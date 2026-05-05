@@ -40,6 +40,10 @@
 #### ComfyUI
 
 - 選模型、提示詞、LoRA、參數後產圖
+- 需要時可改成 `img2img`、`inpaint`、`outpaint` 或 `upscale`
+- `img2img / inpaint / outpaint / upscale` 可上傳來源圖；ControlNet 可另外上傳控制圖，並設定類型、強度與作用區間
+- ControlNet 目前支援 `Canny`、`Depth`、`OpenPose`、`Lineart / Scribble`、`SoftEdge`、`Tile`
+- 歷史清單可一鍵把先前的提示詞、LoRA、ControlNet、來源圖 / 遮罩圖設定套回再重跑
 - 產圖完成後可儲存到 Cloud Drive、分享到論壇或丟棄
 - 頁面會明確顯示目前是本地模式還是遠端模式
 
@@ -79,6 +83,8 @@
   可能是 visibility、加密模式、權限、檔案狀態或舊 key 無法解密。
 - ComfyUI 產圖中：
   頁面會維持進度與狀態；若 root 設的是遠端 API，模型下載工具本來就不會出現。
+- 若頁面提示缺少 ControlNet 模型 / node、控制圖格式錯誤、或 `control strength` 超出範圍：
+  代表後端已明確拒收這次設定，不是靜默失敗。
 
 ## 測試方式
 

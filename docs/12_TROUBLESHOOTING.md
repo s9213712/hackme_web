@@ -141,7 +141,8 @@ API 會回：
   目前生圖頁只允許 `SDXL`、`Pony`、`Illustrious`、`Noob` 系列 LoRA
 - 名稱帶 `neg` / `negative` 的 Embedding 快捷按鈕會直接寫進負面提示詞；
   再按一次則會從目前所在的提示詞移除
-- ControlNet / Hypernetwork 下載選項不在目前 UI，這是刻意限制，不是載入失敗
+- ControlNet 類型目前支援 `Canny`、`Depth`、`OpenPose`、`Lineart / Scribble`、`SoftEdge`、`Tile`
+- 若頁面直接提示缺少 ControlNet 模型 / node / preprocessor，代表後端能力檢查已拒收這次設定；不是靜默忽略
 
 #### 9. ComfyUI 長任務跑到一半
 

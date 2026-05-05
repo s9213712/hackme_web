@@ -34,6 +34,7 @@ class FakeComfyUIClient:
     discarded = []
     interrupted = 0
     generated_count = 0
+    uploaded_images = []
 
     def health_check(self, *, timeout=3):
         return {"ok": True, "system": {"os": "test"}}
@@ -52,6 +53,106 @@ class FakeComfyUIClient:
 
     def get_sampler_options(self):
         return {"samplers": ["euler", "dpmpp_2m"], "schedulers": ["normal", "karras"]}
+
+    def get_capabilities(self):
+        return {
+            "available_nodes": [
+                "CheckpointLoaderSimple",
+                "CLIPTextEncode",
+                "KSampler",
+                "VAEDecode",
+                "SaveImage",
+                "LoadImage",
+                "LoadImageMask",
+                "VAEEncode",
+                "VAEEncodeForInpaint",
+                "ImagePadForOutpaint",
+                "UpscaleModelLoader",
+                "ImageUpscaleWithModel",
+                "ControlNetLoader",
+                "ControlNetApplyAdvanced",
+                "CannyEdgePreprocessor",
+                "DepthAnythingPreprocessor",
+                "OpenposePreprocessor",
+                "LineArtPreprocessor",
+                "PiDiNetPreprocessor",
+                "SoftEdgePreprocessor",
+                "TilePreprocessor",
+            ],
+            "controlnet_models": [
+                "control_v11p_sd15_canny.safetensors",
+                "control_v11f1p_sd15_depth.safetensors",
+                "control_v11p_sd15_openpose.safetensors",
+                "control_v11p_sd15_lineart.safetensors",
+                "control_v11p_sd15_scribble.safetensors",
+                "control_v11p_sd15_softedge.safetensors",
+                "control_v11f1e_sd15_tile.safetensors",
+            ],
+            "upscale_models": ["4x-UltraSharp.pth", "RealESRGAN_x4plus.pth"],
+            "controlnet_types": {
+                "canny": {
+                    "label": "Canny",
+                    "available": True,
+                    "available_preprocessors": ["CannyEdgePreprocessor"],
+                    "default_preprocessor": "CannyEdgePreprocessor",
+                    "matching_models": ["control_v11p_sd15_canny.safetensors"],
+                },
+                "depth": {
+                    "label": "Depth",
+                    "available": True,
+                    "available_preprocessors": ["DepthAnythingPreprocessor"],
+                    "default_preprocessor": "DepthAnythingPreprocessor",
+                    "matching_models": ["control_v11f1p_sd15_depth.safetensors"],
+                },
+                "openpose": {
+                    "label": "OpenPose",
+                    "available": True,
+                    "available_preprocessors": ["OpenposePreprocessor"],
+                    "default_preprocessor": "OpenposePreprocessor",
+                    "matching_models": ["control_v11p_sd15_openpose.safetensors"],
+                },
+                "lineart": {
+                    "label": "Lineart",
+                    "available": True,
+                    "available_preprocessors": ["LineArtPreprocessor"],
+                    "default_preprocessor": "LineArtPreprocessor",
+                    "matching_models": ["control_v11p_sd15_lineart.safetensors"],
+                },
+                "scribble": {
+                    "label": "Scribble",
+                    "available": True,
+                    "available_preprocessors": ["PiDiNetPreprocessor"],
+                    "default_preprocessor": "PiDiNetPreprocessor",
+                    "matching_models": ["control_v11p_sd15_scribble.safetensors"],
+                },
+                "softedge": {
+                    "label": "SoftEdge",
+                    "available": True,
+                    "available_preprocessors": ["SoftEdgePreprocessor"],
+                    "default_preprocessor": "SoftEdgePreprocessor",
+                    "matching_models": ["control_v11p_sd15_softedge.safetensors"],
+                },
+                "tile": {
+                    "label": "Tile",
+                    "available": True,
+                    "available_preprocessors": ["TilePreprocessor"],
+                    "default_preprocessor": "TilePreprocessor",
+                    "matching_models": ["control_v11f1e_sd15_tile.safetensors"],
+                },
+            },
+            "generation_modes": [
+                {"key": "txt2img", "label": "文字生圖", "available": True},
+                {"key": "img2img", "label": "圖生圖", "available": True},
+                {"key": "inpaint", "label": "局部重繪", "available": True},
+                {"key": "outpaint", "label": "向外延展", "available": True},
+                {"key": "upscale", "label": "放大修復", "available": True},
+            ],
+        }
+
+    def upload_image_bytes(self, data, filename, *, image_type="input", overwrite=False, subfolder=""):
+        image_ref = {"filename": filename, "subfolder": subfolder, "type": image_type}
+        FakeComfyUIClient.uploaded_images.append({"image_ref": dict(image_ref), "size": len(data or b"")})
+        return image_ref
 
     def generate_image(self, params, *, timeout_seconds=180, progress_callback=None):
         FakeComfyUIClient.generated_count += 1
@@ -317,6 +418,21 @@ class LocalLoraMetadataClient(FakeComfyUIClient):
         return ["fancy_v2.safetensors"]
 
 
+class MissingControlnetModelClient(FakeComfyUIClient):
+    def get_capabilities(self):
+        payload = super().get_capabilities()
+        payload["controlnet_types"]["canny"]["available"] = False
+        payload["controlnet_types"]["canny"]["matching_models"] = []
+        return payload
+
+
+class MissingWorkflowNodeClient(FakeComfyUIClient):
+    def get_capabilities(self):
+        payload = super().get_capabilities()
+        payload["available_nodes"] = [node for node in payload["available_nodes"] if node != "VAEEncodeForInpaint"]
+        return payload
+
+
 def _write_lora_sidecar(base_dir, filename, *, base_model="", trained_words=None, extra=None):
     sidecar = Path(base_dir) / "models" / "loras" / f"{filename}.civitai.json"
     sidecar.parent.mkdir(parents=True, exist_ok=True)
@@ -413,6 +529,10 @@ def test_comfyui_models_and_generate_routes(tmp_path):
     assert models.get_json()["lora_details"]["anime-style.safetensors"]["supported"] is False
     assert models.get_json()["vaes"] == ["sdxl_vae.safetensors", "anime_vae.pt"]
     assert models.get_json()["embeddings"] == ["badhandv4.pt", "easynegative.safetensors"]
+    assert {item["key"] for item in models.get_json()["generation_modes"]} >= {"txt2img", "img2img", "inpaint", "outpaint", "upscale"}
+    assert models.get_json()["controlnet_types"]["canny"]["available"] is True
+    assert "control_v11p_sd15_canny.safetensors" in models.get_json()["controlnet_models"]
+    assert "4x-UltraSharp.pth" in models.get_json()["upscale_models"]
     assert models.get_json()["max_batch_size"] == 1
     assert models.get_json()["default_width"] == 1024
     assert models.get_json()["default_height"] == 1024
@@ -453,6 +573,225 @@ def test_comfyui_models_and_generate_routes(tmp_path):
     assert FakeComfyUIClient.last_timeout_seconds == 1800
     assert FakeComfyUIClient.last_params["loras"] == [{"name": "detail.safetensors", "strength_model": 0.8, "strength_clip": 0.7}]
     assert FakeComfyUIClient.last_params["vae"] == "sdxl_vae.safetensors"
+
+
+def test_comfyui_img2img_controlnet_generate_uploads_assets_and_records_history(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    FakeComfyUIClient.uploaded_images = []
+    client = _build_app(db_path, storage_root).test_client()
+
+    generated = client.post(
+        "/api/comfyui/generate",
+        data={
+            "generation_mode": "img2img",
+            "model": "dream.safetensors",
+            "prompt": "repaint the scene",
+            "negative_prompt": "blurry",
+            "width": "512",
+            "height": "512",
+            "steps": "18",
+            "cfg": "7",
+            "sampler_name": "euler",
+            "scheduler": "normal",
+            "seed": "123",
+            "batch_size": "1",
+            "confirm_billing": "true",
+            "denoise_strength": "0.55",
+            "controlnet_enabled": "true",
+            "controlnet_type": "canny",
+            "control_strength": "0.9",
+            "control_start": "0.1",
+            "control_end": "0.8",
+            "source_image": (io.BytesIO(b"source-bytes"), "source.png", "image/png"),
+            "control_image": (io.BytesIO(b"control-bytes"), "control.png", "image/png"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert generated.status_code == 200
+    body = generated.get_json()
+    assert body["ok"] is True
+    assert body["history_id"] > 0
+    assert FakeComfyUIClient.last_params["generation_mode"] == "img2img"
+    assert FakeComfyUIClient.last_params["source_image_ref"]["filename"] == "source.png"
+    assert FakeComfyUIClient.last_params["controlnet"]["image_ref"]["filename"] == "control.png"
+    assert FakeComfyUIClient.last_params["controlnet"]["type"] == "canny"
+    assert len(FakeComfyUIClient.uploaded_images) == 2
+
+    history = client.get("/api/comfyui/history")
+    assert history.status_code == 200
+    history_body = history.get_json()
+    assert history_body["history"][0]["generation_mode"] == "img2img"
+    assert history_body["history"][0]["controlnet"]["type"] == "canny"
+    assert history_body["history"][0]["input_assets"]["source_image_ref"]["filename"] == "source.png"
+
+
+def test_comfyui_generate_rejects_controlnet_strength_out_of_range(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(db_path, storage_root).test_client()
+
+    generated = client.post(
+        "/api/comfyui/generate",
+        json={
+            "generation_mode": "txt2img",
+            "model": "dream.safetensors",
+            "prompt": "a robot portrait",
+            "controlnet_enabled": True,
+            "controlnet_type": "canny",
+            "control_strength": 2.5,
+        },
+    )
+    assert generated.status_code == 400
+    assert "Control strength" in generated.get_json()["msg"]
+
+
+def test_comfyui_generate_rejects_when_controlnet_model_missing(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(db_path, storage_root, comfyui_client=MissingControlnetModelClient()).test_client()
+
+    generated = client.post(
+        "/api/comfyui/generate",
+        data={
+            "generation_mode": "img2img",
+            "model": "dream.safetensors",
+            "prompt": "repaint the scene",
+            "confirm_billing": "true",
+            "source_image": (io.BytesIO(b"source-bytes"), "source.png", "image/png"),
+            "control_image": (io.BytesIO(b"control-bytes"), "control.png", "image/png"),
+            "controlnet_enabled": "true",
+            "controlnet_type": "canny",
+        },
+        content_type="multipart/form-data",
+    )
+    assert generated.status_code == 409
+    assert "缺少對應" in generated.get_json()["msg"]
+
+
+def test_comfyui_generate_rejects_when_workflow_node_missing(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(db_path, storage_root, comfyui_client=MissingWorkflowNodeClient()).test_client()
+
+    generated = client.post(
+        "/api/comfyui/generate",
+        data={
+            "generation_mode": "inpaint",
+            "model": "dream.safetensors",
+            "prompt": "repair the face",
+            "confirm_billing": "true",
+            "source_image": (io.BytesIO(b"source-bytes"), "source.png", "image/png"),
+            "mask_image": (io.BytesIO(b"mask-bytes"), "mask.png", "image/png"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert generated.status_code == 409
+    assert "workflow node" in generated.get_json()["msg"]
+
+
+def test_comfyui_generate_rejects_invalid_control_image_format(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(db_path, storage_root).test_client()
+
+    generated = client.post(
+        "/api/comfyui/generate",
+        data={
+            "generation_mode": "img2img",
+            "model": "dream.safetensors",
+            "prompt": "repaint the scene",
+            "source_image": (io.BytesIO(b"source-bytes"), "source.png", "image/png"),
+            "control_image": (io.BytesIO(b"bad-bytes"), "control.txt", "text/plain"),
+            "controlnet_enabled": "true",
+            "controlnet_type": "canny",
+        },
+        content_type="multipart/form-data",
+    )
+    assert generated.status_code == 400
+    assert "控制圖 只支援 PNG / JPG / WEBP" in generated.get_json()["msg"]
+
+
+def test_comfyui_history_rerun_reuses_saved_assets(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    FakeComfyUIClient.uploaded_images = []
+    client = _build_app(db_path, storage_root).test_client()
+
+    generated = client.post(
+        "/api/comfyui/generate",
+        data={
+            "generation_mode": "upscale",
+            "model": "dream.safetensors",
+            "prompt": "",
+            "upscale_model": "4x-UltraSharp.pth",
+            "confirm_billing": "true",
+            "source_image": (io.BytesIO(b"source-bytes"), "source.png", "image/png"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert generated.status_code == 200
+    history_id = generated.get_json()["history_id"]
+    FakeComfyUIClient.uploaded_images = []
+
+    rerun = client.post(f"/api/comfyui/history/{history_id}/rerun", json={})
+    assert rerun.status_code == 200
+    job_id = rerun.get_json()["job"]["job_id"]
+
+    polled = client.get(f"/api/comfyui/jobs/{job_id}")
+    assert polled.status_code == 200
+    body = polled.get_json()
+    for _ in range(40):
+      if body["job"]["status"] == "completed":
+        break
+      time.sleep(0.05)
+      body = client.get(f"/api/comfyui/jobs/{job_id}").get_json()
+    assert body["job"]["status"] == "completed"
+    assert FakeComfyUIClient.uploaded_images == []
+    assert FakeComfyUIClient.last_params["generation_mode"] == "upscale"
+    assert FakeComfyUIClient.last_params["source_image_ref"]["filename"] == "source.png"
+
+
+def test_comfyui_image_preview_returns_uploaded_asset_preview(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(db_path, storage_root).test_client()
+
+    generated = client.post(
+        "/api/comfyui/generate",
+        data={
+            "generation_mode": "img2img",
+            "model": "dream.safetensors",
+            "prompt": "repaint the scene",
+            "confirm_billing": "true",
+            "source_image": (io.BytesIO(b"source-bytes"), "source.png", "image/png"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert generated.status_code == 200
+
+    history = client.get("/api/comfyui/history").get_json()["history"][0]
+    source_ref = history["input_assets"]["source_image_ref"]
+    preview = client.post("/api/comfyui/image-preview", json={"image_ref": source_ref})
+    assert preview.status_code == 200
+    image = preview.get_json()["image"]
+    assert image["data_url"].startswith("data:image/png;base64,")
+    assert image["image_ref"]["filename"] == "source.png"
+
 
 
 def test_comfyui_generate_rejects_unsupported_lora_base_model(tmp_path):
@@ -842,6 +1181,30 @@ def test_comfyui_workflow_uses_requested_batch_size():
     assert workflow["5"]["inputs"]["batch_size"] == 4
 
 
+def test_comfyui_object_info_combo_options_are_parsed_for_upscale_models(monkeypatch):
+    client = ComfyUIClient("http://fake-comfyui")
+
+    def fake_json_request(path, **_kwargs):
+        assert path == "/object_info/UpscaleModelLoader"
+        return {
+            "UpscaleModelLoader": {
+                "input": {
+                    "required": {
+                        "model_name": [
+                            "COMBO",
+                            {
+                                "options": ["4x_NMKD-Superscale-SP_178000_G.pth"],
+                            },
+                        ]
+                    }
+                }
+            }
+        }
+
+    monkeypatch.setattr(client, "_json_request", fake_json_request)
+    assert client.get_upscale_models() == ["4x_NMKD-Superscale-SP_178000_G.pth"]
+
+
 def test_comfyui_workflow_chains_loras_between_checkpoint_and_sampler():
     workflow = ComfyUIClient("http://fake-comfyui").build_text_to_image_workflow({
         "model": "dream.safetensors",
@@ -871,6 +1234,50 @@ def test_comfyui_workflow_chains_loras_between_checkpoint_and_sampler():
     assert workflow["3"]["inputs"]["model"] == ["11", 0]
     assert workflow["6"]["inputs"]["clip"] == ["11", 1]
     assert workflow["7"]["inputs"]["clip"] == ["11", 1]
+
+
+def test_comfyui_inpaint_workflow_sets_grow_mask_by():
+    workflow = ComfyUIClient("http://fake-comfyui").build_inpaint_workflow({
+        "model": "dream.safetensors",
+        "prompt": "repair the face",
+        "negative_prompt": "",
+        "width": 512,
+        "height": 512,
+        "steps": 12,
+        "cfg": 6.5,
+        "sampler_name": "euler",
+        "scheduler": "normal",
+        "seed": 123,
+        "batch_size": 1,
+        "filename_prefix": "hackme_web",
+        "source_image_ref": {"filename": "source.png", "subfolder": "", "type": "input"},
+        "mask_image_ref": {"filename": "mask.png", "subfolder": "", "type": "input"},
+    })
+
+    assert workflow["10"]["class_type"] == "VAEEncodeForInpaint"
+    assert workflow["10"]["inputs"]["grow_mask_by"] == 6
+
+
+def test_comfyui_outpaint_workflow_sets_grow_mask_by():
+    workflow = ComfyUIClient("http://fake-comfyui").build_outpaint_workflow({
+        "model": "dream.safetensors",
+        "prompt": "expand the canvas",
+        "negative_prompt": "",
+        "width": 512,
+        "height": 512,
+        "steps": 12,
+        "cfg": 6.5,
+        "sampler_name": "euler",
+        "scheduler": "normal",
+        "seed": 123,
+        "batch_size": 1,
+        "filename_prefix": "hackme_web",
+        "source_image_ref": {"filename": "source.png", "subfolder": "", "type": "input"},
+        "outpaint": {"left": 64, "top": 32, "right": 16, "bottom": 8, "feathering": 24},
+    })
+
+    assert workflow["11"]["class_type"] == "VAEEncodeForInpaint"
+    assert workflow["11"]["inputs"]["grow_mask_by"] == 6
 
 
 def test_comfyui_workflow_uses_custom_vae_when_selected():
@@ -1485,6 +1892,81 @@ def test_comfyui_civitai_inspect_and_download_flow(tmp_path, monkeypatch):
     assert listed_json["lora_details"]["fancy_v2.safetensors"]["base_model"] == "SDXL"
     assert listed_json["lora_details"]["fancy_v2.safetensors"]["supported"] is True
     assert listed_json["lora_details"]["fancy_v2.safetensors"]["trained_words"] == ["fancy style", "cinematic"]
+
+
+def test_root_can_upload_comfyui_model_file_into_local_models_dir(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    comfy_base = tmp_path / "comfyui_portable"
+    comfy_base.mkdir()
+    (comfy_base / "main.py").write_text("# comfy", encoding="utf-8")
+    root_actor = {"id": 1, "username": "root", "role": "super_admin"}
+    client = _build_app(
+        db_path,
+        storage_root,
+        actor=lambda: root_actor,
+        settings={
+            "comfyui_connection_mode": "local",
+            "comfyui_base_dir": str(comfy_base),
+        },
+    ).test_client()
+
+    uploaded = client.post(
+        "/api/root/comfyui/model-upload",
+        data={
+            "type": "lora",
+            "base_dir": str(comfy_base),
+            "model_file": (io.BytesIO(b"fake-model-bytes"), "manual_test_lora.safetensors", "application/octet-stream"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert uploaded.status_code == 200
+    body = uploaded.get_json()
+    assert body["upload"]["filename"] == "manual_test_lora.safetensors"
+    assert body["upload"]["source"] == "manual_upload"
+    saved = comfy_base / "models" / "loras" / "manual_test_lora.safetensors"
+    assert saved.exists()
+    assert saved.read_bytes() == b"fake-model-bytes"
+    sidecar = comfy_base / "models" / "loras" / "manual_test_lora.safetensors.civitai.json"
+    sidecar_data = json.loads(sidecar.read_text(encoding="utf-8"))
+    assert sidecar_data["source"] == "manual_upload"
+    assert sidecar_data["uploaded_by"] == "root"
+
+
+def test_comfyui_model_upload_rejects_invalid_extension(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    comfy_base = tmp_path / "comfyui_portable"
+    comfy_base.mkdir()
+    (comfy_base / "main.py").write_text("# comfy", encoding="utf-8")
+    root_actor = {"id": 1, "username": "root", "role": "super_admin"}
+    client = _build_app(
+        db_path,
+        storage_root,
+        actor=lambda: root_actor,
+        settings={
+            "comfyui_connection_mode": "local",
+            "comfyui_base_dir": str(comfy_base),
+        },
+    ).test_client()
+
+    uploaded = client.post(
+        "/api/root/comfyui/model-upload",
+        data={
+            "type": "checkpoint",
+            "base_dir": str(comfy_base),
+            "model_file": (io.BytesIO(b"bad-model"), "manual_test_lora.txt", "text/plain"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert uploaded.status_code == 400
+    assert "模型副檔名必須是" in uploaded.get_json()["msg"]
 
 
 def test_comfyui_civitai_async_download_job_reports_progress_and_result(tmp_path, monkeypatch):
@@ -2162,6 +2644,26 @@ def test_comfyui_frontend_is_wired():
     assert 'id="module-comfyui"' in index_html
     assert 'id="comfyui-model-select"' in index_html
     assert 'id="comfyui-vae-select"' in index_html
+    assert 'id="comfyui-generation-mode"' in index_html
+    assert 'id="comfyui-denoise-strength"' in index_html
+    assert 'id="comfyui-upscale-model"' in index_html
+    assert 'id="comfyui-source-image-file"' in index_html
+    assert 'id="comfyui-mask-image-file"' in index_html
+    assert 'id="comfyui-control-image-file"' in index_html
+    assert 'id="comfyui-controlnet-enabled"' in index_html
+    assert 'id="comfyui-controlnet-type"' in index_html
+    assert 'id="comfyui-controlnet-model"' in index_html
+    assert 'id="comfyui-controlnet-preprocessor"' in index_html
+    assert 'id="comfyui-control-strength"' in index_html
+    assert 'id="comfyui-control-start"' in index_html
+    assert 'id="comfyui-control-end"' in index_html
+    assert 'id="comfyui-outpaint-left"' in index_html
+    assert 'id="comfyui-outpaint-top"' in index_html
+    assert 'id="comfyui-outpaint-right"' in index_html
+    assert 'id="comfyui-outpaint-bottom"' in index_html
+    assert 'id="comfyui-outpaint-feathering"' in index_html
+    assert 'id="comfyui-history-refresh-btn"' in index_html
+    assert 'id="comfyui-history-list"' in index_html
     assert 'id="comfyui-lora-select"' in index_html
     assert 'id="comfyui-lora-add-btn"' in index_html
     assert 'id="comfyui-lora-count"' in index_html
@@ -2177,6 +2679,11 @@ def test_comfyui_frontend_is_wired():
     assert 'id="comfyui-share-btn"' in index_html
     assert 'id="comfyui-progress-panel"' in index_html
     assert 'id="comfyui-model-download-btn"' in index_html
+    assert 'id="comfyui-model-source-mode"' in index_html
+    assert 'id="comfyui-model-source-civitai"' in index_html
+    assert 'id="comfyui-model-source-upload"' in index_html
+    assert 'id="comfyui-model-upload-file"' in index_html
+    assert 'id="comfyui-model-upload-btn"' in index_html
     assert 'id="comfyui-model-download-progress"' in index_html
     assert 'id="comfyui-model-download-progress-label"' in index_html
     assert 'id="comfyui-model-download-progress-percent"' in index_html
@@ -2196,7 +2703,7 @@ def test_comfyui_frontend_is_wired():
     assert '模式讀取中' in index_html
     assert 'id="comfyui-root-model-details"' in index_html
     assert 'id="comfyui-root-model-mode-hint"' in index_html
-    assert 'root 模型下載（Civitai）' in index_html
+    assert 'root 模型匯入（Civitai / 檔案上傳）' in index_html
     assert '和上方生圖表單分開' in index_html
     assert '<option value="embedding">Embedding / TI</option>' in index_html
     assert '<option value="vae">VAE</option>' in index_html
@@ -2211,9 +2718,9 @@ def test_comfyui_frontend_is_wired():
     assert 'id="comfyui-civitai-settings" style="display:none;"' in index_html
     assert 'id="s-comfyui-civitai-api-key"' in index_html
     assert 'const show = currentUser === "root";' in comfyui_js
-    assert '目前是雲端 / 遠端模式，所以這個區塊只保留說明。若要用 Civitai 下載模型到本站的本地 ComfyUI，請先把 backend 切回本地模式。' in comfyui_js
-    assert "/js/36-comfyui.js?v=20260503-comfyui-mode-badge" in index_html
-    assert "/styles.css?v=20260503-appearance-v2" in index_html
+    assert '目前是雲端 / 遠端模式，所以這個區塊只保留說明。若要管理本站的本地 ComfyUI 模型，請先把 backend 切回本地模式。' in comfyui_js
+    assert "/js/36-comfyui.js?v=20260505-comfyui-controlnet-history" in index_html
+    assert "/styles.css?v=20260505-comfyui-controlnet-history" in index_html
     assert "width: min(420px, 100%);" in css
     assert "max-height: 320px;" in css
     assert ".comfyui-root-details" in css
@@ -2230,6 +2737,7 @@ def test_comfyui_frontend_is_wired():
     assert 'apiFetch(API + "/comfyui/billing-quote"' in comfyui_js
     assert 'apiFetch(API + "/root/comfyui/civitai/inspect"' in comfyui_js
     assert 'apiFetch(API + "/root/comfyui/civitai/download"' in comfyui_js
+    assert 'apiFetch(API + "/root/comfyui/model-upload"' in comfyui_js
     assert 'apiFetch(API + "/comfyui/models" + comfyuiRequestQuery()' in comfyui_js
     assert 'apiFetch(API + "/comfyui/status" + comfyuiRequestQuery()' in comfyui_js
     assert 'setComfyuiIdleSuspend("comfyui_generate", !!busy, "ComfyUI 產圖中");' in comfyui_js
@@ -2243,6 +2751,17 @@ def test_comfyui_frontend_is_wired():
     assert "function stopLocalComfyui()" in comfyui_js
     assert "function comfyuiConnectionModeLabel(mode = comfyuiConnectionMode)" in comfyui_js
     assert "function comfyuiConnectionModeDetail(mode = comfyuiConnectionMode)" in comfyui_js
+    assert "function fillComfyuiGenerationModes(values = [])" in comfyui_js
+    assert "function fillComfyuiControlnetTypes(types = {})" in comfyui_js
+    assert "function fillComfyuiUpscaleModels(values = [])" in comfyui_js
+    assert "function updateComfyuiModelSourceMode()" in comfyui_js
+    assert "function uploadComfyuiModelFile()" in comfyui_js
+    assert "function updateComfyuiModeVisibility()" in comfyui_js
+    assert "function comfyuiBuildGenerateRequest(payload)" in comfyui_js
+    assert "function loadComfyuiHistory()" in comfyui_js
+    assert "function applyComfyuiHistoryToForm(historyId)" in comfyui_js
+    assert "function rerunComfyuiHistory(historyId)" in comfyui_js
+    assert "function bindComfyuiAdvancedUi()" in comfyui_js
     assert "function updateComfyuiModeNote(modeOverride = null)" in comfyui_js
     assert 'badge.textContent = normalizedMode === "local" ? "本地模式" : "雲端 / 遠端模式";' in comfyui_js
     assert 'detail.textContent = comfyuiConnectionModeDetail(normalizedMode);' in comfyui_js
@@ -2264,6 +2783,9 @@ def test_comfyui_frontend_is_wired():
     assert "function removeComfyuiPromptTerms(terms = [], { promptType = \"prompt\" } = {})" in comfyui_js
     assert "function clearSelectedComfyuiLoras()" in comfyui_js
     assert "function removeComfyuiSelectedLoraByIndex(index)" in comfyui_js
+    assert "function renderComfyuiHistory()" in comfyui_js
+    assert 'apiFetch(API + "/comfyui/history"' in comfyui_js
+    assert 'apiFetch(API + "/comfyui/image-preview"' in comfyui_js
     assert "function isNegativeComfyuiEmbedding(name)" in comfyui_js
     assert "function applyComfyuiPromptTerms(terms = [])" in comfyui_js
     assert "function renderComfyuiCivitaiTrainedWords(versionId)" in comfyui_js
@@ -2353,6 +2875,7 @@ def test_comfyui_frontend_is_wired():
     assert "interruptComfyuiGeneration" in bootstrap_js
     assert 'if (comfyuiLoadDraftBtn) comfyuiLoadDraftBtn.addEventListener("click", loadComfyuiLastSettings);' in bootstrap_js
     assert "bindComfyuiDraftPersistence" in bootstrap_js
+    assert "bindComfyuiAdvancedUi" in bootstrap_js
     assert 'apiFetch(API + "/root/comfyui/test-connection"' in admin_js
     assert 'if (comfyuiTestConnectionBtn) comfyuiTestConnectionBtn.addEventListener("click", testComfyuiConnection);' in bootstrap_js
     assert 'shareComfyuiToCommunity' in bootstrap_js

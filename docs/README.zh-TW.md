@@ -2,7 +2,7 @@
 
 [English README](../README.md)
 
-**目前 Release ID：`2026.05.05-114`**
+**目前 Release ID：`2026.05.05-116`**
 
 這份文件是中文捷徑版入口，不再承擔全部教學。它只回答三件事：
 
@@ -53,6 +53,15 @@ python3 server.py
 - `standard_plain` / `server_encrypted`：Safari 保留原生 HLS，桌機 Chrome / Firefox / Edge 走同源 `hls.js`，失敗才退回直接串流
 - strict `e2ee`：維持瀏覽器端解密播放，不做伺服器端 HLS，速度會較慢但不降級 E2EE 承諾
 - `持連結可看` 的 E2EE 影音現在也有分享管理面板，可看分享狀態、剩餘觀看次數、到期日、密碼狀態；若完整連結 fragment 遺失，只能重新產生分享
+
+ComfyUI 目前除了一般 txt2img，也支援：
+- `img2img`
+- `inpaint`
+- `outpaint`
+- ControlNet（Canny / Depth / OpenPose / Lineart / Scribble / SoftEdge / Tile）
+- upscale model
+- 歷史套回 / 重跑
+- root 本地模式下可在同一個折疊面板選擇「Civitai 網址」或「本地檔案上傳」匯入模型
 
 ## 文件地圖
 

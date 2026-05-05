@@ -23,11 +23,31 @@ let comfyuiSelectedLoras = [];
 let comfyuiConnectionMode = "remote";
 let comfyuiLocalStartPollTimer = null;
 let comfyuiCivitaiInspection = null;
+let comfyuiControlnetTypes = {};
+let comfyuiUpscaleModels = [];
+let comfyuiGenerationModes = [];
+let comfyuiHistoryItems = [];
+let comfyuiInputAssets = {
+  source: { file: null, imageRef: null, previewUrl: "", filename: "" },
+  mask: { file: null, imageRef: null, previewUrl: "", filename: "" },
+  control: { file: null, imageRef: null, previewUrl: "", filename: "" },
+};
 const COMFYUI_GENERATION_TIMEOUT_SECONDS = 1800;
 const COMFYUI_MAX_LORAS = 8;
 const COMFYUI_LORA_EXTRA_PRICE = 1;
 const COMFYUI_VAE_BUILTIN = "__checkpoint_builtin__";
+const COMFYUI_IMAGE_ASSET_KEYS = ["source", "mask", "control"];
+const COMFYUI_CONTROLNET_TIPS = {
+  canny: "適合保留邊緣與輪廓，常用於重畫原圖構圖。",
+  depth: "適合保留場景深度與立體關係。",
+  openpose: "適合固定人物姿勢與骨架。",
+  lineart: "適合線稿上色或乾淨描線重建。",
+  scribble: "適合塗鴉快速構圖。",
+  softedge: "適合柔和邊緣與輪廓引導。",
+  tile: "適合局部細節補強與放大。",
+};
 const COMFYUI_DRAFT_FIELD_IDS = [
+  "comfyui-generation-mode",
   "comfyui-model-select",
   "comfyui-vae-select",
   "comfyui-prompt",
@@ -41,11 +61,65 @@ const COMFYUI_DRAFT_FIELD_IDS = [
   "comfyui-seed",
   "comfyui-sampler",
   "comfyui-scheduler",
+  "comfyui-denoise-strength",
+  "comfyui-upscale-model",
+  "comfyui-controlnet-enabled",
+  "comfyui-controlnet-type",
+  "comfyui-controlnet-model",
+  "comfyui-controlnet-preprocessor",
+  "comfyui-control-strength",
+  "comfyui-control-start",
+  "comfyui-control-end",
+  "comfyui-outpaint-left",
+  "comfyui-outpaint-top",
+  "comfyui-outpaint-right",
+  "comfyui-outpaint-bottom",
+  "comfyui-outpaint-feathering",
   "comfyui-save-path",
   "comfyui-album-select",
   "comfyui-share-title",
   "comfyui-share-note",
 ];
+const COMFYUI_DYNAMIC_SELECT_IDS = [
+  "comfyui-model-select",
+  "comfyui-vae-select",
+  "comfyui-sampler",
+  "comfyui-scheduler",
+  "comfyui-album-select",
+  "comfyui-controlnet-type",
+  "comfyui-controlnet-model",
+  "comfyui-controlnet-preprocessor",
+  "comfyui-upscale-model",
+];
+const COMFYUI_INPUT_ASSET_META = {
+  source: {
+    fileInputId: "comfyui-source-image-file",
+    previewId: "comfyui-source-image-preview",
+    metaId: "comfyui-source-image-meta",
+    clearBtnId: "comfyui-source-image-clear-btn",
+    cardId: "comfyui-source-image-card",
+    emptyText: "尚未選擇來源圖片",
+    title: "來源圖片",
+  },
+  mask: {
+    fileInputId: "comfyui-mask-image-file",
+    previewId: "comfyui-mask-image-preview",
+    metaId: "comfyui-mask-image-meta",
+    clearBtnId: "comfyui-mask-image-clear-btn",
+    cardId: "comfyui-mask-image-card",
+    emptyText: "尚未選擇遮罩圖片",
+    title: "遮罩圖片",
+  },
+  control: {
+    fileInputId: "comfyui-control-image-file",
+    previewId: "comfyui-control-image-preview",
+    metaId: "comfyui-control-image-meta",
+    clearBtnId: "comfyui-control-image-clear-btn",
+    cardId: "comfyui-control-image-card",
+    emptyText: "尚未選擇控制圖",
+    title: "控制圖",
+  },
+};
 
 function setComfyuiTabAvailability(available, detail = "") {
   comfyuiServerAvailable = available === null ? null : !!available;
@@ -211,6 +285,271 @@ function applyComfyuiRuntimeLimits(payload = {}) {
     generate.title = `非 root 帳號成功產圖後每張扣 ${comfyuiBillingQuote.unit_price} 點；每個 LoRA 每張額外 +${comfyuiBillingQuote.lora_extra_unit_price || COMFYUI_LORA_EXTRA_PRICE} 點；產圖失敗不扣點，丟棄預覽不退款`;
   }
   updateComfyuiRootPanelVisibility();
+}
+
+function comfyuiGenerationMode() {
+  return String($("comfyui-generation-mode")?.value || "txt2img").trim().toLowerCase() || "txt2img";
+}
+
+function comfyuiModeUsesSourceImage(mode = comfyuiGenerationMode()) {
+  return ["img2img", "inpaint", "outpaint", "upscale"].includes(String(mode || "").trim().toLowerCase());
+}
+
+function comfyuiModeUsesMaskImage(mode = comfyuiGenerationMode()) {
+  return String(mode || "").trim().toLowerCase() === "inpaint";
+}
+
+function comfyuiModeUsesOutpaint(mode = comfyuiGenerationMode()) {
+  return String(mode || "").trim().toLowerCase() === "outpaint";
+}
+
+function comfyuiModeUsesUpscale(mode = comfyuiGenerationMode()) {
+  return String(mode || "").trim().toLowerCase() === "upscale";
+}
+
+function isComfyuiControlnetEnabled() {
+  return !!$("comfyui-controlnet-enabled")?.checked;
+}
+
+function comfyuiModeTip(mode = comfyuiGenerationMode()) {
+  switch (String(mode || "").trim().toLowerCase()) {
+    case "img2img":
+      return "圖生圖：以上傳來源圖為基底重畫，適合保留構圖與色塊。";
+    case "inpaint":
+      return "局部重繪：需要來源圖與遮罩圖，只重畫你標出的區域。";
+    case "outpaint":
+      return "向外延展：以來源圖為中心向外擴邊，讓模型補完畫面外框。";
+    case "upscale":
+      return "放大修復：使用 scale model 先放大，再保留原圖細節。";
+    default:
+      return "文字生圖：只需要提示詞，不需要來源圖片。";
+  }
+}
+
+function comfyuiReadableModeLabel(mode = comfyuiGenerationMode()) {
+  const normalized = String(mode || "").trim().toLowerCase();
+  const hit = comfyuiGenerationModes.find((item) => String(item?.key || "").trim().toLowerCase() === normalized);
+  if (hit?.label) return String(hit.label);
+  return {
+    txt2img: "文字生圖",
+    img2img: "圖生圖",
+    inpaint: "局部重繪",
+    outpaint: "向外延展",
+    upscale: "放大修復",
+  }[normalized] || normalized || "文字生圖";
+}
+
+function fillComfyuiGenerationModes(values = []) {
+  comfyuiGenerationModes = Array.isArray(values) && values.length
+    ? values
+      .filter((item) => item && typeof item === "object" && item.key)
+      .map((item) => ({
+        key: String(item.key),
+        label: String(item.label || item.key),
+        available: item.available !== false,
+      }))
+    : [
+        { key: "txt2img", label: "文字生圖", available: true },
+        { key: "img2img", label: "圖生圖", available: true },
+        { key: "inpaint", label: "局部重繪", available: true },
+        { key: "outpaint", label: "向外延展", available: true },
+        { key: "upscale", label: "放大修復", available: true },
+      ];
+  const select = $("comfyui-generation-mode");
+  if (!select) return;
+  select.innerHTML = comfyuiGenerationModes.map((item) => (
+    `<option value="${sanitize(item.key)}"${item.available ? "" : ' disabled="disabled"'}>${sanitize(item.label)}</option>`
+  )).join("");
+}
+
+function fillComfyuiControlnetTypes(types = {}) {
+  comfyuiControlnetTypes = types && typeof types === "object" ? types : {};
+  const select = $("comfyui-controlnet-type");
+  if (!select) return;
+  const options = Object.entries(comfyuiControlnetTypes).length
+    ? Object.entries(comfyuiControlnetTypes).map(([key, item]) => {
+        const available = item && item.available === true;
+        const label = available
+          ? (item.label || key)
+          : `${item?.label || key}（缺少 nodes / models）`;
+        return `<option value="${sanitize(key)}"${available ? "" : ' disabled="disabled"'}>${sanitize(label)}</option>`;
+      }).join("")
+    : Object.entries(COMFYUI_CONTROLNET_TIPS).map(([key]) => `<option value="${sanitize(key)}">${sanitize(key)}</option>`).join("");
+  select.innerHTML = options;
+}
+
+function comfyuiSelectedControlnetType() {
+  return String($("comfyui-controlnet-type")?.value || "canny").trim().toLowerCase() || "canny";
+}
+
+function fillComfyuiControlnetModelOptions() {
+  const select = $("comfyui-controlnet-model");
+  if (!select) return;
+  const type = comfyuiSelectedControlnetType();
+  const info = comfyuiControlnetTypes?.[type] || {};
+  const models = Array.isArray(info.matching_models) ? info.matching_models : [];
+  const previous = select.value || "";
+  select.innerHTML = ['<option value="">自動選擇可用模型</option>']
+    .concat(models.map((model) => `<option value="${sanitize(model)}">${sanitize(model)}</option>`))
+    .join("");
+  if (previous && models.includes(previous)) select.value = previous;
+}
+
+function fillComfyuiControlnetPreprocessorOptions() {
+  const select = $("comfyui-controlnet-preprocessor");
+  if (!select) return;
+  const type = comfyuiSelectedControlnetType();
+  const info = comfyuiControlnetTypes?.[type] || {};
+  const preprocessors = Array.isArray(info.available_preprocessors) ? info.available_preprocessors : [];
+  const previous = select.value || "";
+  select.innerHTML = ['<option value="">自動選擇</option>']
+    .concat(preprocessors.map((name) => `<option value="${sanitize(name)}">${sanitize(name)}</option>`))
+    .join("");
+  if (previous && preprocessors.includes(previous)) {
+    select.value = previous;
+  } else if (!previous && info.default_preprocessor) {
+    select.value = info.default_preprocessor;
+  }
+}
+
+function fillComfyuiUpscaleModels(values = []) {
+  comfyuiUpscaleModels = Array.isArray(values) ? values.filter(Boolean).map(String) : [];
+  const select = $("comfyui-upscale-model");
+  if (!select) return;
+  const previous = select.value || "";
+  const options = comfyuiUpscaleModels.length
+    ? comfyuiUpscaleModels.map((value) => `<option value="${sanitize(value)}">${sanitize(value)}</option>`)
+    : ['<option value="">目前沒有可用的放大模型</option>'];
+  select.innerHTML = options.join("");
+  if (previous && comfyuiUpscaleModels.includes(previous)) select.value = previous;
+}
+
+function updateComfyuiControlnetTip() {
+  const tip = $("comfyui-controlnet-tip");
+  if (!tip) return;
+  const type = comfyuiSelectedControlnetType();
+  const typeInfo = comfyuiControlnetTypes?.[type] || {};
+  const available = typeInfo.available === true;
+  const tail = available ? "" : " 目前缺少對應 nodes 或 models，無法建立工作。";
+  tip.textContent = `${COMFYUI_CONTROLNET_TIPS[type] || "可利用控制圖約束構圖與細節。"}${tail}`;
+}
+
+function updateComfyuiModeVisibility() {
+  const mode = comfyuiGenerationMode();
+  const modeTip = $("comfyui-generation-mode-tip");
+  const denoiseField = $("comfyui-denoise-field");
+  const upscaleField = $("comfyui-upscale-model-field");
+  const outpaintPanel = $("comfyui-outpaint-panel");
+  const controlFields = $("comfyui-controlnet-fields");
+  const controlCard = $(COMFYUI_INPUT_ASSET_META.control.cardId);
+  const maskCard = $(COMFYUI_INPUT_ASSET_META.mask.cardId);
+  if (modeTip) modeTip.textContent = comfyuiModeTip(mode);
+  if (denoiseField) denoiseField.style.display = mode === "txt2img" || mode === "upscale" ? "none" : "";
+  if (upscaleField) upscaleField.style.display = comfyuiModeUsesUpscale(mode) ? "" : "none";
+  if (outpaintPanel) outpaintPanel.style.display = comfyuiModeUsesOutpaint(mode) ? "" : "none";
+  if (maskCard) maskCard.style.display = comfyuiModeUsesMaskImage(mode) ? "" : "none";
+  if (controlFields) controlFields.style.display = isComfyuiControlnetEnabled() ? "" : "none";
+  if (controlCard) controlCard.style.display = isComfyuiControlnetEnabled() ? "" : "none";
+  updateComfyuiControlnetTip();
+}
+
+function comfyuiAssetState(key) {
+  return comfyuiInputAssets[key] || { file: null, imageRef: null, previewUrl: "", filename: "" };
+}
+
+function revokeComfyuiAssetPreview(asset) {
+  if (asset?.previewUrl && String(asset.previewUrl).startsWith("blob:")) {
+    try { URL.revokeObjectURL(asset.previewUrl); } catch (_err) {}
+  }
+}
+
+function renderComfyuiInputAsset(key) {
+  const meta = COMFYUI_INPUT_ASSET_META[key];
+  if (!meta) return;
+  const preview = $(meta.previewId);
+  const status = $(meta.metaId);
+  const clearBtn = $(meta.clearBtnId);
+  const fileInput = $(meta.fileInputId);
+  const asset = comfyuiAssetState(key);
+  if (preview) {
+    if (asset.previewUrl) {
+      preview.innerHTML = `<img src="${sanitize(asset.previewUrl)}" alt="${sanitize(meta.title)}預覽" />`;
+    } else {
+      preview.innerHTML = `<span class="drive-card-sub">${sanitize(meta.emptyText)}</span>`;
+    }
+  }
+  if (status) {
+    if (asset.file) {
+      status.textContent = `已選擇本地檔：${asset.filename || asset.file.name || "未命名圖片"} · ${formatDriveBytes(asset.file.size || 0)}`;
+    } else if (asset.imageRef?.filename) {
+      status.textContent = `使用已保存的 ${meta.title}：${asset.filename || asset.imageRef.filename}`;
+    } else {
+      status.textContent = key === "mask" ? "建議與來源圖片尺寸一致。" : (key === "control" ? "控制圖只在啟用 ControlNet 時送出。" : "可上傳 PNG、JPG、WEBP。");
+    }
+  }
+  if (clearBtn) clearBtn.disabled = !asset.file && !asset.imageRef;
+  if (fileInput && !asset.file) fileInput.value = "";
+}
+
+function setComfyuiInputAssetFromFile(key, file) {
+  const asset = comfyuiAssetState(key);
+  revokeComfyuiAssetPreview(asset);
+  comfyuiInputAssets[key] = {
+    file,
+    imageRef: null,
+    previewUrl: file ? URL.createObjectURL(file) : "",
+    filename: file?.name || "",
+  };
+  renderComfyuiInputAsset(key);
+}
+
+function setComfyuiInputAssetFromRef(key, imageRef, previewUrl = "", filename = "") {
+  const asset = comfyuiAssetState(key);
+  revokeComfyuiAssetPreview(asset);
+  comfyuiInputAssets[key] = {
+    file: null,
+    imageRef: imageRef || null,
+    previewUrl: previewUrl || "",
+    filename: filename || imageRef?.filename || "",
+  };
+  renderComfyuiInputAsset(key);
+}
+
+function clearComfyuiInputAsset(key) {
+  const asset = comfyuiAssetState(key);
+  revokeComfyuiAssetPreview(asset);
+  comfyuiInputAssets[key] = { file: null, imageRef: null, previewUrl: "", filename: "" };
+  renderComfyuiInputAsset(key);
+}
+
+async function loadComfyuiImageRefPreview(imageRef) {
+  const res = await apiFetch(API + "/comfyui/image-preview", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      "X-CSRF-Token": getCsrfToken() || ""
+    },
+    body: JSON.stringify({ image_ref: imageRef })
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json.ok) throw new Error(json.msg || `ComfyUI 圖片預覽讀取失敗（HTTP ${res.status}）`);
+  return json.image || {};
+}
+
+async function hydrateComfyuiInputAssetFromRef(key, imageRef) {
+  if (!imageRef?.filename) {
+    clearComfyuiInputAsset(key);
+    return;
+  }
+  try {
+    await fetchCsrfToken({ force: true });
+    const preview = await loadComfyuiImageRefPreview(imageRef);
+    setComfyuiInputAssetFromRef(key, imageRef, preview.data_url || "", imageRef.filename || "");
+  } catch (err) {
+    setComfyuiInputAssetFromRef(key, imageRef, "", imageRef.filename || "");
+    setComfyuiMessage(err.message || "圖片預覽讀取失敗", false);
+  }
 }
 
 function fillComfyuiSelect(id, values, fallback) {
@@ -398,11 +737,12 @@ function restoreComfyuiDraft({ includeDynamicSelects = true } = {}) {
     renderComfyuiSelectedLoras();
   }
   COMFYUI_DRAFT_FIELD_IDS.forEach((id) => {
-    if (!includeDynamicSelects && ["comfyui-model-select", "comfyui-vae-select", "comfyui-sampler", "comfyui-scheduler", "comfyui-album-select"].includes(id)) {
+    if (!includeDynamicSelects && COMFYUI_DYNAMIC_SELECT_IDS.includes(id)) {
       return;
     }
     setComfyuiFieldValue(id, draft[id]);
   });
+  updateComfyuiModeVisibility();
 }
 
 function updateComfyuiRootPanelVisibility(modeOverride = null) {
@@ -422,9 +762,10 @@ function updateComfyuiRootPanelVisibility(modeOverride = null) {
   panel.dataset.mode = localReady ? "local" : "remote";
   if (hint) {
     hint.textContent = localReady
-      ? "目前是本地模式，可在這裡管理 Civitai 模型下載。"
-      : "目前是雲端 / 遠端模式，所以這個區塊只保留說明。若要用 Civitai 下載模型到本站的本地 ComfyUI，請先把 backend 切回本地模式。";
+      ? "目前是本地模式，可在這裡用 Civitai 下載或直接上傳模型檔。"
+      : "目前是雲端 / 遠端模式，所以這個區塊只保留說明。若要管理本站的本地 ComfyUI 模型，請先把 backend 切回本地模式。";
   }
+  updateComfyuiModelSourceMode();
 }
 
 function renderComfyuiSelectedLoras() {
@@ -715,6 +1056,87 @@ function bindComfyuiDraftPersistence() {
   });
 }
 
+function bindComfyuiAdvancedUi() {
+  const modeSelect = $("comfyui-generation-mode");
+  if (modeSelect && modeSelect.dataset.comfyuiBound !== "1") {
+    modeSelect.dataset.comfyuiBound = "1";
+    modeSelect.addEventListener("change", () => {
+      updateComfyuiModeVisibility();
+      writeComfyuiDraft();
+    });
+  }
+  const controlEnabled = $("comfyui-controlnet-enabled");
+  if (controlEnabled && controlEnabled.dataset.comfyuiBound !== "1") {
+    controlEnabled.dataset.comfyuiBound = "1";
+    controlEnabled.addEventListener("change", () => {
+      updateComfyuiModeVisibility();
+      writeComfyuiDraft();
+    });
+  }
+  const controlType = $("comfyui-controlnet-type");
+  if (controlType && controlType.dataset.comfyuiBound !== "1") {
+    controlType.dataset.comfyuiBound = "1";
+    controlType.addEventListener("change", () => {
+      fillComfyuiControlnetModelOptions();
+      fillComfyuiControlnetPreprocessorOptions();
+      updateComfyuiControlnetTip();
+      writeComfyuiDraft();
+    });
+  }
+  const modelSourceMode = $("comfyui-model-source-mode");
+  if (modelSourceMode && modelSourceMode.dataset.comfyuiBound !== "1") {
+    modelSourceMode.dataset.comfyuiBound = "1";
+    modelSourceMode.addEventListener("change", updateComfyuiModelSourceMode);
+  }
+  const uploadBtn = $("comfyui-model-upload-btn");
+  if (uploadBtn && uploadBtn.dataset.comfyuiBound !== "1") {
+    uploadBtn.dataset.comfyuiBound = "1";
+    uploadBtn.addEventListener("click", () => {
+      uploadComfyuiModelFile().catch((err) => setComfyuiMessage(err.message || "模型上傳失敗", false));
+    });
+  }
+  ["model", "preprocessor"].forEach((name) => {
+    const el = $(`comfyui-controlnet-${name}`);
+    if (!el || el.dataset.comfyuiBound === "1") return;
+    el.dataset.comfyuiBound = "1";
+    el.addEventListener("change", writeComfyuiDraft);
+  });
+  Object.entries(COMFYUI_INPUT_ASSET_META).forEach(([key, meta]) => {
+    const fileInput = $(meta.fileInputId);
+    if (fileInput && fileInput.dataset.comfyuiBound !== "1") {
+      fileInput.dataset.comfyuiBound = "1";
+      fileInput.addEventListener("change", () => {
+        const file = fileInput.files && fileInput.files[0] ? fileInput.files[0] : null;
+        if (!file) {
+          clearComfyuiInputAsset(key);
+          return;
+        }
+        if (!/^image\/(png|jpeg|webp)$/i.test(file.type || "")) {
+          setComfyuiMessage("控制圖、遮罩圖與來源圖只支援 PNG、JPG、WEBP。", false);
+          fileInput.value = "";
+          return;
+        }
+        setComfyuiInputAssetFromFile(key, file);
+      });
+    }
+    const clearBtn = $(meta.clearBtnId);
+    if (clearBtn && clearBtn.dataset.comfyuiBound !== "1") {
+      clearBtn.dataset.comfyuiBound = "1";
+      clearBtn.addEventListener("click", () => clearComfyuiInputAsset(key));
+    }
+  });
+  const refreshBtn = $("comfyui-history-refresh-btn");
+  if (refreshBtn && refreshBtn.dataset.comfyuiBound !== "1") {
+    refreshBtn.dataset.comfyuiBound = "1";
+    refreshBtn.addEventListener("click", () => {
+      loadComfyuiHistory().catch((err) => setComfyuiMessage(err.message || "ComfyUI 歷史紀錄讀取失敗", false));
+    });
+  }
+  updateComfyuiModeVisibility();
+  updateComfyuiModelSourceMode();
+  Object.keys(COMFYUI_INPUT_ASSET_META).forEach((key) => renderComfyuiInputAsset(key));
+}
+
 async function loadComfyuiLastSettings() {
   const draft = readComfyuiDraft();
   if (!Object.keys(draft).length) {
@@ -761,6 +1183,187 @@ async function loadComfyuiAlbums({ force = false } = {}) {
     comfyuiAlbumsLoaded = false;
     setComfyuiMessage(err.message || "相簿讀取失敗", false);
     return [];
+  }
+}
+
+function comfyuiHistoryItemById(historyId) {
+  return comfyuiHistoryItems.find((item) => Number(item?.id) === Number(historyId)) || null;
+}
+
+function renderComfyuiHistory() {
+  const list = $("comfyui-history-list");
+  const status = $("comfyui-history-status");
+  if (!list) return;
+  if (!Array.isArray(comfyuiHistoryItems) || !comfyuiHistoryItems.length) {
+    list.innerHTML = '<div class="drive-empty">尚無 ComfyUI 歷史紀錄</div>';
+    if (status) status.textContent = "尚未找到可重跑的 ComfyUI 歷史紀錄";
+    return;
+  }
+  if (status) status.textContent = `最近 ${comfyuiHistoryItems.length} 筆 ComfyUI 歷史紀錄，可直接套回或重跑。`;
+  list.innerHTML = comfyuiHistoryItems.map((item) => {
+    const payload = item?.payload || {};
+    const control = item?.controlnet || {};
+    const mode = comfyuiReadableModeLabel(item?.generation_mode || payload?.generation_mode || "txt2img");
+    const controlLabel = control?.type ? ` · ControlNet ${String(control.type).toUpperCase()}` : "";
+    const model = payload?.model ? ` · ${payload.model}` : "";
+    const prompt = sanitize(String(payload?.prompt || "").slice(0, 140) || "（無提示詞）");
+    const createdAt = sanitize(String(item?.created_at || "").replace("T", " ").slice(0, 16));
+    return `
+      <div class="comfyui-history-item">
+        <div class="comfyui-history-head">
+          <strong>${sanitize(mode)}</strong>
+          <span>${createdAt}</span>
+        </div>
+        <div class="drive-card-sub">${sanitize(`ID #${item.id}${model}${controlLabel}`)}</div>
+        <div class="comfyui-history-prompt">${prompt}</div>
+        <div class="drive-card-sub">
+          ${sanitize(`步數 ${payload.steps || "-"} · CFG ${payload.cfg || "-"} · Seed ${payload.seed ?? "random"} · 張數 ${payload.batch_size || 1}`)}
+        </div>
+        <div class="drive-file-actions" style="justify-content:flex-start;">
+          <button class="btn btn-sm" type="button" data-comfyui-history-apply="${item.id}">套回表單</button>
+          <button class="btn btn-sm" type="button" data-comfyui-history-rerun="${item.id}">一鍵重跑</button>
+        </div>
+      </div>
+    `;
+  }).join("");
+  list.querySelectorAll("[data-comfyui-history-apply]").forEach((button) => {
+    button.addEventListener("click", () => {
+      applyComfyuiHistoryToForm(Number(button.getAttribute("data-comfyui-history-apply")));
+    });
+  });
+  list.querySelectorAll("[data-comfyui-history-rerun]").forEach((button) => {
+    button.addEventListener("click", () => {
+      rerunComfyuiHistory(Number(button.getAttribute("data-comfyui-history-rerun")));
+    });
+  });
+}
+
+async function loadComfyuiHistory() {
+  if (!currentUser || !canAccessModule("comfyui")) return [];
+  const status = $("comfyui-history-status");
+  if (status) status.textContent = "正在讀取 ComfyUI 歷史紀錄...";
+  await fetchCsrfToken({ force: true });
+  const res = await apiFetch(API + "/comfyui/history", {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": getCsrfToken() || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json.ok) {
+    const message = json.msg || `ComfyUI 歷史紀錄讀取失敗（HTTP ${res.status}）`;
+    if (status) status.textContent = message;
+    throw new Error(message);
+  }
+  comfyuiHistoryItems = Array.isArray(json.history) ? json.history : [];
+  renderComfyuiHistory();
+  return comfyuiHistoryItems;
+}
+
+async function applyComfyuiHistoryAssets(inputAssets = {}) {
+  await Promise.all([
+    inputAssets?.source_image_ref
+      ? hydrateComfyuiInputAssetFromRef("source", inputAssets.source_image_ref)
+      : Promise.resolve(clearComfyuiInputAsset("source")),
+    inputAssets?.mask_image_ref
+      ? hydrateComfyuiInputAssetFromRef("mask", inputAssets.mask_image_ref)
+      : Promise.resolve(clearComfyuiInputAsset("mask")),
+    inputAssets?.control_image_ref
+      ? hydrateComfyuiInputAssetFromRef("control", inputAssets.control_image_ref)
+      : Promise.resolve(clearComfyuiInputAsset("control")),
+  ]);
+}
+
+async function applyComfyuiHistoryToForm(historyId) {
+  const item = comfyuiHistoryItemById(historyId);
+  if (!item) {
+    setComfyuiMessage("找不到這筆 ComfyUI 歷史紀錄。", false);
+    return;
+  }
+  const payload = item.payload || {};
+  const controlnet = item.controlnet || {};
+  const loras = Array.isArray(payload.loras) ? payload.loras : [];
+  comfyuiSelectedLoras = loras
+    .filter((entry) => entry && typeof entry === "object" && entry.name)
+    .slice(0, COMFYUI_MAX_LORAS)
+    .map((entry) => ({
+      name: String(entry.name),
+      strength_model: Number.isFinite(Number(entry.strength_model)) ? Number(entry.strength_model) : 1,
+      strength_clip: Number.isFinite(Number(entry.strength_clip)) ? Number(entry.strength_clip) : 1,
+    }));
+  renderComfyuiSelectedLoras();
+  [
+    ["comfyui-generation-mode", payload.generation_mode || item.generation_mode || "txt2img"],
+    ["comfyui-model-select", payload.model || ""],
+    ["comfyui-vae-select", payload.vae || COMFYUI_VAE_BUILTIN],
+    ["comfyui-prompt", payload.prompt || ""],
+    ["comfyui-negative-prompt", payload.negative_prompt || ""],
+    ["comfyui-width", payload.width || comfyuiDefaultWidth],
+    ["comfyui-height", payload.height || comfyuiDefaultHeight],
+    ["comfyui-steps", payload.steps || 20],
+    ["comfyui-cfg", payload.cfg || 7],
+    ["comfyui-batch-size", payload.batch_size || 1],
+    ["comfyui-seed", payload.seed ?? ""],
+    ["comfyui-sampler", payload.sampler_name || "euler"],
+    ["comfyui-scheduler", payload.scheduler || "normal"],
+    ["comfyui-denoise-strength", payload.denoise_strength ?? 0.65],
+    ["comfyui-upscale-model", payload.upscale_model || ""],
+    ["comfyui-controlnet-type", controlnet.type || "canny"],
+    ["comfyui-controlnet-model", controlnet.model_name || ""],
+    ["comfyui-controlnet-preprocessor", controlnet.preprocessor || ""],
+    ["comfyui-control-strength", controlnet.strength ?? 1],
+    ["comfyui-control-start", controlnet.start_percent ?? 0],
+    ["comfyui-control-end", controlnet.end_percent ?? 1],
+    ["comfyui-outpaint-left", payload.outpaint?.left ?? 128],
+    ["comfyui-outpaint-top", payload.outpaint?.top ?? 128],
+    ["comfyui-outpaint-right", payload.outpaint?.right ?? 128],
+    ["comfyui-outpaint-bottom", payload.outpaint?.bottom ?? 128],
+    ["comfyui-outpaint-feathering", payload.outpaint?.feathering ?? 48],
+  ].forEach(([id, value]) => setComfyuiFieldValue(id, value));
+  const controlEnabled = !!controlnet?.type;
+  if ($("comfyui-controlnet-enabled")) $("comfyui-controlnet-enabled").checked = controlEnabled;
+  fillComfyuiControlnetModelOptions();
+  fillComfyuiControlnetPreprocessorOptions();
+  await applyComfyuiHistoryAssets(item.input_assets || {});
+  updateComfyuiModeVisibility();
+  writeComfyuiDraft();
+  setComfyuiMessage(`已套回第 ${historyId} 筆 ComfyUI 歷史，可直接再調整後重跑。`, true);
+}
+
+async function rerunComfyuiHistory(historyId) {
+  if (!historyId) return;
+  await fetchCsrfToken({ force: true });
+  setComfyuiBusy(true);
+  setComfyuiMessage("正在建立 ComfyUI 重跑工作...", true);
+  startComfyuiProgress(COMFYUI_GENERATION_TIMEOUT_SECONDS);
+  const controller = new AbortController();
+  comfyuiGenerateAbortController = controller;
+  try {
+    const res = await apiFetch(API + `/comfyui/history/${encodeURIComponent(historyId)}/rerun`, {
+      method: "POST",
+      credentials: "same-origin",
+      signal: controller.signal,
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRF-Token": getCsrfToken() || ""
+      },
+      body: JSON.stringify({})
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) throw new Error(json.msg || `ComfyUI 歷史重跑失敗（HTTP ${res.status}）`);
+    const result = await pollComfyuiJobUntilDone(json.job?.job_id, controller, COMFYUI_GENERATION_TIMEOUT_SECONDS);
+    const images = Array.isArray(result.images) && result.images.length ? result.images : [result.image].filter(Boolean);
+    comfyuiGeneratedImages = images;
+    renderComfyuiGeneratedImages(comfyuiGeneratedImages);
+    setComfyuiSelectedImage(0);
+    stopComfyuiProgress({ complete: true });
+    updateComfyuiResultButtons(true);
+    loadComfyuiHistory().catch(() => {});
+    setComfyuiMessage(`已重跑第 ${historyId} 筆 ComfyUI 歷史。`, true);
+  } catch (err) {
+    stopComfyuiProgress({ error: err.message || "ComfyUI 歷史重跑失敗" });
+    setComfyuiMessage(err.message || "ComfyUI 歷史重跑失敗", false);
+  } finally {
+    if (comfyuiGenerateAbortController === controller) comfyuiGenerateAbortController = null;
+    setComfyuiBusy(false);
   }
 }
 
@@ -843,11 +1446,18 @@ async function loadComfyuiModels() {
     renderComfyuiEmbeddingShortcuts(json.embeddings || []);
     fillComfyuiSelect("comfyui-sampler", json.samplers || [], "euler");
     fillComfyuiSelect("comfyui-scheduler", json.schedulers || [], "normal");
+    fillComfyuiGenerationModes(json.generation_modes || []);
+    fillComfyuiControlnetTypes(json.controlnet_types || {});
+    fillComfyuiUpscaleModels(json.upscale_models || []);
+    fillComfyuiControlnetModelOptions();
+    fillComfyuiControlnetPreprocessorOptions();
     restoreComfyuiDraft();
     pruneUnsupportedComfyuiSelectedLoras({ notify: true });
+    updateComfyuiModeVisibility();
     applyComfyuiRuntimeLimits(json);
     comfyuiModelsLoaded = true;
     loadComfyuiAlbums({ force: true }).catch(() => {});
+    loadComfyuiHistory().catch(() => {});
     setComfyuiTabAvailability(true);
     if (status) status.textContent = `已連線 ${json.comfyui_url || "ComfyUI"}${comfyuiBackendLabel(json)}，模型 ${Number((json.models || []).length)} 個，LoRA ${Number((json.loras || []).length)} 個，Embedding ${Number((json.embeddings || []).length)} 個，VAE ${Number((json.vaes || []).length)} 個`;
   } catch (err) {
@@ -1006,7 +1616,9 @@ function comfyuiNumberValue(id, fallback) {
 
 function comfyuiPayload() {
   const vae = $("comfyui-vae-select")?.value || COMFYUI_VAE_BUILTIN;
-  return {
+  const mode = comfyuiGenerationMode();
+  const payload = {
+    generation_mode: mode,
     model: $("comfyui-model-select")?.value || "",
     prompt: $("comfyui-prompt")?.value || "",
     negative_prompt: $("comfyui-negative-prompt")?.value || "",
@@ -1020,8 +1632,109 @@ function comfyuiPayload() {
     scheduler: $("comfyui-scheduler")?.value || "normal",
     vae: vae === COMFYUI_VAE_BUILTIN ? "" : vae,
     loras: comfyuiSelectedLoras.slice(0, COMFYUI_MAX_LORAS),
-    filename_prefix: "hackme_web"
+    denoise_strength: comfyuiNumberValue("comfyui-denoise-strength", 0.65),
+    filename_prefix: "hackme_web",
   };
+  if (comfyuiInputAssets.source?.imageRef) payload.source_image_ref = comfyuiInputAssets.source.imageRef;
+  if (comfyuiInputAssets.mask?.imageRef) payload.mask_image_ref = comfyuiInputAssets.mask.imageRef;
+  if (isComfyuiControlnetEnabled()) {
+    payload.controlnet = {
+      type: comfyuiSelectedControlnetType(),
+      model_name: $("comfyui-controlnet-model")?.value || "",
+      preprocessor: $("comfyui-controlnet-preprocessor")?.value || "",
+      strength: comfyuiNumberValue("comfyui-control-strength", 1),
+      start_percent: comfyuiNumberValue("comfyui-control-start", 0),
+      end_percent: comfyuiNumberValue("comfyui-control-end", 1),
+    };
+    if (comfyuiInputAssets.control?.imageRef) payload.controlnet.image_ref = comfyuiInputAssets.control.imageRef;
+  }
+  if (mode === "outpaint") {
+    payload.outpaint = {
+      left: Math.max(0, Math.floor(comfyuiNumberValue("comfyui-outpaint-left", 128))),
+      top: Math.max(0, Math.floor(comfyuiNumberValue("comfyui-outpaint-top", 128))),
+      right: Math.max(0, Math.floor(comfyuiNumberValue("comfyui-outpaint-right", 128))),
+      bottom: Math.max(0, Math.floor(comfyuiNumberValue("comfyui-outpaint-bottom", 128))),
+      feathering: Math.max(0, Math.floor(comfyuiNumberValue("comfyui-outpaint-feathering", 48))),
+    };
+  }
+  if (mode === "upscale") {
+    payload.upscale_model = $("comfyui-upscale-model")?.value || "";
+  }
+  return payload;
+}
+
+function comfyuiValidatePayloadForUi(payload) {
+  const mode = String(payload?.generation_mode || "").trim().toLowerCase();
+  const needsSource = comfyuiModeUsesSourceImage(mode);
+  const needsMask = comfyuiModeUsesMaskImage(mode);
+  if (needsSource && !comfyuiInputAssets.source?.file && !payload.source_image_ref) {
+    return `「${comfyuiReadableModeLabel(mode)}」需要來源圖片。`;
+  }
+  if (needsMask && !comfyuiInputAssets.mask?.file && !payload.mask_image_ref) {
+    return "局部重繪需要遮罩圖片。";
+  }
+  if (isComfyuiControlnetEnabled() && !comfyuiInputAssets.control?.file && !payload.controlnet?.image_ref) {
+    return "啟用 ControlNet 時需要控制圖。";
+  }
+  if (mode === "upscale" && !String(payload.upscale_model || "").trim()) {
+    return "放大修復需要選擇 scale model。";
+  }
+  return "";
+}
+
+function comfyuiBuildGenerateRequest(payload) {
+  const useMultipart = COMFYUI_IMAGE_ASSET_KEYS.some((key) => comfyuiInputAssets[key]?.file);
+  if (!useMultipart) {
+    return {
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    };
+  }
+  const form = new FormData();
+  const appendScalar = (key, value) => {
+    if (value === undefined || value === null || value === "") return;
+    form.append(key, String(value));
+  };
+  appendScalar("generation_mode", payload.generation_mode);
+  appendScalar("model", payload.model);
+  appendScalar("prompt", payload.prompt);
+  appendScalar("negative_prompt", payload.negative_prompt);
+  appendScalar("width", payload.width);
+  appendScalar("height", payload.height);
+  appendScalar("steps", payload.steps);
+  appendScalar("cfg", payload.cfg);
+  appendScalar("batch_size", payload.batch_size);
+  appendScalar("seed", payload.seed);
+  appendScalar("sampler_name", payload.sampler_name);
+  appendScalar("scheduler", payload.scheduler);
+  appendScalar("vae", payload.vae);
+  appendScalar("denoise_strength", payload.denoise_strength);
+  appendScalar("upscale_model", payload.upscale_model);
+  appendScalar("filename_prefix", payload.filename_prefix);
+  if (payload.source_image_ref) form.append("source_image_ref", JSON.stringify(payload.source_image_ref));
+  if (payload.mask_image_ref) form.append("mask_image_ref", JSON.stringify(payload.mask_image_ref));
+  if (Array.isArray(payload.loras) && payload.loras.length) form.append("loras_json", JSON.stringify(payload.loras));
+  if (payload.controlnet) {
+    appendScalar("controlnet_enabled", true);
+    appendScalar("controlnet_type", payload.controlnet.type);
+    appendScalar("controlnet_model", payload.controlnet.model_name || "");
+    appendScalar("controlnet_preprocessor", payload.controlnet.preprocessor || "");
+    appendScalar("control_strength", payload.controlnet.strength);
+    appendScalar("control_start", payload.controlnet.start_percent);
+    appendScalar("control_end", payload.controlnet.end_percent);
+    if (payload.controlnet.image_ref) form.append("control_image_ref", JSON.stringify(payload.controlnet.image_ref));
+  }
+  if (payload.outpaint) {
+    appendScalar("outpaint_left", payload.outpaint.left);
+    appendScalar("outpaint_top", payload.outpaint.top);
+    appendScalar("outpaint_right", payload.outpaint.right);
+    appendScalar("outpaint_bottom", payload.outpaint.bottom);
+    appendScalar("outpaint_feathering", payload.outpaint.feathering);
+  }
+  if (comfyuiInputAssets.source?.file) form.append("source_image", comfyuiInputAssets.source.file, comfyuiInputAssets.source.file.name || "source.png");
+  if (comfyuiInputAssets.mask?.file) form.append("mask_image", comfyuiInputAssets.mask.file, comfyuiInputAssets.mask.file.name || "mask.png");
+  if (comfyuiInputAssets.control?.file) form.append("control_image", comfyuiInputAssets.control.file, comfyuiInputAssets.control.file.name || "control.png");
+  return { headers: {}, body: form };
 }
 
 function comfyuiRunCount() {
@@ -1091,6 +1804,11 @@ async function generateComfyuiImage() {
   }
   if (!comfyuiModelsLoaded) return;
   const payload = comfyuiPayload();
+  const validationMessage = comfyuiValidatePayloadForUi(payload);
+  if (validationMessage) {
+    setComfyuiMessage(validationMessage, false);
+    return;
+  }
   const runCount = comfyuiRunCount();
   const billingConfirmation = confirmComfyuiBilling(payload);
   if (!billingConfirmation.confirmed) {
@@ -1116,6 +1834,7 @@ async function generateComfyuiImage() {
     if (preflightBilling) {
       comfyuiBillingQuote = { ...(comfyuiBillingQuote || {}), ...preflightBilling };
     }
+    const generateRequest = comfyuiBuildGenerateRequest(payload);
     startComfyuiProgress(COMFYUI_GENERATION_TIMEOUT_SECONDS * runCount);
     let totalCharged = 0;
     const generated = [];
@@ -1131,17 +1850,31 @@ async function generateComfyuiImage() {
         credentials: "same-origin",
         signal: controller.signal,
         headers: {
-          "Content-Type": "application/json",
-          "X-CSRF-Token": getCsrfToken() || ""
+          "X-CSRF-Token": getCsrfToken() || "",
+          ...(generateRequest.headers || {})
         },
-        body: JSON.stringify({
-          ...payload,
-          batch_size: 1,
-          async_progress: true,
-          confirm_billing: billingConfirmation.required,
-          timeout_seconds: COMFYUI_GENERATION_TIMEOUT_SECONDS,
-          ...comfyuiRequestPayloadExtras()
-        })
+        body: (() => {
+          if (generateRequest.body instanceof FormData) {
+            const body = new FormData();
+            generateRequest.body.forEach((value, key) => body.append(key, value));
+            body.append("batch_size", "1");
+            body.append("async_progress", "true");
+            body.append("confirm_billing", billingConfirmation.required ? "true" : "false");
+            body.append("timeout_seconds", String(COMFYUI_GENERATION_TIMEOUT_SECONDS));
+            Object.entries(comfyuiRequestPayloadExtras() || {}).forEach(([key, value]) => {
+              if (value !== undefined && value !== null && value !== "") body.append(key, String(value));
+            });
+            return body;
+          }
+          return JSON.stringify({
+            ...payload,
+            batch_size: 1,
+            async_progress: true,
+            confirm_billing: billingConfirmation.required,
+            timeout_seconds: COMFYUI_GENERATION_TIMEOUT_SECONDS,
+            ...comfyuiRequestPayloadExtras()
+          });
+        })()
       });
       const startJson = await startRes.json().catch(() => ({}));
       if (!startRes.ok || !startJson.ok) throw new Error(startJson.msg || `第 ${requestIndex + 1} 張產圖失敗（HTTP ${startRes.status}）`);
@@ -1169,6 +1902,7 @@ async function generateComfyuiImage() {
     setComfyuiSelectedImage(0);
     stopComfyuiProgress({ complete: true });
     updateComfyuiResultButtons(true);
+    loadComfyuiHistory().catch(() => {});
     const billingText = totalCharged > 0
       ? `已扣 ${totalCharged} 點。`
       : "";
@@ -1442,6 +2176,18 @@ function renderComfyuiCivitaiInspection(model) {
   }
 }
 
+function comfyuiSelectedModelSourceMode() {
+  return String($("comfyui-model-source-mode")?.value || "civitai").trim().toLowerCase() || "civitai";
+}
+
+function updateComfyuiModelSourceMode() {
+  const mode = comfyuiSelectedModelSourceMode();
+  const civitai = $("comfyui-model-source-civitai");
+  const upload = $("comfyui-model-source-upload");
+  if (civitai) civitai.style.display = mode === "upload" ? "none" : "";
+  if (upload) upload.style.display = mode === "upload" ? "" : "none";
+}
+
 function onComfyuiCivitaiVersionChange() {
   const versionId = $("comfyui-civitai-version")?.value || "";
   renderComfyuiCivitaiFiles(versionId);
@@ -1629,4 +2375,76 @@ async function downloadComfyuiCivitaiModel() {
 
 async function downloadComfyuiModelFromUrl() {
   return downloadComfyuiCivitaiModel();
+}
+
+async function uploadComfyuiModelFile() {
+  if (currentUser !== "root") {
+    setComfyuiMessage("只有 root 可以匯入 ComfyUI 模型。", false);
+    return;
+  }
+  const button = $("comfyui-model-upload-btn");
+  const status = $("comfyui-model-download-status");
+  const fileInput = $("comfyui-model-upload-file");
+  const file = fileInput?.files?.[0] || null;
+  const type = $("comfyui-model-download-type")?.value || "checkpoint";
+  const baseDir = ($("comfyui-model-base-dir")?.value || "").trim();
+  if (!file) {
+    if (status) status.textContent = "請先選擇要上傳的模型檔案。";
+    setComfyuiMessage("請先選擇要上傳的模型檔案。", false);
+    return;
+  }
+  if (button) {
+    button.disabled = true;
+    button.textContent = "上傳中...";
+  }
+  if (status) status.textContent = "正在上傳模型檔...";
+  setComfyuiModelDownloadProgress({
+    visible: true,
+    running: true,
+    percent: 0,
+    label: "準備匯入",
+    detail: `正在上傳 ${file.name} ...`
+  });
+  try {
+    await fetchCsrfToken({ force: true });
+    const form = new FormData();
+    form.append("type", type);
+    form.append("base_dir", baseDir);
+    form.append("model_file", file);
+    const res = await apiFetch(API + "/root/comfyui/model-upload", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": getCsrfToken() || "" },
+      body: form,
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) throw new Error(json.msg || `模型上傳失敗（HTTP ${res.status}）`);
+    const info = json.upload || {};
+    if (status) status.textContent = `${json.msg || "模型已匯入"}（${formatDriveBytes(info.size_bytes || 0)}）`;
+    setComfyuiModelDownloadProgress({
+      visible: true,
+      running: false,
+      percent: 100,
+      label: "模型已匯入",
+      detail: `${info.filename || file.name} · ${formatDriveBytes(info.size_bytes || 0)}`
+    });
+    setComfyuiMessage(json.msg || "模型已匯入。請重新整理模型清單。", true);
+    if (fileInput) fileInput.value = "";
+    await loadComfyuiModels();
+  } catch (err) {
+    if (status) status.textContent = err.message || "模型上傳失敗";
+    setComfyuiModelDownloadProgress({
+      visible: true,
+      running: false,
+      percent: 100,
+      label: "模型上傳失敗",
+      detail: err.message || "模型上傳失敗"
+    });
+    setComfyuiMessage(err.message || "模型上傳失敗", false);
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "上傳模型檔";
+    }
+  }
 }

@@ -18,7 +18,7 @@ Related technical references:
 
 ## Release and Schema
 
-- Release ID: `2026.05.05-114`
+- Release ID: `2026.05.05-116`
 - Schema version: `29`
 - Release ID source: `services/release_info.py`
 - Runtime version endpoint: `GET /api/version`
@@ -363,6 +363,9 @@ Streaming notes:
 - `POST /api/comfyui/billing-quote`
 - `POST /api/comfyui/generate`
 - `GET /api/comfyui/jobs/{job_id}`
+- `GET /api/comfyui/history`
+- `POST /api/comfyui/history/{history_id}/rerun`
+- `POST /api/comfyui/image-preview`
 - `POST /api/comfyui/interrupt`
 - `POST /api/comfyui/save`
 - `POST /api/comfyui/discard`
@@ -370,6 +373,7 @@ Streaming notes:
 - `POST /api/root/comfyui/test-connection`
 - `POST /api/root/comfyui/civitai/inspect`
 - `POST /api/root/comfyui/civitai/download`
+- `POST /api/root/comfyui/model-upload`
 - `POST /api/root/comfyui/stop`
 - `GET /api/me/appearance`
 - `PUT /api/me/appearance`
@@ -382,14 +386,35 @@ ComfyUI notes:
   polls `/api/comfyui/jobs/{job_id}` for progress and final result.
 - Each selected LoRA keeps its own `strength_model` and `strength_clip` values
   in the frontend draft and sends them back in the generation payload.
+- Advanced generation modes now include `img2img`, `inpaint`, `outpaint`, and
+  `upscale`. Multipart uploads are accepted for source, mask, and ControlNet
+  control images; the server validates MIME/extension before hydrating them
+  into persisted preview assets.
+- ControlNet support is capability-driven. The server exposes supported
+  generation modes, ControlNet types, ControlNet models, preprocessors, and
+  upscale models through `GET /api/comfyui/models`; generate requests are
+  rejected up front when the required node/model/preprocessor is unavailable.
+- History replay stores prompt, LoRA, generation mode, source/mask/control
+  image refs, ControlNet settings, outpaint extents, and upscale model so the
+  frontend can offer one-click restore and rerun.
 - Root-only Civitai endpoints inspect a page URL, list versions/files, and
   download the selected checkpoint or LoRA into the configured local project.
   The model-download UI is intentionally separated from the main generation form
   and rendered as a collapsed panel at the bottom of the AI page.
+- The same root-only panel now also supports direct file uploads into the local
+  ComfyUI `models/` tree for checkpoint / LoRA / embedding / VAE management
+  without going through Civitai metadata first.
 - LoRA availability is metadata-driven. The frontend and backend only allow
   LoRAs whose recorded `base_model` normalizes into `sdxl`, `pony`,
   `illustrious`, or `noob`. `SD1.5`, `Flux`, and unknown-metadata LoRAs are
   disabled in the picker and rejected by `POST /api/comfyui/generate`.
+- Supported ControlNet families in the current UI are `canny`, `depth`,
+  `openpose`, `lineart`, `scribble`, `softedge`, and `tile`.
+- `scripts/comfyui_feature_probe.py` is the backup/live probe harness for this
+  module. It logs in through the web app, exercises `status`, `models`,
+  `txt2img`, `img2img`, `inpaint`, `outpaint`, `upscale`, `history rerun`, and
+  optionally ControlNet, then writes a JSON report that can be attached to QA
+  evidence.
 - Local mode supports explicit start and root-only stop operations for the
   shared ComfyUI process.
 - Remote mode is generation-only. Root settings hide Civitai key / download UI

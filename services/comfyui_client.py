@@ -18,6 +18,60 @@ class ComfyUIError(RuntimeError):
     pass
 
 
+CONTROLNET_TYPE_DEFINITIONS = {
+    "canny": {
+        "label": "Canny",
+        "default_preprocessor": "CannyEdgePreprocessor",
+        "preprocessor_candidates": ["CannyEdgePreprocessor"],
+        "model_keywords": ["canny"],
+    },
+    "depth": {
+        "label": "Depth",
+        "default_preprocessor": "DepthAnythingPreprocessor",
+        "preprocessor_candidates": ["DepthAnythingPreprocessor", "MiDaS-DepthMapPreprocessor"],
+        "model_keywords": ["depth"],
+    },
+    "openpose": {
+        "label": "OpenPose",
+        "default_preprocessor": "OpenposePreprocessor",
+        "preprocessor_candidates": ["OpenposePreprocessor", "DWPreprocessor"],
+        "model_keywords": ["openpose", "pose"],
+    },
+    "lineart": {
+        "label": "Lineart",
+        "default_preprocessor": "LineArtPreprocessor",
+        "preprocessor_candidates": ["LineArtPreprocessor", "LineartStandardPreprocessor"],
+        "model_keywords": ["lineart", "line-art"],
+    },
+    "scribble": {
+        "label": "Scribble",
+        "default_preprocessor": "PiDiNetPreprocessor",
+        "preprocessor_candidates": ["PiDiNetPreprocessor", "ScribblePreprocessor"],
+        "model_keywords": ["scribble"],
+    },
+    "softedge": {
+        "label": "SoftEdge",
+        "default_preprocessor": "SoftEdgePreprocessor",
+        "preprocessor_candidates": ["SoftEdgePreprocessor", "HEDPreprocessor", "PiDiNetPreprocessor"],
+        "model_keywords": ["softedge", "soft-edge", "hed"],
+    },
+    "tile": {
+        "label": "Tile",
+        "default_preprocessor": "TilePreprocessor",
+        "preprocessor_candidates": ["TilePreprocessor"],
+        "model_keywords": ["tile"],
+    },
+}
+
+GENERATION_MODE_DEFINITIONS = {
+    "txt2img": {"label": "文字生圖"},
+    "img2img": {"label": "圖生圖"},
+    "inpaint": {"label": "局部重繪"},
+    "outpaint": {"label": "向外延展"},
+    "upscale": {"label": "放大修復"},
+}
+
+
 @dataclass
 class ComfyUIImage:
     filename: str
@@ -63,6 +117,46 @@ class ComfyUIClient:
         except urllib.error.URLError as exc:
             raise ComfyUIError(f"ComfyUI 連線失敗：{getattr(exc, 'reason', exc)}") from exc
 
+    def _multipart_request(self, path, *, fields=None, files=None, timeout=None):
+        boundary = f"----HackmeWebComfyUI{uuid.uuid4().hex}"
+        body = bytearray()
+        for key, value in (fields or {}).items():
+            body.extend(f"--{boundary}\r\n".encode("utf-8"))
+            body.extend(f'Content-Disposition: form-data; name="{key}"\r\n\r\n'.encode("utf-8"))
+            body.extend(str(value).encode("utf-8"))
+            body.extend(b"\r\n")
+        for item in files or []:
+            if not isinstance(item, dict):
+                continue
+            field_name = str(item.get("field") or "image")
+            filename = str(item.get("filename") or "upload.bin")
+            content_type = str(item.get("content_type") or "application/octet-stream")
+            data = item.get("data") or b""
+            body.extend(f"--{boundary}\r\n".encode("utf-8"))
+            body.extend(
+                f'Content-Disposition: form-data; name="{field_name}"; filename="{filename}"\r\n'.encode("utf-8")
+            )
+            body.extend(f"Content-Type: {content_type}\r\n\r\n".encode("utf-8"))
+            body.extend(data)
+            body.extend(b"\r\n")
+        body.extend(f"--{boundary}--\r\n".encode("utf-8"))
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        }
+        req = urllib.request.Request(self._url(path), data=bytes(body), method="POST", headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout or self.timeout) as resp:
+                raw = resp.read().decode("utf-8")
+                if not raw.strip():
+                    return {}
+                try:
+                    return json.loads(raw)
+                except json.JSONDecodeError as exc:
+                    raise ComfyUIError("ComfyUI 回應不是 JSON") from exc
+        except urllib.error.URLError as exc:
+            raise ComfyUIError(f"ComfyUI 連線失敗：{getattr(exc, 'reason', exc)}") from exc
+
     def _open_progress_socket(self, client_id, *, timeout=5):
         if websocket is None:
             raise ComfyUIError("缺少 websocket-client 套件，無法讀取 ComfyUI 即時進度")
@@ -79,10 +173,28 @@ class ComfyUIClient:
         node = info.get(node_class) if isinstance(info, dict) else None
         required = ((node or {}).get("input") or {}).get("required") or {}
         raw_values = required.get(input_name) or []
-        values = raw_values[0] if isinstance(raw_values, list) and raw_values else []
-        if not isinstance(values, list):
-            values = []
+        values = []
+        if isinstance(raw_values, list) and raw_values:
+            first = raw_values[0]
+            if isinstance(first, list):
+                values = first
+            elif isinstance(first, str) and len(raw_values) > 1 and isinstance(raw_values[1], dict):
+                options = raw_values[1].get("options") or []
+                if isinstance(options, list):
+                    values = options
         return [str(item) for item in values if str(item).strip()]
+
+    def get_object_info(self, node_class=None):
+        path = "/object_info"
+        if node_class:
+            path = f"/object_info/{urllib.parse.quote(str(node_class))}"
+        info = self._json_request(path)
+        if not isinstance(info, dict):
+            raise ComfyUIError("ComfyUI object_info 回應格式不正確")
+        return info
+
+    def list_node_classes(self):
+        return sorted(self.get_object_info().keys())
 
     def get_models(self):
         return self._list_node_input_options("CheckpointLoaderSimple", "ckpt_name")
@@ -128,34 +240,88 @@ class ComfyUIClient:
             "schedulers": [str(item) for item in scheduler_values] if isinstance(scheduler_values, list) else [],
         }
 
-    def build_text_to_image_workflow(self, params):
-        workflow = {
-            "3": {
-                "class_type": "KSampler",
-                "inputs": {
-                    "seed": int(params["seed"]),
-                    "steps": int(params["steps"]),
-                    "cfg": float(params["cfg"]),
-                    "sampler_name": params["sampler_name"],
-                    "scheduler": params["scheduler"],
-                    "denoise": 1,
-                    "model": ["4", 0],
-                    "positive": ["6", 0],
-                    "negative": ["7", 0],
-                    "latent_image": ["5", 0],
-                },
+    def get_controlnet_models(self):
+        return self._list_node_input_options("ControlNetLoader", "control_net_name")
+
+    def get_upscale_models(self):
+        return self._list_node_input_options("UpscaleModelLoader", "model_name")
+
+    def get_capabilities(self):
+        object_info = self.get_object_info()
+        available_nodes = set(object_info.keys())
+        controlnet_models = self.get_controlnet_models() if "ControlNetLoader" in available_nodes else []
+        upscale_models = self.get_upscale_models() if "UpscaleModelLoader" in available_nodes else []
+        controlnet_types = {}
+        for key, definition in CONTROLNET_TYPE_DEFINITIONS.items():
+            preprocessor_candidates = list(definition.get("preprocessor_candidates") or [])
+            available_preprocessors = [
+                name for name in preprocessor_candidates if name in available_nodes
+            ]
+            model_keywords = [keyword.lower() for keyword in definition.get("model_keywords") or []]
+            matching_models = [
+                model
+                for model in controlnet_models
+                if any(keyword in str(model).lower() for keyword in model_keywords)
+            ]
+            controlnet_types[key] = {
+                "label": definition.get("label") or key,
+                "available": bool(
+                    {"ControlNetLoader", "ControlNetApplyAdvanced", "LoadImage"}.issubset(available_nodes)
+                    and available_preprocessors
+                    and matching_models
+                ),
+                "available_preprocessors": available_preprocessors,
+                "default_preprocessor": next(
+                    (name for name in [definition.get("default_preprocessor")] + preprocessor_candidates if name in available_preprocessors),
+                    "",
+                ),
+                "matching_models": matching_models,
+            }
+        return {
+            "available_nodes": sorted(available_nodes),
+            "controlnet_models": controlnet_models,
+            "upscale_models": upscale_models,
+            "controlnet_types": controlnet_types,
+            "generation_modes": [
+                {
+                    "key": key,
+                    "label": value.get("label") or key,
+                    "available": True,
+                }
+                for key, value in GENERATION_MODE_DEFINITIONS.items()
+            ],
+        }
+
+    def upload_image_bytes(self, data, filename, *, image_type="input", overwrite=False, subfolder=""):
+        filename = Path(str(filename or "upload.png")).name
+        payload = self._multipart_request(
+            "/upload/image",
+            fields={
+                "type": str(image_type or "input"),
+                "overwrite": "true" if overwrite else "false",
+                "subfolder": str(subfolder or ""),
             },
+            files=[{
+                "field": "image",
+                "filename": filename,
+                "content_type": "application/octet-stream",
+                "data": data or b"",
+            }],
+        )
+        name = str(payload.get("name") or filename).strip()
+        if not name:
+            raise ComfyUIError("ComfyUI 未回傳上傳檔名")
+        return {
+            "filename": name,
+            "subfolder": str(payload.get("subfolder") or subfolder or "").strip(),
+            "type": str(payload.get("type") or image_type or "input").strip() or "input",
+        }
+
+    def _build_text_to_image_base(self, params):
+        workflow = {
             "4": {
                 "class_type": "CheckpointLoaderSimple",
                 "inputs": {"ckpt_name": params["model"]},
-            },
-            "5": {
-                "class_type": "EmptyLatentImage",
-                "inputs": {
-                    "width": int(params["width"]),
-                    "height": int(params["height"]),
-                    "batch_size": int(params.get("batch_size") or 1),
-                },
             },
             "6": {
                 "class_type": "CLIPTextEncode",
@@ -164,17 +330,6 @@ class ComfyUIClient:
             "7": {
                 "class_type": "CLIPTextEncode",
                 "inputs": {"text": params.get("negative_prompt") or "", "clip": ["4", 1]},
-            },
-            "8": {
-                "class_type": "VAEDecode",
-                "inputs": {"samples": ["3", 0], "vae": ["4", 2]},
-            },
-            "9": {
-                "class_type": "SaveImage",
-                "inputs": {
-                    "filename_prefix": params.get("filename_prefix") or "hackme_web",
-                    "images": ["8", 0],
-                },
             },
         }
         final_model = ["4", 0]
@@ -200,18 +355,322 @@ class ComfyUIClient:
             }
             final_model = [node_id, 0]
             final_clip = [node_id, 1]
+        vae_ref = ["4", 2]
         vae_name = str(params.get("vae") or "").strip()
         if vae_name:
             vae_node_id = str(next_node_id)
+            next_node_id += 1
             workflow[vae_node_id] = {
                 "class_type": "VAELoader",
                 "inputs": {"vae_name": vae_name},
             }
-            workflow["8"]["inputs"]["vae"] = [vae_node_id, 0]
-        workflow["3"]["inputs"]["model"] = final_model
+            vae_ref = [vae_node_id, 0]
         workflow["6"]["inputs"]["clip"] = final_clip
         workflow["7"]["inputs"]["clip"] = final_clip
+        return workflow, final_model, final_clip, vae_ref, next_node_id
+
+    def _attach_controlnet(self, workflow, params, *, positive_ref, negative_ref, next_node_id):
+        control = params.get("controlnet") if isinstance(params.get("controlnet"), dict) else None
+        if not control:
+            return positive_ref, negative_ref, next_node_id
+        control_image = control.get("image_ref") if isinstance(control.get("image_ref"), dict) else None
+        if not control_image or not control_image.get("filename"):
+            raise ComfyUIError("ControlNet 缺少控制圖")
+        loader_id = str(next_node_id)
+        next_node_id += 1
+        workflow[loader_id] = {
+            "class_type": "LoadImage",
+            "inputs": {"image": control_image["filename"], "upload": "image"},
+        }
+        image_ref = [loader_id, 0]
+        preprocessor = str(control.get("preprocessor") or "").strip()
+        if preprocessor:
+            preprocessor_id = str(next_node_id)
+            next_node_id += 1
+            workflow[preprocessor_id] = {
+                "class_type": preprocessor,
+                "inputs": {"image": image_ref},
+            }
+            image_ref = [preprocessor_id, 0]
+        model_id = str(next_node_id)
+        next_node_id += 1
+        workflow[model_id] = {
+            "class_type": "ControlNetLoader",
+            "inputs": {"control_net_name": control["model_name"]},
+        }
+        apply_id = str(next_node_id)
+        next_node_id += 1
+        workflow[apply_id] = {
+            "class_type": "ControlNetApplyAdvanced",
+            "inputs": {
+                "positive": positive_ref,
+                "negative": negative_ref,
+                "control_net": [model_id, 0],
+                "image": image_ref,
+                "strength": float(control.get("strength") or 1.0),
+                "start_percent": float(control.get("start_percent") or 0.0),
+                "end_percent": float(control.get("end_percent") or 1.0),
+            },
+        }
+        return [apply_id, 0], [apply_id, 1], next_node_id
+
+    def build_text_to_image_workflow(self, params):
+        workflow, final_model, _final_clip, vae_ref, next_node_id = self._build_text_to_image_base(params)
+        workflow["5"] = {
+            "class_type": "EmptyLatentImage",
+            "inputs": {
+                "width": int(params["width"]),
+                "height": int(params["height"]),
+                "batch_size": int(params.get("batch_size") or 1),
+            },
+        }
+        positive_ref = ["6", 0]
+        negative_ref = ["7", 0]
+        positive_ref, negative_ref, next_node_id = self._attach_controlnet(
+            workflow,
+            params,
+            positive_ref=positive_ref,
+            negative_ref=negative_ref,
+            next_node_id=next_node_id,
+        )
+        workflow["3"] = {
+            "class_type": "KSampler",
+            "inputs": {
+                "seed": int(params["seed"]),
+                "steps": int(params["steps"]),
+                "cfg": float(params["cfg"]),
+                "sampler_name": params["sampler_name"],
+                "scheduler": params["scheduler"],
+                "denoise": 1,
+                "model": final_model,
+                "positive": positive_ref,
+                "negative": negative_ref,
+                "latent_image": ["5", 0],
+            },
+        }
+        workflow["8"] = {
+            "class_type": "VAEDecode",
+            "inputs": {"samples": ["3", 0], "vae": vae_ref},
+        }
+        workflow["9"] = {
+            "class_type": "SaveImage",
+            "inputs": {
+                "filename_prefix": params.get("filename_prefix") or "hackme_web",
+                "images": ["8", 0],
+            },
+        }
         return workflow
+
+    def build_image_to_image_workflow(self, params):
+        workflow, final_model, _final_clip, vae_ref, next_node_id = self._build_text_to_image_base(params)
+        source_image = params.get("source_image_ref") if isinstance(params.get("source_image_ref"), dict) else None
+        if not source_image:
+            raise ComfyUIError("圖生圖缺少來源圖片")
+        workflow["5"] = {
+            "class_type": "LoadImage",
+            "inputs": {"image": source_image["filename"], "upload": "image"},
+        }
+        workflow["10"] = {
+            "class_type": "VAEEncode",
+            "inputs": {"pixels": ["5", 0], "vae": vae_ref},
+        }
+        positive_ref = ["6", 0]
+        negative_ref = ["7", 0]
+        positive_ref, negative_ref, next_node_id = self._attach_controlnet(
+            workflow,
+            params,
+            positive_ref=positive_ref,
+            negative_ref=negative_ref,
+            next_node_id=next_node_id,
+        )
+        workflow["3"] = {
+            "class_type": "KSampler",
+            "inputs": {
+                "seed": int(params["seed"]),
+                "steps": int(params["steps"]),
+                "cfg": float(params["cfg"]),
+                "sampler_name": params["sampler_name"],
+                "scheduler": params["scheduler"],
+                "denoise": float(params.get("denoise_strength") or 0.65),
+                "model": final_model,
+                "positive": positive_ref,
+                "negative": negative_ref,
+                "latent_image": ["10", 0],
+            },
+        }
+        workflow["8"] = {
+            "class_type": "VAEDecode",
+            "inputs": {"samples": ["3", 0], "vae": vae_ref},
+        }
+        workflow["9"] = {
+            "class_type": "SaveImage",
+            "inputs": {
+                "filename_prefix": params.get("filename_prefix") or "hackme_web",
+                "images": ["8", 0],
+            },
+        }
+        return workflow
+
+    def build_inpaint_workflow(self, params):
+        workflow, final_model, _final_clip, vae_ref, next_node_id = self._build_text_to_image_base(params)
+        source_image = params.get("source_image_ref") if isinstance(params.get("source_image_ref"), dict) else None
+        mask_image = params.get("mask_image_ref") if isinstance(params.get("mask_image_ref"), dict) else None
+        if not source_image or not mask_image:
+            raise ComfyUIError("局部重繪缺少來源圖片或遮罩")
+        workflow["5"] = {
+            "class_type": "LoadImage",
+            "inputs": {"image": source_image["filename"], "upload": "image"},
+        }
+        workflow["11"] = {
+            "class_type": "LoadImageMask",
+            "inputs": {"image": mask_image["filename"], "channel": "alpha"},
+        }
+        workflow["10"] = {
+            "class_type": "VAEEncodeForInpaint",
+            "inputs": {"pixels": ["5", 0], "mask": ["11", 0], "vae": vae_ref, "grow_mask_by": 6},
+        }
+        positive_ref = ["6", 0]
+        negative_ref = ["7", 0]
+        positive_ref, negative_ref, next_node_id = self._attach_controlnet(
+            workflow,
+            params,
+            positive_ref=positive_ref,
+            negative_ref=negative_ref,
+            next_node_id=next_node_id,
+        )
+        workflow["3"] = {
+            "class_type": "KSampler",
+            "inputs": {
+                "seed": int(params["seed"]),
+                "steps": int(params["steps"]),
+                "cfg": float(params["cfg"]),
+                "sampler_name": params["sampler_name"],
+                "scheduler": params["scheduler"],
+                "denoise": float(params.get("denoise_strength") or 0.8),
+                "model": final_model,
+                "positive": positive_ref,
+                "negative": negative_ref,
+                "latent_image": ["10", 0],
+            },
+        }
+        workflow["8"] = {
+            "class_type": "VAEDecode",
+            "inputs": {"samples": ["3", 0], "vae": vae_ref},
+        }
+        workflow["9"] = {
+            "class_type": "SaveImage",
+            "inputs": {
+                "filename_prefix": params.get("filename_prefix") or "hackme_web",
+                "images": ["8", 0],
+            },
+        }
+        return workflow
+
+    def build_outpaint_workflow(self, params):
+        workflow, final_model, _final_clip, vae_ref, next_node_id = self._build_text_to_image_base(params)
+        source_image = params.get("source_image_ref") if isinstance(params.get("source_image_ref"), dict) else None
+        if not source_image:
+            raise ComfyUIError("向外延展缺少來源圖片")
+        expand = params.get("outpaint") if isinstance(params.get("outpaint"), dict) else {}
+        workflow["5"] = {
+            "class_type": "LoadImage",
+            "inputs": {"image": source_image["filename"], "upload": "image"},
+        }
+        workflow["10"] = {
+            "class_type": "ImagePadForOutpaint",
+            "inputs": {
+                "image": ["5", 0],
+                "left": int(expand.get("left") or 0),
+                "top": int(expand.get("top") or 0),
+                "right": int(expand.get("right") or 0),
+                "bottom": int(expand.get("bottom") or 0),
+                "feathering": int(expand.get("feathering") or 24),
+            },
+        }
+        workflow["11"] = {
+            "class_type": "VAEEncodeForInpaint",
+            "inputs": {"pixels": ["10", 0], "mask": ["10", 1], "vae": vae_ref, "grow_mask_by": 6},
+        }
+        positive_ref = ["6", 0]
+        negative_ref = ["7", 0]
+        positive_ref, negative_ref, next_node_id = self._attach_controlnet(
+            workflow,
+            params,
+            positive_ref=positive_ref,
+            negative_ref=negative_ref,
+            next_node_id=next_node_id,
+        )
+        workflow["3"] = {
+            "class_type": "KSampler",
+            "inputs": {
+                "seed": int(params["seed"]),
+                "steps": int(params["steps"]),
+                "cfg": float(params["cfg"]),
+                "sampler_name": params["sampler_name"],
+                "scheduler": params["scheduler"],
+                "denoise": float(params.get("denoise_strength") or 0.9),
+                "model": final_model,
+                "positive": positive_ref,
+                "negative": negative_ref,
+                "latent_image": ["11", 0],
+            },
+        }
+        workflow["8"] = {
+            "class_type": "VAEDecode",
+            "inputs": {"samples": ["3", 0], "vae": vae_ref},
+        }
+        workflow["9"] = {
+            "class_type": "SaveImage",
+            "inputs": {
+                "filename_prefix": params.get("filename_prefix") or "hackme_web",
+                "images": ["8", 0],
+            },
+        }
+        return workflow
+
+    def build_upscale_workflow(self, params):
+        source_image = params.get("source_image_ref") if isinstance(params.get("source_image_ref"), dict) else None
+        upscale_model = str(params.get("upscale_model") or "").strip()
+        if not source_image:
+            raise ComfyUIError("放大修復缺少來源圖片")
+        if not upscale_model:
+            raise ComfyUIError("請選擇放大模型")
+        workflow = {
+            "3": {
+                "class_type": "UpscaleModelLoader",
+                "inputs": {"model_name": upscale_model},
+            },
+            "4": {
+                "class_type": "LoadImage",
+                "inputs": {"image": source_image["filename"], "upload": "image"},
+            },
+            "5": {
+                "class_type": "ImageUpscaleWithModel",
+                "inputs": {"upscale_model": ["3", 0], "image": ["4", 0]},
+            },
+            "9": {
+                "class_type": "SaveImage",
+                "inputs": {
+                    "filename_prefix": params.get("filename_prefix") or "hackme_web",
+                    "images": ["5", 0],
+                },
+            },
+        }
+        return workflow
+
+    def build_generation_workflow(self, params):
+        mode = str(params.get("generation_mode") or "txt2img").strip().lower()
+        if mode == "txt2img":
+            return self.build_text_to_image_workflow(params)
+        if mode == "img2img":
+            return self.build_image_to_image_workflow(params)
+        if mode == "inpaint":
+            return self.build_inpaint_workflow(params)
+        if mode == "outpaint":
+            return self.build_outpaint_workflow(params)
+        if mode == "upscale":
+            return self.build_upscale_workflow(params)
+        raise ComfyUIError("ComfyUI 產圖模式不支援")
 
     def queue_prompt_with_client_id(self, workflow, *, client_id=None):
         client_id = str(client_id or uuid.uuid4().hex)
@@ -468,7 +927,7 @@ class ComfyUIClient:
         return result
 
     def generate_image(self, params, *, timeout_seconds=1800, progress_callback=None):
-        workflow = self.build_text_to_image_workflow(params)
+        workflow = self.build_generation_workflow(params)
         websocket_conn = None
         client_id = uuid.uuid4().hex
         try:

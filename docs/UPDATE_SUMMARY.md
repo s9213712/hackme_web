@@ -1,6 +1,18 @@
 # Update Summary
 
-Release ID: `2026.05.05-114`
+Release ID: `2026.05.05-116`
+
+## 2026.05.05-116
+
+- Fixed live ComfyUI `inpaint` / `outpaint` workflow validation against current `VAEEncodeForInpaint` by explicitly setting `grow_mask_by`, so real jobs no longer fail with `Required input is missing: grow_mask_by`.
+- Added root model import source mode switching: the local ComfyUI panel can now either inspect/download from a Civitai URL or upload a local model file directly into the appropriate `models/` folder with extension validation and audit logging.
+- Added `scripts/comfyui_feature_probe.py` plus regression coverage so operators can live-smoke `status`, `models`, `txt2img`, `img2img`, `inpaint`, `outpaint`, `upscale`, ControlNet availability, and history rerun without hand-building each request.
+
+## 2026.05.05-115
+
+- ComfyUI generation now supports `img2img`, `inpaint`, `outpaint`, ControlNet-assisted workflows, upscale-model selection, and generation history replay as first-class UI/API features instead of only plain txt2img.
+- `GET /api/comfyui/models` now exposes capability metadata for generation modes, ControlNet families/models/preprocessors, and upscale models; `POST /api/comfyui/generate` accepts multipart source/mask/control images and rejects missing models, invalid image formats, missing workflow nodes, or out-of-range ControlNet strength with human-readable errors.
+- Added `/api/comfyui/history`, `/api/comfyui/history/<history_id>/rerun`, and `/api/comfyui/image-preview` so saved inputs can be restored, rerun, and previewed without silently re-uploading hidden state; the mobile form and release docs were updated to match.
 
 ## 2026.05.05-114
 

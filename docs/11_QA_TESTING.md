@@ -136,13 +136,18 @@ PYTHONPATH=. python3 scripts/trading_backtest_20000_probe.py --include-route --j
 - 確認功能新增後，同步更新 smoke / pentest / QA runbook / troubleshooting
 - 若本次改到 ComfyUI，至少補：
   - 設定頁的 `Civitai API Key` 與 root 本地模型下載工具，是否真的只在 `local` 模式出現；切到 `remote` 時不應殘留可操作入口
-  - model list 是否回傳 `models / loras / embeddings / vaes`
+  - model list 是否回傳 `models / loras / embeddings / vaes / generation_modes / controlnet_types / controlnet_models / upscale_models`
   - LoRA metadata / `trained_words` 是否會在重新整理後仍存在，不是只在下載當下有
   - 使用者加入 LoRA 時，是否只會補上缺少的 trigger words，而不會每次重複疊加
   - prompt helper 是否能把 Embedding token 正確送進後端
   - custom VAE 是否真的改到 workflow，而不是只有 UI 多一個欄位
   - Civitai inspect / download 是否顯示 trigger words，且 remote mode 不會誤顯示本地下載工具
   - 生圖、本地啟動、模型下載進行中時，閒置登出倒數是否改成暫停，而不是做到一半被踢出
+  - `img2img / inpaint / outpaint / upscale` 是否能正確接收來源圖 / 遮罩圖 / 控制圖，手機版表單不可擠壞
+  - ControlNet 模型缺失、workflow 缺 node、控制圖格式錯誤、`control strength` 超出範圍時，是否回人性化錯誤而非靜默失敗
+  - history replay 是否能套回來源圖、遮罩圖、ControlNet、outpaint 與 upscale 設定，不可只回填純文字 prompt
+  - root 模型匯入面板是否可在 `Civitai 網址 / 本地檔案上傳` 兩種來源間切換；本地上傳只允許合法副檔名，remote mode 不得出現誤導性入口
+  - 若要做 live smoke，可額外跑 `python3 scripts/comfyui_feature_probe.py --base-url https://127.0.0.1:PORT --username root --password ... --insecure --json-out /tmp/comfyui_probe.json`，確認 status、model list、txt2img、img2img、inpaint、outpaint、upscale、history rerun 全都真的能通；ControlNet 若缺模型 / node，應回 `expected_unavailable` 或明確錯誤，而不是卡死
 - 若本次改到影音串流 / E2EE 分享，至少補：
   - Safari 是否仍走原生 HLS，而不是被 `hls.js` 蓋掉
   - 桌機 Chrome / Firefox / Edge 是否能載入同源 `hls.js` 並播放 prepared HLS

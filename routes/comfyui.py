@@ -22,7 +22,12 @@ import urllib.request
 from flask import request
 
 from services.cloud_drive import attach_existing_file, ensure_cloud_drive_attachment_schema, store_cloud_upload
-from services.comfyui_client import ComfyUIClient, ComfyUIError
+from services.comfyui_client import (
+    CONTROLNET_TYPE_DEFINITIONS,
+    GENERATION_MODE_DEFINITIONS,
+    ComfyUIClient,
+    ComfyUIError,
+)
 from services.notifications import create_notification_if_enabled
 from services.storage_albums import (
     add_album_file,
@@ -70,6 +75,13 @@ CIVITAI_MODEL_TYPE_TO_DOWNLOAD_TYPE = {
     "vae": "vae",
 }
 COMFYUI_EMBEDDING_TOKEN_RE = re.compile(r"<\s*embeddings\s*:\s*([^<>]+?)\s*>", re.IGNORECASE)
+COMFYUI_ALLOWED_IMAGE_MIME_TYPES = {
+    "image/png",
+    "image/jpeg",
+    "image/webp",
+}
+COMFYUI_ALLOWED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+COMFYUI_HISTORY_LIMIT = 20
 
 
 class _MemoryFile:
@@ -208,6 +220,225 @@ def register_comfyui_routes(app, deps):
 
     def _verify_comfyui_image_ref_owner(conn, *, actor, image_ref, prompt_id=None):
         return bool(_load_comfyui_image_ref_record(conn, actor=actor, image_ref=image_ref, prompt_id=prompt_id))
+
+    def _ensure_comfyui_generation_history_schema(conn):
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS comfyui_generation_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner_user_id INTEGER NOT NULL,
+                backend_url TEXT NOT NULL DEFAULT '',
+                generation_mode TEXT NOT NULL DEFAULT 'txt2img',
+                payload_json TEXT NOT NULL,
+                input_assets_json TEXT NOT NULL DEFAULT '{}',
+                controlnet_json TEXT NOT NULL DEFAULT '{}',
+                result_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_comfyui_generation_history_owner ON comfyui_generation_history(owner_user_id, created_at DESC)"
+        )
+
+    def _record_generation_history(conn, *, actor, params, backend_url="", result_payload=None):
+        _ensure_comfyui_generation_history_schema(conn)
+        now = datetime.now().isoformat()
+        payload = {
+            "generation_mode": params.get("generation_mode") or "txt2img",
+            "model": params.get("model") or "",
+            "prompt": params.get("prompt") or "",
+            "negative_prompt": params.get("negative_prompt") or "",
+            "width": int(params.get("width") or 0),
+            "height": int(params.get("height") or 0),
+            "steps": int(params.get("steps") or 0),
+            "cfg": float(params.get("cfg") or 0),
+            "sampler_name": params.get("sampler_name") or "",
+            "scheduler": params.get("scheduler") or "",
+            "seed": int(params.get("seed") or 0),
+            "batch_size": int(params.get("batch_size") or 1),
+            "filename_prefix": params.get("filename_prefix") or "hackme_web",
+            "loras": list(params.get("loras") or []),
+            "vae": params.get("vae") or "",
+            "denoise_strength": float(params.get("denoise_strength") or 0),
+            "upscale_model": params.get("upscale_model") or "",
+            "outpaint": dict(params.get("outpaint") or {}),
+        }
+        input_assets = {
+            "source_image_ref": params.get("source_image_ref"),
+            "mask_image_ref": params.get("mask_image_ref"),
+            "control_image_ref": ((params.get("controlnet") or {}).get("image_ref") if isinstance(params.get("controlnet"), dict) else None),
+        }
+        cur = conn.execute(
+            """
+            INSERT INTO comfyui_generation_history (
+                owner_user_id, backend_url, generation_mode, payload_json,
+                input_assets_json, controlnet_json, result_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(_actor_value(actor, "id")),
+                _normalize_comfyui_backend_url(backend_url),
+                str(payload["generation_mode"] or "txt2img"),
+                json.dumps(payload, ensure_ascii=False, sort_keys=True),
+                json.dumps(input_assets, ensure_ascii=False, sort_keys=True),
+                json.dumps(params.get("controlnet") or {}, ensure_ascii=False, sort_keys=True),
+                json.dumps(result_payload or {}, ensure_ascii=False, sort_keys=True),
+                now,
+                now,
+            ),
+        )
+        return cur.lastrowid
+
+    def _list_generation_history(conn, *, actor, limit=COMFYUI_HISTORY_LIMIT):
+        _ensure_comfyui_generation_history_schema(conn)
+        rows = conn.execute(
+            """
+            SELECT * FROM comfyui_generation_history
+            WHERE owner_user_id=?
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+            """,
+            (int(_actor_value(actor, "id")), int(limit)),
+        ).fetchall()
+        items = []
+        for row in rows:
+            payload = _parse_json_field(row["payload_json"], {})
+            input_assets = _parse_json_field(row["input_assets_json"], {})
+            controlnet = _parse_json_field(row["controlnet_json"], {})
+            result_json = _parse_json_field(row["result_json"], {})
+            items.append({
+                "id": int(row["id"]),
+                "generation_mode": row["generation_mode"],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+                "payload": payload,
+                "input_assets": input_assets,
+                "controlnet": controlnet,
+                "result": result_json,
+            })
+        return items
+
+    def _load_generation_history(conn, *, actor, history_id):
+        _ensure_comfyui_generation_history_schema(conn)
+        row = conn.execute(
+            "SELECT * FROM comfyui_generation_history WHERE id=? AND owner_user_id=?",
+            (int(history_id), int(_actor_value(actor, "id"))),
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "id": int(row["id"]),
+            "backend_url": row["backend_url"] or "",
+            "generation_mode": row["generation_mode"] or "txt2img",
+            "payload": _parse_json_field(row["payload_json"], {}),
+            "input_assets": _parse_json_field(row["input_assets_json"], {}),
+            "controlnet": _parse_json_field(row["controlnet_json"], {}),
+            "result": _parse_json_field(row["result_json"], {}),
+        }
+
+    def _parse_generation_request():
+        uploaded_assets = {}
+        if request.content_type and "multipart/form-data" in request.content_type.lower():
+            data = request.form.to_dict(flat=True)
+            files = request.files or {}
+            for field_name, label in (
+                ("source_image", "來源圖片"),
+                ("mask_image", "遮罩圖片"),
+                ("control_image", "控制圖"),
+            ):
+                payload, msg = _validate_image_upload(files.get(field_name), label=label)
+                if msg:
+                    return None, None, msg
+                if payload:
+                    uploaded_assets[field_name] = payload
+            return data, uploaded_assets, None
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return None, None, "Invalid JSON"
+        if not isinstance(data, dict):
+            return None, None, "Invalid request"
+        return data, uploaded_assets, None
+
+    def _hydrate_generation_assets(actor, active_client, params, uploaded_assets):
+        params = dict(params or {})
+        uploaded_assets = dict(uploaded_assets or {})
+        image_ref_records = []
+        for field_name, params_key in (
+            ("source_image", "source_image_ref"),
+            ("mask_image", "mask_image_ref"),
+            ("control_image", "control_image_ref"),
+        ):
+            asset = uploaded_assets.get(field_name)
+            if not asset:
+                continue
+            image_ref = active_client.upload_image_bytes(
+                asset["data"],
+                asset["filename"],
+                image_type="input",
+                overwrite=False,
+            )
+            image_ref_records.append({"image_ref": image_ref, "prompt_id": ""})
+            if params_key == "control_image_ref":
+                control = dict(params.get("controlnet") or {})
+                control["image_ref"] = image_ref
+                params["controlnet"] = control
+            else:
+                params[params_key] = image_ref
+        if image_ref_records:
+            conn = get_db()
+            try:
+                _register_comfyui_image_refs(conn, actor=actor, images=image_ref_records, backend_url=getattr(active_client, "base_url", ""))
+                conn.commit()
+            finally:
+                conn.close()
+        return params
+
+    def _validate_generation_capabilities(active_client, params):
+        if not hasattr(active_client, "get_capabilities"):
+            return {}, None
+        capabilities = active_client.get_capabilities() if hasattr(active_client, "get_capabilities") else {}
+        available_nodes = set((capabilities or {}).get("available_nodes") or [])
+        mode = str((params or {}).get("generation_mode") or "txt2img").strip().lower()
+        required_nodes = {"CheckpointLoaderSimple", "CLIPTextEncode", "KSampler", "VAEDecode", "SaveImage"}
+        if mode == "img2img":
+            required_nodes.update({"LoadImage", "VAEEncode"})
+        elif mode == "inpaint":
+            required_nodes.update({"LoadImage", "LoadImageMask", "VAEEncodeForInpaint"})
+        elif mode == "outpaint":
+            required_nodes.update({"LoadImage", "ImagePadForOutpaint", "VAEEncodeForInpaint"})
+        elif mode == "upscale":
+            required_nodes = {"LoadImage", "UpscaleModelLoader", "ImageUpscaleWithModel", "SaveImage"}
+            upscale_models = set((capabilities or {}).get("upscale_models") or [])
+            if str((params or {}).get("upscale_model") or "").strip() not in upscale_models:
+                return None, "缺少對應的放大模型，請先安裝 scale model"
+        missing_nodes = sorted(node for node in required_nodes if node not in available_nodes)
+        if missing_nodes:
+            return None, f"ComfyUI 缺少必要 workflow node：{', '.join(missing_nodes)}"
+        control = (params or {}).get("controlnet") if isinstance((params or {}).get("controlnet"), dict) else None
+        if control:
+            control_type = str(control.get("type") or "").strip().lower()
+            type_info = ((capabilities or {}).get("controlnet_types") or {}).get(control_type) or {}
+            if not type_info.get("available"):
+                return None, f"ControlNet {CONTROLNET_TYPE_DEFINITIONS.get(control_type, {}).get('label', control_type)} 缺少對應 nodes 或 models"
+            chosen_preprocessor = str(control.get("preprocessor") or type_info.get("default_preprocessor") or "").strip()
+            if not chosen_preprocessor:
+                return None, "找不到可用的 ControlNet preprocessor"
+            if chosen_preprocessor not in set(type_info.get("available_preprocessors") or []):
+                return None, f"ControlNet preprocessor 不可用：{chosen_preprocessor}"
+            chosen_model = str(control.get("model_name") or "").strip()
+            if not chosen_model:
+                matching_models = list(type_info.get("matching_models") or [])
+                if not matching_models:
+                    return None, "缺少對應的 ControlNet 模型"
+                control["model_name"] = matching_models[0]
+            elif chosen_model not in set(type_info.get("matching_models") or []):
+                return None, f"ControlNet 模型不可用：{chosen_model}"
+            control["preprocessor"] = chosen_preprocessor
+            params["controlnet"] = control
+        return capabilities, None
 
     def _assert_reasonable_image_size(image):
         size = len(getattr(image, "data", b"") or b"")
@@ -1465,6 +1696,82 @@ def register_comfyui_routes(app, deps):
         )
         return result, None
 
+    def _upload_comfyui_model_file(*, uploaded_file, model_type, base_dir, actor=None):
+        model_type = _normalize_download_model_type(model_type)
+        if model_type not in COMFYUI_MODEL_DOWNLOAD_TYPES:
+            return None, "模型類型不支援"
+        if _configured_connection_mode() != "local":
+            return None, "目前是遠端模式，不提供本地 ComfyUI 模型匯入"
+        if uploaded_file is None:
+            return None, "請先選擇要上傳的模型檔案"
+        original_name = str(getattr(uploaded_file, "filename", "") or "").strip()
+        if not original_name:
+            return None, "請先選擇要上傳的模型檔案"
+        base = _configured_comfyui_base_dir(base_dir)
+        if not base:
+            return None, "請先設定 COMFYUI_BASE_DIR 或在本面板輸入 ComfyUI 專案資料夾"
+        project_dir = _configured_comfyui_project_dir(base_dir) or base
+        folder_name, label = COMFYUI_MODEL_DOWNLOAD_TYPES[model_type]
+        try:
+            filename = _safe_model_filename(original_name, f"uploaded_{model_type}.safetensors")
+        except ValueError as exc:
+            return None, str(exc)
+        destination_dir = (project_dir / "models" / folder_name).resolve()
+        try:
+            destination_dir.relative_to(base.resolve())
+        except ValueError:
+            return None, "模型儲存路徑不合法"
+        destination_dir.mkdir(parents=True, exist_ok=True)
+        destination = (destination_dir / filename).resolve()
+        try:
+            destination.relative_to(destination_dir)
+        except ValueError:
+            return None, "模型檔名不合法"
+        if destination.exists():
+            return None, f"{label} 檔案已存在：{filename}"
+        temp_path = None
+        written = 0
+        try:
+            with tempfile.NamedTemporaryFile(prefix=f".{filename}.", suffix=".part", dir=str(destination_dir), delete=False) as tmp:
+                temp_path = Path(tmp.name)
+                stream = getattr(uploaded_file, "stream", uploaded_file)
+                while True:
+                    chunk = stream.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    written += len(chunk)
+                    if written > MAX_COMFYUI_MODEL_DOWNLOAD_BYTES:
+                        raise ValueError("模型檔案超過上傳大小上限")
+                    tmp.write(chunk)
+            if written <= 0:
+                raise ValueError("上傳內容為空")
+            temp_path.replace(destination)
+        except Exception as exc:
+            if temp_path and temp_path.exists():
+                temp_path.unlink(missing_ok=True)
+            return None, str(exc)
+        _write_comfyui_model_sidecar(
+            model_type=model_type,
+            filename=filename,
+            base_dir=base_dir,
+            payload={
+                "source": "manual_upload",
+                "original_filename": original_name,
+                "saved_filename": filename,
+                "uploaded_at": datetime.now().isoformat(),
+                "uploaded_by": _actor_value(actor, "username", "") if actor else "",
+                "size_bytes": written,
+            },
+        )
+        return {
+            "type": model_type,
+            "label": label,
+            "filename": filename,
+            "size_bytes": written,
+            "saved_path": str(destination),
+            "source": "manual_upload",
+        }, None
+
     def _client(actor=None, *, backend_url=None):
         binding = _comfyui_binding(actor, backend_url=backend_url)
         return _client_for_url(binding["url"])
@@ -1681,10 +1988,39 @@ def register_comfyui_routes(app, deps):
             if quote:
                 billing = _charge_comfyui_generation(actor, quote, prompt_id=result.get("prompt_id"))
             images = _finalize_generation_records(actor, params, result, backend_url=backend_binding.get("url"))
+            history_id = None
+            conn = get_db()
+            try:
+                history_id = _record_generation_history(
+                    conn,
+                    actor=actor,
+                    params=params,
+                    backend_url=backend_binding.get("url"),
+                    result_payload={
+                        "prompt_id": result.get("prompt_id") or "",
+                        "images": [
+                            {
+                                "image_ref": item.get("image_ref"),
+                                "mime_type": item.get("mime_type"),
+                                "size_bytes": item.get("size_bytes"),
+                            }
+                            for item in images
+                        ],
+                    },
+                )
+                conn.commit()
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+            finally:
+                conn.close()
             payload = {
                 "image": images[0],
                 "images": images,
                 "billing": billing,
+                "history_id": history_id,
                 "wallet": (billing or {}).get("wallet") or _comfyui_wallet_payload(actor),
             }
             _update_generation_job(
@@ -1866,9 +2202,137 @@ def register_comfyui_routes(app, deps):
             text += ".png"
         return text[:120]
 
+    def _parse_json_field(value, fallback):
+        if value in (None, ""):
+            return fallback
+        if isinstance(value, (dict, list)):
+            return value
+        try:
+            return json.loads(str(value))
+        except Exception:
+            return fallback
+
+    def _number_from_text(value, *, label, numeric_type=float):
+        if value in (None, ""):
+            return None, None
+        try:
+            return numeric_type(value), None
+        except Exception:
+            return None, f"{label} 格式不正確"
+
+    def _normalized_generation_mode(value):
+        mode = str(value or "txt2img").strip().lower()
+        return mode if mode in GENERATION_MODE_DEFINITIONS else None
+
+    def _validate_image_upload(file_storage, *, label):
+        if not file_storage:
+            return None, None
+        filename = str(getattr(file_storage, "filename", "") or "").strip()
+        mime_type = str(getattr(file_storage, "mimetype", "") or "").strip().lower()
+        ext = Path(filename).suffix.lower()
+        if ext not in COMFYUI_ALLOWED_IMAGE_EXTENSIONS or mime_type not in COMFYUI_ALLOWED_IMAGE_MIME_TYPES:
+            return None, f"{label} 只支援 PNG / JPG / WEBP"
+        data = file_storage.read()
+        try:
+            file_storage.stream.seek(0)
+        except Exception:
+            pass
+        if not data:
+            return None, f"{label} 內容不可為空"
+        return {
+            "filename": _clean_filename(filename, fallback="image.png"),
+            "mime_type": mime_type,
+            "data": data,
+        }, None
+
+    def _normalize_image_ref_field(value):
+        payload = _parse_json_field(value, None)
+        if not isinstance(payload, dict):
+            return None
+        return _image_ref_payload(payload)
+
+    def _normalize_controlnet_payload(data):
+        enabled = _coerce_bool(data.get("controlnet_enabled"))
+        if not enabled and isinstance(data.get("controlnet"), dict):
+            enabled = True
+        if not enabled:
+            return None, None
+        control_type = str(
+            data.get("controlnet_type")
+            or ((data.get("controlnet") or {}).get("type") if isinstance(data.get("controlnet"), dict) else "")
+            or ""
+        ).strip().lower()
+        if control_type not in CONTROLNET_TYPE_DEFINITIONS:
+            return None, "請選擇有效的 ControlNet 類型"
+        strength, err = _number_from_text(
+            data.get("control_strength")
+            if "control_strength" in data
+            else ((data.get("controlnet") or {}).get("strength") if isinstance(data.get("controlnet"), dict) else None),
+            label="Control strength",
+            numeric_type=float,
+        )
+        if err:
+            return None, err
+        start_percent, err = _number_from_text(
+            data.get("control_start")
+            if "control_start" in data
+            else ((data.get("controlnet") or {}).get("start_percent") if isinstance(data.get("controlnet"), dict) else None),
+            label="Control start",
+            numeric_type=float,
+        )
+        if err:
+            return None, err
+        end_percent, err = _number_from_text(
+            data.get("control_end")
+            if "control_end" in data
+            else ((data.get("controlnet") or {}).get("end_percent") if isinstance(data.get("controlnet"), dict) else None),
+            label="Control end",
+            numeric_type=float,
+        )
+        if err:
+            return None, err
+        strength = 1.0 if strength is None else strength
+        start_percent = 0.0 if start_percent is None else start_percent
+        end_percent = 1.0 if end_percent is None else end_percent
+        if strength < 0 or strength > 2:
+            return None, "Control strength 必須介於 0 到 2"
+        if start_percent < 0 or start_percent > 1 or end_percent < 0 or end_percent > 1 or start_percent > end_percent:
+            return None, "Control start / end 必須介於 0 到 1，且 start 不可大於 end"
+        preprocessor = str(
+            data.get("controlnet_preprocessor")
+            or ((data.get("controlnet") or {}).get("preprocessor") if isinstance(data.get("controlnet"), dict) else "")
+            or ""
+        ).strip()
+        model_name = str(
+            data.get("controlnet_model")
+            or ((data.get("controlnet") or {}).get("model_name") if isinstance(data.get("controlnet"), dict) else "")
+            or ""
+        ).strip()
+        return {
+            "enabled": True,
+            "type": control_type,
+            "strength": round(float(strength), 4),
+            "start_percent": round(float(start_percent), 4),
+            "end_percent": round(float(end_percent), 4),
+            "preprocessor": preprocessor,
+            "model_name": model_name,
+        }, None
+
+    def _normalize_outpaint_payload(data):
+        return {
+            "left": _int_range(data.get("outpaint_left"), 0, 0, 2048),
+            "top": _int_range(data.get("outpaint_top"), 0, 0, 2048),
+            "right": _int_range(data.get("outpaint_right"), 0, 0, 2048),
+            "bottom": _int_range(data.get("outpaint_bottom"), 0, 0, 2048),
+            "feathering": _int_range(data.get("outpaint_feathering"), 24, 0, 256),
+        }
+
     def _normalize_generation_payload(data):
+        mode = _normalized_generation_mode(data.get("generation_mode"))
+        if not mode:
+            return None, "ComfyUI 產圖模式不支援"
         prompt = _normalize_comfyui_prompt_text(data.get("prompt"))
-        if not prompt:
+        if mode != "upscale" and not prompt:
             return None, "請輸入提示詞"
         if len(prompt) > 3000:
             return None, "提示詞最多 3000 字"
@@ -1876,17 +2340,29 @@ def register_comfyui_routes(app, deps):
         if len(negative) > 3000:
             return None, "負面提示詞最多 3000 字"
         model = str(data.get("model") or "").strip()
-        if not model:
+        if mode != "upscale" and not model:
             return None, "請選擇模型"
         vae = _normalize_comfyui_vae_name(data.get("vae"))
         if vae is None:
             return None, "VAE 名稱不合法"
-        loras, lora_msg = _normalize_loras(data)
+        loras_source = dict(data)
+        if loras_source.get("loras") in (None, "") and loras_source.get("loras_json") not in (None, ""):
+            loras_source["loras"] = _parse_json_field(loras_source.get("loras_json"), [])
+        loras, lora_msg = _normalize_loras(loras_source)
         if lora_msg:
             return None, lora_msg
         seed = _int_range(data.get("seed"), secrets.randbits(32), 0, 2**63 - 1)
         default_dimensions = _configured_default_dimensions()
+        controlnet, controlnet_msg = _normalize_controlnet_payload(data)
+        if controlnet_msg:
+            return None, controlnet_msg
+        denoise_strength, denoise_err = _number_from_text(data.get("denoise_strength"), label="Denoise strength", numeric_type=float)
+        if denoise_err:
+            return None, denoise_err
+        if denoise_strength is not None and (denoise_strength < 0 or denoise_strength > 1):
+            return None, "Denoise strength 必須介於 0 到 1"
         params = {
+            "generation_mode": mode,
             "model": model,
             "prompt": prompt,
             "negative_prompt": negative,
@@ -1901,7 +2377,28 @@ def register_comfyui_routes(app, deps):
             "filename_prefix": _clean_filename(data.get("filename_prefix") or "hackme_web", fallback="hackme_web").rsplit(".", 1)[0],
             "loras": loras,
             "vae": vae,
+            "denoise_strength": 0.65 if denoise_strength is None else round(float(denoise_strength), 4),
+            "controlnet": controlnet,
+            "source_image_ref": _normalize_image_ref_field(data.get("source_image_ref") or data.get("source_image_ref_json")),
+            "mask_image_ref": _normalize_image_ref_field(data.get("mask_image_ref") or data.get("mask_image_ref_json")),
+            "upscale_model": str(data.get("upscale_model") or "").strip(),
+            "outpaint": _normalize_outpaint_payload(data),
         }
+        skip_asset_validation = _coerce_bool(data.get("skip_asset_validation"))
+        if not skip_asset_validation and mode == "img2img" and not params["source_image_ref"]:
+            return None, "圖生圖需要來源圖片"
+        if not skip_asset_validation and mode == "inpaint":
+            if not params["source_image_ref"]:
+                return None, "局部重繪需要來源圖片"
+            if not params["mask_image_ref"]:
+                return None, "局部重繪需要遮罩圖片"
+        if not skip_asset_validation and mode == "outpaint" and not params["source_image_ref"]:
+            return None, "向外延展需要來源圖片"
+        if not skip_asset_validation and mode == "upscale":
+            if not params["source_image_ref"]:
+                return None, "放大修復需要來源圖片"
+            if not params["upscale_model"]:
+                return None, "請選擇放大模型"
         return params, None
 
     def _safe_text(value, limit):
@@ -2388,6 +2885,33 @@ def register_comfyui_routes(app, deps):
             return json_resp({"ok": False, "msg": msg}), 400
         return json_resp({"ok": True, "download": result, "msg": f"已下載 {result['label']}：{result['filename']}"})
 
+    @app.route("/api/root/comfyui/model-upload", methods=["POST"])
+    @require_csrf
+    def root_comfyui_upload_model_file():
+        actor, err = _root_or_403()
+        if err:
+            return err
+        model_file = request.files.get("model_file")
+        model_type = str(request.form.get("type") or request.form.get("model_type") or "").strip().lower()
+        base_dir = request.form.get("base_dir")
+        result, msg = _upload_comfyui_model_file(
+            uploaded_file=model_file,
+            model_type=model_type,
+            base_dir=base_dir,
+            actor=actor,
+        )
+        audit(
+            "COMFYUI_MODEL_UPLOAD",
+            get_client_ip(),
+            user=_actor_value(actor, "username"),
+            success=not bool(msg),
+            ua=get_ua(),
+            detail=f"type={model_type}, filename={getattr(model_file, 'filename', '') if model_file else ''}, saved={(result or {}).get('filename') or ''}, error={msg or ''}"[:300],
+        )
+        if msg:
+            return json_resp({"ok": False, "msg": msg}), 400
+        return json_resp({"ok": True, "upload": result, "msg": f"已匯入 {result['label']}：{result['filename']}"})
+
     @app.route("/api/root/comfyui/download-jobs/<job_id>", methods=["GET"])
     @require_csrf_safe
     def root_comfyui_download_job_status(job_id):
@@ -2454,6 +2978,7 @@ def register_comfyui_routes(app, deps):
             models = active_client.get_models()
             options = active_client.get_sampler_options()
             loras = active_client.get_loras() if hasattr(active_client, "get_loras") else []
+            capabilities = active_client.get_capabilities() if hasattr(active_client, "get_capabilities") else {}
         except ComfyUIError as exc:
             return _json_error_from_comfy(exc, active_client)
         try:
@@ -2480,6 +3005,10 @@ def register_comfyui_routes(app, deps):
             "max_batch_size": _configured_max_batch_size(),
             "default_width": _configured_default_dimensions()["width"],
             "default_height": _configured_default_dimensions()["height"],
+            "controlnet_models": (capabilities or {}).get("controlnet_models") or [],
+            "upscale_models": (capabilities or {}).get("upscale_models") or [],
+            "controlnet_types": (capabilities or {}).get("controlnet_types") or {},
+            "generation_modes": (capabilities or {}).get("generation_modes") or [],
             "billing": None if not _comfyui_charge_required(actor) else (_comfyui_price_quote(1)[0] or {}),
             "wallet": _comfyui_wallet_payload(actor),
             "lora_extra_unit_price": COMFYUI_LORA_EXTRA_PRICE_POINTS,
@@ -2496,6 +3025,7 @@ def register_comfyui_routes(app, deps):
         except Exception:
             return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
         data = data if isinstance(data, dict) else {}
+        data = {**data, "skip_asset_validation": True}
         params, msg = _normalize_generation_payload(data)
         if msg:
             return json_resp({"ok": False, "msg": msg}), 400
@@ -2517,16 +3047,24 @@ def register_comfyui_routes(app, deps):
         actor, err = _actor_or_401()
         if err:
             return err
-        try:
-            data = request.get_json(force=True)
-        except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
-        if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
-        params, msg = _normalize_generation_payload(data if isinstance(data, dict) else {})
+        data, uploaded_assets, request_msg = _parse_generation_request()
+        if request_msg:
+            return json_resp({"ok": False, "msg": request_msg}), 400
+        request_data = data if isinstance(data, dict) else {}
+        if uploaded_assets:
+            request_data = {**request_data, "skip_asset_validation": True}
+        params, msg = _normalize_generation_payload(request_data)
         if msg:
             return json_resp({"ok": False, "msg": msg}), 400
         backend_binding = _comfyui_binding(actor)
+        active_client = _client_for_url(backend_binding["url"])
+        try:
+            params = _hydrate_generation_assets(actor, active_client, params, uploaded_assets)
+            capabilities, capability_msg = _validate_generation_capabilities(active_client, params)
+            if capability_msg:
+                return json_resp({"ok": False, "msg": capability_msg, "capabilities": capabilities or {}}), 409
+        except ComfyUIError as exc:
+            return _json_error_from_comfy(exc, active_client)
         quote = None
         timeout_seconds = _int_range(
             data.get("timeout_seconds"),
@@ -2541,7 +3079,7 @@ def register_comfyui_routes(app, deps):
             msg = _ensure_comfyui_balance(actor, quote)
             if msg:
                 return json_resp({"ok": False, "msg": msg}), 409
-            if data.get("confirm_billing") is not True:
+            if not _coerce_bool(data.get("confirm_billing")):
                 return json_resp({
                     "ok": False,
                     "msg": (
@@ -2550,7 +3088,7 @@ def register_comfyui_routes(app, deps):
                     ),
                     "billing": {**quote, "confirmation_required": True},
                 }), 409
-        if data.get("async_progress") is True:
+        if _coerce_bool(data.get("async_progress")):
             job_id = _create_generation_job(actor)
             request_meta = _capture_request_audit_meta()
             worker = threading.Thread(
@@ -2572,7 +3110,6 @@ def register_comfyui_routes(app, deps):
                     },
                 },
             })
-        active_client = _client_for_url(backend_binding["url"])
         generation_token = _register_active_generation(
             actor,
             backend_url=backend_binding.get("url"),
@@ -2596,6 +3133,34 @@ def register_comfyui_routes(app, deps):
                 audit("COMFYUI_BILLING_ERROR", get_client_ip(), user=actor["username"], success=False, ua=get_ua(), detail=str(exc)[:180])
                 return json_resp({"ok": False, "msg": f"產圖成功，但扣款失敗：{exc}"}), 409
         images = _finalize_generation_records(actor, params, result, backend_url=backend_binding.get("url"))
+        history_id = None
+        conn = get_db()
+        try:
+            history_id = _record_generation_history(
+                conn,
+                actor=actor,
+                params=params,
+                backend_url=backend_binding.get("url"),
+                result_payload={
+                    "prompt_id": result.get("prompt_id") or "",
+                    "images": [
+                        {
+                            "image_ref": item.get("image_ref"),
+                            "mime_type": item.get("mime_type"),
+                            "size_bytes": item.get("size_bytes"),
+                        }
+                        for item in images
+                    ],
+                },
+            )
+            conn.commit()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        finally:
+            conn.close()
         image = images[0]
         image_ref = result["image_ref"]
         audit("COMFYUI_GENERATE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"prompt_id={result['prompt_id']}, file={image_ref.get('filename')}, batch={len(images)}")
@@ -2604,6 +3169,7 @@ def register_comfyui_routes(app, deps):
             "image": image,
             "images": images,
             "billing": billing,
+            "history_id": history_id,
             "wallet": (billing or {}).get("wallet") or _comfyui_wallet_payload(actor),
             "backend_scope": backend_binding["backend_scope"],
         })
@@ -2625,6 +3191,114 @@ def register_comfyui_routes(app, deps):
                 "progress": job.get("progress") or {},
                 "error": job.get("error") or "",
                 "result": job.get("result"),
+            },
+        })
+
+    @app.route("/api/comfyui/history", methods=["GET"])
+    @require_csrf_safe
+    def comfyui_generation_history():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            items = _list_generation_history(conn, actor=actor, limit=COMFYUI_HISTORY_LIMIT)
+        finally:
+            conn.close()
+        return json_resp({"ok": True, "history": items})
+
+    @app.route("/api/comfyui/history/<int:history_id>/rerun", methods=["POST"])
+    @require_csrf
+    def comfyui_generation_history_rerun(history_id):
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            item = _load_generation_history(conn, actor=actor, history_id=history_id)
+        finally:
+            conn.close()
+        if not item:
+            return json_resp({"ok": False, "msg": "找不到這筆 ComfyUI 歷史紀錄"}), 404
+        payload = dict(item.get("payload") or {})
+        input_assets = dict(item.get("input_assets") or {})
+        controlnet = dict(item.get("controlnet") or {})
+        if controlnet:
+            controlnet["image_ref"] = input_assets.get("control_image_ref")
+            payload["controlnet"] = controlnet
+        payload["source_image_ref"] = input_assets.get("source_image_ref")
+        payload["mask_image_ref"] = input_assets.get("mask_image_ref")
+        payload["async_progress"] = True
+        payload["confirm_billing"] = True
+        payload["timeout_seconds"] = DEFAULT_GENERATION_TIMEOUT_SECONDS
+        active_client = _client_for_url(_comfyui_binding(actor, backend_url=item.get("backend_url")).get("url"))
+        try:
+            capabilities, capability_msg = _validate_generation_capabilities(active_client, payload)
+            if capability_msg:
+                return json_resp({"ok": False, "msg": capability_msg, "capabilities": capabilities or {}}), 409
+        except ComfyUIError as exc:
+            return _json_error_from_comfy(exc, active_client)
+        quote = None
+        if _comfyui_charge_required(actor):
+            quote, msg = _comfyui_price_quote(payload.get("batch_size") or 1, lora_count=_comfyui_lora_count(payload))
+            if msg:
+                return json_resp({"ok": False, "msg": msg}), 503
+            msg = _ensure_comfyui_balance(actor, quote)
+            if msg:
+                return json_resp({"ok": False, "msg": msg}), 409
+        job_id = _create_generation_job(actor)
+        request_meta = _capture_request_audit_meta()
+        worker = threading.Thread(
+            target=_run_comfyui_generation_job,
+            args=(job_id, dict(actor), payload, quote, DEFAULT_GENERATION_TIMEOUT_SECONDS, request_meta, _comfyui_binding(actor, backend_url=item.get("backend_url"))),
+            daemon=True,
+        )
+        worker.start()
+        return json_resp({
+            "ok": True,
+            "async": True,
+            "job": {
+                "job_id": job_id,
+                "status": "queued",
+                "progress": {"phase": "queued", "percent": 0, "detail": "已建立重跑工作"},
+            },
+        })
+
+    @app.route("/api/comfyui/image-preview", methods=["POST"])
+    @require_csrf
+    def comfyui_image_preview():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+        image_ref = _image_ref_payload(data.get("image_ref"))
+        if not image_ref:
+            return json_resp({"ok": False, "msg": "圖片引用不合法"}), 400
+        conn = get_db()
+        try:
+            ref_row = _load_comfyui_image_ref_record(conn, actor=actor, image_ref=image_ref)
+        finally:
+            conn.close()
+        if not ref_row:
+            return json_resp({"ok": False, "msg": "無權讀取這張 ComfyUI 圖片"}), 403
+        active_client = _client_for_url(_comfyui_binding(actor, backend_url=(ref_row or {}).get("backend_url")).get("url"))
+        try:
+            image = active_client.fetch_image(image_ref)
+            _assert_reasonable_image_size(image)
+        except ComfyUIError as exc:
+            return _json_error_from_comfy(exc, active_client)
+        return json_resp({
+            "ok": True,
+            "image": {
+                "image_ref": image_ref,
+                "mime_type": image.mime_type,
+                "size_bytes": len(image.data),
+                "data_url": f"data:{image.mime_type};base64,{base64.b64encode(image.data).decode('ascii')}",
             },
         })
 

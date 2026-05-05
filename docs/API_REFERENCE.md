@@ -412,10 +412,13 @@ curl -k -sS https://127.0.0.1:5000/api/version
 |---|---|---|---|
 | GET | `/api/comfyui/status` | logged-in | ComfyUI 狀態 |
 | POST | `/api/comfyui/start` | logged-in | 啟動本地 ComfyUI |
-| GET | `/api/comfyui/models` | logged-in | 模型 / LoRA / embedding / VAE 列表 |
+| GET | `/api/comfyui/models` | logged-in | 模型 / LoRA / embedding / VAE / generation mode / ControlNet / upscale model 列表 |
 | POST | `/api/comfyui/billing-quote` | logged-in | 扣點預估 |
 | POST | `/api/comfyui/generate` | logged-in | 生成圖片 |
 | GET | `/api/comfyui/jobs/<job_id>` | logged-in | job 狀態 |
+| GET | `/api/comfyui/history` | logged-in | 取得近期生成歷史 |
+| POST | `/api/comfyui/history/<history_id>/rerun` | logged-in | 依歷史設定重跑 |
+| POST | `/api/comfyui/image-preview` | logged-in | 預覽已儲存來源圖 / 遮罩圖 / 控制圖 |
 | POST | `/api/comfyui/interrupt` | logged-in | 中斷生成 |
 | POST | `/api/comfyui/save` | logged-in | 儲存結果 |
 | POST | `/api/comfyui/discard` | logged-in | 丟棄結果 |
@@ -424,6 +427,7 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | POST | `/api/root/comfyui/stop` | root | 停止本地 ComfyUI |
 | POST | `/api/root/comfyui/civitai/inspect` | root | 讀 Civitai metadata |
 | POST | `/api/root/comfyui/civitai/download` | root | 下載模型 |
+| POST | `/api/root/comfyui/model-upload` | root | 直接上傳模型檔到本地 ComfyUI models 目錄 |
 | GET | `/api/root/comfyui/download-jobs/<job_id>` | root | 下載 job 狀態 |
 
 ### Security Center / Server Mode / Snapshots / Root Ops

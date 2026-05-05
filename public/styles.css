@@ -1447,6 +1447,46 @@
       border-top: 1px solid rgba(255,255,255,.08);
     }
 
+    .comfyui-input-asset-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: .75rem;
+      margin: .6rem 0 .85rem;
+    }
+
+    .comfyui-input-asset-card,
+    .comfyui-controlnet-panel,
+    .comfyui-outpaint-panel,
+    .comfyui-history-item {
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 10px;
+      background: rgba(255,255,255,.035);
+      padding: .7rem;
+    }
+
+    .comfyui-controlnet-panel,
+    .comfyui-outpaint-panel {
+      margin: .7rem 0;
+    }
+
+    .comfyui-input-preview {
+      min-height: 120px;
+      margin-top: .5rem;
+      display: grid;
+      place-items: center;
+      border: 1px dashed rgba(255,255,255,.12);
+      border-radius: 8px;
+      background: rgba(0,0,0,.2);
+      overflow: hidden;
+    }
+
+    .comfyui-input-preview img {
+      width: 100%;
+      max-height: 220px;
+      object-fit: contain;
+      display: block;
+    }
+
     .inline-control-row {
       display: flex;
       gap: .45rem;
@@ -1694,6 +1734,30 @@
     .comfyui-root-body {
       display: grid;
       gap: .75rem;
+    }
+
+    .comfyui-history-list {
+      display: grid;
+      gap: .7rem;
+      margin-top: .75rem;
+    }
+
+    .comfyui-history-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: .75rem;
+      flex-wrap: wrap;
+      margin-bottom: .35rem;
+    }
+
+    .comfyui-history-prompt {
+      font-size: .82rem;
+      color: var(--text);
+      line-height: 1.5;
+      margin: .35rem 0;
+      white-space: pre-wrap;
+      word-break: break-word;
     }
 
     @keyframes comfyuiProgressPulse {

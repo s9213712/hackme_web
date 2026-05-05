@@ -7,13 +7,20 @@
 ![database](https://img.shields.io/badge/database-SQLite-0f6ab4)
 ![security](https://img.shields.io/badge/focus-auth%20%2B%20RBAC%20%2B%20audit-b31d28)
 
-**Current Release ID: `2026.05.05-114`**
+**Current Release ID: `2026.05.05-116`**
 
 `hackme_web` is a security-focused Flask web application that combines
 authentication, RBAC, moderation, per-user appearance overrides, Cloud Drive,
 ComfyUI integration, PointsChain, multi-exchange fused-price trading
 experiments with richer chart indicators, expanded points-quoted markets, and
 server-mode controls with auditable recovery tools in a single-node deployment.
+
+Recent AI image workflow additions now include `img2img`, `inpaint`,
+`outpaint`, ControlNet-assisted generation, upscale-model selection, and
+history replay for saved prompts/assets. Root can now import local ComfyUI
+model files directly from the web UI in addition to pasting a Civitai URL, and
+there is a dedicated probe script for smoke-testing every supported generation
+mode against a live ComfyUI backend.
 
 This README keeps only the shortest entry route. Detailed deployment,
 operations, feature, security, and QA references live under `docs/`.
@@ -159,6 +166,7 @@ registration CAPTCHA mode is not `turnstile`, you can leave these values unset.
 python3 scripts/pre_push_checks.py
 security/run_functional_smoke.sh --port 50741
 security/run_pentest.sh --target https://127.0.0.1:5000
+python3 scripts/comfyui_feature_probe.py --base-url https://127.0.0.1:5000 --username root --password RootSmoke123! --insecure
 ```
 
 The installed `hooks/pre-push` now auto-runs the same gate in `--ci` mode, but
