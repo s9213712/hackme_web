@@ -1,6 +1,12 @@
 # Update Summary
 
-Release ID: `2026.05.05-120`
+Release ID: `2026.05.05-121`
+
+## 2026.05.05-121
+
+- Cloud Drive preview now treats archives and PDFs more like a normal file manager: archive preview renders a structured file/folder list, plain and `server_encrypted` PDFs prefer the browser's native PDF viewer path, and strict `e2ee` PDFs render through browser-side decrypt plus `object/embed` with a new-tab fallback.
+- E2EE file preview now reuses the most recently successful passphrase within the current login session before prompting again, reducing repeated password dialogs when opening multiple E2EE files with the same secret.
+- Shared strict E2EE video pages now show explicit progress phases (`share auth`, `ciphertext download`, `browser decrypt`) instead of looking frozen on a generic loading state, and the health indicator UI now hides the text label while the server remains green/healthy.
 
 ## 2026.05.05-120
 

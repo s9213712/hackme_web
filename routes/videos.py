@@ -463,6 +463,33 @@ def register_video_routes(app, deps):
     el.textContent = text || "";
     el.style.color = bad ? "#ff9da1" : "#b9c2f0";
   }}
+  function formatProgressBytes(value) {{
+    const num = Number(value || 0);
+    if (!Number.isFinite(num) || num <= 0) return "0 B";
+    if (num < 1024) return `${{num}} B`;
+    if (num < 1024 * 1024) return `${{(num / 1024).toFixed(1)}} KB`;
+    if (num < 1024 * 1024 * 1024) return `${{(num / 1024 / 1024).toFixed(1)}} MB`;
+    return `${{(num / 1024 / 1024 / 1024).toFixed(2)}} GB`;
+  }}
+  async function readBlobWithProgress(response, onProgress) {{
+    if (!response.body || typeof response.body.getReader !== "function") {{
+      return response.blob();
+    }}
+    const total = Number(response.headers.get("Content-Length") || 0);
+    const reader = response.body.getReader();
+    const chunks = [];
+    let loaded = 0;
+    while (true) {{
+      const {{ done, value }} = await reader.read();
+      if (done) break;
+      if (value) {{
+        chunks.push(value);
+        loaded += value.byteLength || 0;
+        if (typeof onProgress === "function") onProgress(loaded, total);
+      }}
+    }}
+    return new Blob(chunks, {{ type: response.headers.get("Content-Type") || "application/octet-stream" }});
+  }}
   function browserSupportsNativeHls(mediaType="video") {{
     const probe = document.createElement(mediaType === "audio" ? "audio" : "video");
     return !!(probe && typeof probe.canPlayType === "function" && probe.canPlayType("application/vnd.apple.mpegurl"));
@@ -604,12 +631,20 @@ def register_video_routes(app, deps):
         throw new Error("此 E2EE 分享影音缺少連結片段金鑰，無法復原。請向分享者重新取得完整連結；若分享者也遺失，只能重新產生分享。");
       }}
       try {{
+        setMsg("正在讀取 E2EE 分享授權...");
         const keyRes = await fetch(playback.e2ee_key_url, {{ credentials: "same-origin" }});
         const keyJson = await keyRes.json().catch(() => ({{}}));
         if (!keyRes.ok || !keyJson.ok || !keyJson.e2ee_share) throw new Error(keyJson.msg || "E2EE 分享解密資訊讀取失敗");
+        setMsg("正在下載加密影音檔。E2EE 影音會先在瀏覽器端讀取密文，因此大檔案會較慢。");
         const cipherRes = await fetch(playback.ciphertext_url, {{ credentials: "same-origin" }});
         if (!cipherRes.ok) throw new Error("E2EE 密文讀取失敗");
-        const cipherBlob = await cipherRes.blob();
+        const cipherBlob = await readBlobWithProgress(cipherRes, (loaded, total) => {{
+          const summary = total > 0
+            ? `${{formatProgressBytes(loaded)}} / ${{formatProgressBytes(total)}}`
+            : formatProgressBytes(loaded);
+          setMsg(`正在下載加密影音檔：${{summary}}。完成後會在瀏覽器端解密，不會把密碼或金鑰送到伺服器。`);
+        }});
+        setMsg("正在瀏覽器端解密影音。這一步不會把原始 E2EE 密碼、raw file key 或 #vk 傳到伺服器。");
         const decrypted = await decryptSharedE2eeBlob(cipherBlob, keyJson.e2ee_share, fragmentKey);
         player.src = URL.createObjectURL(decrypted.blob);
         setMsg("已在瀏覽器端以分享授權解密播放；strict E2EE 不支援伺服器端轉檔、縮圖與內容掃描，速度會較慢。");

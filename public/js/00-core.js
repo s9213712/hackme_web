@@ -701,19 +701,30 @@ async function loadSiteConfig() {
 function setServerConnectionState(state, label) {
   const dots = [$("sidebar-server-dot"), $("auth-server-dot")].filter(Boolean);
   const labels = [$("sidebar-server-label"), $("auth-server-label")].filter(Boolean);
+  const containers = [$("sidebar-server-dot")?.closest(".sidebar-server-state"), $("auth-server-dot")?.closest(".auth-server-status")].filter(Boolean);
   if (!dots.length || !labels.length) return;
   const colors = {
     online: ["#4caf50", "rgba(76,175,80,.75)"],
     unstable: ["#ffb74d", "rgba(255,183,77,.75)"],
     offline: ["#ff4f6d", "rgba(255,79,109,.75)"],
   };
+  const isHealthy = state === "online";
   const [color, glow] = colors[state] || colors.unstable;
   dots.forEach((dot) => {
     dot.style.background = color;
     dot.style.boxShadow = `0 0 10px ${glow}`;
+    dot.title = label;
+    dot.setAttribute("aria-label", label);
+  });
+  containers.forEach((node) => {
+    node.title = label;
+    node.setAttribute("aria-label", label);
   });
   labels.forEach((text) => {
-    text.textContent = label;
+    text.hidden = isHealthy;
+    text.textContent = isHealthy ? "" : label;
+    text.title = label;
+    text.setAttribute("aria-label", label);
   });
 }
 

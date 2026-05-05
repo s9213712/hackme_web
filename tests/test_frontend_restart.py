@@ -32,3 +32,7 @@ def test_server_status_indicator_requires_consecutive_failures_or_slow_checks():
     assert "if (serverConnectionSlowStreak >= SERVER_CONNECTION_UNSTABLE_SLOW_STREAK)" in core_js
     assert "if (serverConnectionFailures >= SERVER_CONNECTION_OFFLINE_FAILURE_COUNT)" in core_js
     assert "else if (serverConnectionFailures >= SERVER_CONNECTION_UNSTABLE_FAILURE_COUNT)" in core_js
+    assert 'const isHealthy = state === "online";' in core_js
+    assert "text.hidden = isHealthy;" in core_js
+    assert 'text.textContent = isHealthy ? "" : label;' in core_js
+    assert 'dot.setAttribute("aria-label", label);' in core_js

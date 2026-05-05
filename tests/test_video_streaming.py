@@ -740,6 +740,10 @@ def test_shared_video_page_mentions_hls_js_fallback_and_fragment_loss(tmp_path):
     assert "完整連結" in html
     assert "無法復原" in html
     assert "分享授權無效或已被竄改" in html
+    assert "正在讀取 E2EE 分享授權" in html
+    assert "正在下載加密影音檔" in html
+    assert "正在瀏覽器端解密影音" in html
+    assert "不會把密碼或金鑰送到伺服器" in html
 
 
 def test_shared_video_regeneration_for_e2ee_requires_new_browser_side_envelope(tmp_path):

@@ -60,9 +60,9 @@
 
 - 一句話說明：提供上傳、分享、預覽、隱私模式、資料夾、垃圾桶與相簿。
 - 設計目的：集中處理檔案、權限、加密模式與媒體功能的共同基礎。
-- 使用方法：上傳檔案、選擇隱私模式、必要時建立相簿與分享連結；Cloud Drive 現在可直接雙擊資料夾列進入，不必只靠右側 `開啟` 按鈕；若容量不足，一般使用者目前可購買的預設方案是 `1GB / 7 天`；音樂檔可直接在雲端硬碟 inline 預覽。
+- 使用方法：上傳檔案、選擇隱私模式、必要時建立相簿與分享連結；Cloud Drive 現在可直接雙擊資料夾列進入，不必只靠右側 `開啟` 按鈕；若容量不足，一般使用者目前可購買的預設方案是 `1GB / 7 天`；音樂檔可直接在雲端硬碟 inline 預覽，PDF 會優先走瀏覽器原生檢視器，壓縮檔則改為結構化清單預覽。
 - 原理：不同隱私模式決定 server 能否掃描 / 預覽 / 解密，並影響影片等上層模組。
-- 失敗情境與提示：配額不足、加密模式不支援某些預覽、權限不足、檔案被 quarantine。
+- 失敗情境與提示：配額不足、加密模式不支援某些預覽、權限不足、檔案被 quarantine；strict E2EE PDF 若內嵌檢視器失敗，畫面會保留新分頁開啟備援；E2EE 檔案則會先嘗試本次 session 最近成功的密碼，不會每次都強制重新輸入。
 - 測試方式：上傳、預覽、分享、刪除、恢復、相簿操作、E2EE / server_encrypted 邊界。
 - 相關文件連結：[04_USER_GUIDE.md](04_USER_GUIDE.md), [WEB.md](WEB.md), [12_TROUBLESHOOTING.md](12_TROUBLESHOOTING.md)
 
@@ -72,7 +72,7 @@
 - 設計目的：重用既有 storage/permission/PointsChain，而不是再造第二套媒體系統。
 - 使用方法：先上傳影片到 Cloud Drive，再從影音頁發布；不論是直接上傳影音，或從既有 Cloud Drive 影音檔發布，都可附上自訂封面圖。prepared HLS 影片在 Safari 會走原生 HLS，桌機 Chrome / Firefox / Edge 會用同源 `hls.js`，若 HLS 失敗才退回直接串流。`持連結可看` 的 strict E2EE 影音則會在同頁顯示分享管理面板，讓擁有者查看分享狀態、剩餘觀看次數、是否有第二層分享密碼、到期日與重新產生 / 撤銷入口。
 - 原理：影片 metadata 與互動是 presentation layer，實際檔案仍由 Cloud Drive 提供。
-- 失敗情境與提示：strict E2EE 檔案不可作為一般 server-side/HLS 影音發布；若要發布成 `持連結可看` 的 E2EE 影音，擁有者需在瀏覽器端輸入一次原始 E2EE 密碼建立分享授權；若完整分享連結 fragment 遺失，伺服器無法復原，只能重新產生分享；server_encrypted 若遇舊 key 不可解會回 `decrypt_unavailable`。
+- 失敗情境與提示：strict E2EE 檔案不可作為一般 server-side/HLS 影音發布；若要發布成 `持連結可看` 的 E2EE 影音，擁有者需在瀏覽器端輸入一次原始 E2EE 密碼建立分享授權；分享頁現在會明確顯示「讀取分享授權 / 下載加密影音 / 瀏覽器端解密」階段，避免大檔案只看起來像卡住；若完整分享連結 fragment 遺失，伺服器無法復原，只能重新產生分享；server_encrypted 若遇舊 key 不可解會回 `decrypt_unavailable`。
 - 測試方式：發布、播放、private/unlisted、評論、打賞、權限與解密失敗情境。
 - 相關文件連結：[VIDEO_PLATFORM.md](VIDEO_PLATFORM.md), [VIDEO_STREAMING_ARCHITECTURE.md](VIDEO_STREAMING_ARCHITECTURE.md), [07_POINTSCHAIN.md](07_POINTSCHAIN.md), [11_QA_TESTING.md](11_QA_TESTING.md)
 

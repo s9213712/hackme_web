@@ -49,6 +49,7 @@ const DRIVE_PRIVACY_MODE_COMPARISON = [
 const DRIVE_E2EE_PASSPHRASE_WRAPPER = "browser_passphrase_pbkdf2_v2";
 const DRIVE_E2EE_PBKDF2_ITERATIONS = 310000;
 const driveE2eeSessionPassphrases = new Map();
+const driveE2eeRecentSessionPassphrases = [];
 const ATTACHMENT_FILE_SELECT_IDS = [
   "chat-attachment-existing-file-id",
   "dm-attachment-existing-file-id",
@@ -330,6 +331,7 @@ function driveE2eeKnownFileIds(fileId) {
 
 function clearDriveE2eeSessionPassphrases() {
   driveE2eeSessionPassphrases.clear();
+  driveE2eeRecentSessionPassphrases.length = 0;
 }
 
 function forgetDriveE2eeSessionPassphrase(fileId) {
@@ -348,11 +350,36 @@ function getRememberedDriveE2eeSessionPassphrase(fileId) {
   return "";
 }
 
+function rememberDriveE2eeRecentSessionPassphrase(passphrase) {
+  const normalized = String(passphrase || "");
+  if (!normalized) return;
+  const existing = driveE2eeRecentSessionPassphrases.indexOf(normalized);
+  if (existing >= 0) driveE2eeRecentSessionPassphrases.splice(existing, 1);
+  driveE2eeRecentSessionPassphrases.unshift(normalized);
+  if (driveE2eeRecentSessionPassphrases.length > 4) {
+    driveE2eeRecentSessionPassphrases.length = 4;
+  }
+}
+
+function getDriveE2eeSessionPassphraseCandidates(fileId) {
+  const remembered = getRememberedDriveE2eeSessionPassphrase(fileId);
+  const candidates = [];
+  const addCandidate = (value) => {
+    const normalized = String(value || "");
+    if (!normalized || candidates.includes(normalized)) return;
+    candidates.push(normalized);
+  };
+  addCandidate(remembered);
+  driveE2eeRecentSessionPassphrases.forEach(addCandidate);
+  return candidates;
+}
+
 function rememberDriveE2eeSessionPassphrase(fileId, passphrase) {
   if (!passphrase) return;
   driveE2eeKnownFileIds(fileId).forEach((id) => {
     driveE2eeSessionPassphrases.set(driveE2eeSessionKey(id), passphrase);
   });
+  rememberDriveE2eeRecentSessionPassphrase(passphrase);
 }
 
 async function getDriveE2eeSessionPassphrase(fileId, promptText, { force = false } = {}) {
@@ -1577,8 +1604,17 @@ async function fetchDriveE2eeCiphertext(fileId, csrf) {
 async function decryptDriveE2eeFileForSession(fileId, csrf, promptText) {
   const e2ee = await fetchDriveE2eeKey(fileId, csrf);
   const ciphertext = await fetchDriveE2eeCiphertext(fileId, csrf);
+  for (const passphrase of getDriveE2eeSessionPassphraseCandidates(fileId)) {
+    try {
+      const decrypted = await decryptDriveE2eeBlob(ciphertext, e2ee, passphrase);
+      rememberDriveE2eeSessionPassphrase(fileId, passphrase);
+      return decrypted;
+    } catch (err) {
+      forgetDriveE2eeSessionPassphrase(fileId);
+    }
+  }
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const passphrase = await getDriveE2eeSessionPassphrase(fileId, promptText, { force: attempt > 0 });
+    const passphrase = await getDriveE2eeSessionPassphrase(fileId, promptText, { force: true });
     if (!passphrase) return null;
     try {
       const decrypted = await decryptDriveE2eeBlob(ciphertext, e2ee, passphrase);
@@ -1679,7 +1715,7 @@ async function fetchDrivePreviewContent(fileId, csrf, expectedMime = "") {
 
 function drivePreviewUsesDirectStream(preview) {
   const category = String(preview?.category || "");
-  return category === "audio" || category === "video";
+  return category === "audio" || category === "video" || category === "pdf";
 }
 
 async function resolveDrivePreviewMediaUrl(fileId, csrf, preview, { fullscreen = false } = {}) {
@@ -1689,6 +1725,26 @@ async function resolveDrivePreviewMediaUrl(fileId, csrf, preview, { fullscreen =
     return drivePreviewContentUrl(fileId);
   }
   return fetchDrivePreviewContent(fileId, csrf, preview?.mime_type || "");
+}
+
+function renderDrivePdfPreview(url, title, { encrypted = false } = {}) {
+  const safeTitle = sanitize(title || "PDF preview");
+  const message = encrypted
+    ? "這份 PDF 已在瀏覽器解密。若內嵌檢視器無法開啟，請改用新分頁或直接下載。"
+    : "若瀏覽器內建 PDF 檢視器未載入，請改用新分頁開啟或直接下載。";
+  return `
+    <div class="drive-pdf-preview">
+      <object data="${url}" type="application/pdf" aria-label="${safeTitle}">
+        <embed src="${url}" type="application/pdf" />
+        <div class="drive-empty">
+          ${message}
+          <div class="drive-file-actions" style="justify-content:flex-start;">
+            <a class="btn btn-primary" href="${url}" target="_blank" rel="noopener">在新分頁開啟 PDF</a>
+          </div>
+        </div>
+      </object>
+    </div>
+  `;
 }
 
 function renderDriveDecryptedPreviewMedia(preview, blob, { fullscreen = false } = {}) {
@@ -1705,7 +1761,7 @@ function renderDriveDecryptedPreviewMedia(preview, blob, { fullscreen = false } 
   if (preview.category === "audio") return `<audio controls ${fullscreen ? "autoplay " : ""}src="${url}"></audio>`;
   if (preview.category === "video") return `<video controls ${fullscreen ? "autoplay " : ""}src="${url}"></video>`;
   if (preview.category === "image") return `<img src="${url}" alt="${title}" />`;
-  if (preview.category === "pdf") return `<iframe src="${url}" title="${title}"></iframe>`;
+  if (preview.category === "pdf") return renderDrivePdfPreview(url, title, { encrypted: true });
   return `<div class="drive-empty">此 E2EE 檔案已在瀏覽器解密，但目前不支援 inline 預覽。</div>`;
 }
 
@@ -1791,14 +1847,34 @@ function shouldOpenDriveFullscreen(fileId, options = {}) {
 
 function renderDriveArchiveEntries(entries) {
   const rows = Array.isArray(entries) ? entries : [];
-  if (!rows.length) return "壓縮檔內無可列出的項目";
-  return rows.map((entry) => {
-    const name = `${entry.is_dir ? "[dir] " : ""}${sanitize(entry.name || "-")}`;
-    const size = entry.size === null || entry.size === undefined ? "-" : formatDriveBytes(entry.size || 0);
-    const compressed = entry.compressed_size === null || entry.compressed_size === undefined ? "" : ` · compressed ${formatDriveBytes(entry.compressed_size || 0)}`;
-    const note = entry.note ? ` · ${sanitize(entry.note)}` : "";
-    return `${name} · ${size}${compressed}${note}`;
-  }).join("\n");
+  if (!rows.length) return `<div class="drive-empty">壓縮檔內無可列出的項目</div>`;
+  return `
+    <div class="drive-archive-list" role="list">
+      ${rows.map((entry) => {
+        const isDir = !!entry.is_dir;
+        const kind = isDir ? "資料夾" : "檔案";
+        const name = sanitize(entry.name || "-");
+        const size = entry.size === null || entry.size === undefined ? "-" : formatDriveBytes(entry.size || 0);
+        const compressed = entry.compressed_size === null || entry.compressed_size === undefined
+          ? "-"
+          : formatDriveBytes(entry.compressed_size || 0);
+        const note = entry.note ? sanitize(entry.note) : "";
+        return `
+          <div class="drive-archive-entry" role="listitem">
+            <div class="drive-archive-entry-main">
+              <span class="drive-archive-kind">${kind}</span>
+              <strong class="drive-archive-name">${name}</strong>
+            </div>
+            <div class="drive-archive-entry-meta">
+              <span>大小 ${size}</span>
+              <span>壓縮後 ${compressed}</span>
+              ${note ? `<span>${note}</span>` : ""}
+            </div>
+          </div>
+        `;
+      }).join("")}
+    </div>
+  `;
 }
 
 async function previewDriveFile(fileId, options = {}) {
@@ -1845,7 +1921,7 @@ async function previewDriveFile(fileId, options = {}) {
       if (preview.category === "audio") panel.innerHTML += `<audio controls preload="metadata" src="${url}"></audio>`;
       else if (preview.category === "video") panel.innerHTML += `<video controls preload="metadata" playsinline src="${url}"></video>`;
       else if (preview.category === "image") panel.innerHTML += `<img src="${url}" alt="${sanitize(preview.filename || "image preview")}" />`;
-      else if (preview.category === "pdf") panel.innerHTML += `<iframe src="${url}" title="PDF preview"></iframe>`;
+      else if (preview.category === "pdf") panel.innerHTML += renderDrivePdfPreview(url, preview.filename || "PDF preview");
       else panel.innerHTML += `<div class="drive-empty">此檔案無可用預覽。</div>`;
       return;
     }
@@ -1961,7 +2037,7 @@ async function previewAlbumFileFullscreen(fileId, fileName = "", options = {}) {
     } else if (preview.category === "audio") {
       body.innerHTML = `<audio controls autoplay preload="metadata" src="${url}"></audio>`;
     } else if (preview.category === "pdf") {
-      body.innerHTML = `<iframe src="${url}" title="${sanitize(preview.filename || fileName || "PDF preview")}"></iframe>`;
+      body.innerHTML = renderDrivePdfPreview(url, preview.filename || fileName || "PDF preview");
     } else {
       throw new Error("這個檔案類型目前只支援右側預覽");
     }

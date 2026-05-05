@@ -18,7 +18,7 @@ Related technical references:
 
 ## Release and Schema
 
-- Release ID: `2026.05.05-120`
+- Release ID: `2026.05.05-121`
 - Schema version: `29`
 - Release ID source: `services/release_info.py`
 - Runtime version endpoint: `GET /api/version`
@@ -171,6 +171,23 @@ Cloud Drive folder navigation now supports row-level double-click open in
 addition to the explicit `開啟` action button. Action buttons remain outside the
 double-click target path, so delete/download controls must not trigger folder
 navigation.
+
+Cloud Drive preview behavior also changed in this release train:
+
+- archive previews now render a structured file list instead of a single
+  newline-joined text block
+- plain / `server_encrypted` PDFs prefer the native `/preview/content` viewer
+  path so browsers receive the correct `application/pdf` response directly
+- strict `e2ee` PDFs still decrypt in the browser, but now render through
+  `object/embed` plus an explicit new-tab fallback instead of relying on a
+  fragile single iframe path
+- E2EE session passphrase caching now tries the most recently successful
+  passphrase from the current login session before prompting again for the next
+  file
+
+Shared strict E2EE video pages now expose explicit browser-side progress
+states (`share auth`, `ciphertext download`, `browser decrypt`) so large media
+does not appear frozen while the browser is still doing client-side work.
 
 If you need to add a new points-quoted asset such as `SOL` or `GOLD`, update
 the market catalog first, then extend provider support or UI behavior only if

@@ -386,6 +386,38 @@ def test_server_encrypted_media_preview_content_encodes_unicode_filename_safely(
     assert "filename*=UTF-8''" in ranged.headers["Content-Disposition"]
 
 
+def test_server_encrypted_pdf_preview_content_encodes_unicode_filename_safely(tmp_path):
+    db_path = tmp_path / "unicode-pdf-drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    pdf_bytes = b"%PDF-1.4\n% unicode pdf preview\n"
+    res = client.post(
+        "/api/cloud-drive/upload",
+        data={"file": (io.BytesIO(pdf_bytes), "日本語資料.pdf", "application/pdf"), "privacy_mode": "server_encrypted"},
+        content_type="multipart/form-data",
+    )
+
+    assert res.status_code == 200
+    file_id = res.get_json()["file"]["file_id"]
+
+    metadata = client.get(f"/api/cloud-drive/files/{file_id}/preview")
+    assert metadata.status_code == 200
+    assert metadata.get_json()["preview"]["category"] == "pdf"
+
+    content = client.get(f"/api/cloud-drive/files/{file_id}/preview/content")
+    assert content.status_code == 200
+    assert content.data == pdf_bytes
+    assert content.mimetype == "application/pdf"
+    disposition = content.headers["Content-Disposition"]
+    assert 'filename="' in disposition
+    assert "filename*=UTF-8''" in disposition
+    assert "%E6%97%A5%E6%9C%AC%E8%AA%9E%E8%B3%87%E6%96%99.pdf" in disposition
+
+
 def test_cloud_drive_upload_repairs_legacy_uploaded_files_schema(tmp_path):
     db_path = tmp_path / "legacy-drive.db"
     storage_root = tmp_path / "storage"

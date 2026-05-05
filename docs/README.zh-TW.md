@@ -2,7 +2,7 @@
 
 [English README](../README.md)
 
-**目前 Release ID：`2026.05.05-120`**
+**目前 Release ID：`2026.05.05-121`**
 
 這份文件是中文捷徑版入口，不再承擔全部教學。它只回答三件事：
 
@@ -53,6 +53,9 @@ python3 server.py
 - `standard_plain` / `server_encrypted`：Safari 保留原生 HLS，桌機 Chrome / Firefox / Edge 走同源 `hls.js`，失敗才退回直接串流
 - strict `e2ee`：維持瀏覽器端解密播放，不做伺服器端 HLS，速度會較慢但不降級 E2EE 承諾
 - `持連結可看` 的 E2EE 影音現在也有分享管理面板，可看分享狀態、剩餘觀看次數、到期日、密碼狀態；若完整連結 fragment 遺失，只能重新產生分享
+- Cloud Drive 預覽現在也更接近日常檔案管理器：壓縮檔會顯示結構化檔案清單，PDF 會優先走原生檢視器；若是 strict `e2ee` PDF，會先在瀏覽器端解密，再用 `object/embed` 預覽或新分頁備援
+- 同一次登入 session 內再開另一個 E2EE 檔案時，前端會先嘗試剛剛成功過的最近密碼；只有真的解不開才會再詢問
+- 伺服器健康度現在是綠燈只顯示燈號，黃燈 / 紅燈才顯示文字訊息
 
 ComfyUI 目前除了一般 txt2img，也支援：
 - `img2img`

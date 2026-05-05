@@ -19,6 +19,11 @@ def test_cloud_drive_preview_ui_is_wired():
     assert "drive-preview-archive" in drive_js
     assert "drive-preview-text" in drive_js
     assert "function renderDriveArchiveEntries(entries)" in drive_js
+    assert 'class="drive-archive-list"' in drive_js
+    assert 'class="drive-archive-entry"' in drive_js
+    assert 'class="drive-archive-kind"' in drive_js
+    assert 'class="drive-archive-entry-meta"' in drive_js
+    assert "壓縮後" in drive_js
     assert '".7z", ".rar", ".tar", ".gz"' in drive_js
     assert "closeDrivePreview()" in drive_js
     assert "async function previewDriveE2eeFile(fileId)" in drive_js
@@ -26,9 +31,17 @@ def test_cloud_drive_preview_ui_is_wired():
     assert "function normalizeDrivePreviewBlobMime(blob, expectedMime = \"\")" in drive_js
     assert "new Blob([blob], { type: targetMime })" in drive_js
     assert "function drivePreviewUsesDirectStream(preview)" in drive_js
+    assert 'return category === "audio" || category === "video" || category === "pdf";' in drive_js
     assert "async function resolveDrivePreviewMediaUrl(fileId, csrf, preview" in drive_js
     assert 'return drivePreviewContentUrl(fileId);' in drive_js
+    assert "function renderDrivePdfPreview(url, title, { encrypted = false } = {})" in drive_js
+    assert '這份 PDF 已在瀏覽器解密。若內嵌檢視器無法開啟，請改用新分頁或直接下載。' in drive_js
+    assert '若瀏覽器內建 PDF 檢視器未載入，請改用新分頁開啟或直接下載。' in drive_js
+    assert '<object data="${url}" type="application/pdf"' in drive_js
+    assert '<embed src="${url}" type="application/pdf" />' in drive_js
+    assert '在新分頁開啟 PDF' in drive_js
     assert "driveE2eeSessionPassphrases" in drive_js
+    assert "driveE2eeRecentSessionPassphrases" in drive_js
     assert "clearDriveE2eeSessionPassphrases" in (ROOT / "public" / "js" / "00-core.js").read_text(encoding="utf-8")
     assert "return previewAlbumFileFullscreen(fileId, options.fileName || \"\")" in drive_js
     assert 'preview.category === "video"' in drive_js
@@ -40,6 +53,12 @@ def test_cloud_drive_preview_ui_is_wired():
     assert '"img-src":     "\'self\' data: blob:"' in server_py
     assert '"media-src":   "\'self\' blob:"' in server_py
     assert '"frame-src":   "\'self\' blob:"' in server_py
+    styles_css = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
+    assert ".drive-preview-panel object," in styles_css
+    assert ".album-full-preview-body object," in styles_css
+    assert ".drive-archive-list {" in styles_css
+    assert ".drive-archive-entry {" in styles_css
+    assert ".drive-archive-kind {" in styles_css
 
 
 def test_filemanager_and_albummanager_ui_are_wired():
@@ -155,7 +174,7 @@ def test_album_viewer_has_dedicated_module():
     assert 'data-drive-action="album-preview-prev"' in index_html
     assert 'data-drive-action="album-preview-next"' in index_html
     assert '/js/35-drive.js?v=20260504-drive-media-rename' in index_html
-    assert '/styles.css?v=20260503-appearance-v2' in index_html
+    assert '/styles.css?v=20260505-civitai-search' in index_html
     assert '/js/00-core.js?v=20260503-appearance-v2' in index_html
     assert '/js/40-auth-users.js?v=20260503-appearance-reset' in index_html
     assert 'src="/js/50-admin.js' in index_html
@@ -422,6 +441,11 @@ def test_cloud_drive_e2ee_download_decrypts_in_browser():
     assert "getDriveE2eeSessionPassphrase" in drive_js
     assert "function rememberDriveE2eeSessionPassphrase(fileId, passphrase)" in drive_js
     assert "function getRememberedDriveE2eeSessionPassphrase(fileId)" in drive_js
+    assert "function rememberDriveE2eeRecentSessionPassphrase(passphrase)" in drive_js
+    assert "function getDriveE2eeSessionPassphraseCandidates(fileId)" in drive_js
+    assert "driveE2eeRecentSessionPassphrases.forEach(addCandidate);" in drive_js
+    assert "for (const passphrase of getDriveE2eeSessionPassphraseCandidates(fileId))" in drive_js
+    assert "const passphrase = await getDriveE2eeSessionPassphrase(fileId, promptText, { force: true });" in drive_js
     assert "const decrypted = await decryptDriveE2eeBlob(blob, keyJson.e2ee, passphrase);" in drive_js
     assert "rememberDriveE2eeSessionPassphrase(fileId, passphrase);" in drive_js
     assert "const remembered = getRememberedDriveE2eeSessionPassphrase(file.file_id);" in drive_js

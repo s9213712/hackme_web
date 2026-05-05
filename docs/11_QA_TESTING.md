@@ -139,6 +139,10 @@ PYTHONPATH=. python3 scripts/trading_backtest_20000_probe.py --include-route --j
 
 - 確認 README、Start Here、Feature Overview 都把這份文件列為測試主入口
 - 若改到 Cloud Drive 檔案瀏覽器，至少手動確認資料夾單擊不誤開、雙擊可進入、右側 `開啟` 按鈕仍可用，且雙擊不會誤觸刪除/下載等 action button
+  - PDF 預覽是否在 plain / `server_encrypted` 模式下直接走原生 viewer，日文 / 中文檔名不會再破 viewer header
+  - strict `e2ee` PDF 若無法內嵌，是否保留「新分頁開啟 PDF」備援
+  - 壓縮檔預覽是否為結構化清單而不是單段文字
+  - 同一次登入 session 內再開第二個 E2EE 檔案時，是否會先嘗試最近成功密碼，而不是每次都直接跳出詢問
 - 確認功能新增後，同步更新 smoke / pentest / QA runbook / troubleshooting
 - 若本次改到帳號復原 / 密碼流程，至少補：
   - 一般使用者 `password reset request/confirm` 仍可正常運作
@@ -172,6 +176,7 @@ PYTHONPATH=. python3 scripts/trading_backtest_20000_probe.py --include-route --j
   - `持連結可看` 的 E2EE 影音分享管理面板，是否會顯示分享狀態、剩餘觀看次數、到期日、分享密碼狀態與重新產生 / 撤銷入口
   - manager/root 若能管理 unlisted 影音分享，是否能更新或撤銷 share-link，不可只在 UI 顯示按鈕卻在後端被 owner-only 擋掉
   - 分享頁若沒有 fragment，是否會明確提示「無法復原，只能重新產生分享」
+  - 分享頁是否會清楚顯示 `讀取分享授權 / 下載加密影音 / 瀏覽器端解密` 三個階段，而不是大檔只看起來像卡住
   - 分享頁若有第二層密碼，是否正確要求「完整連結 + 分享密碼」
   - 分享頁若 wrapped file key 被竄改，是否顯示人性化錯誤，不可把原始 exception 直接丟給使用者
   - 手機版播放頁 / 分享頁是否仍能看到播放狀態、錯誤提示與主要按鈕，不可被播放器擠掉
