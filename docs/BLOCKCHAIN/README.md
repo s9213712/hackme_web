@@ -25,11 +25,19 @@
 | [POINTSCHAIN_ENGINEERING.md](POINTSCHAIN_ENGINEERING.md) | dev / qa | 8-phase 工程地圖 / schema / API / 風險 / 時程 | all |
 | **[IMPLEMENTATION_GUIDE.md](IMPLEMENTATION_GUIDE.md)** | **動工 agent** | **動工前必讀**：分支規則 (`04.blockchain`) + 紅線 + 提案流程 + phase 動工模板 | all |
 | **[PHASE_0_CLEANUP_GATE.md](PHASE_0_CLEANUP_GATE.md)** | **Phase 0 動工 agent / release owner** | **Phase 0 最終清單與結論**：歷史 blockers、recommend items、反 pattern 與 final review verdict | Phase 0 |
-| [POINTS_WALLET_ADDRESSING.md](POINTS_WALLET_ADDRESSING.md) | dev | PNT1 + base58check + ed25519 + 9 官方地址 + supply_state | Phase 1 |
+| [POINTS_WALLET_ADDRESSING.md](POINTS_WALLET_ADDRESSING.md) | dev | PNT1 + base58check + ed25519 + 10 官方地址 + supply_state | Phase 1 |
 | [POINTS_TRANSFER_API.md](POINTS_TRANSFER_API.md) | dev | preview / transfer / nonce / fee 路徑 | Phase 3 |
 | [MULTISIG_WALLETS.md](MULTISIG_WALLETS.md) | dev | 5-role signer / 3-of-5 / proposal / approve / execute | Phase 4 |
 | [POINTS_MINING_REWARDS.md](POINTS_MINING_REWARDS.md) | dev / admin / user | QA Mining 公式 + 雙人審核 + signer 排除 + trust_score + retroactive | **Phase 7** |
 | [POINTSCHAIN_QA.md](POINTSCHAIN_QA.md) | qa | 14 項必測 + 各 Phase 出口 gate + invariants + Release Blocker | all |
+| **[GOVERNANCE_FRAMEWORK.md](GOVERNANCE_FRAMEWORK.md)** | dev / governance reviewer | 治理框架主索引：14 維度、role matrix、L0–L5 tier、parameter registry、explorer、MVP 範圍 | **Governance** |
+| [GOVERNANCE_PROPOSAL_LIFECYCLE.md](GOVERNANCE_PROPOSAL_LIFECYCLE.md) | dev | 11 lifecycle 狀態 + schema + timelock + deposit + simulation | Governance G-0..G-1 |
+| [GOVERNANCE_VOTING_POWER.md](GOVERNANCE_VOTING_POWER.md) | dev / user-rep | eligibility + 多維 weight 公式 + Bicameral + delegation + sybil scoring | Governance G-5 |
+| [POINTS_MONETARY_POLICY.md](POINTS_MONETARY_POLICY.md) | dev / treasurer | mint / burn / fee / reserve rebalancing 制度 | Governance G-2 |
+| [TREASURY_BUDGET_POLICY.md](TREASURY_BUDGET_POLICY.md) | dev / committee | 預算 buckets + committee 結構 + reconciliation | Governance G-2 |
+| [EMERGENCY_GOVERNANCE.md](EMERGENCY_GOVERNANCE.md) | dev / emergency committee | emergency action taxonomy + user exit window + postmortem + ratification | Governance G-3 |
+| [GOVERNANCE_QA_GATE.md](GOVERNANCE_QA_GATE.md) | qa | 12 條 governance 必過測試（self-approve / payload integrity / hard cap / 緊急 stop / direct param 直寫禁止） | Governance G-4 |
+| [DISPUTE_AND_APPEALS.md](DISPUTE_AND_APPEALS.md) | dev / mediator | 7 種 dispute kind + mediator + 14d appeal + dispute pool | Governance G-3 / G-6 |
 
 ## Phase 順序與依賴
 
@@ -52,6 +60,21 @@ Phase 7  QA Mining                 ★ 依賴 Phase 0/1/2/4/6
    ↓                               公式 reward + multisig 升級 + signer 排除 + trust 守護
         Phase 8 Content Mining (未來)
         Phase 9 Validator Reward (未來)
+
+Governance phases (parallel track, after PointsChain Phase 1+2+4 close):
+Phase G-0  Parameter registry + proposal schema    依賴 Phase 1+2+4
+   │                                               GOVERNANCE_FRAMEWORK §6
+Phase G-1  Proposal lifecycle + multisig integration  GOVERNANCE_PROPOSAL_LIFECYCLE
+   │                                               + GOVERNANCE_FRAMEWORK §3 / §4
+Phase G-2  Treasury budget + monetary policy enforcement
+   │                                               TREASURY_BUDGET_POLICY + POINTS_MONETARY_POLICY
+Phase G-3  Emergency governance + dispute MVP      EMERGENCY_GOVERNANCE
+   │                                               + DISPUTE_AND_APPEALS (subset)
+Phase G-4  Governance explorer + QA gate           GOVERNANCE_FRAMEWORK §8
+   │                                               + GOVERNANCE_QA_GATE
+Phase G-5  Voting power + delegation + Bicameral   GOVERNANCE_VOTING_POWER
+   │                                               (Phase 2 of governance, 非 MVP)
+Phase G-6  Dispute full version                    DISPUTE_AND_APPEALS full
 ```
 
 預估 Phase 0–7 全做完約 **4.5–5 個月**（單一資深 dev）。
@@ -103,7 +126,7 @@ Phase 7  QA Mining                 ★ 依賴 Phase 0/1/2/4/6
 
 ## 維護規則
 
-- 本資料夾下 7 份正式設計文件 + IMPLEMENTATION_GUIDE.md + 本 README 視為 canonical
+- 本資料夾下 8 份核心設計文件 + 8 份 governance 設計文件 + IMPLEMENTATION_GUIDE.md + 本 README 視為 canonical
 - 任何修訂必須由 root 同意；個別 dev 不可改設計取捨
 - 章節之間相互引用採相對路徑（`./POINTSCHAIN_QA.md`）；引用本資料夾外用 `../`
 - 命名固定，不可改檔名（外部 README / docs/03_ADMIN_GUIDE.md / docs/08_TRADING_ENGINE.md 等都已連結）
