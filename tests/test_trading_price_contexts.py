@@ -48,6 +48,11 @@ def _actor(user_id=1, username="alice", role="user"):
 
 def test_dashboard_markets_and_positions_expose_reference_and_risk_grade_contexts(tmp_path):
     _, points, trading = _services(tmp_path)
+    trading.update_root_settings(
+        actor=_actor(2, "root", "super_admin"),
+        settings={"price_source": "manual_root"},
+        markets=[{"symbol": "ETH/POINTS", "manual_price_points": 5000}],
+    )
     points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=5000, action_type="seed")
     trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="0.1")
 

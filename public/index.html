@@ -3786,10 +3786,149 @@
               <summary>
                 <div>
                   <div class="drive-card-title">各交易對參數</div>
-                  <div class="drive-card-sub">每個市場自己的價格跳動上限、手續費與最大/最小交易額。</div>
+                  <div class="drive-card-sub">root 可管理市場 registry、provider mapping、Probe 與停用，不再需要改程式碼才能加市場。</div>
                 </div>
               </summary>
               <div class="drive-collapsible-body">
+                <div class="admin-toolbar" style="gap:.5rem;flex-wrap:wrap;">
+                  <button class="btn" type="button" id="root-trading-market-registry-refresh-btn">重新整理市場 registry</button>
+                  <button class="btn" type="button" id="root-trading-market-registry-new-btn">新增市場</button>
+                </div>
+                <div id="root-trading-market-registry-msg" style="margin-top:.45rem;font-size:.8rem;"></div>
+                <div id="root-trading-market-registry-list" class="drive-file-list billing-catalog-list" style="margin-top:.55rem;"></div>
+                <details class="drive-collapsible-panel settings-collapse" style="margin-top:.75rem;" open>
+                  <summary>
+                    <div>
+                      <div class="drive-card-title">市場編輯 / Probe</div>
+                      <div class="drive-card-sub">symbol、display、spot / margin / bot / risk-grade、provider 健康度。</div>
+                    </div>
+                  </summary>
+                  <div class="drive-collapsible-body">
+                    <div class="settings-option-grid">
+                      <div class="field">
+                        <label>內部市場 symbol</label>
+                        <input type="text" id="root-trading-registry-symbol" placeholder="SOL/POINTS" />
+                        <div class="field-hint">目前建議內部 quote 維持 `POINTS`；對外顯示可另外設成 `USDT`。</div>
+                      </div>
+                      <div class="field">
+                        <label>Base asset</label>
+                        <input type="text" id="root-trading-registry-base-asset" placeholder="SOL" />
+                      </div>
+                      <div class="field">
+                        <label>Quote asset</label>
+                        <input type="text" id="root-trading-registry-quote-asset" placeholder="POINTS" />
+                      </div>
+                      <div class="field">
+                        <label>對外顯示 quote</label>
+                        <input type="text" id="root-trading-registry-display-quote" placeholder="USDT" />
+                      </div>
+                      <div class="field">
+                        <label>顯示名稱</label>
+                        <input type="text" id="root-trading-registry-display-name" placeholder="SOL/USDT" />
+                      </div>
+                      <div class="field">
+                        <label>市場類型</label>
+                        <select id="root-trading-registry-market-type">
+                          <option value="spot">spot</option>
+                          <option value="synthetic">synthetic</option>
+                          <option value="reference_only">reference_only</option>
+                        </select>
+                      </div>
+                      <div class="field">
+                        <label>排序</label>
+                        <input type="number" id="root-trading-registry-sort-order" min="1" max="100000" step="1" value="9999" />
+                      </div>
+                      <div class="field">
+                        <label>預設手動價格</label>
+                        <input type="number" id="root-trading-registry-default-manual-price" min="0.00000001" step="0.00000001" value="1" />
+                      </div>
+                      <div class="field">
+                        <label>價格精度</label>
+                        <input type="number" id="root-trading-registry-price-precision" min="0" max="12" step="1" value="8" />
+                      </div>
+                      <div class="field">
+                        <label>數量精度</label>
+                        <input type="number" id="root-trading-registry-quantity-precision" min="0" max="12" step="1" value="8" />
+                      </div>
+                      <div class="field">
+                        <label>最小數量</label>
+                        <input type="number" id="root-trading-registry-min-order-size" min="0.00000001" step="0.00000001" value="0.00000001" />
+                      </div>
+                      <div class="field">
+                        <label>最大數量</label>
+                        <input type="number" id="root-trading-registry-max-order-size" min="0.00000001" step="0.00000001" value="1000000" />
+                      </div>
+                      <div class="field">
+                        <label>lot size</label>
+                        <input type="number" id="root-trading-registry-lot-size" min="0.00000001" step="0.00000001" value="0.00000001" />
+                      </div>
+                      <div class="field">
+                        <label>tick size</label>
+                        <input type="number" id="root-trading-registry-tick-size" min="0.00000001" step="0.00000001" value="0.00000001" />
+                      </div>
+                      <div class="field"><label><input type="checkbox" id="root-trading-registry-enabled" checked /> 市場啟用</label></div>
+                      <div class="field"><label><input type="checkbox" id="root-trading-registry-allow-spot" checked /> 允許現貨</label></div>
+                      <div class="field"><label><input type="checkbox" id="root-trading-registry-allow-margin" checked /> 允許融資 / 保證金</label></div>
+                      <div class="field"><label><input type="checkbox" id="root-trading-registry-allow-bots" checked /> 允許 bot / grid</label></div>
+                      <div class="field"><label><input type="checkbox" id="root-trading-registry-allow-risk-grade" /> 允許 risk-grade 高風險用途</label></div>
+                      <div class="field"><label><input type="checkbox" id="root-trading-registry-live-price-enabled" checked /> 啟用 live/reference 價格輸入</label></div>
+                      <div class="field"><label><input type="checkbox" id="root-trading-registry-reference-enabled" checked /> 啟用 candles / reference price</label></div>
+                      <div class="field"><label><input type="checkbox" id="root-trading-registry-btc-trade-enabled" /> 啟用 BTC_trade 信號</label></div>
+                    </div>
+                    <div class="admin-toolbar" style="margin-top:.55rem;gap:.5rem;flex-wrap:wrap;">
+                      <button class="btn btn-primary" type="button" id="root-trading-market-registry-save-btn">儲存市場</button>
+                      <button class="btn" type="button" id="root-trading-market-registry-probe-btn">執行 provider probe</button>
+                      <button class="btn" type="button" id="root-trading-market-registry-disable-btn">停用市場</button>
+                      <button class="btn" type="button" id="root-trading-market-registry-cancel-btn">清空編輯</button>
+                    </div>
+                    <div id="root-trading-market-registry-editor-status" class="field-hint" style="margin-top:.4rem;"></div>
+                  </div>
+                </details>
+                <details class="drive-collapsible-panel settings-collapse" style="margin-top:.75rem;" open>
+                  <summary>
+                    <div>
+                      <div class="drive-card-title">Provider Mapping</div>
+                      <div class="drive-card-sub">調整 ticker / depth / candles 支援與優先序；Probe 失敗時不得啟用 risk-grade。</div>
+                    </div>
+                  </summary>
+                  <div class="drive-collapsible-body">
+                    <div id="root-trading-market-provider-selected" class="field-hint">尚未選擇市場</div>
+                    <div id="root-trading-market-provider-list" class="drive-file-list billing-catalog-list" style="margin-top:.55rem;"></div>
+                    <div class="settings-option-grid" style="margin-top:.65rem;">
+                      <div class="field">
+                        <label>Provider</label>
+                        <select id="root-trading-market-provider-name">
+                          <option value="binance_public_api">Binance</option>
+                          <option value="okx_public_api">OKX</option>
+                          <option value="coinbase_exchange">Coinbase</option>
+                          <option value="kraken_public_api">Kraken</option>
+                          <option value="gemini_public_api">Gemini</option>
+                          <option value="bitstamp_public_api">Bitstamp</option>
+                          <option value="coingecko_simple_price">CoinGecko</option>
+                        </select>
+                      </div>
+                      <div class="field">
+                        <label>Provider symbol</label>
+                        <input type="text" id="root-trading-market-provider-symbol" placeholder="SOLUSDT / SOL-USD ..." />
+                      </div>
+                      <div class="field">
+                        <label>優先序</label>
+                        <input type="number" id="root-trading-market-provider-priority" min="1" max="1000" step="1" value="100" />
+                      </div>
+                      <div class="field"><label><input type="checkbox" id="root-trading-market-provider-enabled" checked /> 啟用 mapping</label></div>
+                      <div class="field"><label><input type="checkbox" id="root-trading-market-provider-ticker" checked /> ticker</label></div>
+                      <div class="field"><label><input type="checkbox" id="root-trading-market-provider-depth" checked /> depth</label></div>
+                      <div class="field"><label><input type="checkbox" id="root-trading-market-provider-candles" checked /> candles</label></div>
+                    </div>
+                    <div class="admin-toolbar" style="margin-top:.55rem;gap:.5rem;flex-wrap:wrap;">
+                      <button class="btn btn-primary" type="button" id="root-trading-market-provider-save-btn">儲存 provider mapping</button>
+                      <button class="btn" type="button" id="root-trading-market-provider-cancel-btn">清空 provider 編輯</button>
+                    </div>
+                    <div id="root-trading-market-provider-status" class="field-hint" style="margin-top:.4rem;"></div>
+                    <div id="root-trading-market-registry-audit" class="drive-file-list billing-catalog-list" style="margin-top:.75rem;"></div>
+                  </div>
+                </details>
+                <div class="field-hint" style="margin-top:.75rem;">以下保留既有手續費 / 最低最高交易額設定；其餘市場啟用、provider mapping 與風控用途改由上方 registry 管理。</div>
                 <div id="root-trading-market-settings" class="drive-file-list billing-catalog-list"></div>
               </div>
             </details>

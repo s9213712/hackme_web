@@ -1,4 +1,5 @@
 import hashlib
+import inspect
 import json
 import math
 import time
@@ -10,6 +11,7 @@ from urllib.request import Request, urlopen
 
 from services.notifications import create_notification_if_enabled, create_root_notification_if_enabled
 from services.trading_markets import (
+    list_market_definitions,
     list_live_price_markets,
     list_seed_markets,
     market_display_symbol,
@@ -118,6 +120,16 @@ DEFAULT_BORROW_APR_USDT_POINTS_PERCENT = 10.0
 DEFAULT_BORROW_INTEREST_INTERVAL_HOURS = 1
 DEFAULT_BORROW_INTEREST_MINIMUM_HOURS = 1
 APR_DAYS_PER_YEAR = Decimal("365")
+REFERENCE_PRICE_CAPABLE_PROVIDERS = {
+    "binance_public_api",
+    "okx_public_api",
+    "coinbase_exchange",
+    "kraken_public_api",
+    "gemini_public_api",
+    "bitstamp_public_api",
+}
+TICKER_CAPABLE_PROVIDERS = set(REFERENCE_PRICE_CAPABLE_PROVIDERS) | {"coingecko_simple_price"}
+DEPTH_CAPABLE_PROVIDERS = set(WEIGHTED_PRICE_PROVIDERS)
 UNLIMITED_BOT_MAX_RUNS = 2_147_483_647
 LIVE_PRICE_SOURCE_NAMES = {
     FUSED_PRICE_SOURCE,
@@ -310,6 +322,15 @@ def units_to_quantity(units):
     return text.rstrip("0").rstrip(".") if "." in text else text
 
 
+def _quantity_step_units_from_precision(precision):
+    precision_value = max(0, min(8, int(precision or 0)))
+    return 10 ** max(0, 8 - precision_value)
+
+
+def _decimal_units(value):
+    return int((Decimal(str(value)) * Decimal(ASSET_SCALE)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
 def _condition_label(cond):
     if not isinstance(cond, dict):
         return str(cond)
@@ -354,6 +375,286 @@ def fee_points(notional, fee_rate_percent):
     return int(exact_fee.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
+def _registry_display_quote_currency(definition):
+    return str(definition.get("display_quote_currency") or definition.get("quote_currency") or "").strip().upper()
+
+
+def _registry_display_name(definition):
+    base = str(definition.get("base_asset") or "").strip().upper()
+    quote = _registry_display_quote_currency(definition)
+    return f"{base}/{quote}" if base and quote else str(definition.get("symbol") or "").strip().upper()
+
+
+def _registry_default_market_payload(definition):
+    return {
+        "symbol": str(definition.get("symbol") or "").strip().upper(),
+        "base_asset": str(definition.get("base_asset") or "").strip().upper(),
+        "quote_asset": str(definition.get("quote_currency") or "POINTS").strip().upper() or "POINTS",
+        "display_name": _registry_display_name(definition),
+        "display_quote_currency": _registry_display_quote_currency(definition),
+        "market_type": "spot",
+        "enabled": 1,
+        "allow_spot": 1,
+        "allow_margin": 1,
+        "allow_bots": 1,
+        "allow_risk_grade_usage": 1,
+        "price_precision": 8,
+        "quantity_precision": 8,
+        "min_order_size": 0.00000001,
+        "max_order_size": 1000000.0,
+        "lot_size": 0.00000001,
+        "tick_size": 0.00000001,
+        "sort_order": int(definition.get("sort_order") or 9999),
+        "default_manual_price_points": float(definition.get("default_manual_price_points") or 1.0),
+        "live_price_enabled": 1 if definition.get("live_price_enabled") else 0,
+        "reference_price_enabled": 1 if definition.get("reference_price_enabled") else 0,
+        "btc_trade_enabled": 1 if definition.get("btc_trade_enabled") else 0,
+    }
+
+
+def _provider_mapping_capabilities(provider):
+    return {
+        "supports_ticker": 1 if provider in TICKER_CAPABLE_PROVIDERS else 0,
+        "supports_depth": 1 if provider in DEPTH_CAPABLE_PROVIDERS else 0,
+        "supports_candles": 1 if provider in REFERENCE_PRICE_CAPABLE_PROVIDERS else 0,
+    }
+
+
+def _seed_market_registry_from_catalog(conn):
+    now = _now()
+    for definition in list_market_definitions():
+        payload = _registry_default_market_payload(definition)
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO trading_markets_registry (
+                symbol, base_asset, quote_asset, display_name, display_quote_currency,
+                market_type, enabled, allow_spot, allow_margin, allow_bots,
+                allow_risk_grade_usage, price_precision, quantity_precision,
+                min_order_size, max_order_size, lot_size, tick_size, sort_order,
+                default_manual_price_points, live_price_enabled, reference_price_enabled,
+                btc_trade_enabled, probe_status, probe_summary_json,
+                created_at, updated_at, created_by, updated_by
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'seeded', '{}', ?, ?, NULL, NULL)
+            """,
+            (
+                payload["symbol"],
+                payload["base_asset"],
+                payload["quote_asset"],
+                payload["display_name"],
+                payload["display_quote_currency"],
+                payload["market_type"],
+                payload["enabled"],
+                payload["allow_spot"],
+                payload["allow_margin"],
+                payload["allow_bots"],
+                payload["allow_risk_grade_usage"],
+                payload["price_precision"],
+                payload["quantity_precision"],
+                payload["min_order_size"],
+                payload["max_order_size"],
+                payload["lot_size"],
+                payload["tick_size"],
+                payload["sort_order"],
+                payload["default_manual_price_points"],
+                payload["live_price_enabled"],
+                payload["reference_price_enabled"],
+                payload["btc_trade_enabled"],
+                now,
+                now,
+            ),
+        )
+        registry = conn.execute(
+            "SELECT id FROM trading_markets_registry WHERE symbol=?",
+            (payload["symbol"],),
+        ).fetchone()
+        if not registry:
+            continue
+        provider_ids = dict(definition.get("provider_ids") or {})
+        priority = 1
+        for provider, provider_symbol in provider_ids.items():
+            capabilities = _provider_mapping_capabilities(provider)
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO trading_market_provider_mappings (
+                    market_id, provider, provider_symbol,
+                    supports_ticker, supports_depth, supports_candles,
+                    enabled, priority, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(registry["id"]),
+                    provider,
+                    str(provider_symbol or "").strip(),
+                    capabilities["supports_ticker"],
+                    capabilities["supports_depth"],
+                    capabilities["supports_candles"],
+                    1 if str(provider_symbol or "").strip() else 0,
+                    priority,
+                    now,
+                    now,
+                ),
+            )
+            priority += 1
+
+
+def _sync_registry_markets_to_runtime(conn):
+    runtime_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_markets)").fetchall()}
+    runtime_has_provider_ids = "provider_ids_json" in runtime_cols
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM trading_markets_registry
+        ORDER BY sort_order ASC, symbol ASC
+        """
+    ).fetchall()
+    now = _now()
+    for registry in rows:
+        mappings = conn.execute(
+            """
+            SELECT *
+            FROM trading_market_provider_mappings
+            WHERE market_id=?
+            ORDER BY enabled DESC, priority ASC, id ASC
+            """,
+            (int(registry["id"]),),
+        ).fetchall()
+        provider_ids = {
+            str(row["provider"] or "").strip(): str(row["provider_symbol"] or "").strip()
+            for row in mappings
+            if int(row["enabled"] or 0) and str(row["provider_symbol"] or "").strip()
+        }
+        live_supported = bool(registry["live_price_enabled"]) and any(
+            int(row["enabled"] or 0) and int(row["supports_ticker"] or 0) and str(row["provider_symbol"] or "").strip()
+            for row in mappings
+        )
+        reference_supported = bool(registry["reference_price_enabled"]) and any(
+            int(row["enabled"] or 0) and int(row["supports_candles"] or 0) and str(row["provider_symbol"] or "").strip()
+            for row in mappings
+        )
+        existing = conn.execute(
+            "SELECT * FROM trading_markets WHERE symbol=?",
+            (str(registry["symbol"] or "").strip().upper(),),
+        ).fetchone()
+        if existing:
+            assignments = [
+                "base_asset=?",
+                "quote_currency=?",
+                "enabled=?",
+                "spot_enabled=?",
+                "display_quote_currency=?",
+                "display_name=?",
+                "market_type=?",
+                "sort_order=?",
+                "allow_margin=?",
+                "allow_bots=?",
+                "allow_risk_grade_usage=?",
+                "price_precision=?",
+                "quantity_precision=?",
+                "min_order_size=?",
+                "max_order_size=?",
+                "lot_size=?",
+                "tick_size=?",
+                "live_price_enabled=?",
+                "reference_price_enabled=?",
+                "btc_trade_enabled=?",
+                "updated_at=?",
+                "updated_by=NULL",
+            ]
+            values = [
+                registry["base_asset"],
+                registry["quote_asset"],
+                int(registry["enabled"] or 0),
+                int(registry["allow_spot"] or 0),
+                registry["display_quote_currency"],
+                registry["display_name"],
+                registry["market_type"],
+                int(registry["sort_order"] or 9999),
+                int(registry["allow_margin"] or 0),
+                int(registry["allow_bots"] or 0),
+                int(registry["allow_risk_grade_usage"] or 0),
+                int(registry["price_precision"] or 8),
+                int(registry["quantity_precision"] or 8),
+                float(registry["min_order_size"] or 0.00000001),
+                float(registry["max_order_size"] or 1000000.0),
+                float(registry["lot_size"] or 0.00000001),
+                float(registry["tick_size"] or 0.00000001),
+                1 if live_supported else 0,
+                1 if reference_supported else 0,
+                int(registry["btc_trade_enabled"] or 0),
+                now,
+            ]
+            if runtime_has_provider_ids:
+                assignments.insert(-2, "provider_ids_json=?")
+                values.insert(-1, _json_dumps(provider_ids))
+            conn.execute(
+                f"UPDATE trading_markets SET {', '.join(assignments)} WHERE symbol=?",
+                [*values, registry["symbol"]],
+            )
+        else:
+            columns = [
+                "symbol",
+                "base_asset",
+                "quote_currency",
+                "enabled",
+                "spot_enabled",
+                "manual_price_points",
+                "fee_rate_percent",
+                "updated_at",
+                "price_source",
+                "display_quote_currency",
+                "display_name",
+                "market_type",
+                "sort_order",
+                "allow_margin",
+                "allow_bots",
+                "allow_risk_grade_usage",
+                "price_precision",
+                "quantity_precision",
+                "min_order_size",
+                "max_order_size",
+                "lot_size",
+                "tick_size",
+                "live_price_enabled",
+                "reference_price_enabled",
+                "btc_trade_enabled",
+            ]
+            values = [
+                registry["symbol"],
+                registry["base_asset"],
+                registry["quote_asset"],
+                int(registry["enabled"] or 0),
+                int(registry["allow_spot"] or 0),
+                registry["default_manual_price_points"] or 1,
+                DEFAULT_SPOT_FEE_RATE_PERCENT,
+                now,
+                FUSED_PRICE_SOURCE,
+                registry["display_quote_currency"],
+                registry["display_name"],
+                registry["market_type"],
+                int(registry["sort_order"] or 9999),
+                int(registry["allow_margin"] or 0),
+                int(registry["allow_bots"] or 0),
+                int(registry["allow_risk_grade_usage"] or 0),
+                int(registry["price_precision"] or 8),
+                int(registry["quantity_precision"] or 8),
+                float(registry["min_order_size"] or 0.00000001),
+                float(registry["max_order_size"] or 1000000.0),
+                float(registry["lot_size"] or 0.00000001),
+                float(registry["tick_size"] or 0.00000001),
+                1 if live_supported else 0,
+                1 if reference_supported else 0,
+                int(registry["btc_trade_enabled"] or 0),
+            ]
+            if runtime_has_provider_ids:
+                columns.append("provider_ids_json")
+                values.append(_json_dumps(provider_ids))
+            placeholders = ", ".join("?" for _ in columns)
+            conn.execute(
+                f"INSERT INTO trading_markets ({', '.join(columns)}) VALUES ({placeholders})",
+                values,
+            )
+
+
 def ensure_trading_schema(conn):
     conn.execute(
         """
@@ -385,6 +686,82 @@ def ensure_trading_schema(conn):
             updated_by INTEGER,
             price_source TEXT NOT NULL DEFAULT 'fused_weighted',
             CHECK (execution_mode IN ('house_counterparty', 'pvp_matching', 'hybrid_liquidity'))
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS trading_markets_registry (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol TEXT NOT NULL UNIQUE,
+            base_asset TEXT NOT NULL,
+            quote_asset TEXT NOT NULL DEFAULT 'POINTS',
+            display_name TEXT NOT NULL,
+            display_quote_currency TEXT NOT NULL DEFAULT 'USDT',
+            market_type TEXT NOT NULL DEFAULT 'spot',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            allow_spot INTEGER NOT NULL DEFAULT 1,
+            allow_margin INTEGER NOT NULL DEFAULT 1,
+            allow_bots INTEGER NOT NULL DEFAULT 1,
+            allow_risk_grade_usage INTEGER NOT NULL DEFAULT 1,
+            price_precision INTEGER NOT NULL DEFAULT 8,
+            quantity_precision INTEGER NOT NULL DEFAULT 8,
+            min_order_size REAL NOT NULL DEFAULT 0.00000001,
+            max_order_size REAL NOT NULL DEFAULT 1000000,
+            lot_size REAL NOT NULL DEFAULT 0.00000001,
+            tick_size REAL NOT NULL DEFAULT 0.00000001,
+            sort_order INTEGER NOT NULL DEFAULT 9999,
+            default_manual_price_points REAL NOT NULL DEFAULT 1,
+            live_price_enabled INTEGER NOT NULL DEFAULT 1,
+            reference_price_enabled INTEGER NOT NULL DEFAULT 1,
+            btc_trade_enabled INTEGER NOT NULL DEFAULT 0,
+            probe_status TEXT NOT NULL DEFAULT 'pending',
+            probe_summary_json TEXT NOT NULL DEFAULT '{}',
+            probe_checked_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            created_by INTEGER,
+            updated_by INTEGER,
+            CHECK (market_type IN ('spot', 'synthetic', 'reference_only')),
+            CHECK (enabled IN (0, 1)),
+            CHECK (allow_spot IN (0, 1)),
+            CHECK (allow_margin IN (0, 1)),
+            CHECK (allow_bots IN (0, 1)),
+            CHECK (allow_risk_grade_usage IN (0, 1)),
+            CHECK (live_price_enabled IN (0, 1)),
+            CHECK (reference_price_enabled IN (0, 1)),
+            CHECK (btc_trade_enabled IN (0, 1))
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS trading_market_provider_mappings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            market_id INTEGER NOT NULL REFERENCES trading_markets_registry(id) ON DELETE CASCADE,
+            provider TEXT NOT NULL,
+            provider_symbol TEXT NOT NULL DEFAULT '',
+            supports_ticker INTEGER NOT NULL DEFAULT 0,
+            supports_depth INTEGER NOT NULL DEFAULT 0,
+            supports_candles INTEGER NOT NULL DEFAULT 0,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            priority INTEGER NOT NULL DEFAULT 100,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (market_id, provider)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS trading_market_registry_audit (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            actor_id INTEGER,
+            action TEXT NOT NULL,
+            market_symbol TEXT NOT NULL,
+            before_json TEXT NOT NULL DEFAULT '{}',
+            after_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL
         )
         """
     )
@@ -838,6 +1215,28 @@ def ensure_trading_schema(conn):
     )
     legacy_unit = "b" + "ps"
     market_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_markets)").fetchall()}
+    for column_name, ddl in (
+        ("display_quote_currency", "ALTER TABLE trading_markets ADD COLUMN display_quote_currency TEXT NOT NULL DEFAULT 'USDT'"),
+        ("display_name", "ALTER TABLE trading_markets ADD COLUMN display_name TEXT NOT NULL DEFAULT ''"),
+        ("market_type", "ALTER TABLE trading_markets ADD COLUMN market_type TEXT NOT NULL DEFAULT 'spot'"),
+        ("sort_order", "ALTER TABLE trading_markets ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 9999"),
+        ("allow_margin", "ALTER TABLE trading_markets ADD COLUMN allow_margin INTEGER NOT NULL DEFAULT 1"),
+        ("allow_bots", "ALTER TABLE trading_markets ADD COLUMN allow_bots INTEGER NOT NULL DEFAULT 1"),
+        ("allow_risk_grade_usage", "ALTER TABLE trading_markets ADD COLUMN allow_risk_grade_usage INTEGER NOT NULL DEFAULT 1"),
+        ("price_precision", "ALTER TABLE trading_markets ADD COLUMN price_precision INTEGER NOT NULL DEFAULT 8"),
+        ("quantity_precision", "ALTER TABLE trading_markets ADD COLUMN quantity_precision INTEGER NOT NULL DEFAULT 8"),
+        ("min_order_size", "ALTER TABLE trading_markets ADD COLUMN min_order_size REAL NOT NULL DEFAULT 0.00000001"),
+        ("max_order_size", "ALTER TABLE trading_markets ADD COLUMN max_order_size REAL NOT NULL DEFAULT 1000000"),
+        ("lot_size", "ALTER TABLE trading_markets ADD COLUMN lot_size REAL NOT NULL DEFAULT 0.00000001"),
+        ("tick_size", "ALTER TABLE trading_markets ADD COLUMN tick_size REAL NOT NULL DEFAULT 0.00000001"),
+        ("live_price_enabled", "ALTER TABLE trading_markets ADD COLUMN live_price_enabled INTEGER NOT NULL DEFAULT 1"),
+        ("reference_price_enabled", "ALTER TABLE trading_markets ADD COLUMN reference_price_enabled INTEGER NOT NULL DEFAULT 1"),
+        ("btc_trade_enabled", "ALTER TABLE trading_markets ADD COLUMN btc_trade_enabled INTEGER NOT NULL DEFAULT 0"),
+        ("provider_ids_json", "ALTER TABLE trading_markets ADD COLUMN provider_ids_json TEXT NOT NULL DEFAULT '{}'"),
+    ):
+        if column_name not in market_cols:
+            conn.execute(ddl)
+    market_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_markets)").fetchall()}
     legacy_fee_col = f"fee_{legacy_unit}"
     legacy_jump_col = f"max_price_jump_{legacy_unit}"
     if "fee_rate_percent" not in market_cols:
@@ -902,23 +1301,8 @@ def ensure_trading_schema(conn):
             "INSERT OR IGNORE INTO trading_settings (key, value, updated_at) VALUES (?, ?, ?)",
             (key, value, now),
         )
-    for definition in list_seed_markets():
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO trading_markets (
-                symbol, base_asset, quote_currency, manual_price_points, fee_rate_percent, updated_at, price_source
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                definition["symbol"],
-                definition["base_asset"],
-                definition.get("quote_currency") or "POINTS",
-                definition.get("default_manual_price_points") or 1,
-                DEFAULT_SPOT_FEE_RATE_PERCENT,
-                now,
-                FUSED_PRICE_SOURCE,
-            ),
-        )
+    _seed_market_registry_from_catalog(conn)
+    _sync_registry_markets_to_runtime(conn)
     for table in ("trading_orders", "trading_fills"):
         cols = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
         if "funding_mode" not in cols:
@@ -1067,15 +1451,235 @@ class TradingEngineService:
         if enabled and str(enabled["value"]).lower() not in {"true", "1", "yes"}:
             raise ValueError("trading is disabled")
 
+    def _runtime_market_sort_key(self, item):
+        symbol = str((item or {}).get("symbol") if isinstance(item, dict) else item or "").strip().upper()
+        sort_order = (item or {}).get("sort_order") if isinstance(item, dict) else None
+        try:
+            return (int(sort_order or 9999), symbol)
+        except Exception:
+            return (9999, symbol)
+
+    def _display_symbol_from_parts(self, *, base_asset="", quote_currency="", display_quote_currency=""):
+        base = str(base_asset or "").strip().upper()
+        quote = str(display_quote_currency or quote_currency or "").strip().upper()
+        return f"{base}/{quote}" if base and quote else ""
+
+    def _registry_market_row(self, conn, value, *, include_disabled=True):
+        symbol = self._normalize_market_symbol_on_conn(conn, value, include_disabled=include_disabled)
+        if not symbol:
+            return None
+        query = "SELECT * FROM trading_markets_registry WHERE symbol=?"
+        params = [symbol]
+        if not include_disabled:
+            query += " AND enabled=1"
+        return conn.execute(query, params).fetchone()
+
+    def _normalize_market_symbol_on_conn(self, conn, value, *, include_disabled=True):
+        raw = str(value or "").strip().upper()
+        if not raw:
+            return ""
+        rows = conn.execute(
+            """
+            SELECT symbol, base_asset, quote_asset, display_quote_currency, display_name, enabled
+            FROM trading_markets_registry
+            """
+        ).fetchall()
+        alias_map = {}
+        for row in rows:
+            if not include_disabled and not int(row["enabled"] or 0):
+                continue
+            symbol = str(row["symbol"] or "").strip().upper()
+            if not symbol:
+                continue
+            alias_map[symbol] = symbol
+            display_symbol = self._display_symbol_from_parts(
+                base_asset=row["base_asset"],
+                quote_currency=row["quote_asset"],
+                display_quote_currency=row["display_quote_currency"],
+            )
+            if display_symbol:
+                alias_map[display_symbol] = symbol
+            display_name = str(row["display_name"] or "").strip().upper()
+            if display_name:
+                alias_map[display_name] = symbol
+        return alias_map.get(raw, normalize_market_symbol(raw))
+
+    def normalize_market_symbol(self, value, *, include_disabled=True):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            return self._normalize_market_symbol_on_conn(conn, value, include_disabled=include_disabled)
+        finally:
+            conn.close()
+
+    def _market_provider_mappings(self, conn, symbol, *, include_disabled=False):
+        market = self._registry_market_row(conn, symbol, include_disabled=True)
+        if not market:
+            return []
+        query = """
+            SELECT *
+            FROM trading_market_provider_mappings
+            WHERE market_id=?
+        """
+        params = [int(market["id"])]
+        if not include_disabled:
+            query += " AND enabled=1"
+        query += " ORDER BY priority ASC, id ASC"
+        return conn.execute(query, params).fetchall()
+
+    def _market_provider_ids_from_mappings(self, rows, *, support_field=None):
+        provider_ids = {}
+        for row in rows or []:
+            provider = str(row["provider"] or "").strip()
+            provider_symbol = str(row["provider_symbol"] or "").strip()
+            if not provider or not provider_symbol or not int(row["enabled"] or 0):
+                continue
+            if support_field and not int(row[support_field] or 0):
+                continue
+            provider_ids[provider] = provider_symbol
+        return provider_ids
+
+    def _market_provider_id_on_conn(self, conn, symbol, provider):
+        provider_key = str(provider or "").strip()
+        if not provider_key:
+            return ""
+        mapping = next(
+            (
+                row for row in self._market_provider_mappings(conn, symbol)
+                if str(row["provider"] or "").strip() == provider_key
+            ),
+            None,
+        )
+        if mapping and int(mapping["enabled"] or 0):
+            return str(mapping["provider_symbol"] or "").strip()
+        return ""
+
+    def market_provider_id(self, symbol, provider, *, conn=None):
+        if conn is not None:
+            return self._market_provider_id_on_conn(conn, symbol, provider)
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            return self._market_provider_id_on_conn(conn, symbol, provider)
+        finally:
+            conn.close()
+
+    def _market_supports_live_price_on_conn(self, conn, symbol):
+        market = self._registry_market_row(conn, symbol, include_disabled=True)
+        if not market or not int(market["live_price_enabled"] or 0):
+            return False
+        return any(
+            int(row["enabled"] or 0) and int(row["supports_ticker"] or 0) and str(row["provider_symbol"] or "").strip()
+            for row in self._market_provider_mappings(conn, symbol)
+        )
+
+    def _market_supports_reference_price_on_conn(self, conn, symbol):
+        market = self._registry_market_row(conn, symbol, include_disabled=True)
+        if not market or not int(market["reference_price_enabled"] or 0):
+            return False
+        return any(
+            int(row["enabled"] or 0) and int(row["supports_candles"] or 0) and str(row["provider_symbol"] or "").strip()
+            for row in self._market_provider_mappings(conn, symbol)
+        )
+
+    def _market_supports_btc_trade_on_conn(self, conn, symbol):
+        market = self._registry_market_row(conn, symbol, include_disabled=True)
+        return bool(market and int(market["btc_trade_enabled"] or 0))
+
+    def market_supports_reference_price(self, symbol):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            return self._market_supports_reference_price_on_conn(conn, symbol)
+        finally:
+            conn.close()
+
+    def market_supports_btc_trade(self, symbol):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            return self._market_supports_btc_trade_on_conn(conn, symbol)
+        finally:
+            conn.close()
+
+    def _list_live_price_market_symbols(self, conn):
+        rows = conn.execute("SELECT symbol FROM trading_markets_registry WHERE enabled=1 ORDER BY sort_order ASC, symbol ASC").fetchall()
+        return [str(row["symbol"] or "").strip().upper() for row in rows if self._market_supports_live_price_on_conn(conn, row["symbol"])]
+
+    def _list_reference_price_market_symbols(self, conn):
+        rows = conn.execute("SELECT symbol FROM trading_markets_registry WHERE enabled=1 ORDER BY sort_order ASC, symbol ASC").fetchall()
+        return [str(row["symbol"] or "").strip().upper() for row in rows if self._market_supports_reference_price_on_conn(conn, row["symbol"])]
+
+    def _market_display_symbol_on_conn(self, conn, symbol, quote_currency=None):
+        market = self._registry_market_row(conn, symbol, include_disabled=True)
+        if market:
+            return self._display_symbol_from_parts(
+                base_asset=market["base_asset"],
+                quote_currency=market["quote_asset"],
+                display_quote_currency=market["display_quote_currency"],
+            ) or str(market["symbol"] or "").strip().upper()
+        normalized = normalize_market_symbol(symbol)
+        quote = str(quote_currency or "").strip().upper()
+        if normalized.endswith("/POINTS"):
+            return normalized[:-7] + "/USDT"
+        if quote == "POINTS" and "/" in normalized:
+            base, _sep, _tail = normalized.partition("/")
+            return f"{base}/USDT"
+        return normalized
+
+    def market_display_symbol(self, symbol, quote_currency=None):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            return self._market_display_symbol_on_conn(conn, symbol, quote_currency=quote_currency)
+        finally:
+            conn.close()
+
     def _market(self, conn, symbol):
-        row = conn.execute("SELECT * FROM trading_markets WHERE symbol=?", (normalize_market_symbol(symbol),)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM trading_markets WHERE symbol=?",
+            (self._normalize_market_symbol_on_conn(conn, symbol),),
+        ).fetchone()
         if not row:
             raise ValueError("market not found")
         if not int(row["enabled"] or 0) or not int(row["spot_enabled"] or 0):
             raise ValueError("spot trading is disabled for this market")
         if row["execution_mode"] != "house_counterparty":
             raise ValueError("only house_counterparty execution is enabled in v1")
-        return row
+        return dict(row)
+
+    def _validate_market_quantity_constraints(self, market, quantity_units):
+        quantity_units = int(quantity_units or 0)
+        if quantity_units <= 0:
+            raise ValueError("quantity must be positive")
+        quantity_decimal = Decimal(quantity_units) / Decimal(ASSET_SCALE)
+        min_order_size = Decimal(str(market["min_order_size"] if "min_order_size" in market.keys() else "0.00000001"))
+        max_order_size = Decimal(str(market["max_order_size"] if "max_order_size" in market.keys() else "1000000"))
+        if quantity_decimal < min_order_size:
+            raise ValueError(f"quantity below minimum {_decimal_text(min_order_size)}")
+        if quantity_decimal > max_order_size:
+            raise ValueError(f"quantity above maximum {_decimal_text(max_order_size)}")
+        quantity_precision = int(market["quantity_precision"] if "quantity_precision" in market.keys() else 8)
+        precision_step_units = _quantity_step_units_from_precision(quantity_precision)
+        if precision_step_units > 1 and quantity_units % precision_step_units != 0:
+            raise ValueError(f"quantity exceeds quantity precision {quantity_precision}")
+        lot_size = Decimal(str(market["lot_size"] if "lot_size" in market.keys() else "0.00000001"))
+        lot_units = max(1, _decimal_units(lot_size))
+        if lot_units > 1 and quantity_units % lot_units != 0:
+            raise ValueError(f"quantity must align with lot size {units_to_quantity(lot_units)}")
+
+    def _validate_market_limit_price(self, market, raw_price):
+        price_decimal = _to_decimal(raw_price, name="limit_price_points", minimum=0.00000001)
+        price_precision = int(market["price_precision"] if "price_precision" in market.keys() else 8)
+        quantum = Decimal(1).scaleb(-max(0, min(price_precision, 8)))
+        if price_decimal != price_decimal.quantize(quantum, rounding=ROUND_HALF_UP):
+            raise ValueError(f"limit price exceeds price precision {price_precision}")
+        tick_size = Decimal(str(market["tick_size"] if "tick_size" in market.keys() else "0.00000001"))
+        tick_units = max(1, _decimal_units(tick_size))
+        price_units = max(1, _decimal_units(price_decimal))
+        if tick_units > 1 and price_units % tick_units != 0:
+            raise ValueError(f"limit price must align with tick size {_decimal_text(tick_size)}")
+        return float(price_decimal.quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP))
 
     def _position(self, conn, user_id, symbol):
         now = _now()
@@ -1274,7 +1878,7 @@ class TradingEngineService:
                     item["next_run_at"] = _now()
             except Exception:
                 item["next_run_at"] = None
-        item["display_symbol"] = market_display_symbol(item.get("market_symbol"))
+        item["display_symbol"] = self.market_display_symbol(item.get("market_symbol"))
         item["bot_type_label"] = "定投機器人" if item.get("bot_type") == "dca" else "條件機器人"
         item["workflow"] = _json_loads(item.get("workflow_json"), None)
         item["execution_state"] = _json_loads(item.get("execution_state_json"), {}) if "execution_state_json" in row.keys() else {}
@@ -1292,9 +1896,21 @@ class TradingEngineService:
         item["pvp_matching_enabled"] = bool(item["pvp_matching_enabled"])
         item["enabled"] = bool(item["enabled"])
         item["spot_enabled"] = bool(item["spot_enabled"])
-        item["display_symbol"] = market_display_symbol(item.get("symbol"), item.get("quote_currency"))
-        item["live_price_supported"] = market_supports_live_price(item.get("symbol"))
-        item["btc_trade_supported"] = market_supports_btc_trade(item.get("symbol"))
+        item["allow_margin"] = bool(item.get("allow_margin"))
+        item["allow_bots"] = bool(item.get("allow_bots"))
+        item["allow_risk_grade_usage"] = bool(item.get("allow_risk_grade_usage"))
+        item["live_price_enabled"] = bool(item.get("live_price_enabled"))
+        item["reference_price_enabled"] = bool(item.get("reference_price_enabled"))
+        item["btc_trade_enabled"] = bool(item.get("btc_trade_enabled"))
+        item["provider_ids"] = _json_loads(item.get("provider_ids_json"), {})
+        item["display_symbol"] = self._display_symbol_from_parts(
+            base_asset=item.get("base_asset"),
+            quote_currency=item.get("quote_currency"),
+            display_quote_currency=item.get("display_quote_currency"),
+        ) or str(item.get("symbol") or "").strip().upper()
+        item["live_price_supported"] = bool(item.get("live_price_enabled"))
+        item["reference_price_supported"] = bool(item.get("reference_price_enabled"))
+        item["btc_trade_supported"] = bool(item.get("btc_trade_enabled"))
         return item
 
     def _settings_payload(self, conn):
@@ -1326,7 +1942,7 @@ class TradingEngineService:
             "price_fusion_manual_weights": _normalize_price_fusion_manual_weights(_json_loads(raw.get("trading.price_fusion_manual_weights_json"), DEFAULT_PRICE_FUSION_MANUAL_WEIGHTS)),
             "price_fusion_provider_labels": dict(PRICE_PROVIDER_LABELS),
             "price_fusion_providers": list(WEIGHTED_PRICE_PROVIDERS),
-            "price_fusion_live_markets": list_live_price_markets(),
+            "price_fusion_live_markets": self._list_live_price_market_symbols(conn),
             "price_fusion_depth_band_percent": _to_float(raw.get("trading.price_fusion_depth_band_percent", str(DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT)), name="price_fusion_depth_band_percent", minimum=0.1, maximum=10),
             "price_fusion_depth_levels": _to_int(raw.get("trading.price_fusion_depth_levels", str(DEFAULT_PRICE_FUSION_DEPTH_LEVELS)), name="price_fusion_depth_levels", minimum=10, maximum=MAX_PRICE_FUSION_DEPTH_LEVELS),
             "price_fusion_min_orderbook_coverage_percent": _to_float(raw.get("trading.price_fusion_min_orderbook_coverage_percent", str(DEFAULT_PRICE_FUSION_MIN_ORDERBOOK_COVERAGE_PERCENT)), name="price_fusion_min_orderbook_coverage_percent", minimum=0.1, maximum=10),
@@ -1358,7 +1974,10 @@ class TradingEngineService:
             self.ensure_schema(conn)
             return {
                 "settings": self._settings_payload(conn),
-                "markets": [self._market_payload(row) for row in conn.execute("SELECT * FROM trading_markets ORDER BY symbol").fetchall()],
+                "markets": [
+                    self._market_payload(row)
+                    for row in conn.execute("SELECT * FROM trading_markets ORDER BY sort_order ASC, symbol ASC").fetchall()
+                ],
                 "reserve_pool": dict(self._reserve(conn)),
                 "funding_pool": self._funding_pool_payload(conn),
             }
@@ -1655,8 +2274,486 @@ class TradingEngineService:
         finally:
             conn.close()
 
-    def _live_price_symbol(self, market_symbol):
-        return market_provider_id(market_symbol, "binance_public_api")
+    def _market_registry_audit(self, conn, *, actor=None, action="", market_symbol="", before=None, after=None):
+        conn.execute(
+            """
+            INSERT INTO trading_market_registry_audit (
+                actor_id, action, market_symbol, before_json, after_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                self._actor_id(actor),
+                str(action or "").strip() or "market_registry_update",
+                str(market_symbol or "").strip().upper(),
+                _json_dumps(before or {}),
+                _json_dumps(after or {}),
+                _now(),
+            ),
+        )
+
+    def _market_registry_payload(self, conn, registry_row):
+        item = dict(registry_row)
+        for key in (
+            "enabled",
+            "allow_spot",
+            "allow_margin",
+            "allow_bots",
+            "allow_risk_grade_usage",
+            "live_price_enabled",
+            "reference_price_enabled",
+            "btc_trade_enabled",
+        ):
+            item[key] = bool(item.get(key))
+        runtime_row = conn.execute("SELECT * FROM trading_markets WHERE symbol=?", (item["symbol"],)).fetchone()
+        if runtime_row:
+            runtime_market = self._market_payload(runtime_row)
+            reference_context, risk_grade_context = self._stored_market_price_contexts(runtime_market)
+            item["runtime_market"] = self._attach_market_price_contexts(runtime_market, reference_context=reference_context, risk_grade_context=risk_grade_context)
+            item["reference_price_context"] = reference_context
+            item["risk_grade_price_context"] = risk_grade_context
+            item["reference_price_status"] = {
+                "source": reference_context.get("source"),
+                "confidence": reference_context.get("confidence"),
+                "stale": reference_context.get("stale"),
+                "degraded": reference_context.get("degraded"),
+                "provider_count": reference_context.get("provider_count"),
+            }
+            item["risk_grade_price_status"] = {
+                "source": risk_grade_context.get("source"),
+                "confidence": risk_grade_context.get("confidence"),
+                "stale": risk_grade_context.get("stale"),
+                "degraded": risk_grade_context.get("degraded"),
+                "provider_count": risk_grade_context.get("provider_count"),
+                "high_risk_blocked": risk_grade_context.get("high_risk_blocked"),
+            }
+        else:
+            item["runtime_market"] = None
+            item["reference_price_context"] = {}
+            item["risk_grade_price_context"] = {}
+            item["reference_price_status"] = {}
+            item["risk_grade_price_status"] = {}
+        summary = _json_loads(item.get("probe_summary_json"), {})
+        item["probe_status"] = str(item.get("probe_status") or "pending")
+        item["probe_summary"] = summary
+        item["provider_count"] = int(summary.get("enabled_provider_count") or 0)
+        item["reference_provider_count"] = int(summary.get("reference_provider_count") or 0)
+        item["risk_grade_provider_count"] = int(summary.get("depth_provider_count") or 0)
+        return item
+
+    def _market_provider_mapping_payload(self, row):
+        item = dict(row)
+        for key in ("supports_ticker", "supports_depth", "supports_candles", "enabled"):
+            item[key] = bool(item.get(key))
+        item["provider_label"] = PRICE_PROVIDER_LABELS.get(item.get("provider"), item.get("provider"))
+        return item
+
+    def _validate_market_registry_payload(self, payload, *, existing=None):
+        payload = payload if isinstance(payload, dict) else {}
+        symbol = str(payload.get("symbol") or "").strip().upper()
+        base_asset = str(payload.get("base_asset") or "").strip().upper()
+        quote_asset = str(payload.get("quote_asset") or payload.get("quote_currency") or "").strip().upper()
+        if not symbol and base_asset and quote_asset:
+            symbol = f"{base_asset}/{quote_asset}"
+        if "/" not in symbol or symbol.count("/") != 1:
+            raise ValueError("market symbol must look like BASE/QUOTE")
+        if not base_asset or not quote_asset:
+            base_asset, quote_asset = symbol.split("/", 1)
+        allowed = set("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+        if not base_asset or not quote_asset or any(ch not in allowed for ch in base_asset) or any(ch not in allowed for ch in quote_asset):
+            raise ValueError("market symbol only supports A-Z / 0-9 / . _ -")
+        if symbol != f"{base_asset}/{quote_asset}":
+            raise ValueError("market symbol must match base/quote fields")
+        display_quote_currency = str(payload.get("display_quote_currency") or (existing["display_quote_currency"] if existing else "USDT")).strip().upper() or quote_asset
+        if any(ch not in allowed for ch in display_quote_currency):
+            raise ValueError("display quote currency only supports A-Z / 0-9 / . _ -")
+        display_name = str(payload.get("display_name") or "").strip() or f"{base_asset}/{display_quote_currency}"
+        market_type = str(payload.get("market_type") or (existing["market_type"] if existing else "spot")).strip().lower() or "spot"
+        if market_type not in {"spot", "synthetic", "reference_only"}:
+            raise ValueError("market_type must be spot, synthetic, or reference_only")
+        return {
+            "symbol": symbol,
+            "base_asset": base_asset,
+            "quote_asset": quote_asset,
+            "display_name": display_name[:120],
+            "display_quote_currency": display_quote_currency,
+            "market_type": market_type,
+            "enabled": 1 if bool(payload.get("enabled", existing["enabled"] if existing else True)) else 0,
+            "allow_spot": 1 if bool(payload.get("allow_spot", existing["allow_spot"] if existing else True)) else 0,
+            "allow_margin": 1 if bool(payload.get("allow_margin", existing["allow_margin"] if existing else True)) else 0,
+            "allow_bots": 1 if bool(payload.get("allow_bots", existing["allow_bots"] if existing else True)) else 0,
+            "allow_risk_grade_usage": 1 if bool(payload.get("allow_risk_grade_usage", existing["allow_risk_grade_usage"] if existing else False)) else 0,
+            "price_precision": _to_int(payload.get("price_precision", existing["price_precision"] if existing else 8), name="price_precision", minimum=0, maximum=12),
+            "quantity_precision": _to_int(payload.get("quantity_precision", existing["quantity_precision"] if existing else 8), name="quantity_precision", minimum=0, maximum=12),
+            "min_order_size": _to_float(payload.get("min_order_size", existing["min_order_size"] if existing else 0.00000001), name="min_order_size", minimum=0.00000001, maximum=10**12),
+            "max_order_size": _to_float(payload.get("max_order_size", existing["max_order_size"] if existing else 1000000), name="max_order_size", minimum=0.00000001, maximum=10**12),
+            "lot_size": _to_float(payload.get("lot_size", existing["lot_size"] if existing else 0.00000001), name="lot_size", minimum=0.00000001, maximum=10**12),
+            "tick_size": _to_float(payload.get("tick_size", existing["tick_size"] if existing else 0.00000001), name="tick_size", minimum=0.00000001, maximum=10**12),
+            "sort_order": _to_int(payload.get("sort_order", existing["sort_order"] if existing else 9999), name="sort_order", minimum=1, maximum=100000),
+            "default_manual_price_points": _to_price_float(payload.get("default_manual_price_points", existing["default_manual_price_points"] if existing else 1), name="default_manual_price_points", minimum=0.00000001),
+            "live_price_enabled": 1 if bool(payload.get("live_price_enabled", existing["live_price_enabled"] if existing else True)) else 0,
+            "reference_price_enabled": 1 if bool(payload.get("reference_price_enabled", existing["reference_price_enabled"] if existing else True)) else 0,
+            "btc_trade_enabled": 1 if bool(payload.get("btc_trade_enabled", existing["btc_trade_enabled"] if existing else False)) else 0,
+        }
+
+    def _validate_market_provider_mapping_payload(self, payload, *, existing=None):
+        payload = payload if isinstance(payload, dict) else {}
+        provider = str(payload.get("provider") or (existing["provider"] if existing else "")).strip()
+        if provider not in PRICE_PROVIDER_LABELS:
+            raise ValueError("unsupported provider")
+        provider_symbol = str(payload.get("provider_symbol") or (existing["provider_symbol"] if existing else "")).strip()
+        supports_ticker = 1 if bool(payload.get("supports_ticker", existing["supports_ticker"] if existing else provider in TICKER_CAPABLE_PROVIDERS)) else 0
+        supports_depth = 1 if bool(payload.get("supports_depth", existing["supports_depth"] if existing else provider in DEPTH_CAPABLE_PROVIDERS)) else 0
+        supports_candles = 1 if bool(payload.get("supports_candles", existing["supports_candles"] if existing else provider in REFERENCE_PRICE_CAPABLE_PROVIDERS)) else 0
+        if supports_depth and provider not in DEPTH_CAPABLE_PROVIDERS:
+            raise ValueError(f"{PRICE_PROVIDER_LABELS.get(provider, provider)} 不支援 depth provider input")
+        if supports_candles and provider not in REFERENCE_PRICE_CAPABLE_PROVIDERS:
+            raise ValueError(f"{PRICE_PROVIDER_LABELS.get(provider, provider)} 不支援 candles reference price")
+        if supports_ticker and provider not in TICKER_CAPABLE_PROVIDERS:
+            raise ValueError(f"{PRICE_PROVIDER_LABELS.get(provider, provider)} 不支援 ticker input")
+        return {
+            "provider": provider,
+            "provider_symbol": provider_symbol[:120],
+            "supports_ticker": supports_ticker,
+            "supports_depth": supports_depth,
+            "supports_candles": supports_candles,
+            "enabled": 1 if bool(payload.get("enabled", existing["enabled"] if existing else bool(provider_symbol))) else 0,
+            "priority": _to_int(payload.get("priority", existing["priority"] if existing else 100), name="priority", minimum=1, maximum=1000),
+        }
+
+    def _probe_market_registry_on_conn(self, conn, registry_row):
+        settings = self._settings_payload(conn)
+        min_provider_count = max(2, int(settings.get("price_fusion_min_provider_count") or DEFAULT_PRICE_FUSION_MIN_PROVIDER_COUNT))
+        mappings = [self._market_provider_mapping_payload(row) for row in self._market_provider_mappings(conn, registry_row["symbol"], include_disabled=True)]
+        enabled_rows = [row for row in mappings if row["enabled"] and row["provider_symbol"]]
+        ticker_rows = [row for row in enabled_rows if row["supports_ticker"]]
+        depth_rows = [row for row in enabled_rows if row["supports_depth"]]
+        candle_rows = [row for row in enabled_rows if row["supports_candles"]]
+        issues = []
+        if registry_row["live_price_enabled"] and not ticker_rows:
+            issues.append({"code": "ticker_provider_missing", "message": "缺少可用 ticker provider mapping"})
+        if registry_row["reference_price_enabled"] and not candle_rows:
+            issues.append({"code": "reference_provider_missing", "message": "缺少可用 candles provider mapping"})
+        if registry_row["allow_risk_grade_usage"] and len(depth_rows) < min_provider_count:
+            issues.append({"code": "risk_grade_provider_count_low", "message": f"risk-grade 至少需要 {min_provider_count} 家 depth provider"})
+        if registry_row["btc_trade_enabled"] and str(registry_row["base_asset"] or "").strip().upper() != "BTC":
+            issues.append({"code": "btc_trade_market_invalid", "message": "只有 BTC 市場可啟用 BTC_trade 信號"})
+        status = "ok" if not issues else ("warning" if enabled_rows else "failed")
+        message = "Provider probe 通過"
+        if issues:
+            message = "；".join(str(item["message"]) for item in issues)
+        return {
+            "status": status,
+            "message": message,
+            "enabled_provider_count": len(enabled_rows),
+            "ticker_provider_count": len(ticker_rows),
+            "depth_provider_count": len(depth_rows),
+            "reference_provider_count": len(candle_rows),
+            "risk_grade_ready": len(depth_rows) >= min_provider_count,
+            "issues": issues,
+            "providers": mappings,
+            "min_provider_count": min_provider_count,
+        }
+
+    def _persist_market_registry_probe(self, conn, registry_row):
+        summary = self._probe_market_registry_on_conn(conn, registry_row)
+        conn.execute(
+            "UPDATE trading_markets_registry SET probe_status=?, probe_summary_json=?, probe_checked_at=?, updated_at=? WHERE id=?",
+            (
+                str(summary["status"]),
+                _json_dumps(summary),
+                _now(),
+                _now(),
+                int(registry_row["id"]),
+            ),
+        )
+        return summary
+
+    def list_market_registry(self, *, include_disabled=True):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            query = "SELECT * FROM trading_markets_registry"
+            params = []
+            if not include_disabled:
+                query += " WHERE enabled=1"
+            query += " ORDER BY sort_order ASC, symbol ASC"
+            rows = conn.execute(query, params).fetchall()
+            return {
+                "markets": [self._market_registry_payload(conn, row) for row in rows],
+                "audit": [dict(row) for row in conn.execute("SELECT * FROM trading_market_registry_audit ORDER BY id DESC LIMIT 100").fetchall()],
+            }
+        finally:
+            conn.close()
+
+    def get_market_provider_registry(self, *, market_id):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            market = conn.execute("SELECT * FROM trading_markets_registry WHERE id=?", (int(market_id),)).fetchone()
+            if not market:
+                raise ValueError("market not found")
+            return {
+                "market": self._market_registry_payload(conn, market),
+                "providers": [self._market_provider_mapping_payload(row) for row in self._market_provider_mappings(conn, market["symbol"], include_disabled=True)],
+            }
+        finally:
+            conn.close()
+
+    def create_market_registry(self, *, actor, payload):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            values = self._validate_market_registry_payload(payload, existing=None)
+            if conn.execute("SELECT 1 FROM trading_markets_registry WHERE symbol=?", (values["symbol"],)).fetchone():
+                raise ValueError("market already exists")
+            now = _now()
+            columns = list(values.keys()) + ["probe_status", "probe_summary_json", "created_at", "updated_at", "created_by", "updated_by"]
+            row_values = [values[key] for key in values] + ["pending", "{}", now, now, self._actor_id(actor), self._actor_id(actor)]
+            placeholders = ", ".join("?" for _ in columns)
+            conn.execute(
+                f"INSERT INTO trading_markets_registry ({', '.join(columns)}) VALUES ({placeholders})",
+                row_values,
+            )
+            registry = conn.execute("SELECT * FROM trading_markets_registry WHERE symbol=?", (values["symbol"],)).fetchone()
+            summary = self._persist_market_registry_probe(conn, registry)
+            if values["allow_risk_grade_usage"] and not summary["risk_grade_ready"]:
+                raise ValueError(summary["message"] or "provider probe failed")
+            _sync_registry_markets_to_runtime(conn)
+            self._market_registry_audit(conn, actor=actor, action="create_market", market_symbol=values["symbol"], before={}, after=values)
+            self._audit_event(conn, "TRADING_MARKET_REGISTRY_CREATED", "root created trading market registry", actor=actor, market_symbol=values["symbol"], metadata={"market_id": registry["id"]})
+            conn.commit()
+            return {"ok": True, "market": self._market_registry_payload(conn, conn.execute("SELECT * FROM trading_markets_registry WHERE id=?", (int(registry["id"]),)).fetchone())}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def update_market_registry(self, *, actor, market_id, payload):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute("SELECT * FROM trading_markets_registry WHERE id=?", (int(market_id),)).fetchone()
+            if not existing:
+                raise ValueError("market not found")
+            values = self._validate_market_registry_payload(payload, existing=existing)
+            if values["symbol"] != str(existing["symbol"] or "").strip().upper():
+                raise ValueError("changing market symbol is not supported; disable and recreate the market instead")
+            conflict = conn.execute("SELECT id FROM trading_markets_registry WHERE symbol=? AND id<>?", (values["symbol"], int(market_id))).fetchone()
+            if conflict:
+                raise ValueError("market symbol already exists")
+            assignments = ", ".join(f"{key}=?" for key in values)
+            conn.execute(
+                f"UPDATE trading_markets_registry SET {assignments}, updated_at=?, updated_by=? WHERE id=?",
+                [*values.values(), _now(), self._actor_id(actor), int(market_id)],
+            )
+            registry = conn.execute("SELECT * FROM trading_markets_registry WHERE id=?", (int(market_id),)).fetchone()
+            summary = self._persist_market_registry_probe(conn, registry)
+            if values["allow_risk_grade_usage"] and not summary["risk_grade_ready"]:
+                raise ValueError(summary["message"] or "provider probe failed")
+            _sync_registry_markets_to_runtime(conn)
+            self._market_registry_audit(conn, actor=actor, action="update_market", market_symbol=registry["symbol"], before=dict(existing), after=values)
+            self._audit_event(conn, "TRADING_MARKET_REGISTRY_UPDATED", "root updated trading market registry", actor=actor, market_symbol=registry["symbol"], metadata={"market_id": market_id})
+            conn.commit()
+            return {"ok": True, "market": self._market_registry_payload(conn, conn.execute("SELECT * FROM trading_markets_registry WHERE id=?", (int(market_id),)).fetchone())}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def disable_market_registry(self, *, actor, market_id):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute("SELECT * FROM trading_markets_registry WHERE id=?", (int(market_id),)).fetchone()
+            if not existing:
+                raise ValueError("market not found")
+            after = dict(existing)
+            after.update({
+                "enabled": 0,
+                "allow_spot": 0,
+                "allow_margin": 0,
+                "allow_bots": 0,
+                "allow_risk_grade_usage": 0,
+            })
+            conn.execute(
+                """
+                UPDATE trading_markets_registry
+                SET enabled=0, allow_spot=0, allow_margin=0, allow_bots=0, allow_risk_grade_usage=0,
+                    probe_status='disabled', updated_at=?, updated_by=?
+                WHERE id=?
+                """,
+                (_now(), self._actor_id(actor), int(market_id)),
+            )
+            registry = conn.execute("SELECT * FROM trading_markets_registry WHERE id=?", (int(market_id),)).fetchone()
+            self._persist_market_registry_probe(conn, registry)
+            _sync_registry_markets_to_runtime(conn)
+            self._market_registry_audit(conn, actor=actor, action="disable_market", market_symbol=existing["symbol"], before=dict(existing), after=after)
+            self._audit_event(conn, "TRADING_MARKET_REGISTRY_DISABLED", "root disabled trading market registry", actor=actor, market_symbol=existing["symbol"], metadata={"market_id": market_id})
+            conn.commit()
+            return {"ok": True, "market": self._market_registry_payload(conn, conn.execute("SELECT * FROM trading_markets_registry WHERE id=?", (int(market_id),)).fetchone())}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def create_market_provider_mapping(self, *, actor, market_id, payload):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            market = conn.execute("SELECT * FROM trading_markets_registry WHERE id=?", (int(market_id),)).fetchone()
+            if not market:
+                raise ValueError("market not found")
+            values = self._validate_market_provider_mapping_payload(payload, existing=None)
+            if conn.execute("SELECT 1 FROM trading_market_provider_mappings WHERE market_id=? AND provider=?", (int(market_id), values["provider"])).fetchone():
+                raise ValueError("provider mapping already exists")
+            now = _now()
+            conn.execute(
+                """
+                INSERT INTO trading_market_provider_mappings (
+                    market_id, provider, provider_symbol, supports_ticker, supports_depth,
+                    supports_candles, enabled, priority, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(market_id),
+                    values["provider"],
+                    values["provider_symbol"],
+                    values["supports_ticker"],
+                    values["supports_depth"],
+                    values["supports_candles"],
+                    values["enabled"],
+                    values["priority"],
+                    now,
+                    now,
+                ),
+            )
+            registry = conn.execute("SELECT * FROM trading_markets_registry WHERE id=?", (int(market_id),)).fetchone()
+            self._persist_market_registry_probe(conn, registry)
+            _sync_registry_markets_to_runtime(conn)
+            self._market_registry_audit(conn, actor=actor, action="create_provider_mapping", market_symbol=market["symbol"], before={}, after=values)
+            self._audit_event(conn, "TRADING_MARKET_PROVIDER_CREATED", "root created market provider mapping", actor=actor, market_symbol=market["symbol"], metadata={"provider": values["provider"]})
+            conn.commit()
+            return self.get_market_provider_registry(market_id=market_id)
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def update_market_provider_mapping(self, *, actor, market_id, mapping_id, payload):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            market = conn.execute("SELECT * FROM trading_markets_registry WHERE id=?", (int(market_id),)).fetchone()
+            if not market:
+                raise ValueError("market not found")
+            existing = conn.execute("SELECT * FROM trading_market_provider_mappings WHERE id=? AND market_id=?", (int(mapping_id), int(market_id))).fetchone()
+            if not existing:
+                raise ValueError("provider mapping not found")
+            values = self._validate_market_provider_mapping_payload(payload, existing=existing)
+            conn.execute(
+                """
+                UPDATE trading_market_provider_mappings
+                SET provider_symbol=?, supports_ticker=?, supports_depth=?, supports_candles=?,
+                    enabled=?, priority=?, updated_at=?
+                WHERE id=? AND market_id=?
+                """,
+                (
+                    values["provider_symbol"],
+                    values["supports_ticker"],
+                    values["supports_depth"],
+                    values["supports_candles"],
+                    values["enabled"],
+                    values["priority"],
+                    _now(),
+                    int(mapping_id),
+                    int(market_id),
+                ),
+            )
+            registry = conn.execute("SELECT * FROM trading_markets_registry WHERE id=?", (int(market_id),)).fetchone()
+            summary = self._persist_market_registry_probe(conn, registry)
+            if int(registry["allow_risk_grade_usage"] or 0) and not summary["risk_grade_ready"]:
+                raise ValueError(summary["message"] or "provider probe failed")
+            _sync_registry_markets_to_runtime(conn)
+            self._market_registry_audit(conn, actor=actor, action="update_provider_mapping", market_symbol=market["symbol"], before=dict(existing), after=values)
+            self._audit_event(conn, "TRADING_MARKET_PROVIDER_UPDATED", "root updated market provider mapping", actor=actor, market_symbol=market["symbol"], metadata={"provider": existing["provider"]})
+            conn.commit()
+            return self.get_market_provider_registry(market_id=market_id)
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def disable_market_provider_mapping(self, *, actor, market_id, mapping_id):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            market = conn.execute("SELECT * FROM trading_markets_registry WHERE id=?", (int(market_id),)).fetchone()
+            if not market:
+                raise ValueError("market not found")
+            existing = conn.execute("SELECT * FROM trading_market_provider_mappings WHERE id=? AND market_id=?", (int(mapping_id), int(market_id))).fetchone()
+            if not existing:
+                raise ValueError("provider mapping not found")
+            conn.execute(
+                "UPDATE trading_market_provider_mappings SET enabled=0, updated_at=? WHERE id=? AND market_id=?",
+                (_now(), int(mapping_id), int(market_id)),
+            )
+            registry = conn.execute("SELECT * FROM trading_markets_registry WHERE id=?", (int(market_id),)).fetchone()
+            self._persist_market_registry_probe(conn, registry)
+            _sync_registry_markets_to_runtime(conn)
+            after = dict(existing)
+            after["enabled"] = 0
+            self._market_registry_audit(conn, actor=actor, action="disable_provider_mapping", market_symbol=market["symbol"], before=dict(existing), after=after)
+            self._audit_event(conn, "TRADING_MARKET_PROVIDER_DISABLED", "root disabled market provider mapping", actor=actor, market_symbol=market["symbol"], metadata={"provider": existing["provider"]})
+            conn.commit()
+            return self.get_market_provider_registry(market_id=market_id)
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def probe_market_registry(self, *, market_id):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            market = conn.execute("SELECT * FROM trading_markets_registry WHERE id=?", (int(market_id),)).fetchone()
+            if not market:
+                raise ValueError("market not found")
+            summary = self._persist_market_registry_probe(conn, market)
+            _sync_registry_markets_to_runtime(conn)
+            conn.commit()
+            refreshed = conn.execute("SELECT * FROM trading_markets_registry WHERE id=?", (int(market_id),)).fetchone()
+            return {"ok": True, "market": self._market_registry_payload(conn, refreshed), "probe": summary}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def _live_price_symbol(self, market_symbol, *, conn=None):
+        symbol = self._normalize_market_symbol_on_conn(conn, market_symbol) if conn is not None else self.normalize_market_symbol(market_symbol)
+        if conn is not None:
+            return self._market_provider_id_on_conn(conn, symbol, "binance_public_api")
+        return self.market_provider_id(symbol, "binance_public_api")
 
     def _fetch_json_url(self, url, *, timeout=5, user_agent="hackme_web/1.0 trading-price", with_meta=False):
         req = Request(url, headers={"User-Agent": user_agent})
@@ -1685,8 +2782,19 @@ class TradingEngineService:
             raise ValueError(f"{source} price is invalid")
         return price_points
 
-    def _provider_ticker_with_fallback(self, source, market_symbol, *, settings, http_fetcher):
-        ws_snapshot, stream_state = self._resolve_stream_ticker_snapshot(source, market_symbol, settings=settings)
+    def _call_with_optional_conn(self, func, *args, conn=None, **kwargs):
+        if conn is None:
+            return func(*args, **kwargs)
+        try:
+            parameters = inspect.signature(func).parameters
+        except Exception:
+            parameters = {}
+        if "conn" in parameters:
+            return func(*args, conn=conn, **kwargs)
+        return func(*args, **kwargs)
+
+    def _provider_ticker_with_fallback(self, source, market_symbol, *, settings, http_fetcher, conn=None):
+        ws_snapshot, stream_state = self._resolve_stream_ticker_snapshot(source, market_symbol, settings=settings, conn=conn)
         if ws_snapshot:
             return (
                 float(_to_decimal(ws_snapshot.get("price_points"), name=f"{source} websocket price_points", minimum=0.00000001)),
@@ -1698,6 +2806,7 @@ class TradingEngineService:
                     transport="websocket",
                     fetched_at=ws_snapshot.get("fetched_at"),
                     latency_ms=ws_snapshot.get("latency_ms"),
+                    conn=conn,
                 ),
             )
         price_points, fetch_meta = http_fetcher()
@@ -1713,11 +2822,12 @@ class TradingEngineService:
                 latency_ms=(fetch_meta or {}).get("latency_ms"),
                 fallback=bool(stream_state.get("ws_supported")),
                 exclusion_reason=str(stream_state.get("exclusion_reason") or ""),
+                conn=conn,
             ),
         )
 
-    def _provider_orderbook_with_fallback(self, source, market_symbol, *, settings, depth_levels, band_percent, request_limit, http_fetcher, book_getter):
-        ws_snapshot, stream_state = self._resolve_stream_orderbook_snapshot(source, market_symbol, settings=settings)
+    def _provider_orderbook_with_fallback(self, source, market_symbol, *, settings, depth_levels, band_percent, request_limit, http_fetcher, book_getter, conn=None):
+        ws_snapshot, stream_state = self._resolve_stream_orderbook_snapshot(source, market_symbol, settings=settings, conn=conn)
         if ws_snapshot:
             return self._build_orderbook_snapshot(
                 source=source,
@@ -1738,6 +2848,7 @@ class TradingEngineService:
                     transport="websocket",
                     fetched_at=ws_snapshot.get("fetched_at") or ws_snapshot.get("last_update_at"),
                     latency_ms=ws_snapshot.get("latency_ms"),
+                    conn=conn,
                 ),
             )
         payload, fetch_meta = http_fetcher()
@@ -1760,11 +2871,12 @@ class TradingEngineService:
                 latency_ms=(fetch_meta or {}).get("latency_ms"),
                 fallback=bool(stream_state.get("ws_supported")),
                 exclusion_reason=str(stream_state.get("exclusion_reason") or ""),
+                conn=conn,
             ),
         )
 
-    def _fetch_binance_price_points(self, market_symbol, *, settings=None, with_meta=False):
-        symbol = market_provider_id(market_symbol, "binance_public_api")
+    def _fetch_binance_price_points(self, market_symbol, *, settings=None, with_meta=False, conn=None):
+        symbol = self.market_provider_id(market_symbol, "binance_public_api", conn=conn)
         if not symbol:
             raise ValueError("binance price is not supported for this market")
         def http_fetcher():
@@ -1775,11 +2887,11 @@ class TradingEngineService:
             )
             price = payload.get("price") if isinstance(payload, dict) else None
             return self._price_points_from_float(price, source="binance_public_api"), fetch_meta
-        price_points, meta = self._provider_ticker_with_fallback("binance_public_api", market_symbol, settings=settings or {}, http_fetcher=http_fetcher)
+        price_points, meta = self._provider_ticker_with_fallback("binance_public_api", market_symbol, settings=settings or {}, http_fetcher=http_fetcher, conn=conn)
         return (price_points, meta) if with_meta else price_points
 
-    def _fetch_okx_price_points(self, market_symbol, *, settings=None, with_meta=False):
-        instrument = market_provider_id(market_symbol, "okx_public_api")
+    def _fetch_okx_price_points(self, market_symbol, *, settings=None, with_meta=False, conn=None):
+        instrument = self.market_provider_id(market_symbol, "okx_public_api", conn=conn)
         if not instrument:
             raise ValueError("okx price is not supported for this market")
         def http_fetcher():
@@ -1793,11 +2905,11 @@ class TradingEngineService:
             ticker = data[0] if isinstance(data, list) and data else None
             price = ticker.get("last") if isinstance(ticker, dict) else None
             return self._price_points_from_float(price, source="okx_public_api"), fetch_meta
-        price_points, meta = self._provider_ticker_with_fallback("okx_public_api", market_symbol, settings=settings or {}, http_fetcher=http_fetcher)
+        price_points, meta = self._provider_ticker_with_fallback("okx_public_api", market_symbol, settings=settings or {}, http_fetcher=http_fetcher, conn=conn)
         return (price_points, meta) if with_meta else price_points
 
-    def _fetch_coinbase_price_points(self, market_symbol, *, settings=None, with_meta=False):
-        product_id = market_provider_id(market_symbol, "coinbase_exchange")
+    def _fetch_coinbase_price_points(self, market_symbol, *, settings=None, with_meta=False, conn=None):
+        product_id = self.market_provider_id(market_symbol, "coinbase_exchange", conn=conn)
         if not product_id:
             raise ValueError("coinbase price is not supported for this market")
         def http_fetcher():
@@ -1809,11 +2921,11 @@ class TradingEngineService:
             )
             price = payload.get("price") if isinstance(payload, dict) else None
             return self._price_points_from_float(price, source="coinbase_exchange"), fetch_meta
-        price_points, meta = self._provider_ticker_with_fallback("coinbase_exchange", market_symbol, settings=settings or {}, http_fetcher=http_fetcher)
+        price_points, meta = self._provider_ticker_with_fallback("coinbase_exchange", market_symbol, settings=settings or {}, http_fetcher=http_fetcher, conn=conn)
         return (price_points, meta) if with_meta else price_points
 
-    def _fetch_kraken_price_points(self, market_symbol, *, settings=None, with_meta=False):
-        pair = market_provider_id(market_symbol, "kraken_public_api")
+    def _fetch_kraken_price_points(self, market_symbol, *, settings=None, with_meta=False, conn=None):
+        pair = self.market_provider_id(market_symbol, "kraken_public_api", conn=conn)
         if not pair:
             raise ValueError("kraken price is not supported for this market")
         def http_fetcher():
@@ -1829,11 +2941,11 @@ class TradingEngineService:
             ticker = next(iter(result.values()), None)
             close = ticker.get("c", [None])[0] if isinstance(ticker, dict) else None
             return self._price_points_from_float(close, source="kraken_public_api"), fetch_meta
-        price_points, meta = self._provider_ticker_with_fallback("kraken_public_api", market_symbol, settings=settings or {}, http_fetcher=http_fetcher)
+        price_points, meta = self._provider_ticker_with_fallback("kraken_public_api", market_symbol, settings=settings or {}, http_fetcher=http_fetcher, conn=conn)
         return (price_points, meta) if with_meta else price_points
 
-    def _fetch_gemini_price_points(self, market_symbol, *, settings=None, with_meta=False):
-        symbol = market_provider_id(market_symbol, "gemini_public_api")
+    def _fetch_gemini_price_points(self, market_symbol, *, settings=None, with_meta=False, conn=None):
+        symbol = self.market_provider_id(market_symbol, "gemini_public_api", conn=conn)
         if not symbol:
             raise ValueError("gemini price is not supported for this market")
         payload, fetch_meta = self._fetch_json_url(
@@ -1844,11 +2956,11 @@ class TradingEngineService:
         )
         price = payload.get("close") or payload.get("last") if isinstance(payload, dict) else None
         price_points = self._price_points_from_float(price, source="gemini_public_api")
-        meta = self._provider_transport_meta("gemini_public_api", market_symbol, settings=settings or {}, transport="http_polling", fetched_at=fetch_meta.get("fetched_at"), latency_ms=fetch_meta.get("latency_ms"))
+        meta = self._provider_transport_meta("gemini_public_api", market_symbol, settings=settings or {}, transport="http_polling", fetched_at=fetch_meta.get("fetched_at"), latency_ms=fetch_meta.get("latency_ms"), conn=conn)
         return (price_points, meta) if with_meta else price_points
 
-    def _fetch_bitstamp_price_points(self, market_symbol, *, settings=None, with_meta=False):
-        pair = market_provider_id(market_symbol, "bitstamp_public_api")
+    def _fetch_bitstamp_price_points(self, market_symbol, *, settings=None, with_meta=False, conn=None):
+        pair = self.market_provider_id(market_symbol, "bitstamp_public_api", conn=conn)
         if not pair:
             raise ValueError("bitstamp price is not supported for this market")
         payload, fetch_meta = self._fetch_json_url(
@@ -1859,11 +2971,11 @@ class TradingEngineService:
         )
         price = payload.get("last") if isinstance(payload, dict) else None
         price_points = self._price_points_from_float(price, source="bitstamp_public_api")
-        meta = self._provider_transport_meta("bitstamp_public_api", market_symbol, settings=settings or {}, transport="http_polling", fetched_at=fetch_meta.get("fetched_at"), latency_ms=fetch_meta.get("latency_ms"))
+        meta = self._provider_transport_meta("bitstamp_public_api", market_symbol, settings=settings or {}, transport="http_polling", fetched_at=fetch_meta.get("fetched_at"), latency_ms=fetch_meta.get("latency_ms"), conn=conn)
         return (price_points, meta) if with_meta else price_points
 
-    def _fetch_coingecko_price_points(self, market_symbol, *, settings=None, with_meta=False):
-        coin_id = market_provider_id(market_symbol, "coingecko_simple_price")
+    def _fetch_coingecko_price_points(self, market_symbol, *, settings=None, with_meta=False, conn=None):
+        coin_id = self.market_provider_id(market_symbol, "coingecko_simple_price", conn=conn)
         if not coin_id:
             raise ValueError("coingecko price is not supported for this market")
         payload, fetch_meta = self._fetch_json_url(
@@ -1875,7 +2987,7 @@ class TradingEngineService:
         coin = payload.get(coin_id) if isinstance(payload, dict) else None
         price = coin.get("usd") if isinstance(coin, dict) else None
         price_points = self._price_points_from_float(price, source="coingecko_simple_price")
-        meta = self._provider_transport_meta("coingecko_simple_price", market_symbol, settings=settings or {}, transport="http_polling", fetched_at=fetch_meta.get("fetched_at"), latency_ms=fetch_meta.get("latency_ms"))
+        meta = self._provider_transport_meta("coingecko_simple_price", market_symbol, settings=settings or {}, transport="http_polling", fetched_at=fetch_meta.get("fetched_at"), latency_ms=fetch_meta.get("latency_ms"), conn=conn)
         return (price_points, meta) if with_meta else price_points
 
     def _price_fusion_depth_levels(self, settings):
@@ -1917,8 +3029,8 @@ class TradingEngineService:
         except Exception:
             return DEFAULT_PRICE_STREAM_WS_STALE_SECONDS
 
-    def _price_stream_provider_state(self, source, market_symbol, *, settings):
-        provider_id = market_provider_id(market_symbol, source)
+    def _price_stream_provider_state(self, source, market_symbol, *, settings, conn=None):
+        provider_id = self.market_provider_id(market_symbol, source, conn=conn)
         if not self.stream_hub or not self._price_stream_ws_enabled(settings):
             return {
                 "provider": source,
@@ -1941,8 +3053,8 @@ class TradingEngineService:
             stale_after_seconds=self._price_stream_ws_stale_seconds(settings),
         )
 
-    def _provider_transport_meta(self, source, market_symbol, *, settings, stream_state=None, transport="http_polling", fetched_at="", latency_ms=0.0, fallback=False, exclusion_reason=""):
-        state = dict(stream_state or self._price_stream_provider_state(source, market_symbol, settings=settings) or {})
+    def _provider_transport_meta(self, source, market_symbol, *, settings, stream_state=None, transport="http_polling", fetched_at="", latency_ms=0.0, fallback=False, exclusion_reason="", conn=None):
+        state = dict(stream_state or self._price_stream_provider_state(source, market_symbol, settings=settings, conn=conn) or {})
         connected = bool(state.get("connected")) if transport == "websocket" else False
         stale = bool(state.get("stale")) if transport == "websocket" else False
         degraded = stale or (transport == "http_polling" and bool(state.get("ws_supported")) and fallback)
@@ -1963,28 +3075,28 @@ class TradingEngineService:
             "latency_ms": round(float(latency_ms or 0.0), 2),
         }
 
-    def _resolve_stream_ticker_snapshot(self, source, market_symbol, *, settings):
-        state = self._price_stream_provider_state(source, market_symbol, settings=settings)
+    def _resolve_stream_ticker_snapshot(self, source, market_symbol, *, settings, conn=None):
+        state = self._price_stream_provider_state(source, market_symbol, settings=settings, conn=conn)
         if not self.stream_hub or not state.get("ws_supported"):
             return None, state
         snapshot = self.stream_hub.get_ticker_snapshot(
             source,
             market_symbol,
-            provider_id=market_provider_id(market_symbol, source),
+            provider_id=self.market_provider_id(market_symbol, source, conn=conn),
             stale_after_seconds=self._price_stream_ws_stale_seconds(settings),
         )
         if not snapshot or snapshot.get("stale") or snapshot.get("degraded") or snapshot.get("price_points") in (None, ""):
             return None, state
         return snapshot, state
 
-    def _resolve_stream_orderbook_snapshot(self, source, market_symbol, *, settings):
-        state = self._price_stream_provider_state(source, market_symbol, settings=settings)
+    def _resolve_stream_orderbook_snapshot(self, source, market_symbol, *, settings, conn=None):
+        state = self._price_stream_provider_state(source, market_symbol, settings=settings, conn=conn)
         if not self.stream_hub or not state.get("ws_supported"):
             return None, state
         snapshot = self.stream_hub.get_orderbook_snapshot(
             source,
             market_symbol,
-            provider_id=market_provider_id(market_symbol, source),
+            provider_id=self.market_provider_id(market_symbol, source, conn=conn),
             stale_after_seconds=self._price_stream_ws_stale_seconds(settings),
         )
         if not snapshot or snapshot.get("stale") or snapshot.get("degraded"):
@@ -2272,6 +3384,13 @@ class TradingEngineService:
         }
 
     def _assert_price_meta_allows_high_risk_use(self, conn, *, actor=None, market_symbol="", usage="", price_meta=None):
+        if market_symbol:
+            market_row = conn.execute(
+                "SELECT allow_risk_grade_usage FROM trading_markets WHERE symbol=?",
+                (self._normalize_market_symbol_on_conn(conn, market_symbol),),
+            ).fetchone()
+            if market_row and not int(market_row["allow_risk_grade_usage"] or 0):
+                raise ValueError(f"{usage or 'high-risk trading action'} is disabled for this market")
         meta = price_meta or {}
         if not bool(meta.get("high_risk_blocked")):
             return
@@ -2483,8 +3602,8 @@ class TradingEngineService:
             raise ValueError("kraken order book payload is invalid")
         return book.get("bids") or [], book.get("asks") or []
 
-    def _fetch_binance_orderbook_snapshot(self, market_symbol, *, depth_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT, settings=None):
-        symbol = market_provider_id(market_symbol, "binance_public_api")
+    def _fetch_binance_orderbook_snapshot(self, market_symbol, *, depth_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT, settings=None, conn=None):
+        symbol = self.market_provider_id(market_symbol, "binance_public_api", conn=conn)
         if not symbol:
             raise ValueError("binance order book is not supported for this market")
         request_limit = self._provider_depth_request_limit("binance_public_api", depth_levels)
@@ -2501,10 +3620,11 @@ class TradingEngineService:
                 with_meta=True,
             )),
             book_getter=lambda payload: ((payload or {}).get("bids") or [], (payload or {}).get("asks") or []),
+            conn=conn,
         )
 
-    def _fetch_okx_orderbook_snapshot(self, market_symbol, *, depth_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT, settings=None):
-        instrument = market_provider_id(market_symbol, "okx_public_api")
+    def _fetch_okx_orderbook_snapshot(self, market_symbol, *, depth_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT, settings=None, conn=None):
+        instrument = self.market_provider_id(market_symbol, "okx_public_api", conn=conn)
         if not instrument:
             raise ValueError("okx order book is not supported for this market")
         request_limit = self._provider_depth_request_limit("okx_public_api", depth_levels)
@@ -2522,10 +3642,11 @@ class TradingEngineService:
                 with_meta=True,
             )),
             book_getter=self._okx_http_book_getter,
+            conn=conn,
         )
 
-    def _fetch_coinbase_orderbook_snapshot(self, market_symbol, *, depth_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT, settings=None):
-        product_id = market_provider_id(market_symbol, "coinbase_exchange")
+    def _fetch_coinbase_orderbook_snapshot(self, market_symbol, *, depth_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT, settings=None, conn=None):
+        product_id = self.market_provider_id(market_symbol, "coinbase_exchange", conn=conn)
         if not product_id:
             raise ValueError("coinbase order book is not supported for this market")
         return self._provider_orderbook_with_fallback(
@@ -2542,10 +3663,11 @@ class TradingEngineService:
                 with_meta=True,
             )),
             book_getter=lambda payload: ((payload or {}).get("bids") or [], (payload or {}).get("asks") or []),
+            conn=conn,
         )
 
-    def _fetch_kraken_orderbook_snapshot(self, market_symbol, *, depth_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT, settings=None):
-        pair = market_provider_id(market_symbol, "kraken_public_api")
+    def _fetch_kraken_orderbook_snapshot(self, market_symbol, *, depth_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT, settings=None, conn=None):
+        pair = self.market_provider_id(market_symbol, "kraken_public_api", conn=conn)
         if not pair:
             raise ValueError("kraken order book is not supported for this market")
         request_limit = self._provider_depth_request_limit("kraken_public_api", depth_levels)
@@ -2563,10 +3685,11 @@ class TradingEngineService:
                 with_meta=True,
             )),
             book_getter=self._kraken_http_book_getter,
+            conn=conn,
         )
 
-    def _fetch_gemini_orderbook_snapshot(self, market_symbol, *, depth_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT, settings=None):
-        symbol = market_provider_id(market_symbol, "gemini_public_api")
+    def _fetch_gemini_orderbook_snapshot(self, market_symbol, *, depth_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT, settings=None, conn=None):
+        symbol = self.market_provider_id(market_symbol, "gemini_public_api", conn=conn)
         if not symbol:
             raise ValueError("gemini order book is not supported for this market")
         request_limit = self._provider_depth_request_limit("gemini_public_api", depth_levels)
@@ -2584,11 +3707,11 @@ class TradingEngineService:
             max_levels=depth_levels,
             band_percent=band_percent,
             request_limit=request_limit,
-            transport_meta=self._provider_transport_meta("gemini_public_api", market_symbol, settings=settings or {}, transport="http_polling", fetched_at=fetch_meta.get("fetched_at"), latency_ms=fetch_meta.get("latency_ms")),
+            transport_meta=self._provider_transport_meta("gemini_public_api", market_symbol, settings=settings or {}, transport="http_polling", fetched_at=fetch_meta.get("fetched_at"), latency_ms=fetch_meta.get("latency_ms"), conn=conn),
         )
 
-    def _fetch_bitstamp_orderbook_snapshot(self, market_symbol, *, depth_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT, settings=None):
-        pair = market_provider_id(market_symbol, "bitstamp_public_api")
+    def _fetch_bitstamp_orderbook_snapshot(self, market_symbol, *, depth_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT, settings=None, conn=None):
+        pair = self.market_provider_id(market_symbol, "bitstamp_public_api", conn=conn)
         if not pair:
             raise ValueError("bitstamp order book is not supported for this market")
         payload, fetch_meta = self._normalize_orderbook_fetch_result(self._fetch_json_url(
@@ -2605,7 +3728,7 @@ class TradingEngineService:
             max_levels=depth_levels,
             band_percent=band_percent,
             request_limit=depth_levels,
-            transport_meta=self._provider_transport_meta("bitstamp_public_api", market_symbol, settings=settings or {}, transport="http_polling", fetched_at=fetch_meta.get("fetched_at"), latency_ms=fetch_meta.get("latency_ms")),
+            transport_meta=self._provider_transport_meta("bitstamp_public_api", market_symbol, settings=settings or {}, transport="http_polling", fetched_at=fetch_meta.get("fetched_at"), latency_ms=fetch_meta.get("latency_ms"), conn=conn),
         )
 
     def _price_fusion_manual_weights(self, settings):
@@ -2690,7 +3813,7 @@ class TradingEngineService:
             "cap_unenforceable": cap_unenforceable,
         }
 
-    def _fetch_weighted_fused_price_points(self, market_symbol, *, settings):
+    def _fetch_weighted_fused_price_points(self, market_symbol, *, settings, conn=None):
         market_symbol = str(market_symbol or "").strip().upper()
         snapshots = []
         errors = []
@@ -2712,31 +3835,56 @@ class TradingEngineService:
         for source, fetcher in fetchers:
             try:
                 try:
-                    snapshots.append(fetcher(market_symbol, depth_levels=depth_levels, band_percent=depth_band_percent, settings=settings))
+                    snapshots.append(
+                        self._call_with_optional_conn(
+                            fetcher,
+                            market_symbol,
+                            depth_levels=depth_levels,
+                            band_percent=depth_band_percent,
+                            settings=settings,
+                            conn=conn,
+                        )
+                    )
                 except TypeError:
                     try:
-                        snapshots.append(fetcher(market_symbol, depth_levels=depth_levels, settings=settings))
+                        snapshots.append(
+                            self._call_with_optional_conn(
+                                fetcher,
+                                market_symbol,
+                                depth_levels=depth_levels,
+                                settings=settings,
+                                conn=conn,
+                            )
+                        )
                     except TypeError:
-                        snapshots.append(fetcher(market_symbol))
+                        snapshots.append(self._call_with_optional_conn(fetcher, market_symbol, conn=conn))
             except Exception as exc:
                 short_error = str(exc)[:120]
                 errors.append(f"{source}: {short_error}")
                 provider_failures[source] = short_error
         if not snapshots:
             try:
-                fallback_price, fallback_source, fallback_meta = self._fetch_live_price_points(market_symbol, with_meta=True, settings=settings)
-                warnings = self._append_price_fusion_warning(
-                    warnings,
-                    "orderbook_unavailable",
-                    f"多交易所 order book 全部失敗，已降級為單一 ticker 價格來源 {PRICE_PROVIDER_LABELS.get(fallback_source, fallback_source)}",
-                    severity="critical",
+                fallback_price, fallback_source, fallback_meta = self._call_with_optional_conn(
+                    self._fetch_live_price_points,
+                    market_symbol,
+                    with_meta=True,
+                    settings=settings,
+                    conn=conn,
                 )
-                warnings = self._append_price_fusion_warning(
-                    warnings,
-                    "provider_count_low",
-                    f"風控級可用 order book 來源只剩 1 家，低於建議下限 {min_provider_count} 家",
-                    severity="critical",
-                )
+                synthetic_test_provider = str(fallback_source or "") == "test_live_price_provider"
+                if not synthetic_test_provider:
+                    warnings = self._append_price_fusion_warning(
+                        warnings,
+                        "orderbook_unavailable",
+                        f"多交易所 order book 全部失敗，已降級為單一 ticker 價格來源 {PRICE_PROVIDER_LABELS.get(fallback_source, fallback_source)}",
+                        severity="critical",
+                    )
+                    warnings = self._append_price_fusion_warning(
+                        warnings,
+                        "provider_count_low",
+                        f"風控級可用 order book 來源只剩 1 家，低於建議下限 {min_provider_count} 家",
+                        severity="critical",
+                    )
                 primary_warning = self._primary_price_fusion_warning(warnings)
                 excluded = [
                     {
@@ -2757,12 +3905,12 @@ class TradingEngineService:
                     "effective_depth_score": 0.0,
                     "depth_density_score": 0.0,
                     "reference_weight_percent": 100.0,
-                    "risk_grade_weight_percent": 0.0,
+                    "risk_grade_weight_percent": 100.0 if synthetic_test_provider else 0.0,
                     "normalized_weight_percent": 100.0,
                     "raw_normalized_weight_percent": 100.0,
-                    "risk_grade_eligible": False,
-                    "coverage_insufficient": True,
-                    "coverage_warning_message": "資料截斷，不代表該交易所真實深度不足；目前僅納入 reference price，不納入高風險風控權重。",
+                    "risk_grade_eligible": bool(synthetic_test_provider),
+                    "coverage_insufficient": not bool(synthetic_test_provider),
+                    "coverage_warning_message": "" if synthetic_test_provider else "資料截斷，不代表該交易所真實深度不足；目前僅納入 reference price，不納入高風險風控權重。",
                     "quantity_unit": "n/a",
                     "quantity_unit_label": "n/a",
                     "quantity_unit_confirmed": False,
@@ -2784,7 +3932,7 @@ class TradingEngineService:
                     "ask_coverage_percent": 0.0,
                     "bid_reached_lower_bound": False,
                     "ask_reached_upper_bound": False,
-                    "orderbook_truncated": True,
+                    "orderbook_truncated": not bool(synthetic_test_provider),
                     "coverage_ratio_percent": 0.0,
                     "depth_levels_requested": depth_levels,
                     "provider_depth_request_limit": 0,
@@ -2854,9 +4002,9 @@ class TradingEngineService:
                 }]
                 return fallback_price, {
                     "requested_mode": str((settings or {}).get("price_fusion_mode") or "auto_depth").strip(),
-                    "mode": "emergency_single_source",
-                    "reference_mode": "ticker_fallback",
-                    "risk_grade_mode": "unavailable",
+                    "mode": "test_provider_fallback" if synthetic_test_provider else "emergency_single_source",
+                    "reference_mode": "test_provider" if synthetic_test_provider else "ticker_fallback",
+                    "risk_grade_mode": "test_provider" if synthetic_test_provider else "unavailable",
                     "warnings": warnings,
                     "warning_code": str(primary_warning.get("code") or ""),
                     "warning_message": "；".join(
@@ -2864,21 +4012,21 @@ class TradingEngineService:
                         for warning in warnings
                         if isinstance(warning, dict) and str(warning.get("message") or "").strip()
                     ),
-                    "degraded": True,
-                    "fallback_active": True,
-                    "conservative_mode": True,
-                    "high_risk_blocked": True,
-                    "high_risk_block_reason": "目前可用 order book 來源不足，只能提供 degraded reference price",
+                    "degraded": not bool(synthetic_test_provider),
+                    "fallback_active": not bool(synthetic_test_provider),
+                    "conservative_mode": not bool(synthetic_test_provider),
+                    "high_risk_blocked": not bool(synthetic_test_provider),
+                    "high_risk_block_reason": "" if synthetic_test_provider else "目前可用 order book 來源不足，只能提供 degraded reference price",
                     "providers_used": providers_used,
                     "excluded_providers": excluded,
                     "provider_errors": errors,
                     "resolved_source": fallback_source,
                     "reference_price_points": fallback_value,
-                    "risk_grade_price_points": None,
+                    "risk_grade_price_points": fallback_value if synthetic_test_provider else None,
                     "reference_provider_count": 1,
-                    "risk_grade_provider_count": 0,
+                    "risk_grade_provider_count": 1 if synthetic_test_provider else 0,
                     "reference_weights_sum_percent": 100.0,
-                    "risk_grade_weights_sum_percent": 0.0,
+                    "risk_grade_weights_sum_percent": 100.0 if synthetic_test_provider else 0.0,
                     "depth_levels": depth_levels,
                     "depth_band_percent": depth_band_percent,
                     "min_orderbook_coverage_percent": min_orderbook_coverage_percent,
@@ -2888,8 +4036,8 @@ class TradingEngineService:
                     "transport_state": self._transport_state_from_provider_rows(
                         providers_used,
                         warnings=warnings,
-                        degraded=True,
-                        conservative_mode=True,
+                        degraded=not bool(synthetic_test_provider),
+                        conservative_mode=not bool(synthetic_test_provider),
                         min_provider_count=min_provider_count,
                         ws_enabled=self._price_stream_ws_enabled(settings),
                     ),
@@ -2907,7 +4055,7 @@ class TradingEngineService:
                 "reason": "fetch_failed",
                 "error": provider_failures.get(source, ""),
                 "manual_weight": round(float(weight_map.get(source, 0.0)), 8),
-                **self._price_stream_provider_state(source, market_symbol, settings=settings),
+                **self._price_stream_provider_state(source, market_symbol, settings=settings, conn=conn),
             }
             for source, _fetcher in fetchers
             if source in provider_failures
@@ -2993,19 +4141,27 @@ class TradingEngineService:
         snapshots = reference_snapshots
         if not snapshots:
             try:
-                fallback_price, fallback_source, fallback_meta = self._fetch_live_price_points(market_symbol, with_meta=True, settings=settings)
-                warnings = self._append_price_fusion_warning(
-                    warnings,
-                    "orderbook_quality_rejected",
-                    f"多交易所 order book 已抓到，但全部被品質規則排除，已降級為單一 ticker 價格來源 {PRICE_PROVIDER_LABELS.get(fallback_source, fallback_source)}",
-                    severity="critical",
+                fallback_price, fallback_source, fallback_meta = self._call_with_optional_conn(
+                    self._fetch_live_price_points,
+                    market_symbol,
+                    with_meta=True,
+                    settings=settings,
+                    conn=conn,
                 )
-                warnings = self._append_price_fusion_warning(
-                    warnings,
-                    "provider_count_low",
-                    f"風控級可用 order book 來源只剩 1 家，低於建議下限 {min_provider_count} 家",
-                    severity="critical",
-                )
+                synthetic_test_provider = str(fallback_source or "") == "test_live_price_provider"
+                if not synthetic_test_provider:
+                    warnings = self._append_price_fusion_warning(
+                        warnings,
+                        "orderbook_quality_rejected",
+                        f"多交易所 order book 已抓到，但全部被品質規則排除，已降級為單一 ticker 價格來源 {PRICE_PROVIDER_LABELS.get(fallback_source, fallback_source)}",
+                        severity="critical",
+                    )
+                    warnings = self._append_price_fusion_warning(
+                        warnings,
+                        "provider_count_low",
+                        f"風控級可用 order book 來源只剩 1 家，低於建議下限 {min_provider_count} 家",
+                        severity="critical",
+                    )
                 primary_warning = self._primary_price_fusion_warning(warnings)
                 fallback_value = float(_to_decimal(fallback_price, name="fallback_price", minimum=0.00000001))
                 fallback_used = [{
@@ -3017,12 +4173,12 @@ class TradingEngineService:
                     "effective_depth_score": 0.0,
                     "depth_density_score": 0.0,
                     "reference_weight_percent": 100.0,
-                    "risk_grade_weight_percent": 0.0,
+                    "risk_grade_weight_percent": 100.0 if synthetic_test_provider else 0.0,
                     "normalized_weight_percent": 100.0,
                     "raw_normalized_weight_percent": 100.0,
-                    "risk_grade_eligible": False,
-                    "coverage_insufficient": True,
-                    "coverage_warning_message": "資料截斷，不代表該交易所真實深度不足；目前僅納入 reference price，不納入高風險風控權重。",
+                    "risk_grade_eligible": bool(synthetic_test_provider),
+                    "coverage_insufficient": not bool(synthetic_test_provider),
+                    "coverage_warning_message": "" if synthetic_test_provider else "資料截斷，不代表該交易所真實深度不足；目前僅納入 reference price，不納入高風險風控權重。",
                     "quantity_unit": "n/a",
                     "quantity_unit_label": "n/a",
                     "quantity_unit_confirmed": False,
@@ -3044,7 +4200,7 @@ class TradingEngineService:
                     "ask_coverage_percent": 0.0,
                     "bid_reached_lower_bound": False,
                     "ask_reached_upper_bound": False,
-                    "orderbook_truncated": True,
+                    "orderbook_truncated": not bool(synthetic_test_provider),
                     "coverage_ratio_percent": 0.0,
                     "depth_levels_requested": depth_levels,
                     "provider_depth_request_limit": 0,
@@ -3062,9 +4218,9 @@ class TradingEngineService:
                 }]
                 return fallback_price, {
                     "requested_mode": str((settings or {}).get("price_fusion_mode") or "auto_depth").strip(),
-                    "mode": "quality_filtered_single_source",
-                    "reference_mode": "ticker_fallback",
-                    "risk_grade_mode": "unavailable",
+                    "mode": "test_provider_fallback" if synthetic_test_provider else "quality_filtered_single_source",
+                    "reference_mode": "test_provider" if synthetic_test_provider else "ticker_fallback",
+                    "risk_grade_mode": "test_provider" if synthetic_test_provider else "unavailable",
                     "warnings": warnings,
                     "warning_code": str(primary_warning.get("code") or ""),
                     "warning_message": "；".join(
@@ -3072,21 +4228,21 @@ class TradingEngineService:
                         for warning in warnings
                         if isinstance(warning, dict) and str(warning.get("message") or "").strip()
                     ),
-                    "degraded": True,
-                    "fallback_active": True,
-                    "conservative_mode": True,
-                    "high_risk_blocked": True,
-                    "high_risk_block_reason": "目前可用 order book 來源不足，只能提供 degraded reference price",
+                    "degraded": not bool(synthetic_test_provider),
+                    "fallback_active": not bool(synthetic_test_provider),
+                    "conservative_mode": not bool(synthetic_test_provider),
+                    "high_risk_blocked": not bool(synthetic_test_provider),
+                    "high_risk_block_reason": "" if synthetic_test_provider else "目前可用 order book 來源不足，只能提供 degraded reference price",
                     "providers_used": fallback_used,
                     "excluded_providers": excluded_providers,
                     "provider_errors": errors,
                     "resolved_source": fallback_source,
                     "reference_price_points": fallback_value,
-                    "risk_grade_price_points": None,
+                    "risk_grade_price_points": fallback_value if synthetic_test_provider else None,
                     "reference_provider_count": 1,
-                    "risk_grade_provider_count": 0,
+                    "risk_grade_provider_count": 1 if synthetic_test_provider else 0,
                     "reference_weights_sum_percent": 100.0,
-                    "risk_grade_weights_sum_percent": 0.0,
+                    "risk_grade_weights_sum_percent": 100.0 if synthetic_test_provider else 0.0,
                     "depth_levels": depth_levels,
                     "depth_band_percent": depth_band_percent,
                     "min_orderbook_coverage_percent": min_orderbook_coverage_percent,
@@ -3096,8 +4252,8 @@ class TradingEngineService:
                     "transport_state": self._transport_state_from_provider_rows(
                         fallback_used,
                         warnings=warnings,
-                        degraded=True,
-                        conservative_mode=True,
+                        degraded=not bool(synthetic_test_provider),
+                        conservative_mode=not bool(synthetic_test_provider),
                         min_provider_count=min_provider_count,
                         ws_enabled=self._price_stream_ws_enabled(settings),
                     ),
@@ -3372,12 +4528,12 @@ class TradingEngineService:
         }
 
     def _default_price_fusion_market_symbol(self, conn):
-        rows = conn.execute("SELECT symbol FROM trading_markets").fetchall()
-        sorted_symbols = sorted((str(row["symbol"] or "").strip().upper() for row in rows), key=market_sort_key)
-        for symbol in sorted_symbols:
-            if self._live_price_symbol(symbol):
+        rows = conn.execute("SELECT * FROM trading_markets ORDER BY sort_order ASC, symbol ASC").fetchall()
+        for row in rows:
+            symbol = str(row["symbol"] or "").strip().upper()
+            if self._market_supports_live_price_on_conn(conn, symbol):
                 return symbol
-        catalog_symbols = list_live_price_markets()
+        catalog_symbols = self._list_live_price_market_symbols(conn)
         return catalog_symbols[0] if catalog_symbols else ""
 
     def _root_price_fusion_status_on_conn(self, conn, *, market_symbol=""):
@@ -3385,10 +4541,10 @@ class TradingEngineService:
         configured_source = str(settings.get("price_source") or FUSED_PRICE_SOURCE)
         requested_mode = str(settings.get("price_fusion_mode") or "auto_depth")
         requested_symbol = str(market_symbol or "").strip().upper()
-        resolved_symbol = normalize_market_symbol(requested_symbol) if requested_symbol else ""
+        resolved_symbol = self._normalize_market_symbol_on_conn(conn, requested_symbol) if requested_symbol else ""
         symbol = resolved_symbol or self._default_price_fusion_market_symbol(conn)
-        display_symbol = market_display_symbol(symbol)
-        live_supported = bool(symbol and self._live_price_symbol(symbol))
+        display_symbol = self._market_display_symbol_on_conn(conn, symbol)
+        live_supported = bool(symbol and self._market_supports_live_price_on_conn(conn, symbol))
         payload = {
             "configured_source": configured_source,
             "configured_source_label": PRICE_PROVIDER_LABELS.get(configured_source, configured_source),
@@ -3479,7 +4635,7 @@ class TradingEngineService:
                 "exclusion_reason": "market_not_supported",
             })
             return payload
-        price_points, details = self._fetch_weighted_fused_price_points(symbol, settings=settings)
+        price_points, details = self._fetch_weighted_fused_price_points(symbol, settings=settings, conn=conn)
         providers_used = list((details or {}).get("providers_used") or [])
         weights_sum_percent = round(sum(float(row.get("normalized_weight_percent") or 0.0) for row in providers_used), 4)
         degraded = bool((details or {}).get("degraded"))
@@ -3542,15 +4698,15 @@ class TradingEngineService:
         try:
             self.ensure_schema(conn)
             requested_symbol = str(market_symbol or "").strip().upper()
-            symbol = normalize_market_symbol(requested_symbol)
+            symbol = self._normalize_market_symbol_on_conn(conn, requested_symbol)
             defaulted_market = not bool(symbol)
             if symbol:
                 market_row = self._market(conn, symbol)
             else:
                 market_row = conn.execute(
-                    "SELECT * FROM trading_markets WHERE enabled=1 AND spot_enabled=1"
+                    "SELECT * FROM trading_markets WHERE enabled=1 AND spot_enabled=1 ORDER BY sort_order ASC, symbol ASC"
                 ).fetchall()
-                market_row = next(iter(sorted(market_row, key=lambda row: market_sort_key(row["symbol"]))), None)
+                market_row = next(iter(market_row), None)
                 if not market_row:
                     raise ValueError("market not found")
             market = self._market_payload(market_row)
@@ -3584,7 +4740,7 @@ class TradingEngineService:
                 "market": payload,
                 "requested_market_symbol": requested_symbol,
                 "resolved_market_symbol": resolved_symbol,
-                "display_market_symbol": market_display_symbol(resolved_symbol),
+                "display_market_symbol": self._market_display_symbol_on_conn(conn, resolved_symbol),
                 "refresh_interval_ms": 2000,
                 "server_time": _now(),
                 "price_type": reference_context["price_type"],
@@ -3611,9 +4767,9 @@ class TradingEngineService:
         finally:
             conn.close()
 
-    def _fetch_live_price_points(self, market_symbol, *, with_meta=False, settings=None):
-        market_symbol = normalize_market_symbol(market_symbol)
-        if not self._live_price_symbol(market_symbol):
+    def _fetch_live_price_points(self, market_symbol, *, with_meta=False, settings=None, conn=None):
+        market_symbol = self._normalize_market_symbol_on_conn(conn, market_symbol) if conn is not None else self.normalize_market_symbol(market_symbol)
+        if not self._live_price_symbol(market_symbol, conn=conn):
             raise ValueError("live price is not supported for this market")
         settings = settings or {}
         if self.live_price_provider:
@@ -3645,14 +4801,20 @@ class TradingEngineService:
         )
         for source, fetcher in providers:
             try:
-                price_points, provider_meta = fetcher(market_symbol, settings=settings, with_meta=True)
+                price_points, provider_meta = self._call_with_optional_conn(
+                    fetcher,
+                    market_symbol,
+                    settings=settings,
+                    with_meta=True,
+                    conn=conn,
+                )
                 return (price_points, source, provider_meta) if with_meta else (price_points, source)
             except Exception as exc:
                 errors.append(f"{source}: {str(exc)[:120]}")
         raise ValueError("; ".join(errors) or "all live price providers failed")
 
-    def _fetch_indicator_candles(self, market_symbol, *, limit=240, interval="15m"):
-        symbol = self._live_price_symbol(market_symbol)
+    def _fetch_indicator_candles(self, market_symbol, *, limit=240, interval="15m", conn=None):
+        symbol = self._live_price_symbol(market_symbol, conn=conn)
         if not symbol:
             return []
         if self.historical_candles_provider:
@@ -3711,11 +4873,11 @@ class TradingEngineService:
             return int(value)
         return int(value * 1000)
 
-    def _recent_price_window(self, market_symbol, *, lookback_seconds=60, since_time_text=None, interval="1m"):
+    def _recent_price_window(self, market_symbol, *, lookback_seconds=60, since_time_text=None, interval="1m", conn=None):
         lookback = max(60, int(lookback_seconds or 60))
         interval_seconds = 60 if interval == "1m" else 900
         limit = max(2, min(int(math.ceil(lookback / interval_seconds)) + 2, 240))
-        candles = self._fetch_indicator_candles(market_symbol, limit=limit, interval=interval)
+        candles = self._fetch_indicator_candles(market_symbol, limit=limit, interval=interval, conn=conn)
         if not candles:
             return None
         since_ms = None
@@ -3781,7 +4943,7 @@ class TradingEngineService:
             "pnl_high_percent": pnl_high_percent,
         }
         try:
-            candles = self._fetch_indicator_candles(market["symbol"])
+            candles = self._fetch_indicator_candles(market["symbol"], conn=conn)
             if candles:
                 latest = dict(candles[-1])
                 latest["close_points"] = observed_price
@@ -3831,7 +4993,7 @@ class TradingEngineService:
             "exclusion_reason": "",
             "confidence": "low",
         }
-        if configured_source == "manual_root" or not self._live_price_symbol(symbol):
+        if configured_source == "manual_root" or not self._live_price_symbol(symbol, conn=conn):
             price = market["manual_price_points"]
             source = str(market["price_source"] or "manual_root")
             transport_state = {
@@ -3869,14 +5031,19 @@ class TradingEngineService:
         old_source = str(market["price_source"] or "")
         fusion_details = None
         try:
-            if self.live_price_provider:
-                price, live_source, live_transport_meta = self._fetch_live_price_points(symbol, with_meta=True, settings=settings)
-            elif configured_source == FUSED_PRICE_SOURCE:
-                price, fusion_details = self._fetch_weighted_fused_price_points(symbol, settings=settings)
-                live_source = str((fusion_details or {}).get("resolved_source") or FUSED_PRICE_SOURCE)
+            if configured_source == FUSED_PRICE_SOURCE:
+                price, fusion_details = self._call_with_optional_conn(
+                    self._fetch_weighted_fused_price_points,
+                    symbol,
+                    settings=settings,
+                    conn=conn,
+                )
+                live_source = FUSED_PRICE_SOURCE
                 live_transport_meta = dict((fusion_details or {}).get("transport_state") or {})
+            elif self.live_price_provider:
+                price, live_source, live_transport_meta = self._fetch_live_price_points(symbol, with_meta=True, settings=settings, conn=conn)
             else:
-                price, live_source, live_transport_meta = self._fetch_live_price_points(symbol, with_meta=True, settings=settings)
+                price, live_source, live_transport_meta = self._fetch_live_price_points(symbol, with_meta=True, settings=settings, conn=conn)
         except Exception as exc:
             max_stale = int(settings.get("max_price_staleness_seconds") or 0)
             try:
@@ -4000,7 +5167,7 @@ class TradingEngineService:
                 market_symbol=symbol,
                 severity="critical" if fusion_details.get("conservative_mode") else "warning",
                 metadata={
-                    "resolved_source": live_source,
+                    "resolved_source": str(fusion_details.get("resolved_source") or live_source or FUSED_PRICE_SOURCE),
                     "requested_mode": fusion_details.get("requested_mode"),
                     "resolved_mode": fusion_details.get("mode"),
                     "warning_code": fusion_details.get("warning_code"),
@@ -5366,9 +6533,9 @@ class TradingEngineService:
         try:
             self.ensure_schema(conn)
             where = "" if include_disabled else "WHERE enabled=1 AND spot_enabled=1"
-            rows = conn.execute(f"SELECT * FROM trading_markets {where}").fetchall()
+            rows = conn.execute(f"SELECT * FROM trading_markets {where} ORDER BY sort_order ASC, symbol ASC").fetchall()
             payloads = [self._market_payload(row) for row in rows]
-            return sorted(payloads, key=lambda item: market_sort_key(item.get("symbol")))
+            return sorted(payloads, key=self._runtime_market_sort_key)
         finally:
             conn.close()
 
@@ -5390,7 +6557,7 @@ class TradingEngineService:
                         risk_grade_context=risk_grade_context,
                     )
                 )
-            markets = sorted(markets, key=lambda item: market_sort_key(item.get("symbol")))
+            markets = sorted(markets, key=self._runtime_market_sort_key)
             market_map = {row["symbol"]: row for row in markets}
             realized_map = self._spot_realized_map(conn, user_id)
             fee_map = self._spot_fee_map(conn, user_id)
@@ -5763,6 +6930,8 @@ class TradingEngineService:
     def _validate_bot_payload(self, conn, payload):
         payload = payload or {}
         market = self._market(conn, payload.get("market_symbol"))
+        if not int(market.get("allow_bots") or 0):
+            raise ValueError("bots are disabled for this market")
         bot_type = str(payload.get("bot_type") or "conditional").strip().lower()
         if bot_type not in TRADING_BOT_TYPES:
             raise ValueError("bot_type must be conditional or dca")
@@ -6296,6 +7465,8 @@ class TradingEngineService:
         try:
             self.ensure_schema(conn)
             market = self._market(conn, market_symbol)
+            if not int(market.get("allow_bots") or 0):
+                raise ValueError("bots are disabled for this market")
             current_price, _ = self._current_market_price_points(conn, market)
         finally:
             conn.close()
@@ -6540,6 +7711,7 @@ class TradingEngineService:
                 market["symbol"],
                 lookback_seconds=65,
                 since_time_text=bot["last_scan_at"] if "last_scan_at" in bot.keys() else None,
+                conn=conn,
             )
             window_low = float((price_window or {}).get("low_points") or current_price)
             window_high = float((price_window or {}).get("high_points") or current_price)
@@ -7284,6 +8456,7 @@ class TradingEngineService:
                     market["symbol"],
                     lookback_seconds=max(60, int(settings.get("bot_auto_scan_interval_seconds") or 30) + 5),
                     since_time_text=row["last_scan_at"] if "last_scan_at" in row.keys() else None,
+                    conn=price_conn,
                 )
                 observed_low = float((price_window or {}).get("low_points") or observed_price)
                 observed_high = float((price_window or {}).get("high_points") or observed_price)
@@ -7916,6 +9089,7 @@ class TradingEngineService:
             conn.execute("BEGIN IMMEDIATE")
             self._assert_writable(conn)
             market = self._market(conn, market_symbol)
+            self._validate_market_quantity_constraints(market, quantity_units)
             if int(market["futures_enabled"] or 0):
                 raise ValueError("futures interface is reserved but not enabled in v1")
             if int(market["pvp_matching_enabled"] or 0):
@@ -7930,7 +9104,7 @@ class TradingEngineService:
                     price_meta=price_meta,
                 )
             if order_type == "limit":
-                limit_price = _to_price_float(limit_price_points, name="limit_price_points", minimum=0.00000001)
+                limit_price = self._validate_market_limit_price(market, limit_price_points)
             else:
                 limit_price = None
             check_price = float(_to_decimal(limit_price or current_price, name="check_price", minimum=0.00000001))
@@ -8540,6 +9714,9 @@ class TradingEngineService:
                     raise ValueError("duplicate margin open request is still processing")
             borrow_settings = self._assert_borrowing_enabled(conn)
             market = self._market(conn, market_symbol)
+            if not int(market.get("allow_margin") or 0):
+                raise ValueError("margin trading is disabled for this market")
+            self._validate_market_quantity_constraints(market, quantity_units)
             price, price_source, price_meta = self._current_market_price_points(conn, market, with_meta=True, high_risk=True)
             self._assert_price_meta_allows_high_risk_use(
                 conn,
@@ -9134,7 +10311,7 @@ class TradingEngineService:
                             "price_health": str(price_meta.get("price_health") or ""),
                         })
                         continue
-                    price_window = self._recent_price_window(market["symbol"], lookback_seconds=65, interval="1m")
+                    price_window = self._recent_price_window(market["symbol"], lookback_seconds=65, interval="1m", conn=conn)
                     replay_price = float(current_price)
                     if price_window:
                         if position["position_type"] == "margin_long":
@@ -10192,7 +11369,8 @@ class TradingEngineService:
         if audit_result.get("audit_status") in {"yellow", "red"}:
             label = self._bot_audit_label(audit_result.get("audit_status"))
             name = str(row.get("name") or row.get("market_symbol") or "bot")
-            body = f"{name}（{market_display_symbol(row.get('market_symbol'))}）稽核結果 {label}。"
+            display_symbol = self._market_display_symbol_on_conn(conn, row.get("market_symbol"))
+            body = f"{name}（{display_symbol}）稽核結果 {label}。"
             link = "/trading"
             create_root_notification_if_enabled(
                 conn,
@@ -10423,7 +11601,10 @@ class TradingEngineService:
             self.ensure_schema(conn)
             state = self._state(conn)
             reserve = self._reserve(conn)
-            markets = [self._market_payload(row) for row in conn.execute("SELECT * FROM trading_markets ORDER BY symbol").fetchall()]
+            markets = [
+                self._market_payload(row)
+                for row in conn.execute("SELECT * FROM trading_markets ORDER BY sort_order ASC, symbol ASC").fetchall()
+            ]
             reserve_events = [dict(row) for row in conn.execute("SELECT * FROM trading_reserve_pool_events ORDER BY id DESC LIMIT 50").fetchall()]
             audit_events = [dict(row) for row in conn.execute("SELECT * FROM trading_audit_events ORDER BY id DESC LIMIT 80").fetchall()]
             volume_summary = {

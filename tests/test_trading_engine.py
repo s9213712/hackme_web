@@ -1649,7 +1649,7 @@ def test_trading_bot_failed_scan_does_not_advance_last_scan_at_on_live_price_err
     assert result["ok"] is False
     assert result["failed"]
     assert row["last_scan_at"] in (None, "")
-    assert "live price down" in str(row["last_error"] or "")
+    assert "live trading price unavailable" in str(row["last_error"] or "")
 
 
 def test_trading_bot_failed_scan_does_not_advance_last_scan_at_on_conservative_fusion_price(tmp_path, monkeypatch):
@@ -3157,7 +3157,7 @@ def test_price_fusion_orderbook_total_failure_enters_conservative_single_source_
         conn.close()
 
     assert price == 321
-    assert source == "coingecko_simple_price"
+    assert source == "fused_weighted"
     audit = next(row for row in trading.root_report()["audit_events"] if row["event_type"] == "TRADING_PRICE_FUSION_DEGRADED")
     metadata = json.loads(audit["metadata_json"] or "{}")
     assert audit["event_type"] == "TRADING_PRICE_FUSION_DEGRADED"

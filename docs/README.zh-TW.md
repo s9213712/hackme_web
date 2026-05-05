@@ -2,7 +2,7 @@
 
 [English README](../README.md)
 
-**目前 Release ID：`2026.05.05-123`**
+**目前 Release ID：`2026.05.05-124`**
 
 這份文件是中文捷徑版入口，不再承擔全部教學。它只回答三件事：
 
@@ -71,6 +71,11 @@ ComfyUI 目前除了一般 txt2img，也支援：
 - upscale model
 - 歷史套回 / 重跑
 - root 本地模式下可在同一個折疊面板選擇「Civitai 網址」或「本地檔案上傳」匯入模型
+
+交易系統除了既有 `reference price / risk-grade price` 與 WebSocket provider input，
+現在也把交易市場升級成 root 可管理的 registry：root 可在後台新增 / 停用市場、調整
+precision / lot size / tick size、維護各交易所 provider mapping，並先做 probe 再決定
+是否允許 `risk-grade` 用途。市場停用後只會阻擋新下單，不會破壞既有歷史與報表。
 
 Server Mode v2 的教學腳本也已擴充成完整 bundle：`docs/examples/server_mode_v2/`
 除了原本的 token 教學，另外補了 focused pentest、stress、full-feature、

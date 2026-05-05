@@ -22,12 +22,10 @@ from services.btc_trade_bridge import (
     expand_server_path,
 )
 from services.trading_markets import (
-    list_reference_price_markets,
-    market_display_symbol,
-    market_provider_id,
-    market_supports_btc_trade,
-    market_supports_reference_price,
-    normalize_market_symbol,
+    market_provider_id as catalog_market_provider_id,
+    market_supports_btc_trade as catalog_market_supports_btc_trade,
+    market_supports_reference_price as catalog_market_supports_reference_price,
+    normalize_market_symbol as catalog_normalize_market_symbol,
 )
 from services.trading_engine import BACKTEST_SEGMENT_CANDLES, MAX_BACKTEST_CANDLES, units_to_quantity
 
@@ -139,6 +137,30 @@ def register_trading_routes(app, deps):
         if not WORKFLOW_SLUG_RE.match(slug):
             raise ValueError("workflow template id must use letters, numbers, dash, or underscore")
         return slug
+
+    def normalize_market_symbol_for_route(value):
+        normalizer = getattr(trading_service, "normalize_market_symbol", None)
+        if callable(normalizer):
+            return normalizer(value)
+        return catalog_normalize_market_symbol(value)
+
+    def market_provider_id_for_route(symbol, provider):
+        resolver = getattr(trading_service, "market_provider_id", None)
+        if callable(resolver):
+            return resolver(symbol, provider)
+        return catalog_market_provider_id(symbol, provider)
+
+    def market_supports_reference_price_for_route(symbol):
+        checker = getattr(trading_service, "market_supports_reference_price", None)
+        if callable(checker):
+            return checker(symbol)
+        return catalog_market_supports_reference_price(symbol)
+
+    def market_supports_btc_trade_for_route(symbol):
+        checker = getattr(trading_service, "market_supports_btc_trade", None)
+        if callable(checker):
+            return checker(symbol)
+        return catalog_market_supports_btc_trade(symbol)
 
     def relative_workflow_path(path):
         try:
@@ -267,7 +289,13 @@ def register_trading_routes(app, deps):
         return round(float(value) * USDT_TO_POINTS_RATE, 8)
 
     def display_market_symbol(symbol):
-        return market_display_symbol(symbol)
+        renderer = getattr(trading_service, "market_display_symbol", None)
+        if callable(renderer):
+            return renderer(symbol)
+        normalized = normalize_market_symbol_for_route(symbol)
+        if normalized.endswith("/POINTS"):
+            return normalized[:-7] + "/USDT"
+        return normalized
 
     def fetch_json_url(url, *, timeout=6, user_agent="hackme_web/1.0 reference-price-proxy"):
         req = Request(url, headers={"User-Agent": user_agent})
@@ -465,14 +493,14 @@ def register_trading_routes(app, deps):
         return {"source": "bitstamp_public_api", "symbol": pair, "candles": candles}
 
     def fetch_reference_candles_with_fallback(market_symbol, interval, limit):
-        market_symbol = normalize_market_symbol(market_symbol)
+        market_symbol = normalize_market_symbol_for_route(market_symbol)
         providers = (
-            lambda: fetch_binance_reference_candles(market_provider_id(market_symbol, "binance_public_api"), interval, limit),
-            lambda: fetch_okx_reference_candles(market_provider_id(market_symbol, "okx_public_api"), interval, limit),
-            lambda: fetch_coinbase_reference_candles(market_provider_id(market_symbol, "coinbase_exchange"), interval, limit),
-            lambda: fetch_kraken_reference_candles(market_provider_id(market_symbol, "kraken_public_api"), interval, limit),
-            lambda: fetch_gemini_reference_candles(market_provider_id(market_symbol, "gemini_public_api"), interval, limit),
-            lambda: fetch_bitstamp_reference_candles(market_provider_id(market_symbol, "bitstamp_public_api"), interval, limit),
+            lambda: fetch_binance_reference_candles(market_provider_id_for_route(market_symbol, "binance_public_api"), interval, limit),
+            lambda: fetch_okx_reference_candles(market_provider_id_for_route(market_symbol, "okx_public_api"), interval, limit),
+            lambda: fetch_coinbase_reference_candles(market_provider_id_for_route(market_symbol, "coinbase_exchange"), interval, limit),
+            lambda: fetch_kraken_reference_candles(market_provider_id_for_route(market_symbol, "kraken_public_api"), interval, limit),
+            lambda: fetch_gemini_reference_candles(market_provider_id_for_route(market_symbol, "gemini_public_api"), interval, limit),
+            lambda: fetch_bitstamp_reference_candles(market_provider_id_for_route(market_symbol, "bitstamp_public_api"), interval, limit),
         )
         errors = []
         for provider in providers:
@@ -507,8 +535,8 @@ def register_trading_routes(app, deps):
             raise ValueError("backtest time must be ISO datetime or unix timestamp")
 
     def fetch_reference_candles_for_backtest(data):
-        market_symbol = normalize_market_symbol(data.get("market_symbol") or data.get("market") or "BTC/USDT")
-        if not market_supports_reference_price(market_symbol):
+        market_symbol = normalize_market_symbol_for_route(data.get("market_symbol") or data.get("market") or "BTC/USDT")
+        if not market_supports_reference_price_for_route(market_symbol):
             raise ValueError("unsupported backtest market")
         interval = str(data.get("timeframe") or data.get("interval") or "15m").strip()
         if interval not in REFERENCE_PRICE_INTERVALS:
@@ -545,7 +573,7 @@ def register_trading_routes(app, deps):
         if start_ms is not None or end_ms is not None:
             try:
                 provider_result = fetch_binance_reference_candles(
-                    market_provider_id(market_symbol, "binance_public_api"),
+                    market_provider_id_for_route(market_symbol, "binance_public_api"),
                     interval,
                     download_limit,
                     start_ms=start_ms,
@@ -772,8 +800,8 @@ def register_trading_routes(app, deps):
         actor, err = actor_or_401()
         if err:
             return err
-        market_symbol = normalize_market_symbol(request.args.get("market") or "BTC/USDT")
-        if not market_supports_btc_trade(market_symbol):
+        market_symbol = normalize_market_symbol_for_route(request.args.get("market") or "BTC/USDT")
+        if not market_supports_btc_trade_for_route(market_symbol):
             return json_resp({"ok": True, "available": False, "hidden": True, "msg": "僅 BTC/USDT 顯示 BTC_trade 信號"})
         try:
             settings = trading_service.get_root_settings().get("settings", {})
@@ -860,9 +888,9 @@ def register_trading_routes(app, deps):
                 "msg": "參考價格查詢過於頻繁，請稍後再試",
                 "retry_after": retry_after,
             }), 429
-        market_symbol = normalize_market_symbol(request.args.get("market") or "BTC/USDT")
-        binance_symbol = market_provider_id(market_symbol, "binance_public_api")
-        if not binance_symbol or not market_supports_reference_price(market_symbol):
+        market_symbol = normalize_market_symbol_for_route(request.args.get("market") or "BTC/USDT")
+        binance_symbol = market_provider_id_for_route(market_symbol, "binance_public_api")
+        if not binance_symbol or not market_supports_reference_price_for_route(market_symbol):
             return json_resp({"ok": False, "msg": "不支援的參考價格市場"}), 400
         interval = str(request.args.get("interval") or "15m").strip()
         if interval not in REFERENCE_PRICE_INTERVALS:
@@ -1417,6 +1445,134 @@ def register_trading_routes(app, deps):
             )
             audit("TRADING_SETTINGS_UPDATED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail="root billing settings")
             return json_resp(result)
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/admin/trading/markets", methods=["GET"])
+    @require_csrf_safe
+    def admin_trading_markets():
+        actor, err = root_or_403()
+        if err:
+            return err
+        include_disabled = str(request.args.get("include_disabled") or "1").strip().lower() not in {"0", "false", "no"}
+        try:
+            payload = trading_service.list_market_registry(include_disabled=include_disabled)
+            return json_resp({"ok": True, **payload})
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/admin/trading/markets", methods=["POST"])
+    @require_csrf
+    def admin_trading_markets_create():
+        actor, err = root_or_403()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        try:
+            result = trading_service.create_market_registry(actor=actor, payload=data)
+            audit("TRADING_MARKET_REGISTRY_CREATED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"symbol={result['market']['symbol']}")
+            return json_resp(result)
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/admin/trading/markets/<int:market_id>", methods=["PUT"])
+    @require_csrf
+    def admin_trading_markets_update(market_id):
+        actor, err = root_or_403()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        try:
+            result = trading_service.update_market_registry(actor=actor, market_id=market_id, payload=data)
+            audit("TRADING_MARKET_REGISTRY_UPDATED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"market_id={market_id}")
+            return json_resp(result)
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/admin/trading/markets/<int:market_id>/disable", methods=["DELETE"])
+    @require_csrf
+    def admin_trading_markets_disable(market_id):
+        actor, err = root_or_403()
+        if err:
+            return err
+        try:
+            result = trading_service.disable_market_registry(actor=actor, market_id=market_id)
+            audit("TRADING_MARKET_REGISTRY_DISABLED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"market_id={market_id}")
+            return json_resp(result)
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/admin/trading/markets/<int:market_id>/probe", methods=["POST"])
+    @require_csrf
+    def admin_trading_markets_probe(market_id):
+        actor, err = root_or_403()
+        if err:
+            return err
+        try:
+            result = trading_service.probe_market_registry(market_id=market_id)
+            audit("TRADING_MARKET_REGISTRY_PROBED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"market_id={market_id}")
+            return json_resp(result)
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/admin/trading/markets/<int:market_id>/providers", methods=["GET"])
+    @require_csrf_safe
+    def admin_trading_market_providers(market_id):
+        actor, err = root_or_403()
+        if err:
+            return err
+        try:
+            result = trading_service.get_market_provider_registry(market_id=market_id)
+            return json_resp({"ok": True, **result})
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/admin/trading/markets/<int:market_id>/providers", methods=["POST"])
+    @require_csrf
+    def admin_trading_market_providers_create(market_id):
+        actor, err = root_or_403()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        try:
+            result = trading_service.create_market_provider_mapping(actor=actor, market_id=market_id, payload=data)
+            audit("TRADING_MARKET_PROVIDER_CREATED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"market_id={market_id}")
+            return json_resp({"ok": True, **result})
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/admin/trading/markets/<int:market_id>/providers/<int:mapping_id>", methods=["PUT"])
+    @require_csrf
+    def admin_trading_market_providers_update(market_id, mapping_id):
+        actor, err = root_or_403()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        try:
+            result = trading_service.update_market_provider_mapping(actor=actor, market_id=market_id, mapping_id=mapping_id, payload=data)
+            audit("TRADING_MARKET_PROVIDER_UPDATED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"market_id={market_id},mapping_id={mapping_id}")
+            return json_resp({"ok": True, **result})
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/admin/trading/markets/<int:market_id>/providers/<int:mapping_id>", methods=["DELETE"])
+    @require_csrf
+    def admin_trading_market_providers_disable(market_id, mapping_id):
+        actor, err = root_or_403()
+        if err:
+            return err
+        try:
+            result = trading_service.disable_market_provider_mapping(actor=actor, market_id=market_id, mapping_id=mapping_id)
+            audit("TRADING_MARKET_PROVIDER_DISABLED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"market_id={market_id},mapping_id={mapping_id}")
+            return json_resp({"ok": True, **result})
         except Exception as exc:
             return service_error(exc)
 

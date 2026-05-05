@@ -335,7 +335,7 @@ def test_trading_write_guard_does_not_full_replay_on_every_write():
 
 def test_trading_market_update_remains_available_in_safe_mode():
     trading_engine = (ROOT / "services" / "trading_engine.py").read_text(encoding="utf-8")
-    update_market = trading_engine.split("def update_market", 1)[1].split("def allocate_reserve", 1)[0]
+    update_market = trading_engine.split("def update_market(", 1)[1].split("def allocate_reserve", 1)[0]
 
     assert "self._assert_writable(conn)" not in update_market
     assert "TRADING_MARKET_UPDATED" in update_market

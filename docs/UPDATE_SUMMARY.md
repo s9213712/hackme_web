@@ -1,6 +1,12 @@
 # Update Summary
 
-Release ID: `2026.05.05-123`
+Release ID: `2026.05.05-124`
+
+## 2026.05.05-124
+
+- 交易市場不再只靠程式內 hardcode：新增 root-only trading market registry，可在後台新增 / 編輯 / 停用市場，調整 `precision / lot size / tick size`，並維護各交易所 provider mapping 與排序。
+- `provider mapping` 與 `risk-grade` 啟用現在有明確 probe 與 audit：root 修改市場或 provider mapping 會留下 before/after audit log；若 depth provider 不足或 probe 未達標，市場不可啟用 `risk-grade` 用途。
+- disabled market 只會阻擋新下單，不會破壞既有歷史、持倉與報表；下單與融資路徑也會立即套用市場 precision、lot size、tick size 與新開關條件。
 
 ## 2026.05.05-123
 

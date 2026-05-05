@@ -363,11 +363,14 @@ curl -k -sS https://127.0.0.1:5000/api/version
 來源：`routes/trading.py`
 深層規格請看 [TRADING.md](TRADING.md) 與 [TRADING_BOT_AUDIT.md](TRADING_BOT_AUDIT.md)。
 
-目前 market catalog 已包含：
+目前預設 seed 市場包含：
 
 - display symbols: `BTC/USDT`, `ETH/USDT`, `XRP/USDT`, `BNB/USDT`, `PAXG/USDT`
 - internal canonical symbols: `BTC/POINTS`, `ETH/POINTS`, `XRP/POINTS`,
   `BNB/POINTS`, `PAXG/POINTS`
+
+正式啟用中的市場、precision、lot size、tick size、provider mapping 與
+`allow_risk_grade_usage` 則由 root 後台的 trading market registry 決定。
 
 | Method | Path | 角色 | 用途 |
 |---|---|---|---|
@@ -396,6 +399,15 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | POST | `/api/trading/margin/<position_uuid>/collateral` | logged-in | 補保證金 |
 | GET | `/api/admin/trading/report` | manager | 交易報表 |
 | GET/PUT | `/api/root/trading/settings` | root | root 交易設定 |
+| GET | `/api/admin/trading/markets` | root | 交易市場 registry 列表 |
+| POST | `/api/admin/trading/markets` | root | 新增交易市場 |
+| PUT | `/api/admin/trading/markets/<market_id>` | root | 編輯交易市場 |
+| DELETE | `/api/admin/trading/markets/<market_id>/disable` | root | 停用交易市場（保留歷史） |
+| POST | `/api/admin/trading/markets/<market_id>/probe` | root | probe 市場 provider 狀態 |
+| GET | `/api/admin/trading/markets/<market_id>/providers` | root | 讀 market provider mappings |
+| POST | `/api/admin/trading/markets/<market_id>/providers` | root | 新增 provider mapping |
+| PUT | `/api/admin/trading/markets/<market_id>/providers/<mapping_id>` | root | 編輯 provider mapping |
+| DELETE | `/api/admin/trading/markets/<market_id>/providers/<mapping_id>` | root | 停用 provider mapping |
 | GET | `/api/root/trading/price-fusion-status` | root | 融合價格診斷 / provider transport state |
 | GET | `/api/root/trading/bot-audit/dashboard` | root | bot audit dashboard |
 | POST | `/api/root/trading/bot-audit/run` | root | 立即跑 bot audit |
@@ -528,6 +540,7 @@ curl -k -sS https://127.0.0.1:5000/api/version
 - `live-price` 目前回傳 canonical `price_type`、`source`、`confidence`、`stale`、`degraded`、`provider_count`，並附 `reference_price_context` / `risk_grade_price_context`；UI 展示價與風控價不可再混用。
 - `live-price` 與 root `price-fusion-status` 現在也回傳 canonical `connected`、`fallback`、`last_update_at`、`exclusion_reason` 與完整 `transport_state`。Binance / OKX / Coinbase / Kraken 的 websocket 只是 provider input，不可直接把單一 WS provider 當成風控價格。
 - `reference-prices` 明確屬於 `reference price` 類型，只能作為展示 / K 線 / 一般估值參考，不可直接拿來推導保證金、強平或 bot 風控。
+- trading market registry 是 canonical 市場開關來源：market 被 disable 後不可再新下單，但既有歷史 / 持倉 / 報表仍必須可查；provider mapping 未通過 probe 時，不可啟用 `risk-grade` 用途。
 
 ## 測試方式
 

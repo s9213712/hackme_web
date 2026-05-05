@@ -1206,6 +1206,11 @@ let rootEconomyCatalogCache = [];
 let rootTradingSettingsCache = { settings: {}, markets: [] };
 let rootTradingPriceFusionStatusCache = null;
 let rootTradingBotAuditCache = null;
+let rootTradingMarketRegistryCache = [];
+let rootTradingMarketRegistryAuditCache = [];
+let rootTradingMarketProviderCache = [];
+let rootTradingMarketRegistrySelectedId = null;
+let rootTradingMarketProviderSelectedId = null;
 
 function rootCatalogMsg(text, ok = true) {
   const msg = $("root-catalog-msg");
@@ -1360,6 +1365,547 @@ function rootTradingBotAuditMsg(text, ok = true) {
   if (!msg) return;
   msg.textContent = text || "";
   msg.style.color = ok ? "#4caf50" : "#ff4f6d";
+}
+
+function rootTradingMarketRegistryMsg(text, ok = true) {
+  const msg = $("root-trading-market-registry-msg");
+  if (!msg) return;
+  msg.textContent = text || "";
+  msg.style.color = ok ? "#4caf50" : "#ff4f6d";
+}
+
+function rootTradingMarketRegistryEditorStatus(text, ok = true) {
+  const msg = $("root-trading-market-registry-editor-status");
+  if (!msg) return;
+  msg.textContent = text || "";
+  msg.style.color = ok ? "#4caf50" : "#ff4f6d";
+}
+
+function rootTradingMarketProviderStatus(text, ok = true) {
+  const msg = $("root-trading-market-provider-status");
+  if (!msg) return;
+  msg.textContent = text || "";
+  msg.style.color = ok ? "#4caf50" : "#ff4f6d";
+}
+
+function tradingMarketRegistryCheckbox(id, value, fallback = false) {
+  const node = $(id);
+  if (node) node.checked = value == null ? fallback : !!value;
+}
+
+function tradingMarketRegistryValue(id, value, fallback = "") {
+  const node = $(id);
+  if (node) node.value = value == null ? fallback : value;
+}
+
+function clearRootTradingMarketProviderForm() {
+  rootTradingMarketProviderSelectedId = null;
+  if ($("root-trading-market-provider-name")) $("root-trading-market-provider-name").value = "binance_public_api";
+  tradingMarketRegistryValue("root-trading-market-provider-symbol", "");
+  tradingMarketRegistryValue("root-trading-market-provider-priority", 100);
+  tradingMarketRegistryCheckbox("root-trading-market-provider-enabled", true, true);
+  tradingMarketRegistryCheckbox("root-trading-market-provider-ticker", true, true);
+  tradingMarketRegistryCheckbox("root-trading-market-provider-depth", true, true);
+  tradingMarketRegistryCheckbox("root-trading-market-provider-candles", true, true);
+  rootTradingMarketProviderStatus("");
+}
+
+function renderRootTradingMarketRegistryAudit(symbol = "") {
+  const list = $("root-trading-market-registry-audit");
+  if (!list) return;
+  const normalized = String(symbol || "").trim().toUpperCase();
+  const rows = rootTradingMarketRegistryAuditCache.filter((row) => !normalized || String(row.market_symbol || "").trim().toUpperCase() === normalized);
+  if (!rows.length) {
+    list.innerHTML = `<div class="drive-empty">尚無${normalized ? ` ${sanitize(normalized)} ` : ""}market registry audit</div>`;
+    return;
+  }
+  list.innerHTML = rows.slice(0, 20).map((row) => `
+    <div class="drive-file-row">
+      <div>
+        <strong>${sanitize(row.action || "audit")}</strong>
+        <div class="drive-card-sub">${sanitize(row.market_symbol || "-")} · actor ${sanitize(String(row.actor_id ?? "-"))} · ${sanitize(row.created_at || "-")}</div>
+      </div>
+    </div>
+  `).join("");
+}
+
+function populateRootTradingMarketProviderForm(row = null) {
+  clearRootTradingMarketProviderForm();
+  if (!row || typeof row !== "object") return;
+  rootTradingMarketProviderSelectedId = Number(row.id || 0) || null;
+  tradingMarketRegistryValue("root-trading-market-provider-name", row.provider || "binance_public_api");
+  tradingMarketRegistryValue("root-trading-market-provider-symbol", row.provider_symbol || "");
+  tradingMarketRegistryValue("root-trading-market-provider-priority", Number(row.priority || 100));
+  tradingMarketRegistryCheckbox("root-trading-market-provider-enabled", row.enabled, true);
+  tradingMarketRegistryCheckbox("root-trading-market-provider-ticker", row.supports_ticker, true);
+  tradingMarketRegistryCheckbox("root-trading-market-provider-depth", row.supports_depth, true);
+  tradingMarketRegistryCheckbox("root-trading-market-provider-candles", row.supports_candles, true);
+  rootTradingMarketProviderStatus(`正在編輯 ${row.provider_label || row.provider || "provider"} mapping`);
+}
+
+function renderRootTradingMarketProviders(payload = {}) {
+  const list = $("root-trading-market-provider-list");
+  const selected = $("root-trading-market-provider-selected");
+  if (!list || !selected) return;
+  const market = payload.market || null;
+  rootTradingMarketProviderCache = Array.isArray(payload.providers) ? payload.providers : [];
+  if (!market) {
+    selected.textContent = "尚未選擇市場";
+    list.innerHTML = `<div class="drive-empty">請先從上方市場列表選擇一個市場</div>`;
+    renderRootTradingMarketRegistryAudit("");
+    return;
+  }
+  selected.textContent = `${market.display_name || market.symbol} · provider ${Number(market.provider_count || rootTradingMarketProviderCache.length)} 家 · probe ${market.probe_status || "pending"}`;
+  if (!rootTradingMarketProviderCache.length) {
+    list.innerHTML = `<div class="drive-empty">尚無 provider mapping</div>`;
+  } else {
+    list.innerHTML = rootTradingMarketProviderCache.map((row) => `
+      <div class="drive-file-row billing-catalog-row">
+        <div>
+          <strong>${sanitize(row.provider_label || row.provider || "-")}</strong>
+          <div class="drive-card-sub">${sanitize(row.provider_symbol || "尚未設定 provider symbol")} · priority ${Number(row.priority || 0)} · ${row.enabled ? "啟用" : "停用"}</div>
+          <div class="drive-card-sub">ticker ${row.supports_ticker ? "✓" : "×"} · depth ${row.supports_depth ? "✓" : "×"} · candles ${row.supports_candles ? "✓" : "×"}</div>
+        </div>
+        <div class="admin-toolbar" style="gap:.35rem;flex-wrap:wrap;">
+          <button class="btn" type="button" data-root-trading-provider-edit="${Number(row.id || 0)}">編輯</button>
+          <button class="btn" type="button" data-root-trading-provider-disable="${Number(row.id || 0)}">停用</button>
+        </div>
+      </div>
+    `).join("");
+    list.querySelectorAll("[data-root-trading-provider-edit]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const row = rootTradingMarketProviderCache.find((item) => Number(item.id || 0) === Number(btn.dataset.rootTradingProviderEdit || 0));
+        populateRootTradingMarketProviderForm(row || null);
+      });
+    });
+    list.querySelectorAll("[data-root-trading-provider-disable]").forEach((btn) => {
+      btn.addEventListener("click", () => disableRootTradingMarketProvider(btn.dataset.rootTradingProviderDisable || ""));
+    });
+  }
+  renderRootTradingMarketRegistryAudit(market.symbol || "");
+}
+
+function clearRootTradingMarketRegistryForm() {
+  rootTradingMarketRegistrySelectedId = null;
+  tradingMarketRegistryValue("root-trading-registry-symbol", "");
+  if ($("root-trading-registry-symbol")) $("root-trading-registry-symbol").disabled = false;
+  tradingMarketRegistryValue("root-trading-registry-base-asset", "");
+  tradingMarketRegistryValue("root-trading-registry-quote-asset", "POINTS");
+  tradingMarketRegistryValue("root-trading-registry-display-quote", "USDT");
+  tradingMarketRegistryValue("root-trading-registry-display-name", "");
+  tradingMarketRegistryValue("root-trading-registry-market-type", "spot");
+  tradingMarketRegistryValue("root-trading-registry-sort-order", 9999);
+  tradingMarketRegistryValue("root-trading-registry-default-manual-price", 1);
+  tradingMarketRegistryValue("root-trading-registry-price-precision", 8);
+  tradingMarketRegistryValue("root-trading-registry-quantity-precision", 8);
+  tradingMarketRegistryValue("root-trading-registry-min-order-size", 0.00000001);
+  tradingMarketRegistryValue("root-trading-registry-max-order-size", 1000000);
+  tradingMarketRegistryValue("root-trading-registry-lot-size", 0.00000001);
+  tradingMarketRegistryValue("root-trading-registry-tick-size", 0.00000001);
+  tradingMarketRegistryCheckbox("root-trading-registry-enabled", true, true);
+  tradingMarketRegistryCheckbox("root-trading-registry-allow-spot", true, true);
+  tradingMarketRegistryCheckbox("root-trading-registry-allow-margin", true, true);
+  tradingMarketRegistryCheckbox("root-trading-registry-allow-bots", true, true);
+  tradingMarketRegistryCheckbox("root-trading-registry-allow-risk-grade", false, false);
+  tradingMarketRegistryCheckbox("root-trading-registry-live-price-enabled", true, true);
+  tradingMarketRegistryCheckbox("root-trading-registry-reference-enabled", true, true);
+  tradingMarketRegistryCheckbox("root-trading-registry-btc-trade-enabled", false, false);
+  rootTradingMarketRegistryEditorStatus("");
+  clearRootTradingMarketProviderForm();
+  renderRootTradingMarketProviders({});
+}
+
+function populateRootTradingMarketRegistryForm(market = null) {
+  clearRootTradingMarketRegistryForm();
+  if (!market || typeof market !== "object") return;
+  rootTradingMarketRegistrySelectedId = Number(market.id || 0) || null;
+  tradingMarketRegistryValue("root-trading-registry-symbol", market.symbol || "");
+  if ($("root-trading-registry-symbol")) $("root-trading-registry-symbol").disabled = true;
+  tradingMarketRegistryValue("root-trading-registry-base-asset", market.base_asset || "");
+  tradingMarketRegistryValue("root-trading-registry-quote-asset", market.quote_asset || market.quote_currency || "POINTS");
+  tradingMarketRegistryValue("root-trading-registry-display-quote", market.display_quote_currency || "USDT");
+  tradingMarketRegistryValue("root-trading-registry-display-name", market.display_name || "");
+  tradingMarketRegistryValue("root-trading-registry-market-type", market.market_type || "spot");
+  tradingMarketRegistryValue("root-trading-registry-sort-order", Number(market.sort_order || 9999));
+  tradingMarketRegistryValue("root-trading-registry-default-manual-price", market.default_manual_price_points ?? 1);
+  tradingMarketRegistryValue("root-trading-registry-price-precision", Number(market.price_precision || 8));
+  tradingMarketRegistryValue("root-trading-registry-quantity-precision", Number(market.quantity_precision || 8));
+  tradingMarketRegistryValue("root-trading-registry-min-order-size", market.min_order_size ?? 0.00000001);
+  tradingMarketRegistryValue("root-trading-registry-max-order-size", market.max_order_size ?? 1000000);
+  tradingMarketRegistryValue("root-trading-registry-lot-size", market.lot_size ?? 0.00000001);
+  tradingMarketRegistryValue("root-trading-registry-tick-size", market.tick_size ?? 0.00000001);
+  tradingMarketRegistryCheckbox("root-trading-registry-enabled", market.enabled, true);
+  tradingMarketRegistryCheckbox("root-trading-registry-allow-spot", market.allow_spot, true);
+  tradingMarketRegistryCheckbox("root-trading-registry-allow-margin", market.allow_margin, true);
+  tradingMarketRegistryCheckbox("root-trading-registry-allow-bots", market.allow_bots, true);
+  tradingMarketRegistryCheckbox("root-trading-registry-allow-risk-grade", market.allow_risk_grade_usage, false);
+  tradingMarketRegistryCheckbox("root-trading-registry-live-price-enabled", market.live_price_enabled, true);
+  tradingMarketRegistryCheckbox("root-trading-registry-reference-enabled", market.reference_price_enabled, true);
+  tradingMarketRegistryCheckbox("root-trading-registry-btc-trade-enabled", market.btc_trade_enabled, false);
+  const ref = market.reference_price_status || {};
+  const risk = market.risk_grade_price_status || {};
+  rootTradingMarketRegistryEditorStatus(
+    `${market.display_name || market.symbol} · probe ${market.probe_status || "pending"} · reference ${ref.source || "-"} / ${ref.confidence || "-"} · risk-grade ${risk.source || "-"} / ${risk.confidence || "-"}${risk.high_risk_blocked ? " · 已封鎖高風險用途" : ""}`
+  );
+  loadRootTradingMarketProviders(rootTradingMarketRegistrySelectedId);
+}
+
+function renderRootTradingMarketRegistry(payload = {}) {
+  const list = $("root-trading-market-registry-list");
+  if (!list) return;
+  rootTradingMarketRegistryCache = Array.isArray(payload.markets) ? payload.markets : [];
+  rootTradingMarketRegistryAuditCache = Array.isArray(payload.audit) ? payload.audit : [];
+  if (!rootTradingMarketRegistryCache.length) {
+    list.innerHTML = `<div class="drive-empty">尚無市場 registry；可用「新增市場」建立新交易對。</div>`;
+    renderRootTradingMarketRegistryAudit("");
+    return;
+  }
+  list.innerHTML = rootTradingMarketRegistryCache.map((market) => {
+    const ref = market.reference_price_status || {};
+    const risk = market.risk_grade_price_status || {};
+    const summary = market.probe_summary || {};
+    return `
+      <div class="drive-file-row billing-catalog-row">
+        <div>
+          <strong>${sanitize(market.display_name || market.symbol || "-")}</strong>
+          <div class="drive-card-sub">${sanitize(market.symbol || "-")} · ${market.enabled ? "啟用" : "停用"} · probe ${sanitize(market.probe_status || "pending")} · provider ${Number(market.provider_count || 0)} 家</div>
+          <div class="drive-card-sub">reference ${sanitize(ref.source || "-")} / ${sanitize(ref.confidence || "-")} · stale ${ref.stale ? "yes" : "no"} · degraded ${ref.degraded ? "yes" : "no"} · providers ${Number(ref.provider_count || 0)}</div>
+          <div class="drive-card-sub">risk-grade ${sanitize(risk.source || "-")} / ${sanitize(risk.confidence || "-")} · stale ${risk.stale ? "yes" : "no"} · degraded ${risk.degraded ? "yes" : "no"} · providers ${Number(risk.provider_count || 0)}${risk.high_risk_blocked ? " · blocked" : ""}</div>
+          <div class="drive-card-sub">spot ${market.allow_spot ? "✓" : "×"} · margin ${market.allow_margin ? "✓" : "×"} · bot ${market.allow_bots ? "✓" : "×"} · risk-grade ${market.allow_risk_grade_usage ? "✓" : "×"} · live ${market.live_price_enabled ? "✓" : "×"} · candles ${market.reference_price_enabled ? "✓" : "×"}</div>
+          ${summary.message ? `<div class="drive-card-sub" style="color:${market.probe_status === "ok" ? "#9ecbff" : "#ffcf85"};">${sanitize(summary.message)}</div>` : ""}
+        </div>
+        <div class="admin-toolbar" style="gap:.35rem;flex-wrap:wrap;">
+          <button class="btn" type="button" data-root-trading-market-edit="${Number(market.id || 0)}">編輯</button>
+          <button class="btn" type="button" data-root-trading-market-probe="${Number(market.id || 0)}">Probe</button>
+          <button class="btn" type="button" data-root-trading-market-disable="${Number(market.id || 0)}">停用</button>
+        </div>
+      </div>
+    `;
+  }).join("");
+  list.querySelectorAll("[data-root-trading-market-edit]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const market = rootTradingMarketRegistryCache.find((item) => Number(item.id || 0) === Number(btn.dataset.rootTradingMarketEdit || 0));
+      populateRootTradingMarketRegistryForm(market || null);
+    });
+  });
+  list.querySelectorAll("[data-root-trading-market-probe]").forEach((btn) => {
+    btn.addEventListener("click", () => probeRootTradingMarketRegistry(btn.dataset.rootTradingMarketProbe || ""));
+  });
+  list.querySelectorAll("[data-root-trading-market-disable]").forEach((btn) => {
+    btn.addEventListener("click", () => disableRootTradingMarketRegistry(btn.dataset.rootTradingMarketDisable || ""));
+  });
+  const selected = rootTradingMarketRegistryCache.find((item) => Number(item.id || 0) === Number(rootTradingMarketRegistrySelectedId || 0));
+  if (selected) renderRootTradingMarketRegistryAudit(selected.symbol || "");
+}
+
+async function loadRootTradingMarketRegistry(options = {}) {
+  if (currentUser !== "root" || !$("root-trading-market-registry-list")) return;
+  if (!options.silent) rootTradingMarketRegistryMsg("交易市場 registry 讀取中...");
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  try {
+    const res = await apiFetch(API + "/admin/trading/markets?include_disabled=1", {
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" },
+    });
+    const json = await parseRootTradingSettingsResponse(res);
+    if (!res.ok || !json.ok) {
+      rootTradingMarketRegistryMsg(rootTradingSettingsHttpMessage(res, json, "交易市場 registry 讀取失敗"), false);
+      return;
+    }
+    renderRootTradingMarketRegistry(json);
+    if (rootTradingMarketRegistrySelectedId) {
+      const selected = rootTradingMarketRegistryCache.find((item) => Number(item.id || 0) === Number(rootTradingMarketRegistrySelectedId));
+      if (selected) {
+        populateRootTradingMarketRegistryForm(selected);
+      } else {
+        clearRootTradingMarketRegistryForm();
+      }
+    } else {
+      renderRootTradingMarketRegistryAudit("");
+    }
+    rootTradingMarketRegistryMsg("");
+  } catch (err) {
+    rootTradingMarketRegistryMsg(err.message || "交易市場 registry 讀取請求失敗", false);
+  }
+}
+
+async function loadRootTradingMarketProviders(marketId) {
+  if (currentUser !== "root" || !marketId) return;
+  rootTradingMarketProviderStatus("provider mapping 讀取中...");
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  try {
+    const res = await apiFetch(API + `/admin/trading/markets/${encodeURIComponent(marketId)}/providers`, {
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" },
+    });
+    const json = await parseRootTradingSettingsResponse(res);
+    if (!res.ok || !json.ok) {
+      rootTradingMarketProviderStatus(rootTradingSettingsHttpMessage(res, json, "provider mapping 讀取失敗"), false);
+      return;
+    }
+    renderRootTradingMarketProviders(json);
+    rootTradingMarketProviderStatus("");
+  } catch (err) {
+    rootTradingMarketProviderStatus(err.message || "provider mapping 讀取請求失敗", false);
+  }
+}
+
+function collectRootTradingMarketRegistryForm() {
+  return {
+    symbol: ($("root-trading-registry-symbol")?.value || "").trim().toUpperCase(),
+    base_asset: ($("root-trading-registry-base-asset")?.value || "").trim().toUpperCase(),
+    quote_asset: ($("root-trading-registry-quote-asset")?.value || "").trim().toUpperCase(),
+    display_quote_currency: ($("root-trading-registry-display-quote")?.value || "").trim().toUpperCase(),
+    display_name: ($("root-trading-registry-display-name")?.value || "").trim(),
+    market_type: ($("root-trading-registry-market-type")?.value || "spot").trim(),
+    sort_order: Number($("root-trading-registry-sort-order")?.value || 9999),
+    default_manual_price_points: Number($("root-trading-registry-default-manual-price")?.value || 1),
+    price_precision: Number($("root-trading-registry-price-precision")?.value || 8),
+    quantity_precision: Number($("root-trading-registry-quantity-precision")?.value || 8),
+    min_order_size: Number($("root-trading-registry-min-order-size")?.value || 0.00000001),
+    max_order_size: Number($("root-trading-registry-max-order-size")?.value || 1000000),
+    lot_size: Number($("root-trading-registry-lot-size")?.value || 0.00000001),
+    tick_size: Number($("root-trading-registry-tick-size")?.value || 0.00000001),
+    enabled: !!$("root-trading-registry-enabled")?.checked,
+    allow_spot: !!$("root-trading-registry-allow-spot")?.checked,
+    allow_margin: !!$("root-trading-registry-allow-margin")?.checked,
+    allow_bots: !!$("root-trading-registry-allow-bots")?.checked,
+    allow_risk_grade_usage: !!$("root-trading-registry-allow-risk-grade")?.checked,
+    live_price_enabled: !!$("root-trading-registry-live-price-enabled")?.checked,
+    reference_price_enabled: !!$("root-trading-registry-reference-enabled")?.checked,
+    btc_trade_enabled: !!$("root-trading-registry-btc-trade-enabled")?.checked,
+  };
+}
+
+function collectRootTradingMarketProviderForm() {
+  return {
+    provider: ($("root-trading-market-provider-name")?.value || "").trim(),
+    provider_symbol: ($("root-trading-market-provider-symbol")?.value || "").trim(),
+    priority: Number($("root-trading-market-provider-priority")?.value || 100),
+    enabled: !!$("root-trading-market-provider-enabled")?.checked,
+    supports_ticker: !!$("root-trading-market-provider-ticker")?.checked,
+    supports_depth: !!$("root-trading-market-provider-depth")?.checked,
+    supports_candles: !!$("root-trading-market-provider-candles")?.checked,
+  };
+}
+
+async function saveRootTradingMarketRegistry() {
+  if (currentUser !== "root") return;
+  const payload = collectRootTradingMarketRegistryForm();
+  if (!payload.symbol && payload.base_asset && payload.quote_asset) {
+    payload.symbol = `${payload.base_asset}/${payload.quote_asset}`;
+  }
+  if (!payload.symbol) {
+    rootTradingMarketRegistryEditorStatus("請先填寫市場 symbol", false);
+    return;
+  }
+  rootTradingMarketRegistryEditorStatus("市場儲存中...");
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const editingId = Number(rootTradingMarketRegistrySelectedId || 0);
+  const url = editingId ? `${API}/admin/trading/markets/${editingId}` : `${API}/admin/trading/markets`;
+  const method = editingId ? "PUT" : "POST";
+  try {
+    const res = await apiFetch(url, {
+      method,
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+      body: JSON.stringify(payload),
+    });
+    const json = await parseRootTradingSettingsResponse(res);
+    if (!res.ok || !json.ok) {
+      rootTradingMarketRegistryEditorStatus(rootTradingSettingsHttpMessage(res, json, "市場儲存失敗"), false);
+      return;
+    }
+    const market = json.market || null;
+    rootTradingMarketRegistrySelectedId = Number(market?.id || rootTradingMarketRegistrySelectedId || 0) || null;
+    await loadRootTradingMarketRegistry({ silent: true });
+    if (rootTradingMarketRegistrySelectedId) await loadRootTradingMarketProviders(rootTradingMarketRegistrySelectedId);
+    rootTradingMarketRegistryMsg(editingId ? "市場已更新" : "市場已建立");
+    rootTradingMarketRegistryEditorStatus(market?.probe_summary?.message || "市場已儲存");
+  } catch (err) {
+    rootTradingMarketRegistryEditorStatus(err.message || "市場儲存請求失敗", false);
+  }
+}
+
+async function probeRootTradingMarketRegistry(explicitId = "") {
+  const marketId = Number(explicitId || rootTradingMarketRegistrySelectedId || 0);
+  if (!marketId) {
+    rootTradingMarketRegistryEditorStatus("請先選擇市場再執行 probe", false);
+    return;
+  }
+  rootTradingMarketRegistryEditorStatus("provider probe 執行中...");
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  try {
+    const res = await apiFetch(API + `/admin/trading/markets/${encodeURIComponent(marketId)}/probe`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" },
+    });
+    const json = await parseRootTradingSettingsResponse(res);
+    if (!res.ok || !json.ok) {
+      rootTradingMarketRegistryEditorStatus(rootTradingSettingsHttpMessage(res, json, "provider probe 失敗"), false);
+      return;
+    }
+    rootTradingMarketRegistrySelectedId = marketId;
+    await loadRootTradingMarketRegistry({ silent: true });
+    if (rootTradingMarketRegistrySelectedId) await loadRootTradingMarketProviders(rootTradingMarketRegistrySelectedId);
+    rootTradingMarketRegistryEditorStatus(json.probe?.message || "provider probe 完成");
+  } catch (err) {
+    rootTradingMarketRegistryEditorStatus(err.message || "provider probe 請求失敗", false);
+  }
+}
+
+async function disableRootTradingMarketRegistry(explicitId = "") {
+  const marketId = Number(explicitId || rootTradingMarketRegistrySelectedId || 0);
+  if (!marketId) {
+    rootTradingMarketRegistryEditorStatus("請先選擇市場再停用", false);
+    return;
+  }
+  const market = rootTradingMarketRegistryCache.find((item) => Number(item.id || 0) === marketId);
+  if (!confirm(`停用 ${market?.display_name || market?.symbol || "此市場"}？既有歷史仍保留，但之後不能再下單。`)) return;
+  rootTradingMarketRegistryEditorStatus("市場停用中...");
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  try {
+    const res = await apiFetch(API + `/admin/trading/markets/${encodeURIComponent(marketId)}/disable`, {
+      method: "DELETE",
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" },
+    });
+    const json = await parseRootTradingSettingsResponse(res);
+    if (!res.ok || !json.ok) {
+      rootTradingMarketRegistryEditorStatus(rootTradingSettingsHttpMessage(res, json, "市場停用失敗"), false);
+      return;
+    }
+    await loadRootTradingMarketRegistry({ silent: true });
+    if (rootTradingMarketRegistrySelectedId === marketId) {
+      populateRootTradingMarketRegistryForm(json.market || null);
+    }
+    rootTradingMarketRegistryMsg("市場已停用");
+    rootTradingMarketRegistryEditorStatus("disabled market 不會破壞既有歷史，但之後不可下單。");
+  } catch (err) {
+    rootTradingMarketRegistryEditorStatus(err.message || "市場停用請求失敗", false);
+  }
+}
+
+async function saveRootTradingMarketProvider() {
+  if (currentUser !== "root") return;
+  const marketId = Number(rootTradingMarketRegistrySelectedId || 0);
+  if (!marketId) {
+    rootTradingMarketProviderStatus("請先選擇市場再儲存 provider mapping", false);
+    return;
+  }
+  const payload = collectRootTradingMarketProviderForm();
+  rootTradingMarketProviderStatus("provider mapping 儲存中...");
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const mappingId = Number(rootTradingMarketProviderSelectedId || 0);
+  const url = mappingId
+    ? `${API}/admin/trading/markets/${marketId}/providers/${mappingId}`
+    : `${API}/admin/trading/markets/${marketId}/providers`;
+  const method = mappingId ? "PUT" : "POST";
+  try {
+    const res = await apiFetch(url, {
+      method,
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+      body: JSON.stringify(payload),
+    });
+    const json = await parseRootTradingSettingsResponse(res);
+    if (!res.ok || !json.ok) {
+      rootTradingMarketProviderStatus(rootTradingSettingsHttpMessage(res, json, "provider mapping 儲存失敗"), false);
+      return;
+    }
+    clearRootTradingMarketProviderForm();
+    renderRootTradingMarketProviders(json);
+    await loadRootTradingMarketRegistry({ silent: true });
+    rootTradingMarketProviderStatus(mappingId ? "provider mapping 已更新" : "provider mapping 已建立");
+  } catch (err) {
+    rootTradingMarketProviderStatus(err.message || "provider mapping 儲存請求失敗", false);
+  }
+}
+
+async function disableRootTradingMarketProvider(mappingIdValue = "") {
+  if (currentUser !== "root") return;
+  const marketId = Number(rootTradingMarketRegistrySelectedId || 0);
+  const mappingId = Number(mappingIdValue || 0);
+  if (!marketId || !mappingId) {
+    rootTradingMarketProviderStatus("請先選擇要停用的 provider mapping", false);
+    return;
+  }
+  const row = rootTradingMarketProviderCache.find((item) => Number(item.id || 0) === mappingId);
+  if (!confirm(`停用 ${row?.provider_label || row?.provider || "此"} provider mapping？`)) return;
+  rootTradingMarketProviderStatus("provider mapping 停用中...");
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  try {
+    const res = await apiFetch(API + `/admin/trading/markets/${marketId}/providers/${mappingId}`, {
+      method: "DELETE",
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" },
+    });
+    const json = await parseRootTradingSettingsResponse(res);
+    if (!res.ok || !json.ok) {
+      rootTradingMarketProviderStatus(rootTradingSettingsHttpMessage(res, json, "provider mapping 停用失敗"), false);
+      return;
+    }
+    clearRootTradingMarketProviderForm();
+    renderRootTradingMarketProviders(json);
+    await loadRootTradingMarketRegistry({ silent: true });
+    rootTradingMarketProviderStatus("provider mapping 已停用");
+  } catch (err) {
+    rootTradingMarketProviderStatus(err.message || "provider mapping 停用請求失敗", false);
+  }
+}
+
+function bindRootTradingMarketRegistryControls() {
+  const refreshBtn = $("root-trading-market-registry-refresh-btn");
+  if (refreshBtn && !refreshBtn.dataset.registryBound) {
+    refreshBtn.addEventListener("click", () => loadRootTradingMarketRegistry());
+    refreshBtn.dataset.registryBound = "1";
+  }
+  const newBtn = $("root-trading-market-registry-new-btn");
+  if (newBtn && !newBtn.dataset.registryBound) {
+    newBtn.addEventListener("click", () => {
+      clearRootTradingMarketRegistryForm();
+      rootTradingMarketRegistryEditorStatus("正在建立新市場；symbol 會成為不可變的內部市場代號。");
+    });
+    newBtn.dataset.registryBound = "1";
+  }
+  const saveBtn = $("root-trading-market-registry-save-btn");
+  if (saveBtn && !saveBtn.dataset.registryBound) {
+    saveBtn.addEventListener("click", saveRootTradingMarketRegistry);
+    saveBtn.dataset.registryBound = "1";
+  }
+  const probeBtn = $("root-trading-market-registry-probe-btn");
+  if (probeBtn && !probeBtn.dataset.registryBound) {
+    probeBtn.addEventListener("click", () => probeRootTradingMarketRegistry());
+    probeBtn.dataset.registryBound = "1";
+  }
+  const disableBtn = $("root-trading-market-registry-disable-btn");
+  if (disableBtn && !disableBtn.dataset.registryBound) {
+    disableBtn.addEventListener("click", () => disableRootTradingMarketRegistry());
+    disableBtn.dataset.registryBound = "1";
+  }
+  const cancelBtn = $("root-trading-market-registry-cancel-btn");
+  if (cancelBtn && !cancelBtn.dataset.registryBound) {
+    cancelBtn.addEventListener("click", clearRootTradingMarketRegistryForm);
+    cancelBtn.dataset.registryBound = "1";
+  }
+  const providerSaveBtn = $("root-trading-market-provider-save-btn");
+  if (providerSaveBtn && !providerSaveBtn.dataset.registryBound) {
+    providerSaveBtn.addEventListener("click", saveRootTradingMarketProvider);
+    providerSaveBtn.dataset.registryBound = "1";
+  }
+  const providerCancelBtn = $("root-trading-market-provider-cancel-btn");
+  if (providerCancelBtn && !providerCancelBtn.dataset.registryBound) {
+    providerCancelBtn.addEventListener("click", clearRootTradingMarketProviderForm);
+    providerCancelBtn.dataset.registryBound = "1";
+  }
 }
 
 function tradingBotAuditColor(status) {
@@ -1752,6 +2298,7 @@ function renderRootTradingSettings(payload) {
   const settings = payload?.settings || {};
   const markets = Array.isArray(payload?.markets) ? payload.markets : [];
   const reserve = payload?.reserve_pool || {};
+  bindRootTradingMarketRegistryControls();
   if ($("root-trading-enabled")) $("root-trading-enabled").checked = settings.enabled !== false;
   if ($("root-trading-borrowing-enabled")) $("root-trading-borrowing-enabled").checked = !!settings.borrowing_enabled;
   if ($("root-trading-borrow-apr-btc-eth")) $("root-trading-borrow-apr-btc-eth").value = adminPercentValue(settings.borrow_apr_btc_eth_percent ?? 8, 8);
@@ -1839,6 +2386,7 @@ function renderRootTradingSettings(payload) {
   if (!list) return;
   if (!markets.length) {
     list.innerHTML = `<div class="drive-empty">尚無交易市場</div>`;
+    loadRootTradingMarketRegistry({ silent: true });
     return;
   }
   list.innerHTML = markets.map((market) => `
@@ -1857,6 +2405,7 @@ function renderRootTradingSettings(payload) {
   `).join("");
   loadRootTradingPriceFusionStatus();
   loadRootTradingBotAuditDashboard();
+  loadRootTradingMarketRegistry({ silent: true });
 }
 
 async function loadRootTradingSettings() {

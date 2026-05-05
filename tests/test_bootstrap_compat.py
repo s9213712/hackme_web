@@ -160,6 +160,9 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     game_invite_cols = {row["name"] for row in conn.execute("PRAGMA table_info(game_invites)").fetchall()}
     game_reward_cols = {row["name"] for row in conn.execute("PRAGMA table_info(game_leaderboard_rewards)").fetchall()}
     trading_market_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_markets)").fetchall()}
+    trading_market_registry_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_markets_registry)").fetchall()}
+    trading_provider_mapping_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_market_provider_mappings)").fetchall()}
+    trading_registry_audit_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_market_registry_audit)").fetchall()}
     trading_order_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_orders)").fetchall()}
     trading_fill_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_fills)").fetchall()}
     trading_position_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_spot_positions)").fetchall()}
@@ -240,7 +243,25 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     assert {"game_key", "mode", "white_user_id", "black_user_id", "current_turn", "board_json", "winner_user_id", "white_deleted_at", "black_deleted_at"} <= game_match_cols
     assert {"game_key", "inviter_user_id", "opponent_user_id", "status", "match_id"} <= game_invite_cols
     assert {"game_key", "week_key", "user_id", "rank", "score", "reward_points", "ledger_uuid"} <= game_reward_cols
-    assert {"symbol", "manual_price_points", "futures_enabled", "pvp_matching_enabled", "price_source"} <= trading_market_cols
+    assert {
+        "symbol", "manual_price_points", "futures_enabled", "pvp_matching_enabled", "price_source",
+        "display_quote_currency", "display_name", "market_type", "sort_order",
+        "allow_margin", "allow_bots", "allow_risk_grade_usage",
+        "price_precision", "quantity_precision", "min_order_size", "max_order_size",
+        "lot_size", "tick_size", "live_price_enabled", "reference_price_enabled",
+        "btc_trade_enabled", "provider_ids_json",
+    } <= trading_market_cols
+    assert {
+        "symbol", "base_asset", "quote_asset", "display_name", "display_quote_currency",
+        "enabled", "allow_spot", "allow_margin", "allow_bots", "allow_risk_grade_usage",
+        "price_precision", "quantity_precision", "min_order_size", "max_order_size",
+        "lot_size", "tick_size", "probe_status", "probe_summary_json", "created_by", "updated_by",
+    } <= trading_market_registry_cols
+    assert {
+        "market_id", "provider", "provider_symbol", "supports_ticker", "supports_depth",
+        "supports_candles", "enabled", "priority",
+    } <= trading_provider_mapping_cols
+    assert {"actor_id", "action", "market_symbol", "before_json", "after_json", "created_at"} <= trading_registry_audit_cols
     assert {"order_uuid", "user_id", "market_symbol", "side", "order_type", "status", "frozen_points"} <= trading_order_cols
     assert {"fill_uuid", "order_id", "notional_points", "fee_points", "points_ledger_uuids_json"} <= trading_fill_cols
     assert {"user_id", "market_symbol", "quantity_units", "locked_quantity_units"} <= trading_position_cols
