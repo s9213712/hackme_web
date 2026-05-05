@@ -7,7 +7,7 @@
 ![database](https://img.shields.io/badge/database-SQLite-0f6ab4)
 ![security](https://img.shields.io/badge/focus-auth%20%2B%20RBAC%20%2B%20audit-b31d28)
 
-**Current Release ID: `2026.05.05-116`**
+**Current Release ID: `2026.05.05-117`**
 
 `hackme_web` is a security-focused Flask web application that combines
 authentication, RBAC, moderation, per-user appearance overrides, Cloud Drive,
@@ -20,7 +20,11 @@ Recent AI image workflow additions now include `img2img`, `inpaint`,
 history replay for saved prompts/assets. Root can now import local ComfyUI
 model files directly from the web UI in addition to pasting a Civitai URL, and
 there is a dedicated probe script for smoke-testing every supported generation
-mode against a live ComfyUI backend.
+mode against a live ComfyUI backend. The same root-only panel now supports
+Civitai keyword search, base-model / type / NSFW filters, result summaries
+with version / file size / hash / compatible-model hints, and a mandatory
+download confirmation step before anything is written into the local ComfyUI
+models tree.
 
 This README keeps only the shortest entry route. Detailed deployment,
 operations, feature, security, and QA references live under `docs/`.

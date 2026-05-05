@@ -142,6 +142,9 @@ PYTHONPATH=. python3 scripts/trading_backtest_20000_probe.py --include-route --j
   - prompt helper 是否能把 Embedding token 正確送進後端
   - custom VAE 是否真的改到 workflow，而不是只有 UI 多一個欄位
   - Civitai inspect / download 是否顯示 trigger words，且 remote mode 不會誤顯示本地下載工具
+  - Civitai 搜尋是否支援關鍵字、base model、Checkpoint / LoRA / Embedding / ControlNet、Safe/NSFW 篩選，且搜尋結果會顯示版本、檔案大小、hash、相容模型摘要
+  - root 若未設定 Civitai API Key，搜尋與 inspect/download 是否回人性化錯誤，而不是靜默失敗或 500
+  - Civitai 下載前是否真的會跳二次確認；下載中斷時是否顯示「下載中斷或連線失敗」而非模糊錯誤
   - 生圖、本地啟動、模型下載進行中時，閒置登出倒數是否改成暫停，而不是做到一半被踢出
   - `img2img / inpaint / outpaint / upscale` 是否能正確接收來源圖 / 遮罩圖 / 控制圖，手機版表單不可擠壞
   - ControlNet 模型缺失、workflow 缺 node、控制圖格式錯誤、`control strength` 超出範圍時，是否回人性化錯誤而非靜默失敗

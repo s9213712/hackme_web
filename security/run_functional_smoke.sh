@@ -686,6 +686,7 @@ run_checks() {
   else
     skip "comfyui integration availability" "ComfyUI backend is optional for functional smoke"
   fi
+  request "comfyui civitai search missing api key" "POST" "/api/root/comfyui/civitai/search" "400" '{"query":"sdxl anime","model_type":"checkpoint","base_model":"SDXL","nsfw_mode":"safe"}'
   request "comfyui discard requires image ref" "POST" "/api/comfyui/discard" "400" '{"prompt_id":"smoke"}'
   request "comfyui share requires generated image" "POST" "/api/comfyui/share" "400" '{"title":"smoke comfyui share"}'
   request "cloud drive files list" "GET" "/api/cloud-drive/files" "200"

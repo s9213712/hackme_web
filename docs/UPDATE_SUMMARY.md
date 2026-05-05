@@ -1,6 +1,12 @@
 # Update Summary
 
-Release ID: `2026.05.05-116`
+Release ID: `2026.05.05-117`
+
+## 2026.05.05-117
+
+- Added root-only Civitai search/filter support on the local ComfyUI model-import panel: keyword search, base-model filter, checkpoint / LoRA / embedding / ControlNet type filter, and Safe/NSFW filtering now hit the official Civitai model search API instead of requiring users to paste a page URL up front.
+- Search results now summarize latest-version metadata before download, including version name, file size, hash hints, compatible/base models, and an explicit “帶入下載區” step; downloads also require a second confirmation dialog before writing into the local ComfyUI `models/` tree.
+- Added human-readable handling for missing Civitai API keys and interrupted downloads, extended functional smoke to probe the new search endpoint’s API-key guard, and updated API / QA / admin / developer docs to match the new root-only workflow.
 
 ## 2026.05.05-116
 

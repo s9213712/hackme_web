@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>hackme_web — 登入系統</title>
   <!-- Security headers via HTTP (set by server/Talisman) -->
-  <link rel="stylesheet" href="/styles.css?v=20260505-comfyui-controlnet-history" />
+  <link rel="stylesheet" href="/styles.css?v=20260505-civitai-search" />
 </head>
 <body>
 <!-- ════════════════════ AUTH CARD ════════════════════ -->
@@ -1400,6 +1400,7 @@
                   <option value="checkpoint">Checkpoint</option>
                   <option value="lora">LoRA</option>
                   <option value="embedding">Embedding / TI</option>
+                  <option value="controlnet">ControlNet</option>
                   <option value="vae">VAE</option>
                 </select>
               </div>
@@ -1412,6 +1413,50 @@
               </div>
             </div>
             <div id="comfyui-model-source-civitai">
+              <div class="drive-card-sub" style="margin-bottom:.6rem;">可先用關鍵字搜尋與篩選 Civitai，搜尋結果只會幫你帶入模型網址；真正下載前仍會再次確認版本、檔案、大小與 hash。</div>
+              <div class="settings-option-grid">
+                <div class="field">
+                  <label>關鍵字搜尋</label>
+                  <input type="search" id="comfyui-civitai-search-query" placeholder="例如：sdxl anime, canny controlnet" />
+                </div>
+                <div class="field">
+                  <label>Base Model</label>
+                  <select id="comfyui-civitai-search-base-model">
+                    <option value="">全部</option>
+                    <option value="SDXL">SDXL</option>
+                    <option value="Pony">Pony</option>
+                    <option value="Illustrious">Illustrious</option>
+                    <option value="NoobAI">NoobAI</option>
+                    <option value="Flux.1 D">Flux.1 D</option>
+                    <option value="SD 1.5">SD 1.5</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label>類型</label>
+                  <select id="comfyui-civitai-search-type">
+                    <option value="">全部</option>
+                    <option value="checkpoint">Checkpoint</option>
+                    <option value="lora">LoRA</option>
+                    <option value="embedding">Embedding / TI</option>
+                    <option value="controlnet">ControlNet</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label>安全篩選</label>
+                  <select id="comfyui-civitai-search-nsfw">
+                    <option value="safe">僅 Safe</option>
+                    <option value="all">Safe + NSFW</option>
+                    <option value="nsfw">僅 NSFW</option>
+                  </select>
+                </div>
+              </div>
+              <div class="drive-file-actions" style="justify-content:flex-start;">
+                <button class="btn" id="comfyui-civitai-search-btn" type="button">搜尋 Civitai</button>
+              </div>
+              <div id="comfyui-civitai-search-status" class="drive-card-sub" style="margin-top:.4rem;">尚未搜尋 Civitai 模型</div>
+              <div id="comfyui-civitai-search-results" class="comfyui-civitai-search-results">
+                <div class="drive-card-sub">支援關鍵字、base model、Checkpoint / LoRA / Embedding / ControlNet、Safe/NSFW 篩選。</div>
+              </div>
               <div class="field"><label>Civitai 模型頁網址</label><input type="url" id="comfyui-civitai-url" placeholder="https://civitai.com/models/123456/..." /></div>
               <div class="settings-option-grid">
                 <div class="field"><label>版本</label><select id="comfyui-civitai-version"><option value="">請先讀取模型</option></select></div>
@@ -4488,7 +4533,7 @@
 <script src="/js/32-notifications.js?v=20260428-forum-pages" defer></script>
 <script src="/js/34-markdown-editor.js?v=20260428-forum-pages" defer></script>
 <script src="/js/35-drive.js?v=20260504-drive-media-rename" defer></script>
-<script src="/js/36-comfyui.js?v=20260505-comfyui-controlnet-history" defer></script>
+<script src="/js/36-comfyui.js?v=20260505-civitai-search" defer></script>
 <script src="/js/37-bug-report.js?v=20260502-device-feature" defer></script>
 <script src="/js/38-games.js?v=20260502-mobile-controls" defer></script>
 <script src="/js/39-videos.js?v=20260505-hlsjs-player" defer></script>
@@ -4496,6 +4541,6 @@
 <script src="/js/50-admin.js?v=20260504-fusion-coverage-v1" defer></script>
 <script src="/js/55-economy.js?v=20260501-wallet-auto-refresh" defer></script>
 <script src="/js/56-trading.js?v=20260502-grid-spot" defer></script>
-<script src="/js/90-bootstrap.js?v=20260505-comfyui-controlnet-history" defer></script>
+<script src="/js/90-bootstrap.js?v=20260505-civitai-search" defer></script>
 </body>
 </html>

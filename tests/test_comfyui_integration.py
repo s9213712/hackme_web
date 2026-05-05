@@ -1708,6 +1708,106 @@ def test_comfyui_civitai_inspect_requires_root_and_civitai_url(tmp_path):
     assert "Civitai" in invalid.get_json()["msg"]
 
 
+def test_comfyui_civitai_search_requires_root_and_reports_missing_api_key(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    user_client = _build_app(db_path, storage_root).test_client()
+
+    forbidden = user_client.post("/api/root/comfyui/civitai/search", json={"query": "anime"})
+    assert forbidden.status_code == 403
+
+    root_actor = {"id": 1, "username": "root", "role": "super_admin"}
+    root_client = _build_app(db_path, storage_root, actor=lambda: root_actor).test_client()
+    missing_key = root_client.post(
+        "/api/root/comfyui/civitai/search",
+        json={"query": "anime", "model_type": "checkpoint", "base_model": "SDXL", "nsfw_mode": "safe"},
+    )
+    assert missing_key.status_code == 400
+    assert "Civitai API Key" in missing_key.get_json()["msg"]
+
+
+def test_comfyui_civitai_search_returns_filtered_results_and_audit(tmp_path, monkeypatch):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    root_actor = {"id": 1, "username": "root", "role": "super_admin"}
+    audit_events = []
+    client = _build_app(
+        db_path,
+        storage_root,
+        actor=lambda: root_actor,
+        settings={"comfyui_civitai_api_key": "secret-token"},
+        extra_deps={"audit": lambda *args, **kwargs: audit_events.append((args, kwargs))},
+    ).test_client()
+
+    def fake_urlopen(request_obj, timeout=0):
+        url = request_obj.full_url
+        headers = dict(request_obj.header_items())
+        parsed = urllib.parse.urlsplit(url)
+        query = urllib.parse.parse_qs(parsed.query)
+        assert parsed.scheme == "https"
+        assert parsed.netloc == "civitai.com"
+        assert parsed.path == "/api/v1/models"
+        assert headers.get("Authorization") == "Bearer secret-token"
+        assert query.get("query") == ["anime knight"]
+        assert query.get("types") == ["Checkpoint"]
+        assert query.get("baseModels") == ["SDXL"]
+        assert query.get("nsfw") == ["false"]
+        payload = {
+            "items": [
+                {
+                    "id": 654321,
+                    "name": "Knight XL",
+                    "type": "Checkpoint",
+                    "creator": {"username": "artist"},
+                    "nsfw": False,
+                    "modelVersions": [
+                        {
+                            "id": 9001,
+                            "name": "v3",
+                            "baseModel": "SDXL",
+                            "createdAt": "2026-05-01T12:00:00Z",
+                            "trainedWords": ["knight armor"],
+                            "files": [
+                                {
+                                    "id": 9101,
+                                    "name": "knight_xl_v3.safetensors",
+                                    "sizeKB": 4096,
+                                    "hashes": {"SHA256": "deadbeef"},
+                                    "type": "Model",
+                                    "downloadUrl": "https://civitai.com/api/download/models/9101",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+            "metadata": {"totalItems": 1, "currentPage": 1, "pageSize": 12},
+        }
+        return _FakeResponse(url=url, body=json.dumps(payload), headers={"Content-Type": "application/json; charset=utf-8"})
+
+    monkeypatch.setattr(comfyui_routes.urllib.request, "urlopen", fake_urlopen)
+
+    searched = client.post(
+        "/api/root/comfyui/civitai/search",
+        json={"query": "anime knight", "model_type": "checkpoint", "base_model": "SDXL", "nsfw_mode": "safe"},
+    )
+    assert searched.status_code == 200
+    body = searched.get_json()
+    assert body["ok"] is True
+    assert body["total_items"] == 1
+    assert body["results"][0]["model_id"] == 654321
+    assert body["results"][0]["selected_page_url"].endswith("654321?modelVersionId=9001")
+    assert body["results"][0]["compatible_models"] == ["SDXL"]
+    assert body["results"][0]["latest_version"]["primary_file"]["hashes"]["sha256"] == "deadbeef"
+    assert body["results"][0]["suggested_model_type"] == "checkpoint"
+    assert audit_events
+    assert audit_events[-1][0][0] == "COMFYUI_CIVITAI_SEARCH"
+
+
 def test_comfyui_civitai_red_url_is_accepted(tmp_path, monkeypatch):
     db_path = tmp_path / "comfyui.db"
     storage_root = tmp_path / "storage"
@@ -1892,6 +1992,76 @@ def test_comfyui_civitai_inspect_and_download_flow(tmp_path, monkeypatch):
     assert listed_json["lora_details"]["fancy_v2.safetensors"]["base_model"] == "SDXL"
     assert listed_json["lora_details"]["fancy_v2.safetensors"]["supported"] is True
     assert listed_json["lora_details"]["fancy_v2.safetensors"]["trained_words"] == ["fancy style", "cinematic"]
+
+
+def test_comfyui_civitai_download_reports_interrupted_transfer(tmp_path, monkeypatch):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    comfy_base = tmp_path / "comfyui_portable"
+    comfy_base.mkdir()
+    (comfy_base / "main.py").write_text("# comfy", encoding="utf-8")
+    root_actor = {"id": 1, "username": "root", "role": "super_admin"}
+    client = _build_app(
+        db_path,
+        storage_root,
+        actor=lambda: root_actor,
+        settings={
+            "comfyui_civitai_api_key": "secret-token",
+            "comfyui_base_dir": str(comfy_base),
+        },
+    ).test_client()
+
+    def fake_urlopen(request_obj, timeout=0):
+        url = request_obj.full_url
+        if url == "https://civitai.com/api/v1/models/123456":
+            payload = {
+                "id": 123456,
+                "name": "Fancy Model",
+                "type": "Controlnet",
+                "creator": {"username": "artist"},
+                "modelVersions": [
+                    {
+                        "id": 2002,
+                        "name": "v2",
+                        "baseModel": "SDXL",
+                        "files": [
+                            {
+                                "id": 3002,
+                                "name": "fancy_controlnet_v2.safetensors",
+                                "sizeKB": 4096,
+                                "downloadUrl": "https://civitai.com/api/download/models/2002",
+                                "type": "Model",
+                            }
+                        ],
+                    },
+                ],
+            }
+            return _FakeResponse(url=url, body=json.dumps(payload), headers={"Content-Type": "application/json; charset=utf-8"})
+        if url.startswith("https://civitai.com/api/download/models/2002"):
+            raise comfyui_routes.urllib.error.URLError("connection reset by peer")
+        raise AssertionError(f"unexpected urlopen target: {url}")
+
+    monkeypatch.setattr(comfyui_routes.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        comfyui_routes.socket,
+        "getaddrinfo",
+        lambda host, port, type=0: [(None, None, None, None, ("104.21.72.187", port or 443))],
+    )
+
+    downloaded = client.post(
+        "/api/root/comfyui/civitai/download",
+        json={
+            "page_url": "https://civitai.com/models/123456/fancy-model?modelVersionId=2002",
+            "version_id": 2002,
+            "file_id": 3002,
+            "type": "controlnet",
+            "base_dir": str(comfy_base),
+        },
+    )
+    assert downloaded.status_code == 400
+    assert "下載中斷或連線失敗" in downloaded.get_json()["msg"]
 
 
 def test_root_can_upload_comfyui_model_file_into_local_models_dir(tmp_path):
@@ -2690,6 +2860,13 @@ def test_comfyui_frontend_is_wired():
     assert 'id="comfyui-model-download-progress-bar"' in index_html
     assert 'id="comfyui-model-download-progress-detail"' in index_html
     assert 'id="comfyui-civitai-inspect-btn"' in index_html
+    assert 'id="comfyui-civitai-search-btn"' in index_html
+    assert 'id="comfyui-civitai-search-query"' in index_html
+    assert 'id="comfyui-civitai-search-base-model"' in index_html
+    assert 'id="comfyui-civitai-search-type"' in index_html
+    assert 'id="comfyui-civitai-search-nsfw"' in index_html
+    assert 'id="comfyui-civitai-search-status"' in index_html
+    assert 'id="comfyui-civitai-search-results"' in index_html
     assert 'id="comfyui-civitai-url"' in index_html
     assert 'id="comfyui-civitai-version"' in index_html
     assert 'id="comfyui-civitai-file"' in index_html
@@ -2707,7 +2884,7 @@ def test_comfyui_frontend_is_wired():
     assert '和上方生圖表單分開' in index_html
     assert '<option value="embedding">Embedding / TI</option>' in index_html
     assert '<option value="vae">VAE</option>' in index_html
-    assert '<option value="controlnet">ControlNet</option>' not in index_html
+    assert '<option value="controlnet">ControlNet</option>' in index_html
     assert '<option value="hypernetwork">Hypernetwork</option>' not in index_html
     assert 'id="s-comfyui-connection-mode"' in index_html
     assert 'id="s-comfyui-remote-api-url"' in index_html
@@ -2719,8 +2896,8 @@ def test_comfyui_frontend_is_wired():
     assert 'id="s-comfyui-civitai-api-key"' in index_html
     assert 'const show = currentUser === "root";' in comfyui_js
     assert '目前是雲端 / 遠端模式，所以這個區塊只保留說明。若要管理本站的本地 ComfyUI 模型，請先把 backend 切回本地模式。' in comfyui_js
-    assert "/js/36-comfyui.js?v=20260505-comfyui-controlnet-history" in index_html
-    assert "/styles.css?v=20260505-comfyui-controlnet-history" in index_html
+    assert "/js/36-comfyui.js?v=20260505-civitai-search" in index_html
+    assert "/styles.css?v=20260505-civitai-search" in index_html
     assert "width: min(420px, 100%);" in css
     assert "max-height: 320px;" in css
     assert ".comfyui-root-details" in css
@@ -2735,6 +2912,7 @@ def test_comfyui_frontend_is_wired():
     assert '遠端模式只負責呼叫指定 API 生圖，無法透過 API 把模型下載回本站的本地 ComfyUI，所以會隱藏本地模型下載與 Civitai API Key。' in admin_js
     assert 'apiFetch(API + "/comfyui/generate"' in comfyui_js
     assert 'apiFetch(API + "/comfyui/billing-quote"' in comfyui_js
+    assert 'apiFetch(API + "/root/comfyui/civitai/search"' in comfyui_js
     assert 'apiFetch(API + "/root/comfyui/civitai/inspect"' in comfyui_js
     assert 'apiFetch(API + "/root/comfyui/civitai/download"' in comfyui_js
     assert 'apiFetch(API + "/root/comfyui/model-upload"' in comfyui_js
@@ -2789,6 +2967,9 @@ def test_comfyui_frontend_is_wired():
     assert "function isNegativeComfyuiEmbedding(name)" in comfyui_js
     assert "function applyComfyuiPromptTerms(terms = [])" in comfyui_js
     assert "function renderComfyuiCivitaiTrainedWords(versionId)" in comfyui_js
+    assert "function renderComfyuiCivitaiSearchResults(results)" in comfyui_js
+    assert "function searchComfyuiCivitaiModels()" in comfyui_js
+    assert "function useComfyuiCivitaiSearchResult(modelId)" in comfyui_js
     assert 'const COMFYUI_VAE_BUILTIN = "__checkpoint_builtin__";' in comfyui_js
     assert 'vae: vae === COMFYUI_VAE_BUILTIN ? "" : vae,' in comfyui_js
     assert 'fillComfyuiVaeSelect(json.vaes || []);' in comfyui_js
@@ -2821,6 +3002,7 @@ def test_comfyui_frontend_is_wired():
     assert "s-comfyui-civitai-api-key" in admin_js
     assert "無法透過 API 把模型下載回本站的本地 ComfyUI" in admin_js
     assert "startLocalComfyui" in bootstrap_js
+    assert "searchComfyuiCivitaiModels" in comfyui_js
     assert "inspectComfyuiCivitaiModel" in bootstrap_js
     assert "stopLocalComfyui" in bootstrap_js
     assert "json.starting" in admin_js

@@ -23,6 +23,7 @@ let comfyuiSelectedLoras = [];
 let comfyuiConnectionMode = "remote";
 let comfyuiLocalStartPollTimer = null;
 let comfyuiCivitaiInspection = null;
+let comfyuiCivitaiSearchResults = [];
 let comfyuiControlnetTypes = {};
 let comfyuiUpscaleModels = [];
 let comfyuiGenerationModes = [];
@@ -1095,6 +1096,13 @@ function bindComfyuiAdvancedUi() {
       uploadComfyuiModelFile().catch((err) => setComfyuiMessage(err.message || "模型上傳失敗", false));
     });
   }
+  const civitaiSearchBtn = $("comfyui-civitai-search-btn");
+  if (civitaiSearchBtn && civitaiSearchBtn.dataset.comfyuiBound !== "1") {
+    civitaiSearchBtn.dataset.comfyuiBound = "1";
+    civitaiSearchBtn.addEventListener("click", () => {
+      searchComfyuiCivitaiModels().catch((err) => setComfyuiMessage(err.message || "Civitai 搜尋失敗", false));
+    });
+  }
   ["model", "preprocessor"].forEach((name) => {
     const el = $(`comfyui-controlnet-${name}`);
     if (!el || el.dataset.comfyuiBound === "1") return;
@@ -2112,6 +2120,147 @@ async function shareComfyuiToCommunity() {
   }
 }
 
+function formatComfyuiCivitaiFileSize(file) {
+  const sizeBytes = Number(file?.size_bytes || 0);
+  if (sizeBytes > 0 && typeof formatDriveBytes === "function") {
+    return formatDriveBytes(sizeBytes);
+  }
+  const sizeKb = Number(file?.size_kb || 0);
+  if (sizeKb > 0 && typeof formatDriveBytes === "function") {
+    return formatDriveBytes(Math.round(sizeKb * 1024));
+  }
+  return "";
+}
+
+function summarizeComfyuiCivitaiHashes(file) {
+  const hashes = file && typeof file.hashes === "object" ? file.hashes : {};
+  return Object.entries(hashes)
+    .filter(([key, value]) => String(key || "").trim() && String(value || "").trim())
+    .slice(0, 3)
+    .map(([key, value]) => `${String(key).toUpperCase()}: ${String(value)}`);
+}
+
+function renderComfyuiCivitaiSearchResults(results) {
+  const box = $("comfyui-civitai-search-results");
+  if (!box) return;
+  comfyuiCivitaiSearchResults = Array.isArray(results) ? results.slice() : [];
+  if (!comfyuiCivitaiSearchResults.length) {
+    box.innerHTML = '<div class="drive-card-sub">沒有符合條件的 Civitai 模型。可調整關鍵字、base model、類型或 Safe/NSFW 篩選。</div>';
+    return;
+  }
+  box.innerHTML = comfyuiCivitaiSearchResults.map((item) => {
+    const latestVersion = item.latest_version || {};
+    const primaryFile = latestVersion.primary_file || {};
+    const hashSummary = summarizeComfyuiCivitaiHashes(primaryFile);
+    const compatibleModels = Array.isArray(item.compatible_models) ? item.compatible_models.filter(Boolean) : [];
+    const sizeLabel = formatComfyuiCivitaiFileSize(primaryFile);
+    const createdAt = latestVersion.created_at ? new Date(latestVersion.created_at).toLocaleString() : "";
+    const nsfwChip = item.nsfw ? '<span class="comfyui-civitai-search-chip warn">NSFW</span>' : '<span class="comfyui-civitai-search-chip">Safe</span>';
+    return `
+      <div class="comfyui-civitai-search-card">
+        <div class="comfyui-civitai-search-head">
+          <div class="comfyui-civitai-search-title">
+            <strong>${sanitize(item.name || "未命名模型")}</strong>
+            <span>${sanitize(item.creator ? `by ${item.creator}` : "官方未提供作者")} · ${sanitize(item.type || "未知類型")} · ${sanitize(`版本 ${item.version_count || 0}`)}</span>
+          </div>
+          <div class="comfyui-civitai-search-flags">
+            <span class="comfyui-civitai-search-chip">${sanitize(item.suggested_model_type || "checkpoint")}</span>
+            ${nsfwChip}
+          </div>
+        </div>
+        <div class="comfyui-civitai-search-meta">
+          <span>最新版本：${sanitize(latestVersion.name || "未命名版本")}</span>
+          ${latestVersion.base_model ? `<span>Base model：${sanitize(latestVersion.base_model)}</span>` : ""}
+          ${createdAt ? `<span>更新時間：${sanitize(createdAt)}</span>` : ""}
+        </div>
+        <div class="comfyui-civitai-search-meta">
+          ${compatibleModels.length ? `<span>相容模型：${sanitize(compatibleModels.join(", "))}</span>` : '<span>相容模型：官方未標示</span>'}
+          ${primaryFile.name ? `<span>檔案：${sanitize(primaryFile.name)}</span>` : ""}
+          ${sizeLabel ? `<span>大小：${sanitize(sizeLabel)}</span>` : ""}
+        </div>
+        <div class="comfyui-civitai-search-hashes">
+          ${hashSummary.length ? hashSummary.map((value) => `<span>${sanitize(value)}</span>`).join("") : '<span>hash：官方未提供</span>'}
+        </div>
+        <div class="drive-card-sub">搜尋結果使用固定版本摘要顯示；若顯示下載前資料不足，可先帶入下載區讀取完整版本與檔案清單。</div>
+        <div class="drive-file-actions" style="justify-content:flex-start;">
+          <button class="btn" type="button" data-comfyui-civitai-select="${sanitize(String(item.model_id || ""))}">帶入下載區</button>
+        </div>
+      </div>
+    `;
+  }).join("");
+  box.querySelectorAll("[data-comfyui-civitai-select]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const modelId = button.getAttribute("data-comfyui-civitai-select") || "";
+      useComfyuiCivitaiSearchResult(modelId).catch((err) => setComfyuiMessage(err.message || "帶入 Civitai 模型失敗", false));
+    });
+  });
+}
+
+async function useComfyuiCivitaiSearchResult(modelId) {
+  const selected = comfyuiCivitaiSearchResults.find((item) => String(item.model_id || "") === String(modelId || ""));
+  if (!selected) {
+    setComfyuiMessage("找不到要帶入的 Civitai 搜尋結果。", false);
+    return;
+  }
+  if ($("comfyui-civitai-url")) $("comfyui-civitai-url").value = selected.selected_page_url || selected.page_url || "";
+  if ($("comfyui-model-download-type") && selected.suggested_model_type) {
+    $("comfyui-model-download-type").value = selected.suggested_model_type;
+  }
+  const status = $("comfyui-civitai-search-status");
+  if (status) status.textContent = `已帶入 ${selected.name}，正在讀取完整版本與檔案資訊...`;
+  await inspectComfyuiCivitaiModel();
+}
+
+async function searchComfyuiCivitaiModels() {
+  if (currentUser !== "root") {
+    setComfyuiMessage("只有 root 可以搜尋 Civitai 模型。", false);
+    return;
+  }
+  const button = $("comfyui-civitai-search-btn");
+  const status = $("comfyui-civitai-search-status");
+  const query = ($("comfyui-civitai-search-query")?.value || "").trim();
+  const baseModel = ($("comfyui-civitai-search-base-model")?.value || "").trim();
+  const modelType = ($("comfyui-civitai-search-type")?.value || "").trim();
+  const nsfwMode = ($("comfyui-civitai-search-nsfw")?.value || "safe").trim() || "safe";
+  if (button) {
+    button.disabled = true;
+    button.textContent = "搜尋中...";
+  }
+  if (status) status.textContent = "正在搜尋 Civitai 模型...";
+  try {
+    await fetchCsrfToken({ force: true });
+    const res = await apiFetch(API + "/root/comfyui/civitai/search", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRF-Token": getCsrfToken() || "",
+      },
+      body: JSON.stringify({
+        query,
+        base_model: baseModel,
+        model_type: modelType,
+        nsfw_mode: nsfwMode,
+        limit: 12,
+      }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) throw new Error(json.msg || `Civitai 搜尋失敗（HTTP ${res.status}）`);
+    renderComfyuiCivitaiSearchResults(json.results || []);
+    if (status) status.textContent = json.msg || "已取得 Civitai 搜尋結果。";
+    setComfyuiMessage(json.msg || "已取得 Civitai 搜尋結果。", true);
+  } catch (err) {
+    renderComfyuiCivitaiSearchResults([]);
+    if (status) status.textContent = err.message || "Civitai 搜尋失敗";
+    setComfyuiMessage(err.message || "Civitai 搜尋失敗", false);
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "搜尋 Civitai";
+    }
+  }
+}
+
 function renderComfyuiCivitaiFiles(versionId) {
   const fileSelect = $("comfyui-civitai-file");
   if (!fileSelect) return;
@@ -2310,6 +2459,30 @@ async function downloadComfyuiCivitaiModel() {
   if (!versionId) {
     if (status) status.textContent = "請先讀取模型資訊並選擇版本。";
     setComfyuiMessage("請先讀取模型資訊並選擇版本。", false);
+    return;
+  }
+  const versions = Array.isArray(comfyuiCivitaiInspection?.versions) ? comfyuiCivitaiInspection.versions : [];
+  const selectedVersion = versions.find((item) => String(item.id || "") === String(versionId)) || null;
+  const selectedFile = Array.isArray(selectedVersion?.files)
+    ? selectedVersion.files.find((item) => String(item.id || "") === String(fileId || "")) || selectedVersion.files[0] || null
+    : null;
+  const confirmBits = [
+    `模型：${comfyuiCivitaiInspection?.name || "未命名模型"}`,
+    `版本：${selectedVersion?.name || versionId}`,
+    `檔案：${selectedFile?.name || "未命名檔案"}`,
+  ];
+  const sizeLabel = formatComfyuiCivitaiFileSize(selectedFile);
+  if (sizeLabel) confirmBits.push(`大小：${sizeLabel}`);
+  const hashSummary = summarizeComfyuiCivitaiHashes(selectedFile);
+  if (hashSummary.length) confirmBits.push(`Hash：${hashSummary.join(" / ")}`);
+  const compatibleModels = Array.isArray(comfyuiCivitaiInspection?.versions)
+    ? [...new Set(comfyuiCivitaiInspection.versions.map((item) => String(item.base_model || "").trim()).filter(Boolean))]
+    : [];
+  if (compatibleModels.length) confirmBits.push(`相容模型：${compatibleModels.join(", ")}`);
+  confirmBits.push("下載後會直接寫入本地 ComfyUI models 目錄。");
+  if (!window.confirm(`請再次確認要下載這個 Civitai 模型：\n\n${confirmBits.join("\n")}`)) {
+    if (status) status.textContent = "已取消模型下載。";
+    setComfyuiMessage("已取消模型下載。", false);
     return;
   }
   if (button) {

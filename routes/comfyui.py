@@ -55,6 +55,7 @@ COMFYUI_MODEL_DOWNLOAD_TYPES = {
     "lora": ("loras", "LoRA"),
     "embedding": ("embeddings", "Embedding / Textual Inversion"),
     "vae": ("vae", "VAE"),
+    "controlnet": ("controlnet", "ControlNet"),
 }
 COMFYUI_SUPPORTED_LORA_BASE_MODEL_FAMILIES = {"sdxl", "pony", "illustrious", "noob"}
 MAX_COMFYUI_MODEL_DOWNLOAD_BYTES = int(os.environ.get("COMFYUI_MODEL_DOWNLOAD_MAX_BYTES", str(20 * 1024 * 1024 * 1024)))
@@ -73,6 +74,13 @@ CIVITAI_MODEL_TYPE_TO_DOWNLOAD_TYPE = {
     "textualinversion": "embedding",
     "embedding": "embedding",
     "vae": "vae",
+    "controlnet": "controlnet",
+}
+CIVITAI_SEARCH_TYPE_TO_API = {
+    "checkpoint": "Checkpoint",
+    "lora": "LORA",
+    "embedding": "TextualInversion",
+    "controlnet": "Controlnet",
 }
 COMFYUI_EMBEDDING_TOKEN_RE = re.compile(r"<\s*embeddings\s*:\s*([^<>]+?)\s*>", re.IGNORECASE)
 COMFYUI_ALLOWED_IMAGE_MIME_TYPES = {
@@ -1355,7 +1363,7 @@ def register_comfyui_routes(app, deps):
 
     def _civitai_api_get(path, *, auth_value):
         if not auth_value:
-            raise ValueError("請先在 root 設定填入 Civitai API Key")
+            return None, "請先在 root 設定填入 Civitai API Key"
         url = f"{CIVITAI_API_BASE}/{path.lstrip('/')}"
         try:
             return _fetch_json(url, headers=_civitai_headers(auth_value), timeout=20), None
@@ -1371,6 +1379,16 @@ def register_comfyui_routes(app, deps):
         except Exception as exc:
             return None, str(exc)
 
+    def _normalize_civitai_search_type(value):
+        key = _normalize_download_model_type(value)
+        return key if key in CIVITAI_SEARCH_TYPE_TO_API else ""
+
+    def _normalize_civitai_nsfw_mode(value):
+        raw = str(value or "safe").strip().lower()
+        if raw in {"safe", "all", "nsfw"}:
+            return raw
+        return "safe"
+
     def _serialize_civitai_file(file_entry, fallback_download_url):
         if not isinstance(file_entry, dict):
             return None
@@ -1380,12 +1398,22 @@ def register_comfyui_routes(app, deps):
         suffix = Path(filename).suffix.lower()
         if suffix not in COMFYUI_MODEL_DOWNLOAD_EXTENSIONS:
             return None
+        try:
+            size_kb = float(file_entry.get("sizeKB")) if file_entry.get("sizeKB") is not None else None
+        except Exception:
+            size_kb = None
         return {
             "id": int(file_entry.get("id") or 0) or None,
             "name": filename,
-            "size_kb": file_entry.get("sizeKB"),
+            "size_kb": size_kb,
+            "size_bytes": int(round(size_kb * 1024)) if size_kb is not None else None,
             "download_url": str(file_entry.get("downloadUrl") or fallback_download_url or "").strip(),
             "metadata": dict(file_entry.get("metadata") or {}),
+            "hashes": {
+                str(key).strip().lower(): str(value).strip()
+                for key, value in dict(file_entry.get("hashes") or {}).items()
+                if str(key).strip() and str(value).strip()
+            },
             "pickle_scan_result": file_entry.get("pickleScanResult"),
             "virus_scan_result": file_entry.get("virusScanResult"),
             "type": str(file_entry.get("type") or "").strip(),
@@ -1420,6 +1448,97 @@ def register_comfyui_routes(app, deps):
         if selected_version_id is None and versions:
             selected_version_id = versions[0]["id"]
         return versions, selected_version_id
+
+    def _build_civitai_page_url(model_id, version_id=None):
+        base_url = f"https://civitai.com/models/{int(model_id)}"
+        if version_id:
+            return f"{base_url}?modelVersionId={int(version_id)}"
+        return base_url
+
+    def _serialize_civitai_search_results(search_data):
+        results = []
+        items = list((search_data or {}).get("items") or [])
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            model_id = int(item.get("id") or 0) or None
+            if not model_id:
+                continue
+            versions, selected_version_id = _serialize_civitai_versions(item)
+            if not versions:
+                continue
+            compatible_models = []
+            for version in versions:
+                base_model = str(version.get("base_model") or "").strip()
+                if base_model and base_model not in compatible_models:
+                    compatible_models.append(base_model)
+            latest_version = versions[0]
+            primary_file = dict((latest_version.get("files") or [None])[0] or {})
+            suggested_model_type = _normalize_download_model_type(item.get("type"))
+            if suggested_model_type not in COMFYUI_MODEL_DOWNLOAD_TYPES:
+                suggested_model_type = "checkpoint"
+            results.append({
+                "model_id": model_id,
+                "page_url": _build_civitai_page_url(model_id),
+                "selected_page_url": _build_civitai_page_url(model_id, selected_version_id),
+                "name": str(item.get("name") or f"Model {model_id}").strip(),
+                "type": str(item.get("type") or "").strip(),
+                "suggested_model_type": suggested_model_type,
+                "creator": str(((item.get("creator") or {}).get("username") or "")).strip(),
+                "nsfw": bool(item.get("nsfw")),
+                "version_count": len(versions),
+                "compatible_models": compatible_models,
+                "selected_version_id": selected_version_id,
+                "latest_version": {
+                    "id": latest_version.get("id"),
+                    "name": latest_version.get("name"),
+                    "created_at": latest_version.get("created_at"),
+                    "base_model": latest_version.get("base_model"),
+                    "trained_words": list(latest_version.get("trained_words") or []),
+                    "file_count": len(latest_version.get("files") or []),
+                    "primary_file": primary_file or None,
+                },
+            })
+        metadata = dict((search_data or {}).get("metadata") or {})
+        return {
+            "results": results,
+            "total_items": int(metadata.get("totalItems") or 0) if str(metadata.get("totalItems") or "").isdigit() else len(results),
+            "current_page": int(metadata.get("currentPage") or 1) if str(metadata.get("currentPage") or "").isdigit() else 1,
+            "page_size": int(metadata.get("pageSize") or len(results) or 0) if str(metadata.get("pageSize") or "").isdigit() else len(results),
+        }
+
+    def _search_civitai_models(query="", *, base_model="", model_type="", nsfw_mode="safe", limit=12):
+        safe_query = str(query or "").strip()[:120]
+        safe_base_model = str(base_model or "").strip()[:80]
+        safe_model_type = _normalize_civitai_search_type(model_type)
+        safe_nsfw_mode = _normalize_civitai_nsfw_mode(nsfw_mode)
+        try:
+            safe_limit = max(1, min(24, int(limit or 12)))
+        except Exception:
+            safe_limit = 12
+        params = [("limit", safe_limit)]
+        if safe_query:
+            params.append(("query", safe_query))
+        if safe_model_type:
+            params.append(("types", CIVITAI_SEARCH_TYPE_TO_API[safe_model_type]))
+        if safe_base_model:
+            params.append(("baseModels", safe_base_model))
+        if safe_nsfw_mode == "safe":
+            params.append(("nsfw", "false"))
+        elif safe_nsfw_mode == "nsfw":
+            params.append(("nsfw", "true"))
+        search_data, err = _civitai_api_get(f"models?{urlencode(params, doseq=True)}", auth_value=_configured_civitai_api_key())
+        if err:
+            return None, err
+        payload = _serialize_civitai_search_results(search_data)
+        payload["filters"] = {
+            "query": safe_query,
+            "base_model": safe_base_model,
+            "model_type": safe_model_type,
+            "nsfw_mode": safe_nsfw_mode,
+            "limit": safe_limit,
+        }
+        return payload, None
 
     def _inspect_civitai_model(page_url):
         ref, msg = _parse_civitai_reference(page_url)
@@ -1618,10 +1737,14 @@ def register_comfyui_routes(app, deps):
         except urllib.error.URLError as exc:
             if temp_path and temp_path.exists():
                 temp_path.unlink(missing_ok=True)
-            return None, f"模型下載失敗：{getattr(exc, 'reason', exc)}"
+            return None, f"模型下載中斷或連線失敗：{getattr(exc, 'reason', exc)}"
         except Exception as exc:
             if temp_path and temp_path.exists():
                 temp_path.unlink(missing_ok=True)
+            if isinstance(exc, TimeoutError):
+                return None, "模型下載逾時，請稍後再試"
+            if exc.__class__.__name__ == "IncompleteRead":
+                return None, "模型下載中斷，請稍後再試"
             return None, str(exc)
         return {
             "type": model_type,
@@ -2828,6 +2951,60 @@ def register_comfyui_routes(app, deps):
         if msg:
             return json_resp({"ok": False, "msg": msg}), 400
         return json_resp({"ok": True, "model": result, "msg": f"已讀取 {result['name']}，請選擇版本與檔案"})
+
+    @app.route("/api/root/comfyui/civitai/search", methods=["POST"])
+    @require_csrf
+    def root_comfyui_civitai_search():
+        actor, err = _root_or_403()
+        if err:
+            return err
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+        query = str(data.get("query") or "").strip()
+        base_model = str(data.get("base_model") or "").strip()
+        model_type = str(data.get("model_type") or data.get("type") or "").strip()
+        nsfw_mode = _normalize_civitai_nsfw_mode(data.get("nsfw_mode") or data.get("safety") or "safe")
+        try:
+            limit = max(1, min(24, int(data.get("limit") or 12)))
+        except Exception:
+            limit = 12
+        result, msg = _search_civitai_models(
+            query,
+            base_model=base_model,
+            model_type=model_type,
+            nsfw_mode=nsfw_mode,
+            limit=limit,
+        )
+        audit(
+            "COMFYUI_CIVITAI_SEARCH",
+            get_client_ip(),
+            user=_actor_value(actor, "username"),
+            success=not bool(msg),
+            ua=get_ua(),
+            detail=(
+                f"query={query[:80]}, type={_normalize_civitai_search_type(model_type) or '-'}, "
+                f"base_model={base_model[:40] or '-'}, nsfw={nsfw_mode}, "
+                f"count={len((result or {}).get('results') or [])}, error={msg or ''}"
+            )[:300],
+        )
+        if msg:
+            return json_resp({"ok": False, "msg": msg}), 400
+        total = int(result.get("total_items") or 0)
+        count = len(result.get("results") or [])
+        message = "沒有符合條件的 Civitai 模型，請調整關鍵字或篩選器。" if count == 0 else f"已找到 {count} 個 Civitai 模型（總數約 {total}）。"
+        return json_resp({
+            "ok": True,
+            "results": result.get("results") or [],
+            "filters": result.get("filters") or {},
+            "total_items": total,
+            "current_page": result.get("current_page") or 1,
+            "page_size": result.get("page_size") or count,
+            "msg": message,
+        })
 
     @app.route("/api/root/comfyui/civitai/download", methods=["POST"])
     @require_csrf

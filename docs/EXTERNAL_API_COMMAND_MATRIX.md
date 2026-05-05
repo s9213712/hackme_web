@@ -168,7 +168,7 @@ Source:
 
 ## Civitai
 
-Root-only ComfyUI model management uses Civitai for inspection and download.
+Root-only ComfyUI model management uses Civitai for search, inspection, and download.
 
 ### Inputs accepted by this project
 
@@ -178,6 +178,8 @@ Root-only ComfyUI model management uses Civitai for inspection and download.
 
 ### Used now
 
+- `GET https://civitai.com/api/v1/models?query=...&types=...&baseModels=...&nsfw=...`
+  - keyword search with base-model / type / Safe-NSFW filters for the root-only ComfyUI import panel
 - `GET https://civitai.com/api/v1/models/<model_id>`
   - inspect model metadata, versions, files, base model, trained words
 - `GET https://civitai.com/api/download/models/<version_id>`
@@ -194,7 +196,6 @@ Current project behavior:
 
 Not currently used but available upstream:
 
-- model search endpoints
 - creator/profile endpoints
 - image browsing endpoints
 - tag/category discovery

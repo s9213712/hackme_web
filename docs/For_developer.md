@@ -18,7 +18,7 @@ Related technical references:
 
 ## Release and Schema
 
-- Release ID: `2026.05.05-116`
+- Release ID: `2026.05.05-117`
 - Schema version: `29`
 - Release ID source: `services/release_info.py`
 - Runtime version endpoint: `GET /api/version`
@@ -372,6 +372,7 @@ Streaming notes:
 - `POST /api/comfyui/share`
 - `POST /api/root/comfyui/test-connection`
 - `POST /api/root/comfyui/civitai/inspect`
+- `POST /api/root/comfyui/civitai/search`
 - `POST /api/root/comfyui/civitai/download`
 - `POST /api/root/comfyui/model-upload`
 - `POST /api/root/comfyui/stop`
@@ -399,6 +400,11 @@ ComfyUI notes:
   frontend can offer one-click restore and rerun.
 - Root-only Civitai endpoints inspect a page URL, list versions/files, and
   download the selected checkpoint or LoRA into the configured local project.
+- Root-only Civitai search now uses the official `/api/v1/models` endpoint with
+  keyword, base-model, type, and Safe/NSFW filters. Search results intentionally
+  stay separate from download execution: they summarize version/file/hash
+  metadata and only populate the inspect/download controls after an explicit
+  “帶入下載區” action.
   The model-download UI is intentionally separated from the main generation form
   and rendered as a collapsed panel at the bottom of the AI page.
 - The same root-only panel now also supports direct file uploads into the local

@@ -425,6 +425,7 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | POST | `/api/comfyui/share` | logged-in | 分享結果 |
 | POST | `/api/root/comfyui/test-connection` | root | 測試連線 |
 | POST | `/api/root/comfyui/stop` | root | 停止本地 ComfyUI |
+| POST | `/api/root/comfyui/civitai/search` | root | 用關鍵字 / base model / 類型 / NSFW 篩選搜尋 Civitai 模型 |
 | POST | `/api/root/comfyui/civitai/inspect` | root | 讀 Civitai metadata |
 | POST | `/api/root/comfyui/civitai/download` | root | 下載模型 |
 | POST | `/api/root/comfyui/model-upload` | root | 直接上傳模型檔到本地 ComfyUI models 目錄 |
