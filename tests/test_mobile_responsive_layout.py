@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 
@@ -8,7 +9,9 @@ def test_main_app_has_mobile_responsive_overrides():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     css = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
 
-    assert "/styles.css?v=20260503-appearance-v2" in index_html
+    # Match any cache-bust version of styles.css — the actual mobile
+    # behavior we test is in the CSS body below, not the version stamp.
+    assert re.search(r"/styles\.css\?v=", index_html)
     assert "Mobile ergonomics pass" in css
     assert "@media (max-width: 860px)" in css
     assert "@media (max-width: 720px)" in css

@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 
@@ -12,10 +13,14 @@ def test_chat_room_delete_ui_is_wired():
     css = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
     chat_route = (ROOT / "routes" / "chat.py").read_text(encoding="utf-8")
 
+    # Asset references — match any cache-bust version so Codex / Claude
+    # bumping the ?v=… string for browser caching doesn't tip these
+    # tests over. The behavior under test is "the file is referenced",
+    # not "the file is referenced at exactly version X".
     assert "/js/20-chat.js?v=20260429-official-chat-protect" in index_html
-    assert "/js/00-core.js?v=20260503-appearance-v2" in index_html
-    assert "/js/90-bootstrap.js?v=20260503-appearance-v2" in index_html
-    assert "/styles.css?v=20260503-appearance-v2" in index_html
+    assert re.search(r"/js/00-core\.js\?v=", index_html)
+    assert re.search(r"/js/90-bootstrap\.js\?v=", index_html)
+    assert re.search(r"/styles\.css\?v=", index_html)
     assert 'id="chat-friend-username"' in index_html
     assert 'id="chat-pending-attachment-list"' in index_html
     assert 'id="chat-attachment-pick-btn"' in index_html
