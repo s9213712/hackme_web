@@ -58,6 +58,9 @@ def test_video_platform_accepts_audio_media_in_ui():
     assert 'getRememberedVideoShareFragment' in videos_js
     assert 'mode === "e2ee_stream_v2"' in videos_js
     assert 'mode === "e2ee_direct"' in videos_js
+    assert 'setVideoPlaybackActionButton(' in videos_js
+    assert '開始 E2EE 播放' in videos_js
+    assert '未按下播放前，不會主動要求 E2EE 密碼。' in videos_js
     assert '完整分享連結' in videos_js
     assert '伺服器無法復原，只能重新產生分享' in videos_js
     assert '重新產生此分享時，瀏覽器會要求發布者再次輸入原始 E2EE 密碼' in videos_js
@@ -92,6 +95,7 @@ def test_video_platform_uses_separate_watch_view_and_mobile_layout():
     assert 'videoShareStateSummary' in videos_js
     assert 'saveVideoShareSettings' in videos_js
     assert '已改用直接串流' in videos_js
+    assert 'id="video-playback-action"' in videos_js
     assert "@media (max-width: 720px)" in styles
     assert "#module-videos .admin-tools" in styles
     assert ".video-watch-topbar" in styles

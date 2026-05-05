@@ -229,6 +229,7 @@ PYTHONPATH=. python3 scripts/trading_backtest_20000_probe.py --include-route --j
   - `live-price` 與 `root /trading/price-fusion-status` 是否另外回 `connected / fallback / last_update_at / exclusion_reason / transport_state`
   - `reference-prices` 是否明確標成 `price_type=reference`，且帶 `price_context`
   - 目前價格、現貨估值、現貨盈虧、融資維持率、強平價、下單預估是否都有清楚標示自己用的是 `reference price` 還是 `risk-grade price`
+  - 當 `risk-grade price` 不可用時，前台是否明確顯示「目前風控級價格不可用，已暫停市價單與高風險交易；限價單仍可使用」，而不是誤導成整個市場沒價格
   - 高風險價格降級時，市價單 / 融資估算 / bot 風控是否都顯示人性化阻擋訊息，而不是靜默沿用 generic market price
   - Binance / OKX / Coinbase / Kraken websocket provider input 斷線時，是否自動退回 HTTP polling，且 UI 顯示 `fallback / stale / degraded` 而不是假裝正常
   - 單一 provider 異常或只剩單源 degraded 參考價時，`risk-grade price` 是否維持 blocked，不得拿單源 WS/HTTP 資料偷偷通過風控
@@ -242,6 +243,10 @@ PYTHONPATH=. python3 scripts/trading_backtest_20000_probe.py --include-route --j
   - market registry audit log 是否保留 before / after，且只有 root 可改
   - seeded 市場是否回傳 `registry_source=catalog_seed`、`seed_version` 與 `seed_sync_status`
   - root 修改 seeded 市場後，後台是否明確顯示 `drifted`，而不是把 DB / catalog 差異藏起來
+- 若本次改到 Server Mode v2 / production gate，至少補：
+  - unsigned / hash mismatch / signature mismatch 的 production report upload 是否被拒絕
+  - `production_requirements()` 是否把 `trust_level != verified` 或 `signature_valid = false` 的報告列為 failed
+  - `internal_test` login token 是否只能給綁定帳號使用，其他帳號拿到同一顆 token 仍應被拒絕
 - 若本次改到交易圖表 / 技術指標，至少補：
   - 參考 K 線圖的 checkbox 是否有同步接進前端事件，不是只有 HTML 多了控制項
   - `MA10 / MA30 / EMA50 / RSI14 / KD(9,3,3)` 是否真的會進入 chart render，而不是只出現在 legend

@@ -18,7 +18,7 @@ Related technical references:
 
 ## Release and Schema
 
-- Release ID: `2026.05.05-138`
+- Release ID: `2026.05.05-139`
 - Schema version: `30`
 - Release ID source: `services/release_info.py`
 - Runtime version endpoint: `GET /api/version`
@@ -76,9 +76,14 @@ Server Mode v2 note:
 - launch-check `doc` shortcuts now open via a root-only in-app document reader
   backed by `/api/root/launch-check/doc`, so repo-relative playbook/test links
   no longer 404 inside the running app.
-- Each production gate report card now includes an upload entry point that
-  accepts pasted or file-loaded JSON and posts it to
-  `/api/root/production-report/upload`, then refreshes the B-zone status.
+- Each production gate report card now includes an upload entry point, but the
+  upload is no longer trust-blind: root must provide `raw_report`,
+  `sha256 report_hash`, `hmac_sha256 signature`, and `key_version`; the server
+  recomputes the hash and verifies the signature before the report can satisfy
+  production gate requirements.
+- `internal_test` login token is no longer a shared singleton gate. Root must
+  bind it to one target account at issuance time, and only that account may use
+  the token at `/api/login` while the server is in `internal_test`.
 - `security/server_mode_v2_full_smoke.py` is the isolated runtime harness that
   runs the six-script bundle and then verifies shadow-table activity did not
   leak into production wallet / ledger tables.
@@ -215,9 +220,9 @@ Cloud Drive preview behavior also changed in this release train:
   newline-joined text block
 - plain / `server_encrypted` PDFs prefer the native `/preview/content` viewer
   path so browsers receive the correct `application/pdf` response directly
-- strict `e2ee` PDFs still decrypt in the browser, but now render through
-  `object/embed` plus an explicit new-tab fallback instead of relying on a
-  fragile single iframe path
+- strict `e2ee` PDFs still decrypt in the browser, but now render through an
+  iframe plus an explicit new-tab fallback instead of relying on CSP-blocked
+  object/embed behavior
 - E2EE session passphrase caching now tries the most recently successful
   passphrase from the current login session before prompting again for the next
   file

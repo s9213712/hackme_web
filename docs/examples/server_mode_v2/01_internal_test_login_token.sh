@@ -3,9 +3,9 @@
 # ---------------------------------------------------------------------------
 # 教學：internal_test login token 完整生命週期
 #
-#   internal_test login token 是 "門票"：
+#   internal_test login token 是「綁定單一帳號的登入門票」：
 #   - 由 root 產生 / 輪換
-#   - 全站只有一個（singleton；存在 system_settings.internal_test_login_token_hash）
+#   - 只綁定一個受邀帳號（hash / expires / bound user 存在 system_settings）
 #   - 只在 server 處於 `internal_test` mode 時，會在 /api/login 額外驗證
 #   - 在其他 mode 下 server 不會檢查它（也不會用它授權任何事）
 #
@@ -15,8 +15,9 @@
 #     2. 用 root 帳號登入 + 完成 forced password change
 #     3. 把 server 切到 `internal_test` mode（confirm phrase: SWITCH_TO_INTERNAL_TEST）
 #     4. POST /api/admin/access-controls/internal-test-token
+#        （帶 target_username 或 target_user_id）
 #        → 回 issued plaintext token；server 只存 hash
-#     5. 安全把 token 交給被邀請的 tester（out-of-band；本腳本印 fingerprint，不印 raw）
+#     5. 安全把 token 交給指定 tester（out-of-band；本腳本印 fingerprint，不印 raw）
 #   TESTER
 #     6. 用 tester 帳號 + 平常密碼 + internal_test_token 登入
 #     7. 確認 /api/me 看得到自己 session
@@ -158,7 +159,7 @@ rotate_resp=$(curl "${CURL_OPTS[@]}" -b "$ROOT_JAR" \
   -H "Content-Type: application/json" \
   -H "X-CSRF-Token: $csrf" \
   -X POST "$BASE_URL/api/admin/access-controls/internal-test-token" \
-  -d "{\"confirm\":\"ROTATE_INTERNAL_TEST_TOKEN\",\"ttl_minutes\":60,\"csrf_token\":\"$csrf\"}")
+  -d "{\"confirm\":\"ROTATE_INTERNAL_TEST_TOKEN\",\"ttl_minutes\":60,\"target_username\":\"$TESTER_USER\",\"csrf_token\":\"$csrf\"}")
 issued=$(printf '%s' "$rotate_resp" | jq -r '.token // .issued_token // empty')
 [ -n "$issued" ] || fail "rotate did not return a token: $rotate_resp"
 say "  rotation OK"

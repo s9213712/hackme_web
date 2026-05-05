@@ -19,8 +19,8 @@ This folder contains runnable **教學範例** for the two distinct token classe
 │   {"internal_test_token": "..."}       │   X-Tester-Token: ...                     │
 │                                        │   (Authorization: Bearer ... also works)  │
 │                                        │                                           │
-│ One per deployment (singleton).        │ One per tester (multi-issued).            │
-│ Rotated by root.                       │ Created/revoked by root via               │
+│ One bound account per issued token.    │ One per tester (multi-issued).            │
+│ Rotated by root for a specific tester. │ Created/revoked by root via               │
 │                                        │   /api/root/tester-token/*                │
 │                                        │                                           │
 │ Only verified while                    │ Only valid in `test` / `internal_test`    │
@@ -91,7 +91,7 @@ Pre-Phase 0 of [`SERVER_MODE_V2_IMPLEMENTATION_PLAN.md`](../../SERVER_MODE_V2_IM
 These are properties of the **server**, not bugs in the tutorials. The scripts now handle them, but operators should be aware:
 
 1. **`internal_test` mode runs with `browser_only_mode_enabled=true`.** Plain `curl` without a browser-marker User-Agent gets blocked at `/api/*`. The scripts add `User-Agent: Mozilla/5.0 ... HackmeWebTutorialClient/1.0` so the browser-only middleware lets them through. (See `services/access_controls.py:BROWSER_UA_MARKERS`.)
-2. **`POST /api/admin/access-controls/internal-test-token` requires `confirm:"ROTATE_INTERNAL_TEST_TOKEN"`** in the body, and **`POST /api/root/server-mode/checkpoint` requires `target_mode`**. Missing those gives a 400 with no useful hint — both scripts now send them.
+2. **`POST /api/admin/access-controls/internal-test-token` requires `confirm:"ROTATE_INTERNAL_TEST_TOKEN"` plus `target_username` or `target_user_id`** in the body, and **`POST /api/root/server-mode/checkpoint` requires `target_mode`**. Missing those gives a 400 with no useful hint — the scripts now send them.
 3. **`POST /api/root/tester-token/create` does not accept `ttl_minutes`.** The expiration parameter is `expires_at` (ISO 8601). The server stores and compares it as **naive local time** via `datetime.now().isoformat()`; passing a UTC `Z` timestamp from a TW (`UTC+8`) shell makes the token look already-expired and silently breaks every subsequent tester call. Script 02 now generates the timestamp with `datetime.now() + timedelta(minutes=60)` (naive local) to match the server's comparison.
 4. **Default-account `must_change_password=1`.** A freshly-bootstrapped `test` user is flagged for forced password change on first login. The middleware blocks `/api/tester/*` until the password is changed — meaning the tutorial's `test` account would be unusable for shadow-API demos out of the box. The smoke harness clears this flag in DB before running script 02. The tutorial assumes the operator has already handled the forced-change step out of band.
 5. **`/api/root/tester-token/list` JSON shape**: the smoke confirmed `label` is among the returned fields, but jq's bare-object shorthand `{label}` collides with jq's reserved `label $name` syntax. Script 02 now uses `{"label": .label}` explicitly.

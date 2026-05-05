@@ -21,8 +21,10 @@ the gate exists to prevent.
 """
 
 import json
+import os
 import sqlite3
 import tempfile
+import hashlib
 from datetime import datetime
 from pathlib import Path
 
@@ -32,6 +34,9 @@ from services.snapshots import (
     PRODUCTION_REQUIRED_REPORT_TYPES,
     ServerModeService,
     SnapshotService,
+    _canonical_json_text,
+    _hmac_sha256,
+    _production_report_signature_payload,
     ensure_snapshot_schema,
 )
 
@@ -98,14 +103,42 @@ def _insert_report(db_path, report_type, *, _pass=True, critical=0, high=0, repo
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     now = datetime.now().isoformat()
-    rh = report_hash if report_hash is not None else f"hash_{report_type}"
+    raw_report = {
+        "report_type": report_type,
+        "target_commit": target_commit,
+        "status": "pass" if _pass else "fail",
+        "critical_findings_count": int(critical),
+        "high_findings_count": int(high),
+    }
+    raw_report_json = _canonical_json_text(raw_report)
+    rh = report_hash if report_hash is not None else f"sha256:{hashlib.sha256(raw_report_json.encode('utf-8')).hexdigest()}"
+    key = os.environ.setdefault("SERVER_MODE_REPORT_HMAC_KEY", "pytest-production-report-key")
+    key_version = os.environ.setdefault("SERVER_MODE_REPORT_HMAC_KEY_VERSION", "pytest-v1")
+    signature_payload = {
+        "report_type": report_type,
+        "report_hash": rh,
+        "target_commit": target_commit,
+        "target_branch": "test-branch",
+        "server_mode": "test",
+        "test_result": "pass" if _pass else "fail",
+        "pass": 1 if _pass else 0,
+        "critical_findings_count": int(critical),
+        "high_findings_count": int(high),
+        "unresolved_findings_json": "[]",
+        "tester": "pytest",
+        "raw_report_json": raw_report_json,
+        "report_source": "pytest_fixture",
+        "key_version": key_version,
+    }
+    signature = f"hmac_sha256:{_hmac_sha256(key, _production_report_signature_payload(signature_payload))}"
     conn.execute(
         """
         INSERT INTO production_entry_reports
         (id, report_type, report_hash, target_commit, target_branch, server_mode,
          test_result, pass, critical_findings_count, high_findings_count,
-         unresolved_findings_json, tester, signature, created_at)
-        VALUES (?, ?, ?, ?, 'test-branch', 'test', ?, ?, ?, ?, '[]', 'pytest', '', ?)
+         unresolved_findings_json, tester, signature, raw_report_json, report_source,
+         trust_level, key_version, verified_at, created_at)
+        VALUES (?, ?, ?, ?, 'test-branch', 'test', ?, ?, ?, ?, '[]', 'pytest', ?, ?, 'pytest_fixture', 'verified', ?, ?, ?)
         """,
         (
             f"rep_{report_type}",
@@ -116,6 +149,10 @@ def _insert_report(db_path, report_type, *, _pass=True, critical=0, high=0, repo
             1 if _pass else 0,
             int(critical),
             int(high),
+            signature,
+            raw_report_json,
+            key_version,
+            now,
             now,
         ),
     )

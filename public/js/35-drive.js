@@ -1734,15 +1734,12 @@ function renderDrivePdfPreview(url, title, { encrypted = false } = {}) {
     : "若瀏覽器內建 PDF 檢視器未載入，請改用新分頁開啟或直接下載。";
   return `
     <div class="drive-pdf-preview">
-      <object data="${url}" type="application/pdf" aria-label="${safeTitle}">
-        <embed src="${url}" type="application/pdf" />
-        <div class="drive-empty">
-          ${message}
-          <div class="drive-file-actions" style="justify-content:flex-start;">
-            <a class="btn btn-primary" href="${url}" target="_blank" rel="noopener">在新分頁開啟 PDF</a>
-          </div>
-        </div>
-      </object>
+      <iframe src="${url}" title="${safeTitle}" loading="lazy"></iframe>
+      <div class="drive-card-sub">${message}</div>
+      <div class="drive-file-actions drive-pdf-preview-actions">
+        <a class="btn btn-primary" href="${url}" target="_blank" rel="noopener">在新分頁開啟 PDF</a>
+        <a class="btn" href="${url}" download>下載 PDF</a>
+      </div>
     </div>
   `;
 }

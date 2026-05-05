@@ -2196,6 +2196,8 @@ def register_system_admin_routes(app, deps):
         if "clear_internal_test_token" in data and data.get("clear_internal_test_token"):
             updates["internal_test_login_token_hash"] = ""
             updates["internal_test_login_token_expires_at"] = ""
+            updates["internal_test_login_token_user_id"] = 0
+            updates["internal_test_login_token_username"] = ""
         if not updates:
             return json_resp({"ok":False,"msg":"沒有可寫入的存取控制設定"}), 400
         saved = save_settings(updates)
@@ -2264,12 +2266,36 @@ def register_system_admin_routes(app, deps):
             ttl_minutes = max(5, min(int(ttl_minutes), 30 * 24 * 60))
         except Exception:
             ttl_minutes = 24 * 60
+        target_user_id = data.get("target_user_id")
+        target_username = str(data.get("target_username") or "").strip()
+        resolved_user = None
+        conn = get_db()
+        try:
+            if target_user_id not in (None, ""):
+                try:
+                    resolved_user = conn.execute(
+                        "SELECT id, username FROM users WHERE id=? LIMIT 1",
+                        (int(target_user_id),),
+                    ).fetchone()
+                except Exception:
+                    resolved_user = None
+            if not resolved_user and target_username:
+                resolved_user = conn.execute(
+                    "SELECT id, username FROM users WHERE LOWER(username)=LOWER(?) LIMIT 1",
+                    (target_username,),
+                ).fetchone()
+        finally:
+            conn.close()
+        if not resolved_user:
+            return json_resp({"ok":False,"msg":"請指定存在的綁定帳號（target_user_id 或 target_username）"}), 400
         issued_value = generate_internal_test_token()
         expires_at = maintenance_bypass_expires_at(ttl_minutes)
         before_settings = get_system_settings()
         saved = save_settings({
             "internal_test_login_token_hash": hash_internal_test_token(issued_value),
             "internal_test_login_token_expires_at": expires_at,
+            "internal_test_login_token_user_id": int(resolved_user["id"]),
+            "internal_test_login_token_username": str(resolved_user["username"] or "").strip(),
         })
         _audit_settings_changed(
             "INTERNAL_TEST_TOKEN_ROTATED",
@@ -2277,7 +2303,7 @@ def register_system_admin_routes(app, deps):
             before_settings,
             saved,
             scope="internal_test_token",
-            extra={"ttl_minutes": ttl_minutes, "expires_at": expires_at},
+            extra={"ttl_minutes": ttl_minutes, "expires_at": expires_at, "target_user_id": int(resolved_user["id"]), "target_username": str(resolved_user["username"] or "").strip()},
         )
         return json_resp({
             "ok": True,
@@ -2285,6 +2311,8 @@ def register_system_admin_routes(app, deps):
             "token": issued_value,
             "expires_at": expires_at,
             "ttl_minutes": ttl_minutes,
+            "target_user_id": int(resolved_user["id"]),
+            "target_username": str(resolved_user["username"] or "").strip(),
             "access_controls": access_control_settings_payload(get_system_settings()),
         })
 
@@ -2747,6 +2775,9 @@ def register_system_admin_routes(app, deps):
             unresolved_findings=data.get("unresolved_findings") or [],
             tester=data.get("tester") or actor["username"],
             signature=data.get("signature") or "",
+            raw_report=data.get("raw_report"),
+            key_version=data.get("key_version") or "",
+            report_source=data.get("report_source") or "manual_signed_upload",
         )
         return json_resp(result), (200 if result.get("ok") else 400)
 
@@ -2872,6 +2903,29 @@ def register_system_admin_routes(app, deps):
         )
         return json_resp(result), (200 if result.get("ok") else 403)
 
+    @app.route("/api/tester/shadow-role", methods=["GET"])
+    def tester_shadow_role_get():
+        if not server_mode_service or not hasattr(server_mode_service, "tester_shadow_state"):
+            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+        actor, error = _require_tester_actor()
+        if error:
+            return error
+        tester_header_value = _tester_token_from_request()
+        state = server_mode_service.tester_shadow_state(
+            actor=actor,
+            **{"token": tester_header_value},
+            route=request.path,
+            ip_address=get_client_ip(),
+        )
+        if not state.get("ok"):
+            return json_resp(state), 403
+        return json_resp({
+            "ok": True,
+            "mode": state.get("mode"),
+            "token": state.get("token"),
+            "shadow_role": state.get("shadow_role"),
+        })
+
     @app.route("/api/tester/shadow-role", methods=["POST"])
     @require_csrf
     def tester_shadow_role():
@@ -2895,6 +2949,29 @@ def register_system_admin_routes(app, deps):
             ip_address=get_client_ip(),
         )
         return json_resp(result), (200 if result.get("ok") else 403)
+
+    @app.route("/api/tester/shadow-wallet", methods=["GET"])
+    def tester_shadow_wallet_get():
+        if not server_mode_service or not hasattr(server_mode_service, "tester_shadow_state"):
+            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+        actor, error = _require_tester_actor()
+        if error:
+            return error
+        tester_header_value = _tester_token_from_request()
+        state = server_mode_service.tester_shadow_state(
+            actor=actor,
+            **{"token": tester_header_value},
+            route=request.path,
+            ip_address=get_client_ip(),
+        )
+        if not state.get("ok"):
+            return json_resp(state), 403
+        return json_resp({
+            "ok": True,
+            "mode": state.get("mode"),
+            "token": state.get("token"),
+            "shadow_wallet": state.get("shadow_wallet"),
+        })
 
     @app.route("/api/tester/shadow-wallet", methods=["POST"])
     @require_csrf

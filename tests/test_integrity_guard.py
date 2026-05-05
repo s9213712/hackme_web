@@ -1,5 +1,6 @@
 import os
 import sqlite3
+import hashlib
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -7,7 +8,14 @@ from flask import Flask, jsonify, make_response
 
 from routes.system_admin import register_system_admin_routes
 from services.integrity_guard import CONFIRM_APPROVE, IntegrityGuard, ensure_integrity_schema
-from services.snapshots import PRODUCTION_REQUIRED_REPORT_TYPES, ServerModeService, ensure_snapshot_schema
+from services.snapshots import (
+    PRODUCTION_REQUIRED_REPORT_TYPES,
+    ServerModeService,
+    _canonical_json_text,
+    _hmac_sha256,
+    _production_report_signature_payload,
+    ensure_snapshot_schema,
+)
 
 
 def _json_resp(payload, status=200):
@@ -155,15 +163,38 @@ def test_production_mode_high_risk_integrity_finding_enters_incident_lockdown(tm
         conn.row_factory = sqlite3.Row
         ensure_snapshot_schema(conn)
         now = datetime.now().isoformat()
+        key = os.environ.setdefault("SERVER_MODE_REPORT_HMAC_KEY", "pytest-production-report-key")
+        key_version = os.environ.setdefault("SERVER_MODE_REPORT_HMAC_KEY_VERSION", "pytest-v1")
         for report_type in PRODUCTION_REQUIRED_REPORT_TYPES:
+            raw_report = {"report_type": report_type, "status": "pass", "summary": "fixture"}
+            raw_report_json = _canonical_json_text(raw_report)
+            report_hash = f"sha256:{hashlib.sha256(raw_report_json.encode('utf-8')).hexdigest()}"
+            signature_payload = {
+                "report_type": report_type,
+                "report_hash": report_hash,
+                "target_commit": "commit",
+                "target_branch": "branch",
+                "server_mode": "test",
+                "test_result": "pass",
+                "pass": 1,
+                "critical_findings_count": 0,
+                "high_findings_count": 0,
+                "unresolved_findings_json": "[]",
+                "tester": "pytest",
+                "raw_report_json": raw_report_json,
+                "report_source": "pytest_fixture",
+                "key_version": key_version,
+            }
+            signature = f"hmac_sha256:{_hmac_sha256(key, _production_report_signature_payload(signature_payload))}"
             conn.execute(
                 """
                 INSERT OR IGNORE INTO production_entry_reports
                 (id, report_type, report_hash, target_commit, target_branch, server_mode, test_result,
-                 pass, critical_findings_count, high_findings_count, unresolved_findings_json, tester, signature, created_at)
-                VALUES (?, ?, ?, 'commit', 'branch', 'test', 'pass', 1, 0, 0, '[]', 'pytest', '', ?)
+                 pass, critical_findings_count, high_findings_count, unresolved_findings_json, tester, signature,
+                 raw_report_json, report_source, trust_level, key_version, verified_at, created_at)
+                VALUES (?, ?, ?, 'commit', 'branch', 'test', 'pass', 1, 0, 0, '[]', 'pytest', ?, ?, 'pytest_fixture', 'verified', ?, ?, ?)
                 """,
-                (f"rep_{report_type}", report_type, f"hash_{report_type}", now),
+                (f"rep_{report_type}", report_type, report_hash, signature, raw_report_json, key_version, now, now),
             )
         conn.commit()
         return conn

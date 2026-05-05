@@ -2785,6 +2785,20 @@
       min-height: 320px;
     }
 
+    .drive-pdf-preview {
+      display: grid;
+      gap: .65rem;
+    }
+
+    .drive-pdf-preview iframe {
+      min-height: 520px;
+      height: min(72vh, 820px);
+    }
+
+    .drive-pdf-preview-actions {
+      justify-content: flex-start;
+    }
+
     .album-full-preview-body video,
     .album-full-preview-body audio,
     .album-full-preview-body object,

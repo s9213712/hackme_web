@@ -14,7 +14,8 @@
 | 必填欄位 | 規則 |
 |---|---|
 | `report_type` | 必須 ∈ §1 13 個白名單 |
-| `report_hash` | 格式 `sha256:<64 hex>`（artifact 檔案的 sha256） |
+| `raw_report` | 原始報告 JSON；伺服器會對它做 canonical JSON 後重算 hash |
+| `report_hash` | 格式 `sha256:<64 hex>`，且必須等於 `sha256(canonical_json(raw_report))` |
 | `target_commit` | 受測 commit hash（git log 得） |
 | `target_branch` | 受測 branch 名 |
 | `server_mode` | 受測時 server 在哪個 mode（多數 = `dev_ready` 或 `test`） |
@@ -24,9 +25,11 @@
 | `high_findings_count` | 必須 `0` |
 | `unresolved_findings` | 必須空陣列 |
 | `tester` | 跑測試的人員 / 系統 ID |
-| `signature` | artifact 的簽章（HMAC 或 GPG，視內部 policy） |
+| `signature` | 必須是 `hmac_sha256:<hex>`，伺服器會用 production report key 驗簽 |
+| `key_version` | 對應簽章用的 key version |
 
 **Replay 防護**：同 `(report_type, report_hash, target_commit)` 三元組已存在 → reject，避免複用過期 artifact。
+**可信驗證**：缺少 `raw_report`、`report_hash` 與 `raw_report` 不一致、`signature` 驗證失敗、`key_version` 不符，任何一項都不會被 production gate 接受。
 
 **Commit 對齊**：13 份 report 的 `target_commit` 必須**全部相同**才算「對同一個 commit 都通過」。任一份 commit hash 不一致 → 視為過期，重跑該份。
 

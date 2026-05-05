@@ -36,6 +36,7 @@ let tradingBotChartOverlay = null;
 const tradingGridExpandedBots = new Set();
 const TRADING_WORKFLOW_STORAGE_KEY = "hackme_trading_workflow_json";
 const TRADING_LIVE_PRICE_REFRESH_MS = 2000;
+const TRADING_RISK_GRADE_UNAVAILABLE_MESSAGE = "目前風控級價格不可用，已暫停市價單與高風險交易；限價單仍可使用";
 
 function tradingRequestId(prefix = "trading") {
   if (typeof economyRequestId === "function") return economyRequestId(prefix);
@@ -273,7 +274,7 @@ function renderTradingCurrentPrice(market, options = {}) {
       if (excludedSources.length) notes.push(`排除 ${excludedSources.join(", ")}`);
       if (transportState.fallback) notes.push("WebSocket provider input 已退回 HTTP polling");
       if (transportState.stale) notes.push("provider input stale");
-      healthEl.textContent = `🟡 reference 價格保守模式 · 風控級價格不可用${notes.length ? ` · ${notes.join(" · ")}` : ""}`;
+      healthEl.textContent = `🟡 ${TRADING_RISK_GRADE_UNAVAILABLE_MESSAGE}${notes.length ? ` · ${notes.join(" · ")}` : ""}`;
       healthEl.classList.add("warning");
     } else if (health === "fallback" || health === "degraded" || excludedSources.length || riskContext?.risk_grade_usable === false) {
       const notes = [];
@@ -283,7 +284,7 @@ function renderTradingCurrentPrice(market, options = {}) {
       if (!fallbackReason && !warnings.length && riskContext?.warning_message) notes.push(riskContext.warning_message);
       if (transportState.fallback) notes.push("WebSocket provider input 已退回 HTTP polling");
       if (transportState.stale) notes.push("provider input stale");
-      if (riskContext?.risk_grade_usable === false && !riskContext?.high_risk_blocked) notes.push("目前只可作為 reference price，不可作為風控級價格");
+      if (riskContext?.risk_grade_usable === false && !riskContext?.high_risk_blocked) notes.push(TRADING_RISK_GRADE_UNAVAILABLE_MESSAGE);
       if (defaultedMarket) notes.push(`未指定市場，已改用 ${tradingDisplaySymbol(symbol)}`);
       healthEl.textContent = `🟡 reference 價格降級${notes.length ? ` · ${notes.join(" · ")}` : ""}`;
       healthEl.classList.add("warning");
@@ -560,13 +561,13 @@ function tradingOrderDraftEstimate() {
     };
   }
   if (!price || price <= 0) {
-    return { ok: false, blocking: true, message: orderType === "limit" ? "請輸入有效限價" : "目前市場價格不可用，暫停下單" };
+    return { ok: false, blocking: true, message: orderType === "limit" ? "請輸入有效限價" : TRADING_RISK_GRADE_UNAVAILABLE_MESSAGE };
   }
   if (orderType !== "limit" && (riskContext?.high_risk_blocked || riskContext?.risk_grade_usable === false)) {
     return {
       ok: false,
       blocking: true,
-      message: `市價單暫停：${riskContext.warning_message || "風控級價格目前不可用"} · ${tradingPriceContextSummary(riskContext, { compact: true })}`,
+      message: `${TRADING_RISK_GRADE_UNAVAILABLE_MESSAGE} · ${riskContext.warning_message || "風控級價格目前不可用"} · ${tradingPriceContextSummary(riskContext, { compact: true })}`,
     };
   }
   let quantity = inputValue;
@@ -2059,7 +2060,7 @@ function updateTradingMarginEstimate() {
   }
   let blocking = false;
   if (riskContext?.high_risk_blocked || riskContext?.risk_grade_usable === false) {
-    const message = `${typeLabel} 暫停：${riskContext.warning_message || "風控級價格目前不可用"} · ${tradingPriceContextSummary(riskContext, { compact: true })}`;
+    const message = `${TRADING_RISK_GRADE_UNAVAILABLE_MESSAGE} · ${typeLabel} 暫停：${riskContext.warning_message || "風控級價格目前不可用"} · ${tradingPriceContextSummary(riskContext, { compact: true })}`;
     blocking = true;
     estimate.textContent = message;
     estimate.style.color = "#ff6b7a";

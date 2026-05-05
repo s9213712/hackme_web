@@ -21,6 +21,8 @@ DEFAULT_SETTINGS = {
     "maintenance_bypass_token_expires_at": "",
     "internal_test_login_token_hash": "",
     "internal_test_login_token_expires_at": "",
+    "internal_test_login_token_user_id": 0,
+    "internal_test_login_token_username": "",
     "server_listen_host": "",
     "server_listen_port": 0,
     "server_ssl_enabled": True,

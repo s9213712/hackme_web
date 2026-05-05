@@ -1,13 +1,22 @@
 import io
 import json
+import os
 import sqlite3
+import hashlib
 from datetime import datetime
 from pathlib import Path
 
 from flask import Flask, jsonify, make_response
 
 from routes.system_admin import register_system_admin_routes, restart_launcher_code
-from services.snapshots import ServerModeService, SnapshotService, ensure_snapshot_schema
+from services.snapshots import (
+    ServerModeService,
+    SnapshotService,
+    _canonical_json_text,
+    _hmac_sha256,
+    _production_report_signature_payload,
+    ensure_snapshot_schema,
+)
 from services.upload_security import ensure_upload_security_schema
 
 
@@ -446,18 +455,167 @@ def _insert_passing_production_reports(db_path):
     conn = _db(db_path)
     ensure_snapshot_schema(conn)
     now = datetime.now().isoformat()
+    key = os.environ.setdefault("SERVER_MODE_REPORT_HMAC_KEY", "pytest-production-report-key")
+    key_version = os.environ.setdefault("SERVER_MODE_REPORT_HMAC_KEY_VERSION", "pytest-v1")
     for report_type in PRODUCTION_REQUIRED_REPORT_TYPES:
+        raw_report = {"report_type": report_type, "status": "pass", "summary": "fixture"}
+        raw_report_json = _canonical_json_text(raw_report)
+        report_hash = f"sha256:{hashlib.sha256(raw_report_json.encode('utf-8')).hexdigest()}"
+        signature_payload = {
+            "report_type": report_type,
+            "report_hash": report_hash,
+            "target_commit": "test-commit",
+            "target_branch": "test-branch",
+            "server_mode": "test",
+            "test_result": "pass",
+            "pass": 1,
+            "critical_findings_count": 0,
+            "high_findings_count": 0,
+            "unresolved_findings_json": "[]",
+            "tester": "pytest",
+            "raw_report_json": raw_report_json,
+            "report_source": "pytest_fixture",
+            "key_version": key_version,
+        }
+        signature = f"hmac_sha256:{_hmac_sha256(key, _production_report_signature_payload(signature_payload))}"
         conn.execute(
             """
             INSERT INTO production_entry_reports
             (id, report_type, report_hash, target_commit, target_branch, server_mode, test_result,
-             pass, critical_findings_count, high_findings_count, unresolved_findings_json, tester, signature, created_at)
-            VALUES (?, ?, ?, 'test-commit', 'test-branch', 'test', 'pass', 1, 0, 0, '[]', 'pytest', '', ?)
+             pass, critical_findings_count, high_findings_count, unresolved_findings_json, tester, signature,
+             raw_report_json, report_source, trust_level, key_version, verified_at, created_at)
+            VALUES (?, ?, ?, 'test-commit', 'test-branch', 'test', 'pass', 1, 0, 0, '[]', 'pytest', ?, ?, 'pytest_fixture', 'verified', ?, ?, ?)
             """,
-            (f"rep_{report_type}", report_type, f"hash_{report_type}", now),
+            (f"rep_{report_type}", report_type, report_hash, signature, raw_report_json, key_version, now, now),
         )
     conn.commit()
     conn.close()
+
+
+def test_production_report_upload_requires_signed_raw_report(tmp_path):
+    audit_log = []
+    service, db_path, uploads = _service(tmp_path, audit_log)
+    mode = ServerModeService(snapshot_service=service, get_db=lambda: _db(db_path), audit=lambda *args, **kwargs: audit_log.append((args, kwargs)))
+    actor = {"id": 1, "username": "root"}
+
+    missing_raw = mode.upload_production_report(
+        actor=actor,
+        report_type="stress",
+        report_hash="sha256:" + ("0" * 64),
+        target_commit="abc123",
+        target_branch="main",
+        server_mode="preprod",
+        test_result="pass",
+        passed=True,
+        critical_findings_count=0,
+        high_findings_count=0,
+        unresolved_findings=[],
+        tester="root",
+        signature="hmac_sha256:deadbeef",
+    )
+    assert missing_raw["ok"] is False
+    assert missing_raw["reason"] == "missing_raw_report"
+
+
+def test_production_report_upload_verifies_signature_and_hash(tmp_path):
+    audit_log = []
+    service, db_path, uploads = _service(tmp_path, audit_log)
+    mode = ServerModeService(snapshot_service=service, get_db=lambda: _db(db_path), audit=lambda *args, **kwargs: audit_log.append((args, kwargs)))
+    actor = {"id": 1, "username": "root"}
+    raw_report = {"suite": "stress", "summary": "all pass", "checks": [{"name": "rate_limit", "ok": True}]}
+    attestation = mode._prepare_production_report_attestation(
+        report_type="stress",
+        raw_report=raw_report,
+        target_commit="abc123",
+        target_branch="main",
+        server_mode="preprod",
+        test_result="pass",
+        passed=True,
+        critical_findings_count=0,
+        high_findings_count=0,
+        unresolved_findings=[],
+        tester="root",
+    )
+    ok = mode.upload_production_report(
+        actor=actor,
+        report_type="stress",
+        report_hash=attestation["report_hash"],
+        target_commit="abc123",
+        target_branch="main",
+        server_mode="preprod",
+        test_result="pass",
+        passed=True,
+        critical_findings_count=0,
+        high_findings_count=0,
+        unresolved_findings=[],
+        tester="root",
+        signature=attestation["signature"],
+        raw_report=raw_report,
+        key_version=attestation["key_version"],
+    )
+    assert ok["ok"] is True
+    requirements = mode.production_requirements()
+    assert requirements["reports"]["stress"]["signature_valid"] is True
+    assert requirements["reports"]["stress"]["trust_level"] == "verified"
+
+    bad_sig = mode.upload_production_report(
+        actor=actor,
+        report_type="permission",
+        report_hash=attestation["report_hash"],
+        target_commit="abc123",
+        target_branch="main",
+        server_mode="preprod",
+        test_result="pass",
+        passed=True,
+        critical_findings_count=0,
+        high_findings_count=0,
+        unresolved_findings=[],
+        tester="root",
+        signature="hmac_sha256:deadbeef",
+        raw_report=raw_report,
+        key_version=attestation["key_version"],
+    )
+    assert bad_sig["ok"] is False
+    assert "signature" in bad_sig["msg"]
+
+
+def test_production_requirements_fail_when_latest_report_signature_is_tampered(tmp_path):
+    audit_log = []
+    service, db_path, uploads = _service(tmp_path, audit_log)
+    mode = ServerModeService(snapshot_service=service, get_db=lambda: _db(db_path), audit=lambda *args, **kwargs: audit_log.append((args, kwargs)))
+    raw_report = {"suite": "stress", "summary": "all pass"}
+    attestation = mode._prepare_production_report_attestation(
+        report_type="stress",
+        raw_report=raw_report,
+        target_commit="abc123",
+        target_branch="main",
+        server_mode="preprod",
+        test_result="pass",
+        passed=True,
+        critical_findings_count=0,
+        high_findings_count=0,
+        unresolved_findings=[],
+        tester="root",
+    )
+    conn = _db(db_path)
+    ensure_snapshot_schema(conn)
+    now = datetime.now().isoformat()
+    conn.execute(
+        """
+        INSERT INTO production_entry_reports
+        (id, report_type, report_hash, target_commit, target_branch, server_mode, test_result,
+         pass, critical_findings_count, high_findings_count, unresolved_findings_json, tester, signature,
+         raw_report_json, report_source, trust_level, key_version, verified_at, created_at)
+        VALUES (?, 'stress', ?, 'abc123', 'main', 'preprod', 'pass', 1, 0, 0, '[]', 'root', ?, ?, 'manual_signed_upload', 'verified', ?, ?, ?)
+        """,
+        ("rep_stress", attestation["report_hash"], attestation["signature"], attestation["raw_report_json"].replace("all pass", "tampered"), attestation["key_version"], now, now),
+    )
+    conn.commit()
+    conn.close()
+    requirements = mode.production_requirements()
+    assert "stress" in requirements["failed"]
+    assert requirements["reports"]["stress"]["signature_valid"] is False
+    assert requirements["reports"]["stress"]["verification_reason"] in {"report_hash_mismatch", "signature_mismatch"}
 
 
 def test_builtin_security_profiles_refresh_and_close_superweak_controls(tmp_path):
@@ -856,6 +1014,8 @@ class _FakeSnapshotService:
 class _FakeServerModeService:
     def __init__(self):
         self.saved_profiles = []
+        self.shadow_role = None
+        self.shadow_wallet_balance = 0
 
     def get_current_mode(self):
         return {"current_mode": "dev_ready", "previous_mode": None, "active_snapshot_id": None}
@@ -915,13 +1075,30 @@ class _FakeServerModeService:
         return [{"id": "tester_token_test", "tester_user_id": 2, "revoked_at": None}]
 
     def tester_shadow_state(self, **kwargs):
-        return {"ok": True, "shadow_wallet": {"balance_points": 0}, "shadow_role": None}
+        role_payload = None
+        if self.shadow_role:
+            role_payload = {"tester_user_id": 2, "shadow_role": self.shadow_role, "original_role": "user"}
+        return {
+            "ok": True,
+            "mode": "test",
+            "token": {
+                "id": "tester_token_test",
+                "expires_at": "2026-05-03T00:00:00",
+                "can_modify_own_role": True,
+                "can_modify_own_points": True,
+                "can_run_security_tests": False,
+            },
+            "shadow_wallet": {"tester_user_id": 2, "balance_points": self.shadow_wallet_balance},
+            "shadow_role": role_payload,
+        }
 
     def set_tester_shadow_role(self, **kwargs):
-        return {"ok": True, "shadow_role": kwargs.get("shadow_role")}
+        self.shadow_role = kwargs.get("shadow_role")
+        return {"ok": True, "shadow_role": self.shadow_role}
 
     def adjust_tester_shadow_wallet(self, **kwargs):
-        return {"ok": True, "balance_points": int(kwargs.get("delta_points") or 0), "formal_points_chain_changed": False}
+        self.shadow_wallet_balance += int(kwargs.get("delta_points") or 0)
+        return {"ok": True, "balance_points": self.shadow_wallet_balance, "formal_points_chain_changed": False}
 
 
 def _build_admin_app(actor_box, snapshot_service, restart_calls=None):
@@ -1146,11 +1323,23 @@ def test_server_mode_v2_root_api_is_root_only_and_exposes_requirements():
     actor_box["actor"] = {"id": 2, "username": "test", "role": "user"}
     shadow_state = client.get("/api/tester/shadow-state", headers={"X-Tester-Token": "hmt_test"})
     assert shadow_state.status_code == 200
+    shadow_role_read = client.get("/api/tester/shadow-role", headers={"X-Tester-Token": "hmt_test"})
+    assert shadow_role_read.status_code == 200
+    assert shadow_role_read.get_json()["ok"] is True
+    shadow_wallet_read = client.get("/api/tester/shadow-wallet", headers={"X-Tester-Token": "hmt_test"})
+    assert shadow_wallet_read.status_code == 200
+    assert shadow_wallet_read.get_json()["ok"] is True
     shadow_role = client.post("/api/tester/shadow-role", json={"role": "manager"}, headers={"X-Tester-Token": "hmt_test"})
     assert shadow_role.status_code == 200
     shadow_wallet = client.post("/api/tester/shadow-wallet", json={"delta_points": 10}, headers={"X-Tester-Token": "hmt_test"})
     assert shadow_wallet.status_code == 200
     assert shadow_wallet.get_json()["formal_points_chain_changed"] is False
+    shadow_role_after = client.get("/api/tester/shadow-role", headers={"X-Tester-Token": "hmt_test"})
+    assert shadow_role_after.status_code == 200
+    assert shadow_role_after.get_json()["shadow_role"]["shadow_role"] == "manager"
+    shadow_wallet_after = client.get("/api/tester/shadow-wallet", headers={"X-Tester-Token": "hmt_test"})
+    assert shadow_wallet_after.status_code == 200
+    assert shadow_wallet_after.get_json()["shadow_wallet"]["balance_points"] == 10
 
     actor_box["actor"] = {"id": 2, "username": "admin", "role": "manager"}
     denied = client.get("/api/root/server-mode")

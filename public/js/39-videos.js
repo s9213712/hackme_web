@@ -965,6 +965,36 @@ function fallbackVideoPlayerToDirect(player, playback, message, bad = false) {
   setVideoPlaybackStatus(message || "HLS 初始化失敗，已改用直接串流。", bad);
 }
 
+function clearVideoPlaybackAction() {
+  const wrap = $("video-playback-action");
+  if (wrap) wrap.innerHTML = "";
+}
+
+function setVideoPlaybackActionButton(label, onClick, helperText = "") {
+  const wrap = $("video-playback-action");
+  if (!wrap) return;
+  wrap.innerHTML = `
+    <button class="btn btn-primary" type="button" id="video-playback-start-btn">${sanitize(label || "開始播放")}</button>
+    ${helperText ? `<div class="drive-card-sub">${sanitize(helperText)}</div>` : ""}
+  `;
+  const button = $("video-playback-start-btn");
+  if (!button) return;
+  button.addEventListener("click", async () => {
+    if (button.disabled) return;
+    button.disabled = true;
+    try {
+      clearVideoPlaybackAction();
+      await onClick();
+    } catch (err) {
+      const message = err?.message || "影音播放初始化失敗";
+      setVideoPlaybackStatus(message, true);
+      videoMsg(message, false);
+      button.disabled = false;
+      setVideoPlaybackActionButton(label, onClick, helperText);
+    }
+  }, { once: true });
+}
+
 async function attachVideoHlsJsPlayer(player, playback, sessionId) {
   const statusText = "已使用 HLS.js 播放，桌機 Chrome / Firefox / Edge 可穩定播放 HLS；若網路或格式異常會自動退回直接串流。";
   let HlsCtor = null;
@@ -1004,13 +1034,26 @@ async function activateVideoPlaybackMode(video, playback, playbackSource, sessio
   if (!player) return;
   resetVideoPlaybackStatusState();
   if (playback?.mode === "e2ee_stream_v2") {
-    await attachVideoE2eeStreamV2Player(video, playback, sessionId);
+    clearVideoPlaybackAction();
+    setVideoPlaybackStatus("此 strict E2EE 影音會在瀏覽器端解密。按下「開始 E2EE 播放」後才會讀取分享授權或要求密碼。", false);
+    setVideoPlaybackActionButton(
+      "開始 E2EE 播放",
+      () => attachVideoE2eeStreamV2Player(video, playback, sessionId),
+      "未按下播放前，不會主動要求 E2EE 密碼。"
+    );
     return;
   }
   if (playback?.mode === "e2ee_direct") {
-    await hydrateVideoE2eePlayer(video, playback, sessionId);
+    clearVideoPlaybackAction();
+    setVideoPlaybackStatus("此 strict E2EE 影音會在瀏覽器端完整解密。按下「開始 E2EE 播放」後才會要求原始密碼。", false);
+    setVideoPlaybackActionButton(
+      "開始 E2EE 播放",
+      () => hydrateVideoE2eePlayer(video, playback, sessionId),
+      "未按下播放前，不會主動要求 E2EE 密碼。"
+    );
     return;
   }
+  clearVideoPlaybackAction();
   if (playbackSource?.mode === "hls_js") {
     setVideoPlaybackStatus(playbackSource.statusText || "正在初始化 HLS.js 播放器...", false);
     await attachVideoHlsJsPlayer(player, playback, sessionId);
@@ -1112,6 +1155,7 @@ function renderVideoDetail(video, comments = [], playback = null) {
         <div class="drive-card-sub" id="video-playback-status">
           ${sanitize(playbackSource.statusText || streamStatusText || "")}
         </div>
+        <div class="drive-file-actions" id="video-playback-action" style="justify-content:flex-start;margin-top:.45rem;"></div>
         ${streamActions}
         ${shareInfo}
         <div class="drive-card-heading">

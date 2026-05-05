@@ -141,11 +141,17 @@ def register_public_routes(app, deps):
         )
         if tester_token_login_allowed(conn, token, user_id):
             return True
-        return verify_internal_test_token(
+        if not verify_internal_test_token(
             token,
             settings.get("internal_test_login_token_hash", ""),
             settings.get("internal_test_login_token_expires_at", ""),
-        )
+        ):
+            return False
+        try:
+            bound_user_id = int(settings.get("internal_test_login_token_user_id") or 0)
+        except Exception:
+            bound_user_id = 0
+        return not bound_user_id or int(user_id) == bound_user_id
 
     def production_login_conflict(conn, user_id, ip, now_iso, settings):
         if current_server_mode(conn) != "production":

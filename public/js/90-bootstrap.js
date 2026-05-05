@@ -109,6 +109,7 @@ function bindUiEvents() {
   const integrityBulkReject = $("integrity-bulk-reject-btn");
   const integrityBulkIgnore = $("integrity-bulk-ignore-btn");
   const integrityRepair = $("integrity-repair-btn");
+  const auditChainRepair = $("audit-chain-repair-btn");
   const restartBtn   = $("restart-server-btn");
   const securityCenterRefresh = $("security-center-refresh-btn");
   const securityControlsSave = $("security-controls-save-btn");
@@ -541,6 +542,7 @@ function bindUiEvents() {
   if (integrityBulkReject) integrityBulkReject.addEventListener("click", () => reviewSelectedIntegrityFindings("reject"));
   if (integrityBulkIgnore) integrityBulkIgnore.addEventListener("click", () => reviewSelectedIntegrityFindings("ignore"));
   if (integrityRepair) integrityRepair.addEventListener("click", repairIntegrityChains);
+  if (auditChainRepair) auditChainRepair.addEventListener("click", repairIntegrityChains);
   if (restartBtn)   restartBtn.addEventListener("click",   restartServer);
   if (securityCenterRefresh) securityCenterRefresh.addEventListener("click", loadSecurityCenter);
   if (securityControlsSave) securityControlsSave.addEventListener("click", saveSecurityCenterControls);

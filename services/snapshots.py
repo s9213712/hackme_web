@@ -127,6 +127,30 @@ def _hmac_sha256(secret, payload):
     ).hexdigest()
 
 
+def _canonical_json_text(payload):
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _production_report_signature_payload(row):
+    get = row.get if isinstance(row, dict) else lambda key, default=None: row[key] if key in row.keys() else default
+    return {
+        "report_type": get("report_type", ""),
+        "report_hash": get("report_hash", ""),
+        "target_commit": get("target_commit", ""),
+        "target_branch": get("target_branch", ""),
+        "server_mode": get("server_mode", ""),
+        "test_result": get("test_result", ""),
+        "pass": int(get("pass", 0) or 0),
+        "critical_findings_count": int(get("critical_findings_count", 0) or 0),
+        "high_findings_count": int(get("high_findings_count", 0) or 0),
+        "unresolved_findings_json": get("unresolved_findings_json", "[]") or "[]",
+        "tester": get("tester", ""),
+        "raw_report_json": get("raw_report_json", "") or "",
+        "report_source": get("report_source", "") or "",
+        "key_version": get("key_version", ""),
+    }
+
+
 def _tester_token_signature_payload(row):
     get = row.get if isinstance(row, dict) else lambda key, default=None: row[key] if key in row.keys() else default
     return {
@@ -1053,10 +1077,25 @@ def ensure_snapshot_schema(conn):
             unresolved_findings_json TEXT NOT NULL DEFAULT '[]',
             tester                  TEXT,
             signature               TEXT,
+            raw_report_json         TEXT NOT NULL DEFAULT '{}',
+            report_source           TEXT NOT NULL DEFAULT 'manual_upload',
+            trust_level             TEXT NOT NULL DEFAULT 'unverified',
+            key_version             TEXT NOT NULL DEFAULT '',
+            verified_at             TEXT NOT NULL DEFAULT '',
             created_at              TEXT NOT NULL
         )
         """
     )
+    production_report_cols = {row["name"] for row in conn.execute("PRAGMA table_info(production_entry_reports)").fetchall()}
+    for col, ddl in (
+        ("raw_report_json", "ALTER TABLE production_entry_reports ADD COLUMN raw_report_json TEXT NOT NULL DEFAULT '{}'"),
+        ("report_source", "ALTER TABLE production_entry_reports ADD COLUMN report_source TEXT NOT NULL DEFAULT 'manual_upload'"),
+        ("trust_level", "ALTER TABLE production_entry_reports ADD COLUMN trust_level TEXT NOT NULL DEFAULT 'unverified'"),
+        ("key_version", "ALTER TABLE production_entry_reports ADD COLUMN key_version TEXT NOT NULL DEFAULT ''"),
+        ("verified_at", "ALTER TABLE production_entry_reports ADD COLUMN verified_at TEXT NOT NULL DEFAULT ''"),
+    ):
+        if col not in production_report_cols:
+            conn.execute(ddl)
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS incident_reports (
@@ -2372,8 +2411,12 @@ class ServerModeService:
         return base_dir / filename
 
     def _hmac_key(self, purpose="server_mode_log", current_mode=None):
-        env_name = "SERVER_MODE_LOG_HMAC_KEY" if purpose == "server_mode_log" else "SERVER_MODE_TOKEN_HMAC_KEY"
-        version_env = "SERVER_MODE_LOG_HMAC_KEY_VERSION" if purpose == "server_mode_log" else "SERVER_MODE_TOKEN_HMAC_KEY_VERSION"
+        purpose_env = {
+            "server_mode_log": ("SERVER_MODE_LOG_HMAC_KEY", "SERVER_MODE_LOG_HMAC_KEY_VERSION"),
+            "server_mode_token": ("SERVER_MODE_TOKEN_HMAC_KEY", "SERVER_MODE_TOKEN_HMAC_KEY_VERSION"),
+            "server_mode_report": ("SERVER_MODE_REPORT_HMAC_KEY", "SERVER_MODE_REPORT_HMAC_KEY_VERSION"),
+        }
+        env_name, version_env = purpose_env.get(purpose, ("SERVER_MODE_TOKEN_HMAC_KEY", "SERVER_MODE_TOKEN_HMAC_KEY_VERSION"))
         key = os.environ.get(env_name, "").strip()
         version = os.environ.get(version_env, "env-v1").strip() or "env-v1"
         if key:
@@ -2436,6 +2479,97 @@ class ServerModeService:
         digest = hashlib.sha256(bundle.read_bytes()).hexdigest()
         (self.audit_export_dir / f"server_mode_audit_{day}.sha256").write_text(f"{digest}  {bundle.name}\n", encoding="utf-8")
         return {"event_path": str(event_path), "bundle": str(bundle), "sha256": digest}
+
+    def _prepare_production_report_attestation(
+        self,
+        *,
+        report_type,
+        raw_report,
+        target_commit="",
+        target_branch="",
+        server_mode="",
+        test_result="",
+        passed=False,
+        critical_findings_count=0,
+        high_findings_count=0,
+        unresolved_findings=None,
+        tester="",
+        report_source="manual_signed_upload",
+    ):
+        if raw_report is None:
+            return {"ok": False, "reason": "missing_raw_report"}
+        raw_report_json = _canonical_json_text(raw_report)
+        report_hash = f"sha256:{hashlib.sha256(raw_report_json.encode('utf-8')).hexdigest()}"
+        key, key_version = self._hmac_key("server_mode_report")
+        unresolved_json = _canonical_json_text(list(unresolved_findings or []))
+        payload = {
+            "report_type": str(report_type or "").strip(),
+            "report_hash": report_hash,
+            "target_commit": str(target_commit or "").strip(),
+            "target_branch": str(target_branch or "").strip(),
+            "server_mode": str(server_mode or "").strip(),
+            "test_result": str(test_result or "").strip().lower(),
+            "pass": 1 if passed else 0,
+            "critical_findings_count": int(critical_findings_count or 0),
+            "high_findings_count": int(high_findings_count or 0),
+            "unresolved_findings_json": unresolved_json,
+            "tester": str(tester or "").strip(),
+            "raw_report_json": raw_report_json,
+            "report_source": str(report_source or "manual_signed_upload").strip() or "manual_signed_upload",
+            "key_version": key_version,
+        }
+        signature = f"hmac_sha256:{_hmac_sha256(key, _production_report_signature_payload(payload))}"
+        return {
+            "ok": True,
+            "report_hash": report_hash,
+            "signature": signature,
+            "key_version": key_version,
+            "raw_report_json": raw_report_json,
+            "payload": payload,
+        }
+
+    def _verify_production_report_signature(self, row):
+        raw_report_json = str(row.get("raw_report_json") or "").strip()
+        if not raw_report_json:
+            return {"ok": False, "reason": "missing_raw_report_json"}
+        try:
+            raw_report = json.loads(raw_report_json)
+        except Exception:
+            return {"ok": False, "reason": "invalid_raw_report_json"}
+        normalized_raw_report_json = _canonical_json_text(raw_report)
+        expected_hash = f"sha256:{hashlib.sha256(normalized_raw_report_json.encode('utf-8')).hexdigest()}"
+        if str(row.get("report_hash") or "").strip() != expected_hash:
+            return {"ok": False, "reason": "report_hash_mismatch"}
+        signature = str(row.get("signature") or "").strip()
+        if not signature:
+            return {"ok": False, "reason": "missing_signature"}
+        if not signature.startswith("hmac_sha256:"):
+            return {"ok": False, "reason": "unsupported_signature_scheme"}
+        try:
+            key, key_version = self._hmac_key("server_mode_report")
+        except Exception as exc:
+            return {"ok": False, "reason": str(exc)}
+        stored_key_version = str(row.get("key_version") or "").strip()
+        if stored_key_version and stored_key_version != key_version:
+            return {"ok": False, "reason": "key_version_mismatch", "expected_key_version": key_version}
+        payload = {
+            "report_type": str(row.get("report_type") or "").strip(),
+            "report_hash": expected_hash,
+            "target_commit": str(row.get("target_commit") or "").strip(),
+            "target_branch": str(row.get("target_branch") or "").strip(),
+            "server_mode": str(row.get("server_mode") or "").strip(),
+            "test_result": str(row.get("test_result") or "").strip().lower(),
+            "pass": int(row.get("pass") or 0),
+            "critical_findings_count": int(row.get("critical_findings_count") or 0),
+            "high_findings_count": int(row.get("high_findings_count") or 0),
+            "unresolved_findings_json": str(row.get("unresolved_findings_json") or "[]"),
+            "tester": str(row.get("tester") or "").strip(),
+            "raw_report_json": normalized_raw_report_json,
+            "report_source": str(row.get("report_source") or "manual_signed_upload").strip() or "manual_signed_upload",
+            "key_version": stored_key_version or key_version,
+        }
+        expected_signature = f"hmac_sha256:{_hmac_sha256(key, _production_report_signature_payload(payload))}"
+        return {"ok": hmac.compare_digest(signature, expected_signature), "reason": "" if hmac.compare_digest(signature, expected_signature) else "signature_mismatch", "key_version": stored_key_version or key_version}
 
     def _stable_hash(self, payload):
         return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")).hexdigest()
@@ -2980,7 +3114,15 @@ class ServerModeService:
                     """,
                     (report_type,),
                 ).fetchone()
-                reports[report_type] = dict(row) if row else None
+                if row:
+                    item = dict(row)
+                    sig = self._verify_production_report_signature(item)
+                    item["signature_valid"] = bool(sig.get("ok"))
+                    item["verification_reason"] = sig.get("reason") or ""
+                    item["trust_level"] = str(item.get("trust_level") or ("verified" if sig.get("ok") else "unverified"))
+                    reports[report_type] = item
+                else:
+                    reports[report_type] = None
             missing = [key for key, row in reports.items() if not row]
             failed = [
                 key
@@ -2991,6 +3133,8 @@ class ServerModeService:
                     or int(row["critical_findings_count"] or 0) > 0
                     or int(row["high_findings_count"] or 0) > 0
                     or not row["report_hash"]
+                    or str(row.get("trust_level") or "").strip() != "verified"
+                    or not bool(row.get("signature_valid"))
                 )
             ]
             return {
@@ -3019,19 +3163,19 @@ class ServerModeService:
         unresolved_findings=None,
         tester="",
         signature="",
+        raw_report=None,
+        key_version="",
+        report_source="manual_signed_upload",
     ):
         report_type = str(report_type or "").strip()
         if report_type not in PRODUCTION_REQUIRED_REPORT_TYPES:
             return {"ok": False, "msg": "report_type 不在 production gate 清單"}
-        report_hash = str(report_hash or "").strip()
         target_commit = str(target_commit or "").strip()
         target_branch = str(target_branch or "").strip()
         server_mode = str(server_mode or "").strip()
         test_result = str(test_result or "").strip().lower()
         tester = str(tester or self._actor_name(actor) or "").strip()
         signature = str(signature or "").strip()
-        if not SHA256_REPORT_HASH_RE.fullmatch(report_hash):
-            return {"ok": False, "msg": "report_hash 必須是 sha256:<64 hex>"}
         if not target_commit or not target_branch or not server_mode or not test_result or not tester or not signature:
             return {"ok": False, "msg": "production report 缺少 target_commit/target_branch/server_mode/test_result/tester/signature"}
         if test_result not in {"pass", "passed"} or not passed:
@@ -3040,10 +3184,37 @@ class ServerModeService:
             return {"ok": False, "msg": "production report 不允許 critical/high finding"}
         if unresolved_findings:
             return {"ok": False, "msg": "production report 不允許 unresolved finding"}
+        attestation = self._prepare_production_report_attestation(
+            report_type=report_type,
+            raw_report=raw_report,
+            target_commit=target_commit,
+            target_branch=target_branch,
+            server_mode=server_mode,
+            test_result=test_result,
+            passed=passed,
+            critical_findings_count=critical_findings_count,
+            high_findings_count=high_findings_count,
+            unresolved_findings=unresolved_findings,
+            tester=tester,
+            report_source=report_source,
+        )
+        if not attestation.get("ok"):
+            return {"ok": False, "msg": "production report 需要 raw_report，伺服器必須重算 hash 並驗證簽章", "reason": attestation.get("reason") or "missing_raw_report"}
+        report_hash = str(report_hash or "").strip()
+        if not SHA256_REPORT_HASH_RE.fullmatch(report_hash):
+            return {"ok": False, "msg": "report_hash 必須是 sha256:<64 hex>"}
+        if report_hash != attestation["report_hash"]:
+            return {"ok": False, "msg": "report_hash 與 raw_report 內容不一致", "expected_report_hash": attestation["report_hash"]}
+        provided_key_version = str(key_version or "").strip()
+        if provided_key_version and provided_key_version != attestation["key_version"]:
+            return {"ok": False, "msg": "key_version 與伺服器可驗證金鑰不一致", "expected_key_version": attestation["key_version"]}
+        if signature != attestation["signature"]:
+            return {"ok": False, "msg": "signature 驗證失敗，請確認使用伺服器可驗證的正式報告簽章", "expected_key_version": attestation["key_version"]}
         report_id = f"prodrep_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{secrets.token_hex(4)}"
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
+            self._record_security_key_on_conn(conn, purpose="server_mode_report", key_version=attestation["key_version"], status="active")
             replay = conn.execute(
                 """
                 SELECT id FROM production_entry_reports
@@ -3058,8 +3229,9 @@ class ServerModeService:
                 """
                 INSERT INTO production_entry_reports
                 (id, report_type, report_hash, target_commit, target_branch, server_mode, test_result,
-                 pass, critical_findings_count, high_findings_count, unresolved_findings_json, tester, signature, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 pass, critical_findings_count, high_findings_count, unresolved_findings_json, tester, signature,
+                 raw_report_json, report_source, trust_level, key_version, verified_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     report_id,
@@ -3075,11 +3247,23 @@ class ServerModeService:
                     json.dumps(unresolved_findings or [], ensure_ascii=False, sort_keys=True),
                     tester,
                     signature,
+                    attestation["raw_report_json"],
+                    str(report_source or "manual_signed_upload").strip() or "manual_signed_upload",
+                    "verified",
+                    attestation["key_version"],
+                    datetime.now().isoformat(),
                     datetime.now().isoformat(),
                 ),
             )
             conn.commit()
-            return {"ok": True, "report_id": report_id, "requirements": self.production_requirements()}
+            return {
+                "ok": True,
+                "report_id": report_id,
+                "trust_level": "verified",
+                "signature_valid": True,
+                "key_version": attestation["key_version"],
+                "requirements": self.production_requirements(),
+            }
         finally:
             conn.close()
 

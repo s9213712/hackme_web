@@ -221,7 +221,7 @@ def test_account_security_locks_user_after_repeated_bad_passwords(tmp_path):
     assert row[1]
 
 
-def test_internal_test_mode_requires_root_issued_token_for_non_root_login(tmp_path):
+def test_internal_test_mode_requires_root_issued_token_for_the_bound_non_root_login(tmp_path):
     db_path = tmp_path / "internal-test.db"
     _seed_db(db_path)
     conn = sqlite3.connect(db_path)
@@ -238,7 +238,9 @@ def test_internal_test_mode_requires_root_issued_token_for_non_root_login(tmp_pa
         );
         INSERT INTO server_modes (id, current_mode) VALUES (1, 'internal_test');
         INSERT INTO users (id, username, status, role) VALUES (2, 'root', 'active', 'super_admin');
+        INSERT INTO users (id, username, status, role) VALUES (3, 'bob', 'active', 'user');
         INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (2, 'rootpass', '2026-01-01T00:00:00');
+        INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (3, 'correct', '2026-01-01T00:00:00');
         """
     )
     conn.commit()
@@ -251,18 +253,21 @@ def test_internal_test_mode_requires_root_issued_token_for_non_root_login(tmp_pa
             "block_duration_minutes": 10,
             "internal_test_login_token_hash": hash_internal_test_token(token),
             "internal_test_login_token_expires_at": maintenance_bypass_expires_at(30),
+            "internal_test_login_token_user_id": 1,
         },
     ).test_client()
 
     denied = client.post("/api/login", json={"username": "alice", "password": "correct"})
     bad_token = client.post("/api/login", json={"username": "alice", "password": "correct", "internal_test_token": "bad"})
     allowed = client.post("/api/login", json={"username": "alice", "password": "correct", "internal_test_token": token})
+    wrong_user = client.post("/api/login", json={"username": "bob", "password": "correct", "internal_test_token": token})
     root_allowed = client.post("/api/login", json={"username": "root", "password": "rootpass"})
 
     assert denied.status_code == 403
     assert "內測模式" in denied.get_json()["msg"]
     assert bad_token.status_code == 403
     assert allowed.status_code == 200
+    assert wrong_user.status_code == 403
     assert root_allowed.status_code == 200
 
 

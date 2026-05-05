@@ -506,7 +506,7 @@ Workflow preset 補充：
 | GET/PUT | `/api/admin/features` | manager | feature flags |
 | GET/PUT | `/api/admin/access-controls` | manager | ACL / whitelist / lockdown |
 | POST | `/api/admin/access-controls/maintenance-bypass-token` | manager | 維護繞過 token |
-| POST | `/api/admin/access-controls/internal-test-token` | manager | internal-test token |
+| POST | `/api/admin/access-controls/internal-test-token` | manager | 產生綁定單一帳號的 internal-test login token |
 | GET/POST | `/api/admin/snapshots` | manager | 列快照 / 建快照 |
 | GET/POST | `/api/admin/snapshots/daily` | manager | 日常快照設定 |
 | POST | `/api/admin/system-reset` | manager | 系統重置 |
@@ -548,18 +548,28 @@ Workflow preset 補充：
 | POST | `/api/root/server-update/preview` | root | 更新預覽 |
 | POST | `/api/root/server-update/apply` | root | 套用更新 |
 | GET | `/api/admin/security-center/profiles` | manager | 安全 profile |
-| POST | `/api/root/production-report/upload` | root | 上傳 production report |
+| POST | `/api/root/production-report/upload` | root | 上傳可驗證的 production report（需 raw_report + sha256 hash + signature） |
 | GET | `/api/root/production-report/status` | root | production report 狀態 |
 | POST | `/api/root/production/enter` | root | 進 production |
 | POST | `/api/root/tester-token/create` | root | 建 tester token |
 | POST | `/api/root/tester-token/revoke` | root | 撤 tester token |
 | GET | `/api/root/tester-token/list` | root | tester token 列表 |
 | GET | `/api/tester/shadow-state` | tester | shadow state |
-| GET | `/api/tester/shadow-role` | tester | shadow role |
-| GET | `/api/tester/shadow-wallet` | tester | shadow wallet |
+| GET | `/api/tester/shadow-role` | tester | 讀取目前 shadow role |
+| POST | `/api/tester/shadow-role` | tester | 修改自己的 shadow role |
+| GET | `/api/tester/shadow-wallet` | tester | 讀取目前 shadow wallet |
+| POST | `/api/tester/shadow-wallet` | tester | 修改自己的 shadow wallet |
 | POST | `/api/root/incident/enter` | root | 進 incident lockdown |
 | GET | `/api/root/incident/status` | root | incident 狀態 |
 | POST | `/api/root/incident/resolve` | root | 解除 incident |
+
+- `POST /api/admin/access-controls/internal-test-token` 不再是 shared singleton login token：root 產生時必須指定 `target_user_id` 或 `target_username`，之後只有該帳號可在 `internal_test` mode 的 `/api/login` 使用這顆 token。
+- `POST /api/root/production-report/upload` 現在要求：
+  - `raw_report`
+  - `report_hash = sha256(canonical_json(raw_report))`
+  - `signature = hmac_sha256:<hex>`
+  - `key_version`
+  伺服器會重算 hash 並驗簽；未通過者不會計入 production gate。
 
 ### Bug Reports
 

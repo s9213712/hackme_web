@@ -702,7 +702,7 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "provider input stale" in trading_js
     assert "🟡 reference 價格降級" in trading_js
     assert "🟢 reference 價格正常" in trading_js
-    assert "目前只可作為 reference price，不可作為風控級價格" in trading_js
+    assert "目前風控級價格不可用，已暫停市價單與高風險交易；限價單仍可使用" in trading_js
     assert "風控可用" in trading_js
 
     workflow_editor = (ROOT / "public" / "trading-workflow-editor.html").read_text(encoding="utf-8")
@@ -776,6 +776,7 @@ def test_trading_ui_labels_reference_and_risk_grade_price_usage():
     assert "function tradingPriceContextSummary" in trading_js
     assert "risk_grade_usable" in trading_js
     assert "riskContext?.high_risk_blocked || riskContext?.risk_grade_usable === false" in trading_js
+    assert "目前風控級價格不可用，已暫停市價單與高風險交易；限價單仍可使用" in trading_js
     assert "目前價格（reference）" in trading_html
     assert "用途：展示 / 一般估值" in trading_html
     assert "市價單估值採用風控級價格" in trading_js

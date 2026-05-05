@@ -961,6 +961,10 @@ def test_shared_video_page_mentions_hls_js_fallback_and_fragment_loss(tmp_path):
     assert "isSharePasswordResponse" in html
     assert "showSharePasswordPrompt" in html
     assert "此分享影音需要先解鎖" in html
+    assert 'id="player-action"' in html
+    assert "showSharedPlaybackAction" in html
+    assert "開始 E2EE 播放" in html
+    assert "未按下播放前，不會主動要求密碼或開始解密。" in html
 
 
 def test_shared_e2ee_stream_v2_manifest_and_chunk_routes_work_and_stay_off_hls(tmp_path):

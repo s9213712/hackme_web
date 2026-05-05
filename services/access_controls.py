@@ -140,6 +140,11 @@ def maintenance_bypass_required_payload(message):
 
 def access_control_settings_payload(settings):
     settings = dict(settings or {})
+    bound_user_id = 0
+    try:
+        bound_user_id = int(settings.get("internal_test_login_token_user_id") or 0)
+    except Exception:
+        bound_user_id = 0
     return {
         "root_ip_whitelist_enabled": bool(settings.get("root_ip_whitelist_enabled", False)),
         "root_ip_whitelist": settings.get("root_ip_whitelist", ""),
@@ -150,4 +155,6 @@ def access_control_settings_payload(settings):
         "internal_test_token_configured": bool(settings.get("internal_test_login_token_hash")),
         "internal_test_token_expires_at": settings.get("internal_test_login_token_expires_at") or "",
         "internal_test_token_expired": maintenance_bypass_token_is_expired(settings.get("internal_test_login_token_expires_at")) if settings.get("internal_test_login_token_hash") else False,
+        "internal_test_token_user_id": bound_user_id,
+        "internal_test_token_username": str(settings.get("internal_test_login_token_username") or "").strip(),
     }

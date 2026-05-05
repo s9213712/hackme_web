@@ -69,15 +69,21 @@ def test_prelaunch_tests_include_stress_progress_and_logs():
     assert 'securityStressStart.addEventListener("click", startSecurityStressTest)' in bootstrap_js
 
 
-def test_points_chain_auto_handle_lives_in_audit_area_and_integrity_buttons_are_single_bound():
+def test_audit_chain_repair_and_points_chain_recovery_buttons_live_in_correct_areas():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    economy_js = (ROOT / "public" / "js" / "55-economy.js").read_text(encoding="utf-8")
     bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
     audit_section = index_html.split('id="sec-server-audit"', 1)[1].split('id="sec-server-security"', 1)[0]
     economy_recovery_section = index_html.split('id="economy-recovery-card"', 1)[1].split('id="economy-account-query-card"', 1)[0]
 
-    assert 'id="economy-recovery-auto-handle-btn"' in audit_section
-    assert 'id="economy-recovery-auto-handle-btn"' not in economy_recovery_section
+    assert 'id="audit-chain-repair-btn"' in audit_section
+    assert 'id="economy-recovery-auto-handle-btn"' not in audit_section
+    assert 'id="economy-recovery-auto-handle-btn"' in economy_recovery_section
+    assert "一鍵處理 PointsChain 異常" in economy_recovery_section
+    assert 'id="economy-recovery-action-status"' in economy_recovery_section
+    assert "economyRecoveryActionMsg" in economy_js
+    assert 'auditChainRepair.addEventListener("click", repairIntegrityChains)' in bootstrap_js
     assert 'integrityBulkApprove.addEventListener("click", () => reviewSelectedIntegrityFindings("approve"))' in bootstrap_js
     assert 'igBulkApprove.addEventListener("click", () => reviewSelectedIntegrityFindings("approve"))' not in admin_js
 
@@ -150,12 +156,15 @@ def test_launch_check_treats_production_profile_settings_as_auto_applied_not_man
     assert 'id="launch-check-upload-file"' in index_html
     assert 'id="launch-check-upload-json"' in index_html
     assert 'id="launch-check-upload-submit-btn"' in index_html
+    assert "raw_report" in index_html
+    assert "hmac_sha256" in index_html
     assert 'id="launch-check-doc-panel"' in index_html
     assert 'id="launch-check-doc-content"' in index_html
     assert "openLaunchCheckDoc" in admin_js
     assert 'API}/root/launch-check/doc?path=' in admin_js or 'API + "/root/launch-check/doc?path=' in admin_js
     assert "submitLaunchCheckReportUpload" in admin_js
     assert 'API + "/root/production-report/upload"' in admin_js
+    assert "伺服器會重算 hash 並驗簽" in admin_js
     assert 'data-launch-upload="' in admin_js
     assert 'launchCheckUploadSubmit.addEventListener("click", () => submitLaunchCheckReportUpload())' in bootstrap_js
     assert 'launchCheckUploadFile.addEventListener("change", async () => {' in bootstrap_js

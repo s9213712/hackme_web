@@ -1,6 +1,37 @@
 # Update Summary
 
-Release ID: `2026.05.05-138`
+Release ID: `2026.05.05-139`
+
+## 2026.05.05-139
+
+- Trading UI warning text is now explicit when only `reference price` remains:
+  the frontend says `目前風控級價格不可用，已暫停市價單與高風險交易；限價單仍可使用`
+  instead of implying the whole market has no price.
+- Production report upload is now a verified path instead of a loose JSON
+  intake: uploads must include `raw_report`, `sha256` `report_hash`,
+  `hmac_sha256` `signature`, and `key_version`, and the server recomputes the
+  hash plus verifies the signature before the report can satisfy production
+  gate requirements.
+- `internal_test` login tokens are no longer shared across multiple accounts.
+  Root must bind each issued token to a single target account, and only that
+  account can use it on `/api/login` while the server is in `internal_test`
+  mode.
+- The root launch-check upload helper now explains signed-report requirements
+  directly in the UI, and failed production-report verification surfaces a
+  concrete reason instead of a generic upload failure.
+- Cloud Drive PDF preview now uses an iframe/new-tab fallback path that works
+  under the site's CSP (`object-src 'none'`), so strict E2EE and
+  server-encrypted PDFs no longer fail because the browser blocks
+  `object/embed`.
+- Strict E2EE video pages no longer prompt for decryption immediately on page
+  load; users must explicitly press `開始 E2EE 播放` before fragment lookup,
+  password prompt, and browser-side decrypt begin.
+- The audit / PointsChain recovery buttons are now wired to the correct chains:
+  the audit page repairs audit/integrity chains, while the PointsChain recovery
+  card owns the `一鍵處理 PointsChain 異常` action and its own status line.
+- Tester-token APIs now expose `GET /api/tester/shadow-role` and
+  `GET /api/tester/shadow-wallet` in addition to the existing POST mutation
+  routes, so the documented read paths no longer return `404`.
 
 ## 2026.05.05-138
 
@@ -107,6 +138,37 @@ Release ID: `2026.05.05-138`
 - strict E2EE 影音新增 `E2EE Streaming v2` 基礎：瀏覽器可使用 encrypted chunk manifest、逐段密文下載、Web Worker 解密與 `MediaSource` 播放；若沒有 v2 manifest、裝置不支援 Worker / MediaSource / WebCrypto，會明確退回舊版完整解密播放，而不是假裝成功或誤走 HLS。
 - 新增 `/api/videos/<id>/e2ee-stream-v2/manifest`、`/api/videos/<id>/e2ee-stream-v2/chunks/<chunk_index>` 與對應 shared token 路由；這些端點永遠只回密文 chunk，不接收 `raw_file_key`、`e2ee_password`、`vk`，也沿用分享 token 的過期、撤銷與最大觀看次數保護。
 - 影音前端現在可在 strict E2EE 路徑下區分 `browser_e2ee_stream_v2` 與 `browser_e2ee_full_fallback`，共享頁也會明確顯示「讀取分享授權 / 下載加密影音 / 瀏覽器端解密」等階段提示，並在分享授權無效或被竄改時顯示人性化錯誤。
+
+## 2026.05.05-139
+
+- Trading UI warning text is now explicit when only `reference price` remains:
+  the frontend says `目前風控級價格不可用，已暫停市價單與高風險交易；限價單仍可使用`
+  instead of implying the whole market has no price.
+- Production report upload is now a verified path instead of a loose JSON
+  intake: uploads must include `raw_report`, `sha256` `report_hash`,
+  `hmac_sha256` `signature`, and `key_version`, and the server recomputes the
+  hash plus verifies the signature before the report can satisfy production
+  gate requirements.
+- `internal_test` login tokens are no longer shared across multiple accounts.
+  Root must bind each issued token to a single target account, and only that
+  account can use it on `/api/login` while the server is in `internal_test`
+  mode.
+- The root launch-check upload helper now explains signed-report requirements
+  directly in the UI, and failed production-report verification surfaces a
+  concrete reason instead of a generic upload failure.
+- Cloud Drive PDF preview now uses an iframe/new-tab fallback path that works
+  under the site's CSP (`object-src 'none'`), so strict E2EE and
+  server-encrypted PDFs no longer fail because the browser blocks
+  `object/embed`.
+- Strict E2EE video pages no longer prompt for decryption immediately on page
+  load; users must explicitly press `開始 E2EE 播放` before fragment lookup,
+  password prompt, and browser-side decrypt begin.
+- The audit / PointsChain recovery buttons are now wired to the correct chains:
+  the audit page repairs audit/integrity chains, while the PointsChain recovery
+  card owns the `一鍵處理 PointsChain 異常` action and its own status line.
+- Tester-token APIs now expose `GET /api/tester/shadow-role` and
+  `GET /api/tester/shadow-wallet` in addition to the existing POST mutation
+  routes, so the documented read paths no longer return `404`.
 
 ## 2026.05.05-122
 

@@ -473,6 +473,7 @@ def register_video_routes(app, deps):
         <button type="submit">解鎖影音</button>
       </form>
       <div id="player-host" class="hidden"></div>
+      <div id="player-action" class="hidden"></div>
       <div id="e2ee-note" class="meta hidden">此影音採端到端加密，只支援瀏覽器端解密播放，首次載入與快轉會較慢。</div>
     </div>
   </div>
@@ -543,6 +544,35 @@ def register_video_routes(app, deps):
       try {{ sharedHls.destroy(); }} catch (_) {{}}
     }}
     sharedHls = null;
+  }}
+  function clearSharedPlaybackAction() {{
+    const wrap = $("player-action");
+    if (!wrap) return;
+    wrap.classList.add("hidden");
+    wrap.innerHTML = "";
+  }}
+  function showSharedPlaybackAction(label, onClick, helperText="") {{
+    const wrap = $("player-action");
+    if (!wrap) return;
+    wrap.classList.remove("hidden");
+    wrap.innerHTML = `
+      <button type="button" id="shared-playback-start-btn">${{label}}</button>
+      ${{helperText ? `<div class="meta" style="margin-top:.5rem;">${{helperText}}</div>` : ""}}
+    `;
+    const button = $("shared-playback-start-btn");
+    if (!button) return;
+    button.addEventListener("click", async () => {{
+      if (button.disabled) return;
+      button.disabled = true;
+      try {{
+        clearSharedPlaybackAction();
+        await onClick();
+      }} catch (err) {{
+        setMsg(err.message || "E2EE 影音播放初始化失敗", true);
+        button.disabled = false;
+        showSharedPlaybackAction(label, onClick, helperText);
+      }}
+    }}, {{ once: true }});
   }}
   function loadSharedHlsLibrary(url) {{
     if (window.Hls) return Promise.resolve(window.Hls);
@@ -829,22 +859,29 @@ def register_video_routes(app, deps):
     destroySharedPlaybackArtifacts();
     if (playback.mode === "e2ee_stream_v2") {{
       $("e2ee-note").classList.remove("hidden");
-      const fragmentKey = shareKeyFromFragment();
-      if (!fragmentKey) {{
-        throw new Error("此 E2EE 分享影音缺少連結片段金鑰，無法復原。請向分享者重新取得完整連結；若分享者也遺失，只能重新產生分享。");
-      }}
-      await attachSharedE2eeStreamV2(player, playback, fragmentKey);
+      setMsg("這是 strict E2EE 分享影音。按下「開始 E2EE 播放」後，才會在瀏覽器端讀取 fragment 並解密。");
+      showSharedPlaybackAction("開始 E2EE 播放", async () => {{
+        const fragmentKey = shareKeyFromFragment();
+        if (!fragmentKey) {{
+          throw new Error("此 E2EE 分享影音缺少連結片段金鑰，無法復原。請向分享者重新取得完整連結；若分享者也遺失，只能重新產生分享。");
+        }}
+        await attachSharedE2eeStreamV2(player, playback, fragmentKey);
+      }}, "未按下播放前，不會主動要求密碼或開始解密。");
       return;
     }}
     if (playback.mode === "e2ee_direct") {{
       $("e2ee-note").classList.remove("hidden");
-      const fragmentKey = shareKeyFromFragment();
-      if (!fragmentKey) {{
-        throw new Error("此 E2EE 分享影音缺少連結片段金鑰，無法復原。請向分享者重新取得完整連結；若分享者也遺失，只能重新產生分享。");
-      }}
-      await fallbackSharedE2eeToFullDecrypt(player, playback, fragmentKey, "正在使用舊版完整解密播放。strict E2EE 不支援伺服器端轉檔、縮圖與內容掃描，速度會較慢。");
+      setMsg("這是 strict E2EE 分享影音。按下「開始 E2EE 播放」後，才會在瀏覽器端完整解密播放。");
+      showSharedPlaybackAction("開始 E2EE 播放", async () => {{
+        const fragmentKey = shareKeyFromFragment();
+        if (!fragmentKey) {{
+          throw new Error("此 E2EE 分享影音缺少連結片段金鑰，無法復原。請向分享者重新取得完整連結；若分享者也遺失，只能重新產生分享。");
+        }}
+        await fallbackSharedE2eeToFullDecrypt(player, playback, fragmentKey, "正在使用舊版完整解密播放。strict E2EE 不支援伺服器端轉檔、縮圖與內容掃描，速度會較慢。");
+      }}, "未按下播放前，不會主動要求密碼或開始解密。");
       return;
     }}
+    clearSharedPlaybackAction();
     if (playback.mode === "hls" && browserSupportsNativeHls(video.media_type)) {{
       player.src = playback.master_url || playback.fallback_url || "";
       setMsg("Safari / 原生 HLS 已啟用。");

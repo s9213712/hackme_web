@@ -1720,10 +1720,12 @@
                 <div class="drive-card-sub">異常時會進入 safe mode，只產生 forensic bundle 與恢復方案；root 確認後才會套用備份並由 ledger 重建 wallet。</div>
               </div>
               <div class="drive-file-actions">
+                <button class="btn" id="economy-recovery-auto-handle-btn" type="button">一鍵處理 PointsChain 異常</button>
                 <button class="btn btn-danger" id="economy-recovery-approve-btn" type="button">確認恢復</button>
               </div>
             </div>
             <div id="economy-recovery-status" class="drive-card-sub">safe mode：-</div>
+            <div id="economy-recovery-action-status" class="drive-card-sub" style="margin-top:.4rem;">尚未執行自動恢復。</div>
             <div class="settings-option-grid" style="margin-top:.65rem;">
               <div class="field"><label>恢復備份</label><select id="economy-recovery-backup-id"><option value="">尚無可用備份</option></select></div>
               <div class="field"><label>確認字串</label><input type="text" id="economy-recovery-confirm" placeholder="RESTORE POINTSCHAIN" /></div>
@@ -2501,7 +2503,7 @@
       <div class="form-section" id="sec-server-audit">
         <div class="admin-toolbar" style="margin-bottom:.5rem;">
           <button class="btn btn-primary" id="audit-refresh">🔄 重新整理</button>
-          <button class="btn" id="economy-recovery-auto-handle-btn" type="button">一鍵處理異常鏈</button>
+          <button class="btn" id="audit-chain-repair-btn" type="button">修復審計 / 違規鏈</button>
           <span style="font-size:.75rem;color:var(--muted);">共 <span id="audit-total">0</span> 筆</span>
           <span id="audit-integrity" style="margin-left:.5rem;font-size:.72rem;"></span>
           <span id="audit-chain-action-status" style="font-size:.72rem;color:var(--muted);"></span>
@@ -2897,11 +2899,11 @@
               </div>
               <div class="field">
                 <label>快速說明</label>
-                <div class="drive-card-sub" id="launch-check-upload-hint" style="margin-top:.25rem;">上傳的 JSON 內容會直接送往 production-report upload API，成功後自動重整 B 區狀態。</div>
+                <div class="drive-card-sub" id="launch-check-upload-hint" style="margin-top:.25rem;">上傳的 JSON 必須包含 raw_report、sha256 report_hash 與可驗證 signature；伺服器會重算 hash 與驗簽，未通過不會計入 production gate。</div>
               </div>
             </div>
             <label style="display:block;margin-top:.55rem;">Report JSON</label>
-            <textarea id="launch-check-upload-json" rows="10" style="width:100%;font-family:monospace;font-size:.78rem;" placeholder='{"report_hash":"...","pass":true,"target_commit":"..."}'></textarea>
+            <textarea id="launch-check-upload-json" rows="10" style="width:100%;font-family:monospace;font-size:.78rem;" placeholder='{"report_type":"stress","target_commit":"...","target_branch":"...","server_mode":"preprod","test_result":"pass","pass":true,"critical_findings_count":0,"high_findings_count":0,"unresolved_findings":[],"tester":"root","report_hash":"sha256:...","signature":"hmac_sha256:...","key_version":"...","raw_report":{"summary":"..."}}'></textarea>
             <div class="admin-toolbar" style="margin-top:.55rem;display:flex;align-items:center;gap:.55rem;flex-wrap:wrap;">
               <button class="btn btn-primary" type="button" id="launch-check-upload-submit-btn">上傳報告</button>
               <button class="btn btn-secondary" type="button" id="launch-check-upload-clear-btn">清空</button>
@@ -2981,6 +2983,14 @@
                 <input type="number" id="internal-test-token-ttl" min="5" max="43200" value="1440" />
               </div>
               <div class="field">
+                <label>綁定 user id</label>
+                <input type="number" id="internal-test-token-user-id" min="1" placeholder="例如 3（可與帳號名稱擇一填寫）" />
+              </div>
+              <div class="field">
+                <label>綁定帳號名稱</label>
+                <input type="text" id="internal-test-token-username" placeholder="例如 s92137（可與 user id 擇一填寫）" />
+              </div>
+              <div class="field">
                 <label>確認字串</label>
                 <input type="text" id="internal-test-token-confirm" placeholder="ROTATE_INTERNAL_TEST_TOKEN" />
               </div>
@@ -2992,6 +3002,13 @@
             <div class="field" id="internal-test-token-output-wrap" style="display:none;">
               <label>新 token（只顯示這一次）</label>
               <input type="text" id="internal-test-token-output" readonly />
+            </div>
+            <div id="internal-test-token-usage-wrap" class="security-profile-preview" style="display:none;">
+              <div><strong>使用方式</strong></div>
+              <div>1. 先把伺服器模式切到 <code>internal_test</code>。</div>
+              <div>2. 只有指定帳號可使用這顆 token；受邀測試員使用自己的帳號密碼登入。</div>
+              <div>3. 在登入頁的「內測 token（內測模式才需要）」欄位貼上這顆 token 再登入。</div>
+              <div>4. 這顆 token 只綁定指定帳號；若要給其他測試員使用，請重新產生新 token。</div>
             </div>
             <div id="internal-test-token-msg" class="msg"></div>
             </div>
@@ -3035,6 +3052,13 @@
               <div id="tester-token-created-wrap" class="field" style="display:none;margin-top:.55rem;">
                 <label>新 token（只顯示這一次）</label>
                 <input type="text" id="tester-token-created" readonly />
+              </div>
+              <div id="tester-token-usage-wrap" class="security-profile-preview" style="display:none;">
+                <div><strong>使用方式</strong></div>
+                <div>1. 這不是登入 token，不能拿去填 <code>/api/login</code>。</div>
+                <div>2. 測試員必須先用自己的帳號登入。</div>
+                <div>3. 之後在允許的 tester API 請求中帶上這顆 token，例如放在 <code>X-Tester-Token</code> 或 <code>X-Internal-Test-Token</code> header。</div>
+                <div>4. 這顆 token 只綁定建立時指定的 <code>tester_user_id</code>，且只允許你勾選的 routes / 能力。</div>
               </div>
               <div id="tester-token-msg" class="msg"></div>
               <div id="tester-token-list" class="security-profile-preview"></div>

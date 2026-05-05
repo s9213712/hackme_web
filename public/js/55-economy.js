@@ -36,6 +36,13 @@ function auditChainActionMsg(text, ok = true) {
   el.style.color = ok ? "#4caf50" : "#ff4f6d";
 }
 
+function economyRecoveryActionMsg(text, ok = true) {
+  const el = $("economy-recovery-action-status");
+  if (!el) return;
+  el.textContent = text || "";
+  el.style.color = ok ? "#4caf50" : "#ff4f6d";
+}
+
 function economyRequestId(prefix = "economy") {
   if (window.crypto && typeof window.crypto.randomUUID === "function") {
     return `${prefix}:${window.crypto.randomUUID()}`;
@@ -870,7 +877,7 @@ async function autoHandlePointsChainRecovery() {
       btn.textContent = "處理中...";
     }
     economySetMsg("正在驗證 PointsChain 並準備處理異常...");
-    auditChainActionMsg("正在處理 PointsChain 異常...");
+    economyRecoveryActionMsg("正在處理 PointsChain 異常...");
     const json = await fetchEconomyJson("/root/points/chain/recovery/auto-handle", {
       method: "POST",
       body: JSON.stringify({ confirm: "AUTO HANDLE POINTSCHAIN" }),
@@ -878,19 +885,19 @@ async function autoHandlePointsChainRecovery() {
     await loadEconomyDashboard();
     if (json.action === "verified_clean") {
       economySetMsg(json.msg || "PointsChain 驗證正常");
-      auditChainActionMsg(json.msg || "PointsChain 驗證正常");
+      economyRecoveryActionMsg(json.msg || "PointsChain 驗證正常");
       setEconomyChainStatus(formatEconomyVerificationSummary(json.verification || {}), true);
       if (typeof loadAudit === "function") await loadAudit(auditPage || 0);
       return;
     }
     const resultMessage = formatEconomyRecoveryResult(json);
     economySetMsg(json.msg || resultMessage || "異常鏈處理完成", !!json.ok);
-    auditChainActionMsg(json.msg || resultMessage || "異常鏈處理完成", !!json.ok);
+    economyRecoveryActionMsg(json.msg || resultMessage || "異常鏈處理完成", !!json.ok);
     setEconomyChainStatus(formatEconomyVerificationSummary(json.verification || json.initial_verification || {}), !!json.ok);
     if (typeof loadAudit === "function") await loadAudit(auditPage || 0);
   } catch (err) {
     economySetMsg(err.message || "一鍵處理異常鏈失敗", false);
-    auditChainActionMsg(err.message || "一鍵處理異常鏈失敗", false);
+    economyRecoveryActionMsg(err.message || "一鍵處理異常鏈失敗", false);
     setEconomyChainStatus(err.message || "一鍵處理異常鏈失敗", false);
     await loadEconomyRootReport();
   } finally {

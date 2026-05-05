@@ -37,9 +37,9 @@ def test_cloud_drive_preview_ui_is_wired():
     assert "function renderDrivePdfPreview(url, title, { encrypted = false } = {})" in drive_js
     assert '這份 PDF 已在瀏覽器解密。若內嵌檢視器無法開啟，請改用新分頁或直接下載。' in drive_js
     assert '若瀏覽器內建 PDF 檢視器未載入，請改用新分頁開啟或直接下載。' in drive_js
-    assert '<object data="${url}" type="application/pdf"' in drive_js
-    assert '<embed src="${url}" type="application/pdf" />' in drive_js
+    assert '<iframe src="${url}" title="${safeTitle}" loading="lazy"></iframe>' in drive_js
     assert '在新分頁開啟 PDF' in drive_js
+    assert '下載 PDF' in drive_js
     assert "driveE2eeSessionPassphrases" in drive_js
     assert "driveE2eeRecentSessionPassphrases" in drive_js
     assert "clearDriveE2eeSessionPassphrases" in (ROOT / "public" / "js" / "00-core.js").read_text(encoding="utf-8")
@@ -53,9 +53,12 @@ def test_cloud_drive_preview_ui_is_wired():
     assert '"img-src":     "\'self\' data: blob:"' in server_py
     assert '"media-src":   "\'self\' blob:"' in server_py
     assert '"frame-src":   "\'self\' blob:"' in server_py
+    assert '"object-src":  "\'none\'"' in server_py
     styles_css = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
     assert ".drive-preview-panel object," in styles_css
     assert ".album-full-preview-body object," in styles_css
+    assert ".drive-pdf-preview {" in styles_css
+    assert ".drive-pdf-preview iframe {" in styles_css
     assert ".drive-archive-list {" in styles_css
     assert ".drive-archive-entry {" in styles_css
     assert ".drive-archive-kind {" in styles_css
@@ -275,6 +278,12 @@ def test_album_viewer_has_dedicated_module():
     assert 'id="server-mode-token-hint"' in index_html
     assert 'id="server-mode-internal-test-panel" style="display:none;"' in index_html
     assert 'id="server-mode-tester-token-panel" style="display:none;"' in index_html
+    assert 'id="internal-test-token-usage-wrap" class="security-profile-preview" style="display:none;"' in index_html
+    assert 'id="tester-token-usage-wrap" class="security-profile-preview" style="display:none;"' in index_html
+    assert "這顆 token 只綁定指定帳號" in index_html
+    assert 'id="internal-test-token-user-id"' in index_html
+    assert 'id="internal-test-token-username"' in index_html
+    assert "這不是登入 token，不能拿去填 <code>/api/login</code>" in index_html
     assert "loadCurrentSecurityProfileDraft" in admin_js
     assert "renderSecurityProfilePreview" in admin_js
     assert "function applySecurityProfileToInputs" in admin_js
@@ -282,6 +291,8 @@ def test_album_viewer_has_dedicated_module():
     assert "function previewSecurityProfileSelection" in admin_js
     assert "function bindSecurityProfileSelect" in admin_js
     assert "function updateServerModeTokenPanels(modeOverride = null)" in admin_js
+    assert 'const usage = $("internal-test-token-usage-wrap");' in admin_js
+    assert 'const usage = $("tester-token-usage-wrap");' in admin_js
     assert '"feature_audit_log_enabled"' in admin_js
     assert '"feature_economy_enabled"' in admin_js
     assert "FEATURE_SERVICE_BUNDLES" in admin_js

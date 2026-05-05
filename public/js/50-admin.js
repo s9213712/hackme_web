@@ -3139,10 +3139,10 @@ function openLaunchCheckUpload(reportType = "") {
   if (hint) {
     const meta = LAUNCH_CHECK_REPORT_META[reportType];
     hint.textContent = meta
-      ? `用途：${meta.purpose}｜建議產生方式：${meta.generator}`
-      : "上傳的 JSON 內容會直接送往 production-report upload API，成功後自動重整 B 區狀態。";
+      ? `用途：${meta.purpose}｜建議產生方式：${meta.generator}｜注意：必須提供 raw_report + sha256 report_hash + 可驗證 signature，伺服器會重算 hash 並驗簽。`
+      : "上傳的 JSON 必須包含 raw_report、sha256 report_hash 與可驗證 signature；未通過驗簽不會計入 production gate。";
   }
-  if (input && !input.value.trim()) input.value = reportType ? `{\n  "report_type": "${reportType}",\n  "pass": true,\n  "report_hash": ""\n}` : "";
+  if (input && !input.value.trim()) input.value = reportType ? `{\n  "report_type": "${reportType}",\n  "target_commit": "",\n  "target_branch": "",\n  "server_mode": "preprod",\n  "test_result": "pass",\n  "pass": true,\n  "critical_findings_count": 0,\n  "high_findings_count": 0,\n  "unresolved_findings": [],\n  "tester": "root",\n  "report_hash": "sha256:",\n  "signature": "hmac_sha256:",\n  "key_version": "",\n  "raw_report": {\n    "summary": "fill with the actual signed report body"\n  }\n}` : "";
   if (file) file.value = "";
   launchCheckSetUploadStatus("");
   if (panel) panel.open = true;
@@ -3245,6 +3245,8 @@ function launchCheckCardMarkup(reportType, reportRow, missing, failed, idx) {
     if (reportRow && Number(reportRow.critical_findings_count || 0) > 0) reasons.push(`critical=${reportRow.critical_findings_count}`);
     if (reportRow && Number(reportRow.high_findings_count || 0) > 0) reasons.push(`high=${reportRow.high_findings_count}`);
     if (reportRow && !reportRow.report_hash) reasons.push("缺 report_hash");
+    if (reportRow && reportRow.signature_valid === false) reasons.push(`驗簽失敗${reportRow.verification_reason ? `(${reportRow.verification_reason})` : ""}`);
+    if (reportRow && String(reportRow.trust_level || "").trim() && String(reportRow.trust_level || "").trim() !== "verified") reasons.push(`trust=${reportRow.trust_level}`);
     if (reasons.length) stateNote = `失敗原因：${reasons.join("、")}。修完後重跑並上傳新一份。`;
     else stateNote = "請看上傳的 report payload 內容，找出不通過的欄位。";
   } else if (reportRow) {
@@ -3293,6 +3295,18 @@ async function submitLaunchCheckReportUpload() {
   }
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     launchCheckSetUploadStatus("Report JSON 必須是 object", false);
+    return;
+  }
+  if (payload.raw_report == null) {
+    launchCheckSetUploadStatus("缺少 raw_report；伺服器需要重算 hash 並驗證簽章", false);
+    return;
+  }
+  if (!String(payload.report_hash || "").startsWith("sha256:")) {
+    launchCheckSetUploadStatus("report_hash 必須是 sha256:<64 hex>", false);
+    return;
+  }
+  if (!String(payload.signature || "").startsWith("hmac_sha256:")) {
+    launchCheckSetUploadStatus("signature 必須是 hmac_sha256:<hex>", false);
     return;
   }
   payload.report_type = reportType;
@@ -3464,7 +3478,10 @@ async function loadInternalTestTokenStatus() {
     const configured = !!access.internal_test_token_configured;
     const expired = !!access.internal_test_token_expired;
     const expires = access.internal_test_token_expires_at || "-";
-    status.textContent = configured ? `已設定，${expired ? "已過期" : "有效"}，到期：${expires}` : "尚未設定內測 token";
+    const boundId = Number(access.internal_test_token_user_id || 0);
+    const boundUser = String(access.internal_test_token_username || "").trim();
+    const boundText = boundId ? `，綁定帳號：${boundUser || `user #${boundId}`}` : "，尚未綁定帳號";
+    status.textContent = configured ? `已設定，${expired ? "已過期" : "有效"}，到期：${expires}${boundText}` : "尚未設定內測 token";
     status.style.color = configured && !expired ? "#4caf50" : "var(--muted)";
   } catch (err) {
     status.textContent = err.message || "內測 token 狀態讀取失敗";
@@ -3550,7 +3567,9 @@ async function createTesterToken() {
   }
   const wrap = $("tester-token-created-wrap");
   const out = $("tester-token-created");
+  const usage = $("tester-token-usage-wrap");
   if (wrap) wrap.style.display = "block";
+  if (usage) usage.style.display = "block";
   if (out) {
     out.value = json.token || "";
     out.focus();
@@ -3577,9 +3596,15 @@ async function revokeTesterToken(tokenId) {
 
 async function rotateInternalTestToken() {
   const confirmText = $("internal-test-token-confirm")?.value || "";
+  const targetUserId = parseInt($("internal-test-token-user-id")?.value || "0", 10);
+  const targetUsername = ($("internal-test-token-username")?.value || "").trim();
   const msg = $("internal-test-token-msg");
   if (confirmText !== "ROTATE_INTERNAL_TEST_TOKEN") {
     if (msg) flash(msg, "確認字串必須等於 ROTATE_INTERNAL_TEST_TOKEN", false);
+    return;
+  }
+  if (!targetUserId && !targetUsername) {
+    if (msg) flash(msg, "請至少填一個綁定帳號（user id 或帳號名稱）", false);
     return;
   }
   await fetchCsrfToken({ force: true });
@@ -3589,7 +3614,12 @@ async function rotateInternalTestToken() {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
-    body: JSON.stringify({ confirm: confirmText, ttl_minutes: ttl })
+    body: JSON.stringify({
+      confirm: confirmText,
+      ttl_minutes: ttl,
+      target_user_id: targetUserId || null,
+      target_username: targetUsername || "",
+    })
   });
   const json = await res.json().catch(() => ({}));
   if (!json.ok) {
@@ -3598,14 +3628,16 @@ async function rotateInternalTestToken() {
   }
   const outWrap = $("internal-test-token-output-wrap");
   const out = $("internal-test-token-output");
+  const usage = $("internal-test-token-usage-wrap");
   if (outWrap) outWrap.style.display = "block";
+  if (usage) usage.style.display = "block";
   if (out) {
     out.value = json.token || "";
     out.focus();
     out.select();
   }
   if ($("internal-test-token-confirm")) $("internal-test-token-confirm").value = "";
-  if (msg) flash(msg, `內測 token 已產生，到期：${json.expires_at || "-"}`, true);
+  if (msg) flash(msg, `內測 token 已產生，綁定 ${json.target_username || (json.target_user_id ? `user #${json.target_user_id}` : "指定帳號")}，到期：${json.expires_at || "-"}`, true);
   await loadInternalTestTokenStatus();
 }
 
