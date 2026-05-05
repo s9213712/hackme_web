@@ -527,6 +527,13 @@ def ensure_points_economy_schema(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_pending_status ON points_pending_rewards(status, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_chain_blocks_number ON points_chain_blocks(block_number)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_chain_backup_created ON points_chain_backup_catalog(created_at)")
+    # Phase 3 of SERVER_MODE_V2_IMPLEMENTATION_PLAN.md — DB-level guard.
+    # Final line of defense: any non-production write to points_chain_blocks
+    # is aborted by the trigger before the row hits disk. Phases 7 + 2
+    # catch most bugs at the application layer; this trigger catches
+    # whatever slips through.
+    from services.db_mode_triggers import install_mode_triggers_schema
+    install_mode_triggers_schema(conn)
     conn.execute(
         """
         CREATE TRIGGER IF NOT EXISTS trg_points_ledger_no_delete

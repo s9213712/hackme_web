@@ -132,6 +132,7 @@ from services.release_info import APP_NAME, APP_RELEASE_ID
 from services.runtime_output import get_runtime_output, install_runtime_output_capture
 from services.server_bind import effective_server_bind, effective_server_ssl
 from services.server_mode_context import attach_to_g as smv2_attach_ctx, current_ctx as smv2_current_ctx
+from services.db_mode_triggers import register_app_mode_function as smv2_register_app_mode
 from services.snapshots import SnapshotService, ServerModeService, ensure_snapshot_schema
 from services.storage_maintenance import run_storage_maintenance_if_due
 from services.storage_paths import validate_storage_root
@@ -808,6 +809,15 @@ def get_db():
     try:
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA busy_timeout = 15000")
+    except Exception:
+        pass
+    # Phase 3: register app_mode() user function on every connection so
+    # the BEFORE INSERT trigger on points_chain_blocks has something to
+    # evaluate. Failure to register is silently safe — the trigger
+    # would just fail with "no such function" on the next chain insert,
+    # which is loud-fail behavior we want anyway.
+    try:
+        smv2_register_app_mode(conn, mode_reader=get_runtime_server_mode)
     except Exception:
         pass
     return conn

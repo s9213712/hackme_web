@@ -20,6 +20,11 @@ def _db(tmp_path):
         conn = sqlite3.connect(path)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
+        # Phase 3: every connection must register app_mode() so the
+        # BEFORE INSERT trigger on points_chain_blocks has something
+        # to evaluate. These tests run as production-mode behavior.
+        from services.db_mode_triggers import register_app_mode_function
+        register_app_mode_function(conn, mode_reader=lambda: "production")
         return conn
 
     conn = get_db()
