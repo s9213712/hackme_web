@@ -29,6 +29,7 @@ _STATE = {
     "csrf_token_ttl": CSRF_TOKEN_TTL,
     "session_idle_timeout": SESSION_IDLE_TIMEOUT,
     "tester_token_user_lookup": None,
+    "get_runtime_server_mode": None,
 }
 
 _hasher = argon2.PasswordHasher(time_cost=3, memory_cost=65536,
@@ -45,6 +46,7 @@ def configure_auth_service(
     csrf_token_ttl=CSRF_TOKEN_TTL,
     session_idle_timeout=SESSION_IDLE_TIMEOUT,
     tester_token_user_lookup=None,
+    get_runtime_server_mode=None,
 ):
     _STATE.update({
         "get_db": get_db,
@@ -55,7 +57,30 @@ def configure_auth_service(
         "csrf_token_ttl": csrf_token_ttl,
         "session_idle_timeout": session_idle_timeout,
         "tester_token_user_lookup": tester_token_user_lookup,
+        "get_runtime_server_mode": get_runtime_server_mode,
     })
+
+
+def _is_superweak_csrf_bypass():
+    """SERVER_MODE_V2_PROFILE_MATRIX.md §Mode Behavior Matrix footnote 1.
+
+    CSRF is on in every mode EXCEPT `superweak` (the deliberate weakest
+    web mode used for red-team / fuzz / pentest, alongside disabled
+    rate limit / login lock / account lock / password strength).
+
+    Returns True only when the runtime mode is exactly 'superweak';
+    every other mode (including unknown / unconfigured) keeps CSRF on.
+    Reads mode every call — no cache — so a switch *out of* superweak
+    re-arms CSRF immediately and a switch *into* superweak only
+    bypasses for requests that actually start in that mode.
+    """
+    reader = _STATE.get("get_runtime_server_mode")
+    if not callable(reader):
+        return False
+    try:
+        return reader() == "superweak"
+    except Exception:
+        return False
 
 
 def json_resp(data, status=200):
@@ -297,10 +322,15 @@ def require_csrf(f):
         if request.method not in CSRF_PROTECTED_METHODS:
             return f(*args, **kwargs)
         # SERVER_MODE_V2_PROFILE_MATRIX.md §Mode Behavior Matrix footnote 1:
-        # CSRF is on in every mode EXCEPT `superweak` (the deliberate weakest
-        # web mode used for red-team / fuzz / pentest). Current code has no
-        # per-mode bypass yet; the superweak bypass lands in Phase 0 of
-        # SERVER_MODE_V2_IMPLEMENTATION_PLAN.md.
+        # CSRF on in every mode EXCEPT `superweak`.
+        if _is_superweak_csrf_bypass():
+            record_security_event(
+                "csrf_skipped_superweak",
+                _request_ip(),
+                target_user="-",
+                detail=f"path={request.path},decorator=require_csrf",
+            )
+            return f(*args, **kwargs)
         csrf_tok = get_request_csrf_token()
         body_username = None
         if request.is_json:
@@ -346,7 +376,18 @@ def require_csrf_safe(f):
             return json_resp({"ok": False, "msg": "未登入"}), 401
         if request.method not in CSRF_PROTECTED_METHODS:
             return f(*args, **kwargs)
-        # CSRF policy: see comment in require_csrf above.
+        # CSRF policy: see comment in require_csrf above. superweak bypass
+        # also applies here so that CSRF posture is uniform across both
+        # decorators — otherwise red-team / pentest tooling would be blocked
+        # on authenticated endpoints in superweak only.
+        if _is_superweak_csrf_bypass():
+            record_security_event(
+                "csrf_skipped_superweak",
+                _request_ip(),
+                target_user=user,
+                detail=f"path={request.path},decorator=require_csrf_safe",
+            )
+            return f(*args, **kwargs)
         csrf_tok = get_request_csrf_token()
         if not verify_csrf_token(csrf_tok, user):
             return csrf_invalid_response("invalid_safe", user)

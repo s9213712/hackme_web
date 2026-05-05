@@ -1047,6 +1047,7 @@ configure_auth_service(
     csrf_token_ttl=CSRF_TOKEN_TTL,
     session_idle_timeout=SESSION_IDLE_TIMEOUT_SECONDS,
     tester_token_user_lookup=tester_token_username_from_request,
+    get_runtime_server_mode=get_runtime_server_mode,
 )
 configure_audit_service(
     get_db=get_db,

@@ -171,14 +171,15 @@ def test_delete_csrf_tokens_for_username_invalidates_old_session_token(tmp_path)
     assert auth.verify_csrf_token("old-token", "alice") is False
 
 
-# ── Server Mode v2 §Global Rules: csrf_always_on=true ───────────────────────
-# CSRF must NOT be bypassed by current_mode (including superweak). These
-# regression tests lock that invariant. See SERVER_MODE_V2_PROFILE_MATRIX.md
-# §Global Rules / §Mode Behavior Matrix footnote 1.
+# ── Server Mode v2 §Mode Behavior Matrix footnote 1 ────────────────────────
+# CSRF is on in every mode EXCEPT `superweak` (the deliberate weakest web
+# mode for red-team / fuzz / pentest). Tests below lock both halves of that
+# invariant: enforced-by-default + bypassed-only-in-superweak.
+# See SERVER_MODE_V2_PROFILE_MATRIX.md footnote 1.
 
 
 def test_require_csrf_is_enforced_when_no_token_present(monkeypatch):
-    """csrf_always_on=true: missing CSRF token must be rejected."""
+    """csrf default-on: missing CSRF token must be rejected."""
     monkeypatch.setattr(auth, "db_get_user_from_token", lambda token: None)
     monkeypatch.setattr(auth, "verify_csrf_token", lambda token, owner: False)
 
@@ -197,7 +198,7 @@ def test_require_csrf_is_enforced_when_no_token_present(monkeypatch):
 
 
 def test_require_csrf_safe_rejects_authenticated_request_without_csrf(monkeypatch):
-    """csrf_always_on=true: authenticated POST without verified CSRF must 403."""
+    """csrf default-on: authenticated POST without verified CSRF must 403."""
     monkeypatch.setattr(auth, "db_get_user_from_token", lambda token: "alice" if token == "session-1" else None)
     monkeypatch.setattr(auth, "verify_csrf_token", lambda token, owner: False)
 
@@ -231,3 +232,106 @@ def test_require_csrf_safe_still_requires_login_first(monkeypatch):
     client = app.test_client()
     response = client.post("/safe-probe", json={})
     assert response.status_code == 401
+
+
+def test_require_csrf_bypassed_in_superweak(monkeypatch):
+    """superweak mode: CSRF check is skipped for require_csrf-decorated POSTs.
+
+    This is the only mode that bypasses CSRF; all 6 other modes
+    (test / internal_test / dev_ready / production / maintenance /
+    incident_lockdown) keep CSRF on.
+    """
+    events = []
+    monkeypatch.setattr(auth, "db_get_user_from_token", lambda token: None)
+    # If the bypass leaks, this would force a 403 — so we keep verify
+    # returning False and assert we never reach it.
+    monkeypatch.setattr(auth, "verify_csrf_token", lambda token, owner: False)
+    monkeypatch.setattr(auth, "record_security_event", lambda event_type, ip, **kwargs: events.append({"event_type": event_type, "ip": ip, **kwargs}))
+    auth.configure_auth_service(
+        get_db=lambda: None,
+        get_user_by_username=lambda username: None,
+        fernet=None,
+        get_runtime_server_mode=lambda: "superweak",
+    )
+
+    app = Flask(__name__)
+    app.testing = True
+
+    @app.route("/probe", methods=["POST"])
+    @auth.require_csrf
+    def probe():
+        return auth.json_resp({"ok": True})
+
+    response = app.test_client().post("/probe", json={})
+    assert response.status_code == 200
+    assert response.get_json() == {"ok": True}
+    assert any(ev["event_type"] == "csrf_skipped_superweak" and "require_csrf" in ev.get("detail", "") for ev in events), events
+
+
+def test_require_csrf_safe_bypassed_in_superweak(monkeypatch):
+    """superweak mode: CSRF check is skipped for require_csrf_safe-decorated POSTs.
+
+    Login is still required (the bypass is only on the CSRF check, not on
+    authentication).
+    """
+    events = []
+    monkeypatch.setattr(auth, "db_get_user_from_token", lambda token: "alice" if token == "session-1" else None)
+    monkeypatch.setattr(auth, "verify_csrf_token", lambda token, owner: False)
+    monkeypatch.setattr(auth, "record_security_event", lambda event_type, ip, **kwargs: events.append({"event_type": event_type, "ip": ip, **kwargs}))
+    auth.configure_auth_service(
+        get_db=lambda: None,
+        get_user_by_username=lambda username: None,
+        fernet=None,
+        get_runtime_server_mode=lambda: "superweak",
+    )
+
+    app = Flask(__name__)
+    app.testing = True
+
+    @app.route("/safe-probe", methods=["POST"])
+    @auth.require_csrf_safe
+    def safe_probe():
+        return auth.json_resp({"ok": True})
+
+    client = app.test_client()
+
+    # Without session → 401 (auth still required).
+    no_session = client.post("/safe-probe", json={})
+    assert no_session.status_code == 401
+
+    # With session but no CSRF → 200 in superweak.
+    client.set_cookie("session_token", "session-1")
+    response = client.post("/safe-probe", json={})
+    assert response.status_code == 200
+    assert response.get_json() == {"ok": True}
+    assert any(ev["event_type"] == "csrf_skipped_superweak" and "require_csrf_safe" in ev.get("detail", "") for ev in events), events
+
+
+def test_csrf_bypass_strict_equality_only(monkeypatch):
+    """superweak bypass is strict equality only — no other mode bypasses.
+
+    Modes that contain 'super' or 'weak' as substrings, or modes whose
+    name is similar but not exactly 'superweak', must not trigger bypass.
+    """
+    monkeypatch.setattr(auth, "db_get_user_from_token", lambda token: None)
+    monkeypatch.setattr(auth, "verify_csrf_token", lambda token, owner: False)
+    monkeypatch.setattr(auth, "record_security_event", lambda event_type, ip, **kwargs: None)
+
+    app = Flask(__name__)
+    app.testing = True
+
+    @app.route("/probe", methods=["POST"])
+    @auth.require_csrf
+    def probe():
+        return auth.json_resp({"ok": True})
+
+    client = app.test_client()
+    for mode in ("production", "internal_test", "test", "dev_ready", "maintenance", "incident_lockdown", "", None, "Superweak", "superweak ", "super_weak"):
+        auth.configure_auth_service(
+            get_db=lambda: None,
+            get_user_by_username=lambda username: None,
+            fernet=None,
+            get_runtime_server_mode=lambda mode=mode: mode,
+        )
+        response = client.post("/probe", json={})
+        assert response.status_code == 403, f"mode={mode!r} unexpectedly bypassed CSRF"
