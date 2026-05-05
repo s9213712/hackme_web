@@ -94,7 +94,7 @@ security/run_functional_smoke.sh --keep-runtime
 | Area | Checked Behaviors |
 |---|---|
 | runtime safety | 啟動前 filesystem snapshot、隔離 runtime、結束清理或還原 runtime。 |
-| public API | index、site config、version、password strength、captcha challenge。 |
+| public API | index、site config、version、password strength、captcha challenge、offline root recovery CLI availability。 |
 | local TLS | `runtime/cert.pem` / `runtime/key.pem` 首次啟動自動生成，reset 後重啟也會重新生成。 |
 | auth | CSRF token、root login、預設密碼強制修改、session identity。 |
 | admin | health、readiness、anomaly、DB integrity、audit chain、environment、settings、feature flags、access controls、member rules、platform stats、audit log。 |

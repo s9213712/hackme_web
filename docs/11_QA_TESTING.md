@@ -92,6 +92,8 @@ PYTHONPATH=. python3 scripts/trading_backtest_20000_probe.py --include-route --j
   額外 timeout floor。
 - `security/functional_permission_pentest.py`
   是權限濫用 / 角色矩陣專測，不是一般 port scanner。
+- `security/video_module_pentest.py`
+  是 Cloud Drive-backed video 專測，涵蓋 share-link、strict E2EE 共享邊界、manager regenerate / revoke 與 tip/idempotency。
 - `tests/smoke_suite.py`
   是極薄的 Python smoke；它現在會在跑完後把暫時打開的 feature flags 還原，
   避免污染同一個測試 runtime。
@@ -139,6 +141,7 @@ PYTHONPATH=. python3 scripts/trading_backtest_20000_probe.py --include-route --j
   - `root` 不可再透過 web `忘記密碼`、email token 或審核流程重設
   - `scripts/root_recovery.py` 是否會撤銷 root 現有 session、清掉 root CSRF token、強制下次登入改密碼
   - 離線 recovery 後是否留下審計紀錄；若 runtime 缺審計 secret，是否至少不會把 recovery 本身做失敗
+  - `security/run_functional_smoke.sh` 是否仍能驗證 offline root recovery CLI 可執行
 - 若本次改到 ComfyUI，至少補：
   - 設定頁的 `Civitai API Key` 與 root 本地模型下載工具，是否真的只在 `local` 模式出現；切到 `remote` 時不應殘留可操作入口
   - model list 是否回傳 `models / loras / embeddings / vaes / generation_modes / controlnet_types / controlnet_models / upscale_models`
@@ -150,6 +153,7 @@ PYTHONPATH=. python3 scripts/trading_backtest_20000_probe.py --include-route --j
   - Civitai 搜尋是否支援關鍵字、base model、Checkpoint / LoRA / Embedding / ControlNet、Safe/NSFW 篩選，且搜尋結果會顯示版本、檔案大小、hash、相容模型摘要
   - root 若未設定 Civitai API Key，搜尋與 inspect/download 是否回人性化錯誤，而不是靜默失敗或 500
   - Civitai 下載前是否真的會跳二次確認；下載中斷時是否顯示「下載中斷或連線失敗」而非模糊錯誤
+  - `functional_permission_pentest.py` 是否仍擋住 anonymous / user / manager 對 root-only ComfyUI / Civitai 搜尋、inspect、model upload 與 download-job poll 的越權存取
   - 生圖、本地啟動、模型下載進行中時，閒置登出倒數是否改成暫停，而不是做到一半被踢出
   - `img2img / inpaint / outpaint / upscale` 是否能正確接收來源圖 / 遮罩圖 / 控制圖，手機版表單不可擠壞
   - ControlNet 模型缺失、workflow 缺 node、控制圖格式錯誤、`control strength` 超出範圍時，是否回人性化錯誤而非靜默失敗
@@ -202,6 +206,7 @@ PYTHONPATH=. python3 scripts/trading_backtest_20000_probe.py --include-route --j
   - `live-price` 是否會同步刷新 DB 內 `trading_markets.manual_price_points / price_source` 快取，文件也要寫清楚這不是純 read-only API
   - `security/trading_exchange_validation.py` 是否已和目前引擎結果同步，不再出現過時 expected value
   - `security/trading_exchange_validation.py` 是否會額外檢查連續加倉後 `avg_cost_points` 仍維持合理，不會悄悄爆成異常大值
+  - `security/trading_stress_pentest.py` 是否會在強迫 `conservative` 融合價格時，驗證市價單與融資開倉都被高風險 gate 阻擋
 - 若本次改到交易圖表 / 技術指標，至少補：
   - 參考 K 線圖的 checkbox 是否有同步接進前端事件，不是只有 HTML 多了控制項
   - `MA10 / MA30 / EMA50 / RSI14 / KD(9,3,3)` 是否真的會進入 chart render，而不是只出現在 legend

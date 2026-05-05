@@ -1,6 +1,12 @@
 # Update Summary
 
-Release ID: `2026.05.05-118`
+Release ID: `2026.05.05-119`
+
+## 2026.05.05-119
+
+- Expanded the security validation script suite instead of only relying on product tests: `functional_permission_pentest.py` now covers root-only ComfyUI / Civitai search, inspect, model upload, and download-job endpoints across anonymous, user, manager, and root roles.
+- `trading_stress_pentest.py` now forces a conservative fused-price state and verifies that degraded `risk-grade price` input blocks high-risk market orders and financing opens rather than silently leaking degraded data into trading.
+- `video_module_pentest.py` now covers manager-side unlisted share-link regeneration, strict E2EE shared-video envelope boundaries, and revoked share-link blocking; `run_functional_smoke.sh` also confirms that the offline `scripts/root_recovery.py` CLI remains available.
 
 ## 2026.05.05-118
 

@@ -527,6 +527,11 @@ run_checks() {
   request "public version" "GET" "/api/version" "200"
   request "public password strength" "POST" "/api/password-strength" "200" '{"pass''word":"SmokeUser123!"}'
   request "public captcha challenge" "GET" "/api/captcha/challenge" "200"
+  if python3 scripts/root_recovery.py --help >/dev/null 2>&1; then
+    pass "root recovery cli help" "offline root recovery cli is available"
+  else
+    fail "root recovery cli help" "scripts/root_recovery.py --help failed"
+  fi
   check_local_tls_files
 
   login_root || return 1
