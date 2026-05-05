@@ -63,6 +63,10 @@ say() {
   printf '%s\n' "$*"
 }
 
+warn() {
+  printf 'WARN: %s\n' "$*" >&2
+}
+
 die() {
   printf 'ERROR: %s\n' "$*" >&2
   exit 1
@@ -289,6 +293,8 @@ validate_environment() {
   local missing=0
   local port="${HTML_LEARNING_PORT:-5000}"
   local bind="${GUNICORN_BIND:-${HTML_LEARNING_HOST:-0.0.0.0}:$port}"
+  local has_ffmpeg="false"
+  local has_ffprobe="false"
 
   command -v python3 >/dev/null 2>&1 || { say "缺少 python3"; missing=1; }
   if ! command -v gunicorn >/dev/null 2>&1 && ! python3 -c "import gunicorn" >/dev/null 2>&1; then
@@ -315,6 +321,20 @@ validate_environment() {
     die "部署設定未完成。可執行 scripts/run_prod.sh --wizard 重新產生設定。"
   fi
 
+  if command -v ffmpeg >/dev/null 2>&1; then
+    has_ffmpeg="true"
+  else
+    warn "未找到 ffmpeg；影音平台的 HLS 衍生檔/轉檔功能將無法使用，影片仍可退回直接串流。"
+  fi
+  if command -v ffprobe >/dev/null 2>&1; then
+    has_ffprobe="true"
+  else
+    warn "未找到 ffprobe；影音 metadata 偵測與 HLS 準備流程會失敗，請安裝 ffmpeg 套件。"
+  fi
+  if [[ -z "${CIVITAI_API_KEY:-}" ]]; then
+    warn "未設定 CIVITAI_API_KEY；root 仍可使用本地模型上傳，但 Civitai 搜尋/下載不會啟用。"
+  fi
+
   say "部署設定檢查"
   say "- env file: $ENV_FILE"
   say "- bind: $bind"
@@ -323,6 +343,9 @@ validate_environment() {
   say "- logs: ${HTML_LEARNING_LOG_DIR}"
   say "- HTTPS redirect: ${FORCE_HTTPS:-false}"
   say "- secure cookies: ${SESSION_COOKIE_SECURE:-false}"
+  say "- HLS tooling: ffmpeg=${has_ffmpeg}, ffprobe=${has_ffprobe}"
+  say "- Civitai search/download: $([[ -n "${CIVITAI_API_KEY:-}" ]] && printf 'configured' || printf 'disabled (missing CIVITAI_API_KEY)')"
+  say "- root offline recovery: python3 scripts/root_recovery.py"
 }
 
 prepare_runtime_dirs() {

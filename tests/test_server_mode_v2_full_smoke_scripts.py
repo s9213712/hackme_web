@@ -24,3 +24,4 @@ def test_server_mode_v2_full_smoke_references_extended_bundle_and_isolation_chec
     assert "points_wallets" in script
     assert "all_scripts_passed" in script
     assert "prod_clean" in script
+    assert "time.sleep(5)" in script

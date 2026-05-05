@@ -1,6 +1,12 @@
 # Update Summary
 
-Release ID: `2026.05.05-121`
+Release ID: `2026.05.05-122`
+
+## 2026.05.05-122
+
+- `deploy.sh` now supports `--with-civitai-key '<CIVITAI_API_KEY>'`, so first-time deployments can seed root-only Civitai search/download access without manually editing `.env`.
+- `scripts/run_prod.sh --check` now reports optional capability status for `ffmpeg` / `ffprobe` (video HLS derivative pipeline), `CIVITAI_API_KEY` (root-only Civitai search/download), and the canonical offline root recovery entrypoint `python3 scripts/root_recovery.py`.
+- Deployment docs and quickstart guides now explain that these checks are advisory capability hints rather than hard blockers for normal deployment.
 
 ## 2026.05.05-121
 

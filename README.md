@@ -7,7 +7,7 @@
 ![database](https://img.shields.io/badge/database-SQLite-0f6ab4)
 ![security](https://img.shields.io/badge/focus-auth%20%2B%20RBAC%20%2B%20audit-b31d28)
 
-**Current Release ID: `2026.05.05-121`**
+**Current Release ID: `2026.05.05-122`**
 
 `hackme_web` is a security-focused Flask web application that combines
 authentication, RBAC, moderation, per-user appearance overrides, Cloud Drive,
@@ -67,6 +67,12 @@ Recommended first deployment:
 
 ```bash
 ./deploy.sh
+```
+
+如果你已經知道要接本地 ComfyUI / Civitai，可直接在第一次部署時一起寫入：
+
+```bash
+./deploy.sh --with-comfyui http://127.0.0.1:8192 --with-civitai-key '<CIVITAI_API_KEY>'
 ```
 
 Manual development start:
@@ -133,6 +139,9 @@ If you enable Cloudflare Turnstile, keep the two keys separate:
 
 Do not put `TURNSTILE_SECRET_KEY` in frontend code or commit it into Git. If
 registration CAPTCHA mode is not `turnstile`, you can leave these values unset.
+`deploy.sh` / `scripts/run_prod.sh --check` 現在也會明確提示目前是否已具備
+`ffmpeg` / `ffprobe`（影音 HLS 衍生檔）與 `CIVITAI_API_KEY`（root-only Civitai
+搜尋/下載）能力，但它們屬於可選擴充，不會阻擋一般部署啟動。
 
 ## Documentation Map
 

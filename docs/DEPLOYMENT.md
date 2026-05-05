@@ -24,12 +24,16 @@ Useful modes:
 ./deploy.sh --init-db-only
 ./deploy.sh --with-comfyui http://127.0.0.1:8192
 ./deploy.sh --with-turnstile '<TURNSTILE_SECRET_KEY>'
+./deploy.sh --with-civitai-key '<CIVITAI_API_KEY>'
 ./deploy.sh --lite-hint
 ./deploy.sh --check-only --skip-install
 ```
 
 `--skip-install` 適合已經有可用 `.venv`、但當前環境不想每次重新碰 pip 網路的情境。
 單獨執行 `./deploy.sh --lite-hint` 時，現在只會輸出低配部署建議，不會先建立 `.venv`。
+`--with-civitai-key` 只會把 root-only Civitai 搜尋/下載所需的 `CIVITAI_API_KEY`
+寫進 `.env`；沒有這個 key，ComfyUI 本地模型上傳仍可用，只是無法直接搜尋/下載
+Civitai 模型。
 
 Generated runtime files remain local and must not be committed:
 
@@ -44,6 +48,19 @@ Generated runtime files remain local and must not be committed:
 - `runtime/key.pem`
 - `runtime/database/`, `runtime/logs/`, `runtime/storage/`, `runtime/chats/`,
   `runtime/anchors/`, and `runtime/reports/`
+
+## Capability Checks
+
+`scripts/run_prod.sh --check` 現在除了檢查必填 env 與 runtime 目錄，也會額外提示：
+
+- `ffmpeg` / `ffprobe` 是否存在
+  - 影響影音平台的 HLS 衍生檔與 metadata probe
+- `CIVITAI_API_KEY` 是否存在
+  - 影響 root-only Civitai 搜尋 / 下載
+- `scripts/root_recovery.py`
+  - root 忘記密碼時的正式 offline 補救入口
+
+這些能力提示屬於**可選擴充檢查**，不會阻擋一般部署。
 
 ## Functional Smoke
 

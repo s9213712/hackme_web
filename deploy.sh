@@ -9,6 +9,8 @@ WITH_COMFYUI=0
 COMFYUI_URL="${COMFYUI_URL:-http://127.0.0.1:8192}"
 WITH_TURNSTILE=0
 TURNSTILE_SECRET="${TURNSTILE_SECRET:-}"
+WITH_CIVITAI=0
+CIVITAI_API_KEY_VALUE="${CIVITAI_API_KEY_VALUE:-}"
 LITE_HINT=0
 SKIP_INSTALL=0
 ORIGINAL_ARGC="$#"
@@ -25,6 +27,7 @@ Options:
   --init-db-only          Install/check dependencies and initialize/migrate DB only.
   --with-comfyui URL      Add COMFYUI_API_URL to .env before launch.
   --with-turnstile SECRET Add TURNSTILE_SECRET_KEY to .env before launch.
+  --with-civitai-key KEY  Add CIVITAI_API_KEY to .env before launch.
   --lite-hint             Print Raspberry Pi / low-end device deployment hints.
   --skip-install          Reuse the current VENV_DIR and skip pip upgrade/install.
   --no-start              Alias for --check-only.
@@ -59,6 +62,11 @@ while [[ $# -gt 0 ]]; do
     --with-turnstile)
       WITH_TURNSTILE=1
       TURNSTILE_SECRET="${2:?missing Turnstile secret}"
+      shift 2
+      ;;
+    --with-civitai-key)
+      WITH_CIVITAI=1
+      CIVITAI_API_KEY_VALUE="${2:?missing Civitai API key}"
       shift 2
       ;;
     --lite-hint)
@@ -148,6 +156,9 @@ main() {
   fi
   if [[ "$WITH_TURNSTILE" == "1" ]]; then
     append_or_replace_env "TURNSTILE_SECRET_KEY" "$TURNSTILE_SECRET"
+  fi
+  if [[ "$WITH_CIVITAI" == "1" ]]; then
+    append_or_replace_env "CIVITAI_API_KEY" "$CIVITAI_API_KEY_VALUE"
   fi
   if [[ "$LITE_HINT" == "1" ]]; then
     print_lite_hints

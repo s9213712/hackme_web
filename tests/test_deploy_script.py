@@ -32,5 +32,18 @@ def test_deploy_helper_supports_skip_install_and_hint_only():
     script = (ROOT / "deploy.sh").read_text(encoding="utf-8")
 
     assert "--skip-install" in script
+    assert "--with-civitai-key" in script
     assert 'if [[ "$SKIP_INSTALL" == "1" ]]; then' in script
+    assert 'append_or_replace_env "CIVITAI_API_KEY" "$CIVITAI_API_KEY_VALUE"' in script
     assert 'if [[ "$LITE_HINT" == "1" && "$ORIGINAL_ARGC" == "1" ]]; then' in script
+
+
+def test_run_prod_check_reports_optional_hls_and_civitai_capabilities():
+    script = (ROOT / "scripts" / "run_prod.sh").read_text(encoding="utf-8")
+
+    assert '未找到 ffmpeg；影音平台的 HLS 衍生檔/轉檔功能將無法使用' in script
+    assert '未找到 ffprobe；影音 metadata 偵測與 HLS 準備流程會失敗' in script
+    assert '未設定 CIVITAI_API_KEY；root 仍可使用本地模型上傳' in script
+    assert 'say "- HLS tooling: ffmpeg=${has_ffmpeg}, ffprobe=${has_ffprobe}"' in script
+    assert 'say "- Civitai search/download: $([[ -n "${CIVITAI_API_KEY:-}" ]] && printf \'configured\' || printf \'disabled (missing CIVITAI_API_KEY)\')"' in script
+    assert 'say "- root offline recovery: python3 scripts/root_recovery.py"' in script

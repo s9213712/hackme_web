@@ -18,7 +18,7 @@ Related technical references:
 
 ## Release and Schema
 
-- Release ID: `2026.05.05-121`
+- Release ID: `2026.05.05-122`
 - Schema version: `29`
 - Release ID source: `services/release_info.py`
 - Runtime version endpoint: `GET /api/version`
@@ -848,6 +848,16 @@ Automation-friendly modes:
 ./scripts/run_prod.sh --init-db-only
 ./scripts/run_prod.sh --no-wizard
 ```
+
+`run_prod.sh --check` 現在還會額外提示目前部署是否已具備：
+- `ffmpeg` / `ffprobe`
+  - 影響影音平台 HLS 衍生檔與 metadata probe
+- `CIVITAI_API_KEY`
+  - 影響 root-only Civitai 搜尋 / 下載
+- `python3 scripts/root_recovery.py`
+  - root 的正式 offline recovery 入口
+
+這些提示屬於可選能力檢查，不是一般部署的硬阻擋條件。
 
 To regenerate `.env` intentionally:
 

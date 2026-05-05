@@ -176,7 +176,7 @@ def main() -> int:
             }),
         ]
 
-        for name, extra_env in scripts:
+        for idx, (name, extra_env) in enumerate(scripts):
             sh = EXAMPLES / name
             print(f"\n[full] === running {name} ===")
             run_env = dict(env, BASE_URL=base_url, **extra_env)
@@ -192,6 +192,14 @@ def main() -> int:
                 tail = "\n".join((r.stderr or "").splitlines()[-6:])
                 print(tail)
             results[name] = {"rc": r.returncode}
+            # Sleep between scripts so any tester-token rate-limit
+            # / login-violation window from the previous script can
+            # tick down before the next script issues its own probes.
+            # 04 and 05 in particular accumulate many request-log
+            # rows; without this sleep, 06/07 sometimes saw their
+            # initial root login throttled.
+            if idx + 1 < len(scripts):
+                time.sleep(5)
 
         # Final isolation check
         c = sqlite3.connect(str(db_path)); c.row_factory = sqlite3.Row

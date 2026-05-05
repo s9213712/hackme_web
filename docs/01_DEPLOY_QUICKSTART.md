@@ -25,6 +25,12 @@
 ./deploy.sh
 ```
 
+若你已經知道要接本地 ComfyUI 與 root-only Civitai 搜尋/下載，可直接：
+
+```bash
+./deploy.sh --with-comfyui http://127.0.0.1:8192 --with-civitai-key '<CIVITAI_API_KEY>'
+```
+
 如果你想手動方式：
 
 ```bash
@@ -74,6 +80,10 @@ curl -k -sS https://127.0.0.1:5000/api/version
   `scripts/run_prod.sh` 的部署精靈，並初始化 DB / 啟動服務。
 - 若 `.venv` 已備妥、你只想在隔離環境做快速檢查，可用：
   `./deploy.sh --check-only --skip-install`
+- `scripts/run_prod.sh --check` 現在除了基本 env/路徑檢查，還會提醒你目前是否缺：
+  - `ffmpeg` / `ffprobe`（影音 HLS 衍生檔）
+  - `CIVITAI_API_KEY`（root-only Civitai 搜尋/下載）
+  這些不會阻擋一般部署，只是能力提示。
 - repo 只追蹤原始碼；DB、logs、storage、keys、TLS 憑證、reports 都是
   runtime 檔，啟動後才生成。
 - 這種設計降低 clone 後的人工整理成本，也避免把別人的 runtime 狀態帶進來。

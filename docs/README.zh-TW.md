@@ -2,7 +2,7 @@
 
 [English README](../README.md)
 
-**目前 Release ID：`2026.05.05-121`**
+**目前 Release ID：`2026.05.05-122`**
 
 這份文件是中文捷徑版入口，不再承擔全部教學。它只回答三件事：
 
@@ -36,6 +36,12 @@
 
 ```bash
 ./deploy.sh
+```
+
+若已經知道本機會接 ComfyUI 與 Civitai，也可在第一次部署時直接帶入：
+
+```bash
+./deploy.sh --with-comfyui http://127.0.0.1:8192 --with-civitai-key '<CIVITAI_API_KEY>'
 ```
 
 手動：
