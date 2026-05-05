@@ -97,11 +97,11 @@ function collectCloudDriveTransferLimits() {
 function switchServerTab(tab) {
   currentServerTab = tab;
   if (tab !== "security") stopServerOutputPoll();
-  ["security", "audit", "health", "integrity", "settings", "env"].forEach((name) => {
+  ["security", "audit", "health", "integrity", "launch-check", "settings", "env"].forEach((name) => {
     const sec = $("sec-server-" + name);
     if (sec) sec.classList.toggle("active", name === tab);
   });
-  ["tab-server-security", "tab-server-audit", "tab-server-health", "tab-server-integrity", "tab-server-settings", "tab-server-env"].forEach((id) => {
+  ["tab-server-security", "tab-server-audit", "tab-server-health", "tab-server-integrity", "tab-server-launch-check", "tab-server-settings", "tab-server-env"].forEach((id) => {
     const btn = $(id);
     if (!btn) return;
     btn.classList.toggle("active", id === "tab-server-" + tab);
@@ -113,6 +113,7 @@ function switchServerTab(tab) {
   if (tab === "audit") loadAudit(0);
   if (tab === "health") { loadServerHealth(); loadPlatformStats(); }
   if (tab === "integrity") loadIntegrityGuard();
+  if (tab === "launch-check") loadLaunchCheck();
   if (tab === "settings") {
     loadSettings();
     loadServerMode();
@@ -2350,6 +2351,200 @@ function renderServerModeRequirements(requirements) {
     <div>必要報告：${required.join(", ") || "-"}</div>
     <div>缺少：${missing.join(", ") || "無"}；失敗：${failed.join(", ") || "無"}</div>
   `;
+}
+
+// ── 上線前檢查分頁（13 份 production gate report）────────────────────────────
+const LAUNCH_CHECK_REPORT_META = {
+  clean_smoke: {
+    label: "Mode v2 乾淨 smoke",
+    purpose: "boot path / state-machine / 基線 endpoints 在乾淨狀態下都過。",
+    generator: "python3 security/server_mode_v2_clean_smoke.py",
+    tip: "失敗多半是某個 mode 切換邏輯被改壞；先看輸出 JSON 的 first failing step。",
+  },
+  adversarial: {
+    label: "Mode v2 對抗測試",
+    purpose: "injection / bypass / mode-spoof 等對抗手法都被擋下。",
+    generator: "python3 security/server_mode_v2_adversarial.py",
+    tip: "失敗代表有可繞過的權限漏洞，**不可** 放行 production；先 fix 再上。",
+  },
+  redteam_l2: {
+    label: "Mode v2 Red-team L2",
+    purpose: "Red-team Level 2 攻擊樹（multi-step exploit）。",
+    generator: "python3 security/server_mode_v2_redteam_l2.py",
+    tip: "失敗代表某條 exploit chain 仍可走；找 chain 中第一個能擋的點補強。",
+  },
+  pytest: {
+    label: "全專案 pytest",
+    purpose: "tests/ 全部 pytest 通過。",
+    generator: "pytest tests/ -q",
+    tip: "失敗就跑 pytest -x 找最前面那條紅燈，先修它。",
+  },
+  log_chain_verify: {
+    label: "Log chain 完整性",
+    purpose: "mode_switch_logs + audit chain 雜湊鏈完整無破洞。",
+    generator: "GET /api/admin/health/audit-chain ＋ services/server_mode_v2_log_chain_verify",
+    tip: "失敗代表 audit chain 被改過（極危險）— 立刻進 incident_lockdown 調查。",
+  },
+  integrity_guard: {
+    label: "Integrity Guard 自檢",
+    purpose: "IntegrityGuard 自檢無 high-risk finding。",
+    generator: "GET /api/admin/integrity/repair?dry_run=true",
+    tip: "若有 high-risk file diff，請先確認是否為合法升級；不是就走 restore。",
+  },
+  stress: {
+    label: "壓力 / 流量壓測",
+    purpose: "trading + 一般流量壓測無 OOM / deadlock / 大量錯誤。",
+    generator: "python3 security/stress_test.py + python3 security/trading_stress_pentest.py",
+    tip: "失敗多半是 worker 飽和或 race condition；先看 server log 的 spike 時間點。",
+  },
+  permission: {
+    label: "權限滲透",
+    purpose: "role / permission pentest 無越權。",
+    generator: "python3 security/functional_permission_pentest.py",
+    tip: "失敗代表某條 API 缺 require_role / require_csrf；補上後重跑。",
+  },
+  functional: {
+    label: "全功能 smoke",
+    purpose: "全功能流程（登入 / 聊天 / 雲端硬碟 / 交易 / 積分 等）都正常。",
+    generator: "bash security/run_functional_smoke.sh ＋ python3 tests/smoke_suite.py",
+    tip: "失敗代表某個使用者流程已壞，可能是最近 commit 副作用。",
+  },
+  pentest: {
+    label: "安全滲透測試",
+    purpose: "session / CSRF / XSS / SQLi 等滲透測試無重大發現。",
+    generator: "bash security/run_pentest.sh ＋ python3 security/session_security_pentest.py",
+    tip: "失敗代表 web layer 有可利用洞，**絕不**可放上線；fix 後重跑。",
+  },
+  snapshot_restore: {
+    label: "Snapshot / Restore",
+    purpose: "snapshot 建立 + restore 回放 + 一致性驗證全程通過。",
+    generator: "pytest tests/test_snapshots.py ＋ 手動 1 次 create→restore→verify",
+    tip: "失敗代表 disaster recovery 不可靠；不要硬上 production。",
+  },
+  points_chain_consistency: {
+    label: "PointsChain 一致性",
+    purpose: "PointsChain 雜湊鏈、區塊內 ledger 對應全部一致。",
+    generator: "pytest tests/test_points_chain.py ＋ services/points_chain.verify_chain()",
+    tip: "失敗等同帳本被污染，**不可** 上線；走 restore + 重新 verify。",
+  },
+  cloud_drive_quota_permission: {
+    label: "雲端硬碟 quota / 權限",
+    purpose: "Cloud Drive quota、上傳權限、共享權限規則都正確。",
+    generator: "pytest tests/test_cloud_drive_attachments.py tests/test_storage_albums_schema.py",
+    tip: "失敗代表 quota 算錯或共享越權；先 fix 再產 report。",
+  },
+};
+
+function launchCheckMsg(text, ok = false) {
+  const msg = $("launch-check-msg");
+  if (!msg) return;
+  msg.textContent = text || "";
+  msg.style.color = ok ? "#4caf50" : "#ff4f6d";
+}
+
+function launchCheckCardMarkup(reportType, reportRow, missing, failed) {
+  const meta = LAUNCH_CHECK_REPORT_META[reportType] || {
+    label: reportType,
+    purpose: "（未登錄的 report 類型）",
+    generator: "（請查 docs/examples/server_mode_v2/03_production_gate_playbook.md）",
+    tip: "—",
+  };
+  let statusColor = "#4caf50";
+  let statusIcon = "✓";
+  let statusLabel = "通過";
+  let stateNote = "";
+  if (missing) {
+    statusColor = "#ff4f6d";
+    statusIcon = "❌";
+    statusLabel = "缺少報告";
+    stateNote = "這份報告沒有任何上傳紀錄；請依下方 generator 產生並上傳。";
+  } else if (failed) {
+    statusColor = "#ff4f6d";
+    statusIcon = "❌";
+    statusLabel = "最新報告未通過";
+    const reasons = [];
+    if (!reportRow || !reportRow.pass) reasons.push("test_result 非 pass");
+    if (reportRow && Number(reportRow.critical_findings_count || 0) > 0) reasons.push(`critical=${reportRow.critical_findings_count}`);
+    if (reportRow && Number(reportRow.high_findings_count || 0) > 0) reasons.push(`high=${reportRow.high_findings_count}`);
+    if (reportRow && !reportRow.report_hash) reasons.push("缺 report_hash");
+    if (reasons.length) stateNote = `失敗原因：${reasons.join("、")}。修完後重跑並上傳新一份。`;
+    else stateNote = "請看上傳的 report payload 內容，找出不通過的欄位。";
+  } else if (reportRow) {
+    stateNote = `最近通過：${reportRow.created_at || "-"}（commit ${String(reportRow.target_commit || "").slice(0, 8) || "-"}）`;
+  }
+  const escape = (text) => String(text == null ? "" : text)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return `
+    <div class="security-profile-preview show" style="border-left:4px solid ${statusColor};padding-left:.7rem;">
+      <div style="display:flex;align-items:baseline;gap:.45rem;flex-wrap:wrap;">
+        <strong style="color:${statusColor};font-size:.95rem;">${statusIcon} ${escape(meta.label)}</strong>
+        <span style="font-size:.7rem;color:var(--muted);">${escape(reportType)}</span>
+        <span style="margin-left:auto;font-size:.78rem;color:${statusColor};font-weight:600;">${escape(statusLabel)}</span>
+      </div>
+      <div style="margin-top:.35rem;color:var(--text);"><strong>用途</strong>：${escape(meta.purpose)}</div>
+      <div style="margin-top:.25rem;"><strong>產生方式</strong>：<code style="font-size:.7rem;">${escape(meta.generator)}</code></div>
+      <div style="margin-top:.25rem;"><strong>失敗對策</strong>：${escape(meta.tip)}</div>
+      ${stateNote ? `<div style="margin-top:.4rem;color:${statusColor};">⤷ ${escape(stateNote)}</div>` : ""}
+    </div>
+  `;
+}
+
+async function loadLaunchCheck() {
+  const list = $("launch-check-list");
+  const overall = $("launch-check-overall");
+  const summary = $("launch-check-summary");
+  if (!list || currentUser !== "root") return;
+  list.innerHTML = `<div class="drive-empty">讀取上線前檢查中…</div>`;
+  if (overall) {
+    overall.textContent = "讀取中…";
+    overall.style.color = "var(--muted)";
+  }
+  if (summary) summary.textContent = "";
+  launchCheckMsg("");
+  try {
+    await fetchCsrfToken({ force: true });
+    const csrf = getCsrfToken();
+    const res = await apiFetch(API + "/root/server-mode/requirements", {
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" }
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || (typeof json.ok === "boolean" && !json.ok && !Array.isArray(json.required))) {
+      throw new Error(json.msg || `HTTP ${res.status}`);
+    }
+    const required = Array.isArray(json.required) ? json.required : [];
+    const missing = new Set(Array.isArray(json.missing) ? json.missing : []);
+    const failed = new Set(Array.isArray(json.failed) ? json.failed : []);
+    const reports = json.reports && typeof json.reports === "object" ? json.reports : {};
+    const passingCount = required.filter((key) => !missing.has(key) && !failed.has(key)).length;
+    if (overall) {
+      const allPassed = json.ok === true && missing.size === 0 && failed.size === 0;
+      overall.textContent = allPassed
+        ? `✓ 全部 ${required.length} 份報告已通過，可進 production`
+        : `❌ ${passingCount} / ${required.length} 通過 — 還不能進 production`;
+      overall.style.color = allPassed ? "#4caf50" : "#ff4f6d";
+    }
+    if (summary) {
+      const parts = [];
+      if (missing.size) parts.push(`缺 ${missing.size} 份`);
+      if (failed.size) parts.push(`不通過 ${failed.size} 份`);
+      summary.textContent = parts.join("、");
+    }
+    if (!required.length) {
+      list.innerHTML = `<div class="drive-empty">沒有定義 production gate report — 請檢查 services/snapshots.py:PRODUCTION_REQUIRED_REPORT_TYPES</div>`;
+      return;
+    }
+    list.innerHTML = required
+      .map((reportType) => launchCheckCardMarkup(reportType, reports[reportType] || null, missing.has(reportType), failed.has(reportType)))
+      .join("");
+  } catch (err) {
+    if (overall) {
+      overall.textContent = "讀取失敗";
+      overall.style.color = "#ff4f6d";
+    }
+    list.innerHTML = `<div class="drive-empty">上線前檢查讀取失敗：${err && err.message ? err.message : "未知錯誤"}</div>`;
+    launchCheckMsg(err && err.message ? err.message : "未知錯誤", false);
+  }
 }
 
 async function loadServerModeLogs() {

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>hackme_web — 登入系統</title>
   <!-- Security headers via HTTP (set by server/Talisman) -->
-  <link rel="stylesheet" href="/styles.css?v=20260503-appearance-v2" />
+  <link rel="stylesheet" href="/styles.css?v=20260505-comfyui-controlnet-history" />
 </head>
 <body>
 <!-- ════════════════════ AUTH CARD ════════════════════ -->
@@ -1180,6 +1180,118 @@
             </select>
             <div class="drive-card-sub">可保留模型內建 VAE，或改用已安裝的獨立 VAE 檔。</div>
           </div>
+          <div class="settings-option-grid">
+            <div class="field">
+              <label>生成模式</label>
+              <select id="comfyui-generation-mode">
+                <option value="txt2img">文字生圖</option>
+                <option value="img2img">圖生圖</option>
+                <option value="inpaint">局部重繪</option>
+                <option value="outpaint">向外延展</option>
+                <option value="upscale">放大修復</option>
+              </select>
+            </div>
+            <div class="field" id="comfyui-denoise-field">
+              <label>重繪強度</label>
+              <input type="number" id="comfyui-denoise-strength" min="0" max="1" step="0.05" value="0.65" />
+              <div class="drive-card-sub">圖生圖、局部重繪、向外延展時使用，越高代表越偏離原圖。</div>
+            </div>
+            <div class="field" id="comfyui-upscale-model-field" style="display:none;">
+              <label>放大模型</label>
+              <select id="comfyui-upscale-model">
+                <option value="">讀取放大模型中...</option>
+              </select>
+            </div>
+          </div>
+          <div class="drive-card-sub" id="comfyui-generation-mode-tip">文字生圖：只需要提示詞，不需要來源圖片。</div>
+          <div class="comfyui-input-asset-grid">
+            <div class="comfyui-input-asset-card" id="comfyui-source-image-card">
+              <div class="drive-card-title">來源圖片</div>
+              <input type="file" id="comfyui-source-image-file" accept="image/png,image/jpeg,image/webp" />
+              <div class="drive-card-sub">img2img、局部重繪、向外延展、放大修復會使用這張圖。</div>
+              <div class="comfyui-input-preview" id="comfyui-source-image-preview"><span class="drive-card-sub">尚未選擇來源圖片</span></div>
+              <div class="drive-card-sub" id="comfyui-source-image-meta">可上傳 PNG、JPG、WEBP。</div>
+              <div class="drive-file-actions" style="justify-content:flex-start;">
+                <button class="btn btn-sm" id="comfyui-source-image-clear-btn" type="button">清除來源圖</button>
+              </div>
+            </div>
+            <div class="comfyui-input-asset-card" id="comfyui-mask-image-card" style="display:none;">
+              <div class="drive-card-title">遮罩圖片</div>
+              <input type="file" id="comfyui-mask-image-file" accept="image/png,image/jpeg,image/webp" />
+              <div class="drive-card-sub">局部重繪使用遮罩；白色 / 不透明區域代表要重畫的位置。</div>
+              <div class="comfyui-input-preview" id="comfyui-mask-image-preview"><span class="drive-card-sub">尚未選擇遮罩圖片</span></div>
+              <div class="drive-card-sub" id="comfyui-mask-image-meta">建議與來源圖片尺寸一致。</div>
+              <div class="drive-file-actions" style="justify-content:flex-start;">
+                <button class="btn btn-sm" id="comfyui-mask-image-clear-btn" type="button">清除遮罩</button>
+              </div>
+            </div>
+            <div class="comfyui-input-asset-card" id="comfyui-control-image-card" style="display:none;">
+              <div class="drive-card-title">控制圖</div>
+              <input type="file" id="comfyui-control-image-file" accept="image/png,image/jpeg,image/webp" />
+              <div class="drive-card-sub">ControlNet 會依這張控制圖保留構圖、姿勢、深度或線稿。</div>
+              <div class="comfyui-input-preview" id="comfyui-control-image-preview"><span class="drive-card-sub">尚未選擇控制圖</span></div>
+              <div class="drive-card-sub" id="comfyui-control-image-meta">控制圖只在啟用 ControlNet 時送出。</div>
+              <div class="drive-file-actions" style="justify-content:flex-start;">
+                <button class="btn btn-sm" id="comfyui-control-image-clear-btn" type="button">清除控制圖</button>
+              </div>
+            </div>
+          </div>
+          <div class="comfyui-controlnet-panel">
+            <div class="field">
+              <label><input type="checkbox" id="comfyui-controlnet-enabled" /> 啟用 ControlNet</label>
+              <div class="drive-card-sub">可控制構圖、姿勢、線稿、深度、邊緣或局部細節，不只是重畫原圖。</div>
+            </div>
+            <div class="settings-option-grid" id="comfyui-controlnet-fields" style="display:none;">
+              <div class="field">
+                <label>ControlNet 類型</label>
+                <select id="comfyui-controlnet-type">
+                  <option value="canny">Canny</option>
+                  <option value="depth">Depth</option>
+                  <option value="openpose">OpenPose</option>
+                  <option value="lineart">Lineart</option>
+                  <option value="scribble">Scribble</option>
+                  <option value="softedge">SoftEdge</option>
+                  <option value="tile">Tile</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>ControlNet 模型</label>
+                <select id="comfyui-controlnet-model">
+                  <option value="">自動選擇可用模型</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>Preprocessor</label>
+                <select id="comfyui-controlnet-preprocessor">
+                  <option value="">自動選擇</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>Control Strength</label>
+                <input type="number" id="comfyui-control-strength" min="0" max="2" step="0.05" value="1" />
+              </div>
+              <div class="field">
+                <label>Control Start</label>
+                <input type="number" id="comfyui-control-start" min="0" max="1" step="0.05" value="0" />
+              </div>
+              <div class="field">
+                <label>Control End</label>
+                <input type="number" id="comfyui-control-end" min="0" max="1" step="0.05" value="1" />
+              </div>
+            </div>
+            <div class="drive-card-sub" id="comfyui-controlnet-tip">Canny 適合保留邊緣與輪廓，常用於重畫原圖構圖。</div>
+          </div>
+          <div class="comfyui-outpaint-panel" id="comfyui-outpaint-panel" style="display:none;">
+            <div class="drive-card-title">向外延展範圍</div>
+            <div class="settings-option-grid">
+              <div class="field"><label>Left</label><input type="number" id="comfyui-outpaint-left" min="0" max="2048" step="8" value="128" /></div>
+              <div class="field"><label>Top</label><input type="number" id="comfyui-outpaint-top" min="0" max="2048" step="8" value="128" /></div>
+              <div class="field"><label>Right</label><input type="number" id="comfyui-outpaint-right" min="0" max="2048" step="8" value="128" /></div>
+              <div class="field"><label>Bottom</label><input type="number" id="comfyui-outpaint-bottom" min="0" max="2048" step="8" value="128" /></div>
+              <div class="field"><label>Feathering</label><input type="number" id="comfyui-outpaint-feathering" min="0" max="512" step="4" value="48" /></div>
+            </div>
+            <div class="drive-card-sub">向外延展會先在原圖外圍補邊，再交給模型接續生成。</div>
+          </div>
           <div class="drive-card-sub" style="margin-top:-.25rem;margin-bottom:.5rem;">LoRA 每增加 1 個，成功產圖每張額外 +1 點。</div>
           <div class="comfyui-lora-panel">
             <div class="settings-option-grid">
@@ -1253,6 +1365,19 @@
             <div id="comfyui-progress-detail" class="drive-card-sub">等待 ComfyUI 回應</div>
           </div>
           <div id="comfyui-result-meta" class="drive-card-sub"></div>
+        </div>
+      </div>
+      <div class="drive-card comfyui-history-card" style="margin-top:1rem;">
+        <div class="drive-card-heading">
+          <div>
+            <div class="drive-card-title">ComfyUI 歷史重跑</div>
+            <div class="drive-card-sub">保存模式、來源圖、ControlNet、放大模型與重繪參數，可一鍵套回或重跑。</div>
+          </div>
+          <button class="btn" id="comfyui-history-refresh-btn" type="button">重新整理歷史</button>
+        </div>
+        <div id="comfyui-history-status" class="drive-card-sub">尚未讀取歷史紀錄</div>
+        <div id="comfyui-history-list" class="comfyui-history-list">
+          <div class="drive-empty">尚無 ComfyUI 歷史紀錄</div>
         </div>
       </div>
       <div class="drive-card comfyui-root-panel" id="comfyui-root-model-panel" style="display:none;margin-top:1rem;">
@@ -2246,6 +2371,7 @@
         <button class="tab" id="tab-server-audit">審計日誌</button>
         <button class="tab" id="tab-server-health">健康度</button>
         <button class="tab" id="tab-server-integrity">Integrity Guard</button>
+        <button class="tab" id="tab-server-launch-check">上線前檢查</button>
         <button class="tab" id="tab-server-settings">伺服器設定</button>
         <button class="tab" id="tab-server-env">系統環境</button>
       </div>
@@ -2554,6 +2680,21 @@
         </div>
         <div id="integrity-warning" style="font-size:.8rem;margin-bottom:.65rem;"></div>
         <div id="integrity-findings" style="max-height:420px;overflow:auto;font-size:.72rem;"></div>
+      </div>
+
+      <div class="form-section" id="sec-server-launch-check">
+        <div class="admin-toolbar" style="margin-bottom:.5rem;display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;">
+          <button class="btn btn-primary" type="button" id="launch-check-refresh-btn">🔄 重新檢查</button>
+          <span id="launch-check-overall" style="font-weight:600;font-size:.95rem;">尚未檢查</span>
+          <span id="launch-check-summary" style="font-size:.78rem;color:var(--muted);"></span>
+        </div>
+        <div class="drive-card-sub" style="margin-bottom:.65rem;">
+          切換到 <strong>production</strong> 之前，必須有 13 份「最新通過」的報告全部 ✓ 綠燈。<br>
+          ❌ 紅 = 缺少或最新一份不合格；⚠ 黃 = 已存在但需要關注；✓ 綠 = 通過。<br>
+          詳細產生 / 上傳流程：<code>docs/examples/server_mode_v2/03_production_gate_playbook.md</code>。
+        </div>
+        <div id="launch-check-list" class="security-log-grid"></div>
+        <div id="launch-check-msg" class="msg" style="margin-top:.6rem;"></div>
       </div>
 
       <div class="form-section" id="sec-server-settings">
@@ -4323,7 +4464,7 @@
 <script src="/js/32-notifications.js?v=20260428-forum-pages" defer></script>
 <script src="/js/34-markdown-editor.js?v=20260428-forum-pages" defer></script>
 <script src="/js/35-drive.js?v=20260504-drive-media-rename" defer></script>
-<script src="/js/36-comfyui.js?v=20260503-comfyui-mode-badge" defer></script>
+<script src="/js/36-comfyui.js?v=20260505-comfyui-controlnet-history" defer></script>
 <script src="/js/37-bug-report.js?v=20260502-device-feature" defer></script>
 <script src="/js/38-games.js?v=20260502-mobile-controls" defer></script>
 <script src="/js/39-videos.js?v=20260505-hlsjs-player" defer></script>
@@ -4331,6 +4472,6 @@
 <script src="/js/50-admin.js?v=20260504-fusion-coverage-v1" defer></script>
 <script src="/js/55-economy.js?v=20260501-wallet-auto-refresh" defer></script>
 <script src="/js/56-trading.js?v=20260502-grid-spot" defer></script>
-<script src="/js/90-bootstrap.js?v=20260503-appearance-v2" defer></script>
+<script src="/js/90-bootstrap.js?v=20260505-comfyui-controlnet-history" defer></script>
 </body>
 </html>

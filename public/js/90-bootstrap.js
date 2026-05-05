@@ -19,6 +19,7 @@ function bindUiEvents() {
   const tabServerSecurity = $("tab-server-security");
   const tabServerAudit = $("tab-server-audit");
   const tabServerIntegrity = $("tab-server-integrity");
+  const tabServerLaunchCheck = $("tab-server-launch-check");
   const tabServerSettings = $("tab-server-settings");
   const tabServerEnv = $("tab-server-env");
   const tabSettingsSecurity = $("tab-settings-security");
@@ -97,6 +98,7 @@ function bindUiEvents() {
   const testerTokenCreate = $("tester-token-create-btn");
   const testerTokenList = $("tester-token-list-btn");
   const healthRefresh = $("health-refresh-btn");
+  const launchCheckRefresh = $("launch-check-refresh-btn");
   const integrityRefresh = $("integrity-refresh-btn");
   const integrityRescan = $("integrity-rescan-btn");
   const integrityExport = $("integrity-export-btn");
@@ -227,6 +229,7 @@ function bindUiEvents() {
   if (tabServerAudit) tabServerAudit.addEventListener("click", () => switchServerTab("audit"));
   if (tabServerHealth) tabServerHealth.addEventListener("click", () => switchServerTab("health"));
   if (tabServerIntegrity) tabServerIntegrity.addEventListener("click", () => switchServerTab("integrity"));
+  if (tabServerLaunchCheck) tabServerLaunchCheck.addEventListener("click", () => switchServerTab("launch-check"));
   if (tabServerSettings) tabServerSettings.addEventListener("click", () => switchServerTab("settings"));
   if (tabServerEnv) tabServerEnv.addEventListener("click", () => switchServerTab("env"));
   if (tabSettingsSecurity) tabSettingsSecurity.addEventListener("click", () => switchSettingsSection("security"));
@@ -375,6 +378,7 @@ function bindUiEvents() {
   if (rootTradingBtcTradeCheck) rootTradingBtcTradeCheck.addEventListener("click", checkRootBtcTradeStatus);
   if (rootTradingBtcTradeSetup) rootTradingBtcTradeSetup.addEventListener("click", setupRootBtcTrade);
   if (typeof bindComfyuiDraftPersistence === "function") bindComfyuiDraftPersistence();
+  if (typeof bindComfyuiAdvancedUi === "function") bindComfyuiAdvancedUi();
   if (typeof bindEconomyInlineEvents === "function") bindEconomyInlineEvents();
   if (sidebarToggle) sidebarToggle.addEventListener("click", () => {
     setSidebarCollapsed(!document.body.classList.contains("sidebar-collapsed"));
@@ -502,6 +506,7 @@ function bindUiEvents() {
   if (testerTokenList) testerTokenList.addEventListener("click", loadTesterTokens);
   if (healthRefresh) healthRefresh.addEventListener("click", loadServerHealth);
   if (integrityRefresh) integrityRefresh.addEventListener("click", loadIntegrityGuard);
+  if (launchCheckRefresh) launchCheckRefresh.addEventListener("click", () => loadLaunchCheck());
   if (integrityRescan) integrityRescan.addEventListener("click", rescanIntegrityGuard);
   if (integrityExport) integrityExport.addEventListener("click", exportIntegrityReport);
   if (integrityBulkApprove) integrityBulkApprove.addEventListener("click", () => reviewSelectedIntegrityFindings("approve"));
