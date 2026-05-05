@@ -95,6 +95,17 @@ def test_shadow_ledger_exists_with_expected_columns():
     assert expected.issubset(set(cols)), f"missing columns: {expected - set(cols)}"
 
 
+def test_shadow_wallets_exists_with_points_only_columns():
+    conn = _fresh_db()
+    cols = _columns(conn, "test_shadow_wallets")
+    expected = {
+        "id", "tester_user_id", "user_id", "balance_points", "frozen_points",
+        "total_points_earned", "total_points_spent", "wallet_status",
+        "risk_level", "token_id", "created_at", "updated_at",
+    }
+    assert expected.issubset(set(cols)), f"missing columns: {expected - set(cols)}"
+
+
 def test_shadow_indexes_exist():
     conn = _fresh_db()
     indexes = {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'").fetchall()}

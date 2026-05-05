@@ -48,6 +48,10 @@ def _services(tmp_path):
     points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
     prices = {"BTC/POINTS": 77059, "ETH/POINTS": 5000}
     trading = TradingEngineService(get_db=get_db, points_service=points, live_price_provider=lambda symbol: prices[symbol])
+    # Most trading-engine tests use injected prices, not live fused-network data.
+    # Force the runtime price source onto the synthetic provider path so these
+    # tests stay deterministic even when the host machine has real network access.
+    _set_trading_setting(trading, "trading.price_source", "binance_public_api")
     trading.test_prices = prices
     return points, trading
 
@@ -69,6 +73,7 @@ def _services_with_history(tmp_path, *, prices=None, candles=None):
         live_price_provider=lambda symbol: live_prices[symbol],
         historical_candles_provider=history_provider,
     )
+    _set_trading_setting(trading, "trading.price_source", "binance_public_api")
     trading.test_prices = live_prices
     return points, trading
 
@@ -552,11 +557,10 @@ def test_internal_test_open_margin_position_writes_chain_collateral_to_shadow_le
         conn.execute(
             """
             UPDATE test_shadow_wallets
-            SET balance_points=?, soft_balance=?, hard_balance=0,
-                soft_frozen=0, hard_frozen=0, updated_at=?
+            SET balance_points=?, frozen_points=0, updated_at=?
             WHERE user_id=?
             """,
-            (2_000, 2_000, now, 1),
+            (2_000, now, 1),
         )
         trading._ensure_trial_credit(conn, 1)
         conn.execute(
@@ -594,7 +598,7 @@ def test_internal_test_open_margin_position_writes_chain_collateral_to_shadow_le
             (opened["position"]["position_uuid"],),
         ).fetchall()
         shadow_wallet = conn.execute(
-            "SELECT soft_balance, soft_frozen, balance_points FROM test_shadow_wallets WHERE user_id=?",
+            "SELECT balance_points, frozen_points FROM test_shadow_wallets WHERE user_id=?",
             (1,),
         ).fetchone()
     finally:
@@ -607,9 +611,8 @@ def test_internal_test_open_margin_position_writes_chain_collateral_to_shadow_le
     ]
     assert all(int(row["tester_user_id"] or 0) == 9 for row in shadow_ledger_rows)
     assert shadow_wallet is not None
-    assert int(shadow_wallet["soft_frozen"] or 0) == 300
-    assert int(shadow_wallet["soft_balance"] or 0) == 1_699
     assert int(shadow_wallet["balance_points"] or 0) == 1_699
+    assert int(shadow_wallet["frozen_points"] or 0) == 300
 
 
 def test_spot_buy_uses_trial_credit_before_points_chain_and_updates_position(tmp_path):
@@ -2011,7 +2014,7 @@ def test_trading_bot_failed_scan_does_not_advance_last_scan_at_on_live_price_err
     )
     trading.update_root_settings(
         actor=_actor(3, "root", "super_admin"),
-        settings={"max_price_staleness_seconds": 0},
+        settings={"max_price_staleness_seconds": 0, "price_source": "binance_public_api"},
         markets=[],
     )
     trading.save_trading_bot(
@@ -2107,6 +2110,11 @@ def test_trading_bot_failed_scan_does_not_advance_last_scan_at_on_candle_fetch_e
         points_service=points,
         live_price_provider=lambda symbol: 100.0,
         historical_candles_provider=_history_provider,
+    )
+    trading.update_root_settings(
+        actor=_actor(3, "root", "super_admin"),
+        settings={"price_source": "binance_public_api"},
+        markets=[],
     )
     workflow = {
         "version": 1,

@@ -826,14 +826,9 @@ def ensure_snapshot_schema(conn):
             tester_user_id  INTEGER NOT NULL,
             user_id         INTEGER,
             balance_points  INTEGER NOT NULL DEFAULT 0,
-            soft_balance    INTEGER NOT NULL DEFAULT 0,
-            hard_balance    INTEGER NOT NULL DEFAULT 0,
-            soft_frozen     INTEGER NOT NULL DEFAULT 0,
-            hard_frozen     INTEGER NOT NULL DEFAULT 0,
-            total_soft_earned INTEGER NOT NULL DEFAULT 0,
-            total_hard_earned INTEGER NOT NULL DEFAULT 0,
-            total_soft_spent INTEGER NOT NULL DEFAULT 0,
-            total_hard_spent INTEGER NOT NULL DEFAULT 0,
+            frozen_points   INTEGER NOT NULL DEFAULT 0,
+            total_points_earned INTEGER NOT NULL DEFAULT 0,
+            total_points_spent INTEGER NOT NULL DEFAULT 0,
             wallet_status   TEXT NOT NULL DEFAULT 'active',
             risk_level      TEXT NOT NULL DEFAULT 'normal',
             token_id        TEXT,
@@ -845,14 +840,9 @@ def ensure_snapshot_schema(conn):
     shadow_wallet_cols = {row["name"] for row in conn.execute("PRAGMA table_info(test_shadow_wallets)").fetchall()}
     for col, ddl in (
         ("user_id", "ALTER TABLE test_shadow_wallets ADD COLUMN user_id INTEGER"),
-        ("soft_balance", "ALTER TABLE test_shadow_wallets ADD COLUMN soft_balance INTEGER NOT NULL DEFAULT 0"),
-        ("hard_balance", "ALTER TABLE test_shadow_wallets ADD COLUMN hard_balance INTEGER NOT NULL DEFAULT 0"),
-        ("soft_frozen", "ALTER TABLE test_shadow_wallets ADD COLUMN soft_frozen INTEGER NOT NULL DEFAULT 0"),
-        ("hard_frozen", "ALTER TABLE test_shadow_wallets ADD COLUMN hard_frozen INTEGER NOT NULL DEFAULT 0"),
-        ("total_soft_earned", "ALTER TABLE test_shadow_wallets ADD COLUMN total_soft_earned INTEGER NOT NULL DEFAULT 0"),
-        ("total_hard_earned", "ALTER TABLE test_shadow_wallets ADD COLUMN total_hard_earned INTEGER NOT NULL DEFAULT 0"),
-        ("total_soft_spent", "ALTER TABLE test_shadow_wallets ADD COLUMN total_soft_spent INTEGER NOT NULL DEFAULT 0"),
-        ("total_hard_spent", "ALTER TABLE test_shadow_wallets ADD COLUMN total_hard_spent INTEGER NOT NULL DEFAULT 0"),
+        ("frozen_points", "ALTER TABLE test_shadow_wallets ADD COLUMN frozen_points INTEGER NOT NULL DEFAULT 0"),
+        ("total_points_earned", "ALTER TABLE test_shadow_wallets ADD COLUMN total_points_earned INTEGER NOT NULL DEFAULT 0"),
+        ("total_points_spent", "ALTER TABLE test_shadow_wallets ADD COLUMN total_points_spent INTEGER NOT NULL DEFAULT 0"),
         ("wallet_status", "ALTER TABLE test_shadow_wallets ADD COLUMN wallet_status TEXT NOT NULL DEFAULT 'active'"),
         ("risk_level", "ALTER TABLE test_shadow_wallets ADD COLUMN risk_level TEXT NOT NULL DEFAULT 'normal'"),
         ("created_at", "ALTER TABLE test_shadow_wallets ADD COLUMN created_at TEXT"),
@@ -860,7 +850,50 @@ def ensure_snapshot_schema(conn):
         if col not in shadow_wallet_cols:
             conn.execute(ddl)
     conn.execute("UPDATE test_shadow_wallets SET user_id=tester_user_id WHERE user_id IS NULL")
-    conn.execute("UPDATE test_shadow_wallets SET soft_balance=balance_points WHERE soft_balance=0 AND balance_points != 0")
+    if "soft_balance" in shadow_wallet_cols or "hard_balance" in shadow_wallet_cols:
+        conn.execute(
+            """
+            UPDATE test_shadow_wallets
+            SET balance_points=
+                CASE
+                    WHEN COALESCE(balance_points, 0) != 0 THEN balance_points
+                    ELSE COALESCE(soft_balance, 0) + COALESCE(hard_balance, 0)
+                END
+            """
+        )
+    if "soft_frozen" in shadow_wallet_cols or "hard_frozen" in shadow_wallet_cols:
+        conn.execute(
+            """
+            UPDATE test_shadow_wallets
+            SET frozen_points=
+                CASE
+                    WHEN COALESCE(frozen_points, 0) != 0 THEN frozen_points
+                    ELSE COALESCE(soft_frozen, 0) + COALESCE(hard_frozen, 0)
+                END
+            """
+        )
+    if "total_soft_earned" in shadow_wallet_cols or "total_hard_earned" in shadow_wallet_cols:
+        conn.execute(
+            """
+            UPDATE test_shadow_wallets
+            SET total_points_earned=
+                CASE
+                    WHEN COALESCE(total_points_earned, 0) != 0 THEN total_points_earned
+                    ELSE COALESCE(total_soft_earned, 0) + COALESCE(total_hard_earned, 0)
+                END
+            """
+        )
+    if "total_soft_spent" in shadow_wallet_cols or "total_hard_spent" in shadow_wallet_cols:
+        conn.execute(
+            """
+            UPDATE test_shadow_wallets
+            SET total_points_spent=
+                CASE
+                    WHEN COALESCE(total_points_spent, 0) != 0 THEN total_points_spent
+                    ELSE COALESCE(total_soft_spent, 0) + COALESCE(total_hard_spent, 0)
+                END
+            """
+        )
     conn.execute("UPDATE test_shadow_wallets SET created_at=updated_at WHERE created_at IS NULL OR created_at=''")
     conn.execute(
         """

@@ -1925,11 +1925,10 @@ class TradingEngineService:
         conn.execute(
             """
             INSERT OR IGNORE INTO test_shadow_wallets (
-                tester_user_id, user_id, balance_points, soft_balance, hard_balance,
-                soft_frozen, hard_frozen, total_soft_earned, total_hard_earned,
-                total_soft_spent, total_hard_spent, wallet_status, risk_level,
+                tester_user_id, user_id, balance_points, frozen_points,
+                total_points_earned, total_points_spent, wallet_status, risk_level,
                 created_at, updated_at
-            ) VALUES (?, ?, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'active', 'normal', ?, ?)
+            ) VALUES (?, ?, 0, 0, 0, 0, 'active', 'normal', ?, ?)
             """,
             (actor_user_id, int(user_id), now, now),
         )
@@ -1941,10 +1940,10 @@ class TradingEngineService:
     def _shadow_wallet_payload(self, row):
         if not row:
             return None
-        points_balance = int(row["soft_balance"] or 0) + int(row["hard_balance"] or 0)
-        points_frozen = int(row["soft_frozen"] or 0) + int(row["hard_frozen"] or 0)
-        total_points_earned = int(row["total_soft_earned"] or 0) + int(row["total_hard_earned"] or 0)
-        total_points_spent = int(row["total_soft_spent"] or 0) + int(row["total_hard_spent"] or 0)
+        points_balance = int(row["balance_points"] or 0)
+        points_frozen = int(row["frozen_points"] or 0)
+        total_points_earned = int(row["total_points_earned"] or 0)
+        total_points_spent = int(row["total_points_spent"] or 0)
         return {
             "user_id": int(row["user_id"]),
             "public_account_id": public_account_id(self.points_service.chain_secret, int(row["user_id"])),
@@ -1998,10 +1997,10 @@ class TradingEngineService:
         if str(wallet["wallet_status"] or "active") == "closed":
             raise ValueError("wallet is closed")
         currency = normalize_currency_type(currency_type)
-        balance_col = "soft_balance" if currency == "soft" else "hard_balance"
-        frozen_col = "soft_frozen" if currency == "soft" else "hard_frozen"
-        earned_col = "total_soft_earned" if currency == "soft" else "total_hard_earned"
-        spent_col = "total_soft_spent" if currency == "soft" else "total_hard_spent"
+        balance_col = "balance_points"
+        frozen_col = "frozen_points"
+        earned_col = "total_points_earned"
+        spent_col = "total_points_spent"
         balance_before = int(wallet[balance_col] or 0)
         frozen_before = int(wallet[frozen_col] or 0)
         balance_after = balance_before
@@ -2088,7 +2087,6 @@ class TradingEngineService:
                 now,
             ),
         )
-        total_balance_points = balance_after + int(wallet["hard_balance"] or 0) if balance_col == "soft_balance" else int(wallet["soft_balance"] or 0) + balance_after
         conn.execute(
             f"""
             UPDATE test_shadow_wallets
@@ -2096,7 +2094,7 @@ class TradingEngineService:
                 balance_points=?, updated_at=?
             WHERE user_id=?
             """,
-            (balance_after, frozen_after, earned_delta, spent_delta, total_balance_points, now, int(user_id)),
+            (balance_after, frozen_after, earned_delta, spent_delta, balance_after, now, int(user_id)),
         )
         return conn.execute("SELECT * FROM test_shadow_ledger WHERE id=?", (cur.lastrowid,)).fetchone()
 

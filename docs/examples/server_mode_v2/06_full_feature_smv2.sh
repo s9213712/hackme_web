@@ -105,7 +105,7 @@ csrf=$(get_csrf "$ROOT_JAR")
 rotate_resp=$(curl "${CURL_OPTS[@]}" -b "$ROOT_JAR" \
   -H "Content-Type: application/json" -H "X-CSRF-Token: $csrf" \
   -X POST "$BASE_URL/api/admin/access-controls/internal-test-token" \
-  -d "{\"confirm\":\"ROTATE_INTERNAL_TEST_TOKEN\",\"ttl_minutes\":30,\"csrf_token\":\"$csrf\"}")
+  -d "{\"confirm\":\"ROTATE_INTERNAL_TEST_TOKEN\",\"ttl_minutes\":30,\"target_username\":\"$TESTER_USER\",\"csrf_token\":\"$csrf\"}")
 [ -n "$(printf '%s' "$rotate_resp" | jq -r '.token // empty')" ] || fail "rotate failed: $rotate_resp"
 ok "internal_test login token rotated"
 

@@ -1,6 +1,28 @@
 # Update Summary
 
-Release ID: `2026.05.05-141`
+Release ID: `2026.05.06-142`
+
+## 2026.05.06-142
+
+- `test_shadow_wallets` is now aligned with the points-only trading shadow path
+  instead of the older `soft_* / hard_*` split. Fresh snapshot schemas create
+  `balance_points`, `frozen_points`, `total_points_earned`, and
+  `total_points_spent`, while migrations fold any legacy soft/hard values into
+  those canonical fields so internal-test trading, funding settlement, and
+  chain-backed margin opens stop failing on missing shadow-wallet columns.
+- The Server Mode v2 smoke harnesses now point back at the actual tutorial
+  bundle under `docs/examples/server_mode_v2/` instead of an empty
+  `scripts/server_mode_v2/` directory, so `security/server_mode_v2_token_smoke.py`
+  and `security/server_mode_v2_full_smoke.py` run the same scripts the docs and
+  tests reference.
+- `docs/examples/server_mode_v2/06_full_feature_smv2.sh` now passes
+  `target_username` when rotating an `internal_test` login token, matching the
+  current server-side requirement for single-account-bound internal-test login
+  tokens.
+- `docs/examples/server_mode_v2/05_stress_smv2.sh` no longer burns the full
+  burst after the first blocked tester-token response; it now exits the rate
+  limit probe as soon as the contract is proven and shortens the per-request
+  timeout, eliminating the prior full-smoke timeout on script 05.
 
 ## 2026.05.05-141
 

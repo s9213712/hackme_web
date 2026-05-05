@@ -61,20 +61,21 @@ note "tester token issued (id=${TOKEN_ID})"
 
 # ── probe 1: sequential burst > rate limit ─────────────────────────
 say "1) sequential burst ${BURST_SIZE} GETs of /api/tester/shadow-state"
-# Sequential is deterministic: token max_requests_per_minute=30, so
-# request #31..#${BURST_SIZE} should be denied as the sliding window
-# fills up. Using parallelism would race against the Flask dev server
-# and leave responses lost — for a teaching probe, sequential is
-# clearer and reliable.
+# Sequential is deterministic, but once the first blocked response
+# shows up we already proved the contract. Do not spend the rest of
+# the burst waiting on avoidable timeouts.
 work_dir=$(mktemp -d); trap 'rm -rf "$work_dir" "$ROOT_JAR"' EXIT
 log_file="$work_dir/probe1.log"
 : > "$log_file"
 for i in $(seq 1 "$BURST_SIZE"); do
-  code=$(curl -sk --max-time 5 \
+  code=$(curl -sk --max-time 2 \
     -H "User-Agent: Mozilla/5.0 stress" \
     -H "X-Tester-Token: $TOKEN" \
     -o /dev/null -w '%{http_code}' "$BASE_URL/api/tester/shadow-state" 2>/dev/null || echo "000")
   printf '%s\n' "$code" >> "$log_file"
+  if printf '%s' "$code" | grep -qE '^(401|403|429)$'; then
+    break
+  fi
 done
 total_logged=$(wc -l < "$log_file" | tr -d ' ')
 ok_count=$(grep -c '^200$' "$log_file" 2>/dev/null) || ok_count=0
