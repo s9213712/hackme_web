@@ -325,6 +325,192 @@ def test_small_spot_buy_does_not_overcharge_integer_fee(tmp_path):
     assert dashboard["funding"]["trial_credit"]["available_points"] == 900
 
 
+@pytest.mark.parametrize(
+    ("market_symbol", "entry_price", "exit_price", "quantity"),
+    [
+        ("XRP/POINTS", Decimal("3"), Decimal("3.3"), "100"),
+        ("BNB/POINTS", Decimal("700"), Decimal("770"), "0.5"),
+        ("PAXG/POINTS", Decimal("3300"), Decimal("3600"), "0.1"),
+    ],
+)
+def test_new_points_markets_spot_orders_keep_cost_fee_and_realized_pnl_sane(tmp_path, market_symbol, entry_price, exit_price, quantity):
+    _, trading = _services_with_history(
+        tmp_path,
+        prices={
+            "XRP/POINTS": 3.0,
+            "BNB/POINTS": 700.0,
+            "PAXG/POINTS": 3300.0,
+        },
+    )
+
+    trading.test_prices[market_symbol] = float(entry_price)
+    buy = trading.place_order(
+        actor=_actor(),
+        market_symbol=market_symbol,
+        side="buy",
+        order_type="market",
+        quantity=quantity,
+    )
+
+    dashboard_after_buy = trading.user_dashboard(user_id=1)
+    position = next(row for row in dashboard_after_buy["positions"] if row["market_symbol"] == market_symbol)
+    expected_notional = notional_points(position["quantity_units"], float(entry_price))
+
+    assert buy["order"]["status"] == "filled"
+    assert position["quantity"] == quantity
+    assert position["avg_cost_points"] >= float(entry_price)
+    assert position["gross_cost_points"] == expected_notional
+    assert position["cost_basis_points"] == expected_notional + buy["order"]["fee_points"]
+
+    trading.test_prices[market_symbol] = float(exit_price)
+    sold = trading.place_order(
+        actor=_actor(),
+        market_symbol=market_symbol,
+        side="sell",
+        order_type="market",
+        quantity=quantity,
+    )
+    dashboard_after_sell = trading.user_dashboard(user_id=1)
+    closed_position = next(row for row in dashboard_after_sell["positions"] if row["market_symbol"] == market_symbol)
+    sell_fill = dashboard_after_sell["fills"][0]
+
+    assert sold["order"]["status"] == "filled"
+    assert closed_position["quantity_units"] == 0
+    assert closed_position["quantity"] == "0"
+    assert closed_position["realized_pnl_points"] > 0
+    assert sell_fill["market_symbol"] == market_symbol
+    assert sell_fill["price_points"] == float(exit_price)
+    assert sell_fill["fee_points"] == sold["order"]["fee_points"]
+    assert sell_fill["realized_pnl_points"] > 0
+
+
+@pytest.mark.parametrize(
+    ("market_symbol", "candles", "order_points"),
+    [
+        (
+            "XRP/POINTS",
+            [
+                {"time": 1, "close_points": 3.0},
+                {"time": 2, "close_points": 3.0},
+                {"time": 3, "close_points": 4.0},
+            ],
+            300,
+        ),
+        (
+            "BNB/POINTS",
+            [
+                {"time": 1, "close_points": 700.0},
+                {"time": 2, "close_points": 700.0},
+                {"time": 3, "close_points": 770.0},
+            ],
+            700,
+        ),
+        (
+            "PAXG/POINTS",
+            [
+                {"time": 1, "close_points": 3300.0},
+                {"time": 2, "close_points": 3300.0},
+                {"time": 3, "close_points": 3600.0},
+            ],
+            330,
+        ),
+    ],
+)
+def test_new_points_markets_dca_backtest_keeps_fee_and_final_value_consistent(tmp_path, market_symbol, candles, order_points):
+    _, trading = _services_with_history(
+        tmp_path,
+        prices={
+            "XRP/POINTS": 3.0,
+            "BNB/POINTS": 700.0,
+            "PAXG/POINTS": 3300.0,
+        },
+        candles=candles,
+    )
+
+    result = trading.backtest_trading_bot(
+        actor=_actor(),
+        payload={
+            "market_symbol": market_symbol,
+            "strategy": "dca",
+            "bot_config": {"order_points": order_points, "interval_candles": 99},
+            "initial_cash_points": order_points,
+            "candles": candles,
+        },
+    )
+
+    spend = order_points
+    fee = fee_points(spend, 0.1)
+    buy_price = Decimal(str(candles[0]["close_points"]))
+    last_price = Decimal(str(candles[-1]["close_points"]))
+    units = int((Decimal(str(spend - fee)) * Decimal(trading_engine_module.ASSET_SCALE) / buy_price).quantize(Decimal("1"), rounding=ROUND_DOWN))
+    expected_value = notional_points(units, float(last_price))
+
+    assert result["ok"] is True
+    assert result["market_symbol"] == market_symbol
+    assert result["strategy"] == "dca"
+    assert result["trade_count"] == 1
+    assert result["trades"][0]["fee_points"] == fee
+    assert result["trades"][0]["price_points"] == float(buy_price)
+    assert result["position_value_points"] == expected_value
+    assert result["final_value_points"] == expected_value
+    assert result["pnl_points"] == expected_value - spend
+
+
+@pytest.mark.parametrize(
+    ("market_symbol", "price_points", "quantity", "collateral_points"),
+    [
+        ("XRP/POINTS", 3.0, "100", 500),
+        ("BNB/POINTS", 700.0, "0.1", 200),
+        ("PAXG/POINTS", 3300.0, "0.02", 200),
+    ],
+)
+def test_new_points_markets_short_borrow_uses_non_btc_eth_apr_group_and_closes(tmp_path, market_symbol, price_points, quantity, collateral_points):
+    points, trading = _services_with_history(
+        tmp_path,
+        prices={
+            "XRP/POINTS": 3.0,
+            "BNB/POINTS": 700.0,
+            "PAXG/POINTS": 3300.0,
+        },
+    )
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    trading.update_root_settings(
+        actor=_actor(3, "root", "super_admin"),
+        settings={
+            "borrowing_enabled": True,
+            "borrow_apr_btc_eth_percent": 8,
+            "borrow_apr_usdt_points_percent": 10,
+            "borrow_interest_pool_pressure_multiplier": 0,
+            "borrow_interest_interval_hours": 1,
+            "borrow_interest_minimum_hours": 1,
+            "price_source": "manual_root",
+        },
+        markets=[{"symbol": market_symbol, "manual_price_points": price_points}],
+    )
+
+    opened = trading.open_margin_position(
+        actor=_actor(),
+        market_symbol=market_symbol,
+        position_type="short",
+        quantity=quantity,
+        collateral_points=collateral_points,
+    )
+    position = trading.user_dashboard(user_id=1)["margin_positions"][0]
+
+    assert opened["position"]["status"] == "open"
+    assert opened["position"]["borrowed_asset_symbol"] == market_symbol.split("/", 1)[0]
+    assert opened["position"]["interest_percent_daily"] == pytest.approx(10.0 / 365.0)
+    assert position["interest_apr_percent"] == pytest.approx(10.0)
+    assert position["interest_interval_hours"] == 1
+    assert position["interest_minimum_hours"] == 1
+    assert position["breakeven_price_points"] > 0
+    assert position["liquidation_price_points"] > opened["position"]["entry_price_points"]
+
+    closed = trading.close_margin_position(actor=_actor(), position_uuid=opened["position"]["position_uuid"])
+    assert closed["position"]["status"] == "closed"
+    assert trading.verify_state()["ok"] is True
+
+
 def test_backtest_accepts_full_year_hourly_window_under_new_limit(tmp_path):
     _, trading = _services(tmp_path)
     candles = [
