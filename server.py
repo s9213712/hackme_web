@@ -131,6 +131,7 @@ from services.points_chain import DEFAULT_BLOCK_LEDGER_THRESHOLD, DEFAULT_BLOCK_
 from services.release_info import APP_NAME, APP_RELEASE_ID
 from services.runtime_output import get_runtime_output, install_runtime_output_capture
 from services.server_bind import effective_server_bind, effective_server_ssl
+from services.server_mode_context import attach_to_g as smv2_attach_ctx, current_ctx as smv2_current_ctx
 from services.snapshots import SnapshotService, ServerModeService, ensure_snapshot_schema
 from services.storage_maintenance import run_storage_maintenance_if_due
 from services.storage_paths import validate_storage_root
@@ -1234,6 +1235,31 @@ def api_request_too_large(error):
 
 
 @app.before_request
+def attach_smv2_ctx():
+    """SERVER_MODE_V2_IMPLEMENTATION_PLAN.md Phase 1.
+
+    MUST stay registered as the FIRST before_request hook so every
+    later hook + route can read flask.g.smv2_ctx via current_ctx().
+
+    Phase 1 deliberately attaches only `mode` + `request_id` eagerly.
+    Computing `tester_id` / `actor_role` here would require running
+    `get_current_user_ctx()` for every request — which itself runs
+    `tester_token_username_from_request()` (timing-noisy DB query +
+    audit event recording). Doing that on top of the per-route auth
+    lookups would double the work and push some hot endpoints past
+    request-timeout budgets.
+
+    Later phases that genuinely need actor info (Phase 2 routing,
+    Phase 5 trading) will populate those fields where needed; see
+    `SmV2Context.tester_id` / `.actor_role` defaulting to None.
+    """
+    if request.method == "OPTIONS":
+        return None
+    smv2_attach_ctx(mode_reader=get_runtime_server_mode)
+    return None
+
+
+@app.before_request
 def protect_sensitive_static_pages():
     if request.method == "OPTIONS" or request.path != "/trading-workflow-editor.html":
         return None
@@ -1316,7 +1342,8 @@ def restrict_cors():
             return ("", 204)
 
     settings = get_system_settings()
-    runtime_mode = get_runtime_server_mode()
+    # Phase 1: read mode from request-scoped ctx instead of hitting DB again.
+    runtime_mode = smv2_current_ctx().mode
     mode_blocks_writes = runtime_mode in {"maintenance", "incident_lockdown"}
     if not mode_blocks_writes and not settings.get("maintenance_mode", False):
         return None
