@@ -31,6 +31,8 @@ from services.trading_mode_gate import (
     matching_orderbook_key,
 )
 from services.trading_markets import (
+    TRADING_MARKET_CATALOG_SEED_VERSION,
+    get_market_definition,
     list_market_definitions,
     list_live_price_markets,
     list_seed_markets,
@@ -429,6 +431,8 @@ def _registry_default_market_payload(definition):
         "live_price_enabled": 1 if definition.get("live_price_enabled") else 0,
         "reference_price_enabled": 1 if definition.get("reference_price_enabled") else 0,
         "btc_trade_enabled": 1 if definition.get("btc_trade_enabled") else 0,
+        "registry_source": "catalog_seed",
+        "seed_version": int(TRADING_MARKET_CATALOG_SEED_VERSION),
     }
 
 
@@ -437,6 +441,105 @@ def _provider_mapping_capabilities(provider):
         "supports_ticker": 1 if provider in TICKER_CAPABLE_PROVIDERS else 0,
         "supports_depth": 1 if provider in DEPTH_CAPABLE_PROVIDERS else 0,
         "supports_candles": 1 if provider in REFERENCE_PRICE_CAPABLE_PROVIDERS else 0,
+    }
+
+
+def _market_seed_compare_value(value):
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, float):
+        return round(float(value), 8)
+    if value is None:
+        return None
+    return value
+
+
+def _registry_seed_status(registry_row, mappings):
+    source = str(registry_row.get("registry_source") or "catalog_seed").strip().lower() or "catalog_seed"
+    catalog_definition = get_market_definition(registry_row.get("symbol"))
+    catalog_seed_version = int(TRADING_MARKET_CATALOG_SEED_VERSION)
+    applied_seed_version = int(registry_row.get("seed_version") or 0)
+    if source == "custom":
+        return {
+            "registry_source": "custom",
+            "seed_version": applied_seed_version,
+            "catalog_seed_version": catalog_seed_version,
+            "seed_sync_status": "custom",
+            "seed_sync_reasons": [],
+            "seed_sync_message": "此市場由 root 在資料庫中建立，DB 是唯一 source of truth。",
+        }
+    if not catalog_definition:
+        return {
+            "registry_source": source,
+            "seed_version": applied_seed_version,
+            "catalog_seed_version": catalog_seed_version,
+            "seed_sync_status": "orphaned_seed",
+            "seed_sync_reasons": ["catalog_definition_missing"],
+            "seed_sync_message": "catalog 已不再定義此市場；目前以 DB registry 為唯一 source of truth。",
+        }
+    expected = _registry_default_market_payload(catalog_definition)
+    reasons = []
+    compare_fields = (
+        "base_asset",
+        "quote_asset",
+        "display_name",
+        "display_quote_currency",
+        "market_type",
+        "enabled",
+        "allow_spot",
+        "allow_margin",
+        "allow_bots",
+        "allow_risk_grade_usage",
+        "price_precision",
+        "quantity_precision",
+        "min_order_size",
+        "max_order_size",
+        "lot_size",
+        "tick_size",
+        "sort_order",
+        "default_manual_price_points",
+        "live_price_enabled",
+        "reference_price_enabled",
+        "btc_trade_enabled",
+    )
+    for field in compare_fields:
+        if _market_seed_compare_value(registry_row.get(field)) != _market_seed_compare_value(expected.get(field)):
+            reasons.append(field)
+    expected_mappings = {}
+    for provider, provider_symbol in dict(catalog_definition.get("provider_ids") or {}).items():
+        capabilities = _provider_mapping_capabilities(provider)
+        expected_mappings[provider] = {
+            "provider_symbol": str(provider_symbol or "").strip(),
+            "supports_ticker": int(capabilities["supports_ticker"]),
+            "supports_depth": int(capabilities["supports_depth"]),
+            "supports_candles": int(capabilities["supports_candles"]),
+            "enabled": 1 if str(provider_symbol or "").strip() else 0,
+        }
+    actual_mappings = {
+        str(row["provider"] or "").strip(): {
+            "provider_symbol": str(row["provider_symbol"] or "").strip(),
+            "supports_ticker": int(row["supports_ticker"] or 0),
+            "supports_depth": int(row["supports_depth"] or 0),
+            "supports_candles": int(row["supports_candles"] or 0),
+            "enabled": int(row["enabled"] or 0),
+        }
+        for row in mappings
+    }
+    if expected_mappings != actual_mappings:
+        reasons.append("provider_mappings")
+    status = "current" if not reasons else "drifted"
+    message = (
+        "此 seeded 市場仍與目前 catalog 定義一致。"
+        if status == "current"
+        else "此 seeded 市場已偏離目前 catalog 定義；DB registry 仍是執行期 source of truth。"
+    )
+    return {
+        "registry_source": source,
+        "seed_version": applied_seed_version,
+        "catalog_seed_version": catalog_seed_version,
+        "seed_sync_status": status,
+        "seed_sync_reasons": reasons,
+        "seed_sync_message": message,
     }
 
 
@@ -452,9 +555,9 @@ def _seed_market_registry_from_catalog(conn):
                 allow_risk_grade_usage, price_precision, quantity_precision,
                 min_order_size, max_order_size, lot_size, tick_size, sort_order,
                 default_manual_price_points, live_price_enabled, reference_price_enabled,
-                btc_trade_enabled, probe_status, probe_summary_json,
+                btc_trade_enabled, registry_source, seed_version, probe_status, probe_summary_json,
                 created_at, updated_at, created_by, updated_by
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'seeded', '{}', ?, ?, NULL, NULL)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'seeded', '{}', ?, ?, NULL, NULL)
             """,
             (
                 payload["symbol"],
@@ -479,9 +582,19 @@ def _seed_market_registry_from_catalog(conn):
                 payload["live_price_enabled"],
                 payload["reference_price_enabled"],
                 payload["btc_trade_enabled"],
+                payload["registry_source"],
+                payload["seed_version"],
                 now,
                 now,
             ),
+        )
+        conn.execute(
+            """
+            UPDATE trading_markets_registry
+            SET seed_version=?, updated_at=CASE WHEN registry_source='catalog_seed' AND updated_by IS NULL THEN ? ELSE updated_at END
+            WHERE symbol=? AND registry_source='catalog_seed'
+            """,
+            (int(TRADING_MARKET_CATALOG_SEED_VERSION), now, payload["symbol"]),
         )
         registry = conn.execute(
             "SELECT id FROM trading_markets_registry WHERE symbol=?",
@@ -735,6 +848,8 @@ def ensure_trading_schema(conn):
             live_price_enabled INTEGER NOT NULL DEFAULT 1,
             reference_price_enabled INTEGER NOT NULL DEFAULT 1,
             btc_trade_enabled INTEGER NOT NULL DEFAULT 0,
+            registry_source TEXT NOT NULL DEFAULT 'catalog_seed',
+            seed_version INTEGER NOT NULL DEFAULT 1,
             probe_status TEXT NOT NULL DEFAULT 'pending',
             probe_summary_json TEXT NOT NULL DEFAULT '{}',
             probe_checked_at TEXT,
@@ -750,7 +865,8 @@ def ensure_trading_schema(conn):
             CHECK (allow_risk_grade_usage IN (0, 1)),
             CHECK (live_price_enabled IN (0, 1)),
             CHECK (reference_price_enabled IN (0, 1)),
-            CHECK (btc_trade_enabled IN (0, 1))
+            CHECK (btc_trade_enabled IN (0, 1)),
+            CHECK (registry_source IN ('catalog_seed', 'custom'))
         )
         """
     )
@@ -1276,6 +1392,18 @@ def ensure_trading_schema(conn):
         conn.execute("ALTER TABLE trading_markets ADD COLUMN max_price_jump_percent REAL NOT NULL DEFAULT 10")
         if legacy_jump_col in market_cols:
             conn.execute(f"UPDATE trading_markets SET max_price_jump_percent=CAST({legacy_jump_col} AS REAL) / 100.0")
+    registry_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_markets_registry)").fetchall()}
+    if "registry_source" not in registry_cols:
+        conn.execute("ALTER TABLE trading_markets_registry ADD COLUMN registry_source TEXT NOT NULL DEFAULT 'catalog_seed'")
+    if "seed_version" not in registry_cols:
+        conn.execute("ALTER TABLE trading_markets_registry ADD COLUMN seed_version INTEGER NOT NULL DEFAULT 1")
+    conn.execute(
+        """
+        UPDATE trading_markets_registry
+        SET registry_source='catalog_seed'
+        WHERE registry_source IS NULL OR TRIM(registry_source)=''
+        """
+    )
     margin_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_margin_positions)").fetchall()}
     legacy_interest_col = f"interest_{legacy_unit}_daily"
     if "interest_percent_daily" not in margin_cols:
@@ -2841,6 +2969,9 @@ class TradingEngineService:
             "btc_trade_enabled",
         ):
             item[key] = bool(item.get(key))
+        mappings = self._market_provider_mappings(conn, item["symbol"], include_disabled=True)
+        seed_state = _registry_seed_status(item, mappings)
+        item.update(seed_state)
         runtime_row = conn.execute("SELECT * FROM trading_markets WHERE symbol=?", (item["symbol"],)).fetchone()
         if runtime_row:
             runtime_market = self._market_payload(runtime_row)
@@ -3046,8 +3177,8 @@ class TradingEngineService:
             if conn.execute("SELECT 1 FROM trading_markets_registry WHERE symbol=?", (values["symbol"],)).fetchone():
                 raise ValueError("market already exists")
             now = _now()
-            columns = list(values.keys()) + ["probe_status", "probe_summary_json", "created_at", "updated_at", "created_by", "updated_by"]
-            row_values = [values[key] for key in values] + ["pending", "{}", now, now, self._actor_id(actor), self._actor_id(actor)]
+            columns = list(values.keys()) + ["registry_source", "seed_version", "probe_status", "probe_summary_json", "created_at", "updated_at", "created_by", "updated_by"]
+            row_values = [values[key] for key in values] + ["custom", 0, "pending", "{}", now, now, self._actor_id(actor), self._actor_id(actor)]
             placeholders = ", ".join("?" for _ in columns)
             conn.execute(
                 f"INSERT INTO trading_markets_registry ({', '.join(columns)}) VALUES ({placeholders})",

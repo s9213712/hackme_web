@@ -1455,7 +1455,7 @@ function renderRootTradingMarketProviders(payload = {}) {
     renderRootTradingMarketRegistryAudit("");
     return;
   }
-  selected.textContent = `${market.display_name || market.symbol} · provider ${Number(market.provider_count || rootTradingMarketProviderCache.length)} 家 · probe ${market.probe_status || "pending"}`;
+  selected.textContent = `${market.display_name || market.symbol} · provider ${Number(market.provider_count || rootTradingMarketProviderCache.length)} 家 · probe ${market.probe_status || "pending"} · seed ${market.seed_sync_status || "-"}`;
   if (!rootTradingMarketProviderCache.length) {
     list.innerHTML = `<div class="drive-empty">尚無 provider mapping</div>`;
   } else {
@@ -1545,7 +1545,7 @@ function populateRootTradingMarketRegistryForm(market = null) {
   const ref = market.reference_price_status || {};
   const risk = market.risk_grade_price_status || {};
   rootTradingMarketRegistryEditorStatus(
-    `${market.display_name || market.symbol} · probe ${market.probe_status || "pending"} · reference ${ref.source || "-"} / ${ref.confidence || "-"} · risk-grade ${risk.source || "-"} / ${risk.confidence || "-"} / usable ${risk.risk_grade_usable ? "yes" : "no"}${risk.high_risk_blocked ? " · 已封鎖高風險用途" : ""}`
+    `${market.display_name || market.symbol} · probe ${market.probe_status || "pending"} · seed ${market.registry_source || "-"} / v${Number(market.seed_version || 0)} / ${market.seed_sync_status || "-"} · reference ${ref.source || "-"} / ${ref.confidence || "-"} · risk-grade ${risk.source || "-"} / ${risk.confidence || "-"} / usable ${risk.risk_grade_usable ? "yes" : "no"}${risk.high_risk_blocked ? " · 已封鎖高風險用途" : ""}`
   );
   loadRootTradingMarketProviders(rootTradingMarketRegistrySelectedId);
 }
@@ -1564,15 +1564,24 @@ function renderRootTradingMarketRegistry(payload = {}) {
     const ref = market.reference_price_status || {};
     const risk = market.risk_grade_price_status || {};
     const summary = market.probe_summary || {};
+    const seedVersion = Number(market.seed_version || 0);
+    const catalogSeedVersion = Number(market.catalog_seed_version || 0);
+    const seedStatus = market.seed_sync_status || "-";
+    const seedSource = market.registry_source || "-";
+    const seedReasons = Array.isArray(market.seed_sync_reasons) && market.seed_sync_reasons.length
+      ? ` · drift ${sanitize(market.seed_sync_reasons.join(", "))}`
+      : "";
     return `
       <div class="drive-file-row billing-catalog-row">
         <div>
           <strong>${sanitize(market.display_name || market.symbol || "-")}</strong>
           <div class="drive-card-sub">${sanitize(market.symbol || "-")} · ${market.enabled ? "啟用" : "停用"} · probe ${sanitize(market.probe_status || "pending")} · provider ${Number(market.provider_count || 0)} 家</div>
+          <div class="drive-card-sub">registry ${sanitize(seedSource)} · seed v${seedVersion} / catalog v${catalogSeedVersion} · status ${sanitize(seedStatus)}${seedReasons}</div>
           <div class="drive-card-sub">reference ${sanitize(ref.source || "-")} / ${sanitize(ref.confidence || "-")} · stale ${ref.stale ? "yes" : "no"} · degraded ${ref.degraded ? "yes" : "no"} · providers ${Number(ref.provider_count || 0)}</div>
           <div class="drive-card-sub">risk-grade ${sanitize(risk.source || "-")} / ${sanitize(risk.confidence || "-")} · stale ${risk.stale ? "yes" : "no"} · degraded ${risk.degraded ? "yes" : "no"} · providers ${Number(risk.provider_count || 0)} · usable ${risk.risk_grade_usable ? "yes" : "no"}${risk.high_risk_blocked ? " · blocked" : ""}</div>
           <div class="drive-card-sub">spot ${market.allow_spot ? "✓" : "×"} · margin ${market.allow_margin ? "✓" : "×"} · bot ${market.allow_bots ? "✓" : "×"} · risk-grade ${market.allow_risk_grade_usage ? "✓" : "×"} · live ${market.live_price_enabled ? "✓" : "×"} · candles ${market.reference_price_enabled ? "✓" : "×"}</div>
           ${summary.message ? `<div class="drive-card-sub" style="color:${market.probe_status === "ok" ? "#9ecbff" : "#ffcf85"};">${sanitize(summary.message)}</div>` : ""}
+          ${market.seed_sync_message ? `<div class="drive-card-sub" style="color:${seedStatus === "current" ? "#9ecbff" : "#ffcf85"};">${sanitize(market.seed_sync_message)}</div>` : ""}
         </div>
         <div class="admin-toolbar" style="gap:.35rem;flex-wrap:wrap;">
           <button class="btn" type="button" data-root-trading-market-edit="${Number(market.id || 0)}">編輯</button>

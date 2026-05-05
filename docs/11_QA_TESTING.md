@@ -230,6 +230,8 @@ PYTHONPATH=. python3 scripts/trading_backtest_20000_probe.py --include-route --j
   - disabled market 是否確實阻擋新下單，但既有歷史、持倉與報表仍可查
   - provider mapping 錯誤或 probe 未通過時，是否拒絕啟用 `risk-grade` 用途
   - market registry audit log 是否保留 before / after，且只有 root 可改
+  - seeded 市場是否回傳 `registry_source=catalog_seed`、`seed_version` 與 `seed_sync_status`
+  - root 修改 seeded 市場後，後台是否明確顯示 `drifted`，而不是把 DB / catalog 差異藏起來
 - 若本次改到交易圖表 / 技術指標，至少補：
   - 參考 K 線圖的 checkbox 是否有同步接進前端事件，不是只有 HTML 多了控制項
   - `MA10 / MA30 / EMA50 / RSI14 / KD(9,3,3)` 是否真的會進入 chart render，而不是只出現在 legend

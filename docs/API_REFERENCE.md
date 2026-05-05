@@ -408,6 +408,16 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | POST | `/api/admin/trading/markets/<market_id>/providers` | root | 新增 provider mapping |
 | PUT | `/api/admin/trading/markets/<market_id>/providers/<mapping_id>` | root | 編輯 provider mapping |
 | DELETE | `/api/admin/trading/markets/<market_id>/providers/<mapping_id>` | root | 停用 provider mapping |
+
+`GET /api/admin/trading/markets` 現在也會回：
+- `registry_source`：`catalog_seed` 或 `custom`
+- `seed_version`
+- `catalog_seed_version`
+- `seed_sync_status`：`current` / `drifted` / `custom` / `orphaned_seed`
+- `seed_sync_reasons`
+
+這些欄位的目的不是自動覆蓋 DB，而是讓 root 看見：某個 seeded 市場是否已偏離
+目前 code catalog。執行期仍以 DB registry 為 source of truth。
 | GET | `/api/root/trading/price-fusion-status` | root | 融合價格診斷 / provider transport state |
 | GET | `/api/root/trading/bot-audit/dashboard` | root | bot audit dashboard |
 | POST | `/api/root/trading/bot-audit/run` | root | 立即跑 bot audit |
@@ -560,6 +570,7 @@ Workflow preset 補充：
 - `live-price` 與 root `price-fusion-status` 現在也回傳 canonical `connected`、`fallback`、`last_update_at`、`exclusion_reason` 與完整 `transport_state`。Binance / OKX / Coinbase / Kraken 的 websocket 只是 provider input，不可直接把單一 WS provider 當成風控價格。
 - `reference-prices` 明確屬於 `reference price` 類型，只能作為展示 / K 線 / 一般估值參考，不可直接拿來推導保證金、強平或 bot 風控。
 - trading market registry 是 canonical 市場開關來源：market 被 disable 後不可再新下單，但既有歷史 / 持倉 / 報表仍必須可查；provider mapping 未通過 probe 時，不可啟用 `risk-grade` 用途。
+- trading market registry 的 `seed_version` / `seed_sync_status` 只做 seed drift 可視化，不會默默把 root 已調整過的市場定義蓋回 code catalog。
 
 ## 測試方式
 

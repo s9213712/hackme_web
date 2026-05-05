@@ -4,7 +4,7 @@ from datetime import datetime
 
 from services.sqlite_safe import table_columns as safe_table_columns
 
-CURRENT_SCHEMA_VERSION = 29
+CURRENT_SCHEMA_VERSION = 30
 SCHEMA_MIGRATIONS = (
     (1, "bootstrap schema_migrations metadata table"),
     (2, "ensure legacy-compatible users columns"),
@@ -35,6 +35,7 @@ SCHEMA_MIGRATIONS = (
     (27, "chat recall stickers and friends schema"),
     (28, "game zone chess schema"),
     (29, "trading engine schema"),
+    (30, "trading market registry seed metadata"),
 )
 
 _STATE = {
@@ -611,6 +612,10 @@ def apply_schema_migrations(
 
             ensure_game_schema(conn)
         elif version == 29:
+            from services.trading_engine import ensure_trading_schema
+
+            ensure_trading_schema(conn)
+        elif version == 30:
             from services.trading_engine import ensure_trading_schema
 
             ensure_trading_schema(conn)

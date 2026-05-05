@@ -2,7 +2,7 @@
 
 [English README](../README.md)
 
-**目前 Release ID：`2026.05.05-132`**
+**目前 Release ID：`2026.05.05-133`**
 
 這份文件是中文捷徑版入口，不再承擔全部教學。它只回答三件事：
 
@@ -77,6 +77,9 @@ ComfyUI 目前除了一般 txt2img，也支援：
 現在也把交易市場升級成 root 可管理的 registry：root 可在後台新增 / 停用市場、調整
 precision / lot size / tick size、維護各交易所 provider mapping，並先做 probe 再決定
 是否允許 `risk-grade` 用途。市場停用後只會阻擋新下單，不會破壞既有歷史與報表。
+另外 registry 現在會明確標示 `catalog_seed` / `custom`、`seed_version` 與
+`seed_sync_status`，讓 root 看得出某個市場是 bootstrap seed 還是 DB 自建市場，
+以及目前 DB 定義是否已偏離 catalog；執行期仍以 DB registry 為 source of truth。
 
 Server Mode v2 的教學腳本也已擴充成完整 bundle：`docs/examples/server_mode_v2/`
 除了原本的 token 教學，另外補了 focused pentest、stress、full-feature、

@@ -1,6 +1,9 @@
 from copy import deepcopy
 
 
+TRADING_MARKET_CATALOG_SEED_VERSION = 1
+
+
 TRADING_MARKET_CATALOG = (
     {
         "symbol": "BTC/POINTS",

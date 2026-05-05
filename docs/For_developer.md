@@ -18,8 +18,8 @@ Related technical references:
 
 ## Release and Schema
 
-- Release ID: `2026.05.05-132`
-- Schema version: `29`
+- Release ID: `2026.05.05-133`
+- Schema version: `30`
 - Release ID source: `services/release_info.py`
 - Runtime version endpoint: `GET /api/version`
 - Branch and release policy: [BRANCHING_AND_RELEASE.md](BRANCHING_AND_RELEASE.md)
@@ -50,6 +50,17 @@ Root account note:
 
 - `root` is intentionally excluded from the public password-reset flow.
 - Offline recovery must go through `scripts/root_recovery.py`.
+
+Trading registry note:
+
+- `trading_markets_registry` is now the runtime source of truth for enabled
+  markets.
+- `services/trading_markets.py` remains a bootstrap seed catalog, not the live
+  authority.
+- Seeded rows now expose `registry_source`, `seed_version`, and
+  `seed_sync_status` so root can see when a DB-backed market has drifted away
+  from the current code catalog without silently overwriting root-managed
+  changes.
 
 Server Mode v2 note:
 

@@ -260,6 +260,7 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
         "enabled", "allow_spot", "allow_margin", "allow_bots", "allow_risk_grade_usage",
         "price_precision", "quantity_precision", "min_order_size", "max_order_size",
         "lot_size", "tick_size", "probe_status", "probe_summary_json", "created_by", "updated_by",
+        "registry_source", "seed_version",
     } <= trading_market_registry_cols
     assert {
         "market_id", "provider", "provider_symbol", "supports_ticker", "supports_depth",
@@ -282,7 +283,7 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
         "preset_id", "actor_user_id", "prompt", "negative_prompt", "params_json", "workflow_json",
         "output_refs_json", "status", "error", "created_at", "updated_at",
     } <= comfyui_workflow_run_cols
-    assert migration_versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]
+    assert migration_versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
     assert set(default_users) == {"root", "admin", "test"}
 
     assert default_users["root"]["role"] == "super_admin"

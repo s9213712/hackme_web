@@ -118,6 +118,14 @@
 
 ### Trading / Bots / Backtest
 
+- 一句話說明：提供市場下單、借貸、bot、backtest、reference/risk-grade 價格，以及 root 可管理的 market registry。
+- 設計目的：讓交易市場不再寫死於程式內，而是由 DB registry 控制執行期 source of truth，同時保留 catalog seed 供 bootstrap 與 drift 對照。
+- 使用方法：root 可在市場 registry 後台新增市場、調整 provider mapping、停用市場；卡片現在也會顯示 `catalog_seed` / `custom`、`seed_version` 與 `seed_sync_status`。
+- 原理：runtime 交易市場來自 `trading_markets_registry`；`services/trading_markets.py` 只負責 bootstrap seed 與版本對照，不會默默覆蓋 root 在 DB 內做過的調整。
+- 失敗情境與提示：市場被 disable 時，後端會拒絕新下單但保留歷史；provider mapping probe 失敗時，不可啟用 `risk-grade` 用途；若 seeded 市場與 catalog 不一致，後台會顯示 `drifted`，但不會自動改回。
+- 測試方式：registry CRUD、provider probe、precision/lot size/tick size 驗證、disabled market 阻擋、seed drift 狀態顯示、risk-grade gating。
+- 相關文件連結：[08_TRADING_ENGINE.md](08_TRADING_ENGINE.md), [TRADING.md](TRADING.md), [For_developer.md](For_developer.md), [11_QA_TESTING.md](11_QA_TESTING.md)
+
 - 一句話說明：提供現貨交易、借貸交易、多交易所融合價格、DCA / 網格 / workflow bot 與回測。
 - 設計目的：驗證金額、風控、撮合、PointsChain 結算與策略流程。
 - 使用方法：root 先啟用 economy / trading，再決定價格來源是 `融合價格（多交易所加權平均）` 還是單一 Binance；若選融合價格，可維持 `依深度自動權重`，或切成 `root 手動權重` 自行調整各交易所占比。交易相關 root 設定現在已從 `計費` 拆成獨立 `交易所` 分頁。root 設定頁同時有 `融合價格即時比例` dashboard，可直接看到目前各 API 真實占比、被排除來源與是否已降級。現貨 fee 預設 `0.10%`，Grid 預設吃 spot fee 的 `75%`（25% 折扣）；借貸則分成 `BTC / ETH = 8% APR` 與 `USDT / POINTS = 10% APR` 兩組，並可調整每小時計息規則。一般使用者交易頁的 `目前價格` 會每 `2` 秒刷新一次，漲綠跌紅；買入/賣出預估也會跟著同一節奏重算；積分錢包裡的現貨/進階交易浮盈虧、root 虛擬總額也會同步跟著最新價格更新。新版同時明確區分 `reference price` 與 `risk-grade price`：前者只用在展示、K 線與一般估值；後者專門用在融資、強平、保證金、未實現盈虧、bot 風控與交易限制。交易圖表除了原本的 `MA / EMA / 布林線`，現在也提供 `RSI14` 與 `KD(9,3,3)` 副圖，可直接在站內看趨勢與超買超賣。現貨明細另外會直接列出 `持有成本`、`單顆成本` 與 `損益平均價格`，其中損益平均價格已把預估賣出手續費算進去；借貸明細則會同時列出 `損益平衡價` 與 `逐倉估算強平價`，而且損益平衡價已把 `開倉費 / 累積利息 / 預估平倉手續費` 都算進去，兩個價格都會隨每小時計息與即時現價一起重算。若來源已降級成 fallback / cached source，頁面會直接亮黃燈，並用人話說明目前只剩 reference 參考或風控級價格暫不可用。Grid Bot 建立頁現在也會先試算最不利一格的毛利、手續費、扣費後淨利與損益兩平間距；紅燈直接阻擋，黃燈需二次確認，不再只看每格價差。root 同頁也有 `交易機器人定期稽核` dashboard；bot 在首筆成交或啟用滿 24 小時前會先標成 `未稽核`，之後才會進入綠 / 黃 / 紅燈。若你接了外部 `BTC_trade`，同一區也能先檢查腳本，再按 `一鍵啟動預測`，讓系統先判斷是否要更新資料 / 重訓模型，最後在背景等待新的預測 report。定投機器人的 `最多執行次數` 也可輸入 `-1` 代表不限制；回測若超過單批 `10,000` 根，後端會自動分段續跑，總上限為 `20,000` 根。一般使用者不需要自己理解這個上限代表多少天，因為回測頁會依目前週期即時提示「若保留開始時間，結束最晚可選到哪裡」或反過來提示開始最早可選到哪裡。交易市場本身也不再只靠程式內 hardcode：root 現在可在後台 registry 新增 / 停用市場、設定 precision / lot size / tick size、維護 provider mapping，並先 probe 再決定是否允許 `risk-grade` 用途。停用市場只會阻擋新下單，不會破壞既有歷史、持倉與報表。

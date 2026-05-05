@@ -9,6 +9,7 @@ import routes.trading as trading_routes
 from routes.trading import register_trading_routes
 from services.points_chain import PointsLedgerService, ensure_points_economy_schema
 from services.trading_engine import TradingEngineService, ensure_trading_schema
+from services.trading_markets import TRADING_MARKET_CATALOG_SEED_VERSION
 
 
 def _db(tmp_path):
@@ -184,11 +185,21 @@ def test_registry_schema_seeds_markets_and_exposes_audit_tables(tmp_path):
         conn.close()
 
     assert {"trading_markets_registry", "trading_market_provider_mappings", "trading_market_registry_audit"} <= tables
+    btc = next(row for row in registry["markets"] if row["symbol"] == "BTC/POINTS")
+    assert btc["registry_source"] == "catalog_seed"
+    assert btc["seed_version"] == TRADING_MARKET_CATALOG_SEED_VERSION
+    assert btc["catalog_seed_version"] == TRADING_MARKET_CATALOG_SEED_VERSION
+    assert btc["seed_sync_status"] == "current"
 
 
 def test_root_can_add_market_and_public_market_list_reflects_registry(tmp_path, monkeypatch):
     _get_db, _points, trading = _services(tmp_path)
     market_id = _seed_sol_market(trading)
+    registry = trading.list_market_registry(include_disabled=True)
+    sol_registry = next(row for row in registry["markets"] if row["symbol"] == "SOL/POINTS")
+    assert sol_registry["registry_source"] == "custom"
+    assert sol_registry["seed_version"] == 0
+    assert sol_registry["seed_sync_status"] == "custom"
 
     trading_routes.REFERENCE_PRICE_CACHE.clear()
     candles = [
@@ -218,6 +229,41 @@ def test_root_can_add_market_and_public_market_list_reflects_registry(tmp_path, 
     assert reference["market"] == "SOL/POINTS"
     assert reference["display_market"] == "SOL/USDT"
     assert reference["source"] == "binance_public_api"
+
+
+def test_seeded_market_updates_are_reported_as_catalog_drift(tmp_path):
+    _get_db, _points, trading = _services(tmp_path)
+    root = _actor(3, "root", "super_admin")
+    market_id = _find_market_id(trading, "BTC/POINTS")
+    trading.update_market_registry(actor=root, market_id=market_id, payload={
+        "symbol": "BTC/POINTS",
+        "base_asset": "BTC",
+        "quote_asset": "POINTS",
+        "display_quote_currency": "USDT",
+        "display_name": "BTC / custom drift",
+        "market_type": "spot",
+        "enabled": True,
+        "allow_spot": True,
+        "allow_margin": True,
+        "allow_bots": True,
+        "allow_risk_grade_usage": True,
+        "price_precision": 8,
+        "quantity_precision": 8,
+        "min_order_size": 0.00000001,
+        "max_order_size": 1000000,
+        "lot_size": 0.00000001,
+        "tick_size": 0.00000001,
+        "sort_order": 10,
+        "default_manual_price_points": 100000,
+        "live_price_enabled": True,
+        "reference_price_enabled": True,
+        "btc_trade_enabled": True,
+    })
+    registry = trading.list_market_registry(include_disabled=True)
+    btc = next(row for row in registry["markets"] if row["symbol"] == "BTC/POINTS")
+    assert btc["registry_source"] == "catalog_seed"
+    assert btc["seed_sync_status"] == "drifted"
+    assert "display_name" in btc["seed_sync_reasons"]
 
 
 @pytest.mark.parametrize(

@@ -7,13 +7,19 @@
 ![database](https://img.shields.io/badge/database-SQLite-0f6ab4)
 ![security](https://img.shields.io/badge/focus-auth%20%2B%20RBAC%20%2B%20audit-b31d28)
 
-**Current Release ID: `2026.05.05-132`**
+**Current Release ID: `2026.05.05-133`**
 
 `hackme_web` is a security-focused Flask web application that combines
 authentication, RBAC, moderation, per-user appearance overrides, Cloud Drive,
 ComfyUI integration, PointsChain, multi-exchange fused-price trading
 experiments with richer chart indicators, expanded points-quoted markets, and
 server-mode controls with auditable recovery tools in a single-node deployment.
+
+Trading market registry 現在也會明確標出每個市場是 `catalog_seed` 還是
+root 自建 `custom`，並回報 `seed_version` / `seed_sync_status`。也就是說
+catalog 只負責 bootstrap 與版本對照，真正執行期 source of truth 是 DB
+registry；若 seeded 市場被 root 改過，後台會直接顯示 drifted，而不是把
+catalog / DB 差異藏起來。
 
 Recent AI image workflow additions now include `img2img`, `inpaint`,
 `outpaint`, ControlNet-assisted generation, upscale-model selection, and

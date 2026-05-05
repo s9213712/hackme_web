@@ -1,6 +1,12 @@
 # Update Summary
 
-Release ID: `2026.05.05-132`
+Release ID: `2026.05.05-133`
+
+## 2026.05.05-133
+
+- Trading market registry 的 seed drift 現在不再是隱性風險。`trading_markets_registry` 新增 `registry_source` 與 `seed_version`，root 後台與 API 也會回傳 `catalog_seed_version`、`seed_sync_status`、`seed_sync_reasons`、`seed_sync_message`，明確標示某個市場是 `catalog_seed` 還是 `custom`，以及是否已偏離目前 code catalog。
+- 這一刀沒有把 DB 悄悄蓋回 catalog。runtime 仍以 DB registry 為 source of truth；若 seeded 市場被 root 調整過，後台只會顯示 `drifted`，讓 drift 可見、可審計，而不是自動回寫。
+- migration / bootstrap 也同步升到 schema version `30`，並新增 regression：seeded 市場會回 `seed_version` / `current`，root 自建市場會回 `custom`，修改 seeded 市場後會顯示 `drifted`。
 
 ## 2026.05.05-132
 
