@@ -1,6 +1,12 @@
 # Update Summary
 
-Release ID: `2026.05.05-119`
+Release ID: `2026.05.05-120`
+
+## 2026.05.05-120
+
+- Expanded the Server Mode v2 example bundle under `docs/examples/server_mode_v2/` with four new runnable scripts: `04_pentest_smv2.sh`, `05_stress_smv2.sh`, `06_full_feature_smv2.sh`, and `07_privilege_escalation_smv2.sh`.
+- Added `security/server_mode_v2_full_smoke.py`, an isolated runtime harness that runs the full six-script SMv2 tutorial bundle (`01`, `02`, `04`, `05`, `06`, `07`) and then asserts that shadow-table activity did not leak into production wallet / ledger tables.
+- Synced README, Traditional Chinese README, developer guide, QA map, pentest guide, and the examples README so the new SMv2 tutorial bundle and full smoke harness are documented as the canonical live-http coverage route.
 
 ## 2026.05.05-119
 

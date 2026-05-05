@@ -90,6 +90,10 @@ PYTHONPATH=. python3 scripts/trading_backtest_20000_probe.py --include-route --j
   是外層 orchestrator，會呼叫多種檢查，包含 `functional-permissions`、
   server-mode-v2、whole-site-production-gate 等子檢查；whole-site gate 會套
   額外 timeout floor。
+- `security/server_mode_v2_full_smoke.py`
+  是 Server Mode v2 教學腳本 bundle 的隔離 runtime smoke harness；它會依序跑
+  `docs/examples/server_mode_v2/01、02、04、05、06、07`，最後確認 shadow
+  與 production tables 沒有互相污染。
 - `security/functional_permission_pentest.py`
   是權限濫用 / 角色矩陣專測，不是一般 port scanner。
 - `security/video_module_pentest.py`

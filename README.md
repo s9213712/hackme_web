@@ -7,7 +7,7 @@
 ![database](https://img.shields.io/badge/database-SQLite-0f6ab4)
 ![security](https://img.shields.io/badge/focus-auth%20%2B%20RBAC%20%2B%20audit-b31d28)
 
-**Current Release ID: `2026.05.05-119`**
+**Current Release ID: `2026.05.05-120`**
 
 `hackme_web` is a security-focused Flask web application that combines
 authentication, RBAC, moderation, per-user appearance overrides, Cloud Drive,
@@ -30,6 +30,16 @@ flow.
 
 This README keeps only the shortest entry route. Detailed deployment,
 operations, feature, security, and QA references live under `docs/`.
+
+Server Mode v2 的教學腳本現在也擴充成完整 bundle：除了原本的 login-token /
+tester-token 兩支 tutorial，`docs/examples/server_mode_v2/` 另外補了 focused
+pentest、stress、full-feature、privilege-escalation 四支腳本；若要一次跑完整
+6 支並確認 shadow-table activity 沒有污染 production wallet / ledger tables，
+可直接執行：
+
+```bash
+PYTHONPATH=. python3 security/server_mode_v2_full_smoke.py
+```
 
 ## Fast Route
 

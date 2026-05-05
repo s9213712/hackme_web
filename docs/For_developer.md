@@ -18,7 +18,7 @@ Related technical references:
 
 ## Release and Schema
 
-- Release ID: `2026.05.05-119`
+- Release ID: `2026.05.05-120`
 - Schema version: `29`
 - Release ID source: `services/release_info.py`
 - Runtime version endpoint: `GET /api/version`
@@ -50,6 +50,15 @@ Root account note:
 
 - `root` is intentionally excluded from the public password-reset flow.
 - Offline recovery must go through `scripts/root_recovery.py`.
+
+Server Mode v2 note:
+
+- `docs/examples/server_mode_v2/` no longer stops at the two token tutorials.
+  It now also includes focused pentest, stress, full-feature, and
+  privilege-escalation scripts.
+- `security/server_mode_v2_full_smoke.py` is the isolated runtime harness that
+  runs the six-script bundle and then verifies shadow-table activity did not
+  leak into production wallet / ledger tables.
 
 ## Fast Local Setup
 

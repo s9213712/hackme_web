@@ -40,8 +40,29 @@ A user might need either or both:
 | --- | --- |
 | [`01_internal_test_login_token.sh`](01_internal_test_login_token.sh) | How to rotate, distribute, and consume the **internal_test login token**. |
 | [`02_tester_token_shadow_api.sh`](02_tester_token_shadow_api.sh) | How root creates a **tester token**, scopes it, and how a tester consumes it against `/api/tester/*`. |
+| [`04_pentest_smv2.sh`](04_pentest_smv2.sh) | Focused SMv2 pentest probes: tester-token boundary checks, confirm-phrase negatives, revoke/replay denial, and root/admin path blocking. |
+| [`05_stress_smv2.sh`](05_stress_smv2.sh) | SMv2-specific burst/rate-limit checks for shadow APIs, chain-side credit flow, and mode-log reads. |
+| [`06_full_feature_smv2.sh`](06_full_feature_smv2.sh) | End-to-end walkthrough of the main Server Mode v2 admin surfaces, including mode switch, checkpoint, tester-token issue/use/revoke, and isolation checks. |
+| [`07_privilege_escalation_smv2.sh`](07_privilege_escalation_smv2.sh) | Negative privilege-escalation probes to prove tester tokens and shadow-role writes cannot become root/admin back doors. |
 
 Each script is self-contained bash + curl + `jq`. Read the `# usage` block at the top.
+
+## Wider harness
+
+To run the broader six-script Server Mode v2 tutorial bundle instead of only
+the two token examples, use:
+
+```bash
+PYTHONPATH=. python3 security/server_mode_v2_full_smoke.py
+```
+
+This boots an isolated runtime under `/tmp`, runs `01`, `02`, `04`, `05`,
+`06`, and `07` back-to-back, then checks that shadow-table activity did not
+leak into production wallet / ledger tables.
+
+In other words, the harness is not only looking for per-script `rc=0`; it also
+confirms that shadow-table activity did not leak into production wallet tables
+or the production ledger namespace.
 
 ## Safety rails
 
@@ -75,10 +96,16 @@ These are properties of the **server**, not bugs in the tutorials. The scripts n
 4. **Default-account `must_change_password=1`.** A freshly-bootstrapped `test` user is flagged for forced password change on first login. The middleware blocks `/api/tester/*` until the password is changed — meaning the tutorial's `test` account would be unusable for shadow-API demos out of the box. The smoke harness clears this flag in DB before running script 02. The tutorial assumes the operator has already handled the forced-change step out of band.
 5. **`/api/root/tester-token/list` JSON shape**: the smoke confirmed `label` is among the returned fields, but jq's bare-object shorthand `{label}` collides with jq's reserved `label $name` syntax. Script 02 now uses `{"label": .label}` explicitly.
 
-### Re-run the smoke at any time
+### Re-run the smaller token smoke at any time
 
 ```bash
 python3 security/server_mode_v2_token_smoke.py
 ```
 
 Picks a random free port, spawns an isolated server in `/tmp/hackme_token_smoke_<random>/`, runs both `.sh` scripts back-to-back, asserts shadow-vs-prod table counts, kills the server. Runtime + server log are preserved under the temp dir for inspection.
+
+To run the broader 6-script bundle instead of only token tutorials:
+
+```bash
+PYTHONPATH=. python3 security/server_mode_v2_full_smoke.py
+```

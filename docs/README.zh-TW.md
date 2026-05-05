@@ -2,7 +2,7 @@
 
 [English README](../README.md)
 
-**目前 Release ID：`2026.05.05-119`**
+**目前 Release ID：`2026.05.05-120`**
 
 這份文件是中文捷徑版入口，不再承擔全部教學。它只回答三件事：
 
@@ -62,6 +62,15 @@ ComfyUI 目前除了一般 txt2img，也支援：
 - upscale model
 - 歷史套回 / 重跑
 - root 本地模式下可在同一個折疊面板選擇「Civitai 網址」或「本地檔案上傳」匯入模型
+
+Server Mode v2 的教學腳本也已擴充成完整 bundle：`docs/examples/server_mode_v2/`
+除了原本的 token 教學，另外補了 focused pentest、stress、full-feature、
+privilege-escalation 四支腳本。若要在隔離 runtime 一次跑完整 6 支並確認
+shadow-table activity 沒有污染 production wallet / ledger tables，可直接執行：
+
+```bash
+PYTHONPATH=. python3 security/server_mode_v2_full_smoke.py
+```
 
 ## 文件地圖
 
