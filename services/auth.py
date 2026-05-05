@@ -296,6 +296,11 @@ def require_csrf(f):
     def decorated(*args, **kwargs):
         if request.method not in CSRF_PROTECTED_METHODS:
             return f(*args, **kwargs)
+        # SERVER_MODE_V2_PROFILE_MATRIX.md §Mode Behavior Matrix footnote 1:
+        # CSRF is on in every mode EXCEPT `superweak` (the deliberate weakest
+        # web mode used for red-team / fuzz / pentest). Current code has no
+        # per-mode bypass yet; the superweak bypass lands in Phase 0 of
+        # SERVER_MODE_V2_IMPLEMENTATION_PLAN.md.
         csrf_tok = get_request_csrf_token()
         body_username = None
         if request.is_json:
@@ -341,6 +346,7 @@ def require_csrf_safe(f):
             return json_resp({"ok": False, "msg": "未登入"}), 401
         if request.method not in CSRF_PROTECTED_METHODS:
             return f(*args, **kwargs)
+        # CSRF policy: see comment in require_csrf above.
         csrf_tok = get_request_csrf_token()
         if not verify_csrf_token(csrf_tok, user):
             return csrf_invalid_response("invalid_safe", user)

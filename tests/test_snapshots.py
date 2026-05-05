@@ -303,7 +303,7 @@ def test_superweak_enter_and_exit_restore_rolls_back_dirty_state(tmp_path):
     exited = mode.exit_superweak(actor=actor, action="restore", confirm="RESTORE_BEFORE_SUPERWEAK", reason="done")
 
     assert exited["ok"] is True
-    assert exited["mode"]["current_mode"] == "test"
+    assert exited["mode"]["current_mode"] == "dev_ready"
     conn = _db(db_path)
     count = conn.execute("SELECT COUNT(*) AS c FROM posts WHERE id=2").fetchone()["c"]
     conn.close()
@@ -391,6 +391,10 @@ def test_tester_token_shadow_layer_does_not_mutate_formal_user_or_points_chain(t
     conn.execute(
         "INSERT INTO users (id, username, role, status, member_level, base_level, effective_level) VALUES (2, 'tester', 'user', 'active', 'normal', 'normal', 'normal')"
     )
+    # tester tokens are scoped to ['test', 'internal_test'] modes. Default boot
+    # is now 'dev_ready' (see SERVER_MODE_V2_PROFILE_MATRIX.md §Default Mode);
+    # this test exercises the shadow layer so explicitly seat it in 'test' mode.
+    conn.execute("UPDATE server_modes SET current_mode='test' WHERE id=1")
     conn.commit()
     conn.close()
     mode = ServerModeService(snapshot_service=service, get_db=lambda: _db(db_path), audit=lambda *args, **kwargs: audit_log.append((args, kwargs)))
@@ -602,7 +606,7 @@ def test_mode_switch_checkpoint_gate_and_independent_log(tmp_path):
     log = conn.execute("SELECT from_mode, to_mode, success, checkpoint_id FROM mode_switch_logs ORDER BY created_at DESC LIMIT 1").fetchone()
     checkpoint = conn.execute("SELECT status, target_mode FROM server_checkpoints WHERE id=?", (log["checkpoint_id"],)).fetchone()
     conn.close()
-    assert log["from_mode"] == "test"
+    assert log["from_mode"] == "dev_ready"
     assert log["to_mode"] == "maintenance"
     assert log["success"] == 1
     assert checkpoint["status"] == "ready"
@@ -721,8 +725,8 @@ def test_runtime_reset_creates_pre_reset_snapshot_and_clears_runtime_tables_and_
     conn = _db(db_path)
     current_mode = conn.execute("SELECT current_mode FROM server_modes WHERE id=1").fetchone()["current_mode"]
     conn.close()
-    assert result["server_mode"] == "test"
-    assert current_mode == "test"
+    assert result["server_mode"] == "dev_ready"
+    assert current_mode == "dev_ready"
     assert any(call[0][0] == "SYSTEM_RUNTIME_RESET" for call in audit_log)
 
 
@@ -780,7 +784,7 @@ def test_runtime_reset_invokes_points_and_audit_chain_resets(tmp_path):
     assert result["ok"] is True
     assert result["points_chain_reset"]["reset"] is True
     assert result["audit_chain_reset"]["reset"] is True
-    assert result["server_mode"] == "test"
+    assert result["server_mode"] == "dev_ready"
     assert result["management_only_settings"]["feature_accounts_enabled"] is True
     assert result["management_only_settings"]["feature_chat_enabled"] is False
     assert calls["points"][0]["pre_reset_snapshot_id"] == result["pre_reset_snapshot_id"]

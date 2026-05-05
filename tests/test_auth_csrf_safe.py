@@ -169,3 +169,65 @@ def test_delete_csrf_tokens_for_username_invalidates_old_session_token(tmp_path)
     assert auth.verify_csrf_token("old-token", "alice") is True
     auth.delete_csrf_tokens_for_username("alice")
     assert auth.verify_csrf_token("old-token", "alice") is False
+
+
+# ── Server Mode v2 §Global Rules: csrf_always_on=true ───────────────────────
+# CSRF must NOT be bypassed by current_mode (including superweak). These
+# regression tests lock that invariant. See SERVER_MODE_V2_PROFILE_MATRIX.md
+# §Global Rules / §Mode Behavior Matrix footnote 1.
+
+
+def test_require_csrf_is_enforced_when_no_token_present(monkeypatch):
+    """csrf_always_on=true: missing CSRF token must be rejected."""
+    monkeypatch.setattr(auth, "db_get_user_from_token", lambda token: None)
+    monkeypatch.setattr(auth, "verify_csrf_token", lambda token, owner: False)
+
+    app = Flask(__name__)
+    app.testing = True
+
+    @app.route("/probe", methods=["POST"])
+    @auth.require_csrf
+    def probe():
+        return auth.json_resp({"ok": True})
+
+    client = app.test_client()
+    response = client.post("/probe", json={"username": ""})
+    assert response.status_code == 403
+    assert response.get_json().get("error") == "csrf_invalid"
+
+
+def test_require_csrf_safe_rejects_authenticated_request_without_csrf(monkeypatch):
+    """csrf_always_on=true: authenticated POST without verified CSRF must 403."""
+    monkeypatch.setattr(auth, "db_get_user_from_token", lambda token: "alice" if token == "session-1" else None)
+    monkeypatch.setattr(auth, "verify_csrf_token", lambda token, owner: False)
+
+    app = Flask(__name__)
+    app.testing = True
+
+    @app.route("/safe-probe", methods=["POST"])
+    @auth.require_csrf_safe
+    def safe_probe():
+        return auth.json_resp({"ok": True})
+
+    client = app.test_client()
+    client.set_cookie("session_token", "session-1")
+    response = client.post("/safe-probe", json={})
+    assert response.status_code == 403
+    assert response.get_json().get("error") == "csrf_invalid"
+
+
+def test_require_csrf_safe_still_requires_login_first(monkeypatch):
+    """No session → 401 before CSRF check is even attempted."""
+    monkeypatch.setattr(auth, "db_get_user_from_token", lambda token: None)
+
+    app = Flask(__name__)
+    app.testing = True
+
+    @app.route("/safe-probe", methods=["POST"])
+    @auth.require_csrf_safe
+    def safe_probe():
+        return auth.json_resp({"ok": True})
+
+    client = app.test_client()
+    response = client.post("/safe-probe", json={})
+    assert response.status_code == 401
