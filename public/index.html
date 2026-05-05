@@ -1383,8 +1383,8 @@
       <div class="drive-card comfyui-root-panel" id="comfyui-root-model-panel" style="display:none;margin-top:1rem;">
         <details class="comfyui-root-details" id="comfyui-root-model-details">
           <summary class="comfyui-root-summary">
-            <span class="comfyui-root-summary-title">root 模型下載（Civitai）</span>
-            <span class="comfyui-root-summary-sub">展開後可讀取 Civitai 模型版本與檔案，下載到本地 ComfyUI models 目錄；和上方生圖表單分開。</span>
+            <span class="comfyui-root-summary-title">root 模型匯入（Civitai / 檔案上傳）</span>
+            <span class="comfyui-root-summary-sub">展開後可從 Civitai 下載，或直接上傳模型檔到本地 ComfyUI models 目錄；和上方生圖表單分開。</span>
           </summary>
           <div class="comfyui-root-body">
             <div id="comfyui-root-model-mode-hint" class="drive-card-sub" style="margin-bottom:.8rem;">目前是本地模式，可在這裡管理 Civitai 模型下載。</div>
@@ -1403,21 +1403,40 @@
                   <option value="vae">VAE</option>
                 </select>
               </div>
-            </div>
-            <div class="field"><label>Civitai 模型頁網址</label><input type="url" id="comfyui-civitai-url" placeholder="https://civitai.com/models/123456/..." /></div>
-            <div class="settings-option-grid">
-              <div class="field"><label>版本</label><select id="comfyui-civitai-version"><option value="">請先讀取模型</option></select></div>
-              <div class="field"><label>檔案</label><select id="comfyui-civitai-file"><option value="">請先選擇版本</option></select></div>
-            </div>
-            <div class="field">
-              <label>這個版本的 Trigger Words</label>
-              <div id="comfyui-civitai-trained-words" class="comfyui-embedding-shortcuts">
-                <span class="drive-card-sub">若這是 LoRA / Embedding 版本，讀取後會顯示官方提供的 trigger words。</span>
+              <div class="field">
+                <label>模型來源</label>
+                <select id="comfyui-model-source-mode">
+                  <option value="civitai">Civitai 網址</option>
+                  <option value="upload">本地檔案上傳</option>
+                </select>
               </div>
             </div>
-            <div class="drive-file-actions" style="justify-content:flex-start;">
-              <button class="btn" id="comfyui-civitai-inspect-btn" type="button">讀取模型資訊</button>
-              <button class="btn" id="comfyui-model-download-btn" type="button">下載選定版本</button>
+            <div id="comfyui-model-source-civitai">
+              <div class="field"><label>Civitai 模型頁網址</label><input type="url" id="comfyui-civitai-url" placeholder="https://civitai.com/models/123456/..." /></div>
+              <div class="settings-option-grid">
+                <div class="field"><label>版本</label><select id="comfyui-civitai-version"><option value="">請先讀取模型</option></select></div>
+                <div class="field"><label>檔案</label><select id="comfyui-civitai-file"><option value="">請先選擇版本</option></select></div>
+              </div>
+              <div class="field">
+                <label>這個版本的 Trigger Words</label>
+                <div id="comfyui-civitai-trained-words" class="comfyui-embedding-shortcuts">
+                  <span class="drive-card-sub">若這是 LoRA / Embedding 版本，讀取後會顯示官方提供的 trigger words。</span>
+                </div>
+              </div>
+              <div class="drive-file-actions" style="justify-content:flex-start;">
+                <button class="btn" id="comfyui-civitai-inspect-btn" type="button">讀取模型資訊</button>
+                <button class="btn" id="comfyui-model-download-btn" type="button">下載選定版本</button>
+              </div>
+            </div>
+            <div id="comfyui-model-source-upload" style="display:none;">
+              <div class="field">
+                <label>上傳模型檔案</label>
+                <input type="file" id="comfyui-model-upload-file" accept=".safetensors,.ckpt,.pt,.pth,.bin" />
+                <div class="drive-card-sub">支援直接把本地模型檔匯入對應的 ComfyUI models 資料夾；不會自動產生 Civitai metadata。</div>
+              </div>
+              <div class="drive-file-actions" style="justify-content:flex-start;">
+                <button class="btn" id="comfyui-model-upload-btn" type="button">上傳模型檔</button>
+              </div>
             </div>
             <div id="comfyui-model-download-status" class="drive-card-sub">尚未下載模型</div>
             <div id="comfyui-model-download-progress" class="comfyui-progress-panel" style="display:none;margin-top:.6rem;">
@@ -2396,7 +2415,7 @@
           <button class="btn" type="button" id="security-thresholds-save-btn">儲存閾值</button>
         </div>
         <div id="security-save-status" class="msg" style="margin-bottom:.65rem;"></div>
-        <div id="security-center-summary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.55rem;margin-bottom:.8rem;"></div>
+        <div id="security-center-summary" class="health-summary-grid" style="margin-bottom:.8rem;"></div>
         <details class="drive-collapsible-panel settings-collapse">
           <summary>
             <div>

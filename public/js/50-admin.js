@@ -3440,6 +3440,28 @@ function populateProfileSelect(selectId, profiles, selectedMode) {
   }
 }
 
+// Server Mode v2 mode -> banner color (matches PROFILE_MATRIX UI banner row).
+const SERVER_MODE_COLORS = {
+  production: "#4caf50",
+  dev_ready: "#82b1ff",
+  internal_test: "#ffb74d",
+  test: "#26c6da",
+  maintenance: "#ba68c8",
+  incident_lockdown: "#ff4f6d",
+  superweak: "#ff4f6d",
+};
+
+// Some toggles are good when ON, others are good when ON-with-WARN
+// (e.g. maintenance_mode is operational — green when off, red when on).
+// `expect` controls which side counts as healthy:
+//   "on"  => ON is green, OFF is red
+//   "off" => OFF is green, ON is red
+function lightForToggle(label, value, expect) {
+  const on = !!value;
+  const ok = expect === "on" ? on : !on;
+  return [label, on ? "啟用" : "關閉", ok ? "#4caf50" : "#ff4f6d"];
+}
+
 function renderSecuritySummary(sc) {
   const summary = $("security-center-summary");
   if (!summary) return;
@@ -3449,20 +3471,31 @@ function renderSecuritySummary(sc) {
   const mode = sc.mode || {};
   const settings = sc.settings || {};
   const signalCount = Array.isArray(anomaly.signals) ? anomaly.signals.length : 0;
+  const auditEnabled = audit.enabled !== false;
+  const modeName = mode.current_mode || "dev_ready";
+  const modeColor = SERVER_MODE_COLORS[modeName] || "#82b1ff";
+
   const cards = [
-    ["Readiness", readiness.status || "-", readiness.status === "ok" ? "#4caf50" : "#ff4f6d"],
-    ["Anomaly", anomaly.status || "ok", anomaly.status === "ok" ? "#4caf50" : anomaly.status === "critical" ? "#ff4f6d" : "#ffb74d"],
+    // Top-line health + readiness mirror the 健康度 dashboard so the
+    // operator sees the same colours in both places.
+    ["Readiness", readiness.status || "-", healthStatusColor(readiness.status)],
+    ["Anomaly", anomaly.status || "ok", healthStatusColor(anomaly.status)],
     ["Signals", String(signalCount), signalCount ? "#ffb74d" : "#4caf50"],
-    ["Audit Chain", audit.enabled === false ? "停用" : audit.ok ? "完整" : "異常", audit.enabled === false ? "#9e9e9e" : audit.ok ? "#4caf50" : "#ff4f6d"],
-    ["Server Mode", mode.current_mode || "dev_ready", mode.current_mode === "superweak" ? "#ff4f6d" : "#82b1ff"],
-    ["Maintenance", settings.maintenance_mode ? "啟用" : "關閉", settings.maintenance_mode ? "#ff4f6d" : "#4caf50"],
+    ["Audit Chain", auditEnabled ? (audit.ok ? "完整" : "異常") : "停用",
+     auditEnabled ? (audit.ok ? "#4caf50" : "#ff4f6d") : "#9e9e9e"],
+    ["Server Mode", modeName, modeColor],
+    // Maintenance / browser-only: ON = ops in restricted state -> red.
+    lightForToggle("維護模式", settings.maintenance_mode, "off"),
+    lightForToggle("Browser-only", settings.browser_only_mode_enabled, "off"),
+    // Defense toggles: ON = healthy, OFF = exposed -> red.
+    lightForToggle("HTTPS / SSL", settings.server_ssl_enabled, "on"),
+    lightForToggle("審計 chain", settings.audit_chain_enabled, "on"),
+    lightForToggle("IP 封鎖", settings.ip_blocking_enabled, "on"),
+    lightForToggle("登入暴力鎖", settings.login_violation_enabled, "on"),
+    lightForToggle("速率限制", settings.rate_limit_violation_enabled, "on"),
+    lightForToggle("Integrity Guard", settings.integrity_guard_enabled, "on"),
   ];
-  summary.innerHTML = cards.map(([label, value, color]) => `
-    <div style="border:1px solid rgba(255,255,255,.08);background:rgba(0,0,0,.22);border-radius:8px;padding:.6rem;">
-      <div style="font-size:.68rem;color:var(--muted);">${sanitize(label)}</div>
-      <div style="font-size:1rem;color:${color};font-weight:700;margin-top:.2rem;word-break:break-word;">${sanitize(value)}</div>
-    </div>
-  `).join("");
+  summary.innerHTML = cards.map(([label, value, color]) => renderHealthMetric(label, value, color)).join("");
 }
 
 function renderServerOutput(output) {
@@ -3693,7 +3726,7 @@ async function loadSecurityCenter() {
   const sc = json.security_center || {};
   if (!json.ok) {
     const summary = $("security-center-summary");
-    if (summary) summary.innerHTML = `<div style="color:#ff4f6d;">${sanitize(json.msg || "安全中心讀取失敗")}</div>`;
+    if (summary) summary.innerHTML = renderHealthMetric("安全中心", json.msg || "讀取失敗", "#ff4f6d");
     return;
   }
   renderSecuritySummary(sc);
