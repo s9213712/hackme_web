@@ -178,6 +178,25 @@ def _root_price_fusion_status_app(actor, captured):
                 "conservative_mode": False,
                 "message": "",
                 "price_points": 100,
+                "transport_state": {
+                    "mode": "websocket",
+                    "connected": True,
+                    "fallback": False,
+                    "stale": False,
+                    "degraded": False,
+                    "confidence": "high",
+                    "provider_count": 4,
+                    "last_update_at": "2026-05-05T00:00:00",
+                    "exclusion_reason": "",
+                    "message": "WebSocket provider input 正常運作。",
+                },
+                "connected": True,
+                "fallback": False,
+                "stale": False,
+                "confidence": "high",
+                "provider_count": 4,
+                "last_update_at": "2026-05-05T00:00:00",
+                "exclusion_reason": "",
             }
 
     def passthrough(fn):
@@ -231,6 +250,10 @@ def _live_price_app(actor, captured):
                 "stale": defaulted,
                 "degraded": defaulted,
                 "provider_count": 4 if not defaulted else 1,
+                "connected": not defaulted,
+                "fallback": defaulted,
+                "last_update_at": "2026-05-05T00:00:00",
+                "exclusion_reason": "provider_count_low" if defaulted else "",
                 "price_health": "fallback" if defaulted else "healthy",
                 "fallback_reason": "orderbook unavailable" if defaulted else "",
                 "excluded_sources": ["okx_public_api"] if defaulted else [],
@@ -238,6 +261,18 @@ def _live_price_app(actor, captured):
                 "high_risk_blocked": defaulted,
                 "high_risk_block_reason": "目前不是正常 fused price" if defaulted else "",
                 "defaulted_market": defaulted,
+                "transport_state": {
+                    "mode": "mixed" if defaulted else "websocket",
+                    "connected": not defaulted,
+                    "fallback": defaulted,
+                    "stale": defaulted,
+                    "degraded": defaulted,
+                    "confidence": "low" if defaulted else "high",
+                    "provider_count": 1 if defaulted else 4,
+                    "last_update_at": "2026-05-05T00:00:00",
+                    "exclusion_reason": "provider_count_low" if defaulted else "",
+                    "message": "部分 provider 已切回 HTTP polling，請視為可審計降級狀態。" if defaulted else "WebSocket provider input 正常運作。",
+                },
                 "reference_price_context": {
                     "price_type": "reference",
                     "source": "fused_weighted",
@@ -1136,6 +1171,15 @@ def test_root_price_fusion_status_route_passes_selected_market_symbol():
     assert payload["status"]["requested_market_symbol"] == "ETH/POINTS"
     assert payload["status"]["resolved_market_symbol"] == "ETH/POINTS"
     assert payload["status"]["display_market_symbol"] == "ETH/USDT"
+    assert payload["status"]["connected"] is True
+    assert payload["status"]["fallback"] is False
+    assert payload["status"]["stale"] is False
+    assert payload["status"]["confidence"] == "high"
+    assert payload["status"]["provider_count"] == 4
+    assert payload["status"]["last_update_at"] == "2026-05-05T00:00:00"
+    assert payload["status"]["exclusion_reason"] == ""
+    assert payload["status"]["transport_state"]["connected"] is True
+    assert payload["status"]["transport_state"]["fallback"] is False
     assert captured["market_symbol"] == "ETH/POINTS"
 
 
@@ -1151,6 +1195,7 @@ def test_root_price_fusion_status_route_normalizes_display_market_symbol():
     assert payload["requested_market_symbol"] == "ETH/USDT"
     assert payload["resolved_market_symbol"] == "ETH/POINTS"
     assert payload["display_market_symbol"] == "ETH/USDT"
+    assert payload["transport_state"]["provider_count"] == 4
     assert captured["market_symbol"] == "ETH/USDT"
 
 
@@ -1173,6 +1218,12 @@ def test_trading_live_price_route_returns_selected_market_quote():
     assert payload["stale"] is False
     assert payload["degraded"] is False
     assert payload["provider_count"] == 4
+    assert payload["connected"] is True
+    assert payload["fallback"] is False
+    assert payload["last_update_at"] == "2026-05-05T00:00:00"
+    assert payload["exclusion_reason"] == ""
+    assert payload["transport_state"]["connected"] is True
+    assert payload["transport_state"]["fallback"] is False
     assert payload["fallback_reason"] == ""
     assert payload["excluded_sources"] == []
     assert payload["warnings"] == []
@@ -1224,5 +1275,11 @@ def test_trading_live_price_route_marks_defaulted_market_when_missing():
     assert payload["stale"] is True
     assert payload["degraded"] is True
     assert payload["provider_count"] == 1
+    assert payload["connected"] is False
+    assert payload["fallback"] is True
+    assert payload["last_update_at"] == "2026-05-05T00:00:00"
+    assert payload["exclusion_reason"] == "provider_count_low"
+    assert payload["transport_state"]["fallback"] is True
+    assert payload["transport_state"]["stale"] is True
     assert payload["risk_grade_price_context"]["high_risk_blocked"] is True
     assert captured["market_symbol"] == ""

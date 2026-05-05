@@ -1419,6 +1419,7 @@ function renderRootTradingPriceFusionStatus(status = {}) {
   const usedRows = Array.isArray(status.providers_used) ? status.providers_used : [];
   const excludedRows = Array.isArray(status.excluded_providers) ? status.excluded_providers : [];
   const warnings = Array.isArray(status.warnings) ? status.warnings : [];
+  const transportState = status.transport_state && typeof status.transport_state === "object" ? status.transport_state : {};
   const message = String(status.message || "").trim();
   const riskEligibleRows = usedRows.filter((row) => row && row.risk_grade_eligible);
   const referenceSourceText = usedRows.length === 1
@@ -1447,7 +1448,10 @@ function renderRootTradingPriceFusionStatus(status = {}) {
         <div class="drive-card-sub">reference 價格 ${sanitize(status.reference_price_points == null ? "-" : `${formatNumber(status.reference_price_points, 8)} POINTS`)} · 風控級價格 ${sanitize(status.risk_grade_price_points == null ? "-" : `${formatNumber(status.risk_grade_price_points, 8)} POINTS`)} · reference 權重合計 ${sanitize(Number(status.reference_weights_sum_percent || weightsSum).toFixed(2))}% · 風控級權重合計 ${sanitize(Number(status.risk_grade_weights_sum_percent || 0).toFixed(2))}%</div>
         <div class="drive-card-sub">每家最多採樣 ${sanitize(String(depthLevels || "-"))} 檔 · 目標深度區間 ±${sanitize(String(bandPercent || "-"))}% · 最低覆蓋門檻 ${sanitize(String(minCoveragePercent || "-"))}% · 最少來源 ${sanitize(String(minProviderCount || "-"))} 家 · 單一來源上限 ${sanitize(providerCap)}% · 中位 midpoint ${sanitize(medianMidpoint)}</div>
         <div class="drive-card-sub">${sanitize(referenceSourceText)} · ${sanitize(qualifiedSourceText)} · ${sanitize(providerCountSummary)}</div>
+        <div class="drive-card-sub">provider input ${sanitize(String(transportState.mode || "http_polling_only"))} · 連線 ${transportState.connected ? "connected" : "disconnected"} · fallback ${transportState.fallback ? "HTTP polling" : "no"} · stale ${transportState.stale ? "yes" : "no"} · 信心 ${sanitize(String(transportState.confidence || "-"))} · provider_count ${sanitize(String(transportState.provider_count ?? 0))}${transportState.last_update_at ? ` · last update ${sanitize(String(transportState.last_update_at))}` : ""}</div>
+        ${transportState.exclusion_reason ? `<div class="drive-card-sub" style="color:#ffcf85;">provider input exclusion：${sanitize(String(transportState.exclusion_reason || ""))}</div>` : ""}
         ${message ? `<div class="drive-card-sub" style="color:${state === "healthy" ? "#9ecbff" : "#ffb347"};">${sanitize(message)}</div>` : ""}
+        ${transportState.message ? `<div class="drive-card-sub" style="color:${transportState.degraded ? "#ffb347" : "#9ecbff"};">${sanitize(String(transportState.message || ""))}</div>` : ""}
         ${warnings.length ? `<div class="drive-card-sub" style="color:#ffcf85;">${warnings.map((warning) => sanitize(String(warning?.message || warning?.code || ""))).filter(Boolean).join("；")}</div>` : ""}
         ${status.conservative_mode ? `<div class="drive-card-sub" style="color:#ff9aa8;">已進入保守模式：目前不是正常 fused price，僅能作為 degraded reference price，不建議高風險交易。</div>` : ""}
         <div class="drive-card-sub" style="color:#ffcf85;">目前這套 auto_depth 融合較適合作為 v1 reference price 與流動性 sanity check，不建議單獨作為強平、機器人或實際成交的唯一依據。</div>
@@ -1764,6 +1768,8 @@ function renderRootTradingSettings(payload) {
   if ($("root-trading-price-fusion-min-coverage-percent")) $("root-trading-price-fusion-min-coverage-percent").value = Number(settings.price_fusion_min_orderbook_coverage_percent ?? 0.5);
   if ($("root-trading-price-fusion-max-provider-weight")) $("root-trading-price-fusion-max-provider-weight").value = adminPercentValue(settings.price_fusion_max_single_provider_weight_percent ?? 40, 40);
   if ($("root-trading-price-fusion-min-provider-count")) $("root-trading-price-fusion-min-provider-count").value = Number(settings.price_fusion_min_provider_count ?? 3);
+  if ($("root-trading-price-stream-ws-enabled")) $("root-trading-price-stream-ws-enabled").checked = settings.price_stream_ws_enabled !== false;
+  if ($("root-trading-price-stream-ws-stale-seconds")) $("root-trading-price-stream-ws-stale-seconds").value = Number(settings.price_stream_ws_stale_seconds ?? 10);
   renderRootTradingFusionWeightInputs(settings);
   renderRootTradingPriceFusionMarketOptions(payload);
   const priceSourceSelect = $("root-trading-price-source");
@@ -1914,6 +1920,8 @@ async function saveRootTradingSettings() {
       price_fusion_min_orderbook_coverage_percent: Number($("root-trading-price-fusion-min-coverage-percent")?.value || 0.5),
       price_fusion_max_single_provider_weight_percent: adminInputPercent($("root-trading-price-fusion-max-provider-weight")?.value || 40),
       price_fusion_min_provider_count: Number($("root-trading-price-fusion-min-provider-count")?.value || 3),
+      price_stream_ws_enabled: !!$("root-trading-price-stream-ws-enabled")?.checked,
+      price_stream_ws_stale_seconds: Number($("root-trading-price-stream-ws-stale-seconds")?.value || 10),
       max_price_staleness_seconds: Number($("root-trading-max-price-staleness")?.value || 0),
       margin_liquidation_enabled: !!$("root-trading-liquidation-enabled")?.checked,
       bot_auto_scan_enabled: !!$("root-trading-bot-auto-enabled")?.checked,

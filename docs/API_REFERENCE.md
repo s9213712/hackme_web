@@ -365,7 +365,7 @@ curl -k -sS https://127.0.0.1:5000/api/version
 |---|---|---|---|
 | GET | `/api/trading/markets` | logged-in | 市場列表 |
 | GET | `/api/trading/dashboard` | logged-in | 交易頁摘要（含 reference / risk-grade contexts） |
-| GET | `/api/trading/live-price` | logged-in | 即時 reference 價格 / price health / price contexts |
+| GET | `/api/trading/live-price` | logged-in | 即時 reference 價格 / price health / price contexts / provider transport state |
 | GET | `/api/trading/history/export.csv` | logged-in | 匯出交易歷史 |
 | GET | `/api/trading/btc-signal` | logged-in | BTC_trade signal |
 | GET | `/api/trading/workflow-templates` | logged-in | workflow 模板 |
@@ -388,7 +388,7 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | POST | `/api/trading/margin/<position_uuid>/collateral` | logged-in | 補保證金 |
 | GET | `/api/admin/trading/report` | manager | 交易報表 |
 | GET/PUT | `/api/root/trading/settings` | root | root 交易設定 |
-| GET | `/api/root/trading/price-fusion-status` | root | 融合價格診斷 |
+| GET | `/api/root/trading/price-fusion-status` | root | 融合價格診斷 / provider transport state |
 | GET | `/api/root/trading/bot-audit/dashboard` | root | bot audit dashboard |
 | POST | `/api/root/trading/bot-audit/run` | root | 立即跑 bot audit |
 | GET | `/api/root/trading/btc-trade/check` | root | 檢查 BTC_trade |
@@ -513,6 +513,7 @@ curl -k -sS https://127.0.0.1:5000/api/version
 - `docs/BLOCKCHAIN/*` 有些是已拍板但未實作規格，不可直接當成現行 API。
 - `live-price` 不是純 read-only，它會同步刷新後端快取價格狀態，請不要把它當成完全無副作用的 health probe。
 - `live-price` 目前回傳 canonical `price_type`、`source`、`confidence`、`stale`、`degraded`、`provider_count`，並附 `reference_price_context` / `risk_grade_price_context`；UI 展示價與風控價不可再混用。
+- `live-price` 與 root `price-fusion-status` 現在也回傳 canonical `connected`、`fallback`、`last_update_at`、`exclusion_reason` 與完整 `transport_state`。Binance / OKX / Coinbase / Kraken 的 websocket 只是 provider input，不可直接把單一 WS provider 當成風控價格。
 - `reference-prices` 明確屬於 `reference price` 類型，只能作為展示 / K 線 / 一般估值參考，不可直接拿來推導保證金、強平或 bot 風控。
 
 ## 測試方式

@@ -19,6 +19,7 @@ from services.trading_markets import (
     market_supports_live_price,
     normalize_market_symbol,
 )
+from services.trading_price_streams import TradingPriceStreamHub, WS_CAPABLE_PRICE_PROVIDERS
 
 
 ASSET_SCALE = 100_000_000
@@ -108,6 +109,7 @@ DEFAULT_PRICE_FUSION_MAX_PROVIDER_LATENCY_MS = 2500
 DEFAULT_PRICE_FUSION_MAX_MIDPOINT_DEVIATION_PERCENT = 0.50
 DEFAULT_PRICE_FUSION_MIN_SIDE_BALANCE_RATIO = 0.10
 DEFAULT_PRICE_FUSION_MIN_PROVIDER_COUNT = 3
+DEFAULT_PRICE_STREAM_WS_STALE_SECONDS = 10
 DEFAULT_SPOT_FEE_RATE_PERCENT = 0.10
 DEFAULT_GRID_FEE_DISCOUNT_PERCENT = 25.0
 GRID_PREVIEW_YELLOW_NET_SPREAD_PERCENT = Decimal("0.10")
@@ -886,6 +888,8 @@ def ensure_trading_schema(conn):
         ("trading.price_fusion_min_orderbook_coverage_percent", str(DEFAULT_PRICE_FUSION_MIN_ORDERBOOK_COVERAGE_PERCENT)),
         ("trading.price_fusion_max_single_provider_weight_percent", str(DEFAULT_PRICE_FUSION_MAX_SINGLE_PROVIDER_WEIGHT_PERCENT)),
         ("trading.price_fusion_min_provider_count", str(DEFAULT_PRICE_FUSION_MIN_PROVIDER_COUNT)),
+        ("trading.price_stream_ws_enabled", "true"),
+        ("trading.price_stream_ws_stale_seconds", str(DEFAULT_PRICE_STREAM_WS_STALE_SECONDS)),
         ("trading.btc_trade_enabled", "false"),
         ("trading.btc_trade_repo_url", "https://github.com/s9213712/BTC_trade.git"),
         ("trading.btc_trade_branch", "strategy/v15b-plus"),
@@ -981,12 +985,13 @@ def ensure_trading_schema(conn):
 
 
 class TradingEngineService:
-    def __init__(self, *, get_db, points_service, audit=None, live_price_provider=None, historical_candles_provider=None):
+    def __init__(self, *, get_db, points_service, audit=None, live_price_provider=None, historical_candles_provider=None, stream_hub=None):
         self.get_db = get_db
         self.points_service = points_service
         self.audit = audit or (lambda *args, **kwargs: None)
         self.live_price_provider = live_price_provider
         self.historical_candles_provider = historical_candles_provider
+        self.stream_hub = stream_hub
 
     def ensure_schema(self, conn):
         self.points_service.ensure_schema(conn)
@@ -1331,6 +1336,8 @@ class TradingEngineService:
             "price_fusion_max_midpoint_deviation_percent": DEFAULT_PRICE_FUSION_MAX_MIDPOINT_DEVIATION_PERCENT,
             "price_fusion_min_side_balance_ratio_percent": round(DEFAULT_PRICE_FUSION_MIN_SIDE_BALANCE_RATIO * 100.0, 2),
             "price_fusion_min_provider_count": _to_int(raw.get("trading.price_fusion_min_provider_count", str(DEFAULT_PRICE_FUSION_MIN_PROVIDER_COUNT)), name="price_fusion_min_provider_count", minimum=1, maximum=len(WEIGHTED_PRICE_PROVIDERS)),
+            "price_stream_ws_enabled": str(raw.get("trading.price_stream_ws_enabled", "true")).lower() in {"true", "1", "yes"},
+            "price_stream_ws_stale_seconds": _to_int(raw.get("trading.price_stream_ws_stale_seconds", str(DEFAULT_PRICE_STREAM_WS_STALE_SECONDS)), name="price_stream_ws_stale_seconds", minimum=1, maximum=120),
             "btc_trade_enabled": str(raw.get("trading.btc_trade_enabled", "false")).lower() in {"true", "1", "yes"},
             "btc_trade_project_dir": raw.get("trading.btc_trade_project_dir", ""),
             "btc_trade_repo_url": raw.get("trading.btc_trade_repo_url", "https://github.com/s9213712/BTC_trade.git"),
@@ -1377,6 +1384,7 @@ class TradingEngineService:
                 "bot_auto_scan_enabled": "trading.bot_auto_scan_enabled",
                 "bot_audit_enabled": "trading.bot_audit_enabled",
                 "btc_trade_enabled": "trading.btc_trade_enabled",
+                "price_stream_ws_enabled": "trading.price_stream_ws_enabled",
             }
             for input_key, storage_key in bool_keys.items():
                 if input_key in settings:
@@ -1563,6 +1571,13 @@ class TradingEngineService:
                     ("trading.price_fusion_min_provider_count", value, now, self._actor_id(actor)),
                 )
                 setting_changes["trading.price_fusion_min_provider_count"] = value
+            if "price_stream_ws_stale_seconds" in settings:
+                value = str(_to_int(settings.get("price_stream_ws_stale_seconds"), name="price_stream_ws_stale_seconds", minimum=1, maximum=120))
+                conn.execute(
+                    "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                    ("trading.price_stream_ws_stale_seconds", value, now, self._actor_id(actor)),
+                )
+                setting_changes["trading.price_stream_ws_stale_seconds"] = value
             if "btc_trade_project_dir" in settings:
                 value = str(settings.get("btc_trade_project_dir") or "").strip()
                 if len(value) > 500:
@@ -1670,95 +1685,198 @@ class TradingEngineService:
             raise ValueError(f"{source} price is invalid")
         return price_points
 
-    def _fetch_binance_price_points(self, market_symbol):
+    def _provider_ticker_with_fallback(self, source, market_symbol, *, settings, http_fetcher):
+        ws_snapshot, stream_state = self._resolve_stream_ticker_snapshot(source, market_symbol, settings=settings)
+        if ws_snapshot:
+            return (
+                float(_to_decimal(ws_snapshot.get("price_points"), name=f"{source} websocket price_points", minimum=0.00000001)),
+                self._provider_transport_meta(
+                    source,
+                    market_symbol,
+                    settings=settings,
+                    stream_state=stream_state,
+                    transport="websocket",
+                    fetched_at=ws_snapshot.get("fetched_at"),
+                    latency_ms=ws_snapshot.get("latency_ms"),
+                ),
+            )
+        price_points, fetch_meta = http_fetcher()
+        return (
+            price_points,
+            self._provider_transport_meta(
+                source,
+                market_symbol,
+                settings=settings,
+                stream_state=stream_state,
+                transport="http_polling",
+                fetched_at=(fetch_meta or {}).get("fetched_at"),
+                latency_ms=(fetch_meta or {}).get("latency_ms"),
+                fallback=bool(stream_state.get("ws_supported")),
+                exclusion_reason=str(stream_state.get("exclusion_reason") or ""),
+            ),
+        )
+
+    def _provider_orderbook_with_fallback(self, source, market_symbol, *, settings, depth_levels, band_percent, request_limit, http_fetcher, book_getter):
+        ws_snapshot, stream_state = self._resolve_stream_orderbook_snapshot(source, market_symbol, settings=settings)
+        if ws_snapshot:
+            return self._build_orderbook_snapshot(
+                source=source,
+                bids=ws_snapshot.get("bids") or [],
+                asks=ws_snapshot.get("asks") or [],
+                fetch_meta={
+                    "fetched_at": ws_snapshot.get("fetched_at") or ws_snapshot.get("last_update_at") or _now(),
+                    "latency_ms": ws_snapshot.get("latency_ms") or 0.0,
+                },
+                max_levels=depth_levels,
+                band_percent=band_percent,
+                request_limit=request_limit,
+                transport_meta=self._provider_transport_meta(
+                    source,
+                    market_symbol,
+                    settings=settings,
+                    stream_state=stream_state,
+                    transport="websocket",
+                    fetched_at=ws_snapshot.get("fetched_at") or ws_snapshot.get("last_update_at"),
+                    latency_ms=ws_snapshot.get("latency_ms"),
+                ),
+            )
+        payload, fetch_meta = http_fetcher()
+        bids, asks = book_getter(payload)
+        return self._build_orderbook_snapshot(
+            source=source,
+            bids=bids,
+            asks=asks,
+            fetch_meta=fetch_meta,
+            max_levels=depth_levels,
+            band_percent=band_percent,
+            request_limit=request_limit,
+            transport_meta=self._provider_transport_meta(
+                source,
+                market_symbol,
+                settings=settings,
+                stream_state=stream_state,
+                transport="http_polling",
+                fetched_at=(fetch_meta or {}).get("fetched_at"),
+                latency_ms=(fetch_meta or {}).get("latency_ms"),
+                fallback=bool(stream_state.get("ws_supported")),
+                exclusion_reason=str(stream_state.get("exclusion_reason") or ""),
+            ),
+        )
+
+    def _fetch_binance_price_points(self, market_symbol, *, settings=None, with_meta=False):
         symbol = market_provider_id(market_symbol, "binance_public_api")
         if not symbol:
             raise ValueError("binance price is not supported for this market")
-        payload = self._fetch_json_url(
-            f"{BINANCE_TICKER_URL}?{urlencode({'symbol': symbol})}",
-            timeout=5,
-        )
-        price = payload.get("price") if isinstance(payload, dict) else None
-        return self._price_points_from_float(price, source="binance_public_api")
+        def http_fetcher():
+            payload, fetch_meta = self._fetch_json_url(
+                f"{BINANCE_TICKER_URL}?{urlencode({'symbol': symbol})}",
+                timeout=5,
+                with_meta=True,
+            )
+            price = payload.get("price") if isinstance(payload, dict) else None
+            return self._price_points_from_float(price, source="binance_public_api"), fetch_meta
+        price_points, meta = self._provider_ticker_with_fallback("binance_public_api", market_symbol, settings=settings or {}, http_fetcher=http_fetcher)
+        return (price_points, meta) if with_meta else price_points
 
-    def _fetch_okx_price_points(self, market_symbol):
+    def _fetch_okx_price_points(self, market_symbol, *, settings=None, with_meta=False):
         instrument = market_provider_id(market_symbol, "okx_public_api")
         if not instrument:
             raise ValueError("okx price is not supported for this market")
-        payload = self._fetch_json_url(
-            f"{OKX_TICKER_URL}?{urlencode({'instId': instrument})}",
-            timeout=5,
-            user_agent="hackme_web/1.0 trading-price okx",
-        )
-        data = payload.get("data") if isinstance(payload, dict) else None
-        ticker = data[0] if isinstance(data, list) and data else None
-        price = ticker.get("last") if isinstance(ticker, dict) else None
-        return self._price_points_from_float(price, source="okx_public_api")
+        def http_fetcher():
+            payload, fetch_meta = self._fetch_json_url(
+                f"{OKX_TICKER_URL}?{urlencode({'instId': instrument})}",
+                timeout=5,
+                user_agent="hackme_web/1.0 trading-price okx",
+                with_meta=True,
+            )
+            data = payload.get("data") if isinstance(payload, dict) else None
+            ticker = data[0] if isinstance(data, list) and data else None
+            price = ticker.get("last") if isinstance(ticker, dict) else None
+            return self._price_points_from_float(price, source="okx_public_api"), fetch_meta
+        price_points, meta = self._provider_ticker_with_fallback("okx_public_api", market_symbol, settings=settings or {}, http_fetcher=http_fetcher)
+        return (price_points, meta) if with_meta else price_points
 
-    def _fetch_coinbase_price_points(self, market_symbol):
+    def _fetch_coinbase_price_points(self, market_symbol, *, settings=None, with_meta=False):
         product_id = market_provider_id(market_symbol, "coinbase_exchange")
         if not product_id:
             raise ValueError("coinbase price is not supported for this market")
-        payload = self._fetch_json_url(
-            COINBASE_TICKER_URL_TEMPLATE.format(product_id=product_id),
-            timeout=5,
-            user_agent="hackme_web/1.0 trading-price coinbase",
-        )
-        price = payload.get("price") if isinstance(payload, dict) else None
-        return self._price_points_from_float(price, source="coinbase_exchange")
+        def http_fetcher():
+            payload, fetch_meta = self._fetch_json_url(
+                COINBASE_TICKER_URL_TEMPLATE.format(product_id=product_id),
+                timeout=5,
+                user_agent="hackme_web/1.0 trading-price coinbase",
+                with_meta=True,
+            )
+            price = payload.get("price") if isinstance(payload, dict) else None
+            return self._price_points_from_float(price, source="coinbase_exchange"), fetch_meta
+        price_points, meta = self._provider_ticker_with_fallback("coinbase_exchange", market_symbol, settings=settings or {}, http_fetcher=http_fetcher)
+        return (price_points, meta) if with_meta else price_points
 
-    def _fetch_kraken_price_points(self, market_symbol):
+    def _fetch_kraken_price_points(self, market_symbol, *, settings=None, with_meta=False):
         pair = market_provider_id(market_symbol, "kraken_public_api")
         if not pair:
             raise ValueError("kraken price is not supported for this market")
-        payload = self._fetch_json_url(
-            f"{KRAKEN_TICKER_URL}?{urlencode({'pair': pair})}",
-            timeout=5,
-            user_agent="hackme_web/1.0 trading-price kraken",
-        )
-        if not isinstance(payload, dict) or payload.get("error"):
-            raise ValueError(f"kraken ticker error: {payload.get('error') if isinstance(payload, dict) else 'invalid payload'}")
-        result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
-        ticker = next(iter(result.values()), None)
-        close = ticker.get("c", [None])[0] if isinstance(ticker, dict) else None
-        return self._price_points_from_float(close, source="kraken_public_api")
+        def http_fetcher():
+            payload, fetch_meta = self._fetch_json_url(
+                f"{KRAKEN_TICKER_URL}?{urlencode({'pair': pair})}",
+                timeout=5,
+                user_agent="hackme_web/1.0 trading-price kraken",
+                with_meta=True,
+            )
+            if not isinstance(payload, dict) or payload.get("error"):
+                raise ValueError(f"kraken ticker error: {payload.get('error') if isinstance(payload, dict) else 'invalid payload'}")
+            result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+            ticker = next(iter(result.values()), None)
+            close = ticker.get("c", [None])[0] if isinstance(ticker, dict) else None
+            return self._price_points_from_float(close, source="kraken_public_api"), fetch_meta
+        price_points, meta = self._provider_ticker_with_fallback("kraken_public_api", market_symbol, settings=settings or {}, http_fetcher=http_fetcher)
+        return (price_points, meta) if with_meta else price_points
 
-    def _fetch_gemini_price_points(self, market_symbol):
+    def _fetch_gemini_price_points(self, market_symbol, *, settings=None, with_meta=False):
         symbol = market_provider_id(market_symbol, "gemini_public_api")
         if not symbol:
             raise ValueError("gemini price is not supported for this market")
-        payload = self._fetch_json_url(
+        payload, fetch_meta = self._fetch_json_url(
             GEMINI_TICKER_URL_TEMPLATE.format(symbol=symbol),
             timeout=5,
             user_agent="hackme_web/1.0 trading-price gemini",
+            with_meta=True,
         )
         price = payload.get("close") or payload.get("last") if isinstance(payload, dict) else None
-        return self._price_points_from_float(price, source="gemini_public_api")
+        price_points = self._price_points_from_float(price, source="gemini_public_api")
+        meta = self._provider_transport_meta("gemini_public_api", market_symbol, settings=settings or {}, transport="http_polling", fetched_at=fetch_meta.get("fetched_at"), latency_ms=fetch_meta.get("latency_ms"))
+        return (price_points, meta) if with_meta else price_points
 
-    def _fetch_bitstamp_price_points(self, market_symbol):
+    def _fetch_bitstamp_price_points(self, market_symbol, *, settings=None, with_meta=False):
         pair = market_provider_id(market_symbol, "bitstamp_public_api")
         if not pair:
             raise ValueError("bitstamp price is not supported for this market")
-        payload = self._fetch_json_url(
+        payload, fetch_meta = self._fetch_json_url(
             BITSTAMP_TICKER_URL_TEMPLATE.format(pair=pair),
             timeout=5,
             user_agent="hackme_web/1.0 trading-price bitstamp",
+            with_meta=True,
         )
         price = payload.get("last") if isinstance(payload, dict) else None
-        return self._price_points_from_float(price, source="bitstamp_public_api")
+        price_points = self._price_points_from_float(price, source="bitstamp_public_api")
+        meta = self._provider_transport_meta("bitstamp_public_api", market_symbol, settings=settings or {}, transport="http_polling", fetched_at=fetch_meta.get("fetched_at"), latency_ms=fetch_meta.get("latency_ms"))
+        return (price_points, meta) if with_meta else price_points
 
-    def _fetch_coingecko_price_points(self, market_symbol):
+    def _fetch_coingecko_price_points(self, market_symbol, *, settings=None, with_meta=False):
         coin_id = market_provider_id(market_symbol, "coingecko_simple_price")
         if not coin_id:
             raise ValueError("coingecko price is not supported for this market")
-        payload = self._fetch_json_url(
+        payload, fetch_meta = self._fetch_json_url(
             f"{COINGECKO_SIMPLE_PRICE_URL}?{urlencode({'ids': coin_id, 'vs_currencies': 'usd', 'include_last_updated_at': 'true'})}",
             timeout=5,
             user_agent="hackme_web/1.0 trading-price coingecko",
+            with_meta=True,
         )
         coin = payload.get(coin_id) if isinstance(payload, dict) else None
         price = coin.get("usd") if isinstance(coin, dict) else None
-        return self._price_points_from_float(price, source="coingecko_simple_price")
+        price_points = self._price_points_from_float(price, source="coingecko_simple_price")
+        meta = self._provider_transport_meta("coingecko_simple_price", market_symbol, settings=settings or {}, transport="http_polling", fetched_at=fetch_meta.get("fetched_at"), latency_ms=fetch_meta.get("latency_ms"))
+        return (price_points, meta) if with_meta else price_points
 
     def _price_fusion_depth_levels(self, settings):
         try:
@@ -1789,6 +1907,89 @@ class TradingEngineService:
             return int((settings or {}).get("price_fusion_min_provider_count") or DEFAULT_PRICE_FUSION_MIN_PROVIDER_COUNT)
         except Exception:
             return DEFAULT_PRICE_FUSION_MIN_PROVIDER_COUNT
+
+    def _price_stream_ws_enabled(self, settings):
+        return bool((settings or {}).get("price_stream_ws_enabled", True))
+
+    def _price_stream_ws_stale_seconds(self, settings):
+        try:
+            return int((settings or {}).get("price_stream_ws_stale_seconds") or DEFAULT_PRICE_STREAM_WS_STALE_SECONDS)
+        except Exception:
+            return DEFAULT_PRICE_STREAM_WS_STALE_SECONDS
+
+    def _price_stream_provider_state(self, source, market_symbol, *, settings):
+        provider_id = market_provider_id(market_symbol, source)
+        if not self.stream_hub or not self._price_stream_ws_enabled(settings):
+            return {
+                "provider": source,
+                "market_symbol": str(market_symbol or "").strip().upper(),
+                "ws_supported": False,
+                "transport": "http_polling",
+                "connected": False,
+                "fallback": False,
+                "stale": False,
+                "degraded": False,
+                "confidence": "medium",
+                "provider_count": 1,
+                "last_update_at": "",
+                "exclusion_reason": "" if provider_id else "provider_not_supported",
+            }
+        return self.stream_hub.get_provider_state(
+            source,
+            market_symbol,
+            provider_id=provider_id,
+            stale_after_seconds=self._price_stream_ws_stale_seconds(settings),
+        )
+
+    def _provider_transport_meta(self, source, market_symbol, *, settings, stream_state=None, transport="http_polling", fetched_at="", latency_ms=0.0, fallback=False, exclusion_reason=""):
+        state = dict(stream_state or self._price_stream_provider_state(source, market_symbol, settings=settings) or {})
+        connected = bool(state.get("connected")) if transport == "websocket" else False
+        stale = bool(state.get("stale")) if transport == "websocket" else False
+        degraded = stale or (transport == "http_polling" and bool(state.get("ws_supported")) and fallback)
+        confidence = "high" if transport == "websocket" and connected and not stale else ("medium" if transport == "http_polling" else str(state.get("confidence") or "low"))
+        last_update_at = str(fetched_at or state.get("last_update_at") or "")
+        reason = str(exclusion_reason or state.get("exclusion_reason") or "")
+        return {
+            "ws_supported": bool(state.get("ws_supported")),
+            "transport": transport,
+            "connected": connected,
+            "fallback": bool(fallback),
+            "stale": stale,
+            "degraded": degraded,
+            "confidence": confidence,
+            "provider_count": 1,
+            "last_update_at": last_update_at,
+            "exclusion_reason": reason,
+            "latency_ms": round(float(latency_ms or 0.0), 2),
+        }
+
+    def _resolve_stream_ticker_snapshot(self, source, market_symbol, *, settings):
+        state = self._price_stream_provider_state(source, market_symbol, settings=settings)
+        if not self.stream_hub or not state.get("ws_supported"):
+            return None, state
+        snapshot = self.stream_hub.get_ticker_snapshot(
+            source,
+            market_symbol,
+            provider_id=market_provider_id(market_symbol, source),
+            stale_after_seconds=self._price_stream_ws_stale_seconds(settings),
+        )
+        if not snapshot or snapshot.get("stale") or snapshot.get("degraded") or snapshot.get("price_points") in (None, ""):
+            return None, state
+        return snapshot, state
+
+    def _resolve_stream_orderbook_snapshot(self, source, market_symbol, *, settings):
+        state = self._price_stream_provider_state(source, market_symbol, settings=settings)
+        if not self.stream_hub or not state.get("ws_supported"):
+            return None, state
+        snapshot = self.stream_hub.get_orderbook_snapshot(
+            source,
+            market_symbol,
+            provider_id=market_provider_id(market_symbol, source),
+            stale_after_seconds=self._price_stream_ws_stale_seconds(settings),
+        )
+        if not snapshot or snapshot.get("stale") or snapshot.get("degraded"):
+            return None, state
+        return snapshot, state
 
     def _provider_quantity_unit_info(self, source):
         return {
@@ -1900,6 +2101,10 @@ class TradingEngineService:
             "stale": stale,
             "degraded": degraded,
             "provider_count": provider_count,
+            "connected": bool(meta.get("connected")),
+            "fallback": bool(meta.get("fallback")),
+            "last_update_at": str(meta.get("last_update_at") or ""),
+            "exclusion_reason": str(meta.get("exclusion_reason") or ""),
             "health": health,
             "purpose": self._price_usage_label(normalized_type),
             "warning_message": warning_message,
@@ -1934,6 +2139,11 @@ class TradingEngineService:
             "risk_grade_provider_count": 1 if source and source != "manual_root" else 0,
             "stale": source.endswith("_cached"),
             "degraded": source == "manual_root" or source.endswith("_cached"),
+            "connected": False,
+            "fallback": source.endswith("_cached"),
+            "last_update_at": str((market or {}).get("updated_at") or ""),
+            "exclusion_reason": "manual_root_active" if source == "manual_root" else ("cached_price_active" if source.endswith("_cached") else ""),
+            "confidence": "manual" if source == "manual_root" else ("low" if source.endswith("_cached") else "medium"),
         }
         if source == "manual_root":
             price_meta["warnings"] = self._append_price_fusion_warning(
@@ -1988,6 +2198,78 @@ class TradingEngineService:
             return max(float(snapshot.get("depth_score") or 0.0), 0.0)
         except Exception:
             return 0.0
+
+    def _transport_state_from_provider_rows(self, provider_rows, *, warnings=None, degraded=False, conservative_mode=False, min_provider_count=0, ws_enabled=True):
+        rows = [row for row in (provider_rows or []) if isinstance(row, dict)]
+        ws_rows = [row for row in rows if row.get("source") in WS_CAPABLE_PRICE_PROVIDERS]
+        connected_count = sum(1 for row in ws_rows if bool(row.get("connected")))
+        fallback_count = sum(1 for row in ws_rows if bool(row.get("fallback")))
+        stale_count = sum(1 for row in ws_rows if bool(row.get("stream_stale") or row.get("stale")))
+        last_update_at = ""
+        last_candidates = [
+            str(row.get("provider_last_update_at") or row.get("last_update_at") or row.get("fetched_at") or "").strip()
+            for row in rows
+            if str(row.get("provider_last_update_at") or row.get("last_update_at") or row.get("fetched_at") or "").strip()
+        ]
+        if last_candidates:
+            last_update_at = sorted(last_candidates)[-1]
+        warning_rows = [row for row in rows if str(row.get("provider_exclusion_reason") or "").strip()]
+        primary_exclusion = str(warning_rows[0].get("provider_exclusion_reason") or "").strip() if warning_rows else ""
+        if not primary_exclusion:
+            primary_warning = self._primary_price_fusion_warning(warnings or [])
+            primary_exclusion = str(primary_warning.get("message") or primary_warning.get("code") or "").strip()
+        if not ws_enabled:
+            return {
+                "mode": "http_polling_only",
+                "connected": False,
+                "fallback": False,
+                "stale": False,
+                "degraded": bool(degraded),
+                "confidence": "medium",
+                "provider_count": len(rows),
+                "last_update_at": last_update_at,
+                "exclusion_reason": primary_exclusion,
+                "message": "WebSocket 未啟用，使用 HTTP polling 作為 provider input。",
+            }
+        if not ws_rows:
+            return {
+                "mode": "http_only_providers",
+                "connected": False,
+                "fallback": False,
+                "stale": False,
+                "degraded": bool(degraded),
+                "confidence": "medium",
+                "provider_count": len(rows),
+                "last_update_at": last_update_at,
+                "exclusion_reason": primary_exclusion,
+                "message": "目前市場沒有支援 WebSocket 的 provider input，使用 HTTP polling。",
+            }
+        transport_degraded = bool(degraded or conservative_mode or fallback_count or stale_count or connected_count <= 0)
+        confidence = "high"
+        if conservative_mode or connected_count <= 0:
+            confidence = "low"
+        elif transport_degraded:
+            confidence = "medium"
+        return {
+            "mode": "mixed" if fallback_count else "websocket",
+            "connected": connected_count > 0,
+            "fallback": fallback_count > 0,
+            "stale": stale_count > 0,
+            "degraded": transport_degraded,
+            "confidence": confidence,
+            "provider_count": connected_count,
+            "last_update_at": last_update_at,
+            "exclusion_reason": primary_exclusion,
+            "message": (
+                "部分 provider 已切回 HTTP polling，請視為可審計降級狀態。"
+                if fallback_count
+                else (
+                    "WebSocket provider input 正常運作。"
+                    if connected_count >= max(1, min_provider_count)
+                    else "WebSocket provider input 不足，請視為降級狀態。"
+                )
+            ),
+        }
 
     def _assert_price_meta_allows_high_risk_use(self, conn, *, actor=None, market_symbol="", usage="", price_meta=None):
         meta = price_meta or {}
@@ -2121,7 +2403,7 @@ class TradingEngineService:
         snapshot = self._depth_notional_snapshot(bids, asks, max_levels=max_levels, band_percent=band_percent)
         return snapshot["midpoint"], snapshot["depth_score"]
 
-    def _build_orderbook_snapshot(self, *, source, bids, asks, fetch_meta=None, max_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT, request_limit=None):
+    def _build_orderbook_snapshot(self, *, source, bids, asks, fetch_meta=None, max_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT, request_limit=None, transport_meta=None):
         stats = self._depth_notional_snapshot(bids, asks, max_levels=max_levels, band_percent=band_percent)
         fetched_at = str((fetch_meta or {}).get("fetched_at") or _now())
         latency_ms = round(float((fetch_meta or {}).get("latency_ms") or 0.0), 2)
@@ -2165,6 +2447,18 @@ class TradingEngineService:
             "latency_ms": latency_ms,
         }
         snapshot.update(self._provider_quantity_unit_info(source))
+        if isinstance(transport_meta, dict):
+            snapshot.update({
+                "ws_supported": bool(transport_meta.get("ws_supported")),
+                "transport": str(transport_meta.get("transport") or "http_polling"),
+                "connected": bool(transport_meta.get("connected")),
+                "fallback": bool(transport_meta.get("fallback")),
+                "stream_stale": bool(transport_meta.get("stale")),
+                "stream_degraded": bool(transport_meta.get("degraded")),
+                "stream_confidence": str(transport_meta.get("confidence") or "medium"),
+                "provider_last_update_at": str(transport_meta.get("last_update_at") or fetched_at),
+                "provider_exclusion_reason": str(transport_meta.get("exclusion_reason") or ""),
+            })
         return snapshot
 
     def _normalize_orderbook_fetch_result(self, fetch_result):
@@ -2173,99 +2467,105 @@ class TradingEngineService:
             return payload, fetch_meta if isinstance(fetch_meta, dict) else {}
         return fetch_result, {}
 
-    def _fetch_binance_orderbook_snapshot(self, market_symbol, *, depth_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT):
-        symbol = market_provider_id(market_symbol, "binance_public_api")
-        if not symbol:
-            raise ValueError("binance order book is not supported for this market")
-        request_limit = self._provider_depth_request_limit("binance_public_api", depth_levels)
-        payload, fetch_meta = self._normalize_orderbook_fetch_result(self._fetch_json_url(
-            f"{BINANCE_DEPTH_URL}?{urlencode({'symbol': symbol, 'limit': request_limit})}",
-            timeout=5,
-            with_meta=True,
-        ))
-        return self._build_orderbook_snapshot(
-            source="binance_public_api",
-            bids=payload.get("bids") or [],
-            asks=payload.get("asks") or [],
-            fetch_meta=fetch_meta,
-            max_levels=depth_levels,
-            band_percent=band_percent,
-            request_limit=request_limit,
-        )
-
-    def _fetch_okx_orderbook_snapshot(self, market_symbol, *, depth_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT):
-        instrument = market_provider_id(market_symbol, "okx_public_api")
-        if not instrument:
-            raise ValueError("okx order book is not supported for this market")
-        request_limit = self._provider_depth_request_limit("okx_public_api", depth_levels)
-        payload, fetch_meta = self._normalize_orderbook_fetch_result(self._fetch_json_url(
-            f"{OKX_BOOKS_URL}?{urlencode({'instId': instrument, 'sz': request_limit})}",
-            timeout=5,
-            user_agent="hackme_web/1.0 trading-depth okx",
-            with_meta=True,
-        ))
+    def _okx_http_book_getter(self, payload):
         data = payload.get("data") if isinstance(payload, dict) else None
         book = data[0] if isinstance(data, list) and data else None
         if not isinstance(book, dict):
             raise ValueError("okx order book payload is invalid")
-        return self._build_orderbook_snapshot(
-            source="okx_public_api",
-            bids=book.get("bids") or [],
-            asks=book.get("asks") or [],
-            fetch_meta=fetch_meta,
-            max_levels=depth_levels,
-            band_percent=band_percent,
-            request_limit=request_limit,
-        )
+        return book.get("bids") or [], book.get("asks") or []
 
-    def _fetch_coinbase_orderbook_snapshot(self, market_symbol, *, depth_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT):
-        product_id = market_provider_id(market_symbol, "coinbase_exchange")
-        if not product_id:
-            raise ValueError("coinbase order book is not supported for this market")
-        payload, fetch_meta = self._normalize_orderbook_fetch_result(self._fetch_json_url(
-            f"{COINBASE_BOOK_URL_TEMPLATE.format(product_id=product_id)}?{urlencode({'level': 2})}",
-            timeout=5,
-            user_agent="hackme_web/1.0 trading-depth coinbase",
-            with_meta=True,
-        ))
-        return self._build_orderbook_snapshot(
-            source="coinbase_exchange",
-            bids=payload.get("bids") or [],
-            asks=payload.get("asks") or [],
-            fetch_meta=fetch_meta,
-            max_levels=depth_levels,
-            band_percent=band_percent,
-            request_limit=2,
-        )
-
-    def _fetch_kraken_orderbook_snapshot(self, market_symbol, *, depth_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT):
-        pair = market_provider_id(market_symbol, "kraken_public_api")
-        if not pair:
-            raise ValueError("kraken order book is not supported for this market")
-        request_limit = self._provider_depth_request_limit("kraken_public_api", depth_levels)
-        payload, fetch_meta = self._normalize_orderbook_fetch_result(self._fetch_json_url(
-            f"{KRAKEN_DEPTH_URL}?{urlencode({'pair': pair, 'count': request_limit})}",
-            timeout=5,
-            user_agent="hackme_web/1.0 trading-depth kraken",
-            with_meta=True,
-        ))
+    def _kraken_http_book_getter(self, payload):
         if not isinstance(payload, dict) or payload.get("error"):
             raise ValueError(f"kraken depth error: {payload.get('error') if isinstance(payload, dict) else 'invalid payload'}")
         result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
         book = next(iter(result.values()), None)
         if not isinstance(book, dict):
             raise ValueError("kraken order book payload is invalid")
-        return self._build_orderbook_snapshot(
-            source="kraken_public_api",
-            bids=book.get("bids") or [],
-            asks=book.get("asks") or [],
-            fetch_meta=fetch_meta,
-            max_levels=depth_levels,
+        return book.get("bids") or [], book.get("asks") or []
+
+    def _fetch_binance_orderbook_snapshot(self, market_symbol, *, depth_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT, settings=None):
+        symbol = market_provider_id(market_symbol, "binance_public_api")
+        if not symbol:
+            raise ValueError("binance order book is not supported for this market")
+        request_limit = self._provider_depth_request_limit("binance_public_api", depth_levels)
+        return self._provider_orderbook_with_fallback(
+            "binance_public_api",
+            market_symbol,
+            settings=settings or {},
+            depth_levels=depth_levels,
             band_percent=band_percent,
             request_limit=request_limit,
+            http_fetcher=lambda: self._normalize_orderbook_fetch_result(self._fetch_json_url(
+                f"{BINANCE_DEPTH_URL}?{urlencode({'symbol': symbol, 'limit': request_limit})}",
+                timeout=5,
+                with_meta=True,
+            )),
+            book_getter=lambda payload: ((payload or {}).get("bids") or [], (payload or {}).get("asks") or []),
         )
 
-    def _fetch_gemini_orderbook_snapshot(self, market_symbol, *, depth_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT):
+    def _fetch_okx_orderbook_snapshot(self, market_symbol, *, depth_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT, settings=None):
+        instrument = market_provider_id(market_symbol, "okx_public_api")
+        if not instrument:
+            raise ValueError("okx order book is not supported for this market")
+        request_limit = self._provider_depth_request_limit("okx_public_api", depth_levels)
+        return self._provider_orderbook_with_fallback(
+            "okx_public_api",
+            market_symbol,
+            settings=settings or {},
+            depth_levels=depth_levels,
+            band_percent=band_percent,
+            request_limit=request_limit,
+            http_fetcher=lambda: self._normalize_orderbook_fetch_result(self._fetch_json_url(
+                f"{OKX_BOOKS_URL}?{urlencode({'instId': instrument, 'sz': request_limit})}",
+                timeout=5,
+                user_agent="hackme_web/1.0 trading-depth okx",
+                with_meta=True,
+            )),
+            book_getter=self._okx_http_book_getter,
+        )
+
+    def _fetch_coinbase_orderbook_snapshot(self, market_symbol, *, depth_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT, settings=None):
+        product_id = market_provider_id(market_symbol, "coinbase_exchange")
+        if not product_id:
+            raise ValueError("coinbase order book is not supported for this market")
+        return self._provider_orderbook_with_fallback(
+            "coinbase_exchange",
+            market_symbol,
+            settings=settings or {},
+            depth_levels=depth_levels,
+            band_percent=band_percent,
+            request_limit=2,
+            http_fetcher=lambda: self._normalize_orderbook_fetch_result(self._fetch_json_url(
+                f"{COINBASE_BOOK_URL_TEMPLATE.format(product_id=product_id)}?{urlencode({'level': 2})}",
+                timeout=5,
+                user_agent="hackme_web/1.0 trading-depth coinbase",
+                with_meta=True,
+            )),
+            book_getter=lambda payload: ((payload or {}).get("bids") or [], (payload or {}).get("asks") or []),
+        )
+
+    def _fetch_kraken_orderbook_snapshot(self, market_symbol, *, depth_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT, settings=None):
+        pair = market_provider_id(market_symbol, "kraken_public_api")
+        if not pair:
+            raise ValueError("kraken order book is not supported for this market")
+        request_limit = self._provider_depth_request_limit("kraken_public_api", depth_levels)
+        return self._provider_orderbook_with_fallback(
+            "kraken_public_api",
+            market_symbol,
+            settings=settings or {},
+            depth_levels=depth_levels,
+            band_percent=band_percent,
+            request_limit=request_limit,
+            http_fetcher=lambda: self._normalize_orderbook_fetch_result(self._fetch_json_url(
+                f"{KRAKEN_DEPTH_URL}?{urlencode({'pair': pair, 'count': request_limit})}",
+                timeout=5,
+                user_agent="hackme_web/1.0 trading-depth kraken",
+                with_meta=True,
+            )),
+            book_getter=self._kraken_http_book_getter,
+        )
+
+    def _fetch_gemini_orderbook_snapshot(self, market_symbol, *, depth_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT, settings=None):
         symbol = market_provider_id(market_symbol, "gemini_public_api")
         if not symbol:
             raise ValueError("gemini order book is not supported for this market")
@@ -2276,19 +2576,18 @@ class TradingEngineService:
             user_agent="hackme_web/1.0 trading-depth gemini",
             with_meta=True,
         ))
-        bids = [[row.get("price"), row.get("amount")] for row in (payload.get("bids") or []) if isinstance(row, dict)]
-        asks = [[row.get("price"), row.get("amount")] for row in (payload.get("asks") or []) if isinstance(row, dict)]
         return self._build_orderbook_snapshot(
             source="gemini_public_api",
-            bids=bids,
-            asks=asks,
+            bids=[[row.get("price"), row.get("amount")] for row in (payload.get("bids") or []) if isinstance(row, dict)],
+            asks=[[row.get("price"), row.get("amount")] for row in (payload.get("asks") or []) if isinstance(row, dict)],
             fetch_meta=fetch_meta,
             max_levels=depth_levels,
             band_percent=band_percent,
             request_limit=request_limit,
+            transport_meta=self._provider_transport_meta("gemini_public_api", market_symbol, settings=settings or {}, transport="http_polling", fetched_at=fetch_meta.get("fetched_at"), latency_ms=fetch_meta.get("latency_ms")),
         )
 
-    def _fetch_bitstamp_orderbook_snapshot(self, market_symbol, *, depth_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT):
+    def _fetch_bitstamp_orderbook_snapshot(self, market_symbol, *, depth_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT, settings=None):
         pair = market_provider_id(market_symbol, "bitstamp_public_api")
         if not pair:
             raise ValueError("bitstamp order book is not supported for this market")
@@ -2306,6 +2605,7 @@ class TradingEngineService:
             max_levels=depth_levels,
             band_percent=band_percent,
             request_limit=depth_levels,
+            transport_meta=self._provider_transport_meta("bitstamp_public_api", market_symbol, settings=settings or {}, transport="http_polling", fetched_at=fetch_meta.get("fetched_at"), latency_ms=fetch_meta.get("latency_ms")),
         )
 
     def _price_fusion_manual_weights(self, settings):
@@ -2412,10 +2712,10 @@ class TradingEngineService:
         for source, fetcher in fetchers:
             try:
                 try:
-                    snapshots.append(fetcher(market_symbol, depth_levels=depth_levels, band_percent=depth_band_percent))
+                    snapshots.append(fetcher(market_symbol, depth_levels=depth_levels, band_percent=depth_band_percent, settings=settings))
                 except TypeError:
                     try:
-                        snapshots.append(fetcher(market_symbol, depth_levels=depth_levels))
+                        snapshots.append(fetcher(market_symbol, depth_levels=depth_levels, settings=settings))
                     except TypeError:
                         snapshots.append(fetcher(market_symbol))
             except Exception as exc:
@@ -2424,7 +2724,7 @@ class TradingEngineService:
                 provider_failures[source] = short_error
         if not snapshots:
             try:
-                fallback_price, fallback_source = self._fetch_live_price_points(market_symbol)
+                fallback_price, fallback_source, fallback_meta = self._fetch_live_price_points(market_symbol, with_meta=True, settings=settings)
                 warnings = self._append_price_fusion_warning(
                     warnings,
                     "orderbook_unavailable",
@@ -2448,6 +2748,110 @@ class TradingEngineService:
                     for source, _fetcher in fetchers
                 ]
                 fallback_value = float(_to_decimal(fallback_price, name="fallback_price", minimum=0.00000001))
+                providers_used = [{
+                    "source": fallback_source,
+                    "label": PRICE_PROVIDER_LABELS.get(fallback_source, fallback_source),
+                    "price_points": fallback_value,
+                    "midpoint_points": fallback_value,
+                    "depth_score": 0.0,
+                    "effective_depth_score": 0.0,
+                    "depth_density_score": 0.0,
+                    "reference_weight_percent": 100.0,
+                    "risk_grade_weight_percent": 0.0,
+                    "normalized_weight_percent": 100.0,
+                    "raw_normalized_weight_percent": 100.0,
+                    "risk_grade_eligible": False,
+                    "coverage_insufficient": True,
+                    "coverage_warning_message": "資料截斷，不代表該交易所真實深度不足；目前僅納入 reference price，不納入高風險風控權重。",
+                    "quantity_unit": "n/a",
+                    "quantity_unit_label": "n/a",
+                    "quantity_unit_confirmed": False,
+                    "quantity_unit_note": "ticker fallback has no order book depth snapshot",
+                    "best_bid_points": None,
+                    "best_ask_points": None,
+                    "spread_percent": None,
+                    "bid_notional_points": None,
+                    "ask_notional_points": None,
+                    "fetched_at": str(fallback_meta.get("last_update_at") or _now()),
+                    "age_seconds": 0.0,
+                    "latency_ms": round(float(fallback_meta.get("latency_ms") or 0.0), 2),
+                    "midpoint_deviation_percent": 0.0,
+                    "raw_bid_levels_count": 0,
+                    "raw_ask_levels_count": 0,
+                    "used_bid_levels_count": 0,
+                    "used_ask_levels_count": 0,
+                    "bid_coverage_percent": 0.0,
+                    "ask_coverage_percent": 0.0,
+                    "bid_reached_lower_bound": False,
+                    "ask_reached_upper_bound": False,
+                    "orderbook_truncated": True,
+                    "coverage_ratio_percent": 0.0,
+                    "depth_levels_requested": depth_levels,
+                    "provider_depth_request_limit": 0,
+                    "provider_depth_limit_reached": False,
+                    "transport": str(fallback_meta.get("transport") or "http_polling"),
+                    "connected": bool(fallback_meta.get("connected")),
+                    "fallback": bool(fallback_meta.get("fallback")),
+                    "stale": bool(fallback_meta.get("stale")),
+                    "degraded": bool(fallback_meta.get("degraded")),
+                    "confidence": str(fallback_meta.get("confidence") or "low"),
+                    "last_update_at": str(fallback_meta.get("last_update_at") or _now()),
+                    "exclusion_reason": str(fallback_meta.get("exclusion_reason") or ""),
+                    "provider_last_update_at": str(fallback_meta.get("last_update_at") or _now()),
+                    "provider_exclusion_reason": str(fallback_meta.get("exclusion_reason") or ""),
+                }]
+                providers_used = [{
+                    "source": fallback_source,
+                    "label": PRICE_PROVIDER_LABELS.get(fallback_source, fallback_source),
+                    "price_points": fallback_value,
+                    "midpoint_points": fallback_value,
+                    "depth_score": 0.0,
+                    "effective_depth_score": 0.0,
+                    "depth_density_score": 0.0,
+                    "reference_weight_percent": 100.0,
+                    "risk_grade_weight_percent": 0.0,
+                    "normalized_weight_percent": 100.0,
+                    "raw_normalized_weight_percent": 100.0,
+                    "risk_grade_eligible": False,
+                    "coverage_insufficient": True,
+                    "coverage_warning_message": "資料截斷，不代表該交易所真實深度不足；目前僅納入 reference price，不納入高風險風控權重。",
+                    "quantity_unit": "n/a",
+                    "quantity_unit_label": "n/a",
+                    "quantity_unit_confirmed": False,
+                    "quantity_unit_note": "ticker fallback has no order book depth snapshot",
+                    "best_bid_points": None,
+                    "best_ask_points": None,
+                    "spread_percent": None,
+                    "bid_notional_points": None,
+                    "ask_notional_points": None,
+                    "fetched_at": str(fallback_meta.get("last_update_at") or _now()),
+                    "age_seconds": 0.0,
+                    "latency_ms": round(float(fallback_meta.get("latency_ms") or 0.0), 2),
+                    "midpoint_deviation_percent": 0.0,
+                    "raw_bid_levels_count": 0,
+                    "raw_ask_levels_count": 0,
+                    "used_bid_levels_count": 0,
+                    "used_ask_levels_count": 0,
+                    "bid_coverage_percent": 0.0,
+                    "ask_coverage_percent": 0.0,
+                    "bid_reached_lower_bound": False,
+                    "ask_reached_upper_bound": False,
+                    "orderbook_truncated": True,
+                    "coverage_ratio_percent": 0.0,
+                    "depth_levels_requested": depth_levels,
+                    "provider_depth_request_limit": 0,
+                    "provider_depth_limit_reached": False,
+                    "transport": str(fallback_meta.get("transport") or "http_polling"),
+                    "connected": bool(fallback_meta.get("connected")),
+                    "fallback": bool(fallback_meta.get("fallback")),
+                    "stale": bool(fallback_meta.get("stale")),
+                    "degraded": bool(fallback_meta.get("degraded")),
+                    "confidence": str(fallback_meta.get("confidence") or "low"),
+                    "last_update_at": str(fallback_meta.get("last_update_at") or _now()),
+                    "exclusion_reason": str(fallback_meta.get("exclusion_reason") or ""),
+                    "provider_last_update_at": str(fallback_meta.get("last_update_at") or _now()),
+                    "provider_exclusion_reason": str(fallback_meta.get("exclusion_reason") or ""),
+                }]
                 return fallback_price, {
                     "requested_mode": str((settings or {}).get("price_fusion_mode") or "auto_depth").strip(),
                     "mode": "emergency_single_source",
@@ -2465,48 +2869,7 @@ class TradingEngineService:
                     "conservative_mode": True,
                     "high_risk_blocked": True,
                     "high_risk_block_reason": "目前可用 order book 來源不足，只能提供 degraded reference price",
-                    "providers_used": [{
-                        "source": fallback_source,
-                        "label": PRICE_PROVIDER_LABELS.get(fallback_source, fallback_source),
-                        "price_points": fallback_value,
-                        "midpoint_points": fallback_value,
-                        "depth_score": 0.0,
-                        "effective_depth_score": 0.0,
-                        "depth_density_score": 0.0,
-                        "reference_weight_percent": 100.0,
-                        "risk_grade_weight_percent": 0.0,
-                        "normalized_weight_percent": 100.0,
-                        "raw_normalized_weight_percent": 100.0,
-                        "risk_grade_eligible": False,
-                        "coverage_insufficient": True,
-                        "coverage_warning_message": "資料截斷，不代表該交易所真實深度不足；目前僅納入 reference price，不納入高風險風控權重。",
-                        "quantity_unit": "n/a",
-                        "quantity_unit_label": "n/a",
-                        "quantity_unit_confirmed": False,
-                        "quantity_unit_note": "ticker fallback has no order book depth snapshot",
-                        "best_bid_points": None,
-                        "best_ask_points": None,
-                        "spread_percent": None,
-                        "bid_notional_points": None,
-                        "ask_notional_points": None,
-                        "fetched_at": _now(),
-                        "age_seconds": 0.0,
-                        "latency_ms": 0.0,
-                        "midpoint_deviation_percent": 0.0,
-                        "raw_bid_levels_count": 0,
-                        "raw_ask_levels_count": 0,
-                        "used_bid_levels_count": 0,
-                        "used_ask_levels_count": 0,
-                        "bid_coverage_percent": 0.0,
-                        "ask_coverage_percent": 0.0,
-                        "bid_reached_lower_bound": False,
-                        "ask_reached_upper_bound": False,
-                        "orderbook_truncated": True,
-                        "coverage_ratio_percent": 0.0,
-                        "depth_levels_requested": depth_levels,
-                        "provider_depth_request_limit": 0,
-                        "provider_depth_limit_reached": False,
-                    }],
+                    "providers_used": providers_used,
                     "excluded_providers": excluded,
                     "provider_errors": errors,
                     "resolved_source": fallback_source,
@@ -2522,6 +2885,14 @@ class TradingEngineService:
                     "max_single_provider_weight_percent": max_single_provider_weight_percent,
                     "min_provider_count": min_provider_count,
                     "median_midpoint_points": fallback_value,
+                    "transport_state": self._transport_state_from_provider_rows(
+                        providers_used,
+                        warnings=warnings,
+                        degraded=True,
+                        conservative_mode=True,
+                        min_provider_count=min_provider_count,
+                        ws_enabled=self._price_stream_ws_enabled(settings),
+                    ),
                 }
             except Exception as fallback_exc:
                 errors.append(f"single_source_fallback: {str(fallback_exc)[:120]}")
@@ -2536,6 +2907,7 @@ class TradingEngineService:
                 "reason": "fetch_failed",
                 "error": provider_failures.get(source, ""),
                 "manual_weight": round(float(weight_map.get(source, 0.0)), 8),
+                **self._price_stream_provider_state(source, market_symbol, settings=settings),
             }
             for source, _fetcher in fetchers
             if source in provider_failures
@@ -2606,6 +2978,14 @@ class TradingEngineService:
                     "orderbook_truncated": bool(snap.get("orderbook_truncated")),
                     "coverage_ratio_percent": round(float(snap.get("coverage_ratio_percent") or 0.0), 4),
                     "quantity_unit_label": snap.get("quantity_unit_label"),
+                    "transport": str(snap.get("transport") or "http_polling"),
+                    "connected": bool(snap.get("connected")),
+                    "fallback": bool(snap.get("fallback")),
+                    "stale": bool(snap.get("stream_stale")),
+                    "degraded": bool(snap.get("stream_degraded")),
+                    "confidence": str(snap.get("stream_confidence") or "medium"),
+                    "last_update_at": str(snap.get("provider_last_update_at") or snap.get("fetched_at") or ""),
+                    "exclusion_reason": str(snap.get("provider_exclusion_reason") or message or reason),
                 })
                 continue
             reference_snapshots.append(snap)
@@ -2613,7 +2993,7 @@ class TradingEngineService:
         snapshots = reference_snapshots
         if not snapshots:
             try:
-                fallback_price, fallback_source = self._fetch_live_price_points(market_symbol)
+                fallback_price, fallback_source, fallback_meta = self._fetch_live_price_points(market_symbol, with_meta=True, settings=settings)
                 warnings = self._append_price_fusion_warning(
                     warnings,
                     "orderbook_quality_rejected",
@@ -2628,6 +3008,58 @@ class TradingEngineService:
                 )
                 primary_warning = self._primary_price_fusion_warning(warnings)
                 fallback_value = float(_to_decimal(fallback_price, name="fallback_price", minimum=0.00000001))
+                fallback_used = [{
+                    "source": fallback_source,
+                    "label": PRICE_PROVIDER_LABELS.get(fallback_source, fallback_source),
+                    "price_points": fallback_value,
+                    "midpoint_points": fallback_value,
+                    "depth_score": 0.0,
+                    "effective_depth_score": 0.0,
+                    "depth_density_score": 0.0,
+                    "reference_weight_percent": 100.0,
+                    "risk_grade_weight_percent": 0.0,
+                    "normalized_weight_percent": 100.0,
+                    "raw_normalized_weight_percent": 100.0,
+                    "risk_grade_eligible": False,
+                    "coverage_insufficient": True,
+                    "coverage_warning_message": "資料截斷，不代表該交易所真實深度不足；目前僅納入 reference price，不納入高風險風控權重。",
+                    "quantity_unit": "n/a",
+                    "quantity_unit_label": "n/a",
+                    "quantity_unit_confirmed": False,
+                    "quantity_unit_note": "ticker fallback has no order book depth snapshot",
+                    "best_bid_points": None,
+                    "best_ask_points": None,
+                    "spread_percent": None,
+                    "bid_notional_points": None,
+                    "ask_notional_points": None,
+                    "fetched_at": str(fallback_meta.get("last_update_at") or _now()),
+                    "age_seconds": 0.0,
+                    "latency_ms": round(float(fallback_meta.get("latency_ms") or 0.0), 2),
+                    "midpoint_deviation_percent": 0.0,
+                    "raw_bid_levels_count": 0,
+                    "raw_ask_levels_count": 0,
+                    "used_bid_levels_count": 0,
+                    "used_ask_levels_count": 0,
+                    "bid_coverage_percent": 0.0,
+                    "ask_coverage_percent": 0.0,
+                    "bid_reached_lower_bound": False,
+                    "ask_reached_upper_bound": False,
+                    "orderbook_truncated": True,
+                    "coverage_ratio_percent": 0.0,
+                    "depth_levels_requested": depth_levels,
+                    "provider_depth_request_limit": 0,
+                    "provider_depth_limit_reached": False,
+                    "transport": str(fallback_meta.get("transport") or "http_polling"),
+                    "connected": bool(fallback_meta.get("connected")),
+                    "fallback": bool(fallback_meta.get("fallback")),
+                    "stale": bool(fallback_meta.get("stale")),
+                    "degraded": bool(fallback_meta.get("degraded")),
+                    "confidence": str(fallback_meta.get("confidence") or "low"),
+                    "last_update_at": str(fallback_meta.get("last_update_at") or _now()),
+                    "exclusion_reason": str(fallback_meta.get("exclusion_reason") or ""),
+                    "provider_last_update_at": str(fallback_meta.get("last_update_at") or _now()),
+                    "provider_exclusion_reason": str(fallback_meta.get("exclusion_reason") or ""),
+                }]
                 return fallback_price, {
                     "requested_mode": str((settings or {}).get("price_fusion_mode") or "auto_depth").strip(),
                     "mode": "quality_filtered_single_source",
@@ -2645,48 +3077,7 @@ class TradingEngineService:
                     "conservative_mode": True,
                     "high_risk_blocked": True,
                     "high_risk_block_reason": "目前可用 order book 來源不足，只能提供 degraded reference price",
-                    "providers_used": [{
-                        "source": fallback_source,
-                        "label": PRICE_PROVIDER_LABELS.get(fallback_source, fallback_source),
-                        "price_points": fallback_value,
-                        "midpoint_points": fallback_value,
-                        "depth_score": 0.0,
-                        "effective_depth_score": 0.0,
-                        "depth_density_score": 0.0,
-                        "reference_weight_percent": 100.0,
-                        "risk_grade_weight_percent": 0.0,
-                        "normalized_weight_percent": 100.0,
-                        "raw_normalized_weight_percent": 100.0,
-                        "risk_grade_eligible": False,
-                        "coverage_insufficient": True,
-                        "coverage_warning_message": "資料截斷，不代表該交易所真實深度不足；目前僅納入 reference price，不納入高風險風控權重。",
-                        "quantity_unit": "n/a",
-                        "quantity_unit_label": "n/a",
-                        "quantity_unit_confirmed": False,
-                        "quantity_unit_note": "ticker fallback has no order book depth snapshot",
-                        "best_bid_points": None,
-                        "best_ask_points": None,
-                        "spread_percent": None,
-                        "bid_notional_points": None,
-                        "ask_notional_points": None,
-                        "fetched_at": _now(),
-                        "age_seconds": 0.0,
-                        "latency_ms": 0.0,
-                        "midpoint_deviation_percent": 0.0,
-                        "raw_bid_levels_count": 0,
-                        "raw_ask_levels_count": 0,
-                        "used_bid_levels_count": 0,
-                        "used_ask_levels_count": 0,
-                        "bid_coverage_percent": 0.0,
-                        "ask_coverage_percent": 0.0,
-                        "bid_reached_lower_bound": False,
-                        "ask_reached_upper_bound": False,
-                        "orderbook_truncated": True,
-                        "coverage_ratio_percent": 0.0,
-                        "depth_levels_requested": depth_levels,
-                        "provider_depth_request_limit": 0,
-                        "provider_depth_limit_reached": False,
-                    }],
+                    "providers_used": fallback_used,
                     "excluded_providers": excluded_providers,
                     "provider_errors": errors,
                     "resolved_source": fallback_source,
@@ -2702,6 +3093,14 @@ class TradingEngineService:
                     "max_single_provider_weight_percent": max_single_provider_weight_percent,
                     "min_provider_count": min_provider_count,
                     "median_midpoint_points": median_midpoint,
+                    "transport_state": self._transport_state_from_provider_rows(
+                        fallback_used,
+                        warnings=warnings,
+                        degraded=True,
+                        conservative_mode=True,
+                        min_provider_count=min_provider_count,
+                        ws_enabled=self._price_stream_ws_enabled(settings),
+                    ),
                 }
             except Exception as fallback_exc:
                 errors.append(f"quality_filtered_single_source: {str(fallback_exc)[:120]}")
@@ -2863,7 +3262,22 @@ class TradingEngineService:
         )
         degraded = bool(excluded_providers) or bool(warnings) or reference_model["resolved_mode"] != mode or conservative_mode
         reference_value = float(Decimal(str(reference_price)).quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP))
-        risk_value = float(Decimal(str(risk_grade_price)).quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP)) if risk_grade_price is not None else None
+        transport_state = self._transport_state_from_provider_rows(
+            snapshots,
+            warnings=warnings,
+            degraded=degraded,
+            conservative_mode=conservative_mode,
+            min_provider_count=min_provider_count,
+            ws_enabled=self._price_stream_ws_enabled(settings),
+        )
+        degraded = bool(degraded or transport_state.get("degraded"))
+        if not warning_message and str(transport_state.get("message") or "").strip():
+            warning_message = str(transport_state.get("message") or "").strip()
+        risk_value = (
+            float(Decimal(str(risk_grade_price)).quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP))
+            if risk_grade_price is not None and not conservative_mode
+            else None
+        )
         return reference_value, {
             "requested_mode": mode,
             "mode": reference_model["resolved_mode"],
@@ -2932,6 +3346,14 @@ class TradingEngineService:
                     "quantity_unit_confirmed": bool(snap.get("quantity_unit_confirmed")),
                     "quantity_unit_note": str(snap.get("quantity_unit_note") or ""),
                     "contract_size_adjusted": bool(snap.get("contract_size_adjusted")),
+                    "transport": str(snap.get("transport") or "http_polling"),
+                    "connected": bool(snap.get("connected")),
+                    "fallback": bool(snap.get("fallback")),
+                    "stale": bool(snap.get("stream_stale")),
+                    "degraded": bool(snap.get("stream_degraded")),
+                    "confidence": str(snap.get("stream_confidence") or "medium"),
+                    "last_update_at": str(snap.get("provider_last_update_at") or snap.get("fetched_at") or ""),
+                    "exclusion_reason": str(snap.get("provider_exclusion_reason") or ""),
                 }
                 for snap in snapshots
             ],
@@ -2946,6 +3368,7 @@ class TradingEngineService:
             "median_midpoint_points": round(float(median_midpoint), 8),
             "reference_weights_sum_percent": round(sum(float(reference_weights.get(snap["source"], 0.0)) * 100.0 for snap in snapshots), 4),
             "risk_grade_weights_sum_percent": round(sum(float(risk_weights.get(snap["source"], 0.0)) * 100.0 for snap in snapshots), 4),
+            "transport_state": transport_state,
         }
 
     def _default_price_fusion_market_symbol(self, conn):
@@ -2987,9 +3410,21 @@ class TradingEngineService:
             "min_provider_count": int(settings.get("price_fusion_min_provider_count") or DEFAULT_PRICE_FUSION_MIN_PROVIDER_COUNT),
         }
         if configured_source != FUSED_PRICE_SOURCE:
+            transport_state = {
+                "mode": "inactive",
+                "connected": False,
+                "fallback": False,
+                "stale": False,
+                "degraded": False,
+                "confidence": "manual",
+                "provider_count": 0,
+                "last_update_at": "",
+                "exclusion_reason": "",
+                "message": "目前價格來源不是融合價格；只有切回融合價格後才會計算各 API 即時占比。",
+            }
             payload.update({
                 "state": "inactive",
-                "message": "目前價格來源不是融合價格；只有切回融合價格後才會計算各 API 即時占比。",
+                "message": transport_state["message"],
                 "degraded": False,
                 "fallback_active": False,
                 "conservative_mode": False,
@@ -2999,12 +3434,32 @@ class TradingEngineService:
                 "resolved_mode": requested_mode,
                 "resolved_source": configured_source,
                 "price_points": None,
+                "transport_state": transport_state,
+                "connected": False,
+                "fallback": False,
+                "stale": False,
+                "confidence": "manual",
+                "provider_count": 0,
+                "last_update_at": "",
+                "exclusion_reason": "",
             })
             return payload
         if not live_supported:
+            transport_state = {
+                "mode": "unsupported",
+                "connected": False,
+                "fallback": False,
+                "stale": False,
+                "degraded": True,
+                "confidence": "low",
+                "provider_count": 0,
+                "last_update_at": "",
+                "exclusion_reason": "market_not_supported",
+                "message": "這個市場目前沒有支援即時融合價格來源。",
+            }
             payload.update({
                 "state": "unsupported",
-                "message": "這個市場目前沒有支援即時融合價格來源。",
+                "message": transport_state["message"],
                 "degraded": True,
                 "fallback_active": False,
                 "conservative_mode": False,
@@ -3014,6 +3469,14 @@ class TradingEngineService:
                 "resolved_mode": requested_mode,
                 "resolved_source": FUSED_PRICE_SOURCE,
                 "price_points": None,
+                "transport_state": transport_state,
+                "connected": False,
+                "fallback": False,
+                "stale": False,
+                "confidence": "low",
+                "provider_count": 0,
+                "last_update_at": "",
+                "exclusion_reason": "market_not_supported",
             })
             return payload
         price_points, details = self._fetch_weighted_fused_price_points(symbol, settings=settings)
@@ -3055,6 +3518,14 @@ class TradingEngineService:
             "provider_errors": list((details or {}).get("provider_errors") or []),
             "reference_weights_sum_percent": float((details or {}).get("reference_weights_sum_percent") or 0.0),
             "risk_grade_weights_sum_percent": float((details or {}).get("risk_grade_weights_sum_percent") or 0.0),
+            "transport_state": dict((details or {}).get("transport_state") or {}),
+            "connected": bool(((details or {}).get("transport_state") or {}).get("connected")),
+            "fallback": bool(((details or {}).get("transport_state") or {}).get("fallback")),
+            "stale": bool(((details or {}).get("transport_state") or {}).get("stale")),
+            "confidence": str((((details or {}).get("transport_state") or {}).get("confidence") or "medium")),
+            "provider_count": int((((details or {}).get("transport_state") or {}).get("provider_count") or 0)),
+            "last_update_at": str((((details or {}).get("transport_state") or {}).get("last_update_at") or "")),
+            "exclusion_reason": str((((details or {}).get("transport_state") or {}).get("exclusion_reason") or "")),
         })
         return payload
 
@@ -3122,6 +3593,10 @@ class TradingEngineService:
                 "stale": reference_context["stale"],
                 "degraded": reference_context["degraded"],
                 "provider_count": reference_context["provider_count"],
+                "connected": bool((price_meta or {}).get("connected")),
+                "fallback": bool((price_meta or {}).get("fallback")),
+                "last_update_at": str((price_meta or {}).get("last_update_at") or ""),
+                "exclusion_reason": str((price_meta or {}).get("exclusion_reason") or ""),
                 "price_health": str((price_meta or {}).get("price_health") or "healthy"),
                 "fallback_reason": str((price_meta or {}).get("fallback_reason") or ""),
                 "excluded_sources": list((price_meta or {}).get("excluded_sources") or []),
@@ -3131,17 +3606,33 @@ class TradingEngineService:
                 "defaulted_market": defaulted_market,
                 "reference_price_context": reference_context,
                 "risk_grade_price_context": risk_grade_context,
+                "transport_state": dict((price_meta or {}).get("transport_state") or {}),
             }
         finally:
             conn.close()
 
-    def _fetch_live_price_points(self, market_symbol):
+    def _fetch_live_price_points(self, market_symbol, *, with_meta=False, settings=None):
         market_symbol = normalize_market_symbol(market_symbol)
         if not self._live_price_symbol(market_symbol):
             raise ValueError("live price is not supported for this market")
+        settings = settings or {}
         if self.live_price_provider:
             price = self.live_price_provider(market_symbol)
-            return self._price_points_from_float(price, source="test_live_price_provider"), "test_live_price_provider"
+            price_points = self._price_points_from_float(price, source="test_live_price_provider")
+            meta = {
+                "ws_supported": False,
+                "transport": "test_provider",
+                "connected": False,
+                "fallback": False,
+                "stale": False,
+                "degraded": False,
+                "confidence": "high",
+                "provider_count": 1,
+                "last_update_at": _now(),
+                "exclusion_reason": "",
+                "latency_ms": 0.0,
+            }
+            return (price_points, "test_live_price_provider", meta) if with_meta else (price_points, "test_live_price_provider")
         errors = []
         providers = (
             ("binance_public_api", self._fetch_binance_price_points),
@@ -3154,7 +3645,8 @@ class TradingEngineService:
         )
         for source, fetcher in providers:
             try:
-                return fetcher(market_symbol), source
+                price_points, provider_meta = fetcher(market_symbol, settings=settings, with_meta=True)
+                return (price_points, source, provider_meta) if with_meta else (price_points, source)
             except Exception as exc:
                 errors.append(f"{source}: {str(exc)[:120]}")
         raise ValueError("; ".join(errors) or "all live price providers failed")
@@ -3333,14 +3825,37 @@ class TradingEngineService:
             "risk_grade_provider_count": 0,
             "stale": False,
             "degraded": False,
+            "connected": False,
+            "fallback": False,
+            "last_update_at": "",
+            "exclusion_reason": "",
+            "confidence": "low",
         }
         if configured_source == "manual_root" or not self._live_price_symbol(symbol):
             price = market["manual_price_points"]
             source = str(market["price_source"] or "manual_root")
+            transport_state = {
+                "mode": "manual_root",
+                "connected": False,
+                "fallback": False,
+                "stale": False,
+                "degraded": True,
+                "confidence": "manual",
+                "provider_count": 0,
+                "last_update_at": str(market["updated_at"] or ""),
+                "exclusion_reason": "manual_root_active",
+                "message": "目前使用手動價格，不是即時市場 provider input。",
+            }
             price_meta["reference_price_points"] = float(Decimal(str(price or "0")))
             price_meta["risk_grade_price_points"] = float(Decimal(str(price or "0")))
             price_meta["resolved_source"] = source
             price_meta["degraded"] = True
+            price_meta["connected"] = False
+            price_meta["fallback"] = False
+            price_meta["last_update_at"] = transport_state["last_update_at"]
+            price_meta["exclusion_reason"] = transport_state["exclusion_reason"]
+            price_meta["confidence"] = "manual"
+            price_meta["transport_state"] = transport_state
             price_meta["warnings"] = self._append_price_fusion_warning(
                 price_meta.get("warnings"),
                 "manual_price_active",
@@ -3355,12 +3870,13 @@ class TradingEngineService:
         fusion_details = None
         try:
             if self.live_price_provider:
-                price, live_source = self._fetch_live_price_points(symbol)
+                price, live_source, live_transport_meta = self._fetch_live_price_points(symbol, with_meta=True, settings=settings)
             elif configured_source == FUSED_PRICE_SOURCE:
                 price, fusion_details = self._fetch_weighted_fused_price_points(symbol, settings=settings)
                 live_source = str((fusion_details or {}).get("resolved_source") or FUSED_PRICE_SOURCE)
+                live_transport_meta = dict((fusion_details or {}).get("transport_state") or {})
             else:
-                price, live_source = self._fetch_live_price_points(symbol)
+                price, live_source, live_transport_meta = self._fetch_live_price_points(symbol, with_meta=True, settings=settings)
         except Exception as exc:
             max_stale = int(settings.get("max_price_staleness_seconds") or 0)
             try:
@@ -3371,6 +3887,18 @@ class TradingEngineService:
             cached_source = old_source[:-7] if old_source.endswith("_cached") else old_source
             if old_price_decimal > 0 and max_stale > 0 and stale_seconds <= max_stale and cached_source in LIVE_PRICE_SOURCE_NAMES:
                 source = f"{cached_source}_cached"
+                transport_state = {
+                    "mode": "cached_fallback",
+                    "connected": False,
+                    "fallback": True,
+                    "stale": True,
+                    "degraded": True,
+                    "confidence": "low",
+                    "provider_count": 1,
+                    "last_update_at": "",
+                    "exclusion_reason": str(exc),
+                    "message": "即時價格失敗，已退回最後健康快取。",
+                }
                 price_meta.update({
                     "price_health": "fallback",
                     "fallback_reason": str(exc),
@@ -3380,8 +3908,14 @@ class TradingEngineService:
                     "resolved_source": source,
                     "reference_provider_count": 1,
                     "risk_grade_provider_count": 1,
-                    "stale": True,
-                    "degraded": True,
+                    "stale": bool(transport_state["stale"]),
+                    "degraded": bool(transport_state["degraded"]),
+                    "connected": bool(transport_state["connected"]),
+                    "fallback": bool(transport_state["fallback"]),
+                    "last_update_at": str(transport_state["last_update_at"]),
+                    "exclusion_reason": str(transport_state["exclusion_reason"]),
+                    "confidence": str(transport_state["confidence"]),
+                    "transport_state": transport_state,
                 })
                 self._audit_event(
                     conn,
@@ -3450,8 +3984,14 @@ class TradingEngineService:
                 "resolved_source": str(fusion_details.get("resolved_source") or live_source or FUSED_PRICE_SOURCE),
                 "reference_provider_count": int(fusion_details.get("reference_provider_count") or 0),
                 "risk_grade_provider_count": int(fusion_details.get("risk_grade_provider_count") or 0),
-                "stale": False,
                 "degraded": True,
+                "connected": bool((fusion_details.get("transport_state") or {}).get("connected")),
+                "fallback": bool((fusion_details.get("transport_state") or {}).get("fallback")),
+                "stale": bool((fusion_details.get("transport_state") or {}).get("stale")),
+                "last_update_at": str((fusion_details.get("transport_state") or {}).get("last_update_at") or ""),
+                "exclusion_reason": str((fusion_details.get("transport_state") or {}).get("exclusion_reason") or reason_text),
+                "confidence": str((fusion_details.get("transport_state") or {}).get("confidence") or "low"),
+                "transport_state": dict((fusion_details.get("transport_state") or {})),
             })
             self._audit_event(
                 conn,
@@ -3485,18 +4025,53 @@ class TradingEngineService:
                 "resolved_source": str(fusion_details.get("resolved_source") or live_source or FUSED_PRICE_SOURCE),
                 "reference_provider_count": int(fusion_details.get("reference_provider_count") or 0),
                 "risk_grade_provider_count": int(fusion_details.get("risk_grade_provider_count") or 0),
-                "stale": False,
-                "degraded": False,
+                "stale": bool((fusion_details.get("transport_state") or {}).get("stale")),
+                "degraded": bool((fusion_details.get("transport_state") or {}).get("degraded")),
+                "connected": bool((fusion_details.get("transport_state") or {}).get("connected")),
+                "fallback": bool((fusion_details.get("transport_state") or {}).get("fallback")),
+                "last_update_at": str((fusion_details.get("transport_state") or {}).get("last_update_at") or ""),
+                "exclusion_reason": str((fusion_details.get("transport_state") or {}).get("exclusion_reason") or ""),
+                "confidence": str((fusion_details.get("transport_state") or {}).get("confidence") or "high"),
+                "transport_state": dict((fusion_details.get("transport_state") or {})),
             })
         else:
             live_price = float(_to_decimal(price, name="live_price_points", minimum=0.00000001))
+            transport_state = {
+                "mode": str((live_transport_meta or {}).get("transport") or "http_polling"),
+                "connected": bool((live_transport_meta or {}).get("connected")),
+                "fallback": bool((live_transport_meta or {}).get("fallback")),
+                "stale": bool((live_transport_meta or {}).get("stale")),
+                "degraded": bool((live_transport_meta or {}).get("degraded")),
+                "confidence": str((live_transport_meta or {}).get("confidence") or "medium"),
+                "provider_count": int((live_transport_meta or {}).get("provider_count") or 1),
+                "last_update_at": str((live_transport_meta or {}).get("last_update_at") or ""),
+                "exclusion_reason": str((live_transport_meta or {}).get("exclusion_reason") or ""),
+                "message": "",
+            }
             price_meta["reference_price_points"] = live_price
             price_meta["risk_grade_price_points"] = live_price
             price_meta["resolved_source"] = str(live_source or configured_source or "manual_root")
             price_meta["reference_provider_count"] = 1
             price_meta["risk_grade_provider_count"] = 1
-            price_meta["stale"] = False
-            price_meta["degraded"] = False
+            price_meta["stale"] = bool(transport_state["stale"])
+            price_meta["degraded"] = bool(transport_state["degraded"])
+            price_meta["connected"] = bool(transport_state["connected"])
+            price_meta["fallback"] = bool(transport_state["fallback"])
+            price_meta["last_update_at"] = str(transport_state["last_update_at"])
+            price_meta["exclusion_reason"] = str(transport_state["exclusion_reason"])
+            price_meta["confidence"] = str(transport_state["confidence"])
+            price_meta["transport_state"] = transport_state
+            if transport_state["fallback"] and not price_meta["fallback_reason"]:
+                price_meta["fallback_reason"] = "WebSocket provider input 已斷線，已自動切回 HTTP polling。"
+            elif transport_state["stale"] and not price_meta["fallback_reason"]:
+                price_meta["fallback_reason"] = "WebSocket provider input 已過時，已改用 HTTP polling。"
+        active_transport_state = dict(price_meta.get("transport_state") or {})
+        if active_transport_state and not price_meta.get("fallback_reason") and (
+            bool(active_transport_state.get("fallback"))
+            or bool(active_transport_state.get("stale"))
+            or bool(active_transport_state.get("degraded"))
+        ):
+            price_meta["fallback_reason"] = str(active_transport_state.get("message") or active_transport_state.get("exclusion_reason") or "").strip()
         if configured_source == FUSED_PRICE_SOURCE and fusion_details and high_risk and fusion_details.get("risk_grade_price_points") is not None:
             price = float(_to_decimal(fusion_details.get("risk_grade_price_points"), name="risk_grade_price_points", minimum=0.00000001))
         now = _now()

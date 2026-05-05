@@ -169,6 +169,17 @@ return `price_type`, `source`, `confidence`, `stale`, `degraded`, and
 `risk_grade_price_context` payloads, and the frontend labels important numbers
 accordingly instead of treating every market number as interchangeable.
 
+For supported providers (Binance / OKX / Coinbase / Kraken), websocket ticker
+and depth feeds now act as **provider input only**. They never replace the
+`reference` / `risk-grade` price split by themselves. The backend canonical
+state now tracks `connected`, `fallback`, `stale`, `degraded`, `confidence`,
+`provider_count`, `last_update_at`, and `exclusion_reason` in `transport_state`
+so the UI and higher-risk flows can tell the difference between healthy
+websocket input, HTTP fallback, stale input, and conservative degraded mode.
+If the websocket path drops or a provider publishes malformed data, the engine
+falls back to HTTP polling for reference input while keeping `risk-grade`
+blocking rules intact.
+
 Spot wallet rows also show two unit-price helpers now: `持有成本` is the
 current position acquisition cost including the estimated buy-side fee, and
 `損益平均價格` is the break-even exit price after also accounting for the

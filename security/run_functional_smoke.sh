@@ -584,8 +584,8 @@ run_checks() {
     login_smoke_user || return 1
     request "trading user dashboard" "GET" "/api/trading/dashboard" "200"
     request "trading live price" "GET" "/api/trading/live-price?market=ETH/POINTS" "200"
-    if json_bool '"price_health" in data and "price_type" in data and "source" in data and "confidence" in data and "stale" in data and "degraded" in data and "provider_count" in data and "reference_price_context" in data and "risk_grade_price_context" in data and "fallback_reason" in data and "excluded_sources" in data and "defaulted_market" in data and int(data.get("refresh_interval_ms") or 0) == 2000' "$(latest_raw "trading live price")"; then
-      pass "trading live price metadata" "canonical price_type/source/confidence/stale/degraded/provider_count plus contexts present"
+    if json_bool '"price_health" in data and "price_type" in data and "source" in data and "confidence" in data and "stale" in data and "degraded" in data and "provider_count" in data and "connected" in data and "fallback" in data and "last_update_at" in data and "exclusion_reason" in data and "transport_state" in data and "reference_price_context" in data and "risk_grade_price_context" in data and "fallback_reason" in data and "excluded_sources" in data and "defaulted_market" in data and int(data.get("refresh_interval_ms") or 0) == 2000' "$(latest_raw "trading live price")"; then
+      pass "trading live price metadata" "canonical price_type/source/confidence/stale/degraded/provider_count plus transport state and contexts present"
     else
       fail "trading live price metadata" "missing live-price metadata fields or unexpected refresh interval"
     fi
@@ -613,6 +613,11 @@ run_checks() {
     login_root || return 1
     request "trading root report after smoke trades" "GET" "/api/admin/trading/report" "200"
     request "trading root price fusion status" "GET" "/api/root/trading/price-fusion-status?market_symbol=ETH/POINTS" "200"
+    if json_bool '"transport_state" in data.get("status", {}) and "connected" in data.get("status", {}) and "fallback" in data.get("status", {}) and "stale" in data.get("status", {}) and "confidence" in data.get("status", {}) and "provider_count" in data.get("status", {}) and "last_update_at" in data.get("status", {}) and "exclusion_reason" in data.get("status", {})' "$(latest_raw "trading root price fusion status")"; then
+      pass "trading root price fusion transport state" "root fusion diagnostic exposes canonical websocket transport state"
+    else
+      fail "trading root price fusion transport state" "missing canonical transport state fields on root fusion diagnostic"
+    fi
     request "trading root bot audit dashboard" "GET" "/api/root/trading/bot-audit/dashboard?limit=10" "200"
     request "trading root bot audit manual run" "POST" "/api/root/trading/bot-audit/run" "200" '{"force":true,"limit":10}'
   else

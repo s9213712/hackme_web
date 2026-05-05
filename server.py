@@ -136,6 +136,7 @@ from services.storage_maintenance import run_storage_maintenance_if_due
 from services.storage_paths import validate_storage_root
 from services.upload_security import ensure_upload_security_schema
 from services.trading_engine import TradingEngineService, ensure_trading_schema
+from services.trading_price_streams import TradingPriceStreamHub
 
 # ── Paths ───────────────────────────────────────────────────────────────────
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
@@ -1144,10 +1145,12 @@ points_service = PointsLedgerService(
     audit=audit,
     backup_dir=POINTS_CHAIN_BACKUP_DIR,
 )
+trading_price_stream_hub = TradingPriceStreamHub(audit=audit)
 trading_service = TradingEngineService(
     get_db=get_db,
     points_service=points_service,
     audit=audit,
+    stream_hub=trading_price_stream_hub,
 )
 snapshot_service.set_post_restore_validators([
     ("points_chain", lambda: points_service.verify_chain()),

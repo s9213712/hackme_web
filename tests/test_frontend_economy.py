@@ -222,6 +222,14 @@ def test_root_points_page_is_chain_operations_console():
     assert "density" in admin_js
     assert "資料截斷，不代表該交易所真實深度不足" in admin_js
     assert "provider depth limit reached" in admin_js
+    assert 'id="root-trading-price-stream-ws-enabled"' in index_html
+    assert 'id="root-trading-price-stream-ws-stale-seconds"' in index_html
+    assert "price_stream_ws_enabled" in admin_js
+    assert "price_stream_ws_stale_seconds" in admin_js
+    assert "provider input" in admin_js
+    assert 'fallback ${transportState.fallback ? "HTTP polling" : "no"}' in admin_js
+    assert "last update" in admin_js
+    assert "transportState" in admin_js
     assert "最低覆蓋門檻（%）" in index_html
     assert "最少可用來源數" in index_html
     assert "price_fusion_depth_band_percent" in admin_js
@@ -686,6 +694,10 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "high_risk_block_reason" in trading_js
     assert "warnings" in trading_js
     assert "defaulted_market" in trading_js
+    assert "function tradingTransportStateSummary" in trading_js
+    assert "transport_state" in trading_js
+    assert "WebSocket provider input 已退回 HTTP polling" in trading_js
+    assert "provider input stale" in trading_js
     assert "🟡 reference 價格降級" in trading_js
     assert "🟢 reference 價格正常" in trading_js
 

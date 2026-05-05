@@ -3456,6 +3456,15 @@
                     <input type="number" id="root-trading-price-fusion-min-provider-count" min="1" max="6" step="1" value="3" />
                     <div class="field-hint">低於這個數量時，融合價格會改標示為保守模式，不建議用於高風險判斷。</div>
                   </div>
+                  <div class="field">
+                    <label><input type="checkbox" id="root-trading-price-stream-ws-enabled" checked /> 啟用 WebSocket provider input</label>
+                    <div class="field-hint">支援 Binance / OKX / Coinbase / Kraken ticker 與 depth WebSocket。斷線時會自動切回 HTTP polling，但不會改變 reference / risk-grade 價格語義。</div>
+                  </div>
+                  <div class="field">
+                    <label>WebSocket 視為 stale 的秒數</label>
+                    <input type="number" id="root-trading-price-stream-ws-stale-seconds" min="1" max="120" step="1" value="10" />
+                    <div class="field-hint">超過這個時間沒收到 provider input，就標示 stale 並切回 HTTP polling。</div>
+                  </div>
                   <div class="field" id="root-trading-price-fusion-weights-field">
                     <label>手動權重</label>
                     <div id="root-trading-price-fusion-weights" class="trading-fusion-weight-list"></div>

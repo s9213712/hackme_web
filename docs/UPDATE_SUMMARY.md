@@ -1,6 +1,12 @@
 # Update Summary
 
-Release ID: `2026.05.05-113`
+Release ID: `2026.05.05-114`
+
+## 2026.05.05-114
+
+- Trading provider input now prefers websocket ticker/depth feeds for Binance, OKX, Coinbase, and Kraken, but keeps websocket strictly as provider input instead of replacing `reference price` / `risk-grade price` semantics.
+- `GET /api/trading/live-price` and root `GET /api/root/trading/price-fusion-status` now expose canonical transport state (`connected`, `fallback`, `stale`, `degraded`, `confidence`, `provider_count`, `last_update_at`, `exclusion_reason`, `transport_state`) so UI, smoke checks, and risk controls can audit degraded or fallback states explicitly.
+- Fixed a quality-filtered single-source fallback bug in fused-price diagnostics and added dedicated regression coverage for websocket updates, disconnect fallback, malformed provider payload rejection, and blocking risk-grade price when only degraded single-source data remains.
 
 ## 2026.05.05-113
 

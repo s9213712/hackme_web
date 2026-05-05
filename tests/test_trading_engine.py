@@ -2303,7 +2303,15 @@ def test_live_price_fusion_auto_depth_weights_surviving_exchanges(tmp_path, monk
     points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
     trading = TradingEngineService(get_db=get_db, points_service=points)
     root = _actor(3, "root", "super_admin")
-    trading.update_root_settings(actor=root, settings={"price_source": "fused_weighted", "price_fusion_mode": "auto_depth"}, markets=[])
+    trading.update_root_settings(
+        actor=root,
+        settings={
+            "price_source": "fused_weighted",
+            "price_fusion_mode": "auto_depth",
+            "price_stream_ws_enabled": False,
+        },
+        markets=[],
+    )
 
     def boom(_market_symbol):
         raise OSError("provider unavailable")
@@ -2370,7 +2378,15 @@ def test_price_fusion_auto_depth_status_uses_depth_scores_and_sums_to_hundred(tm
     points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
     trading = TradingEngineService(get_db=get_db, points_service=points)
     root = _actor(3, "root", "super_admin")
-    trading.update_root_settings(actor=root, settings={"price_source": "fused_weighted", "price_fusion_mode": "auto_depth"}, markets=[])
+    trading.update_root_settings(
+        actor=root,
+        settings={
+            "price_source": "fused_weighted",
+            "price_fusion_mode": "auto_depth",
+            "price_stream_ws_enabled": False,
+        },
+        markets=[],
+    )
 
     monkeypatch.setattr(trading, "_fetch_binance_orderbook_snapshot", lambda _symbol: _depth_snapshot(trading, "binance_public_api", 1))
     monkeypatch.setattr(trading, "_fetch_okx_orderbook_snapshot", lambda _symbol: _depth_snapshot(trading, "okx_public_api", 2))
@@ -2915,7 +2931,28 @@ def test_price_fusion_orderbook_total_failure_enters_conservative_single_source_
     monkeypatch.setattr(trading, "_fetch_kraken_orderbook_snapshot", boom)
     monkeypatch.setattr(trading, "_fetch_gemini_orderbook_snapshot", boom)
     monkeypatch.setattr(trading, "_fetch_bitstamp_orderbook_snapshot", boom)
-    monkeypatch.setattr(trading, "_fetch_live_price_points", lambda _symbol: (321, "coingecko_simple_price"))
+    monkeypatch.setattr(
+        trading,
+        "_fetch_live_price_points",
+        lambda _symbol, *, with_meta=False, settings=None: (
+            321,
+            "coingecko_simple_price",
+            {
+                "transport": "http_polling",
+                "connected": False,
+                "fallback": False,
+                "stale": False,
+                "degraded": False,
+                "confidence": "medium",
+                "provider_count": 1,
+                "last_update_at": "2026-05-05T00:00:00",
+                "exclusion_reason": "",
+                "latency_ms": 0.0,
+            },
+        )
+        if with_meta
+        else (321, "coingecko_simple_price"),
+    )
 
     status = trading.get_root_price_fusion_status(market_symbol="ETH/POINTS")
     assert status["state"] == "conservative"

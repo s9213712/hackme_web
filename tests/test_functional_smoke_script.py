@@ -38,5 +38,7 @@ def test_functional_smoke_covers_latest_trading_and_announcement_paths():
     assert 'request "community edit announcement" "PUT" "/api/community/announcements/${ANNOUNCEMENT_ID}" "200"' in script
     assert '"price_type" in data and "source" in data and "confidence" in data and "stale" in data and "degraded" in data and "provider_count" in data' in script
     assert '"reference_price_context" in data and "risk_grade_price_context" in data' in script
+    assert '"connected" in data and "fallback" in data and "last_update_at" in data and "exclusion_reason" in data and "transport_state" in data' in script
+    assert '"transport_state" in data.get("status", {}) and "connected" in data.get("status", {}) and "fallback" in data.get("status", {}) and "stale" in data.get("status", {}) and "confidence" in data.get("status", {}) and "provider_count" in data.get("status", {}) and "last_update_at" in data.get("status", {}) and "exclusion_reason" in data.get("status", {})' in script
     assert "trading extras" in docs
     assert "announcement create/edit" in docs

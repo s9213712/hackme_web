@@ -18,7 +18,7 @@ Related technical references:
 
 ## Release and Schema
 
-- Release ID: `2026.05.05-113`
+- Release ID: `2026.05.05-114`
 - Schema version: `29`
 - Release ID source: `services/release_info.py`
 - Runtime version endpoint: `GET /api/version`
@@ -468,6 +468,11 @@ Trading API notes:
 - Trading uses `1 POINT = 1 USDT`.
 - User funds must flow through PointsChain. Do not directly update wallet
   balances for trading.
+- `GET /api/trading/live-price` and `GET /api/root/trading/price-fusion-status`
+  now expose canonical websocket transport state (`connected`, `fallback`,
+  `stale`, `degraded`, `confidence`, `provider_count`, `last_update_at`,
+  `exclusion_reason`, `transport_state`). Treat websocket as provider input
+  only; do not bypass `reference price` / `risk-grade price` semantics.
 - Percent API fields use human percent values directly: `0.3` means `0.3%`,
   `15` means `15%`.
 - Root trading settings now default `price_source` to `fused_weighted`.

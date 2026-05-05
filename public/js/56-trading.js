@@ -175,6 +175,20 @@ function tradingPriceContextSummary(context, { compact = false } = {}) {
   return `${safe.purpose || ""} · ${sourceLabel} · ${providerText} · ${confidenceText} · ${stateText}${warning ? ` · ${warning}` : ""}`;
 }
 
+function tradingTransportStateSummary(state, { compact = false } = {}) {
+  const safe = state && typeof state === "object" ? state : {};
+  const mode = String(safe.mode || safe.transport || "http_polling_only");
+  const connection = safe.connected ? "connected" : "disconnected";
+  const fallback = safe.fallback ? "HTTP fallback" : "直連";
+  const stale = safe.stale ? "stale" : "fresh";
+  const confidence = `信心 ${tradingPriceConfidenceLabel(safe.confidence)}`;
+  const providerText = Number.isFinite(Number(safe.provider_count)) ? `provider ${Number(safe.provider_count)}` : "provider ?";
+  const reason = String(safe.exclusion_reason || safe.message || "").trim();
+  const base = `${mode} · ${connection} · ${fallback} · ${stale} · ${confidence} · ${providerText}`;
+  if (compact) return reason ? `${base} · ${reason}` : base;
+  return reason ? `provider input：${base} · ${reason}` : `provider input：${base}`;
+}
+
 function renderTradingCurrentPrice(market, options = {}) {
   const priceEl = $("trading-current-price");
   const labelEl = $("trading-current-label");
@@ -195,8 +209,9 @@ function renderTradingCurrentPrice(market, options = {}) {
   const warnings = Array.isArray(options.warnings) ? options.warnings : (referenceContext?.warnings || liveMeta[symbol]?.warnings || []);
   const highRiskBlockReason = options.highRiskBlockReason || riskContext?.warning_message || liveMeta[symbol]?.high_risk_block_reason || "";
   const defaultedMarket = options.defaultedMarket === true || liveMeta[symbol]?.defaulted_market === true;
+  const transportState = options.transportState || liveMeta[symbol]?.transport_state || {};
   if (labelEl) labelEl.textContent = "目前價格（reference）";
-  if (purposeEl) purposeEl.textContent = `用途：展示 / 一般估值 · ${tradingPriceContextSummary(referenceContext, { compact: true })}`;
+  if (purposeEl) purposeEl.textContent = `用途：展示 / 一般估值 · ${tradingPriceContextSummary(referenceContext, { compact: true })} · ${tradingTransportStateSummary(transportState, { compact: true })}`;
   const previousPrice = symbol && Number.isFinite(priceHistory[symbol]) ? Number(priceHistory[symbol]) : null;
   if (priceEl) {
     priceEl.textContent = market ? formatTradingPointsValue(nextPrice) : "-";
@@ -252,6 +267,8 @@ function renderTradingCurrentPrice(market, options = {}) {
       if (defaultedMarket) notes.push(`未指定市場，已改用 ${tradingDisplaySymbol(symbol)}`);
       if (highRiskBlockReason) notes.push(highRiskBlockReason);
       if (excludedSources.length) notes.push(`排除 ${excludedSources.join(", ")}`);
+      if (transportState.fallback) notes.push("WebSocket provider input 已退回 HTTP polling");
+      if (transportState.stale) notes.push("provider input stale");
       healthEl.textContent = `🟡 reference 價格保守模式 · 風控級價格不可用${notes.length ? ` · ${notes.join(" · ")}` : ""}`;
       healthEl.classList.add("warning");
     } else if (health === "fallback" || health === "degraded" || excludedSources.length) {
@@ -259,6 +276,8 @@ function renderTradingCurrentPrice(market, options = {}) {
       if (excludedSources.length) notes.push(`排除 ${excludedSources.join(", ")}`);
       if (fallbackReason) notes.push(fallbackReason);
       if (!fallbackReason && warnings.length) notes.push(String(warnings[0]?.message || warnings[0]?.code || ""));
+      if (transportState.fallback) notes.push("WebSocket provider input 已退回 HTTP polling");
+      if (transportState.stale) notes.push("provider input stale");
       if (defaultedMarket) notes.push(`未指定市場，已改用 ${tradingDisplaySymbol(symbol)}`);
       healthEl.textContent = `🟡 reference 價格降級${notes.length ? ` · ${notes.join(" · ")}` : ""}`;
       healthEl.classList.add("warning");
@@ -3596,6 +3615,10 @@ async function loadTradingLivePrice() {
           stale: !!json.stale,
           degraded: !!json.degraded,
           provider_count: Number.isFinite(Number(json.provider_count)) ? Number(json.provider_count) : null,
+          connected: !!json.connected,
+          fallback: !!json.fallback,
+          last_update_at: json.last_update_at || "",
+          exclusion_reason: json.exclusion_reason || "",
           price_health: json.price_health || "healthy",
           fallback_reason: json.fallback_reason || "",
           excluded_sources: Array.isArray(json.excluded_sources) ? json.excluded_sources : [],
@@ -3605,6 +3628,7 @@ async function loadTradingLivePrice() {
           defaulted_market: !!json.defaulted_market,
           reference_price_context: json.reference_price_context && typeof json.reference_price_context === "object" ? json.reference_price_context : null,
           risk_grade_price_context: json.risk_grade_price_context && typeof json.risk_grade_price_context === "object" ? json.risk_grade_price_context : null,
+          transport_state: json.transport_state && typeof json.transport_state === "object" ? json.transport_state : null,
         };
         if (nextMarket.symbol === selectedSymbol) selectedMeta = liveMeta[nextMarket.symbol];
         updated = true;
@@ -3621,6 +3645,7 @@ async function loadTradingLivePrice() {
         fallbackReason: selectedMeta?.fallback_reason,
         excludedSources: selectedMeta?.excluded_sources,
         defaultedMarket: !!selectedMeta?.defaulted_market,
+        transportState: selectedMeta?.transport_state,
       });
       updateTradingOrderEstimate();
       updateTradingMarginEstimate();
