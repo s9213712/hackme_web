@@ -85,6 +85,18 @@ from services.trading.payloads import (
     order_payload,
     position_payload,
 )
+from services.trading.bots.indicators import (
+    build_workflow_indicator_series,
+    workflow_indicator_context,
+)
+from services.trading.bots.workflow import (
+    condition_label,
+    validate_workflow,
+    validate_workflow_graph,
+    workflow_condition_hit,
+    workflow_decision,
+    workflow_graph_decision,
+)
 from services.trading.markets import (
     fallback_market_display_symbol,
     market_display_symbol_from_registry_row,
@@ -320,29 +332,7 @@ def _borrow_apr_group_for_asset(asset_symbol):
 
 
 def _condition_label(cond):
-    if not isinstance(cond, dict):
-        return str(cond)
-    if "AND" in cond:
-        parts = cond["AND"] if isinstance(cond["AND"], list) else []
-        return "AND(" + ", ".join(_condition_label(p) for p in parts) + ")"
-    if "OR" in cond:
-        parts = cond["OR"] if isinstance(cond["OR"], list) else []
-        return "OR(" + ", ".join(_condition_label(p) for p in parts) + ")"
-    if "NOT" in cond:
-        return "NOT(" + _condition_label(cond["NOT"]) + ")"
-    ctype = str(cond.get("type") or "always")
-    value = cond.get("value")
-    period = cond.get("period")
-    position = cond.get("position")
-    labels = {
-        "always": "無條件", "price_above": f"價格≥{value}", "price_below": f"價格≤{value}",
-        "rsi_above": f"RSI≥{value}", "rsi_below": f"RSI≤{value}",
-        "kd_above": f"KD≥{value}", "kd_below": f"KD≤{value}",
-        "ma_position": f"MA{period}{' 上方' if position == 'above' else ' 下方'}",
-        "bb_position": f"BB {position}", "has_position": f"持倉={'是' if value else '否'}",
-        "stop_loss_percent": f"止損≤-{value}%", "take_profit_percent": f"止盈≥{value}%",
-    }
-    return labels.get(ctype, ctype)
+    return condition_label(cond)
 
 
 def _registry_display_quote_currency(definition):
@@ -7103,206 +7093,23 @@ class TradingEngineService:
         }
 
     def _validate_workflow(self, value):
-        if not value:
-            return None
-        if isinstance(value, str):
-            try:
-                workflow = json.loads(value)
-            except Exception as exc:
-                raise ValueError("workflow_json must be valid JSON") from exc
-        elif isinstance(value, dict):
-            workflow = value
-        else:
-            raise ValueError("workflow_json must be an object")
-        nodes = workflow.get("nodes")
-        edges = workflow.get("edges")
-        if isinstance(nodes, list) or isinstance(edges, list):
-            return self._validate_workflow_graph(workflow)
-        branches = workflow.get("branches")
-        if not isinstance(branches, list) or not branches:
-            raise ValueError("workflow must contain at least one branch")
-        clean_branches = []
-        for index, branch in enumerate(branches[:20], start=1):
-            if not isinstance(branch, dict):
-                raise ValueError("workflow branch must be an object")
-            logic = str(branch.get("logic") or "AND").upper()
-            if logic not in {"AND", "OR"}:
-                raise ValueError("workflow branch logic must be AND or OR")
-            conditions = branch.get("conditions") or [{"type": "always"}]
-            actions = branch.get("actions") or [{"type": "hold", "step": 1}]
-            if not isinstance(conditions, list) or not isinstance(actions, list):
-                raise ValueError("workflow branch conditions/actions must be arrays")
-            clean_conditions = []
-            for condition in conditions[:20]:
-                if not isinstance(condition, dict):
-                    raise ValueError("workflow condition must be an object")
-                ctype = str(condition.get("type") or "always").strip()
-                if ctype != "always" and ctype not in WORKFLOW_CONDITION_TYPES:
-                    raise ValueError(f"unsupported workflow condition: {ctype}")
-                clean = {"type": ctype}
-                for key in ("value", "period", "position", "operator"):
-                    if key in condition:
-                        clean[key] = condition.get(key)
-                clean_conditions.append(clean)
-            clean_actions = []
-            for action in actions[:20]:
-                if not isinstance(action, dict):
-                    raise ValueError("workflow action must be an object")
-                atype = str(action.get("type") or "hold").strip()
-                if atype not in WORKFLOW_ACTION_TYPES:
-                    raise ValueError(f"unsupported workflow action: {atype}")
-                clean = {
-                    "type": atype,
-                    "step": _to_int(action.get("step", len(clean_actions) + 1), name="workflow action step", minimum=1, maximum=1000),
-                    "order_type": str(action.get("order_type") or "market").strip().lower(),
-                }
-                if clean["order_type"] not in {"market", "limit"}:
-                    raise ValueError("workflow action order_type must be market or limit")
-                for key in ("percent", "amount_points", "limit_price_points"):
-                    if key in action and action.get(key) not in (None, ""):
-                        clean[key] = float(action.get(key))
-                clean_actions.append(clean)
-            clean_branches.append({
-                "id": str(branch.get("id") or f"branch_{index}")[:80],
-                "name": str(branch.get("name") or f"策略分支 {index}")[:80],
-                "priority": _to_int(branch.get("priority", 0), name="workflow priority", minimum=-1000, maximum=1000),
-                "logic": logic,
-                "cooldown_seconds": _to_int(branch.get("cooldown_seconds", 0), name="workflow cooldown_seconds", minimum=0, maximum=86400),
-                "max_runs": _to_int(branch.get("max_runs", 1000), name="workflow max_runs", minimum=1, maximum=1000),
-                "conditions": clean_conditions,
-                "actions": clean_actions,
-            })
-        clean = {"version": 1, "strategy_kind": "workflow", "branches": clean_branches}
-        if workflow.get("source"):
-            clean["source"] = str(workflow.get("source"))[:80]
-        return clean
+        return validate_workflow(
+            value,
+            validate_workflow_graph_func=self._validate_workflow_graph,
+            to_int=_to_int,
+            condition_types=WORKFLOW_CONDITION_TYPES,
+            action_types=WORKFLOW_ACTION_TYPES,
+        )
 
     def _validate_workflow_graph(self, workflow):
-        nodes = workflow.get("nodes")
-        edges = workflow.get("edges")
-        if not isinstance(nodes, list) or not nodes:
-            raise ValueError("workflow graph must contain nodes")
-        if not isinstance(edges, list):
-            raise ValueError("workflow graph edges must be an array")
-        clean_nodes = []
-        node_ids = set()
-        start_count = 0
-        for index, node in enumerate(nodes[:100], start=1):
-            if not isinstance(node, dict):
-                raise ValueError("workflow graph node must be an object")
-            node_id = str(node.get("id") or f"node_{index}")[:80]
-            if not node_id or node_id in node_ids:
-                raise ValueError("workflow graph node ids must be unique")
-            node_ids.add(node_id)
-            node_type = str(node.get("type") or "condition").strip().lower()
-            if node_type not in WORKFLOW_NODE_TYPES:
-                raise ValueError(f"unsupported workflow node type: {node_type}")
-            clean = {
-                "id": node_id,
-                "type": node_type,
-                "label": str(node.get("label") or node.get("name") or node_id)[:80],
-                "x": _to_int(node.get("x", index * 120), name="node x", minimum=-100000, maximum=100000),
-                "y": _to_int(node.get("y", 120), name="node y", minimum=-100000, maximum=100000),
-                "inputs": [str(port)[:24] for port in (node.get("inputs") or ["in"]) if str(port) in WORKFLOW_PORTS],
-                "outputs": [str(port)[:24] for port in (node.get("outputs") or ["out"]) if str(port) in WORKFLOW_PORTS],
-                "priority": _to_int(node.get("priority", 0), name="node priority", minimum=-1000, maximum=1000),
-            }
-            if node_type == "start":
-                start_count += 1
-                clean["inputs"] = []
-                clean["outputs"] = ["out"]
-            elif node_type == "condition":
-                condition = node.get("condition") if isinstance(node.get("condition"), dict) else node
-                ctype = str(condition.get("type") or "always").strip()
-                if ctype != "always" and ctype not in WORKFLOW_CONDITION_TYPES and not any(key in condition for key in ("AND", "OR", "NOT")):
-                    raise ValueError(f"unsupported workflow condition: {ctype}")
-                clean["condition"] = condition
-                clean["outputs"] = ["true", "false"]
-            elif node_type == "logic":
-                operator = str(node.get("operator") or node.get("logic") or "AND").strip().upper()
-                if operator not in {"AND", "OR", "NOT"}:
-                    raise ValueError("workflow logic node must be AND, OR, or NOT")
-                clean["operator"] = operator
-                clean["outputs"] = ["true", "false"]
-            elif node_type == "action":
-                action = node.get("action") if isinstance(node.get("action"), dict) else node
-                atype = str(action.get("type") or "hold").strip()
-                if atype not in WORKFLOW_ACTION_TYPES:
-                    raise ValueError(f"unsupported workflow action: {atype}")
-                clean_action = {
-                    "type": atype,
-                    "step": _to_int(action.get("step", 1), name="workflow action step", minimum=1, maximum=1000),
-                    "order_type": str(action.get("order_type") or "market").strip().lower(),
-                }
-                if clean_action["order_type"] not in {"market", "limit"}:
-                    raise ValueError("workflow action order_type must be market or limit")
-                for key in ("percent", "amount_points", "limit_price_points"):
-                    if key in action and action.get(key) not in (None, ""):
-                        clean_action[key] = float(action.get(key))
-                clean["action"] = clean_action
-                clean["outputs"] = ["out"]
-            elif node_type == "control":
-                clean["cooldown_seconds"] = _to_int(node.get("cooldown_seconds", 0), name="node cooldown_seconds", minimum=0, maximum=86400)
-                clean["max_runs"] = _to_int(node.get("max_runs", 1000), name="node max_runs", minimum=1, maximum=1000)
-                clean["outputs"] = ["then", "wait"]
-            clean_nodes.append(clean)
-        if start_count > 1:
-            raise ValueError("workflow graph can contain at most one start node")
-        clean_edges = []
-        seen_edges = set()
-        for index, edge in enumerate(edges[:200], start=1):
-            if not isinstance(edge, dict):
-                raise ValueError("workflow graph edge must be an object")
-            source = str(edge.get("from") or edge.get("source") or "")[:80]
-            target = str(edge.get("to") or edge.get("target") or "")[:80]
-            if source not in node_ids or target not in node_ids:
-                raise ValueError("workflow graph edge references unknown node")
-            from_port = str(edge.get("from_port") or edge.get("source_port") or "out").strip().lower()
-            to_port = str(edge.get("to_port") or edge.get("target_port") or "in").strip().lower()
-            if from_port not in WORKFLOW_PORTS or to_port not in WORKFLOW_PORTS:
-                raise ValueError("workflow graph edge port is invalid")
-            source_node = next((node for node in clean_nodes if node["id"] == source), None)
-            target_node = next((node for node in clean_nodes if node["id"] == target), None)
-            if source_node and from_port not in set(source_node.get("outputs") or []):
-                raise ValueError("workflow graph edge uses unavailable source port")
-            if target_node and to_port not in set(target_node.get("inputs") or ["in"]):
-                raise ValueError("workflow graph edge uses unavailable target port")
-            edge_id = str(edge.get("id") or f"edge_{index}")[:80]
-            edge_key = (source, from_port, target, to_port)
-            if edge_key in seen_edges:
-                continue
-            seen_edges.add(edge_key)
-            clean_edges.append({"id": edge_id, "from": source, "from_port": from_port, "to": target, "to_port": to_port})
-        action_ids = {node["id"] for node in clean_nodes if node["type"] == "action"}
-        if not action_ids:
-            raise ValueError("workflow graph must contain at least one action node")
-        start_node_id = str(workflow.get("start_node_id") or next((node["id"] for node in clean_nodes if node["type"] == "start"), clean_nodes[0]["id"]))[:80]
-        if start_node_id not in node_ids:
-            raise ValueError("workflow graph start_node_id references unknown node")
-        outgoing = {}
-        for edge in clean_edges:
-            outgoing.setdefault(edge["from"], []).append(edge["to"])
-        reachable = set()
-        stack = [start_node_id]
-        while stack:
-            node_id = stack.pop()
-            if node_id in reachable:
-                continue
-            reachable.add(node_id)
-            stack.extend(outgoing.get(node_id, []))
-        if not action_ids & reachable:
-            raise ValueError("workflow graph action nodes must be reachable from start")
-        clean = {
-            "version": 2,
-            "strategy_kind": "workflow_graph",
-            "source": str(workflow.get("source") or "workflow_editor")[:80],
-            "name": str(workflow.get("name") or "Workflow Strategy")[:80],
-            "description": str(workflow.get("description") or "")[:160],
-            "start_node_id": start_node_id,
-            "nodes": clean_nodes,
-            "edges": clean_edges,
-        }
-        return clean
+        return validate_workflow_graph(
+            workflow,
+            to_int=_to_int,
+            condition_types=WORKFLOW_CONDITION_TYPES,
+            action_types=WORKFLOW_ACTION_TYPES,
+            node_types=WORKFLOW_NODE_TYPES,
+            ports=WORKFLOW_PORTS,
+        )
 
     def _validate_bot_payload(self, conn, payload):
         payload = payload or {}
@@ -8272,227 +8079,13 @@ class TradingEngineService:
         return units_to_quantity(units)
 
     def _build_workflow_indicator_series(self, candles):
-        candles = candles or []
-        contexts = [{} for _ in candles]
-        closes = []
-        highs = []
-        lows = []
-        prev_close = None
-        gain_count = 0
-        avg_gain = None
-        avg_loss = None
-        for index, candle in enumerate(candles):
-            if not isinstance(candle, dict):
-                continue
-            try:
-                close = float(candle.get("close_points") or candle.get("price_points") or candle.get("close_usdt") or candle.get("price_usdt") or 0)
-                high = float(candle.get("high_points") or candle.get("high_usdt") or close)
-                low = float(candle.get("low_points") or candle.get("low_usdt") or close)
-            except Exception:
-                continue
-            if not math.isfinite(close) or close <= 0:
-                continue
-            if not math.isfinite(high) or high <= 0:
-                high = close
-            if not math.isfinite(low) or low <= 0:
-                low = close
-            if prev_close is not None:
-                delta = close - prev_close
-                gain = max(delta, 0.0)
-                loss = abs(min(delta, 0.0))
-                gain_count += 1
-                if gain_count == 14:
-                    recent_closes = closes[-13:] + [close]
-                    deltas = [recent_closes[i] - recent_closes[i - 1] for i in range(1, len(recent_closes))]
-                    gains = [max(value, 0.0) for value in deltas]
-                    losses = [abs(min(value, 0.0)) for value in deltas]
-                    avg_gain = sum(gains) / 14.0
-                    avg_loss = sum(losses) / 14.0
-                elif gain_count > 14 and avg_gain is not None and avg_loss is not None:
-                    avg_gain = ((avg_gain * 13.0) + gain) / 14.0
-                    avg_loss = ((avg_loss * 13.0) + loss) / 14.0
-            prev_close = close
-            closes.append(close)
-            highs.append(high)
-            lows.append(low)
-
-            ma20 = sum(closes[-20:]) / 20.0 if len(closes) >= 20 else None
-            ma50 = sum(closes[-50:]) / 50.0 if len(closes) >= 50 else None
-            ma200 = sum(closes[-200:]) / 200.0 if len(closes) >= 200 else None
-            bb_mid = ma20
-            bb_upper = None
-            bb_lower = None
-            bb_std = None
-            if ma20 is not None:
-                window20 = closes[-20:]
-                variance = sum((value - ma20) ** 2 for value in window20) / 20.0
-                bb_std = math.sqrt(variance)
-                if bb_std > 0:
-                    bb_upper = ma20 + 2 * bb_std
-                    bb_lower = ma20 - 2 * bb_std
-            kd_k = None
-            if len(closes) >= 9:
-                high9 = max(highs[-9:])
-                low9 = min(lows[-9:])
-                kd_k = 50.0 if high9 == low9 else ((close - low9) * 100.0 / (high9 - low9))
-            rsi_value = None
-            if gain_count >= 14 and avg_gain is not None and avg_loss is not None:
-                if avg_loss == 0:
-                    rsi_value = 100.0
-                else:
-                    rs = avg_gain / avg_loss
-                    rsi_value = 100.0 - (100.0 / (1.0 + rs))
-            contexts[index] = {
-                "price": close,
-                "ma20": ma20,
-                "ma50": ma50,
-                "ma200": ma200,
-                "bb_mid": bb_mid,
-                "bb_upper": bb_upper,
-                "bb_lower": bb_lower,
-                "bb_std": bb_std,
-                "rsi": rsi_value,
-                "kd": kd_k,
-            }
-        return contexts
+        return build_workflow_indicator_series(candles)
 
     def _workflow_indicator_context(self, candles, index):
-        candles = candles or []
-        index = max(0, min(int(index or 0), len(candles) - 1)) if candles else 0
-        closes = []
-        highs = []
-        lows = []
-        for candle in candles[:index + 1]:
-            try:
-                closes.append(float(candle.get("close_points") or candle.get("price_points") or candle.get("close_usdt") or candle.get("price_usdt") or 0))
-                highs.append(float(candle.get("high_points") or candle.get("high_usdt") or closes[-1]))
-                lows.append(float(candle.get("low_points") or candle.get("low_usdt") or closes[-1]))
-            except Exception:
-                continue
-        if not closes:
-            return {}
-        def sma(period):
-            period = int(period)
-            if len(closes) < period:
-                return None
-            return sum(closes[-period:]) / period
-        def rsi(period=14):
-            if len(closes) <= period:
-                return None
-            gains = []
-            losses = []
-            for offset in range(1, len(closes)):
-                delta = closes[offset] - closes[offset - 1]
-                gains.append(max(delta, 0))
-                losses.append(abs(min(delta, 0)))
-            if len(gains) < period:
-                return None
-            avg_gain = sum(gains[:period]) / period
-            avg_loss = sum(losses[:period]) / period
-            for offset in range(period, len(gains)):
-                avg_gain = ((avg_gain * (period - 1)) + gains[offset]) / period
-                avg_loss = ((avg_loss * (period - 1)) + losses[offset]) / period
-            if avg_loss == 0:
-                return 100.0
-            rs = avg_gain / avg_loss
-            return 100 - (100 / (1 + rs))
-        ma20 = sma(20)
-        ma50 = sma(50)
-        bb_mid = ma20
-        bb_upper = None
-        bb_lower = None
-        bb_std = None
-        if ma20 is not None and len(closes) >= 20:
-            variance = sum((value - ma20) ** 2 for value in closes[-20:]) / 20
-            bb_std = math.sqrt(variance)
-            if bb_std > 0:
-                bb_upper = ma20 + 2 * bb_std
-                bb_lower = ma20 - 2 * bb_std
-        kd_k = None
-        if len(closes) >= 9 and highs and lows:
-            high9 = max(highs[-9:])
-            low9 = min(lows[-9:])
-            kd_k = 50.0 if high9 == low9 else ((closes[-1] - low9) * 100 / (high9 - low9))
-        return {
-            "price": closes[-1],
-            "ma20": ma20,
-            "ma50": ma50,
-            "ma200": sma(200),
-            "bb_mid": bb_mid,
-            "bb_upper": bb_upper,
-            "bb_lower": bb_lower,
-            "bb_std": bb_std,
-            "rsi": rsi(14),
-            "kd": kd_k,
-        }
+        return workflow_indicator_context(candles, index)
 
     def _workflow_condition_hit(self, condition, context):
-        if not isinstance(condition, dict):
-            return False
-        if "AND" in condition:
-            items = condition.get("AND") if isinstance(condition.get("AND"), list) else []
-            return bool(items) and all(self._workflow_condition_hit(item, context) for item in items)
-        if "OR" in condition:
-            items = condition.get("OR") if isinstance(condition.get("OR"), list) else []
-            return bool(items) and any(self._workflow_condition_hit(item, context) for item in items)
-        if "NOT" in condition:
-            target = condition.get("NOT")
-            return not self._workflow_condition_hit(target if isinstance(target, dict) else {"type": str(target)}, context)
-        ctype = str(condition.get("type") or "always")
-        price = float(context.get("price") or 0)
-        low_price = float(context.get("window_low_price") or price or 0)
-        high_price = float(context.get("window_high_price") or price or 0)
-        value = float(condition.get("value") or 0)
-        if ctype == "always":
-            return True
-        if ctype == "price_below":
-            return low_price > 0 and low_price <= value
-        if ctype == "price_above":
-            return high_price > 0 and high_price >= value
-        if ctype == "has_position":
-            return bool(context.get("has_position")) == bool(condition.get("value", True))
-        if ctype == "rsi_above":
-            return context.get("rsi") is not None and float(context["rsi"]) >= value
-        if ctype == "rsi_below":
-            return context.get("rsi") is not None and float(context["rsi"]) <= value
-        if ctype == "kd_above":
-            return context.get("kd") is not None and float(context["kd"]) >= value
-        if ctype == "kd_below":
-            return context.get("kd") is not None and float(context["kd"]) <= value
-        if ctype == "ma_position":
-            period = int(condition.get("period") or 50)
-            ma_value = context.get(f"ma{period}")
-            position = str(condition.get("position") or "above")
-            return ma_value is not None and ((price >= ma_value) if position == "above" else (price <= ma_value))
-        if ctype == "bb_position":
-            position = str(condition.get("position") or "above_mid")
-            if position == "above_mid":
-                return context.get("bb_mid") is not None and price >= float(context["bb_mid"])
-            if position == "below_mid":
-                return context.get("bb_mid") is not None and price <= float(context["bb_mid"])
-            if position == "above_upper":
-                return (
-                    context.get("bb_upper") is not None
-                    and float(context.get("bb_std") or 0) > 0
-                    and price > float(context["bb_upper"])
-                )
-            if position == "below_lower":
-                return (
-                    context.get("bb_lower") is not None
-                    and float(context.get("bb_std") or 0) > 0
-                    and price < float(context["bb_lower"])
-                )
-        if ctype == "stop_loss_percent":
-            pnl = context.get("pnl_low_percent")
-            if pnl is None:
-                pnl = context.get("pnl_percent")
-            return pnl is not None and bool(context.get("has_position")) and pnl <= -abs(value)
-        if ctype == "take_profit_percent":
-            pnl = context.get("pnl_high_percent")
-            if pnl is None:
-                pnl = context.get("pnl_percent")
-            return pnl is not None and bool(context.get("has_position")) and pnl >= abs(value)
-        return False
+        return workflow_condition_hit(condition, context)
 
     def _bot_condition_checks(self, bot, current_price):
         checks = []
@@ -8565,110 +8158,26 @@ class TradingEngineService:
         return checks
 
     def _workflow_graph_decision(self, workflow, *, context, run_count=0, last_run_at=None, execution_state=None):
-        nodes = {node["id"]: node for node in workflow.get("nodes") or []}
-        incoming = {}
-        outgoing = {}
-        for edge in workflow.get("edges") or []:
-            incoming.setdefault(edge["to"], []).append(edge)
-            outgoing.setdefault(edge["from"], []).append(edge)
-        memo = {}
-        visiting = set()
-
-        def node_value(node_id):
-            if node_id in memo:
-                return memo[node_id]
-            if node_id in visiting:
-                raise ValueError("workflow graph contains a cycle")
-            node = nodes.get(node_id)
-            if not node:
-                return False
-            visiting.add(node_id)
-            ntype = node.get("type")
-            if ntype == "start":
-                result = True
-            elif ntype == "condition":
-                result = self._workflow_condition_hit(node.get("condition") or {}, context)
-            elif ntype == "logic":
-                values = [edge_value(edge) for edge in incoming.get(node_id, [])]
-                operator = str(node.get("operator") or "AND").upper()
-                if operator == "OR":
-                    result = any(values)
-                elif operator == "NOT":
-                    result = not (values[0] if values else False)
-                else:
-                    result = bool(values) and all(values)
-            elif ntype == "control":
-                cooldown = int(node.get("cooldown_seconds") or 0)
-                max_runs = int(node.get("max_runs") or 1000)
-                result = int(run_count or 0) < max_runs
-                if result and cooldown and last_run_at:
-                    try:
-                        result = (datetime.now() - datetime.fromisoformat(str(last_run_at))).total_seconds() >= cooldown
-                    except Exception:
-                        result = True
-                if result:
-                    result = all(edge_value(edge) for edge in incoming.get(node_id, [])) if incoming.get(node_id) else True
-            else:
-                result = all(edge_value(edge) for edge in incoming.get(node_id, [])) if incoming.get(node_id) else False
-            visiting.remove(node_id)
-            memo[node_id] = bool(result)
-            return memo[node_id]
-
-        def edge_value(edge):
-            value = node_value(edge["from"])
-            if edge.get("from_port") == "false":
-                return not value
-            if edge.get("from_port") in {"true", "then", "out"}:
-                return value
-            return value
-
-        executed = set((execution_state or {}).get("executed_action_ids") or [])
-        branch_counts = (execution_state or {}).get("branch_step_counts") or {}
-        actions = sorted(
-            (node for node in nodes.values() if node.get("type") == "action"),
-            key=lambda node: (-int(node.get("priority") or 0), int((node.get("action") or {}).get("step") or 1)),
+        return workflow_graph_decision(
+            workflow,
+            context=context,
+            run_count=run_count,
+            last_run_at=last_run_at,
+            execution_state=execution_state,
+            workflow_condition_hit_func=self._workflow_condition_hit,
         )
-        for node in actions:
-            action = node.get("action") or {"type": "hold", "step": 1}
-            action_id = node["id"]
-            if action.get("type") != "close_all" and action_id in executed:
-                continue
-            if action.get("type") != "close_all" and int(action.get("step") or 1) <= int(branch_counts.get(action_id, 0)):
-                continue
-            gates = incoming.get(action_id) or []
-            matched = all(edge_value(edge) for edge in gates) if gates else False
-            if matched:
-                return {"branch": node, "action": action, "reason": node.get("label") or action_id, "action_id": action_id}
-        return None
 
     def _workflow_decision(self, workflow, *, context, run_count=0, last_run_at=None, execution_state=None):
-        workflow = self._validate_workflow(workflow)
-        if workflow.get("strategy_kind") == "workflow_graph":
-            return self._workflow_graph_decision(workflow, context=context, run_count=run_count, last_run_at=last_run_at, execution_state=execution_state)
-        branches = sorted(workflow["branches"], key=lambda row: int(row.get("priority") or 0), reverse=True)
-        now_dt = datetime.now()
-        branch_counts = (execution_state or {}).get("branch_step_counts") or {}
-        for branch in branches:
-            cooldown = int(branch.get("cooldown_seconds") or 0)
-            if cooldown and last_run_at:
-                try:
-                    if (now_dt - datetime.fromisoformat(str(last_run_at))).total_seconds() < cooldown:
-                        continue
-                except Exception:
-                    pass
-            conditions = branch.get("conditions") or [{"type": "always"}]
-            hits = [self._workflow_condition_hit(condition, context) for condition in conditions]
-            matched = all(hits) if branch.get("logic") == "AND" else any(hits)
-            if not matched:
-                continue
-            fallback_count = int(run_count or 0) if workflow.get("source") == "legacy_condition" else 0
-            step = int(branch_counts.get(branch.get("id"), fallback_count)) + 1
-            actions = sorted(branch.get("actions") or [], key=lambda row: int(row.get("step") or 1))
-            action = next((row for row in actions if int(row.get("step") or 1) >= step), None)
-            if not action:
-                continue
-            return {"branch": branch, "action": action, "reason": branch.get("name") or branch.get("id") or "workflow"}
-        return None
+        return workflow_decision(
+            workflow,
+            context=context,
+            run_count=run_count,
+            last_run_at=last_run_at,
+            execution_state=execution_state,
+            validate_workflow_func=self._validate_workflow,
+            workflow_graph_decision_func=self._workflow_graph_decision,
+            workflow_condition_hit_func=self._workflow_condition_hit,
+        )
 
     def _workflow_order_from_decision(self, conn, *, user_id, actor, market, decision, price_points):
         action = decision.get("action") or {}
