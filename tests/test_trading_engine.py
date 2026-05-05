@@ -8,6 +8,7 @@ import pytest
 
 import services.trading_engine as trading_engine_module
 from services.points_chain import PointsLedgerService, ensure_points_economy_schema
+from services.snapshots import ensure_snapshot_schema
 from services.server_mode_context import SmV2Context
 from services.trading_engine import TradingEngineService, ensure_trading_schema, fee_points, notional_points
 from services.trading_mode_gate import TradingDisabledInMode
@@ -74,6 +75,10 @@ def _services_with_history(tmp_path, *, prices=None, candles=None):
 
 def _actor(user_id=1, username="alice", role="user"):
     return {"id": user_id, "username": username, "role": role}
+
+
+def _sm_ctx(mode="production", *, tester_id=None):
+    return SmV2Context(mode=mode, tester_id=tester_id, actor_role="user", request_id=f"test-{mode}-{tester_id or 'prod'}")
 
 
 def _depth_snapshot(trading, source, quantity_per_level, *, price=100.0):
@@ -249,6 +254,95 @@ def test_legacy_rate_unit_label_removed_from_repository_text():
         if needle in text.lower():
             offenders.append(str(path.relative_to(ROOT)))
     assert offenders == []
+
+
+def test_matching_orderbook_registry_namespaces_orders_by_mode_and_tester(tmp_path):
+    _points, trading = _services(tmp_path)
+    now = trading_engine_module._now()
+    prod_ctx = _sm_ctx("production")
+    tester1_ctx = _sm_ctx("internal_test", tester_id=1)
+    tester2_ctx = _sm_ctx("internal_test", tester_id=2)
+
+    def _limit_row(order_id, order_uuid, *, status="open"):
+        return {
+            "id": order_id,
+            "order_uuid": order_uuid,
+            "market_symbol": "BTC/POINTS",
+            "side": "buy",
+            "order_type": "limit",
+            "status": status,
+            "limit_price_points": 77000,
+            "updated_at": now,
+        }
+
+    trading._matching_orderbook_apply_order(_limit_row(1, "prod-order"), ctx=prod_ctx)
+    trading._matching_orderbook_apply_order(_limit_row(2, "tester-1-order"), ctx=tester1_ctx)
+    trading._matching_orderbook_apply_order(_limit_row(3, "tester-2-order"), ctx=tester2_ctx)
+
+    prod_key = trading._matching_orderbook_namespace("BTC/POINTS", ctx=prod_ctx)[0]
+    tester1_key = trading._matching_orderbook_namespace("BTC/POINTS", ctx=tester1_ctx)[0]
+    tester2_key = trading._matching_orderbook_namespace("BTC/POINTS", ctx=tester2_ctx)[0]
+
+    assert set(trading._matching_orderbooks) >= {prod_key, tester1_key, tester2_key}
+    assert set(trading._matching_orderbooks[prod_key]["buy"]) == {"prod-order"}
+    assert set(trading._matching_orderbooks[tester1_key]["buy"]) == {"tester-1-order"}
+    assert set(trading._matching_orderbooks[tester2_key]["buy"]) == {"tester-2-order"}
+
+    trading._matching_orderbook_apply_order(_limit_row(2, "tester-1-order", status="cancelled"), ctx=tester1_ctx)
+
+    assert "tester-1-order" not in trading._matching_orderbooks[tester1_key]["buy"]
+    assert "prod-order" in trading._matching_orderbooks[prod_key]["buy"]
+    assert "tester-2-order" in trading._matching_orderbooks[tester2_key]["buy"]
+
+
+def test_matching_orderbook_hydrate_reads_only_routed_world(tmp_path):
+    _points, trading = _services(tmp_path)
+    conn = trading.get_db()
+    try:
+        ensure_snapshot_schema(conn)
+        now = trading_engine_module._now()
+        conn.execute(
+            """
+            INSERT INTO trading_orders (
+                order_uuid, user_id, market_symbol, side, order_type, funding_mode, execution_mode,
+                quantity_units, limit_price_points, status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("prod-limit-1", 1, "BTC/POINTS", "buy", "limit", "points_chain", "house_counterparty", 100, 77000, "open", now, now),
+        )
+        conn.execute(
+            """
+            INSERT INTO test_shadow_orders (
+                order_uuid, tester_user_id, user_id, market_symbol, side, order_type, funding_mode, execution_mode,
+                quantity_units, limit_price_points, status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("shadow-limit-7", 7, 7, "BTC/POINTS", "buy", "limit", "points_chain", "house_counterparty", 100, 77100, "open", now, now),
+        )
+        conn.execute(
+            """
+            INSERT INTO test_shadow_orders (
+                order_uuid, tester_user_id, user_id, market_symbol, side, order_type, funding_mode, execution_mode,
+                quantity_units, limit_price_points, status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("shadow-limit-8", 8, 8, "BTC/POINTS", "buy", "limit", "points_chain", "house_counterparty", 100, 77200, "open", now, now),
+        )
+        conn.commit()
+
+        prod_orders = trading._matching_orderbook_order_uuids(conn, market_symbol="BTC/POINTS", ctx=_sm_ctx("production"))
+        tester7_orders = trading._matching_orderbook_order_uuids(
+            conn, market_symbol="BTC/POINTS", ctx=_sm_ctx("internal_test", tester_id=7)
+        )
+        tester8_orders = trading._matching_orderbook_order_uuids(
+            conn, market_symbol="BTC/POINTS", ctx=_sm_ctx("internal_test", tester_id=8)
+        )
+
+        assert prod_orders == ["prod-limit-1"]
+        assert tester7_orders == ["shadow-limit-7"]
+        assert tester8_orders == ["shadow-limit-8"]
+    finally:
+        conn.close()
 
 
 def test_spot_buy_uses_trial_credit_before_points_chain_and_updates_position(tmp_path):

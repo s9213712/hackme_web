@@ -22,7 +22,7 @@ from services.points_chain import (
 )
 from services.server_mode_context import SmV2Context, current_ctx
 from services.server_mode_routing import resolve_table
-from services.trading_mode_gate import assert_trading_allowed
+from services.trading_mode_gate import assert_trading_allowed, matching_orderbook_key
 from services.trading_markets import (
     list_market_definitions,
     list_live_price_markets,
@@ -1389,6 +1389,7 @@ class TradingEngineService:
         self.live_price_provider = live_price_provider
         self.historical_candles_provider = historical_candles_provider
         self.stream_hub = stream_hub
+        self._matching_orderbooks = {}
 
     def ensure_schema(self, conn):
         self.points_service.ensure_schema(conn)
@@ -1463,6 +1464,112 @@ class TradingEngineService:
         enabled = conn.execute("SELECT value FROM trading_settings WHERE key='trading.enabled'").fetchone()
         if enabled and str(enabled["value"]).lower() not in {"true", "1", "yes"}:
             raise ValueError("trading is disabled")
+
+    def _matching_orderbook_namespace(self, market_symbol, *, ctx=None):
+        route_ctx = self._resolve_trading_ctx(ctx, action="matching_orderbook")
+        market = str(market_symbol or "").strip().upper()
+        key = matching_orderbook_key(market, route_ctx)
+        book = self._matching_orderbooks.setdefault(
+            key,
+            {
+                "market_symbol": market,
+                "mode": route_ctx.mode,
+                "tester_id": route_ctx.tester_id,
+                "buy": {},
+                "sell": {},
+            },
+        )
+        return key, book, route_ctx
+
+    def _matching_orderbook_keys_for_ctx(self, ctx):
+        route_ctx = self._resolve_trading_ctx(ctx, action="matching_orderbook")
+        return [
+            key
+            for key, book in self._matching_orderbooks.items()
+            if str(book.get("mode") or "") == route_ctx.mode
+            and int(book.get("tester_id") or 0) == int(route_ctx.tester_id or 0)
+        ]
+
+    def _matching_orderbook_apply_order(self, order, *, ctx=None):
+        if not order:
+            return None
+        if str(order["order_type"] or "").strip().lower() != "limit":
+            return None
+        order_uuid = str(order["order_uuid"] or "").strip()
+        if not order_uuid:
+            return None
+        side = str(order["side"] or "").strip().lower()
+        key, book, route_ctx = self._matching_orderbook_namespace(order["market_symbol"], ctx=ctx)
+        for side_name in ("buy", "sell"):
+            if side_name != side:
+                book[side_name].pop(order_uuid, None)
+        if str(order["status"] or "") in OPEN_ORDER_STATUSES:
+            book[side][order_uuid] = {
+                "id": int(order["id"]),
+                "order_uuid": order_uuid,
+                "market_symbol": str(order["market_symbol"] or "").strip().upper(),
+                "side": side,
+                "status": str(order["status"] or ""),
+                "limit_price_points": order["limit_price_points"],
+                "updated_at": order["updated_at"],
+            }
+        else:
+            book[side].pop(order_uuid, None)
+        return key, route_ctx
+
+    def _matching_orderbook_hydrate(self, conn, *, market_symbol=None, limit=200, ctx=None):
+        orders_table, route_ctx = self._resolve_table("orders", ctx, action="matching_orderbook_hydrate")
+        params = []
+        where = "WHERE order_type='limit' AND status IN ('open', 'partially_filled')"
+        if route_ctx.mode == "internal_test":
+            if route_ctx.tester_id is None:
+                raise ValueError("internal_test matching orderbook hydrate requires tester_id")
+            where += " AND tester_user_id=?"
+            params.append(int(route_ctx.tester_id))
+        market = str(market_symbol or "").strip().upper()
+        if market:
+            where += " AND market_symbol=?"
+            params.append(market)
+        rows = conn.execute(
+            f"SELECT * FROM {orders_table} {where} ORDER BY id ASC LIMIT ?",
+            (*params, int(limit)),
+        ).fetchall()
+        live_by_key = {}
+        for row in rows:
+            applied = self._matching_orderbook_apply_order(row, ctx=route_ctx)
+            if not applied:
+                continue
+            key, _applied_ctx = applied
+            live_by_key.setdefault(key, set()).add(str(row["order_uuid"] or ""))
+        if market:
+            keys = [matching_orderbook_key(market, route_ctx)]
+        else:
+            keys = self._matching_orderbook_keys_for_ctx(route_ctx)
+        for key in keys:
+            book = self._matching_orderbooks.get(key)
+            if not book:
+                continue
+            live_uuids = live_by_key.get(key, set())
+            for side_name in ("buy", "sell"):
+                for order_uuid in list(book[side_name].keys()):
+                    if order_uuid not in live_uuids:
+                        book[side_name].pop(order_uuid, None)
+        return route_ctx
+
+    def _matching_orderbook_order_uuids(self, conn, *, market_symbol=None, limit=200, ctx=None):
+        route_ctx = self._matching_orderbook_hydrate(conn, market_symbol=market_symbol, limit=limit, ctx=ctx)
+        market = str(market_symbol or "").strip().upper()
+        if market:
+            keys = [matching_orderbook_key(market, route_ctx)]
+        else:
+            keys = self._matching_orderbook_keys_for_ctx(route_ctx)
+        items = []
+        for key in keys:
+            book = self._matching_orderbooks.get(key) or {}
+            for side_name in ("buy", "sell"):
+                items.extend((book.get(side_name) or {}).values())
+        items.sort(key=lambda item: int(item.get("id") or 0))
+        return [str(item.get("order_uuid") or "") for item in items[: int(limit)] if str(item.get("order_uuid") or "")]
 
     def _legacy_production_ctx(self):
         return SmV2Context(
@@ -5768,6 +5875,8 @@ class TradingEngineService:
                 """,
                 (f"{reason}: trial credit reclaim unlocked sell order", _now(), order["id"]),
             )
+            updated_order = conn.execute(f"SELECT * FROM {orders_table} WHERE id=?", (order["id"],)).fetchone()
+            self._matching_orderbook_apply_order(updated_order, ctx=route_ctx)
             self._audit_event(
                 conn,
                 "TRADING_TRIAL_CREDIT_SELL_ORDER_CANCELLED",
@@ -5840,6 +5949,8 @@ class TradingEngineService:
                 """,
                 (f"{reason}: trial credit reclaimed", _now(), order["id"]),
             )
+            updated_order = conn.execute(f"SELECT * FROM {orders_table} WHERE id=?", (order["id"],)).fetchone()
+            self._matching_orderbook_apply_order(updated_order, ctx=route_ctx)
             self._audit_event(
                 conn,
                 "TRADING_TRIAL_CREDIT_ORDER_CANCELLED",
@@ -9533,6 +9644,7 @@ class TradingEngineService:
                 self._notify_trade_filled(conn, fill)
             else:
                 order = conn.execute(f"SELECT * FROM {orders_table} WHERE id=?", (order_id,)).fetchone()
+                self._matching_orderbook_apply_order(order, ctx=ctx)
                 self._audit_event(conn, "TRADING_ORDER_OPEN", "limit order stored as open order", actor=actor, target_user_id=user_id, order_id=order_id, market_symbol=market["symbol"], metadata={"price_source": price_source, "current_price_points": current_price})
             conn.commit()
             return {"ok": True, "order": self._order_payload(order), "executed": executable}
@@ -9564,13 +9676,15 @@ class TradingEngineService:
             if market_symbol:
                 where += " AND market_symbol=?"
                 params.append(str(market_symbol or "").strip().upper())
-            order_uuids = [
-                row["order_uuid"]
-                for row in conn.execute(
-                    f"SELECT order_uuid FROM {orders_table} {where} ORDER BY id ASC LIMIT ?",
-                    (*params, limit),
-                ).fetchall()
-            ]
+            routed_market = None
+            if market_symbol:
+                routed_market = self._normalize_market_symbol_on_conn(conn, market_symbol)
+            order_uuids = self._matching_orderbook_order_uuids(
+                conn,
+                market_symbol=routed_market,
+                limit=limit,
+                ctx=ctx,
+            )
         finally:
             conn.close()
 
@@ -9895,6 +10009,8 @@ class TradingEngineService:
             """,
             (price, fee, quantity_units, _now(), order["id"]),
         )
+        updated_order = conn.execute(f"SELECT * FROM {orders_table} WHERE id=?", (order["id"],)).fetchone()
+        self._matching_orderbook_apply_order(updated_order, ctx=route_ctx)
         return conn.execute("SELECT * FROM trading_fills WHERE id=?", (fill_id,)).fetchone()
 
     def cancel_order(self, *, actor, order_uuid, ctx=None):
@@ -9952,6 +10068,8 @@ class TradingEngineService:
                 if cur.rowcount < 1:
                     raise ValueError("spot position unlock failed")
             conn.execute(f"UPDATE {orders_table} SET status='cancelled', frozen_points=0, updated_at=? WHERE id=?", (_now(), order["id"]))
+            updated_order = conn.execute(f"SELECT * FROM {orders_table} WHERE id=?", (order["id"],)).fetchone()
+            self._matching_orderbook_apply_order(updated_order, ctx=ctx)
             self._audit_event(conn, "TRADING_ORDER_CANCELLED", "order cancelled", actor=actor, target_user_id=user_id, order_id=order["id"], market_symbol=order["market_symbol"])
             conn.commit()
             return {"ok": True, "order_uuid": order["order_uuid"], "status": "cancelled"}

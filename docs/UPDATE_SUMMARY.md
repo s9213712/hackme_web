@@ -1,6 +1,12 @@
 # Update Summary
 
-Release ID: `2026.05.05-126`
+Release ID: `2026.05.05-127`
+
+## 2026.05.05-127
+
+- Server Mode v2 的 Trading Phase 5b G-3 已把 in-memory matching engine orderbook 真的改成依 `matching_orderbook_key(market, ctx)` 分 namespace，而不是只靠 `market_symbol` 當 key；同一個 `BTC/POINTS` 在 production、`test`、以及不同 `internal_test tester_id` 下都會落到不同的 matching book。
+- `match_open_limit_orders()` 現在先依 routed world hydrate 對應 namespace 的 open limit orders，再從該 world 的 in-memory book 取 order UUID 進行撮合；`cancel_order()`、`_execute_order()` 與 trial-credit reclaim 取消單也會同步清掉各自 namespace 內的幽靈單。
+- 這輪的關鍵防線是：shadow tester 7 的 open limit order 不會再被 tester 8 或 production matcher 看見，避免「同一張 test_shadow_orders 表內不同 tester 共用 orderbook」的 cross-world/cross-tester 撮合污染。
 
 ## 2026.05.05-126
 

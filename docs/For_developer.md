@@ -18,7 +18,7 @@ Related technical references:
 
 ## Release and Schema
 
-- Release ID: `2026.05.05-126`
+- Release ID: `2026.05.05-127`
 - Schema version: `29`
 - Release ID source: `services/release_info.py`
 - Runtime version endpoint: `GET /api/version`
@@ -59,6 +59,10 @@ Server Mode v2 note:
 - `security/server_mode_v2_full_smoke.py` is the isolated runtime harness that
   runs the six-script bundle and then verifies shadow-table activity did not
   leak into production wallet / ledger tables.
+- Trading Phase 5b G-3 now namespaces the in-memory matching orderbook by
+  `matching_orderbook_key(market, ctx)`, so production and per-tester
+  `internal_test` open limit orders no longer share the same in-process
+  matching book even when they target the same market symbol.
 
 ## Fast Local Setup
 
