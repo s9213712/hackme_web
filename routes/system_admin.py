@@ -1387,6 +1387,64 @@ def register_system_admin_routes(app, deps):
         )
         return json_resp({"ok": True, "msg": "全功能測試已啟動", "job": _security_test_job_payload(job)}, 202)
 
+    @app.route("/api/root/security-tests/privilege", methods=["POST"])
+    @require_csrf
+    def root_security_test_privilege():
+        actor, error = require_root_actor()
+        if error:
+            return error
+        try:
+            data = request.get_json(force=True) if request.is_json else {}
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+        target = str(data.get("target") or request.host_url or "").strip().rstrip("/")
+        if not re.fullmatch(r"https?://[A-Za-z0-9.\-_\[\]:]+(?::\d+)?(?:/.*)?", target):
+            return json_resp({"ok": False, "msg": "target 必須是 http(s) URL"}), 400
+        report_root = _security_test_report_root()
+        artifact_prefix = f"privilege_{uuid.uuid4().hex[:10]}"
+        out_json = os.path.join(report_root, f"{artifact_prefix}.json")
+        out_md = os.path.join(report_root, f"{artifact_prefix}.md")
+        command = [
+            sys.executable,
+            os.path.join(BASE_DIR, "security", "functional_permission_pentest.py"),
+            "--base-url", target,
+            "--out-json", out_json,
+            "--out-md", out_md,
+        ]
+        if bool(data.get("destructive")):
+            command.append("--destructive")
+        env = {}
+        for key in ("ROOT_PASSWORD", "MANAGER_PASSWORD", "TEST_PASSWORD"):
+            value = str(data.get(key.lower()) or "").strip()
+            if value:
+                env[key] = value
+        username_env_keys = {
+            "root_username": "PENTEST_ROOT_USERNAME",
+            "manager_username": "PENTEST_MANAGER_USERNAME",
+            "user_username": "PENTEST_USER_USERNAME",
+        }
+        for payload_key, env_key in username_env_keys.items():
+            value = str(data.get(payload_key) or "").strip()
+            if value:
+                env[env_key] = value
+        job = _start_security_test_job(
+            "privilege",
+            command,
+            command_label=[
+                "python3",
+                "security/functional_permission_pentest.py",
+                "--base-url",
+                target,
+            ] + (["--destructive"] if bool(data.get("destructive")) else []),
+            report_root=report_root,
+            report_prefix=artifact_prefix,
+            actor=actor,
+            env=env,
+        )
+        return json_resp({"ok": True, "msg": "越權測試已啟動", "job": _security_test_job_payload(job)}, 202)
+
     @app.route("/api/root/security-tests/stress", methods=["POST"])
     @require_csrf
     def root_security_test_stress():
@@ -2630,6 +2688,36 @@ def register_system_admin_routes(app, deps):
             "result": result.get("result", "PASS" if result.get("ok") else "FAIL"),
             "details": result,
         }), (200 if result.get("ok") else 409)
+
+    @app.route("/api/root/launch-check/doc", methods=["GET"])
+    @require_csrf_safe
+    def root_launch_check_doc():
+        actor, error = require_root_actor()
+        if error:
+            return error
+        rel_path = str(request.args.get("path") or "").strip()
+        if not rel_path:
+            return json_resp({"ok": False, "msg": "缺少文件路徑"}), 400
+        docs_root = os.path.realpath(os.path.join(BASE_DIR, "docs"))
+        target = os.path.realpath(os.path.join(BASE_DIR, rel_path))
+        if not target.startswith(docs_root + os.sep):
+            return json_resp({"ok": False, "msg": "只允許讀取 docs/ 內的文件"}), 400
+        if not os.path.isfile(target):
+            return json_resp({"ok": False, "msg": "找不到指定文件"}), 404
+        if os.path.splitext(target)[1].lower() not in {".md", ".txt", ".json"}:
+            return json_resp({"ok": False, "msg": "文件格式不支援"}), 400
+        try:
+            with open(target, "r", encoding="utf-8") as fh:
+                content = fh.read()
+        except OSError as exc:
+            return json_resp({"ok": False, "msg": f"文件讀取失敗：{exc}"}), 500
+        return json_resp({
+            "ok": True,
+            "path": public_relative_path(target, BASE_DIR),
+            "label": os.path.basename(target),
+            "content": content[:120000],
+            "truncated": len(content) > 120000,
+        })
 
     @app.route("/api/root/production-report/upload", methods=["POST"])
     @require_csrf

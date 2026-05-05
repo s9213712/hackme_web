@@ -39,18 +39,32 @@ def test_prelaunch_tests_include_stress_progress_and_logs():
     bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
 
     assert 'id="security-stress-start-btn"' in index_html
+    assert 'id="security-privilege-start-btn"' in index_html
+    assert 'id="security-pentest-log"' in index_html
+    assert 'id="security-privilege-log"' in index_html
+    assert 'id="security-functional-log"' in index_html
+    assert 'id="security-stress-log"' in index_html
+    assert 'id="security-pentest-progress-fill"' in index_html
+    assert 'id="security-privilege-progress-fill"' in index_html
+    assert 'id="security-functional-progress-fill"' in index_html
+    assert 'id="security-stress-progress-fill"' in index_html
     assert 'id="security-stress-requests"' in index_html
     assert 'id="security-stress-concurrency"' in index_html
+    assert "startSecurityPrivilegeTest" in admin_js
     assert "startSecurityStressTest" in admin_js
+    assert 'API + "/root/security-tests/privilege"' in admin_js
     assert 'API + "/root/security-tests/stress"' in admin_js
     assert "drive-progress-fill" in admin_js
     assert "job.log_tail" in admin_js
+    assert "renderSecurityTestPanel" in admin_js
+    assert 'securityTestMsg("越權測試啟動中..."' in admin_js
     assert "securityStressStart" in bootstrap_js
     assert 'securityTestMsg("滲透測試啟動中..."' in admin_js
     assert 'securityTestMsg("全功能測試啟動中..."' in admin_js
     assert 'securityTestMsg("壓力測試啟動中..."' in admin_js
     assert 'msg show ${ok ? "ok" : "err"}' in admin_js
     assert 'securityPentestStart.addEventListener("click", startSecurityPentest)' in bootstrap_js
+    assert 'securityPrivilegeStart.addEventListener("click", startSecurityPrivilegeTest)' in bootstrap_js
     assert 'securityFunctionalStart.addEventListener("click", startSecurityFunctionalSmoke)' in bootstrap_js
     assert 'securityStressStart.addEventListener("click", startSecurityStressTest)' in bootstrap_js
 
@@ -127,10 +141,24 @@ def test_server_update_ui_warns_and_requires_preview_then_apply():
 def test_launch_check_treats_production_profile_settings_as_auto_applied_not_manual_blockers():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
     launch_body = admin_js.split("function launchCheckConditionList(sc, requirements) {", 1)[1].split("function jumpToAnchor", 1)[0]
 
     assert "production profile 的 HTTPS / audit chain / Integrity Guard / browser-only 等安全設定會在 mode switch 成功時自動套用" in index_html
     assert "不是</strong>你必須先手動打開的上線前檢查項目" in index_html
+    assert 'id="launch-check-upload-panel"' in index_html
+    assert 'id="launch-check-upload-file"' in index_html
+    assert 'id="launch-check-upload-json"' in index_html
+    assert 'id="launch-check-upload-submit-btn"' in index_html
+    assert 'id="launch-check-doc-panel"' in index_html
+    assert 'id="launch-check-doc-content"' in index_html
+    assert "openLaunchCheckDoc" in admin_js
+    assert 'API}/root/launch-check/doc?path=' in admin_js or 'API + "/root/launch-check/doc?path=' in admin_js
+    assert "submitLaunchCheckReportUpload" in admin_js
+    assert 'API + "/root/production-report/upload"' in admin_js
+    assert 'data-launch-upload="' in admin_js
+    assert 'launchCheckUploadSubmit.addEventListener("click", () => submitLaunchCheckReportUpload())' in bootstrap_js
+    assert 'launchCheckUploadFile.addEventListener("change", async () => {' in bootstrap_js
     assert "productionAutoSummary" in launch_body
     assert "上線前檢查可在非 production 執行；真正切換由 GO_LIVE 完成" in launch_body
     assert "這些安全設定會在切換到 production 時自動套用，不是上線前檢查的手動前置條件" in launch_body

@@ -2,7 +2,7 @@
 
 [English README](../README.md)
 
-**目前 Release ID：`2026.05.05-135`**
+**目前 Release ID：`2026.05.05-137`**
 
 這份文件是中文捷徑版入口，不再承擔全部教學。它只回答三件事：
 
@@ -22,6 +22,11 @@
 - `上線前檢查` 現在是純粹的 preflight gate，不再要求你先切成
   `production`，也不再把 production profile 會在 mode switch 時自動套用的
   HTTPS / audit chain / Integrity Guard / browser-only 設定當成手動前置條件。
+- launch-check 內的 playbook / tests 捷徑現在會在站內直接開啟文件檢視，不再跳
+  `NOT FOUND`；每張 production gate report 卡也都內建 `上傳報告` 入口，可
+  直接貼上或上傳 JSON 後重整 B 區狀態。
+- 安全中心的 root 測試面板現在分成四張獨立卡：滲透測試、越權 / 權限濫用測試、
+  全功能測試、壓力測試；每張卡都有自己的進度條、最近任務狀態與詳細 log。
 
 ### root / admin
 

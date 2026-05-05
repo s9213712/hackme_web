@@ -24,7 +24,7 @@ def _app(tmp_path, actor=None):
         "ANCHOR_DIR": str(base_dir / "anchors"),
         "BASE_DIR": str(base_dir),
         "CHAT_DIR": str(base_dir / "chats"),
-        "CURRENT_SERVER_BIND_STATE": {"host": "127.0.0.1", "port": 5000, "ssl_enabled": False},
+        "CURRENT_SERVER_BIND_STATE": {"host": "127.0.0.1", "port": 5443, "ssl_enabled": False},
         "DB_PATH": str(base_dir / "database.db"),
         "LOG_DIR": str(base_dir / "logs"),
         "SERVER_LOG_PATH": str(base_dir / "logs" / "server.log"),
@@ -89,6 +89,34 @@ def test_root_can_start_functional_smoke_job(tmp_path, monkeypatch):
     assert job["log_tail"][0].startswith("$ security/run_functional_smoke.sh")
 
 
+def test_root_can_start_privilege_job(tmp_path, monkeypatch):
+    system_admin.SECURITY_TEST_JOBS.clear()
+    commands = []
+
+    class CaptureProcess(_FakeProcess):
+        def __init__(self, command, **kwargs):
+            commands.append(command)
+            super().__init__(command, **kwargs)
+
+    monkeypatch.setattr(system_admin.subprocess, "Popen", CaptureProcess)
+    client = _app(tmp_path).test_client()
+
+    res = client.post("/api/root/security-tests/privilege", json={
+        "target": "https://127.0.0.1:5443",
+        "destructive": True,
+    })
+    data = res.get_json()
+    job = _wait_for_job_done(client, data["job"]["job_id"])
+
+    assert res.status_code == 202
+    assert data["job"]["kind"] == "privilege"
+    assert job["status"] == "passed"
+    assert any(item.endswith("security/functional_permission_pentest.py") for item in commands[0])
+    assert "--base-url" in commands[0]
+    assert "https://127.0.0.1:5443" in commands[0]
+    assert "--destructive" in commands[0]
+
+
 def test_root_can_start_pentest_job_with_authorized_target(tmp_path, monkeypatch):
     system_admin.SECURITY_TEST_JOBS.clear()
     commands = []
@@ -139,7 +167,7 @@ def test_root_can_start_stress_job(tmp_path, monkeypatch):
     client = _app(tmp_path).test_client()
 
     res = client.post("/api/root/security-tests/stress", json={
-        "target": "https://127.0.0.1:5000",
+        "target": "https://127.0.0.1:5443",
         "requests": 25,
         "concurrency": 5,
         "paths": "/,/api/version",
@@ -171,7 +199,7 @@ def test_root_can_start_duration_stress_job(tmp_path, monkeypatch):
     client = _app(tmp_path).test_client()
 
     res = client.post("/api/root/security-tests/stress", json={
-        "target": "https://127.0.0.1:5000",
+        "target": "https://127.0.0.1:5443",
         "mode": "duration",
         "duration_seconds": 15,
         "max_requests": 800,
@@ -203,4 +231,5 @@ def test_security_test_jobs_are_root_only(tmp_path):
 
     assert client.get("/api/root/security-tests").status_code == 403
     assert client.post("/api/root/security-tests/functional", json={"port": 50741}).status_code == 403
-    assert client.post("/api/root/security-tests/stress", json={"target": "https://127.0.0.1:5000"}).status_code == 403
+    assert client.post("/api/root/security-tests/privilege", json={"target": "https://127.0.0.1:5443"}).status_code == 403
+    assert client.post("/api/root/security-tests/stress", json={"target": "https://127.0.0.1:5443"}).status_code == 403

@@ -94,6 +94,11 @@ PYTHONPATH=. python3 scripts/trading_backtest_20000_probe.py --include-route --j
   是 Server Mode v2 教學腳本 bundle 的隔離 runtime smoke harness；它會依序跑
   `docs/examples/server_mode_v2/01、02、04、05、06、07`，最後確認 shadow
   與 production tables 沒有互相污染。
+- root 安全中心的 `上線前檢查`
+  現在除了 A/B 區卡片外，也內建：
+  - 站內文件檢視（playbook / tests 捷徑不再跳 `NOT FOUND`）
+  - per-report JSON upload 入口（可直接貼上或上傳 `.json`）
+  - upload 後自動重整 B 區 report 狀態
 - `security/functional_permission_pentest.py`
   是權限濫用 / 角色矩陣專測，不是一般 port scanner。
 - `security/video_module_pentest.py`
@@ -144,6 +149,11 @@ PYTHONPATH=. python3 scripts/trading_backtest_20000_probe.py --include-route --j
   - 壓縮檔預覽是否為結構化清單而不是單段文字
   - 同一次登入 session 內再開第二個 E2EE 檔案時，是否會先嘗試最近成功密碼，而不是每次都直接跳出詢問
 - 確認功能新增後，同步更新 smoke / pentest / QA runbook / troubleshooting
+- 若本次改到安全中心的 root 測試面板，至少補：
+  - 滲透 / 越權 / 全功能 / 壓力四張卡是否都有獨立按鈕、進度條、最近任務狀態與詳細 log
+  - `GET /api/root/security-tests` 與各自的 `POST /api/root/security-tests/*` 是否仍維持 root-only
+  - 越權測試是否真的走 `functional_permission_pentest.py`，而不是只是 UI 多一顆按鈕
+  - 任務清單刷新時，四張卡是否只更新對應 kind 的最新 job，不會互相覆蓋
 - 若本次改到帳號復原 / 密碼流程，至少補：
   - 一般使用者 `password reset request/confirm` 仍可正常運作
   - `root` 不可再透過 web `忘記密碼`、email token 或審核流程重設

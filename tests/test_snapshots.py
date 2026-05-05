@@ -1116,6 +1116,13 @@ def test_server_mode_v2_root_api_is_root_only_and_exposes_requirements():
     assert report.status_code == 200
     assert report.get_json()["report_id"] == "prodrep_test"
 
+    doc = client.get("/api/root/launch-check/doc?path=docs/API_REFERENCE.md")
+    assert doc.status_code == 200
+    assert "API Reference" in doc.get_json()["content"]
+
+    traversal = client.get("/api/root/launch-check/doc?path=../server.py")
+    assert traversal.status_code == 400
+
     logs = client.get("/api/root/server-mode/logs")
     assert logs.status_code == 200
     assert logs.get_json()["logs"][0]["id"] == "mode_test"

@@ -1,6 +1,18 @@
 # Update Summary
 
-Release ID: `2026.05.05-135`
+Release ID: `2026.05.05-137`
+
+## 2026.05.05-137
+
+- `上線前檢查` 的 playbook / tests 捷徑不再直接跳 repo-relative `docs/...` 而導致 `NOT FOUND`。root 現在可透過新 API `GET /api/root/launch-check/doc?path=docs/...` 在站內直接閱讀 production gate playbook / 測試文件。
+- 每一張 production gate report 卡現在都有 `上傳報告` 入口，可直接貼上 JSON 或選擇 `.json` 檔後送往 `/api/root/production-report/upload`；上傳成功後會即時重整 B 區狀態。
+- 新增回歸涵蓋：launch-check 文件檢視只允許 `docs/` 內安全路徑、path traversal 會被拒絕，且前端 upload/doc panel 的關鍵元素與事件綁定存在。
+
+## 2026.05.05-136
+
+- 安全中心的 root 上線前測試面板現在不再只靠一個混合任務列表。滲透、越權 / 權限濫用、全功能、壓力四種測試都各自有獨立卡片、獨立進度條、最近任務狀態與詳細 log，操作上不再需要從混雜 job list 猜哪段輸出屬於哪種測試。
+- 新增 root-only `POST /api/root/security-tests/privilege`，直接驅動 `security/functional_permission_pentest.py`，可從安全中心啟動越權 / permission-abuse 測試；若需要，也可顯式帶 `--destructive` 跑高風險 guard。
+- root 安全測試面板的前端綁定也同步補齊：四種測試都會顯示人性化狀態、progress 與 log，而且 `loadSecurityTestJobs()` 會把最新 job 正確分流到對應卡片，而不是互相覆蓋。
 
 ## 2026.05.05-135
 

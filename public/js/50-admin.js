@@ -3110,6 +3110,79 @@ function jumpToAnchor(anchorId) {
   }
 }
 
+function launchCheckSetUploadStatus(text, ok = false) {
+  const el = $("launch-check-upload-status");
+  if (!el) return;
+  el.textContent = text || "";
+  el.style.color = text ? (ok ? "#4caf50" : "#ff4f6d") : "var(--muted)";
+}
+
+function populateLaunchCheckUploadTypes(selected = "") {
+  const select = $("launch-check-upload-report-type");
+  if (!select) return;
+  const current = selected || select.value || "";
+  const options = Object.entries(LAUNCH_CHECK_REPORT_META).map(([key, meta]) => {
+    const chosen = key === current ? " selected" : "";
+    return `<option value="${key}"${chosen}>${meta.label} (${key})</option>`;
+  });
+  select.innerHTML = options.join("");
+}
+
+function openLaunchCheckUpload(reportType = "") {
+  populateLaunchCheckUploadTypes(reportType);
+  const panel = $("launch-check-upload-panel");
+  const sub = $("launch-check-upload-sub");
+  const hint = $("launch-check-upload-hint");
+  const input = $("launch-check-upload-json");
+  const file = $("launch-check-upload-file");
+  if (sub) sub.textContent = reportType ? `準備上傳 ${reportType} 的 production report JSON。` : "選擇 report 類型後，可貼上 JSON 或上傳 `.json` 檔。";
+  if (hint) {
+    const meta = LAUNCH_CHECK_REPORT_META[reportType];
+    hint.textContent = meta
+      ? `用途：${meta.purpose}｜建議產生方式：${meta.generator}`
+      : "上傳的 JSON 內容會直接送往 production-report upload API，成功後自動重整 B 區狀態。";
+  }
+  if (input && !input.value.trim()) input.value = reportType ? `{\n  "report_type": "${reportType}",\n  "pass": true,\n  "report_hash": ""\n}` : "";
+  if (file) file.value = "";
+  launchCheckSetUploadStatus("");
+  if (panel) panel.open = true;
+  jumpToAnchor("launch-check-upload-panel");
+}
+
+async function openLaunchCheckDoc(shortcut) {
+  const path = String(shortcut?.href || "").trim();
+  if (!path) {
+    launchCheckMsg("文件路徑未定義", false);
+    return;
+  }
+  const panel = $("launch-check-doc-panel");
+  const sub = $("launch-check-doc-sub");
+  const pathEl = $("launch-check-doc-path");
+  const content = $("launch-check-doc-content");
+  if (sub) sub.textContent = "讀取文件中...";
+  if (pathEl) pathEl.textContent = path;
+  if (content) content.textContent = "讀取中...";
+  if (panel) panel.open = true;
+  jumpToAnchor("launch-check-doc-panel");
+  try {
+    await fetchCsrfToken({ force: true });
+    const csrf = getCsrfToken();
+    const res = await apiFetch(`${API}/root/launch-check/doc?path=${encodeURIComponent(path)}`, {
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" },
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) throw new Error(json.msg || `HTTP ${res.status}`);
+    if (sub) sub.textContent = shortcut?.label || json.label || "文件內容";
+    if (pathEl) pathEl.textContent = json.path || path;
+    if (content) content.textContent = json.content || "（空白文件）";
+  } catch (err) {
+    if (sub) sub.textContent = "文件讀取失敗";
+    if (content) content.textContent = `讀取失敗：${err && err.message ? err.message : "未知錯誤"}`;
+    launchCheckMsg(err && err.message ? err.message : "文件讀取失敗", false);
+  }
+}
+
 function launchCheckShortcutHandler(shortcut) {
   if (!shortcut) return null;
   if (shortcut.kind === "ui") {
@@ -3119,10 +3192,7 @@ function launchCheckShortcutHandler(shortcut) {
     };
   }
   if (shortcut.kind === "doc") {
-    return () => {
-      const url = shortcut.href || "";
-      if (url) window.open(url, "_blank", "noopener");
-    };
+    return () => openLaunchCheckDoc(shortcut);
   }
   return null;
 }
@@ -3186,6 +3256,7 @@ function launchCheckCardMarkup(reportType, reportRow, missing, failed, idx) {
   const shortcutBtn = shortcut
     ? `<button class="btn btn-sm" type="button" data-launch-shortcut="report-${idx}" style="margin-top:.5rem;font-size:.72rem;padding:.22rem .55rem;">${escape(shortcut.label || (shortcut.kind === "ui" ? "前往 UI" : "開啟 playbook"))}</button>`
     : "";
+  const uploadBtn = `<button class="btn btn-sm" type="button" data-launch-upload="${escape(reportType)}" style="margin-top:.5rem;font-size:.72rem;padding:.22rem .55rem;">上傳報告</button>`;
   return `
     <div class="security-profile-preview show" style="border-left:4px solid ${statusColor};padding-left:.7rem;">
       <div style="display:flex;align-items:baseline;gap:.45rem;flex-wrap:wrap;">
@@ -3197,9 +3268,57 @@ function launchCheckCardMarkup(reportType, reportRow, missing, failed, idx) {
       <div style="margin-top:.25rem;"><strong>產生方式</strong>：<code style="font-size:.7rem;">${escape(meta.generator)}</code></div>
       <div style="margin-top:.25rem;"><strong>失敗對策</strong>：${escape(meta.tip)}</div>
       ${stateNote ? `<div style="margin-top:.4rem;color:${statusColor};">⤷ ${escape(stateNote)}</div>` : ""}
-      ${shortcutBtn}
+      <div style="display:flex;gap:.45rem;flex-wrap:wrap;align-items:center;">
+        ${shortcutBtn}
+        ${uploadBtn}
+      </div>
     </div>
   `;
+}
+
+async function submitLaunchCheckReportUpload() {
+  const typeSelect = $("launch-check-upload-report-type");
+  const textarea = $("launch-check-upload-json");
+  const reportType = String(typeSelect?.value || "").trim();
+  if (!reportType) {
+    launchCheckSetUploadStatus("請先選擇 report 類型", false);
+    return;
+  }
+  let payload;
+  try {
+    payload = JSON.parse(textarea?.value || "{}");
+  } catch (err) {
+    launchCheckSetUploadStatus(`JSON 解析失敗：${err.message || "格式錯誤"}`, false);
+    return;
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    launchCheckSetUploadStatus("Report JSON 必須是 object", false);
+    return;
+  }
+  payload.report_type = reportType;
+  launchCheckSetUploadStatus("上傳中...", true);
+  try {
+    await fetchCsrfToken({ force: true });
+    const csrf = getCsrfToken();
+    const res = await apiFetch(API + "/root/production-report/upload", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRF-Token": csrf || "",
+      },
+      body: JSON.stringify(payload),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) throw new Error(json.msg || `HTTP ${res.status}`);
+    launchCheckSetUploadStatus(`上傳成功：${json.report_id || reportType}`, true);
+    launchCheckMsg(`已上傳 ${reportType} 報告`, true);
+    await loadLaunchCheck();
+  } catch (err) {
+    const message = err && err.message ? err.message : "上傳失敗";
+    launchCheckSetUploadStatus(message, false);
+    launchCheckMsg(message, false);
+  }
 }
 
 async function loadLaunchCheck() {
@@ -3294,6 +3413,10 @@ async function loadLaunchCheck() {
       const btn = list.querySelector(`[data-launch-shortcut="report-${idx}"]`);
       const handler = launchCheckShortcutHandler(meta.shortcut);
       if (btn && handler) btn.addEventListener("click", handler);
+    });
+    required.forEach((reportType) => {
+      const btn = list.querySelector(`[data-launch-upload="${reportType}"]`);
+      if (btn) btn.addEventListener("click", () => openLaunchCheckUpload(reportType));
     });
   } catch (err) {
     if (overall) {
@@ -4280,16 +4403,103 @@ function securityTestMsg(text, ok = true) {
   msg.className = text ? `msg show ${ok ? "ok" : "err"}` : "msg";
 }
 
+function securityTestKindLabel(kind) {
+  return kind === "pentest"
+    ? "滲透測試"
+    : kind === "privilege"
+      ? "越權測試"
+      : kind === "functional"
+        ? "全功能測試"
+        : kind === "stress"
+          ? "壓力測試"
+          : (kind || "-");
+}
+
+function securityTestKindSummary(kind) {
+  return kind === "pentest"
+    ? "檢查滲透測試工具、HTTP 漏洞掃描與授權目標設定。"
+    : kind === "privilege"
+      ? "檢查角色邊界、提權與權限濫用流程。"
+      : kind === "functional"
+        ? "檢查隔離 runtime 內的全站功能 smoke。"
+        : kind === "stress"
+          ? "檢查受控壓測、fallback 與流量峰值。"
+          : "尚無任務紀錄";
+}
+
+function securityTestPanelRefs(kind) {
+  return {
+    status: $(`security-${kind}-status`),
+    fill: $(`security-${kind}-progress-fill`),
+    label: $(`security-${kind}-progress-label`),
+    detail: $(`security-${kind}-detail`),
+    log: $(`security-${kind}-log`),
+  };
+}
+
+function renderSecurityTestPanel(kind, job) {
+  const refs = securityTestPanelRefs(kind);
+  const { status, fill, label, detail, log } = refs;
+  if (!status || !fill || !label || !detail || !log) return;
+  const title = securityTestKindLabel(kind);
+  if (!job) {
+    status.textContent = `${title}：尚未執行`;
+    status.style.color = "var(--muted)";
+    fill.classList.remove("indeterminate");
+    fill.style.width = "0%";
+    label.textContent = "等待啟動";
+    detail.textContent = securityTestKindSummary(kind);
+    log.textContent = "等待測試輸出...";
+    return;
+  }
+  const colorFor = (value) => value === "passed" ? "#4caf50" : value === "failed" ? "#ff4f6d" : "#ffb74d";
+  const progress = Math.max(0, Math.min(100, Number(job.progress_percent ?? 0)));
+  const running = job.status === "running";
+  status.textContent = `${title}：${running ? "執行中" : job.status === "passed" ? "已通過" : job.status === "failed" ? "失敗" : (job.status || "-")}`;
+  status.style.color = colorFor(job.status);
+  fill.classList.toggle("indeterminate", running);
+  fill.style.width = running ? `${Math.max(progress, 12)}%` : `${progress}%`;
+  label.textContent = `${running ? "執行中" : "完成"} · ${Math.round(progress)}%`;
+  const detailParts = [
+    job.job_id ? `job=${job.job_id}` : "",
+    job.started_at ? `started=${job.started_at}` : "",
+    job.finished_at ? `finished=${job.finished_at}` : "",
+    job.returncode == null ? "" : `rc=${job.returncode}`,
+    job.report_dir ? `report=${job.report_dir}` : "",
+    !job.report_dir && Array.isArray(job.report_artifacts) && job.report_artifacts.length ? `artifacts=${job.report_artifacts.join(", ")}` : "",
+    job.log_path ? `log=${job.log_path}` : "",
+    job.error ? `error=${job.error}` : "",
+  ].filter(Boolean);
+  detail.textContent = detailParts.join(" · ") || securityTestKindSummary(kind);
+  log.textContent = (Array.isArray(job.log_tail) && job.log_tail.length)
+    ? job.log_tail.join("\n")
+    : (running ? "測試啟動中，等待輸出..." : "此任務目前沒有輸出。");
+  log.scrollTop = log.scrollHeight;
+}
+
+function renderSecurityTestPanels(jobs) {
+  const rows = Array.isArray(jobs) ? jobs : [];
+  const latestByKind = new Map();
+  rows.forEach((job) => {
+    if (!job || !job.kind || latestByKind.has(job.kind)) return;
+    latestByKind.set(job.kind, job);
+  });
+  ["pentest", "privilege", "functional", "stress"].forEach((kind) => {
+    renderSecurityTestPanel(kind, latestByKind.get(kind) || null);
+  });
+}
+
 function renderSecurityTestJobs(jobs) {
   const list = $("security-test-jobs");
   if (!list) return;
   const rows = Array.isArray(jobs) ? jobs : [];
+  renderSecurityTestPanels(rows);
   if (!rows.length) {
     list.innerHTML = `<div class="drive-empty">尚無 root 啟動的測試任務</div>`;
     return;
   }
   const colorFor = (status) => status === "passed" ? "#4caf50" : status === "failed" ? "#ff4f6d" : "#ffb74d";
-  const labelFor = (kind) => kind === "pentest" ? "滲透測試" : kind === "functional" ? "全功能測試" : kind === "stress" ? "壓力測試" : (kind || "-");
+  const labelFor = (kind) => securityTestKindLabel(kind);
   list.innerHTML = rows.map((job) => `
     <div class="drive-file-row">
       <div style="min-width:0;flex:1;">
@@ -4321,6 +4531,8 @@ async function loadSecurityTestJobs() {
     if (target && !target.value) target.value = window.location.origin;
     const stressTarget = $("security-stress-target");
     if (stressTarget && !stressTarget.value) stressTarget.value = window.location.origin;
+    const privilegeTarget = $("security-privilege-target");
+    if (privilegeTarget && !privilegeTarget.value) privilegeTarget.value = window.location.origin;
     const res = await apiFetch(API + "/root/security-tests", {
       credentials: "same-origin",
       headers: { "X-CSRF-Token": csrf || "" }
@@ -4353,7 +4565,8 @@ async function loadSecurityTestJob(jobId) {
     securityTestMsg(json.msg || "任務查詢失敗", false);
     return;
   }
-  renderSecurityTestJobs([json.job]);
+  renderSecurityTestPanel(json.job?.kind || "", json.job || null);
+  securityTestMsg(`已刷新 ${securityTestKindLabel(json.job?.kind || "")} 任務 ${json.job?.job_id || ""}`, true);
 }
 
 async function startSecurityPentest() {
@@ -4382,6 +4595,31 @@ async function startSecurityPentest() {
     if (ok) await loadSecurityTestJobs();
   } catch (err) {
     securityTestMsg(`滲透測試啟動失敗：${err.message || "請檢查伺服器連線"}`, false);
+  }
+}
+
+async function startSecurityPrivilegeTest() {
+  if (currentUser !== "root") return;
+  const payload = {
+    target: $("security-privilege-target")?.value || window.location.origin,
+    destructive: !!$("security-privilege-destructive")?.checked,
+  };
+  securityTestMsg("越權測試啟動中...", true);
+  try {
+    await fetchCsrfToken({ force: true });
+    const csrf = getCsrfToken();
+    const res = await apiFetch(API + "/root/security-tests/privilege", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+      body: JSON.stringify(payload)
+    });
+    const json = await res.json().catch(() => ({}));
+    const ok = res.ok && !!json.ok;
+    securityTestMsg(ok ? `越權測試已啟動：${json.job?.job_id || ""}` : (json.msg || `越權測試啟動失敗（HTTP ${res.status}）`), ok);
+    if (ok) await loadSecurityTestJobs();
+  } catch (err) {
+    securityTestMsg(`越權測試啟動失敗：${err.message || "請檢查伺服器連線"}`, false);
   }
 }
 

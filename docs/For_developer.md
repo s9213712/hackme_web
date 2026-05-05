@@ -18,7 +18,7 @@ Related technical references:
 
 ## Release and Schema
 
-- Release ID: `2026.05.05-135`
+- Release ID: `2026.05.05-137`
 - Schema version: `30`
 - Release ID source: `services/release_info.py`
 - Runtime version endpoint: `GET /api/version`
@@ -73,6 +73,12 @@ Server Mode v2 note:
   browser-only mode are applied during the `GO_LIVE` switch itself, so the
   launch-check tab shows them as auto-applied posture instead of manual
   preconditions.
+- launch-check `doc` shortcuts now open via a root-only in-app document reader
+  backed by `/api/root/launch-check/doc`, so repo-relative playbook/test links
+  no longer 404 inside the running app.
+- Each production gate report card now includes an upload entry point that
+  accepts pasted or file-loaded JSON and posts it to
+  `/api/root/production-report/upload`, then refreshes the B-zone status.
 - `security/server_mode_v2_full_smoke.py` is the isolated runtime harness that
   runs the six-script bundle and then verifies shadow-table activity did not
   leak into production wallet / ledger tables.

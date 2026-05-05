@@ -99,6 +99,9 @@ function bindUiEvents() {
   const testerTokenList = $("tester-token-list-btn");
   const healthRefresh = $("health-refresh-btn");
   const launchCheckRefresh = $("launch-check-refresh-btn");
+  const launchCheckUploadFile = $("launch-check-upload-file");
+  const launchCheckUploadSubmit = $("launch-check-upload-submit-btn");
+  const launchCheckUploadClear = $("launch-check-upload-clear-btn");
   const integrityRefresh = $("integrity-refresh-btn");
   const integrityRescan = $("integrity-rescan-btn");
   const integrityExport = $("integrity-export-btn");
@@ -116,6 +119,7 @@ function bindUiEvents() {
   const securityModeSelect = $("security-mode-select");
   const securityTestRefresh = $("security-test-refresh-btn");
   const securityPentestStart = $("security-pentest-start-btn");
+  const securityPrivilegeStart = $("security-privilege-start-btn");
   const securityFunctionalStart = $("security-functional-start-btn");
   const securityStressStart = $("security-stress-start-btn");
   const serverModeSelect = $("server-mode-select");
@@ -507,6 +511,30 @@ function bindUiEvents() {
   if (healthRefresh) healthRefresh.addEventListener("click", loadServerHealth);
   if (integrityRefresh) integrityRefresh.addEventListener("click", loadIntegrityGuard);
   if (launchCheckRefresh) launchCheckRefresh.addEventListener("click", () => loadLaunchCheck());
+  if (launchCheckUploadFile) launchCheckUploadFile.addEventListener("change", async () => {
+    const file = launchCheckUploadFile.files && launchCheckUploadFile.files[0];
+    if (!file) return;
+    const textarea = $("launch-check-upload-json");
+    const sub = $("launch-check-upload-sub");
+    try {
+      const text = await file.text();
+      if (textarea) textarea.value = text;
+      if (sub) sub.textContent = `已載入 ${file.name}，請確認 JSON 後再上傳。`;
+      if (typeof launchCheckSetUploadStatus === "function") launchCheckSetUploadStatus("");
+    } catch (err) {
+      if (typeof launchCheckSetUploadStatus === "function") launchCheckSetUploadStatus(`讀取檔案失敗：${err && err.message ? err.message : "未知錯誤"}`, false);
+    }
+  });
+  if (launchCheckUploadSubmit) launchCheckUploadSubmit.addEventListener("click", () => submitLaunchCheckReportUpload());
+  if (launchCheckUploadClear) launchCheckUploadClear.addEventListener("click", () => {
+    const textarea = $("launch-check-upload-json");
+    const file = $("launch-check-upload-file");
+    const sub = $("launch-check-upload-sub");
+    if (textarea) textarea.value = "";
+    if (file) file.value = "";
+    if (sub) sub.textContent = "選擇 report 類型後，可貼上 JSON 或上傳 `.json` 檔。";
+    if (typeof launchCheckSetUploadStatus === "function") launchCheckSetUploadStatus("");
+  });
   if (integrityRescan) integrityRescan.addEventListener("click", rescanIntegrityGuard);
   if (integrityExport) integrityExport.addEventListener("click", exportIntegrityReport);
   if (integrityBulkApprove) integrityBulkApprove.addEventListener("click", () => reviewSelectedIntegrityFindings("approve"));
@@ -523,6 +551,7 @@ function bindUiEvents() {
   if (securityModeSelect) securityModeSelect.addEventListener("change", () => previewSecurityProfileSelection("security-mode-select", "security-mode-profile-preview", "sc"));
   if (securityTestRefresh) securityTestRefresh.addEventListener("click", loadSecurityTestJobs);
   if (securityPentestStart) securityPentestStart.addEventListener("click", startSecurityPentest);
+  if (securityPrivilegeStart) securityPrivilegeStart.addEventListener("click", startSecurityPrivilegeTest);
   if (securityFunctionalStart) securityFunctionalStart.addEventListener("click", startSecurityFunctionalSmoke);
   if (securityStressStart) securityStressStart.addEventListener("click", startSecurityStressTest);
   if (serverModeSelect) serverModeSelect.addEventListener("change", () => {

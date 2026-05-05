@@ -2517,7 +2517,7 @@
           <summary>
             <div>
               <div class="drive-card-title">上線前測試</div>
-              <div class="drive-card-sub">root 可啟動滲透測試、全功能測試與壓力測試；報告會寫入 security/reports/root-triggered。</div>
+              <div class="drive-card-sub">root 可啟動滲透、越權、全功能與壓力測試；每種測試都有獨立進度條與詳細 log，報告會寫入 security/reports/root-triggered。</div>
             </div>
           </summary>
           <div class="drive-collapsible-body">
@@ -2525,67 +2525,122 @@
             <div></div>
             <button class="btn" type="button" id="security-test-refresh-btn">刷新任務</button>
           </div>
-          <div class="settings-option-grid">
-            <div class="field">
-              <label>滲透測試 Target URL</label>
-              <input type="text" id="security-pentest-target" placeholder="https://127.0.0.1:5000" />
+          <div class="security-log-grid" style="margin-top:.35rem;">
+            <div class="drive-card security-test-panel">
+              <div class="drive-card-title">滲透測試</div>
+              <div class="drive-card-sub">掃描 web surface、session、CSRF、常見弱點。啟動前需勾選授權目標。</div>
+              <div class="settings-option-grid" style="margin-top:.55rem;">
+                <div class="field">
+                  <label>Target URL</label>
+                  <input type="text" id="security-pentest-target" placeholder="https://127.0.0.1:5000" />
+                </div>
+                <div class="field">
+                  <label>指定項目（空白=全部）</label>
+                  <input type="text" id="security-pentest-only" placeholder="nmap,nuclei,sqlmap" />
+                </div>
+                <div class="field">
+                  <label>跳過項目</label>
+                  <input type="text" id="security-pentest-skip" placeholder="testssl,sslscan" />
+                </div>
+                <div class="field">
+                  <label>單工具逾時秒數</label>
+                  <input type="number" id="security-pentest-timeout" min="1" max="3600" value="180" />
+                </div>
+                <div class="field">
+                  <label><input type="checkbox" id="security-pentest-own-target" /> 確認這是本專案授權目標</label>
+                </div>
+                <div class="field">
+                  <label>&nbsp;</label>
+                  <button class="btn btn-primary" type="button" id="security-pentest-start-btn">開始滲透測試</button>
+                </div>
+              </div>
+              <div id="security-pentest-status" class="drive-card-sub" style="margin-top:.45rem;">尚未執行</div>
+              <div class="drive-progress" aria-label="滲透測試 progress"><div id="security-pentest-progress-fill" class="drive-progress-fill" style="width:0%;"></div></div>
+              <div id="security-pentest-progress-label" class="drive-progress-label">等待啟動</div>
+              <div id="security-pentest-detail" class="drive-card-sub">尚無任務紀錄</div>
+              <pre id="security-pentest-log" class="security-log-box security-log-pre" style="max-height:220px;margin-top:.45rem;">等待測試輸出...</pre>
             </div>
-            <div class="field">
-              <label>指定項目（空白=全部）</label>
-              <input type="text" id="security-pentest-only" placeholder="nmap,nuclei,sqlmap" />
+
+            <div class="drive-card security-test-panel">
+              <div class="drive-card-title">越權 / 權限濫用測試</div>
+              <div class="drive-card-sub">檢查角色邊界、root-only surface、提權與濫用流程。預設只跑非破壞性 guard。</div>
+              <div class="settings-option-grid" style="margin-top:.55rem;">
+                <div class="field">
+                  <label>Target URL</label>
+                  <input type="text" id="security-privilege-target" placeholder="https://127.0.0.1:5000" />
+                </div>
+                <div class="field">
+                  <label><input type="checkbox" id="security-privilege-destructive" /> 額外執行明確 destructive guard（高風險）</label>
+                </div>
+                <div class="field">
+                  <label>&nbsp;</label>
+                  <button class="btn btn-primary" type="button" id="security-privilege-start-btn">開始越權測試</button>
+                </div>
+              </div>
+              <div id="security-privilege-status" class="drive-card-sub" style="margin-top:.45rem;">尚未執行</div>
+              <div class="drive-progress" aria-label="越權測試 progress"><div id="security-privilege-progress-fill" class="drive-progress-fill" style="width:0%;"></div></div>
+              <div id="security-privilege-progress-label" class="drive-progress-label">等待啟動</div>
+              <div id="security-privilege-detail" class="drive-card-sub">尚無任務紀錄</div>
+              <pre id="security-privilege-log" class="security-log-box security-log-pre" style="max-height:220px;margin-top:.45rem;">等待測試輸出...</pre>
             </div>
-            <div class="field">
-              <label>跳過項目</label>
-              <input type="text" id="security-pentest-skip" placeholder="testssl,sslscan" />
+
+            <div class="drive-card security-test-panel">
+              <div class="drive-card-title">全功能測試</div>
+              <div class="drive-card-sub">啟動隔離 runtime，逐步驗證登入、聊天、雲端硬碟、交易等主要流程。</div>
+              <div class="settings-option-grid" style="margin-top:.55rem;">
+                <div class="field">
+                  <label>測試 Port</label>
+                  <input type="number" id="security-functional-port" min="1" max="65535" value="50741" />
+                </div>
+                <div class="field">
+                  <label><input type="checkbox" id="security-functional-keep-runtime" /> 保留測試 runtime</label>
+                </div>
+                <div class="field">
+                  <label>&nbsp;</label>
+                  <button class="btn btn-primary" type="button" id="security-functional-start-btn">開始全功能測試</button>
+                </div>
+              </div>
+              <div id="security-functional-status" class="drive-card-sub" style="margin-top:.45rem;">尚未執行</div>
+              <div class="drive-progress" aria-label="全功能測試 progress"><div id="security-functional-progress-fill" class="drive-progress-fill" style="width:0%;"></div></div>
+              <div id="security-functional-progress-label" class="drive-progress-label">等待啟動</div>
+              <div id="security-functional-detail" class="drive-card-sub">尚無任務紀錄</div>
+              <pre id="security-functional-log" class="security-log-box security-log-pre" style="max-height:220px;margin-top:.45rem;">等待測試輸出...</pre>
             </div>
-            <div class="field">
-              <label>單工具逾時秒數</label>
-              <input type="number" id="security-pentest-timeout" min="1" max="3600" value="180" />
-            </div>
-            <div class="field">
-              <label><input type="checkbox" id="security-pentest-own-target" /> 確認這是本專案授權目標</label>
-            </div>
-            <div class="field">
-              <label>&nbsp;</label>
-              <button class="btn btn-primary" type="button" id="security-pentest-start-btn">開始滲透測試</button>
-            </div>
-          </div>
-          <div class="settings-option-grid" style="margin-top:.75rem;">
-            <div class="field">
-              <label>全功能測試 Port</label>
-              <input type="number" id="security-functional-port" min="1" max="65535" value="50741" />
-            </div>
-            <div class="field">
-              <label><input type="checkbox" id="security-functional-keep-runtime" /> 保留測試 runtime</label>
-            </div>
-            <div class="field">
-              <label>&nbsp;</label>
-              <button class="btn btn-primary" type="button" id="security-functional-start-btn">開始全功能測試</button>
-            </div>
-          </div>
-          <div class="settings-option-grid" style="margin-top:.75rem;">
-            <div class="field">
-              <label>壓力測試 Target URL</label>
-              <input type="text" id="security-stress-target" placeholder="https://127.0.0.1:5000" />
-            </div>
-            <div class="field">
-              <label>總請求數</label>
-              <input type="number" id="security-stress-requests" min="1" max="5000" value="200" />
-            </div>
-            <div class="field">
-              <label>併發數</label>
-              <input type="number" id="security-stress-concurrency" min="1" max="100" value="20" />
-            </div>
-            <div class="field">
-              <label>測試路徑</label>
-              <input type="text" id="security-stress-paths" placeholder="/,/api/version,/api/site-config" />
-            </div>
-            <div class="field">
-              <label>&nbsp;</label>
-              <button class="btn btn-primary" type="button" id="security-stress-start-btn">開始壓力測試</button>
+
+            <div class="drive-card security-test-panel">
+              <div class="drive-card-title">壓力測試</div>
+              <div class="drive-card-sub">對一般流量與交易路徑做受控負載；適合觀察 fallback、timeout 與 log 峰值。</div>
+              <div class="settings-option-grid" style="margin-top:.55rem;">
+                <div class="field">
+                  <label>Target URL</label>
+                  <input type="text" id="security-stress-target" placeholder="https://127.0.0.1:5000" />
+                </div>
+                <div class="field">
+                  <label>總請求數</label>
+                  <input type="number" id="security-stress-requests" min="1" max="5000" value="200" />
+                </div>
+                <div class="field">
+                  <label>併發數</label>
+                  <input type="number" id="security-stress-concurrency" min="1" max="100" value="20" />
+                </div>
+                <div class="field">
+                  <label>測試路徑</label>
+                  <input type="text" id="security-stress-paths" placeholder="/,/api/version,/api/site-config" />
+                </div>
+                <div class="field">
+                  <label>&nbsp;</label>
+                  <button class="btn btn-primary" type="button" id="security-stress-start-btn">開始壓力測試</button>
+                </div>
+              </div>
+              <div id="security-stress-status" class="drive-card-sub" style="margin-top:.45rem;">尚未執行</div>
+              <div class="drive-progress" aria-label="壓力測試 progress"><div id="security-stress-progress-fill" class="drive-progress-fill" style="width:0%;"></div></div>
+              <div id="security-stress-progress-label" class="drive-progress-label">等待啟動</div>
+              <div id="security-stress-detail" class="drive-card-sub">尚無任務紀錄</div>
+              <pre id="security-stress-log" class="security-log-box security-log-pre" style="max-height:220px;margin-top:.45rem;">等待測試輸出...</pre>
             </div>
           </div>
           <div id="security-test-msg" class="msg"></div>
+          <div class="drive-card-sub" style="margin-top:.55rem;">下方保留最近任務紀錄；上方四張卡會各自顯示最新進度與詳細 log。</div>
           <div id="security-test-jobs" class="drive-file-list" style="margin-top:.75rem;"></div>
           </div>
         </details>
@@ -2817,6 +2872,49 @@
         <div class="health-section-title">B. 13 份必過 Production Gate Reports</div>
         <div id="launch-check-list" class="security-log-grid"></div>
         <div id="launch-check-msg" class="msg" style="margin-top:.6rem;"></div>
+        <details class="drive-collapsible-panel settings-collapse" id="launch-check-upload-panel" style="margin-top:.75rem;">
+          <summary>
+            <div>
+              <div class="drive-card-title">上傳 / 分析 Production Report</div>
+              <div class="drive-card-sub" id="launch-check-upload-sub">選擇 report 類型後，可貼上 JSON 或上傳 `.json` 檔。</div>
+            </div>
+          </summary>
+          <div class="drive-collapsible-body">
+            <div class="settings-option-grid">
+              <div class="field">
+                <label>Report 類型</label>
+                <select id="launch-check-upload-report-type"></select>
+              </div>
+              <div class="field">
+                <label>JSON 檔案</label>
+                <input type="file" id="launch-check-upload-file" accept=".json,application/json" />
+              </div>
+              <div class="field">
+                <label>快速說明</label>
+                <div class="drive-card-sub" id="launch-check-upload-hint" style="margin-top:.25rem;">上傳的 JSON 內容會直接送往 production-report upload API，成功後自動重整 B 區狀態。</div>
+              </div>
+            </div>
+            <label style="display:block;margin-top:.55rem;">Report JSON</label>
+            <textarea id="launch-check-upload-json" rows="10" style="width:100%;font-family:monospace;font-size:.78rem;" placeholder='{"report_hash":"...","pass":true,"target_commit":"..."}'></textarea>
+            <div class="admin-toolbar" style="margin-top:.55rem;display:flex;align-items:center;gap:.55rem;flex-wrap:wrap;">
+              <button class="btn btn-primary" type="button" id="launch-check-upload-submit-btn">上傳報告</button>
+              <button class="btn btn-secondary" type="button" id="launch-check-upload-clear-btn">清空</button>
+              <span id="launch-check-upload-status" style="font-size:.78rem;color:var(--muted);"></span>
+            </div>
+          </div>
+        </details>
+        <details class="drive-collapsible-panel settings-collapse" id="launch-check-doc-panel" style="margin-top:.75rem;">
+          <summary>
+            <div>
+              <div class="drive-card-title">Production Gate Playbook / 文件檢視</div>
+              <div class="drive-card-sub" id="launch-check-doc-sub">尚未開啟文件</div>
+            </div>
+          </summary>
+          <div class="drive-collapsible-body">
+            <div class="drive-card-sub" id="launch-check-doc-path" style="margin-bottom:.45rem;"></div>
+            <pre id="launch-check-doc-content" class="security-log-box security-log-pre" style="max-height:420px;overflow:auto;">點上方卡片的 playbook / tests 按鈕後，會在這裡顯示內容。</pre>
+          </div>
+        </details>
       </div>
 
       <div class="form-section" id="sec-server-settings">

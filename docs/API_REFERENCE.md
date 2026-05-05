@@ -530,10 +530,12 @@ Workflow preset 補充：
 | GET/POST | `/api/root/security-tests` | root | security jobs 列表 |
 | GET | `/api/root/security-tests/<job_id>` | root | 單一 security job |
 | POST | `/api/root/security-tests/pentest` | root | 啟動 pentest |
+| POST | `/api/root/security-tests/privilege` | root | 啟動 privilege / permission-abuse test |
 | POST | `/api/root/security-tests/functional` | root | 啟動 functional test |
 | POST | `/api/root/security-tests/stress` | root | 啟動 stress test |
 | GET/PUT | `/api/admin/security-center/thresholds` | manager | security thresholds |
 | GET/PUT | `/api/admin/security-center/controls` | manager | security controls |
+| GET | `/api/root/launch-check/doc?path=docs/...` | root | 站內檢視 launch-check playbook / tests 文件 |
 | GET | `/api/root/server-update/status` | root | 更新狀態 |
 | POST | `/api/root/server-update/preview` | root | 更新預覽 |
 | POST | `/api/root/server-update/apply` | root | 套用更新 |
