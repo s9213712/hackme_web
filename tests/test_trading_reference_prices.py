@@ -260,6 +260,7 @@ def _live_price_app(actor, captured):
                 "warnings": [{"code": "provider_count_low", "message": "可用來源不足", "severity": "critical"}] if defaulted else [],
                 "high_risk_blocked": defaulted,
                 "high_risk_block_reason": "目前不是正常 fused price" if defaulted else "",
+                "risk_grade_usable": not defaulted,
                 "defaulted_market": defaulted,
                 "transport_state": {
                     "mode": "mixed" if defaulted else "websocket",
@@ -283,6 +284,7 @@ def _live_price_app(actor, captured):
                     "provider_count": 4 if not defaulted else 1,
                     "purpose": "展示 / 一般估值 / K 線 / 非風控參考",
                     "warning_message": "目前使用最後健康快取" if defaulted else "",
+                    "risk_grade_usable": False,
                 },
                 "risk_grade_price_context": {
                     "price_type": "risk_grade",
@@ -295,6 +297,7 @@ def _live_price_app(actor, captured):
                     "purpose": "融資 / 強平 / 保證金 / PnL / bot 風控 / 交易限制",
                     "warning_message": "目前不是正常 fused price" if defaulted else "",
                     "high_risk_blocked": defaulted,
+                    "risk_grade_usable": not defaulted,
                 },
             }
 
@@ -1228,6 +1231,7 @@ def test_trading_live_price_route_returns_selected_market_quote():
     assert payload["excluded_sources"] == []
     assert payload["warnings"] == []
     assert payload["high_risk_blocked"] is False
+    assert payload["risk_grade_usable"] is True
     assert payload["high_risk_block_reason"] == ""
     assert payload["defaulted_market"] is False
     assert payload["requested_market_symbol"] == "BTC/POINTS"
@@ -1270,6 +1274,7 @@ def test_trading_live_price_route_marks_defaulted_market_when_missing():
     assert payload["excluded_sources"] == ["okx_public_api"]
     assert payload["warnings"][0]["code"] == "provider_count_low"
     assert payload["high_risk_blocked"] is True
+    assert payload["risk_grade_usable"] is False
     assert payload["high_risk_block_reason"] == "目前不是正常 fused price"
     assert payload["defaulted_market"] is True
     assert payload["stale"] is True
@@ -1282,4 +1287,5 @@ def test_trading_live_price_route_marks_defaulted_market_when_missing():
     assert payload["transport_state"]["fallback"] is True
     assert payload["transport_state"]["stale"] is True
     assert payload["risk_grade_price_context"]["high_risk_blocked"] is True
+    assert payload["risk_grade_price_context"]["risk_grade_usable"] is False
     assert captured["market_symbol"] == ""

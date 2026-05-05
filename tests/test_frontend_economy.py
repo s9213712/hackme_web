@@ -702,6 +702,8 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "provider input stale" in trading_js
     assert "🟡 reference 價格降級" in trading_js
     assert "🟢 reference 價格正常" in trading_js
+    assert "目前只可作為 reference price，不可作為風控級價格" in trading_js
+    assert "風控可用" in trading_js
 
     workflow_editor = (ROOT / "public" / "trading-workflow-editor.html").read_text(encoding="utf-8")
     workflow_editor_js = (ROOT / "public" / "js" / "trading-workflow-editor.js").read_text(encoding="utf-8")
@@ -767,13 +769,17 @@ def test_spot_position_details_show_holding_cost_and_break_even_price():
 
 def test_trading_ui_labels_reference_and_risk_grade_price_usage():
     trading_js = (ROOT / "public" / "js" / "56-trading.js").read_text(encoding="utf-8")
+    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
     trading_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
 
     assert "function tradingMarketPriceContext" in trading_js
     assert "function tradingPriceContextSummary" in trading_js
+    assert "risk_grade_usable" in trading_js
+    assert "riskContext?.high_risk_blocked || riskContext?.risk_grade_usable === false" in trading_js
     assert "目前價格（reference）" in trading_html
     assert "用途：展示 / 一般估值" in trading_html
     assert "市價單估值採用風控級價格" in trading_js
     assert "風控級價格用途：融資 / 強平 / 保證金 / PnL" in trading_js
     assert "目前部位價值採 reference price；未實現盈虧採 risk-grade price" in trading_js
     assert "reference price：" in trading_js
+    assert 'usable ${risk.risk_grade_usable ? "yes" : "no"}' in admin_js

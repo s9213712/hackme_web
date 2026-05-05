@@ -1545,7 +1545,7 @@ function populateRootTradingMarketRegistryForm(market = null) {
   const ref = market.reference_price_status || {};
   const risk = market.risk_grade_price_status || {};
   rootTradingMarketRegistryEditorStatus(
-    `${market.display_name || market.symbol} · probe ${market.probe_status || "pending"} · reference ${ref.source || "-"} / ${ref.confidence || "-"} · risk-grade ${risk.source || "-"} / ${risk.confidence || "-"}${risk.high_risk_blocked ? " · 已封鎖高風險用途" : ""}`
+    `${market.display_name || market.symbol} · probe ${market.probe_status || "pending"} · reference ${ref.source || "-"} / ${ref.confidence || "-"} · risk-grade ${risk.source || "-"} / ${risk.confidence || "-"} / usable ${risk.risk_grade_usable ? "yes" : "no"}${risk.high_risk_blocked ? " · 已封鎖高風險用途" : ""}`
   );
   loadRootTradingMarketProviders(rootTradingMarketRegistrySelectedId);
 }
@@ -1570,7 +1570,7 @@ function renderRootTradingMarketRegistry(payload = {}) {
           <strong>${sanitize(market.display_name || market.symbol || "-")}</strong>
           <div class="drive-card-sub">${sanitize(market.symbol || "-")} · ${market.enabled ? "啟用" : "停用"} · probe ${sanitize(market.probe_status || "pending")} · provider ${Number(market.provider_count || 0)} 家</div>
           <div class="drive-card-sub">reference ${sanitize(ref.source || "-")} / ${sanitize(ref.confidence || "-")} · stale ${ref.stale ? "yes" : "no"} · degraded ${ref.degraded ? "yes" : "no"} · providers ${Number(ref.provider_count || 0)}</div>
-          <div class="drive-card-sub">risk-grade ${sanitize(risk.source || "-")} / ${sanitize(risk.confidence || "-")} · stale ${risk.stale ? "yes" : "no"} · degraded ${risk.degraded ? "yes" : "no"} · providers ${Number(risk.provider_count || 0)}${risk.high_risk_blocked ? " · blocked" : ""}</div>
+          <div class="drive-card-sub">risk-grade ${sanitize(risk.source || "-")} / ${sanitize(risk.confidence || "-")} · stale ${risk.stale ? "yes" : "no"} · degraded ${risk.degraded ? "yes" : "no"} · providers ${Number(risk.provider_count || 0)} · usable ${risk.risk_grade_usable ? "yes" : "no"}${risk.high_risk_blocked ? " · blocked" : ""}</div>
           <div class="drive-card-sub">spot ${market.allow_spot ? "✓" : "×"} · margin ${market.allow_margin ? "✓" : "×"} · bot ${market.allow_bots ? "✓" : "×"} · risk-grade ${market.allow_risk_grade_usage ? "✓" : "×"} · live ${market.live_price_enabled ? "✓" : "×"} · candles ${market.reference_price_enabled ? "✓" : "×"}</div>
           ${summary.message ? `<div class="drive-card-sub" style="color:${market.probe_status === "ok" ? "#9ecbff" : "#ffcf85"};">${sanitize(summary.message)}</div>` : ""}
         </div>

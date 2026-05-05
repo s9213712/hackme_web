@@ -1,6 +1,12 @@
 # Update Summary
 
-Release ID: `2026.05.05-129`
+Release ID: `2026.05.05-130`
+
+## 2026.05.05-130
+
+- Trading provider fallback discipline 的第一刀已收斂成「價格信任等級」而不是全面改寫交易規則：`test_live_price_provider` 現在會被標成 `confidence=low`、`synthetic_test_provider=true`，並在 `reference / risk-grade` context 中明確標示 `risk_grade_usable=false`。
+- `manual_root`、最後健康快取、以及 degraded / stale / fallback provider input 都會明確回傳 `risk_grade_usable=false` 與對應 warning；cached / degraded 高風險價格仍會被後端 hard block，而 synthetic test provider 只保留給單測與注入測試，不可由 root 設定成正式 `price_source`。
+- 前端交易頁與 root 市場管理診斷已同步顯示 `風控可用 yes/no`，並在市價單 / 融資風險估算中同時檢查 `high_risk_blocked || risk_grade_usable === false`，避免把 synthetic、manual 或 cached 價格靜默當成 production risk-grade 使用。
 
 ## 2026.05.05-129
 

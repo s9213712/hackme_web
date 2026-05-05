@@ -3705,6 +3705,8 @@ class TradingEngineService:
         providers = max(0, int(provider_count or 0))
         if normalized_source == "manual_root":
             return "manual"
+        if normalized_source == "test_live_price_provider":
+            return "low"
         if stale or high_risk_blocked or normalized_health in {"conservative", "fallback"}:
             return "low"
         if degraded:
@@ -3712,6 +3714,35 @@ class TradingEngineService:
         if normalized_type == "risk_grade" and providers < max(1, DEFAULT_PRICE_FUSION_MIN_PROVIDER_COUNT):
             return "medium"
         return "high"
+
+    def _price_context_risk_grade_usable(
+        self,
+        *,
+        price_type,
+        source,
+        health,
+        degraded,
+        stale,
+        provider_count,
+        high_risk_blocked,
+        fallback,
+        synthetic_test_provider=False,
+    ):
+        normalized_type = str(price_type or "reference").strip().lower() or "reference"
+        normalized_source = str(source or "").strip()
+        normalized_health = str(health or "healthy").strip().lower()
+        providers = max(0, int(provider_count or 0))
+        if normalized_type != "risk_grade":
+            return False
+        if synthetic_test_provider or normalized_source == "test_live_price_provider":
+            return False
+        if normalized_source == "manual_root" or normalized_source.endswith("_cached"):
+            return False
+        if high_risk_blocked or stale or degraded or fallback:
+            return False
+        if normalized_health in {"fallback", "conservative", "degraded"}:
+            return False
+        return providers > 0
 
     def _build_price_context(self, *, market_symbol, price_type, price_points, price_source, price_meta):
         meta = price_meta or {}
@@ -3724,6 +3755,7 @@ class TradingEngineService:
         provider_key = "risk_grade_provider_count" if normalized_type == "risk_grade" else "reference_provider_count"
         provider_count = max(0, int(meta.get(provider_key) or 0))
         high_risk_blocked = bool(meta.get("high_risk_blocked")) if normalized_type == "risk_grade" else False
+        synthetic_test_provider = bool(meta.get("synthetic_test_provider"))
         warning_message = str(meta.get("high_risk_block_reason") or meta.get("fallback_reason") or "").strip()
         if not warning_message:
             warning_message = str(self._primary_price_fusion_warning(warnings).get("message") or "").strip()
@@ -3731,6 +3763,8 @@ class TradingEngineService:
             warning_message = "目前使用手動價格，請勿將此價格視為正常即時市場深度。"
         if not warning_message and stale:
             warning_message = "目前使用最後健康快取，請留意價格可能已過時。"
+        if not warning_message and synthetic_test_provider:
+            warning_message = "目前使用測試注入 live price provider；此來源只適合測試與 reference 顯示，不可視為 production 風控價格。"
         confidence = self._price_context_confidence(
             price_type=normalized_type,
             source=source,
@@ -3739,6 +3773,17 @@ class TradingEngineService:
             stale=stale,
             provider_count=provider_count,
             high_risk_blocked=high_risk_blocked,
+        )
+        risk_grade_usable = self._price_context_risk_grade_usable(
+            price_type=normalized_type,
+            source=source,
+            health=health,
+            degraded=degraded,
+            stale=stale,
+            provider_count=provider_count,
+            high_risk_blocked=high_risk_blocked,
+            fallback=bool(meta.get("fallback")),
+            synthetic_test_provider=synthetic_test_provider,
         )
         return {
             "price_type": normalized_type,
@@ -3758,6 +3803,8 @@ class TradingEngineService:
             "purpose": self._price_usage_label(normalized_type),
             "warning_message": warning_message,
             "high_risk_blocked": high_risk_blocked,
+            "risk_grade_usable": risk_grade_usable,
+            "synthetic_test_provider": synthetic_test_provider,
             "excluded_sources": list(meta.get("excluded_sources") or []),
             "warnings": warnings,
         }
@@ -3778,7 +3825,7 @@ class TradingEngineService:
             "fallback_reason": "",
             "excluded_sources": [],
             "warnings": [],
-            "high_risk_blocked": False,
+            "high_risk_blocked": source.endswith("_cached"),
             "high_risk_block_reason": "",
             "requested_price_mode": "reference",
             "reference_price_points": price_value,
@@ -3804,6 +3851,7 @@ class TradingEngineService:
             price_meta["fallback_reason"] = "目前使用手動價格"
         elif source.endswith("_cached"):
             price_meta["price_health"] = "fallback"
+            price_meta["high_risk_block_reason"] = "目前使用最後健康快取，不能作為風控級價格。"
             price_meta["warnings"] = self._append_price_fusion_warning(
                 [],
                 "cached_price_active",
@@ -3929,6 +3977,8 @@ class TradingEngineService:
             if market_row and not int(market_row["allow_risk_grade_usage"] or 0):
                 raise ValueError(f"{usage or 'high-risk trading action'} is disabled for this market")
         meta = price_meta or {}
+        if bool(meta.get("synthetic_test_provider")):
+            return
         if not bool(meta.get("high_risk_blocked")):
             return
         reason = str(meta.get("high_risk_block_reason") or meta.get("fallback_reason") or "price source is in conservative mode").strip()
@@ -4542,6 +4592,7 @@ class TradingEngineService:
                     "mode": "test_provider_fallback" if synthetic_test_provider else "emergency_single_source",
                     "reference_mode": "test_provider" if synthetic_test_provider else "ticker_fallback",
                     "risk_grade_mode": "test_provider" if synthetic_test_provider else "unavailable",
+                    "synthetic_test_provider": bool(synthetic_test_provider),
                     "warnings": warnings,
                     "warning_code": str(primary_warning.get("code") or ""),
                     "warning_message": "；".join(
@@ -4758,6 +4809,7 @@ class TradingEngineService:
                     "mode": "test_provider_fallback" if synthetic_test_provider else "quality_filtered_single_source",
                     "reference_mode": "test_provider" if synthetic_test_provider else "ticker_fallback",
                     "risk_grade_mode": "test_provider" if synthetic_test_provider else "unavailable",
+                    "synthetic_test_provider": bool(synthetic_test_provider),
                     "warnings": warnings,
                     "warning_code": str(primary_warning.get("code") or ""),
                     "warning_message": "；".join(
@@ -4976,6 +5028,7 @@ class TradingEngineService:
             "mode": reference_model["resolved_mode"],
             "reference_mode": "reference_price",
             "risk_grade_mode": risk_model["resolved_mode"] if risk_model else "unavailable",
+            "synthetic_test_provider": False,
             "warnings": warnings,
             "warning_code": str(primary_warning.get("code") or ""),
             "warning_message": warning_message,
@@ -5219,6 +5272,7 @@ class TradingEngineService:
             "provider_count": int((((details or {}).get("transport_state") or {}).get("provider_count") or 0)),
             "last_update_at": str((((details or {}).get("transport_state") or {}).get("last_update_at") or "")),
             "exclusion_reason": str((((details or {}).get("transport_state") or {}).get("exclusion_reason") or "")),
+            "risk_grade_usable": not high_risk_blocked and int((details or {}).get("risk_grade_provider_count") or 0) > 0,
         })
         return payload
 
@@ -5296,6 +5350,7 @@ class TradingEngineService:
                 "warnings": list((price_meta or {}).get("warnings") or []),
                 "high_risk_blocked": bool((price_meta or {}).get("high_risk_blocked")),
                 "high_risk_block_reason": str((price_meta or {}).get("high_risk_block_reason") or ""),
+                "risk_grade_usable": bool((risk_grade_context or {}).get("risk_grade_usable")),
                 "defaulted_market": defaulted_market,
                 "reference_price_context": reference_context,
                 "risk_grade_price_context": risk_grade_context,
@@ -5319,11 +5374,12 @@ class TradingEngineService:
                 "fallback": False,
                 "stale": False,
                 "degraded": False,
-                "confidence": "high",
+                "confidence": "low",
                 "provider_count": 1,
                 "last_update_at": _now(),
                 "exclusion_reason": "",
                 "latency_ms": 0.0,
+                "synthetic_test_provider": True,
             }
             return (price_points, "test_live_price_provider", meta) if with_meta else (price_points, "test_live_price_provider")
         errors = []
@@ -5529,10 +5585,11 @@ class TradingEngineService:
             "last_update_at": "",
             "exclusion_reason": "",
             "confidence": "low",
+            "synthetic_test_provider": False,
         }
         if configured_source == "manual_root" or not self._live_price_symbol(symbol, conn=conn):
             price = market["manual_price_points"]
-            source = str(market["price_source"] or "manual_root")
+            source = "manual_root" if configured_source == "manual_root" else str(market["price_source"] or "manual_root")
             transport_state = {
                 "mode": "manual_root",
                 "connected": False,
@@ -5608,10 +5665,12 @@ class TradingEngineService:
                     "fallback_reason": str(exc),
                     "excluded_sources": [],
                     "reference_price_points": old_price,
-                    "risk_grade_price_points": old_price,
+                    "risk_grade_price_points": None,
                     "resolved_source": source,
                     "reference_provider_count": 1,
-                    "risk_grade_provider_count": 1,
+                    "risk_grade_provider_count": 0,
+                    "high_risk_blocked": True,
+                    "high_risk_block_reason": "目前使用最後健康快取，不能作為風控級價格。",
                     "stale": bool(transport_state["stale"]),
                     "degraded": bool(transport_state["degraded"]),
                     "connected": bool(transport_state["connected"]),
@@ -5619,6 +5678,7 @@ class TradingEngineService:
                     "last_update_at": str(transport_state["last_update_at"]),
                     "exclusion_reason": str(transport_state["exclusion_reason"]),
                     "confidence": str(transport_state["confidence"]),
+                    "risk_grade_usable": False,
                     "transport_state": transport_state,
                 })
                 self._audit_event(
@@ -5689,12 +5749,14 @@ class TradingEngineService:
                 "reference_provider_count": int(fusion_details.get("reference_provider_count") or 0),
                 "risk_grade_provider_count": int(fusion_details.get("risk_grade_provider_count") or 0),
                 "degraded": True,
+                "risk_grade_usable": False,
                 "connected": bool((fusion_details.get("transport_state") or {}).get("connected")),
                 "fallback": bool((fusion_details.get("transport_state") or {}).get("fallback")),
                 "stale": bool((fusion_details.get("transport_state") or {}).get("stale")),
                 "last_update_at": str((fusion_details.get("transport_state") or {}).get("last_update_at") or ""),
                 "exclusion_reason": str((fusion_details.get("transport_state") or {}).get("exclusion_reason") or reason_text),
                 "confidence": str((fusion_details.get("transport_state") or {}).get("confidence") or "low"),
+                "synthetic_test_provider": bool(fusion_details.get("synthetic_test_provider")),
                 "transport_state": dict((fusion_details.get("transport_state") or {})),
             })
             self._audit_event(
@@ -5729,6 +5791,7 @@ class TradingEngineService:
                 "resolved_source": str(fusion_details.get("resolved_source") or live_source or FUSED_PRICE_SOURCE),
                 "reference_provider_count": int(fusion_details.get("reference_provider_count") or 0),
                 "risk_grade_provider_count": int(fusion_details.get("risk_grade_provider_count") or 0),
+                "risk_grade_usable": bool((fusion_details.get("risk_grade_provider_count") or 0) and not bool((fusion_details.get("transport_state") or {}).get("stale")) and not bool((fusion_details.get("transport_state") or {}).get("degraded")) and not bool((fusion_details.get("transport_state") or {}).get("fallback"))),
                 "stale": bool((fusion_details.get("transport_state") or {}).get("stale")),
                 "degraded": bool((fusion_details.get("transport_state") or {}).get("degraded")),
                 "connected": bool((fusion_details.get("transport_state") or {}).get("connected")),
@@ -5736,6 +5799,7 @@ class TradingEngineService:
                 "last_update_at": str((fusion_details.get("transport_state") or {}).get("last_update_at") or ""),
                 "exclusion_reason": str((fusion_details.get("transport_state") or {}).get("exclusion_reason") or ""),
                 "confidence": str((fusion_details.get("transport_state") or {}).get("confidence") or "high"),
+                "synthetic_test_provider": bool(fusion_details.get("synthetic_test_provider")),
                 "transport_state": dict((fusion_details.get("transport_state") or {})),
             })
         else:
@@ -5752,11 +5816,21 @@ class TradingEngineService:
                 "exclusion_reason": str((live_transport_meta or {}).get("exclusion_reason") or ""),
                 "message": "",
             }
+            synthetic_test_provider = str(live_source or "") == "test_live_price_provider" or bool((live_transport_meta or {}).get("synthetic_test_provider"))
+            risk_grade_unusable = bool(
+                synthetic_test_provider
+                or transport_state["fallback"]
+                or transport_state["stale"]
+                or transport_state["degraded"]
+            )
             price_meta["reference_price_points"] = live_price
-            price_meta["risk_grade_price_points"] = live_price
+            price_meta["risk_grade_price_points"] = None if risk_grade_unusable else live_price
             price_meta["resolved_source"] = str(live_source or configured_source or "manual_root")
             price_meta["reference_provider_count"] = 1
-            price_meta["risk_grade_provider_count"] = 1
+            price_meta["risk_grade_provider_count"] = 0 if risk_grade_unusable else 1
+            price_meta["high_risk_blocked"] = bool(risk_grade_unusable and not synthetic_test_provider)
+            if risk_grade_unusable and not synthetic_test_provider:
+                price_meta["high_risk_block_reason"] = "目前 provider input 已降級 / stale / fallback，不能作為風控級價格。"
             price_meta["stale"] = bool(transport_state["stale"])
             price_meta["degraded"] = bool(transport_state["degraded"])
             price_meta["connected"] = bool(transport_state["connected"])
@@ -5764,7 +5838,9 @@ class TradingEngineService:
             price_meta["last_update_at"] = str(transport_state["last_update_at"])
             price_meta["exclusion_reason"] = str(transport_state["exclusion_reason"])
             price_meta["confidence"] = str(transport_state["confidence"])
+            price_meta["risk_grade_usable"] = not bool(risk_grade_unusable)
             price_meta["transport_state"] = transport_state
+            price_meta["synthetic_test_provider"] = bool(synthetic_test_provider)
             if transport_state["fallback"] and not price_meta["fallback_reason"]:
                 price_meta["fallback_reason"] = "WebSocket provider input 已斷線，已自動切回 HTTP polling。"
             elif transport_state["stale"] and not price_meta["fallback_reason"]:

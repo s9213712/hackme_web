@@ -2670,15 +2670,15 @@ def test_live_price_failure_uses_recent_last_good_price(tmp_path):
         raise RuntimeError("price feed down")
 
     trading.live_price_provider = fail_price
-    second = trading.place_order(
-        actor=_actor(),
-        market_symbol="ETH/POINTS",
-        side="buy",
-        order_type="market",
-        quantity="0.01",
-    )
+    with pytest.raises(ValueError, match="market order is blocked while fused price is in conservative mode"):
+        trading.place_order(
+            actor=_actor(),
+            market_symbol="ETH/POINTS",
+            side="buy",
+            order_type="market",
+            quantity="0.01",
+        )
 
-    assert second["order"]["execution_price_points"] == 5000
     assert trading.verify_state()["ok"] is True
 
 
@@ -3306,6 +3306,122 @@ def test_current_market_price_uses_risk_grade_value_for_high_risk_paths(tmp_path
     assert reference_meta["requested_price_mode"] == "reference"
     assert risk_meta["requested_price_mode"] == "risk_grade"
     assert risk_meta["risk_grade_price_points"] == pytest.approx(99.0, abs=0.0001)
+
+
+def test_test_live_price_provider_is_marked_synthetic_and_not_risk_grade_usable(tmp_path):
+    _points, trading = _services(tmp_path)
+
+    quote = trading.get_live_market_quote(market_symbol="BTC/POINTS")
+
+    assert quote["source"] == "test_live_price_provider"
+    assert quote["confidence"] == "low"
+    assert quote["risk_grade_usable"] is False
+    assert quote["risk_grade_price_context"]["risk_grade_usable"] is False
+    assert quote["risk_grade_price_context"]["synthetic_test_provider"] is True
+    assert "測試注入 live price provider" in quote["risk_grade_price_context"]["warning_message"]
+
+
+def test_root_settings_reject_test_live_price_provider_as_price_source(tmp_path):
+    _points, trading = _services(tmp_path)
+    root = _actor(3, "root", "super_admin")
+
+    with pytest.raises(ValueError, match="price_source must be fused_weighted, binance_public_api, or manual_root"):
+        trading.update_root_settings(actor=root, settings={"price_source": "test_live_price_provider"}, markets=[])
+
+
+def test_manual_root_price_is_not_risk_grade_usable(tmp_path):
+    points, trading = _services(tmp_path)
+    root = _actor(3, "root", "super_admin")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="seed")
+    trading.update_root_settings(actor=root, settings={"price_source": "manual_root"}, markets=[])
+
+    quote = trading.get_live_market_quote(market_symbol="ETH/POINTS")
+
+    assert quote["source"] == "manual_root"
+    assert quote["risk_grade_usable"] is False
+    assert quote["risk_grade_price_context"]["risk_grade_usable"] is False
+    assert quote["risk_grade_price_context"]["warning_message"] == "目前使用手動價格"
+
+
+def test_cached_live_price_fallback_is_not_risk_grade_usable(tmp_path, monkeypatch):
+    points, trading = _services(tmp_path)
+    root = _actor(3, "root", "super_admin")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="seed")
+    trading.update_root_settings(
+        actor=root,
+        settings={"price_source": "fused_weighted", "max_price_staleness_seconds": 300},
+        markets=[],
+    )
+
+    conn = trading.get_db()
+    try:
+        conn.execute(
+            "UPDATE trading_markets SET manual_price_points=?, price_source=?, updated_at=? WHERE symbol=?",
+            (5000.0, "binance_public_api", datetime.now().isoformat(), "ETH/POINTS"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(trading, "_fetch_weighted_fused_price_points", lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("all providers down")))
+
+    conn = trading.get_db()
+    try:
+        market = trading._market(conn, "ETH/POINTS")
+        price, source, meta = trading._current_market_price_points(conn, market, with_meta=True, high_risk=True)
+    finally:
+        conn.close()
+
+    assert price == pytest.approx(5000.0, abs=0.0001)
+    assert source == "binance_public_api_cached"
+    assert meta["high_risk_blocked"] is True
+    assert meta["risk_grade_usable"] is False
+    assert meta["risk_grade_price_points"] is None
+
+    with pytest.raises(ValueError, match="market order is blocked while fused price is in conservative mode"):
+        trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="0.01")
+
+
+def test_direct_provider_fallback_is_not_risk_grade_usable(tmp_path, monkeypatch):
+    points, trading = _services(tmp_path)
+    root = _actor(3, "root", "super_admin")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="seed")
+    trading.update_root_settings(actor=root, settings={"price_source": "binance_public_api"}, markets=[])
+
+    monkeypatch.setattr(
+        trading,
+        "_fetch_live_price_points",
+        lambda _symbol, *, with_meta=False, settings=None, conn=None: (
+            5000.0,
+            "binance_public_api",
+            {
+                "transport": "http_polling",
+                "connected": False,
+                "fallback": True,
+                "stale": True,
+                "degraded": True,
+                "confidence": "low",
+                "provider_count": 1,
+                "last_update_at": "2026-05-05T00:00:00",
+                "exclusion_reason": "websocket_disconnected",
+                "latency_ms": 88.0,
+            },
+        ),
+    )
+
+    conn = trading.get_db()
+    try:
+        market = trading._market(conn, "ETH/POINTS")
+        _price, _source, meta = trading._current_market_price_points(conn, market, with_meta=True, high_risk=True)
+    finally:
+        conn.close()
+
+    assert meta["high_risk_blocked"] is True
+    assert meta["risk_grade_usable"] is False
+    assert meta["risk_grade_price_points"] is None
+
+    with pytest.raises(ValueError, match="market order is blocked while fused price is in conservative mode"):
+        trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="0.01")
 
 
 def test_price_fusion_status_applies_single_provider_weight_cap(tmp_path, monkeypatch):
