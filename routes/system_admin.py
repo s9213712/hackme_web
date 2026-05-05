@@ -576,6 +576,26 @@ def register_system_admin_routes(app, deps):
             "strategy": "git fetch + git diff preview + git merge --ff-only",
         }
 
+    def rebuild_integrity_baseline_after_update(actor, branch, preview):
+        if not integrity_guard:
+            return {"ok": False, "msg": "integrity guard unavailable"}
+        try:
+            changed_paths = []
+            for item in preview.get("changed_files") or []:
+                path = str((item or {}).get("path") or "").strip()
+                if path:
+                    changed_paths.append(path)
+            note = f"server update baseline refresh from origin/{branch}"
+            baseline = integrity_guard.rebaseline_paths(
+                actor=actor["username"],
+                file_paths=changed_paths,
+                note=note,
+            )
+            scan = integrity_guard.scan(actor=actor["username"], create_initial_manifest=False)
+            return {"ok": bool(scan.get("ok", True)), "baseline": baseline, "result": scan}
+        except Exception as exc:
+            return {"ok": False, "msg": str(exc)}
+
     def run_integrity_scan_after_update(actor):
         if not integrity_guard:
             return {"ok": False, "msg": "integrity guard unavailable"}
@@ -1598,12 +1618,12 @@ def register_system_admin_routes(app, deps):
         integrity_result = None
         restart_result = None
         if merge_result["ok"]:
-            integrity_result = run_integrity_scan_after_update(actor)
+            integrity_result = rebuild_integrity_baseline_after_update(actor, branch, preview)
             restart_result = schedule_server_restart(reason=f"server update from origin/{branch}", delay_seconds=1.25)
             _notify_root(
                 "server_update_unverified",
                 "伺服器已套用未驗證更新",
-                f"已從 origin/{branch} 套用更新，更新前已建立 snapshot 與 PointsChain backup，系統將自動重啟。此更新尚未經本機測試驗證，請執行 smoke test、權限測試並處理 Integrity Guard pending findings。",
+                f"已從 origin/{branch} 套用更新，更新前已建立 snapshot 與 PointsChain backup，Integrity Guard baseline 已依本次更新檔案重建，系統將自動重啟。此更新尚未經本機測試驗證，請執行 smoke test、權限測試並確認沒有其他 pending findings。",
                 link="/server",
             )
         detail = {

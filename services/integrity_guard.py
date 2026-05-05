@@ -590,6 +590,68 @@ class IntegrityGuard:
             entries[file_path] = self.file_record(target)
         return entries
 
+    def rebaseline_paths(self, *, actor, file_paths, note=""):
+        raw_paths = file_paths or []
+        normalized = []
+        seen = set()
+        for path in raw_paths:
+            rel = str(path or "").replace("\\", "/").strip("/")
+            if not rel or rel == MANIFEST_FILENAME or rel in seen:
+                continue
+            seen.add(rel)
+            normalized.append(rel)
+        entries, state = self._current_entries_from_manifest()
+        if state != "ok":
+            entries = self.collect_files()
+        updated_paths = []
+        for rel in normalized:
+            target = (self.base_dir / rel).resolve()
+            if target.exists() and self.should_protect(rel):
+                entries[rel] = self.file_record(target)
+                updated_paths.append(rel)
+            else:
+                entries.pop(rel, None)
+                updated_paths.append(rel)
+        payload = self.write_manifest(
+            entries,
+            approved_by=str(actor or "system"),
+            note=(note or "rebaseline selected integrity paths")[:1000],
+        )
+        approved_findings = 0
+        if self.get_db:
+            conn = self.get_db()
+            try:
+                self.ensure_schema(conn)
+                reviewed_at = _now()
+                review_note = (note or "approved by server update baseline refresh")[:1000]
+                for rel in updated_paths:
+                    cur = conn.execute(
+                        "UPDATE integrity_findings SET status='approved', reviewed_by=?, reviewed_at=?, review_note=? "
+                        "WHERE status='pending' AND file_path=?",
+                        (str(actor or "system"), reviewed_at, review_note, rel),
+                    )
+                    approved_findings += int(cur.rowcount or 0)
+                conn.commit()
+                status = self.status(conn=conn)
+            finally:
+                conn.close()
+        else:
+            status = {"ok": True}
+        self.audit(
+            "INTEGRITY_BASELINE_REFRESHED",
+            "-",
+            user=str(actor or "system"),
+            success=True,
+            detail=f"updated_paths={len(updated_paths)},approved_findings={approved_findings}",
+        )
+        return {
+            "ok": True,
+            "updated_paths": updated_paths,
+            "approved_findings": approved_findings,
+            "manifest": payload,
+            "status": status,
+        }
+
     def auto_approve_expired_findings(self, *, actor="system:auto-approve", max_age=AUTO_APPROVE_PENDING_AFTER, conn=None):
         close = False
         if conn is None:
@@ -681,8 +743,25 @@ class IntegrityGuard:
                 return {"ok": False, "msg": f"confirm 必須等於 {CONFIRM_APPROVE}"}
             reviewed_at = _now()
             if action == "approve":
-                entries = self._apply_manifest_update_for_finding(finding)
-                self.write_manifest(entries, approved_by=actor["username"], note=note or f"approve finding #{finding_id}")
+                try:
+                    entries = self._apply_manifest_update_for_finding(finding)
+                    self.write_manifest(entries, approved_by=actor["username"], note=note or f"approve finding #{finding_id}")
+                except Exception as exc:
+                    error_message = str(exc) or "integrity finding approve failed"
+                    self.audit(
+                        "INTEGRITY_FINDING_APPROVE_FAILED",
+                        "-",
+                        user=actor["username"],
+                        success=False,
+                        detail=f"id={finding_id},file_path={finding['file_path']},risk_level={finding['risk_level']},change_type={finding['change_type']},error={error_message}",
+                    )
+                    return {
+                        "ok": False,
+                        "msg": f"approve 失敗：{error_message}",
+                        "error": "integrity_approve_failed",
+                        "reason": error_message,
+                        "finding": finding,
+                    }
                 new_status = "approved"
             elif action == "reject":
                 new_status = "rejected"

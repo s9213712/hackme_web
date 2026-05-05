@@ -28,7 +28,9 @@ def test_server_update_routes_are_root_only_and_use_safe_git_flow():
     assert 'snapshot_type="pre_update"' in system_admin
     assert 'kind="pre_server_update"' in system_admin
     assert "schedule_server_restart(reason=f\"server update from origin/{branch}\"" in system_admin
-    assert "run_integrity_scan_after_update(actor)" in system_admin
+    assert "rebuild_integrity_baseline_after_update(actor, branch, preview)" in system_admin
+    assert "integrity_guard.rebaseline_paths(" in system_admin
+    assert 'Integrity Guard baseline 已依本次更新檔案重建' in system_admin
     assert "SERVER_UPDATE_WARNING" in system_admin
     assert "git reset --hard" not in system_admin
     assert "checkout -B" not in system_admin

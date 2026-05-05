@@ -5042,7 +5042,11 @@ async function reviewIntegrityFinding(id, action) {
     body: JSON.stringify({ confirm: confirmText, note })
   });
   const json = await res.json().catch(() => ({}));
-  alert(json.msg || (json.ok ? "操作完成" : "操作失敗"));
+  const reason = json.reason || json.error_message || "";
+  const message = json.ok
+    ? (json.msg || "操作完成")
+    : (reason ? `${json.msg || "操作失敗"}\n原因：${reason}` : (json.msg || "操作失敗"));
+  alert(message);
   await loadIntegrityGuard();
 }
 
@@ -5073,7 +5077,15 @@ async function reviewSelectedIntegrityFindings(action) {
     body: JSON.stringify({ action, finding_ids: ids, confirm: confirmText, note })
   });
   const json = await res.json().catch(() => ({}));
-  alert(json.ok ? `批次操作完成：${json.reviewed}/${json.total}` : (json.msg || `批次操作失敗：${json.reviewed || 0}/${json.total || ids.length}`));
+  if (json.ok) {
+    alert(`批次操作完成：${json.reviewed}/${json.total}`);
+  } else {
+    const failed = Array.isArray(json.results)
+      ? json.results.filter((item) => !item.ok).map((item) => `#${item.finding_id}: ${item.reason || item.msg || item.error || "unknown"}`)
+      : [];
+    const summary = json.msg || `批次操作失敗：${json.reviewed || 0}/${json.total || ids.length}`;
+    alert(failed.length ? `${summary}\n${failed.join("\n")}` : summary);
+  }
   await loadIntegrityGuard();
 }
 

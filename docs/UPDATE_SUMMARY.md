@@ -1,6 +1,12 @@
 # Update Summary
 
-Release ID: `2026.05.05-131`
+Release ID: `2026.05.05-132`
+
+## 2026.05.05-132
+
+- Root 的 GitHub 伺服器更新流程現在會在成功 fast-forward 後，先依本次 `git diff` 變動到的受保護檔案重建 Integrity Guard baseline，再做後續 integrity scan。這樣更新後不會因為「剛套用的新版本檔案」立刻全部變成 pending findings。
+- 這次 baseline refresh 只接受本次更新涉及的檔案，不會粗暴清空所有 pending findings；若 repo 內另有與本次更新無關的異常，後續 integrity scan 仍會把它們保留下來。
+- 新增 regression 驗證：`rebaseline_paths(...)` 只會接受指定檔案、其他 finding 仍維持 pending；server update route 也明確要求 baseline refresh，而不是單純 rescan。
 
 ## 2026.05.05-131
 

@@ -122,6 +122,27 @@ def test_approve_updates_manifest_and_reject_does_not(tmp_path):
     assert any("INTEGRITY_FINDING_APPROVED" in args for args, _ in audit_log)
 
 
+def test_approve_failure_returns_explicit_reason_when_target_cannot_be_rebased(tmp_path):
+    guard, base, audit_log = _guard(tmp_path)
+    guard.scan(actor="system")
+    (base / "server.py").write_text("print('approved')\n", encoding="utf-8")
+    guard.scan(actor="system")
+    finding = next(item for item in guard.list_findings(status="pending") if item["file_path"] == "server.py")
+    os.remove(base / "server.py")
+
+    failed = guard.review_finding(
+        finding["id"],
+        action="approve",
+        actor={"username": "root"},
+        note="trusted deploy",
+        confirm=CONFIRM_APPROVE,
+    )
+    assert failed["ok"] is False
+    assert failed["error"] == "integrity_approve_failed"
+    assert "outside protected scope" in failed["reason"] or "no longer exists" in failed["reason"]
+    assert any("INTEGRITY_FINDING_APPROVE_FAILED" in args for args, _ in audit_log)
+
+
 def test_production_mode_high_risk_integrity_finding_enters_incident_lockdown(tmp_path):
     guard, base, _ = _guard(tmp_path)
     guard.scan(actor="system")
@@ -214,6 +235,34 @@ def test_high_risk_integrity_findings_do_not_auto_approve_after_one_day(tmp_path
     assert any("INTEGRITY_FINDING_AUTO_APPROVE_SKIPPED_HIGH_RISK" in args for args, _ in audit_log)
 
 
+def test_rebaseline_paths_only_accepts_selected_files_and_keeps_other_findings_pending(tmp_path):
+    guard, base, audit_log = _guard(tmp_path)
+    guard.scan(actor="system")
+    (base / "server.py").write_text("print('server update accepted')\n", encoding="utf-8")
+    (base / "README.md").write_text("# still pending\n", encoding="utf-8")
+    guard.scan(actor="system")
+
+    pending_before = guard.list_findings(status="pending")
+    assert {item["file_path"] for item in pending_before} >= {"server.py", "README.md"}
+
+    refreshed = guard.rebaseline_paths(
+        actor="root",
+        file_paths=["server.py"],
+        note="server update baseline refresh",
+    )
+    assert refreshed["ok"] is True
+    assert refreshed["approved_findings"] >= 1
+    assert "server.py" in refreshed["updated_paths"]
+    assert any("INTEGRITY_BASELINE_REFRESHED" in args for args, _ in audit_log)
+
+    status = guard.scan(actor="root", create_initial_manifest=False)
+    pending_after = guard.list_findings(status="pending")
+    pending_paths = {item["file_path"] for item in pending_after}
+    assert "server.py" not in pending_paths
+    assert "README.md" in pending_paths
+    assert status["summary"]["pending"] >= 1
+
+
 def _admin_app(tmp_path, actor_box, guard, audit_log):
     app = Flask(__name__)
     app.testing = True
@@ -293,6 +342,47 @@ def test_integrity_bulk_review_requires_root_and_confirmation(tmp_path):
     actor_box["actor"] = {"id": 2, "username": "admin", "role": "manager"}
     denied = client.post("/api/root/integrity/findings/bulk-review", json={"action": "ignore", "finding_ids": ids})
     assert denied.status_code == 403
+
+
+def test_integrity_api_returns_approve_failure_reason_and_bulk_failure_details(tmp_path):
+    guard, base, audit_log = _guard(tmp_path)
+    guard.scan(actor="system")
+    (base / "server.py").write_text("print('bulk-approve')\n", encoding="utf-8")
+    (base / "README.md").write_text("# bulk-approve\n", encoding="utf-8")
+    guard.scan(actor="system")
+    findings = guard.list_findings(status="pending")
+    server_finding = next(item for item in findings if item["file_path"] == "server.py")
+    readme_finding = next(item for item in findings if item["file_path"] == "README.md")
+    os.remove(base / "server.py")
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
+    client = _admin_app(tmp_path, actor_box, guard, audit_log).test_client()
+
+    single = client.post(
+        f"/api/root/integrity/findings/{server_finding['id']}/approve",
+        json={"confirm": CONFIRM_APPROVE},
+    )
+    assert single.status_code == 400
+    single_body = single.get_json()
+    assert single_body["error"] == "integrity_approve_failed"
+    assert single_body["reason"]
+
+    bulk = client.post(
+        "/api/root/integrity/findings/bulk-review",
+        json={
+            "action": "approve",
+            "finding_ids": [server_finding["id"], readme_finding["id"]],
+            "confirm": CONFIRM_APPROVE,
+        },
+    )
+    assert bulk.status_code == 400
+    body = bulk.get_json()
+    assert body["ok"] is False
+    assert body["reviewed"] == 1
+    failed_result = next(item for item in body["results"] if item["finding_id"] == server_finding["id"])
+    ok_result = next(item for item in body["results"] if item["finding_id"] == readme_finding["id"])
+    assert failed_result["ok"] is False
+    assert failed_result["reason"]
+    assert ok_result["ok"] is True
 
 
 def test_report_does_not_expose_signing_key(tmp_path):
