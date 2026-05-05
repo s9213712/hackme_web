@@ -41,6 +41,10 @@ The repository root keeps only [README.md](../README.md) and
 - [CLI_ADMIN_PLAYBOOK.md](CLI_ADMIN_PLAYBOOK.md): curl/cmd playbook for root,
   admin, and developer operations
 - [For_developer.md](For_developer.md): API, schema, runtime layout, feature flags
+- [ENCRYPTION_RUNTIME_BOUNDARY.md](ENCRYPTION_RUNTIME_BOUNDARY.md): what a
+  runtime engineer can decrypt vs what strict E2EE still protects
+- [EXTERNAL_API_COMMAND_MATRIX.md](EXTERNAL_API_COMMAND_MATRIX.md): current
+  exchange / Civitai / ComfyUI upstream command inventory
 - [WEB.md](WEB.md): detailed page-by-page UI behavior
 - [TRADING.md](TRADING.md): full trading, bots, workflow editor, and backtest details
 - [VIDEO_PLATFORM.md](VIDEO_PLATFORM.md): detailed video module reference

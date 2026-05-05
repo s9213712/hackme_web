@@ -1,11 +1,13 @@
 from pathlib import Path
 import mimetypes
+from datetime import datetime, timedelta
 
-from flask import Response, request, send_file
+from flask import Response, request, send_file, session
 
 from services.cloud_drive import (
     decrypt_server_encrypted_bytes,
     ensure_cloud_drive_attachment_schema,
+    is_e2ee_file,
     is_server_encrypted_file,
     resolve_file_storage_path,
     store_cloud_upload,
@@ -23,12 +25,17 @@ from services.upload_security import safe_public_filename
 from services.videos import (
     add_video_comment,
     ensure_video_schema,
+    ensure_video_share_link,
     get_video,
     list_video_comments,
     list_videos,
+    mark_video_share_link_accessed,
     publish_video,
+    revoke_video_share_link,
     record_video_view,
+    resolve_video_share_token,
     set_video_like,
+    shared_video_payload,
     tip_video,
 )
 
@@ -49,6 +56,7 @@ def register_video_routes(app, deps):
     get_member_level_rule = deps["get_member_level_rule"]
     ffmpeg_bin = deps.get("FFMPEG_BIN", "ffmpeg")
     ffprobe_bin = deps.get("FFPROBE_BIN", "ffprobe")
+    forbidden_share_fields = {"raw_file_key", "e2ee_password", "vk", "share_key", "share_key_bytes"}
 
     def _parse_json_body():
         try:
@@ -169,10 +177,27 @@ def register_video_routes(app, deps):
                 "description": request.form.get("description") or "",
                 "visibility": (request.form.get("visibility") or "public").strip() or "public",
                 "cover_file_id": (request.form.get("cover_file_id") or "").strip() or None,
+                "share_password": request.form.get("share_password") or "",
+                "share_wrapped_file_key_envelope": request.form.get("share_wrapped_file_key_envelope") or "",
+                "share_expires_at": request.form.get("share_expires_at") or "",
+                "share_max_views": request.form.get("share_max_views") or "",
             }
             return data, request.files.get("cover"), None, None
         data, err, status = _parse_json_body()
+        if isinstance(data, dict):
+            data["share_password"] = data.get("share_password") or ""
+            data["share_wrapped_file_key_envelope"] = data.get("share_wrapped_file_key_envelope") or ""
+            data["share_expires_at"] = data.get("share_expires_at") or ""
+            data["share_max_views"] = data.get("share_max_views") or ""
         return data, None, err, status
+
+    def _reject_sensitive_share_fields(payload):
+        payload = payload or {}
+        for field in forbidden_share_fields:
+            value = payload.get(field)
+            if value not in (None, "", [], {}):
+                return json_resp({"ok": False, "msg": f"禁止提交敏感分享欄位：{field}", "error": "forbidden_share_secret_field"}), 400
+        return None
 
     def _store_video_cover_upload(conn, *, actor, member_rule, cover_upload, privacy_mode):
         if not cover_upload or not cover_upload.filename:
@@ -250,6 +275,330 @@ def register_video_routes(app, deps):
         response.headers["Content-Disposition"] = build_content_disposition("inline", download_name)
         return response
 
+    def _shared_video_password_from_request():
+        return request.headers.get("X-Video-Share-Password") or request.args.get("password") or ""
+
+    def _shared_video_access_state():
+        raw = session.get("video_share_access")
+        return raw if isinstance(raw, dict) else {}
+
+    def _shared_video_has_session_access(token):
+        state = _shared_video_access_state()
+        key = str(token or "")
+        expires_at = str(state.get(key) or "").strip()
+        if not expires_at:
+            return False
+        return expires_at > datetime.utcnow().replace(microsecond=0).isoformat()
+
+    def _grant_shared_video_session_access(token, *, hours=8):
+        state = _shared_video_access_state()
+        state[str(token or "")] = (datetime.utcnow() + timedelta(hours=max(1, int(hours)))).replace(microsecond=0).isoformat()
+        session["video_share_access"] = state
+        session.modified = True
+
+    def _revoke_shared_video_session_access(token):
+        state = _shared_video_access_state()
+        if str(token or "") in state:
+            state.pop(str(token or ""), None)
+            session["video_share_access"] = state
+            session.modified = True
+
+    def _shared_video_seen_state():
+        raw = session.get("video_share_seen")
+        return raw if isinstance(raw, dict) else {}
+
+    def _shared_video_seen(token):
+        return bool(_shared_video_seen_state().get(str(token or "")))
+
+    def _mark_shared_video_seen(token):
+        state = _shared_video_seen_state()
+        state[str(token or "")] = True
+        session["video_share_seen"] = state
+        session.modified = True
+
+    def _count_shared_video_access(conn, row, token, counted_in_session):
+        if counted_in_session:
+            return True
+        mark_video_share_link_accessed(conn, row["share_id"] if "share_id" in row.keys() else row["id"])
+        _mark_shared_video_seen(token)
+        return True
+
+    def _shared_video_error_response(reason):
+        if reason == "password_required":
+            return json_resp({
+                "ok": False,
+                "msg": "這部影音需要分享密碼",
+                "reason": reason,
+                "password_required": True,
+            }), 401
+        if reason == "password_invalid":
+            return json_resp({
+                "ok": False,
+                "msg": "分享密碼不正確",
+                "reason": reason,
+                "password_required": True,
+            }), 403
+        if reason == "password_locked":
+            return json_resp({"ok": False, "msg": "分享密碼嘗試次數過多，請稍後再試", "reason": reason, "password_required": True}), 429
+        if reason == "expired":
+            return json_resp({"ok": False, "msg": "此分享連結已到期", "reason": reason}), 410
+        if reason == "view_limit_reached":
+            return json_resp({"ok": False, "msg": "此分享連結已達最大觀看次數", "reason": reason}), 410
+        if reason == "forbidden_fragment_transport":
+            return json_resp({"ok": False, "msg": "分享金鑰必須保留在 URL fragment，不可送到伺服器", "reason": reason}), 400
+        return json_resp({"ok": False, "msg": "分享影音不存在或已失效", "reason": reason}), 404
+
+    def _resolve_shared_video(conn, token):
+        if request.args.get("vk"):
+            return None, "forbidden_fragment_transport", False, _shared_video_seen(token)
+        password_verified = _shared_video_has_session_access(token)
+        counted_in_session = _shared_video_seen(token)
+        row, reason = resolve_video_share_token(
+            conn,
+            token,
+            password=_shared_video_password_from_request(),
+            password_verified=password_verified,
+            counted_in_session=counted_in_session,
+        )
+        return row, reason, password_verified, counted_in_session
+
+    def _e2ee_direct_status(row):
+        return {
+            "uploaded_file_id": row["id"],
+            "source_mode": "e2ee",
+            "media_type": "audio" if str(row["original_filename_plain_for_public"] or "").lower().endswith((".mp3", ".m4a", ".aac", ".flac", ".wav", ".weba", ".opus", ".oga", ".ogg")) else "video",
+            "status": "direct_only",
+            "storage_mode": "browser_e2ee",
+            "master_manifest_path": "",
+            "duration_seconds": 0.0,
+            "source_mime_type": str(row["mime_type_plain_for_public"] or mimetypes.guess_type(str(row["original_filename_plain_for_public"] or ""))[0] or ""),
+            "source_size_bytes": int(row["size_bytes"] or 0),
+            "error_message": "端到端加密影音只支援瀏覽器端解密播放，會較慢且不支援 HLS 加速。",
+            "variants": [],
+        }
+
+    def _playback_payload_for_file(conn, *, row, video_id, shared_token=None):
+        media_type = "audio" if str(row["original_filename_plain_for_public"] or "").lower().endswith((".mp3", ".m4a", ".aac", ".flac", ".wav", ".weba", ".opus", ".oga", ".ogg")) else "video"
+        if is_e2ee_file(row):
+            if shared_token:
+                ciphertext_url = f"/api/videos/shared/{shared_token}/ciphertext"
+                e2ee_key_url = f"/api/videos/shared/{shared_token}/e2ee-key"
+            else:
+                ciphertext_url = f"/api/cloud-drive/files/{row['id']}/preview/content"
+                e2ee_key_url = f"/api/cloud-drive/files/{row['id']}/e2ee-key"
+            return {
+                "mode": "e2ee_direct",
+                "media_type": media_type,
+                "source_mode": "e2ee",
+                "fallback_url": ciphertext_url,
+                "stream_url": ciphertext_url,
+                "ciphertext_url": ciphertext_url,
+                "e2ee_key_url": e2ee_key_url,
+                "requires_fragment_key": bool(shared_token),
+                "master_url": "",
+                "streaming_ready": False,
+                "high_performance_streaming": False,
+                "status": _e2ee_direct_status(row),
+            }
+        payload = stream_playback_payload(conn, file_row=row, video_id=video_id)
+        payload["high_performance_streaming"] = payload.get("mode") == "hls"
+        return payload
+
+    def _shared_video_html(token):
+        token = str(token or "")
+        return f"""<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>分享影音</title>
+  <style>
+    body {{ margin:0; background:#111521; color:#eef2ff; font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }}
+    .wrap {{ max-width:960px; margin:0 auto; padding:1rem; }}
+    .card {{ background:#171c2b; border:1px solid #2a3150; border-radius:18px; padding:1rem; box-shadow:0 14px 40px rgba(0,0,0,.22); }}
+    .msg {{ min-height:1.4rem; color:#b9c2f0; margin:.75rem 0; white-space:pre-wrap; }}
+    .field {{ display:grid; gap:.35rem; margin:.75rem 0; }}
+    input, button, textarea {{ font:inherit; }}
+    input[type=password] {{ width:100%; box-sizing:border-box; padding:.7rem .9rem; border-radius:12px; border:1px solid #39405c; background:#0f1422; color:#eef2ff; }}
+    button {{ padding:.7rem 1rem; border-radius:12px; border:0; background:#3d78ff; color:#fff; cursor:pointer; }}
+    button.secondary {{ background:#2b3148; }}
+    video, audio {{ width:100%; margin-top:.8rem; border-radius:14px; background:#070b15; }}
+    .meta {{ color:#b8bfd8; font-size:.95rem; }}
+    .hidden {{ display:none !important; }}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1 id="title">分享影音</h1>
+      <div class="meta" id="meta">讀取中...</div>
+      <div class="msg" id="msg"></div>
+      <form id="share-password-form" class="hidden">
+        <div class="field">
+          <label for="share-password">分享密碼</label>
+          <input id="share-password" type="password" autocomplete="current-password" />
+        </div>
+        <button type="submit">解鎖影音</button>
+      </form>
+      <div id="player-host" class="hidden"></div>
+      <div id="e2ee-note" class="meta hidden">此影音採端到端加密，只支援瀏覽器端解密播放，首次載入與快轉會較慢。</div>
+    </div>
+  </div>
+  <script>
+  const TOKEN = {token!r};
+
+  function $(id) {{ return document.getElementById(id); }}
+  function setMsg(text, bad=false) {{
+    const el = $("msg");
+    if (!el) return;
+    el.textContent = text || "";
+    el.style.color = bad ? "#ff9da1" : "#b9c2f0";
+  }}
+  function browserSupportsNativeHls(mediaType="video") {{
+    const probe = document.createElement(mediaType === "audio" ? "audio" : "video");
+    return !!(probe && typeof probe.canPlayType === "function" && probe.canPlayType("application/vnd.apple.mpegurl"));
+  }}
+  function b64ToBytes(value) {{
+    const binary = atob(String(value || "").replace(/\\s+/g, ""));
+    const out = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) out[i] = binary.charCodeAt(i);
+    return out;
+  }}
+  function b64UrlToBytes(value) {{
+    const normalized = String(value || "").replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized + "=".repeat((4 - normalized.length % 4) % 4);
+    return b64ToBytes(padded);
+  }}
+  function shareKeyFromFragment() {{
+    const hash = String(window.location.hash || "");
+    const params = new URLSearchParams(hash.startsWith("#") ? hash.slice(1) : hash);
+    return String(params.get("vk") || "").trim();
+  }}
+    async function importShareKey(rawFragment) {{
+      const bytes = b64UrlToBytes(rawFragment);
+      if (bytes.byteLength < 32) {{
+      throw new Error("分享連結缺少有效的片段金鑰，請向分享者重新取得完整連結。");
+      }}
+      return crypto.subtle.importKey("raw", bytes, {{ name: "AES-GCM", length: 256 }}, false, ["decrypt"]);
+    }}
+  async function unwrapSharedFileKey(envelopeText, fragmentKey) {{
+    const envelope = JSON.parse(envelopeText || "{{}}");
+    if (String(envelope.alg || "") !== "AES-GCM" || Number(envelope.v || 0) !== 1) {{
+      throw new Error("分享金鑰封裝格式不支援，請分享者重新產生分享連結。");
+    }}
+    const wrappingKey = await importShareKey(fragmentKey);
+    const rawKey = await crypto.subtle.decrypt(
+      {{ name: "AES-GCM", iv: b64ToBytes(envelope.nonce) }},
+      wrappingKey,
+      b64ToBytes(envelope.ciphertext)
+    );
+    return crypto.subtle.importKey("raw", rawKey, {{ name: "AES-GCM" }}, true, ["decrypt"]);
+  }}
+  async function decryptJsonMetadata(fileKey, encryptedMetadata) {{
+    const envelope = JSON.parse(encryptedMetadata || "{{}}");
+    const plaintext = await crypto.subtle.decrypt({{ name: "AES-GCM", iv: b64ToBytes(envelope.nonce) }}, fileKey, b64ToBytes(envelope.ciphertext));
+    return JSON.parse(new TextDecoder().decode(plaintext));
+  }}
+  async function decryptSharedE2eeBlob(blob, e2eeShare, fragmentKey) {{
+    const fileKey = await unwrapSharedFileKey(e2eeShare.wrapped_file_key_envelope, fragmentKey);
+    const plaintext = await crypto.subtle.decrypt({{ name: "AES-GCM", iv: b64ToBytes(e2eeShare.nonce) }}, fileKey, await blob.arrayBuffer());
+    const metadata = await decryptJsonMetadata(fileKey, e2eeShare.encrypted_metadata);
+    return {{
+      blob: new Blob([plaintext], {{ type: metadata.mime_type || "application/octet-stream" }}),
+      filename: metadata.filename || "media",
+    }};
+  }}
+  async function unlockShare(password) {{
+    const res = await fetch(`/api/videos/shared/${{encodeURIComponent(TOKEN)}}/unlock`, {{
+      method: "POST",
+      credentials: "same-origin",
+      headers: {{ "Content-Type": "application/json" }},
+      body: JSON.stringify({{ password }}),
+    }});
+    const json = await res.json().catch(() => ({{}}));
+    if (!res.ok || !json.ok) throw new Error(json.msg || `HTTP ${{res.status}}`);
+    return json;
+  }}
+  async function fetchJson(url) {{
+    const res = await fetch(url, {{ credentials: "same-origin" }});
+    const json = await res.json().catch(() => ({{}}));
+    return {{ res, json }};
+  }}
+  async function loadSharedVideo() {{
+    const meta = await fetchJson(`/api/videos/shared/${{encodeURIComponent(TOKEN)}}`);
+    if (meta.res.status === 401 || meta.res.status === 403) {{
+      $("share-password-form").classList.remove("hidden");
+      setMsg(meta.json.msg || "這部影音需要分享密碼", true);
+      return;
+    }}
+    if (!meta.res.ok || !meta.json.ok) throw new Error(meta.json.msg || `HTTP ${{meta.res.status}}`);
+    const video = meta.json.video || {{}};
+    $("title").textContent = video.title || "分享影音";
+    $("meta").textContent = `${{video.owner_nickname || video.owner_username || "使用者"}} · ${{video.visibility || "unlisted"}}`;
+    if (video.share_requires_fragment_key) {{
+      const requirements = [];
+      requirements.push("此 E2EE 影音必須使用完整分享連結");
+      if (video.share_password_required) requirements.push("並輸入分享密碼");
+      requirements.push("若遺失連結片段金鑰，分享者只能重新產生分享。");
+      setMsg(requirements.join(" · "));
+    }}
+    const playback = await fetchJson(`/api/videos/shared/${{encodeURIComponent(TOKEN)}}/playback`);
+    if (!playback.res.ok || !playback.json.ok) throw new Error(playback.json.msg || `HTTP ${{playback.res.status}}`);
+    await renderPlayback(video, playback.json);
+  }}
+  async function renderPlayback(video, playback) {{
+    const host = $("player-host");
+    host.classList.remove("hidden");
+    const mediaTag = video.media_type === "audio" ? "audio" : "video";
+    const src = playback.mode === "hls" && browserSupportsNativeHls(video.media_type)
+      ? (playback.master_url || playback.fallback_url || "")
+      : (playback.fallback_url || playback.stream_url || "");
+    host.innerHTML = mediaTag === "audio"
+      ? `<audio id="shared-player" controls preload="metadata"></audio>`
+      : `<video id="shared-player" controls playsinline preload="metadata"></video>`;
+    const player = $("shared-player");
+    if (!player) return;
+    if (playback.mode === "e2ee_direct") {{
+      $("e2ee-note").classList.remove("hidden");
+      const fragmentKey = shareKeyFromFragment();
+      if (!fragmentKey) {{
+        throw new Error("此 E2EE 分享影音缺少連結片段金鑰，無法復原。請向分享者重新取得完整連結；若分享者也遺失，只能重新產生分享。");
+      }}
+      try {{
+        const keyRes = await fetch(playback.e2ee_key_url, {{ credentials: "same-origin" }});
+        const keyJson = await keyRes.json().catch(() => ({{}}));
+        if (!keyRes.ok || !keyJson.ok || !keyJson.e2ee_share) throw new Error(keyJson.msg || "E2EE 分享解密資訊讀取失敗");
+        const cipherRes = await fetch(playback.ciphertext_url, {{ credentials: "same-origin" }});
+        if (!cipherRes.ok) throw new Error("E2EE 密文讀取失敗");
+        const cipherBlob = await cipherRes.blob();
+        const decrypted = await decryptSharedE2eeBlob(cipherBlob, keyJson.e2ee_share, fragmentKey);
+        player.src = URL.createObjectURL(decrypted.blob);
+        setMsg("已在瀏覽器端以分享授權解密播放；strict E2EE 不支援伺服器端轉檔、縮圖與內容掃描，速度會較慢。");
+        return;
+      }} catch (err) {{
+        throw new Error(err?.message || "分享授權無效或已被竄改，無法解密播放。");
+      }}
+      return;
+    }}
+    player.src = src;
+    setMsg(playback.mode === "hls" ? "HLS 串流已就緒。" : (playback.high_performance_streaming ? "" : "目前使用直接串流。"));
+  }}
+  $("share-password-form").addEventListener("submit", async (event) => {{
+    event.preventDefault();
+    try {{
+      await unlockShare(($("share-password").value || "").trim());
+      $("share-password-form").classList.add("hidden");
+      setMsg("分享密碼驗證成功。");
+      await loadSharedVideo();
+    }} catch (err) {{
+      setMsg(err.message || "分享密碼驗證失敗", true);
+    }}
+  }});
+  loadSharedVideo().catch((err) => setMsg(err.message || "分享影音載入失敗", true));
+  </script>
+</body>
+</html>"""
+
     @app.route("/api/videos/publish", methods=["POST"])
     @require_csrf
     def video_publish():
@@ -259,6 +608,9 @@ def register_video_routes(app, deps):
         data, cover_upload, err, status = _parse_publish_request()
         if err:
             return err, status
+        sensitive = _reject_sensitive_share_fields(data)
+        if sensitive:
+            return sensitive
         conn = get_db()
         try:
             cover_result = None
@@ -283,6 +635,10 @@ def register_video_routes(app, deps):
                 description=data.get("description") or "",
                 visibility=data.get("visibility") or "public",
                 cover_file_id=cover_result["file_id"] if cover_result else (data.get("cover_file_id") or None),
+                share_password=data.get("share_password") or "",
+                share_wrapped_file_key_envelope=data.get("share_wrapped_file_key_envelope") or "",
+                share_expires_at=data.get("share_expires_at") or "",
+                share_max_views=data.get("share_max_views") or 0,
             )
             file_row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (video["cloud_file_id"],)).fetchone()
             stream_asset, stream_warning = _maybe_prepare_stream_asset(
@@ -324,9 +680,10 @@ def register_video_routes(app, deps):
             return json_resp({"ok": False, "msg": "請選擇要上傳的影音檔", "error": "missing_file"}), 400
         if not _uploaded_file_is_media(uploaded):
             return json_resp({"ok": False, "msg": "只接受影片或音樂檔", "error": "not_media"}), 400
+        sensitive = _reject_sensitive_share_fields(request.form)
+        if sensitive:
+            return sensitive
         privacy_mode = str(request.form.get("privacy_mode") or "standard_plain").strip() or "standard_plain"
-        if privacy_mode == "e2ee":
-            return json_resp({"ok": False, "msg": "影音串流不支援 E2EE 檔案，請改用一般檔案或伺服器端加密", "error": "e2ee_not_streamable"}), 400
         if privacy_mode not in {"standard_plain", "server_encrypted"}:
             return json_resp({"ok": False, "msg": "影音隱私模式不支援", "error": "unsupported_privacy_mode"}), 400
         cover_upload = request.files.get("cover")
@@ -381,6 +738,10 @@ def register_video_routes(app, deps):
                 description=request.form.get("description") or "",
                 visibility=request.form.get("visibility") or "public",
                 cover_file_id=cover_result["file_id"] if cover_result else None,
+                share_password=request.form.get("share_password") or "",
+                share_wrapped_file_key_envelope=request.form.get("share_wrapped_file_key_envelope") or "",
+                share_expires_at=request.form.get("share_expires_at") or "",
+                share_max_views=request.form.get("share_max_views") or 0,
             )
             stream_asset, stream_warning = _maybe_prepare_stream_asset(
                 conn,
@@ -407,6 +768,304 @@ def register_video_routes(app, deps):
                 "cover_storage_file": cover_storage_file,
             })
         except Exception as exc:
+            conn.rollback()
+            return _error_response(exc)
+        finally:
+            conn.close()
+
+    @app.route("/shared/videos/<token>", methods=["GET"])
+    def shared_video_page(token):
+        return Response(_shared_video_html(token), status=200, mimetype="text/html; charset=utf-8")
+
+    @app.route("/api/videos/shared/<token>/unlock", methods=["POST"])
+    def shared_video_unlock(token):
+        conn = get_db()
+        try:
+            data = request.get_json(silent=True) or {}
+            sensitive = _reject_sensitive_share_fields(data)
+            if sensitive:
+                return sensitive
+            password = str(data.get("password") or "")
+            row, reason = resolve_video_share_token(conn, token, password=password, password_verified=False)
+            if not row:
+                if reason in {"password_invalid", "password_locked"}:
+                    conn.commit()
+                return _shared_video_error_response(reason)
+            _grant_shared_video_session_access(token)
+            conn.commit()
+            return json_resp({"ok": True, "share_url": f"/shared/videos/{token}", "password_required": bool((row["share_password_required"] if "share_password_required" in row.keys() else row["password_required"]) or 0)})
+        finally:
+            conn.close()
+
+    @app.route("/api/videos/shared/<token>", methods=["GET"])
+    def shared_video_detail(token):
+        conn = get_db()
+        try:
+            row, reason, password_verified, counted_in_session = _resolve_shared_video(conn, token)
+            if not row:
+                if reason in {"password_invalid", "password_locked"}:
+                    conn.commit()
+                return _shared_video_error_response(reason)
+            video, _ = shared_video_payload(conn, token, password_verified=password_verified, counted_in_session=counted_in_session)
+            _count_shared_video_access(conn, row, token, counted_in_session)
+            conn.commit()
+            return json_resp({"ok": True, "video": video})
+        finally:
+            conn.close()
+
+    @app.route("/api/videos/shared/<token>/playback", methods=["GET"])
+    def shared_video_playback(token):
+        conn = get_db()
+        try:
+            row, reason, _password_verified, _counted_in_session = _resolve_shared_video(conn, token)
+            if not row:
+                if reason in {"password_invalid", "password_locked"}:
+                    conn.commit()
+                return _shared_video_error_response(reason)
+            _count_shared_video_access(conn, row, token, _counted_in_session)
+            file_row = _load_stream_file(conn, file_id=row["cloud_file_id"])
+            payload = _playback_payload_for_file(conn, row=file_row, video_id=row["id"], shared_token=token)
+            payload["video_id"] = int(row["id"])
+            payload["can_prepare_stream"] = False
+            payload["prepare_stream_url"] = ""
+            conn.commit()
+            return json_resp({"ok": True, **payload})
+        finally:
+            conn.close()
+
+    @app.route("/api/videos/shared/<token>/stream", methods=["GET"])
+    def shared_video_stream(token):
+        conn = get_db()
+        try:
+            row, reason, _password_verified, _counted_in_session = _resolve_shared_video(conn, token)
+            if not row:
+                if reason in {"password_invalid", "password_locked"}:
+                    conn.commit()
+                return _shared_video_error_response(reason)
+            _count_shared_video_access(conn, row, token, _counted_in_session)
+            file_row = _load_stream_file(conn, file_id=row["cloud_file_id"])
+            path = resolve_file_storage_path(storage_root, file_row)
+            if not path.exists():
+                return json_resp({"ok": False, "msg": "實體檔案不存在", "error": "file_missing"}), 404
+            filename = file_row["original_filename_plain_for_public"] or row["title"] or "video"
+            mimetype = file_row["mime_type_plain_for_public"] or "video/mp4"
+            if is_e2ee_file(file_row):
+                conn.commit()
+                return send_file(path, as_attachment=False, download_name=filename, mimetype="application/octet-stream", conditional=True)
+            if is_server_encrypted_file(file_row):
+                raw = decrypt_server_encrypted_bytes(path, server_file_fernet)
+                conn.commit()
+                return _send_bytes_with_range(raw, download_name=filename, mimetype=mimetype, range_header=request.headers.get("Range"))
+            conn.commit()
+            return send_file(path, as_attachment=False, download_name=filename, mimetype=mimetype, conditional=True)
+        finally:
+            conn.close()
+
+    @app.route("/api/videos/shared/<token>/cover", methods=["GET"])
+    def shared_video_cover(token):
+        conn = get_db()
+        try:
+            row, reason, _password_verified, _counted_in_session = _resolve_shared_video(conn, token)
+            if not row:
+                if reason in {"password_invalid", "password_locked"}:
+                    conn.commit()
+                return _shared_video_error_response(reason)
+            _count_shared_video_access(conn, row, token, _counted_in_session)
+            cover_file_id = row["cover_file_id"]
+            if not cover_file_id:
+                return json_resp({"ok": False, "msg": "此影音沒有封面", "error": "cover_not_found"}), 404
+            cover_row = conn.execute(
+                "SELECT * FROM uploaded_files WHERE id=? AND deleted_at IS NULL",
+                (cover_file_id,),
+            ).fetchone()
+            if not cover_row:
+                return json_resp({"ok": False, "msg": "封面檔案不存在", "error": "cover_file_not_found"}), 404
+            path = resolve_file_storage_path(storage_root, cover_row)
+            if not path.exists():
+                return json_resp({"ok": False, "msg": "封面實體檔案不存在", "error": "cover_file_missing"}), 404
+            filename = cover_row["original_filename_plain_for_public"] or "cover"
+            mimetype = cover_row["mime_type_plain_for_public"] or mimetypes.guess_type(filename)[0] or "image/jpeg"
+            if is_server_encrypted_file(cover_row):
+                raw = decrypt_server_encrypted_bytes(path, server_file_fernet)
+                conn.commit()
+                return _send_bytes_with_range(raw, download_name=filename, mimetype=mimetype, range_header=request.headers.get("Range"))
+            conn.commit()
+            return send_file(path, as_attachment=False, download_name=filename, mimetype=mimetype, conditional=True)
+        finally:
+            conn.close()
+
+    @app.route("/api/videos/shared/<token>/e2ee-key", methods=["GET"])
+    def shared_video_e2ee_key(token):
+        conn = get_db()
+        try:
+            row, reason, _password_verified, _counted_in_session = _resolve_shared_video(conn, token)
+            if not row:
+                if reason in {"password_invalid", "password_locked"}:
+                    conn.commit()
+                return _shared_video_error_response(reason)
+            _count_shared_video_access(conn, row, token, _counted_in_session)
+            file_row = _load_stream_file(conn, file_id=row["cloud_file_id"])
+            if not is_e2ee_file(file_row):
+                return json_resp({"ok": False, "msg": "此影音不是端到端加密檔案"}), 400
+            if not str((row["share_wrapped_file_key_envelope"] if "share_wrapped_file_key_envelope" in row.keys() else row["wrapped_file_key_envelope"]) or "").strip():
+                return json_resp({"ok": False, "msg": "此 E2EE 影音尚未建立可分享的瀏覽器端解密授權", "error": "missing_share_key_wrap"}), 409
+            conn.commit()
+            return json_resp({
+                "ok": True,
+                "e2ee_share": {
+                    "file_id": file_row["id"],
+                    "privacy_mode": file_row["privacy_mode"],
+                    "encrypted_metadata": file_row["original_filename_encrypted"],
+                    "wrapped_file_key_envelope": row["share_wrapped_file_key_envelope"] if "share_wrapped_file_key_envelope" in row.keys() else row["wrapped_file_key_envelope"],
+                    "encryption_algorithm": file_row["encryption_algorithm"],
+                    "encryption_version": file_row["encryption_version"],
+                    "nonce": file_row["nonce"],
+                    "ciphertext_sha256": file_row["ciphertext_sha256"],
+                },
+            })
+        finally:
+            conn.close()
+
+    @app.route("/api/videos/shared/<token>/ciphertext", methods=["GET"])
+    def shared_video_ciphertext(token):
+        conn = get_db()
+        try:
+            row, reason, _password_verified, _counted_in_session = _resolve_shared_video(conn, token)
+            if not row:
+                if reason in {"password_invalid", "password_locked"}:
+                    conn.commit()
+                return _shared_video_error_response(reason)
+            _count_shared_video_access(conn, row, token, _counted_in_session)
+            file_row = _load_stream_file(conn, file_id=row["cloud_file_id"])
+            if not is_e2ee_file(file_row):
+                return json_resp({"ok": False, "msg": "此影音不是端到端加密檔案"}), 400
+            path = resolve_file_storage_path(storage_root, file_row)
+            if not path.exists():
+                return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
+            conn.commit()
+            return send_file(
+                path,
+                as_attachment=False,
+                download_name=file_row["original_filename_plain_for_public"] or "e2ee.bin",
+                mimetype="application/octet-stream",
+                conditional=True,
+            )
+        finally:
+            conn.close()
+
+    @app.route("/api/videos/shared/<token>/hls/master.m3u8", methods=["GET"])
+    def shared_video_hls_master(token):
+        conn = get_db()
+        try:
+            row, reason, _password_verified, _counted_in_session = _resolve_shared_video(conn, token)
+            if not row:
+                if reason in {"password_invalid", "password_locked"}:
+                    conn.commit()
+                return _shared_video_error_response(reason)
+            _count_shared_video_access(conn, row, token, _counted_in_session)
+            file_row = _load_stream_file(conn, file_id=row["cloud_file_id"])
+            asset = get_stream_status(conn, file_row=file_row)
+            if not asset or asset.get("status") != "ready" or not asset.get("master_manifest_path"):
+                return json_resp({"ok": False, "msg": "影音串流尚未準備完成", "error": "stream_not_ready"}), 409
+            path = resolve_file_storage_path(storage_root, {"storage_path": asset["master_manifest_path"]})
+            conn.commit()
+            return send_file(path, as_attachment=False, download_name="master.m3u8", mimetype="application/vnd.apple.mpegurl", conditional=True)
+        finally:
+            conn.close()
+
+    @app.route("/api/videos/shared/<token>/hls/<variant>/playlist.m3u8", methods=["GET"])
+    def shared_video_hls_variant_playlist(token, variant):
+        conn = get_db()
+        try:
+            row, reason, _password_verified, _counted_in_session = _resolve_shared_video(conn, token)
+            if not row:
+                if reason in {"password_invalid", "password_locked"}:
+                    conn.commit()
+                return _shared_video_error_response(reason)
+            _count_shared_video_access(conn, row, token, _counted_in_session)
+            file_row = _load_stream_file(conn, file_id=row["cloud_file_id"])
+            asset = get_stream_status(conn, file_row=file_row)
+            if not asset or asset.get("status") != "ready":
+                return json_resp({"ok": False, "msg": "影音串流尚未準備完成", "error": "stream_not_ready"}), 409
+            match = next((item for item in (asset.get("variants") or []) if item.get("name") == variant), None)
+            if not match:
+                return json_resp({"ok": False, "msg": "找不到串流變體", "error": "variant_not_found"}), 404
+            path = resolve_file_storage_path(storage_root, {"storage_path": match["playlist_path"]})
+            conn.commit()
+            return send_file(path, as_attachment=False, download_name="playlist.m3u8", mimetype="application/vnd.apple.mpegurl", conditional=True)
+        finally:
+            conn.close()
+
+    @app.route("/api/videos/shared/<token>/hls/<variant>/<segment>", methods=["GET"])
+    def shared_video_hls_segment(token, variant, segment):
+        conn = get_db()
+        try:
+            row, reason, _password_verified, _counted_in_session = _resolve_shared_video(conn, token)
+            if not row:
+                if reason in {"password_invalid", "password_locked"}:
+                    conn.commit()
+                return _shared_video_error_response(reason)
+            _count_shared_video_access(conn, row, token, _counted_in_session)
+            file_row = _load_stream_file(conn, file_id=row["cloud_file_id"])
+            asset = get_stream_status(conn, file_row=file_row)
+            if not asset or asset.get("status") != "ready":
+                return json_resp({"ok": False, "msg": "影音串流尚未準備完成", "error": "stream_not_ready"}), 409
+            match = next((item for item in (asset.get("variants") or []) if item.get("name") == variant), None)
+            if not match:
+                return json_resp({"ok": False, "msg": "找不到串流變體", "error": "variant_not_found"}), 404
+            if "/" in segment or ".." in segment:
+                return json_resp({"ok": False, "msg": "無效的串流片段", "error": "invalid_segment"}), 400
+            rel = next((item["path"] for item in (match.get("segments") or []) if item.get("filename") == segment), "")
+            if not rel:
+                if segment == "init.mp4" and match.get("init_segment_path"):
+                    rel = match["init_segment_path"]
+                else:
+                    return json_resp({"ok": False, "msg": "找不到串流片段", "error": "segment_not_found"}), 404
+            path = resolve_file_storage_path(storage_root, {"storage_path": rel})
+            mimetype = "video/mp4" if segment.endswith(".mp4") or segment.endswith(".m4s") else "application/octet-stream"
+            conn.commit()
+            return send_file(path, as_attachment=False, download_name=segment, mimetype=mimetype, conditional=True)
+        finally:
+            conn.close()
+
+    @app.route("/api/videos/<int:video_id>/share-link", methods=["PUT", "DELETE"])
+    @require_csrf
+    def video_share_link_manage(video_id):
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            video = get_video(conn, video_id, actor=actor)
+            if not video or not video.get("can_edit"):
+                return json_resp({"ok": False, "msg": "找不到影音", "error": "not_found"}), 404
+            if request.method == "DELETE":
+                revoke_video_share_link(conn, actor=actor, video_id=video_id)
+                conn.commit()
+                return json_resp({"ok": True, "share_link": None, "video_id": int(video_id)})
+            data = request.get_json(silent=True) or {}
+            sensitive = _reject_sensitive_share_fields(data)
+            if sensitive:
+                return sensitive
+            share_link, msg = ensure_video_share_link(
+                conn,
+                actor=actor,
+                video_id=video_id,
+                password=data["share_password"] if "share_password" in data else None,
+                wrapped_file_key_envelope=data["share_wrapped_file_key_envelope"] if "share_wrapped_file_key_envelope" in data else None,
+                expires_at=data["share_expires_at"] if "share_expires_at" in data else None,
+                max_views=data["share_max_views"] if "share_max_views" in data else None,
+                regenerate=bool(data.get("regenerate")),
+            )
+            if msg:
+                return json_resp({"ok": False, "msg": msg, "error": "share_link_update_failed"}), 400
+            updated = get_video(conn, video_id, actor=actor)
+            conn.commit()
+            return json_resp({"ok": True, "share_link": share_link, "video": updated})
+        except PermissionError as exc:
+            conn.rollback()
+            return _error_response(exc)
+        except ValueError as exc:
             conn.rollback()
             return _error_response(exc)
         finally:
@@ -455,6 +1114,8 @@ def register_video_routes(app, deps):
             ensure_media_stream_schema(conn)
             row = _load_stream_file(conn, file_id=file_id)
             _assert_stream_prepare_allowed(actor, row)
+            if is_e2ee_file(row):
+                return json_resp({"ok": False, "msg": "E2EE 影音只支援瀏覽器端解密播放，不建立伺服器端串流衍生檔", "error": "e2ee_direct_only"}), 409
             asset = prepare_stream_asset(
                 conn,
                 file_row=row,
@@ -507,9 +1168,9 @@ def register_video_routes(app, deps):
             if not video:
                 return json_resp({"ok": False, "msg": "找不到影片", "error": "not_found"}), 404
             row = _load_stream_file(conn, file_id=video["cloud_file_id"])
-            payload = stream_playback_payload(conn, file_row=row, video_id=video_id)
+            payload = _playback_payload_for_file(conn, row=row, video_id=video_id)
             payload["video_id"] = int(video_id)
-            payload["can_prepare_stream"] = bool(video.get("can_edit"))
+            payload["can_prepare_stream"] = bool(video.get("can_edit")) and not is_e2ee_file(row)
             payload["prepare_stream_url"] = video.get("prepare_stream_url") or ""
             return json_resp({"ok": True, **payload})
         except PermissionError as exc:
@@ -539,6 +1200,14 @@ def register_video_routes(app, deps):
                 return json_resp({"ok": False, "msg": "實體檔案不存在", "error": "file_missing"}), 404
             filename = row["original_filename_plain_for_public"] or video["title"] or "video"
             mimetype = row["mime_type_plain_for_public"] or "video/mp4"
+            if is_e2ee_file(row):
+                return send_file(
+                    path,
+                    as_attachment=False,
+                    download_name=filename,
+                    mimetype="application/octet-stream",
+                    conditional=True,
+                )
             if is_server_encrypted_file(row):
                 raw = decrypt_server_encrypted_bytes(path, server_file_fernet)
                 return _send_bytes_with_range(raw, download_name=filename, mimetype=mimetype, range_header=request.headers.get("Range"))

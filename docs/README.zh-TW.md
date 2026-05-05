@@ -2,7 +2,7 @@
 
 [English README](../README.md)
 
-**目前 Release ID：`2026.05.05-108`**
+**目前 Release ID：`2026.05.05-110`**
 
 這份文件是中文捷徑版入口，不再承擔全部教學。它只回答三件事：
 
@@ -76,6 +76,8 @@ python3 server.py
 - [API_REFERENCE.md](API_REFERENCE.md)
 - [CLI_ADMIN_PLAYBOOK.md](CLI_ADMIN_PLAYBOOK.md)
 - [For_developer.md](For_developer.md)
+- [ENCRYPTION_RUNTIME_BOUNDARY.md](ENCRYPTION_RUNTIME_BOUNDARY.md)
+- [EXTERNAL_API_COMMAND_MATRIX.md](EXTERNAL_API_COMMAND_MATRIX.md)
 - [WEB.md](WEB.md)
 - [TRADING.md](TRADING.md)
 - [VIDEO_PLATFORM.md](VIDEO_PLATFORM.md)

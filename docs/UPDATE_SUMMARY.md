@@ -1,6 +1,18 @@
 # Update Summary
 
-Release ID: `2026.05.05-108`
+Release ID: `2026.05.05-110`
+
+## 2026.05.05-110
+
+- Added [ENCRYPTION_RUNTIME_BOUNDARY.md](ENCRYPTION_RUNTIME_BOUNDARY.md) as the canonical operator/engineer trust-boundary document for `standard_plain`, `server_encrypted`, strict `e2ee`, and E2EE shared-video envelopes.
+- Added [EXTERNAL_API_COMMAND_MATRIX.md](EXTERNAL_API_COMMAND_MATRIX.md) to inventory the upstream exchange, Civitai, and ComfyUI commands currently used by the project, plus nearby capabilities not yet wired.
+- Added a regression proving that a runtime engineer can decrypt `server_encrypted` data with the runtime file key, but cannot decrypt strict `e2ee` data from runtime state alone.
+
+## 2026.05.05-109
+
+- Unlisted E2EE videos can now be shared without downgrading strict E2EE into server-side HLS: the owner enters the original E2EE password once at publish time, the browser re-wraps the file key into a share envelope, and viewers use the complete link fragment plus an optional second-layer share password for browser-side playback.
+- Added video share-link management APIs for owners/managers: revoke or regenerate share links, plus optional expiry time and maximum view count controls.
+- Shared video routes now reject forbidden secret fields (`raw_file_key`, `e2ee_password`, `vk`), enforce password retry lockouts, honor expiry / max views, and count access consistently across metadata/playback routes.
 
 ## 2026.05.05-108
 

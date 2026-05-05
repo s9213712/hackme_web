@@ -72,7 +72,7 @@
 - 設計目的：重用既有 storage/permission/PointsChain，而不是再造第二套媒體系統。
 - 使用方法：先上傳影片到 Cloud Drive，再從影音頁發布；不論是直接上傳影音，或從既有 Cloud Drive 影音檔發布，都可附上自訂封面圖。
 - 原理：影片 metadata 與互動是 presentation layer，實際檔案仍由 Cloud Drive 提供。
-- 失敗情境與提示：E2EE 檔案不可發布；server_encrypted 若遇舊 key 不可解會回 `decrypt_unavailable`。
+- 失敗情境與提示：strict E2EE 檔案不可作為一般 server-side/HLS 影音發布；若要發布成 `持連結可看` 的 E2EE 影音，擁有者需在瀏覽器端輸入一次原始 E2EE 密碼建立分享授權；server_encrypted 若遇舊 key 不可解會回 `decrypt_unavailable`。
 - 測試方式：發布、播放、private/unlisted、評論、打賞、權限與解密失敗情境。
 - 相關文件連結：[VIDEO_PLATFORM.md](VIDEO_PLATFORM.md), [VIDEO_STREAMING_ARCHITECTURE.md](VIDEO_STREAMING_ARCHITECTURE.md), [07_POINTSCHAIN.md](07_POINTSCHAIN.md), [11_QA_TESTING.md](11_QA_TESTING.md)
 

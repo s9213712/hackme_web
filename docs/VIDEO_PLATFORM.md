@@ -13,6 +13,8 @@ The formal large-media HLS / segmented streaming design is documented in
 Platform v1 is still the user-facing baseline, but Phase C-1 foundation is now
 implemented for prepared HLS playback, automatic stream preparation on eligible
 published media, and manual retry controls in the watch page.
+For the runtime trust boundary between `server_encrypted` and strict `e2ee`,
+see [ENCRYPTION_RUNTIME_BOUNDARY.md](ENCRYPTION_RUNTIME_BOUNDARY.md).
 
 ## Architecture
 
@@ -72,6 +74,10 @@ Current playback behavior:
 - owners and manager/root accounts can re-run stream preparation from the video
   watch page when a derivative is still pending or failed
 - browsers without native HLS still fall back to direct `/stream`
+- strict `e2ee` media stay on browser-side decryption and do not use
+  server-side HLS; when the owner publishes an unlisted E2EE video, the
+  browser re-wraps the file key into a share envelope and stores the fragment
+  key only in the URL fragment / local session state
 
 The stream endpoint resolves the file with the existing Cloud Drive safe path
 resolver, so path traversal, absolute paths, and storage-root escape are handled
@@ -81,7 +87,11 @@ Rules:
 
 - Only the file owner can publish a Cloud Drive file.
 - The file MIME type must start with `video/`.
-- E2EE files cannot be published as server-streamed videos.
+- E2EE files cannot be published as normal server-streamed videos.
+- E2EE files can be published as `持連結可看` shared videos when the browser
+  creates a wrapped share envelope at publish time.
+- The server never accepts `raw_file_key`, `e2ee_password`, or the fragment
+  key `vk`.
 - Blocked or quarantined files cannot be published.
 - Private videos require owner or manager/root access.
 - Unlisted videos are not listed publicly but can be opened by direct link.
@@ -112,6 +122,9 @@ video_tip_min_points
 
 ```text
 POST   /api/videos/publish
+POST   /api/videos/upload
+PUT    /api/videos/<id>/share-link
+DELETE /api/videos/<id>/share-link
 GET    /api/videos?sort=new|hot|trending&page=1
 GET    /api/videos/<id>
 POST   /api/media/<file_id>/prepare-stream
@@ -122,6 +135,11 @@ GET    /api/videos/<id>/stream
 GET    /api/videos/<id>/hls/master.m3u8
 GET    /api/videos/<id>/hls/<variant>/playlist.m3u8
 GET    /api/videos/<id>/hls/<variant>/<segment>
+POST   /api/videos/shared/<token>/unlock
+GET    /api/videos/shared/<token>
+GET    /api/videos/shared/<token>/playback
+GET    /api/videos/shared/<token>/e2ee-key
+GET    /api/videos/shared/<token>/ciphertext
 POST   /api/videos/<id>/view
 POST   /api/videos/<id>/like
 DELETE /api/videos/<id>/like
@@ -199,5 +217,7 @@ Current note:
 
 - HLS-based large-media streaming is no longer only a paper design. Phase C-1
   provides prepare/status/playback/HLS routes and derivative packaging for
-  plain or `server_encrypted` video, but direct `/stream` remains the fallback
-  and strict `e2ee` still stays non-streamable on the server side.
+  plain or `server_encrypted` video, but direct `/stream` remains the fallback.
+  Strict `e2ee` still stays non-streamable on the server side and instead uses
+  browser-side decryption with a wrapped share key when published as an
+  unlisted shared video.

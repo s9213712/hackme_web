@@ -52,11 +52,26 @@ def test_publish_media_requires_owner_and_video_or_audio_mime():
         publish_video(conn, actor=actor(1, "owner"), cloud_file_id="text-1", title="not video")
 
 
-def test_publish_rejects_e2ee_video_for_server_streaming():
+def test_publish_requires_share_envelope_for_e2ee_unlisted_and_rejects_public():
     conn = video_test_db()
     seed_cloud_file(conn, file_id="e2ee-video", owner_user_id=1, mime="video/mp4", privacy_mode="e2ee")
-    with pytest.raises(ValueError, match="E2EE"):
-        publish_video(conn, actor=actor(1, "owner"), cloud_file_id="e2ee-video", title="secret")
+    with pytest.raises(ValueError, match="瀏覽器端分享授權"):
+        publish_video(conn, actor=actor(1, "owner"), cloud_file_id="e2ee-video", title="secret", visibility="unlisted")
+    with pytest.raises(ValueError, match="不可設為公開"):
+        publish_video(conn, actor=actor(1, "owner"), cloud_file_id="e2ee-video", title="secret", visibility="public")
+
+    video = publish_video(
+        conn,
+        actor=actor(1, "owner"),
+        cloud_file_id="e2ee-video",
+        title="secret",
+        visibility="unlisted",
+        share_wrapped_file_key_envelope='{"alg":"AES-GCM","v":1,"nonce":"AAAAAAAAAAAAAAAA","ciphertext":"AQIDBA=="}',
+    )
+
+    assert video["visibility"] == "unlisted"
+    assert video["share_url"].startswith("/shared/videos/")
+    assert video["share_requires_fragment_key"] is True
 
 
 def test_publish_accepts_server_encrypted_video_for_server_streaming():
@@ -66,6 +81,46 @@ def test_publish_accepts_server_encrypted_video_for_server_streaming():
     video = publish_video(conn, actor=actor(1, "owner"), cloud_file_id="server-encrypted-video", title="encrypted stream")
 
     assert video["cloud_file_id"] == "server-encrypted-video"
+
+
+def test_publish_share_link_hash_uses_kdf_and_revoke_regenerate_controls():
+    conn = video_test_db()
+    seed_cloud_file(conn, file_id="e2ee-video", owner_user_id=1, mime="video/mp4", privacy_mode="e2ee")
+    first = publish_video(
+        conn,
+        actor=actor(1, "owner"),
+        cloud_file_id="e2ee-video",
+        title="secret",
+        visibility="unlisted",
+        share_password="ViewerPass123",
+        share_wrapped_file_key_envelope='{"alg":"AES-GCM","v":1,"nonce":"AAAAAAAAAAAAAAAA","ciphertext":"AQIDBA=="}',
+        share_expires_at="2026-12-31T23:59:59",
+        share_max_views=12,
+    )
+    share_row = conn.execute("SELECT * FROM video_share_links WHERE video_id=?", (first["id"],)).fetchone()
+    assert share_row["password_required"] == 1
+    assert str(share_row["password_hash"]).startswith(("argon2id$", "pbkdf2_sha256$"))
+    assert share_row["wrapped_file_key_envelope"]
+
+    from services.videos import ensure_video_share_link, revoke_video_share_link
+
+    updated, msg = ensure_video_share_link(
+        conn,
+        actor=actor(1, "owner"),
+        video_id=first["id"],
+        regenerate=True,
+        wrapped_file_key_envelope='{"alg":"AES-GCM","v":1,"nonce":"BBBBBBBBBBBBBBBB","ciphertext":"BQYHCA=="}',
+    )
+    assert msg is None
+    assert updated["url"] != first["share_url"]
+    assert updated["password_required"] is True
+
+    revoke_video_share_link(conn, actor=actor(1, "owner"), video_id=first["id"])
+    active = conn.execute(
+        "SELECT COUNT(*) AS total FROM video_share_links WHERE video_id=? AND revoked_at IS NULL",
+        (first["id"],),
+    ).fetchone()
+    assert int(active["total"]) == 0
 
 
 def _json_resp(payload, status=200):
@@ -378,8 +433,46 @@ def test_video_upload_rejects_e2ee_and_non_video(tmp_path):
     )
 
     assert e2ee.status_code == 400
-    assert e2ee.get_json()["error"] == "e2ee_not_streamable"
+    assert e2ee.get_json()["error"] == "unsupported_privacy_mode"
     assert text.status_code == 400
     assert text.get_json()["error"] == "not_media"
     assert bad_cover.status_code == 400
     assert bad_cover.get_json()["error"] == "cover_not_image"
+
+
+def test_video_publish_routes_reject_sensitive_share_secret_fields(tmp_path):
+    db_path = tmp_path / "publish-secrets.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_video_upload_db(db_path)
+    fernet = Fernet(Fernet.generate_key())
+    client = _build_video_upload_app(db_path, storage_root, fernet).test_client()
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute(
+            """
+            INSERT INTO uploaded_files (
+                id, owner_user_id, storage_path, privacy_mode, risk_level, scan_status,
+                original_filename_plain_for_public, mime_type_plain_for_public, size_bytes, created_at
+            ) VALUES (?, ?, ?, 'standard_plain', 'low', 'clean', ?, ?, 18, '2026-01-01T00:00:00')
+            """,
+            ("drive-video", 1, "users/1/drive-video/from-drive.mp4", "from-drive.mp4", "video/mp4"),
+        )
+        Path(storage_root / "users" / "1" / "drive-video").mkdir(parents=True, exist_ok=True)
+        (storage_root / "users" / "1" / "drive-video" / "from-drive.mp4").write_bytes(b"cloud-backed-video")
+        conn.commit()
+    finally:
+        conn.close()
+
+    response = client.post(
+        "/api/videos/publish",
+        json={
+            "cloud_file_id": "drive-video",
+            "title": "Cloud file with forbidden field",
+            "visibility": "public",
+            "raw_file_key": "never-allowed",
+        },
+    )
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "forbidden_share_secret_field"

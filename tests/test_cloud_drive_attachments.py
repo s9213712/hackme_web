@@ -11,7 +11,10 @@ from flask import Flask, jsonify, make_response
 
 import routes.files as files_routes
 from routes.files import register_file_routes
-from services.cloud_drive import ensure_cloud_drive_attachment_schema
+from services.cloud_drive import (
+    decrypt_server_encrypted_bytes,
+    ensure_cloud_drive_attachment_schema,
+)
 from services.member_levels import ensure_member_level_rules_schema
 from services.storage_albums import ensure_storage_album_schema
 from services.upload_security import ensure_upload_security_schema, update_cloud_drive_security_policy
@@ -260,6 +263,65 @@ def test_server_encrypted_upload_stores_ciphertext_but_downloads_plaintext(tmp_p
     download = client.get(f"/api/cloud-drive/files/{file_id}/download")
     assert download.status_code == 200
     assert download.data == b"secret note"
+
+
+def test_runtime_engineer_can_decrypt_server_encrypted_but_not_e2ee(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    fernet = Fernet(Fernet.generate_key())
+    client = _build_app(db_path, storage_root, actor_box, server_file_fernet=fernet).test_client()
+
+    server_res = client.post(
+        "/api/cloud-drive/upload",
+        data={"file": (io.BytesIO(b"server secret"), "note.txt"), "privacy_mode": "server_encrypted"},
+        content_type="multipart/form-data",
+    )
+    assert server_res.status_code == 200
+    server_file_id = server_res.get_json()["file"]["file_id"]
+
+    e2ee_ciphertext = b"browser-side-ciphertext"
+    e2ee_res = client.post(
+        "/api/cloud-drive/upload",
+        data={
+            "file": (io.BytesIO(e2ee_ciphertext), "vault.bin"),
+            "privacy_mode": "e2ee",
+            "encrypted_metadata": "sealed:metadata",
+            "encrypted_file_key": "sealed:owner-key",
+            "wrapped_by": "browser_passphrase_pbkdf2_v2",
+            "ciphertext_sha256": "a" * 64,
+            "encryption_algorithm": "AES-GCM",
+            "encryption_version": "browser-passphrase-v2",
+            "nonce": "nonce",
+        },
+        content_type="multipart/form-data",
+    )
+    assert e2ee_res.status_code == 200
+    e2ee_file_id = e2ee_res.get_json()["file"]["file_id"]
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    server_row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (server_file_id,)).fetchone()
+    e2ee_row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (e2ee_file_id,)).fetchone()
+    key_row = conn.execute(
+        "SELECT encrypted_file_key, wrapped_by FROM encrypted_file_keys WHERE file_id=?",
+        (e2ee_file_id,),
+    ).fetchone()
+    conn.close()
+
+    server_path = storage_root / server_row["storage_path"]
+    e2ee_path = storage_root / e2ee_row["storage_path"]
+
+    assert decrypt_server_encrypted_bytes(server_path, fernet) == b"server secret"
+    assert server_path.read_bytes() != b"server secret"
+
+    assert e2ee_path.read_bytes() == e2ee_ciphertext
+    assert key_row["encrypted_file_key"] == "sealed:owner-key"
+    assert key_row["wrapped_by"] == "browser_passphrase_pbkdf2_v2"
+    with pytest.raises(ValueError):
+        decrypt_server_encrypted_bytes(e2ee_path, fernet)
 
 
 def test_server_encrypted_media_preview_content_supports_range_requests(tmp_path):

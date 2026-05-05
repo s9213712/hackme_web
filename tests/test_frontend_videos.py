@@ -34,6 +34,17 @@ def test_video_platform_accepts_audio_media_in_ui():
     assert "function humanVideoStreamStatus" in videos_js
     assert "data-video-prepare-stream" in videos_js
     assert "prepareVideoStream" in videos_js
+    assert "VIDEO_SHARE_FRAGMENT_STORAGE_KEY" in videos_js
+    assert "buildVideoE2eeShareEnvelope" in videos_js
+    assert 'share_wrapped_file_key_envelope' in videos_js
+    assert 'share_expires_at' in videos_js
+    assert 'share_max_views' in videos_js
+    assert 'data-video-share-regenerate' in videos_js
+    assert 'data-video-share-revoke' in videos_js
+    assert 'share_fragment_key' in videos_js
+    assert 'getRememberedVideoShareFragment' in videos_js
+    assert '完整分享連結' in videos_js
+    assert '伺服器無法復原，只能重新產生分享' in videos_js
     assert ".video-audio-player" in styles
     assert ".video-thumb-image" in styles
 
@@ -54,6 +65,10 @@ def test_video_platform_uses_separate_watch_view_and_mobile_layout():
     assert 'event.preventDefault();' in videos_js
     assert 'class="video-thumb-media"' in videos_js
     assert "#t=0.1" in videos_js
+    assert 'share_requires_fragment_key' in videos_js
+    assert 'strict E2EE' in videos_js
+    assert '分享連結已重新產生' in videos_js
+    assert '分享連結已撤銷' in videos_js
     assert "@media (max-width: 720px)" in styles
     assert "#module-videos .admin-tools" in styles
     assert ".video-watch-topbar" in styles

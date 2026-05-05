@@ -11,9 +11,14 @@ and [05_FEATURES_OVERVIEW.md](05_FEATURES_OVERVIEW.md).
 This file is the deep technical reference, not the first stop for a new
 deployer.
 
+Related technical references:
+
+- [ENCRYPTION_RUNTIME_BOUNDARY.md](ENCRYPTION_RUNTIME_BOUNDARY.md)
+- [EXTERNAL_API_COMMAND_MATRIX.md](EXTERNAL_API_COMMAND_MATRIX.md)
+
 ## Release and Schema
 
-- Release ID: `2026.05.05-108`
+- Release ID: `2026.05.05-110`
 - Schema version: `29`
 - Release ID source: `services/release_info.py`
 - Runtime version endpoint: `GET /api/version`
@@ -332,7 +337,9 @@ Streaming notes:
 - plain video can now be prepared into HLS derivatives
 - `server_encrypted` video can be prepared through a controlled
   decrypt-and-package path
-- strict `e2ee` remains unavailable for server-side streaming derivatives
+- strict `e2ee` remains unavailable for server-side streaming derivatives, but
+  unlisted E2EE videos can now use browser-side shared playback with a wrapped
+  share envelope and `#vk=` fragment key
 - eligible public/unlisted or `server_encrypted` media now auto-prepare HLS
   derivatives on publish as a best-effort path
 - browsers without native HLS support still fall back to direct `/stream`

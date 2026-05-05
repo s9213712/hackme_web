@@ -85,6 +85,8 @@ Use `standard_plain` when users need normal cloud-drive behavior. Use
 scan/preview/download support is still required. Use E2EE when confidentiality
 is more important than server-side scanning and recovery support. E2EE files can
 still be previewed by the browser after the user enters the file password.
+For the runtime trust boundary between `server_encrypted` and strict `e2ee`,
+see [ENCRYPTION_RUNTIME_BOUNDARY.md](ENCRYPTION_RUNTIME_BOUNDARY.md).
 
 E2EE uses a user-entered file encryption password in the browser. The browser
 derives a wrapping key with PBKDF2-SHA256 and uses it to encrypt the per-file
@@ -144,15 +146,21 @@ future HLS / segmented streaming design for large media is documented in
 - users can like, comment, and tip
 - tips are recorded through PointsChain
 
-E2EE files are intentionally not publishable as server-streamed videos because
-the server cannot safely preview or stream plaintext without receiving
-decryptable material. Use normal or server-encrypted Cloud Drive modes for
-videos meant to be watched in the web player.
+E2EE files are intentionally not publishable as normal server-streamed / HLS
+videos because the server cannot safely preview or stream plaintext without
+receiving decryptable material. They can, however, be published as `持連結可看`
+shared videos: the owner enters the original E2EE password once at publish
+time, the browser unwraps the file key locally, and the browser re-wraps that
+file key into a share envelope that still keeps the server blind to the raw key
+and original password. For normal web-player HLS, use `standard_plain` or
+`server_encrypted`.
 
 If a `server_encrypted` file was written with an older server file key that is
 no longer available, the video page now fails safely: the cover endpoint shows
 an explanatory placeholder and stream/content endpoints return a structured
 `decrypt_unavailable` error instead of a generic server error.
+The strict E2EE publish/share boundary is also documented in
+[ENCRYPTION_RUNTIME_BOUNDARY.md](ENCRYPTION_RUNTIME_BOUNDARY.md).
 
 ### ComfyUI
 

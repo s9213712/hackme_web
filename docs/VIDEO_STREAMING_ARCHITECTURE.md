@@ -29,7 +29,9 @@ large files still show noticeable startup delay in one important path:
   memory before range slicing, which creates large startup latency and memory
   pressure for big video and audio files.
 - `e2ee`: the server cannot safely decrypt plaintext, so it cannot transparently
-  transcode or package a normal server-side streaming derivative.
+  transcode or package a normal server-side streaming derivative. E2EE videos
+  may still be published as `持連結可看` browser-side decrypted shares, but that
+  path remains distinct from HLS.
 
 Because of these constraints, browser-side buffering alone is not enough.
 
@@ -67,6 +69,8 @@ Today:
 - Cloud Drive preview for plain audio/video uses direct preview URLs.
 - Video Platform v1 streams media through `/api/videos/<id>/stream`.
 - E2EE files are intentionally blocked from server-streamed video publishing.
+  They may instead use browser-side share playback with a wrapped file key
+  envelope and a fragment-held viewer key.
 - `server_encrypted` files can be streamed, but the current path is expensive
   for large files because it decrypts the whole object before serving ranges.
 - Phase C-1 already adds:
@@ -148,13 +152,20 @@ Not allowed:
 
 Recommended product rule:
 
-- strict E2EE files remain non-publishable for server-streamed video
-- if the user wants platform streaming, they must explicitly create a separate
-  streamable derivative with weaker privacy semantics such as
+- strict E2EE files remain non-publishable for server-streamed video / HLS
+- unlisted E2EE video shares may use browser-side decryption only:
+  - owner enters the original E2EE password once at publish time
+  - browser unwraps the original file key locally
+  - browser generates a random 256-bit share key
+  - browser re-wraps the file key with AES-GCM and stores only the wrapped
+    envelope on the server
+  - the share key travels only in the URL fragment `#vk=...`
+- if the user wants platform-grade HLS / ABR streaming, they must explicitly
+  create a separate streamable derivative with weaker privacy semantics such as
   `server_encrypted`
 
 That keeps the original E2EE promise intact instead of silently downgrading
-security.
+security while still allowing users to share E2EE media.
 
 ## Storage Model
 

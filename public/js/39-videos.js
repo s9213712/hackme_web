@@ -7,10 +7,102 @@ const videoState = {
   viewRecordedFor: new Set(),
   browseLoaded: false,
 };
+let videoPublishDriveFiles = [];
+const VIDEO_SHARE_FRAGMENT_STORAGE_KEY = "hackme_web.video_share_fragments";
 
 function videoMsg(text, ok = true) {
   const el = $("video-msg");
   if (el) flash(el, text, ok);
+}
+
+function loadVideoShareFragments() {
+  try {
+    return JSON.parse(sessionStorage.getItem(VIDEO_SHARE_FRAGMENT_STORAGE_KEY) || "{}") || {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function saveVideoShareFragments(data) {
+  try {
+    sessionStorage.setItem(VIDEO_SHARE_FRAGMENT_STORAGE_KEY, JSON.stringify(data || {}));
+  } catch (_) {
+    // ignore session storage failure
+  }
+}
+
+function rememberVideoShareFragment(shareUrl, fragmentKey) {
+  const url = String(shareUrl || "").trim();
+  const fragment = String(fragmentKey || "").trim();
+  if (!url || !fragment) return;
+  const state = loadVideoShareFragments();
+  state[url] = fragment;
+  saveVideoShareFragments(state);
+}
+
+function getRememberedVideoShareFragment(shareUrl) {
+  const state = loadVideoShareFragments();
+  return String(state[String(shareUrl || "").trim()] || "").trim();
+}
+
+function forgetRememberedVideoShareFragment(shareUrl) {
+  const state = loadVideoShareFragments();
+  const key = String(shareUrl || "").trim();
+  if (!key || !Object.prototype.hasOwnProperty.call(state, key)) return;
+  delete state[key];
+  saveVideoShareFragments(state);
+}
+
+function videoSelectedDriveFile() {
+  const target = String($("video-publish-file")?.value || "");
+  return videoPublishDriveFiles.find((file) => String(file?.id || "") === target) || null;
+}
+
+function videoShareBytesToBase64(bytes) {
+  const buffer = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
+  let binary = "";
+  for (let i = 0; i < buffer.length; i += 1) binary += String.fromCharCode(buffer[i]);
+  return btoa(binary);
+}
+
+function videoShareBytesToBase64Url(bytes) {
+  return videoShareBytesToBase64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+async function buildVideoE2eeShareEnvelope(fileId) {
+  if (!window.crypto?.subtle || typeof fetchDriveE2eeKey !== "function" || typeof unwrapDriveFileKey !== "function" || typeof getDriveE2eeSessionPassphrase !== "function" || typeof rememberDriveE2eeSessionPassphrase !== "function") {
+    throw new Error("目前瀏覽器無法建立 E2EE 影音分享授權。");
+  }
+  if (!getCsrfToken()) {
+    await fetchCsrfToken();
+  }
+  const csrf = getCsrfToken() || "";
+  const e2ee = await fetchDriveE2eeKey(fileId, csrf);
+  const passphrase = await getDriveE2eeSessionPassphrase(
+    fileId,
+    "請輸入此 E2EE 影音原始加密密碼。密碼只會在瀏覽器端使用，用來建立分享授權。"
+  );
+  if (!passphrase) {
+    throw new Error("E2EE 影音分享需要先輸入原始加密密碼。");
+  }
+  const fileKey = await unwrapDriveFileKey(e2ee.encrypted_file_key, passphrase);
+  rememberDriveE2eeSessionPassphrase(fileId, passphrase);
+  const rawFileKey = await window.crypto.subtle.exportKey("raw", fileKey);
+  const shareKeyBytes = new Uint8Array(32);
+  window.crypto.getRandomValues(shareKeyBytes);
+  const shareKey = await window.crypto.subtle.importKey("raw", shareKeyBytes, { name: "AES-GCM", length: 256 }, false, ["encrypt"]);
+  const nonce = new Uint8Array(12);
+  window.crypto.getRandomValues(nonce);
+  const ciphertext = await window.crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, shareKey, rawFileKey);
+  return {
+    share_wrapped_file_key_envelope: JSON.stringify({
+      alg: "AES-GCM",
+      v: 1,
+      nonce: videoShareBytesToBase64(nonce),
+      ciphertext: videoShareBytesToBase64(new Uint8Array(ciphertext)),
+    }),
+    share_fragment_key: videoShareBytesToBase64Url(shareKeyBytes),
+  };
 }
 
 function videoDisplayName(file) {
@@ -111,10 +203,12 @@ async function loadVideoPublishFiles() {
     const json = await res.json().catch(() => ({}));
     if (!res.ok || !json.ok) throw new Error(json.msg || `HTTP ${res.status}`);
     const files = (json.files || []).filter(isCloudMediaFile);
+    videoPublishDriveFiles = files;
     select.innerHTML = files.length
       ? files.map((file) => `<option value="${sanitize(file.id)}">${sanitize(videoDisplayName(file))}</option>`).join("")
       : `<option value="">雲端硬碟目前沒有可發布的影音檔</option>`;
   } catch (err) {
+    videoPublishDriveFiles = [];
     select.innerHTML = `<option value="">影音檔讀取失敗</option>`;
     videoMsg(err.message || "影音檔讀取失敗", false);
   }
@@ -124,14 +218,28 @@ async function publishVideoFromDrive() {
   const button = $("video-publish-btn");
   const directFile = $("video-upload-file")?.files?.[0] || null;
   const coverFile = $("video-cover-file")?.files?.[0] || null;
+  const sharePassword = ($("video-share-password")?.value || "").trim();
+  const selectedFile = directFile ? null : videoSelectedDriveFile();
   const payload = {
     cloud_file_id: $("video-publish-file")?.value || "",
     title: ($("video-publish-title")?.value || "").trim(),
     description: ($("video-publish-description")?.value || "").trim(),
     visibility: $("video-publish-visibility")?.value || "public",
+    share_password: sharePassword,
+    share_expires_at: ($("video-share-expires-at")?.value || "").trim(),
+    share_max_views: ($("video-share-max-views")?.value || "").trim(),
   };
   if (!directFile && !payload.cloud_file_id) return videoMsg("請選擇要直接上傳的影音檔，或選擇雲端硬碟中的影音檔", false);
   if (!payload.title && !directFile) return videoMsg("請輸入影音標題", false);
+  let e2eeShare = null;
+  if (!directFile && selectedFile?.privacy_mode === "e2ee" && payload.visibility === "unlisted") {
+    try {
+      e2eeShare = await buildVideoE2eeShareEnvelope(selectedFile.id);
+      payload.share_wrapped_file_key_envelope = e2eeShare.share_wrapped_file_key_envelope;
+    } catch (err) {
+      return videoMsg(err.message || "E2EE 影音分享授權建立失敗", false);
+    }
+  }
   if (button) button.disabled = true;
   try {
     let res;
@@ -141,6 +249,9 @@ async function publishVideoFromDrive() {
       form.append("title", payload.title || directFile.name.replace(/\.[^.]+$/, ""));
       form.append("description", payload.description);
       form.append("visibility", payload.visibility);
+      form.append("share_password", payload.share_password);
+      form.append("share_expires_at", payload.share_expires_at);
+      form.append("share_max_views", payload.share_max_views);
       form.append("privacy_mode", $("video-upload-privacy-mode")?.value || "standard_plain");
       if (coverFile) form.append("cover", coverFile);
       videoMsg("影音檔上傳中，請稍候...", true);
@@ -155,6 +266,10 @@ async function publishVideoFromDrive() {
       form.append("title", payload.title);
       form.append("description", payload.description);
       form.append("visibility", payload.visibility);
+      form.append("share_password", payload.share_password);
+      form.append("share_expires_at", payload.share_expires_at);
+      form.append("share_max_views", payload.share_max_views);
+      if (payload.share_wrapped_file_key_envelope) form.append("share_wrapped_file_key_envelope", payload.share_wrapped_file_key_envelope);
       form.append("cover", coverFile);
       videoMsg("影音封面上傳中，請稍候...", true);
       res = await apiFetch(API + "/videos/publish", {
@@ -176,6 +291,15 @@ async function publishVideoFromDrive() {
     if (input) input.value = "";
     const coverInput = $("video-cover-file");
     if (coverInput) coverInput.value = "";
+    const shareInput = $("video-share-password");
+    if (shareInput) shareInput.value = "";
+    const shareMaxViews = $("video-share-max-views");
+    if (shareMaxViews) shareMaxViews.value = "";
+    const shareExpiresAt = $("video-share-expires-at");
+    if (shareExpiresAt) shareExpiresAt.value = "";
+    if (e2eeShare && json.video?.share_url) {
+      rememberVideoShareFragment(json.video.share_url, e2eeShare.share_fragment_key);
+    }
     if (json.stream_warning) {
       videoMsg(`影音已發布；${json.stream_warning}`, false);
     } else if (json.stream_asset?.status === "ready") {
@@ -251,6 +375,13 @@ function browserSupportsNativeHls(mediaType = "video") {
 }
 
 function playbackSourceForVideo(video, playback) {
+  if (playback?.mode === "e2ee_direct") {
+    return {
+      mode: "e2ee_direct",
+      src: "",
+      statusText: "端到端加密影音會在瀏覽器端解密播放，速度會較慢。",
+    };
+  }
   if (!playback || playback.mode !== "hls") {
     return {
       mode: "direct",
@@ -275,6 +406,7 @@ function playbackSourceForVideo(video, playback) {
 function humanVideoStreamStatus(playback) {
   const status = playback?.status || {};
   const streamStatus = String(status.status || "").trim();
+  if (streamStatus === "direct_only") return status.error_message || "此影音只支援瀏覽器端解密播放。";
   if (streamStatus === "ready") return "HLS 串流已就緒";
   if (streamStatus === "processing") return "HLS 串流準備中";
   if (streamStatus === "failed") return `HLS 串流失敗：${status.error_message || "請稍後重試"}`;
@@ -303,6 +435,83 @@ async function prepareVideoStream(fileId, videoId) {
   }
 }
 
+async function updateVideoShareLink(video, options = {}) {
+  const payload = {};
+  if (Object.prototype.hasOwnProperty.call(options, "share_password")) payload.share_password = options.share_password;
+  if (Object.prototype.hasOwnProperty.call(options, "share_wrapped_file_key_envelope")) payload.share_wrapped_file_key_envelope = options.share_wrapped_file_key_envelope;
+  if (Object.prototype.hasOwnProperty.call(options, "share_expires_at")) payload.share_expires_at = options.share_expires_at;
+  if (Object.prototype.hasOwnProperty.call(options, "share_max_views")) payload.share_max_views = options.share_max_views;
+  if (options.regenerate) payload.regenerate = true;
+  const res = await apiFetch(`/api/videos/${encodeURIComponent(video.id)}/share-link`, {
+    method: "PUT",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json.ok) throw new Error(json.msg || `HTTP ${res.status}`);
+  return json;
+}
+
+async function regenerateVideoShareLink(video) {
+  if (!video?.id || video?.visibility !== "unlisted") return;
+  let e2eeShare = null;
+  try {
+    if (video.share_requires_fragment_key) {
+      e2eeShare = await buildVideoE2eeShareEnvelope(video.cloud_file_id);
+    }
+    const json = await updateVideoShareLink(video, {
+      regenerate: true,
+      ...(e2eeShare ? { share_wrapped_file_key_envelope: e2eeShare.share_wrapped_file_key_envelope } : {}),
+    });
+    if (video.share_url) forgetRememberedVideoShareFragment(video.share_url);
+    if (e2eeShare && json.share_link?.url) {
+      rememberVideoShareFragment(json.share_link.url, e2eeShare.share_fragment_key);
+    }
+    videoMsg("分享連結已重新產生；若有舊連結請停止使用。", true);
+    await loadVideos(videoState.sort);
+    await openVideoDetail(video.id);
+  } catch (err) {
+    videoMsg(err.message || "重新產生分享連結失敗", false);
+  }
+}
+
+async function revokeVideoShareLink(video) {
+  if (!video?.id || !video?.share_url) return;
+  try {
+    const res = await apiFetch(`/api/videos/${encodeURIComponent(video.id)}/share-link`, {
+      method: "DELETE",
+      credentials: "same-origin",
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) throw new Error(json.msg || `HTTP ${res.status}`);
+    forgetRememberedVideoShareFragment(video.share_url);
+    videoMsg("分享連結已撤銷。", true);
+    await loadVideos(videoState.sort);
+    await openVideoDetail(video.id);
+  } catch (err) {
+    videoMsg(err.message || "撤銷分享連結失敗", false);
+  }
+}
+
+async function hydrateVideoE2eePlayer(video, playback) {
+  const player = $("video-player");
+  if (!player) return;
+  if (!getCsrfToken()) {
+    await fetchCsrfToken();
+  }
+  const csrf = getCsrfToken() || "";
+  const decrypted = await buildDriveE2eePreview(video.cloud_file_id, csrf);
+  if (!decrypted?.blob) {
+    throw new Error("E2EE 影音解密播放失敗");
+  }
+  player.src = URL.createObjectURL(decrypted.blob);
+  const status = $("video-playback-status");
+  if (status) {
+    status.textContent = "已在瀏覽器端以原始 E2EE 密碼解密播放；本次登入 session 內密碼會暫存在瀏覽器記憶體。";
+  }
+}
+
 function renderVideoDetail(video, comments = [], playback = null) {
   const detail = $("video-detail");
   if (!detail) return;
@@ -311,7 +520,7 @@ function renderVideoDetail(video, comments = [], playback = null) {
   const playbackSource = playbackSourceForVideo(video, playback);
   const playbackStatus = playback?.status || {};
   const streamStatusText = humanVideoStreamStatus(playback);
-  const streamActions = video.can_edit
+  const streamActions = video.can_edit && playback?.mode !== "e2ee_direct"
     ? `
       <div class="drive-file-actions" style="justify-content:flex-start;margin-top:.45rem;">
         <button class="btn btn-sm" type="button" data-video-prepare-stream="${sanitize(video.cloud_file_id || "")}">
@@ -323,6 +532,41 @@ function renderVideoDetail(video, comments = [], playback = null) {
   const player = video.media_type === "audio"
     ? `<audio id="video-player" class="video-player video-audio-player" controls preload="metadata" src="${sanitize(playbackSource.src)}"></audio>`
     : `<video id="video-player" class="video-player" controls playsinline preload="metadata" src="${sanitize(playbackSource.src)}"></video>`;
+  const rememberedFragment = video.share_requires_fragment_key && video.share_url
+    ? getRememberedVideoShareFragment(video.share_url)
+    : "";
+  const shareInfo = video.can_edit && video.visibility === "unlisted"
+    ? `
+      <details class="drive-collapsible-panel" open>
+        <summary>
+          <span>
+            <span class="drive-card-title">分享控制</span>
+            <span class="drive-card-sub">${video.share_url ? "已建立持連結分享" : "尚未建立分享"}</span>
+          </span>
+        </summary>
+        <div class="drive-collapsible-body">
+          <div class="drive-card-sub">${sanitize(video.share_url || "發布後會自動建立分享連結")}</div>
+          ${video.share_requires_fragment_key ? `
+            <div class="field-help">此影音採 strict E2EE。觀看者需使用完整分享連結；若設定第二層分享密碼，還需要「完整連結 + 分享密碼」。伺服器端不提供轉檔、縮圖或內容掃描。</div>
+            <div class="field-help">${rememberedFragment
+              ? "本次登入 session 已保存此分享的片段金鑰，可直接複製完整連結。"
+              : "此裝置目前沒有保存片段金鑰；若完整連結遺失，伺服器無法復原，只能重新產生分享。"}
+            </div>
+          ` : `
+            <div class="field-help">非 E2EE 分享可使用 HLS 或直接串流；若有設定分享密碼，觀看者需要先解鎖。</div>
+          `}
+          <div class="drive-card-sub">${video.share_password_required ? "已設定分享密碼" : "未設定分享密碼"}</div>
+          <div class="drive-card-sub">${video.share_expires_at ? `到期時間：${sanitize(video.share_expires_at)}` : "到期時間：未限制"}</div>
+          <div class="drive-card-sub">${Number(video.share_max_views || 0) > 0 ? `最大觀看次數：${Number(video.share_max_views || 0)}` : "最大觀看次數：不限"}</div>
+          <div class="drive-file-actions" style="justify-content:flex-start;margin-top:.65rem;">
+            <button class="btn btn-sm" type="button" data-video-copy-link="${Number(video.id || 0)}">複製分享連結</button>
+            <button class="btn btn-sm" type="button" data-video-share-regenerate="${Number(video.id || 0)}">重新產生分享</button>
+            <button class="btn btn-sm btn-danger" type="button" data-video-share-revoke="${Number(video.id || 0)}">撤銷分享</button>
+          </div>
+        </div>
+      </details>
+    `
+    : "";
   detail.innerHTML = `
     <div class="video-watch-topbar">
       <button class="btn btn-sm" type="button" id="video-back-btn">← 返回影音列表</button>
@@ -335,6 +579,7 @@ function renderVideoDetail(video, comments = [], playback = null) {
           ${sanitize(playbackSource.statusText || streamStatusText)}
         </div>
         ${streamActions}
+        ${shareInfo}
         <div class="drive-card-heading">
           <div>
             <div class="drive-card-title">${sanitize(video.title || "未命名影片")}</div>
@@ -389,6 +634,13 @@ function renderVideoDetail(video, comments = [], playback = null) {
     </div>
   `;
   bindVideoPlayerView(video.id);
+  if (playback?.mode === "e2ee_direct") {
+    hydrateVideoE2eePlayer(video, playback).catch((err) => {
+      const status = $("video-playback-status");
+      if (status) status.textContent = err.message || "E2EE 影音解密播放失敗";
+      videoMsg(err.message || "E2EE 影音解密播放失敗", false);
+    });
+  }
 }
 
 function bindVideoPlayerView(videoId) {
@@ -505,7 +757,20 @@ async function addVideoComment(videoId) {
 }
 
 async function copyVideoLink(videoId) {
-  const url = `${location.origin}${location.pathname}#videos/${encodeURIComponent(videoId)}`;
+  const video = videoState.current && Number(videoState.current.id || 0) === Number(videoId || 0)
+    ? videoState.current
+    : (videoState.videos || []).find((item) => Number(item.id || 0) === Number(videoId || 0));
+  let url = `${location.origin}${location.pathname}#videos/${encodeURIComponent(videoId)}`;
+  if (video?.visibility === "unlisted" && video?.share_url) {
+    url = `${location.origin}${video.share_url}`;
+    if (video.share_requires_fragment_key) {
+      const fragment = getRememberedVideoShareFragment(video.share_url);
+      if (!fragment) {
+        return videoMsg("此 E2EE 分享連結的本機片段金鑰不可復原；若遺失只能重新產生分享。", false);
+      }
+      url += `#vk=${fragment}`;
+    }
+  }
   try {
     await navigator.clipboard.writeText(url);
     videoMsg("連結已複製", true);
@@ -575,6 +840,16 @@ document.addEventListener("click", (event) => {
   const prepare = event.target.closest("[data-video-prepare-stream]");
   if (prepare) {
     prepareVideoStream(prepare.dataset.videoPrepareStream, videoState.current?.id || 0);
+    return;
+  }
+  const regenerateShare = event.target.closest("[data-video-share-regenerate]");
+  if (regenerateShare) {
+    regenerateVideoShareLink(videoState.current);
+    return;
+  }
+  const revokeShare = event.target.closest("[data-video-share-revoke]");
+  if (revokeShare) {
+    revokeVideoShareLink(videoState.current);
     return;
   }
   if (event.target.closest("#video-refresh-btn")) {

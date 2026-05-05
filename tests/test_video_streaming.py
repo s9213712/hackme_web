@@ -1,3 +1,4 @@
+import io
 import sqlite3
 from pathlib import Path
 
@@ -51,6 +52,7 @@ def _init_db(db_path):
 def _build_app(db_path, storage_root, fernet, current_user):
     app = Flask(__name__)
     app.testing = True
+    app.secret_key = "video-streaming-test-secret"
 
     def get_db():
         conn = sqlite3.connect(db_path)
@@ -129,6 +131,22 @@ def _fake_hls_package(source_path, *, derivative_dir, media_type, ffmpeg_bin="ff
         encoding="utf-8",
     )
     return variant_name, variant_dir / "playlist.m3u8", variant_dir / "init.mp4"
+
+
+def _mark_file_as_e2ee(conn, file_id):
+    conn.execute(
+        """
+        UPDATE uploaded_files
+        SET privacy_mode='e2ee',
+            original_filename_encrypted='sealed:metadata',
+            encryption_algorithm='AES-GCM',
+            encryption_version='browser_passphrase_pbkdf2_v2',
+            nonce='nonce-123',
+            ciphertext_sha256=?
+        WHERE id=?
+        """,
+        ("a" * 64, file_id),
+    )
 
 
 def test_prepare_stream_asset_builds_hls_derivatives_for_plain_video(tmp_path, monkeypatch):
@@ -422,3 +440,276 @@ def test_video_publish_keeps_success_when_auto_prepare_fails(tmp_path, monkeypat
     assert body["video"]["title"] == "Movie 2"
     assert body["stream_asset"] is None
     assert "HLS 串流準備失敗" in body["stream_warning"]
+
+
+def test_video_upload_server_encrypted_auto_prepares_stream_asset(tmp_path, monkeypatch):
+    db_path = tmp_path / "upload-route.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    fernet = Fernet(Fernet.generate_key())
+    owner_client = _build_app(
+        db_path,
+        storage_root,
+        fernet,
+        current_user={"id": 1, "username": "alice", "role": "user", "member_level": "trusted", "effective_level": "trusted"},
+    ).test_client()
+
+    called = {}
+
+    def fake_prepare(conn, *, file_row, storage_root, server_file_fernet=None, ffprobe_bin="ffprobe", ffmpeg_bin="ffmpeg"):
+        called["file_id"] = file_row["id"]
+        called["privacy_mode"] = file_row["privacy_mode"]
+        return {"status": "ready", "master_manifest_path": f"media_derivatives/{file_row['id']}/master.m3u8"}
+
+    monkeypatch.setattr(video_routes, "prepare_stream_asset", fake_prepare)
+    response = owner_client.post(
+        "/api/videos/upload",
+        data={
+            "video": (io.BytesIO(b"server-encrypted-video"), "clip.mp4", "video/mp4"),
+            "title": "Encrypted upload",
+            "visibility": "public",
+            "privacy_mode": "server_encrypted",
+        },
+        content_type="multipart/form-data",
+    )
+    body = response.get_json()
+
+    assert response.status_code == 200
+    assert called["file_id"] == body["file"]["file_id"]
+    assert called["privacy_mode"] == "server_encrypted"
+    assert body["stream_asset"]["status"] == "ready"
+    assert body["stream_warning"] == ""
+
+
+def test_prepare_stream_auto_policy_distinguishes_plain_server_encrypted_and_e2ee(tmp_path):
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        CREATE TABLE uploaded_files (
+            id TEXT PRIMARY KEY,
+            owner_user_id INTEGER NOT NULL,
+            storage_path TEXT NOT NULL,
+            privacy_mode TEXT NOT NULL,
+            risk_level TEXT NOT NULL,
+            scan_status TEXT NOT NULL,
+            original_filename_plain_for_public TEXT,
+            mime_type_plain_for_public TEXT,
+            size_bytes INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT,
+            deleted_at TEXT
+        )
+        """
+    )
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _seed_uploaded_file(conn, storage_root, file_id="plain-video", owner_user_id=1, filename="plain.mp4", mime="video/mp4", privacy_mode="standard_plain")
+    _seed_uploaded_file(conn, storage_root, file_id="encrypted-video", owner_user_id=1, filename="enc.mp4", mime="video/mp4", privacy_mode="server_encrypted")
+    _seed_uploaded_file(conn, storage_root, file_id="e2ee-video", owner_user_id=1, filename="secret.mp4", mime="video/mp4", privacy_mode="e2ee")
+
+    plain = conn.execute("SELECT * FROM uploaded_files WHERE id='plain-video'").fetchone()
+    encrypted = conn.execute("SELECT * FROM uploaded_files WHERE id='encrypted-video'").fetchone()
+    e2ee = conn.execute("SELECT * FROM uploaded_files WHERE id='e2ee-video'").fetchone()
+
+    assert media_streaming.should_auto_prepare_stream(plain, visibility="public")["enabled"] is True
+    assert media_streaming.should_auto_prepare_stream(plain, visibility="private")["enabled"] is False
+    assert media_streaming.should_auto_prepare_stream(encrypted, visibility="private")["enabled"] is True
+    assert media_streaming.should_auto_prepare_stream(e2ee, visibility="public")["enabled"] is False
+
+
+def test_shared_e2ee_video_requires_password_fragment_and_exposes_browser_side_payload(tmp_path):
+    db_path = tmp_path / "shared-e2ee.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    owner_conn = sqlite3.connect(db_path)
+    owner_conn.row_factory = sqlite3.Row
+    try:
+        _seed_uploaded_file(owner_conn, storage_root, file_id="e2ee-video", owner_user_id=1, filename="secret.mp4", mime="video/mp4", privacy_mode="e2ee", payload=b"ciphertext-video")
+        _mark_file_as_e2ee(owner_conn, "e2ee-video")
+        video = publish_video(
+            owner_conn,
+            actor={"id": 1, "username": "alice", "role": "user"},
+            cloud_file_id="e2ee-video",
+            title="Secret",
+            visibility="unlisted",
+            share_password="SharePass123",
+            share_wrapped_file_key_envelope='{"alg":"AES-GCM","v":1,"nonce":"AAAAAAAAAAAAAAAA","ciphertext":"AQIDBA=="}',
+            share_max_views=5,
+        )
+        owner_conn.commit()
+        token = video["share_url"].rsplit("/", 1)[-1]
+    finally:
+        owner_conn.close()
+
+    client = _build_app(db_path, storage_root, Fernet(Fernet.generate_key()), current_user=None).test_client()
+
+    locked = client.get(f"/api/videos/shared/{token}")
+    assert locked.status_code == 401
+    assert locked.get_json()["reason"] == "password_required"
+
+    forbidden = client.get(f"/api/videos/shared/{token}?vk=should-not-arrive")
+    assert forbidden.status_code == 400
+    assert forbidden.get_json()["reason"] == "forbidden_fragment_transport"
+
+    secret_field = client.post(
+        f"/api/videos/shared/{token}/unlock",
+        json={"password": "SharePass123", "raw_file_key": "forbidden"},
+    )
+    assert secret_field.status_code == 400
+    assert secret_field.get_json()["error"] == "forbidden_share_secret_field"
+
+    bad_password = client.post(
+        f"/api/videos/shared/{token}/unlock",
+        json={"password": "wrong-pass"},
+    )
+    assert bad_password.status_code == 403
+    assert bad_password.get_json()["reason"] == "password_invalid"
+
+    unlocked = client.post(
+        f"/api/videos/shared/{token}/unlock",
+        json={"password": "SharePass123"},
+    )
+    assert unlocked.status_code == 200
+    assert unlocked.get_json()["ok"] is True
+
+    detail = client.get(f"/api/videos/shared/{token}")
+    assert detail.status_code == 200
+    video_payload = detail.get_json()["video"]
+    assert video_payload["share_password_required"] is True
+    assert video_payload["share_requires_fragment_key"] is True
+    assert video_payload["share_max_views"] == 5
+
+    playback = client.get(f"/api/videos/shared/{token}/playback")
+    assert playback.status_code == 200
+    playback_json = playback.get_json()
+    assert playback_json["mode"] == "e2ee_direct"
+    assert playback_json["requires_fragment_key"] is True
+
+    e2ee_key = client.get(f"/api/videos/shared/{token}/e2ee-key")
+    assert e2ee_key.status_code == 200
+    key_payload = e2ee_key.get_json()["e2ee_share"]
+    assert key_payload["wrapped_file_key_envelope"]
+    assert "encrypted_file_key" not in key_payload
+    assert key_payload["ciphertext_sha256"] == "a" * 64
+
+    ciphertext = client.get(f"/api/videos/shared/{token}/ciphertext")
+    assert ciphertext.status_code == 200
+    assert ciphertext.data == b"ciphertext-video"
+
+
+def test_shared_video_password_lock_max_views_and_revoke_routes(tmp_path):
+    db_path = tmp_path / "shared-guardrails.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    owner_conn = sqlite3.connect(db_path)
+    owner_conn.row_factory = sqlite3.Row
+    try:
+        _seed_uploaded_file(owner_conn, storage_root, file_id="plain-video", owner_user_id=1, filename="movie.mp4", mime="video/mp4", privacy_mode="standard_plain", payload=b"plain-video")
+        video = publish_video(
+            owner_conn,
+            actor={"id": 1, "username": "alice", "role": "user"},
+            cloud_file_id="plain-video",
+            title="Plain",
+            visibility="unlisted",
+            share_password="SharePass123",
+            share_max_views=1,
+        )
+        owner_conn.commit()
+        video_id = video["id"]
+        token = video["share_url"].rsplit("/", 1)[-1]
+    finally:
+        owner_conn.close()
+
+    anonymous = _build_app(db_path, storage_root, Fernet(Fernet.generate_key()), current_user=None).test_client()
+    for _ in range(5):
+        denied = anonymous.post(f"/api/videos/shared/{token}/unlock", json={"password": "wrong-pass"})
+        assert denied.status_code == 403
+    locked = anonymous.post(f"/api/videos/shared/{token}/unlock", json={"password": "wrong-pass"})
+    assert locked.status_code == 429
+    assert locked.get_json()["reason"] == "password_locked"
+
+    owner_client = _build_app(
+        db_path,
+        storage_root,
+        Fernet(Fernet.generate_key()),
+        current_user={"id": 1, "username": "alice", "role": "user", "member_level": "trusted", "effective_level": "trusted"},
+    ).test_client()
+    regenerated = owner_client.put(f"/api/videos/{video_id}/share-link", json={"regenerate": True})
+    assert regenerated.status_code == 200
+    new_share_url = regenerated.get_json()["share_link"]["url"]
+    new_token = new_share_url.rsplit("/", 1)[-1]
+    assert new_token != token
+    assert regenerated.get_json()["share_link"]["password_required"] is True
+
+    first_viewer = _build_app(db_path, storage_root, Fernet(Fernet.generate_key()), current_user=None).test_client()
+    unlock = first_viewer.post(f"/api/videos/shared/{new_token}/unlock", json={"password": "SharePass123"})
+    assert unlock.status_code == 200
+    ok = first_viewer.get(f"/api/videos/shared/{new_token}/playback")
+    assert ok.status_code == 200
+
+    second_viewer = _build_app(db_path, storage_root, Fernet(Fernet.generate_key()), current_user=None).test_client()
+    second_unlock = second_viewer.post(f"/api/videos/shared/{new_token}/unlock", json={"password": "SharePass123"})
+    assert second_unlock.status_code == 410
+    exhausted = second_unlock
+    assert exhausted.status_code == 410
+    assert exhausted.get_json()["reason"] == "view_limit_reached"
+
+    revoked = owner_client.delete(f"/api/videos/{video_id}/share-link")
+    assert revoked.status_code == 200
+    revoked_view = _build_app(db_path, storage_root, Fernet(Fernet.generate_key()), current_user=None).test_client().get(f"/api/videos/shared/{new_token}")
+    assert revoked_view.status_code == 404
+
+
+def test_shared_video_regeneration_for_e2ee_requires_new_browser_side_envelope(tmp_path):
+    db_path = tmp_path / "shared-e2ee-regenerate.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    owner_conn = sqlite3.connect(db_path)
+    owner_conn.row_factory = sqlite3.Row
+    try:
+        _seed_uploaded_file(owner_conn, storage_root, file_id="e2ee-video", owner_user_id=1, filename="secret.mp4", mime="video/mp4", privacy_mode="e2ee", payload=b"ciphertext-video")
+        _mark_file_as_e2ee(owner_conn, "e2ee-video")
+        video = publish_video(
+            owner_conn,
+            actor={"id": 1, "username": "alice", "role": "user"},
+            cloud_file_id="e2ee-video",
+            title="Secret",
+            visibility="unlisted",
+            share_wrapped_file_key_envelope='{"alg":"AES-GCM","v":1,"nonce":"AAAAAAAAAAAAAAAA","ciphertext":"AQIDBA=="}',
+        )
+        owner_conn.commit()
+        video_id = video["id"]
+    finally:
+        owner_conn.close()
+
+    owner_client = _build_app(
+        db_path,
+        storage_root,
+        Fernet(Fernet.generate_key()),
+        current_user={"id": 1, "username": "alice", "role": "user", "member_level": "trusted", "effective_level": "trusted"},
+    ).test_client()
+
+    missing = owner_client.put(f"/api/videos/{video_id}/share-link", json={"regenerate": True})
+    assert missing.status_code == 400
+    assert "瀏覽器端分享授權" in missing.get_json()["msg"]
+
+    forbidden = owner_client.put(f"/api/videos/{video_id}/share-link", json={"regenerate": True, "e2ee_password": "nope"})
+    assert forbidden.status_code == 400
+    assert forbidden.get_json()["error"] == "forbidden_share_secret_field"
+
+    regenerated = owner_client.put(
+        f"/api/videos/{video_id}/share-link",
+        json={
+            "regenerate": True,
+            "share_wrapped_file_key_envelope": '{"alg":"AES-GCM","v":1,"nonce":"BBBBBBBBBBBBBBBB","ciphertext":"BQYHCA=="}',
+        },
+    )
+    assert regenerated.status_code == 200
+    body = regenerated.get_json()
+    assert body["share_link"]["requires_fragment_key"] is True
+    assert body["video"]["share_requires_fragment_key"] is True

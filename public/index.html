@@ -897,9 +897,25 @@
                   <option value="private">私人</option>
                 </select>
               </div>
+              <div class="field">
+                <label>分享密碼（選填）</label>
+                <input type="password" id="video-share-password" maxlength="128" autocomplete="new-password" placeholder="持連結可看時可再加一層密碼" />
+                <div class="field-help">未設定時，只要拿到完整分享連結即可觀看；若是 E2EE 影音，完整連結仍會包含只留在瀏覽器端的片段金鑰。</div>
+              </div>
+              <div class="field">
+                <label>分享有效到（選填）</label>
+                <input type="datetime-local" id="video-share-expires-at" />
+                <div class="field-help">超過時間後分享連結會失效。</div>
+              </div>
+              <div class="field">
+                <label>最大觀看次數（選填）</label>
+                <input type="number" id="video-share-max-views" min="0" max="1000000" step="1" placeholder="0 代表不限次數" />
+                <div class="field-help">分享頁首次成功載入會計一次；0 代表不限。</div>
+              </div>
               <div class="field" style="grid-column:1/-1;">
                 <label>描述</label>
                 <textarea id="video-publish-description" rows="3" maxlength="2000" placeholder="影音說明、章節或注意事項"></textarea>
+                <div class="field-help">E2EE 影音在發布時只會要求擁有者輸入一次原始加密密碼，之後會在瀏覽器端重新包裝成分享授權；若遺失完整連結中的片段金鑰，伺服器無法復原，只能重新產生分享。</div>
               </div>
               <div class="field">
                 <label>&nbsp;</label>

@@ -238,7 +238,9 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | POST | `/api/videos/publish` | logged-in | 發布影音 |
 | POST | `/api/videos/upload` | logged-in | 上傳影音 |
 | GET | `/api/videos` | anonymous | 影音列表 |
-| GET/PUT/DELETE | `/api/videos/<video_id>` | logged-in / manager | 單一影音 |
+| GET | `/api/videos/<video_id>` | logged-in / manager | 單一影音 |
+| PUT | `/api/videos/<video_id>/share-link` | logged-in / manager | 更新或重建分享連結 |
+| DELETE | `/api/videos/<video_id>/share-link` | logged-in / manager | 撤銷分享連結 |
 | POST | `/api/media/<file_id>/prepare-stream` | logged-in / manager | 建立 HLS 衍生檔 |
 | GET | `/api/media/<file_id>/stream-status` | logged-in / manager | 查影音衍生狀態 |
 | GET | `/api/videos/<video_id>/playback` | anonymous | 取得 direct / HLS 播放決策 |
@@ -252,6 +254,17 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | GET | `/api/videos/<video_id>/comments` | anonymous | 評論列表 |
 | POST | `/api/videos/<video_id>/comment` | logged-in | 留言 |
 | POST | `/api/videos/<video_id>/tip` | logged-in | 打賞 |
+| GET | `/shared/videos/<token>` | anonymous | 分享頁 HTML |
+| POST | `/api/videos/shared/<token>/unlock` | anonymous | 驗證第二層分享密碼 |
+| GET | `/api/videos/shared/<token>` | anonymous | 分享影音 metadata |
+| GET | `/api/videos/shared/<token>/playback` | anonymous | 分享影音 playback 決策 |
+| GET | `/api/videos/shared/<token>/stream` | anonymous | 分享影音 direct stream |
+| GET | `/api/videos/shared/<token>/cover` | anonymous | 分享影音封面 |
+| GET | `/api/videos/shared/<token>/e2ee-key` | anonymous | E2EE 分享 envelope metadata |
+| GET | `/api/videos/shared/<token>/ciphertext` | anonymous | E2EE 分享密文內容 |
+| GET | `/api/videos/shared/<token>/hls/master.m3u8` | anonymous | 分享影音 HLS master |
+| GET | `/api/videos/shared/<token>/hls/<variant>/playlist.m3u8` | anonymous | 分享影音 HLS variant |
+| GET | `/api/videos/shared/<token>/hls/<variant>/<segment>` | anonymous | 分享影音 HLS segment |
 
 ### Games
 
