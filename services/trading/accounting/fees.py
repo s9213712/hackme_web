@@ -1,8 +1,5 @@
-from decimal import Decimal, ROUND_HALF_UP
+"""Compatibility wrapper around :mod:`services.trading.accounting.core`."""
 
+from services.trading.accounting.core import fee_points
 
-def fee_points(notional, fee_rate_percent):
-    exact_fee = (Decimal(int(notional or 0)) * Decimal(str(fee_rate_percent or 0))) / Decimal("100")
-    if exact_fee <= 0:
-        return 0
-    return int(exact_fee.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+__all__ = ["fee_points"]

@@ -22,11 +22,11 @@ from services.points_chain import (
 )
 from services.server_mode_context import SmV2Context, current_ctx
 from services.server_mode_routing import resolve_table
-from services.trading.accounting.fees import fee_points
-from services.trading.accounting.notional import notional_points
-from services.trading.accounting.units import (
+from services.trading.accounting.core import (
     _decimal_units,
     _quantity_step_units_from_precision,
+    fee_points,
+    notional_points,
     quantity_to_units,
     units_to_quantity,
 )
@@ -37,6 +37,22 @@ from services.trading.constants import (
     DEFAULT_SPOT_FEE_RATE_PERCENT,
     GRID_PREVIEW_YELLOW_NET_SPREAD_PERCENT,
     POINT_MICRO_SCALE,
+)
+from services.trading.settings_schema import (
+    TRADING_ROOT_BOOL_SETTING_KEYS,
+    apr_pair_from_raw,
+    bool_input_text,
+    choice_input_value,
+    daily_from_apr,
+    float_input_text,
+    int_input_text,
+    interval_pair_from_raw,
+    raw_bool_setting,
+    raw_choice_setting,
+    raw_float_setting,
+    raw_int_setting,
+    text_input_value,
+    write_apr_from_daily,
 )
 from services.trading.validators import (
     _apr_percent_from_daily,
@@ -2469,56 +2485,62 @@ class TradingEngineService:
     def _settings_payload(self, conn):
         rows = conn.execute("SELECT key, value, updated_at, updated_by FROM trading_settings ORDER BY key").fetchall()
         raw = {row["key"]: row["value"] for row in rows}
-        borrow_apr_btc_eth = _to_float(raw.get("trading.borrow_apr_btc_eth_percent", str(DEFAULT_BORROW_APR_BTC_ETH_PERCENT)), name="borrow_apr_btc_eth_percent", minimum=0, maximum=100000)
-        borrow_apr_usdt_points = _to_float(raw.get("trading.borrow_apr_usdt_points_percent", str(DEFAULT_BORROW_APR_USDT_POINTS_PERCENT)), name="borrow_apr_usdt_points_percent", minimum=0, maximum=100000)
-        borrow_interest_interval_hours = _to_int(raw.get("trading.borrow_interest_interval_hours", str(DEFAULT_BORROW_INTEREST_INTERVAL_HOURS)), name="borrow_interest_interval_hours", minimum=1, maximum=168)
-        borrow_interest_minimum_hours = _to_int(raw.get("trading.borrow_interest_minimum_hours", str(DEFAULT_BORROW_INTEREST_MINIMUM_HOURS)), name="borrow_interest_minimum_hours", minimum=1, maximum=168)
+        borrow_apr_btc_eth, borrow_apr_usdt_points = apr_pair_from_raw(
+            raw,
+            btc_eth_default=DEFAULT_BORROW_APR_BTC_ETH_PERCENT,
+            usdt_points_default=DEFAULT_BORROW_APR_USDT_POINTS_PERCENT,
+        )
+        borrow_interest_interval_hours, borrow_interest_minimum_hours = interval_pair_from_raw(
+            raw,
+            interval_default=DEFAULT_BORROW_INTEREST_INTERVAL_HOURS,
+            minimum_default=DEFAULT_BORROW_INTEREST_MINIMUM_HOURS,
+        )
         return {
-            "enabled": str(raw.get("trading.enabled", "true")).lower() in {"true", "1", "yes"},
-            "futures_enabled": str(raw.get("trading.futures_enabled", "false")).lower() in {"true", "1", "yes"},
-            "pvp_matching_enabled": str(raw.get("trading.pvp_matching_enabled", "false")).lower() in {"true", "1", "yes"},
-            "borrowing_enabled": str(raw.get("trading.borrowing_enabled", "true")).lower() in {"true", "1", "yes"},
+            "enabled": raw_bool_setting(raw, "trading.enabled", default=True),
+            "futures_enabled": raw_bool_setting(raw, "trading.futures_enabled", default=False),
+            "pvp_matching_enabled": raw_bool_setting(raw, "trading.pvp_matching_enabled", default=False),
+            "borrowing_enabled": raw_bool_setting(raw, "trading.borrowing_enabled", default=True),
             "borrow_apr_btc_eth_percent": borrow_apr_btc_eth,
             "borrow_apr_usdt_points_percent": borrow_apr_usdt_points,
-            "borrow_interest_percent_daily": _daily_percent_from_apr(borrow_apr_usdt_points),
-            "borrow_interest_pool_pressure_multiplier": _to_float(raw.get("trading.borrow_interest_pool_pressure_multiplier", str(TRADING_FUNDING_POOL_PRESSURE_MULTIPLIER)), name="borrow_interest_pool_pressure_multiplier", minimum=0, maximum=100),
+            "borrow_interest_percent_daily": daily_from_apr(borrow_apr_usdt_points),
+            "borrow_interest_pool_pressure_multiplier": raw_float_setting(raw, "trading.borrow_interest_pool_pressure_multiplier", TRADING_FUNDING_POOL_PRESSURE_MULTIPLIER, name="borrow_interest_pool_pressure_multiplier", minimum=0, maximum=100),
             "borrow_interest_interval_hours": borrow_interest_interval_hours,
             "borrow_interest_minimum_hours": borrow_interest_minimum_hours,
-            "margin_long_financing_percent": _to_float(raw.get("trading.margin_long_financing_percent", str(MARGIN_LONG_FINANCING_RATE_PERCENT)), name="margin_long_financing_percent", minimum=0, maximum=100),
-            "short_collateral_percent": _to_float(raw.get("trading.short_collateral_percent", str(SHORT_COLLATERAL_RATE_PERCENT)), name="short_collateral_percent", minimum=0, maximum=100),
-            "margin_liquidation_enabled": str(raw.get("trading.margin_liquidation_enabled", "true")).lower() in {"true", "1", "yes"},
-            "shadow_funding_publish_enabled": str(raw.get("trading.shadow_funding_publish_enabled", "false")).lower() in {"true", "1", "yes"},
-            "margin_maintenance_percent": _to_float(raw.get("trading.margin_maintenance_percent", "15"), name="margin_maintenance_percent", minimum=0, maximum=100),
-            "grid_fee_discount_percent": _to_float(raw.get("trading.grid_fee_discount_percent", str(DEFAULT_GRID_FEE_DISCOUNT_PERCENT)), name="grid_fee_discount_percent", minimum=0, maximum=100),
-            "max_price_staleness_seconds": _to_int(raw.get("trading.max_price_staleness_seconds", "900"), name="max_price_staleness_seconds", minimum=0, maximum=86400),
+            "margin_long_financing_percent": raw_float_setting(raw, "trading.margin_long_financing_percent", MARGIN_LONG_FINANCING_RATE_PERCENT, name="margin_long_financing_percent", minimum=0, maximum=100),
+            "short_collateral_percent": raw_float_setting(raw, "trading.short_collateral_percent", SHORT_COLLATERAL_RATE_PERCENT, name="short_collateral_percent", minimum=0, maximum=100),
+            "margin_liquidation_enabled": raw_bool_setting(raw, "trading.margin_liquidation_enabled", default=True),
+            "shadow_funding_publish_enabled": raw_bool_setting(raw, "trading.shadow_funding_publish_enabled", default=False),
+            "margin_maintenance_percent": raw_float_setting(raw, "trading.margin_maintenance_percent", "15", name="margin_maintenance_percent", minimum=0, maximum=100),
+            "grid_fee_discount_percent": raw_float_setting(raw, "trading.grid_fee_discount_percent", DEFAULT_GRID_FEE_DISCOUNT_PERCENT, name="grid_fee_discount_percent", minimum=0, maximum=100),
+            "max_price_staleness_seconds": raw_int_setting(raw, "trading.max_price_staleness_seconds", "900", name="max_price_staleness_seconds", minimum=0, maximum=86400),
             "price_source": raw.get("trading.price_source", FUSED_PRICE_SOURCE),
-            "price_fusion_mode": raw.get("trading.price_fusion_mode", "auto_depth") if raw.get("trading.price_fusion_mode", "auto_depth") in PRICE_FUSION_MODES else "auto_depth",
+            "price_fusion_mode": raw_choice_setting(raw, "trading.price_fusion_mode", "auto_depth", allowed=PRICE_FUSION_MODES),
             "price_fusion_manual_weights": _normalize_price_fusion_manual_weights(_json_loads(raw.get("trading.price_fusion_manual_weights_json"), DEFAULT_PRICE_FUSION_MANUAL_WEIGHTS)),
             "price_fusion_provider_labels": dict(PRICE_PROVIDER_LABELS),
             "price_fusion_providers": list(WEIGHTED_PRICE_PROVIDERS),
             "price_fusion_live_markets": self._list_live_price_market_symbols(conn),
-            "price_fusion_depth_band_percent": _to_float(raw.get("trading.price_fusion_depth_band_percent", str(DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT)), name="price_fusion_depth_band_percent", minimum=0.1, maximum=10),
-            "price_fusion_depth_levels": _to_int(raw.get("trading.price_fusion_depth_levels", str(DEFAULT_PRICE_FUSION_DEPTH_LEVELS)), name="price_fusion_depth_levels", minimum=10, maximum=MAX_PRICE_FUSION_DEPTH_LEVELS),
-            "price_fusion_min_orderbook_coverage_percent": _to_float(raw.get("trading.price_fusion_min_orderbook_coverage_percent", str(DEFAULT_PRICE_FUSION_MIN_ORDERBOOK_COVERAGE_PERCENT)), name="price_fusion_min_orderbook_coverage_percent", minimum=0.1, maximum=10),
-            "price_fusion_max_single_provider_weight_percent": _to_float(raw.get("trading.price_fusion_max_single_provider_weight_percent", str(DEFAULT_PRICE_FUSION_MAX_SINGLE_PROVIDER_WEIGHT_PERCENT)), name="price_fusion_max_single_provider_weight_percent", minimum=0, maximum=100),
+            "price_fusion_depth_band_percent": raw_float_setting(raw, "trading.price_fusion_depth_band_percent", DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT, name="price_fusion_depth_band_percent", minimum=0.1, maximum=10),
+            "price_fusion_depth_levels": raw_int_setting(raw, "trading.price_fusion_depth_levels", DEFAULT_PRICE_FUSION_DEPTH_LEVELS, name="price_fusion_depth_levels", minimum=10, maximum=MAX_PRICE_FUSION_DEPTH_LEVELS),
+            "price_fusion_min_orderbook_coverage_percent": raw_float_setting(raw, "trading.price_fusion_min_orderbook_coverage_percent", DEFAULT_PRICE_FUSION_MIN_ORDERBOOK_COVERAGE_PERCENT, name="price_fusion_min_orderbook_coverage_percent", minimum=0.1, maximum=10),
+            "price_fusion_max_single_provider_weight_percent": raw_float_setting(raw, "trading.price_fusion_max_single_provider_weight_percent", DEFAULT_PRICE_FUSION_MAX_SINGLE_PROVIDER_WEIGHT_PERCENT, name="price_fusion_max_single_provider_weight_percent", minimum=0, maximum=100),
             "price_fusion_max_provider_age_seconds": DEFAULT_PRICE_FUSION_MAX_PROVIDER_AGE_SECONDS,
             "price_fusion_max_provider_latency_ms": DEFAULT_PRICE_FUSION_MAX_PROVIDER_LATENCY_MS,
             "price_fusion_max_midpoint_deviation_percent": DEFAULT_PRICE_FUSION_MAX_MIDPOINT_DEVIATION_PERCENT,
             "price_fusion_min_side_balance_ratio_percent": round(DEFAULT_PRICE_FUSION_MIN_SIDE_BALANCE_RATIO * 100.0, 2),
-            "price_fusion_min_provider_count": _to_int(raw.get("trading.price_fusion_min_provider_count", str(DEFAULT_PRICE_FUSION_MIN_PROVIDER_COUNT)), name="price_fusion_min_provider_count", minimum=1, maximum=len(WEIGHTED_PRICE_PROVIDERS)),
-            "price_stream_ws_enabled": str(raw.get("trading.price_stream_ws_enabled", "true")).lower() in {"true", "1", "yes"},
-            "price_stream_ws_stale_seconds": _to_int(raw.get("trading.price_stream_ws_stale_seconds", str(DEFAULT_PRICE_STREAM_WS_STALE_SECONDS)), name="price_stream_ws_stale_seconds", minimum=1, maximum=120),
-            "btc_trade_enabled": str(raw.get("trading.btc_trade_enabled", "false")).lower() in {"true", "1", "yes"},
+            "price_fusion_min_provider_count": raw_int_setting(raw, "trading.price_fusion_min_provider_count", DEFAULT_PRICE_FUSION_MIN_PROVIDER_COUNT, name="price_fusion_min_provider_count", minimum=1, maximum=len(WEIGHTED_PRICE_PROVIDERS)),
+            "price_stream_ws_enabled": raw_bool_setting(raw, "trading.price_stream_ws_enabled", default=True),
+            "price_stream_ws_stale_seconds": raw_int_setting(raw, "trading.price_stream_ws_stale_seconds", DEFAULT_PRICE_STREAM_WS_STALE_SECONDS, name="price_stream_ws_stale_seconds", minimum=1, maximum=120),
+            "btc_trade_enabled": raw_bool_setting(raw, "trading.btc_trade_enabled", default=False),
             "btc_trade_project_dir": raw.get("trading.btc_trade_project_dir", ""),
             "btc_trade_repo_url": raw.get("trading.btc_trade_repo_url", "https://github.com/s9213712/BTC_trade.git"),
             "btc_trade_branch": raw.get("trading.btc_trade_branch", "strategy/v15b-plus"),
-            "bot_auto_scan_enabled": str(raw.get("trading.bot_auto_scan_enabled", "true")).lower() in {"true", "1", "yes"},
-            "bot_auto_scan_interval_seconds": _to_int(raw.get("trading.bot_auto_scan_interval_seconds", "30"), name="bot_auto_scan_interval_seconds", minimum=10, maximum=3600),
-            "bot_auto_scan_limit": _to_int(raw.get("trading.bot_auto_scan_limit", "50"), name="bot_auto_scan_limit", minimum=1, maximum=200),
-            "bot_audit_enabled": str(raw.get("trading.bot_audit_enabled", "true")).lower() in {"true", "1", "yes"},
-            "bot_audit_interval_seconds": _to_int(raw.get("trading.bot_audit_interval_seconds", str(TRADING_BOT_AUDIT_INTERVAL_SECONDS)), name="bot_audit_interval_seconds", minimum=60, maximum=86400),
-            "bot_audit_limit": _to_int(raw.get("trading.bot_audit_limit", str(TRADING_BOT_AUDIT_LIMIT)), name="bot_audit_limit", minimum=1, maximum=200),
-            "bot_audit_min_enabled_seconds": _to_int(raw.get("trading.bot_audit_min_enabled_seconds", str(TRADING_BOT_AUDIT_MIN_ENABLED_SECONDS)), name="bot_audit_min_enabled_seconds", minimum=3600, maximum=604800),
+            "bot_auto_scan_enabled": raw_bool_setting(raw, "trading.bot_auto_scan_enabled", default=True),
+            "bot_auto_scan_interval_seconds": raw_int_setting(raw, "trading.bot_auto_scan_interval_seconds", "30", name="bot_auto_scan_interval_seconds", minimum=10, maximum=3600),
+            "bot_auto_scan_limit": raw_int_setting(raw, "trading.bot_auto_scan_limit", "50", name="bot_auto_scan_limit", minimum=1, maximum=200),
+            "bot_audit_enabled": raw_bool_setting(raw, "trading.bot_audit_enabled", default=True),
+            "bot_audit_interval_seconds": raw_int_setting(raw, "trading.bot_audit_interval_seconds", TRADING_BOT_AUDIT_INTERVAL_SECONDS, name="bot_audit_interval_seconds", minimum=60, maximum=86400),
+            "bot_audit_limit": raw_int_setting(raw, "trading.bot_audit_limit", TRADING_BOT_AUDIT_LIMIT, name="bot_audit_limit", minimum=1, maximum=200),
+            "bot_audit_min_enabled_seconds": raw_int_setting(raw, "trading.bot_audit_min_enabled_seconds", TRADING_BOT_AUDIT_MIN_ENABLED_SECONDS, name="bot_audit_min_enabled_seconds", minimum=3600, maximum=604800),
             "raw": raw,
         }
 
@@ -2548,21 +2570,9 @@ class TradingEngineService:
             settings = settings if isinstance(settings, dict) else {}
             market_updates = markets if isinstance(markets, list) else []
             setting_changes = {}
-            bool_keys = {
-                "enabled": "trading.enabled",
-                "futures_enabled": "trading.futures_enabled",
-                "pvp_matching_enabled": "trading.pvp_matching_enabled",
-                "borrowing_enabled": "trading.borrowing_enabled",
-                "margin_liquidation_enabled": "trading.margin_liquidation_enabled",
-                "shadow_funding_publish_enabled": "trading.shadow_funding_publish_enabled",
-                "bot_auto_scan_enabled": "trading.bot_auto_scan_enabled",
-                "bot_audit_enabled": "trading.bot_audit_enabled",
-                "btc_trade_enabled": "trading.btc_trade_enabled",
-                "price_stream_ws_enabled": "trading.price_stream_ws_enabled",
-            }
-            for input_key, storage_key in bool_keys.items():
+            for input_key, storage_key in TRADING_ROOT_BOOL_SETTING_KEYS.items():
                 if input_key in settings:
-                    value = "true" if bool(settings.get(input_key)) else "false"
+                    value = bool_input_text(settings, input_key)
                     conn.execute(
                         "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
                         (storage_key, value, now, self._actor_id(actor)),
@@ -2574,14 +2584,14 @@ class TradingEngineService:
             ):
                 if input_key in settings:
                     numeric = _to_float(settings.get(input_key), name=input_key, minimum=0, maximum=100)
-                    value = str(numeric)
+                    value = float_input_text(settings, input_key, minimum=0, maximum=100)
                     conn.execute(
                         "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
                         (storage_key, value, now, self._actor_id(actor)),
                     )
                     setting_changes[storage_key] = value
                     if input_key == "borrow_apr_usdt_points_percent":
-                        legacy_daily = str(_daily_percent_from_apr(numeric))
+                        legacy_daily = str(daily_from_apr(numeric))
                         conn.execute(
                             "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
                             ("trading.borrow_interest_percent_daily", legacy_daily, now, self._actor_id(actor)),
@@ -2589,19 +2599,20 @@ class TradingEngineService:
                         setting_changes["trading.borrow_interest_percent_daily"] = legacy_daily
             if "borrow_interest_percent_daily" in settings and "borrow_apr_usdt_points_percent" not in settings:
                 legacy_daily = _to_float(settings.get("borrow_interest_percent_daily"), name="borrow_interest_percent_daily", minimum=0, maximum=100)
-                apr_value = str(_apr_percent_from_daily(legacy_daily))
+                apr_payload = write_apr_from_daily(settings, now=now, actor_id=self._actor_id(actor))
+                apr_value = apr_payload["trading.borrow_apr_usdt_points_percent"]
                 conn.execute(
                     "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
                     ("trading.borrow_apr_usdt_points_percent", apr_value, now, self._actor_id(actor)),
                 )
                 conn.execute(
                     "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
-                    ("trading.borrow_interest_percent_daily", str(legacy_daily), now, self._actor_id(actor)),
+                    ("trading.borrow_interest_percent_daily", apr_payload["trading.borrow_interest_percent_daily"], now, self._actor_id(actor)),
                 )
                 setting_changes["trading.borrow_apr_usdt_points_percent"] = apr_value
-                setting_changes["trading.borrow_interest_percent_daily"] = str(legacy_daily)
+                setting_changes["trading.borrow_interest_percent_daily"] = apr_payload["trading.borrow_interest_percent_daily"]
             if "borrow_interest_pool_pressure_multiplier" in settings:
-                value = str(_to_float(settings.get("borrow_interest_pool_pressure_multiplier"), name="borrow_interest_pool_pressure_multiplier", minimum=0, maximum=100))
+                value = float_input_text(settings, "borrow_interest_pool_pressure_multiplier", minimum=0, maximum=100)
                 conn.execute(
                     "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
                     ("trading.borrow_interest_pool_pressure_multiplier", value, now, self._actor_id(actor)),
@@ -2612,7 +2623,7 @@ class TradingEngineService:
                 ("borrow_interest_minimum_hours", "trading.borrow_interest_minimum_hours"),
             ):
                 if input_key in settings:
-                    value = str(_to_int(settings.get(input_key), name=input_key, minimum=1, maximum=168))
+                    value = int_input_text(settings, input_key, minimum=1, maximum=168)
                     conn.execute(
                         "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
                         (storage_key, value, now, self._actor_id(actor)),
@@ -2623,81 +2634,87 @@ class TradingEngineService:
                 ("short_collateral_percent", "trading.short_collateral_percent"),
             ):
                 if input_key in settings:
-                    value = str(_to_float(settings.get(input_key), name=input_key, minimum=0, maximum=100))
+                    value = float_input_text(settings, input_key, minimum=0, maximum=100)
                     conn.execute(
                         "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
                         (storage_key, value, now, self._actor_id(actor)),
                     )
                     setting_changes[storage_key] = value
             if "margin_maintenance_percent" in settings:
-                value = str(_to_float(settings.get("margin_maintenance_percent"), name="margin_maintenance_percent", minimum=0, maximum=100))
+                value = float_input_text(settings, "margin_maintenance_percent", minimum=0, maximum=100)
                 conn.execute(
                     "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
                     ("trading.margin_maintenance_percent", value, now, self._actor_id(actor)),
                 )
                 setting_changes["trading.margin_maintenance_percent"] = value
             if "grid_fee_discount_percent" in settings:
-                value = str(_to_float(settings.get("grid_fee_discount_percent"), name="grid_fee_discount_percent", minimum=0, maximum=100))
+                value = float_input_text(settings, "grid_fee_discount_percent", minimum=0, maximum=100)
                 conn.execute(
                     "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
                     ("trading.grid_fee_discount_percent", value, now, self._actor_id(actor)),
                 )
                 setting_changes["trading.grid_fee_discount_percent"] = value
             if "max_price_staleness_seconds" in settings:
-                value = str(_to_int(settings.get("max_price_staleness_seconds"), name="max_price_staleness_seconds", minimum=0, maximum=86400))
+                value = int_input_text(settings, "max_price_staleness_seconds", minimum=0, maximum=86400)
                 conn.execute(
                     "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
                     ("trading.max_price_staleness_seconds", value, now, self._actor_id(actor)),
                 )
                 setting_changes["trading.max_price_staleness_seconds"] = value
             if "bot_auto_scan_interval_seconds" in settings:
-                value = str(_to_int(settings.get("bot_auto_scan_interval_seconds"), name="bot_auto_scan_interval_seconds", minimum=10, maximum=3600))
+                value = int_input_text(settings, "bot_auto_scan_interval_seconds", minimum=10, maximum=3600)
                 conn.execute(
                     "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
                     ("trading.bot_auto_scan_interval_seconds", value, now, self._actor_id(actor)),
                 )
                 setting_changes["trading.bot_auto_scan_interval_seconds"] = value
             if "bot_auto_scan_limit" in settings:
-                value = str(_to_int(settings.get("bot_auto_scan_limit"), name="bot_auto_scan_limit", minimum=1, maximum=200))
+                value = int_input_text(settings, "bot_auto_scan_limit", minimum=1, maximum=200)
                 conn.execute(
                     "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
                     ("trading.bot_auto_scan_limit", value, now, self._actor_id(actor)),
                 )
                 setting_changes["trading.bot_auto_scan_limit"] = value
             if "bot_audit_interval_seconds" in settings:
-                value = str(_to_int(settings.get("bot_audit_interval_seconds"), name="bot_audit_interval_seconds", minimum=60, maximum=86400))
+                value = int_input_text(settings, "bot_audit_interval_seconds", minimum=60, maximum=86400)
                 conn.execute(
                     "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
                     ("trading.bot_audit_interval_seconds", value, now, self._actor_id(actor)),
                 )
                 setting_changes["trading.bot_audit_interval_seconds"] = value
             if "bot_audit_limit" in settings:
-                value = str(_to_int(settings.get("bot_audit_limit"), name="bot_audit_limit", minimum=1, maximum=200))
+                value = int_input_text(settings, "bot_audit_limit", minimum=1, maximum=200)
                 conn.execute(
                     "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
                     ("trading.bot_audit_limit", value, now, self._actor_id(actor)),
                 )
                 setting_changes["trading.bot_audit_limit"] = value
             if "bot_audit_min_enabled_seconds" in settings:
-                value = str(_to_int(settings.get("bot_audit_min_enabled_seconds"), name="bot_audit_min_enabled_seconds", minimum=3600, maximum=604800))
+                value = int_input_text(settings, "bot_audit_min_enabled_seconds", minimum=3600, maximum=604800)
                 conn.execute(
                     "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
                     ("trading.bot_audit_min_enabled_seconds", value, now, self._actor_id(actor)),
                 )
                 setting_changes["trading.bot_audit_min_enabled_seconds"] = value
             if "price_source" in settings:
-                value = str(settings.get("price_source") or "").strip()
-                if value not in {FUSED_PRICE_SOURCE, "binance_public_api", "manual_root"}:
-                    raise ValueError("price_source must be fused_weighted, binance_public_api, or manual_root")
+                value = choice_input_value(
+                    settings,
+                    "price_source",
+                    allowed={FUSED_PRICE_SOURCE, "binance_public_api", "manual_root"},
+                    error_message="price_source must be fused_weighted, binance_public_api, or manual_root",
+                )
                 conn.execute(
                     "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
                     ("trading.price_source", value, now, self._actor_id(actor)),
                 )
                 setting_changes["trading.price_source"] = value
             if "price_fusion_mode" in settings:
-                value = str(settings.get("price_fusion_mode") or "").strip()
-                if value not in PRICE_FUSION_MODES:
-                    raise ValueError("price_fusion_mode must be auto_depth or manual_weights")
+                value = choice_input_value(
+                    settings,
+                    "price_fusion_mode",
+                    allowed=PRICE_FUSION_MODES,
+                    error_message="price_fusion_mode must be auto_depth or manual_weights",
+                )
                 conn.execute(
                     "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
                     ("trading.price_fusion_mode", value, now, self._actor_id(actor)),
@@ -2711,51 +2728,49 @@ class TradingEngineService:
                 )
                 setting_changes["trading.price_fusion_manual_weights_json"] = value
             if "price_fusion_depth_levels" in settings:
-                value = str(_to_int(settings.get("price_fusion_depth_levels"), name="price_fusion_depth_levels", minimum=10, maximum=MAX_PRICE_FUSION_DEPTH_LEVELS))
+                value = int_input_text(settings, "price_fusion_depth_levels", minimum=10, maximum=MAX_PRICE_FUSION_DEPTH_LEVELS)
                 conn.execute(
                     "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
                     ("trading.price_fusion_depth_levels", value, now, self._actor_id(actor)),
                 )
                 setting_changes["trading.price_fusion_depth_levels"] = value
             if "price_fusion_depth_band_percent" in settings:
-                value = str(_to_float(settings.get("price_fusion_depth_band_percent"), name="price_fusion_depth_band_percent", minimum=0.1, maximum=10))
+                value = float_input_text(settings, "price_fusion_depth_band_percent", minimum=0.1, maximum=10)
                 conn.execute(
                     "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
                     ("trading.price_fusion_depth_band_percent", value, now, self._actor_id(actor)),
                 )
                 setting_changes["trading.price_fusion_depth_band_percent"] = value
             if "price_fusion_min_orderbook_coverage_percent" in settings:
-                value = str(_to_float(settings.get("price_fusion_min_orderbook_coverage_percent"), name="price_fusion_min_orderbook_coverage_percent", minimum=0.1, maximum=10))
+                value = float_input_text(settings, "price_fusion_min_orderbook_coverage_percent", minimum=0.1, maximum=10)
                 conn.execute(
                     "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
                     ("trading.price_fusion_min_orderbook_coverage_percent", value, now, self._actor_id(actor)),
                 )
                 setting_changes["trading.price_fusion_min_orderbook_coverage_percent"] = value
             if "price_fusion_max_single_provider_weight_percent" in settings:
-                value = str(_to_float(settings.get("price_fusion_max_single_provider_weight_percent"), name="price_fusion_max_single_provider_weight_percent", minimum=0, maximum=100))
+                value = float_input_text(settings, "price_fusion_max_single_provider_weight_percent", minimum=0, maximum=100)
                 conn.execute(
                     "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
                     ("trading.price_fusion_max_single_provider_weight_percent", value, now, self._actor_id(actor)),
                 )
                 setting_changes["trading.price_fusion_max_single_provider_weight_percent"] = value
             if "price_fusion_min_provider_count" in settings:
-                value = str(_to_int(settings.get("price_fusion_min_provider_count"), name="price_fusion_min_provider_count", minimum=1, maximum=len(WEIGHTED_PRICE_PROVIDERS)))
+                value = int_input_text(settings, "price_fusion_min_provider_count", minimum=1, maximum=len(WEIGHTED_PRICE_PROVIDERS))
                 conn.execute(
                     "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
                     ("trading.price_fusion_min_provider_count", value, now, self._actor_id(actor)),
                 )
                 setting_changes["trading.price_fusion_min_provider_count"] = value
             if "price_stream_ws_stale_seconds" in settings:
-                value = str(_to_int(settings.get("price_stream_ws_stale_seconds"), name="price_stream_ws_stale_seconds", minimum=1, maximum=120))
+                value = int_input_text(settings, "price_stream_ws_stale_seconds", minimum=1, maximum=120)
                 conn.execute(
                     "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
                     ("trading.price_stream_ws_stale_seconds", value, now, self._actor_id(actor)),
                 )
                 setting_changes["trading.price_stream_ws_stale_seconds"] = value
             if "btc_trade_project_dir" in settings:
-                value = str(settings.get("btc_trade_project_dir") or "").strip()
-                if len(value) > 500:
-                    raise ValueError("btc_trade_project_dir too long")
+                value = text_input_value(settings, "btc_trade_project_dir")
                 conn.execute(
                     "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
                     ("trading.btc_trade_project_dir", value, now, self._actor_id(actor)),
@@ -2766,13 +2781,11 @@ class TradingEngineService:
                 ("btc_trade_branch", "trading.btc_trade_branch"),
             ):
                 if input_key in settings:
-                    value = str(settings.get(input_key) or "").strip()
+                    value = text_input_value(settings, input_key)
                     if input_key == "btc_trade_repo_url" and not value:
                         value = "https://github.com/s9213712/BTC_trade.git"
                     if input_key == "btc_trade_branch" and not value:
                         value = "strategy/v15b-plus"
-                    if len(value) > 500:
-                        raise ValueError(f"{input_key} too long")
                     conn.execute(
                         "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
                         (storage_key, value, now, self._actor_id(actor)),
