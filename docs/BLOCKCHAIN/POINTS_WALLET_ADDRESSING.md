@@ -91,9 +91,9 @@ CREATE INDEX idx_wallet_addresses_type
 
 ---
 
-## 5. 9 個官方地址
+## 5. 10 個官方地址
 
-啟用 Phase 1 時，由 root 透過官方 multisig signer 流程公開生成 9 組 keypair，並在啟用前公告於 explorer 與 README。地址產生後寫入 immutable 文件，不再變更。
+啟用 Phase 1 時，由 root 透過官方 multisig signer 流程公開生成 10 組 keypair，並在啟用前公告於 explorer 與 README。地址產生後寫入 immutable 文件，不再變更。
 
 | 常數名 | wallet_type | 用途 | 私鑰 |
 |---|---|---|---|
@@ -101,6 +101,7 @@ CREATE INDEX idx_wallet_addresses_type
 | `OFFICIAL_REWARD_POOL` | `reward_pool` | 任務 / 活動獎勵發放來源 | multisig |
 | `OFFICIAL_FEE_POOL` | `fee_pool` | 平台抽成累計 | multisig（出帳時） |
 | `OFFICIAL_RESERVE_POOL` | `reserve` | 市場儲備 / 做市 | multisig |
+| `OFFICIAL_EXCHANGE_FUND` | `exchange_fund` | 交易所基金（CFD 對坐 / PVP 做市現貨；見 WHITEPAPER §3.6） | multisig 2-of-3 |
 | `OFFICIAL_MINT` | `mint` | 增發發行端 | **NULL**（無私鑰） |
 | `OFFICIAL_BURN` | `burn` | 燒毀終點 | **NULL**（無私鑰） |
 | `OFFICIAL_AIRDROP` | `airdrop` | 活動 / 空投發放 | multisig |
@@ -191,7 +192,7 @@ GET /api/points/wallet
       "wallet_type": "custodial",
       "is_primary": true,
       "status": "active",
-      "balances": {"soft": 5010, "hard": 0, "soft_frozen": 0, "hard_frozen": 0}
+      "balances": {"points": 5010, "points_frozen": 0}
     }
   ],
   "supply_state": {

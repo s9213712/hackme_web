@@ -53,7 +53,7 @@
 
 - [ ] `points_wallet_addresses` 表存在
 - [ ] `points_supply_state` 表存在且 `id=1` row 存在
-- [ ] 9 個官方地址全部 `status='active'`
+- [ ] 10 個官方地址全部 `status='active'`（含 `PNT1EXCHFUND`；見 WHITEPAPER §3.2 / §3.6）
 - [ ] `OFFICIAL_BURN` 與 `OFFICIAL_MINT` 的 `encrypted wallet secret IS NULL`
 - [ ] migration 後每個既有 user 都有 1 筆 `is_primary=1` custodial address
 - [ ] migration 報告寫入 `secure_audit`
@@ -137,7 +137,7 @@
 - [ ] 轉到 burn / mint / 自己 / 不存在地址 / disabled / revoked 全拒
 - [ ] timestamp 偏離 > 5 分鐘必拒
 - [ ] amount ≤ 0 必拒
-- [ ] currency_type 不在 {soft,hard} 必拒
+- [ ] currency_type 不等於 `points` 必拒
 - [ ] memo > 256 字元必拒
 
 ### 5.2 Invariant
@@ -359,7 +359,7 @@
 任何時間點以下永遠成立：
 
 ```
-1.  USDT balance >= 0  ─→ 已對應到 soft/hard balance ≥ 0
+1.  USDT balance >= 0  ─→ 已對應到 points balance ≥ 0
 2.  asset balance >= 0  ─→ 同上
 3.  Σ user_balances + Σ official_balances + burned_supply ≤ total_supply
 4.  total_supply == initial_supply + minted_supply − burned_supply

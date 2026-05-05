@@ -36,7 +36,7 @@
 ```
 Phase 0  鏈化前清債               已完成 final cleanup / runtime cleanup / live API validation / full pytest
    │                              ── 詳見 PHASE_0_CLEANUP_GATE.md
-Phase 1  地址化基礎建設            wallet_addresses + 9 official + supply_state
+Phase 1  地址化基礎建設            wallet_addresses + 10 official (含 EXCHFUND) + supply_state
    │
 Phase 2  Ledger v2                 address-centric + dual-write + state/supply root
    │

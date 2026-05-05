@@ -99,7 +99,7 @@ CREATE TABLE points_supply_state (
     initial_supply INTEGER NOT NULL,
     minted_supply INTEGER NOT NULL DEFAULT 0,
     burned_supply INTEGER NOT NULL DEFAULT 0,
-    soft_supply_cap INTEGER,                                   -- core points hard cap (NULL = no cap)
+    supply_cap INTEGER,                                        -- core points cap (NULL = no cap)
     last_invariant_check_at TEXT NOT NULL,
     last_invariant_check_pass INTEGER NOT NULL DEFAULT 1,
     last_invariant_diff INTEGER NOT NULL DEFAULT 0,
@@ -107,7 +107,7 @@ CREATE TABLE points_supply_state (
 );
 ```
 
-### 3.2 9 個官方地址（boot 時 INSERT IF NOT EXISTS）
+### 3.2 10 個官方地址（boot 時 INSERT IF NOT EXISTS）
 
 | 常數 | 地址（範例 placeholder，正式生成時改） | wallet_type | 私鑰 |
 |---|---|---|---|
@@ -115,6 +115,7 @@ CREATE TABLE points_supply_state (
 | `OFFICIAL_REWARD_POOL` | PNT1REWARD... | reward_pool | multisig 控管 |
 | `OFFICIAL_FEE_POOL` | PNT1FEEPOOL... | fee_pool | system 自動入帳 |
 | `OFFICIAL_RESERVE_POOL` | PNT1RESERVE... | reserve | multisig 2-of-3 |
+| `OFFICIAL_EXCHANGE_FUND` | PNT1EXCHFUND... | exchange_fund | multisig 2-of-3（CFD 對坐 / PVP 做市；見 WHITEPAPER §3.6） |
 | `OFFICIAL_MINT` | PNT1MINT... | mint | **NULL** |
 | `OFFICIAL_BURN` | PNT1BURN... | burn | **NULL** |
 | `OFFICIAL_AIRDROP` | PNT1AIRDROP... | airdrop | multisig 2-of-3 |
@@ -130,7 +131,7 @@ CREATE TABLE points_supply_state (
 | GET | `/api/points/wallet` | 回 `primary_address` + `addresses[]`（既有 endpoint 升級） | logged-in |
 | GET | `/api/points/address/<address>` | 用地址查餘額 | self / admin / root |
 | GET | `/api/points/explorer/summary` | total / circulating / burned / minted / latest_block_height | 匿名 |
-| GET | `/api/admin/points/official-addresses` | 列 9 個官方地址狀態 | admin / root |
+| GET | `/api/admin/points/official-addresses` | 列 10 個官方地址狀態（含 EXCHANGE_FUND） | admin / root |
 | POST | `/api/points/address/create` | self-custody 進階用戶建第二地址（保留路徑，Phase 5 啟用） | logged-in |
 
 ### 3.4 對既有系統影響
@@ -139,13 +140,13 @@ CREATE TABLE points_supply_state (
 |---|---|
 | Trading engine | fee 寫入時 dual-write `to_address=fee_pool`（不改主流程）|
 | Snapshot manifest | 新增 `supply_state` row hash + `wallet_addresses` schema check |
-| Server bootstrap | 新增「9 官方地址 INSERT IF NOT EXISTS」、「supply_state 初始化」 |
+| Server bootstrap | 新增「10 官方地址 INSERT IF NOT EXISTS」、「supply_state 初始化」 |
 | Server mode | incident_lockdown 自動 freeze 高風險 wallet_type；boot-time invariant 不過 → 進 incident_lockdown |
 
 ### 3.5 Phase 1 出口 gate（細項見 POINTSCHAIN_QA.md §1）
 
 - [ ] 每個既有 user 都有 1 筆 primary custodial address
-- [ ] 9 個官方地址全 active；burn/mint 的 `encrypted wallet secret IS NULL`
+- [ ] 10 個官方地址全 active；burn/mint 的 `encrypted wallet secret IS NULL`
 - [ ] `points_supply_state.last_invariant_check_pass=1` 且 `_diff=0`
 - [ ] address checksum 正確：1 萬筆隨機 mutate 1 byte 後 verify 必失敗
 - [ ] 既有 trading / video / shop regression 全綠
@@ -170,7 +171,7 @@ CREATE TABLE points_ledger_v2 (
     to_address TEXT,                                     -- NULL only for burn
     amount INTEGER NOT NULL CHECK (amount > 0),
     fee_amount INTEGER NOT NULL DEFAULT 0,
-    currency_type TEXT NOT NULL CHECK (currency_type IN ('soft','hard')),
+    currency_type TEXT NOT NULL CHECK (currency_type = 'points'),
     reference_type TEXT,
     reference_id TEXT,
     memo_hash TEXT,                                      -- sha256(memo)；memo 不直存
@@ -214,7 +215,7 @@ canonical = {
     "to_address": ... or "",
     "amount": str(int(amount)),         # integer string
     "fee_amount": str(int(fee_amount)),
-    "currency_type": "soft" or "hard",
+    "currency_type": "points",
     "memo_hash": ... or "",
     "nonce": ...,
     "timestamp": ISO8601 UTC Z,
@@ -271,7 +272,7 @@ GET  /api/points/tx/<event_id>
 {
   "to_address": "PNT1abc...",
   "amount": "100",
-  "currency_type": "soft",
+  "currency_type": "points",
   "memo": "thanks",
   "client_nonce": "uuid",
   "timestamp": "2026-05-04T00:00:00Z"
@@ -430,7 +431,7 @@ CREATE TABLE points_multisig_approvals (
   "from": "PNT1...",
   "to": "PNT1...",
   "amount": "100",
-  "currency_type": "soft",
+  "currency_type": "points",
   "memo_hash": "...",
   "nonce": "uuid",
   "timestamp": "2026-05-04T00:00:00Z"
