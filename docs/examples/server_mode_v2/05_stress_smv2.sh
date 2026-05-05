@@ -28,7 +28,7 @@ BASE_URL="${BASE_URL:-https://127.0.0.1:5000}"
 ROOT_USER="${ROOT_USER:-root}"
 ROOT_PW="${ROOT_PW:?need ROOT_PW}"
 TESTER_USER_ID="${TESTER_USER_ID:?need TESTER_USER_ID}"
-BURST_SIZE="${BURST_SIZE:-40}"     # > tester max_requests_per_minute (30)
+BURST_SIZE="${BURST_SIZE:-15}"     # > tester max_requests_per_minute (5)
 PARALLELISM="${PARALLELISM:-8}"
 CURL_OPTS=(-sk --max-time 30 -H "User-Agent: Mozilla/5.0 (X11; Linux) HackmeWebStress/1.0")
 
@@ -53,7 +53,7 @@ create_resp=$(curl "${CURL_OPTS[@]}" -b "$ROOT_JAR" \
   -H "Content-Type: application/json" -H "X-CSRF-Token: $csrf" \
   -X POST "$BASE_URL/api/root/tester-token/create" \
   -d "$(jq -n --arg c "$csrf" --argjson uid "$TESTER_USER_ID" --arg exp "$expires_at" \
-    '{tester_user_id:$uid, allowed_features:["smv2"], allowed_routes:["/api/tester/shadow-state","/api/tester/shadow-role","/api/tester/shadow-wallet"], expires_at:$exp, max_requests_per_minute:30, can_modify_own_role:true, can_modify_own_points:true, csrf_token:$c}')")
+    '{tester_user_id:$uid, allowed_features:["smv2"], allowed_routes:["/api/tester/shadow-state","/api/tester/shadow-role","/api/tester/shadow-wallet"], expires_at:$exp, max_requests_per_minute:5, can_modify_own_role:true, can_modify_own_points:true, csrf_token:$c}')")
 TOKEN=$(printf '%s' "$create_resp" | jq -r '.token // empty')
 TOKEN_ID=$(printf '%s' "$create_resp" | jq -r '.token_id // empty')
 [ -n "$TOKEN" ] || { note "tester-token create failed: $create_resp"; exit 1; }
