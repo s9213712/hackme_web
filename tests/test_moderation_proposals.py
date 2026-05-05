@@ -10,7 +10,7 @@ def _role_rank(role):
     return {"user": 0, "manager": 3, "super_admin": 4}.get(role or "user", 0)
 
 
-def _build_app(db_path, actor_box, revoked):
+def _build_app(db_path, actor_box, revoked, *, audit_enabled=False, audit_result=(True, None, "ok"), activation_log=None):
     app = Flask(__name__)
     app.testing = True
 
@@ -24,13 +24,13 @@ def _build_app(db_path, actor_box, revoked):
 
     register_moderation_routes(app, {
         "AUDIT_LOG_PATH": "missing.log",
-        "activate_emergency_lockdown": lambda reason: None,
+        "activate_emergency_lockdown": lambda reason: (activation_log.append(reason) if activation_log is not None else None),
         "add_violation": lambda *args, **kwargs: None,
         "audit": lambda *args, **kwargs: None,
         "get_client_ip": lambda: "127.0.0.1",
         "get_current_user_ctx": lambda: actor_box["actor"],
         "get_db": get_db,
-        "is_audit_chain_enabled": lambda: False,
+        "is_audit_chain_enabled": lambda: audit_enabled,
         "is_feature_enabled": lambda key: key == "feature_member_governance_enabled",
         "json_resp": lambda payload: jsonify(payload),
         "normalize_text": lambda value: value.strip() if isinstance(value, str) else "",
@@ -40,7 +40,7 @@ def _build_app(db_path, actor_box, revoked):
         "revoke_user_sessions": lambda user_id: revoked.append(user_id),
         "role_rank": _role_rank,
         "secure_add_violation": lambda *args, **kwargs: None,
-        "verify_audit_integrity": lambda: (True, None, "ok"),
+        "verify_audit_integrity": lambda: audit_result,
         "verify_violation_integrity": lambda user_id: (True, None, "ok"),
     })
     return app
@@ -61,6 +61,17 @@ def _seed_users(db_path):
             deleted_at TEXT,
             updated_at TEXT,
             violation_count INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE secure_audit (
+            id INTEGER PRIMARY KEY,
+            ts TEXT,
+            action TEXT,
+            ip TEXT,
+            user TEXT,
+            success INTEGER,
+            ua TEXT,
+            detail TEXT,
+            chain_hash TEXT
         );
         INSERT INTO users (id, username, role, status, member_level) VALUES
             (1, 'root', 'super_admin', 'active', 'normal'),
@@ -218,6 +229,32 @@ def test_high_risk_governance_requires_root_and_two_managers(tmp_path):
     conn.close()
     assert row == ("active", "suspended")
     assert revoked == [4]
+
+
+def test_admin_audit_reports_broken_chain_without_auto_lockdown(tmp_path):
+    db_path = tmp_path / "moderation.db"
+    _seed_users(db_path)
+    revoked = []
+    activation_log = []
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
+    client = _build_app(
+        str(db_path),
+        actor_box,
+        revoked,
+        audit_enabled=True,
+        audit_result=(False, 11, "hash mismatch"),
+        activation_log=activation_log,
+    ).test_client()
+
+    res = client.get("/api/admin/audit")
+    data = res.get_json()
+
+    assert res.status_code == 200
+    assert data["integrity"]["ok"] is False
+    assert data["integrity"]["broken_at"] == 11
+    assert data["integrity"]["operator_action_required"] is True
+    assert data["integrity"]["auto_lockdown_applied"] is False
+    assert activation_log == []
 
 
 def test_root_proposer_does_not_auto_vote_on_high_risk_proposal(tmp_path):

@@ -74,6 +74,10 @@ $HOME/.local/share/hackme_web
 - production profile 的 HTTPS / audit chain / Integrity Guard /
   browser-only 等安全設定會在 `GO_LIVE` 切換成功時自動套用，不應被理解成
   「必須先手動打開才能過檢查」。
+- 被動健康檢查與審計頁現在只會回報 audit chain / integrity 異常，不會因 root 單純
+  查看 `/api/admin/health` 或 `/api/admin/audit` 就自動把站切成 maintenance mode。
+- Integrity Guard strict mode 在正常更新 / 重啟後若發現 high-risk findings，啟動會
+  保持可用並留下警告，但 `GO_LIVE` / pre-production gate 仍會拒絕，直到 root review。
 
 ### 反向代理建議
 

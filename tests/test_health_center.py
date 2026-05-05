@@ -19,7 +19,7 @@ class _SnapshotStub:
         return [{"id": "snap_test"}]
 
 
-def _make_app(tmp_path, actor=None, audit_result=(True, None, "integrity OK"), include_forum_tables=True):
+def _make_app(tmp_path, actor=None, audit_result=(True, None, "integrity OK"), include_forum_tables=True, activation_log=None):
     db_path = tmp_path / "health.db"
     chat_dir = tmp_path / "chats"
     log_dir = tmp_path / "logs"
@@ -74,7 +74,7 @@ def _make_app(tmp_path, actor=None, audit_result=(True, None, "integrity OK"), i
         "LOG_DIR": str(log_dir),
         "SERVER_LOG_PATH": str(log_dir / "server.log"),
         "STORAGE_DIR": str(storage_dir),
-        "activate_emergency_lockdown": lambda reason: None,
+        "activate_emergency_lockdown": lambda reason: (activation_log.append(reason) if activation_log is not None else None),
         "audit": lambda *args, **kwargs: None,
         "get_client_ip": lambda: "127.0.0.1",
         "get_current_user_ctx": lambda: actor or {"id": 1, "username": "root", "role": "super_admin"},
@@ -153,12 +153,30 @@ def test_health_anomaly_treats_missing_optional_forum_tables_as_zero(tmp_path):
 
 
 def test_health_audit_chain_reports_broken_chain(tmp_path):
-    app = _make_app(tmp_path, audit_result=(False, 7, "hash mismatch"))
+    activation_log = []
+    app = _make_app(tmp_path, audit_result=(False, 7, "hash mismatch"), activation_log=activation_log)
     res = app.test_client().get("/api/admin/health/audit-chain")
     data = res.get_json()
     assert res.status_code == 200
     assert data["audit_integrity"]["ok"] is False
     assert data["audit_integrity"]["broken_at"] == 7
+    assert data["audit_integrity"]["operator_action_required"] is True
+    assert data["audit_integrity"]["auto_lockdown_applied"] is False
+    assert activation_log == []
+
+
+def test_admin_health_broken_audit_chain_marks_critical_without_auto_lockdown(tmp_path):
+    activation_log = []
+    app = _make_app(tmp_path, audit_result=(False, 7, "hash mismatch"), activation_log=activation_log)
+    res = app.test_client().get("/api/admin/health")
+    data = res.get_json()
+
+    assert res.status_code == 200
+    assert data["status"] == "critical"
+    assert data["audit_integrity"]["ok"] is False
+    assert data["audit_integrity"]["operator_action_required"] is True
+    assert data["audit_integrity"]["auto_lockdown_applied"] is False
+    assert activation_log == []
 
 
 def test_health_center_requires_super_admin(tmp_path):

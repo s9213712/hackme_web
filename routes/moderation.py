@@ -773,11 +773,23 @@ def register_moderation_routes(app, deps):
             # Integrity 驗證
             if is_audit_chain_enabled():
                 ok, broken_at, details = verify_audit_integrity()
-                if not ok:
-                    activate_emergency_lockdown(f"audit_chain_broken_at={broken_at}; {details}")
-                integrity = {"enabled": True, "ok": ok, "broken_at": broken_at, "details": details}
+                integrity = {
+                    "enabled": True,
+                    "ok": ok,
+                    "broken_at": broken_at,
+                    "details": details,
+                    "operator_action_required": ok is False,
+                    "auto_lockdown_applied": False,
+                }
             else:
-                integrity = {"enabled": False, "ok": None, "broken_at": None, "details": "audit chain disabled"}
+                integrity = {
+                    "enabled": False,
+                    "ok": None,
+                    "broken_at": None,
+                    "details": "audit chain disabled",
+                    "operator_action_required": False,
+                    "auto_lockdown_applied": False,
+                }
 
             return json_resp({
                 "ok": True,

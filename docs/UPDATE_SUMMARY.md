@@ -1,6 +1,16 @@
 # Update Summary
 
-Release ID: `2026.05.05-139`
+Release ID: `2026.05.05-140`
+
+## 2026.05.05-140
+
+- Audit chain / Integrity Guard 對正常維運的敏感度已收斂：root 被動查看
+  `/api/admin/health`、`/api/admin/health/audit-chain`、`/api/admin/audit` 時，
+  若 audit chain 斷裂，系統現在只會回傳 `critical`、`operator_action_required`
+  與 `auto_lockdown_applied=false`，不再因單純查狀態就自動切進 maintenance mode。
+- Integrity Guard `strict mode` 在重啟 / 更新後若看到 high-risk findings，
+  啟動流程現在會記 audit warning 並繼續提供服務；真正的 `GO_LIVE` /
+  pre-production entry 仍會因這些 findings 被擋住，直到 root review 完成。
 
 ## 2026.05.05-139
 

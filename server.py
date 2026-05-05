@@ -1935,7 +1935,18 @@ if __name__ == "__main__":
         if get_system_settings().get("integrity_guard_strict_mode", False):
             high_risk = (integrity_status.get("summary") or {}).get("high_risk_pending", 0)
             if high_risk:
-                raise SystemExit("Integrity Guard strict mode blocked startup due to high risk findings")
+                warning = f"Integrity Guard strict mode detected {high_risk} high risk finding(s) at startup; startup continues, but production entry must stay blocked until root reviews them."
+                print(f"[integrity-guard] {warning}")
+                try:
+                    audit(
+                        "INTEGRITY_GUARD_STARTUP_WARNING",
+                        "0.0.0.0",
+                        user="system-startup",
+                        success=False,
+                        detail=warning,
+                    )
+                except Exception:
+                    pass
     start_daily_snapshot_worker()
     start_storage_maintenance_worker()
     start_points_chain_block_worker()

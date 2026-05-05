@@ -18,7 +18,7 @@ Related technical references:
 
 ## Release and Schema
 
-- Release ID: `2026.05.05-139`
+- Release ID: `2026.05.05-140`
 - Schema version: `30`
 - Release ID source: `services/release_info.py`
 - Runtime version endpoint: `GET /api/version`
@@ -81,6 +81,14 @@ Server Mode v2 note:
   `sha256 report_hash`, `hmac_sha256 signature`, and `key_version`; the server
   recomputes the hash and verifies the signature before the report can satisfy
   production gate requirements.
+- Passive audit verification endpoints are now read-only in effect: if the
+  audit chain is broken, `/api/admin/health`, `/api/admin/health/audit-chain`,
+  and `/api/admin/audit` return `critical`/`operator_action_required` metadata
+  but do not auto-trigger maintenance mode by themselves.
+- Integrity Guard strict mode no longer hard-exits the process on startup after
+  normal restart/update drift. Startup records an audit warning and continues,
+  while `GO_LIVE`/pre-production entry remains blocked until the findings are
+  reviewed.
 - `internal_test` login token is no longer a shared singleton gate. Root must
   bind it to one target account at issuance time, and only that account may use
   the token at `/api/login` while the server is in `internal_test`.

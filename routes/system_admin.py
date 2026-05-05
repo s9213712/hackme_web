@@ -855,9 +855,23 @@ def register_system_admin_routes(app, deps):
     def audit_integrity_summary():
         audit_enabled = is_audit_chain_enabled()
         if not audit_enabled:
-            return {"enabled": False, "ok": None, "broken_at": None, "details": "audit chain disabled"}
+            return {
+                "enabled": False,
+                "ok": None,
+                "broken_at": None,
+                "details": "audit chain disabled",
+                "operator_action_required": False,
+                "auto_lockdown_applied": False,
+            }
         audit_ok, audit_broken, audit_details = verify_audit_integrity()
-        return {"enabled": True, "ok": audit_ok, "broken_at": audit_broken, "details": audit_details}
+        return {
+            "enabled": True,
+            "ok": audit_ok,
+            "broken_at": audit_broken,
+            "details": audit_details,
+            "operator_action_required": audit_ok is False,
+            "auto_lockdown_applied": False,
+        }
 
     def db_integrity_summary():
         conn = get_db()
@@ -1133,9 +1147,6 @@ def register_system_admin_routes(app, deps):
         audit_enabled = is_audit_chain_enabled()
         if audit_enabled:
             audit_ok, audit_broken, audit_details = verify_audit_integrity()
-            if not audit_ok:
-                activate_emergency_lockdown(f"audit_chain_broken_at={audit_broken}; {audit_details}")
-                settings = get_system_settings()
         else:
             audit_ok, audit_broken, audit_details = None, None, "audit chain disabled"
 
@@ -1165,7 +1176,14 @@ def register_system_admin_routes(app, deps):
             "ok": True,
             "status": status,
             "maintenance_mode": settings.get("maintenance_mode", False),
-            "audit_integrity": {"enabled": audit_enabled, "ok": audit_ok, "broken_at": audit_broken, "details": audit_details},
+            "audit_integrity": {
+                "enabled": audit_enabled,
+                "ok": audit_ok,
+                "broken_at": audit_broken,
+                "details": audit_details,
+                "operator_action_required": audit_ok is False,
+                "auto_lockdown_applied": False,
+            },
             "counts": counts,
             "count_errors": count_errors,
             "storage": {
