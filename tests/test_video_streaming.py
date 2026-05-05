@@ -1,9 +1,13 @@
+import base64
+import hashlib
 import io
 import json
+import os
 import sqlite3
 from pathlib import Path
 
 from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from flask import Flask, jsonify, make_response
 
 import routes.videos as video_routes
@@ -148,6 +152,152 @@ def _mark_file_as_e2ee(conn, file_id):
         """,
         ("a" * 64, file_id),
     )
+
+
+def _b64(data: bytes) -> str:
+    return base64.b64encode(data).decode("ascii")
+
+
+def _b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
+
+
+def _b64url_decode(data: str) -> bytes:
+    padded = data + ("=" * (-len(data) % 4))
+    return base64.urlsafe_b64decode(padded.encode("ascii"))
+
+
+def _seed_real_e2ee_file(conn, storage_root, *, file_id, owner_user_id, filename, mime, plaintext):
+    file_key = AESGCM.generate_key(bit_length=256)
+    file_aead = AESGCM(file_key)
+    file_nonce = os.urandom(12)
+    ciphertext = file_aead.encrypt(file_nonce, plaintext, None)
+    metadata_nonce = os.urandom(12)
+    encrypted_metadata = json.dumps(
+        {
+            "alg": "AES-GCM",
+            "v": 1,
+            "nonce": _b64(metadata_nonce),
+            "ciphertext": _b64(
+                file_aead.encrypt(
+                    metadata_nonce,
+                    json.dumps(
+                        {
+                            "filename": filename,
+                            "mime_type": mime,
+                            "size_bytes": len(plaintext),
+                        }
+                    ).encode("utf-8"),
+                    None,
+                )
+            ),
+        }
+    )
+    _seed_uploaded_file(
+        conn,
+        storage_root,
+        file_id=file_id,
+        owner_user_id=owner_user_id,
+        filename=filename,
+        mime=mime,
+        privacy_mode="e2ee",
+        payload=ciphertext,
+    )
+    conn.execute(
+        """
+        UPDATE uploaded_files
+        SET privacy_mode='e2ee',
+            original_filename_encrypted=?,
+            encryption_algorithm='AES-GCM',
+            encryption_version='browser-passphrase-v2',
+            nonce=?,
+            ciphertext_sha256=?,
+            size_bytes=?
+        WHERE id=?
+        """,
+        (
+            encrypted_metadata,
+            _b64(file_nonce),
+            hashlib.sha256(ciphertext).hexdigest(),
+            len(ciphertext),
+            file_id,
+        ),
+    )
+
+    share_key = AESGCM.generate_key(bit_length=256)
+    share_nonce = os.urandom(12)
+    share_envelope = json.dumps(
+        {
+            "alg": "AES-GCM",
+            "v": 1,
+            "nonce": _b64(share_nonce),
+            "ciphertext": _b64(AESGCM(share_key).encrypt(share_nonce, file_key, None)),
+        }
+    )
+    return {
+        "plaintext": plaintext,
+        "file_key": file_key,
+        "file_nonce_b64": _b64(file_nonce),
+        "encrypted_metadata": encrypted_metadata,
+        "share_key": share_key,
+        "share_fragment_key": _b64url(share_key),
+        "share_wrapped_file_key_envelope": share_envelope,
+    }
+
+
+def _unwrap_shared_file_key_from_fragment(envelope_text, fragment_key):
+    envelope = json.loads(envelope_text)
+    share_key = _b64url_decode(fragment_key)
+    return AESGCM(share_key).decrypt(base64.b64decode(envelope["nonce"]), base64.b64decode(envelope["ciphertext"]), None)
+
+
+def _decrypt_shared_metadata(file_key, encrypted_metadata):
+    envelope = json.loads(encrypted_metadata)
+    plaintext = AESGCM(file_key).decrypt(
+        base64.b64decode(envelope["nonce"]),
+        base64.b64decode(envelope["ciphertext"]),
+        None,
+    )
+    return json.loads(plaintext.decode("utf-8"))
+
+
+def _build_real_stream_v2_manifest_and_bundle(file_key, plaintext, *, content_type):
+    aead = AESGCM(file_key)
+    chunk_plaintext_size = 7
+    chunks = []
+    bundle_parts = []
+    cipher_offset = 0
+    plain_offset = 0
+    chunk_index = 0
+    while plain_offset < len(plaintext):
+        chunk_plain = plaintext[plain_offset:plain_offset + chunk_plaintext_size]
+        nonce = os.urandom(12)
+        cipher = aead.encrypt(nonce, chunk_plain, None)
+        chunks.append(
+            {
+                "chunk_index": chunk_index,
+                "nonce": _b64(nonce),
+                "ciphertext_offset": cipher_offset,
+                "ciphertext_size": len(cipher),
+                "plaintext_offset": plain_offset,
+                "plaintext_size": len(chunk_plain),
+                "ciphertext_sha256": hashlib.sha256(cipher).hexdigest(),
+            }
+        )
+        bundle_parts.append(cipher)
+        cipher_offset += len(cipher)
+        plain_offset += len(chunk_plain)
+        chunk_index += 1
+    manifest = {
+        "e2ee_stream_version": 2,
+        "chunk_size": chunk_plaintext_size,
+        "chunk_count": len(chunks),
+        "content_type": content_type,
+        "duration_hint": 3.5,
+        "byte_range_hint": {"total_plaintext_bytes": len(plaintext)},
+        "chunks": chunks,
+    }
+    return manifest, b"".join(bundle_parts)
 
 
 def test_prepare_stream_asset_builds_hls_derivatives_for_plain_video(tmp_path, monkeypatch):
@@ -608,6 +758,68 @@ def test_shared_e2ee_video_requires_password_fragment_and_exposes_browser_side_p
     assert ciphertext.data == b"ciphertext-video"
 
 
+def test_shared_e2ee_video_simulation_can_decrypt_original_plaintext(tmp_path):
+    db_path = tmp_path / "shared-e2ee-sim.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    owner_conn = sqlite3.connect(db_path)
+    owner_conn.row_factory = sqlite3.Row
+    try:
+        sealed = _seed_real_e2ee_file(
+            owner_conn,
+            storage_root,
+            file_id="e2ee-video",
+            owner_user_id=1,
+            filename="secret.mp4",
+            mime="video/mp4",
+            plaintext=b"simulated-shared-e2ee-video-payload",
+        )
+        video = publish_video(
+            owner_conn,
+            actor={"id": 1, "username": "alice", "role": "user"},
+            cloud_file_id="e2ee-video",
+            title="Secret",
+            visibility="unlisted",
+            share_password="SharePass123",
+            share_wrapped_file_key_envelope=sealed["share_wrapped_file_key_envelope"],
+            share_max_views=5,
+        )
+        owner_conn.commit()
+        token = video["share_url"].rsplit("/", 1)[-1]
+    finally:
+        owner_conn.close()
+
+    viewer = _build_app(db_path, storage_root, Fernet(Fernet.generate_key()), current_user=None).test_client()
+    assert viewer.post(f"/api/videos/shared/{token}/unlock", json={"password": "SharePass123"}).status_code == 200
+
+    playback = viewer.get(f"/api/videos/shared/{token}/playback")
+    assert playback.status_code == 200
+    playback_json = playback.get_json()
+    assert playback_json["player_strategy"] == "browser_e2ee_full_fallback"
+    assert playback_json["mode"] == "e2ee_direct"
+
+    key_payload = viewer.get(playback_json["e2ee_key_url"]).get_json()["e2ee_share"]
+    unwrapped_file_key = _unwrap_shared_file_key_from_fragment(
+        key_payload["wrapped_file_key_envelope"],
+        sealed["share_fragment_key"],
+    )
+    assert unwrapped_file_key == sealed["file_key"]
+
+    decrypted_metadata = _decrypt_shared_metadata(unwrapped_file_key, key_payload["encrypted_metadata"])
+    assert decrypted_metadata["filename"] == "secret.mp4"
+    assert decrypted_metadata["mime_type"] == "video/mp4"
+
+    ciphertext = viewer.get(playback_json["ciphertext_url"])
+    assert ciphertext.status_code == 200
+    plaintext = AESGCM(unwrapped_file_key).decrypt(
+        base64.b64decode(key_payload["nonce"]),
+        ciphertext.data,
+        None,
+    )
+    assert plaintext == sealed["plaintext"]
+
+
 def test_shared_video_password_lock_max_views_and_revoke_routes(tmp_path):
     db_path = tmp_path / "shared-guardrails.db"
     storage_root = tmp_path / "storage"
@@ -869,6 +1081,94 @@ def test_shared_e2ee_stream_v2_manifest_and_chunk_routes_work_and_stay_off_hls(t
     direct_manifest = owner_client.get(f"/api/videos/{video_id}/e2ee-stream-v2/manifest")
     assert direct_manifest.status_code == 200
     assert direct_manifest.get_json()["available"] is True
+
+
+def test_shared_e2ee_stream_v2_simulation_can_decrypt_chunked_plaintext(tmp_path):
+    db_path = tmp_path / "shared-e2ee-stream-v2-sim.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    owner_conn = sqlite3.connect(db_path)
+    owner_conn.row_factory = sqlite3.Row
+    try:
+        sealed = _seed_real_e2ee_file(
+            owner_conn,
+            storage_root,
+            file_id="e2ee-video",
+            owner_user_id=1,
+            filename="secret.mp4",
+            mime="video/mp4",
+            plaintext=b"simulated-shared-e2ee-stream-v2-payload",
+        )
+        video = publish_video(
+            owner_conn,
+            actor={"id": 1, "username": "alice", "role": "user"},
+            cloud_file_id="e2ee-video",
+            title="Secret",
+            visibility="unlisted",
+            share_password="SharePass123",
+            share_wrapped_file_key_envelope=sealed["share_wrapped_file_key_envelope"],
+            share_max_views=6,
+        )
+        owner_conn.commit()
+        token = video["share_url"].rsplit("/", 1)[-1]
+    finally:
+        owner_conn.close()
+
+    owner_client = _build_app(
+        db_path,
+        storage_root,
+        Fernet(Fernet.generate_key()),
+        current_user={"id": 1, "username": "alice", "role": "user", "member_level": "trusted", "effective_level": "trusted"},
+    ).test_client()
+    manifest, bundle = _build_real_stream_v2_manifest_and_bundle(
+        sealed["file_key"],
+        sealed["plaintext"],
+        content_type="video/mp4",
+    )
+    prepared = owner_client.post(
+        "/api/media/e2ee-video/e2ee-stream-v2",
+        data={
+            "manifest_json": json.dumps(manifest),
+            "bundle": (io.BytesIO(bundle), "bundle.bin"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert prepared.status_code == 200
+    assert prepared.get_json()["asset"]["available"] is True
+
+    viewer = _build_app(db_path, storage_root, Fernet(Fernet.generate_key()), current_user=None).test_client()
+    assert viewer.post(f"/api/videos/shared/{token}/unlock", json={"password": "SharePass123"}).status_code == 200
+
+    playback = viewer.get(f"/api/videos/shared/{token}/playback")
+    assert playback.status_code == 200
+    playback_json = playback.get_json()
+    assert playback_json["player_strategy"] == "browser_e2ee_stream_v2"
+    assert playback_json["mode"] == "e2ee_stream_v2"
+
+    key_payload = viewer.get(playback_json["e2ee_key_url"]).get_json()["e2ee_share"]
+    unwrapped_file_key = _unwrap_shared_file_key_from_fragment(
+        key_payload["wrapped_file_key_envelope"],
+        sealed["share_fragment_key"],
+    )
+    assert unwrapped_file_key == sealed["file_key"]
+
+    shared_manifest = viewer.get(playback_json["manifest_url"])
+    assert shared_manifest.status_code == 200
+    manifest_json = shared_manifest.get_json()
+    plaintext_parts = []
+    for chunk_meta in manifest_json["chunks"]:
+        chunk_res = viewer.get(
+            playback_json["chunk_url_template"].replace("__INDEX__", str(chunk_meta["chunk_index"]))
+        )
+        assert chunk_res.status_code == 200
+        chunk_plain = AESGCM(unwrapped_file_key).decrypt(
+            base64.b64decode(chunk_meta["nonce"]),
+            chunk_res.data,
+            None,
+        )
+        plaintext_parts.append(chunk_plain)
+    assert b"".join(plaintext_parts) == sealed["plaintext"]
 
 
 def test_shared_e2ee_stream_v2_endpoints_respect_revoked_expired_and_view_limits(tmp_path):
