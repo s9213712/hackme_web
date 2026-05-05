@@ -47,10 +47,10 @@ def test_shadow_orders_exists_with_expected_columns():
     conn = _fresh_db()
     cols = _columns(conn, "test_shadow_orders")
     expected = {
-        "id", "order_uuid", "tester_user_id", "market_symbol", "side",
-        "order_type", "quantity_units", "limit_price_points",
+        "id", "order_uuid", "tester_user_id", "user_id", "market_symbol", "side",
+        "order_type", "funding_mode", "execution_mode", "quantity_units", "limit_price_points",
         "execution_price_points", "status", "frozen_points", "fee_points",
-        "filled_quantity_units", "reason", "token_id", "created_at",
+        "trial_frozen_points", "chain_frozen_points", "filled_quantity_units", "reason", "token_id", "created_at",
         "updated_at",
     }
     assert expected.issubset(set(cols)), f"missing columns: {expected - set(cols)}"
@@ -60,7 +60,7 @@ def test_shadow_positions_exists_with_expected_columns():
     conn = _fresh_db()
     cols = _columns(conn, "test_shadow_positions")
     expected = {
-        "tester_user_id", "market_symbol", "quantity_units",
+        "user_id", "tester_user_id", "market_symbol", "quantity_units",
         "locked_quantity_units", "avg_cost_points", "token_id", "updated_at",
     }
     assert expected.issubset(set(cols)), f"missing columns: {expected - set(cols)}"
@@ -70,9 +70,11 @@ def test_shadow_ledger_exists_with_expected_columns():
     conn = _fresh_db()
     cols = _columns(conn, "test_shadow_ledger")
     expected = {
-        "id", "ledger_uuid", "tester_user_id", "currency_type", "direction",
+        "id", "ledger_uuid", "tester_user_id", "user_id", "public_account_id", "currency_type", "direction",
         "amount", "balance_before", "balance_after", "action_type",
-        "reference_type", "reference_id", "reason", "token_id", "created_at",
+        "reference_type", "reference_id", "idempotency_key", "reason", "token_id", "created_at",
+        "public_metadata_json", "private_metadata_json", "metadata_hash",
+        "previous_ledger_hash", "ledger_hash", "status",
     }
     assert expected.issubset(set(cols)), f"missing columns: {expected - set(cols)}"
 

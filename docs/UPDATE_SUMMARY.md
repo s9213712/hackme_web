@@ -1,6 +1,12 @@
 # Update Summary
 
-Release ID: `2026.05.05-125`
+Release ID: `2026.05.05-126`
+
+## 2026.05.05-126
+
+- Server Mode v2 的 Trading Phase 5b G-2 已把交易引擎內與 `orders / positions / points_ledger / wallets` 相關的主要 SQL 路徑收斂成 runtime routing：`user_dashboard`、grid bot scan、root simulated reset、verification / safe-mode replay helpers 現在都會依 mode 解析到 production 或 shadow 表，而不是再直接讀寫固定的 production 表名。
+- `test_shadow_wallets / test_shadow_orders / test_shadow_positions / test_shadow_ledger` 的 shadow schema 已補齊 production 路徑需要的核心欄位，讓 internal_test world 可以承接交易凍結、trial / chain split、ledger metadata 與 safe-mode verification，而不再只是一組過於簡化的示意表。
+- 這輪是架構強化而不是新 UI：目標是讓 SMv2 internal_test 的交易資料路徑更接近真正的 dual-world routing，並確保 production wallet / ledger 不會因 shadow-mode 交易引擎讀寫而被污染。
 
 ## 2026.05.05-125
 

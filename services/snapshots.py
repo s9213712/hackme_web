@@ -800,12 +800,44 @@ def ensure_snapshot_schema(conn):
         CREATE TABLE IF NOT EXISTS test_shadow_wallets (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
             tester_user_id  INTEGER NOT NULL,
+            user_id         INTEGER,
             balance_points  INTEGER NOT NULL DEFAULT 0,
+            soft_balance    INTEGER NOT NULL DEFAULT 0,
+            hard_balance    INTEGER NOT NULL DEFAULT 0,
+            soft_frozen     INTEGER NOT NULL DEFAULT 0,
+            hard_frozen     INTEGER NOT NULL DEFAULT 0,
+            total_soft_earned INTEGER NOT NULL DEFAULT 0,
+            total_hard_earned INTEGER NOT NULL DEFAULT 0,
+            total_soft_spent INTEGER NOT NULL DEFAULT 0,
+            total_hard_spent INTEGER NOT NULL DEFAULT 0,
+            wallet_status   TEXT NOT NULL DEFAULT 'active',
+            risk_level      TEXT NOT NULL DEFAULT 'normal',
             token_id        TEXT,
+            created_at      TEXT,
             updated_at      TEXT NOT NULL
         )
         """
     )
+    shadow_wallet_cols = {row["name"] for row in conn.execute("PRAGMA table_info(test_shadow_wallets)").fetchall()}
+    for col, ddl in (
+        ("user_id", "ALTER TABLE test_shadow_wallets ADD COLUMN user_id INTEGER"),
+        ("soft_balance", "ALTER TABLE test_shadow_wallets ADD COLUMN soft_balance INTEGER NOT NULL DEFAULT 0"),
+        ("hard_balance", "ALTER TABLE test_shadow_wallets ADD COLUMN hard_balance INTEGER NOT NULL DEFAULT 0"),
+        ("soft_frozen", "ALTER TABLE test_shadow_wallets ADD COLUMN soft_frozen INTEGER NOT NULL DEFAULT 0"),
+        ("hard_frozen", "ALTER TABLE test_shadow_wallets ADD COLUMN hard_frozen INTEGER NOT NULL DEFAULT 0"),
+        ("total_soft_earned", "ALTER TABLE test_shadow_wallets ADD COLUMN total_soft_earned INTEGER NOT NULL DEFAULT 0"),
+        ("total_hard_earned", "ALTER TABLE test_shadow_wallets ADD COLUMN total_hard_earned INTEGER NOT NULL DEFAULT 0"),
+        ("total_soft_spent", "ALTER TABLE test_shadow_wallets ADD COLUMN total_soft_spent INTEGER NOT NULL DEFAULT 0"),
+        ("total_hard_spent", "ALTER TABLE test_shadow_wallets ADD COLUMN total_hard_spent INTEGER NOT NULL DEFAULT 0"),
+        ("wallet_status", "ALTER TABLE test_shadow_wallets ADD COLUMN wallet_status TEXT NOT NULL DEFAULT 'active'"),
+        ("risk_level", "ALTER TABLE test_shadow_wallets ADD COLUMN risk_level TEXT NOT NULL DEFAULT 'normal'"),
+        ("created_at", "ALTER TABLE test_shadow_wallets ADD COLUMN created_at TEXT"),
+    ):
+        if col not in shadow_wallet_cols:
+            conn.execute(ddl)
+    conn.execute("UPDATE test_shadow_wallets SET user_id=tester_user_id WHERE user_id IS NULL")
+    conn.execute("UPDATE test_shadow_wallets SET soft_balance=balance_points WHERE soft_balance=0 AND balance_points != 0")
+    conn.execute("UPDATE test_shadow_wallets SET created_at=updated_at WHERE created_at IS NULL OR created_at=''")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS test_shadow_transactions (
@@ -843,14 +875,19 @@ def ensure_snapshot_schema(conn):
             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
             order_uuid          TEXT NOT NULL UNIQUE,
             tester_user_id      INTEGER NOT NULL,
+            user_id             INTEGER,
             market_symbol       TEXT NOT NULL,
             side                TEXT NOT NULL,
             order_type          TEXT NOT NULL,
+            funding_mode        TEXT NOT NULL DEFAULT 'points_chain',
+            execution_mode      TEXT NOT NULL DEFAULT 'house_counterparty',
             quantity_units      INTEGER NOT NULL CHECK (quantity_units > 0),
             limit_price_points  INTEGER,
             execution_price_points INTEGER,
             status              TEXT NOT NULL DEFAULT 'open',
             frozen_points       INTEGER NOT NULL DEFAULT 0,
+            trial_frozen_points INTEGER NOT NULL DEFAULT 0,
+            chain_frozen_points INTEGER NOT NULL DEFAULT 0,
             fee_points          INTEGER NOT NULL DEFAULT 0,
             filled_quantity_units INTEGER NOT NULL DEFAULT 0,
             reason              TEXT,
@@ -859,15 +896,28 @@ def ensure_snapshot_schema(conn):
             updated_at          TEXT NOT NULL,
             CHECK (side IN ('buy', 'sell')),
             CHECK (order_type IN ('market', 'limit')),
-            CHECK (status IN ('open', 'partially_filled', 'filled', 'cancelled', 'rejected'))
+            CHECK (status IN ('open', 'partially_filled', 'filled', 'cancelled', 'rejected')),
+            CHECK (execution_mode IN ('house_counterparty', 'pvp_matching', 'hybrid_liquidity'))
         )
         """
     )
+    shadow_order_cols = {row["name"] for row in conn.execute("PRAGMA table_info(test_shadow_orders)").fetchall()}
+    for col, ddl in (
+        ("user_id", "ALTER TABLE test_shadow_orders ADD COLUMN user_id INTEGER"),
+        ("funding_mode", "ALTER TABLE test_shadow_orders ADD COLUMN funding_mode TEXT NOT NULL DEFAULT 'points_chain'"),
+        ("execution_mode", "ALTER TABLE test_shadow_orders ADD COLUMN execution_mode TEXT NOT NULL DEFAULT 'house_counterparty'"),
+        ("trial_frozen_points", "ALTER TABLE test_shadow_orders ADD COLUMN trial_frozen_points INTEGER NOT NULL DEFAULT 0"),
+        ("chain_frozen_points", "ALTER TABLE test_shadow_orders ADD COLUMN chain_frozen_points INTEGER NOT NULL DEFAULT 0"),
+    ):
+        if col not in shadow_order_cols:
+            conn.execute(ddl)
+    conn.execute("UPDATE test_shadow_orders SET user_id=tester_user_id WHERE user_id IS NULL")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_shadow_orders_tester ON test_shadow_orders(tester_user_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_shadow_orders_market_status ON test_shadow_orders(market_symbol, status)")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS test_shadow_positions (
+            user_id              INTEGER,
             tester_user_id      INTEGER NOT NULL,
             market_symbol       TEXT NOT NULL,
             quantity_units      INTEGER NOT NULL DEFAULT 0 CHECK (quantity_units >= 0),
@@ -879,6 +929,10 @@ def ensure_snapshot_schema(conn):
         )
         """
     )
+    shadow_position_cols = {row["name"] for row in conn.execute("PRAGMA table_info(test_shadow_positions)").fetchall()}
+    if "user_id" not in shadow_position_cols:
+        conn.execute("ALTER TABLE test_shadow_positions ADD COLUMN user_id INTEGER")
+    conn.execute("UPDATE test_shadow_positions SET user_id=tester_user_id WHERE user_id IS NULL")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_shadow_positions_tester ON test_shadow_positions(tester_user_id)")
     conn.execute(
         """
@@ -886,6 +940,8 @@ def ensure_snapshot_schema(conn):
             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
             ledger_uuid         TEXT NOT NULL UNIQUE,
             tester_user_id      INTEGER NOT NULL,
+            user_id             INTEGER,
+            public_account_id   TEXT,
             currency_type       TEXT NOT NULL,
             direction           TEXT NOT NULL,
             amount              INTEGER NOT NULL CHECK (amount > 0),
@@ -894,7 +950,19 @@ def ensure_snapshot_schema(conn):
             action_type         TEXT NOT NULL,
             reference_type      TEXT,
             reference_id        TEXT,
+            idempotency_key     TEXT UNIQUE,
             reason              TEXT,
+            public_metadata_json TEXT,
+            private_metadata_json TEXT,
+            sensitive_metadata_encrypted TEXT,
+            metadata_hash       TEXT,
+            previous_ledger_hash TEXT,
+            ledger_hash         TEXT,
+            risk_flag           TEXT DEFAULT 'none',
+            risk_score          INTEGER NOT NULL DEFAULT 0,
+            created_by          INTEGER,
+            created_by_role     TEXT,
+            status              TEXT NOT NULL DEFAULT 'confirmed',
             token_id            TEXT,
             created_at          TEXT NOT NULL,
             CHECK (currency_type IN ('soft', 'hard')),
@@ -902,6 +970,26 @@ def ensure_snapshot_schema(conn):
         )
         """
     )
+    shadow_ledger_cols = {row["name"] for row in conn.execute("PRAGMA table_info(test_shadow_ledger)").fetchall()}
+    for col, ddl in (
+        ("user_id", "ALTER TABLE test_shadow_ledger ADD COLUMN user_id INTEGER"),
+        ("public_account_id", "ALTER TABLE test_shadow_ledger ADD COLUMN public_account_id TEXT"),
+        ("idempotency_key", "ALTER TABLE test_shadow_ledger ADD COLUMN idempotency_key TEXT UNIQUE"),
+        ("public_metadata_json", "ALTER TABLE test_shadow_ledger ADD COLUMN public_metadata_json TEXT"),
+        ("private_metadata_json", "ALTER TABLE test_shadow_ledger ADD COLUMN private_metadata_json TEXT"),
+        ("sensitive_metadata_encrypted", "ALTER TABLE test_shadow_ledger ADD COLUMN sensitive_metadata_encrypted TEXT"),
+        ("metadata_hash", "ALTER TABLE test_shadow_ledger ADD COLUMN metadata_hash TEXT"),
+        ("previous_ledger_hash", "ALTER TABLE test_shadow_ledger ADD COLUMN previous_ledger_hash TEXT"),
+        ("ledger_hash", "ALTER TABLE test_shadow_ledger ADD COLUMN ledger_hash TEXT"),
+        ("risk_flag", "ALTER TABLE test_shadow_ledger ADD COLUMN risk_flag TEXT DEFAULT 'none'"),
+        ("risk_score", "ALTER TABLE test_shadow_ledger ADD COLUMN risk_score INTEGER NOT NULL DEFAULT 0"),
+        ("created_by", "ALTER TABLE test_shadow_ledger ADD COLUMN created_by INTEGER"),
+        ("created_by_role", "ALTER TABLE test_shadow_ledger ADD COLUMN created_by_role TEXT"),
+        ("status", "ALTER TABLE test_shadow_ledger ADD COLUMN status TEXT NOT NULL DEFAULT 'confirmed'"),
+    ):
+        if col not in shadow_ledger_cols:
+            conn.execute(ddl)
+    conn.execute("UPDATE test_shadow_ledger SET user_id=tester_user_id WHERE user_id IS NULL")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_shadow_ledger_tester ON test_shadow_ledger(tester_user_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_shadow_ledger_action ON test_shadow_ledger(action_type, created_at)")
     conn.execute(

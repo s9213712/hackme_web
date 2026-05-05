@@ -10,7 +10,18 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from services.notifications import create_notification_if_enabled, create_root_notification_if_enabled
+from services.points_chain import (
+    DISPLAY_CURRENCY,
+    actor_value,
+    compute_ledger_hash,
+    metadata_hash,
+    normalize_currency_type,
+    public_account_id,
+    utc_now,
+    _metadata_json_checked,
+)
 from services.server_mode_context import SmV2Context, current_ctx
+from services.server_mode_routing import resolve_table
 from services.trading_mode_gate import assert_trading_allowed
 from services.trading_markets import (
     list_market_definitions,
@@ -1469,6 +1480,227 @@ class TradingEngineService:
                 ctx = self._legacy_production_ctx()
         return assert_trading_allowed(ctx, action=action)
 
+    def _ambient_trading_ctx(self):
+        try:
+            return current_ctx()
+        except Exception:
+            return self._legacy_production_ctx()
+
+    def _routing_ctx_for_read(self, ctx=None):
+        route_ctx = ctx or self._ambient_trading_ctx()
+        if getattr(route_ctx, "mode", "") not in {"production", "internal_test"}:
+            return self._legacy_production_ctx()
+        return route_ctx
+
+    def _resolve_table(self, logical, ctx=None, *, for_write=False, action="trade"):
+        route_ctx = self._resolve_trading_ctx(ctx, action=action) if for_write else self._routing_ctx_for_read(ctx)
+        return resolve_table(logical, route_ctx), route_ctx
+
+    def _sql_tables(self, ctx=None, *, for_write=False, action="trade"):
+        _orders, route_ctx = self._resolve_table("orders", ctx, for_write=for_write, action=action)
+        return ({
+            "orders": _orders,
+            "positions": resolve_table("positions", route_ctx),
+            "points_ledger": resolve_table("points_ledger", route_ctx),
+            "wallets": resolve_table("wallets", route_ctx),
+        }, route_ctx)
+
+    def _format_routed_sql(self, sql, ctx=None, *, for_write=False, action="trade"):
+        tables, route_ctx = self._sql_tables(ctx, for_write=for_write, action=action)
+        return sql.format(**tables), route_ctx
+
+    def _execute_routed_sql(self, conn, sql, params=(), ctx=None, *, for_write=False, action="trade"):
+        formatted, route_ctx = self._format_routed_sql(sql, ctx, for_write=for_write, action=action)
+        return conn.execute(formatted, params), route_ctx
+
+    def _shadow_actor_user_id(self, ctx, user_id):
+        try:
+            tester_id = int(getattr(ctx, "tester_id", None) or 0)
+        except Exception:
+            tester_id = 0
+        return tester_id if tester_id > 0 else int(user_id)
+
+    def _ensure_shadow_wallet(self, conn, user_id, ctx):
+        now = utc_now()
+        actor_user_id = self._shadow_actor_user_id(ctx, user_id)
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO test_shadow_wallets (
+                tester_user_id, user_id, balance_points, soft_balance, hard_balance,
+                soft_frozen, hard_frozen, total_soft_earned, total_hard_earned,
+                total_soft_spent, total_hard_spent, wallet_status, risk_level,
+                created_at, updated_at
+            ) VALUES (?, ?, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'active', 'normal', ?, ?)
+            """,
+            (actor_user_id, int(user_id), now, now),
+        )
+        row = conn.execute("SELECT * FROM test_shadow_wallets WHERE user_id=?", (int(user_id),)).fetchone()
+        if row is None:
+            raise ValueError("shadow wallet not found")
+        return row
+
+    def _shadow_wallet_payload(self, row):
+        if not row:
+            return None
+        points_balance = int(row["soft_balance"] or 0) + int(row["hard_balance"] or 0)
+        points_frozen = int(row["soft_frozen"] or 0) + int(row["hard_frozen"] or 0)
+        total_points_earned = int(row["total_soft_earned"] or 0) + int(row["total_hard_earned"] or 0)
+        total_points_spent = int(row["total_soft_spent"] or 0) + int(row["total_hard_spent"] or 0)
+        return {
+            "user_id": int(row["user_id"]),
+            "public_account_id": public_account_id(self.points_service.chain_secret, int(row["user_id"])),
+            "currency_type": DISPLAY_CURRENCY,
+            "points_balance": points_balance,
+            "points_frozen": points_frozen,
+            "total_points_earned": total_points_earned,
+            "total_points_spent": total_points_spent,
+            "soft_balance": points_balance,
+            "hard_balance": 0,
+            "soft_frozen": points_frozen,
+            "hard_frozen": 0,
+            "wallet_status": row["wallet_status"],
+            "risk_level": row["risk_level"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    def _wallet_row(self, conn, user_id, ctx=None):
+        wallet_table, route_ctx = self._resolve_table("wallets", ctx, action="wallet-read")
+        if wallet_table == "wallets":
+            return self.points_service.ensure_wallet(conn, user_id)
+        return self._ensure_shadow_wallet(conn, user_id, route_ctx)
+
+    def _wallet_payload(self, conn, user_id, ctx=None):
+        wallet_table, route_ctx = self._resolve_table("wallets", ctx, action="wallet-read")
+        if wallet_table == "wallets":
+            return self.points_service.serialize_wallet(self.points_service.ensure_wallet(conn, user_id))
+        return self._shadow_wallet_payload(self._ensure_shadow_wallet(conn, user_id, route_ctx))
+
+    def _shadow_existing_ledger_row(self, conn, idempotency_key):
+        if not idempotency_key:
+            return None
+        return conn.execute("SELECT * FROM test_shadow_ledger WHERE idempotency_key=?", (str(idempotency_key),)).fetchone()
+
+    def _shadow_last_ledger_hash(self, conn):
+        row = conn.execute("SELECT ledger_hash FROM test_shadow_ledger ORDER BY id DESC LIMIT 1").fetchone()
+        return str(row["ledger_hash"] or "") if row else None
+
+    def _shadow_record_transaction(self, conn, *, ctx, user_id, currency_type, direction, amount, action_type, reference_type=None, reference_id=None, idempotency_key=None, reason="", public_metadata=None, private_metadata=None, sensitive_metadata_encrypted="", actor=None, risk_flag="none", risk_score=0):
+        if direction not in {"credit", "debit", "freeze", "unfreeze", "reverse", "transfer_in", "transfer_out"}:
+            raise ValueError("unsupported ledger direction")
+        amount = int(amount or 0)
+        if amount <= 0:
+            raise ValueError("amount must be positive")
+        existing = self._shadow_existing_ledger_row(conn, idempotency_key)
+        if existing:
+            return existing
+
+        wallet = self._ensure_shadow_wallet(conn, user_id, ctx)
+        if str(wallet["wallet_status"] or "active") == "closed":
+            raise ValueError("wallet is closed")
+        currency = normalize_currency_type(currency_type)
+        balance_col = "soft_balance" if currency == "soft" else "hard_balance"
+        frozen_col = "soft_frozen" if currency == "soft" else "hard_frozen"
+        earned_col = "total_soft_earned" if currency == "soft" else "total_hard_earned"
+        spent_col = "total_soft_spent" if currency == "soft" else "total_hard_spent"
+        balance_before = int(wallet[balance_col] or 0)
+        frozen_before = int(wallet[frozen_col] or 0)
+        balance_after = balance_before
+        frozen_after = frozen_before
+        earned_delta = 0
+        spent_delta = 0
+        if direction in {"credit", "transfer_in"}:
+            balance_after += amount
+            earned_delta = amount
+        elif direction in {"debit", "transfer_out", "reverse"}:
+            if balance_before < amount:
+                raise ValueError("insufficient balance")
+            balance_after -= amount
+            spent_delta = amount
+        elif direction == "freeze":
+            if balance_before < amount:
+                raise ValueError("insufficient balance")
+            balance_after -= amount
+            frozen_after += amount
+        elif direction == "unfreeze":
+            if frozen_before < amount:
+                raise ValueError("insufficient frozen balance")
+            balance_after += amount
+            frozen_after -= amount
+
+        public_json = _metadata_json_checked(public_metadata or {}, label="public_metadata")
+        private_json = _metadata_json_checked(private_metadata or {}, label="private_metadata")
+        meta_hash = metadata_hash(public_metadata or {}, private_metadata or {}, sensitive_metadata_encrypted or "")
+        now = utc_now()
+        ledger_uuid = str(uuid.uuid4())
+        previous_ledger_hash = self._shadow_last_ledger_hash(conn)
+        ledger_data = {
+            "ledger_uuid": ledger_uuid,
+            "public_account_id": public_account_id(self.points_service.chain_secret, int(user_id)),
+            "currency_type": currency,
+            "direction": direction,
+            "amount": amount,
+            "balance_before": balance_before,
+            "balance_after": balance_after,
+            "action_type": action_type,
+            "reference_type": reference_type,
+            "reference_id": str(reference_id) if reference_id is not None else None,
+            "metadata_hash": meta_hash,
+            "previous_ledger_hash": previous_ledger_hash,
+            "created_at": now,
+        }
+        ledger_hash = compute_ledger_hash(ledger_data)
+        actor_user_id = self._shadow_actor_user_id(ctx, user_id)
+        cur = conn.execute(
+            """
+            INSERT INTO test_shadow_ledger (
+                ledger_uuid, tester_user_id, user_id, public_account_id, currency_type, direction,
+                amount, balance_before, balance_after, action_type, reference_type, reference_id,
+                idempotency_key, reason, public_metadata_json, private_metadata_json,
+                sensitive_metadata_encrypted, metadata_hash, previous_ledger_hash, ledger_hash,
+                risk_flag, risk_score, created_by, created_by_role, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?)
+            """,
+            (
+                ledger_uuid,
+                actor_user_id,
+                int(user_id),
+                ledger_data["public_account_id"],
+                currency,
+                direction,
+                amount,
+                balance_before,
+                balance_after,
+                action_type,
+                reference_type,
+                ledger_data["reference_id"],
+                idempotency_key,
+                reason or "",
+                public_json,
+                private_json,
+                sensitive_metadata_encrypted or "",
+                meta_hash,
+                previous_ledger_hash,
+                ledger_hash,
+                risk_flag,
+                int(risk_score or 0),
+                int(actor_value(actor, "id")) if actor_value(actor, "id") else None,
+                actor_value(actor, "role"),
+                now,
+            ),
+        )
+        total_balance_points = balance_after + int(wallet["hard_balance"] or 0) if balance_col == "soft_balance" else int(wallet["soft_balance"] or 0) + balance_after
+        conn.execute(
+            f"""
+            UPDATE test_shadow_wallets
+            SET {balance_col}=?, {frozen_col}=?, {earned_col}={earned_col}+?, {spent_col}={spent_col}+?,
+                balance_points=?, updated_at=?
+            WHERE user_id=?
+            """,
+            (balance_after, frozen_after, earned_delta, spent_delta, total_balance_points, now, int(user_id)),
+        )
+        return conn.execute("SELECT * FROM test_shadow_ledger WHERE id=?", (cur.lastrowid,)).fetchone()
+
     def _runtime_market_sort_key(self, item):
         symbol = str((item or {}).get("symbol") if isinstance(item, dict) else item or "").strip().upper()
         sort_order = (item or {}).get("sort_order") if isinstance(item, dict) else None
@@ -1699,18 +1931,29 @@ class TradingEngineService:
             raise ValueError(f"limit price must align with tick size {_decimal_text(tick_size)}")
         return float(price_decimal.quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP))
 
-    def _position(self, conn, user_id, symbol):
+    def _position(self, conn, user_id, symbol, *, ctx=None):
         now = _now()
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO trading_spot_positions
-                (user_id, market_symbol, quantity_units, locked_quantity_units, avg_cost_points, updated_at)
-            VALUES (?, ?, 0, 0, 0, ?)
-            """,
-            (int(user_id), symbol, now),
-        )
+        positions_table, route_ctx = self._resolve_table("positions", ctx, action="position-read")
+        if positions_table == "test_shadow_positions":
+            conn.execute(
+                f"""
+                INSERT OR IGNORE INTO {positions_table}
+                    (tester_user_id, user_id, market_symbol, quantity_units, locked_quantity_units, avg_cost_points, updated_at)
+                VALUES (?, ?, ?, 0, 0, 0, ?)
+                """,
+                (self._shadow_actor_user_id(route_ctx, user_id), int(user_id), symbol, now),
+            )
+        else:
+            conn.execute(
+                f"""
+                INSERT OR IGNORE INTO {positions_table}
+                    (user_id, market_symbol, quantity_units, locked_quantity_units, avg_cost_points, updated_at)
+                VALUES (?, ?, 0, 0, 0, ?)
+                """,
+                (int(user_id), symbol, now),
+            )
         return conn.execute(
-            "SELECT * FROM trading_spot_positions WHERE user_id=? AND market_symbol=?",
+            f"SELECT * FROM {positions_table} WHERE user_id=? AND market_symbol=?",
             (int(user_id), symbol),
         ).fetchone()
 
@@ -1827,7 +2070,10 @@ class TradingEngineService:
         )
         return next_balance
 
-    def _ledger(self, conn, **kwargs):
+    def _ledger(self, conn, *, ctx=None, **kwargs):
+        ledger_table, route_ctx = self._resolve_table("points_ledger", ctx, action="ledger-write")
+        if ledger_table == "test_shadow_ledger":
+            return self._shadow_record_transaction(conn, ctx=route_ctx, **kwargs)
         return self.points_service._record_transaction(conn, **kwargs)[0]
 
     def _user_volume_stats(self, conn, user_id):
@@ -5112,19 +5358,19 @@ class TradingEngineService:
                 )
                 return (old_price, source, price_meta) if with_meta else (old_price, source)
             raise ValueError(f"live trading price unavailable for {symbol}: {exc}") from exc
-        has_live_history = bool(conn.execute(
+        history_sql, _history_ctx = self._format_routed_sql(
             """
             SELECT 1
-            FROM trading_orders
+            FROM {orders}
             WHERE market_symbol=?
             UNION ALL
             SELECT 1 FROM trading_margin_positions WHERE market_symbol=?
             UNION ALL
             SELECT 1 FROM trading_futures_positions WHERE market_symbol=?
             LIMIT 1
-            """,
-            (symbol, symbol, symbol),
-        ).fetchone())
+            """
+        )
+        has_live_history = bool(conn.execute(history_sql, (symbol, symbol, symbol)).fetchone())
         if old_price_decimal > 0 and old_source in LIVE_PRICE_SOURCE_NAMES and has_live_history:
             jump_percent = float((abs(Decimal(str(price)) - old_price_decimal) * Decimal("100")) / old_price_decimal)
             allowed_percent = float(market["max_price_jump_percent"] or 0)
@@ -5483,11 +5729,14 @@ class TradingEngineService:
             "wallet_credit_points": wallet_credit,
         }
 
-    def _cancel_trial_reclaim_sell_orders(self, conn, user_id, *, actor, reason):
+    def _cancel_trial_reclaim_sell_orders(self, conn, user_id, *, actor, reason, ctx=None):
+        route_ctx = self._routing_ctx_for_read(ctx)
+        orders_table = resolve_table("orders", route_ctx)
+        positions_table = resolve_table("positions", route_ctx)
         orders = conn.execute(
-            """
+            f"""
             SELECT o.*
-            FROM trading_orders o
+            FROM {orders_table} o
             JOIN trading_trial_position_costs t
               ON t.user_id=o.user_id AND t.market_symbol=o.market_symbol
             WHERE o.user_id=?
@@ -5502,8 +5751,8 @@ class TradingEngineService:
             remaining_units = max(0, int(order["quantity_units"] or 0) - int(order["filled_quantity_units"] or 0))
             if remaining_units:
                 conn.execute(
-                    """
-                    UPDATE trading_spot_positions
+                    f"""
+                    UPDATE {positions_table}
                     SET quantity_units=quantity_units+?,
                         locked_quantity_units=MAX(locked_quantity_units-?, 0),
                         updated_at=?
@@ -5512,8 +5761,8 @@ class TradingEngineService:
                     (remaining_units, remaining_units, _now(), int(user_id), order["market_symbol"]),
                 )
             conn.execute(
-                """
-                UPDATE trading_orders
+                f"""
+                UPDATE {orders_table}
                 SET status='cancelled', reason=?, updated_at=?
                 WHERE id=?
                 """,
@@ -5544,15 +5793,18 @@ class TradingEngineService:
         available_delta = int(available_delta_if_active or 0) if row["status"] == "active" else 0
         self._trial_delta(conn, user_id, available_delta=available_delta, deployed_delta=-deployed_release)
 
-    def _reclaim_trial_credit(self, conn, user_id, *, actor=None, reason="TRIAL_CREDIT_RECLAIM"):
+    def _reclaim_trial_credit(self, conn, user_id, *, actor=None, reason="TRIAL_CREDIT_RECLAIM", ctx=None):
         row = self._trial_credit_row(conn, user_id)
         if not row or row["status"] != "active":
             return row
         actor = actor or self._system_actor()
         reclaimed_before_sell = int(row["available_points"] or 0)
+        route_ctx = self._routing_ctx_for_read(ctx)
+        orders_table = resolve_table("orders", route_ctx)
+        positions_table = resolve_table("positions", route_ctx)
         for order in conn.execute(
-            """
-            SELECT * FROM trading_orders
+            f"""
+            SELECT * FROM {orders_table}
             WHERE user_id=? AND side='buy' AND status IN ('open', 'partially_filled')
               AND trial_frozen_points > 0
             ORDER BY id ASC
@@ -5577,10 +5829,11 @@ class TradingEngineService:
                     reason="TRIAL_CREDIT_RECLAIM_CANCEL_ORDER",
                     public_metadata={"order_id": order["id"], "market": order["market_symbol"], "side": order["side"]},
                     actor=actor,
+                    ctx=route_ctx,
                 )
             conn.execute(
-                """
-                UPDATE trading_orders
+                f"""
+                UPDATE {orders_table}
                 SET status='cancelled', frozen_points=0, trial_frozen_points=0, chain_frozen_points=0,
                     reason=?, updated_at=?
                 WHERE id=?
@@ -5598,12 +5851,12 @@ class TradingEngineService:
                 severity="warning",
                 metadata={"reason": reason, "trial_frozen_points": trial_frozen, "chain_frozen_points": chain_frozen},
             )
-        self._cancel_trial_reclaim_sell_orders(conn, user_id, actor=actor, reason=reason)
+        self._cancel_trial_reclaim_sell_orders(conn, user_id, actor=actor, reason=reason, ctx=route_ctx)
         for trial_pos in conn.execute(
             "SELECT * FROM trading_trial_position_costs WHERE user_id=? AND quantity_units>0 ORDER BY market_symbol",
             (int(user_id),),
         ).fetchall():
-            position = self._position(conn, user_id, trial_pos["market_symbol"])
+            position = self._position(conn, user_id, trial_pos["market_symbol"], ctx=route_ctx)
             sell_units = min(int(position["quantity_units"] or 0), int(trial_pos["quantity_units"] or 0))
             if sell_units <= 0:
                 continue
@@ -5612,16 +5865,16 @@ class TradingEngineService:
             order_uuid = str(uuid.uuid4())
             now = _now()
             conn.execute(
-                """
-                UPDATE trading_spot_positions
+                f"""
+                UPDATE {positions_table}
                 SET quantity_units=quantity_units-?, locked_quantity_units=locked_quantity_units+?, updated_at=?
                 WHERE user_id=? AND market_symbol=?
                 """,
                 (sell_units, sell_units, now, int(user_id), trial_pos["market_symbol"]),
             )
             cur = conn.execute(
-                """
-                INSERT INTO trading_orders (
+                f"""
+                INSERT INTO {orders_table} (
                     order_uuid, user_id, market_symbol, side, order_type, funding_mode, execution_mode,
                     quantity_units, limit_price_points, execution_price_points, status,
                     frozen_points, trial_frozen_points, chain_frozen_points, fee_points,
@@ -5631,8 +5884,8 @@ class TradingEngineService:
                 """,
                 (order_uuid, int(user_id), trial_pos["market_symbol"], sell_units, current_price, reason, now, now),
             )
-            order = conn.execute("SELECT * FROM trading_orders WHERE id=?", (cur.lastrowid,)).fetchone()
-            fill = self._execute_order(conn, order, market, actor=actor)
+            order = conn.execute(f"SELECT * FROM {orders_table} WHERE id=?", (cur.lastrowid,)).fetchone()
+            fill = self._execute_order(conn, order, market, actor=actor, ctx=route_ctx)
             self._audit_event(
                 conn,
                 "TRADING_TRIAL_CREDIT_FORCED_SELL",
@@ -5700,8 +5953,7 @@ class TradingEngineService:
                 "note": "root 模擬交易資金不寫入 PointsChain，也不影響帳戶積分",
             }
         trial = self._ensure_trial_credit(conn, user_id)
-        wallet = self.points_service.ensure_wallet(conn, user_id)
-        payload = self.points_service.serialize_wallet(wallet)
+        payload = self._wallet_payload(conn, user_id)
         wallet_available = int(payload.get("points_balance") or 0)
         wallet_locked = int(payload.get("points_frozen") or 0)
         trial_payload = None
@@ -5997,8 +6249,8 @@ class TradingEngineService:
             return conn.execute("SELECT * FROM trading_margin_positions WHERE id=?", (position["id"],)).fetchone()
 
         user_id = int(position["user_id"])
-        wallet = self.points_service.ensure_wallet(conn, user_id)
-        available = int(wallet["soft_balance"] or 0) + int(wallet["hard_balance"] or 0)
+        wallet_payload = self._wallet_payload(conn, user_id)
+        available = int(wallet_payload.get("points_balance") or 0)
         paid = min(due_points, available)
         capitalized = due_points - paid
         ledger_uuid = None
@@ -6232,8 +6484,8 @@ class TradingEngineService:
         if self._is_root_user_id(conn, user_id):
             account = self._root_sim_account(conn, user_id)
             return int(account["balance_points"] or 0)
-        wallet = self.points_service.ensure_wallet(conn, user_id)
-        wallet_available = int(wallet["soft_balance"] or 0) + int(wallet["hard_balance"] or 0)
+        wallet_payload = self._wallet_payload(conn, user_id)
+        wallet_available = int(wallet_payload.get("points_balance") or 0)
         trial = self._trial_credit_row(conn, user_id)
         trial_available = int(trial["available_points"] or 0) if trial and trial["status"] == "active" else 0
         return max(0, wallet_available + trial_available)
@@ -6563,6 +6815,9 @@ class TradingEngineService:
             self.ensure_schema(conn)
             self._ensure_trial_credit(conn, user_id)
             conn.commit()
+            tables, route_ctx = self._sql_tables()
+            positions_table = tables["positions"]
+            orders_table = tables["orders"]
             state = self._state(conn)
             markets = []
             for row in conn.execute("SELECT * FROM trading_markets WHERE enabled=1").fetchall():
@@ -6586,7 +6841,10 @@ class TradingEngineService:
                     realized_points=realized_map.get(row["market_symbol"], 0),
                     total_fees=fee_map.get(row["market_symbol"], 0),
                 )
-                for row in conn.execute("SELECT * FROM trading_spot_positions WHERE user_id=? ORDER BY market_symbol", (int(user_id),)).fetchall()
+                for row in conn.execute(
+                    f"SELECT * FROM {positions_table} WHERE user_id=? ORDER BY market_symbol",
+                    (int(user_id),),
+                ).fetchall()
             ]
             futures_positions = [
                 self._futures_position_payload(row)
@@ -6625,7 +6883,10 @@ class TradingEngineService:
                 (int(user_id),),
             ).fetchall():
                 bot_order_map[row["order_uuid"]] = row["bot_name"]
-            raw_orders = conn.execute("SELECT * FROM trading_orders WHERE user_id=? ORDER BY id DESC LIMIT 50", (int(user_id),)).fetchall()
+            raw_orders = conn.execute(
+                f"SELECT * FROM {orders_table} WHERE user_id=? ORDER BY id DESC LIMIT 50",
+                (int(user_id),),
+            ).fetchall()
             orders = []
             for row in raw_orders:
                 item = self._order_payload(row)
@@ -6649,7 +6910,7 @@ class TradingEngineService:
             fill_order_uuid_map = {
                 row["id"]: row["order_uuid"]
                 for row in conn.execute(
-                    "SELECT f.id, o.order_uuid FROM trading_fills f JOIN trading_orders o ON o.id=f.order_id WHERE f.user_id=? ORDER BY f.id DESC LIMIT 50",
+                    f"SELECT f.id, o.order_uuid FROM trading_fills f JOIN {orders_table} o ON o.id=f.order_id WHERE f.user_id=? ORDER BY f.id DESC LIMIT 50",
                     (int(user_id),),
                 ).fetchall()
             }
@@ -7713,6 +7974,8 @@ class TradingEngineService:
         bot_id = int(bot["id"])
         bot_actor = {"id": user_id, "username": self._actor_username(actor), "role": self._actor_role(actor)}
         now = _now()
+        route_ctx = self._resolve_trading_ctx(action="grid_bot_scan")
+        orders_table = resolve_table("orders", route_ctx)
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
@@ -7748,7 +8011,7 @@ class TradingEngineService:
                 if not go["trading_order_uuid"]:
                     continue
                 t_order = conn.execute(
-                    "SELECT * FROM trading_orders WHERE order_uuid=?",
+                    f"SELECT * FROM {orders_table} WHERE order_uuid=?",
                     (go["trading_order_uuid"],),
                 ).fetchone()
                 if not t_order:
@@ -7773,11 +8036,11 @@ class TradingEngineService:
                         continue
                     execution_price = float(t_order["limit_price_points"] or go["price_points"] or current_price)
                     conn.execute(
-                        "UPDATE trading_orders SET execution_price_points=?, updated_at=? WHERE id=?",
+                        f"UPDATE {orders_table} SET execution_price_points=?, updated_at=? WHERE id=?",
                         (execution_price, now, t_order["id"]),
                     )
-                    t_order = conn.execute("SELECT * FROM trading_orders WHERE id=?", (t_order["id"],)).fetchone()
-                    fill = self._execute_order(conn, t_order, market, actor=actor)
+                    t_order = conn.execute(f"SELECT * FROM {orders_table} WHERE id=?", (t_order["id"],)).fetchone()
+                    fill = self._execute_order(conn, t_order, market, actor=actor, ctx=route_ctx)
                     filled_units = int(fill["quantity_units"] or 0)
                     self._audit_event(
                         conn,
@@ -9165,8 +9428,7 @@ class TradingEngineService:
             elif side == "buy" and funding_mode != "root_simulated":
                 trial = self._ensure_trial_credit(conn, user_id)
                 trial_available = int(trial["available_points"] or 0) if trial and trial["status"] == "active" else 0
-                wallet = self.points_service.ensure_wallet(conn, user_id)
-                wallet_payload = self.points_service.serialize_wallet(wallet)
+                wallet_payload = self._wallet_payload(conn, user_id, ctx=ctx)
                 wallet_available = int(wallet_payload.get("points_balance") or 0)
                 total_available = trial_available + wallet_available
                 if total_points > total_available:
@@ -9188,9 +9450,11 @@ class TradingEngineService:
                 order_reason = "GRID_ORDER"
             else:
                 order_reason = ""
+            orders_table = resolve_table("orders", ctx)
+            positions_table = resolve_table("positions", ctx)
             cur = conn.execute(
-                """
-                INSERT INTO trading_orders (
+                f"""
+                INSERT INTO {orders_table} (
                     order_uuid, user_id, market_symbol, side, order_type, funding_mode, execution_mode,
                     quantity_units, limit_price_points, execution_price_points, status,
                     frozen_points, trial_frozen_points, chain_frozen_points, fee_points,
@@ -9244,14 +9508,15 @@ class TradingEngineService:
                             "chain_frozen_points": chain_frozen,
                         },
                         actor=actor,
+                        ctx=ctx,
                     ))
             else:
-                position = self._position(conn, user_id, market["symbol"])
+                position = self._position(conn, user_id, market["symbol"], ctx=ctx)
                 if int(position["quantity_units"]) < quantity_units:
                     raise ValueError("insufficient spot position")
                 conn.execute(
-                    """
-                    UPDATE trading_spot_positions
+                    f"""
+                    UPDATE {positions_table}
                     SET quantity_units=quantity_units-?, locked_quantity_units=locked_quantity_units+?, updated_at=?
                     WHERE user_id=? AND market_symbol=?
                     """,
@@ -9259,15 +9524,15 @@ class TradingEngineService:
                 )
 
             if executable:
-                order = conn.execute("SELECT * FROM trading_orders WHERE id=?", (order_id,)).fetchone()
-                fill = self._execute_order(conn, order, market, actor=actor)
-                order = conn.execute("SELECT * FROM trading_orders WHERE id=?", (order_id,)).fetchone()
+                order = conn.execute(f"SELECT * FROM {orders_table} WHERE id=?", (order_id,)).fetchone()
+                fill = self._execute_order(conn, order, market, actor=actor, ctx=ctx)
+                order = conn.execute(f"SELECT * FROM {orders_table} WHERE id=?", (order_id,)).fetchone()
                 event_type = "TRADING_EMERGENCY_MARKET_CLOSE" if emergency_close else "TRADING_ORDER_FILLED"
                 message = "emergency market close filled" if emergency_close else "spot order filled"
                 self._audit_event(conn, event_type, message, actor=actor, target_user_id=user_id, order_id=order_id, market_symbol=market["symbol"], severity="warning" if emergency_close else "info", metadata={"fill_id": fill["id"], "price_source": price_source, "execution_price_points": execution_price, "fee_rate_percent": effective_fee_rate_percent})
                 self._notify_trade_filled(conn, fill)
             else:
-                order = conn.execute("SELECT * FROM trading_orders WHERE id=?", (order_id,)).fetchone()
+                order = conn.execute(f"SELECT * FROM {orders_table} WHERE id=?", (order_id,)).fetchone()
                 self._audit_event(conn, "TRADING_ORDER_OPEN", "limit order stored as open order", actor=actor, target_user_id=user_id, order_id=order_id, market_symbol=market["symbol"], metadata={"price_source": price_source, "current_price_points": current_price})
             conn.commit()
             return {"ok": True, "order": self._order_payload(order), "executed": executable}
@@ -9295,13 +9560,14 @@ class TradingEngineService:
             self.ensure_schema(conn)
             params = []
             where = "WHERE order_type='limit' AND status IN ('open', 'partially_filled')"
+            orders_table = resolve_table("orders", ctx)
             if market_symbol:
                 where += " AND market_symbol=?"
                 params.append(str(market_symbol or "").strip().upper())
             order_uuids = [
                 row["order_uuid"]
                 for row in conn.execute(
-                    f"SELECT order_uuid FROM trading_orders {where} ORDER BY id ASC LIMIT ?",
+                    f"SELECT order_uuid FROM {orders_table} {where} ORDER BY id ASC LIMIT ?",
                     (*params, limit),
                 ).fetchall()
             ]
@@ -9318,7 +9584,7 @@ class TradingEngineService:
                 conn.commit()
                 conn.execute("BEGIN IMMEDIATE")
                 self._assert_writable(conn)
-                order = conn.execute("SELECT * FROM trading_orders WHERE order_uuid=?", (order_uuid,)).fetchone()
+                order = conn.execute(f"SELECT * FROM {orders_table} WHERE order_uuid=?", (order_uuid,)).fetchone()
                 if not order or order["status"] not in OPEN_ORDER_STATUSES or order["order_type"] != "limit":
                     conn.rollback()
                     skipped += 1
@@ -9337,11 +9603,11 @@ class TradingEngineService:
                     skipped += 1
                     continue
                 conn.execute(
-                    "UPDATE trading_orders SET execution_price_points=?, updated_at=? WHERE id=?",
+                    f"UPDATE {orders_table} SET execution_price_points=?, updated_at=? WHERE id=?",
                     (execution_price, _now(), order["id"]),
                 )
-                order = conn.execute("SELECT * FROM trading_orders WHERE id=?", (order["id"],)).fetchone()
-                fill = self._execute_order(conn, order, market, actor=actor)
+                order = conn.execute(f"SELECT * FROM {orders_table} WHERE id=?", (order["id"],)).fetchone()
+                fill = self._execute_order(conn, order, market, actor=actor, ctx=ctx)
                 self._audit_event(
                     conn,
                     "TRADING_LIMIT_ORDER_MATCHED",
@@ -9368,7 +9634,9 @@ class TradingEngineService:
                 conn.close()
         return {"ok": not errors, "scanned": len(order_uuids), "matched": matched, "skipped": skipped, "errors": errors}
 
-    def _execute_order(self, conn, order, market, *, actor):
+    def _execute_order(self, conn, order, market, *, actor, ctx=None):
+        orders_table, route_ctx = self._resolve_table("orders", ctx, action="execute_order")
+        positions_table = resolve_table("positions", route_ctx)
         side = order["side"]
         user_id = int(order["user_id"])
         quantity_units = int(order["quantity_units"])
@@ -9429,6 +9697,7 @@ class TradingEngineService:
                         reason="TRADING_UNFREEZE_SETTLEMENT",
                         public_metadata={"order_id": order["id"], "market": market["symbol"], "side": side, "chain_refund_points": chain_refund},
                         actor=actor,
+                        ctx=route_ctx,
                     )["ledger_uuid"])
                 if chain_spend > 0:
                     ledger_uuids.append(self._ledger(
@@ -9453,8 +9722,9 @@ class TradingEngineService:
                             "chain_spend_points": chain_spend,
                         },
                         actor=actor,
+                        ctx=route_ctx,
                     )["ledger_uuid"])
-            position = self._position(conn, user_id, market["symbol"])
+            position = self._position(conn, user_id, market["symbol"], ctx=route_ctx)
             prev_qty = int(position["quantity_units"])
             prev_cost = _to_decimal(position["avg_cost_points"] or 0, name="avg_cost_points", minimum=0)
             next_qty = prev_qty + quantity_units
@@ -9472,8 +9742,8 @@ class TradingEngineService:
                 else 0
             )
             conn.execute(
-                """
-                UPDATE trading_spot_positions
+                f"""
+                UPDATE {positions_table}
                 SET quantity_units=?, avg_cost_points=?, updated_at=?
                 WHERE user_id=? AND market_symbol=?
                 """,
@@ -9524,10 +9794,11 @@ class TradingEngineService:
                             "trial_profit_points": trial_profit,
                         },
                         actor=actor,
+                        ctx=route_ctx,
                     )["ledger_uuid"])
                 if fee:
                     self._reserve_delta(conn, delta=fee, event_type="fee_retained", reason="TRADING_FEE", actor=actor, order_id=order["id"])
-            position = self._position(conn, user_id, market["symbol"])
+            position = self._position(conn, user_id, market["symbol"], ctx=route_ctx)
             if int(position["locked_quantity_units"]) < quantity_units:
                 raise ValueError("insufficient locked spot position")
             avg_cost = float(_to_decimal(position["avg_cost_points"] or 0, name="avg_cost_points", minimum=0))
@@ -9543,8 +9814,8 @@ class TradingEngineService:
             next_total_units = int(position["quantity_units"] or 0) + int(position["locked_quantity_units"] or 0) - quantity_units
             next_avg_cost = avg_cost if next_total_units > 0 else 0
             conn.execute(
-                """
-                UPDATE trading_spot_positions
+                f"""
+                UPDATE {positions_table}
                 SET locked_quantity_units=locked_quantity_units-?, avg_cost_points=?, updated_at=?
                 WHERE user_id=? AND market_symbol=?
                 """,
@@ -9617,8 +9888,8 @@ class TradingEngineService:
                 ),
             )
         conn.execute(
-            """
-            UPDATE trading_orders
+            f"""
+            UPDATE {orders_table}
             SET status='filled', execution_price_points=?, fee_points=?, filled_quantity_units=?, frozen_points=0, updated_at=?
             WHERE id=?
             """,
@@ -9635,7 +9906,9 @@ class TradingEngineService:
             conn.commit()
             conn.execute("BEGIN IMMEDIATE")
             self._assert_writable(conn)
-            order = conn.execute("SELECT * FROM trading_orders WHERE order_uuid=?", (str(order_uuid or ""),)).fetchone()
+            orders_table = resolve_table("orders", ctx)
+            positions_table = resolve_table("positions", ctx)
+            order = conn.execute(f"SELECT * FROM {orders_table} WHERE order_uuid=?", (str(order_uuid or ""),)).fetchone()
             if not order:
                 raise ValueError("order not found")
             if int(order["user_id"]) != int(user_id):
@@ -9665,11 +9938,12 @@ class TradingEngineService:
                         reason="TRADING_ORDER_CANCELLED",
                         public_metadata={"order_id": order["id"], "market": order["market_symbol"], "side": order["side"]},
                         actor=actor,
+                        ctx=ctx,
                     )
             if order["side"] == "sell":
                 cur = conn.execute(
-                    """
-                    UPDATE trading_spot_positions
+                    f"""
+                    UPDATE {positions_table}
                     SET quantity_units=quantity_units+?, locked_quantity_units=locked_quantity_units-?, updated_at=?
                     WHERE user_id=? AND market_symbol=? AND locked_quantity_units>=?
                     """,
@@ -9677,7 +9951,7 @@ class TradingEngineService:
                 )
                 if cur.rowcount < 1:
                     raise ValueError("spot position unlock failed")
-            conn.execute("UPDATE trading_orders SET status='cancelled', frozen_points=0, updated_at=? WHERE id=?", (_now(), order["id"]))
+            conn.execute(f"UPDATE {orders_table} SET status='cancelled', frozen_points=0, updated_at=? WHERE id=?", (_now(), order["id"]))
             self._audit_event(conn, "TRADING_ORDER_CANCELLED", "order cancelled", actor=actor, target_user_id=user_id, order_id=order["id"], market_symbol=order["market_symbol"])
             conn.commit()
             return {"ok": True, "order_uuid": order["order_uuid"], "status": "cancelled"}
@@ -10196,8 +10470,8 @@ class TradingEngineService:
                         available_delta_if_active=trial_return,
                     )
                     remaining_loss -= trial_loss
-                wallet = self.points_service.ensure_wallet(conn, user_id)
-                wallet_balance = int(wallet["soft_balance"] or 0) + int(wallet["hard_balance"] or 0)
+                wallet_payload = self._wallet_payload(conn, user_id, ctx=ctx)
+                wallet_balance = int(wallet_payload.get("points_balance") or 0)
                 debit_amount = min(remaining_loss, wallet_balance)
                 bad_debt = remaining_loss - debit_amount
                 if debit_amount:
@@ -10663,6 +10937,9 @@ class TradingEngineService:
         if not self._is_root_actor(actor):
             raise ValueError("only root can reset simulated trading points")
         user_id = self._actor_id(actor)
+        tables, route_ctx = self._sql_tables(for_write=True, action="root_simulated_reset")
+        orders_table = tables["orders"]
+        positions_table = tables["positions"]
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
@@ -10671,9 +10948,9 @@ class TradingEngineService:
             self._root_sim_account(conn, user_id, actor=actor)
             now = _now()
             deleted_counts = {
-                "orders": int(conn.execute("SELECT COUNT(*) FROM trading_orders WHERE user_id=?", (user_id,)).fetchone()[0] or 0),
+                "orders": int(conn.execute(f"SELECT COUNT(*) FROM {orders_table} WHERE user_id=?", (user_id,)).fetchone()[0] or 0),
                 "fills": int(conn.execute("SELECT COUNT(*) FROM trading_fills WHERE user_id=?", (user_id,)).fetchone()[0] or 0),
-                "spot_positions": int(conn.execute("SELECT COUNT(*) FROM trading_spot_positions WHERE user_id=?", (user_id,)).fetchone()[0] or 0),
+                "spot_positions": int(conn.execute(f"SELECT COUNT(*) FROM {positions_table} WHERE user_id=?", (user_id,)).fetchone()[0] or 0),
                 "futures_positions": int(conn.execute("SELECT COUNT(*) FROM trading_futures_positions WHERE user_id=?", (user_id,)).fetchone()[0] or 0),
                 "margin_positions": int(conn.execute("SELECT COUNT(*) FROM trading_margin_positions WHERE user_id=?", (user_id,)).fetchone()[0] or 0),
                 "pending_profit": int(conn.execute("SELECT COUNT(*) FROM trading_pending_profit WHERE user_id=?", (user_id,)).fetchone()[0] or 0),
@@ -10684,8 +10961,8 @@ class TradingEngineService:
             conn.execute("DELETE FROM trading_bots WHERE user_id=?", (user_id,))
             conn.execute("DELETE FROM trading_spot_realized_pnl WHERE user_id=?", (user_id,))
             conn.execute("DELETE FROM trading_fills WHERE user_id=?", (user_id,))
-            conn.execute("DELETE FROM trading_orders WHERE user_id=?", (user_id,))
-            conn.execute("DELETE FROM trading_spot_positions WHERE user_id=?", (user_id,))
+            conn.execute(f"DELETE FROM {orders_table} WHERE user_id=?", (user_id,))
+            conn.execute(f"DELETE FROM {positions_table} WHERE user_id=?", (user_id,))
             conn.execute("DELETE FROM trading_futures_positions WHERE user_id=?", (user_id,))
             conn.execute("DELETE FROM trading_margin_positions WHERE user_id=?", (user_id,))
             conn.execute("DELETE FROM trading_pending_profit WHERE user_id=?", (user_id,))
@@ -10737,23 +11014,26 @@ class TradingEngineService:
         return totals
 
     def _ledger_row(self, conn, ledger_uuid):
-        return conn.execute("SELECT * FROM points_ledger WHERE ledger_uuid=?", (str(ledger_uuid or ""),)).fetchone()
+        ledger_table, _route_ctx = self._resolve_table("points_ledger", action="ledger-read")
+        return conn.execute(f"SELECT * FROM {ledger_table} WHERE ledger_uuid=?", (str(ledger_uuid or ""),)).fetchone()
 
     def _verify_fill_ledgers(self, conn, errors):
+        orders_table, route_ctx = self._resolve_table("orders", action="verify_fill_ledgers")
+        ledger_table = resolve_table("points_ledger", route_ctx)
         fills = conn.execute(
-            """
+            f"""
             SELECT f.*, o.order_uuid, o.chain_frozen_points
             FROM trading_fills f
-            JOIN trading_orders o ON o.id=f.order_id
+            JOIN {orders_table} o ON o.id=f.order_id
             ORDER BY f.id ASC
             """
         ).fetchall()
         ledger_by_uuid = {
             row["ledger_uuid"]: row
             for row in conn.execute(
-                """
+                f"""
                 SELECT *
-                FROM points_ledger
+                FROM {ledger_table}
                 WHERE reference_type='trading_order'
                   AND action_type IN (
                     'trading_unfreeze',
@@ -10816,11 +11096,14 @@ class TradingEngineService:
                 })
 
     def _verify_open_order_locks(self, conn, errors):
+        orders_table, route_ctx = self._resolve_table("orders", action="verify_open_order_locks")
+        positions_table = resolve_table("positions", route_ctx)
+        ledger_table = resolve_table("points_ledger", route_ctx)
         ledger_net = {}
         for row in conn.execute(
-            """
+            f"""
             SELECT reference_id, direction, amount
-            FROM points_ledger
+            FROM {ledger_table}
             WHERE reference_type='trading_order'
               AND action_type IN ('trading_freeze', 'trading_unfreeze')
             ORDER BY id ASC
@@ -10834,7 +11117,7 @@ class TradingEngineService:
                 ledger_net[reference_id] += int(row["amount"])
             elif row["direction"] == "unfreeze":
                 ledger_net[reference_id] -= int(row["amount"])
-        order_rows = conn.execute("SELECT * FROM trading_orders ORDER BY id ASC").fetchall()
+        order_rows = conn.execute(f"SELECT * FROM {orders_table} ORDER BY id ASC").fetchall()
         for order in order_rows:
             funding_mode = order["funding_mode"] if "funding_mode" in order.keys() else "points_chain"
             if funding_mode == "root_simulated":
@@ -10871,7 +11154,9 @@ class TradingEngineService:
             if order["side"] == "sell" and order["status"] in OPEN_ORDER_STATUSES:
                 key = (int(order["user_id"]), order["market_symbol"])
                 locked_expected[key] = locked_expected.get(key, 0) + int(order["quantity_units"])
-        for row in conn.execute("SELECT user_id, market_symbol, locked_quantity_units FROM trading_spot_positions ORDER BY user_id, market_symbol").fetchall():
+        for row in conn.execute(
+            f"SELECT user_id, market_symbol, locked_quantity_units FROM {positions_table} ORDER BY user_id, market_symbol"
+        ).fetchall():
             key = (int(row["user_id"]), row["market_symbol"])
             expected = locked_expected.pop(key, 0)
             actual = int(row["locked_quantity_units"] or 0)
@@ -10894,6 +11179,7 @@ class TradingEngineService:
                 })
 
     def _verify_reserve_pool(self, conn, errors):
+        ledger_table, _route_ctx = self._resolve_table("points_ledger", action="verify_reserve_pool")
         fill_delta = int(conn.execute("SELECT COALESCE(SUM(reserve_delta_points), 0) FROM trading_fills").fetchone()[0] or 0)
         trade_event_delta = int(conn.execute(
             """
@@ -10936,7 +11222,7 @@ class TradingEngineService:
         allocation_ledgers = {
             row["ledger_uuid"]: row
             for row in conn.execute(
-                "SELECT * FROM points_ledger WHERE action_type='trading_reserve_allocation' ORDER BY id ASC"
+                f"SELECT * FROM {ledger_table} WHERE action_type='trading_reserve_allocation' ORDER BY id ASC"
             ).fetchall()
         }
         for event in conn.execute("SELECT * FROM trading_reserve_pool_events WHERE event_type='root_reserve_allocation' ORDER BY id ASC").fetchall():
@@ -10985,11 +11271,12 @@ class TradingEngineService:
             })
 
     def _verify_sim_accounts(self, conn, errors):
+        orders_table, _route_ctx = self._resolve_table("orders", action="verify_sim_accounts")
         expected_locked = {}
         for order in conn.execute(
-            """
+            f"""
             SELECT user_id, frozen_points
-            FROM trading_orders
+            FROM {orders_table}
             WHERE funding_mode='root_simulated'
               AND side='buy'
               AND status IN ('open', 'partially_filled')
@@ -11028,15 +11315,16 @@ class TradingEngineService:
                 })
 
     def _verify_margin_position_locks(self, conn, errors):
+        ledger_table, _route_ctx = self._resolve_table("points_ledger", action="verify_margin_position_locks")
         root_user_ids = {
             int(row["id"])
             for row in conn.execute("SELECT id FROM users WHERE username='root'").fetchall()
         }
         ledger_net = {}
         for row in conn.execute(
-            """
+            f"""
             SELECT reference_id, direction, amount
-            FROM points_ledger
+            FROM {ledger_table}
             WHERE reference_type='trading_margin_position'
               AND action_type IN ('trading_margin_collateral_freeze', 'trading_margin_collateral_unfreeze')
             ORDER BY id ASC
@@ -11131,7 +11419,8 @@ class TradingEngineService:
     def _verify_state_on_conn(self, conn, *, enter_safe_mode=False):
         errors = []
         totals = self._replay_positions(conn)
-        rows = conn.execute("SELECT * FROM trading_spot_positions ORDER BY user_id, market_symbol").fetchall()
+        positions_table, _route_ctx = self._resolve_table("positions", action="verify_state")
+        rows = conn.execute(f"SELECT * FROM {positions_table} ORDER BY user_id, market_symbol").fetchall()
         seen = set()
         for row in rows:
             key = (int(row["user_id"]), row["market_symbol"])
@@ -11291,15 +11580,16 @@ class TradingEngineService:
                     "metadata": {"failed_runs": len(failed_runs)},
                 })
         else:
+            orders_table, _route_ctx = self._resolve_table("orders", action="bot_audit")
             open_orders = conn.execute(
                 "SELECT COUNT(*) AS c FROM trading_grid_orders WHERE grid_bot_id=? AND status='open'",
                 (int(row["id"]),),
             ).fetchone()["c"]
             orphan_open_orders = conn.execute(
-                """
+                f"""
                 SELECT COUNT(*) AS c
                 FROM trading_grid_orders go
-                LEFT JOIN trading_orders o ON o.order_uuid=go.trading_order_uuid
+                LEFT JOIN {orders_table} o ON o.order_uuid=go.trading_order_uuid
                 WHERE go.grid_bot_id=? AND go.status='open' AND (
                     go.trading_order_uuid IS NULL OR o.id IS NULL OR COALESCE(o.status, '') NOT IN ('open', 'partially_filled')
                 )
