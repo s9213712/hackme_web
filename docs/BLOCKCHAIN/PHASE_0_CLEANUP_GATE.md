@@ -447,13 +447,16 @@ def validate_setting(key, raw_value):
 ### 3.3 既有持續項目
 
 - [x] #129 / #130 / #131 / PB-1 持續綠（final review regression 與 full pytest 已重跑）
-- [ ] 全站 silent fallback grep audit 報告產出，root 簽核「保留/改 opt-in/移除」清單
-- [ ] incident_lockdown 跨路徑 coverage 為 Phase 1+ 預留 hook（service 層 helper 函式）
+- [ ] 全站 silent fallback grep audit 報告產出，root 簽核「保留/改 opt-in/移除」清單 — *屬 Phase 1+ 架構強化，不阻擋 Phase 1 candidate，但必須在後續 QA gate 持續追蹤*
+- [ ] incident_lockdown 跨路徑 coverage 為 Phase 1+ 預留 hook（service 層 helper 函式）— *同上，Phase 1+ 架構強化任務*
+
+> **這兩項屬於 Phase 1+ 架構強化，不再阻擋 Phase 1 candidate，但必須在後續 QA gate 持續追蹤。**
+> They do not block Phase 1 candidate status, but must be tracked in Phase 1+ QA.
 
 ### 3.4 Low cleanup（不阻擋）
 
-- [ ] #141：test ignored_dirs 補 `.venv` 等
-- [ ] #142：`prompt_password / prompt_default` 改 `>&2` 導向 stderr
+- [x] **#141**：test ignored_dirs 補 `.venv` 等 — RESOLVED 2026-05-04（見 Low-18）
+- [x] **#142**：`prompt_password / prompt_default` 改 `>&2` 導向 stderr — RESOLVED 2026-05-04（見 Low-19）
 
 ### 3.5 Docs / 簽核
 

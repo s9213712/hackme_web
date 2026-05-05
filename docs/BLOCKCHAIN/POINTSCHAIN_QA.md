@@ -264,7 +264,7 @@
 
 ## 8a. Phase 7 出口 Gate（QA Mining / Contribution Rewards）
 
-> Status: design approved, implementation blocked until Phase 0/1/2/4/6 complete.
+> Status: design approved. Phase 0 cleanup closed. Phase 7 implementation blocked until Phase 1 / 2 / 4 / 6 complete and root separately authorizes Phase 7.
 > 完整規格 [POINTS_MINING_REWARDS.md](POINTS_MINING_REWARDS.md) §21。
 
 ### 8a.1 Schema / 結構

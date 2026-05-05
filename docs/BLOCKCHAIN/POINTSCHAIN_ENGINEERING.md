@@ -490,7 +490,7 @@ CREATE TABLE points_multisig_approvals (
 
 ## 8a. Phase 7：QA Mining / Contribution Rewards
 
-**狀態：Design approved (root, 2026-05-04)，implementation blocked until Phase 0/1/2/4/6 complete.**
+**狀態：Design approved (root, 2026-05-04). Phase 0 cleanup closed. Phase 7 implementation blocked until Phase 1 / 2 / 4 / 6 complete and root separately authorizes Phase 7.**
 
 完整設計與 schema / API / gate 見 [POINTS_MINING_REWARDS.md](POINTS_MINING_REWARDS.md)。本章只列工程整合要點。
 

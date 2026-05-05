@@ -1,12 +1,12 @@
 # PointsChain Mining Rewards v1
 
-> **Status：Design approved (root, 2026-05-04)，implementation blocked until PointsChain v2 Phase 0/1/2/4/6 complete.**
+> **Status：Design approved (root, 2026-05-04). Phase 0 cleanup closed. Phase 7 implementation blocked until Phase 1 / 2 / 4 / 6 complete and root separately authorizes Phase 7.**
 >
 > 此文件是 PointsChain v2 **Phase 7** 正式設計書。
 > 對應 [`docs/research/QA Mining.txt`](../research/QA%20Mining.txt) 與
 > 設計提案 [`docs/research/POINTS_MINING_REWARDS_PLAN.md`](../research/POINTS_MINING_REWARDS_PLAN.md)。
 >
-> 在 PointsChain v2 Phase 0/1/2/4/6 完成前，僅允許 DRAFT / mock / dry-run；不准真實 payout。
+> Phase 0 cleanup 已關閉，但在 Phase 1 / 2 / 4 / 6 完成前，Phase 7 僅允許 DRAFT / mock / dry-run；不准真實 payout。
 
 ---
 
@@ -886,4 +886,4 @@ mining payout 不寫 ledger_v2 + chain_block
 
 ---
 
-*Approved by root, 2026-05-04. Implementation blocked until PointsChain v2 Phase 0/1/2/4/6 complete.*
+*Approved by root, 2026-05-04. Phase 0 cleanup closed. Phase 7 implementation blocked until PointsChain v2 Phase 1 / 2 / 4 / 6 complete and root separately authorizes Phase 7.*

@@ -400,7 +400,7 @@ PointsChain v2 對既有 snapshot/restore 的明確策略：
 
 ### 10a. Phase 7：QA Mining / 貢獻獎勵
 
-> Status: **Design approved (2026-05-04)，implementation blocked until Phase 0/1/2/4/6 complete.**
+> Status: **Design approved (2026-05-04). Phase 0 cleanup closed. Phase 7 implementation blocked until Phase 1 / 2 / 4 / 6 complete and root separately authorizes Phase 7.**
 > 完整規格見 [POINTS_MINING_REWARDS.md](POINTS_MINING_REWARDS.md)。
 
 #### 你能做什麼
