@@ -494,6 +494,124 @@ def test_matching_orderbook_hydrate_reads_only_routed_world(tmp_path):
         conn.close()
 
 
+def test_internal_test_open_margin_position_routes_row_to_shadow_table(tmp_path):
+    _points, trading = _services(tmp_path)
+    conn = trading.get_db()
+    try:
+        ensure_snapshot_schema(conn)
+        conn.commit()
+    finally:
+        conn.close()
+
+    opened = trading.open_margin_position(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        position_type="margin_long",
+        quantity="0.2",
+        collateral_points=250,
+        ctx=_sm_ctx("internal_test", tester_id=7),
+    )
+
+    conn = trading.get_db()
+    try:
+        prod_count = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM trading_margin_positions WHERE position_uuid=?",
+                (opened["position"]["position_uuid"],),
+            ).fetchone()[0]
+            or 0
+        )
+        shadow_row = conn.execute(
+            """
+            SELECT tester_user_id, user_id, status, collateral_trial_points, collateral_chain_points
+            FROM test_shadow_margin_positions
+            WHERE position_uuid=?
+            """,
+            (opened["position"]["position_uuid"],),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert prod_count == 0
+    assert shadow_row is not None
+    assert int(shadow_row["tester_user_id"] or 0) == 7
+    assert int(shadow_row["user_id"] or 0) == 1
+    assert shadow_row["status"] == "open"
+    assert int(shadow_row["collateral_trial_points"] or 0) == 250
+    assert int(shadow_row["collateral_chain_points"] or 0) == 0
+
+
+def test_internal_test_open_margin_position_writes_chain_collateral_to_shadow_ledger(tmp_path):
+    _points, trading = _services(tmp_path)
+    ctx = _sm_ctx("internal_test", tester_id=9)
+    conn = trading.get_db()
+    try:
+        ensure_snapshot_schema(conn)
+        trading._ensure_shadow_wallet(conn, 1, ctx)
+        now = trading_engine_module._now()
+        conn.execute(
+            """
+            UPDATE test_shadow_wallets
+            SET balance_points=?, soft_balance=?, hard_balance=0,
+                soft_frozen=0, hard_frozen=0, updated_at=?
+            WHERE user_id=?
+            """,
+            (2_000, 2_000, now, 1),
+        )
+        trading._ensure_trial_credit(conn, 1)
+        conn.execute(
+            """
+            UPDATE trading_trial_credits
+            SET available_points=0, locked_points=0, deployed_points=0, status='depleted', updated_at=?
+            WHERE user_id=?
+            """,
+            (now, 1),
+        )
+        prod_ledger_before = int(conn.execute("SELECT COUNT(*) FROM points_ledger").fetchone()[0] or 0)
+        conn.commit()
+    finally:
+        conn.close()
+
+    opened = trading.open_margin_position(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        position_type="margin_long",
+        quantity="0.2",
+        collateral_points=300,
+        ctx=ctx,
+    )
+
+    conn = trading.get_db()
+    try:
+        prod_ledger_after = int(conn.execute("SELECT COUNT(*) FROM points_ledger").fetchone()[0] or 0)
+        shadow_ledger_rows = conn.execute(
+            """
+            SELECT tester_user_id, action_type, direction, amount
+            FROM test_shadow_ledger
+            WHERE reference_id=?
+            ORDER BY id ASC
+            """,
+            (opened["position"]["position_uuid"],),
+        ).fetchall()
+        shadow_wallet = conn.execute(
+            "SELECT soft_balance, soft_frozen, balance_points FROM test_shadow_wallets WHERE user_id=?",
+            (1,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert prod_ledger_after == prod_ledger_before
+    assert [row["action_type"] for row in shadow_ledger_rows] == [
+        "trading_margin_collateral_freeze",
+        "trading_margin_open_fee",
+    ]
+    assert all(int(row["tester_user_id"] or 0) == 9 for row in shadow_ledger_rows)
+    assert shadow_wallet is not None
+    assert int(shadow_wallet["soft_frozen"] or 0) == 300
+    assert int(shadow_wallet["soft_balance"] or 0) == 1_699
+    assert int(shadow_wallet["balance_points"] or 0) == 1_699
+
+
 def test_spot_buy_uses_trial_credit_before_points_chain_and_updates_position(tmp_path):
     points, trading = _services(tmp_path)
     points.record_transaction(

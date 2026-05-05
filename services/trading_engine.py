@@ -10471,6 +10471,7 @@ class TradingEngineService:
             conn.commit()
             conn.execute("BEGIN IMMEDIATE")
             self._assert_writable(conn)
+            margin_positions_table, route_ctx = self._resolve_table("margin_positions", ctx, action="open_margin_position")
             if operation_key:
                 existing_operation = conn.execute(
                     """
@@ -10570,6 +10571,7 @@ class TradingEngineService:
                         "chain_collateral_points": chain_collateral,
                     },
                     actor=actor,
+                    ctx=route_ctx,
                 )["ledger_uuid"])
             if chain_fee:
                 ledger_uuids.append(self._ledger(
@@ -10591,44 +10593,80 @@ class TradingEngineService:
                         "chain_fee_points": chain_fee,
                     },
                     actor=actor,
+                    ctx=route_ctx,
                 )["ledger_uuid"])
             if fee and not is_root_simulated:
                 self._reserve_delta(conn, delta=fee, event_type="margin_fee_retained", reason="TRADING_MARGIN_OPEN_FEE", actor=actor)
             if principal and not is_root_simulated:
                 self._reserve_delta(conn, delta=-principal, event_type="margin_principal_lent", reason="TRADING_MARGIN_PRINCIPAL_LENT", actor=actor)
             now = _now()
-            cur = conn.execute(
-                """
-                INSERT INTO trading_margin_positions (
-                    position_uuid, user_id, market_symbol, position_type, quantity_units,
-                    entry_price_points, principal_points, collateral_points, open_fee_points,
-                    interest_percent_daily, interest_paid_points, interest_accrued_hours, interest_interval_hours,
-                    interest_minimum_hours, borrowed_asset_symbol, status, opened_at, updated_at,
-                    collateral_trial_points, collateral_chain_points, open_fee_trial_points, open_fee_chain_points
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    position_uuid,
-                    user_id,
-                    market["symbol"],
-                    position_type,
-                    quantity_units,
-                    price,
-                    principal,
-                    collateral,
-                    fee,
-                    effective_interest_percent_daily,
-                    interest_interval_hours,
-                    interest_minimum_hours,
-                    borrowed_asset_symbol,
-                    now,
-                    now,
-                    trial_collateral,
-                    chain_collateral,
-                    trial_fee,
-                    chain_fee,
-                ),
-            )
+            if margin_positions_table == "test_shadow_margin_positions":
+                cur = conn.execute(
+                    f"""
+                    INSERT INTO {margin_positions_table} (
+                        position_uuid, tester_user_id, user_id, market_symbol, position_type, quantity_units,
+                        entry_price_points, principal_points, collateral_points, open_fee_points,
+                        interest_percent_daily, interest_paid_points, interest_accrued_hours, interest_interval_hours,
+                        interest_minimum_hours, borrowed_asset_symbol, status, opened_at, updated_at,
+                        collateral_trial_points, collateral_chain_points, open_fee_trial_points, open_fee_chain_points
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        position_uuid,
+                        self._shadow_actor_user_id(route_ctx, user_id),
+                        user_id,
+                        market["symbol"],
+                        position_type,
+                        quantity_units,
+                        price,
+                        principal,
+                        collateral,
+                        fee,
+                        effective_interest_percent_daily,
+                        interest_interval_hours,
+                        interest_minimum_hours,
+                        borrowed_asset_symbol,
+                        now,
+                        now,
+                        trial_collateral,
+                        chain_collateral,
+                        trial_fee,
+                        chain_fee,
+                    ),
+                )
+            else:
+                cur = conn.execute(
+                    f"""
+                    INSERT INTO {margin_positions_table} (
+                        position_uuid, user_id, market_symbol, position_type, quantity_units,
+                        entry_price_points, principal_points, collateral_points, open_fee_points,
+                        interest_percent_daily, interest_paid_points, interest_accrued_hours, interest_interval_hours,
+                        interest_minimum_hours, borrowed_asset_symbol, status, opened_at, updated_at,
+                        collateral_trial_points, collateral_chain_points, open_fee_trial_points, open_fee_chain_points
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        position_uuid,
+                        user_id,
+                        market["symbol"],
+                        position_type,
+                        quantity_units,
+                        price,
+                        principal,
+                        collateral,
+                        fee,
+                        effective_interest_percent_daily,
+                        interest_interval_hours,
+                        interest_minimum_hours,
+                        borrowed_asset_symbol,
+                        now,
+                        now,
+                        trial_collateral,
+                        chain_collateral,
+                        trial_fee,
+                        chain_fee,
+                    ),
+                )
             self._audit_event(
                 conn,
                 "TRADING_MARGIN_POSITION_OPENED",
@@ -10673,7 +10711,7 @@ class TradingEngineService:
                     occurred_at=now,
                 )
             conn.commit()
-            row = conn.execute("SELECT * FROM trading_margin_positions WHERE id=?", (cur.lastrowid,)).fetchone()
+            row = conn.execute(f"SELECT * FROM {margin_positions_table} WHERE id=?", (cur.lastrowid,)).fetchone()
             result = {"ok": True, "position": self._margin_position_payload(row), "funding": self._funding_payload(conn, user_id)}
             if operation_key:
                 conn.execute(

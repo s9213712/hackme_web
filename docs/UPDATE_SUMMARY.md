@@ -1,6 +1,24 @@
 # Update Summary
 
-Release ID: `2026.05.05-134`
+Release ID: `2026.05.05-135`
+
+## 2026.05.05-135
+
+- `open_margin_position()` now routes margin position inserts through the
+  resolved `margin_positions` table for the active Server Mode v2 context
+  instead of hardcoding `trading_margin_positions`.
+- Internal-test margin opens now populate `tester_user_id` when writing shadow
+  rows, so `test_shadow_margin_positions` inserts follow the shadow schema
+  contract instead of failing or silently drifting back toward production-only
+  assumptions.
+- Internal-test margin collateral and fee ledger writes now pass the active
+  trading context into `_ledger(...)`, ensuring chain-backed shadow margin opens
+  write to `test_shadow_ledger` / `test_shadow_wallets` instead of production
+  `points_ledger` / `wallets`.
+- Added regressions proving:
+  - shadow margin opens create rows only in `test_shadow_margin_positions`,
+  - chain-backed shadow margin opens leave production `points_ledger` untouched,
+  - shadow ledger rows record the expected tester namespace.
 
 ## 2026.05.05-134
 
