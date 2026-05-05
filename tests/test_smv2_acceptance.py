@@ -113,11 +113,39 @@ def test_production_trade_updates_chain_correctly():
 # ─────────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.xfail(strict=True, reason="Phase 5 trading dual-engine not yet landed")
 def test_liquidation_does_not_cross_world():
-    # Will assert that a shadow-position liquidation never reads
-    # production positions and never writes production wallets/ledger.
-    raise AssertionError("Phase 5 not landed — placeholder")
+    """Liquidation source / sink must stay in the same world.
+    Phase 5 (boundary) gate enforces this at every entry point.
+    """
+    from services.trading_mode_gate import (
+        liquidation_target_table,
+        liquidation_settle_table,
+        assert_same_world,
+        CrossWorldContamination,
+        TradingDisabledInMode,
+    )
+    # A production liquidation reads from production positions and
+    # writes to production wallets — both stay in prod.
+    prod_ctx = _ctx("production")
+    assert liquidation_target_table(prod_ctx) == "trading_spot_positions"
+    assert liquidation_settle_table(prod_ctx) == "wallets"
+
+    # An internal_test liquidation reads from shadow positions and
+    # writes to shadow wallets — both stay in shadow.
+    inter_ctx = _ctx("internal_test")
+    assert liquidation_target_table(inter_ctx) == "test_shadow_positions"
+    assert liquidation_settle_table(inter_ctx) == "test_shadow_wallets"
+
+    # Mixing prod source + shadow sink (or vice versa) — refuse loudly.
+    with pytest.raises(CrossWorldContamination):
+        assert_same_world(prod_ctx, inter_ctx, action="liquidation")
+    with pytest.raises(CrossWorldContamination):
+        assert_same_world(inter_ctx, prod_ctx, action="liquidation_settle")
+
+    # Non-trading modes refuse outright.
+    for bad_mode in ("dev_ready", "maintenance", "incident_lockdown", "superweak"):
+        with pytest.raises(TradingDisabledInMode):
+            liquidation_target_table(_ctx(bad_mode))
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -150,9 +178,21 @@ def test_restore_recovers_chain_integrity():
 # ─────────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.xfail(strict=True, reason="Phase 5 trading dual-engine not yet landed")
 def test_funding_rate_does_not_cross_world():
-    raise AssertionError("Phase 5 not landed — placeholder")
+    """Funding-rate publish channels are mode-scoped from day 1 via
+    the cache-key helper. A production funding tick cannot be
+    accidentally republished into a shadow channel — the keys differ.
+    """
+    from services.trading_mode_gate import funding_channel_key, TradingDisabledInMode
+    prod = funding_channel_key("BTC", _ctx("production"))
+    inter = funding_channel_key("BTC", SmV2Context(mode="internal_test", tester_id=7, actor_role="user", request_id="r"))
+    assert prod != inter
+    assert ":production:" in prod
+    assert ":internal_test:" in inter and "tester7" in inter
+    # Non-trading modes refuse outright.
+    for bad_mode in ("dev_ready", "maintenance", "incident_lockdown", "superweak"):
+        with pytest.raises(TradingDisabledInMode):
+            funding_channel_key("BTC", _ctx(bad_mode))
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -162,9 +202,29 @@ def test_funding_rate_does_not_cross_world():
 # ─────────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.xfail(strict=True, reason="Phase 5 + Phase 6 not yet landed")
 def test_matching_engine_namespaces_separate():
-    raise AssertionError("Phases 5 / 6 not landed — placeholder")
+    """Matching-engine orderbook keys carry mode scope. A buy at 1 BTC
+    in internal_test sits in a different namespace than the same buy
+    in production — so a shadow order can never collide with a prod
+    one.
+    """
+    from services.trading_mode_gate import matching_orderbook_key
+    prod_ctx = _ctx("production")
+    test_ctx = _ctx("test")
+    inter_ctx = SmV2Context(mode="internal_test", tester_id=1, actor_role="user", request_id="r")
+    inter_ctx_2 = SmV2Context(mode="internal_test", tester_id=2, actor_role="user", request_id="r2")
+
+    prod = matching_orderbook_key("BTC/POINTS", prod_ctx)
+    test = matching_orderbook_key("BTC/POINTS", test_ctx)
+    inter1 = matching_orderbook_key("BTC/POINTS", inter_ctx)
+    inter2 = matching_orderbook_key("BTC/POINTS", inter_ctx_2)
+
+    # All four namespaces are distinct.
+    assert len({prod, test, inter1, inter2}) == 4
+    # internal_test without tester_id must refuse — would otherwise
+    # collide all testers into a single shadow orderbook.
+    with pytest.raises(ValueError):
+        matching_orderbook_key("BTC/POINTS", _ctx("internal_test"))
 
 
 # ─────────────────────────────────────────────────────────────────────
