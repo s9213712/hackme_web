@@ -12,6 +12,7 @@ table the current request is allowed to write to. The mapping:
     | wallets              | wallets            | test_shadow_wallets   |
     | orders               | trading_orders     | test_shadow_orders    |
     | positions            | trading_spot_positions | test_shadow_positions |
+    | margin_positions     | trading_margin_positions | test_shadow_margin_positions |
     | points_ledger        | points_ledger      | test_shadow_ledger    |
     | points_chain_blocks  | points_chain_blocks| RoutingNotAllowed     |
 
@@ -43,6 +44,7 @@ LOGICAL_TO_PROD = {
     "wallets": "wallets",
     "orders": "trading_orders",
     "positions": "trading_spot_positions",
+    "margin_positions": "trading_margin_positions",
     "points_ledger": "points_ledger",
     "points_chain_blocks": "points_chain_blocks",
 }
@@ -50,6 +52,7 @@ LOGICAL_TO_SHADOW = {
     "wallets": "test_shadow_wallets",
     "orders": "test_shadow_orders",
     "positions": "test_shadow_positions",
+    "margin_positions": "test_shadow_margin_positions",
     "points_ledger": "test_shadow_ledger",
     # points_chain_blocks intentionally NOT in this map — never routable
     # outside production. See `resolve_table` below.

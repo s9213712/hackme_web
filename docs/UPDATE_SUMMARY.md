@@ -1,6 +1,12 @@
 # Update Summary
 
-Release ID: `2026.05.05-127`
+Release ID: `2026.05.05-128`
+
+## 2026.05.05-128
+
+- Server Mode v2 的 Trading Phase 5b G-4 已把 liquidation source/sink 明確 mode-lock：liquidation source 現在經由 `liquidation_target_table(ctx)` 指向 `trading_margin_positions` 或 `test_shadow_margin_positions`，settlement sink 則經由 `liquidation_settle_table(ctx)` 指向 production 或 shadow wallet world。
+- `close_margin_position(... force_liquidation=True)` 與 `scan_margin_liquidations()` 現在都會先做 same-world guard；production liquidation 繼續沿用原流程，但 `internal_test` liquidation 會在任何 reserve / ledger / chain side effect 之前明確拒絕，避免 shadow liquidation 寫到 production wallet、points ledger 或 chain。
+- 這輪也補了 `test_shadow_margin_positions` schema 與 regression：internal_test 不會拿 production `position_uuid` 來強平，手工插入的 shadow margin position 也只會收到「shadow liquidation 尚未支援」的明確錯誤，而不會留下半套 production mutation。
 
 ## 2026.05.05-127
 

@@ -127,11 +127,11 @@ def funding_channel_key(market: str, ctx: SmV2Context) -> str:
 
 def liquidation_target_table(ctx: SmV2Context) -> str:
     """The "where do liquidation effects land" answer. Wrapper around
-    resolve_table('positions', ctx) plus the trading-mode gate, so the
+    resolve_table('margin_positions', ctx) plus the trading-mode gate, so the
     liquidation worker can refuse a non-trading mode upfront.
     """
     ctx = assert_trading_allowed(ctx, action="liquidation")
-    return resolve_table("positions", ctx)
+    return resolve_table("margin_positions", ctx)
 
 
 def liquidation_settle_table(ctx: SmV2Context) -> str:

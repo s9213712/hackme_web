@@ -22,7 +22,13 @@ from services.points_chain import (
 )
 from services.server_mode_context import SmV2Context, current_ctx
 from services.server_mode_routing import resolve_table
-from services.trading_mode_gate import assert_trading_allowed, matching_orderbook_key
+from services.trading_mode_gate import (
+    assert_same_world,
+    assert_trading_allowed,
+    liquidation_settle_table,
+    liquidation_target_table,
+    matching_orderbook_key,
+)
 from services.trading_markets import (
     list_market_definitions,
     list_live_price_markets,
@@ -6333,11 +6339,12 @@ class TradingEngineService:
         )
         return capitalized + int((carry + due_micro) // POINT_MICRO_SCALE)
 
-    def _accrue_margin_interest(self, conn, position, *, actor=None, now_text=None):
+    def _accrue_margin_interest(self, conn, position, *, actor=None, now_text=None, ctx=None):
         if not position or position["status"] != "open":
             return position
         if self._is_root_user_id(conn, int(position["user_id"])):
             return position
+        margin_positions_table, route_ctx = self._resolve_table("margin_positions", ctx, action="margin_interest")
         total_hours = self._margin_interest_total_hours(position, now_text=now_text)
         accrued_hours = int(position["interest_accrued_hours"] or 0) if "interest_accrued_hours" in position.keys() else 0
         due_hours = max(0, total_hours - accrued_hours)
@@ -6354,13 +6361,13 @@ class TradingEngineService:
         next_carry = int(total_micro % POINT_MICRO_SCALE)
         if due_points <= 0:
             conn.execute(
-                "UPDATE trading_margin_positions SET interest_accrued_hours=?, interest_carry_micropoints=?, updated_at=? WHERE id=?",
+                f"UPDATE {margin_positions_table} SET interest_accrued_hours=?, interest_carry_micropoints=?, updated_at=? WHERE id=?",
                 (total_hours, next_carry, _now(), position["id"]),
             )
-            return conn.execute("SELECT * FROM trading_margin_positions WHERE id=?", (position["id"],)).fetchone()
+            return conn.execute(f"SELECT * FROM {margin_positions_table} WHERE id=?", (position["id"],)).fetchone()
 
         user_id = int(position["user_id"])
-        wallet_payload = self._wallet_payload(conn, user_id)
+        wallet_payload = self._wallet_payload(conn, user_id, ctx=route_ctx)
         available = int(wallet_payload.get("points_balance") or 0)
         paid = min(due_points, available)
         capitalized = due_points - paid
@@ -6368,6 +6375,7 @@ class TradingEngineService:
         if paid:
             ledger_uuid = self._ledger(
                 conn,
+                ctx=route_ctx,
                 user_id=user_id,
                 currency_type="points",
                 direction="debit",
@@ -6400,8 +6408,8 @@ class TradingEngineService:
 
         now = _now()
         conn.execute(
-            """
-            UPDATE trading_margin_positions
+            f"""
+            UPDATE {margin_positions_table}
             SET interest_points=interest_points+?,
                 interest_paid_points=interest_paid_points+?,
                 interest_accrued_hours=?,
@@ -6430,7 +6438,7 @@ class TradingEngineService:
                 "ledger_uuid": ledger_uuid,
             },
         )
-        return conn.execute("SELECT * FROM trading_margin_positions WHERE id=?", (position["id"],)).fetchone()
+        return conn.execute(f"SELECT * FROM {margin_positions_table} WHERE id=?", (position["id"],)).fetchone()
 
     def _margin_risk_payload(self, conn, position, market=None, *, now_text=None, price_override_points=None, price_source_override=None):
         market = market or self._market(conn, position["market_symbol"])
@@ -10465,8 +10473,9 @@ class TradingEngineService:
             conn.commit()
             conn.execute("BEGIN IMMEDIATE")
             self._assert_writable(conn)
+            margin_positions_table, route_ctx = self._resolve_table("margin_positions", ctx, action="close_margin_position")
             position = conn.execute(
-                "SELECT * FROM trading_margin_positions WHERE position_uuid=?",
+                f"SELECT * FROM {margin_positions_table} WHERE position_uuid=?",
                 (str(position_uuid or ""),),
             ).fetchone()
             if not position:
@@ -10476,7 +10485,17 @@ class TradingEngineService:
                 raise ValueError("cannot close another user's margin position")
             if position["status"] != "open":
                 raise ValueError("margin position is not open")
-            position = self._accrue_margin_interest(conn, position, actor=actor)
+            if force_liquidation:
+                source_table = liquidation_target_table(route_ctx)
+                settle_table = liquidation_settle_table(route_ctx)
+                assert_same_world(route_ctx, route_ctx, "liquidation")
+                if source_table != margin_positions_table:
+                    raise ValueError("liquidation source table mismatch")
+                if settle_table != resolve_table("wallets", route_ctx):
+                    raise ValueError("liquidation settle table mismatch")
+                if route_ctx.mode != "production":
+                    raise ValueError("shadow liquidation is not supported yet; production-only until shadow funding world lands")
+            position = self._accrue_margin_interest(conn, position, actor=actor, ctx=route_ctx)
             market = self._market(conn, position["market_symbol"])
             risk = self._margin_risk_payload(
                 conn,
@@ -10497,7 +10516,7 @@ class TradingEngineService:
                         } if price_override_points is not None else None,
                     )
                     for row in conn.execute(
-                        "SELECT * FROM trading_margin_positions WHERE user_id=? AND status='open' ORDER BY id ASC",
+                        f"SELECT * FROM {margin_positions_table} WHERE user_id=? AND status='open' ORDER BY id ASC",
                         (user_id,),
                     ).fetchall()
                 ]
@@ -10534,6 +10553,7 @@ class TradingEngineService:
             elif collateral_chain:
                 ledger_uuids.append(self._ledger(
                     conn,
+                    ctx=route_ctx,
                     user_id=user_id,
                     currency_type="points",
                     direction="unfreeze",
@@ -10564,6 +10584,7 @@ class TradingEngineService:
                     )
                 ledger_uuids.append(self._ledger(
                     conn,
+                    ctx=route_ctx,
                     user_id=user_id,
                     currency_type="points",
                     direction="credit",
@@ -10595,6 +10616,7 @@ class TradingEngineService:
                 if debit_amount:
                     ledger_uuids.append(self._ledger(
                         conn,
+                        ctx=route_ctx,
                         user_id=user_id,
                         currency_type="points",
                         direction="debit",
@@ -10632,8 +10654,8 @@ class TradingEngineService:
             now = _now()
             next_status = "liquidated" if force_liquidation else "closed"
             conn.execute(
-                """
-                UPDATE trading_margin_positions
+                f"""
+                UPDATE {margin_positions_table}
                 SET close_fee_points=?, interest_points=?, exit_price_points=?, realized_pnl_points=?, status=?, closed_at=?, updated_at=?
                 WHERE id=?
                 """,
@@ -10676,7 +10698,7 @@ class TradingEngineService:
             if force_liquidation:
                 self._notify_margin_liquidated(conn, user_id=user_id, position=position, risk=risk)
             conn.commit()
-            row = conn.execute("SELECT * FROM trading_margin_positions WHERE id=?", (position["id"],)).fetchone()
+            row = conn.execute(f"SELECT * FROM {margin_positions_table} WHERE id=?", (position["id"],)).fetchone()
             return {
                 "ok": True,
                 "position": self._margin_position_payload(row),
@@ -10701,6 +10723,10 @@ class TradingEngineService:
         scanned = 0
         try:
             self.ensure_schema(conn)
+            margin_positions_table, route_ctx = self._resolve_table("margin_positions", ctx, action="scan_margin_liquidations")
+            liquidation_target_table(route_ctx)
+            liquidation_settle_table(route_ctx)
+            assert_same_world(route_ctx, route_ctx, "liquidation")
             settings = self._settings_payload(conn)
             if not settings.get("borrowing_enabled"):
                 return {"ok": True, "enabled": False, "reason": "borrowing_disabled", "scanned": 0, "candidates": [], "liquidated": [], "errors": []}
@@ -10709,15 +10735,17 @@ class TradingEngineService:
             state = self._state(conn)
             if state.get("safe_mode"):
                 return {"ok": True, "enabled": False, "reason": "trading_safe_mode", "scanned": 0, "candidates": [], "liquidated": [], "errors": []}
+            if route_ctx.mode != "production":
+                return {"ok": True, "enabled": False, "reason": "shadow_liquidation_unsupported", "scanned": 0, "candidates": [], "liquidated": [], "errors": []}
             rows = conn.execute(
-                "SELECT * FROM trading_margin_positions WHERE status='open' ORDER BY id ASC LIMIT ?",
+                f"SELECT * FROM {margin_positions_table} WHERE status='open' ORDER BY id ASC LIMIT ?",
                 (limit,),
             ).fetchall()
             scanned = len(rows)
             positions_by_user = {}
             for position in rows:
                 try:
-                    position = self._accrue_margin_interest(conn, position, actor=actor)
+                    position = self._accrue_margin_interest(conn, position, actor=actor, ctx=route_ctx)
                     market = self._market(conn, position["market_symbol"])
                     current_price, price_source, price_meta = self._current_market_price_points(conn, market, with_meta=True, high_risk=True)
                     if bool(price_meta.get("high_risk_blocked")):
@@ -10786,6 +10814,7 @@ class TradingEngineService:
                     force_liquidation=True,
                     price_override_points=(candidate.get("risk") or {}).get("price_points"),
                     price_source_override=(candidate.get("risk") or {}).get("price_source"),
+                    ctx=ctx,
                 )
                 liquidated.append({
                     "position_uuid": candidate["position_uuid"],

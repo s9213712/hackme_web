@@ -107,11 +107,11 @@ def test_funding_channel_refused_in_non_trading_mode():
 
 
 def test_liquidation_target_in_production():
-    assert liquidation_target_table(_ctx("production")) == "trading_spot_positions"
+    assert liquidation_target_table(_ctx("production")) == "trading_margin_positions"
 
 
 def test_liquidation_target_in_internal_test_uses_shadow():
-    assert liquidation_target_table(_ctx("internal_test", tester_id=1)) == "test_shadow_positions"
+    assert liquidation_target_table(_ctx("internal_test", tester_id=1)) == "test_shadow_margin_positions"
 
 
 def test_liquidation_settle_in_production():

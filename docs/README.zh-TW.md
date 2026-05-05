@@ -2,7 +2,7 @@
 
 [English README](../README.md)
 
-**目前 Release ID：`2026.05.05-127`**
+**目前 Release ID：`2026.05.05-128`**
 
 這份文件是中文捷徑版入口，不再承擔全部教學。它只回答三件事：
 
@@ -86,6 +86,12 @@ shadow-table activity 沒有污染 production wallet / ledger tables，可直接
 ```bash
 PYTHONPATH=. python3 security/server_mode_v2_full_smoke.py
 ```
+
+補充：Server Mode v2 的 trading Phase 5b 目前已完成 SQL routing、matching
+orderbook namespace 與 liquidation source/sink mode-lock。production liquidation
+維持正常，但 `internal_test` liquidation 目前會先明確拒絕，避免 shadow world
+留下任何 production wallet / ledger / chain 污染；完整的 shadow funding /
+liquidation settlement world 仍是後續 follow-up。
 
 ## 文件地圖
 

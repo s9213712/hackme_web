@@ -936,6 +936,51 @@ def ensure_snapshot_schema(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_shadow_positions_tester ON test_shadow_positions(tester_user_id)")
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS test_shadow_margin_positions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            position_uuid TEXT NOT NULL UNIQUE,
+            tester_user_id INTEGER NOT NULL,
+            user_id INTEGER,
+            market_symbol TEXT NOT NULL,
+            position_type TEXT NOT NULL,
+            quantity_units INTEGER NOT NULL CHECK (quantity_units > 0),
+            entry_price_points INTEGER NOT NULL CHECK (entry_price_points > 0),
+            principal_points INTEGER NOT NULL DEFAULT 0 CHECK (principal_points >= 0),
+            collateral_points INTEGER NOT NULL CHECK (collateral_points > 0),
+            open_fee_points INTEGER NOT NULL DEFAULT 0,
+            close_fee_points INTEGER NOT NULL DEFAULT 0,
+            exit_price_points INTEGER,
+            realized_pnl_points INTEGER NOT NULL DEFAULT 0,
+            interest_percent_daily REAL NOT NULL DEFAULT 0,
+            interest_points INTEGER NOT NULL DEFAULT 0,
+            interest_paid_points INTEGER NOT NULL DEFAULT 0,
+            interest_accrued_hours INTEGER NOT NULL DEFAULT 0,
+            interest_carry_micropoints INTEGER NOT NULL DEFAULT 0,
+            interest_interval_hours INTEGER NOT NULL DEFAULT 1,
+            interest_minimum_hours INTEGER NOT NULL DEFAULT 1,
+            borrowed_asset_symbol TEXT NOT NULL DEFAULT 'POINTS',
+            status TEXT NOT NULL DEFAULT 'open',
+            opened_at TEXT NOT NULL,
+            closed_at TEXT,
+            updated_at TEXT NOT NULL,
+            collateral_trial_points INTEGER NOT NULL DEFAULT 0 CHECK (collateral_trial_points >= 0),
+            collateral_chain_points INTEGER NOT NULL DEFAULT 0 CHECK (collateral_chain_points >= 0),
+            open_fee_trial_points INTEGER NOT NULL DEFAULT 0 CHECK (open_fee_trial_points >= 0),
+            open_fee_chain_points INTEGER NOT NULL DEFAULT 0 CHECK (open_fee_chain_points >= 0),
+            CHECK (position_type IN ('margin_long', 'short')),
+            CHECK (status IN ('open', 'closed', 'liquidated'))
+        )
+        """
+    )
+    shadow_margin_cols = {row["name"] for row in conn.execute("PRAGMA table_info(test_shadow_margin_positions)").fetchall()}
+    if "user_id" not in shadow_margin_cols:
+        conn.execute("ALTER TABLE test_shadow_margin_positions ADD COLUMN user_id INTEGER")
+    conn.execute("UPDATE test_shadow_margin_positions SET user_id=tester_user_id WHERE user_id IS NULL")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_shadow_margin_positions_tester_status ON test_shadow_margin_positions(tester_user_id, status, market_symbol)"
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS test_shadow_ledger (
             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
             ledger_uuid         TEXT NOT NULL UNIQUE,

@@ -107,8 +107,8 @@ def test_production_trade_updates_chain_correctly():
 # 4. liquidation_does_not_cross_world
 #
 # Phase 5 (trading dual-engine) lands the actual liquidation routing.
-# Until then the cheapest proof is: liquidation source is "positions",
-# and "positions" routes to test_shadow_positions in internal_test.
+# Until then the cheapest proof is: liquidation source is "margin_positions",
+# and "margin_positions" routes to test_shadow_margin_positions in internal_test.
 # Marked xfail until Phase 5 actually wires liquidation through routing.
 # ─────────────────────────────────────────────────────────────────────
 
@@ -127,13 +127,13 @@ def test_liquidation_does_not_cross_world():
     # A production liquidation reads from production positions and
     # writes to production wallets — both stay in prod.
     prod_ctx = _ctx("production")
-    assert liquidation_target_table(prod_ctx) == "trading_spot_positions"
+    assert liquidation_target_table(prod_ctx) == "trading_margin_positions"
     assert liquidation_settle_table(prod_ctx) == "wallets"
 
     # An internal_test liquidation reads from shadow positions and
     # writes to shadow wallets — both stay in shadow.
     inter_ctx = _ctx("internal_test")
-    assert liquidation_target_table(inter_ctx) == "test_shadow_positions"
+    assert liquidation_target_table(inter_ctx) == "test_shadow_margin_positions"
     assert liquidation_settle_table(inter_ctx) == "test_shadow_wallets"
 
     # Mixing prod source + shadow sink (or vice versa) — refuse loudly.
@@ -273,7 +273,7 @@ def test_superweak_trading_remains_disabled():
     assert settings.get("feature_economy_enabled") is False, settings
     assert settings.get("feature_trading_enabled") is False, settings
     # Routing also confirms: no trading logical name is routable.
-    for logical in ("wallets", "orders", "positions", "points_ledger"):
+    for logical in ("wallets", "orders", "positions", "margin_positions", "points_ledger"):
         with pytest.raises(routing.RoutingNotAllowed):
             routing.resolve_table(logical, _ctx("superweak"))
     with pytest.raises(ChainModeViolation):

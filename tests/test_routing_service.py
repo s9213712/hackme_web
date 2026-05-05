@@ -35,6 +35,10 @@ def test_production_routes_positions_to_trading_spot_positions():
     assert routing.resolve_table("positions", _ctx("production")) == "trading_spot_positions"
 
 
+def test_production_routes_margin_positions_to_prod():
+    assert routing.resolve_table("margin_positions", _ctx("production")) == "trading_margin_positions"
+
+
 def test_production_routes_points_ledger_to_prod():
     assert routing.resolve_table("points_ledger", _ctx("production")) == "points_ledger"
 
@@ -58,6 +62,10 @@ def test_internal_test_routes_positions_to_shadow():
     assert routing.resolve_table("positions", _ctx("internal_test")) == "test_shadow_positions"
 
 
+def test_internal_test_routes_margin_positions_to_shadow():
+    assert routing.resolve_table("margin_positions", _ctx("internal_test")) == "test_shadow_margin_positions"
+
+
 def test_internal_test_routes_points_ledger_to_shadow():
     assert routing.resolve_table("points_ledger", _ctx("internal_test")) == "test_shadow_ledger"
 
@@ -74,7 +82,7 @@ def test_internal_test_chain_blocks_raises():
 
 
 @pytest.mark.parametrize("mode", ["dev_ready", "test", "maintenance", "incident_lockdown", "superweak"])
-@pytest.mark.parametrize("logical", ["wallets", "orders", "positions", "points_ledger"])
+@pytest.mark.parametrize("logical", ["wallets", "orders", "positions", "margin_positions", "points_ledger"])
 def test_unsupported_modes_raise_routing_not_allowed(mode, logical):
     with pytest.raises(routing.RoutingNotAllowed) as exc:
         routing.resolve_table(logical, _ctx(mode))

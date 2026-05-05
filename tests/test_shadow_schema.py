@@ -66,6 +66,22 @@ def test_shadow_positions_exists_with_expected_columns():
     assert expected.issubset(set(cols)), f"missing columns: {expected - set(cols)}"
 
 
+def test_shadow_margin_positions_exists_with_expected_columns():
+    conn = _fresh_db()
+    cols = _columns(conn, "test_shadow_margin_positions")
+    expected = {
+        "id", "position_uuid", "tester_user_id", "user_id", "market_symbol", "position_type",
+        "quantity_units", "entry_price_points", "principal_points", "collateral_points",
+        "open_fee_points", "close_fee_points", "exit_price_points", "realized_pnl_points",
+        "interest_percent_daily", "interest_points", "interest_paid_points",
+        "interest_accrued_hours", "interest_carry_micropoints", "interest_interval_hours",
+        "interest_minimum_hours", "borrowed_asset_symbol", "status", "opened_at", "closed_at",
+        "updated_at", "collateral_trial_points", "collateral_chain_points",
+        "open_fee_trial_points", "open_fee_chain_points",
+    }
+    assert expected.issubset(set(cols)), f"missing columns: {expected - set(cols)}"
+
+
 def test_shadow_ledger_exists_with_expected_columns():
     conn = _fresh_db()
     cols = _columns(conn, "test_shadow_ledger")
@@ -86,6 +102,7 @@ def test_shadow_indexes_exist():
         "idx_shadow_orders_tester",
         "idx_shadow_orders_market_status",
         "idx_shadow_positions_tester",
+        "idx_shadow_margin_positions_tester_status",
         "idx_shadow_ledger_tester",
         "idx_shadow_ledger_action",
     ):

@@ -18,7 +18,7 @@ Related technical references:
 
 ## Release and Schema
 
-- Release ID: `2026.05.05-127`
+- Release ID: `2026.05.05-128`
 - Schema version: `29`
 - Release ID source: `services/release_info.py`
 - Runtime version endpoint: `GET /api/version`
@@ -63,6 +63,11 @@ Server Mode v2 note:
   `matching_orderbook_key(market, ctx)`, so production and per-tester
   `internal_test` open limit orders no longer share the same in-process
   matching book even when they target the same market symbol.
+- Trading Phase 5b G-4 now routes liquidation source via
+  `liquidation_target_table(ctx)` and settlement via
+  `liquidation_settle_table(ctx)`. Production liquidation remains enabled, but
+  `internal_test` liquidation is intentionally rejected before any reserve /
+  ledger / chain mutation until a full shadow funding world exists.
 
 ## Fast Local Setup
 

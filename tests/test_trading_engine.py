@@ -4491,6 +4491,153 @@ def test_margin_liquidation_scan_skips_when_fused_price_is_conservative(tmp_path
     assert result["errors"][0]["price_health"] == "conservative"
 
 
+def test_internal_test_force_liquidation_cannot_read_production_margin_position(tmp_path):
+    points, trading = _services(tmp_path)
+    conn = trading.get_db()
+    try:
+        ensure_snapshot_schema(conn)
+        conn.commit()
+    finally:
+        conn.close()
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=202, action_type="test_funding")
+    _deplete_trial_credit(trading, user_id=1)
+    trading.update_root_settings(
+        actor=_actor(3, "root", "super_admin"),
+        settings={
+            "borrowing_enabled": True,
+            "borrow_interest_percent_daily": 0,
+            "margin_liquidation_enabled": True,
+            "margin_maintenance_percent": 15,
+            "price_source": "manual_root",
+        },
+        markets=[],
+    )
+    opened = trading.open_margin_position(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        position_type="margin_long",
+        quantity="0.1",
+        collateral_points=200,
+    )
+    conn = trading.get_db()
+    try:
+        prod_ledger_before = int(conn.execute("SELECT COUNT(*) FROM points_ledger").fetchone()[0] or 0)
+        prod_chain_before = int(conn.execute("SELECT COUNT(*) FROM points_chain_blocks").fetchone()[0] or 0)
+    finally:
+        conn.close()
+
+    with pytest.raises(ValueError, match="margin position not found"):
+        trading.close_margin_position(
+            actor={"username": "system", "role": "system"},
+            position_uuid=opened["position"]["position_uuid"],
+            force_liquidation=True,
+            ctx=_sm_ctx("internal_test", tester_id=7),
+        )
+
+    conn = trading.get_db()
+    try:
+        row = conn.execute(
+            "SELECT status FROM trading_margin_positions WHERE position_uuid=?",
+            (opened["position"]["position_uuid"],),
+        ).fetchone()
+        prod_ledger_after = int(conn.execute("SELECT COUNT(*) FROM points_ledger").fetchone()[0] or 0)
+        prod_chain_after = int(conn.execute("SELECT COUNT(*) FROM points_chain_blocks").fetchone()[0] or 0)
+    finally:
+        conn.close()
+
+    assert row["status"] == "open"
+    assert prod_ledger_after == prod_ledger_before
+    assert prod_chain_after == prod_chain_before
+
+
+def test_internal_test_liquidation_rejects_shadow_world_before_prod_mutation(tmp_path):
+    _points, trading = _services(tmp_path)
+    conn = trading.get_db()
+    try:
+        ensure_snapshot_schema(conn)
+        now = trading_engine_module._now()
+        conn.execute(
+            """
+            INSERT INTO test_shadow_margin_positions (
+                position_uuid, tester_user_id, user_id, market_symbol, position_type,
+                quantity_units, entry_price_points, principal_points, collateral_points,
+                interest_percent_daily, status, opened_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
+            """,
+            ("shadow-liquidation-1", 7, 1, "ETH/POINTS", "margin_long", 10_000_000, 5000, 300, 200, 0.0, now, now),
+        )
+        conn.commit()
+        prod_ledger_before = int(conn.execute("SELECT COUNT(*) FROM points_ledger").fetchone()[0] or 0)
+        prod_chain_before = int(conn.execute("SELECT COUNT(*) FROM points_chain_blocks").fetchone()[0] or 0)
+    finally:
+        conn.close()
+
+    with pytest.raises(ValueError, match="shadow liquidation is not supported yet"):
+        trading.close_margin_position(
+            actor={"username": "system", "role": "system"},
+            position_uuid="shadow-liquidation-1",
+            force_liquidation=True,
+            ctx=_sm_ctx("internal_test", tester_id=7),
+        )
+
+    conn = trading.get_db()
+    try:
+        shadow_row = conn.execute(
+            "SELECT status FROM test_shadow_margin_positions WHERE position_uuid='shadow-liquidation-1'"
+        ).fetchone()
+        prod_ledger_after = int(conn.execute("SELECT COUNT(*) FROM points_ledger").fetchone()[0] or 0)
+        prod_chain_after = int(conn.execute("SELECT COUNT(*) FROM points_chain_blocks").fetchone()[0] or 0)
+    finally:
+        conn.close()
+
+    assert shadow_row["status"] == "open"
+    assert prod_ledger_after == prod_ledger_before
+    assert prod_chain_after == prod_chain_before
+
+
+def test_internal_test_liquidation_scan_returns_disabled_without_prod_side_effects(tmp_path):
+    _points, trading = _services(tmp_path)
+    conn = trading.get_db()
+    try:
+        ensure_snapshot_schema(conn)
+        now = trading_engine_module._now()
+        conn.execute(
+            """
+            INSERT INTO test_shadow_margin_positions (
+                position_uuid, tester_user_id, user_id, market_symbol, position_type,
+                quantity_units, entry_price_points, principal_points, collateral_points,
+                interest_percent_daily, status, opened_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
+            """,
+            ("shadow-scan-1", 9, 1, "ETH/POINTS", "margin_long", 10_000_000, 5000, 300, 200, 0.0, now, now),
+        )
+        conn.commit()
+        prod_ledger_before = int(conn.execute("SELECT COUNT(*) FROM points_ledger").fetchone()[0] or 0)
+        prod_chain_before = int(conn.execute("SELECT COUNT(*) FROM points_chain_blocks").fetchone()[0] or 0)
+    finally:
+        conn.close()
+
+    result = trading.scan_margin_liquidations(
+        actor={"username": "system", "role": "system"},
+        limit=10,
+        ctx=_sm_ctx("internal_test", tester_id=9),
+    )
+
+    assert result["ok"] is True
+    assert result["enabled"] is False
+    assert result["reason"] == "shadow_liquidation_unsupported"
+
+    conn = trading.get_db()
+    try:
+        prod_ledger_after = int(conn.execute("SELECT COUNT(*) FROM points_ledger").fetchone()[0] or 0)
+        prod_chain_after = int(conn.execute("SELECT COUNT(*) FROM points_chain_blocks").fetchone()[0] or 0)
+    finally:
+        conn.close()
+
+    assert prod_ledger_after == prod_ledger_before
+    assert prod_chain_after == prod_chain_before
+
+
 def test_cross_margin_free_margin_prevents_single_position_liquidation(tmp_path):
     points, trading = _services(tmp_path)
     points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
