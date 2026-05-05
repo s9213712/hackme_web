@@ -85,6 +85,16 @@ from services.trading.payloads import (
     order_payload,
     position_payload,
 )
+from services.trading.markets import (
+    fallback_market_display_symbol,
+    market_display_symbol_from_registry_row,
+    market_provider_ids_from_mappings,
+    market_seed_compare_value,
+    market_supports_mapping_rows,
+    normalize_market_symbol_from_rows,
+    provider_mapping_capabilities,
+    registry_seed_status,
+)
 from services.trading.validators import (
     _apr_percent_from_daily,
     _billable_interest_hours_from_elapsed_seconds,
@@ -106,7 +116,6 @@ from services.trading_mode_gate import (
 )
 from services.trading_markets import (
     TRADING_MARKET_CATALOG_SEED_VERSION,
-    get_market_definition,
     list_market_definitions,
     list_live_price_markets,
     list_seed_markets,
@@ -376,110 +385,25 @@ def _registry_default_market_payload(definition):
 
 
 def _provider_mapping_capabilities(provider):
-    return {
-        "supports_ticker": 1 if provider in TICKER_CAPABLE_PROVIDERS else 0,
-        "supports_depth": 1 if provider in DEPTH_CAPABLE_PROVIDERS else 0,
-        "supports_candles": 1 if provider in REFERENCE_PRICE_CAPABLE_PROVIDERS else 0,
-    }
+    return provider_mapping_capabilities(
+        provider,
+        ticker_capable_providers=TICKER_CAPABLE_PROVIDERS,
+        depth_capable_providers=DEPTH_CAPABLE_PROVIDERS,
+        reference_price_capable_providers=REFERENCE_PRICE_CAPABLE_PROVIDERS,
+    )
 
 
 def _market_seed_compare_value(value):
-    if isinstance(value, bool):
-        return int(value)
-    if isinstance(value, float):
-        return round(float(value), 8)
-    if value is None:
-        return None
-    return value
+    return market_seed_compare_value(value)
 
 
 def _registry_seed_status(registry_row, mappings):
-    source = str(registry_row.get("registry_source") or "catalog_seed").strip().lower() or "catalog_seed"
-    catalog_definition = get_market_definition(registry_row.get("symbol"))
-    catalog_seed_version = int(TRADING_MARKET_CATALOG_SEED_VERSION)
-    applied_seed_version = int(registry_row.get("seed_version") or 0)
-    if source == "custom":
-        return {
-            "registry_source": "custom",
-            "seed_version": applied_seed_version,
-            "catalog_seed_version": catalog_seed_version,
-            "seed_sync_status": "custom",
-            "seed_sync_reasons": [],
-            "seed_sync_message": "此市場由 root 在資料庫中建立，DB 是唯一 source of truth。",
-        }
-    if not catalog_definition:
-        return {
-            "registry_source": source,
-            "seed_version": applied_seed_version,
-            "catalog_seed_version": catalog_seed_version,
-            "seed_sync_status": "orphaned_seed",
-            "seed_sync_reasons": ["catalog_definition_missing"],
-            "seed_sync_message": "catalog 已不再定義此市場；目前以 DB registry 為唯一 source of truth。",
-        }
-    expected = _registry_default_market_payload(catalog_definition)
-    reasons = []
-    compare_fields = (
-        "base_asset",
-        "quote_asset",
-        "display_name",
-        "display_quote_currency",
-        "market_type",
-        "enabled",
-        "allow_spot",
-        "allow_margin",
-        "allow_bots",
-        "allow_risk_grade_usage",
-        "price_precision",
-        "quantity_precision",
-        "min_order_size",
-        "max_order_size",
-        "lot_size",
-        "tick_size",
-        "sort_order",
-        "default_manual_price_points",
-        "live_price_enabled",
-        "reference_price_enabled",
-        "btc_trade_enabled",
+    return registry_seed_status(
+        registry_row,
+        mappings,
+        registry_default_market_payload=_registry_default_market_payload,
+        provider_mapping_capabilities_func=_provider_mapping_capabilities,
     )
-    for field in compare_fields:
-        if _market_seed_compare_value(registry_row.get(field)) != _market_seed_compare_value(expected.get(field)):
-            reasons.append(field)
-    expected_mappings = {}
-    for provider, provider_symbol in dict(catalog_definition.get("provider_ids") or {}).items():
-        capabilities = _provider_mapping_capabilities(provider)
-        expected_mappings[provider] = {
-            "provider_symbol": str(provider_symbol or "").strip(),
-            "supports_ticker": int(capabilities["supports_ticker"]),
-            "supports_depth": int(capabilities["supports_depth"]),
-            "supports_candles": int(capabilities["supports_candles"]),
-            "enabled": 1 if str(provider_symbol or "").strip() else 0,
-        }
-    actual_mappings = {
-        str(row["provider"] or "").strip(): {
-            "provider_symbol": str(row["provider_symbol"] or "").strip(),
-            "supports_ticker": int(row["supports_ticker"] or 0),
-            "supports_depth": int(row["supports_depth"] or 0),
-            "supports_candles": int(row["supports_candles"] or 0),
-            "enabled": int(row["enabled"] or 0),
-        }
-        for row in mappings
-    }
-    if expected_mappings != actual_mappings:
-        reasons.append("provider_mappings")
-    status = "current" if not reasons else "drifted"
-    message = (
-        "此 seeded 市場仍與目前 catalog 定義一致。"
-        if status == "current"
-        else "此 seeded 市場已偏離目前 catalog 定義；DB registry 仍是執行期 source of truth。"
-    )
-    return {
-        "registry_source": source,
-        "seed_version": applied_seed_version,
-        "catalog_seed_version": catalog_seed_version,
-        "seed_sync_status": status,
-        "seed_sync_reasons": reasons,
-        "seed_sync_message": message,
-    }
 
 
 def _seed_market_registry_from_catalog(conn):
@@ -2061,34 +1985,18 @@ class TradingEngineService:
         return conn.execute(query, params).fetchone()
 
     def _normalize_market_symbol_on_conn(self, conn, value, *, include_disabled=True):
-        raw = str(value or "").strip().upper()
-        if not raw:
-            return ""
         rows = conn.execute(
             """
             SELECT symbol, base_asset, quote_asset, display_quote_currency, display_name, enabled
             FROM trading_markets_registry
             """
         ).fetchall()
-        alias_map = {}
-        for row in rows:
-            if not include_disabled and not int(row["enabled"] or 0):
-                continue
-            symbol = str(row["symbol"] or "").strip().upper()
-            if not symbol:
-                continue
-            alias_map[symbol] = symbol
-            display_symbol = self._display_symbol_from_parts(
-                base_asset=row["base_asset"],
-                quote_currency=row["quote_asset"],
-                display_quote_currency=row["display_quote_currency"],
-            )
-            if display_symbol:
-                alias_map[display_symbol] = symbol
-            display_name = str(row["display_name"] or "").strip().upper()
-            if display_name:
-                alias_map[display_name] = symbol
-        return alias_map.get(raw, normalize_market_symbol(raw))
+        return normalize_market_symbol_from_rows(
+            rows,
+            value,
+            include_disabled=include_disabled,
+            display_symbol_from_parts=self._display_symbol_from_parts,
+        )
 
     def normalize_market_symbol(self, value, *, include_disabled=True):
         conn = self.get_db()
@@ -2114,16 +2022,7 @@ class TradingEngineService:
         return conn.execute(query, params).fetchall()
 
     def _market_provider_ids_from_mappings(self, rows, *, support_field=None):
-        provider_ids = {}
-        for row in rows or []:
-            provider = str(row["provider"] or "").strip()
-            provider_symbol = str(row["provider_symbol"] or "").strip()
-            if not provider or not provider_symbol or not int(row["enabled"] or 0):
-                continue
-            if support_field and not int(row[support_field] or 0):
-                continue
-            provider_ids[provider] = provider_symbol
-        return provider_ids
+        return market_provider_ids_from_mappings(rows, support_field=support_field)
 
     def _market_provider_id_on_conn(self, conn, symbol, provider):
         provider_key = str(provider or "").strip()
@@ -2154,18 +2053,18 @@ class TradingEngineService:
         market = self._registry_market_row(conn, symbol, include_disabled=True)
         if not market or not int(market["live_price_enabled"] or 0):
             return False
-        return any(
-            int(row["enabled"] or 0) and int(row["supports_ticker"] or 0) and str(row["provider_symbol"] or "").strip()
-            for row in self._market_provider_mappings(conn, symbol)
+        return market_supports_mapping_rows(
+            self._market_provider_mappings(conn, symbol),
+            support_field="supports_ticker",
         )
 
     def _market_supports_reference_price_on_conn(self, conn, symbol):
         market = self._registry_market_row(conn, symbol, include_disabled=True)
         if not market or not int(market["reference_price_enabled"] or 0):
             return False
-        return any(
-            int(row["enabled"] or 0) and int(row["supports_candles"] or 0) and str(row["provider_symbol"] or "").strip()
-            for row in self._market_provider_mappings(conn, symbol)
+        return market_supports_mapping_rows(
+            self._market_provider_mappings(conn, symbol),
+            support_field="supports_candles",
         )
 
     def _market_supports_btc_trade_on_conn(self, conn, symbol):
@@ -2199,19 +2098,11 @@ class TradingEngineService:
     def _market_display_symbol_on_conn(self, conn, symbol, quote_currency=None):
         market = self._registry_market_row(conn, symbol, include_disabled=True)
         if market:
-            return self._display_symbol_from_parts(
-                base_asset=market["base_asset"],
-                quote_currency=market["quote_asset"],
-                display_quote_currency=market["display_quote_currency"],
-            ) or str(market["symbol"] or "").strip().upper()
-        normalized = normalize_market_symbol(symbol)
-        quote = str(quote_currency or "").strip().upper()
-        if normalized.endswith("/POINTS"):
-            return normalized[:-7] + "/USDT"
-        if quote == "POINTS" and "/" in normalized:
-            base, _sep, _tail = normalized.partition("/")
-            return f"{base}/USDT"
-        return normalized
+            return market_display_symbol_from_registry_row(
+                market,
+                display_symbol_from_parts=self._display_symbol_from_parts,
+            )
+        return fallback_market_display_symbol(symbol, quote_currency=quote_currency)
 
     def market_display_symbol(self, symbol, quote_currency=None):
         conn = self.get_db()
