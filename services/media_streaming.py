@@ -591,11 +591,16 @@ def stream_playback_payload(conn, *, file_row, video_id):
         "fallback_url": direct_url,
         "stream_url": direct_url,
         "master_url": "",
+        "hls_js_url": "/js/vendor/hls.light.min.js?v=20260505-hlsjs",
+        "player_strategy": "direct_only",
+        "stream_warning": "目前使用直接串流。",
         "status": status,
         "streaming_ready": False,
     }
     if status and status.get("status") == "ready" and status.get("master_manifest_path"):
         payload["mode"] = "hls"
         payload["master_url"] = f"/api/videos/{int(video_id)}/hls/master.m3u8"
+        payload["player_strategy"] = "native_hls_or_hlsjs"
+        payload["stream_warning"] = ""
         payload["streaming_ready"] = True
     return payload

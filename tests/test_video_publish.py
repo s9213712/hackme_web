@@ -11,7 +11,7 @@ from services.cloud_drive import ensure_cloud_drive_attachment_schema
 from services.member_levels import ensure_member_level_rules_schema
 from services.storage_albums import ensure_storage_album_schema
 from services.upload_security import ensure_upload_security_schema, update_cloud_drive_security_policy
-from services.videos import publish_video
+from services.videos import get_video, publish_video
 from tests.video_test_helpers import actor, seed_cloud_file, video_test_db
 
 
@@ -121,6 +121,31 @@ def test_publish_share_link_hash_uses_kdf_and_revoke_regenerate_controls():
         (first["id"],),
     ).fetchone()
     assert int(active["total"]) == 0
+
+
+def test_publish_share_payload_exposes_state_remaining_views_and_fragment_requirement():
+    conn = video_test_db()
+    seed_cloud_file(conn, file_id="e2ee-video", owner_user_id=1, mime="video/mp4", privacy_mode="e2ee")
+    video = publish_video(
+        conn,
+        actor=actor(1, "owner"),
+        cloud_file_id="e2ee-video",
+        title="secret",
+        visibility="unlisted",
+        share_password="ViewerPass123",
+        share_wrapped_file_key_envelope='{"alg":"AES-GCM","v":1,"nonce":"AAAAAAAAAAAAAAAA","ciphertext":"AQIDBA=="}',
+        share_max_views=12,
+    )
+
+    hydrated = get_video(conn, video["id"], actor=actor(1, "owner"))
+    share = hydrated["share_link"]
+
+    assert share["state"] == "active"
+    assert share["state_message"] == "分享連結有效"
+    assert share["remaining_views"] == 12
+    assert share["password_required"] is True
+    assert share["requires_fragment_key"] is True
+    assert share["password_locked_until"] == ""
 
 
 def _json_resp(payload, status=200):

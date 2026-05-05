@@ -315,6 +315,9 @@ def test_video_playback_and_hls_routes_use_ready_stream_asset(tmp_path, monkeypa
     assert payload["mode"] == "hls"
     assert payload["streaming_ready"] is True
     assert payload["can_prepare_stream"] is False
+    assert payload["player_strategy"] == "native_hls_or_hlsjs"
+    assert payload["stream_warning"] == ""
+    assert payload["hls_js_url"].endswith("hls.light.min.js?v=20260505-hlsjs")
     assert payload["master_url"].endswith(f"/api/videos/{video_id}/hls/master.m3u8")
     assert payload["fallback_url"].endswith(f"/api/videos/{video_id}/stream")
 
@@ -587,6 +590,9 @@ def test_shared_e2ee_video_requires_password_fragment_and_exposes_browser_side_p
     playback_json = playback.get_json()
     assert playback_json["mode"] == "e2ee_direct"
     assert playback_json["requires_fragment_key"] is True
+    assert playback_json["player_strategy"] == "browser_e2ee"
+    assert playback_json["stream_warning"]
+    assert playback_json["hls_js_url"] == ""
 
     e2ee_key = client.get(f"/api/videos/shared/{token}/e2ee-key")
     assert e2ee_key.status_code == 200
@@ -662,6 +668,78 @@ def test_shared_video_password_lock_max_views_and_revoke_routes(tmp_path):
     assert revoked.status_code == 200
     revoked_view = _build_app(db_path, storage_root, Fernet(Fernet.generate_key()), current_user=None).test_client().get(f"/api/videos/shared/{new_token}")
     assert revoked_view.status_code == 404
+
+
+def test_manager_can_update_unlisted_share_link_and_receives_state_payload(tmp_path):
+    db_path = tmp_path / "shared-manager.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    owner_conn = sqlite3.connect(db_path)
+    owner_conn.row_factory = sqlite3.Row
+    try:
+        _seed_uploaded_file(owner_conn, storage_root, file_id="plain-video", owner_user_id=1, filename="movie.mp4", mime="video/mp4", privacy_mode="standard_plain", payload=b"plain-video")
+        video = publish_video(
+            owner_conn,
+            actor={"id": 1, "username": "alice", "role": "user"},
+            cloud_file_id="plain-video",
+            title="Plain",
+            visibility="unlisted",
+        )
+        owner_conn.commit()
+        video_id = video["id"]
+    finally:
+        owner_conn.close()
+
+    manager_client = _build_app(
+        db_path,
+        storage_root,
+        Fernet(Fernet.generate_key()),
+        current_user={"id": 3, "username": "manager", "role": "manager", "member_level": "trusted", "effective_level": "trusted"},
+    ).test_client()
+    updated = manager_client.put(
+        f"/api/videos/{video_id}/share-link",
+        json={"share_password": "ManagerShare123", "share_max_views": 7},
+    )
+    assert updated.status_code == 200
+    body = updated.get_json()
+    assert body["share_link"]["state"] == "active"
+    assert body["share_link"]["remaining_views"] == 7
+    assert body["share_link"]["password_required"] is True
+    assert body["video"]["share_link"]["state_message"] == "分享連結有效"
+
+
+def test_shared_video_page_mentions_hls_js_fallback_and_fragment_loss(tmp_path):
+    db_path = tmp_path / "shared-page.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    owner_conn = sqlite3.connect(db_path)
+    owner_conn.row_factory = sqlite3.Row
+    try:
+        _seed_uploaded_file(owner_conn, storage_root, file_id="plain-video", owner_user_id=1, filename="movie.mp4", mime="video/mp4", privacy_mode="standard_plain", payload=b"plain-video")
+        video = publish_video(
+            owner_conn,
+            actor={"id": 1, "username": "alice", "role": "user"},
+            cloud_file_id="plain-video",
+            title="Plain",
+            visibility="unlisted",
+        )
+        owner_conn.commit()
+        token = video["share_url"].rsplit("/", 1)[-1]
+    finally:
+        owner_conn.close()
+
+    page = _build_app(db_path, storage_root, Fernet(Fernet.generate_key()), current_user=None).test_client().get(f"/shared/videos/{token}")
+    html = page.get_data(as_text=True)
+
+    assert page.status_code == 200
+    assert "loadSharedHlsLibrary" in html
+    assert "/js/vendor/hls.light.min.js?v=20260505-hlsjs" in html
+    assert "Chrome / Firefox / Edge" in html
+    assert "完整連結" in html
+    assert "無法復原" in html
+    assert "分享授權無效或已被竄改" in html
 
 
 def test_shared_video_regeneration_for_e2ee_requires_new_browser_side_envelope(tmp_path):

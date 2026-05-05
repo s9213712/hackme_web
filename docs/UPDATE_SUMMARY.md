@@ -1,6 +1,19 @@
 # Update Summary
 
-Release ID: `2026.05.05-110`
+Release ID: `2026.05.05-112`
+
+## 2026.05.05-112
+
+- The video watch page now includes an E2EE share-management panel for unlisted videos, exposing share state, remaining views, password status, expiry, max views, copy/regenerate/revoke controls, and the explicit warning that fragment loss is unrecoverable.
+- Share-link management now stays consistent with the documented permissions: manager/root can update or revoke unlisted share links, while strict E2EE regeneration still requires a fresh browser-side share envelope from the publisher's original password.
+- Added richer regression coverage for share state payloads, manager-side share-link updates, fragment-loss/tamper messaging, and the mobile layout of the new management controls.
+
+## 2026.05.05-111
+
+- Added same-origin `hls.js` playback fallback for prepared HLS media, so desktop Chrome / Firefox / Edge can play HLS reliably without breaking Safari native HLS.
+- Video playback APIs now expose `player_strategy`, `stream_warning`, and `hls_js_url`, and the UI now surfaces human-readable HLS/direct/E2EE playback states instead of silently guessing.
+- Shared video pages now use the same HLS fallback rules as the main video page; strict E2EE shares still stay browser-side, while HLS.js failures fall back to direct stream with explicit error messaging.
+- Added release-level regression coverage for local `hls.js` loading, shared-page fallback wiring, and HLS/E2EE playback hints.
 
 ## 2026.05.05-110
 

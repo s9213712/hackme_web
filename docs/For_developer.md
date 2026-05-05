@@ -18,7 +18,7 @@ Related technical references:
 
 ## Release and Schema
 
-- Release ID: `2026.05.05-110`
+- Release ID: `2026.05.05-112`
 - Schema version: `29`
 - Release ID source: `services/release_info.py`
 - Runtime version endpoint: `GET /api/version`
@@ -342,7 +342,18 @@ Streaming notes:
   share envelope and `#vk=` fragment key
 - eligible public/unlisted or `server_encrypted` media now auto-prepare HLS
   derivatives on publish as a best-effort path
-- browsers without native HLS support still fall back to direct `/stream`
+- Safari keeps native HLS playback
+- desktop Chrome / Firefox / Edge now load a same-origin `hls.js` bundle for
+  prepared HLS playback
+- if HLS.js initialization fails, playback falls back to direct `/stream` with
+  a user-visible error state instead of silently failing
+- local HLS fallback bundle:
+  - `public/js/vendor/hls.light.min.js`
+  - upstream `hls.js` `1.6.15`
+  - `BSD-3-Clause`
+- unlisted strict `e2ee` videos now expose a share-management panel in the
+  main video detail page, but the server still rejects `raw_file_key`,
+  `e2ee_password`, and `vk`; only wrapped share envelopes are accepted
 
 ### ComfyUI
 

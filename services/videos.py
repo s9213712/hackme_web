@@ -459,21 +459,53 @@ def _video_share_password_required(row):
     return bool(str(_share_row_value(row, "password_hash") or ""))
 
 
+def _video_share_state(row):
+    if not row:
+        return "missing"
+    if str(_share_row_value(row, "revoked_at", "") or "").strip():
+        return "revoked"
+    if _video_share_is_expired(row):
+        return "expired"
+    max_views = int(_share_row_value(row, "max_views", 0) or 0)
+    access_count = int(_share_row_value(row, "access_count", 0) or 0)
+    if max_views > 0 and access_count >= max_views:
+        return "view_limit_reached"
+    if _video_share_password_is_locked(row):
+        return "password_locked"
+    token = str(_share_row_value(row, "token", "") or "").strip()
+    return "active" if token else "missing"
+
+
 def _video_share_link_payload(row):
     if not row:
         return None
     token = _share_row_value(row, "token")
+    max_views = int(_share_row_value(row, "max_views", 0) or 0)
+    access_count = int(_share_row_value(row, "access_count", 0) or 0)
+    remaining_views = max(0, max_views - access_count) if max_views > 0 else None
+    state = _video_share_state(row)
     return {
         "id": _share_row_value(row, "id"),
         "video_id": int(_share_row_value(row, "video_id", 0) or 0),
         "created_at": _share_row_value(row, "created_at"),
-        "access_count": int(_share_row_value(row, "access_count", 0) or 0),
+        "access_count": access_count,
         "last_accessed_at": _share_row_value(row, "last_accessed_at"),
         "expires_at": _share_row_value(row, "expires_at", "") or "",
-        "max_views": int(_share_row_value(row, "max_views", 0) or 0),
+        "max_views": max_views,
+        "remaining_views": remaining_views,
         "url": _video_share_url(token),
         "password_required": _video_share_password_required(row),
         "requires_fragment_key": bool(str(_share_row_value(row, "wrapped_file_key_envelope", "") or "").strip()),
+        "state": state,
+        "state_message": {
+            "active": "分享連結有效",
+            "expired": "分享連結已到期",
+            "view_limit_reached": "分享連結已達最大觀看次數",
+            "password_locked": "分享密碼已暫時鎖定",
+            "revoked": "分享連結已撤銷",
+            "missing": "尚未建立分享連結",
+        }.get(state, "分享狀態未知"),
+        "password_locked_until": _share_row_value(row, "password_locked_until", "") or "",
     }
 
 
@@ -532,7 +564,14 @@ def ensure_video_share_link(
 ):
     ensure_video_schema(conn)
     video = conn.execute("SELECT * FROM videos WHERE id=?", (int(video_id),)).fetchone()
-    if not video or int(video["owner_user_id"]) != int(_actor_value(actor, "id")):
+    if (
+        not video
+        or not actor
+        or (
+            int(video["owner_user_id"]) != int(_actor_value(actor, "id"))
+            and not is_manager_or_root(actor)
+        )
+    ):
         return None, "找不到影音"
     normalized_envelope = None if wrapped_file_key_envelope in (_VIDEO_SHARE_UNSET, None) else _normalized_share_wrap_envelope(wrapped_file_key_envelope)
     normalized_expires_at = None if expires_at in (_VIDEO_SHARE_UNSET, None) else _normalize_video_share_expiry(expires_at)

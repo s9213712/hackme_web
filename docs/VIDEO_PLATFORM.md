@@ -73,11 +73,18 @@ Current playback behavior:
   does not stay on the whole-file decrypt path
 - owners and manager/root accounts can re-run stream preparation from the video
   watch page when a derivative is still pending or failed
-- browsers without native HLS still fall back to direct `/stream`
+- Safari keeps native HLS playback
+- desktop Chrome / Firefox / Edge use a same-origin `hls.js` bundle for
+  prepared HLS playback
+- if `hls.js` fails to initialize or hits a fatal playback error, the player
+  falls back to direct `/stream` with a user-visible warning
 - strict `e2ee` media stay on browser-side decryption and do not use
   server-side HLS; when the owner publishes an unlisted E2EE video, the
   browser re-wraps the file key into a share envelope and stores the fragment
   key only in the URL fragment / local session state
+- the video detail page now includes a share-management panel for unlisted
+  videos, showing link state, remaining views, expiry, second-layer password
+  status, fragment-loss warnings, and copy / regenerate / revoke controls
 
 The stream endpoint resolves the file with the existing Cloud Drive safe path
 resolver, so path traversal, absolute paths, and storage-root escape are handled
@@ -192,6 +199,15 @@ The script validates:
 - idempotency against double spend
 - insufficient-balance rejection
 
+## hls.js Vendor
+
+- Local bundle: `public/js/vendor/hls.light.min.js`
+- Upstream: `hls.js`
+- Version: `1.6.15`
+- License: `BSD-3-Clause`
+- Purpose: desktop Chrome / Firefox / Edge HLS fallback without a third-party
+  CDN dependency at playback time; Safari still prefers native HLS.
+
 Pytest coverage:
 
 ```text
@@ -202,11 +218,28 @@ tests/test_video_comments.py
 tests/test_video_security.py
 ```
 
+## Release Blockers For Streaming
+
+Do not release a streaming build if any of the following are still broken:
+
+- Safari native HLS playback regresses for prepared HLS media.
+- Desktop Chrome / Firefox / Edge cannot initialize the local `hls.js`
+  fallback for prepared HLS media.
+- `hls.js` failure states do not fall back to direct `/stream` with a
+  user-visible error.
+- Strict `e2ee` playback accidentally tries to send `vk`, raw file keys, or
+  original E2EE passwords to the server.
+- The E2EE share-management panel fails to show share state, remaining views,
+  password lock state, or expiry/max-view controls for unlisted videos.
+- Fragment-loss messaging is unclear or implies the server can recover `#vk`.
+- Shared strict `e2ee` pages do not clearly state that fragment loss is
+  unrecoverable and requires share regeneration.
+- Mobile playback UI overflows or hides the actionable error / fallback state.
+
 ## Explicit Non-Goals For v1 / Phase C-1
 
 - No multi-bitrate ABR ladder yet.
 - Auto-prepare is currently synchronous/best-effort, not a queued worker yet.
-- No `hls.js` bundle for non-native browsers yet.
 - No CDN.
 - No recommendation algorithm.
 - No subscription/follow system.

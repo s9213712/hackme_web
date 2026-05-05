@@ -266,6 +266,37 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | GET | `/api/videos/shared/<token>/hls/<variant>/playlist.m3u8` | anonymous | 分享影音 HLS variant |
 | GET | `/api/videos/shared/<token>/hls/<variant>/<segment>` | anonymous | 分享影音 HLS segment |
 
+播放決策補充：
+
+- `/api/videos/<video_id>/playback` 與 `/api/videos/shared/<token>/playback`
+  現在會回：
+  - `mode`: `direct` / `hls` / `e2ee_direct`
+  - `player_strategy`: `direct_only` / `native_hls_or_hlsjs` / `browser_e2ee`
+  - `stream_warning`
+  - `hls_js_url`
+- `/api/videos/<video_id>` 若影片為 `unlisted` 且目前 actor 可管理分享，`video.share_link`
+  會回：
+  - `state`
+  - `state_message`
+  - `remaining_views`
+  - `password_locked_until`
+  - `requires_fragment_key`
+- `PUT /api/videos/<video_id>/share-link`
+  - 接受：
+    - `share_password`
+    - `share_expires_at`
+    - `share_max_views`
+    - `share_wrapped_file_key_envelope`
+    - `regenerate`
+  - 拒絕：
+    - `raw_file_key`
+    - `e2ee_password`
+    - `vk`
+    - `share_key`
+    - `share_key_bytes`
+- Safari 走原生 HLS；桌機 Chrome / Firefox / Edge 由前端載入同源
+  `hls.js` 後播放 `master_url`；strict `e2ee` 只走瀏覽器端解密播放。
+
 ### Games
 
 來源：`routes/games.py`

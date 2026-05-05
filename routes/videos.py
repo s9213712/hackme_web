@@ -396,6 +396,9 @@ def register_video_routes(app, deps):
                 "e2ee_key_url": e2ee_key_url,
                 "requires_fragment_key": bool(shared_token),
                 "master_url": "",
+                "hls_js_url": "",
+                "player_strategy": "browser_e2ee",
+                "stream_warning": "strict E2EE 影音只支援瀏覽器端解密播放，速度會較慢，且不支援伺服器端 HLS 加速。",
                 "streaming_ready": False,
                 "high_performance_streaming": False,
                 "status": _e2ee_direct_status(row),
@@ -425,6 +428,12 @@ def register_video_routes(app, deps):
     video, audio {{ width:100%; margin-top:.8rem; border-radius:14px; background:#070b15; }}
     .meta {{ color:#b8bfd8; font-size:.95rem; }}
     .hidden {{ display:none !important; }}
+    @media (max-width: 640px) {{
+      .wrap {{ padding:.75rem; }}
+      .card {{ padding:.85rem; border-radius:14px; }}
+      video, audio {{ border-radius:10px; }}
+      button {{ width:100%; }}
+    }}
   </style>
 </head>
 <body>
@@ -457,6 +466,38 @@ def register_video_routes(app, deps):
   function browserSupportsNativeHls(mediaType="video") {{
     const probe = document.createElement(mediaType === "audio" ? "audio" : "video");
     return !!(probe && typeof probe.canPlayType === "function" && probe.canPlayType("application/vnd.apple.mpegurl"));
+  }}
+  let sharedHls = null;
+  let sharedHlsLoadPromise = null;
+  function destroySharedPlaybackArtifacts() {{
+    if (sharedHls && typeof sharedHls.destroy === "function") {{
+      try {{ sharedHls.destroy(); }} catch (_) {{}}
+    }}
+    sharedHls = null;
+  }}
+  function loadSharedHlsLibrary(url) {{
+    if (window.Hls) return Promise.resolve(window.Hls);
+    if (sharedHlsLoadPromise) return sharedHlsLoadPromise;
+    sharedHlsLoadPromise = new Promise((resolve, reject) => {{
+      const existing = document.querySelector('script[data-shared-hls-js="1"]');
+      if (existing) {{
+        existing.addEventListener("load", () => resolve(window.Hls || null), {{ once: true }});
+        existing.addEventListener("error", () => reject(new Error("HLS.js 載入失敗")), {{ once: true }});
+        return;
+      }}
+      const script = document.createElement("script");
+      script.src = url;
+      script.async = true;
+      script.defer = true;
+      script.dataset.sharedHlsJs = "1";
+      script.onload = () => resolve(window.Hls || null);
+      script.onerror = () => reject(new Error("HLS.js 載入失敗"));
+      document.head.appendChild(script);
+    }}).catch((err) => {{
+      sharedHlsLoadPromise = null;
+      throw err;
+    }});
+    return sharedHlsLoadPromise;
   }}
   function b64ToBytes(value) {{
     const binary = atob(String(value || "").replace(/\\s+/g, ""));
@@ -550,14 +591,12 @@ def register_video_routes(app, deps):
     const host = $("player-host");
     host.classList.remove("hidden");
     const mediaTag = video.media_type === "audio" ? "audio" : "video";
-    const src = playback.mode === "hls" && browserSupportsNativeHls(video.media_type)
-      ? (playback.master_url || playback.fallback_url || "")
-      : (playback.fallback_url || playback.stream_url || "");
     host.innerHTML = mediaTag === "audio"
       ? `<audio id="shared-player" controls preload="metadata"></audio>`
       : `<video id="shared-player" controls playsinline preload="metadata"></video>`;
     const player = $("shared-player");
     if (!player) return;
+    destroySharedPlaybackArtifacts();
     if (playback.mode === "e2ee_direct") {{
       $("e2ee-note").classList.remove("hidden");
       const fragmentKey = shareKeyFromFragment();
@@ -580,8 +619,36 @@ def register_video_routes(app, deps):
       }}
       return;
     }}
-    player.src = src;
-    setMsg(playback.mode === "hls" ? "HLS 串流已就緒。" : (playback.high_performance_streaming ? "" : "目前使用直接串流。"));
+    if (playback.mode === "hls" && browserSupportsNativeHls(video.media_type)) {{
+      player.src = playback.master_url || playback.fallback_url || "";
+      setMsg("Safari / 原生 HLS 已啟用。");
+      return;
+    }}
+    if (playback.mode === "hls" && playback.master_url) {{
+      try {{
+        const Hls = await loadSharedHlsLibrary(playback.hls_js_url || "/js/vendor/hls.light.min.js?v=20260505-hlsjs");
+        if (!Hls || typeof Hls.isSupported !== "function" || !Hls.isSupported()) {{
+          throw new Error("目前瀏覽器不支援 HLS.js 所需的 MediaSource");
+        }}
+        sharedHls = new Hls({{ enableWorker: true, backBufferLength: 30 }});
+        sharedHls.on(Hls.Events.ERROR, (_event, data) => {{
+          if (!data?.fatal) return;
+          destroySharedPlaybackArtifacts();
+          player.src = playback.fallback_url || playback.stream_url || "";
+          setMsg(`HLS.js 播放失敗，已改用直接串流。${{data?.details ? ` (${{data.details}})` : ""}}`, true);
+        }});
+        sharedHls.loadSource(playback.master_url);
+        sharedHls.attachMedia(player);
+        setMsg("已使用 HLS.js 播放；桌機 Chrome / Firefox / Edge 可穩定播放 HLS。");
+        return;
+      }} catch (err) {{
+        player.src = playback.fallback_url || playback.stream_url || "";
+        setMsg(`HLS.js 初始化失敗，已改用直接串流。${{err?.message ? ` (${{err.message}})` : ""}}`, true);
+        return;
+      }}
+    }}
+    player.src = playback.fallback_url || playback.stream_url || "";
+    setMsg(playback.stream_warning || (playback.high_performance_streaming ? "目前使用高效串流。" : "目前使用直接串流。"));
   }}
   $("share-password-form").addEventListener("submit", async (event) => {{
     event.preventDefault();
@@ -1041,6 +1108,14 @@ def register_video_routes(app, deps):
                 return json_resp({"ok": False, "msg": "找不到影音", "error": "not_found"}), 404
             if request.method == "DELETE":
                 revoke_video_share_link(conn, actor=actor, video_id=video_id)
+                audit(
+                    "VIDEO_SHARE_LINK_REVOKE",
+                    get_client_ip(),
+                    user=actor["username"],
+                    success=True,
+                    ua=get_ua(),
+                    detail=f"video_id={int(video_id)}",
+                )
                 conn.commit()
                 return json_resp({"ok": True, "share_link": None, "video_id": int(video_id)})
             data = request.get_json(silent=True) or {}
@@ -1060,6 +1135,19 @@ def register_video_routes(app, deps):
             if msg:
                 return json_resp({"ok": False, "msg": msg, "error": "share_link_update_failed"}), 400
             updated = get_video(conn, video_id, actor=actor)
+            audit(
+                "VIDEO_SHARE_LINK_UPDATE",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=(
+                    f"video_id={int(video_id)},"
+                    f"regenerate={1 if data.get('regenerate') else 0},"
+                    f"password_required={1 if share_link and share_link.get('password_required') else 0},"
+                    f"state={share_link.get('state') if share_link else 'unknown'}"
+                ),
+            )
             conn.commit()
             return json_resp({"ok": True, "share_link": share_link, "video": updated})
         except PermissionError as exc:

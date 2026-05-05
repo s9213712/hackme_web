@@ -22,7 +22,10 @@ def test_video_visibility_rules():
     private = _published(conn, "private")
 
     assert get_video(conn, public["id"], actor=None)["visibility"] == "public"
-    assert get_video(conn, unlisted["id"], actor=None)["visibility"] == "unlisted"
+    with pytest.raises(PermissionError):
+        get_video(conn, unlisted["id"], actor=None)
+    assert get_video(conn, unlisted["id"], actor=actor(1, "owner"))["visibility"] == "unlisted"
+    assert get_video(conn, unlisted["id"], actor=actor(3, "manager", "manager"))["visibility"] == "unlisted"
 
     with pytest.raises(PermissionError):
         get_video(conn, private["id"], actor=actor(2, "viewer"))
@@ -36,7 +39,8 @@ def test_unlisted_video_is_link_accessible_but_not_publicly_listed():
     public = _published(conn, "public")
     unlisted = _published(conn, "unlisted")
 
-    assert get_video(conn, unlisted["id"], actor=None)["visibility"] == "unlisted"
+    with pytest.raises(PermissionError):
+        get_video(conn, unlisted["id"], actor=None)
     anonymous_ids = {row["id"] for row in list_videos(conn, actor=None)}
     viewer_ids = {row["id"] for row in list_videos(conn, actor=actor(2, "viewer"))}
     owner_ids = {row["id"] for row in list_videos(conn, actor=actor(1, "owner"))}
