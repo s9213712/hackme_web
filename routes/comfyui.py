@@ -62,6 +62,7 @@ COMFYUI_MODEL_DOWNLOAD_TYPES = {
     "embedding": ("embeddings", "Embedding / Textual Inversion"),
     "vae": ("vae", "VAE"),
     "controlnet": ("controlnet", "ControlNet"),
+    "upscale": ("upscale_models", "放大模型"),
 }
 COMFYUI_SUPPORTED_LORA_BASE_MODEL_FAMILIES = {"sdxl", "pony", "illustrious", "noob"}
 MAX_COMFYUI_MODEL_DOWNLOAD_BYTES = int(os.environ.get("COMFYUI_MODEL_DOWNLOAD_MAX_BYTES", str(20 * 1024 * 1024 * 1024)))
@@ -81,12 +82,15 @@ CIVITAI_MODEL_TYPE_TO_DOWNLOAD_TYPE = {
     "embedding": "embedding",
     "vae": "vae",
     "controlnet": "controlnet",
+    "upscaler": "upscale",
+    "upscale": "upscale",
 }
 CIVITAI_SEARCH_TYPE_TO_API = {
     "checkpoint": "Checkpoint",
     "lora": "LORA",
     "embedding": "TextualInversion",
     "controlnet": "Controlnet",
+    "upscale": "Upscaler",
 }
 COMFYUI_EMBEDDING_TOKEN_RE = re.compile(r"<\s*embeddings\s*:\s*([^<>]+?)\s*>", re.IGNORECASE)
 COMFYUI_ALLOWED_IMAGE_MIME_TYPES = {
@@ -1606,17 +1610,68 @@ def register_comfyui_routes(app, deps):
         return headers
 
     def _comfyui_model_sidecar_path(*, model_type, filename, base_dir=None):
+        return _comfyui_model_sidecar_path_with_relative(model_type=model_type, filename=filename, base_dir=base_dir)
+
+    def _normalize_model_relative_dir(value):
+        raw = str(value or "").strip().replace("\\", "/")
+        if not raw:
+            return ""
+        if raw.startswith("/") or raw.startswith("../") or raw == "..":
+            raise ValueError("模型相對路徑必須位於 ComfyUI/models/ 之下")
+        parts = []
+        for part in raw.split("/"):
+            part = part.strip()
+            if not part or part == ".":
+                continue
+            if part == "..":
+                raise ValueError("模型相對路徑不允許 ..")
+            parts.append(part)
+        return "/".join(parts)
+
+    def _split_model_relative_name(value):
+        raw = str(value or "").strip().replace("\\", "/")
+        if not raw or raw.startswith("/") or ".." in raw.split("/"):
+            return "", raw
+        if "/" not in raw:
+            return "", raw
+        parts = [part.strip() for part in raw.split("/") if part.strip()]
+        if not parts:
+            return "", ""
+        return "/".join(parts[:-1]), parts[-1]
+
+    def _resolve_model_destination_dir(*, model_type, base_dir=None, relative_dir=None):
+        normalized_type = _normalize_download_model_type(model_type)
+        mapping = COMFYUI_MODEL_DOWNLOAD_TYPES.get(normalized_type)
+        if not mapping:
+            return None, None, None, "模型類型不支援"
+        base = _configured_comfyui_base_dir(base_dir)
+        if not base:
+            return None, None, None, "請先設定 COMFYUI_BASE_DIR 或在本面板輸入 ComfyUI 專案資料夾"
+        project_dir = _configured_comfyui_project_dir(base_dir) or base
+        models_root = (project_dir / "models").resolve()
+        default_relative_dir, label = mapping
+        try:
+            safe_relative_dir = _normalize_model_relative_dir(relative_dir) or default_relative_dir
+        except ValueError as exc:
+            return None, None, None, str(exc)
+        destination_dir = (models_root / safe_relative_dir).resolve()
+        try:
+            destination_dir.relative_to(models_root)
+        except ValueError:
+            return None, None, None, "模型相對路徑超出 ComfyUI/models 範圍"
+        return destination_dir, safe_relative_dir, label, None
+
+    def _comfyui_model_sidecar_path_with_relative(*, model_type, filename, base_dir=None, relative_dir=None):
         safe_name = str(filename or "").strip()
         if not safe_name or "/" in safe_name or "\\" in safe_name or ".." in safe_name:
             return None
-        project_dir = _configured_comfyui_project_dir(base_dir)
-        if not project_dir:
+        model_dir, _relative_dir, _label, msg = _resolve_model_destination_dir(
+            model_type=model_type,
+            base_dir=base_dir,
+            relative_dir=relative_dir,
+        )
+        if msg or not model_dir:
             return None
-        mapping = COMFYUI_MODEL_DOWNLOAD_TYPES.get(_normalize_download_model_type(model_type))
-        if not mapping:
-            return None
-        folder_name, _label = mapping
-        model_dir = (project_dir / "models" / folder_name).resolve()
         sidecar = (model_dir / f"{safe_name}.civitai.json").resolve()
         try:
             sidecar.relative_to(model_dir)
@@ -1624,8 +1679,13 @@ def register_comfyui_routes(app, deps):
             return None
         return sidecar
 
-    def _write_comfyui_model_sidecar(*, model_type, filename, base_dir=None, payload=None):
-        sidecar = _comfyui_model_sidecar_path(model_type=model_type, filename=filename, base_dir=base_dir)
+    def _write_comfyui_model_sidecar(*, model_type, filename, base_dir=None, relative_dir=None, payload=None):
+        sidecar = _comfyui_model_sidecar_path_with_relative(
+            model_type=model_type,
+            filename=filename,
+            base_dir=base_dir,
+            relative_dir=relative_dir,
+        )
         if not sidecar:
             return False
         data = payload if isinstance(payload, dict) else {}
@@ -1635,8 +1695,13 @@ def register_comfyui_routes(app, deps):
             return False
         return True
 
-    def _read_comfyui_model_sidecar(*, model_type, filename, base_dir=None):
-        sidecar = _comfyui_model_sidecar_path(model_type=model_type, filename=filename, base_dir=base_dir)
+    def _read_comfyui_model_sidecar(*, model_type, filename, base_dir=None, relative_dir=None):
+        sidecar = _comfyui_model_sidecar_path_with_relative(
+            model_type=model_type,
+            filename=filename,
+            base_dir=base_dir,
+            relative_dir=relative_dir,
+        )
         if not sidecar or not sidecar.exists():
             return {}
         try:
@@ -1698,7 +1763,8 @@ def register_comfyui_routes(app, deps):
             clean_name = str(name or "").strip()
             if not clean_name:
                 continue
-            meta = _read_comfyui_model_sidecar(model_type="lora", filename=clean_name, base_dir=base_dir)
+            relative_dir, filename = _split_model_relative_name(clean_name)
+            meta = _read_comfyui_model_sidecar(model_type="lora", filename=filename, base_dir=base_dir, relative_dir=relative_dir)
             support = _lora_support_payload(meta.get("base_model"))
             details[clean_name] = {
                 "name": clean_name,
@@ -2033,29 +2099,27 @@ def register_comfyui_routes(app, deps):
             "file_id": file_id,
             "model_type": model_type,
             "base_dir": data.get("base_dir"),
+            "relative_dir": data.get("relative_dir") or data.get("model_relative_path") or "",
         }, None
 
-    def _download_comfyui_model_file(*, url, model_type, base_dir, filename_hint=None, auth_value=None, progress_callback=None):
+    def _download_comfyui_model_file(*, url, model_type, base_dir, relative_dir=None, filename_hint=None, auth_value=None, progress_callback=None):
         parsed, msg = _public_or_civitai_host(url)
         if msg:
             return None, msg
         model_type = _normalize_download_model_type(model_type)
         if model_type not in COMFYUI_MODEL_DOWNLOAD_TYPES:
             return None, "模型類型不支援"
-        base = _configured_comfyui_base_dir(base_dir)
-        if not base:
-            return None, "請先設定 COMFYUI_BASE_DIR 或在本面板輸入 ComfyUI 專案資料夾"
-        project_dir = _configured_comfyui_project_dir(base_dir) or base
-        folder_name, label = COMFYUI_MODEL_DOWNLOAD_TYPES[model_type]
+        destination_dir, effective_relative_dir, label, msg = _resolve_model_destination_dir(
+            model_type=model_type,
+            base_dir=base_dir,
+            relative_dir=relative_dir,
+        )
+        if msg:
+            return None, msg
         try:
             filename = _safe_model_filename(filename_hint or url, f"downloaded_{model_type}.safetensors")
         except ValueError as exc:
             return None, str(exc)
-        destination_dir = (project_dir / "models" / folder_name).resolve()
-        try:
-            destination_dir.relative_to(base.resolve())
-        except ValueError:
-            return None, "模型儲存路徑不合法"
         destination_dir.mkdir(parents=True, exist_ok=True)
         destination = (destination_dir / filename).resolve()
         try:
@@ -2137,10 +2201,11 @@ def register_comfyui_routes(app, deps):
             "label": label,
             "filename": filename,
             "size_bytes": written,
+            "relative_dir": effective_relative_dir,
             "saved_path": str(destination),
         }, None
 
-    def _download_civitai_model_selection(*, page_url, version_id, file_id, model_type, base_dir, progress_callback=None):
+    def _download_civitai_model_selection(*, page_url, version_id, file_id, model_type, base_dir, relative_dir=None, progress_callback=None):
         inspection, msg = _inspect_civitai_model(page_url)
         if msg:
             return None, msg
@@ -2168,6 +2233,7 @@ def register_comfyui_routes(app, deps):
             url=download_url,
             model_type=model_type or inspection.get("suggested_model_type"),
             base_dir=base_dir,
+            relative_dir=relative_dir,
             filename_hint=chosen_file.get("name"),
             auth_value=_configured_civitai_api_key(),
             progress_callback=progress_callback,
@@ -2189,6 +2255,7 @@ def register_comfyui_routes(app, deps):
             model_type=result.get("type") or model_type or inspection.get("suggested_model_type"),
             filename=result.get("filename"),
             base_dir=base_dir,
+            relative_dir=result.get("relative_dir"),
             payload={
                 "source": "civitai",
                 "model_id": inspection["model_id"],
@@ -2201,11 +2268,12 @@ def register_comfyui_routes(app, deps):
                 "trained_words": list(chosen_version.get("trained_words") or []),
                 "source_url": inspection["page_url"],
                 "saved_filename": result.get("filename"),
+                "relative_dir": result.get("relative_dir") or "",
             },
         )
         return result, None
 
-    def _upload_comfyui_model_file(*, uploaded_file, model_type, base_dir, actor=None):
+    def _upload_comfyui_model_file(*, uploaded_file, model_type, base_dir, relative_dir=None, actor=None):
         model_type = _normalize_download_model_type(model_type)
         if model_type not in COMFYUI_MODEL_DOWNLOAD_TYPES:
             return None, "模型類型不支援"
@@ -2216,20 +2284,17 @@ def register_comfyui_routes(app, deps):
         original_name = str(getattr(uploaded_file, "filename", "") or "").strip()
         if not original_name:
             return None, "請先選擇要上傳的模型檔案"
-        base = _configured_comfyui_base_dir(base_dir)
-        if not base:
-            return None, "請先設定 COMFYUI_BASE_DIR 或在本面板輸入 ComfyUI 專案資料夾"
-        project_dir = _configured_comfyui_project_dir(base_dir) or base
-        folder_name, label = COMFYUI_MODEL_DOWNLOAD_TYPES[model_type]
+        destination_dir, effective_relative_dir, label, msg = _resolve_model_destination_dir(
+            model_type=model_type,
+            base_dir=base_dir,
+            relative_dir=relative_dir,
+        )
+        if msg:
+            return None, msg
         try:
             filename = _safe_model_filename(original_name, f"uploaded_{model_type}.safetensors")
         except ValueError as exc:
             return None, str(exc)
-        destination_dir = (project_dir / "models" / folder_name).resolve()
-        try:
-            destination_dir.relative_to(base.resolve())
-        except ValueError:
-            return None, "模型儲存路徑不合法"
         destination_dir.mkdir(parents=True, exist_ok=True)
         destination = (destination_dir / filename).resolve()
         try:
@@ -2263,10 +2328,12 @@ def register_comfyui_routes(app, deps):
             model_type=model_type,
             filename=filename,
             base_dir=base_dir,
+            relative_dir=effective_relative_dir,
             payload={
                 "source": "manual_upload",
                 "original_filename": original_name,
                 "saved_filename": filename,
+                "relative_dir": effective_relative_dir,
                 "uploaded_at": datetime.now().isoformat(),
                 "uploaded_by": _actor_value(actor, "username", "") if actor else "",
                 "size_bytes": written,
@@ -2277,6 +2344,7 @@ def register_comfyui_routes(app, deps):
             "label": label,
             "filename": filename,
             "size_bytes": written,
+            "relative_dir": effective_relative_dir,
             "saved_path": str(destination),
             "source": "manual_upload",
         }, None
@@ -2672,6 +2740,7 @@ def register_comfyui_routes(app, deps):
                 file_id=parsed_request["file_id"],
                 model_type=parsed_request["model_type"],
                 base_dir=parsed_request["base_dir"],
+                relative_dir=parsed_request["relative_dir"],
                 progress_callback=lambda progress: _update_model_download_progress(job_id, progress),
             )
             if msg:
@@ -3514,6 +3583,7 @@ def register_comfyui_routes(app, deps):
             file_id=request_data["file_id"],
             model_type=request_data["model_type"],
             base_dir=request_data["base_dir"],
+            relative_dir=request_data["relative_dir"],
         )
         audit(
             "COMFYUI_CIVITAI_DOWNLOAD",
@@ -3536,10 +3606,12 @@ def register_comfyui_routes(app, deps):
         model_file = request.files.get("model_file")
         model_type = str(request.form.get("type") or request.form.get("model_type") or "").strip().lower()
         base_dir = request.form.get("base_dir")
+        relative_dir = request.form.get("relative_dir") or request.form.get("model_relative_path") or ""
         result, msg = _upload_comfyui_model_file(
             uploaded_file=model_file,
             model_type=model_type,
             base_dir=base_dir,
+            relative_dir=relative_dir,
             actor=actor,
         )
         audit(

@@ -51,6 +51,8 @@ const COMFYUI_CONTROLNET_TIPS = {
   tile: "適合局部細節補強與放大。",
 };
 const COMFYUI_DRAFT_FIELD_IDS = [
+  "comfyui-model-download-type",
+  "comfyui-model-relative-path",
   "comfyui-generation-mode",
   "comfyui-model-select",
   "comfyui-vae-select",
@@ -1091,6 +1093,22 @@ function bindComfyuiAdvancedUi() {
   if (modelSourceMode && modelSourceMode.dataset.comfyuiBound !== "1") {
     modelSourceMode.dataset.comfyuiBound = "1";
     modelSourceMode.addEventListener("change", updateComfyuiModelSourceMode);
+  }
+  const modelDownloadType = $("comfyui-model-download-type");
+  if (modelDownloadType && modelDownloadType.dataset.comfyuiBound !== "1") {
+    modelDownloadType.dataset.comfyuiBound = "1";
+    modelDownloadType.addEventListener("change", () => {
+      updateComfyuiModelRelativePathHint();
+      writeComfyuiDraft();
+    });
+  }
+  const modelRelativePath = $("comfyui-model-relative-path");
+  if (modelRelativePath && modelRelativePath.dataset.comfyuiBound !== "1") {
+    modelRelativePath.dataset.comfyuiBound = "1";
+    modelRelativePath.addEventListener("input", () => {
+      updateComfyuiModelRelativePathHint();
+      writeComfyuiDraft();
+    });
   }
   const uploadBtn = $("comfyui-model-upload-btn");
   if (uploadBtn && uploadBtn.dataset.comfyuiBound !== "1") {
@@ -2717,6 +2735,7 @@ async function useComfyuiCivitaiSearchResult(modelId) {
   if ($("comfyui-model-download-type") && selected.suggested_model_type) {
     $("comfyui-model-download-type").value = selected.suggested_model_type;
   }
+  updateComfyuiModelRelativePathHint();
   const status = $("comfyui-civitai-search-status");
   if (status) status.textContent = `已帶入 ${selected.name}，正在讀取完整版本與檔案資訊...`;
   await inspectComfyuiCivitaiModel();
@@ -2830,6 +2849,7 @@ function renderComfyuiCivitaiInspection(model) {
   if ($("comfyui-model-download-type") && comfyuiCivitaiInspection?.suggested_model_type) {
     $("comfyui-model-download-type").value = comfyuiCivitaiInspection.suggested_model_type;
   }
+  updateComfyuiModelRelativePathHint();
   if (status && model) {
     const creator = model.creator ? ` · by ${model.creator}` : "";
     status.textContent = `已讀取 ${model.name}${creator}，請選擇版本與檔案。`;
@@ -2840,12 +2860,39 @@ function comfyuiSelectedModelSourceMode() {
   return String($("comfyui-model-source-mode")?.value || "civitai").trim().toLowerCase() || "civitai";
 }
 
+function comfyuiSelectedModelDownloadType() {
+  return String($("comfyui-model-download-type")?.value || "checkpoint").trim().toLowerCase() || "checkpoint";
+}
+
+function comfyuiDefaultModelRelativeDir(type = comfyuiSelectedModelDownloadType()) {
+  const normalized = String(type || "checkpoint").trim().toLowerCase() || "checkpoint";
+  if (normalized === "lora") return "loras";
+  if (normalized === "embedding") return "embeddings";
+  if (normalized === "vae") return "vae";
+  if (normalized === "controlnet") return "controlnet";
+  if (normalized === "upscale") return "upscale_models";
+  return "checkpoints";
+}
+
+function updateComfyuiModelRelativePathHint() {
+  const hint = $("comfyui-model-relative-path-hint");
+  if (!hint) return;
+  const relativePath = ($("comfyui-model-relative-path")?.value || "").trim();
+  const defaultDir = comfyuiDefaultModelRelativeDir();
+  const effectiveDir = relativePath || defaultDir;
+  hint.innerHTML = [
+    `不填時會使用目前模型類型的預設資料夾 <code>ComfyUI/models/${sanitize(defaultDir)}</code>。`,
+    `若要自訂，請填寫 <code>ComfyUI/models/</code> 底下的相對路徑；目前會寫入 <code>ComfyUI/models/${sanitize(effectiveDir)}</code>。`,
+  ].join(" ");
+}
+
 function updateComfyuiModelSourceMode() {
   const mode = comfyuiSelectedModelSourceMode();
   const civitai = $("comfyui-model-source-civitai");
   const upload = $("comfyui-model-source-upload");
   if (civitai) civitai.style.display = mode === "upload" ? "none" : "";
   if (upload) upload.style.display = mode === "upload" ? "" : "none";
+  updateComfyuiModelRelativePathHint();
 }
 
 function onComfyuiCivitaiVersionChange() {
@@ -2959,6 +3006,7 @@ async function downloadComfyuiCivitaiModel() {
   const status = $("comfyui-model-download-status");
   const pageUrl = ($("comfyui-civitai-url")?.value || "").trim();
   const type = $("comfyui-model-download-type")?.value || "checkpoint";
+  const relativeDir = ($("comfyui-model-relative-path")?.value || "").trim();
   const baseDir = ($("comfyui-model-base-dir")?.value || "").trim();
   const versionId = $("comfyui-civitai-version")?.value || "";
   const fileId = $("comfyui-civitai-file")?.value || "";
@@ -2990,6 +3038,7 @@ async function downloadComfyuiCivitaiModel() {
     ? [...new Set(comfyuiCivitaiInspection.versions.map((item) => String(item.base_model || "").trim()).filter(Boolean))]
     : [];
   if (compatibleModels.length) confirmBits.push(`相容模型：${compatibleModels.join(", ")}`);
+  confirmBits.push(`儲存路徑：ComfyUI/models/${relativeDir || comfyuiDefaultModelRelativeDir(type)}`);
   confirmBits.push("下載後會直接寫入本地 ComfyUI models 目錄。");
   if (!window.confirm(`請再次確認要下載這個 Civitai 模型：\n\n${confirmBits.join("\n")}`)) {
     if (status) status.textContent = "已取消模型下載。";
@@ -3017,7 +3066,15 @@ async function downloadComfyuiCivitaiModel() {
         "Content-Type": "application/json",
         "X-CSRF-Token": getCsrfToken() || ""
       },
-      body: JSON.stringify({ page_url: pageUrl, version_id: versionId, file_id: fileId, type, base_dir: baseDir, async_progress: true })
+      body: JSON.stringify({
+        page_url: pageUrl,
+        version_id: versionId,
+        file_id: fileId,
+        type,
+        base_dir: baseDir,
+        relative_dir: relativeDir,
+        async_progress: true,
+      })
     });
     const json = await res.json().catch(() => ({}));
     if (!res.ok || !json.ok) throw new Error(json.msg || `模型下載失敗（HTTP ${res.status}）`);
@@ -3071,6 +3128,7 @@ async function uploadComfyuiModelFile() {
   const fileInput = $("comfyui-model-upload-file");
   const file = fileInput?.files?.[0] || null;
   const type = $("comfyui-model-download-type")?.value || "checkpoint";
+  const relativeDir = ($("comfyui-model-relative-path")?.value || "").trim();
   const baseDir = ($("comfyui-model-base-dir")?.value || "").trim();
   if (!file) {
     if (status) status.textContent = "請先選擇要上傳的模型檔案。";
@@ -3094,6 +3152,7 @@ async function uploadComfyuiModelFile() {
     const form = new FormData();
     form.append("type", type);
     form.append("base_dir", baseDir);
+    form.append("relative_dir", relativeDir);
     form.append("model_file", file);
     const res = await apiFetch(API + "/root/comfyui/model-upload", {
       method: "POST",

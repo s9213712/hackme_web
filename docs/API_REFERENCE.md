@@ -470,6 +470,14 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | POST | `/api/root/comfyui/model-upload` | root | 直接上傳模型檔到本地 ComfyUI models 目錄 |
 | GET | `/api/root/comfyui/download-jobs/<job_id>` | root | 下載 job 狀態 |
 
+ComfyUI 模型匯入補充：
+
+- `/api/root/comfyui/civitai/download` 與 `/api/root/comfyui/model-upload` 都支援可選的
+  `relative_dir`，代表 `ComfyUI/models/` 底下的相對路徑。
+- 若 `relative_dir` 留空，後端會依模型類型自動落到預設資料夾，例如
+  `checkpoints/`、`loras/`、`controlnet/`、`upscale_models/`。
+- `relative_dir` 不可使用 absolute path、`..` 或跳出 `ComfyUI/models/` 的路徑。
+
 Workflow preset 補充：
 
 - 匯入/更新 workflow JSON 會先驗證：

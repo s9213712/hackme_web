@@ -2387,6 +2387,87 @@ def test_comfyui_civitai_download_reports_interrupted_transfer(tmp_path, monkeyp
     assert "下載中斷或連線失敗" in downloaded.get_json()["msg"]
 
 
+def test_comfyui_civitai_download_supports_upscale_default_dir(tmp_path, monkeypatch):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    comfy_base = tmp_path / "comfyui_portable"
+    comfy_base.mkdir()
+    (comfy_base / "main.py").write_text("# comfy", encoding="utf-8")
+    root_actor = {"id": 1, "username": "root", "role": "super_admin"}
+    client = _build_app(
+        db_path,
+        storage_root,
+        actor=lambda: root_actor,
+        settings={
+            "comfyui_civitai_api_key": "secret-token",
+            "comfyui_base_dir": str(comfy_base),
+        },
+    ).test_client()
+
+    def fake_urlopen(request_obj, timeout=0):
+        url = request_obj.full_url
+        if url == "https://civitai.com/api/v1/models/55555":
+            payload = {
+                "id": 55555,
+                "name": "Ultra Upscaler",
+                "type": "Upscaler",
+                "creator": {"username": "artist"},
+                "modelVersions": [
+                    {
+                        "id": 6001,
+                        "name": "v1",
+                        "baseModel": "SDXL",
+                        "files": [
+                            {
+                                "id": 7001,
+                                "name": "4x-UltraSharp.pth",
+                                "sizeKB": 1024,
+                                "downloadUrl": "https://civitai.com/api/download/models/6001",
+                                "type": "Model",
+                            }
+                        ],
+                    },
+                ],
+            }
+            return _FakeResponse(url=url, body=json.dumps(payload), headers={"Content-Type": "application/json; charset=utf-8"})
+        if url.startswith("https://civitai.com/api/download/models/6001"):
+            return _FakeResponse(
+                url=url,
+                body=b"fake-upscale-bytes",
+                headers={"Content-Disposition": 'attachment; filename="4x-UltraSharp.pth"'},
+            )
+        raise AssertionError(f"unexpected urlopen target: {url}")
+
+    monkeypatch.setattr(comfyui_routes.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        comfyui_routes.socket,
+        "getaddrinfo",
+        lambda host, port, type=0: [(None, None, None, None, ("104.21.72.187", port or 443))],
+    )
+
+    downloaded = client.post(
+        "/api/root/comfyui/civitai/download",
+        json={
+            "page_url": "https://civitai.com/models/55555/upscale?modelVersionId=6001",
+            "version_id": 6001,
+            "file_id": 7001,
+            "type": "upscale",
+            "base_dir": str(comfy_base),
+        },
+    )
+
+    assert downloaded.status_code == 200
+    body = downloaded.get_json()
+    assert body["download"]["relative_dir"] == "upscale_models"
+    saved = comfy_base / "models" / "upscale_models" / "4x-UltraSharp.pth"
+    assert saved.exists()
+    sidecar = comfy_base / "models" / "upscale_models" / "4x-UltraSharp.pth.civitai.json"
+    assert sidecar.exists()
+    assert json.loads(sidecar.read_text(encoding="utf-8"))["relative_dir"] == "upscale_models"
+
+
 def test_root_can_upload_comfyui_model_file_into_local_models_dir(tmp_path):
     db_path = tmp_path / "comfyui.db"
     storage_root = tmp_path / "storage"
@@ -2429,6 +2510,45 @@ def test_root_can_upload_comfyui_model_file_into_local_models_dir(tmp_path):
     assert sidecar_data["uploaded_by"] == "root"
 
 
+def test_root_can_upload_comfyui_model_file_into_custom_relative_dir(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    comfy_base = tmp_path / "comfyui_portable"
+    comfy_base.mkdir()
+    (comfy_base / "main.py").write_text("# comfy", encoding="utf-8")
+    root_actor = {"id": 1, "username": "root", "role": "super_admin"}
+    client = _build_app(
+        db_path,
+        storage_root,
+        actor=lambda: root_actor,
+        settings={
+            "comfyui_connection_mode": "local",
+            "comfyui_base_dir": str(comfy_base),
+        },
+    ).test_client()
+
+    uploaded = client.post(
+        "/api/root/comfyui/model-upload",
+        data={
+            "type": "upscale",
+            "base_dir": str(comfy_base),
+            "relative_dir": "upscale_models/custom",
+            "model_file": (io.BytesIO(b"fake-upscale-bytes"), "custom_upscale.pth", "application/octet-stream"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert uploaded.status_code == 200
+    body = uploaded.get_json()
+    assert body["upload"]["relative_dir"] == "upscale_models/custom"
+    saved = comfy_base / "models" / "upscale_models" / "custom" / "custom_upscale.pth"
+    assert saved.exists()
+    sidecar = comfy_base / "models" / "upscale_models" / "custom" / "custom_upscale.pth.civitai.json"
+    assert json.loads(sidecar.read_text(encoding="utf-8"))["relative_dir"] == "upscale_models/custom"
+
+
 def test_comfyui_model_upload_rejects_invalid_extension(tmp_path):
     db_path = tmp_path / "comfyui.db"
     storage_root = tmp_path / "storage"
@@ -2460,6 +2580,40 @@ def test_comfyui_model_upload_rejects_invalid_extension(tmp_path):
 
     assert uploaded.status_code == 400
     assert "模型副檔名必須是" in uploaded.get_json()["msg"]
+
+
+def test_comfyui_model_upload_rejects_relative_dir_traversal(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    comfy_base = tmp_path / "comfyui_portable"
+    comfy_base.mkdir()
+    (comfy_base / "main.py").write_text("# comfy", encoding="utf-8")
+    root_actor = {"id": 1, "username": "root", "role": "super_admin"}
+    client = _build_app(
+        db_path,
+        storage_root,
+        actor=lambda: root_actor,
+        settings={
+            "comfyui_connection_mode": "local",
+            "comfyui_base_dir": str(comfy_base),
+        },
+    ).test_client()
+
+    uploaded = client.post(
+        "/api/root/comfyui/model-upload",
+        data={
+            "type": "upscale",
+            "base_dir": str(comfy_base),
+            "relative_dir": "../escape",
+            "model_file": (io.BytesIO(b"fake-upscale-bytes"), "custom_upscale.pth", "application/octet-stream"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert uploaded.status_code == 400
+    assert "相對路徑" in uploaded.get_json()["msg"]
 
 
 def test_comfyui_civitai_async_download_job_reports_progress_and_result(tmp_path, monkeypatch):
@@ -3177,6 +3331,8 @@ def test_comfyui_frontend_is_wired():
     assert 'id="comfyui-model-source-upload"' in index_html
     assert 'id="comfyui-model-upload-file"' in index_html
     assert 'id="comfyui-model-upload-btn"' in index_html
+    assert 'id="comfyui-model-relative-path"' in index_html
+    assert '<option value="upscale">放大模型 / Upscaler</option>' in index_html
     assert 'id="comfyui-model-download-progress"' in index_html
     assert 'id="comfyui-model-download-progress-label"' in index_html
     assert 'id="comfyui-model-download-progress-percent"' in index_html
@@ -3256,6 +3412,8 @@ def test_comfyui_frontend_is_wired():
     assert "function fillComfyuiControlnetTypes(types = {})" in comfyui_js
     assert "function fillComfyuiUpscaleModels(values = [])" in comfyui_js
     assert "function updateComfyuiModelSourceMode()" in comfyui_js
+    assert "function comfyuiDefaultModelRelativeDir(type = comfyuiSelectedModelDownloadType())" in comfyui_js
+    assert "function updateComfyuiModelRelativePathHint()" in comfyui_js
     assert "function uploadComfyuiModelFile()" in comfyui_js
     assert "function updateComfyuiModeVisibility()" in comfyui_js
     assert "function comfyuiBuildGenerateRequest(payload)" in comfyui_js

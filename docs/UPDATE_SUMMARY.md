@@ -1,6 +1,12 @@
 # Update Summary
 
-Release ID: `2026.05.05-137`
+Release ID: `2026.05.05-138`
+
+## 2026.05.05-138
+
+- Root 的 ComfyUI 模型匯入區現在新增 `放大模型 / Upscaler` 類型，下載 Civitai 模型或直接上傳本地模型檔時，都可以正確落到預設的 `ComfyUI/models/upscale_models/`。
+- 同一個匯入區也新增「下載到哪個路徑」欄位，可填 `ComfyUI/models/` 底下的相對路徑；若留空則依模型類型自動選用預設資料夾。後端會拒絕 absolute path、`..` 與任何跳出 `ComfyUI/models/` 的路徑。
+- 補上回歸：前端已接上 `upscale` 類型與路徑提示，Civitai download / model upload 都可保存 `relative_dir`，而路徑穿越會被拒絕。
 
 ## 2026.05.05-137
 

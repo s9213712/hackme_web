@@ -18,7 +18,7 @@ Related technical references:
 
 ## Release and Schema
 
-- Release ID: `2026.05.05-137`
+- Release ID: `2026.05.05-138`
 - Schema version: `30`
 - Release ID source: `services/release_info.py`
 - Runtime version endpoint: `GET /api/version`
@@ -478,6 +478,10 @@ ComfyUI notes:
 - The same root-only panel now also supports direct file uploads into the local
   ComfyUI `models/` tree for checkpoint / LoRA / embedding / VAE management
   without going through Civitai metadata first.
+- Root can now also choose `放大模型 / Upscaler` in the same panel and optionally
+  provide a `relative_dir` under `ComfyUI/models/`; if left blank, the backend
+  routes the file into the type-default directory such as `loras/`,
+  `controlnet/`, or `upscale_models/`.
 - LoRA availability is metadata-driven. The frontend and backend only allow
   LoRAs whose recorded `base_model` normalizes into `sdxl`, `pony`,
   `illustrious`, or `noob`. `SD1.5`, `Flux`, and unknown-metadata LoRAs are

@@ -1454,6 +1454,7 @@
                   <option value="embedding">Embedding / TI</option>
                   <option value="controlnet">ControlNet</option>
                   <option value="vae">VAE</option>
+                  <option value="upscale">放大模型 / Upscaler</option>
                 </select>
               </div>
               <div class="field">
@@ -1462,6 +1463,11 @@
                   <option value="civitai">Civitai 網址</option>
                   <option value="upload">本地檔案上傳</option>
                 </select>
+              </div>
+              <div class="field">
+                <label>下載 / 匯入到相對路徑</label>
+                <input type="text" id="comfyui-model-relative-path" placeholder="留空使用預設，例如 loras 或 upscale_models" />
+                <div class="drive-card-sub" id="comfyui-model-relative-path-hint">不填時會使用模型類型的預設資料夾；若要自訂，請填寫 <code>ComfyUI/models/</code> 底下的相對路徑，例如 <code>loras/characters</code>。</div>
               </div>
             </div>
             <div id="comfyui-model-source-civitai">

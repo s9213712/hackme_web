@@ -2,7 +2,7 @@
 
 [English README](../README.md)
 
-**目前 Release ID：`2026.05.05-137`**
+**目前 Release ID：`2026.05.05-138`**
 
 這份文件是中文捷徑版入口，不再承擔全部教學。它只回答三件事：
 
@@ -82,6 +82,9 @@ ComfyUI 目前除了一般 txt2img，也支援：
 - 歷史套回 / 重跑
 - workflow JSON 匯入 / 匯出、個人 preset、root 官方 preset
 - root 本地模式下可在同一個折疊面板選擇「Civitai 網址」或「本地檔案上傳」匯入模型
+- 模型匯入區現在也支援 `放大模型 / Upscaler` 類型，並可選填 `ComfyUI/models/`
+  底下的相對路徑；若留空則會依類型自動使用預設資料夾，例如 `upscale_models/`
+  或 `loras/`
 
 交易系統除了既有 `reference price / risk-grade price` 與 WebSocket provider input，
 現在也把交易市場升級成 root 可管理的 registry：root 可在後台新增 / 停用市場、調整
