@@ -1,6 +1,29 @@
 # Update Summary
 
-Release ID: `2026.05.07-150`
+Release ID: `2026.05.07-152`
+
+## 2026.05.07-152
+
+- Refactored `routes/comfyui.py` into bounded route-registration modules under
+  `routes/comfyui_sections/`, so root/admin connection tests, Civitai/model
+  admin routes, and workflow preset routes no longer grow inside one route god
+  file while the source-contract image-ref guards remain in the main module.
+- Split `public/js/50-admin.js` by moving the root-only server-mode and
+  launch-check dashboard block into `public/js/51-admin-server-mode-launch-check.js`,
+  keeping the main admin bundle focused on shared admin helpers.
+- Split `public/js/36-comfyui.js` by moving workflow preset/editor UI logic
+  into `public/js/36-comfyui-workflows.js`, aligning the frontend module
+  boundary with the new ComfyUI workflow route section.
+- Increased the pre-push quick pytest timeout from 90s to 180s so the hook no
+  longer reports an internal timeout when the selected cross-area regression
+  corpus is still passing.
+- Refactored `routes/files.py` by moving share-link, album-share, and preview
+  routes into `routes/file_sections/share_preview_routes.py`, keeping the main
+  file focused on upload/storage orchestration while preserving Cloud Drive
+  policy and preview fail-closed behavior.
+- Split `public/js/35-drive.js` by moving album share / preview / text-preview
+  UI logic into `public/js/35-drive-preview-share.js`, so the main drive bundle
+  no longer mixes browser storage actions with fullscreen preview flow.
 
 ## 2026.05.07-150
 
