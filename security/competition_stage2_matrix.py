@@ -367,16 +367,22 @@ def main() -> int:
                 tr_row["template"] = template_name
                 tr_row["asset"] = asset["display"]
                 raw_trades.append(tr_row)
-            # Persist equity curve as compact CSV.
+            # Persist equity curve as compact CSV. Engine's equity_curve uses
+            # ``time`` (unix ts) and ``price_points`` keys; derive ISO from ts.
             eq_path = EQUITY_DIR / f"{template_name}__{asset['display']}.csv"
             with eq_path.open("w", newline="") as f:
                 w = csv.writer(f)
                 w.writerow(["bar_index", "candle_time", "candle_iso", "price", "equity_points"])
                 for i, p in enumerate(equity):
+                    ts = int(p.get("time") or 0)
+                    iso = (
+                        datetime.utcfromtimestamp(ts).isoformat() + "+00:00"
+                        if ts else ""
+                    )
                     w.writerow([
                         i,
-                        p.get("candle_time", ""),
-                        p.get("candle_iso", ""),
+                        ts,
+                        iso,
                         p.get("price_points", ""),
                         p.get("equity_points", ""),
                     ])

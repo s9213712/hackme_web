@@ -1,0 +1,39 @@
+{
+  "generated_at": "2026-05-06T17:56:10",
+  "total_runs": 110,
+  "wall_seconds": 1139.92,
+  "fee_rate_percent": 0.3,
+  "slippage_percent": 0.1,
+  "initial_cash_points": 100000,
+  "templates": [
+    "bollinger_reversion",
+    "breakout_buy",
+    "dip_buy",
+    "full_entry_exit",
+    "kd_momentum",
+    "ma200_trend_entry",
+    "ma_pullback",
+    "risk_guard",
+    "rsi_scale",
+    "staged_profit_taking",
+    "stop_loss",
+    "swing_bb_ma50",
+    "bb_rsi_reversion_codex",
+    "breakout_guarded_codex",
+    "kd_trend_scaleout_codex",
+    "ma200_rsi_reclaim_codex",
+    "trend_floor_rebalance_codex",
+    "adaptive_profit_ladder_claude",
+    "bb_breakout_momentum_claude",
+    "golden_cross_dual_ma_claude",
+    "trend_pyramid_claude",
+    "triple_confirmation_dip_claude"
+  ],
+  "assets": [
+    "BTC",
+    "ETH",
+    "XRP",
+    "BNB",
+    "PAXG"
+  ]
+}
