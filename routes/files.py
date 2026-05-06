@@ -19,7 +19,7 @@ from services.upload_security import (
     scan_uploaded_file,
 )
 from datetime import datetime
-from services.cloud_drive import (
+from services.storage.cloud_drive import (
     attach_existing_file,
     can_download_file,
     create_announcement_attachment_request,
@@ -35,9 +35,9 @@ from services.cloud_drive import (
     share_e2ee_file,
     store_cloud_upload,
 )
-from services.file_previews import build_preview_metadata, preview_category
-from services.notifications import create_notification_if_enabled
-from services.remote_downloads import (
+from services.media.previews import build_preview_metadata, preview_category
+from services.system.notifications import create_notification_if_enabled
+from services.storage.remote_downloads import (
     RemoteDownloadError,
     download_remote_url,
     download_torrent_file_with_aria2,
@@ -84,21 +84,21 @@ from services.storage_albums import (
     mark_album_share_link_accessed,
     public_album_payload,
 )
-from services.storage_maintenance import run_storage_maintenance, storage_maintenance_status
-from services.storage_quota_overrides import (
+from services.storage.maintenance import run_storage_maintenance, storage_maintenance_status
+from services.storage.quota_overrides import (
     clear_storage_quota_override,
     get_storage_quota_override,
     set_storage_quota_override,
 )
-from services.storage_quota_purchases import (
+from services.storage.quota_purchases import (
     active_storage_quota_purchases,
     default_storage_upgrade_catalog,
     ensure_storage_upgrade_price_catalog,
     list_storage_upgrade_price_catalog,
     record_storage_quota_purchase,
 )
-from services.storage_capacity_audit import audit_storage_capacity, can_allocate_storage_bytes
-from services.http_headers import build_content_disposition
+from services.storage.capacity_audit import audit_storage_capacity, can_allocate_storage_bytes
+from services.core.http_headers import build_content_disposition
 from flask import Response, after_this_request, request, send_file, stream_with_context
 
 

@@ -1,7 +1,7 @@
 import pytest
 
 from services.points_chain import DISPLAY_CURRENCY, PointsLedgerService
-from services.videos import publish_video, tip_video
+from services.media.videos import publish_video, tip_video
 from tests.video_test_helpers import actor, seed_cloud_file, video_test_db
 
 

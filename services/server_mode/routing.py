@@ -36,7 +36,7 @@ from __future__ import annotations
 from typing import Optional
 
 from services.points_chain import ChainModeViolation
-from services.server_mode_context import SmV2Context, assert_ctx
+from services.server_mode.context import SmV2Context, assert_ctx
 
 
 # logical -> physical table name mappings.

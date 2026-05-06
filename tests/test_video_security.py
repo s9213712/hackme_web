@@ -1,6 +1,6 @@
 import pytest
 
-from services.videos import publish_video, record_video_view, set_video_like
+from services.media.videos import publish_video, record_video_view, set_video_like
 from tests.video_test_helpers import actor, seed_cloud_file, video_test_db
 
 

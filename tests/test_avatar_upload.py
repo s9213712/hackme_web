@@ -5,7 +5,7 @@ import pytest
 from flask import Flask, jsonify
 
 from routes.users import register_user_routes
-from services.member_levels import ensure_member_level_user_columns
+from services.users.member_levels import ensure_member_level_user_columns
 from services.upload_security import ensure_upload_security_schema, update_cloud_drive_security_policy
 
 

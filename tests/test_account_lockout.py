@@ -4,7 +4,7 @@ import sqlite3
 from flask import Flask, jsonify, make_response
 
 from routes.public import register_public_routes
-from services.access_controls import hash_internal_test_token, maintenance_bypass_expires_at
+from services.security.access_controls import hash_internal_test_token, maintenance_bypass_expires_at
 
 
 def _build_app(

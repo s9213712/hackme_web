@@ -1,6 +1,6 @@
 import sqlite3
 
-from services.user_profiles import (
+from services.users.profiles import (
     clear_profile_appearance,
     ensure_user_profile_schema,
     get_profile_appearance,

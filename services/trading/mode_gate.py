@@ -31,10 +31,10 @@ from __future__ import annotations
 
 from typing import Optional
 
-from services.cache_keys import make_cache_key
+from services.core.cache_keys import make_cache_key
 from services.points_chain import ChainModeViolation
-from services.server_mode_context import SmV2Context, assert_ctx
-from services.server_mode_routing import resolve_table
+from services.server_mode.context import SmV2Context, assert_ctx
+from services.server_mode.routing import resolve_table
 
 
 _TRADING_MODES = {"production", "internal_test", "test"}

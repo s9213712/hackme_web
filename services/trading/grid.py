@@ -4,7 +4,7 @@ import json
 import uuid
 from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
 
-from services.server_mode_routing import resolve_table
+from services.server_mode.routing import resolve_table
 from services.trading.accounting.core import fee_points, notional_points, units_to_quantity
 from services.trading.constants import (
     ASSET_SCALE,
@@ -334,7 +334,20 @@ def create_grid_bot(service, *, actor, payload):
         market = service._market(conn, market_symbol)
         if not int(market.get("allow_bots") or 0):
             raise ValueError("bots are disabled for this market")
-        current_price, _ = service._current_market_price_points(conn, market)
+        service._assert_market_boot_ready(market, usage="grid bot create")
+        current_price, _price_source, price_meta = service._current_market_price_points(
+            conn,
+            market,
+            with_meta=True,
+            high_risk=True,
+        )
+        service._assert_price_meta_allows_high_risk_use(
+            conn,
+            actor=actor,
+            market_symbol=market["symbol"],
+            usage="grid bot create",
+            price_meta=price_meta,
+        )
     finally:
         conn.close()
 
@@ -560,14 +573,48 @@ def scan_one_grid_bot(service, bot, *, actor):
     try:
         service.ensure_schema(conn)
         market = service._market(conn, bot["market_symbol"])
-        current_price, _price_source, price_meta = service._current_market_price_points(conn, market, with_meta=True, high_risk=True)
-        service._assert_price_meta_allows_high_risk_use(
-            conn,
-            actor=actor,
-            market_symbol=market["symbol"],
-            usage="grid bot scan",
-            price_meta=price_meta,
-        )
+        try:
+            service._assert_market_boot_ready(market, usage="grid bot scan")
+            current_price, _price_source, price_meta = service._current_market_price_points(
+                conn,
+                market,
+                with_meta=True,
+                high_risk=True,
+            )
+            service._assert_price_meta_allows_high_risk_use(
+                conn,
+                actor=actor,
+                market_symbol=market["symbol"],
+                usage="grid bot scan",
+                price_meta=price_meta,
+            )
+        except ValueError as exc:
+            blocked_reason = str(exc)
+            conn.execute(
+                "UPDATE trading_grid_bots SET last_error=?, updated_at=? WHERE id=?",
+                (blocked_reason[:500], now, bot_id),
+            )
+            service._audit_event(
+                conn,
+                "GRID_BOT_SCAN_BLOCKED",
+                "grid bot scan paused because no risk-grade execution price is available",
+                actor=actor,
+                target_user_id=user_id,
+                market_symbol=market["symbol"],
+                severity="warning",
+                metadata={
+                    "bot_uuid": bot["bot_uuid"],
+                    "grid_scan_blocked_reason": blocked_reason,
+                },
+            )
+            conn.commit()
+            return {
+                "bot_uuid": bot["bot_uuid"],
+                "blocked": True,
+                "grid_scan_blocked_reason": blocked_reason,
+                "fills_processed": [],
+                "counter_orders_placed": [],
+            }
         price_window = service._recent_price_window(
             market["symbol"],
             lookback_seconds=65,

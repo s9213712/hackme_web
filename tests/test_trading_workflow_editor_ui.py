@@ -10,9 +10,12 @@ def test_trading_workflow_editor_has_full_node_editor_surface():
 
     assert "節點工具箱" in html
     assert "策略檢查" in html
+    assert "回測預覽" in html
     assert "可讀 JSON" in html
-    assert 'href="/trading-workflow-editor.css?v=20260501-csp"' in html
-    assert 'src="/js/trading-workflow-editor.js?v=20260501-csp"' in html
+    assert 'href="/trading-workflow-editor.css?v=20260506-workflow-preview"' in html
+    assert 'src="/js/trading-workflow-editor.js?v=20260506-workflow-preview"' in html
+    assert 'id="workflow-preview-market"' in html
+    assert 'id="workflow-preview-run-btn"' in html
     assert 'data-add-node="condition:price_below"' in html
     assert 'data-add-node="condition:ma_position"' in html
     assert 'data-add-node="action:buy_percent"' in html
@@ -31,6 +34,9 @@ def test_trading_workflow_editor_has_full_node_editor_surface():
     assert "TRUE/FALSE branch" in js
     assert "Nested AND" in js
     assert "validateWorkflow" in js
+    assert '"/trading/workflow-editor/backtest"' in js
+    assert "runWorkflowPreviewBacktest" in js
+    assert "workflow-preview-metrics" in js
     assert "renderInspector" in js
     assert "applyGraphNodePositions" in js
     assert "window.HackmeTradingWorkflowEditor" in js
@@ -40,6 +46,7 @@ def test_trading_workflow_editor_has_full_node_editor_surface():
     assert ".graph-edge-layer" in css
     assert ".graph-edge.positive" in css
     assert ".node-inline-controls" in css
+    assert ".preview-metrics" in css
 
 
 def test_trading_workflow_editor_static_page_requires_login():

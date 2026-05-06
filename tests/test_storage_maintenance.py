@@ -2,12 +2,12 @@ import sqlite3
 from datetime import datetime, timedelta
 
 from services.storage_albums import ensure_storage_album_schema
-from services.storage_maintenance import (
+from services.storage.maintenance import (
     run_storage_maintenance,
     run_storage_maintenance_if_due,
     storage_maintenance_status,
 )
-from services.storage_quota_enforcement import ensure_storage_quota_enforcement_schema
+from services.storage.quota_enforcement import ensure_storage_quota_enforcement_schema
 
 
 def _conn():

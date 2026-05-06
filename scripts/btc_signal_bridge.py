@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from services.btc_trade_bridge import BtcTradeBridge, btc_trade_status
+from services.trading.btc_bridge import BtcTradeBridge, btc_trade_status
 
 
 def _default_btc_trade_dir():

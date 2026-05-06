@@ -4,7 +4,7 @@ import sqlite3
 from flask import Flask, jsonify, make_response
 
 from routes.public import register_public_routes
-from services.account_recovery import create_recovery_token
+from services.users.recovery import create_recovery_token
 
 
 PASSWORD_FIELD = "pass" + "word"

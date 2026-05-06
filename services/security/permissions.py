@@ -1,5 +1,5 @@
-from services.identity import is_admin_role, role_rank
-from services.member_levels import get_member_level_rule, refresh_user_effective_level
+from services.security.identity import is_admin_role, role_rank
+from services.users.member_levels import get_member_level_rule, refresh_user_effective_level
 
 ACTIVE_STATUS = "active"
 ACTION_RULE_FIELDS = {

@@ -5,16 +5,16 @@ from datetime import datetime, timedelta
 from functools import wraps
 from flask import request, send_file
 
-from services.member_levels import apply_member_level_change, ensure_member_level_user_columns
-from services.cloud_drive import ensure_cloud_drive_attachment_schema, resolve_file_storage_path, store_cloud_upload
+from services.users.member_levels import apply_member_level_change, ensure_member_level_user_columns
+from services.storage.cloud_drive import ensure_cloud_drive_attachment_schema, resolve_file_storage_path, store_cloud_upload
 from services.sanction_notices import record_admin_sanction_notice
-from services.account_recovery import (
+from services.users.recovery import (
     ensure_account_recovery_schema,
     get_password_reset_review_request,
     list_password_reset_review_requests,
     mark_password_reset_review_request,
 )
-from services.user_profiles import ensure_user_profile_schema, get_profile_appearance
+from services.users.profiles import ensure_user_profile_schema, get_profile_appearance
 
 
 def register_user_routes(app, deps):

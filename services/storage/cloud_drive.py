@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from cryptography.fernet import InvalidToken
 
-from services.storage_paths import resolve_storage_path
+from services.storage.paths import resolve_storage_path
 from services.storage_albums import ensure_storage_album_schema
 from services.upload_security import (
     create_uploaded_file_record,

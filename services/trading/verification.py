@@ -3,7 +3,7 @@
 import json
 from datetime import datetime
 
-from services.server_mode_routing import resolve_table
+from services.server_mode.routing import resolve_table
 from services.trading.constants import OPEN_ORDER_STATUSES
 from services.trading.validators import _to_decimal
 

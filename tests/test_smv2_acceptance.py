@@ -31,9 +31,9 @@ import pytest
 import tempfile
 from pathlib import Path
 
-from services import server_mode_routing as routing
+from services.server_mode import routing
 from services.points_chain import ChainModeViolation, PointsLedgerService
-from services.server_mode_context import SmV2Context
+from services.server_mode.context import SmV2Context
 
 
 def _ctx(mode):
@@ -119,7 +119,7 @@ def test_liquidation_does_not_cross_world():
     """Liquidation source / sink must stay in the same world.
     Phase 5 (boundary) gate enforces this at every entry point.
     """
-    from services.trading_mode_gate import (
+    from services.trading.mode_gate import (
         liquidation_target_table,
         liquidation_settle_table,
         assert_same_world,
@@ -185,7 +185,7 @@ def test_funding_rate_does_not_cross_world():
     the cache-key helper. A production funding tick cannot be
     accidentally republished into a shadow channel — the keys differ.
     """
-    from services.trading_mode_gate import funding_channel_key, TradingDisabledInMode
+    from services.trading.mode_gate import funding_channel_key, TradingDisabledInMode
     prod = funding_channel_key("BTC", _ctx("production"))
     inter = funding_channel_key("BTC", SmV2Context(mode="internal_test", tester_id=7, actor_role="user", request_id="r"))
     assert prod != inter
@@ -258,7 +258,7 @@ def test_matching_engine_namespaces_separate():
     in production — so a shadow order can never collide with a prod
     one.
     """
-    from services.trading_mode_gate import matching_orderbook_key
+    from services.trading.mode_gate import matching_orderbook_key
     prod_ctx = _ctx("production")
     test_ctx = _ctx("test")
     inter_ctx = SmV2Context(mode="internal_test", tester_id=1, actor_role="user", request_id="r")
@@ -285,7 +285,7 @@ def test_matching_engine_namespaces_separate():
 
 
 def test_cache_keys_carry_mode_scope():
-    from services.cache_keys import make_cache_key
+    from services.core.cache_keys import make_cache_key
     # Forgetting mode= must raise — the strongest spec-promise.
     with pytest.raises(TypeError):
         make_cache_key("orderbook", market="BTC/POINTS")  # type: ignore[call-arg]

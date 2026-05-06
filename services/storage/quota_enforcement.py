@@ -1,8 +1,8 @@
 import uuid
 from datetime import datetime, timedelta
 
-from services.notifications import create_notification
-from services.sqlite_safe import table_columns as safe_table_columns
+from services.system.notifications import create_notification
+from services.core.sqlite_safe import table_columns as safe_table_columns
 from services.storage_albums import ensure_storage_album_schema, sync_user_storage_summary
 from services.upload_security import (
     ensure_upload_security_schema,
@@ -204,7 +204,7 @@ def purge_expired_quota_reduction_files(conn, *, actor_user_id=None, now=None):
             "effective_level": notice["effective_level"],
             "sanction_status": notice["sanction_status"],
         }
-        from services.member_levels import get_member_level_rule
+        from services.users.member_levels import get_member_level_rule
 
         current_rule = get_member_level_rule(conn, user.get("effective_level") or user.get("member_level") or "normal")
         usage = get_user_cloud_drive_usage(conn, user, member_rule=current_rule)

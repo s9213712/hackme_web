@@ -1,6 +1,40 @@
 # Update Summary
 
-Release ID: `2026.05.06-145`
+Release ID: `2026.05.06-147`
+
+## 2026.05.06-147
+
+- `services/points_chain.py` has been split into a real
+  `services/points_chain/` package with medium-grain boundaries: shared
+  currency/schema/hash helpers and `ChainModeViolation` live in `schema.py`,
+  while the full `PointsLedgerService` implementation now lives in
+  `service.py`.
+- Existing `from services.points_chain import ...` imports keep working through
+  the package `__init__`, including compatibility for tests that monkeypatch
+  `services.points_chain.time.time`.
+- The old top-level `services/points_chain.py` path remains as a tiny
+  source-reference facade so regression checks that inspect that file by path
+  still enforce the pending-reward maker-checker contract.
+- `ServerModeService` no longer sidesteps a repo-root `runtime` blocker by
+  silently creating `.runtime/`. If no explicit runtime base dir is available,
+  a non-directory `runtime` path now fails closed; when an `IntegrityGuard`
+  instance provides an app base directory, server-mode audit/HMAC files are
+  routed under that app-local runtime tree instead.
+
+## 2026.05.06-146
+
+- `services/snapshots.py` has been split into a real `services/snapshots/`
+  package with medium-grain boundaries: shared schema/hash/signature helpers in
+  `schema.py`, snapshot/archive/restore flow in `service.py`, and Server Mode
+  v2 profile/checkpoint/audit flow in `server_mode.py`.
+- Existing `from services.snapshots import ...` call sites keep working through
+  the package `__init__`, while the old top-level `services/snapshots.py` path
+  remains as a tiny compatibility/source-reference facade for regression tests
+  and operator docs that still read that file by path.
+- Snapshot and Server Mode helpers now tolerate a conflicting `runtime` file in
+  the repo root by falling back to `.runtime/` for auto-generated local HMAC
+  keys, removing an implicit path-shape assumption that broke
+  `ServerModeService(snapshot_service=None)` test environments.
 
 ## 2026.05.06-145
 

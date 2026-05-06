@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from services.sqlite_safe import table_columns
+from services.core.sqlite_safe import table_columns
 
 
 ROOT = Path(__file__).resolve().parents[1]

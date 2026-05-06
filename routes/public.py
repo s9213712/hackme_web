@@ -6,8 +6,8 @@ from datetime import datetime, timedelta
 import argon2
 from flask import make_response, request, send_from_directory
 
-from services.access_controls import verify_internal_test_token
-from services.account_recovery import (
+from services.security.access_controls import verify_internal_test_token
+from services.users.recovery import (
     create_password_reset_review_request,
     create_recovery_token,
     ensure_account_recovery_schema,
@@ -16,8 +16,8 @@ from services.account_recovery import (
     normalize_email,
     queue_mail,
 )
-from services.captcha import create_captcha_challenge, normalize_captcha_mode, verify_captcha_response
-from services.user_profiles import clear_profile_appearance, get_profile_appearance, update_profile_appearance
+from services.security.captcha import create_captcha_challenge, normalize_captcha_mode, verify_captcha_response
+from services.users.profiles import clear_profile_appearance, get_profile_appearance, update_profile_appearance
 
 
 def register_public_routes(app, deps):

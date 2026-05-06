@@ -1,7 +1,7 @@
 import sqlite3
 from datetime import datetime, timedelta
 
-from services.captcha import (
+from services.security.captcha import (
     create_captcha_challenge,
     ensure_captcha_schema,
     normalize_captcha_mode,

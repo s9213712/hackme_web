@@ -7,7 +7,7 @@ isolation provable.
 
 import pytest
 
-from services.cache_keys import make_cache_key, parse_cache_key
+from services.core.cache_keys import make_cache_key, parse_cache_key
 
 
 def test_production_key_has_mode_prefix():

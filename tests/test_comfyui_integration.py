@@ -9,9 +9,9 @@ from flask import Flask, jsonify, make_response, request
 
 from routes import comfyui as comfyui_routes
 from routes.comfyui import register_comfyui_routes
-from services.cloud_drive import ensure_cloud_drive_attachment_schema
-from services.comfyui_client import ComfyUIClient, ComfyUIImage
-from services.member_levels import ensure_member_level_rules_schema
+from services.storage.cloud_drive import ensure_cloud_drive_attachment_schema
+from services.comfyui.client import ComfyUIClient, ComfyUIImage
+from services.users.member_levels import ensure_member_level_rules_schema
 from services.storage_albums import (
     create_album,
     create_storage_file_entry,
@@ -248,7 +248,7 @@ class FakeComfyUIClient:
 
 class FailingComfyUIClient(FakeComfyUIClient):
     def generate_image(self, params, *, timeout_seconds=180, progress_callback=None):
-        from services.comfyui_client import ComfyUIError
+        from services.comfyui.client import ComfyUIError
 
         raise ComfyUIError("ComfyUI 產圖失敗")
 
@@ -367,7 +367,7 @@ class OfflineComfyUIClient:
     base_url = "http://fake-offline"
 
     def health_check(self, *, timeout=3):
-        from services.comfyui_client import ComfyUIError
+        from services.comfyui.client import ComfyUIError
 
         raise ComfyUIError("ComfyUI 連線失敗：refused")
 
@@ -378,7 +378,7 @@ class RecoveringComfyUIClient:
         self.base_url = "http://localhost:8192"
 
     def health_check(self, *, timeout=3):
-        from services.comfyui_client import ComfyUIError
+        from services.comfyui.client import ComfyUIError
 
         if not self.state.get("ready"):
             raise ComfyUIError("ComfyUI 連線失敗：refused")
@@ -3051,7 +3051,7 @@ def test_comfyui_discard_tolerates_plain_text_history_response(tmp_path, monkeyp
         calls.append(req.full_url)
         return PlainTextResponse()
 
-    monkeypatch.setattr("services.comfyui_client.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("services.comfyui.client.urllib.request.urlopen", fake_urlopen)
 
     result = ComfyUIClient("http://fake-comfyui").discard_image(
         {"filename": "plain-history.png", "subfolder": "", "type": "output"},
@@ -3207,7 +3207,7 @@ def test_comfyui_interrupt_tolerates_plain_text_response(monkeypatch):
         calls.append(req.full_url)
         return PlainTextResponse()
 
-    monkeypatch.setattr("services.comfyui_client.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("services.comfyui.client.urllib.request.urlopen", fake_urlopen)
 
     result = ComfyUIClient("http://fake-comfyui").interrupt()
 

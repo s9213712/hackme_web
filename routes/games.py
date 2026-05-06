@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from flask import request
 
-from services.chess_game import (
+from services.games.chess import (
     board_rows,
     game_status,
     initial_board,

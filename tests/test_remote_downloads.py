@@ -1,7 +1,7 @@
 import pytest
 from pathlib import Path
 
-from services.remote_downloads import (
+from services.storage.remote_downloads import (
     RemoteDownloadError,
     download_magnet_with_aria2,
     download_remote_url,
@@ -39,8 +39,8 @@ def test_magnet_download_reports_aria2_log_tail(monkeypatch):
         def kill(self):
             self.returncode = -9
 
-    monkeypatch.setattr("services.remote_downloads.shutil.which", lambda name: "/usr/bin/aria2c")
-    monkeypatch.setattr("services.remote_downloads.subprocess.Popen", FakePopen)
+    monkeypatch.setattr("services.storage.remote_downloads.shutil.which", lambda name: "/usr/bin/aria2c")
+    monkeypatch.setattr("services.storage.remote_downloads.subprocess.Popen", FakePopen)
 
     with pytest.raises(RemoteDownloadError) as exc:
         download_magnet_with_aria2("magnet:?xt=urn:btih:bad")
@@ -73,8 +73,8 @@ def test_magnet_metadata_timeout_reports_human_message(monkeypatch):
         def kill(self):
             self.returncode = -9
 
-    monkeypatch.setattr("services.remote_downloads.shutil.which", lambda name: "/usr/bin/aria2c")
-    monkeypatch.setattr("services.remote_downloads.subprocess.Popen", TimeoutPopen)
+    monkeypatch.setattr("services.storage.remote_downloads.shutil.which", lambda name: "/usr/bin/aria2c")
+    monkeypatch.setattr("services.storage.remote_downloads.subprocess.Popen", TimeoutPopen)
 
     with pytest.raises(RemoteDownloadError) as exc:
         download_magnet_with_aria2("magnet:?xt=urn:btih:bad")
@@ -108,8 +108,8 @@ def test_magnet_bind_failure_reports_host_network_message(monkeypatch):
         def kill(self):
             self.returncode = -9
 
-    monkeypatch.setattr("services.remote_downloads.shutil.which", lambda name: "/usr/bin/aria2c")
-    monkeypatch.setattr("services.remote_downloads.subprocess.Popen", BindFailurePopen)
+    monkeypatch.setattr("services.storage.remote_downloads.shutil.which", lambda name: "/usr/bin/aria2c")
+    monkeypatch.setattr("services.storage.remote_downloads.subprocess.Popen", BindFailurePopen)
 
     with pytest.raises(RemoteDownloadError) as exc:
         download_magnet_with_aria2("magnet:?xt=urn:btih:bad")
@@ -141,8 +141,8 @@ def test_bt_download_kills_when_temp_size_exceeds_limit(monkeypatch):
         def kill(self):
             self.returncode = -9
 
-    monkeypatch.setattr("services.remote_downloads.shutil.which", lambda name: "/usr/bin/aria2c")
-    monkeypatch.setattr("services.remote_downloads.subprocess.Popen", SlowPopen)
+    monkeypatch.setattr("services.storage.remote_downloads.shutil.which", lambda name: "/usr/bin/aria2c")
+    monkeypatch.setattr("services.storage.remote_downloads.subprocess.Popen", SlowPopen)
 
     with pytest.raises(RemoteDownloadError) as exc:
         download_magnet_with_aria2("magnet:?xt=urn:btih:bad", max_bytes=1024)
@@ -154,7 +154,7 @@ def test_magnet_trackers_reject_private_hosts(monkeypatch):
     def fake_getaddrinfo(host, port, **kwargs):
         return [(2, 1, 6, "", ("127.0.0.1", int(port or 80)))]
 
-    monkeypatch.setattr("services.remote_downloads.socket.getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr("services.storage.remote_downloads.socket.getaddrinfo", fake_getaddrinfo)
 
     with pytest.raises(RemoteDownloadError, match="localhost"):
         validate_remote_url("magnet:?xt=urn:btih:abc&tr=http%3A%2F%2Flocalhost%3A8080%2Fannounce")
@@ -164,7 +164,7 @@ def test_torrent_url_is_classified_as_bt(monkeypatch):
     def fake_getaddrinfo(host, port=None, **kwargs):
         return [(2, 1, 6, "", ("8.8.8.8", int(port or 80)))]
 
-    monkeypatch.setattr("services.remote_downloads.socket.getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr("services.storage.remote_downloads.socket.getaddrinfo", fake_getaddrinfo)
 
     parsed = validate_remote_url("https://downloads.example/file.torrent?token=abc")
     assert parsed["kind"] == "torrent_url"
@@ -177,7 +177,7 @@ def test_resolver_accepts_public_candidate_when_private_candidate_exists(monkeyp
             (2, 1, 6, "", ("8.8.8.8", int(port or 80))),
         ]
 
-    monkeypatch.setattr("services.remote_downloads.socket.getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr("services.storage.remote_downloads.socket.getaddrinfo", fake_getaddrinfo)
 
     parsed = validate_remote_url("https://downloads.example/file.torrent?token=abc")
     assert parsed["kind"] == "torrent_url"
@@ -196,10 +196,10 @@ def test_direct_mode_saves_torrent_file_itself(monkeypatch, tmp_path):
         mimetype = "application/x-bittorrent"
         cleanup_dir = None
 
-    monkeypatch.setattr("services.remote_downloads.socket.getaddrinfo", fake_getaddrinfo)
-    monkeypatch.setattr("services.remote_downloads.download_direct_link", lambda url, **kwargs: FakeDownloaded())
+    monkeypatch.setattr("services.storage.remote_downloads.socket.getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr("services.storage.remote_downloads.download_direct_link", lambda url, **kwargs: FakeDownloaded())
     monkeypatch.setattr(
-        "services.remote_downloads.download_torrent_file_with_aria2",
+        "services.storage.remote_downloads.download_torrent_file_with_aria2",
         lambda *args, **kwargs: pytest.fail("direct mode must not run aria2 for .torrent URLs"),
     )
 
@@ -229,15 +229,15 @@ def test_torrent_url_mode_downloads_payload_with_aria2(monkeypatch, tmp_path):
         mimetype = "text/plain"
         cleanup_dir = None
 
-    monkeypatch.setattr("services.remote_downloads.socket.getaddrinfo", fake_getaddrinfo)
-    monkeypatch.setattr("services.remote_downloads.download_direct_link", lambda url, **kwargs: FakeTorrent())
+    monkeypatch.setattr("services.storage.remote_downloads.socket.getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr("services.storage.remote_downloads.download_direct_link", lambda url, **kwargs: FakeTorrent())
 
     def fake_torrent_download(path, **kwargs):
         captured["path"] = path
         captured["display_name"] = kwargs.get("display_name")
         return FakeDownloaded()
 
-    monkeypatch.setattr("services.remote_downloads.download_torrent_file_with_aria2", fake_torrent_download)
+    monkeypatch.setattr("services.storage.remote_downloads.download_torrent_file_with_aria2", fake_torrent_download)
 
     downloaded = download_torrent_url_with_aria2("https://downloads.example/payload.torrent")
     assert downloaded.filename == "payload.txt"
@@ -253,7 +253,7 @@ def test_torrent_file_trackers_reject_private_hosts(tmp_path, monkeypatch):
     torrent.write_bytes(
         b"d8:announce31:http://tracker.example/announce4:infod4:name4:test12:piece lengthi16384e6:pieces0:ee"
     )
-    monkeypatch.setattr("services.remote_downloads.socket.getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr("services.storage.remote_downloads.socket.getaddrinfo", fake_getaddrinfo)
 
     with pytest.raises(RemoteDownloadError, match="localhost"):
         validate_torrent_file_trackers(torrent)
@@ -289,9 +289,9 @@ def test_torrent_download_excludes_private_trackers_instead_of_failing(tmp_path,
         def communicate(self, timeout=None):
             return self.stdout, self.stderr
 
-    monkeypatch.setattr("services.remote_downloads.socket.getaddrinfo", fake_getaddrinfo)
-    monkeypatch.setattr("services.remote_downloads.shutil.which", lambda name: "/usr/bin/aria2c")
-    monkeypatch.setattr("services.remote_downloads.subprocess.Popen", DonePopen)
+    monkeypatch.setattr("services.storage.remote_downloads.socket.getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr("services.storage.remote_downloads.shutil.which", lambda name: "/usr/bin/aria2c")
+    monkeypatch.setattr("services.storage.remote_downloads.subprocess.Popen", DonePopen)
 
     report = inspect_torrent_file_trackers(torrent)
     assert report["blocked"][0]["url"] == tracker.decode("ascii")

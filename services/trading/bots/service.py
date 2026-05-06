@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_DOWN
 
-from services.notifications import create_notification_if_enabled, create_root_notification_if_enabled
+from services.system.notifications import create_notification_if_enabled, create_root_notification_if_enabled
 from services.trading.accounting.core import quantity_to_units, units_to_quantity
 from services.trading.bots.audit import (
     bot_audit_enabled_at,

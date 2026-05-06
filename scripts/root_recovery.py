@@ -16,9 +16,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from services.audit import audit, configure_audit_service
+from services.system.audit import audit, configure_audit_service
 from services.auth import hash_password, verify_password
-from services.password_strength import enforce_password_strength, score_password_strength
+from services.security.password_strength import enforce_password_strength, score_password_strength
 
 
 def _env_path(name: str, default_path: Path) -> Path:

@@ -1,7 +1,7 @@
 import sqlite3
 from datetime import datetime, timedelta
 
-from services.member_levels import (
+from services.users.member_levels import (
     DEFAULT_MEMBER_LEVEL_RULES,
     apply_member_level_change,
     ensure_member_level_rules_schema,
@@ -12,7 +12,7 @@ from services.member_levels import (
     suggest_sanction,
     update_member_level_rule,
 )
-from services.permissions import (
+from services.security.permissions import (
     can_comment,
     can_dm,
     can_post,

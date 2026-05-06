@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from flask import request, send_file
 
-from services.access_controls import (
+from services.security.access_controls import (
     access_control_settings_payload,
     generate_internal_test_token,
     generate_maintenance_bypass_token,
@@ -21,23 +21,23 @@ from services.access_controls import (
     maintenance_bypass_expires_at,
 )
 from services.bootstrap import CURRENT_SCHEMA_VERSION, get_schema_version
-from services.integrity_guard import CONFIRM_APPROVE
-from services.member_levels import (
+from services.system.integrity_guard import CONFIRM_APPROVE
+from services.users.member_levels import (
     DEFAULT_MEMBER_LEVEL_RULES,
     ensure_member_level_rules_schema,
     serialize_member_level_rule,
     update_member_level_rule,
 )
-from services.notifications import create_root_notification_if_enabled
-from services.server_bind import (
+from services.system.notifications import create_root_notification_if_enabled
+from services.server.bind import (
     server_bind_settings_payload,
     server_ssl_settings_payload,
     validate_listen_host,
     validate_listen_port,
 )
-from services.captcha import normalize_captcha_mode
-from services.storage_paths import validate_storage_root
-from services.storage_capacity_audit import audit_storage_capacity
+from services.security.captcha import normalize_captcha_mode
+from services.storage.paths import validate_storage_root
+from services.storage.capacity_audit import audit_storage_capacity
 from services.upload_security import (
     ensure_upload_security_schema,
     get_cloud_drive_security_policy,

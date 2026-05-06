@@ -1,7 +1,7 @@
 import shutil
 from pathlib import Path
 
-from services.member_levels import get_member_level_rule
+from services.users.member_levels import get_member_level_rule
 from services.upload_security import get_user_cloud_drive_usage
 
 

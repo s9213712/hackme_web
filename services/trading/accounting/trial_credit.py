@@ -76,5 +76,8 @@ def trial_credit_payload(trial, *, days_valid):
         "activated_at": trial["activated_at"],
         "expires_at": trial["expires_at"],
         "reclaimed_at": trial["reclaimed_at"],
+        "reclaim_blocked_reason": str(trial["reclaim_blocked_reason"] or "") if "reclaim_blocked_reason" in trial.keys() else "",
+        "reclaim_blocked_at": trial["reclaim_blocked_at"] if "reclaim_blocked_at" in trial.keys() else None,
+        "pending_reclaim": bool(str(trial["reclaim_blocked_reason"] or "").strip()) if "reclaim_blocked_reason" in trial.keys() else False,
         "days_valid": int(days_valid or 0),
     }

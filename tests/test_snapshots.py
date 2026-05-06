@@ -6,6 +6,7 @@ import hashlib
 from datetime import datetime
 from pathlib import Path
 
+import pytest
 from flask import Flask, jsonify, make_response
 
 from routes.system_admin import register_system_admin_routes, restart_launcher_code
@@ -142,6 +143,15 @@ def test_server_mode_hmac_key_defaults_to_runtime_subdir_without_snapshot_servic
     path = mode._local_hmac_key_path("server_mode_log")
 
     assert path == (tmp_path / "runtime" / ".server_mode_log_hmac_key").resolve()
+
+
+def test_server_mode_hmac_key_fails_closed_when_runtime_path_is_a_file(tmp_path, monkeypatch):
+    monkeypatch.delenv("HACKME_RUNTIME_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "runtime").write_text("block repo pollution\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="runtime path is blocked by a non-directory file"):
+        ServerModeService(snapshot_service=None, get_db=lambda: None, audit=lambda *args, **kwargs: None)
 
 
 def test_restore_reverts_db_and_uploaded_files_and_creates_pre_restore(tmp_path):

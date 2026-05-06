@@ -5,8 +5,8 @@ from functools import wraps
 
 from flask import request
 
-from services.governance_records import add_reputation_event, record_moderation_action
-from services.permissions import require_member_action
+from services.governance.records import add_reputation_event, record_moderation_action
+from services.security.permissions import require_member_action
 
 
 def register_community_routes(app, deps):

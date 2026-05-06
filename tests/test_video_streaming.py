@@ -11,13 +11,13 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from flask import Flask, jsonify, make_response
 
 import routes.videos as video_routes
-import services.media_streaming as media_streaming
+from services.media import streaming as media_streaming
 from routes.videos import register_video_routes
-from services.cloud_drive import ensure_cloud_drive_attachment_schema
-from services.member_levels import ensure_member_level_rules_schema
+from services.storage.cloud_drive import ensure_cloud_drive_attachment_schema
+from services.users.member_levels import ensure_member_level_rules_schema
 from services.storage_albums import ensure_storage_album_schema
 from services.upload_security import ensure_upload_security_schema, update_cloud_drive_security_policy
-from services.videos import publish_video
+from services.media.videos import publish_video
 
 
 def _json_resp(payload, status=200):

@@ -1,5 +1,9 @@
-APP_NAME = "hackme_web"
+"""Compatibility facade for services.platform.release_info."""
 
-# Bump this on every published server build so the login page can prove which
-# code release is actually running.
-APP_RELEASE_ID = "2026.05.06-145"
+from services.platform import release_info as _impl
+
+APP_NAME = "hackme_web"
+APP_RELEASE_ID = "2026.05.06-147"
+
+assert APP_NAME == _impl.APP_NAME
+assert APP_RELEASE_ID == _impl.APP_RELEASE_ID

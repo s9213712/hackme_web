@@ -21,20 +21,20 @@ import urllib.request
 
 from flask import request
 
-from services.cloud_drive import attach_existing_file, ensure_cloud_drive_attachment_schema, store_cloud_upload
-from services.comfyui_client import (
+from services.storage.cloud_drive import attach_existing_file, ensure_cloud_drive_attachment_schema, store_cloud_upload
+from services.comfyui.client import (
     CONTROLNET_TYPE_DEFINITIONS,
     GENERATION_MODE_DEFINITIONS,
     ComfyUIClient,
     ComfyUIError,
 )
-from services.comfyui_workflows import (
+from services.comfyui.workflows import (
     WorkflowValidationError,
     extract_workflow_summary,
     sanitize_workflow_json,
     workflow_json_to_pretty_text,
 )
-from services.notifications import create_notification_if_enabled
+from services.system.notifications import create_notification_if_enabled
 from services.storage_albums import (
     add_album_file,
     create_storage_file_entry,

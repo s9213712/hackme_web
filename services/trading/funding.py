@@ -8,7 +8,7 @@ public façade and delegates into these helpers.
 import uuid
 from decimal import Decimal, ROUND_HALF_UP
 
-from services.server_mode_context import SmV2Context
+from services.server_mode.context import SmV2Context
 from services.trading.accounting.core import notional_points, quantity_to_units, units_to_quantity
 from services.trading.accounting.trial_credit import trial_credit_payload
 from services.trading.constants import ASSET_SCALE
@@ -306,6 +306,7 @@ def open_root_contract_position(
         settings = service._settings_payload(conn)
         if not settings.get("futures_enabled") or not int(market["futures_enabled"] or 0):
             raise ValueError("contract trading is disabled")
+        service._assert_market_boot_ready(market, usage="contract position open")
         price, price_source, price_meta = service._current_market_price_points(
             conn,
             market,
@@ -435,7 +436,20 @@ def close_root_contract_position(
         if position["status"] != "open":
             raise ValueError("contract position is not open")
         market = service._market(conn, position["market_symbol"])
-        current_price, price_source = service._current_market_price_points(conn, market)
+        service._assert_market_boot_ready(market, usage="contract position close")
+        current_price, price_source, price_meta = service._current_market_price_points(
+            conn,
+            market,
+            with_meta=True,
+            high_risk=True,
+        )
+        service._assert_price_meta_allows_high_risk_use(
+            conn,
+            actor=actor,
+            market_symbol=market["symbol"],
+            usage="contract position close",
+            price_meta=price_meta,
+        )
         entry_price = float(_to_decimal(position["entry_price_points"], name="entry_price_points", minimum=0.00000001))
         quantity_units = int(position["quantity_units"])
         price_delta = notional_points(quantity_units, abs(current_price - entry_price))

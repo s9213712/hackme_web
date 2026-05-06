@@ -3,7 +3,7 @@ import json
 from flask import Flask, jsonify, make_response
 
 from routes.system_admin import register_system_admin_routes
-from services.access_controls import (
+from services.security.access_controls import (
     access_control_settings_payload,
     client_ip_allowed,
     hash_maintenance_bypass_token,
@@ -14,7 +14,7 @@ from services.access_controls import (
     parse_ip_whitelist,
     verify_maintenance_bypass_token,
 )
-from services.server_bind import (
+from services.server.bind import (
     effective_server_bind,
     effective_server_ssl,
     server_ssl_settings_payload,

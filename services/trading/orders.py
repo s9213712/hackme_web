@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 
-from services.server_mode_routing import resolve_table
+from services.server_mode.routing import resolve_table
 from services.trading.accounting.core import (
     fee_points,
     notional_points,
@@ -70,14 +70,6 @@ def place_order(
         current_price, price_source, price_meta = service._current_market_price_points(
             conn, market, with_meta=True, high_risk=(order_type == "market")
         )
-        if order_type == "market":
-            service._assert_price_meta_allows_high_risk_use(
-                conn,
-                actor=actor,
-                market_symbol=market["symbol"],
-                usage="market order",
-                price_meta=price_meta,
-            )
         if order_type == "limit":
             limit_price = service._validate_market_limit_price(market, limit_price_points)
         else:
@@ -110,6 +102,14 @@ def place_order(
             limit_price=limit_price,
             current_price=current_price,
         )
+        if executable:
+            service._assert_price_meta_allows_high_risk_use(
+                conn,
+                actor=actor,
+                market_symbol=market["symbol"],
+                usage="market order" if order_type == "market" else "immediately executable limit order",
+                price_meta=price_meta,
+            )
         now = _now_text()
         order_uuid = str(uuid.uuid4())
         funding_mode = "root_simulated" if service._is_root_actor(actor) else "points_chain"
@@ -328,7 +328,19 @@ def match_open_limit_orders(service, *, actor=None, market_symbol=None, limit=20
                 conn.rollback()
                 skipped += 1
                 continue
-            current_price, price_source = service._current_market_price_points(conn, market)
+            current_price, price_source, price_meta = service._current_market_price_points(
+                conn,
+                market,
+                with_meta=True,
+                high_risk=True,
+            )
+            service._assert_price_meta_allows_high_risk_use(
+                conn,
+                actor=actor,
+                market_symbol=market["symbol"],
+                usage="limit order match",
+                price_meta=price_meta,
+            )
             executable, execution_price = service._is_executable(
                 market,
                 side=order["side"],

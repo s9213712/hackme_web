@@ -7,7 +7,7 @@ from pathlib import Path
 from flask import Flask, jsonify, make_response
 
 from routes.system_admin import register_system_admin_routes
-from services.integrity_guard import CONFIRM_APPROVE, IntegrityGuard, ensure_integrity_schema
+from services.system.integrity_guard import CONFIRM_APPROVE, IntegrityGuard, ensure_integrity_schema
 from services.snapshots import (
     PRODUCTION_REQUIRED_REPORT_TYPES,
     ServerModeService,

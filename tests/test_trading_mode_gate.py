@@ -10,8 +10,8 @@ proves the gate primitives behave correctly.
 import pytest
 
 from services.points_chain import ChainModeViolation
-from services.server_mode_context import SmV2Context
-from services.trading_mode_gate import (
+from services.server_mode.context import SmV2Context
+from services.trading.mode_gate import (
     CrossWorldContamination,
     TradingDisabledInMode,
     assert_same_world,
@@ -133,6 +133,6 @@ def test_liquidation_in_test_mode_uses_routing_not_allowed_for_now():
     target for positions — caller should see the routing error, not a
     silent fallback.
     """
-    from services.server_mode_routing import RoutingNotAllowed
+    from services.server_mode.routing import RoutingNotAllowed
     with pytest.raises(RoutingNotAllowed):
         liquidation_target_table(_ctx("test"))

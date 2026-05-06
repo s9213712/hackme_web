@@ -10,7 +10,7 @@ from urllib.request import Request, urlopen
 
 from flask import Response, request
 
-from services.btc_trade_bridge import (
+from services.trading.btc_bridge import (
     DEFAULT_BTC_TRADE_BRANCH,
     DEFAULT_BTC_TRADE_REPO_URL,
     BTC_TRADE_START_WAIT_SECONDS,
@@ -21,7 +21,7 @@ from services.btc_trade_bridge import (
     default_btc_trade_project_dir,
     expand_server_path,
 )
-from services.trading_markets import (
+from services.trading.catalog import (
     market_provider_id as catalog_market_provider_id,
     market_supports_btc_trade as catalog_market_supports_btc_trade,
     market_supports_reference_price as catalog_market_supports_reference_price,
@@ -534,6 +534,20 @@ def register_trading_routes(app, deps):
         except Exception:
             raise ValueError("backtest time must be ISO datetime or unix timestamp")
 
+    def infer_backtest_candle_limit_from_window(data, interval, active_cap):
+        start_ms = parse_time_ms(data.get("start_time"))
+        end_ms = parse_time_ms(data.get("end_time"))
+        if start_ms is None or end_ms is None:
+            return None
+        if end_ms <= start_ms:
+            raise ValueError("backtest end_time must be after start_time")
+        interval_ms = INTERVAL_MILLISECONDS.get(interval)
+        if not interval_ms:
+            return None
+        import math as _math
+        span_ms = max(interval_ms, end_ms - start_ms)
+        return min(max(2, _math.ceil(span_ms / interval_ms)), active_cap)
+
     def fetch_reference_candles_for_backtest(data):
         market_symbol = normalize_market_symbol_for_route(data.get("market_symbol") or data.get("market") or "BTC/USDT")
         if not market_supports_reference_price_for_route(market_symbol):
@@ -563,7 +577,8 @@ def register_trading_routes(app, deps):
             except Exception:
                 raise ValueError("backtest candle limit 格式錯誤")
         else:
-            limit = min(500, active_cap)
+            inferred_limit = infer_backtest_candle_limit_from_window(data, interval, active_cap)
+            limit = inferred_limit if inferred_limit is not None else min(500, active_cap)
         if limit > active_cap:
             raise ValueError(
                 f"回測長度超過上限：{active_cap} 根 K 棒"
@@ -603,6 +618,54 @@ def register_trading_routes(app, deps):
             "max_backtest_candles_per_batch": BACKTEST_SEGMENT_CANDLES,
             "max_backtest_days": max_days_for_interval,
         }
+
+    def run_backtest_payload(actor, data, *, default_auto_fetch_reference=False):
+        payload = dict(data or {})
+        fetched_meta = {}
+        candles = payload.get("candles")
+        auto_fetch_reference = str(payload.get("auto_fetch_reference_candles") or "").strip().lower() in {"1", "true", "yes", "on"}
+        if default_auto_fetch_reference and (not isinstance(candles, list) or not candles):
+            auto_fetch_reference = True
+            payload["auto_fetch_reference_candles"] = True
+        if isinstance(candles, list) and candles and len(candles) < 2:
+            raise ValueError("candles are required for backtest")
+        if (not isinstance(candles, list) or not candles) and auto_fetch_reference:
+            fetched = fetch_reference_candles_for_backtest(payload)
+            payload["candles"] = fetched["candles"]
+            payload["data_source"] = fetched["source"]
+            payload["provider_symbol"] = fetched["symbol"]
+            payload["requested_candle_limit"] = fetched.get("requested_limit")
+            payload["download_candle_limit"] = fetched.get("download_limit")
+            fetched_meta = {
+                "interval": fetched.get("interval"),
+                "mins_per_candle": fetched.get("mins_per_candle"),
+                "actual_candle_count": fetched.get("actual_candle_count"),
+                "actual_backtest_days": fetched.get("actual_days"),
+                "max_backtest_candles": fetched.get("max_backtest_candles"),
+                "max_backtest_candles_per_batch": fetched.get("max_backtest_candles_per_batch"),
+                "max_backtest_days": fetched.get("max_backtest_days"),
+            }
+        result = trading_service.backtest_trading_bot(actor=actor, payload=payload)
+        result["data_source"] = result.get("data_source") or payload.get("data_source") or ("browser_loaded_chart" if isinstance((payload or {}).get("candles"), list) else "")
+        result["provider_symbol"] = result.get("provider_symbol") or payload.get("provider_symbol") or ""
+        get_max_backtest_candles = getattr(trading_service, "get_max_backtest_candles", None)
+        active_cap = int(get_max_backtest_candles()) if callable(get_max_backtest_candles) else MAX_BACKTEST_CANDLES
+        result["max_backtest_candles"] = active_cap
+        result["max_backtest_candles_per_batch"] = result.get("max_backtest_candles_per_batch") or fetched_meta.get("max_backtest_candles_per_batch") or BACKTEST_SEGMENT_CANDLES
+        result["provider_candle_limit"] = BACKTEST_PROVIDER_CANDLE_LIMIT
+        result["requested_candle_limit"] = payload.get("requested_candle_limit") or payload.get("candle_limit") or payload.get("limit") or len(payload.get("candles") or [])
+        result["download_candle_limit"] = payload.get("download_candle_limit") or len(payload.get("candles") or [])
+        interval_key = fetched_meta.get("interval") or str(payload.get("timeframe") or payload.get("interval") or "15m").strip()
+        mins_per_candle = fetched_meta.get("mins_per_candle") or INTERVAL_MINUTES.get(interval_key, 15)
+        n_candles = result.get("candle_count") or len(payload.get("candles") or [])
+        result["interval"] = interval_key
+        result["backtest_window_days"] = round(n_candles * mins_per_candle / 1440, 1)
+        result["max_backtest_days"] = fetched_meta.get("max_backtest_days") or round(active_cap * mins_per_candle / 1440, 1)
+        result["backtest_limits"] = {
+            iv: {"max_candles": active_cap, "max_days": round(active_cap * m / 1440, 1)}
+            for iv, m in INTERVAL_MINUTES.items()
+        }
+        return result
 
     @app.route("/api/trading/markets", methods=["GET"])
     @require_csrf_safe
@@ -876,6 +939,45 @@ def register_trading_routes(app, deps):
         except Exception as exc:
             return service_error(exc)
 
+    @app.route("/api/trading/workflow-editor/backtest", methods=["POST"])
+    @require_csrf
+    def trading_workflow_editor_backtest():
+        actor, err = actor_or_401()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        try:
+            workflow = data.get("workflow") or data.get("workflow_json")
+            if not isinstance(workflow, dict):
+                raise ValueError("請先完成 Workflow JSON 後再執行回測")
+            validated = trading_service._validate_workflow(workflow)
+            preview_payload = {
+                "market_symbol": data.get("market_symbol") or data.get("market") or "BTC/USDT",
+                "strategy": "workflow",
+                "workflow_json": validated,
+                "initial_cash_points": data.get("initial_cash_points") or 10000,
+                "timeframe": data.get("timeframe") or data.get("interval") or "1h",
+                "start_time": data.get("start_time") or "",
+                "end_time": data.get("end_time") or "",
+                "slippage_percent": data.get("slippage_percent") or 0,
+                "candle_limit": data.get("candle_limit"),
+                "auto_fetch_reference_candles": True,
+            }
+            result = run_backtest_payload(actor, preview_payload, default_auto_fetch_reference=True)
+            audit(
+                "TRADING_WORKFLOW_EDITOR_BACKTEST",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"market={result.get('market_symbol')}, strategy=workflow, trades={result.get('trade_count')}",
+            )
+            return json_resp(result)
+        except Exception as exc:
+            return service_error(exc)
+
     @app.route("/api/trading/reference-prices", methods=["GET"])
     @require_csrf_safe
     def trading_reference_prices():
@@ -1060,48 +1162,7 @@ def register_trading_routes(app, deps):
         if err:
             return err
         try:
-            fetched_meta = {}
-            candles = data.get("candles")
-            auto_fetch_reference = str(data.get("auto_fetch_reference_candles") or "").strip().lower() in {"1", "true", "yes", "on"}
-            if isinstance(candles, list) and candles and len(candles) < 2:
-                raise ValueError("candles are required for backtest")
-            if (not isinstance(candles, list) or not candles) and auto_fetch_reference:
-                fetched = fetch_reference_candles_for_backtest(data)
-                data["candles"] = fetched["candles"]
-                data["data_source"] = fetched["source"]
-                data["provider_symbol"] = fetched["symbol"]
-                data["requested_candle_limit"] = fetched.get("requested_limit")
-                data["download_candle_limit"] = fetched.get("download_limit")
-                fetched_meta = {
-                    "interval": fetched.get("interval"),
-                    "mins_per_candle": fetched.get("mins_per_candle"),
-                    "actual_candle_count": fetched.get("actual_candle_count"),
-                    "actual_backtest_days": fetched.get("actual_days"),
-                    "max_backtest_candles": fetched.get("max_backtest_candles"),
-                    "max_backtest_candles_per_batch": fetched.get("max_backtest_candles_per_batch"),
-                    "max_backtest_days": fetched.get("max_backtest_days"),
-                }
-            result = trading_service.backtest_trading_bot(actor=actor, payload=data)
-            result["data_source"] = result.get("data_source") or data.get("data_source") or ("browser_loaded_chart" if isinstance((data or {}).get("candles"), list) else "")
-            result["provider_symbol"] = result.get("provider_symbol") or data.get("provider_symbol") or ""
-            get_max_backtest_candles = getattr(trading_service, "get_max_backtest_candles", None)
-            active_cap = int(get_max_backtest_candles()) if callable(get_max_backtest_candles) else MAX_BACKTEST_CANDLES
-            result["max_backtest_candles"] = active_cap
-            result["max_backtest_candles_per_batch"] = result.get("max_backtest_candles_per_batch") or fetched_meta.get("max_backtest_candles_per_batch") or BACKTEST_SEGMENT_CANDLES
-            result["provider_candle_limit"] = BACKTEST_PROVIDER_CANDLE_LIMIT
-            result["requested_candle_limit"] = data.get("requested_candle_limit") or data.get("candle_limit") or data.get("limit") or len(data.get("candles") or [])
-            result["download_candle_limit"] = data.get("download_candle_limit") or len(data.get("candles") or [])
-            # Interval and window info (auto-calculated so the caller never has to compute candle counts)
-            interval_key = fetched_meta.get("interval") or str(data.get("timeframe") or data.get("interval") or "15m").strip()
-            mins_per_candle = fetched_meta.get("mins_per_candle") or INTERVAL_MINUTES.get(interval_key, 15)
-            n_candles = result.get("candle_count") or len(data.get("candles") or [])
-            result["interval"] = interval_key
-            result["backtest_window_days"] = round(n_candles * mins_per_candle / 1440, 1)
-            result["max_backtest_days"] = fetched_meta.get("max_backtest_days") or round(active_cap * mins_per_candle / 1440, 1)
-            result["backtest_limits"] = {
-                iv: {"max_candles": active_cap, "max_days": round(active_cap * m / 1440, 1)}
-                for iv, m in INTERVAL_MINUTES.items()
-            }
+            result = run_backtest_payload(actor, data)
             audit(
                 "TRADING_BOT_BACKTEST",
                 get_client_ip(),

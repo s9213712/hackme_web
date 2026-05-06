@@ -1,4 +1,4 @@
-from services.password_strength import enforce_password_strength, score_password_strength
+from services.security.password_strength import enforce_password_strength, score_password_strength
 
 
 def test_password_strength_scores_missing_requirements():

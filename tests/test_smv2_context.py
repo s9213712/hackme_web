@@ -14,7 +14,7 @@ from dataclasses import FrozenInstanceError
 
 from flask import Flask
 
-from services import server_mode_context as smv2
+from services.server_mode import context as smv2
 
 
 def test_smv2_context_is_frozen():

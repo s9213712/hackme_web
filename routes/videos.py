@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 
 from flask import Response, request, send_file, session
 
-from services.cloud_drive import (
+from services.storage.cloud_drive import (
     decrypt_server_encrypted_bytes,
     ensure_cloud_drive_attachment_schema,
     is_e2ee_file,
@@ -13,15 +13,15 @@ from services.cloud_drive import (
     resolve_file_storage_path,
     store_cloud_upload,
 )
-from services.http_headers import build_content_disposition
-from services.media_streaming import (
+from services.core.http_headers import build_content_disposition
+from services.media.streaming import (
     ensure_media_stream_schema,
     get_stream_status,
     prepare_stream_asset,
     should_auto_prepare_stream,
     stream_playback_payload,
 )
-from services.e2ee_streaming import (
+from services.media.e2ee_streaming import (
     ensure_e2ee_stream_v2_schema,
     get_e2ee_stream_v2_status,
     resolve_e2ee_chunk_response,
@@ -30,7 +30,7 @@ from services.e2ee_streaming import (
 )
 from services.storage_albums import create_storage_file_entry, ensure_storage_album_schema
 from services.upload_security import safe_public_filename
-from services.videos import (
+from services.media.videos import (
     add_video_comment,
     ensure_video_schema,
     ensure_video_share_link,

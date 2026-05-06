@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Trading Workflow Editor</title>
-  <link rel="stylesheet" href="/trading-workflow-editor.css?v=20260501-csp" />
+  <link rel="stylesheet" href="/trading-workflow-editor.css?v=20260506-workflow-preview" />
 </head>
 <body>
   <header class="topbar">
@@ -105,6 +105,56 @@
           <ul class="validation-list" id="validationList"></ul>
         </div>
       </div>
+      <div class="panel">
+        <div class="panel-head">
+          <div class="panel-title">回測預覽</div>
+          <span class="badge" id="workflowPreviewBadge">未執行</span>
+        </div>
+        <div class="panel-body">
+          <div class="field">
+            <label>市場</label>
+            <select id="workflow-preview-market"></select>
+          </div>
+          <div class="three-col">
+            <div class="field">
+              <label>週期</label>
+              <select id="workflow-preview-timeframe">
+                <option value="15m">15m</option>
+                <option value="1h" selected>1h</option>
+                <option value="4h">4h</option>
+                <option value="1d">1d</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>初始資金</label>
+              <input id="workflow-preview-initial-cash" type="number" min="1" step="1" value="10000" />
+            </div>
+            <div class="field">
+              <label>滑價 %</label>
+              <input id="workflow-preview-slippage" type="number" min="0" step="0.01" value="0" />
+            </div>
+          </div>
+          <div class="two-col">
+            <div class="field">
+              <label>開始時間</label>
+              <input id="workflow-preview-start" type="datetime-local" />
+            </div>
+            <div class="field">
+              <label>結束時間</label>
+              <input id="workflow-preview-end" type="datetime-local" />
+            </div>
+          </div>
+          <div class="preview-actions">
+            <button class="primary" id="workflow-preview-run-btn" type="button">執行回測預覽</button>
+            <button id="workflow-preview-range-180d" type="button">最近 180 天</button>
+            <button id="workflow-preview-range-365d" type="button">最近 365 天</button>
+          </div>
+          <div class="status" id="workflow-preview-status"></div>
+          <div class="preview-metrics" id="workflow-preview-metrics"></div>
+          <div class="preview-detail" id="workflow-preview-detail"></div>
+          <div class="preview-warnings" id="workflow-preview-warnings"></div>
+        </div>
+      </div>
       <div class="panel json-panel">
         <div class="panel-body">
           <details>
@@ -117,6 +167,6 @@
     </aside>
   </main>
 
-  <script src="/js/trading-workflow-editor.js?v=20260501-csp"></script>
+  <script src="/js/trading-workflow-editor.js?v=20260506-workflow-preview"></script>
 </body>
 </html>

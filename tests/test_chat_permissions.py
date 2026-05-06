@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from flask import Flask, jsonify
 
 from routes.chat import register_chat_routes
-from services.cloud_drive import ensure_cloud_drive_attachment_schema
+from services.storage.cloud_drive import ensure_cloud_drive_attachment_schema
 
 
 def _role_rank(role):

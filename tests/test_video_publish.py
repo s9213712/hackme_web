@@ -7,11 +7,11 @@ from cryptography.fernet import Fernet
 from flask import Flask, jsonify, make_response
 
 from routes.videos import register_video_routes
-from services.cloud_drive import ensure_cloud_drive_attachment_schema
-from services.member_levels import ensure_member_level_rules_schema
+from services.storage.cloud_drive import ensure_cloud_drive_attachment_schema
+from services.users.member_levels import ensure_member_level_rules_schema
 from services.storage_albums import ensure_storage_album_schema
 from services.upload_security import ensure_upload_security_schema, update_cloud_drive_security_policy
-from services.videos import get_video, publish_video
+from services.media.videos import get_video, publish_video
 from tests.video_test_helpers import actor, seed_cloud_file, video_test_db
 
 
@@ -102,7 +102,7 @@ def test_publish_share_link_hash_uses_kdf_and_revoke_regenerate_controls():
     assert str(share_row["password_hash"]).startswith(("argon2id$", "pbkdf2_sha256$"))
     assert share_row["wrapped_file_key_envelope"]
 
-    from services.videos import ensure_video_share_link, revoke_video_share_link
+    from services.media.videos import ensure_video_share_link, revoke_video_share_link
 
     updated, msg = ensure_video_share_link(
         conn,

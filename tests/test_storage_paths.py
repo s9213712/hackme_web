@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from services.storage_paths import resolve_storage_path, validate_storage_root
+from services.storage.paths import resolve_storage_path, validate_storage_root
 
 
 def test_resolve_storage_path_accepts_safe_relative_path(tmp_path):

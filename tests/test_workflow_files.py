@@ -48,6 +48,7 @@ def test_workflow_custom_files_are_runtime_data_not_committed_templates():
     index = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     assert '"/api/trading/workflow-templates"' in routes
     assert '"/api/trading/workflow-templates/custom"' in routes
+    assert '"/api/trading/workflow-editor/backtest"' in routes
     assert '"/trading/workflow-templates"' in frontend
     assert '"/trading/workflow-templates/custom"' in frontend
     assert 'id="trading-workflow-custom-save-btn"' in index

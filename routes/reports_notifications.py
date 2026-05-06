@@ -2,12 +2,12 @@ from datetime import datetime
 
 from flask import request
 
-from services.notifications import (
+from services.system.notifications import (
     create_notification,
     ensure_notifications_schema,
     serialize_notification,
 )
-from services.permissions import require_member_action
+from services.security.permissions import require_member_action
 
 
 REPORT_TARGET_TYPES = {"chat_message", "forum_post", "forum_thread", "user", "other"}

@@ -19,7 +19,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 import argon2
 from flask_talisman import Talisman
-from services.audit import (
+from services.system.audit import (
     _chain_hash,
     audit,
     canonical_json,
@@ -28,13 +28,13 @@ from services.audit import (
     reset_audit_chain_with_event,
     verify_audit_integrity,
 )
-from services.access_controls import (
+from services.security.access_controls import (
     client_ip_allowed,
     is_browser_user_agent,
     maintenance_bypass_required_payload,
     verify_maintenance_bypass_token,
 )
-from services.account_recovery import ensure_account_recovery_schema
+from services.users.recovery import ensure_account_recovery_schema
 from services.auth import (
     CSRF_TOKEN_TTL,
     SESSION_TTL,
@@ -86,7 +86,7 @@ from services.violations import (
     secure_add_violation,
     verify_violation_integrity,
 )
-from services.security_events import (
+from services.security.events import (
     block_ip,
     check_user_rate_limit,
     clear_failed_logins,
@@ -104,13 +104,13 @@ from services.bootstrap import (
     migrate_legacy_json_artifacts,
     migrate_legacy_json_to_db,
 )
-from services.chat_support import (
+from services.chat.support import (
     append_chat_record,
     configure_chat_support_service,
     ensure_official_chat_room,
     ensure_user_official_room_membership,
 )
-from services.identity import (
+from services.security.identity import (
     ACCOUNT_STATUSES,
     MEMBER_LEVELS,
     ROLE_LABEL,
@@ -118,14 +118,14 @@ from services.identity import (
     ensure_user_identity_columns,
     role_rank,
 )
-from services.governance_records import ensure_governance_records_schema
-from services.integrity_guard import IntegrityGuard, ensure_integrity_schema
-from services.member_levels import ensure_member_level_rules_schema, get_member_level_rule
-from services.moderation_proposals import ensure_moderation_proposals_schema
-from services.password_strength import enforce_password_strength, score_password_strength
+from services.governance.records import ensure_governance_records_schema
+from services.system.integrity_guard import IntegrityGuard, ensure_integrity_schema
+from services.users.member_levels import ensure_member_level_rules_schema, get_member_level_rule
+from services.governance.moderation import ensure_moderation_proposals_schema
+from services.security.password_strength import enforce_password_strength, score_password_strength
 from services.points_chain import DEFAULT_BLOCK_LEDGER_THRESHOLD, DEFAULT_BLOCK_MAX_INTERVAL_SECONDS, PointsLedgerService, ensure_points_economy_schema
 from services.release_info import APP_NAME, APP_RELEASE_ID
-from services.runtime_output import get_runtime_output, install_runtime_output_capture
+from services.core.runtime_output import get_runtime_output, install_runtime_output_capture
 from services.server.routes import register_server_routes
 from services.server.runtime import (
     _build_fernet,
@@ -142,6 +142,46 @@ from services.server.runtime import (
     parse_ip_set,
     save_json,
 )
+from services.server.security_runtime import (
+    decrypt_field as decrypt_field_helper,
+    encrypt_field as encrypt_field_helper,
+    feature_gate_for_path as feature_gate_for_path_runtime_helper,
+    get_client_ip as get_client_ip_helper,
+    get_request_maintenance_bypass_token as get_request_maintenance_bypass_token_runtime_helper,
+    get_runtime_server_mode as get_runtime_server_mode_helper,
+    get_ua as get_ua_helper,
+    has_valid_maintenance_bypass as has_valid_maintenance_bypass_runtime_helper,
+    hash_token as hash_token_helper,
+    is_audit_chain_enabled as is_audit_chain_enabled_helper,
+    is_ip_blocking_enabled as is_ip_blocking_enabled_runtime_helper,
+    path_is_root_recovery_allowed_during_lockdown as path_is_root_recovery_allowed_during_lockdown_runtime_helper,
+    reseal_audit_chain_if_required_on_startup as reseal_audit_chain_if_required_on_startup_helper,
+    root_ip_is_allowed as root_ip_is_allowed_runtime_helper,
+    tester_token_username_from_request as tester_token_username_from_request_helper,
+    verify_token as verify_token_helper,
+)
+from services.server.validation import (
+    normalize_text as normalize_text_helper,
+    parse_birthdate as parse_birthdate_helper,
+    parse_positive_int as parse_positive_int_helper,
+    user_public_payload as user_public_payload_helper,
+    validate_id_number as validate_id_number_helper,
+    validate_password as validate_password_helper,
+    validate_phone as validate_phone_helper,
+)
+from services.server.database import (
+    activate_emergency_lockdown as activate_emergency_lockdown_helper,
+    count_role as count_role_helper,
+    db_get_user_role as db_get_user_role_helper,
+    ensure_appeal_columns as ensure_appeal_columns_helper,
+    ensure_secure_audit_columns as ensure_secure_audit_columns_helper,
+    ensure_security_support_schema as ensure_security_support_schema_helper,
+    ensure_session_columns as ensure_session_columns_helper,
+    ensure_user_columns as ensure_user_columns_helper,
+    get_db as get_db_helper,
+    get_user_by_username as get_user_by_username_helper,
+)
+from services.server.container import build_runtime_services
 from services.server.startup import (
     measure_backtest_capacity_if_needed as measure_backtest_capacity_if_needed_helper,
     run_server_main as run_server_main_helper,
@@ -164,15 +204,15 @@ from services.server.request_guards import (
     protect_sensitive_static_page as protect_sensitive_static_page_helper,
     root_ip_is_allowed as root_ip_is_allowed_helper,
 )
-from services.server_bind import effective_server_bind, effective_server_ssl
-from services.server_mode_context import attach_to_g as smv2_attach_ctx, current_ctx as smv2_current_ctx
-from services.db_mode_triggers import register_app_mode_function as smv2_register_app_mode
+from services.server.bind import effective_server_bind, effective_server_ssl
+from services.server_mode.context import attach_to_g as smv2_attach_ctx, current_ctx as smv2_current_ctx
+from services.platform.db_mode_triggers import register_app_mode_function as smv2_register_app_mode
 from services.snapshots import SnapshotService, ServerModeService, ensure_snapshot_schema
-from services.storage_maintenance import run_storage_maintenance_if_due
-from services.storage_paths import validate_storage_root
+from services.storage.maintenance import run_storage_maintenance_if_due
+from services.storage.paths import validate_storage_root
 from services.upload_security import ensure_upload_security_schema
 from services.trading_engine import TradingEngineService, ensure_trading_schema
-from services.trading_price_streams import TradingPriceStreamHub
+from services.trading.streams import TradingPriceStreamHub
 
 # ── Paths ───────────────────────────────────────────────────────────────────
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
@@ -270,39 +310,17 @@ LEGACY_AUDIT_LOG = AUDIT_LOG_PATH
 
 # ── Sensitive field encryption helpers (PII) ─────────────────────────────
 def encrypt_field(value):
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        value = str(value)
-    if value == "":
-        return ""
-    return fernet.encrypt(value.encode("utf-8")).decode("utf-8")
+    return encrypt_field_helper(value, fernet=fernet)
 
 def decrypt_field(value):
-    if value is None or value == "":
-        return ""
-    if not isinstance(value, str):
-        return str(value)
-    try:
-        return fernet.decrypt(value.encode("utf-8")).decode("utf-8")
-    except Exception:
-        # Backward compatibility with pre-encryption rows. If the value looks
-        # like Fernet ciphertext but can no longer be decrypted (for example,
-        # a runtime key was reset), do not leak the raw ciphertext into UI.
-        if value.startswith("gAAAAA"):
-            return ""
-        return value
+    return decrypt_field_helper(value, fernet=fernet)
 
 def verify_token(token):
-    try:
-        data = json.loads(fernet.decrypt(token.encode()).decode())
-        if datetime.now() > datetime.fromisoformat(data["exp"]): return None
-        return data["user"]
-    except Exception: return None
+    return verify_token_helper(token, fernet=fernet)
 
 # ── Token hash (stored in DB for session lookup) ──────────────────────────────
 def hash_token(token):
-    return hashlib.sha256(token.encode()).hexdigest()
+    return hash_token_helper(token)
 
 # ── Security helpers ────────────────────────────────────────────────────────────
 # ── Trusted proxies (prevent X-Forwarded-For spoofing) ───────────────────────
@@ -324,190 +342,82 @@ CSRF_SECRET_KEY = _load_or_create_text_secret(
 
 
 def get_client_ip():
-    remote = request.remote_addr or ""
-    try:
-        remote = str(ip_address(remote))
-    except Exception:
-        remote = "0.0.0.0"
+    return get_client_ip_helper(request, use_xff=USE_XFF, trusted_proxy_ips=TRUSTED_PROXY_IPS)
 
-    # By default, do not trust X-Forwarded-For unless explicitly enabled.
-    # This avoids spoofing when app is accessed directly (local tests / direct TLS).
-    if not USE_XFF or not TRUSTED_PROXY_IPS:
-        return remote
-
-    # Only trust XFF when request source is a trusted proxy in allow-list.
-    xff = request.headers.get("X-Forwarded-For", "")
-    if xff:
-        if remote in TRUSTED_PROXY_IPS:
-            parts = [p.strip() for p in xff.split(",") if p.strip()]
-            if parts:
-                try:
-                    return str(ip_address(parts[0]))
-                except Exception:
-                    return remote
-    return remote
-
-def get_ua(): return request.headers.get("User-Agent","-")[:200]
+def get_ua(): return get_ua_helper(request)
 
 def is_audit_chain_enabled():
-    return bool(get_system_settings().get("audit_chain_enabled", False))
+    return is_audit_chain_enabled_helper(get_system_settings=get_system_settings)
 
 def reseal_audit_chain_if_required_on_startup():
-    settings = get_system_settings()
-    if not bool(settings.get("audit_chain_enabled", False)):
-        return {"ok": True, "skipped": True, "reason": "audit_chain_disabled"}
-    if not bool(settings.get("audit_chain_reseal_required", False)):
-        return {"ok": True, "skipped": True, "reason": "not_required"}
-    result = repair_audit_chain(reason="startup_after_audit_chain_reenabled")
-    save_settings({"audit_chain_reseal_required": False})
-    audit(
-        "AUDIT_CHAIN_STARTUP_RESEALED",
-        "0.0.0.0",
-        user="system",
-        success=True,
-        detail=f"entries_resealed={result.get('entries_resealed')},head_id={result.get('head_id')}",
+    return reseal_audit_chain_if_required_on_startup_helper(
+        get_system_settings=get_system_settings,
+        repair_audit_chain=repair_audit_chain,
+        save_settings=save_settings,
+        audit=audit,
     )
-    return {"ok": True, "skipped": False, "result": result}
 
 def is_ip_blocking_enabled():
-    settings = get_system_settings()
-    if "ip_blocking_enabled" in settings:
-        return bool(settings.get("ip_blocking_enabled", False))
-    return bool(IP_BLOCKING_ENABLED)
+    return is_ip_blocking_enabled_runtime_helper(
+        get_system_settings=get_system_settings,
+        env_default=IP_BLOCKING_ENABLED,
+    )
 
 
 def get_request_maintenance_bypass_token():
-    return get_request_maintenance_bypass_token_helper(request)
+    return get_request_maintenance_bypass_token_runtime_helper(
+        request,
+        helper=get_request_maintenance_bypass_token_helper,
+    )
 
 
 def has_valid_maintenance_bypass(settings=None):
-    settings = settings or get_system_settings()
-    return has_valid_maintenance_bypass_helper(
-        settings,
+    return has_valid_maintenance_bypass_runtime_helper(
+        settings=settings,
+        get_system_settings=get_system_settings,
         request_obj=request,
+        helper=has_valid_maintenance_bypass_helper,
         verify_maintenance_bypass_token=verify_maintenance_bypass_token,
     )
 
 
 def get_runtime_server_mode():
-    conn = None
-    try:
-        conn = get_db()
-        row = conn.execute("SELECT current_mode FROM server_modes WHERE id=1").fetchone()
-        mode = str(row["current_mode"] or "test").strip().lower() if row else "test"
-        return "dev_ready" if mode == "preprod" else mode
-    except Exception:
-        return "test"
-    finally:
-        if conn:
-            conn.close()
+    return get_runtime_server_mode_helper(get_db=get_db)
 
 
 def tester_token_username_from_request(req):
-    token = (  # allowlist: tester token header parsing, not a hardcoded secret
-        req.headers.get("X-Tester-Token", "")
-        or req.headers.get("X-Internal-Test-Token", "")
-        or ""
-    ).strip()
-    auth_header = req.headers.get("Authorization", "")
-    if not token and auth_header.lower().startswith("bearer "):
-        token = auth_header[7:].strip()  # allowlist: parse bearer token from request header
-    if not token:
-        return None
-    raw_uri = (
-        req.environ.get("RAW_URI")
-        or req.environ.get("REQUEST_URI")
-        or req.full_path
-        or req.path
-        or ""
+    return tester_token_username_from_request_helper(
+        req,
+        get_db=get_db,
+        ensure_snapshot_schema=ensure_snapshot_schema,
+        get_runtime_server_mode_func=get_runtime_server_mode,
+        record_security_event=record_security_event,
+        get_client_ip_func=get_client_ip,
     )
-    decoded_uri = urllib.parse.unquote(raw_uri)
-    suspicious_path = any(marker in raw_uri.lower() for marker in ("%2f", "%5c", "%2e")) or "\\" in decoded_uri or ".." in decoded_uri
-    if suspicious_path:
-        record_security_event("permission_denied", get_client_ip(), target_user="-", detail=f"tester_token_suspicious_path:path={raw_uri}")
-        return None
-    conn = None
-    try:
-        conn = get_db()
-        ensure_snapshot_schema(conn)
-        mode = get_runtime_server_mode()
-        if mode not in {"test", "internal_test"}:
-            return None
-        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
-        row = conn.execute(
-            """
-            SELECT t.*, u.username, u.status
-            FROM tester_tokens t
-            JOIN users u ON u.id=t.tester_user_id
-            WHERE t.token_hash=?
-              AND t.revoked_at IS NULL
-              AND t.expires_at>?
-              AND u.status='active'
-            LIMIT 1
-            """,
-            (token_hash, datetime.now().isoformat()),
-        ).fetchone()
-        if not row:
-            return None
-        path = req.path or ""
-        if path.startswith("/api/root/") or path in {"/api/root"}:
-            record_security_event("permission_denied", get_client_ip(), target_user=row["username"], detail=f"tester_token_root_api:path={path}")
-            return None
-        forbidden_prefixes = (
-            "/api/admin/server-mode",
-            "/api/admin/snapshots",
-            "/api/admin/integrity",
-            "/api/admin/settings",
-            "/api/admin/features",
-        )
-        if any(path == prefix or path.startswith(prefix) for prefix in forbidden_prefixes):
-            record_security_event("permission_denied", get_client_ip(), target_user=row["username"], detail=f"tester_token_forbidden_admin_api:path={path}")
-            return None
-        try:
-            allowed_routes = json.loads(row["allowed_routes_json"] or "[]")
-        except Exception:
-            allowed_routes = []
-        if allowed_routes and not any(path == route or path.startswith(str(route).rstrip("/") + "/") for route in allowed_routes):
-            record_security_event("permission_denied", get_client_ip(), target_user=row["username"], detail=f"tester_token_route_not_allowed:path={path}")
-            return None
-        window_start = (datetime.now() - timedelta(seconds=60)).isoformat()
-        recent = conn.execute(
-            "SELECT COUNT(*) AS c FROM tester_token_request_log WHERE token_id=? AND created_at>?",
-            (row["id"], window_start),
-        ).fetchone()
-        max_rpm = max(1, int(row["max_requests_per_minute"] or 60))
-        if int(recent["c"] or 0) >= max_rpm:
-            record_security_event("rate_limited", get_client_ip(), target_user=row["username"], detail=f"tester_token_rate_limit:token_id={row['id']}")
-            return None
-        conn.execute(
-            "INSERT INTO tester_token_request_log (token_id, route, ip_address, created_at) VALUES (?, ?, ?, ?)",
-            (row["id"], path, get_client_ip(), datetime.now().isoformat()),
-        )
-        conn.commit()
-        return row["username"]
-    except Exception:
-        try:
-            if conn:
-                conn.rollback()
-        except Exception:
-            pass
-        return None
-    finally:
-        if conn:
-            conn.close()
 
 
 def path_is_root_recovery_allowed_during_lockdown(path):
-    return path_is_root_recovery_allowed_during_lockdown_helper(path)
+    return path_is_root_recovery_allowed_during_lockdown_runtime_helper(
+        path,
+        helper=path_is_root_recovery_allowed_during_lockdown_helper,
+    )
 
 
 def root_ip_is_allowed(settings=None):
-    settings = settings or get_system_settings()
-    return root_ip_is_allowed_helper(settings, get_client_ip=get_client_ip, client_ip_allowed=client_ip_allowed)
+    return root_ip_is_allowed_runtime_helper(
+        settings=settings,
+        get_system_settings=get_system_settings,
+        get_client_ip_func=get_client_ip,
+        helper=root_ip_is_allowed_helper,
+        client_ip_allowed=client_ip_allowed,
+    )
 
 
 def feature_gate_for_path(path):
-    return feature_gate_for_path_helper(path)
+    return feature_gate_for_path_runtime_helper(
+        path,
+        helper=feature_gate_for_path_helper,
+    )
 
 # ── Domain constants / validation helpers ─────────────────────────────────────
 MAX_MANAGERS = 5
@@ -522,449 +432,178 @@ PW_RE = re.compile(r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=\[\]{};
 
 
 def normalize_text(v):
-    return (v or "").strip() if isinstance(v, str) else ""
+    return normalize_text_helper(v)
 
 
 def parse_birthdate(v):
-    if not v:
-        return None
-    v = str(v).strip()
-    try:
-        datetime.strptime(v, "%Y-%m-%d")
-        return v
-    except Exception:
-        return None
+    return parse_birthdate_helper(v)
 
 
 def parse_positive_int(v, default=None, min_value=1, max_value=None):
-    if v is None:
-        return default
-    if isinstance(v, bool):
-        return None
-    if isinstance(v, float) and not v.is_integer():
-        return None
-    if isinstance(v, str):
-        v = v.strip()
-    try:
-        value = int(v)
-    except (TypeError, ValueError):
-        return None
-    if value < min_value:
-        return None
-    if max_value is not None and value > max_value:
-        return None
-    return value
+    return parse_positive_int_helper(v, default=default, min_value=min_value, max_value=max_value)
 
 
 def validate_password(pw):
-    if not isinstance(pw, str):
-        return False, "密碼格式錯誤"
-    if len(pw) < 8:
-        return False, "密碼至少需要 8 個字元"
-    if len(pw) > 128:
-        return False, "密碼太長（最多 128 字元）"
-    if not re.search(r"[A-Z]", pw):
-        return False, "密碼必須包含大寫字母"
-    if not re.search(r"[a-z]", pw):
-        return False, "密碼必須包含小寫字母"
-    if not re.search(r"[!@#$%^&*()_+\-=\[\]{};':\"\\|,.<>\/?]", pw):
-        return False, "密碼必須包含符號"
-    return True, "OK"
+    return validate_password_helper(pw)
 
 
 def validate_id_number(v):
-    if not isinstance(v, str):
-        return False
-    v = v.strip()
-    if not v:
-        return False
-    return bool(re.fullmatch(r"^[A-Za-z0-9]{5,24}$", v))
+    return validate_id_number_helper(v)
 
 
 def validate_phone(v):
-    if not isinstance(v, str):
-        return False
-    v = v.strip()
-    if not v:
-        return False
-    return bool(re.fullmatch(r"^\+?[0-9][0-9\-]{5,30}$", v))
+    return validate_phone_helper(v)
 
 
 def get_db():
-    conn = sqlite3.connect(DB_PATH, timeout=15)
-    conn.row_factory = sqlite3.Row
-    try:
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA busy_timeout = 15000")
-    except Exception:
-        pass
-    # Phase 3: register app_mode() user function on every connection so
-    # the BEFORE INSERT trigger on points_chain_blocks has something to
-    # evaluate. Failure to register is silently safe — the trigger
-    # would just fail with "no such function" on the next chain insert,
-    # which is loud-fail behavior we want anyway.
-    try:
-        smv2_register_app_mode(conn, mode_reader=get_runtime_server_mode)
-    except Exception:
-        pass
-    return conn
+    return get_db_helper(
+        DB_PATH,
+        register_app_mode=lambda conn: smv2_register_app_mode(conn, mode_reader=get_runtime_server_mode),
+    )
 
 
 def count_role(role):
-    conn = get_db()
-    try:
-        row = conn.execute(
-            "SELECT COUNT(*) as c FROM users WHERE role=? AND username<>'root'",
-            (role,)
-        ).fetchone()
-        return row["c"] if row else 0
-    finally:
-        conn.close()
+    return count_role_helper(role, get_db=get_db)
 
 
 def get_user_by_username(username):
-    conn = get_db()
-    try:
-        row = conn.execute(
-            "SELECT id, username, email, nickname, real_name, birthdate, id_number, phone, status, role, "
-            "member_level, base_level, effective_level, trust_score, points, reputation, violation_score, "
-            "sanction_status, sanction_until, level_updated_at, level_updated_by, level_update_reason, "
-        "password_strength_score, must_change_password, is_default_password, avatar_file_id, avatar_crop_json, blocked_until, violation_count, chat_violation_warned "
-            "FROM users WHERE username=?",
-            (username,)
-        ).fetchone()
-        if not row:
-            return None
-        return row
-    finally:
-        conn.close()
+    return get_user_by_username_helper(username, get_db=get_db)
 
 
 def user_public_payload(row, *, include_sensitive=False):
-    if not row:
-        return None
-    data = dict(row)
-    is_special_account = data.get("username") == "root" or data.get("role") in {"super_admin", "manager"}
-    is_deleted = str(data.get("status") or "").strip().lower() == "deleted"
-    try:
-        avatar_crop = json.loads(data.get("avatar_crop_json") or "{}") if data.get("avatar_crop_json") else {}
-    except Exception:
-        avatar_crop = {}
-    payload = {
-        "id": data.get("id"),
-        "username": data.get("username"),
-        "nickname": decrypt_field(data.get("nickname")),
-        "email": data.get("email"),
-        "status": data.get("status"),
-        "role": data.get("role"),
-        "member_level": None if (is_special_account or is_deleted) else (data.get("member_level") or "normal"),
-        "base_level": None if (is_special_account or is_deleted) else (data.get("base_level") or data.get("member_level") or "normal"),
-        "effective_level": None if (is_special_account or is_deleted) else (data.get("effective_level") or data.get("member_level") or "normal"),
-        "member_level_label": "已刪除" if is_deleted else ("特殊階級" if is_special_account else (data.get("effective_level") or data.get("member_level") or "normal")),
-        "special_account": is_special_account,
-        "is_deleted": is_deleted,
-        "trust_score": data.get("trust_score") or 0,
-        "points": data.get("points") or 0,
-        "reputation": data.get("reputation") or 0,
-        "violation_score": data.get("violation_score") or data.get("violation_count") or 0,
-        "sanction_status": data.get("sanction_status") or "none",
-        "sanction_until": data.get("sanction_until"),
-        "level_updated_at": data.get("level_updated_at"),
-        "level_updated_by": data.get("level_updated_by"),
-        "level_update_reason": data.get("level_update_reason"),
-        "password_strength_score": data.get("password_strength_score") or 0,
-        "must_change_password": bool(data.get("must_change_password") or 0),
-        "is_default_password": bool(data.get("is_default_password") or 0),
-        "avatar_file_id": data.get("avatar_file_id"),
-        "avatar_crop": avatar_crop if isinstance(avatar_crop, dict) else {},
-        "role_label": ROLE_LABEL.get(data.get("role"), data.get("role")),
-        "blocked_until": data.get("blocked_until"),
-        "violation_count": data.get("violation_count") or 0,
-    }
-    if include_sensitive:
-        payload.update({
-            "real_name": decrypt_field(data.get("real_name")),
-            "birthdate": decrypt_field(data.get("birthdate")),
-            "id_number": decrypt_field(data.get("id_number")),
-            "phone": decrypt_field(data.get("phone")),
-        })
-    else:
-        payload.update({
-            "real_name": "",
-            "birthdate": "",
-            "id_number": "",
-            "phone": "",
-        })
-    return payload
+    return user_public_payload_helper(
+        row,
+        decrypt_field=decrypt_field,
+        role_label=ROLE_LABEL,
+        include_sensitive=include_sensitive,
+    )
 
 
 def ensure_user_columns(conn):
-    ensure_user_identity_columns(conn)
+    return ensure_user_columns_helper(conn, ensure_user_identity_columns=ensure_user_identity_columns)
 
 
 def ensure_secure_audit_columns(conn):
-    cols = {r["name"] for r in conn.execute("PRAGMA table_info(secure_audit)").fetchall()}
-    for name in ("prev_hash", "entry_hash"):
-        if name not in cols:
-            conn.execute(f"ALTER TABLE secure_audit ADD COLUMN {name} TEXT")
+    return ensure_secure_audit_columns_helper(conn)
 
 
 def ensure_appeal_columns(conn):
-    cols = {r["name"] for r in conn.execute("PRAGMA table_info(violation_appeals)").fetchall()}
-    additions = [
-        ("latest_violation_id", "INTEGER"),
-        ("violation_count_snapshot", "INTEGER NOT NULL DEFAULT 0"),
-        ("penalty_points", "INTEGER NOT NULL DEFAULT 0"),
-        ("pre_status", "TEXT NOT NULL DEFAULT 'active'"),
-        ("pre_role", "TEXT NOT NULL DEFAULT 'user'"),
-        ("review_note", "TEXT"),
-    ]
-    for name, ddl in additions:
-        if name not in cols:
-            conn.execute(f"ALTER TABLE violation_appeals ADD COLUMN {name} {ddl}")
+    return ensure_appeal_columns_helper(conn)
 
 
 def ensure_session_columns(conn):
-    cols = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)").fetchall()}
-    additions = [
-        ("is_revoked", "INTEGER NOT NULL DEFAULT 0"),
-        ("revoked_at", "TEXT"),
-        ("last_seen", "TEXT"),
-        ("device_info", "TEXT"),
-        ("ip_country", "TEXT"),
-        ("session_epoch", "INTEGER NOT NULL DEFAULT 0"),
-    ]
-    for name, ddl in additions:
-        if name not in cols:
-            conn.execute(f"ALTER TABLE sessions ADD COLUMN {name} {ddl}")
-    conn.execute("UPDATE sessions SET is_revoked=0 WHERE is_revoked IS NULL")
-    conn.execute("UPDATE sessions SET last_seen=created_at WHERE last_seen IS NULL")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_last_seen ON sessions(last_seen)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_revoked ON sessions(is_revoked)")
+    return ensure_session_columns_helper(conn)
 
 
 def ensure_security_support_schema(conn):
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS ip_blocks (
-            id             INTEGER PRIMARY KEY AUTOINCREMENT,
-            ip_address     TEXT NOT NULL UNIQUE,
-            blocked_until  TEXT NOT NULL,
-            reason         TEXT,
-            created_at     TEXT NOT NULL DEFAULT (datetime('now'))
-        )
-        """
+    return ensure_security_support_schema_helper(
+        conn,
+        ensure_member_level_rules_schema=ensure_member_level_rules_schema,
+        ensure_moderation_proposals_schema=ensure_moderation_proposals_schema,
+        ensure_governance_records_schema=ensure_governance_records_schema,
+        ensure_snapshot_schema=ensure_snapshot_schema,
+        ensure_upload_security_schema=ensure_upload_security_schema,
+        ensure_integrity_schema=ensure_integrity_schema,
+        ensure_account_recovery_schema=ensure_account_recovery_schema,
     )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS login_locations (
-            id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            ip_hash       TEXT NOT NULL,
-            country       TEXT,
-            city          TEXT,
-            login_at      TEXT NOT NULL,
-            is_suspicious INTEGER NOT NULL DEFAULT 0
-        )
-        """
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ip_blocks_ip ON ip_blocks(ip_address)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ip_blocks_until ON ip_blocks(blocked_until)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_login_locations_user ON login_locations(user_id, login_at)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_login_locations_ip ON login_locations(ip_hash)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_csrf_expires_at ON csrf_tokens(expires_at)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_sec_event_type_ip_time ON security_events(event_type, ip_address, created_at)")
-    ensure_member_level_rules_schema(conn)
-    ensure_moderation_proposals_schema(conn)
-    ensure_governance_records_schema(conn)
-    ensure_snapshot_schema(conn)
-    ensure_upload_security_schema(conn)
-    ensure_integrity_schema(conn)
-    ensure_account_recovery_schema(conn)
-
-    legacy_rows = conn.execute(
-        "SELECT ip_address, detail, created_at FROM security_events "
-        "WHERE event_type='ip_block' ORDER BY id DESC"
-    ).fetchall()
-    seen = set()
-    for row in legacy_rows:
-        ip = row["ip_address"]
-        if not ip or ip in seen:
-            continue
-        seen.add(ip)
-        detail = row["detail"] or ""
-        match = re.search(r"blocked_until=([0-9T:\-\.]+)", detail)
-        if not match:
-            continue
-        blocked_until = match.group(1)
-        conn.execute(
-            "INSERT OR IGNORE INTO ip_blocks (ip_address, blocked_until, reason, created_at) VALUES (?, ?, ?, ?)",
-            (ip, blocked_until, detail, row["created_at"] or datetime.now().isoformat())
-        )
 
 
 def db_get_user_role(username):
-    conn = get_db()
-    row = conn.execute(
-        "SELECT role FROM users WHERE username=?", (username,)
-    ).fetchone()
-    conn.close()
-    return row["role"] if row else None
+    return db_get_user_role_helper(username, get_db=get_db)
 
 
 def activate_emergency_lockdown(reason):
-    conn = get_db()
-    try:
-        init_system_settings_table(conn)
-        conn.execute(
-            "INSERT OR REPLACE INTO system_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
-            ("maintenance_mode", "True", datetime.now().isoformat(), "audit_guard")
-        )
-        conn.commit()
-        refresh_system_settings()
-    finally:
-        conn.close()
-    try:
-        audit("EMERGENCY_LOCKDOWN_ENABLED", get_client_ip(), user="audit_guard", success=True, detail=reason)
-    except Exception:
-        pass
+    return activate_emergency_lockdown_helper(
+        reason,
+        get_db=get_db,
+        init_system_settings_table=init_system_settings_table,
+        refresh_system_settings=refresh_system_settings,
+        audit=audit,
+        get_client_ip_func=get_client_ip,
+    )
 
 
-configure_settings_service(
-    get_db=get_db,
-    load_json=load_json,
-    base_dir=BASE_DIR,
-)
-configure_auth_service(
-    get_db=get_db,
-    get_user_by_username=get_user_by_username,
-    fernet=fernet,
-    get_client_ip=get_client_ip,
-    session_ttl=SESSION_TTL,
-    csrf_token_ttl=CSRF_TOKEN_TTL,
-    session_idle_timeout=SESSION_IDLE_TIMEOUT_SECONDS,
-    tester_token_user_lookup=tester_token_username_from_request,
-    get_runtime_server_mode=get_runtime_server_mode,
-)
-configure_audit_service(
-    get_db=get_db,
-    chain_seed=CHAIN_SEED,
-    integrity_key=_INTEGRITY_KEY,
-    audit_log_path=AUDIT_LOG_PATH,
-    audit_anchor_path=AUDIT_ANCHOR_PATH,
-    audit_anchor_latest_path=AUDIT_ANCHOR_LATEST_PATH,
-    audit_anchor_interval_seconds=AUDIT_ANCHOR_INTERVAL_SECONDS,
-)
-configure_violations_service(
-    get_db=get_db,
-    get_system_settings=get_system_settings,
-    audit=audit,
-    get_client_ip=get_client_ip,
-    chain_seed=CHAIN_SEED,
-    integrity_key=_INTEGRITY_KEY,
-)
-configure_security_events_service(
-    get_db=get_db,
-    get_system_settings=get_system_settings,
-    audit=audit,
-    is_ip_blocking_enabled=is_ip_blocking_enabled,
-)
-configure_bootstrap_service(
-    get_db=get_db,
-    db_path=os.path.join(DB_DIR, "bootstrap"),
-    schema_path=os.path.join(BASE_DIR, "bootstrap.schema.sql"),
-    legacy_fail_log=LEGACY_FAIL_LOG,
-    legacy_blocked_ips=LEGACY_BLOCKED_IPS,
-    legacy_rate_limit=LEGACY_RATE_LIMIT,
-    legacy_audit_log=LEGACY_AUDIT_LOG,
-    chain_seed=CHAIN_SEED,
-    chain_hash=_chain_hash,
-    load_json=load_json,
-    normalize_text=normalize_text,
-    hash_password=hash_password,
-    verify_password=verify_password,
-    audit=audit,
-    refresh_system_settings=refresh_system_settings,
-    init_system_settings_table=init_system_settings_table,
-    seed_missing_settings=_seed_missing_settings_to_db,
-    import_legacy_settings_files=_import_legacy_settings_files,
-    default_settings=DEFAULT_SETTINGS,
-)
-configure_chat_support_service(
-    chat_dir=CHAT_DIR,
-    official_chat_room_name=OFFICIAL_CHAT_ROOM_NAME,
-    encrypt_field=encrypt_field,
-)
-snapshot_service = SnapshotService(
-    get_db=get_db,
-    db_path=DB_PATH,
-    base_dir=BASE_DIR,
-    runtime_base_dir=RUNTIME_SECRETS_DIR,
-    storage_root=STORAGE_DIR,
-    audit=audit,
-    file_roots=[
-        CHAT_DIR,
-        os.path.join(BASE_DIR, "uploads"),
-        os.path.join(BASE_DIR, "avatars"),
-        os.path.join(BASE_DIR, "attachments"),
-        os.path.join(BASE_DIR, "media"),
-    ],
-    config_files=[
-        os.path.join(BASE_DIR, "system_settings.json"),
-        os.path.join(BASE_DIR, "settings.json"),
-        os.path.join(BASE_DIR, ".env"),
-    ],
-    runtime_secret_files=[
-        CHAIN_SEED_PATH,
-        CSRF_SECRET_PATH,
-        SERVER_FILE_KEY_PATH,
-        SESSION_SECRET_PATH,
-        os.path.join(RUNTIME_SECRETS_DIR, ".fley"),
-        INTEGRITY_KEY_PATH,
-        INTEGRITY_MANIFEST_PATH,
-        CERT_FILE,
-        KEY_FILE,
-        SERVER_MODE_LOG_HMAC_KEY_PATH,
-    ],
-    reset_points_chain=lambda **kwargs: points_service.reset_runtime_chain(**kwargs),
-    reset_audit_chain=reset_audit_chain_with_event,
-)
 ROOT_INTEGRITY_SIGNING_KEY = os.environ.get("ROOT_INTEGRITY_SIGNING_KEY", "").encode("utf-8") or _INTEGRITY_KEY
-integrity_guard = IntegrityGuard(
-    base_dir=BASE_DIR,
-    manifest_path=INTEGRITY_MANIFEST_PATH,
-    signing_key=ROOT_INTEGRITY_SIGNING_KEY,
-    get_db=get_db,
-    audit=audit,
+_runtime_services = build_runtime_services(
+    config={
+        "base_dir": BASE_DIR,
+        "db_dir": DB_DIR,
+        "db_path": DB_PATH,
+        "runtime_secrets_dir": RUNTIME_SECRETS_DIR,
+        "storage_root": STORAGE_DIR,
+        "chat_dir": CHAT_DIR,
+        "points_chain_backup_dir": POINTS_CHAIN_BACKUP_DIR,
+        "audit_log_path": AUDIT_LOG_PATH,
+        "audit_anchor_path": AUDIT_ANCHOR_PATH,
+        "audit_anchor_latest_path": AUDIT_ANCHOR_LATEST_PATH,
+        "audit_anchor_interval_seconds": AUDIT_ANCHOR_INTERVAL_SECONDS,
+        "legacy_fail_log": LEGACY_FAIL_LOG,
+        "legacy_blocked_ips": LEGACY_BLOCKED_IPS,
+        "legacy_rate_limit": LEGACY_RATE_LIMIT,
+        "legacy_audit_log": LEGACY_AUDIT_LOG,
+        "official_chat_room_name": OFFICIAL_CHAT_ROOM_NAME,
+        "chain_seed": CHAIN_SEED,
+        "integrity_key": _INTEGRITY_KEY,
+        "root_integrity_signing_key": ROOT_INTEGRITY_SIGNING_KEY,
+        "integrity_manifest_path": INTEGRITY_MANIFEST_PATH,
+        "file_roots": [
+            CHAT_DIR,
+            os.path.join(BASE_DIR, "uploads"),
+            os.path.join(BASE_DIR, "avatars"),
+            os.path.join(BASE_DIR, "attachments"),
+            os.path.join(BASE_DIR, "media"),
+        ],
+        "config_files": [
+            os.path.join(BASE_DIR, "system_settings.json"),
+            os.path.join(BASE_DIR, "settings.json"),
+            os.path.join(BASE_DIR, ".env"),
+        ],
+        "runtime_secret_files": [
+            CHAIN_SEED_PATH,
+            CSRF_SECRET_PATH,
+            SERVER_FILE_KEY_PATH,
+            SESSION_SECRET_PATH,
+            os.path.join(RUNTIME_SECRETS_DIR, ".fley"),
+            INTEGRITY_KEY_PATH,
+            INTEGRITY_MANIFEST_PATH,
+            CERT_FILE,
+            KEY_FILE,
+            SERVER_MODE_LOG_HMAC_KEY_PATH,
+        ],
+    },
+    deps={
+        "get_db": get_db,
+        "get_user_by_username": get_user_by_username,
+        "fernet": fernet,
+        "get_client_ip": get_client_ip,
+        "session_ttl": SESSION_TTL,
+        "csrf_token_ttl": CSRF_TOKEN_TTL,
+        "session_idle_timeout": SESSION_IDLE_TIMEOUT_SECONDS,
+        "tester_token_user_lookup": tester_token_username_from_request,
+        "get_runtime_server_mode": get_runtime_server_mode,
+        "get_system_settings": get_system_settings,
+        "save_settings": save_settings,
+        "refresh_system_settings": refresh_system_settings,
+        "init_system_settings_table": init_system_settings_table,
+        "seed_missing_settings": _seed_missing_settings_to_db,
+        "import_legacy_settings_files": _import_legacy_settings_files,
+        "default_settings": DEFAULT_SETTINGS,
+        "load_json": load_json,
+        "normalize_text": normalize_text,
+        "hash_password": hash_password,
+        "verify_password": verify_password,
+        "audit": audit,
+        "is_ip_blocking_enabled": is_ip_blocking_enabled,
+        "encrypt_field": encrypt_field,
+        "record_security_event": record_security_event,
+    },
 )
-points_service = PointsLedgerService(
-    get_db=get_db,
-    chain_secret=CHAIN_SEED,
-    audit=audit,
-    backup_dir=POINTS_CHAIN_BACKUP_DIR,
-    # Phase 7: chain writes require mode == 'production'.
-    mode_reader=get_runtime_server_mode,
-    security_event_recorder=lambda event_type, **kwargs: record_security_event(event_type, get_client_ip(), **kwargs),
-)
-trading_price_stream_hub = TradingPriceStreamHub(audit=audit)
-trading_service = TradingEngineService(
-    get_db=get_db,
-    points_service=points_service,
-    audit=audit,
-    stream_hub=trading_price_stream_hub,
-)
-snapshot_service.set_post_restore_validators([
-    ("points_chain", lambda: points_service.verify_chain()),
-    ("trading_state", lambda: trading_service.verify_state()),
-])
-server_mode_service = ServerModeService(
-    snapshot_service=snapshot_service,
-    get_db=get_db,
-    audit=audit,
-    integrity_guard=integrity_guard,
-    save_settings=save_settings,
-)
+snapshot_service = _runtime_services["snapshot_service"]
+integrity_guard = _runtime_services["integrity_guard"]
+points_service = _runtime_services["points_service"]
+trading_price_stream_hub = _runtime_services["trading_price_stream_hub"]
+trading_service = _runtime_services["trading_service"]
+server_mode_service = _runtime_services["server_mode_service"]
 
 # ── Flask app ──────────────────────────────────────────────────────────────────
 app = Flask(__name__, static_folder=PUBLIC_DIR, static_url_path="")

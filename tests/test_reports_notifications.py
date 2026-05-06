@@ -3,7 +3,7 @@ import sqlite3
 from flask import Flask, jsonify
 
 from routes.reports_notifications import register_reports_notification_routes
-from services.member_levels import ensure_member_level_rules_schema
+from services.users.member_levels import ensure_member_level_rules_schema
 
 
 def _role_rank(role):

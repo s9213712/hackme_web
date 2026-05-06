@@ -7,7 +7,7 @@ from flask import Flask, jsonify, make_response
 from routes.files import register_file_routes
 from routes.system_admin import register_system_admin_routes
 from services import settings
-from services.member_levels import ensure_member_level_rules_schema
+from services.users.member_levels import ensure_member_level_rules_schema
 from services.upload_security import ensure_upload_security_schema
 from server import feature_gate_for_path
 

@@ -1,6 +1,6 @@
 import sqlite3
 
-from services.audit import audit, configure_audit_service, repair_audit_chain, reset_audit_chain_with_event, verify_audit_integrity
+from services.system.audit import audit, configure_audit_service, repair_audit_chain, reset_audit_chain_with_event, verify_audit_integrity
 from services.violations import (
     configure_violations_service,
     repair_violation_chains,

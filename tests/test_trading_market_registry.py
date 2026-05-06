@@ -9,7 +9,7 @@ import routes.trading as trading_routes
 from routes.trading import register_trading_routes
 from services.points_chain import PointsLedgerService, ensure_points_economy_schema
 from services.trading_engine import TradingEngineService, ensure_trading_schema
-from services.trading_markets import TRADING_MARKET_CATALOG_SEED_VERSION
+from services.trading.catalog import TRADING_MARKET_CATALOG_SEED_VERSION
 
 
 def _db(tmp_path):
@@ -53,6 +53,10 @@ def _services(tmp_path):
     conn = trading.get_db()
     try:
         trading.ensure_schema(conn)
+        conn.execute(
+            "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, '2024-01-01T00:00:00', 'test')",
+            ("trading.price_source", "binance_public_api"),
+        )
         conn.execute(
             "UPDATE trading_markets SET live_price_confirmed_at=COALESCE(live_price_confirmed_at, ?)",
             ("2024-01-01T00:00:00",),
@@ -347,11 +351,6 @@ def test_market_registry_rejects_risk_grade_enable_without_enough_depth_provider
 
 def test_disable_market_preserves_history_and_prevents_new_orders(tmp_path):
     _get_db, points, trading = _services(tmp_path)
-    trading.update_root_settings(
-        actor=_actor(3, "root", "super_admin"),
-        settings={"price_source": "manual_root"},
-        markets=[{"symbol": "ETH/POINTS", "manual_price_points": 5000}],
-    )
     points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=5000, action_type="seed")
     trading.place_order(actor=_actor(1, "alice", "user"), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="0.1")
 

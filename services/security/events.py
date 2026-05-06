@@ -3,7 +3,7 @@ import threading
 import time
 from datetime import datetime, timedelta
 
-from services.notifications import create_root_notification_if_enabled
+from services.system.notifications import create_root_notification_if_enabled
 
 _STATE = {
     "get_db": None,

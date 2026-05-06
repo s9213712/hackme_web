@@ -6,10 +6,10 @@ import sqlite3
 from datetime import datetime, timedelta
 from flask import Response, request
 
-from services.cloud_drive import attach_existing_file, can_download_file, ensure_cloud_drive_attachment_schema
-from services.notifications import create_notification, create_notification_if_enabled, ensure_notifications_schema
-from services.permissions import require_member_action
-from services.sqlite_safe import table_columns as safe_table_columns
+from services.storage.cloud_drive import attach_existing_file, can_download_file, ensure_cloud_drive_attachment_schema
+from services.system.notifications import create_notification, create_notification_if_enabled, ensure_notifications_schema
+from services.security.permissions import require_member_action
+from services.core.sqlite_safe import table_columns as safe_table_columns
 
 CHAT_RECALL_WINDOW_SECONDS = 5 * 60
 CHAT_STICKERS = {

@@ -7,15 +7,15 @@ import uuid
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 
-from services.notifications import create_notification_if_enabled
-from services.server_mode_routing import resolve_table
+from services.system.notifications import create_notification_if_enabled
+from services.server_mode.routing import resolve_table
 from services.trading.accounting.core import (
     fee_points,
     notional_points,
     quantity_to_units,
     units_to_quantity,
 )
-from services.trading.constants import ASSET_SCALE
+from services.trading.constants import ASSET_SCALE, POINT_MICRO_SCALE
 from services.trading.notifications import (
     create_trading_user_notification,
     margin_near_liquidation_notification_payload,
@@ -292,6 +292,108 @@ def margin_position_payload_with_risk(
     item["breakeven_price_points"] = risk.get("breakeven_price_points")
     item["liquidation_price_points"] = risk.get("liquidation_price_points")
     return item
+
+
+def accrue_margin_interest(service, conn, position, *, actor=None, now_text=None, ctx=None):
+    if not position or position["status"] != "open":
+        return position
+    if service._is_root_user_id(conn, int(position["user_id"])):
+        return position
+    margin_positions_table, route_ctx = service._resolve_table("margin_positions", ctx, action="margin_interest")
+    total_hours = service._margin_interest_total_hours(position, now_text=now_text)
+    accrued_hours = int(position["interest_accrued_hours"] or 0) if "interest_accrued_hours" in position.keys() else 0
+    due_hours = max(0, total_hours - accrued_hours)
+    if due_hours <= 0:
+        return position
+    carry = int(position["interest_carry_micropoints"] or 0) if "interest_carry_micropoints" in position.keys() else 0
+    due_micro = service._margin_interest_due_micropoints(
+        principal=int(position["principal_points"] or 0),
+        rate_percent=float(position["interest_percent_daily"] or 0),
+        hours=due_hours,
+    )
+    total_micro = carry + due_micro
+    due_points = int(total_micro // POINT_MICRO_SCALE)
+    next_carry = int(total_micro % POINT_MICRO_SCALE)
+    if due_points <= 0:
+        conn.execute(
+            f"UPDATE {margin_positions_table} SET interest_accrued_hours=?, interest_carry_micropoints=?, updated_at=? WHERE id=?",
+            (total_hours, next_carry, _now_text(), position["id"]),
+        )
+        return conn.execute(f"SELECT * FROM {margin_positions_table} WHERE id=?", (position["id"],)).fetchone()
+
+    user_id = int(position["user_id"])
+    wallet_payload = service._wallet_payload(conn, user_id, ctx=route_ctx)
+    available = int(wallet_payload.get("points_balance") or 0)
+    paid = min(due_points, available)
+    capitalized = due_points - paid
+    ledger_uuid = None
+    if paid:
+        ledger_uuid = service._ledger(
+            conn,
+            ctx=route_ctx,
+            user_id=user_id,
+            currency_type="points",
+            direction="debit",
+            amount=paid,
+            action_type="trading_margin_interest_hourly",
+            reference_type="trading_margin_position",
+            reference_id=position["position_uuid"],
+            idempotency_key=f"trading:margin:interest:{position['position_uuid']}:{total_hours}",
+            reason="TRADING_MARGIN_HOURLY_INTEREST",
+            public_metadata={
+                "market": position["market_symbol"],
+                "position_type": position["position_type"],
+                "charged_hours": due_hours,
+                "total_accrued_hours": total_hours,
+                "capitalized_interest_points": capitalized,
+                "carry_micropoints": next_carry,
+            },
+            actor=actor,
+        )["ledger_uuid"]
+        service._reserve_delta(
+            conn,
+            delta=paid,
+            event_type="margin_interest_retained",
+            reason="TRADING_MARGIN_HOURLY_INTEREST",
+            actor=actor,
+            order_id=None,
+            fill_id=None,
+            points_ledger_uuid=ledger_uuid,
+        )
+
+    now = _now_text()
+    conn.execute(
+        f"""
+        UPDATE {margin_positions_table}
+        SET interest_points=interest_points+?,
+            interest_paid_points=interest_paid_points+?,
+            interest_accrued_hours=?,
+            interest_carry_micropoints=?,
+            updated_at=?
+        WHERE id=?
+        """,
+        (capitalized, paid, total_hours, next_carry, now, position["id"]),
+    )
+    service._audit_event(
+        conn,
+        "TRADING_MARGIN_INTEREST_ACCRUED",
+        "margin borrow interest accrued hourly",
+        actor=actor,
+        target_user_id=user_id,
+        market_symbol=position["market_symbol"],
+        severity="info" if not capitalized else "warning",
+        metadata={
+            "position_uuid": position["position_uuid"],
+            "due_points": due_points,
+            "paid_points": paid,
+            "capitalized_points": capitalized,
+            "charged_hours": due_hours,
+            "total_accrued_hours": total_hours,
+            "carry_micropoints": next_carry,
+            "ledger_uuid": ledger_uuid,
+        },
+    )
+    return conn.execute(f"SELECT * FROM {margin_positions_table} WHERE id=?", (position["id"],)).fetchone()
 
 
 def margin_free_margin_points(service, conn, user_id):

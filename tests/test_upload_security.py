@@ -19,16 +19,16 @@ from services.upload_security import (
     scan_archive_members,
     update_cloud_drive_security_policy,
 )
-from services.storage_quota_overrides import set_storage_quota_override
+from services.storage.quota_overrides import set_storage_quota_override
 from services.points_chain import ensure_points_economy_schema
-from services.storage_quota_purchases import (
+from services.storage.quota_purchases import (
     ensure_storage_upgrade_price_catalog,
     enrich_storage_upgrade_catalog,
     list_storage_upgrade_price_catalog,
     record_storage_quota_purchase,
     storage_upgrade_product_from_catalog,
 )
-from services.storage_capacity_audit import audit_storage_capacity, can_allocate_storage_bytes
+from services.storage.capacity_audit import audit_storage_capacity, can_allocate_storage_bytes
 
 
 def _conn():
@@ -570,7 +570,7 @@ def test_storage_capacity_audit_detects_host_overcommit(tmp_path, monkeypatch):
         used = 500
         free = 500
 
-    monkeypatch.setattr("services.storage_capacity_audit.shutil.disk_usage", lambda path: FakeDiskUsage())
+    monkeypatch.setattr("services.storage.capacity_audit.shutil.disk_usage", lambda path: FakeDiskUsage())
     conn = _conn()
     try:
         set_storage_quota_override(conn, 1, quota_bytes=0, reason="baseline", actor_user_id=2)
@@ -603,7 +603,7 @@ def test_storage_capacity_guard_blocks_new_quota_when_host_is_full(tmp_path, mon
         used = 900
         free = 100
 
-    monkeypatch.setattr("services.storage_capacity_audit.shutil.disk_usage", lambda path: FakeDiskUsage())
+    monkeypatch.setattr("services.storage.capacity_audit.shutil.disk_usage", lambda path: FakeDiskUsage())
     conn = _conn()
     try:
         ok, msg, projected = can_allocate_storage_bytes(conn, tmp_path, 200)

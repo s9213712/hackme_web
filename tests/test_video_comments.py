@@ -1,6 +1,6 @@
 import pytest
 
-from services.videos import add_video_comment, list_video_comments, publish_video
+from services.media.videos import add_video_comment, list_video_comments, publish_video
 from tests.video_test_helpers import actor, seed_cloud_file, video_test_db
 
 

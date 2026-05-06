@@ -1,4 +1,4 @@
-from services.trading_markets import (
+from services.trading.catalog import (
     get_market_definition,
     list_live_price_markets,
     list_seed_markets,

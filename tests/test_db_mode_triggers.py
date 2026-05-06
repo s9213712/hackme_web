@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from services.db_mode_triggers import (
+from services.platform.db_mode_triggers import (
     install_all,
     install_mode_triggers_schema,
     register_app_mode_function,

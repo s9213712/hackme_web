@@ -37,6 +37,8 @@ Use for:
 If `risk-grade price` is unavailable, the frontend should clearly warn users
 that high-risk flows are paused. This does **not** mean the whole market has no
 price; it means the system no longer trusts the price for high-risk actions.
+Reference price may degrade for display, but risk-grade price must fail closed
+for any settlement or execution path.
 
 ## Source Modes
 

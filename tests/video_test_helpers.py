@@ -1,6 +1,6 @@
 import sqlite3
 
-from services.videos import ensure_video_schema
+from services.media.videos import ensure_video_schema
 
 
 def video_test_db():

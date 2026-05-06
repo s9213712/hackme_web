@@ -12,11 +12,11 @@ from flask import Flask, jsonify, make_response
 
 import routes.files as files_routes
 from routes.files import register_file_routes
-from services.cloud_drive import (
+from services.storage.cloud_drive import (
     decrypt_server_encrypted_bytes,
     ensure_cloud_drive_attachment_schema,
 )
-from services.member_levels import ensure_member_level_rules_schema
+from services.users.member_levels import ensure_member_level_rules_schema
 from services.storage_albums import ensure_storage_album_schema
 from services.upload_security import ensure_upload_security_schema, update_cloud_drive_security_policy
 
@@ -274,7 +274,7 @@ def test_server_encrypted_upload_scans_in_memory_plaintext_not_final_storage_pat
     actor_box = {"actor": _actor(1, "alice")}
     client = _build_app(db_path, storage_root, actor_box).test_client()
 
-    import services.cloud_drive as cloud_drive
+    from services.storage import cloud_drive
 
     observed = {}
 

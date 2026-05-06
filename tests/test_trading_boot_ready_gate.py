@@ -1,11 +1,14 @@
 """Boot-ready gate (2026-05-06): trading / liquidation / bots refuse to act
 on a market until at least one live price has been confirmed.
 
-These tests verify the four guards added with the 2026-05-06 fix:
+These tests verify the high-risk guards added with the 2026-05-06 fix:
   - place_order
   - open_margin_position
   - match_open_limit_orders (skip when not boot-ready)
   - run_due_trading_bots / scan_margin_liquidations (skip when not boot-ready)
+  - root contract open / close
+  - grid bot create / scan
+  - trial credit forced sell
 
 The gate only relaxes after ``trading_markets.live_price_confirmed_at`` is
 populated by a successful live-price fetch, which the engine now stamps
@@ -13,6 +16,7 @@ automatically inside ``_current_market_price_points``.
 """
 
 import sqlite3
+from datetime import datetime
 
 import pytest
 
@@ -86,6 +90,40 @@ def _stamp(trading, symbol):
         conn.commit()
     finally:
         conn.close()
+
+
+def _set_manual_root_price(trading, *, symbol, price_points):
+    root = _actor(2, "root", "super_admin")
+    trading.update_root_settings(actor=root, settings={"price_source": "manual_root"}, markets=[])
+    trading.update_market(
+        actor=root,
+        symbol=symbol,
+        manual_price_points=price_points,
+        confirm_jump=True,
+    )
+
+
+def _prime_cached_live_price(trading, *, symbol, price_points):
+    conn = trading.get_db()
+    try:
+        conn.execute(
+            """
+            UPDATE trading_markets
+            SET manual_price_points=?, price_source='binance_public_api', updated_at=?, live_price_confirmed_at=COALESCE(live_price_confirmed_at, ?)
+            WHERE symbol=?
+            """,
+            (price_points, datetime.now().isoformat(), "2024-01-01T00:00:00", symbol),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _force_live_provider_failure(trading, message="provider down"):
+    def _raiser(_symbol):
+        raise RuntimeError(message)
+
+    trading.live_price_provider = _raiser
 
 
 def test_place_order_blocked_until_market_boot_ready(tmp_path):
@@ -212,3 +250,355 @@ def test_assert_market_boot_ready_helper_returns_truthy_after_stamp(tmp_path):
     finally:
         conn.close()
     assert trading._is_market_boot_ready(market2) is True
+
+
+def test_manual_root_high_risk_price_blocked_until_market_boot_ready(tmp_path):
+    _points, trading = _services(tmp_path)
+    _set_manual_root_price(trading, symbol="ETH/POINTS", price_points=5000)
+    conn = trading.get_db()
+    try:
+        market = trading._market(conn, "ETH/POINTS")
+        _price, _source, meta = trading._current_market_price_points(
+            conn,
+            market,
+            with_meta=True,
+            high_risk=True,
+        )
+    finally:
+        conn.close()
+    assert meta["high_risk_blocked"] is True
+    assert "手動價格" in meta["high_risk_block_reason"]
+
+    _stamp(trading, "ETH/POINTS")
+    conn = trading.get_db()
+    try:
+        market = trading._market(conn, "ETH/POINTS")
+        _price, _source, stamped_meta = trading._current_market_price_points(
+            conn,
+            market,
+            with_meta=True,
+            high_risk=True,
+        )
+    finally:
+        conn.close()
+    assert stamped_meta["high_risk_blocked"] is True
+
+
+def test_cached_fallback_high_risk_price_is_blocked(tmp_path):
+    _points, trading = _services(tmp_path)
+    _stamp(trading, "ETH/POINTS")
+    _prime_cached_live_price(trading, symbol="ETH/POINTS", price_points=5000)
+    _force_live_provider_failure(trading, message="cached fallback test")
+    conn = trading.get_db()
+    try:
+        market = trading._market(conn, "ETH/POINTS")
+        _price, _source, meta = trading._current_market_price_points(
+            conn,
+            market,
+            with_meta=True,
+            high_risk=True,
+        )
+    finally:
+        conn.close()
+    assert meta["high_risk_blocked"] is True
+    assert meta["fallback"] is True
+    assert meta["risk_grade_usable"] is False
+
+
+def test_contract_open_rejects_market_boot_pending(tmp_path):
+    _points, trading = _services(tmp_path)
+    root = _actor(2, "root", "super_admin")
+    trading.update_root_settings(
+        actor=root,
+        settings={"futures_enabled": True},
+        markets=[{"symbol": "ETH/POINTS", "futures_enabled": True}],
+    )
+
+    with pytest.raises(ValueError, match="尚未收到任何即時價格更新"):
+        trading.open_root_contract_position(
+            actor=root,
+            market_symbol="ETH/POINTS",
+            side="long",
+            quantity="0.01",
+            leverage=2,
+            margin_points=25,
+        )
+
+
+def test_contract_close_rejects_market_boot_pending(tmp_path):
+    _points, trading = _services(tmp_path)
+    root = _actor(2, "root", "super_admin")
+    trading.update_root_settings(
+        actor=root,
+        settings={"futures_enabled": True},
+        markets=[{"symbol": "ETH/POINTS", "futures_enabled": True}],
+    )
+    _stamp(trading, "ETH/POINTS")
+    opened = trading.open_root_contract_position(
+        actor=root,
+        market_symbol="ETH/POINTS",
+        side="long",
+        quantity="0.01",
+        leverage=2,
+        margin_points=25,
+    )
+    conn = trading.get_db()
+    try:
+        conn.execute(
+            "UPDATE trading_markets SET live_price_confirmed_at=NULL WHERE symbol='ETH/POINTS'"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    with pytest.raises(ValueError, match="尚未收到任何即時價格更新"):
+        trading.close_root_contract_position(
+            actor=root,
+            position_uuid=opened["position"]["position_uuid"],
+        )
+
+
+def test_contract_open_rejects_manual_root_price(tmp_path):
+    _points, trading = _services(tmp_path)
+    root = _actor(2, "root", "super_admin")
+    trading.update_root_settings(
+        actor=root,
+        settings={"futures_enabled": True},
+        markets=[{"symbol": "ETH/POINTS", "futures_enabled": True}],
+    )
+    _stamp(trading, "ETH/POINTS")
+    _set_manual_root_price(trading, symbol="ETH/POINTS", price_points=5000)
+
+    with pytest.raises(ValueError, match="手動價格"):
+        trading.open_root_contract_position(
+            actor=root,
+            market_symbol="ETH/POINTS",
+            side="long",
+            quantity="0.01",
+            leverage=2,
+            margin_points=25,
+        )
+
+
+def test_contract_close_rejects_cached_fallback_price(tmp_path):
+    _points, trading = _services(tmp_path)
+    root = _actor(2, "root", "super_admin")
+    trading.update_root_settings(
+        actor=root,
+        settings={"futures_enabled": True},
+        markets=[{"symbol": "ETH/POINTS", "futures_enabled": True}],
+    )
+    _stamp(trading, "ETH/POINTS")
+    opened = trading.open_root_contract_position(
+        actor=root,
+        market_symbol="ETH/POINTS",
+        side="long",
+        quantity="0.01",
+        leverage=2,
+        margin_points=25,
+    )
+    _prime_cached_live_price(trading, symbol="ETH/POINTS", price_points=5000)
+    _force_live_provider_failure(trading, message="cached fallback contract close")
+
+    with pytest.raises(ValueError, match="conservative mode|快取|cached"):
+        trading.close_root_contract_position(
+            actor=root,
+            position_uuid=opened["position"]["position_uuid"],
+        )
+
+
+def test_grid_create_rejects_market_boot_pending(tmp_path):
+    _points, trading = _services(tmp_path)
+
+    with pytest.raises(ValueError, match="尚未收到任何即時價格更新"):
+        trading.create_grid_bot(
+            actor=_actor(),
+            payload={
+                "name": "boot gate grid",
+                "market_symbol": "ETH/POINTS",
+                "lower_price_points": 4900,
+                "upper_price_points": 5100,
+                "grid_count": 3,
+                "order_amount_points": 100,
+            },
+        )
+
+
+def test_grid_scan_rejects_market_boot_pending(tmp_path):
+    points, trading = _services(tmp_path)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="seed")
+    _stamp(trading, "ETH/POINTS")
+    created = trading.create_grid_bot(
+        actor=_actor(),
+        payload={
+            "name": "boot gate grid scan",
+            "market_symbol": "ETH/POINTS",
+            "lower_price_points": 4900,
+            "upper_price_points": 5100,
+            "grid_count": 3,
+            "order_amount_points": 100,
+        },
+    )
+    assert created["ok"] is True
+    conn = trading.get_db()
+    try:
+        conn.execute(
+            "UPDATE trading_markets SET live_price_confirmed_at=NULL WHERE symbol='ETH/POINTS'"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    scanned = trading.scan_grid_bots(actor=_actor())
+    assert scanned["results"]
+    assert "尚未收到任何即時價格更新" in str(scanned["results"][0].get("grid_scan_blocked_reason") or "")
+
+
+def test_grid_scan_rejects_manual_root_price(tmp_path):
+    points, trading = _services(tmp_path)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="seed")
+    _stamp(trading, "ETH/POINTS")
+    trading.create_grid_bot(
+        actor=_actor(),
+        payload={
+            "name": "manual root grid scan",
+            "market_symbol": "ETH/POINTS",
+            "lower_price_points": 4900,
+            "upper_price_points": 5100,
+            "grid_count": 3,
+            "order_amount_points": 100,
+        },
+    )
+    _set_manual_root_price(trading, symbol="ETH/POINTS", price_points=5000)
+
+    scanned = trading.scan_grid_bots(actor=_actor())
+    assert scanned["results"]
+    assert "手動價格" in str(scanned["results"][0].get("grid_scan_blocked_reason") or "")
+
+
+def test_grid_scan_does_not_fill_or_counter_order_on_fallback_price(tmp_path):
+    points, trading = _services(tmp_path)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="seed")
+    _stamp(trading, "ETH/POINTS")
+    created = trading.create_grid_bot(
+        actor=_actor(),
+        payload={
+            "name": "cached fallback grid scan",
+            "market_symbol": "ETH/POINTS",
+            "lower_price_points": 4900,
+            "upper_price_points": 5100,
+            "grid_count": 3,
+            "order_amount_points": 100,
+        },
+    )
+    bot_uuid = created["bot"]["bot_uuid"]
+    conn = trading.get_db()
+    try:
+        before = conn.execute(
+            "SELECT COUNT(*) FROM trading_grid_orders WHERE grid_bot_id=(SELECT id FROM trading_grid_bots WHERE bot_uuid=?)",
+            (bot_uuid,),
+        ).fetchone()[0]
+        open_before = conn.execute(
+            "SELECT COUNT(*) FROM trading_grid_orders WHERE grid_bot_id=(SELECT id FROM trading_grid_bots WHERE bot_uuid=?) AND status='open'",
+            (bot_uuid,),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    _prime_cached_live_price(trading, symbol="ETH/POINTS", price_points=5000)
+    _force_live_provider_failure(trading, message="cached fallback grid scan")
+
+    scanned = trading.scan_grid_bots(actor=_actor())
+    assert scanned["results"]
+    assert "快取" in str(scanned["results"][0].get("grid_scan_blocked_reason") or "")
+    conn = trading.get_db()
+    try:
+        after = conn.execute(
+            "SELECT COUNT(*) FROM trading_grid_orders WHERE grid_bot_id=(SELECT id FROM trading_grid_bots WHERE bot_uuid=?)",
+            (bot_uuid,),
+        ).fetchone()[0]
+        open_after = conn.execute(
+            "SELECT COUNT(*) FROM trading_grid_orders WHERE grid_bot_id=(SELECT id FROM trading_grid_bots WHERE bot_uuid=?) AND status='open'",
+            (bot_uuid,),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert after == before
+    assert open_after == open_before
+
+
+def test_trial_credit_forced_sell_rejects_market_boot_pending(tmp_path):
+    _points, trading = _services(tmp_path)
+    _stamp(trading, "ETH/POINTS")
+    trading.place_order(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        side="buy",
+        order_type="market",
+        quantity="0.1",
+    )
+    conn = trading.get_db()
+    try:
+        conn.execute("UPDATE trading_markets SET live_price_confirmed_at=NULL WHERE symbol='ETH/POINTS'")
+        conn.execute("UPDATE trading_trial_credits SET expires_at='2000-01-01T00:00:00' WHERE user_id=1")
+        conn.commit()
+    finally:
+        conn.close()
+
+    dashboard = trading.user_dashboard(user_id=1)
+    trial = dashboard["funding"]["trial_credit"]
+    assert trial["pending_reclaim"] is True
+    assert "尚未收到任何即時價格更新" in trial["reclaim_blocked_reason"]
+
+
+def test_trial_credit_forced_sell_rejects_manual_root_price(tmp_path):
+    _points, trading = _services(tmp_path)
+    root = _actor(2, "root", "super_admin")
+    _stamp(trading, "ETH/POINTS")
+    trading.place_order(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        side="buy",
+        order_type="market",
+        quantity="0.1",
+    )
+    trading.update_root_settings(actor=root, settings={"price_source": "manual_root"}, markets=[])
+    trading.update_market(actor=root, symbol="ETH/POINTS", manual_price_points=5000, confirm_jump=True)
+    conn = trading.get_db()
+    try:
+        conn.execute("UPDATE trading_trial_credits SET expires_at='2000-01-01T00:00:00' WHERE user_id=1")
+        conn.commit()
+    finally:
+        conn.close()
+
+    dashboard = trading.user_dashboard(user_id=1)
+    trial = dashboard["funding"]["trial_credit"]
+    assert trial["pending_reclaim"] is True
+    assert "手動價格" in trial["reclaim_blocked_reason"]
+
+
+def test_trial_credit_forced_sell_records_reclaim_blocked_reason(tmp_path):
+    _points, trading = _services(tmp_path)
+    root = _actor(2, "root", "super_admin")
+    _stamp(trading, "ETH/POINTS")
+    trading.place_order(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        side="buy",
+        order_type="market",
+        quantity="0.1",
+    )
+    trading.update_root_settings(actor=root, settings={"price_source": "manual_root"}, markets=[])
+    trading.update_market(actor=root, symbol="ETH/POINTS", manual_price_points=5000, confirm_jump=True)
+    conn = trading.get_db()
+    try:
+        conn.execute("UPDATE trading_trial_credits SET expires_at='2000-01-01T00:00:00' WHERE user_id=1")
+        conn.commit()
+    finally:
+        conn.close()
+
+    dashboard = trading.user_dashboard(user_id=1)
+    trial = dashboard["funding"]["trial_credit"]
+    assert trial["pending_reclaim"] is True
+    assert trial["reclaim_blocked_at"]
+    audit_types = [row["event_type"] for row in trading.root_report()["audit_events"]]
+    assert "TRADING_TRIAL_CREDIT_RECLAIM_BLOCKED" in audit_types

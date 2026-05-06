@@ -4,7 +4,7 @@ from unittest.mock import patch
 from flask import Flask, jsonify
 
 from routes.games import choose_computer_move, ensure_game_schema, register_games_routes
-from services.chess_game import game_status, initial_board, legal_moves, validate_move
+from services.games.chess import game_status, initial_board, legal_moves, validate_move
 
 
 def _build_app(db_path, actor_box, points_service=None):

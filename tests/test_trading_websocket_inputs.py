@@ -2,7 +2,7 @@ import sqlite3
 
 from services.points_chain import PointsLedgerService, ensure_points_economy_schema
 from services.trading_engine import TradingEngineService, ensure_trading_schema
-from services.trading_price_streams import TradingPriceStreamHub
+from services.trading.streams import TradingPriceStreamHub
 
 
 def _db(tmp_path):

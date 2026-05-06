@@ -5,12 +5,12 @@ import time
 from datetime import datetime
 from flask import request
 
-from services.governance_records import (
+from services.governance.records import (
     ensure_governance_records_schema,
     record_moderation_action,
 )
-from services.member_levels import apply_member_level_change
-from services.moderation_proposals import (
+from services.users.member_levels import apply_member_level_change
+from services.governance.moderation import (
     VOTES,
     cast_action_value,
     create_moderation_proposal,

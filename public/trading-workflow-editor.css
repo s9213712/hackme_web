@@ -368,6 +368,61 @@
     .inspector-card + .inspector-card { margin-top: .75rem; }
     .json-panel summary { cursor: pointer; color: var(--text); font-weight: 700; }
     .status { min-height: 1.35rem; color: var(--muted); margin-top: .55rem; font-size: .86rem; }
+    .preview-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .45rem;
+      margin-top: .3rem;
+    }
+    .preview-metrics {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: .5rem;
+      margin-top: .7rem;
+    }
+    .preview-metric {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(15, 23, 42, .72);
+      padding: .6rem;
+    }
+    .preview-metric .label {
+      color: var(--muted);
+      font-size: .78rem;
+    }
+    .preview-metric strong {
+      display: block;
+      margin-top: .18rem;
+      font-size: 1rem;
+      line-height: 1.2;
+    }
+    .preview-metric small {
+      display: block;
+      margin-top: .14rem;
+      color: var(--muted);
+      font-size: .74rem;
+    }
+    .preview-detail,
+    .preview-warnings {
+      display: grid;
+      gap: .4rem;
+      margin-top: .7rem;
+    }
+    .preview-detail-item,
+    .preview-warning-item {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: .45rem .55rem;
+      background: rgba(15, 23, 42, .65);
+      color: var(--muted);
+      font-size: .82rem;
+      line-height: 1.45;
+    }
+    .preview-warning-item {
+      color: #fde68a;
+      border-color: rgba(245, 158, 11, .35);
+      background: rgba(120, 53, 15, .32);
+    }
     .validation-list {
       display: grid;
       gap: .42rem;
@@ -510,6 +565,10 @@
       .top-actions,
       .tool-grid,
       .row-actions {
+        grid-template-columns: 1fr;
+      }
+
+      .preview-metrics {
         grid-template-columns: 1fr;
       }
 

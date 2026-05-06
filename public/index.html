@@ -1900,7 +1900,6 @@
               <button type="button" data-trading-bot-tab="dca">定投機器人</button>
               <button type="button" data-trading-bot-tab="grid">網格交易</button>
               <button type="button" data-trading-bot-tab="strategy">自動化 Workflow</button>
-              <button type="button" data-trading-bot-tab="backtest">回測分析</button>
               <button type="button" data-trading-bot-tab="records">紀錄</button>
             </div>
             <div class="trading-bot-panel trading-bot-tab-panel active" id="trading-bot-tab-mybots">
@@ -1935,6 +1934,33 @@
                   </div>
                   <div class="field"><label><input type="checkbox" id="trading-dca-bot-enabled" checked /> 啟用</label></div>
                   <div class="field"><label>操作</label><button class="btn btn-primary" id="trading-dca-bot-save-btn" type="button">新增定投</button></div>
+                </div>
+                <div class="drive-card" style="margin-top:.85rem;">
+                  <div class="drive-card-heading compact-heading">
+                    <div>
+                      <div class="drive-card-title">定投回測 Dashboard</div>
+                      <div class="drive-card-sub">未選已儲存定投 Bot 時，直接使用上方目前表單的市場、金額與定投節奏。</div>
+                    </div>
+                  </div>
+                  <div class="settings-option-grid" style="margin-top:.65rem;">
+                    <div class="field"><label>已儲存定投 Bot</label><select id="trading-dca-backtest-bot-select"><option value="">使用目前表單設定</option></select></div>
+                    <div class="field"><label>市場</label><select id="trading-dca-backtest-market"><option value="">讀取市場中...</option></select></div>
+                    <div class="field"><label>K 線週期</label><select id="trading-dca-backtest-timeframe"><option value="5m">5 分</option><option value="15m" selected>15 分</option><option value="1h">1 小時</option><option value="4h">4 小時</option><option value="1d">日線</option></select></div>
+                    <div class="field"><label>回測開始</label><input type="datetime-local" id="trading-dca-backtest-start" /></div>
+                    <div class="field"><label>回測結束</label><input type="datetime-local" id="trading-dca-backtest-end" /></div>
+                    <div class="field"><label>初始資金</label><input type="number" id="trading-dca-backtest-initial-cash" min="1" step="1" value="10000" /></div>
+                    <div class="field"><label>滑價百分比</label><input type="number" id="trading-dca-backtest-slippage-percent" min="0" max="20" step="0.01" value="0" /></div>
+                    <div class="field"><label>每次定投金額（點）</label><input type="number" id="trading-dca-backtest-order-points" min="1" step="1" value="100" /></div>
+                    <div class="field"><label>定投間隔（K 線根數）</label><input type="number" id="trading-dca-backtest-interval-candles" min="1" step="1" value="1" /></div>
+                    <div class="field"><label>操作</label><button class="btn btn-primary" id="trading-dca-backtest-run-btn" type="button">執行定投回測</button></div>
+                  </div>
+                  <div class="drive-card-sub" id="trading-dca-backtest-date-hint" style="margin-top:.35rem;line-height:1.6;">
+                    先選開始或結束時間，系統會依目前週期提示另一側最遠可選到哪裡。
+                  </div>
+                  <div class="drive-card-sub" id="trading-dca-backtest-result" style="margin-top:.75rem;">回測結果僅供參考。歷史績效不代表未來收益。</div>
+                  <div id="trading-dca-backtest-warnings" style="display:none;margin-top:.5rem;"></div>
+                  <div id="trading-dca-backtest-metrics" class="settings-option-grid economy-wallet-grid" style="margin-top:.75rem;"></div>
+                  <div id="trading-dca-backtest-trades" class="drive-file-list" style="margin-top:.75rem;"></div>
                 </div>
                 <div class="drive-card-title" style="margin-top:.85rem;">定投列表</div>
                 <div id="trading-dca-bot-list" class="drive-file-list"></div>
@@ -1972,6 +1998,39 @@
                 <b>等差</b>：每格間隔固定點數，適合窄幅震盪、幣價變化不大的行情；高價格區每格利潤比例較低。<br>
                 <b>等比</b>：每格間隔固定百分比，低價到高價每格利潤率均等，適合跨越大價差或長期持有的寬幅行情。<br>
                 <b>資金凍結說明</b>：買單凍結<b>積分（現金）</b>；賣單需凍結<b>現貨底倉</b>（若帳戶無足夠現貨，需先購入）。
+              </div>
+              <div class="drive-card" style="margin-top:.85rem;">
+                <div class="drive-card-heading compact-heading">
+                  <div>
+                    <div class="drive-card-title">網格回測 Dashboard</div>
+                    <div class="drive-card-sub">未選已儲存網格 Bot 時，直接使用上方目前表單的區間、格數與每格金額。</div>
+                  </div>
+                </div>
+                <div class="settings-option-grid" style="margin-top:.65rem;">
+                  <div class="field"><label>已儲存網格 Bot</label><select id="trading-grid-backtest-bot-select"><option value="">使用目前表單設定</option></select></div>
+                  <div class="field"><label>市場</label><select id="trading-grid-backtest-market"><option value="">讀取市場中...</option></select></div>
+                  <div class="field"><label>K 線週期</label><select id="trading-grid-backtest-timeframe"><option value="5m">5 分</option><option value="15m" selected>15 分</option><option value="1h">1 小時</option><option value="4h">4 小時</option><option value="1d">日線</option></select></div>
+                  <div class="field"><label>回測開始</label><input type="datetime-local" id="trading-grid-backtest-start" /></div>
+                  <div class="field"><label>回測結束</label><input type="datetime-local" id="trading-grid-backtest-end" /></div>
+                  <div class="field"><label>初始資金</label><input type="number" id="trading-grid-backtest-initial-cash" min="1" step="1" value="10000" /></div>
+                  <div class="field"><label>滑價百分比</label><input type="number" id="trading-grid-backtest-slippage-percent" min="0" max="20" step="0.01" value="0" /></div>
+                  <div class="field"><label>下限價格（點）</label><input type="number" id="trading-grid-backtest-grid-lower" min="1" step="1" placeholder="例如 80000" /></div>
+                  <div class="field"><label>上限價格（點）</label><input type="number" id="trading-grid-backtest-grid-upper" min="1" step="1" placeholder="例如 120000" /></div>
+                  <div class="field"><label>網格數量</label><input type="number" id="trading-grid-backtest-grid-count" min="2" max="500" step="1" value="10" /></div>
+                  <div class="field"><label>每格金額（點）</label><input type="number" id="trading-grid-backtest-grid-amount" min="1" step="1" value="100" /></div>
+                  <div class="field"><label>間距模式</label><select id="trading-grid-backtest-grid-spacing"><option value="arithmetic">等差（固定點數間距）</option><option value="geometric">等比（固定百分比間距）</option></select></div>
+                  <div class="field"><label>操作</label><button class="btn btn-primary" id="trading-grid-backtest-run-btn" type="button">執行網格回測</button></div>
+                </div>
+                <div class="drive-card-sub" id="trading-grid-backtest-date-hint" style="margin-top:.35rem;line-height:1.6;">
+                  先選開始或結束時間，系統會依目前週期提示另一側最遠可選到哪裡。
+                </div>
+                <div class="drive-card-sub" id="trading-grid-backtest-grid-hint" style="margin-top:.3rem;font-size:.81em;color:var(--muted);line-height:1.5;">
+                  等差：每格固定點數，適合窄幅震盪行情。&nbsp;&nbsp;等比：每格固定百分比，適合跨越大價差的寬幅行情。
+                </div>
+                <div class="drive-card-sub" id="trading-grid-backtest-result" style="margin-top:.75rem;">回測結果僅供參考。歷史績效不代表未來收益。</div>
+                <div id="trading-grid-backtest-warnings" style="display:none;margin-top:.5rem;"></div>
+                <div id="trading-grid-backtest-metrics" class="settings-option-grid economy-wallet-grid" style="margin-top:.75rem;"></div>
+                <div id="trading-grid-backtest-trades" class="drive-file-list" style="margin-top:.75rem;"></div>
               </div>
               <div id="trading-grid-spot-confirm" style="display:none;"></div>
               <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-top:1rem;">
@@ -2045,69 +2104,34 @@
                   <button class="btn btn-primary" id="trading-auto-bot-save-btn" type="button">儲存 Workflow Bot</button>
                   <button class="btn" id="trading-bot-scan-btn" type="button">立即掃描</button>
                 </div>
+                <div class="drive-card" style="margin-top:.85rem;">
+                  <div class="drive-card-heading compact-heading">
+                    <div>
+                      <div class="drive-card-title">Workflow 回測 Dashboard</div>
+                      <div class="drive-card-sub">未選已儲存 Workflow Bot 時，直接使用上方目前的 Workflow JSON 與市場設定。</div>
+                    </div>
+                  </div>
+                  <div class="settings-option-grid" style="margin-top:.65rem;">
+                    <div class="field"><label>已儲存 Workflow Bot</label><select id="trading-workflow-backtest-bot-select"><option value="">使用目前表單設定</option></select></div>
+                    <div class="field"><label>市場</label><select id="trading-workflow-backtest-market"><option value="">讀取市場中...</option></select></div>
+                    <div class="field"><label>K 線週期</label><select id="trading-workflow-backtest-timeframe"><option value="5m">5 分</option><option value="15m" selected>15 分</option><option value="1h">1 小時</option><option value="4h">4 小時</option><option value="1d">日線</option></select></div>
+                    <div class="field"><label>回測開始</label><input type="datetime-local" id="trading-workflow-backtest-start" /></div>
+                    <div class="field"><label>回測結束</label><input type="datetime-local" id="trading-workflow-backtest-end" /></div>
+                    <div class="field"><label>初始資金</label><input type="number" id="trading-workflow-backtest-initial-cash" min="1" step="1" value="10000" /></div>
+                    <div class="field"><label>滑價百分比</label><input type="number" id="trading-workflow-backtest-slippage-percent" min="0" max="20" step="0.01" value="0" /></div>
+                    <div class="field"><label>每次投入金額（點）</label><input type="number" id="trading-workflow-backtest-order-points" min="1" step="1" value="100" /></div>
+                    <div class="field"><label>操作</label><button class="btn btn-primary" id="trading-workflow-backtest-run-btn" type="button">執行 Workflow 回測</button></div>
+                  </div>
+                  <div class="drive-card-sub" id="trading-workflow-backtest-date-hint" style="margin-top:.35rem;line-height:1.6;">
+                    先選開始或結束時間，系統會依目前週期提示另一側最遠可選到哪裡。
+                  </div>
+                  <div class="drive-card-sub" id="trading-workflow-backtest-result" style="margin-top:.75rem;">回測結果僅供參考。歷史績效不代表未來收益。</div>
+                  <div id="trading-workflow-backtest-warnings" style="display:none;margin-top:.5rem;"></div>
+                  <div id="trading-workflow-backtest-metrics" class="settings-option-grid economy-wallet-grid" style="margin-top:.75rem;"></div>
+                  <div id="trading-workflow-backtest-trades" class="drive-file-list" style="margin-top:.75rem;"></div>
+                </div>
                 <div class="drive-card-title" style="margin-top:.85rem;">自動化列表</div>
                 <div id="trading-strategy-bot-list" class="drive-file-list"></div>
-            </div>
-            <div class="trading-bot-panel trading-bot-tab-panel" id="trading-bot-tab-backtest">
-              <div class="drive-card-title">回測分析</div>
-              <div class="drive-card-sub">回測只讀歷史 K 線與目前設定，不建立訂單、不扣款、不修改持倉、不寫 PointsChain。</div>
-              <div class="settings-option-grid" style="margin-top:.65rem;">
-                <div class="field">
-                  <label>回測類型</label>
-                  <select id="trading-backtest-strategy">
-                    <option value="dca">定投機器人</option>
-                    <option value="workflow">自動化 Workflow</option>
-                    <option value="grid">網格交易</option>
-                  </select>
-                </div>
-                <div class="field"><label>選擇已儲存 Bot</label><select id="trading-backtest-bot-select"><option value="">使用目前表單設定</option></select></div>
-                <div class="field"><label>市場</label><select id="trading-backtest-market"><option value="">讀取市場中...</option></select></div>
-                <div class="field"><label>K 線週期</label><select id="trading-backtest-timeframe"><option value="5m">5 分</option><option value="15m" selected>15 分</option><option value="1h">1 小時</option><option value="4h">4 小時</option><option value="1d">日線</option></select></div>
-                <div class="field"><label>回測開始</label><input type="datetime-local" id="trading-backtest-start" /></div>
-                <div class="field"><label>回測結束</label><input type="datetime-local" id="trading-backtest-end" /></div>
-                <div class="field"><label>初始資金</label><input type="number" id="trading-backtest-initial-cash" min="1" step="1" value="10000" /></div>
-                <div class="field"><label>滑價百分比</label><input type="number" id="trading-backtest-slippage-percent" min="0" max="20" step="0.01" value="0" /></div>
-              </div>
-              <div class="drive-card-sub" id="trading-backtest-date-hint" style="margin-top:.35rem;line-height:1.6;">
-                先選開始或結束時間，系統會依目前週期提示另一側最遠可選到哪裡。
-              </div>
-              <!-- 定投選項 -->
-              <div id="trading-backtest-dca-options" class="settings-option-grid" style="margin-top:.4rem;">
-                <div class="field"><label>每次定投金額（點）</label><input type="number" id="trading-backtest-order-points" min="1" step="1" value="100" /></div>
-                <div class="field"><label>定投間隔（K 線根數）</label><input type="number" id="trading-backtest-interval-candles" min="1" step="1" value="1" /></div>
-              </div>
-              <!-- 網格選項 -->
-              <div id="trading-backtest-grid-options" class="settings-option-grid" style="display:none;margin-top:.4rem;">
-                <div class="field"><label>下限價格（點）</label><input type="number" id="trading-backtest-grid-lower" min="1" step="1" placeholder="例如 80000" /></div>
-                <div class="field"><label>上限價格（點）</label><input type="number" id="trading-backtest-grid-upper" min="1" step="1" placeholder="例如 120000" /></div>
-                <div class="field"><label>網格數量</label><input type="number" id="trading-backtest-grid-count" min="2" max="500" step="1" value="10" /></div>
-                <div class="field"><label>每格金額（點）</label><input type="number" id="trading-backtest-grid-amount" min="1" step="1" value="100" /></div>
-                <div class="field"><label>間距模式</label><select id="trading-backtest-grid-spacing"><option value="arithmetic">等差（固定點數間距）</option><option value="geometric">等比（固定百分比間距）</option></select></div>
-              </div>
-              <div class="drive-card-sub" id="trading-backtest-grid-hint" style="display:none;margin-top:.3rem;font-size:.81em;color:var(--muted);line-height:1.5;">
-                等差：每格固定點數，適合窄幅震盪行情。&nbsp;&nbsp;等比：每格固定百分比，適合跨越大價差的寬幅行情。
-              </div>
-              <!-- Workflow 選項 -->
-              <div id="trading-backtest-workflow-options" style="display:none;margin-top:.4rem;">
-                <div class="settings-option-grid">
-                  <div class="field">
-                    <label>使用 Workflow 模板</label>
-                    <select id="trading-backtest-workflow-template"><option value="">自訂（JSON 編輯器）</option></select>
-                  </div>
-                  <div class="field"><label>每次投入金額（點）</label><input type="number" id="trading-backtest-workflow-order-points" min="1" step="1" value="100" /></div>
-                </div>
-                <div class="field" style="margin-top:.4rem;">
-                  <label>Workflow JSON</label>
-                  <textarea id="trading-backtest-workflow-json" rows="6" style="width:100%;font-family:monospace;font-size:.8rem;" placeholder='{"branches":[...]}'></textarea>
-                </div>
-              </div>
-              <div class="settings-option-grid" style="margin-top:.5rem;">
-                <div class="field"><label>操作</label><button class="btn btn-primary" id="trading-backtest-run-btn" type="button">執行回測</button></div>
-              </div>
-              <div class="drive-card-sub" id="trading-bot-backtest-result" style="margin-top:.75rem;">回測結果僅供參考。歷史績效不代表未來收益。</div>
-              <div id="trading-backtest-warnings" style="display:none;margin-top:.5rem;"></div>
-              <div id="trading-backtest-metrics" class="settings-option-grid economy-wallet-grid" style="margin-top:.75rem;"></div>
-              <div id="trading-backtest-trades" class="drive-file-list" style="margin-top:.75rem;"></div>
             </div>
             <div class="trading-bot-panel trading-bot-tab-panel" id="trading-bot-tab-records">
               <div class="drive-card-title">執行紀錄</div>

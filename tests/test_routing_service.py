@@ -11,9 +11,9 @@ Locks the contract:
 
 import pytest
 
-from services import server_mode_routing as routing
+from services.server_mode import routing
 from services.points_chain import ChainModeViolation
-from services.server_mode_context import SmV2Context
+from services.server_mode.context import SmV2Context
 
 
 def _ctx(mode):

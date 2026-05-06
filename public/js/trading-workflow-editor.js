@@ -2,6 +2,7 @@
 
 (function () {
   const STORAGE_KEY = "hackme_trading_workflow_json";
+  const PREVIEW_STORAGE_KEY = "hackme_trading_workflow_preview";
   const $ = (id) => document.getElementById(id);
   const NODE_TYPES = ["start", "condition", "logic", "control", "action"];
   const CONDITION_TYPES = ["always", "price_below", "price_above", "rsi_above", "rsi_below", "kd_above", "kd_below", "ma_position", "bb_position", "has_position"];
@@ -37,6 +38,9 @@
   let pendingConnection = null;
   let dragNode = null;
   let workflow = normalizeWorkflow(loadInitialWorkflow());
+  let workflowPreviewCsrfToken = "";
+  let workflowPreviewBound = false;
+  let workflowPreviewState = { markets: [], result: null };
   const GRAPH_NODE_WIDTH = 210;
   const GRAPH_NODE_HEIGHT = 118;
 
@@ -51,6 +55,299 @@
   function numberValue(value, fallback = 0) {
     const next = Number(value);
     return Number.isFinite(next) ? next : fallback;
+  }
+
+  function apiPath(path) {
+    return `/api${path}`;
+  }
+
+  function readCookie(name) {
+    const text = document.cookie || "";
+    const prefix = `${name}=`;
+    const chunk = text.split(/;\s*/).find((item) => item.startsWith(prefix));
+    return chunk ? decodeURIComponent(chunk.slice(prefix.length)) : "";
+  }
+
+  async function fetchWorkflowPreviewCsrfToken({ force = false } = {}) {
+    const cookieToken = readCookie("csrf_token");
+    if (!force && (workflowPreviewCsrfToken || cookieToken)) {
+      workflowPreviewCsrfToken = workflowPreviewCsrfToken || cookieToken || "";
+      return workflowPreviewCsrfToken;
+    }
+    try {
+      const res = await fetch(apiPath("/csrf-token"), { credentials: "same-origin" });
+      const json = await res.json().catch(() => ({}));
+      if (res.ok && json && typeof json.csrf_token === "string" && json.csrf_token) {
+        workflowPreviewCsrfToken = json.csrf_token;
+        return workflowPreviewCsrfToken;
+      }
+    } catch (_) {
+      // fall through to cookie fallback
+    }
+    workflowPreviewCsrfToken = readCookie("csrf_token") || "";
+    return workflowPreviewCsrfToken;
+  }
+
+  async function fetchWorkflowPreviewJson(path, options = {}) {
+    const requestOptions = { ...(options || {}) };
+    const method = String(requestOptions.method || "GET").toUpperCase();
+    const headers = { ...(requestOptions.headers || {}) };
+    if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
+      headers["X-CSRF-Token"] = await fetchWorkflowPreviewCsrfToken();
+      if (requestOptions.body && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
+    }
+    const res = await fetch(apiPath(path), {
+      credentials: "same-origin",
+      ...requestOptions,
+      method,
+      headers,
+    });
+    const raw = await res.text().catch(() => "");
+    let json = {};
+    try {
+      json = raw ? JSON.parse(raw) : {};
+    } catch (_) {
+      json = {};
+    }
+    if (!res.ok || !json.ok) {
+      throw new Error(String(json.msg || json.message || raw || `HTTP ${res.status}` || "操作失敗").slice(0, 240));
+    }
+    return json;
+  }
+
+  function pad2(value) {
+    return String(value).padStart(2, "0");
+  }
+
+  function toLocalDatetimeValue(date) {
+    const safe = date instanceof Date ? date : new Date();
+    return `${safe.getFullYear()}-${pad2(safe.getMonth() + 1)}-${pad2(safe.getDate())}T${pad2(safe.getHours())}:${pad2(safe.getMinutes())}`;
+  }
+
+  function defaultPreviewConfig() {
+    const end = new Date();
+    const start = new Date(end.getTime() - 180 * 24 * 60 * 60 * 1000);
+    return {
+      market_symbol: "BTC/POINTS",
+      timeframe: "1h",
+      initial_cash_points: 10000,
+      slippage_percent: 0,
+      start_time: toLocalDatetimeValue(start),
+      end_time: toLocalDatetimeValue(end),
+    };
+  }
+
+  function loadPreviewConfig() {
+    const fallback = defaultPreviewConfig();
+    try {
+      const parsed = JSON.parse(localStorage.getItem(PREVIEW_STORAGE_KEY) || "{}");
+      if (!parsed || typeof parsed !== "object") return fallback;
+      return {
+        market_symbol: String(parsed.market_symbol || fallback.market_symbol),
+        timeframe: String(parsed.timeframe || fallback.timeframe),
+        initial_cash_points: Math.max(1, numberValue(parsed.initial_cash_points, fallback.initial_cash_points)),
+        slippage_percent: Math.max(0, numberValue(parsed.slippage_percent, fallback.slippage_percent)),
+        start_time: String(parsed.start_time || fallback.start_time),
+        end_time: String(parsed.end_time || fallback.end_time),
+      };
+    } catch (_) {
+      return fallback;
+    }
+  }
+
+  function applyPreviewConfig(config) {
+    const safe = config || defaultPreviewConfig();
+    if ($("workflow-preview-market")) $("workflow-preview-market").value = String(safe.market_symbol || "");
+    if ($("workflow-preview-timeframe")) $("workflow-preview-timeframe").value = String(safe.timeframe || "1h");
+    if ($("workflow-preview-initial-cash")) $("workflow-preview-initial-cash").value = String(Math.max(1, numberValue(safe.initial_cash_points, 10000)));
+    if ($("workflow-preview-slippage")) $("workflow-preview-slippage").value = String(Math.max(0, numberValue(safe.slippage_percent, 0)));
+    if ($("workflow-preview-start")) $("workflow-preview-start").value = String(safe.start_time || "");
+    if ($("workflow-preview-end")) $("workflow-preview-end").value = String(safe.end_time || "");
+  }
+
+  function currentPreviewConfig() {
+    return {
+      market_symbol: String($("workflow-preview-market")?.value || ""),
+      timeframe: String($("workflow-preview-timeframe")?.value || "1h"),
+      initial_cash_points: Math.max(1, numberValue($("workflow-preview-initial-cash")?.value, 10000)),
+      slippage_percent: Math.max(0, numberValue($("workflow-preview-slippage")?.value, 0)),
+      start_time: String($("workflow-preview-start")?.value || ""),
+      end_time: String($("workflow-preview-end")?.value || ""),
+    };
+  }
+
+  function savePreviewConfig() {
+    try {
+      localStorage.setItem(PREVIEW_STORAGE_KEY, JSON.stringify(currentPreviewConfig()));
+    } catch (_) {
+      // ignore local storage failures
+    }
+  }
+
+  function shiftPreviewRange(days) {
+    const safeDays = Math.max(1, Number(days || 180));
+    const end = new Date();
+    const start = new Date(end.getTime() - safeDays * 24 * 60 * 60 * 1000);
+    if ($("workflow-preview-start")) $("workflow-preview-start").value = toLocalDatetimeValue(start);
+    if ($("workflow-preview-end")) $("workflow-preview-end").value = toLocalDatetimeValue(end);
+    savePreviewConfig();
+  }
+
+  function previewStatus(message, good = true) {
+    const el = $("workflow-preview-status");
+    if (!el) return;
+    el.textContent = message || "";
+    el.style.color = good ? "var(--muted)" : "var(--red)";
+  }
+
+  function formatMetricValue(value, digits = 2) {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return "-";
+    return num.toLocaleString("zh-Hant-TW", {
+      minimumFractionDigits: digits > 0 ? digits : 0,
+      maximumFractionDigits: digits,
+    });
+  }
+
+  function formatSignedMetric(value, digits = 2, suffix = "") {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return "-";
+    return `${num >= 0 ? "+" : ""}${formatMetricValue(num, digits)}${suffix}`;
+  }
+
+  function previewMetricCard(label, value, subtext) {
+    return `
+      <div class="preview-metric">
+        <span class="label">${html(label)}</span>
+        <strong>${html(value)}</strong>
+        <small>${html(subtext || "")}</small>
+      </div>
+    `;
+  }
+
+  function renderWorkflowPreviewResult(result) {
+    const badge = $("workflowPreviewBadge");
+    const metrics = $("workflow-preview-metrics");
+    const detail = $("workflow-preview-detail");
+    const warnings = $("workflow-preview-warnings");
+    workflowPreviewState.result = result || null;
+    if (badge) {
+      badge.className = `badge ${result ? (Number(result.return_percent || 0) >= 0 ? "ok" : "warn") : ""}`.trim();
+      badge.textContent = result ? "已完成" : "未執行";
+    }
+    if (!metrics || !detail || !warnings) return;
+    if (!result) {
+      metrics.innerHTML = "";
+      detail.innerHTML = "";
+      warnings.innerHTML = "";
+      return;
+    }
+    metrics.innerHTML = [
+      previewMetricCard("最終資產", `${formatMetricValue(result.final_value_points, 2)} POINTS`, `初始 ${formatMetricValue(result.initial_cash_points, 2)} POINTS`),
+      previewMetricCard("最終報酬", `${formatSignedMetric(result.return_percent, 2, "%")}`, `${formatSignedMetric(result.pnl_points, 2)} POINTS`),
+      previewMetricCard("成交數", String(Number(result.trade_count || 0)), "backtest only"),
+      previewMetricCard("最大回撤", `${formatMetricValue(result.max_drawdown_percent || 0, 2)}%`, `資料 ${Number(result.candle_count || 0)} 根`),
+    ].join("");
+    detail.innerHTML = [
+      `<div class="preview-detail-item">資料來源：${html(result.data_source || "-")} · 市場：${html(result.market_symbol || "-")} · 週期：${html(result.interval || "-")}</div>`,
+      `<div class="preview-detail-item">區間：${html(String(result.first_candle_time || "-"))} ～ ${html(String(result.last_candle_time || "-"))}</div>`,
+      `<div class="preview-detail-item">回測視窗：約 ${html(formatMetricValue(result.backtest_window_days || 0, 1))} 天 · 上限 ${html(Number(result.max_backtest_candles || 0).toLocaleString("zh-Hant-TW"))} 根</div>`,
+    ].join("");
+    const rangeWarnings = Array.isArray(result.range_warnings) ? result.range_warnings : [];
+    warnings.innerHTML = rangeWarnings.length
+      ? rangeWarnings.map((item) => `<div class="preview-warning-item">⚠ ${html(item)}</div>`).join("")
+      : "";
+  }
+
+  function renderWorkflowPreviewMarkets() {
+    const select = $("workflow-preview-market");
+    if (!select) return;
+    const markets = Array.isArray(workflowPreviewState.markets) ? workflowPreviewState.markets : [];
+    const current = currentPreviewConfig().market_symbol || "BTC/POINTS";
+    const options = markets.length
+      ? markets.map((market) => {
+          const value = String(market.symbol || "");
+          const label = String(market.display_market_symbol || market.symbol || value);
+          return `<option value="${html(value)}">${html(label)}</option>`;
+        }).join("")
+      : `<option value="BTC/POINTS">BTC/USDT</option>`;
+    select.innerHTML = options;
+    if (Array.from(select.options).some((item) => item.value === current)) select.value = current;
+    else if (Array.from(select.options).some((item) => item.value === "BTC/POINTS")) select.value = "BTC/POINTS";
+  }
+
+  async function loadWorkflowPreviewMarkets() {
+    try {
+      const json = await fetchWorkflowPreviewJson("/trading/markets");
+      workflowPreviewState.markets = Array.isArray(json.markets) ? json.markets : [];
+      renderWorkflowPreviewMarkets();
+      savePreviewConfig();
+    } catch (err) {
+      renderWorkflowPreviewMarkets();
+      previewStatus(err.message || "市場列表載入失敗", false);
+    }
+  }
+
+  async function runWorkflowPreviewBacktest() {
+    const errors = validateWorkflow().filter((item) => item.level === "err");
+    if (errors.length) {
+      previewStatus("Workflow validation 未通過，請先修正紅色項目。", false);
+      return;
+    }
+    const config = currentPreviewConfig();
+    if (!config.market_symbol) {
+      previewStatus("請先選擇回測市場。", false);
+      return;
+    }
+    if (config.start_time && config.end_time && config.start_time >= config.end_time) {
+      previewStatus("回測開始時間必須早於結束時間。", false);
+      return;
+    }
+    savePreviewConfig();
+    previewStatus("回測中…");
+    renderWorkflowPreviewResult(null);
+    try {
+      const json = await fetchWorkflowPreviewJson("/trading/workflow-editor/backtest", {
+        method: "POST",
+        body: JSON.stringify({
+          market_symbol: config.market_symbol,
+          timeframe: config.timeframe,
+          initial_cash_points: config.initial_cash_points,
+          slippage_percent: config.slippage_percent,
+          start_time: config.start_time,
+          end_time: config.end_time,
+          workflow_json: normalizeWorkflow(workflow),
+        }),
+      });
+      renderWorkflowPreviewResult(json);
+      previewStatus(
+        `回測完成：報酬 ${formatSignedMetric(json.return_percent, 2, "%")} · 成交 ${Number(json.trade_count || 0)} 次 · 最大回撤 ${formatMetricValue(json.max_drawdown_percent || 0, 2)}%`,
+        Number(json.return_percent || 0) >= 0,
+      );
+    } catch (err) {
+      renderWorkflowPreviewResult(null);
+      previewStatus(err.message || "回測失敗", false);
+    }
+  }
+
+  function bindWorkflowPreview() {
+    if (workflowPreviewBound) return;
+    workflowPreviewBound = true;
+    $("workflow-preview-run-btn")?.addEventListener("click", () => { runWorkflowPreviewBacktest(); });
+    $("workflow-preview-range-180d")?.addEventListener("click", () => { shiftPreviewRange(180); });
+    $("workflow-preview-range-365d")?.addEventListener("click", () => { shiftPreviewRange(365); });
+    ["workflow-preview-market", "workflow-preview-timeframe", "workflow-preview-initial-cash", "workflow-preview-slippage", "workflow-preview-start", "workflow-preview-end"].forEach((id) => {
+      $(id)?.addEventListener("change", savePreviewConfig);
+      $(id)?.addEventListener("input", savePreviewConfig);
+    });
+  }
+
+  function initializeWorkflowPreview() {
+    applyPreviewConfig(loadPreviewConfig());
+    bindWorkflowPreview();
+    renderWorkflowPreviewMarkets();
+    renderWorkflowPreviewResult(null);
+    loadWorkflowPreviewMarkets();
   }
 
   function loadInitialWorkflow() {
@@ -853,9 +1150,11 @@
       selectedNodeId = workflow.start_node_id;
       render();
     },
+    runBacktestPreview: () => runWorkflowPreviewBacktest(),
     templateWorkflow,
     validateWorkflow,
   };
 
   render();
+  initializeWorkflowPreview();
 }());

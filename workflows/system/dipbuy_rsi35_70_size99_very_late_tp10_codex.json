@@ -1,0 +1,108 @@
+{
+  "id": "dipbuy_rsi35_70_size99_very_late_tp10_codex",
+  "label": "回檔趨勢吸納 + 超晚減倉 10%（Codex）",
+  "description": "以 dipbuy_rsi35_70_size99_noexit 為基底，保留 RSI<35 加碼 30%，並在獲利 60% / 120% / 200% 時各賣 10%。本地 5 資產 5y 回測平均 +62.62%，最大回撤 81.75%，平均交易次數 4.0。",
+  "scope": "system",
+  "explanation": {
+    "purpose": "採用更輕的減倉強度，比 15% 版更保留主升段曝險，目標是在少量去風險和長抱之間取中間值。",
+    "entry_conditions": [
+      "價格站上 MA200",
+      "RSI ≥ 35 且 ≤ 70",
+      "目前空倉",
+      "進場冷卻 4 小時"
+    ],
+    "actions": [
+      "進場：買入 99%",
+      "加碼：仍站上 MA200 + RSI<35 + 已持倉 → 買 30%",
+      "極晚減倉：獲利 ≥ 60% / 120% / 200% 時，各賣出 10%"
+    ],
+    "risk_notes": [
+      "最大回撤仍遠高於一般保守策略，只是比純 no-exit 略降。",
+      "這個版本更偏重保住漲幅，不是追求低波動。"
+    ],
+    "best_for": [
+      "想保留更多主升段部位、並略微增加交易次數的版本"
+    ],
+    "tuning": [
+      "若要再壓回撤，可先試更小的加碼比率，而不是把 TP 提前。"
+    ]
+  },
+  "workflow": {
+    "version": 2,
+    "strategy_kind": "workflow_graph",
+    "source": "codex_competition",
+    "name": "dipbuy_rsi35_70_size99_very_late_tp10_codex",
+    "start_node_id": "start",
+    "nodes": [
+      { "id": "start", "type": "start", "label": "開始", "x": 0, "y": 400 },
+      { "id": "entry_ma", "type": "condition", "label": "上 MA200", "x": 1, "y": 100, "condition": { "type": "ma_position", "period": 200, "position": "above" } },
+      { "id": "entry_rsi_floor", "type": "condition", "label": "RSI≥35", "x": 1, "y": 200, "condition": { "type": "rsi_above", "value": 35 } },
+      { "id": "entry_rsi_ceil", "type": "condition", "label": "RSI≤70", "x": 1, "y": 300, "condition": { "type": "rsi_below", "value": 70 } },
+      { "id": "no_pos", "type": "condition", "label": "空倉", "x": 1, "y": 400, "condition": { "type": "has_position", "value": false } },
+      { "id": "entry_and", "type": "logic", "label": "AND", "x": 2, "y": 250, "operator": "AND" },
+      { "id": "entry_cd", "type": "control", "label": "冷卻 4h", "x": 3, "y": 250, "cooldown_seconds": 14400, "max_runs": 1000 },
+      { "id": "entry_buy", "type": "action", "label": "買 99%", "x": 4, "y": 250, "priority": 10, "action": { "type": "buy_percent", "percent": 99, "step": 100, "order_type": "market" } },
+
+      { "id": "p_ma", "type": "condition", "label": "仍上 MA200", "x": 1, "y": 600, "condition": { "type": "ma_position", "period": 200, "position": "above" } },
+      { "id": "p_rsi", "type": "condition", "label": "RSI<35", "x": 1, "y": 700, "condition": { "type": "rsi_below", "value": 35 } },
+      { "id": "p_pos", "type": "condition", "label": "已持倉", "x": 1, "y": 800, "condition": { "type": "has_position", "value": true } },
+      { "id": "p_and", "type": "logic", "label": "AND", "x": 2, "y": 700, "operator": "AND" },
+      { "id": "p_cd", "type": "control", "label": "冷卻 24h", "x": 3, "y": 700, "cooldown_seconds": 86400, "max_runs": 1000 },
+      { "id": "p_buy", "type": "action", "label": "加碼 30%", "x": 4, "y": 700, "priority": 30, "action": { "type": "buy_percent", "percent": 30, "step": 100, "order_type": "market" } },
+
+      { "id": "tp1", "type": "condition", "label": "獲利≥60%", "x": 1, "y": 1040, "condition": { "type": "take_profit_percent", "value": 60 } },
+      { "id": "tp1_pos", "type": "condition", "label": "已持倉", "x": 1, "y": 1120, "condition": { "type": "has_position", "value": true } },
+      { "id": "tp1_and", "type": "logic", "label": "AND", "x": 2, "y": 1080, "operator": "AND" },
+      { "id": "tp1_sell", "type": "action", "label": "賣 10%", "x": 3, "y": 1080, "priority": 50, "action": { "type": "sell_percent", "percent": 10, "step": 1, "order_type": "market" } },
+
+      { "id": "tp2", "type": "condition", "label": "獲利≥120%", "x": 1, "y": 1240, "condition": { "type": "take_profit_percent", "value": 120 } },
+      { "id": "tp2_pos", "type": "condition", "label": "已持倉", "x": 1, "y": 1320, "condition": { "type": "has_position", "value": true } },
+      { "id": "tp2_and", "type": "logic", "label": "AND", "x": 2, "y": 1280, "operator": "AND" },
+      { "id": "tp2_sell", "type": "action", "label": "賣 10%", "x": 3, "y": 1280, "priority": 60, "action": { "type": "sell_percent", "percent": 10, "step": 1, "order_type": "market" } },
+
+      { "id": "tp3", "type": "condition", "label": "獲利≥200%", "x": 1, "y": 1440, "condition": { "type": "take_profit_percent", "value": 200 } },
+      { "id": "tp3_pos", "type": "condition", "label": "已持倉", "x": 1, "y": 1520, "condition": { "type": "has_position", "value": true } },
+      { "id": "tp3_and", "type": "logic", "label": "AND", "x": 2, "y": 1480, "operator": "AND" },
+      { "id": "tp3_sell", "type": "action", "label": "賣 10%", "x": 3, "y": 1480, "priority": 70, "action": { "type": "sell_percent", "percent": 10, "step": 1, "order_type": "market" } }
+    ],
+    "edges": [
+      { "id": "e_s_ma", "from": "start", "from_port": "out", "to": "entry_ma", "to_port": "in" },
+      { "id": "e_s_rf", "from": "start", "from_port": "out", "to": "entry_rsi_floor", "to_port": "in" },
+      { "id": "e_s_rc", "from": "start", "from_port": "out", "to": "entry_rsi_ceil", "to_port": "in" },
+      { "id": "e_s_np", "from": "start", "from_port": "out", "to": "no_pos", "to_port": "in" },
+      { "id": "e_ma_an", "from": "entry_ma", "from_port": "true", "to": "entry_and", "to_port": "in" },
+      { "id": "e_rf_an", "from": "entry_rsi_floor", "from_port": "true", "to": "entry_and", "to_port": "in" },
+      { "id": "e_rc_an", "from": "entry_rsi_ceil", "from_port": "true", "to": "entry_and", "to_port": "in" },
+      { "id": "e_np_an", "from": "no_pos", "from_port": "true", "to": "entry_and", "to_port": "in" },
+      { "id": "e_an_cd", "from": "entry_and", "from_port": "true", "to": "entry_cd", "to_port": "in" },
+      { "id": "e_cd_buy", "from": "entry_cd", "from_port": "then", "to": "entry_buy", "to_port": "in" },
+
+      { "id": "e_s_pma", "from": "start", "from_port": "out", "to": "p_ma", "to_port": "in" },
+      { "id": "e_s_pr", "from": "start", "from_port": "out", "to": "p_rsi", "to_port": "in" },
+      { "id": "e_s_pp", "from": "start", "from_port": "out", "to": "p_pos", "to_port": "in" },
+      { "id": "e_pma_an", "from": "p_ma", "from_port": "true", "to": "p_and", "to_port": "in" },
+      { "id": "e_pr_an", "from": "p_rsi", "from_port": "true", "to": "p_and", "to_port": "in" },
+      { "id": "e_pp_an", "from": "p_pos", "from_port": "true", "to": "p_and", "to_port": "in" },
+      { "id": "e_pan_cd", "from": "p_and", "from_port": "true", "to": "p_cd", "to_port": "in" },
+      { "id": "e_pcd_buy", "from": "p_cd", "from_port": "then", "to": "p_buy", "to_port": "in" },
+
+      { "id": "e_s_tp1", "from": "start", "from_port": "out", "to": "tp1", "to_port": "in" },
+      { "id": "e_s_tp1p", "from": "start", "from_port": "out", "to": "tp1_pos", "to_port": "in" },
+      { "id": "e_tp1_an", "from": "tp1", "from_port": "true", "to": "tp1_and", "to_port": "in" },
+      { "id": "e_tp1p_an", "from": "tp1_pos", "from_port": "true", "to": "tp1_and", "to_port": "in" },
+      { "id": "e_tp1_sell", "from": "tp1_and", "from_port": "true", "to": "tp1_sell", "to_port": "in" },
+
+      { "id": "e_s_tp2", "from": "start", "from_port": "out", "to": "tp2", "to_port": "in" },
+      { "id": "e_s_tp2p", "from": "start", "from_port": "out", "to": "tp2_pos", "to_port": "in" },
+      { "id": "e_tp2_an", "from": "tp2", "from_port": "true", "to": "tp2_and", "to_port": "in" },
+      { "id": "e_tp2p_an", "from": "tp2_pos", "from_port": "true", "to": "tp2_and", "to_port": "in" },
+      { "id": "e_tp2_sell", "from": "tp2_and", "from_port": "true", "to": "tp2_sell", "to_port": "in" },
+
+      { "id": "e_s_tp3", "from": "start", "from_port": "out", "to": "tp3", "to_port": "in" },
+      { "id": "e_s_tp3p", "from": "start", "from_port": "out", "to": "tp3_pos", "to_port": "in" },
+      { "id": "e_tp3_an", "from": "tp3", "from_port": "true", "to": "tp3_and", "to_port": "in" },
+      { "id": "e_tp3p_an", "from": "tp3_pos", "from_port": "true", "to": "tp3_and", "to_port": "in" },
+      { "id": "e_tp3_sell", "from": "tp3_and", "from_port": "true", "to": "tp3_sell", "to_port": "in" }
+    ]
+  }
+}

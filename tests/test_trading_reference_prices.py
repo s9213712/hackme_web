@@ -6,9 +6,9 @@ from urllib.parse import parse_qs, urlparse
 from flask import Flask, jsonify
 
 import routes.trading as trading_routes
-import services.btc_trade_bridge as btc_bridge
+from services.trading import btc_bridge
 from routes.trading import register_trading_routes
-from services.btc_trade_bridge import BtcTradeBridge
+from services.trading.btc_bridge import BtcTradeBridge
 
 
 class _FakeBinanceResponse:
@@ -84,6 +84,9 @@ def _backtest_app(actor):
     app.testing = True
 
     class FakeTradingService:
+        def _validate_workflow(self, workflow):
+            return workflow
+
         def backtest_trading_bot(self, *, actor, payload):
             candles = payload.get("candles") or []
             return {
@@ -100,6 +103,7 @@ def _backtest_app(actor):
                 "final_value_points": 1000,
                 "pnl_points": 0,
                 "return_percent": 0,
+                "max_drawdown_percent": 0,
                 "trades": [],
                 "equity_curve": [],
             }
@@ -402,6 +406,69 @@ def test_backtest_downloads_historical_candles_when_browser_did_not_send_any(mon
     assert "interval=15m" in captured["url"]
     assert "startTime=" in captured["url"]
     assert "endTime=" in captured["url"]
+
+
+def test_workflow_editor_backtest_preview_downloads_historical_candles(monkeypatch):
+    trading_routes.REFERENCE_PRICE_CACHE.clear()
+    captured = {}
+
+    def fake_urlopen(request, timeout=0):
+        captured["url"] = request.full_url
+        return _FakeBinanceResponse([
+            [1714500000000, "60000", "61000", "59000", "60500"],
+            [1714500900000, "60500", "62000", "60400", "61800"],
+        ])
+
+    monkeypatch.setattr(trading_routes, "urlopen", fake_urlopen)
+    client = _backtest_app({"id": 1, "username": "alice", "role": "user"}).test_client()
+
+    response = client.post("/api/trading/workflow-editor/backtest", json={
+        "market_symbol": "BTC/USDT",
+        "timeframe": "15m",
+        "initial_cash_points": 5000,
+        "start_time": "2024-05-01T00:00:00+00:00",
+        "end_time": "2024-05-01T00:30:00+00:00",
+        "workflow_json": {
+            "version": 2,
+            "strategy_kind": "workflow_graph",
+            "source": "workflow_editor",
+            "name": "Preview Workflow",
+            "start_node_id": "start",
+            "nodes": [
+                {"id": "start", "type": "start", "label": "開始", "x": 0, "y": 0},
+                {"id": "hold", "type": "action", "label": "不動作", "x": 200, "y": 0, "action": {"type": "hold", "step": 1, "order_type": "market"}},
+            ],
+            "edges": [
+                {"id": "e1", "from": "start", "from_port": "out", "to": "hold", "to_port": "in"}
+            ],
+        },
+    })
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["ok"] is True
+    assert payload["strategy"] == "workflow"
+    assert payload["data_source"] == "binance_public_api"
+    assert payload["provider_symbol"] == "BTCUSDT"
+    assert payload["candle_count"] == 2
+    assert payload["requested_candle_limit"] == 2
+    assert payload["download_candle_limit"] == 2
+    assert "api.binance.com/api/v3/klines" in captured["url"]
+    assert "interval=15m" in captured["url"]
+
+
+def test_workflow_editor_backtest_preview_requires_workflow_json():
+    client = _backtest_app({"id": 1, "username": "alice", "role": "user"}).test_client()
+
+    response = client.post("/api/trading/workflow-editor/backtest", json={
+        "market_symbol": "BTC/USDT",
+        "timeframe": "1h",
+    })
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload["ok"] is False
+    assert "Workflow JSON" in payload["msg"]
 
 
 def test_backtest_download_supports_full_year_hourly_window(monkeypatch):

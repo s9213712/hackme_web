@@ -1,7 +1,7 @@
 import sqlite3
 
-from services.identity import ensure_user_identity_columns, role_rank
-from services.permissions import require_member_action, require_role
+from services.security.identity import ensure_user_identity_columns, role_rank
+from services.security.permissions import require_member_action, require_role
 
 
 def test_ensure_user_identity_columns_repairs_legacy_users(tmp_path):

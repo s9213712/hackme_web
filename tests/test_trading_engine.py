@@ -10,9 +10,9 @@ from services.trading import margin as trading_margin_module
 import services.trading_engine as trading_engine_module
 from services.points_chain import PointsLedgerService, ensure_points_economy_schema
 from services.snapshots import ensure_snapshot_schema
-from services.server_mode_context import SmV2Context
+from services.server_mode.context import SmV2Context
 from services.trading_engine import TradingEngineService, ensure_trading_schema, fee_points, notional_points
-from services.trading_mode_gate import CrossWorldContamination, TradingDisabledInMode
+from services.trading.mode_gate import CrossWorldContamination, TradingDisabledInMode
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -97,6 +97,15 @@ def _services_with_history(tmp_path, *, prices=None, candles=None):
     trading.test_prices = live_prices
     _stamp_all_markets_boot_ready(trading)
     return points, trading
+
+
+def _set_live_price(trading, *, symbol, price_points, max_price_jump_percent=None):
+    if hasattr(trading, "test_prices"):
+        trading.test_prices[symbol] = price_points
+    kwargs = {"manual_price_points": price_points, "confirm_jump": True}
+    if max_price_jump_percent is not None:
+        kwargs["max_price_jump_percent"] = max_price_jump_percent
+    trading.update_market(actor=_actor(3, "root", "super_admin"), symbol=symbol, **kwargs)
 
 
 def _actor(user_id=1, username="alice", role="user"):
@@ -898,7 +907,6 @@ def test_new_points_markets_short_borrow_uses_non_btc_eth_apr_group_and_closes(t
             "borrow_interest_pool_pressure_multiplier": 0,
             "borrow_interest_interval_hours": 1,
             "borrow_interest_minimum_hours": 1,
-            "price_source": "manual_root",
         },
         markets=[{"symbol": market_symbol, "manual_price_points": price_points}],
     )
@@ -2686,11 +2694,9 @@ def test_emergency_market_close_sells_all_with_double_fee(tmp_path):
 def test_trial_credit_expiry_reclaims_principal_but_keeps_profit(tmp_path):
     points, trading = _services(tmp_path)
     root = _actor(3, "root", "super_admin")
-    trading.update_root_settings(actor=root, settings={"price_source": "manual_root"}, markets=[])
-    trading.update_market(actor=root, symbol="ETH/POINTS", manual_price_points=5000, confirm_jump=True)
     trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="0.1")
 
-    trading.update_market(actor=root, symbol="ETH/POINTS", manual_price_points=6000, confirm_jump=True)
+    _set_live_price(trading, symbol="ETH/POINTS", price_points=6000)
     conn = trading.get_db()
     conn.execute("UPDATE trading_trial_credits SET expires_at='2000-01-01T00:00:00' WHERE user_id=1")
     conn.commit()
@@ -2711,9 +2717,6 @@ def test_trial_credit_expiry_reclaims_principal_but_keeps_profit(tmp_path):
 
 def test_trial_credit_expiry_cancels_open_sell_orders_before_reclaim(tmp_path):
     points, trading = _services(tmp_path)
-    root = _actor(3, "root", "super_admin")
-    trading.update_root_settings(actor=root, settings={"price_source": "manual_root"}, markets=[])
-    trading.update_market(actor=root, symbol="ETH/POINTS", manual_price_points=5000, confirm_jump=True)
     trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="0.1")
     sell = trading.place_order(
         actor=_actor(),
@@ -2747,13 +2750,10 @@ def test_trial_credit_expiry_cancels_open_sell_orders_before_reclaim(tmp_path):
 
 def test_spot_dashboard_reports_backend_pnl_and_fees(tmp_path):
     points, trading = _services(tmp_path)
-    root = _actor(3, "root", "super_admin")
     points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
-    trading.update_root_settings(actor=root, settings={"price_source": "manual_root"}, markets=[])
-    trading.update_market(actor=root, symbol="ETH/POINTS", manual_price_points=5000, confirm_jump=True)
 
     trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="0.1")
-    trading.update_market(actor=root, symbol="ETH/POINTS", manual_price_points=6000, confirm_jump=True)
+    _set_live_price(trading, symbol="ETH/POINTS", price_points=6000)
     dashboard_after_buy = trading.user_dashboard(user_id=1)
     position = dashboard_after_buy["positions"][0]
     assert position["quantity"] == "0.1"
@@ -3840,8 +3840,8 @@ def test_update_market_and_limit_order_preserve_decimal_price_points(tmp_path):
     points, trading = _services(tmp_path)
     root = _actor(3, "root", "super_admin")
     points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
-    trading.update_root_settings(actor=root, settings={"price_source": "manual_root"}, markets=[])
     updated = trading.update_market(actor=root, symbol="ETH/POINTS", manual_price_points="5000.125", confirm_jump=True)
+    trading.test_prices["ETH/POINTS"] = 5000.125
 
     assert updated["market"]["manual_price_points"] == pytest.approx(5000.125)
 
@@ -4051,10 +4051,7 @@ def test_limit_buy_can_be_cancelled_and_unfreezes_points(tmp_path):
 
 def test_limit_order_matcher_executes_when_price_reaches_limit(tmp_path):
     points, trading = _services(tmp_path)
-    root = _actor(3, "root", "super_admin")
     points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
-    trading.update_root_settings(actor=root, settings={"price_source": "manual_root"}, markets=[])
-    trading.update_market(actor=root, symbol="ETH/POINTS", manual_price_points=5000, confirm_jump=True)
 
     order = trading.place_order(
         actor=_actor(),
@@ -4068,7 +4065,7 @@ def test_limit_order_matcher_executes_when_price_reaches_limit(tmp_path):
     assert points.get_wallet(1)["points_frozen"] == 0
     assert order["trial_frozen_points"] == 400
 
-    trading.update_market(actor=root, symbol="ETH/POINTS", manual_price_points=3900, confirm_jump=True)
+    _set_live_price(trading, symbol="ETH/POINTS", price_points=3900)
     matched = trading.match_open_limit_orders(actor={"username": "system", "role": "system"}, limit=10)
 
     assert matched["ok"] is True
@@ -4217,7 +4214,6 @@ def test_margin_positions_use_asset_specific_apr_groups_and_hourly_interest_meta
             "borrow_interest_pool_pressure_multiplier": 0,
             "borrow_interest_interval_hours": 1,
             "borrow_interest_minimum_hours": 1,
-            "price_source": "manual_root",
         },
         markets=[],
     )
@@ -4261,7 +4257,7 @@ def test_trading_volume_stats_accumulate_spot_and_margin_activity_for_future_vip
     points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
     trading.update_root_settings(
         actor=_actor(3, "root", "super_admin"),
-        settings={"borrowing_enabled": True, "price_source": "manual_root"},
+        settings={"borrowing_enabled": True},
         markets=[],
     )
 
@@ -4437,7 +4433,6 @@ def test_margin_interest_accumulates_fractional_carry_for_small_principal(tmp_pa
             "borrowing_enabled": True,
             "borrow_interest_percent_daily": 1,
             "borrow_interest_pool_pressure_multiplier": 0,
-            "price_source": "manual_root",
         },
         markets=[{"symbol": "ETH/POINTS", "manual_price_points": 5000}],
     )
@@ -4531,7 +4526,6 @@ def test_margin_open_requires_buffer_so_liquidation_price_starts_beyond_entry(tm
             "margin_long_financing_percent": 90,
             "short_collateral_percent": 10,
             "margin_maintenance_percent": 15,
-            "price_source": "manual_root",
         },
         markets=[],
     )
@@ -4594,7 +4588,6 @@ def test_margin_risk_includes_break_even_and_interest_raises_thresholds(tmp_path
             "borrow_interest_pool_pressure_multiplier": 0,
             "borrow_interest_interval_hours": 1,
             "borrow_interest_minimum_hours": 1,
-            "price_source": "manual_root",
         },
         markets=[],
     )
@@ -4804,7 +4797,6 @@ def test_short_borrow_position_profit_and_interest_enter_reserve_pool(tmp_path):
             "borrowing_enabled": True,
             "borrow_apr_btc_eth_percent": 100,
             "borrow_interest_pool_pressure_multiplier": 0,
-            "price_source": "manual_root",
         },
         markets=[],
     )
@@ -4825,7 +4817,7 @@ def test_short_borrow_position_profit_and_interest_enter_reserve_pool(tmp_path):
         conn.commit()
     finally:
         conn.close()
-    trading.update_market(actor=_actor(3, "root", "super_admin"), symbol="ETH/POINTS", manual_price_points=4000, confirm_jump=True)
+    _set_live_price(trading, symbol="ETH/POINTS", price_points=4000)
     closed = trading.close_margin_position(actor=_actor(), position_uuid=opened["position"]["position_uuid"])
 
     assert closed["position"]["status"] == "closed"
@@ -4847,7 +4839,6 @@ def test_margin_liquidation_scan_closes_underwater_position(tmp_path):
             "borrow_interest_percent_daily": 0,
             "margin_liquidation_enabled": True,
             "margin_maintenance_percent": 15,
-            "price_source": "manual_root",
         },
         markets=[],
     )
@@ -4859,7 +4850,7 @@ def test_margin_liquidation_scan_closes_underwater_position(tmp_path):
         collateral_points=200,
     )
 
-    trading.update_market(actor=_actor(3, "root", "super_admin"), symbol="ETH/POINTS", manual_price_points=3300, confirm_jump=True)
+    _set_live_price(trading, symbol="ETH/POINTS", price_points=3300)
     result = trading.scan_margin_liquidations(actor={"username": "system", "role": "system"}, limit=10)
 
     assert result["ok"] is True
@@ -5066,7 +5057,6 @@ def test_margin_risk_notification_failure_emits_audit(tmp_path, monkeypatch):
             "borrowing_enabled": True,
             "margin_liquidation_enabled": True,
             "margin_maintenance_percent": 15,
-            "price_source": "manual_root",
         },
         markets=[],
     )
@@ -5077,7 +5067,7 @@ def test_margin_risk_notification_failure_emits_audit(tmp_path, monkeypatch):
         quantity="0.1",
         collateral_points=120,
     )
-    trading.update_market(actor=_actor(3, "root", "super_admin"), symbol="ETH/POINTS", manual_price_points=4550, confirm_jump=True)
+    _set_live_price(trading, symbol="ETH/POINTS", price_points=4550)
 
     def fail_notification(*args, **kwargs):
         raise RuntimeError("notification transport failed")
@@ -5113,7 +5103,6 @@ def test_internal_test_force_liquidation_cannot_read_production_margin_position(
             "borrow_interest_percent_daily": 0,
             "margin_liquidation_enabled": True,
             "margin_maintenance_percent": 15,
-            "price_source": "manual_root",
         },
         markets=[],
     )
@@ -5254,7 +5243,6 @@ def test_cross_margin_free_margin_prevents_single_position_liquidation(tmp_path)
             "borrow_interest_percent_daily": 0,
             "margin_liquidation_enabled": True,
             "margin_maintenance_percent": 15,
-            "price_source": "manual_root",
         },
         markets=[],
     )
@@ -5266,7 +5254,7 @@ def test_cross_margin_free_margin_prevents_single_position_liquidation(tmp_path)
         collateral_points=200,
     )
 
-    trading.update_market(actor=_actor(3, "root", "super_admin"), symbol="ETH/POINTS", manual_price_points=3300, confirm_jump=True)
+    _set_live_price(trading, symbol="ETH/POINTS", price_points=3300)
     dashboard = trading.user_dashboard(user_id=1)
     position_risk = dashboard["margin_positions"][0]["risk"]
     account_risk = dashboard["margin_summary"]
@@ -5290,7 +5278,6 @@ def test_margin_scan_notifies_user_when_position_is_near_liquidation(tmp_path):
             "borrowing_enabled": True,
             "margin_liquidation_enabled": True,
             "margin_maintenance_percent": 15,
-            "price_source": "manual_root",
         },
         markets=[],
     )
@@ -5302,7 +5289,7 @@ def test_margin_scan_notifies_user_when_position_is_near_liquidation(tmp_path):
         collateral_points=120,
     )
 
-    trading.update_market(actor=_actor(3, "root", "super_admin"), symbol="ETH/POINTS", manual_price_points=4550, confirm_jump=True)
+    _set_live_price(trading, symbol="ETH/POINTS", price_points=4550)
     first_scan = trading.scan_margin_liquidations(actor={"username": "system", "role": "system"}, limit=10)
     second_scan = trading.scan_margin_liquidations(actor={"username": "system", "role": "system"}, limit=10)
 
@@ -5323,7 +5310,6 @@ def test_margin_scan_notifies_user_when_price_jumps_sharply(tmp_path):
         settings={
             "borrowing_enabled": True,
             "margin_liquidation_enabled": True,
-            "price_source": "manual_root",
         },
         markets=[],
     )
@@ -5341,7 +5327,7 @@ def test_margin_scan_notifies_user_when_price_jumps_sharply(tmp_path):
         collateral_points=200,
     )
 
-    trading.update_market(actor=_actor(3, "root", "super_admin"), symbol="ETH/POINTS", manual_price_points=5700, confirm_jump=True)
+    _set_live_price(trading, symbol="ETH/POINTS", price_points=5700, max_price_jump_percent=10)
     trading.scan_margin_liquidations(actor={"username": "system", "role": "system"}, limit=10)
     trading.scan_margin_liquidations(actor={"username": "system", "role": "system"}, limit=10)
 

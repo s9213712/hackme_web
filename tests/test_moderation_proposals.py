@@ -3,7 +3,7 @@ import sqlite3
 from flask import Flask, jsonify
 
 from routes.moderation import register_moderation_routes
-from services.governance_records import add_reputation_event, ensure_governance_records_schema
+from services.governance.records import add_reputation_event, ensure_governance_records_schema
 
 
 def _role_rank(role):

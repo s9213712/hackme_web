@@ -1,6 +1,6 @@
 import sqlite3
 
-from services import security_events
+from services.security import events as security_events
 
 
 def _get_db_factory(db_path):

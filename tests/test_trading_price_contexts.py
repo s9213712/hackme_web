@@ -45,6 +45,10 @@ def _services(tmp_path):
     try:
         trading.ensure_schema(conn)
         conn.execute(
+            "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, '2024-01-01T00:00:00', 'test')",
+            ("trading.price_source", "binance_public_api"),
+        )
+        conn.execute(
             "UPDATE trading_markets SET live_price_confirmed_at=COALESCE(live_price_confirmed_at, ?)",
             ("2024-01-01T00:00:00",),
         )
@@ -60,11 +64,6 @@ def _actor(user_id=1, username="alice", role="user"):
 
 def test_dashboard_markets_and_positions_expose_reference_and_risk_grade_contexts(tmp_path):
     _, points, trading = _services(tmp_path)
-    trading.update_root_settings(
-        actor=_actor(2, "root", "super_admin"),
-        settings={"price_source": "manual_root"},
-        markets=[{"symbol": "ETH/POINTS", "manual_price_points": 5000}],
-    )
     points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=5000, action_type="seed")
     trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="0.1")
 
@@ -85,7 +84,7 @@ def test_margin_risk_payload_uses_high_risk_price_mode_and_context(tmp_path, mon
     points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=5000, action_type="seed")
     trading.update_root_settings(
         actor=_actor(2, "root", "super_admin"),
-        settings={"borrowing_enabled": True, "price_source": "manual_root"},
+        settings={"borrowing_enabled": True},
         markets=[{"symbol": "ETH/POINTS", "manual_price_points": 5000}],
     )
     opened = trading.open_margin_position(

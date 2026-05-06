@@ -486,7 +486,9 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "現貨交易機器人" in trading_section
     assert "自動化 Workflow" in trading_section
     assert "定投" in trading_section
-    assert "回測分析" in trading_section
+    assert "定投回測 Dashboard" in trading_section
+    assert "網格回測 Dashboard" in trading_section
+    assert "Workflow 回測 Dashboard" in trading_section
     assert "/trading-workflow-editor.html" in trading_section
     assert 'id="trading-auto-workflow-json"' in trading_section
     assert 'id="trading-workflow-load-btn"' in trading_section
@@ -507,11 +509,19 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert 'id="trading-auto-bot-save-btn"' in trading_section
     assert 'id="trading-dca-bot-save-btn"' in trading_section
     assert 'id="trading-bot-scan-btn"' in trading_section
-    assert 'id="trading-backtest-run-btn"' in trading_section
+    assert 'id="trading-dca-backtest-run-btn"' in trading_section
+    assert 'id="trading-grid-backtest-run-btn"' in trading_section
+    assert 'id="trading-workflow-backtest-run-btn"' in trading_section
     assert 'id="trading-auto-bot-market"' in trading_section
     assert 'id="trading-dca-bot-market"' in trading_section
-    assert 'id="trading-backtest-market"' in trading_section
-    assert 'id="trading-backtest-date-hint"' in trading_section
+    assert 'id="trading-dca-backtest-market"' in trading_section
+    assert 'id="trading-grid-backtest-market"' in trading_section
+    assert 'id="trading-workflow-backtest-market"' in trading_section
+    assert 'id="trading-dca-backtest-date-hint"' in trading_section
+    assert 'id="trading-grid-backtest-date-hint"' in trading_section
+    assert 'id="trading-workflow-backtest-date-hint"' in trading_section
+    assert 'data-trading-bot-tab="backtest"' not in trading_section
+    assert 'id="trading-bot-tab-backtest"' not in trading_section
     assert 'id="trading-bot-type"' not in trading_section
     assert "function saveTradingBot" in trading_js
     assert "function saveTradingDcaBot" in trading_js
@@ -519,6 +529,9 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "function backtestTradingBot" in trading_js
     assert "function formatBacktestDatetimeLocal" in trading_js
     assert "function updateBacktestDateRangeGuidance" in trading_js
+    assert "TRADING_BACKTEST_CONTEXTS" in trading_js
+    assert "function tradingBacktestConfig" in trading_js
+    assert "function tradingBacktestEl" in trading_js
     assert "function tradingBotRecentFills" in trading_js
     assert "function renderTradingBotFillDetails" in trading_js
     assert "function increaseTradingBotMaxRuns" in trading_js
@@ -567,6 +580,9 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "後端自動分" in trading_js
     assert "資料來源" in trading_js
     assert "prepareTradingBacktestFromBot" in trading_js
+    assert 'trading-dca-backtest-run-btn' in trading_js
+    assert 'trading-grid-backtest-run-btn' in trading_js
+    assert 'trading-workflow-backtest-run-btn' in trading_js
     assert '"/trading/bots/scan"' in trading_js
     assert '"/trading/bots/backtest"' in trading_js
     assert "tradingState.bots" in trading_js
