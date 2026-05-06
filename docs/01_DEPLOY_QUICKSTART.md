@@ -42,16 +42,26 @@ python3 server.py
 
 ### 第一次啟動後要確認
 
-1. 能打開啟動訊息中的網址，預設通常是 `http://127.0.0.1:5000/`。
-   如果你是直接執行 `python3 server.py`，本機預設通常會是
-   `https://127.0.0.1:5000/`，因為開發模式會自動準備本地 TLS 憑證。
-2. `GET /api/version` 有回應。
-3. 你知道 bootstrap 帳號：
+1. 先看 server console 印出的實際 URL，不要先假設一定是 HTTP 或 HTTPS。
+2. 一般情況：
+   - `./deploy.sh` / production wizard：依設定可能是 HTTP 或 HTTPS
+   - `python3 server.py`：本機開發模式通常會自動準備本地 TLS，因此多半是
+     `https://127.0.0.1:5000/`
+3. 若不確定，直接探測：
+
+   ```bash
+   for scheme in https http; do
+     curl -ksSf "${scheme}://127.0.0.1:5000/api/version" && echo "$scheme works"
+   done
+   ```
+
+4. `GET /api/version` 有回應。
+5. 你知道 bootstrap 帳號：
    - `root/root`
    - `admin/admin`
    - `test/test`
-4. 第一次登入後，預設密碼會被要求立刻修改。
-5. 改完 bootstrap 密碼後，請重新登入；高權限 session 會被立即撤銷，這是預期安全行為。
+6. 第一次登入後，預設密碼會被要求立刻修改。
+7. 改完 bootstrap 密碼後，請重新登入；高權限 session 會被立即撤銷，這是預期安全行為。
 
 ### 若要改第一次密碼
 
@@ -68,10 +78,12 @@ python3 scripts/pre_push_checks.py
 security/run_functional_smoke.sh --port 50741
 ```
 
-如果你只想看版本與頁面是否起來：
+如果你只想先看版本：
 
 ```bash
-curl -k -sS https://127.0.0.1:5000/api/version
+for scheme in https http; do
+  curl -ksSf "${scheme}://127.0.0.1:5000/api/version" && echo "$scheme works"
+done
 ```
 
 ## 原理
@@ -105,7 +117,7 @@ curl -k -sS https://127.0.0.1:5000/api/version
 
 - `python3 scripts/pre_push_checks.py`
 - `security/run_functional_smoke.sh --port 50741`
-- `curl -k -sS https://127.0.0.1:5000/api/version`
+- `for scheme in https http; do curl -ksSf "${scheme}://127.0.0.1:5000/api/version" && echo "$scheme works"; done`
 - 手動登入 `root`，確認首頁、設定頁、主要模組頁可載入
 
 ## 相關文件連結

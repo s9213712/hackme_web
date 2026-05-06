@@ -146,7 +146,7 @@
 
 ## 相關文件
 
-- [README.zh-TW.md](README.zh-TW.md)
-- [For_developer.md](For_developer.md)
+- [README.zh-TW.md](../README.zh-TW.md)
+- [For_developer.md](../For_developer.md)
 - [QA_MISSION_FOR_AGENTS.md](QA_MISSION_FOR_AGENTS.md)
-- [security/PRE_RELEASE_CHECKLIST.md](security/PRE_RELEASE_CHECKLIST.md)
+- [security/PRE_RELEASE_CHECKLIST.md](../security/PRE_RELEASE_CHECKLIST.md)

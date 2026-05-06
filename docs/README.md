@@ -1,5 +1,8 @@
 # Documentation Map
 
+Use this file as the canonical doc index. Entry docs should point back here
+instead of repeating deep feature narratives.
+
 The repository root keeps only [README.md](../README.md) and
 [SECURITY.md](../SECURITY.md). Everything else lives here.
 
@@ -38,8 +41,11 @@ The repository root keeps only [README.md](../README.md) and
 ## Deep Reference
 
 - [API_REFERENCE.md](API_REFERENCE.md): canonical implemented API route map
+- [BACKTEST_CAPACITY_AND_TEMPLATE_BENCHMARKS.md](BACKTEST_CAPACITY_AND_TEMPLATE_BENCHMARKS.md): trading backtest cap measurement and benchmark asset notes
+- [BTC_TRADE_INTEGRATION.md](BTC_TRADE_INTEGRATION.md): external BTC_trade repo integration and operator flow
 - [CLI_ADMIN_PLAYBOOK.md](CLI_ADMIN_PLAYBOOK.md): curl/cmd playbook for root,
   admin, and developer operations
+- [COMFYUI_ADMIN.md](COMFYUI_ADMIN.md): root/admin-only ComfyUI and Civitai operations
 - [For_developer.md](For_developer.md): API, schema, runtime layout, feature flags
 - [ENCRYPTION_RUNTIME_BOUNDARY.md](ENCRYPTION_RUNTIME_BOUNDARY.md): what a
   runtime engineer can decrypt vs what strict E2EE still protects

@@ -10,7 +10,7 @@
 - [ ] 負責人：
 - [ ] 檢查日期：
 - [ ] 若本次包含上線新功能，Release ID 尾碼已 +1，且 README / For_developer / `services/release_info.py` 已同步。
-- [ ] 若本次有功能新增、修改或重構，已依 [RULES_FOR_AGENTS.md](../RULES_FOR_AGENTS.md) 檢查文件、測試、錯誤回饋、手機版與伺服器端驗證。
+- [ ] 若本次有功能新增、修改或重構，已依 [RULES_FOR_AGENTS.md](../AGENTS/RULES_FOR_AGENTS.md) 檢查文件、測試、錯誤回饋、手機版與伺服器端驗證。
 
 ## 必要阻擋項目
 

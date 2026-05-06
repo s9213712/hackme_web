@@ -309,7 +309,7 @@ PYTHONPATH=. python3 scripts/trading_backtest_20000_probe.py --include-route --j
 
 ## 相關文件連結
 
-- [QA_MISSION_FOR_AGENTS.md](QA_MISSION_FOR_AGENTS.md)
+- [AGENTS/QA_MISSION_FOR_AGENTS.md](AGENTS/QA_MISSION_FOR_AGENTS.md)
 - [AGENTS/TRADING_QA_REGRESSION_MATRIX.md](AGENTS/TRADING_QA_REGRESSION_MATRIX.md)
 - [security/FUNCTIONAL_SMOKE.md](security/FUNCTIONAL_SMOKE.md)
 - [security/PENTEST.md](security/PENTEST.md)
