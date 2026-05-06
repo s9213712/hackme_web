@@ -70,13 +70,23 @@
   黃燈需二次確認，避免看起來有價差但扣完費其實虧損
 - 價格來源失效、價格跳動過大或借貸池不足時，系統應 fail closed
 - Backtest 現在把「總上限」和「內部分段上限」拆開：單次請求總上限為
-  `20,000` 根 K 線，內部分段每批最多 `10,000` 根；因此像
+  `trading.backtest_max_candles`（預設 `20,000`，root 可在交易設定頁調整），
+  內部分段每批最多 `10,000` 根；因此像
   `BTC/USDT 2024-01-01 ~ 2024-12-31 @ 1h` 這類全年回測現在可直接執行，
   而且不需要前端自己切成多次獨立回測
-- 回測日期欄位不再只丟給使用者一個 `20,000` 根上限。前端會依目前週期，
-  即時計算「若保留開始時間，結束最晚可選到哪裡」與
+- 回測日期欄位不再只丟給使用者一個 `20,000` 根上限。前端會依目前週期 +
+  目前 `backtest_max_candles` 設定，即時計算「若保留開始時間，結束最晚可選到哪裡」與
   「若保留結束時間，開始最早可選到哪裡」，並同步收斂 `datetime-local`
   欄位的可選範圍
+- **Backtest cap 是動態 setting，不是寫死的常數**：
+  `services/trading_engine.py` 仍保留 `MAX_BACKTEST_CANDLES = 20_000` 作為
+  fallback，但實際 cap 透過 `trading_service.get_max_backtest_candles()` 取出。
+  Root 可改的範圍是 `1,000 – 10,000,000`。
+- **首次啟動會自動量測本機回測上限**：
+  `services/server/startup.py:measure_backtest_capacity_if_needed` 在
+  daemon thread 跑一輪 15 種 bot 的 probe（3 基本 + 12 system workflow），
+  取最慢者作為「本機在 60 秒內可跑的根數」，自動填入 `backtest_max_candles`。
+  方法/原理/實測結果見 [`BACKTEST_CAPACITY_AND_TEMPLATE_BENCHMARKS.md`](BACKTEST_CAPACITY_AND_TEMPLATE_BENCHMARKS.md)。
 
 ## 失敗情境與提示
 

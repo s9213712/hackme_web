@@ -1,0 +1,89 @@
+{
+  "id": "adaptive_profit_ladder_claude",
+  "label": "階梯式獲利了結（Claude）",
+  "description": "RSI < 30 進場買入 30%，獲利 8% 賣 25%、15% 賣 33%、25% 賣 50%、虧損 8% 全平。透過分批了結讓部分倉位能吃到大行情。",
+  "scope": "system",
+  "explanation": {
+    "purpose": "解決 full_entry_exit「固定 15% 全平」會錯失大行情的問題：分階段了結讓部分倉位繼續持有，但又能逐步鎖利。",
+    "entry_conditions": [
+      "RSI 跌破 30（極度超賣信號），且空倉。",
+      "進場後 12 小時冷卻避免在底部反覆觸發。"
+    ],
+    "actions": [
+      "進場：以可用資金 30% 市價買入。",
+      "獲利 8%：賣出 25%（鎖第一波獲利）。",
+      "獲利 15%：賣出 33%（鎖中段獲利）。",
+      "獲利 25%：賣出 50%（鎖大段獲利，剩餘倉位繼續吃趨勢）。",
+      "虧損 8%：全平止損。"
+    ],
+    "risk_notes": [
+      "三階段了結會讓最後 1/4 倉位「裸奔」吃趨勢，若反轉會回吐部分浮盈。",
+      "RSI < 30 在持續下跌行情中可能多次出現，需配合冷卻避免追跌。",
+      "如果是震盪行情，分階段了結反而比一次性了結遜色（因為第二、三階段不會觸發）。"
+    ],
+    "best_for": [
+      "趨勢明確的市場：先鎖部分利潤再讓贏家奔跑。",
+      "想驗證「半倉策略」與「全進全出」的差異。"
+    ],
+    "tuning": [
+      "8 / 15 / 25 三個獲利階梯可視波動率調整（高波動拉寬，低波動縮窄）。",
+      "進場 RSI 30 改為 25 會更嚴格，35 會更寬鬆。",
+      "止損 8% 對應策略風險偏好。"
+    ]
+  },
+  "workflow": {
+    "version": 2,
+    "strategy_kind": "workflow_graph",
+    "source": "system_template",
+    "name": "階梯式獲利了結（Claude）",
+    "description": "RSI 進場 + 三階段了結 + 止損",
+    "start_node_id": "start",
+    "nodes": [
+      { "id": "start",        "type": "start",     "label": "開始",          "x":  80, "y": 410 },
+      { "id": "rsi_oversold", "type": "condition", "label": "RSI ≤ 30",     "x": 260, "y": 100, "condition": { "type": "rsi_below", "value": 30 } },
+      { "id": "no_pos",       "type": "condition", "label": "空倉",          "x": 260, "y": 200, "condition": { "type": "has_position", "value": false } },
+      { "id": "entry_and",    "type": "logic",     "label": "AND",           "x": 460, "y": 150, "operator": "AND" },
+      { "id": "cd_entry",     "type": "control",   "label": "冷卻 12h",      "x": 620, "y": 150, "cooldown_seconds": 43200, "max_runs": 100 },
+      { "id": "buy_30",       "type": "action",    "label": "買入 30%",      "x": 800, "y": 150, "priority": 10, "action": { "type": "buy_percent", "percent": 30, "step": 1, "order_type": "market" } },
+      { "id": "tp1_cond",     "type": "condition", "label": "獲利 ≥ 8%",    "x": 260, "y": 320, "condition": { "type": "take_profit_percent", "value": 8 } },
+      { "id": "has_tp1",      "type": "condition", "label": "已有持倉",      "x": 260, "y": 400, "condition": { "type": "has_position", "value": true } },
+      { "id": "tp1_and",      "type": "logic",     "label": "AND",           "x": 480, "y": 360, "operator": "AND" },
+      { "id": "tp1_sell",     "type": "action",    "label": "賣出 25%",      "x": 700, "y": 360, "priority": 40, "action": { "type": "sell_percent", "percent": 25, "step": 1, "order_type": "market" } },
+      { "id": "tp2_cond",     "type": "condition", "label": "獲利 ≥ 15%",   "x": 260, "y": 500, "condition": { "type": "take_profit_percent", "value": 15 } },
+      { "id": "has_tp2",      "type": "condition", "label": "已有持倉",      "x": 260, "y": 580, "condition": { "type": "has_position", "value": true } },
+      { "id": "tp2_and",      "type": "logic",     "label": "AND",           "x": 480, "y": 540, "operator": "AND" },
+      { "id": "tp2_sell",     "type": "action",    "label": "賣出 33%",      "x": 700, "y": 540, "priority": 50, "action": { "type": "sell_percent", "percent": 33, "step": 2, "order_type": "market" } },
+      { "id": "tp3_cond",     "type": "condition", "label": "獲利 ≥ 25%",   "x": 260, "y": 680, "condition": { "type": "take_profit_percent", "value": 25 } },
+      { "id": "has_tp3",      "type": "condition", "label": "已有持倉",      "x": 260, "y": 760, "condition": { "type": "has_position", "value": true } },
+      { "id": "tp3_and",      "type": "logic",     "label": "AND",           "x": 480, "y": 720, "operator": "AND" },
+      { "id": "tp3_sell",     "type": "action",    "label": "賣出 50%",      "x": 700, "y": 720, "priority": 60, "action": { "type": "sell_percent", "percent": 50, "step": 3, "order_type": "market" } },
+      { "id": "sl_cond",      "type": "condition", "label": "虧損 ≥ 8%",    "x": 260, "y": 880, "condition": { "type": "stop_loss_percent", "value": 8 } },
+      { "id": "sl_close",     "type": "action",    "label": "止損全平",      "x": 700, "y": 880, "priority": 100, "action": { "type": "close_all", "step": 1, "order_type": "market" } }
+    ],
+    "edges": [
+      { "id": "e_s_rsi",   "from": "start",        "from_port": "out",  "to": "rsi_oversold", "to_port": "in" },
+      { "id": "e_s_np",    "from": "start",        "from_port": "out",  "to": "no_pos",       "to_port": "in" },
+      { "id": "e_rs_and",  "from": "rsi_oversold", "from_port": "true", "to": "entry_and",    "to_port": "in" },
+      { "id": "e_np_and",  "from": "no_pos",       "from_port": "true", "to": "entry_and",    "to_port": "in" },
+      { "id": "e_and_cd",  "from": "entry_and",    "from_port": "true", "to": "cd_entry",     "to_port": "in" },
+      { "id": "e_cd_buy",  "from": "cd_entry",     "from_port": "then", "to": "buy_30",       "to_port": "in" },
+      { "id": "e_s_tp1",   "from": "start",        "from_port": "out",  "to": "tp1_cond",     "to_port": "in" },
+      { "id": "e_s_htp1",  "from": "start",        "from_port": "out",  "to": "has_tp1",      "to_port": "in" },
+      { "id": "e_tp1_and", "from": "tp1_cond",     "from_port": "true", "to": "tp1_and",      "to_port": "in" },
+      { "id": "e_h1_and",  "from": "has_tp1",      "from_port": "true", "to": "tp1_and",      "to_port": "in" },
+      { "id": "e_a1_sell", "from": "tp1_and",      "from_port": "true", "to": "tp1_sell",     "to_port": "in" },
+      { "id": "e_s_tp2",   "from": "start",        "from_port": "out",  "to": "tp2_cond",     "to_port": "in" },
+      { "id": "e_s_htp2",  "from": "start",        "from_port": "out",  "to": "has_tp2",      "to_port": "in" },
+      { "id": "e_tp2_and", "from": "tp2_cond",     "from_port": "true", "to": "tp2_and",      "to_port": "in" },
+      { "id": "e_h2_and",  "from": "has_tp2",      "from_port": "true", "to": "tp2_and",      "to_port": "in" },
+      { "id": "e_a2_sell", "from": "tp2_and",      "from_port": "true", "to": "tp2_sell",     "to_port": "in" },
+      { "id": "e_s_tp3",   "from": "start",        "from_port": "out",  "to": "tp3_cond",     "to_port": "in" },
+      { "id": "e_s_htp3",  "from": "start",        "from_port": "out",  "to": "has_tp3",      "to_port": "in" },
+      { "id": "e_tp3_and", "from": "tp3_cond",     "from_port": "true", "to": "tp3_and",      "to_port": "in" },
+      { "id": "e_h3_and",  "from": "has_tp3",      "from_port": "true", "to": "tp3_and",      "to_port": "in" },
+      { "id": "e_a3_sell", "from": "tp3_and",      "from_port": "true", "to": "tp3_sell",     "to_port": "in" },
+      { "id": "e_s_sl",    "from": "start",        "from_port": "out",  "to": "sl_cond",      "to_port": "in" },
+      { "id": "e_sl",      "from": "sl_cond",      "from_port": "true", "to": "sl_close",     "to_port": "in" }
+    ]
+  }
+}

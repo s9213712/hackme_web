@@ -26,6 +26,18 @@ Custom templates are stored per user under `workflows/custom/<username>/`.
 | `full_entry_exit.json` | 完整進出場策略 | 進場+風控 | price≤門檻+空倉→買 / SL 10%→全平 / TP 15%→全平 | buy 80% / close_all |
 | `staged_profit_taking.json` | 分批獲利了結 | 分批出場+風控 | SL 8%→全平 / TP 20%→全平 / TP 10%+持倉→賣40% | close_all / sell 40% |
 
+#### Claude 設計範本（2026-05-06 新增 5 個）
+
+| 檔案 | 名稱 | 策略角度 | 條件 | 動作 |
+|------|------|----------|------|------|
+| `trend_pyramid_claude.json` | 趨勢加碼 | 進場+加碼+趨勢出場 | MA50↑+RSI≥50+空倉→買30% / MA50↑+RSI<50+持倉→加碼25% / MA50↓+持倉→全平 / SL 10% | buy 30% / buy 25% / close_all |
+| `adaptive_profit_ladder_claude.json` | 階梯式獲利了結 | 三階段了結 | RSI≤30+空倉→買30% / TP 8%→賣25% / TP 15%→賣33% / TP 25%→賣50% / SL 8% | buy 30% / sell 25/33/50% / close_all |
+| `golden_cross_dual_ma_claude.json` | 雙均線黃金交叉 | 重倉趨勢追隨 | MA50↑+MA200↑+空倉→買50% / MA50↓+持倉→全平 / SL 12% | buy 50% / close_all |
+| `triple_confirmation_dip_claude.json` | 三重確認逢低買 | 多重確認進場 | RSI≤30+BB下軌+MA200↑+空倉→買40% / TP 18%→賣60% / SL 9% | buy 40% / sell 60% / close_all |
+| `bb_breakout_momentum_claude.json` | 布林上軌動能突破 | 突破動能 | BB上軌+RSI 50–70+MA50↑+空倉→買25% / TP 10%→賣40% / TP 20%→賣60% / SL 6% | buy 25% / sell 40/60% / close_all |
+
+> 設計動機與 5 種 K 線歷史回測排名見 [`docs/BACKTEST_CAPACITY_AND_TEMPLATE_BENCHMARKS.md`](../docs/BACKTEST_CAPACITY_AND_TEMPLATE_BENCHMARKS.md)。
+
 ### 欄位說明
 
 每個 JSON 檔包含：

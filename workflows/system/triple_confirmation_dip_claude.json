@@ -1,0 +1,78 @@
+{
+  "id": "triple_confirmation_dip_claude",
+  "label": "三重確認逢低買（Claude）",
+  "description": "RSI < 30 + 布林下軌 + 仍站上 MA200 三重確認後重倉買入 40%，獲利 18% 賣 60%，止損 9%。透過多重過濾減少假訊號。",
+  "scope": "system",
+  "explanation": {
+    "purpose": "解決 RSI 單獨使用時假訊號多的問題：要求 RSI 超賣 + BB 下軌 + 長期趨勢仍向上 三者同時成立才進場，把進場條件壓到極苛刻，但訊號出現時勝率較高。",
+    "entry_conditions": [
+      "RSI < 30（極度超賣）。",
+      "價格跌破布林下軌（短期偏離過大）。",
+      "價格仍站上 MA200（長期趨勢向上，避免接刀）。",
+      "目前空倉。",
+      "四個條件同時成立。"
+    ],
+    "actions": [
+      "進場：以可用資金 40% 市價買入。",
+      "獲利 18%：賣出 60%（鎖大段獲利）。",
+      "止損：虧損達 9% 全平。"
+    ],
+    "risk_notes": [
+      "訊號很稀疏：5 年中可能只觸發 1-3 次，但勝率高。",
+      "MA200 過濾排除空頭循環，因此空頭市場時這個範本不會進場。",
+      "獲利 18% 才賣 60% 較積極，剩餘 40% 沒有出場條件，需手動處理。"
+    ],
+    "best_for": [
+      "牛市中的回檔、震盪後的破底反彈。",
+      "想要訊號少但勝率高的使用者。"
+    ],
+    "tuning": [
+      "RSI 30 / BB 下軌 / MA200 三個過濾任一放寬都會明顯增加觸發次數但降低勝率。",
+      "進場 40% 可調 30%-50% 視風險偏好。",
+      "獲利 18% 可改為分階段（10/20/30% 階梯）讓剩餘倉位繼續吃趨勢。"
+    ]
+  },
+  "workflow": {
+    "version": 2,
+    "strategy_kind": "workflow_graph",
+    "source": "system_template",
+    "name": "三重確認逢低買（Claude）",
+    "description": "RSI + BB + MA200 三重確認進場 + 中位獲利了結",
+    "start_node_id": "start",
+    "nodes": [
+      { "id": "start",       "type": "start",     "label": "開始",            "x":  80, "y": 350 },
+      { "id": "rsi_oversold","type": "condition", "label": "RSI ≤ 30",        "x": 260, "y":  80, "condition": { "type": "rsi_below", "value": 30 } },
+      { "id": "bb_lower",    "type": "condition", "label": "跌破布林下軌",    "x": 260, "y": 170, "condition": { "type": "bb_position", "position": "below_lower" } },
+      { "id": "above_ma200", "type": "condition", "label": "仍站上 MA200",    "x": 260, "y": 260, "condition": { "type": "ma_position", "period": 200, "position": "above" } },
+      { "id": "no_pos",      "type": "condition", "label": "空倉",            "x": 260, "y": 350, "condition": { "type": "has_position", "value": false } },
+      { "id": "entry_and",   "type": "logic",     "label": "AND",             "x": 480, "y": 220, "operator": "AND" },
+      { "id": "cd_entry",    "type": "control",   "label": "冷卻 24h",        "x": 640, "y": 220, "cooldown_seconds": 86400, "max_runs": 100 },
+      { "id": "buy_40",      "type": "action",    "label": "買入 40%",        "x": 820, "y": 220, "priority": 15, "action": { "type": "buy_percent", "percent": 40, "step": 1, "order_type": "market" } },
+      { "id": "tp_cond",     "type": "condition", "label": "獲利 ≥ 18%",     "x": 260, "y": 480, "condition": { "type": "take_profit_percent", "value": 18 } },
+      { "id": "has_pos_tp",  "type": "condition", "label": "已有持倉",        "x": 260, "y": 570, "condition": { "type": "has_position", "value": true } },
+      { "id": "tp_and",      "type": "logic",     "label": "AND",             "x": 480, "y": 530, "operator": "AND" },
+      { "id": "tp_sell",     "type": "action",    "label": "賣出 60%",        "x": 700, "y": 530, "priority": 60, "action": { "type": "sell_percent", "percent": 60, "step": 1, "order_type": "market" } },
+      { "id": "sl_cond",     "type": "condition", "label": "虧損 ≥ 9%",      "x": 260, "y": 700, "condition": { "type": "stop_loss_percent", "value": 9 } },
+      { "id": "sl_close",    "type": "action",    "label": "止損全平",        "x": 700, "y": 700, "priority": 100, "action": { "type": "close_all", "step": 1, "order_type": "market" } }
+    ],
+    "edges": [
+      { "id": "e_s_rs",   "from": "start",        "from_port": "out",  "to": "rsi_oversold", "to_port": "in" },
+      { "id": "e_s_bb",   "from": "start",        "from_port": "out",  "to": "bb_lower",     "to_port": "in" },
+      { "id": "e_s_ma",   "from": "start",        "from_port": "out",  "to": "above_ma200",  "to_port": "in" },
+      { "id": "e_s_np",   "from": "start",        "from_port": "out",  "to": "no_pos",       "to_port": "in" },
+      { "id": "e_rs_an",  "from": "rsi_oversold", "from_port": "true", "to": "entry_and",    "to_port": "in" },
+      { "id": "e_bb_an",  "from": "bb_lower",     "from_port": "true", "to": "entry_and",    "to_port": "in" },
+      { "id": "e_ma_an",  "from": "above_ma200",  "from_port": "true", "to": "entry_and",    "to_port": "in" },
+      { "id": "e_np_an",  "from": "no_pos",       "from_port": "true", "to": "entry_and",    "to_port": "in" },
+      { "id": "e_an_cd",  "from": "entry_and",    "from_port": "true", "to": "cd_entry",     "to_port": "in" },
+      { "id": "e_cd_buy", "from": "cd_entry",     "from_port": "then", "to": "buy_40",       "to_port": "in" },
+      { "id": "e_s_tp",   "from": "start",        "from_port": "out",  "to": "tp_cond",      "to_port": "in" },
+      { "id": "e_s_htp",  "from": "start",        "from_port": "out",  "to": "has_pos_tp",   "to_port": "in" },
+      { "id": "e_tp_and", "from": "tp_cond",      "from_port": "true", "to": "tp_and",       "to_port": "in" },
+      { "id": "e_htp_an", "from": "has_pos_tp",   "from_port": "true", "to": "tp_and",       "to_port": "in" },
+      { "id": "e_tp_sel", "from": "tp_and",       "from_port": "true", "to": "tp_sell",      "to_port": "in" },
+      { "id": "e_s_sl",   "from": "start",        "from_port": "out",  "to": "sl_cond",      "to_port": "in" },
+      { "id": "e_sl",     "from": "sl_cond",      "from_port": "true", "to": "sl_close",     "to_port": "in" }
+    ]
+  }
+}
