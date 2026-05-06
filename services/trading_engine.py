@@ -30,6 +30,23 @@ from services.trading.accounting.core import (
     quantity_to_units,
     units_to_quantity,
 )
+from services.trading.accounting.funding_pool import (
+    funding_pool_outstanding_principal,
+    funding_pool_payload,
+)
+from services.trading.accounting.interest import (
+    margin_interest_due_micropoints,
+    margin_interest_due_points,
+    margin_interest_points,
+    margin_interest_total_hours,
+)
+from services.trading.accounting.trial_credit import (
+    trial_allocate_sell_result,
+    trial_credit_expires_at,
+    trial_credit_payload,
+    trial_credit_status_after_delta,
+    trial_units_for_buy,
+)
 from services.trading.audit import emit_trading_audit_event
 from services.trading.constants import (
     APR_DAYS_PER_YEAR,
@@ -115,6 +132,14 @@ from services.trading.bots.workflow import (
     workflow_condition_hit,
     workflow_decision,
     workflow_graph_decision,
+)
+from services.trading.bots.audit import (
+    bot_audit_enabled_at,
+    bot_audit_is_eligible,
+    bot_audit_latest_map,
+    bot_audit_result,
+    build_bot_audit_dashboard_item,
+    increment_audit_summary,
 )
 from services.trading.backtest import (
     backtest_anchor_price,
@@ -2223,7 +2248,7 @@ class TradingEngineService:
             WHERE event_type='margin_principal_repaid'
             """
         ).fetchone()[0] or 0)
-        return max(0, abs(lent) - repaid)
+        return funding_pool_outstanding_principal(lent=lent, repaid=repaid)
 
     def _borrow_apr_percent_for_asset(self, settings, *, asset_symbol):
         group = _borrow_apr_group_for_asset(asset_symbol)
@@ -2245,38 +2270,22 @@ class TradingEngineService:
         settings = self._settings_payload(conn)
         balance = int(reserve["balance_points"] or 0)
         outstanding = self._funding_pool_outstanding_principal(conn)
-        requested = max(0, int(requested_principal or 0))
-        capacity = max(0, balance + outstanding)
-        projected_balance = max(0, balance - requested)
-        projected_outstanding = outstanding + requested
-        projected_capacity = max(0, projected_balance + projected_outstanding)
-        utilization = (outstanding / capacity) if capacity > 0 else 0.0
-        projected_utilization = (projected_outstanding / projected_capacity) if projected_capacity > 0 else 1.0
         borrowed_asset = str(borrowed_asset or "POINTS").strip().upper() or "POINTS"
         base_apr = self._borrow_apr_percent_for_asset(settings, asset_symbol=borrowed_asset)
-        base_rate = _daily_percent_from_apr(base_apr)
         raw_pressure = settings.get("borrow_interest_pool_pressure_multiplier")
         pressure = float(TRADING_FUNDING_POOL_PRESSURE_MULTIPLIER if raw_pressure is None else raw_pressure)
-        effective_rate = base_rate * (1.0 + max(0.0, utilization) * max(0.0, pressure))
-        projected_rate = base_rate * (1.0 + max(0.0, projected_utilization) * max(0.0, pressure))
-        return {
-            "name": "資金池",
-            "initial_points": TRADING_FUNDING_POOL_INITIAL_POINTS,
-            "balance_points": balance,
-            "available_points": balance,
-            "outstanding_principal_points": outstanding,
-            "capacity_points": capacity,
-            "utilization_percent": round(utilization * 100, 4),
-            "projected_utilization_percent": round(projected_utilization * 100, 4),
-            "borrowed_asset_symbol": borrowed_asset,
-            "base_interest_apr_percent": round(base_apr, 8),
-            "effective_interest_apr_percent": round(_apr_percent_from_daily(effective_rate), 8),
-            "projected_interest_apr_percent": round(_apr_percent_from_daily(projected_rate), 8),
-            "base_interest_percent_daily": round(base_rate, 8),
-            "interest_pool_pressure_multiplier": round(pressure, 8),
-            "effective_interest_percent_daily": round(effective_rate, 8),
-            "projected_interest_percent_daily": round(projected_rate, 8),
-        }
+        payload = funding_pool_payload(
+            balance=balance,
+            outstanding=outstanding,
+            requested_principal=requested_principal,
+            borrowed_asset=borrowed_asset,
+            base_apr=base_apr,
+            pressure=pressure,
+            initial_points=TRADING_FUNDING_POOL_INITIAL_POINTS,
+            daily_from_apr=_daily_percent_from_apr,
+            apr_from_daily=_apr_percent_from_daily,
+        )
+        return payload
 
     def _reserve_delta(self, conn, *, delta, event_type, reason, actor=None, source_user_id=None, order_id=None, fill_id=None, points_ledger_uuid=None):
         reserve = self._reserve(conn)
@@ -5696,7 +5705,7 @@ class TradingEngineService:
         row = self._trial_credit_row(conn, user_id)
         now = _now()
         if not row:
-            expires_at = (datetime.fromisoformat(now) + timedelta(days=TRIAL_CREDIT_DAYS)).isoformat()
+            expires_at = trial_credit_expires_at(now, days_valid=TRIAL_CREDIT_DAYS)
             conn.execute(
                 """
                 INSERT INTO trading_trial_credits (
@@ -5755,9 +5764,12 @@ class TradingEngineService:
         next_deployed = int(row["deployed_points"] or 0) + int(deployed_delta)
         if min(next_available, next_locked, next_deployed) < 0:
             raise ValueError("trial credit accounting would become negative")
-        next_status = status or row["status"]
-        if next_status == "active" and next_available == 0 and next_locked == 0 and next_deployed == 0:
-            next_status = "depleted"
+        next_status = trial_credit_status_after_delta(
+            status or row["status"],
+            next_available=next_available,
+            next_locked=next_locked,
+            next_deployed=next_deployed,
+        )
         conn.execute(
             """
             UPDATE trading_trial_credits
@@ -5810,11 +5822,11 @@ class TradingEngineService:
         trial_used_points = int(trial_used_points or 0)
         if trial_used_points <= 0:
             return 0
-        total_points = max(1, int(total_points or 0))
-        trial_units = int(quantity_units) if trial_used_points >= total_points else int((int(quantity_units) * trial_used_points) // total_points)
-        if trial_units <= 0:
-            trial_units = 1
-        trial_units = min(int(quantity_units), trial_units)
+        trial_units = trial_units_for_buy(
+            quantity_units=quantity_units,
+            trial_used_points=trial_used_points,
+            total_points=total_points,
+        )
         self._trial_delta(conn, user_id, locked_delta=-trial_used_points, deployed_delta=trial_used_points)
         trial_pos = self._trial_position(conn, user_id, market_symbol)
         conn.execute(
@@ -5835,38 +5847,32 @@ class TradingEngineService:
 
     def _trial_allocate_sell(self, conn, *, user_id, market_symbol, quantity_units, net_credit_points):
         trial_pos = self._trial_position(conn, user_id, market_symbol)
-        available_trial_units = int(trial_pos["quantity_units"] or 0)
-        trial_cost_total = int(trial_pos["trial_cost_points"] or 0)
-        quantity_units = int(quantity_units)
-        net_credit_points = int(net_credit_points or 0)
-        if available_trial_units <= 0 or trial_cost_total <= 0 or quantity_units <= 0 or net_credit_points <= 0:
-            return {"trial_units": 0, "trial_cost_points": 0, "trial_repaid_points": 0, "trial_profit_points": 0, "wallet_credit_points": net_credit_points}
-        trial_units = min(available_trial_units, quantity_units)
-        if trial_units == available_trial_units:
-            trial_cost = trial_cost_total
-        else:
-            trial_cost = int(math.ceil(trial_cost_total * trial_units / available_trial_units))
-        trial_net_credit = int(math.floor(net_credit_points * trial_units / quantity_units))
-        trial_repaid = min(trial_net_credit, trial_cost)
-        trial_profit = max(0, trial_net_credit - trial_cost)
-        wallet_credit = max(0, net_credit_points - trial_repaid)
-        remaining_units = max(0, available_trial_units - trial_units)
-        remaining_cost = max(0, trial_cost_total - trial_cost)
+        allocation = trial_allocate_sell_result(
+            available_trial_units=int(trial_pos["quantity_units"] or 0),
+            trial_cost_total=int(trial_pos["trial_cost_points"] or 0),
+            quantity_units=quantity_units,
+            net_credit_points=net_credit_points,
+        )
         conn.execute(
             """
             UPDATE trading_trial_position_costs
             SET quantity_units=?, trial_cost_points=?, updated_at=?
             WHERE user_id=? AND market_symbol=?
             """,
-            (remaining_units, remaining_cost, _now(), int(user_id), market_symbol),
+            (allocation["remaining_units"], allocation["remaining_cost"], _now(), int(user_id), market_symbol),
         )
-        self._trial_delta(conn, user_id, available_delta=trial_repaid, deployed_delta=-trial_cost)
+        self._trial_delta(
+            conn,
+            user_id,
+            available_delta=allocation["trial_repaid_points"],
+            deployed_delta=-allocation["trial_cost_points"],
+        )
         return {
-            "trial_units": trial_units,
-            "trial_cost_points": trial_cost,
-            "trial_repaid_points": trial_repaid,
-            "trial_profit_points": trial_profit,
-            "wallet_credit_points": wallet_credit,
+            "trial_units": allocation["trial_units"],
+            "trial_cost_points": allocation["trial_cost_points"],
+            "trial_repaid_points": allocation["trial_repaid_points"],
+            "trial_profit_points": allocation["trial_profit_points"],
+            "wallet_credit_points": allocation["wallet_credit_points"],
         }
 
     def _cancel_trial_reclaim_sell_orders(self, conn, user_id, *, actor, reason, ctx=None):
@@ -6102,17 +6108,7 @@ class TradingEngineService:
         wallet_locked = int(payload.get("points_frozen") or 0)
         trial_payload = None
         if trial:
-            trial_payload = {
-                "initial_points": int(trial["initial_points"] or 0),
-                "available_points": int(trial["available_points"] or 0),
-                "locked_points": int(trial["locked_points"] or 0),
-                "deployed_points": int(trial["deployed_points"] or 0),
-                "status": trial["status"],
-                "activated_at": trial["activated_at"],
-                "expires_at": trial["expires_at"],
-                "reclaimed_at": trial["reclaimed_at"],
-                "days_valid": TRIAL_CREDIT_DAYS,
-            }
+            trial_payload = trial_credit_payload(trial, days_valid=TRIAL_CREDIT_DAYS)
         return {
             "mode": "points_chain",
             "available_points": wallet_available + int(trial["available_points"] or 0) if trial else wallet_available,
@@ -6285,55 +6281,38 @@ class TradingEngineService:
         return max(base_minimum, safety_minimum)
 
     def _margin_interest_total_hours(self, row, now_text=None):
-        principal = int(row["principal_points"] or 0)
-        rate_percent = float(row["interest_percent_daily"] or 0)
-        if principal <= 0 or rate_percent <= 0:
-            return 0
-        try:
-            opened_at = datetime.fromisoformat(str(row["opened_at"]))
-            closed_at = datetime.fromisoformat(str(now_text or _now()))
-        except Exception:
-            return 0
-        seconds = max(0, (closed_at - opened_at).total_seconds())
-        hours = _billable_interest_hours_from_elapsed_seconds(
-            seconds,
-            interval_hours=int(row["interest_interval_hours"] or DEFAULT_BORROW_INTEREST_INTERVAL_HOURS) if "interest_interval_hours" in row.keys() else DEFAULT_BORROW_INTEREST_INTERVAL_HOURS,
-            minimum_hours=int(row["interest_minimum_hours"] or DEFAULT_BORROW_INTEREST_MINIMUM_HOURS) if "interest_minimum_hours" in row.keys() else DEFAULT_BORROW_INTEREST_MINIMUM_HOURS,
+        return margin_interest_total_hours(
+            row,
+            now_text=now_text or _now(),
+            billable_interest_hours_from_elapsed_seconds=_billable_interest_hours_from_elapsed_seconds,
+            default_interval_hours=DEFAULT_BORROW_INTEREST_INTERVAL_HOURS,
+            default_minimum_hours=DEFAULT_BORROW_INTEREST_MINIMUM_HOURS,
         )
-        return max(0, hours)
 
     def _margin_interest_due_points(self, row, *, hours):
-        principal = int(row["principal_points"] or 0)
-        rate_percent = float(row["interest_percent_daily"] or 0)
-        hours = max(0, int(hours or 0))
-        if principal <= 0 or rate_percent <= 0 or hours <= 0:
-            return 0
-        carry = int(row["interest_carry_micropoints"] or 0) if "interest_carry_micropoints" in row.keys() else 0
-        total_micro = self._margin_interest_due_micropoints(principal=principal, rate_percent=rate_percent, hours=hours) + carry
-        return int(total_micro // POINT_MICRO_SCALE)
+        return margin_interest_due_points(
+            row,
+            hours=hours,
+            point_micro_scale=POINT_MICRO_SCALE,
+            due_micropoints_func=self._margin_interest_due_micropoints,
+        )
 
     def _margin_interest_due_micropoints(self, *, principal, rate_percent, hours):
-        principal = int(principal or 0)
-        rate_percent = float(rate_percent or 0)
-        hours = max(0, int(hours or 0))
-        if principal <= 0 or rate_percent <= 0 or hours <= 0:
-            return 0
-        hourly_rate = (Decimal(str(rate_percent)) / Decimal("100")) / Decimal("24")
-        total_micro = Decimal(principal) * hourly_rate * Decimal(hours) * Decimal(POINT_MICRO_SCALE)
-        return int(total_micro.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        return margin_interest_due_micropoints(
+            principal=principal,
+            rate_percent=rate_percent,
+            hours=hours,
+            point_micro_scale=POINT_MICRO_SCALE,
+        )
 
     def _margin_interest_points(self, row, now_text=None):
-        accrued_hours = int(row["interest_accrued_hours"] or 0) if "interest_accrued_hours" in row.keys() else 0
-        total_hours = self._margin_interest_total_hours(row, now_text=now_text)
-        due_hours = max(0, total_hours - accrued_hours)
-        capitalized = int(row["interest_points"] or 0)
-        carry = int(row["interest_carry_micropoints"] or 0) if "interest_carry_micropoints" in row.keys() else 0
-        due_micro = self._margin_interest_due_micropoints(
-            principal=int(row["principal_points"] or 0),
-            rate_percent=float(row["interest_percent_daily"] or 0),
-            hours=due_hours,
+        return margin_interest_points(
+            row,
+            now_text=now_text or _now(),
+            point_micro_scale=POINT_MICRO_SCALE,
+            total_hours_func=self._margin_interest_total_hours,
+            due_micropoints_func=self._margin_interest_due_micropoints,
         )
-        return capitalized + int((carry + due_micro) // POINT_MICRO_SCALE)
 
     def _accrue_margin_interest(self, conn, position, *, actor=None, now_text=None, ctx=None):
         if not position or position["status"] != "open":
@@ -10998,15 +10977,10 @@ class TradingEngineService:
             conn.close()
 
     def _bot_audit_latest_map(self, conn):
-        latest = {}
         rows = conn.execute(
             "SELECT * FROM trading_bot_audit_runs ORDER BY id DESC LIMIT 1000"
         ).fetchall()
-        for row in rows:
-            key = (str(row["bot_kind"]), str(row["bot_uuid"]))
-            if key not in latest:
-                latest[key] = dict(row)
-        return latest
+        return bot_audit_latest_map(rows)
 
     def _bot_audit_label(self, status):
         return bot_audit_label(status)
@@ -11015,27 +10989,16 @@ class TradingEngineService:
         return bot_audit_eligibility_reason_label(reason)
 
     def _bot_audit_enabled_at(self, row):
-        raw = row.get("enabled_at") or row.get("updated_at") or row.get("created_at") or ""
-        try:
-            return datetime.fromisoformat(str(raw))
-        except Exception:
-            return datetime.fromisoformat(_now())
+        return bot_audit_enabled_at(row, now_text=_now())
 
     def _bot_audit_is_eligible(self, row, *, bot_kind, min_enabled_seconds):
-        if not bool(row.get("enabled")):
-            return False, "disabled"
-        enabled_at = self._bot_audit_enabled_at(row)
-        age_seconds = max(0, int((datetime.fromisoformat(_now()) - enabled_at).total_seconds()))
-        has_trade = False
-        if bot_kind == "trading_bot":
-            has_trade = int(row.get("triggered_run_count") or 0) > 0
-        else:
-            has_trade = int(row.get("total_trades") or 0) > 0
-        if has_trade:
-            return True, "has_trade"
-        if age_seconds >= int(min_enabled_seconds or TRADING_BOT_AUDIT_MIN_ENABLED_SECONDS):
-            return True, "aged_24h"
-        return False, "awaiting_first_trade"
+        return bot_audit_is_eligible(
+            row,
+            bot_kind=bot_kind,
+            min_enabled_seconds=min_enabled_seconds or TRADING_BOT_AUDIT_MIN_ENABLED_SECONDS,
+            now_text=_now(),
+            enabled_at_func=bot_audit_enabled_at,
+        )
 
     def _bot_audit_run_findings(self, conn, row, *, bot_kind, min_enabled_seconds):
         findings = []
@@ -11134,17 +11097,11 @@ class TradingEngineService:
                     "message": "網格機器人啟用已滿 24 小時，但尚未成交，請檢查網格範圍或市場波動是否不足。",
                     "metadata": {"enabled_at": row.get("enabled_at") or row.get("created_at") or ""},
                 })
-        blocker_count = sum(1 for item in findings if item["severity"] == "blocker")
-        warning_count = sum(1 for item in findings if item["severity"] == "warning")
-        audit_status = "red" if blocker_count else ("yellow" if warning_count else "green")
-        return {
-            "eligible": eligible,
-            "eligible_reason": eligible_reason,
-            "audit_status": audit_status,
-            "findings": findings,
-            "blocker_count": blocker_count,
-            "warning_count": warning_count,
-        }
+        return bot_audit_result(
+            findings=findings,
+            eligible=eligible,
+            eligible_reason=eligible_reason,
+        )
 
     def _record_bot_audit_run(self, conn, row, *, bot_kind, audit_result):
         now = _now()
@@ -11293,39 +11250,24 @@ class TradingEngineService:
                 min_enabled_seconds=min_enabled_seconds,
             )
             audit_status = str((latest or {}).get("audit_status") or "unaudited")
-            summary[audit_status] = summary.get(audit_status, 0) + 1
-            item = {
-                "bot_kind": row["bot_kind"],
-                "bot_uuid": str(row["bot_uuid"]),
-                "name": str(row.get("name") or row.get("market_symbol") or ""),
-                "market_symbol": str(row.get("market_symbol") or ""),
-                "display_symbol": str(row.get("market_symbol") or "").replace("/POINTS", "/USDT"),
-                "user_id": int(row["user_id"]),
-                "username": str(row.get("username") or ""),
-                "enabled": bool(row.get("enabled")),
-                "enabled_at": row.get("enabled_at") or row.get("created_at") or "",
-                "eligible": bool(eligible),
-                "eligible_reason": eligible_reason,
-                "eligible_reason_label": self._bot_audit_eligibility_reason_label(eligible_reason),
-                "audit_status": audit_status,
-                "audit_label": self._bot_audit_label(audit_status),
-                "last_audited_at": (latest or {}).get("created_at") or "",
-                "warning_count": int((latest or {}).get("warning_count") or 0),
-                "blocker_count": int((latest or {}).get("blocker_count") or 0),
-                "finding_count": int((latest or {}).get("finding_count") or 0),
-                "last_error": str(row.get("last_error") or "")[:240],
-            }
-            if row["bot_kind"] == "trading_bot":
-                item["triggered_run_count"] = int(row.get("triggered_run_count") or 0)
-                item["run_count"] = int(row.get("run_count") or 0)
-            else:
-                item["total_trades"] = int(row.get("total_trades") or 0)
-                item["open_order_count"] = int(
+            increment_audit_summary(summary, audit_status)
+            open_order_count = 0
+            if row["bot_kind"] != "trading_bot":
+                open_order_count = int(
                     conn.execute(
                         "SELECT COUNT(*) AS c FROM trading_grid_orders WHERE grid_bot_id=? AND status='open'",
                         (int(row["id"]),),
                     ).fetchone()["c"]
                 )
+            item = build_bot_audit_dashboard_item(
+                row=row,
+                latest=latest,
+                eligible=eligible,
+                eligible_reason=eligible_reason,
+                eligible_reason_label=self._bot_audit_eligibility_reason_label(eligible_reason),
+                audit_label=self._bot_audit_label(audit_status),
+                open_order_count=open_order_count,
+            )
             items.append(item)
         recent_runs = [
             dict(row)
