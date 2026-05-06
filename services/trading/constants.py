@@ -10,6 +10,35 @@ DEFAULT_GRID_FEE_DISCOUNT_PERCENT = 25.0
 GRID_PREVIEW_YELLOW_NET_SPREAD_PERCENT = Decimal("0.10")
 APR_DAYS_PER_YEAR = Decimal("365")
 
+WEIGHTED_PRICE_PROVIDERS = (
+    "binance_public_api",
+    "okx_public_api",
+    "coinbase_exchange",
+    "kraken_public_api",
+    "gemini_public_api",
+    "bitstamp_public_api",
+)
+PRICE_PROVIDER_LABELS = {
+    "binance_public_api": "Binance",
+    "okx_public_api": "OKX",
+    "coinbase_exchange": "Coinbase",
+    "kraken_public_api": "Kraken",
+    "gemini_public_api": "Gemini",
+    "bitstamp_public_api": "Bitstamp",
+    "coingecko_simple_price": "CoinGecko",
+}
+DEFAULT_PRICE_FUSION_MIN_PROVIDER_COUNT = 3
+REFERENCE_PRICE_CAPABLE_PROVIDERS = {
+    "binance_public_api",
+    "okx_public_api",
+    "coinbase_exchange",
+    "kraken_public_api",
+    "gemini_public_api",
+    "bitstamp_public_api",
+}
+TICKER_CAPABLE_PROVIDERS = set(REFERENCE_PRICE_CAPABLE_PROVIDERS) | {"coingecko_simple_price"}
+DEPTH_CAPABLE_PROVIDERS = set(WEIGHTED_PRICE_PROVIDERS)
+
 TRADING_BOT_TRIGGER_TYPES = {"always", "price_above", "price_below"}
 TRADING_BOT_TYPES = {"conditional", "dca"}
 TRADING_BOT_AUDIT_INTERVAL_SECONDS = 300

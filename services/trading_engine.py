@@ -51,14 +51,20 @@ from services.trading.audit import emit_trading_audit_event
 from services.trading.constants import (
     APR_DAYS_PER_YEAR,
     ASSET_SCALE,
+    DEFAULT_PRICE_FUSION_MIN_PROVIDER_COUNT,
     DEFAULT_GRID_FEE_DISCOUNT_PERCENT,
     DEFAULT_SPOT_FEE_RATE_PERCENT,
+    DEPTH_CAPABLE_PROVIDERS,
     GRID_PREVIEW_YELLOW_NET_SPREAD_PERCENT,
     POINT_MICRO_SCALE,
+    PRICE_PROVIDER_LABELS,
+    REFERENCE_PRICE_CAPABLE_PROVIDERS,
+    TICKER_CAPABLE_PROVIDERS,
     TRADING_BOT_AUDIT_INTERVAL_SECONDS,
     TRADING_BOT_AUDIT_LIMIT,
     TRADING_BOT_AUDIT_MIN_ENABLED_SECONDS,
     UNLIMITED_BOT_MAX_RUNS,
+    WEIGHTED_PRICE_PROVIDERS,
     WORKFLOW_ACTION_TYPES,
     WORKFLOW_CONDITION_TYPES,
     WORKFLOW_NODE_TYPES,
@@ -206,14 +212,30 @@ from services.trading.backtest import (
     update_backtest_drawdown,
 )
 from services.trading.markets import (
+    create_market_provider_mapping as create_market_provider_mapping_helper,
+    create_market_registry as create_market_registry_helper,
+    disable_market_provider_mapping as disable_market_provider_mapping_helper,
+    disable_market_registry as disable_market_registry_helper,
     fallback_market_display_symbol,
+    get_market_provider_registry as get_market_provider_registry_helper,
+    list_market_registry as list_market_registry_helper,
     market_display_symbol_from_registry_row,
+    market_provider_mapping_payload as market_provider_mapping_payload_helper,
     market_provider_ids_from_mappings,
+    market_registry_audit as market_registry_audit_helper,
+    market_registry_payload as market_registry_payload_helper,
     market_seed_compare_value,
     market_supports_mapping_rows,
     normalize_market_symbol_from_rows,
+    persist_market_registry_probe as persist_market_registry_probe_helper,
+    probe_market_registry as probe_market_registry_helper,
+    probe_market_registry_on_conn as probe_market_registry_on_conn_helper,
     provider_mapping_capabilities,
     registry_seed_status,
+    update_market_provider_mapping as update_market_provider_mapping_helper,
+    update_market_registry as update_market_registry_helper,
+    validate_market_provider_mapping_payload as validate_market_provider_mapping_payload_helper,
+    validate_market_registry_payload as validate_market_registry_payload_helper,
 )
 from services.trading.validators import (
     _apr_percent_from_daily,
@@ -276,23 +298,6 @@ GEMINI_BOOK_URL_TEMPLATE = "https://api.gemini.com/v1/book/{symbol}"
 BITSTAMP_ORDER_BOOK_URL_TEMPLATE = "https://www.bitstamp.net/api/v2/order_book/{pair}/"
 FUSED_PRICE_SOURCE = "fused_weighted"
 PRICE_FUSION_MODES = {"auto_depth", "manual_weights"}
-WEIGHTED_PRICE_PROVIDERS = (
-    "binance_public_api",
-    "okx_public_api",
-    "coinbase_exchange",
-    "kraken_public_api",
-    "gemini_public_api",
-    "bitstamp_public_api",
-)
-PRICE_PROVIDER_LABELS = {
-    "binance_public_api": "Binance",
-    "okx_public_api": "OKX",
-    "coinbase_exchange": "Coinbase",
-    "kraken_public_api": "Kraken",
-    "gemini_public_api": "Gemini",
-    "bitstamp_public_api": "Bitstamp",
-    "coingecko_simple_price": "CoinGecko",
-}
 DEFAULT_PRICE_FUSION_MANUAL_WEIGHTS = {
     "binance_public_api": 40.0,
     "okx_public_api": 25.0,
@@ -310,22 +315,11 @@ DEFAULT_PRICE_FUSION_MAX_PROVIDER_AGE_SECONDS = 15
 DEFAULT_PRICE_FUSION_MAX_PROVIDER_LATENCY_MS = 2500
 DEFAULT_PRICE_FUSION_MAX_MIDPOINT_DEVIATION_PERCENT = 0.50
 DEFAULT_PRICE_FUSION_MIN_SIDE_BALANCE_RATIO = 0.10
-DEFAULT_PRICE_FUSION_MIN_PROVIDER_COUNT = 3
 DEFAULT_PRICE_STREAM_WS_STALE_SECONDS = 10
 DEFAULT_BORROW_APR_BTC_ETH_PERCENT = 8.0
 DEFAULT_BORROW_APR_USDT_POINTS_PERCENT = 10.0
 DEFAULT_BORROW_INTEREST_INTERVAL_HOURS = 1
 DEFAULT_BORROW_INTEREST_MINIMUM_HOURS = 1
-REFERENCE_PRICE_CAPABLE_PROVIDERS = {
-    "binance_public_api",
-    "okx_public_api",
-    "coinbase_exchange",
-    "kraken_public_api",
-    "gemini_public_api",
-    "bitstamp_public_api",
-}
-TICKER_CAPABLE_PROVIDERS = set(REFERENCE_PRICE_CAPABLE_PROVIDERS) | {"coingecko_simple_price"}
-DEPTH_CAPABLE_PROVIDERS = set(WEIGHTED_PRICE_PROVIDERS)
 LIVE_PRICE_SOURCE_NAMES = {
     FUSED_PRICE_SOURCE,
     "binance_public_api",
@@ -2782,482 +2776,104 @@ class TradingEngineService:
             conn.close()
 
     def _market_registry_audit(self, conn, *, actor=None, action="", market_symbol="", before=None, after=None):
-        conn.execute(
-            """
-            INSERT INTO trading_market_registry_audit (
-                actor_id, action, market_symbol, before_json, after_json, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                self._actor_id(actor),
-                str(action or "").strip() or "market_registry_update",
-                str(market_symbol or "").strip().upper(),
-                _json_dumps(before or {}),
-                _json_dumps(after or {}),
-                _now(),
-            ),
+        return market_registry_audit_helper(
+            self,
+            conn,
+            actor=actor,
+            action=action,
+            market_symbol=market_symbol,
+            before=before,
+            after=after,
         )
 
     def _market_registry_payload(self, conn, registry_row):
-        item = dict(registry_row)
-        for key in (
-            "enabled",
-            "allow_spot",
-            "allow_margin",
-            "allow_bots",
-            "allow_risk_grade_usage",
-            "live_price_enabled",
-            "reference_price_enabled",
-            "btc_trade_enabled",
-        ):
-            item[key] = bool(item.get(key))
-        mappings = self._market_provider_mappings(conn, item["symbol"], include_disabled=True)
-        seed_state = _registry_seed_status(item, mappings)
-        item.update(seed_state)
-        runtime_row = conn.execute("SELECT * FROM trading_markets WHERE symbol=?", (item["symbol"],)).fetchone()
-        if runtime_row:
-            runtime_market = self._market_payload(runtime_row)
-            reference_context, risk_grade_context = self._stored_market_price_contexts(runtime_market)
-            item["runtime_market"] = self._attach_market_price_contexts(runtime_market, reference_context=reference_context, risk_grade_context=risk_grade_context)
-            item["reference_price_context"] = reference_context
-            item["risk_grade_price_context"] = risk_grade_context
-            item["reference_price_status"] = {
-                "source": reference_context.get("source"),
-                "confidence": reference_context.get("confidence"),
-                "stale": reference_context.get("stale"),
-                "degraded": reference_context.get("degraded"),
-                "provider_count": reference_context.get("provider_count"),
-            }
-            item["risk_grade_price_status"] = {
-                "source": risk_grade_context.get("source"),
-                "confidence": risk_grade_context.get("confidence"),
-                "stale": risk_grade_context.get("stale"),
-                "degraded": risk_grade_context.get("degraded"),
-                "provider_count": risk_grade_context.get("provider_count"),
-                "high_risk_blocked": risk_grade_context.get("high_risk_blocked"),
-            }
-        else:
-            item["runtime_market"] = None
-            item["reference_price_context"] = {}
-            item["risk_grade_price_context"] = {}
-            item["reference_price_status"] = {}
-            item["risk_grade_price_status"] = {}
-        summary = _json_loads(item.get("probe_summary_json"), {})
-        item["probe_status"] = str(item.get("probe_status") or "pending")
-        item["probe_summary"] = summary
-        item["provider_count"] = int(summary.get("enabled_provider_count") or 0)
-        item["reference_provider_count"] = int(summary.get("reference_provider_count") or 0)
-        item["risk_grade_provider_count"] = int(summary.get("depth_provider_count") or 0)
-        return item
+        return market_registry_payload_helper(
+            self,
+            conn,
+            registry_row,
+            registry_default_market_payload=_registry_default_market_payload,
+        )
 
     def _market_provider_mapping_payload(self, row):
-        item = dict(row)
-        for key in ("supports_ticker", "supports_depth", "supports_candles", "enabled"):
-            item[key] = bool(item.get(key))
-        item["provider_label"] = PRICE_PROVIDER_LABELS.get(item.get("provider"), item.get("provider"))
-        return item
+        return market_provider_mapping_payload_helper(row)
 
     def _validate_market_registry_payload(self, payload, *, existing=None):
-        payload = payload if isinstance(payload, dict) else {}
-        symbol = str(payload.get("symbol") or "").strip().upper()
-        base_asset = str(payload.get("base_asset") or "").strip().upper()
-        quote_asset = str(payload.get("quote_asset") or payload.get("quote_currency") or "").strip().upper()
-        if not symbol and base_asset and quote_asset:
-            symbol = f"{base_asset}/{quote_asset}"
-        if "/" not in symbol or symbol.count("/") != 1:
-            raise ValueError("market symbol must look like BASE/QUOTE")
-        if not base_asset or not quote_asset:
-            base_asset, quote_asset = symbol.split("/", 1)
-        allowed = set("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
-        if not base_asset or not quote_asset or any(ch not in allowed for ch in base_asset) or any(ch not in allowed for ch in quote_asset):
-            raise ValueError("market symbol only supports A-Z / 0-9 / . _ -")
-        if symbol != f"{base_asset}/{quote_asset}":
-            raise ValueError("market symbol must match base/quote fields")
-        display_quote_currency = str(payload.get("display_quote_currency") or (existing["display_quote_currency"] if existing else "USDT")).strip().upper() or quote_asset
-        if any(ch not in allowed for ch in display_quote_currency):
-            raise ValueError("display quote currency only supports A-Z / 0-9 / . _ -")
-        display_name = str(payload.get("display_name") or "").strip() or f"{base_asset}/{display_quote_currency}"
-        market_type = str(payload.get("market_type") or (existing["market_type"] if existing else "spot")).strip().lower() or "spot"
-        if market_type not in {"spot", "synthetic", "reference_only"}:
-            raise ValueError("market_type must be spot, synthetic, or reference_only")
-        return {
-            "symbol": symbol,
-            "base_asset": base_asset,
-            "quote_asset": quote_asset,
-            "display_name": display_name[:120],
-            "display_quote_currency": display_quote_currency,
-            "market_type": market_type,
-            "enabled": 1 if bool(payload.get("enabled", existing["enabled"] if existing else True)) else 0,
-            "allow_spot": 1 if bool(payload.get("allow_spot", existing["allow_spot"] if existing else True)) else 0,
-            "allow_margin": 1 if bool(payload.get("allow_margin", existing["allow_margin"] if existing else True)) else 0,
-            "allow_bots": 1 if bool(payload.get("allow_bots", existing["allow_bots"] if existing else True)) else 0,
-            "allow_risk_grade_usage": 1 if bool(payload.get("allow_risk_grade_usage", existing["allow_risk_grade_usage"] if existing else False)) else 0,
-            "price_precision": _to_int(payload.get("price_precision", existing["price_precision"] if existing else 8), name="price_precision", minimum=0, maximum=12),
-            "quantity_precision": _to_int(payload.get("quantity_precision", existing["quantity_precision"] if existing else 8), name="quantity_precision", minimum=0, maximum=12),
-            "min_order_size": _to_float(payload.get("min_order_size", existing["min_order_size"] if existing else 0.00000001), name="min_order_size", minimum=0.00000001, maximum=10**12),
-            "max_order_size": _to_float(payload.get("max_order_size", existing["max_order_size"] if existing else 1000000), name="max_order_size", minimum=0.00000001, maximum=10**12),
-            "lot_size": _to_float(payload.get("lot_size", existing["lot_size"] if existing else 0.00000001), name="lot_size", minimum=0.00000001, maximum=10**12),
-            "tick_size": _to_float(payload.get("tick_size", existing["tick_size"] if existing else 0.00000001), name="tick_size", minimum=0.00000001, maximum=10**12),
-            "sort_order": _to_int(payload.get("sort_order", existing["sort_order"] if existing else 9999), name="sort_order", minimum=1, maximum=100000),
-            "default_manual_price_points": _to_price_float(payload.get("default_manual_price_points", existing["default_manual_price_points"] if existing else 1), name="default_manual_price_points", minimum=0.00000001),
-            "live_price_enabled": 1 if bool(payload.get("live_price_enabled", existing["live_price_enabled"] if existing else True)) else 0,
-            "reference_price_enabled": 1 if bool(payload.get("reference_price_enabled", existing["reference_price_enabled"] if existing else True)) else 0,
-            "btc_trade_enabled": 1 if bool(payload.get("btc_trade_enabled", existing["btc_trade_enabled"] if existing else False)) else 0,
-        }
+        return validate_market_registry_payload_helper(payload, existing=existing)
 
     def _validate_market_provider_mapping_payload(self, payload, *, existing=None):
-        payload = payload if isinstance(payload, dict) else {}
-        provider = str(payload.get("provider") or (existing["provider"] if existing else "")).strip()
-        if provider not in PRICE_PROVIDER_LABELS:
-            raise ValueError("unsupported provider")
-        provider_symbol = str(payload.get("provider_symbol") or (existing["provider_symbol"] if existing else "")).strip()
-        supports_ticker = 1 if bool(payload.get("supports_ticker", existing["supports_ticker"] if existing else provider in TICKER_CAPABLE_PROVIDERS)) else 0
-        supports_depth = 1 if bool(payload.get("supports_depth", existing["supports_depth"] if existing else provider in DEPTH_CAPABLE_PROVIDERS)) else 0
-        supports_candles = 1 if bool(payload.get("supports_candles", existing["supports_candles"] if existing else provider in REFERENCE_PRICE_CAPABLE_PROVIDERS)) else 0
-        if supports_depth and provider not in DEPTH_CAPABLE_PROVIDERS:
-            raise ValueError(f"{PRICE_PROVIDER_LABELS.get(provider, provider)} 不支援 depth provider input")
-        if supports_candles and provider not in REFERENCE_PRICE_CAPABLE_PROVIDERS:
-            raise ValueError(f"{PRICE_PROVIDER_LABELS.get(provider, provider)} 不支援 candles reference price")
-        if supports_ticker and provider not in TICKER_CAPABLE_PROVIDERS:
-            raise ValueError(f"{PRICE_PROVIDER_LABELS.get(provider, provider)} 不支援 ticker input")
-        return {
-            "provider": provider,
-            "provider_symbol": provider_symbol[:120],
-            "supports_ticker": supports_ticker,
-            "supports_depth": supports_depth,
-            "supports_candles": supports_candles,
-            "enabled": 1 if bool(payload.get("enabled", existing["enabled"] if existing else bool(provider_symbol))) else 0,
-            "priority": _to_int(payload.get("priority", existing["priority"] if existing else 100), name="priority", minimum=1, maximum=1000),
-        }
+        return validate_market_provider_mapping_payload_helper(payload, existing=existing)
 
     def _probe_market_registry_on_conn(self, conn, registry_row):
-        settings = self._settings_payload(conn)
-        min_provider_count = max(2, int(settings.get("price_fusion_min_provider_count") or DEFAULT_PRICE_FUSION_MIN_PROVIDER_COUNT))
-        mappings = [self._market_provider_mapping_payload(row) for row in self._market_provider_mappings(conn, registry_row["symbol"], include_disabled=True)]
-        enabled_rows = [row for row in mappings if row["enabled"] and row["provider_symbol"]]
-        ticker_rows = [row for row in enabled_rows if row["supports_ticker"]]
-        depth_rows = [row for row in enabled_rows if row["supports_depth"]]
-        candle_rows = [row for row in enabled_rows if row["supports_candles"]]
-        issues = []
-        if registry_row["live_price_enabled"] and not ticker_rows:
-            issues.append({"code": "ticker_provider_missing", "message": "缺少可用 ticker provider mapping"})
-        if registry_row["reference_price_enabled"] and not candle_rows:
-            issues.append({"code": "reference_provider_missing", "message": "缺少可用 candles provider mapping"})
-        if registry_row["allow_risk_grade_usage"] and len(depth_rows) < min_provider_count:
-            issues.append({"code": "risk_grade_provider_count_low", "message": f"risk-grade 至少需要 {min_provider_count} 家 depth provider"})
-        if registry_row["btc_trade_enabled"] and str(registry_row["base_asset"] or "").strip().upper() != "BTC":
-            issues.append({"code": "btc_trade_market_invalid", "message": "只有 BTC 市場可啟用 BTC_trade 信號"})
-        status = "ok" if not issues else ("warning" if enabled_rows else "failed")
-        message = "Provider probe 通過"
-        if issues:
-            message = "；".join(str(item["message"]) for item in issues)
-        return {
-            "status": status,
-            "message": message,
-            "enabled_provider_count": len(enabled_rows),
-            "ticker_provider_count": len(ticker_rows),
-            "depth_provider_count": len(depth_rows),
-            "reference_provider_count": len(candle_rows),
-            "risk_grade_ready": len(depth_rows) >= min_provider_count,
-            "issues": issues,
-            "providers": mappings,
-            "min_provider_count": min_provider_count,
-        }
+        return probe_market_registry_on_conn_helper(self, conn, registry_row)
 
     def _persist_market_registry_probe(self, conn, registry_row):
-        summary = self._probe_market_registry_on_conn(conn, registry_row)
-        conn.execute(
-            "UPDATE trading_markets_registry SET probe_status=?, probe_summary_json=?, probe_checked_at=?, updated_at=? WHERE id=?",
-            (
-                str(summary["status"]),
-                _json_dumps(summary),
-                _now(),
-                _now(),
-                int(registry_row["id"]),
-            ),
-        )
-        return summary
+        return persist_market_registry_probe_helper(self, conn, registry_row)
 
     def list_market_registry(self, *, include_disabled=True):
-        conn = self.get_db()
-        try:
-            self.ensure_schema(conn)
-            query = "SELECT * FROM trading_markets_registry"
-            params = []
-            if not include_disabled:
-                query += " WHERE enabled=1"
-            query += " ORDER BY sort_order ASC, symbol ASC"
-            rows = conn.execute(query, params).fetchall()
-            return {
-                "markets": [self._market_registry_payload(conn, row) for row in rows],
-                "audit": [dict(row) for row in conn.execute("SELECT * FROM trading_market_registry_audit ORDER BY id DESC LIMIT 100").fetchall()],
-            }
-        finally:
-            conn.close()
+        return list_market_registry_helper(self, include_disabled=include_disabled)
 
     def get_market_provider_registry(self, *, market_id):
-        conn = self.get_db()
-        try:
-            self.ensure_schema(conn)
-            market = conn.execute("SELECT * FROM trading_markets_registry WHERE id=?", (int(market_id),)).fetchone()
-            if not market:
-                raise ValueError("market not found")
-            return {
-                "market": self._market_registry_payload(conn, market),
-                "providers": [self._market_provider_mapping_payload(row) for row in self._market_provider_mappings(conn, market["symbol"], include_disabled=True)],
-            }
-        finally:
-            conn.close()
+        return get_market_provider_registry_helper(self, market_id=market_id)
 
     def create_market_registry(self, *, actor, payload):
-        conn = self.get_db()
-        try:
-            self.ensure_schema(conn)
-            conn.commit()
-            conn.execute("BEGIN IMMEDIATE")
-            values = self._validate_market_registry_payload(payload, existing=None)
-            if conn.execute("SELECT 1 FROM trading_markets_registry WHERE symbol=?", (values["symbol"],)).fetchone():
-                raise ValueError("market already exists")
-            now = _now()
-            columns = list(values.keys()) + ["registry_source", "seed_version", "probe_status", "probe_summary_json", "created_at", "updated_at", "created_by", "updated_by"]
-            row_values = [values[key] for key in values] + ["custom", 0, "pending", "{}", now, now, self._actor_id(actor), self._actor_id(actor)]
-            placeholders = ", ".join("?" for _ in columns)
-            conn.execute(
-                f"INSERT INTO trading_markets_registry ({', '.join(columns)}) VALUES ({placeholders})",
-                row_values,
-            )
-            registry = conn.execute("SELECT * FROM trading_markets_registry WHERE symbol=?", (values["symbol"],)).fetchone()
-            summary = self._persist_market_registry_probe(conn, registry)
-            if values["allow_risk_grade_usage"] and not summary["risk_grade_ready"]:
-                raise ValueError(summary["message"] or "provider probe failed")
-            _sync_registry_markets_to_runtime(conn)
-            self._market_registry_audit(conn, actor=actor, action="create_market", market_symbol=values["symbol"], before={}, after=values)
-            self._audit_event(conn, "TRADING_MARKET_REGISTRY_CREATED", "root created trading market registry", actor=actor, market_symbol=values["symbol"], metadata={"market_id": registry["id"]})
-            conn.commit()
-            return {"ok": True, "market": self._market_registry_payload(conn, conn.execute("SELECT * FROM trading_markets_registry WHERE id=?", (int(registry["id"]),)).fetchone())}
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+        return create_market_registry_helper(
+            self,
+            actor=actor,
+            payload=payload,
+            sync_runtime_markets=_sync_registry_markets_to_runtime,
+        )
 
     def update_market_registry(self, *, actor, market_id, payload):
-        conn = self.get_db()
-        try:
-            self.ensure_schema(conn)
-            conn.commit()
-            conn.execute("BEGIN IMMEDIATE")
-            existing = conn.execute("SELECT * FROM trading_markets_registry WHERE id=?", (int(market_id),)).fetchone()
-            if not existing:
-                raise ValueError("market not found")
-            values = self._validate_market_registry_payload(payload, existing=existing)
-            if values["symbol"] != str(existing["symbol"] or "").strip().upper():
-                raise ValueError("changing market symbol is not supported; disable and recreate the market instead")
-            conflict = conn.execute("SELECT id FROM trading_markets_registry WHERE symbol=? AND id<>?", (values["symbol"], int(market_id))).fetchone()
-            if conflict:
-                raise ValueError("market symbol already exists")
-            assignments = ", ".join(f"{key}=?" for key in values)
-            conn.execute(
-                f"UPDATE trading_markets_registry SET {assignments}, updated_at=?, updated_by=? WHERE id=?",
-                [*values.values(), _now(), self._actor_id(actor), int(market_id)],
-            )
-            registry = conn.execute("SELECT * FROM trading_markets_registry WHERE id=?", (int(market_id),)).fetchone()
-            summary = self._persist_market_registry_probe(conn, registry)
-            if values["allow_risk_grade_usage"] and not summary["risk_grade_ready"]:
-                raise ValueError(summary["message"] or "provider probe failed")
-            _sync_registry_markets_to_runtime(conn)
-            self._market_registry_audit(conn, actor=actor, action="update_market", market_symbol=registry["symbol"], before=dict(existing), after=values)
-            self._audit_event(conn, "TRADING_MARKET_REGISTRY_UPDATED", "root updated trading market registry", actor=actor, market_symbol=registry["symbol"], metadata={"market_id": market_id})
-            conn.commit()
-            return {"ok": True, "market": self._market_registry_payload(conn, conn.execute("SELECT * FROM trading_markets_registry WHERE id=?", (int(market_id),)).fetchone())}
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+        return update_market_registry_helper(
+            self,
+            actor=actor,
+            market_id=market_id,
+            payload=payload,
+            sync_runtime_markets=_sync_registry_markets_to_runtime,
+        )
 
     def disable_market_registry(self, *, actor, market_id):
-        conn = self.get_db()
-        try:
-            self.ensure_schema(conn)
-            conn.commit()
-            conn.execute("BEGIN IMMEDIATE")
-            existing = conn.execute("SELECT * FROM trading_markets_registry WHERE id=?", (int(market_id),)).fetchone()
-            if not existing:
-                raise ValueError("market not found")
-            after = dict(existing)
-            after.update({
-                "enabled": 0,
-                "allow_spot": 0,
-                "allow_margin": 0,
-                "allow_bots": 0,
-                "allow_risk_grade_usage": 0,
-            })
-            conn.execute(
-                """
-                UPDATE trading_markets_registry
-                SET enabled=0, allow_spot=0, allow_margin=0, allow_bots=0, allow_risk_grade_usage=0,
-                    probe_status='disabled', updated_at=?, updated_by=?
-                WHERE id=?
-                """,
-                (_now(), self._actor_id(actor), int(market_id)),
-            )
-            registry = conn.execute("SELECT * FROM trading_markets_registry WHERE id=?", (int(market_id),)).fetchone()
-            self._persist_market_registry_probe(conn, registry)
-            _sync_registry_markets_to_runtime(conn)
-            self._market_registry_audit(conn, actor=actor, action="disable_market", market_symbol=existing["symbol"], before=dict(existing), after=after)
-            self._audit_event(conn, "TRADING_MARKET_REGISTRY_DISABLED", "root disabled trading market registry", actor=actor, market_symbol=existing["symbol"], metadata={"market_id": market_id})
-            conn.commit()
-            return {"ok": True, "market": self._market_registry_payload(conn, conn.execute("SELECT * FROM trading_markets_registry WHERE id=?", (int(market_id),)).fetchone())}
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+        return disable_market_registry_helper(
+            self,
+            actor=actor,
+            market_id=market_id,
+            sync_runtime_markets=_sync_registry_markets_to_runtime,
+        )
 
     def create_market_provider_mapping(self, *, actor, market_id, payload):
-        conn = self.get_db()
-        try:
-            self.ensure_schema(conn)
-            conn.commit()
-            conn.execute("BEGIN IMMEDIATE")
-            market = conn.execute("SELECT * FROM trading_markets_registry WHERE id=?", (int(market_id),)).fetchone()
-            if not market:
-                raise ValueError("market not found")
-            values = self._validate_market_provider_mapping_payload(payload, existing=None)
-            if conn.execute("SELECT 1 FROM trading_market_provider_mappings WHERE market_id=? AND provider=?", (int(market_id), values["provider"])).fetchone():
-                raise ValueError("provider mapping already exists")
-            now = _now()
-            conn.execute(
-                """
-                INSERT INTO trading_market_provider_mappings (
-                    market_id, provider, provider_symbol, supports_ticker, supports_depth,
-                    supports_candles, enabled, priority, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    int(market_id),
-                    values["provider"],
-                    values["provider_symbol"],
-                    values["supports_ticker"],
-                    values["supports_depth"],
-                    values["supports_candles"],
-                    values["enabled"],
-                    values["priority"],
-                    now,
-                    now,
-                ),
-            )
-            registry = conn.execute("SELECT * FROM trading_markets_registry WHERE id=?", (int(market_id),)).fetchone()
-            self._persist_market_registry_probe(conn, registry)
-            _sync_registry_markets_to_runtime(conn)
-            self._market_registry_audit(conn, actor=actor, action="create_provider_mapping", market_symbol=market["symbol"], before={}, after=values)
-            self._audit_event(conn, "TRADING_MARKET_PROVIDER_CREATED", "root created market provider mapping", actor=actor, market_symbol=market["symbol"], metadata={"provider": values["provider"]})
-            conn.commit()
-            return self.get_market_provider_registry(market_id=market_id)
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+        return create_market_provider_mapping_helper(
+            self,
+            actor=actor,
+            market_id=market_id,
+            payload=payload,
+            sync_runtime_markets=_sync_registry_markets_to_runtime,
+        )
 
     def update_market_provider_mapping(self, *, actor, market_id, mapping_id, payload):
-        conn = self.get_db()
-        try:
-            self.ensure_schema(conn)
-            conn.commit()
-            conn.execute("BEGIN IMMEDIATE")
-            market = conn.execute("SELECT * FROM trading_markets_registry WHERE id=?", (int(market_id),)).fetchone()
-            if not market:
-                raise ValueError("market not found")
-            existing = conn.execute("SELECT * FROM trading_market_provider_mappings WHERE id=? AND market_id=?", (int(mapping_id), int(market_id))).fetchone()
-            if not existing:
-                raise ValueError("provider mapping not found")
-            values = self._validate_market_provider_mapping_payload(payload, existing=existing)
-            conn.execute(
-                """
-                UPDATE trading_market_provider_mappings
-                SET provider_symbol=?, supports_ticker=?, supports_depth=?, supports_candles=?,
-                    enabled=?, priority=?, updated_at=?
-                WHERE id=? AND market_id=?
-                """,
-                (
-                    values["provider_symbol"],
-                    values["supports_ticker"],
-                    values["supports_depth"],
-                    values["supports_candles"],
-                    values["enabled"],
-                    values["priority"],
-                    _now(),
-                    int(mapping_id),
-                    int(market_id),
-                ),
-            )
-            registry = conn.execute("SELECT * FROM trading_markets_registry WHERE id=?", (int(market_id),)).fetchone()
-            summary = self._persist_market_registry_probe(conn, registry)
-            if int(registry["allow_risk_grade_usage"] or 0) and not summary["risk_grade_ready"]:
-                raise ValueError(summary["message"] or "provider probe failed")
-            _sync_registry_markets_to_runtime(conn)
-            self._market_registry_audit(conn, actor=actor, action="update_provider_mapping", market_symbol=market["symbol"], before=dict(existing), after=values)
-            self._audit_event(conn, "TRADING_MARKET_PROVIDER_UPDATED", "root updated market provider mapping", actor=actor, market_symbol=market["symbol"], metadata={"provider": existing["provider"]})
-            conn.commit()
-            return self.get_market_provider_registry(market_id=market_id)
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+        return update_market_provider_mapping_helper(
+            self,
+            actor=actor,
+            market_id=market_id,
+            mapping_id=mapping_id,
+            payload=payload,
+            sync_runtime_markets=_sync_registry_markets_to_runtime,
+        )
 
     def disable_market_provider_mapping(self, *, actor, market_id, mapping_id):
-        conn = self.get_db()
-        try:
-            self.ensure_schema(conn)
-            conn.commit()
-            conn.execute("BEGIN IMMEDIATE")
-            market = conn.execute("SELECT * FROM trading_markets_registry WHERE id=?", (int(market_id),)).fetchone()
-            if not market:
-                raise ValueError("market not found")
-            existing = conn.execute("SELECT * FROM trading_market_provider_mappings WHERE id=? AND market_id=?", (int(mapping_id), int(market_id))).fetchone()
-            if not existing:
-                raise ValueError("provider mapping not found")
-            conn.execute(
-                "UPDATE trading_market_provider_mappings SET enabled=0, updated_at=? WHERE id=? AND market_id=?",
-                (_now(), int(mapping_id), int(market_id)),
-            )
-            registry = conn.execute("SELECT * FROM trading_markets_registry WHERE id=?", (int(market_id),)).fetchone()
-            self._persist_market_registry_probe(conn, registry)
-            _sync_registry_markets_to_runtime(conn)
-            after = dict(existing)
-            after["enabled"] = 0
-            self._market_registry_audit(conn, actor=actor, action="disable_provider_mapping", market_symbol=market["symbol"], before=dict(existing), after=after)
-            self._audit_event(conn, "TRADING_MARKET_PROVIDER_DISABLED", "root disabled market provider mapping", actor=actor, market_symbol=market["symbol"], metadata={"provider": existing["provider"]})
-            conn.commit()
-            return self.get_market_provider_registry(market_id=market_id)
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+        return disable_market_provider_mapping_helper(
+            self,
+            actor=actor,
+            market_id=market_id,
+            mapping_id=mapping_id,
+            sync_runtime_markets=_sync_registry_markets_to_runtime,
+        )
 
     def probe_market_registry(self, *, market_id):
-        conn = self.get_db()
-        try:
-            self.ensure_schema(conn)
-            conn.commit()
-            conn.execute("BEGIN IMMEDIATE")
-            market = conn.execute("SELECT * FROM trading_markets_registry WHERE id=?", (int(market_id),)).fetchone()
-            if not market:
-                raise ValueError("market not found")
-            summary = self._persist_market_registry_probe(conn, market)
-            _sync_registry_markets_to_runtime(conn)
-            conn.commit()
-            refreshed = conn.execute("SELECT * FROM trading_markets_registry WHERE id=?", (int(market_id),)).fetchone()
-            return {"ok": True, "market": self._market_registry_payload(conn, refreshed), "probe": summary}
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+        return probe_market_registry_helper(
+            self,
+            market_id=market_id,
+            sync_runtime_markets=_sync_registry_markets_to_runtime,
+        )
 
     def _live_price_symbol(self, market_symbol, *, conn=None):
         symbol = self._normalize_market_symbol_on_conn(conn, market_symbol) if conn is not None else self.normalize_market_symbol(market_symbol)
