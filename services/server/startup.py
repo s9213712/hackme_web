@@ -235,15 +235,18 @@ def measure_backtest_capacity_if_needed(*, trading_service, audit):
         try:
             result = measure_backtest_capacity(trading_service=trading_service, time_budget_seconds=time_budget)
             trading_service.record_backtest_capacity_measurement(
-                measured_capacity=result.get("measured_capacity") or 0,
+                measured_capacity_min=result.get("measured_capacity_min") or 0,
+                measured_capacity_max=result.get("measured_capacity_max") or 0,
                 measured_at=result.get("measured_at") or "",
+                bottleneck_strategy=result.get("bottleneck_strategy") or "",
+                fastest_strategy=result.get("fastest_strategy") or "",
                 actor_id="system-startup",
             )
             audit(
                 "TRADING_BACKTEST_CAPACITY_PROBE_DONE",
                 "0.0.0.0",
                 user="system",
-                success=bool(result.get("measured_capacity")),
+                success=bool(result.get("measured_capacity_min")),
                 detail=json.dumps(result, ensure_ascii=False),
             )
         except Exception as exc:

@@ -1,22 +1,30 @@
 """First-boot backtest capacity probe.
 
-Runs a small synthetic backtest at a fixed candle count, then projects how
-many candles fit into a 60-second budget on this host. The result is stored
-as a hint for root in trading_settings (NOT enforced — the actual cap is
-``trading.backtest_max_candles`` which root sets manually).
+Measures the host's worst-case backtest throughput by running a small probe
+against every supported bot strategy (and every system workflow template),
+then projects the slowest per-candle cost into a configurable time budget.
 
-Designed to be cheap on cold boot: a single ~3 second probe, capped to 5s.
+The result is a hint for root, NOT enforced: the actual cap is
+``trading.backtest_max_candles`` which root sets manually. The hint exists
+so root can pick a cap that even the slowest bot can finish within the
+budget.
+
+Designed to be cheap on cold boot: each probe runs ~20K candles
+(~0.2-0.5s each on commodity hardware), so ~16 probes complete in well
+under 10 seconds.
 """
 from __future__ import annotations
 
+import json
 import time
 from datetime import datetime
-from typing import Any, Dict, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 
-PROBE_CANDLES = 200_000
+PROBE_CANDLES = 20_000
 PROBE_TIME_BUDGET_SECONDS = 60.0
-PROBE_HARD_TIMEOUT_SECONDS = 8.0
+WORKFLOWS_DIR = Path(__file__).resolve().parents[2] / "workflows" / "system"
 
 
 def _make_probe_candles(n: int) -> list:
@@ -57,6 +65,57 @@ def _resolve_probe_actor(trading_service: Any) -> Optional[Dict[str, Any]]:
             pass
 
 
+def _load_workflow_templates() -> List[Tuple[str, Dict[str, Any]]]:
+    if not WORKFLOWS_DIR.is_dir():
+        return []
+    templates = []
+    for path in sorted(WORKFLOWS_DIR.glob("*.json")):
+        try:
+            data = json.loads(path.read_text())
+        except Exception:
+            continue
+        wf = data.get("workflow")
+        if isinstance(wf, dict):
+            templates.append((path.stem, wf))
+    return templates
+
+
+def _build_probe_payloads(market_symbol: str, candles: list) -> List[Tuple[str, Dict[str, Any]]]:
+    """Return [(label, payload), ...] for one probe per bot type."""
+    payloads: List[Tuple[str, Dict[str, Any]]] = []
+    payloads.append(("conditional", {
+        "market_symbol": market_symbol,
+        "strategy": "conditional",
+        "trigger_type": "price_below",
+        "trigger_price_points": 0,
+        "candles": candles,
+    }))
+    payloads.append(("dca", {
+        "market_symbol": market_symbol,
+        "strategy": "dca",
+        "interval_seconds": 3600,
+        "order_amount_points": 100,
+        "candles": candles,
+    }))
+    payloads.append(("grid", {
+        "market_symbol": market_symbol,
+        "strategy": "grid",
+        "lower_price_points": 100,
+        "upper_price_points": 110,
+        "grid_count": 10,
+        "order_amount_points": 100,
+        "candles": candles,
+    }))
+    for name, wf in _load_workflow_templates():
+        payloads.append((f"workflow:{name}", {
+            "market_symbol": market_symbol,
+            "strategy": "workflow",
+            "workflow_json": wf,
+            "candles": candles,
+        }))
+    return payloads
+
+
 def measure_backtest_capacity(
     *,
     trading_service: Any,
@@ -65,48 +124,67 @@ def measure_backtest_capacity(
     probe_candles: int = PROBE_CANDLES,
     time_budget_seconds: float = PROBE_TIME_BUDGET_SECONDS,
 ) -> Dict[str, Any]:
-    """Run a single probe and project the 60-second capacity.
+    """Run probes across all bot types and return the worst-case 60-second capacity.
 
-    Returns ``{measured_capacity, measured_at, probe_candles, probe_seconds, candles_per_second}``.
-    Returns ``measured_capacity=0`` on any error so callers can treat absence as "unknown".
+    Returns ``{measured_capacity, measured_at, probe_candles, time_budget_seconds,
+    bottleneck_strategy, bottleneck_seconds, runs}`` where ``runs`` lists the
+    per-strategy timing. ``measured_capacity = floor(budget / max_per_candle_cost)``
+    so root knows the slowest bot can finish within the budget at this cap.
     """
     actor = actor or _resolve_probe_actor(trading_service) or {"id": 0, "username": "system", "role": "system"}
     candles = _make_probe_candles(probe_candles)
-    payload = {
-        "market_symbol": market_symbol,
-        "strategy": "conditional",
-        "trigger_type": "price_below",
-        "trigger_price_points": 0,  # never triggers — measures pure scan cost
-        "candles": candles,
-    }
-    started = time.perf_counter()
-    try:
-        trading_service.backtest_trading_bot(actor=actor, payload=payload)
-    except Exception:
+    payloads = _build_probe_payloads(market_symbol, candles)
+
+    runs: List[Dict[str, Any]] = []
+    for label, payload in payloads:
+        started = time.perf_counter()
+        ok = False
+        error = ""
+        try:
+            trading_service.backtest_trading_bot(actor=actor, payload=payload)
+            ok = True
+        except Exception as exc:
+            error = str(exc)[:200]
+        elapsed = time.perf_counter() - started
+        runs.append({
+            "strategy": label,
+            "ok": ok,
+            "elapsed_seconds": round(elapsed, 4),
+            "candles_per_second": int(probe_candles / elapsed) if (ok and elapsed > 0) else 0,
+            "error": error,
+        })
+
+    successful = [r for r in runs if r["ok"] and r["elapsed_seconds"] > 0]
+    if not successful:
         return {
-            "measured_capacity": 0,
+            "measured_capacity_min": 0,
+            "measured_capacity_max": 0,
             "measured_at": datetime.now().isoformat(timespec="seconds"),
             "probe_candles": probe_candles,
-            "probe_seconds": 0.0,
-            "candles_per_second": 0,
-            "error": "probe_failed",
+            "time_budget_seconds": time_budget_seconds,
+            "bottleneck_strategy": "",
+            "bottleneck_seconds": 0.0,
+            "fastest_strategy": "",
+            "fastest_seconds": 0.0,
+            "runs": runs,
+            "error": "no_successful_probes",
         }
-    elapsed = time.perf_counter() - started
-    if elapsed <= 0:
-        return {
-            "measured_capacity": 0,
-            "measured_at": datetime.now().isoformat(timespec="seconds"),
-            "probe_candles": probe_candles,
-            "probe_seconds": 0.0,
-            "candles_per_second": 0,
-            "error": "zero_elapsed",
-        }
-    rate = probe_candles / elapsed
-    measured_capacity = int(rate * time_budget_seconds)
+
+    bottleneck = max(successful, key=lambda r: r["elapsed_seconds"])
+    fastest = min(successful, key=lambda r: r["elapsed_seconds"])
+    worst_per_candle = bottleneck["elapsed_seconds"] / probe_candles
+    best_per_candle = fastest["elapsed_seconds"] / probe_candles
+    capacity_min = int(time_budget_seconds / worst_per_candle) if worst_per_candle > 0 else 0
+    capacity_max = int(time_budget_seconds / best_per_candle) if best_per_candle > 0 else 0
     return {
-        "measured_capacity": measured_capacity,
+        "measured_capacity_min": capacity_min,
+        "measured_capacity_max": capacity_max,
         "measured_at": datetime.now().isoformat(timespec="seconds"),
         "probe_candles": probe_candles,
-        "probe_seconds": round(elapsed, 3),
-        "candles_per_second": int(rate),
+        "time_budget_seconds": time_budget_seconds,
+        "bottleneck_strategy": bottleneck["strategy"],
+        "bottleneck_seconds": bottleneck["elapsed_seconds"],
+        "fastest_strategy": fastest["strategy"],
+        "fastest_seconds": fastest["elapsed_seconds"],
+        "runs": runs,
     }

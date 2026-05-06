@@ -2408,7 +2408,10 @@ class TradingEngineService:
             "bot_audit_min_enabled_seconds": raw_int_setting(raw, "trading.bot_audit_min_enabled_seconds", TRADING_BOT_AUDIT_MIN_ENABLED_SECONDS, name="bot_audit_min_enabled_seconds", minimum=3600, maximum=604800),
             "backtest_max_candles": raw_int_setting(raw, "trading.backtest_max_candles", str(MAX_BACKTEST_CANDLES), name="backtest_max_candles", minimum=BACKTEST_MAX_CANDLES_FLOOR, maximum=BACKTEST_MAX_CANDLES_CEILING),
             "backtest_measured_capacity": raw_int_setting(raw, "trading.backtest_measured_capacity", "0", name="backtest_measured_capacity", minimum=0, maximum=BACKTEST_MAX_CANDLES_CEILING),
+            "backtest_measured_capacity_max": raw_int_setting(raw, "trading.backtest_measured_capacity_max", "0", name="backtest_measured_capacity_max", minimum=0, maximum=BACKTEST_MAX_CANDLES_CEILING),
             "backtest_capacity_measured_at": raw.get("trading.backtest_capacity_measured_at", ""),
+            "backtest_capacity_bottleneck": raw.get("trading.backtest_capacity_bottleneck", ""),
+            "backtest_capacity_fastest": raw.get("trading.backtest_capacity_fastest", ""),
             "backtest_capacity_time_budget_seconds": raw_int_setting(raw, "trading.backtest_capacity_time_budget_seconds", str(BACKTEST_CAPACITY_TIME_BUDGET_DEFAULT_SECONDS), name="backtest_capacity_time_budget_seconds", minimum=BACKTEST_CAPACITY_TIME_BUDGET_MIN_SECONDS, maximum=BACKTEST_CAPACITY_TIME_BUDGET_MAX_SECONDS),
             "raw": raw,
         }
@@ -2487,7 +2490,7 @@ class TradingEngineService:
                 conn.close()
 
     def get_backtest_capacity_measurement(self, conn=None):
-        """Return {measured_capacity, measured_at} for the first-boot calibration result."""
+        """Return measurement payload (min/max capacity + bottleneck/fastest strategy)."""
         close_conn = False
         if conn is None:
             conn = self.get_db()
@@ -2496,44 +2499,102 @@ class TradingEngineService:
             try:
                 self.ensure_schema(conn)
                 rows = conn.execute(
-                    "SELECT key, value FROM trading_settings WHERE key IN (?, ?)",
-                    ("trading.backtest_measured_capacity", "trading.backtest_capacity_measured_at"),
+                    "SELECT key, value FROM trading_settings WHERE key IN (?, ?, ?, ?, ?)",
+                    (
+                        "trading.backtest_measured_capacity",
+                        "trading.backtest_measured_capacity_max",
+                        "trading.backtest_capacity_measured_at",
+                        "trading.backtest_capacity_bottleneck",
+                        "trading.backtest_capacity_fastest",
+                    ),
                 ).fetchall()
             except Exception:
-                return {"measured_capacity": 0, "measured_at": ""}
+                return {"measured_capacity": 0, "measured_capacity_max": 0, "measured_at": "", "bottleneck_strategy": "", "fastest_strategy": ""}
             raw = {row["key"]: row["value"] for row in rows}
             try:
                 measured_capacity = int(str(raw.get("trading.backtest_measured_capacity", "0")).strip() or 0)
             except Exception:
                 measured_capacity = 0
+            try:
+                measured_capacity_max = int(str(raw.get("trading.backtest_measured_capacity_max", "0")).strip() or 0)
+            except Exception:
+                measured_capacity_max = 0
             return {
                 "measured_capacity": max(0, measured_capacity),
+                "measured_capacity_max": max(0, measured_capacity_max),
                 "measured_at": raw.get("trading.backtest_capacity_measured_at", "") or "",
+                "bottleneck_strategy": raw.get("trading.backtest_capacity_bottleneck", "") or "",
+                "fastest_strategy": raw.get("trading.backtest_capacity_fastest", "") or "",
             }
         finally:
             if close_conn:
                 conn.close()
 
-    def record_backtest_capacity_measurement(self, *, measured_capacity, measured_at, actor_id="system"):
-        """Persist a first-boot calibration result (and optionally seed the cap setting if unset)."""
+    def record_backtest_capacity_measurement(
+        self,
+        *,
+        measured_capacity_min,
+        measured_capacity_max,
+        measured_at,
+        bottleneck_strategy="",
+        fastest_strategy="",
+        actor_id="system",
+        seed_default_cap=True,
+    ):
+        """Persist probe results.
+
+        If ``seed_default_cap`` and the cap setting is still at its first-boot default
+        (i.e., never set by root), auto-seed ``trading.backtest_max_candles`` with the
+        worst-case capacity so root sees a host-realistic default in the UI.
+        """
         try:
-            measured_capacity = int(measured_capacity)
+            measured_capacity_min = int(measured_capacity_min)
         except Exception:
-            measured_capacity = 0
-        measured_capacity = max(0, min(BACKTEST_MAX_CANDLES_CEILING, measured_capacity))
+            measured_capacity_min = 0
+        try:
+            measured_capacity_max = int(measured_capacity_max)
+        except Exception:
+            measured_capacity_max = 0
+        measured_capacity_min = max(0, min(BACKTEST_MAX_CANDLES_CEILING, measured_capacity_min))
+        measured_capacity_max = max(measured_capacity_min, min(BACKTEST_MAX_CANDLES_CEILING, measured_capacity_max))
         if not measured_at:
             measured_at = _now()
+        bottleneck_strategy = str(bottleneck_strategy or "")[:100]
+        fastest_strategy = str(fastest_strategy or "")[:100]
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
             conn.execute(
                 "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
-                ("trading.backtest_measured_capacity", str(measured_capacity), measured_at, actor_id),
+                ("trading.backtest_measured_capacity", str(measured_capacity_min), measured_at, actor_id),
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                ("trading.backtest_measured_capacity_max", str(measured_capacity_max), measured_at, actor_id),
             )
             conn.execute(
                 "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
                 ("trading.backtest_capacity_measured_at", measured_at, measured_at, actor_id),
             )
+            conn.execute(
+                "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                ("trading.backtest_capacity_bottleneck", bottleneck_strategy, measured_at, actor_id),
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                ("trading.backtest_capacity_fastest", fastest_strategy, measured_at, actor_id),
+            )
+            if seed_default_cap and measured_capacity_min >= BACKTEST_MAX_CANDLES_FLOOR:
+                # Only seed if cap is still unset — preserve any explicit root override.
+                row = conn.execute(
+                    "SELECT 1 FROM trading_settings WHERE key = ?",
+                    ("trading.backtest_max_candles",),
+                ).fetchone()
+                if not row:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                        ("trading.backtest_max_candles", str(measured_capacity_min), measured_at, actor_id),
+                    )
             conn.commit()
         finally:
             conn.close()

@@ -2384,12 +2384,17 @@ function renderRootTradingSettings(payload) {
   if ($("root-trading-backtest-capacity-budget")) $("root-trading-backtest-capacity-budget").value = settings.backtest_capacity_time_budget_seconds ?? 60;
   const measuredHintEl = $("root-trading-backtest-measured-hint");
   if (measuredHintEl) {
-    const measured = Number(settings.backtest_measured_capacity || 0);
+    const minCap   = Number(settings.backtest_measured_capacity || 0);
+    const maxCap   = Number(settings.backtest_measured_capacity_max || 0);
     const measuredAt = String(settings.backtest_capacity_measured_at || "").trim();
-    const budget = Number(settings.backtest_capacity_time_budget_seconds || 60);
-    if (measured > 0) {
-      const measuredAtSuffix = measuredAt ? `（${measuredAt} 量測）` : "";
-      measuredHintEl.textContent = `本機 ${budget} 秒內極限約 ${measured.toLocaleString()} 根${measuredAtSuffix}`;
+    const bottleneck = String(settings.backtest_capacity_bottleneck || "").trim();
+    const fastest    = String(settings.backtest_capacity_fastest || "").trim();
+    const budget   = Number(settings.backtest_capacity_time_budget_seconds || 60);
+    if (minCap > 0) {
+      const ts = measuredAt ? `（${measuredAt} 量測）` : "";
+      const minPart = `所有機器人最低 ${minCap.toLocaleString()} 根（瓶頸：${bottleneck || "-"}，做為預設值）`;
+      const maxPart = maxCap > 0 ? `；最快 ${maxCap.toLocaleString()} 根（${fastest || "-"}）` : "";
+      measuredHintEl.textContent = `${budget} 秒內 — ${minPart}${maxPart}${ts}`;
       measuredHintEl.style.color = "var(--accent-2, #00d4aa)";
     } else {
       measuredHintEl.textContent = "本機性能尚未量測（首次啟動時自動執行）";
