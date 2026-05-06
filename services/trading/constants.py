@@ -1,3 +1,5 @@
+"""Shared trading-domain constants."""
+
 from decimal import Decimal
 
 
@@ -7,3 +9,29 @@ DEFAULT_SPOT_FEE_RATE_PERCENT = 0.10
 DEFAULT_GRID_FEE_DISCOUNT_PERCENT = 25.0
 GRID_PREVIEW_YELLOW_NET_SPREAD_PERCENT = Decimal("0.10")
 APR_DAYS_PER_YEAR = Decimal("365")
+
+TRADING_BOT_TRIGGER_TYPES = {"always", "price_above", "price_below"}
+TRADING_BOT_TYPES = {"conditional", "dca"}
+TRADING_BOT_AUDIT_INTERVAL_SECONDS = 300
+TRADING_BOT_AUDIT_LIMIT = 50
+TRADING_BOT_AUDIT_MIN_ENABLED_SECONDS = 86_400
+WORKFLOW_CONDITION_TYPES = {
+    "always",
+    "price_above",
+    "price_below",
+    "rsi_above",
+    "rsi_below",
+    "kd_above",
+    "kd_below",
+    "ma_position",
+    "bb_position",
+    "has_position",
+    "change_percent_up",
+    "change_percent_down",
+    "stop_loss_percent",
+    "take_profit_percent",
+}
+WORKFLOW_ACTION_TYPES = {"buy_percent", "buy_amount", "sell_percent", "close_all", "hold"}
+WORKFLOW_NODE_TYPES = {"start", "condition", "logic", "action", "control"}
+WORKFLOW_PORTS = {"in", "out", "true", "false", "then", "wait"}
+UNLIMITED_BOT_MAX_RUNS = 2_147_483_647

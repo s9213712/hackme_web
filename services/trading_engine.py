@@ -55,6 +55,14 @@ from services.trading.constants import (
     DEFAULT_SPOT_FEE_RATE_PERCENT,
     GRID_PREVIEW_YELLOW_NET_SPREAD_PERCENT,
     POINT_MICRO_SCALE,
+    TRADING_BOT_AUDIT_INTERVAL_SECONDS,
+    TRADING_BOT_AUDIT_LIMIT,
+    TRADING_BOT_AUDIT_MIN_ENABLED_SECONDS,
+    UNLIMITED_BOT_MAX_RUNS,
+    WORKFLOW_ACTION_TYPES,
+    WORKFLOW_CONDITION_TYPES,
+    WORKFLOW_NODE_TYPES,
+    WORKFLOW_PORTS,
 )
 from services.trading.settings_schema import (
     TRADING_ROOT_BOOL_SETTING_KEYS,
@@ -73,8 +81,6 @@ from services.trading.settings_schema import (
     write_apr_from_daily,
 )
 from services.trading.notifications import (
-    bot_audit_notification_payload,
-    create_trading_root_notification,
     create_trading_user_notification,
     insufficient_balance_notification_payload,
     margin_liquidated_notification_payload,
@@ -131,13 +137,20 @@ from services.trading.payloads import (
     position_payload,
 )
 from services.trading.grid import (
+    create_grid_bot as create_grid_bot_helper,
+    delete_grid_bot as delete_grid_bot_helper,
     grid_bot_payload,
     grid_fee_rate_percent,
     grid_levels,
+    list_grid_bots as list_grid_bots_helper,
     grid_preview_fee_rates,
     grid_preview_risk,
     grid_preview_summary,
     grid_quantity_units,
+    preview_grid_bot as preview_grid_bot_helper,
+    scan_grid_bots as scan_grid_bots_helper,
+    scan_one_grid_bot as scan_one_grid_bot_helper,
+    toggle_grid_bot as toggle_grid_bot_helper,
 )
 from services.trading.bots.indicators import (
     build_workflow_indicator_series,
@@ -151,13 +164,32 @@ from services.trading.bots.workflow import (
     workflow_decision,
     workflow_graph_decision,
 )
-from services.trading.bots.audit import (
-    bot_audit_enabled_at,
-    bot_audit_is_eligible,
-    bot_audit_latest_map,
-    bot_audit_result,
-    build_bot_audit_dashboard_item,
-    increment_audit_summary,
+from services.trading.bots.service import (
+    bot_audit_candidates as bot_audit_candidates_helper,
+    bot_audit_dashboard_on_conn as bot_audit_dashboard_on_conn_helper,
+    bot_audit_enabled_at_on_row as bot_audit_enabled_at_helper,
+    bot_audit_is_eligible_on_row as bot_audit_is_eligible_helper,
+    bot_audit_latest_map_on_conn as bot_audit_latest_map_helper,
+    bot_audit_run_findings as bot_audit_run_findings_helper,
+    bot_condition_checks as bot_condition_checks_helper,
+    bot_trigger_hit as bot_trigger_hit_helper,
+    delete_trading_bot as delete_trading_bot_helper,
+    get_bot_audit_dashboard as get_bot_audit_dashboard_helper,
+    increase_trading_bot_max_runs as increase_trading_bot_max_runs_helper,
+    legacy_workflow as legacy_workflow_helper,
+    list_trading_bots as list_trading_bots_helper,
+    quantity_text_from_budget as quantity_text_from_budget_helper,
+    record_bot_audit_run as record_bot_audit_run_helper,
+    record_bot_run as record_bot_run_helper,
+    run_due_bot_audits as run_due_bot_audits_helper,
+    run_due_trading_bots as run_due_trading_bots_helper,
+    run_trading_bot_once as run_trading_bot_once_helper,
+    run_trading_bot_rows as run_trading_bot_rows_helper,
+    run_trading_bots as run_trading_bots_helper,
+    save_trading_bot as save_trading_bot_helper,
+    validate_bot_payload as validate_bot_payload_helper,
+    workflow_live_context as workflow_live_context_helper,
+    workflow_order_from_decision as workflow_order_from_decision_helper,
 )
 from services.trading.backtest import (
     backtest_anchor_price,
@@ -227,31 +259,8 @@ MARGIN_LONG_FINANCING_RATE_PERCENT = 90.0
 SHORT_COLLATERAL_RATE_PERCENT = 60.0
 SUPPORTED_EXECUTION_MODES = {"house_counterparty", "pvp_matching", "hybrid_liquidity"}
 OPEN_ORDER_STATUSES = {"open", "partially_filled"}
-TRADING_BOT_TRIGGER_TYPES = {"always", "price_above", "price_below"}
-TRADING_BOT_TYPES = {"conditional", "dca"}
 BACKTEST_SEGMENT_CANDLES = 10_000
 MAX_BACKTEST_CANDLES = 20_000
-TRADING_BOT_AUDIT_INTERVAL_SECONDS = 300
-TRADING_BOT_AUDIT_LIMIT = 50
-TRADING_BOT_AUDIT_MIN_ENABLED_SECONDS = 86_400
-WORKFLOW_CONDITION_TYPES = {
-    "price_below",
-    "price_above",
-    "rsi_above",
-    "rsi_below",
-    "kd_above",
-    "kd_below",
-    "ma_position",
-    "bb_position",
-    "has_position",
-    "change_percent_up",
-    "change_percent_down",
-    "take_profit_percent",
-    "stop_loss_percent",
-}
-WORKFLOW_ACTION_TYPES = {"buy_percent", "buy_amount", "sell_percent", "close_all", "hold"}
-WORKFLOW_NODE_TYPES = {"start", "condition", "logic", "action", "control"}
-WORKFLOW_PORTS = {"in", "out", "true", "false", "then", "wait"}
 BINANCE_TICKER_URL = "https://api.binance.com/api/v3/ticker/price"
 OKX_TICKER_URL = "https://www.okx.com/api/v5/market/ticker"
 COINBASE_TICKER_URL_TEMPLATE = "https://api.exchange.coinbase.com/products/{product_id}/ticker"
@@ -317,7 +326,6 @@ REFERENCE_PRICE_CAPABLE_PROVIDERS = {
 }
 TICKER_CAPABLE_PROVIDERS = set(REFERENCE_PRICE_CAPABLE_PROVIDERS) | {"coingecko_simple_price"}
 DEPTH_CAPABLE_PROVIDERS = set(WEIGHTED_PRICE_PROVIDERS)
-UNLIMITED_BOT_MAX_RUNS = 2_147_483_647
 LIVE_PRICE_SOURCE_NAMES = {
     FUSED_PRICE_SOURCE,
     "binance_public_api",
@@ -5307,57 +5315,15 @@ class TradingEngineService:
         }
 
     def _workflow_live_context(self, conn, *, market, user_id, observed_price, observed_low=None, observed_high=None):
-        position = self._position(conn, int(user_id), market["symbol"])
-        qty = int(position["quantity_units"] or 0)
-        locked = int(position["locked_quantity_units"] or 0)
-        avg_cost = float(_to_decimal(position["avg_cost_points"] or 0, name="avg_cost_points", minimum=0))
-        has_pos = qty > locked
-        low_price = float(observed_low or observed_price or 0)
-        high_price = float(observed_high or observed_price or 0)
-        pnl_percent = None
-        pnl_low_percent = None
-        pnl_high_percent = None
-        if has_pos and avg_cost > 0 and observed_price and observed_price > 0:
-            pnl_percent = round((observed_price - avg_cost) * 100.0 / avg_cost, 4)
-            if low_price > 0:
-                pnl_low_percent = round((low_price - avg_cost) * 100.0 / avg_cost, 4)
-            if high_price > 0:
-                pnl_high_percent = round((high_price - avg_cost) * 100.0 / avg_cost, 4)
-        context = {
-            "price": observed_price,
-            "window_low_price": low_price or observed_price,
-            "window_high_price": high_price or observed_price,
-            "has_position": has_pos,
-            "avg_cost": avg_cost,
-            "pnl_percent": pnl_percent,
-            "pnl_low_percent": pnl_low_percent,
-            "pnl_high_percent": pnl_high_percent,
-        }
-        try:
-            candles = self._fetch_indicator_candles(market["symbol"], conn=conn)
-            if candles:
-                latest = dict(candles[-1])
-                latest["close_points"] = observed_price
-                candles = [*candles[:-1], latest]
-                context.update(self._workflow_indicator_context(candles, len(candles) - 1))
-                context["price"] = observed_price
-                context["window_low_price"] = low_price or observed_price
-                context["window_high_price"] = high_price or observed_price
-                context["has_position"] = int(position["quantity_units"] or 0) > int(position["locked_quantity_units"] or 0)
-                context["pnl_percent"] = pnl_percent
-                context["pnl_low_percent"] = pnl_low_percent
-                context["pnl_high_percent"] = pnl_high_percent
-        except Exception as exc:
-            self._audit_event(
-                conn,
-                "TRADING_BOT_INDICATOR_CONTEXT_UNAVAILABLE",
-                "trading bot indicator context unavailable; price-only context used",
-                target_user_id=int(user_id),
-                market_symbol=market["symbol"],
-                severity="warning",
-                metadata={"error": str(exc)[:200]},
-            )
-        return context
+        return workflow_live_context_helper(
+            self,
+            conn,
+            market=market,
+            user_id=user_id,
+            observed_price=observed_price,
+            observed_low=observed_low,
+            observed_high=observed_high,
+        )
 
     def _current_market_price_points(self, conn, market, *, with_meta=False, high_risk=False):
         symbol = market["symbol"]
@@ -6791,29 +6757,16 @@ class TradingEngineService:
         return False, None
 
     def _legacy_workflow(self, *, trigger_type, trigger_price, side, quantity_text, order_type, limit_price, max_runs, cooldown_seconds):
-        condition = {"type": "always"}
-        if trigger_type == "price_above":
-            condition = {"type": "price_above", "value": int(trigger_price or 0)}
-        elif trigger_type == "price_below":
-            condition = {"type": "price_below", "value": int(trigger_price or 0)}
-        action = {"type": "buy_amount", "amount_points": 100, "step": 1}
-        if side == "sell":
-            action = {"type": "sell_percent", "percent": 100, "step": 1}
-        return {
-            "version": 1,
-            "strategy_kind": "workflow",
-            "source": "legacy_condition",
-            "branches": [{
-                "id": "branch_1",
-                "name": "預設策略",
-                "priority": 10,
-                "logic": "AND",
-                "cooldown_seconds": int(cooldown_seconds or 0),
-                "max_runs": int(max_runs or 1),
-                "conditions": [condition],
-                "actions": [{**action, "order_type": order_type, "limit_price_points": limit_price, "quantity": quantity_text}],
-            }],
-        }
+        return legacy_workflow_helper(
+            trigger_type=trigger_type,
+            trigger_price=trigger_price,
+            side=side,
+            quantity_text=quantity_text,
+            order_type=order_type,
+            limit_price=limit_price,
+            max_runs=max_runs,
+            cooldown_seconds=cooldown_seconds,
+        )
 
     def _validate_workflow(self, value):
         return validate_workflow(
@@ -6835,253 +6788,19 @@ class TradingEngineService:
         )
 
     def _validate_bot_payload(self, conn, payload):
-        payload = payload or {}
-        market = self._market(conn, payload.get("market_symbol"))
-        if not int(market.get("allow_bots") or 0):
-            raise ValueError("bots are disabled for this market")
-        bot_type = str(payload.get("bot_type") or "conditional").strip().lower()
-        if bot_type not in TRADING_BOT_TYPES:
-            raise ValueError("bot_type must be conditional or dca")
-        side = str(payload.get("side") or "").strip().lower()
-        order_type = str(payload.get("order_type") or "").strip().lower()
-        has_workflow_payload = payload.get("workflow_json") is not None or payload.get("workflow") is not None
-        trigger_type = str(payload.get("trigger_type") or ("always" if has_workflow_payload else "")).strip().lower()
-        if bot_type == "dca":
-            side = "buy"
-            order_type = "market"
-            trigger_type = "always"
-        if side not in {"buy", "sell"}:
-            raise ValueError("bot side must be buy or sell")
-        if order_type not in {"market", "limit"}:
-            raise ValueError("bot order_type must be market or limit")
-        if trigger_type not in TRADING_BOT_TRIGGER_TYPES:
-            raise ValueError("bot trigger_type must be always, price_above, or price_below")
-        budget_points = _to_int(payload.get("budget_points", 0), name="budget_points", minimum=0, maximum=10**12)
-        if bot_type == "dca":
-            if budget_points <= 0:
-                raise ValueError("dca budget_points must be positive")
-            quantity_text = "0.00000001"
-        else:
-            quantity_text = str(payload.get("quantity") or payload.get("quantity_text") or "").strip()
-            quantity_to_units(quantity_text)
-        limit_price = None
-        if order_type == "limit":
-            limit_price = _to_price_float(payload.get("limit_price_points"), name="limit_price_points", minimum=0.00000001, maximum=10**12)
-        trigger_price = None
-        if trigger_type != "always":
-            trigger_price = _to_price_float(payload.get("trigger_price_points"), name="trigger_price_points", minimum=0.00000001, maximum=10**12)
-        max_runs = _bot_max_runs_to_storage(
-            payload.get("max_runs", 1),
-            allow_unlimited=(bot_type == "dca"),
-            maximum=1000,
-        )
-        cooldown_seconds = _to_int(payload.get("cooldown_seconds", 300), name="cooldown_seconds", minimum=0, maximum=86400)
-        interval_hours = _to_int(payload.get("interval_hours", 24), name="interval_hours", minimum=1, maximum=8760)
-        if bot_type == "dca":
-            cooldown_seconds = max(cooldown_seconds, interval_hours * 3600)
-        workflow = None
-        if bot_type == "conditional":
-            workflow = self._validate_workflow(payload.get("workflow_json") or payload.get("workflow"))
-            if workflow is None:
-                workflow = self._legacy_workflow(
-                    trigger_type=trigger_type,
-                    trigger_price=trigger_price,
-                    side=side,
-                    quantity_text=quantity_text,
-                    order_type=order_type,
-                    limit_price=limit_price,
-                    max_runs=max_runs,
-                    cooldown_seconds=cooldown_seconds,
-                )
-        name = str(payload.get("name") or "").strip()[:80] or f"{market['symbol']} {bot_type}"
-        return {
-            "bot_type": bot_type,
-            "name": name,
-            "market_symbol": market["symbol"],
-            "side": side,
-            "order_type": order_type,
-            "quantity_text": quantity_text,
-            "limit_price_points": limit_price,
-            "trigger_type": trigger_type,
-            "trigger_price_points": trigger_price,
-            "enabled": bool(payload.get("enabled", True)),
-            "max_runs": max_runs,
-            "cooldown_seconds": cooldown_seconds,
-            "interval_hours": interval_hours,
-            "budget_points": budget_points,
-            "workflow": workflow,
-        }
+        return validate_bot_payload_helper(self, conn, payload)
 
     def list_trading_bots(self, *, actor):
-        user_id = self._actor_id(actor)
-        if not user_id:
-            raise ValueError("login required")
-        conn = self.get_db()
-        try:
-            self.ensure_schema(conn)
-            market_prices = {
-                row["symbol"]: float(_to_decimal(row["manual_price_points"] or 0, name="manual_price_points", minimum=0))
-                for row in conn.execute("SELECT symbol, manual_price_points FROM trading_markets").fetchall()
-            }
-            bots = []
-            for row in conn.execute("SELECT * FROM trading_bots WHERE user_id=? ORDER BY id DESC LIMIT 100", (user_id,)).fetchall():
-                bot = self._bot_payload(row)
-                current_price = market_prices.get(str(bot.get("market_symbol") or ""), 0)
-                try:
-                    bot["condition_checks"] = self._bot_condition_checks(bot, current_price)
-                except Exception:
-                    bot["condition_checks"] = []
-                bots.append(bot)
-            runs = [
-                self._bot_run_payload(row)
-                for row in conn.execute("SELECT * FROM trading_bot_runs WHERE user_id=? ORDER BY id DESC LIMIT 100", (user_id,)).fetchall()
-            ]
-            return {"ok": True, "bots": bots, "runs": runs}
-        finally:
-            conn.close()
+        return list_trading_bots_helper(self, actor=actor)
 
     def save_trading_bot(self, *, actor, payload, bot_uuid=None):
-        user_id = self._actor_id(actor)
-        if not user_id:
-            raise ValueError("login required")
-        conn = self.get_db()
-        try:
-            self.ensure_schema(conn)
-            conn.commit()
-            conn.execute("BEGIN IMMEDIATE")
-            self._assert_writable(conn)
-            data = self._validate_bot_payload(conn, payload)
-            now = _now()
-            if bot_uuid:
-                existing = conn.execute("SELECT * FROM trading_bots WHERE bot_uuid=?", (str(bot_uuid),)).fetchone()
-                if not existing:
-                    raise ValueError("trading bot not found")
-                if int(existing["user_id"]) != int(user_id):
-                    raise ValueError("cannot update another user's trading bot")
-                conn.execute(
-                    """
-                    UPDATE trading_bots
-                    SET bot_type=?, name=?, market_symbol=?, side=?, order_type=?, quantity_text=?,
-                        limit_price_points=?, trigger_type=?, trigger_price_points=?,
-                        enabled=?, max_runs=?, cooldown_seconds=?, interval_hours=?, budget_points=?,
-                        workflow_json=?, execution_state_json='{}', last_error='',
-                        enabled_at=?, updated_at=?
-                    WHERE id=?
-                    """,
-                    (
-                        data["bot_type"], data["name"], data["market_symbol"], data["side"], data["order_type"], data["quantity_text"],
-                        data["limit_price_points"], data["trigger_type"], data["trigger_price_points"],
-                        1 if data["enabled"] else 0, data["max_runs"], data["cooldown_seconds"],
-                        data["interval_hours"], data["budget_points"], _json_dumps(data["workflow"]) if data["workflow"] else None,
-                        now if data["enabled"] and not bool(existing["enabled"]) else (existing["enabled_at"] if data["enabled"] else None),
-                        now,
-                        existing["id"],
-                    ),
-                )
-                bot_id = existing["id"]
-                event_type = "TRADING_BOT_UPDATED"
-            else:
-                cur = conn.execute(
-                    """
-                    INSERT INTO trading_bots (
-                        bot_uuid, user_id, bot_type, name, market_symbol, side, order_type, quantity_text,
-                        limit_price_points, trigger_type, trigger_price_points, enabled,
-                        max_runs, run_count, cooldown_seconds, interval_hours, budget_points, workflow_json, execution_state_json, enabled_at, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, '{}', ?, ?, ?)
-                    """,
-                    (
-                        str(uuid.uuid4()), user_id, data["bot_type"], data["name"], data["market_symbol"], data["side"], data["order_type"],
-                        data["quantity_text"], data["limit_price_points"], data["trigger_type"], data["trigger_price_points"],
-                        1 if data["enabled"] else 0, data["max_runs"], data["cooldown_seconds"],
-                        data["interval_hours"], data["budget_points"], _json_dumps(data["workflow"]) if data["workflow"] else None,
-                        now if data["enabled"] else None,
-                        now,
-                        now,
-                    ),
-                )
-                bot_id = cur.lastrowid
-                event_type = "TRADING_BOT_CREATED"
-            row = conn.execute("SELECT * FROM trading_bots WHERE id=?", (bot_id,)).fetchone()
-            self._audit_event(conn, event_type, "trading bot workflow saved", actor=actor, target_user_id=user_id, market_symbol=row["market_symbol"], metadata={"bot_uuid": row["bot_uuid"], "bot_type": row["bot_type"], "trigger_type": row["trigger_type"], "side": row["side"], "order_type": row["order_type"]})
-            conn.commit()
-            return {"ok": True, "bot": self._bot_payload(row)}
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+        return save_trading_bot_helper(self, actor=actor, payload=payload, bot_uuid=bot_uuid)
 
     def delete_trading_bot(self, *, actor, bot_uuid):
-        user_id = self._actor_id(actor)
-        if not user_id:
-            raise ValueError("login required")
-        conn = self.get_db()
-        try:
-            self.ensure_schema(conn)
-            conn.commit()
-            conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute("SELECT * FROM trading_bots WHERE bot_uuid=?", (str(bot_uuid or ""),)).fetchone()
-            if not row:
-                raise ValueError("trading bot not found")
-            if int(row["user_id"]) != int(user_id):
-                raise ValueError("cannot delete another user's trading bot")
-            conn.execute("DELETE FROM trading_bots WHERE id=?", (row["id"],))
-            self._audit_event(conn, "TRADING_BOT_DELETED", "trading bot workflow deleted", actor=actor, target_user_id=user_id, market_symbol=row["market_symbol"], metadata={"bot_uuid": row["bot_uuid"]})
-            conn.commit()
-            return {"ok": True, "bot_uuid": row["bot_uuid"]}
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+        return delete_trading_bot_helper(self, actor=actor, bot_uuid=bot_uuid)
 
     def increase_trading_bot_max_runs(self, *, actor, bot_uuid, delta):
-        user_id = self._actor_id(actor)
-        if not user_id:
-            raise ValueError("login required")
-        increment = _to_int(delta, name="delta", minimum=1, maximum=1000)
-        conn = self.get_db()
-        try:
-            self.ensure_schema(conn)
-            conn.commit()
-            conn.execute("BEGIN IMMEDIATE")
-            self._assert_writable(conn)
-            row = conn.execute("SELECT * FROM trading_bots WHERE bot_uuid=?", (str(bot_uuid or ""),)).fetchone()
-            if not row:
-                raise ValueError("trading bot not found")
-            if int(row["user_id"]) != int(user_id):
-                raise ValueError("cannot update another user's trading bot")
-            if int(row["max_runs"] or 0) >= UNLIMITED_BOT_MAX_RUNS:
-                conn.commit()
-                return {"ok": True, "bot": self._bot_payload(row), "delta": 0, "unlimited": True}
-            next_max_runs = _to_int(int(row["max_runs"] or 0) + increment, name="max_runs", minimum=1, maximum=10000)
-            now = _now()
-            conn.execute(
-                "UPDATE trading_bots SET max_runs=?, updated_at=? WHERE id=?",
-                (next_max_runs, now, row["id"]),
-            )
-            updated = conn.execute("SELECT * FROM trading_bots WHERE id=?", (row["id"],)).fetchone()
-            self._audit_event(
-                conn,
-                "TRADING_BOT_MAX_RUNS_INCREASED",
-                "trading bot max runs increased",
-                actor=actor,
-                target_user_id=user_id,
-                market_symbol=row["market_symbol"],
-                metadata={
-                    "bot_uuid": row["bot_uuid"],
-                    "delta": increment,
-                    "previous_max_runs": int(row["max_runs"] or 0),
-                    "max_runs": next_max_runs,
-                },
-            )
-            conn.commit()
-            return {"ok": True, "bot": self._bot_payload(updated), "delta": increment}
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+        return increase_trading_bot_max_runs_helper(self, actor=actor, bot_uuid=bot_uuid, delta=delta)
 
     # ── Grid Trading Bot ────────────────────────────────────────────────────
 
@@ -7112,555 +6831,44 @@ class TradingEngineService:
         )
 
     def preview_grid_bot(self, *, actor, payload):
-        user_id = self._actor_id(actor)
-        if not user_id:
-            raise ValueError("login required")
-        source = payload or {}
-        market_symbol = str(source.get("market_symbol") or "").strip().upper()
-        upper_price = _to_price_float(source.get("upper_price_points", source.get("upper_price")), name="upper_price_points", minimum=0.00000001)
-        lower_price = _to_price_float(source.get("lower_price_points", source.get("lower_price")), name="lower_price_points", minimum=0.00000001)
-        if upper_price <= lower_price:
-            raise ValueError("upper_price_points must be greater than lower_price_points")
-        grid_count = _to_int(source.get("grid_count", 10), name="grid_count", minimum=2, maximum=200)
-        order_amount_decimal = _to_decimal(source.get("order_amount_points", source.get("investment_amount")), name="order_amount_points", minimum=1, maximum=10**12)
-        if order_amount_decimal != order_amount_decimal.to_integral_value():
-            raise ValueError("order_amount_points must be an integer")
-        order_amount_points = int(order_amount_decimal)
-        spacing_mode = str(source.get("spacing_mode") or "arithmetic").strip().lower()
-        if spacing_mode not in ("arithmetic", "geometric"):
-            spacing_mode = "arithmetic"
-        order_mode = str(source.get("order_mode") or "maker").strip().lower()
-        conn = self.get_db()
-        try:
-            self.ensure_schema(conn)
-            market = self._market(conn, market_symbol)
-            settings = self._settings_payload(conn)
-        finally:
-            conn.close()
-        fee_rates = self._grid_preview_fee_rates(market, settings, order_mode=order_mode)
-        summary = self._grid_preview_summary(
-            lower_price_points=lower_price,
-            upper_price_points=upper_price,
-            grid_count=grid_count,
-            order_amount_points=order_amount_points,
-            spacing_mode=spacing_mode,
-            fee_rates=fee_rates,
-        )
-        worst_pair = summary["worst_pair"] or {}
-        return {
-            "ok": True,
-            "market_symbol": market_symbol,
-            "spacing_mode": spacing_mode,
-            "order_mode": order_mode,
-            "levels": summary["grid_levels"],
-            "pair_count": summary["pair_count"],
-            "fee_model": {
-                "spot_fee_percent": _decimal_text(fee_rates["spot_fee_percent"], places="0.0001"),
-                "grid_discount_percent": _decimal_text(fee_rates["grid_discount_percent"], places="0.0001"),
-                "maker_fee_percent": _decimal_text(fee_rates["maker_fee_percent"], places="0.0001"),
-                "taker_fee_percent": _decimal_text(fee_rates["taker_fee_percent"], places="0.0001"),
-                "buy_fee_percent": _decimal_text(fee_rates["buy_fee_percent"], places="0.0001"),
-                "sell_fee_percent": _decimal_text(fee_rates["sell_fee_percent"], places="0.0001"),
-                "round_trip_fee_percent": _decimal_text(fee_rates["round_trip_fee_percent"], places="0.0001"),
-            },
-            "break_even": {
-                "min_spread_percent": _decimal_text(summary["break_even_spread_percent"], places="0.0001"),
-            },
-            "grid_profit": {
-                "grid_spacing_percent": _decimal_text(worst_pair.get("grid_spacing_percent", 0), places="0.0001"),
-                "grid_spacing_points": _decimal_text(worst_pair.get("grid_spacing_points", 0), places="0.0001"),
-                "estimated_net_spread_percent": _decimal_text(worst_pair.get("net_spread_percent", 0), places="0.0001"),
-                "estimated_gross_profit_per_grid": _decimal_text(worst_pair.get("gross_profit_points", 0)),
-                "estimated_fee_per_grid": _decimal_text(worst_pair.get("fee_points", 0)),
-                "estimated_net_profit_per_grid": _decimal_text(worst_pair.get("net_profit_points", 0)),
-                "estimated_total_gross_profit": _decimal_text(summary["estimated_total_gross_profit_points"]),
-                "estimated_total_fee": _decimal_text(summary["estimated_total_fee_points"]),
-                "estimated_total_net_profit": _decimal_text(summary["estimated_total_net_profit_points"]),
-                "reference_buy_price_points": _decimal_text(worst_pair.get("buy_price_points", 0), places="0.0001"),
-                "reference_sell_price_points": _decimal_text(worst_pair.get("sell_price_points", 0), places="0.0001"),
-                "reference_quantity": _decimal_text(worst_pair.get("quantity", 0)),
-            },
-            "risk": summary["risk"],
-        }
+        return preview_grid_bot_helper(self, actor=actor, payload=payload)
 
     def _grid_bot_payload(self, row, orders=None):
         return grid_bot_payload(row, json_loads=_json_loads, orders=orders)
 
     def create_grid_bot(self, *, actor, payload):
-        user_id = self._actor_id(actor)
-        if not user_id:
-            raise ValueError("login required")
-        payload = payload or {}
-        name = str(payload.get("name") or "").strip()
-        if not name:
-            raise ValueError("grid bot name is required")
-        if len(name) > 80:
-            raise ValueError("grid bot name too long")
-        market_symbol = str(payload.get("market_symbol") or "").strip().upper()
-        upper_price = _to_price_float(payload.get("upper_price_points"), name="upper_price_points", minimum=0.00000001)
-        lower_price = _to_price_float(payload.get("lower_price_points"), name="lower_price_points", minimum=0.00000001)
-        if upper_price <= lower_price:
-            raise ValueError("upper_price_points must be greater than lower_price_points")
-        grid_count = _to_int(payload.get("grid_count", 10), name="grid_count", minimum=2, maximum=200)
-        order_amount = _to_int(payload.get("order_amount_points"), name="order_amount_points", minimum=1)
-        spacing_mode = str(payload.get("spacing_mode") or "arithmetic").strip()
-        if spacing_mode not in ("arithmetic", "geometric"):
-            spacing_mode = "arithmetic"
-        preview = self.preview_grid_bot(
-            actor=actor,
-            payload={
-                "market_symbol": market_symbol,
-                "upper_price_points": upper_price,
-                "lower_price_points": lower_price,
-                "grid_count": grid_count,
-                "order_amount_points": order_amount,
-                "spacing_mode": spacing_mode,
-                "order_mode": "maker",
-            },
-        )
-        risk = preview.get("risk") or {}
-        if risk.get("blocked"):
-            raise ValueError(risk.get("message") or "grid preview blocked")
-        if risk.get("requires_confirmation") and not bool(payload.get("confirm_thin_profit")):
-            raise ValueError(risk.get("message") or "grid profit is too thin; confirmation required")
-
-        # Phase 1: validate market and get current price (read-only)
-        conn = self.get_db()
-        try:
-            self.ensure_schema(conn)
-            market = self._market(conn, market_symbol)
-            if not int(market.get("allow_bots") or 0):
-                raise ValueError("bots are disabled for this market")
-            current_price, _ = self._current_market_price_points(conn, market)
-        finally:
-            conn.close()
-
-        grid_levels = self._grid_levels(lower_price, upper_price, grid_count, spacing_mode)
-        now = _now()
-        bot_uuid = str(uuid.uuid4())
-
-        # Phase 2: insert bot row (commit immediately before placing orders)
-        conn = self.get_db()
-        try:
-            conn.execute("BEGIN IMMEDIATE")
-            conn.execute(
-                """
-                INSERT INTO trading_grid_bots
-                  (bot_uuid, user_id, name, market_symbol, upper_price_points, lower_price_points,
-                   grid_count, order_amount_points, enabled, initial_price_points, grid_levels_json,
-                   enabled_at, created_at, updated_at)
-                VALUES (?,?,?,?,?,?,?,?,1,?,?,?,?,?)
-                """,
-                (bot_uuid, user_id, name, market_symbol, upper_price, lower_price,
-                 grid_count, order_amount, current_price,
-                 json.dumps(grid_levels), now, now, now),
-            )
-            grid_bot_id = conn.execute(
-                "SELECT id FROM trading_grid_bots WHERE bot_uuid=?", (bot_uuid,)
-            ).fetchone()["id"]
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            conn.close()
-            raise
-        else:
-            conn.close()
-
-        # Phase 3: place limit orders for each level (each call opens its own connection)
-        bot_actor = {"id": int(user_id), "username": self._actor_username(actor), "role": self._actor_role(actor)}
-        placed = []
-        errors = []
-        for i, level_price in enumerate(grid_levels):
-            if level_price < current_price:
-                side = "buy"
-            elif level_price > current_price:
-                side = "sell"
-            else:
-                continue
-            qty_units = self._grid_quantity_units(order_amount, level_price)
-            if qty_units <= 0:
-                errors.append(f"level {i} price {level_price}: 金額不足以買入最小單位")
-                continue
-            qty_text = units_to_quantity(qty_units)
-            try:
-                order_result = self.place_order(
-                    actor=bot_actor,
-                    market_symbol=market_symbol,
-                    side=side,
-                    order_type="limit",
-                    quantity=qty_text,
-                    limit_price_points=level_price,
-                    is_grid_order=True,
-                )
-                trading_order_uuid = (order_result.get("order") or {}).get("order_uuid")
-                placed.append({"level_index": i, "price_points": level_price, "side": side,
-                               "trading_order_uuid": trading_order_uuid, "qty_units": qty_units})
-            except Exception as exc:
-                errors.append(f"level {i} price {level_price}: {exc}")
-
-        # Phase 4: record grid_orders for placed orders (single commit)
-        if placed:
-            conn = self.get_db()
-            try:
-                conn.execute("BEGIN IMMEDIATE")
-                for p in placed:
-                    conn.execute(
-                        """
-                        INSERT INTO trading_grid_orders
-                          (order_uuid, grid_bot_id, user_id, level_index, price_points, side,
-                           trading_order_uuid, status, created_at, updated_at)
-                        VALUES (?,?,?,?,?,?,?,'open',?,?)
-                        """,
-                        (str(uuid.uuid4()), grid_bot_id, user_id,
-                         p["level_index"], p["price_points"], p["side"],
-                         p["trading_order_uuid"], now, now),
-                    )
-                self._audit_event(conn, "GRID_BOT_CREATED", "grid trading bot created", actor=actor,
-                                  target_user_id=user_id, market_symbol=market_symbol,
-                                  metadata={"bot_uuid": bot_uuid, "grid_count": grid_count, "placed": len(placed)})
-                conn.commit()
-            except Exception:
-                conn.rollback()
-                conn.close()
-                raise
-            else:
-                conn.close()
-
-        # Phase 5: read back final state
-        conn = self.get_db()
-        try:
-            bot_row = conn.execute("SELECT * FROM trading_grid_bots WHERE bot_uuid=?", (bot_uuid,)).fetchone()
-            orders = conn.execute(
-                "SELECT * FROM trading_grid_orders WHERE grid_bot_id=? ORDER BY level_index ASC",
-                (grid_bot_id,),
-            ).fetchall()
-            return {"ok": True, "bot": self._grid_bot_payload(bot_row, [dict(o) for o in orders]),
-                    "placed": placed, "errors": errors, "current_price_points": current_price}
-        finally:
-            conn.close()
+        return create_grid_bot_helper(self, actor=actor, payload=payload)
 
     def list_grid_bots(self, *, actor):
-        user_id = self._actor_id(actor)
-        if not user_id:
-            raise ValueError("login required")
-        conn = self.get_db()
-        try:
-            self.ensure_schema(conn)
-            bots = []
-            for row in conn.execute("SELECT * FROM trading_grid_bots WHERE user_id=? ORDER BY id DESC LIMIT 50", (user_id,)).fetchall():
-                orders = conn.execute(
-                    "SELECT * FROM trading_grid_orders WHERE grid_bot_id=? ORDER BY level_index ASC, id ASC",
-                    (row["id"],),
-                ).fetchall()
-                bots.append(self._grid_bot_payload(row, [dict(o) for o in orders]))
-            return {"ok": True, "bots": bots}
-        finally:
-            conn.close()
+        return list_grid_bots_helper(self, actor=actor)
 
     def toggle_grid_bot(self, *, actor, bot_uuid, enabled):
-        user_id = self._actor_id(actor)
-        if not user_id:
-            raise ValueError("login required")
-        conn = self.get_db()
-        try:
-            self.ensure_schema(conn)
-            conn.commit()
-            conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute("SELECT * FROM trading_grid_bots WHERE bot_uuid=? AND user_id=?", (str(bot_uuid or ""), user_id)).fetchone()
-            if not row:
-                raise ValueError("grid bot not found")
-            now = _now()
-            conn.execute(
-                "UPDATE trading_grid_bots SET enabled=?, enabled_at=?, updated_at=? WHERE id=?",
-                (1 if enabled else 0, now if enabled and not bool(row["enabled"]) else (row["enabled_at"] if enabled else None), now, row["id"]),
-            )
-            conn.commit()
-            return {"ok": True, "bot_uuid": bot_uuid, "enabled": bool(enabled)}
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+        return toggle_grid_bot_helper(self, actor=actor, bot_uuid=bot_uuid, enabled=enabled)
 
     def delete_grid_bot(self, *, actor, bot_uuid):
-        user_id = self._actor_id(actor)
-        if not user_id:
-            raise ValueError("login required")
-        # Phase 1: read-only — fetch bot and open order UUIDs
-        conn = self.get_db()
-        try:
-            self.ensure_schema(conn)
-            row = conn.execute("SELECT * FROM trading_grid_bots WHERE bot_uuid=? AND user_id=?", (str(bot_uuid or ""), user_id)).fetchone()
-            if not row:
-                raise ValueError("grid bot not found")
-            open_order_uuids = [
-                go["trading_order_uuid"]
-                for go in conn.execute(
-                    "SELECT trading_order_uuid FROM trading_grid_orders WHERE grid_bot_id=? AND status='open'",
-                    (row["id"],),
-                ).fetchall()
-                if go["trading_order_uuid"]
-            ]
-            bot_id = row["id"]
-        finally:
-            conn.close()
-        # Phase 2: cancel each open limit order (each cancel_order uses its own connection)
-        bot_actor = {"id": int(user_id), "username": self._actor_username(actor), "role": self._actor_role(actor)}
-        for order_uuid in open_order_uuids:
-            try:
-                self.cancel_order(actor=bot_actor, order_uuid=order_uuid)
-            except Exception:
-                pass
-        # Phase 3: delete the bot row (CASCADE removes grid_orders)
-        conn = self.get_db()
-        try:
-            conn.execute("BEGIN IMMEDIATE")
-            conn.execute("DELETE FROM trading_grid_bots WHERE id=?", (bot_id,))
-            conn.commit()
-            return {"ok": True, "bot_uuid": bot_uuid}
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+        return delete_grid_bot_helper(self, actor=actor, bot_uuid=bot_uuid)
 
     def scan_grid_bots(self, *, actor):
-        user_id = self._actor_id(actor)
-        if not user_id:
-            raise ValueError("login required")
-        conn = self.get_db()
-        try:
-            self.ensure_schema(conn)
-            bots = conn.execute(
-                "SELECT * FROM trading_grid_bots WHERE user_id=? AND enabled=1 ORDER BY id ASC",
-                (user_id,),
-            ).fetchall()
-        finally:
-            conn.close()
-        results = []
-        for bot in bots:
-            try:
-                r = self._scan_one_grid_bot(bot, actor=actor)
-                results.append(r)
-            except Exception as exc:
-                conn2 = self.get_db()
-                try:
-                    conn2.execute("UPDATE trading_grid_bots SET last_error=?, updated_at=? WHERE id=?", (str(exc)[:500], _now(), bot["id"]))
-                    conn2.commit()
-                except Exception:
-                    pass
-                finally:
-                    conn2.close()
-                results.append({"bot_uuid": bot["bot_uuid"], "error": str(exc)})
-        return {"ok": True, "scanned": len(bots), "results": results}
+        return scan_grid_bots_helper(self, actor=actor)
 
     def _scan_one_grid_bot(self, bot, *, actor):
-        user_id = int(bot["user_id"])
-        bot_id = int(bot["id"])
-        bot_actor = {"id": user_id, "username": self._actor_username(actor), "role": self._actor_role(actor)}
-        now = _now()
-        route_ctx = self._resolve_trading_ctx(action="grid_bot_scan")
-        orders_table = resolve_table("orders", route_ctx)
-        conn = self.get_db()
-        try:
-            self.ensure_schema(conn)
-            market = self._market(conn, bot["market_symbol"])
-            current_price, _price_source, price_meta = self._current_market_price_points(conn, market, with_meta=True, high_risk=True)
-            self._assert_price_meta_allows_high_risk_use(
-                conn,
-                actor=actor,
-                market_symbol=market["symbol"],
-                usage="grid bot scan",
-                price_meta=price_meta,
-            )
-            price_window = self._recent_price_window(
-                market["symbol"],
-                lookback_seconds=65,
-                since_time_text=bot["last_scan_at"] if "last_scan_at" in bot.keys() else None,
-                conn=conn,
-            )
-            window_low = float((price_window or {}).get("low_points") or current_price)
-            window_high = float((price_window or {}).get("high_points") or current_price)
-            grid_levels = _json_loads(bot["grid_levels_json"], [])
-            if not grid_levels:
-                grid_levels = self._grid_levels(bot["lower_price_points"], bot["upper_price_points"], bot["grid_count"])
-            open_grid_orders = conn.execute(
-                "SELECT * FROM trading_grid_orders WHERE grid_bot_id=? AND status='open' ORDER BY level_index ASC",
-                (bot_id,),
-            ).fetchall()
-            fills_processed = []
-            counter_orders_placed = []
-            profit_delta = 0
-            trades_delta = 0
-            for go in open_grid_orders:
-                if not go["trading_order_uuid"]:
-                    continue
-                t_order = conn.execute(
-                    f"SELECT * FROM {orders_table} WHERE order_uuid=?",
-                    (go["trading_order_uuid"],),
-                ).fetchone()
-                if not t_order:
-                    continue
-                if t_order["status"] in ("filled", "partially_filled"):
-                    filled_units = int(t_order["filled_quantity_units"] or 0)
-                else:
-                    executable, _ = self._is_executable(
-                        market,
-                        side=t_order["side"],
-                        order_type=t_order["order_type"],
-                        limit_price=t_order["limit_price_points"],
-                        current_price=current_price,
-                    )
-                    if not executable and t_order["order_type"] == "limit":
-                        limit_price = float(_to_decimal(t_order["limit_price_points"] or 0, name="limit_price_points", minimum=0))
-                        if t_order["side"] == "buy" and limit_price > 0 and window_low <= limit_price:
-                            executable = True
-                        elif t_order["side"] == "sell" and limit_price > 0 and window_high >= limit_price:
-                            executable = True
-                    if not executable:
-                        continue
-                    execution_price = float(t_order["limit_price_points"] or go["price_points"] or current_price)
-                    conn.execute(
-                        f"UPDATE {orders_table} SET execution_price_points=?, updated_at=? WHERE id=?",
-                        (execution_price, now, t_order["id"]),
-                    )
-                    t_order = conn.execute(f"SELECT * FROM {orders_table} WHERE id=?", (t_order["id"],)).fetchone()
-                    fill = self._execute_order(conn, t_order, market, actor=actor, ctx=route_ctx)
-                    filled_units = int(fill["quantity_units"] or 0)
-                    self._audit_event(
-                        conn,
-                        "GRID_ORDER_FILLED",
-                        "grid order filled by CFD price crossing",
-                        actor=actor,
-                        target_user_id=user_id,
-                        order_id=t_order["id"],
-                        market_symbol=market["symbol"],
-                        metadata={
-                            "bot_uuid": bot["bot_uuid"],
-                            "grid_order_uuid": go["order_uuid"],
-                            "fill_id": fill["id"],
-                            "level_index": int(go["level_index"]),
-                            "side": go["side"],
-                            "trigger_price_points": current_price,
-                            "execution_price_points": execution_price,
-                        },
-                    )
-                    self._notify_trade_filled(conn, fill)
-                    conn.commit()
-                filled_units = int(filled_units or 0)
-                if filled_units <= 0:
-                    continue
-                conn.commit()
-                conn.execute("BEGIN IMMEDIATE")
-                conn.execute(
-                    "UPDATE trading_grid_orders SET status='filled', filled_quantity_units=?, updated_at=? WHERE id=?",
-                    (filled_units, now, go["id"]),
-                )
-                conn.commit()
-                fills_processed.append({"level_index": go["level_index"], "side": go["side"], "price_points": go["price_points"]})
-                level_idx = int(go["level_index"])
-                side = str(go["side"])
-                filled_price = float(_to_decimal(go["price_points"] or 0, name="grid_price_points", minimum=0))
-                if side == "buy":
-                    counter_level_idx = level_idx + 1
-                    counter_side = "sell"
-                else:
-                    counter_level_idx = level_idx - 1
-                    counter_side = "buy"
-                    buy_price = grid_levels[level_idx - 1] if level_idx > 0 else filled_price
-                    settings = self._settings_payload(conn)
-                    grid_fee_rate_percent = self._grid_fee_rate_percent(float(market["fee_rate_percent"] or 0), settings)
-                    buy_notional = notional_points(filled_units, buy_price)
-                    sell_notional = notional_points(filled_units, filled_price)
-                    gross_profit = sell_notional - buy_notional
-                    total_fee = fee_points(buy_notional, grid_fee_rate_percent) + fee_points(sell_notional, grid_fee_rate_percent)
-                    profit_delta += gross_profit - total_fee
-                    trades_delta += 1
-                if 0 <= counter_level_idx < len(grid_levels):
-                    counter_price = int(grid_levels[counter_level_idx])
-                    existing = conn.execute(
-                        "SELECT id FROM trading_grid_orders WHERE grid_bot_id=? AND level_index=? AND status='open'",
-                        (bot_id, counter_level_idx),
-                    ).fetchone()
-                    if not existing:
-                        qty_units = filled_units if counter_side == "sell" else self._grid_quantity_units(int(bot["order_amount_points"]), counter_price)
-                        if qty_units > 0:
-                            qty_text = units_to_quantity(qty_units)
-                            try:
-                                order_result = self.place_order(
-                                    actor=bot_actor,
-                                    market_symbol=bot["market_symbol"],
-                                    side=counter_side,
-                                    order_type="limit",
-                                    quantity=qty_text,
-                                    limit_price_points=counter_price,
-                                    is_grid_order=True,
-                                )
-                                t_order_uuid = (order_result.get("order") or {}).get("order_uuid")
-                                grid_order_uuid = str(uuid.uuid4())
-                                conn.execute("BEGIN IMMEDIATE")
-                                conn.execute(
-                                    """
-                                    INSERT INTO trading_grid_orders
-                                      (order_uuid, grid_bot_id, user_id, level_index, price_points, side,
-                                       trading_order_uuid, status, created_at, updated_at)
-                                    VALUES (?,?,?,?,?,?,?,'open',?,?)
-                                    """,
-                                    (grid_order_uuid, bot_id, user_id, counter_level_idx, counter_price,
-                                     counter_side, t_order_uuid, now, now),
-                                )
-                                conn.commit()
-                                counter_orders_placed.append({"level_index": counter_level_idx, "side": counter_side, "price_points": counter_price})
-                            except Exception as exc:
-                                conn.rollback()
-                                pass
-            if profit_delta or trades_delta:
-                conn.execute(
-                    "UPDATE trading_grid_bots SET total_profit_points=total_profit_points+?, total_trades=total_trades+?, last_scan_at=?, last_error=NULL, updated_at=? WHERE id=?",
-                    (profit_delta, trades_delta, now, now, bot_id),
-                )
-                conn.commit()
-            else:
-                conn.execute("UPDATE trading_grid_bots SET last_scan_at=?, updated_at=? WHERE id=?", (now, now, bot_id))
-                conn.commit()
-            return {
-                "bot_uuid": bot["bot_uuid"],
-                "current_price_points": current_price,
-                "scan_window_low_points": window_low,
-                "scan_window_high_points": window_high,
-                "fills_processed": fills_processed,
-                "counter_orders_placed": counter_orders_placed,
-                "profit_delta": profit_delta,
-            }
-        finally:
-            conn.close()
+        return scan_one_grid_bot_helper(self, bot, actor=actor)
 
     # ── End Grid Trading Bot ─────────────────────────────────────────────────
 
     def _bot_trigger_hit(self, bot, observed_price, *, observed_low=None, observed_high=None):
-        if str(bot["bot_type"] or "conditional") == "dca":
-            return True
-        trigger_type = bot["trigger_type"]
-        if trigger_type == "always":
-            return True
-        trigger_price = float(bot["trigger_price_points"] or 0)
-        low_price = float(observed_low or observed_price or 0)
-        high_price = float(observed_high or observed_price or 0)
-        if trigger_type == "price_above":
-            return high_price > 0 and high_price >= trigger_price
-        if trigger_type == "price_below":
-            return low_price > 0 and low_price <= trigger_price
-        return False
+        return bot_trigger_hit_helper(
+            bot,
+            observed_price,
+            observed_low=observed_low,
+            observed_high=observed_high,
+        )
 
     def _quantity_text_from_budget(self, *, budget_points, price_points):
-        budget = int(budget_points or 0)
-        price = _to_decimal(price_points, name="price_points", minimum=0)
-        if budget <= 0 or price <= 0:
-            raise ValueError("dca budget or price is invalid")
-        units = int((Decimal(budget) * Decimal(ASSET_SCALE) / price).quantize(Decimal("1"), rounding=ROUND_DOWN))
-        if units <= 0:
-            raise ValueError("dca budget is too small for current price")
-        return units_to_quantity(units)
+        return quantity_text_from_budget_helper(
+            budget_points=budget_points,
+            price_points=price_points,
+        )
 
     def _build_workflow_indicator_series(self, candles):
         return build_workflow_indicator_series(candles)
@@ -7672,74 +6880,7 @@ class TradingEngineService:
         return workflow_condition_hit(condition, context)
 
     def _bot_condition_checks(self, bot, current_price):
-        checks = []
-        bot_type = str(bot.get("bot_type") or "conditional")
-        if bot_type == "dca":
-            interval = int(bot.get("interval_hours") or 24)
-            last_run = bot.get("last_run_at")
-            if last_run:
-                try:
-                    next_dt = datetime.fromisoformat(str(last_run)) + timedelta(hours=interval)
-                    met = datetime.now() >= next_dt
-                    checks.append({"label": f"距上次定投已滿 {interval}h", "met": met})
-                except Exception:
-                    checks.append({"label": f"定投間隔 {interval}h", "met": True})
-            else:
-                checks.append({"label": f"定投間隔 {interval}h（尚未執行過）", "met": True})
-            return checks
-        workflow = bot.get("workflow")
-        if workflow and isinstance(workflow, dict):
-            branches = workflow.get("branches") or []
-            if branches:
-                for i, branch in enumerate(branches):
-                    cond = branch.get("condition")
-                    if cond:
-                        ctx = {"price": float(current_price or 0)}
-                        met = self._workflow_condition_hit(cond, ctx)
-                        label = _condition_label(cond)
-                        checks.append({"label": f"分支{i + 1}: {label}", "met": met})
-                return checks
-            nodes = workflow.get("nodes") or []
-            for node in nodes:
-                if node.get("type") == "condition":
-                    cond = node.get("condition")
-                    if cond:
-                        ctx = {"price": float(current_price or 0)}
-                        met = self._workflow_condition_hit(cond, ctx)
-                        label = _condition_label(cond)
-                        checks.append({"label": f"節點 {node.get('id', '')}: {label}", "met": met})
-            if not checks:
-                checks.append({"label": "Workflow（無條件節點）", "met": True})
-            return checks
-        trigger_type = str(bot.get("trigger_type") or "always")
-        if trigger_type == "always":
-            checks.append({"label": "無條件觸發", "met": True})
-        elif trigger_type == "price_above":
-            threshold = float(_to_decimal(bot.get("trigger_price_points") or 0, name="trigger_price_points", minimum=0))
-            live_price = float(_to_decimal(current_price or 0, name="current_price", minimum=0))
-            met = live_price >= threshold
-            checks.append({"label": f"價格 ≥ {_decimal_text(threshold)} 點（現價 {_decimal_text(live_price)}）", "met": met})
-        elif trigger_type == "price_below":
-            threshold = float(_to_decimal(bot.get("trigger_price_points") or 0, name="trigger_price_points", minimum=0))
-            live_price = float(_to_decimal(current_price or 0, name="current_price", minimum=0))
-            met = live_price <= threshold
-            checks.append({"label": f"價格 ≤ {_decimal_text(threshold)} 點（現價 {_decimal_text(live_price)}）", "met": met})
-        if bot.get("run_count") is not None and bot.get("max_runs") is not None:
-            run_count = int(bot["run_count"])
-            max_runs = int(bot["max_runs"])
-            if max_runs == -1:
-                checks.append({"label": f"執行次數 {run_count}/不限制", "met": True})
-            else:
-                checks.append({"label": f"執行次數 {run_count}/{max_runs}", "met": _bot_max_runs_has_remaining(run_count, max_runs)})
-        cooldown = int(bot.get("cooldown_seconds") or 0)
-        if cooldown > 0 and bot.get("last_run_at"):
-            try:
-                next_dt = datetime.fromisoformat(str(bot["last_run_at"])) + timedelta(seconds=cooldown)
-                met = datetime.now() >= next_dt
-                checks.append({"label": f"冷卻 {cooldown}s（{'已解除' if met else '冷卻中'}）", "met": met})
-            except Exception:
-                pass
-        return checks
+        return bot_condition_checks_helper(self, bot, current_price)
 
     def _workflow_graph_decision(self, workflow, *, context, run_count=0, last_run_at=None, execution_state=None):
         return workflow_graph_decision(
@@ -7764,261 +6905,27 @@ class TradingEngineService:
         )
 
     def _workflow_order_from_decision(self, conn, *, user_id, actor, market, decision, price_points):
-        action = decision.get("action") or {}
-        atype = str(action.get("type") or "hold")
-        if atype == "hold":
-            return None
-        funding = self._funding_payload(conn, user_id)
-        position = self._position(conn, user_id, market["symbol"])
-        order_type = str(action.get("order_type") or "market").lower()
-        limit_price = float(_to_decimal(action.get("limit_price_points") or 0, name="limit_price_points", minimum=0)) or None
-        if atype in {"buy_percent", "buy_amount"}:
-            available = int(funding.get("available_points") or 0)
-            amount = int(float(action.get("amount_points") or 0))
-            if atype == "buy_percent":
-                amount = int(available * max(0.0, min(float(action.get("percent") or 0), 100.0)) / 100)
-            fee_rate = float(market["fee_rate_percent"] or 0) / 100.0
-            spend = max(0, min(amount, available))
-            if spend <= 0:
-                raise ValueError("workflow buy action has no available funds")
-            price_decimal = _to_decimal(price_points or 0, name="price_points", minimum=0.00000001)
-            spend_decimal = Decimal(str(spend)) / Decimal(str(1 + fee_rate))
-            units = int((spend_decimal * Decimal(ASSET_SCALE) / price_decimal).quantize(Decimal("1"), rounding=ROUND_DOWN))
-            if units <= 0:
-                raise ValueError("workflow buy action is too small")
-            return {"side": "buy", "order_type": order_type, "quantity": units_to_quantity(units), "limit_price_points": limit_price}
-        if atype in {"sell_percent", "close_all"}:
-            sellable_units = max(0, int(position["quantity_units"] or 0) - int(position["locked_quantity_units"] or 0))
-            percent = 100.0 if atype == "close_all" else max(0.0, min(float(action.get("percent") or 0), 100.0))
-            units = int(sellable_units * percent / 100)
-            if units <= 0:
-                raise ValueError("workflow sell action has no sellable position")
-            return {"side": "sell", "order_type": order_type, "quantity": units_to_quantity(units), "limit_price_points": limit_price}
-        return None
+        return workflow_order_from_decision_helper(
+            self,
+            conn,
+            user_id=user_id,
+            actor=actor,
+            market=market,
+            decision=decision,
+            price_points=price_points,
+        )
 
     def run_trading_bots(self, *, actor, limit=50):
-        user_id = self._actor_id(actor)
-        if not user_id:
-            raise ValueError("login required")
-        limit = _to_int(limit or 50, name="limit", minimum=1, maximum=200)
-        conn = self.get_db()
-        try:
-            self.ensure_schema(conn)
-            rows = conn.execute(
-                """
-                SELECT b.*, u.username, u.role
-                FROM trading_bots b
-                JOIN users u ON u.id=b.user_id
-                WHERE b.user_id=? AND b.enabled=1 AND b.run_count < b.max_runs
-                ORDER BY b.id ASC
-                LIMIT ?
-                """,
-                (user_id, limit),
-            ).fetchall()
-        finally:
-            conn.close()
-
-        return self._run_trading_bot_rows(rows)
+        return run_trading_bots_helper(self, actor=actor, limit=limit)
 
     def run_trading_bot_once(self, *, actor, bot_uuid):
-        user_id = self._actor_id(actor)
-        if not user_id:
-            raise ValueError("login required")
-        conn = self.get_db()
-        try:
-            self.ensure_schema(conn)
-            row = conn.execute(
-                """
-                SELECT b.*, u.username, u.role
-                FROM trading_bots b
-                JOIN users u ON u.id=b.user_id
-                WHERE b.bot_uuid=? AND b.user_id=?
-                LIMIT 1
-                """,
-                (str(bot_uuid or ""), user_id),
-            ).fetchone()
-        finally:
-            conn.close()
-
-        if not row:
-            raise ValueError("trading bot not found")
-        if not bool(row["enabled"]):
-            return {"ok": True, "scanned": 1, "triggered": [], "skipped": [{"bot_uuid": row["bot_uuid"], "reason": "disabled"}], "failed": []}
-        if not _bot_max_runs_has_remaining(row["run_count"], row["max_runs"]):
-            return {"ok": True, "scanned": 1, "triggered": [], "skipped": [{"bot_uuid": row["bot_uuid"], "reason": "max_runs_reached"}], "failed": []}
-        return self._run_trading_bot_rows([row])
+        return run_trading_bot_once_helper(self, actor=actor, bot_uuid=bot_uuid)
 
     def run_due_trading_bots(self, *, actor=None, limit=50):
-        limit = _to_int(limit or 50, name="limit", minimum=1, maximum=200)
-        conn = self.get_db()
-        try:
-            self.ensure_schema(conn)
-            settings = self._settings_payload(conn)
-            if not settings.get("enabled", True):
-                return {"ok": True, "enabled": False, "reason": "trading_disabled", "scanned": 0, "triggered": [], "skipped": [], "failed": []}
-            if not settings.get("bot_auto_scan_enabled", True):
-                return {"ok": True, "enabled": False, "reason": "bot_auto_scan_disabled", "scanned": 0, "triggered": [], "skipped": [], "failed": []}
-            user_cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
-            active_clauses = []
-            if "status" in user_cols:
-                active_clauses.append("COALESCE(u.status, 'active') = 'active'")
-            if "deleted_at" in user_cols:
-                active_clauses.append("COALESCE(u.deleted_at, '') = ''")
-            active_sql = " AND ".join(active_clauses) if active_clauses else "1=1"
-            rows = conn.execute(
-                f"""
-                SELECT b.*, u.username, u.role
-                FROM trading_bots b
-                JOIN users u ON u.id=b.user_id
-                WHERE b.enabled=1 AND b.run_count < b.max_runs AND {active_sql}
-                ORDER BY b.id ASC
-                LIMIT ?
-                """,
-                (limit,),
-            ).fetchall()
-        finally:
-            conn.close()
-
-        result = self._run_trading_bot_rows(rows)
-        result["enabled"] = True
-        return result
+        return run_due_trading_bots_helper(self, actor=actor, limit=limit)
 
     def _run_trading_bot_rows(self, rows):
-        scanned = 0
-        triggered = []
-        skipped = []
-        failed = []
-        for row in rows:
-            scanned += 1
-            price_conn = None
-            now_dt = datetime.now()
-            workflow_state = _json_loads(row["execution_state_json"], {}) if "execution_state_json" in row.keys() else {}
-            if not isinstance(workflow_state, dict):
-                workflow_state = {}
-            workflow_state.setdefault("executed_action_ids", [])
-            workflow_state.setdefault("branch_step_counts", {})
-            decision = None
-            if row["last_run_at"]:
-                try:
-                    last_run = datetime.fromisoformat(str(row["last_run_at"]))
-                    if (now_dt - last_run).total_seconds() < int(row["cooldown_seconds"] or 0):
-                        skipped.append({"bot_uuid": row["bot_uuid"], "reason": "cooldown"})
-                        continue
-                except Exception:
-                    pass
-            observed_price = None
-            try:
-                price_conn = self.get_db()
-                self.ensure_schema(price_conn)
-                market = self._market(price_conn, row["market_symbol"])
-                settings = self._settings_payload(price_conn)
-                observed_price, price_source, price_meta = self._current_market_price_points(price_conn, market, with_meta=True, high_risk=True)
-                self._assert_price_meta_allows_high_risk_use(
-                    price_conn,
-                    actor={"id": int(row["user_id"]), "username": row["username"], "role": row["role"]},
-                    market_symbol=market["symbol"],
-                    usage="trading bot trigger",
-                    price_meta=price_meta,
-                )
-                price_window = self._recent_price_window(
-                    market["symbol"],
-                    lookback_seconds=max(60, int(settings.get("bot_auto_scan_interval_seconds") or 30) + 5),
-                    since_time_text=row["last_scan_at"] if "last_scan_at" in row.keys() else None,
-                    conn=price_conn,
-                )
-                observed_low = float((price_window or {}).get("low_points") or observed_price)
-                observed_high = float((price_window or {}).get("high_points") or observed_price)
-                workflow = _json_loads(row["workflow_json"], None) if "workflow_json" in row.keys() else None
-                order_payload = None
-                if workflow and str(row["bot_type"] or "conditional") == "conditional":
-                    context = self._workflow_live_context(
-                        price_conn,
-                        market=market,
-                        user_id=int(row["user_id"]),
-                        observed_price=observed_price,
-                        observed_low=observed_low,
-                        observed_high=observed_high,
-                    )
-                    decision = self._workflow_decision(
-                        workflow,
-                        context=context,
-                        run_count=int(row["run_count"] or 0),
-                        last_run_at=row["last_run_at"],
-                        execution_state=workflow_state,
-                    )
-                    if not decision:
-                        skipped_reason = "condition_not_met" if workflow.get("source") == "legacy_condition" else "workflow_not_matched"
-                        price_conn.close()
-                        price_conn = None
-                        self._record_bot_run(row, status="skipped", observed_price=observed_price, error=skipped_reason)
-                        skipped.append({"bot_uuid": row["bot_uuid"], "reason": skipped_reason, "observed_price_points": observed_price})
-                        continue
-                    order_payload = self._workflow_order_from_decision(
-                        price_conn,
-                        user_id=int(row["user_id"]),
-                        actor={"id": int(row["user_id"]), "username": row["username"], "role": row["role"]},
-                        market=market,
-                        decision=decision,
-                        price_points=observed_price,
-                    )
-                    if not order_payload:
-                        price_conn.close()
-                        price_conn = None
-                        self._record_bot_run(row, status="skipped", observed_price=observed_price, error="workflow_hold")
-                        skipped.append({"bot_uuid": row["bot_uuid"], "reason": "workflow_hold", "observed_price_points": observed_price})
-                        continue
-                price_conn.close()
-                price_conn = None
-                if not workflow and not self._bot_trigger_hit(row, observed_price, observed_low=observed_low, observed_high=observed_high):
-                    self._record_bot_run(row, status="skipped", observed_price=observed_price, error="condition_not_met")
-                    skipped.append({"bot_uuid": row["bot_uuid"], "reason": "condition_not_met", "observed_price_points": observed_price})
-                    continue
-                quantity_text = row["quantity_text"]
-                if str(row["bot_type"] or "conditional") == "dca":
-                    quantity_text = self._quantity_text_from_budget(
-                        budget_points=int(row["budget_points"] or 0),
-                        price_points=observed_price,
-                    )
-                bot_actor = {"id": int(row["user_id"]), "username": row["username"], "role": row["role"]}
-                if order_payload:
-                    quantity_text = order_payload["quantity"]
-                    order_type = order_payload["order_type"]
-                    side = order_payload["side"]
-                    limit_price_points = order_payload.get("limit_price_points")
-                else:
-                    order_type = row["order_type"]
-                    side = row["side"]
-                    limit_price_points = row["limit_price_points"]
-                result = self.place_order(
-                    actor=bot_actor,
-                    market_symbol=row["market_symbol"],
-                    side=side,
-                    order_type=order_type,
-                    quantity=quantity_text,
-                    limit_price_points=limit_price_points,
-                )
-                order_uuid = (result.get("order") or {}).get("order_uuid")
-                if workflow and decision:
-                    action = decision.get("action") or {}
-                    action_id = decision.get("action_id") or (decision.get("branch") or {}).get("id")
-                    if action_id:
-                        counts = workflow_state.setdefault("branch_step_counts", {})
-                        counts[action_id] = int(counts.get(action_id, 0)) + 1
-                        if action.get("type") != "close_all":
-                            executed = workflow_state.setdefault("executed_action_ids", [])
-                            if action_id not in executed:
-                                executed.append(action_id)
-                self._record_bot_run(row, status="triggered", observed_price=observed_price, order_uuid=order_uuid, execution_state=workflow_state)
-                triggered.append({"bot_uuid": row["bot_uuid"], "order_uuid": order_uuid, "observed_price_points": observed_price, "executed": bool(result.get("executed"))})
-            except Exception as exc:
-                if price_conn is not None:
-                    try:
-                        price_conn.close()
-                    except Exception:
-                        pass
-                self._record_bot_run(row, status="failed", observed_price=observed_price, error=str(exc))
-                failed.append({"bot_uuid": row["bot_uuid"], "error": str(exc), "observed_price_points": observed_price})
-        return {"ok": not failed, "scanned": scanned, "triggered": triggered, "skipped": skipped, "failed": failed}
+        return run_trading_bot_rows_helper(self, rows)
 
     def backtest_trading_bot(self, *, actor, payload):
         if not self._actor_id(actor):
@@ -8421,73 +7328,15 @@ class TradingEngineService:
         )
 
     def _record_bot_run(self, bot, *, status, observed_price=None, order_uuid=None, error="", execution_state=None):
-        conn = self.get_db()
-        try:
-            self.ensure_schema(conn)
-            conn.commit()
-            conn.execute("BEGIN IMMEDIATE")
-            now = _now()
-            conn.execute(
-                """
-                INSERT INTO trading_bot_runs (
-                    run_uuid, bot_id, user_id, market_symbol, trigger_type, trigger_price_points,
-                    observed_price_points, status, order_uuid, error, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    str(uuid.uuid4()),
-                    int(bot["id"]),
-                    int(bot["user_id"]),
-                    bot["market_symbol"],
-                    bot["trigger_type"],
-                    bot["trigger_price_points"],
-                    observed_price,
-                    status,
-                    order_uuid,
-                    str(error or "")[:240],
-                    now,
-                ),
-            )
-            if status == "triggered":
-                if execution_state is not None:
-                    conn.execute(
-                        "UPDATE trading_bots SET run_count=run_count+1, last_run_at=?, execution_state_json=?, last_error='', last_scan_at=?, updated_at=? WHERE id=?",
-                        (now, _json_dumps(execution_state), now, now, int(bot["id"])),
-                    )
-                else:
-                    conn.execute(
-                        "UPDATE trading_bots SET run_count=run_count+1, last_run_at=?, last_error='', last_scan_at=?, updated_at=? WHERE id=?",
-                        (now, now, now, int(bot["id"])),
-                    )
-            elif status == "failed":
-                conn.execute(
-                    "UPDATE trading_bots SET run_count=run_count+1, last_run_at=?, last_error=?, updated_at=? WHERE id=?",
-                    (now, str(error or "")[:240], now, int(bot["id"])),
-                )
-                create_notification_if_enabled(
-                    conn,
-                    user_id=int(bot["user_id"]),
-                    type="trading_bot_failed",
-                    title="交易機器人執行失敗",
-                    body=f"{bot['name']} 執行失敗：{str(error or '')[:120]}",
-                    link="/trading",
-                )
-            self._audit_event(
-                conn,
-                "TRADING_BOT_RUN",
-                f"trading bot {status}",
-                actor={"id": int(bot["user_id"]), "username": bot["username"], "role": bot["role"]},
-                target_user_id=int(bot["user_id"]),
-                market_symbol=bot["market_symbol"],
-                severity="warning" if status == "failed" else "info",
-                metadata={"bot_uuid": bot["bot_uuid"], "status": status, "observed_price_points": observed_price, "order_uuid": order_uuid, "error": str(error or "")[:240]},
-            )
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+        return record_bot_run_helper(
+            self,
+            bot,
+            status=status,
+            observed_price=observed_price,
+            order_uuid=order_uuid,
+            error=error,
+            execution_state=execution_state,
+        )
 
     def place_order(self, *, actor, market_symbol, side, order_type, quantity, limit_price_points=None, emergency_close=False, is_grid_order=False, ctx=None):
         return place_order_helper(
@@ -9339,10 +8188,7 @@ class TradingEngineService:
             conn.close()
 
     def _bot_audit_latest_map(self, conn):
-        rows = conn.execute(
-            "SELECT * FROM trading_bot_audit_runs ORDER BY id DESC LIMIT 1000"
-        ).fetchall()
-        return bot_audit_latest_map(rows)
+        return bot_audit_latest_map_helper(conn)
 
     def _bot_audit_label(self, status):
         return bot_audit_label(status)
@@ -9351,382 +8197,44 @@ class TradingEngineService:
         return bot_audit_eligibility_reason_label(reason)
 
     def _bot_audit_enabled_at(self, row):
-        return bot_audit_enabled_at(row, now_text=_now())
+        return bot_audit_enabled_at_helper(row)
 
     def _bot_audit_is_eligible(self, row, *, bot_kind, min_enabled_seconds):
-        return bot_audit_is_eligible(
-            row,
-            bot_kind=bot_kind,
-            min_enabled_seconds=min_enabled_seconds or TRADING_BOT_AUDIT_MIN_ENABLED_SECONDS,
-            now_text=_now(),
-            enabled_at_func=bot_audit_enabled_at,
-        )
-
-    def _bot_audit_run_findings(self, conn, row, *, bot_kind, min_enabled_seconds):
-        findings = []
-        state = self._state(conn)
-        if bool(state.get("safe_mode")):
-            findings.append({
-                "severity": "blocker",
-                "code": "safe_mode_active",
-                "message": "交易系統目前處於 safe mode，機器人結果不可信，需先排除全域交易異常。",
-                "metadata": {"reason": state.get("reason") or ""},
-            })
-        eligible, eligible_reason = self._bot_audit_is_eligible(
+        return bot_audit_is_eligible_helper(
             row,
             bot_kind=bot_kind,
             min_enabled_seconds=min_enabled_seconds,
         )
-        if bot_kind == "trading_bot":
-            recent_runs = [
-                dict(item)
-                for item in conn.execute(
-                    "SELECT status, error, created_at, order_uuid FROM trading_bot_runs WHERE bot_id=? ORDER BY id DESC LIMIT 10",
-                    (int(row["id"]),),
-                ).fetchall()
-            ]
-            failed_runs = [item for item in recent_runs if item.get("status") == "failed"]
-            if str(row.get("last_error") or "").strip():
-                findings.append({
-                    "severity": "blocker" if failed_runs else "warning",
-                    "code": "bot_last_error_present",
-                    "message": f"最近一次 bot 執行留下錯誤：{str(row.get('last_error') or '')[:180]}",
-                    "metadata": {"last_error": str(row.get("last_error") or "")[:240]},
-                })
-            if eligible_reason == "aged_24h" and int(row.get("triggered_run_count") or 0) <= 0:
-                findings.append({
-                    "severity": "warning",
-                    "code": "no_trade_after_24h",
-                    "message": "機器人啟用已滿 24 小時，但尚未產生任何成交，請檢查條件是否過嚴或市場是否不活躍。",
-                    "metadata": {"enabled_at": row.get("enabled_at") or row.get("created_at") or ""},
-                })
-            if len(failed_runs) >= 3 and int(row.get("triggered_run_count") or 0) <= 0:
-                findings.append({
-                    "severity": "blocker",
-                    "code": "repeated_failed_runs",
-                    "message": "最近 bot 巡檢多次失敗且沒有成功成交，請先排除錯誤再繼續啟用。",
-                    "metadata": {"failed_runs": len(failed_runs)},
-                })
-            elif failed_runs:
-                findings.append({
-                    "severity": "warning",
-                    "code": "recent_failed_runs",
-                    "message": f"最近 {len(failed_runs)} 次 bot 巡檢失敗，建議 root 追查執行錯誤。",
-                    "metadata": {"failed_runs": len(failed_runs)},
-                })
-        else:
-            orders_table, _route_ctx = self._resolve_table("orders", action="bot_audit")
-            open_orders = conn.execute(
-                "SELECT COUNT(*) AS c FROM trading_grid_orders WHERE grid_bot_id=? AND status='open'",
-                (int(row["id"]),),
-            ).fetchone()["c"]
-            orphan_open_orders = conn.execute(
-                f"""
-                SELECT COUNT(*) AS c
-                FROM trading_grid_orders go
-                LEFT JOIN {orders_table} o ON o.order_uuid=go.trading_order_uuid
-                WHERE go.grid_bot_id=? AND go.status='open' AND (
-                    go.trading_order_uuid IS NULL OR o.id IS NULL OR COALESCE(o.status, '') NOT IN ('open', 'partially_filled')
-                )
-                """,
-                (int(row["id"]),),
-            ).fetchone()["c"]
-            if str(row.get("last_error") or "").strip():
-                findings.append({
-                    "severity": "blocker",
-                    "code": "grid_last_error_present",
-                    "message": f"網格機器人最近一次掃描失敗：{str(row.get('last_error') or '')[:180]}",
-                    "metadata": {"last_error": str(row.get("last_error") or "")[:240]},
-                })
-            if int(orphan_open_orders or 0) > 0:
-                findings.append({
-                    "severity": "blocker",
-                    "code": "grid_orphan_open_orders",
-                    "message": f"仍有 {int(orphan_open_orders)} 筆網格開單找不到對應 trading_orders 或狀態不同步。",
-                    "metadata": {"orphan_open_orders": int(orphan_open_orders or 0)},
-                })
-            if bool(row.get("enabled")) and int(open_orders or 0) <= 0:
-                findings.append({
-                    "severity": "warning",
-                    "code": "grid_has_no_open_orders",
-                    "message": "網格機器人目前啟用中，但沒有任何有效開單，可能已漏掛單或需要人工檢查。",
-                    "metadata": {"open_orders": int(open_orders or 0)},
-                })
-            if eligible_reason == "aged_24h" and int(row.get("total_trades") or 0) <= 0:
-                findings.append({
-                    "severity": "warning",
-                    "code": "grid_no_trade_after_24h",
-                    "message": "網格機器人啟用已滿 24 小時，但尚未成交，請檢查網格範圍或市場波動是否不足。",
-                    "metadata": {"enabled_at": row.get("enabled_at") or row.get("created_at") or ""},
-                })
-        return bot_audit_result(
-            findings=findings,
-            eligible=eligible,
-            eligible_reason=eligible_reason,
+
+    def _bot_audit_run_findings(self, conn, row, *, bot_kind, min_enabled_seconds):
+        return bot_audit_run_findings_helper(
+            self,
+            conn,
+            row,
+            bot_kind=bot_kind,
+            min_enabled_seconds=min_enabled_seconds,
         )
 
     def _record_bot_audit_run(self, conn, row, *, bot_kind, audit_result):
-        now = _now()
-        findings = audit_result.get("findings") or []
-        run_uuid = str(uuid.uuid4())
-        cur = conn.execute(
-            """
-            INSERT INTO trading_bot_audit_runs (
-                run_uuid, bot_kind, bot_uuid, bot_id, user_id, market_symbol,
-                audit_status, eligible_reason, findings_json, finding_count,
-                warning_count, blocker_count, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                run_uuid,
-                bot_kind,
-                str(row["bot_uuid"]),
-                int(row["id"]),
-                int(row["user_id"]),
-                str(row["market_symbol"]),
-                str(audit_result.get("audit_status") or "green"),
-                str(audit_result.get("eligible_reason") or ""),
-                _json_dumps(findings),
-                len(findings),
-                int(audit_result.get("warning_count") or 0),
-                int(audit_result.get("blocker_count") or 0),
-                now,
-            ),
-        )
-        run_id = cur.lastrowid
-        for finding in findings:
-            conn.execute(
-                """
-                INSERT INTO trading_bot_audit_findings (
-                    run_id, severity, code, message, metadata_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    int(run_id),
-                    str(finding.get("severity") or "warning"),
-                    str(finding.get("code") or "unknown"),
-                    str(finding.get("message") or "")[:500],
-                    _json_dumps(finding.get("metadata") or {}),
-                    now,
-                ),
-            )
-        if audit_result.get("audit_status") in {"yellow", "red"}:
-            status = str(audit_result.get("audit_status") or "green")
-            label = self._bot_audit_label(status)
-            display_symbol = self._market_display_symbol_on_conn(conn, row.get("market_symbol"))
-            notice = bot_audit_notification_payload(
-                row=row,
-                status=status,
-                label=label,
-                display_symbol=display_symbol,
-            )
-            create_trading_root_notification(
-                conn,
-                notification_type=notice["root_notification_type"],
-                title=notice["root_title"],
-                body=notice["body"],
-                once=True,
-                create_root_notification=create_root_notification_if_enabled,
-            )
-            create_trading_user_notification(
-                conn,
-                user_id=int(row["user_id"]),
-                notification_type=notice["user_notification_type"],
-                title=notice["user_title"],
-                body=notice["body"],
-                create_notification=create_notification_if_enabled,
-            )
-        self._audit_event(
+        return record_bot_audit_run_helper(
+            self,
             conn,
-            "TRADING_BOT_AUDIT_RUN",
-            "trading bot audit completed",
-            actor={"id": None, "username": "system", "role": "system"},
-            target_user_id=int(row["user_id"]),
-            market_symbol=str(row["market_symbol"]),
-            severity="warning" if audit_result.get("audit_status") in {"yellow", "red"} else "info",
-            metadata={
-                "bot_kind": bot_kind,
-                "bot_uuid": str(row["bot_uuid"]),
-                "audit_status": str(audit_result.get("audit_status") or "green"),
-                "finding_count": len(findings),
-                "warning_count": int(audit_result.get("warning_count") or 0),
-                "blocker_count": int(audit_result.get("blocker_count") or 0),
-            },
+            row,
+            bot_kind=bot_kind,
+            audit_result=audit_result,
         )
-        return run_uuid
 
     def _bot_audit_candidates(self, conn, *, limit):
-        user_cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
-        active_clauses = []
-        if "status" in user_cols:
-            active_clauses.append("COALESCE(u.status, 'active') = 'active'")
-        if "deleted_at" in user_cols:
-            active_clauses.append("COALESCE(u.deleted_at, '') = ''")
-        active_sql = " AND ".join(active_clauses) if active_clauses else "1=1"
-        bot_rows = [
-            {
-                **dict(row),
-                "bot_kind": "trading_bot",
-                "triggered_run_count": row["triggered_run_count"],
-            }
-            for row in conn.execute(
-                f"""
-                SELECT b.*, u.username, u.role,
-                       (SELECT COUNT(*) FROM trading_bot_runs r WHERE r.bot_id=b.id AND r.status='triggered') AS triggered_run_count
-                FROM trading_bots b
-                JOIN users u ON u.id=b.user_id
-                WHERE {active_sql}
-                ORDER BY b.enabled DESC, COALESCE(b.enabled_at, b.created_at, b.updated_at) ASC, b.id ASC
-                LIMIT ?
-                """,
-                (limit,),
-            ).fetchall()
-        ]
-        grid_rows = [
-            {**dict(row), "bot_kind": "grid_bot"}
-            for row in conn.execute(
-                f"""
-                SELECT g.*, u.username, u.role
-                FROM trading_grid_bots g
-                JOIN users u ON u.id=g.user_id
-                WHERE {active_sql}
-                ORDER BY g.enabled DESC, COALESCE(g.enabled_at, g.created_at, g.updated_at) ASC, g.id ASC
-                LIMIT ?
-                """,
-                (limit,),
-            ).fetchall()
-        ]
-        return [*bot_rows, *grid_rows]
+        return bot_audit_candidates_helper(conn, limit=limit)
 
     def _bot_audit_dashboard_on_conn(self, conn, *, limit, settings=None):
-        settings = settings or self._settings_payload(conn)
-        latest_map = self._bot_audit_latest_map(conn)
-        min_enabled_seconds = int(settings.get("bot_audit_min_enabled_seconds") or TRADING_BOT_AUDIT_MIN_ENABLED_SECONDS)
-        items = []
-        summary = {"unaudited": 0, "green": 0, "yellow": 0, "red": 0}
-        for row in self._bot_audit_candidates(conn, limit=_to_int(limit, name="limit", minimum=1, maximum=300)):
-            latest = latest_map.get((row["bot_kind"], str(row["bot_uuid"])))
-            eligible, eligible_reason = self._bot_audit_is_eligible(
-                row,
-                bot_kind=row["bot_kind"],
-                min_enabled_seconds=min_enabled_seconds,
-            )
-            audit_status = str((latest or {}).get("audit_status") or "unaudited")
-            increment_audit_summary(summary, audit_status)
-            open_order_count = 0
-            if row["bot_kind"] != "trading_bot":
-                open_order_count = int(
-                    conn.execute(
-                        "SELECT COUNT(*) AS c FROM trading_grid_orders WHERE grid_bot_id=? AND status='open'",
-                        (int(row["id"]),),
-                    ).fetchone()["c"]
-                )
-            item = build_bot_audit_dashboard_item(
-                row=row,
-                latest=latest,
-                eligible=eligible,
-                eligible_reason=eligible_reason,
-                eligible_reason_label=self._bot_audit_eligibility_reason_label(eligible_reason),
-                audit_label=self._bot_audit_label(audit_status),
-                open_order_count=open_order_count,
-            )
-            items.append(item)
-        recent_runs = [
-            dict(row)
-            for row in conn.execute(
-                "SELECT * FROM trading_bot_audit_runs ORDER BY id DESC LIMIT 80"
-            ).fetchall()
-        ]
-        return {
-            "ok": True,
-            "settings": {
-                "bot_audit_enabled": settings.get("bot_audit_enabled", True),
-                "bot_audit_interval_seconds": settings.get("bot_audit_interval_seconds", TRADING_BOT_AUDIT_INTERVAL_SECONDS),
-                "bot_audit_limit": settings.get("bot_audit_limit", TRADING_BOT_AUDIT_LIMIT),
-                "bot_audit_min_enabled_seconds": settings.get("bot_audit_min_enabled_seconds", TRADING_BOT_AUDIT_MIN_ENABLED_SECONDS),
-            },
-            "summary": summary,
-            "items": items,
-            "recent_runs": recent_runs,
-        }
+        return bot_audit_dashboard_on_conn_helper(self, conn, limit=limit, settings=settings)
 
     def run_due_bot_audits(self, *, actor=None, limit=0, force=False):
-        conn = self.get_db()
-        try:
-            self.ensure_schema(conn)
-            settings = self._settings_payload(conn)
-            if not settings.get("bot_audit_enabled", True) and not force:
-                return {"ok": True, "enabled": False, "reason": "audit_disabled", "scanned": 0, "audited": [], "skipped": []}
-            limit = _to_int(limit or settings.get("bot_audit_limit") or TRADING_BOT_AUDIT_LIMIT, name="bot_audit_limit", minimum=1, maximum=200)
-            interval_seconds = int(settings.get("bot_audit_interval_seconds") or TRADING_BOT_AUDIT_INTERVAL_SECONDS)
-            min_enabled_seconds = int(settings.get("bot_audit_min_enabled_seconds") or TRADING_BOT_AUDIT_MIN_ENABLED_SECONDS)
-            latest_map = self._bot_audit_latest_map(conn)
-            audited = []
-            skipped = []
-            for row in self._bot_audit_candidates(conn, limit=limit):
-                latest = latest_map.get((row["bot_kind"], str(row["bot_uuid"])))
-                audit_result = self._bot_audit_run_findings(
-                    conn,
-                    row,
-                    bot_kind=row["bot_kind"],
-                    min_enabled_seconds=min_enabled_seconds,
-                )
-                if not audit_result["eligible"]:
-                    skipped.append({
-                        "bot_kind": row["bot_kind"],
-                        "bot_uuid": row["bot_uuid"],
-                        "reason": audit_result["eligible_reason"],
-                    })
-                    continue
-                if not force and latest:
-                    try:
-                        last_dt = datetime.fromisoformat(str(latest["created_at"]))
-                    except Exception:
-                        last_dt = None
-                    if last_dt and (datetime.fromisoformat(_now()) - last_dt).total_seconds() < interval_seconds:
-                        skipped.append({
-                            "bot_kind": row["bot_kind"],
-                            "bot_uuid": row["bot_uuid"],
-                            "reason": "interval_not_elapsed",
-                        })
-                        continue
-                conn.commit()
-                conn.execute("BEGIN IMMEDIATE")
-                run_uuid = self._record_bot_audit_run(
-                    conn,
-                    row,
-                    bot_kind=row["bot_kind"],
-                    audit_result=audit_result,
-                )
-                conn.commit()
-                audited.append({
-                    "run_uuid": run_uuid,
-                    "bot_kind": row["bot_kind"],
-                    "bot_uuid": row["bot_uuid"],
-                    "audit_status": audit_result["audit_status"],
-                    "finding_count": len(audit_result["findings"]),
-                })
-            return {
-                "ok": True,
-                "enabled": True,
-                "scanned": len(audited) + len(skipped),
-                "audited": audited,
-                "skipped": skipped,
-            }
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+        return run_due_bot_audits_helper(self, actor=actor, limit=limit, force=force)
 
     def get_bot_audit_dashboard(self, *, limit=100):
-        conn = self.get_db()
-        try:
-            self.ensure_schema(conn)
-            settings = self._settings_payload(conn)
-            return self._bot_audit_dashboard_on_conn(conn, limit=limit, settings=settings)
-        finally:
-            conn.close()
+        return get_bot_audit_dashboard_helper(self, limit=limit)
 
     def root_report(self):
         conn = self.get_db()
