@@ -38,6 +38,7 @@ REFERENCE_PRICE_CAPABLE_PROVIDERS = {
 }
 TICKER_CAPABLE_PROVIDERS = set(REFERENCE_PRICE_CAPABLE_PROVIDERS) | {"coingecko_simple_price"}
 DEPTH_CAPABLE_PROVIDERS = set(WEIGHTED_PRICE_PROVIDERS)
+OPEN_ORDER_STATUSES = {"open", "partially_filled"}
 
 TRADING_BOT_TRIGGER_TYPES = {"always", "price_above", "price_below"}
 TRADING_BOT_TYPES = {"conditional", "dca"}
