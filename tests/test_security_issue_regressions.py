@@ -51,7 +51,7 @@ def test_community_numeric_bounds_and_unlisted_reply_access_are_guarded():
 
 
 def test_margin_collateral_without_client_key_uses_stable_retry_key():
-    trading = (ROOT / "services" / "trading_engine.py").read_text(encoding="utf-8")
+    trading = (ROOT / "services" / "trading" / "margin.py").read_text(encoding="utf-8")
     collateral_route = trading.split("def add_margin_collateral", 1)[1].split("def close_margin_position", 1)[0]
 
     assert 'fallback_key = idempotency_key or f"{position_uuid}:{amount}:{int(datetime.now().timestamp() // 60)}"' in collateral_route
@@ -369,13 +369,13 @@ def test_trading_fill_ledger_verification_uses_batch_lookup():
 def test_root_margin_trading_uses_simulated_funds_not_pointschain():
     trading_engine = (ROOT / "services" / "trading_engine.py").read_text(encoding="utf-8")
     trading_margin = (ROOT / "services" / "trading" / "margin.py").read_text(encoding="utf-8")
-    open_margin = trading_engine.split("def open_margin_position", 1)[1].split("def close_margin_position", 1)[0]
+    open_margin = trading_margin.split("def open_margin_position", 1)[1].split("def add_margin_collateral", 1)[0]
     close_margin = trading_engine.split("def close_margin_position", 1)[1].split("def scan_margin_liquidations", 1)[0]
     sim_verify = trading_engine.split("def _verify_sim_accounts", 1)[1].split("def _verify_margin_position_locks", 1)[0]
     margin_verify = trading_engine.split("def _verify_margin_position_locks", 1)[1].split("def _verify_spot_realized_pnl", 1)[0]
 
-    assert "is_root_simulated = self._is_root_actor(actor)" in open_margin
-    assert "self._sim_delta(conn, user_id, balance_delta=-(collateral + fee), locked_delta=collateral)" in open_margin
+    assert "is_root_simulated = service._is_root_actor(actor)" in open_margin
+    assert "service._sim_delta(conn, user_id, balance_delta=-(collateral + fee), locked_delta=collateral)" in open_margin
     assert '"funding_mode": "root_simulated"' in open_margin
     assert "close_margin_position_helper(" in close_margin
     assert "is_root_simulated = service._is_root_user_id(conn, user_id)" in trading_margin
@@ -412,8 +412,8 @@ def test_margin_collateral_and_account_maintenance_are_supported():
     assert "def _minimum_margin_collateral_points" in trading_engine
     assert "risk_reason" in trading_margin
     assert "借券放空在價格上漲時會虧損" in trading_margin
-    assert "def add_margin_collateral" in trading_engine
-    assert "TRADING_MARGIN_COLLATERAL_ADDED" in trading_engine
+    assert "def add_margin_collateral" in trading_margin
+    assert "TRADING_MARGIN_COLLATERAL_ADDED" in trading_margin
     assert '"margin_summary": self._margin_summary_payload(conn, user_id, margin_positions)' in dashboard
     assert '@app.route("/api/trading/margin/<position_uuid>/collateral", methods=["POST"])' in trading_routes
     assert "def _margin_account_payload" in trading_engine

@@ -1,12 +1,20 @@
 """Trading margin risk/account/liquidation helpers."""
 
+import hashlib
+import json
 import math
+import uuid
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 
 from services.notifications import create_notification_if_enabled
 from services.server_mode_routing import resolve_table
-from services.trading.accounting.core import fee_points, notional_points
+from services.trading.accounting.core import (
+    fee_points,
+    notional_points,
+    quantity_to_units,
+    units_to_quantity,
+)
 from services.trading.constants import ASSET_SCALE
 from services.trading.notifications import (
     create_trading_user_notification,
@@ -28,6 +36,27 @@ POSITION_MARGIN_SHORT_LEGACY = "margin_short"
 
 def _now_text():
     return datetime.now().isoformat()
+
+
+def _json_dumps(value):
+    return json.dumps(value or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _json_loads(value, default=None):
+    if not value:
+        return default if default is not None else {}
+    try:
+        return json.loads(value)
+    except Exception:
+        return default if default is not None else {}
+
+
+def _client_idempotency_key(value, *, prefix):
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return f"{prefix}:{digest}"
 
 
 def _is_short_position(position_type):
@@ -497,6 +526,486 @@ def notify_margin_risk_alerts(service, conn, *, position, risk, market):
                 "error": str(exc)[:200],
             },
         )
+
+
+def open_margin_position(
+    service,
+    *,
+    actor,
+    market_symbol,
+    position_type,
+    quantity,
+    collateral_points,
+    idempotency_key=None,
+    ctx=None,
+):
+    ctx = service._resolve_trading_ctx(ctx, action="open_margin_position")
+    user_id = service._actor_id(actor)
+    if not user_id:
+        raise ValueError("login required")
+    position_type = str(position_type or "").strip().lower()
+    if position_type not in {POSITION_MARGIN_LONG, POSITION_MARGIN_SHORT}:
+        raise ValueError("position_type must be margin_long or short")
+    quantity_units = quantity_to_units(quantity)
+    collateral = _to_int(collateral_points, name="collateral_points", minimum=1, maximum=10**12)
+    operation_key = _client_idempotency_key(idempotency_key, prefix=f"margin_open:{user_id}")
+    conn = service.get_db()
+    try:
+        service.ensure_schema(conn)
+        conn.commit()
+        conn.execute("BEGIN IMMEDIATE")
+        service._assert_writable(conn)
+        margin_positions_table, route_ctx = service._resolve_table(
+            "margin_positions", ctx, action="open_margin_position"
+        )
+        if operation_key:
+            existing_operation = conn.execute(
+                """
+                SELECT response_json FROM trading_operation_idempotency
+                WHERE idempotency_key=? AND operation='margin_open'
+                """,
+                (operation_key,),
+            ).fetchone()
+            if existing_operation and existing_operation["response_json"]:
+                result = _json_loads(existing_operation["response_json"], {"ok": True})
+                conn.rollback()
+                return result
+            now_text = _now_text()
+            insert_cur = conn.execute(
+                """
+                INSERT OR IGNORE INTO trading_operation_idempotency (
+                    idempotency_key, operation, user_id, reference_uuid, response_json, created_at, updated_at
+                ) VALUES (?, 'margin_open', ?, '', '', ?, ?)
+                """,
+                (operation_key, int(user_id), now_text, now_text),
+            )
+            if insert_cur.rowcount == 0:
+                existing_operation = conn.execute(
+                    "SELECT response_json FROM trading_operation_idempotency WHERE idempotency_key=?",
+                    (operation_key,),
+                ).fetchone()
+                if existing_operation and existing_operation["response_json"]:
+                    result = _json_loads(existing_operation["response_json"], {"ok": True})
+                    conn.rollback()
+                    return result
+                raise ValueError("duplicate margin open request is still processing")
+        borrow_settings = service._assert_borrowing_enabled(conn)
+        market = service._market(conn, market_symbol)
+        if not int(market.get("allow_margin") or 0):
+            raise ValueError("margin trading is disabled for this market")
+        service._validate_market_quantity_constraints(market, quantity_units)
+        price, price_source, price_meta = service._current_market_price_points(
+            conn, market, with_meta=True, high_risk=True
+        )
+        service._assert_price_meta_allows_high_risk_use(
+            conn,
+            actor=actor,
+            market_symbol=market["symbol"],
+            usage="margin financing risk evaluation",
+            price_meta=price_meta,
+        )
+        notional = notional_points(quantity_units, price)
+        min_collateral = service._minimum_margin_collateral_points(
+            conn,
+            position_type=position_type,
+            notional=notional,
+            fee_rate_percent=float(market["fee_rate_percent"] or 0),
+        )
+        if collateral < min_collateral:
+            raise ValueError(f"collateral below minimum {min_collateral}")
+        fee = fee_points(notional, float(market["fee_rate_percent"] or 0))
+        if position_type == POSITION_MARGIN_LONG and collateral >= notional:
+            raise ValueError(f"collateral must be lower than notional {notional} for margin long")
+        principal = max(0, notional - collateral) if position_type == POSITION_MARGIN_LONG else notional
+        borrowed_asset_symbol = service._margin_borrowed_asset_symbol(market, position_type)
+        interest_interval_hours = int(borrow_settings["interest_interval_hours"] or 0)
+        interest_minimum_hours = int(borrow_settings["interest_minimum_hours"] or 0)
+        funding_pool = service._funding_pool_payload(
+            conn, requested_principal=principal, borrowed_asset=borrowed_asset_symbol
+        )
+        if not service._is_root_actor(actor) and principal > int(funding_pool["available_points"] or 0):
+            raise ValueError("funding pool is insufficient for requested borrow amount")
+        effective_interest_percent_daily = float(
+            funding_pool["projected_interest_percent_daily"]
+            if principal
+            else funding_pool["effective_interest_percent_daily"]
+        )
+        position_uuid = str(uuid.uuid4())
+        ledger_uuids = []
+        is_root_simulated = service._is_root_actor(actor)
+        if is_root_simulated:
+            service._sim_delta(conn, user_id, balance_delta=-(collateral + fee), locked_delta=collateral)
+            trial_fee = 0
+            chain_fee = 0
+            trial_collateral = 0
+            chain_collateral = 0
+        else:
+            trial_fee = service._trial_spend(conn, user_id, fee)
+            chain_fee = fee - trial_fee
+            trial_collateral = service._trial_deploy(conn, user_id, collateral)
+            chain_collateral = collateral - trial_collateral
+        if chain_collateral:
+            ledger_uuids.append(
+                service._ledger(
+                    conn,
+                    user_id=user_id,
+                    currency_type="points",
+                    direction="freeze",
+                    amount=chain_collateral,
+                    action_type="trading_margin_collateral_freeze",
+                    reference_type="trading_margin_position",
+                    reference_id=position_uuid,
+                    idempotency_key=f"trading:margin:collateral:{position_uuid}",
+                    reason="TRADING_MARGIN_COLLATERAL",
+                    public_metadata={
+                        "position_type": position_type,
+                        "market": market["symbol"],
+                        "quantity": units_to_quantity(quantity_units),
+                        "notional": notional,
+                        "trial_collateral_points": trial_collateral,
+                        "chain_collateral_points": chain_collateral,
+                    },
+                    actor=actor,
+                    ctx=route_ctx,
+                )["ledger_uuid"]
+            )
+        if chain_fee:
+            ledger_uuids.append(
+                service._ledger(
+                    conn,
+                    user_id=user_id,
+                    currency_type="points",
+                    direction="debit",
+                    amount=chain_fee,
+                    action_type="trading_margin_open_fee",
+                    reference_type="trading_margin_position",
+                    reference_id=position_uuid,
+                    idempotency_key=f"trading:margin:open_fee:{position_uuid}",
+                    reason="TRADING_MARGIN_OPEN_FEE",
+                    public_metadata={
+                        "position_type": position_type,
+                        "market": market["symbol"],
+                        "fee_rate_percent": float(market["fee_rate_percent"] or 0),
+                        "trial_fee_points": trial_fee,
+                        "chain_fee_points": chain_fee,
+                    },
+                    actor=actor,
+                    ctx=route_ctx,
+                )["ledger_uuid"]
+            )
+        if fee and not is_root_simulated:
+            service._reserve_delta(
+                conn,
+                delta=fee,
+                event_type="margin_fee_retained",
+                reason="TRADING_MARGIN_OPEN_FEE",
+                actor=actor,
+            )
+        if principal and not is_root_simulated:
+            service._reserve_delta(
+                conn,
+                delta=-principal,
+                event_type="margin_principal_lent",
+                reason="TRADING_MARGIN_PRINCIPAL_LENT",
+                actor=actor,
+            )
+        now = _now_text()
+        if margin_positions_table == "test_shadow_margin_positions":
+            cur = conn.execute(
+                f"""
+                INSERT INTO {margin_positions_table} (
+                    position_uuid, tester_user_id, user_id, market_symbol, position_type, quantity_units,
+                    entry_price_points, principal_points, collateral_points, open_fee_points,
+                    interest_percent_daily, interest_paid_points, interest_accrued_hours, interest_interval_hours,
+                    interest_minimum_hours, borrowed_asset_symbol, status, opened_at, updated_at,
+                    collateral_trial_points, collateral_chain_points, open_fee_trial_points, open_fee_chain_points
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    position_uuid,
+                    service._shadow_actor_user_id(route_ctx, user_id),
+                    user_id,
+                    market["symbol"],
+                    position_type,
+                    quantity_units,
+                    price,
+                    principal,
+                    collateral,
+                    fee,
+                    effective_interest_percent_daily,
+                    interest_interval_hours,
+                    interest_minimum_hours,
+                    borrowed_asset_symbol,
+                    now,
+                    now,
+                    trial_collateral,
+                    chain_collateral,
+                    trial_fee,
+                    chain_fee,
+                ),
+            )
+        else:
+            cur = conn.execute(
+                f"""
+                INSERT INTO {margin_positions_table} (
+                    position_uuid, user_id, market_symbol, position_type, quantity_units,
+                    entry_price_points, principal_points, collateral_points, open_fee_points,
+                    interest_percent_daily, interest_paid_points, interest_accrued_hours, interest_interval_hours,
+                    interest_minimum_hours, borrowed_asset_symbol, status, opened_at, updated_at,
+                    collateral_trial_points, collateral_chain_points, open_fee_trial_points, open_fee_chain_points
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    position_uuid,
+                    user_id,
+                    market["symbol"],
+                    position_type,
+                    quantity_units,
+                    price,
+                    principal,
+                    collateral,
+                    fee,
+                    effective_interest_percent_daily,
+                    interest_interval_hours,
+                    interest_minimum_hours,
+                    borrowed_asset_symbol,
+                    now,
+                    now,
+                    trial_collateral,
+                    chain_collateral,
+                    trial_fee,
+                    chain_fee,
+                ),
+            )
+        service._audit_event(
+            conn,
+            "TRADING_MARGIN_POSITION_OPENED",
+            "margin borrow position opened",
+            actor=actor,
+            target_user_id=user_id,
+            market_symbol=market["symbol"],
+            metadata={
+                "position_id": cur.lastrowid,
+                "position_uuid": position_uuid,
+                "position_type": position_type,
+                "quantity": units_to_quantity(quantity_units),
+                "entry_price_points": price,
+                "price_source": price_source,
+                "principal_points": principal,
+                "funding_pool_available_before": funding_pool["available_points"],
+                "funding_pool_projected_utilization_percent": funding_pool["projected_utilization_percent"],
+                "borrowed_asset_symbol": borrowed_asset_symbol,
+                "base_interest_apr_percent": funding_pool["base_interest_apr_percent"],
+                "effective_interest_apr_percent": funding_pool["projected_interest_apr_percent"]
+                if principal
+                else funding_pool["effective_interest_apr_percent"],
+                "base_interest_percent_daily": funding_pool["base_interest_percent_daily"],
+                "effective_interest_percent_daily": effective_interest_percent_daily,
+                "interest_interval_hours": interest_interval_hours,
+                "interest_minimum_hours": interest_minimum_hours,
+                "collateral_points": collateral,
+                "open_fee_points": fee,
+                "trial_collateral_points": trial_collateral,
+                "chain_collateral_points": chain_collateral,
+                "trial_fee_points": trial_fee,
+                "chain_fee_points": chain_fee,
+                "funding_mode": "root_simulated"
+                if is_root_simulated
+                else ("trial_mixed" if (trial_collateral or trial_fee) else "points_chain"),
+                "ledger_uuids": ledger_uuids,
+            },
+        )
+        if not is_root_simulated:
+            service._record_user_trade_volume(
+                conn,
+                user_id=user_id,
+                trade_kind="margin",
+                notional_points=notional,
+                fee_points=fee,
+                occurred_at=now,
+            )
+        conn.commit()
+        row = conn.execute(
+            f"SELECT * FROM {margin_positions_table} WHERE id=?",
+            (cur.lastrowid,),
+        ).fetchone()
+        result = {
+            "ok": True,
+            "position": service._margin_position_payload(row),
+            "funding": service._funding_payload(conn, user_id),
+        }
+        if operation_key:
+            conn.execute(
+                """
+                UPDATE trading_operation_idempotency
+                SET reference_uuid=?, response_json=?, updated_at=?
+                WHERE idempotency_key=?
+                """,
+                (position_uuid, _json_dumps(result), _now_text(), operation_key),
+            )
+            conn.commit()
+        return result
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def add_margin_collateral(
+    service,
+    *,
+    actor,
+    position_uuid,
+    amount_points,
+    idempotency_key=None,
+    ctx=None,
+):
+    ctx = service._resolve_trading_ctx(ctx, action="add_margin_collateral")
+    actor_user_id = service._actor_id(actor)
+    if not actor_user_id:
+        raise ValueError("login required")
+    amount = _to_int(amount_points, name="collateral_points", minimum=1, maximum=10**12)
+    fallback_key = idempotency_key or f"{position_uuid}:{amount}:{int(datetime.now().timestamp() // 60)}"
+    operation_key = _client_idempotency_key(
+        fallback_key,
+        prefix=f"margin_collateral_add:{actor_user_id}:{position_uuid}",
+    )
+    conn = service.get_db()
+    try:
+        service.ensure_schema(conn)
+        conn.commit()
+        conn.execute("BEGIN IMMEDIATE")
+        service._assert_writable(conn)
+        if operation_key:
+            existing_operation = conn.execute(
+                """
+                SELECT response_json FROM trading_operation_idempotency
+                WHERE idempotency_key=? AND operation='margin_collateral_add'
+                """,
+                (operation_key,),
+            ).fetchone()
+            if existing_operation and existing_operation["response_json"]:
+                result = _json_loads(existing_operation["response_json"], {"ok": True})
+                conn.rollback()
+                return result
+            now_text = _now_text()
+            insert_cur = conn.execute(
+                """
+                INSERT OR IGNORE INTO trading_operation_idempotency (
+                    idempotency_key, operation, user_id, reference_uuid, response_json, created_at, updated_at
+                ) VALUES (?, 'margin_collateral_add', ?, ?, '', ?, ?)
+                """,
+                (operation_key, int(actor_user_id), str(position_uuid or ""), now_text, now_text),
+            )
+            if insert_cur.rowcount == 0:
+                existing_operation = conn.execute(
+                    "SELECT response_json FROM trading_operation_idempotency WHERE idempotency_key=?",
+                    (operation_key,),
+                ).fetchone()
+                if existing_operation and existing_operation["response_json"]:
+                    result = _json_loads(existing_operation["response_json"], {"ok": True})
+                    conn.rollback()
+                    return result
+                raise ValueError("duplicate margin collateral request is still processing")
+        position = conn.execute(
+            "SELECT * FROM trading_margin_positions WHERE position_uuid=?",
+            (str(position_uuid or ""),),
+        ).fetchone()
+        if not position:
+            raise ValueError("margin position not found")
+        user_id = int(position["user_id"])
+        if int(user_id) != int(actor_user_id):
+            raise ValueError("cannot update another user's margin position")
+        if position["status"] != "open":
+            raise ValueError("margin position is not open")
+        is_root_simulated = service._is_root_user_id(conn, user_id)
+        ledger_uuids = []
+        trial_added = 0
+        chain_added = 0
+        if is_root_simulated:
+            service._sim_delta(conn, user_id, balance_delta=-amount, locked_delta=amount)
+        else:
+            trial_added = service._trial_deploy(conn, user_id, amount)
+            chain_added = amount - trial_added
+            if chain_added:
+                ledger_uuids.append(
+                    service._ledger(
+                        conn,
+                        user_id=user_id,
+                        currency_type="points",
+                        direction="freeze",
+                        amount=chain_added,
+                        action_type="trading_margin_collateral_freeze",
+                        reference_type="trading_margin_position",
+                        reference_id=position["position_uuid"],
+                        idempotency_key=f"trading:margin:collateral_add:{operation_key}",
+                        reason="TRADING_MARGIN_COLLATERAL_ADD",
+                        public_metadata={
+                            "position_type": position["position_type"],
+                            "market": position["market_symbol"],
+                            "trial_collateral_points": trial_added,
+                            "chain_collateral_points": chain_added,
+                        },
+                        actor=actor,
+                    )["ledger_uuid"]
+                )
+        now = _now_text()
+        conn.execute(
+            """
+            UPDATE trading_margin_positions
+            SET collateral_points=collateral_points+?,
+                collateral_trial_points=collateral_trial_points+?,
+                collateral_chain_points=collateral_chain_points+?,
+                updated_at=?
+            WHERE id=?
+            """,
+            (amount, trial_added, chain_added, now, position["id"]),
+        )
+        service._audit_event(
+            conn,
+            "TRADING_MARGIN_COLLATERAL_ADDED",
+            "margin collateral added",
+            actor=actor,
+            target_user_id=user_id,
+            market_symbol=position["market_symbol"],
+            metadata={
+                "position_id": position["id"],
+                "position_uuid": position["position_uuid"],
+                "amount_points": amount,
+                "funding_mode": "root_simulated"
+                if is_root_simulated
+                else ("trial_mixed" if trial_added else "points_chain"),
+                "trial_collateral_points": trial_added,
+                "chain_collateral_points": chain_added,
+                "ledger_uuids": ledger_uuids,
+            },
+        )
+        row = conn.execute(
+            "SELECT * FROM trading_margin_positions WHERE id=?",
+            (position["id"],),
+        ).fetchone()
+        result = {
+            "ok": True,
+            "position": service._margin_position_payload_with_risk(conn, row),
+            "funding": service._funding_payload(conn, user_id),
+        }
+        if operation_key:
+            conn.execute(
+                """
+                UPDATE trading_operation_idempotency
+                SET response_json=?, updated_at=?
+                WHERE idempotency_key=?
+                """,
+                (_json_dumps(result), _now_text(), operation_key),
+            )
+        conn.commit()
+        return result
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def close_margin_position(
