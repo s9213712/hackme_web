@@ -1,6 +1,6 @@
 # Workflow Template Competition — Final Report
 
-Generated: 2026-05-06T18:08:46
+Generated: 2026-05-06T18:37:33
 
 > All 22 competition templates were normalized to **1h timeframe** to avoid timeframe shopping. Fee = 0.3% per side, slippage = 0.1% per side. Initial cash = 100,000 POINTS. Backtests run on real Binance BTCUSDT/ETHUSDT/XRPUSDT/BNBUSDT/PAXGUSDT 1h candles (2021-05-07 → 2026-05-06).
 
@@ -356,7 +356,7 @@ Legend: 📦 original (12), ⚙️ codex (5), 🤖 claude (5). Verdict — PASS 
 | **buy_and_hold** | +46.24% | -30.52% | -7.43% | +3.71% | +153.80% | +33.16% |
 | **cash_only** | +0.00% | +0.00% | +0.00% | +0.00% | +0.00% | +0.00% |
 | **fixed_dca** | +41.96% | -36.73% | -6.62% | -0.33% | +151.35% | +29.93% |
-| **simple_grid** | +48.88% | -0.94% | +10.04% | +42.93% | +125.68% | +45.32% |
+| **simple_grid** | +30.27% | +44.00% | +23.66% | +62.51% | +26.50% | +37.39% |
 | **simple_ma_cross** | +0.64% | +8.39% | -1.13% | -0.18% | -0.50% | +1.44% |
 
 > **重要**：buy_and_hold (PAXG) +153.80%、simple_grid (BTC) +48.88% — **所有 22 個競賽模板都明顯遜於 buy_and_hold 與 simple_grid**。原因：競賽模板每次只動 10–50% 資金，在長多市場吃不到完整趨勢；而 baseline 全倉部署。

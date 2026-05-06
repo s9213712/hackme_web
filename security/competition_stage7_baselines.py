@@ -102,13 +102,17 @@ def main() -> int:
                          "trade_count": int(res.get("trade_count") or 0)})
         except Exception as exc:
             rows.append({"baseline": "fixed_dca", "asset": asset["display"], "error": str(exc)[:100]})
-        # Simple grid: ±50% × 20 levels, order = INITIAL_CASH / (grid_count / 2)
-        # so a fully-filled half (e.g., 10 buy-grids hit) deploys ~100% of capital.
-        # Earlier ±5% × 10 × 1000 POINTS only deployed 10% max — not a fair
-        # benchmark vs buy_and_hold. New params target equal-capital comparison.
+        # Simple grid: ±50% × 20 levels, order = INITIAL_CASH / grid_count
+        # so half-grid full deploys ~50% capital (the engine reserves the
+        # whole `order × buy_grid_count` upfront; setting order × 10 ≥
+        # INITIAL_CASH locks all cash and produces 0 trades — verified
+        # empirically with order=10K → 0 trades, order=5K → 8 trades).
+        # Earlier ±5% × 10 × 1000 POINTS only deployed 10% max which made
+        # the benchmark unfair vs 100% buy_and_hold; this version targets
+        # ~50% deployment which is closer to fair while still tradable.
         p0 = float(candles[0]["close_points"])
         grid_count = 20
-        order_amount = INITIAL_CASH // (grid_count // 2)  # 10,000 per grid
+        order_amount = INITIAL_CASH // grid_count  # 5,000 per grid
         try:
             res = trading.backtest_trading_bot(actor=actor, payload={
                 "market_symbol": market_symbol, "strategy": "grid",
