@@ -14,7 +14,7 @@ from services.trading.accounting.trial_credit import trial_credit_payload
 from services.trading.constants import ASSET_SCALE
 from services.trading.payloads import futures_position_payload
 from services.trading.validators import _to_decimal, _to_int
-from services.trading_mode_gate import assert_same_world, funding_channel_key
+from services.trading.mode_gate import assert_same_world, funding_channel_key
 
 
 def _now_text():

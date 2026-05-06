@@ -22,7 +22,7 @@ from services.trading.notifications import (
     margin_price_jump_notification_payload,
 )
 from services.trading.validators import _to_decimal, _to_int
-from services.trading_mode_gate import (
+from services.trading.mode_gate import (
     assert_same_world,
     liquidation_settle_table,
     liquidation_target_table,

@@ -14,7 +14,7 @@ from services.trading.constants import (
     REFERENCE_PRICE_CAPABLE_PROVIDERS,
     TICKER_CAPABLE_PROVIDERS,
 )
-from services.trading_markets import (
+from services.trading.catalog import (
     TRADING_MARKET_CATALOG_SEED_VERSION,
     get_market_definition,
     normalize_market_symbol,

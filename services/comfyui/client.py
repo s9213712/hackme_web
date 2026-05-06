@@ -1,0 +1,387 @@
+import json
+import urllib.error
+import urllib.parse
+import urllib.request
+import uuid
+from dataclasses import dataclass
+
+try:
+    import websocket
+except Exception:  # pragma: no cover - optional import fallback
+    websocket = None
+
+from services.comfyui.constants import CONTROLNET_TYPE_DEFINITIONS, GENERATION_MODE_DEFINITIONS
+from services.comfyui import execution as comfy_execution
+from services.comfyui import files as comfy_files
+from services.comfyui.workflow import builder as workflow_builder
+
+
+class ComfyUIError(RuntimeError):
+    pass
+
+
+@dataclass
+class ComfyUIImage:
+    filename: str
+    subfolder: str
+    type: str
+    mime_type: str
+    data: bytes
+
+
+class ComfyUIClient:
+    def __init__(self, base_url="http://localhost:8192", timeout=30):
+        self.base_url = str(base_url or "http://localhost:8192").rstrip("/")
+        self.timeout = int(timeout or 30)
+
+    def _url(self, path):
+        return f"{self.base_url}{path}"
+
+    def _ws_url(self):
+        parsed = urllib.parse.urlparse(self.base_url)
+        scheme = "wss" if parsed.scheme == "https" else "ws"
+        netloc = parsed.netloc or parsed.path
+        path = parsed.path.rstrip("/")
+        return urllib.parse.urlunparse((scheme, netloc, path, "", "", ""))
+
+    def _json_request(self, path, *, method="GET", payload=None, timeout=None, allow_non_json=False):
+        headers = {"Accept": "application/json"}
+        body = None
+        if payload is not None:
+            body = json.dumps(payload).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+        req = urllib.request.Request(self._url(path), data=body, method=method, headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout or self.timeout) as resp:
+                raw = resp.read().decode("utf-8")
+                if not raw.strip():
+                    return {}
+                try:
+                    return json.loads(raw)
+                except json.JSONDecodeError as exc:
+                    if allow_non_json:
+                        return {"raw": raw}
+                    raise ComfyUIError("ComfyUI 回應不是 JSON") from exc
+        except urllib.error.URLError as exc:
+            raise ComfyUIError(f"ComfyUI 連線失敗：{getattr(exc, 'reason', exc)}") from exc
+
+    def _multipart_request(self, path, *, fields=None, files=None, timeout=None):
+        boundary = f"----HackmeWebComfyUI{uuid.uuid4().hex}"
+        body = bytearray()
+        for key, value in (fields or {}).items():
+            body.extend(f"--{boundary}\r\n".encode("utf-8"))
+            body.extend(f'Content-Disposition: form-data; name="{key}"\r\n\r\n'.encode("utf-8"))
+            body.extend(str(value).encode("utf-8"))
+            body.extend(b"\r\n")
+        for item in files or []:
+            if not isinstance(item, dict):
+                continue
+            field_name = str(item.get("field") or "image")
+            filename = str(item.get("filename") or "upload.bin")
+            content_type = str(item.get("content_type") or "application/octet-stream")
+            data = item.get("data") or b""
+            body.extend(f"--{boundary}\r\n".encode("utf-8"))
+            body.extend(
+                f'Content-Disposition: form-data; name="{field_name}"; filename="{filename}"\r\n'.encode("utf-8")
+            )
+            body.extend(f"Content-Type: {content_type}\r\n\r\n".encode("utf-8"))
+            body.extend(data)
+            body.extend(b"\r\n")
+        body.extend(f"--{boundary}--\r\n".encode("utf-8"))
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        }
+        req = urllib.request.Request(self._url(path), data=bytes(body), method="POST", headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout or self.timeout) as resp:
+                raw = resp.read().decode("utf-8")
+                if not raw.strip():
+                    return {}
+                try:
+                    return json.loads(raw)
+                except json.JSONDecodeError as exc:
+                    raise ComfyUIError("ComfyUI 回應不是 JSON") from exc
+        except urllib.error.URLError as exc:
+            raise ComfyUIError(f"ComfyUI 連線失敗：{getattr(exc, 'reason', exc)}") from exc
+
+    def _open_progress_socket(self, client_id, *, timeout=5):
+        if websocket is None:
+            raise ComfyUIError("缺少 websocket-client 套件，無法讀取 ComfyUI 即時進度")
+        query = urllib.parse.urlencode({"clientId": str(client_id)})
+        try:
+            ws = websocket.create_connection(f"{self._ws_url()}/ws?{query}", timeout=timeout)
+            ws.settimeout(0.25)
+            return ws
+        except Exception as exc:
+            raise ComfyUIError(f"ComfyUI websocket 連線失敗：{exc}") from exc
+
+    def _list_node_input_options(self, node_class, input_name):
+        info = self._json_request(f"/object_info/{node_class}")
+        node = info.get(node_class) if isinstance(info, dict) else None
+        required = ((node or {}).get("input") or {}).get("required") or {}
+        raw_values = required.get(input_name) or []
+        values = []
+        if isinstance(raw_values, list) and raw_values:
+            first = raw_values[0]
+            if isinstance(first, list):
+                values = first
+            elif isinstance(first, str) and len(raw_values) > 1 and isinstance(raw_values[1], dict):
+                options = raw_values[1].get("options") or []
+                if isinstance(options, list):
+                    values = options
+        return [str(item) for item in values if str(item).strip()]
+
+    def get_object_info(self, node_class=None):
+        path = "/object_info"
+        if node_class:
+            path = f"/object_info/{urllib.parse.quote(str(node_class))}"
+        info = self._json_request(path)
+        if not isinstance(info, dict):
+            raise ComfyUIError("ComfyUI object_info 回應格式不正確")
+        return info
+
+    def list_node_classes(self):
+        return sorted(self.get_object_info().keys())
+
+    def get_models(self):
+        return self._list_node_input_options("CheckpointLoaderSimple", "ckpt_name")
+
+    def get_loras(self):
+        return self._list_node_input_options("LoraLoader", "lora_name")
+
+    def get_vaes(self):
+        return self._list_node_input_options("VAELoader", "vae_name")
+
+    def get_embeddings(self):
+        data = self._json_request("/embeddings")
+        if isinstance(data, list):
+            values = data
+        elif isinstance(data, dict):
+            values = data.get("embeddings") or data.get("items") or []
+        else:
+            values = []
+        if not isinstance(values, list):
+            values = []
+        return [str(item) for item in values if str(item).strip()]
+
+    def health_check(self, *, timeout=3):
+        stats = self._json_request("/system_stats", timeout=timeout)
+        if not isinstance(stats, dict):
+            raise ComfyUIError("ComfyUI 狀態回應格式不正確")
+        return {
+            "ok": True,
+            "base_url": self.base_url,
+            "system": stats.get("system") or {},
+        }
+
+    def get_sampler_options(self):
+        info = self._json_request("/object_info/KSampler")
+        node = info.get("KSampler") if isinstance(info, dict) else None
+        required = ((node or {}).get("input") or {}).get("required") or {}
+        sampler = required.get("sampler_name") or []
+        scheduler = required.get("scheduler") or []
+        sampler_values = sampler[0] if isinstance(sampler, list) and sampler else []
+        scheduler_values = scheduler[0] if isinstance(scheduler, list) and scheduler else []
+        return {
+            "samplers": [str(item) for item in sampler_values] if isinstance(sampler_values, list) else [],
+            "schedulers": [str(item) for item in scheduler_values] if isinstance(scheduler_values, list) else [],
+        }
+
+    def get_controlnet_models(self):
+        return self._list_node_input_options("ControlNetLoader", "control_net_name")
+
+    def get_upscale_models(self):
+        return self._list_node_input_options("UpscaleModelLoader", "model_name")
+
+    def get_capabilities(self):
+        object_info = self.get_object_info()
+        available_nodes = set(object_info.keys())
+        controlnet_models = self.get_controlnet_models() if "ControlNetLoader" in available_nodes else []
+        upscale_models = self.get_upscale_models() if "UpscaleModelLoader" in available_nodes else []
+        controlnet_types = {}
+        for key, definition in CONTROLNET_TYPE_DEFINITIONS.items():
+            preprocessor_candidates = list(definition.get("preprocessor_candidates") or [])
+            available_preprocessors = [name for name in preprocessor_candidates if name in available_nodes]
+            model_keywords = [keyword.lower() for keyword in definition.get("model_keywords") or []]
+            matching_models = [
+                model
+                for model in controlnet_models
+                if any(keyword in str(model).lower() for keyword in model_keywords)
+            ]
+            controlnet_types[key] = {
+                "label": definition.get("label") or key,
+                "available": bool(
+                    {"ControlNetLoader", "ControlNetApplyAdvanced", "LoadImage"}.issubset(available_nodes)
+                    and available_preprocessors
+                    and matching_models
+                ),
+                "available_preprocessors": available_preprocessors,
+                "default_preprocessor": next(
+                    (
+                        name
+                        for name in [definition.get("default_preprocessor")] + preprocessor_candidates
+                        if name in available_preprocessors
+                    ),
+                    "",
+                ),
+                "matching_models": matching_models,
+            }
+        return {
+            "available_nodes": sorted(available_nodes),
+            "controlnet_models": controlnet_models,
+            "upscale_models": upscale_models,
+            "controlnet_types": controlnet_types,
+            "generation_modes": [
+                {
+                    "key": key,
+                    "label": value.get("label") or key,
+                    "available": True,
+                }
+                for key, value in GENERATION_MODE_DEFINITIONS.items()
+            ],
+        }
+
+    def upload_image_bytes(self, data, filename, *, image_type="input", overwrite=False, subfolder=""):
+        return comfy_files.upload_image_bytes(
+            self,
+            data,
+            filename,
+            image_type=image_type,
+            overwrite=overwrite,
+            subfolder=subfolder,
+            error_cls=ComfyUIError,
+        )
+
+    def _build_text_to_image_base(self, params):
+        return workflow_builder.build_text_to_image_base(params)
+
+    def _attach_controlnet(self, workflow, params, *, positive_ref, negative_ref, next_node_id):
+        return workflow_builder.attach_controlnet(
+            workflow,
+            params,
+            positive_ref=positive_ref,
+            negative_ref=negative_ref,
+            next_node_id=next_node_id,
+            error_cls=ComfyUIError,
+        )
+
+    def build_text_to_image_workflow(self, params):
+        return workflow_builder.build_text_to_image_workflow(params, error_cls=ComfyUIError)
+
+    def build_image_to_image_workflow(self, params):
+        return workflow_builder.build_image_to_image_workflow(params, error_cls=ComfyUIError)
+
+    def build_inpaint_workflow(self, params):
+        return workflow_builder.build_inpaint_workflow(params, error_cls=ComfyUIError)
+
+    def build_outpaint_workflow(self, params):
+        return workflow_builder.build_outpaint_workflow(params, error_cls=ComfyUIError)
+
+    def build_upscale_workflow(self, params):
+        return workflow_builder.build_upscale_workflow(params, error_cls=ComfyUIError)
+
+    def build_generation_workflow(self, params):
+        return workflow_builder.build_generation_workflow(params, error_cls=ComfyUIError)
+
+    def queue_prompt_with_client_id(self, workflow, *, client_id=None):
+        return comfy_execution.queue_prompt_with_client_id(
+            self,
+            workflow,
+            client_id=client_id,
+            error_cls=ComfyUIError,
+        )
+
+    def queue_prompt(self, workflow):
+        return comfy_execution.queue_prompt(self, workflow, error_cls=ComfyUIError)
+
+    def interrupt(self):
+        return comfy_execution.interrupt(self)
+
+    def _emit_progress(self, progress_callback, snapshot):
+        return comfy_execution.emit_progress(progress_callback, snapshot)
+
+    def _apply_ws_message_to_progress(self, snapshot, message, prompt_id):
+        return comfy_execution.apply_ws_message_to_progress(snapshot, message, prompt_id)
+
+    def wait_for_images(
+        self,
+        prompt_id,
+        *,
+        timeout_seconds=1800,
+        poll_interval=1.0,
+        expected_count=1,
+        websocket_conn=None,
+        progress_callback=None,
+    ):
+        return comfy_execution.wait_for_images(
+            self,
+            prompt_id,
+            timeout_seconds=timeout_seconds,
+            poll_interval=poll_interval,
+            expected_count=expected_count,
+            websocket_conn=websocket_conn,
+            progress_callback=progress_callback,
+            error_cls=ComfyUIError,
+            websocket_module=websocket,
+        )
+
+    def wait_for_first_image(self, prompt_id, *, timeout_seconds=1800, poll_interval=1.0):
+        return comfy_execution.wait_for_first_image(
+            self,
+            prompt_id,
+            timeout_seconds=timeout_seconds,
+            poll_interval=poll_interval,
+            error_cls=ComfyUIError,
+            websocket_module=websocket,
+        )
+
+    def fetch_image(self, image_ref):
+        return comfy_files.fetch_image(self, image_ref, error_cls=ComfyUIError, image_cls=ComfyUIImage)
+
+    def _local_dir_for_type(self, image_type, *, local_base_dir=None):
+        return comfy_files.local_dir_for_type(
+            image_type,
+            error_cls=ComfyUIError,
+            local_base_dir=local_base_dir,
+        )
+
+    def _safe_local_image_path(self, image_ref, *, local_base_dir=None):
+        return comfy_files.safe_local_image_path(
+            image_ref,
+            error_cls=ComfyUIError,
+            local_base_dir=local_base_dir,
+        )
+
+    def discard_image(self, image_ref, *, prompt_id=None, local_base_dir=None, allow_api_delete=True):
+        return comfy_files.discard_image(
+            self,
+            image_ref,
+            prompt_id=prompt_id,
+            local_base_dir=local_base_dir,
+            allow_api_delete=allow_api_delete,
+            error_cls=ComfyUIError,
+        )
+
+    def generate_from_workflow(self, workflow, *, timeout_seconds=1800, expected_count=1, progress_callback=None):
+        return comfy_execution.generate_from_workflow(
+            self,
+            workflow,
+            timeout_seconds=timeout_seconds,
+            expected_count=expected_count,
+            progress_callback=progress_callback,
+            error_cls=ComfyUIError,
+            websocket_module=websocket,
+            image_fetcher=self.fetch_image,
+        )
+
+    def generate_image(self, params, *, timeout_seconds=1800, progress_callback=None):
+        return comfy_execution.generate_image(
+            self,
+            params,
+            timeout_seconds=timeout_seconds,
+            progress_callback=progress_callback,
+            error_cls=ComfyUIError,
+            build_generation_workflow_func=self.build_generation_workflow,
+            generate_from_workflow_func=self.generate_from_workflow,
+        )
