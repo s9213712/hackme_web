@@ -147,14 +147,6 @@ def fill_payload(row, *, units_to_quantity, json_loads, realized=None):
     return item
 
 
-def grid_bot_payload(row, *, json_loads, orders=None):
-    item = dict(row)
-    item["enabled"] = bool(item["enabled"])
-    item["grid_levels"] = json_loads(item.get("grid_levels_json"), [])
-    item["orders"] = orders or []
-    return item
-
-
 def bot_audit_label(status):
     mapping = {
         "unaudited": "未稽核",
