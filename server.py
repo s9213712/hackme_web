@@ -127,6 +127,21 @@ from services.points_chain import DEFAULT_BLOCK_LEDGER_THRESHOLD, DEFAULT_BLOCK_
 from services.release_info import APP_NAME, APP_RELEASE_ID
 from services.runtime_output import get_runtime_output, install_runtime_output_capture
 from services.server.routes import register_server_routes
+from services.server.runtime import (
+    _build_fernet,
+    _env_bool,
+    _env_int,
+    _env_path,
+    _env_session_samesite,
+    _load_db_setting_value,
+    _load_or_create_binary_secret,
+    _load_or_create_text_secret,
+    ensure_local_tls_files,
+    load_chain_seed,
+    load_json,
+    parse_ip_set,
+    save_json,
+)
 from services.server.startup import (
     run_server_main as run_server_main_helper,
     start_daily_snapshot_worker as start_daily_snapshot_worker_helper,
@@ -173,12 +188,6 @@ SERVER_STARTED_AT = datetime.now().isoformat()
 SERVER_RELEASE_ID = APP_RELEASE_ID
 SERVER_VERSION = APP_RELEASE_ID
 
-def _env_path(name, default_path):
-    value = os.environ.get(name, "").strip()
-    if not value:
-        return default_path
-    return value if os.path.isabs(value) else os.path.abspath(value)
-
 RUNTIME_DIR = _env_path("HACKME_RUNTIME_DIR", os.path.join(BASE_DIR, "runtime"))
 RUNTIME_DIR = os.path.abspath(RUNTIME_DIR)
 RUNTIME_SECRETS_DIR = _env_path("HTML_LEARNING_RUNTIME_SECRETS_DIR", RUNTIME_DIR)
@@ -222,133 +231,13 @@ os.makedirs(ANCHOR_DIR, exist_ok=True)
 os.makedirs(REPORTS_DIR, exist_ok=True)
 
 
-def _load_db_setting_value(db_path, key):
-    if not os.path.exists(db_path):
-        return ""
-    try:
-        conn = sqlite3.connect(db_path)
-        try:
-            row = conn.execute("SELECT value FROM system_settings WHERE key=?", (key,)).fetchone()
-            return str(row[0] or "").strip() if row else ""
-        finally:
-            conn.close()
-    except Exception:
-        return ""
-
-
 _configured_storage_root = _load_db_setting_value(DB_PATH, "cloud_drive_storage_root")
 if _configured_storage_root:
     STORAGE_DIR = _configured_storage_root
 STORAGE_DIR = str(validate_storage_root(STORAGE_DIR, base_dir=BASE_DIR, create=True))
 
-
-def _load_or_create_text_secret(env_name, path, *, generator):
-    env_value = os.environ.get(env_name, "").strip()
-    if env_value:
-        return env_value
-    if os.path.exists(path):
-        try:
-            with open(path, encoding="utf-8") as f:
-                value = f.read().strip()
-            if value:
-                return value
-        except Exception:
-            pass
-    value = generator()
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(value)
-    os.chmod(path, 0o600)
-    return value
-
-
-def _load_or_create_binary_secret(env_name, path, *, generator):
-    env_value = os.environ.get(env_name)
-    if env_value:
-        return env_value.encode("utf-8")
-    if os.path.exists(path):
-        try:
-            with open(path, "rb") as f:
-                value = f.read()
-            if value:
-                return value
-        except Exception:
-            pass
-    value = generator()
-    with open(path, "wb") as f:
-        f.write(value)
-    os.chmod(path, 0o600)
-    return value
-
-
-def ensure_local_tls_files(cert_file, key_file):
-    if os.path.exists(cert_file) and os.path.exists(key_file):
-        return {"created": False, "cert_file": cert_file, "key_file": key_file}
-
-    os.makedirs(os.path.dirname(os.path.abspath(cert_file)), exist_ok=True)
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)  # allowlist: generate local TLS keypair at runtime
-    subject = issuer = x509.Name(
-        [
-            x509.NameAttribute(NameOID.COUNTRY_NAME, "TW"),
-            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "hackme_web local"),
-            x509.NameAttribute(NameOID.COMMON_NAME, "localhost"),
-        ]
-    )
-    cert = (
-        x509.CertificateBuilder()
-        .subject_name(subject)
-        .issuer_name(issuer)
-        .public_key(key.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime.utcnow() - timedelta(minutes=1))
-        .not_valid_after(datetime.utcnow() + timedelta(days=825))
-        .add_extension(
-            x509.SubjectAlternativeName(
-                [
-                    x509.DNSName("localhost"),
-                    x509.IPAddress(ip_address("127.0.0.1")),
-                    x509.IPAddress(ip_address("::1")),
-                ]
-            ),
-            critical=False,
-        )
-        .sign(key, hashes.SHA256())
-    )
-
-    tmp_key = key_file + ".tmp"
-    tmp_cert = cert_file + ".tmp"
-    with open(tmp_key, "wb") as f:
-        f.write(
-            key.private_bytes(
-                encoding=serialization.Encoding.PEM,
-                format=serialization.PrivateFormat.TraditionalOpenSSL,
-                encryption_algorithm=serialization.NoEncryption(),
-            )
-        )
-    os.chmod(tmp_key, 0o600)
-    with open(tmp_cert, "wb") as f:
-        f.write(cert.public_bytes(serialization.Encoding.PEM))
-    os.chmod(tmp_cert, 0o644)
-    os.replace(tmp_key, key_file)
-    os.replace(tmp_cert, cert_file)
-    return {"created": True, "cert_file": cert_file, "key_file": key_file}
-
-
 # ── Hash-chain seed (server-side only, not exposed to client) ─────────────────
-def _get_chain_seed():
-    seed_file = CHAIN_SEED_PATH
-    if os.path.exists(seed_file):
-        try:
-            with open(seed_file) as f:
-                return f.read().strip()
-        except Exception:
-            pass
-    seed = secrets.token_hex(24)
-    with open(seed_file, "w") as f:
-        f.write(seed)
-    os.chmod(seed_file, 0o600)
-    return seed
-
-CHAIN_SEED = _get_chain_seed()
+CHAIN_SEED = load_chain_seed(CHAIN_SEED_PATH)
 
 # ── Secrets ─────────────────────────────────────────────────────────────────
 SECRET_KEY = _load_or_create_text_secret(
@@ -370,33 +259,8 @@ _INTEGRITY_KEY = _load_or_create_binary_secret(
 )
 
 
-def _build_fernet(secret):
-    if isinstance(secret, bytes):
-        secret = secret.decode("utf-8", errors="ignore")  # allowlist: normalize runtime secret bytes
-    secret = str(secret).strip()  # allowlist: normalize runtime secret string
-    try:
-        return Fernet(secret.encode("utf-8"))
-    except Exception:
-        derived = base64.urlsafe_b64encode(hashlib.sha256(secret.encode("utf-8")).digest())
-        return Fernet(derived)
-
-
 fernet = _build_fernet(SECRET_KEY)
 server_file_fernet = _build_fernet(SERVER_FILE_ENCRYPTION_KEY)
-
-# ── JSON helpers ──────────────────────────────────────────────────────────────
-def load_json(path):
-    if not os.path.exists(path): return {}
-    try:
-        with open(path) as f: return json.load(f)
-    except Exception:
-        return {}
-
-def save_json(path, data):
-    tmp = path + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-    os.replace(tmp, path)
 
 LEGACY_FAIL_LOG = _runtime_path("HTML_LEARNING_FAIL_LOG_PATH", "fail_log.json")
 LEGACY_BLOCKED_IPS = _runtime_path("HTML_LEARNING_BLOCKED_IPS_PATH", "blocked_ips.json")
@@ -441,42 +305,6 @@ def hash_token(token):
 
 # ── Security helpers ────────────────────────────────────────────────────────────
 # ── Trusted proxies (prevent X-Forwarded-For spoofing) ───────────────────────
-def parse_ip_set(raw_value):
-    if not raw_value:
-        return set()
-    values = set()
-    for token in str(raw_value).split(","):  # allowlist: token here means CSV item, not a credential
-        token = token.strip()  # allowlist: normalize trusted-proxy CSV item
-        if not token:
-            continue
-        try:
-            values.add(str(ip_address(token)))
-        except Exception:
-            continue
-    return values
-
-def _env_bool(name, default=False):
-    value = os.environ.get(name)
-    if value is None:
-        return default
-    return str(value).strip().lower() in {"1", "true", "on", "yes"}
-
-
-def _env_int(name, default, minimum=None):
-    raw = os.environ.get(name)
-    try:
-        value = int(str(raw).strip()) if raw is not None else int(default)
-    except Exception:
-        value = int(default)
-    if minimum is not None and value < minimum:
-        value = minimum
-    return value
-
-
-def _env_session_samesite():
-    s = os.environ.get("SESSION_COOKIE_SAMESITE", "Strict").strip().lower()
-    return "Strict" if s in {"", "strict"} else ("Lax" if s == "lax" else "None")
-
 TRUSTED_PROXY_IPS = parse_ip_set(os.environ.get("TRUSTED_PROXY_IPS", ""))
 USE_XFF = os.environ.get("USE_XFF", "false").strip().lower() in {"1", "true", "on", "yes"}
 UNTRUSTED_XFF_MSG = "X-Forwarded-For from untrusted proxy rejected"
