@@ -30,6 +30,7 @@ from services.trading.accounting.core import (
     quantity_to_units,
     units_to_quantity,
 )
+from services.trading.audit import emit_trading_audit_event
 from services.trading.constants import (
     APR_DAYS_PER_YEAR,
     ASSET_SCALE,
@@ -53,6 +54,16 @@ from services.trading.settings_schema import (
     raw_int_setting,
     text_input_value,
     write_apr_from_daily,
+)
+from services.trading.notifications import (
+    bot_audit_notification_payload,
+    create_trading_root_notification,
+    create_trading_user_notification,
+    insufficient_balance_notification_payload,
+    margin_liquidated_notification_payload,
+    margin_near_liquidation_notification_payload,
+    margin_price_jump_notification_payload,
+    trade_fill_notification_payload,
 )
 from services.trading.price_fusion.context import (
     price_context_confidence,
@@ -1429,25 +1440,19 @@ class TradingEngineService:
         return self._actor_username(actor) == "root"
 
     def _audit_event(self, conn, event_type, message, *, actor=None, target_user_id=None, order_id=None, market_symbol=None, severity="info", metadata=None):
-        conn.execute(
-            """
-            INSERT INTO trading_audit_events (
-                event_uuid, event_type, severity, actor_user_id, target_user_id,
-                order_id, market_symbol, message, metadata_json, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                str(uuid.uuid4()),
-                event_type,
-                severity,
-                self._actor_id(actor),
-                int(target_user_id) if target_user_id is not None else None,
-                int(order_id) if order_id is not None else None,
-                market_symbol,
-                message,
-                _json_dumps(metadata or {}),
-                _now(),
-            ),
+        emit_trading_audit_event(
+            conn,
+            event_type=event_type,
+            message=message,
+            actor_id=self._actor_id(actor),
+            target_user_id=target_user_id,
+            order_id=order_id,
+            market_symbol=market_symbol,
+            severity=severity,
+            metadata=metadata,
+            json_dumps=_json_dumps,
+            now_text=_now,
+            uuid_factory=uuid.uuid4,
         )
 
     def _state(self, conn):
@@ -6788,19 +6793,18 @@ class TradingEngineService:
 
     def _notify_trade_filled(self, conn, fill):
         try:
-            side_label = "買入" if fill["side"] == "buy" else "賣出"
-            quantity = units_to_quantity(fill["quantity_units"])
-            create_notification_if_enabled(
+            notice = trade_fill_notification_payload(
+                fill,
+                units_to_quantity=units_to_quantity,
+                decimal_text=_decimal_text,
+            )
+            create_trading_user_notification(
                 conn,
                 user_id=fill["user_id"],
-                type="trading_order_filled",
-                title="交易已成交",
-                body=(
-                    f"{fill['market_symbol']} {side_label} {quantity} 已成交，"
-                    f"成交價 {_decimal_text(fill['price_points'])}，成交額 {int(fill['notional_points'])}，"
-                    f"手續費 {int(fill['fee_points'] or 0)}。"
-                ),
-                link="/trading",
+                notification_type=notice["notification_type"],
+                title=notice["title"],
+                body=notice["body"],
+                create_notification=create_notification_if_enabled,
             )
         except Exception:
             pass
@@ -6812,16 +6816,20 @@ class TradingEngineService:
     def _notify_insufficient_balance(self, *, user_id, market_symbol, side, order_type, quantity, error):
         conn = self.get_db()
         try:
-            create_notification_if_enabled(
+            notice = insufficient_balance_notification_payload(
+                market_symbol=market_symbol,
+                side=side,
+                order_type=order_type,
+                quantity=quantity,
+                error=error,
+            )
+            create_trading_user_notification(
                 conn,
                 user_id=user_id,
-                type="trading_balance_insufficient",
-                title="交易未成立：餘額不足",
-                body=(
-                    f"{market_symbol or '交易市場'} {side or '-'} {order_type or '-'} "
-                    f"數量 {quantity} 未成立：{str(error)[:180]}"
-                ),
-                link="/trading",
+                notification_type=notice["notification_type"],
+                title=notice["title"],
+                body=notice["body"],
+                create_notification=create_notification_if_enabled,
             )
             conn.commit()
         except Exception:
@@ -6831,17 +6839,18 @@ class TradingEngineService:
 
     def _notify_margin_liquidated(self, conn, *, user_id, position, risk):
         try:
-            create_notification_if_enabled(
+            notice = margin_liquidated_notification_payload(
+                position=position,
+                risk=risk,
+                decimal_text=_decimal_text,
+            )
+            create_trading_user_notification(
                 conn,
                 user_id=user_id,
-                type="trading_margin_liquidated",
-                title="進階交易倉位已被強制平倉",
-                body=(
-                    f"{position['market_symbol']} {position['position_type']} 已低於維持保證金並自動清算；"
-                    f"結算價 {_decimal_text(risk.get('price_points') or 0)}，"
-                    f"損益 {int(risk.get('delta_points') or 0)} 點。"
-                ),
-                link="/trading",
+                notification_type=notice["notification_type"],
+                title=notice["title"],
+                body=notice["body"],
+                create_notification=create_notification_if_enabled,
             )
         except Exception:
             pass
@@ -6873,17 +6882,21 @@ class TradingEngineService:
             if not risk.get("liquidation_required") and ratio is not None and float(ratio) <= 150.0:
                 alert_type = "trading_margin_near_liquidation"
                 if not self._has_unread_margin_alert(conn, user_id=user_id, alert_type=alert_type, position_uuid=position_uuid):
-                    create_notification_if_enabled(
+                    notice = margin_near_liquidation_notification_payload(
+                        market_symbol=market_symbol,
+                        position_label=position_label,
+                        price=price,
+                        liquidation_price=liquidation_price,
+                        ratio=ratio,
+                        position_uuid=position_uuid,
+                    )
+                    create_trading_user_notification(
                         conn,
                         user_id=user_id,
-                        type=alert_type,
-                        title="進階交易接近強平",
-                        body=(
-                            f"{market_symbol} {position_label} 倉位接近強平，"
-                            f"目前價 {price}，強平價 {liquidation_price or '-'}，"
-                            f"整戶維持率 {ratio}%。倉位 {position_uuid}"
-                        ),
-                        link="/trading",
+                        notification_type=notice["notification_type"],
+                        title=notice["title"],
+                        body=notice["body"],
+                        create_notification=create_notification_if_enabled,
                     )
             if entry_price > 0 and price > 0:
                 move_percent = abs(price - entry_price) * 100.0 / entry_price
@@ -6892,16 +6905,22 @@ class TradingEngineService:
                     alert_type = "trading_margin_price_jump"
                     if not self._has_unread_margin_alert(conn, user_id=user_id, alert_type=alert_type, position_uuid=position_uuid):
                         direction = "上漲" if price > entry_price else "下跌"
-                        create_notification_if_enabled(
+                        notice = margin_price_jump_notification_payload(
+                            market_symbol=market_symbol,
+                            position_label=position_label,
+                            direction=direction,
+                            move_percent=move_percent,
+                            entry_price=entry_price,
+                            price=price,
+                            position_uuid=position_uuid,
+                        )
+                        create_trading_user_notification(
                             conn,
                             user_id=user_id,
-                            type=alert_type,
-                            title="進階交易價格大幅波動",
-                            body=(
-                                f"{market_symbol} {position_label} 參考價較開倉價{direction} {move_percent:.2f}%，"
-                                f"開倉價 {entry_price}，目前價 {price}。倉位 {position_uuid}"
-                            ),
-                            link="/trading",
+                            notification_type=notice["notification_type"],
+                            title=notice["title"],
+                            body=notice["body"],
+                            create_notification=create_notification_if_enabled,
                         )
         except Exception:
             pass
@@ -11173,26 +11192,30 @@ class TradingEngineService:
                 ),
             )
         if audit_result.get("audit_status") in {"yellow", "red"}:
-            label = self._bot_audit_label(audit_result.get("audit_status"))
-            name = str(row.get("name") or row.get("market_symbol") or "bot")
+            status = str(audit_result.get("audit_status") or "green")
+            label = self._bot_audit_label(status)
             display_symbol = self._market_display_symbol_on_conn(conn, row.get("market_symbol"))
-            body = f"{name}（{display_symbol}）稽核結果 {label}。"
-            link = "/trading"
-            create_root_notification_if_enabled(
-                conn,
-                type=f"trading_bot_audit_{audit_result.get('audit_status')}",
-                title="交易機器人稽核警示",
-                body=body,
-                link=link,
-                once=True,
+            notice = bot_audit_notification_payload(
+                row=row,
+                status=status,
+                label=label,
+                display_symbol=display_symbol,
             )
-            create_notification_if_enabled(
+            create_trading_root_notification(
+                conn,
+                notification_type=notice["root_notification_type"],
+                title=notice["root_title"],
+                body=notice["body"],
+                once=True,
+                create_root_notification=create_root_notification_if_enabled,
+            )
+            create_trading_user_notification(
                 conn,
                 user_id=int(row["user_id"]),
-                type="trading_bot_audit_warning",
-                title="交易機器人需要檢查",
-                body=body,
-                link=link,
+                notification_type=notice["user_notification_type"],
+                title=notice["user_title"],
+                body=notice["body"],
+                create_notification=create_notification_if_enabled,
             )
         self._audit_event(
             conn,
