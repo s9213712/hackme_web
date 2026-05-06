@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from services.trading import margin as trading_margin_module
 import services.trading_engine as trading_engine_module
 from services.points_chain import PointsLedgerService, ensure_points_economy_schema
 from services.snapshots import ensure_snapshot_schema
@@ -4930,6 +4931,145 @@ def test_margin_liquidation_scan_skips_when_fused_price_is_conservative(tmp_path
     assert result["errors"]
     assert result["errors"][0]["position_uuid"] == opened["position"]["position_uuid"]
     assert result["errors"][0]["price_health"] == "conservative"
+
+
+def test_close_margin_position_rejects_high_risk_blocked_price(tmp_path, monkeypatch):
+    points, trading = _services(tmp_path)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    _deplete_trial_credit(trading, user_id=1)
+    trading.update_root_settings(
+        actor=_actor(3, "root", "super_admin"),
+        settings={"borrowing_enabled": True, "borrow_interest_percent_daily": 0},
+        markets=[],
+    )
+    opened = trading.open_margin_position(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        position_type="margin_long",
+        quantity="0.1",
+        collateral_points=200,
+    )
+
+    def blocked_price(conn, market, *, with_meta=False, high_risk=False):
+        if with_meta:
+            return (
+                3300.0,
+                "fused_weighted",
+                {
+                    "price_health": "conservative",
+                    "fallback_reason": "degraded",
+                    "excluded_sources": [],
+                    "warnings": [],
+                    "high_risk_blocked": True,
+                    "high_risk_block_reason": "risk-grade price unavailable",
+                },
+            )
+        return 3300.0
+
+    monkeypatch.setattr(trading, "_current_market_price_points", blocked_price)
+
+    with pytest.raises(ValueError, match="risk-grade price unavailable"):
+        trading.close_margin_position(
+            actor=_actor(),
+            position_uuid=opened["position"]["position_uuid"],
+        )
+
+
+def test_close_margin_position_rejects_public_price_override(tmp_path):
+    points, trading = _services(tmp_path)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    _deplete_trial_credit(trading, user_id=1)
+    trading.update_root_settings(
+        actor=_actor(3, "root", "super_admin"),
+        settings={"borrowing_enabled": True, "borrow_interest_percent_daily": 0},
+        markets=[],
+    )
+    opened = trading.open_margin_position(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        position_type="margin_long",
+        quantity="0.1",
+        collateral_points=200,
+    )
+
+    with pytest.raises(ValueError, match="internal price override is not allowed"):
+        trading.close_margin_position(
+            actor=_actor(),
+            position_uuid=opened["position"]["position_uuid"],
+            price_override_points=3300,
+            price_source_override="public_override",
+        )
+
+
+def test_margin_risk_payload_accepts_margin_short_alias(tmp_path):
+    _points, trading = _services(tmp_path)
+    trading.update_root_settings(
+        actor=_actor(3, "root", "super_admin"),
+        settings={"borrowing_enabled": True, "borrow_interest_percent_daily": 0},
+        markets=[],
+    )
+    opened = trading.open_margin_position(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        position_type="short",
+        quantity="0.1",
+        collateral_points=300,
+    )
+
+    conn = trading.get_db()
+    try:
+        row = conn.execute(
+            "SELECT * FROM trading_margin_positions WHERE position_uuid=?",
+            (opened["position"]["position_uuid"],),
+        ).fetchone()
+        row_dict = dict(row)
+        row_dict["position_type"] = "margin_short"
+        market = trading._market(conn, row["market_symbol"])
+        risk = trading._margin_risk_payload(conn, row_dict, market=market, now_text="2026-05-04T10:30:00")
+    finally:
+        conn.close()
+
+    assert risk["risk_status"] == "short_price_risk"
+    assert "價格上漲" in risk["risk_reason"]
+
+
+def test_margin_risk_notification_failure_emits_audit(tmp_path, monkeypatch):
+    points, trading = _services(tmp_path)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    trading.update_root_settings(
+        actor=_actor(3, "root", "super_admin"),
+        settings={
+            "borrowing_enabled": True,
+            "margin_liquidation_enabled": True,
+            "margin_maintenance_percent": 15,
+            "price_source": "manual_root",
+        },
+        markets=[],
+    )
+    trading.open_margin_position(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        position_type="margin_long",
+        quantity="0.1",
+        collateral_points=120,
+    )
+    trading.update_market(actor=_actor(3, "root", "super_admin"), symbol="ETH/POINTS", manual_price_points=4550, confirm_jump=True)
+
+    def fail_notification(*args, **kwargs):
+        raise RuntimeError("notification transport failed")
+
+    monkeypatch.setattr(trading_margin_module, "create_trading_user_notification", fail_notification)
+    result = trading.scan_margin_liquidations(actor={"username": "system", "role": "system"}, limit=10)
+
+    assert result["ok"] is True
+    audit = next(
+        row
+        for row in trading.root_report()["audit_events"]
+        if row["event_type"] == "TRADING_MARGIN_RISK_NOTIFY_FAILED"
+    )
+    assert audit["severity"] == "warning"
+    metadata = json.loads(audit["metadata_json"] or "{}")
+    assert metadata["error"].startswith("notification transport failed")
 
 
 def test_internal_test_force_liquidation_cannot_read_production_margin_position(tmp_path):
