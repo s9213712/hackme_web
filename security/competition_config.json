@@ -45,7 +45,8 @@
   "competition_templates": {
     "original_12": ["bollinger_reversion", "breakout_buy", "dip_buy", "full_entry_exit", "kd_momentum", "ma200_trend_entry", "ma_pullback", "risk_guard", "rsi_scale", "staged_profit_taking", "stop_loss", "swing_bb_ma50"],
     "codex_5": ["bb_rsi_reversion_codex", "breakout_guarded_codex", "kd_trend_scaleout_codex", "ma200_rsi_reclaim_codex", "trend_floor_rebalance_codex"],
-    "claude_5": ["adaptive_profit_ladder_claude", "bb_breakout_momentum_claude", "golden_cross_dual_ma_claude", "trend_pyramid_claude", "triple_confirmation_dip_claude"]
+    "claude_5": ["adaptive_profit_ladder_claude", "bb_breakout_momentum_claude", "golden_cross_dual_ma_claude", "trend_pyramid_claude", "triple_confirmation_dip_claude"],
+    "claude_rev": ["triple_trend_recovery_claude_rev"]
   },
   "baselines": ["buy_and_hold", "cash_only", "fixed_dca", "simple_grid", "simple_ma_cross"],
   "verdict_rules": {

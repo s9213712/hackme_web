@@ -102,13 +102,18 @@ def main() -> int:
                          "trade_count": int(res.get("trade_count") or 0)})
         except Exception as exc:
             rows.append({"baseline": "fixed_dca", "asset": asset["display"], "error": str(exc)[:100]})
-        # Simple grid: ±5% × 10
+        # Simple grid: ±50% × 20 levels, order = INITIAL_CASH / (grid_count / 2)
+        # so a fully-filled half (e.g., 10 buy-grids hit) deploys ~100% of capital.
+        # Earlier ±5% × 10 × 1000 POINTS only deployed 10% max — not a fair
+        # benchmark vs buy_and_hold. New params target equal-capital comparison.
         p0 = float(candles[0]["close_points"])
+        grid_count = 20
+        order_amount = INITIAL_CASH // (grid_count // 2)  # 10,000 per grid
         try:
             res = trading.backtest_trading_bot(actor=actor, payload={
                 "market_symbol": market_symbol, "strategy": "grid",
-                "lower_price_points": p0 * 0.95, "upper_price_points": p0 * 1.05,
-                "grid_count": 10, "order_amount_points": 1000,
+                "lower_price_points": p0 * 0.50, "upper_price_points": p0 * 1.50,
+                "grid_count": grid_count, "order_amount_points": order_amount,
                 "candles": candles,
             })
             rows.append({"baseline": "simple_grid", "asset": asset["display"],
