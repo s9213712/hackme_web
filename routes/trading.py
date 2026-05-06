@@ -542,7 +542,8 @@ def register_trading_routes(app, deps):
         if interval not in REFERENCE_PRICE_INTERVALS:
             raise ValueError("unsupported backtest interval")
         mins_per_candle = INTERVAL_MINUTES.get(interval, 15)
-        active_cap = trading_service.get_max_backtest_candles()
+        get_max_backtest_candles = getattr(trading_service, "get_max_backtest_candles", None)
+        active_cap = int(get_max_backtest_candles()) if callable(get_max_backtest_candles) else MAX_BACKTEST_CANDLES
         max_days_for_interval = round(active_cap * mins_per_candle / 1440, 1)
         # Accept either candle count (limit/candle_limit) or human-readable days
         days_raw = data.get("days") or data.get("backtest_days")
@@ -568,7 +569,7 @@ def register_trading_routes(app, deps):
                 f"回測長度超過上限：{active_cap} 根 K 棒"
                 f"（{interval} 間隔最多可回測 {max_days_for_interval} 天）"
             )
-        download_limit = max(2, min(limit, active_cap))
+        download_limit = max(2, min(limit, BACKTEST_PROVIDER_CANDLE_LIMIT))
         start_ms = parse_time_ms(data.get("start_time"))
         end_ms = parse_time_ms(data.get("end_time"))
         if start_ms is not None or end_ms is not None:
@@ -1083,10 +1084,11 @@ def register_trading_routes(app, deps):
             result = trading_service.backtest_trading_bot(actor=actor, payload=data)
             result["data_source"] = result.get("data_source") or data.get("data_source") or ("browser_loaded_chart" if isinstance((data or {}).get("candles"), list) else "")
             result["provider_symbol"] = result.get("provider_symbol") or data.get("provider_symbol") or ""
-            active_cap = trading_service.get_max_backtest_candles()
+            get_max_backtest_candles = getattr(trading_service, "get_max_backtest_candles", None)
+            active_cap = int(get_max_backtest_candles()) if callable(get_max_backtest_candles) else MAX_BACKTEST_CANDLES
             result["max_backtest_candles"] = active_cap
             result["max_backtest_candles_per_batch"] = result.get("max_backtest_candles_per_batch") or fetched_meta.get("max_backtest_candles_per_batch") or BACKTEST_SEGMENT_CANDLES
-            result["provider_candle_limit"] = active_cap
+            result["provider_candle_limit"] = BACKTEST_PROVIDER_CANDLE_LIMIT
             result["requested_candle_limit"] = data.get("requested_candle_limit") or data.get("candle_limit") or data.get("limit") or len(data.get("candles") or [])
             result["download_candle_limit"] = data.get("download_candle_limit") or len(data.get("candles") or [])
             # Interval and window info (auto-calculated so the caller never has to compute candle counts)

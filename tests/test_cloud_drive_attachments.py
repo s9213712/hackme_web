@@ -266,7 +266,7 @@ def test_server_encrypted_upload_stores_ciphertext_but_downloads_plaintext(tmp_p
     assert download.data == b"secret note"
 
 
-def test_server_encrypted_upload_scans_temp_plaintext_not_final_storage_path(tmp_path, monkeypatch):
+def test_server_encrypted_upload_scans_in_memory_plaintext_not_final_storage_path(tmp_path, monkeypatch):
     db_path = tmp_path / "drive.db"
     storage_root = tmp_path / "storage"
     storage_root.mkdir()
@@ -286,6 +286,7 @@ def test_server_encrypted_upload_scans_temp_plaintext_not_final_storage_path(tmp
         assert os.path.exists(file_path)
         with open(file_path, "rb") as handle:
             assert handle.read() == b"secret note"
+        assert str(file_path).startswith("/proc/self/fd/")
         assert final_path.exists() is False
         return {"scan_status": "clean", "risk_level": "low", "results": []}
 

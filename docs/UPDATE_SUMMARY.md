@@ -1,6 +1,18 @@
 # Update Summary
 
-Release ID: `2026.05.06-143`
+Release ID: `2026.05.06-144`
+
+## 2026.05.06-144
+
+- `server_encrypted` Cloud Drive uploads no longer write plaintext to any
+  temporary disk file before scanning. The upload path now exposes plaintext to
+  scanners through an in-memory Linux `memfd` path and only writes ciphertext
+  to the final storage location, closing the remaining plaintext-at-rest window
+  during upload scanning.
+- Trading backtest auto-fetch routes now keep the overall `backtest_max_candles`
+  cap separate from the per-request provider batch limit, and they fall back to
+  the legacy default cap when lightweight/test trading service stubs do not
+  implement `get_max_backtest_candles()`.
 
 ## 2026.05.06-143
 

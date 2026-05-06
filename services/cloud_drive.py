@@ -1,6 +1,5 @@
 import json
 import os
-import tempfile
 import uuid
 import hashlib
 from datetime import datetime
@@ -102,6 +101,29 @@ def decrypt_server_encrypted_bytes(path, server_file_fernet):
         return server_file_fernet.decrypt(Path(path).read_bytes())
     except InvalidToken as exc:
         raise ValueError("此檔案無法以目前伺服器金鑰解密，可能是重設或換鑰後留下的舊檔案，請重新上傳") from exc
+
+
+def _server_encrypted_scan_path_from_bytes(plaintext_bytes):
+    """Expose plaintext to scanners through an in-memory file descriptor path.
+
+    ``server_encrypted`` uploads already require whole-file encryption with
+    Fernet, so holding the plaintext in memory is not a regression. Using a
+    Linux memfd avoids writing the plaintext to any persistent storage path
+    before the final ciphertext is produced.
+    """
+    if not hasattr(os, "memfd_create"):
+        raise RuntimeError("server_encrypted uploads require os.memfd_create support")
+    fd = os.memfd_create("cloud-drive-server-encrypted-upload", os.MFD_CLOEXEC)
+    try:
+        os.write(fd, plaintext_bytes)
+        os.lseek(fd, 0, os.SEEK_SET)
+        return fd, Path(f"/proc/self/fd/{fd}")
+    except Exception:
+        try:
+            os.close(fd)
+        except Exception:
+            pass
+        raise
 
 
 def _actor_value(actor, key, default=None):
@@ -273,19 +295,25 @@ def store_cloud_upload(
     rel_path = f"users/{int(actor['id'])}/{file_id_hint}/{filename}"
     target = resolve_storage_path(storage_root, rel_path, create_parent=True)
     server_encrypted = is_server_encrypted_privacy_mode(privacy_mode)
+    memfd = None
     plaintext_scan_path = target
-    temp_plaintext_path = None
+    plaintext_bytes = b""
     if server_encrypted:
-        handle = tempfile.NamedTemporaryFile(prefix="cloud-drive-plain-", suffix=".upload", delete=False)
-        temp_plaintext_path = handle.name
-        handle.close()
-        plaintext_scan_path = Path(temp_plaintext_path)
-    with open(plaintext_scan_path, "wb") as out:
+        chunks = []
         while True:
             chunk = stream.read(1024 * 1024)
             if not chunk:
                 break
-            out.write(chunk)
+            chunks.append(chunk)
+        plaintext_bytes = b"".join(chunks)
+        memfd, plaintext_scan_path = _server_encrypted_scan_path_from_bytes(plaintext_bytes)
+    else:
+        with open(plaintext_scan_path, "wb") as out:
+            while True:
+                chunk = stream.read(1024 * 1024)
+                if not chunk:
+                    break
+                out.write(chunk)
     try:
         if server_encrypted and server_file_fernet is None:
             raise ValueError("server_file_encryption_key is required for server_encrypted uploads")
@@ -339,9 +367,9 @@ def store_cloud_upload(
         result["size_bytes"] = int(size_bytes or 0)
         return result, None
     finally:
-        if temp_plaintext_path:
+        if memfd is not None:
             try:
-                Path(temp_plaintext_path).unlink(missing_ok=True)
+                os.close(memfd)
             except Exception:
                 pass
 
