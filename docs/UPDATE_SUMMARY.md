@@ -1,6 +1,29 @@
 # Update Summary
 
-Release ID: `2026.05.06-142`
+Release ID: `2026.05.06-143`
+
+## 2026.05.06-143
+
+- API routes now fail with a consistent JSON envelope instead of Flask's
+  default HTML 5xx page when an unhandled exception escapes `/api/...`, while
+  non-API requests keep a minimal plain-text 500 fallback.
+- Cloud Drive's security model docs now spell out the trust boundary between
+  `standard_plain`, `server_encrypted`, and strict `e2ee` storage so users can
+  see exactly when the server/root can read plaintext and when they cannot.
+- Server-encrypted Cloud Drive uploads now scan a dedicated temporary plaintext
+  file and only write ciphertext to the final storage path, closing the old
+  window where the permanent storage location could briefly contain plaintext.
+- Snapshot restore now fails closed if the server cannot enable maintenance
+  mode before the restore begins, instead of silently continuing with a dirty
+  runtime state.
+- PointsChain wallet rebuild is now transaction-safe even when called without
+  an outer transaction, preventing a crash between `DELETE` and re-insert from
+  leaving all wallet rows empty.
+- ComfyUI workflow import now rejects oversized workflow JSON, excessive node
+  counts, and overly deep nesting to reduce denial-of-service risk from giant
+  crafted workflows.
+- `websocket-client` is now declared in `requirements.txt`, matching the live
+  trading websocket provider code path used by Binance/Coinbase streaming.
 
 ## 2026.05.06-142
 

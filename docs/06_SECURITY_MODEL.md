@@ -17,6 +17,7 @@
 3. audit chain / integrity guard
 4. server modes / snapshot / restore 邊界
 5. feature flags 是否讓高風險功能在錯誤模式下暴露
+6. Cloud Drive / video 的 plaintext 與加密信任邊界
 
 ## 原理
 
@@ -49,6 +50,28 @@
 - `test`、`internal_test`、`dev_ready`、`production`、`maintenance`、
   `incident_lockdown`、`superweak` 各自有不同保護層
 - snapshot restore、PointsChain recovery、runtime reset 是不同工具，不可混用概念
+
+### Cloud Drive / 影音加密邊界
+
+不是所有「加密」模式都等於端到端加密。部署者與 root 需要先分清楚：
+
+| Mode | Server/root 可讀明文 | 磁碟靜態資料 | 掃描 / 預覽 / 下載 | 信任假設 |
+| --- | --- | --- | --- | --- |
+| `standard_plain` | 可以 | 明文 | 最完整 | 信任 server 與 runtime |
+| `server_encrypted` | 可以 | 密文 | 由 server 暫時解密處理 | 降低磁碟 / 備份暴露，但不是 zero-knowledge |
+| `e2ee` | 不可以 | 密文 | 僅瀏覽器端解密 | 對 server / root / runtime engineer 也隱藏明文 |
+
+- `server_encrypted` 的意思是「磁碟上盡量用密文保存」，不是「root 看不到明文」。
+- strict `e2ee` 才是使用者明文不交給 server 的模式。
+- `server_encrypted` 目前仍需要 server-side path 才能做掃描、預覽、plaintext download；因此它保護的是 at-rest exposure，不是 runtime zero-knowledge。
+- 如果使用者需要「即使 root / runtime engineer 也看不到內容」，必須選 strict `e2ee`。
+- 如果選 strict `e2ee`，也要接受遺失使用者密碼後 server 無法幫忙復原。
+
+更完整的 runtime trust boundary 請看：
+
+- [ENCRYPTION_RUNTIME_BOUNDARY.md](ENCRYPTION_RUNTIME_BOUNDARY.md)
+- [WEB.md](WEB.md)
+- [VIDEO_PLATFORM.md](VIDEO_PLATFORM.md)
 
 ## 失敗情境與提示
 

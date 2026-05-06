@@ -61,3 +61,10 @@ def test_runtime_artifacts_default_to_runtime_subdir_and_not_repo_root():
     assert 'CHAIN_SEED_PATH = _runtime_path("HTML_LEARNING_CHAIN_SEED_PATH", ".chain_seed")' in server_py
     assert 'CERT_FILE = _runtime_path("HTML_LEARNING_CERT_FILE", "cert.pem")' in server_py
     assert 'KEY_FILE = _runtime_path("HTML_LEARNING_KEY_FILE", "key.pem")' in server_py
+
+
+def test_server_api_unhandled_errors_return_json():
+    server_py = (ROOT / "server.py").read_text(encoding="utf-8")
+    assert "@app.errorhandler(Exception)" in server_py
+    assert '"error": "internal_server_error"' in server_py
+    assert 'if request.path.startswith("/api")' in server_py

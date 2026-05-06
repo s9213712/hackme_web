@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from email.message import EmailMessage
 from functools import wraps
 from flask import Flask, request, jsonify, send_from_directory, make_response
-from werkzeug.exceptions import RequestEntityTooLarge
+from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
 from cryptography import x509
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes, serialization
@@ -1031,6 +1031,25 @@ def api_request_too_large(error):
             "max_request_mb": limit_mb,
         }), 413
     return error
+
+
+@app.errorhandler(Exception)
+def api_unhandled_exception(error):
+    if isinstance(error, HTTPException):
+        if request.path.startswith("/api"):
+            return json_resp({
+                "ok": False,
+                "msg": str(error.description or "Request failed"),
+                "error": str(error.name or "http_error").strip().lower().replace(" ", "_"),
+            }), int(error.code or 500)
+        return error
+    if request.path.startswith("/api"):
+        return json_resp({
+            "ok": False,
+            "msg": "Internal server error",
+            "error": "internal_server_error",
+        }), 500
+    return "Internal Server Error", 500
 
 
 @app.before_request
