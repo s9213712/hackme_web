@@ -39,6 +39,18 @@ def _services(tmp_path):
     prices = {"BTC/POINTS": 77059, "ETH/POINTS": 5000}
     trading = TradingEngineService(get_db=get_db, points_service=points, live_price_provider=lambda symbol: prices[symbol])
     trading.test_prices = prices
+    # Boot-ready gate: stamp markets so tests don't have to round-trip a
+    # live-price fetch before exercising place_order / open_margin_position.
+    conn = trading.get_db()
+    try:
+        trading.ensure_schema(conn)
+        conn.execute(
+            "UPDATE trading_markets SET live_price_confirmed_at=COALESCE(live_price_confirmed_at, ?)",
+            ("2024-01-01T00:00:00",),
+        )
+        conn.commit()
+    finally:
+        conn.close()
     return get_db, points, trading
 
 

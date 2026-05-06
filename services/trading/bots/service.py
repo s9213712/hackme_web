@@ -683,6 +683,13 @@ def run_trading_bot_rows(service, rows):
             price_conn = service.get_db()
             service.ensure_schema(price_conn)
             market = service._market(price_conn, row["market_symbol"])
+            if not service._is_market_boot_ready(market):
+                skipped.append({
+                    "bot_uuid": row["bot_uuid"],
+                    "reason": "market_boot_pending",
+                    "detail": f"market {market['symbol']} 尚未收到任何即時價格更新",
+                })
+                continue
             settings = service._settings_payload(price_conn)
             observed_price, _price_source, price_meta = service._current_market_price_points(price_conn, market, with_meta=True, high_risk=True)
             service._assert_price_meta_allows_high_risk_use(

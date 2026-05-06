@@ -591,6 +591,7 @@ def open_margin_position(
                 raise ValueError("duplicate margin open request is still processing")
         borrow_settings = service._assert_borrowing_enabled(conn)
         market = service._market(conn, market_symbol)
+        service._assert_market_boot_ready(market, usage="margin position open")
         if not int(market.get("allow_margin") or 0):
             raise ValueError("margin trading is disabled for this market")
         service._validate_market_quantity_constraints(market, quantity_units)
@@ -1437,6 +1438,19 @@ def scan_margin_liquidations(service, *, actor=None, limit=100, ctx=None):
             try:
                 position = service._accrue_margin_interest(conn, position, actor=actor, ctx=route_ctx)
                 market = service._market(conn, position["market_symbol"])
+                if not service._is_market_boot_ready(market):
+                    errors.append(
+                        {
+                            "position_uuid": position["position_uuid"],
+                            "user_id": int(position["user_id"]),
+                            "error": (
+                                f"market {market['symbol']} 尚未收到任何即時價格更新，"
+                                "清算掃描已跳過以避免使用啟動時的預設參考價"
+                            ),
+                            "price_health": "boot_pending",
+                        }
+                    )
+                    continue
                 current_price, price_source, price_meta = service._current_market_price_points(
                     conn, market, with_meta=True, high_risk=True
                 )

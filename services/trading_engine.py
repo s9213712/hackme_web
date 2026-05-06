@@ -774,7 +774,7 @@ def ensure_trading_schema(conn):
             futures_enabled INTEGER NOT NULL DEFAULT 0,
             pvp_matching_enabled INTEGER NOT NULL DEFAULT 0,
             execution_mode TEXT NOT NULL DEFAULT 'house_counterparty',
-            manual_price_points INTEGER NOT NULL CHECK (manual_price_points > 0),
+            manual_price_points INTEGER NOT NULL CHECK (manual_price_points >= 0),
             max_price_jump_percent REAL NOT NULL DEFAULT 10,
             min_order_points INTEGER NOT NULL DEFAULT 1,
             max_order_points INTEGER NOT NULL DEFAULT 100000,
@@ -782,6 +782,7 @@ def ensure_trading_schema(conn):
             updated_at TEXT NOT NULL,
             updated_by INTEGER,
             price_source TEXT NOT NULL DEFAULT 'fused_weighted',
+            live_price_confirmed_at TEXT,
             CHECK (execution_mode IN ('house_counterparty', 'pvp_matching', 'hybrid_liquidity'))
         )
         """
@@ -1333,6 +1334,11 @@ def ensure_trading_schema(conn):
         ("reference_price_enabled", "ALTER TABLE trading_markets ADD COLUMN reference_price_enabled INTEGER NOT NULL DEFAULT 1"),
         ("btc_trade_enabled", "ALTER TABLE trading_markets ADD COLUMN btc_trade_enabled INTEGER NOT NULL DEFAULT 0"),
         ("provider_ids_json", "ALTER TABLE trading_markets ADD COLUMN provider_ids_json TEXT NOT NULL DEFAULT '{}'"),
+        # Boot-ready gate (2026-05-06): NULL until a real live-price fetch
+        # has succeeded for this market. Trading / liquidation / bot ops
+        # refuse to act on markets where this is still NULL — protects
+        # against acting on the seed default after a fresh boot.
+        ("live_price_confirmed_at", "ALTER TABLE trading_markets ADD COLUMN live_price_confirmed_at TEXT"),
     ):
         if column_name not in market_cols:
             conn.execute(ddl)
@@ -2118,6 +2124,35 @@ class TradingEngineService:
         if row["execution_mode"] != "house_counterparty":
             raise ValueError("only house_counterparty execution is enabled in v1")
         return dict(row)
+
+    def _is_market_boot_ready(self, market):
+        """Boot-ready gate (2026-05-06).
+
+        ``trading_markets.live_price_confirmed_at`` is NULL until at least one
+        live-source price fetch has cleared the jump validator for this symbol.
+        Until that timestamp is set, any operation that takes price as truth
+        (spot order, margin open, liquidation, bot decision) MUST refuse —
+        otherwise we risk acting on the seed default that ``manual_price_points``
+        was first inserted with.
+        """
+        if not isinstance(market, dict) and "live_price_confirmed_at" not in (getattr(market, "keys", lambda: ())()):
+            return False
+        try:
+            confirmed_at = market["live_price_confirmed_at"]
+        except (KeyError, IndexError):
+            confirmed_at = None
+        return bool(str(confirmed_at or "").strip())
+
+    def _assert_market_boot_ready(self, market, *, usage="trading"):
+        if not self._is_market_boot_ready(market):
+            symbol = ""
+            try:
+                symbol = str(market["symbol"])
+            except Exception:
+                pass
+            raise ValueError(
+                f"market {symbol or '?'} 尚未收到任何即時價格更新，{usage} 暫停以避免使用啟動時的預設參考價"
+            )
 
     def _validate_market_quantity_constraints(self, market, quantity_units):
         quantity_units = int(quantity_units or 0)
@@ -5089,6 +5124,11 @@ class TradingEngineService:
         }
         if configured_source == "manual_root" or not self._live_price_symbol(symbol, conn=conn):
             price = market["manual_price_points"]
+            if not price or float(price) <= 0:
+                raise ValueError(
+                    f"market {symbol} 沒有可用的手動價格（manual_price_points <= 0）；"
+                    "請等待 live provider 寫入第一筆即時價，或由 root 主動設定"
+                )
             source = "manual_root" if configured_source == "manual_root" else str(market["price_source"] or "manual_root")
             transport_state = {
                 "mode": "manual_root",
@@ -5375,10 +5415,20 @@ class TradingEngineService:
         if configured_source == FUSED_PRICE_SOURCE and fusion_details and high_risk and fusion_details.get("risk_grade_price_points") is not None:
             price = float(_to_decimal(fusion_details.get("risk_grade_price_points"), name="risk_grade_price_points", minimum=0.00000001))
         now = _now()
-        conn.execute(
-            "UPDATE trading_markets SET manual_price_points=?, price_source=?, updated_at=? WHERE symbol=?",
-            (price, live_source, now, symbol),
-        )
+        # Boot-ready gate: stamp live_price_confirmed_at the first time a real
+        # live-source price clears the jump validator. Trading / liquidation /
+        # bot guards downstream rely on this column being non-NULL.
+        if live_source in LIVE_PRICE_SOURCE_NAMES:
+            conn.execute(
+                "UPDATE trading_markets SET manual_price_points=?, price_source=?, updated_at=?, "
+                "live_price_confirmed_at=COALESCE(live_price_confirmed_at, ?) WHERE symbol=?",
+                (price, live_source, now, now, symbol),
+            )
+        else:
+            conn.execute(
+                "UPDATE trading_markets SET manual_price_points=?, price_source=?, updated_at=? WHERE symbol=?",
+                (price, live_source, now, symbol),
+            )
         return (price, live_source, price_meta) if with_meta else (price, live_source)
 
     def _root_sim_account(self, conn, user_id, *, actor=None):

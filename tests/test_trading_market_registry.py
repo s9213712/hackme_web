@@ -48,6 +48,18 @@ def _services(tmp_path):
     }
     trading = TradingEngineService(get_db=get_db, points_service=points, live_price_provider=lambda symbol: prices[symbol])
     trading.test_prices = prices
+    # Boot-ready gate: stamp markets so tests can place orders / open margin
+    # without first triggering a live-price fetch through public APIs.
+    conn = trading.get_db()
+    try:
+        trading.ensure_schema(conn)
+        conn.execute(
+            "UPDATE trading_markets SET live_price_confirmed_at=COALESCE(live_price_confirmed_at, ?)",
+            ("2024-01-01T00:00:00",),
+        )
+        conn.commit()
+    finally:
+        conn.close()
     return get_db, points, trading
 
 
@@ -96,6 +108,18 @@ def _find_market_id(trading, symbol):
     payload = trading.list_market_registry(include_disabled=True)
     row = next(item for item in payload["markets"] if item["symbol"] == symbol)
     return int(row["id"])
+
+
+def _stamp_market_boot_ready(trading, symbol):
+    conn = trading.get_db()
+    try:
+        conn.execute(
+            "UPDATE trading_markets SET live_price_confirmed_at=COALESCE(live_price_confirmed_at, ?) WHERE symbol=?",
+            ("2024-01-01T00:00:00", symbol),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _seed_sol_market(trading):
@@ -163,6 +187,7 @@ def _seed_sol_market(trading):
         "reference_price_enabled": True,
         "btc_trade_enabled": False,
     })
+    _stamp_market_boot_ready(trading, "SOL/POINTS")
     return market_id
 
 

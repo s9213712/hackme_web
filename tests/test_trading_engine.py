@@ -44,6 +44,24 @@ def _db(tmp_path):
     return get_db
 
 
+def _stamp_all_markets_boot_ready(trading):
+    """Boot-ready gate (2026-05-06): production refuses to trade / liquidate /
+    run bots until at least one live price has been confirmed for the market.
+    Tests inject deterministic prices and don't go through the live worker, so
+    we stamp all known markets up-front to keep existing fixtures honest.
+    """
+    conn = trading.get_db()
+    try:
+        trading.ensure_schema(conn)
+        conn.execute(
+            "UPDATE trading_markets SET live_price_confirmed_at=COALESCE(live_price_confirmed_at, ?)",
+            ("2024-01-01T00:00:00",),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _services(tmp_path):
     get_db = _db(tmp_path)
     points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
@@ -54,6 +72,7 @@ def _services(tmp_path):
     # tests stay deterministic even when the host machine has real network access.
     _set_trading_setting(trading, "trading.price_source", "binance_public_api")
     trading.test_prices = prices
+    _stamp_all_markets_boot_ready(trading)
     return points, trading
 
 
@@ -76,6 +95,7 @@ def _services_with_history(tmp_path, *, prices=None, candles=None):
     )
     _set_trading_setting(trading, "trading.price_source", "binance_public_api")
     trading.test_prices = live_prices
+    _stamp_all_markets_boot_ready(trading)
     return points, trading
 
 
@@ -2018,6 +2038,7 @@ def test_trading_bot_failed_scan_does_not_advance_last_scan_at_on_live_price_err
         settings={"max_price_staleness_seconds": 0, "price_source": "binance_public_api"},
         markets=[],
     )
+    _stamp_all_markets_boot_ready(trading)
     trading.save_trading_bot(
         actor=_actor(),
         payload={
@@ -2117,6 +2138,7 @@ def test_trading_bot_failed_scan_does_not_advance_last_scan_at_on_candle_fetch_e
         settings={"price_source": "binance_public_api"},
         markets=[],
     )
+    _stamp_all_markets_boot_ready(trading)
     workflow = {
         "version": 1,
         "strategy_kind": "workflow",
@@ -2815,6 +2837,7 @@ def test_live_price_provider_falls_back_to_coinbase_when_binance_is_down(tmp_pat
     trading = TradingEngineService(get_db=get_db, points_service=points)
     points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
     trading.update_root_settings(actor=_actor(3, "root", "super_admin"), settings={"price_source": "binance_public_api"}, markets=[])
+    _stamp_all_markets_boot_ready(trading)
     urls = []
 
     def fake_urlopen(request, timeout=0):
@@ -2850,6 +2873,7 @@ def test_live_price_provider_walks_public_fallback_chain_to_bitstamp(tmp_path, m
     trading = TradingEngineService(get_db=get_db, points_service=points)
     points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
     trading.update_root_settings(actor=_actor(3, "root", "super_admin"), settings={"price_source": "binance_public_api"}, markets=[])
+    _stamp_all_markets_boot_ready(trading)
     urls = []
 
     def fake_urlopen(request, timeout=0):
