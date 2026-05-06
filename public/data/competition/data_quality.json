@@ -1,0 +1,173 @@
+{
+  "generated_at": "2026-05-06T17:26:02",
+  "interval": "1h",
+  "outlier_pct_threshold": 50.0,
+  "assets": [
+    {
+      "asset": "BTC",
+      "candle_count": 43800,
+      "first_iso": "2021-05-07T03:00:00+00:00",
+      "last_iso": "2026-05-06T09:00:00+00:00",
+      "issues": {
+        "ohlc_invalid": [],
+        "timestamp_dup": [],
+        "timestamp_gap": [
+          {
+            "index": 2351,
+            "iso": "2021-08-13T06:00:00+00:00",
+            "gap_seconds": 18000
+          },
+          {
+            "index": 3480,
+            "iso": "2021-09-29T09:00:00+00:00",
+            "gap_seconds": 10800
+          },
+          {
+            "index": 16468,
+            "iso": "2023-03-24T14:00:00+00:00",
+            "gap_seconds": 7200
+          }
+        ],
+        "outlier_jump": [],
+        "zero_volume": 1
+      },
+      "verdict": "WARNING",
+      "verdict_reason": "timestamp gaps or zero-volume rate >5%",
+      "fetch_seconds": 15.29,
+      "symbol": "BTCUSDT"
+    },
+    {
+      "asset": "ETH",
+      "candle_count": 43800,
+      "first_iso": "2021-05-07T03:00:00+00:00",
+      "last_iso": "2026-05-06T09:00:00+00:00",
+      "issues": {
+        "ohlc_invalid": [],
+        "timestamp_dup": [],
+        "timestamp_gap": [
+          {
+            "index": 2351,
+            "iso": "2021-08-13T06:00:00+00:00",
+            "gap_seconds": 18000
+          },
+          {
+            "index": 3480,
+            "iso": "2021-09-29T09:00:00+00:00",
+            "gap_seconds": 10800
+          },
+          {
+            "index": 16468,
+            "iso": "2023-03-24T14:00:00+00:00",
+            "gap_seconds": 7200
+          }
+        ],
+        "outlier_jump": [],
+        "zero_volume": 1
+      },
+      "verdict": "WARNING",
+      "verdict_reason": "timestamp gaps or zero-volume rate >5%",
+      "fetch_seconds": 17.02,
+      "symbol": "ETHUSDT"
+    },
+    {
+      "asset": "XRP",
+      "candle_count": 43800,
+      "first_iso": "2021-05-07T03:00:00+00:00",
+      "last_iso": "2026-05-06T09:00:00+00:00",
+      "issues": {
+        "ohlc_invalid": [],
+        "timestamp_dup": [],
+        "timestamp_gap": [
+          {
+            "index": 2351,
+            "iso": "2021-08-13T06:00:00+00:00",
+            "gap_seconds": 18000
+          },
+          {
+            "index": 3480,
+            "iso": "2021-09-29T09:00:00+00:00",
+            "gap_seconds": 10800
+          },
+          {
+            "index": 16468,
+            "iso": "2023-03-24T14:00:00+00:00",
+            "gap_seconds": 7200
+          }
+        ],
+        "outlier_jump": [],
+        "zero_volume": 1
+      },
+      "verdict": "WARNING",
+      "verdict_reason": "timestamp gaps or zero-volume rate >5%",
+      "fetch_seconds": 15.16,
+      "symbol": "XRPUSDT"
+    },
+    {
+      "asset": "BNB",
+      "candle_count": 43800,
+      "first_iso": "2021-05-07T03:00:00+00:00",
+      "last_iso": "2026-05-06T09:00:00+00:00",
+      "issues": {
+        "ohlc_invalid": [],
+        "timestamp_dup": [],
+        "timestamp_gap": [
+          {
+            "index": 2351,
+            "iso": "2021-08-13T06:00:00+00:00",
+            "gap_seconds": 18000
+          },
+          {
+            "index": 3480,
+            "iso": "2021-09-29T09:00:00+00:00",
+            "gap_seconds": 10800
+          },
+          {
+            "index": 16468,
+            "iso": "2023-03-24T14:00:00+00:00",
+            "gap_seconds": 7200
+          }
+        ],
+        "outlier_jump": [],
+        "zero_volume": 1
+      },
+      "verdict": "WARNING",
+      "verdict_reason": "timestamp gaps or zero-volume rate >5%",
+      "fetch_seconds": 14.89,
+      "symbol": "BNBUSDT"
+    },
+    {
+      "asset": "PAXG",
+      "candle_count": 43800,
+      "first_iso": "2021-05-07T03:00:00+00:00",
+      "last_iso": "2026-05-06T09:00:00+00:00",
+      "issues": {
+        "ohlc_invalid": [],
+        "timestamp_dup": [],
+        "timestamp_gap": [
+          {
+            "index": 2351,
+            "iso": "2021-08-13T06:00:00+00:00",
+            "gap_seconds": 18000
+          },
+          {
+            "index": 3480,
+            "iso": "2021-09-29T09:00:00+00:00",
+            "gap_seconds": 10800
+          },
+          {
+            "index": 16468,
+            "iso": "2023-03-24T14:00:00+00:00",
+            "gap_seconds": 7200
+          }
+        ],
+        "outlier_jump": [],
+        "zero_volume": 1
+      },
+      "verdict": "WARNING",
+      "verdict_reason": "timestamp gaps or zero-volume rate >5%",
+      "fetch_seconds": 15.3,
+      "symbol": "PAXGUSDT"
+    }
+  ],
+  "overall_verdict": "WARNING"
+}

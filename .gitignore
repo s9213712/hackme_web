@@ -16,7 +16,13 @@ workflows/custom/*
 !workflows/custom/.gitkeep
 !public/data/
 !public/data/*.json
+!public/data/competition/
+!public/data/competition/*.json
 public/data/workflow_template_benchmarks_*.json
+public/data/competition/candles_*.json
+public/data/competition/equity/
+!security/competition_config.json
+!security/competition_*.py
 external/
 secure_backups/
 !requirements.txt

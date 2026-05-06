@@ -1,0 +1,65 @@
+{
+  "version": "2026-05-06",
+  "title": "Workflow Template Competition Benchmark",
+  "description": "Multi-asset, multi-regime, walk-forward + stress test for 22 workflow templates (12 original + 5 Codex + 5 Claude). Base strategies (conditional/dca/grid) are excluded from ranking.",
+  "constants": {
+    "interval": "1h",
+    "fee_rate_percent": 0.3,
+    "slippage_percent_main": 0.1,
+    "slippage_percent_sensitivity": [0.05, 0.1, 0.2],
+    "initial_cash_points": 100000,
+    "min_trade_count_warning": 10,
+    "min_trade_count_fail": 5,
+    "max_drawdown_fail_percent": 25.0,
+    "min_profit_factor_pass": 1.1,
+    "outlier_pct_threshold": 50.0
+  },
+  "assets": [
+    {"display": "BTC",  "symbol": "BTCUSDT",  "market_symbol": "BTC/POINTS"},
+    {"display": "ETH",  "symbol": "ETHUSDT",  "market_symbol": "ETH/POINTS"},
+    {"display": "XRP",  "symbol": "XRPUSDT",  "market_symbol": "XRP/POINTS"},
+    {"display": "BNB",  "symbol": "BNBUSDT",  "market_symbol": "BNB/POINTS"},
+    {"display": "PAXG", "symbol": "PAXGUSDT", "market_symbol": "PAXG/POINTS"}
+  ],
+  "regimes": {
+    "btc_bull_2020_2021":  {"start": "2020-04-01", "end": "2021-11-09",  "label": "BTC bull (covid bottom → ATH)"},
+    "btc_bear_2022":       {"start": "2021-11-10", "end": "2022-12-31",  "label": "BTC bear (ATH → 16k)"},
+    "btc_range_2023":      {"start": "2023-01-01", "end": "2023-09-30",  "label": "BTC range (16k–30k consolidation)"},
+    "btc_high_vol_2024":   {"start": "2024-01-01", "end": "2024-04-30",  "label": "BTC high-vol (ETF approval shock)"},
+    "btc_low_vol_2023h2":  {"start": "2023-09-01", "end": "2023-12-31",  "label": "BTC low-vol (slow climb)"}
+  },
+  "walk_forward": {
+    "train":    {"start": "2020-01-01", "end": "2023-12-31"},
+    "validate": {"start": "2024-01-01", "end": "2024-12-31"},
+    "forward":  {"start": "2025-01-01", "end": "2026-05-06"}
+  },
+  "stress_scenarios": [
+    "flash_crash",
+    "fake_breakout",
+    "gap_down",
+    "low_vol_chop",
+    "volume_spike_fake_signal",
+    "stale_price",
+    "outlier_candle"
+  ],
+  "competition_templates": {
+    "original_12": ["bollinger_reversion", "breakout_buy", "dip_buy", "full_entry_exit", "kd_momentum", "ma200_trend_entry", "ma_pullback", "risk_guard", "rsi_scale", "staged_profit_taking", "stop_loss", "swing_bb_ma50"],
+    "codex_5": ["bb_rsi_reversion_codex", "breakout_guarded_codex", "kd_trend_scaleout_codex", "ma200_rsi_reclaim_codex", "trend_floor_rebalance_codex"],
+    "claude_5": ["adaptive_profit_ladder_claude", "bb_breakout_momentum_claude", "golden_cross_dual_ma_claude", "trend_pyramid_claude", "triple_confirmation_dip_claude"]
+  },
+  "baselines": ["buy_and_hold", "cash_only", "fixed_dca", "simple_grid", "simple_ma_cross"],
+  "verdict_rules": {
+    "FAIL_if_any": [
+      "trade_count < 5",
+      "max_drawdown_percent > 25",
+      "profit_factor < 1.1",
+      "fee_adjusted_return < 0",
+      "walk_forward_forward_return < 0"
+    ],
+    "WARNING_if_any": [
+      "trade_count < 10",
+      "only_btc_profitable_other_4_assets_loss",
+      "fee_adjusted_return - return_percent > 5"
+    ]
+  }
+}
