@@ -2947,6 +2947,56 @@ function gridComputeLevels(lower, upper, count, mode) {
   return levels;
 }
 
+// 6 grid presets keyed off current market reference price. Numbers are
+// the same configurations validated in security/competition_grid_skyfloor_test.py
+// against 5 assets × 5y × 1h candles. The "skyfloor_5x" row averaged
+// +111% across BTC/ETH/XRP/BNB but lost on PAXG (single-direction
+// trend) — see docs/COMPETITION/GRID_SKYFLOOR_COMPARISON.md.
+const TRADING_GRID_PRESETS = {
+  conservative:    { lower_factor: 0.80, upper_factor: 1.20, grid_count: 10,  order_amount: 5000 },
+  balanced:        { lower_factor: 0.50, upper_factor: 1.50, grid_count: 20,  order_amount: 5000 },
+  skyfloor_narrow: { lower_factor: 0.20, upper_factor: 1.80, grid_count: 50,  order_amount: 2000 },
+  skyfloor_mid:    { lower_factor: 0.10, upper_factor: 3.00, grid_count: 50,  order_amount: 2000 },
+  skyfloor_wide:   { lower_factor: 0.10, upper_factor: 3.00, grid_count: 100, order_amount: 1000 },
+  skyfloor_5x:     { lower_factor: 0.05, upper_factor: 5.00, grid_count: 100, order_amount: 1000 },
+};
+
+function applyGridPreset() {
+  const select = $("trading-grid-preset");
+  if (!select) return;
+  const key = select.value || "";
+  if (!key) return;
+  const cfg = TRADING_GRID_PRESETS[key];
+  if (!cfg) return;
+  const sym = $("trading-grid-bot-market")?.value || "";
+  if (!sym) {
+    tradingSetMsg("請先選擇市場再套用預設");
+    return;
+  }
+  const market = (tradingState.markets || []).find((m) => m.symbol === sym);
+  const refPrice = market ? tradingMarketPricePoints(market, "reference") : 0;
+  if (!refPrice || refPrice <= 0) {
+    tradingSetMsg("該市場目前沒有可參考的市價，無法計算上下限");
+    return;
+  }
+  const lower = Math.max(1, Math.round(refPrice * cfg.lower_factor));
+  const upper = Math.max(lower + 1, Math.round(refPrice * cfg.upper_factor));
+  const lowerEl = $("trading-grid-lower-price");
+  const upperEl = $("trading-grid-upper-price");
+  const countEl = $("trading-grid-count");
+  const amountEl = $("trading-grid-order-amount");
+  const modeEl = $("trading-grid-spacing-mode");
+  if (lowerEl) lowerEl.value = lower;
+  if (upperEl) upperEl.value = upper;
+  if (countEl) countEl.value = cfg.grid_count;
+  if (amountEl) amountEl.value = cfg.order_amount;
+  // Sky-floor variants prefer geometric spacing because the range covers
+  // multiple orders of magnitude; arithmetic would crowd grids near the floor.
+  if (modeEl && key.startsWith("skyfloor")) modeEl.value = "geometric";
+  if (typeof scheduleGridBotPreview === "function") scheduleGridBotPreview();
+  tradingSetMsg(`已套用預設「${key}」（市價 ${refPrice}） — 區間 ${lower}–${upper}`);
+}
+
 function clearGridBotPreview() {
   tradingGridPreviewState = null;
   const preview = $("trading-grid-preview");
@@ -4650,6 +4700,8 @@ function bindTradingEvents() {
   if (gridSpacingMode) gridSpacingMode.addEventListener("change", scheduleGridBotPreview);
   const gridMarketSelect = $("trading-grid-bot-market");
   if (gridMarketSelect) gridMarketSelect.addEventListener("change", scheduleGridBotPreview);
+  const gridPresetSelect = $("trading-grid-preset");
+  if (gridPresetSelect) gridPresetSelect.addEventListener("change", applyGridPreset);
   document.querySelectorAll("[data-trading-bot-tab]").forEach((btn) => {
     btn.addEventListener("click", () => {
       switchTradingBotTab(btn.dataset.tradingBotTab || "dca");

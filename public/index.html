@@ -1946,6 +1946,19 @@
               <div class="settings-option-grid" style="margin-top:.65rem;">
                 <div class="field"><label>名稱</label><input type="text" id="trading-grid-bot-name" maxlength="80" placeholder="例如 BTC 網格 45000-55000" /></div>
                 <div class="field"><label>市場</label><select id="trading-grid-bot-market"><option value="">讀取市場中...</option></select></div>
+                <div class="field" style="grid-column:1 / -1;">
+                  <label>快速套用預設（依市價計算上下限與每格金額）</label>
+                  <select id="trading-grid-preset">
+                    <option value="">— 自訂 —</option>
+                    <option value="conservative">保守：±20% × 10 格 × 5K（窄幅震盪）</option>
+                    <option value="balanced">平衡：±50% × 20 格 × 5K</option>
+                    <option value="skyfloor_narrow">天地網格-窄：0.2×–1.8× × 50 格 × 2K</option>
+                    <option value="skyfloor_mid">天地網格-中：0.1×–3× × 50 格 × 2K</option>
+                    <option value="skyfloor_wide">天地網格-寬：0.1×–3× × 100 格 × 1K</option>
+                    <option value="skyfloor_5x">天地網格-極寬：0.05×–5× × 100 格 × 1K ★5y 回測平均 +111%</option>
+                  </select>
+                  <div class="field-hint">回測 5 個資產 5 年 1h 資料的對照見 <code>docs/COMPETITION/GRID_SKYFLOOR_COMPARISON.md</code>。預設僅供參考，不保證未來表現。</div>
+                </div>
                 <div class="field"><label>上限價格（點）</label><input type="number" id="trading-grid-upper-price" min="1" step="1" placeholder="例如 55000" /></div>
                 <div class="field"><label>下限價格（點）</label><input type="number" id="trading-grid-lower-price" min="1" step="1" placeholder="例如 45000" /></div>
                 <div class="field"><label>網格數量</label><input type="number" id="trading-grid-count" min="2" max="200" step="1" value="10" /></div>
