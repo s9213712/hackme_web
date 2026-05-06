@@ -97,6 +97,20 @@ from services.trading.bots.workflow import (
     workflow_decision,
     workflow_graph_decision,
 )
+from services.trading.backtest import (
+    backtest_anchor_price,
+    backtest_equity_value,
+    backtest_segment_count,
+    build_backtest_equity_point,
+    build_backtest_initial_state,
+    build_backtest_outlier_warning,
+    build_backtest_range_warnings,
+    build_backtest_result_payload,
+    filter_backtest_candles_by_range,
+    iter_backtest_segments,
+    push_recent_valid_price,
+    update_backtest_drawdown,
+)
 from services.trading.markets import (
     fallback_market_display_symbol,
     market_display_symbol_from_registry_row,
@@ -8451,15 +8465,11 @@ class TradingEngineService:
         start_time = str(payload.get("start_time") or "").strip()
         end_time = str(payload.get("end_time") or "").strip()
         if start_time or end_time:
-            filtered = []
-            for candle in candles:
-                stamp = str(candle.get("time_iso") or candle.get("time") or "")
-                if start_time and stamp < start_time:
-                    continue
-                if end_time and stamp > end_time:
-                    continue
-                filtered.append(candle)
-            candles = filtered
+            candles = filter_backtest_candles_by_range(
+                candles,
+                start_time=start_time,
+                end_time=end_time,
+            )
             if len(candles) < 2:
                 raise ValueError("candles are required for selected backtest range")
         conn = self.get_db()
@@ -8491,50 +8501,32 @@ class TradingEngineService:
         initial_cash = cash
         initial_workflow_state = payload.get("initial_workflow_state") if isinstance(payload.get("initial_workflow_state"), dict) else {}
         range_warnings = []
-        state = {
-            "cash": cash,
-            "units": int(payload.get("initial_units") or 0),
-            "avg_cost_bt": float(payload.get("initial_avg_cost") or 0),
-            "trades": [],
-            "equity_curve": [],
-            "peak_value": cash,
-            "max_drawdown_percent": 0.0,
-            "wins": 0,
-            "sells": 0,
-            "trade_count": int(payload.get("initial_trade_count") or 0),
-            "processed_candles": int(payload.get("initial_candle_offset") or 0),
-            "workflow_state": {
-                "executed_action_ids": set(initial_workflow_state.get("executed_action_ids") or []),
-                "branch_step_counts": {
-                    str(k): int(v)
-                    for k, v in (initial_workflow_state.get("branch_step_counts") or {}).items()
-                },
-            },
-            "grid_initialized": False,
-            "grid_state": {},
-            "grid_levels": [],
-            "grid_order_amount": 0,
-            "grid_fee_rate": grid_fee_rate_percent,
-            "last_valid_price": None,
-            "recent_valid_prices": [],
-            "outlier_skipped_count": 0,
-        }
+        state = build_backtest_initial_state(
+            cash=cash,
+            initial_units=payload.get("initial_units") or 0,
+            initial_avg_cost=payload.get("initial_avg_cost") or 0,
+            initial_trade_count=payload.get("initial_trade_count") or 0,
+            initial_candle_offset=payload.get("initial_candle_offset") or 0,
+            initial_workflow_state=initial_workflow_state,
+            grid_fee_rate=grid_fee_rate_percent,
+        )
         workflow_indicator_series = self._build_workflow_indicator_series(candles) if strategy == "workflow" else []
 
         def _record_equity(global_index, candle, price):
-            equity = state["cash"] + notional_points(state["units"], price)
-            state["peak_value"] = max(state["peak_value"], equity)
-            if state["peak_value"] > 0:
-                state["max_drawdown_percent"] = max(
-                    state["max_drawdown_percent"],
-                    round((state["peak_value"] - equity) * 100 / state["peak_value"], 4),
+            equity = backtest_equity_value(cash=state["cash"], units=state["units"], price=price)
+            state["peak_value"], state["max_drawdown_percent"] = update_backtest_drawdown(
+                peak_value=state["peak_value"],
+                max_drawdown_percent=state["max_drawdown_percent"],
+                equity=equity,
+            )
+            state["equity_curve"].append(
+                build_backtest_equity_point(
+                    global_index=global_index,
+                    candle=candle,
+                    price=price,
+                    equity=equity,
                 )
-            state["equity_curve"].append({
-                "index": global_index,
-                "time": candle.get("time") or candle.get("time_iso") or global_index,
-                "equity_points": equity,
-                "price_points": price,
-            })
+            )
 
         def _ensure_grid_state(chunk_candles):
             if strategy != "grid" or state["grid_initialized"]:
@@ -8622,26 +8614,31 @@ class TradingEngineService:
                     continue
                 if not math.isfinite(price) or price <= 0:
                     continue
-                anchor_prices = [float(value) for value in (state.get("recent_valid_prices") or []) if float(value or 0) > 0]
-                anchor_price = 0
-                if anchor_prices:
-                    sorted_anchor = sorted(anchor_prices)
-                    anchor_price = float(sorted_anchor[len(sorted_anchor) // 2])
-                elif state["last_valid_price"]:
-                    anchor_price = float(state["last_valid_price"])
+                anchor_price = backtest_anchor_price(
+                    recent_valid_prices=state.get("recent_valid_prices"),
+                    last_valid_price=state.get("last_valid_price"),
+                )
                 if anchor_price > 0 and max_price_jump_percent > 0:
                     jump_percent = abs(price - anchor_price) * 100.0 / anchor_price
                     if jump_percent > max_price_jump_percent:
                         state["outlier_skipped_count"] += 1
                         if state["outlier_skipped_count"] <= 5:
-                            candle_time = candle.get("time_iso") or candle.get("time") or global_index
                             range_warnings.append(
-                                f"已略過跳價 {jump_percent:.2f}% 的 K 線（時間 {candle_time}，價格 {price}，參考價 {anchor_price}，上限 {max_price_jump_percent:.2f}%）"
+                                build_backtest_outlier_warning(
+                                    global_index=global_index,
+                                    candle=candle,
+                                    price=price,
+                                    anchor_price=anchor_price,
+                                    max_price_jump_percent=max_price_jump_percent,
+                                )
                             )
                         continue
                 state["last_valid_price"] = price
-                state["recent_valid_prices"].append(price)
-                state["recent_valid_prices"] = state["recent_valid_prices"][-5:]
+                state["recent_valid_prices"] = push_recent_valid_price(
+                    state["recent_valid_prices"],
+                    price,
+                    limit=5,
+                )
 
                 if strategy == "grid":
                     try:
@@ -8819,68 +8816,39 @@ class TradingEngineService:
                 _record_equity(global_index, candle, price)
             state["processed_candles"] += len(chunk_candles)
 
-        segment_count = max(1, math.ceil(len(candles) / BACKTEST_SEGMENT_CANDLES))
-        for segment_index in range(segment_count):
-            chunk = candles[
-                segment_index * BACKTEST_SEGMENT_CANDLES:
-                (segment_index + 1) * BACKTEST_SEGMENT_CANDLES
-            ]
-            if chunk:
-                _run_chunk(chunk)
-        last_price = 0
-        last_price = float(state["last_valid_price"] or 0)
-        position_value = notional_points(state["units"], last_price) if last_price else 0
-        final_value = state["cash"] + position_value
+        segment_count = backtest_segment_count(len(candles), BACKTEST_SEGMENT_CANDLES)
+        for chunk in iter_backtest_segments(candles, BACKTEST_SEGMENT_CANDLES):
+            _run_chunk(chunk)
         all_candles_raw = payload.get("candles") or []
-        if start_time and all_candles_raw:
-            first_raw = str(all_candles_raw[0].get("time_iso") or all_candles_raw[0].get("time") or "")
-            if first_raw and start_time < first_raw:
-                range_warnings.append(f"請求起始時間 {start_time} 早於資料最早 K 線 {first_raw}，實際回測從 {first_raw} 開始")
-        if end_time and all_candles_raw:
-            last_raw = str(all_candles_raw[-1].get("time_iso") or all_candles_raw[-1].get("time") or "")
-            if last_raw and end_time > last_raw:
-                range_warnings.append(f"請求結束時間 {end_time} 晚於資料最新 K 線 {last_raw}，實際回測至 {last_raw}")
-        if len(all_candles_raw) >= MAX_BACKTEST_CANDLES:
-            range_warnings.append(f"K 線數量達到上限 {MAX_BACKTEST_CANDLES} 根，更早的歷史資料可能未被包含")
-        if segment_count > 1:
-            range_warnings.append(f"回測資料共 {len(candles)} 根 K 線，後端已自動分成 {segment_count} 批連續執行（每批最多 {BACKTEST_SEGMENT_CANDLES} 根）")
-        if state["outlier_skipped_count"] > 5:
-            range_warnings.append(f"另有 {state['outlier_skipped_count'] - 5} 根跳價 K 線超過 {max_price_jump_percent:.2f}% 已被略過")
-        return {
-            "ok": True,
-            "strategy": strategy,
-            "market_symbol": market["symbol"],
-            "data_source": str(payload.get("data_source") or ("provided_candles" if payload.get("candles") else "")),
-            "provider_symbol": str(payload.get("provider_symbol") or ""),
-            "candle_count": len(candles),
-            "max_backtest_candles": MAX_BACKTEST_CANDLES,
-            "max_backtest_candles_per_batch": BACKTEST_SEGMENT_CANDLES,
-            "requested_candle_limit": payload.get("requested_candle_limit") or payload.get("candle_limit") or payload.get("limit") or len(candles),
-            "first_candle_time": candles[0].get("time_iso") or candles[0].get("time") if candles else "",
-            "last_candle_time": candles[-1].get("time_iso") or candles[-1].get("time") if candles else "",
-            "initial_cash_points": initial_cash,
-            "cash_points": state["cash"],
-            "position_quantity": units_to_quantity(state["units"]),
-            "position_value_points": position_value,
-            "final_value_points": final_value,
-            "pnl_points": final_value - initial_cash,
-            "return_percent": round(((final_value - initial_cash) * 100) / initial_cash, 4),
-            "max_drawdown_percent": state["max_drawdown_percent"],
-            "win_rate_percent": round((state["wins"] * 100 / state["sells"]), 4) if state["sells"] else 0.0,
-            "trade_count": len(state["trades"]),
-            "trades": state["trades"],
-            "equity_curve": state["equity_curve"],
-            "start_time": start_time,
-            "end_time": end_time,
-            "range_warnings": range_warnings,
-            "outlier_skipped_count": state["outlier_skipped_count"],
-            "max_price_jump_percent": max_price_jump_percent,
-            "end_units": state["units"],
-            "end_avg_cost": state["avg_cost_bt"],
-            "end_cash_points": state["cash"],
-            "segmented_backtest": segment_count > 1,
-            "segmented_backtest_batches": segment_count,
-        }
+        range_warnings = build_backtest_range_warnings(
+            existing_warnings=range_warnings,
+            start_time=start_time,
+            end_time=end_time,
+            all_candles_raw=all_candles_raw,
+            candle_count=len(candles),
+            max_backtest_candles=MAX_BACKTEST_CANDLES,
+            segment_count=segment_count,
+            max_backtest_candles_per_batch=BACKTEST_SEGMENT_CANDLES,
+            outlier_skipped_count=state["outlier_skipped_count"],
+            max_price_jump_percent=max_price_jump_percent,
+        )
+        return build_backtest_result_payload(
+            state=state,
+            candles=candles,
+            strategy=strategy,
+            market_symbol=market["symbol"],
+            initial_cash=initial_cash,
+            start_time=start_time,
+            end_time=end_time,
+            range_warnings=range_warnings,
+            max_backtest_candles=MAX_BACKTEST_CANDLES,
+            max_backtest_candles_per_batch=BACKTEST_SEGMENT_CANDLES,
+            requested_candle_limit=payload.get("requested_candle_limit") or payload.get("candle_limit") or payload.get("limit") or len(candles),
+            data_source=str(payload.get("data_source") or ("provided_candles" if payload.get("candles") else "")),
+            provider_symbol=str(payload.get("provider_symbol") or ""),
+            max_price_jump_percent=max_price_jump_percent,
+            segment_count=segment_count,
+        )
 
     def _record_bot_run(self, bot, *, status, observed_price=None, order_uuid=None, error="", execution_state=None):
         conn = self.get_db()
