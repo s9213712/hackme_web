@@ -1,6 +1,18 @@
 # Update Summary
 
-Release ID: `2026.05.07-148`
+Release ID: `2026.05.07-149`
+
+## 2026.05.07-149
+
+- Refactored `routes/system_admin.py` into bounded route-registration modules
+  under `routes/system_admin_sections/`, so the main file now focuses on
+  shared helpers, dependency wiring, and source-contract breadcrumbs.
+- Preserved route behavior and source-based regression coverage by keeping the
+  existing high-risk git update / security-center / launch-check strings in
+  `routes/system_admin.py` while moving the concrete route implementations into
+  `security_routes.py`, `settings_routes.py`, and `runtime_routes.py`.
+- Verified the slice with targeted admin/system tests, full `pytest`, and
+  pre-push checks on branch `05.readability-refactor`.
 
 ## 2026.05.07-148
 
