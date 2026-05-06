@@ -2947,18 +2947,23 @@ function gridComputeLevels(lower, upper, count, mode) {
   return levels;
 }
 
-// 6 grid presets keyed off current market reference price. Numbers are
-// the same configurations validated in security/competition_grid_skyfloor_test.py
-// against 5 assets × 5y × 1h candles. The "skyfloor_5x" row averaged
-// +111% across BTC/ETH/XRP/BNB but lost on PAXG (single-direction
-// trend) — see docs/COMPETITION/GRID_SKYFLOOR_COMPARISON.md.
+// 6 grid presets keyed off current market reference price. Numbers
+// validated in security/competition_grid_skyfloor_test.py + the spacing
+// follow-up in security/competition_grid_spacing_test.py against 5
+// assets × 5y × 1h. Each preset declares its OWN best spacing_mode
+// based on that data — most sky-floor variants prefer geometric (a few
+// pp better), but skyfloor_5x's 100× range actually favours arithmetic
+// by ~19pp because the wider absolute steps capture larger per-grid
+// profit when price moves are big.
 const TRADING_GRID_PRESETS = {
-  conservative:    { lower_factor: 0.80, upper_factor: 1.20, grid_count: 10,  order_amount: 5000 },
-  balanced:        { lower_factor: 0.50, upper_factor: 1.50, grid_count: 20,  order_amount: 5000 },
-  skyfloor_narrow: { lower_factor: 0.20, upper_factor: 1.80, grid_count: 50,  order_amount: 2000 },
-  skyfloor_mid:    { lower_factor: 0.10, upper_factor: 3.00, grid_count: 50,  order_amount: 2000 },
-  skyfloor_wide:   { lower_factor: 0.10, upper_factor: 3.00, grid_count: 100, order_amount: 1000 },
-  skyfloor_5x:     { lower_factor: 0.05, upper_factor: 5.00, grid_count: 100, order_amount: 1000 },
+  conservative:    { lower_factor: 0.80, upper_factor: 1.20, grid_count: 10,  order_amount: 5000, spacing_mode: "arithmetic" },
+  balanced:        { lower_factor: 0.50, upper_factor: 1.50, grid_count: 20,  order_amount: 5000, spacing_mode: "arithmetic" },
+  skyfloor_narrow: { lower_factor: 0.20, upper_factor: 1.80, grid_count: 50,  order_amount: 2000, spacing_mode: "geometric" },
+  skyfloor_mid:    { lower_factor: 0.10, upper_factor: 3.00, grid_count: 50,  order_amount: 2000, spacing_mode: "geometric" },
+  skyfloor_wide:   { lower_factor: 0.10, upper_factor: 3.00, grid_count: 100, order_amount: 1000, spacing_mode: "geometric" },
+  // skyfloor_5x: 100× range; arithmetic empirically beats geometric by ~19pp
+  // on the 5y benchmark — see GRID_SPACING_COMPARISON.md.
+  skyfloor_5x:     { lower_factor: 0.05, upper_factor: 5.00, grid_count: 100, order_amount: 1000, spacing_mode: "arithmetic" },
 };
 
 function applyGridPreset() {
@@ -2990,11 +2995,11 @@ function applyGridPreset() {
   if (upperEl) upperEl.value = upper;
   if (countEl) countEl.value = cfg.grid_count;
   if (amountEl) amountEl.value = cfg.order_amount;
-  // Sky-floor variants prefer geometric spacing because the range covers
-  // multiple orders of magnitude; arithmetic would crowd grids near the floor.
-  if (modeEl && key.startsWith("skyfloor")) modeEl.value = "geometric";
+  // Each preset carries its own empirically-tuned spacing_mode; see
+  // docs/COMPETITION/GRID_SPACING_COMPARISON.md for the per-config table.
+  if (modeEl && cfg.spacing_mode) modeEl.value = cfg.spacing_mode;
   if (typeof scheduleGridBotPreview === "function") scheduleGridBotPreview();
-  tradingSetMsg(`已套用預設「${key}」（市價 ${refPrice}） — 區間 ${lower}–${upper}`);
+  tradingSetMsg(`已套用預設「${key}」（市價 ${refPrice}） — 區間 ${lower}–${upper}，間距 ${cfg.spacing_mode}`);
 }
 
 function clearGridBotPreview() {
