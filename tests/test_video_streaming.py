@@ -958,6 +958,9 @@ def test_shared_video_page_mentions_hls_js_fallback_and_fragment_loss(tmp_path):
     assert "正在下載加密影音檔" in html
     assert "正在瀏覽器端解密影音" in html
     assert "不會把密碼或金鑰送到伺服器" in html
+    assert "AbortController" in html
+    assert "setTimeout(() => controller.abort(), 10000);" in html
+    assert "分享影音載入失敗" in html
     assert "isSharePasswordResponse" in html
     assert "showSharePasswordPrompt" in html
     assert "此分享影音需要先解鎖" in html
@@ -1341,3 +1344,228 @@ def test_shared_video_regeneration_for_e2ee_requires_new_browser_side_envelope(t
     body = regenerated.get_json()
     assert body["share_link"]["requires_fragment_key"] is True
     assert body["video"]["share_requires_fragment_key"] is True
+
+
+def test_shared_video_three_privacy_modes_complete_unlock_flow(tmp_path):
+    """User-reported regression: share page stuck after password input, no
+    response to submit. Reproduces full unlock flow for all 3 privacy modes
+    so any future regression in this user-facing flow fails CI:
+
+      1) standard_plain   — server stores plaintext on disk
+      2) server_encrypted — Fernet-encrypted on disk, decrypted server-side
+      3) e2ee             — browser-side decryption only
+
+    For each mode the test exercises:
+      - GET /shared/videos/<token>            → returns the inline HTML (200)
+      - GET /api/videos/shared/<token>        → 401 password_required (locked)
+      - POST /api/videos/shared/<token>/unlock with wrong password → 403
+      - POST .../unlock with right password → 200 ok
+      - GET /api/videos/shared/<token>        → 200 with video metadata
+      - GET /api/videos/shared/<token>/playback → 200 playback descriptor
+    """
+    import sqlite3
+    from cryptography.fernet import Fernet
+
+    cases = [
+        ("standard_plain", False),   # plaintext on disk
+        ("server_encrypted", False), # Fernet on disk
+        ("e2ee", True),              # browser-side only
+    ]
+
+    for privacy_mode, is_e2ee in cases:
+        db_path = tmp_path / f"share-{privacy_mode}.db"
+        storage_root = tmp_path / f"storage-{privacy_mode}"
+        storage_root.mkdir()
+        _init_db(db_path)
+        owner_conn = sqlite3.connect(db_path)
+        owner_conn.row_factory = sqlite3.Row
+        try:
+            file_id = f"video-{privacy_mode}"
+            if is_e2ee:
+                _seed_uploaded_file(
+                    owner_conn, storage_root,
+                    file_id=file_id, owner_user_id=1,
+                    filename="secret.mp4", mime="video/mp4",
+                )
+                _mark_file_as_e2ee(owner_conn, file_id)
+            else:
+                _seed_uploaded_file(
+                    owner_conn, storage_root,
+                    file_id=file_id, owner_user_id=1,
+                    filename="clip.mp4", mime="video/mp4",
+                    privacy_mode=privacy_mode,
+                )
+
+            kwargs = {
+                "actor": {"id": 1, "username": "alice", "role": "user"},
+                "cloud_file_id": file_id,
+                "title": f"Test {privacy_mode}",
+                "visibility": "unlisted",
+                "share_password": "P@ssw0rd!",
+                "share_max_views": 10,
+            }
+            if is_e2ee:
+                kwargs["share_wrapped_file_key_envelope"] = (
+                    '{"alg":"AES-GCM","v":1,"nonce":"AAAAAAAAAAAAAAAA","ciphertext":"AQIDBA=="}'
+                )
+            video = publish_video(owner_conn, **kwargs)
+            owner_conn.commit()
+            token = video["share_url"].rsplit("/", 1)[-1]
+        finally:
+            owner_conn.close()
+
+        client = _build_app(
+            db_path, storage_root,
+            Fernet(Fernet.generate_key()),
+            current_user=None,
+        ).test_client()
+
+        # 1) Inline HTML page renders (no 5xx, no f-string crash)
+        page = client.get(f"/shared/videos/{token}")
+        assert page.status_code == 200, f"{privacy_mode}: share page HTML status {page.status_code}"
+        page_html = page.data.decode("utf-8")
+        assert "share-password-form" in page_html, f"{privacy_mode}: form missing from rendered HTML"
+        assert "loadSharedVideo" in page_html, f"{privacy_mode}: loadSharedVideo not in rendered JS"
+
+        # 2) Metadata while locked → 401 password_required
+        locked = client.get(f"/api/videos/shared/{token}")
+        assert locked.status_code == 401, (
+            f"{privacy_mode}: locked metadata expected 401, got {locked.status_code} "
+            f"body={locked.get_json()}"
+        )
+        body = locked.get_json()
+        assert body.get("password_required") is True, f"{privacy_mode}: missing password_required flag"
+
+        # 3) Wrong password → 403
+        bad = client.post(
+            f"/api/videos/shared/{token}/unlock",
+            json={"password": "wrong-attempt-1"},
+        )
+        assert bad.status_code == 403, (
+            f"{privacy_mode}: wrong password expected 403, got {bad.status_code}"
+        )
+
+        # 4) Correct password → 200 OK + session granted
+        unlock = client.post(
+            f"/api/videos/shared/{token}/unlock",
+            json={"password": "P@ssw0rd!"},
+        )
+        assert unlock.status_code == 200, (
+            f"{privacy_mode}: correct password expected 200, got {unlock.status_code} "
+            f"body={unlock.get_json()}"
+        )
+        assert unlock.get_json()["ok"] is True
+
+        # 5) Metadata after unlock → 200 with video payload
+        detail = client.get(f"/api/videos/shared/{token}")
+        assert detail.status_code == 200, (
+            f"{privacy_mode}: post-unlock detail expected 200, got {detail.status_code} "
+            f"body={detail.get_json()}"
+        )
+        assert detail.get_json()["video"]["share_password_required"] is True
+
+        # 6) Playback descriptor available
+        playback = client.get(f"/api/videos/shared/{token}/playback")
+        assert playback.status_code == 200, (
+            f"{privacy_mode}: playback expected 200, got {playback.status_code} "
+            f"body={playback.get_json()}"
+        )
+        playback_json = playback.get_json()
+        if is_e2ee:
+            assert playback_json["mode"].startswith("e2ee"), (
+                f"e2ee: expected e2ee_* playback mode, got {playback_json['mode']}"
+            )
+        else:
+            assert playback_json["mode"] in {"hls", "direct", "high_performance", "server_encrypted"}, (
+                f"{privacy_mode}: expected non-e2ee playback mode, got {playback_json['mode']}"
+            )
+
+
+def test_shared_video_page_csp_does_not_block_inline_script(tmp_path):
+    """Issue #182 regression guard.
+
+    Talisman is configured with strict CSP `script-src: 'self'` (no
+    'unsafe-inline', no nonce). Inline `<script>` blocks are blocked by
+    every modern browser. The shared video page must not rely on inline
+    JS to function.
+
+    This test fires when:
+      A) the response has an inline <script>...</script> body AND
+      B) the CSP forbids both 'unsafe-inline' and nonce-X for script-src
+
+    The fix is either (A) move the JS to /static or (B) emit a nonce
+    matching the script tag.
+    """
+    import sqlite3, re
+    from cryptography.fernet import Fernet
+
+    db_path = tmp_path / "csp-share.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        _seed_uploaded_file(
+            conn, storage_root,
+            file_id="video-csp", owner_user_id=1,
+            filename="x.mp4", mime="video/mp4",
+        )
+        video = publish_video(
+            conn,
+            actor={"id": 1, "username": "alice", "role": "user"},
+            cloud_file_id="video-csp",
+            title="csp",
+            visibility="unlisted",
+            share_password="P",
+        )
+        conn.commit()
+        token = video["share_url"].rsplit("/", 1)[-1]
+    finally:
+        conn.close()
+
+    client = _build_app(
+        db_path, storage_root,
+        Fernet(Fernet.generate_key()),
+        current_user=None,
+    ).test_client()
+
+    resp = client.get(f"/shared/videos/{token}")
+    assert resp.status_code == 200
+    body = resp.data.decode("utf-8")
+
+    # The test fixture doesn't go through Talisman, so we can't rely on
+    # the test response's CSP header. Read the *production* CSP config
+    # directly from server.py to know what real browsers will see.
+    from pathlib import Path as _Path
+    server_py = (_Path(__file__).resolve().parents[1] / "server.py").read_text(encoding="utf-8")
+    script_src_match = re.search(r'"script-src":\s*"([^"]+)"', server_py)
+    production_script_src = script_src_match.group(1) if script_src_match else ""
+    production_allows_inline = (
+        "'unsafe-inline'" in production_script_src
+        or "'nonce-" in production_script_src
+    )
+
+    inline_script = re.search(r"<script>(.{50,})</script>", body, re.DOTALL)
+    has_external_script = (
+        '<script src="' in body or '<script type="application/json"' in body
+    )
+
+    if inline_script and not has_external_script and not production_allows_inline:
+        raise AssertionError(
+            f"Shared video page emits a non-trivial inline <script> body "
+            f"({len(inline_script.group(1))} chars) but the production CSP "
+            f"in server.py is `script-src: {production_script_src}` which "
+            "forbids inline scripts. Browsers will silently block the JS, "
+            "leaving the password form inert and the page stuck at "
+            "'讀取中...'.\n"
+            "\n"
+            "Fix options:\n"
+            "  A) Move the inline JS to public/js/shared-video.js and load "
+            "via <script src='/js/shared-video.js'>. Pass TOKEN via a JSON "
+            "island (<script type='application/json'>...</script>).\n"
+            "  B) Configure Talisman with content_security_policy_nonce_in="
+            "['script-src'] and emit <script nonce='...'> on this page.\n"
+            "\n"
+            "See issue #182."
+        )
