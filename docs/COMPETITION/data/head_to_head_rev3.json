@@ -1,0 +1,85 @@
+{
+  "results": {
+    "claude_rev3": {
+      "template_name": "auto_search_winner_claude_rev3_return",
+      "per_asset": [
+        {
+          "asset": "BTC",
+          "return_percent": 104.609,
+          "max_drawdown_percent": 59.7482,
+          "trade_count": 5
+        },
+        {
+          "asset": "ETH",
+          "return_percent": -38.498,
+          "max_drawdown_percent": 80.8839,
+          "trade_count": 2
+        },
+        {
+          "asset": "XRP",
+          "return_percent": 31.31,
+          "max_drawdown_percent": 81.8171,
+          "trade_count": 4
+        },
+        {
+          "asset": "BNB",
+          "return_percent": 91.255,
+          "max_drawdown_percent": 56.2283,
+          "trade_count": 5
+        },
+        {
+          "asset": "PAXG",
+          "return_percent": 115.071,
+          "max_drawdown_percent": 22.0167,
+          "trade_count": 4
+        }
+      ],
+      "avg_ret": 60.749399999999994,
+      "max_dd": 81.8171,
+      "avg_trades": 4.0
+    },
+    "codex_late_tp15": {
+      "template_name": "dipbuy_rsi35_70_size99_late_tp15_nopyr_codex",
+      "per_asset": [
+        {
+          "asset": "BTC",
+          "return_percent": 108.243,
+          "max_drawdown_percent": 76.7548,
+          "trade_count": 3
+        },
+        {
+          "asset": "ETH",
+          "return_percent": -38.518,
+          "max_drawdown_percent": 80.6855,
+          "trade_count": 1
+        },
+        {
+          "asset": "XRP",
+          "return_percent": 9.994,
+          "max_drawdown_percent": 81.6592,
+          "trade_count": 2
+        },
+        {
+          "asset": "BNB",
+          "return_percent": 104.582,
+          "max_drawdown_percent": 60.8809,
+          "trade_count": 4
+        },
+        {
+          "asset": "PAXG",
+          "return_percent": 137.693,
+          "max_drawdown_percent": 21.9558,
+          "trade_count": 3
+        }
+      ],
+      "avg_ret": 64.39880000000001,
+      "max_dd": 81.6592,
+      "avg_trades": 2.6
+    }
+  },
+  "asset_wins": {
+    "claude_rev3": 2,
+    "codex_late_tp15": 3,
+    "tied": 0
+  }
+}
