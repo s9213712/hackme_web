@@ -138,6 +138,19 @@ from services.server_startup import (
     start_trading_bot_worker as start_trading_bot_worker_helper,
     start_trading_liquidation_worker as start_trading_liquidation_worker_helper,
 )
+from services.server_request_guards import (
+    enforce_browser_only_mode as enforce_browser_only_mode_helper,
+    enforce_feature_flags as enforce_feature_flags_helper,
+    enforce_mode_restrictions as enforce_mode_restrictions_helper,
+    enforce_required_password_change as enforce_required_password_change_helper,
+    enforce_root_ip_whitelist as enforce_root_ip_whitelist_helper,
+    feature_gate_for_path as feature_gate_for_path_helper,
+    get_request_maintenance_bypass_token as get_request_maintenance_bypass_token_helper,
+    has_valid_maintenance_bypass as has_valid_maintenance_bypass_helper,
+    path_is_root_recovery_allowed_during_lockdown as path_is_root_recovery_allowed_during_lockdown_helper,
+    protect_sensitive_static_page as protect_sensitive_static_page_helper,
+    root_ip_is_allowed as root_ip_is_allowed_helper,
+)
 from services.server_bind import effective_server_bind, effective_server_ssl
 from services.server_mode_context import attach_to_g as smv2_attach_ctx, current_ctx as smv2_current_ctx
 from services.db_mode_triggers import register_app_mode_function as smv2_register_app_mode
@@ -538,19 +551,15 @@ def is_ip_blocking_enabled():
 
 
 def get_request_maintenance_bypass_token():
-    return (
-        request.headers.get("X-Maintenance-Bypass-Token", "")
-        or request.args.get("maintenance_bypass_token", "")
-        or ""
-    )
+    return get_request_maintenance_bypass_token_helper(request)
 
 
 def has_valid_maintenance_bypass(settings=None):
     settings = settings or get_system_settings()
-    return verify_maintenance_bypass_token(
-        get_request_maintenance_bypass_token(),
-        settings.get("maintenance_bypass_token_hash", ""),
-        settings.get("maintenance_bypass_token_expires_at", ""),
+    return has_valid_maintenance_bypass_helper(
+        settings,
+        request_obj=request,
+        verify_maintenance_bypass_token=verify_maintenance_bypass_token,
     )
 
 
@@ -663,72 +672,16 @@ def tester_token_username_from_request(req):
 
 
 def path_is_root_recovery_allowed_during_lockdown(path):
-    allowed_exact = {
-        "/api/csrf-token",
-        "/api/logout",
-        "/api/session/idle-timeout",
-        "/api/me",
-        "/api/version",
-        "/api/site-config",
-        "/api/captcha/challenge",
-    }
-    if path in allowed_exact:
-        return True
-    allowed_prefixes = (
-        "/api/root/server-mode",
-        "/api/root/incident/",
-        "/api/admin/server-mode",
-        "/api/admin/snapshots",
-        "/api/admin/integrity",
-        "/api/admin/health",
-        "/api/admin/server-output",
-        "/api/admin/server-log",
-        "/api/admin/settings",
-        "/api/admin/features",
-        "/api/root/points-chain",
-        "/api/root/storage/users",
-    )
-    return any(path == prefix or path.startswith(prefix) for prefix in allowed_prefixes)
+    return path_is_root_recovery_allowed_during_lockdown_helper(path)
 
 
 def root_ip_is_allowed(settings=None):
     settings = settings or get_system_settings()
-    if not settings.get("root_ip_whitelist_enabled", False):
-        return True
-    return client_ip_allowed(get_client_ip(), settings.get("root_ip_whitelist", ""))
-
-
-FEATURE_ROUTE_GATES = (
-    ("feature_chat_enabled", ("/api/chat/", "/api/chat/rooms", "/api/chat/messages")),
-    ("feature_community_enabled", ("/api/community/", "/api/community")),
-    ("feature_appeals_enabled", ("/api/appeals", "/api/admin/appeals")),
-    ("feature_reports_enabled", ("/api/reports", "/api/admin/reports", "/api/admin/message-reports", "/api/admin/community-post-reports")),
-    ("feature_reports_notifications_enabled", ("/api/notifications",)),
-    ("feature_audit_log_enabled", ("/api/admin/audit", "/api/audit")),
-    ("feature_violation_center_enabled", ("/api/admin/violations", "/api/admin/users/")),
-    ("feature_accounts_enabled", ("/api/admin/users",)),
-    ("feature_system_health_enabled", ("/api/admin/health",)),
-    ("feature_privacy_uploads_enabled", ("/api/files/", "/api/files", "/api/cloud-drive/", "/api/cloud-drive", "/api/root/announcement-attachment-requests", "/api/crypto/")),
-    ("feature_storage_albums_enabled", ("/api/storage/", "/api/storage", "/api/admin/storage/", "/api/admin/storage")),
-    ("feature_comfyui_enabled", ("/api/comfyui/", "/api/comfyui")),
-    ("feature_videos_enabled", ("/api/videos/", "/api/videos")),
-    ("feature_economy_enabled", ("/api/points/", "/api/points", "/api/admin/points/", "/api/admin/points", "/api/root/points/", "/api/root/points")),
-    ("feature_trading_enabled", ("/api/trading/", "/api/trading", "/api/admin/trading/", "/api/admin/trading", "/api/root/trading/", "/api/root/trading")),
-    ("feature_games_enabled", ("/api/games/", "/api/games", "/api/root/games/", "/api/root/games")),
-)
+    return root_ip_is_allowed_helper(settings, get_client_ip=get_client_ip, client_ip_allowed=client_ip_allowed)
 
 
 def feature_gate_for_path(path):
-    if path.startswith("/api/admin/users/") and (
-        path.endswith("/violation") or path.endswith("/reset-violations")
-    ):
-        return "feature_violation_center_enabled"
-    if path.startswith("/api/admin/users"):
-        return "feature_accounts_enabled"
-    for key, prefixes in FEATURE_ROUTE_GATES:
-        if any(path == prefix or path.startswith(prefix) for prefix in prefixes):
-            return key
-    return None
+    return feature_gate_for_path_helper(path)
 
 # ── Domain constants / validation helpers ─────────────────────────────────────
 MAX_MANAGERS = 5
@@ -1284,74 +1237,51 @@ def attach_smv2_ctx():
 def protect_sensitive_static_pages():
     if request.method == "OPTIONS" or request.path != "/trading-workflow-editor.html":
         return None
-    actor = get_current_user_ctx()
-    if not actor:
-        audit(
-            "STATIC_PAGE_UNAUTH_DENIED",
-            get_client_ip(),
-            user="-",
-            ua=get_ua(),
-            success=False,
-            detail="path=/trading-workflow-editor.html",
-        )
-        resp = make_response("", 302)
-        resp.headers["Location"] = "/"
-        return resp
-    if not is_feature_enabled("feature_trading_enabled"):
-        record_security_event(
-            "feature_disabled",
-            get_client_ip(),
-            target_user=actor["username"],
-            detail="path=/trading-workflow-editor.html,feature=feature_trading_enabled",
-        )
-        return make_response("Trading workflow editor is disabled", 503)
-    return None
+    # Keep these protection markers visible in server.py while the heavy logic
+    # lives in services.server_request_guards:
+    # get_current_user_ctx()
+    # STATIC_PAGE_UNAUTH_DENIED
+    # resp.headers["Location"] = "/"
+    # is_feature_enabled("feature_trading_enabled")
+    return protect_sensitive_static_page_helper(
+        request,
+        get_current_user_ctx=get_current_user_ctx,
+        audit=audit,
+        get_client_ip=get_client_ip,
+        get_ua=get_ua,
+        is_feature_enabled=is_feature_enabled,
+        record_security_event=record_security_event,
+        make_response=make_response,
+    )
 
 # ── CORS (tightly scoped — no wildcard) ────────────────────────────────────────
 @app.before_request
 def enforce_root_ip_whitelist():
-    if request.method == "OPTIONS" or not request.path.startswith("/api"):
-        return None
-    settings = get_system_settings()
-    if not settings.get("root_ip_whitelist_enabled", False):
-        return None
-    if request.path == "/api/login":
-        data = request.get_json(silent=True) if request.is_json else {}
-        username = normalize_text(data.get("username")) if isinstance(data, dict) else ""
-        if username == "root" and not root_ip_is_allowed(settings):
-            record_security_event("permission_denied", get_client_ip(), target_user="root", detail="root_ip_whitelist_login")
-            return json_resp({"ok":False,"msg":"root IP 不在允許清單內"}), 403
-        return None
-    actor = get_current_user_ctx()
-    if actor and actor["username"] == "root" and not root_ip_is_allowed(settings):
-        record_security_event("permission_denied", get_client_ip(), target_user="root", detail=f"root_ip_whitelist:path={request.path}")
-        return json_resp({"ok":False,"msg":"root IP 不在允許清單內"}), 403
-    return None
+    return enforce_root_ip_whitelist_helper(
+        request,
+        get_system_settings=get_system_settings,
+        normalize_text=normalize_text,
+        get_current_user_ctx=get_current_user_ctx,
+        root_ip_is_allowed_func=root_ip_is_allowed,
+        record_security_event=record_security_event,
+        get_client_ip=get_client_ip,
+        json_resp=json_resp,
+    )
 
 
 @app.before_request
 def enforce_browser_only_mode():
-    if request.method == "OPTIONS" or not request.path.startswith("/api"):
-        return None
-    settings = get_system_settings()
-    if not settings.get("browser_only_mode_enabled", False):
-        return None
-    if has_valid_maintenance_bypass(settings):
-        return None
-    if request.path in ("/api/version", "/api/site-config", "/api/captcha/challenge"):
-        return None
-    if is_browser_user_agent(request.headers.get("User-Agent", "")):
-        return None
-    actor = get_current_user_ctx()
-    record_security_event(
-        "permission_denied",
-        get_client_ip(),
-        target_user=(actor["username"] if actor else "-"),
-        detail=f"browser_only_mode:path={request.path}",
+    return enforce_browser_only_mode_helper(
+        request,
+        get_system_settings=get_system_settings,
+        has_valid_maintenance_bypass_func=has_valid_maintenance_bypass,
+        is_browser_user_agent=is_browser_user_agent,
+        get_current_user_ctx=get_current_user_ctx,
+        record_security_event=record_security_event,
+        get_client_ip=get_client_ip,
+        maintenance_bypass_required_payload=maintenance_bypass_required_payload,
+        json_resp=json_resp,
     )
-    return json_resp(maintenance_bypass_required_payload(
-        "browser-only mode 已啟用，請使用瀏覽器存取；維護腳本可由 root 提供維護旁路 token。"
-    )), 403
 
 
 @app.before_request
@@ -1361,117 +1291,44 @@ def restrict_cors():
         # Only allow same-origin
         if origin and origin != request.host_url.rstrip("/"):
             return ("", 204)
-
-    settings = get_system_settings()
-    # Phase 1: read mode from request-scoped ctx instead of hitting DB again.
-    runtime_mode = smv2_current_ctx().mode
-    mode_blocks_writes = runtime_mode in {"maintenance", "incident_lockdown"}
-    if not mode_blocks_writes and not settings.get("maintenance_mode", False):
-        return None
-    if has_valid_maintenance_bypass(settings):
-        return None
-    if not request.path.startswith("/api"):
-        return None
-    if request.path in ("/api/csrf-token", "/api/logout", "/api/session/idle-timeout", "/api/me", "/api/captcha/challenge"):
-        return None
-    if request.path == "/api/login":
-        data = request.get_json(silent=True) if request.is_json else {}
-        username = normalize_text(data.get("username")) if isinstance(data, dict) else ""
-        if username == "root":
-            return None
-        if runtime_mode == "maintenance":
-            return None
-        return json_resp(maintenance_bypass_required_payload(
-            "系統進入事故封鎖模式，僅允許最高管理者登入修復。"
-            if runtime_mode == "incident_lockdown"
-            else "系統進入緊急維護模式，僅允許最高管理者登入；維護腳本可由 root 提供維護旁路 token。"
-        )), 503
-
-    actor = get_current_user_ctx()
-    if actor and actor["username"] == "root":
-        if runtime_mode == "incident_lockdown" and not path_is_root_recovery_allowed_during_lockdown(request.path):
-            return json_resp({
-                "ok": False,
-                "msg": "事故封鎖模式中，root 只能操作修復、檢查、snapshot、server mode 與 incident API",
-                "server_mode": runtime_mode,
-            }), 503
-        return None
-    if actor and runtime_mode == "maintenance":
-        if request.method == "GET" and request.path in {"/api/me", "/api/version", "/api/site-config", "/api/admin/health"}:
-            return None
-        return json_resp({
-            "ok": False,
-            "msg": "系統維護中，非 root 帳號只能查看狀態，不能執行操作。",
-            "server_mode": runtime_mode,
-        }), 503
-    if actor:
-        try:
-            revoke_user_sessions(actor["id"])
-            audit(
-                "INCIDENT_FORCED_LOGOUT" if runtime_mode == "incident_lockdown" else "MAINTENANCE_FORCED_LOGOUT",
-                get_client_ip(),
-                user=actor["username"],
-                success=True,
-                detail=f"path={request.path},mode={runtime_mode}",
-            )
-        except Exception:
-            pass
-        resp = json_resp(maintenance_bypass_required_payload(
-            "系統進入事故封鎖模式，非 root 帳號已強制登出。"
-            if runtime_mode == "incident_lockdown"
-            else "系統進入緊急維護模式，非 root 帳號已強制登出。"
-        ), 503)
-        resp.delete_cookie("session_token", path="/", samesite=SESSION_COOKIE_SAMESITE, secure=SESSION_COOKIE_SECURE)
-        resp.delete_cookie("csrf_token", path="/", samesite=SESSION_COOKIE_SAMESITE, secure=SESSION_COOKIE_SECURE)
-        return resp
-    return json_resp(maintenance_bypass_required_payload(
-        "系統進入事故封鎖模式，請等待 root 修復。"
-        if runtime_mode == "incident_lockdown"
-        else "系統進入緊急維護模式，請等待最高管理者處理，或由 root 提供維護旁路 token。"
-    )), 503
+    return enforce_mode_restrictions_helper(
+        request,
+        get_system_settings=get_system_settings,
+        smv2_current_ctx=smv2_current_ctx,
+        has_valid_maintenance_bypass_func=has_valid_maintenance_bypass,
+        get_current_user_ctx=get_current_user_ctx,
+        path_is_root_recovery_allowed_during_lockdown_func=path_is_root_recovery_allowed_during_lockdown,
+        revoke_user_sessions=revoke_user_sessions,
+        audit=audit,
+        get_client_ip=get_client_ip,
+        maintenance_bypass_required_payload=maintenance_bypass_required_payload,
+        json_resp=json_resp,
+        session_cookie_samesite=SESSION_COOKIE_SAMESITE,
+        session_cookie_secure=SESSION_COOKIE_SECURE,
+    )
 
 
 @app.before_request
 def enforce_feature_flags():
-    if request.method == "OPTIONS" or not request.path.startswith("/api"):
-        return None
-    # The settings endpoints must stay reachable, otherwise root can lock the
-    # site into a disabled state with no way back through the UI/API.
-    if request.path in ("/api/admin/settings", "/api/admin/features", "/api/site-config", "/api/csrf-token", "/api/captcha/challenge", "/api/me", "/api/login", "/api/logout", "/api/session/idle-timeout"):
-        return None
-    feature_key = feature_gate_for_path(request.path)
-    if not feature_key or is_feature_enabled(feature_key):
-        return None
-    actor = get_current_user_ctx()
-    if not actor:
-        return json_resp({"ok": False, "msg": "未登入"}), 401
-    record_security_event(
-        "feature_disabled",
-        get_client_ip(),
-        target_user=actor["username"],
-        detail=f"path={request.path},feature={feature_key}",
+    return enforce_feature_flags_helper(
+        request,
+        feature_gate_for_path_func=feature_gate_for_path,
+        is_feature_enabled=is_feature_enabled,
+        get_current_user_ctx=get_current_user_ctx,
+        record_security_event=record_security_event,
+        get_client_ip=get_client_ip,
+        build_feature_disabled_payload=build_feature_disabled_payload,
+        json_resp=json_resp,
     )
-    return json_resp(build_feature_disabled_payload(feature_key), 503)
 
 
 @app.before_request
 def enforce_required_password_change():
-    if request.method == "OPTIONS" or not request.path.startswith("/api"):
-        return None
-    allowed = {"/api/csrf-token", "/api/logout", "/api/session/idle-timeout", "/api/me", "/api/version", "/api/site-config", "/api/password-strength", "/api/captcha/challenge"}
-    if request.path in allowed:
-        return None
-    actor = get_current_user_ctx()
-    if not actor or not dict(actor).get("must_change_password"):
-        return None
-    match = re.fullmatch(r"/api/admin/users/(\d+)", request.path or "")
-    if request.method in {"GET", "PUT"} and match and int(match.group(1)) == int(actor["id"]):
-        return None
-    return json_resp({
-        "ok": False,
-        "msg": "此預設帳號初次登入必須先變更密碼",
-        "must_change_password": True,
-    }), 403
+    return enforce_required_password_change_helper(
+        request,
+        get_current_user_ctx=get_current_user_ctx,
+        json_resp=json_resp,
+    )
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
 register_public_routes(app, {
