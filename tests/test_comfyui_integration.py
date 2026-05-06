@@ -872,6 +872,46 @@ def test_comfyui_workflow_import_rejects_bad_json_and_unsafe_paths(tmp_path):
     assert "外部 URL" in unsafe_url.get_json()["msg"]
 
 
+def test_comfyui_workflow_import_rejects_too_many_nodes_and_deep_nesting(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(db_path, storage_root).test_client()
+
+    too_many_nodes = {
+        str(index): {
+            "class_type": "LoadImage",
+            "inputs": {"image": f"image-{index}.png", "upload": "image"},
+        }
+        for index in range(201)
+    }
+    too_many = client.post(
+        "/api/comfyui/workflows/import",
+        json={"title": "too-many", "workflow_json": too_many_nodes},
+    )
+    assert too_many.status_code == 400
+    assert "node 數量過多" in too_many.get_json()["msg"]
+
+    nested_value = "leaf"
+    for _ in range(12):
+        nested_value = [nested_value]
+    too_deep = client.post(
+        "/api/comfyui/workflows/import",
+        json={
+            "title": "too-deep",
+            "workflow_json": {
+                "1": {
+                    "class_type": "LoadImage",
+                    "inputs": {"image": nested_value, "upload": "image"},
+                }
+            },
+        },
+    )
+    assert too_deep.status_code == 400
+    assert "巢狀層級過深" in too_deep.get_json()["msg"]
+
+
 def test_comfyui_private_workflow_preset_cannot_be_read_by_other_user(tmp_path):
     db_path = tmp_path / "comfyui.db"
     storage_root = tmp_path / "storage"

@@ -227,6 +227,50 @@ def test_restore_fails_when_runtime_secret_validation_fails(tmp_path):
     assert any(call[0][0] == "SNAPSHOT_RESTORE_RUNTIME_SECRETS_FAILED" for call in audit_log)
 
 
+def test_restore_fails_closed_when_maintenance_mode_cannot_be_enabled(tmp_path):
+    audit_log = []
+    service, db_path, uploads = _service(tmp_path, audit_log)
+    snap = service.create_snapshot(snapshot_type="manual", actor={"id": 1, "username": "root"}, notes="baseline")
+
+    conn = _db(db_path)
+    conn.execute("INSERT INTO posts (id, title) VALUES (2, 'dirty state')")
+    conn.commit()
+    conn.close()
+
+    original_get_db = service.get_db
+
+    class FailingMaintenanceConnection:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def execute(self, sql, params=()):
+            if "UPDATE system_settings SET value='true'" in sql:
+                raise sqlite3.OperationalError("maintenance update blocked")
+            return self._inner.execute(sql, params)
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    def failing_get_db():
+        return FailingMaintenanceConnection(original_get_db())
+
+    service.get_db = failing_get_db
+    restored = service.restore_snapshot(snapshot_id=snap.snapshot_id, actor={"id": 1, "username": "root"}, reason="rollback")
+
+    assert restored["ok"] is False
+    assert restored["msg"] == "restore preparation failed"
+    assert restored["pre_restore_snapshot_id"]
+    conn = _db(db_path)
+    posts = [row["title"] for row in conn.execute("SELECT title FROM posts ORDER BY id").fetchall()]
+    event = conn.execute("SELECT status, restore_mode, error_message FROM snapshot_restore_events ORDER BY started_at DESC LIMIT 1").fetchone()
+    conn.close()
+    assert posts == ["P1", "dirty state"]
+    assert event["status"] == "failed"
+    assert event["restore_mode"] == "prepare"
+    assert "maintenance update blocked" in event["error_message"]
+    assert any(call[0][0] == "SNAPSHOT_RESTORE_PREPARE_FAILED" for call in audit_log)
+
+
 def test_portable_snapshot_archive_restores_on_different_instance(tmp_path):
     source_root = tmp_path / "source"
     target_root = tmp_path / "target"

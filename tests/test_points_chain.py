@@ -82,6 +82,27 @@ def test_points_transaction_updates_wallet_and_hash_chain(tmp_path):
     assert service.verify_chain()["ok"] is True
 
 
+def test_rebuild_wallets_from_ledger_starts_its_own_transaction_when_needed(tmp_path):
+    service = _service(tmp_path)
+    service.record_transaction(
+        user_id=1,
+        currency_type="points",
+        direction="credit",
+        amount=10,
+        action_type="test_credit",
+        idempotency_key="credit:rebuild-wallets",
+    )
+
+    conn = service.get_db()
+    try:
+        assert conn.in_transaction is False
+        rebuild = service._rebuild_wallets_from_ledger(conn)
+        assert rebuild["wallets_rebuilt"] >= 1
+        assert conn.in_transaction is False
+    finally:
+        conn.close()
+
+
 def test_legacy_hard_currency_is_merged_into_single_points_balance(tmp_path):
     service = _service(tmp_path)
 

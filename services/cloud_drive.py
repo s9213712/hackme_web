@@ -272,68 +272,78 @@ def store_cloud_upload(
     file_id_hint = uuid.uuid4().hex
     rel_path = f"users/{int(actor['id'])}/{file_id_hint}/{filename}"
     target = resolve_storage_path(storage_root, rel_path, create_parent=True)
-    with open(target, "wb") as out:
+    server_encrypted = is_server_encrypted_privacy_mode(privacy_mode)
+    plaintext_scan_path = target
+    temp_plaintext_path = None
+    if server_encrypted:
+        handle = tempfile.NamedTemporaryFile(prefix="cloud-drive-plain-", suffix=".upload", delete=False)
+        temp_plaintext_path = handle.name
+        handle.close()
+        plaintext_scan_path = Path(temp_plaintext_path)
+    with open(plaintext_scan_path, "wb") as out:
         while True:
             chunk = stream.read(1024 * 1024)
             if not chunk:
                 break
             out.write(chunk)
-    server_encrypted = is_server_encrypted_privacy_mode(privacy_mode)
-    if server_encrypted and server_file_fernet is None:
-        try:
-            target.unlink(missing_ok=True)
-        except Exception:
-            pass
-        raise ValueError("server_file_encryption_key is required for server_encrypted uploads")
-    result = create_uploaded_file_record(
-        conn,
-        owner_user_id=actor["id"],
-        storage_path=rel_path,
-        privacy_mode=privacy_mode,
-        size_bytes=size_bytes,
-        original_filename=filename,
-        encrypted_metadata=encrypted_metadata,
-        encrypted_file_key=encrypted_file_key,
-        wrapped_by=wrapped_by,
-        mime_type=getattr(file_storage, "mimetype", None),
-        ciphertext_sha256=ciphertext_sha256,
-        plaintext_sha256=None,
-        encryption_algorithm="Fernet" if server_encrypted else encryption_algorithm,
-        encryption_version="server-side-v1" if server_encrypted else encryption_version,
-        nonce=nonce,
-        client_scan_report=client_scan_report,
-        user=actor,
-        scan_now=False,
-    )
-    if scan_now and result.get("scan_status") == "pending":
-        scan_result = scan_uploaded_file(
+    try:
+        if server_encrypted and server_file_fernet is None:
+            raise ValueError("server_file_encryption_key is required for server_encrypted uploads")
+        result = create_uploaded_file_record(
             conn,
-            file_id=result["file_id"],
-            file_path=target,
-            filename=filename,
-            declared_mime=getattr(file_storage, "mimetype", None),
+            owner_user_id=actor["id"],
+            storage_path=rel_path,
+            privacy_mode=privacy_mode,
+            size_bytes=size_bytes,
+            original_filename=filename,
+            encrypted_metadata=encrypted_metadata,
+            encrypted_file_key=encrypted_file_key,
+            wrapped_by=wrapped_by,
+            mime_type=getattr(file_storage, "mimetype", None),
+            ciphertext_sha256=ciphertext_sha256,
+            plaintext_sha256=None,
+            encryption_algorithm="Fernet" if server_encrypted else encryption_algorithm,
+            encryption_version="server-side-v1" if server_encrypted else encryption_version,
+            nonce=nonce,
+            client_scan_report=client_scan_report,
+            user=actor,
+            scan_now=False,
         )
-        result["scan_status"] = scan_result["scan_status"]
-        result["risk_level"] = scan_result["risk_level"]
-        result["scan_result"] = scan_result
-    if server_encrypted:
-        plaintext = target.read_bytes()
-        ciphertext = server_file_fernet.encrypt(plaintext)
-        target.write_bytes(ciphertext)
-        digest = hashlib.sha256(ciphertext).hexdigest()
-        conn.execute(
-            """
-            UPDATE uploaded_files
-            SET ciphertext_sha256=?, encryption_algorithm=?, encryption_version=?, updated_at=?
-            WHERE id=?
-            """,
-            (digest, "Fernet", "server-side-v1", _now(), result["file_id"]),
-        )
-        result["ciphertext_sha256"] = digest
-        result["encryption_algorithm"] = "Fernet"
-        result["encryption_version"] = "server-side-v1"
-    result["size_bytes"] = int(size_bytes or 0)
-    return result, None
+        if scan_now and result.get("scan_status") == "pending":
+            scan_result = scan_uploaded_file(
+                conn,
+                file_id=result["file_id"],
+                file_path=plaintext_scan_path,
+                filename=filename,
+                declared_mime=getattr(file_storage, "mimetype", None),
+            )
+            result["scan_status"] = scan_result["scan_status"]
+            result["risk_level"] = scan_result["risk_level"]
+            result["scan_result"] = scan_result
+        if server_encrypted:
+            plaintext = plaintext_scan_path.read_bytes()
+            ciphertext = server_file_fernet.encrypt(plaintext)
+            target.write_bytes(ciphertext)
+            digest = hashlib.sha256(ciphertext).hexdigest()
+            conn.execute(
+                """
+                UPDATE uploaded_files
+                SET ciphertext_sha256=?, encryption_algorithm=?, encryption_version=?, updated_at=?
+                WHERE id=?
+                """,
+                (digest, "Fernet", "server-side-v1", _now(), result["file_id"]),
+            )
+            result["ciphertext_sha256"] = digest
+            result["encryption_algorithm"] = "Fernet"
+            result["encryption_version"] = "server-side-v1"
+        result["size_bytes"] = int(size_bytes or 0)
+        return result, None
+    finally:
+        if temp_plaintext_path:
+            try:
+                Path(temp_plaintext_path).unlink(missing_ok=True)
+            except Exception:
+                pass
 
 
 def get_file_status(conn, *, actor, file_id):

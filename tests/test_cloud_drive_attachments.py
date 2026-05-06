@@ -1,5 +1,6 @@
 import gzip
 import io
+import os
 import sqlite3
 import threading
 import time
@@ -263,6 +264,49 @@ def test_server_encrypted_upload_stores_ciphertext_but_downloads_plaintext(tmp_p
     download = client.get(f"/api/cloud-drive/files/{file_id}/download")
     assert download.status_code == 200
     assert download.data == b"secret note"
+
+
+def test_server_encrypted_upload_scans_temp_plaintext_not_final_storage_path(tmp_path, monkeypatch):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    import services.cloud_drive as cloud_drive
+
+    observed = {}
+
+    def fake_scan_uploaded_file(conn, *, file_id, file_path, filename=None, declared_mime=None):
+        row = conn.execute("SELECT storage_path FROM uploaded_files WHERE id=?", (file_id,)).fetchone()
+        final_path = storage_root / row["storage_path"]
+        observed["scan_path"] = str(file_path)
+        observed["final_path"] = str(final_path)
+        assert os.path.exists(file_path)
+        with open(file_path, "rb") as handle:
+            assert handle.read() == b"secret note"
+        assert final_path.exists() is False
+        return {"scan_status": "clean", "risk_level": "low", "results": []}
+
+    monkeypatch.setattr(cloud_drive, "scan_uploaded_file", fake_scan_uploaded_file)
+
+    res = client.post(
+        "/api/cloud-drive/upload",
+        data={"file": (io.BytesIO(b"secret note"), "note.txt"), "privacy_mode": "server_encrypted"},
+        content_type="multipart/form-data",
+    )
+
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["file"]["privacy_mode"] == "server_encrypted"
+    assert observed["scan_path"] != observed["final_path"]
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (body["file"]["file_id"],)).fetchone()
+    conn.close()
+    stored = storage_root / row["storage_path"]
+    assert stored.read_bytes() != b"secret note"
 
 
 def test_runtime_engineer_can_decrypt_server_encrypted_but_not_e2ee(tmp_path):

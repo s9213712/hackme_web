@@ -2193,10 +2193,10 @@ class SnapshotService:
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
-            try:
-                conn.execute("UPDATE system_settings SET value='true', value_type='bool', updated_at=? WHERE key='maintenance_mode'", (started_at,))
-            except Exception:
-                pass
+            conn.execute(
+                "UPDATE system_settings SET value='true', value_type='bool', updated_at=? WHERE key='maintenance_mode'",
+                (started_at,),
+            )
             conn.execute(
                 "INSERT INTO snapshot_restore_events "
                 "(id, snapshot_id, restored_by, started_at, status, restore_mode, pre_restore_snapshot_id, checksum_verified, dry_run) "
@@ -2204,6 +2204,31 @@ class SnapshotService:
                 (event_id, snapshot_id, actor_id, started_at, pre.snapshot_id),
             )
             conn.commit()
+        except Exception as exc:
+            conn.rollback()
+            try:
+                conn.execute(
+                    "INSERT OR REPLACE INTO snapshot_restore_events "
+                    "(id, snapshot_id, restored_by, started_at, completed_at, status, restore_mode, pre_restore_snapshot_id, checksum_verified, dry_run, error_message) "
+                    "VALUES (?, ?, ?, ?, ?, 'failed', 'prepare', ?, 1, 0, ?)",
+                    (event_id, snapshot_id, actor_id, started_at, datetime.now().isoformat(), pre.snapshot_id, str(exc)),
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+            self.audit(
+                "SNAPSHOT_RESTORE_PREPARE_FAILED",
+                "-",
+                user=actor_name,
+                success=False,
+                detail=f"snapshot_id={snapshot_id},pre_restore={pre.snapshot_id},error={exc}",
+            )
+            return {
+                "ok": False,
+                "msg": "restore preparation failed",
+                "error": str(exc),
+                "pre_restore_snapshot_id": pre.snapshot_id,
+            }
         finally:
             conn.close()
 

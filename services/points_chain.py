@@ -1085,40 +1085,51 @@ class PointsLedgerService:
         return totals
 
     def _rebuild_wallets_from_ledger(self, conn):
-        rows = conn.execute("SELECT * FROM points_ledger ORDER BY id ASC").fetchall()
-        totals = self._wallet_totals_from_ledger(rows)
-        now = utc_now()
-        existing = {
-            int(row["user_id"]): dict(row)
-            for row in conn.execute("SELECT * FROM points_wallets").fetchall()
-        }
-        conn.execute("DELETE FROM points_wallets")
-        user_ids = {int(row["id"]) for row in conn.execute("SELECT id FROM users").fetchall()}
-        user_ids.update(totals.keys())
-        for user_id in sorted(user_ids):
-            old = existing.get(user_id, {})
-            total = totals.get(user_id, {"balance": 0, "frozen": 0, "earned": 0, "spent": 0})
-            conn.execute(
-                """
-                INSERT INTO points_wallets (
-                    user_id, soft_balance, hard_balance, soft_frozen, hard_frozen,
-                    total_soft_earned, total_hard_earned, total_soft_spent, total_hard_spent,
-                    wallet_status, risk_level, created_at, updated_at
-                ) VALUES (?, ?, 0, ?, 0, ?, 0, ?, 0, ?, ?, ?, ?)
-                """,
-                (
-                    user_id,
-                    int(total["balance"]),
-                    int(total["frozen"]),
-                    int(total["earned"]),
-                    int(total["spent"]),
-                    old.get("wallet_status") or "active",
-                    old.get("risk_level") or "normal",
-                    old.get("created_at") or now,
-                    now,
-                ),
-            )
-        return {"wallets_rebuilt": len(user_ids), "source_ledger_rows": len(rows)}
+        started_transaction = False
+        if not conn.in_transaction:
+            conn.execute("BEGIN IMMEDIATE")
+            started_transaction = True
+        try:
+            rows = conn.execute("SELECT * FROM points_ledger ORDER BY id ASC").fetchall()
+            totals = self._wallet_totals_from_ledger(rows)
+            now = utc_now()
+            existing = {
+                int(row["user_id"]): dict(row)
+                for row in conn.execute("SELECT * FROM points_wallets").fetchall()
+            }
+            conn.execute("DELETE FROM points_wallets")
+            user_ids = {int(row["id"]) for row in conn.execute("SELECT id FROM users").fetchall()}
+            user_ids.update(totals.keys())
+            for user_id in sorted(user_ids):
+                old = existing.get(user_id, {})
+                total = totals.get(user_id, {"balance": 0, "frozen": 0, "earned": 0, "spent": 0})
+                conn.execute(
+                    """
+                    INSERT INTO points_wallets (
+                        user_id, soft_balance, hard_balance, soft_frozen, hard_frozen,
+                        total_soft_earned, total_hard_earned, total_soft_spent, total_hard_spent,
+                        wallet_status, risk_level, created_at, updated_at
+                    ) VALUES (?, ?, 0, ?, 0, ?, 0, ?, 0, ?, ?, ?, ?)
+                    """,
+                    (
+                        user_id,
+                        int(total["balance"]),
+                        int(total["frozen"]),
+                        int(total["earned"]),
+                        int(total["spent"]),
+                        old.get("wallet_status") or "active",
+                        old.get("risk_level") or "normal",
+                        old.get("created_at") or now,
+                        now,
+                    ),
+                )
+            if started_transaction:
+                conn.commit()
+            return {"wallets_rebuilt": len(user_ids), "source_ledger_rows": len(rows)}
+        except Exception:
+            if started_transaction:
+                conn.rollback()
+            raise
 
     def _verify_wallets_against_ledger(self, conn):
         rows = conn.execute("SELECT * FROM points_ledger ORDER BY id ASC").fetchall()

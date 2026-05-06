@@ -37,6 +37,9 @@ CONTROLNET_TYPE_ALIASES = {
     "soft_edge": "softedge",
     "tile": "tile",
 }
+WORKFLOW_MAX_NODE_COUNT = 200
+WORKFLOW_MAX_NESTING_DEPTH = 10
+WORKFLOW_MAX_JSON_BYTES = 256_000
 
 
 class WorkflowValidationError(ValueError):
@@ -81,7 +84,9 @@ def _sanitize_leaf(value, *, field_name, field_path):
     raise WorkflowValidationError(f"workflow 欄位 {field_path} 類型不支援")
 
 
-def _sanitize_value(value, *, field_name="", field_path="workflow"):
+def _sanitize_value(value, *, field_name="", field_path="workflow", depth=0):
+    if depth > WORKFLOW_MAX_NESTING_DEPTH:
+        raise WorkflowValidationError(f"{field_path} 巢狀層級過深")
     if isinstance(value, dict):
         sanitized = {}
         for key, item in value.items():
@@ -89,11 +94,11 @@ def _sanitize_value(value, *, field_name="", field_path="workflow"):
             if not key_text:
                 raise WorkflowValidationError(f"{field_path} 含有空白欄位名稱")
             child_path = f"{field_path}.{key_text}"
-            sanitized[key_text] = _sanitize_value(item, field_name=key_text, field_path=child_path)
+            sanitized[key_text] = _sanitize_value(item, field_name=key_text, field_path=child_path, depth=depth + 1)
         return sanitized
     if isinstance(value, list):
         return [
-            _sanitize_value(item, field_name=field_name, field_path=f"{field_path}[{index}]")
+            _sanitize_value(item, field_name=field_name, field_path=f"{field_path}[{index}]", depth=depth + 1)
             for index, item in enumerate(value)
         ]
     return _sanitize_leaf(value, field_name=field_name, field_path=field_path)
@@ -296,18 +301,22 @@ def extract_workflow_summary(workflow_json):
 def sanitize_workflow_json(workflow_json):
     candidate = workflow_json
     if isinstance(candidate, str):
+        if len(candidate.encode("utf-8")) > WORKFLOW_MAX_JSON_BYTES:
+            raise WorkflowValidationError("workflow JSON 過大")
         try:
             candidate = json.loads(candidate)
         except json.JSONDecodeError as exc:
             raise WorkflowValidationError("workflow JSON 格式不正確") from exc
     if not isinstance(candidate, dict) or not candidate:
         raise WorkflowValidationError("workflow JSON 必須是非空物件")
+    if len(candidate) > WORKFLOW_MAX_NODE_COUNT:
+        raise WorkflowValidationError("workflow node 數量過多")
     sanitized = {}
     for node_id, node in candidate.items():
         safe_node_id = _normalize_node_id(node_id)
         if not isinstance(node, dict):
             raise WorkflowValidationError(f"workflow node {safe_node_id} 格式不正確")
-        safe_node = _sanitize_value(node, field_name=safe_node_id, field_path=f"workflow.{safe_node_id}")
+        safe_node = _sanitize_value(node, field_name=safe_node_id, field_path=f"workflow.{safe_node_id}", depth=1)
         safe_class = str(safe_node.get("class_type") or "").strip()
         if not safe_class:
             raise WorkflowValidationError(f"workflow node {safe_node_id} 缺少 class_type")
@@ -316,6 +325,8 @@ def sanitize_workflow_json(workflow_json):
         if not isinstance(safe_node.get("inputs"), dict):
             raise WorkflowValidationError(f"workflow node {safe_node_id} 缺少 inputs")
         sanitized[safe_node_id] = safe_node
+    if len(_canonical_json(sanitized).encode("utf-8")) > WORKFLOW_MAX_JSON_BYTES:
+        raise WorkflowValidationError("workflow JSON 過大")
     summary = extract_workflow_summary(sanitized)
     workflow_hash = hashlib.sha256(_canonical_json(sanitized).encode("utf-8")).hexdigest()
     return {
