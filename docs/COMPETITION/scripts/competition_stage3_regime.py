@@ -6,7 +6,7 @@ five regime windows defined in competition_config.json (BTC bull / bear
 / range / high-vol / low-vol). Computes per-regime return%, max
 drawdown, trade count, and writes:
 
-  public/data/competition/regime_matrix.csv  long-format rows
+  docs/COMPETITION/data/regime_matrix.csv  long-format rows
 
 This stage does NOT re-run backtests — it just re-aggregates Stage 2
 equity curves and trade logs against the regime calendar windows.
@@ -19,10 +19,10 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-OUT_DIR = REPO_ROOT / "public" / "data" / "competition"
+REPO_ROOT = Path(__file__).resolve().parents[3]
+OUT_DIR = REPO_ROOT / "docs" / "COMPETITION" / "data"
 EQUITY_DIR = OUT_DIR / "equity"
-CONFIG = json.loads((REPO_ROOT / "security" / "competition_config.json").read_text())
+CONFIG = json.loads((REPO_ROOT / "docs" / "COMPETITION" / "scripts" / "competition_config.json").read_text())
 TEMPLATES = (
     CONFIG["competition_templates"]["original_12"]
     + CONFIG["competition_templates"]["codex_5"]

@@ -7,7 +7,7 @@ extended metrics (CAGR / Sharpe / Sortino / Profit Factor / Win Rate /
 Avg Win/Loss / Exposure / Fee+Slippage adjustments) from the trade list
 and equity curve produced by ``backtest_trading_bot``.
 
-Output layout (under public/data/competition/):
+Output layout (under docs/COMPETITION/data/):
   raw_results.csv       1 row per (template × asset)
   raw_trades.csv        1 row per individual trade
   asset_matrix.csv      pivot of return_percent (templates × assets)
@@ -30,15 +30,15 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
 
-OUT_DIR = REPO_ROOT / "public" / "data" / "competition"
+OUT_DIR = REPO_ROOT / "docs" / "COMPETITION" / "data"
 EQUITY_DIR = OUT_DIR / "equity"
 EQUITY_DIR.mkdir(parents=True, exist_ok=True)
 DOCS_DIR = REPO_ROOT / "docs" / "COMPETITION"
 
-CONFIG = json.loads((REPO_ROOT / "security" / "competition_config.json").read_text())
+CONFIG = json.loads((REPO_ROOT / "docs" / "COMPETITION" / "scripts" / "competition_config.json").read_text())
 FEE_RATE_PERCENT = float(CONFIG["constants"]["fee_rate_percent"])
 SLIPPAGE_PERCENT = float(CONFIG["constants"]["slippage_percent_main"])
 INITIAL_CASH = int(CONFIG["constants"]["initial_cash_points"])

@@ -9,7 +9,7 @@ Five baselines, each on the 5 assets at 1h × 5y:
   simple_grid     : engine's `grid` strategy, ±5% × 10 levels around start
   simple_ma_cross : tiny workflow — buy on MA20 cross above MA50, sell on cross back
 
-Output: public/data/competition/baselines.csv
+Output: docs/COMPETITION/data/baselines.csv
 """
 from __future__ import annotations
 
@@ -19,14 +19,14 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
-sys.path.insert(0, str(REPO_ROOT / "security"))
+sys.path.insert(0, str(REPO_ROOT / "docs" / "COMPETITION" / "scripts"))
 
 from competition_stage2_matrix import build_runtime, load_candles
 
-OUT_DIR = REPO_ROOT / "public" / "data" / "competition"
-CONFIG = json.loads((REPO_ROOT / "security" / "competition_config.json").read_text())
+OUT_DIR = REPO_ROOT / "docs" / "COMPETITION" / "data"
+CONFIG = json.loads((REPO_ROOT / "docs" / "COMPETITION" / "scripts" / "competition_config.json").read_text())
 ASSETS = CONFIG["assets"]
 INITIAL_CASH = int(CONFIG["constants"]["initial_cash_points"])
 FEE_RATE_PERCENT = CONFIG["constants"]["fee_rate_percent"]

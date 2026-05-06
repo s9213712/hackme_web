@@ -22,9 +22,9 @@ import sys
 import time
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
-sys.path.insert(0, str(REPO_ROOT / "security"))
+sys.path.insert(0, str(REPO_ROOT / "docs" / "COMPETITION" / "scripts"))
 
 from competition_stage2_matrix import build_runtime, load_candles, ASSETS, INITIAL_CASH
 
@@ -74,7 +74,7 @@ def main() -> int:
                 "wall_seconds": round(elapsed, 2), "error": err,
             })
 
-    out_csv = REPO_ROOT / "public" / "data" / "competition" / "grid_skyfloor_comparison.csv"
+    out_csv = REPO_ROOT / "docs" / "COMPETITION" / "data" / "grid_skyfloor_comparison.csv"
     keys = ["config", "asset", "lower", "upper", "grids", "order_amount", "return_percent", "trade_count", "wall_seconds", "error"]
     with out_csv.open("w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=keys, extrasaction="ignore")

@@ -14,7 +14,7 @@ single failure mode:
   stale_price               5 identical candles in a row
   outlier_candle            1 candle with +20% wick (high only, close back)
 
-Output: public/data/competition/stress_test_matrix.csv
+Output: docs/COMPETITION/data/stress_test_matrix.csv
 
 Stress runs are intentionally short and isolated so each row tests a
 single failure mode, not cumulative regime drift.
@@ -29,14 +29,14 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
-sys.path.insert(0, str(REPO_ROOT / "security"))
+sys.path.insert(0, str(REPO_ROOT / "docs" / "COMPETITION" / "scripts"))
 
 from competition_stage2_matrix import build_runtime, load_template_workflow
 
-OUT_DIR = REPO_ROOT / "public" / "data" / "competition"
-CONFIG = json.loads((REPO_ROOT / "security" / "competition_config.json").read_text())
+OUT_DIR = REPO_ROOT / "docs" / "COMPETITION" / "data"
+CONFIG = json.loads((REPO_ROOT / "docs" / "COMPETITION" / "scripts" / "competition_config.json").read_text())
 TEMPLATES = (
     CONFIG["competition_templates"]["original_12"]
     + CONFIG["competition_templates"]["codex_5"]

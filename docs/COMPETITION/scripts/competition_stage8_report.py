@@ -25,12 +25,12 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-OUT_DIR = REPO_ROOT / "public" / "data" / "competition"
+REPO_ROOT = Path(__file__).resolve().parents[3]
+OUT_DIR = REPO_ROOT / "docs" / "COMPETITION" / "data"
 DOCS_DIR = REPO_ROOT / "docs" / "COMPETITION"
 DOCS_DIR.mkdir(parents=True, exist_ok=True)
 
-CONFIG = json.loads((REPO_ROOT / "security" / "competition_config.json").read_text())
+CONFIG = json.loads((REPO_ROOT / "docs" / "COMPETITION" / "scripts" / "competition_config.json").read_text())
 TEMPLATES = (
     CONFIG["competition_templates"]["original_12"]
     + CONFIG["competition_templates"]["codex_5"]
@@ -398,31 +398,31 @@ def main() -> int:
     method.append("")
     method.append("## Output Files")
     method.append("")
-    method.append("- `public/data/competition/data_quality.json` (Stage 1)")
-    method.append("- `public/data/competition/raw_results.csv` (Stage 2)")
-    method.append("- `public/data/competition/raw_trades.csv` (Stage 2)")
-    method.append("- `public/data/competition/asset_matrix.csv` (Stage 2)")
-    method.append("- `public/data/competition/equity/<template>__<asset>.csv` (Stage 2)")
-    method.append("- `public/data/competition/regime_matrix.csv` (Stage 3)")
-    method.append("- `public/data/competition/walk_forward_matrix.csv` (Stage 4)")
-    method.append("- `public/data/competition/stress_test_matrix.csv` (Stage 5)")
-    method.append("- `public/data/competition/sensitivity_matrix.csv` (Stage 6)")
-    method.append("- `public/data/competition/baselines.csv` (Stage 7)")
+    method.append("- `docs/COMPETITION/data/data_quality.json` (Stage 1)")
+    method.append("- `docs/COMPETITION/data/raw_results.csv` (Stage 2)")
+    method.append("- `docs/COMPETITION/data/raw_trades.csv` (Stage 2)")
+    method.append("- `docs/COMPETITION/data/asset_matrix.csv` (Stage 2)")
+    method.append("- `docs/COMPETITION/data/equity/<template>__<asset>.csv` (Stage 2)")
+    method.append("- `docs/COMPETITION/data/regime_matrix.csv` (Stage 3)")
+    method.append("- `docs/COMPETITION/data/walk_forward_matrix.csv` (Stage 4)")
+    method.append("- `docs/COMPETITION/data/stress_test_matrix.csv` (Stage 5)")
+    method.append("- `docs/COMPETITION/data/sensitivity_matrix.csv` (Stage 6)")
+    method.append("- `docs/COMPETITION/data/baselines.csv` (Stage 7)")
     method.append("- `docs/COMPETITION/DATA_QUALITY.md` (Stage 1, human readable)")
     method.append("- `docs/COMPETITION/report.md` (Stage 8, human readable)")
     method.append("- `docs/COMPETITION/METHODOLOGY.md` (this file)")
     method.append("")
     method.append("## Pipeline Scripts")
     method.append("")
-    method.append("- `security/competition_stage1_data.py` — fetch + quality check")
-    method.append("- `security/competition_stage2_matrix.py` — main matrix")
-    method.append("- `security/competition_backfill_equity_ts.py` — bug-fix backfill (BUG-1)")
-    method.append("- `security/competition_stage3_regime.py` — regime breakdown")
-    method.append("- `security/competition_stage4_walkforward.py` — walk-forward")
-    method.append("- `security/competition_stage5_stress.py` — stress test (synthetic)")
-    method.append("- `security/competition_stage6_sensitivity.py` — slippage sensitivity")
-    method.append("- `security/competition_stage7_baselines.py` — baselines")
-    method.append("- `security/competition_stage8_report.py` — report generator (this script)")
+    method.append("- `docs/COMPETITION/scripts/competition_stage1_data.py` — fetch + quality check")
+    method.append("- `docs/COMPETITION/scripts/competition_stage2_matrix.py` — main matrix")
+    method.append("- `docs/COMPETITION/scripts/competition_backfill_equity_ts.py` — bug-fix backfill (BUG-1)")
+    method.append("- `docs/COMPETITION/scripts/competition_stage3_regime.py` — regime breakdown")
+    method.append("- `docs/COMPETITION/scripts/competition_stage4_walkforward.py` — walk-forward")
+    method.append("- `docs/COMPETITION/scripts/competition_stage5_stress.py` — stress test (synthetic)")
+    method.append("- `docs/COMPETITION/scripts/competition_stage6_sensitivity.py` — slippage sensitivity")
+    method.append("- `docs/COMPETITION/scripts/competition_stage7_baselines.py` — baselines")
+    method.append("- `docs/COMPETITION/scripts/competition_stage8_report.py` — report generator (this script)")
     method.append("")
     method.append("## Known Issues / Caveats")
     method.append("")

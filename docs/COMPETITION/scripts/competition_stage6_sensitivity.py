@@ -6,7 +6,7 @@ existing turnover and return numbers in raw_results.csv. No backtest
 re-run needed because slippage is a linear post-process: total_cost =
 turnover × rate.
 
-Output: public/data/competition/sensitivity_matrix.csv
+Output: docs/COMPETITION/data/sensitivity_matrix.csv
 """
 from __future__ import annotations
 
@@ -15,9 +15,9 @@ import json
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-OUT_DIR = REPO_ROOT / "public" / "data" / "competition"
-CONFIG = json.loads((REPO_ROOT / "security" / "competition_config.json").read_text())
+REPO_ROOT = Path(__file__).resolve().parents[3]
+OUT_DIR = REPO_ROOT / "docs" / "COMPETITION" / "data"
+CONFIG = json.loads((REPO_ROOT / "docs" / "COMPETITION" / "scripts" / "competition_config.json").read_text())
 SLIPPAGES = CONFIG["constants"]["slippage_percent_sensitivity"]
 INITIAL_CASH = CONFIG["constants"]["initial_cash_points"]
 

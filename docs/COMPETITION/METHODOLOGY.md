@@ -63,31 +63,31 @@
 
 ## Output Files
 
-- `public/data/competition/data_quality.json` (Stage 1)
-- `public/data/competition/raw_results.csv` (Stage 2)
-- `public/data/competition/raw_trades.csv` (Stage 2)
-- `public/data/competition/asset_matrix.csv` (Stage 2)
-- `public/data/competition/equity/<template>__<asset>.csv` (Stage 2)
-- `public/data/competition/regime_matrix.csv` (Stage 3)
-- `public/data/competition/walk_forward_matrix.csv` (Stage 4)
-- `public/data/competition/stress_test_matrix.csv` (Stage 5)
-- `public/data/competition/sensitivity_matrix.csv` (Stage 6)
-- `public/data/competition/baselines.csv` (Stage 7)
+- `docs/COMPETITION/data/data_quality.json` (Stage 1)
+- `docs/COMPETITION/data/raw_results.csv` (Stage 2)
+- `docs/COMPETITION/data/raw_trades.csv` (Stage 2)
+- `docs/COMPETITION/data/asset_matrix.csv` (Stage 2)
+- `docs/COMPETITION/data/equity/<template>__<asset>.csv` (Stage 2)
+- `docs/COMPETITION/data/regime_matrix.csv` (Stage 3)
+- `docs/COMPETITION/data/walk_forward_matrix.csv` (Stage 4)
+- `docs/COMPETITION/data/stress_test_matrix.csv` (Stage 5)
+- `docs/COMPETITION/data/sensitivity_matrix.csv` (Stage 6)
+- `docs/COMPETITION/data/baselines.csv` (Stage 7)
 - `docs/COMPETITION/DATA_QUALITY.md` (Stage 1, human readable)
 - `docs/COMPETITION/report.md` (Stage 8, human readable)
 - `docs/COMPETITION/METHODOLOGY.md` (this file)
 
 ## Pipeline Scripts
 
-- `security/competition_stage1_data.py` — fetch + quality check
-- `security/competition_stage2_matrix.py` — main matrix
-- `security/competition_backfill_equity_ts.py` — bug-fix backfill (BUG-1)
-- `security/competition_stage3_regime.py` — regime breakdown
-- `security/competition_stage4_walkforward.py` — walk-forward
-- `security/competition_stage5_stress.py` — stress test (synthetic)
-- `security/competition_stage6_sensitivity.py` — slippage sensitivity
-- `security/competition_stage7_baselines.py` — baselines
-- `security/competition_stage8_report.py` — report generator (this script)
+- `docs/COMPETITION/scripts/competition_stage1_data.py` — fetch + quality check
+- `docs/COMPETITION/scripts/competition_stage2_matrix.py` — main matrix
+- `docs/COMPETITION/scripts/competition_backfill_equity_ts.py` — bug-fix backfill (BUG-1)
+- `docs/COMPETITION/scripts/competition_stage3_regime.py` — regime breakdown
+- `docs/COMPETITION/scripts/competition_stage4_walkforward.py` — walk-forward
+- `docs/COMPETITION/scripts/competition_stage5_stress.py` — stress test (synthetic)
+- `docs/COMPETITION/scripts/competition_stage6_sensitivity.py` — slippage sensitivity
+- `docs/COMPETITION/scripts/competition_stage7_baselines.py` — baselines
+- `docs/COMPETITION/scripts/competition_stage8_report.py` — report generator (this script)
 
 ## Known Issues / Caveats
 

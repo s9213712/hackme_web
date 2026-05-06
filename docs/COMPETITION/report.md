@@ -1,6 +1,6 @@
 # Workflow Template Competition — Final Report
 
-Generated: 2026-05-06T18:37:33
+Generated: 2026-05-06T19:08:08
 
 > All 22 competition templates were normalized to **1h timeframe** to avoid timeframe shopping. Fee = 0.3% per side, slippage = 0.1% per side. Initial cash = 100,000 POINTS. Backtests run on real Binance BTCUSDT/ETHUSDT/XRPUSDT/BNBUSDT/PAXGUSDT 1h candles (2021-05-07 → 2026-05-06).
 

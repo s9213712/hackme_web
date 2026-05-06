@@ -5,7 +5,7 @@ Splits each (template, asset) equity curve into three windows defined in
 competition_config.json (train 2020–2023 / validate 2024 / forward
 2025–2026), and computes per-window return + DD + trade count.
 
-Output: public/data/competition/walk_forward_matrix.csv
+Output: docs/COMPETITION/data/walk_forward_matrix.csv
 
 Note: workflow templates have no learnable parameters — "walk-forward"
 here checks regime stability, not literal training. The forward-window
@@ -28,8 +28,8 @@ from competition_stage3_regime import (
 )
 
 from pathlib import Path
-REPO_ROOT = Path(__file__).resolve().parents[1]
-CONFIG = json.loads((REPO_ROOT / "security" / "competition_config.json").read_text())
+REPO_ROOT = Path(__file__).resolve().parents[3]
+CONFIG = json.loads((REPO_ROOT / "docs" / "COMPETITION" / "scripts" / "competition_config.json").read_text())
 WINDOWS = CONFIG["walk_forward"]
 
 

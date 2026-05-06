@@ -18,10 +18,10 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-OUT_DIR = REPO_ROOT / "public" / "data" / "competition"
+REPO_ROOT = Path(__file__).resolve().parents[3]
+OUT_DIR = REPO_ROOT / "docs" / "COMPETITION" / "data"
 EQUITY_DIR = OUT_DIR / "equity"
-CONFIG = json.loads((REPO_ROOT / "security" / "competition_config.json").read_text())
+CONFIG = json.loads((REPO_ROOT / "docs" / "COMPETITION" / "scripts" / "competition_config.json").read_text())
 ASSETS = [a["display"] for a in CONFIG["assets"]]
 
 

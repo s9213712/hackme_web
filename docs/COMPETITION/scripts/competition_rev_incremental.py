@@ -15,9 +15,9 @@ import sys
 import time
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
-sys.path.insert(0, str(REPO_ROOT / "security"))
+sys.path.insert(0, str(REPO_ROOT / "docs" / "COMPETITION" / "scripts"))
 
 from datetime import datetime, timezone
 from competition_stage2_matrix import (
@@ -26,7 +26,7 @@ from competition_stage2_matrix import (
 )
 from competition_stage5_stress import SCENARIOS
 
-OUT_DIR = REPO_ROOT / "public" / "data" / "competition"
+OUT_DIR = REPO_ROOT / "docs" / "COMPETITION" / "data"
 EQUITY_DIR = OUT_DIR / "equity"
 TEMPLATE = "triple_trend_recovery_claude_rev"
 

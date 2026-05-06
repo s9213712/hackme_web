@@ -5,8 +5,8 @@ Downloads 1h candles for the 5 traded assets (BTC, ETH, XRP, BNB, PAXG)
 against USDT from Binance public klines, runs OHLC + continuity quality
 checks, and writes:
 
-- ``public/data/competition/candles_<asset>.json``  raw candles per asset
-- ``public/data/competition/data_quality.json``     machine-readable summary
+- ``docs/COMPETITION/data/candles_<asset>.json``  raw candles per asset
+- ``docs/COMPETITION/data/data_quality.json``     machine-readable summary
 - ``docs/COMPETITION/DATA_QUALITY.md``              human-readable report
 
 Stops with non-zero exit and a clear error if any asset fails the
@@ -22,8 +22,8 @@ from pathlib import Path
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-OUT_DIR = REPO_ROOT / "public" / "data" / "competition"
+REPO_ROOT = Path(__file__).resolve().parents[3]
+OUT_DIR = REPO_ROOT / "docs" / "COMPETITION" / "data"
 DOCS_DIR = REPO_ROOT / "docs" / "COMPETITION"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 DOCS_DIR.mkdir(parents=True, exist_ok=True)

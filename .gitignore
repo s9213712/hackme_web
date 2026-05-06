@@ -16,13 +16,18 @@ workflows/custom/*
 !workflows/custom/.gitkeep
 !public/data/
 !public/data/*.json
-!public/data/competition/
-!public/data/competition/*.json
 public/data/workflow_template_benchmarks_*.json
-public/data/competition/candles_*.json
-public/data/competition/equity/
-!security/competition_config.json
-!security/competition_*.py
+# Competition harness moved 2026-05-06 from security/ + public/data/competition
+# to docs/COMPETITION/ for single-place archival.
+!docs/COMPETITION/
+!docs/COMPETITION/scripts/
+!docs/COMPETITION/scripts/*.py
+!docs/COMPETITION/scripts/*.json
+!docs/COMPETITION/data/
+!docs/COMPETITION/data/*.csv
+!docs/COMPETITION/data/*.json
+docs/COMPETITION/data/candles_*.json
+docs/COMPETITION/data/equity/
 external/
 secure_backups/
 !requirements.txt

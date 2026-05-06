@@ -17,9 +17,9 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
-sys.path.insert(0, str(REPO_ROOT / "security"))
+sys.path.insert(0, str(REPO_ROOT / "docs" / "COMPETITION" / "scripts"))
 
 from competition_stage2_matrix import (
     build_runtime, load_candles, load_template_workflow, run_one,
@@ -28,10 +28,10 @@ from competition_stage2_matrix import (
 from competition_stage3_regime import slice_metrics, parse_iso_to_ts, regime_window_ts
 from competition_stage5_stress import SCENARIOS
 
-CONFIG = json.loads((REPO_ROOT / "security" / "competition_config.json").read_text())
+CONFIG = json.loads((REPO_ROOT / "docs" / "COMPETITION" / "scripts" / "competition_config.json").read_text())
 TEMPLATE = "triple_trend_recovery_claude_rev"
 TEMPLATE_LABEL = "趨勢三重接力（Claude rev）"
-OUT_DIR = REPO_ROOT / "public" / "data" / "competition"
+OUT_DIR = REPO_ROOT / "docs" / "COMPETITION" / "data"
 DOCS_DIR = REPO_ROOT / "docs" / "COMPETITION"
 
 
