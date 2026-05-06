@@ -1,0 +1,1699 @@
+{
+  "generated_at": "2026-05-06T21:13:02",
+  "candidate_count": 36,
+  "buy_and_hold_avg": 33.160000000000004,
+  "results": [
+    {
+      "candidate": {
+        "mid_id": "size80_tp20_40_60_sell25",
+        "initial_size_pct": 80,
+        "tp1": 20,
+        "tp2": 40,
+        "tp3": 60,
+        "tp_sell_pct": 25,
+        "pyramid_enabled": false
+      },
+      "per_asset": [
+        {
+          "asset": "BTC",
+          "return_percent": 53.564,
+          "max_drawdown_percent": 32.011,
+          "trade_count": 4
+        },
+        {
+          "asset": "ETH",
+          "return_percent": -19.362,
+          "max_drawdown_percent": 51.1348,
+          "trade_count": 2
+        },
+        {
+          "asset": "XRP",
+          "return_percent": 17.125,
+          "max_drawdown_percent": 67.4531,
+          "trade_count": 4
+        },
+        {
+          "asset": "BNB",
+          "return_percent": 43.539,
+          "max_drawdown_percent": 38.023,
+          "trade_count": 4
+        },
+        {
+          "asset": "PAXG",
+          "return_percent": 69.013,
+          "max_drawdown_percent": 18.0552,
+          "trade_count": 4
+        }
+      ],
+      "avg_ret": 32.775800000000004,
+      "max_dd": 67.4531,
+      "avg_trades": 3.6,
+      "score": 12.539870000000004
+    },
+    {
+      "candidate": {
+        "mid_id": "size80_tp20_40_60_sell25_pyr",
+        "initial_size_pct": 80,
+        "tp1": 20,
+        "tp2": 40,
+        "tp3": 60,
+        "tp_sell_pct": 25,
+        "pyramid_enabled": true
+      },
+      "per_asset": [
+        {
+          "asset": "BTC",
+          "return_percent": 57.344,
+          "max_drawdown_percent": 33.6497,
+          "trade_count": 5
+        },
+        {
+          "asset": "ETH",
+          "return_percent": -18.602,
+          "max_drawdown_percent": 55.1584,
+          "trade_count": 3
+        },
+        {
+          "asset": "XRP",
+          "return_percent": 20.691,
+          "max_drawdown_percent": 70.6863,
+          "trade_count": 5
+        },
+        {
+          "asset": "BNB",
+          "return_percent": 46.56,
+          "max_drawdown_percent": 40.0375,
+          "trade_count": 5
+        },
+        {
+          "asset": "PAXG",
+          "return_percent": 74.613,
+          "max_drawdown_percent": 19.312,
+          "trade_count": 5
+        }
+      ],
+      "avg_ret": 36.1212,
+      "max_dd": 70.6863,
+      "avg_trades": 4.6,
+      "score": 14.915310000000002
+    },
+    {
+      "candidate": {
+        "mid_id": "size80_tp20_40_60_sell30",
+        "initial_size_pct": 80,
+        "tp1": 20,
+        "tp2": 40,
+        "tp3": 60,
+        "tp_sell_pct": 30,
+        "pyramid_enabled": false
+      },
+      "per_asset": [
+        {
+          "asset": "BTC",
+          "return_percent": 48.61,
+          "max_drawdown_percent": 26.5581,
+          "trade_count": 4
+        },
+        {
+          "asset": "ETH",
+          "return_percent": -17.009,
+          "max_drawdown_percent": 47.7931,
+          "trade_count": 2
+        },
+        {
+          "asset": "XRP",
+          "return_percent": 19.269,
+          "max_drawdown_percent": 67.4531,
+          "trade_count": 4
+        },
+        {
+          "asset": "BNB",
+          "return_percent": 40.677,
+          "max_drawdown_percent": 38.023,
+          "trade_count": 4
+        },
+        {
+          "asset": "PAXG",
+          "return_percent": 61.622,
+          "max_drawdown_percent": 18.0552,
+          "trade_count": 4
+        }
+      ],
+      "avg_ret": 30.633799999999997,
+      "max_dd": 67.4531,
+      "avg_trades": 3.6,
+      "score": 10.397869999999998
+    },
+    {
+      "candidate": {
+        "mid_id": "size80_tp20_40_60_sell30_pyr",
+        "initial_size_pct": 80,
+        "tp1": 20,
+        "tp2": 40,
+        "tp3": 60,
+        "tp_sell_pct": 30,
+        "pyramid_enabled": true
+      },
+      "per_asset": [
+        {
+          "asset": "BTC",
+          "return_percent": 52.035,
+          "max_drawdown_percent": 27.9452,
+          "trade_count": 5
+        },
+        {
+          "asset": "ETH",
+          "return_percent": -16.174,
+          "max_drawdown_percent": 51.6559,
+          "trade_count": 3
+        },
+        {
+          "asset": "XRP",
+          "return_percent": 22.44,
+          "max_drawdown_percent": 70.6863,
+          "trade_count": 5
+        },
+        {
+          "asset": "BNB",
+          "return_percent": 43.491,
+          "max_drawdown_percent": 40.0375,
+          "trade_count": 5
+        },
+        {
+          "asset": "PAXG",
+          "return_percent": 66.607,
+          "max_drawdown_percent": 19.312,
+          "trade_count": 5
+        }
+      ],
+      "avg_ret": 33.6798,
+      "max_dd": 70.6863,
+      "avg_trades": 4.6,
+      "score": 12.47391
+    },
+    {
+      "candidate": {
+        "mid_id": "size80_tp20_40_60_sell50",
+        "initial_size_pct": 80,
+        "tp1": 20,
+        "tp2": 40,
+        "tp3": 60,
+        "tp_sell_pct": 50,
+        "pyramid_enabled": false
+      },
+      "per_asset": [
+        {
+          "asset": "BTC",
+          "return_percent": 33.334,
+          "max_drawdown_percent": 22.6935,
+          "trade_count": 4
+        },
+        {
+          "asset": "ETH",
+          "return_percent": -7.598,
+          "max_drawdown_percent": 44.7582,
+          "trade_count": 2
+        },
+        {
+          "asset": "XRP",
+          "return_percent": 23.47,
+          "max_drawdown_percent": 67.4531,
+          "trade_count": 4
+        },
+        {
+          "asset": "BNB",
+          "return_percent": 31.235,
+          "max_drawdown_percent": 38.023,
+          "trade_count": 4
+        },
+        {
+          "asset": "PAXG",
+          "return_percent": 39.371,
+          "max_drawdown_percent": 18.0552,
+          "trade_count": 4
+        }
+      ],
+      "avg_ret": 23.962400000000002,
+      "max_dd": 67.4531,
+      "avg_trades": 3.6,
+      "score": 3.7264700000000026
+    },
+    {
+      "candidate": {
+        "mid_id": "size80_tp20_40_60_sell50_pyr",
+        "initial_size_pct": 80,
+        "tp1": 20,
+        "tp2": 40,
+        "tp3": 60,
+        "tp_sell_pct": 50,
+        "pyramid_enabled": true
+      },
+      "per_asset": [
+        {
+          "asset": "BTC",
+          "return_percent": 35.646,
+          "max_drawdown_percent": 22.6935,
+          "trade_count": 5
+        },
+        {
+          "asset": "ETH",
+          "return_percent": -6.459,
+          "max_drawdown_percent": 46.0942,
+          "trade_count": 3
+        },
+        {
+          "asset": "XRP",
+          "return_percent": 25.319,
+          "max_drawdown_percent": 70.6863,
+          "trade_count": 5
+        },
+        {
+          "asset": "BNB",
+          "return_percent": 33.358,
+          "max_drawdown_percent": 40.0375,
+          "trade_count": 5
+        },
+        {
+          "asset": "PAXG",
+          "return_percent": 42.492,
+          "max_drawdown_percent": 19.312,
+          "trade_count": 5
+        }
+      ],
+      "avg_ret": 26.071199999999997,
+      "max_dd": 70.6863,
+      "avg_trades": 4.6,
+      "score": 4.865309999999997
+    },
+    {
+      "candidate": {
+        "mid_id": "size80_tp30_60_90_sell25",
+        "initial_size_pct": 80,
+        "tp1": 30,
+        "tp2": 60,
+        "tp3": 90,
+        "tp_sell_pct": 25,
+        "pyramid_enabled": false
+      },
+      "per_asset": [
+        {
+          "asset": "BTC",
+          "return_percent": 62.071,
+          "max_drawdown_percent": 40.7434,
+          "trade_count": 4
+        },
+        {
+          "asset": "ETH",
+          "return_percent": -31.125,
+          "max_drawdown_percent": 67.7024,
+          "trade_count": 1
+        },
+        {
+          "asset": "XRP",
+          "return_percent": 25.016,
+          "max_drawdown_percent": 67.4531,
+          "trade_count": 4
+        },
+        {
+          "asset": "BNB",
+          "return_percent": 51.364,
+          "max_drawdown_percent": 38.7736,
+          "trade_count": 4
+        },
+        {
+          "asset": "PAXG",
+          "return_percent": 79.96,
+          "max_drawdown_percent": 18.0552,
+          "trade_count": 4
+        }
+      ],
+      "avg_ret": 37.4572,
+      "max_dd": 67.7024,
+      "avg_trades": 3.4,
+      "score": 17.14648
+    },
+    {
+      "candidate": {
+        "mid_id": "size80_tp30_60_90_sell25_pyr",
+        "initial_size_pct": 80,
+        "tp1": 30,
+        "tp2": 60,
+        "tp3": 90,
+        "tp_sell_pct": 25,
+        "pyramid_enabled": true
+      },
+      "per_asset": [
+        {
+          "asset": "BTC",
+          "return_percent": 66.446,
+          "max_drawdown_percent": 42.7369,
+          "trade_count": 5
+        },
+        {
+          "asset": "ETH",
+          "return_percent": -16.654,
+          "max_drawdown_percent": 54.3061,
+          "trade_count": 3
+        },
+        {
+          "asset": "XRP",
+          "return_percent": 29.668,
+          "max_drawdown_percent": 70.6863,
+          "trade_count": 5
+        },
+        {
+          "asset": "BNB",
+          "return_percent": 54.956,
+          "max_drawdown_percent": 40.6223,
+          "trade_count": 5
+        },
+        {
+          "asset": "PAXG",
+          "return_percent": 86.46,
+          "max_drawdown_percent": 19.312,
+          "trade_count": 5
+        }
+      ],
+      "avg_ret": 44.1752,
+      "max_dd": 70.6863,
+      "avg_trades": 4.6,
+      "score": 22.969309999999997
+    },
+    {
+      "candidate": {
+        "mid_id": "size80_tp30_60_90_sell30",
+        "initial_size_pct": 80,
+        "tp1": 30,
+        "tp2": 60,
+        "tp3": 90,
+        "tp_sell_pct": 30,
+        "pyramid_enabled": false
+      },
+      "per_asset": [
+        {
+          "asset": "BTC",
+          "return_percent": 58.056,
+          "max_drawdown_percent": 35.9722,
+          "trade_count": 4
+        },
+        {
+          "asset": "ETH",
+          "return_percent": -31.125,
+          "max_drawdown_percent": 67.7024,
+          "trade_count": 1
+        },
+        {
+          "asset": "XRP",
+          "return_percent": 27.994,
+          "max_drawdown_percent": 67.4531,
+          "trade_count": 4
+        },
+        {
+          "asset": "BNB",
+          "return_percent": 49.323,
+          "max_drawdown_percent": 38.023,
+          "trade_count": 4
+        },
+        {
+          "asset": "PAXG",
+          "return_percent": 74.148,
+          "max_drawdown_percent": 18.0552,
+          "trade_count": 4
+        }
+      ],
+      "avg_ret": 35.679199999999994,
+      "max_dd": 67.7024,
+      "avg_trades": 3.4,
+      "score": 15.368479999999995
+    },
+    {
+      "candidate": {
+        "mid_id": "size80_tp30_60_90_sell30_pyr",
+        "initial_size_pct": 80,
+        "tp1": 30,
+        "tp2": 60,
+        "tp3": 90,
+        "tp_sell_pct": 30,
+        "pyramid_enabled": true
+      },
+      "per_asset": [
+        {
+          "asset": "BTC",
+          "return_percent": 62.139,
+          "max_drawdown_percent": 37.757,
+          "trade_count": 5
+        },
+        {
+          "asset": "ETH",
+          "return_percent": -13.837,
+          "max_drawdown_percent": 50.6982,
+          "trade_count": 3
+        },
+        {
+          "asset": "XRP",
+          "return_percent": 32.453,
+          "max_drawdown_percent": 70.6863,
+          "trade_count": 5
+        },
+        {
+          "asset": "BNB",
+          "return_percent": 52.767,
+          "max_drawdown_percent": 40.0375,
+          "trade_count": 5
+        },
+        {
+          "asset": "PAXG",
+          "return_percent": 80.173,
+          "max_drawdown_percent": 19.312,
+          "trade_count": 5
+        }
+      ],
+      "avg_ret": 42.739000000000004,
+      "max_dd": 70.6863,
+      "avg_trades": 4.6,
+      "score": 21.533110000000004
+    },
+    {
+      "candidate": {
+        "mid_id": "size80_tp30_60_90_sell50",
+        "initial_size_pct": 80,
+        "tp1": 30,
+        "tp2": 60,
+        "tp3": 90,
+        "tp_sell_pct": 50,
+        "pyramid_enabled": false
+      },
+      "per_asset": [
+        {
+          "asset": "BTC",
+          "return_percent": 44.574,
+          "max_drawdown_percent": 22.6935,
+          "trade_count": 4
+        },
+        {
+          "asset": "ETH",
+          "return_percent": -31.125,
+          "max_drawdown_percent": 67.7024,
+          "trade_count": 1
+        },
+        {
+          "asset": "XRP",
+          "return_percent": 33.633,
+          "max_drawdown_percent": 67.4531,
+          "trade_count": 4
+        },
+        {
+          "asset": "BNB",
+          "return_percent": 41.267,
+          "max_drawdown_percent": 38.023,
+          "trade_count": 4
+        },
+        {
+          "asset": "PAXG",
+          "return_percent": 56.777,
+          "max_drawdown_percent": 18.0552,
+          "trade_count": 4
+        }
+      ],
+      "avg_ret": 29.0252,
+      "max_dd": 67.7024,
+      "avg_trades": 3.4,
+      "score": 8.714480000000002
+    },
+    {
+      "candidate": {
+        "mid_id": "size80_tp30_60_90_sell50_pyr",
+        "initial_size_pct": 80,
+        "tp1": 30,
+        "tp2": 60,
+        "tp3": 90,
+        "tp_sell_pct": 50,
+        "pyramid_enabled": true
+      },
+      "per_asset": [
+        {
+          "asset": "BTC",
+          "return_percent": 47.672,
+          "max_drawdown_percent": 22.6935,
+          "trade_count": 5
+        },
+        {
+          "asset": "ETH",
+          "return_percent": -2.563,
+          "max_drawdown_percent": 46.0942,
+          "trade_count": 3
+        },
+        {
+          "asset": "XRP",
+          "return_percent": 37.452,
+          "max_drawdown_percent": 70.6863,
+          "trade_count": 5
+        },
+        {
+          "asset": "BNB",
+          "return_percent": 44.122,
+          "max_drawdown_percent": 40.0375,
+          "trade_count": 5
+        },
+        {
+          "asset": "PAXG",
+          "return_percent": 61.416,
+          "max_drawdown_percent": 19.312,
+          "trade_count": 5
+        }
+      ],
+      "avg_ret": 37.6198,
+      "max_dd": 70.6863,
+      "avg_trades": 4.6,
+      "score": 16.413909999999998
+    },
+    {
+      "candidate": {
+        "mid_id": "size80_tp50_100_200_sell25",
+        "initial_size_pct": 80,
+        "tp1": 50,
+        "tp2": 100,
+        "tp3": 200,
+        "tp_sell_pct": 25,
+        "pyramid_enabled": false
+      },
+      "per_asset": [
+        {
+          "asset": "BTC",
+          "return_percent": 84.29,
+          "max_drawdown_percent": 52.2562,
+          "trade_count": 4
+        },
+        {
+          "asset": "ETH",
+          "return_percent": -31.125,
+          "max_drawdown_percent": 67.7024,
+          "trade_count": 1
+        },
+        {
+          "asset": "XRP",
+          "return_percent": 24.895,
+          "max_drawdown_percent": 67.4531,
+          "trade_count": 3
+        },
+        {
+          "asset": "BNB",
+          "return_percent": 73.531,
+          "max_drawdown_percent": 49.3933,
+          "trade_count": 4
+        },
+        {
+          "asset": "PAXG",
+          "return_percent": 92.711,
+          "max_drawdown_percent": 18.0552,
+          "trade_count": 3
+        }
+      ],
+      "avg_ret": 48.860400000000006,
+      "max_dd": 67.7024,
+      "avg_trades": 3.0,
+      "score": 28.549680000000006
+    },
+    {
+      "candidate": {
+        "mid_id": "size80_tp50_100_200_sell25_pyr",
+        "initial_size_pct": 80,
+        "tp1": 50,
+        "tp2": 100,
+        "tp3": 200,
+        "tp_sell_pct": 25,
+        "pyramid_enabled": true
+      },
+      "per_asset": [
+        {
+          "asset": "BTC",
+          "return_percent": 90.289,
+          "max_drawdown_percent": 54.7098,
+          "trade_count": 5
+        },
+        {
+          "asset": "ETH",
+          "return_percent": -30.745,
+          "max_drawdown_percent": 72.3205,
+          "trade_count": 2
+        },
+        {
+          "asset": "XRP",
+          "return_percent": 29.996,
+          "max_drawdown_percent": 70.6863,
+          "trade_count": 4
+        },
+        {
+          "asset": "BNB",
+          "return_percent": 79.148,
+          "max_drawdown_percent": 51.5516,
+          "trade_count": 5
+        },
+        {
+          "asset": "PAXG",
+          "return_percent": 100.242,
+          "max_drawdown_percent": 19.312,
+          "trade_count": 4
+        }
+      ],
+      "avg_ret": 53.786,
+      "max_dd": 72.3205,
+      "avg_trades": 4.0,
+      "score": 32.08985
+    },
+    {
+      "candidate": {
+        "mid_id": "size80_tp50_100_200_sell30",
+        "initial_size_pct": 80,
+        "tp1": 50,
+        "tp2": 100,
+        "tp3": 200,
+        "tp_sell_pct": 30,
+        "pyramid_enabled": false
+      },
+      "per_asset": [
+        {
+          "asset": "BTC",
+          "return_percent": 82.325,
+          "max_drawdown_percent": 49.0816,
+          "trade_count": 4
+        },
+        {
+          "asset": "ETH",
+          "return_percent": -31.125,
+          "max_drawdown_percent": 67.7024,
+          "trade_count": 1
+        },
+        {
+          "asset": "XRP",
+          "return_percent": 29.061,
+          "max_drawdown_percent": 67.4531,
+          "trade_count": 3
+        },
+        {
+          "asset": "BNB",
+          "return_percent": 73.537,
+          "max_drawdown_percent": 46.4875,
+          "trade_count": 4
+        },
+        {
+          "asset": "PAXG",
+          "return_percent": 87.927,
+          "max_drawdown_percent": 18.0552,
+          "trade_count": 3
+        }
+      ],
+      "avg_ret": 48.345000000000006,
+      "max_dd": 67.7024,
+      "avg_trades": 3.0,
+      "score": 28.034280000000006
+    },
+    {
+      "candidate": {
+        "mid_id": "size80_tp50_100_200_sell30_pyr",
+        "initial_size_pct": 80,
+        "tp1": 50,
+        "tp2": 100,
+        "tp3": 200,
+        "tp_sell_pct": 30,
+        "pyramid_enabled": true
+      },
+      "per_asset": [
+        {
+          "asset": "BTC",
+          "return_percent": 88.179,
+          "max_drawdown_percent": 51.403,
+          "trade_count": 5
+        },
+        {
+          "asset": "ETH",
+          "return_percent": -30.745,
+          "max_drawdown_percent": 72.3205,
+          "trade_count": 2
+        },
+        {
+          "asset": "XRP",
+          "return_percent": 33.995,
+          "max_drawdown_percent": 70.6863,
+          "trade_count": 4
+        },
+        {
+          "asset": "BNB",
+          "return_percent": 79.214,
+          "max_drawdown_percent": 48.5212,
+          "trade_count": 5
+        },
+        {
+          "asset": "PAXG",
+          "return_percent": 95.062,
+          "max_drawdown_percent": 19.312,
+          "trade_count": 4
+        }
+      ],
+      "avg_ret": 53.141,
+      "max_dd": 72.3205,
+      "avg_trades": 4.0,
+      "score": 31.44485
+    },
+    {
+      "candidate": {
+        "mid_id": "size80_tp50_100_200_sell50",
+        "initial_size_pct": 80,
+        "tp1": 50,
+        "tp2": 100,
+        "tp3": 200,
+        "tp_sell_pct": 50,
+        "pyramid_enabled": false
+      },
+      "per_asset": [
+        {
+          "asset": "BTC",
+          "return_percent": 71.246,
+          "max_drawdown_percent": 35.9734,
+          "trade_count": 4
+        },
+        {
+          "asset": "ETH",
+          "return_percent": -31.125,
+          "max_drawdown_percent": 67.7024,
+          "trade_count": 1
+        },
+        {
+          "asset": "XRP",
+          "return_percent": 41.59,
+          "max_drawdown_percent": 67.4531,
+          "trade_count": 3
+        },
+        {
+          "asset": "BNB",
+          "return_percent": 67.89,
+          "max_drawdown_percent": 38.023,
+          "trade_count": 4
+        },
+        {
+          "asset": "PAXG",
+          "return_percent": 70.788,
+          "max_drawdown_percent": 18.0552,
+          "trade_count": 3
+        }
+      ],
+      "avg_ret": 44.0778,
+      "max_dd": 67.7024,
+      "avg_trades": 3.0,
+      "score": 23.767080000000004
+    },
+    {
+      "candidate": {
+        "mid_id": "size80_tp50_100_200_sell50_pyr",
+        "initial_size_pct": 80,
+        "tp1": 50,
+        "tp2": 100,
+        "tp3": 200,
+        "tp_sell_pct": 50,
+        "pyramid_enabled": true
+      },
+      "per_asset": [
+        {
+          "asset": "BTC",
+          "return_percent": 76.29,
+          "max_drawdown_percent": 37.7205,
+          "trade_count": 5
+        },
+        {
+          "asset": "ETH",
+          "return_percent": -30.745,
+          "max_drawdown_percent": 72.3205,
+          "trade_count": 2
+        },
+        {
+          "asset": "XRP",
+          "return_percent": 45.839,
+          "max_drawdown_percent": 70.6863,
+          "trade_count": 4
+        },
+        {
+          "asset": "BNB",
+          "return_percent": 73.356,
+          "max_drawdown_percent": 40.0375,
+          "trade_count": 5
+        },
+        {
+          "asset": "PAXG",
+          "return_percent": 76.527,
+          "max_drawdown_percent": 19.312,
+          "trade_count": 4
+        }
+      ],
+      "avg_ret": 48.2534,
+      "max_dd": 72.3205,
+      "avg_trades": 4.0,
+      "score": 26.55725
+    },
+    {
+      "candidate": {
+        "mid_id": "size99_tp20_40_60_sell25",
+        "initial_size_pct": 99,
+        "tp1": 20,
+        "tp2": 40,
+        "tp3": 60,
+        "tp_sell_pct": 25,
+        "pyramid_enabled": false
+      },
+      "per_asset": [
+        {
+          "asset": "BTC",
+          "return_percent": 66.284,
+          "max_drawdown_percent": 37.001,
+          "trade_count": 4
+        },
+        {
+          "asset": "ETH",
+          "return_percent": -23.96,
+          "max_drawdown_percent": 61.0234,
+          "trade_count": 2
+        },
+        {
+          "asset": "XRP",
+          "return_percent": 21.192,
+          "max_drawdown_percent": 81.6592,
+          "trade_count": 4
+        },
+        {
+          "asset": "BNB",
+          "return_percent": 53.88,
+          "max_drawdown_percent": 45.7148,
+          "trade_count": 4
+        },
+        {
+          "asset": "PAXG",
+          "return_percent": 85.402,
+          "max_drawdown_percent": 21.9558,
+          "trade_count": 4
+        }
+      ],
+      "avg_ret": 40.5596,
+      "max_dd": 81.6592,
+      "avg_trades": 3.6,
+      "score": 16.061840000000004
+    },
+    {
+      "candidate": {
+        "mid_id": "size99_tp20_40_60_sell25_pyr",
+        "initial_size_pct": 99,
+        "tp1": 20,
+        "tp2": 40,
+        "tp3": 60,
+        "tp_sell_pct": 25,
+        "pyramid_enabled": true
+      },
+      "per_asset": [
+        {
+          "asset": "BTC",
+          "return_percent": 66.473,
+          "max_drawdown_percent": 37.0739,
+          "trade_count": 5
+        },
+        {
+          "asset": "ETH",
+          "return_percent": -23.864,
+          "max_drawdown_percent": 61.1744,
+          "trade_count": 3
+        },
+        {
+          "asset": "XRP",
+          "return_percent": 21.636,
+          "max_drawdown_percent": 81.8171,
+          "trade_count": 5
+        },
+        {
+          "asset": "BNB",
+          "return_percent": 54.031,
+          "max_drawdown_percent": 45.8119,
+          "trade_count": 5
+        },
+        {
+          "asset": "PAXG",
+          "return_percent": 85.695,
+          "max_drawdown_percent": 22.0167,
+          "trade_count": 5
+        }
+      ],
+      "avg_ret": 40.7942,
+      "max_dd": 81.8171,
+      "avg_trades": 4.6,
+      "score": 16.24907
+    },
+    {
+      "candidate": {
+        "mid_id": "size99_tp20_40_60_sell30",
+        "initial_size_pct": 99,
+        "tp1": 20,
+        "tp2": 40,
+        "tp3": 60,
+        "tp_sell_pct": 30,
+        "pyramid_enabled": false
+      },
+      "per_asset": [
+        {
+          "asset": "BTC",
+          "return_percent": 60.156,
+          "max_drawdown_percent": 30.7962,
+          "trade_count": 4
+        },
+        {
+          "asset": "ETH",
+          "return_percent": -21.049,
+          "max_drawdown_percent": 57.0515,
+          "trade_count": 2
+        },
+        {
+          "asset": "XRP",
+          "return_percent": 23.842,
+          "max_drawdown_percent": 81.6592,
+          "trade_count": 4
+        },
+        {
+          "asset": "BNB",
+          "return_percent": 50.339,
+          "max_drawdown_percent": 45.7148,
+          "trade_count": 4
+        },
+        {
+          "asset": "PAXG",
+          "return_percent": 76.258,
+          "max_drawdown_percent": 21.9558,
+          "trade_count": 4
+        }
+      ],
+      "avg_ret": 37.9092,
+      "max_dd": 81.6592,
+      "avg_trades": 3.6,
+      "score": 13.411439999999999
+    },
+    {
+      "candidate": {
+        "mid_id": "size99_tp20_40_60_sell30_pyr",
+        "initial_size_pct": 99,
+        "tp1": 20,
+        "tp2": 40,
+        "tp3": 60,
+        "tp_sell_pct": 30,
+        "pyramid_enabled": true
+      },
+      "per_asset": [
+        {
+          "asset": "BTC",
+          "return_percent": 60.328,
+          "max_drawdown_percent": 30.8583,
+          "trade_count": 5
+        },
+        {
+          "asset": "ETH",
+          "return_percent": -20.937,
+          "max_drawdown_percent": 57.1925,
+          "trade_count": 3
+        },
+        {
+          "asset": "XRP",
+          "return_percent": 24.303,
+          "max_drawdown_percent": 81.8171,
+          "trade_count": 5
+        },
+        {
+          "asset": "BNB",
+          "return_percent": 50.48,
+          "max_drawdown_percent": 45.8119,
+          "trade_count": 5
+        },
+        {
+          "asset": "PAXG",
+          "return_percent": 76.522,
+          "max_drawdown_percent": 22.0167,
+          "trade_count": 5
+        }
+      ],
+      "avg_ret": 38.1392,
+      "max_dd": 81.8171,
+      "avg_trades": 4.6,
+      "score": 13.594070000000006
+    },
+    {
+      "candidate": {
+        "mid_id": "size99_tp20_40_60_sell50",
+        "initial_size_pct": 99,
+        "tp1": 20,
+        "tp2": 40,
+        "tp3": 60,
+        "tp_sell_pct": 50,
+        "pyramid_enabled": false
+      },
+      "per_asset": [
+        {
+          "asset": "BTC",
+          "return_percent": 41.249,
+          "max_drawdown_percent": 27.8935,
+          "trade_count": 4
+        },
+        {
+          "asset": "ETH",
+          "return_percent": -9.403,
+          "max_drawdown_percent": 55.3592,
+          "trade_count": 2
+        },
+        {
+          "asset": "XRP",
+          "return_percent": 29.044,
+          "max_drawdown_percent": 81.6592,
+          "trade_count": 4
+        },
+        {
+          "asset": "BNB",
+          "return_percent": 38.653,
+          "max_drawdown_percent": 45.7148,
+          "trade_count": 4
+        },
+        {
+          "asset": "PAXG",
+          "return_percent": 48.72,
+          "max_drawdown_percent": 21.9558,
+          "trade_count": 4
+        }
+      ],
+      "avg_ret": 29.6526,
+      "max_dd": 81.6592,
+      "avg_trades": 3.6,
+      "score": 5.15484
+    },
+    {
+      "candidate": {
+        "mid_id": "size99_tp20_40_60_sell50_pyr",
+        "initial_size_pct": 99,
+        "tp1": 20,
+        "tp2": 40,
+        "tp3": 60,
+        "tp_sell_pct": 50,
+        "pyramid_enabled": true
+      },
+      "per_asset": [
+        {
+          "asset": "BTC",
+          "return_percent": 41.363,
+          "max_drawdown_percent": 27.8935,
+          "trade_count": 5
+        },
+        {
+          "asset": "ETH",
+          "return_percent": -9.23,
+          "max_drawdown_percent": 55.3782,
+          "trade_count": 3
+        },
+        {
+          "asset": "XRP",
+          "return_percent": 29.537,
+          "max_drawdown_percent": 81.8171,
+          "trade_count": 5
+        },
+        {
+          "asset": "BNB",
+          "return_percent": 38.759,
+          "max_drawdown_percent": 45.8119,
+          "trade_count": 5
+        },
+        {
+          "asset": "PAXG",
+          "return_percent": 48.893,
+          "max_drawdown_percent": 22.0167,
+          "trade_count": 5
+        }
+      ],
+      "avg_ret": 29.8644,
+      "max_dd": 81.8171,
+      "avg_trades": 4.6,
+      "score": 5.319270000000003
+    },
+    {
+      "candidate": {
+        "mid_id": "size99_tp30_60_90_sell25",
+        "initial_size_pct": 99,
+        "tp1": 30,
+        "tp2": 60,
+        "tp3": 90,
+        "tp_sell_pct": 25,
+        "pyramid_enabled": false
+      },
+      "per_asset": [
+        {
+          "asset": "BTC",
+          "return_percent": 76.81,
+          "max_drawdown_percent": 46.7638,
+          "trade_count": 4
+        },
+        {
+          "asset": "ETH",
+          "return_percent": -38.518,
+          "max_drawdown_percent": 80.6855,
+          "trade_count": 1
+        },
+        {
+          "asset": "XRP",
+          "return_percent": 30.958,
+          "max_drawdown_percent": 81.6592,
+          "trade_count": 4
+        },
+        {
+          "asset": "BNB",
+          "return_percent": 63.561,
+          "max_drawdown_percent": 45.7148,
+          "trade_count": 4
+        },
+        {
+          "asset": "PAXG",
+          "return_percent": 98.948,
+          "max_drawdown_percent": 21.9558,
+          "trade_count": 4
+        }
+      ],
+      "avg_ret": 46.351800000000004,
+      "max_dd": 81.6592,
+      "avg_trades": 3.4,
+      "score": 21.854040000000005
+    },
+    {
+      "candidate": {
+        "mid_id": "size99_tp30_60_90_sell25_pyr",
+        "initial_size_pct": 99,
+        "tp1": 30,
+        "tp2": 60,
+        "tp3": 90,
+        "tp_sell_pct": 25,
+        "pyramid_enabled": true
+      },
+      "per_asset": [
+        {
+          "asset": "BTC",
+          "return_percent": 77.03,
+          "max_drawdown_percent": 46.8512,
+          "trade_count": 5
+        },
+        {
+          "asset": "ETH",
+          "return_percent": -38.498,
+          "max_drawdown_percent": 80.8839,
+          "trade_count": 2
+        },
+        {
+          "asset": "XRP",
+          "return_percent": 31.462,
+          "max_drawdown_percent": 81.8171,
+          "trade_count": 5
+        },
+        {
+          "asset": "BNB",
+          "return_percent": 63.741,
+          "max_drawdown_percent": 45.8119,
+          "trade_count": 5
+        },
+        {
+          "asset": "PAXG",
+          "return_percent": 99.282,
+          "max_drawdown_percent": 22.0167,
+          "trade_count": 5
+        }
+      ],
+      "avg_ret": 46.6034,
+      "max_dd": 81.8171,
+      "avg_trades": 4.4,
+      "score": 22.058270000000004
+    },
+    {
+      "candidate": {
+        "mid_id": "size99_tp30_60_90_sell30",
+        "initial_size_pct": 99,
+        "tp1": 30,
+        "tp2": 60,
+        "tp3": 90,
+        "tp_sell_pct": 30,
+        "pyramid_enabled": false
+      },
+      "per_asset": [
+        {
+          "asset": "BTC",
+          "return_percent": 71.844,
+          "max_drawdown_percent": 41.3702,
+          "trade_count": 4
+        },
+        {
+          "asset": "ETH",
+          "return_percent": -38.518,
+          "max_drawdown_percent": 80.6855,
+          "trade_count": 1
+        },
+        {
+          "asset": "XRP",
+          "return_percent": 34.642,
+          "max_drawdown_percent": 81.6592,
+          "trade_count": 4
+        },
+        {
+          "asset": "BNB",
+          "return_percent": 61.036,
+          "max_drawdown_percent": 45.7148,
+          "trade_count": 4
+        },
+        {
+          "asset": "PAXG",
+          "return_percent": 91.759,
+          "max_drawdown_percent": 21.9558,
+          "trade_count": 4
+        }
+      ],
+      "avg_ret": 44.15259999999999,
+      "max_dd": 81.6592,
+      "avg_trades": 3.4,
+      "score": 19.654839999999993
+    },
+    {
+      "candidate": {
+        "mid_id": "size99_tp30_60_90_sell30_pyr",
+        "initial_size_pct": 99,
+        "tp1": 30,
+        "tp2": 60,
+        "tp3": 90,
+        "tp_sell_pct": 30,
+        "pyramid_enabled": true
+      },
+      "per_asset": [
+        {
+          "asset": "BTC",
+          "return_percent": 72.048,
+          "max_drawdown_percent": 41.4492,
+          "trade_count": 5
+        },
+        {
+          "asset": "ETH",
+          "return_percent": -38.498,
+          "max_drawdown_percent": 80.8839,
+          "trade_count": 2
+        },
+        {
+          "asset": "XRP",
+          "return_percent": 35.168,
+          "max_drawdown_percent": 81.8171,
+          "trade_count": 5
+        },
+        {
+          "asset": "BNB",
+          "return_percent": 61.209,
+          "max_drawdown_percent": 45.8119,
+          "trade_count": 5
+        },
+        {
+          "asset": "PAXG",
+          "return_percent": 92.071,
+          "max_drawdown_percent": 22.0167,
+          "trade_count": 5
+        }
+      ],
+      "avg_ret": 44.39960000000001,
+      "max_dd": 81.8171,
+      "avg_trades": 4.4,
+      "score": 19.85447000000001
+    },
+    {
+      "candidate": {
+        "mid_id": "size99_tp30_60_90_sell50",
+        "initial_size_pct": 99,
+        "tp1": 30,
+        "tp2": 60,
+        "tp3": 90,
+        "tp_sell_pct": 50,
+        "pyramid_enabled": false
+      },
+      "per_asset": [
+        {
+          "asset": "BTC",
+          "return_percent": 55.159,
+          "max_drawdown_percent": 27.8935,
+          "trade_count": 4
+        },
+        {
+          "asset": "ETH",
+          "return_percent": -38.518,
+          "max_drawdown_percent": 80.6855,
+          "trade_count": 1
+        },
+        {
+          "asset": "XRP",
+          "return_percent": 41.619,
+          "max_drawdown_percent": 81.6592,
+          "trade_count": 4
+        },
+        {
+          "asset": "BNB",
+          "return_percent": 51.065,
+          "max_drawdown_percent": 45.7148,
+          "trade_count": 4
+        },
+        {
+          "asset": "PAXG",
+          "return_percent": 70.263,
+          "max_drawdown_percent": 21.9558,
+          "trade_count": 4
+        }
+      ],
+      "avg_ret": 35.9176,
+      "max_dd": 81.6592,
+      "avg_trades": 3.4,
+      "score": 11.41984
+    },
+    {
+      "candidate": {
+        "mid_id": "size99_tp30_60_90_sell50_pyr",
+        "initial_size_pct": 99,
+        "tp1": 30,
+        "tp2": 60,
+        "tp3": 90,
+        "tp_sell_pct": 50,
+        "pyramid_enabled": true
+      },
+      "per_asset": [
+        {
+          "asset": "BTC",
+          "return_percent": 55.314,
+          "max_drawdown_percent": 27.8935,
+          "trade_count": 5
+        },
+        {
+          "asset": "ETH",
+          "return_percent": -38.498,
+          "max_drawdown_percent": 80.8839,
+          "trade_count": 2
+        },
+        {
+          "asset": "XRP",
+          "return_percent": 42.19,
+          "max_drawdown_percent": 81.8171,
+          "trade_count": 5
+        },
+        {
+          "asset": "BNB",
+          "return_percent": 51.208,
+          "max_drawdown_percent": 45.8119,
+          "trade_count": 5
+        },
+        {
+          "asset": "PAXG",
+          "return_percent": 70.503,
+          "max_drawdown_percent": 22.0167,
+          "trade_count": 5
+        }
+      ],
+      "avg_ret": 36.1434,
+      "max_dd": 81.8171,
+      "avg_trades": 4.4,
+      "score": 11.598270000000003
+    },
+    {
+      "candidate": {
+        "mid_id": "size99_tp50_100_200_sell25",
+        "initial_size_pct": 99,
+        "tp1": 50,
+        "tp2": 100,
+        "tp3": 200,
+        "tp_sell_pct": 25,
+        "pyramid_enabled": false
+      },
+      "per_asset": [
+        {
+          "asset": "BTC",
+          "return_percent": 104.309,
+          "max_drawdown_percent": 59.6407,
+          "trade_count": 4
+        },
+        {
+          "asset": "ETH",
+          "return_percent": -38.518,
+          "max_drawdown_percent": 80.6855,
+          "trade_count": 1
+        },
+        {
+          "asset": "XRP",
+          "return_percent": 30.807,
+          "max_drawdown_percent": 81.6592,
+          "trade_count": 3
+        },
+        {
+          "asset": "BNB",
+          "return_percent": 90.994,
+          "max_drawdown_percent": 56.1307,
+          "trade_count": 4
+        },
+        {
+          "asset": "PAXG",
+          "return_percent": 114.728,
+          "max_drawdown_percent": 21.9558,
+          "trade_count": 3
+        }
+      ],
+      "avg_ret": 60.464,
+      "max_dd": 81.6592,
+      "avg_trades": 3.0,
+      "score": 35.96624
+    },
+    {
+      "candidate": {
+        "mid_id": "size99_tp50_100_200_sell25_pyr",
+        "initial_size_pct": 99,
+        "tp1": 50,
+        "tp2": 100,
+        "tp3": 200,
+        "tp_sell_pct": 25,
+        "pyramid_enabled": true
+      },
+      "per_asset": [
+        {
+          "asset": "BTC",
+          "return_percent": 104.609,
+          "max_drawdown_percent": 59.7482,
+          "trade_count": 5
+        },
+        {
+          "asset": "ETH",
+          "return_percent": -38.498,
+          "max_drawdown_percent": 80.8839,
+          "trade_count": 2
+        },
+        {
+          "asset": "XRP",
+          "return_percent": 31.31,
+          "max_drawdown_percent": 81.8171,
+          "trade_count": 4
+        },
+        {
+          "asset": "BNB",
+          "return_percent": 91.255,
+          "max_drawdown_percent": 56.2283,
+          "trade_count": 5
+        },
+        {
+          "asset": "PAXG",
+          "return_percent": 115.071,
+          "max_drawdown_percent": 22.0167,
+          "trade_count": 4
+        }
+      ],
+      "avg_ret": 60.749399999999994,
+      "max_dd": 81.8171,
+      "avg_trades": 4.0,
+      "score": 36.204269999999994
+    },
+    {
+      "candidate": {
+        "mid_id": "size99_tp50_100_200_sell30",
+        "initial_size_pct": 99,
+        "tp1": 50,
+        "tp2": 100,
+        "tp3": 200,
+        "tp_sell_pct": 30,
+        "pyramid_enabled": false
+      },
+      "per_asset": [
+        {
+          "asset": "BTC",
+          "return_percent": 101.875,
+          "max_drawdown_percent": 56.0693,
+          "trade_count": 4
+        },
+        {
+          "asset": "ETH",
+          "return_percent": -38.518,
+          "max_drawdown_percent": 80.6855,
+          "trade_count": 1
+        },
+        {
+          "asset": "XRP",
+          "return_percent": 35.962,
+          "max_drawdown_percent": 81.6592,
+          "trade_count": 3
+        },
+        {
+          "asset": "BNB",
+          "return_percent": 90.999,
+          "max_drawdown_percent": 52.8903,
+          "trade_count": 4
+        },
+        {
+          "asset": "PAXG",
+          "return_percent": 108.811,
+          "max_drawdown_percent": 21.9558,
+          "trade_count": 3
+        }
+      ],
+      "avg_ret": 59.8258,
+      "max_dd": 81.6592,
+      "avg_trades": 3.0,
+      "score": 35.32804
+    },
+    {
+      "candidate": {
+        "mid_id": "size99_tp50_100_200_sell30_pyr",
+        "initial_size_pct": 99,
+        "tp1": 50,
+        "tp2": 100,
+        "tp3": 200,
+        "tp_sell_pct": 30,
+        "pyramid_enabled": true
+      },
+      "per_asset": [
+        {
+          "asset": "BTC",
+          "return_percent": 102.169,
+          "max_drawdown_percent": 56.1707,
+          "trade_count": 5
+        },
+        {
+          "asset": "ETH",
+          "return_percent": -38.498,
+          "max_drawdown_percent": 80.8839,
+          "trade_count": 2
+        },
+        {
+          "asset": "XRP",
+          "return_percent": 36.497,
+          "max_drawdown_percent": 81.8171,
+          "trade_count": 4
+        },
+        {
+          "asset": "BNB",
+          "return_percent": 91.262,
+          "max_drawdown_percent": 52.9827,
+          "trade_count": 5
+        },
+        {
+          "asset": "PAXG",
+          "return_percent": 109.129,
+          "max_drawdown_percent": 22.0167,
+          "trade_count": 4
+        }
+      ],
+      "avg_ret": 60.1118,
+      "max_dd": 81.8171,
+      "avg_trades": 4.0,
+      "score": 35.56667
+    },
+    {
+      "candidate": {
+        "mid_id": "size99_tp50_100_200_sell50",
+        "initial_size_pct": 99,
+        "tp1": 50,
+        "tp2": 100,
+        "tp3": 200,
+        "tp_sell_pct": 50,
+        "pyramid_enabled": false
+      },
+      "per_asset": [
+        {
+          "asset": "BTC",
+          "return_percent": 88.165,
+          "max_drawdown_percent": 41.2476,
+          "trade_count": 4
+        },
+        {
+          "asset": "ETH",
+          "return_percent": -38.518,
+          "max_drawdown_percent": 80.6855,
+          "trade_count": 1
+        },
+        {
+          "asset": "XRP",
+          "return_percent": 51.466,
+          "max_drawdown_percent": 81.6592,
+          "trade_count": 3
+        },
+        {
+          "asset": "BNB",
+          "return_percent": 84.014,
+          "max_drawdown_percent": 45.7148,
+          "trade_count": 4
+        },
+        {
+          "asset": "PAXG",
+          "return_percent": 87.6,
+          "max_drawdown_percent": 21.9558,
+          "trade_count": 3
+        }
+      ],
+      "avg_ret": 54.545399999999994,
+      "max_dd": 81.6592,
+      "avg_trades": 3.0,
+      "score": 30.047639999999994
+    },
+    {
+      "candidate": {
+        "mid_id": "size99_tp50_100_200_sell50_pyr",
+        "initial_size_pct": 99,
+        "tp1": 50,
+        "tp2": 100,
+        "tp3": 200,
+        "tp_sell_pct": 50,
+        "pyramid_enabled": true
+      },
+      "per_asset": [
+        {
+          "asset": "BTC",
+          "return_percent": 88.418,
+          "max_drawdown_percent": 41.3245,
+          "trade_count": 5
+        },
+        {
+          "asset": "ETH",
+          "return_percent": -38.498,
+          "max_drawdown_percent": 80.8839,
+          "trade_count": 2
+        },
+        {
+          "asset": "XRP",
+          "return_percent": 52.097,
+          "max_drawdown_percent": 81.8171,
+          "trade_count": 4
+        },
+        {
+          "asset": "BNB",
+          "return_percent": 84.254,
+          "max_drawdown_percent": 45.8119,
+          "trade_count": 5
+        },
+        {
+          "asset": "PAXG",
+          "return_percent": 87.84,
+          "max_drawdown_percent": 22.0167,
+          "trade_count": 4
+        }
+      ],
+      "avg_ret": 54.822199999999995,
+      "max_dd": 81.8171,
+      "avg_trades": 4.0,
+      "score": 30.27707
+    }
+  ]
+}
