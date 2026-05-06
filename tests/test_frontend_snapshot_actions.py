@@ -5,7 +5,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_snapshot_action_buttons_do_not_submit_settings_form():
-    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    admin_js = (
+        (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+        + "\n"
+        + (ROOT / "public" / "js" / "51-admin-server-mode-launch-check.js").read_text(encoding="utf-8")
+    )
 
     assert 'type="button" data-snapshot-restore=' in admin_js
     assert 'type="button" data-snapshot-download=' in admin_js

@@ -3342,10 +3342,14 @@ def test_comfyui_share_creates_comfyui_thread_with_preview_grant(tmp_path):
 def test_comfyui_frontend_is_wired():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     core_js = (ROOT / "public" / "js" / "00-core.js").read_text(encoding="utf-8")
-    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    admin_js = (
+        (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+        + "\n"
+        + (ROOT / "public" / "js" / "51-admin-server-mode-launch-check.js").read_text(encoding="utf-8")
+    )
     bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
     community_js = (ROOT / "public" / "js" / "25-community.js").read_text(encoding="utf-8")
-    comfyui_js = (ROOT / "public" / "js" / "36-comfyui.js").read_text(encoding="utf-8")
+    comfyui_js = ((ROOT / "public" / "js" / "36-comfyui.js").read_text(encoding="utf-8") + "\n" + (ROOT / "public" / "js" / "36-comfyui-workflows.js").read_text(encoding="utf-8"))
     css = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
     settings_py = (ROOT / "services" / "settings.py").read_text(encoding="utf-8")
     smoke = (ROOT / "security" / "run_functional_smoke.sh").read_text(encoding="utf-8")

@@ -23,7 +23,11 @@ def test_public_registration_only_requires_account_password_and_nickname():
 
 def test_root_points_page_is_chain_operations_console():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
-    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    admin_js = (
+        (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+        + "\n"
+        + (ROOT / "public" / "js" / "51-admin-server-mode-launch-check.js").read_text(encoding="utf-8")
+    )
     economy_js = (ROOT / "public" / "js" / "55-economy.js").read_text(encoding="utf-8")
     bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
     styles = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
@@ -315,7 +319,11 @@ def test_root_points_page_is_chain_operations_console():
 def test_trading_exchange_is_separate_from_wallet_page():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     core_js = (ROOT / "public" / "js" / "00-core.js").read_text(encoding="utf-8")
-    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    admin_js = (
+        (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+        + "\n"
+        + (ROOT / "public" / "js" / "51-admin-server-mode-launch-check.js").read_text(encoding="utf-8")
+    )
     bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
     trading_js = (ROOT / "public" / "js" / "56-trading.js").read_text(encoding="utf-8")
     workflow_templates = "\n".join(
@@ -785,7 +793,11 @@ def test_spot_position_details_show_holding_cost_and_break_even_price():
 
 def test_trading_ui_labels_reference_and_risk_grade_price_usage():
     trading_js = (ROOT / "public" / "js" / "56-trading.js").read_text(encoding="utf-8")
-    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    admin_js = (
+        (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+        + "\n"
+        + (ROOT / "public" / "js" / "51-admin-server-mode-launch-check.js").read_text(encoding="utf-8")
+    )
     trading_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
 
     assert "function tradingMarketPriceContext" in trading_js

@@ -9,7 +9,11 @@ def test_personal_appearance_editor_and_routes_are_wired():
     core_js = (ROOT / "public" / "js" / "00-core.js").read_text(encoding="utf-8")
     auth_js = (ROOT / "public" / "js" / "40-auth-users.js").read_text(encoding="utf-8")
     public_py = (ROOT / "routes" / "public.py").read_text(encoding="utf-8")
-    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    admin_js = (
+        (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+        + "\n"
+        + (ROOT / "public" / "js" / "51-admin-server-mode-launch-check.js").read_text(encoding="utf-8")
+    )
 
     assert "/js/40-auth-users.js?v=20260503-appearance-reset" in index_html
     assert 'id="edit-user-appearance-section" style="display:none;"' in index_html

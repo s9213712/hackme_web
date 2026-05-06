@@ -7,7 +7,11 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_captcha_ui_and_settings_are_wired():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     auth_js = (ROOT / "public" / "js" / "40-auth-users.js").read_text(encoding="utf-8")
-    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    admin_js = (
+        (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+        + "\n"
+        + (ROOT / "public" / "js" / "51-admin-server-mode-launch-check.js").read_text(encoding="utf-8")
+    )
     bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
 
     assert 'id="captcha-field"' in index_html

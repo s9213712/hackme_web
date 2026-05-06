@@ -9,7 +9,7 @@ def test_chat_room_delete_ui_is_wired():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     core_js = (ROOT / "public" / "js" / "00-core.js").read_text(encoding="utf-8")
     chat_js = (ROOT / "public" / "js" / "20-chat.js").read_text(encoding="utf-8")
-    drive_js = (ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8")
+    drive_js = ((ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8") + "\n" + (ROOT / "public" / "js" / "35-drive-preview-share.js").read_text(encoding="utf-8"))
     css = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
     chat_route = (ROOT / "routes" / "chat.py").read_text(encoding="utf-8")
 

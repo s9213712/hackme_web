@@ -48,7 +48,7 @@ def test_pending_idle_timeout_blocks_auto_session_restore_on_refresh():
 
 
 def test_comfyui_long_running_work_suspends_idle_logout():
-    comfyui = (ROOT / "public" / "js" / "36-comfyui.js").read_text(encoding="utf-8")
+    comfyui = ((ROOT / "public" / "js" / "36-comfyui.js").read_text(encoding="utf-8") + "\n" + (ROOT / "public" / "js" / "36-comfyui-workflows.js").read_text(encoding="utf-8"))
 
     assert 'function setComfyuiIdleSuspend(reason, active, label)' in comfyui
     assert 'setComfyuiIdleSuspend("comfyui_generate", !!busy, "ComfyUI 產圖中");' in comfyui

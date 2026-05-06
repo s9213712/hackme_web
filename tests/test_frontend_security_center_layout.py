@@ -6,7 +6,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_security_center_logs_have_non_overlapping_layout():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
-    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    admin_js = (
+        (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+        + "\n"
+        + (ROOT / "public" / "js" / "51-admin-server-mode-launch-check.js").read_text(encoding="utf-8")
+    )
     css = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
 
     assert 'class="security-log-grid"' in index_html
@@ -23,7 +27,11 @@ def test_security_center_logs_have_non_overlapping_layout():
 
 
 def test_saving_settings_preserves_current_admin_surface():
-    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    admin_js = (
+        (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+        + "\n"
+        + (ROOT / "public" / "js" / "51-admin-server-mode-launch-check.js").read_text(encoding="utf-8")
+    )
     save_body = admin_js.split("async function saveSettings()", 1)[1].split("async function loadServerEnv()", 1)[0]
 
     assert "setAuthState({" not in save_body
@@ -35,7 +43,11 @@ def test_saving_settings_preserves_current_admin_surface():
 
 def test_prelaunch_tests_include_stress_progress_and_logs():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
-    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    admin_js = (
+        (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+        + "\n"
+        + (ROOT / "public" / "js" / "51-admin-server-mode-launch-check.js").read_text(encoding="utf-8")
+    )
     bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
 
     assert 'id="security-stress-start-btn"' in index_html
@@ -71,7 +83,11 @@ def test_prelaunch_tests_include_stress_progress_and_logs():
 
 def test_audit_chain_repair_and_points_chain_recovery_buttons_live_in_correct_areas():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
-    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    admin_js = (
+        (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+        + "\n"
+        + (ROOT / "public" / "js" / "51-admin-server-mode-launch-check.js").read_text(encoding="utf-8")
+    )
     economy_js = (ROOT / "public" / "js" / "55-economy.js").read_text(encoding="utf-8")
     bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
     audit_section = index_html.split('id="sec-server-audit"', 1)[1].split('id="sec-server-security"', 1)[0]
@@ -90,7 +106,11 @@ def test_audit_chain_repair_and_points_chain_recovery_buttons_live_in_correct_ar
 
 def test_custom_security_profile_uses_form_controls_not_raw_json():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
-    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    admin_js = (
+        (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+        + "\n"
+        + (ROOT / "public" / "js" / "51-admin-server-mode-launch-check.js").read_text(encoding="utf-8")
+    )
     profile_section = index_html.split("新增自定義設定檔", 1)[1].split('id="security-profile-save-btn"', 1)[0]
     save_body = admin_js.split("async function saveSecurityProfile()", 1)[1].split("function healthStatusColor", 1)[0]
 
@@ -106,7 +126,11 @@ def test_custom_security_profile_uses_form_controls_not_raw_json():
 
 def test_security_control_and_threshold_saves_show_visible_status():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
-    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    admin_js = (
+        (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+        + "\n"
+        + (ROOT / "public" / "js" / "51-admin-server-mode-launch-check.js").read_text(encoding="utf-8")
+    )
     controls_body = admin_js.split("async function saveSecurityCenterControls()", 1)[1].split("async function saveSecurityThresholds()", 1)[0]
     thresholds_body = admin_js.split("async function saveSecurityThresholds()", 1)[1].split("async function applySecurityMode()", 1)[0]
 
@@ -124,7 +148,11 @@ def test_security_control_and_threshold_saves_show_visible_status():
 
 def test_server_update_ui_warns_and_requires_preview_then_apply():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
-    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    admin_js = (
+        (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+        + "\n"
+        + (ROOT / "public" / "js" / "51-admin-server-mode-launch-check.js").read_text(encoding="utf-8")
+    )
     bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
 
     assert "GitHub 更新中心" in index_html
@@ -146,7 +174,11 @@ def test_server_update_ui_warns_and_requires_preview_then_apply():
 
 def test_launch_check_treats_production_profile_settings_as_auto_applied_not_manual_blockers():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
-    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    admin_js = (
+        (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+        + "\n"
+        + (ROOT / "public" / "js" / "51-admin-server-mode-launch-check.js").read_text(encoding="utf-8")
+    )
     bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
     launch_body = admin_js.split("function launchCheckConditionList(sc, requirements) {", 1)[1].split("function jumpToAnchor", 1)[0]
 

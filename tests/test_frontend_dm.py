@@ -7,7 +7,11 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_dm_ui_removed_and_chat_group_controls_are_wired():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     core_js = (ROOT / "public" / "js" / "00-core.js").read_text(encoding="utf-8")
-    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    admin_js = (
+        (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+        + "\n"
+        + (ROOT / "public" / "js" / "51-admin-server-mode-launch-check.js").read_text(encoding="utf-8")
+    )
     bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
     chat_js = (ROOT / "public" / "js" / "20-chat.js").read_text(encoding="utf-8")
     users_js = (ROOT / "public" / "js" / "10-users.js").read_text(encoding="utf-8")

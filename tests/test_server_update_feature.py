@@ -38,7 +38,11 @@ def test_server_update_routes_are_root_only_and_use_safe_git_flow():
 
 def test_server_update_frontend_displays_update_summary():
     index = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
-    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    admin_js = (
+        (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+        + "\n"
+        + (ROOT / "public" / "js" / "51-admin-server-mode-launch-check.js").read_text(encoding="utf-8")
+    )
 
     assert 'id="server-update-summary"' in index
     assert "function renderServerUpdateSummary" in admin_js
