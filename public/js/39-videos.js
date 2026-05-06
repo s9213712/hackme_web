@@ -1352,7 +1352,7 @@ async function copyVideoLink(videoId) {
     await navigator.clipboard.writeText(url);
     videoMsg("連結已複製", true);
   } catch (_) {
-    videoMsg(url, true);
+    window.prompt("分享連結", url);
   }
 }
 

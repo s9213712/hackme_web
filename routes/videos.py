@@ -815,9 +815,18 @@ def register_video_routes(app, deps):
     return json;
   }}
   async function fetchJson(url) {{
-    const res = await fetch(url, {{ credentials: "same-origin" }});
-    const json = await res.json().catch(() => ({{}}));
-    return {{ res, json }};
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10000);
+    try {{
+      const res = await fetch(url, {{
+        credentials: "same-origin",
+        signal: controller.signal,
+      }});
+      const json = await res.json().catch(() => ({{}}));
+      return {{ res, json }};
+    }} finally {{
+      clearTimeout(timer);
+    }}
   }}
   async function loadSharedVideo() {{
     const metaEl = $("meta");
