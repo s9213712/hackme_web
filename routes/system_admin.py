@@ -1,5 +1,4 @@
 import json
-import ipaddress
 import os
 import platform
 import re
@@ -9,7 +8,6 @@ import threading
 import time
 import uuid
 from datetime import datetime
-from pathlib import Path
 from flask import request, send_file
 
 from services.security.access_controls import (
@@ -43,6 +41,18 @@ from services.upload_security import (
     get_cloud_drive_security_policy,
     update_cloud_drive_security_policy,
 )
+from services.platform.admin_validation import (
+    feature_dependency_error_payload,
+    is_hhmm,
+    normalize_ip_whitelist_or_none,
+    parse_int_in_range,
+    parse_strict_bool,
+    public_relative_path,
+    validate_comfyui_api_host,
+    validate_comfyui_api_url,
+    validate_comfyui_relative_script,
+    validate_git_branch_name,
+)
 from services.settings import find_feature_dependency_violations
 
 
@@ -50,158 +60,7 @@ SECURITY_TEST_JOBS = {}
 SECURITY_TEST_JOBS_LOCK = threading.Lock()
 
 
-COMFYUI_HOST_RE = re.compile(r"^[A-Za-z0-9_.:-]+$")
-GIT_BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$")
 SERVER_UPDATE_WARNING = "此更新直接來自 GitHub diff/merge，尚未經本機測試驗證；更新後請自行執行 smoke test、權限測試與 debug。"
-
-
-def _parse_strict_bool(value):
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, int) and value in (0, 1):
-        return bool(value)
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"1", "true", "yes", "on", "y", "t"}:
-            return True
-        if normalized in {"0", "false", "no", "off", "n", "f"}:
-            return False
-    return None
-
-
-def _parse_int_in_range(value, minimum, maximum):
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        parsed = value
-    elif isinstance(value, float):
-        if not value.is_integer():
-            return None
-        parsed = int(value)
-    elif isinstance(value, str) and re.fullmatch(r"-?\d+", value.strip()):
-        parsed = int(value.strip())
-    else:
-        return None
-    if parsed < minimum or parsed > maximum:
-        return None
-    return parsed
-
-
-def _is_hhmm(value):
-    text = str(value or "").strip()
-    return bool(re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", text))
-
-
-def _normalize_ip_whitelist_or_none(raw):
-    entries = []
-    bad = []
-    for item in str(raw or "").replace("\n", ",").split(","):
-        value = item.strip()
-        if not value:
-            continue
-        try:
-            if "/" in value:
-                ipaddress.ip_network(value, strict=False)
-            else:
-                ipaddress.ip_address(value)
-            entries.append(value)
-        except ValueError:
-            bad.append(value)
-    if bad:
-        return None, bad
-    return ",".join(entries), []
-
-
-def _feature_dependency_error_payload(violations):
-    first = violations[0]
-    missing_labels = "、".join(item["required_label"] for item in violations)
-    return {
-        "ok": False,
-        "msg": f"{first['feature_label']} 需要先啟用：{missing_labels}",
-        "violations": violations,
-    }
-
-
-def public_relative_path(path, base_dir):
-    if not path:
-        return "-"
-    try:
-        base = os.path.abspath(base_dir)
-        target = os.path.abspath(path)
-        rel = os.path.relpath(target, base)
-        if rel == ".":
-            return "."
-        if rel.startswith(".."):
-            return f"<outside>/{os.path.basename(target) or 'path'}"
-        return rel.replace("\\", "/")
-    except Exception:
-        return os.path.basename(str(path)) or "-"
-
-
-def validate_comfyui_api_host(value):
-    host = str(value or "").strip().strip("[]")
-    if not host:
-        return None
-    if len(host) > 253:
-        return None
-    forbidden = ("://", "/", "\\", "@", "?", "#", "%", " ")
-    if any(part in host for part in forbidden):
-        return None
-    if not COMFYUI_HOST_RE.match(host):
-        return None
-    return host
-
-
-def validate_comfyui_api_url(value):
-    from urllib.parse import urlparse
-
-    raw = str(value or "").strip().rstrip("/")
-    if not raw:
-        return ""
-    parsed = urlparse(raw)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        return None
-    if parsed.username or parsed.password:
-        return None
-    if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
-        return None
-    return raw
-
-
-def validate_comfyui_relative_script(value, *, base_dir=None):
-    raw = str(value or "").strip()
-    if not raw:
-        return ""
-    if len(raw) > 240:
-        return None
-    try:
-        if raw.startswith("/") or raw.startswith("\\"):
-            if not base_dir:
-                return None
-            base = Path(str(base_dir)).expanduser().resolve()
-            target = Path(raw).expanduser().resolve()
-            rel = target.relative_to(base)
-            parts = rel.as_posix().split("/")
-            if not parts or any(part in {"", ".", ".."} for part in parts):
-                return None
-            return rel.as_posix()
-        parts = raw.replace("\\", "/").split("/")
-        if not parts or any(part in {"", ".", ".."} for part in parts):
-            return None
-        return "/".join(parts)
-    except Exception:
-        return None
-
-
-def validate_git_branch_name(value):
-    branch = str(value or "").strip()
-    if not branch or branch in {"HEAD", ".", ".."}:
-        return None
-    if branch.startswith("/") or branch.endswith("/") or ".." in branch or branch.endswith(".lock"):
-        return None
-    if not GIT_BRANCH_RE.match(branch):
-        return None
-    return branch
 
 
 def restart_launcher_code():
@@ -1960,7 +1819,7 @@ def register_system_admin_routes(app, deps):
             if isinstance(value, bool)
         }
         for key in bool_keys & set(data.keys()):
-            parsed = _parse_strict_bool(data.get(key))
+            parsed = parse_strict_bool(data.get(key))
             if parsed is None:
                 return json_resp({"ok":False,"msg":f"{key} 必須是布林值 true/false"}), 400
             data[key] = parsed
@@ -2064,22 +1923,22 @@ def register_system_admin_routes(app, deps):
                 return json_resp({"ok":False,"msg":"captcha_ttl_seconds 必須是 60-3600 秒"}), 400
             data["captcha_ttl_seconds"] = ttl_seconds
         if "video_tip_fee_percent" in data:
-            fee_percent = _parse_int_in_range(data.get("video_tip_fee_percent"), 0, 100)
+            fee_percent = parse_int_in_range(data.get("video_tip_fee_percent"), 0, 100)
             if fee_percent is None:
                 return json_resp({"ok":False,"msg":"video_tip_fee_percent 必須是 0-100"}), 400
             data["video_tip_fee_percent"] = fee_percent
         if "video_tip_min_points" in data:
-            minimum_points = _parse_int_in_range(data.get("video_tip_min_points"), 1, 1_000_000)
+            minimum_points = parse_int_in_range(data.get("video_tip_min_points"), 1, 1_000_000)
             if minimum_points is None:
                 return json_resp({"ok":False,"msg":"video_tip_min_points 必須是 1-1000000"}), 400
             data["video_tip_min_points"] = minimum_points
         if "security_log_tail_lines" in data:
-            tail_lines = _parse_int_in_range(data.get("security_log_tail_lines"), 1, 10_000)
+            tail_lines = parse_int_in_range(data.get("security_log_tail_lines"), 1, 10_000)
             if tail_lines is None:
                 return json_resp({"ok":False,"msg":"security_log_tail_lines 必須是 1-10000"}), 400
             data["security_log_tail_lines"] = tail_lines
         if "snapshot_daily_time" in data:
-            if not _is_hhmm(data.get("snapshot_daily_time")):
+            if not is_hhmm(data.get("snapshot_daily_time")):
                 return json_resp({"ok":False,"msg":"snapshot_daily_time 必須是 HH:MM"}), 400
             data["snapshot_daily_time"] = str(data.get("snapshot_daily_time")).strip()
         if "storage_trash_retention_days" in data:
@@ -2095,7 +1954,7 @@ def register_system_admin_routes(app, deps):
                 return json_resp({"ok":False,"msg":"storage_maintenance_daily_time 必須是 HH:MM"}), 400
         violations = find_feature_dependency_violations(current_settings, data)
         if violations:
-            return json_resp(_feature_dependency_error_payload(violations)), 400
+            return json_resp(feature_dependency_error_payload(violations)), 400
 
         before_settings = dict(current_settings)
         try:
@@ -2103,7 +1962,7 @@ def register_system_admin_routes(app, deps):
         except ValueError as exc:
             if "requires" in str(exc):
                 violations = find_feature_dependency_violations(current_settings, data)
-                return json_resp(_feature_dependency_error_payload(violations or [{"feature": "", "feature_label": "功能", "required": "", "required_label": "父功能"}])), 400
+                return json_resp(feature_dependency_error_payload(violations or [{"feature": "", "feature_label": "功能", "required": "", "required_label": "父功能"}])), 400
             raise
         if not settings:
             return json_resp({"ok":False,"msg":"沒有可寫入的設定欄位"}), 400
@@ -2169,13 +2028,13 @@ def register_system_admin_routes(app, deps):
         before_settings = get_system_settings()
         violations = find_feature_dependency_violations(before_settings, data)
         if violations:
-            return json_resp(_feature_dependency_error_payload(violations)), 400
+            return json_resp(feature_dependency_error_payload(violations)), 400
         try:
             updates = save_feature_settings(data)
         except ValueError as exc:
             if "requires" in str(exc):
                 violations = find_feature_dependency_violations(before_settings, data)
-                return json_resp(_feature_dependency_error_payload(violations or [{"feature": "", "feature_label": "功能", "required": "", "required_label": "父功能"}])), 400
+                return json_resp(feature_dependency_error_payload(violations or [{"feature": "", "feature_label": "功能", "required": "", "required_label": "父功能"}])), 400
             raise
         if not updates:
             return json_resp({"ok":False,"msg":"沒有可寫入的功能開關"}), 400
@@ -2202,11 +2061,11 @@ def register_system_admin_routes(app, deps):
             if key in data:
                 updates[key] = data[key]
         if "root_ip_whitelist" in updates:
-            normalized_whitelist, bad_entries = _normalize_ip_whitelist_or_none(updates["root_ip_whitelist"])
+            normalized_whitelist, bad_entries = normalize_ip_whitelist_or_none(updates["root_ip_whitelist"])
             if bad_entries:
                 return json_resp({"ok":False,"msg":f"無效的 IP / CIDR：{', '.join(bad_entries)}"}), 400
             updates["root_ip_whitelist"] = normalized_whitelist
-        if _parse_strict_bool(updates.get("root_ip_whitelist_enabled")) and not str(updates.get("root_ip_whitelist") or before_settings.get("root_ip_whitelist") or "").strip():
+        if parse_strict_bool(updates.get("root_ip_whitelist_enabled")) and not str(updates.get("root_ip_whitelist") or before_settings.get("root_ip_whitelist") or "").strip():
             return json_resp({"ok":False,"msg":"啟用 root IP 白名單前，至少要填入一個有效的 IP 或 CIDR"}), 400
         if "clear_maintenance_bypass_token" in data and data.get("clear_maintenance_bypass_token"):
             updates["maintenance_bypass_token_hash"] = ""

@@ -1,6 +1,22 @@
 # Update Summary
 
-Release ID: `2026.05.06-147`
+Release ID: `2026.05.07-148`
+
+## 2026.05.07-148
+
+- Readability Refactor is now unblocked on branch `05.readability-refactor`:
+  the full pytest baseline is green again, so inventory-only status is no
+  longer forcing the branch to stop before code changes.
+- Introduced `services/platform/admin_validation.py` to centralize one bounded
+  family of root/admin validation helpers instead of keeping duplicate route-
+  local parsers in `routes/system_admin.py`.
+- The extracted helper set keeps previous behavior intact, including:
+  strict bool parsing for admin settings, IP whitelist normalization, public
+  path redaction, git branch validation, and ComfyUI script/endpoint checks.
+- `routes/comfyui.py` now reuses the shared ComfyUI URL/host validator without
+  collapsing user-facing error messages; blank URL handling for system-admin
+  settings and detailed `credentials/path/shape` errors for the ComfyUI root
+  test endpoint are both preserved.
 
 ## 2026.05.06-147
 

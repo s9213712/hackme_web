@@ -22,6 +22,10 @@ import urllib.request
 from flask import request
 
 from services.storage.cloud_drive import attach_existing_file, ensure_cloud_drive_attachment_schema, store_cloud_upload
+from services.platform.admin_validation import (
+    validate_comfyui_api_host as shared_validate_comfyui_api_host,
+    validate_comfyui_api_url as shared_validate_comfyui_api_url,
+)
 from services.comfyui.client import (
     CONTROLNET_TYPE_DEFINITIONS,
     GENERATION_MODE_DEFINITIONS,
@@ -50,7 +54,6 @@ SAFE_SCHEDULER_FALLBACK = "normal"
 DEFAULT_GENERATION_TIMEOUT_SECONDS = 1800
 MAX_GENERATION_TIMEOUT_SECONDS = 1800
 COMFYUI_BASIC_PRICE_ITEM_KEY = "comfyui_txt2img_basic"
-COMFYUI_HOST_RE = re.compile(r"^[A-Za-z0-9_.:-]+$")
 MAX_COMFYUI_FETCH_IMAGE_BYTES = 50 * 1024 * 1024
 MAX_COMFYUI_LORAS_PER_PROMPT = 8
 COMFYUI_LORA_EXTRA_PRICE_POINTS = 1
@@ -997,17 +1000,7 @@ def register_comfyui_routes(app, deps):
         return True, "owned_generation_only", summary
 
     def _validate_comfyui_host(value):
-        host = str(value or "").strip().strip("[]")
-        if not host:
-            return None
-        if len(host) > 253:
-            return None
-        forbidden = ("://", "/", "\\", "@", "?", "#", "%", " ")
-        if any(part in host for part in forbidden):
-            return None
-        if not COMFYUI_HOST_RE.match(host):
-            return None
-        return host
+        return shared_validate_comfyui_api_host(value)
 
     def _parse_comfyui_endpoint(data):
         mode = str((data or {}).get("mode") or (data or {}).get("comfyui_connection_mode") or _configured_connection_mode()).strip().lower()
@@ -1033,15 +1026,14 @@ def register_comfyui_routes(app, deps):
         return f"http://{display_host}:{port}", {"mode": mode if mode in {"local", "remote"} else "remote", "host": host, "port": port}, None
 
     def _validate_comfyui_api_url(value):
-        raw = str(value or "").strip().rstrip("/")
-        if not raw:
+        raw, error = shared_validate_comfyui_api_url(value, allow_blank=False, return_error=True)
+        if error == "blank":
             return None, "ComfyUI API 位址不可空白"
-        parsed = urlparse(raw)
-        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        if error == "shape":
             return None, "ComfyUI API 位址必須是 http://host:port 或 https://host:port"
-        if parsed.username or parsed.password:
+        if error == "credentials":
             return None, "ComfyUI API 位址不可包含帳密"
-        if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+        if error == "path":
             return None, "ComfyUI API 位址只需填主機與 port，不要包含路徑或參數"
         return raw, None
 
