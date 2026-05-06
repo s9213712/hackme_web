@@ -465,3 +465,37 @@ def test_cloud_drive_e2ee_download_decrypts_in_browser():
     assert "outputBlob = decrypted.blob" in drive_js
     assert "name = decrypted.filename || name" in drive_js
     assert "伺服器無法重設或找回此密碼" in drive_js
+
+
+def test_share_link_copy_buttons_have_clipboard_fallback():
+    """Issue #176 / #177 regression guard.
+
+    Both `copyAlbumShareUrl` (drive) and `copyVideoLink` (videos) call
+    `navigator.clipboard.writeText`, which is undefined in non-secure
+    contexts (HTTP). The fallback MUST give the user a way to manually
+    select+copy the URL — not just flash a toast that disappears."""
+    drive_js = (ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8")
+    video_js = (ROOT / "public" / "js" / "39-videos.js").read_text(encoding="utf-8")
+
+    # Drive: prompt-based fallback is OK (user can select+copy).
+    assert "async function copyAlbumShareUrl(url)" in drive_js
+    assert "navigator.clipboard.writeText(shareUrl)" in drive_js
+    assert 'window.prompt("分享連結"' in drive_js, (
+        "drive copyAlbumShareUrl must offer a window.prompt fallback so the "
+        "URL is selectable when navigator.clipboard is unavailable"
+    )
+
+    # Videos: assert copyVideoLink has a fallback that lets the user
+    # actually copy the URL (window.prompt OR a persistent visible element).
+    assert "async function copyVideoLink(videoId)" in video_js
+    assert "navigator.clipboard.writeText(url)" in video_js
+    has_prompt_fallback = "window.prompt" in video_js
+    has_input_fallback = (
+        "select()" in video_js and "execCommand" in video_js
+    )
+    assert has_prompt_fallback or has_input_fallback, (
+        "copyVideoLink fallback must offer a way for the user to manually "
+        "select and copy the URL when navigator.clipboard is unavailable. "
+        "videoMsg(url, true) alone is a transient toast and not selectable. "
+        "See issue #176."
+    )

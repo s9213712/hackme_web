@@ -1341,3 +1341,33 @@ def test_shared_video_regeneration_for_e2ee_requires_new_browser_side_envelope(t
     body = regenerated.get_json()
     assert body["share_link"]["requires_fragment_key"] is True
     assert body["video"]["share_requires_fragment_key"] is True
+
+
+def test_shared_video_page_fetch_has_timeout_or_abort():
+    """Issue #177 regression guard.
+
+    The /shared/videos/<token> page uses `fetchJson` to load metadata and
+    playback. Without an AbortController/timeout, a slow or hung server
+    leaves the page stuck on '正在讀取分享資訊...' indefinitely. Confirm
+    the inline page source has either AbortController or signal: timer.
+    """
+    from pathlib import Path
+    src = Path(__file__).resolve().parents[1] / "routes" / "videos.py"
+    text = src.read_text(encoding="utf-8")
+    # The shared-video page is rendered inline in routes/videos.py around
+    # the /shared/videos/<token> route. Its `fetchJson` helper must include
+    # abort / timeout so a slow upstream doesn't lock the page forever.
+    assert "/shared/videos/<token>" in text, (
+        "shared video route definition not found; test selector is stale"
+    )
+    has_abort = "AbortController" in text
+    has_signal = "signal:" in text or "signal :" in text
+    has_timeout_setter = (
+        "setTimeout" in text and "abort()" in text
+    )
+    assert (has_abort and has_signal) or has_timeout_setter, (
+        "The shared-video page's fetchJson must use AbortController + "
+        "signal (or equivalent setTimeout(abort)) to bound waiting time. "
+        "Without it the page stays at '正在讀取分享資訊...' forever on "
+        "slow / unreachable server. See issue #177."
+    )
