@@ -23,6 +23,7 @@ QUICK_TESTS = [
     "tests/test_security_issue_regressions.py",
     "tests/test_user_csv_exports.py",
 ]
+QUICK_PYTEST_TIMEOUT_SECONDS = 180
 
 
 def run(ctx: PrepushContext) -> CheckResult:
@@ -34,7 +35,16 @@ def run(ctx: PrepushContext) -> CheckResult:
     env = utils.env_without_local_runtime()
     env["PYTHONPATH"] = str(ctx.repo_root)
     env["HTML_LEARNING_TEST_RUNTIME"] = "1"
-    proc = utils.run_command([sys.executable, "-m", "pytest", "-q", *tests], cwd=ctx.repo_root, timeout=90, env=env)
+    # The quick gate deliberately covers a wide cross-section of backend,
+    # frontend, trading, and ComfyUI regressions. As the selected corpus grew,
+    # the old 90s ceiling started producing internal timeout errors even when
+    # the tests were actually green, so the hook needs a realistic budget.
+    proc = utils.run_command(
+        [sys.executable, "-m", "pytest", "-q", *tests],
+        cwd=ctx.repo_root,
+        timeout=QUICK_PYTEST_TIMEOUT_SECONDS,
+        env=env,
+    )
     if proc.returncode != 0:
         output = "\n".join((proc.stdout + proc.stderr).splitlines()[-80:])
         return CheckResult.fail(
