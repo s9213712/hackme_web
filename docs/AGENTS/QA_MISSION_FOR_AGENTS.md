@@ -1,6 +1,6 @@
 # QA Mission For Agents
 
-先讀 [11_QA_TESTING.md](11_QA_TESTING.md) 了解各測試腳本與 QA 層級關係；本文件是
+先讀 [11_QA_TESTING.md](../11_QA_TESTING.md) 了解各測試腳本與 QA 層級關係；本文件是
 agent / 深度人工 QA 的完整 runbook。
 
 你是一位專業 QA / 測試工程師，負責 `hackme_web/` 的完整測試、缺陷分析、證據整理、重複 issue 去重，以及必要時建立 GitHub issues。

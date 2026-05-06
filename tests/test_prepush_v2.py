@@ -8,6 +8,7 @@ from scripts.prepush.checks import (
     forbidden_paths_check,
     frontend_check,
     local_path_check,
+    markdown_links_check,
     pytest_quick_check,
     release_check,
     secrets_check,
@@ -34,6 +35,48 @@ def test_local_path_leak_reports_pattern_not_raw_line(tmp_path):
     path.write_text("dev path: /mnt/d/share/ComfyUI\n", encoding="utf-8")
     findings = local_path_check.scan_line("docs.md", path.read_text(encoding="utf-8"), 1)
     assert findings == [{"file": "docs.md", "line": 1, "pattern": "WSL_DRIVE_PATH"}]
+
+
+def test_markdown_link_check_reports_missing_relative_link(tmp_path):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (tmp_path / "README.md").write_text("# root\n", encoding="utf-8")
+    (tmp_path / "SECURITY.md").write_text("# security\n", encoding="utf-8")
+    (docs / "00_START_HERE.md").write_text("[missing](MISSING.md)\n", encoding="utf-8")
+
+    ctx = make_ctx(tmp_path)
+    result = markdown_links_check.run(ctx)
+
+    assert result.status == FAIL
+    assert result.name == "markdown links"
+    assert result.details == [{"file": "docs/00_START_HERE.md", "line": 1, "link": "MISSING.md"}]
+
+
+def test_markdown_link_check_accepts_correct_relative_links_and_ignores_code(tmp_path):
+    docs = tmp_path / "docs"
+    agents = docs / "AGENTS"
+    security = docs / "security"
+    agents.mkdir(parents=True)
+    security.mkdir(parents=True)
+
+    (tmp_path / "README.md").write_text("[docs](docs/README.md)\n", encoding="utf-8")
+    (tmp_path / "SECURITY.md").write_text("# security\n", encoding="utf-8")
+    (docs / "README.md").write_text(
+        "[quickstart](01_DEPLOY_QUICKSTART.md)\n"
+        "```md\n"
+        "[ignored](BROKEN.md)\n"
+        "```\n",
+        encoding="utf-8",
+    )
+    (docs / "01_DEPLOY_QUICKSTART.md").write_text("# quickstart\n", encoding="utf-8")
+    (agents / "QA_MISSION_FOR_AGENTS.md").write_text("[qa](../11_QA_TESTING.md)\n", encoding="utf-8")
+    (docs / "11_QA_TESTING.md").write_text("[external](https://example.com)\n", encoding="utf-8")
+    (security / "PRE_RELEASE_CHECKLIST.md").write_text("# release\n", encoding="utf-8")
+
+    ctx = make_ctx(tmp_path)
+    result = markdown_links_check.run(ctx)
+
+    assert result.status != FAIL
 
 
 def test_gitkeep_is_not_forbidden_runtime_artifact():

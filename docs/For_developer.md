@@ -29,7 +29,7 @@ Related technical references:
 
 Feature work is not considered complete when only the code path is finished.
 All new features, bug fixes, refactors, admin tools, and UI changes must also
-follow the project-wide rules in [RULES_FOR_AGENTS.md](RULES_FOR_AGENTS.md).
+follow the project-wide rules in [AGENTS/RULES_FOR_AGENTS.md](AGENTS/RULES_FOR_AGENTS.md).
 
 Required follow-up areas include:
 

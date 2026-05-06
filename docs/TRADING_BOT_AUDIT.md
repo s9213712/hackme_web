@@ -16,8 +16,8 @@
 | `trading_audit_events` 交易專用稽核表 | ✅ 已實作 | `services/trading_engine.py:558` 起；存 actor / target_user_id / market_symbol / metadata_json |
 | `trading_bot_runs` 每次 bot 巡檢紀錄 | ✅ 已實作 | `services/trading_engine.py:626` 起；status (`triggered`/`skipped`/`failed`)、observed_price、error |
 | Bot 觸發 / cooldown / max_runs 守護 | ✅ 已實作 | `services/trading_engine.py:_bot_trigger_hit` 與 `run_trading_bot_rows` |
-| Wallet/Ledger replay 對帳 | ✅ 可離線跑 | 範例腳本：[`docs/AGENTS/reports/claude/prechain_qa_2026-05-04/scripts/01_ledger_replay.py`](AGENTS/reports/claude/prechain_qa_2026-05-04/scripts/01_ledger_replay.py) |
-| 手算 spot/DCA 訂單金額/手續費/PnL | ✅ 可離線跑 | 範例腳本：[`02_trading_handcalc.py`](AGENTS/reports/claude/prechain_qa_2026-05-04/scripts/02_trading_handcalc.py)、[`03_dca_timing.py`](AGENTS/reports/claude/prechain_qa_2026-05-04/scripts/03_dca_timing.py) |
+| Wallet/Ledger replay 對帳 | ✅ 可離線跑 | 範例 evidence：[`replay_check.json`](AGENTS/reports/claude/prechain_qa_2026-05-04/evidence/ledger/replay_check.json) |
+| 手算 spot/DCA 訂單金額/手續費/PnL | ✅ 可離線跑 | 範例 evidence：[`phase56_handcalc.json`](AGENTS/reports/claude/prechain_qa_2026-05-04/evidence/trading/phase56_handcalc.json)、[`dca_minimal.log`](AGENTS/reports/claude/prechain_qa_2026-05-04/evidence/trading/dca_minimal.log) |
 | 用戶送 bug 報告 | ✅ 已實作 | `POST /api/bug-reports` 與 admin 端 `/api/admin/bug-reports/<id>/review`；`routes/bug_reports.py` |
 | 定期 bot 稽核 | ✅ 已實作 | `run_due_bot_audits()`；預設每 `300s` 掃一次，可由 root 調整 |
 | 納入稽核條件守門 | ✅ 已實作 | bot 至少成交 1 筆，或啟用已滿 `24h` 才從 `未稽核` 進入綠 / 黃 / 紅燈 |
