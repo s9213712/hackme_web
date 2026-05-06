@@ -3899,6 +3899,16 @@
                     <input type="number" id="root-trading-bot-auto-limit" min="1" max="200" step="1" value="50" />
                   </div>
                   <div class="field">
+                    <label>回測最大 K 棒數 <span id="root-trading-backtest-measured-hint" class="field-hint" style="display:inline-block;margin-left:.4rem;"></span></label>
+                    <input type="number" id="root-trading-backtest-max-candles" min="1000" max="10000000" step="1000" value="20000" />
+                    <div class="field-hint">控制單次回測可餵入的 K 棒上限。預設 20,000；首次啟動伺服器時會量測本機性能極限，並顯示在欄位旁供 root 參考。</div>
+                  </div>
+                  <div class="field">
+                    <label>回測極限量測秒數預算</label>
+                    <input type="number" id="root-trading-backtest-capacity-budget" min="5" max="600" step="5" value="60" />
+                    <div class="field-hint">首次啟動的性能量測會以此秒數為預算；換言之「本機極限」 = 此秒數內可跑的 K 棒數。預設 60 秒。</div>
+                  </div>
+                  <div class="field">
                     <label><input type="checkbox" id="root-trading-bot-audit-enabled" checked /> 啟用交易機器人定期稽核</label>
                     <div class="field-hint">僅 root 可見。機器人至少成交一筆，或啟用滿 24 小時後，才會納入定期稽核目標。</div>
                   </div>

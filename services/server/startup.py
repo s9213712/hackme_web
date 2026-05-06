@@ -208,6 +208,58 @@ def start_trading_liquidation_worker(*, trading_service, audit):
     return worker
 
 
+def measure_backtest_capacity_if_needed(*, trading_service, audit):
+    """First-boot backtest probe.
+
+    If trading_settings has no ``trading.backtest_capacity_measured_at`` value yet,
+    run a small synthetic backtest in a background thread and record the
+    projected 60-second capacity. Subsequent boots no-op. Root can re-trigger
+    via the admin API endpoint.
+    """
+    try:
+        existing = trading_service.get_backtest_capacity_measurement()
+    except Exception as exc:
+        audit("TRADING_BACKTEST_CAPACITY_PROBE_SKIPPED", "0.0.0.0", user="system", success=False, detail=str(exc))
+        return None
+    if existing.get("measured_at"):
+        return None
+
+    from services.trading.backtest_capacity import measure_backtest_capacity
+
+    try:
+        time_budget = trading_service.get_backtest_capacity_time_budget_seconds()
+    except Exception:
+        time_budget = 60
+
+    def run_probe():
+        try:
+            result = measure_backtest_capacity(trading_service=trading_service, time_budget_seconds=time_budget)
+            trading_service.record_backtest_capacity_measurement(
+                measured_capacity=result.get("measured_capacity") or 0,
+                measured_at=result.get("measured_at") or "",
+                actor_id="system-startup",
+            )
+            audit(
+                "TRADING_BACKTEST_CAPACITY_PROBE_DONE",
+                "0.0.0.0",
+                user="system",
+                success=bool(result.get("measured_capacity")),
+                detail=json.dumps(result, ensure_ascii=False),
+            )
+        except Exception as exc:
+            audit(
+                "TRADING_BACKTEST_CAPACITY_PROBE_FAILED",
+                "0.0.0.0",
+                user="system",
+                success=False,
+                detail=str(exc),
+            )
+
+    worker = threading.Thread(target=run_probe, name="trading-backtest-capacity-probe", daemon=True)
+    worker.start()
+    return worker
+
+
 def start_trading_bot_worker(*, trading_service, audit):
     fallback_interval = _int_env("HTML_LEARNING_TRADING_BOT_SCAN_INTERVAL_SECONDS", 30, minimum=10, maximum=3600)
 
@@ -293,6 +345,7 @@ def run_server_main(
     effective_server_bind,
     server_bind_state,
     app,
+    measure_backtest_capacity_first_boot=None,
 ):
     install_runtime_output_capture(server_log_path)
     init_db(**init_db_kwargs)
@@ -367,6 +420,11 @@ def run_server_main(
     start_points_chain_block_worker()
     start_trading_liquidation_worker()
     start_trading_bot_worker()
+    if measure_backtest_capacity_first_boot is not None:
+        try:
+            measure_backtest_capacity_first_boot()
+        except Exception as exc:
+            audit("TRADING_BACKTEST_CAPACITY_PROBE_BOOTSTRAP_FAILED", "0.0.0.0", user="system", success=False, detail=str(exc))
     ensure_local_tls_files(cert_file, key_file)
     has_ssl_files = os.path.exists(cert_file) and os.path.exists(key_file)
     ssl_state = effective_server_ssl(get_system_settings(), cert_exists=has_ssl_files)

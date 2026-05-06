@@ -2380,6 +2380,22 @@ function renderRootTradingSettings(payload) {
   if ($("root-trading-bot-auto-enabled")) $("root-trading-bot-auto-enabled").checked = settings.bot_auto_scan_enabled !== false;
   if ($("root-trading-bot-auto-interval")) $("root-trading-bot-auto-interval").value = settings.bot_auto_scan_interval_seconds ?? 30;
   if ($("root-trading-bot-auto-limit")) $("root-trading-bot-auto-limit").value = settings.bot_auto_scan_limit ?? 50;
+  if ($("root-trading-backtest-max-candles")) $("root-trading-backtest-max-candles").value = settings.backtest_max_candles ?? 20000;
+  if ($("root-trading-backtest-capacity-budget")) $("root-trading-backtest-capacity-budget").value = settings.backtest_capacity_time_budget_seconds ?? 60;
+  const measuredHintEl = $("root-trading-backtest-measured-hint");
+  if (measuredHintEl) {
+    const measured = Number(settings.backtest_measured_capacity || 0);
+    const measuredAt = String(settings.backtest_capacity_measured_at || "").trim();
+    const budget = Number(settings.backtest_capacity_time_budget_seconds || 60);
+    if (measured > 0) {
+      const measuredAtSuffix = measuredAt ? `（${measuredAt} 量測）` : "";
+      measuredHintEl.textContent = `本機 ${budget} 秒內極限約 ${measured.toLocaleString()} 根${measuredAtSuffix}`;
+      measuredHintEl.style.color = "var(--accent-2, #00d4aa)";
+    } else {
+      measuredHintEl.textContent = "本機性能尚未量測（首次啟動時自動執行）";
+      measuredHintEl.style.color = "";
+    }
+  }
   if ($("root-trading-bot-audit-enabled")) $("root-trading-bot-audit-enabled").checked = settings.bot_audit_enabled !== false;
   if ($("root-trading-bot-audit-interval")) $("root-trading-bot-audit-interval").value = settings.bot_audit_interval_seconds ?? 300;
   if ($("root-trading-bot-audit-limit")) $("root-trading-bot-audit-limit").value = settings.bot_audit_limit ?? 50;
@@ -2486,6 +2502,8 @@ async function saveRootTradingSettings() {
       bot_auto_scan_enabled: !!$("root-trading-bot-auto-enabled")?.checked,
       bot_auto_scan_interval_seconds: Number($("root-trading-bot-auto-interval")?.value || 30),
       bot_auto_scan_limit: Number($("root-trading-bot-auto-limit")?.value || 50),
+      backtest_max_candles: Number($("root-trading-backtest-max-candles")?.value || 20000),
+      backtest_capacity_time_budget_seconds: Number($("root-trading-backtest-capacity-budget")?.value || 60),
       bot_audit_enabled: !!$("root-trading-bot-audit-enabled")?.checked,
       bot_audit_interval_seconds: Number($("root-trading-bot-audit-interval")?.value || 300),
       bot_audit_limit: Number($("root-trading-bot-audit-limit")?.value || 50),

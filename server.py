@@ -143,6 +143,7 @@ from services.server.runtime import (
     save_json,
 )
 from services.server.startup import (
+    measure_backtest_capacity_if_needed as measure_backtest_capacity_if_needed_helper,
     run_server_main as run_server_main_helper,
     start_daily_snapshot_worker as start_daily_snapshot_worker_helper,
     start_points_chain_block_worker as start_points_chain_block_worker_helper,
@@ -1218,6 +1219,10 @@ def start_trading_bot_worker():
     return start_trading_bot_worker_helper(trading_service=trading_service, audit=audit)
 
 
+def measure_backtest_capacity_first_boot():
+    return measure_backtest_capacity_if_needed_helper(trading_service=trading_service, audit=audit)
+
+
 # ── Start ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     run_server_main_helper(
@@ -1247,6 +1252,7 @@ if __name__ == "__main__":
         start_points_chain_block_worker=start_points_chain_block_worker,
         start_trading_liquidation_worker=start_trading_liquidation_worker,
         start_trading_bot_worker=start_trading_bot_worker,
+        measure_backtest_capacity_first_boot=measure_backtest_capacity_first_boot,
         ensure_local_tls_files=ensure_local_tls_files,
         cert_file=CERT_FILE,
         key_file=KEY_FILE,

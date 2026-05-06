@@ -542,7 +542,8 @@ def register_trading_routes(app, deps):
         if interval not in REFERENCE_PRICE_INTERVALS:
             raise ValueError("unsupported backtest interval")
         mins_per_candle = INTERVAL_MINUTES.get(interval, 15)
-        max_days_for_interval = round(MAX_BACKTEST_CANDLES * mins_per_candle / 1440, 1)
+        active_cap = trading_service.get_max_backtest_candles()
+        max_days_for_interval = round(active_cap * mins_per_candle / 1440, 1)
         # Accept either candle count (limit/candle_limit) or human-readable days
         days_raw = data.get("days") or data.get("backtest_days")
         limit_raw = data.get("limit") or data.get("candle_limit")
@@ -554,20 +555,20 @@ def register_trading_routes(app, deps):
             if days_val <= 0:
                 raise ValueError("backtest days 必須大於 0")
             import math as _math
-            limit = min(_math.ceil(days_val * 1440 / mins_per_candle), MAX_BACKTEST_CANDLES)
+            limit = min(_math.ceil(days_val * 1440 / mins_per_candle), active_cap)
         elif limit_raw is not None:
             try:
                 limit = int(limit_raw)
             except Exception:
                 raise ValueError("backtest candle limit 格式錯誤")
         else:
-            limit = min(500, MAX_BACKTEST_CANDLES)
-        if limit > MAX_BACKTEST_CANDLES:
+            limit = min(500, active_cap)
+        if limit > active_cap:
             raise ValueError(
-                f"回測長度超過上限：{MAX_BACKTEST_CANDLES} 根 K 棒"
+                f"回測長度超過上限：{active_cap} 根 K 棒"
                 f"（{interval} 間隔最多可回測 {max_days_for_interval} 天）"
             )
-        download_limit = max(2, min(limit, BACKTEST_PROVIDER_CANDLE_LIMIT))
+        download_limit = max(2, min(limit, active_cap))
         start_ms = parse_time_ms(data.get("start_time"))
         end_ms = parse_time_ms(data.get("end_time"))
         if start_ms is not None or end_ms is not None:
@@ -597,7 +598,7 @@ def register_trading_routes(app, deps):
             "mins_per_candle": mins_per_candle,
             "actual_candle_count": len(candles),
             "actual_days": actual_days,
-            "max_backtest_candles": MAX_BACKTEST_CANDLES,
+            "max_backtest_candles": active_cap,
             "max_backtest_candles_per_batch": BACKTEST_SEGMENT_CANDLES,
             "max_backtest_days": max_days_for_interval,
         }
@@ -1082,9 +1083,10 @@ def register_trading_routes(app, deps):
             result = trading_service.backtest_trading_bot(actor=actor, payload=data)
             result["data_source"] = result.get("data_source") or data.get("data_source") or ("browser_loaded_chart" if isinstance((data or {}).get("candles"), list) else "")
             result["provider_symbol"] = result.get("provider_symbol") or data.get("provider_symbol") or ""
-            result["max_backtest_candles"] = MAX_BACKTEST_CANDLES
+            active_cap = trading_service.get_max_backtest_candles()
+            result["max_backtest_candles"] = active_cap
             result["max_backtest_candles_per_batch"] = result.get("max_backtest_candles_per_batch") or fetched_meta.get("max_backtest_candles_per_batch") or BACKTEST_SEGMENT_CANDLES
-            result["provider_candle_limit"] = BACKTEST_PROVIDER_CANDLE_LIMIT
+            result["provider_candle_limit"] = active_cap
             result["requested_candle_limit"] = data.get("requested_candle_limit") or data.get("candle_limit") or data.get("limit") or len(data.get("candles") or [])
             result["download_candle_limit"] = data.get("download_candle_limit") or len(data.get("candles") or [])
             # Interval and window info (auto-calculated so the caller never has to compute candle counts)
@@ -1093,9 +1095,9 @@ def register_trading_routes(app, deps):
             n_candles = result.get("candle_count") or len(data.get("candles") or [])
             result["interval"] = interval_key
             result["backtest_window_days"] = round(n_candles * mins_per_candle / 1440, 1)
-            result["max_backtest_days"] = fetched_meta.get("max_backtest_days") or round(MAX_BACKTEST_CANDLES * mins_per_candle / 1440, 1)
+            result["max_backtest_days"] = fetched_meta.get("max_backtest_days") or round(active_cap * mins_per_candle / 1440, 1)
             result["backtest_limits"] = {
-                iv: {"max_candles": MAX_BACKTEST_CANDLES, "max_days": round(MAX_BACKTEST_CANDLES * m / 1440, 1)}
+                iv: {"max_candles": active_cap, "max_days": round(active_cap * m / 1440, 1)}
                 for iv, m in INTERVAL_MINUTES.items()
             }
             audit(

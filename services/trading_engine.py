@@ -306,7 +306,16 @@ MARGIN_LONG_FINANCING_RATE_PERCENT = 90.0
 SHORT_COLLATERAL_RATE_PERCENT = 60.0
 SUPPORTED_EXECUTION_MODES = {"house_counterparty", "pvp_matching", "hybrid_liquidity"}
 BACKTEST_SEGMENT_CANDLES = 10_000
+# Default cap; root may override via trading_settings 'trading.backtest_max_candles'.
+# Hard floor (1000) and ceiling (10_000_000) are enforced wherever the setting is consumed.
 MAX_BACKTEST_CANDLES = 20_000
+BACKTEST_MAX_CANDLES_FLOOR = 1_000
+BACKTEST_MAX_CANDLES_CEILING = 10_000_000
+# First-boot probe budget bounds (seconds). Default 60s gives a stable signal;
+# floor 5s prevents nonsense projections from dust-sized probes.
+BACKTEST_CAPACITY_TIME_BUDGET_DEFAULT_SECONDS = 60
+BACKTEST_CAPACITY_TIME_BUDGET_MIN_SECONDS = 5
+BACKTEST_CAPACITY_TIME_BUDGET_MAX_SECONDS = 600
 BINANCE_TICKER_URL = "https://api.binance.com/api/v3/ticker/price"
 OKX_TICKER_URL = "https://www.okx.com/api/v5/market/ticker"
 COINBASE_TICKER_URL_TEMPLATE = "https://api.exchange.coinbase.com/products/{product_id}/ticker"
@@ -2397,6 +2406,10 @@ class TradingEngineService:
             "bot_audit_interval_seconds": raw_int_setting(raw, "trading.bot_audit_interval_seconds", TRADING_BOT_AUDIT_INTERVAL_SECONDS, name="bot_audit_interval_seconds", minimum=60, maximum=86400),
             "bot_audit_limit": raw_int_setting(raw, "trading.bot_audit_limit", TRADING_BOT_AUDIT_LIMIT, name="bot_audit_limit", minimum=1, maximum=200),
             "bot_audit_min_enabled_seconds": raw_int_setting(raw, "trading.bot_audit_min_enabled_seconds", TRADING_BOT_AUDIT_MIN_ENABLED_SECONDS, name="bot_audit_min_enabled_seconds", minimum=3600, maximum=604800),
+            "backtest_max_candles": raw_int_setting(raw, "trading.backtest_max_candles", str(MAX_BACKTEST_CANDLES), name="backtest_max_candles", minimum=BACKTEST_MAX_CANDLES_FLOOR, maximum=BACKTEST_MAX_CANDLES_CEILING),
+            "backtest_measured_capacity": raw_int_setting(raw, "trading.backtest_measured_capacity", "0", name="backtest_measured_capacity", minimum=0, maximum=BACKTEST_MAX_CANDLES_CEILING),
+            "backtest_capacity_measured_at": raw.get("trading.backtest_capacity_measured_at", ""),
+            "backtest_capacity_time_budget_seconds": raw_int_setting(raw, "trading.backtest_capacity_time_budget_seconds", str(BACKTEST_CAPACITY_TIME_BUDGET_DEFAULT_SECONDS), name="backtest_capacity_time_budget_seconds", minimum=BACKTEST_CAPACITY_TIME_BUDGET_MIN_SECONDS, maximum=BACKTEST_CAPACITY_TIME_BUDGET_MAX_SECONDS),
             "raw": raw,
         }
 
@@ -2413,6 +2426,115 @@ class TradingEngineService:
                 "reserve_pool": dict(self._reserve(conn)),
                 "funding_pool": self._funding_pool_payload(conn),
             }
+        finally:
+            conn.close()
+
+    def get_max_backtest_candles(self, conn=None):
+        """Resolve the runtime backtest cap (root-configured) with safe fallback to MAX_BACKTEST_CANDLES."""
+        close_conn = False
+        if conn is None:
+            conn = self.get_db()
+            close_conn = True
+        try:
+            try:
+                self.ensure_schema(conn)
+                row = conn.execute("SELECT value FROM trading_settings WHERE key = ?", ("trading.backtest_max_candles",)).fetchone()
+            except Exception:
+                return MAX_BACKTEST_CANDLES
+            if not row:
+                return MAX_BACKTEST_CANDLES
+            try:
+                value = int(str(row["value"]).strip())
+            except Exception:
+                return MAX_BACKTEST_CANDLES
+            if value < BACKTEST_MAX_CANDLES_FLOOR:
+                return MAX_BACKTEST_CANDLES
+            if value > BACKTEST_MAX_CANDLES_CEILING:
+                return BACKTEST_MAX_CANDLES_CEILING
+            return value
+        finally:
+            if close_conn:
+                conn.close()
+
+    def get_backtest_capacity_time_budget_seconds(self, conn=None):
+        """Resolve the root-configured probe time budget (seconds), default 60."""
+        close_conn = False
+        if conn is None:
+            conn = self.get_db()
+            close_conn = True
+        try:
+            try:
+                self.ensure_schema(conn)
+                row = conn.execute(
+                    "SELECT value FROM trading_settings WHERE key = ?",
+                    ("trading.backtest_capacity_time_budget_seconds",),
+                ).fetchone()
+            except Exception:
+                return BACKTEST_CAPACITY_TIME_BUDGET_DEFAULT_SECONDS
+            if not row:
+                return BACKTEST_CAPACITY_TIME_BUDGET_DEFAULT_SECONDS
+            try:
+                value = int(str(row["value"]).strip())
+            except Exception:
+                return BACKTEST_CAPACITY_TIME_BUDGET_DEFAULT_SECONDS
+            if value < BACKTEST_CAPACITY_TIME_BUDGET_MIN_SECONDS:
+                return BACKTEST_CAPACITY_TIME_BUDGET_MIN_SECONDS
+            if value > BACKTEST_CAPACITY_TIME_BUDGET_MAX_SECONDS:
+                return BACKTEST_CAPACITY_TIME_BUDGET_MAX_SECONDS
+            return value
+        finally:
+            if close_conn:
+                conn.close()
+
+    def get_backtest_capacity_measurement(self, conn=None):
+        """Return {measured_capacity, measured_at} for the first-boot calibration result."""
+        close_conn = False
+        if conn is None:
+            conn = self.get_db()
+            close_conn = True
+        try:
+            try:
+                self.ensure_schema(conn)
+                rows = conn.execute(
+                    "SELECT key, value FROM trading_settings WHERE key IN (?, ?)",
+                    ("trading.backtest_measured_capacity", "trading.backtest_capacity_measured_at"),
+                ).fetchall()
+            except Exception:
+                return {"measured_capacity": 0, "measured_at": ""}
+            raw = {row["key"]: row["value"] for row in rows}
+            try:
+                measured_capacity = int(str(raw.get("trading.backtest_measured_capacity", "0")).strip() or 0)
+            except Exception:
+                measured_capacity = 0
+            return {
+                "measured_capacity": max(0, measured_capacity),
+                "measured_at": raw.get("trading.backtest_capacity_measured_at", "") or "",
+            }
+        finally:
+            if close_conn:
+                conn.close()
+
+    def record_backtest_capacity_measurement(self, *, measured_capacity, measured_at, actor_id="system"):
+        """Persist a first-boot calibration result (and optionally seed the cap setting if unset)."""
+        try:
+            measured_capacity = int(measured_capacity)
+        except Exception:
+            measured_capacity = 0
+        measured_capacity = max(0, min(BACKTEST_MAX_CANDLES_CEILING, measured_capacity))
+        if not measured_at:
+            measured_at = _now()
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            conn.execute(
+                "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                ("trading.backtest_measured_capacity", str(measured_capacity), measured_at, actor_id),
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                ("trading.backtest_capacity_measured_at", measured_at, measured_at, actor_id),
+            )
+            conn.commit()
         finally:
             conn.close()
 
@@ -2531,6 +2653,20 @@ class TradingEngineService:
                     ("trading.bot_auto_scan_limit", value, now, self._actor_id(actor)),
                 )
                 setting_changes["trading.bot_auto_scan_limit"] = value
+            if "backtest_max_candles" in settings:
+                value = int_input_text(settings, "backtest_max_candles", minimum=BACKTEST_MAX_CANDLES_FLOOR, maximum=BACKTEST_MAX_CANDLES_CEILING)
+                conn.execute(
+                    "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                    ("trading.backtest_max_candles", value, now, self._actor_id(actor)),
+                )
+                setting_changes["trading.backtest_max_candles"] = value
+            if "backtest_capacity_time_budget_seconds" in settings:
+                value = int_input_text(settings, "backtest_capacity_time_budget_seconds", minimum=BACKTEST_CAPACITY_TIME_BUDGET_MIN_SECONDS, maximum=BACKTEST_CAPACITY_TIME_BUDGET_MAX_SECONDS)
+                conn.execute(
+                    "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                    ("trading.backtest_capacity_time_budget_seconds", value, now, self._actor_id(actor)),
+                )
+                setting_changes["trading.backtest_capacity_time_budget_seconds"] = value
             if "bot_audit_interval_seconds" in settings:
                 value = int_input_text(settings, "bot_audit_interval_seconds", minimum=60, maximum=86400)
                 conn.execute(
@@ -6449,8 +6585,9 @@ class TradingEngineService:
         candles = payload.get("candles") or []
         if not isinstance(candles, list) or len(candles) < 2:
             raise ValueError("candles are required for backtest")
-        if len(candles) > MAX_BACKTEST_CANDLES:
-            raise ValueError(f"candles length must be <= {MAX_BACKTEST_CANDLES}")
+        active_max_candles = self.get_max_backtest_candles()
+        if len(candles) > active_max_candles:
+            raise ValueError(f"candles length must be <= {active_max_candles}")
         start_time = str(payload.get("start_time") or "").strip()
         end_time = str(payload.get("end_time") or "").strip()
         if start_time or end_time:
@@ -6815,7 +6952,7 @@ class TradingEngineService:
             end_time=end_time,
             all_candles_raw=all_candles_raw,
             candle_count=len(candles),
-            max_backtest_candles=MAX_BACKTEST_CANDLES,
+            max_backtest_candles=active_max_candles,
             segment_count=segment_count,
             max_backtest_candles_per_batch=BACKTEST_SEGMENT_CANDLES,
             outlier_skipped_count=state["outlier_skipped_count"],
@@ -6830,7 +6967,7 @@ class TradingEngineService:
             start_time=start_time,
             end_time=end_time,
             range_warnings=range_warnings,
-            max_backtest_candles=MAX_BACKTEST_CANDLES,
+            max_backtest_candles=active_max_candles,
             max_backtest_candles_per_batch=BACKTEST_SEGMENT_CANDLES,
             requested_candle_limit=payload.get("requested_candle_limit") or payload.get("candle_limit") or payload.get("limit") or len(candles),
             data_source=str(payload.get("data_source") or ("provided_candles" if payload.get("candles") else "")),
