@@ -1,0 +1,562 @@
+{
+  "generated_at": "2026-05-06T12:42:21",
+  "data_source": "binance_btcusdt_1h",
+  "candle_count_total": 43800,
+  "first_candle_iso": "2021-05-06T22:00:00+00:00",
+  "last_candle_iso": "2026-05-06T04:00:00+00:00",
+  "initial_cash_points": 100000,
+  "windows": [
+    {
+      "label": "6mo",
+      "candle_count": 4320,
+      "rankings": [
+        {
+          "template": "full_entry_exit",
+          "label": "完整進出場策略",
+          "candle_count": 4320,
+          "trade_count": 2,
+          "final_equity_points": 111919,
+          "initial_cash_points": 100000,
+          "pnl_percent": 11.92,
+          "max_drawdown_percent": 8.42,
+          "wall_seconds": 0.84
+        },
+        {
+          "template": "risk_guard",
+          "label": "停利停損風控",
+          "candle_count": 4320,
+          "trade_count": 0,
+          "final_equity_points": 100000,
+          "initial_cash_points": 100000,
+          "pnl_percent": 0.0,
+          "max_drawdown_percent": 0.0,
+          "wall_seconds": 0.63
+        },
+        {
+          "template": "staged_profit_taking",
+          "label": "分批獲利了結",
+          "candle_count": 4320,
+          "trade_count": 0,
+          "final_equity_points": 100000,
+          "initial_cash_points": 100000,
+          "pnl_percent": 0.0,
+          "max_drawdown_percent": 0.0,
+          "wall_seconds": 0.97
+        },
+        {
+          "template": "stop_loss",
+          "label": "持倉跌破停損",
+          "candle_count": 4320,
+          "trade_count": 0,
+          "final_equity_points": 100000,
+          "initial_cash_points": 100000,
+          "pnl_percent": 0.0,
+          "max_drawdown_percent": 0.0,
+          "wall_seconds": 0.61
+        },
+        {
+          "template": "swing_bb_ma50",
+          "label": "布林波段 + MA50 支撐",
+          "candle_count": 4320,
+          "trade_count": 3,
+          "final_equity_points": 99424,
+          "initial_cash_points": 100000,
+          "pnl_percent": -0.58,
+          "max_drawdown_percent": 2.16,
+          "wall_seconds": 1.13
+        },
+        {
+          "template": "ma_pullback",
+          "label": "MA 趨勢回踩",
+          "candle_count": 4320,
+          "trade_count": 1,
+          "final_equity_points": 99350,
+          "initial_cash_points": 100000,
+          "pnl_percent": -0.65,
+          "max_drawdown_percent": 4.77,
+          "wall_seconds": 0.66
+        },
+        {
+          "template": "dip_buy",
+          "label": "保守逢低買入",
+          "candle_count": 4320,
+          "trade_count": 1,
+          "final_equity_points": 99067,
+          "initial_cash_points": 100000,
+          "pnl_percent": -0.93,
+          "max_drawdown_percent": 3.84,
+          "wall_seconds": 0.48
+        },
+        {
+          "template": "bollinger_reversion",
+          "label": "布林通道均值回歸",
+          "candle_count": 4320,
+          "trade_count": 2,
+          "final_equity_points": 98953,
+          "initial_cash_points": 100000,
+          "pnl_percent": -1.05,
+          "max_drawdown_percent": 2.03,
+          "wall_seconds": 0.72
+        },
+        {
+          "template": "ma200_trend_entry",
+          "label": "MA200 長線趨勢進場",
+          "candle_count": 4320,
+          "trade_count": 1,
+          "final_equity_points": 98866,
+          "initial_cash_points": 100000,
+          "pnl_percent": -1.13,
+          "max_drawdown_percent": 5.83,
+          "wall_seconds": 0.73
+        },
+        {
+          "template": "rsi_scale",
+          "label": "RSI 分批買賣",
+          "candle_count": 4320,
+          "trade_count": 2,
+          "final_equity_points": 98330,
+          "initial_cash_points": 100000,
+          "pnl_percent": -1.67,
+          "max_drawdown_percent": 2.77,
+          "wall_seconds": 0.72
+        },
+        {
+          "template": "kd_momentum",
+          "label": "KD 動能追蹤",
+          "candle_count": 4320,
+          "trade_count": 1,
+          "final_equity_points": 97914,
+          "initial_cash_points": 100000,
+          "pnl_percent": -2.09,
+          "max_drawdown_percent": 4.24,
+          "wall_seconds": 0.56
+        },
+        {
+          "template": "breakout_buy",
+          "label": "突破追價買入",
+          "candle_count": 4320,
+          "trade_count": 1,
+          "final_equity_points": 96926,
+          "initial_cash_points": 100000,
+          "pnl_percent": -3.07,
+          "max_drawdown_percent": 6.37,
+          "wall_seconds": 0.57
+        }
+      ]
+    },
+    {
+      "label": "1yr",
+      "candle_count": 8760,
+      "rankings": [
+        {
+          "template": "full_entry_exit",
+          "label": "完整進出場策略",
+          "candle_count": 8760,
+          "trade_count": 2,
+          "final_equity_points": 111919,
+          "initial_cash_points": 100000,
+          "pnl_percent": 11.92,
+          "max_drawdown_percent": 8.42,
+          "wall_seconds": 1.78
+        },
+        {
+          "template": "risk_guard",
+          "label": "停利停損風控",
+          "candle_count": 8760,
+          "trade_count": 0,
+          "final_equity_points": 100000,
+          "initial_cash_points": 100000,
+          "pnl_percent": 0.0,
+          "max_drawdown_percent": 0.0,
+          "wall_seconds": 1.18
+        },
+        {
+          "template": "staged_profit_taking",
+          "label": "分批獲利了結",
+          "candle_count": 8760,
+          "trade_count": 0,
+          "final_equity_points": 100000,
+          "initial_cash_points": 100000,
+          "pnl_percent": 0.0,
+          "max_drawdown_percent": 0.0,
+          "wall_seconds": 1.82
+        },
+        {
+          "template": "stop_loss",
+          "label": "持倉跌破停損",
+          "candle_count": 8760,
+          "trade_count": 0,
+          "final_equity_points": 100000,
+          "initial_cash_points": 100000,
+          "pnl_percent": 0.0,
+          "max_drawdown_percent": 0.0,
+          "wall_seconds": 1.1
+        },
+        {
+          "template": "rsi_scale",
+          "label": "RSI 分批買賣",
+          "candle_count": 8760,
+          "trade_count": 2,
+          "final_equity_points": 99130,
+          "initial_cash_points": 100000,
+          "pnl_percent": -0.87,
+          "max_drawdown_percent": 3.06,
+          "wall_seconds": 1.47
+        },
+        {
+          "template": "dip_buy",
+          "label": "保守逢低買入",
+          "candle_count": 8760,
+          "trade_count": 1,
+          "final_equity_points": 99067,
+          "initial_cash_points": 100000,
+          "pnl_percent": -0.93,
+          "max_drawdown_percent": 3.84,
+          "wall_seconds": 1.0
+        },
+        {
+          "template": "swing_bb_ma50",
+          "label": "布林波段 + MA50 支撐",
+          "candle_count": 8760,
+          "trade_count": 3,
+          "final_equity_points": 99061,
+          "initial_cash_points": 100000,
+          "pnl_percent": -0.94,
+          "max_drawdown_percent": 1.06,
+          "wall_seconds": 2.5
+        },
+        {
+          "template": "bollinger_reversion",
+          "label": "布林通道均值回歸",
+          "candle_count": 8760,
+          "trade_count": 2,
+          "final_equity_points": 98938,
+          "initial_cash_points": 100000,
+          "pnl_percent": -1.06,
+          "max_drawdown_percent": 3.03,
+          "wall_seconds": 1.44
+        },
+        {
+          "template": "kd_momentum",
+          "label": "KD 動能追蹤",
+          "candle_count": 8760,
+          "trade_count": 1,
+          "final_equity_points": 98345,
+          "initial_cash_points": 100000,
+          "pnl_percent": -1.65,
+          "max_drawdown_percent": 6.29,
+          "wall_seconds": 1.12
+        },
+        {
+          "template": "ma_pullback",
+          "label": "MA 趨勢回踩",
+          "candle_count": 8760,
+          "trade_count": 1,
+          "final_equity_points": 97137,
+          "initial_cash_points": 100000,
+          "pnl_percent": -2.86,
+          "max_drawdown_percent": 6.94,
+          "wall_seconds": 1.32
+        },
+        {
+          "template": "breakout_buy",
+          "label": "突破追價買入",
+          "candle_count": 8760,
+          "trade_count": 1,
+          "final_equity_points": 97101,
+          "initial_cash_points": 100000,
+          "pnl_percent": -2.9,
+          "max_drawdown_percent": 9.05,
+          "wall_seconds": 1.2
+        },
+        {
+          "template": "ma200_trend_entry",
+          "label": "MA200 長線趨勢進場",
+          "candle_count": 8760,
+          "trade_count": 1,
+          "final_equity_points": 96724,
+          "initial_cash_points": 100000,
+          "pnl_percent": -3.28,
+          "max_drawdown_percent": 8.81,
+          "wall_seconds": 1.44
+        }
+      ]
+    },
+    {
+      "label": "3yr",
+      "candle_count": 26280,
+      "rankings": [
+        {
+          "template": "ma200_trend_entry",
+          "label": "MA200 長線趨勢進場",
+          "candle_count": 26280,
+          "trade_count": 1,
+          "final_equity_points": 129586,
+          "initial_cash_points": 100000,
+          "pnl_percent": 29.59,
+          "max_drawdown_percent": 22.45,
+          "wall_seconds": 4.25
+        },
+        {
+          "template": "ma_pullback",
+          "label": "MA 趨勢回踩",
+          "candle_count": 26280,
+          "trade_count": 1,
+          "final_equity_points": 123911,
+          "initial_cash_points": 100000,
+          "pnl_percent": 23.91,
+          "max_drawdown_percent": 19.39,
+          "wall_seconds": 3.74
+        },
+        {
+          "template": "kd_momentum",
+          "label": "KD 動能追蹤",
+          "candle_count": 26280,
+          "trade_count": 1,
+          "final_equity_points": 119380,
+          "initial_cash_points": 100000,
+          "pnl_percent": 19.38,
+          "max_drawdown_percent": 16.82,
+          "wall_seconds": 3.16
+        },
+        {
+          "template": "dip_buy",
+          "label": "保守逢低買入",
+          "candle_count": 26280,
+          "trade_count": 1,
+          "final_equity_points": 118136,
+          "initial_cash_points": 100000,
+          "pnl_percent": 18.14,
+          "max_drawdown_percent": 16.34,
+          "wall_seconds": 2.84
+        },
+        {
+          "template": "rsi_scale",
+          "label": "RSI 分批買賣",
+          "candle_count": 26280,
+          "trade_count": 2,
+          "final_equity_points": 109242,
+          "initial_cash_points": 100000,
+          "pnl_percent": 9.24,
+          "max_drawdown_percent": 9.47,
+          "wall_seconds": 4.22
+        },
+        {
+          "template": "bollinger_reversion",
+          "label": "布林通道均值回歸",
+          "candle_count": 26280,
+          "trade_count": 2,
+          "final_equity_points": 109057,
+          "initial_cash_points": 100000,
+          "pnl_percent": 9.06,
+          "max_drawdown_percent": 9.44,
+          "wall_seconds": 4.3
+        },
+        {
+          "template": "risk_guard",
+          "label": "停利停損風控",
+          "candle_count": 26280,
+          "trade_count": 0,
+          "final_equity_points": 100000,
+          "initial_cash_points": 100000,
+          "pnl_percent": 0.0,
+          "max_drawdown_percent": 0.0,
+          "wall_seconds": 3.38
+        },
+        {
+          "template": "staged_profit_taking",
+          "label": "分批獲利了結",
+          "candle_count": 26280,
+          "trade_count": 0,
+          "final_equity_points": 100000,
+          "initial_cash_points": 100000,
+          "pnl_percent": 0.0,
+          "max_drawdown_percent": 0.0,
+          "wall_seconds": 5.43
+        },
+        {
+          "template": "stop_loss",
+          "label": "持倉跌破停損",
+          "candle_count": 26280,
+          "trade_count": 0,
+          "final_equity_points": 100000,
+          "initial_cash_points": 100000,
+          "pnl_percent": 0.0,
+          "max_drawdown_percent": 0.0,
+          "wall_seconds": 3.49
+        },
+        {
+          "template": "swing_bb_ma50",
+          "label": "布林波段 + MA50 支撐",
+          "candle_count": 26280,
+          "trade_count": 3,
+          "final_equity_points": 99224,
+          "initial_cash_points": 100000,
+          "pnl_percent": -0.78,
+          "max_drawdown_percent": 1.2,
+          "wall_seconds": 6.31
+        },
+        {
+          "template": "breakout_buy",
+          "label": "突破追價買入",
+          "candle_count": 26280,
+          "trade_count": 1,
+          "final_equity_points": 97043,
+          "initial_cash_points": 100000,
+          "pnl_percent": -2.96,
+          "max_drawdown_percent": 9.01,
+          "wall_seconds": 3.38
+        },
+        {
+          "template": "full_entry_exit",
+          "label": "完整進出場策略",
+          "candle_count": 26280,
+          "trade_count": 2,
+          "final_equity_points": 91326,
+          "initial_cash_points": 100000,
+          "pnl_percent": -8.67,
+          "max_drawdown_percent": 8.99,
+          "wall_seconds": 5.01
+        }
+      ]
+    },
+    {
+      "label": "5yr",
+      "candle_count": 43800,
+      "rankings": [
+        {
+          "template": "ma200_trend_entry",
+          "label": "MA200 長線趨勢進場",
+          "candle_count": 43800,
+          "trade_count": 1,
+          "final_equity_points": 115727,
+          "initial_cash_points": 100000,
+          "pnl_percent": 15.73,
+          "max_drawdown_percent": 18.04,
+          "wall_seconds": 7.04
+        },
+        {
+          "template": "ma_pullback",
+          "label": "MA 趨勢回踩",
+          "candle_count": 43800,
+          "trade_count": 1,
+          "final_equity_points": 114290,
+          "initial_cash_points": 100000,
+          "pnl_percent": 14.29,
+          "max_drawdown_percent": 15.84,
+          "wall_seconds": 6.21
+        },
+        {
+          "template": "dip_buy",
+          "label": "保守逢低買入",
+          "candle_count": 43800,
+          "trade_count": 1,
+          "final_equity_points": 104387,
+          "initial_cash_points": 100000,
+          "pnl_percent": 4.39,
+          "max_drawdown_percent": 9.94,
+          "wall_seconds": 4.77
+        },
+        {
+          "template": "kd_momentum",
+          "label": "KD 動能追蹤",
+          "candle_count": 43800,
+          "trade_count": 1,
+          "final_equity_points": 103986,
+          "initial_cash_points": 100000,
+          "pnl_percent": 3.99,
+          "max_drawdown_percent": 9.72,
+          "wall_seconds": 5.48
+        },
+        {
+          "template": "bollinger_reversion",
+          "label": "布林通道均值回歸",
+          "candle_count": 43800,
+          "trade_count": 2,
+          "final_equity_points": 102333,
+          "initial_cash_points": 100000,
+          "pnl_percent": 2.33,
+          "max_drawdown_percent": 5.26,
+          "wall_seconds": 6.99
+        },
+        {
+          "template": "rsi_scale",
+          "label": "RSI 分批買賣",
+          "candle_count": 43800,
+          "trade_count": 2,
+          "final_equity_points": 101169,
+          "initial_cash_points": 100000,
+          "pnl_percent": 1.17,
+          "max_drawdown_percent": 5.54,
+          "wall_seconds": 6.96
+        },
+        {
+          "template": "risk_guard",
+          "label": "停利停損風控",
+          "candle_count": 43800,
+          "trade_count": 0,
+          "final_equity_points": 100000,
+          "initial_cash_points": 100000,
+          "pnl_percent": 0.0,
+          "max_drawdown_percent": 0.0,
+          "wall_seconds": 5.34
+        },
+        {
+          "template": "staged_profit_taking",
+          "label": "分批獲利了結",
+          "candle_count": 43800,
+          "trade_count": 0,
+          "final_equity_points": 100000,
+          "initial_cash_points": 100000,
+          "pnl_percent": 0.0,
+          "max_drawdown_percent": 0.0,
+          "wall_seconds": 9.66
+        },
+        {
+          "template": "stop_loss",
+          "label": "持倉跌破停損",
+          "candle_count": 43800,
+          "trade_count": 0,
+          "final_equity_points": 100000,
+          "initial_cash_points": 100000,
+          "pnl_percent": 0.0,
+          "max_drawdown_percent": 0.0,
+          "wall_seconds": 5.61
+        },
+        {
+          "template": "swing_bb_ma50",
+          "label": "布林波段 + MA50 支撐",
+          "candle_count": 43800,
+          "trade_count": 3,
+          "final_equity_points": 99969,
+          "initial_cash_points": 100000,
+          "pnl_percent": -0.03,
+          "max_drawdown_percent": 1.8,
+          "wall_seconds": 10.85
+        },
+        {
+          "template": "breakout_buy",
+          "label": "突破追價買入",
+          "candle_count": 43800,
+          "trade_count": 1,
+          "final_equity_points": 97043,
+          "initial_cash_points": 100000,
+          "pnl_percent": -2.96,
+          "max_drawdown_percent": 9.01,
+          "wall_seconds": 5.76
+        },
+        {
+          "template": "full_entry_exit",
+          "label": "完整進出場策略",
+          "candle_count": 43800,
+          "trade_count": 2,
+          "final_equity_points": 90136,
+          "initial_cash_points": 100000,
+          "pnl_percent": -9.86,
+          "max_drawdown_percent": 13.3,
+          "wall_seconds": 7.88
+        }
+      ]
+    }
+  ]
+}

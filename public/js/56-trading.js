@@ -2236,6 +2236,7 @@ function renderTradingWorkflowTemplateExplanation() {
     ["適合情境", tradingWorkflowExplanationList(detail.best_for)],
     ["可調參數", tradingWorkflowExplanationList(detail.tuning)],
   ].filter(([, content]) => !!content);
+  const benchmarkHtml = renderTradingWorkflowTemplateBenchmark(key);
   box.innerHTML = `
     <div class="drive-card-title">${sanitize(item.label || key)}</div>
     ${sections.map(([title, content]) => `
@@ -2244,8 +2245,78 @@ function renderTradingWorkflowTemplateExplanation() {
         <div>${content.startsWith("<") ? content : sanitize(content)}</div>
       </div>
     `).join("")}
+    ${benchmarkHtml}
     <div class="muted">來源：${sanitize(item.source_path || item.scope || "workflow")}</div>
   `;
+  loadTradingWorkflowBenchmarksAsync();
+}
+
+let tradingWorkflowBenchmarkCache = null;
+let tradingWorkflowBenchmarkLoading = false;
+
+function renderTradingWorkflowTemplateBenchmark(templateId) {
+  const data = tradingWorkflowBenchmarkCache;
+  if (!data || !Array.isArray(data.windows)) {
+    return `
+      <div class="workflow-template-section">
+        <strong>歷史回測表現（BTC/USDT 1h）</strong>
+        <div class="muted">資料載入中...</div>
+      </div>
+    `;
+  }
+  const rows = data.windows.map((w) => {
+    const r = (w.rankings || []).find((row) => row.template === templateId);
+    if (!r || r.error) return [w.label, null, null, null];
+    const pnl = Number(r.pnl_percent || 0);
+    return [w.label, pnl, Number(r.trade_count || 0), Number(r.max_drawdown_percent || 0)];
+  });
+  if (!rows.length) return "";
+  const fmtPct = (v) => {
+    if (v === null || v === undefined) return "-";
+    const n = Number(v);
+    const cls = n > 0 ? "color:#00d4aa" : n < 0 ? "color:#ff6b6b" : "";
+    return `<span style="${cls}">${n >= 0 ? "+" : ""}${n.toFixed(2)}%</span>`;
+  };
+  const table = `
+    <table style="width:100%;border-collapse:collapse;font-size:.82rem;margin-top:.3rem;">
+      <thead><tr style="border-bottom:1px solid var(--muted, #444);">
+        <th style="text-align:left;padding:.2rem .4rem;">時長</th>
+        <th style="text-align:right;padding:.2rem .4rem;">PnL</th>
+        <th style="text-align:right;padding:.2rem .4rem;">交易次數</th>
+        <th style="text-align:right;padding:.2rem .4rem;">最大回撤</th>
+      </tr></thead>
+      <tbody>${rows.map(([label, pnl, trades, dd]) => `
+        <tr>
+          <td style="padding:.2rem .4rem;">${sanitize(label)}</td>
+          <td style="text-align:right;padding:.2rem .4rem;">${pnl === null ? "-" : fmtPct(pnl)}</td>
+          <td style="text-align:right;padding:.2rem .4rem;">${trades === null ? "-" : trades}</td>
+          <td style="text-align:right;padding:.2rem .4rem;">${dd === null ? "-" : fmtPct(-Math.abs(dd))}</td>
+        </tr>
+      `).join("")}</tbody>
+    </table>
+  `;
+  return `
+    <div class="workflow-template-section">
+      <strong>歷史回測表現（BTC/USDT 1h，初始資金 ${Number(data.initial_cash_points || 0).toLocaleString()} POINTS）</strong>
+      ${table}
+      <div class="muted" style="font-size:.72rem;margin-top:.3rem;">資料來源：${sanitize(data.data_source || "")}；資料區間 ${sanitize(String(data.first_candle_iso || "").slice(0, 10))} → ${sanitize(String(data.last_candle_iso || "").slice(0, 10))}；產生時間 ${sanitize(data.generated_at || "")}</div>
+    </div>
+  `;
+}
+
+async function loadTradingWorkflowBenchmarksAsync() {
+  if (tradingWorkflowBenchmarkCache || tradingWorkflowBenchmarkLoading) return;
+  tradingWorkflowBenchmarkLoading = true;
+  try {
+    const res = await fetch("/data/workflow_template_benchmarks.json", { credentials: "same-origin" });
+    if (!res.ok) return;
+    tradingWorkflowBenchmarkCache = await res.json();
+    renderTradingWorkflowTemplateExplanation();
+  } catch (_err) {
+    // benchmark JSON is optional; silent fallback to "no data"
+  } finally {
+    tradingWorkflowBenchmarkLoading = false;
+  }
 }
 
 async function loadTradingWorkflowTemplates({ force = false } = {}) {
