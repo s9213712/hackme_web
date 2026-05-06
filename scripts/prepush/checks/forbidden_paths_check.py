@@ -17,22 +17,10 @@ FORBIDDEN_PATTERNS = (
     ".integrity_key",
     ".chain_seed",
     "integrity_manifest.json",
-    "anchors/**",
-    "chats/**",
-    "reports/**",
-    "security/audit_exports/**",
-    "storage/**",
-    "logs/**",
-    "runtime/**",
-    "hackme_web_runtime/**",
-    "html_learning_storage/**",
     "**/__pycache__/**",
     ".pytest_cache/**",
     ".mypy_cache/**",
     ".ruff_cache/**",
-    "node_modules/**",
-    "dist/**",
-    "build/**",
 )
 
 

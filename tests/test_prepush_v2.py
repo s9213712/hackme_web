@@ -52,6 +52,11 @@ def test_db_log_storage_report_artifacts_are_forbidden():
     assert forbidden_paths_check.is_forbidden("docs/WEBCHAT/AGENT_SKILL_PROPOSAL.md:Zone.Identifier")
 
 
+def test_services_storage_package_is_not_treated_as_runtime_storage():
+    assert forbidden_paths_check.is_forbidden("services/storage/__init__.py") is False
+    assert forbidden_paths_check.is_forbidden("services/storage/cloud_drive.py") is False
+
+
 def test_secret_scanner_allows_fake_examples_and_redacts_real_secret():
     fake = 'password="fake example changeme"'
     real = "api_key=sk-abcdefghijklmnopqrstuvwxyz123456"
