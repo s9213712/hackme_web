@@ -1,6 +1,15 @@
 # Update Summary
 
-Release ID: `2026.05.07-149`
+Release ID: `2026.05.07-150`
+
+## 2026.05.07-150
+
+- `scripts/run_prod.sh` now aligns `FORCE_HTTPS=true` with Gunicorn's proxy
+  trust model by writing/exporting `GUNICORN_FORWARDED_ALLOW_IPS` and passing it
+  to `--forwarded-allow-ips`, so proxy-terminated HTTPS can upgrade
+  `X-Forwarded-Proto` into a real secure WSGI scheme.
+- The production deploy docs now spell out that `FORCE_HTTPS` alone is not
+  enough; Gunicorn must trust the same proxy IPs that terminate TLS.
 
 ## 2026.05.07-149
 

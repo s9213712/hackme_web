@@ -47,3 +47,14 @@ def test_run_prod_check_reports_optional_hls_and_civitai_capabilities():
     assert 'say "- HLS tooling: ffmpeg=${has_ffmpeg}, ffprobe=${has_ffprobe}"' in script
     assert 'say "- Civitai search/download: $([[ -n "${CIVITAI_API_KEY:-}" ]] && printf \'configured\' || printf \'disabled (missing CIVITAI_API_KEY)\')"' in script
     assert 'say "- root offline recovery: python3 scripts/root_recovery.py"' in script
+
+
+def test_run_prod_aligns_force_https_with_forwarded_proxy_trust():
+    script = (ROOT / "scripts" / "run_prod.sh").read_text(encoding="utf-8")
+
+    assert 'write_env_line "GUNICORN_FORWARDED_ALLOW_IPS" "$gunicorn_forwarded_allow_ips"' in script
+    assert 'export GUNICORN_FORWARDED_ALLOW_IPS="${GUNICORN_FORWARDED_ALLOW_IPS:-${TRUSTED_PROXY_IPS:-}}"' in script
+    assert 'if [[ "${FORCE_HTTPS:-false}" == "true" && -z "${GUNICORN_FORWARDED_ALLOW_IPS:-}" ]]; then' in script
+    assert 'export GUNICORN_FORWARDED_ALLOW_IPS="127.0.0.1"' in script
+    assert '--forwarded-allow-ips "$GUNICORN_FORWARDED_ALLOW_IPS"' in script
+    assert 'say "- gunicorn forwarded proxy trust: ${GUNICORN_FORWARDED_ALLOW_IPS:-<empty>}"' in script

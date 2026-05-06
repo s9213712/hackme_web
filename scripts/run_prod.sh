@@ -159,7 +159,7 @@ run_wizard() {
   say "這會建立 $ENV_FILE；檔案權限會設為 600，請不要提交到 git。"
   say ""
 
-  local runtime_root host port external_https force_https cookie_secure use_xff trusted_proxy_ips
+  local runtime_root host port external_https force_https cookie_secure use_xff trusted_proxy_ips gunicorn_forwarded_allow_ips
   local workers timeout log_level create_manager create_test manager_password test_password
   local root_password storage_dir db_dir log_dir chat_dir anchor_dir reports_dir
 
@@ -186,13 +186,21 @@ run_wizard() {
   force_https="$external_https"
   cookie_secure="$external_https"
 
-  if prompt_yes_no "是否信任反向代理傳入的 X-Forwarded-For？" "n"; then
+  if [[ "$external_https" == "true" ]]; then
+    trusted_proxy_ips="$(prompt_default "可信任 proxy IP（用於 HTTPS / forwarded headers；多個用逗號）" "127.0.0.1")"
+    if prompt_yes_no "是否信任反向代理傳入的 X-Forwarded-For？" "n"; then
+      use_xff="true"
+    else
+      use_xff="false"
+    fi
+  elif prompt_yes_no "是否信任反向代理傳入的 X-Forwarded-For？" "n"; then
     use_xff="true"
     trusted_proxy_ips="$(prompt_default "可信任 proxy IP，多個用逗號" "127.0.0.1")"
   else
     use_xff="false"
     trusted_proxy_ips=""
   fi
+  gunicorn_forwarded_allow_ips="$trusted_proxy_ips"
 
   say ""
   say "設定 bootstrap 帳號。root 密碼只用於首次建立或預設密碼判定；首次登入後應立即變更。"
@@ -227,6 +235,7 @@ run_wizard() {
   write_env_line "SESSION_COOKIE_SAMESITE" "Strict"
   write_env_line "USE_XFF" "$use_xff"
   write_env_line "TRUSTED_PROXY_IPS" "$trusted_proxy_ips"
+  write_env_line "GUNICORN_FORWARDED_ALLOW_IPS" "$gunicorn_forwarded_allow_ips"
   write_env_line "SESSION_SECRET" "$(generate_secret)"
   write_env_line "CSRF_SECRET_KEY" "$(generate_secret)"
   write_env_line "ROOT_INTEGRITY_SIGNING_KEY" "$(generate_secret)"
@@ -343,9 +352,14 @@ validate_environment() {
   say "- logs: ${HTML_LEARNING_LOG_DIR}"
   say "- HTTPS redirect: ${FORCE_HTTPS:-false}"
   say "- secure cookies: ${SESSION_COOKIE_SECURE:-false}"
+  say "- gunicorn forwarded proxy trust: ${GUNICORN_FORWARDED_ALLOW_IPS:-<empty>}"
   say "- HLS tooling: ffmpeg=${has_ffmpeg}, ffprobe=${has_ffprobe}"
   say "- Civitai search/download: $([[ -n "${CIVITAI_API_KEY:-}" ]] && printf 'configured' || printf 'disabled (missing CIVITAI_API_KEY)')"
   say "- root offline recovery: python3 scripts/root_recovery.py"
+
+  if [[ "${FORCE_HTTPS:-false}" == "true" && -z "${GUNICORN_FORWARDED_ALLOW_IPS:-}" ]]; then
+    warn "FORCE_HTTPS=true 但未設定 GUNICORN_FORWARDED_ALLOW_IPS；若 HTTPS 終止在反向代理，請設定可信任 proxy IP。"
+  fi
 }
 
 prepare_runtime_dirs() {
@@ -399,6 +413,13 @@ export GUNICORN_TIMEOUT="${GUNICORN_TIMEOUT:-60}"
 export GUNICORN_LOG_LEVEL="${GUNICORN_LOG_LEVEL:-info}"
 export GUNICORN_ACCESS_LOG="${GUNICORN_ACCESS_LOG:--}"
 export GUNICORN_ERROR_LOG="${GUNICORN_ERROR_LOG:--}"
+export GUNICORN_FORWARDED_ALLOW_IPS="${GUNICORN_FORWARDED_ALLOW_IPS:-${TRUSTED_PROXY_IPS:-}}"
+if [[ "${FORCE_HTTPS:-false}" == "true" && -z "${GUNICORN_FORWARDED_ALLOW_IPS:-}" ]]; then
+  # FORCE_HTTPS means the app will treat requests as external HTTPS. If TLS is
+  # terminated at a reverse proxy, Gunicorn must trust that proxy so
+  # X-Forwarded-Proto can upgrade wsgi.url_scheme to https.
+  export GUNICORN_FORWARDED_ALLOW_IPS="127.0.0.1"
+fi
 
 validate_environment
 prepare_runtime_dirs
@@ -417,6 +438,7 @@ fi
 say "Starting Hackme Web with Gunicorn..."
 exec python3 -m gunicorn \
   --bind "$GUNICORN_BIND" \
+  --forwarded-allow-ips "$GUNICORN_FORWARDED_ALLOW_IPS" \
   --workers "$GUNICORN_WORKERS" \
   --timeout "$GUNICORN_TIMEOUT" \
   --access-logfile "$GUNICORN_ACCESS_LOG" \
