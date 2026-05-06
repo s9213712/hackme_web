@@ -130,6 +130,14 @@ from services.password_strength import enforce_password_strength, score_password
 from services.points_chain import DEFAULT_BLOCK_LEDGER_THRESHOLD, DEFAULT_BLOCK_MAX_INTERVAL_SECONDS, PointsLedgerService, ensure_points_economy_schema
 from services.release_info import APP_NAME, APP_RELEASE_ID
 from services.runtime_output import get_runtime_output, install_runtime_output_capture
+from services.server_startup import (
+    run_server_main as run_server_main_helper,
+    start_daily_snapshot_worker as start_daily_snapshot_worker_helper,
+    start_points_chain_block_worker as start_points_chain_block_worker_helper,
+    start_storage_maintenance_worker as start_storage_maintenance_worker_helper,
+    start_trading_bot_worker as start_trading_bot_worker_helper,
+    start_trading_liquidation_worker as start_trading_liquidation_worker_helper,
+)
 from services.server_bind import effective_server_bind, effective_server_ssl
 from services.server_mode_context import attach_to_g as smv2_attach_ctx, current_ctx as smv2_current_ctx
 from services.db_mode_triggers import register_app_mode_function as smv2_register_app_mode
@@ -1657,323 +1665,75 @@ register_operation_routes(app, {
 
 
 def start_daily_snapshot_worker():
-    try:
-        interval = int(os.environ.get("HTML_LEARNING_SNAPSHOT_CHECK_INTERVAL_SECONDS", "3600"))
-    except ValueError:
-        interval = 3600
-    interval = max(60, interval)
-
-    def loop():
-        while True:
-            try:
-                result = snapshot_service.create_daily_snapshot_if_due(
-                    actor={"id": 0, "username": "system"},
-                    settings=get_system_settings(),
-                    save_settings=save_settings,
-                )
-                if result.get("created"):
-                    audit("DAILY_SNAPSHOT_CREATED", "0.0.0.0", user="system", success=True, detail=f"snapshot_id={result.get('snapshot_id')}")
-            except Exception as exc:
-                audit("DAILY_SNAPSHOT_FAILED", "0.0.0.0", user="system", success=False, detail=str(exc))
-            time.sleep(interval)
-
-    worker = threading.Thread(target=loop, name="daily-snapshot-worker", daemon=True)
-    worker.start()
-    return worker
+    return start_daily_snapshot_worker_helper(
+        snapshot_service=snapshot_service,
+        get_system_settings=get_system_settings,
+        save_settings=save_settings,
+        audit=audit,
+    )
 
 
 def start_storage_maintenance_worker():
-    try:
-        interval = int(os.environ.get("HTML_LEARNING_STORAGE_MAINTENANCE_CHECK_INTERVAL_SECONDS", "3600"))
-    except ValueError:
-        interval = 3600
-    interval = max(60, interval)
-
-    def loop():
-        while True:
-            conn = None
-            try:
-                conn = get_db()
-                result = run_storage_maintenance_if_due(
-                    conn,
-                    settings=get_system_settings(),
-                    save_settings=save_settings,
-                    actor_user_id=0,
-                )
-                if result.get("ran"):
-                    conn.commit()
-                    audit("STORAGE_MAINTENANCE_AUTO_RUN", "0.0.0.0", user="system", success=True, detail=str(result.get("result") or {}))
-                else:
-                    conn.rollback()
-            except Exception as exc:
-                if conn:
-                    conn.rollback()
-                audit("STORAGE_MAINTENANCE_FAILED", "0.0.0.0", user="system", success=False, detail=str(exc))
-            finally:
-                if conn:
-                    conn.close()
-            time.sleep(interval)
-
-    worker = threading.Thread(target=loop, name="storage-maintenance-worker", daemon=True)
-    worker.start()
-    return worker
+    return start_storage_maintenance_worker_helper(
+        get_db=get_db,
+        run_storage_maintenance_if_due=run_storage_maintenance_if_due,
+        get_system_settings=get_system_settings,
+        save_settings=save_settings,
+        audit=audit,
+    )
 
 
 def start_points_chain_block_worker():
-    try:
-        check_interval = int(os.environ.get("HTML_LEARNING_POINTS_BLOCK_CHECK_INTERVAL_SECONDS", "15"))
-    except ValueError:
-        check_interval = 15
-    try:
-        ledger_threshold = int(os.environ.get("HTML_LEARNING_POINTS_BLOCK_LEDGER_THRESHOLD", str(DEFAULT_BLOCK_LEDGER_THRESHOLD)))
-    except ValueError:
-        ledger_threshold = DEFAULT_BLOCK_LEDGER_THRESHOLD
-    try:
-        max_interval_seconds = int(os.environ.get("HTML_LEARNING_POINTS_BLOCK_MAX_INTERVAL_SECONDS", str(DEFAULT_BLOCK_MAX_INTERVAL_SECONDS)))
-    except ValueError:
-        max_interval_seconds = DEFAULT_BLOCK_MAX_INTERVAL_SECONDS
-    check_interval = max(5, check_interval)
-    ledger_threshold = max(1, ledger_threshold)
-    max_interval_seconds = max(60, max_interval_seconds)
-
-    def loop():
-        actor = {"username": "system", "role": "system"}
-        while True:
-            try:
-                backup_result = points_service.create_scheduled_backup_if_due()
-                if backup_result.get("created"):
-                    audit("POINTS_SCHEDULED_BACKUP_CREATED", "0.0.0.0", user="system", success=bool(backup_result.get("ok")), detail=backup_result.get("backup_id"))
-                result = points_service.seal_due_block(actor=actor, ledger_threshold=ledger_threshold, max_interval_seconds=max_interval_seconds, limit=500)
-                if result.get("sealed"):
-                    block = result.get("block") or {}
-                    audit(
-                        "POINTS_AUTO_BLOCK_SEALED",
-                        "0.0.0.0",
-                        user="system",
-                        success=True,
-                        detail=f"block_number={block.get('block_number')},ledger_count={block.get('ledger_count')}",
-                    )
-                elif result.get("ok") is False:
-                    audit("POINTS_AUTO_BLOCK_SKIPPED", "0.0.0.0", user="system", success=False, detail=str(result.get("msg") or "verification failed"))
-            except Exception as exc:
-                audit("POINTS_AUTO_BLOCK_FAILED", "0.0.0.0", user="system", success=False, detail=str(exc))
-            time.sleep(check_interval)
-
-    worker = threading.Thread(target=loop, name="points-chain-block-worker", daemon=True)
-    worker.start()
-    return worker
+    return start_points_chain_block_worker_helper(
+        points_service=points_service,
+        audit=audit,
+        default_block_ledger_threshold=DEFAULT_BLOCK_LEDGER_THRESHOLD,
+        default_block_max_interval_seconds=DEFAULT_BLOCK_MAX_INTERVAL_SECONDS,
+    )
 
 
 def start_trading_liquidation_worker():
-    try:
-        check_interval = int(os.environ.get("HTML_LEARNING_TRADING_LIQUIDATION_CHECK_INTERVAL_SECONDS", "30"))
-    except ValueError:
-        check_interval = 30
-    check_interval = max(10, check_interval)
-
-    def loop():
-        actor = {"username": "system", "role": "system"}
-        while True:
-            try:
-                match_result = trading_service.match_open_limit_orders(actor=actor, limit=200)
-                matched = match_result.get("matched") or []
-                match_errors = match_result.get("errors") or []
-                if matched:
-                    audit(
-                        "TRADING_AUTO_LIMIT_MATCH_RUN",
-                        "0.0.0.0",
-                        user="system",
-                        success=True,
-                        detail=f"scanned={match_result.get('scanned')}, matched={len(matched)}",
-                    )
-                if match_errors:
-                    audit(
-                        "TRADING_AUTO_LIMIT_MATCH_ERRORS",
-                        "0.0.0.0",
-                        user="system",
-                        success=False,
-                        detail=json.dumps(match_errors[:5], ensure_ascii=False),
-                    )
-                result = trading_service.scan_margin_liquidations(actor=actor, limit=100)
-                liquidated = result.get("liquidated") or []
-                errors = result.get("errors") or []
-                if liquidated:
-                    audit(
-                        "TRADING_AUTO_LIQUIDATION_RUN",
-                        "0.0.0.0",
-                        user="system",
-                        success=True,
-                        detail=f"scanned={result.get('scanned')}, liquidated={len(liquidated)}",
-                    )
-                if errors:
-                    audit(
-                        "TRADING_AUTO_LIQUIDATION_ERRORS",
-                        "0.0.0.0",
-                        user="system",
-                        success=False,
-                        detail=json.dumps(errors[:5], ensure_ascii=False),
-                    )
-            except Exception as exc:
-                audit("TRADING_AUTO_LIQUIDATION_FAILED", "0.0.0.0", user="system", success=False, detail=str(exc))
-            time.sleep(check_interval)
-
-    worker = threading.Thread(target=loop, name="trading-liquidation-worker", daemon=True)
-    worker.start()
-    return worker
+    return start_trading_liquidation_worker_helper(trading_service=trading_service, audit=audit)
 
 
 def start_trading_bot_worker():
-    try:
-        fallback_interval = int(os.environ.get("HTML_LEARNING_TRADING_BOT_SCAN_INTERVAL_SECONDS", "30"))
-    except ValueError:
-        fallback_interval = 30
-    fallback_interval = max(10, min(fallback_interval, 3600))
-
-    def loop():
-        actor = {"username": "system", "role": "system"}
-        last_audit_started_at = 0.0
-        while True:
-            interval = fallback_interval
-            try:
-                settings = (trading_service.get_root_settings().get("settings") or {})
-                interval = max(10, min(int(settings.get("bot_auto_scan_interval_seconds") or fallback_interval), 3600))
-                if not settings.get("enabled", True) or not settings.get("bot_auto_scan_enabled", True):
-                    time.sleep(interval)
-                    continue
-                limit = max(1, min(int(settings.get("bot_auto_scan_limit") or 50), 200))
-                result = trading_service.run_due_trading_bots(actor=actor, limit=limit)
-                triggered = result.get("triggered") or []
-                failed = result.get("failed") or []
-                if triggered:
-                    audit(
-                        "TRADING_BOT_AUTO_SCAN_RUN",
-                        "0.0.0.0",
-                        user="system",
-                        success=True,
-                        detail=f"scanned={result.get('scanned')}, triggered={len(triggered)}",
-                    )
-                if failed:
-                    audit(
-                        "TRADING_BOT_AUTO_SCAN_ERRORS",
-                        "0.0.0.0",
-                        user="system",
-                        success=False,
-                        detail=json.dumps(failed[:5], ensure_ascii=False),
-                    )
-                audit_enabled = settings.get("bot_audit_enabled", True)
-                audit_interval = max(60, min(int(settings.get("bot_audit_interval_seconds") or 300), 86400))
-                audit_limit = max(1, min(int(settings.get("bot_audit_limit") or 50), 200))
-                now_mono = time.monotonic()
-                if audit_enabled and now_mono - last_audit_started_at >= audit_interval:
-                    audit_result = trading_service.run_due_bot_audits(actor=actor, limit=audit_limit, force=False)
-                    last_audit_started_at = now_mono
-                    audited_rows = audit_result.get("audited") or []
-                    if audited_rows:
-                        audit(
-                            "TRADING_BOT_AUDIT_AUTO_RUN",
-                            "0.0.0.0",
-                            user="system",
-                            success=True,
-                            detail=f"audited={len(audited_rows)}, skipped={len(audit_result.get('skipped') or [])}",
-                        )
-            except Exception as exc:
-                audit("TRADING_BOT_AUTO_SCAN_FAILED", "0.0.0.0", user="system", success=False, detail=str(exc))
-            time.sleep(interval)
-
-    worker = threading.Thread(target=loop, name="trading-bot-worker", daemon=True)
-    worker.start()
-    return worker
+    return start_trading_bot_worker_helper(trading_service=trading_service, audit=audit)
 
 
 # ── Start ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    install_runtime_output_capture(SERVER_LOG_PATH)
-    init_db(
-        ensure_secure_audit_columns=ensure_secure_audit_columns,
-        ensure_user_columns=ensure_user_columns,
-        ensure_appeal_columns=ensure_appeal_columns,
-        ensure_security_support_schema=ensure_security_support_schema,
-        ensure_points_economy_schema=ensure_points_economy_schema,
-        ensure_session_columns=ensure_session_columns,
-        ensure_official_chat_room=ensure_official_chat_room,
-        hash_password=hash_password,
+    run_server_main_helper(
+        server_log_path=SERVER_LOG_PATH,
+        install_runtime_output_capture=install_runtime_output_capture,
+        init_db=init_db,
+        init_db_kwargs={
+            "ensure_secure_audit_columns": ensure_secure_audit_columns,
+            "ensure_user_columns": ensure_user_columns,
+            "ensure_appeal_columns": ensure_appeal_columns,
+            "ensure_security_support_schema": ensure_security_support_schema,
+            "ensure_points_economy_schema": ensure_points_economy_schema,
+            "ensure_session_columns": ensure_session_columns,
+            "ensure_official_chat_room": ensure_official_chat_room,
+            "hash_password": hash_password,
+        },
+        get_db=get_db,
+        ensure_trading_schema=ensure_trading_schema,
+        reseal_audit_chain_if_required_on_startup=reseal_audit_chain_if_required_on_startup,
+        audit=audit,
+        server_mode_service=server_mode_service,
+        points_service=points_service,
+        get_system_settings=get_system_settings,
+        integrity_guard=integrity_guard,
+        start_daily_snapshot_worker=start_daily_snapshot_worker,
+        start_storage_maintenance_worker=start_storage_maintenance_worker,
+        start_points_chain_block_worker=start_points_chain_block_worker,
+        start_trading_liquidation_worker=start_trading_liquidation_worker,
+        start_trading_bot_worker=start_trading_bot_worker,
+        ensure_local_tls_files=ensure_local_tls_files,
+        cert_file=CERT_FILE,
+        key_file=KEY_FILE,
+        effective_server_ssl=effective_server_ssl,
+        effective_server_bind=effective_server_bind,
+        server_bind_state=SERVER_BIND_STATE,
+        app=app,
     )
-    conn = get_db()
-    try:
-        ensure_trading_schema(conn)
-        conn.commit()
-    finally:
-        conn.close()
-    try:
-        reseal_audit_chain_if_required_on_startup()
-    except Exception as exc:
-        audit("AUDIT_CHAIN_STARTUP_RESEAL_FAILED", "0.0.0.0", user="system", success=False, detail=str(exc))
-    try:
-        recovery = server_mode_service.recover_superweak_on_startup(actor={"id": 0, "username": "system-startup", "role": "system"})
-        if recovery.get("recovered"):
-            audit("SERVER_MODE_SUPERWEAK_STARTUP_RECOVERED", "0.0.0.0", user="system", success=True, detail=json.dumps(recovery, ensure_ascii=False, sort_keys=True, default=str))
-        elif not recovery.get("ok"):
-            audit("SERVER_MODE_SUPERWEAK_STARTUP_RECOVERY_FAILED", "0.0.0.0", user="system", success=False, detail=json.dumps(recovery, ensure_ascii=False, sort_keys=True, default=str))
-    except Exception as exc:
-        audit("SERVER_MODE_SUPERWEAK_STARTUP_RECOVERY_ERROR", "0.0.0.0", user="system", success=False, detail=str(exc))
-    if os.environ.get("HTML_LEARNING_BOOTSTRAP_POINTS_CHAIN", "").strip().lower() in {"1", "true", "yes", "on"}:
-        try:
-            system_actor = {"username": "system", "role": "system"}
-            genesis = points_service.bootstrap_admin_initial_grants(actor=system_actor, seal_genesis=True)
-            salary = points_service.award_admin_weekly_salaries(actor=system_actor)
-            if genesis.get("created_count") or salary.get("created_count"):
-                audit(
-                    "POINTS_BOOTSTRAP_GRANTS",
-                    "0.0.0.0",
-                    success=True,
-                    detail=f"genesis={genesis.get('created_count')}, weekly={salary.get('created_count')}, week={salary.get('salary_week')}",
-                )
-        except Exception as exc:
-            audit("POINTS_BOOTSTRAP_GRANTS_FAILED", "0.0.0.0", success=False, detail=str(exc))
-    if get_system_settings().get("integrity_guard_enabled", True):
-        integrity_status = integrity_guard.scan(actor="system-startup", create_initial_manifest=True)
-        if get_system_settings().get("integrity_guard_strict_mode", False):
-            high_risk = (integrity_status.get("summary") or {}).get("high_risk_pending", 0)
-            if high_risk:
-                warning = f"Integrity Guard strict mode detected {high_risk} high risk finding(s) at startup; startup continues, but production entry must stay blocked until root reviews them."
-                print(f"[integrity-guard] {warning}")
-                try:
-                    audit(
-                        "INTEGRITY_GUARD_STARTUP_WARNING",
-                        "0.0.0.0",
-                        user="system-startup",
-                        success=False,
-                        detail=warning,
-                    )
-                except Exception:
-                    pass
-    start_daily_snapshot_worker()
-    start_storage_maintenance_worker()
-    start_points_chain_block_worker()
-    start_trading_liquidation_worker()
-    start_trading_bot_worker()
-    tls_generation = ensure_local_tls_files(CERT_FILE, KEY_FILE)
-    has_ssl_files = os.path.exists(CERT_FILE) and os.path.exists(KEY_FILE)
-    ssl_state = effective_server_ssl(get_system_settings(), cert_exists=has_ssl_files)
-    has_ssl = ssl_state["enabled"]
-
-    scheme = ssl_state["scheme"]
-    bind = effective_server_bind(get_system_settings())
-    host = bind["host"]
-    port = bind["port"]
-    SERVER_BIND_STATE.update({"host": host, "port": port, "ssl_enabled": has_ssl})
-    print(f"\n🌐  hackme_web server running at {scheme}://{host}:{port}")
-    if has_ssl:
-        ssl_label = "enabled"
-    elif ssl_state["enabled_by_setting"] and not has_ssl_files:
-        ssl_label = "disabled (runtime/cert.pem + runtime/key.pem missing)"
-    else:
-        ssl_label = "disabled by root setting"
-    print(f"    SSL: {ssl_label}")
-    print(f"    Audit log: database (secure_audit table + hash-chain)")
-    print(f"    Security: Argon2id + timing-noise + account-enum-protection + CSRF + strict-headers\n")
-
-    kwargs = {"host": host, "port": port, "debug": False}
-    if has_ssl:
-        kwargs["ssl_context"] = (CERT_FILE, KEY_FILE)
-    app.run(**kwargs)
