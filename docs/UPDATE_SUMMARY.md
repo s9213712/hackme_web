@@ -1,6 +1,21 @@
 # Update Summary
 
-Release ID: `2026.05.06-144`
+Release ID: `2026.05.06-145`
+
+## 2026.05.06-145
+
+- Trading workflow benchmark generation now preserves a stable frontend
+  contract: the default `1h` benchmark run writes to the canonical
+  `public/data/workflow_template_benchmarks.json`, while non-canonical
+  interval or relative-threshold variants write to suffixed auxiliary files
+  instead of silently diverging from the asset the frontend actually loads.
+- The shipped workflow benchmark asset now carries explicit `interval` and
+  `use_relative_thresholds` metadata so the trading UI can label benchmark
+  data correctly and tests can validate the asset contract directly.
+- Added dedicated regression coverage for backtest-capacity projection,
+  first-boot capacity probe recording, and the canonical workflow benchmark
+  asset schema instead of relying only on broad trading/backtest integration
+  tests.
 
 ## 2026.05.06-144
 

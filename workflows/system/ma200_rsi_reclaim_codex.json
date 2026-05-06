@@ -1,0 +1,70 @@
+{
+  "id": "ma200_rsi_reclaim_codex",
+  "label": "MA200 趨勢回踩反彈（Codex）",
+  "description": "價格維持在 MA200 與 MA20 上方、RSI 回落到 40 以下且空倉時進場；內建止盈與止損。",
+  "scope": "system",
+  "explanation": {
+    "purpose": "這個模板押注長期多頭結構仍在，只是在短期回踩時做一次風險受控的反彈進場。",
+    "entry_conditions": [
+      "價格在 MA200 上方，確認長期趨勢仍為多頭。",
+      "價格在 MA20 上方，避免接太弱的 falling knife。",
+      "RSI <= 40，代表短期動能有拉回但不一定已失控。",
+      "必須空倉，避免在單邊下跌時連續加碼。"
+    ],
+    "actions": [
+      "進場時用可用資金 18% 市價買入。",
+      "若獲利達 14%，全部了結。",
+      "若虧損達 6%，立即止損全平。"
+    ],
+    "risk_notes": [
+      "若 MA20 上方只是短暫反抽，仍可能在進場後再度轉弱。",
+      "這是順勢拉回策略，不適合已經跌破 MA200 的空頭段。"
+    ],
+    "best_for": [
+      "中長期偏多、但會有短期回踩的市場。",
+      "希望避免極端追高，也不想用絕對價位的人。"
+    ],
+    "tuning": [
+      "想更保守可把 RSI 門檻降到 35。",
+      "想降低單筆風險可把買入比例從 18% 改到 10-12%。"
+    ]
+  },
+  "workflow": {
+    "version": 2,
+    "strategy_kind": "workflow_graph",
+    "source": "system_template",
+    "name": "MA200 趨勢回踩反彈（Codex）",
+    "description": "價格維持在 MA200 與 MA20 上方、RSI 回落到 40 以下且空倉時進場；內建止盈與止損。",
+    "start_node_id": "start",
+    "nodes": [
+      { "id": "start", "type": "start", "label": "開始", "x": 80, "y": 250 },
+      { "id": "above_ma200", "type": "condition", "label": "站上 MA200", "x": 260, "y": 90, "condition": { "type": "ma_position", "period": 200, "position": "above" } },
+      { "id": "above_ma20", "type": "condition", "label": "站上 MA20", "x": 260, "y": 190, "condition": { "type": "ma_position", "period": 20, "position": "above" } },
+      { "id": "rsi_reset", "type": "condition", "label": "RSI <= 40", "x": 260, "y": 290, "condition": { "type": "rsi_below", "value": 40 } },
+      { "id": "no_position", "type": "condition", "label": "目前空倉", "x": 260, "y": 390, "condition": { "type": "has_position", "value": false } },
+      { "id": "entry_and", "type": "logic", "label": "AND", "x": 500, "y": 240, "operator": "AND" },
+      { "id": "cooldown", "type": "control", "label": "冷卻 8 小時", "x": 700, "y": 240, "cooldown_seconds": 28800, "max_runs": 100 },
+      { "id": "buy_18", "type": "action", "label": "買入 18%", "x": 900, "y": 240, "priority": 10, "action": { "type": "buy_percent", "percent": 18, "step": 1, "order_type": "market" } },
+      { "id": "tp14", "type": "condition", "label": "獲利 >= 14%", "x": 260, "y": 520, "condition": { "type": "take_profit_percent", "value": 14 } },
+      { "id": "close_tp", "type": "action", "label": "止盈全平", "x": 900, "y": 520, "priority": 80, "action": { "type": "close_all", "step": 1, "order_type": "market" } },
+      { "id": "sl6", "type": "condition", "label": "虧損 >= 6%", "x": 260, "y": 620, "condition": { "type": "stop_loss_percent", "value": 6 } },
+      { "id": "close_sl", "type": "action", "label": "止損全平", "x": 900, "y": 620, "priority": 100, "action": { "type": "close_all", "step": 1, "order_type": "market" } }
+    ],
+    "edges": [
+      { "id": "e_s_ma200", "from": "start", "from_port": "out", "to": "above_ma200", "to_port": "in" },
+      { "id": "e_s_ma20", "from": "start", "from_port": "out", "to": "above_ma20", "to_port": "in" },
+      { "id": "e_s_rsi", "from": "start", "from_port": "out", "to": "rsi_reset", "to_port": "in" },
+      { "id": "e_s_nopos", "from": "start", "from_port": "out", "to": "no_position", "to_port": "in" },
+      { "id": "e_s_tp", "from": "start", "from_port": "out", "to": "tp14", "to_port": "in" },
+      { "id": "e_s_sl", "from": "start", "from_port": "out", "to": "sl6", "to_port": "in" },
+      { "id": "e_ma200_and", "from": "above_ma200", "from_port": "true", "to": "entry_and", "to_port": "in" },
+      { "id": "e_ma20_and", "from": "above_ma20", "from_port": "true", "to": "entry_and", "to_port": "in" },
+      { "id": "e_rsi_and", "from": "rsi_reset", "from_port": "true", "to": "entry_and", "to_port": "in" },
+      { "id": "e_nopos_and", "from": "no_position", "from_port": "true", "to": "entry_and", "to_port": "in" },
+      { "id": "e_and_cd", "from": "entry_and", "from_port": "true", "to": "cooldown", "to_port": "in" },
+      { "id": "e_cd_buy", "from": "cooldown", "from_port": "then", "to": "buy_18", "to_port": "in" },
+      { "id": "e_tp_close", "from": "tp14", "from_port": "true", "to": "close_tp", "to_port": "in" },
+      { "id": "e_sl_close", "from": "sl6", "from_port": "true", "to": "close_sl", "to_port": "in" }
+    ]
+  }
+}

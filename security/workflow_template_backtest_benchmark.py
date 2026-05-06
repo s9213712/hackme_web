@@ -1,23 +1,28 @@
 #!/usr/bin/env python3
-"""Backtest the 12 system workflow templates over 6mo/1yr/3yr/5yr windows.
+"""Backtest the 12 system workflow templates over multiple intervals.
 
-Fetches BTC/USDT 1h candles from Binance, then for each template runs the
-backtest at 4 time horizons. Outputs a JSON summary suitable for embedding
-in the frontend as user reference.
+Fetches BTC/USDT candles from Binance, runs each template's backtest at
+4 time horizons (6mo / 1yr / 3yr / 5yr where the dataset allows), and
+writes a JSON ranking. Optionally rewrites the 4 templates that ship with
+hardcoded absolute price thresholds to use relative-only conditions.
 
 Usage:
-    python security/workflow_template_backtest_benchmark.py [--out PATH]
+    python security/workflow_template_backtest_benchmark.py \
+        --interval 1h \
+        [--use-relative-thresholds] \
+        [--out PATH]
 
-Defaults:
-    --out  public/data/workflow_template_benchmarks.json
+Supported intervals: 5m, 15m, 1h, 4h, 4d (4d is resampled from 1d locally;
+Binance does not expose 4d natively).
 
-The frontend (public/js/56-trading.js → renderTradingWorkflowTemplateBenchmark)
-fetches this JSON to display per-template historical PnL next to the
-template explanation panel.
+Default output contract:
+    - 1h, default thresholds  -> public/data/workflow_template_benchmarks.json
+    - anything else           -> public/data/workflow_template_benchmarks_<variant>.json
 """
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import sqlite3
 import sys
@@ -46,29 +51,106 @@ TEMPLATES = [
     "stop_loss",
     "swing_bb_ma50",
 ]
-WINDOWS = [
-    ("6mo",  6 * 30 * 24),     # 4,320 candles
-    ("1yr",  365 * 24),         # 8,760
-    ("3yr",  3 * 365 * 24),     # 26,280
-    ("5yr",  5 * 365 * 24),     # 43,800
-]
+
+# Each interval's K-bars-per-day for slicing windows; 4d is custom.
+INTERVAL_BARS_PER_DAY = {
+    "5m": 24 * 12,
+    "15m": 24 * 4,
+    "1h": 24,
+    "4h": 6,
+    "4d": 1 / 4.0,
+}
+WINDOWS = [("6mo", 6 * 30), ("1yr", 365), ("3yr", 3 * 365), ("5yr", 5 * 365)]
 INITIAL_CASH = 100_000
+CANONICAL_BENCHMARK_FILENAME = "workflow_template_benchmarks.json"
 
 
+# ─── Relative-threshold rewrites ──────────────────────────────────────────────
+# These rewrites convert the four templates that ship with hardcoded absolute
+# price thresholds into relative-only versions. The replacements use existing
+# workflow condition types (rsi_below, ma_position, stop_loss_percent) so no
+# engine changes are required.
+RELATIVE_THRESHOLD_REWRITES = {
+    "breakout_buy": {
+        # price_above 100000 → "above MA20" proxy for short-term breakout.
+        "find": {"type": "price_above", "value": 100000},
+        "replace": {"type": "ma_position", "period": 20, "position": "above"},
+        "label_change": "突破短期 MA20（相對）",
+    },
+    "dip_buy": {
+        # price_below 90000 → RSI <= 35 (oversold dip).
+        "find": {"type": "price_below", "value": 90000},
+        "replace": {"type": "rsi_below", "value": 35},
+        "label_change": "RSI ≤ 35 才買入（相對）",
+    },
+    "full_entry_exit": {
+        # price_below 85000 → RSI <= 30 (extreme oversold entry).
+        "find": {"type": "price_below", "value": 85000},
+        "replace": {"type": "rsi_below", "value": 30},
+        "label_change": "RSI ≤ 30 才進場（相對）",
+    },
+    "stop_loss": {
+        # price_below 80000 → 7% PnL stop loss.
+        "find": {"type": "price_below", "value": 80000},
+        "replace": {"type": "stop_loss_percent", "value": 7},
+        "label_change": "持倉跌 -7% 停損（相對）",
+    },
+}
+
+
+def maybe_rewrite_to_relative(template_name: str, workflow: dict, *, use_relative: bool) -> dict:
+    """Return a (possibly modified) workflow with absolute thresholds replaced."""
+    if not use_relative:
+        return workflow
+    rewrite = RELATIVE_THRESHOLD_REWRITES.get(template_name)
+    if not rewrite:
+        return workflow
+    new_wf = copy.deepcopy(workflow)
+    target = rewrite["find"]
+    replacement = rewrite["replace"]
+    for node in new_wf.get("nodes", []):
+        cond = node.get("condition") or {}
+        if cond.get("type") == target["type"] and cond.get("value") == target.get("value"):
+            node["condition"] = dict(replacement)
+    return new_wf
+
+
+def default_output_path(interval: str, *, use_relative_thresholds: bool = False) -> Path:
+    """Return the default benchmark asset path for the given variant.
+
+    The frontend currently consumes the canonical 1h/default-threshold asset.
+    Other interval/variant outputs stay as explicitly suffixed auxiliary files so
+    local benchmark reruns do not silently diverge from the shipped frontend
+    contract.
+    """
+    if interval == "1h" and not use_relative_thresholds:
+        return REPO_ROOT / "public" / "data" / CANONICAL_BENCHMARK_FILENAME
+    variant = interval
+    if use_relative_thresholds:
+        variant = f"{variant}_relative"
+    return REPO_ROOT / "public" / "data" / f"workflow_template_benchmarks_{variant}.json"
+
+
+# ─── Data fetch ────────────────────────────────────────────────────────────────
 def _http_get_json(url: str) -> object:
     req = Request(url, headers={"User-Agent": "workflow-bench/1.0"})
     with urlopen(req, timeout=30) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
-def fetch_binance_1h_candles(total: int) -> list:
-    """Fetch the most recent ``total`` 1h candles for BTC/USDT in ascending order."""
+def fetch_binance_candles(interval: str, total: int) -> list:
+    """Fetch the most recent ``total`` candles for BTC/USDT at the given interval.
+
+    For 4d, fetches 1d and resamples locally (Binance has no 4d endpoint).
+    """
+    binance_interval = "1d" if interval == "4d" else interval
+    fetch_total = total * 4 if interval == "4d" else total
     candles_raw = []
     end_ms = int(time.time() * 1000)
     fetched = 0
-    while fetched < total:
-        chunk = min(1000, total - fetched)
-        params = {"symbol": "BTCUSDT", "interval": "1h", "limit": chunk, "endTime": end_ms}
+    while fetched < fetch_total:
+        chunk = min(1000, fetch_total - fetched)
+        params = {"symbol": "BTCUSDT", "interval": binance_interval, "limit": chunk, "endTime": end_ms}
         url = "https://api.binance.com/api/v3/klines?" + urlencode(params)
         rows = _http_get_json(url)
         if not isinstance(rows, list) or not rows:
@@ -76,9 +158,11 @@ def fetch_binance_1h_candles(total: int) -> list:
         candles_raw = rows + candles_raw
         end_ms = rows[0][0] - 1
         fetched += len(rows)
-        time.sleep(0.15)  # be polite
-        print(f"  fetched {fetched}/{total} 1h candles...", file=sys.stderr)
+        time.sleep(0.15)
+        print(f"  fetched {fetched}/{fetch_total} {binance_interval} candles...", file=sys.stderr)
     candles_raw.sort(key=lambda r: r[0])
+    if interval == "4d":
+        candles_raw = _resample_to_4d(candles_raw)
     return [
         {
             "time": int(row[0] // 1000),
@@ -94,6 +178,25 @@ def fetch_binance_1h_candles(total: int) -> list:
     ]
 
 
+def _resample_to_4d(daily_rows: list) -> list:
+    """Bucket every 4 daily candles into one 4d candle (open=first, high=max, low=min, close=last)."""
+    out = []
+    for i in range(0, len(daily_rows), 4):
+        chunk = daily_rows[i:i + 4]
+        if len(chunk) < 4:
+            continue  # drop the trailing incomplete bucket
+        out.append([
+            chunk[0][0],                                   # open time = first day open ms
+            chunk[0][1],                                   # open
+            max(float(r[2]) for r in chunk),               # high
+            min(float(r[3]) for r in chunk),               # low
+            chunk[-1][4],                                  # close
+            sum(float(r[5]) for r in chunk),               # volume
+        ])
+    return out
+
+
+# ─── Runtime + run ────────────────────────────────────────────────────────────
 def build_runtime():
     from services.points_chain import PointsLedgerService, ensure_points_economy_schema
     from services.trading_engine import TradingEngineService, ensure_trading_schema
@@ -115,10 +218,10 @@ def build_runtime():
     conn.execute("INSERT INTO users (username, role) VALUES ('alice', 'user')")
     ensure_points_economy_schema(conn)
     ensure_trading_schema(conn)
-    # raise the cap so 5-year (43,800) backtests fit
+    # Lift the cap so even 5y of 5m (~525K candles) fits.
     conn.execute(
         "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
-        ("trading.backtest_max_candles", "100000", datetime.now().isoformat(), "bench"),
+        ("trading.backtest_max_candles", "1000000", datetime.now().isoformat(), "bench"),
     )
     conn.commit()
     conn.close()
@@ -134,16 +237,16 @@ def build_runtime():
 
 
 def load_template(name: str) -> dict:
-    path = WORKFLOWS_DIR / f"{name}.json"
-    return json.loads(path.read_text())
+    return json.loads((WORKFLOWS_DIR / f"{name}.json").read_text())
 
 
-def run_backtest(trading, *, template_name: str, candles: list) -> dict:
+def run_backtest(trading, *, template_name: str, candles: list, use_relative: bool) -> dict:
     template = load_template(template_name)
+    workflow = maybe_rewrite_to_relative(template_name, template["workflow"], use_relative=use_relative)
     payload = {
         "market_symbol": "BTC/POINTS",
         "strategy": "workflow",
-        "workflow_json": template["workflow"],
+        "workflow_json": workflow,
         "initial_cash_points": INITIAL_CASH,
         "candles": candles,
     }
@@ -175,34 +278,74 @@ def run_backtest(trading, *, template_name: str, candles: list) -> dict:
     }
 
 
+def derive_window_sizes(interval: str, available: int) -> list:
+    bars_per_day = INTERVAL_BARS_PER_DAY[interval]
+    out = []
+    for label, days in WINDOWS:
+        size = max(2, int(round(days * bars_per_day))) if bars_per_day >= 1 else max(2, int(round(days * bars_per_day)))
+        if size > available:
+            continue
+        out.append((label, size))
+    return out
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--out", default=str(REPO_ROOT / "public" / "data" / "workflow_template_benchmarks.json"))
-    parser.add_argument("--total-candles", type=int, default=WINDOWS[-1][1])
+    parser.add_argument("--interval", required=True, choices=list(INTERVAL_BARS_PER_DAY.keys()))
+    parser.add_argument("--use-relative-thresholds", action="store_true",
+                        help="Rewrite the 4 absolute-threshold templates to relative versions before running")
+    parser.add_argument("--out", default=None,
+                        help="Output JSON path (default: canonical 1h asset or interval-suffixed variant)")
+    parser.add_argument("--total-candles", type=int, default=None,
+                        help="How many candles of this interval to fetch (default: 5y or what's available)")
     args = parser.parse_args()
 
-    print(f"Fetching {args.total_candles} 1h BTC/USDT candles from Binance...", file=sys.stderr)
-    candles_full = fetch_binance_1h_candles(args.total_candles)
-    print(f"  got {len(candles_full)} candles, {candles_full[0]['time_iso']} → {candles_full[-1]['time_iso']}", file=sys.stderr)
+    bars_per_day = INTERVAL_BARS_PER_DAY[args.interval]
+    if args.total_candles is None:
+        target = int(round(5 * 365 * bars_per_day))
+    else:
+        target = args.total_candles
+
+    print(f"\n=== Workflow template benchmark — interval={args.interval}, "
+          f"relative_thresholds={'on' if args.use_relative_thresholds else 'off'} ===", file=sys.stderr)
+    print(f"Target candle count: {target:,}", file=sys.stderr)
+    fetch_started = time.perf_counter()
+    candles_full = fetch_binance_candles(args.interval, target)
+    fetch_elapsed = time.perf_counter() - fetch_started
+    print(f"Got {len(candles_full)} candles, {candles_full[0]['time_iso']} → {candles_full[-1]['time_iso']} "
+          f"(fetch {fetch_elapsed:.1f}s)", file=sys.stderr)
 
     trading = build_runtime()
     out = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
-        "data_source": "binance_btcusdt_1h",
+        "data_source": f"binance_btcusdt_{args.interval}",
+        "interval": args.interval,
+        "use_relative_thresholds": bool(args.use_relative_thresholds),
         "candle_count_total": len(candles_full),
         "first_candle_iso": candles_full[0]["time_iso"],
         "last_candle_iso":  candles_full[-1]["time_iso"],
         "initial_cash_points": INITIAL_CASH,
+        "fetch_seconds": round(fetch_elapsed, 2),
         "windows": [],
+        "relative_threshold_rewrites": (
+            {
+                k: {"label_change": v["label_change"]}
+                for k, v in RELATIVE_THRESHOLD_REWRITES.items()
+            } if args.use_relative_thresholds else {}
+        ),
     }
-    for window_label, window_size in WINDOWS:
-        sliced = candles_full[-window_size:] if window_size <= len(candles_full) else candles_full
+
+    bench_started = time.perf_counter()
+    for window_label, window_size in derive_window_sizes(args.interval, len(candles_full)):
+        sliced = candles_full[-window_size:]
         actual = len(sliced)
-        print(f"\n=== Window {window_label} ({actual} candles) ===", file=sys.stderr)
+        print(f"\n--- Window {window_label} ({actual} candles) ---", file=sys.stderr)
         runs = []
         for tname in TEMPLATES:
-            row = run_backtest(trading, template_name=tname, candles=sliced)
-            print(f"  {row['label']:<32} pnl={row.get('pnl_percent', 'ERR'):>8} trades={row.get('trade_count', 'ERR')}", file=sys.stderr)
+            row = run_backtest(trading, template_name=tname, candles=sliced,
+                               use_relative=args.use_relative_thresholds)
+            print(f"  {row['label']:<32} pnl={row.get('pnl_percent', 'ERR'):>9} "
+                  f"trades={row.get('trade_count', 'ERR')}", file=sys.stderr)
             runs.append(row)
         runs.sort(key=lambda r: r.get("pnl_percent", -1e9), reverse=True)
         out["windows"].append({
@@ -210,11 +353,19 @@ def main():
             "candle_count": actual,
             "rankings": runs,
         })
+    bench_elapsed = time.perf_counter() - bench_started
+    out["benchmark_seconds"] = round(bench_elapsed, 2)
+    out["total_seconds"] = round(fetch_elapsed + bench_elapsed, 2)
 
-    out_path = Path(args.out)
+    out_path = Path(args.out) if args.out else default_output_path(
+        args.interval,
+        use_relative_thresholds=args.use_relative_thresholds,
+    )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(out, ensure_ascii=False, indent=2))
-    print(f"\nWrote {out_path}", file=sys.stderr)
+    print(f"\nFetch={fetch_elapsed:.1f}s  Bench={bench_elapsed:.1f}s  Total={fetch_elapsed + bench_elapsed:.1f}s",
+          file=sys.stderr)
+    print(f"Wrote {out_path}", file=sys.stderr)
 
 
 if __name__ == "__main__":

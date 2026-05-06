@@ -558,5 +558,7 @@
         }
       ]
     }
-  ]
+  ],
+  "interval": "1h",
+  "use_relative_thresholds": false
 }

@@ -2297,7 +2297,7 @@ function renderTradingWorkflowTemplateBenchmark(templateId) {
   `;
   return `
     <div class="workflow-template-section">
-      <strong>歷史回測表現（BTC/USDT 1h，初始資金 ${Number(data.initial_cash_points || 0).toLocaleString()} POINTS）</strong>
+      <strong>歷史回測表現（BTC/USDT ${sanitize(data.interval || "1h")}，初始資金 ${Number(data.initial_cash_points || 0).toLocaleString()} POINTS）</strong>
       ${table}
       <div class="muted" style="font-size:.72rem;margin-top:.3rem;">資料來源：${sanitize(data.data_source || "")}；資料區間 ${sanitize(String(data.first_candle_iso || "").slice(0, 10))} → ${sanitize(String(data.last_candle_iso || "").slice(0, 10))}；產生時間 ${sanitize(data.generated_at || "")}</div>
     </div>

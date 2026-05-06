@@ -1,0 +1,79 @@
+{
+  "id": "kd_trend_scaleout_codex",
+  "label": "KD 趨勢加速分批了結（Codex）",
+  "description": "KD 強勢、價格同時站上 MA50 與 MA200 且空倉時進場；獲利先減碼再全平。",
+  "scope": "system",
+  "explanation": {
+    "purpose": "這個模板偏向順勢追動能，但加入長中期均線過濾和分批獲利，避免純動能模板沒有出場紀律。",
+    "entry_conditions": [
+      "KD >= 70，表示短期動能已經明確轉強。",
+      "價格站上 MA50 與 MA200，確認不是逆勢追高。",
+      "目前空倉，避免訊號持續強時連續加碼。"
+    ],
+    "actions": [
+      "進場時買入 12%。",
+      "獲利達 9% 時先賣出 35%。",
+      "獲利達 18% 時全部了結。",
+      "虧損達 6% 時立即止損。"
+    ],
+    "risk_notes": [
+      "動能強不代表不會在高檔鈍化後反轉。",
+      "這種策略在震盪行情容易被假突破洗掉。"
+    ],
+    "best_for": [
+      "趨勢加速段。",
+      "想保留部分部位續抱，但又不想完全裸奔的人。"
+    ],
+    "tuning": [
+      "如果想更晚進場，可把 KD 門檻拉到 75。",
+      "如果想更積極保利，可把第一段出場改成 +8% 賣 50%。"
+    ]
+  },
+  "workflow": {
+    "version": 2,
+    "strategy_kind": "workflow_graph",
+    "source": "system_template",
+    "name": "KD 趨勢加速分批了結（Codex）",
+    "description": "KD 強勢、價格同時站上 MA50 與 MA200 且空倉時進場；獲利先減碼再全平。",
+    "start_node_id": "start",
+    "nodes": [
+      { "id": "start", "type": "start", "label": "開始", "x": 80, "y": 260 },
+      { "id": "kd_hot", "type": "condition", "label": "KD >= 70", "x": 260, "y": 90, "condition": { "type": "kd_above", "value": 70 } },
+      { "id": "above_ma50", "type": "condition", "label": "站上 MA50", "x": 260, "y": 190, "condition": { "type": "ma_position", "period": 50, "position": "above" } },
+      { "id": "above_ma200", "type": "condition", "label": "站上 MA200", "x": 260, "y": 290, "condition": { "type": "ma_position", "period": 200, "position": "above" } },
+      { "id": "no_position", "type": "condition", "label": "目前空倉", "x": 260, "y": 390, "condition": { "type": "has_position", "value": false } },
+      { "id": "entry_and", "type": "logic", "label": "AND", "x": 500, "y": 250, "operator": "AND" },
+      { "id": "cooldown", "type": "control", "label": "冷卻 6 小時", "x": 700, "y": 250, "cooldown_seconds": 21600, "max_runs": 100 },
+      { "id": "buy_12", "type": "action", "label": "買入 12%", "x": 900, "y": 250, "priority": 10, "action": { "type": "buy_percent", "percent": 12, "step": 1, "order_type": "market" } },
+      { "id": "tp9", "type": "condition", "label": "獲利 >= 9%", "x": 260, "y": 540, "condition": { "type": "take_profit_percent", "value": 9 } },
+      { "id": "has_pos_a", "type": "condition", "label": "已有持倉", "x": 260, "y": 640, "condition": { "type": "has_position", "value": true } },
+      { "id": "tp_and", "type": "logic", "label": "AND", "x": 500, "y": 590, "operator": "AND" },
+      { "id": "sell_35", "type": "action", "label": "賣出 35%", "x": 720, "y": 590, "priority": 55, "action": { "type": "sell_percent", "percent": 35, "step": 1, "order_type": "market" } },
+      { "id": "tp18", "type": "condition", "label": "獲利 >= 18%", "x": 260, "y": 760, "condition": { "type": "take_profit_percent", "value": 18 } },
+      { "id": "close_tp", "type": "action", "label": "全部了結", "x": 720, "y": 760, "priority": 80, "action": { "type": "close_all", "step": 1, "order_type": "market" } },
+      { "id": "sl6", "type": "condition", "label": "虧損 >= 6%", "x": 260, "y": 870, "condition": { "type": "stop_loss_percent", "value": 6 } },
+      { "id": "close_sl", "type": "action", "label": "止損全平", "x": 720, "y": 870, "priority": 100, "action": { "type": "close_all", "step": 1, "order_type": "market" } }
+    ],
+    "edges": [
+      { "id": "e_s_kd", "from": "start", "from_port": "out", "to": "kd_hot", "to_port": "in" },
+      { "id": "e_s_ma50", "from": "start", "from_port": "out", "to": "above_ma50", "to_port": "in" },
+      { "id": "e_s_ma200", "from": "start", "from_port": "out", "to": "above_ma200", "to_port": "in" },
+      { "id": "e_s_nopos", "from": "start", "from_port": "out", "to": "no_position", "to_port": "in" },
+      { "id": "e_s_tp9", "from": "start", "from_port": "out", "to": "tp9", "to_port": "in" },
+      { "id": "e_s_haspos", "from": "start", "from_port": "out", "to": "has_pos_a", "to_port": "in" },
+      { "id": "e_s_tp18", "from": "start", "from_port": "out", "to": "tp18", "to_port": "in" },
+      { "id": "e_s_sl6", "from": "start", "from_port": "out", "to": "sl6", "to_port": "in" },
+      { "id": "e_kd_and", "from": "kd_hot", "from_port": "true", "to": "entry_and", "to_port": "in" },
+      { "id": "e_ma50_and", "from": "above_ma50", "from_port": "true", "to": "entry_and", "to_port": "in" },
+      { "id": "e_ma200_and", "from": "above_ma200", "from_port": "true", "to": "entry_and", "to_port": "in" },
+      { "id": "e_nopos_and", "from": "no_position", "from_port": "true", "to": "entry_and", "to_port": "in" },
+      { "id": "e_and_cd", "from": "entry_and", "from_port": "true", "to": "cooldown", "to_port": "in" },
+      { "id": "e_cd_buy", "from": "cooldown", "from_port": "then", "to": "buy_12", "to_port": "in" },
+      { "id": "e_tp9_and", "from": "tp9", "from_port": "true", "to": "tp_and", "to_port": "in" },
+      { "id": "e_pos_and", "from": "has_pos_a", "from_port": "true", "to": "tp_and", "to_port": "in" },
+      { "id": "e_tp_and_sell", "from": "tp_and", "from_port": "true", "to": "sell_35", "to_port": "in" },
+      { "id": "e_tp18_close", "from": "tp18", "from_port": "true", "to": "close_tp", "to_port": "in" },
+      { "id": "e_sl_close", "from": "sl6", "from_port": "true", "to": "close_sl", "to_port": "in" }
+    ]
+  }
+}

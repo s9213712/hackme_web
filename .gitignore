@@ -16,6 +16,7 @@ workflows/custom/*
 !workflows/custom/.gitkeep
 !public/data/
 !public/data/*.json
+public/data/workflow_template_benchmarks_*.json
 external/
 secure_backups/
 !requirements.txt
