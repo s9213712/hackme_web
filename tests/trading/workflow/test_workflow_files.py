@@ -8,9 +8,7 @@ ROOT = Path(__file__).resolve().parents[3]
 def test_trading_workflow_templates_live_under_workflows_directory():
     workflow_root = ROOT / "workflows"
     system_dir = workflow_root / "system"
-    custom_dir = workflow_root / "custom"
     assert system_dir.is_dir()
-    assert custom_dir.is_dir()
 
     # Plan B (N=11) — head-to-head finalists + 4 trend followers + 2
     # mean-reversion + 3 exit-only tools.  See workflows/README.md for
@@ -46,17 +44,18 @@ def test_trading_workflow_templates_live_under_workflows_directory():
 def test_workflow_custom_files_are_runtime_data_not_committed_templates():
     gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
     assert "!workflows/system/*.json" in gitignore
-    assert "workflows/custom/*" in gitignore
-    assert "!workflows/custom/.gitkeep" in gitignore
+    assert "runtime/" in gitignore
 
     routes = (ROOT / "routes" / "trading.py").read_text(encoding="utf-8")
     frontend = (ROOT / "public" / "js" / "56-trading.js").read_text(encoding="utf-8")
     index = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     assert '"/api/trading/workflow-templates"' in routes
     assert '"/api/trading/workflow-templates/custom"' in routes
+    assert 'runtime/workflows/custom' in routes
     assert '"/api/trading/workflow-editor/backtest"' in routes
     assert '"/trading/workflow-templates"' in frontend
     assert '"/trading/workflow-templates/custom"' in frontend
+    assert 'runtime/workflows/custom' in frontend
     assert 'id="trading-workflow-custom-save-btn"' in index
 
 

@@ -108,7 +108,7 @@ initialization so fresh installs can initialize all current schemas.
 
 Release `2026.05.02-042` moves official trading Workflow templates into the
 tracked `workflows/system/` directory, keeps user-created templates as runtime
-data under `workflows/custom/`, adds structured explanations to every official
+data under `runtime/workflows/custom/`, adds structured explanations to every official
 template, and introduces a validation script that checks trigger behavior,
 downloads public K-line data, runs backend backtests, and compares them with an
 independent replay.

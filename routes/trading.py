@@ -1,6 +1,7 @@
 import csv
 import io
 import json
+import os
 import re
 import time
 from datetime import datetime, timezone
@@ -51,8 +52,16 @@ REFERENCE_PRICE_CACHE_TTL_SECONDS = 1.0
 BACKTEST_PROVIDER_CANDLE_LIMIT = MAX_BACKTEST_CANDLES
 WORKFLOW_ROOT = Path(__file__).resolve().parents[1] / "workflows"
 WORKFLOW_SYSTEM_DIR = WORKFLOW_ROOT / "system"
-WORKFLOW_CUSTOM_DIR = WORKFLOW_ROOT / "custom"
 WORKFLOW_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$")
+
+
+def workflow_custom_root():
+    runtime_root = Path(os.environ.get("HACKME_RUNTIME_DIR") or "/tmp/hackme_web_runtime")
+    return runtime_root / "workflows" / "custom"
+
+
+def workflow_custom_root_label():
+    return "runtime/workflows/custom"
 
 
 def register_trading_routes(app, deps):
@@ -164,9 +173,16 @@ def register_trading_routes(app, deps):
 
     def relative_workflow_path(path):
         try:
-            return path.resolve().relative_to(WORKFLOW_ROOT.resolve()).as_posix()
+            resolved = path.resolve()
+            system_root = WORKFLOW_ROOT.resolve()
+            if resolved == system_root or system_root in resolved.parents:
+                return f"workflows/{resolved.relative_to(system_root).as_posix()}"
+            custom_root = workflow_custom_root().resolve(strict=False)
+            if resolved == custom_root or custom_root in resolved.parents:
+                return f"{workflow_custom_root_label()}/{resolved.relative_to(custom_root).as_posix()}"
         except Exception:
-            return path.name
+            pass
+        return path.name
 
     def load_workflow_template_file(path, *, scope):
         try:
@@ -193,7 +209,7 @@ def register_trading_routes(app, deps):
         if WORKFLOW_SYSTEM_DIR.is_dir():
             files.extend(("system", path) for path in sorted(WORKFLOW_SYSTEM_DIR.glob("*.json")))
         if actor:
-            custom_dir = WORKFLOW_CUSTOM_DIR / workflow_user_slug(actor)
+            custom_dir = workflow_custom_root() / workflow_user_slug(actor)
             if custom_dir.is_dir():
                 files.extend(("custom", path) for path in sorted(custom_dir.glob("*.json")))
         return files
@@ -897,6 +913,8 @@ def register_trading_routes(app, deps):
             "system": [item for item in templates if item.get("scope") == "system"],
             "custom": [item for item in templates if item.get("scope") == "custom"],
             "workflow_root": "workflows",
+            "system_workflow_root": "workflows/system",
+            "custom_workflow_root": workflow_custom_root_label(),
             "errors": errors,
         })
 
@@ -914,7 +932,7 @@ def register_trading_routes(app, deps):
             template_id = workflow_template_slug(data.get("id") or data.get("label") or workflow.get("name"), "custom_workflow")
             label = str(data.get("label") or workflow.get("name") or template_id).strip()[:120] or template_id
             description = str(data.get("description") or workflow.get("description") or "").strip()[:500]
-            custom_dir = WORKFLOW_CUSTOM_DIR / workflow_user_slug(actor)
+            custom_dir = workflow_custom_root() / workflow_user_slug(actor)
             custom_dir.mkdir(parents=True, exist_ok=True)
             path = custom_dir / f"{template_id}.json"
             payload = {
@@ -935,7 +953,12 @@ def register_trading_routes(app, deps):
                 ua=get_ua(),
                 detail=f"template_id={template_id}, path={relative_workflow_path(path)}",
             )
-            return json_resp({"ok": True, "template": item, "msg": "Workflow 自訂模板已儲存"})
+            return json_resp({
+                "ok": True,
+                "template": item,
+                "custom_workflow_root": workflow_custom_root_label(),
+                "msg": f"Workflow 自訂模板已儲存到 {workflow_custom_root_label()}",
+            })
         except Exception as exc:
             return service_error(exc)
 

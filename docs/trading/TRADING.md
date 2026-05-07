@@ -518,7 +518,7 @@ thresholds and backtest them before enabling live scans.
 Workflow files are stored under the project-level `workflows/` directory:
 
 - `workflows/system/` contains built-in templates tracked by Git.
-- `workflows/custom/<username>/` contains user-created templates generated at
+- `runtime/workflows/custom/<username>/` contains user-created templates generated at
   runtime and ignored by Git.
 - Official templates must include structured explanations: purpose, trigger
   conditions, actions, risk notes, suitable usage, and tuning guidance.

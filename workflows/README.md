@@ -3,9 +3,9 @@
 All trading workflow files live under this directory.
 
 - `workflows/system/`: built-in templates tracked by Git.
-- `workflows/custom/`: user-created templates generated at runtime and ignored by Git.
+- `runtime/workflows/custom/`: user-created templates generated at runtime and ignored by Git.
 
-Custom templates are stored per user under `workflows/custom/<username>/`.
+Custom templates are stored per user under `runtime/workflows/custom/<username>/`.
 
 ---
 
@@ -95,5 +95,5 @@ Custom templates are stored per user under `workflows/custom/<username>/`.
 
 ## 新增自訂模板
 
-1. 在 `workflows/custom/<username>/` 下新增 JSON 檔（格式同上，`"scope": "custom"`）。
+1. 在 `runtime/workflows/custom/<username>/` 下新增 JSON 檔（格式同上，`"scope": "custom"`）。
 2. 系統模板（`scope: system`）由 Git 管理，請勿直接修改，需要客製請複製到 custom 目錄。

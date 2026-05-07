@@ -2388,7 +2388,7 @@ async function saveTradingWorkflowCustomTemplate() {
     } else {
       await loadTradingWorkflowTemplates({ force: true });
     }
-    tradingSetMsg(json.msg || "Workflow 自訂模板已儲存到 workflows/custom");
+    tradingSetMsg(json.msg || `Workflow 自訂模板已儲存到 ${json.custom_workflow_root || "runtime/workflows/custom"}`);
   } catch (err) {
     tradingSetMsg(err.message || "Workflow 自訂模板儲存失敗", false);
   }

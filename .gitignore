@@ -11,9 +11,6 @@ runtime/
 !workflows/README.md
 !workflows/system/
 !workflows/system/*.json
-!workflows/custom/
-workflows/custom/*
-!workflows/custom/.gitkeep
 !public/data/
 !public/data/*.json
 public/data/workflow_template_benchmarks_*.json

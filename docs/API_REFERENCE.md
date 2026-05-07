@@ -380,7 +380,7 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | GET | `/api/trading/history/export.csv` | logged-in | 匯出交易歷史 |
 | GET | `/api/trading/btc-signal` | logged-in | BTC_trade signal |
 | GET | `/api/trading/workflow-templates` | logged-in | workflow 模板 |
-| POST | `/api/trading/workflow-templates/custom` | logged-in | 儲存自訂模板 |
+| POST | `/api/trading/workflow-templates/custom` | logged-in | 儲存自訂模板（寫入 `runtime/workflows/custom/<username>/`） |
 | GET | `/api/trading/reference-prices` | logged-in | K 線 / 指標資料 / reference price context |
 | GET/POST | `/api/trading/orders` | logged-in | 訂單列表 / 下現貨單 |
 | POST | `/api/trading/orders/<order_uuid>/cancel` | logged-in | 取消現貨單 |
