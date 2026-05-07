@@ -1,4 +1,5 @@
 import hashlib
+import hmac
 import json
 import random
 import secrets
@@ -131,7 +132,11 @@ def verify_csrf_double_submit(body_token):
     cookie_tok = request.cookies.get("csrf_token", "")
     if not isinstance(cookie_tok, str) or not cookie_tok or not body_token:
         return False
-    if cookie_tok != body_token:
+    # Constant-time compare to deny a timing oracle on the CSRF token.
+    # `==` short-circuits on the first mismatching byte, leaking position
+    # information. hmac.compare_digest takes the same time for any pair
+    # of equal-length strings.  See issue #180.
+    if not hmac.compare_digest(cookie_tok, body_token):
         return False
     tok_hash = hashlib.sha256(cookie_tok.encode()).hexdigest()
     conn = _STATE["get_db"]()
