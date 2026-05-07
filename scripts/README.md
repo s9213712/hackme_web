@@ -21,6 +21,8 @@ for one-off experiments.
   Operator repair and recovery tooling.
 - `scripts/comfyui/`
   ComfyUI probe tooling and ComfyUI-specific local startup template.
+- `scripts/games/`
+  Chess experiment training and other game-related operator tooling.
 - `scripts/prepush/`
   Pre-push framework internals and checks.
 - `scripts/security/`

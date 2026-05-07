@@ -29,6 +29,7 @@ weekly salary jobs are not run at startup unless the operator explicitly sets
 |---|---|
 | `runtime/database/database.db` | SQLite runtime database. |
 | `runtime/database/chess_experiment.db` | 西洋棋 `experiment` 難度的獨立學習資料庫。 |
+| `runtime/models/chess_experiment_2_nn.json` | 西洋棋 `experiment 2:nn` 難度的獨立模型檔。 |
 | `runtime/storage/` | Cloud Drive user files. |
 | `runtime/reports/bugs/` | User bug reports. |
 | `runtime/reports/server_mode_audit/` | Server mode audit export JSON / JSONL / SHA256 bundles. |
@@ -36,6 +37,7 @@ weekly salary jobs are not run at startup unless the operator explicitly sets
 | `runtime/anchors/` | Audit/integrity anchor files. |
 | `runtime/logs/` | Server and audit text logs. |
 | `runtime/reports/security/` | Security, smoke, and pentest reports. |
+| `runtime/reports/games/` | 西洋棋自動對弈訓練報告。 |
 | `secure_backups/` | Legacy local PointsChain backup path; ignored. |
 | `runtime/database/points_chain_backups/` | Current PointsChain ledger backup location when using the default runtime layout. |
 | `runtime/cert.pem`, `runtime/key.pem` | Local TLS files generated on first start. |
