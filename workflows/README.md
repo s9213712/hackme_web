@@ -11,32 +11,61 @@ Custom templates are stored per user under `workflows/custom/<username>/`.
 
 ## System Templates (`workflows/system/`)
 
-| 檔案 | 名稱 | 策略類型 | 條件 | 動作 |
-|------|------|----------|------|------|
-| `dip_buy.json` | 保守逢低買入 | 單條件進場 | price_below + 冷卻 | buy 10% |
-| `breakout_buy.json` | 突破追價買入 | 多條件進場 | price_above AND MA50↑ | buy 15% |
-| `ma_pullback.json` | MA 趨勢回踩 | 多條件進場+冷卻 | MA50↑ AND RSI≤45 + 冷卻4h | buy 12% |
-| `kd_momentum.json` | KD 動能追蹤 | 多條件進場 | KD≥60 AND MA20↑ | buy 10% |
-| `ma200_trend_entry.json` | MA200 長線趨勢進場 | 長線過濾進場 | MA200↑ AND MA50↑ AND RSI≤60 + 冷卻6h | buy 15% |
-| `rsi_scale.json` | RSI 分批買賣 | 雙向策略 | RSI≤30→買 / RSI≥70+持倉→賣 | buy 10% / sell 50% |
-| `bollinger_reversion.json` | 布林通道均值回歸 | 均值回歸 | BB下軌→買 / BB中線+持倉→賣 | buy 10% / sell 50% |
-| `swing_bb_ma50.json` | 布林波段+MA50 支撐 | 波段+風控 | BB下軌+MA50↑+空倉→買 / BB上軌+持倉→賣 / SL 7% | buy 20% / sell 50% / close_all |
-| `stop_loss.json` | 持倉跌破停損 | 純風控 | has_position AND price≤門檻 | close_all (P100) |
-| `risk_guard.json` | 停利停損風控 | 純風控 | SL 5%→全平 / TP 10%→賣半 | close_all (P100) / sell 50% (P50) |
-| `full_entry_exit.json` | 完整進出場策略 | 進場+風控 | price≤門檻+空倉→買 / SL 10%→全平 / TP 15%→全平 | buy 80% / close_all |
-| `staged_profit_taking.json` | 分批獲利了結 | 分批出場+風控 | SL 8%→全平 / TP 20%→全平 / TP 10%+持倉→賣40% | close_all / sell 40% |
+目前保留 **11 個** system templates，目的是讓使用者拿到「**完整風格光譜**」而不是只有
+正式對戰冠軍。對抗加賽落敗、偏弱、或重複的候選都已退場。
 
-#### Claude 設計範本（2026-05-06 新增 5 個）
+選擇背後的考量（**Plan B**）：
 
-| 檔案 | 名稱 | 策略角度 | 條件 | 動作 |
-|------|------|----------|------|------|
-| `trend_pyramid_claude.json` | 趨勢加碼 | 進場+加碼+趨勢出場 | MA50↑+RSI≥50+空倉→買30% / MA50↑+RSI<50+持倉→加碼25% / MA50↓+持倉→全平 / SL 10% | buy 30% / buy 25% / close_all |
-| `adaptive_profit_ladder_claude.json` | 階梯式獲利了結 | 三階段了結 | RSI≤30+空倉→買30% / TP 8%→賣25% / TP 15%→賣33% / TP 25%→賣50% / SL 8% | buy 30% / sell 25/33/50% / close_all |
-| `golden_cross_dual_ma_claude.json` | 雙均線黃金交叉 | 重倉趨勢追隨 | MA50↑+MA200↑+空倉→買50% / MA50↓+持倉→全平 / SL 12% | buy 50% / close_all |
-| `triple_confirmation_dip_claude.json` | 三重確認逢低買 | 多重確認進場 | RSI≤30+BB下軌+MA200↑+空倉→買40% / TP 18%→賣60% / SL 9% | buy 40% / sell 60% / close_all |
-| `bb_breakout_momentum_claude.json` | 布林上軌動能突破 | 突破動能 | BB上軌+RSI 50–70+MA50↑+空倉→買25% / TP 10%→賣40% / TP 20%→賣60% / SL 6% | buy 25% / sell 40/60% / close_all |
+- 新手在 1 年橫盤行情下需要 dd<10% 的保守選項
+- 長期持倉者需要單純 trend-follower（ma200 / ma_pullback）
+- 進階使用者要看 head-to-head 決賽冠軍長什麼樣
+- 出場策略要可以**獨立**作為教學模板（不混在 entry 內）
 
-> 設計動機與 5 種 K 線歷史回測排名見 [`docs/BACKTEST_CAPACITY_AND_TEMPLATE_BENCHMARKS.md`](../docs/BACKTEST_CAPACITY_AND_TEMPLATE_BENCHMARKS.md)。
+### 排名與保留依據
+
+排名公式：時段 1y(30%) + 3y(40%) + 5y(30%) × interval 15m(30%) + 1h(40%) + 4h(30%)，
+基於 `docs/COMPETITION/data/workflow_template_benchmarks_*.json` BTC 單一資產資料；
+頭兩個冠亞軍另外採用 `head_to_head_rev3.json` 5 資產 5y 參數調優資料。
+
+| # | 檔案 | 角色 | 平均報酬 | 最大回撤 | 風格 |
+|---|------|------|------:|------:|------|
+| 1 | `dipbuy_rsi35_70_size99_late_tp15_nopyr_codex.json` | **最終冠軍 / 建議預設** | **+64.40%** | 81.7% | head-to-head 決賽冠軍（Codex，5 資產 5y）|
+| 2 | `auto_search_winner_claude_rev3_return.json` | 決賽對照組 | **+60.75%** | 81.8% | head-to-head 決賽亞軍（Claude rev3）|
+| 3 | `ma200_trend_entry.json` | 長期趨勢追隨 | +14.07% | 23.1% | ★ 牛市冠軍（3y +29%）|
+| 4 | `breakout_buy.json` | 突破追進 | +13.31% | 22.7% | ★ 牛市並列冠軍（3y +29%）|
+| 5 | `ma_pullback.json` | 趨勢回踩 | +11.97% | 19.9% | ★ 趨勢追隨（3y +24%）|
+| 6 | `dip_buy.json` | 保守逢低買入 | +8.38% | 17.1% | 中段趨勢 |
+| 7 | `kd_momentum.json` | KD 動能 | +8.26% | 17.0% | 中段趨勢 |
+| 8 | `bollinger_reversion.json` | 布林反轉 | +4.20% | 9.8% | 中庸保守（dd<10%）|
+| 9 | `risk_guard.json` | 風控止損 | 0% | 0% | exit-only 工具 |
+| 10 | `staged_profit_taking.json` | 分批獲利了結 | 0% | 0% | exit-only 工具 |
+| 11 | `stop_loss.json` | 持倉止損 | 0% | 0% | exit-only 工具 |
+
+> exit-only 三件式（#9-11）獨立回測一定 0%（沒有持倉沒事可做），這是預期行為。
+> 它們設計為**搭配進場 workflow 一起使用**的範例。
+>
+> 最終排名與對戰結論見：
+> [`docs/COMPETITION/FINAL_HEAD_TO_HEAD_REPORT.md`](../docs/COMPETITION/FINAL_HEAD_TO_HEAD_REPORT.md)
+
+### 已退場的候選
+
+以下模板曾經存在但因為**綜合表現顯著輸給上面 11 個**而退場：
+
+| 退場類別 | 模板 | 退場理由 |
+|---|---|---|
+| 重複（合併到代表者）| `rsi_scale` | 表現幾乎等於 `bollinger_reversion`（+4.04% vs +4.20%）|
+| 重複 | `swing_bb_ma50` | 風險高 dd 17.9% 但報酬僅 +3.49%；方向類似 `bollinger_reversion`|
+| 1y 強但長期負 | `full_entry_exit` | 1y +12% 漂亮，但 3y/5y 全 -8%；牛市出場邏輯吃虧 |
+| head-to-head 第三 | `auto_search_winner_claude_rev2` | 已被 `_rev3_return` 取代 |
+| 對戰中間迭代 | `dipbuy_..._late_tp15_codex` | 含金字塔加碼版；最終冠軍是 `_nopyr` 不加碼版 |
+| 對戰中間迭代 | `dipbuy_..._very_late_tp10_codex` | 早期 exploration |
+| 顯著負報酬（≤ -0.13%）| 11 個（adaptive/bb_breakout/bb_rsi/breakout_guarded/golden_cross/kd_trend/ma200_rsi_reclaim/trend_floor/trend_pyramid/triple_confirmation/triple_trend_recovery）| 加權 PnL 全部負；保留只會誤導使用者 |
+
+這些結果仍保留在競賽報告與 commit history 中，需要回顧時可見：
+
+- [`docs/COMPETITION/report.md`](../docs/COMPETITION/report.md)
+- [`docs/COMPETITION/FINAL_HEAD_TO_HEAD_REPORT.md`](../docs/COMPETITION/FINAL_HEAD_TO_HEAD_REPORT.md)
+- [`docs/COMPETITION/REV2_STANDALONE_REPORT.md`](../docs/COMPETITION/REV2_STANDALONE_REPORT.md)
 
 ### 欄位說明
 
