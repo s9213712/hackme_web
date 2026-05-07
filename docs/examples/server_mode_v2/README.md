@@ -36,16 +36,22 @@ A user might need either or both:
 
 ## Files
 
-| Script | Demonstrates |
+| Script / Doc | Demonstrates |
 | --- | --- |
+| **[`TESTER_HANDBOOK.md`](TESTER_HANDBOOK.md)** | **For testers** — end-to-end playbook covering both tokens, functional UI testing, deep penetration probes, common pitfalls, and a bug-report template. Start here if you are a tester who just received a token. |
 | [`01_internal_test_login_token.sh`](01_internal_test_login_token.sh) | How to rotate, distribute, and consume the **internal_test login token**. |
 | [`02_tester_token_shadow_api.sh`](02_tester_token_shadow_api.sh) | How root creates a **tester token**, scopes it, and how a tester consumes it against `/api/tester/*`. |
+| [`03_production_gate_playbook.md`](03_production_gate_playbook.md) | Pre-production gate report walkthrough (root-side; testers should read but not run in prod). |
 | [`04_pentest_smv2.sh`](04_pentest_smv2.sh) | Focused SMv2 pentest probes: tester-token boundary checks, confirm-phrase negatives, revoke/replay denial, and root/admin path blocking. |
 | [`05_stress_smv2.sh`](05_stress_smv2.sh) | SMv2-specific burst/rate-limit checks for shadow APIs, chain-side credit flow, and mode-log reads. |
 | [`06_full_feature_smv2.sh`](06_full_feature_smv2.sh) | End-to-end walkthrough of the main Server Mode v2 admin surfaces, including mode switch, checkpoint, tester-token issue/use/revoke, and isolation checks. |
 | [`07_privilege_escalation_smv2.sh`](07_privilege_escalation_smv2.sh) | Negative privilege-escalation probes to prove tester tokens and shadow-role writes cannot become root/admin back doors. |
 
 Each script is self-contained bash + curl + `jq`. Read the `# usage` block at the top.
+
+> **First time receiving a token?** Read [`TESTER_HANDBOOK.md`](TESTER_HANDBOOK.md) §0–§2 before
+> running any script. It tells you which token you got, what you can and cannot do with it, and
+> the exact pre-flight check to confirm the server is in the right mode.
 
 ## Wider harness
 

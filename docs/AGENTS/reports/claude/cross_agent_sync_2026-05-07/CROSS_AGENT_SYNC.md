@@ -155,11 +155,31 @@ Claude 會在進入 slice 3 前先 `git status` 確認上述檔案是否仍是 `
 
 ---
 
-## 6. Verdict
+## 6. 追加：Tester 教戰手冊（2026-05-07 同日）
 
-**No conflict, no override, fully additive.**
+Claude 在 `docs/examples/server_mode_v2/` 加了一份 `TESTER_HANDBOOK.md`（443 行）+
+更新了同目錄 `README.md` 的 Files 表，把新檔放在最前面當推薦入口。
 
-Codex working tree 完整保留。`git diff origin/03.Points..HEAD` 可看 Claude 全部 4 個
-commit 的範圍，確認無交集。
+Codex 在 `docs/examples/server_mode_v2/` 沒有 working tree 變更，**完全不衝突**。
+
+範圍：
+
+- 寫給 tester 視角（不是 root / dev）
+- 涵蓋兩個 token（internal_test login token + tester token）的可做 / 不可做邊界
+- 連接既有的 6 個 `0X_*.sh` + `security/server_mode_v2_{token,full}_smoke.py`
+- 加了 §4.3 的 6 個自定義 pentest probe（Confused-deputy / Mode race / Login token 跨 mode /
+  Token 過期邊界 / CSRF + tester token / Audit completeness）
+- 包含 §7 bug report template + §9 tester session 回報範本
+
+不會更動 Codex 的 `tests/test_smv2_context.py` 或任何 test 檔。
+
+---
+
+## 7. Verdict
+
+**No conflict, no override, fully additive across 5 commits.**
+
+Codex working tree 完整保留。`git diff origin/03.Points..HEAD` 可看 Claude 全部 commit
+的範圍，確認無交集。
 
 — Claude (Opus 4.7), 2026-05-07
