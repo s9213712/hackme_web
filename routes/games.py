@@ -17,6 +17,11 @@ from services.games.chess_engine import (
     choose_experiment_move,
     record_experiment_learning,
 )
+from services.games.chess_nn import (
+    EXPERIMENT_NN_DIFFICULTY,
+    choose_experiment_nn_move,
+    record_experiment_nn_learning,
+)
 from services.points_chain import DISPLAY_CURRENCY
 
 GAME_KEY = "chess"
@@ -24,7 +29,7 @@ SOLO_GAME_KEYS = {"sudoku", "minesweeper", "1a2b", "tetris", "space_shooter"}
 SCORE_RANKED_SOLO_GAMES = {"tetris", "space_shooter"}
 SOLO_GAME_CHECK_SQL = "'sudoku', 'minesweeper', '1a2b', 'tetris', 'space_shooter'"
 WEEKLY_REWARDS = (300, 200, 100)
-COMPUTER_DIFFICULTIES = {"normal", "hard", EXPERIMENT_DIFFICULTY}
+COMPUTER_DIFFICULTIES = {"normal", "hard", EXPERIMENT_DIFFICULTY, EXPERIMENT_NN_DIFFICULTY}
 MINESWEEPER_DIFFICULTIES = {"easy", "normal", "hard"}
 PIECE_VALUES = {
     "p": 100,
@@ -120,6 +125,10 @@ def choose_computer_move(board, side, difficulty="normal", learning_store=None):
         move = choose_experiment_move(board, side, store=learning_store, difficulty=difficulty)
         if move:
             return move
+    if difficulty == EXPERIMENT_NN_DIFFICULTY:
+        move = choose_experiment_nn_move(board, side)
+        if move:
+            return move
     return _choose_heuristic_move(board, side, difficulty)
 
 
@@ -164,7 +173,7 @@ def game_schema_sql():
         CHECK (status IN ('active', 'finished', 'cancelled')),
         CHECK (current_turn IN ('white', 'black')),
         CHECK (human_side IN ('white', 'black')),
-        CHECK (computer_difficulty IN ('easy', 'normal', 'hard', 'experiment'))
+        CHECK (computer_difficulty IN ('easy', 'normal', 'hard', 'experiment', 'experiment 2:nn'))
     );
     CREATE TABLE IF NOT EXISTS game_invites (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -291,12 +300,17 @@ def rebuild_game_matches_table(conn):
             CHECK (status IN ('active', 'finished', 'cancelled')),
             CHECK (current_turn IN ('white', 'black')),
             CHECK (human_side IN ('white', 'black')),
-            CHECK (computer_difficulty IN ('easy', 'normal', 'hard', 'experiment'))
+            CHECK (computer_difficulty IN ('easy', 'normal', 'hard', 'experiment', 'experiment 2:nn'))
         )
         """
     )
+    old_cols = {row["name"] for row in conn.execute("PRAGMA table_info(game_matches_old)").fetchall()}
+
+    def old_expr(name, fallback_sql):
+        return name if name in old_cols else fallback_sql
+
     conn.execute(
-        """
+        f"""
         INSERT INTO game_matches (
             id, game_key, mode, status, white_user_id, black_user_id, human_side,
             computer_difficulty, current_turn, board_json, move_history_json,
@@ -304,12 +318,25 @@ def rebuild_game_matches_table(conn):
             finished_at, white_deleted_at, black_deleted_at
         )
         SELECT
-            id, game_key, mode, status, white_user_id, black_user_id,
-            COALESCE(human_side, 'white'),
-            COALESCE(computer_difficulty, 'normal'),
-            current_turn, board_json, move_history_json, winner_user_id,
-            result_reason, leaderboard_week, created_at, updated_at, finished_at,
-            white_deleted_at, black_deleted_at
+            id,
+            game_key,
+            COALESCE({old_expr('mode', "'pvp'")}, 'pvp'),
+            COALESCE({old_expr('status', "'active'")}, 'active'),
+            white_user_id,
+            {old_expr('black_user_id', 'NULL')},
+            COALESCE({old_expr('human_side', "'white'")}, 'white'),
+            COALESCE({old_expr('computer_difficulty', "'normal'")}, 'normal'),
+            COALESCE({old_expr('current_turn', "'white'")}, 'white'),
+            board_json,
+            COALESCE({old_expr('move_history_json', "'[]'")}, '[]'),
+            {old_expr('winner_user_id', 'NULL')},
+            {old_expr('result_reason', 'NULL')},
+            {old_expr('leaderboard_week', 'NULL')},
+            created_at,
+            updated_at,
+            {old_expr('finished_at', 'NULL')},
+            {old_expr('white_deleted_at', 'NULL')},
+            {old_expr('black_deleted_at', 'NULL')}
         FROM game_matches_old
         """
     )
@@ -342,7 +369,7 @@ def ensure_game_schema(conn):
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='game_matches'"
     ).fetchone()
     match_sql = str(match_schema["sql"] or "") if match_schema else ""
-    if match_schema and "experiment" not in match_sql:
+    if match_schema and ("experiment" not in match_sql or "experiment 2:nn" not in match_sql):
         rebuild_game_matches_table(conn)
     cols = {row["name"] for row in conn.execute("PRAGMA table_info(game_matches)").fetchall()}
     if "white_deleted_at" not in cols:
@@ -586,25 +613,39 @@ def register_games_routes(app, deps):
                 awarded.append({"user_id": row["user_id"], "username": row["username"], "rank": index + 1, "reward_points": reward_points})
         return awarded
 
-    def persist_experiment_learning(row, *, winner_color, actor_username):
-        if chess_engine_store is None:
-            return 0
+    def persist_computer_learning(row, *, winner_color, actor_username):
+        updated = 0
+        if chess_engine_store is not None:
+            try:
+                updated += record_experiment_learning(
+                    row,
+                    winner_color=winner_color,
+                    store=chess_engine_store,
+                )
+            except Exception as exc:
+                audit(
+                    "GAME_CHESS_EXPERIMENT_LEARNING_FAILED",
+                    get_client_ip(),
+                    user=actor_username,
+                    success=False,
+                    ua=get_ua(),
+                    detail=f"match_id={row['id']}, error={type(exc).__name__}: {exc}",
+                )
         try:
-            return record_experiment_learning(
+            updated += record_experiment_nn_learning(
                 row,
                 winner_color=winner_color,
-                store=chess_engine_store,
             )
         except Exception as exc:
             audit(
-                "GAME_CHESS_EXPERIMENT_LEARNING_FAILED",
+                "GAME_CHESS_EXPERIMENT_NN_LEARNING_FAILED",
                 get_client_ip(),
                 user=actor_username,
                 success=False,
                 ua=get_ua(),
                 detail=f"match_id={row['id']}, error={type(exc).__name__}: {exc}",
             )
-            return 0
+        return updated
 
     @app.route("/api/games/catalog", methods=["GET"])
     @require_csrf_safe
@@ -624,6 +665,7 @@ def register_games_routes(app, deps):
                     {"key": "normal", "label": "普通"},
                     {"key": "hard", "label": "困難"},
                     {"key": EXPERIMENT_DIFFICULTY, "label": "實驗"},
+                    {"key": EXPERIMENT_NN_DIFFICULTY, "label": "實驗 2：NN"},
                 ],
             }, {
                 "key": "sudoku",
@@ -1031,7 +1073,7 @@ def register_games_routes(app, deps):
             if status_info["status"] == "finished":
                 refreshed = conn.execute("SELECT * FROM game_matches WHERE id=?", (match_id,)).fetchone()
                 finish_match(conn, refreshed, status_info, utc_now())
-                persist_experiment_learning(
+                persist_computer_learning(
                     refreshed,
                     winner_color=status_info.get("winner_color"),
                     actor_username=actor["username"],
@@ -1072,7 +1114,7 @@ def register_games_routes(app, deps):
                 """,
                 (winner, current_week_key(), now, now, match_id),
             )
-            persist_experiment_learning(
+            persist_computer_learning(
                 row,
                 winner_color=opponent(side),
                 actor_username=actor["username"],

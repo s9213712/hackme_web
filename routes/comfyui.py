@@ -19,8 +19,15 @@ from urllib.parse import parse_qs, unquote, urlencode, urlparse, urlunparse
 import urllib.error
 import urllib.request
 
-from flask import request
+from flask import request, send_file
 
+from services.comfyui.settings import (
+    DEFAULT_COMFYUI_PORT,
+    normalize_comfyui_connection_mode,
+    validate_comfyui_api_host,
+    validate_comfyui_api_port,
+    validate_comfyui_api_url,
+)
 from services.storage.cloud_drive import attach_existing_file, ensure_cloud_drive_attachment_schema, store_cloud_upload
 from services.comfyui.client import (
     CONTROLNET_TYPE_DEFINITIONS,
@@ -35,7 +42,7 @@ from services.comfyui.workflows import (
     workflow_json_to_pretty_text,
 )
 from services.system.notifications import create_notification_if_enabled
-from services.storage_albums import (
+from services.storage.storage_albums import (
     add_album_file,
     create_storage_file_entry,
     ensure_output_album,
@@ -44,13 +51,12 @@ from services.storage_albums import (
 
 
 DEFAULT_COMFYUI_URL = os.environ.get("COMFYUI_API_URL", "http://localhost:8192")
-DEFAULT_COMFYUI_PORT = 8192
+COMFYUI_LOCAL_START_TEMPLATE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "comfyui" / "comfyui_run_in_linux.template.sh"
 SAFE_SAMPLER_FALLBACK = "euler"
 SAFE_SCHEDULER_FALLBACK = "normal"
 DEFAULT_GENERATION_TIMEOUT_SECONDS = 1800
 MAX_GENERATION_TIMEOUT_SECONDS = 1800
 COMFYUI_BASIC_PRICE_ITEM_KEY = "comfyui_txt2img_basic"
-COMFYUI_HOST_RE = re.compile(r"^[A-Za-z0-9_.:-]+$")
 MAX_COMFYUI_FETCH_IMAGE_BYTES = 50 * 1024 * 1024
 MAX_COMFYUI_LORAS_PER_PROMPT = 8
 COMFYUI_LORA_EXTRA_PRICE_POINTS = 1
@@ -997,20 +1003,12 @@ def register_comfyui_routes(app, deps):
         return True, "owned_generation_only", summary
 
     def _validate_comfyui_host(value):
-        host = str(value or "").strip().strip("[]")
-        if not host:
-            return None
-        if len(host) > 253:
-            return None
-        forbidden = ("://", "/", "\\", "@", "?", "#", "%", " ")
-        if any(part in host for part in forbidden):
-            return None
-        if not COMFYUI_HOST_RE.match(host):
-            return None
-        return host
+        return validate_comfyui_api_host(value)
 
     def _parse_comfyui_endpoint(data):
-        mode = str((data or {}).get("mode") or (data or {}).get("comfyui_connection_mode") or _configured_connection_mode()).strip().lower()
+        mode = normalize_comfyui_connection_mode(
+            (data or {}).get("mode") or (data or {}).get("comfyui_connection_mode") or _configured_connection_mode()
+        ) or "remote"
         if mode == "remote":
             raw_url = str((data or {}).get("api_url") or (data or {}).get("comfyui_remote_api_url") or "").strip()
             if raw_url:
@@ -1023,25 +1021,17 @@ def register_comfyui_routes(app, deps):
         host = _validate_comfyui_host(data.get("host") or data.get("comfyui_api_host") or default_url.hostname or "localhost")
         if host is None:
             return None, None, "ComfyUI Host / IP 必須是主機名稱或 IP，不可包含 http://、路徑、帳密或特殊字元"
-        try:
-            port = int(data.get("port") or data.get("comfyui_api_port") or default_url.port or DEFAULT_COMFYUI_PORT)
-        except Exception:
-            return None, None, "ComfyUI Port 必須是 1-65535"
-        if port < 1 or port > 65535:
+        port = validate_comfyui_api_port(data.get("port") or data.get("comfyui_api_port") or default_url.port or DEFAULT_COMFYUI_PORT)
+        if port is None:
             return None, None, "ComfyUI Port 必須是 1-65535"
         display_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
-        return f"http://{display_host}:{port}", {"mode": mode if mode in {"local", "remote"} else "remote", "host": host, "port": port}, None
+        return f"http://{display_host}:{port}", {"mode": mode, "host": host, "port": port}, None
 
     def _validate_comfyui_api_url(value):
-        raw = str(value or "").strip().rstrip("/")
-        if not raw:
+        raw = validate_comfyui_api_url(value, allow_blank=True)
+        if raw == "":
             return None, "ComfyUI API 位址不可空白"
-        parsed = urlparse(raw)
-        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-            return None, "ComfyUI API 位址必須是 http://host:port 或 https://host:port"
-        if parsed.username or parsed.password:
-            return None, "ComfyUI API 位址不可包含帳密"
-        if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+        if raw is None:
             return None, "ComfyUI API 位址只需填主機與 port，不要包含路徑或參數"
         return raw, None
 
@@ -1054,8 +1044,7 @@ def register_comfyui_routes(app, deps):
 
     def _configured_connection_mode():
         settings = get_system_settings() or {}
-        mode = str(settings.get("comfyui_connection_mode") or "remote").strip().lower()
-        return mode if mode in {"local", "remote"} else "remote"
+        return normalize_comfyui_connection_mode(settings.get("comfyui_connection_mode")) or "remote"
 
     def _configured_comfyui_url():
         settings = get_system_settings() or {}
@@ -3459,6 +3448,29 @@ def register_comfyui_routes(app, deps):
                 "autostart": autostart,
                 "local_runtime": runtime,
             })
+
+    @app.route("/api/root/comfyui/local-start-template", methods=["GET"])
+    @require_csrf_safe
+    def root_comfyui_local_start_template():
+        actor, err = _root_or_403()
+        if err:
+            return err
+        if not COMFYUI_LOCAL_START_TEMPLATE_PATH.is_file():
+            return json_resp({"ok": False, "msg": "ComfyUI 啟動腳本範本不存在"}), 503
+        audit(
+            "COMFYUI_LOCAL_TEMPLATE_DOWNLOADED",
+            get_client_ip(),
+            user=_actor_value(actor, "username"),
+            success=True,
+            ua=get_ua(),
+            detail=f"filename={COMFYUI_LOCAL_START_TEMPLATE_PATH.name}",
+        )
+        return send_file(
+            COMFYUI_LOCAL_START_TEMPLATE_PATH,
+            as_attachment=True,
+            download_name=COMFYUI_LOCAL_START_TEMPLATE_PATH.name,
+            mimetype="text/x-shellscript",
+        )
 
     @app.route("/api/root/comfyui/civitai/inspect", methods=["POST"])
     @require_csrf

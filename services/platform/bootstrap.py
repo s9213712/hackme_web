@@ -594,11 +594,11 @@ def apply_schema_migrations(
         elif version == 23:
             _ensure_reports_notifications_schema(conn)
         elif version == 24:
-            from services.storage_albums import ensure_storage_album_schema
+            from services.storage.storage_albums import ensure_storage_album_schema
 
             ensure_storage_album_schema(conn)
         elif version == 25:
-            from services.storage_albums import ensure_storage_album_schema
+            from services.storage.storage_albums import ensure_storage_album_schema
 
             ensure_storage_album_schema(conn)
         elif version == 26:
@@ -612,11 +612,11 @@ def apply_schema_migrations(
 
             ensure_game_schema(conn)
         elif version == 29:
-            from services.trading_engine import ensure_trading_schema
+            from services.trading.trading_engine import ensure_trading_schema
 
             ensure_trading_schema(conn)
         elif version == 30:
-            from services.trading_engine import ensure_trading_schema
+            from services.trading.trading_engine import ensure_trading_schema
 
             ensure_trading_schema(conn)
 

@@ -13,14 +13,14 @@ deployer.
 
 Related technical references:
 
-- [ENCRYPTION_RUNTIME_BOUNDARY.md](ENCRYPTION_RUNTIME_BOUNDARY.md)
+- [ENCRYPTION_RUNTIME_BOUNDARY.md](runtime/ENCRYPTION_RUNTIME_BOUNDARY.md)
 - [EXTERNAL_API_COMMAND_MATRIX.md](EXTERNAL_API_COMMAND_MATRIX.md)
 
 ## Release and Schema
 
-- Release ID: `2026.05.07-154`
+- Release ID: `2026.05.07-155`
 - Schema version: `30`
-- Release ID source: `services/release_info.py`
+- Release ID source: `services/platform/release_info.py`
 - Runtime version endpoint: `GET /api/version`
 - Branch and release policy: [BRANCHING_AND_RELEASE.md](BRANCHING_AND_RELEASE.md)
 - Upload request-body cap: `HTML_LEARNING_MAX_CONTENT_MB` (default `1024`, minimum `128`)
@@ -49,7 +49,7 @@ state that gap explicitly instead of marking the feature as fully complete.
 Root account note:
 
 - `root` is intentionally excluded from the public password-reset flow.
-- Offline recovery must go through `scripts/root_recovery.py`.
+- Offline recovery must go through `scripts/admin/root_recovery.py`.
 
 Trading registry note:
 
@@ -64,7 +64,7 @@ Trading registry note:
 
 Server Mode v2 note:
 
-- `docs/examples/server_mode_v2/` no longer stops at the two token tutorials.
+- `docs/server_mode_v2/` no longer stops at the two token tutorials.
   It now also includes focused pentest, stress, full-feature, and
   privilege-escalation scripts.
 - `launch-check` is a preflight gate, not a requirement to already be in
@@ -98,7 +98,7 @@ Server Mode v2 note:
 - `internal_test` login token is no longer a shared singleton gate. Root must
   bind it to one target account at issuance time, and only that account may use
   the token at `/api/login` while the server is in `internal_test`.
-- `security/server_mode_v2_full_smoke.py` is the isolated runtime harness that
+- `scripts/security/server_mode/server_mode_v2_full_smoke.py` is the isolated runtime harness that
   runs the six-script bundle and then verifies shadow-table activity did not
   leak into production wallet / ledger tables.
 - Trading Phase 5b G-3 now namespaces the in-memory matching orderbook by
@@ -153,7 +153,7 @@ Ignored runtime state includes:
 - `runtime/cert.pem`, `runtime/key.pem`
 - `runtime/integrity_manifest.json`
 - `runtime/reports/bugs/`
-- `security/reports/`
+- `runtime/reports/security/`
 
 Override paths with:
 
@@ -195,7 +195,7 @@ Use [CLI_ADMIN_PLAYBOOK.md](CLI_ADMIN_PLAYBOOK.md) when you want to operate the
 site with `curl` / shell commands instead of the web UI.
 
 The formal HLS / segmented streaming Phase C design for large media now lives
-in [VIDEO_STREAMING_ARCHITECTURE.md](VIDEO_STREAMING_ARCHITECTURE.md). Use that
+in [VIDEO_STREAMING_ARCHITECTURE.md](video/VIDEO_STREAMING_ARCHITECTURE.md). Use that
 document for:
 
 - large-video streaming architecture
@@ -507,7 +507,7 @@ ComfyUI notes:
   disabled in the picker and rejected by `POST /api/comfyui/generate`.
 - Supported ControlNet families in the current UI are `canny`, `depth`,
   `openpose`, `lineart`, `scribble`, `softedge`, and `tile`.
-- `scripts/comfyui_feature_probe.py` is the backup/live probe harness for this
+- `scripts/comfyui/feature_probe.py` is the backup/live probe harness for this
   module. It logs in through the web app, exercises `status`, `models`,
   `txt2img`, `img2img`, `inpaint`, `outpaint`, `upscale`, `history rerun`, and
   optionally ControlNet, then writes a JSON report that can be attached to QA
@@ -615,7 +615,7 @@ Trading API notes:
 - Backtests can accept frontend-supplied candles or fetch Binance historical
   K-lines from `start_time`, `end_time`, and `timeframe`.
 
-Detailed usage is documented in [TRADING.md](TRADING.md).
+Detailed usage is documented in [TRADING.md](trading/TRADING.md).
 
 ### Security Center and Operations
 
@@ -676,7 +676,7 @@ Canonical Server Mode v2 states:
 Entering `superweak` requires root confirmation and creates a
 `before_superweak` snapshot. Reset creates a `pre_reset` snapshot before
 clearing resettable runtime state. The authoritative mode matrix and
-confirmation rules live in [SERVER_MODE_V2_PROFILE_MATRIX.md](SERVER_MODE_V2_PROFILE_MATRIX.md).
+confirmation rules live in [SERVER_MODE_V2_PROFILE_MATRIX.md](server_mode_v2/SERVER_MODE_V2_PROFILE_MATRIX.md).
 
 Snapshot archives are downloadable and can be uploaded for restore on another
 host.
@@ -766,9 +766,9 @@ Route modules:
 Service modules:
 
 - `services/access_controls.py`
-- `services/auth.py`
+- `services/users/auth.py`
 - `services/audit.py`
-- `services/bootstrap.py`
+- `services/platform/bootstrap.py`
 - `services/captcha.py`
 - `services/chat_support.py`
 - `services/cloud_drive.py`
@@ -781,17 +781,18 @@ Service modules:
 - `services/notifications.py`
 - `services/password_strength.py`
 - `services/permissions.py`
-- `services/release_info.py`
+- `services/platform/release_info.py`
 - `services/security_events.py`
 - `services/server_bind.py`
-- `services/settings.py`
-- `services/snapshots.py`
-- `services/storage_albums.py`
+- `services/platform/settings.py`
+- `services/comfyui/settings.py`
+- `services/snapshots/schema.py`
+- `services/storage/storage_albums.py`
 - `services/storage_maintenance.py`
 - `services/storage_paths.py`
-- `services/trading_engine.py`
-- `services/upload_security.py`
-- `services/violations.py`
+- `services/trading/trading_engine.py`
+- `services/security/upload_security.py`
+- `services/governance/violations.py`
 
 Frontend scripts:
 
@@ -831,7 +832,7 @@ gitleaks version
 Full local gate:
 
 ```bash
-python3 scripts/pre_push_checks.py
+python3 scripts/prepush/pre_push_checks.py
 ```
 
 The default gate is intentionally lightweight: Python compilation,
@@ -846,7 +847,7 @@ the run non-interactive and sanitized; it does not imply `--full`.
 Cleanup helpers:
 
 ```bash
-python3 scripts/pre_push_checks.py --clean --clean-temp --yes
+python3 scripts/prepush/pre_push_checks.py --clean --clean-temp --yes
 ```
 
 - `--clean` removes safe repository caches and repo-root `runtime/`: `__pycache__`,
@@ -893,7 +894,7 @@ Security and pentest runner documentation:
 For first deployment, run the guided setup:
 
 ```bash
-./scripts/run_prod.sh
+./one_click_setup.sh
 ```
 
 If `.env` does not exist and the script is attached to a terminal, it opens an
@@ -904,17 +905,17 @@ Gunicorn settings, then writes `.env` with mode `600`.
 Automation-friendly modes:
 
 ```bash
-./scripts/run_prod.sh --check
-./scripts/run_prod.sh --init-db-only
-./scripts/run_prod.sh --no-wizard
+./one_click_setup.sh --check
+./one_click_setup.sh --init-db-only
+./one_click_setup.sh --no-wizard
 ```
 
-`run_prod.sh --check` 現在還會額外提示目前部署是否已具備：
+`one_click_setup.sh --check` 現在還會額外提示目前部署是否已具備：
 - `ffmpeg` / `ffprobe`
   - 影響影音平台 HLS 衍生檔與 metadata probe
 - `CIVITAI_API_KEY`
   - 影響 root-only Civitai 搜尋 / 下載
-- `python3 scripts/root_recovery.py`
+- `python3 scripts/admin/root_recovery.py`
   - root 的正式 offline recovery 入口
 
 這些提示屬於可選能力檢查，不是一般部署的硬阻擋條件。
@@ -922,7 +923,7 @@ Automation-friendly modes:
 To regenerate `.env` intentionally:
 
 ```bash
-./scripts/run_prod.sh --wizard
+./one_click_setup.sh --wizard
 ```
 
 Recommended production defaults:

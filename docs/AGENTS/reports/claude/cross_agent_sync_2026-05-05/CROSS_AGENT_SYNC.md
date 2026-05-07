@@ -24,7 +24,7 @@ Claude 側已在 [`docs/BLOCKCHAIN/PHASE_0_CLEANUP_GATE.md`](../../../BLOCKCHAIN
 
 ---
 
-## 2. 與 Codex `docs/ENCRYPTION_RUNTIME_BOUNDARY.md` 的對齊
+## 2. 與 Codex `docs/runtime/ENCRYPTION_RUNTIME_BOUNDARY.md` 的對齊
 
 ### 2.1 三層加密邊界
 

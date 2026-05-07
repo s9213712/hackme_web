@@ -4,19 +4,19 @@ from __future__ import annotations
 
 import os
 
-from services.auth import configure_auth_service
-from services.bootstrap import configure_bootstrap_service
+from services.users.auth import configure_auth_service
+from services.platform.bootstrap import configure_bootstrap_service
 from services.chat.support import configure_chat_support_service
 from services.games.chess_engine import ChessExperimentStore
 from services.points_chain import PointsLedgerService
 from services.security.events import configure_security_events_service
-from services.settings import configure_settings_service
+from services.platform.settings import configure_settings_service
 from services.snapshots import SnapshotService, ServerModeService
 from services.system.audit import _chain_hash, configure_audit_service, reset_audit_chain_with_event
 from services.system.integrity_guard import IntegrityGuard
 from services.trading.streams import TradingPriceStreamHub
-from services.trading_engine import TradingEngineService
-from services.violations import configure_violations_service
+from services.trading.trading_engine import TradingEngineService
+from services.governance.violations import configure_violations_service
 
 
 def build_runtime_services(*, config, deps):

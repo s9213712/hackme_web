@@ -79,7 +79,7 @@ def load_template_workflow(name: str) -> dict:
 
 def build_runtime():
     from services.points_chain import PointsLedgerService, ensure_points_economy_schema
-    from services.trading_engine import TradingEngineService, ensure_trading_schema
+    from services.trading.trading_engine import TradingEngineService, ensure_trading_schema
 
     tmp = Path(tempfile.mkdtemp(prefix="comp2_"))
     db_path = tmp / "trading.db"

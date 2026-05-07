@@ -1,0 +1,16 @@
+from tests.comfyui._integration_suite import (
+    test_comfyui_export_current_and_run_workflow_preset_preserve_parameters,
+    test_comfyui_generate_normalizes_embedding_shortcut_syntax,
+    test_comfyui_inpaint_workflow_sets_grow_mask_by,
+    test_comfyui_object_info_combo_options_are_parsed_for_upscale_models,
+    test_comfyui_outpaint_workflow_sets_grow_mask_by,
+    test_comfyui_private_workflow_preset_cannot_be_read_by_other_user,
+    test_comfyui_workflow_chains_loras_between_checkpoint_and_sampler,
+    test_comfyui_workflow_import_rejects_bad_json_and_unsafe_paths,
+    test_comfyui_workflow_import_rejects_too_many_nodes_and_deep_nesting,
+    test_comfyui_workflow_run_rejects_missing_dependencies,
+    test_comfyui_workflow_uses_custom_vae_when_selected,
+    test_comfyui_workflow_uses_requested_batch_size,
+    test_root_can_publish_official_workflow_preset_with_audit,
+)
+

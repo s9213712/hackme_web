@@ -125,15 +125,15 @@ QA 不只要找 bug，還要檢查功能是否符合
 
 | 領域 | 主要 UI / 頁面 | 主要 route modules | 主要 service modules | 高價值 tests | 主要文件 |
 |---|---|---|---|---|---|
-| 認證 / 帳號 / 權限 | `public/js/40-auth-users.js`, `public/js/10-users.js` | `routes/public.py`, `routes/users.py`, `routes/appeals.py` | `services/auth.py`, `services/account_recovery.py`, `services/password_strength.py`, `services/permissions.py`, `services/identity.py`, `services/sanction_notices.py`, `services/violations.py` | `test_auth_csrf_safe.py`, `test_access_controls.py`, `test_account_lockout.py`, `test_account_recovery.py`, `test_account_sessions.py`, `test_password_strength.py`, `test_security_issue_regressions.py` | `README.md`, `WEB.md`, `For_developer.md` |
+| 認證 / 帳號 / 權限 | `public/js/40-auth-users.js`, `public/js/10-users.js` | `routes/public.py`, `routes/users.py`, `routes/appeals.py` | `services/users/auth.py`, `services/account_recovery.py`, `services/password_strength.py`, `services/permissions.py`, `services/identity.py`, `services/governance/sanction_notices.py`, `services/governance/violations.py` | `test_auth_csrf_safe.py`, `test_access_controls.py`, `test_account_lockout.py`, `test_account_recovery.py`, `test_account_sessions.py`, `test_password_strength.py`, `test_security_issue_regressions.py` | `README.md`, `WEB.md`, `For_developer.md` |
 | 社群 / 討論區 / 檢舉 / 通知 | `public/js/20-chat.js`, `public/js/25-community.js`, `public/js/30-appeals.js`, `public/js/32-notifications.js` | `routes/chat.py`, `routes/community.py`, `routes/moderation.py`, `routes/reports_notifications.py`, `routes/bug_reports.py` | `services/chat_support.py`, `services/moderation_proposals.py`, `services/notifications.py`, `services/governance_records.py` | `test_chat_permissions.py`, `test_dm_routes.py`, `test_community_permissions.py`, `test_moderation_proposals.py`, `test_reports_notifications.py`, `test_bug_reports.py` | `WEB.md`, `For_developer.md` |
-| Cloud Drive / 上傳 / 相簿 / 下載器 | `public/js/35-drive.js` | `routes/files.py` | `services/cloud_drive.py`, `services/file_previews.py`, `services/upload_security.py`, `services/storage_albums.py`, `services/storage_paths.py`, `services/storage_maintenance.py`, `services/storage_capacity_audit.py`, `services/storage_quota_*`, `services/remote_downloads.py` | `test_upload_security.py`, `test_cloud_drive_attachments.py`, `test_remote_downloads.py`, `test_storage_paths.py`, `test_storage_maintenance.py`, `test_storage_albums_schema.py`, `test_frontend_drive_preview.py` | `WEB.md`, `For_developer.md`, `VIDEO_PLATFORM.md` |
-| 影片分享平台 | `public/js/35-drive.js`, `public/js/32-notifications.js`, 前端影音模組 | `routes/videos.py` | `services/videos.py`, `services/cloud_drive.py`, `services/points_chain.py` | `test_video_publish.py`, `test_video_permission.py`, `test_video_comments.py`, `test_video_tips.py`, `test_video_security.py`, `test_frontend_videos.py` | `VIDEO_PLATFORM.md`, `WEB.md`, `For_developer.md` |
-| PointsChain / Economy / 健康度 | `public/js/50-admin.js`, `public/js/55-economy.js` | `routes/economy.py`, `routes/system_admin.py` | `services/points_chain.py`, `services/security_events.py`, `services/integrity_guard.py`, `services/settings.py` | `test_points_chain.py`, `test_health_center.py`, `test_integrity_guard.py`, `test_integrity_repair.py`, `test_frontend_economy.py`, `test_settings_audit_reseal.py` | `WEB.md`, `For_developer.md`, `docs/security/*.md` |
-| 交易 / Bot / Workflow / BTC_trade | `public/js/56-trading.js`, `public/js/trading-workflow-editor.js` | `routes/trading.py`, `routes/economy.py` | `services/trading_engine.py`, `services/btc_trade_bridge.py`, `services/points_chain.py` | `test_trading_engine.py`, `test_trading_reference_prices.py`, `test_trading_workflow_editor_ui.py`, `test_frontend_economy.py` | `TRADING.md`, `WEB.md`, `docs/security/TRADING_STRESS_PENTEST.md`, `TRADING_QA_REGRESSION_MATRIX.md` |
+| Cloud Drive / 上傳 / 相簿 / 下載器 | `public/js/35-drive.js` | `routes/files.py` | `services/cloud_drive.py`, `services/file_previews.py`, `services/security/upload_security.py`, `services/storage/storage_albums.py`, `services/storage_paths.py`, `services/storage_maintenance.py`, `services/storage_capacity_audit.py`, `services/storage_quota_*`, `services/remote_downloads.py` | `test_upload_security.py`, `test_cloud_drive_attachments.py`, `test_remote_downloads.py`, `test_storage_paths.py`, `test_storage_maintenance.py`, `test_storage_albums_schema.py`, `test_frontend_drive_preview.py` | `WEB.md`, `For_developer.md`, `VIDEO_PLATFORM.md` |
+| 影片分享平台 | `public/js/35-drive.js`, `public/js/32-notifications.js`, 前端影音模組 | `routes/videos.py` | `services/videos.py`, `services/cloud_drive.py`, `services/points_chain/service.py` | `test_video_publish.py`, `test_video_permission.py`, `test_video_comments.py`, `test_video_tips.py`, `test_video_security.py`, `test_frontend_videos.py` | `VIDEO_PLATFORM.md`, `WEB.md`, `For_developer.md` |
+| PointsChain / Economy / 健康度 | `public/js/50-admin.js`, `public/js/55-economy.js` | `routes/economy.py`, `routes/system_admin.py` | `services/points_chain/service.py`, `services/security_events.py`, `services/integrity_guard.py`, `services/platform/settings.py` | `test_points_chain.py`, `test_health_center.py`, `test_integrity_guard.py`, `test_integrity_repair.py`, `test_frontend_economy.py`, `test_settings_audit_reseal.py` | `WEB.md`, `For_developer.md`, `docs/security/*.md` |
+| 交易 / Bot / Workflow / BTC_trade | `public/js/56-trading.js`, `public/js/trading-workflow-editor.js` | `routes/trading.py`, `routes/economy.py` | `services/trading/trading_engine.py`, `services/btc_trade_bridge.py`, `services/points_chain/service.py` | `test_trading_engine.py`, `test_trading_reference_prices.py`, `test_trading_workflow_editor_ui.py`, `test_frontend_economy.py` | `TRADING.md`, `WEB.md`, `docs/security/TRADING_STRESS_PENTEST.md`, `TRADING_QA_REGRESSION_MATRIX.md` |
 | ComfyUI 整合 | `public/js/36-comfyui.js` | `routes/comfyui.py` | `services/comfyui_client.py`, `services/cloud_drive.py` | `test_comfyui_integration.py`, `test_cloud_drive_attachments.py` | `WEB.md`, `For_developer.md` |
-| Server Mode / Security Center / Access Controls | `public/js/50-admin.js`, `public/js/90-bootstrap.js` | `routes/system_admin.py`, `routes/operations.py`, `routes/public.py` | `services/access_controls.py`, `services/audit.py`, `services/security_events.py`, `services/integrity_guard.py`, `services/server_bind.py`, `services/settings.py` | `test_security_defaults.py`, `test_security_events.py`, `test_frontend_security_center_layout.py`, `test_frontend_health_center.py`, `test_server_update_feature.py` | `SERVER_MODE_V2_*.md`, `docs/security/*.md`, `For_developer.md` |
-| Snapshot / Restore / Reset / Bootstrap | root 管理頁 | `routes/operations.py`, `routes/system_admin.py` | `services/snapshots.py`, `services/bootstrap.py`, `services/points_chain.py` | `test_snapshots.py`, `test_bootstrap_compat.py`, `test_release_policy.py` | `RUNTIME_RESET_AND_RECOVERY.md`, `For_developer.md`, `PRE_RELEASE_CHECKLIST.md` |
+| Server Mode / Security Center / Access Controls | `public/js/50-admin.js`, `public/js/90-bootstrap.js` | `routes/system_admin.py`, `routes/operations.py`, `routes/public.py` | `services/access_controls.py`, `services/audit.py`, `services/security_events.py`, `services/integrity_guard.py`, `services/server_bind.py`, `services/platform/settings.py` | `test_security_defaults.py`, `test_security_events.py`, `test_frontend_security_center_layout.py`, `test_frontend_health_center.py`, `test_server_update_feature.py` | `SERVER_MODE_V2_*.md`, `docs/security/*.md`, `For_developer.md` |
+| Snapshot / Restore / Reset / Bootstrap | root 管理頁 | `routes/operations.py`, `routes/system_admin.py` | `services/snapshots/schema.py`, `services/platform/bootstrap.py`, `services/points_chain/service.py` | `test_snapshots.py`, `test_bootstrap_compat.py`, `test_release_policy.py` | `RUNTIME_RESET_AND_RECOVERY.md`, `For_developer.md`, `PRE_RELEASE_CHECKLIST.md` |
 | 遊戲 / 其他附屬功能 | 遊戲頁 | `routes/games.py` | `services/chess_game.py` | `test_games.py`, `test_frontend_games.py` | `WEB.md` |
 
 ## 封存 / 非現行功能
@@ -156,7 +156,7 @@ rg -n "webterminal|terminal" routes services public docs -g '!*.pyc'
 只要這輪 QA 有碰到：
 
 - `routes/trading.py`
-- `services/trading_engine.py`
+- `services/trading/trading_engine.py`
 - `public/js/56-trading.js`
 - `public/js/trading-workflow-editor.js`
 - price-source / scheduler / liquidation / DCA / grid / backtest
@@ -381,9 +381,9 @@ sqlite3 "$QA_DB" "SELECT id, owner_user_id, privacy_mode, scan_status, risk_leve
 ### 1. Repo 衛生與快速 gate
 
 ```bash
-python3 scripts/pre_push_checks.py --clean --yes
-python3 scripts/pre_push_checks.py --ci
-python3 scripts/pre_push_checks.py --full --keep-temp
+python3 scripts/prepush/pre_push_checks.py --clean --yes
+python3 scripts/prepush/pre_push_checks.py --ci
+python3 scripts/prepush/pre_push_checks.py --full --keep-temp
 ```
 
 ### 2. 全量 pytest
@@ -398,73 +398,76 @@ PYTHONPATH=. python3 -m pytest -q tests
 
 ```bash
 PYTHONPATH=. python3 -m pytest -q \
-  tests/test_auth_csrf_safe.py \
-  tests/test_access_controls.py \
-  tests/test_account_lockout.py \
-  tests/test_account_recovery.py \
-  tests/test_account_sessions.py \
-  tests/test_password_strength.py \
-  tests/test_identity_schema.py \
-  tests/test_session_idle_timeout.py \
-  tests/test_feature_flags.py \
-  tests/test_functional_permission_pentest.py
+  tests/security/auth/test_auth_csrf_safe.py \
+  tests/security/auth/test_access_controls.py \
+  tests/account/auth/test_account_lockout.py \
+  tests/account/recovery/test_account_recovery.py \
+  tests/account/sessions/test_account_sessions.py \
+  tests/security/input/test_password_strength.py \
+  tests/users/test_identity_schema.py \
+  tests/security/auth/test_session_idle_timeout.py \
+  tests/platform/test_feature_flags.py \
+  tests/security/smoke/test_functional_permission_pentest.py
 ```
 
 #### 社群 / 聊天 / 檢舉 / 通知
 
 ```bash
 PYTHONPATH=. python3 -m pytest -q \
-  tests/test_chat_permissions.py \
-  tests/test_dm_routes.py \
-  tests/test_community_permissions.py \
-  tests/test_moderation_proposals.py \
-  tests/test_reports_notifications.py \
-  tests/test_bug_reports.py \
-  tests/test_member_level_rules.py
+  tests/community/test_chat_permissions.py \
+  tests/community/test_dm_routes.py \
+  tests/community/test_community_permissions.py \
+  tests/community/test_moderation_proposals.py \
+  tests/community/test_reports_notifications.py \
+  tests/regressions/test_bug_reports.py \
+  tests/users/test_member_level_rules.py
 ```
 
 #### Cloud Drive / 上傳 / 相簿 / 影片 / ComfyUI
 
 ```bash
 PYTHONPATH=. python3 -m pytest -q \
-  tests/test_upload_security.py \
-  tests/test_cloud_drive_attachments.py \
-  tests/test_remote_downloads.py \
-  tests/test_storage_paths.py \
-  tests/test_storage_maintenance.py \
-  tests/test_storage_albums_schema.py \
-  tests/test_frontend_drive_preview.py \
-  tests/test_video_publish.py \
-  tests/test_video_permission.py \
-  tests/test_video_comments.py \
-  tests/test_video_tips.py \
-  tests/test_video_security.py \
-  tests/test_comfyui_integration.py
+  tests/storage/test_upload_security.py \
+  tests/storage/test_cloud_drive_attachments.py \
+  tests/storage/test_remote_downloads.py \
+  tests/storage/test_storage_paths.py \
+  tests/storage/test_storage_maintenance.py \
+  tests/storage/test_storage_albums_schema.py \
+  tests/frontend/storage/test_frontend_drive_preview.py \
+  tests/video/api/test_video_publish.py \
+  tests/video/api/test_video_permission.py \
+  tests/video/api/test_video_comments.py \
+  tests/video/api/test_video_tips.py \
+  tests/video/security/test_video_security.py \
+  tests/comfyui/generation/test_comfyui_generation.py \
+  tests/comfyui/workflows/test_comfyui_workflows.py \
+  tests/comfyui/settings/test_comfyui_settings.py \
+  tests/comfyui/civitai/test_comfyui_civitai.py \
+  tests/comfyui/storage/test_comfyui_storage.py
 ```
 
 #### PointsChain / 健康中心 / Snapshot / 交易
 
 ```bash
 PYTHONPATH=. python3 -m pytest -q \
-  tests/test_points_chain.py \
-  tests/test_health_center.py \
-  tests/test_integrity_guard.py \
-  tests/test_integrity_repair.py \
-  tests/test_security_events.py \
-  tests/test_settings_audit_reseal.py \
-  tests/test_snapshots.py \
-  tests/test_trading_engine.py \
-  tests/test_trading_reference_prices.py \
-  tests/test_security_issue_regressions.py
+  tests/points/test_points_chain.py \
+  tests/security/integrity/test_health_center.py \
+  tests/security/integrity/test_integrity_guard.py \
+  tests/security/integrity/test_integrity_repair.py \
+  tests/security/gates/test_security_events.py \
+  tests/platform/test_settings_audit_reseal.py \
+  tests/snapshots/test_snapshots.py \
+  tests/trading/core/test_trading_engine.py \
+  tests/trading/pricing/test_trading_reference_prices.py \
+  tests/regressions/test_security_issue_regressions.py
 ```
 
 #### 前端 / 版面 / RWD / 互動回歸
 
 ```bash
 PYTHONPATH=. python3 -m pytest -q \
-  tests/test_frontend_*.py \
-  tests/test_mobile_responsive_layout.py \
-  tests/test_trading_workflow_editor_ui.py
+  tests/frontend \
+  tests/trading/workflow/test_trading_workflow_editor_ui.py
 ```
 
 ### 4. 直接 smoke suite
@@ -472,7 +475,7 @@ PYTHONPATH=. python3 -m pytest -q \
 這是最快的黑箱 API / session / CSRF / major-flow 檢查。
 
 ```bash
-PYTHONPATH=. python3 tests/smoke_suite.py \
+PYTHONPATH=. python3 tests/security/smoke/smoke_suite.py \
   --base-url "$QA_BASE_URL" \
   --suite all
 ```
@@ -480,8 +483,8 @@ PYTHONPATH=. python3 tests/smoke_suite.py \
 可拆成功能或安全子集：
 
 ```bash
-PYTHONPATH=. python3 tests/smoke_suite.py --base-url "$QA_BASE_URL" --suite functional
-PYTHONPATH=. python3 tests/smoke_suite.py --base-url "$QA_BASE_URL" --suite security
+PYTHONPATH=. python3 tests/security/smoke/smoke_suite.py --base-url "$QA_BASE_URL" --suite functional
+PYTHONPATH=. python3 tests/security/smoke/smoke_suite.py --base-url "$QA_BASE_URL" --suite security
 ```
 
 ### 5. Functional smoke script
@@ -491,7 +494,7 @@ PYTHONPATH=. python3 tests/smoke_suite.py --base-url "$QA_BASE_URL" --suite secu
 ```bash
 export SMOKE_PORT="$(pick_free_port)"
 
-security/run_functional_smoke.sh \
+scripts/security/pentest/run_functional_smoke.sh \
   --port "$SMOKE_PORT" \
   --runtime "$QA_ROOT/functional_runtime" \
   --out "$QA_REPORTS"
@@ -502,7 +505,7 @@ security/run_functional_smoke.sh \
 先看有哪些檢查：
 
 ```bash
-security/run_pentest.sh --list-checks
+scripts/security/pentest/run_pentest.sh --list-checks
 ```
 
 #### 權限 / session / headers
@@ -511,7 +514,7 @@ security/run_pentest.sh --list-checks
 ROOT_PASSWORD='RootQa123!' \
 MANAGER_PASSWORD='ManagerQa123!' \
 TEST_PASSWORD='TestQa123!' \
-PYTHONPATH=. security/run_pentest.sh \
+PYTHONPATH=. scripts/security/pentest/run_pentest.sh \
   --target "$QA_BASE_URL" \
   --only functional-permissions,session-security,header-security
 ```
@@ -519,7 +522,7 @@ PYTHONPATH=. security/run_pentest.sh \
 #### Server Mode v2 全套
 
 ```bash
-PYTHONPATH=. security/run_pentest.sh \
+PYTHONPATH=. scripts/security/pentest/run_pentest.sh \
   --target "$QA_BASE_URL" \
   --only server-mode-v2,server-mode-v2-adversarial,server-mode-v2-live-http,server-mode-v2-enterprise,server-mode-v2-redteam-l2
 ```
@@ -527,7 +530,7 @@ PYTHONPATH=. security/run_pentest.sh \
 #### 影片模組
 
 ```bash
-PYTHONPATH=. security/run_pentest.sh \
+PYTHONPATH=. scripts/security/pentest/run_pentest.sh \
   --target "$QA_BASE_URL" \
   --only video-module
 ```
@@ -535,7 +538,7 @@ PYTHONPATH=. security/run_pentest.sh \
 #### 整站 production gate
 
 ```bash
-PYTHONPATH=. security/run_pentest.sh \
+PYTHONPATH=. scripts/security/pentest/run_pentest.sh \
   --target "$QA_BASE_URL" \
   --only whole-site-production-gate
 ```
@@ -543,7 +546,7 @@ PYTHONPATH=. security/run_pentest.sh \
 #### 本機快速安全掃描
 
 ```bash
-PYTHONPATH=. security/run_pentest.sh \
+PYTHONPATH=. scripts/security/pentest/run_pentest.sh \
   --target "$QA_BASE_URL" \
   --skip ffuf,gobuster,dirsearch,sqlmap,sslscan,testssl
 ```
@@ -551,7 +554,7 @@ PYTHONPATH=. security/run_pentest.sh \
 ### 7. 交易壓力 / 正確性 / 風險流程
 
 ```bash
-PYTHONPATH=. python3 security/trading_stress_pentest.py \
+PYTHONPATH=. python3 scripts/security/pentest/trading_stress_pentest.py \
   --base-url "$QA_BASE_URL" \
   --root-password 'RootQa123!' \
   --mode full \
@@ -564,9 +567,9 @@ PYTHONPATH=. python3 security/trading_stress_pentest.py \
 針對 restore / margin / permission probe 單跑：
 
 ```bash
-PYTHONPATH=. python3 security/trading_stress_pentest.py --base-url "$QA_BASE_URL" --root-password 'RootQa123!' --mode restore_consistency
-PYTHONPATH=. python3 security/trading_stress_pentest.py --base-url "$QA_BASE_URL" --root-password 'RootQa123!' --mode margin_liquidation
-PYTHONPATH=. python3 security/trading_stress_pentest.py --base-url "$QA_BASE_URL" --root-password 'RootQa123!' --mode permission_probe
+PYTHONPATH=. python3 scripts/security/pentest/trading_stress_pentest.py --base-url "$QA_BASE_URL" --root-password 'RootQa123!' --mode restore_consistency
+PYTHONPATH=. python3 scripts/security/pentest/trading_stress_pentest.py --base-url "$QA_BASE_URL" --root-password 'RootQa123!' --mode margin_liquidation
+PYTHONPATH=. python3 scripts/security/pentest/trading_stress_pentest.py --base-url "$QA_BASE_URL" --root-password 'RootQa123!' --mode permission_probe
 ```
 
 ### 8. HTTP 壓力基準
@@ -648,8 +651,8 @@ qa_api GET /api/root/points/chain/verify
 優先使用內建 automated commands：
 
 ```bash
-PYTHONPATH=. security/run_pentest.sh --target "$QA_BASE_URL" --only server-mode-v2-live-http
-PYTHONPATH=. python3 security/trading_stress_pentest.py --base-url "$QA_BASE_URL" --root-password 'RootQa123!' --mode restore_consistency
+PYTHONPATH=. scripts/security/pentest/run_pentest.sh --target "$QA_BASE_URL" --only server-mode-v2-live-http
+PYTHONPATH=. python3 scripts/security/pentest/trading_stress_pentest.py --base-url "$QA_BASE_URL" --root-password 'RootQa123!' --mode restore_consistency
 PYTHONPATH=. python3 -m pytest -q tests/test_snapshots.py
 ```
 

@@ -8,7 +8,7 @@ from scripts.prepush.result import CheckResult
 
 
 def run(ctx: PrepushContext) -> CheckResult:
-    script = ctx.repo_root / "security" / "server_mode_v2_clean_smoke.py"
+    script = ctx.repo_root / "scripts" / "security" / "server_mode" / "server_mode_v2_clean_smoke.py"
     if not script.exists():
         return CheckResult.fail("Server Mode v2", "server_mode_v2_clean_smoke.py is missing", severity="critical")
     out_dir = ctx.ensure_temp_root() / "server_mode_reports"
@@ -24,6 +24,6 @@ def run(ctx: PrepushContext) -> CheckResult:
             "clean smoke failed",
             severity="high",
             details=[{"output": utils.sanitize_path(output), "out": ctx.sanitize_path(out_dir)}],
-            remediation="Run security/server_mode_v2_clean_smoke.py and inspect generated report.",
+            remediation="Run scripts/security/server_mode/server_mode_v2_clean_smoke.py and inspect generated report.",
         )
     return CheckResult.pass_("Server Mode v2", "clean mode-switch smoke passed", details=[{"out": ctx.sanitize_path(out_dir)}])

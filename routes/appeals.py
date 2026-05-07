@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 from flask import request
 
-from services.sanction_notices import ensure_admin_sanction_appeal_schema, restore_admin_sanction_context
+from services.governance.sanction_notices import ensure_admin_sanction_appeal_schema, restore_admin_sanction_context
 
 
 def register_appeal_routes(app, deps):

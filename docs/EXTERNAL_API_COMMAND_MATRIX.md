@@ -265,7 +265,7 @@ Current project behavior built on top of those commands:
 ## Code Pointers
 
 - exchange market data:
-  [services/trading_engine.py](/home/s92137/hackme_web/services/trading_engine.py)
+  [services/trading/engine.py](/home/s92137/hackme_web/services/trading/engine.py)
 - market symbol registry:
   [services/trading_markets.py](/home/s92137/hackme_web/services/trading_markets.py)
 - ComfyUI upstream client:

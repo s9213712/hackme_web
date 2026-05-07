@@ -6,7 +6,7 @@ from scripts.prepush.context import PrepushContext
 from scripts.prepush.result import CheckResult
 
 
-RELEASE_FILE = "services/release_info.py"
+RELEASE_FILE = "services/platform/release_info.py"
 DOCS = ["README.md", "docs/README.zh-TW.md", "docs/For_developer.md", "docs/UPDATE_SUMMARY.md"]
 SIGNIFICANT_PREFIXES = (
     "server.py",
@@ -37,7 +37,7 @@ def run(ctx: PrepushContext) -> CheckResult:
     try:
         release_id = read_release_id(ctx)
     except Exception as exc:
-        return CheckResult.fail("release id sync", str(exc), remediation="Define APP_RELEASE_ID in services/release_info.py.")
+        return CheckResult.fail("release id sync", str(exc), remediation="Define APP_RELEASE_ID in services/platform/release_info.py.")
 
     missing = []
     for rel in DOCS:

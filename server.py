@@ -35,7 +35,7 @@ from services.security.access_controls import (
     verify_maintenance_bypass_token,
 )
 from services.users.recovery import ensure_account_recovery_schema
-from services.auth import (
+from services.users.auth import (
     CSRF_TOKEN_TTL,
     SESSION_TTL,
     SESSION_IDLE_TIMEOUT,
@@ -60,7 +60,7 @@ from services.auth import (
     verify_csrf_double_submit,
     verify_password,
 )
-from services.settings import (
+from services.platform.settings import (
     DEFAULT_SETTINGS,
     build_feature_disabled_payload,
     configure_settings_service,
@@ -75,7 +75,7 @@ from services.settings import (
     _import_legacy_settings_files,
     _seed_missing_settings_to_db,
 )
-from services.violations import (
+from services.governance.violations import (
     add_violation,
     check_and_apply_auto_violations,
     configure_violations_service,
@@ -97,7 +97,7 @@ from services.security.events import (
     record_login_failure,
     record_security_event,
 )
-from services.bootstrap import (
+from services.platform.bootstrap import (
     apply_schema_migrations,
     configure_bootstrap_service,
     init_db,
@@ -124,7 +124,7 @@ from services.users.member_levels import ensure_member_level_rules_schema, get_m
 from services.governance.moderation import ensure_moderation_proposals_schema
 from services.security.password_strength import enforce_password_strength, score_password_strength
 from services.points_chain import DEFAULT_BLOCK_LEDGER_THRESHOLD, DEFAULT_BLOCK_MAX_INTERVAL_SECONDS, PointsLedgerService, ensure_points_economy_schema
-from services.release_info import APP_NAME, APP_RELEASE_ID
+from services.platform.release_info import APP_NAME, APP_RELEASE_ID
 from services.core.runtime_output import get_runtime_output, install_runtime_output_capture
 from services.server.routes import register_server_routes
 from services.server.runtime import (
@@ -211,8 +211,8 @@ from services.platform.db_mode_triggers import register_app_mode_function as smv
 from services.snapshots import SnapshotService, ServerModeService, ensure_snapshot_schema
 from services.storage.maintenance import run_storage_maintenance_if_due
 from services.storage.paths import validate_storage_root
-from services.upload_security import ensure_upload_security_schema
-from services.trading_engine import TradingEngineService, ensure_trading_schema
+from services.security.upload_security import ensure_upload_security_schema
+from services.trading.trading_engine import TradingEngineService, ensure_trading_schema
 from services.trading.streams import TradingPriceStreamHub
 
 # ── Paths ───────────────────────────────────────────────────────────────────

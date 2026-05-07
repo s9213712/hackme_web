@@ -1,8 +1,7 @@
 """Trading service package.
 
-The concrete engine now lives in :mod:`services.trading.engine`, while the
-legacy :mod:`services.trading_engine` path remains as a compatibility facade.
-This package collects extracted helper modules behind stable compatibility
-boundaries while the integration branch converges toward a coarser,
-maintainable modular layout.
+The concrete engine lives in :mod:`services.trading.engine`, and the
+package-local :mod:`services.trading.trading_engine` facade preserves
+source-visible breadcrumbs for regression checks without leaving a
+root-level shim behind.
 """

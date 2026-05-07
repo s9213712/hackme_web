@@ -10,7 +10,7 @@ import time
 import uuid
 from io import BytesIO
 
-from services.upload_security import (
+from services.security.upload_security import (
     get_cloud_drive_safety_summary,
     get_cloud_drive_security_policy,
     get_user_cloud_drive_usage,
@@ -45,7 +45,7 @@ from services.storage.remote_downloads import (
     remote_download_capabilities,
     validate_remote_url,
 )
-from services.storage_albums import (
+from services.storage.storage_albums import (
     add_album_file,
     create_album,
     create_album_from_storage_folder,

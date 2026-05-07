@@ -20,7 +20,7 @@ from services.security.access_controls import (
     hash_maintenance_bypass_token,
     maintenance_bypass_expires_at,
 )
-from services.bootstrap import CURRENT_SCHEMA_VERSION, get_schema_version
+from services.platform.bootstrap import CURRENT_SCHEMA_VERSION, get_schema_version
 from services.system.integrity_guard import CONFIRM_APPROVE
 from services.users.member_levels import (
     DEFAULT_MEMBER_LEVEL_RULES,
@@ -38,19 +38,27 @@ from services.server.bind import (
 from services.security.captcha import normalize_captcha_mode
 from services.storage.paths import validate_storage_root
 from services.storage.capacity_audit import audit_storage_capacity
-from services.upload_security import (
+from services.security.upload_security import (
     ensure_upload_security_schema,
     get_cloud_drive_security_policy,
     update_cloud_drive_security_policy,
 )
-from services.settings import find_feature_dependency_violations
+from services.comfyui.settings import (
+    normalize_comfyui_connection_mode,
+    validate_comfyui_api_host,
+    validate_comfyui_api_port,
+    validate_comfyui_api_url,
+    validate_comfyui_batch_size,
+    validate_comfyui_dimension,
+    validate_comfyui_relative_script,
+)
+from services.platform.settings import find_feature_dependency_violations
 
 
 SECURITY_TEST_JOBS = {}
 SECURITY_TEST_JOBS_LOCK = threading.Lock()
 
 
-COMFYUI_HOST_RE = re.compile(r"^[A-Za-z0-9_.:-]+$")
 GIT_BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$")
 SERVER_UPDATE_WARNING = "此更新直接來自 GitHub diff/merge，尚未經本機測試驗證；更新後請自行執行 smoke test、權限測試與 debug。"
 
@@ -127,7 +135,7 @@ def public_relative_path(path, base_dir):
         return "-"
     try:
         base = os.path.abspath(base_dir)
-        target = os.path.abspath(path)
+        target = os.path.abspath(path) if os.path.isabs(path) else os.path.abspath(os.path.join(base, path))
         rel = os.path.relpath(target, base)
         if rel == ".":
             return "."
@@ -136,61 +144,6 @@ def public_relative_path(path, base_dir):
         return rel.replace("\\", "/")
     except Exception:
         return os.path.basename(str(path)) or "-"
-
-
-def validate_comfyui_api_host(value):
-    host = str(value or "").strip().strip("[]")
-    if not host:
-        return None
-    if len(host) > 253:
-        return None
-    forbidden = ("://", "/", "\\", "@", "?", "#", "%", " ")
-    if any(part in host for part in forbidden):
-        return None
-    if not COMFYUI_HOST_RE.match(host):
-        return None
-    return host
-
-
-def validate_comfyui_api_url(value):
-    from urllib.parse import urlparse
-
-    raw = str(value or "").strip().rstrip("/")
-    if not raw:
-        return ""
-    parsed = urlparse(raw)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        return None
-    if parsed.username or parsed.password:
-        return None
-    if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
-        return None
-    return raw
-
-
-def validate_comfyui_relative_script(value, *, base_dir=None):
-    raw = str(value or "").strip()
-    if not raw:
-        return ""
-    if len(raw) > 240:
-        return None
-    try:
-        if raw.startswith("/") or raw.startswith("\\"):
-            if not base_dir:
-                return None
-            base = Path(str(base_dir)).expanduser().resolve()
-            target = Path(raw).expanduser().resolve()
-            rel = target.relative_to(base)
-            parts = rel.as_posix().split("/")
-            if not parts or any(part in {"", ".", ".."} for part in parts):
-                return None
-            return rel.as_posix()
-        parts = raw.replace("\\", "/").split("/")
-        if not parts or any(part in {"", ".", ".."} for part in parts):
-            return None
-        return "/".join(parts)
-    except Exception:
-        return None
 
 
 def validate_git_branch_name(value):
@@ -242,7 +195,17 @@ subprocess.Popen([python_exe, script_path], cwd=base_dir, close_fds=True, start_
 
 def register_system_admin_routes(app, deps):
     ANCHOR_DIR = deps["ANCHOR_DIR"]
-    BASE_DIR = deps["BASE_DIR"]
+    module_base_dir = os.path.realpath(os.path.join(os.path.dirname(__file__), ".."))
+    raw_base_dir = deps["BASE_DIR"]
+    BASE_DIR = (
+        os.path.realpath(raw_base_dir)
+        if os.path.isabs(raw_base_dir)
+        else os.path.realpath(os.path.join(module_base_dir, raw_base_dir))
+    )
+    REPORTS_DIR = deps.get("REPORTS_DIR") or os.environ.get("HTML_LEARNING_REPORTS_DIR") or os.path.join(
+        os.environ.get("HACKME_RUNTIME_DIR") or "/tmp/hackme_web_runtime",
+        "reports",
+    )
     GIT_REPO_DIR = deps.get("GIT_REPO_DIR") or BASE_DIR
     CHAT_DIR = deps["CHAT_DIR"]
     DB_PATH = deps["DB_PATH"]
@@ -663,7 +626,7 @@ def register_system_admin_routes(app, deps):
         )
 
     def _security_test_report_root():
-        path = os.path.join(BASE_DIR, "security", "reports", "root-triggered")
+        path = os.path.join(REPORTS_DIR, "security", "root-triggered")
         os.makedirs(path, exist_ok=True)
         return path
 
@@ -1337,7 +1300,7 @@ def register_system_admin_routes(app, deps):
             return json_resp({"ok": False, "msg": "tool_timeout_seconds 必須介於 1-3600"}), 400
         report_root = _security_test_report_root()
         command = [
-            os.path.join(BASE_DIR, "security", "run_pentest.sh"),
+            os.path.join(BASE_DIR, "scripts", "security", "pentest", "run_pentest.sh"),
             "--target", target,
             "--out", report_root,
             "--tool-timeout", str(tool_timeout),
@@ -1367,7 +1330,7 @@ def register_system_admin_routes(app, deps):
         job = _start_security_test_job(
             "pentest",
             command,
-            command_label=["security/run_pentest.sh", "--target", target],
+            command_label=["scripts/security/pentest/run_pentest.sh", "--target", target],
             report_root=report_root,
             report_prefix="20",
             actor=actor,
@@ -1392,7 +1355,7 @@ def register_system_admin_routes(app, deps):
             return json_resp({"ok": False, "msg": "port 必須介於 1-65535"}), 400
         report_root = _security_test_report_root()
         command = [
-            os.path.join(BASE_DIR, "security", "run_functional_smoke.sh"),
+            os.path.join(BASE_DIR, "scripts", "security", "pentest", "run_functional_smoke.sh"),
             "--port", str(port),
             "--out", report_root,
         ]
@@ -1406,7 +1369,7 @@ def register_system_admin_routes(app, deps):
         job = _start_security_test_job(
             "functional",
             command,
-            command_label=["security/run_functional_smoke.sh", "--port", str(port)],
+            command_label=["scripts/security/pentest/run_functional_smoke.sh", "--port", str(port)],
             report_root=report_root,
             report_prefix="functional_",
             actor=actor,
@@ -1435,7 +1398,7 @@ def register_system_admin_routes(app, deps):
         out_md = os.path.join(report_root, f"{artifact_prefix}.md")
         command = [
             sys.executable,
-            os.path.join(BASE_DIR, "security", "functional_permission_pentest.py"),
+            os.path.join(BASE_DIR, "scripts", "security", "pentest", "functional_permission_pentest.py"),
             "--base-url", target,
             "--out-json", out_json,
             "--out-md", out_md,
@@ -1461,7 +1424,7 @@ def register_system_admin_routes(app, deps):
             command,
             command_label=[
                 "python3",
-                "security/functional_permission_pentest.py",
+                "scripts/security/pentest/functional_permission_pentest.py",
                 "--base-url",
                 target,
             ] + (["--destructive"] if bool(data.get("destructive")) else []),
@@ -1515,7 +1478,7 @@ def register_system_admin_routes(app, deps):
         report_root = _security_test_report_root()
         command = [
             sys.executable,
-            os.path.join(BASE_DIR, "security", "stress_test.py"),
+            os.path.join(BASE_DIR, "scripts", "security", "pentest", "stress_test.py"),
             "--target", target,
             "--mode", mode,
             "--concurrency", str(concurrency),
@@ -1535,7 +1498,7 @@ def register_system_admin_routes(app, deps):
             command,
             command_label=[
                 "python3",
-                "security/stress_test.py",
+                "scripts/security/pentest/stress_test.py",
                 "--target",
                 target,
                 "--mode",
@@ -1984,8 +1947,8 @@ def register_system_admin_routes(app, deps):
                 return json_resp({"ok":False,"msg":"server_listen_port 必須是 1-65535，或 0/空值沿用環境變數"}), 400
             data["server_listen_port"] = port
         if "comfyui_connection_mode" in data:
-            mode = str(data.get("comfyui_connection_mode") or "").strip().lower()
-            if mode not in {"local", "remote"}:
+            mode = normalize_comfyui_connection_mode(data.get("comfyui_connection_mode"))
+            if mode is None:
                 return json_resp({"ok":False,"msg":"comfyui_connection_mode 必須是 local 或 remote"}), 400
             data["comfyui_connection_mode"] = mode
         if "comfyui_remote_api_url" in data:
@@ -2019,30 +1982,21 @@ def register_system_admin_routes(app, deps):
                 return json_resp({"ok":False,"msg":"comfyui_api_host 必須是主機名稱或 IP，不可包含 http://、路徑、帳密或特殊字元"}), 400
             data["comfyui_api_host"] = host
         if "comfyui_api_port" in data:
-            try:
-                port = int(data.get("comfyui_api_port"))
-            except Exception:
-                return json_resp({"ok":False,"msg":"comfyui_api_port 必須是 1-65535"}), 400
-            if port < 1 or port > 65535:
+            port = validate_comfyui_api_port(data.get("comfyui_api_port"))
+            if port is None:
                 return json_resp({"ok":False,"msg":"comfyui_api_port 必須是 1-65535"}), 400
             data["comfyui_api_port"] = port
         if "comfyui_civitai_api_key" in data:
             data["comfyui_civitai_api_key"] = str(data.get("comfyui_civitai_api_key") or "").strip()
         if "comfyui_max_batch_size" in data:
-            try:
-                batch_size = int(data.get("comfyui_max_batch_size"))
-            except Exception:
-                return json_resp({"ok":False,"msg":"comfyui_max_batch_size 必須是 1-8"}), 400
-            if batch_size < 1 or batch_size > 8:
+            batch_size = validate_comfyui_batch_size(data.get("comfyui_max_batch_size"))
+            if batch_size is None:
                 return json_resp({"ok":False,"msg":"comfyui_max_batch_size 必須是 1-8"}), 400
             data["comfyui_max_batch_size"] = batch_size
         for key in ("comfyui_default_width", "comfyui_default_height"):
             if key in data:
-                try:
-                    size = int(data.get(key))
-                except Exception:
-                    return json_resp({"ok":False,"msg":f"{key} 必須是 64-2048 且為 8 的倍數"}), 400
-                if size < 64 or size > 2048 or size % 8 != 0:
+                size = validate_comfyui_dimension(data.get(key))
+                if size is None:
                     return json_resp({"ok":False,"msg":f"{key} 必須是 64-2048 且為 8 的倍數"}), 400
                 data[key] = size
         if "cloud_drive_storage_root" in data:

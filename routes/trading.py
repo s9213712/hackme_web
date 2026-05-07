@@ -27,7 +27,7 @@ from services.trading.catalog import (
     market_supports_reference_price as catalog_market_supports_reference_price,
     normalize_market_symbol as catalog_normalize_market_symbol,
 )
-from services.trading_engine import BACKTEST_SEGMENT_CANDLES, MAX_BACKTEST_CANDLES, units_to_quantity
+from services.trading.trading_engine import BACKTEST_SEGMENT_CANDLES, MAX_BACKTEST_CANDLES, units_to_quantity
 
 
 BINANCE_KLINES_URL = "https://api.binance.com/api/v3/klines"

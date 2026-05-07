@@ -146,7 +146,7 @@ Whole-site production still requires separate passing evidence for:
 The aggregate check is:
 
 ```bash
-PYTHONPATH=. security/run_pentest.sh \
+PYTHONPATH=. scripts/security/pentest/run_pentest.sh \
   --target http://127.0.0.1:5000 \
   --only whole-site-production-gate
 ```
@@ -164,8 +164,8 @@ WHOLE_SITE_PRODUCTION_GATE_SUMMARY:
 Latest local release evidence before the Video Platform module for `2026.05.02-046`:
 
 ```text
-security/reports/20260502T150309Z/raw/whole_site_production_gate_20260502_230524.md
-security/reports/20260502T150309Z/raw/whole_site_production_gate_20260502_230524.json
+runtime/reports/security/20260502T150309Z/raw/whole_site_production_gate_20260502_230524.md
+runtime/reports/security/20260502T150309Z/raw/whole_site_production_gate_20260502_230524.json
 ```
 
 Result:

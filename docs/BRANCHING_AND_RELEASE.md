@@ -38,7 +38,7 @@ hackme_web_lite            lightweight target branch for low-end devices
 The server release ID lives in:
 
 ```text
-services/release_info.py
+services/platform/release_info.py
 ```
 
 Every push to a shared branch must increment the last numeric segment by 1

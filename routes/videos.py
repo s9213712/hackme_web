@@ -28,8 +28,8 @@ from services.media.e2ee_streaming import (
     serialize_manifest_for_client,
     upsert_e2ee_stream_v2_asset,
 )
-from services.storage_albums import create_storage_file_entry, ensure_storage_album_schema
-from services.upload_security import safe_public_filename
+from services.storage.storage_albums import create_storage_file_entry, ensure_storage_album_schema
+from services.security.upload_security import safe_public_filename
 from services.media.videos import (
     add_video_comment,
     ensure_video_schema,

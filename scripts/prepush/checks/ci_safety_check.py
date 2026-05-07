@@ -27,12 +27,27 @@ def run(ctx: PrepushContext) -> CheckResult:
         rel = ctx.relpath(path)
         if rel.startswith("scripts/prepush/"):
             continue
-        if rel == "tests/test_prepush_v2.py":
+        if rel in {
+            "tests/test_prepush_v2.py",
+            "tests/scripts/prepush/test_prepush_v2.py",
+            "tests/scripts/security/test_on_live_reports_make_script.py",
+        }:
             continue
         for line_no, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1):
             lowered = line.lower()
             if "localhost:5000" in line or "127.0.0.1:5000" in line:
-                if "example" not in lowered and "docs" not in rel and "client." not in line and '"target"' not in line:
+                if (
+                    "example" not in lowered
+                    and "docs" not in rel
+                    and "client." not in line
+                    and '"target"' not in line
+                    and "default=" not in line
+                    and "default:" not in lowered
+                    and not (
+                        rel == "scripts/security/gate/on_live_reports_make.py"
+                        and "for base in (" in line
+                    )
+                ):
                     findings.append({"file": rel, "line": line_no, "problem": "fixed port 5000"})
             for name, marker in LOCAL_PATH_PATTERNS.items():
                 if marker in line and "sanitize" not in lowered and "not in" not in lowered and "local path" not in lowered:

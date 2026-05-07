@@ -22,7 +22,7 @@
 #### 1. Repo / 快速 gate
 
 ```bash
-python3 scripts/pre_push_checks.py
+python3 scripts/prepush/pre_push_checks.py
 ```
 
 如果有安裝 `hooks/pre-push`，push 前也會先自動執行一輪 `--clean --yes
@@ -38,17 +38,17 @@ PYTHONPATH=. python3 -m pytest -q tests
 #### 3. 功能 smoke
 
 ```bash
-security/run_functional_smoke.sh --port 50741
+scripts/security/pentest/run_functional_smoke.sh --port 50741
 ```
 
-`tests/smoke_suite.py`、`security/run_functional_smoke.sh`、`security/run_pentest.sh`
+`tests/security/smoke/smoke_suite.py`、`scripts/security/pentest/run_functional_smoke.sh`、`scripts/security/pentest/run_pentest.sh`
 的 smoke 預設帳密現在已對齊為
 `RootSmoke123! / ManagerSmoke123! / TestSmoke123!`。
 
 #### 4. 權限與安全掃描
 
 ```bash
-security/run_pentest.sh --target https://127.0.0.1:5000
+scripts/security/pentest/run_pentest.sh --target https://127.0.0.1:5000
 ```
 
 若只跑 `whole-site-production-gate`，wrapper 會自動把 timeout floor 拉高到
@@ -57,53 +57,53 @@ security/run_pentest.sh --target https://127.0.0.1:5000
 #### 5. 角色 / 權限專測
 
 ```bash
-security/run_pentest.sh --target https://127.0.0.1:5000 --only functional-permissions
+scripts/security/pentest/run_pentest.sh --target https://127.0.0.1:5000 --only functional-permissions
 ```
 
 #### 6. 交易壓力 / 正確性
 
 ```bash
-PYTHONPATH=. python3 security/trading_stress_pentest.py --target https://127.0.0.1:5000
+PYTHONPATH=. python3 scripts/security/pentest/trading_stress_pentest.py --target https://127.0.0.1:5000
 ```
 
 若這次改到交易價格融合或定投上限，另外補跑：
 
 ```bash
-PYTHONPATH=. python3 -m pytest -q tests/test_trading_engine.py tests/test_trading_reference_prices.py
-python3 security/trading_exchange_validation.py --out /tmp/trading_exchange_validation_followup
+PYTHONPATH=. python3 -m pytest -q tests/trading/core/test_trading_engine.py tests/trading/pricing/test_trading_reference_prices.py
+python3 scripts/trading/validation/trading_exchange_validation.py --out /tmp/trading_exchange_validation_followup
 ```
 
 若這次改到 workflow / Grid / backtest 驗證腳本本身，另外補跑：
 
 ```bash
-PYTHONPATH=. python3 security/trading_workflow_template_validation.py --no-download --limit 200 --out /tmp/trading_workflow_validation_followup
-PYTHONPATH=. python3 scripts/trading_backtest_20000_probe.py --include-route --json-out /tmp/trading_backtest_20000_followup.json
+PYTHONPATH=. python3 scripts/trading/validation/trading_workflow_template_validation.py --no-download --limit 200 --out /tmp/trading_workflow_validation_followup
+PYTHONPATH=. python3 scripts/trading/probes/backtest_20000_probe.py --include-route --json-out /tmp/trading_backtest_20000_followup.json
 ```
 
 ### 腳本關係
 
-- `scripts/pre_push_checks.py`
+- `scripts/prepush/pre_push_checks.py`
   是本機快速 gate，不預設啟 server。
-- `security/run_functional_smoke.sh`
+- `scripts/security/pentest/run_functional_smoke.sh`
   是隔離 runtime 的主要功能回歸；它會保留自己的 `/tmp` runtime 邊界。
-- `security/run_pentest.sh`
+- `scripts/security/pentest/run_pentest.sh`
   是外層 orchestrator，會呼叫多種檢查，包含 `functional-permissions`、
   server-mode-v2、whole-site-production-gate 等子檢查；whole-site gate 會套
   額外 timeout floor。
-- `security/server_mode_v2_full_smoke.py`
+- `scripts/security/server_mode/server_mode_v2_full_smoke.py`
   是 Server Mode v2 教學腳本 bundle 的隔離 runtime smoke harness；它會依序跑
-  `docs/examples/server_mode_v2/01、02、04、05、06、07`，最後確認 shadow
+  `docs/server_mode_v2/01、02、04、05、06、07`，最後確認 shadow
   與 production tables 沒有互相污染。
 - root 安全中心的 `上線前檢查`
   現在除了 A/B 區卡片外，也內建：
   - 站內文件檢視（playbook / tests 捷徑不再跳 `NOT FOUND`）
   - per-report JSON upload 入口（可直接貼上或上傳 `.json`）
   - upload 後自動重整 B 區 report 狀態
-- `security/functional_permission_pentest.py`
+- `scripts/security/pentest/functional_permission_pentest.py`
   是權限濫用 / 角色矩陣專測，不是一般 port scanner。
-- `security/video_module_pentest.py`
+- `scripts/security/pentest/video_module_pentest.py`
   是 Cloud Drive-backed video 專測，涵蓋 share-link、strict E2EE 共享邊界、manager regenerate / revoke 與 tip/idempotency。
-- `tests/smoke_suite.py`
+- `tests/security/smoke/smoke_suite.py`
   是極薄的 Python smoke；它現在會在跑完後把暫時打開的 feature flags 還原，
   避免污染同一個測試 runtime。
 - `QA_MISSION_FOR_AGENTS.md`
@@ -114,6 +114,59 @@ PYTHONPATH=. python3 scripts/trading_backtest_20000_probe.py --include-route --j
 - `docs/AGENTS/TRADING_QA_REGRESSION_MATRIX.md`
   是交易系統專用的固定回歸清單；只要改到 backtest / workflow / grid / DCA / liquidation /
   融合價格，就不能只跑 `test_trading_engine.py` 或歷史回測。
+
+### Production Gate 13 份報告對照表
+
+這 13 份報告是 production gate 的 source of truth。
+欄位說明：
+
+- `使用腳本 / 驗證面`：產生或驗證該報告的主要入口。
+- `測試筆數`：
+  - `動態` 代表腳本執行時計算 `total/passed/failed`，不是固定 pytest case 數。
+  - `固定 N` 代表目前 repo 內對應 pytest 檔的 collected case 數。
+- `預設放置位置`：指生成腳本的預設輸出落點；若是站內手動匯出 / 上傳型報告，則列 canonical staging 路徑。
+
+若要一次生成這 13 份報告，直接使用 repo root 的：
+
+```bash
+./on_live_reports_make.sh --base-url https://127.0.0.1:5000 --root-password '<ROOT_PASSWORD>'
+```
+
+它會把 raw artifacts 放到：
+
+- `runtime/reports/security/production_gate/runs/<RUN_ID>/`
+
+並把上傳前的穩定 payload staging 到：
+
+- `runtime/reports/security/production_gate/<report_type>_report.json`
+
+| report_type | 使用腳本 / 驗證面 | 測試筆數 | 預設放置位置 |
+|---|---|---:|---|
+| `clean_smoke` | `python3 scripts/security/server_mode/server_mode_v2_clean_smoke.py` | 動態 | `runtime/reports/security/server_mode_v2_clean_smoke_<timestamp>.json|.md` |
+| `adversarial` | `python3 scripts/security/server_mode/server_mode_v2_adversarial.py` | 動態 | `runtime/reports/security/server_mode_v2_adversarial_<timestamp>.json|.md` |
+| `redteam_l2` | `python3 scripts/security/server_mode/server_mode_v2_redteam_l2.py` | 動態 | `runtime/reports/security/server_mode_v2_redteam_l2_<timestamp>.json|.md` |
+| `pytest` | `PYTHONPATH=. python3 -m pytest -q tests` | 動態 | `runtime/reports/security/production_gate/pytest_production_report.json` |
+| `log_chain_verify` | `GET /api/root/server-mode/logs/verify` | 動態 | `runtime/reports/security/production_gate/log_chain_verify_report.json` |
+| `integrity_guard` | `POST /api/root/integrity/rescan` + `GET /api/root/integrity/report` + `tests/security/integrity/test_integrity_guard.py` | 固定 15 | `runtime/reports/security/production_gate/integrity_guard_report.json` |
+| `stress` | `python3 scripts/security/pentest/stress_test.py` + `python3 scripts/security/pentest/trading_stress_pentest.py` | 動態 | `runtime/reports/security/stress_<timestamp>.json|.md`；`runtime/reports/security/trading_stress_report_<timestamp>.json|.md` |
+| `permission` | `python3 scripts/security/pentest/functional_permission_pentest.py` | 動態 | `runtime/reports/security/functional_permission_pentest_<timestamp>.json|.md` |
+| `functional` | `scripts/security/pentest/run_functional_smoke.sh` + `tests/security/smoke/smoke_suite.py` | 動態 | `runtime/reports/security/functional_<run_id>/00_FUNCTIONAL_SMOKE.md`、`results.tsv`、`server.out`、`raw/` |
+| `pentest` | `scripts/security/pentest/run_pentest.sh` + `python3 scripts/security/pentest/session_security_pentest.py` | 動態 | `runtime/reports/security/<run_id>/00_SUMMARY.md` + `raw/*.json|*.md|*.txt` |
+| `snapshot_restore` | `PYTHONPATH=. python3 -m pytest -q tests/snapshots/test_snapshots.py` + 手動 `create → restore → verify` | 固定 40 | `runtime/reports/security/production_gate/snapshot_restore_report.json` |
+| `points_chain_consistency` | `PYTHONPATH=. python3 -m pytest -q tests/points/test_points_chain.py` + `services/points_chain.verify_chain()` | 固定 27 | `runtime/reports/security/production_gate/points_chain_consistency_report.json` |
+| `cloud_drive_quota_permission` | `PYTHONPATH=. python3 -m pytest -q tests/storage/test_cloud_drive_attachments.py tests/storage/test_storage_albums_schema.py` | 固定 55 | `runtime/reports/security/production_gate/cloud_drive_quota_permission_report.json` |
+
+補充：
+
+- `pytest` / `log_chain_verify` / `snapshot_restore` / `points_chain_consistency` / `cloud_drive_quota_permission`
+  這幾類若不是由單一腳本直接產生檔案，仍應把最後簽署/上傳前的 raw report staging 到
+  `runtime/reports/security/production_gate/`，不要散落在 repo root。
+- `functional` 與 `pentest` 都是目錄型報告，不是單一 `.json`；前者偏功能流程，後者偏安全/攻擊面。
+- `stress` 一次通常會有兩份報告：一般 HTTP 壓測與 trading stress，各自獨立保存。
+- `on_live_reports_make.sh` 會額外生成：
+  - `runtime/reports/security/production_gate/on_live_reports_make_<RUN_ID>.json`
+  - `runtime/reports/security/production_gate/on_live_reports_make_<RUN_ID>.md`
+  這兩份是本次整批產製的總結，不是 13 份 required report 之一。
 
 ## 原理
 
@@ -157,9 +210,9 @@ PYTHONPATH=. python3 scripts/trading_backtest_20000_probe.py --include-route --j
 - 若本次改到帳號復原 / 密碼流程，至少補：
   - 一般使用者 `password reset request/confirm` 仍可正常運作
   - `root` 不可再透過 web `忘記密碼`、email token 或審核流程重設
-  - `scripts/root_recovery.py` 是否會撤銷 root 現有 session、清掉 root CSRF token、強制下次登入改密碼
+  - `scripts/admin/root_recovery.py` 是否會撤銷 root 現有 session、清掉 root CSRF token、強制下次登入改密碼
   - 離線 recovery 後是否留下審計紀錄；若 runtime 缺審計 secret，是否至少不會把 recovery 本身做失敗
-  - `security/run_functional_smoke.sh` 是否仍能驗證 offline root recovery CLI 可執行
+  - `scripts/security/pentest/run_functional_smoke.sh` 是否仍能驗證 offline root recovery CLI 可執行
 - 若本次改到 ComfyUI，至少補：
   - 設定頁的 `Civitai API Key` 與 root 本地模型下載工具，是否真的只在 `local` 模式出現；切到 `remote` 時不應殘留可操作入口
   - model list 是否回傳 `models / loras / embeddings / vaes / generation_modes / controlnet_types / controlnet_models / upscale_models`
@@ -184,7 +237,7 @@ PYTHONPATH=. python3 scripts/trading_backtest_20000_probe.py --include-route --j
   - workflow preset run 若缺 checkpoint / LoRA / ControlNet / workflow node，是否回 `409` 與明確依賴錯誤，而不是靜默 fallback
   - 一鍵重跑是否會保留 seed / CFG / steps / LoRA / ControlNet 上下文；匯出 JSON 不得含本機絕對路徑或 server storage path
   - 手機版 workflow workbench 是否仍可閱讀 preset 清單、依賴狀態、官方標記與主要操作按鈕
-  - 若要做 live smoke，可額外跑 `python3 scripts/comfyui_feature_probe.py --base-url https://127.0.0.1:PORT --username root --password ... --insecure --json-out /tmp/comfyui_probe.json`，確認 status、model list、txt2img、img2img、inpaint、outpaint、upscale、history rerun 全都真的能通；ControlNet 若缺模型 / node，應回 `expected_unavailable` 或明確錯誤，而不是卡死
+  - 若要做 live smoke，可額外跑 `python3 scripts/comfyui/feature_probe.py --base-url https://127.0.0.1:PORT --username root --password ... --insecure --json-out /tmp/comfyui_probe.json`，確認 status、model list、txt2img、img2img、inpaint、outpaint、upscale、history rerun 全都真的能通；ControlNet 若缺模型 / node，應回 `expected_unavailable` 或明確錯誤，而不是卡死
 - 若本次改到影音串流 / E2EE 分享，至少補：
   - Safari 是否仍走原生 HLS，而不是被 `hls.js` 蓋掉
   - 桌機 Chrome / Firefox / Edge 是否能載入同源 `hls.js` 並播放 prepared HLS
@@ -234,9 +287,9 @@ PYTHONPATH=. python3 scripts/trading_backtest_20000_probe.py --include-route --j
   - Binance / OKX / Coinbase / Kraken websocket provider input 斷線時，是否自動退回 HTTP polling，且 UI 顯示 `fallback / stale / degraded` 而不是假裝正常
   - 單一 provider 異常或只剩單源 degraded 參考價時，`risk-grade price` 是否維持 blocked，不得拿單源 WS/HTTP 資料偷偷通過風控
   - `live-price` 是否會同步刷新 DB 內 `trading_markets.manual_price_points / price_source` 快取，文件也要寫清楚這不是純 read-only API
-  - `security/trading_exchange_validation.py` 是否已和目前引擎結果同步，不再出現過時 expected value
-  - `security/trading_exchange_validation.py` 是否會額外檢查連續加倉後 `avg_cost_points` 仍維持合理，不會悄悄爆成異常大值
-  - `security/trading_stress_pentest.py` 是否會在強迫 `conservative` 融合價格時，驗證市價單與融資開倉都被高風險 gate 阻擋
+  - `scripts/trading/validation/trading_exchange_validation.py` 是否已和目前引擎結果同步，不再出現過時 expected value
+  - `scripts/trading/validation/trading_exchange_validation.py` 是否會額外檢查連續加倉後 `avg_cost_points` 仍維持合理，不會悄悄爆成異常大值
+  - `scripts/security/pentest/trading_stress_pentest.py` 是否會在強迫 `conservative` 融合價格時，驗證市價單與融資開倉都被高風險 gate 阻擋
   - root `交易市場 registry` 是否可新增 / 編輯 / 停用市場，且 provider mapping、precision、lot size、tick size 會立即反映到下單驗證
   - disabled market 是否確實阻擋新下單，但既有歷史、持倉與報表仍可查
   - provider mapping 錯誤或 probe 未通過時，是否拒絕啟用 `risk-grade` 用途
@@ -291,13 +344,13 @@ PYTHONPATH=. python3 scripts/trading_backtest_20000_probe.py --include-route --j
   - `NaN / Infinity` 是否被 preview API 拒絕
   - `empty candles`、`single candle`、`negative / zero / NaN / missing tick` 是否被正確拒絕或明確標示略過
   - workflow `flat sequence` 是否仍不會誤觸發
-  - `security/trading_workflow_template_validation.py` 是否仍包含 workflow `flat sequence` guard，且不再用過時 replay oracle 誤判 graph workflow
+  - `scripts/trading/validation/trading_workflow_template_validation.py` 是否仍包含 workflow `flat sequence` guard，且不再用過時 replay oracle 誤判 graph workflow
   - workflow `stop_loss_percent` 是否使用 scan window low、`take_profit_percent`
     是否使用 scan window high，且目前只標示 long-only 語義
   - `100 -> 10 -> 150` 類 jump / gap collapse 是否有風險警示或 filter，不會製造不真實回測幻覺
   - `full tick [100,80,120]` 與 `sampled [100,120]` 是否仍會出現 stop-loss / liquidation 漏觸發
   - `wallet=0 + trial_credit_only` 與小本金利息案例是否仍維持正確帳務
-  - `scripts/trading_backtest_20000_probe.py` 的 Grid 20k case、single-candle reject、outlier skip、flat Bollinger guard 是否都與目前引擎一致
+  - `scripts/trading/probes/backtest_20000_probe.py` 的 Grid 20k case、single-candle reject、outlier skip、flat Bollinger guard 是否都與目前引擎一致
   - 詳細清單見 `docs/AGENTS/TRADING_QA_REGRESSION_MATRIX.md`
 - 若本次改到站點外觀 / 個人外觀，至少補：
   - root 改全站預設後，未登入與一般使用者是否都先看到新預設

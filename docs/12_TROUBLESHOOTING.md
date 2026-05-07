@@ -46,7 +46,7 @@
 不要走登入頁的 `忘記密碼`。正式補救方式是到站台實體 runtime 上執行：
 
 ```bash
-python3 scripts/root_recovery.py --prompt-password
+python3 scripts/admin/root_recovery.py --prompt-password
 ```
 
 這會撤銷 root 既有 session，並要求下次登入立刻改密碼。

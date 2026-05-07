@@ -7,7 +7,7 @@
 ![database](https://img.shields.io/badge/database-SQLite-0f6ab4)
 ![security](https://img.shields.io/badge/focus-auth%20%2B%20RBAC%20%2B%20audit-b31d28)
 
-**Current Release ID: `2026.05.07-154`**
+**Current Release ID: `2026.05.07-155`**
 
 `hackme_web` 是一個部署者優先的 Flask 單機站點，整合了帳號與權限、
 Cloud Drive、ComfyUI、PointsChain、交易實驗、Snapshot/Restore 與
@@ -29,13 +29,13 @@ Server Mode 等能力。
 推薦第一次部署直接從 repo 根目錄執行：
 
 ```bash
-./deploy.sh
+./one_click_setup.sh
 ```
 
 若你一開始就知道要接本地 ComfyUI 與 root-only Civitai 搜尋/下載，可直接：
 
 ```bash
-./deploy.sh --with-comfyui http://127.0.0.1:8192 --with-civitai-key '<CIVITAI_API_KEY>'
+./one_click_setup.sh --with-comfyui http://127.0.0.1:8192 --with-civitai-key '<CIVITAI_API_KEY>'
 ```
 
 手動開發啟動：
@@ -49,7 +49,7 @@ python3 server.py
 
 啟動後請以 server console 印出的實際 URL 為準。一般情況：
 
-- `./deploy.sh` / production wizard：依設定可能是 HTTP 或 HTTPS
+- `./one_click_setup.sh` / production wizard：依設定可能是 HTTP 或 HTTPS
 - `python3 server.py`：本機開發模式通常會自動準備本地 TLS，因此多半是
   `https://127.0.0.1:5000/`
 

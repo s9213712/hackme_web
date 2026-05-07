@@ -79,14 +79,14 @@
   「若保留結束時間，開始最早可選到哪裡」，並同步收斂 `datetime-local`
   欄位的可選範圍
 - **Backtest cap 是動態 setting，不是寫死的常數**：
-  `services/trading_engine.py` 仍保留 `MAX_BACKTEST_CANDLES = 20_000` 作為
+  `services/trading/trading_engine.py` 仍保留 `MAX_BACKTEST_CANDLES = 20_000` 作為
   fallback，但實際 cap 透過 `trading_service.get_max_backtest_candles()` 取出。
   Root 可改的範圍是 `1,000 – 10,000,000`。
 - **首次啟動會自動量測本機回測上限**：
   `services/server/startup.py:measure_backtest_capacity_if_needed` 在
   daemon thread 跑一輪 15 種 bot 的 probe（3 基本 + 12 system workflow），
   取最慢者作為「本機在 60 秒內可跑的根數」，自動填入 `backtest_max_candles`。
-  方法/原理/實測結果見 [`BACKTEST_CAPACITY_AND_TEMPLATE_BENCHMARKS.md`](BACKTEST_CAPACITY_AND_TEMPLATE_BENCHMARKS.md)。
+  方法/原理/實測結果見 [`BACKTEST_CAPACITY_AND_TEMPLATE_BENCHMARKS.md`](trading/BACKTEST_CAPACITY_AND_TEMPLATE_BENCHMARKS.md)。
 
 ## 失敗情境與提示
 
@@ -155,14 +155,14 @@
 - workflow `stop_loss_percent` / `take_profit_percent` 是否明確維持 long-only
   語義；若測到 short / futures 也需要這種條件，必須獨立設計與驗證
 - 交易機器人稽核 dashboard 是否正確區分 `未稽核` 與綠 / 黃 / 紅燈
-- `security/trading_stress_pentest.py`
-- `security/trading_workflow_template_validation.py`
-- `scripts/trading_backtest_20000_probe.py`
+- `scripts/security/pentest/trading_stress_pentest.py`
+- `scripts/trading/validation/trading_workflow_template_validation.py`
+- `scripts/trading/probes/backtest_20000_probe.py`
 - snapshot / restore 後狀態一致性
 
 ## 相關文件連結
 
-- [TRADING.md](TRADING.md)
+- [TRADING.md](trading/TRADING.md)
 - [07_POINTSCHAIN.md](07_POINTSCHAIN.md)
 - [11_QA_TESTING.md](11_QA_TESTING.md)
 - [security/TRADING_STRESS_PENTEST.md](security/TRADING_STRESS_PENTEST.md)
@@ -175,12 +175,12 @@
 
 本模組未來將與全站 PointsChain v2 區塊鏈化整合：
 
-- 工程設計：[`docs/BLOCKCHAIN/POINTSCHAIN_ENGINEERING.md`](BLOCKCHAIN/POINTSCHAIN_ENGINEERING.md)
-- 用戶白皮書：[`docs/BLOCKCHAIN/POINTSCHAIN_WHITEPAPER.md`](BLOCKCHAIN/POINTSCHAIN_WHITEPAPER.md)
-- 地址規格：[`docs/BLOCKCHAIN/POINTS_WALLET_ADDRESSING.md`](BLOCKCHAIN/POINTS_WALLET_ADDRESSING.md)
-- 轉帳 API：[`docs/BLOCKCHAIN/POINTS_TRANSFER_API.md`](BLOCKCHAIN/POINTS_TRANSFER_API.md)
-- 多簽錢包：[`docs/BLOCKCHAIN/MULTISIG_WALLETS.md`](BLOCKCHAIN/MULTISIG_WALLETS.md)
-- QA Mining / 貢獻獎勵 (Phase 7)：[`docs/BLOCKCHAIN/POINTS_MINING_REWARDS.md`](BLOCKCHAIN/POINTS_MINING_REWARDS.md)
-- QA / Release Gate：[`docs/BLOCKCHAIN/POINTSCHAIN_QA.md`](BLOCKCHAIN/POINTSCHAIN_QA.md)
+- 工程設計：[`docs/archive/research/BLOCKCHAIN/POINTSCHAIN_ENGINEERING.md`](archive/research/BLOCKCHAIN/POINTSCHAIN_ENGINEERING.md)
+- 用戶白皮書：[`docs/archive/research/BLOCKCHAIN/POINTSCHAIN_WHITEPAPER.md`](archive/research/BLOCKCHAIN/POINTSCHAIN_WHITEPAPER.md)
+- 地址規格：[`docs/archive/research/BLOCKCHAIN/POINTS_WALLET_ADDRESSING.md`](archive/research/BLOCKCHAIN/POINTS_WALLET_ADDRESSING.md)
+- 轉帳 API：[`docs/archive/research/BLOCKCHAIN/POINTS_TRANSFER_API.md`](archive/research/BLOCKCHAIN/POINTS_TRANSFER_API.md)
+- 多簽錢包：[`docs/archive/research/BLOCKCHAIN/MULTISIG_WALLETS.md`](archive/research/BLOCKCHAIN/MULTISIG_WALLETS.md)
+- QA Mining / 貢獻獎勵 (Phase 7)：[`docs/archive/research/BLOCKCHAIN/POINTS_MINING_REWARDS.md`](archive/research/BLOCKCHAIN/POINTS_MINING_REWARDS.md)
+- QA / Release Gate：[`docs/archive/research/BLOCKCHAIN/POINTSCHAIN_QA.md`](archive/research/BLOCKCHAIN/POINTSCHAIN_QA.md)
 
 **狀態：設計已拍板（root, 2026-05-04），尚未實作完成。**

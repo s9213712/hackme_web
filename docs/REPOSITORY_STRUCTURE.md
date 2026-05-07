@@ -10,7 +10,8 @@ cleanup predictable, reviewable, and reversible.
 
 - Keep the repository root small.
 - Keep `README.md` as an entry wizard, not a feature encyclopedia.
-- Keep runtime data under `runtime/` or `security/reports/`, never under new
+- Keep runtime data under `runtime/`, especially `runtime/reports/security/`,
+  never under new
   ad-hoc top-level folders.
 - Split by bounded domain, not by tiny helper count.
 - Prefer one stable canonical location per concept.
@@ -22,9 +23,9 @@ cleanup predictable, reviewable, and reversible.
 The repository root should contain only:
 
 - entry docs: `README.md`, `SECURITY.md`
-- bootstrap files: `requirements.txt`, `deploy.sh`, `server.py`
+- bootstrap files: `requirements.txt`, `one_click_setup.sh`, `server.py`
 - top-level source trees: `routes/`, `services/`, `public/`
-- operator and validation trees: `scripts/`, `security/`
+- operator and validation tree: `scripts/`
 - documentation and tests: `docs/`, `tests/`
 - runtime boundary: `runtime/`
 
@@ -54,8 +55,6 @@ These files are canonical, short-entry or cross-cutting docs and may stay at
 - `API_REFERENCE.md`
 - `DEPLOYMENT.md`
 - `For_developer.md`
-- `TRADING.md`
-- `VIDEO_PLATFORM.md`
 - `WEB.md`
 - `RELEASE_LAYOUT.md`
 - `REPOSITORY_STRUCTURE.md`
@@ -66,6 +65,11 @@ These files are canonical, short-entry or cross-cutting docs and may stay at
 - `docs/AGENTS/`: agent rules, QA runbooks, reports
 - `docs/BLOCKCHAIN/`: PointsChain and governance design set
 - `docs/COMPETITION/`: backtest and strategy competition evidence
+- `docs/trading/`: trading, bot audit, risk-price, benchmark, and BTC_trade reference
+- `docs/video/`: deep video/media architecture docs
+- `docs/comfyui/`: ComfyUI operator docs
+- `docs/runtime/`: runtime-boundary and recovery docs
+- `docs/server_mode_v2/`: Server Mode v2 spec bundle
 - `docs/archive/`: retired attempts, historical notes, abandoned designs
 - `docs/research/`: research drafts and completed research artifacts
 
@@ -85,8 +89,8 @@ forever:
 Before adding a new top-level doc, prefer one of these homes:
 
 - user/admin/operator guide: extend an existing numbered guide
-- low-level feature reference: extend `TRADING.md`, `WEB.md`,
-  `VIDEO_PLATFORM.md`, `For_developer.md`, or `API_REFERENCE.md`
+- low-level feature reference: extend `docs/trading/*`, `docs/video/*`,
+  `docs/runtime/*`, `WEB.md`, `For_developer.md`, or `API_REFERENCE.md`
 - historical or exploratory content: `docs/archive/` or `docs/research/`
 - agent-only process notes: `docs/AGENTS/`
 
@@ -95,30 +99,32 @@ Before adding a new top-level doc, prefer one of these homes:
 Top-level `scripts/` should contain only stable operator entrypoints and
 well-known validation commands.
 
-### Keep At `scripts/` Root
+### Keep As Stable Operator Entry Points
 
-- `run_prod.sh`
-- `pre_push_checks.py`
-- `root_recovery.py`
+- repo root `one_click_setup.sh`
+- repo root `on_live_reports_make.sh`
+- `scripts/prepush/pre_push_checks.py`
+- `scripts/admin/root_recovery.py`
 
 ### Canonical Subtrees
 
 - `scripts/prepush/`: pre-push framework and checks
 - `scripts/trading/`: trading probes, bridges, offline validation helpers
 - `scripts/comfyui/`: ComfyUI probes and helper tooling
-- `scripts/templates/`: reusable operator templates
+- `scripts/admin/`: operator recovery / repair tools
+- `scripts/prepush/`: pre-push framework and checks
+- `scripts/security/`: pentest, production gate, server-mode smoke, and related tooling
+- `scripts/trading/`: trading probes, bridges, offline validation helpers
+- `scripts/comfyui/`: ComfyUI probes and helper tooling
 
-### Current Move Candidates
+### Recent Canonical Moves
 
-These names are valid, but should eventually move into clearer subtrees:
+These scripts now live in clearer subtrees:
 
-- `btc_signal_bridge.py` -> `scripts/trading/btc_signal_bridge.py`
-- `trading_backtest_20000_probe.py` -> `scripts/trading/backtest_20000_probe.py`
-- `comfyui_feature_probe.py` -> `scripts/comfyui/feature_probe.py`
-- `comfyui_run_in_linux.template.sh` -> `scripts/templates/comfyui_run_in_linux.template.sh`
-
-When these moves happen, keep a thin wrapper at the old path for one release so
-existing docs, tests, and operator muscle memory do not break at once.
+- `scripts/trading/bridges/btc_signal_bridge.py`
+- `scripts/trading/probes/backtest_20000_probe.py`
+- `scripts/comfyui/feature_probe.py`
+- `scripts/comfyui/comfyui_run_in_linux.template.sh`
 
 ## Tests Placement Logic
 

@@ -9,7 +9,7 @@
 - [ ] 部署環境：
 - [ ] 負責人：
 - [ ] 檢查日期：
-- [ ] 若本次包含上線新功能，Release ID 尾碼已 +1，且 README / For_developer / `services/release_info.py` 已同步。
+- [ ] 若本次包含上線新功能，Release ID 尾碼已 +1，且 README / For_developer / `services/platform/release_info.py` 已同步。
 - [ ] 若本次有功能新增、修改或重構，已依 [RULES_FOR_AGENTS.md](../AGENTS/RULES_FOR_AGENTS.md) 檢查文件、測試、錯誤回饋、手機版與伺服器端驗證。
 
 ## 必要阻擋項目
@@ -17,7 +17,7 @@
 - [ ] 阻擋：已完成滲透測試。
   - 指令：
     ```bash
-    security/run_pentest.sh --target https://<production-or-staging-host>
+    scripts/security/pentest/run_pentest.sh --target https://<production-or-staging-host>
     ```
   - 報告路徑：
   - 結論：沒有未處理的 high / critical 風險；若有 findings，已建立 issue 並完成修復或由 root 明確接受風險。
@@ -25,7 +25,7 @@
 - [ ] 阻擋：已完成全功能測試。
   - 指令：
     ```bash
-    security/run_functional_smoke.sh --port 50741
+    scripts/security/pentest/run_functional_smoke.sh --port 50741
     ```
   - 報告路徑：
   - 結論：`failures` 必須為 `0`；若有 `skip`，必須確認是外部服務未啟用或預期條件，而不是功能缺失。
@@ -33,14 +33,14 @@
 - [ ] 阻擋：已完成基礎壓力測試。
   - 指令：
     ```bash
-    security/stress_test.py --target https://<staging-host> --i-own-this-target
+    python3 scripts/security/pentest/stress_test.py --target https://<staging-host> --i-own-this-target
     ```
   - 報告路徑：
   - 結論：沒有 HTTP 500/502/503；若有瓶頸，已記錄目前主機容量上限。
 
 - [ ] 阻擋：本機自動測試通過。
   ```bash
-  python3 scripts/pre_push_checks.py
+  python3 scripts/prepush/pre_push_checks.py
   PYTHONPATH=. python3 -m pytest -q tests
   ```
 
@@ -89,7 +89,7 @@
 
 - [ ] 所有阻擋項目已完成。
 - [ ] 所有 high / critical issue 已關閉或有 root 風險接受紀錄。
-- [ ] 滲透測試報告與全功能測試報告已保存於 `security/reports/` 或外部 release artifact。
+- [ ] 滲透測試報告與全功能測試報告已保存於 `runtime/reports/security/` 或外部 release artifact。
 - [ ] README / WEB / For_developer 與實際功能一致。
 - [ ] 若本次有新功能，最終交付說明已列出功能、文件、測試、錯誤提醒、手機版檢查、伺服器端運算與未完成項。
 - [ ] 已記錄最終 commit SHA。

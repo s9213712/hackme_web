@@ -11,27 +11,27 @@ matrix, see [SYSTEM_DEPENDENCIES.md](SYSTEM_DEPENDENCIES.md).
 Use the root helper:
 
 ```bash
-./deploy.sh
+./one_click_setup.sh
 ```
 
 On first run it creates `.venv`, installs `requirements.txt`, delegates the
-interactive production setup wizard to `scripts/run_prod.sh`, initializes the
-database, and starts Gunicorn.
+interactive production setup wizard inside `./one_click_setup.sh`, initializes
+the database, and starts Gunicorn.
 
 Useful modes:
 
 ```bash
-./deploy.sh --check-only
-./deploy.sh --init-db-only
-./deploy.sh --with-comfyui http://127.0.0.1:8192
-./deploy.sh --with-turnstile '<TURNSTILE_SECRET_KEY>'
-./deploy.sh --with-civitai-key '<CIVITAI_API_KEY>'
-./deploy.sh --lite-hint
-./deploy.sh --check-only --skip-install
+./one_click_setup.sh --check-only
+./one_click_setup.sh --init-db-only
+./one_click_setup.sh --with-comfyui http://127.0.0.1:8192
+./one_click_setup.sh --with-turnstile '<TURNSTILE_SECRET_KEY>'
+./one_click_setup.sh --with-civitai-key '<CIVITAI_API_KEY>'
+./one_click_setup.sh --lite-hint
+./one_click_setup.sh --check-only --skip-install
 ```
 
 `--skip-install` 適合已經有可用 `.venv`、但當前環境不想每次重新碰 pip 網路的情境。
-單獨執行 `./deploy.sh --lite-hint` 時，現在只會輸出低配部署建議，不會先建立 `.venv`。
+單獨執行 `./one_click_setup.sh --lite-hint` 時，現在只會輸出低配部署建議，不會先建立 `.venv`。
 `--with-civitai-key` 只會把 root-only Civitai 搜尋/下載所需的 `CIVITAI_API_KEY`
 寫進 `.env`；沒有這個 key，ComfyUI 本地模型上傳仍可用，只是無法直接搜尋/下載
 Civitai 模型。
@@ -52,13 +52,13 @@ Generated runtime files remain local and must not be committed:
 
 ## Capability Checks
 
-`scripts/run_prod.sh --check` 現在除了檢查必填 env 與 runtime 目錄，也會額外提示：
+`./one_click_setup.sh --check` 現在除了檢查必填 env 與 runtime 目錄，也會額外提示：
 
 - `ffmpeg` / `ffprobe` 是否存在
   - 影響影音平台的 HLS 衍生檔與 metadata probe
 - `CIVITAI_API_KEY` 是否存在
   - 影響 root-only Civitai 搜尋 / 下載
-- `scripts/root_recovery.py`
+- `scripts/admin/root_recovery.py`
   - root 忘記密碼時的正式 offline 補救入口
 
 這些能力提示屬於**可選擴充檢查**，不會阻擋一般部署。
@@ -70,19 +70,19 @@ Generated runtime files remain local and must not be committed:
 Run:
 
 ```bash
-security/run_functional_smoke.sh
+scripts/security/pentest/run_functional_smoke.sh
 ```
 
 It starts an isolated temporary server, tests core features, verifies
 snapshot/restore/reset behavior, checks TLS file generation, and writes reports
-under `security/reports`.
+under `runtime/reports/security`.
 
 ## Functional Permission Pentest
 
 Run:
 
 ```bash
-security/run_pentest.sh --target http://127.0.0.1:5000 --only functional-permissions
+scripts/security/pentest/run_pentest.sh --target http://127.0.0.1:5000 --only functional-permissions
 ```
 
 It logs in as root, manager, normal user, and anonymous clients to verify
@@ -94,13 +94,13 @@ format, and no 500/502/503 regressions.
 Run a lightweight local traffic estimate:
 
 ```bash
-security/stress_test.py --target http://127.0.0.1:5000 --requests 500 --concurrency 50
+scripts/security/pentest/stress_test.py --target http://127.0.0.1:5000 --requests 500 --concurrency 50
 ```
 
 Run a short duration-based flood simulation against a loopback server you own:
 
 ```bash
-python3 security/stress_test.py \
+python3 scripts/security/pentest/stress_test.py \
   --target http://127.0.0.1:5000 \
   --mode duration \
   --duration-seconds 20 \
@@ -122,7 +122,7 @@ still honors a safety `--max-requests` cap.
 Run the project-level validation before publishing:
 
 ```bash
-python3 scripts/pre_push_checks.py
+python3 scripts/prepush/pre_push_checks.py
 ```
 
 The helper compiles Python under `server.py`, `routes/`, `services/`,
@@ -139,7 +139,7 @@ enable heavyweight checks. Optional cleanup flags list their deletion plan first
 and require confirmation unless `--yes` is used:
 
 ```bash
-python3 scripts/pre_push_checks.py --clean --clean-temp --yes
+python3 scripts/prepush/pre_push_checks.py --clean --clean-temp --yes
 ```
 
 - `--clean`: remove safe repository caches such as `__pycache__`,
@@ -160,4 +160,4 @@ bash hooks/install-hooks.sh
 ```
 
 The hook bumps `APP_RELEASE_ID`, amends the current commit, runs
-`scripts/pre_push_checks.py --ci`, and blocks the push on failure.
+`scripts/prepush/pre_push_checks.py --ci`, and blocks the push on failure.

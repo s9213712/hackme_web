@@ -1,6 +1,18 @@
 # Update Summary
 
-Release ID: `2026.05.07-154`
+Release ID: `2026.05.07-155`
+
+## 2026.05.07-155
+
+- Reorganized deep feature docs into bounded subdirectories so `docs/` root can
+  stay focused on entry guides and cross-cutting references.
+- Trading deep references now live under `docs/trading/`; video/media
+  architecture under `docs/video/`; runtime-boundary docs under
+  `docs/runtime/`; ComfyUI operator docs under `docs/comfyui/`; and Server
+  Mode v2 spec bundles under `docs/server_mode/`.
+- Added per-folder `README.md` entry files plus updated canonical doc index and
+  release policy coverage so future doc growth follows the same placement
+  rules.
 
 ## 2026.05.07-154
 
@@ -49,7 +61,7 @@ Release ID: `2026.05.07-154`
 
 ## 2026.05.06-147
 
-- `services/points_chain.py` has been split into a real
+- `services/points_chain/` has been split into a real
   `services/points_chain/` package with medium-grain boundaries: shared
   currency/schema/hash helpers and `ChainModeViolation` live in `schema.py`,
   while the full `PointsLedgerService` implementation now lives in
@@ -57,9 +69,9 @@ Release ID: `2026.05.07-154`
 - Existing `from services.points_chain import ...` imports keep working through
   the package `__init__`, including compatibility for tests that monkeypatch
   `services.points_chain.time.time`.
-- The old top-level `services/points_chain.py` path remains as a tiny
-  source-reference facade so regression checks that inspect that file by path
-  still enforce the pending-reward maker-checker contract.
+- Source-based regression checks now inspect the canonical package files
+  directly, so the root-level `services/points_chain.py` shim is no longer
+  needed.
 - `ServerModeService` no longer sidesteps a repo-root `runtime` blocker by
   silently creating `.runtime/`. If no explicit runtime base dir is available,
   a non-directory `runtime` path now fails closed; when an `IntegrityGuard`
@@ -68,14 +80,13 @@ Release ID: `2026.05.07-154`
 
 ## 2026.05.06-146
 
-- `services/snapshots.py` has been split into a real `services/snapshots/`
+- `services/snapshots/` has been split into a real `services/snapshots/`
   package with medium-grain boundaries: shared schema/hash/signature helpers in
   `schema.py`, snapshot/archive/restore flow in `service.py`, and Server Mode
   v2 profile/checkpoint/audit flow in `server_mode.py`.
 - Existing `from services.snapshots import ...` call sites keep working through
-  the package `__init__`, while the old top-level `services/snapshots.py` path
-  remains as a tiny compatibility/source-reference facade for regression tests
-  and operator docs that still read that file by path.
+  the package `__init__`, and source-based regression checks now point at the
+  canonical package files instead of a root-level shim.
 - Snapshot and Server Mode helpers now tolerate a conflicting `runtime` file in
   the repo root by falling back to `.runtime/` for auto-generated local HMAC
   keys, removing an implicit path-shape assumption that broke
@@ -420,7 +431,7 @@ Release ID: `2026.05.07-154`
 
 ## 2026.05.05-110
 
-- Added [ENCRYPTION_RUNTIME_BOUNDARY.md](ENCRYPTION_RUNTIME_BOUNDARY.md) as the canonical operator/engineer trust-boundary document for `standard_plain`, `server_encrypted`, strict `e2ee`, and E2EE shared-video envelopes.
+- Added [ENCRYPTION_RUNTIME_BOUNDARY.md](runtime/ENCRYPTION_RUNTIME_BOUNDARY.md) as the canonical operator/engineer trust-boundary document for `standard_plain`, `server_encrypted`, strict `e2ee`, and E2EE shared-video envelopes.
 - Added [EXTERNAL_API_COMMAND_MATRIX.md](EXTERNAL_API_COMMAND_MATRIX.md) to inventory the upstream exchange, Civitai, and ComfyUI commands currently used by the project, plus nearby capabilities not yet wired.
 - Added a regression proving that a runtime engineer can decrypt `server_encrypted` data with the runtime file key, but cannot decrypt strict `e2ee` data from runtime state alone.
 
@@ -446,7 +457,7 @@ Release ID: `2026.05.07-154`
 
 - Cloud Drive audio and video preview now use the native `/preview/content` stream URL instead of fetching a blob first, so browsers can handle streaming media previews more reliably.
 - Clarified the attachment-storage wording: chat / DM / announcement attachments only write into `/attachments/` when those attachment actions are actually used; this is a storage path convention, not a separate built-in module.
-- Added `docs/VIDEO_STREAMING_ARCHITECTURE.md` as the canonical Phase C design for HLS / segmented media streaming, including the split between `standard_plain`, `server_encrypted`, and strict `e2ee` media behavior.
+- Added `docs/video/VIDEO_STREAMING_ARCHITECTURE.md` as the canonical Phase C design for HLS / segmented media streaming, including the split between `standard_plain`, `server_encrypted`, and strict `e2ee` media behavior.
 
 ## 2026.05.04-105
 
@@ -1399,7 +1410,7 @@ Release ID: `2026.05.07-154`
   mode keeps startup explicit: users press the AI-page start button before
   generation, and already-running local ComfyUI instances can be reused by
   other users.
-- Added `scripts/comfyui_run_in_linux.template.sh` as a reusable Linux
+- Added `scripts/comfyui/comfyui_run_in_linux.template.sh` as a reusable Linux
   startup template. It checks for an existing virtual environment, creates one
   only when needed, installs dependencies idempotently, and avoids embedding
   workstation-specific paths.

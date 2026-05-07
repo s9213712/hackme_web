@@ -36,6 +36,13 @@ Future moves should converge toward:
 - `tests/scripts/`
 - `tests/contracts/`
 
+## Current Domain Subtrees
+
+The first domain regrouping slices now exist:
+
+- `tests/scripts/`: script and CLI contract checks
+- `tests/video/`: video/frontend-video/media streaming suites
+
 ## Merge Rules
 
 Merge files only when they share:

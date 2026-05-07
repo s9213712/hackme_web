@@ -3,7 +3,7 @@
 This project uses two layers of plaintext secret detection before code is merged:
 
 - `gitleaks detect --source "$(git rev-parse --show-toplevel)" --no-git --redact --config "$(git rev-parse --show-toplevel)/.gitleaks.toml"`
-- `python3 security/scan_plaintext_secrets.py --fail-on high`
+- `python3 scripts/security/gate/scan_plaintext_secrets.py --fail-on high`
 
 The custom scanner checks project-specific plaintext patterns such as credential
 assignments, bearer authorization headers, private-key markers, and database
@@ -53,17 +53,17 @@ Run the checks manually:
 
 ```bash
 pre-commit run --all-files
-python3 security/scan_plaintext_secrets.py --fail-on high
+python3 scripts/security/gate/scan_plaintext_secrets.py --fail-on high
 ```
 
 ## Reports
 
 The custom scanner writes masked reports to:
 
-- `security/reports/secrets_scan_report.json`
-- `security/reports/secrets_scan_report.md`
+- `runtime/reports/security/secrets_scan_report.json`
+- `runtime/reports/security/secrets_scan_report.md`
 
-CI also uploads `security/reports/gitleaks_report.json` as an artifact. Reports
+CI also uploads `runtime/reports/security/gitleaks_report.json` as an artifact. Reports
 must not include complete secret values. Evidence is masked, for example:
 
 - `token field -> <masked>`
@@ -77,7 +77,7 @@ forks, caches, or CI logs may still contain it.
 
 ## Allowlist Policy
 
-Temporary allowlist entries live in `security/secrets_allowlist.yml`. Each entry
+Temporary allowlist entries live in `scripts/security/gate/secrets_allowlist.yml`. Each entry
 must include:
 
 - `file`

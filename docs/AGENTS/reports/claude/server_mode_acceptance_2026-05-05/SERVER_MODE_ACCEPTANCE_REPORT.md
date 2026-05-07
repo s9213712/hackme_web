@@ -3,12 +3,12 @@
 > **Agent:** Claude
 > **Date:** 2026-05-05（首版）／**修訂 2026-05-05（D-1/D-2/D-3 已併入主規格）**
 > **Type:** Acceptance review — docs-only / 不動源碼
-> **Spec source:** [`docs/SERVER_MODE_V2_PROFILE_MATRIX.md`](../../../SERVER_MODE_V2_PROFILE_MATRIX.md)（已 root 拍板更新，2026-05-05）
+> **Spec source:** [`docs/server_mode/SERVER_MODE_V2_PROFILE_MATRIX.md`](../../../server_mode/SERVER_MODE_V2_PROFILE_MATRIX.md)（已 root 拍板更新，2026-05-05）
 > **Impl source:** [`services/snapshots.py`](../../../../services/snapshots.py) + 各 routes
 > **Test:** isolated env `/tmp/hackme_codex_accept_*/` + pytest baseline
 >
 > **修訂說明（2026-05-05）**：
-> 首版列了 D-1 / D-2 / D-3 三個「驗收差異」建議改 spec。root 已直接拍板把這三條寫進主規格 [`SERVER_MODE_V2_PROFILE_MATRIX.md`](../../../SERVER_MODE_V2_PROFILE_MATRIX.md)：
+> 首版列了 D-1 / D-2 / D-3 三個「驗收差異」建議改 spec。root 已直接拍板把這三條寫進主規格 [`SERVER_MODE_V2_PROFILE_MATRIX.md`](../../../server_mode/SERVER_MODE_V2_PROFILE_MATRIX.md)：
 > - **D-1** → spec §Production Gate Reports 改成 **13 個 report types**（與 `services/snapshots.py:35-49` 一致）
 > - **D-2** → spec §Mode Behavior Matrix 「CSRF」列全 mode 改成 `on`，加 footnote「always-on, including superweak」
 > - **D-3** → spec 新增 §Per-Mechanism Enforcement 章節，明示「mode-driven enforcement is per-mechanism, not centralized」

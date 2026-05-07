@@ -12,9 +12,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from services.bootstrap import CURRENT_SCHEMA_VERSION
-from services.release_info import APP_RELEASE_ID
-from services.settings import MANAGEMENT_ONLY_RESET_SETTINGS
+from services.platform.bootstrap import CURRENT_SCHEMA_VERSION
+from services.platform.release_info import APP_RELEASE_ID
+from services.platform.settings import MANAGEMENT_ONLY_RESET_SETTINGS
 
 SNAPSHOT_ID_RE = re.compile(r"^snap_\d{8}_\d{6}_[a-f0-9]{6}$")
 SHA256_REPORT_HASH_RE = re.compile(r"^sha256:[a-f0-9]{64}$")

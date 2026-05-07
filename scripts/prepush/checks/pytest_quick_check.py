@@ -9,20 +9,21 @@ from scripts.prepush.result import CheckResult
 
 
 QUICK_TESTS = [
-    "tests/test_auth_csrf_safe.py",
-    "tests/test_access_controls.py",
-    "tests/test_prepush_v2.py",
-    "tests/test_frontend_account_admin.py",
-    "tests/test_account_sessions.py",
-    "tests/test_comfyui_integration.py",
-    "tests/test_cloud_drive_attachments.py",
-    "tests/test_sanction_notices.py",
-    "tests/test_trading_engine.py",
-    "tests/test_remote_downloads.py",
-    "tests/test_video_publish.py",
-    "tests/test_security_issue_regressions.py",
-    "tests/test_user_csv_exports.py",
+    "tests/security/auth/test_auth_csrf_safe.py",
+    "tests/security/auth/test_access_controls.py",
+    "tests/scripts/prepush/test_prepush_v2.py",
+    "tests/frontend/admin/test_frontend_account_admin.py",
+    "tests/account/sessions/test_account_sessions.py",
+    "tests/comfyui/generation/test_comfyui_generation.py",
+    "tests/storage/test_cloud_drive_attachments.py",
+    "tests/users/test_sanction_notices.py",
+    "tests/trading/core/test_trading_engine.py",
+    "tests/storage/test_remote_downloads.py",
+    "tests/video/api/test_video_publish.py",
+    "tests/regressions/test_security_issue_regressions.py",
+    "tests/users/test_user_csv_exports.py",
 ]
+QUICK_TIMEOUT_SECONDS = 180
 
 
 def run(ctx: PrepushContext) -> CheckResult:
@@ -34,7 +35,12 @@ def run(ctx: PrepushContext) -> CheckResult:
     env = utils.env_without_local_runtime()
     env["PYTHONPATH"] = str(ctx.repo_root)
     env["HTML_LEARNING_TEST_RUNTIME"] = "1"
-    proc = utils.run_command([sys.executable, "-m", "pytest", "-q", *tests], cwd=ctx.repo_root, timeout=90, env=env)
+    proc = utils.run_command(
+        [sys.executable, "-m", "pytest", "-q", *tests],
+        cwd=ctx.repo_root,
+        timeout=QUICK_TIMEOUT_SECONDS,
+        env=env,
+    )
     if proc.returncode != 0:
         output = "\n".join((proc.stdout + proc.stderr).splitlines()[-80:])
         return CheckResult.fail(

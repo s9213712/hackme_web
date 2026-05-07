@@ -3,6 +3,8 @@ import sqlite3
 import threading
 from datetime import datetime
 
+from services.comfyui.settings import COMFYUI_DEFAULT_SETTINGS
+
 SYSTEM_SETTINGS_TABLE = "system_settings"
 DEFAULT_SETTINGS = {
     "audit_chain_enabled": True,
@@ -61,16 +63,7 @@ DEFAULT_SETTINGS = {
     "module_comfyui_min_role": "user",
     "module_games_min_role": "user",
     "module_videos_min_role": "user",
-    "comfyui_connection_mode": os.environ.get("COMFYUI_CONNECTION_MODE", "remote"),
-    "comfyui_remote_api_url": os.environ.get("COMFYUI_API_URL", ""),
-    "comfyui_base_dir": os.environ.get("COMFYUI_BASE_DIR", ""),
-    "comfyui_local_start_script": os.environ.get("COMFYUI_START_SCRIPT", ""),
-    "comfyui_api_host": os.environ.get("COMFYUI_API_HOST", "localhost"),
-    "comfyui_api_port": 8192,
-    "comfyui_civitai_api_key": os.environ.get("CIVITAI_API_KEY", ""),
-    "comfyui_max_batch_size": 1,
-    "comfyui_default_width": 1024,
-    "comfyui_default_height": 1024,
+    **COMFYUI_DEFAULT_SETTINGS,
     "chat_filter_rules_json": "",
     "feature_chat_enabled": False,
     "feature_community_enabled": False,

@@ -6,7 +6,7 @@ import math
 
 @lru_cache(maxsize=1)
 def _engine_module():
-    from services import trading_engine as engine
+    from services.trading import trading_engine as engine
 
     return engine
 

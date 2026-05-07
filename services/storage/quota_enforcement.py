@@ -3,8 +3,8 @@ from datetime import datetime, timedelta
 
 from services.system.notifications import create_notification
 from services.core.sqlite_safe import table_columns as safe_table_columns
-from services.storage_albums import ensure_storage_album_schema, sync_user_storage_summary
-from services.upload_security import (
+from services.storage.storage_albums import ensure_storage_album_schema, sync_user_storage_summary
+from services.security.upload_security import (
     ensure_upload_security_schema,
     get_user_cloud_drive_usage,
 )

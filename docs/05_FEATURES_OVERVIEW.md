@@ -15,12 +15,12 @@
 | 個人外觀 / 站點主題 | 全用戶 + root | root 全站預設、個人外觀覆寫開關 | [03_ADMIN_GUIDE.md](03_ADMIN_GUIDE.md), [04_USER_GUIDE.md](04_USER_GUIDE.md), [WEB.md](WEB.md) |
 | 社群 / Chat / 論壇 / 公告 | 一般站點 | reports / notifications / moderation | [WEB.md](WEB.md) |
 | Cloud Drive / 相簿 | 全用戶 | attachments、albums、upload security | [WEB.md](WEB.md) |
-| Video Platform | 內容站點 | Cloud Drive、PointsChain | [VIDEO_PLATFORM.md](VIDEO_PLATFORM.md), [VIDEO_STREAMING_ARCHITECTURE.md](VIDEO_STREAMING_ARCHITECTURE.md) |
+| Video Platform | 內容站點 | Cloud Drive、PointsChain | [VIDEO_PLATFORM.md](video/VIDEO_PLATFORM.md), [VIDEO_STREAMING_ARCHITECTURE.md](video/VIDEO_STREAMING_ARCHITECTURE.md) |
 | ComfyUI | AI 站點 | feature_comfyui、local/remote ComfyUI、Civitai 僅本地模式 | [WEB.md](WEB.md), [For_developer.md](For_developer.md) |
 | Appeals / Notices / Governance | 有審核流程的站點 | reports、notifications、identity/member governance | [WEB.md](WEB.md) |
-| Security Center / Server Mode | root | audit、integrity、snapshot/restore、health center | [06_SECURITY_MODEL.md](06_SECURITY_MODEL.md), [SERVER_MODE_V2_PROFILE_MATRIX.md](SERVER_MODE_V2_PROFILE_MATRIX.md) |
+| Security Center / Server Mode | root | audit、integrity、snapshot/restore、health center | [06_SECURITY_MODEL.md](06_SECURITY_MODEL.md), [SERVER_MODE_V2_PROFILE_MATRIX.md](server_mode_v2/SERVER_MODE_V2_PROFILE_MATRIX.md) |
 | PointsChain | 經濟功能 | wallet、ledger、video tips、trading | [07_POINTSCHAIN.md](07_POINTSCHAIN.md) |
-| Trading / Bots / Backtest | 交易站點 | PointsChain、economy、price feeds、chart indicators、QA scripts | [08_TRADING_ENGINE.md](08_TRADING_ENGINE.md), [TRADING.md](TRADING.md) |
+| Trading / Bots / Backtest | 交易站點 | PointsChain、economy、price feeds、chart indicators、QA scripts | [08_TRADING_ENGINE.md](08_TRADING_ENGINE.md), [TRADING.md](trading/TRADING.md) |
 | Snapshot / Restore / Reset | root / 運維 | server mode、audit、integrity、PointsChain | [09_SNAPSHOT_RESET_RESTORE.md](09_SNAPSHOT_RESET_RESTORE.md) |
 | WebTerminal | 已封存 | 不在 active main line | [10_WEB_TERMINAL.md](10_WEB_TERMINAL.md) |
 
@@ -74,7 +74,7 @@
 - 原理：影片 metadata 與互動是 presentation layer，實際檔案仍由 Cloud Drive 提供。
 - 失敗情境與提示：strict E2EE 檔案不可作為一般 server-side/HLS 影音發布；若要發布成 `持連結可看` 的 E2EE 影音，擁有者需在瀏覽器端輸入一次原始 E2EE 密碼建立分享授權；若沒有 `E2EE Streaming v2` manifest、裝置不支援 MediaSource / Worker / WebCrypto、或密文 chunk 驗證失敗，系統會明確退回舊版完整解密播放，不會假裝成功；分享頁現在會明確顯示「讀取分享授權 / 下載加密影音 / 瀏覽器端解密」階段，避免大檔案只看起來像卡住；若完整分享連結 fragment 遺失，伺服器無法復原，只能重新產生分享；server_encrypted 若遇舊 key 不可解會回 `decrypt_unavailable`。
 - 測試方式：發布、播放、private/unlisted、評論、打賞、權限與解密失敗情境。
-- 相關文件連結：[VIDEO_PLATFORM.md](VIDEO_PLATFORM.md), [VIDEO_STREAMING_ARCHITECTURE.md](VIDEO_STREAMING_ARCHITECTURE.md), [07_POINTSCHAIN.md](07_POINTSCHAIN.md), [11_QA_TESTING.md](11_QA_TESTING.md)
+- 相關文件連結：[VIDEO_PLATFORM.md](video/VIDEO_PLATFORM.md), [VIDEO_STREAMING_ARCHITECTURE.md](video/VIDEO_STREAMING_ARCHITECTURE.md), [07_POINTSCHAIN.md](07_POINTSCHAIN.md), [11_QA_TESTING.md](11_QA_TESTING.md)
 
 ### ComfyUI
 
@@ -104,7 +104,7 @@
 - 原理：mode、checkpoint、audit chain、integrity findings、protected logs 各自維持邊界。
 - 失敗情境與提示：缺 confirmation string、production gate 未滿足、incident lockdown、生效功能組未完整啟用。
 - 測試方式：mode switch、superweak rollback、incident lockdown、log verify、permission pentest。
-- 相關文件連結：[06_SECURITY_MODEL.md](06_SECURITY_MODEL.md), [09_SNAPSHOT_RESET_RESTORE.md](09_SNAPSHOT_RESET_RESTORE.md), [SERVER_MODE_V2_PROFILE_MATRIX.md](SERVER_MODE_V2_PROFILE_MATRIX.md)
+- 相關文件連結：[06_SECURITY_MODEL.md](06_SECURITY_MODEL.md), [09_SNAPSHOT_RESET_RESTORE.md](09_SNAPSHOT_RESET_RESTORE.md), [SERVER_MODE_V2_PROFILE_MATRIX.md](server_mode_v2/SERVER_MODE_V2_PROFILE_MATRIX.md)
 
 ### PointsChain
 
@@ -114,7 +114,7 @@
 - 原理：ledger 是 source of truth，wallet 由 ledger replay 重建。
 - 失敗情境與提示：safe mode、chain verify fail、恢復需要人工確認、餘額顯示與鏈不一致。
 - 測試方式：credit/debit、seal/verify、backup/recovery、影片打賞、交易資金流。
-- 相關文件連結：[07_POINTSCHAIN.md](07_POINTSCHAIN.md), [08_TRADING_ENGINE.md](08_TRADING_ENGINE.md), [RUNTIME_RESET_AND_RECOVERY.md](RUNTIME_RESET_AND_RECOVERY.md)
+- 相關文件連結：[07_POINTSCHAIN.md](07_POINTSCHAIN.md), [08_TRADING_ENGINE.md](08_TRADING_ENGINE.md), [RUNTIME_RESET_AND_RECOVERY.md](runtime/RUNTIME_RESET_AND_RECOVERY.md)
 
 ### Trading / Bots / Backtest
 
@@ -124,7 +124,7 @@
 - 原理：runtime 交易市場來自 `trading_markets_registry`；`services/trading_markets.py` 只負責 bootstrap seed 與版本對照，不會默默覆蓋 root 在 DB 內做過的調整。
 - 失敗情境與提示：市場被 disable 時，後端會拒絕新下單但保留歷史；provider mapping probe 失敗時，不可啟用 `risk-grade` 用途；若 seeded 市場與 catalog 不一致，後台會顯示 `drifted`，但不會自動改回。
 - 測試方式：registry CRUD、provider probe、precision/lot size/tick size 驗證、disabled market 阻擋、seed drift 狀態顯示、risk-grade gating。
-- 相關文件連結：[08_TRADING_ENGINE.md](08_TRADING_ENGINE.md), [TRADING.md](TRADING.md), [For_developer.md](For_developer.md), [11_QA_TESTING.md](11_QA_TESTING.md)
+- 相關文件連結：[08_TRADING_ENGINE.md](08_TRADING_ENGINE.md), [TRADING.md](trading/TRADING.md), [For_developer.md](For_developer.md), [11_QA_TESTING.md](11_QA_TESTING.md)
 
 - 一句話說明：提供現貨交易、借貸交易、多交易所融合價格、DCA / 網格 / workflow bot 與回測。
 - 設計目的：驗證金額、風控、撮合、PointsChain 結算與策略流程。
@@ -132,7 +132,7 @@
 - 原理：前台顯示是輔助，實際撮合與結算由後端重新驗證；關鍵金額不信任前端。融合價格模式會優先抓 Binance / OKX / Coinbase / Kraken / Gemini / Bitstamp 的掛單簿中價與深度，依深度或 root 手動權重融合；若部分 API 失效，系統會自動用剩餘健康來源重新分配權重。市場 seed、顯示 symbol、各交易所 provider id、預設手動價與 BTC_trade 支援條件仍集中在 `services/trading_markets.py`，但真正啟用中的市場、precision、lot/tick size、provider mapping 與 `risk-grade` 使用權限已進 DB registry，由 root 後台控制。交易頁每 `2` 秒輪詢一次輕量 `live-price` API，且每次拿到新價格後會同步重算買入/賣出預估；同一輪也會重算積分錢包裡的 spot / margin 浮盈虧與 root 虛擬總額，不再等到較慢的 full dashboard refresh 才跳一次。這支 API 不是純 read-only：它會在後端同步刷新 `trading_markets.manual_price_points / price_source` 的最新快取，讓後續撮合、估值與 dashboard 能共用同一份最新交易參考價。Grid Bot preview 也統一改由後端 `Decimal` 精算，會把每格毛利、買/賣手續費、扣費後淨利、損益兩平 spread 與紅/黃/綠燈一起回傳；前端只做顯示，不自行用浮點數偷算。交易帳本仍以整數 POINT 為最小單位，但手續費改用 `Decimal` 後端計算並採四捨五入到最近整點，避免舊版小額單長期偏向 `ceil` 超收；借貸利息則會先累積到 micropoints，再跨過整點時才真正記成 POINT，避免小本金被每次計息都直接進位。借貸 APR 依借入資產分組，多單與空單因此可能使用不同利率；前台會直接顯示 `累積利息`、`已實扣`、`下一次計息`。後端也會同步累積每位使用者的 spot / margin 名目成交量、總 fee 與成交次數，供後續 VIP 系統或 root report 使用。回測引擎則把單批執行上限和總上限拆開：內部分段每批最多 `10,000` 根，但整體回測最多可連續處理 `20,000` 根；若 `candles < 2`，只有顯式 opt-in 才會抓 reference candles，不再靜默把隔離資料換成 live public history。交易 bot 稽核則由後端 scheduler 執行，先用「首筆成交或啟用滿 24 小時」作為納入條件，再產生綠 / 黃 / 紅燈與 bug report 對照資訊。BTC_trade 一鍵啟動則改成背景工作：資料 / 模型檢查、必要更新、重訓與預測都在伺服器端串接，root 前端只輪詢工作狀態，不會把長時間訓練誤判成 timeout 失敗。
 - 失敗情境與提示：餘額不足、價格來源失效、circuit breaker、借貸池不足、功能旗標未完整啟用；若融合價格手動權重全部設成 0，系統會退回自動深度權重，並在 root dashboard / log 直接標示 `manual weights invalid`；若 order book 全失敗，會顯示 `價格來源降級` 並進入保守模式，而不是靜默把單一 ticker 當成正常 fused price。若你在手算小額單手續費時看到與舊版不同，先確認是否已升到 `2026.05.03-063` 之後的 rounding 規則，也確認是否還誤把 Grid 當成舊版 `50%` 折扣。若你在借貸部位看到 `interest_points` 暫時仍是 0，但 `interest_exact_points` 已有小數，代表系統正在累積未滿 1 點的利息殘值；若 APR 看起來和你預期不同，也要先分辨目前借的是 `BTC / ETH` 還是 `USDT / POINTS`。若回測區間超過 `20,000` 根 K 線，前後端都會明確要求縮小區間，而不是靜默截斷；若 `candles < 2` 卻還看到回測像是自己變成真實行情，請先確認 server 是否已升到 `2026.05.04-070`。若交易頁的 `目前價格` 看起來跟參考 K 線最新收盤不同，這在 `2026.05.04-071` 之後是正常設計：前者是實際交易參考價，後者只是圖表參考資料。若 root 稽核 dashboard 顯示 `未稽核`，通常代表 bot 尚未成交且也未滿 24 小時，不是系統壞掉。若 BTC_trade 一鍵啟動長時間停在訓練中，先看背景工作狀態；新版不再因單純 timeout 就判成失敗，只有腳本實際退出錯誤或等不到新的 report 才會轉紅。
 - 測試方式：正常交易、邊界輸入、精度、回測、stress pentest、單一交易所 API 失效後的融合價格重算、root-only 融合價格 dashboard、Grid Bot fee preview 的紅 / 黃 / 綠燈與 break-even 驗證、交易 bot `未稽核 -> 綠 / 黃 / 紅燈` 稽核流程、DCA `max_runs=-1` 連續執行、restore consistency、`BTC/USDT 1h` 全年歷史回測、超過 `10,000` 根時的後端自動分段續跑、`candles < 2` isolation 驗證、小本金借貸利息 carry 驗證、參考 K 線圖的 `MA10 / MA20 / MA30 / MA60 / EMA12 / EMA26 / EMA50 / 布林線 / RSI14 / KD` 指標顯示，以及 `volume_stats / volume_summary` 是否正確累積。
-- 相關文件連結：[08_TRADING_ENGINE.md](08_TRADING_ENGINE.md), [TRADING.md](TRADING.md), [11_QA_TESTING.md](11_QA_TESTING.md)
+- 相關文件連結：[08_TRADING_ENGINE.md](08_TRADING_ENGINE.md), [TRADING.md](trading/TRADING.md), [11_QA_TESTING.md](11_QA_TESTING.md)
 
 ### Snapshot / Restore / Reset
 
@@ -142,7 +142,7 @@
 - 原理：server snapshot、PointsChain backup、audit chain、runtime reset 各自有明確所有權邊界。
 - 失敗情境與提示：snapshot restore 會回放 runtime secret files，若 restore event 出現 `runtime secret validation failed` 要先修這批檔案；reset 仍會清掉 runtime secrets 並要求重啟；PointsChain recovery 不能拿來代替全站 restore。
 - 測試方式：create/list/download/restore/upload-restore/reset、post-restore consistency、offline/reconnect reset smoke。
-- 相關文件連結：[09_SNAPSHOT_RESET_RESTORE.md](09_SNAPSHOT_RESET_RESTORE.md), [RUNTIME_RESET_AND_RECOVERY.md](RUNTIME_RESET_AND_RECOVERY.md), [11_QA_TESTING.md](11_QA_TESTING.md)
+- 相關文件連結：[09_SNAPSHOT_RESET_RESTORE.md](09_SNAPSHOT_RESET_RESTORE.md), [RUNTIME_RESET_AND_RECOVERY.md](runtime/RUNTIME_RESET_AND_RECOVERY.md), [11_QA_TESTING.md](11_QA_TESTING.md)
 
 ### WebTerminal
 

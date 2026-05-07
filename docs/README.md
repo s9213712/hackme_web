@@ -43,31 +43,44 @@ The repository root keeps only [README.md](../README.md) and
 ## Deep Reference
 
 - [API_REFERENCE.md](API_REFERENCE.md): canonical implemented API route map
-- [BACKTEST_CAPACITY_AND_TEMPLATE_BENCHMARKS.md](BACKTEST_CAPACITY_AND_TEMPLATE_BENCHMARKS.md): trading backtest cap measurement and benchmark asset notes
-- [BTC_TRADE_INTEGRATION.md](BTC_TRADE_INTEGRATION.md): external BTC_trade repo integration and operator flow
 - [CLI_ADMIN_PLAYBOOK.md](CLI_ADMIN_PLAYBOOK.md): curl/cmd playbook for root,
   admin, and developer operations
-- [COMFYUI_ADMIN.md](COMFYUI_ADMIN.md): root/admin-only ComfyUI and Civitai operations
 - [For_developer.md](For_developer.md): API, schema, runtime layout, feature flags
-- [ENCRYPTION_RUNTIME_BOUNDARY.md](ENCRYPTION_RUNTIME_BOUNDARY.md): what a
-  runtime engineer can decrypt vs what strict E2EE still protects
 - [EXTERNAL_API_COMMAND_MATRIX.md](EXTERNAL_API_COMMAND_MATRIX.md): current
   exchange / Civitai / ComfyUI upstream command inventory
 - [WEB.md](WEB.md): detailed page-by-page UI behavior
-- [TRADING.md](TRADING.md): full trading, bots, workflow editor, and backtest details
-- [VIDEO_PLATFORM.md](VIDEO_PLATFORM.md): detailed video module reference
-- [VIDEO_STREAMING_ARCHITECTURE.md](VIDEO_STREAMING_ARCHITECTURE.md): formal
-  HLS / encrypted-media streaming Phase C design
-- [SECURITY.md](SECURITY.md): current security controls and known limits
-- [RUNTIME_RESET_AND_RECOVERY.md](RUNTIME_RESET_AND_RECOVERY.md): detailed
-  reset/snapshot/PointsChain boundary notes
 - [DEPLOYMENT.md](DEPLOYMENT.md): script-level deployment and operations reference
-- [AGENTS/README.md](AGENTS/README.md): entry for agent rules, QA runbooks, and
-  archived QA reports
-- [AGENTS/QA_MISSION_FOR_AGENTS.md](AGENTS/QA_MISSION_FOR_AGENTS.md): deep QA
-  runbook for agents and manual exploratory testing
-- [AGENTS/RULES_FOR_AGENTS.md](AGENTS/RULES_FOR_AGENTS.md): project-wide
-  completion rules for docs, tests, UX, mobile checks, and delivery reporting
+- [SECURITY.md](SECURITY.md): current security controls and known limits
+
+### Trading Reference Set
+
+- [trading/README.md](trading/README.md): trading docs index
+- [TRADING.md](trading/TRADING.md): full trading, bots, workflow editor, and backtest details
+- [TRADING_BOT_AUDIT.md](trading/TRADING_BOT_AUDIT.md): bot audit workflow and operator meaning
+- [TRADING_RISK_PRICE.md](trading/TRADING_RISK_PRICE.md): reference vs risk-grade price rules
+- [BACKTEST_CAPACITY_AND_TEMPLATE_BENCHMARKS.md](trading/BACKTEST_CAPACITY_AND_TEMPLATE_BENCHMARKS.md): trading backtest cap measurement and benchmark asset notes
+- [BTC_TRADE_INTEGRATION.md](trading/BTC_TRADE_INTEGRATION.md): external BTC_trade repo integration and operator flow
+
+### Video And Encryption Reference Set
+
+- [video/README.md](video/README.md): video docs index
+- [VIDEO_PLATFORM.md](video/VIDEO_PLATFORM.md): detailed video module reference
+- [VIDEO_STREAMING_ARCHITECTURE.md](video/VIDEO_STREAMING_ARCHITECTURE.md): formal
+  HLS / encrypted-media streaming Phase C design
+- [runtime/README.md](runtime/README.md): runtime boundary docs index
+- [ENCRYPTION_RUNTIME_BOUNDARY.md](runtime/ENCRYPTION_RUNTIME_BOUNDARY.md): what a
+  runtime engineer can decrypt vs what strict E2EE still protects
+- [RUNTIME_RESET_AND_RECOVERY.md](runtime/RUNTIME_RESET_AND_RECOVERY.md): detailed
+  reset/snapshot/PointsChain boundary notes
+
+### ComfyUI And Server Mode Reference Set
+
+- [comfyui/README.md](comfyui/README.md): ComfyUI operator docs index
+- [COMFYUI_ADMIN.md](comfyui/COMFYUI_ADMIN.md): root/admin-only ComfyUI and Civitai operations
+- [server_mode_v2/README.md](server_mode_v2/README.md): Server Mode v2 spec bundle index
+- [SERVER_MODE_V2_PROFILE_MATRIX.md](server_mode_v2/SERVER_MODE_V2_PROFILE_MATRIX.md): canonical mode matrix
+- [SERVER_MODE_V2_TEST_PLAN.md](server_mode_v2/SERVER_MODE_V2_TEST_PLAN.md): mode redesign coverage
+- [SERVER_MODE_V2_MIGRATION_PLAN.md](server_mode_v2/SERVER_MODE_V2_MIGRATION_PLAN.md): migration history
 
 ## Release, Security, And Testing
 
@@ -81,9 +94,6 @@ The repository root keeps only [README.md](../README.md) and
 - [security/PENTEST.md](security/PENTEST.md): security runner and whole-site gate usage
 - [security/TRADING_STRESS_PENTEST.md](security/TRADING_STRESS_PENTEST.md): trading correctness/stress script
 - [security/SERVER_MODE_V2_RED_TEAM_PLAYBOOK.md](security/SERVER_MODE_V2_RED_TEAM_PLAYBOOK.md): adversarial mode tests
-- [SERVER_MODE_V2_PROFILE_MATRIX.md](SERVER_MODE_V2_PROFILE_MATRIX.md): canonical mode matrix
-- [SERVER_MODE_V2_TEST_PLAN.md](SERVER_MODE_V2_TEST_PLAN.md): mode redesign coverage
-- [SERVER_MODE_V2_MIGRATION_PLAN.md](SERVER_MODE_V2_MIGRATION_PLAN.md): migration history
 - [SECURITY_MODES.md](SECURITY_MODES.md): legacy redirect for old links
 
 ## Maintainer Structure
@@ -100,5 +110,5 @@ The repository root keeps only [README.md](../README.md) and
 - [VERSION_STORY.md](VERSION_STORY.md): project history and abandoned branches
 - [archive/research/README.md](archive/research/README.md): archived research
   notes and retired implementation workflows
-- [research/finished/GRID_TRADING_BOT_DESIGN_REPORT.md](research/finished/GRID_TRADING_BOT_DESIGN_REPORT.md): future grid-bot research
+- [archive/research/finished/GRID_TRADING_BOT_DESIGN_REPORT.md](archive/research/finished/GRID_TRADING_BOT_DESIGN_REPORT.md): future grid-bot research
 - [archive/webterminal/README.md](archive/webterminal/README.md): archived WebTerminal attempts

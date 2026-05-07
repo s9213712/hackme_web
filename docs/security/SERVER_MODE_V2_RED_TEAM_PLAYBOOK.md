@@ -3,9 +3,9 @@
 This playbook defines adversarial checks for Server Mode v2. The automated
 implementations live in:
 
-- `security/server_mode_v2_adversarial.py`
-- `security/server_mode_v2_redteam_l2.py`
-- `security/server_mode_v2_live_http_smoke.py`
+- `scripts/security/server_mode/server_mode_v2_adversarial.py`
+- `scripts/security/server_mode/server_mode_v2_redteam_l2.py`
+- `scripts/security/server_mode/server_mode_v2_live_http_smoke.py`
 
 ## Scope
 

@@ -52,7 +52,7 @@ python3 -m pip install -r requirements.txt
 
 - 一般站點仍可啟動
 - 影音平台會降級成較少能力的模式
-- `scripts/run_prod.sh --check` 會明確警告，不是靜默失敗
+- `./one_click_setup.sh --check` 會明確警告，不是靜默失敗
 
 ## 3. Optional Feature Binaries
 
@@ -95,7 +95,7 @@ python3 -m pip install -r requirements.txt
 
 相關文件：
 
-- [COMFYUI_ADMIN.md](COMFYUI_ADMIN.md)
+- [COMFYUI_ADMIN.md](comfyui/COMFYUI_ADMIN.md)
 - [WEB.md](WEB.md)
 
 ### 4.2 Civitai

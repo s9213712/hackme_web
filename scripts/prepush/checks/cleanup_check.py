@@ -14,7 +14,7 @@ REPO_CACHE_DIR_NAMES = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_ca
 REPO_CACHE_FILE_NAMES = {".coverage"}
 REPO_CACHE_FILE_SUFFIXES = {".pyc", ".pyo"}
 REPO_JUNK_FILE_SUFFIXES = {":Zone.Identifier"}
-PROTECTED_CLEAN_PATHS = {"runtime", "security/reports"}
+PROTECTED_CLEAN_PATHS = {"runtime"}
 PROTECTED_CLEAN_FILES = {
     "bootstrap.schema.sql",
     "runtime/cert.pem",

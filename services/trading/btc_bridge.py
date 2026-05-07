@@ -986,7 +986,7 @@ class BtcTradeBridge:
         if hackme_dir not in sys.path:
             sys.path.insert(0, hackme_dir)
         from services.points_chain import PointsLedgerService
-        from services.trading_engine import TradingEngineService
+        from services.trading.trading_engine import TradingEngineService
 
         points_service = PointsLedgerService(
             get_db=self.get_db,

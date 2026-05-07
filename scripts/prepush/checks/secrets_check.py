@@ -44,9 +44,9 @@ def scan_text(rel: str, text: str) -> list[dict[str, object]]:
         if line_allowed(line):
             continue
         for name, pattern in SECRET_PATTERNS.items():
-            if rel == "security/scan_plaintext_secrets.py" and name == "PRIVATE_KEY":
+            if rel == "scripts/security/gate/scan_plaintext_secrets.py" and name == "PRIVATE_KEY":
                 continue
-            if rel == "tests/test_plaintext_secrets_scan.py" and name in {"PASSWORD_ASSIGNMENT", "SECRET_ASSIGNMENT", "PRIVATE_KEY"}:
+            if rel == "tests/security/input/test_plaintext_secrets_scan.py" and name in {"PASSWORD_ASSIGNMENT", "SECRET_ASSIGNMENT", "PRIVATE_KEY"}:
                 continue
             if rel in {"tests/test_prepush_v2.py", "tests/test_snapshots.py"} and name in {"SECRET_ASSIGNMENT", "OPENAI_STYLE_KEY"}:
                 continue

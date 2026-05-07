@@ -1,6 +1,6 @@
 from datetime import datetime, time, timedelta
 
-from services.storage_albums import ensure_storage_album_schema, sync_user_storage_summary
+from services.storage.storage_albums import ensure_storage_album_schema, sync_user_storage_summary
 from services.storage.quota_enforcement import purge_expired_quota_reduction_files
 
 

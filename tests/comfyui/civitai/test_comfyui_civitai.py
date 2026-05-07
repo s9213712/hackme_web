@@ -1,0 +1,15 @@
+from tests.comfyui._integration_suite import (
+    test_comfyui_civitai_async_download_job_reports_progress_and_result,
+    test_comfyui_civitai_download_reports_interrupted_transfer,
+    test_comfyui_civitai_download_supports_upscale_default_dir,
+    test_comfyui_civitai_inspect_and_download_flow,
+    test_comfyui_civitai_inspect_requires_root_and_civitai_url,
+    test_comfyui_civitai_red_url_is_accepted,
+    test_comfyui_civitai_search_requires_root_and_reports_missing_api_key,
+    test_comfyui_civitai_search_returns_filtered_results_and_audit,
+    test_comfyui_model_upload_rejects_invalid_extension,
+    test_comfyui_model_upload_rejects_relative_dir_traversal,
+    test_root_can_upload_comfyui_model_file_into_custom_relative_dir,
+    test_root_can_upload_comfyui_model_file_into_local_models_dir,
+)
+

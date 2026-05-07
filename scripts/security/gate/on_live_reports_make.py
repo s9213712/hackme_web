@@ -1,0 +1,689 @@
+#!/usr/bin/env python3
+"""Generate the 13 production-gate reports in one pass.
+
+This wrapper keeps two layers of output:
+
+1. Raw artifacts under runtime/reports/security/production_gate/runs/<RUN_ID>/
+2. Stable upload-ready payloads under runtime/reports/security/production_gate/
+
+The stable payload JSON files are signed with the same HMAC scheme used by
+`/api/root/production-report/upload`, so operators can either upload them
+manually or pass `--upload` to let this script submit them after generation.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import shutil
+import ssl
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from dataclasses import dataclass
+from datetime import datetime
+from http.cookiejar import CookieJar
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[3]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.security.common_paths import runtime_root, security_reports_root  # noqa: E402
+from services.snapshots import PRODUCTION_REQUIRED_REPORT_TYPES, ServerModeService  # noqa: E402
+
+
+def _ensure_runtime_env() -> None:
+    os.environ.setdefault("HACKME_RUNTIME_DIR", str(runtime_root()))
+
+
+def _now_stamp() -> str:
+    return datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+
+
+def _json_dump(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _text_dump(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text.rstrip() + "\n", encoding="utf-8")
+
+
+def _tail(text: str, limit: int = 4000) -> str:
+    return (text or "")[-limit:]
+
+
+def _last_nonempty_line(text: str) -> str:
+    for line in reversed((text or "").splitlines()):
+        if line.strip():
+            return line.strip()
+    return ""
+
+
+def _find_latest_paths(parent: Path, pattern: str) -> list[Path]:
+    if not parent.exists():
+        return []
+    return sorted(parent.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def _git_output(*args: str) -> str:
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(ROOT), *args],
+            text=True,
+            capture_output=True,
+            timeout=15,
+            check=True,
+        )
+        return proc.stdout.strip()
+    except Exception:
+        return ""
+
+
+def _target_meta() -> dict:
+    return {
+        "target_commit": _git_output("rev-parse", "HEAD"),
+        "target_branch": _git_output("rev-parse", "--abbrev-ref", "HEAD"),
+    }
+
+
+@dataclass
+class CommandResult:
+    command: list[str]
+    returncode: int
+    stdout: str
+    stderr: str
+    duration_ms: int
+
+    @property
+    def ok(self) -> bool:
+        return self.returncode == 0
+
+
+def _run(command: list[str], *, env: dict | None = None, timeout: int = 3600) -> CommandResult:
+    merged = os.environ.copy()
+    merged["PYTHONPATH"] = str(ROOT) + (os.pathsep + merged["PYTHONPATH"] if merged.get("PYTHONPATH") else "")
+    if env:
+        merged.update(env)
+    started = time.perf_counter()
+    proc = subprocess.run(
+        command,
+        cwd=str(ROOT),
+        text=True,
+        capture_output=True,
+        env=merged,
+        timeout=timeout,
+    )
+    return CommandResult(
+        command=command,
+        returncode=proc.returncode,
+        stdout=proc.stdout,
+        stderr=proc.stderr,
+        duration_ms=int((time.perf_counter() - started) * 1000),
+    )
+
+
+class LiveClient:
+    def __init__(self, base_url: str):
+        self.base_url = base_url.rstrip("/")
+        self.cookies = CookieJar()
+        self.ctx = ssl._create_unverified_context()
+        self.opener = urllib.request.build_opener(
+            urllib.request.HTTPSHandler(context=self.ctx),
+            urllib.request.HTTPCookieProcessor(self.cookies),
+        )
+        self.csrf = ""
+
+    def _request(self, path: str, *, method: str = "GET", body: dict | None = None) -> tuple[int, dict, str]:
+        headers = {}
+        data = None
+        if body is not None:
+            raw = json.dumps(body, ensure_ascii=False).encode("utf-8")
+            data = raw
+            headers["Content-Type"] = "application/json"
+        if self.csrf:
+            headers["X-CSRF-Token"] = self.csrf
+        req = urllib.request.Request(self.base_url + path, data=data, headers=headers, method=method)
+        try:
+            with self.opener.open(req, timeout=30) as resp:
+                raw = resp.read()
+                text = raw.decode("utf-8", errors="replace")
+                payload = json.loads(text) if text else {}
+                return int(resp.status), payload, text
+        except urllib.error.HTTPError as exc:
+            raw = exc.read()
+            text = raw.decode("utf-8", errors="replace")
+            try:
+                payload = json.loads(text) if text else {}
+            except Exception:
+                payload = {"_raw": text[:500]}
+            return int(exc.code), payload, text
+
+    def fetch_csrf(self) -> str:
+        status, payload, _ = self._request("/api/csrf-token")
+        if status != 200 or not payload.get("csrf_token"):
+            raise RuntimeError(payload.get("msg") or f"failed to fetch csrf token (HTTP {status})")
+        self.csrf = str(payload["csrf_token"])
+        return self.csrf
+
+    def login(self, username: str, password: str) -> None:
+        self.fetch_csrf()
+        status, payload, _ = self._request(
+            "/api/login",
+            method="POST",
+            body={"username": username, "password": password, "csrf_token": self.csrf},
+        )
+        if status != 200 or not payload.get("ok"):
+            raise RuntimeError(payload.get("msg") or payload.get("error") or f"login failed (HTTP {status})")
+
+
+def _auto_detect_base_url() -> str:
+    for base in ("https://127.0.0.1:5000", "http://127.0.0.1:5000"):
+        client = LiveClient(base)
+        try:
+            status, payload, _ = client._request("/api/version")
+            if status == 200 and isinstance(payload, dict):
+                return base
+        except Exception:
+            pass
+    raise RuntimeError("無法自動偵測本機 base URL；請顯式傳入 --base-url")
+
+
+class PayloadSigner:
+    def __init__(self):
+        _ensure_runtime_env()
+        self.service = ServerModeService(
+            snapshot_service=None,
+            get_db=lambda: None,
+            audit=lambda *args, **kwargs: None,
+        )
+
+    def build(self, *, report_type: str, raw_report: dict, passed: bool, test_result: str, critical: int = 0, high: int = 0, unresolved: list | None = None, tester: str, report_source: str, target_commit: str, target_branch: str, server_mode: str = "") -> dict:
+        attestation = self.service._prepare_production_report_attestation(
+            report_type=report_type,
+            raw_report=raw_report,
+            target_commit=target_commit,
+            target_branch=target_branch,
+            server_mode=server_mode,
+            test_result=test_result,
+            passed=passed,
+            critical_findings_count=critical,
+            high_findings_count=high,
+            unresolved_findings=unresolved or [],
+            tester=tester,
+            report_source=report_source,
+        )
+        if not attestation.get("ok"):
+            raise RuntimeError(attestation.get("reason") or "failed to sign production report payload")
+        return {
+            "report_type": report_type,
+            "report_hash": attestation["report_hash"],
+            "signature": attestation["signature"],
+            "key_version": attestation["key_version"],
+            "target_commit": target_commit,
+            "target_branch": target_branch,
+            "server_mode": server_mode,
+            "test_result": test_result,
+            "pass": bool(passed),
+            "critical_findings_count": int(critical),
+            "high_findings_count": int(high),
+            "unresolved_findings": list(unresolved or []),
+            "tester": tester,
+            "report_source": report_source,
+            "raw_report": raw_report,
+        }
+
+
+def _payload_md(payload: dict, canonical_path: Path) -> str:
+    raw = payload["raw_report"]
+    lines = [
+        f"# {payload['report_type']} production report",
+        "",
+        f"- canonical_payload: `{canonical_path}`",
+        f"- test_result: `{payload['test_result']}`",
+        f"- pass: `{payload['pass']}`",
+        f"- report_hash: `{payload['report_hash']}`",
+        f"- key_version: `{payload['key_version']}`",
+        f"- target_branch: `{payload.get('target_branch') or '-'}`",
+        f"- target_commit: `{payload.get('target_commit') or '-'}`",
+        f"- report_source: `{payload.get('report_source') or '-'}`",
+        "",
+        "## Summary",
+        "",
+        f"- status: `{raw.get('status', '-')}`",
+        f"- summary: {raw.get('summary', '-')}",
+    ]
+    artifacts = raw.get("artifacts") or {}
+    if artifacts:
+        lines.extend(["", "## Artifacts", ""])
+        for key, value in artifacts.items():
+            lines.append(f"- {key}: `{value}`")
+    return "\n".join(lines)
+
+
+def _make_payload(report_type: str, raw_report: dict, *, passed: bool, tester: str, report_source: str, meta: dict, canonical_json: Path, canonical_md: Path, signer: PayloadSigner, critical: int = 0, high: int = 0, unresolved: list | None = None, server_mode: str = "") -> dict:
+    payload = signer.build(
+        report_type=report_type,
+        raw_report=raw_report,
+        passed=passed,
+        test_result="pass" if passed else "fail",
+        critical=critical,
+        high=high,
+        unresolved=unresolved or [],
+        tester=tester,
+        report_source=report_source,
+        target_commit=meta["target_commit"],
+        target_branch=meta["target_branch"],
+        server_mode=server_mode,
+    )
+    _json_dump(canonical_json, payload)
+    _text_dump(canonical_md, _payload_md(payload, canonical_json))
+    return payload
+
+
+def _report_paths(out_root: Path, report_type: str) -> tuple[Path, Path]:
+    return out_root / f"{report_type}_report.json", out_root / f"{report_type}_report.md"
+
+
+def _script_report(raw_dir: Path, report_type: str, command: list[str], *, timeout: int, signer: PayloadSigner, meta: dict) -> dict:
+    artifact_dir = raw_dir / report_type
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    result = _run(command + ["--out", str(artifact_dir)], timeout=timeout)
+    parsed = {}
+    try:
+        parsed = json.loads(result.stdout.strip()) if result.stdout.strip() else {}
+    except Exception:
+        parsed = {}
+    artifacts = {}
+    for key in ("json_report", "md_report"):
+        if parsed.get(key):
+            artifacts[key] = str(parsed[key])
+    raw_report = {
+        "report_type": report_type,
+        "status": "pass" if result.ok else "fail",
+        "summary": _last_nonempty_line(result.stdout) or _last_nonempty_line(result.stderr) or f"returncode={result.returncode}",
+        "generator": " ".join(command),
+        "artifacts": artifacts,
+        "duration_ms": result.duration_ms,
+        "stdout_summary": parsed or {"stdout_tail": _tail(result.stdout), "stderr_tail": _tail(result.stderr)},
+    }
+    return _make_payload(
+        report_type,
+        raw_report,
+        passed=result.ok,
+        tester="on_live_reports_make.sh",
+        report_source="on_live_reports_make.sh",
+        meta=meta,
+        canonical_json=_report_paths(raw_dir.parent, report_type)[0],
+        canonical_md=_report_paths(raw_dir.parent, report_type)[1],
+        signer=signer,
+        high=0 if result.ok else 1,
+    )
+
+
+def _pytest_report(out_root: Path, raw_dir: Path, report_type: str, test_args: list[str], *, timeout: int, signer: PayloadSigner, meta: dict) -> dict:
+    log_path = raw_dir / f"{report_type}_pytest.log"
+    result = _run([sys.executable, "-m", "pytest", "-q", *test_args], timeout=timeout)
+    _text_dump(log_path, result.stdout + ("\n" + result.stderr if result.stderr else ""))
+    raw_report = {
+        "report_type": report_type,
+        "status": "pass" if result.ok else "fail",
+        "summary": _last_nonempty_line(result.stdout) or _last_nonempty_line(result.stderr) or f"returncode={result.returncode}",
+        "generator": f"PYTHONPATH=. python3 -m pytest -q {' '.join(test_args)}",
+        "artifacts": {"pytest_log": str(log_path)},
+        "duration_ms": result.duration_ms,
+    }
+    canonical_json, canonical_md = _report_paths(out_root, report_type)
+    return _make_payload(
+        report_type,
+        raw_report,
+        passed=result.ok,
+        tester="on_live_reports_make.sh",
+        report_source="on_live_reports_make.sh",
+        meta=meta,
+        canonical_json=canonical_json,
+        canonical_md=canonical_md,
+        signer=signer,
+        high=0 if result.ok else 1,
+    )
+
+
+def _functional_report(out_root: Path, raw_dir: Path, args, signer: PayloadSigner, meta: dict) -> dict:
+    report_root = raw_dir / "functional_root"
+    result = _run(
+        [
+            "bash",
+            str(ROOT / "scripts" / "security" / "pentest" / "run_functional_smoke.sh"),
+            "--port",
+            str(args.functional_port),
+            "--out",
+            str(report_root),
+        ],
+        timeout=args.functional_timeout,
+    )
+    latest = _find_latest_paths(report_root, "functional_*")
+    artifacts = {}
+    if latest:
+        artifacts["report_dir"] = str(latest[0])
+        summary = latest[0] / "00_FUNCTIONAL_SMOKE.md"
+        if summary.exists():
+            artifacts["summary_md"] = str(summary)
+    raw_report = {
+        "report_type": "functional",
+        "status": "pass" if result.ok else "fail",
+        "summary": _last_nonempty_line(result.stdout) or _last_nonempty_line(result.stderr) or f"returncode={result.returncode}",
+        "generator": "scripts/security/pentest/run_functional_smoke.sh",
+        "artifacts": artifacts,
+        "duration_ms": result.duration_ms,
+    }
+    canonical_json, canonical_md = _report_paths(out_root, "functional")
+    return _make_payload("functional", raw_report, passed=result.ok, tester="on_live_reports_make.sh", report_source="on_live_reports_make.sh", meta=meta, canonical_json=canonical_json, canonical_md=canonical_md, signer=signer, high=0 if result.ok else 1)
+
+
+def _pentest_report(out_root: Path, raw_dir: Path, args, signer: PayloadSigner, meta: dict) -> dict:
+    report_root = raw_dir / "pentest_root"
+    env = {
+        "ROOT_PASSWORD": args.target_root_password,
+        "MANAGER_PASSWORD": args.manager_password,
+        "TEST_PASSWORD": args.test_password,
+    }
+    command = [
+        "bash",
+        str(ROOT / "scripts" / "security" / "pentest" / "run_pentest.sh"),
+        "--target",
+        args.base_url,
+        "--out",
+        str(report_root),
+    ]
+    if args.i_own_this_target:
+        command.append("--i-own-this-target")
+    result = _run(command, env=env, timeout=args.pentest_timeout)
+    latest = _find_latest_paths(report_root, "20*")
+    artifacts = {}
+    if latest:
+        artifacts["report_dir"] = str(latest[0])
+        summary = latest[0] / "00_SUMMARY.md"
+        if summary.exists():
+            artifacts["summary_md"] = str(summary)
+    raw_report = {
+        "report_type": "pentest",
+        "status": "pass" if result.ok else "fail",
+        "summary": _last_nonempty_line(result.stdout) or _last_nonempty_line(result.stderr) or f"returncode={result.returncode}",
+        "generator": "scripts/security/pentest/run_pentest.sh",
+        "artifacts": artifacts,
+        "duration_ms": result.duration_ms,
+    }
+    canonical_json, canonical_md = _report_paths(out_root, "pentest")
+    return _make_payload("pentest", raw_report, passed=result.ok, tester="on_live_reports_make.sh", report_source="on_live_reports_make.sh", meta=meta, canonical_json=canonical_json, canonical_md=canonical_md, signer=signer, high=0 if result.ok else 1)
+
+
+def _permission_report(out_root: Path, raw_dir: Path, args, signer: PayloadSigner, meta: dict) -> dict:
+    report_dir = raw_dir / "permission"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    out_json = report_dir / "functional_permission_pentest.json"
+    out_md = report_dir / "functional_permission_pentest.md"
+    env = {
+        "ROOT_PASSWORD": args.target_root_password,
+        "MANAGER_PASSWORD": args.manager_password,
+        "TEST_PASSWORD": args.test_password,
+    }
+    command = [
+        sys.executable,
+        str(ROOT / "scripts" / "security" / "pentest" / "functional_permission_pentest.py"),
+        "--base-url",
+        args.base_url,
+        "--out-json",
+        str(out_json),
+        "--out-md",
+        str(out_md),
+    ]
+    result = _run(command, env=env, timeout=args.permission_timeout)
+    report_payload = {}
+    if out_json.exists():
+        try:
+            report_payload = json.loads(out_json.read_text(encoding="utf-8"))
+        except Exception:
+            report_payload = {}
+    passed = bool(report_payload.get("ok", result.ok)) if report_payload else result.ok
+    raw_report = {
+        "report_type": "permission",
+        "status": "pass" if passed else "fail",
+        "summary": report_payload.get("summary") or _last_nonempty_line(result.stdout) or f"returncode={result.returncode}",
+        "generator": "python3 scripts/security/pentest/functional_permission_pentest.py",
+        "artifacts": {"json_report": str(out_json), "md_report": str(out_md)},
+        "duration_ms": result.duration_ms,
+        "script_payload": report_payload,
+    }
+    canonical_json, canonical_md = _report_paths(out_root, "permission")
+    return _make_payload("permission", raw_report, passed=passed, tester="on_live_reports_make.sh", report_source="on_live_reports_make.sh", meta=meta, canonical_json=canonical_json, canonical_md=canonical_md, signer=signer, high=0 if passed else 1)
+
+
+def _stress_report(out_root: Path, raw_dir: Path, args, signer: PayloadSigner, meta: dict) -> dict:
+    report_dir = raw_dir / "stress"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    general = _run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "security" / "pentest" / "stress_test.py"),
+            "--target",
+            args.base_url,
+            "--out",
+            str(report_dir),
+            "--i-own-this-target",
+        ]
+        if args.i_own_this_target
+        else [
+            sys.executable,
+            str(ROOT / "scripts" / "security" / "pentest" / "stress_test.py"),
+            "--target",
+            args.base_url,
+            "--out",
+            str(report_dir),
+        ],
+        timeout=args.stress_timeout,
+    )
+    trading_env = {"ROOT_PASSWORD": args.target_root_password}
+    if args.root_new_password:
+        trading_env["PENTEST_ROOT_NEW_PASSWORD"] = args.root_new_password
+    trading = _run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "security" / "pentest" / "trading_stress_pentest.py"),
+            "--base-url",
+            args.base_url,
+            "--mode",
+            "functional_correctness",
+            "--users",
+            "2",
+            "--orders-per-user",
+            "5",
+            "--concurrency",
+            "2",
+            "--rate",
+            "10",
+            "--out",
+            str(report_dir),
+        ],
+        env=trading_env,
+        timeout=args.trading_stress_timeout,
+    )
+    artifacts = {}
+    for pattern, key in (
+        ("stress_*.json", "http_stress_json"),
+        ("stress_*.md", "http_stress_md"),
+        ("trading_stress_report_*.json", "trading_stress_json"),
+        ("trading_stress_report_*.md", "trading_stress_md"),
+    ):
+        matches = _find_latest_paths(report_dir, pattern)
+        if matches:
+            artifacts[key] = str(matches[0])
+    passed = general.ok and trading.ok
+    raw_report = {
+        "report_type": "stress",
+        "status": "pass" if passed else "fail",
+        "summary": f"http_stress={'pass' if general.ok else 'fail'}, trading_stress={'pass' if trading.ok else 'fail'}",
+        "generator": "python3 scripts/security/pentest/stress_test.py + python3 scripts/security/pentest/trading_stress_pentest.py",
+        "artifacts": artifacts,
+        "duration_ms": general.duration_ms + trading.duration_ms,
+        "subchecks": {
+            "http_stress": {"returncode": general.returncode, "stdout_tail": _tail(general.stdout), "stderr_tail": _tail(general.stderr)},
+            "trading_stress": {"returncode": trading.returncode, "stdout_tail": _tail(trading.stdout), "stderr_tail": _tail(trading.stderr)},
+        },
+    }
+    canonical_json, canonical_md = _report_paths(out_root, "stress")
+    return _make_payload("stress", raw_report, passed=passed, tester="on_live_reports_make.sh", report_source="on_live_reports_make.sh", meta=meta, canonical_json=canonical_json, canonical_md=canonical_md, signer=signer, high=0 if passed else 1)
+
+
+def _log_chain_report(out_root: Path, client: LiveClient, signer: PayloadSigner, meta: dict) -> dict:
+    status, payload, _ = client._request("/api/root/server-mode/logs/verify")
+    details = payload.get("details") or {}
+    passed = status == 200 and bool(payload.get("ok")) and int(payload.get("broken_links") or 0) == 0
+    raw_report = {
+        "report_type": "log_chain_verify",
+        "status": "pass" if passed else "fail",
+        "summary": f"chain_length={payload.get('chain_length', 0)}, broken_links={payload.get('broken_links', 0)}, result={payload.get('result', '-')}",
+        "generator": "GET /api/root/server-mode/logs/verify",
+        "details": payload,
+        "artifacts": {},
+    }
+    canonical_json, canonical_md = _report_paths(out_root, "log_chain_verify")
+    return _make_payload("log_chain_verify", raw_report, passed=passed, tester="on_live_reports_make.sh", report_source="on_live_reports_make.sh", meta=meta, canonical_json=canonical_json, canonical_md=canonical_md, signer=signer, high=0 if passed else 1, unresolved=list(details.get("mismatches") or []))
+
+
+def _integrity_report(out_root: Path, client: LiveClient, signer: PayloadSigner, meta: dict) -> dict:
+    rescan_status, rescan_payload, _ = client._request("/api/root/integrity/rescan", method="POST", body={})
+    report_status, report_payload, _ = client._request("/api/root/integrity/report")
+    report = report_payload.get("report") or {}
+    status = report.get("status") or {}
+    summary = status.get("summary") or {}
+    health = status.get("health") or {}
+    high_pending = int(summary.get("high_risk_pending") or 0)
+    passed = rescan_status == 200 and bool(rescan_payload.get("ok")) and report_status == 200 and bool(report_payload.get("ok")) and high_pending == 0 and str(health.get("level") or "").lower() not in {"critical", "error"}
+    raw_report = {
+        "report_type": "integrity_guard",
+        "status": "pass" if passed else "fail",
+        "summary": f"health={health.get('level', '-')}, pending={summary.get('pending', 0)}, high_risk_pending={high_pending}",
+        "generator": "POST /api/root/integrity/rescan + GET /api/root/integrity/report",
+        "details": {"rescan": rescan_payload, "report": report_payload},
+        "artifacts": {},
+    }
+    canonical_json, canonical_md = _report_paths(out_root, "integrity_guard")
+    return _make_payload("integrity_guard", raw_report, passed=passed, tester="on_live_reports_make.sh", report_source="on_live_reports_make.sh", meta=meta, canonical_json=canonical_json, canonical_md=canonical_md, signer=signer, high=high_pending)
+
+
+def _upload_payloads(client: LiveClient, payload_paths: list[Path]) -> list[dict]:
+    results = []
+    for path in payload_paths:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        status, response, _ = client._request("/api/root/production-report/upload", method="POST", body=payload)
+        results.append({"path": str(path), "status": status, "ok": bool(response.get("ok")), "response": response})
+    return results
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Generate all 13 production-gate reports and stage upload-ready payloads under runtime/reports/security/production_gate.")
+    parser.add_argument("--base-url", default="", help="Live base URL for root-only and live-target checks. Default: auto-detect 127.0.0.1:5000 via https/http.")
+    parser.add_argument("--root-username", default=os.environ.get("ROOT_USERNAME", "root"))
+    parser.add_argument("--root-password", default=os.environ.get("ROOT_PASSWORD", ""))
+    parser.add_argument("--manager-password", default=os.environ.get("MANAGER_PASSWORD", "ManagerSmoke123!"))
+    parser.add_argument("--test-password", default=os.environ.get("TEST_PASSWORD", "TestSmoke123!"))
+    parser.add_argument("--root-new-password", default=os.environ.get("PENTEST_ROOT_NEW_PASSWORD", ""))
+    parser.add_argument("--out", default=str(security_reports_root() / "production_gate"))
+    parser.add_argument("--functional-port", type=int, default=50741)
+    parser.add_argument("--functional-timeout", type=int, default=900)
+    parser.add_argument("--pentest-timeout", type=int, default=3600)
+    parser.add_argument("--stress-timeout", type=int, default=600)
+    parser.add_argument("--trading-stress-timeout", type=int, default=600)
+    parser.add_argument("--pytest-timeout", type=int, default=7200)
+    parser.add_argument("--upload", action="store_true", help="Upload the generated payloads to /api/root/production-report/upload after generation.")
+    parser.add_argument("--i-own-this-target", action="store_true", help="Allow non-loopback/non-local targets for scripts that require explicit operator confirmation.")
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    if not args.base_url:
+        args.base_url = _auto_detect_base_url()
+    if not args.root_password:
+        raise SystemExit("請傳入 --root-password，或先設 ROOT_PASSWORD。")
+
+    out_root = Path(args.out).expanduser().resolve()
+    run_id = _now_stamp()
+    raw_dir = out_root / "runs" / run_id
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    _ensure_runtime_env()
+
+    client = LiveClient(args.base_url)
+    client.login(args.root_username, args.root_password)
+
+    meta = _target_meta()
+    signer = PayloadSigner()
+    payloads: dict[str, dict] = {}
+
+    payloads["clean_smoke"] = _script_report(raw_dir, "clean_smoke", [sys.executable, str(ROOT / "scripts" / "security" / "server_mode" / "server_mode_v2_clean_smoke.py")], timeout=900, signer=signer, meta=meta)
+    payloads["adversarial"] = _script_report(raw_dir, "adversarial", [sys.executable, str(ROOT / "scripts" / "security" / "server_mode" / "server_mode_v2_adversarial.py")], timeout=900, signer=signer, meta=meta)
+    payloads["redteam_l2"] = _script_report(raw_dir, "redteam_l2", [sys.executable, str(ROOT / "scripts" / "security" / "server_mode" / "server_mode_v2_redteam_l2.py")], timeout=900, signer=signer, meta=meta)
+
+    payloads["pytest"] = _pytest_report(out_root, raw_dir, "pytest", ["tests"], timeout=args.pytest_timeout, signer=signer, meta=meta)
+    payloads["log_chain_verify"] = _log_chain_report(out_root, client, signer, meta)
+    payloads["integrity_guard"] = _integrity_report(out_root, client, signer, meta)
+    payloads["stress"] = _stress_report(out_root, raw_dir, args, signer, meta)
+    payloads["permission"] = _permission_report(out_root, raw_dir, args, signer, meta)
+    payloads["functional"] = _functional_report(out_root, raw_dir, args, signer, meta)
+    payloads["pentest"] = _pentest_report(out_root, raw_dir, args, signer, meta)
+    payloads["snapshot_restore"] = _pytest_report(out_root, raw_dir, "snapshot_restore", ["tests/snapshots/test_snapshots.py"], timeout=args.pytest_timeout, signer=signer, meta=meta)
+    payloads["points_chain_consistency"] = _pytest_report(out_root, raw_dir, "points_chain_consistency", ["tests/points/test_points_chain.py"], timeout=args.pytest_timeout, signer=signer, meta=meta)
+    payloads["cloud_drive_quota_permission"] = _pytest_report(out_root, raw_dir, "cloud_drive_quota_permission", ["tests/storage/test_cloud_drive_attachments.py", "tests/storage/test_storage_albums_schema.py"], timeout=args.pytest_timeout, signer=signer, meta=meta)
+
+    missing = [name for name in PRODUCTION_REQUIRED_REPORT_TYPES if name not in payloads]
+    if missing:
+        raise SystemExit(f"missing production reports: {missing}")
+
+    upload_results = []
+    if args.upload:
+        payload_paths = [_report_paths(out_root, name)[0] for name in PRODUCTION_REQUIRED_REPORT_TYPES]
+        upload_results = _upload_payloads(client, payload_paths)
+
+    summary = {
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "base_url": args.base_url,
+        "out_root": str(out_root),
+        "run_dir": str(raw_dir),
+        "reports": {name: {"pass": bool(payloads[name]["pass"]), "path": str(_report_paths(out_root, name)[0])} for name in PRODUCTION_REQUIRED_REPORT_TYPES},
+        "all_passed": all(bool(payloads[name]["pass"]) for name in PRODUCTION_REQUIRED_REPORT_TYPES),
+        "upload_results": upload_results,
+    }
+    _json_dump(out_root / f"on_live_reports_make_{run_id}.json", summary)
+    _text_dump(
+        out_root / f"on_live_reports_make_{run_id}.md",
+        "\n".join(
+            [
+                "# on_live_reports_make summary",
+                "",
+                f"- base_url: `{args.base_url}`",
+                f"- out_root: `{out_root}`",
+                f"- run_dir: `{raw_dir}`",
+                f"- all_passed: `{summary['all_passed']}`",
+                "",
+                "## Reports",
+                "",
+                *[
+                    f"- {name}: `{'PASS' if payloads[name]['pass'] else 'FAIL'}` -> `{_report_paths(out_root, name)[0]}`"
+                    for name in PRODUCTION_REQUIRED_REPORT_TYPES
+                ],
+            ]
+        ),
+    )
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    return 0 if summary["all_passed"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

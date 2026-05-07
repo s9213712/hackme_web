@@ -15,7 +15,7 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from services.upload_security import safe_public_filename
+from services.security.upload_security import safe_public_filename
 
 
 MAX_BDECODE_DEPTH = 64

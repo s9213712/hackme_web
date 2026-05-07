@@ -7,7 +7,7 @@ import time
 from flask import Response, request
 
 from services.points_chain import DISPLAY_CURRENCY
-from services.sanction_notices import record_admin_sanction_notice
+from services.governance.sanction_notices import record_admin_sanction_notice
 
 
 def register_economy_routes(app, deps):

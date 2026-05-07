@@ -1,0 +1,22 @@
+from tests.comfyui._integration_suite import (
+    test_comfyui_batch_limit_is_root_configurable,
+    test_comfyui_billing_quote_rejects_total_run_cost_before_work,
+    test_comfyui_default_dimensions_are_root_configurable,
+    test_comfyui_generate_async_job_captures_request_meta_before_thread_handoff,
+    test_comfyui_generate_async_job_reports_progress_and_result,
+    test_comfyui_generate_rejects_controlnet_strength_out_of_range,
+    test_comfyui_generate_rejects_invalid_control_image_format,
+    test_comfyui_generate_rejects_unsupported_lora_base_model,
+    test_comfyui_generate_rejects_when_controlnet_model_missing,
+    test_comfyui_generate_rejects_when_workflow_node_missing,
+    test_comfyui_generation_does_not_charge_root,
+    test_comfyui_generation_failure_does_not_charge_points,
+    test_comfyui_generation_rejects_when_points_are_insufficient_before_work,
+    test_comfyui_generation_requires_billing_confirmation_for_non_root,
+    test_comfyui_history_rerun_reuses_saved_assets,
+    test_comfyui_image_preview_returns_uploaded_asset_preview,
+    test_comfyui_img2img_controlnet_generate_uploads_assets_and_records_history,
+    test_comfyui_lora_billing_quote_adds_one_point_per_lora_per_image,
+    test_comfyui_models_and_generate_routes,
+)
+

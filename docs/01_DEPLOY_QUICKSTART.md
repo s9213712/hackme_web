@@ -25,13 +25,13 @@
 從 repo 根目錄執行：
 
 ```bash
-./deploy.sh
+./one_click_setup.sh
 ```
 
 若你已經知道要接本地 ComfyUI 與 root-only Civitai 搜尋/下載，可直接：
 
 ```bash
-./deploy.sh --with-comfyui http://127.0.0.1:8192 --with-civitai-key '<CIVITAI_API_KEY>'
+./one_click_setup.sh --with-comfyui http://127.0.0.1:8192 --with-civitai-key '<CIVITAI_API_KEY>'
 ```
 
 如果你想手動方式：
@@ -47,7 +47,7 @@ python3 server.py
 
 1. 先看 server console 印出的實際 URL，不要先假設一定是 HTTP 或 HTTPS。
 2. 一般情況：
-   - `./deploy.sh` / production wizard：依設定可能是 HTTP 或 HTTPS
+   - `./one_click_setup.sh` / production wizard：依設定可能是 HTTP 或 HTTPS
    - `python3 server.py`：本機開發模式通常會自動準備本地 TLS，因此多半是
      `https://127.0.0.1:5000/`
 3. 若不確定，直接探測：
@@ -77,8 +77,8 @@ python3 server.py
 ### 最短驗證
 
 ```bash
-python3 scripts/pre_push_checks.py
-security/run_functional_smoke.sh --port 50741
+python3 scripts/prepush/pre_push_checks.py
+scripts/security/pentest/run_functional_smoke.sh --port 50741
 ```
 
 如果你只想先看版本：
@@ -91,11 +91,11 @@ done
 
 ## 原理
 
-- `./deploy.sh` 是推薦入口，會幫你建立 `.venv`、安裝 requirements、委派
-  `scripts/run_prod.sh` 的部署精靈，並初始化 DB / 啟動服務。
+- `./one_click_setup.sh` 是推薦入口，會幫你建立 `.venv`、安裝 requirements、
+  視需要啟動部署精靈，並初始化 DB / 啟動服務。
 - 若 `.venv` 已備妥、你只想在隔離環境做快速檢查，可用：
-  `./deploy.sh --check-only --skip-install`
-- `scripts/run_prod.sh --check` 現在除了基本 env/路徑檢查，還會提醒你目前是否缺：
+  `./one_click_setup.sh --check-only --skip-install`
+- `./one_click_setup.sh --check` 現在除了基本 env/路徑檢查，還會提醒你目前是否缺：
   - `ffmpeg` / `ffprobe`（影音 HLS 衍生檔）
   - `CIVITAI_API_KEY`（root-only Civitai 搜尋/下載）
   這些不會阻擋一般部署，只是能力提示。
@@ -108,7 +108,7 @@ done
 
 ## 失敗情境與提示
 
-- `./deploy.sh` 找不到或權限不足：
+- `./one_click_setup.sh` 找不到或權限不足：
   請在 repo 根目錄執行，並確認檔案可執行。
 - 能啟動但頁面打不開：
   先看 bind host / port 是否被占用，再看
@@ -121,8 +121,8 @@ done
 
 ## 測試方式
 
-- `python3 scripts/pre_push_checks.py`
-- `security/run_functional_smoke.sh --port 50741`
+- `python3 scripts/prepush/pre_push_checks.py`
+- `scripts/security/pentest/run_functional_smoke.sh --port 50741`
 - `for scheme in https http; do curl -ksSf "${scheme}://127.0.0.1:5000/api/version" && echo "$scheme works"; done`
 - 手動登入 `root`，確認首頁、設定頁、主要模組頁可載入
 

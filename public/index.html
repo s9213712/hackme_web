@@ -2075,14 +2075,9 @@
                     <div class="field">
                       <label>基礎模板</label>
                       <select id="trading-workflow-template-select">
-                        <option value="dip_buy">保守逢低買入</option>
-                        <option value="breakout_buy">突破追價買入</option>
-                        <option value="stop_loss">持倉跌破停損</option>
-                        <option value="rsi_scale">RSI 分批買賣</option>
-                        <option value="ma_pullback">MA 趨勢回踩</option>
-                        <option value="bollinger_reversion">布林通道均值回歸</option>
-                        <option value="kd_momentum">KD 動能追蹤</option>
-                        <option value="risk_guard">停利停損風控</option>
+                        <option value="dipbuy_rsi35_70_size99_late_tp15_nopyr_codex">回檔趨勢吸納 + 超晚減倉 15% + 不加碼（Codex）</option>
+                        <option value="auto_search_winner_claude_rev3_return">自動搜索勝出（Claude rev3_return）</option>
+                        <option value="auto_search_winner_claude_rev2">自動搜索勝出（Claude rev2）</option>
                       </select>
                     </div>
                     <div class="field">
@@ -2563,7 +2558,7 @@
           <summary>
             <div>
               <div class="drive-card-title">上線前測試</div>
-              <div class="drive-card-sub">root 可啟動滲透、越權、全功能與壓力測試；每種測試都有獨立進度條與詳細 log，報告會寫入 security/reports/root-triggered。</div>
+              <div class="drive-card-sub">root 可啟動滲透、越權、全功能與壓力測試；每種測試都有獨立進度條與詳細 log，報告會寫入 runtime/reports/security/root-triggered。</div>
             </div>
           </summary>
           <div class="drive-collapsible-body">
@@ -2909,7 +2904,7 @@
           切換到 <strong>production</strong> 之前必須兩塊都通過：<strong>(A) 切換前 blocker / 現況提示</strong>（鏈 / 完整性 / readiness / anomaly）+ <strong>(B) 13 份最新通過報告</strong>。<br>
           <strong>注意：</strong>production profile 的 HTTPS / audit chain / Integrity Guard / browser-only 等安全設定會在 mode switch 成功時自動套用，<strong>不是</strong>你必須先手動打開的上線前檢查項目。<br>
           ❌ 紅 = 不通過或缺少；⚠ 黃 = 接近 / 警告；✓ 綠 = 通過。各卡片附捷徑與失敗對策。<br>
-          詳細產生 / 上傳流程：<code>docs/examples/server_mode_v2/03_production_gate_playbook.md</code>。
+          詳細產生 / 上傳流程：<code>docs/server_mode_v2/03_production_gate_playbook.md</code>。
         </div>
 
         <div class="health-section-title" style="margin-top:.4rem;">A. 切換前 blocker / 現況提示（鏈 / 完整性 / readiness / anomaly）</div>
@@ -3513,6 +3508,7 @@
               <div class="field">
                 <label>啟動腳本</label>
                 <input type="text" id="s-comfyui-local-start-script" placeholder="run_in_linux.sh" />
+                <div class="drive-card-sub">需要範本時，可直接<a id="comfyui-local-start-template-link" href="/api/root/comfyui/local-start-template" download>下載 Linux 啟動腳本 template</a>，再放進你的 ComfyUI 本地資料夾。</div>
               </div>
               <div class="field">
                 <label>本地 API Host / IP</label>

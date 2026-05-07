@@ -3,7 +3,7 @@ from datetime import datetime
 
 def notifications_enabled(default=True):
     try:
-        from services.settings import DEFAULT_SETTINGS, get_system_settings
+        from services.platform.settings import DEFAULT_SETTINGS, get_system_settings
         settings = get_system_settings()
         return bool(settings.get(
             "feature_reports_notifications_enabled",

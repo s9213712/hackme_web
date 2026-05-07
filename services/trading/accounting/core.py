@@ -1,9 +1,9 @@
 """Pure trading accounting helpers.
 
 This module groups the small numeric helpers that make up the shared
-accounting core for trading. The legacy ``services.trading_engine``
-module still owns orchestration and state changes; these helpers only
-perform deterministic calculations.
+accounting core for trading. The concrete engine in
+``services.trading.engine`` still owns orchestration and state changes;
+these helpers only perform deterministic calculations.
 """
 
 from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_DOWN, ROUND_HALF_UP

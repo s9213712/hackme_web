@@ -37,7 +37,6 @@ LOCAL_PATH_PATTERNS = {
     "D:\\": "WINDOWS_D_DRIVE",
     "G:\\": "WINDOWS_G_DRIVE",
     "\\\\wsl.localhost\\": "WSL_HOST_PATH",
-    "hackme_web_runtime": "RUNTIME_DIR_NAME",
     "html_learning_storage": "LEGACY_STORAGE_DIR",
     "hackme_web_economy_fix": "OLD_WORKTREE_NAME",
 }

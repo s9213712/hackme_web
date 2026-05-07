@@ -13,8 +13,7 @@ separate locations so a downloaded release starts cleanly.
 | `public/` | Browser assets. |
 | `bootstrap.schema.sql` | Bootstrap schema only. Runtime SQLite databases are not tracked. |
 | `tests/` | Automated regression tests. |
-| `scripts/` | Operator and local validation scripts. |
-| `security/` | Security, smoke, and pentest runner scripts. |
+| `scripts/` | Operator, validation, security, and feature probe scripts. |
 | `docs/` | User, admin, security, API, deployment, and release documentation. |
 
 ## Runtime Data
@@ -36,7 +35,7 @@ weekly salary jobs are not run at startup unless the operator explicitly sets
 | `runtime/chats/` | Chat sidecar logs. |
 | `runtime/anchors/` | Audit/integrity anchor files. |
 | `runtime/logs/` | Server and audit text logs. |
-| `security/reports/` | Security, smoke, and pentest reports. |
+| `runtime/reports/security/` | Security, smoke, and pentest reports. |
 | `secure_backups/` | Legacy local PointsChain backup path; ignored. |
 | `runtime/database/points_chain_backups/` | Current PointsChain ledger backup location when using the default runtime layout. |
 | `runtime/cert.pem`, `runtime/key.pem` | Local TLS files generated on first start. |
@@ -63,9 +62,8 @@ directory needs to exist in a fresh checkout.
 
 ## Security Script Policy
 
-- Executable test scripts live under `security/`.
-- Generated reports live under `security/reports/`.
-- Only `security/reports/.gitkeep` is tracked.
+- Executable security test scripts live under `scripts/security/`.
+- Generated reports live under `runtime/reports/security/`.
 - Reports, raw responses, cookies, server output, and snapshots are local
   artifacts and should be regenerated when needed.
 
@@ -78,7 +76,7 @@ refactors because they are large maintenance surfaces:
 - `public/styles.css`
 - `public/js/50-admin.js`
 - `public/js/35-drive.js`
-- `services/points_chain.py`
+- `services/points_chain/service.py`
 - `routes/files.py`
 - `routes/community.py`
 - `routes/system_admin.py`

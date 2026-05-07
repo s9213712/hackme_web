@@ -2936,7 +2936,7 @@ function renderServerModeRequirements(requirements) {
 
 // ── 上線前檢查分頁（13 份 production gate report）────────────────────────────
 //
-// Each entry: label / purpose / generator / tip (failure remediation) / shortcut
+// Each entry: label / purpose / generator / defaultOutput / tip / shortcut
 // shortcut.kind:
 //   "ui"      -> jump to the in-app panel that triggers this report
 //   "doc"     -> link to the playbook / spec file (CLI-only generators)
@@ -2944,91 +2944,104 @@ const LAUNCH_CHECK_REPORT_META = {
   clean_smoke: {
     label: "Mode v2 乾淨 smoke",
     purpose: "boot path / state-machine / 基線 endpoints 在乾淨狀態下都過。",
-    generator: "python3 security/server_mode_v2_clean_smoke.py",
+    generator: "python3 scripts/security/server_mode/server_mode_v2_clean_smoke.py",
+    defaultOutput: "runtime/reports/security/server_mode_v2_clean_smoke_<timestamp>.json|.md",
     tip: "失敗多半是某個 mode 切換邏輯被改壞；先看輸出 JSON 的 first failing step。",
-    shortcut: { kind: "doc", label: "playbook §1 No.1", href: "docs/examples/server_mode_v2/03_production_gate_playbook.md" },
+    shortcut: { kind: "doc", label: "playbook §1 No.1", href: "docs/server_mode_v2/03_production_gate_playbook.md" },
   },
   adversarial: {
     label: "Mode v2 對抗測試",
     purpose: "injection / bypass / mode-spoof 等對抗手法都被擋下。",
-    generator: "python3 security/server_mode_v2_adversarial.py",
+    generator: "python3 scripts/security/server_mode/server_mode_v2_adversarial.py",
+    defaultOutput: "runtime/reports/security/server_mode_v2_adversarial_<timestamp>.json|.md",
     tip: "失敗代表有可繞過的權限漏洞，**不可** 放行 production；先 fix 再上。",
-    shortcut: { kind: "doc", label: "playbook §1 No.2", href: "docs/examples/server_mode_v2/03_production_gate_playbook.md" },
+    shortcut: { kind: "doc", label: "playbook §1 No.2", href: "docs/server_mode_v2/03_production_gate_playbook.md" },
   },
   redteam_l2: {
     label: "Mode v2 Red-team L2",
     purpose: "Red-team Level 2 攻擊樹（multi-step exploit）。",
-    generator: "python3 security/server_mode_v2_redteam_l2.py",
+    generator: "python3 scripts/security/server_mode/server_mode_v2_redteam_l2.py",
+    defaultOutput: "runtime/reports/security/server_mode_v2_redteam_l2_<timestamp>.json|.md",
     tip: "失敗代表某條 exploit chain 仍可走；找 chain 中第一個能擋的點補強。",
-    shortcut: { kind: "doc", label: "playbook §1 No.3", href: "docs/examples/server_mode_v2/03_production_gate_playbook.md" },
+    shortcut: { kind: "doc", label: "playbook §1 No.3", href: "docs/server_mode_v2/03_production_gate_playbook.md" },
   },
   pytest: {
     label: "全專案 pytest",
     purpose: "tests/ 全部 pytest 通過。",
     generator: "pytest tests/ -q",
+    defaultOutput: "runtime/reports/security/production_gate/pytest_production_report.json",
     tip: "失敗就跑 pytest -x 找最前面那條紅燈，先修它。",
-    shortcut: { kind: "doc", label: "tests/ 目錄", href: "docs/examples/server_mode_v2/03_production_gate_playbook.md" },
+    shortcut: { kind: "doc", label: "tests/ 目錄", href: "docs/server_mode_v2/03_production_gate_playbook.md" },
   },
   log_chain_verify: {
     label: "Log chain 完整性",
     purpose: "mode_switch_logs + audit chain 雜湊鏈完整無破洞。",
-    generator: "GET /api/admin/health/audit-chain ＋ services/server_mode_v2_log_chain_verify",
+    generator: "GET /api/root/server-mode/logs/verify",
+    defaultOutput: "runtime/reports/security/production_gate/log_chain_verify_report.json",
     tip: "失敗代表 audit chain 被改過（極危險）— 立刻進 incident_lockdown 調查。",
     shortcut: { kind: "ui", target: "health", anchor: "server-health-audit", label: "前往健康度 → 審計與檢查" },
   },
   integrity_guard: {
     label: "Integrity Guard 自檢",
     purpose: "IntegrityGuard 自檢無 high-risk finding。",
-    generator: "GET /api/admin/integrity/repair?dry_run=true",
+    generator: "POST /api/root/integrity/rescan ＋ GET /api/root/integrity/report",
+    defaultOutput: "runtime/reports/security/production_gate/integrity_guard_report.json",
     tip: "若有 high-risk file diff，請先確認是否為合法升級；不是就走 restore。",
     shortcut: { kind: "ui", target: "integrity", anchor: "integrity-findings", label: "前往 Integrity Guard 分頁" },
   },
   stress: {
     label: "壓力 / 流量壓測",
     purpose: "trading + 一般流量壓測無 OOM / deadlock / 大量錯誤。",
-    generator: "python3 security/stress_test.py + python3 security/trading_stress_pentest.py",
+    generator: "python3 scripts/security/pentest/stress_test.py + python3 scripts/security/pentest/trading_stress_pentest.py",
+    defaultOutput: "runtime/reports/security/stress_<timestamp>.json|.md ＋ runtime/reports/security/trading_stress_report_<timestamp>.json|.md",
     tip: "失敗多半是 worker 飽和或 race condition；先看 server log 的 spike 時間點。",
     shortcut: { kind: "ui", target: "security", anchor: "security-stress-start-btn", label: "前往總覽 → 壓力測試面板" },
   },
   permission: {
     label: "權限滲透",
     purpose: "role / permission pentest 無越權。",
-    generator: "python3 security/functional_permission_pentest.py",
+    generator: "python3 scripts/security/pentest/functional_permission_pentest.py",
+    defaultOutput: "runtime/reports/security/functional_permission_pentest_<timestamp>.json|.md",
     tip: "失敗代表某條 API 缺 require_role / require_csrf；補上後重跑。",
-    shortcut: { kind: "doc", label: "playbook §1 No.8", href: "docs/examples/server_mode_v2/03_production_gate_playbook.md" },
+    shortcut: { kind: "doc", label: "playbook §1 No.8", href: "docs/server_mode_v2/03_production_gate_playbook.md" },
   },
   functional: {
     label: "全功能 smoke",
     purpose: "全功能流程（登入 / 聊天 / 雲端硬碟 / 交易 / 積分 等）都正常。",
-    generator: "bash security/run_functional_smoke.sh ＋ python3 tests/smoke_suite.py",
+    generator: "bash scripts/security/pentest/run_functional_smoke.sh ＋ python3 tests/security/smoke/smoke_suite.py",
+    defaultOutput: "runtime/reports/security/functional_<run_id>/00_FUNCTIONAL_SMOKE.md ＋ raw/、results.tsv、server.out",
     tip: "失敗代表某個使用者流程已壞，可能是最近 commit 副作用。",
     shortcut: { kind: "ui", target: "security", anchor: "security-functional-start-btn", label: "前往總覽 → 全功能測試面板" },
   },
   pentest: {
     label: "安全滲透測試",
     purpose: "session / CSRF / XSS / SQLi 等滲透測試無重大發現。",
-    generator: "bash security/run_pentest.sh ＋ python3 security/session_security_pentest.py",
+    generator: "bash scripts/security/pentest/run_pentest.sh ＋ python3 scripts/security/pentest/session_security_pentest.py",
+    defaultOutput: "runtime/reports/security/<run_id>/00_SUMMARY.md ＋ raw/*.json|*.md|*.txt",
     tip: "失敗代表 web layer 有可利用洞，**絕不**可放上線；fix 後重跑。",
     shortcut: { kind: "ui", target: "security", anchor: "security-pentest-start-btn", label: "前往總覽 → 滲透測試面板" },
   },
   snapshot_restore: {
     label: "Snapshot / Restore",
     purpose: "snapshot 建立 + restore 回放 + 一致性驗證全程通過。",
-    generator: "pytest tests/test_snapshots.py ＋ 手動 1 次 create→restore→verify",
+    generator: "pytest tests/snapshots/test_snapshots.py ＋ 手動 1 次 create→restore→verify",
+    defaultOutput: "runtime/reports/security/production_gate/snapshot_restore_report.json",
     tip: "失敗代表 disaster recovery 不可靠；不要硬上 production。",
     shortcut: { kind: "ui", target: "settings", anchor: "snapshot-section", label: "前往伺服器設定 → 快照管理" },
   },
   points_chain_consistency: {
     label: "PointsChain 一致性",
     purpose: "PointsChain 雜湊鏈、區塊內 ledger 對應全部一致。",
-    generator: "pytest tests/test_points_chain.py ＋ services/points_chain.verify_chain()",
+    generator: "pytest tests/points/test_points_chain.py ＋ services/points_chain.verify_chain()",
+    defaultOutput: "runtime/reports/security/production_gate/points_chain_consistency_report.json",
     tip: "失敗等同帳本被污染，**不可** 上線；走 restore + 重新 verify。",
     shortcut: { kind: "ui", target: "settings", anchor: "server-mode-section", label: "前往伺服器設定 → 鏈狀態" },
   },
   cloud_drive_quota_permission: {
     label: "雲端硬碟 quota / 權限",
     purpose: "Cloud Drive quota、上傳權限、共享權限規則都正確。",
-    generator: "pytest tests/test_cloud_drive_attachments.py tests/test_storage_albums_schema.py",
+    generator: "pytest tests/storage/test_cloud_drive_attachments.py tests/storage/test_storage_albums_schema.py",
+    defaultOutput: "runtime/reports/security/production_gate/cloud_drive_quota_permission_report.json",
     tip: "失敗代表 quota 算錯或共享越權；先 fix 再產 report。",
     shortcut: { kind: "ui", target: "settings", anchor: "sec-settings-drive", label: "前往伺服器設定 → 雲端硬碟" },
   },
@@ -3247,7 +3260,7 @@ function launchCheckCardMarkup(reportType, reportRow, missing, failed, idx) {
   const meta = LAUNCH_CHECK_REPORT_META[reportType] || {
     label: reportType,
     purpose: "（未登錄的 report 類型）",
-    generator: "（請查 docs/examples/server_mode_v2/03_production_gate_playbook.md）",
+    generator: "（請查 docs/server_mode_v2/03_production_gate_playbook.md）",
     tip: "—",
   };
   let statusColor = "#4caf50";
@@ -3291,6 +3304,7 @@ function launchCheckCardMarkup(reportType, reportRow, missing, failed, idx) {
       </div>
       <div style="margin-top:.35rem;color:var(--text);"><strong>用途</strong>：${escape(meta.purpose)}</div>
       <div style="margin-top:.25rem;"><strong>產生方式</strong>：<code style="font-size:.7rem;">${escape(meta.generator)}</code></div>
+      ${meta.defaultOutput ? `<div style="margin-top:.25rem;"><strong>預設放置</strong>：<code style="font-size:.7rem;">${escape(meta.defaultOutput)}</code></div>` : ""}
       <div style="margin-top:.25rem;"><strong>失敗對策</strong>：${escape(meta.tip)}</div>
       ${stateNote ? `<div style="margin-top:.4rem;color:${statusColor};">⤷ ${escape(stateNote)}</div>` : ""}
       <div style="display:flex;gap:.45rem;flex-wrap:wrap;align-items:center;">
@@ -3438,7 +3452,7 @@ async function loadLaunchCheck() {
       summary.textContent = parts.join("、");
     }
     if (!required.length) {
-      list.innerHTML = `<div class="drive-empty">沒有定義 production gate report — 請檢查 services/snapshots.py:PRODUCTION_REQUIRED_REPORT_TYPES</div>`;
+      list.innerHTML = `<div class="drive-empty">沒有定義 production gate report — 請檢查 services/snapshots/schema.py:PRODUCTION_REQUIRED_REPORT_TYPES</div>`;
       return;
     }
     list.innerHTML = required

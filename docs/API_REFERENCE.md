@@ -7,8 +7,8 @@
 原本 API 說明分散在：
 
 - [For_developer.md](For_developer.md)
-- [TRADING.md](TRADING.md)
-- [TRADING_BOT_AUDIT.md](TRADING_BOT_AUDIT.md)
+- [TRADING.md](trading/TRADING.md)
+- [TRADING_BOT_AUDIT.md](trading/TRADING_BOT_AUDIT.md)
 - [07_POINTSCHAIN.md](07_POINTSCHAIN.md)
 - [SECURITY.md](SECURITY.md)
 
@@ -361,7 +361,7 @@ curl -k -sS https://127.0.0.1:5000/api/version
 ### Trading / Bots / Margin
 
 來源：`routes/trading.py`
-深層規格請看 [TRADING.md](TRADING.md) 與 [TRADING_BOT_AUDIT.md](TRADING_BOT_AUDIT.md)。
+深層規格請看 [TRADING.md](trading/TRADING.md) 與 [TRADING_BOT_AUDIT.md](trading/TRADING_BOT_AUDIT.md)。
 
 目前預設 seed 市場包含：
 
@@ -599,7 +599,7 @@ Workflow preset 補充：
 - 若改到交易 / 權限 / settings，至少補回歸：
 
 ```bash
-python3 scripts/pre_push_checks.py --ci
+python3 scripts/prepush/pre_push_checks.py --ci
 PYTHONPATH=. python3 -m pytest -q tests
 ```
 
@@ -607,7 +607,7 @@ PYTHONPATH=. python3 -m pytest -q tests
 
 - [CLI_ADMIN_PLAYBOOK.md](CLI_ADMIN_PLAYBOOK.md)
 - [For_developer.md](For_developer.md)
-- [TRADING.md](TRADING.md)
-- [TRADING_BOT_AUDIT.md](TRADING_BOT_AUDIT.md)
+- [TRADING.md](trading/TRADING.md)
+- [TRADING_BOT_AUDIT.md](trading/TRADING_BOT_AUDIT.md)
 - [07_POINTSCHAIN.md](07_POINTSCHAIN.md)
 - [SECURITY.md](SECURITY.md)

@@ -7,7 +7,7 @@ from flask import request, send_file
 
 from services.users.member_levels import apply_member_level_change, ensure_member_level_user_columns
 from services.storage.cloud_drive import ensure_cloud_drive_attachment_schema, resolve_file_storage_path, store_cloud_upload
-from services.sanction_notices import record_admin_sanction_notice
+from services.governance.sanction_notices import record_admin_sanction_notice
 from services.users.recovery import (
     ensure_account_recovery_schema,
     get_password_reset_review_request,

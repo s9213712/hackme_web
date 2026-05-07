@@ -1,0 +1,1 @@
+"""Trading competition tooling."""

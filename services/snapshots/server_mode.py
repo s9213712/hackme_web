@@ -1466,7 +1466,7 @@ class ServerModeService:
 
     def _apply_production_upload_policy(self, conn):
         try:
-            from services.upload_security import ensure_upload_security_schema, update_cloud_drive_security_policy
+            from services.security.upload_security import ensure_upload_security_schema, update_cloud_drive_security_policy
         except Exception:
             return {"ok": False, "msg": "upload security policy unavailable"}
         ensure_upload_security_schema(conn)

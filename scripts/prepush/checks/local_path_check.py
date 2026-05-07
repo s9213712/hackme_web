@@ -20,7 +20,7 @@ SCAN_EXTRA = (
     "docs/DEPLOYMENT.md",
     "docs/UPDATE_SUMMARY.md",
     "scripts",
-    "security",
+    "scripts/security",
 )
 
 
@@ -37,7 +37,7 @@ def scan_line(rel: str, line: str, line_no: int) -> list[dict[str, object]]:
             continue
         if rel == "hooks/pre-push" and "Release ID:\\s" in line:
             continue
-        if rel.startswith(("security/reports/", "reports/")):
+        if rel.startswith(("runtime/reports/", "reports/")):
             continue
         if rel.startswith("tests/") and ("sanitize" in line.lower() or "local path" in line.lower()):
             continue

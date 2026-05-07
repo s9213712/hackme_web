@@ -82,19 +82,19 @@ curl -k -sS -b "$JAR" "$BASE/api/me"
 `root` 不走一般 web 忘記密碼流程。若 root 忘記密碼，請直接在實體 runtime / repo 上執行：
 
 ```bash
-python3 scripts/root_recovery.py --json
+python3 scripts/admin/root_recovery.py --json
 ```
 
 互動式自訂臨時密碼：
 
 ```bash
-python3 scripts/root_recovery.py --prompt-password
+python3 scripts/admin/root_recovery.py --prompt-password
 ```
 
 直接指定 DB 路徑：
 
 ```bash
-python3 scripts/root_recovery.py --db-path /path/to/runtime/database/database.db --json
+python3 scripts/admin/root_recovery.py --db-path /path/to/runtime/database/database.db --json
 ```
 
 這會：
@@ -399,5 +399,5 @@ curl -k -sS -b "$JAR" "$BASE/api/me"
 - [API_REFERENCE.md](API_REFERENCE.md)
 - [For_developer.md](For_developer.md)
 - [11_QA_TESTING.md](11_QA_TESTING.md)
-- [TRADING.md](TRADING.md)
-- [TRADING_BOT_AUDIT.md](TRADING_BOT_AUDIT.md)
+- [TRADING.md](trading/TRADING.md)
+- [TRADING_BOT_AUDIT.md](trading/TRADING_BOT_AUDIT.md)

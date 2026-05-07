@@ -2394,9 +2394,9 @@ async function saveTradingWorkflowCustomTemplate() {
   }
 }
 
-function tradingWorkflowTemplate(name = "dip_buy") {
+function tradingWorkflowTemplate(name = "dipbuy_rsi35_70_size99_late_tp15_nopyr_codex") {
   const templates = tradingWorkflowTemplates();
-  const item = templates[name] || templates.dip_buy || Object.values(templates)[0];
+  const item = templates[name] || templates.dipbuy_rsi35_70_size99_late_tp15_nopyr_codex || Object.values(templates)[0];
   if (!item || !item.workflow) {
     return {
       version: 2,
@@ -2411,9 +2411,9 @@ function tradingWorkflowTemplate(name = "dip_buy") {
 }
 
 function applyTradingWorkflowTemplate() {
-  const key = $("trading-workflow-template-select")?.value || "dip_buy";
+  const key = $("trading-workflow-template-select")?.value || "dipbuy_rsi35_70_size99_late_tp15_nopyr_codex";
   const templates = tradingWorkflowTemplates();
-  const item = templates[key] || templates.dip_buy;
+  const item = templates[key] || templates.dipbuy_rsi35_70_size99_late_tp15_nopyr_codex || Object.values(templates)[0];
   if (!item || !item.workflow) {
     tradingSetMsg("沒有可用 Workflow 模板，請確認 workflows/system 內有模板檔", false);
     return;

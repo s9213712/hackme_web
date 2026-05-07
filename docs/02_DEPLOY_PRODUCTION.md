@@ -11,7 +11,7 @@
 ### 推薦部署路線
 
 1. 先用 [01_DEPLOY_QUICKSTART.md](01_DEPLOY_QUICKSTART.md) 完成本機或 staging 驗證。
-2. 用 `./deploy.sh` 或 `./scripts/run_prod.sh --wizard` 建立 `.env`。
+2. 用 `./one_click_setup.sh` 或 `./one_click_setup.sh --wizard` 建立 `.env`。
 3. 把 runtime 根目錄放在獨立資料區，不要放 repo 內。
 4. 決定是否由反向代理處理 HTTPS。
 5. 建立上線前 snapshot。
@@ -91,24 +91,38 @@ $HOME/.local/share/hackme_web
 ### 上線前必跑
 
 ```bash
-python3 scripts/pre_push_checks.py
+python3 scripts/prepush/pre_push_checks.py
 PYTHONPATH=. python3 -m pytest -q tests
-security/run_functional_smoke.sh --port 50741
-security/run_pentest.sh --target https://<host>
-python3 security/stress_test.py --target https://<host> --i-own-this-target
+scripts/security/pentest/run_functional_smoke.sh --port 50741
+scripts/security/pentest/run_pentest.sh --target https://<host>
+python3 scripts/security/pentest/stress_test.py --target https://<host> --i-own-this-target
 ```
 
 如果本次要評估整站 production readiness：
 
 ```bash
-PYTHONPATH=. security/run_pentest.sh \
+PYTHONPATH=. scripts/security/pentest/run_pentest.sh \
   --target https://<host> \
   --only whole-site-production-gate
 ```
 
+如果你要一次產出 production gate 要求的 13 份報告，可直接用：
+
+```bash
+./on_live_reports_make.sh --base-url https://<host> --root-password '<ROOT_PASSWORD>'
+```
+
+這會把 raw outputs 放進 `runtime/reports/security/production_gate/runs/<RUN_ID>/`，
+並把上傳用的穩定 payload 放在 `runtime/reports/security/production_gate/`。
+
+13 份 production gate 報告的對照表、固定 pytest 測項數與預設報告落點，統一放在
+[11_QA_TESTING.md](11_QA_TESTING.md) 的「Production Gate 13 份報告對照表」。
+部署者上線前若要確認報告應該生成在哪裡、哪些是動態腳本、哪些是固定 pytest
+回歸，請以那張表為準。
+
 ## 原理
 
-- `scripts/run_prod.sh` 會產生 `.env` 與本機 secret/key 類 runtime 檔案，這些不應從 Git 複製。
+- `./one_click_setup.sh` 會產生 `.env` 與本機 secret/key 類 runtime 檔案，這些不應從 Git 複製。
 - HTTPS、secure cookies、proxy trust、runtime 路徑與備份策略，決定的是營運風險，不只是功能是否可用。
 - `hackme_web` 把 snapshot、PointsChain、audit chain、integrity guard 分開，是為了避免一個恢復動作默默覆蓋另一個保護層。
 

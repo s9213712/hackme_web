@@ -2,7 +2,7 @@ import shutil
 from pathlib import Path
 
 from services.users.member_levels import get_member_level_rule
-from services.upload_security import get_user_cloud_drive_usage
+from services.security.upload_security import get_user_cloud_drive_usage
 
 
 STORAGE_CAPACITY_SAFETY_RATIO = 0.9

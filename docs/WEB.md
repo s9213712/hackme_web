@@ -86,7 +86,7 @@ scan/preview/download support is still required. Use E2EE when confidentiality
 is more important than server-side scanning and recovery support. E2EE files can
 still be previewed by the browser after the user enters the file password.
 For the runtime trust boundary between `server_encrypted` and strict `e2ee`,
-see [ENCRYPTION_RUNTIME_BOUNDARY.md](ENCRYPTION_RUNTIME_BOUNDARY.md).
+see [ENCRYPTION_RUNTIME_BOUNDARY.md](runtime/ENCRYPTION_RUNTIME_BOUNDARY.md).
 
 E2EE uses a user-entered file encryption password in the browser. The browser
 derives a wrapping key with PBKDF2-SHA256 and uses it to encrypt the per-file
@@ -138,7 +138,7 @@ upload to a separate filesystem.
 
 The current page behavior described here is still Video Platform v1. The formal
 future HLS / segmented streaming design for large media is documented in
-[VIDEO_STREAMING_ARCHITECTURE.md](VIDEO_STREAMING_ARCHITECTURE.md).
+[VIDEO_STREAMING_ARCHITECTURE.md](video/VIDEO_STREAMING_ARCHITECTURE.md).
 
 - owner selects one of their own Cloud Drive video files
 - visibility can be public, unlisted, or private
@@ -160,7 +160,7 @@ no longer available, the video page now fails safely: the cover endpoint shows
 an explanatory placeholder and stream/content endpoints return a structured
 `decrypt_unavailable` error instead of a generic server error.
 The strict E2EE publish/share boundary is also documented in
-[ENCRYPTION_RUNTIME_BOUNDARY.md](ENCRYPTION_RUNTIME_BOUNDARY.md).
+[ENCRYPTION_RUNTIME_BOUNDARY.md](runtime/ENCRYPTION_RUNTIME_BOUNDARY.md).
 
 ### ComfyUI
 
@@ -221,7 +221,7 @@ Root can configure ComfyUI in two modes from server settings:
   local startup polling, async generation, and root's local-model download job.
 
 The reference Linux/WSL startup script template is
-`scripts/comfyui_run_in_linux.template.sh`. Copy it into a ComfyUI portable
+`scripts/comfyui/comfyui_run_in_linux.template.sh`. Copy it into a ComfyUI portable
 folder as `run_in_linux.sh`, then set that folder and script name in root
 settings. Do not document or commit workstation-specific absolute paths; use
 deployment-local paths such as `/opt/comfyui-portable` in examples. The script
@@ -353,7 +353,7 @@ before execution:
   remaining spot cost, an estimated entry fee, and the estimated exit fee at the
   current market price. Realized PnL is recorded on each sell fill and is
   replay-verified by the trading state checker.
-- See [Trading System And Bots](TRADING.md) for the full trading, bot,
+- See [Trading System And Bots](trading/TRADING.md) for the full trading, bot,
   workflow editor, backtest, and validation guide.
 
 When `root` enables BTC_trade in trading settings, the BTC market can also show
@@ -363,7 +363,7 @@ steps; any failure only hides the panel and shows a root warning. The panel
 understands the newer BTC_trade runtime report fields, including strategy
 version, fear/greed, portfolio equity, PnL, report text, and next prediction
 countdown. The optional bridge script is owned by this project at
-`scripts/btc_signal_bridge.py`.
+`scripts/trading/bridges/btc_signal_bridge.py`.
 
 Trading funds are separated by account type:
 
@@ -419,5 +419,5 @@ tracked by git:
 - local security reports
 
 For clean deployments, clone the repository, install dependencies, and run
-`scripts/run_prod.sh`. On first deployment it opens a setup wizard for bootstrap
+`./one_click_setup.sh`. On first deployment it opens a setup wizard for bootstrap
 passwords, runtime paths, HTTPS policy, and Gunicorn settings.

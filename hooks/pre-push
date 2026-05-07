@@ -6,7 +6,7 @@
 #
 # IMPORTANT: validation failures exit non-zero and block the push.
 
-RELEASE_FILE="services/release_info.py"
+RELEASE_FILE="services/platform/release_info.py"
 SUMMARY_FILE="docs/UPDATE_SUMMARY.md"
 
 bump_version() {
@@ -20,7 +20,7 @@ bump_version() {
   CURRENT=$(python3 - <<'PYEOF'
 import re, sys
 try:
-    content = open("services/release_info.py").read()
+    content = open("services/platform/release_info.py").read()
     m = re.search(r'APP_RELEASE_ID\s*=\s*"([^"]+)"', content)
     print(m.group(1) if m else "", end="")
 except Exception:
@@ -48,11 +48,11 @@ PYEOF
 
   echo "pre-push: bumping version $CURRENT → $NEW_ID"
 
-  # Update services/release_info.py
+  # Update services/platform/release_info.py
   python3 - "$NEW_ID" <<'PYEOF'
 import re, sys
 new_id = sys.argv[1]
-path = "services/release_info.py"
+path = "services/platform/release_info.py"
 content = open(path).read()
 result = re.sub(r'(APP_RELEASE_ID\s*=\s*)"[^"]+"', rf'\1"{new_id}"', content)
 open(path, "w").write(result)
@@ -84,4 +84,4 @@ PYEOF
 bump_version
 
 echo "pre-push: running blocking validation suite"
-PYTHONPATH=. python3 scripts/pre_push_checks.py --clean --yes --ci
+PYTHONPATH=. python3 scripts/prepush/pre_push_checks.py --clean --yes --ci
