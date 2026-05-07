@@ -4,6 +4,63 @@ from decimal import Decimal, ROUND_HALF_UP
 from services.trading.constants import APR_DAYS_PER_YEAR
 
 
+# Public bool literal table.  Centralizes the `{"1","true","yes","on"}` set
+# duplicated across 22 sites (see
+# docs/AGENTS/reports/claude/readability_refactor_2026-05-07/INVENTORY.md
+# §4.1).  Slice 2 publishes the table + parser; slice 3 migrates callers.
+_TRUE_LITERALS = frozenset({"1", "true", "yes", "on"})
+_TRUE_LITERALS_LOOSE = frozenset({"1", "true", "yes", "on", "y", "t"})
+_FALSE_LITERALS = frozenset({"0", "false", "no", "off"})
+_FALSE_LITERALS_LOOSE = frozenset({"0", "false", "no", "off", "n", "f"})
+
+
+def parse_bool_strict(value, *, default=False, accept_y_t=False, name="value"):
+    """Strictly parse a value into bool.
+
+    Accepts:
+      - `bool` → returned as-is
+      - `None` or empty string → `default`
+      - `int 0/1` → `False/True`
+      - `str` matching one of the literal sets (case-insensitive, stripped)
+
+    Rejects (raises ValueError):
+      - any other type (`dict`, `list`, etc.)
+      - any string outside the literal set (e.g. `"maybe"`, `"truee"`)
+      - any non-0/1 int
+
+    `accept_y_t=True` extends the accepted strings to include
+    `{"y","t"}` / `{"n","f"}` (some legacy callers used this loose form;
+    new code should not).
+
+    Why not `bool(value)`: `bool({"x":1})` is `True` and `bool("False")`
+    is also `True` — silently coerces invalid input into a truthy result.
+    Operators and bots passing malformed flags should get a 400, not a
+    surprise behavior change.
+    """
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, int):
+        if value == 0:
+            return False
+        if value == 1:
+            return True
+        raise ValueError(f"{name} must be a boolean (got int {value!r})")
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized == "":
+            return default
+        true_set = _TRUE_LITERALS_LOOSE if accept_y_t else _TRUE_LITERALS
+        false_set = _FALSE_LITERALS_LOOSE if accept_y_t else _FALSE_LITERALS
+        if normalized in true_set:
+            return True
+        if normalized in false_set:
+            return False
+        raise ValueError(f"{name} must be a boolean literal (got {value!r})")
+    raise ValueError(f"{name} must be a boolean (got {type(value).__name__})")
+
+
 def _to_int(value, *, name, minimum=0, maximum=10**12):
     try:
         number = int(value)
@@ -83,3 +140,20 @@ def _billable_interest_hours_from_elapsed_seconds(seconds, *, interval_hours=1, 
     interval_seconds = interval_hours * 3600.0
     billed_hours = int(math.ceil(seconds / interval_seconds)) * interval_hours
     return max(minimum_hours, billed_hours)
+
+
+# Public-named aliases of the strict numeric parsers above.  The original
+# `_to_*` names mark these helpers as private to validators.py, but 13
+# caller modules already cross-import them (INVENTORY §4.4), which makes
+# the underscore prefix misleading.  Callers should migrate to the public
+# names; the legacy names remain as aliases so this slice is purely
+# additive (no behavior change, no caller migration required).
+parse_int_strict = _to_int
+parse_float_strict = _to_float
+parse_decimal_strict = _to_decimal
+parse_price_float_strict = _to_price_float
+decimal_text = _decimal_text
+daily_percent_from_apr = _daily_percent_from_apr
+apr_percent_from_daily = _apr_percent_from_daily
+normalize_borrow_interest_timing = _normalize_borrow_interest_timing
+billable_interest_hours_from_elapsed_seconds = _billable_interest_hours_from_elapsed_seconds
