@@ -642,3 +642,57 @@ def test_friend_request_accept_and_remove(tmp_path):
     assert accepted.status_code == 200
     assert friends.get_json()["friends"][0]["other_username"] == "alice"
     assert removed.status_code == 200
+
+
+def test_audit_safe_escapes_log_injection_chars():
+    """Issue #179 regression — _audit_safe must escape newline / null /
+    kv-separator chars so user-controlled fields (chat room name, invited
+    username) cannot forge audit log rows.
+
+    Contract: every appearance of a dangerous char in the OUTPUT is
+    preceded by a backslash. The dangerous chars (`,` `=`) themselves
+    still appear (after a backslash) so a downstream un-escaper can
+    recover the original. What MUST NOT happen: a raw newline / NUL
+    that splits one audit row into two.
+    """
+    import re
+    from routes.chat import _audit_safe
+
+    # 1. Real-world forged row: newline in a room name would split a
+    # single audit event into two. The escape must remove ALL raw
+    # newlines / CRs / NULs.
+    forged = "legitimate\nROOT_LOGIN_FORGED ip=192.168.1.1 user=victim success=True"
+    safe = _audit_safe(forged)
+    assert "\n" not in safe
+    assert "\r" not in safe
+    assert "\x00" not in safe
+    assert "\\n" in safe  # the escape sequence is present
+
+    # 2. For `,` and `=`: every appearance must be preceded by a
+    # backslash. We verify by stripping away every `\<char>` escape
+    # and confirming no dangerous char remains.
+    sample = "name\r\n\x00with,bad=chars"
+    safe = _audit_safe(sample)
+    stripped = re.sub(r"\\.", "", safe)
+    for raw in ("\r", "\n", "\x00", ",", "="):
+        assert raw not in stripped, (
+            f"raw {raw!r} still appears in {safe!r} (stripped={stripped!r})"
+        )
+
+    # 3. None passes through as empty
+    assert _audit_safe(None) == ""
+
+    # 4. Long input gets truncated with marker
+    long_input = "a" * 5000
+    safe = _audit_safe(long_input, max_len=100)
+    assert len(safe) <= 100 + len("...(truncated)")
+    assert safe.endswith("...(truncated)")
+
+    # 5. Backslashes themselves are escaped first so the escape sequence
+    # is unambiguous. Input is the 5-char string "foo\nbar" where `\n`
+    # is two literal chars (backslash + n, NOT a newline).
+    safe = _audit_safe("foo\\nbar")
+    # After escaping, the original backslash is doubled; the literal
+    # `n` after it is unchanged. So the substring "\\\\n" (Python source
+    # for "\\n" = 4 chars on the wire) appears.
+    assert "\\\\n" in safe

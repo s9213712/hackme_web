@@ -46,6 +46,37 @@ def sanitize_chat_content(value):
     return CHAT_HTML_TAG_RE.sub("", text).strip()
 
 
+def _audit_safe(value, *, max_len=200):
+    """Escape user-controlled fields before inserting into audit `detail`
+    key=value strings.
+
+    Audit log readers split events on newlines; a chat room name like
+    `legitimate\\nROOT_LOGIN_FORGED ip=... success=True` would otherwise
+    forge a fake audit row. This helper:
+
+      - replaces ``\\r`` / ``\\n`` / ``\\x00`` with their literal escape
+        sequences so log readers see one logical line
+      - replaces ``,`` and ``=`` (the audit kv separators) with similar
+        escapes so callers cannot inject extra k=v pairs
+      - caps length so a single forged-name attack cannot fill audit
+        storage
+
+    See issue #179.
+    """
+    if value is None:
+        return ""
+    text = str(value)
+    text = text.replace("\\", "\\\\")
+    text = text.replace("\r", "\\r")
+    text = text.replace("\n", "\\n")
+    text = text.replace("\x00", "\\x00")
+    text = text.replace(",", "\\,")
+    text = text.replace("=", "\\=")
+    if len(text) > max_len:
+        text = text[:max_len] + "...(truncated)"
+    return text
+
+
 def _table_columns(conn, table):
     try:
         return safe_table_columns(conn, table)
@@ -452,9 +483,15 @@ def register_chat_routes(app, deps):
                     except Exception:
                         pass
             conn.commit()
-            detail = f"room_id={room_id}, name={name}, is_private={is_private_room}, invited={','.join(added_usernames)}"
+            # Escape user-controlled fields (room name, usernames) to prevent
+            # log injection — see _audit_safe / issue #179.
+            safe_invited = ",".join(_audit_safe(u, max_len=80) for u in added_usernames)
+            detail = (
+                f"room_id={room_id}, name={_audit_safe(name)}, "
+                f"is_private={is_private_room}, invited={safe_invited}"
+            )
             if target_row:
-                detail += f", target={target_row['username']}"
+                detail += f", target={_audit_safe(target_row['username'], max_len=80)}"
         except Exception:
             try:
                 conn.rollback()
@@ -655,7 +692,13 @@ def register_chat_routes(app, deps):
                 )
                 invited.append(user_row["username"])
             conn.commit()
-            audit("CHAT_ROOM_INVITE", get_client_ip(), user=actor["username"], detail=f"room_id={room_id},invited={','.join(invited)},missing={','.join(missing)}")
+            safe_invited_csv = ",".join(_audit_safe(u, max_len=80) for u in invited)
+            safe_missing_csv = ",".join(_audit_safe(u, max_len=80) for u in missing)
+            audit(
+                "CHAT_ROOM_INVITE", get_client_ip(),
+                user=actor["username"],
+                detail=f"room_id={room_id},invited={safe_invited_csv},missing={safe_missing_csv}",
+            )
             return json_resp({"ok":True,"msg":"聊天室邀請已送出","invited":invited,"missing":missing})
         finally:
             conn.close()
