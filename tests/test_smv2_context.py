@@ -12,9 +12,16 @@ Locks in the four contracts of services/server_mode_context.py:
 import pytest
 from dataclasses import FrozenInstanceError
 
-from flask import Flask
+import hashlib
+import sqlite3
+from datetime import datetime, timedelta
+
+from flask import Flask, request
 
 from services.server_mode import context as smv2
+from services.server.request_guards import enforce_mode_restrictions
+from services.server import security_runtime
+from services.snapshots import ensure_snapshot_schema
 
 
 def test_smv2_context_is_frozen():
@@ -148,3 +155,138 @@ def test_attach_via_before_request_hook():
     assert r1["mode"] == "internal_test"
     assert r1["tester_id"] == 9
     assert r2["request_id"] != r1["request_id"]  # no leak across requests
+
+
+def test_options_requests_skip_mode_restriction_ctx_lookup():
+    app = Flask(__name__)
+
+    def boom():
+        raise AssertionError("smv2_current_ctx should not run for OPTIONS")
+
+    with app.test_request_context("/api/unknown", method="OPTIONS"):
+        result = enforce_mode_restrictions(
+            request,
+            get_system_settings=lambda: {},
+            smv2_current_ctx=boom,
+            has_valid_maintenance_bypass_func=lambda settings: False,
+            get_current_user_ctx=lambda: None,
+            path_is_root_recovery_allowed_during_lockdown_func=lambda path: False,
+            revoke_user_sessions=lambda user_id: None,
+            audit=lambda *args, **kwargs: None,
+            get_client_ip=lambda: "127.0.0.1",
+            maintenance_bypass_required_payload=lambda msg: {"ok": False, "msg": msg},
+            json_resp=lambda payload, status=200: (payload, status),
+            session_cookie_samesite="Lax",
+            session_cookie_secure=False,
+        )
+        assert result is None
+
+
+def test_tester_token_identity_reader_hydrates_ctx_and_caches_request_lookup(tmp_path):
+    db_path = tmp_path / "tester.db"
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    ensure_snapshot_schema(conn)
+    conn.execute(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL,
+            role TEXT NOT NULL,
+            status TEXT NOT NULL,
+            member_level TEXT,
+            base_level TEXT,
+            effective_level TEXT
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO users (id, username, role, status, member_level, base_level, effective_level) "
+        "VALUES (7, 'smokeuser', 'user', 'active', 'normal', 'normal', 'normal')"
+    )
+    conn.execute("UPDATE server_modes SET current_mode='internal_test' WHERE id=1")
+    token = "hmt_test_ctx"
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    now = datetime.now()
+    conn.execute(
+        """
+        INSERT INTO tester_tokens
+        (id, token_hash, tester_user_id, mode_scope_json, route_scope_json, method_scope_json,
+         allowed_features_json, allowed_routes_json, expires_at, issued_at, nonce,
+         max_requests_per_minute, can_modify_own_role, can_modify_own_points, can_run_security_tests,
+         created_by, created_at, hmac_signature, key_version)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 1, ?, '', '')
+        """,
+        (
+            "tester_ctx",
+            token_hash,
+            7,
+            '["test","internal_test"]',
+            '["/api/trading"]',
+            '["GET","POST"]',
+            "[]",
+            '["/api/trading"]',
+            (now + timedelta(hours=1)).isoformat(),
+            now.isoformat(),
+            "nonce-ctx",
+            60,
+            now.isoformat(),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    def get_db():
+        db = sqlite3.connect(db_path)
+        db.row_factory = sqlite3.Row
+        return db
+
+    app = Flask(__name__)
+    with app.test_request_context("/api/trading/orders", method="POST", headers={"X-Tester-Token": token}):
+        identity_1 = security_runtime.tester_token_identity_from_request(
+            request,
+            get_db=get_db,
+            ensure_snapshot_schema=ensure_snapshot_schema,
+            get_runtime_server_mode_func=lambda: "internal_test",
+            record_security_event=lambda *args, **kwargs: None,
+            get_client_ip_func=lambda: "127.0.0.1",
+        )
+        identity_2 = security_runtime.tester_token_identity_from_request(
+            request,
+            get_db=get_db,
+            ensure_snapshot_schema=ensure_snapshot_schema,
+            get_runtime_server_mode_func=lambda: "internal_test",
+            record_security_event=lambda *args, **kwargs: None,
+            get_client_ip_func=lambda: "127.0.0.1",
+        )
+        ctx = smv2.attach_to_g(
+            mode_reader=lambda: "internal_test",
+            tester_id_reader=lambda: security_runtime.tester_token_identity_from_request(
+                request,
+                get_db=get_db,
+                ensure_snapshot_schema=ensure_snapshot_schema,
+                get_runtime_server_mode_func=lambda: "internal_test",
+                record_security_event=lambda *args, **kwargs: None,
+                get_client_ip_func=lambda: "127.0.0.1",
+            )["tester_id"],
+            actor_role_reader=lambda: security_runtime.tester_token_identity_from_request(
+                request,
+                get_db=get_db,
+                ensure_snapshot_schema=ensure_snapshot_schema,
+                get_runtime_server_mode_func=lambda: "internal_test",
+                record_security_event=lambda *args, **kwargs: None,
+                get_client_ip_func=lambda: "127.0.0.1",
+            )["actor_role"],
+        )
+
+    conn = get_db()
+    request_logs = conn.execute(
+        "SELECT COUNT(*) AS c FROM tester_token_request_log WHERE token_id='tester_ctx'"
+    ).fetchone()["c"]
+    conn.close()
+
+    assert identity_1 == {"username": "smokeuser", "tester_id": 7, "actor_role": "user"}
+    assert identity_2 == identity_1
+    assert ctx.tester_id == 7
+    assert ctx.actor_role == "user"
+    assert request_logs == 1

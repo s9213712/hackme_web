@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+if [[ -n "${PORT+x}" ]]; then
+  PORT_SOURCE="env"
+else
+  PORT_SOURCE="default"
+fi
 HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-50734}"
 SMOKE_SCHEME="${SMOKE_SCHEME:-${SCHEME:-https}}"
@@ -38,6 +43,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --port)
       PORT="${2:?missing port}"
+      PORT_SOURCE="arg"
       shift 2
       ;;
     --runtime)
@@ -75,13 +81,17 @@ COOKIE_JAR="$OUT_DIR/cookies.txt"
 SUMMARY="$OUT_DIR/00_FUNCTIONAL_SMOKE.md"
 RESULTS_TSV="$OUT_DIR/results.tsv"
 SERVER_LOG="$OUT_DIR/server.out"
-BASE_URL="${SMOKE_SCHEME}://${HOST}:${PORT}"
+BASE_URL=""
 CURL_TLS_ARGS=()
+REQUEST_EXTRA_HEADER=""
+TESTER_TOKEN=""
+TESTER_TOKEN_ID=""
 if [[ "$SMOKE_SCHEME" == "https" ]]; then
   CURL_TLS_ARGS=(-k)
 fi
 SERVER_PID=""
 CSRF_TOKEN=""
+MAINTENANCE_BYPASS_TOKEN=""
 FAILURES=0
 SKIPS=0
 
@@ -118,7 +128,7 @@ import sys
 expr, path = sys.argv[1], sys.argv[2]
 with open(path, "r", encoding="utf-8") as f:
     data = json.load(f)
-safe_builtins = {"next": next, "len": len, "int": int, "str": str, "any": any}
+safe_builtins = {"next": next, "len": len, "int": int, "str": str, "any": any, "bool": bool}
 value = eval(expr, {"__builtins__": safe_builtins}, {"data": data})
 if value is None:
     raise SystemExit(1)
@@ -137,6 +147,10 @@ json_bool() {
 
 csrf_from_cookie() {
   awk '$6 == "csrf_token" { value=$7 } END { print value }' "$COOKIE_JAR"
+}
+
+session_token_from_cookie() {
+  awk '$6 == "session_token" { value=$7 } END { print value }' "$COOKIE_JAR"
 }
 
 safe_name() {
@@ -180,6 +194,61 @@ expect_code() {
   return 1
 }
 
+refresh_base_url() {
+  BASE_URL="${SMOKE_SCHEME}://${HOST}:${PORT}"
+}
+
+port_is_available() {
+  python3 - "$HOST" "$1" <<'PY'
+import socket
+import sys
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+try:
+    sock.bind((host, port))
+except OSError:
+    raise SystemExit(1)
+finally:
+    sock.close()
+PY
+}
+
+pick_free_local_port() {
+  python3 - "$HOST" <<'PY'
+import socket
+import sys
+
+host = sys.argv[1]
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.bind((host, 0))
+print(sock.getsockname()[1])
+sock.close()
+PY
+}
+
+ensure_start_port() {
+  if port_is_available "$PORT"; then
+    refresh_base_url
+    return 0
+  fi
+  if [[ "$PORT_SOURCE" == "default" ]]; then
+    local previous_port="$PORT"
+    PORT="$(pick_free_local_port || true)"
+    if [[ -z "$PORT" ]]; then
+      fail "server startup port selection" "port $previous_port already in use and auto-pick failed; choose --port explicitly or run outside a socket-restricted sandbox"
+      return 1
+    fi
+    refresh_base_url
+    pass "server startup port selection" "port $previous_port already in use; switched to free port $PORT"
+    return 0
+  fi
+  fail "server startup port selection" "port $PORT already in use; choose another --port or PORT value"
+  return 1
+}
+
 request() {
   local name="$1"
   local method="$2"
@@ -189,6 +258,12 @@ request() {
   local out="$RAW_DIR/$(safe_name "$name").json"
   local code
   local args=(-sS -b "$COOKIE_JAR" -c "$COOKIE_JAR" -o "$out" -w "%{http_code}" -X "$method")
+  if [[ -n "$REQUEST_EXTRA_HEADER" ]]; then
+    args+=(-H "$REQUEST_EXTRA_HEADER")
+  fi
+  if [[ -n "$MAINTENANCE_BYPASS_TOKEN" ]]; then
+    args+=(-H "X-Maintenance-Bypass-Token: $MAINTENANCE_BYPASS_TOKEN")
+  fi
   if [[ -n "$CSRF_TOKEN" ]]; then
     args+=(-H "X-CSRF-Token: $CSRF_TOKEN")
   fi
@@ -209,10 +284,21 @@ request() {
   fi
 }
 
+request_with_tester_token() {
+  local previous_extra_header="$REQUEST_EXTRA_HEADER"
+  REQUEST_EXTRA_HEADER="X-Tester-Token: $TESTER_TOKEN"
+  request "$@"
+  REQUEST_EXTRA_HEADER="$previous_extra_header"
+}
+
 refresh_csrf_quiet() {
   local out="$RAW_DIR/refresh_csrf_$(date +%s%N).json"
   local code
-  code="$(curl "${CURL_TLS_ARGS[@]}" -sS -b "$COOKIE_JAR" -c "$COOKIE_JAR" -o "$out" -w "%{http_code}" "$BASE_URL/api/csrf-token" || true)"
+  local args=(-sS -b "$COOKIE_JAR" -c "$COOKIE_JAR" -o "$out" -w "%{http_code}")
+  if [[ -n "$MAINTENANCE_BYPASS_TOKEN" ]]; then
+    args+=(-H "X-Maintenance-Bypass-Token: $MAINTENANCE_BYPASS_TOKEN")
+  fi
+  code="$(curl "${CURL_TLS_ARGS[@]}" "${args[@]}" "$BASE_URL/api/csrf-token" || true)"
   if [[ "$code" == "200" ]]; then
     CSRF_TOKEN="$(json_expr 'data["csrf_token"]' "$out" || echo "$CSRF_TOKEN")"
   fi
@@ -225,8 +311,11 @@ upload_file() {
   local expected="$4"
   local out="$RAW_DIR/$(safe_name "$name").json"
   local code
-  code="$(curl "${CURL_TLS_ARGS[@]}" -sS -b "$COOKIE_JAR" -c "$COOKIE_JAR" -o "$out" -w "%{http_code}" \
-    -H "X-CSRF-Token: $CSRF_TOKEN" \
+  local args=(-sS -b "$COOKIE_JAR" -c "$COOKIE_JAR" -o "$out" -w "%{http_code}" -H "X-CSRF-Token: $CSRF_TOKEN")
+  if [[ -n "$MAINTENANCE_BYPASS_TOKEN" ]]; then
+    args+=(-H "X-Maintenance-Bypass-Token: $MAINTENANCE_BYPASS_TOKEN")
+  fi
+  code="$(curl "${CURL_TLS_ARGS[@]}" "${args[@]}" \
     -F "privacy_mode=standard_plain" \
     -F "file=@${file_path};type=text/plain" \
     "$BASE_URL$path" || true)"
@@ -238,13 +327,66 @@ upload_file() {
   refresh_csrf_quiet
 }
 
+multipart_request() {
+  local name="$1"
+  local path="$2"
+  local expected="$3"
+  shift 3
+  local out="$RAW_DIR/$(safe_name "$name").json"
+  local code
+  local args=(-sS -b "$COOKIE_JAR" -c "$COOKIE_JAR" -o "$out" -w "%{http_code}" -H "X-CSRF-Token: $CSRF_TOKEN")
+  if [[ -n "$MAINTENANCE_BYPASS_TOKEN" ]]; then
+    args+=(-H "X-Maintenance-Bypass-Token: $MAINTENANCE_BYPASS_TOKEN")
+  fi
+  while [[ $# -gt 0 ]]; do
+    args+=(-F "$1")
+    shift
+  done
+  code="$(curl "${CURL_TLS_ARGS[@]}" "${args[@]}" "$BASE_URL$path" || true)"
+  if expect_code "$code" "$expected"; then
+    pass "$name" "POST $path -> $code"
+  else
+    fail "$name" "POST $path -> $code, expected $expected, body=$out"
+  fi
+  refresh_csrf_quiet
+}
+
+assert_json_check() {
+  local source_name="$1"
+  local expr="$2"
+  local label="$3"
+  local ok_detail="$4"
+  local fail_detail="$5"
+  if json_bool "$expr" "$(latest_raw "$source_name")"; then
+    pass "$label" "$ok_detail"
+  else
+    fail "$label" "$fail_detail"
+  fi
+}
+
+assert_body_contains() {
+  local source_name="$1"
+  local needle="$2"
+  local label="$3"
+  local ok_detail="$4"
+  local fail_detail="$5"
+  if grep -Fq "$needle" "$(latest_raw "$source_name")"; then
+    pass "$label" "$ok_detail"
+  else
+    fail "$label" "$fail_detail"
+  fi
+}
+
 check_unknown_options() {
   local name="unknown path options"
   local out="$RAW_DIR/$(safe_name "$name").body"
   local headers="$RAW_DIR/$(safe_name "$name").headers"
   local code allow
-  code="$(curl "${CURL_TLS_ARGS[@]}" -sS -b "$COOKIE_JAR" -c "$COOKIE_JAR" -D "$headers" -o "$out" -w "%{http_code}" \
-    -X OPTIONS -H "X-CSRF-Token: $CSRF_TOKEN" "$BASE_URL/not-real-functional-smoke" || true)"
+  local args=(-sS -b "$COOKIE_JAR" -c "$COOKIE_JAR" -D "$headers" -o "$out" -w "%{http_code}" -X OPTIONS -H "X-CSRF-Token: $CSRF_TOKEN")
+  if [[ -n "$MAINTENANCE_BYPASS_TOKEN" ]]; then
+    args+=(-H "X-Maintenance-Bypass-Token: $MAINTENANCE_BYPASS_TOKEN")
+  fi
+  code="$(curl "${CURL_TLS_ARGS[@]}" "${args[@]}" "$BASE_URL/not-real-functional-smoke" || true)"
   allow="$(awk 'BEGIN{IGNORECASE=1} /^Allow:/ {sub(/\r$/, ""); print substr($0, 8)}' "$headers" | tail -n1)"
   if ! expect_code "$code" "200,404"; then
     fail "$name" "OPTIONS unknown path -> $code, expected 200 or 404"
@@ -333,10 +475,12 @@ wait_for_restart_reconnect() {
 }
 
 start_server() {
+  ensure_start_port || return 1
   echo "[*] Runtime: $RUNTIME_ROOT"
   echo "[*] Report: $OUT_DIR"
   echo "[*] Pre-start snapshot: $PRE_START_SNAPSHOT"
   env \
+    HACKME_RUNTIME_DIR="$RUNTIME_ROOT" \
     HTML_LEARNING_HOST="$HOST" \
     HTML_LEARNING_PORT="$PORT" \
     HTML_LEARNING_DB_DIR="$RUNTIME_ROOT/database" \
@@ -363,7 +507,11 @@ start_server() {
 fetch_public_csrf() {
   local out="$RAW_DIR/00_csrf_token.json"
   local code
-  code="$(curl "${CURL_TLS_ARGS[@]}" -sS -c "$COOKIE_JAR" -o "$out" -w "%{http_code}" "$BASE_URL/api/csrf-token" || true)"
+  local args=(-sS -c "$COOKIE_JAR" -o "$out" -w "%{http_code}")
+  if [[ -n "$MAINTENANCE_BYPASS_TOKEN" ]]; then
+    args+=(-H "X-Maintenance-Bypass-Token: $MAINTENANCE_BYPASS_TOKEN")
+  fi
+  code="$(curl "${CURL_TLS_ARGS[@]}" "${args[@]}" "$BASE_URL/api/csrf-token" || true)"
   if [[ "$code" != "200" ]]; then
     fail "csrf token" "GET /api/csrf-token -> $code"
     return 1
@@ -373,7 +521,13 @@ fetch_public_csrf() {
 }
 
 login_root() {
+  rm -f "$COOKIE_JAR"
+  fetch_public_csrf || return 1
   request "auth login root" "POST" "/api/login" "200" "{\"username\":\"root\",\"password\":\"$ROOT_PASSWORD\",\"csrf_token\":\"$CSRF_TOKEN\"}"
+  if [[ -z "$(session_token_from_cookie)" ]]; then
+    fail "auth session refresh" "missing session_token cookie after root login"
+    return 1
+  fi
   CSRF_TOKEN="$(csrf_from_cookie)"
   if [[ -z "$CSRF_TOKEN" ]]; then
     fail "auth csrf refresh" "missing csrf_token cookie after login"
@@ -383,9 +537,21 @@ login_root() {
 }
 
 login_smoke_user() {
+  local login_step="${1:-auth login smoke user}"
+  local internal_test_token="${2:-}"
+  local payload
   rm -f "$COOKIE_JAR"
   fetch_public_csrf || return 1
-  request "auth login smoke user" "POST" "/api/login" "200" "{\"username\":\"smokeuser\",\"password\":\"SmokeUser123!\",\"csrf_token\":\"$CSRF_TOKEN\"}"
+  payload="{\"username\":\"smokeuser\",\"password\":\"SmokeUser123!\",\"csrf_token\":\"$CSRF_TOKEN\""
+  if [[ -n "$internal_test_token" ]]; then
+    payload="${payload},\"internal_test_token\":\"$internal_test_token\""
+  fi
+  payload="${payload}}"
+  request "$login_step" "POST" "/api/login" "200" "$payload"
+  if [[ -z "$(session_token_from_cookie)" ]]; then
+    fail "auth session refresh smoke user" "missing session_token cookie after smoke user login"
+    return 1
+  fi
   CSRF_TOKEN="$(csrf_from_cookie)"
   if [[ -z "$CSRF_TOKEN" ]]; then
     fail "auth csrf refresh smoke user" "missing csrf_token cookie after smoke user login"
@@ -428,18 +594,71 @@ enable_smoke_feature_flags() {
     "feature_chat_enabled": true,
     "feature_community_enabled": true,
     "feature_appeals_enabled": true,
+        "feature_reports_enabled": true,
+        "feature_forum_core_enabled": true,
+        "feature_attachments_enabled": true,
+        "feature_storage_albums_enabled": true,
+        "feature_privacy_uploads_enabled": true,
+        "feature_videos_enabled": true,
+        "feature_comfyui_enabled": true,
+        "feature_economy_enabled": true,
+        "feature_trading_enabled": true,
+        "feature_games_enabled": true,
+        "feature_account_security_enabled": true
+  }'
+  request "admin verify smoke feature flags" "GET" "/api/admin/features" "200"
+}
+
+enable_smoke_feature_flags_after_mode_switch() {
+  local label_prefix="$1"
+  request "${label_prefix} re-enable smoke feature flags" "PUT" "/api/admin/features" "200" '{
+    "feature_chat_enabled": true,
+    "feature_community_enabled": true,
+    "feature_appeals_enabled": true,
     "feature_reports_enabled": true,
     "feature_forum_core_enabled": true,
     "feature_attachments_enabled": true,
     "feature_storage_albums_enabled": true,
     "feature_privacy_uploads_enabled": true,
+    "feature_videos_enabled": true,
     "feature_comfyui_enabled": true,
     "feature_economy_enabled": true,
     "feature_trading_enabled": true,
     "feature_games_enabled": true,
     "feature_account_security_enabled": true
   }'
-  request "admin verify smoke feature flags" "GET" "/api/admin/features" "200"
+  request "${label_prefix} verify smoke feature flags" "GET" "/api/admin/features" "200"
+}
+
+rotate_maintenance_bypass_token() {
+  request "admin rotate maintenance bypass token" "POST" "/api/admin/access-controls/maintenance-bypass-token" "200" '{"confirm":"ROTATE","ttl_minutes":30}'
+  MAINTENANCE_BYPASS_TOKEN="$(json_expr 'data["token"]' "$(latest_raw "admin rotate maintenance bypass token")" || true)"
+  if [[ -z "${MAINTENANCE_BYPASS_TOKEN:-}" ]]; then
+    fail "admin rotate maintenance bypass token" "token missing from maintenance bypass rotation response"
+    return 1
+  fi
+  pass "maintenance bypass token ready" "operator bypass token acquired for browser-only mode smoke coverage"
+}
+
+create_internal_test_tester_token() {
+  local expires_at
+  expires_at="$(python3 - <<'PY'
+from datetime import datetime, timedelta
+# Use local wall time here. The backend currently validates tester token
+# expiry against naive local timestamps, and the root UI sends datetime-local
+# values without timezone info. Using utcnow() here creates a token that looks
+# valid in the report but is already expired in UTC+offset environments.
+print((datetime.now() + timedelta(hours=6)).replace(microsecond=0).isoformat())
+PY
+)"
+  request "root create tester token for smoke trading" "POST" "/api/root/tester-token/create" "200" "{\"tester_user_id\":${SMOKE_USER_ID},\"allowed_routes\":[\"/api/trading\",\"/api/me\"],\"expires_at\":\"${expires_at}\",\"max_requests_per_minute\":60}"
+  TESTER_TOKEN="$(json_expr 'data["token"]' "$(latest_raw "root create tester token for smoke trading")" || true)"
+  TESTER_TOKEN_ID="$(json_expr 'data["token_id"]' "$(latest_raw "root create tester token for smoke trading")" || true)"
+  if [[ -z "${TESTER_TOKEN:-}" ]]; then
+    fail "root create tester token for smoke trading" "tester token missing from creation response"
+    return 1
+  fi
+  pass "tester token ready for smoke trading" "token_id=${TESTER_TOKEN_ID:-unknown}"
 }
 
 create_forum_post_flow() {
@@ -578,7 +797,13 @@ run_checks() {
     request "points admin credit smoke user" "POST" "/api/admin/points/adjust" "200" "{\"user_id\":$SMOKE_USER_ID,\"currency_type\":\"soft\",\"direction\":\"credit\",\"amount\":1000,\"reason\":\"functional smoke seed\"}"
     request "points admin wallet smoke user" "GET" "/api/admin/points/wallets/${SMOKE_USER_ID}" "200"
     request "points admin ledger" "GET" "/api/admin/points/ledger?limit=20" "200"
-    request "points chain seal" "POST" "/api/root/points/chain/seal" "200" '{"limit":100}'
+    request "points chain seal blocked outside production" "POST" "/api/root/points/chain/seal" "400" '{"limit":100}'
+    assert_json_check \
+      "points chain seal blocked outside production" \
+      '"msg" in data and "production-only" in str(data["msg"]) and data.get("ok") is False' \
+      "points chain seal guidance" \
+      "production-only chain write fails closed with an explicit operator-facing message" \
+      "chain seal outside production was not blocked with a clear message"
     request "points chain verify" "GET" "/api/root/points/chain/verify" "200"
     request "points chain recovery status" "GET" "/api/root/points/chain/recovery" "200"
     request "points chain one-click anomaly handler" "POST" "/api/root/points/chain/recovery/auto-handle" "200" '{"confirm":"AUTO HANDLE POINTSCHAIN"}'
@@ -586,6 +811,17 @@ run_checks() {
     request "points economy stats" "GET" "/api/admin/points/economy/stats" "200"
     request "trading root report" "GET" "/api/admin/trading/report" "200"
     request "trading root manual price rejected" "POST" "/api/root/trading/markets/ETH%2FPOINTS" "400" '{"manual_price_points":5000,"max_price_jump_percent":10,"fee_rate_percent":0.3,"min_order_points":1,"max_order_points":100000,"enabled":true}'
+    login_smoke_user || return 1
+    request "trading market buy blocked in custom profile" "POST" "/api/trading/orders" "400" '{"market_symbol":"ETH/POINTS","side":"buy","order_type":"market","quantity":"0.01"}'
+    assert_json_check \
+      "trading market buy blocked in custom profile" \
+      '"msg" in data and "enabled only in production / internal_test / test" in str(data["msg"]) and data.get("ok") is False' \
+      "trading custom profile block guidance" \
+      "custom profile rejects trading writes with a non-silent mode guidance message" \
+      "custom profile trading block was missing the expected operator guidance"
+    login_root || return 1
+    request "security center switch to test mode" "POST" "/api/admin/server-mode" "200" '{"mode":"test","confirm":"SWITCH_TO_TEST","notes":"functional smoke trading diagnostics"}'
+    enable_smoke_feature_flags_after_mode_switch "admin after test mode"
     login_smoke_user || return 1
     request "trading user dashboard" "GET" "/api/trading/dashboard" "200"
     request "trading live price" "GET" "/api/trading/live-price?market=ETH/POINTS" "200"
@@ -606,14 +842,18 @@ run_checks() {
     else
       fail "trading grid preview payload" "grid preview missing fee-aware sections"
     fi
-    request "trading market buy" "POST" "/api/trading/orders" "200" '{"market_symbol":"ETH/POINTS","side":"buy","order_type":"market","quantity":"0.01"}'
-    request "trading dashboard after buy" "GET" "/api/trading/dashboard" "200"
-    request "trading open limit order" "POST" "/api/trading/orders" "200" '{"market_symbol":"ETH/POINTS","side":"buy","order_type":"limit","quantity":"0.01","limit_price_points":1}'
-    TRADING_LIMIT_ORDER_UUID="$(json_expr 'data["order"]["order_uuid"]' "$(latest_raw "trading open limit order")" || true)"
+    login_root || return 1
+    rotate_maintenance_bypass_token || return 1
+    request "security center switch to internal_test mode" "POST" "/api/admin/server-mode" "200" '{"mode":"internal_test","confirm":"SWITCH_TO_INTERNAL_TEST","notes":"functional smoke routed trading write validation"}'
+    enable_smoke_feature_flags_after_mode_switch "admin after internal_test mode"
+    create_internal_test_tester_token || return 1
+    login_smoke_user "auth login smoke user internal_test" "$TESTER_TOKEN" || return 1
+    request_with_tester_token "trading tester internal_test limit order" "POST" "/api/trading/orders" "200" '{"market_symbol":"ETH/POINTS","side":"buy","order_type":"limit","quantity":"1","limit_price_points":1}'
+    TRADING_LIMIT_ORDER_UUID="$(json_expr 'data["order"]["order_uuid"]' "$(latest_raw "trading tester internal_test limit order")" || true)"
     if [[ -n "${TRADING_LIMIT_ORDER_UUID:-}" ]]; then
-      request "trading cancel limit order" "POST" "/api/trading/orders/${TRADING_LIMIT_ORDER_UUID}/cancel" "200" '{}'
+      request_with_tester_token "trading cancel internal_test limit order" "POST" "/api/trading/orders/${TRADING_LIMIT_ORDER_UUID}/cancel" "200" '{}'
     else
-      skip "trading cancel limit order" "limit order uuid not found"
+      skip "trading cancel internal_test limit order" "limit order uuid not found"
     fi
     login_root || return 1
     request "trading root report after smoke trades" "GET" "/api/admin/trading/report" "200"
@@ -625,6 +865,8 @@ run_checks() {
     fi
     request "trading root bot audit dashboard" "GET" "/api/root/trading/bot-audit/dashboard?limit=10" "200"
     request "trading root bot audit manual run" "POST" "/api/root/trading/bot-audit/run" "200" '{"force":true,"limit":10}'
+    request "security center switch back to test mode after internal_test" "POST" "/api/admin/server-mode" "200" '{"mode":"test","confirm":"SWITCH_TO_TEST","notes":"functional smoke return to test mode for user flows"}'
+    enable_smoke_feature_flags_after_mode_switch "admin after returning to test mode"
   else
     skip "points admin credit smoke user" "smoke user id missing"
     skip "points chain seal/verify" "smoke user id missing"
@@ -632,7 +874,14 @@ run_checks() {
 
   request "community announcements list" "GET" "/api/community/announcements" "200"
   request "community create announcement" "POST" "/api/community/announcements" "200" '{"title":"Smoke Announcement","content":"functional smoke announcement","is_pinned":true}'
-  ANNOUNCEMENT_ID="$(json_expr 'data["announcement"]["id"]' "$(latest_raw "community create announcement")" || true)"
+  assert_json_check \
+    "community create announcement" \
+    '"msg" in data and "公告已發布" in str(data["msg"]) and data.get("ok") is True' \
+    "community create announcement guidance" \
+    "announcement publish returns an explicit success message" \
+    "announcement publish response lost its user-facing success message"
+  request "community announcements list after create" "GET" "/api/community/announcements" "200"
+  ANNOUNCEMENT_ID="$(json_expr 'next((row["id"] for row in data.get("announcements", []) if row.get("title") == "Smoke Announcement"), "")' "$(latest_raw "community announcements list after create")" || true)"
   if [[ -n "${ANNOUNCEMENT_ID:-}" ]]; then
     request "community edit announcement" "PUT" "/api/community/announcements/${ANNOUNCEMENT_ID}" "200" '{"title":"Smoke Announcement Updated","content":"functional smoke announcement updated","is_pinned":false}'
   else
@@ -684,16 +933,34 @@ run_checks() {
   request "cloud drive remote downloader capabilities" "GET" "/api/cloud-drive/remote-download/capabilities" "200"
   request "cloud drive remote downloader rejects local file" "POST" "/api/cloud-drive/remote-download" "400" '{"url":"file:///etc/passwd","privacy_mode":"standard_plain"}'
   request "cloud drive remote downloader task rejects local file" "POST" "/api/cloud-drive/remote-download/tasks" "400" '{"url":"file:///etc/passwd","privacy_mode":"standard_plain"}'
+  assert_json_check \
+    "cloud drive remote downloader rejects local file" \
+    '"msg" in data and bool(str(data["msg"]).strip()) and data.get("ok") is False' \
+    "cloud drive remote downloader guidance" \
+    "invalid file:// input returns an explicit user-facing message" \
+    "remote downloader rejection lacked a user-facing msg"
   request "comfyui status" "GET" "/api/comfyui/status" "200"
   request "comfyui models" "GET" "/api/comfyui/models" "200,503"
   request "comfyui workflow presets list" "GET" "/api/comfyui/workflows" "200"
   request "comfyui workflow import unsafe path rejected" "POST" "/api/comfyui/workflows/import" "400" '{"title":"smoke unsafe workflow","workflow_json":{"1":{"class_type":"LoadImage","inputs":{"image":"/tmp/evil.png","upload":"image"}}}}'
+  assert_json_check \
+    "comfyui workflow import unsafe path rejected" \
+    '"msg" in data and "路徑" in str(data["msg"]) and data.get("ok") is False' \
+    "comfyui unsafe workflow guidance" \
+    "unsafe workflow import is rejected with a human-readable path warning" \
+    "unsafe workflow import rejection was missing clear guidance"
   if [[ "$(json_expr 'data.get("ok", False)' "$(latest_raw "comfyui models")" || echo false)" == "true" ]]; then
     pass "comfyui integration availability" "ComfyUI model endpoint is reachable"
   else
     skip "comfyui integration availability" "ComfyUI backend is optional for functional smoke"
   fi
   request "comfyui civitai search missing api key" "POST" "/api/root/comfyui/civitai/search" "400" '{"query":"sdxl anime","model_type":"checkpoint","base_model":"SDXL","nsfw_mode":"safe"}'
+  assert_json_check \
+    "comfyui civitai search missing api key" \
+    '"msg" in data and ("API Key" in str(data["msg"]) or "api key" in str(data["msg"]).lower()) and data.get("ok") is False' \
+    "comfyui missing api key guidance" \
+    "missing API key path returns an actionable operator-facing message" \
+    "missing Civitai API key rejection lacked actionable guidance"
   request "comfyui discard requires image ref" "POST" "/api/comfyui/discard" "400" '{"prompt_id":"smoke"}'
   request "comfyui share requires generated image" "POST" "/api/comfyui/share" "400" '{"title":"smoke comfyui share"}'
   request "cloud drive files list" "GET" "/api/cloud-drive/files" "200"
@@ -742,6 +1009,100 @@ run_checks() {
     skip "file status/download/delete" "upload id not found"
   fi
 
+  login_smoke_user || return 1
+  printf 'not-a-real-mp4-but-functional-smoke\n' > "$OUT_DIR/smoke_video.mp4"
+  printf 'plain text should be rejected by video upload\n' > "$OUT_DIR/not_media.txt"
+  multipart_request "video upload missing file" "/api/videos/upload" "400" \
+    "title=Missing video upload" \
+    "visibility=unlisted"
+  assert_json_check \
+    "video upload missing file" \
+    '"msg" in data and "影音檔" in str(data["msg"]) and data.get("error") == "missing_file"' \
+    "video upload missing file guidance" \
+    "missing upload path rejects cleanly with a user-facing message" \
+    "missing upload path did not expose a clear missing_file message"
+  multipart_request "video upload rejects non media" "/api/videos/upload" "400" \
+    "video=@${OUT_DIR}/not_media.txt;type=text/plain" \
+    "title=Smoke text upload" \
+    "visibility=unlisted"
+  assert_json_check \
+    "video upload rejects non media" \
+    '"msg" in data and ("影片" in str(data["msg"]) or "音樂" in str(data["msg"])) and data.get("error") == "not_media"' \
+    "video upload non-media guidance" \
+    "non-media upload is rejected with explicit media-type guidance" \
+    "non-media upload rejection lacked clear media guidance"
+  multipart_request "video upload and publish shared video" "/api/videos/upload" "200" \
+    "video=@${OUT_DIR}/smoke_video.mp4;type=video/mp4" \
+    "title=Functional Smoke Shared Video ${RUN_ID}" \
+    "description=video share smoke flow" \
+    "visibility=unlisted"
+  SMOKE_VIDEO_ID="$(json_expr 'data["video"]["id"]' "$(latest_raw "video upload and publish shared video")" || true)"
+  SMOKE_VIDEO_SHARE_URL="$(json_expr 'data["video"]["share_url"]' "$(latest_raw "video upload and publish shared video")" || true)"
+  SMOKE_VIDEO_SHARE_TOKEN="${SMOKE_VIDEO_SHARE_URL##*/}"
+  if [[ -n "${SMOKE_VIDEO_ID:-}" ]]; then
+    request "video list" "GET" "/api/videos" "200"
+    request "video detail" "GET" "/api/videos/${SMOKE_VIDEO_ID}" "200"
+    request "video playback" "GET" "/api/videos/${SMOKE_VIDEO_ID}/playback" "200"
+  else
+    skip "video list/detail/playback" "smoke video id not found"
+  fi
+  if [[ -n "${SMOKE_VIDEO_SHARE_URL:-}" && -n "${SMOKE_VIDEO_SHARE_TOKEN:-}" ]]; then
+    rm -f "$COOKIE_JAR"
+    request "video shared page" "GET" "${SMOKE_VIDEO_SHARE_URL}" "200"
+    assert_body_contains \
+      "video shared page" \
+      "讀取中..." \
+      "video shared page bootstrap state" \
+      "shared page HTML renders an explicit initial loading state" \
+      "shared page HTML was missing its initial loading hint"
+    assert_body_contains \
+      "video shared page" \
+      "/js/shared-video.js" \
+      "video shared page script reference" \
+      "shared page HTML references the dedicated shared-video runtime script" \
+      "shared page HTML was missing the shared-video runtime script reference"
+    request "video shared page script asset" "GET" "/js/shared-video.js" "200"
+    assert_body_contains \
+      "video shared page script asset" \
+      "正在讀取分享資訊..." \
+      "video shared page loading state" \
+      "shared page runtime script upgrades the loading copy instead of hanging silently" \
+      "shared page runtime script was missing the upgraded loading hint"
+    assert_body_contains \
+      "video shared page script asset" \
+      "AbortController" \
+      "video shared page timeout guard" \
+      "shared page includes an explicit fetch timeout guard" \
+      "shared page was missing the AbortController timeout guard"
+    assert_body_contains \
+      "video shared page script asset" \
+      "分享影音載入失敗" \
+      "video shared page error guidance" \
+      "shared page exposes a non-silent load failure message" \
+      "shared page was missing the user-facing load failure message"
+    request "video shared detail" "GET" "/api/videos/shared/${SMOKE_VIDEO_SHARE_TOKEN}" "200"
+    request "video shared playback" "GET" "/api/videos/shared/${SMOKE_VIDEO_SHARE_TOKEN}/playback" "200"
+    assert_json_check \
+      "video shared detail" \
+      '"video" in data and bool(str(data["video"]["title"]).strip()) and data.get("ok") is True' \
+      "video shared detail payload" \
+      "anonymous shared detail returns the video payload and title" \
+      "shared detail payload was missing the expected video title"
+    login_smoke_user || return 1
+    request "video share revoke" "DELETE" "/api/videos/${SMOKE_VIDEO_ID}/share-link" "200" '{}'
+    rm -f "$COOKIE_JAR"
+    request "video shared detail after revoke" "GET" "/api/videos/shared/${SMOKE_VIDEO_SHARE_TOKEN}" "404"
+    assert_json_check \
+      "video shared detail after revoke" \
+      '"msg" in data and bool(str(data["msg"]).strip()) and data.get("ok") is False' \
+      "video shared revoke guidance" \
+      "revoked shared link fails closed with a user-facing message" \
+      "revoked shared link response was missing a human-readable msg"
+  else
+    skip "video shared page/detail/playback" "smoke video share url not found"
+  fi
+  login_root || return 1
+
   request "bug report create" "POST" "/api/bug-reports" "200" '{"severity":"low","title":"Smoke bug report","description":"functional smoke bug report"}'
   request "admin bug reports" "GET" "/api/admin/bug-reports" "200"
   request "reports list" "GET" "/api/admin/reports" "200"
@@ -761,23 +1122,31 @@ run_checks() {
   check_unknown_options
 
   request "snapshot restore checkpoint" "POST" "/api/admin/snapshots/${APP_SNAPSHOT_ID}/restore" "200" '{"confirm":"RESTORE","reason":"functional smoke cleanup verification"}'
-  login_root || return 1
-  request "restore verify baseline threads" "GET" "/api/community/boards/${BASELINE_BOARD_ID}/threads" "200"
-  if json_bool "any(t['id'] == int('$BASELINE_THREAD_ID') for t in data['threads'])" "$(latest_raw "restore verify baseline threads")"; then
-    pass "restore kept baseline post" "thread=$BASELINE_THREAD_ID"
+  if json_bool 'data.get("ok") is True' "$(latest_raw "snapshot restore checkpoint")"; then
+    login_root || return 1
+    request "restore verify baseline threads" "GET" "/api/community/boards/${BASELINE_BOARD_ID}/threads" "200"
+    if json_bool "any(t['id'] == int('$BASELINE_THREAD_ID') for t in data['threads'])" "$(latest_raw "restore verify baseline threads")"; then
+      pass "restore kept baseline post" "thread=$BASELINE_THREAD_ID"
+    else
+      fail "restore kept baseline post" "baseline thread not found after restore"
+    fi
+    if json_bool "any(str(t['title']).startswith('residual Thread') for t in data['threads'])" "$(latest_raw "restore verify baseline threads")"; then
+      fail "restore removed residual posts" "residual thread still visible after restore"
+    else
+      pass "restore removed residual posts" "no residual thread under baseline board"
+    fi
+    request "restore verify residual category gone" "GET" "/api/community/categories" "200"
+    if json_bool "any(str(c['name']).startswith('residual Category') for c in data['categories'])" "$(latest_raw "restore verify residual category gone")"; then
+      fail "restore removed residual category" "residual category still visible after restore"
+    else
+      pass "restore removed residual category" "residual category not visible after restore"
+    fi
   else
-    fail "restore kept baseline post" "baseline thread not found after restore"
-  fi
-  if json_bool "any(str(t['title']).startswith('residual Thread') for t in data['threads'])" "$(latest_raw "restore verify baseline threads")"; then
-    fail "restore removed residual posts" "residual thread still visible after restore"
-  else
-    pass "restore removed residual posts" "no residual thread under baseline board"
-  fi
-  request "restore verify residual category gone" "GET" "/api/community/categories" "200"
-  if json_bool "any(str(c['name']).startswith('residual Category') for c in data['categories'])" "$(latest_raw "restore verify residual category gone")"; then
-    fail "restore removed residual category" "residual category still visible after restore"
-  else
-    pass "restore removed residual category" "residual category not visible after restore"
+    skip "restore verify baseline threads" "restore checkpoint did not complete; downstream restore invariants skipped"
+    skip "restore kept baseline post" "restore checkpoint did not complete; baseline retention cannot be asserted"
+    skip "restore removed residual posts" "restore checkpoint did not complete; residual cleanup cannot be asserted"
+    skip "restore verify residual category gone" "restore checkpoint did not complete; residual category check skipped"
+    skip "restore removed residual category" "restore checkpoint did not complete; residual category cleanup cannot be asserted"
   fi
 
   local reset_started_at_before
@@ -823,7 +1192,7 @@ $(cat "$RESULTS_TSV")
 - administration: health, readiness, anomaly, DB integrity, audit chain, environment, settings, feature flags, access controls, member rules, platform stats, audit log
 - security center: aggregate security overview, root-only audit data, server log/live output, security controls, threshold update, custom profile creation, custom profile mode switch, integrity guard status/pending finding checks
 - PointsChain economy: wallet, catalog/rules, admin adjustment, ledger listing, root block sealing, chain verification, manual ledger backup, recovery status, economy stats
-- Trading engine: live-price metadata, fee-aware grid preview, root trading report, manual market price update, user spot market buy, limit order creation/cancellation, root price-fusion status, root bot-audit dashboard/manual run
+- Trading engine: custom-profile blocked writes, test-mode read-only diagnostics, internal_test routed root limit order/cancellation, live-price metadata, fee-aware grid preview, root trading report, manual market price update, root price-fusion status, root bot-audit dashboard/manual run
 - snapshots/restore/reset: in-app snapshot creation/listing, restore verification that keeps only the baseline forum post, server reset must go offline within 20 seconds then reconnect within 180 seconds by default, reset verification that removes the baseline post, and TLS files regenerate after reset
 - deployment-local TLS: runtime/cert.pem and runtime/key.pem are generated on startup and regenerated after runtime reset
 - storage and files: storage quota/listing, root storage capacity audit, root storage user list, cloud-drive storage upgrade catalog, cloud-drive upload/status/preview/download/delete, remote download capability checks

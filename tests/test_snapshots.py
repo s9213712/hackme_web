@@ -135,6 +135,39 @@ def test_snapshot_runtime_secret_paths_use_runtime_prefix_for_external_runtime_d
     assert snapshot["metadata"]["runtime_secret_files"][0]["path"] == "runtime/.filekey"
 
 
+def test_restore_stages_runtime_secret_files_before_repo_runtime_sentinel(tmp_path):
+    audit_log = []
+    runtime_root = tmp_path / "runtime-root"
+    runtime_root.mkdir()
+    runtime_key = runtime_root / ".chain_seed"
+    service, db_path, uploads = _service(
+        tmp_path,
+        audit_log,
+        runtime_base_dir=runtime_root,
+        runtime_secret_files=[runtime_key],
+    )
+    runtime_key.write_text("seed-v1", encoding="utf-8")
+    (uploads / "f1.txt").write_text("one", encoding="utf-8")
+    snap = service.create_snapshot(snapshot_type="manual", actor={"id": 1, "username": "root"}, notes="baseline external runtime")
+
+    runtime_key.write_text("seed-v2", encoding="utf-8")
+    (uploads / "f2.txt").write_text("two", encoding="utf-8")
+    (service.base_dir / "runtime").write_text("block repo pollution\n", encoding="utf-8")
+
+    restored = service.restore_snapshot(snapshot_id=snap.snapshot_id, actor={"id": 1, "username": "root"}, reason="restore with sentinel")
+
+    assert restored["ok"] is True
+    assert runtime_key.read_text(encoding="utf-8") == "seed-v1"
+    assert not (uploads / "f2.txt").exists()
+    assert (service.base_dir / "runtime").read_text(encoding="utf-8") == "block repo pollution\n"
+    conn = _db(db_path)
+    event = conn.execute(
+        "SELECT status FROM snapshot_restore_events ORDER BY started_at DESC LIMIT 1"
+    ).fetchone()
+    conn.close()
+    assert event["status"] == "completed"
+
+
 def test_server_mode_hmac_key_defaults_to_runtime_subdir_without_snapshot_service(tmp_path, monkeypatch):
     monkeypatch.delenv("HACKME_RUNTIME_DIR", raising=False)
     monkeypatch.chdir(tmp_path)
@@ -189,6 +222,42 @@ def test_restore_reverts_db_and_uploaded_files_and_creates_pre_restore(tmp_path)
     assert event["pre_restore_snapshot_id"]
     assert (service.snapshots_root / event["pre_restore_snapshot_id"]).exists()
     assert any(call[0][0] == "SNAPSHOT_RESTORE_COMPLETED" for call in audit_log)
+
+
+def test_restore_preparation_tolerates_legacy_system_settings_without_value_type(tmp_path):
+    audit_log = []
+    service, db_path, _uploads = _service(tmp_path, audit_log)
+    conn = _db(db_path)
+    conn.executescript(
+        """
+        ALTER TABLE system_settings RENAME TO system_settings_old;
+        CREATE TABLE system_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT,
+            updated_at TEXT,
+            updated_by TEXT
+        );
+        INSERT INTO system_settings (key, value, updated_at, updated_by)
+        SELECT key, value, updated_at, updated_by FROM system_settings_old;
+        DROP TABLE system_settings_old;
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    snap = service.create_snapshot(snapshot_type="manual", actor={"id": 1, "username": "root"}, notes="legacy settings schema")
+    conn = _db(db_path)
+    conn.execute("INSERT INTO posts (id, title) VALUES (2, 'legacy dirty state')")
+    conn.commit()
+    conn.close()
+
+    restored = service.restore_snapshot(snapshot_id=snap.snapshot_id, actor={"id": 1, "username": "root"}, reason="legacy restore")
+
+    assert restored["ok"] is True
+    conn = _db(db_path)
+    posts = [row["title"] for row in conn.execute("SELECT title FROM posts ORDER BY id").fetchall()]
+    conn.close()
+    assert posts == ["P1"]
 
 
 def test_restore_reports_failure_when_post_restore_validation_fails(tmp_path):
@@ -501,6 +570,38 @@ def test_tester_token_shadow_layer_does_not_mutate_formal_user_or_points_chain(t
     conn.close()
     assert formal["role"] == "user"
     assert points_tables is None
+
+
+def test_create_tester_token_rejects_expired_or_timezone_aware_expiry(tmp_path):
+    audit_log = []
+    service, db_path, _uploads = _service(tmp_path, audit_log)
+    conn = _db(db_path)
+    conn.execute(
+        "INSERT INTO users (id, username, role, status, member_level, base_level, effective_level) VALUES (2, 'tester', 'user', 'active', 'normal', 'normal', 'normal')"
+    )
+    conn.execute("UPDATE server_modes SET current_mode='test' WHERE id=1")
+    conn.commit()
+    conn.close()
+    mode = ServerModeService(snapshot_service=service, get_db=lambda: _db(db_path), audit=lambda *args, **kwargs: audit_log.append((args, kwargs)))
+    actor = {"id": 1, "username": "root"}
+
+    expired = mode.create_tester_token(
+        actor=actor,
+        tester_user_id=2,
+        allowed_routes=["/api/tester"],
+        expires_at="2000-01-01T00:00:00",
+    )
+    aware = mode.create_tester_token(
+        actor=actor,
+        tester_user_id=2,
+        allowed_routes=["/api/tester"],
+        expires_at="2099-01-01T00:00:00+00:00",
+    )
+
+    assert expired["ok"] is False
+    assert "未來時間" in expired["msg"]
+    assert aware["ok"] is False
+    assert "不含時區" in aware["msg"]
 
 
 def _insert_passing_production_reports(db_path):

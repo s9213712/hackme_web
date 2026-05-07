@@ -645,6 +645,48 @@ def test_internal_test_open_margin_position_writes_chain_collateral_to_shadow_le
     assert int(shadow_wallet["frozen_points"] or 0) == 300
 
 
+def test_internal_test_root_limit_order_routes_row_to_shadow_orders(tmp_path):
+    _points, trading = _services(tmp_path)
+    ctx = _sm_ctx("internal_test", tester_id=3)
+    conn = trading.get_db()
+    try:
+        ensure_snapshot_schema(conn)
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = trading.place_order(
+        actor=_actor(3, "root", "super_admin"),
+        market_symbol="ETH/POINTS",
+        side="buy",
+        order_type="limit",
+        quantity="1",
+        limit_price_points=1,
+        ctx=ctx,
+    )
+
+    assert result["order"]["status"] == "open"
+    conn = trading.get_db()
+    try:
+        shadow = conn.execute(
+            """
+            SELECT tester_user_id, user_id, market_symbol, order_type, status
+            FROM test_shadow_orders
+            WHERE order_uuid=?
+            """,
+            (result["order"]["order_uuid"],),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert shadow is not None
+    assert int(shadow["tester_user_id"] or 0) == 3
+    assert int(shadow["user_id"] or 0) == 3
+    assert shadow["market_symbol"] == "ETH/POINTS"
+    assert shadow["order_type"] == "limit"
+    assert shadow["status"] == "open"
+
+
 def test_spot_buy_uses_trial_credit_before_points_chain_and_updates_position(tmp_path):
     points, trading = _services(tmp_path)
     points.record_transaction(

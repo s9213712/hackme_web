@@ -157,6 +157,7 @@ from services.server.security_runtime import (
     path_is_root_recovery_allowed_during_lockdown as path_is_root_recovery_allowed_during_lockdown_runtime_helper,
     reseal_audit_chain_if_required_on_startup as reseal_audit_chain_if_required_on_startup_helper,
     root_ip_is_allowed as root_ip_is_allowed_runtime_helper,
+    tester_token_identity_from_request as tester_token_identity_from_request_helper,
     tester_token_username_from_request as tester_token_username_from_request_helper,
     verify_token as verify_token_helper,
 )
@@ -394,6 +395,31 @@ def tester_token_username_from_request(req):
         record_security_event=record_security_event,
         get_client_ip_func=get_client_ip,
     )
+
+
+def tester_token_identity_from_request(req):
+    return tester_token_identity_from_request_helper(
+        req,
+        get_db=get_db,
+        ensure_snapshot_schema=ensure_snapshot_schema,
+        get_runtime_server_mode_func=get_runtime_server_mode,
+        record_security_event=record_security_event,
+        get_client_ip_func=get_client_ip,
+    )
+
+
+def tester_token_tester_id_from_request():
+    identity = tester_token_identity_from_request(request)
+    if not identity:
+        return None
+    return identity.get("tester_id")
+
+
+def tester_token_actor_role_from_request():
+    identity = tester_token_identity_from_request(request)
+    if not identity:
+        return None
+    return identity.get("actor_role")
 
 
 def path_is_root_recovery_allowed_during_lockdown(path):
@@ -699,21 +725,19 @@ def attach_smv2_ctx():
     MUST stay registered as the FIRST before_request hook so every
     later hook + route can read flask.g.smv2_ctx via current_ctx().
 
-    Phase 1 deliberately attaches only `mode` + `request_id` eagerly.
-    Computing `tester_id` / `actor_role` here would require running
-    `get_current_user_ctx()` for every request — which itself runs
-    `tester_token_username_from_request()` (timing-noisy DB query +
-    audit event recording). Doing that on top of the per-route auth
-    lookups would double the work and push some hot endpoints past
-    request-timeout budgets.
-
-    Later phases that genuinely need actor info (Phase 2 routing,
-    Phase 5 trading) will populate those fields where needed; see
-    `SmV2Context.tester_id` / `.actor_role` defaulting to None.
+    We still refuse to hydrate full session-cookie actor info here.
+    The only eagerly attached actor metadata is tester-token identity,
+    because internal_test trading/orderbook routing must know the
+    tester namespace before any write path runs. Requests without a
+    tester token stay cheap: the reader exits before any DB work.
     """
     if request.method == "OPTIONS":
         return None
-    smv2_attach_ctx(mode_reader=get_runtime_server_mode)
+    smv2_attach_ctx(
+        mode_reader=get_runtime_server_mode,
+        tester_id_reader=tester_token_tester_id_from_request,
+        actor_role_reader=tester_token_actor_role_from_request,
+    )
     return None
 
 

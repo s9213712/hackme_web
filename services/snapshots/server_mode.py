@@ -985,6 +985,14 @@ class ServerModeService:
         expires_at = str(expires_at or "").strip()
         if not expires_at:
             return {"ok": False, "msg": "expires_at 必填"}
+        try:
+            expires_at_dt = datetime.fromisoformat(expires_at)
+        except Exception:
+            return {"ok": False, "msg": "expires_at 格式錯誤，請使用本地時間 ISO 8601，例如 2026-05-07T18:30:00"}
+        if expires_at_dt.tzinfo is not None:
+            return {"ok": False, "msg": "expires_at 目前只接受不含時區的本地時間 ISO 8601，例如 2026-05-07T18:30:00"}
+        if expires_at_dt <= datetime.now():
+            return {"ok": False, "msg": "expires_at 必須是未來時間，請使用本地時間 ISO 8601"}
         token = f"hmt_{secrets.token_urlsafe(32)}"
         token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
         token_id = f"tester_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{secrets.token_hex(4)}"

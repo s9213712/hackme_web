@@ -216,14 +216,14 @@ def enforce_mode_restrictions(
     session_cookie_samesite,
     session_cookie_secure,
 ):
+    if request_obj.method == "OPTIONS" or not request_obj.path.startswith("/api"):
+        return None
     settings = get_system_settings()
     runtime_mode = smv2_current_ctx().mode
     mode_blocks_writes = runtime_mode in {"maintenance", "incident_lockdown"}
     if not mode_blocks_writes and not settings.get("maintenance_mode", False):
         return None
     if has_valid_maintenance_bypass_func(settings):
-        return None
-    if not request_obj.path.startswith("/api"):
         return None
     if request_obj.path in ("/api/csrf-token", "/api/logout", "/api/session/idle-timeout", "/api/me", "/api/captcha/challenge"):
         return None

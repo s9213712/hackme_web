@@ -134,7 +134,7 @@ def get_runtime_server_mode(*, get_db):
             conn.close()
 
 
-def tester_token_username_from_request(
+def tester_token_identity_from_request(
     req,
     *,
     get_db,
@@ -143,6 +143,9 @@ def tester_token_username_from_request(
     record_security_event,
     get_client_ip_func,
 ):
+    cache_key = "hackme_web.tester_token_identity"
+    if cache_key in req.environ:
+        return req.environ[cache_key]
     token = (
         req.headers.get("X-Tester-Token", "")
         or req.headers.get("X-Internal-Test-Token", "")
@@ -152,6 +155,7 @@ def tester_token_username_from_request(
     if not token and auth_header.lower().startswith("bearer "):
         token = auth_header[7:].strip()
     if not token:
+        req.environ[cache_key] = None
         return None
     raw_uri = (
         req.environ.get("RAW_URI")
@@ -169,6 +173,7 @@ def tester_token_username_from_request(
             target_user="-",
             detail=f"tester_token_suspicious_path:path={raw_uri}",
         )
+        req.environ[cache_key] = None
         return None
     conn = None
     try:
@@ -176,11 +181,12 @@ def tester_token_username_from_request(
         ensure_snapshot_schema(conn)
         mode = get_runtime_server_mode_func()
         if mode not in {"test", "internal_test"}:
+            req.environ[cache_key] = None
             return None
         token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
         row = conn.execute(
             """
-            SELECT t.*, u.username, u.status
+            SELECT t.*, u.username, u.role, u.status
             FROM tester_tokens t
             JOIN users u ON u.id=t.tester_user_id
             WHERE t.token_hash=?
@@ -201,6 +207,7 @@ def tester_token_username_from_request(
                 target_user=row["username"],
                 detail=f"tester_token_root_api:path={path}",
             )
+            req.environ[cache_key] = None
             return None
         forbidden_prefixes = (
             "/api/admin/server-mode",
@@ -216,6 +223,7 @@ def tester_token_username_from_request(
                 target_user=row["username"],
                 detail=f"tester_token_forbidden_admin_api:path={path}",
             )
+            req.environ[cache_key] = None
             return None
         try:
             allowed_routes = json.loads(row["allowed_routes_json"] or "[]")
@@ -228,6 +236,7 @@ def tester_token_username_from_request(
                 target_user=row["username"],
                 detail=f"tester_token_route_not_allowed:path={path}",
             )
+            req.environ[cache_key] = None
             return None
         window_start = (datetime.now() - timedelta(seconds=60)).isoformat()
         recent = conn.execute(
@@ -242,23 +251,53 @@ def tester_token_username_from_request(
                 target_user=row["username"],
                 detail=f"tester_token_rate_limit:token_id={row['id']}",
             )
+            req.environ[cache_key] = None
             return None
         conn.execute(
             "INSERT INTO tester_token_request_log (token_id, route, ip_address, created_at) VALUES (?, ?, ?, ?)",
             (row["id"], path, get_client_ip_func(), datetime.now().isoformat()),
         )
         conn.commit()
-        return row["username"]
+        identity = {
+            "username": row["username"],
+            "tester_id": int(row["tester_user_id"]),
+            "actor_role": str(row["role"] or "user").strip() or "user",
+        }
+        req.environ[cache_key] = identity
+        return identity
     except Exception:
         try:
             if conn:
                 conn.rollback()
         except Exception:
             pass
+        req.environ[cache_key] = None
         return None
     finally:
         if conn:
             conn.close()
+
+
+def tester_token_username_from_request(
+    req,
+    *,
+    get_db,
+    ensure_snapshot_schema,
+    get_runtime_server_mode_func,
+    record_security_event,
+    get_client_ip_func,
+):
+    identity = tester_token_identity_from_request(
+        req,
+        get_db=get_db,
+        ensure_snapshot_schema=ensure_snapshot_schema,
+        get_runtime_server_mode_func=get_runtime_server_mode_func,
+        record_security_event=record_security_event,
+        get_client_ip_func=get_client_ip_func,
+    )
+    if not identity:
+        return None
+    return identity.get("username")
 
 
 def path_is_root_recovery_allowed_during_lockdown(path, *, helper):

@@ -102,3 +102,16 @@ def test_video_platform_uses_separate_watch_view_and_mobile_layout():
     assert ".video-thumb-media" in styles
     assert "pointer-events: none" in styles
     assert '#video-playback-status[data-state="error"]' in styles
+
+
+def test_video_share_copy_and_shared_page_guardrails_are_visible_in_ui_code():
+    videos_js = (ROOT / "public" / "js" / "39-videos.js").read_text(encoding="utf-8")
+    shared_page = (ROOT / "public" / "js" / "shared-video.js").read_text(encoding="utf-8")
+
+    assert 'await navigator.clipboard.writeText(url);' in videos_js
+    assert 'videoMsg("連結已複製", true);' in videos_js
+    assert 'window.prompt("分享連結", url);' in videos_js
+    assert "此 E2EE 分享連結的本機片段金鑰不可復原；若遺失只能重新產生分享。" in videos_js
+    assert "AbortController" in shared_page
+    assert "setTimeout(() => controller.abort(), 10000);" in shared_page
+    assert 'loadSharedVideo().catch((err) => setMsg(err.message || "分享影音載入失敗", true));' in shared_page

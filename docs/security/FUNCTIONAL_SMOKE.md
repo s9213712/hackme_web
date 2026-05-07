@@ -75,6 +75,7 @@ security/run_functional_smoke.sh --keep-runtime
 
 | Runtime Data | Redirected Env |
 |---|---|
+| runtime root / certs / local TLS / other runtime-relative files | `HACKME_RUNTIME_DIR` |
 | SQLite database | `HTML_LEARNING_DB_DIR` |
 | server log | `HTML_LEARNING_LOG_DIR` |
 | chat sidecar | `HTML_LEARNING_CHAT_DIR` |
@@ -85,7 +86,14 @@ security/run_functional_smoke.sh --keep-runtime
 這代表測試不應修改 tracked 的 `bootstrap.schema.sql`，也不應把 runtime
 狀態寫回 repo 根目錄；`runtime/logs/`、`runtime/chats/`、`runtime/anchors/`、
 `runtime/storage/`、`runtime/reports/` 等執行期資料應只存在於隔離 runtime
-或本地 `runtime/` 目錄。
+或本地 `runtime/` 目錄。腳本也會明確設定 `HACKME_RUNTIME_DIR`，避免撞到 repo
+root 那個故意存在的 `runtime` fail-closed 哨兵檔。
+
+另外，若預設 port `50734` 已被其他本機 server 佔用，腳本會改挑一個空閒 port，
+並在報告中明確記錄 `server startup port selection`；若你是用 `--port` 或 `PORT`
+明確指定 port，則遇到衝突會直接 fail，避免誤打到舊 server 而產生假陽性結果。
+若執行環境本身禁止 socket probe，腳本也會直接 fail，避免把空白 port 當成成功，
+這時請改用明確 `--port`，或在允許 local bind 的環境下執行。
 
 ## Functional Coverage
 
@@ -104,11 +112,18 @@ security/run_functional_smoke.sh --keep-runtime
 | community/forum | announcement create/edit、category、board、board approval、thread、reply、lock、sticky、curate。 |
 | chat/DM | chat room、chat message、DM thread、DM message。 |
 | storage/cloud drive | quota/list、root storage capacity audit、root storage user list、storage upgrade catalog、cloud-drive upload、status、preview、download、delete。 |
-| PointsChain | wallet、catalog/rules、admin adjustment、ledger、seal/verify、manual backup、recovery status、一鍵異常鏈處理、economy stats。 |
-| trading extras | `live-price` metadata / transport state、fee-aware `grid/preview`、root `price-fusion-status` transport state、root `bot-audit` dashboard / manual run。 |
+| video platform | upload/publish、shared page load、anonymous shared playback、revoke flow、missing file / non-media upload error guidance。 |
+| PointsChain | wallet、catalog/rules、admin adjustment、ledger、seal/verify、manual backup、recovery status、一鍵異常鏈處理、economy stats，並驗 custom profile / 非 production 模式下的 production-only chain seal rejection guidance。 |
+| trading extras | 先驗證 custom profile 下交易寫入會 fail closed，再切到 `test` 模式驗證 read-only diagnostics，之後旋轉 maintenance bypass token、切到 `internal_test` 做可路由的真實限價單 / 取消單；同時覆蓋 `live-price` metadata / transport state、fee-aware `grid/preview`、root `price-fusion-status` transport state、root `bot-audit` dashboard / manual run。 |
 | ComfyUI integration | model/status wiring、optional backend availability、workflow preset list/import guards、share/discard error paths、root Civitai search API key guard。 |
 | reports/moderation | bug reports、reports、notifications、appeals、moderation actions/proposals、violations、message reports、mod notes、reputation endpoints。 |
-| hardening | unknown path `OPTIONS` 不應宣告 PUT/DELETE/PATCH 等危險方法。 |
+| hardening | unknown path `OPTIONS` 不應宣告 PUT/DELETE/PATCH 等危險方法；remote downloader rejections expose a user-facing message；known regressions: copy-share fallback and shared page loading timeout guard；custom profile trading block plus test-mode diagnostics and internal_test routed order flow；browser-only mode 需帶 maintenance bypass token 才能讓 operator script 繼續驗證。 |
+
+Video platform: upload/publish, shared page load, anonymous shared playback, revoke flow.
+
+`internal_test` 的 tester token smoke 會用「本地時間、無時區」的 ISO 8601 到期字串，
+因為 root UI 送的是 `datetime-local`；若改成 naive UTC，token 可能會在 UTC+offset
+環境下看起來建立成功、實際登入時卻被當成已過期。
 
 ## Snapshot / Restore / Reset Verification
 

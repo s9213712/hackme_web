@@ -3,6 +3,7 @@ import sqlite3
 from flask import Flask
 
 from services import auth
+from services.server.database import ensure_security_support_schema
 
 
 def test_require_csrf_safe_get_does_not_require_csrf(monkeypatch):
@@ -169,6 +170,29 @@ def test_delete_csrf_tokens_for_username_invalidates_old_session_token(tmp_path)
     assert auth.verify_csrf_token("old-token", "alice") is True
     auth.delete_csrf_tokens_for_username("alice")
     assert auth.verify_csrf_token("old-token", "alice") is False
+
+
+def test_security_support_schema_creates_csrf_tokens_table():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute("CREATE TABLE secure_audit (id INTEGER PRIMARY KEY)")
+    conn.execute("CREATE TABLE violation_appeals (id INTEGER PRIMARY KEY)")
+    conn.execute("CREATE TABLE sessions (id INTEGER PRIMARY KEY, created_at TEXT, expires_at TEXT)")
+    conn.execute("CREATE TABLE security_events (id INTEGER PRIMARY KEY, event_type TEXT, ip_address TEXT, detail TEXT, created_at TEXT)")
+
+    ensure_security_support_schema(
+        conn,
+        ensure_member_level_rules_schema=lambda db: None,
+        ensure_moderation_proposals_schema=lambda db: None,
+        ensure_governance_records_schema=lambda db: None,
+        ensure_snapshot_schema=lambda db: None,
+        ensure_upload_security_schema=lambda db: None,
+        ensure_integrity_schema=lambda db: None,
+        ensure_account_recovery_schema=lambda db: None,
+    )
+
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(csrf_tokens)").fetchall()}
+    assert cols >= {"id", "token_hash", "username", "expires_at"}
 
 
 # ── Server Mode v2 §Mode Behavior Matrix footnote 1 ────────────────────────

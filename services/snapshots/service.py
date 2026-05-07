@@ -275,6 +275,56 @@ class SnapshotService:
             if actual != digest:
                 errors.append({"path": rel_path, "reason": "hash_mismatch", "expected_sha256": digest, "actual_sha256": actual})
         return {"ok": not errors, "checked": checked, "errors": errors}
+
+    def _load_snapshot_metadata(self, snapshot_dir):
+        metadata_path = snapshot_dir / "metadata.json"
+        if not metadata_path.exists():
+            return {}
+        return json.loads(metadata_path.read_text(encoding="utf-8"))
+
+    def _runtime_secret_restore_paths(self, snapshot_dir):
+        try:
+            metadata = self._load_snapshot_metadata(snapshot_dir)
+        except Exception:
+            return set()
+        expected = metadata.get("runtime_secret_files") or []
+        restore_paths = set()
+        for item in expected:
+            rel_path = str((item or {}).get("path") or "").strip().strip("/")
+            if rel_path:
+                restore_paths.add(rel_path)
+        return restore_paths
+
+    def _apply_staged_config_restore(self, snapshot_dir, stage_dir):
+        runtime_secret_paths = self._runtime_secret_restore_paths(snapshot_dir)
+        moved = []
+        stage_root = Path(stage_dir)
+        allowed_base = self.base_dir.resolve(strict=False)
+        for staged in sorted(stage_root.rglob("*")):
+            if not staged.is_file():
+                continue
+            rel = staged.relative_to(stage_root).as_posix()
+            if rel in runtime_secret_paths:
+                target, error = self._resolve_runtime_secret_target(rel)
+                if error:
+                    raise RuntimeError(f"runtime secret restore blocked: {rel} ({error})")
+            else:
+                target = (self.base_dir / rel).resolve(strict=False)
+                if target != allowed_base and allowed_base not in target.parents:
+                    raise RuntimeError(f"config restore blocked outside base_dir: {rel}")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.exists():
+                if target.is_dir():
+                    raise RuntimeError(f"config restore target is a directory: {target}")
+                target.unlink()
+            os.replace(staged, target)
+            moved.append({"path": rel, "target": str(target)})
+        try:
+            shutil.rmtree(stage_root)
+        except Exception:
+            pass
+        return {"moved": moved}
+
     def create_snapshot(self, *, snapshot_type, actor, notes=None):
         if snapshot_type not in SNAPSHOT_TYPES:
             return SnapshotResult(False, error="snapshot type 錯誤")
@@ -947,10 +997,21 @@ class SnapshotService:
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
-            conn.execute(
-                "UPDATE system_settings SET value='true', value_type='bool', updated_at=? WHERE key='maintenance_mode'",
-                (started_at,),
-            )
+            settings_cols = {
+                row["name"] for row in conn.execute("PRAGMA table_info(system_settings)").fetchall()
+            }
+            # 舊版 runtime 只有 key/value/updated_at/updated_by，沒有 value_type。
+            # restore 準備階段不能因為 schema 尚未升級就卡死；這裡只在欄位存在時補 type。
+            if "value_type" in settings_cols:
+                conn.execute(
+                    "UPDATE system_settings SET value='true', value_type='bool', updated_at=? WHERE key='maintenance_mode'",
+                    (started_at,),
+                )
+            else:
+                conn.execute(
+                    "UPDATE system_settings SET value='true', updated_at=? WHERE key='maintenance_mode'",
+                    (started_at,),
+                )
             conn.execute(
                 "INSERT INTO snapshot_restore_events "
                 "(id, snapshot_id, restored_by, started_at, status, restore_mode, pre_restore_snapshot_id, checksum_verified, dry_run) "
@@ -992,8 +1053,12 @@ class SnapshotService:
             self._restore_db(snapshot_dir)
             self._clear_file_roots()
             _safe_extract_tar(snapshot_dir / "uploads.tar.gz", self.base_dir)
-            _safe_extract_tar(snapshot_dir / "config.tar.gz", self.base_dir)
-            self._relocate_runtime_secret_files_from_restore(snapshot_dir)
+            config_restore_stage = snapshot_dir / ".restore_config_stage"
+            if config_restore_stage.exists():
+                shutil.rmtree(config_restore_stage)
+            config_restore_stage.mkdir(parents=True, exist_ok=True)
+            _safe_extract_tar(snapshot_dir / "config.tar.gz", config_restore_stage)
+            self._apply_staged_config_restore(snapshot_dir, config_restore_stage)
             completed_at = datetime.now().isoformat()
             mode_log_merge = self._merge_mode_switch_logs(preserved_mode_switch_logs)
             conn = self.get_db()

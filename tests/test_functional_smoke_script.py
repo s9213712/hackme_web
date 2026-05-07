@@ -23,18 +23,39 @@ def test_functional_smoke_waits_for_reset_restart_reconnect():
     assert "20 秒內觀察連線失敗" in docs
     assert "started_at" in docs
     assert "3 分鐘內重新連線" in docs
+    assert 'HACKME_RUNTIME_DIR="$RUNTIME_ROOT"' in script
+    assert "ensure_start_port || return 1" in script
+    assert "refresh_base_url()" in script
 
 
 def test_functional_smoke_covers_latest_trading_and_announcement_paths():
     script = (ROOT / "security" / "run_functional_smoke.sh").read_text(encoding="utf-8")
     docs = (ROOT / "docs" / "security" / "FUNCTIONAL_SMOKE.md").read_text(encoding="utf-8")
 
+    assert 'request "points chain seal blocked outside production" "POST" "/api/root/points/chain/seal" "400"' in script
+    assert '"points chain seal guidance"' in script
+    assert 'request "trading market buy blocked in custom profile" "POST" "/api/trading/orders" "400"' in script
+    assert '"trading custom profile block guidance"' in script
+    assert 'request "security center switch to test mode" "POST" "/api/admin/server-mode" "200" \'{"mode":"test","confirm":"SWITCH_TO_TEST","notes":"functional smoke trading diagnostics"}\'' in script
+    assert 'enable_smoke_feature_flags_after_mode_switch "admin after test mode"' in script
     assert 'request "trading live price" "GET" "/api/trading/live-price?market=ETH/POINTS" "200"' in script
     assert 'request "trading reference prices" "GET" "/api/trading/reference-prices?market=ETH/POINTS&interval=15m&limit=24" "200"' in script
     assert 'request "trading grid preview" "POST" "/api/trading/grid/preview" "200"' in script
+    assert 'request "admin rotate maintenance bypass token" "POST" "/api/admin/access-controls/maintenance-bypass-token" "200" \'{"confirm":"ROTATE","ttl_minutes":30}\'' in script
+    assert 'MAINTENANCE_BYPASS_TOKEN="$(json_expr \'data["token"]\'' in script
+    assert 'request "security center switch to internal_test mode" "POST" "/api/admin/server-mode" "200" \'{"mode":"internal_test","confirm":"SWITCH_TO_INTERNAL_TEST","notes":"functional smoke routed trading write validation"}\'' in script
+    assert "datetime.now() + timedelta(hours=6)" in script
+    assert "Using utcnow() here creates a token" in script
+    assert 'request "root create tester token for smoke trading" "POST" "/api/root/tester-token/create" "200"' in script
+    assert 'login_smoke_user "auth login smoke user internal_test" "$TESTER_TOKEN"' in script
+    assert 'request_with_tester_token "trading tester internal_test limit order" "POST" "/api/trading/orders" "200"' in script
+    assert 'request_with_tester_token "trading cancel internal_test limit order" "POST" "/api/trading/orders/${TRADING_LIMIT_ORDER_UUID}/cancel" "200" \'{}\'' in script
+    assert 'request "security center switch back to test mode after internal_test" "POST" "/api/admin/server-mode" "200"' in script
     assert 'request "trading root price fusion status" "GET" "/api/root/trading/price-fusion-status?market_symbol=ETH/POINTS" "200"' in script
     assert 'request "trading root bot audit dashboard" "GET" "/api/root/trading/bot-audit/dashboard?limit=10" "200"' in script
     assert 'request "trading root bot audit manual run" "POST" "/api/root/trading/bot-audit/run" "200"' in script
+    assert '"community create announcement guidance"' in script
+    assert 'request "community announcements list after create" "GET" "/api/community/announcements" "200"' in script
     assert 'request "community edit announcement" "PUT" "/api/community/announcements/${ANNOUNCEMENT_ID}" "200"' in script
     assert 'request "comfyui civitai search missing api key" "POST" "/api/root/comfyui/civitai/search" "400"' in script
     assert 'request "comfyui workflow presets list" "GET" "/api/comfyui/workflows" "200"' in script
@@ -46,6 +67,55 @@ def test_functional_smoke_covers_latest_trading_and_announcement_paths():
     assert '"transport_state" in data.get("status", {}) and "connected" in data.get("status", {}) and "fallback" in data.get("status", {}) and "stale" in data.get("status", {}) and "confidence" in data.get("status", {}) and "provider_count" in data.get("status", {}) and "last_update_at" in data.get("status", {}) and "exclusion_reason" in data.get("status", {})' in script
     assert "trading extras" in docs
     assert "announcement create/edit" in docs
+    assert "custom profile trading block plus test-mode diagnostics and internal_test routed order flow" in docs
+    assert "browser-only mode 需帶 maintenance bypass token" in docs
+    assert "本地時間、無時區" in docs
+    assert "production-only chain seal rejection guidance" in docs
     assert "Civitai search API key guard" in docs
     assert "workflow preset list/import guards" in docs
     assert "offline root recovery CLI availability" in docs
+
+
+def test_functional_smoke_login_helpers_require_real_session_cookie():
+    script = (ROOT / "security" / "run_functional_smoke.sh").read_text(encoding="utf-8")
+    docs = (ROOT / "docs" / "security" / "FUNCTIONAL_SMOKE.md").read_text(encoding="utf-8")
+
+    assert "session_token_from_cookie()" in script
+    assert 'fail "auth session refresh" "missing session_token cookie after root login"' in script
+    assert 'fail "auth session refresh smoke user" "missing session_token cookie after smoke user login"' in script
+    assert "port_is_available()" in script
+    assert "pick_free_local_port()" in script
+    assert 'BASE_URL="${SMOKE_SCHEME}://${HOST}:${PORT}"' in script
+    assert 'if [[ -z "$PORT" ]]; then' in script
+    assert 'auto-pick failed; choose --port explicitly or run outside a socket-restricted sandbox' in script
+    assert 'pass "server startup port selection" "port $previous_port already in use; switched to free port $PORT"' in script
+    assert 'fail "server startup port selection" "port $PORT already in use; choose another --port or PORT value"' in script
+    assert "socket probe" in docs
+
+
+def test_functional_smoke_covers_video_share_flow_and_user_facing_error_paths():
+    script = (ROOT / "security" / "run_functional_smoke.sh").read_text(encoding="utf-8")
+    docs = (ROOT / "docs" / "security" / "FUNCTIONAL_SMOKE.md").read_text(encoding="utf-8")
+
+    assert '"feature_videos_enabled": true' in script
+    assert 'multipart_request "video upload missing file" "/api/videos/upload" "400"' in script
+    assert 'multipart_request "video upload rejects non media" "/api/videos/upload" "400"' in script
+    assert 'multipart_request "video upload and publish shared video" "/api/videos/upload" "200"' in script
+    assert 'request "video shared page" "GET" "${SMOKE_VIDEO_SHARE_URL}" "200"' in script
+    assert 'request "video shared page script asset" "GET" "/js/shared-video.js" "200"' in script
+    assert 'request "video shared detail" "GET" "/api/videos/shared/${SMOKE_VIDEO_SHARE_TOKEN}" "200"' in script
+    assert 'request "video shared playback" "GET" "/api/videos/shared/${SMOKE_VIDEO_SHARE_TOKEN}/playback" "200"' in script
+    assert 'request "video share revoke" "DELETE" "/api/videos/${SMOKE_VIDEO_ID}/share-link" "200" \'{}\'' in script
+    assert 'request "video shared detail after revoke" "GET" "/api/videos/shared/${SMOKE_VIDEO_SHARE_TOKEN}" "404"' in script
+    assert 'assert_body_contains \\' in script
+    assert '"讀取中..."' in script
+    assert '"/js/shared-video.js"' in script
+    assert '"AbortController"' in script
+    assert '"分享影音載入失敗"' in script
+    assert '"video upload missing file guidance"' in script
+    assert '"video upload non-media guidance"' in script
+    assert '"video shared revoke guidance"' in script
+    assert "Video platform: upload/publish, shared page load, anonymous shared playback, revoke flow" in docs
+    assert "known regressions: copy-share fallback and shared page loading timeout guard" in docs
+    assert "remote downloader rejections expose a user-facing message" in docs
+    assert "HACKME_RUNTIME_DIR" in docs

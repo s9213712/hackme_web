@@ -126,6 +126,12 @@ def script_check(script: str, args: list[str], *, timeout: int) -> Subcheck:
     return result
 
 
+def shell_script_check(script: str, args: list[str], *, timeout: int) -> Subcheck:
+    result = run_command(["bash", str(ROOT / script), *args], timeout=timeout)
+    result.name = f"{script} {' '.join(args)}".strip()
+    return result
+
+
 def py_compile_all() -> Subcheck:
     started = time.perf_counter()
     excluded_parts = {".git", ".venv", "venv", "__pycache__", "storage", "database", "logs", "security/reports"}
@@ -213,7 +219,16 @@ def build_modules(args) -> list[ModuleResult]:
     ], timeout=args.timeout))
     modules.append(auth)
 
-    rbac = ModuleResult("C. Permission / RBAC")
+    functional = ModuleResult("C. Functional Live Smoke")
+    functional.add(shell_script_check(
+        "security/run_functional_smoke.sh",
+        ["--port", str(args.functional_smoke_port), "--out", str(out_dir)],
+        timeout=max(args.timeout, 420),
+    ))
+    functional.unresolved_risks.append("Functional smoke validates major user/admin flows, but it is not a substitute for focused pentest or browser UX review.")
+    modules.append(functional)
+
+    rbac = ModuleResult("D. Permission / RBAC")
     rbac.add(pytest_check([
         "test_community_permissions.py",
         "test_chat_permissions.py",
@@ -229,16 +244,16 @@ def build_modules(args) -> list[ModuleResult]:
         ], timeout=args.timeout))
     modules.append(rbac)
 
-    snapshot = ModuleResult("D. Snapshot / Restore")
+    snapshot = ModuleResult("E. Snapshot / Restore")
     snapshot.add(pytest_check(["test_snapshots.py", "test_frontend_snapshot_actions.py"], timeout=args.timeout))
     modules.append(snapshot)
 
-    economy = ModuleResult("E. PointsChain / Economy")
+    economy = ModuleResult("F. PointsChain / Economy")
     economy.add(pytest_check(["test_points_chain.py", "test_trading_engine.py"], timeout=args.timeout))
     economy.add(script_check("security/trading_exchange_validation.py", ["--out", str(out_dir)], timeout=args.timeout))
     modules.append(economy)
 
-    drive = ModuleResult("F. Cloud Drive")
+    drive = ModuleResult("G. Cloud Drive")
     drive.add(pytest_check([
         "test_storage_paths.py",
         "test_upload_security.py",
@@ -249,7 +264,7 @@ def build_modules(args) -> list[ModuleResult]:
     ], timeout=max(args.timeout, 420)))
     modules.append(drive)
 
-    videos = ModuleResult("G. Video Platform")
+    videos = ModuleResult("H. Video Platform")
     videos.add(pytest_check([
         "test_video_publish.py",
         "test_video_permission.py",
@@ -260,7 +275,7 @@ def build_modules(args) -> list[ModuleResult]:
     videos.add(script_check("security/video_module_pentest.py", ["--out", str(out_dir)], timeout=args.timeout))
     modules.append(videos)
 
-    trading = ModuleResult("H. Trading / Virtual Exchange")
+    trading = ModuleResult("I. Trading / Virtual Exchange")
     trading.add(pytest_check([
         "test_trading_engine.py",
         "test_trading_reference_prices.py",
@@ -287,7 +302,7 @@ def build_modules(args) -> list[ModuleResult]:
         ], timeout=max(args.timeout, 360)))
     modules.append(trading)
 
-    forum = ModuleResult("I. Forum / Community / Report")
+    forum = ModuleResult("J. Forum / Community / Report")
     forum.add(pytest_check([
         "test_community_permissions.py",
         "test_reports_notifications.py",
@@ -297,7 +312,7 @@ def build_modules(args) -> list[ModuleResult]:
     ], timeout=args.timeout))
     modules.append(forum)
 
-    integrity = ModuleResult("J. Integrity Guard")
+    integrity = ModuleResult("K. Integrity Guard")
     integrity.add(pytest_check([
         "test_integrity_guard.py",
         "test_integrity_repair.py",
@@ -305,12 +320,12 @@ def build_modules(args) -> list[ModuleResult]:
     ], timeout=args.timeout))
     modules.append(integrity)
 
-    audit = ModuleResult("K. Audit / Logs")
+    audit = ModuleResult("L. Audit / Logs")
     audit.add(pytest_check(["test_security_events.py", "test_settings_audit_reseal.py"], timeout=args.timeout))
     audit.add(script_check("security/server_mode_v2_adversarial.py", ["--out", str(out_dir)], timeout=args.timeout))
     modules.append(audit)
 
-    stress = ModuleResult("L. Stress / Reliability")
+    stress = ModuleResult("M. Stress / Reliability")
     if args.base_url:
         stress.add(run_command([
             sys.executable, str(ROOT / "security" / "stress_test.py"),
@@ -328,7 +343,7 @@ def build_modules(args) -> list[ModuleResult]:
         ))
     modules.append(stress)
 
-    full_suite = ModuleResult("M. Full Test Suite")
+    full_suite = ModuleResult("N. Full Test Suite")
     full_suite.add(py_compile_all())
     full_suite.add(git_diff_check())
     full_suite.add(reports_output_policy_check())
@@ -465,6 +480,7 @@ def parse_args():
     parser.add_argument("--base-url", default=os.environ.get("WHOLE_SITE_GATE_BASE_URL", "http://127.0.0.1:5000"))
     parser.add_argument("--out", default=str(ROOT / "security" / "reports"))
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
+    parser.add_argument("--functional-smoke-port", type=int, default=50741)
     parser.add_argument("--stress-requests", type=int, default=60)
     parser.add_argument("--stress-concurrency", type=int, default=10)
     parser.add_argument("--skip-full-pytest", action="store_true")

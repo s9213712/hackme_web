@@ -25,6 +25,8 @@ see both edits side-by-side.
 
 import sqlite3
 from contextlib import closing
+from pathlib import Path
+import py_compile
 
 from services.trading.engine import ensure_trading_schema
 
@@ -68,6 +70,16 @@ def _build_fresh_db(tmp_path):
     ensure_trading_schema(conn)
     conn.commit()
     return conn
+
+
+def test_schema_ddl_module_compiles_cleanly():
+    """Slice 4b moved CREATE TABLE strings into schema_ddl.py.
+
+    Keep a direct compile check here so future doc/comment edits cannot
+    silently break fresh-interpreter imports of ensure_trading_schema.
+    """
+    module_path = Path(__file__).resolve().parents[1] / "services" / "trading" / "schema_ddl.py"
+    py_compile.compile(str(module_path), doraise=True)
 
 
 # ─────────────────────────────────────────────────────────────────

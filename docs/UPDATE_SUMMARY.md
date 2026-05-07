@@ -1,6 +1,33 @@
 # Update Summary
 
-Release ID: `2026.05.06-147`
+Release ID: `2026.05.07-153`
+
+## 2026.05.07-153
+
+- Completed a real end-to-end functional audit instead of static inspection
+  only. The existing smoke surface now re-checks public/auth/admin/security
+  flows, PointsChain/economy/trading, `internal_test` routed trading, Cloud
+  Drive, remote download guardrails, ComfyUI guardrails, video share/playback,
+  snapshot restore, and runtime reset/reconnect.
+- Fixed a fresh-import `SyntaxError` in `services/trading/schema_ddl.py` caused
+  by a nested triple-quote example in the module docstring, and added direct
+  `py_compile` regression coverage.
+- `ensure_security_support_schema()` now explicitly creates `csrf_tokens`,
+  preventing `/api/csrf-token` from failing on a fresh schema/bootstrap path.
+- `OPTIONS` requests now bypass SMv2 context lookup so unknown-path preflight
+  probes fail cleanly instead of throwing a server-side context error.
+- Snapshot restore now stages runtime-secret files before moving them into the
+  runtime tree, avoiding collisions with a repo-root `runtime` sentinel.
+- Video share update/revoke now commits before the real-audit write path, and
+  shared-video fetch now times out explicitly instead of hanging on a forever
+  loading state.
+- `internal_test` shadow-order writes now persist `tester_user_id` correctly,
+  and tester-token creation now rejects malformed, timezone-aware, or already
+  expired expiry timestamps with operator-facing guidance.
+- `security/run_functional_smoke.sh` now generates internal-test tester-token
+  expiry using local wall time, and fails clearly when free-port probing is
+  blocked by a restricted environment instead of silently continuing with a
+  blank port.
 
 ## 2026.05.06-147
 

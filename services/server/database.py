@@ -112,6 +112,16 @@ def ensure_security_support_schema(
 ):
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS csrf_tokens (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            token_hash   TEXT NOT NULL UNIQUE,
+            username     TEXT NOT NULL,
+            expires_at   TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS ip_blocks (
             id             INTEGER PRIMARY KEY AUTOINCREMENT,
             ip_address     TEXT NOT NULL UNIQUE,

@@ -153,34 +153,65 @@ def place_order(
             order_reason = ""
         orders_table = resolve_table("orders", ctx)
         positions_table = resolve_table("positions", ctx)
-        cur = conn.execute(
-            f"""
-            INSERT INTO {orders_table} (
-                order_uuid, user_id, market_symbol, side, order_type, funding_mode, execution_mode,
-                quantity_units, limit_price_points, execution_price_points, status,
-                frozen_points, trial_frozen_points, chain_frozen_points, fee_points,
-                filled_quantity_units, reason, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, 'house_counterparty', ?, ?, ?, 'open', ?, ?, ?, ?, 0, ?, ?, ?)
-            """,
-            (
-                order_uuid,
-                user_id,
-                market["symbol"],
-                side,
-                order_type,
-                funding_mode,
-                quantity_units,
-                limit_price,
-                execution_price,
-                frozen_points,
-                trial_frozen,
-                chain_frozen,
-                fee,
-                order_reason,
-                now,
-                now,
-            ),
-        )
+        if orders_table == "test_shadow_orders":
+            cur = conn.execute(
+                f"""
+                INSERT INTO {orders_table} (
+                    order_uuid, tester_user_id, user_id, market_symbol, side, order_type, funding_mode, execution_mode,
+                    quantity_units, limit_price_points, execution_price_points, status,
+                    frozen_points, trial_frozen_points, chain_frozen_points, fee_points,
+                    filled_quantity_units, reason, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'house_counterparty', ?, ?, ?, 'open', ?, ?, ?, ?, 0, ?, ?, ?)
+                """,
+                (
+                    order_uuid,
+                    service._shadow_actor_user_id(ctx, user_id),
+                    user_id,
+                    market["symbol"],
+                    side,
+                    order_type,
+                    funding_mode,
+                    quantity_units,
+                    limit_price,
+                    execution_price,
+                    frozen_points,
+                    trial_frozen,
+                    chain_frozen,
+                    fee,
+                    order_reason,
+                    now,
+                    now,
+                ),
+            )
+        else:
+            cur = conn.execute(
+                f"""
+                INSERT INTO {orders_table} (
+                    order_uuid, user_id, market_symbol, side, order_type, funding_mode, execution_mode,
+                    quantity_units, limit_price_points, execution_price_points, status,
+                    frozen_points, trial_frozen_points, chain_frozen_points, fee_points,
+                    filled_quantity_units, reason, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'house_counterparty', ?, ?, ?, 'open', ?, ?, ?, ?, 0, ?, ?, ?)
+                """,
+                (
+                    order_uuid,
+                    user_id,
+                    market["symbol"],
+                    side,
+                    order_type,
+                    funding_mode,
+                    quantity_units,
+                    limit_price,
+                    execution_price,
+                    frozen_points,
+                    trial_frozen,
+                    chain_frozen,
+                    fee,
+                    order_reason,
+                    now,
+                    now,
+                ),
+            )
         order_id = cur.lastrowid
         if side == "buy":
             if funding_mode == "root_simulated":
