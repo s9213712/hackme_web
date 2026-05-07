@@ -229,9 +229,73 @@ import；或者 commit 你那部份後告知 Claude 進 slice 3b 收尾。
 
 ---
 
-## 9. Verdict
+## 10. Slice 4 進場（2026-05-07 同日繼續）
 
-**No conflict, no override, fully additive across 6 commits.**
+兩個獨立 commit：
+
+| Commit | Slice | 動了 | 行為變化 |
+|---|---|---|---|
+| `8964863` | 4a | `tests/test_trading_schema_snapshot.py`（新，5 tests） | 否（純測試新增） |
+| `edc3e8b` | 4b | `services/trading/engine.py` -534 行；`services/trading/schema_ddl.py` 新 | 否（snapshot test 驗證 byte-for-byte 等價） |
+
+### Slice 4a — schema 快照鎖死
+
+`tests/test_trading_schema_snapshot.py` 5 tests：
+1. 必須有 15 個關鍵 trading_* table（`trading_settings`、`trading_markets`、`trading_orders`、`trading_margin_positions` 等）
+2. 33 個 default `trading_settings` keys 完全凍結（任一新增/刪除必須同 commit 更新 EXPECTED_SETTINGS_KEYS）
+3. 重跑 ensure_trading_schema 第二次 → 等價（idempotent）
+4. 11 個關鍵 table 各自的 ~40 個 column 簽名（name, type, notnull, pk）逐欄鎖死，含：
+   - `trading_markets.fee_rate_percent` + `max_price_jump_percent`（slice 1 unit-rename target）
+   - `trading_markets.live_price_confirmed_at`（boot-ready gate from `6c807c2`）
+   - `trading_markets_registry.allow_risk_grade_usage`（liquidation-grade price 閘）
+   - `trading_orders.{trial,chain}_frozen_points` + `funding_mode`
+   - `trading_margin_positions` 完整 column set
+5. 初始 reserve_pool 行 + initial_funding event 確實 seed
+
+> Codex 順手在 4a 的 test 加了 `test_schema_ddl_module_compiles_cleanly` 用 `py_compile`
+> 防止 schema_ddl.py 將來被 doc/comment edit 弄崩 — 感謝 ✓
+
+### Slice 4b — 27 個 CREATE TABLE 抽到 schema_ddl.py
+
+`services/trading/engine.py` 的 740 行 `ensure_trading_schema` 變 ~210 行。L813-L1346
+這 534 行 `conn.execute("""CREATE TABLE..."""")` 區段全部搬到 `services/trading/schema_ddl.py`
+變成 27 個 named constants + `ALL_TABLE_DDL` tuple。原 function 改為：
+
+```python
+def ensure_trading_schema(conn):
+    from services.trading.schema_ddl import ALL_TABLE_DDL
+    for ddl in ALL_TABLE_DDL:
+        conn.execute(ddl)
+    now = _now()
+    # ... imperative migrations unchanged
+```
+
+Lazy import（在 function 內）避免 circular dependency 風險。
+
+**Imperative migrations 仍在 engine.py**：PRAGMA-guarded ALTER TABLE、legacy unit 換算
+(`bps`→`percent`)、default `trading_settings` INSERT OR IGNORE、catalog seed sync —
+都需要共用 `now` 與 helpers。拆這部分是 slice 4c（更高風險，需要設計 ctx 物件傳遞
+state）。
+
+### 通知 Codex 你的並行 working tree
+
+Claude 動工期間 Codex `services/trading/orders.py` 還是 `M`（仍未 commit）。Slice 4b
+**沒碰** orders.py。Slice 3b（剩下 1 個 `_now_text` 在 orders.py）和 slice 4c 之後再做。
+
+### 1126/1126 全綠
+
+```
+HACKME_RUNTIME_DIR=/tmp/x python -m pytest tests/ -q --ignore=tests/test_smv2_acceptance.py
+1126 passed in 153.19s
+```
+
+含 slice 2 的 18 + slice 4a 的 5 + 上輪的 1119 - 16（test_smv2_acceptance ignore）。
+
+---
+
+## 11. Verdict
+
+**No conflict, no override, fully additive across 9 commits.**
 
 
 
