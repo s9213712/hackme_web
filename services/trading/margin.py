@@ -21,6 +21,7 @@ from services.trading.notifications import (
     margin_near_liquidation_notification_payload,
     margin_price_jump_notification_payload,
 )
+from services.trading._clock import now_text as _now_text
 from services.trading.validators import _to_decimal, _to_int
 from services.trading.mode_gate import (
     assert_same_world,
@@ -32,10 +33,6 @@ from services.trading.mode_gate import (
 POSITION_MARGIN_LONG = "margin_long"
 POSITION_MARGIN_SHORT = "short"
 POSITION_MARGIN_SHORT_LEGACY = "margin_short"
-
-
-def _now_text():
-    return datetime.now().isoformat()
 
 
 def _json_dumps(value):

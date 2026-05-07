@@ -14,13 +14,8 @@ from services.trading.accounting.trial_credit import trial_credit_payload
 from services.trading.constants import ASSET_SCALE
 from services.trading.payloads import futures_position_payload
 from services.trading.validators import _to_decimal, _to_int
+from services.trading._clock import now_text as _now_text
 from services.trading.mode_gate import assert_same_world, funding_channel_key
-
-
-def _now_text():
-    from datetime import datetime
-
-    return datetime.now().isoformat()
 
 
 def funding_snapshot_ctx(snapshot):

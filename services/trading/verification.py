@@ -1,15 +1,11 @@
 """Trading verification and reconciliation orchestration."""
 
 import json
-from datetime import datetime
 
 from services.server_mode.routing import resolve_table
+from services.trading._clock import now_text as _now_text
 from services.trading.constants import OPEN_ORDER_STATUSES
 from services.trading.validators import _to_decimal
-
-
-def _now_text():
-    return datetime.now().isoformat()
 
 
 def _json_dumps(value):

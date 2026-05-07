@@ -11,13 +11,8 @@ from services.trading.constants import (
     DEFAULT_GRID_FEE_DISCOUNT_PERCENT,
     GRID_PREVIEW_YELLOW_NET_SPREAD_PERCENT,
 )
+from services.trading._clock import now_text as _now_text
 from services.trading.validators import _decimal_text, _to_decimal, _to_int, _to_price_float
-
-
-def _now_text():
-    from datetime import datetime
-
-    return datetime.now().isoformat()
 
 
 def _json_loads(value, default=None):

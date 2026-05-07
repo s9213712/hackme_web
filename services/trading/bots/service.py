@@ -35,12 +35,9 @@ from services.trading.notifications import (
     create_trading_root_notification,
     create_trading_user_notification,
 )
+from services.trading._clock import now_text as _now_text
 from services.trading.payloads import bot_audit_eligibility_reason_label, bot_audit_label
 from services.trading.validators import _decimal_text, _to_decimal, _to_int, _to_price_float
-
-
-def _now_text():
-    return datetime.now().isoformat()
 
 
 def _json_dumps(value):

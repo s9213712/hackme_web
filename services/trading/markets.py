@@ -19,13 +19,8 @@ from services.trading.catalog import (
     get_market_definition,
     normalize_market_symbol,
 )
+from services.trading._clock import now_text as _now_text
 from services.trading.validators import _to_float, _to_int, _to_price_float
-
-
-def _now_text():
-    from datetime import datetime
-
-    return datetime.now().isoformat()
 
 
 def _json_dumps(value):
