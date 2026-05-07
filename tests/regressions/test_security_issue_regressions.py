@@ -291,6 +291,13 @@ def test_secure_cookie_defaults_are_secure():
     assert 'SESSION_COOKIE_SECURE = _env_bool("SESSION_COOKIE_SECURE", default=True)' in server
 
 
+def test_frontend_boot_does_not_probe_disabled_chat_feature():
+    core = (ROOT / "public" / "js" / "00-core.js").read_text(encoding="utf-8")
+
+    assert 'if (canAccessModule("chat")) {' in core
+    assert '    loadChatRooms();' in core
+
+
 def test_trading_stress_pentest_covers_margin_risk_controls():
     script = (ROOT / "scripts" / "security" / "pentest" / "trading_stress_pentest.py").read_text(encoding="utf-8")
 

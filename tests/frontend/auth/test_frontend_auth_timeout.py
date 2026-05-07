@@ -87,3 +87,10 @@ def test_login_recovery_uses_human_facing_verification_wording():
     assert '["recovery-toggle", toggleRecoveryPanel]' in auth
     assert 'el.dataset.authRecoveryBound = "1";' in auth
     assert 'if (typeof bindAuthRecoveryControls === "function") bindAuthRecoveryControls();' in bootstrap
+
+
+def test_public_auth_flows_force_refresh_public_csrf_tokens():
+    auth = (ROOT / "public" / "js" / "40-auth-users.js").read_text(encoding="utf-8")
+
+    assert auth.count("fetchCsrfToken({ force: true });") >= 3
+    assert "fetchCsrfToken({ force: false });" not in auth

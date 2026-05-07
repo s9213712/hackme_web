@@ -7,7 +7,7 @@ function appealCountdownText(totalSeconds) {
 
 async function loadUserAppeals() {
   const wrap = $("user-appeal-wrap");
-  if (!wrap || !currentUser) return;
+  if (!wrap || !currentUser || !canAccessModule("appeals")) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   const res = await apiFetch(API + "/appeals", {
@@ -144,7 +144,7 @@ async function submitAppeal(violationId) {
 }
 
 async function loadAdminAppeals(page = 0, status = null) {
-  if (!currentUser || currentRole !== "super_admin") return;
+  if (!currentUser || currentRole !== "super_admin" || !canAccessModule("appeals")) return;
   const targetStatus = status || adminAppealStatus;
   adminAppealStatus = targetStatus;
   const targetPage = Math.max(1, parseInt(page || 1, 10));

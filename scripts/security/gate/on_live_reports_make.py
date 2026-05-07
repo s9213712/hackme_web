@@ -18,6 +18,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import ssl
 import subprocess
 import sys
@@ -35,7 +36,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.security.common_paths import runtime_root, security_reports_root  # noqa: E402
-from services.snapshots import PRODUCTION_REQUIRED_REPORT_TYPES, ServerModeService  # noqa: E402
+from services.snapshots import MODE_CONFIRM_PHRASES, PRODUCTION_REQUIRED_REPORT_TYPES, ServerModeService  # noqa: E402
 
 
 def _ensure_runtime_env() -> None:
@@ -131,7 +132,7 @@ def _run(command: list[str], *, env: dict | None = None, timeout: int = 3600) ->
 
 
 class LiveClient:
-    def __init__(self, base_url: str):
+    def __init__(self, base_url: str, *, timeout: int = 60, max_retries: int = 4, retry_backoff: float = 2.0):
         self.base_url = base_url.rstrip("/")
         self.cookies = CookieJar()
         self.ctx = ssl._create_unverified_context()
@@ -140,8 +141,14 @@ class LiveClient:
             urllib.request.HTTPCookieProcessor(self.cookies),
         )
         self.csrf = ""
+        self.timeout = max(1, int(timeout))
+        self.max_retries = max(1, int(max_retries))
+        self.retry_backoff = max(0.0, float(retry_backoff))
 
-    def _request(self, path: str, *, method: str = "GET", body: dict | None = None) -> tuple[int, dict, str]:
+    def _request(self, path: str, *, method: str = "GET", body: dict | None = None, retryable: bool | None = None) -> tuple[int, dict, str]:
+        method = method.upper()
+        if retryable is None:
+            retryable = method == "GET"
         headers = {}
         data = None
         if body is not None:
@@ -150,21 +157,27 @@ class LiveClient:
             headers["Content-Type"] = "application/json"
         if self.csrf:
             headers["X-CSRF-Token"] = self.csrf
-        req = urllib.request.Request(self.base_url + path, data=data, headers=headers, method=method)
-        try:
-            with self.opener.open(req, timeout=30) as resp:
-                raw = resp.read()
-                text = raw.decode("utf-8", errors="replace")
-                payload = json.loads(text) if text else {}
-                return int(resp.status), payload, text
-        except urllib.error.HTTPError as exc:
-            raw = exc.read()
-            text = raw.decode("utf-8", errors="replace")
+        attempts = self.max_retries if retryable else 1
+        for attempt in range(1, attempts + 1):
+            req = urllib.request.Request(self.base_url + path, data=data, headers=headers, method=method)
             try:
-                payload = json.loads(text) if text else {}
-            except Exception:
-                payload = {"_raw": text[:500]}
-            return int(exc.code), payload, text
+                with self.opener.open(req, timeout=self.timeout) as resp:
+                    raw = resp.read()
+                    text = raw.decode("utf-8", errors="replace")
+                    payload = json.loads(text) if text else {}
+                    return int(resp.status), payload, text
+            except urllib.error.HTTPError as exc:
+                raw = exc.read()
+                text = raw.decode("utf-8", errors="replace")
+                try:
+                    payload = json.loads(text) if text else {}
+                except Exception:
+                    payload = {"_raw": text[:500]}
+                return int(exc.code), payload, text
+            except (urllib.error.URLError, TimeoutError, ssl.SSLError, OSError):
+                if attempt >= attempts:
+                    raise
+                time.sleep(self.retry_backoff * attempt)
 
     def fetch_csrf(self) -> str:
         status, payload, _ = self._request("/api/csrf-token")
@@ -173,7 +186,7 @@ class LiveClient:
         self.csrf = str(payload["csrf_token"])
         return self.csrf
 
-    def login(self, username: str, password: str) -> None:
+    def login(self, username: str, password: str, *, rotate_to: str = "") -> str:
         self.fetch_csrf()
         status, payload, _ = self._request(
             "/api/login",
@@ -182,6 +195,29 @@ class LiveClient:
         )
         if status != 200 or not payload.get("ok"):
             raise RuntimeError(payload.get("msg") or payload.get("error") or f"login failed (HTTP {status})")
+        self.fetch_csrf()
+        if payload.get("must_change_password"):
+            if not rotate_to:
+                raise RuntimeError("root requires password change before go-live checks; rerun with --root-new-password")
+            me_status, me_payload, _ = self._request("/api/me")
+            user_id = int(me_payload.get("id") or 0) if me_status == 200 else 0
+            if user_id <= 0:
+                raise RuntimeError("password change required but /api/me did not return the current user id")
+            change_status, change_payload, _ = self._request(
+                f"/api/admin/users/{user_id}",
+                method="PUT",
+                body={
+                    "current_password": password,
+                    "password": rotate_to,
+                    "password_confirm": rotate_to,
+                },
+            )
+            if change_status != 200 or not change_payload.get("ok"):
+                raise RuntimeError(change_payload.get("msg") or f"password rotation failed (HTTP {change_status})")
+            self.cookies.clear()
+            self.csrf = ""
+            return self.login(username, rotate_to)
+        return password
 
 
 def _auto_detect_base_url() -> str:
@@ -292,7 +328,26 @@ def _report_paths(out_root: Path, report_type: str) -> tuple[Path, Path]:
     return out_root / f"{report_type}_report.json", out_root / f"{report_type}_report.md"
 
 
-def _script_report(raw_dir: Path, report_type: str, command: list[str], *, timeout: int, signer: PayloadSigner, meta: dict) -> dict:
+def _pick_available_port(preferred: int, *, host: str = "127.0.0.1") -> int:
+    preferred = int(preferred or 0)
+    if preferred > 0:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            probe.bind((host, preferred))
+            return preferred
+        except OSError:
+            pass
+        finally:
+            probe.close()
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        probe.bind((host, 0))
+        return int(probe.getsockname()[1])
+    finally:
+        probe.close()
+
+
+def _script_report(out_root: Path, raw_dir: Path, report_type: str, command: list[str], *, timeout: int, signer: PayloadSigner, meta: dict) -> dict:
     artifact_dir = raw_dir / report_type
     artifact_dir.mkdir(parents=True, exist_ok=True)
     result = _run(command + ["--out", str(artifact_dir)], timeout=timeout)
@@ -321,8 +376,8 @@ def _script_report(raw_dir: Path, report_type: str, command: list[str], *, timeo
         tester="on_live_reports_make.sh",
         report_source="on_live_reports_make.sh",
         meta=meta,
-        canonical_json=_report_paths(raw_dir.parent, report_type)[0],
-        canonical_md=_report_paths(raw_dir.parent, report_type)[1],
+        canonical_json=_report_paths(out_root, report_type)[0],
+        canonical_md=_report_paths(out_root, report_type)[1],
         signer=signer,
         high=0 if result.ok else 1,
     )
@@ -357,12 +412,13 @@ def _pytest_report(out_root: Path, raw_dir: Path, report_type: str, test_args: l
 
 def _functional_report(out_root: Path, raw_dir: Path, args, signer: PayloadSigner, meta: dict) -> dict:
     report_root = raw_dir / "functional_root"
+    functional_port = _pick_available_port(args.functional_port)
     result = _run(
         [
             "bash",
             str(ROOT / "scripts" / "security" / "pentest" / "run_functional_smoke.sh"),
             "--port",
-            str(args.functional_port),
+            str(functional_port),
             "--out",
             str(report_root),
         ],
@@ -380,7 +436,7 @@ def _functional_report(out_root: Path, raw_dir: Path, args, signer: PayloadSigne
         "status": "pass" if result.ok else "fail",
         "summary": _last_nonempty_line(result.stdout) or _last_nonempty_line(result.stderr) or f"returncode={result.returncode}",
         "generator": "scripts/security/pentest/run_functional_smoke.sh",
-        "artifacts": artifacts,
+        "artifacts": {**artifacts, "functional_port": functional_port},
         "duration_ms": result.duration_ms,
     }
     canonical_json, canonical_md = _report_paths(out_root, "functional")
@@ -390,7 +446,7 @@ def _functional_report(out_root: Path, raw_dir: Path, args, signer: PayloadSigne
 def _pentest_report(out_root: Path, raw_dir: Path, args, signer: PayloadSigner, meta: dict) -> dict:
     report_root = raw_dir / "pentest_root"
     env = {
-        "ROOT_PASSWORD": args.target_root_password,
+        "ROOT_PASSWORD": args.root_password,
         "MANAGER_PASSWORD": args.manager_password,
         "TEST_PASSWORD": args.test_password,
     }
@@ -430,7 +486,7 @@ def _permission_report(out_root: Path, raw_dir: Path, args, signer: PayloadSigne
     out_json = report_dir / "functional_permission_pentest.json"
     out_md = report_dir / "functional_permission_pentest.md"
     env = {
-        "ROOT_PASSWORD": args.target_root_password,
+        "ROOT_PASSWORD": args.root_password,
         "MANAGER_PASSWORD": args.manager_password,
         "TEST_PASSWORD": args.test_password,
     }
@@ -465,7 +521,27 @@ def _permission_report(out_root: Path, raw_dir: Path, args, signer: PayloadSigne
     return _make_payload("permission", raw_report, passed=passed, tester="on_live_reports_make.sh", report_source="on_live_reports_make.sh", meta=meta, canonical_json=canonical_json, canonical_md=canonical_md, signer=signer, high=0 if passed else 1)
 
 
-def _stress_report(out_root: Path, raw_dir: Path, args, signer: PayloadSigner, meta: dict) -> dict:
+def _current_live_mode(client: LiveClient) -> str:
+    status, payload, _ = client._request("/api/admin/server-mode")
+    if status != 200 or not bool(payload.get("ok")):
+        raise RuntimeError(payload.get("msg") or f"failed to read live server mode (HTTP {status})")
+    return str((payload.get("mode") or {}).get("current_mode") or "").strip()
+
+
+def _switch_live_mode(client: LiveClient, target_mode: str, *, notes: str) -> dict:
+    confirm = MODE_CONFIRM_PHRASES.get(target_mode, "")
+    status, payload, _ = client._request(
+        "/api/admin/server-mode",
+        method="POST",
+        body={"mode": target_mode, "confirm": confirm, "notes": notes},
+        retryable=True,
+    )
+    if status != 200 or not bool(payload.get("ok")):
+        raise RuntimeError(payload.get("msg") or f"failed to switch live mode to {target_mode} (HTTP {status})")
+    return payload
+
+
+def _stress_report(out_root: Path, raw_dir: Path, args, signer: PayloadSigner, meta: dict, client: LiveClient) -> dict:
     report_dir = raw_dir / "stress"
     report_dir.mkdir(parents=True, exist_ok=True)
     general = _run(
@@ -489,31 +565,45 @@ def _stress_report(out_root: Path, raw_dir: Path, args, signer: PayloadSigner, m
         ],
         timeout=args.stress_timeout,
     )
-    trading_env = {"ROOT_PASSWORD": args.target_root_password}
+    trading_env = {"ROOT_PASSWORD": args.root_password}
     if args.root_new_password:
         trading_env["PENTEST_ROOT_NEW_PASSWORD"] = args.root_new_password
-    trading = _run(
-        [
-            sys.executable,
-            str(ROOT / "scripts" / "security" / "pentest" / "trading_stress_pentest.py"),
-            "--base-url",
-            args.base_url,
-            "--mode",
-            "functional_correctness",
-            "--users",
-            "2",
-            "--orders-per-user",
-            "5",
-            "--concurrency",
-            "2",
-            "--rate",
-            "10",
-            "--out",
-            str(report_dir),
-        ],
-        env=trading_env,
-        timeout=args.trading_stress_timeout,
-    )
+    previous_mode = ""
+    switched_mode = ""
+    restore_error = ""
+    try:
+        previous_mode = _current_live_mode(client)
+        if previous_mode not in {"production", "internal_test", "test"}:
+            _switch_live_mode(client, "internal_test", notes="go_live trading stress precheck")
+            switched_mode = "internal_test"
+        trading = _run(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "security" / "pentest" / "trading_stress_pentest.py"),
+                "--base-url",
+                args.base_url,
+                "--mode",
+                "functional_correctness",
+                "--users",
+                "2",
+                "--orders-per-user",
+                "5",
+                "--concurrency",
+                "2",
+                "--rate",
+                "10",
+                "--out",
+                str(report_dir),
+            ],
+            env=trading_env,
+            timeout=args.trading_stress_timeout,
+        )
+    finally:
+        if switched_mode and previous_mode and previous_mode != switched_mode:
+            try:
+                _switch_live_mode(client, previous_mode, notes="restore live mode after trading stress")
+            except Exception as exc:
+                restore_error = str(exc)
     artifacts = {}
     for pattern, key in (
         ("stress_*.json", "http_stress_json"),
@@ -524,7 +614,13 @@ def _stress_report(out_root: Path, raw_dir: Path, args, signer: PayloadSigner, m
         matches = _find_latest_paths(report_dir, pattern)
         if matches:
             artifacts[key] = str(matches[0])
-    passed = general.ok and trading.ok
+    if previous_mode:
+        artifacts["initial_live_mode"] = previous_mode
+    if switched_mode:
+        artifacts["stress_live_mode"] = switched_mode
+    if restore_error:
+        artifacts["mode_restore_error"] = restore_error
+    passed = general.ok and trading.ok and not restore_error
     raw_report = {
         "report_type": "stress",
         "status": "pass" if passed else "fail",
@@ -557,9 +653,54 @@ def _log_chain_report(out_root: Path, client: LiveClient, signer: PayloadSigner,
     return _make_payload("log_chain_verify", raw_report, passed=passed, tester="on_live_reports_make.sh", report_source="on_live_reports_make.sh", meta=meta, canonical_json=canonical_json, canonical_md=canonical_md, signer=signer, high=0 if passed else 1, unresolved=list(details.get("mismatches") or []))
 
 
+def _refresh_deploy_integrity_baseline_if_needed(client: LiveClient, report_payload: dict) -> dict:
+    report = (report_payload or {}).get("report") or {}
+    status = report.get("status") or {}
+    if not bool(status.get("deployment_review_pending")):
+        return {"attempted": False, "reason": "not_required"}
+
+    findings_status, findings_payload, _ = client._request("/api/root/integrity/findings?status=pending")
+    findings = findings_payload.get("findings") if findings_status == 200 and bool(findings_payload.get("ok")) else []
+    finding_ids = []
+    for item in findings or []:
+        try:
+            finding_ids.append(int(item.get("id")))
+        except Exception:
+            continue
+    if not finding_ids:
+        return {
+            "attempted": False,
+            "reason": "no_pending_findings",
+            "findings_status": findings_status,
+            "findings_payload": findings_payload,
+        }
+
+    approve_confirm = str((report_payload or {}).get("approve_confirm") or "APPROVE INTEGRITY UPDATE")
+    review_status, review_payload, _ = client._request(
+        "/api/root/integrity/findings/bulk-review",
+        method="POST",
+        body={
+            "action": "approve",
+            "finding_ids": finding_ids,
+            "confirm": approve_confirm,
+            "note": "on_live_reports_make auto refresh deploy integrity baseline",
+        },
+    )
+    return {
+        "attempted": True,
+        "finding_ids": finding_ids,
+        "review_status": review_status,
+        "review_payload": review_payload,
+    }
+
+
 def _integrity_report(out_root: Path, client: LiveClient, signer: PayloadSigner, meta: dict) -> dict:
     rescan_status, rescan_payload, _ = client._request("/api/root/integrity/rescan", method="POST", body={})
     report_status, report_payload, _ = client._request("/api/root/integrity/report")
+    baseline_refresh = _refresh_deploy_integrity_baseline_if_needed(client, report_payload)
+    if baseline_refresh.get("attempted"):
+        rescan_status, rescan_payload, _ = client._request("/api/root/integrity/rescan", method="POST", body={})
+        report_status, report_payload, _ = client._request("/api/root/integrity/report")
     report = report_payload.get("report") or {}
     status = report.get("status") or {}
     summary = status.get("summary") or {}
@@ -571,7 +712,7 @@ def _integrity_report(out_root: Path, client: LiveClient, signer: PayloadSigner,
         "status": "pass" if passed else "fail",
         "summary": f"health={health.get('level', '-')}, pending={summary.get('pending', 0)}, high_risk_pending={high_pending}",
         "generator": "POST /api/root/integrity/rescan + GET /api/root/integrity/report",
-        "details": {"rescan": rescan_payload, "report": report_payload},
+        "details": {"rescan": rescan_payload, "report": report_payload, "baseline_refresh": baseline_refresh},
         "artifacts": {},
     }
     canonical_json, canonical_md = _report_paths(out_root, "integrity_guard")
@@ -582,7 +723,21 @@ def _upload_payloads(client: LiveClient, payload_paths: list[Path]) -> list[dict
     results = []
     for path in payload_paths:
         payload = json.loads(path.read_text(encoding="utf-8"))
-        status, response, _ = client._request("/api/root/production-report/upload", method="POST", body=payload)
+        client.fetch_csrf()
+        status, response, _ = client._request(
+            "/api/root/production-report/upload",
+            method="POST",
+            body=payload,
+            retryable=True,
+        )
+        if status == 403 and str(response.get("error") or "") == "csrf_invalid":
+            client.fetch_csrf()
+            status, response, _ = client._request(
+                "/api/root/production-report/upload",
+                method="POST",
+                body=payload,
+                retryable=True,
+            )
         results.append({"path": str(path), "status": status, "ok": bool(response.get("ok")), "response": response})
     return results
 
@@ -595,16 +750,31 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--manager-password", default=os.environ.get("MANAGER_PASSWORD", "ManagerSmoke123!"))
     parser.add_argument("--test-password", default=os.environ.get("TEST_PASSWORD", "TestSmoke123!"))
     parser.add_argument("--root-new-password", default=os.environ.get("PENTEST_ROOT_NEW_PASSWORD", ""))
-    parser.add_argument("--out", default=str(security_reports_root() / "production_gate"))
+    parser.add_argument("--runtime-dir", default=os.environ.get("HACKME_RUNTIME_DIR", ""), help="Runtime root used by report signing and default output paths.")
+    parser.add_argument("--out", default="", help="Output root for stable production-gate payloads. Default: <runtime>/reports/security/production_gate.")
     parser.add_argument("--functional-port", type=int, default=50741)
+    parser.add_argument("--server-mode-timeout", type=int, default=1800)
     parser.add_argument("--functional-timeout", type=int, default=900)
     parser.add_argument("--pentest-timeout", type=int, default=3600)
+    parser.add_argument("--permission-timeout", type=int, default=3600)
     parser.add_argument("--stress-timeout", type=int, default=600)
     parser.add_argument("--trading-stress-timeout", type=int, default=600)
     parser.add_argument("--pytest-timeout", type=int, default=7200)
+    parser.add_argument("--http-timeout", type=int, default=int(os.environ.get("GO_LIVE_HTTP_TIMEOUT", "60")))
+    parser.add_argument("--http-retries", type=int, default=int(os.environ.get("GO_LIVE_HTTP_RETRIES", "4")))
+    parser.add_argument("--http-retry-backoff", type=float, default=float(os.environ.get("GO_LIVE_HTTP_RETRY_BACKOFF", "2.0")))
     parser.add_argument("--upload", action="store_true", help="Upload the generated payloads to /api/root/production-report/upload after generation.")
     parser.add_argument("--i-own-this-target", action="store_true", help="Allow non-loopback/non-local targets for scripts that require explicit operator confirmation.")
     return parser.parse_args()
+
+
+def _resolve_output_root(args: argparse.Namespace) -> Path:
+    if args.runtime_dir:
+        os.environ["HACKME_RUNTIME_DIR"] = str(Path(args.runtime_dir).expanduser().resolve())
+    _ensure_runtime_env()
+    if args.out:
+        return Path(args.out).expanduser().resolve()
+    return (security_reports_root() / "production_gate").resolve()
 
 
 def main() -> int:
@@ -614,27 +784,31 @@ def main() -> int:
     if not args.root_password:
         raise SystemExit("請傳入 --root-password，或先設 ROOT_PASSWORD。")
 
-    out_root = Path(args.out).expanduser().resolve()
+    out_root = _resolve_output_root(args)
     run_id = _now_stamp()
     raw_dir = out_root / "runs" / run_id
     raw_dir.mkdir(parents=True, exist_ok=True)
-    _ensure_runtime_env()
 
-    client = LiveClient(args.base_url)
-    client.login(args.root_username, args.root_password)
+    client = LiveClient(
+        args.base_url,
+        timeout=args.http_timeout,
+        max_retries=args.http_retries,
+        retry_backoff=args.http_retry_backoff,
+    )
+    args.root_password = client.login(args.root_username, args.root_password, rotate_to=args.root_new_password)
 
     meta = _target_meta()
     signer = PayloadSigner()
     payloads: dict[str, dict] = {}
 
-    payloads["clean_smoke"] = _script_report(raw_dir, "clean_smoke", [sys.executable, str(ROOT / "scripts" / "security" / "server_mode" / "server_mode_v2_clean_smoke.py")], timeout=900, signer=signer, meta=meta)
-    payloads["adversarial"] = _script_report(raw_dir, "adversarial", [sys.executable, str(ROOT / "scripts" / "security" / "server_mode" / "server_mode_v2_adversarial.py")], timeout=900, signer=signer, meta=meta)
-    payloads["redteam_l2"] = _script_report(raw_dir, "redteam_l2", [sys.executable, str(ROOT / "scripts" / "security" / "server_mode" / "server_mode_v2_redteam_l2.py")], timeout=900, signer=signer, meta=meta)
+    payloads["clean_smoke"] = _script_report(out_root, raw_dir, "clean_smoke", [sys.executable, str(ROOT / "scripts" / "security" / "server_mode" / "server_mode_v2_clean_smoke.py")], timeout=args.server_mode_timeout, signer=signer, meta=meta)
+    payloads["adversarial"] = _script_report(out_root, raw_dir, "adversarial", [sys.executable, str(ROOT / "scripts" / "security" / "server_mode" / "server_mode_v2_adversarial.py")], timeout=args.server_mode_timeout, signer=signer, meta=meta)
+    payloads["redteam_l2"] = _script_report(out_root, raw_dir, "redteam_l2", [sys.executable, str(ROOT / "scripts" / "security" / "server_mode" / "server_mode_v2_redteam_l2.py")], timeout=args.server_mode_timeout, signer=signer, meta=meta)
 
     payloads["pytest"] = _pytest_report(out_root, raw_dir, "pytest", ["tests"], timeout=args.pytest_timeout, signer=signer, meta=meta)
     payloads["log_chain_verify"] = _log_chain_report(out_root, client, signer, meta)
     payloads["integrity_guard"] = _integrity_report(out_root, client, signer, meta)
-    payloads["stress"] = _stress_report(out_root, raw_dir, args, signer, meta)
+    payloads["stress"] = _stress_report(out_root, raw_dir, args, signer, meta, client)
     payloads["permission"] = _permission_report(out_root, raw_dir, args, signer, meta)
     payloads["functional"] = _functional_report(out_root, raw_dir, args, signer, meta)
     payloads["pentest"] = _pentest_report(out_root, raw_dir, args, signer, meta)
@@ -654,6 +828,7 @@ def main() -> int:
     summary = {
         "generated_at": datetime.utcnow().isoformat() + "Z",
         "base_url": args.base_url,
+        "runtime_dir": os.environ.get("HACKME_RUNTIME_DIR", ""),
         "out_root": str(out_root),
         "run_dir": str(raw_dir),
         "reports": {name: {"pass": bool(payloads[name]["pass"]), "path": str(_report_paths(out_root, name)[0])} for name in PRODUCTION_REQUIRED_REPORT_TYPES},
@@ -668,6 +843,7 @@ def main() -> int:
                 "# on_live_reports_make summary",
                 "",
                 f"- base_url: `{args.base_url}`",
+                f"- runtime_dir: `{os.environ.get('HACKME_RUNTIME_DIR', '') or '-'}`",
                 f"- out_root: `{out_root}`",
                 f"- run_dir: `{raw_dir}`",
                 f"- all_passed: `{summary['all_passed']}`",

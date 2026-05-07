@@ -47,3 +47,23 @@ def test_run_prod_check_reports_optional_hls_and_civitai_capabilities():
     assert 'say "- HLS tooling: ffmpeg=${has_ffmpeg}, ffprobe=${has_ffprobe}"' in script
     assert 'say "- Civitai search/download: $([[ -n "${CIVITAI_API_KEY:-}" ]] && printf \'configured\' || printf \'disabled (missing CIVITAI_API_KEY)\')"' in script
     assert 'say "- root offline recovery: python3 scripts/admin/root_recovery.py"' in script
+
+
+def test_one_click_check_runs_post_init_integrity_audit_and_points_chain_checks():
+    script = (ROOT / "one_click_setup.sh").read_text(encoding="utf-8")
+
+    assert "run_post_init_checks()" in script
+    assert 'server.integrity_guard.scan(actor="one_click_setup", create_initial_manifest=True)' in script
+    assert "deployment_review_pending" in script
+    assert "server.verify_audit_integrity()" in script
+    assert "server.points_service.verify_chain()" in script
+    assert 'print("post-init runtime checks")' in script
+
+
+def test_one_click_gunicorn_default_enables_local_tls_when_server_ssl_is_on():
+    script = (ROOT / "one_click_setup.sh").read_text(encoding="utf-8")
+
+    assert "prepare_tls_runtime()" in script
+    assert "server.ensure_local_tls_files(server.CERT_FILE, server.KEY_FILE)" in script
+    assert '--certfile "$GUNICORN_CERT_FILE"' in script
+    assert '--keyfile "$GUNICORN_KEY_FILE"' in script

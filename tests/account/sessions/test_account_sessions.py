@@ -974,7 +974,7 @@ def test_password_change_revokes_existing_sessions(tmp_path):
     conn.commit()
     conn.close()
 
-    def revoke_sessions(user_id):
+    def revoke_sessions(user_id, **kwargs):
         conn = sqlite3.connect(db_path)
         conn.execute("UPDATE sessions SET is_revoked=1, revoked_at='now' WHERE user_id=?", (user_id,))
         conn.commit()
@@ -997,6 +997,89 @@ def test_password_change_revokes_existing_sessions(tmp_path):
     assert revoked == 2
     assert passwords == 2
     assert user_flags == (0, 0)
+
+
+def test_self_password_change_revokes_sessions_without_root_security_alert_noise(tmp_path):
+    db_path = tmp_path / "app.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            nickname TEXT,
+            real_name TEXT,
+            birthdate TEXT,
+            id_number TEXT,
+            phone TEXT,
+            status TEXT NOT NULL,
+            role TEXT NOT NULL,
+            member_level TEXT NOT NULL DEFAULT 'normal',
+            trust_score INTEGER NOT NULL DEFAULT 0,
+            points INTEGER NOT NULL DEFAULT 0,
+            reputation INTEGER NOT NULL DEFAULT 0,
+            password_strength_score INTEGER NOT NULL DEFAULT 0,
+            blocked_until TEXT,
+            violation_count INTEGER NOT NULL DEFAULT 0,
+            password_changed_at TEXT,
+            must_change_password INTEGER NOT NULL DEFAULT 1,
+            is_default_password INTEGER NOT NULL DEFAULT 1,
+            updated_at TEXT
+        );
+        CREATE TABLE user_passwords (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            token_hash TEXT NOT NULL UNIQUE,
+            ip_address TEXT,
+            user_agent TEXT,
+            device_info TEXT,
+            ip_country TEXT,
+            expires_at TEXT NOT NULL,
+            is_revoked INTEGER NOT NULL DEFAULT 0,
+            revoked_at TEXT,
+            last_seen TEXT,
+            created_at TEXT NOT NULL
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO users (id, username, role, status, must_change_password, is_default_password, updated_at) "
+        "VALUES (1, 'alice', 'user', 'active', 1, 1, '2026-01-01T00:00:00')"
+    )
+    conn.execute(
+        "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (1, 'oldpass', '2026-01-01T00:00:00')"
+    )
+    conn.executemany(
+        "INSERT INTO sessions (user_id, token_hash, expires_at, is_revoked, created_at) VALUES (1, ?, '2999-01-01T00:00:00', 0, '2026-01-01T00:00:00')",
+        [(_hash_token("current"),), (_hash_token("remote"),)],
+    )
+    conn.commit()
+    conn.close()
+
+    revoke_calls = []
+
+    def revoke_sessions(user_id, **kwargs):
+        revoke_calls.append((user_id, kwargs))
+        conn = sqlite3.connect(db_path)
+        conn.execute("UPDATE sessions SET is_revoked=1, revoked_at='now' WHERE user_id=?", (user_id,))
+        conn.commit()
+        conn.close()
+
+    actor_box = {"actor": {"id": 1, "username": "alice", "role": "user", "status": "active"}}
+    client = _build_app(str(db_path), actor_box, revoke_user_sessions=revoke_sessions).test_client()
+    res = client.put(
+        "/api/admin/users/1",
+        json={"current_password": "oldpass", "password": "Newpass@123", "password_confirm": "Newpass@123"},
+    )
+
+    assert res.status_code == 200
+    assert revoke_calls == [(1, {"notify_security_event": False, "detail": "self_password_change"})]
 
 
 def test_password_change_rejects_same_as_current_password(tmp_path):

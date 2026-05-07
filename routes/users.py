@@ -1239,7 +1239,11 @@ def register_user_routes(app, deps):
                 )
                 conn.commit()
             if revoke_sessions_needed:
-                revoke_user_sessions(user_id)
+                revoke_user_sessions(
+                    user_id,
+                    notify_security_event=not is_self,
+                    detail="self_password_change" if is_self else "user_sessions_revoked",
+                )
                 delete_csrf_tokens_for_username(target["username"])
             audit("ADMIN_UPDATE_USER", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
                   detail=f"target_id={user_id},self={is_self}")

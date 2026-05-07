@@ -458,7 +458,7 @@ def db_delete_session(token):
         conn.close()
 
 
-def revoke_user_sessions(user_id):
+def revoke_user_sessions(user_id, *, notify_security_event=True, detail="user_sessions_revoked"):
     conn = _STATE["get_db"]()
     try:
         conn.execute(
@@ -466,7 +466,8 @@ def revoke_user_sessions(user_id):
             (datetime.now().isoformat(), user_id)
         )
         conn.commit()
-        record_security_event("session_revoked", "-", target_user=str(user_id), detail="user_sessions_revoked")
+        if notify_security_event:
+            record_security_event("session_revoked", "-", target_user=str(user_id), detail=detail)
     finally:
         conn.close()
 

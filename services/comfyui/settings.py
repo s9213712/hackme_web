@@ -68,6 +68,8 @@ def validate_comfyui_api_url(value, *, allow_blank=False):
         return None
     if parsed.username or parsed.password:
         return None
+    if parsed.port is None:
+        return None
     if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
         return None
     return raw

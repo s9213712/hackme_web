@@ -525,10 +525,14 @@ class AdversarialRunner:
             signature="sig",
         )
         self.assert_true(not missing.get("ok"), f"missing-field report accepted: {missing}")
-        first = self.runtime.mode_service.upload_production_report(
-            actor=self.root_actor,
+        raw_report = {
+            "report_type": PRODUCTION_REQUIRED_REPORT_TYPES[0],
+            "status": "pass",
+            "summary": "adversarial signed report fixture",
+        }
+        attestation = self.runtime.mode_service._prepare_production_report_attestation(
             report_type=PRODUCTION_REQUIRED_REPORT_TYPES[0],
-            report_hash=valid_hash,
+            raw_report=raw_report,
             target_commit="commit-a",
             target_branch="main",
             server_mode="dev_ready",
@@ -538,20 +542,45 @@ class AdversarialRunner:
             high_findings_count=0,
             unresolved_findings=[],
             tester="adversarial",
-            signature="sig",
+            report_source="server_mode_v2_adversarial",
+        )
+        self.assert_true(attestation.get("ok"), f"failed to sign adversarial fixture report: {attestation}")
+        first = self.runtime.mode_service.upload_production_report(
+            actor=self.root_actor,
+            report_type=PRODUCTION_REQUIRED_REPORT_TYPES[0],
+            report_hash=attestation["report_hash"],
+            target_commit="commit-a",
+            target_branch="main",
+            server_mode="dev_ready",
+            test_result="pass",
+            passed=True,
+            critical_findings_count=0,
+            high_findings_count=0,
+            unresolved_findings=[],
+            tester="adversarial",
+            signature=attestation["signature"],
+            raw_report=raw_report,
+            key_version=attestation["key_version"],
+            report_source="server_mode_v2_adversarial",
         )
         self.assert_true(first.get("ok"), f"valid report rejected: {first}")
         replay = self.runtime.mode_service.upload_production_report(
             actor=self.root_actor,
             report_type=PRODUCTION_REQUIRED_REPORT_TYPES[0],
-            report_hash=valid_hash,
+            report_hash=attestation["report_hash"],
             target_commit="commit-a",
             target_branch="main",
             server_mode="dev_ready",
             test_result="pass",
             passed=True,
             tester="adversarial",
-            signature="sig",
+            critical_findings_count=0,
+            high_findings_count=0,
+            unresolved_findings=[],
+            signature=attestation["signature"],
+            raw_report=raw_report,
+            key_version=attestation["key_version"],
+            report_source="server_mode_v2_adversarial",
         )
         self.assert_true(not replay.get("ok"), f"replay report accepted: {replay}")
         after = self.state_snapshot()

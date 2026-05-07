@@ -1,4 +1,10 @@
+import argparse
+import json
+import os
+import urllib.error
 from pathlib import Path
+
+from scripts.security.gate import on_live_reports_make as helper
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -19,11 +25,26 @@ def test_live_report_helper_covers_all_required_report_types_and_runtime_outputs
     assert 'runtime/reports/security/production_gate/' in helper
     assert '"/api/root/server-mode/logs/verify"' in helper
     assert '"/api/root/integrity/report"' in helper
+    assert '"/api/root/integrity/findings?status=pending"' in helper
+    assert '"/api/root/integrity/findings/bulk-review"' in helper
     assert '"/api/root/production-report/upload"' in helper
     assert "run_functional_smoke.sh" in helper
     assert "run_pentest.sh" in helper
     assert "functional_permission_pentest.py" in helper
     assert "trading_stress_pentest.py" in helper
+    assert "args.target_root_password" not in helper
+    assert '"ROOT_PASSWORD": args.root_password' in helper
+    assert "rotate_to=args.root_new_password" in helper
+    assert "rerun with --root-new-password" in helper
+    assert "--server-mode-timeout" in helper
+    assert '--permission-timeout' in helper
+    assert "deployment_review_pending" in helper
+    assert "canonical_json=_report_paths(out_root, report_type)[0]" in helper
+    assert "--runtime-dir" in helper
+    assert "retryable=True" in helper
+    assert "client.fetch_csrf()" in helper
+    assert "MODE_CONFIRM_PHRASES" in helper
+    assert "functional_port" in helper
 
 
 def test_docs_and_frontend_expose_the_same_canonical_production_gate_paths():
@@ -39,3 +60,77 @@ def test_docs_and_frontend_expose_the_same_canonical_production_gate_paths():
     assert "`POST /api/root/integrity/rescan` + `GET /api/root/integrity/report`" in qa_docs
     assert "GET /api/root/server-mode/logs/verify" in admin_js
     assert "POST /api/root/integrity/rescan ＋ GET /api/root/integrity/report" in admin_js
+
+
+class _FakeResponse:
+    def __init__(self, payload: dict, status: int = 200):
+        self.status = status
+        self._raw = json.dumps(payload).encode("utf-8")
+
+    def read(self):
+        return self._raw
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+def test_live_client_retries_transient_get_errors(monkeypatch):
+    client = helper.LiveClient("https://127.0.0.1:5002", timeout=1, max_retries=3, retry_backoff=0)
+    attempts = {"count": 0}
+
+    def fake_open(req, timeout):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise urllib.error.URLError("handshake timeout")
+        return _FakeResponse({"ok": True, "csrf_token": "token-123"})
+
+    monkeypatch.setattr(client.opener, "open", fake_open)
+    status, payload, text = client._request("/api/csrf-token")
+
+    assert attempts["count"] == 2
+    assert status == 200
+    assert payload["ok"] is True
+    assert "token-123" in text
+
+
+def test_resolve_output_root_prefers_runtime_dir(tmp_path, monkeypatch):
+    runtime_dir = tmp_path / "fresh-runtime"
+    args = argparse.Namespace(runtime_dir=str(runtime_dir), out="")
+
+    monkeypatch.delenv("HACKME_RUNTIME_DIR", raising=False)
+    out_root = helper._resolve_output_root(args)
+
+    assert out_root == (runtime_dir / "reports" / "security" / "production_gate").resolve()
+    assert Path(os.environ["HACKME_RUNTIME_DIR"]).resolve() == runtime_dir.resolve()
+
+
+def test_pick_available_port_falls_back_when_preferred_is_busy(monkeypatch):
+    class _BusySocket:
+        def bind(self, addr):
+            raise OSError("busy")
+
+        def close(self):
+            return None
+
+    class _FreeSocket:
+        def __init__(self):
+            self.bound = None
+
+        def bind(self, addr):
+            self.bound = addr
+
+        def getsockname(self):
+            return ("127.0.0.1", 54321)
+
+        def close(self):
+            return None
+
+    sockets = [_BusySocket(), _FreeSocket()]
+    monkeypatch.setattr(helper.socket, "socket", lambda *args, **kwargs: sockets.pop(0))
+
+    chosen = helper._pick_available_port(50741)
+
+    assert chosen == 54321

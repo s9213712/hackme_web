@@ -375,6 +375,29 @@ def test_root_can_configure_local_comfyui_script_with_absolute_path(tmp_path):
     assert state["comfyui_api_port"] == 8188
 
 
+def test_root_can_leave_remote_comfyui_url_blank_when_saving_settings():
+    app, state = _admin_app()
+    client = app.test_client()
+
+    res = client.put("/api/admin/settings", json={"comfyui_connection_mode": "remote", "comfyui_remote_api_url": ""})
+
+    assert res.status_code == 200
+    assert state["comfyui_connection_mode"] == "remote"
+    assert state["comfyui_remote_api_url"] == ""
+
+
+def test_remote_comfyui_url_requires_explicit_port():
+    app, state = _admin_app()
+    client = app.test_client()
+
+    good = client.put("/api/admin/settings", json={"comfyui_remote_api_url": "https://comfy.example.com:8443"})
+    bad = client.put("/api/admin/settings", json={"comfyui_remote_api_url": "https://comfy.example.com"})
+
+    assert good.status_code == 200
+    assert state["comfyui_remote_api_url"] == "https://comfy.example.com:8443"
+    assert bad.status_code == 400
+
+
 def test_invalid_comfyui_api_endpoint_is_rejected():
     app, state = _admin_app()
     client = app.test_client()

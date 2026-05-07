@@ -28,3 +28,13 @@ def test_admin_user_delete_shows_visible_account_page_feedback():
     assert 'flash(msgEl, json.msg || "帳號已建立", true);' in auth_js
     assert "真實姓名（選填）" in index_html
     assert "身分證（選填）" in index_html
+
+
+def test_disabled_appeals_are_not_prefetched_for_users_or_root():
+    core_js = (ROOT / "public" / "js" / "00-core.js").read_text(encoding="utf-8")
+    appeals_js = (ROOT / "public" / "js" / "30-appeals.js").read_text(encoding="utf-8")
+
+    assert 'if (currentRole === "super_admin" && canAccessModule("appeals")) {' in core_js
+    assert 'if (currentRole !== "super_admin" && canAccessModule("appeals")) {' in core_js
+    assert 'if (!wrap || !currentUser || !canAccessModule("appeals")) return;' in appeals_js
+    assert 'if (!currentUser || currentRole !== "super_admin" || !canAccessModule("appeals")) return;' in appeals_js

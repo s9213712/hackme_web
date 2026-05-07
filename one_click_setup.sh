@@ -477,6 +477,87 @@ print("database ready")
 PY
 }
 
+run_post_init_checks() {
+  python3 - <<'PY'
+import json
+import server
+
+results = {}
+
+integrity = server.integrity_guard.scan(actor="one_click_setup", create_initial_manifest=True)
+integrity_status = server.integrity_guard.status()
+integrity_summary = integrity_status.get("summary") or {}
+integrity_health = integrity_status.get("health") or {}
+integrity_deployment_review_pending = bool(integrity_status.get("deployment_review_pending"))
+integrity_ok = bool(integrity.get("ok", True)) and (
+    integrity_deployment_review_pending
+    or (
+        int(integrity_summary.get("high_risk_pending") or 0) == 0
+        and str(integrity_health.get("level") or "").lower() not in {"critical", "error"}
+    )
+)
+results["integrity_guard"] = {
+    "ok": integrity_ok,
+    "status": "warn" if integrity_deployment_review_pending else ("ok" if integrity_ok else "fail"),
+    "health": integrity_health,
+    "pending": int(integrity_summary.get("pending") or 0),
+    "high_risk_pending": int(integrity_summary.get("high_risk_pending") or 0),
+    "deployment_review_pending": integrity_deployment_review_pending,
+    "note": (
+        "deploy code drift still needs root integrity baseline refresh before GO_LIVE"
+        if integrity_deployment_review_pending
+        else ""
+    ),
+}
+
+audit_ok, audit_broken_at, audit_details = server.verify_audit_integrity()
+results["audit_chain"] = {
+    "ok": bool(audit_ok),
+    "broken_at": audit_broken_at,
+    "details": audit_details,
+}
+
+points = server.points_service.verify_chain()
+results["points_chain"] = {
+    "ok": bool(points.get("ok")),
+    "error_count": int(points.get("error_count") or 0),
+    "counts": points.get("counts") or {},
+    "errors": list(points.get("errors") or [])[:10],
+}
+
+overall_ok = all(bool(item.get("ok")) for item in results.values())
+print("post-init runtime checks")
+for name in ("integrity_guard", "audit_chain", "points_chain"):
+    item = results[name]
+    print(f"- {name}: {item.get('status') or ('ok' if item.get('ok') else 'fail')}")
+print(json.dumps({"ok": overall_ok, "checks": results}, ensure_ascii=False, indent=2))
+if not overall_ok:
+    raise SystemExit(1)
+PY
+}
+
+prepare_tls_runtime() {
+  mapfile -t tls_info < <(python3 - <<'PY'
+import os
+import server
+
+settings = server.get_system_settings()
+if bool(settings.get("server_ssl_enabled", True)):
+    server.ensure_local_tls_files(server.CERT_FILE, server.KEY_FILE)
+cert_exists = os.path.exists(server.CERT_FILE) and os.path.exists(server.KEY_FILE)
+ssl_state = server.effective_server_ssl(settings, cert_exists=cert_exists)
+print("1" if ssl_state.get("enabled") else "0")
+print(server.CERT_FILE)
+print(server.KEY_FILE)
+print(ssl_state.get("scheme") or "http")
+PY
+)
+  GUNICORN_TLS_ENABLED="${tls_info[0]:-0}"
+  GUNICORN_CERT_FILE="${tls_info[1]:-}"
+  GUNICORN_KEY_FILE="${tls_info[2]:-}"
+  GUNICORN_SCHEME="${tls_info[3]:-http}"
+}
+
 main() {
   cd "$ROOT_DIR"
   if [[ "$LITE_HINT" == "1" && "$ORIGINAL_ARGC" == "1" ]]; then
@@ -522,26 +603,36 @@ main() {
   prepare_runtime_dirs
 
   if [[ "$MODE" == "check" ]]; then
+    init_database
+    run_post_init_checks
     say "check complete"
     exit 0
   fi
 
   init_database
+  run_post_init_checks
 
   if [[ "$MODE" == "init-db-only" ]]; then
     exit 0
   fi
 
-  say "Starting Hackme Web with Gunicorn..."
-  exec python3 -m gunicorn \
-    --bind "$GUNICORN_BIND" \
-    --workers "$GUNICORN_WORKERS" \
-    --timeout "$GUNICORN_TIMEOUT" \
-    --access-logfile "$GUNICORN_ACCESS_LOG" \
-    --error-logfile "$GUNICORN_ERROR_LOG" \
-    --capture-output \
-    --log-level "$GUNICORN_LOG_LEVEL" \
-    server:app
+  prepare_tls_runtime
+  say "Starting Hackme Web with Gunicorn on ${GUNICORN_SCHEME}://$GUNICORN_BIND ..."
+  gunicorn_cmd=(
+    python3 -m gunicorn
+    --bind "$GUNICORN_BIND"
+    --workers "$GUNICORN_WORKERS"
+    --timeout "$GUNICORN_TIMEOUT"
+    --access-logfile "$GUNICORN_ACCESS_LOG"
+    --error-logfile "$GUNICORN_ERROR_LOG"
+    --capture-output
+    --log-level "$GUNICORN_LOG_LEVEL"
+  )
+  if [[ "$GUNICORN_TLS_ENABLED" == "1" ]]; then
+    gunicorn_cmd+=(--certfile "$GUNICORN_CERT_FILE" --keyfile "$GUNICORN_KEY_FILE")
+  fi
+  gunicorn_cmd+=(server:app)
+  exec "${gunicorn_cmd[@]}"
 }
 
 main

@@ -1952,7 +1952,7 @@ def register_system_admin_routes(app, deps):
                 return json_resp({"ok":False,"msg":"comfyui_connection_mode 必須是 local 或 remote"}), 400
             data["comfyui_connection_mode"] = mode
         if "comfyui_remote_api_url" in data:
-            api_url = validate_comfyui_api_url(data.get("comfyui_remote_api_url"))
+            api_url = validate_comfyui_api_url(data.get("comfyui_remote_api_url"), allow_blank=True)
             if api_url is None:
                 return json_resp({"ok":False,"msg":"comfyui_remote_api_url 必須是 http(s)://host:port，不可包含帳密、路徑或參數"}), 400
             data["comfyui_remote_api_url"] = api_url

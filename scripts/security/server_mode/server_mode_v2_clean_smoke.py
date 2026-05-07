@@ -9,7 +9,6 @@ Server Mode v2 transitions and the core isolation guarantees.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import sqlite3
@@ -210,6 +209,7 @@ class SmokeRunner:
 
     def step(self, name: str, fn):
         started = datetime.now()
+        print(f"[step] {name}", flush=True)
         try:
             detail = fn()
             self.results.append({
@@ -247,7 +247,7 @@ class SmokeRunner:
         return {"mode": current, "checkpoint": result.get("checkpoint")}
 
     def run(self):
-        self.step("initial mode is clean test", self.check_initial_mode)
+        self.step("initial mode is clean dev_ready", self.check_initial_mode)
         self.step("production gate rejects missing reports", self.check_production_gate_missing)
         for mode in ("dev_ready", "maintenance", "test", "internal_test"):
             self.step(f"switch to {mode}", lambda mode=mode: self.switch(mode))
@@ -262,8 +262,48 @@ class SmokeRunner:
 
     def check_initial_mode(self):
         mode = self.runtime.mode_service.get_current_mode()
-        self.assert_true(mode["current_mode"] == "test", f"unexpected initial mode {mode}")
+        self.assert_true(mode["current_mode"] == "dev_ready", f"unexpected initial mode {mode}")
         return {"mode": mode}
+
+    def upload_signed_pass_report(self, report_type: str):
+        raw_report = {
+            "report_type": report_type,
+            "status": "pass",
+            "summary": f"{report_type} clean smoke pass",
+        }
+        attestation = self.runtime.mode_service._prepare_production_report_attestation(
+            report_type=report_type,
+            raw_report=raw_report,
+            target_commit="clean-smoke",
+            target_branch="clean-env",
+            server_mode="dev_ready",
+            test_result="pass",
+            passed=True,
+            critical_findings_count=0,
+            high_findings_count=0,
+            unresolved_findings=[],
+            tester="server_mode_v2_clean_smoke",
+            report_source="server_mode_v2_clean_smoke",
+        )
+        self.assert_true(attestation.get("ok"), f"failed to sign production report: {report_type} {attestation}")
+        return self.runtime.mode_service.upload_production_report(
+            actor=self.root_actor,
+            report_type=report_type,
+            report_hash=attestation["report_hash"],
+            target_commit="clean-smoke",
+            target_branch="clean-env",
+            server_mode="dev_ready",
+            test_result="pass",
+            passed=True,
+            critical_findings_count=0,
+            high_findings_count=0,
+            unresolved_findings=[],
+            tester="server_mode_v2_clean_smoke",
+            signature=attestation["signature"],
+            raw_report=raw_report,
+            key_version=attestation["key_version"],
+            report_source="server_mode_v2_clean_smoke",
+        )
 
     def check_production_gate_missing(self):
         result = self.runtime.mode_service.switch_mode(
@@ -363,23 +403,10 @@ class SmokeRunner:
 
     def check_production_gate_pass(self):
         for report_type in PRODUCTION_REQUIRED_REPORT_TYPES:
-            report_hash = "sha256:" + hashlib.sha256(f"{report_type}:clean-smoke".encode("utf-8")).hexdigest()
-            result = self.runtime.mode_service.upload_production_report(
-                actor=self.root_actor,
-                report_type=report_type,
-                report_hash=report_hash,
-                target_commit="clean-smoke",
-                target_branch="clean-env",
-                server_mode="dev_ready",
-                test_result="pass",
-                passed=True,
-                critical_findings_count=0,
-                high_findings_count=0,
-                unresolved_findings=[],
-                tester="server_mode_v2_clean_smoke",
-                signature=f"smoke-signature:{report_type}",
-            )
+            print(f"[report] upload {report_type}", flush=True)
+            result = self.upload_signed_pass_report(report_type)
             self.assert_true(result.get("ok"), f"upload production report failed: {report_type} {result}")
+        print("[report] production requirements", flush=True)
         requirements = self.runtime.mode_service.production_requirements()
         self.assert_true(requirements.get("ok"), f"production requirements not satisfied: {requirements}")
         return {"required": requirements.get("required")}

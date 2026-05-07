@@ -833,7 +833,7 @@ function hasIdleTimeoutLogoutPending() {
 async function fetchCsrfToken({ force = false } = {}) {
   const cookieToken = readCookie("csrf_token");
   if (!force && (_csrfToken || cookieToken)) {
-    setCsrfToken(_csrfToken || cookieToken || null);
+    setCsrfToken(cookieToken || _csrfToken || null);
     return _csrfToken;
   }
   if (_csrfTokenRequest) {
@@ -1301,7 +1301,7 @@ function setAuthState(json, showLoginHero = false) {
 
   if (currentRole === "manager" || currentRole === "super_admin") {
     loadUsers();
-    if (currentRole === "super_admin") {
+    if (currentRole === "super_admin" && canAccessModule("appeals")) {
       loadAdminAppeals();
     }
   }
@@ -1309,8 +1309,10 @@ function setAuthState(json, showLoginHero = false) {
   if (typeof loadEconomyDashboard === "function" && canAccessModule("economy")) {
     loadEconomyDashboard();
   }
-  loadChatRooms();
-  if (currentRole !== "super_admin") {
+  if (canAccessModule("chat")) {
+    loadChatRooms();
+  }
+  if (currentRole !== "super_admin" && canAccessModule("appeals")) {
     loadUserAppeals();
   }
   const requestedInitialModule = ((location.pathname === "/videos" || (location.hash || "").startsWith("#videos/")) && canAccessModule("videos"))

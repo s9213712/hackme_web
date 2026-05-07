@@ -4,7 +4,7 @@ async function doLogin() {
   const internalTestToken = isInternalTestLoginMode() ? ($("li-internal-test-token")?.value || "") : "";
   if (!user || !pw) { flash($("li-msg"), "請填寫帳號與密碼", false); return; }
 
-  await fetchCsrfToken({ force: false });
+  await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   if (!csrf) {
     flash($("li-msg"), "安全驗證狀態失效，請重新整理頁面", false);
@@ -401,7 +401,7 @@ async function doRegister() {
     return;
   }
 
-  await fetchCsrfToken({ force: false });
+  await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   if (!csrf) {
     flash($("reg-msg"), "安全驗證狀態失效，請重新整理頁面", false);
@@ -482,7 +482,7 @@ function toggleRecoveryPanel() {
 }
 
 async function postRecoveryAction(path, payload) {
-  await fetchCsrfToken({ force: false });
+  await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   if (!csrf) {
     setRecoveryMsg("安全驗證狀態失效，請重新整理頁面", false);
