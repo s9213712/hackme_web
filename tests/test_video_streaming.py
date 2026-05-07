@@ -57,7 +57,8 @@ def _init_db(db_path):
 
 
 def _build_app(db_path, storage_root, fernet, current_user, *, audit_func=None):
-    app = Flask(__name__)
+    public_dir = str(Path(__file__).resolve().parents[1] / "public")
+    app = Flask(__name__, static_folder=public_dir, static_url_path="")
     app.testing = True
     app.secret_key = "video-streaming-test-secret"
 
@@ -1684,3 +1685,179 @@ def test_shared_video_page_csp_does_not_block_inline_script(tmp_path):
             "\n"
             "See issue #182."
         )
+
+
+def test_shared_video_page_browser_realistic_full_flow_for_three_modes(tmp_path):
+    """Issue #182 deeper guard — go beyond "the file exists" string-grep:
+
+      A) /js/shared-video.js is reachable via the same Flask static handler
+         that real browsers will hit (so a misnamed/misplaced file fails CI).
+      B) The token JSON island parses with json.loads (catches future
+         regressions where someone uses repr() / format() and emits
+         single-quoted Python literals — invalid JSON the browser drops).
+      C) The external JS file references the exact API URL templates that
+         the server actually serves, with a `${TOKEN}` interpolation slot
+         (catches drift between route paths and JS fetch calls).
+      D) The full 3-mode unlock + metadata + playback flow still works
+         when invoked using the parsed-from-island token.
+    """
+    import re
+    import sqlite3
+    from cryptography.fernet import Fernet
+
+    cases = [
+        ("standard_plain", False),
+        ("server_encrypted", False),
+        ("e2ee", True),
+    ]
+
+    for privacy_mode, is_e2ee in cases:
+        db_path = tmp_path / f"realbr-{privacy_mode}.db"
+        storage_root = tmp_path / f"realbr-{privacy_mode}-st"
+        storage_root.mkdir()
+        _init_db(db_path)
+        owner_conn = sqlite3.connect(db_path)
+        owner_conn.row_factory = sqlite3.Row
+        try:
+            file_id = f"realbr-{privacy_mode}"
+            if is_e2ee:
+                _seed_uploaded_file(
+                    owner_conn, storage_root,
+                    file_id=file_id, owner_user_id=1,
+                    filename="x.mp4", mime="video/mp4",
+                )
+                _mark_file_as_e2ee(owner_conn, file_id)
+            else:
+                _seed_uploaded_file(
+                    owner_conn, storage_root,
+                    file_id=file_id, owner_user_id=1,
+                    filename="x.mp4", mime="video/mp4",
+                    privacy_mode=privacy_mode,
+                )
+            kwargs = {
+                "actor": {"id": 1, "username": "alice", "role": "user"},
+                "cloud_file_id": file_id,
+                "title": f"realbr-{privacy_mode}",
+                "visibility": "unlisted",
+                "share_password": "P@ssw0rd!",
+                "share_max_views": 10,
+            }
+            if is_e2ee:
+                kwargs["share_wrapped_file_key_envelope"] = (
+                    '{"alg":"AES-GCM","v":1,"nonce":"AAAAAAAAAAAAAAAA","ciphertext":"AQIDBA=="}'
+                )
+            video = publish_video(owner_conn, **kwargs)
+            owner_conn.commit()
+            html_token = video["share_url"].rsplit("/", 1)[-1]
+        finally:
+            owner_conn.close()
+
+        client = _build_app(
+            db_path, storage_root,
+            Fernet(Fernet.generate_key()),
+            current_user=None,
+        ).test_client()
+
+        # A) external JS reachable via Flask static handler
+        js_resp = client.get("/js/shared-video.js")
+        assert js_resp.status_code == 200, (
+            f"{privacy_mode}: /js/shared-video.js not reachable via static "
+            f"handler (status {js_resp.status_code}); check public/ static "
+            "mount in server.py"
+        )
+        js_body = js_resp.data.decode("utf-8")
+
+        # B) token JSON island must parse as strict JSON
+        page = client.get(f"/shared/videos/{html_token}").data.decode("utf-8")
+        m = re.search(
+            r'<script id="share-token" type="application/json">([^<]*)</script>',
+            page,
+        )
+        assert m, f"{privacy_mode}: JSON island missing"
+        try:
+            parsed_token = json.loads(m.group(1))
+        except json.JSONDecodeError as exc:
+            raise AssertionError(
+                f"{privacy_mode}: JSON island body {m.group(1)!r} is not "
+                f"valid JSON ({exc}). If this trips, someone likely changed "
+                "the serializer to repr() — use json.dumps."
+            )
+        assert parsed_token == html_token, (
+            f"{privacy_mode}: token round-trip mismatch "
+            f"(island={parsed_token!r}, url={html_token!r})"
+        )
+
+        # C) JS fetches the URLs the route actually exposes
+        for needle in (
+            "/api/videos/shared/${encodeURIComponent(TOKEN)}",
+            "/api/videos/shared/${encodeURIComponent(TOKEN)}/unlock",
+            "/api/videos/shared/${encodeURIComponent(TOKEN)}/playback",
+        ):
+            assert needle in js_body, (
+                f"{privacy_mode}: shared-video.js missing fetch URL `{needle}` "
+                "— route path and JS fetch path are out of sync"
+            )
+
+        # D) full unlock flow with the parsed token
+        unlock = client.post(
+            f"/api/videos/shared/{parsed_token}/unlock",
+            json={"password": "P@ssw0rd!"},
+        )
+        assert unlock.status_code == 200, (
+            f"{privacy_mode}: unlock with island-parsed token failed "
+            f"(status={unlock.status_code}, body={unlock.get_json()})"
+        )
+        detail = client.get(f"/api/videos/shared/{parsed_token}")
+        assert detail.status_code == 200, (
+            f"{privacy_mode}: post-unlock metadata expected 200, "
+            f"got {detail.status_code}"
+        )
+        playback = client.get(f"/api/videos/shared/{parsed_token}/playback")
+        assert playback.status_code == 200, (
+            f"{privacy_mode}: playback descriptor expected 200, "
+            f"got {playback.status_code}"
+        )
+
+
+def test_shared_video_token_json_island_resists_script_tag_close_injection():
+    """Issue #182 hardening guard.
+
+    The route writes the share token into a JSON island via
+    json.dumps + .replace("</", "<\\/"). That defense exists so a token
+    that *looked* like </script> can never close the host <script> tag
+    and inject markup. This test simulates the exact serialization the
+    route does for a malicious-looking token and confirms a) the JSON
+    island never closes prematurely, b) it round-trips back to the
+    same string under json.loads.
+
+    The serializer lives at routes/videos.py:_shared_video_html (a
+    closure inside register_video_routes, so we mirror the two-line
+    transformation here).
+    """
+    import json as _json
+
+    malicious = 'abc</script><script>alert(1)</script>def'
+    # Mirror routes/videos.py: share_token_json = json.dumps(...).replace("</", "<\\/")
+    serialized = _json.dumps(malicious).replace("</", "<\\/")
+    html = (
+        '<script id="share-token" type="application/json">'
+        + serialized
+        + '</script>'
+        + '<script src="/js/shared-video.js"></script>'
+    )
+    opener = '<script id="share-token" type="application/json">'
+    start = html.find(opener)
+    body_start = start + len(opener)
+    body_end = html.find("</script>", body_start)
+    assert body_end > body_start, (
+        "JSON island never closes — token serializer let </script> through"
+    )
+    island_body = html[body_start:body_end]
+    # In the JSON-string form, "<\/" is the legal way to embed a slash;
+    # json.loads turns it back into "</" so the parsed token equals the
+    # input.
+    parsed = _json.loads(island_body)
+    assert parsed == malicious, (
+        f"JSON island body did not round-trip the token. "
+        f"island_body={island_body!r}, parsed={parsed!r}"
+    )
