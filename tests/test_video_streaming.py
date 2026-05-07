@@ -14,6 +14,8 @@ import routes.videos as video_routes
 from services.media import streaming as media_streaming
 from routes.videos import register_video_routes
 from services.storage.cloud_drive import ensure_cloud_drive_attachment_schema
+from services.system.audit import audit as runtime_audit
+from services.system.audit import configure_audit_service
 from services.users.member_levels import ensure_member_level_rules_schema
 from services.storage_albums import ensure_storage_album_schema
 from services.upload_security import ensure_upload_security_schema, update_cloud_drive_security_policy
@@ -54,7 +56,7 @@ def _init_db(db_path):
     conn.close()
 
 
-def _build_app(db_path, storage_root, fernet, current_user):
+def _build_app(db_path, storage_root, fernet, current_user, *, audit_func=None):
     app = Flask(__name__)
     app.testing = True
     app.secret_key = "video-streaming-test-secret"
@@ -66,7 +68,7 @@ def _build_app(db_path, storage_root, fernet, current_user):
 
     register_video_routes(app, {
         "STORAGE_DIR": str(storage_root),
-        "audit": lambda *args, **kwargs: None,
+        "audit": audit_func or (lambda *args, **kwargs: None),
         "get_client_ip": lambda: "127.0.0.1",
         "get_current_user_ctx": lambda: current_user,
         "get_db": get_db,
@@ -85,6 +87,52 @@ def _build_app(db_path, storage_root, fernet, current_user):
         "server_file_fernet": fernet,
     })
     return app
+
+
+def _configure_real_audit_for_test(db_path, runtime_root):
+    runtime_root.mkdir(parents=True, exist_ok=True)
+    log_dir = runtime_root / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    anchor_dir = runtime_root / "anchors"
+    anchor_dir.mkdir(parents=True, exist_ok=True)
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS secure_audit (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL,
+            action TEXT NOT NULL,
+            ip TEXT,
+            user TEXT,
+            success INTEGER NOT NULL DEFAULT 0,
+            ua TEXT,
+            detail TEXT,
+            prev_hash TEXT,
+            entry_hash TEXT,
+            chain_hash TEXT
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    def get_db():
+        audit_conn = sqlite3.connect(db_path)
+        audit_conn.row_factory = sqlite3.Row
+        return audit_conn
+
+    configure_audit_service(
+        get_db=get_db,
+        chain_seed="pytest-video-audit-seed",
+        integrity_key=b"pytest-video-audit-key-32-bytes!",
+        audit_log_path=str(log_dir / "audit.log"),
+        audit_anchor_path=str(anchor_dir / "audit_anchors.log"),
+        audit_anchor_latest_path=str(anchor_dir / "audit_latest_anchor.json"),
+        audit_anchor_interval_seconds=0,
+    )
+    return runtime_audit
 
 
 def _seed_uploaded_file(conn, storage_root, *, file_id, owner_user_id, filename, mime, privacy_mode="standard_plain", payload=b"demo-media"):
@@ -946,28 +994,36 @@ def test_shared_video_page_mentions_hls_js_fallback_and_fragment_loss(tmp_path):
 
     page = _build_app(db_path, storage_root, Fernet(Fernet.generate_key()), current_user=None).test_client().get(f"/shared/videos/{token}")
     html = page.get_data(as_text=True)
+    # Issue #182 fix: the runtime JS lives in public/js/shared-video.js so
+    # CSP `script-src: 'self'` doesn't block it. The HTML now only carries
+    # the JSON token island + external script tag; the assertions below
+    # scan the standalone JS file.
+    from pathlib import Path as _P
+    js = (_P(__file__).resolve().parents[1] / "public" / "js" / "shared-video.js").read_text(encoding="utf-8")
 
     assert page.status_code == 200
-    assert "loadSharedHlsLibrary" in html
-    assert "/js/vendor/hls.light.min.js?v=20260505-hlsjs" in html
-    assert "Chrome / Firefox / Edge" in html
-    assert "完整連結" in html
-    assert "無法復原" in html
-    assert "分享授權無效或已被竄改" in html
-    assert "正在讀取 E2EE 分享授權" in html
-    assert "正在下載加密影音檔" in html
-    assert "正在瀏覽器端解密影音" in html
-    assert "不會把密碼或金鑰送到伺服器" in html
-    assert "AbortController" in html
-    assert "setTimeout(() => controller.abort(), 10000);" in html
-    assert "分享影音載入失敗" in html
-    assert "isSharePasswordResponse" in html
-    assert "showSharePasswordPrompt" in html
-    assert "此分享影音需要先解鎖" in html
+    assert '<script src="/js/shared-video.js' in html
+    assert '<script id="share-token" type="application/json">' in html
     assert 'id="player-action"' in html
-    assert "showSharedPlaybackAction" in html
-    assert "開始 E2EE 播放" in html
-    assert "未按下播放前，不會主動要求密碼或開始解密。" in html
+    assert "loadSharedHlsLibrary" in js
+    assert "/js/vendor/hls.light.min.js?v=20260505-hlsjs" in js
+    assert "Chrome / Firefox / Edge" in js
+    assert "完整連結" in js
+    assert "無法復原" in js
+    assert "分享授權無效或已被竄改" in js
+    assert "正在讀取 E2EE 分享授權" in js
+    assert "正在下載加密影音檔" in js
+    assert "正在瀏覽器端解密影音" in js
+    assert "不會把密碼或金鑰送到伺服器" in js
+    assert "AbortController" in js
+    assert "setTimeout(() => controller.abort(), 10000);" in js
+    assert "分享影音載入失敗" in js
+    assert "isSharePasswordResponse" in js
+    assert "showSharePasswordPrompt" in js
+    assert "此分享影音需要先解鎖" in js
+    assert "showSharedPlaybackAction" in js
+    assert "開始 E2EE 播放" in js
+    assert "未按下播放前，不會主動要求密碼或開始解密。" in js
 
 
 def test_shared_e2ee_stream_v2_manifest_and_chunk_routes_work_and_stay_off_hls(tmp_path):
@@ -1346,6 +1402,57 @@ def test_shared_video_regeneration_for_e2ee_requires_new_browser_side_envelope(t
     assert body["video"]["share_requires_fragment_key"] is True
 
 
+def test_share_link_update_and_revoke_succeed_with_real_audit_service(tmp_path):
+    db_path = tmp_path / "shared-real-audit.db"
+    storage_root = tmp_path / "storage-real-audit"
+    storage_root.mkdir()
+    _init_db(db_path)
+    audit_func = _configure_real_audit_for_test(db_path, tmp_path / "runtime-real-audit")
+    owner_conn = sqlite3.connect(db_path)
+    owner_conn.row_factory = sqlite3.Row
+    try:
+        _seed_uploaded_file(
+            owner_conn,
+            storage_root,
+            file_id="plain-video",
+            owner_user_id=1,
+            filename="movie.mp4",
+            mime="video/mp4",
+            privacy_mode="standard_plain",
+            payload=b"plain-video",
+        )
+        video = publish_video(
+            owner_conn,
+            actor={"id": 1, "username": "alice", "role": "user"},
+            cloud_file_id="plain-video",
+            title="Plain",
+            visibility="unlisted",
+        )
+        owner_conn.commit()
+        video_id = video["id"]
+    finally:
+        owner_conn.close()
+
+    owner_client = _build_app(
+        db_path,
+        storage_root,
+        Fernet(Fernet.generate_key()),
+        current_user={"id": 1, "username": "alice", "role": "user", "member_level": "trusted", "effective_level": "trusted"},
+        audit_func=audit_func,
+    ).test_client()
+
+    regenerated = owner_client.put(f"/api/videos/{video_id}/share-link", json={"regenerate": True})
+    assert regenerated.status_code == 200
+    token = regenerated.get_json()["share_link"]["url"].rsplit("/", 1)[-1]
+
+    revoked = owner_client.delete(f"/api/videos/{video_id}/share-link")
+    assert revoked.status_code == 200
+
+    anonymous = _build_app(db_path, storage_root, Fernet(Fernet.generate_key()), current_user=None).test_client()
+    revoked_view = anonymous.get(f"/api/videos/shared/{token}")
+    assert revoked_view.status_code == 404
+
+
 def test_shared_video_three_privacy_modes_complete_unlock_flow(tmp_path):
     """User-reported regression: share page stuck after password input, no
     response to submit. Reproduces full unlock flow for all 3 privacy modes
@@ -1420,12 +1527,20 @@ def test_shared_video_three_privacy_modes_complete_unlock_flow(tmp_path):
             current_user=None,
         ).test_client()
 
-        # 1) Inline HTML page renders (no 5xx, no f-string crash)
+        # 1) Inline HTML page renders (no 5xx, no f-string crash). Per
+        # issue #182 fix, the runtime JS now lives in
+        # public/js/shared-video.js (loaded via <script src>), and the
+        # token is delivered through a JSON island so CSP allows it.
         page = client.get(f"/shared/videos/{token}")
         assert page.status_code == 200, f"{privacy_mode}: share page HTML status {page.status_code}"
         page_html = page.data.decode("utf-8")
         assert "share-password-form" in page_html, f"{privacy_mode}: form missing from rendered HTML"
-        assert "loadSharedVideo" in page_html, f"{privacy_mode}: loadSharedVideo not in rendered JS"
+        assert '<script src="/js/shared-video.js' in page_html, (
+            f"{privacy_mode}: external shared-video.js not loaded — fix #182 may have regressed"
+        )
+        assert '<script id="share-token" type="application/json">' in page_html, (
+            f"{privacy_mode}: token JSON island missing"
+        )
 
         # 2) Metadata while locked → 401 password_required
         locked = client.get(f"/api/videos/shared/{token}")
