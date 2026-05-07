@@ -2,10 +2,10 @@
 
 import json
 import uuid
-from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 
 from services.server_mode.routing import resolve_table
+from services.trading._clock import now_text as _now_text
 from services.trading.accounting.core import (
     fee_points,
     notional_points,
@@ -16,10 +16,6 @@ from services.trading.validators import _to_decimal, _to_int
 
 
 OPEN_ORDER_STATUSES = {"open", "partially_filled"}
-
-
-def _now_text():
-    return datetime.now().isoformat()
 
 
 def _json_dumps(value):
