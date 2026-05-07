@@ -1,9 +1,11 @@
 import sqlite3
+from pathlib import Path
 
 from flask import Flask, jsonify, make_response
 
 from routes.system_admin import register_system_admin_routes
 from services.bootstrap import CURRENT_SCHEMA_VERSION
+from services.system.integrity_guard import IntegrityGuard, ensure_integrity_schema
 
 
 def _json_resp(payload, status=200):
@@ -19,7 +21,7 @@ class _SnapshotStub:
         return [{"id": "snap_test"}]
 
 
-def _make_app(tmp_path, actor=None, audit_result=(True, None, "integrity OK"), include_forum_tables=True, activation_log=None):
+def _make_app(tmp_path, actor=None, audit_result=(True, None, "integrity OK"), include_forum_tables=True, activation_log=None, integrity_guard=None):
     db_path = tmp_path / "health.db"
     chat_dir = tmp_path / "chats"
     log_dir = tmp_path / "logs"
@@ -82,6 +84,7 @@ def _make_app(tmp_path, actor=None, audit_result=(True, None, "integrity OK"), i
         "get_feature_settings": lambda: {},
         "get_system_settings": lambda: {"maintenance_mode": False},
         "get_ua": lambda: "pytest",
+        "integrity_guard": integrity_guard,
         "is_audit_chain_enabled": lambda: True,
         "json_resp": _json_resp,
         "repair_audit_chain": lambda **kwargs: {"entries_resealed": 0},
@@ -96,6 +99,19 @@ def _make_app(tmp_path, actor=None, audit_result=(True, None, "integrity OK"), i
         "verify_audit_integrity": lambda: audit_result,
     })
     return app
+
+
+def _write_integrity_project(base: Path):
+    (base / "services").mkdir(parents=True)
+    (base / "routes").mkdir(parents=True)
+    (base / "public" / "js").mkdir(parents=True)
+    (base / "server.py").write_text("print('server')\n", encoding="utf-8")
+    (base / "services" / "auth.py").write_text("AUTH = True\n", encoding="utf-8")
+    (base / "routes" / "system_admin.py").write_text("ROOT = True\n", encoding="utf-8")
+    (base / "public" / "js" / "50-admin.js").write_text("const admin = true;\n", encoding="utf-8")
+    (base / "bootstrap.schema.sql").write_text("CREATE TABLE x(id);\n", encoding="utf-8")
+    (base / "requirements.txt").write_text("flask\n", encoding="utf-8")
+    (base / "README.md").write_text("# test project\n", encoding="utf-8")
 
 
 def test_health_readiness_and_db_integrity_endpoints(tmp_path):
@@ -177,6 +193,41 @@ def test_admin_health_broken_audit_chain_marks_critical_without_auto_lockdown(tm
     assert data["audit_integrity"]["operator_action_required"] is True
     assert data["audit_integrity"]["auto_lockdown_applied"] is False
     assert activation_log == []
+
+
+def test_health_integrity_guard_clean_deploy_drift_is_degraded_not_critical(tmp_path):
+    integrity_db = tmp_path / "integrity.db"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_integrity_project(repo)
+
+    def get_integrity_db():
+        conn = sqlite3.connect(integrity_db)
+        conn.row_factory = sqlite3.Row
+        ensure_integrity_schema(conn)
+        return conn
+
+    guard = IntegrityGuard(
+        base_dir=repo,
+        signing_key=b"test-signing-key",
+        get_db=get_integrity_db,
+        audit=lambda *args, **kwargs: None,
+    )
+    guard.scan(actor="system")
+    (repo / "services" / "auth.py").write_text("AUTH = 'changed'\n", encoding="utf-8")
+    guard._is_clean_git_checkout = lambda: True
+    guard.scan(actor="system-startup", create_initial_manifest=False)
+
+    app = _make_app(tmp_path, integrity_guard=guard)
+    res = app.test_client().get("/api/admin/health/readiness")
+    data = res.get_json()["readiness"]
+
+    assert res.status_code == 200
+    assert data["status"] == "degraded"
+    integrity = next(item for item in data["checks"] if item["name"] == "integrity_guard")
+    assert integrity["ok"] is False
+    assert integrity["severity"] == "degraded"
+    assert "尚未 rebaseline" in integrity["detail"]
 
 
 def test_health_center_requires_super_admin(tmp_path):

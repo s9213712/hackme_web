@@ -12,6 +12,11 @@ from services.games.chess import (
     opponent,
     validate_move,
 )
+from services.games.chess_engine import (
+    EXPERIMENT_DIFFICULTY,
+    choose_experiment_move,
+    record_experiment_learning,
+)
 from services.points_chain import DISPLAY_CURRENCY
 
 GAME_KEY = "chess"
@@ -19,7 +24,7 @@ SOLO_GAME_KEYS = {"sudoku", "minesweeper", "1a2b", "tetris", "space_shooter"}
 SCORE_RANKED_SOLO_GAMES = {"tetris", "space_shooter"}
 SOLO_GAME_CHECK_SQL = "'sudoku', 'minesweeper', '1a2b', 'tetris', 'space_shooter'"
 WEEKLY_REWARDS = (300, 200, 100)
-COMPUTER_DIFFICULTIES = {"normal", "hard"}
+COMPUTER_DIFFICULTIES = {"normal", "hard", EXPERIMENT_DIFFICULTY}
 MINESWEEPER_DIFFICULTIES = {"easy", "normal", "hard"}
 PIECE_VALUES = {
     "p": 100,
@@ -66,7 +71,7 @@ def move_material_value(move):
     return score
 
 
-def choose_computer_move(board, side, difficulty="normal"):
+def _choose_heuristic_move(board, side, difficulty="normal"):
     moves = legal_moves(board, side)
     if not moves:
         return None
@@ -107,6 +112,15 @@ def choose_computer_move(board, side, difficulty="normal"):
     best_score = max(score for score, _move in scored)
     best_moves = [move for score, move in scored if score == best_score]
     return random.choice(best_moves)
+
+
+def choose_computer_move(board, side, difficulty="normal", learning_store=None):
+    difficulty = normalize_computer_difficulty(difficulty) or "normal"
+    if difficulty == EXPERIMENT_DIFFICULTY:
+        move = choose_experiment_move(board, side, store=learning_store, difficulty=difficulty)
+        if move:
+            return move
+    return _choose_heuristic_move(board, side, difficulty)
 
 
 def load_board(row):
@@ -150,7 +164,7 @@ def game_schema_sql():
         CHECK (status IN ('active', 'finished', 'cancelled')),
         CHECK (current_turn IN ('white', 'black')),
         CHECK (human_side IN ('white', 'black')),
-        CHECK (computer_difficulty IN ('easy', 'normal', 'hard'))
+        CHECK (computer_difficulty IN ('easy', 'normal', 'hard', 'experiment'))
     );
     CREATE TABLE IF NOT EXISTS game_invites (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -248,6 +262,60 @@ def rebuild_solo_score_table(conn):
     conn.execute("DROP TABLE game_solo_scores_old")
 
 
+def rebuild_game_matches_table(conn):
+    conn.execute("ALTER TABLE game_matches RENAME TO game_matches_old")
+    conn.execute(
+        """
+        CREATE TABLE game_matches (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            game_key TEXT NOT NULL,
+            mode TEXT NOT NULL DEFAULT 'pvp',
+            status TEXT NOT NULL DEFAULT 'active',
+            white_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            black_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            human_side TEXT NOT NULL DEFAULT 'white',
+            computer_difficulty TEXT NOT NULL DEFAULT 'normal',
+            current_turn TEXT NOT NULL DEFAULT 'white',
+            board_json TEXT NOT NULL,
+            move_history_json TEXT NOT NULL DEFAULT '[]',
+            winner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            result_reason TEXT,
+            leaderboard_week TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            finished_at TEXT,
+            white_deleted_at TEXT,
+            black_deleted_at TEXT,
+            CHECK (game_key IN ('chess')),
+            CHECK (mode IN ('pvp', 'computer')),
+            CHECK (status IN ('active', 'finished', 'cancelled')),
+            CHECK (current_turn IN ('white', 'black')),
+            CHECK (human_side IN ('white', 'black')),
+            CHECK (computer_difficulty IN ('easy', 'normal', 'hard', 'experiment'))
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO game_matches (
+            id, game_key, mode, status, white_user_id, black_user_id, human_side,
+            computer_difficulty, current_turn, board_json, move_history_json,
+            winner_user_id, result_reason, leaderboard_week, created_at, updated_at,
+            finished_at, white_deleted_at, black_deleted_at
+        )
+        SELECT
+            id, game_key, mode, status, white_user_id, black_user_id,
+            COALESCE(human_side, 'white'),
+            COALESCE(computer_difficulty, 'normal'),
+            current_turn, board_json, move_history_json, winner_user_id,
+            result_reason, leaderboard_week, created_at, updated_at, finished_at,
+            white_deleted_at, black_deleted_at
+        FROM game_matches_old
+        """
+    )
+    conn.execute("DROP TABLE game_matches_old")
+
+
 def ensure_game_schema(conn):
     conn.executescript(game_schema_sql())
     solo_schema = conn.execute(
@@ -270,6 +338,12 @@ def ensure_game_schema(conn):
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_game_solo_scores_score_rank ON game_solo_scores(game_key, week_key, difficulty, score DESC, elapsed_ms)"
     )
+    match_schema = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='game_matches'"
+    ).fetchone()
+    match_sql = str(match_schema["sql"] or "") if match_schema else ""
+    if match_schema and "experiment" not in match_sql:
+        rebuild_game_matches_table(conn)
     cols = {row["name"] for row in conn.execute("PRAGMA table_info(game_matches)").fetchall()}
     if "white_deleted_at" not in cols:
         conn.execute("ALTER TABLE game_matches ADD COLUMN white_deleted_at TEXT")
@@ -279,6 +353,12 @@ def ensure_game_schema(conn):
         conn.execute("ALTER TABLE game_matches ADD COLUMN human_side TEXT NOT NULL DEFAULT 'white'")
     if "computer_difficulty" not in cols:
         conn.execute("ALTER TABLE game_matches ADD COLUMN computer_difficulty TEXT NOT NULL DEFAULT 'easy'")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_game_matches_players ON game_matches(game_key, status, white_user_id, black_user_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_game_matches_finished ON game_matches(game_key, mode, finished_at)"
+    )
     conn.commit()
 
 
@@ -408,6 +488,7 @@ def register_games_routes(app, deps):
     audit = deps.get("audit", lambda *args, **kwargs: None)
     get_client_ip = deps.get("get_client_ip", lambda: "")
     get_ua = deps.get("get_ua", lambda: "")
+    chess_engine_store = deps.get("chess_engine_store")
 
     def actor_or_401():
         actor = get_current_user_ctx()
@@ -505,6 +586,26 @@ def register_games_routes(app, deps):
                 awarded.append({"user_id": row["user_id"], "username": row["username"], "rank": index + 1, "reward_points": reward_points})
         return awarded
 
+    def persist_experiment_learning(row, *, winner_color, actor_username):
+        if chess_engine_store is None:
+            return 0
+        try:
+            return record_experiment_learning(
+                row,
+                winner_color=winner_color,
+                store=chess_engine_store,
+            )
+        except Exception as exc:
+            audit(
+                "GAME_CHESS_EXPERIMENT_LEARNING_FAILED",
+                get_client_ip(),
+                user=actor_username,
+                success=False,
+                ua=get_ua(),
+                detail=f"match_id={row['id']}, error={type(exc).__name__}: {exc}",
+            )
+            return 0
+
     @app.route("/api/games/catalog", methods=["GET"])
     @require_csrf_safe
     def games_catalog():
@@ -522,6 +623,7 @@ def register_games_routes(app, deps):
                 "computer_difficulties": [
                     {"key": "normal", "label": "普通"},
                     {"key": "hard", "label": "困難"},
+                    {"key": EXPERIMENT_DIFFICULTY, "label": "實驗"},
                 ],
             }, {
                 "key": "sudoku",
@@ -731,7 +833,7 @@ def register_games_routes(app, deps):
             if human_side == "black":
                 opening_moves = legal_moves(board, "white")
                 if opening_moves:
-                    computer_move = choose_computer_move(board, "white", difficulty)
+                    computer_move = choose_computer_move(board, "white", difficulty, learning_store=chess_engine_store)
                     applied = validate_move(board, "white", computer_move["from"], computer_move["to"], computer_move.get("promotion"))
                     board = applied["board"]
                     history.append({
@@ -898,7 +1000,12 @@ def register_games_routes(app, deps):
             computer_difficulty = row["computer_difficulty"] if "computer_difficulty" in row.keys() else "normal"
             if row["mode"] == "computer" and status_info["status"] == "active" and next_turn != human_side:
                 computer_side = next_turn
-                computer_move = choose_computer_move(board, computer_side, computer_difficulty)
+                computer_move = choose_computer_move(
+                    board,
+                    computer_side,
+                    computer_difficulty,
+                    learning_store=chess_engine_store,
+                )
                 if computer_move:
                     computer_applied = validate_move(board, computer_side, computer_move["from"], computer_move["to"], computer_move.get("promotion"))
                     board = computer_applied["board"]
@@ -924,6 +1031,11 @@ def register_games_routes(app, deps):
             if status_info["status"] == "finished":
                 refreshed = conn.execute("SELECT * FROM game_matches WHERE id=?", (match_id,)).fetchone()
                 finish_match(conn, refreshed, status_info, utc_now())
+                persist_experiment_learning(
+                    refreshed,
+                    winner_color=status_info.get("winner_color"),
+                    actor_username=actor["username"],
+                )
             conn.commit()
             refreshed = match_row(conn, match_id)
             return json_resp({"ok": True, "match": serialize_match(refreshed, actor["id"])})
@@ -959,6 +1071,11 @@ def register_games_routes(app, deps):
                 WHERE id=? AND status='active'
                 """,
                 (winner, current_week_key(), now, now, match_id),
+            )
+            persist_experiment_learning(
+                row,
+                winner_color=opponent(side),
+                actor_username=actor["username"],
             )
             conn.commit()
             refreshed = match_row(conn, match_id)

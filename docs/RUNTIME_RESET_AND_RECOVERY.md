@@ -16,8 +16,8 @@ It does:
 - create a `pre_reset` server snapshot first
 - clear resettable application tables such as forum, chat, DM, storage, album,
   report, notification, moderation, game, and runtime feature data
-- clear configured runtime file roots such as uploads, avatars, attachments,
-  media, and chat files
+- clear configured canonical runtime file roots such as `runtime/storage/` and
+  `runtime/chats/`
 - reset PointsChain live tables through `PointsLedgerService.reset_runtime_chain`
 - reset the secure audit chain through `reset_audit_chain_with_event`
 - remove local deployment-generated secrets and manifests:

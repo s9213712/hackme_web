@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import json
 import os
+import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -330,6 +331,52 @@ class IntegrityGuard:
         ).fetchone()
         return bool(row)
 
+    def _is_clean_git_checkout(self):
+        git_dir = self.base_dir / ".git"
+        if not git_dir.exists():
+            return False
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(self.base_dir), "status", "--porcelain", "--untracked-files=no"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except Exception:
+            return False
+        return result.returncode == 0 and not str(result.stdout or "").strip()
+
+    def _health_state(self, conn, *, summary, last_scan):
+        health = {"level": "ok", "detail": ""}
+        if int(summary.get("high_risk_pending") or 0) <= 0:
+            return health
+        rows = conn.execute(
+            "SELECT file_path, category FROM integrity_findings WHERE status='pending' AND risk_level='high'"
+        ).fetchall()
+        deploy_review_pending = bool(rows)
+        for row in rows:
+            data = dict(row)
+            if data.get("file_path") == MANIFEST_FILENAME or data.get("category") == "integrity_guard":
+                deploy_review_pending = False
+                break
+        if (
+            deploy_review_pending
+            and last_scan
+            and str(last_scan.get("status") or "") == "findings"
+            and bool(last_scan.get("manifest_valid"))
+            and bool(last_scan.get("manifest_signature_valid"))
+            and self._is_clean_git_checkout()
+        ):
+            # A clean post-deploy checkout still requires root review and
+            # rebaseline, but it should not look identical to manifest
+            # tampering or unsigned source drift.
+            return {
+                "level": "degraded",
+                "detail": "偵測到已部署但尚未 rebaseline 的程式碼變更；production 仍應維持阻擋，請 root 檢查後刷新 integrity baseline",
+            }
+        return {"level": "critical", "detail": "高風險 integrity finding 待人工審核"}
+
     def create_finding(self, conn, *, file_path, category, risk_level, change_type, old_hash=None, new_hash=None, old_size=None, new_size=None, old_mtime=None, new_mtime=None):
         if change_type not in CHANGE_TYPES:
             change_type = "modified"
@@ -529,6 +576,7 @@ class IntegrityGuard:
                         summary["high_risk_pending"] += int(data["c"] or 0)
                     if data["change_type"] in {"modified", "added", "deleted"}:
                         summary[data["change_type"]] += int(data["c"] or 0)
+            health = self._health_state(conn, summary=summary, last_scan=dict(run) if run else None)
             return {
                 "ok": True,
                 "protected_files": protected_count,
@@ -537,6 +585,8 @@ class IntegrityGuard:
                 "manifest_path": str(self.manifest_path),
                 "preprod_allowed": summary["high_risk_pending"] == 0,
                 "auto_approved_expired": auto_approved,
+                "health": health,
+                "deployment_review_pending": health["level"] == "degraded",
             }
         finally:
             if close:

@@ -7,6 +7,7 @@ import os
 from services.auth import configure_auth_service
 from services.bootstrap import configure_bootstrap_service
 from services.chat.support import configure_chat_support_service
+from services.games.chess_engine import ChessExperimentStore
 from services.points_chain import PointsLedgerService
 from services.security.events import configure_security_events_service
 from services.settings import configure_settings_service
@@ -122,6 +123,7 @@ def build_runtime_services(*, config, deps):
         audit=deps["audit"],
         stream_hub=trading_price_stream_hub,
     )
+    chess_engine_store = ChessExperimentStore(db_path=config["chess_engine_db_path"])
     snapshot_service.set_post_restore_validators(
         [
             ("points_chain", lambda: points_service.verify_chain()),
@@ -141,5 +143,6 @@ def build_runtime_services(*, config, deps):
         "points_service": points_service,
         "trading_price_stream_hub": trading_price_stream_hub,
         "trading_service": trading_service,
+        "chess_engine_store": chess_engine_store,
         "server_mode_service": server_mode_service,
     }

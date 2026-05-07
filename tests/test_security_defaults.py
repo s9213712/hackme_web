@@ -56,8 +56,16 @@ def test_runtime_artifacts_default_to_runtime_subdir_and_not_repo_root():
     server_py = (ROOT / "server.py").read_text(encoding="utf-8")
     assert 'RUNTIME_DIR = _env_path("HACKME_RUNTIME_DIR", os.path.join(BASE_DIR, "runtime"))' in server_py
     assert 'DB_DIR = _env_path("HTML_LEARNING_DB_DIR", os.path.join(RUNTIME_DIR, "database"))' in server_py
+    assert 'CHESS_ENGINE_DB_PATH = _env_path("HTML_LEARNING_CHESS_ENGINE_DB_PATH", os.path.join(DB_DIR, "chess_experiment.db"))' in server_py
     assert 'LOG_DIR = _env_path("HTML_LEARNING_LOG_DIR", os.path.join(RUNTIME_DIR, "logs"))' in server_py
     assert 'STORAGE_DIR = _env_path("HTML_LEARNING_STORAGE_DIR", os.path.join(RUNTIME_DIR, "storage"))' in server_py
+    assert '"file_roots": [' in server_py
+    assert 'CHAT_DIR,' in server_py
+    assert 'STORAGE_DIR,' in server_py
+    assert 'os.path.join(BASE_DIR, "uploads")' not in server_py
+    assert 'os.path.join(BASE_DIR, "avatars")' not in server_py
+    assert 'os.path.join(BASE_DIR, "attachments")' not in server_py
+    assert 'os.path.join(BASE_DIR, "media")' not in server_py
     assert 'CHAIN_SEED_PATH = _runtime_path("HTML_LEARNING_CHAIN_SEED_PATH", ".chain_seed")' in server_py
     assert 'CERT_FILE = _runtime_path("HTML_LEARNING_CERT_FILE", "cert.pem")' in server_py
     assert 'KEY_FILE = _runtime_path("HTML_LEARNING_KEY_FILE", "key.pem")' in server_py

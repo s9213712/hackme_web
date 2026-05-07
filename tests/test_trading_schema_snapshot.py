@@ -257,9 +257,10 @@ def test_ensure_trading_schema_critical_columns_present(tmp_path):
     assert has_column("trading_settings", "updated_at", type_="TEXT", notnull=1)
 
     # trading_markets — must keep fee_rate_percent (slice 1 default unit
-    # rename target) + live_price_confirmed_at (boot-ready gate)
+    # rename target) + live-price warmup / boot-ready gate columns
     assert has_column("trading_markets", "symbol", type_="TEXT", pk=1)
     assert has_column("trading_markets", "fee_rate_percent", type_="REAL", notnull=1)
+    assert has_column("trading_markets", "live_price_warmup_started_at", type_="TEXT")
     assert has_column("trading_markets", "live_price_confirmed_at", type_="TEXT")
     assert has_column("trading_markets", "max_price_jump_percent", type_="REAL", notnull=1)
 

@@ -257,6 +257,7 @@ function gameMatchLabel(match) {
 }
 
 function gameDifficultyLabel(difficulty) {
+  if (difficulty === "experiment") return "實驗";
   if (difficulty === "hard") return "困難";
   return "普通";
 }

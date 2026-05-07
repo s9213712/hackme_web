@@ -54,7 +54,9 @@ def _stamp_all_markets_boot_ready(trading):
     try:
         trading.ensure_schema(conn)
         conn.execute(
-            "UPDATE trading_markets SET live_price_confirmed_at=COALESCE(live_price_confirmed_at, ?)",
+            "UPDATE trading_markets "
+            "SET live_price_warmup_started_at=NULL, "
+            "live_price_confirmed_at=COALESCE(live_price_confirmed_at, ?)",
             ("2024-01-01T00:00:00",),
         )
         conn.commit()
@@ -3404,6 +3406,7 @@ def test_live_quote_keeps_risk_grade_usable_when_only_reference_coverage_is_part
     monkeypatch.setattr(trading, "_fetch_kraken_orderbook_snapshot", lambda _symbol: partial("kraken_public_api", min_bid=99.0, max_ask=101.1))
     monkeypatch.setattr(trading, "_fetch_gemini_orderbook_snapshot", lambda _symbol: partial("gemini_public_api", min_bid=99.0, max_ask=101.1))
     monkeypatch.setattr(trading, "_fetch_bitstamp_orderbook_snapshot", lambda _symbol: partial("bitstamp_public_api", min_bid=99.0, max_ask=101.1))
+    _stamp_all_markets_boot_ready(trading)
 
     payload = trading.get_live_market_quote(market_symbol="BTC/USDT")
 

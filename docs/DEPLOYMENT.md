@@ -3,7 +3,8 @@
 This file is the script-level reference. New deployers should start with
 [01_DEPLOY_QUICKSTART.md](01_DEPLOY_QUICKSTART.md) and
 [02_DEPLOY_PRODUCTION.md](02_DEPLOY_PRODUCTION.md), then come back here when
-they need exact command modes and script flags.
+they need exact command modes and script flags. For the canonical dependency
+matrix, see [SYSTEM_DEPENDENCIES.md](SYSTEM_DEPENDENCIES.md).
 
 ## One-Command Deployment
 
@@ -61,6 +62,8 @@ Generated runtime files remain local and must not be committed:
   - root 忘記密碼時的正式 offline 補救入口
 
 這些能力提示屬於**可選擴充檢查**，不會阻擋一般部署。
+更完整的 system binary / external service 清單請看
+[SYSTEM_DEPENDENCIES.md](SYSTEM_DEPENDENCIES.md)。
 
 ## Functional Smoke
 

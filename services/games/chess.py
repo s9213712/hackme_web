@@ -145,6 +145,15 @@ def _uci_for_request(board, from_square, to_square, promotion=None):
     return f"{from_square}{to_square}{suffix}"
 
 
+def to_chess_board(board, turn=None):
+    return _board_from_state(board, turn)
+
+
+def move_to_uci(board, from_square, to_square, promotion=None, color=None):
+    board_obj = _board_from_state(board, color)
+    return _uci_for_request(board_obj, from_square, to_square, promotion)
+
+
 def apply_move_to_board(board, from_square, to_square, promotion=None, color=None):
     board_obj = _board_from_state(board, color)
     move = chess.Move.from_uci(_uci_for_request(board_obj, from_square, to_square, promotion))

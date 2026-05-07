@@ -107,6 +107,19 @@ def test_functional_smoke_covers_video_share_flow_and_user_facing_error_paths():
     assert 'request "video shared playback" "GET" "/api/videos/shared/${SMOKE_VIDEO_SHARE_TOKEN}/playback" "200"' in script
     assert 'request "video share revoke" "DELETE" "/api/videos/${SMOKE_VIDEO_ID}/share-link" "200" \'{}\'' in script
     assert 'request "video shared detail after revoke" "GET" "/api/videos/shared/${SMOKE_VIDEO_SHARE_TOKEN}" "404"' in script
+    assert 'multipart_request "storage e2ee media upload" "/api/storage/files" "200"' in script
+    assert '"privacy_mode=e2ee"' in script
+    assert 'request "video publish shared e2ee" "POST" "/api/videos/publish" "200"' in script
+    assert 'request "video e2ee shared detail locked" "GET" "/api/videos/shared/${E2EE_SHARE_TOKEN}" "401"' in script
+    assert 'request "video e2ee shared unlock wrong password" "POST" "/api/videos/shared/${E2EE_SHARE_TOKEN}/unlock" "403"' in script
+    assert 'request "video e2ee shared unlock" "POST" "/api/videos/shared/${E2EE_SHARE_TOKEN}/unlock" "200"' in script
+    assert 'request "video e2ee shared playback" "GET" "/api/videos/shared/${E2EE_SHARE_TOKEN}/playback" "200"' in script
+    assert 'request "video e2ee shared key payload" "GET" "/api/videos/shared/${E2EE_SHARE_TOKEN}/e2ee-key" "200"' in script
+    assert 'str(data.get("mode") or "").startswith("e2ee")' in script
+    assert 'bool(data["video"].get("share_requires_fragment_key"))' in script
+    assert 'data["e2ee_share"].get("privacy_mode") == "e2ee"' in script
+    assert 'request "video e2ee share revoke" "DELETE" "/api/videos/${E2EE_VIDEO_ID}/share-link" "200" \'{}\'' in script
+    assert 'request "video e2ee shared detail after revoke" "GET" "/api/videos/shared/${E2EE_SHARE_TOKEN}" "404"' in script
     assert 'assert_body_contains \\' in script
     assert '"讀取中..."' in script
     assert '"/js/shared-video.js"' in script
@@ -115,7 +128,8 @@ def test_functional_smoke_covers_video_share_flow_and_user_facing_error_paths():
     assert '"video upload missing file guidance"' in script
     assert '"video upload non-media guidance"' in script
     assert '"video shared revoke guidance"' in script
-    assert "Video platform: upload/publish, shared page load, anonymous shared playback, revoke flow" in docs
+    assert "Video platform: upload/publish, shared page load, password unlock, E2EE bootstrap, anonymous shared playback, revoke flow" in docs
     assert "known regressions: copy-share fallback and shared page loading timeout guard" in docs
+    assert "strict E2EE share flow now verifies password gate" in docs
     assert "remote downloader rejections expose a user-facing message" in docs
     assert "HACKME_RUNTIME_DIR" in docs

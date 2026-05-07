@@ -13,6 +13,8 @@ The repository root keeps only [README.md](../README.md) and
   working local or staging deployment
 - [02_DEPLOY_PRODUCTION.md](02_DEPLOY_PRODUCTION.md): production hardening,
   reverse proxy, backups, and release gate expectations
+- [SYSTEM_DEPENDENCIES.md](SYSTEM_DEPENDENCIES.md): canonical Python packages,
+  system binaries, optional feature tools, and external integration checklist
 
 ## Role Guides
 
@@ -83,6 +85,14 @@ The repository root keeps only [README.md](../README.md) and
 - [SERVER_MODE_V2_TEST_PLAN.md](SERVER_MODE_V2_TEST_PLAN.md): mode redesign coverage
 - [SERVER_MODE_V2_MIGRATION_PLAN.md](SERVER_MODE_V2_MIGRATION_PLAN.md): migration history
 - [SECURITY_MODES.md](SECURITY_MODES.md): legacy redirect for old links
+
+## Maintainer Structure
+
+- [RELEASE_LAYOUT.md](RELEASE_LAYOUT.md): tracked source vs runtime boundaries
+- [REPOSITORY_STRUCTURE.md](REPOSITORY_STRUCTURE.md): canonical placement logic
+  for `docs/`, `scripts/`, `tests/`, runtime baggage, and cleanup priorities
+- [../scripts/README.md](../scripts/README.md): script entrypoint and grouping policy
+- [../tests/README.md](../tests/README.md): test grouping and consolidation policy
 
 ## History, Research, And Archive
 

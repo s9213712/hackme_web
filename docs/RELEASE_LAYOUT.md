@@ -29,6 +29,7 @@ weekly salary jobs are not run at startup unless the operator explicitly sets
 | Path | Runtime Data |
 |---|---|
 | `runtime/database/database.db` | SQLite runtime database. |
+| `runtime/database/chess_experiment.db` | 西洋棋 `experiment` 難度的獨立學習資料庫。 |
 | `runtime/storage/` | Cloud Drive user files. |
 | `runtime/reports/bugs/` | User bug reports. |
 | `runtime/reports/server_mode_audit/` | Server mode audit export JSON / JSONL / SHA256 bundles. |
@@ -41,6 +42,12 @@ weekly salary jobs are not run at startup unless the operator explicitly sets
 | `runtime/cert.pem`, `runtime/key.pem` | Local TLS files generated on first start. |
 | `runtime/.chain_seed`, `runtime/.csrfkey`, `runtime/.fkey`, `runtime/.filekey`, `runtime/.integrity_key`, `runtime/integrity_manifest.json` | Runtime secrets and integrity state generated locally. |
 
+Legacy root folders such as `attachments/`, `avatars/`, `media/`, and
+`uploads/` are not canonical runtime homes anymore. Snapshot/reset wiring now
+clears the canonical runtime roots (`runtime/storage/`, `runtime/chats/`)
+instead of recreating those repo-root folders. Leftover legacy directories
+should be treated as migration or cleanup targets, not as valid storage design.
+
 Tracked placeholder files such as `.gitkeep` are allowed only where an empty
 directory needs to exist in a fresh checkout.
 
@@ -48,6 +55,7 @@ directory needs to exist in a fresh checkout.
 
 - The repository root keeps only `README.md` and GitHub-required `SECURITY.md`.
 - Long-form guides live under `docs/`.
+- Placement and cleanup policy lives in `docs/REPOSITORY_STRUCTURE.md`.
 - Security test usage guides live under `docs/security/`.
 - Historical abandoned work lives under `docs/archive/`.
 - Internal research belongs under `research/` or `docs/research/`; both are

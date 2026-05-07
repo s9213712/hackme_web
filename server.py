@@ -242,6 +242,7 @@ def _runtime_path(env_name, relative_path):
 
 DB_DIR = _env_path("HTML_LEARNING_DB_DIR", os.path.join(RUNTIME_DIR, "database"))
 DB_PATH = os.path.join(DB_DIR, "database.db")
+CHESS_ENGINE_DB_PATH = _env_path("HTML_LEARNING_CHESS_ENGINE_DB_PATH", os.path.join(DB_DIR, "chess_experiment.db"))
 LOG_DIR = _env_path("HTML_LEARNING_LOG_DIR", os.path.join(RUNTIME_DIR, "logs"))
 CHAT_DIR = _env_path("HTML_LEARNING_CHAT_DIR", os.path.join(RUNTIME_DIR, "chats"))
 ANCHOR_DIR = _env_path("HTML_LEARNING_ANCHOR_DIR", os.path.join(RUNTIME_DIR, "anchors"))
@@ -555,6 +556,7 @@ _runtime_services = build_runtime_services(
         "base_dir": BASE_DIR,
         "db_dir": DB_DIR,
         "db_path": DB_PATH,
+        "chess_engine_db_path": CHESS_ENGINE_DB_PATH,
         "runtime_secrets_dir": RUNTIME_SECRETS_DIR,
         "storage_root": STORAGE_DIR,
         "chat_dir": CHAT_DIR,
@@ -574,10 +576,7 @@ _runtime_services = build_runtime_services(
         "integrity_manifest_path": INTEGRITY_MANIFEST_PATH,
         "file_roots": [
             CHAT_DIR,
-            os.path.join(BASE_DIR, "uploads"),
-            os.path.join(BASE_DIR, "avatars"),
-            os.path.join(BASE_DIR, "attachments"),
-            os.path.join(BASE_DIR, "media"),
+            STORAGE_DIR,
         ],
         "config_files": [
             os.path.join(BASE_DIR, "system_settings.json"),
@@ -629,6 +628,7 @@ integrity_guard = _runtime_services["integrity_guard"]
 points_service = _runtime_services["points_service"]
 trading_price_stream_hub = _runtime_services["trading_price_stream_hub"]
 trading_service = _runtime_services["trading_service"]
+chess_engine_store = _runtime_services["chess_engine_store"]
 server_mode_service = _runtime_services["server_mode_service"]
 
 # ── Flask app ──────────────────────────────────────────────────────────────────

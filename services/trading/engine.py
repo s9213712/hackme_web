@@ -868,10 +868,13 @@ def ensure_trading_schema(conn):
         ("reference_price_enabled", "ALTER TABLE trading_markets ADD COLUMN reference_price_enabled INTEGER NOT NULL DEFAULT 1"),
         ("btc_trade_enabled", "ALTER TABLE trading_markets ADD COLUMN btc_trade_enabled INTEGER NOT NULL DEFAULT 0"),
         ("provider_ids_json", "ALTER TABLE trading_markets ADD COLUMN provider_ids_json TEXT NOT NULL DEFAULT '{}'"),
-        # Boot-ready gate (2026-05-06): NULL until a real live-price fetch
-        # has succeeded for this market. Trading / liquidation / bot ops
+        # Boot-ready gate (2026-05-06, warmup tightened 2026-05-07):
+        # NULL until at least two consecutive live quotes have produced a
+        # stable candidate for this market. Trading / liquidation / bot ops
         # refuse to act on markets where this is still NULL — protects
-        # against acting on the seed default after a fresh boot.
+        # against both the seed default and the very first live quote after a
+        # fresh boot or provider recovery.
+        ("live_price_warmup_started_at", "ALTER TABLE trading_markets ADD COLUMN live_price_warmup_started_at TEXT"),
         ("live_price_confirmed_at", "ALTER TABLE trading_markets ADD COLUMN live_price_confirmed_at TEXT"),
     ):
         if column_name not in market_cols:
@@ -1557,12 +1560,12 @@ class TradingEngineService:
     def _is_market_boot_ready(self, market):
         """Boot-ready gate (2026-05-06).
 
-        ``trading_markets.live_price_confirmed_at`` is NULL until at least one
-        live-source price fetch has cleared the jump validator for this symbol.
-        Until that timestamp is set, any operation that takes price as truth
-        (spot order, margin open, liquidation, bot decision) MUST refuse —
-        otherwise we risk acting on the seed default that ``manual_price_points``
-        was first inserted with.
+        ``trading_markets.live_price_confirmed_at`` is NULL until the market
+        has survived warmup with at least two stable live quotes. Until that
+        timestamp is set, any operation that takes price as truth (spot order,
+        margin open, liquidation, bot decision) MUST refuse — otherwise we
+        risk acting either on the seed default that ``manual_price_points`` was
+        first inserted with, or on a single unconfirmed startup spike.
         """
         if not isinstance(market, dict) and "live_price_confirmed_at" not in (getattr(market, "keys", lambda: ())()):
             return False

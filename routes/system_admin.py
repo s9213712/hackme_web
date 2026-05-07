@@ -953,7 +953,16 @@ def register_system_admin_routes(app, deps):
                 integrity = integrity_guard.status()
                 high_pending = int((integrity.get("summary") or {}).get("high_risk_pending") or 0)
                 pending = int((integrity.get("summary") or {}).get("pending") or 0)
-                add_check("integrity_guard", high_pending == 0, f"pending={pending},high={high_pending}", severity="critical")
+                integrity_health = integrity.get("health") or {}
+                detail = f"pending={pending},high={high_pending}"
+                if integrity_health.get("detail"):
+                    detail = f"{detail}; {integrity_health['detail']}"
+                add_check(
+                    "integrity_guard",
+                    high_pending == 0,
+                    detail,
+                    severity="degraded" if integrity_health.get("level") == "degraded" else "critical",
+                )
             except Exception as exc:
                 add_check("integrity_guard", False, str(exc), severity="critical")
 

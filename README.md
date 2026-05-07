@@ -7,7 +7,7 @@
 ![database](https://img.shields.io/badge/database-SQLite-0f6ab4)
 ![security](https://img.shields.io/badge/focus-auth%20%2B%20RBAC%20%2B%20audit-b31d28)
 
-**Current Release ID: `2026.05.07-153`**
+**Current Release ID: `2026.05.07-154`**
 
 `hackme_web` 是一個部署者優先的 Flask 單機站點，整合了帳號與權限、
 Cloud Drive、ComfyUI、PointsChain、交易實驗、Snapshot/Restore 與
@@ -15,7 +15,8 @@ Server Mode 等能力。
 
 這份 README 故意只保留最短入口。最近功能更新請看
 [docs/UPDATE_SUMMARY.md](docs/UPDATE_SUMMARY.md)，完整文件地圖請看
-[docs/README.md](docs/README.md)。
+[docs/README.md](docs/README.md)，系統依賴總表請看
+[docs/SYSTEM_DEPENDENCIES.md](docs/SYSTEM_DEPENDENCIES.md)。
 
 ## First-Time Deployer Route
 
@@ -75,6 +76,7 @@ Fresh local databases 會建立：
 ## Documentation Map
 
 - 文件總索引：[docs/README.md](docs/README.md)
+- 系統依賴總表：[docs/SYSTEM_DEPENDENCIES.md](docs/SYSTEM_DEPENDENCIES.md)
 - root/admin 管理入口：[docs/03_ADMIN_GUIDE.md](docs/03_ADMIN_GUIDE.md)
 - 使用者教學：[docs/04_USER_GUIDE.md](docs/04_USER_GUIDE.md)
 - 功能總覽：[docs/05_FEATURES_OVERVIEW.md](docs/05_FEATURES_OVERVIEW.md)

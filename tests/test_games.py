@@ -4,10 +4,11 @@ from unittest.mock import patch
 from flask import Flask, jsonify
 
 from routes.games import choose_computer_move, ensure_game_schema, register_games_routes
+from services.games.chess_engine import ChessExperimentStore, choose_experiment_move, record_experiment_learning
 from services.games.chess import game_status, initial_board, legal_moves, validate_move
 
 
-def _build_app(db_path, actor_box, points_service=None):
+def _build_app(db_path, actor_box, points_service=None, chess_engine_store=None):
     app = Flask(__name__)
     app.testing = True
 
@@ -27,6 +28,7 @@ def _build_app(db_path, actor_box, points_service=None):
         "require_csrf_safe": passthrough,
         "points_service": points_service,
         "audit": lambda *args, **kwargs: None,
+        "chess_engine_store": chess_engine_store,
     })
     return app
 
@@ -52,6 +54,10 @@ def _seed_db(db_path):
     ensure_game_schema(conn)
     conn.commit()
     conn.close()
+
+
+def _build_chess_engine_store(tmp_path):
+    return ChessExperimentStore(tmp_path / "runtime" / "database" / "chess_experiment.db")
 
 
 def _seed_legacy_user_db(db_path):
@@ -88,6 +94,7 @@ def test_game_catalog_includes_solo_games(tmp_path):
     games = response.get_json()["games"]
     by_key = {game["key"]: game for game in games}
     assert {"chess", "sudoku", "minesweeper", "1a2b", "tetris", "space_shooter"} <= set(by_key)
+    assert [item["key"] for item in by_key["chess"]["computer_difficulties"]] == ["normal", "hard", "experiment"]
     assert by_key["sudoku"]["supports_invites"] is False
     assert by_key["minesweeper"]["supports_computer"] is False
     assert by_key["1a2b"]["supports_invites"] is False
@@ -425,7 +432,7 @@ def test_chess_practice_difficulty_is_persisted_and_rejects_invalid_value(tmp_pa
     db_path = tmp_path / "games.db"
     _seed_db(db_path)
     actor_box = {"actor": {"id": 2, "username": "alice", "role": "user"}}
-    app = _build_app(db_path, actor_box)
+    app = _build_app(db_path, actor_box, chess_engine_store=_build_chess_engine_store(tmp_path))
     client = app.test_client()
 
     rejected = client.post("/api/games/chess/practice", json={"difficulty": "impossible"})
@@ -437,6 +444,12 @@ def test_chess_practice_difficulty_is_persisted_and_rejects_invalid_value(tmp_pa
     match_id = created.get_json()["match_id"]
     match = client.get(f"/api/games/chess/matches/{match_id}").get_json()["match"]
     assert match["computer_difficulty"] == "hard"
+
+    experiment = client.post("/api/games/chess/practice", json={"difficulty": "experiment"})
+    assert experiment.status_code == 200
+    experiment_id = experiment.get_json()["match_id"]
+    experiment_match = client.get(f"/api/games/chess/matches/{experiment_id}").get_json()["match"]
+    assert experiment_match["computer_difficulty"] == "experiment"
 
 
 def test_chess_computer_normal_difficulty_prefers_high_value_capture():
@@ -451,6 +464,87 @@ def test_chess_computer_normal_difficulty_prefers_high_value_capture():
     assert move["from"] == "d8"
     assert move["to"] == "d1"
     assert move["captured"] == "Q"
+
+
+def test_experiment_learning_store_uses_separate_runtime_db(tmp_path):
+    db_path = tmp_path / "games.db"
+    _seed_db(db_path)
+    store = _build_chess_engine_store(tmp_path)
+    row = {
+        "id": 7,
+        "mode": "computer",
+        "computer_difficulty": "experiment",
+        "human_side": "black",
+        "move_history_json": '[{"by":"white","from":"e2","to":"e4","piece":"P"}]',
+    }
+    updated = record_experiment_learning(row, winner_color="white", store=store)
+    assert updated == 1
+    assert store.db_path.exists()
+
+    conn = sqlite3.connect(db_path)
+    try:
+        learning_table = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='game_chess_engine_memory'"
+        ).fetchone()
+        assert learning_table is None
+    finally:
+        conn.close()
+
+    learning_conn = sqlite3.connect(store.db_path)
+    learning_conn.row_factory = sqlite3.Row
+    try:
+        memory = learning_conn.execute(
+            "SELECT move_uci, sample_count, win_count, score_total FROM game_chess_engine_memory"
+        ).fetchone()
+        assert memory["move_uci"] == "e2e4"
+        assert memory["sample_count"] == 1
+        assert memory["win_count"] == 1
+        assert memory["score_total"] > 0
+    finally:
+        learning_conn.close()
+
+
+def test_experiment_move_reads_learning_bias_from_store(tmp_path):
+    store = _build_chess_engine_store(tmp_path)
+    with store.connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO game_chess_engine_memory (
+                position_key, side, move_uci, sample_count, win_count, draw_count, loss_count, score_total, updated_at
+            ) VALUES (?, 'white', 'e2e4', 20, 20, 0, 0, 160, '2026-05-07T00:00:00+00:00')
+            """,
+            ("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq -",),
+        )
+        conn.commit()
+    move = choose_experiment_move(initial_board(), "white", store=store)
+    assert move["from"] == "e2"
+    assert move["to"] == "e4"
+
+
+def test_experiment_resign_persists_learning_to_runtime_store(tmp_path):
+    db_path = tmp_path / "games.db"
+    _seed_db(db_path)
+    actor_box = {"actor": {"id": 2, "username": "alice", "role": "user"}}
+    store = _build_chess_engine_store(tmp_path)
+    app = _build_app(db_path, actor_box, chess_engine_store=store)
+    client = app.test_client()
+
+    created = client.post("/api/games/chess/practice", json={"difficulty": "experiment", "side": "black"})
+    assert created.status_code == 200
+    match_id = created.get_json()["match_id"]
+
+    resigned = client.post(f"/api/games/chess/matches/{match_id}/resign", json={})
+    assert resigned.status_code == 200
+
+    learning_conn = sqlite3.connect(store.db_path)
+    learning_conn.row_factory = sqlite3.Row
+    try:
+        rows = learning_conn.execute(
+            "SELECT COUNT(*) AS c FROM game_chess_engine_memory"
+        ).fetchone()
+        assert rows["c"] >= 1
+    finally:
+        learning_conn.close()
 
 
 def test_chess_pvp_checkmate_finishes_match(tmp_path):

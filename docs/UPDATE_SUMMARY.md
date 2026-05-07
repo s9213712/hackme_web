@@ -1,6 +1,24 @@
 # Update Summary
 
-Release ID: `2026.05.07-153`
+Release ID: `2026.05.07-154`
+
+## 2026.05.07-154
+
+- Trading markets no longer become boot-ready on the very first live quote
+  after a fresh boot or provider recovery. The first healthy quote now only
+  starts a warmup candidate (`live_price_warmup_started_at`), and high-risk
+  paths stay fail-closed until a second stable live quote confirms the market.
+- This closes the startup/default-price jump hole where a market could flip
+  from a seeded placeholder directly to a live API quote and immediately
+  release bots, matching, or other risk-grade actions.
+- `get_live_market_quote` and the trading price metadata now surface this state
+  as `boot_pending` instead of silently treating the first quote as fully
+  confirmed.
+- Added regression coverage for:
+  - schema support for `live_price_warmup_started_at`
+  - first live quote keeping `place_order` blocked
+  - first public live quote still keeping bot scans blocked
+  - second stable quote releasing the boot-ready gate
 
 ## 2026.05.07-153
 

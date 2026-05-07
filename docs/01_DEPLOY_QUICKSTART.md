@@ -17,6 +17,9 @@
 - `python3`
 - `curl`
 
+若你需要完整依賴總表，而不是只看最短路線，請直接看
+[SYSTEM_DEPENDENCIES.md](SYSTEM_DEPENDENCIES.md)。
+
 ### 最短部署流程
 
 從 repo 根目錄執行：
@@ -96,6 +99,9 @@ done
   - `ffmpeg` / `ffprobe`（影音 HLS 衍生檔）
   - `CIVITAI_API_KEY`（root-only Civitai 搜尋/下載）
   這些不會阻擋一般部署，只是能力提示。
+- `BT/magnet` 遠端下載需要 `aria2c`，upload malware 掃描若要啟用則需
+  `clamscan` 或 `clamdscan`；完整依賴請看
+  [SYSTEM_DEPENDENCIES.md](SYSTEM_DEPENDENCIES.md)。
 - repo 只追蹤原始碼；DB、logs、storage、keys、TLS 憑證、reports 都是
   runtime 檔，啟動後才生成。
 - 這種設計降低 clone 後的人工整理成本，也避免把別人的 runtime 狀態帶進來。
@@ -128,4 +134,5 @@ done
 - [11_QA_TESTING.md](11_QA_TESTING.md)
 - [12_TROUBLESHOOTING.md](12_TROUBLESHOOTING.md)
 - [DEPLOYMENT.md](DEPLOYMENT.md)
+- [SYSTEM_DEPENDENCIES.md](SYSTEM_DEPENDENCIES.md)
 - [For_developer.md](For_developer.md)

@@ -1,5 +1,7 @@
 """Snapshot archive and restore service."""
 
+import tempfile
+
 from . import schema as _schema
 
 globals().update(
@@ -79,6 +81,24 @@ class SnapshotService:
 
     def _portable_archive_path(self, snapshot_id):
         return self._snapshot_dir(snapshot_id) / f"{snapshot_id}.snapshot.tar.gz"
+
+    def _stage_snapshot_dir_for_restore(self, snapshot_dir):
+        snapshot_dir = Path(snapshot_dir).resolve(strict=False)
+        file_roots = [Path(root).resolve(strict=False) for root in self.file_roots]
+        if not any(root == snapshot_dir or root in snapshot_dir.parents for root in file_roots):
+            return snapshot_dir, None
+        stage_parent = Path(
+            tempfile.mkdtemp(
+                prefix="snapshot_restore_",
+                dir=str(self.runtime_base_dir.resolve(strict=False)),
+            )
+        )
+        staged_snapshot_dir = stage_parent / snapshot_dir.name
+        # Restore must not delete its own archive when storage_root is one of the
+        # managed runtime roots. Stage the full snapshot bundle outside file_roots
+        # first, then clear runtime roots, and only then extract from the staged copy.
+        shutil.copytree(snapshot_dir, staged_snapshot_dir)
+        return staged_snapshot_dir, stage_parent
 
     def _local_snapshot_record(self, snapshot_id, *, actor_id=0, notes=None):
         snapshot_dir = self._snapshot_dir(snapshot_id)
@@ -1047,18 +1067,20 @@ class SnapshotService:
         finally:
             conn.close()
 
+        staged_snapshot_parent = None
         try:
             snapshot_dir = self._snapshot_dir(snapshot_id)
+            restore_source, staged_snapshot_parent = self._stage_snapshot_dir_for_restore(snapshot_dir)
             self.audit("SNAPSHOT_RESTORE_STARTED", "-", user=actor_name, success=True, detail=f"snapshot_id={snapshot_id},pre_restore={pre.snapshot_id},reason={reason}")
-            self._restore_db(snapshot_dir)
+            self._restore_db(restore_source)
             self._clear_file_roots()
-            _safe_extract_tar(snapshot_dir / "uploads.tar.gz", self.base_dir)
-            config_restore_stage = snapshot_dir / ".restore_config_stage"
+            _safe_extract_tar(restore_source / "uploads.tar.gz", self.base_dir)
+            config_restore_stage = restore_source / ".restore_config_stage"
             if config_restore_stage.exists():
                 shutil.rmtree(config_restore_stage)
             config_restore_stage.mkdir(parents=True, exist_ok=True)
-            _safe_extract_tar(snapshot_dir / "config.tar.gz", config_restore_stage)
-            self._apply_staged_config_restore(snapshot_dir, config_restore_stage)
+            _safe_extract_tar(restore_source / "config.tar.gz", config_restore_stage)
+            self._apply_staged_config_restore(restore_source, config_restore_stage)
             completed_at = datetime.now().isoformat()
             mode_log_merge = self._merge_mode_switch_logs(preserved_mode_switch_logs)
             conn = self.get_db()
@@ -1083,7 +1105,7 @@ class SnapshotService:
                     "pre_restore_snapshot_id": pre.snapshot_id,
                     "mode_switch_log_merge": mode_log_merge,
                 }
-            runtime_secret_validation = self._validate_runtime_secret_files(snapshot_dir)
+            runtime_secret_validation = self._validate_runtime_secret_files(restore_source)
             if not runtime_secret_validation["ok"]:
                 conn = self.get_db()
                 try:
@@ -1177,6 +1199,12 @@ class SnapshotService:
                 conn.close()
             self.audit("SNAPSHOT_RESTORE_FAILED", "-", user=actor_name, success=False, detail=f"snapshot_id={snapshot_id},error={exc}")
             return {"ok": False, "msg": "restore failed", "error": str(exc), "pre_restore_snapshot_id": pre.snapshot_id}
+        finally:
+            if staged_snapshot_parent and staged_snapshot_parent.exists():
+                try:
+                    shutil.rmtree(staged_snapshot_parent)
+                except Exception:
+                    pass
 
     def delete_snapshot(self, *, snapshot_id, actor, reason):
         path = self._snapshot_dir(snapshot_id)

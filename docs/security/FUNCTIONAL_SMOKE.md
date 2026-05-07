@@ -119,7 +119,9 @@ root 那個故意存在的 `runtime` fail-closed 哨兵檔。
 | reports/moderation | bug reports、reports、notifications、appeals、moderation actions/proposals、violations、message reports、mod notes、reputation endpoints。 |
 | hardening | unknown path `OPTIONS` 不應宣告 PUT/DELETE/PATCH 等危險方法；remote downloader rejections expose a user-facing message；known regressions: copy-share fallback and shared page loading timeout guard；custom profile trading block plus test-mode diagnostics and internal_test routed order flow；browser-only mode 需帶 maintenance bypass token 才能讓 operator script 繼續驗證。 |
 
-Video platform: upload/publish, shared page load, anonymous shared playback, revoke flow.
+Video platform: upload/publish, shared page load, password unlock, E2EE bootstrap, anonymous shared playback, revoke flow.
+strict E2EE share flow now verifies password gate, wrong-password guidance,
+post-unlock playback bootstrap, browser-side key payload, and revoke fail-closed behavior.
 
 `internal_test` 的 tester token smoke 會用「本地時間、無時區」的 ISO 8601 到期字串，
 因為 root UI 送的是 `datetime-local`；若改成 naive UTC，token 可能會在 UTC+offset

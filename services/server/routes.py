@@ -148,6 +148,7 @@ OPERATION_ROUTE_KEYS = (
     "BASE_DIR",
     "GIT_REPO_DIR",
     "CHAT_DIR",
+    "chess_engine_store",
     "CURRENT_SERVER_BIND_STATE",
     "DB_PATH",
     "LOG_DIR",

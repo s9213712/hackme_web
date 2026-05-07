@@ -1101,6 +1101,73 @@ run_checks() {
   else
     skip "video shared page/detail/playback" "smoke video share url not found"
   fi
+
+  login_smoke_user || return 1
+  multipart_request "storage e2ee media upload" "/api/storage/files" "200" \
+    "privacy_mode=e2ee" \
+    "encrypted_metadata={\"filename\":\"smoke-e2ee.mp4\",\"mime_type\":\"video/mp4\"}" \
+    "encrypted_file_key=owner-wrapped-smoke-key" \
+    "wrapped_by=user_public_key" \
+    "ciphertext_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
+    "encryption_algorithm=AES-GCM" \
+    "encryption_version=browser-v1" \
+    "nonce=smoke-nonce" \
+    "file=@${OUT_DIR}/smoke_video.mp4;type=video/mp4"
+  E2EE_STORAGE_FILE_ID="$(json_expr 'data["storage_file"]["id"]' "$(latest_raw "storage e2ee media upload")" || true)"
+  if [[ -n "${E2EE_STORAGE_FILE_ID:-}" ]]; then
+    request "video publish shared e2ee" "POST" "/api/videos/publish" "200" "{\"cloud_file_id\":\"${E2EE_STORAGE_FILE_ID}\",\"title\":\"Functional Smoke Shared E2EE ${RUN_ID}\",\"description\":\"e2ee shared smoke flow\",\"visibility\":\"unlisted\",\"share_password\":\"SharePass123!\",\"share_max_views\":2,\"share_wrapped_file_key_envelope\":\"{\\\"alg\\\":\\\"AES-GCM\\\",\\\"v\\\":1,\\\"nonce\\\":\\\"AAAAAAAAAAAAAAAA\\\",\\\"ciphertext\\\":\\\"AQIDBA==\\\"}\"}"
+    E2EE_VIDEO_ID="$(json_expr 'data["video"]["id"]' "$(latest_raw "video publish shared e2ee")" || true)"
+    E2EE_SHARE_URL="$(json_expr 'data["video"]["share_url"]' "$(latest_raw "video publish shared e2ee")" || true)"
+    E2EE_SHARE_TOKEN="${E2EE_SHARE_URL##*/}"
+    if [[ -n "${E2EE_SHARE_URL:-}" && -n "${E2EE_SHARE_TOKEN:-}" ]]; then
+      rm -f "$COOKIE_JAR"
+      request "video e2ee shared page" "GET" "${E2EE_SHARE_URL}" "200"
+      request "video e2ee shared detail locked" "GET" "/api/videos/shared/${E2EE_SHARE_TOKEN}" "401"
+      assert_json_check \
+        "video e2ee shared detail locked" \
+        'data.get("password_required") is True and bool(str(data.get("msg") or "").strip())' \
+        "video e2ee shared password gate" \
+        "strict E2EE shared link blocks metadata until password unlock and exposes clear guidance" \
+        "strict E2EE shared link did not expose the expected password gate guidance"
+      request "video e2ee shared unlock wrong password" "POST" "/api/videos/shared/${E2EE_SHARE_TOKEN}/unlock" "403" '{"password":"wrong-pass"}'
+      assert_json_check \
+        "video e2ee shared unlock wrong password" \
+        'data.get("ok") is False and ("密碼" in str(data.get("msg") or "") or "password" in str(data.get("reason") or "").lower())' \
+        "video e2ee shared wrong password guidance" \
+        "strict E2EE unlock rejects the wrong password with a user-facing message" \
+        "strict E2EE unlock wrong-password path lacked clear guidance"
+      request "video e2ee shared unlock" "POST" "/api/videos/shared/${E2EE_SHARE_TOKEN}/unlock" "200" '{"password":"SharePass123!"}'
+      request "video e2ee shared detail unlocked" "GET" "/api/videos/shared/${E2EE_SHARE_TOKEN}" "200"
+      assert_json_check \
+        "video e2ee shared detail unlocked" \
+        'data.get("ok") is True and "video" in data and bool(data["video"].get("share_requires_fragment_key")) and bool(str(data["video"].get("title") or "").strip())' \
+        "video e2ee shared detail payload" \
+        "strict E2EE shared metadata loads after unlock and marks fragment-key requirement" \
+        "strict E2EE shared metadata payload was missing the expected fragment-key marker"
+      request "video e2ee shared playback" "GET" "/api/videos/shared/${E2EE_SHARE_TOKEN}/playback" "200"
+      assert_json_check \
+        "video e2ee shared playback" \
+        'data.get("ok") is True and str(data.get("mode") or "").startswith("e2ee") and bool(str(data.get("e2ee_key_url") or "").strip())' \
+        "video e2ee shared playback payload" \
+        "strict E2EE shared playback returns an e2ee_* descriptor with browser-side key bootstrap" \
+        "strict E2EE shared playback descriptor was missing browser-side decrypt bootstrap data"
+      request "video e2ee shared key payload" "GET" "/api/videos/shared/${E2EE_SHARE_TOKEN}/e2ee-key" "200"
+      assert_json_check \
+        "video e2ee shared key payload" \
+        'data.get("ok") is True and "e2ee_share" in data and data["e2ee_share"].get("privacy_mode") == "e2ee" and bool(str(data["e2ee_share"].get("wrapped_file_key_envelope") or "").strip())' \
+        "video e2ee shared key guidance" \
+        "strict E2EE share returns the browser-side decrypt envelope after unlock" \
+        "strict E2EE share key endpoint did not return the expected decrypt envelope"
+      login_smoke_user || return 1
+      request "video e2ee share revoke" "DELETE" "/api/videos/${E2EE_VIDEO_ID}/share-link" "200" '{}'
+      rm -f "$COOKIE_JAR"
+      request "video e2ee shared detail after revoke" "GET" "/api/videos/shared/${E2EE_SHARE_TOKEN}" "404"
+    else
+      skip "video e2ee shared flow" "e2ee share url/token not found"
+    fi
+  else
+    skip "video e2ee shared flow" "e2ee storage file id not found"
+  fi
   login_root || return 1
 
   request "bug report create" "POST" "/api/bug-reports" "200" '{"severity":"low","title":"Smoke bug report","description":"functional smoke bug report"}'

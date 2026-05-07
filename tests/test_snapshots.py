@@ -168,6 +168,46 @@ def test_restore_stages_runtime_secret_files_before_repo_runtime_sentinel(tmp_pa
     assert event["status"] == "completed"
 
 
+def test_restore_with_runtime_storage_roots_does_not_recreate_legacy_repo_dirs(tmp_path):
+    audit_log = []
+    base = tmp_path / "app"
+    base.mkdir()
+    runtime_root = base / "runtime"
+    storage_root = runtime_root / "storage"
+    chat_root = runtime_root / "chats"
+    storage_root.mkdir(parents=True)
+    chat_root.mkdir(parents=True)
+    db_path = base / "database.db"
+    _init_db(db_path)
+
+    def get_db():
+        return _db(db_path)
+
+    service = SnapshotService(
+        get_db=get_db,
+        db_path=db_path,
+        base_dir=base,
+        runtime_base_dir=runtime_root,
+        storage_root=storage_root,
+        audit=lambda *args, **kwargs: audit_log.append((args, kwargs)),
+        file_roots=[storage_root, chat_root],
+        config_files=[],
+    )
+
+    (storage_root / "asset.txt").write_text("v1", encoding="utf-8")
+    (chat_root / "room.txt").write_text("chat-v1", encoding="utf-8")
+    snap = service.create_snapshot(snapshot_type="manual", actor={"id": 1, "username": "root"}, notes="runtime roots only")
+
+    (storage_root / "asset-v2.txt").write_text("v2", encoding="utf-8")
+    restored = service.restore_snapshot(snapshot_id=snap.snapshot_id, actor={"id": 1, "username": "root"}, reason="runtime root restore")
+
+    assert restored["ok"] is True
+    assert (storage_root / "asset.txt").exists()
+    assert not (storage_root / "asset-v2.txt").exists()
+    for legacy in ("uploads", "avatars", "attachments", "media"):
+        assert not (base / legacy).exists()
+
+
 def test_server_mode_hmac_key_defaults_to_runtime_subdir_without_snapshot_service(tmp_path, monkeypatch):
     monkeypatch.delenv("HACKME_RUNTIME_DIR", raising=False)
     monkeypatch.chdir(tmp_path)

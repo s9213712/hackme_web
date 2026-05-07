@@ -1575,6 +1575,8 @@ def current_market_price_points(service, conn, market, *, with_meta=False, high_
     symbol = market["symbol"]
     settings = service._settings_payload(conn)
     configured_source = settings.get("price_source") or engine.FUSED_PRICE_SOURCE
+    confirmed_at_text = str(market.get("live_price_confirmed_at") or "").strip()
+    warmup_started_at_text = str(market.get("live_price_warmup_started_at") or "").strip()
     price_meta = {
         "price_health": "healthy",
         "fallback_reason": "",
@@ -1897,11 +1899,75 @@ def current_market_price_points(service, conn, market, *, with_meta=False, high_
     if configured_source == engine.FUSED_PRICE_SOURCE and fusion_details and high_risk and fusion_details.get("risk_grade_price_points") is not None:
         price = float(engine._to_decimal(fusion_details.get("risk_grade_price_points"), name="risk_grade_price_points", minimum=0.00000001))
     now = engine._now()
+    next_confirmed_at = confirmed_at_text or None
+    next_warmup_started_at = warmup_started_at_text or None
+    warmup_pending_reason = ""
+    warmup_jump_percent = None
+    if live_source in engine.LIVE_PRICE_SOURCE_NAMES and not confirmed_at_text:
+        allowed_percent = float(market["max_price_jump_percent"] or 0)
+        if not warmup_started_at_text:
+            warmup_pending_reason = (
+                f"market {symbol} 已收到第一筆即時價格；"
+                "仍需再確認一筆穩定報價後才允許 bot / 撮合 / 風控。"
+            )
+            next_confirmed_at = None
+            next_warmup_started_at = now
+        elif old_price_decimal > 0:
+            warmup_jump_percent = float((abs(Decimal(str(price)) - old_price_decimal) * Decimal("100")) / old_price_decimal)
+            if allowed_percent and warmup_jump_percent > allowed_percent:
+                warmup_pending_reason = (
+                    f"market {symbol} 即時價格暖機期間跳動 {warmup_jump_percent:.2f}% 超過 "
+                    f"{allowed_percent:.2f}%；仍需等待下一筆穩定報價。"
+                )
+                next_confirmed_at = None
+                next_warmup_started_at = now
+            else:
+                next_confirmed_at = now
+                next_warmup_started_at = None
+        else:
+            warmup_pending_reason = (
+                f"market {symbol} 已收到第一筆即時價格；"
+                "仍需再確認一筆穩定報價後才允許 bot / 撮合 / 風控。"
+            )
+            next_confirmed_at = None
+            next_warmup_started_at = now
+    if warmup_pending_reason:
+        price_meta["price_health"] = "boot_pending"
+        price_meta["high_risk_blocked"] = True
+        price_meta["high_risk_block_reason"] = warmup_pending_reason
+        price_meta["risk_grade_usable"] = False
+        price_meta["fallback_reason"] = warmup_pending_reason
+        price_meta["warnings"] = service._append_price_fusion_warning(
+            price_meta.get("warnings"),
+            "boot_warmup_pending",
+            warmup_pending_reason,
+            severity="warning",
+        )
+        transport_state = dict(price_meta.get("transport_state") or {})
+        if transport_state and not str(transport_state.get("message") or "").strip():
+            transport_state["message"] = warmup_pending_reason
+            price_meta["transport_state"] = transport_state
+        service._audit_event(
+            conn,
+            "TRADING_PRICE_BOOT_WARMUP_PENDING",
+            "live trading price captured but market is still warming up",
+            market_symbol=symbol,
+            severity="warning",
+            metadata={
+                "resolved_source": str(live_source or configured_source or ""),
+                "price_points": float(engine._to_decimal(price, name="warmup_price_points", minimum=0.00000001)),
+                "previous_price_points": float(old_price_decimal) if old_price_decimal > 0 else None,
+                "jump_percent": warmup_jump_percent,
+                "allowed_percent": float(market["max_price_jump_percent"] or 0),
+                "warmup_started_at": next_warmup_started_at,
+                "reason": warmup_pending_reason,
+            },
+        )
     if live_source in engine.LIVE_PRICE_SOURCE_NAMES:
         conn.execute(
             "UPDATE trading_markets SET manual_price_points=?, price_source=?, updated_at=?, "
-            "live_price_confirmed_at=COALESCE(live_price_confirmed_at, ?) WHERE symbol=?",
-            (price, live_source, now, now, symbol),
+            "live_price_warmup_started_at=?, live_price_confirmed_at=? WHERE symbol=?",
+            (price, live_source, now, next_warmup_started_at, next_confirmed_at, symbol),
         )
     else:
         conn.execute(

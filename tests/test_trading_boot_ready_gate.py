@@ -11,8 +11,9 @@ These tests verify the high-risk guards added with the 2026-05-06 fix:
   - trial credit forced sell
 
 The gate only relaxes after ``trading_markets.live_price_confirmed_at`` is
-populated by a successful live-price fetch, which the engine now stamps
-automatically inside ``_current_market_price_points``.
+populated by two stable live-price observations. The first successful fetch
+only starts warmup; it must not immediately release bots or other high-risk
+paths.
 """
 
 import sqlite3
@@ -169,35 +170,109 @@ def test_open_margin_position_blocked_until_market_boot_ready(tmp_path):
         )
 
 
-def test_live_price_fetch_stamps_boot_ready(tmp_path):
+def test_live_price_fetch_requires_second_stable_sample_before_boot_ready(tmp_path):
     points, trading = _services(tmp_path)
     conn = trading.get_db()
     try:
         before = conn.execute(
-            "SELECT live_price_confirmed_at FROM trading_markets WHERE symbol='ETH/POINTS'"
+            "SELECT live_price_warmup_started_at, live_price_confirmed_at FROM trading_markets WHERE symbol='ETH/POINTS'"
         ).fetchone()
     finally:
         conn.close()
+    assert before["live_price_warmup_started_at"] is None
     assert before["live_price_confirmed_at"] is None
 
-    # Reading the price once goes through the live provider path which now
-    # stamps live_price_confirmed_at on success.
+    # First live quote only starts warmup; it must not immediately release
+    # high-risk trading paths.
     points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=5000, action_type="seed")
     trading.place_order  # noqa  (sanity import)
     conn = trading.get_db()
     try:
         market = trading._market(conn, "ETH/POINTS")
         trading._current_market_price_points(conn, market, with_meta=True, high_risk=False)
-        after = conn.execute(
-            "SELECT live_price_confirmed_at FROM trading_markets WHERE symbol='ETH/POINTS'"
+        warmup = conn.execute(
+            "SELECT live_price_warmup_started_at, live_price_confirmed_at FROM trading_markets WHERE symbol='ETH/POINTS'"
         ).fetchone()
         conn.commit()
     finally:
         conn.close()
-    assert after["live_price_confirmed_at"], (
-        "live_price_confirmed_at should be set the first time a real live "
-        "fetch succeeds"
+    assert warmup["live_price_warmup_started_at"], (
+        "the first real live fetch should start warmup so the seed/default "
+        "price is no longer the pending candidate"
     )
+    assert warmup["live_price_confirmed_at"] is None
+
+    with pytest.raises(ValueError, match="尚未收到任何即時價格更新"):
+        trading.place_order(
+            actor=_actor(),
+            market_symbol="ETH/POINTS",
+            side="buy",
+            order_type="market",
+            quantity="0.1",
+        )
+
+    conn = trading.get_db()
+    try:
+        market = trading._market(conn, "ETH/POINTS")
+        trading._current_market_price_points(conn, market, with_meta=True, high_risk=False)
+        confirmed = conn.execute(
+            "SELECT live_price_warmup_started_at, live_price_confirmed_at FROM trading_markets WHERE symbol='ETH/POINTS'"
+        ).fetchone()
+        conn.commit()
+    finally:
+        conn.close()
+    assert confirmed["live_price_warmup_started_at"] is None
+    assert confirmed["live_price_confirmed_at"], (
+        "a second stable live quote should release the boot-ready gate"
+    )
+
+
+def test_first_quote_from_default_does_not_release_bot_gate(tmp_path):
+    points, trading = _services(tmp_path)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=5000, action_type="seed")
+    _stamp(trading, "ETH/POINTS")
+    trading.save_trading_bot(
+        actor=_actor(),
+        payload={
+            "name": "warmup gate bot",
+            "market_symbol": "ETH/POINTS",
+            "trigger_type": "price_above",
+            "trigger_price_points": 100,
+            "side": "buy",
+            "order_type": "market",
+            "quantity": "0.01",
+            "max_runs": 1,
+            "cooldown_seconds": 0,
+            "enabled": True,
+        },
+    )
+    conn = trading.get_db()
+    try:
+        conn.execute(
+            "UPDATE trading_markets SET live_price_warmup_started_at=NULL, live_price_confirmed_at=NULL WHERE symbol='ETH/POINTS'"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    quote = trading.get_live_market_quote(market_symbol="ETH/POINTS")
+    assert quote["price_health"] == "boot_pending"
+    assert quote["high_risk_blocked"] is True
+
+    first_run = trading.run_trading_bots(actor=_actor(), limit=10)
+    assert {row.get("reason") for row in first_run.get("skipped") or []} == {"market_boot_pending"}
+
+    conn = trading.get_db()
+    try:
+        assert int(conn.execute("SELECT COUNT(*) FROM trading_orders").fetchone()[0] or 0) == 0
+    finally:
+        conn.close()
+
+    second_quote = trading.get_live_market_quote(market_symbol="ETH/POINTS")
+    assert second_quote["price_health"] != "boot_pending"
+
+    second_run = trading.run_trading_bots(actor=_actor(), limit=10)
+    assert len(second_run.get("triggered") or []) == 1
 
 
 def test_run_due_bots_skips_market_until_boot_ready(tmp_path):

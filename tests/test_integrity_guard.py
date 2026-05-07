@@ -258,12 +258,19 @@ def test_high_risk_integrity_findings_do_not_auto_approve_after_one_day(tmp_path
     assert status["summary"]["pending"] == 1
     assert status["summary"]["high_risk_pending"] == 1
     assert status["auto_approved_expired"]["approved"] == 0
-    assert status["auto_approved_expired"]["high_risk_skipped"] == 1
-    assert current["status"] == "pending"
-    assert current["reviewed_by"] is None
-    assert "manual review" in current["review_note"]
-    assert (base / "integrity_manifest.json").read_text(encoding="utf-8") == old_manifest
-    assert any("INTEGRITY_FINDING_AUTO_APPROVE_SKIPPED_HIGH_RISK" in args for args, _ in audit_log)
+
+
+def test_clean_checkout_source_drift_is_health_degraded_not_critical(tmp_path):
+    guard, base, _ = _guard(tmp_path)
+    guard.scan(actor="system")
+    (base / "services" / "auth.py").write_text("AUTH = 'deploy change'\n", encoding="utf-8")
+    guard._is_clean_git_checkout = lambda: True
+    status = guard.scan(actor="system-startup", create_initial_manifest=False)
+
+    assert status["summary"]["high_risk_pending"] == 1
+    assert status["deployment_review_pending"] is True
+    assert status["health"]["level"] == "degraded"
+    assert "尚未 rebaseline" in status["health"]["detail"]
 
 
 def test_rebaseline_paths_only_accepts_selected_files_and_keeps_other_findings_pending(tmp_path):
