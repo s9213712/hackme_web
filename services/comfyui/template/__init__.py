@@ -38,8 +38,22 @@ from services.comfyui.template.ui_schema import (
     build_ui_schema,
     required_user_inputs,
 )
+from services.comfyui.template.remap import (
+    ALLOWED_IMAGE_EXTENSIONS,
+    ALLOWED_IMAGE_MIMES,
+    DEFAULT_MAX_IMAGE_BYTES,
+    PROTECTED_IMAGE_INPUTS,
+    UploadCallback,
+    remap_load_image_to_cloud_file,
+)
 
 __all__ = [
+    "ALLOWED_IMAGE_EXTENSIONS",
+    "ALLOWED_IMAGE_MIMES",
+    "DEFAULT_MAX_IMAGE_BYTES",
+    "PROTECTED_IMAGE_INPUTS",
+    "UploadCallback",
+    "remap_load_image_to_cloud_file",
     "CORE_ALLOWLIST",
     "CONTROLNET_PREPROCESSOR_ALLOWLIST",
     "EXPLICIT_DENYLIST",
