@@ -244,7 +244,10 @@ class ServerModeService:
         if not signature.startswith("hmac_sha256:"):
             return {"ok": False, "reason": "unsupported_signature_scheme"}
         try:
-            key, key_version = self._hmac_key("server_mode_report")
+            key, key_version = self._hmac_key(
+                "server_mode_report",
+                current_mode=str(row.get("server_mode") or "").strip(),
+            )
         except Exception as exc:
             return {"ok": False, "reason": str(exc)}
         stored_key_version = str(row.get("key_version") or "").strip()
@@ -517,7 +520,7 @@ class ServerModeService:
         if target_mode not in SERVER_MODES and not self.get_profile(target_mode):
             return {"ok": False, "msg": "server mode 錯誤"}
         if not self.snapshot_service:
-            return {"ok": False, "msg": "snapshot service unavailable"}
+            return {"ok": False, "msg": "Snapshot 服務目前無法使用"}
         snapshot = self.snapshot_service.create_snapshot(
             snapshot_type=snapshot_type,
             actor=actor,
@@ -621,7 +624,7 @@ class ServerModeService:
             except Exception:
                 components = {}
             snapshot_id = checkpoint.get("snapshot_id")
-            snapshot_verification = {"ok": False, "msg": "snapshot unavailable"}
+            snapshot_verification = {"ok": False, "msg": "Snapshot 服務目前無法使用"}
             if snapshot_id:
                 try:
                     snapshot_verification = self.snapshot_service.verify_snapshot(snapshot_id=snapshot_id)
@@ -797,51 +800,54 @@ class ServerModeService:
         finally:
             conn.close()
 
+    def _production_requirements_on_conn(self, conn):
+        self.ensure_schema(conn)
+        reports = {}
+        for report_type in PRODUCTION_REQUIRED_REPORT_TYPES:
+            row = conn.execute(
+                """
+                SELECT * FROM production_entry_reports
+                WHERE report_type=?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (report_type,),
+            ).fetchone()
+            if row:
+                item = dict(row)
+                sig = self._verify_production_report_signature(item)
+                item["signature_valid"] = bool(sig.get("ok"))
+                item["verification_reason"] = sig.get("reason") or ""
+                item["trust_level"] = str(item.get("trust_level") or ("verified" if sig.get("ok") else "unverified"))
+                reports[report_type] = item
+            else:
+                reports[report_type] = None
+        missing = [key for key, row in reports.items() if not row]
+        failed = [
+            key
+            for key, row in reports.items()
+            if row
+            and (
+                not bool(row["pass"])
+                or int(row["critical_findings_count"] or 0) > 0
+                or int(row["high_findings_count"] or 0) > 0
+                or not row["report_hash"]
+                or str(row.get("trust_level") or "").strip() != "verified"
+                or not bool(row.get("signature_valid"))
+            )
+        ]
+        return {
+            "ok": not missing and not failed,
+            "required": list(PRODUCTION_REQUIRED_REPORT_TYPES),
+            "missing": missing,
+            "failed": failed,
+            "reports": reports,
+        }
+
     def production_requirements(self):
         conn = self.get_db()
         try:
-            self.ensure_schema(conn)
-            reports = {}
-            for report_type in PRODUCTION_REQUIRED_REPORT_TYPES:
-                row = conn.execute(
-                    """
-                    SELECT * FROM production_entry_reports
-                    WHERE report_type=?
-                    ORDER BY created_at DESC
-                    LIMIT 1
-                    """,
-                    (report_type,),
-                ).fetchone()
-                if row:
-                    item = dict(row)
-                    sig = self._verify_production_report_signature(item)
-                    item["signature_valid"] = bool(sig.get("ok"))
-                    item["verification_reason"] = sig.get("reason") or ""
-                    item["trust_level"] = str(item.get("trust_level") or ("verified" if sig.get("ok") else "unverified"))
-                    reports[report_type] = item
-                else:
-                    reports[report_type] = None
-            missing = [key for key, row in reports.items() if not row]
-            failed = [
-                key
-                for key, row in reports.items()
-                if row
-                and (
-                    not bool(row["pass"])
-                    or int(row["critical_findings_count"] or 0) > 0
-                    or int(row["high_findings_count"] or 0) > 0
-                    or not row["report_hash"]
-                    or str(row.get("trust_level") or "").strip() != "verified"
-                    or not bool(row.get("signature_valid"))
-                )
-            ]
-            return {
-                "ok": not missing and not failed,
-                "required": list(PRODUCTION_REQUIRED_REPORT_TYPES),
-                "missing": missing,
-                "failed": failed,
-                "reports": reports,
-            }
+            return self._production_requirements_on_conn(conn)
         finally:
             conn.close()
 
@@ -922,7 +928,7 @@ class ServerModeService:
                 (report_type, report_hash, target_commit),
             ).fetchone()
             if replay:
-                return {"ok": False, "msg": "production report replay detected", "existing_report_id": replay["id"]}
+                return {"ok": False, "msg": "production report 重複提交", "existing_report_id": replay["id"]}
             conn.execute(
                 """
                 INSERT INTO production_entry_reports
@@ -954,13 +960,14 @@ class ServerModeService:
                 ),
             )
             conn.commit()
+            requirements = self._production_requirements_on_conn(conn)
             return {
                 "ok": True,
                 "report_id": report_id,
                 "trust_level": "verified",
                 "signature_valid": True,
                 "key_version": attestation["key_version"],
-                "requirements": self.production_requirements(),
+                "requirements": requirements,
             }
         finally:
             conn.close()
@@ -1468,7 +1475,7 @@ class ServerModeService:
         try:
             from services.security.upload_security import ensure_upload_security_schema, update_cloud_drive_security_policy
         except Exception:
-            return {"ok": False, "msg": "upload security policy unavailable"}
+            return {"ok": False, "msg": "上傳安全政策目前無法使用"}
         ensure_upload_security_schema(conn)
         policy, msg = update_cloud_drive_security_policy(conn, {
             "require_scan_before_download": True,
@@ -1967,7 +1974,7 @@ class ServerModeService:
                 conn.commit()
             finally:
                 conn.close()
-            return {"ok": False, "recovered": False, "incident_lockdown": True, "msg": "superweak startup recovery missing checkpoint"}
+            return {"ok": False, "recovered": False, "incident_lockdown": True, "msg": "Superweak 啟動恢復缺少 checkpoint"}
         expected_checkpoint = None
         conn = self.get_db()
         try:

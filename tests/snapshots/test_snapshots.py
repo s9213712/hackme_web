@@ -315,7 +315,7 @@ def test_restore_reports_failure_when_post_restore_validation_fails(tmp_path):
     restored = service.restore_snapshot(snapshot_id=snap.snapshot_id, actor={"id": 1, "username": "root"}, reason="rollback")
 
     assert restored["ok"] is False
-    assert restored["msg"] == "post-restore validation failed"
+    assert restored["msg"] == "Restore 後驗證失敗"
     assert restored["post_restore_validation"]["errors"][0]["name"] == "trading_state"
     conn = _db(db_path)
     event = conn.execute("SELECT status, error_message FROM snapshot_restore_events ORDER BY started_at DESC LIMIT 1").fetchone()
@@ -339,7 +339,7 @@ def test_restore_fails_when_runtime_secret_validation_fails(tmp_path):
     restored = service.restore_snapshot(snapshot_id=snap.snapshot_id, actor={"id": 1, "username": "root"}, reason="rollback")
 
     assert restored["ok"] is False
-    assert restored["msg"] == "runtime secret validation failed"
+    assert restored["msg"] == "Runtime 密鑰驗證失敗"
     assert restored["requires_restart"] is True
     assert restored["runtime_secret_validation"]["ok"] is False
     assert any(call[0][0] == "SNAPSHOT_RESTORE_RUNTIME_SECRETS_FAILED" for call in audit_log)
@@ -376,7 +376,7 @@ def test_restore_fails_closed_when_maintenance_mode_cannot_be_enabled(tmp_path):
     restored = service.restore_snapshot(snapshot_id=snap.snapshot_id, actor={"id": 1, "username": "root"}, reason="rollback")
 
     assert restored["ok"] is False
-    assert restored["msg"] == "restore preparation failed"
+    assert restored["msg"] == "還原準備失敗"
     assert restored["pre_restore_snapshot_id"]
     conn = _db(db_path)
     posts = [row["title"] for row in conn.execute("SELECT title FROM posts ORDER BY id").fetchall()]
@@ -771,6 +771,60 @@ def test_production_report_upload_verifies_signature_and_hash(tmp_path):
     )
     assert bad_sig["ok"] is False
     assert "signature" in bad_sig["msg"]
+
+
+def test_production_report_upload_reuses_current_connection_for_requirements(tmp_path):
+    audit_log = []
+    service, db_path, uploads = _service(tmp_path, audit_log)
+    calls = {"count": 0}
+
+    def single_use_get_db():
+        calls["count"] += 1
+        if calls["count"] > 2:
+            raise AssertionError("upload_production_report should not open an extra DB connection to compute requirements")
+        return _db(db_path)
+
+    mode = ServerModeService(
+        snapshot_service=service,
+        get_db=single_use_get_db,
+        audit=lambda *args, **kwargs: audit_log.append((args, kwargs)),
+    )
+    actor = {"id": 1, "username": "root"}
+    raw_report = {"suite": "stress", "summary": "all pass", "checks": [{"name": "rate_limit", "ok": True}]}
+    attestation = mode._prepare_production_report_attestation(
+        report_type="stress",
+        raw_report=raw_report,
+        target_commit="abc123",
+        target_branch="main",
+        server_mode="preprod",
+        test_result="pass",
+        passed=True,
+        critical_findings_count=0,
+        high_findings_count=0,
+        unresolved_findings=[],
+        tester="root",
+    )
+    calls["count"] = 0
+    ok = mode.upload_production_report(
+        actor=actor,
+        report_type="stress",
+        report_hash=attestation["report_hash"],
+        target_commit="abc123",
+        target_branch="main",
+        server_mode="preprod",
+        test_result="pass",
+        passed=True,
+        critical_findings_count=0,
+        high_findings_count=0,
+        unresolved_findings=[],
+        tester="root",
+        signature=attestation["signature"],
+        raw_report=raw_report,
+        key_version=attestation["key_version"],
+    )
+    assert ok["ok"] is True
+    assert ok["requirements"]["reports"]["stress"]["signature_valid"] is True
+    assert calls["count"] == 2
 
 
 def test_production_requirements_fail_when_latest_report_signature_is_tampered(tmp_path):
