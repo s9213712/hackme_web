@@ -8,12 +8,12 @@ from services.storage.quota_overrides import (
     clear_storage_quota_override,
     set_storage_quota_override,
 )
-from services.storage_albums import (
+from services.storage.storage_albums import (
     ensure_storage_album_schema,
     get_user_storage_summary,
     sync_user_storage_summary,
 )
-from services.upload_security import get_user_cloud_drive_usage
+from services.security.upload_security import get_user_cloud_drive_usage
 
 
 def register_file_admin_storage_routes(app, ctx):

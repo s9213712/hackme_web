@@ -8,9 +8,9 @@ from datetime import datetime
 from flask import request
 
 from services.storage.cloud_drive import ensure_cloud_drive_attachment_schema, store_cloud_upload
-from services.storage_albums import create_storage_file_entry, ensure_storage_album_schema
+from services.storage.storage_albums import create_storage_file_entry, ensure_storage_album_schema
 from services.system.notifications import create_notification_if_enabled
-from services.upload_security import get_user_cloud_drive_usage, safe_public_filename
+from services.security.upload_security import get_user_cloud_drive_usage, safe_public_filename
 
 
 def register_file_remote_download_routes(app, ctx):

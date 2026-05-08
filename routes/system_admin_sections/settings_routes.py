@@ -4,7 +4,7 @@ from flask import request
 
 from services.security.captcha import normalize_captcha_mode
 from services.storage.paths import validate_storage_root
-from services.upload_security import (
+from services.security.upload_security import (
     ensure_upload_security_schema,
     get_cloud_drive_security_policy,
     update_cloud_drive_security_policy,

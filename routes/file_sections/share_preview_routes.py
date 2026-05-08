@@ -9,7 +9,7 @@ from services.storage.cloud_drive import (
     is_e2ee_file,
     resolve_file_storage_path,
 )
-from services.storage_albums import (
+from services.storage.storage_albums import (
     create_share_link,
     ensure_storage_album_schema,
     list_share_links,
@@ -21,7 +21,7 @@ from services.storage_albums import (
     resolve_share_token,
     revoke_share_link,
 )
-from services.upload_security import log_file_access
+from services.security.upload_security import log_file_access
 
 
 def register_file_share_preview_routes(app, ctx):

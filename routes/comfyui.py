@@ -19,6 +19,8 @@ from urllib.parse import parse_qs, unquote, urlencode, urlparse, urlunparse
 import urllib.error
 import urllib.request
 
+from routes.comfyui_sections import register_comfyui_workflow_routes
+
 from flask import request, send_file
 
 from services.comfyui.settings import (
