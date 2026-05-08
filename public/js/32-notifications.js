@@ -61,6 +61,10 @@ async function loadNotifications() {
     const json = await res.json().catch(() => ({}));
     if (!json.ok) {
       if (res.status === 503) setNotificationBadge(0);
+      const list = $("notification-list");
+      if (notificationsOpen && list) {
+        list.innerHTML = `<p style="color:#ffb74d;">${sanitize(json.msg || "通知讀取失敗，請稍後重試。")}</p>`;
+      }
       return;
     }
     renderNotifications(json.notifications, json.unread_count);

@@ -6,6 +6,7 @@ from flask import request
 
 from services.games.chess import (
     board_rows,
+    draw_claim_status,
     game_status,
     initial_board,
     legal_moves,
@@ -138,7 +139,7 @@ def _choose_heuristic_move(board, side, difficulty="normal"):
 def choose_computer_move(board, side, difficulty="normal", learning_store=None):
     difficulty = normalize_computer_difficulty(difficulty) or "normal"
     if difficulty == EXPERIMENT_DIFFICULTY:
-        move = choose_experiment_move(board, side, store=learning_store, difficulty=difficulty)
+        move = choose_experiment_move(board, side, store=learning_store, difficulty=difficulty, search_profile="fast")
         if move:
             return move
     if difficulty == EXPERIMENT_NN_DIFFICULTY:
@@ -146,11 +147,11 @@ def choose_computer_move(board, side, difficulty="normal", learning_store=None):
         if move:
             return move
     if difficulty == EXPERIMENT_DL_DIFFICULTY:
-        move = choose_experiment_dl_move(board, side)
+        move = choose_experiment_dl_move(board, side, search_profile="fast")
         if move:
             return move
     if difficulty == EXPERIMENT_PV_DIFFICULTY:
-        move = choose_experiment_pv_move(board, side)
+        move = choose_experiment_pv_move(board, side, search_profile="fast")
         if move:
             return move
     return _choose_heuristic_move(board, side, difficulty)
@@ -188,6 +189,8 @@ def game_schema_sql():
         move_history_json TEXT NOT NULL DEFAULT '[]',
         winner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
         result_reason TEXT,
+        draw_offer_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        draw_offer_at TEXT,
         leaderboard_week TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
@@ -320,6 +323,8 @@ def rebuild_game_matches_table(conn):
                 move_history_json TEXT NOT NULL DEFAULT '[]',
                 winner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
                 result_reason TEXT,
+                draw_offer_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                draw_offer_at TEXT,
                 leaderboard_week TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
@@ -345,7 +350,7 @@ def rebuild_game_matches_table(conn):
             INSERT INTO game_matches (
                 id, game_key, mode, status, white_user_id, black_user_id, human_side,
                 computer_difficulty, current_turn, board_json, move_history_json,
-                winner_user_id, result_reason, leaderboard_week, created_at, updated_at,
+                winner_user_id, result_reason, draw_offer_by_user_id, draw_offer_at, leaderboard_week, created_at, updated_at,
                 finished_at, white_deleted_at, black_deleted_at
             )
             SELECT
@@ -362,6 +367,8 @@ def rebuild_game_matches_table(conn):
                 COALESCE({old_expr('move_history_json', "'[]'")}, '[]'),
                 {old_expr('winner_user_id', 'NULL')},
                 {old_expr('result_reason', 'NULL')},
+                {old_expr('draw_offer_by_user_id', 'NULL')},
+                {old_expr('draw_offer_at', 'NULL')},
                 {old_expr('leaderboard_week', 'NULL')},
                 created_at,
                 updated_at,
@@ -416,6 +423,10 @@ def ensure_game_schema(conn):
         conn.execute("ALTER TABLE game_matches ADD COLUMN human_side TEXT NOT NULL DEFAULT 'white'")
     if "computer_difficulty" not in cols:
         conn.execute("ALTER TABLE game_matches ADD COLUMN computer_difficulty TEXT NOT NULL DEFAULT 'easy'")
+    if "draw_offer_by_user_id" not in cols:
+        conn.execute("ALTER TABLE game_matches ADD COLUMN draw_offer_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL")
+    if "draw_offer_at" not in cols:
+        conn.execute("ALTER TABLE game_matches ADD COLUMN draw_offer_at TEXT")
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_game_matches_players ON game_matches(game_key, status, white_user_id, black_user_id)"
     )
@@ -446,6 +457,7 @@ def active_user_where(conn, alias=""):
 def serialize_match(row, actor_id=None):
     board = load_board(row)
     history = load_history(row)
+    draw_status = draw_claim_status(board, row["current_turn"], move_history=history)
     side = None
     human_side = row["human_side"] if "human_side" in row.keys() else "white"
     computer_difficulty = row["computer_difficulty"] if "computer_difficulty" in row.keys() else "normal"
@@ -462,6 +474,16 @@ def serialize_match(row, actor_id=None):
     if row["mode"] == "computer" and human_side == "black":
         white_username = "電腦"
         black_username = row["white_username"]
+    draw_offer_by_user_id = row["draw_offer_by_user_id"] if "draw_offer_by_user_id" in row.keys() else None
+    draw_offer_pending = row["status"] == "active" and row["mode"] == "pvp" and bool(draw_offer_by_user_id)
+    draw_offer_by_side = None
+    if draw_offer_pending and draw_offer_by_user_id:
+        if int(draw_offer_by_user_id) == int(row["white_user_id"]):
+            draw_offer_by_side = "white"
+        elif row["black_user_id"] and int(draw_offer_by_user_id) == int(row["black_user_id"]):
+            draw_offer_by_side = "black"
+    can_offer_draw = row["status"] == "active" and row["mode"] == "pvp" and bool(side) and not draw_offer_pending
+    can_respond_draw_offer = draw_offer_pending and bool(side) and int(draw_offer_by_user_id or 0) != int(actor_id or 0)
     return {
         "id": row["id"],
         "game_key": row["game_key"],
@@ -481,10 +503,20 @@ def serialize_match(row, actor_id=None):
         "winner_username": row["winner_username"],
         "result_reason": row["result_reason"] or "",
         "my_side": side,
+        "draw_offer_pending": draw_offer_pending,
+        "draw_offer_by_user_id": draw_offer_by_user_id,
+        "draw_offer_by_username": row["draw_offer_by_username"] if "draw_offer_by_username" in row.keys() else None,
+        "draw_offer_by_side": draw_offer_by_side,
+        "draw_offer_at": row["draw_offer_at"] if "draw_offer_at" in row.keys() else None,
+        "can_offer_draw": can_offer_draw,
+        "can_accept_draw_offer": bool(can_respond_draw_offer),
+        "can_reject_draw_offer": bool(can_respond_draw_offer),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
         "finished_at": row["finished_at"],
         "legal_moves": legal_moves(board, row["current_turn"]) if row["status"] == "active" else [],
+        "can_claim_draw": bool(draw_status["can_claim"]) if row["status"] == "active" else False,
+        "draw_claim_reasons": list(draw_status["reasons"]) if row["status"] == "active" else [],
     }
 
 
@@ -493,11 +525,13 @@ def match_select_sql(where):
         SELECT m.*,
                wu.username AS white_username,
                bu.username AS black_username,
-               win.username AS winner_username
+               win.username AS winner_username,
+               offerer.username AS draw_offer_by_username
         FROM game_matches m
         JOIN users wu ON wu.id=m.white_user_id
         LEFT JOIN users bu ON bu.id=m.black_user_id
         LEFT JOIN users win ON win.id=m.winner_user_id
+        LEFT JOIN users offerer ON offerer.id=m.draw_offer_by_user_id
         WHERE {where}
     """
 
@@ -534,7 +568,7 @@ def finish_match(conn, row, status_info, now):
     conn.execute(
         """
         UPDATE game_matches
-        SET status='finished', winner_user_id=?, result_reason=?, leaderboard_week=?, finished_at=?, updated_at=?
+        SET status='finished', winner_user_id=?, result_reason=?, draw_offer_by_user_id=NULL, draw_offer_at=NULL, leaderboard_week=?, finished_at=?, updated_at=?
         WHERE id=?
         """,
         (winner_user_id, status_info.get("reason") or "draw", week, now, now, row["id"]),
@@ -921,6 +955,7 @@ def register_games_routes(app, deps):
                         "to": computer_move["to"],
                         "piece": computer_move["piece"],
                         "captured": applied.get("captured"),
+                        "promotion": computer_move.get("promotion"),
                         "computer": True,
                         "at": now,
                     })
@@ -1070,6 +1105,7 @@ def register_games_routes(app, deps):
                 "to": to_square,
                 "piece": move["piece"],
                 "captured": move.get("captured"),
+                "promotion": move.get("promotion"),
                 "at": now,
             })
             board = move["board"]
@@ -1094,6 +1130,7 @@ def register_games_routes(app, deps):
                         "to": computer_move["to"],
                         "piece": computer_move["piece"],
                         "captured": computer_applied.get("captured"),
+                        "promotion": computer_move.get("promotion"),
                         "computer": True,
                         "at": utc_now(),
                     })
@@ -1102,7 +1139,7 @@ def register_games_routes(app, deps):
             conn.execute(
                 """
                 UPDATE game_matches
-                SET board_json=?, move_history_json=?, current_turn=?, updated_at=?
+                SET board_json=?, move_history_json=?, current_turn=?, draw_offer_by_user_id=NULL, draw_offer_at=NULL, updated_at=?
                 WHERE id=?
                 """,
                 (json.dumps(board, ensure_ascii=False, sort_keys=True), json.dumps(history, ensure_ascii=False), next_turn, now, match_id),
@@ -1125,6 +1162,109 @@ def register_games_routes(app, deps):
         finally:
             conn.close()
 
+    @app.route("/api/games/chess/matches/<int:match_id>/offer-draw", methods=["POST"])
+    @require_csrf
+    def chess_match_offer_draw(match_id):
+        actor, err, status = actor_or_401()
+        if err:
+            return err, status
+        conn = get_db()
+        try:
+            ensure_game_schema(conn)
+            conn.execute("BEGIN IMMEDIATE")
+            row = match_row(conn, match_id)
+            if not row:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": "找不到棋局"}), 404
+            if row["status"] != "active":
+                conn.rollback()
+                return json_resp({"ok": False, "msg": "棋局已結束"}), 409
+            if row["mode"] != "pvp":
+                conn.rollback()
+                return json_resp({"ok": False, "msg": "只有玩家對戰可以提和"}), 409
+            side = actor_color(actor, row)
+            if not side:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": "不是這局的玩家"}), 403
+            existing_offer = row["draw_offer_by_user_id"] if "draw_offer_by_user_id" in row.keys() else None
+            if existing_offer:
+                conn.rollback()
+                if int(existing_offer) == int(actor["id"]):
+                    return json_resp({"ok": False, "msg": "你已經提和，等待對方回覆"}), 409
+                return json_resp({"ok": False, "msg": "對方已提和，請先接受或拒絕"}), 409
+            now = utc_now()
+            conn.execute(
+                """
+                UPDATE game_matches
+                SET draw_offer_by_user_id=?, draw_offer_at=?, updated_at=?
+                WHERE id=? AND status='active'
+                """,
+                (int(actor["id"]), now, now, match_id),
+            )
+            conn.commit()
+            refreshed = match_row(conn, match_id)
+            return json_resp({"ok": True, "match": serialize_match(refreshed, actor["id"])})
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    @app.route("/api/games/chess/matches/<int:match_id>/respond-draw", methods=["POST"])
+    @require_csrf
+    def chess_match_respond_draw(match_id):
+        actor, err, status = actor_or_401()
+        if err:
+            return err, status
+        data, err, status = parse_json_body()
+        if err:
+            return err, status
+        action = str(data.get("action") or "").strip().lower()
+        if action not in {"accept", "reject"}:
+            return json_resp({"ok": False, "msg": "不支援的和棋操作"}), 400
+        conn = get_db()
+        try:
+            ensure_game_schema(conn)
+            conn.execute("BEGIN IMMEDIATE")
+            row = match_row(conn, match_id)
+            if not row:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": "找不到棋局"}), 404
+            if row["status"] != "active":
+                conn.rollback()
+                return json_resp({"ok": False, "msg": "棋局已結束"}), 409
+            side = actor_color(actor, row)
+            if not side:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": "不是這局的玩家"}), 403
+            offerer_id = row["draw_offer_by_user_id"] if "draw_offer_by_user_id" in row.keys() else None
+            if not offerer_id:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": "目前沒有待回覆的提和"}), 409
+            if int(offerer_id) == int(actor["id"]):
+                conn.rollback()
+                return json_resp({"ok": False, "msg": "不能回覆自己提出的和棋"}), 409
+            now = utc_now()
+            if action == "accept":
+                finish_match(conn, row, {"status": "finished", "winner_color": None, "reason": "agreed_draw"}, now)
+            else:
+                conn.execute(
+                    """
+                    UPDATE game_matches
+                    SET draw_offer_by_user_id=NULL, draw_offer_at=NULL, updated_at=?
+                    WHERE id=? AND status='active'
+                    """,
+                    (now, match_id),
+                )
+            conn.commit()
+            refreshed = match_row(conn, match_id)
+            return json_resp({"ok": True, "match": serialize_match(refreshed, actor["id"])})
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
     @app.route("/api/games/chess/matches/<int:match_id>/resign", methods=["POST"])
     @require_csrf
     def chess_match_resign(match_id):
@@ -1137,6 +1277,8 @@ def register_games_routes(app, deps):
             row = match_row(conn, match_id)
             if not row:
                 return json_resp({"ok": False, "msg": "找不到棋局"}), 404
+            if row["status"] != "active":
+                return json_resp({"ok": False, "msg": "這局已經結束"}), 409
             side = actor_color(actor, row)
             if not side:
                 return json_resp({"ok": False, "msg": "不是這局的玩家"}), 403
@@ -1161,6 +1303,47 @@ def register_games_routes(app, deps):
             conn.commit()
             refreshed = match_row(conn, match_id)
             return json_resp({"ok": True, "match": serialize_match(refreshed, actor["id"])})
+        finally:
+            conn.close()
+
+    @app.route("/api/games/chess/matches/<int:match_id>/claim-draw", methods=["POST"])
+    @require_csrf
+    def chess_match_claim_draw(match_id):
+        actor, err, status = actor_or_401()
+        if err:
+            return err, status
+        conn = get_db()
+        try:
+            ensure_game_schema(conn)
+            conn.execute("BEGIN IMMEDIATE")
+            row = match_row(conn, match_id)
+            if not row:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": "找不到棋局"}), 404
+            if row["status"] != "active":
+                conn.rollback()
+                return json_resp({"ok": False, "msg": "棋局已結束"}), 409
+            side = actor_color(actor, row)
+            if not side:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": "不是這局的玩家"}), 403
+            if side != row["current_turn"]:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": "還沒輪到你"}), 409
+            board = load_board(row)
+            history = load_history(row)
+            claim = draw_claim_status(board, row["current_turn"], move_history=history)
+            if not claim["can_claim"]:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": "目前不能申請和棋"}), 409
+            reason = "threefold_repetition" if "threefold_repetition" in claim["reasons"] else "fifty_moves"
+            finish_match(conn, row, {"status": "finished", "winner_color": None, "reason": reason}, utc_now())
+            conn.commit()
+            refreshed = match_row(conn, match_id)
+            return json_resp({"ok": True, "match": serialize_match(refreshed, actor["id"])})
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 

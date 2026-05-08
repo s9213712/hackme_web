@@ -39,6 +39,17 @@ def test_teacher_engine_finds_mate_in_one():
     assert chosen_uci in mating_moves
 
 
+def test_teacher_engine_avoids_early_rook_shuffle_after_edge_pawn():
+    board = chess.Board()
+    for uci in ("a2a4", "g8f6"):
+        board.push(chess.Move.from_uci(uci))
+
+    move = choose_teacher_move({"__fen__": board.fen()}, "white", depth=2)
+
+    assert move is not None
+    assert move["from"] != "a1"
+
+
 def test_shared_search_iterative_deepening_uses_tt_and_finds_mate():
     board = chess.Board("6k1/5Q2/6K1/8/8/8/8/8 w - - 0 1")
     table = TranspositionTable(max_entries=256)

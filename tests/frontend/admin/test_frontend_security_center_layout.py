@@ -223,6 +223,24 @@ def test_launch_check_surfaces_failing_backend_endpoint_names():
     assert 'throw new Error(failures.join("；"));' in launch_body
 
 
+def test_admin_audit_and_violations_load_failures_surface_visible_errors():
+    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+
+    assert 'statusEl.textContent = json.msg || "審計記錄讀取失敗"' in admin_js
+    assert 'container.innerHTML = `<p style=\'color:var(--red);text-align:center;padding:1rem;\'>${sanitize(json.msg || "審計記錄讀取失敗")}</p>`' in admin_js
+    assert 'const message = json.msg || "違規記錄讀取失敗";' in admin_js
+    assert 'entriesEl.innerHTML = `<p style=\'color:var(--red);text-align:center;padding:1rem;\'>${sanitize(message)}</p>`' in admin_js
+
+
+def test_admin_appeals_and_reports_load_failures_surface_visible_errors():
+    appeals_js = (ROOT / "public" / "js" / "30-appeals.js").read_text(encoding="utf-8")
+
+    assert 'const message = json.msg || "申覆清單讀取失敗";' in appeals_js
+    assert 'list.innerHTML = `<p style=\'color:var(--red);text-align:center;padding:1rem;\'>${sanitize(message)}</p>`;' in appeals_js
+    assert 'const message = json.msg || "訊息檢舉清單讀取失敗";' in appeals_js
+    assert 'list.innerHTML = `<p style=\'color:var(--red);text-align:center;padding:1rem;\'>${sanitize(message)}</p>`;' in appeals_js
+
+
 def test_settings_area_uses_collapsible_groups_to_reduce_clutter():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     css = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
@@ -237,3 +255,12 @@ def test_settings_area_uses_collapsible_groups_to_reduce_clutter():
     assert "審計與伺服器輸出" in security_center
     assert ".settings-collapse" in css
     assert ".settings-collapse.danger-collapse" in css
+
+
+def test_admin_settings_and_server_output_failures_are_not_silent():
+    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    notifications_js = (ROOT / "public" / "js" / "32-notifications.js").read_text(encoding="utf-8")
+
+    assert 'setSettingsStatus(json.msg || "系統設定讀取失敗", false);' in admin_js
+    assert 'securityTestMsg(json.msg || "伺服器即時輸出讀取失敗", false);' in admin_js
+    assert 'list.innerHTML = `<p style="color:#ffb74d;">${sanitize(json.msg || "通知讀取失敗，請稍後重試。")}</p>`;' in notifications_js

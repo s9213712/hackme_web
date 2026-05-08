@@ -15,8 +15,8 @@ from services.games.chess import (
     to_chess_board,
     validate_move,
 )
-from services.games.chess_model_registry import bundled_seed_database_path
-from services.games.chess_search import ZobristHasher, search_best_move
+from services.games.chess_model_registry import bundled_seed_database_path, runtime_model_path
+from services.games.chess_search import ZobristHasher, opening_sanity_filter, search_best_move
 from services.server.runtime import default_runtime_root_path
 
 
@@ -24,6 +24,11 @@ EXPERIMENT_DIFFICULTY = "experiment"
 DEFAULT_CHESS_ENGINE_DB_NAME = "chess_experiment.db"
 _INFINITY = 10 ** 9
 _MATE_SCORE = 10 ** 7
+_SEARCH_PROFILES = {
+    "fast": {"depth": 2, "time_budget_ms": 120},
+    "balanced": {"depth": 2, "time_budget_ms": 260},
+    "strong": {"depth": 3, "time_budget_ms": 900},
+}
 _PIECE_VALUES = {
     chess.PAWN: 100,
     chess.KNIGHT: 320,
@@ -97,12 +102,7 @@ _PIECE_SQUARE = {
 
 
 def default_chess_engine_db_path():
-    runtime_dir = os.environ.get("HACKME_RUNTIME_DIR", "").strip()
-    if not runtime_dir:
-        runtime_dir = str(default_runtime_root_path())
-    db_dir = os.environ.get("HTML_LEARNING_DB_DIR", "").strip() or os.path.join(runtime_dir, "database")
-    override = os.environ.get("HTML_LEARNING_CHESS_ENGINE_DB_PATH", "").strip()
-    return Path(override or os.path.join(db_dir, DEFAULT_CHESS_ENGINE_DB_NAME))
+    return runtime_model_path(DEFAULT_CHESS_ENGINE_DB_NAME, env_var="HTML_LEARNING_CHESS_ENGINE_DB_PATH")
 
 
 def bundled_chess_engine_db_path() -> Path:
@@ -249,19 +249,22 @@ def _move_order(board, move, learning_bias):
     return move_score
 
 
-def _difficulty_depth(difficulty):
-    if difficulty == EXPERIMENT_DIFFICULTY:
-        return 3
-    return 2
+def _resolve_search_profile(profile: str | None, difficulty: str) -> dict:
+    normalized = str(profile or "balanced").strip().lower()
+    selected = dict(_SEARCH_PROFILES.get(normalized) or _SEARCH_PROFILES["balanced"])
+    if difficulty != EXPERIMENT_DIFFICULTY:
+        selected["depth"] = min(int(selected["depth"]), 2)
+    return selected
 
 
-def _choose_experiment_move_with_conn(board_state, side, *, conn=None, difficulty=EXPERIMENT_DIFFICULTY):
+def _choose_experiment_move_with_conn(board_state, side, *, conn=None, difficulty=EXPERIMENT_DIFFICULTY, search_profile="balanced"):
     board = to_chess_board(board_state, side)
     if board.turn != (chess.WHITE if side == "white" else chess.BLACK):
         board.turn = chess.WHITE if side == "white" else chess.BLACK
     if board.is_game_over():
         return None
-    depth = _difficulty_depth(difficulty)
+    profile = _resolve_search_profile(search_profile, difficulty)
+    depth = int(profile["depth"])
     bias_cache = {}
 
     def learning_bias_for(current_board, current_side):
@@ -283,8 +286,25 @@ def _choose_experiment_move_with_conn(board_state, side, *, conn=None, difficult
         evaluate=_static_eval,
         move_order_fn=move_order_fn,
         hasher=ZobristHasher(seed=20260518),
+        time_budget_ms=profile.get("time_budget_ms"),
     )
     best_move = search.best_move
+    ai_color = chess.WHITE if side == "white" else chess.BLACK
+    color_sign = 1 if ai_color == chess.WHITE else -1
+
+    def sanity_move_score(move: chess.Move) -> int:
+        score = move_order_fn(board, move, 0)
+        if board.is_capture(move):
+            captured = board.piece_at(move.to_square)
+            if captured is not None:
+                score += _PIECE_VALUES.get(captured.piece_type, 0) * 2
+        after = board.copy(stack=False)
+        after.push(move)
+        if after.is_checkmate():
+            return 9_000_000
+        return score + color_sign * _static_eval(after)
+
+    best_move = opening_sanity_filter(board, best_move, score_move=sanity_move_score)
     root_learning_bias = learning_bias_for(board, side)
     if root_learning_bias:
         best_bias_uci, best_bias_value = max(
@@ -316,12 +336,18 @@ def _choose_experiment_move_with_conn(board_state, side, *, conn=None, difficult
     }
 
 
-def choose_experiment_move(board_state, side, *, conn=None, store=None, difficulty=EXPERIMENT_DIFFICULTY):
+def choose_experiment_move(board_state, side, *, conn=None, store=None, difficulty=EXPERIMENT_DIFFICULTY, search_profile="balanced"):
     if conn is not None:
-        return _choose_experiment_move_with_conn(board_state, side, conn=conn, difficulty=difficulty)
+        return _choose_experiment_move_with_conn(board_state, side, conn=conn, difficulty=difficulty, search_profile=search_profile)
     if store is not None:
-        return store.choose_move(board_state, side, difficulty=difficulty)
-    return _choose_experiment_move_with_conn(board_state, side, conn=None, difficulty=difficulty)
+        if search_profile == "balanced":
+            return store.choose_move(board_state, side, difficulty=difficulty)
+        store_conn = store.connect()
+        try:
+            return _choose_experiment_move_with_conn(board_state, side, conn=store_conn, difficulty=difficulty, search_profile=search_profile)
+        finally:
+            store_conn.close()
+    return _choose_experiment_move_with_conn(board_state, side, conn=None, difficulty=difficulty, search_profile=search_profile)
 
 
 def _outcome_bucket(ai_side, winner_color):

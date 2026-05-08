@@ -392,7 +392,13 @@ async function loadAudit(page) {
     headers: { "X-CSRF-Token": csrf || "" }
   });
   const json = await res.json().catch(() => ({}));
-  if (!json.ok) return;
+  if (!json.ok) {
+    const statusEl = $("audit-chain-action-status");
+    if (statusEl) statusEl.textContent = json.msg || "審計記錄讀取失敗";
+    const container = $("audit-entries");
+    if (container) container.innerHTML = `<p style='color:var(--red);text-align:center;padding:1rem;'>${sanitize(json.msg || "審計記錄讀取失敗")}</p>`;
+    return;
+  }
   auditPage = page;
   $("audit-total").textContent = json.total || 0;
   const integrity = json.integrity;
@@ -459,7 +465,14 @@ async function loadViolations(page, username) {
     headers: { "X-CSRF-Token": csrf || "" }
   });
   const json = await res.json().catch(() => ({}));
-  if (!json.ok) return;
+  if (!json.ok) {
+    const usersEl = $("violation-users");
+    const entriesEl = $("violation-entries");
+    const message = json.msg || "違規記錄讀取失敗";
+    if (usersEl) usersEl.innerHTML = "";
+    if (entriesEl) entriesEl.innerHTML = `<p style='color:var(--red);text-align:center;padding:1rem;'>${sanitize(message)}</p>`;
+    return;
+  }
   violationsPage = page;
   $("violations-total").textContent = json.total || 0;
   const integEl = $("violations-integrity");
@@ -3775,7 +3788,10 @@ async function loadSettings() {
     headers: { "X-CSRF-Token": csrf || "" }
   });
   const json = await res.json().catch(() => ({}));
-  if (!json.ok) return;
+  if (!json.ok) {
+    setSettingsStatus(json.msg || "系統設定讀取失敗", false);
+    return;
+  }
   const s = json.settings || {};
   const bind = json.server_bind || {};
   const ssl = json.server_ssl || {};
@@ -4780,7 +4796,10 @@ async function loadServerOutput() {
     headers: { "X-CSRF-Token": csrf || "" }
   });
   const json = await res.json().catch(() => ({}));
-  if (!json.ok) return;
+  if (!json.ok) {
+    securityTestMsg(json.msg || "伺服器即時輸出讀取失敗", false);
+    return;
+  }
   renderServerOutput(json.server_output || {});
 }
 

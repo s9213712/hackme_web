@@ -2,7 +2,7 @@
 
 This module trains the runtime-backed chess learning artifacts:
 
-- ``experiment`` memory DB: ``runtime/database/chess_experiment.db``
+- ``experiment`` memory DB: ``runtime/games/models/chess_experiment.db``
 - ``experiment 2:nn`` model: ``runtime/games/models/chess_experiment_2_nn.json``
 - ``experiment 3:dl`` model: ``runtime/games/models/chess_experiment_3_dl.json``
 - ``experiment 4:pv`` model: ``runtime/games/models/chess_experiment_4_pv.json``
@@ -61,7 +61,7 @@ from services.games.chess_nn import (
     default_chess_nn_model_path,
     record_experiment_nn_learning,
 )
-from services.games.chess_search import ZobristHasher, search_best_move
+from services.games.chess_search import ZobristHasher, opening_sanity_filter, search_best_move
 from services.server.runtime import default_runtime_root_path
 
 
@@ -550,6 +550,21 @@ def choose_teacher_move(board_state, side: str, *, depth: int = DEFAULT_TEACHER_
         hasher=ZobristHasher(seed=20260517),
     )
     best_move = search.best_move
+    color_sign = 1 if target_turn == chess.WHITE else -1
+
+    def sanity_move_score(move: chess.Move) -> int:
+        score = _teacher_move_order(board, move)
+        if board.is_capture(move):
+            captured = board.piece_at(move.to_square)
+            if captured is not None:
+                score += _TEACHER_PIECE_VALUES.get(captured.piece_type, 0) * 2
+        after = board.copy(stack=False)
+        after.push(move)
+        if after.is_checkmate():
+            return 9_000_000
+        return score + color_sign * _teacher_static_eval(after)
+
+    best_move = opening_sanity_filter(board, best_move, score_move=sanity_move_score)
     if best_move is None:
         return None
     piece = board.piece_at(best_move.from_square)
@@ -640,13 +655,13 @@ def _choose_student_move(
     if difficulty == HARD_DIFFICULTY:
         return _choose_hard_training_move(board_state, side, rng=rng)
     if difficulty == EXPERIMENT_DIFFICULTY:
-        return choose_experiment_move(board_state, side, store=store, difficulty=EXPERIMENT_DIFFICULTY)
+        return choose_experiment_move(board_state, side, store=store, difficulty=EXPERIMENT_DIFFICULTY, search_profile="strong")
     if difficulty == EXPERIMENT_NN_DIFFICULTY:
         return choose_experiment_nn_move(board_state, side, model_path=nn_model_path)
     if difficulty == EXPERIMENT_DL_DIFFICULTY:
-        return choose_experiment_dl_move(board_state, side, model_path=dl_model_path)
+        return choose_experiment_dl_move(board_state, side, model_path=dl_model_path, search_profile="strong")
     if difficulty == EXPERIMENT_PV_DIFFICULTY:
-        return choose_experiment_pv_move(board_state, side, model_path=pv_model_path)
+        return choose_experiment_pv_move(board_state, side, model_path=pv_model_path, search_profile="strong")
     raise ValueError(f"unsupported student difficulty: {difficulty}")
 
 
