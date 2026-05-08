@@ -75,7 +75,7 @@
 
 ```bash
 # 1. 隔離環境啟動 (見 docs/AGENTS/QA_MISSION_FOR_AGENTS.md)
-PYTHONPATH=. python3 server.py
+./test_for_develop.sh --port 50785
 
 # 2. wallet vs ledger replay
 python3 docs/AGENTS/reports/claude/prechain_qa_2026-05-04/scripts/01_ledger_replay.py
@@ -94,7 +94,7 @@ python3 scripts/trading/validation/trading_workflow_template_validation.py --no-
 python3 scripts/trading/probes/backtest_20000_probe.py --include-route --json-out /tmp/trading_audit_check/backtest_20000.json
 
 # 6. 既有 pytest 回歸
-scripts/testing/pytest_in_tmp.sh -q tests/test_trading_engine.py tests/test_points_chain.py
+scripts/testing/pytest_in_tmp.sh -q tests/trading/core/test_trading_engine.py tests/points/test_points_chain.py
 ```
 
 目前這三支交易驗證腳本的分工是：

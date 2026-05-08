@@ -119,23 +119,43 @@ Server Mode v2 note:
 ## Fast Local Setup
 
 ```bash
-python3 -m venv .venv
-. .venv/bin/activate
 python3 -m pip install -r requirements.txt
-python3 server.py
+python3 server.py --doctor
+./test_for_develop.sh --port 50785
 ```
 
-Default local URL:
+Canonical local workflow:
 
 ```text
-https://127.0.0.1:5000/
+repo root:
+  python3 server.py --doctor
+  python3 server.py
+
+daily development:
+  ./test_for_develop.sh --port <free_port>
+
+pytest:
+  scripts/testing/pytest_in_tmp.sh -q tests
 ```
+
+`server.py` 不再接 `--host` / `--port` CLI 參數。若要改 bind，請使用
+`HTML_LEARNING_HOST` / `HTML_LEARNING_PORT` 或 `test_for_develop.sh --port ...`。
+
+`test_for_develop.sh` 目前除了放寬登入 / session / audit / integrity 保護，
+也會把 trading market registry 切成開發可測狀態：
+
+- `allow_spot=1`
+- `allow_margin=1`
+- `allow_bots=1`
+- `allow_risk_grade_usage=1`
+
+這樣 `/tmp` 開發站上的現貨、市價單、Grid Bot 與借貸交易才不會一開站就被
+風控級價格用途開關整體封死。
 
 If `runtime/cert.pem` and `runtime/key.pem` are missing, startup generates a
 local self-signed certificate/key pair for local development. Runtime DB, logs,
-storage, secrets, and integrity files also default to `runtime/` so they stay
-out of the repo root. These deployment-local runtime files must not be
-committed.
+storage, secrets, and integrity files default to `runtime/` under the current
+runtime root. These deployment-local runtime files must not be committed.
 
 ## Runtime State
 
@@ -880,7 +900,7 @@ scripts/testing/pytest_in_tmp.sh -q tests
 Functional smoke runner:
 
 ```bash
-security/run_functional_smoke.sh --port 50741
+scripts/security/pentest/run_functional_smoke.sh --port 50741
 ```
 
 Security and pentest runner documentation:
@@ -891,40 +911,23 @@ Security and pentest runner documentation:
 
 ## Production Start
 
-For first deployment, run the guided setup:
+Production bootstrap is now explicit:
 
 ```bash
-./one_click_setup.sh
+python3 server.py --doctor
+python3 server.py
 ```
 
-If `.env` does not exist and the script is attached to a terminal, it opens an
-interactive setup wizard. The wizard asks for bootstrap account passwords,
-runtime directories, bind address, HTTPS/cookie policy, proxy trust, and
-Gunicorn settings, then writes `.env` with mode `600`.
+`--doctor` validates that the runtime tree already exists and is writable. It
+does not silently scaffold missing directories. Optional feature capability
+checks still come from deployment-specific tooling and docs:
 
-Automation-friendly modes:
-
-```bash
-./one_click_setup.sh --check
-./one_click_setup.sh --init-db-only
-./one_click_setup.sh --no-wizard
-```
-
-`one_click_setup.sh --check` 現在還會額外提示目前部署是否已具備：
 - `ffmpeg` / `ffprobe`
-  - 影響影音平台 HLS 衍生檔與 metadata probe
+  - HLS derivatives and media metadata probes
 - `CIVITAI_API_KEY`
-  - 影響 root-only Civitai 搜尋 / 下載
+  - root-only Civitai search / download
 - `python3 scripts/admin/root_recovery.py`
-  - root 的正式 offline recovery 入口
-
-這些提示屬於可選能力檢查，不是一般部署的硬阻擋條件。
-
-To regenerate `.env` intentionally:
-
-```bash
-./one_click_setup.sh --wizard
-```
+  - root offline recovery entrypoint
 
 Recommended production defaults:
 

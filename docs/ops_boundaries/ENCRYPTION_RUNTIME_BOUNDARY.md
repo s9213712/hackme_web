@@ -46,9 +46,9 @@ Engineering consequence:
 
 Code path:
 
-- decrypt helper: [services/cloud_drive.py](/home/s92137/hackme_web/services/cloud_drive.py:98)
-- file preview / download: [routes/files.py](/home/s92137/hackme_web/routes/files.py:149)
-- video stream / HLS packaging: [routes/videos.py](/home/s92137/hackme_web/routes/videos.py:852), [services/media_streaming.py](/home/s92137/hackme_web/services/media_streaming.py:470)
+- decrypt helper: `services/storage/cloud_drive.py`
+- file preview / download: `routes/files.py`
+- video stream / HLS packaging: `routes/videos.py`, `services/media/streaming.py`
 
 ### `e2ee`
 
@@ -69,8 +69,8 @@ Engineering consequence:
 
 Code path:
 
-- E2EE key fetch for an authenticated recipient only: [routes/files.py](/home/s92137/hackme_web/routes/files.py:3339)
-- wrapped key storage: [services/cloud_drive.py](/home/s92137/hackme_web/services/cloud_drive.py:425)
+- E2EE key fetch for an authenticated recipient only: `routes/files.py`
+- wrapped key storage: `services/storage/cloud_drive.py`
 
 ## Video Sharing Boundary
 
@@ -120,7 +120,7 @@ The server must reject any request that tries to upload or update:
 
 Current enforcement:
 
-- [routes/videos.py](/home/s92137/hackme_web/routes/videos.py:59)
+- `routes/videos.py`
 
 ## Recovery Promise
 
@@ -140,7 +140,7 @@ Current enforcement:
 
 The current regression that locks this promise:
 
-- [tests/test_cloud_drive_attachments.py](/home/s92137/hackme_web/tests/test_cloud_drive_attachments.py)
+- `tests/storage/test_cloud_drive_attachments.py`
   `test_runtime_engineer_can_decrypt_server_encrypted_but_not_e2ee`
 
 What it proves:

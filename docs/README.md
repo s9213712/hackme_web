@@ -43,11 +43,8 @@ The repository root keeps only [README.md](../README.md) and
 ## Deep Reference
 
 - [API_REFERENCE.md](API_REFERENCE.md): canonical implemented API route map
-- [BACKTEST_CAPACITY_AND_TEMPLATE_BENCHMARKS.md](BACKTEST_CAPACITY_AND_TEMPLATE_BENCHMARKS.md): trading backtest cap measurement and benchmark asset notes
-- [BTC_TRADE_INTEGRATION.md](BTC_TRADE_INTEGRATION.md): external BTC_trade repo integration and operator flow
 - [CLI_ADMIN_PLAYBOOK.md](CLI_ADMIN_PLAYBOOK.md): curl/cmd playbook for root,
   admin, and developer operations
-- [COMFYUI_ADMIN.md](COMFYUI_ADMIN.md): root/admin-only ComfyUI and Civitai operations
 - [For_developer.md](For_developer.md): API, schema, runtime layout, feature flags
 - [EXTERNAL_API_COMMAND_MATRIX.md](EXTERNAL_API_COMMAND_MATRIX.md): current
   exchange / Civitai / ComfyUI upstream command inventory
@@ -100,11 +97,9 @@ The repository root keeps only [README.md](../README.md) and
 - [security/TRADING_STRESS_PENTEST.md](security/TRADING_STRESS_PENTEST.md): trading correctness/stress script
 - [security/SERVER_MODE_V2_RED_TEAM_PLAYBOOK.md](security/SERVER_MODE_V2_RED_TEAM_PLAYBOOK.md): adversarial mode tests
 - [SECURITY_MODES.md](SECURITY_MODES.md): legacy redirect for old links
-- [games/chess_training_pipeline.md](games/chess_training_pipeline.md): chess replay filtering, seed training, benchmark suites, and promotion flow
 
 ## Maintainer Structure
 
-- [RELEASE_LAYOUT.md](RELEASE_LAYOUT.md): tracked source vs runtime boundaries
 - [REPOSITORY_STRUCTURE.md](REPOSITORY_STRUCTURE.md): canonical placement logic
   for `docs/`, `scripts/`, `tests/`, runtime baggage, and cleanup priorities
 - [../scripts/README.md](../scripts/README.md): script entrypoint and grouping policy
@@ -118,3 +113,7 @@ The repository root keeps only [README.md](../README.md) and
   notes and retired implementation workflows
 - [archive/research/finished/GRID_TRADING_BOT_DESIGN_REPORT.md](archive/research/finished/GRID_TRADING_BOT_DESIGN_REPORT.md): future grid-bot research
 - [archive/webterminal/README.md](archive/webterminal/README.md): archived WebTerminal attempts
+
+Archive and `docs/AGENTS/reports/` content is historical evidence, not canonical
+operator guidance. Prefer the files listed above unless you are tracing old
+implementation decisions.

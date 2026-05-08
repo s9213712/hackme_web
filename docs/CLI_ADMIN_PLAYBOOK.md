@@ -20,22 +20,23 @@
 不要直接污染 repo 根目錄 runtime。建議：
 
 ```bash
-TS="$(date -u +%Y%m%dT%H%M%SZ)"
-export HACKME_RUNTIME_DIR="/tmp/hackme_web_cli_$TS/runtime"
-mkdir -p "$HACKME_RUNTIME_DIR"
+./test_for_develop.sh --port 5012
+```
+
+若你真的要直接對目前工作樹啟站，請先自己準備完整 runtime 環境，再執行：
+
+```bash
+python3 server.py --doctor
 python3 server.py
 ```
 
-若是另一個 port：
-
-```bash
-python3 server.py --host 127.0.0.1 --port 5012
-```
+`server.py` 不接受 `--host` / `--port` CLI 參數；要改 bind 請用
+`HTML_LEARNING_HOST` / `HTML_LEARNING_PORT`。
 
 ### 2. 共用變數
 
 ```bash
-export BASE="https://127.0.0.1:5000"
+export BASE="https://127.0.0.1:5012"
 export JAR="/tmp/hackme_web_cli.cookie"
 ```
 

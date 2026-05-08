@@ -52,7 +52,7 @@ python3 -m pip install -r requirements.txt
 
 - 一般站點仍可啟動
 - 影音平台會降級成較少能力的模式
-- `./one_click_setup.sh --check` 會明確警告，不是靜默失敗
+- `python3 server.py --doctor` 只檢查 runtime 環境；影音能力是否齊備仍需由部署者額外確認
 
 ## 3. Optional Feature Binaries
 

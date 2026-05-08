@@ -74,7 +74,10 @@ Fresh local databases 會建立：
 - `test/test`
 
 `test_for_develop.sh` 會額外關掉強制改密碼、登入安全限制、Integrity Guard、
-audit chain 等妨礙開發的保護，並保留預設帳密方便反覆 debug。若你要手動啟動，
+audit chain 等妨礙開發的保護，並保留預設帳密方便反覆 debug。同時它也會把
+trading market registry 切成開發可測狀態（`allow_spot / allow_margin /
+allow_bots / allow_risk_grade_usage = 1`），避免 `/tmp` 開發站一開機就把現貨、
+Grid Bot 與借貸交易整體封死。若你要手動啟動，
 仍可在第一次建 DB 前先設：
 
 - `HTML_LEARNING_ROOT_PASSWORD`

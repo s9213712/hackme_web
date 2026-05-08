@@ -50,28 +50,26 @@
 
 ## 最短啟動
 
-推薦：
+目前正式入口只保留三條：
 
 ```bash
-./one_click_setup.sh
-```
-
-若已經知道本機會接 ComfyUI 與 Civitai，也可在第一次部署時直接帶入：
-
-```bash
-./one_click_setup.sh --with-comfyui http://127.0.0.1:8192 --with-civitai-key '<CIVITAI_API_KEY>'
-```
-
-手動：
-
-```bash
-python3 -m venv .venv
-. .venv/bin/activate
-python3 -m pip install -r requirements.txt
+python3 server.py --doctor
 python3 server.py
+./test_for_develop.sh --port 50785
 ```
 
-全新資料庫會建立 `root/root`、`admin/admin`、`test/test`，第一次登入後會要求改密碼。
+建議這樣理解：
+
+- `python3 server.py --doctor`
+  - 只做環境檢查；若 runtime 目錄、權限或必要檔案條件不成立，會直接報錯
+- `python3 server.py`
+  - 正式 / 手動啟動入口；不會再幫你靜默補建環境
+- `./test_for_develop.sh --port 50785`
+  - 開發專用；先把 repo 複製到 `/tmp/.../hackme_web`，再從 `/tmp` 副本啟站，
+    避免污染 repo 工作樹
+
+全新資料庫仍會建立 `root/root`、`admin/admin`、`test/test`。正式資料庫預設仍要求第一次登入後改密碼；
+`test_for_develop.sh` 則會額外放寬一批妨礙開發的保護設定，方便反覆 debug。
 
 影音串流目前採雙路徑：
 - `standard_plain` / `server_encrypted`：Safari 保留原生 HLS，桌機 Chrome / Firefox / Edge 走同源 `hls.js`，失敗才退回直接串流

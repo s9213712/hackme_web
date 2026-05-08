@@ -32,7 +32,7 @@ python3 scripts/prepush/pre_push_checks.py
 #### 2. 全量 pytest
 
 ```bash
-PYTHONPATH=. python3 -m pytest -q tests
+scripts/testing/pytest_in_tmp.sh -q tests
 ```
 
 #### 3. 功能 smoke
@@ -63,13 +63,13 @@ scripts/security/pentest/run_pentest.sh --target https://127.0.0.1:5000 --only f
 #### 6. 交易壓力 / 正確性
 
 ```bash
-PYTHONPATH=. python3 scripts/security/pentest/trading_stress_pentest.py --target https://127.0.0.1:5000
+python3 scripts/security/pentest/trading_stress_pentest.py --target https://127.0.0.1:5000
 ```
 
 若這次改到交易價格融合或定投上限，另外補跑：
 
 ```bash
-PYTHONPATH=. python3 -m pytest -q tests/trading/core/test_trading_engine.py tests/trading/pricing/test_trading_reference_prices.py
+scripts/testing/pytest_in_tmp.sh -q tests/trading/core/test_trading_engine.py tests/trading/pricing/test_trading_reference_prices.py
 python3 scripts/trading/validation/trading_exchange_validation.py --out /tmp/trading_exchange_validation_followup
 ```
 
@@ -158,16 +158,16 @@ python3 scripts/on_live_reports/snapshot_restore.py
 | `clean_smoke` | `python3 scripts/security/server_mode/server_mode_v2_clean_smoke.py` | 動態 | `runtime/reports/security/server_mode_v2_clean_smoke_<timestamp>.json|.md` |
 | `adversarial` | `python3 scripts/security/server_mode/server_mode_v2_adversarial.py` | 動態 | `runtime/reports/security/server_mode_v2_adversarial_<timestamp>.json|.md` |
 | `redteam_l2` | `python3 scripts/security/server_mode/server_mode_v2_redteam_l2.py` | 動態 | `runtime/reports/security/server_mode_v2_redteam_l2_<timestamp>.json|.md` |
-| `pytest` | `PYTHONPATH=. python3 -m pytest -q tests` | 動態 | `runtime/reports/security/production_gate/pytest_production_report.json` |
+| `pytest` | `scripts/testing/pytest_in_tmp.sh -q tests` | 動態 | `runtime/reports/security/production_gate/pytest_production_report.json` |
 | `log_chain_verify` | `GET /api/root/server-mode/logs/verify` | 動態 | `runtime/reports/security/production_gate/log_chain_verify_report.json` |
 | `integrity_guard` | `POST /api/root/integrity/rescan` + `GET /api/root/integrity/report` + `tests/security/integrity/test_integrity_guard.py` | 固定 15 | `runtime/reports/security/production_gate/integrity_guard_report.json` |
 | `stress` | `python3 scripts/security/pentest/stress_test.py` + `python3 scripts/security/pentest/trading_stress_pentest.py` | 動態 | `runtime/reports/security/stress_<timestamp>.json|.md`；`runtime/reports/security/trading_stress_report_<timestamp>.json|.md` |
 | `permission` | `python3 scripts/security/pentest/functional_permission_pentest.py` | 動態 | `runtime/reports/security/functional_permission_pentest_<timestamp>.json|.md` |
 | `functional` | `scripts/security/pentest/run_functional_smoke.sh` + `tests/security/smoke/smoke_suite.py` | 動態 | `runtime/reports/security/functional_<run_id>/00_FUNCTIONAL_SMOKE.md`、`results.tsv`、`server.out`、`raw/` |
 | `pentest` | `scripts/security/pentest/run_pentest.sh` + `python3 scripts/security/pentest/session_security_pentest.py` | 動態 | `runtime/reports/security/<run_id>/00_SUMMARY.md` + `raw/*.json|*.md|*.txt` |
-| `snapshot_restore` | `PYTHONPATH=. python3 -m pytest -q tests/snapshots/test_snapshots.py` + 手動 `create → restore → verify` | 固定 40 | `runtime/reports/security/production_gate/snapshot_restore_report.json` |
-| `points_chain_consistency` | `PYTHONPATH=. python3 -m pytest -q tests/points/test_points_chain.py` + `services/points_chain.verify_chain()` | 固定 27 | `runtime/reports/security/production_gate/points_chain_consistency_report.json` |
-| `cloud_drive_quota_permission` | `PYTHONPATH=. python3 -m pytest -q tests/storage/test_cloud_drive_attachments.py tests/storage/test_storage_albums_schema.py` | 固定 55 | `runtime/reports/security/production_gate/cloud_drive_quota_permission_report.json` |
+| `snapshot_restore` | `scripts/testing/pytest_in_tmp.sh -q tests/snapshots/test_snapshots.py` + 手動 `create → restore → verify` | 固定 40 | `runtime/reports/security/production_gate/snapshot_restore_report.json` |
+| `points_chain_consistency` | `scripts/testing/pytest_in_tmp.sh -q tests/points/test_points_chain.py` + `services/points_chain.verify_chain()` | 固定 27 | `runtime/reports/security/production_gate/points_chain_consistency_report.json` |
+| `cloud_drive_quota_permission` | `scripts/testing/pytest_in_tmp.sh -q tests/storage/test_cloud_drive_attachments.py tests/storage/test_storage_albums_schema.py` | 固定 55 | `runtime/reports/security/production_gate/cloud_drive_quota_permission_report.json` |
 
 補充：
 
@@ -176,7 +176,7 @@ python3 scripts/on_live_reports/snapshot_restore.py
   `runtime/reports/security/production_gate/`，不要散落在 repo root。
 - `functional` 與 `pentest` 都是目錄型報告，不是單一 `.json`；前者偏功能流程，後者偏安全/攻擊面。
 - `stress` 一次通常會有兩份報告：一般 HTTP 壓測與 trading stress，各自獨立保存。
-- `on_live_reports_make.sh` 會額外生成：
+- `on_live_reports_make.py` 會額外生成：
   - `runtime/reports/security/production_gate/on_live_reports_make_<RUN_ID>.json`
   - `runtime/reports/security/production_gate/on_live_reports_make_<RUN_ID>.md`
   這兩份是本次整批產製的總結，不是 13 份 required report 之一。

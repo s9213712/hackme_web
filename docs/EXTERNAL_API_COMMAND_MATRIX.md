@@ -164,7 +164,7 @@ Current market catalog support:
 
 Source:
 
-- [services/trading_markets.py](/home/s92137/hackme_web/services/trading_markets.py)
+- `services/trading/markets.py`
 
 ## Civitai
 
@@ -265,10 +265,10 @@ Current project behavior built on top of those commands:
 ## Code Pointers
 
 - exchange market data:
-  [services/trading/engine.py](/home/s92137/hackme_web/services/trading/engine.py)
+  `services/trading/engine.py`
 - market symbol registry:
-  [services/trading_markets.py](/home/s92137/hackme_web/services/trading_markets.py)
+  `services/trading/markets.py`
 - ComfyUI upstream client:
-  [services/comfyui_client.py](/home/s92137/hackme_web/services/comfyui_client.py)
+  `services/comfyui/client.py`
 - Civitai + ComfyUI route integration:
-  [routes/comfyui.py](/home/s92137/hackme_web/routes/comfyui.py)
+  `routes/comfyui.py`
