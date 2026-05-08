@@ -2726,3 +2726,253 @@ async function uploadComfyuiModelFile() {
     }
   }
 }
+
+// =====================================================================
+// ComfyUI Template Importer (Phase 1 of docs/comfyui/COMFYUI_TEMPLATE_IMPORTER_PLAN.md)
+//
+// Adds a small modal flow that uploads a ComfyUI API-format workflow JSON,
+// renders the §9 6-panel preview, and persists the result via /import.
+//
+// Wires into the existing #comfyui-template-import-btn button (index.html).
+// All DOM is created on demand so this block is safe to append at the bottom
+// of 36-comfyui.js without touching the existing form.
+// =====================================================================
+
+const ComfyUITemplateImporter = (() => {
+  let modalEl = null;
+  let currentToken = null;
+  let currentCapability = null;
+
+  function ensureModal() {
+    if (modalEl && document.body.contains(modalEl)) return modalEl;
+    modalEl = document.createElement("div");
+    modalEl.id = "comfyui-template-importer-modal";
+    modalEl.className = "modal hidden";
+    modalEl.style.position = "fixed";
+    modalEl.style.inset = "0";
+    modalEl.style.background = "rgba(0,0,0,0.55)";
+    modalEl.style.zIndex = "9999";
+    modalEl.style.display = "none";
+    modalEl.innerHTML = `
+      <div class="modal-card" style="max-width:720px;margin:5vh auto;background:var(--surface,#fff);color:var(--text,#000);border-radius:8px;max-height:88vh;overflow:auto;">
+        <header style="padding:16px 20px;border-bottom:1px solid rgba(127,127,127,0.2);display:flex;justify-content:space-between;align-items:center;">
+          <strong>匯入 ComfyUI workflow（API format）</strong>
+          <button type="button" class="btn" id="comfyui-template-importer-close">關閉</button>
+        </header>
+        <section style="padding:16px 20px;">
+          <p style="margin:0 0 8px;">請上傳由 ComfyUI 「Save (API Format)」匯出的 workflow JSON；UI graph 格式（含 nodes/links）會被拒收。</p>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <input type="file" id="comfyui-template-importer-file" accept=".json,application/json" />
+            <button type="button" class="btn btn-primary" id="comfyui-template-importer-preview-btn">分析 workflow</button>
+          </div>
+          <div id="comfyui-template-importer-status" style="margin-top:8px;color:var(--muted,#666);"></div>
+        </section>
+        <section id="comfyui-template-importer-panels" style="padding:0 20px 16px;display:none;">
+          <div id="comfyui-template-importer-capability" style="padding:8px 12px;border-radius:6px;margin-bottom:12px;"></div>
+          <div id="comfyui-template-importer-panel-container"></div>
+        </section>
+        <footer id="comfyui-template-importer-footer" style="padding:12px 20px;border-top:1px solid rgba(127,127,127,0.2);display:none;justify-content:flex-end;gap:8px;">
+          <input type="text" id="comfyui-template-importer-title" placeholder="preset 標題" maxlength="120" style="flex:1;padding:6px 10px;" />
+          <button type="button" class="btn btn-primary" id="comfyui-template-importer-import-btn" disabled>儲存為 preset</button>
+        </footer>
+      </div>
+    `;
+    document.body.appendChild(modalEl);
+    modalEl.querySelector("#comfyui-template-importer-close").addEventListener("click", closeImportModal);
+    modalEl.querySelector("#comfyui-template-importer-preview-btn").addEventListener("click", submitTemplatePreview);
+    modalEl.querySelector("#comfyui-template-importer-import-btn").addEventListener("click", submitTemplateImport);
+    return modalEl;
+  }
+
+  function openImportModal() {
+    ensureModal();
+    currentToken = null;
+    currentCapability = null;
+    modalEl.style.display = "block";
+    modalEl.classList.remove("hidden");
+    setStatus("");
+    const panels = modalEl.querySelector("#comfyui-template-importer-panels");
+    const footer = modalEl.querySelector("#comfyui-template-importer-footer");
+    if (panels) panels.style.display = "none";
+    if (footer) footer.style.display = "none";
+    const fileInput = modalEl.querySelector("#comfyui-template-importer-file");
+    if (fileInput) fileInput.value = "";
+    const titleInput = modalEl.querySelector("#comfyui-template-importer-title");
+    if (titleInput) titleInput.value = "";
+  }
+
+  function closeImportModal() {
+    if (!modalEl) return;
+    modalEl.style.display = "none";
+    modalEl.classList.add("hidden");
+  }
+
+  function setStatus(text, isError = false) {
+    if (!modalEl) return;
+    const el = modalEl.querySelector("#comfyui-template-importer-status");
+    if (el) {
+      el.textContent = text || "";
+      el.style.color = isError ? "#c0392b" : "var(--muted,#666)";
+    }
+  }
+
+  async function submitTemplatePreview() {
+    if (!modalEl) return;
+    const fileInput = modalEl.querySelector("#comfyui-template-importer-file");
+    const file = fileInput && fileInput.files && fileInput.files[0];
+    if (!file) {
+      setStatus("請先選擇 workflow JSON 檔案", true);
+      return;
+    }
+    setStatus("分析中...");
+    try {
+      const formData = new FormData();
+      formData.append("workflow", file);
+      const res = await fetch("/api/comfyui/templates/preview", {
+        method: "POST",
+        headers: { "X-CSRF-Token": (window.csrfToken || "") },
+        body: formData,
+      });
+      const json = await res.json();
+      if (!res.ok || !json.ok) {
+        throw new Error(json.msg || `分析失敗（HTTP ${res.status}）`);
+      }
+      currentToken = json.preview_token;
+      currentCapability = json.capability;
+      renderTemplatePanels(json.ui_schema || {}, json.capability || {});
+      setStatus("分析完成；填好欄位後可匯入");
+    } catch (err) {
+      setStatus(err.message || "分析失敗", true);
+    }
+  }
+
+  function renderTemplatePanels(uiSchema, capability) {
+    if (!modalEl) return;
+    const panels = modalEl.querySelector("#comfyui-template-importer-panels");
+    const container = modalEl.querySelector("#comfyui-template-importer-panel-container");
+    const capEl = modalEl.querySelector("#comfyui-template-importer-capability");
+    const importBtn = modalEl.querySelector("#comfyui-template-importer-import-btn");
+    const footer = modalEl.querySelector("#comfyui-template-importer-footer");
+    if (!container || !capEl || !panels || !footer || !importBtn) return;
+
+    const overall = (capability && capability.overall) || "UNSUPPORTED";
+    const capColor = overall === "SUPPORTED" ? "#27ae60"
+      : overall === "PARTIALLY_SUPPORTED" ? "#e67e22"
+      : "#c0392b";
+    capEl.style.background = capColor + "22";
+    capEl.style.borderLeft = `4px solid ${capColor}`;
+    const blockers = (capability && capability.blockers) || [];
+    capEl.innerHTML = `<strong>相容性：${overall}</strong>` +
+      (blockers.length ? `<ul style="margin:6px 0 0 16px;">${blockers.map(b => `<li>${escapeHtmlSafe(b)}</li>`).join("")}</ul>` : "");
+
+    container.innerHTML = "";
+    const list = (uiSchema && uiSchema.panels) || [];
+    list.forEach(panel => {
+      const section = document.createElement("details");
+      section.open = !panel.collapsed_default;
+      section.style.borderBottom = "1px solid rgba(127,127,127,0.18)";
+      section.style.padding = "8px 0";
+      const summary = document.createElement("summary");
+      summary.style.cursor = "pointer";
+      summary.style.fontWeight = "600";
+      summary.textContent = panel.label || panel.id;
+      section.appendChild(summary);
+      const fields = panel.fields || [];
+      if (fields.length === 0 && panel.id !== "compatibility" && panel.id !== "raw") {
+        const note = document.createElement("div");
+        note.style.color = "var(--muted,#666)";
+        note.style.padding = "6px 0";
+        note.textContent = "（無可編輯欄位）";
+        section.appendChild(note);
+      }
+      fields.forEach(field => {
+        const row = document.createElement("div");
+        row.style.display = "flex";
+        row.style.gap = "8px";
+        row.style.alignItems = "center";
+        row.style.padding = "4px 0";
+        const labelEl = document.createElement("label");
+        labelEl.style.minWidth = "180px";
+        labelEl.textContent = field.label || `${field.class_type}.${field.input_name}`;
+        const inputEl = document.createElement("input");
+        inputEl.type = field.input_type === "number" ? "number" : "text";
+        inputEl.dataset.fieldId = field.id || "";
+        inputEl.dataset.nodeId = field.node_id || "";
+        inputEl.dataset.inputName = field.input_name || "";
+        inputEl.value = field.current_value != null ? String(field.current_value) : "";
+        inputEl.style.flex = "1";
+        inputEl.style.padding = "4px 8px";
+        row.appendChild(labelEl);
+        row.appendChild(inputEl);
+        section.appendChild(row);
+      });
+      container.appendChild(section);
+    });
+
+    panels.style.display = "block";
+    footer.style.display = "flex";
+    importBtn.disabled = overall === "UNSUPPORTED";
+  }
+
+  async function submitTemplateImport() {
+    if (!modalEl) return;
+    if (!currentToken) {
+      setStatus("尚未取得 preview_token，請先按「分析 workflow」", true);
+      return;
+    }
+    const titleInput = modalEl.querySelector("#comfyui-template-importer-title");
+    const title = (titleInput && titleInput.value || "").trim();
+    if (!title) {
+      setStatus("title 不可為空", true);
+      return;
+    }
+    setStatus("匯入中...");
+    try {
+      const res = await fetch("/api/comfyui/templates/import", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": (window.csrfToken || ""),
+        },
+        body: JSON.stringify({ preview_token: currentToken, title }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.ok) {
+        throw new Error(json.msg || `匯入失敗（HTTP ${res.status}）`);
+      }
+      setStatus(`已建立 preset #${json.preset_id}`);
+      currentToken = null;
+      // Refresh the existing preset list if the helper exists.
+      if (typeof loadComfyuiWorkflowPresets === "function") {
+        try { loadComfyuiWorkflowPresets(); } catch (_) {}
+      }
+      setTimeout(closeImportModal, 1200);
+    } catch (err) {
+      setStatus(err.message || "匯入失敗", true);
+    }
+  }
+
+  function escapeHtmlSafe(value) {
+    return String(value == null ? "" : value)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function bindButton() {
+    const btn = document.getElementById("comfyui-template-import-btn");
+    if (!btn || btn.dataset.cuiTemplateBound === "1") return;
+    btn.dataset.cuiTemplateBound = "1";
+    btn.addEventListener("click", openImportModal);
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", bindButton);
+  } else {
+    bindButton();
+  }
+
+  return { openImportModal, closeImportModal, submitTemplatePreview, submitTemplateImport };
+})();
