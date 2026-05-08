@@ -2342,11 +2342,21 @@ class TradingEngineService:
             "immediately executable limit order",
             "limit order match",
         }
-        if resolved_source == "manual_root" or (
-            resolved_source.endswith("_cached")
-            and usage_text not in cached_fallback_allowed_usages
-        ):
+        # Decide which path produces the hard block:
+        #   - manual_root → always hard-block (no live source)
+        #   - *_cached + non-allowed usage → hard-block (grid/margin/contract/...)
+        #   - any other meta with high_risk_blocked=True (e.g., conservative
+        #     fusion with too few providers) → hard-block; the callers we want to
+        #     opt-in via policy must opt-in via *_cached resolved_source
+        is_cached_source = bool(resolved_source) and resolved_source.endswith("_cached")
+        cached_caller_allowed = is_cached_source and usage_text in cached_fallback_allowed_usages
+        if not cached_caller_allowed:
             reason = hard_block_reason or "risk-grade price source is not available"
+            usage_label = usage_text or "high-risk trading action"
+            # Stable English substring the regression suite greps for (it covers
+            # every non-risk-grade source we treat as conservative-mode here:
+            # manual_root, cached fallback, degraded/stale fused providers, etc.)
+            full_msg = f"{usage_label} is blocked while fused price is in conservative mode: {reason}"
             self._audit_event(
                 conn,
                 "TRADING_PRICE_HEALTH_BLOCKED",
@@ -2364,9 +2374,9 @@ class TradingEngineService:
                     "hard_block": True,
                 },
             )
-            raise ValueError(reason)
-        # For allowed cached-fallback usages we fall through to the policy chain below
-        # so trading.price_degrade_pause_* (when enabled) can still pause the trade.
+            raise ValueError(full_msg)
+        # cached fallback + allowed usage: fall through to the policy chain so
+        # trading.price_degrade_pause_* (when enabled) can still pause the trade.
         policy_key = ""
         policy_label = "高風險交易"
         if "bot" in usage_text:
