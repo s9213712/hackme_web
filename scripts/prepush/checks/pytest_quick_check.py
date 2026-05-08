@@ -24,6 +24,7 @@ QUICK_TESTS = [
     "tests/users/test_user_csv_exports.py",
 ]
 QUICK_TIMEOUT_SECONDS = 180
+QUICK_PYTEST_TIMEOUT_SECONDS = QUICK_TIMEOUT_SECONDS
 
 
 def run(ctx: PrepushContext) -> CheckResult:
