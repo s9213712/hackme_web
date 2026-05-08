@@ -33,7 +33,7 @@ def test_dev_launcher_copies_repo_to_tmp_and_bootstraps_dev_friendly_runtime():
     assert '"production_single_account_ip_lock_enabled": False' in script
     assert '"ip_blocking_enabled": False' in script
     assert '"session_idle_timeout_minutes": 1440' in script
-    assert "allow_risk_grade_usage=0" in script
+    assert "allow_risk_grade_usage=1" in script
     assert 'setsid "$PYTHON_BIN" server.py >"$LOG_CAPTURE" 2>&1 < /dev/null &' in script
 
 

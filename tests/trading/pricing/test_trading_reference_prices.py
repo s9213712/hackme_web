@@ -595,6 +595,26 @@ def test_trading_order_invalid_decimal_is_sanitized_for_user():
     assert payload["msg"] == "交易數量格式錯誤，請輸入有效的數字"
 
 
+def test_trading_order_conservative_mode_message_is_not_misclassified_as_insufficient_funds():
+    client = _order_error_app(
+        {"id": 1, "username": "alice", "role": "user"},
+        ValueError("市價交易已因價格降級暫停：目前可用來源數不足，只能提供 degraded reference price（healthy providers=0，需要至少 2 家才視為可交易）"),
+    ).test_client()
+
+    response = client.post("/api/trading/orders", json={
+        "market_symbol": "ETH/POINTS",
+        "side": "buy",
+        "order_type": "market",
+        "quantity": "0.01",
+    })
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload["ok"] is False
+    assert "價格降級暫停" in payload["msg"]
+    assert "交易資金不足" not in payload["msg"]
+
+
 def test_btc_trade_signal_hidden_when_project_missing(tmp_path):
     client = _btc_signal_app({"id": 1, "username": "alice", "role": "user"}, tmp_path / "missing").test_client()
 

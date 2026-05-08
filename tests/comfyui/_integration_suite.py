@@ -5,12 +5,13 @@ import time
 import urllib.parse
 from pathlib import Path
 
+import pytest
 from flask import Flask, jsonify, make_response, request
 
 from routes import comfyui as comfyui_routes
 from routes.comfyui import register_comfyui_routes
 from services.storage.cloud_drive import ensure_cloud_drive_attachment_schema
-from services.comfyui.client import ComfyUIClient, ComfyUIImage
+from services.comfyui.client import ComfyUIClient, ComfyUIError, ComfyUIImage
 from services.users.member_levels import ensure_member_level_rules_schema
 from services.storage.storage_albums import (
     create_album,
@@ -3265,6 +3266,16 @@ def test_comfyui_interrupt_tolerates_plain_text_response(monkeypatch):
 
     assert result == {"raw": "interrupted"}
     assert calls == ["http://fake-comfyui/interrupt"]
+
+
+def test_comfyui_health_check_timeout_is_reported_as_comfyui_error(monkeypatch):
+    def fake_urlopen(req, timeout=None):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr("services.comfyui.client.urllib.request.urlopen", fake_urlopen)
+
+    with pytest.raises(ComfyUIError, match="ComfyUI 連線逾時"):
+        ComfyUIClient("http://fake-comfyui").health_check(timeout=1)
 
 
 def test_comfyui_save_can_add_generated_image_to_album(tmp_path):

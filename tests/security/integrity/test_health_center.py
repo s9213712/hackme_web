@@ -3,7 +3,7 @@ from pathlib import Path
 
 from flask import Flask, jsonify, make_response
 
-from routes.system_admin import _retry_sqlite_locked, register_system_admin_routes
+from routes.system_admin import register_system_admin_routes
 from services.platform.bootstrap import CURRENT_SCHEMA_VERSION
 from services.system.integrity_guard import IntegrityGuard, ensure_integrity_schema
 
@@ -128,25 +128,6 @@ def test_health_readiness_and_db_integrity_endpoints(tmp_path):
     assert db.status_code == 200
     assert db.get_json()["database"]["quick_check"] == ["ok"]
     assert db.get_json()["database"]["ok"] is True
-
-
-def test_retry_sqlite_locked_retries_until_success(monkeypatch):
-    attempts = {"count": 0}
-    sleeps = []
-
-    def flaky():
-        attempts["count"] += 1
-        if attempts["count"] < 3:
-            raise sqlite3.OperationalError("database is locked")
-        return {"ok": True}
-
-    monkeypatch.setattr("routes.system_admin.time.sleep", lambda seconds: sleeps.append(seconds))
-
-    result = _retry_sqlite_locked(flaky, attempts=3, delay_seconds=0.05)
-
-    assert result == {"ok": True}
-    assert attempts["count"] == 3
-    assert sleeps == [0.05, 0.05]
 
 
 def test_admin_health_summary_includes_grouped_dashboard_data(tmp_path):

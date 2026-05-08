@@ -25,8 +25,9 @@ def make_ctx(tmp_path, **kwargs):
 
 
 def test_path_sanitizer_does_not_output_local_home():
-    sanitized = utils.sanitize_path("/home/s92137/hackme_web/runtime/database.db")
-    assert "/home/s92137" not in sanitized
+    home = str(Path.home()).replace("\\", "/").rstrip("/")
+    sanitized = utils.sanitize_path(f"{home}/hackme_web/runtime/database.db")
+    assert home not in sanitized
     assert "<LOCAL_HOME_PATH>" in sanitized
 
 
