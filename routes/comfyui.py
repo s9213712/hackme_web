@@ -4002,6 +4002,7 @@ def register_comfyui_routes(app, deps):
     register_comfyui_template_routes(app, {
         "request": request,
         "actor_or_401": _actor_or_401,
+        "actor_value": _actor_value,
         "json_resp": json_resp,
         "require_csrf": require_csrf,
         "get_client_ip": get_client_ip,
@@ -4009,6 +4010,10 @@ def register_comfyui_routes(app, deps):
         "audit": audit,
         "comfyui_binding": _comfyui_binding,
         "client_for_url": _client_for_url,
+        "get_db": get_db,
+        "upsert_workflow_preset": _upsert_workflow_preset,
+        "load_workflow_preset_row": _load_workflow_preset_row,
+        "workflow_preset_summary": _workflow_preset_summary,
     })
 
     register_comfyui_workflow_routes(app, {

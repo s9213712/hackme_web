@@ -26,15 +26,19 @@ from services.comfyui.validation.sanitize import sanitize_workflow_json
 
 
 def register_comfyui_template_routes(app, ctx):
-    """Register §8 preview endpoint on `app`.
+    """Register §8 preview + import endpoints on `app`.
 
     `ctx` mirrors the convention used by workflow_routes.py / admin_routes.py:
     every route-layer dependency is passed in by name so this module stays
     side-effect-free at import time and easy to unit test.
 
-    Required ctx keys:
+    Required ctx keys (preview):
       - actor_or_401, json_resp, require_csrf, get_client_ip, get_ua, audit,
         comfyui_binding, client_for_url, request
+    Required ctx keys (import) — supplied by routes/comfyui.py from the
+    existing preset helpers:
+      - get_db, actor_value, upsert_workflow_preset, load_workflow_preset_row,
+        workflow_preset_summary
     Optional ctx keys (override for tests):
       - preview_store: PreviewStore instance (defaults to module singleton)
     """
@@ -53,6 +57,14 @@ def register_comfyui_template_routes(app, ctx):
     preview_store = ctx.get("preview_store")
     if preview_store is None:
         preview_store = get_default_preview_store()
+    # Optional integration with the existing preset upsert helpers; the import
+    # endpoint short-circuits when these are missing so unit tests of the
+    # preview endpoint can omit them.
+    get_db = ctx.get("get_db")
+    actor_value = ctx.get("actor_value")
+    upsert_workflow_preset = ctx.get("upsert_workflow_preset")
+    load_workflow_preset_row = ctx.get("load_workflow_preset_row")
+    workflow_preset_summary = ctx.get("workflow_preset_summary")
 
     def _err(msg, *, status=400, stage="", **extra):
         payload = {"ok": False, "msg": msg}
@@ -214,6 +226,174 @@ def register_comfyui_template_routes(app, ctx):
                 "preview_token": token,
                 "preview_token_ttl_seconds": int(PREVIEW_TOKEN_TTL_SECONDS),
                 "ui_schema": schema.to_dict(),
+                "capability": capability.to_dict(),
+            }
+        )
+
+    # The import endpoint requires the preset-upsert helpers from routes/comfyui.py;
+    # skip registration when ctx is missing them (e.g., preview-only unit tests).
+    if not all([get_db, actor_value, upsert_workflow_preset, load_workflow_preset_row, workflow_preset_summary]):
+        return
+
+    @app.route("/api/comfyui/templates/import", methods=["POST"])
+    @require_csrf
+    def comfyui_templates_import():
+        actor, err = actor_or_401()
+        if err:
+            return err
+
+        try:
+            body = request.get_json(force=True, silent=False)
+        except Exception:
+            audit(
+                "COMFYUI_TEMPLATE_IMPORT_FAIL",
+                get_client_ip(),
+                user=(actor or {}).get("username") or "-",
+                success=False,
+                ua=get_ua(),
+                detail="stage=parse",
+            )
+            return _err("請以 JSON 格式提交", stage="parse")
+        if not isinstance(body, dict):
+            return _err("請以 JSON 物件格式提交", stage="parse")
+
+        token = str(body.get("preview_token") or "").strip()
+        if not token or not token.startswith("tkn_"):
+            audit(
+                "COMFYUI_TEMPLATE_IMPORT_FAIL",
+                get_client_ip(),
+                user=actor_value(actor, "username") or "-",
+                success=False,
+                ua=get_ua(),
+                detail="stage=token",
+            )
+            return _err("缺少 preview_token；請先呼叫 /api/comfyui/templates/preview", stage="token")
+
+        title = str(body.get("title") or "").strip()
+        if not title:
+            return _err("title 不可為空", stage="title")
+        description = str(body.get("description") or "")
+        visibility = str(body.get("visibility") or "private")
+        default_params = body.get("default_params") if isinstance(body.get("default_params"), dict) else {}
+
+        # Single-use redemption (§8.2: tokens 30-min TTL, never reused)
+        entry = preview_store.consume(token=token, user_id=int(actor_value(actor, "id")))
+        if entry is None:
+            audit(
+                "COMFYUI_TEMPLATE_IMPORT_FAIL",
+                get_client_ip(),
+                user=actor_value(actor, "username") or "-",
+                success=False,
+                ua=get_ua(),
+                detail="stage=token_invalid",
+            )
+            return _err("preview_token 無效或已過期，請重新預覽 workflow", stage="token_invalid")
+
+        # Defense in depth: re-sanitize + re-analyze + re-capability before write.
+        # Even though preview did all of these, the workflow's been sitting in
+        # an in-process store; cheap to verify it's still safe before commit.
+        stored_workflow = entry.payload.get("workflow") or {}
+        try:
+            sanitized_wrapper = sanitize_workflow_json(stored_workflow)
+        except WorkflowValidationError as exc:
+            audit(
+                "COMFYUI_TEMPLATE_IMPORT_FAIL",
+                get_client_ip(),
+                user=actor_value(actor, "username") or "-",
+                success=False,
+                ua=get_ua(),
+                detail="stage=sanitize",
+            )
+            return _err(str(exc), stage="sanitize")
+
+        sanitized_inner = sanitized_wrapper.get("workflow_json") or {}
+        try:
+            analysis = analyze_workflow_json(sanitized_inner)
+        except WorkflowValidationError as exc:
+            audit(
+                "COMFYUI_TEMPLATE_IMPORT_FAIL",
+                get_client_ip(),
+                user=actor_value(actor, "username") or "-",
+                success=False,
+                ua=get_ua(),
+                detail="stage=analyze",
+            )
+            return _err(str(exc), stage="analyze")
+
+        if analysis.has_blocking_classes():
+            audit(
+                "COMFYUI_TEMPLATE_IMPORT_FAIL",
+                get_client_ip(),
+                user=actor_value(actor, "username") or "-",
+                success=False,
+                ua=get_ua(),
+                detail="stage=allowlist",
+            )
+            return _err(
+                f"workflow 含明確拒絕的節點類型：{sorted(analysis.denied_classes)}",
+                stage="allowlist",
+                denied_classes=sorted(analysis.denied_classes),
+            )
+
+        # Per §4: import requires SUPPORTED or PARTIALLY_SUPPORTED. UNSUPPORTED
+        # (custom nodes missing locally, or hackme_web allowlist rejects a class
+        # that's *present* locally) blocks at import; PARTIALLY_SUPPORTED is
+        # allowed so the user can download missing models and try /run later.
+        binding = comfyui_binding(actor)
+        client = None
+        try:
+            client = client_for_url(binding) if binding else None
+        except Exception:
+            client = None
+        capability = check_workflow_capability(analysis, client=client)
+        if capability.overall == "UNSUPPORTED":
+            audit(
+                "COMFYUI_TEMPLATE_IMPORT_FAIL",
+                get_client_ip(),
+                user=actor_value(actor, "username") or "-",
+                success=False,
+                ua=get_ua(),
+                detail=f"stage=capability unsupported={capability.unsupported}",
+            )
+            return _err(
+                f"workflow 在本地 ComfyUI 上不支援：{capability.unsupported}",
+                stage="capability",
+                unsupported=capability.unsupported,
+                blockers=capability.blockers,
+            )
+
+        # Persist as preset.
+        conn = get_db()
+        try:
+            preset_id = upsert_workflow_preset(
+                conn,
+                preset_id=None,
+                actor=actor,
+                title=title,
+                description=description,
+                visibility=visibility,
+                workflow_payload=sanitized_wrapper,
+                default_params=default_params,
+                is_official=False,
+            )
+            row = load_workflow_preset_row(conn, preset_id=preset_id)
+            conn.commit()
+        finally:
+            conn.close()
+
+        audit(
+            "COMFYUI_TEMPLATE_IMPORT_PASS",
+            get_client_ip(),
+            user=actor_value(actor, "username") or "-",
+            success=True,
+            ua=get_ua(),
+            detail=f"preset_id={preset_id} overall={capability.overall}",
+        )
+        return json_resp(
+            {
+                "ok": True,
+                "preset_id": preset_id,
+                "preset": workflow_preset_summary(row, actor=actor),
                 "capability": capability.to_dict(),
             }
         )
