@@ -173,6 +173,27 @@ function tradingErrorText(json, fallback = "操作失敗") {
   return fallback;
 }
 
+function tradingFriendlyErrorText(text, fallback = "操作失敗") {
+  const raw = String(text || "").trim();
+  if (!raw) return fallback;
+  if (raw.includes("candles are required for selected backtest range")) {
+    return "目前圖表 K 線不涵蓋你選的回測區間。系統會改由後端重抓歷史 K 線；若仍失敗，請縮小區間或改大時間週期。";
+  }
+  if (raw.includes("grid bot create is disabled for this market") || raw.includes("bots are disabled for this market")) {
+    return "這個市場目前未開放交易機器人。請改選其他市場，或由 root 到交易市場 registry 開啟 allow_bots。";
+  }
+  if (raw.includes("unsupported workflow node type")) {
+    const nodeType = raw.split(":").slice(1).join(":").trim();
+    return nodeType
+      ? `Workflow 節點類型目前不支援：${nodeType}。請重新套用目前版本模板或回編輯器重存。`
+      : "Workflow 節點類型目前不支援。請重新套用目前版本模板或回編輯器重存。";
+  }
+  if (raw.includes("trading place_order forbidden in mode='dev_ready'")) {
+    return "目前伺服器是 dev_ready 模式，交易下單被停用。請切到 test / internal_test / production 後再下單。";
+  }
+  return raw;
+}
+
 async function fetchTradingJson(url, options = {}) {
   const { forceCsrf = true, ...requestOptions } = options || {};
   await fetchCsrfToken({ force: !!forceCsrf });
@@ -190,10 +211,14 @@ async function fetchTradingJson(url, options = {}) {
     let fallback = `HTTP ${res.status}`;
     if (res.status === 404) fallback = `交易所 API 不存在：${url}。請確認伺服器已重啟且目前是包含交易所功能的分支。`;
     else if (raw && raw.trim() && !/^not found$/i.test(raw.trim())) fallback = raw.slice(0, 220);
-    const text = tradingErrorText(json, fallback);
+    const text = tradingFriendlyErrorText(tradingErrorText(json, fallback), fallback);
     throw new Error(text || `HTTP ${res.status}`);
   }
   return json;
+}
+
+async function tradingFreshCsrfToken() {
+  return await fetchCsrfToken({ force: true });
 }
 
 function bindTradingActionButton(el, handler, pendingText, fallbackText) {
@@ -1173,6 +1198,8 @@ function renderEconomySpotPositionDetails(positions = [], markets = []) {
     const pnl = tradingSpotPnl(position, market);
     const realizedPnl = tradingNumber(position?.realized_pnl_points, 0);
     const totalFee = tradingNumber(position?.total_fee_points, 0);
+    const stopLossPercent = tradingNumber(position?.stop_loss_percent, 0);
+    const takeProfitPercent = tradingNumber(position?.take_profit_percent, 0);
     const pnlClass = pnl > 0 ? "positive" : (pnl < 0 ? "negative" : "");
     const realizedClass = realizedPnl > 0 ? "positive" : (realizedPnl < 0 ? "negative" : "");
     return `
@@ -1209,7 +1236,7 @@ function renderEconomySpotPositionDetails(positions = [], markets = []) {
         <div class="trading-spot-metric">
           <span>已實現盈虧</span>
           <b class="trading-spot-pnl ${realizedClass}">${realizedPnl >= 0 ? "+" : ""}${formatTradingPointsValue(realizedPnl)} 點</b>
-          <small class="drive-card-sub">累計手續費 ${formatTradingPointsValue(totalFee)} · 扣費成本基準 ${costBasis ? formatTradingPointsValue(costBasis) : "-"}</small>
+          <small class="drive-card-sub">累計手續費 ${formatTradingPointsValue(totalFee)} · 扣費成本基準 ${costBasis ? formatTradingPointsValue(costBasis) : "-"} · ${sanitize(tradingRiskTargetText(stopLossPercent, takeProfitPercent))}</small>
         </div>
         <div class="trading-spot-actions">
           <div class="field">
@@ -1297,6 +1324,7 @@ function tradingMarginPositionRow(row, scope = "trading") {
   const pnlClass = unrealizedPnl > 0 ? "positive" : (unrealizedPnl < 0 ? "negative" : "");
   const leverageHint = collateral > 0 ? `${(principal / collateral).toFixed(2)}x 風險倍數` : "未提供風險倍數";
   const riskText = tradingMarginRiskText({ ...row, risk: liveRisk });
+  const riskTargetText = tradingRiskTargetText(row.stop_loss_percent, row.take_profit_percent);
   const prefix = scope === "economy" ? "economy-" : "";
   return `
     <div class="drive-file-row">
@@ -1313,6 +1341,7 @@ function tradingMarginPositionRow(row, scope = "trading") {
           未實現盈虧 <b class="trading-spot-pnl ${pnlClass}">${unrealizedPnl >= 0 ? "+" : ""}${formatTradingPointsValue(unrealizedPnl)} 點</b> · 損益平衡價 ${breakEvenPrice ? formatTradingPointsValue(breakEvenPrice) : "無法估算"} · 逐倉估算強平價 ${liquidationPrice ? formatTradingPointsValue(liquidationPrice) : "無法估算"}
         </div>
         <div class="drive-card-sub">損益平衡價已含開倉費、累積利息與預估平倉手續費；實際清算仍依全倉維持率</div>
+        <div class="drive-card-sub">${sanitize(riskTargetText)}</div>
         <div class="drive-card-sub">${sanitize(riskText.reason || "")}</div>
         <div class="drive-card-sub">開倉費 ${formatTradingPointsValue(fee)} · 年利率 ${formatTradingPercent(interestAprPercent)}% APR · 累積利息 ${formatTradingPointsValue(interest)} 點 · 已實扣 ${formatTradingPointsValue(paidInterest)} 點 · 已持倉 ${totalElapsedHours} 小時 · 已計息 ${interestHours} 小時</div>
         <div class="drive-card-sub">下一次計息 ${sanitize(nextInterestLabel)}${nextInterestCountdown ? ` · ${sanitize(nextInterestCountdown)}` : ""} · 規則：每 ${formatTradingPointsValue(interestIntervalHours)} 小時、至少 ${formatTradingPointsValue(minimumHours)} 小時 · ${sanitize(leverageHint)}</div>
@@ -1335,21 +1364,25 @@ function renderTradingMarketOptions() {
   const rootSelect = $("trading-root-market-select");
   const contractSelect = $("trading-contract-market-select");
   const marginSelect = $("trading-margin-market-select");
-  const botSelects = [
-    $("trading-auto-bot-market"),
-    $("trading-dca-bot-market"),
-    $("trading-grid-bot-market"),
-    $("trading-dca-backtest-market"),
-    $("trading-grid-backtest-market"),
-    $("trading-workflow-backtest-market"),
-  ];
+  const botSelects = [$("trading-auto-bot-market"), $("trading-dca-bot-market"), $("trading-grid-bot-market")];
+  const botBacktestSelects = [$("trading-dca-backtest-market"), $("trading-grid-backtest-market"), $("trading-workflow-backtest-market")];
   const options = tradingState.markets.length
     ? tradingState.markets.map((market) => `<option value="${sanitize(market.symbol)}">${sanitize(tradingDisplaySymbol(market.symbol))}</option>`).join("")
     : `<option value="">沒有可用市場</option>`;
-  [select, rootSelect, contractSelect, marginSelect, ...botSelects].forEach((target) => {
+  const botMarkets = (tradingState.markets || []).filter((market) => market.allow_bots !== false);
+  const botOptions = botMarkets.length
+    ? botMarkets.map((market) => `<option value="${sanitize(market.symbol)}">${sanitize(tradingDisplaySymbol(market.symbol))}</option>`).join("")
+    : `<option value="">目前沒有開放機器人的市場</option>`;
+  [select, rootSelect, contractSelect, marginSelect, ...botBacktestSelects].forEach((target) => {
     if (!target) return;
     const previous = target.value;
     target.innerHTML = options;
+    if (previous && Array.from(target.options).some((option) => option.value === previous)) target.value = previous;
+  });
+  botSelects.forEach((target) => {
+    if (!target) return;
+    const previous = target.value;
+    target.innerHTML = botOptions;
     if (previous && Array.from(target.options).some((option) => option.value === previous)) target.value = previous;
   });
 }
@@ -1370,7 +1403,7 @@ function renderTradingSummary() {
   if (marginCard) marginCard.style.display = "";
   if (fundingPoolCard) fundingPoolCard.style.display = borrowingEnabled ? "" : "none";
   const marginControlsDisabled = !borrowingEnabled;
-  ["trading-margin-market-select", "trading-margin-type", "trading-margin-quantity", "trading-margin-collateral", "trading-margin-open-btn"].forEach((id) => {
+  ["trading-margin-market-select", "trading-margin-type", "trading-margin-quantity", "trading-margin-collateral", "trading-margin-stop-loss-percent", "trading-margin-take-profit-percent", "trading-margin-open-btn"].forEach((id) => {
     const el = $(id);
     if (el) el.disabled = marginControlsDisabled;
   });
@@ -1424,7 +1457,11 @@ function renderTradingSummary() {
   if ($("trading-fee-rate-percent")) $("trading-fee-rate-percent").textContent = market ? formatTradingPercent(market.fee_rate_percent || 0) : "-";
   const position = market ? tradingState.positions.find((row) => row.market_symbol === market.symbol) : null;
   if ($("trading-position-quantity")) $("trading-position-quantity").textContent = position ? sanitize(position.quantity || "0") : "0";
-  if ($("trading-position-locked")) $("trading-position-locked").textContent = `鎖定 ${position ? sanitize(position.locked_quantity || "0") : "0"}`;
+  if ($("trading-position-locked")) {
+    const lockedText = `鎖定 ${position ? sanitize(position.locked_quantity || "0") : "0"}`;
+    const targetText = position ? tradingRiskTargetText(position.stop_loss_percent, position.take_profit_percent) : "未設定停損 / 停利";
+    $("trading-position-locked").textContent = `${lockedText} · ${targetText}`;
+  }
   const limit = $("trading-limit-price");
   if (limit && market && !$("trading-root-price")?.matches(":focus")) {
     limit.placeholder = `目前 ${formatTradingPointsValue(tradingMarketPricePoints(market, "reference"))}`;
@@ -2436,11 +2473,19 @@ let tradingWorkflowBenchmarkLoading = false;
 
 function renderTradingWorkflowTemplateBenchmark(templateId) {
   const data = tradingWorkflowBenchmarkCache;
-  if (!data || !Array.isArray(data.windows)) {
+  if (!data) {
     return `
       <div class="workflow-template-section">
         <strong>歷史回測表現（BTC/USDT 1h）</strong>
         <div class="muted">資料載入中...</div>
+      </div>
+    `;
+  }
+  if (!Array.isArray(data.windows) || !data.windows.length) {
+    return `
+      <div class="workflow-template-section">
+        <strong>歷史回測表現（BTC/USDT 1h）</strong>
+        <div class="muted">${sanitize(data.load_error || "目前沒有可用的 Workflow 歷史回測資料。")}</div>
       </div>
     `;
   }
@@ -2489,13 +2534,16 @@ async function loadTradingWorkflowBenchmarksAsync() {
   tradingWorkflowBenchmarkLoading = true;
   try {
     const res = await fetch("/data/workflow_template_benchmarks.json", { credentials: "same-origin" });
-    if (!res.ok) return;
+    if (!res.ok) {
+      tradingWorkflowBenchmarkCache = { windows: [], load_error: "尚未提供 Workflow 歷史回測報告。" };
+      return;
+    }
     tradingWorkflowBenchmarkCache = await res.json();
-    renderTradingWorkflowTemplateExplanation();
   } catch (_err) {
-    // benchmark JSON is optional; silent fallback to "no data"
+    tradingWorkflowBenchmarkCache = { windows: [], load_error: "Workflow 歷史回測報告讀取失敗。" };
   } finally {
     tradingWorkflowBenchmarkLoading = false;
+    renderTradingWorkflowTemplateExplanation();
   }
 }
 
@@ -2720,6 +2768,7 @@ function renderTradingBots(rows = [], runs = []) {
             <div class="drive-card-sub">
               狀態 ${row.enabled ? "啟用" : "停用"} · 已觸發 ${Number(row.run_count || 0)} / ${tradingBotMaxRunsLabel(row)} · 冷卻 ${Number(row.cooldown_seconds || 0)} 秒
             </div>
+            <div class="drive-card-sub">${sanitize(tradingRiskTargetText(row.stop_loss_percent, row.take_profit_percent))}</div>
             ${condHtml}
             ${tradeHistoryHtml}
             <div class="drive-card-sub" data-trading-bot-next-run="${sanitize(row.bot_uuid || "")}">${sanitize(tradingBotNextRunText(row))}</div>
@@ -2874,6 +2923,7 @@ function renderMyBotsList() {
           <span class="grid-status-badge ${bot.enabled ? "grid-status-running" : "grid-status-stopped"}">${bot.enabled ? "運行中" : "已暫停"}</span>
         </div>
         <div class="drive-card-sub">已觸發 ${Number(bot.run_count || 0)} / ${tradingBotMaxRunsLabel(bot)} · 冷卻 ${Number(bot.cooldown_seconds || 0)} 秒${bot.last_error ? ` · <span class="negative">上次錯誤：${sanitize(bot.last_error)}</span>` : ""}</div>
+        <div class="drive-card-sub">${sanitize(tradingRiskTargetText(bot.stop_loss_percent, bot.take_profit_percent))}</div>
         ${condHtml ? `<div class="drive-card-sub trading-bot-conditions">${condHtml}</div>` : ""}
         <details class="economy-collapse" style="margin-top:.35rem;">
           <summary>設定摘要</summary>
@@ -2908,6 +2958,7 @@ function renderMyBotsList() {
           <span class="grid-status-badge ${bot.enabled ? "grid-status-running" : "grid-status-stopped"}">${bot.enabled ? "運行中" : "已暫停"}</span>
         </div>
         <div class="drive-card-sub">已觸發 ${Number(bot.run_count || 0)} / ${tradingBotMaxRunsLabel(bot)} · ${sanitize(bot.side === "sell" ? "賣出" : "買入")} · ${sanitize(bot.order_type === "limit" ? `限價 ${bot.limit_price_points}` : "市價單")}${bot.last_error ? ` · <span class="negative">上次錯誤：${sanitize(bot.last_error)}</span>` : ""}</div>
+        <div class="drive-card-sub">${sanitize(tradingRiskTargetText(bot.stop_loss_percent, bot.take_profit_percent))}</div>
         ${condHtml ? `<div class="drive-card-sub trading-bot-conditions">${condHtml}</div>` : ""}
         <details class="economy-collapse" style="margin-top:.35rem;">
           <summary>設定摘要</summary>
@@ -3000,14 +3051,14 @@ function renderMyBotsList() {
       const enable = btn.dataset.gridEnabled === "1";
       btn.disabled = true;
       try {
-        const csrf = getCsrfToken() || await fetchCsrfToken({ force: true });
+        const csrf = await tradingFreshCsrfToken();
         const res = await apiFetch(`${API}/trading/grid-bots/${uuid}/toggle`, {
           method: "POST", credentials: "same-origin",
           headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
           body: JSON.stringify({ enabled: enable }),
         });
         const json = await res.json().catch(() => ({}));
-        if (!res.ok || !json.ok) { tradingSetMsg(json.msg || "狀態更新失敗", false); return; }
+        if (!res.ok || !json.ok) { tradingSetMsg(tradingFriendlyErrorText(json.msg || "狀態更新失敗"), false); return; }
         await loadGridBots();
         renderMyBotsList();
       } catch (e) { tradingSetMsg(e.message || "網格機器人狀態更新失敗", false); }
@@ -3246,7 +3297,7 @@ async function renderGridBotPreview({ quiet = true } = {}) {
   const requestSeq = ++tradingGridPreviewRequestSeq;
   let feePreview = null;
   try {
-    const csrf = getCsrfToken() || await fetchCsrfToken({ force: true });
+    const csrf = await tradingFreshCsrfToken();
     const res = await apiFetch(`${API}/trading/grid/preview`, {
       method: "POST",
       credentials: "same-origin",
@@ -3257,8 +3308,8 @@ async function renderGridBotPreview({ quiet = true } = {}) {
     if (requestSeq !== tradingGridPreviewRequestSeq) return tradingGridPreviewState;
     if (!res.ok || !json.ok) {
       tradingGridPreviewState = null;
-      preview.innerHTML = `<div class="negative">網格試算失敗：${sanitize(json.msg || "無法計算目前設定")}</div>`;
-      if (!quiet) tradingSetMsg(json.msg || "網格試算失敗", false);
+      preview.innerHTML = `<div class="negative">網格試算失敗：${sanitize(tradingFriendlyErrorText(json.msg || "無法計算目前設定"))}</div>`;
+      if (!quiet) tradingSetMsg(tradingFriendlyErrorText(json.msg || "網格試算失敗"), false);
       return null;
     }
     feePreview = json;
@@ -3480,14 +3531,14 @@ function renderGridBotList(bots, currentPriceMap) {
       const enable = btn.dataset.gridEnabled === "1";
       btn.disabled = true;
       try {
-        const csrf = getCsrfToken() || await fetchCsrfToken({ force: true });
+        const csrf = await tradingFreshCsrfToken();
         const res = await apiFetch(`${API}/trading/grid-bots/${uuid}/toggle`, {
           method: "POST", credentials: "same-origin",
           headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
           body: JSON.stringify({ enabled: enable }),
         });
         const json = await res.json().catch(() => ({}));
-        if (!res.ok || !json.ok) { tradingSetMsg(json.msg || "狀態更新失敗", false); return; }
+        if (!res.ok || !json.ok) { tradingSetMsg(tradingFriendlyErrorText(json.msg || "狀態更新失敗"), false); return; }
         await loadGridBots();
       } catch (e) { tradingSetMsg(e.message || "網格機器人狀態更新失敗", false); }
       finally { btn.disabled = false; }
@@ -3504,13 +3555,13 @@ function renderGridBotList(bots, currentPriceMap) {
 async function deleteGridBot(uuid) {
   if (!uuid) return;
   if (!confirm("確定刪除網格機器人？這會取消所有掛單並移除機器人。")) return;
-  const csrf = getCsrfToken() || await fetchCsrfToken({ force: true });
+  const csrf = await tradingFreshCsrfToken();
   const res = await apiFetch(`${API}/trading/grid-bots/${uuid}`, {
     method: "DELETE", credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" },
   });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok || !json.ok) throw new Error(json.msg || "刪除失敗");
+  if (!res.ok || !json.ok) throw new Error(tradingFriendlyErrorText(json.msg || "刪除失敗"));
   tradingSetMsg("網格機器人已刪除");
   tradingGridExpandedBots.delete(uuid);
   await loadGridBots();
@@ -3630,14 +3681,14 @@ async function gridSpotBuyAndCreate() {
   const btn = $("trading-grid-bot-create-btn");
   tradingSetMsg("正在買入底倉...");
   try {
-    const csrf = getCsrfToken() || await fetchCsrfToken({ force: true });
+    const csrf = await tradingFreshCsrfToken();
     const res = await apiFetch(`${API}/trading/orders`, {
       method: "POST", credentials: "same-origin",
       headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
       body: JSON.stringify({ market_symbol: formData.market_symbol, side: "buy", order_type: "market", quantity: situation.deficit.toFixed(8) }),
     });
     const json = await res.json().catch(() => ({}));
-    if (!res.ok || !json.ok) { tradingSetMsg(json.msg || "買入底倉失敗", false); if (btn) btn.disabled = false; return; }
+    if (!res.ok || !json.ok) { tradingSetMsg(tradingFriendlyErrorText(json.msg || "買入底倉失敗"), false); if (btn) btn.disabled = false; return; }
     tradingSetMsg("底倉買入成功，正在建立網格機器人...");
     await loadTradingDashboard();
   } catch (e) { tradingSetMsg(e.message || "買入底倉失敗", false); if (btn) btn.disabled = false; return; }
@@ -3648,14 +3699,14 @@ async function doCreateGridBot(formData) {
   const btn = $("trading-grid-bot-create-btn");
   tradingSetMsg("正在建立網格機器人並掛單...");
   try {
-    const csrf = getCsrfToken() || await fetchCsrfToken({ force: true });
+    const csrf = await tradingFreshCsrfToken();
     const res = await apiFetch(`${API}/trading/grid-bots`, {
       method: "POST", credentials: "same-origin",
       headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
       body: JSON.stringify(formData),
     });
     const json = await res.json().catch(() => ({}));
-    if (!res.ok || !json.ok) { tradingSetMsg(json.msg || "網格建立失敗", false); return; }
+    if (!res.ok || !json.ok) { tradingSetMsg(tradingFriendlyErrorText(json.msg || "網格建立失敗"), false); return; }
     const placed = (json.placed || []).length;
     const errors = json.errors || [];
     let msg = `網格機器人已建立，成功掛單 ${placed} 筆`;
@@ -3671,6 +3722,7 @@ async function doCreateGridBot(formData) {
 async function createGridBot() {
   const name = $("trading-grid-bot-name")?.value?.trim() || "";
   const marketSymbol = $("trading-grid-bot-market")?.value || "";
+  const market = (tradingState.markets || []).find((row) => row.symbol === marketSymbol);
   const upper = Number($("trading-grid-upper-price")?.value || 0);
   const lower = Number($("trading-grid-lower-price")?.value || 0);
   const count = Number($("trading-grid-count")?.value || 10);
@@ -3678,6 +3730,10 @@ async function createGridBot() {
   const spacingMode = $("trading-grid-spacing-mode")?.value || "arithmetic";
   if (!name) { tradingSetMsg("請填寫機器人名稱", false); return; }
   if (!marketSymbol) { tradingSetMsg("請選擇交易市場", false); return; }
+  if (market && market.allow_bots === false) {
+    tradingSetMsg("這個市場目前未開放網格機器人，請改選其他市場或請 root 開啟 allow_bots。", false);
+    return;
+  }
   if (!upper || !lower || upper <= lower) { tradingSetMsg("上限價格必須大於下限價格", false); return; }
   if (count < 2) { tradingSetMsg("網格數量至少為 2", false); return; }
   if (amount < 1) { tradingSetMsg("每格金額必須大於 0", false); return; }
@@ -3722,13 +3778,13 @@ async function scanGridBots() {
   const btn = $("trading-grid-scan-btn");
   if (btn) btn.disabled = true;
   try {
-    const csrf = getCsrfToken() || await fetchCsrfToken({ force: true });
+    const csrf = await tradingFreshCsrfToken();
     const res = await apiFetch(`${API}/trading/grid-bots/scan`, {
       method: "POST", credentials: "same-origin",
       headers: { "X-CSRF-Token": csrf || "" },
     });
     const json = await res.json().catch(() => ({}));
-    if (!res.ok || !json.ok) { tradingSetMsg(json.msg || "掃描失敗", false); return; }
+    if (!res.ok || !json.ok) { tradingSetMsg(tradingFriendlyErrorText(json.msg || "掃描失敗"), false); return; }
     const results = json.results || [];
     const fills = results.reduce((s, r) => s + (r.fills_processed || []).length, 0);
     const placed = results.reduce((s, r) => s + (r.counter_orders_placed || []).length, 0);
@@ -4017,7 +4073,7 @@ async function loadTradingRootReport() {
     tradingState.rootReport = json.report || {};
     renderTradingRootReport(tradingState.rootReport);
   } catch (err) {
-    tradingSetMsg(err.message || "交易報告讀取失敗", false);
+    tradingSetMsg(tradingFriendlyErrorText(err.message || "交易報告讀取失敗"), false);
   }
 }
 
@@ -4038,6 +4094,8 @@ async function submitTradingOrder() {
     side: $("trading-side")?.value || "buy",
     order_type: orderType,
     quantity: tradingQuantityForSubmit(estimate.quantity),
+    stop_loss_percent: tradingOptionalPercentValue("trading-stop-loss-percent"),
+    take_profit_percent: tradingOptionalPercentValue("trading-take-profit-percent"),
   };
   if (orderType === "limit") payload.limit_price_points = Number($("trading-limit-price")?.value || 0);
   try {
@@ -4048,7 +4106,7 @@ async function submitTradingOrder() {
     tradingSetMsg("訂單已送出");
     await loadEconomyDashboard();
   } catch (err) {
-    tradingSetMsg(err.message || "下單失敗", false);
+    tradingSetMsg(tradingFriendlyErrorText(err.message || "下單失敗"), false);
   }
 }
 
@@ -4056,6 +4114,11 @@ async function saveTradingBot() {
   const marketSymbol = $("trading-auto-bot-market")?.value || selectedTradingMarket()?.symbol || "";
   if (!marketSymbol) {
     tradingSetMsg("請先選擇自動化機器人市場", false);
+    return;
+  }
+  const market = (tradingState.markets || []).find((row) => row.symbol === marketSymbol);
+  if (market && market.allow_bots === false) {
+    tradingSetMsg("這個市場目前未開放 Workflow / 自動化機器人，請改選其他市場或請 root 開啟 allow_bots。", false);
     return;
   }
   let workflow;
@@ -4080,6 +4143,8 @@ async function saveTradingBot() {
     max_daily_runs: Number($("trading-auto-daily-runs")?.value || 5),
     max_runs: Number($("trading-auto-bot-max-runs")?.value || 1),
     cooldown_seconds: Number($("trading-auto-bot-cooldown")?.value || 300),
+    stop_loss_percent: tradingOptionalPercentValue("trading-auto-stop-loss-percent"),
+    take_profit_percent: tradingOptionalPercentValue("trading-auto-take-profit-percent"),
     enabled: !!$("trading-auto-bot-enabled")?.checked,
   };
   try {
@@ -4092,7 +4157,7 @@ async function saveTradingBot() {
     if ($("trading-auto-bot-name")) $("trading-auto-bot-name").value = "";
     await loadTradingDashboard();
   } catch (err) {
-    tradingSetMsg(`自動化機器人新增失敗：${err.message || "後端未提供錯誤原因"}`, false);
+    tradingSetMsg(`自動化機器人新增失敗：${tradingFriendlyErrorText(err.message || "後端未提供錯誤原因")}`, false);
   }
 }
 
@@ -4100,6 +4165,11 @@ async function saveTradingDcaBot() {
   const marketSymbol = $("trading-dca-bot-market")?.value || selectedTradingMarket()?.symbol || "";
   if (!marketSymbol) {
     tradingSetMsg("請先選擇定投市場", false);
+    return;
+  }
+  const market = (tradingState.markets || []).find((row) => row.symbol === marketSymbol);
+  if (market && market.allow_bots === false) {
+    tradingSetMsg("這個市場目前未開放定投 / 機器人，請改選其他市場或請 root 開啟 allow_bots。", false);
     return;
   }
   const preset = $("trading-dca-bot-interval-preset")?.value || "24";
@@ -4113,6 +4183,8 @@ async function saveTradingDcaBot() {
     price_upper_limit: Number($("trading-dca-price-upper")?.value || 0) || null,
     price_lower_limit: Number($("trading-dca-price-lower")?.value || 0) || null,
     max_runs: Number($("trading-dca-bot-max-runs")?.value || 1),
+    stop_loss_percent: tradingOptionalPercentValue("trading-dca-stop-loss-percent"),
+    take_profit_percent: tradingOptionalPercentValue("trading-dca-take-profit-percent"),
     enabled: !!$("trading-dca-bot-enabled")?.checked,
   };
   try {
@@ -4139,7 +4211,7 @@ async function saveTradingDcaBot() {
     if ($("trading-dca-bot-name")) $("trading-dca-bot-name").value = "";
     await loadTradingDashboard();
   } catch (err) {
-    tradingSetMsg(`定投機器人新增失敗：${err.message || "後端未提供錯誤原因"}`, false);
+    tradingSetMsg(`定投機器人新增失敗：${tradingFriendlyErrorText(err.message || "後端未提供錯誤原因")}`, false);
   }
 }
 
@@ -4163,6 +4235,33 @@ function downloadBacktestTrades(trades, marketSymbol) {
   document.body.appendChild(a);
   a.click();
   setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
+}
+
+function tradingCandlesCoverRange(candles, startTime = "", endTime = "") {
+  const rows = Array.isArray(candles) ? candles : [];
+  if (rows.length < 2) return false;
+  if (!startTime && !endTime) return true;
+  const first = String(rows[0]?.time_iso || rows[0]?.time || "");
+  const last = String(rows[rows.length - 1]?.time_iso || rows[rows.length - 1]?.time || "");
+  if (startTime && first && startTime < first) return false;
+  if (endTime && last && endTime > last) return false;
+  return true;
+}
+
+function tradingOptionalPercentValue(target) {
+  const el = typeof target === "string" ? $(target) : target;
+  if (!el) return null;
+  const raw = String(el.value || "").trim();
+  if (!raw) return null;
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function tradingRiskTargetText(stopLossPercent, takeProfitPercent) {
+  const parts = [];
+  if (Number(stopLossPercent || 0) > 0) parts.push(`停損 ${formatTradingPointsValue(stopLossPercent)}%`);
+  if (Number(takeProfitPercent || 0) > 0) parts.push(`停利 ${formatTradingPointsValue(takeProfitPercent)}%`);
+  return parts.length ? parts.join(" · ") : "未設定停損 / 停利";
 }
 
 async function backtestTradingBot(contextKey = "dca") {
@@ -4222,10 +4321,13 @@ async function backtestTradingBot(contextKey = "dca") {
     start_time: tradingBacktestEl(contextKey, "start")?.value || "",
     end_time: tradingBacktestEl(contextKey, "end")?.value || "",
     slippage_percent: Number(tradingBacktestEl(contextKey, "slippage-percent")?.value || 0),
+    stop_loss_percent: tradingOptionalPercentValue(tradingBacktestEl(contextKey, "stop-loss-percent")),
+    take_profit_percent: tradingOptionalPercentValue(tradingBacktestEl(contextKey, "take-profit-percent")),
     ...gridParams,
   };
   const hasCandleData = Array.isArray(allCandles) && allCandles.length >= 2;
-  if (!hasCandleData) {
+  const localRangeCovered = hasCandleData && tradingCandlesCoverRange(allCandles, basePayload.start_time, basePayload.end_time);
+  if (!hasCandleData || !localRangeCovered) {
     const estimatedCandles = estimateBacktestRequestedCandles(basePayload.start_time, basePayload.end_time, basePayload.timeframe);
     if (estimatedCandles > BACKTEST_TOTAL_CANDLE_LIMIT) {
       tradingSetMsg(`回測區間約需 ${estimatedCandles.toLocaleString()} 根 K 線，超過單次上限 ${BACKTEST_TOTAL_CANDLE_LIMIT.toLocaleString()} 根。請縮小區間或改大時間週期。`, false);
@@ -4235,8 +4337,8 @@ async function backtestTradingBot(contextKey = "dca") {
     basePayload.candle_limit = estimatedCandles || 500;
     tradingSetMsg(
       estimatedCandles
-        ? `未載入圖表，正在由後端分批下載約 ${estimatedCandles.toLocaleString()} 根歷史 K 線後回測...`
-        : "未載入圖表，正在由後端下載歷史 K 線後回測..."
+        ? `${hasCandleData ? "目前圖表不涵蓋你選的回測區間，" : "未載入圖表，"}正在由後端分批下載約 ${estimatedCandles.toLocaleString()} 根歷史 K 線後回測...`
+        : `${hasCandleData ? "目前圖表不涵蓋你選的回測區間，" : "未載入圖表，"}正在由後端下載歷史 K 線後回測...`
     );
   } else {
     if (allCandles.length > BACKTEST_TOTAL_CANDLE_LIMIT) {
@@ -4259,7 +4361,7 @@ async function backtestTradingBot(contextKey = "dca") {
     renderTradingBacktestResult(combinedJson, contextKey);
     tradingSetMsg(text, Number(combinedJson.pnl_points || 0) >= 0);
   } catch (err) {
-    const text = err.message || "回測失敗";
+    const text = tradingFriendlyErrorText(err.message || "回測失敗");
     if (result) result.textContent = text;
     tradingSetMsg(text, false);
   }
@@ -4356,6 +4458,8 @@ function prepareTradingBacktestFromBot(botUuid) {
   if (tradingBacktestEl(contextKey, "market")) tradingBacktestEl(contextKey, "market").value = bot.market_symbol || "";
   if (contextKey === "dca") {
     if (tradingBacktestEl("dca", "order-points")) tradingBacktestEl("dca", "order-points").value = bot.budget_points || 100;
+    if (tradingBacktestEl("dca", "stop-loss-percent")) tradingBacktestEl("dca", "stop-loss-percent").value = bot.stop_loss_percent || "";
+    if (tradingBacktestEl("dca", "take-profit-percent")) tradingBacktestEl("dca", "take-profit-percent").value = bot.take_profit_percent || "";
     const timeframe = tradingBacktestEl("dca", "timeframe")?.value || "15m";
     const hoursPerCandle = tradingTimeframeMinutes(timeframe) / 60;
     if (tradingBacktestEl("dca", "interval-candles")) {
@@ -4366,6 +4470,8 @@ function prepareTradingBacktestFromBot(botUuid) {
     if (Number(bot.budget_points || 0) > 0 && tradingBacktestEl("workflow", "order-points")) {
       tradingBacktestEl("workflow", "order-points").value = bot.budget_points || 100;
     }
+    if (tradingBacktestEl("workflow", "stop-loss-percent")) tradingBacktestEl("workflow", "stop-loss-percent").value = bot.stop_loss_percent || "";
+    if (tradingBacktestEl("workflow", "take-profit-percent")) tradingBacktestEl("workflow", "take-profit-percent").value = bot.take_profit_percent || "";
     updateBacktestDateRangeGuidance("workflow");
   }
   tradingSetMsg("已帶入機器人回測設定，請確認時間範圍後執行回測");
@@ -4606,6 +4712,8 @@ async function openTradingMarginPosition() {
         position_type: $("trading-margin-type")?.value || "margin_long",
         quantity: $("trading-margin-quantity")?.value || "",
         collateral_points: Number($("trading-margin-collateral")?.value || 0),
+        stop_loss_percent: tradingOptionalPercentValue("trading-margin-stop-loss-percent"),
+        take_profit_percent: tradingOptionalPercentValue("trading-margin-take-profit-percent"),
         idempotency_key: tradingRequestId("margin-open"),
       }),
     });
@@ -4613,7 +4721,7 @@ async function openTradingMarginPosition() {
     tradingSetMsg("進階交易倉位已建立");
     await loadTradingDashboard();
   } catch (err) {
-    const detail = err.message || "後端未提供錯誤原因";
+    const detail = tradingFriendlyErrorText(err.message || "後端未提供錯誤原因");
     tradingSetMsg(`進階交易開倉失敗：${detail}`, false);
   }
 }

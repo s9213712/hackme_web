@@ -117,6 +117,7 @@ from services.trading.margin import (
     margin_summary_payload_legacy,
     notify_margin_risk_alerts,
     open_margin_position as open_margin_position_helper,
+    scan_margin_risk_targets as scan_margin_risk_targets_helper,
     scan_margin_liquidations as scan_margin_liquidations_helper,
 )
 from services.trading.orders import (
@@ -124,6 +125,7 @@ from services.trading.orders import (
     execute_order as execute_order_helper,
     match_open_limit_orders as match_open_limit_orders_helper,
     place_order as place_order_helper,
+    scan_spot_risk_targets as scan_spot_risk_targets_helper,
 )
 from services.trading.price_fusion.context import (
     price_context_confidence,
@@ -982,6 +984,15 @@ def ensure_trading_schema(conn):
         conn.execute("ALTER TABLE trading_orders ADD COLUMN trial_frozen_points INTEGER NOT NULL DEFAULT 0")
     if "chain_frozen_points" not in order_cols:
         conn.execute("ALTER TABLE trading_orders ADD COLUMN chain_frozen_points INTEGER NOT NULL DEFAULT 0")
+    if "stop_loss_percent" not in order_cols:
+        conn.execute("ALTER TABLE trading_orders ADD COLUMN stop_loss_percent REAL")
+    if "take_profit_percent" not in order_cols:
+        conn.execute("ALTER TABLE trading_orders ADD COLUMN take_profit_percent REAL")
+    position_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_spot_positions)").fetchall()}
+    if "stop_loss_percent" not in position_cols:
+        conn.execute("ALTER TABLE trading_spot_positions ADD COLUMN stop_loss_percent REAL")
+    if "take_profit_percent" not in position_cols:
+        conn.execute("ALTER TABLE trading_spot_positions ADD COLUMN take_profit_percent REAL")
     fill_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_fills)").fetchall()}
     if "trial_repaid_points" not in fill_cols:
         conn.execute("ALTER TABLE trading_fills ADD COLUMN trial_repaid_points INTEGER NOT NULL DEFAULT 0")
@@ -1021,6 +1032,10 @@ def ensure_trading_schema(conn):
         conn.execute("ALTER TABLE trading_margin_positions ADD COLUMN exit_price_points INTEGER")
     if "realized_pnl_points" not in margin_cols:
         conn.execute("ALTER TABLE trading_margin_positions ADD COLUMN realized_pnl_points INTEGER NOT NULL DEFAULT 0")
+    if "stop_loss_percent" not in margin_cols:
+        conn.execute("ALTER TABLE trading_margin_positions ADD COLUMN stop_loss_percent REAL")
+    if "take_profit_percent" not in margin_cols:
+        conn.execute("ALTER TABLE trading_margin_positions ADD COLUMN take_profit_percent REAL")
     bot_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_bots)").fetchall()}
     if "bot_type" not in bot_cols:
         conn.execute("ALTER TABLE trading_bots ADD COLUMN bot_type TEXT NOT NULL DEFAULT 'conditional'")
@@ -1037,6 +1052,10 @@ def ensure_trading_schema(conn):
         conn.execute("UPDATE trading_bots SET enabled_at=COALESCE(created_at, updated_at) WHERE enabled=1 AND COALESCE(enabled_at, '')=''")
     if "last_scan_at" not in bot_cols:
         conn.execute("ALTER TABLE trading_bots ADD COLUMN last_scan_at TEXT")
+    if "stop_loss_percent" not in bot_cols:
+        conn.execute("ALTER TABLE trading_bots ADD COLUMN stop_loss_percent REAL")
+    if "take_profit_percent" not in bot_cols:
+        conn.execute("ALTER TABLE trading_bots ADD COLUMN take_profit_percent REAL")
     grid_bot_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_grid_bots)").fetchall()}
     if "enabled_at" not in grid_bot_cols:
         conn.execute("ALTER TABLE trading_grid_bots ADD COLUMN enabled_at TEXT")
@@ -3371,7 +3390,7 @@ class TradingEngineService:
             execution_state=execution_state,
         )
 
-    def place_order(self, *, actor, market_symbol, side, order_type, quantity, limit_price_points=None, emergency_close=False, is_grid_order=False, ctx=None):
+    def place_order(self, *, actor, market_symbol, side, order_type, quantity, limit_price_points=None, stop_loss_percent=None, take_profit_percent=None, emergency_close=False, is_grid_order=False, ctx=None):
         return place_order_helper(
             self,
             actor=actor,
@@ -3380,6 +3399,8 @@ class TradingEngineService:
             order_type=order_type,
             quantity=quantity,
             limit_price_points=limit_price_points,
+            stop_loss_percent=stop_loss_percent,
+            take_profit_percent=take_profit_percent,
             emergency_close=emergency_close,
             is_grid_order=is_grid_order,
             ctx=ctx,
@@ -3400,7 +3421,7 @@ class TradingEngineService:
     def cancel_order(self, *, actor, order_uuid, ctx=None):
         return cancel_order_helper(self, actor=actor, order_uuid=order_uuid, ctx=ctx)
 
-    def open_margin_position(self, *, actor, market_symbol, position_type, quantity, collateral_points, idempotency_key=None, ctx=None):
+    def open_margin_position(self, *, actor, market_symbol, position_type, quantity, collateral_points, stop_loss_percent=None, take_profit_percent=None, idempotency_key=None, ctx=None):
         return open_margin_position_helper(
             self,
             actor=actor,
@@ -3408,6 +3429,8 @@ class TradingEngineService:
             position_type=position_type,
             quantity=quantity,
             collateral_points=collateral_points,
+            stop_loss_percent=stop_loss_percent,
+            take_profit_percent=take_profit_percent,
             idempotency_key=idempotency_key,
             ctx=ctx,
         )
@@ -3440,6 +3463,12 @@ class TradingEngineService:
             limit=limit,
             ctx=ctx,
         )
+
+    def scan_spot_risk_targets(self, *, actor=None, limit=200, ctx=None):
+        return scan_spot_risk_targets_helper(self, actor=actor, limit=limit, ctx=ctx)
+
+    def scan_margin_risk_targets(self, *, actor=None, limit=100, ctx=None):
+        return scan_margin_risk_targets_helper(self, actor=actor, limit=limit, ctx=ctx)
 
     def update_market(self, *, actor, symbol, manual_price_points=None, max_price_jump_percent=None, fee_rate_percent=None, min_order_points=None, max_order_points=None, enabled=None, confirm_jump=False):
         # source-contract breadcrumb: TRADING_MARKET_UPDATED

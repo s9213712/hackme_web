@@ -1930,10 +1930,12 @@
             <div class="drive-card-sub" id="trading-input-mode-note" style="margin-top:.25rem;">直接輸入資產枚數。</div>
           </div>
           <div class="field"><label>限價（USDT 等值 / 1 單位）</label><input type="number" id="trading-limit-price" min="1" step="1" placeholder="限價單才需要" /></div>
+          <div class="field"><label>停損 %（可選）</label><input type="number" id="trading-stop-loss-percent" min="0" max="1000" step="0.01" placeholder="例如 5" /></div>
+          <div class="field"><label>停利 %（可選）</label><input type="number" id="trading-take-profit-percent" min="0" max="1000" step="0.01" placeholder="例如 12" /></div>
           <div class="field">
             <label>下單</label>
             <button class="btn btn-primary" id="trading-submit-order-btn" type="button">送出訂單</button>
-            <div class="drive-card-sub" id="trading-order-estimate" style="margin-top:.35rem;">輸入數量後顯示預估金額</div>
+            <div class="drive-card-sub" id="trading-order-estimate" style="margin-top:.35rem;">輸入數量後顯示預估金額；停損 / 停利只會套用到買入後留下的現貨部位。</div>
           </div>
         </div>
         <div class="settings-option-grid economy-wallet-grid" style="margin-top:.75rem;">
@@ -1994,6 +1996,8 @@
                   <div class="field"><label>自訂間隔小時</label><input type="number" id="trading-dca-bot-interval-hours" min="1" max="8760" step="1" value="24" /></div>
                   <div class="field"><label>價格上限（可選）</label><input type="number" id="trading-dca-price-upper" min="1" step="1" placeholder="高於此價暫停" /></div>
                   <div class="field"><label>價格下限（可選）</label><input type="number" id="trading-dca-price-lower" min="1" step="1" placeholder="低於此價暫停" /></div>
+                  <div class="field"><label>停損 %（可選）</label><input type="number" id="trading-dca-stop-loss-percent" min="0" max="1000" step="0.01" placeholder="持倉跌幅達此值時賣出" /></div>
+                  <div class="field"><label>停利 %（可選）</label><input type="number" id="trading-dca-take-profit-percent" min="0" max="1000" step="0.01" placeholder="持倉漲幅達此值時賣出" /></div>
                   <div class="field">
                     <label>最多執行次數</label>
                     <input type="number" id="trading-dca-bot-max-runs" min="-1" max="1000" step="1" value="7" />
@@ -2019,6 +2023,8 @@
                     <div class="field"><label>滑價百分比</label><input type="number" id="trading-dca-backtest-slippage-percent" min="0" max="20" step="0.01" value="0" /></div>
                     <div class="field"><label>每次定投金額（點）</label><input type="number" id="trading-dca-backtest-order-points" min="1" step="1" value="100" /></div>
                     <div class="field"><label>定投間隔（K 線根數）</label><input type="number" id="trading-dca-backtest-interval-candles" min="1" step="1" value="1" /></div>
+                    <div class="field"><label>停損 %（可選）</label><input type="number" id="trading-dca-backtest-stop-loss-percent" min="0" max="1000" step="0.01" placeholder="例如 5" /></div>
+                    <div class="field"><label>停利 %（可選）</label><input type="number" id="trading-dca-backtest-take-profit-percent" min="0" max="1000" step="0.01" placeholder="例如 12" /></div>
                     <div class="field"><label>操作</label><button class="btn btn-primary" id="trading-dca-backtest-run-btn" type="button">執行定投回測</button></div>
                   </div>
                   <div class="drive-card-sub" id="trading-dca-backtest-date-hint" style="margin-top:.35rem;line-height:1.6;">
@@ -2050,7 +2056,7 @@
                     <option value="skyfloor_wide">天地網格-寬：0.1×–3× × 100 格 × 1K</option>
                     <option value="skyfloor_5x">天地網格-極寬：0.05×–5× × 100 格 × 1K ★5y 回測平均 +111%</option>
                   </select>
-                  <div class="field-hint">回測 5 個資產 5 年 1h 資料的對照見 <code>docs/COMPETITION/GRID_SKYFLOOR_COMPARISON.md</code>。預設僅供參考，不保證未來表現。</div>
+                  <div class="field-hint">5 個資產 5 年 1h 回測平均報酬：保守 +37.39%、窄天地 +73.59%、中天地 +70.81%、寬天地 +77.01%、極寬天地 +111.47%。僅供參考，不保證未來表現。</div>
                 </div>
                 <div class="field"><label>上限價格（點）</label><input type="number" id="trading-grid-upper-price" min="1" step="1" placeholder="例如 55000" /></div>
                 <div class="field"><label>下限價格（點）</label><input type="number" id="trading-grid-lower-price" min="1" step="1" placeholder="例如 45000" /></div>
@@ -2124,6 +2130,8 @@
                   <div class="field"><label>每日最大觸發</label><input type="number" id="trading-auto-daily-runs" min="1" max="100" step="1" value="5" /></div>
                   <div class="field"><label>最多總觸發</label><input type="number" id="trading-auto-bot-max-runs" min="1" max="1000" step="1" value="5" /></div>
                   <div class="field"><label>預設冷卻秒數</label><input type="number" id="trading-auto-bot-cooldown" min="0" max="86400" step="1" value="300" /></div>
+                  <div class="field"><label>停損 %（可選）</label><input type="number" id="trading-auto-stop-loss-percent" min="0" max="1000" step="0.01" placeholder="持倉跌幅達此值時賣出" /></div>
+                  <div class="field"><label>停利 %（可選）</label><input type="number" id="trading-auto-take-profit-percent" min="0" max="1000" step="0.01" placeholder="持倉漲幅達此值時賣出" /></div>
                   <div class="field"><label><input type="checkbox" id="trading-auto-bot-enabled" checked /> 啟用</label></div>
                 </div>
                 <div class="trading-workflow-json-panel" style="margin-top:.75rem;">
@@ -2182,6 +2190,8 @@
                     <div class="field"><label>初始資金</label><input type="number" id="trading-workflow-backtest-initial-cash" min="1" step="1" value="10000" /></div>
                     <div class="field"><label>滑價百分比</label><input type="number" id="trading-workflow-backtest-slippage-percent" min="0" max="20" step="0.01" value="0" /></div>
                     <div class="field"><label>每次投入金額（點）</label><input type="number" id="trading-workflow-backtest-order-points" min="1" step="1" value="100" /></div>
+                    <div class="field"><label>停損 %（可選）</label><input type="number" id="trading-workflow-backtest-stop-loss-percent" min="0" max="1000" step="0.01" placeholder="例如 5" /></div>
+                    <div class="field"><label>停利 %（可選）</label><input type="number" id="trading-workflow-backtest-take-profit-percent" min="0" max="1000" step="0.01" placeholder="例如 12" /></div>
                     <div class="field"><label>操作</label><button class="btn btn-primary" id="trading-workflow-backtest-run-btn" type="button">執行 Workflow 回測</button></div>
                   </div>
                   <div class="drive-card-sub" id="trading-workflow-backtest-date-hint" style="margin-top:.35rem;line-height:1.6;">
@@ -2235,9 +2245,11 @@
               </div>
               <div class="field"><label>數量</label><input type="number" id="trading-margin-quantity" min="0.00000001" step="0.00000001" value="0.01" /></div>
               <div class="field"><label>原始保證金點數</label><input type="number" id="trading-margin-collateral" min="1" step="1" value="100" /></div>
+              <div class="field"><label>停損 %（可選）</label><input type="number" id="trading-margin-stop-loss-percent" min="0" max="1000" step="0.01" placeholder="以入場價漲跌幅計算" /></div>
+              <div class="field"><label>停利 %（可選）</label><input type="number" id="trading-margin-take-profit-percent" min="0" max="1000" step="0.01" placeholder="以入場價漲跌幅計算" /></div>
               <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="trading-margin-open-btn" type="button">建立進階倉位</button></div>
             </div>
-            <div class="drive-card-sub" id="trading-margin-estimate" style="margin-top:.45rem;">輸入數量與保證金後顯示預估風險。</div>
+            <div class="drive-card-sub" id="trading-margin-estimate" style="margin-top:.45rem;">輸入數量與保證金後顯示預估風險；停損 / 停利會由後端自動掃描後平倉。</div>
             <div class="drive-file-list" id="trading-margin-position-list" style="margin-top:.75rem;"></div>
           </div>
         </details>

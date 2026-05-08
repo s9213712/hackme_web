@@ -269,6 +269,8 @@ def backtest_trading_bot(service, *, actor, payload):
     trigger_type = str(payload.get("trigger_type") or "price_below").strip().lower()
     trigger_price = float(_to_decimal(payload.get("trigger_price_points") or 0, name="trigger_price_points", minimum=0))
     interval_candles = _to_int(payload.get("interval_candles", 1), name="interval_candles", minimum=1, maximum=10_000)
+    stop_loss_percent = float(_to_decimal(payload.get("stop_loss_percent") or 0, name="stop_loss_percent", minimum=0))
+    take_profit_percent = float(_to_decimal(payload.get("take_profit_percent") or 0, name="take_profit_percent", minimum=0))
     initial_cash = cash
     initial_workflow_state = payload.get("initial_workflow_state") if isinstance(payload.get("initial_workflow_state"), dict) else {}
     range_warnings = []
@@ -488,37 +490,47 @@ def backtest_trading_bot(service, *, actor, payload):
             workflow_spend = order_points
             workflow_sell_percent = 0.0
             decision = None
+            if state["units"] > 0 and state["avg_cost_bt"] > 0:
+                pnl_low_percent = round(((float(candle.get("low_points") or candle.get("low_usdt") or price) - state["avg_cost_bt"]) * 100.0) / state["avg_cost_bt"], 4)
+                pnl_high_percent = round(((float(candle.get("high_points") or candle.get("high_usdt") or price) - state["avg_cost_bt"]) * 100.0) / state["avg_cost_bt"], 4)
+                if stop_loss_percent > 0 and pnl_low_percent <= -abs(stop_loss_percent):
+                    should_sell = True
+                    workflow_sell_percent = 100.0
+                elif take_profit_percent > 0 and pnl_high_percent >= abs(take_profit_percent):
+                    should_sell = True
+                    workflow_sell_percent = 100.0
             if strategy == "dca":
-                should_buy = global_index % interval_candles == 0
+                should_buy = not should_sell and global_index % interval_candles == 0
             elif strategy == "workflow":
                 context = dict(workflow_indicator_series[global_index] or {})
                 context["price"] = price
                 context["has_position"] = state["units"] > 0
                 context["avg_cost"] = state["avg_cost_bt"]
                 context["pnl_percent"] = round((price - state["avg_cost_bt"]) * 100.0 / state["avg_cost_bt"], 4) if state["units"] > 0 and state["avg_cost_bt"] > 0 else None
-                decision = service._workflow_decision(
-                    workflow,
-                    context=context,
-                    run_count=state["trade_count"],
-                    last_run_at=None,
-                    execution_state=state["workflow_state"],
-                )
-                action = (decision or {}).get("action") or {}
-                action_type = str(action.get("type") or "hold")
-                if action_type in {"buy_percent", "buy_amount"}:
-                    should_buy = True
-                    workflow_spend = int(float(action.get("amount_points") or 0))
-                    if action_type == "buy_percent":
-                        workflow_spend = int(state["cash"] * max(0.0, min(float(action.get("percent") or 0), 100.0)) / 100)
-                elif action_type in {"sell_percent", "close_all"}:
-                    should_sell = True
-                    workflow_sell_percent = 100.0 if action_type == "close_all" else max(0.0, min(float(action.get("percent") or 0), 100.0))
+                if not should_sell:
+                    decision = service._workflow_decision(
+                        workflow,
+                        context=context,
+                        run_count=state["trade_count"],
+                        last_run_at=None,
+                        execution_state=state["workflow_state"],
+                    )
+                    action = (decision or {}).get("action") or {}
+                    action_type = str(action.get("type") or "hold")
+                    if action_type in {"buy_percent", "buy_amount"}:
+                        should_buy = True
+                        workflow_spend = int(float(action.get("amount_points") or 0))
+                        if action_type == "buy_percent":
+                            workflow_spend = int(state["cash"] * max(0.0, min(float(action.get("percent") or 0), 100.0)) / 100)
+                    elif action_type in {"sell_percent", "close_all"}:
+                        should_sell = True
+                        workflow_sell_percent = 100.0 if action_type == "close_all" else max(0.0, min(float(action.get("percent") or 0), 100.0))
             elif trigger_type == "price_below":
-                should_buy = trigger_price > 0 and price <= trigger_price
+                should_buy = not should_sell and trigger_price > 0 and price <= trigger_price
             elif trigger_type == "price_above":
-                should_buy = trigger_price > 0 and price >= trigger_price
+                should_buy = not should_sell and trigger_price > 0 and price >= trigger_price
             elif trigger_type == "always":
-                should_buy = True
+                should_buy = not should_sell
             if should_sell and state["units"] > 0:
                 sell_units = int(state["units"] * workflow_sell_percent / 100)
                 if sell_units > 0:

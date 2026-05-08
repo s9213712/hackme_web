@@ -55,6 +55,13 @@ def _json_loads(value, default=None):
         return default if default is not None else {}
 
 
+def _normalize_optional_risk_percent(value, *, name):
+    if value in (None, ""):
+        return None
+    number = float(_to_decimal(value, name=name, minimum=0.00000001, maximum=1000))
+    return number if number > 0 else None
+
+
 def bot_max_runs_from_storage(value):
     number = int(value or 0)
     return -1 if number >= UNLIMITED_BOT_MAX_RUNS else number
@@ -207,6 +214,8 @@ def validate_bot_payload(service, conn, payload):
                 max_runs=max_runs,
                 cooldown_seconds=cooldown_seconds,
             )
+    stop_loss_percent = _normalize_optional_risk_percent(payload.get("stop_loss_percent"), name="stop_loss_percent")
+    take_profit_percent = _normalize_optional_risk_percent(payload.get("take_profit_percent"), name="take_profit_percent")
     name = str(payload.get("name") or "").strip()[:80] or f"{market['symbol']} {bot_type}"
     return {
         "bot_type": bot_type,
@@ -223,6 +232,8 @@ def validate_bot_payload(service, conn, payload):
         "cooldown_seconds": cooldown_seconds,
         "interval_hours": interval_hours,
         "budget_points": budget_points,
+        "stop_loss_percent": stop_loss_percent,
+        "take_profit_percent": take_profit_percent,
         "workflow": workflow,
     }
 
@@ -322,6 +333,12 @@ def bot_condition_checks(service, bot, current_price):
             checks.append({"label": f"冷卻 {cooldown}s（{'已解除' if met else '冷卻中'}）", "met": met})
         except Exception:
             pass
+    stop_loss_percent = _normalize_optional_risk_percent(bot.get("stop_loss_percent"), name="stop_loss_percent")
+    take_profit_percent = _normalize_optional_risk_percent(bot.get("take_profit_percent"), name="take_profit_percent")
+    if stop_loss_percent:
+        checks.append({"label": f"持倉跌幅達 {stop_loss_percent:g}% 時自動停損", "met": False})
+    if take_profit_percent:
+        checks.append({"label": f"持倉漲幅達 {take_profit_percent:g}% 時自動停利", "met": False})
     return checks
 
 
@@ -329,8 +346,9 @@ def workflow_live_context(service, conn, *, market, user_id, observed_price, obs
     position = service._position(conn, int(user_id), market["symbol"])
     qty = int(position["quantity_units"] or 0)
     locked = int(position["locked_quantity_units"] or 0)
+    sellable_units = max(0, qty - locked)
     avg_cost = float(_to_decimal(position["avg_cost_points"] or 0, name="avg_cost_points", minimum=0))
-    has_pos = qty > locked
+    has_pos = sellable_units > 0
     low_price = float(observed_low or observed_price or 0)
     high_price = float(observed_high or observed_price or 0)
     pnl_percent = None
@@ -347,6 +365,7 @@ def workflow_live_context(service, conn, *, market, user_id, observed_price, obs
         "window_low_price": low_price or observed_price,
         "window_high_price": high_price or observed_price,
         "has_position": has_pos,
+        "sellable_units": sellable_units,
         "avg_cost": avg_cost,
         "pnl_percent": pnl_percent,
         "pnl_low_percent": pnl_low_percent,
@@ -413,6 +432,39 @@ def workflow_order_from_decision(service, conn, *, user_id, actor, market, decis
     return None
 
 
+def bot_risk_target_order(bot, *, context):
+    if not bool(context.get("has_position")):
+        return None
+    sellable_units = int(context.get("sellable_units") or 0)
+    if sellable_units <= 0:
+        return None
+    stop_loss_raw = bot["stop_loss_percent"] if "stop_loss_percent" in bot.keys() else None
+    take_profit_raw = bot["take_profit_percent"] if "take_profit_percent" in bot.keys() else None
+    stop_loss_percent = _normalize_optional_risk_percent(stop_loss_raw, name="stop_loss_percent")
+    take_profit_percent = _normalize_optional_risk_percent(take_profit_raw, name="take_profit_percent")
+    pnl_low_percent = context.get("pnl_low_percent")
+    pnl_high_percent = context.get("pnl_high_percent")
+    if stop_loss_percent and pnl_low_percent is not None and pnl_low_percent <= -abs(stop_loss_percent):
+        return {
+            "side": "sell",
+            "order_type": "market",
+            "quantity": units_to_quantity(sellable_units),
+            "limit_price_points": None,
+            "reason": "stop_loss",
+            "target_percent": stop_loss_percent,
+        }
+    if take_profit_percent and pnl_high_percent is not None and pnl_high_percent >= abs(take_profit_percent):
+        return {
+            "side": "sell",
+            "order_type": "market",
+            "quantity": units_to_quantity(sellable_units),
+            "limit_price_points": None,
+            "reason": "take_profit",
+            "target_percent": take_profit_percent,
+        }
+    return None
+
+
 def list_trading_bots(service, *, actor):
     user_id = service._actor_id(actor)
     if not user_id:
@@ -466,7 +518,7 @@ def save_trading_bot(service, *, actor, payload, bot_uuid=None):
                 SET bot_type=?, name=?, market_symbol=?, side=?, order_type=?, quantity_text=?,
                     limit_price_points=?, trigger_type=?, trigger_price_points=?,
                     enabled=?, max_runs=?, cooldown_seconds=?, interval_hours=?, budget_points=?,
-                    workflow_json=?, execution_state_json='{}', last_error='',
+                    stop_loss_percent=?, take_profit_percent=?, workflow_json=?, execution_state_json='{}', last_error='',
                     enabled_at=?, updated_at=?
                 WHERE id=?
                 """,
@@ -474,7 +526,7 @@ def save_trading_bot(service, *, actor, payload, bot_uuid=None):
                     data["bot_type"], data["name"], data["market_symbol"], data["side"], data["order_type"], data["quantity_text"],
                     data["limit_price_points"], data["trigger_type"], data["trigger_price_points"],
                     1 if data["enabled"] else 0, data["max_runs"], data["cooldown_seconds"],
-                    data["interval_hours"], data["budget_points"], _json_dumps(data["workflow"]) if data["workflow"] else None,
+                    data["interval_hours"], data["budget_points"], data["stop_loss_percent"], data["take_profit_percent"], _json_dumps(data["workflow"]) if data["workflow"] else None,
                     now if data["enabled"] and not bool(existing["enabled"]) else (existing["enabled_at"] if data["enabled"] else None),
                     now,
                     existing["id"],
@@ -488,14 +540,14 @@ def save_trading_bot(service, *, actor, payload, bot_uuid=None):
                 INSERT INTO trading_bots (
                     bot_uuid, user_id, bot_type, name, market_symbol, side, order_type, quantity_text,
                     limit_price_points, trigger_type, trigger_price_points, enabled,
-                    max_runs, run_count, cooldown_seconds, interval_hours, budget_points, workflow_json, execution_state_json, enabled_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, '{}', ?, ?, ?)
+                    max_runs, run_count, cooldown_seconds, interval_hours, budget_points, stop_loss_percent, take_profit_percent, workflow_json, execution_state_json, enabled_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(uuid.uuid4()), user_id, data["bot_type"], data["name"], data["market_symbol"], data["side"], data["order_type"],
                     data["quantity_text"], data["limit_price_points"], data["trigger_type"], data["trigger_price_points"],
                     1 if data["enabled"] else 0, data["max_runs"], data["cooldown_seconds"],
-                    data["interval_hours"], data["budget_points"], _json_dumps(data["workflow"]) if data["workflow"] else None,
+                    data["interval_hours"], data["budget_points"], data["stop_loss_percent"], data["take_profit_percent"], _json_dumps(data["workflow"]) if data["workflow"] else None, "{}",
                     now if data["enabled"] else None,
                     now,
                     now,
@@ -719,48 +771,52 @@ def run_trading_bot_rows(service, rows):
             observed_high = float((price_window or {}).get("high_points") or observed_price)
             workflow = _json_loads(row["workflow_json"], None) if "workflow_json" in row.keys() else None
             order_payload = None
+            context = workflow_live_context(
+                service,
+                price_conn,
+                market=market,
+                user_id=int(row["user_id"]),
+                observed_price=observed_price,
+                observed_low=observed_low,
+                observed_high=observed_high,
+            )
             if workflow and str(row["bot_type"] or "conditional") == "conditional":
-                context = workflow_live_context(
-                    service,
-                    price_conn,
-                    market=market,
-                    user_id=int(row["user_id"]),
-                    observed_price=observed_price,
-                    observed_low=observed_low,
-                    observed_high=observed_high,
-                )
-                decision = service._workflow_decision(
-                    workflow,
-                    context=context,
-                    run_count=int(row["run_count"] or 0),
-                    last_run_at=row["last_run_at"],
-                    execution_state=workflow_state,
-                )
-                if not decision:
-                    skipped_reason = "condition_not_met" if workflow.get("source") == "legacy_condition" else "workflow_not_matched"
-                    price_conn.close()
-                    price_conn = None
-                    record_bot_run(service, row, status="skipped", observed_price=observed_price, error=skipped_reason)
-                    skipped.append({"bot_uuid": row["bot_uuid"], "reason": skipped_reason, "observed_price_points": observed_price})
-                    continue
-                order_payload = workflow_order_from_decision(
-                    service,
-                    price_conn,
-                    user_id=int(row["user_id"]),
-                    actor=_bot_actor(row),
-                    market=market,
-                    decision=decision,
-                    price_points=observed_price,
-                )
-                if not order_payload:
-                    price_conn.close()
-                    price_conn = None
-                    record_bot_run(service, row, status="skipped", observed_price=observed_price, error="workflow_hold")
-                    skipped.append({"bot_uuid": row["bot_uuid"], "reason": "workflow_hold", "observed_price_points": observed_price})
-                    continue
+                order_payload = bot_risk_target_order(row, context=context)
+                if order_payload is None:
+                    decision = service._workflow_decision(
+                        workflow,
+                        context=context,
+                        run_count=int(row["run_count"] or 0),
+                        last_run_at=row["last_run_at"],
+                        execution_state=workflow_state,
+                    )
+                    if not decision:
+                        skipped_reason = "condition_not_met" if workflow.get("source") == "legacy_condition" else "workflow_not_matched"
+                        price_conn.close()
+                        price_conn = None
+                        record_bot_run(service, row, status="skipped", observed_price=observed_price, error=skipped_reason)
+                        skipped.append({"bot_uuid": row["bot_uuid"], "reason": skipped_reason, "observed_price_points": observed_price})
+                        continue
+                    order_payload = workflow_order_from_decision(
+                        service,
+                        price_conn,
+                        user_id=int(row["user_id"]),
+                        actor=_bot_actor(row),
+                        market=market,
+                        decision=decision,
+                        price_points=observed_price,
+                    )
+                    if not order_payload:
+                        price_conn.close()
+                        price_conn = None
+                        record_bot_run(service, row, status="skipped", observed_price=observed_price, error="workflow_hold")
+                        skipped.append({"bot_uuid": row["bot_uuid"], "reason": "workflow_hold", "observed_price_points": observed_price})
+                        continue
+            elif not workflow:
+                order_payload = bot_risk_target_order(row, context=context)
             price_conn.close()
             price_conn = None
-            if not workflow and not bot_trigger_hit(row, observed_price, observed_low=observed_low, observed_high=observed_high):
+            if not workflow and order_payload is None and not bot_trigger_hit(row, observed_price, observed_low=observed_low, observed_high=observed_high):
                 record_bot_run(service, row, status="skipped", observed_price=observed_price, error="condition_not_met")
                 skipped.append({"bot_uuid": row["bot_uuid"], "reason": "condition_not_met", "observed_price_points": observed_price})
                 continue
