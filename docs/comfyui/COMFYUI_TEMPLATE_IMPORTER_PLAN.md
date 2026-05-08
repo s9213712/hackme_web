@@ -675,6 +675,48 @@ def comfyui_workflow_run(preset_id):
 | `COMFYUI_TEMPLATE_RUN_GATE_FAIL` | false | `gate=<n>, reason=<msg>` |
 | `COMFYUI_TEMPLATE_RUN_GATE_PASS` | true | `preset_id=, run_id=, mode=` |
 | `COMFYUI_TEMPLATE_SAFETY_REWRITE` | true | `node_count=, save_prefix_rewritten=, image_remapped=<n>` |
+| `COMFYUI_TEMPLATE_RUN_INPUT_CLEANUP` | true | `run_id=, files_removed=<n>, reason=<gate5_failure|queue_failure>` |
+
+### 10.3 Implementation Notes（必讀，不是建議）
+
+實作 §10.1 5-gate 流程時，這三點必須跟 happy path 一起寫；漏掉任一條都算 spec 不完整：
+
+1. **Gate fail 必先 audit 再 return**
+   每個 `return _err(...)` **前**都要先寫一筆 `COMFYUI_TEMPLATE_RUN_GATE_FAIL`（含 `gate=<n>` 與失敗 stage / reason）。**不可**只在 happy path 結束時記 `..._GATE_PASS`，否則攻擊者多次失敗嘗試在 audit chain 上完全沒留痕。建議用 helper：
+   ```python
+   def _gate_fail(gate, stage, msg, *, actor, preset_id, run_id, **extra):
+       audit("COMFYUI_TEMPLATE_RUN_GATE_FAIL", get_client_ip(),
+             user=actor["username"], success=False,
+             detail=f"gate={gate} stage={stage} preset_id={preset_id} run_id={run_id} reason={msg} " + _kv(extra))
+       return _err(msg, 400, stage=stage)
+   ```
+   每個 `return _err(...)` 都改走這個 helper，杜絕忘記寫 audit 的可能性。
+
+2. **Gate 5 開始就要可清理：每個 run_id 一個臨時資料夾 + 失敗自動清**
+   Gate 5 一旦呼叫 `remap_load_image_to_cloud_file`，就會把 cloud drive 的圖複製到 `ComfyUI input/<run_id>/<node_id>.png`（請務必把 `<run_id>` 當成子目錄，不要平鋪），這意味著從這刻起任何例外都會留下暫存檔。要求：
+   - 用 try/except 包整個 Gate 5 + queue。失敗時 `cleanup_run_temp_files(run_id)` 立即刪除 `ComfyUI input/<run_id>/`，並寫 `COMFYUI_TEMPLATE_RUN_INPUT_CLEANUP` 一筆 audit。
+   - queue_prompt 成功後，當下不刪（ComfyUI 還在跑）；改成由 `services/comfyui/files.py` 的 sweeper（既有的 background cleanup）負責「`run_id` 完成或超時 → 刪暫存」。
+   - **任何時候**對 `ComfyUI input/` 的清理都必須只動本次 `<run_id>` 子樹，禁止 `rmtree(ComfyUI input/)` 或用 glob 跨 run。
+   - 若部署環境無 sweeper，spec 要求 ship 一個 `runtime/comfyui_input_cleanup.cron` 或 systemd-timer，每小時 reap > 24h 未完成的 `<run_id>/` 目錄；不能允許「沒清就 ship」。
+
+3. **`apply_user_inputs` 不得覆蓋 image 欄位**
+   `remap_load_image_to_cloud_file` 已經把 `LoadImage.image` / `LoadImageMask.image` 改寫成 ComfyUI input 內的安全檔名（`<actor_id>_<run_id>_<node_id>.png`）。`apply_user_inputs` 接著套使用者輸入時：
+   - 對 `LoadImage` / `LoadImageMask` 的 `image` 欄位**永不覆蓋**；patch 邏輯要 explicit skip 這幾個 (class_type, input) 組合。
+   - 不得把 user 原始上傳字串、`cloud_file_id`、URL 寫回 workflow（避免攻擊者透過 manifest binding 或欄位 fuzzing 把 image 重新指向 cloud drive 路徑或外部來源）。
+   - 同樣的禁覆蓋規則套用在 §18.4 之後加進來的任何「自動 image input」panel type — 一律以 remap 結果為最終 ground truth。
+   - 建議在 `apply_user_inputs` 開頭明確擋：
+     ```python
+     PROTECTED_INPUTS = {("LoadImage", "image"), ("LoadImageMask", "image"), ("LoadImageMask", "mask")}
+     for node_id, patch in user_input_patches.items():
+         class_type = workflow[node_id].get("class_type")
+         for input_name in list(patch.keys()):
+             if (class_type, input_name) in PROTECTED_INPUTS:
+                 raise SafetyError(
+                     f"node {node_id}.{input_name} 是受保護欄位（已由安全改寫處理），"
+                     f"不允許再透過 user_inputs 覆蓋"
+                 )
+     ```
+   違反這條會直接吃掉 §7.3 的全部安全工作，等於繞過 mime / size / scan / decode 五道驗證，必須 hard fail，不允許 silent skip。
 
 ---
 
@@ -1305,3 +1347,6 @@ public/js/
   - §7.3 `scan_status="skipped"` 預設不接受；只有 root 設定 `security.upload_scan_skip_allowed=true` 時才視為合法
   - §18.2 / §15 將「可直接匯入 ComfyUI」改成「可被 ComfyUI API queue 執行；不承諾 UI editor layout 還原」，跟 §3.1 已釐清的 API vs UI graph 區分一致
   - §15 舊 import endpoint：path 保留但必須帶 `preview_token`；sanitize-only 路徑只在 feature flag `feature_comfyui_legacy_import_enabled=true` 時暫存活；**run bypass 永不允許**，新舊路徑落 DB 後共用同一個 §10 5-gate run pipeline
+- 2026-05-08 · claude · §10 implementation notes（不是建議，是必做）：
+  - 10.2 補 `COMFYUI_TEMPLATE_RUN_INPUT_CLEANUP` audit row
+  - 10.3 三條：(a) 每個 gate fail 必先 audit `..._GATE_FAIL` 再 return（用 helper 強制走同一條路徑）；(b) Gate 5 起所有 `ComfyUI input/<run_id>/` 暫存檔在失敗時必須立即清，成功時交給既有 sweeper / cron 清理 24h 未完成項目；(c) `apply_user_inputs` 對 `LoadImage` / `LoadImageMask` 的 `image` 欄位永不覆蓋，必須 hard fail 任何試圖透過 user_inputs 改回原始字串或 cloud_file_id 的 patch — 違反這條等於繞過 §7.3 全部 mime/size/scan/decode 驗證
