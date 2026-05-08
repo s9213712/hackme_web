@@ -73,11 +73,25 @@ def register_comfyui_template_routes(app, ctx):
         payload.update(extra)
         return json_resp(payload), status
 
+    def _actor_field(actor, key):
+        """Read a field from actor whether it's a sqlite3.Row, dict, or None.
+
+        sqlite3.Row supports __getitem__ but not .get(); dict supports both.
+        """
+        if actor is None:
+            return None
+        if actor_value is not None:
+            return actor_value(actor, key)
+        try:
+            return actor[key]
+        except (KeyError, IndexError, TypeError):
+            return getattr(actor, key, None)
+
     def _audit_preview(actor, *, success, stage="", **detail):
         audit(
             "COMFYUI_TEMPLATE_PREVIEW_FAIL" if not success else "COMFYUI_TEMPLATE_PREVIEW_PASS",
             get_client_ip(),
-            user=(actor or {}).get("username") or "-",
+            user=_actor_field(actor, "username") or "-",
             success=success,
             ua=get_ua(),
             detail=" ".join(f"{k}={v}" for k, v in {"stage": stage, **detail}.items() if v),
@@ -191,10 +205,13 @@ def register_comfyui_template_routes(app, ctx):
             )
 
         # ----- Capability check (§6) ------------------------------------------
+        # comfyui_binding returns a dict like {"url": "...", ...}; client_for_url
+        # expects a bare URL string (matching all other call sites in routes/comfyui.py).
         binding = comfyui_binding(actor)
+        binding_url = (binding or {}).get("url") if isinstance(binding, dict) else binding
         client = None
         try:
-            client = client_for_url(binding) if binding else None
+            client = client_for_url(binding_url) if binding_url else None
         except Exception:
             client = None
         capability = check_workflow_capability(analysis, client=client)
@@ -248,7 +265,7 @@ def register_comfyui_template_routes(app, ctx):
             audit(
                 "COMFYUI_TEMPLATE_IMPORT_FAIL",
                 get_client_ip(),
-                user=(actor or {}).get("username") or "-",
+                user=_actor_field(actor, "username") or "-",
                 success=False,
                 ua=get_ua(),
                 detail="stage=parse",
@@ -340,9 +357,10 @@ def register_comfyui_template_routes(app, ctx):
         # that's *present* locally) blocks at import; PARTIALLY_SUPPORTED is
         # allowed so the user can download missing models and try /run later.
         binding = comfyui_binding(actor)
+        binding_url = (binding or {}).get("url") if isinstance(binding, dict) else binding
         client = None
         try:
-            client = client_for_url(binding) if binding else None
+            client = client_for_url(binding_url) if binding_url else None
         except Exception:
             client = None
         capability = check_workflow_capability(analysis, client=client)
