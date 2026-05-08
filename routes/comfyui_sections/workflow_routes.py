@@ -1,6 +1,49 @@
 import json
 from datetime import datetime
 
+from services.comfyui.template import errors as template_errors
+from services.comfyui.template.run_gate import (
+    RunGateFailure,
+    run_workflow_through_gates,
+)
+from services.platform.settings import is_feature_enabled
+
+
+def _default_upload_callback(active_client):
+    """Return an UploadCallback that pushes bytes into ComfyUI input/<run_id>/.
+
+    Falls back to a no-op (returns the synthetic filename) when no
+    ComfyUI client is available; the run gate will then surface the
+    capability blocker rather than silently swallowing the upload.
+    """
+    def _cb(*, file_row, target_filename, run_id):
+        if active_client is None:
+            return {"filename": target_filename, "subfolder": run_id, "type": "input"}
+        try:
+            from services.comfyui.files import upload_image_bytes
+            from services.comfyui.client import ComfyUIError
+        except Exception:  # pragma: no cover - defensive import guard
+            return {"filename": target_filename, "subfolder": run_id, "type": "input"}
+        storage_path = file_row.get("storage_path") if hasattr(file_row, "get") else file_row["storage_path"]
+        try:
+            with open(storage_path, "rb") as fh:
+                data = fh.read()
+        except Exception:
+            data = b""
+        try:
+            return upload_image_bytes(
+                active_client,
+                data,
+                target_filename,
+                image_type="input",
+                overwrite=False,
+                subfolder=run_id,
+                error_cls=ComfyUIError,
+            )
+        except Exception:
+            return {"filename": target_filename, "subfolder": run_id, "type": "input"}
+    return _cb
+
 
 def register_comfyui_workflow_routes(app, ctx):
     actor_or_401 = ctx["actor_or_401"]
@@ -252,17 +295,88 @@ def register_comfyui_workflow_routes(app, ctx):
         actor, err = actor_or_401()
         if err:
             return err
+        # Strict mode (§15.7 / Phase 6): when feature_comfyui_template_importer_strict
+        # is on, every /run goes through the §10 5-gate. Body may carry
+        # user_inputs (per-node patch dict) and image_field_assignments
+        # (LoadImage node_id → cloud_file_id) so the gate can validate +
+        # remap. Legacy callers without these fields are still subject to
+        # gate validation against the preset's stored workflow.
+        strict_mode = is_feature_enabled("feature_comfyui_template_importer_strict")
+        try:
+            body = ctx["request"].get_json(force=True, silent=True) if strict_mode else {}
+        except Exception:
+            body = {}
+        body = body if isinstance(body, dict) else {}
+        user_inputs = body.get("user_inputs") if isinstance(body.get("user_inputs"), dict) else {}
+        image_field_assignments = (
+            body.get("image_field_assignments")
+            if isinstance(body.get("image_field_assignments"), dict)
+            else {}
+        )
         conn = get_db()
         try:
             row, err_resp = load_workflow_preset(conn, preset_id=preset_id, actor=actor)
             if err_resp:
                 return err_resp
-            active_client = client_for_url(comfyui_binding(actor)["url"])
+            comfyui_url = (comfyui_binding(actor) or {}).get("url")
+            active_client = client_for_url(comfyui_url) if comfyui_url else None
             dependency_status, dependency_msg = assert_workflow_dependencies_or_error(active_client, row)
             if dependency_msg:
                 return json_resp({"ok": False, "msg": dependency_msg, "dependency_status": dependency_status}), 409
             default_params = parse_json_field(row["default_params_json"], {}) or {}
             workflow_json = parse_json_field(row["workflow_json"], {}) or {}
+
+            # 5-gate enforcement before any job is created — failed gates
+            # never produce a job_id so the user gets immediate feedback
+            # instead of polling status.
+            if strict_mode:
+                import uuid as _uuid
+                gate_run_id = _uuid.uuid4().hex
+                try:
+                    gate_result = run_workflow_through_gates(
+                        raw_workflow=workflow_json,
+                        user_inputs=user_inputs,
+                        image_field_assignments=image_field_assignments,
+                        actor=dict(actor),
+                        user_id=int(actor_value(actor, "id")),
+                        run_id=gate_run_id,
+                        conn=conn,
+                        comfyui_client=active_client,
+                        upload_callback=_default_upload_callback(active_client),
+                    )
+                except RunGateFailure as exc:
+                    audit(
+                        "COMFYUI_TEMPLATE_RUN_GATE_FAIL",
+                        get_client_ip(),
+                        user=actor_value(actor, "username") or "-",
+                        success=False,
+                        ua=get_ua(),
+                        detail=(
+                            f"preset_id={preset_id} run_id={gate_run_id} "
+                            f"gate={exc.gate} stage={exc.stage} reason={exc.msg}"
+                        ),
+                    )
+                    return json_resp({
+                        "ok": False,
+                        "msg": exc.msg,
+                        "stage": exc.stage,
+                        "gate": exc.gate,
+                        "audit_detail": exc.audit_detail,
+                    }), exc.http_status
+                workflow_json = gate_result.workflow
+                audit(
+                    "COMFYUI_TEMPLATE_RUN_GATE_PASS",
+                    get_client_ip(),
+                    user=actor_value(actor, "username") or "-",
+                    success=True,
+                    ua=get_ua(),
+                    detail=(
+                        f"preset_id={preset_id} run_id={gate_run_id} "
+                        f"node_count={gate_result.audit_metadata.get('node_count')} "
+                        f"image_remapped={gate_result.audit_metadata.get('image_remapped')}"
+                    ),
+                )
+
             run_id = create_workflow_run(
                 conn,
                 preset_id=preset_id,
@@ -288,6 +402,7 @@ def register_comfyui_workflow_routes(app, ctx):
             "async": True,
             "workflow_run_id": run_id,
             "dependency_status": dependency_status,
+            "strict_mode": bool(strict_mode),
             "job": {
                 "job_id": job_id,
                 "status": "queued",
