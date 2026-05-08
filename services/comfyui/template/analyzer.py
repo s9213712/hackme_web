@@ -167,12 +167,14 @@ def analyze_workflow_json(workflow: dict[str, Any]) -> WorkflowAnalysis:
                 f"workflow node {node_id} 缺少 class_type 欄位"
             )
 
-        inputs_raw = node.get("inputs") or {}
-        if not isinstance(inputs_raw, dict):
+        # Reject explicit non-dict (e.g., list) before the `or {}` coerce path,
+        # otherwise an `inputs=[]` body would be silently treated as no-inputs.
+        if "inputs" in node and node["inputs"] is not None and not isinstance(node["inputs"], dict):
             raise WorkflowValidationError(
                 f"workflow node {node_id}.inputs 必須是物件，目前型別為 "
-                f"{type(inputs_raw).__name__}"
+                f"{type(node['inputs']).__name__}"
             )
+        inputs_raw = node.get("inputs") or {}
 
         node_analysis = NodeAnalysis(node_id=node_id, class_type=class_type)
         node_analysis.is_allowed = is_allowed_class(class_type)
