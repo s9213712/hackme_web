@@ -1,0 +1,127 @@
+"""§4 Node Allowlist for the ComfyUI template importer.
+
+Design principle: allowlist > blocklist. Three handling tiers:
+- Allowlist hit → accepted (further capability check still applies at run).
+- Explicit denylist hit → rejected at preview/import/run.
+- Unknown class (neither allow nor deny) → preview passes with
+  ``capability.overall == "UNSUPPORTED"``; import / run still reject.
+
+Spec reference: docs/comfyui/COMFYUI_TEMPLATE_IMPORTER_PLAN.md §4.
+"""
+
+from __future__ import annotations
+
+from services.comfyui.validation.rules import (
+    WORKFLOW_BLOCKED_CLASS_RE,
+    WORKFLOW_BLOCKED_COMMAND_RE,
+)
+
+
+# §4.1 Core MVP allowlist (17 class types)
+CORE_ALLOWLIST = frozenset(
+    {
+        # Loaders
+        "CheckpointLoaderSimple",
+        "VAELoader",
+        "LoraLoader",
+        "ControlNetLoader",
+        "UpscaleModelLoader",
+        # Inputs
+        "LoadImage",
+        "LoadImageMask",
+        "EmptyLatentImage",
+        # Encoders
+        "CLIPTextEncode",
+        "VAEEncode",
+        "VAEEncodeForInpaint",
+        # Sampling
+        "KSampler",
+        # Decoders
+        "VAEDecode",
+        # ControlNet apply
+        "ControlNetApplyAdvanced",
+        # Outpaint helper
+        "ImagePadForOutpaint",
+        # Upscale apply
+        "ImageUpscaleWithModel",
+        # Save
+        "SaveImage",
+    }
+)
+
+
+# §4.2 ControlNet preprocessor allowlist; aligned with services/comfyui/constants.py
+# CONTROLNET_TYPE_DEFINITIONS — extend in lockstep when adding controlnet types.
+CONTROLNET_PREPROCESSOR_ALLOWLIST = frozenset(
+    {
+        "CannyEdgePreprocessor",
+        "DepthAnythingPreprocessor",
+        "MiDaS-DepthMapPreprocessor",
+        "OpenposePreprocessor",
+        "DWPreprocessor",
+        "LineArtPreprocessor",
+        "LineartStandardPreprocessor",
+        "PiDiNetPreprocessor",
+        "ScribblePreprocessor",
+        "SoftEdgePreprocessor",
+        "HEDPreprocessor",
+    }
+)
+
+
+# §4.3 explicitly denied class types (kept short; the regex below handles families).
+# These are notable enough that we want named-deny instead of regex catch-all
+# so audit / error messages can call them out by name.
+EXPLICIT_DENYLIST = frozenset(
+    {
+        # Animation / video out — disk/runtime cost we don't want for v1
+        "AnimateDiffLoader",
+        "AnimateDiffSampler",
+        "AnimateDiffCombine",
+        "VHS_VideoCombine",
+        "VHS_LoadVideo",
+        # IP / face — out of scope for v1 (privacy + multi-stage pipeline complexity)
+        "IPAdapterApply",
+        "IPAdapterModelLoader",
+        "FaceDetailer",
+        "DetailerForEach",
+        "ReActorFaceSwap",
+        "ReActorBuildFaceModel",
+        # Multi-stage pipe wrappers — failure mode unclear, defer
+        "DetailerPipe",
+        "ToDetailerPipe",
+    }
+)
+
+
+def _matches_blocked_pattern(class_type: str) -> bool:
+    if not class_type:
+        return False
+    return bool(WORKFLOW_BLOCKED_CLASS_RE.search(class_type)) or bool(
+        WORKFLOW_BLOCKED_COMMAND_RE.search(class_type)
+    )
+
+
+def is_allowed_class(class_type: str) -> bool:
+    """True when the class type is on the core allowlist or controlnet preprocessor allowlist."""
+    if not class_type:
+        return False
+    return class_type in CORE_ALLOWLIST or class_type in CONTROLNET_PREPROCESSOR_ALLOWLIST
+
+
+def is_explicitly_denied_class(class_type: str) -> bool:
+    """True when the class type is on the explicit denylist or matches a blocked regex pattern."""
+    if not class_type:
+        return False
+    if class_type in EXPLICIT_DENYLIST:
+        return True
+    return _matches_blocked_pattern(class_type)
+
+
+__all__ = [
+    "CORE_ALLOWLIST",
+    "CONTROLNET_PREPROCESSOR_ALLOWLIST",
+    "EXPLICIT_DENYLIST",
+    "is_allowed_class",
+    "is_explicitly_denied_class",
+]
