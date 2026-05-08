@@ -20,17 +20,29 @@ from services.comfyui.template.analyzer import (
     analyze_workflow_json,
     classify_input_field,
 )
+from services.comfyui.template.capability import (
+    CapabilityCheck,
+    CapabilityOverall,
+    check_workflow_capability,
+    iter_required_models,
+    reset_object_info_cache,
+)
 
 __all__ = [
     "CORE_ALLOWLIST",
     "CONTROLNET_PREPROCESSOR_ALLOWLIST",
     "EXPLICIT_DENYLIST",
+    "CapabilityCheck",
+    "CapabilityOverall",
     "FieldCategory",
     "InputField",
     "NodeAnalysis",
     "WorkflowAnalysis",
     "analyze_workflow_json",
+    "check_workflow_capability",
     "classify_input_field",
     "is_allowed_class",
     "is_explicitly_denied_class",
+    "iter_required_models",
+    "reset_object_info_cache",
 ]
