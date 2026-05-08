@@ -98,6 +98,14 @@ DEFAULT_SETTINGS = {
     "feature_advanced_security_enabled": False,
     "feature_privacy_uploads_enabled": False,
     "feature_comfyui_enabled": False,
+    # ComfyUI Template Importer rollout flags (§15)
+    # - legacy_import_enabled: keep the old sanitize-only POST /api/comfyui/workflows/import
+    #   path alive during migration. When false, that endpoint must require a preview_token
+    #   minted by /api/comfyui/templates/preview.
+    # - template_importer_strict: when true, /api/comfyui/workflows/<id>/run runs the §10
+    #   5-gate. When false, the run handler stays on its legacy code path.
+    "feature_comfyui_legacy_import_enabled": True,
+    "feature_comfyui_template_importer_strict": False,
     "feature_economy_enabled": False,
     "feature_trading_enabled": False,
     "feature_games_enabled": False,
