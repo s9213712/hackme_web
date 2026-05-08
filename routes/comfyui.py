@@ -19,7 +19,10 @@ from urllib.parse import parse_qs, unquote, urlencode, urlparse, urlunparse
 import urllib.error
 import urllib.request
 
-from routes.comfyui_sections import register_comfyui_workflow_routes
+from routes.comfyui_sections import (
+    register_comfyui_template_routes,
+    register_comfyui_workflow_routes,
+)
 
 from flask import request, send_file
 
@@ -3995,6 +3998,18 @@ def register_comfyui_routes(app, deps):
                 "progress": {"phase": "queued", "percent": 0, "detail": "已建立重跑工作"},
             },
         })
+
+    register_comfyui_template_routes(app, {
+        "request": request,
+        "actor_or_401": _actor_or_401,
+        "json_resp": json_resp,
+        "require_csrf": require_csrf,
+        "get_client_ip": get_client_ip,
+        "get_ua": get_ua,
+        "audit": audit,
+        "comfyui_binding": _comfyui_binding,
+        "client_for_url": _client_for_url,
+    })
 
     register_comfyui_workflow_routes(app, {
         "request": request,
