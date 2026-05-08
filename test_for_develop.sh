@@ -272,7 +272,7 @@ try:
             allow_spot=1,
             allow_margin=1,
             allow_bots=1,
-            allow_risk_grade_usage=0,
+            allow_risk_grade_usage=1,
             live_price_enabled=1,
             reference_price_enabled=1,
             updated_at=?
@@ -285,7 +285,7 @@ try:
         SET enabled=1,
             allow_margin=1,
             allow_bots=1,
-            allow_risk_grade_usage=0,
+            allow_risk_grade_usage=1,
             live_price_enabled=1,
             reference_price_enabled=1,
             updated_at=?

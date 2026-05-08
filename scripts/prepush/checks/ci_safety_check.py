@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 from scripts.prepush import utils
 from scripts.prepush.context import PrepushContext
@@ -8,10 +9,12 @@ from scripts.prepush.result import CheckResult
 
 
 LOCAL_PATH_PATTERNS = {
-    "LOCAL_HOME_PATH": "/home/s92137",
     "WSL_DRIVE_PATH": "/mnt/d",
     "WINDOWS_USER_PATH": "C:\\Users\\",
 }
+_HOME_MARKER = str(Path.home()).replace("\\", "/").rstrip("/")
+if _HOME_MARKER and _HOME_MARKER not in {"/", "."}:
+    LOCAL_PATH_PATTERNS["LOCAL_HOME_PATH"] = _HOME_MARKER
 
 
 def run(ctx: PrepushContext) -> CheckResult:
