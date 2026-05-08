@@ -2,14 +2,14 @@
 
 All trading workflow files live under this directory.
 
-- `workflows/system/`: built-in templates tracked by Git.
+- `workflows/trading_bot/`: built-in templates tracked by Git.
 - `runtime/workflows/custom/`: user-created templates generated at runtime and ignored by Git.
 
 Custom templates are stored per user under `runtime/workflows/custom/<username>/`.
 
 ---
 
-## System Templates (`workflows/system/`)
+## System Templates (`workflows/trading_bot/`)
 
 目前保留 **11 個** system templates，目的是讓使用者拿到「**完整風格光譜**」而不是只有
 正式對戰冠軍。對抗加賽落敗、偏弱、或重複的候選都已退場。

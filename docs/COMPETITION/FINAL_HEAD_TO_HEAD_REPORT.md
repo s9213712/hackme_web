@@ -129,8 +129,8 @@ Claude 的 pyramid（RSI<30 加碼 30%）抓到這種震盪低點 → +31.31% vs
 
 - 對戰腳本：`docs/COMPETITION/scripts/competition_head_to_head_rev3.py`
 - 對戰 raw：`docs/COMPETITION/data/head_to_head_rev3.json`
-- Codex 模板：`workflows/system/dipbuy_rsi35_70_size99_late_tp15_nopyr_codex.json`
-- Claude 模板：`workflows/system/auto_search_winner_claude_rev3_return.json`
+- Codex 模板：`workflows/trading_bot/dipbuy_rsi35_70_size99_late_tp15_nopyr_codex.json`
+- Claude 模板：`workflows/trading_bot/auto_search_winner_claude_rev3_return.json`
 - Codex 自報基準（須由 Codex 端確認 wall time / 條件一致性）：5y 平均 +64.40%
 
 ## 結論

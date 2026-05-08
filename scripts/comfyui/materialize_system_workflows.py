@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Materialize the built-in t2i / i2i / inpaint / outpaint / upscale /
 controlnet workflows from services/comfyui/workflow/builder.py into
-workflows/comfyui/system/<id>/ as static API-format JSON files.
+workflows/comfyui/<id>/ as static API-format JSON files.
 
 Each generated subdir contains:
 - workflow.json: the API-format graph the builder produces (pretty-printed).
@@ -156,7 +156,7 @@ def _materialize_one(workflow_id, label, description, builder, extra_params):
     analysis = analyze_workflow_json(workflow)
     schema = build_ui_schema(analysis=analysis)
 
-    target_dir = REPO_ROOT / "workflows" / "comfyui" / "system" / workflow_id
+    target_dir = REPO_ROOT / "workflows" / "comfyui" / workflow_id
     target_dir.mkdir(parents=True, exist_ok=True)
 
     (target_dir / "workflow.json").write_text(

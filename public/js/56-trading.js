@@ -2561,7 +2561,7 @@ async function loadTradingWorkflowTemplates({ force = false } = {}) {
     }
   } catch (err) {
     renderTradingWorkflowTemplateOptions();
-    tradingSetMsg(err.message || "Workflow 模板讀取失敗，請確認 workflows/system 內有模板檔", false);
+    tradingSetMsg(err.message || "Workflow 模板讀取失敗，請確認 workflows/trading_bot 內有模板檔", false);
   }
 }
 
@@ -2627,7 +2627,7 @@ function applyTradingWorkflowTemplate() {
   const templates = tradingWorkflowTemplates();
   const item = templates[key] || templates.dipbuy_rsi35_70_size99_late_tp15_nopyr_codex || Object.values(templates)[0];
   if (!item || !item.workflow) {
-    tradingSetMsg("沒有可用 Workflow 模板，請確認 workflows/system 內有模板檔", false);
+    tradingSetMsg("沒有可用 Workflow 模板，請確認 workflows/trading_bot 內有模板檔", false);
     return;
   }
   const textarea = $("trading-auto-workflow-json");

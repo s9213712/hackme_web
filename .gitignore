@@ -14,14 +14,13 @@ test_backtest_full.py
 !services/games/models/*.json
 !workflows/
 !workflows/README.md
-!workflows/system/
-!workflows/system/*.json
+!workflows/trading_bot/
+!workflows/trading_bot/*.json
 # §18.1 ComfyUI system workflows (workflow.json + manifest.json materialized
 # from services/comfyui/workflow/builder.py per scripts/comfyui/materialize_system_workflows.py)
 !workflows/comfyui/
-!workflows/comfyui/system/
-!workflows/comfyui/system/**/
-!workflows/comfyui/system/**/*.json
+!workflows/comfyui/**/
+!workflows/comfyui/**/*.json
 !public/data/
 !public/data/*.json
 public/data/workflow_template_benchmarks_*.json

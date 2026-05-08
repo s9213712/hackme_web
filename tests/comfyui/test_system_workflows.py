@@ -1,4 +1,4 @@
-"""Validate every workflow shipped under workflows/comfyui/system/ passes
+"""Validate every workflow shipped under workflows/comfyui/ passes
 the importer pipeline: sanitize → analyze → allowlist enforcement.
 
 Failing here means a builder change desynced the materialized JSON;
@@ -16,7 +16,7 @@ from services.comfyui.validation.sanitize import sanitize_workflow_json
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SYSTEM_DIR = REPO_ROOT / "workflows" / "comfyui" / "system"
+SYSTEM_DIR = REPO_ROOT / "workflows" / "comfyui"
 
 
 def _system_ids():
@@ -42,7 +42,7 @@ def test_system_dir_has_expected_workflows():
 @pytest.mark.parametrize("workflow_id", _system_ids() or ["__placeholder__"])
 def test_system_workflow_files_present(workflow_id):
     if workflow_id == "__placeholder__":
-        pytest.skip("workflows/comfyui/system/ not populated yet")
+        pytest.skip("workflows/comfyui/ not populated yet")
     base = SYSTEM_DIR / workflow_id
     assert (base / "workflow.json").is_file(), f"{workflow_id}/workflow.json missing"
     assert (base / "manifest.json").is_file(), f"{workflow_id}/manifest.json missing"
@@ -52,7 +52,7 @@ def test_system_workflow_files_present(workflow_id):
 @pytest.mark.parametrize("workflow_id", _system_ids() or ["__placeholder__"])
 def test_system_workflow_passes_sanitize(workflow_id):
     if workflow_id == "__placeholder__":
-        pytest.skip("workflows/comfyui/system/ not populated yet")
+        pytest.skip("workflows/comfyui/ not populated yet")
     workflow = json.loads((SYSTEM_DIR / workflow_id / "workflow.json").read_text(encoding="utf-8"))
     sanitize_workflow_json(workflow)  # must not raise
 
@@ -60,7 +60,7 @@ def test_system_workflow_passes_sanitize(workflow_id):
 @pytest.mark.parametrize("workflow_id", _system_ids() or ["__placeholder__"])
 def test_system_workflow_passes_allowlist(workflow_id):
     if workflow_id == "__placeholder__":
-        pytest.skip("workflows/comfyui/system/ not populated yet")
+        pytest.skip("workflows/comfyui/ not populated yet")
     workflow = json.loads((SYSTEM_DIR / workflow_id / "workflow.json").read_text(encoding="utf-8"))
     analysis = analyze_workflow_json(workflow)
     assert not analysis.denied_classes, f"{workflow_id} uses denied classes: {analysis.denied_classes}"
@@ -70,7 +70,7 @@ def test_system_workflow_passes_allowlist(workflow_id):
 @pytest.mark.parametrize("workflow_id", _system_ids() or ["__placeholder__"])
 def test_system_manifest_schema_basics(workflow_id):
     if workflow_id == "__placeholder__":
-        pytest.skip("workflows/comfyui/system/ not populated yet")
+        pytest.skip("workflows/comfyui/ not populated yet")
     manifest = json.loads((SYSTEM_DIR / workflow_id / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["schema_version"] == 1
     assert manifest["id"] == workflow_id

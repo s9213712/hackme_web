@@ -7,7 +7,7 @@ Model path:
 `exp1` 不是 JSON 模型，而是搜尋器的 learning DB：
 
 - `services/games/models/chess_experiment.db`
-- runtime 工作副本：`runtime/database/chess_experiment.db`
+- runtime 工作副本：`runtime/games/models/chess_experiment.db`
 
 - `services/games/models/chess_experiment_2_nn.json`
 - runtime 工作副本：`runtime/games/models/chess_experiment_2_nn.json`

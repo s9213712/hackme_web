@@ -931,7 +931,7 @@ def register_trading_routes(app, deps):
             "system": [item for item in templates if item.get("scope") == "system"],
             "custom": [item for item in templates if item.get("scope") == "custom"],
             "workflow_root": "workflows",
-            "system_workflow_root": "workflows/system",
+            "system_workflow_root": "workflows/trading_bot",
             "custom_workflow_root": workflow_custom_root_label(),
             "errors": errors,
         })

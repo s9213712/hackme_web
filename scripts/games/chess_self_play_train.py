@@ -20,7 +20,7 @@ The script uses these match sources:
 
 All generated artifacts stay under ``runtime/``:
 
-- exp1 memory DB: ``runtime/database/chess_experiment.db``
+- exp1 memory DB: ``runtime/games/models/chess_experiment.db``
 - exp2 model: ``runtime/games/models/chess_experiment_2_nn.json``
 - exp3 model: ``runtime/games/models/chess_experiment_3_dl.json``
 - exp4 model: ``runtime/games/models/chess_experiment_4_pv.json``

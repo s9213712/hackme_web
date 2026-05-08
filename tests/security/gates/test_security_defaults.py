@@ -62,7 +62,7 @@ def test_runtime_artifacts_default_to_repo_runtime_root_and_not_repo_root():
     assert 'default_runtime_root,' in server_py
     assert 'RUNTIME_DIR = _env_path("HACKME_RUNTIME_DIR", default_runtime_root())' in server_py
     assert 'DB_DIR = _env_path("HTML_LEARNING_DB_DIR", os.path.join(RUNTIME_DIR, "database"))' in server_py
-    assert 'CHESS_ENGINE_DB_PATH = _env_path("HTML_LEARNING_CHESS_ENGINE_DB_PATH", os.path.join(DB_DIR, "chess_experiment.db"))' in server_py
+    assert 'CHESS_ENGINE_DB_PATH = _env_path("HTML_LEARNING_CHESS_ENGINE_DB_PATH", os.path.join(RUNTIME_DIR, "games", "models", "chess_experiment.db"))' in server_py
     assert 'LOG_DIR = _env_path("HTML_LEARNING_LOG_DIR", os.path.join(RUNTIME_DIR, "logs"))' in server_py
     assert 'STORAGE_DIR = _env_path("HTML_LEARNING_STORAGE_DIR", os.path.join(RUNTIME_DIR, "storage"))' in server_py
     assert '"file_roots": [' in server_py

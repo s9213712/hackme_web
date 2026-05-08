@@ -151,7 +151,7 @@ per-strategy 時序（由快到慢）：
 | `full_entry_exit` | `price_below 85000` | `rsi_below 30`（極度超賣才進場） |
 | `stop_loss` | `price_below 80000` | `stop_loss_percent 7`（持倉 -7% 停損） |
 
-腳本以 `--use-relative-thresholds` 旗標啟用改造（**不**修改原始 `workflows/system/*.json`，僅執行時 in-memory 套用）。
+腳本以 `--use-relative-thresholds` 旗標啟用改造（**不**修改原始 `workflows/trading_bot/*.json`，僅執行時 in-memory 套用）。
 
 ### 2.4 K 線間隔對應的 5 年根數
 

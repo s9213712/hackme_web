@@ -73,7 +73,7 @@ def load_candles(asset_display: str) -> list:
 
 
 def load_template_workflow(name: str) -> dict:
-    p = REPO_ROOT / "workflows" / "system" / f"{name}.json"
+    p = REPO_ROOT / "workflows" / "trading_bot" / f"{name}.json"
     return json.loads(p.read_text())["workflow"]
 
 

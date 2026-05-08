@@ -302,11 +302,15 @@ def test_album_viewer_has_dedicated_module():
     assert "FEATURE_SERVICE_BUNDLES" in admin_js
     assert '"all-enabled"' in admin_js
     assert '"minimum-ops"' in admin_js
+    assert '"raspberry-lite"' in admin_js
     assert "全開" in admin_js
     assert "最低維運" in admin_js
+    assert "Raspberry 套餐" in admin_js
+    assert "輕量主機預設" in admin_js
     assert "bundle.replace === true" in admin_js
     assert "feature-bundle-toolbar" in index_html
     assert "feature-advisory-list" in index_html
+    assert "全開 / 最低維運 / Raspberry 套餐" in index_html
     assert 'id="sc-feature-audit-log-enabled"' in index_html
     assert 'id="sc-feature-economy-enabled"' in index_html
     assert 'previewSecurityProfileSelection("security-mode-select", "security-mode-profile-preview", "sc")' in bootstrap_js
@@ -417,7 +421,8 @@ def test_core_api_fetch_refreshes_csrf_once():
     assert "async function apiFetch" in core_js
     assert 'payload.error !== "csrf_invalid"' in core_js
     assert "fetchCsrfToken({ force: true })" in core_js
-    assert "return apiFetch(url, { ...options, credentials: opts.credentials, headers: retryHeaders }, false);" in core_js
+    assert "const retried = await apiFetch(url, { ...options, credentials: opts.credentials, headers: retryHeaders }, false);" in core_js
+    assert "return retried;" in core_js
     assert 'headers.set("X-CSRF-Token", await fetchCsrfToken());' in core_js
     assert "BroadcastChannel" in core_js
 

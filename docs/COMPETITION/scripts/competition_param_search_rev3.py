@@ -255,7 +255,7 @@ def main() -> int:
         if cand.get("pyramid_enabled"):
             full["explanation"]["actions"].append("加碼：仍上 MA200 + RSI<30 + 持倉 → 買 30%")
 
-        wf_path = REPO_ROOT / "workflows" / "system" / f"auto_search_winner_claude_{label_suffix}.json"
+        wf_path = REPO_ROOT / "workflows" / "trading_bot" / f"auto_search_winner_claude_{label_suffix}.json"
         wf_path.write_text(json.dumps(full, ensure_ascii=False, indent=2))
         print(f"[search] wrote {label_suffix} winner to {wf_path}", file=sys.stderr)
         print(f"   id: {cand['mid_id']}", file=sys.stderr)

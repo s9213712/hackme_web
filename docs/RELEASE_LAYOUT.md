@@ -28,7 +28,7 @@ weekly salary jobs are not run at startup unless the operator explicitly sets
 | Path | Runtime Data |
 |---|---|
 | `runtime/database/database.db` | SQLite runtime database. |
-| `runtime/database/chess_experiment.db` | 西洋棋 `experiment` 難度的獨立學習資料庫。 |
+| `runtime/games/models/chess_experiment.db` | 西洋棋 `experiment` 難度的獨立學習資料庫。 |
 | `runtime/models/chess_experiment_2_nn.json` | 西洋棋 `experiment 2:nn` 難度的獨立模型檔。 |
 | `runtime/storage/` | Cloud Drive user files. |
 | `runtime/reports/bugs/` | User bug reports. |

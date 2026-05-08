@@ -328,7 +328,7 @@ def test_trading_exchange_is_separate_from_wallet_page():
     bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
     trading_js = (ROOT / "public" / "js" / "56-trading.js").read_text(encoding="utf-8")
     workflow_templates = "\n".join(
-        path.read_text(encoding="utf-8") for path in sorted((ROOT / "workflows" / "system").glob("*.json"))
+        path.read_text(encoding="utf-8") for path in sorted((ROOT / "workflows" / "trading_bot").glob("*.json"))
     )
     styles = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
     economy_section = index_html.split('id="module-economy"', 1)[1].split('id="module-trading"', 1)[0]

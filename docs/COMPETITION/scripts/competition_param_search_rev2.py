@@ -19,7 +19,7 @@ Search space (curated, ~32 variants instead of full Cartesian):
 
 Each candidate runs on 5 assets × 5y × 1h × fee 0.3% (slippage applied
 post-hoc as 0.1% × turnover). Final ranking sorts by avg return across
-assets. Winner is exported as workflows/system/<chosen_id>.json.
+assets. Winner is exported as workflows/trading_bot/<chosen_id>.json.
 """
 from __future__ import annotations
 
@@ -307,7 +307,7 @@ def main() -> int:
         if cand.get("stop_loss_percent"):
             full["explanation"]["actions"].append(f"災難止損：虧損 ≥ {cand['stop_loss_percent']}% 全平")
 
-        wf_path = REPO_ROOT / "workflows" / "system" / "auto_search_winner_claude_rev2.json"
+        wf_path = REPO_ROOT / "workflows" / "trading_bot" / "auto_search_winner_claude_rev2.json"
         wf_path.write_text(json.dumps(full, ensure_ascii=False, indent=2))
         print(f"[search] wrote winner workflow to {wf_path}", file=sys.stderr)
         print(f"[search] winner id: {cand['mid_id']}", file=sys.stderr)

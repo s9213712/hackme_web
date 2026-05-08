@@ -82,7 +82,7 @@ python3 scripts/games/chess_replay_prepare.py \
 
 伺服器啟動時，若 runtime 工作模型不存在，會自動把上述 seed 複製到：
 
-- `runtime/database/chess_experiment.db`
+- `runtime/games/models/chess_experiment.db`
 - `runtime/games/models/chess_experiment_2_nn.json`
 - `runtime/games/models/chess_experiment_3_dl.json`
 - `runtime/games/models/chess_experiment_4_pv.json`

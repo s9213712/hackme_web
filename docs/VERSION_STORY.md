@@ -107,7 +107,7 @@ verifies clean deployment and first BTC_trade build, and updates production DB
 initialization so fresh installs can initialize all current schemas.
 
 Release `2026.05.02-042` moves official trading Workflow templates into the
-tracked `workflows/system/` directory, keeps user-created templates as runtime
+tracked `workflows/trading_bot/` directory, keeps user-created templates as runtime
 data under `runtime/workflows/custom/`, adds structured explanations to every official
 template, and introduces a validation script that checks trigger behavior,
 downloads public K-line data, runs backend backtests, and compares them with an

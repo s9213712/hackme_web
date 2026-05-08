@@ -123,7 +123,7 @@ python3 -m pip install -r requirements.txt
 - `runtime/logs/`
 - `runtime/anchors/`
 - `runtime/reports/`
-- `runtime/database/chess_experiment.db`
+- `runtime/games/models/chess_experiment.db`
 - `runtime/.chain_seed`
 - `runtime/.csrfkey`
 - `runtime/.fkey`

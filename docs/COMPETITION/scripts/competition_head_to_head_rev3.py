@@ -32,7 +32,7 @@ def main() -> int:
 
     results = {}
     for label, template_name in CONTENDERS:
-        wf = json.loads((REPO_ROOT / "workflows" / "system" / f"{template_name}.json").read_text())["workflow"]
+        wf = json.loads((REPO_ROOT / "workflows" / "trading_bot" / f"{template_name}.json").read_text())["workflow"]
         per_asset = []
         for asset in ASSETS:
             candles = load_candles(asset["display"])
