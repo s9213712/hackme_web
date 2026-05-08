@@ -37,6 +37,7 @@ from services.comfyui.template.capability import (
     CapabilityCheck,
     check_workflow_capability,
 )
+from services.comfyui.template.cleanup import register_run_dir
 from services.comfyui.template import errors as template_errors
 from services.comfyui.template.remap import (
     PROTECTED_IMAGE_INPUTS,
@@ -303,6 +304,11 @@ def run_workflow_through_gates(
     # ----- Gate 5: safety rewrite + image remap + apply user_inputs -------
     try:
         workflow = rewrite_save_image_prefix(workflow, user_id=int(user_id), run_id=run_id)
+        if image_field_assignments:
+            # Track temp dir for §10.3.2 sweeper before any upload happens —
+            # this way even an upload-callback exception leaves an entry the
+            # sweeper / handler can reap.
+            register_run_dir(run_id=run_id, user_id=int(user_id))
         workflow = remap_load_image_to_cloud_file(
             workflow,
             image_field_assignments=dict(image_field_assignments or {}),

@@ -60,6 +60,15 @@ from services.comfyui.template.run_gate import (
     RunGateResult,
     run_workflow_through_gates,
 )
+from services.comfyui.template.cleanup import (
+    COMFYUI_RUN_TTL_SECONDS,
+    cleanup_run_temp_files,
+    list_active_run_dirs,
+    register_run_dir,
+    registry_size,
+    reset_registry,
+    sweep_orphaned_run_dirs,
+)
 from services.comfyui.template import errors
 
 __all__ = [
@@ -73,7 +82,14 @@ __all__ = [
     "PreviewStore",
     "RunGateFailure",
     "RunGateResult",
+    "COMFYUI_RUN_TTL_SECONDS",
+    "cleanup_run_temp_files",
     "errors",
+    "list_active_run_dirs",
+    "register_run_dir",
+    "registry_size",
+    "reset_registry",
+    "sweep_orphaned_run_dirs",
     "UploadCallback",
     "get_default_preview_store",
     "remap_load_image_to_cloud_file",
