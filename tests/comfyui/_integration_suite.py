@@ -1870,6 +1870,29 @@ def test_comfyui_connection_test_requires_root_and_valid_endpoint(tmp_path):
     assert "Host" in invalid.get_json()["msg"]
 
 
+def test_comfyui_connection_test_preserves_remote_api_url_error_messages(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    root_actor = {"id": 1, "username": "root", "role": "super_admin"}
+    client = _build_app(db_path, storage_root, actor=lambda: root_actor).test_client()
+
+    credentials = client.post(
+        "/api/root/comfyui/test-connection",
+        json={"mode": "remote", "api_url": "http://user:pass@127.0.0.1:8192"},
+    )
+    assert credentials.status_code == 400
+    assert credentials.get_json()["msg"] == "ComfyUI API 位址不可包含帳密"
+
+    with_path = client.post(
+        "/api/root/comfyui/test-connection",
+        json={"mode": "remote", "api_url": "https://127.0.0.1:8192/prompt"},
+    )
+    assert with_path.status_code == 400
+    assert with_path.get_json()["msg"] == "ComfyUI API 位址只需填主機與 port，不要包含路徑或參數"
+
+
 def test_local_comfyui_connection_test_attempts_autostart(tmp_path, monkeypatch):
     db_path = tmp_path / "comfyui.db"
     storage_root = tmp_path / "storage"
@@ -3348,10 +3371,14 @@ def test_comfyui_share_creates_comfyui_thread_with_preview_grant(tmp_path):
 def test_comfyui_frontend_is_wired():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     core_js = (ROOT / "public" / "js" / "00-core.js").read_text(encoding="utf-8")
-    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    admin_js = (
+        (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+        + "\n"
+        + (ROOT / "public" / "js" / "51-admin-server-mode-launch-check.js").read_text(encoding="utf-8")
+    )
     bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
     community_js = (ROOT / "public" / "js" / "25-community.js").read_text(encoding="utf-8")
-    comfyui_js = (ROOT / "public" / "js" / "36-comfyui.js").read_text(encoding="utf-8")
+    comfyui_js = ((ROOT / "public" / "js" / "36-comfyui.js").read_text(encoding="utf-8") + "\n" + (ROOT / "public" / "js" / "36-comfyui-workflows.js").read_text(encoding="utf-8"))
     css = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
     platform_settings_py = (ROOT / "services" / "platform" / "settings.py").read_text(encoding="utf-8")
     comfyui_settings_py = (ROOT / "services" / "comfyui" / "settings.py").read_text(encoding="utf-8")

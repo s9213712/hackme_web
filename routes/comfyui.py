@@ -29,6 +29,10 @@ from services.comfyui.settings import (
     validate_comfyui_api_url,
 )
 from services.storage.cloud_drive import attach_existing_file, ensure_cloud_drive_attachment_schema, store_cloud_upload
+from services.platform.admin_validation import (
+    validate_comfyui_api_host as shared_validate_comfyui_api_host,
+    validate_comfyui_api_url as shared_validate_comfyui_api_url,
+)
 from services.comfyui.client import (
     CONTROLNET_TYPE_DEFINITIONS,
     GENERATION_MODE_DEFINITIONS,
@@ -3990,320 +3994,46 @@ def register_comfyui_routes(app, deps):
             },
         })
 
-    @app.route("/api/comfyui/workflows", methods=["GET"])
-    @require_csrf_safe
-    def comfyui_workflow_presets():
-        actor, err = _actor_or_401()
-        if err:
-            return err
-        binding = _comfyui_binding(actor)
-        active_client = None
-        dependency_warning = ""
-        try:
-            active_client = _client_for_url(binding["url"])
-            if hasattr(active_client, "health_check"):
-                active_client.health_check(timeout=3)
-        except Exception as exc:
-            dependency_warning = str(exc)
-            active_client = None
-        conn = get_db()
-        try:
-            presets = _list_workflow_presets(conn, actor=actor, active_client=active_client)
-        finally:
-            conn.close()
-        return json_resp({
-            "ok": True,
-            "presets": presets,
-            "official_presets": [item for item in presets if item.get("is_official")],
-            "my_presets": [item for item in presets if int(item.get("owner_user_id") or 0) == int(_actor_value(actor, "id")) and not item.get("is_official")],
-            "shared_presets": [item for item in presets if int(item.get("owner_user_id") or 0) != int(_actor_value(actor, "id")) and not item.get("is_official")],
-            "can_publish_official": _actor_value(actor, "username") == "root",
-            "dependency_warning": dependency_warning,
-        })
-
-    @app.route("/api/comfyui/workflows/import", methods=["POST"])
-    @require_csrf
-    def comfyui_workflow_import():
-        actor, err = _actor_or_401()
-        if err:
-            return err
-        try:
-            data = request.get_json(force=True)
-        except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
-        data = data if isinstance(data, dict) else {}
-        workflow_candidate = data.get("workflow_json") if "workflow_json" in data else data.get("workflow")
-        if workflow_candidate in (None, ""):
-            return json_resp({"ok": False, "msg": "請提供 workflow JSON"}), 400
-        try:
-            workflow_payload, extracted_defaults = _extract_workflow_payload(workflow_candidate)
-            default_params = (
-                _normalize_workflow_default_params(data.get("default_params_json") if "default_params_json" in data else data.get("default_params"))
-                if ("default_params_json" in data or "default_params" in data)
-                else extracted_defaults
-            )
-        except WorkflowValidationError as exc:
-            return json_resp({"ok": False, "msg": str(exc)}), 400
-        title = _safe_text(data.get("title") or data.get("name") or f"Workflow {datetime.now().strftime('%Y-%m-%d %H:%M')}", 120)
-        conn = get_db()
-        try:
-            preset_id = _upsert_workflow_preset(
-                conn,
-                actor=actor,
-                title=title,
-                description=data.get("description") or "",
-                visibility=data.get("visibility") or "private",
-                workflow_payload=workflow_payload,
-                default_params=default_params,
-            )
-            row = _load_workflow_preset_row(conn, preset_id=preset_id)
-            conn.commit()
-        finally:
-            conn.close()
-        audit("COMFYUI_WORKFLOW_IMPORT", get_client_ip(), user=_actor_value(actor, "username"), success=True, ua=get_ua(), detail=f"preset_id={preset_id}, title={title}")
-        return json_resp({"ok": True, "preset": _workflow_preset_summary(row, actor=actor), "msg": "已匯入 workflow preset"})
-
-    @app.route("/api/comfyui/workflows/export-current", methods=["POST"])
-    @require_csrf
-    def comfyui_workflow_export_current():
-        actor, err = _actor_or_401()
-        if err:
-            return err
-        try:
-            data = request.get_json(force=True)
-        except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
-        data = data if isinstance(data, dict) else {}
-        params, msg = _normalize_generation_payload(data)
-        if msg:
-            return json_resp({"ok": False, "msg": msg}), 400
-        active_client = _client_for_url(_comfyui_binding(actor)["url"])
-        try:
-            capabilities, capability_msg = _validate_generation_capabilities(active_client, params)
-            if capability_msg:
-                return json_resp({"ok": False, "msg": capability_msg, "capabilities": capabilities or {}}), 409
-            workflow = active_client.build_generation_workflow(params)
-            workflow_payload = sanitize_workflow_json(workflow)
-        except (ComfyUIError, WorkflowValidationError) as exc:
-            return json_resp({"ok": False, "msg": str(exc)}), 400
-        return json_resp({
-            "ok": True,
-            "workflow_json": workflow_payload["workflow_json"],
-            "workflow_text": workflow_json_to_pretty_text(workflow_payload["workflow_json"]),
-            "workflow_hash": workflow_payload["workflow_hash"],
-            "required_models": workflow_payload["required_models"],
-            "required_loras": workflow_payload["required_loras"],
-            "required_controlnets": workflow_payload["required_controlnets"],
-            "default_params": params,
-        })
-
-    @app.route("/api/comfyui/workflows/<int:preset_id>", methods=["GET"])
-    @require_csrf_safe
-    def comfyui_workflow_detail(preset_id):
-        actor, err = _actor_or_401()
-        if err:
-            return err
-        conn = get_db()
-        try:
-            row, err_resp = _load_workflow_preset(conn, preset_id=preset_id, actor=actor)
-            if err_resp:
-                return err_resp
-            active_client = None
-            try:
-                active_client = _client_for_url(_comfyui_binding(actor)["url"])
-                if hasattr(active_client, "health_check"):
-                    active_client.health_check(timeout=3)
-            except Exception:
-                active_client = None
-            dependency_status = _workflow_dependency_status(active_client, row) if active_client is not None else None
-            recent_runs = _list_workflow_runs(conn, preset_id=preset_id, limit=COMFYUI_WORKFLOW_RUN_LIMIT)
-            payload = _workflow_preset_summary(row, dependency_status=dependency_status, recent_runs=recent_runs, actor=actor)
-            payload["workflow_json"] = _parse_json_field(row["workflow_json"], {}) or {}
-        finally:
-            conn.close()
-        return json_resp({"ok": True, "preset": payload})
-
-    @app.route("/api/comfyui/workflows/<int:preset_id>", methods=["PUT"])
-    @require_csrf
-    def comfyui_workflow_update(preset_id):
-        actor, err = _actor_or_401()
-        if err:
-            return err
-        try:
-            data = request.get_json(force=True)
-        except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
-        data = data if isinstance(data, dict) else {}
-        conn = get_db()
-        try:
-            row, err_resp = _load_workflow_preset(conn, preset_id=preset_id, actor=actor, require_write=True)
-            if err_resp:
-                return err_resp
-            before = _workflow_preset_summary(row, actor=actor)
-            workflow_candidate = data.get("workflow_json") if "workflow_json" in data else _parse_json_field(row["workflow_json"], {})
-            workflow_payload, extracted_defaults = _extract_workflow_payload(workflow_candidate)
-            if "default_params_json" in data or "default_params" in data:
-                default_params = _normalize_workflow_default_params(data.get("default_params_json") if "default_params_json" in data else data.get("default_params"))
-            elif "workflow_json" in data:
-                default_params = extracted_defaults
-            else:
-                default_params = _parse_json_field(row["default_params_json"], {}) or {}
-            updated_id = _upsert_workflow_preset(
-                conn,
-                preset_id=preset_id,
-                actor=actor,
-                title=data.get("title") or row["title"],
-                description=data.get("description") if "description" in data else row["description"],
-                visibility=data.get("visibility") if "visibility" in data else row["visibility"],
-                workflow_payload=workflow_payload,
-                default_params=default_params,
-                is_official=bool(row["is_official"]),
-                published_by_user_id=row["published_by_user_id"],
-            )
-            row = _load_workflow_preset_row(conn, preset_id=updated_id)
-            conn.commit()
-        except WorkflowValidationError as exc:
-            conn.rollback()
-            return json_resp({"ok": False, "msg": str(exc)}), 400
-        finally:
-            conn.close()
-        after = _workflow_preset_summary(row, actor=actor)
-        audit(
-            "COMFYUI_WORKFLOW_UPDATE",
-            get_client_ip(),
-            user=_actor_value(actor, "username"),
-            success=True,
-            ua=get_ua(),
-            detail=f"preset_id={preset_id}, before={json.dumps(before, ensure_ascii=False)[:180]}, after={json.dumps(after, ensure_ascii=False)[:180]}",
-        )
-        return json_resp({"ok": True, "preset": after, "msg": "已更新 workflow preset"})
-
-    @app.route("/api/comfyui/workflows/<int:preset_id>", methods=["DELETE"])
-    @require_csrf
-    def comfyui_workflow_delete(preset_id):
-        actor, err = _actor_or_401()
-        if err:
-            return err
-        conn = get_db()
-        try:
-            row, err_resp = _load_workflow_preset(conn, preset_id=preset_id, actor=actor, require_write=True)
-            if err_resp:
-                return err_resp
-            conn.execute("DELETE FROM comfyui_workflow_runs WHERE preset_id=?", (int(preset_id),))
-            conn.execute("DELETE FROM comfyui_workflow_presets WHERE id=? AND owner_user_id=?", (int(preset_id), int(_actor_value(actor, "id"))))
-            conn.commit()
-        finally:
-            conn.close()
-        audit("COMFYUI_WORKFLOW_DELETE", get_client_ip(), user=_actor_value(actor, "username"), success=True, ua=get_ua(), detail=f"preset_id={preset_id}")
-        return json_resp({"ok": True, "msg": "已刪除 workflow preset"})
-
-    @app.route("/api/comfyui/workflows/<int:preset_id>/run", methods=["POST"])
-    @require_csrf
-    def comfyui_workflow_run(preset_id):
-        actor, err = _actor_or_401()
-        if err:
-            return err
-        conn = get_db()
-        try:
-            row, err_resp = _load_workflow_preset(conn, preset_id=preset_id, actor=actor)
-            if err_resp:
-                return err_resp
-            active_client = _client_for_url(_comfyui_binding(actor)["url"])
-            dependency_status, dependency_msg = _assert_workflow_dependencies_or_error(active_client, row)
-            if dependency_msg:
-                return json_resp({"ok": False, "msg": dependency_msg, "dependency_status": dependency_status}), 409
-            default_params = _parse_json_field(row["default_params_json"], {}) or {}
-            workflow_json = _parse_json_field(row["workflow_json"], {}) or {}
-            run_id = _create_workflow_run(
-                conn,
-                preset_id=preset_id,
-                actor=actor,
-                prompt=default_params.get("prompt") or "",
-                negative_prompt=default_params.get("negative_prompt") or "",
-                params_json=default_params,
-                workflow_json=workflow_json,
-            )
-            conn.commit()
-        finally:
-            conn.close()
-        job_id = _create_generation_job(actor)
-        request_meta = _capture_request_audit_meta()
-        worker = threading.Thread(
-            target=_run_comfyui_workflow_preset_job,
-            args=(job_id, dict(actor), dict(row), run_id, DEFAULT_GENERATION_TIMEOUT_SECONDS, request_meta),
-            daemon=True,
-        )
-        worker.start()
-        return json_resp({
-            "ok": True,
-            "async": True,
-            "workflow_run_id": run_id,
-            "dependency_status": dependency_status,
-            "job": {
-                "job_id": job_id,
-                "status": "queued",
-                "progress": {"phase": "queued", "percent": 0, "detail": "已建立 workflow 執行工作"},
-            },
-        })
-
-    @app.route("/api/comfyui/workflows/<int:preset_id>/export", methods=["POST"])
-    @require_csrf
-    def comfyui_workflow_export(preset_id):
-        actor, err = _actor_or_401()
-        if err:
-            return err
-        conn = get_db()
-        try:
-            row, err_resp = _load_workflow_preset(conn, preset_id=preset_id, actor=actor)
-            if err_resp:
-                return err_resp
-            workflow_json = _parse_json_field(row["workflow_json"], {}) or {}
-        finally:
-            conn.close()
-        return json_resp({
-            "ok": True,
-            "filename": f"comfyui-workflow-{preset_id}.json",
-            "workflow_hash": row["workflow_hash"] or "",
-            "workflow_json": workflow_json,
-            "workflow_text": workflow_json_to_pretty_text(workflow_json),
-        })
-
-    @app.route("/api/admin/comfyui/workflows/<int:preset_id>/publish-official", methods=["POST"])
-    @require_csrf
-    def comfyui_workflow_publish_official(preset_id):
-        actor, err = _root_or_403()
-        if err:
-            return err
-        conn = get_db()
-        try:
-            row, err_resp = _load_workflow_preset(conn, preset_id=preset_id, actor=actor, require_write=True)
-            if err_resp:
-                return err_resp
-            updated_id = _upsert_workflow_preset(
-                conn,
-                preset_id=preset_id,
-                actor=actor,
-                title=row["title"],
-                description=row["description"],
-                visibility="public",
-                workflow_payload={
-                    "workflow_json": _parse_json_field(row["workflow_json"], {}) or {},
-                    "workflow_hash": row["workflow_hash"] or "",
-                    "required_models": _parse_json_field(row["required_models_json"], []) or [],
-                    "required_loras": _parse_json_field(row["required_loras_json"], []) or [],
-                    "required_controlnets": _parse_json_field(row["required_controlnets_json"], []) or [],
-                    "default_params": _parse_json_field(row["default_params_json"], {}) or {},
-                },
-                default_params=_parse_json_field(row["default_params_json"], {}) or {},
-                is_official=True,
-                published_by_user_id=_actor_value(actor, "id"),
-            )
-            row = _load_workflow_preset_row(conn, preset_id=updated_id)
-            conn.commit()
-        finally:
-            conn.close()
-        audit("COMFYUI_WORKFLOW_PUBLISH_OFFICIAL", get_client_ip(), user=_actor_value(actor, "username"), success=True, ua=get_ua(), detail=f"preset_id={preset_id}")
-        return json_resp({"ok": True, "preset": _workflow_preset_summary(row, actor=actor), "msg": "已發布為官方 preset"})
+    register_comfyui_workflow_routes(app, {
+        "request": request,
+        "actor_or_401": _actor_or_401,
+        "root_or_403": _root_or_403,
+        "actor_value": _actor_value,
+        "json_resp": json_resp,
+        "require_csrf": require_csrf,
+        "require_csrf_safe": require_csrf_safe,
+        "get_db": get_db,
+        "get_client_ip": get_client_ip,
+        "get_ua": get_ua,
+        "audit": audit,
+        "comfyui_binding": _comfyui_binding,
+        "client_for_url": _client_for_url,
+        "load_workflow_preset": _load_workflow_preset,
+        "workflow_preset_summary": _workflow_preset_summary,
+        "parse_json_field": _parse_json_field,
+        "extract_workflow_payload": _extract_workflow_payload,
+        "normalize_workflow_default_params": _normalize_workflow_default_params,
+        "upsert_workflow_preset": _upsert_workflow_preset,
+        "load_workflow_preset_row": _load_workflow_preset_row,
+        "WorkflowValidationError": WorkflowValidationError,
+        "ComfyUIError": ComfyUIError,
+        "list_workflow_presets": _list_workflow_presets,
+        "workflow_dependency_status": _workflow_dependency_status,
+        "list_workflow_runs": _list_workflow_runs,
+        "normalize_generation_payload": _normalize_generation_payload,
+        "validate_generation_capabilities": _validate_generation_capabilities,
+        "sanitize_workflow_json": sanitize_workflow_json,
+        "workflow_json_to_pretty_text": workflow_json_to_pretty_text,
+        "assert_workflow_dependencies_or_error": _assert_workflow_dependencies_or_error,
+        "create_workflow_run": _create_workflow_run,
+        "create_generation_job": _create_generation_job,
+        "capture_request_audit_meta": _capture_request_audit_meta,
+        "run_comfyui_workflow_preset_job": _run_comfyui_workflow_preset_job,
+        "DEFAULT_GENERATION_TIMEOUT_SECONDS": DEFAULT_GENERATION_TIMEOUT_SECONDS,
+        "COMFYUI_WORKFLOW_RUN_LIMIT": COMFYUI_WORKFLOW_RUN_LIMIT,
+        "safe_text": _safe_text,
+        "threading": threading,
+    })
 
     @app.route("/api/comfyui/image-preview", methods=["POST"])
     @require_csrf

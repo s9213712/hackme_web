@@ -43,8 +43,11 @@ The repository root keeps only [README.md](../README.md) and
 ## Deep Reference
 
 - [API_REFERENCE.md](API_REFERENCE.md): canonical implemented API route map
+- [BACKTEST_CAPACITY_AND_TEMPLATE_BENCHMARKS.md](BACKTEST_CAPACITY_AND_TEMPLATE_BENCHMARKS.md): trading backtest cap measurement and benchmark asset notes
+- [BTC_TRADE_INTEGRATION.md](BTC_TRADE_INTEGRATION.md): external BTC_trade repo integration and operator flow
 - [CLI_ADMIN_PLAYBOOK.md](CLI_ADMIN_PLAYBOOK.md): curl/cmd playbook for root,
   admin, and developer operations
+- [COMFYUI_ADMIN.md](COMFYUI_ADMIN.md): root/admin-only ComfyUI and Civitai operations
 - [For_developer.md](For_developer.md): API, schema, runtime layout, feature flags
 - [EXTERNAL_API_COMMAND_MATRIX.md](EXTERNAL_API_COMMAND_MATRIX.md): current
   exchange / Civitai / ComfyUI upstream command inventory

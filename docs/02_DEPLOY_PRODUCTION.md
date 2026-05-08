@@ -52,6 +52,10 @@ $HOME/.local/share/hackme_web
 - app 仍需正確設定 HTTPS / secure cookie
 - 若信任 `X-Forwarded-For`，只信任你自己的 proxy IP，並設定
   `USE_XFF=true` 與 `TRUSTED_PROXY_IPS=...`
+- `scripts/run_prod.sh` 也會把可信任 proxy IP 寫進
+  `GUNICORN_FORWARDED_ALLOW_IPS`，讓 Gunicorn 接受同一組代理傳入的
+  `X-Forwarded-Proto`，否則 `FORCE_HTTPS=true` 只會停留在 app 設定層，
+  後端仍可能把請求看成 plain HTTP。
 
 #### 3. Bootstrap 帳號
 

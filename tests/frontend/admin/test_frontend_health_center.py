@@ -6,7 +6,11 @@ ROOT = Path(__file__).resolve().parents[3]
 
 def test_health_center_is_grouped_into_readable_sections():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
-    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    admin_js = (
+        (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+        + "\n"
+        + (ROOT / "public" / "js" / "51-admin-server-mode-launch-check.js").read_text(encoding="utf-8")
+    )
 
     assert 'id="server-health-workqueue"' in index_html
     assert 'id="server-health-counts"' in index_html
@@ -29,7 +33,11 @@ def test_health_center_is_grouped_into_readable_sections():
 
 
 def test_platform_stats_render_as_charts_instead_of_metric_cards():
-    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    admin_js = (
+        (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+        + "\n"
+        + (ROOT / "public" / "js" / "51-admin-server-mode-launch-check.js").read_text(encoding="utf-8")
+    )
 
     assert "function renderPlatformBarChart" in admin_js
     assert "function renderPlatformNetChart" in admin_js

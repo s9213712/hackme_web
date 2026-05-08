@@ -143,6 +143,10 @@ def test_quick_pytest_targets_cover_new_feature_regressions():
     assert expected.issubset(set(pytest_quick_check.QUICK_TESTS))
 
 
+def test_quick_pytest_timeout_budget_matches_current_hook_scope():
+    assert pytest_quick_check.QUICK_PYTEST_TIMEOUT_SECONDS >= 180
+
+
 def test_ci_context_is_noninteractive_for_clean(tmp_path):
     cache = tmp_path / "__pycache__"
     cache.mkdir()

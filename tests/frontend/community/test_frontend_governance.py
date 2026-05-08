@@ -7,7 +7,11 @@ ROOT = Path(__file__).resolve().parents[3]
 
 def test_governance_target_uses_member_select():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
-    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    admin_js = (
+        (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+        + "\n"
+        + (ROOT / "public" / "js" / "51-admin-server-mode-launch-check.js").read_text(encoding="utf-8")
+    )
 
     assert '<select id="governance-target-user-id">' in index_html
     assert 'placeholder="目標 user id"' not in index_html

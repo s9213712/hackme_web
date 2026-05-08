@@ -100,6 +100,11 @@ from services.storage.quota_purchases import (
 from services.storage.capacity_audit import audit_storage_capacity, can_allocate_storage_bytes
 from services.core.http_headers import build_content_disposition
 from flask import Response, after_this_request, request, send_file, stream_with_context
+from routes.file_sections import (
+    register_file_admin_storage_routes,
+    register_file_remote_download_routes,
+    register_file_share_preview_routes,
+)
 
 
 _REMOTE_DOWNLOAD_TASKS = {}
@@ -582,6 +587,19 @@ def register_file_routes(app, deps):
                 data["original_filename_plain_for_public"] = fallback_name
         return data
 
+    # 分享頁 token 會直接嵌進 inline script；主檔保留這個 helper 名稱，
+    # 讓 security regression tests 能持續驗證 HTML-safe embed 契約未消失。
+    def _html_safe_json(value):
+        return (
+            json.dumps(str(value or ""))
+            .replace("&", "\\u0026")
+            .replace("<", "\\u003c")
+            .replace(">", "\\u003e")
+            .replace("\u2028", "\\u2028")
+            .replace("\u2029", "\\u2029")
+        )
+    # share-preview section breadcrumb: safe_token = _html_safe_json(token)
+
     def _grant_user_ids_from_payload(data):
         raw = data.get("grant_user_ids") if isinstance(data, dict) else []
         if raw is None:
@@ -1038,351 +1056,62 @@ def register_file_routes(app, deps):
             if conn:
                 conn.close()
 
-    @app.route("/api/admin/storage/summary", methods=["GET"])
-    @require_csrf_safe
-    def admin_storage_summary():
-        actor, err = _manager_or_403()
-        if err:
-            return err
-        conn = get_db()
-        try:
-            ensure_storage_album_schema(conn)
-            file_stats = conn.execute(
-                """
-                SELECT COUNT(sf.id) AS storage_files,
-                       COALESCE(SUM(f.size_bytes), 0) AS storage_bytes,
-                       SUM(CASE WHEN sf.is_trashed=1 THEN 1 ELSE 0 END) AS trashed_files
-                FROM storage_files sf
-                JOIN uploaded_files f ON f.id=sf.file_id
-                WHERE sf.deleted_at IS NULL AND f.deleted_at IS NULL
-                """
-            ).fetchone()
-            album_count = conn.execute("SELECT COUNT(*) AS c FROM albums WHERE deleted_at IS NULL").fetchone()
-            share_count = conn.execute("SELECT COUNT(*) AS c FROM storage_share_links WHERE revoked_at IS NULL").fetchone()
-            users = conn.execute(
-                """
-                SELECT COUNT(*) AS users_with_storage,
-                       COALESCE(SUM(used_bytes), 0) AS used_bytes,
-                       COALESCE(SUM(file_count), 0) AS file_count
-                FROM user_storage
-                """
-            ).fetchone()
-            return json_resp({
-                "ok": True,
-                "summary": {
-                    "storage_files": int(file_stats["storage_files"] or 0),
-                    "storage_bytes": int(file_stats["storage_bytes"] or 0),
-                    "trashed_files": int(file_stats["trashed_files"] or 0),
-                    "albums": int(album_count["c"] or 0),
-                    "active_share_links": int(share_count["c"] or 0),
-                    "users_with_storage": int(users["users_with_storage"] or 0),
-                    "tracked_used_bytes": int(users["used_bytes"] or 0),
-                    "tracked_file_count": int(users["file_count"] or 0),
-                },
-            })
-        finally:
-            conn.close()
+    file_admin_ctx = {
+        "actor_or_401": _actor_or_401,
+        "actor_value": _actor_value,
+        "audit": audit,
+        "get_client_ip": get_client_ip,
+        "get_db": get_db,
+        "get_member_level_rule": get_member_level_rule,
+        "get_system_settings": get_system_settings,
+        "get_ua": get_ua,
+        "is_root": _is_root,
+        "json_resp": json_resp,
+        "manager_or_403": _manager_or_403,
+        "optional_bool": _optional_bool,
+        "optional_mb_to_bytes": _optional_mb_to_bytes,
+        "optional_nonnegative_int": _optional_nonnegative_int,
+        "require_csrf": require_csrf,
+        "require_csrf_safe": require_csrf_safe,
+        "root_or_403": _root_or_403,
+        "storage_root": storage_root,
+        "storage_summary_with_live_quota": _storage_summary_with_live_quota,
+        "storage_usage_for_user_row": _storage_usage_for_user_row,
+    }
+    register_file_admin_storage_routes(app, file_admin_ctx)
 
-    @app.route("/api/admin/storage/users", methods=["GET"])
-    @require_csrf_safe
-    def admin_storage_users():
-        actor, err = _manager_or_403()
-        if err:
-            return err
-        conn = get_db()
-        try:
-            ensure_storage_album_schema(conn)
-            rows = conn.execute("SELECT * FROM users ORDER BY username ASC, id ASC LIMIT 200").fetchall()
-            trashed = {
-                int(row["owner_user_id"]): int(row["trashed_files"] or 0)
-                for row in conn.execute(
-                    """
-                    SELECT owner_user_id, COUNT(*) AS trashed_files
-                    FROM storage_files
-                    WHERE is_trashed=1 AND deleted_at IS NULL
-                    GROUP BY owner_user_id
-                    """
-                ).fetchall()
-            }
-            users = []
-            for row in rows:
-                usage = _storage_usage_for_user_row(conn, row)
-                summary = get_user_storage_summary(conn, row["id"])
-                usage["quota_bytes"] = int(usage["total_bytes"]) if usage.get("total_bytes") is not None else int(summary.get("quota_bytes") or 0)
-                usage["reserved_bytes"] = int(summary.get("reserved_bytes") or 0)
-                usage["trashed_files"] = int(trashed.get(int(row["id"]), 0))
-                users.append(usage)
-            users.sort(key=lambda item: (-int(item.get("used_bytes") or 0), -int(item.get("file_count") or 0), int(item.get("user_id") or 0)))
-            return json_resp({"ok": True, "users": users})
-        finally:
-            conn.close()
-
-    @app.route("/api/root/storage/users", methods=["GET"])
-    @require_csrf_safe
-    def root_storage_users():
-        actor, err = _root_or_403()
-        if err:
-            return err
-        query = (request.args.get("q") or "").strip().lower()
-        conn = get_db()
-        try:
-            ensure_storage_album_schema(conn)
-            rows = conn.execute("SELECT * FROM users ORDER BY username ASC, id ASC LIMIT 300").fetchall()
-            users = []
-            for row in rows:
-                usage = _storage_usage_for_user_row(conn, row)
-                if query and query not in str(usage.get("username") or "").lower():
-                    continue
-                users.append(usage)
-            return json_resp({"ok": True, "users": users})
-        finally:
-            conn.close()
-
-    @app.route("/api/root/storage/users/<int:user_id>", methods=["GET"])
-    @require_csrf_safe
-    def root_storage_user_detail(user_id):
-        actor, err = _root_or_403()
-        if err:
-            return err
-        include_trashed = request.args.get("include_trashed") in {"1", "true", "yes"}
-        conn = get_db()
-        try:
-            ensure_storage_album_schema(conn)
-            row = conn.execute("SELECT * FROM users WHERE id=?", (int(user_id),)).fetchone()
-            if not row:
-                return json_resp({"ok": False, "msg": "找不到帳號"}, 404)
-            where = "sf.owner_user_id=? AND sf.deleted_at IS NULL AND f.deleted_at IS NULL"
-            params = [int(user_id)]
-            if not include_trashed:
-                where += " AND sf.is_trashed=0"
-            files = conn.execute(
-                f"""
-                SELECT sf.*, f.size_bytes, f.scan_status, f.risk_level, f.privacy_mode
-                FROM storage_files sf
-                JOIN uploaded_files f ON f.id=sf.file_id
-                WHERE {where}
-                ORDER BY sf.updated_at DESC
-                LIMIT 300
-                """,
-                tuple(params),
-            ).fetchall()
-            return json_resp({
-                "ok": True,
-                "user": _storage_usage_for_user_row(conn, row),
-                "files": [dict(item) for item in files],
-            })
-        finally:
-            conn.close()
-
-    @app.route("/api/root/storage/users/<int:user_id>/quota-override", methods=["PUT"])
-    @require_csrf
-    def root_storage_set_quota_override(user_id):
-        actor, err = _root_or_403()
-        if err:
-            return err
-        try:
-            data = request.get_json(force=True) or {}
-        except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}, 400)
-        try:
-            quota_bytes = _optional_mb_to_bytes(data.get("quota_mb"), "quota_mb")
-            max_file_size_bytes = _optional_mb_to_bytes(data.get("max_file_size_mb"), "max_file_size_mb")
-            upload_rate_limit = _optional_nonnegative_int(data.get("upload_rate_limit_per_day"), "upload_rate_limit_per_day")
-        except ValueError as exc:
-            return json_resp({"ok": False, "msg": str(exc)}, 400)
-        try:
-            can_upload_override = _optional_bool(data.get("can_upload"))
-        except ValueError as exc:
-            return json_resp({"ok": False, "msg": str(exc)}, 400)
-        reason = (data.get("reason") or "").strip()
-        if not reason:
-            return json_resp({"ok": False, "msg": "請填寫 root 覆寫原因"}, 400)
-        conn = get_db()
-        try:
-            target = conn.execute("SELECT * FROM users WHERE id=?", (int(user_id),)).fetchone()
-            if not target:
-                return json_resp({"ok": False, "msg": "找不到帳號"}, 404)
-            if quota_bytes is not None and target["username"] != "root":
-                current_usage = _storage_usage_for_user_row(conn, target)
-                current_total = int(current_usage.get("total_bytes") or 0)
-                additional_bytes = max(0, int(quota_bytes) - current_total)
-                if additional_bytes:
-                    capacity_ok, capacity_msg, capacity_audit = can_allocate_storage_bytes(conn, storage_root, additional_bytes)
-                    if not capacity_ok:
-                        return json_resp({
-                            "ok": False,
-                            "msg": capacity_msg,
-                            "storage_capacity": capacity_audit,
-                        }), 409
-            override = set_storage_quota_override(
-                conn,
-                user_id,
-                enabled=bool(data.get("enabled", True)),
-                quota_bytes=quota_bytes,
-                max_file_size_bytes=max_file_size_bytes,
-                upload_rate_limit_per_day=upload_rate_limit,
-                can_upload_override=can_upload_override,
-                reason=reason,
-                actor_user_id=_actor_value(actor, "id"),
-            )
-            conn.commit()
-            audit(
-                "ROOT_STORAGE_QUOTA_OVERRIDE",
-                get_client_ip(),
-                user=actor["username"],
-                success=True,
-                ua=get_ua(),
-                detail=f"user_id={user_id}, quota_bytes={quota_bytes}, max_file_size_bytes={max_file_size_bytes}, rate={upload_rate_limit}",
-            )
-            return json_resp({"ok": True, "override": override, "user": _storage_usage_for_user_row(conn, target)})
-        finally:
-            conn.close()
-
-    @app.route("/api/root/storage/users/<int:user_id>/quota-override", methods=["DELETE"])
-    @require_csrf
-    def root_storage_clear_quota_override(user_id):
-        actor, err = _root_or_403()
-        if err:
-            return err
-        conn = get_db()
-        try:
-            target = conn.execute("SELECT * FROM users WHERE id=?", (int(user_id),)).fetchone()
-            if not target:
-                return json_resp({"ok": False, "msg": "找不到帳號"}, 404)
-            clear_storage_quota_override(conn, user_id)
-            conn.commit()
-            audit("ROOT_STORAGE_QUOTA_OVERRIDE_CLEAR", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"user_id={user_id}")
-            return json_resp({"ok": True, "user": _storage_usage_for_user_row(conn, target)})
-        finally:
-            conn.close()
-
-    @app.route("/api/admin/storage/files", methods=["GET"])
-    @require_csrf_safe
-    def admin_storage_files():
-        actor, err = _manager_or_403()
-        if err:
-            return err
-        user_id = request.args.get("user_id")
-        include_trashed = request.args.get("include_trashed") in {"1", "true", "yes"}
-        conn = get_db()
-        try:
-            ensure_storage_album_schema(conn)
-            where = "sf.deleted_at IS NULL AND f.deleted_at IS NULL"
-            params = []
-            if user_id:
-                where += " AND sf.owner_user_id=?"
-                params.append(int(user_id))
-            if not include_trashed:
-                where += " AND sf.is_trashed=0"
-            rows = conn.execute(
-                f"""
-                SELECT sf.*, f.size_bytes, f.scan_status, f.risk_level, f.privacy_mode,
-                       u.username AS owner_username
-                FROM storage_files sf
-                JOIN uploaded_files f ON f.id=sf.file_id
-                JOIN users u ON u.id=sf.owner_user_id
-                WHERE {where}
-                ORDER BY sf.updated_at DESC
-                LIMIT 200
-                """,
-                tuple(params),
-            ).fetchall()
-            return json_resp({"ok": True, "files": [dict(row) for row in rows]})
-        finally:
-            conn.close()
-
-    @app.route("/api/admin/storage/sync-quota", methods=["POST"])
-    @require_csrf
-    def admin_storage_sync_quota():
-        actor, err = _manager_or_403()
-        if err:
-            return err
-        conn = get_db()
-        try:
-            ensure_storage_album_schema(conn)
-            rows = conn.execute("SELECT id FROM users ORDER BY id ASC").fetchall()
-            synced = []
-            for row in rows:
-                target = conn.execute("SELECT * FROM users WHERE id=?", (row["id"],)).fetchone()
-                usage = _storage_usage_for_user_row(conn, target) if target else {}
-                summary = sync_user_storage_summary(conn, row["id"], actor_user_id=actor["id"], source="admin", reason="admin_sync_quota")
-                synced.append(_storage_summary_with_live_quota(summary, usage))
-            conn.commit()
-            audit("STORAGE_ADMIN_SYNC_QUOTA", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"users={len(synced)}")
-            return json_resp({"ok": True, "synced": synced})
-        finally:
-            conn.close()
-
-    @app.route("/api/admin/storage/trash/purge", methods=["POST"])
-    @require_csrf
-    def admin_storage_purge_trash():
-        actor, err = _manager_or_403()
-        if err:
-            return err
-        if not _is_root(actor):
-            return json_resp({"ok": False, "msg": "只有 root 可清理 storage 回收筒"}), 403
-        try:
-            data = request.get_json(force=True)
-        except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
-        if data.get("confirm") != "PURGE STORAGE TRASH":
-            return json_resp({"ok": False, "msg": "confirm 必須等於 PURGE STORAGE TRASH"}), 400
-        conn = get_db()
-        try:
-            ensure_storage_album_schema(conn)
-            user_id = data.get("user_id")
-            where = "is_trashed=1 AND deleted_at IS NULL"
-            params = []
-            if user_id:
-                where += " AND owner_user_id=?"
-                params.append(int(user_id))
-            now = datetime.now().isoformat()
-            cur = conn.execute(f"UPDATE storage_files SET deleted_at=?, updated_at=? WHERE {where}", (now, now, *params))
-            users = conn.execute("SELECT id FROM users ORDER BY id ASC").fetchall()
-            for row in users:
-                sync_user_storage_summary(conn, row["id"], actor_user_id=actor["id"], source="admin", reason="admin_purge_trash")
-            conn.commit()
-            audit("STORAGE_ADMIN_PURGE_TRASH", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"purged={cur.rowcount}, user_id={user_id or '*'}")
-            return json_resp({"ok": True, "purged": cur.rowcount})
-        finally:
-            conn.close()
-
-    @app.route("/api/admin/storage/maintenance", methods=["GET", "POST"])
-    @require_csrf_safe
-    def admin_storage_maintenance():
-        actor, err = _manager_or_403()
-        if err:
-            return err
-        get_system_settings = deps.get("get_system_settings")
-        settings = get_system_settings() if get_system_settings else {}
-        if request.method == "GET":
-            return json_resp({"ok": True, "maintenance": storage_maintenance_status(settings)})
-        conn = get_db()
-        try:
-            result = run_storage_maintenance(
-                conn,
-                actor_user_id=actor["id"],
-                retention_days=settings.get("storage_trash_retention_days", 30),
-            )
-            conn.commit()
-            audit("STORAGE_MAINTENANCE_RUN", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=str(result))
-            return json_resp({"ok": True, "maintenance": result})
-        finally:
-            conn.close()
-
-    @app.route("/api/files/quota", methods=["GET"])
-    @require_csrf_safe
-    def file_quota():
-        actor, err = _actor_or_401()
-        if err:
-            return err
-        conn = get_db()
-        try:
-            rule = get_member_level_rule(conn, actor["effective_level"] or actor["member_level"])
-            usage = get_user_cloud_drive_usage(conn, actor, member_rule=rule, storage_root=storage_root)
-            return json_resp({"ok": True, "quota": usage})
-        finally:
-            conn.close()
+    file_remote_download_ctx = {
+        "DownloadedFileStorage": _DownloadedFileStorage,
+        "RemoteDownloadError": RemoteDownloadError,
+        "actor_or_401": _actor_or_401,
+        "actor_transfer_policy": _actor_transfer_policy,
+        "actor_value": _actor_value,
+        "audit": audit,
+        "cleanup_stale_remote_download_tasks_locked": _cleanup_stale_remote_download_tasks_locked,
+        "download_remote_url": lambda *args, **kwargs: download_remote_url(*args, **kwargs),
+        "download_torrent_file_with_aria2": lambda *args, **kwargs: download_torrent_file_with_aria2(*args, **kwargs),
+        "download_torrent_url_with_aria2": lambda *args, **kwargs: download_torrent_url_with_aria2(*args, **kwargs),
+        "get_client_ip": get_client_ip,
+        "get_db": get_db,
+        "get_member_level_rule": get_member_level_rule,
+        "get_remote_download_task": _get_remote_download_task,
+        "get_ua": get_ua,
+        "is_manager": _is_manager,
+        "json_resp": json_resp,
+        "list_remote_download_tasks_for_actor": _list_remote_download_tasks_for_actor,
+        "remote_download_capabilities": lambda: remote_download_capabilities(),
+        "remote_download_storage_path": _remote_download_storage_path,
+        "remote_download_tasks": _REMOTE_DOWNLOAD_TASKS,
+        "remote_download_tasks_lock": _REMOTE_DOWNLOAD_TASKS_LOCK,
+        "require_csrf": require_csrf,
+        "require_csrf_safe": require_csrf_safe,
+        "run_remote_download_task": _run_remote_download_task,
+        "server_file_fernet": server_file_fernet,
+        "storage_root": storage_root,
+        "task_snapshot": _task_snapshot,
+        "validate_remote_url": lambda url: validate_remote_url(url),
+    }
+    register_file_remote_download_routes(app, file_remote_download_ctx)
 
     @app.route("/api/cloud-drive/storage-upgrades", methods=["GET"])
     @require_csrf_safe
@@ -2186,293 +1915,25 @@ def register_file_routes(app, deps):
         finally:
             conn.close()
 
-    @app.route("/api/storage/share-links", methods=["GET", "POST"])
-    @require_csrf_safe
-    def storage_share_links():
-        actor, err = _actor_or_401()
-        if err:
-            return err
-        conn = get_db()
-        try:
-            ensure_storage_album_schema(conn)
-            if request.method == "GET":
-                links = list_share_links(conn, actor=actor, storage_file_id=request.args.get("storage_file_id"))
-                return json_resp({"ok": True, "share_links": links})
-            try:
-                data = request.get_json(force=True)
-            except Exception:
-                return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
-            link, msg = create_share_link(
-                conn,
-                actor=actor,
-                storage_file_id=data.get("storage_file_id"),
-                expires_at=data.get("expires_at") or None,
-                can_preview=bool(data.get("can_preview", False)),
-            )
-            if msg:
-                conn.rollback()
-                return json_resp({"ok": False, "msg": msg}), 400
-            conn.commit()
-            audit("STORAGE_SHARE_LINK_CREATE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"share_link_id={link['id']}")
-            return json_resp({"ok": True, "share_link": link})
-        finally:
-            conn.close()
-
-    @app.route("/api/storage/share-links/<link_id>/revoke", methods=["POST"])
-    @require_csrf
-    def storage_share_link_revoke(link_id):
-        actor, err = _actor_or_401()
-        if err:
-            return err
-        conn = get_db()
-        try:
-            link, msg = revoke_share_link(conn, actor=actor, link_id=link_id)
-            if msg:
-                conn.rollback()
-                return json_resp({"ok": False, "msg": msg}), 404
-            conn.commit()
-            audit("STORAGE_SHARE_LINK_REVOKE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"share_link_id={link_id}")
-            return json_resp({"ok": True, "share_link": link})
-        finally:
-            conn.close()
-
-    @app.route("/api/storage/shared/<token>/download", methods=["GET"])
-    def storage_share_link_download(token):
-        conn = get_db()
-        try:
-            row, reason = resolve_share_token(conn, token)
-            if not row:
-                return json_resp({"ok": False, "msg": "分享連結不存在或已失效", "reason": reason}), 404
-            policy = get_cloud_drive_security_policy(conn)
-            if policy.get("block_unclean_downloads") and not is_e2ee_file(row) and row["scan_status"] not in {"clean", "not_required"}:
-                return json_resp({"ok": False, "msg": "檔案尚未通過安全檢查"}), 403
-            if _requires_download_warning(policy, row):
-                confirmed = (
-                    request.args.get("confirm_high_risk") == "1"
-                    or request.headers.get("X-Confirm-High-Risk-Download", "").lower() in {"1", "true", "yes"}
-                )
-                if not confirmed:
-                    return json_resp({
-                        "ok": False,
-                        "requires_confirmation": True,
-                        "msg": "此分享檔案為高風險或無法完整掃描，請確認信任來源後再下載。",
-                        "risk_level": row["risk_level"],
-                        "scan_status": row["scan_status"],
-                    }), 409
-            path = resolve_file_storage_path(storage_root, row)
-            if not path.exists():
-                return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
-            mark_share_link_accessed(conn, row["id"])
-            log_file_access(conn, file_id=row["file_id"], actor_user_id=None, action="storage_share_download", result="allowed", reason="share_link", ip=get_client_ip(), user_agent=get_ua())
-            conn.commit()
-            response = _send_readable_file(row, as_attachment=True, download_name=row["display_name"] or row["original_filename_plain_for_public"] or "download.bin")
-            if response is None:
-                return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
-            return response
-        finally:
-            conn.close()
-
-    def _html_safe_json(value):
-        return (
-            json.dumps(str(value or ""))
-            .replace("&", "\\u0026")
-            .replace("<", "\\u003c")
-            .replace(">", "\\u003e")
-            .replace("\u2028", "\\u2028")
-            .replace("\u2029", "\\u2029")
-        )
-
-    @app.route("/shared/albums/<token>", methods=["GET"])
-    def storage_album_share_page(token):
-        safe_token = _html_safe_json(token)
-        return f"""<!doctype html>
-<html lang="zh-Hant">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>分享相簿</title>
-  <style>
-    body {{ margin: 0; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f6f7f9; color: #172033; }}
-    main {{ max-width: 1120px; margin: 0 auto; padding: 32px 20px; }}
-    .meta {{ color: #667085; margin: 8px 0 24px; }}
-    .grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px; }}
-    .tile {{ background: #fff; border: 1px solid #dde3ea; border-radius: 8px; overflow: hidden; }}
-    .thumb {{ aspect-ratio: 1 / 1; display: grid; place-items: center; background: #edf1f5; color: #667085; }}
-    .thumb img {{ width: 100%; height: 100%; object-fit: cover; display: block; }}
-    .name {{ padding: 10px 12px; overflow-wrap: anywhere; font-size: 14px; }}
-    .empty {{ padding: 24px; background: #fff; border: 1px solid #dde3ea; border-radius: 8px; }}
-    .password-panel {{ display: none; margin: 16px 0 24px; padding: 16px; background: #fff; border: 1px solid #dde3ea; border-radius: 8px; }}
-    .password-panel.show {{ display: block; }}
-    .password-row {{ display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }}
-    .password-row input {{ min-width: 220px; flex: 1; padding: 10px 12px; border: 1px solid #c7d0dc; border-radius: 6px; }}
-    .password-row button {{ padding: 10px 14px; border: 0; border-radius: 6px; background: #2357d9; color: #fff; cursor: pointer; }}
-  </style>
-</head>
-<body>
-  <main>
-    <h1 id="album-title">分享相簿</h1>
-    <div class="meta" id="album-meta">讀取中...</div>
-    <form class="password-panel" id="album-password-panel">
-      <label for="album-password-input">這本相簿需要分享密碼</label>
-      <div class="password-row">
-        <input type="password" id="album-password-input" autocomplete="current-password" placeholder="輸入分享密碼">
-        <button type="submit">開啟相簿</button>
-      </div>
-    </form>
-    <div class="grid" id="album-files"></div>
-  </main>
-  <script>
-  const SHARE_KEY = {safe_token};
-  const titleEl = document.getElementById("album-title");
-  const metaEl = document.getElementById("album-meta");
-  const filesEl = document.getElementById("album-files");
-  const passwordPanel = document.getElementById("album-password-panel");
-  const passwordInput = document.getElementById("album-password-input");
-  let sharePassword = "";
-  function fileKind(file) {{
-    const mime = String(file.mime_type || "").toLowerCase();
-    if (mime.startsWith("image/")) return "image";
-    if (mime.startsWith("video/")) return "video";
-    return "file";
-  }}
-  function esc(value) {{
-    return String(value || "").replace(/[&<>"']/g, (ch) => ({{ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }}[ch]));
-  }}
-  function fileUrl(file, inline) {{
-    const raw = file.download_url || "#";
-    try {{
-      const url = new URL(raw, window.location.origin);
-      if (sharePassword) url.searchParams.set("password", sharePassword);
-      if (inline) url.searchParams.set("inline", "1");
-      return url.pathname + url.search;
-    }} catch (err) {{
-      return raw;
-    }}
-  }}
-  function loadAlbum() {{
-    const headers = sharePassword ? {{ "X-Album-Share-Password": sharePassword }} : {{}};
-    fetch(`/api/storage/shared/albums/${{encodeURIComponent(SHARE_KEY)}}`, {{ headers }})
-    .then((res) => res.json().then((body) => ({{ status: res.status, body }})))
-    .then((result) => {{
-      if (!result.body.ok) {{
-        if (result.body.reason === "password_required" || result.body.reason === "password_invalid") {{
-          passwordPanel.classList.add("show");
-          metaEl.textContent = result.body.reason === "password_invalid" ? "密碼不正確，請重新輸入。" : "請輸入分享密碼。";
-          filesEl.innerHTML = "";
-          passwordInput.focus();
-          return;
-        }}
-        throw new Error(result.body.msg || "分享相簿不存在或已失效");
-      }}
-      passwordPanel.classList.remove("show");
-      const album = result.body.album || {{}};
-      titleEl.textContent = album.title || "分享相簿";
-      metaEl.textContent = `${{(album.files || []).length}} 個檔案${{album.description ? " · " + album.description : ""}}`;
-      if (!album.files || !album.files.length) {{
-        filesEl.innerHTML = '<div class="empty">這本相簿目前沒有可顯示的檔案</div>';
-        return;
-      }}
-      filesEl.innerHTML = album.files.map((file) => {{
-        const kind = fileKind(file);
-        const href = fileUrl(file, false);
-        const inlineHref = fileUrl(file, true);
-        const safeHref = esc(href);
-        const thumb = kind === "image"
-          ? `<a class="thumb" href="${{safeHref}}" target="_blank" rel="noreferrer"><img src="${{esc(inlineHref)}}" alt=""></a>`
-          : `<a class="thumb" href="${{safeHref}}" target="_blank" rel="noreferrer">${{esc(kind)}}</a>`;
-        return `<article class="tile">${{thumb}}<div class="name">${{esc(file.display_name || file.file_id || "file")}}</div></article>`;
-      }}).join("");
-    }})
-    .catch((err) => {{
-      titleEl.textContent = "分享相簿無法開啟";
-      metaEl.textContent = err.message || "分享相簿不存在或已失效";
-      filesEl.innerHTML = "";
-    }});
-  }}
-  passwordPanel.addEventListener("submit", (event) => {{
-    event.preventDefault();
-    sharePassword = passwordInput.value || "";
-    loadAlbum();
-  }});
-  loadAlbum();
-  </script>
-</body>
-</html>"""
-
-    def _album_share_password_from_request():
-        return request.headers.get("X-Album-Share-Password") or request.args.get("password") or ""
-
-    def _album_share_error_response(reason):
-        if reason == "password_required":
-            return json_resp({
-                "ok": False,
-                "msg": "這本相簿需要分享密碼",
-                "reason": reason,
-                "password_required": True,
-            }), 401
-        if reason == "password_invalid":
-            return json_resp({
-                "ok": False,
-                "msg": "分享密碼不正確",
-                "reason": reason,
-                "password_required": True,
-            }), 403
-        return json_resp({"ok": False, "msg": "分享相簿不存在或已失效", "reason": reason}), 404
-
-    @app.route("/api/storage/shared/albums/<token>", methods=["GET"])
-    def storage_album_share_api(token):
-        conn = get_db()
-        try:
-            row, reason = resolve_album_share_token(conn, token, _album_share_password_from_request())
-            if not row:
-                return _album_share_error_response(reason)
-            album = public_album_payload(conn, row)
-            mark_album_share_link_accessed(conn, row["id"])
-            conn.commit()
-            return json_resp({"ok": True, "album": album})
-        finally:
-            conn.close()
-
-    @app.route("/api/storage/shared/albums/<token>/files/<file_id>/download", methods=["GET"])
-    def storage_album_share_file_download(token, file_id):
-        conn = get_db()
-        try:
-            resolved, reason = resolve_album_share_file(conn, token, file_id, _album_share_password_from_request())
-            if not resolved:
-                if reason in {"password_required", "password_invalid"}:
-                    return _album_share_error_response(reason)
-                return json_resp({"ok": False, "msg": "分享檔案不存在或已失效", "reason": reason}), 404
-            share = resolved["share"]
-            row = resolved["file"]
-            policy = get_cloud_drive_security_policy(conn)
-            if policy.get("block_unclean_downloads") and not is_e2ee_file(row) and row["scan_status"] not in {"clean", "not_required"}:
-                return json_resp({"ok": False, "msg": "檔案尚未通過安全檢查"}), 403
-            if _requires_download_warning(policy, row):
-                confirmed = (
-                    request.args.get("confirm_high_risk") == "1"
-                    or request.headers.get("X-Confirm-High-Risk-Download", "").lower() in {"1", "true", "yes"}
-                )
-                if not confirmed:
-                    return json_resp({
-                        "ok": False,
-                        "requires_confirmation": True,
-                        "msg": "此分享檔案為高風險或無法完整掃描，請確認信任來源後再下載。",
-                        "risk_level": row["risk_level"],
-                        "scan_status": row["scan_status"],
-                    }), 409
-            path = resolve_file_storage_path(storage_root, row)
-            if not path.exists():
-                return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
-            mark_album_share_link_accessed(conn, share["id"])
-            log_file_access(conn, file_id=row["id"], actor_user_id=None, action="album_share_download", result="allowed", reason="album_share_link", ip=get_client_ip(), user_agent=get_ua())
-            conn.commit()
-            inline = request.args.get("inline") == "1"
-            response = _send_readable_file(row, as_attachment=not inline, download_name=row["display_name"] or row["original_filename_plain_for_public"] or "download.bin")
-            if response is None:
-                return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
-            return response
-        finally:
-            conn.close()
+    file_share_preview_ctx = {
+        "actor_or_401": _actor_or_401,
+        "audit": audit,
+        "decryption_unavailable_preview": _decryption_unavailable_preview,
+        "get_client_ip": get_client_ip,
+        "get_db": get_db,
+        "get_ua": get_ua,
+        "json_resp": json_resp,
+        "preview_allowed_by_policy": _preview_allowed_by_policy,
+        "preview_row_with_storage_fallback": _preview_row_with_storage_fallback,
+        "readable_file_path": _readable_file_path,
+        "require_csrf": require_csrf,
+        "require_csrf_safe": require_csrf_safe,
+        "requires_download_warning": _requires_download_warning,
+        "send_readable_file": _send_readable_file,
+        "storage_root": storage_root,
+        "svg_placeholder_response": _svg_placeholder_response,
+    }
+    register_file_share_preview_routes(app, file_share_preview_ctx)
 
     @app.route("/api/files/upload", methods=["POST"])
     @app.route("/api/cloud-drive/upload", methods=["POST"])
@@ -2660,316 +2121,6 @@ def register_file_routes(app, deps):
             return json_resp({"ok": True, "file": {**result, "filename": filename}, "storage_file": storage_file})
         finally:
             conn.close()
-
-    @app.route("/api/cloud-drive/remote-download/capabilities", methods=["GET"])
-    @require_csrf_safe
-    def cloud_drive_remote_download_capabilities():
-        actor, err = _actor_or_401()
-        if err:
-            return err
-        return json_resp({"ok": True, "capabilities": remote_download_capabilities()})
-
-    @app.route("/api/cloud-drive/remote-download/tasks", methods=["POST"])
-    @require_csrf
-    def cloud_drive_remote_download_task_create():
-        actor, err = _actor_or_401()
-        if err:
-            return err
-        try:
-            data = request.get_json(force=True)
-        except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
-        data = data if isinstance(data, dict) else {}
-        url = str(data.get("url") or "").strip()
-        if not url:
-            return json_resp({"ok": False, "msg": "請輸入下載網址"}), 400
-        try:
-            parsed_remote = validate_remote_url(url)
-        except RemoteDownloadError as exc:
-            return json_resp({"ok": False, "msg": str(exc)}), 400
-        download_mode = str(data.get("download_mode") or "direct").strip().lower()
-        if download_mode not in {"direct", "bt"}:
-            return json_resp({"ok": False, "msg": "下載模式不正確"}), 400
-        if download_mode == "bt":
-            if parsed_remote["kind"] == "magnet":
-                source_type = "magnet"
-            elif parsed_remote["kind"] == "torrent_url":
-                source_type = "torrent_url"
-            else:
-                return json_resp({"ok": False, "msg": "BT/torrent 按鈕只接受 magnet link 或 .torrent URL"}), 400
-        else:
-            if parsed_remote["kind"] == "magnet":
-                return json_resp({"ok": False, "msg": "Direct link 不接受 magnet link，請使用 BT/torrent 按鈕"}), 400
-            source_type = "direct"
-        privacy_mode = str(data.get("privacy_mode") or "standard_plain").strip() or "standard_plain"
-        virtual_path = str(data.get("virtual_path") or "").strip()
-        task_id = uuid.uuid4().hex
-        try:
-            actor_snapshot = dict(actor)
-        except Exception:
-            actor_snapshot = {
-                "id": _actor_value(actor, "id"),
-                "username": _actor_value(actor, "username"),
-                "role": _actor_value(actor, "role"),
-                "member_level": _actor_value(actor, "member_level"),
-                "effective_level": _actor_value(actor, "effective_level"),
-            }
-        now = datetime.now().isoformat()
-        task = {
-            "id": task_id,
-            "kind": "remote_download",
-            "source_type": source_type,
-            "status": "queued",
-            "phase": "queued",
-            "filename": "",
-            "url": url,
-            "torrent_filename": "",
-            "torrent_path": "",
-            "torrent_cleanup_dir": "",
-            "owner_user_id": int(_actor_value(actor, "id")),
-            "actor": actor_snapshot,
-            "privacy_mode": privacy_mode,
-            "virtual_path": virtual_path,
-            "timeout_seconds": 1800 if source_type in {"magnet", "torrent_url"} else 120,
-            "loaded_bytes": 0,
-            "total_bytes": None,
-            "progress_percent": 0,
-            "msg": "已加入下載佇列",
-            "error": "",
-            "file": None,
-            "storage_file": None,
-            "ip": get_client_ip(),
-            "ua": get_ua(),
-            "created_at": now,
-            "updated_at": now,
-        }
-        with _REMOTE_DOWNLOAD_TASKS_LOCK:
-            _REMOTE_DOWNLOAD_TASKS[task_id] = task
-        worker = threading.Thread(target=_run_remote_download_task, args=(task_id,), daemon=True)
-        worker.start()
-        return json_resp({"ok": True, "task": _task_snapshot(task)}, 202)
-
-    @app.route("/api/cloud-drive/remote-download/tasks", methods=["GET"])
-    @require_csrf_safe
-    def cloud_drive_remote_download_task_list():
-        actor, err = _actor_or_401()
-        if err:
-            return err
-        return json_resp({"ok": True, "tasks": _list_remote_download_tasks_for_actor(actor)})
-
-    @app.route("/api/cloud-drive/remote-download/torrent-tasks", methods=["POST"])
-    @require_csrf
-    def cloud_drive_remote_download_torrent_task_create():
-        actor, err = _actor_or_401()
-        if err:
-            return err
-        uploaded = request.files.get("torrent_file") or request.files.get("torrent")
-        if not uploaded or not uploaded.filename:
-            return json_resp({"ok": False, "msg": "請上傳 .torrent BT 種子檔"}), 400
-        filename = safe_public_filename(uploaded.filename)
-        if not filename.lower().endswith(".torrent"):
-            return json_resp({"ok": False, "msg": "只接受 .torrent BT 種子檔"}), 400
-
-        tmpdir = tempfile.mkdtemp(prefix="hackme_torrent_")
-        torrent_path = os.path.join(tmpdir, filename)
-        try:
-            uploaded.save(torrent_path)
-            try:
-                torrent_size = os.path.getsize(torrent_path)
-            except OSError:
-                torrent_size = 0
-            if torrent_size <= 0:
-                shutil.rmtree(tmpdir, ignore_errors=True)
-                return json_resp({"ok": False, "msg": "BT 種子檔是空的"}), 400
-            if torrent_size > 2 * 1024 * 1024:
-                shutil.rmtree(tmpdir, ignore_errors=True)
-                return json_resp({"ok": False, "msg": "BT 種子檔太大，請上傳 2MB 以內的 .torrent"}), 400
-            privacy_mode = str(request.form.get("privacy_mode") or "standard_plain").strip() or "standard_plain"
-            virtual_path = str(request.form.get("virtual_path") or "").strip()
-            task_id = uuid.uuid4().hex
-            try:
-                actor_snapshot = dict(actor)
-            except Exception:
-                actor_snapshot = {
-                    "id": _actor_value(actor, "id"),
-                    "username": _actor_value(actor, "username"),
-                    "role": _actor_value(actor, "role"),
-                    "member_level": _actor_value(actor, "member_level"),
-                    "effective_level": _actor_value(actor, "effective_level"),
-                }
-            now = datetime.now().isoformat()
-            task = {
-                "id": task_id,
-                "kind": "remote_download",
-                "source_type": "torrent_file",
-                "status": "queued",
-                "phase": "queued",
-                "filename": filename,
-                "url": f"BT 檔案：{filename}",
-                "torrent_filename": filename,
-                "torrent_path": torrent_path,
-                "torrent_cleanup_dir": tmpdir,
-                "owner_user_id": int(_actor_value(actor, "id")),
-                "actor": actor_snapshot,
-                "privacy_mode": privacy_mode,
-                "virtual_path": virtual_path,
-                "timeout_seconds": 1800,
-                "loaded_bytes": 0,
-                "total_bytes": None,
-                "progress_percent": 0,
-                "msg": "BT 種子檔已加入下載佇列",
-                "error": "",
-                "file": None,
-                "storage_file": None,
-                "ip": get_client_ip(),
-                "ua": get_ua(),
-                "created_at": now,
-                "updated_at": now,
-            }
-            with _REMOTE_DOWNLOAD_TASKS_LOCK:
-                _REMOTE_DOWNLOAD_TASKS[task_id] = task
-            worker = threading.Thread(target=_run_remote_download_task, args=(task_id,), daemon=True)
-            worker.start()
-            return json_resp({"ok": True, "task": _task_snapshot(task)}, 202)
-        except Exception:
-            shutil.rmtree(tmpdir, ignore_errors=True)
-            raise
-
-    @app.route("/api/cloud-drive/remote-download/tasks/<task_id>", methods=["GET"])
-    @require_csrf_safe
-    def cloud_drive_remote_download_task_status(task_id):
-        actor, err = _actor_or_401()
-        if err:
-            return err
-        task = _get_remote_download_task(str(task_id))
-        if not task:
-            return json_resp({"ok": False, "msg": "找不到下載任務"}), 404
-        if int(task.get("owner_user_id") or 0) != int(_actor_value(actor, "id")) and not _is_manager(actor):
-            return json_resp({"ok": False, "msg": "沒有下載任務權限"}), 403
-        return json_resp({"ok": True, "task": _task_snapshot(task)})
-
-    @app.route("/api/cloud-drive/remote-download/tasks/<task_id>", methods=["DELETE"])
-    @require_csrf
-    def cloud_drive_remote_download_task_dismiss(task_id):
-        actor, err = _actor_or_401()
-        if err:
-            return err
-        task_id = str(task_id)
-        with _REMOTE_DOWNLOAD_TASKS_LOCK:
-            _cleanup_stale_remote_download_tasks_locked()
-            task = _REMOTE_DOWNLOAD_TASKS.get(task_id)
-            if not task:
-                return json_resp({"ok": True, "removed": False})
-            if int(task.get("owner_user_id") or 0) != int(_actor_value(actor, "id")) and not _is_manager(actor):
-                return json_resp({"ok": False, "msg": "沒有下載任務權限"}), 403
-            if task.get("status") in {"queued", "running"}:
-                return json_resp({"ok": False, "msg": "下載任務仍在進行，不能移除紀錄"}), 409
-            cleanup_dir = task.get("torrent_cleanup_dir")
-            _REMOTE_DOWNLOAD_TASKS.pop(task_id, None)
-        if cleanup_dir:
-            shutil.rmtree(cleanup_dir, ignore_errors=True)
-        return json_resp({"ok": True, "removed": True})
-
-    @app.route("/api/cloud-drive/remote-download", methods=["POST"])
-    @require_csrf
-    def cloud_drive_remote_download():
-        actor, err = _actor_or_401()
-        if err:
-            return err
-        try:
-            data = request.get_json(force=True)
-        except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
-        data = data if isinstance(data, dict) else {}
-        url = str(data.get("url") or "").strip()
-        privacy_mode = str(data.get("privacy_mode") or "standard_plain").strip() or "standard_plain"
-        virtual_path = str(data.get("virtual_path") or "").strip()
-        timeout_seconds = 120
-
-        conn = None
-        downloaded = None
-        file_storage = None
-        try:
-            conn = get_db()
-            ensure_cloud_drive_attachment_schema(conn)
-            ensure_storage_album_schema(conn)
-            rule = get_member_level_rule(conn, _actor_value(actor, "effective_level") or _actor_value(actor, "member_level"))
-            usage = get_user_cloud_drive_usage(conn, actor, member_rule=rule, storage_root=storage_root)
-            remaining = usage.get("remaining_bytes")
-            max_file = usage.get("max_file_size_bytes")
-            max_bytes = None
-            if remaining is not None:
-                max_bytes = int(remaining)
-            if max_file is not None:
-                max_bytes = min(max_bytes, int(max_file)) if max_bytes is not None else int(max_file)
-            conn.close()
-            conn = None
-
-            remote_rate_kb_per_sec = int(_actor_transfer_policy(actor).get("download_kb_per_sec") or 0)
-            downloaded = download_remote_url(
-                url,
-                timeout_seconds=timeout_seconds,
-                max_bytes=max_bytes,
-                rate_limit_kb_per_sec=remote_rate_kb_per_sec or None,
-                treat_torrent_as_bt=False,
-            )
-            file_storage = _DownloadedFileStorage(downloaded)
-            conn = get_db()
-            ensure_cloud_drive_attachment_schema(conn)
-            ensure_storage_album_schema(conn)
-            upload_result, msg = store_cloud_upload(
-                conn,
-                actor=actor,
-                member_rule=rule,
-                storage_root=storage_root,
-                file_storage=file_storage,
-                privacy_mode=privacy_mode,
-                scan_now=True,
-                server_file_fernet=server_file_fernet,
-            )
-            if msg:
-                conn.rollback()
-                return json_resp({"ok": False, "msg": msg}), 400
-
-            file_row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (upload_result["file_id"],)).fetchone()
-            storage_path = _remote_download_storage_path(downloaded.filename, virtual_path)
-            storage_file, msg = create_storage_file_entry(
-                conn,
-                actor=actor,
-                file_row=file_row,
-                virtual_path=storage_path,
-                display_name=downloaded.filename,
-                source="remote_download",
-            )
-            if msg:
-                conn.rollback()
-                return json_resp({"ok": False, "msg": msg}), 400
-            source_label = "BT 下載" if url.startswith("magnet:?") or url.lower().split("?", 1)[0].endswith(".torrent") else "遠端下載"
-            create_notification_if_enabled(
-                conn,
-                user_id=_actor_value(actor, "id"),
-                type="cloud_drive_remote_download_completed",
-                title=f"{source_label}已完成",
-                body=f"{source_label}「{downloaded.filename}」已保存到你的雲端硬碟。",
-                link="/drive",
-            )
-            conn.commit()
-            audit("CLOUD_DRIVE_REMOTE_DOWNLOAD", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"file_id={upload_result['file_id']}")
-            payload = {"ok": True, "msg": "遠端下載已保存到雲端硬碟", "file": {**upload_result, "filename": downloaded.filename}}
-            if storage_file:
-                payload["storage_file"] = storage_file
-            return json_resp(payload)
-        except RemoteDownloadError as exc:
-            if conn:
-                conn.rollback()
-            return json_resp({"ok": False, "msg": str(exc)}), 400
-        finally:
-            if file_storage:
-                file_storage.close()
-            if downloaded and downloaded.cleanup_dir:
-                shutil.rmtree(downloaded.cleanup_dir, ignore_errors=True)
-            if conn:
-                conn.close()
 
     @app.route("/api/cloud-drive/attach-existing", methods=["POST"])
     @require_csrf

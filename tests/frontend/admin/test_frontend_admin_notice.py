@@ -6,7 +6,11 @@ ROOT = Path(__file__).resolve().parents[3]
 
 def test_admin_notice_panel_and_bindings_exist():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
-    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    admin_js = (
+        (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+        + "\n"
+        + (ROOT / "public" / "js" / "51-admin-server-mode-launch-check.js").read_text(encoding="utf-8")
+    )
     bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
     core_js = (ROOT / "public" / "js" / "00-core.js").read_text(encoding="utf-8")
 

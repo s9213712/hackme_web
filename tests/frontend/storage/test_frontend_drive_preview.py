@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[3]
 
 def test_cloud_drive_preview_ui_is_wired():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
-    drive_js = (ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8")
+    drive_js = ((ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8") + "\n" + (ROOT / "public" / "js" / "35-drive-preview-share.js").read_text(encoding="utf-8"))
     server_py = (ROOT / "server.py").read_text(encoding="utf-8")
 
     assert 'id="drive-preview-card"' in index_html
@@ -66,7 +66,7 @@ def test_cloud_drive_preview_ui_is_wired():
 
 def test_filemanager_and_albummanager_ui_are_wired():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
-    drive_js = (ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8")
+    drive_js = ((ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8") + "\n" + (ROOT / "public" / "js" / "35-drive-preview-share.js").read_text(encoding="utf-8"))
     bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
 
     assert 'id="storage-upload-file"' in index_html
@@ -159,9 +159,13 @@ def test_filemanager_and_albummanager_ui_are_wired():
 
 def test_album_viewer_has_dedicated_module():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
-    drive_js = (ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8")
+    drive_js = ((ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8") + "\n" + (ROOT / "public" / "js" / "35-drive-preview-share.js").read_text(encoding="utf-8"))
     core_js = (ROOT / "public" / "js" / "00-core.js").read_text(encoding="utf-8")
-    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    admin_js = (
+        (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+        + "\n"
+        + (ROOT / "public" / "js" / "51-admin-server-mode-launch-check.js").read_text(encoding="utf-8")
+    )
     bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
 
     assert 'id="tab-module-albums"' in index_html
@@ -331,7 +335,7 @@ def test_album_viewer_has_dedicated_module():
 
 
 def test_album_preview_category_uses_storage_name_before_uploaded_metadata():
-    drive_js = (ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8")
+    drive_js = ((ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8") + "\n" + (ROOT / "public" / "js" / "35-drive-preview-share.js").read_text(encoding="utf-8"))
 
     assert 'const name = file?.display_name || file?.virtual_path || file?.original_filename_plain_for_public || file?.storage_path || "";' in drive_js
     assert 'const canTryPreview = category === "image" || category === "metadata";' in drive_js
@@ -341,7 +345,7 @@ def test_album_preview_category_uses_storage_name_before_uploaded_metadata():
 
 def test_album_gallery_layout_wraps_long_filenames():
     css = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
-    drive_js = (ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8")
+    drive_js = ((ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8") + "\n" + (ROOT / "public" / "js" / "35-drive-preview-share.js").read_text(encoding="utf-8"))
 
     assert 'class="drive-gallery-file-info"' in drive_js
     assert ".drive-gallery-tile {" in css
@@ -353,7 +357,7 @@ def test_album_gallery_layout_wraps_long_filenames():
 
 def test_cloud_drive_privacy_modes_use_human_labels():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
-    drive_js = (ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8")
+    drive_js = ((ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8") + "\n" + (ROOT / "public" / "js" / "35-drive-preview-share.js").read_text(encoding="utf-8"))
 
     assert 'value="standard_plain">一般檔案（可掃毒、可預覽、可分享）' in index_html
     assert 'value="server_encrypted">伺服器端加密（磁碟密文、下載明文）' in index_html
@@ -381,7 +385,7 @@ def test_cloud_drive_privacy_modes_use_human_labels():
 
 def test_cloud_drive_storage_upgrade_ui_is_wired():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
-    drive_js = (ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8")
+    drive_js = ((ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8") + "\n" + (ROOT / "public" / "js" / "35-drive-preview-share.js").read_text(encoding="utf-8"))
     routes_py = (ROOT / "routes" / "files.py").read_text(encoding="utf-8")
     upload_security_py = (ROOT / "services" / "security" / "upload_security.py").read_text(encoding="utf-8")
 
@@ -419,7 +423,7 @@ def test_core_api_fetch_refreshes_csrf_once():
 
 
 def test_cloud_drive_e2ee_upload_prepares_required_crypto_fields():
-    drive_js = (ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8")
+    drive_js = ((ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8") + "\n" + (ROOT / "public" / "js" / "35-drive-preview-share.js").read_text(encoding="utf-8"))
 
     assert "async function prepareDriveE2eeUpload(file, passphrase, includeClientScanReport = false)" in drive_js
     assert "window.crypto.subtle.generateKey" in drive_js
@@ -442,7 +446,7 @@ def test_cloud_drive_e2ee_upload_prepares_required_crypto_fields():
 
 
 def test_cloud_drive_e2ee_download_decrypts_in_browser():
-    drive_js = (ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8")
+    drive_js = ((ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8") + "\n" + (ROOT / "public" / "js" / "35-drive-preview-share.js").read_text(encoding="utf-8"))
 
     assert "async function unwrapDriveFileKey(encryptedFileKey, passphrase)" in drive_js
     assert "async function decryptDriveE2eeBlob(blob, e2ee, passphrase)" in drive_js
@@ -465,3 +469,37 @@ def test_cloud_drive_e2ee_download_decrypts_in_browser():
     assert "outputBlob = decrypted.blob" in drive_js
     assert "name = decrypted.filename || name" in drive_js
     assert "伺服器無法重設或找回此密碼" in drive_js
+
+
+def test_share_link_copy_buttons_have_clipboard_fallback():
+    """Issue #176 / #177 regression guard.
+
+    Both `copyAlbumShareUrl` (drive) and `copyVideoLink` (videos) call
+    `navigator.clipboard.writeText`, which is undefined in non-secure
+    contexts (HTTP). The fallback MUST give the user a way to manually
+    select+copy the URL — not just flash a toast that disappears."""
+    drive_js = ((ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8") + "\n" + (ROOT / "public" / "js" / "35-drive-preview-share.js").read_text(encoding="utf-8"))
+    video_js = (ROOT / "public" / "js" / "39-videos.js").read_text(encoding="utf-8")
+
+    # Drive: prompt-based fallback is OK (user can select+copy).
+    assert "async function copyAlbumShareUrl(url)" in drive_js
+    assert "navigator.clipboard.writeText(shareUrl)" in drive_js
+    assert 'window.prompt("分享連結"' in drive_js, (
+        "drive copyAlbumShareUrl must offer a window.prompt fallback so the "
+        "URL is selectable when navigator.clipboard is unavailable"
+    )
+
+    # Videos: assert copyVideoLink has a fallback that lets the user
+    # actually copy the URL (window.prompt OR a persistent visible element).
+    assert "async function copyVideoLink(videoId)" in video_js
+    assert "navigator.clipboard.writeText(url)" in video_js
+    has_prompt_fallback = "window.prompt" in video_js
+    has_input_fallback = (
+        "select()" in video_js and "execCommand" in video_js
+    )
+    assert has_prompt_fallback or has_input_fallback, (
+        "copyVideoLink fallback must offer a way for the user to manually "
+        "select and copy the URL when navigator.clipboard is unavailable. "
+        "videoMsg(url, true) alone is a transient toast and not selectable. "
+        "See issue #176."
+    )
