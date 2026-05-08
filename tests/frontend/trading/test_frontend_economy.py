@@ -568,7 +568,9 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "codex_competition" in workflow_templates
     assert "param_search" in workflow_templates
     assert "take_profit_percent" in workflow_templates
-    assert "未載入圖表，正在由後端下載歷史 K 線後回測" in trading_js
+    assert 'hasCandleData ? "目前圖表不涵蓋你選的回測區間，" : "未載入圖表，"' in trading_js
+    assert "正在由後端下載歷史 K 線後回測" in trading_js
+    assert "目前圖表不涵蓋你選的回測區間" in trading_js
     assert "auto_fetch_reference_candles = true" in trading_js
     assert "estimateBacktestRequestedCandles" in trading_js
     assert "BACKTEST_TOTAL_CANDLE_LIMIT" in trading_js
@@ -606,6 +608,17 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "margin_maintenance_percent" in trading_js
     assert "margin_long_financing_percent" in trading_js
     assert "short_collateral_percent" in trading_js
+    assert 'id="trading-stop-loss-percent"' in trading_section
+    assert 'id="trading-take-profit-percent"' in trading_section
+    assert 'id="trading-margin-stop-loss-percent"' in trading_section
+    assert 'id="trading-margin-take-profit-percent"' in trading_section
+    assert 'id="trading-auto-stop-loss-percent"' in trading_section
+    assert 'id="trading-auto-take-profit-percent"' in trading_section
+    assert 'id="trading-dca-stop-loss-percent"' in trading_section
+    assert 'id="trading-dca-take-profit-percent"' in trading_section
+    assert "function tradingRiskTargetText" in trading_js
+    assert "stop_loss_percent: tradingOptionalPercentValue" in trading_js
+    assert "take_profit_percent: tradingOptionalPercentValue" in trading_js
     assert "tradingInputPercent" in trading_js
     assert "formatTradingPercent" in trading_js
     assert "initial_margin_points" in trading_js
@@ -835,3 +848,17 @@ def test_trading_ui_labels_reference_and_risk_grade_price_usage():
     assert "simulated_slippage_size_basis_points_per_10k_notional" in admin_js
     assert "simulated_slippage_max_basis_points" in admin_js
     assert 'usable ${risk.risk_grade_usable ? "yes" : "no"}' in admin_js
+
+
+def test_trading_frontend_surfaces_bot_and_backtest_errors_with_direct_grid_benchmark_numbers():
+    trading_js = (ROOT / "public" / "js" / "56-trading.js").read_text(encoding="utf-8")
+    trading_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
+
+    assert "function tradingFriendlyErrorText" in trading_js
+    assert "目前圖表 K 線不涵蓋你選的回測區間" in trading_js
+    assert "這個市場目前未開放交易機器人" in trading_js
+    assert "Workflow 歷史回測報告讀取失敗" in trading_js
+    assert "目前沒有可用的 Workflow 歷史回測資料" in trading_js
+    assert "目前沒有開放機器人的市場" in trading_js
+    assert "docs/COMPETITION/GRID_SKYFLOOR_COMPARISON.md" not in trading_html
+    assert "5 個資產 5 年 1h 回測平均報酬：保守 +37.39%、窄天地 +73.59%、中天地 +70.81%、寬天地 +77.01%、極寬天地 +111.47%。" in trading_html

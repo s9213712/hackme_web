@@ -22,6 +22,13 @@ def _json_dumps(value):
     return json.dumps(value or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def _normalize_optional_risk_percent(value, *, name):
+    if value in (None, ""):
+        return None
+    number = float(_to_decimal(value, name=name, minimum=0.00000001, maximum=1000))
+    return number if number > 0 else None
+
+
 def _simulated_slippage_profile(settings):
     safe = settings if isinstance(settings, dict) else {}
     enabled = bool(safe.get("simulated_slippage_enabled"))
@@ -82,6 +89,8 @@ def place_order(
     order_type,
     quantity,
     limit_price_points=None,
+    stop_loss_percent=None,
+    take_profit_percent=None,
     emergency_close=False,
     is_grid_order=False,
     ctx=None,
@@ -96,6 +105,8 @@ def place_order(
         raise ValueError("side must be buy or sell")
     if order_type not in {"market", "limit"}:
         raise ValueError("order_type must be market or limit")
+    stop_loss_percent = _normalize_optional_risk_percent(stop_loss_percent, name="stop_loss_percent")
+    take_profit_percent = _normalize_optional_risk_percent(take_profit_percent, name="take_profit_percent")
     emergency_close = bool(emergency_close)
     is_grid_order = bool(is_grid_order)
     if emergency_close and (side != "sell" or order_type != "market"):
@@ -219,8 +230,8 @@ def place_order(
                     order_uuid, tester_user_id, user_id, market_symbol, side, order_type, funding_mode, execution_mode,
                     quantity_units, limit_price_points, execution_price_points, status,
                     frozen_points, trial_frozen_points, chain_frozen_points, fee_points,
-                    filled_quantity_units, reason, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'house_counterparty', ?, ?, ?, 'open', ?, ?, ?, ?, 0, ?, ?, ?)
+                    filled_quantity_units, stop_loss_percent, take_profit_percent, reason, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'house_counterparty', ?, ?, ?, 'open', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
                 """,
                 (
                     order_uuid,
@@ -237,6 +248,8 @@ def place_order(
                     trial_frozen,
                     chain_frozen,
                     fee,
+                    stop_loss_percent,
+                    take_profit_percent,
                     order_reason,
                     now,
                     now,
@@ -249,8 +262,8 @@ def place_order(
                     order_uuid, user_id, market_symbol, side, order_type, funding_mode, execution_mode,
                     quantity_units, limit_price_points, execution_price_points, status,
                     frozen_points, trial_frozen_points, chain_frozen_points, fee_points,
-                    filled_quantity_units, reason, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 'house_counterparty', ?, ?, ?, 'open', ?, ?, ?, ?, 0, ?, ?, ?)
+                    filled_quantity_units, stop_loss_percent, take_profit_percent, reason, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'house_counterparty', ?, ?, ?, 'open', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
                 """,
                 (
                     order_uuid,
@@ -266,6 +279,8 @@ def place_order(
                     trial_frozen,
                     chain_frozen,
                     fee,
+                    stop_loss_percent,
+                    take_profit_percent,
                     order_reason,
                     now,
                     now,
@@ -621,13 +636,18 @@ def execute_order(service, conn, order, market, *, actor, ctx=None):
             if next_qty
             else 0
         )
+        next_stop_loss_percent = position["stop_loss_percent"] if "stop_loss_percent" in position.keys() else None
+        next_take_profit_percent = position["take_profit_percent"] if "take_profit_percent" in position.keys() else None
+        if "stop_loss_percent" in order.keys() and (order["stop_loss_percent"] is not None or order["take_profit_percent"] is not None):
+            next_stop_loss_percent = order["stop_loss_percent"]
+            next_take_profit_percent = order["take_profit_percent"]
         conn.execute(
             f"""
             UPDATE {positions_table}
-            SET quantity_units=?, avg_cost_points=?, updated_at=?
+            SET quantity_units=?, avg_cost_points=?, stop_loss_percent=?, take_profit_percent=?, updated_at=?
             WHERE user_id=? AND market_symbol=?
             """,
-            (next_qty, next_avg, _now_text(), user_id, market["symbol"]),
+            (next_qty, next_avg, next_stop_loss_percent, next_take_profit_percent, _now_text(), user_id, market["symbol"]),
         )
         reserve_delta = (
             0
@@ -719,13 +739,18 @@ def execute_order(service, conn, order, market, *, actor, ctx=None):
             - quantity_units
         )
         next_avg_cost = avg_cost if next_total_units > 0 else 0
+        next_stop_loss_percent = position["stop_loss_percent"] if "stop_loss_percent" in position.keys() else None
+        next_take_profit_percent = position["take_profit_percent"] if "take_profit_percent" in position.keys() else None
+        if next_total_units <= 0:
+            next_stop_loss_percent = None
+            next_take_profit_percent = None
         conn.execute(
             f"""
             UPDATE {positions_table}
-            SET locked_quantity_units=locked_quantity_units-?, avg_cost_points=?, updated_at=?
+            SET locked_quantity_units=locked_quantity_units-?, avg_cost_points=?, stop_loss_percent=?, take_profit_percent=?, updated_at=?
             WHERE user_id=? AND market_symbol=?
             """,
-            (quantity_units, next_avg_cost, _now_text(), user_id, market["symbol"]),
+            (quantity_units, next_avg_cost, next_stop_loss_percent, next_take_profit_percent, _now_text(), user_id, market["symbol"]),
         )
         reserve_delta = 0 if funding_mode == "root_simulated" else fee
     fill_uuid = str(uuid.uuid4())
@@ -903,3 +928,149 @@ def cancel_order(service, *, actor, order_uuid, ctx=None):
         raise
     finally:
         conn.close()
+
+
+def _spot_target_hit(position, *, observed_price, observed_low, observed_high):
+    quantity_units = int(position["quantity_units"] or 0)
+    locked_units = int(position["locked_quantity_units"] or 0)
+    sellable_units = max(0, quantity_units - locked_units)
+    if sellable_units <= 0:
+        return None
+    avg_cost = float(_to_decimal(position["avg_cost_points"] or 0, name="avg_cost_points", minimum=0))
+    if avg_cost <= 0:
+        return None
+    stop_loss_percent = (
+        float(position["stop_loss_percent"])
+        if "stop_loss_percent" in position.keys() and position["stop_loss_percent"] is not None
+        else None
+    )
+    take_profit_percent = (
+        float(position["take_profit_percent"])
+        if "take_profit_percent" in position.keys() and position["take_profit_percent"] is not None
+        else None
+    )
+    if stop_loss_percent and observed_low > 0:
+        trigger_price = avg_cost * max(0.0, 1.0 - stop_loss_percent / 100.0)
+        if observed_low <= trigger_price:
+            return {
+                "target_type": "stop_loss",
+                "target_percent": stop_loss_percent,
+                "trigger_price_points": round(trigger_price, 8),
+                "observed_price_points": observed_price,
+                "sellable_units": sellable_units,
+            }
+    if take_profit_percent and observed_high > 0:
+        trigger_price = avg_cost * (1.0 + take_profit_percent / 100.0)
+        if observed_high >= trigger_price:
+            return {
+                "target_type": "take_profit",
+                "target_percent": take_profit_percent,
+                "trigger_price_points": round(trigger_price, 8),
+                "observed_price_points": observed_price,
+                "sellable_units": sellable_units,
+            }
+    return None
+
+
+def scan_spot_risk_targets(service, *, actor=None, limit=200, ctx=None):
+    ctx = service._resolve_trading_ctx(ctx, action="scan_spot_risk_targets")
+    limit = _to_int(limit or 200, name="limit", minimum=1, maximum=1000)
+    conn = service.get_db()
+    try:
+        service.ensure_schema(conn)
+        conn.commit()
+        positions_table = resolve_table("positions", ctx)
+        rows = conn.execute(
+            f"""
+            SELECT p.*, u.username, u.role
+            FROM {positions_table} p
+            JOIN users u ON u.id = p.user_id
+            WHERE (p.stop_loss_percent IS NOT NULL OR p.take_profit_percent IS NOT NULL)
+              AND (p.quantity_units - p.locked_quantity_units) > 0
+            ORDER BY p.user_id ASC, p.market_symbol ASC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        triggered_candidates = []
+        skipped = []
+        errors = []
+        for row in rows:
+            try:
+                market = service._market(conn, row["market_symbol"])
+                if not service._is_market_boot_ready(market):
+                    skipped.append({"user_id": int(row["user_id"]), "market_symbol": row["market_symbol"], "reason": "market_boot_pending"})
+                    continue
+                observed_price, _price_source, price_meta = service._current_market_price_points(
+                    conn, market, with_meta=True, high_risk=True
+                )
+                service._assert_price_meta_allows_high_risk_use(
+                    conn,
+                    actor={"id": int(row["user_id"]), "username": row["username"], "role": row["role"]},
+                    market_symbol=market["symbol"],
+                    usage="spot risk target auto close",
+                    price_meta=price_meta,
+                )
+                settings = service._settings_payload(conn)
+                price_window = service._recent_price_window(
+                    market["symbol"],
+                    lookback_seconds=max(60, int(settings.get("bot_auto_scan_interval_seconds") or 30) + 5),
+                    conn=conn,
+                )
+                observed_low = float((price_window or {}).get("low_points") or observed_price)
+                observed_high = float((price_window or {}).get("high_points") or observed_price)
+                target = _spot_target_hit(
+                    row,
+                    observed_price=observed_price,
+                    observed_low=observed_low,
+                    observed_high=observed_high,
+                )
+                if target is None:
+                    continue
+                triggered_candidates.append(
+                    {
+                        "actor": {"id": int(row["user_id"]), "username": row["username"], "role": row["role"]},
+                        "market_symbol": market["symbol"],
+                        "quantity": units_to_quantity(int(target["sellable_units"])),
+                        **target,
+                    }
+                )
+            except Exception as exc:
+                errors.append({"user_id": int(row["user_id"]), "market_symbol": row["market_symbol"], "error": str(exc)})
+        conn.close()
+        conn = None
+        triggered = []
+        for candidate in triggered_candidates:
+            try:
+                result = service.place_order(
+                    actor=candidate["actor"],
+                    market_symbol=candidate["market_symbol"],
+                    side="sell",
+                    order_type="market",
+                    quantity=candidate["quantity"],
+                    ctx=ctx,
+                )
+                triggered.append(
+                    {
+                        "user_id": int(candidate["actor"]["id"]),
+                        "market_symbol": candidate["market_symbol"],
+                        "target_type": candidate["target_type"],
+                        "target_percent": candidate["target_percent"],
+                        "order_uuid": (result.get("order") or {}).get("order_uuid"),
+                        "observed_price_points": candidate["observed_price_points"],
+                        "trigger_price_points": candidate["trigger_price_points"],
+                    }
+                )
+            except Exception as exc:
+                errors.append(
+                    {
+                        "user_id": int(candidate["actor"]["id"]),
+                        "market_symbol": candidate["market_symbol"],
+                        "target_type": candidate["target_type"],
+                        "error": str(exc),
+                    }
+                )
+        return {"ok": not errors, "scanned": len(rows), "triggered": triggered, "skipped": skipped, "errors": errors}
+    finally:
+        if conn is not None:
+            conn.close()

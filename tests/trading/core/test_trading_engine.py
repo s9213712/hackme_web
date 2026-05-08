@@ -2075,6 +2075,103 @@ def test_workflow_live_scan_uses_window_high_for_take_profit(tmp_path):
     assert len(scanned["triggered"]) == 1
 
 
+def test_spot_risk_target_scan_auto_closes_position(tmp_path):
+    base_ms = 1_700_000_000_000
+    candles = [
+        {"time_ms": base_ms, "close_points": 100.0, "high_points": 100.0, "low_points": 100.0},
+        {"time_ms": base_ms + 60_000, "close_points": 110.0, "high_points": 110.0, "low_points": 94.0},
+    ]
+    points, trading = _services_with_history(tmp_path, prices={"ETH/POINTS": 100.0}, candles=candles)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    trading.place_order(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        side="buy",
+        order_type="market",
+        quantity="1.0",
+        stop_loss_percent=5,
+        take_profit_percent=12,
+    )
+    trading.test_prices["ETH/POINTS"] = 110.0
+
+    result = trading.scan_spot_risk_targets(actor={"username": "system", "role": "system"}, limit=10)
+
+    assert result["ok"] is True
+    assert len(result["triggered"]) == 1
+    assert result["triggered"][0]["target_type"] == "stop_loss"
+    dashboard = trading.user_dashboard(user_id=1)
+    assert dashboard["positions"][0]["quantity_units"] == 0
+
+
+def test_margin_risk_target_scan_auto_closes_position(tmp_path):
+    base_ms = 1_700_000_000_000
+    candles = [
+        {"time_ms": base_ms, "close_points": 100.0, "high_points": 100.0, "low_points": 100.0},
+        {"time_ms": base_ms + 60_000, "close_points": 108.0, "high_points": 108.0, "low_points": 94.0},
+    ]
+    points, trading = _services_with_history(tmp_path, prices={"ETH/POINTS": 100.0}, candles=candles)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=10000, action_type="test_funding")
+    opened = trading.open_margin_position(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        position_type="margin_long",
+        quantity="1.0",
+        collateral_points=50,
+        stop_loss_percent=5,
+        take_profit_percent=15,
+        idempotency_key="margin-risk-target",
+    )
+    trading.test_prices["ETH/POINTS"] = 108.0
+
+    result = trading.scan_margin_risk_targets(actor={"username": "system", "role": "system"}, limit=10)
+
+    assert result["ok"] is True
+    assert len(result["triggered"]) == 1
+    assert result["triggered"][0]["position_uuid"] == opened["position"]["position_uuid"]
+    conn = trading.get_db()
+    try:
+        row = conn.execute(
+            "SELECT status FROM trading_margin_positions WHERE position_uuid=?",
+            (opened["position"]["position_uuid"],),
+        ).fetchone()
+        assert row["status"] in {"closed", "liquidated"}
+    finally:
+        conn.close()
+
+
+def test_dca_bot_stop_loss_auto_closes_existing_position(tmp_path):
+    base_ms = 1_700_000_000_000
+    candles = [
+        {"time_ms": base_ms, "close_points": 100.0, "high_points": 100.0, "low_points": 100.0},
+        {"time_ms": base_ms + 60_000, "close_points": 108.0, "high_points": 108.0, "low_points": 94.0},
+    ]
+    points, trading = _services_with_history(tmp_path, prices={"ETH/POINTS": 100.0}, candles=candles)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="1.0")
+    trading.test_prices["ETH/POINTS"] = 108.0
+    trading.save_trading_bot(
+        actor=_actor(),
+        payload={
+            "bot_type": "dca",
+            "name": "dca stop",
+            "market_symbol": "ETH/POINTS",
+            "budget_points": 100,
+            "interval_hours": 24,
+            "max_runs": 2,
+            "cooldown_seconds": 0,
+            "enabled": True,
+            "stop_loss_percent": 5,
+        },
+    )
+
+    result = trading.run_trading_bots(actor=_actor(), limit=10)
+
+    assert result["ok"] is True
+    assert len(result["triggered"]) == 1
+    dashboard = trading.user_dashboard(user_id=1)
+    assert dashboard["positions"][0]["quantity_units"] == 0
+
+
 def test_trading_bot_failed_scan_does_not_advance_last_scan_at_on_live_price_error(tmp_path):
     get_db = _db(tmp_path)
     points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")

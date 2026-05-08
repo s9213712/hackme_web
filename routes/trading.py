@@ -1126,6 +1126,8 @@ def register_trading_routes(app, deps):
                 order_type=data.get("order_type"),
                 quantity=data.get("quantity"),
                 limit_price_points=data.get("limit_price_points"),
+                stop_loss_percent=data.get("stop_loss_percent"),
+                take_profit_percent=data.get("take_profit_percent"),
                 emergency_close=bool(data.get("emergency_close")),
             )
             audit(
@@ -1412,6 +1414,8 @@ def register_trading_routes(app, deps):
                 position_type=data.get("position_type"),
                 quantity=data.get("quantity"),
                 collateral_points=data.get("collateral_points"),
+                stop_loss_percent=data.get("stop_loss_percent"),
+                take_profit_percent=data.get("take_profit_percent"),
                 idempotency_key=idempotency_key,
             )
             audit("TRADING_MARGIN_POSITION_OPENED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"position_uuid={result['position'].get('position_uuid')}")

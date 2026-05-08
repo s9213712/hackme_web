@@ -931,6 +931,8 @@ async function apiFetch(url, options = {}, retryOnCsrf = true) {
   }
   opts.headers = headers;
   const response = await fetch(url, opts);
+  const latestCookieToken = readCookie("csrf_token");
+  if (latestCookieToken) setCsrfToken(latestCookieToken);
   if (response.status !== 403 || !retryOnCsrf) return response;
   const payload = await response.clone().json().catch(() => ({}));
   if (!payload || payload.error !== "csrf_invalid") return response;
@@ -938,7 +940,10 @@ async function apiFetch(url, options = {}, retryOnCsrf = true) {
   if (!refreshed) return response;
   const retryHeaders = new Headers(options.headers || {});
   if (isStateChangingMethod(method)) retryHeaders.set("X-CSRF-Token", refreshed);
-  return apiFetch(url, { ...options, credentials: opts.credentials, headers: retryHeaders }, false);
+  const retried = await apiFetch(url, { ...options, credentials: opts.credentials, headers: retryHeaders }, false);
+  const retryCookieToken = readCookie("csrf_token");
+  if (retryCookieToken) setCsrfToken(retryCookieToken);
+  return retried;
 }
 
 function flash(el, text, ok) {

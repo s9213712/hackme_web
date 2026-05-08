@@ -56,6 +56,13 @@ def _client_idempotency_key(value, *, prefix):
     return f"{prefix}:{digest}"
 
 
+def _normalize_optional_risk_percent(value, *, name):
+    if value in (None, ""):
+        return None
+    number = float(_to_decimal(value, name=name, minimum=0.00000001, maximum=1000))
+    return number if number > 0 else None
+
+
 def _is_short_position(position_type):
     return str(position_type or "") in {POSITION_MARGIN_SHORT, POSITION_MARGIN_SHORT_LEGACY}
 
@@ -635,6 +642,8 @@ def open_margin_position(
     position_type,
     quantity,
     collateral_points,
+    stop_loss_percent=None,
+    take_profit_percent=None,
     idempotency_key=None,
     ctx=None,
 ):
@@ -647,6 +656,8 @@ def open_margin_position(
         raise ValueError("position_type must be margin_long or short")
     quantity_units = quantity_to_units(quantity)
     collateral = _to_int(collateral_points, name="collateral_points", minimum=1, maximum=10**12)
+    stop_loss_percent = _normalize_optional_risk_percent(stop_loss_percent, name="stop_loss_percent")
+    take_profit_percent = _normalize_optional_risk_percent(take_profit_percent, name="take_profit_percent")
     operation_key = _client_idempotency_key(idempotency_key, prefix=f"margin_open:{user_id}")
     conn = service.get_db()
     try:
@@ -816,10 +827,11 @@ def open_margin_position(
                 INSERT INTO {margin_positions_table} (
                     position_uuid, tester_user_id, user_id, market_symbol, position_type, quantity_units,
                     entry_price_points, principal_points, collateral_points, open_fee_points,
+                    stop_loss_percent, take_profit_percent,
                     interest_percent_daily, interest_paid_points, interest_accrued_hours, interest_interval_hours,
                     interest_minimum_hours, borrowed_asset_symbol, status, opened_at, updated_at,
                     collateral_trial_points, collateral_chain_points, open_fee_trial_points, open_fee_chain_points
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     position_uuid,
@@ -832,6 +844,8 @@ def open_margin_position(
                     principal,
                     collateral,
                     fee,
+                    stop_loss_percent,
+                    take_profit_percent,
                     effective_interest_percent_daily,
                     interest_interval_hours,
                     interest_minimum_hours,
@@ -850,10 +864,11 @@ def open_margin_position(
                 INSERT INTO {margin_positions_table} (
                     position_uuid, user_id, market_symbol, position_type, quantity_units,
                     entry_price_points, principal_points, collateral_points, open_fee_points,
+                    stop_loss_percent, take_profit_percent,
                     interest_percent_daily, interest_paid_points, interest_accrued_hours, interest_interval_hours,
                     interest_minimum_hours, borrowed_asset_symbol, status, opened_at, updated_at,
                     collateral_trial_points, collateral_chain_points, open_fee_trial_points, open_fee_chain_points
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     position_uuid,
@@ -865,6 +880,8 @@ def open_margin_position(
                     principal,
                     collateral,
                     fee,
+                    stop_loss_percent,
+                    take_profit_percent,
                     effective_interest_percent_daily,
                     interest_interval_hours,
                     interest_minimum_hours,
@@ -905,6 +922,8 @@ def open_margin_position(
                 "interest_minimum_hours": interest_minimum_hours,
                 "collateral_points": collateral,
                 "open_fee_points": fee,
+                "stop_loss_percent": stop_loss_percent,
+                "take_profit_percent": take_profit_percent,
                 "trial_collateral_points": trial_collateral,
                 "chain_collateral_points": chain_collateral,
                 "trial_fee_points": trial_fee,
@@ -1627,6 +1646,138 @@ def scan_margin_liquidations(service, *, actor=None, limit=100, ctx=None):
         conn.commit()
     finally:
         conn.close()
+
+
+def _margin_target_hit(position, *, observed_price, observed_low, observed_high):
+    entry_price = float(_to_decimal(position["entry_price_points"] or 0, name="entry_price_points", minimum=0.00000001))
+    stop_loss_percent = (
+        float(position["stop_loss_percent"])
+        if "stop_loss_percent" in position.keys() and position["stop_loss_percent"] is not None
+        else None
+    )
+    take_profit_percent = (
+        float(position["take_profit_percent"])
+        if "take_profit_percent" in position.keys() and position["take_profit_percent"] is not None
+        else None
+    )
+    if entry_price <= 0:
+        return None
+    is_short = _is_short_position(position["position_type"])
+    if is_short:
+        low_pnl = round((entry_price - observed_high) * 100.0 / entry_price, 4) if observed_high > 0 else None
+        high_pnl = round((entry_price - observed_low) * 100.0 / entry_price, 4) if observed_low > 0 else None
+    else:
+        low_pnl = round((observed_low - entry_price) * 100.0 / entry_price, 4) if observed_low > 0 else None
+        high_pnl = round((observed_high - entry_price) * 100.0 / entry_price, 4) if observed_high > 0 else None
+    if stop_loss_percent and low_pnl is not None and low_pnl <= -abs(stop_loss_percent):
+        return {
+            "target_type": "stop_loss",
+            "target_percent": stop_loss_percent,
+            "observed_price_points": observed_price,
+            "observed_pnl_percent": low_pnl,
+        }
+    if take_profit_percent and high_pnl is not None and high_pnl >= abs(take_profit_percent):
+        return {
+            "target_type": "take_profit",
+            "target_percent": take_profit_percent,
+            "observed_price_points": observed_price,
+            "observed_pnl_percent": high_pnl,
+        }
+    return None
+
+
+def scan_margin_risk_targets(service, *, actor=None, limit=100, ctx=None):
+    ctx = service._resolve_trading_ctx(ctx, action="scan_margin_risk_targets")
+    limit = _to_int(limit or 100, name="limit", minimum=1, maximum=1000)
+    conn = service.get_db()
+    try:
+        service.ensure_schema(conn)
+        conn.commit()
+        margin_positions_table, route_ctx = service._resolve_table(
+            "margin_positions", ctx, action="scan_margin_risk_targets"
+        )
+        rows = conn.execute(
+            f"""
+            SELECT p.*, u.username, u.role
+            FROM {margin_positions_table} p
+            JOIN users u ON u.id = p.user_id
+            WHERE p.status='open'
+              AND (p.stop_loss_percent IS NOT NULL OR p.take_profit_percent IS NOT NULL)
+            ORDER BY p.id ASC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        candidates = []
+        skipped = []
+        errors = []
+        for row in rows:
+            try:
+                market = service._market(conn, row["market_symbol"])
+                if not service._is_market_boot_ready(market):
+                    skipped.append({"position_uuid": row["position_uuid"], "reason": "market_boot_pending"})
+                    continue
+                observed_price, _price_source, price_meta = service._current_market_price_points(
+                    conn, market, with_meta=True, high_risk=True
+                )
+                service._assert_price_meta_allows_high_risk_use(
+                    conn,
+                    actor={"id": int(row["user_id"]), "username": row["username"], "role": row["role"]},
+                    market_symbol=market["symbol"],
+                    usage="margin risk target auto close",
+                    price_meta=price_meta,
+                )
+                settings = service._settings_payload(conn)
+                price_window = service._recent_price_window(
+                    market["symbol"],
+                    lookback_seconds=max(60, int(settings.get("bot_auto_scan_interval_seconds") or 30) + 5),
+                    conn=conn,
+                )
+                observed_low = float((price_window or {}).get("low_points") or observed_price)
+                observed_high = float((price_window or {}).get("high_points") or observed_price)
+                target = _margin_target_hit(
+                    row,
+                    observed_price=observed_price,
+                    observed_low=observed_low,
+                    observed_high=observed_high,
+                )
+                if target is None:
+                    continue
+                candidates.append(
+                    {
+                        "actor": {"id": int(row["user_id"]), "username": row["username"], "role": row["role"]},
+                        "position_uuid": row["position_uuid"],
+                        **target,
+                    }
+                )
+            except Exception as exc:
+                errors.append({"position_uuid": row["position_uuid"], "error": str(exc)})
+        conn.close()
+        conn = None
+        triggered = []
+        for candidate in candidates:
+            try:
+                result = close_margin_position(
+                    service,
+                    actor=candidate["actor"],
+                    position_uuid=candidate["position_uuid"],
+                    ctx=route_ctx,
+                )
+                triggered.append(
+                    {
+                        "position_uuid": candidate["position_uuid"],
+                        "target_type": candidate["target_type"],
+                        "target_percent": candidate["target_percent"],
+                        "observed_pnl_percent": candidate["observed_pnl_percent"],
+                        "delta_points": result.get("delta_points"),
+                    }
+                )
+            except Exception as exc:
+                errors.append({"position_uuid": candidate["position_uuid"], "target_type": candidate["target_type"], "error": str(exc)})
+        return {"ok": not errors, "scanned": len(rows), "triggered": triggered, "skipped": skipped, "errors": errors}
+    finally:
+        if conn is not None:
+            conn.close()
 
     liquidated = []
     for candidate in candidates:

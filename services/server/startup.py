@@ -223,6 +223,44 @@ def start_trading_liquidation_worker(*, trading_service, audit, get_system_setti
                         success=False,
                         detail=json.dumps(match_errors[:5], ensure_ascii=False),
                     )
+                spot_target_result = trading_service.scan_spot_risk_targets(actor=actor, limit=200)
+                spot_triggered = spot_target_result.get("triggered") or []
+                spot_errors = spot_target_result.get("errors") or []
+                if spot_triggered:
+                    audit(
+                        "TRADING_AUTO_SPOT_RISK_TARGET_RUN",
+                        "0.0.0.0",
+                        user="system",
+                        success=True,
+                        detail=f"scanned={spot_target_result.get('scanned')}, triggered={len(spot_triggered)}",
+                    )
+                if spot_errors:
+                    audit(
+                        "TRADING_AUTO_SPOT_RISK_TARGET_ERRORS",
+                        "0.0.0.0",
+                        user="system",
+                        success=False,
+                        detail=json.dumps(spot_errors[:5], ensure_ascii=False),
+                    )
+                margin_target_result = trading_service.scan_margin_risk_targets(actor=actor, limit=100)
+                margin_triggered = margin_target_result.get("triggered") or []
+                margin_target_errors = margin_target_result.get("errors") or []
+                if margin_triggered:
+                    audit(
+                        "TRADING_AUTO_MARGIN_RISK_TARGET_RUN",
+                        "0.0.0.0",
+                        user="system",
+                        success=True,
+                        detail=f"scanned={margin_target_result.get('scanned')}, triggered={len(margin_triggered)}",
+                    )
+                if margin_target_errors:
+                    audit(
+                        "TRADING_AUTO_MARGIN_RISK_TARGET_ERRORS",
+                        "0.0.0.0",
+                        user="system",
+                        success=False,
+                        detail=json.dumps(margin_target_errors[:5], ensure_ascii=False),
+                    )
                 result = trading_service.scan_margin_liquidations(actor=actor, limit=100)
                 liquidated = result.get("liquidated") or []
                 errors = result.get("errors") or []
