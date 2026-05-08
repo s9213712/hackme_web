@@ -10,6 +10,8 @@ test_backtest_full.py
 
 *.log
 *.json
+!services/games/models/
+!services/games/models/*.json
 !workflows/
 !workflows/README.md
 !workflows/system/

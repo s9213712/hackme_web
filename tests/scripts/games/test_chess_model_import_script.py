@@ -43,7 +43,7 @@ def test_chess_model_import_script_installs_exp2_json_into_runtime(tmp_path):
     result = json.loads(proc.stdout)
     assert result["ok"] is True
     assert result["engine"] == "experiment 2:nn"
-    output_path = runtime_dir / "models" / "chess_experiment_2_nn.json"
+    output_path = runtime_dir / "games" / "models" / "chess_experiment_2_nn.json"
     assert result["output_path"] == str(output_path)
     installed = json.loads(output_path.read_text(encoding="utf-8"))
     assert installed["sample_count"] == 321
@@ -98,7 +98,7 @@ def test_chess_model_import_script_validates_exp3_npz(tmp_path):
     assert result["validate_only"] is True
     assert result["sample_count"] == 654
     assert result["replay_size"] == 77
-    assert not (runtime_dir / "models" / "chess_experiment_3_dl.json").exists()
+    assert not (runtime_dir / "games" / "models" / "chess_experiment_3_dl.json").exists()
 
 
 def test_chess_model_import_script_installs_exp4_json_into_runtime(tmp_path):
@@ -130,7 +130,7 @@ def test_chess_model_import_script_installs_exp4_json_into_runtime(tmp_path):
     result = json.loads(proc.stdout)
     assert result["ok"] is True
     assert result["engine"] == "experiment 4:pv"
-    output_path = runtime_dir / "models" / "chess_experiment_4_pv.json"
+    output_path = runtime_dir / "games" / "models" / "chess_experiment_4_pv.json"
     assert result["output_path"] == str(output_path)
     installed = json.loads(output_path.read_text(encoding="utf-8"))
     assert installed["sample_count"] == 88

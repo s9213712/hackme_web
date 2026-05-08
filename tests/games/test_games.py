@@ -7,10 +7,20 @@ import chess
 from flask import Flask, jsonify
 
 from routes.games import choose_computer_move, ensure_game_schema, register_games_routes
-from services.games.chess_dl import EXPERIMENT_DL_DIFFICULTY, choose_experiment_dl_move, record_experiment_dl_learning
-from services.games.chess_engine import ChessExperimentStore, choose_experiment_move, record_experiment_learning
-from services.games.chess_nn import EXPERIMENT_NN_DIFFICULTY, record_experiment_nn_learning
-from services.games.chess_pv import EXPERIMENT_PV_DIFFICULTY, choose_experiment_pv_move, record_experiment_pv_learning
+from services.games.chess_dl import (
+    EXPERIMENT_DL_DIFFICULTY,
+    bundled_chess_dl_model_path,
+    choose_experiment_dl_move,
+    record_experiment_dl_learning,
+)
+from services.games.chess_engine import bundled_chess_engine_db_path, ChessExperimentStore, choose_experiment_move, record_experiment_learning
+from services.games.chess_nn import EXPERIMENT_NN_DIFFICULTY, bundled_chess_nn_model_path, record_experiment_nn_learning
+from services.games.chess_pv import (
+    EXPERIMENT_PV_DIFFICULTY,
+    bundled_chess_pv_model_path,
+    choose_experiment_pv_move,
+    record_experiment_pv_learning,
+)
 from services.games.chess_replay_buffer import (
     classify_replay_record,
     replay_buffer_summary,
@@ -974,6 +984,14 @@ def test_root_chess_engine_dashboard_reports_warm_start_and_replay_summary(tmp_p
     assert payload["pipeline_recommendation"]["ready"] is False
     assert "no usable replays yet" in payload["pipeline_recommendation"]["blocked_reasons"]
     assert Path(payload["promotion"]["path"]).name == "chess_promotion_status.json"
+    runtime_models = tmp_path / "runtime" / "games" / "models"
+    assert (tmp_path / "runtime" / "database" / bundled_chess_engine_db_path().name).exists()
+    assert (runtime_models / bundled_chess_nn_model_path().name).exists()
+    assert (runtime_models / bundled_chess_dl_model_path().name).exists()
+    assert (runtime_models / bundled_chess_pv_model_path().name).exists()
+    artifacts = {row["engine"]: row for row in payload["warm_start"]["artifacts"]}
+    assert artifacts["experiment"]["source"] in {"bundled_seed", "runtime_existing", "schema_fallback"}
+    assert artifacts["experiment 2:nn"]["source"] in {"bundled_seed", "runtime_existing", "template_fallback"}
 
 
 def test_root_chess_promotion_stage_and_promote(tmp_path, monkeypatch):

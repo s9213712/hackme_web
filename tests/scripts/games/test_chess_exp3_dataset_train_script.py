@@ -13,7 +13,7 @@ def test_chess_exp3_dataset_train_script_accepts_plain_and_teacher_distill_rows(
     env = os.environ.copy()
     env["PYTHONPATH"] = str(ROOT)
     env["HACKME_RUNTIME_DIR"] = str(runtime_dir)
-    env["HTML_LEARNING_CHESS_ENGINE_DL_MODEL_PATH"] = str(runtime_dir / "models" / "chess_experiment_3_dl.json")
+    env["HTML_LEARNING_CHESS_ENGINE_DL_MODEL_PATH"] = str(runtime_dir / "games" / "models" / "chess_experiment_3_dl.json")
     env["HTML_LEARNING_CHESS_ENGINE_DL_REPLAY_PATH"] = str(runtime_dir / "models" / "chess_experiment_3_dl_replay.jsonl")
 
     plain_rows = tmp_path / "plain.jsonl"

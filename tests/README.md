@@ -42,6 +42,26 @@ The first domain regrouping slices now exist:
 
 - `tests/scripts/`: script and CLI contract checks
 - `tests/video/`: video/frontend-video/media streaming suites
+- `tests/games/`: chess engine, benchmark, and replay/promotion pipeline checks
+
+## Chess Benchmark Coverage
+
+Chess benchmark changes should extend existing chess suites before adding new
+files:
+
+- `tests/games/test_chess_self_play_training.py`
+  - round-robin benchmark payload
+  - human probe suite
+  - endgame suite
+  - training report shape
+- `tests/scripts/games/test_chess_seed_train_script.py`
+  - seed trainer CLI contract
+- `tests/scripts/games/test_chess_self_play_train_script.py`
+  - full training / smoke / benchmark CLI contract
+
+If you change chess benchmark semantics, update the operator document too:
+
+- `docs/games/chess_training_pipeline.md`
 
 ## Merge Rules
 

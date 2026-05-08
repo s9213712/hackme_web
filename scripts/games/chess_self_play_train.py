@@ -21,9 +21,9 @@ The script uses these match sources:
 All generated artifacts stay under ``runtime/``:
 
 - exp1 memory DB: ``runtime/database/chess_experiment.db``
-- exp2 model: ``runtime/models/chess_experiment_2_nn.json``
-- exp3 model: ``runtime/models/chess_experiment_3_dl.json``
-- exp4 model: ``runtime/models/chess_experiment_4_pv.json``
+- exp2 model: ``runtime/games/models/chess_experiment_2_nn.json``
+- exp3 model: ``runtime/games/models/chess_experiment_3_dl.json``
+- exp4 model: ``runtime/games/models/chess_experiment_4_pv.json``
 - training reports: ``runtime/reports/games/``
 """
 
@@ -57,6 +57,26 @@ from services.games.self_play_training import (  # noqa: E402
 )
 import services.games.chess_dl as chess_dl_service  # noqa: E402
 import services.games.chess_pv as chess_pv_service  # noqa: E402
+
+
+def _progress_log(event: dict) -> None:
+    phase = str(event.get("phase") or "")
+    if phase == "training_started":
+        sys.stderr.write(f"[chess-self-play] training 0/{event.get('total', 0)}\n")
+    elif phase == "training_match_completed":
+        sys.stderr.write(
+            "[chess-self-play] "
+            f"{event.get('completed', 0)}/{event.get('total', 0)} "
+            f"{event.get('white_engine')} vs {event.get('black_engine')} "
+            f"winner={event.get('winner_color') or 'draw'} "
+            f"plies={event.get('plies', 0)} reason={event.get('reason')}\n"
+        )
+    elif phase == "training_finished":
+        sys.stderr.write(
+            f"[chess-self-play] training finished {event.get('completed', 0)}/{event.get('total', 0)} "
+            f"games={event.get('games_played', 0)}\n"
+        )
+    sys.stderr.flush()
 
 
 def parse_args() -> argparse.Namespace:
@@ -157,7 +177,10 @@ def main() -> int:
             nn_model_path=nn_model_path,
             dl_model_path=dl_model_path,
             pv_model_path=pv_model_path,
+            progress_hook=_progress_log,
         )
+        sys.stderr.write("[chess-self-play] smoke evaluation started\n")
+        sys.stderr.flush()
         summary["smoke_evaluation"] = run_post_training_smoke_evaluation(
             store=store,
             nn_model_path=nn_model_path,
@@ -168,6 +191,10 @@ def main() -> int:
             games_per_pair=args.smoke_games_per_pair,
             seed=args.seed + 101,
         )
+        sys.stderr.write("[chess-self-play] smoke evaluation finished\n")
+        sys.stderr.flush()
+        sys.stderr.write("[chess-self-play] benchmark started\n")
+        sys.stderr.flush()
         summary["benchmark"] = run_round_robin_benchmark(
             store=store,
             nn_model_path=nn_model_path,
@@ -178,6 +205,8 @@ def main() -> int:
             rounds=args.benchmark_rounds,
             seed=args.seed + 202,
         )
+        sys.stderr.write("[chess-self-play] benchmark finished\n")
+        sys.stderr.flush()
     reports = write_training_report(summary, report_dir=Path(args.report_dir))
     summary["reports"] = reports
     print(json.dumps(summary, ensure_ascii=False, indent=2))

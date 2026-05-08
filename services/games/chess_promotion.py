@@ -8,10 +8,11 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
-from services.games.chess_dl import default_chess_dl_model_path, experiment_dl_model_template
-from services.games.chess_engine import ChessExperimentStore, default_chess_engine_db_path
-from services.games.chess_nn import default_chess_nn_model_path, experiment_nn_model_template
-from services.games.chess_pv import default_chess_pv_model_path, experiment_pv_model_template
+from services.games.chess_dl import bundled_chess_dl_model_path, default_chess_dl_model_path, experiment_dl_model_template
+from services.games.chess_engine import ChessExperimentStore, bundled_chess_engine_db_path, default_chess_engine_db_path
+from services.games.chess_model_registry import ensure_runtime_model_from_bundle, runtime_chess_models_dir
+from services.games.chess_nn import bundled_chess_nn_model_path, default_chess_nn_model_path, experiment_nn_model_template
+from services.games.chess_pv import bundled_chess_pv_model_path, default_chess_pv_model_path, experiment_pv_model_template
 from services.server.runtime import default_runtime_root_path
 
 
@@ -20,8 +21,7 @@ def _now() -> str:
 
 
 def default_chess_candidate_dir() -> Path:
-    runtime_dir = os.environ.get("HACKME_RUNTIME_DIR", "").strip() or str(default_runtime_root_path())
-    return Path(runtime_dir) / "models" / "candidates"
+    return runtime_chess_models_dir() / "candidates"
 
 
 def default_chess_promotion_status_path() -> Path:
@@ -65,27 +65,44 @@ def _ensure_model_file(path: Path, template_factory) -> bool:
     return True
 
 
+def _ensure_runtime_model(runtime_path: Path, bundled_path: Path, template_factory) -> dict:
+    copied = ensure_runtime_model_from_bundle(runtime_path, bundled_path)
+    if copied["ok"]:
+        return copied
+    created = _ensure_model_file(runtime_path, template_factory)
+    copied["ok"] = True
+    copied["created"] = created
+    copied["copied"] = False
+    copied["source"] = "template_fallback"
+    return copied
+
+
 def ensure_warm_start_chess_environment() -> dict:
     created = []
-    exp1_store = ChessExperimentStore(default_chess_engine_db_path())
-    conn = exp1_store.connect()
-    conn.close()
-    created.append({"engine": "experiment", "path": str(exp1_store.db_path), "created": exp1_store.db_path.exists()})
-    created.append({
-        "engine": "experiment 2:nn",
-        "path": str(default_chess_nn_model_path()),
-        "created": _ensure_model_file(default_chess_nn_model_path(), experiment_nn_model_template),
-    })
-    created.append({
-        "engine": "experiment 3:dl",
-        "path": str(default_chess_dl_model_path()),
-        "created": _ensure_model_file(default_chess_dl_model_path(), experiment_dl_model_template),
-    })
-    created.append({
-        "engine": "experiment 4:pv",
-        "path": str(default_chess_pv_model_path()),
-        "created": _ensure_model_file(default_chess_pv_model_path(), experiment_pv_model_template),
-    })
+    exp1_result = ensure_runtime_model_from_bundle(default_chess_engine_db_path(), bundled_chess_engine_db_path())
+    if not exp1_result["ok"]:
+        exp1_store = ChessExperimentStore(default_chess_engine_db_path())
+        conn = exp1_store.connect()
+        conn.close()
+        exp1_result = {
+            "ok": True,
+            "created": exp1_store.db_path.exists(),
+            "copied": False,
+            "runtime_path": str(exp1_store.db_path),
+            "bundle_path": str(bundled_chess_engine_db_path()),
+            "source": "schema_fallback",
+        }
+    else:
+        exp1_store = ChessExperimentStore(default_chess_engine_db_path())
+        conn = exp1_store.connect()
+        conn.close()
+    created.append({"engine": "experiment", **exp1_result, "path": str(default_chess_engine_db_path())})
+    nn_result = _ensure_runtime_model(default_chess_nn_model_path(), bundled_chess_nn_model_path(), experiment_nn_model_template)
+    created.append({"engine": "experiment 2:nn", **nn_result, "path": str(default_chess_nn_model_path())})
+    dl_result = _ensure_runtime_model(default_chess_dl_model_path(), bundled_chess_dl_model_path(), experiment_dl_model_template)
+    created.append({"engine": "experiment 3:dl", **dl_result, "path": str(default_chess_dl_model_path())})
+    pv_result = _ensure_runtime_model(default_chess_pv_model_path(), bundled_chess_pv_model_path(), experiment_pv_model_template)
+    created.append({"engine": "experiment 4:pv", **pv_result, "path": str(default_chess_pv_model_path())})
     return {"ok": True, "timestamp": _now(), "artifacts": created}
 
 

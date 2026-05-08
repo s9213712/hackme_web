@@ -3,9 +3,9 @@
 This module trains the runtime-backed chess learning artifacts:
 
 - ``experiment`` memory DB: ``runtime/database/chess_experiment.db``
-- ``experiment 2:nn`` model: ``runtime/models/chess_experiment_2_nn.json``
-- ``experiment 3:dl`` model: ``runtime/models/chess_experiment_3_dl.json``
-- ``experiment 4:pv`` model: ``runtime/models/chess_experiment_4_pv.json``
+- ``experiment 2:nn`` model: ``runtime/games/models/chess_experiment_2_nn.json``
+- ``experiment 3:dl`` model: ``runtime/games/models/chess_experiment_3_dl.json``
+- ``experiment 4:pv`` model: ``runtime/games/models/chess_experiment_4_pv.json``
 
 The training loop intentionally includes a stronger search-based teacher.
 Pure student-vs-student self-play tends to collapse into repetitive openings
@@ -107,6 +107,115 @@ _EVAL_OPENINGS = (
     ("kings_indian_attack", ["g1f3", "d7d5", "g2g3", "g8f6", "f1g2", "e7e6"]),
     ("sicilian_open", ["e2e4", "c7c5", "g1f3", "d7d6", "d2d4", "c5d4"]),
     ("nimzo_larsen", ["b2b3", "d7d5", "c1b2", "g8f6", "e2e3", "c7c5"]),
+)
+_HUMAN_PROBE_CASES = (
+    {
+        "id": "scholars_mate_defense",
+        "kind": "scripted_opening",
+        "initial_fen": START_FEN,
+        "human_side": "white",
+        "engine_side": "black",
+        "script": ["e2e4", "d1h5", "f1c4"],
+        "must_leave_no_mate_in_one_for": "white",
+        "description": "Human attempts Scholar's Mate. Engine must not allow an immediate mate-in-one after the script.",
+    },
+    {
+        "id": "punish_free_queen",
+        "kind": "single_response",
+        "initial_fen": "4k3/8/8/8/8/8/4q3/4KQ2 b - - 0 1",
+        "engine_side": "black",
+        "expected_uci_any": ["e2f1"],
+        "expected_material_gain_min": 800,
+        "description": "Human leaves a queen en prise. Engine should punish the blunder immediately.",
+    },
+    {
+        "id": "hanging_rook",
+        "kind": "single_response",
+        "initial_fen": "4k3/8/8/8/8/8/4r3/4KQ2 w - - 0 1",
+        "engine_side": "white",
+        "expected_uci_any": ["f1e2"],
+        "expected_material_gain_min": 400,
+        "description": "Human leaves a rook hanging. Engine should take the free rook.",
+    },
+    {
+        "id": "fork_threat",
+        "kind": "single_response",
+        "initial_fen": "4k3/8/8/8/4K3/3n4/8/7R b - - 0 1",
+        "engine_side": "black",
+        "expected_uci_any": ["d3f2"],
+        "description": "Engine should find the simple knight fork on king and rook.",
+    },
+    {
+        "id": "forced_capture",
+        "kind": "single_response",
+        "initial_fen": "4k3/4Q3/8/8/8/8/8/4K3 b - - 0 1",
+        "engine_side": "black",
+        "expected_uci_any": ["e8e7"],
+        "expected_material_gain_min": 800,
+        "requires_capture": True,
+        "must_resolve_check": True,
+        "description": "Engine is in check and should resolve it by capturing the checking queen.",
+    },
+    {
+        "id": "simple_king_safety",
+        "kind": "single_response",
+        "initial_fen": "4k3/8/8/8/8/8/4q3/4K1R1 w - - 0 1",
+        "engine_side": "white",
+        "expected_uci_any": ["e1e2"],
+        "expected_material_gain_min": 800,
+        "description": "Engine should improve king safety by removing the nearby attacking queen.",
+    },
+)
+_ENDGAME_SUITE_CASES = (
+    {
+        "id": "mate_in_one_white",
+        "initial_fen": "6k1/5Q2/6K1/8/8/8/8/8 w - - 0 1",
+        "side": "white",
+        "expectation": "mate_in_one",
+        "description": "Engine should convert an immediate mating net as white.",
+    },
+    {
+        "id": "mate_in_one_black",
+        "initial_fen": "8/8/8/8/8/6k1/5q2/6K1 b - - 0 1",
+        "side": "black",
+        "expectation": "mate_in_one",
+        "description": "Engine should convert an immediate mating net as black.",
+    },
+    {
+        "id": "promotion_race_white",
+        "initial_fen": "k7/4P3/2K5/8/8/8/8/8 w - - 0 1",
+        "side": "white",
+        "expectation": "promotion",
+        "must_be_promotion": True,
+        "expected_promotion": "q",
+        "description": "Engine should promote the pawn instead of drifting with the king.",
+    },
+    {
+        "id": "avoid_stalemate",
+        "initial_fen": "k7/3Q4/2K5/8/8/8/8/8 w - - 0 1",
+        "side": "white",
+        "expectation": "avoid_stalemate",
+        "must_not_stalemate": True,
+        "description": "Winning side should avoid an immediate stalemate blunder.",
+    },
+    {
+        "id": "check_escape",
+        "initial_fen": "4k3/8/8/8/8/8/4R3/4K3 b - - 0 1",
+        "side": "black",
+        "expectation": "check_escape",
+        "must_resolve_check": True,
+        "description": "Side to move is in check and must find any legal escape.",
+    },
+    {
+        "id": "forced_capture_endgame",
+        "initial_fen": "4k3/4Q3/8/8/8/8/8/4K3 b - - 0 1",
+        "side": "black",
+        "expectation": "forced_capture",
+        "expected_uci_any": ["e8e7"],
+        "requires_capture": True,
+        "must_resolve_check": True,
+        "description": "Side to move should resolve check by forcing the queen capture.",
+    },
 )
 
 
@@ -219,6 +328,130 @@ def _elo_summary(matches: list[dict]) -> list[dict]:
     rows = [{"engine": engine, "elo": round(rating, 2), "games": played[engine]} for engine, rating in ratings.items()]
     rows.sort(key=lambda item: (-item["elo"], item["engine"]))
     return rows
+
+
+def _side_color(side: str) -> chess.Color:
+    return chess.WHITE if side == "white" else chess.BLACK
+
+
+def _opposite_side(side: str) -> str:
+    return "black" if side == "white" else "white"
+
+
+def _apply_uci_move(board: chess.Board, uci: str) -> dict:
+    try:
+        move = chess.Move.from_uci(uci)
+    except ValueError:
+        return {
+            "ok": False,
+            "illegal": True,
+            "reason": f"invalid_uci:{uci}",
+            "move": None,
+            "move_uci": str(uci),
+        }
+    if move not in board.legal_moves:
+        return {
+            "ok": False,
+            "illegal": True,
+            "reason": f"illegal_uci:{uci}",
+            "move": move,
+            "move_uci": str(uci),
+        }
+    board.push(move)
+    return {
+        "ok": True,
+        "illegal": False,
+        "reason": "legal_move",
+        "move": move,
+        "move_uci": move.uci(),
+    }
+
+
+def _immediate_checkmate_uci_moves(board: chess.Board) -> list[str]:
+    mates: list[str] = []
+    for move in board.legal_moves:
+        board.push(move)
+        is_mate = board.is_checkmate()
+        board.pop()
+        if is_mate:
+            mates.append(move.uci())
+    return sorted(mates)
+
+
+def _move_to_uci(move: dict | None) -> str:
+    if not move:
+        return ""
+    return f"{move.get('from') or ''}{move.get('to') or ''}{move.get('promotion') or ''}"
+
+
+def _material_gain_for_side(board_before: chess.Board, board_after: chess.Board, side: str) -> int:
+    delta = _material_score(board_after) - _material_score(board_before)
+    return delta if side == "white" else -delta
+
+
+def _side_king_in_check(board: chess.Board, side: str) -> bool:
+    color = _side_color(side)
+    king_square = board.king(color)
+    if king_square is None:
+        return True
+    return board.is_attacked_by(not color, king_square)
+
+
+def _evaluate_case_expectations(
+    *,
+    case: dict,
+    board_before: chess.Board,
+    board_after: chess.Board,
+    move: chess.Move,
+    move_uci: str,
+    side: str,
+) -> tuple[bool, list[str], dict]:
+    reasons: list[str] = []
+    expected_uci_any = [str(item) for item in (case.get("expected_uci_any") or []) if str(item).strip()]
+    if not expected_uci_any and case.get("expected_uci"):
+        expected_uci_any = [str(case.get("expected_uci"))]
+    if expected_uci_any and move_uci not in expected_uci_any:
+        reasons.append("unexpected_move")
+    material_gain = _material_gain_for_side(board_before, board_after, side)
+    expected_material_gain_min = case.get("expected_material_gain_min")
+    if expected_material_gain_min is not None and material_gain < int(expected_material_gain_min):
+        reasons.append("material_gain_below_min")
+    is_capture = board_before.is_capture(move)
+    if case.get("requires_capture") and not is_capture:
+        reasons.append("capture_required")
+    promotion_symbol = chess.piece_symbol(move.promotion).lower() if move.promotion else ""
+    if case.get("must_be_promotion") and not move.promotion:
+        reasons.append("promotion_required")
+    expected_promotion = str(case.get("expected_promotion") or "").strip().lower()
+    if expected_promotion and promotion_symbol != expected_promotion:
+        reasons.append("unexpected_promotion_piece")
+    if case.get("must_not_stalemate") and board_after.is_stalemate():
+        reasons.append("stalemate_after_move")
+    if case.get("must_resolve_check") and _side_king_in_check(board_after, side):
+        reasons.append("check_not_resolved")
+    target_side = str(case.get("must_leave_no_mate_in_one_for") or "").strip().lower()
+    mate_in_one_moves: list[str] = []
+    if target_side:
+        if board_after.turn == _side_color(target_side):
+            mate_in_one_moves = _immediate_checkmate_uci_moves(board_after)
+        else:
+            reasons.append("unexpected_turn_for_mate_probe")
+        if mate_in_one_moves:
+            reasons.append("allowed_mate_in_one")
+    details = {
+        "expected_uci_any": expected_uci_any,
+        "expected_material_gain_min": int(expected_material_gain_min) if expected_material_gain_min is not None else None,
+        "material_gain": material_gain,
+        "is_capture": bool(is_capture),
+        "is_promotion": bool(move.promotion),
+        "promotion": promotion_symbol,
+        "human_side_checked_for_mate": target_side,
+        "human_has_mate_in_one": bool(mate_in_one_moves),
+        "human_mate_in_one_moves": mate_in_one_moves,
+        "stalemate_after_move": bool(board_after.is_stalemate()),
+        "checkmate_after_move": bool(board_after.is_checkmate()),
+    }
+    return len(reasons) == 0, reasons, details
 
 
 def _move_material_value(move: dict) -> int:
@@ -443,6 +676,349 @@ def _choose_training_move(
         rng=rng,
         exploration_rate=exploration_rate,
     )
+
+
+def _engine_move_for_benchmark(
+    difficulty: str,
+    board_state,
+    side: str,
+    *,
+    store: ChessExperimentStore,
+    nn_model_path: Path,
+    dl_model_path: Path,
+    pv_model_path: Path,
+    teacher_depth: int,
+) -> dict | None:
+    return _choose_training_move(
+        board_state,
+        side,
+        difficulty,
+        store=store,
+        nn_model_path=nn_model_path,
+        dl_model_path=dl_model_path,
+        pv_model_path=pv_model_path,
+        rng=random.Random(0),
+        teacher_depth=teacher_depth,
+        exploration_rate=0.0,
+    )
+
+
+def _run_human_probe_case(
+    engine: str,
+    case: dict,
+    *,
+    store: ChessExperimentStore,
+    nn_model_path: Path,
+    dl_model_path: Path,
+    pv_model_path: Path,
+    teacher_depth: int,
+) -> dict:
+    board = chess.Board(str(case["initial_fen"]))
+    chosen_engine_moves: list[str] = []
+    pass_result = False
+    reasons: list[str] = []
+    engine_illegal_move = False
+    human_side = str(case.get("human_side") or _opposite_side(str(case.get("engine_side") or "white")))
+    human_mate_in_one_moves: list[str] = []
+    detail_fields: dict = {}
+    if case["kind"] == "single_response":
+        side = str(case["engine_side"])
+        move = _engine_move_for_benchmark(
+            engine,
+            {"__fen__": board.fen()},
+            side,
+            store=store,
+            nn_model_path=nn_model_path,
+            dl_model_path=dl_model_path,
+            pv_model_path=pv_model_path,
+            teacher_depth=teacher_depth,
+        )
+        if move is None:
+            reasons.append("engine_no_move")
+        else:
+            chosen_uci = _move_to_uci(move)
+            push_result = _apply_uci_move(board, chosen_uci)
+            if not push_result["ok"]:
+                engine_illegal_move = True
+                reasons.append(str(push_result["reason"]))
+            else:
+                chosen_engine_moves.append(chosen_uci)
+                pass_result, expectation_reasons, details = _evaluate_case_expectations(
+                    case=case,
+                    board_before=chess.Board(str(case["initial_fen"])),
+                    board_after=board,
+                    move=push_result["move"],
+                    move_uci=chosen_uci,
+                    side=side,
+                )
+                detail_fields = details
+                reasons.extend(expectation_reasons)
+                human_mate_in_one_moves = list(details.get("human_mate_in_one_moves") or [])
+    elif case["kind"] == "scripted_opening":
+        engine_side = str(case["engine_side"])
+        for scripted_uci in case.get("script") or []:
+            if board.turn != (chess.WHITE if human_side == "white" else chess.BLACK):
+                reasons.append("unexpected_turn_before_human_move")
+                break
+            push_human = _apply_uci_move(board, str(scripted_uci))
+            if not push_human["ok"]:
+                reasons.append(f"invalid_script_case:{push_human['reason']}")
+                break
+            if board.is_game_over():
+                if board.is_checkmate():
+                    pass_result = board.turn != (chess.WHITE if human_side == "white" else chess.BLACK)
+                else:
+                    reasons.append("game_over_after_human_move")
+                break
+            board_before_engine = board.copy(stack=False)
+            move = _engine_move_for_benchmark(
+                engine,
+                {"__fen__": board.fen()},
+                engine_side,
+                store=store,
+                nn_model_path=nn_model_path,
+                dl_model_path=dl_model_path,
+                pv_model_path=pv_model_path,
+                teacher_depth=teacher_depth,
+            )
+            if move is None:
+                reasons.append("engine_no_move")
+                break
+            chosen_uci = _move_to_uci(move)
+            push_engine = _apply_uci_move(board, chosen_uci)
+            if not push_engine["ok"]:
+                engine_illegal_move = True
+                reasons.append(str(push_engine["reason"]))
+                break
+            chosen_engine_moves.append(chosen_uci)
+            if board.is_game_over():
+                if board.is_checkmate():
+                    pass_result = board.turn == (chess.WHITE if human_side == "white" else chess.BLACK)
+                    if not pass_result:
+                        reasons.append("checkmate_on_engine_turn")
+                else:
+                    reasons.append("draw_after_engine_move")
+                break
+            _, expectation_reasons, details = _evaluate_case_expectations(
+                case=case,
+                board_before=board_before_engine,
+                board_after=board,
+                move=push_engine["move"],
+                move_uci=chosen_uci,
+                side=engine_side,
+            )
+            detail_fields = details
+            human_mate_in_one_moves = list(details.get("human_mate_in_one_moves") or [])
+            if expectation_reasons:
+                reasons.extend(expectation_reasons)
+        else:
+            if not reasons:
+                pass_result = True
+    if not human_mate_in_one_moves and board.turn == _side_color(human_side):
+        human_mate_in_one_moves = _immediate_checkmate_uci_moves(board)
+    if human_mate_in_one_moves and "allowed_mate_in_one" not in reasons and case["kind"] == "scripted_opening":
+        reasons.append("allowed_mate_in_one")
+        pass_result = False
+    if reasons:
+        pass_result = False
+    return {
+        "engine": engine,
+        "probe_id": str(case["id"]),
+        "kind": str(case["kind"]),
+        "description": str(case.get("description") or ""),
+        "pass": bool(pass_result),
+        "reason": "pass" if pass_result else ";".join(reasons) if reasons else "failed",
+        "engine_moves": chosen_engine_moves,
+        "human_side": human_side,
+        "human_has_mate_in_one": bool(human_mate_in_one_moves),
+        "human_mate_in_one_moves": human_mate_in_one_moves,
+        "engine_illegal_move": bool(engine_illegal_move),
+        "material_gain": int(detail_fields.get("material_gain") or 0),
+        "is_capture": bool(detail_fields.get("is_capture")),
+        "is_promotion": bool(detail_fields.get("is_promotion")),
+        "promotion": str(detail_fields.get("promotion") or ""),
+        "final_fen": board.fen(),
+    }
+
+
+def run_human_probe_suite(
+    *,
+    store: ChessExperimentStore | None = None,
+    nn_model_path: Path | None = None,
+    dl_model_path: Path | None = None,
+    pv_model_path: Path | None = None,
+    teacher_depth: int = DEFAULT_TEACHER_DEPTH,
+) -> dict:
+    store = store or ChessExperimentStore()
+    nn_model_path = Path(nn_model_path or default_chess_nn_model_path())
+    dl_model_path = Path(dl_model_path or default_chess_dl_model_path())
+    pv_model_path = Path(pv_model_path or default_chess_pv_model_path())
+    rows: list[dict] = []
+    by_engine: dict[str, dict] = {}
+    for engine in BENCHMARK_ENGINES:
+        passed = 0
+        failed = 0
+        for case in _HUMAN_PROBE_CASES:
+            row = _run_human_probe_case(
+                engine,
+                case,
+                store=store,
+                nn_model_path=nn_model_path,
+                dl_model_path=dl_model_path,
+                pv_model_path=pv_model_path,
+                teacher_depth=teacher_depth,
+            )
+            rows.append(row)
+            if row["pass"]:
+                passed += 1
+            else:
+                failed += 1
+        by_engine[engine] = {
+            "engine": engine,
+            "passed": passed,
+            "failed": failed,
+            "score_rate": round(passed / max(1, passed + failed), 4),
+        }
+    standings = sorted(by_engine.values(), key=lambda item: (-item["passed"], item["failed"], item["engine"]))
+    return {
+        "cases": len(_HUMAN_PROBE_CASES),
+        "engines": list(BENCHMARK_ENGINES),
+        "results": rows,
+        "standings": standings,
+        "pass": all(row["pass"] for row in rows),
+    }
+
+
+def _evaluate_endgame_case(
+    engine: str,
+    case: dict,
+    *,
+    store: ChessExperimentStore,
+    nn_model_path: Path,
+    dl_model_path: Path,
+    pv_model_path: Path,
+    teacher_depth: int,
+) -> dict:
+    board = chess.Board(str(case["initial_fen"]))
+    side = str(case["side"])
+    board_before = board.copy(stack=False)
+    move = _engine_move_for_benchmark(
+        engine,
+        {"__fen__": board.fen()},
+        side,
+        store=store,
+        nn_model_path=nn_model_path,
+        dl_model_path=dl_model_path,
+        pv_model_path=pv_model_path,
+        teacher_depth=teacher_depth,
+    )
+    if move is None:
+        return {
+            "engine": engine,
+            "case_id": str(case["id"]),
+            "description": str(case.get("description") or ""),
+            "pass": False,
+            "reason": "engine_no_move",
+            "move_uci": "",
+            "engine_illegal_move": False,
+            "final_fen": board.fen(),
+        }
+    chosen_uci = _move_to_uci(move)
+    push_result = _apply_uci_move(board, chosen_uci)
+    if not push_result["ok"]:
+        return {
+            "engine": engine,
+            "case_id": str(case["id"]),
+            "description": str(case.get("description") or ""),
+            "pass": False,
+            "reason": str(push_result["reason"]),
+            "move_uci": chosen_uci,
+            "engine_illegal_move": True,
+            "final_fen": board.fen(),
+        }
+    expectation = str(case["expectation"])
+    passed, reasons, details = _evaluate_case_expectations(
+        case=case,
+        board_before=board_before,
+        board_after=board,
+        move=push_result["move"],
+        move_uci=chosen_uci,
+        side=side,
+    )
+    if expectation == "mate_in_one" and not board.is_checkmate():
+        reasons.append("mate_not_found")
+    elif expectation == "promotion" and not push_result["move"].promotion:
+        reasons.append("promotion_required")
+    elif expectation == "avoid_stalemate" and board.is_stalemate():
+        reasons.append("stalemate_after_move")
+    elif expectation == "check_escape" and _side_king_in_check(board, side):
+        reasons.append("check_not_resolved")
+    elif expectation == "forced_capture" and not board_before.is_capture(push_result["move"]):
+        reasons.append("capture_required")
+    passed = len(reasons) == 0
+    return {
+        "engine": engine,
+        "case_id": str(case["id"]),
+        "description": str(case.get("description") or ""),
+        "pass": bool(passed),
+        "reason": "pass" if passed else ";".join(reasons),
+        "move_uci": chosen_uci,
+        "engine_illegal_move": False,
+        "promotion": str(details.get("promotion") or ""),
+        "is_promotion": bool(details.get("is_promotion")),
+        "material_gain": int(details.get("material_gain") or 0),
+        "stalemate_after_move": bool(details.get("stalemate_after_move")),
+        "checkmate_after_move": bool(details.get("checkmate_after_move")),
+        "final_fen": board.fen(),
+    }
+
+
+def run_endgame_benchmark_suite(
+    *,
+    store: ChessExperimentStore | None = None,
+    nn_model_path: Path | None = None,
+    dl_model_path: Path | None = None,
+    pv_model_path: Path | None = None,
+    teacher_depth: int = DEFAULT_TEACHER_DEPTH,
+) -> dict:
+    store = store or ChessExperimentStore()
+    nn_model_path = Path(nn_model_path or default_chess_nn_model_path())
+    dl_model_path = Path(dl_model_path or default_chess_dl_model_path())
+    pv_model_path = Path(pv_model_path or default_chess_pv_model_path())
+    rows: list[dict] = []
+    by_engine: dict[str, dict] = {}
+    for engine in BENCHMARK_ENGINES:
+        passed = 0
+        failed = 0
+        for case in _ENDGAME_SUITE_CASES:
+            row = _evaluate_endgame_case(
+                engine,
+                case,
+                store=store,
+                nn_model_path=nn_model_path,
+                dl_model_path=dl_model_path,
+                pv_model_path=pv_model_path,
+                teacher_depth=teacher_depth,
+            )
+            rows.append(row)
+            if row["pass"]:
+                passed += 1
+            else:
+                failed += 1
+        by_engine[engine] = {
+            "engine": engine,
+            "passed": passed,
+            "failed": failed,
+            "score_rate": round(passed / max(1, passed + failed), 4),
+        }
+    standings = sorted(by_engine.values(), key=lambda item: (-item["passed"], item["failed"], item["engine"]))
+    return {
+        "cases": len(_ENDGAME_SUITE_CASES),
+        "engines": list(BENCHMARK_ENGINES),
+        "results": rows,
+        "standings": standings,
+        "pass": all(row["pass"] for row in rows),
+    }
 
 
 def _record_row_for_side(
@@ -887,6 +1463,20 @@ def run_round_robin_benchmark(
     summary["rounds"] = rounds
     summary["matrix"] = matrix
     summary["head_to_head"] = sorted(head_to_head, key=lambda item: (-item["score_rate"], item["engine_a"], item["engine_b"]))
+    summary["human_probes"] = run_human_probe_suite(
+        store=store,
+        nn_model_path=nn_model_path,
+        dl_model_path=dl_model_path,
+        pv_model_path=pv_model_path,
+        teacher_depth=teacher_depth,
+    )
+    summary["endgame_suite"] = run_endgame_benchmark_suite(
+        store=store,
+        nn_model_path=nn_model_path,
+        dl_model_path=dl_model_path,
+        pv_model_path=pv_model_path,
+        teacher_depth=teacher_depth,
+    )
     return summary
 
 
@@ -914,6 +1504,7 @@ def run_training_session(
     nn_model_path: Path | None = None,
     dl_model_path: Path | None = None,
     pv_model_path: Path | None = None,
+    progress_hook=None,
 ) -> dict:
     rng = random.Random(seed)
     store = store or ChessExperimentStore()
@@ -1039,8 +1630,14 @@ def run_training_session(
         },
         "matches": [],
     }
+    if progress_hook:
+        progress_hook({
+            "phase": "training_started",
+            "completed": 0,
+            "total": len(schedule),
+        })
 
-    for white_engine, black_engine in schedule:
+    for index, (white_engine, black_engine) in enumerate(schedule, start=1):
         opening_board_state, opening_turn, opening_label = _opening_setup_for_index(seed + summary["games_played"], split="train")
         match = play_training_match(
             white_engine=white_engine,
@@ -1089,6 +1686,24 @@ def run_training_session(
                 "teacher_distillation_updates": match.teacher_distillation_updates,
             }
         )
+        if progress_hook:
+            progress_hook({
+                "phase": "training_match_completed",
+                "completed": index,
+                "total": len(schedule),
+                "white_engine": white_engine,
+                "black_engine": black_engine,
+                "winner_color": match.winner_color,
+                "reason": match.reason,
+                "plies": match.move_count,
+            })
+    if progress_hook:
+        progress_hook({
+            "phase": "training_finished",
+            "completed": len(schedule),
+            "total": len(schedule),
+            "games_played": summary["games_played"],
+        })
     return summary
 
 
@@ -1202,6 +1817,38 @@ def write_training_report(summary: dict, *, report_dir: Path | None = None, base
             ])
             for row in benchmark.get("elo", []):
                 lines.append(f"- {row['engine']}: `elo={row['elo']}` `games={row['games']}`")
+        human_probes = benchmark.get("human_probes") or {}
+        if human_probes:
+            lines.extend([
+                "",
+                "### Human Probe Suite",
+                "",
+                f"- cases: `{human_probes.get('cases', 0)}`",
+                f"- pass: `{bool(human_probes.get('pass'))}`",
+                "",
+            ])
+            for row in human_probes.get("standings", []):
+                lines.append(
+                    f"- {row['engine']}: "
+                    f"`passed={row['passed']}` `failed={row['failed']}` "
+                    f"`score_rate={row['score_rate']}`"
+                )
+        endgame_suite = benchmark.get("endgame_suite") or {}
+        if endgame_suite:
+            lines.extend([
+                "",
+                "### Endgame Suite",
+                "",
+                f"- cases: `{endgame_suite.get('cases', 0)}`",
+                f"- pass: `{bool(endgame_suite.get('pass'))}`",
+                "",
+            ])
+            for row in endgame_suite.get("standings", []):
+                lines.append(
+                    f"- {row['engine']}: "
+                    f"`passed={row['passed']}` `failed={row['failed']}` "
+                    f"`score_rate={row['score_rate']}`"
+                )
     md_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
     return {
         "json_report": str(json_path),

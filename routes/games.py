@@ -542,6 +542,7 @@ def finish_match(conn, row, status_info, now):
 
 
 def register_games_routes(app, deps):
+    ensure_warm_start_chess_environment()
     get_current_user_ctx = deps["get_current_user_ctx"]
     get_db = deps["get_db"]
     json_resp = deps["json_resp"]

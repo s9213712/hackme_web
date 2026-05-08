@@ -3,7 +3,7 @@
 This engine extends the lightweight ``experiment 2:nn`` approach with:
 
 - a deeper MLP (`49 -> 64 -> 32 -> 1`)
-- a replay buffer persisted under ``runtime/models/``
+- a replay buffer persisted under ``runtime/games/models/``
 - mini-batch training instead of pure online updates
 - a shared alpha-beta search stack so the NN becomes a leaf evaluator instead
   of selecting moves with only shallow handcrafted reply penalties
@@ -29,7 +29,7 @@ from services.games.chess_nn import (
     _input_size,
 )
 from services.games.chess_search import ZobristHasher, search_best_move
-from services.server.runtime import default_runtime_root_path
+from services.games.chess_model_registry import bundled_seed_model_path, runtime_model_path
 
 
 EXPERIMENT_DL_DIFFICULTY = "experiment 3:dl"
@@ -58,19 +58,15 @@ _PIECE_VALUES = {
 
 
 def default_chess_dl_model_path() -> Path:
-    runtime_dir = os.environ.get("HACKME_RUNTIME_DIR", "").strip()
-    if not runtime_dir:
-        runtime_dir = str(default_runtime_root_path())
-    override = os.environ.get("HTML_LEARNING_CHESS_ENGINE_DL_MODEL_PATH", "").strip()
-    return Path(override or os.path.join(runtime_dir, "models", DEFAULT_CHESS_DL_MODEL_NAME))
+    return runtime_model_path(DEFAULT_CHESS_DL_MODEL_NAME, env_var="HTML_LEARNING_CHESS_ENGINE_DL_MODEL_PATH")
+
+
+def bundled_chess_dl_model_path() -> Path:
+    return bundled_seed_model_path(DEFAULT_CHESS_DL_MODEL_NAME)
 
 
 def default_chess_dl_replay_path() -> Path:
-    runtime_dir = os.environ.get("HACKME_RUNTIME_DIR", "").strip()
-    if not runtime_dir:
-        runtime_dir = str(default_runtime_root_path())
-    override = os.environ.get("HTML_LEARNING_CHESS_ENGINE_DL_REPLAY_PATH", "").strip()
-    return Path(override or os.path.join(runtime_dir, "models", DEFAULT_CHESS_DL_REPLAY_NAME))
+    return runtime_model_path(DEFAULT_CHESS_DL_REPLAY_NAME, env_var="HTML_LEARNING_CHESS_ENGINE_DL_REPLAY_PATH")
 
 
 def _now() -> str:

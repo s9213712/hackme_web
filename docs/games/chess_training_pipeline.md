@@ -72,7 +72,24 @@ python3 scripts/games/chess_replay_prepare.py \
 
 ## 3. 先產 seed model
 
-用 seed trainer 離線訓練可直接上線用的初始模型：
+用 seed trainer 離線訓練可直接上線用的初始模型。
+這支腳本的預設輸出是 repo 內建 seed 位置：
+
+- `services/games/models/chess_experiment.db`
+- `services/games/models/chess_experiment_2_nn.json`
+- `services/games/models/chess_experiment_3_dl.json`
+- `services/games/models/chess_experiment_4_pv.json`
+
+伺服器啟動時，若 runtime 工作模型不存在，會自動把上述 seed 複製到：
+
+- `runtime/database/chess_experiment.db`
+- `runtime/games/models/chess_experiment_2_nn.json`
+- `runtime/games/models/chess_experiment_3_dl.json`
+- `runtime/games/models/chess_experiment_4_pv.json`
+
+之後重訓、對局、replay、promotion 都只使用 runtime 工作副本，不直接改 repo 內建 seed。
+
+離線訓練指令：
 
 ```bash
 REPO_ROOT=/path/to/hackme_web
@@ -84,11 +101,17 @@ PYTHONPATH="$REPO_ROOT" \
 python3 scripts/games/chess_seed_train.py --preset standard
 ```
 
+註：
+
+- `stdout` 保留最終 JSON summary
+- 訓練進度會寫到 `stderr`
+
 常用 preset：
 
 - `micro`: 測試用，最小訓練
 - `quick`: 快速產一版 seed
 - `standard`: 建議一般離線訓練使用
+- `warmup10`: 約 10 分鐘級別的較強 seed warm-up
 - `strong`: 比較重，但適合正式 candidate
 
 可選：
@@ -99,11 +122,11 @@ python3 scripts/games/chess_seed_train.py --preset standard
 - `--with-smoke`
 - `--with-benchmark`
 
-預設輸出模型：
+若你想直接覆蓋別的目標，也可以明確傳：
 
-- `runtime/models/chess_experiment_2_nn.json`
-- `runtime/models/chess_experiment_3_dl.json`
-- `runtime/models/chess_experiment_4_pv.json`
+- `--experiment-2-model-path`
+- `--experiment-3-model-path`
+- `--experiment-4-model-path`
 
 並產生報告：
 
@@ -168,6 +191,57 @@ python3 scripts/games/chess_seed_train.py --preset standard
 
 - `runtime/reports/games/chess_self_play_train_*.json`
 - `runtime/reports/games/chess_self_play_train_*.md`
+
+### benchmark suite 組成
+
+正式 benchmark 現在不只看 round-robin standings，還包含：
+
+- `human_probes`
+  - scripted opening probe
+  - hanging piece / forced capture / fork threat 類單步 tactical probe
+- `endgame_suite`
+  - mate in one
+  - promotion
+  - avoid stalemate
+  - check escape
+
+### human probe / endgame JSON 欄位
+
+每筆 benchmark result 都至少包含：
+
+- `pass`
+- `reason`
+- `final_fen`
+- `engine_illegal_move`
+
+human probe 另外會帶：
+
+- `engine_moves`
+- `human_side`
+- `human_has_mate_in_one`
+- `human_mate_in_one_moves`
+- `material_gain`
+- `is_capture`
+- `is_promotion`
+- `promotion`
+
+endgame suite 另外會帶：
+
+- `move_uci`
+- `material_gain`
+- `is_promotion`
+- `promotion`
+- `stalemate_after_move`
+- `checkmate_after_move`
+
+### 合法性規則
+
+所有 benchmark case 在 `push` UCI 前都必須先檢查 `legal_moves`。
+
+- 非法 UCI：`reason=invalid_uci:*`
+- 不合法著法：`reason=illegal_uci:*`
+
+這兩種情況都會直接記成 fail，不允許靜默通過。
 
 ## 6. Stage / Promote
 
