@@ -13,7 +13,7 @@ from services.games.chess_dl import (
     choose_experiment_dl_move,
     record_experiment_dl_learning,
 )
-from services.games.chess_engine import bundled_chess_engine_db_path, ChessExperimentStore, choose_experiment_move, record_experiment_learning
+from services.games.chess_engine import bundled_chess_engine_db_path, ChessExperimentStore, choose_experiment_move, ensure_chess_engine_schema, record_experiment_learning
 from services.games.chess_nn import EXPERIMENT_NN_DIFFICULTY, bundled_chess_nn_model_path, record_experiment_nn_learning
 from services.games.chess_pv import (
     EXPERIMENT_PV_DIFFICULTY,
@@ -78,7 +78,33 @@ def _seed_db(db_path):
 
 
 def _build_chess_engine_store(tmp_path):
-    return ChessExperimentStore(tmp_path / "runtime" / "database" / "chess_experiment.db")
+    return ChessExperimentStore(tmp_path / "runtime" / "games" / "models" / "chess_experiment.db")
+
+
+def _history_from_uci_sequence(sequence):
+    board = chess.Board()
+    history = []
+    for uci in sequence:
+        move = chess.Move.from_uci(uci)
+        piece = board.piece_at(move.from_square)
+        captured = board.piece_at(move.to_square)
+        if board.is_en_passant(move):
+            capture_square = chess.square(chess.square_file(move.to_square), chess.square_rank(move.from_square))
+            captured = board.piece_at(capture_square)
+        board.push(move)
+        history.append({
+            "by": "white" if not board.turn else "black",
+            "from": chess.square_name(move.from_square),
+            "to": chess.square_name(move.to_square),
+            "piece": piece.symbol() if piece else "",
+            "captured": captured.symbol() if captured else None,
+            "promotion": chess.piece_symbol(move.promotion) if move.promotion else None,
+            "at": "2026-05-08T00:00:00Z",
+        })
+    return history, {
+        square_name: piece.symbol()
+        for square_name, piece in ((chess.square_name(square), piece) for square, piece in board.piece_map().items())
+    } | {"__fen__": board.fen()}, ("white" if board.turn == chess.WHITE else "black")
 
 
 def _seed_legacy_user_db(db_path):
@@ -477,6 +503,128 @@ def test_chess_engine_supports_castling_en_passant_and_promotion():
     assert promoted["board"]["e8"] == "Q"
 
 
+def test_chess_match_payload_exposes_claimable_draw_and_claim_endpoint(tmp_path):
+    db_path = tmp_path / "games.db"
+    _seed_db(db_path)
+    actor_box = {"actor": {"id": 2, "username": "alice", "role": "user"}}
+    app = _build_app(db_path, actor_box)
+    client = app.test_client()
+
+    history, board, current_turn = _history_from_uci_sequence(
+        ["g1f3", "g8f6", "f3g1", "f6g8", "g1f3", "g8f6", "f3g1"]
+    )
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    now = "2026-05-08T00:00:00Z"
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO game_matches (
+                game_key, mode, status, white_user_id, black_user_id, human_side, current_turn,
+                board_json, move_history_json, created_at, updated_at
+            ) VALUES ('chess', 'pvp', 'active', 2, 3, 'white', ?, ?, ?, ?, ?)
+            """,
+            (current_turn, json.dumps(board, ensure_ascii=False, sort_keys=True), json.dumps(history, ensure_ascii=False), now, now),
+        )
+        match_id = cur.lastrowid
+        conn.commit()
+    finally:
+        conn.close()
+
+    detail = client.get(f"/api/games/chess/matches/{match_id}")
+    assert detail.status_code == 200
+    match = detail.get_json()["match"]
+    assert match["can_claim_draw"] is True
+    assert "threefold_repetition" in match["draw_claim_reasons"]
+
+    actor_box["actor"] = {"id": 2, "username": "alice", "role": "user"}
+    denied = client.post(f"/api/games/chess/matches/{match_id}/claim-draw", json={})
+    assert denied.status_code == 409
+
+    actor_box["actor"] = {"id": 3, "username": "bob", "role": "user"}
+    claimed = client.post(f"/api/games/chess/matches/{match_id}/claim-draw", json={})
+    assert claimed.status_code == 200
+    payload = claimed.get_json()
+    assert payload["ok"] is True
+    assert payload["match"]["status"] == "finished"
+    assert payload["match"]["result_reason"] == "threefold_repetition"
+
+
+def test_chess_draw_offer_accept_reject_and_move_clears_offer(tmp_path):
+    db_path = tmp_path / "games.db"
+    _seed_db(db_path)
+    actor_box = {"actor": {"id": 2, "username": "alice", "role": "user"}}
+    app = _build_app(db_path, actor_box)
+    client = app.test_client()
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    now = "2026-05-08T00:00:00Z"
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO game_matches (
+                game_key, mode, status, white_user_id, black_user_id, human_side, current_turn,
+                board_json, move_history_json, created_at, updated_at
+            ) VALUES ('chess', 'pvp', 'active', 2, 3, 'white', 'white', ?, '[]', ?, ?)
+            """,
+            (json.dumps(initial_board(), ensure_ascii=False, sort_keys=True), now, now),
+        )
+        first_match_id = cur.lastrowid
+        cur = conn.execute(
+            """
+            INSERT INTO game_matches (
+                game_key, mode, status, white_user_id, black_user_id, human_side, current_turn,
+                board_json, move_history_json, created_at, updated_at
+            ) VALUES ('chess', 'pvp', 'active', 2, 3, 'white', 'white', ?, '[]', ?, ?)
+            """,
+            (json.dumps(initial_board(), ensure_ascii=False, sort_keys=True), now, now),
+        )
+        second_match_id = cur.lastrowid
+        conn.commit()
+    finally:
+        conn.close()
+
+    offered = client.post(f"/api/games/chess/matches/{first_match_id}/offer-draw", json={})
+    assert offered.status_code == 200
+    payload = offered.get_json()
+    assert payload["match"]["draw_offer_pending"] is True
+    assert payload["match"]["draw_offer_by_user_id"] == 2
+    assert payload["match"]["can_offer_draw"] is False
+
+    actor_box["actor"] = {"id": 3, "username": "bob", "role": "user"}
+    detail = client.get(f"/api/games/chess/matches/{first_match_id}")
+    assert detail.status_code == 200
+    match = detail.get_json()["match"]
+    assert match["can_accept_draw_offer"] is True
+    assert match["can_reject_draw_offer"] is True
+
+    rejected = client.post(f"/api/games/chess/matches/{first_match_id}/respond-draw", json={"action": "reject"})
+    assert rejected.status_code == 200
+    payload = rejected.get_json()
+    assert payload["match"]["status"] == "active"
+    assert payload["match"]["draw_offer_pending"] is False
+
+    actor_box["actor"] = {"id": 2, "username": "alice", "role": "user"}
+    offered_again = client.post(f"/api/games/chess/matches/{second_match_id}/offer-draw", json={})
+    assert offered_again.status_code == 200
+
+    actor_box["actor"] = {"id": 3, "username": "bob", "role": "user"}
+    accepted = client.post(f"/api/games/chess/matches/{second_match_id}/respond-draw", json={"action": "accept"})
+    assert accepted.status_code == 200
+    payload = accepted.get_json()
+    assert payload["match"]["status"] == "finished"
+    assert payload["match"]["result_reason"] == "agreed_draw"
+
+    actor_box["actor"] = {"id": 2, "username": "alice", "role": "user"}
+    offered_third = client.post(f"/api/games/chess/matches/{first_match_id}/offer-draw", json={})
+    assert offered_third.status_code == 200
+    moved = client.post(f"/api/games/chess/matches/{first_match_id}/move", json={"from": "e2", "to": "e4"})
+    assert moved.status_code == 200
+    payload = moved.get_json()
+    assert payload["match"]["draw_offer_pending"] is False
+
+
 def test_chess_practice_match_accepts_player_move_and_computer_reply(tmp_path):
     db_path = tmp_path / "games.db"
     _seed_db(db_path)
@@ -673,6 +821,25 @@ def test_experiment_resign_collects_replay_without_online_learning(tmp_path, mon
     assert "too_short" in replay["quarantine_reasons"]
 
 
+def test_resign_finished_match_returns_conflict(tmp_path):
+    db_path = tmp_path / "games.db"
+    _seed_db(db_path)
+    actor_box = {"actor": {"id": 2, "username": "alice", "role": "user"}}
+    app = _build_app(db_path, actor_box, chess_engine_store=_build_chess_engine_store(tmp_path))
+    client = app.test_client()
+
+    created = client.post("/api/games/chess/practice", json={"difficulty": "normal", "side": "black"})
+    assert created.status_code == 200
+    match_id = created.get_json()["match_id"]
+
+    first = client.post(f"/api/games/chess/matches/{match_id}/resign", json={})
+    assert first.status_code == 200
+
+    second = client.post(f"/api/games/chess/matches/{match_id}/resign", json={})
+    assert second.status_code == 409
+    assert second.get_json()["msg"] == "這局已經結束"
+
+
 def test_experiment_nn_learning_writes_separate_runtime_model(tmp_path, monkeypatch):
     model_path = tmp_path / "runtime" / "models" / "chess_experiment_2_nn.json"
     monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_NN_MODEL_PATH", str(model_path))
@@ -707,10 +874,14 @@ def test_experiment_nn_resign_collects_replay_without_mutating_model(tmp_path, m
     created = client.post("/api/games/chess/practice", json={"difficulty": "experiment 2:nn", "side": "black"})
     assert created.status_code == 200
     match_id = created.get_json()["match_id"]
+    model_before = model_path.read_text(encoding="utf-8") if model_path.exists() else None
 
     resigned = client.post(f"/api/games/chess/matches/{match_id}/resign", json={})
     assert resigned.status_code == 200
-    assert not model_path.exists()
+    if model_before is None:
+        assert not model_path.exists()
+    else:
+        assert model_path.read_text(encoding="utf-8") == model_before
     replay = json.loads(rejected_path.read_text(encoding="utf-8").strip())
     assert replay["engine_name"] == "experiment 2:nn"
     assert replay["collection_tier"] == "rejected"
@@ -755,11 +926,19 @@ def test_experiment_dl_resign_collects_replay_without_mutating_model(tmp_path, m
     created = client.post("/api/games/chess/practice", json={"difficulty": "experiment 3:dl", "side": "black"})
     assert created.status_code == 200
     match_id = created.get_json()["match_id"]
+    model_before = model_path.read_text(encoding="utf-8") if model_path.exists() else None
+    dl_replay_before = replay_path.read_text(encoding="utf-8") if replay_path.exists() else None
 
     resigned = client.post(f"/api/games/chess/matches/{match_id}/resign", json={})
     assert resigned.status_code == 200
-    assert not model_path.exists()
-    assert not replay_path.exists()
+    if model_before is None:
+        assert not model_path.exists()
+    else:
+        assert model_path.read_text(encoding="utf-8") == model_before
+    if dl_replay_before is None:
+        assert not replay_path.exists()
+    else:
+        assert replay_path.read_text(encoding="utf-8") == dl_replay_before
     replay = json.loads(rejected_path.read_text(encoding="utf-8").strip())
     assert replay["engine_name"] == "experiment 3:dl"
     assert replay["collection_tier"] == "rejected"
@@ -825,10 +1004,14 @@ def test_experiment_pv_resign_collects_replay_without_mutating_model(tmp_path, m
     created = client.post("/api/games/chess/practice", json={"difficulty": "experiment 4:pv", "side": "black"})
     assert created.status_code == 200
     match_id = created.get_json()["match_id"]
+    model_before = model_path.read_text(encoding="utf-8") if model_path.exists() else None
 
     resigned = client.post(f"/api/games/chess/matches/{match_id}/resign", json={})
     assert resigned.status_code == 200
-    assert not model_path.exists()
+    if model_before is None:
+        assert not model_path.exists()
+    else:
+        assert model_path.read_text(encoding="utf-8") == model_before
     replay = json.loads(rejected_path.read_text(encoding="utf-8").strip())
     assert replay["engine_name"] == "experiment 4:pv"
     assert replay["collection_tier"] == "rejected"
@@ -960,6 +1143,64 @@ def test_experiment_pv_move_returns_legal_move_on_fresh_model(tmp_path, monkeypa
     assert isinstance(applied["board"], dict)
 
 
+def test_experiment_pv_avoids_early_rook_shuffle_after_edge_pawn(tmp_path, monkeypatch):
+    model_path = tmp_path / "runtime" / "models" / "chess_experiment_4_pv.json"
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_PV_MODEL_PATH", str(model_path))
+    board = chess.Board()
+    for uci in ("a2a4", "g8f6"):
+        board.push(chess.Move.from_uci(uci))
+
+    move = choose_experiment_pv_move({"__fen__": board.fen()}, "white", model_path=model_path)
+
+    assert move is not None
+    assert move["from"] != "a1"
+    applied = validate_move({"__fen__": board.fen()}, "white", move["from"], move["to"], move.get("promotion"))
+    assert isinstance(applied["board"], dict)
+
+
+def test_experiment_pv_avoids_repeating_rook_wander_in_opening(tmp_path, monkeypatch):
+    model_path = tmp_path / "runtime" / "models" / "chess_experiment_4_pv.json"
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_PV_MODEL_PATH", str(model_path))
+    board = chess.Board()
+    for uci in ("a2a4", "g8f6", "a1a3", "e7e5"):
+        board.push(chess.Move.from_uci(uci))
+
+    move = choose_experiment_pv_move({"__fen__": board.fen()}, "white", model_path=model_path)
+
+    assert move is not None
+    assert move["from"] != "a3"
+    applied = validate_move({"__fen__": board.fen()}, "white", move["from"], move["to"], move.get("promotion"))
+    assert isinstance(applied["board"], dict)
+
+
+def test_experiment_move_avoids_early_rook_shuffle_after_edge_pawn(tmp_path):
+    board = chess.Board()
+    for uci in ("a2a4", "g8f6"):
+        board.push(chess.Move.from_uci(uci))
+
+    move = choose_experiment_move({"__fen__": board.fen()}, "white", store=ChessExperimentStore(tmp_path / "exp1.db"))
+
+    assert move is not None
+    assert move["from"] != "a1"
+    applied = validate_move({"__fen__": board.fen()}, "white", move["from"], move["to"], move.get("promotion"))
+    assert isinstance(applied["board"], dict)
+
+
+def test_experiment_dl_move_avoids_early_rook_shuffle_after_edge_pawn(tmp_path, monkeypatch):
+    model_path = tmp_path / "runtime" / "models" / "chess_experiment_3_dl.json"
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_DL_MODEL_PATH", str(model_path))
+    board = chess.Board()
+    for uci in ("a2a4", "g8f6"):
+        board.push(chess.Move.from_uci(uci))
+
+    move = choose_experiment_dl_move({"__fen__": board.fen()}, "white", model_path=model_path)
+
+    assert move is not None
+    assert move["from"] != "a1"
+    applied = validate_move({"__fen__": board.fen()}, "white", move["from"], move["to"], move.get("promotion"))
+    assert isinstance(applied["board"], dict)
+
+
 def test_root_chess_engine_dashboard_reports_warm_start_and_replay_summary(tmp_path, monkeypatch):
     db_path = tmp_path / "games.db"
     _seed_db(db_path)
@@ -985,13 +1226,56 @@ def test_root_chess_engine_dashboard_reports_warm_start_and_replay_summary(tmp_p
     assert "no usable replays yet" in payload["pipeline_recommendation"]["blocked_reasons"]
     assert Path(payload["promotion"]["path"]).name == "chess_promotion_status.json"
     runtime_models = tmp_path / "runtime" / "games" / "models"
-    assert (tmp_path / "runtime" / "database" / bundled_chess_engine_db_path().name).exists()
+    assert (runtime_models / bundled_chess_engine_db_path().name).exists()
     assert (runtime_models / bundled_chess_nn_model_path().name).exists()
     assert (runtime_models / bundled_chess_dl_model_path().name).exists()
     assert (runtime_models / bundled_chess_pv_model_path().name).exists()
     artifacts = {row["engine"]: row for row in payload["warm_start"]["artifacts"]}
     assert artifacts["experiment"]["source"] in {"bundled_seed", "runtime_existing", "schema_fallback"}
     assert artifacts["experiment 2:nn"]["source"] in {"bundled_seed", "runtime_existing", "template_fallback"}
+
+
+def test_root_chess_warm_start_does_not_overwrite_existing_exp1_runtime_db(tmp_path, monkeypatch):
+    db_path = tmp_path / "games.db"
+    _seed_db(db_path)
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
+    runtime_dir = tmp_path / "runtime"
+    runtime_exp1 = runtime_dir / "games" / "models" / bundled_chess_engine_db_path().name
+    runtime_exp1.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(runtime_exp1)
+    conn.row_factory = sqlite3.Row
+    ensure_chess_engine_schema(conn)
+    conn.execute(
+        """
+        INSERT INTO game_chess_engine_memory (
+            position_key, side, move_uci, sample_count, win_count, draw_count, loss_count, score_total, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        ("test-position", "white", "a2a3", 1, 1, 0, 0, 1, "2026-05-08T00:00:00Z"),
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setenv("HACKME_RUNTIME_DIR", str(runtime_dir))
+    app = _build_app(db_path, actor_box, chess_engine_store=ChessExperimentStore(runtime_exp1))
+    client = app.test_client()
+
+    response = client.get("/api/root/games/chess/engines/dashboard")
+    assert response.status_code == 200
+    payload = response.get_json()
+    artifacts = {row["engine"]: row for row in payload["warm_start"]["artifacts"]}
+    assert artifacts["experiment"]["source"] == "runtime_existing"
+
+    conn = sqlite3.connect(runtime_exp1)
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            "SELECT move_uci, sample_count FROM game_chess_engine_memory WHERE position_key=?",
+            ("test-position",),
+        ).fetchone()
+        assert row["move_uci"] == "a2a3"
+        assert row["sample_count"] == 1
+    finally:
+        conn.close()
 
 
 def test_root_chess_promotion_stage_and_promote(tmp_path, monkeypatch):

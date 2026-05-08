@@ -723,7 +723,10 @@ async function loadAnnouncements() {
     headers: { "X-CSRF-Token": getCsrfToken() || "" }
   });
   const json = await res.json().catch(() => ({}));
-  if (!json.ok) return;
+  if (!json.ok) {
+    flash($("community-msg"), json.msg || "公告讀取失敗", false);
+    return;
+  }
   communityAnnouncements = Array.isArray(json.announcements) ? json.announcements : [];
   renderCommunityAnnouncements();
 }
@@ -772,7 +775,10 @@ async function loadCommunityCategories() {
     headers: { "X-CSRF-Token": getCsrfToken() || "" }
   });
   const json = await res.json().catch(() => ({}));
-  if (!json.ok) return;
+  if (!json.ok) {
+    flash($("community-category-msg"), json.msg || "分類讀取失敗", false);
+    return;
+  }
   communityCategories = Array.isArray(json.categories) ? json.categories : [];
   renderCommunityCategories();
 }
@@ -808,7 +814,10 @@ async function loadCommunityBoards() {
     headers: { "X-CSRF-Token": getCsrfToken() || "" }
   });
   const json = await res.json().catch(() => ({}));
-  if (!json.ok) return;
+  if (!json.ok) {
+    flash($("community-msg"), json.msg || "討論區清單讀取失敗", false);
+    return;
+  }
   communityBoards = Array.isArray(json.boards) ? json.boards : [];
   const requestPanel = $("community-board-request-panel");
   if (requestPanel) requestPanel.style.display = communityBoardRequestOpen ? "block" : "none";
@@ -916,7 +925,10 @@ async function loadCommunityBoardReviews() {
     headers: { "X-CSRF-Token": getCsrfToken() || "" }
   });
   const json = await res.json().catch(() => ({}));
-  if (!json.ok) return;
+  if (!json.ok) {
+    flash($("community-msg"), json.msg || "待審核討論區讀取失敗", false);
+    return;
+  }
   communityBoardReviews = Array.isArray(json.items) ? json.items : [];
   renderCommunityBoardReviews();
 }
@@ -932,6 +944,7 @@ async function loadCommunityThreadReviews() {
     canReviewCommunityThreads = false;
     communityThreadReviews = [];
     renderCommunityThreadReviews();
+    flash($("community-msg"), json.msg || "待審核主題讀取失敗", false);
     return;
   }
   canReviewCommunityThreads = true;

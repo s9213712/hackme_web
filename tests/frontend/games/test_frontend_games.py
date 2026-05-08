@@ -16,6 +16,10 @@ def test_game_zone_frontend_assets_are_wired():
     assert "/js/38-games.js?v=20260502-mobile-controls" in index_html
     assert 'id="game-practice-side"' in index_html
     assert 'id="game-practice-difficulty"' in index_html
+    assert 'id="game-offer-draw-btn"' in index_html
+    assert 'id="game-accept-draw-btn"' in index_html
+    assert 'id="game-reject-draw-btn"' in index_html
+    assert 'id="game-claim-draw-btn"' in index_html
     assert 'id="game-root-chess-panel"' in index_html
     assert 'id="game-root-chess-refresh-btn"' in index_html
     assert 'id="game-root-chess-warm-start-btn"' in index_html
@@ -68,6 +72,17 @@ def test_game_zone_frontend_assets_are_wired():
     assert "gameDifficultyLabel" in games_js
     assert "gameOpponentColor" in games_js
     assert "buildOptimisticChessMatch" in games_js
+    assert "兵升變請輸入 q / r / b / n" in games_js
+    assert "/games/chess/matches/${encodeURIComponent(gameSelectedMatchId)}/offer-draw" in games_js
+    assert "/games/chess/matches/${encodeURIComponent(gameSelectedMatchId)}/respond-draw" in games_js
+    assert "已提出和棋，等待對方回覆。" in games_js
+    assert "已接受和棋，棋局結束。" in games_js
+    assert "已拒絕和棋。" in games_js
+    assert "目前不能提和，可能已有待回覆的和棋。" in games_js
+    assert "目前沒有待回覆的和棋。" in games_js
+    assert "/games/chess/matches/${encodeURIComponent(gameSelectedMatchId)}/claim-draw" in games_js
+    assert "目前沒有三次重複或 50 步和棋可申請" in games_js
+    assert "已申請和棋並結束棋局" in games_js
     assert "renderChessRootDashboard" in games_js
     assert "loadChessRootDashboard" in games_js
     assert "warmStartChessModels" in games_js
@@ -147,6 +162,10 @@ def test_game_zone_frontend_assets_are_wired():
     assert "data-mine-index" in games_js
     assert "contextmenu" in games_js
     assert "async function deleteFinishedGame" in games_js
+    assert "已認輸並結束棋局" in games_js
+    assert "這局已經結束，不需要再認輸" in games_js
+    assert "請先選擇要認輸的棋局" in games_js
+    assert "找不到要刪除的棋局，請先刷新遊戲區" in games_js
     assert "method: \"DELETE\"" in games_js
     assert "grid-template-rows: repeat(8, minmax(0, 1fr))" in styles_css
     assert "padding: 0" in styles_css

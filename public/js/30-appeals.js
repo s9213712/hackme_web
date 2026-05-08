@@ -155,7 +155,16 @@ async function loadAdminAppeals(page = 0, status = null) {
     headers: { "X-CSRF-Token": csrf || "" }
   });
   const json = await res.json().catch(() => ({}));
-  if (!json.ok) return;
+  if (!json.ok) {
+    const message = json.msg || "申覆清單讀取失敗";
+    flash($("appeal-msg"), message, false);
+    const list = $("admin-appeal-list");
+    if (list) {
+      list.innerHTML = `<p style='color:var(--red);text-align:center;padding:1rem;'>${sanitize(message)}</p>`;
+    }
+    if ($("admin-appeals-total")) $("admin-appeals-total").textContent = "0";
+    return;
+  }
 
   adminAppealPage = targetPage;
   adminAppeals = Array.isArray(json.items) ? json.items : [];
@@ -287,7 +296,16 @@ async function loadAdminReports(page = 0, status = null) {
     headers: { "X-CSRF-Token": csrf || "" }
   });
   const json = await res.json().catch(() => ({}));
-  if (!json.ok) return;
+  if (!json.ok) {
+    const message = json.msg || "訊息檢舉清單讀取失敗";
+    flash($("appeal-msg"), message, false);
+    const list = $("admin-report-list");
+    if (list) {
+      list.innerHTML = `<p style='color:var(--red);text-align:center;padding:1rem;'>${sanitize(message)}</p>`;
+    }
+    if ($("admin-reports-total")) $("admin-reports-total").textContent = "0";
+    return;
+  }
 
   adminReportPage = targetPage;
   adminReports = Array.isArray(json.items) ? json.items : [];

@@ -67,6 +67,8 @@ CREATE TABLE IF NOT EXISTS game_matches (
     move_history_json TEXT NOT NULL DEFAULT '[]',
     winner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     result_reason TEXT,
+    draw_offer_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    draw_offer_at TEXT,
     leaderboard_week TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -78,7 +80,7 @@ CREATE TABLE IF NOT EXISTS game_matches (
     CHECK (status IN ('active', 'finished', 'cancelled')),
     CHECK (current_turn IN ('white', 'black')),
     CHECK (human_side IN ('white', 'black')),
-    CHECK (computer_difficulty IN ('easy', 'normal', 'hard', 'experiment', 'experiment 2:nn', 'experiment 3:dl'))
+    CHECK (computer_difficulty IN ('easy', 'normal', 'hard', 'experiment', 'experiment 2:nn', 'experiment 3:dl', 'experiment 4:pv'))
 );
 
 CREATE TABLE IF NOT EXISTS game_invites (

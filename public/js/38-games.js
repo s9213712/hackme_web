@@ -396,6 +396,10 @@ function renderChessBoard(match) {
   const status = $("game-current-status");
   const history = $("game-move-history");
   const resign = $("game-resign-btn");
+  const offerDraw = $("game-offer-draw-btn");
+  const acceptDraw = $("game-accept-draw-btn");
+  const rejectDraw = $("game-reject-draw-btn");
+  const claimDraw = $("game-claim-draw-btn");
   if (!board) return;
   if (!match) {
     board.innerHTML = "<div class=\"chess-empty\">尚未選擇棋局</div>";
@@ -403,6 +407,10 @@ function renderChessBoard(match) {
     if (status) status.textContent = "選擇棋局後即可走棋";
     if (history) history.innerHTML = "";
     if (resign) resign.style.display = "none";
+    if (offerDraw) offerDraw.style.display = "none";
+    if (acceptDraw) acceptDraw.style.display = "none";
+    if (rejectDraw) rejectDraw.style.display = "none";
+    if (claimDraw) claimDraw.style.display = "none";
     return;
   }
   const boardMap = match.board || {};
@@ -411,6 +419,10 @@ function renderChessBoard(match) {
   if (status) {
     if (match.status !== "active") {
       status.textContent = match.winner_username ? `已結束，勝者：${match.winner_username}` : `已結束：${match.result_reason || "平手"}`;
+    } else if (match.draw_offer_pending && match.can_accept_draw_offer) {
+      status.textContent = `${match.draw_offer_by_username || "對手"} 已提和，等待你接受或拒絕`;
+    } else if (match.draw_offer_pending && String(match.draw_offer_by_user_id || "") === String(currentUserId || "")) {
+      status.textContent = `已向 ${match.my_side === "white" ? match.black_username : match.white_username} 提和，等待對方回覆`;
     } else if (match.pending_computer_response) {
       status.textContent = match.pending_status_message || "你已走棋，電腦思考中...";
     } else {
@@ -418,6 +430,10 @@ function renderChessBoard(match) {
     }
   }
   if (resign) resign.style.display = match.status === "active" ? "" : "none";
+  if (offerDraw) offerDraw.style.display = match.status === "active" && match.can_offer_draw ? "" : "none";
+  if (acceptDraw) acceptDraw.style.display = match.status === "active" && match.can_accept_draw_offer ? "" : "none";
+  if (rejectDraw) rejectDraw.style.display = match.status === "active" && match.can_reject_draw_offer ? "" : "none";
+  if (claimDraw) claimDraw.style.display = match.status === "active" && myTurn && match.can_claim_draw ? "" : "none";
   if (gameSelectedSquare && !boardMap[gameSelectedSquare]) gameSelectedSquare = null;
   const legalTargets = new Set((match.legal_moves || [])
     .filter((move) => move.from === gameSelectedSquare)
@@ -1489,11 +1505,24 @@ async function selectChessSquare(square) {
   }
   if (gameSelectedSquare && legal && selectedPiece) {
     const from = gameSelectedSquare;
-    const chosenMove = (match.legal_moves || []).find((move) => move.from === from && move.to === square) || {
+    const candidateMoves = (match.legal_moves || []).filter((move) => move.from === from && move.to === square);
+    let chosenMove = candidateMoves[0] || {
       from,
       to: square,
       piece: selectedPiece,
     };
+    let promotion = chosenMove.promotion || null;
+    if (candidateMoves.length > 1 && candidateMoves.some((move) => move.promotion)) {
+      const raw = window.prompt("兵升變請輸入 q / r / b / n", "q");
+      if (raw === null) {
+        setGameMsg("已取消升變走棋。", false);
+        return;
+      }
+      const normalized = String(raw || "q").trim().toLowerCase();
+      const resolved = ["q", "r", "b", "n"].includes(normalized) ? normalized : "q";
+      chosenMove = candidateMoves.find((move) => String(move.promotion || "").toLowerCase() === resolved) || candidateMoves[0];
+      promotion = chosenMove.promotion || resolved;
+    }
     const previousMatch = match;
     const optimisticMatch = buildOptimisticChessMatch(match, chosenMove);
     gameSelectedSquare = null;
@@ -1504,7 +1533,7 @@ async function selectChessSquare(square) {
     try {
       const json = await gameRequest(`/games/chess/matches/${encodeURIComponent(gameSelectedMatchId)}/move`, {
         method: "POST",
-        body: { from, to: square },
+        body: { from, to: square, promotion },
       });
       const updated = json.match;
       gameState.matches = gameState.matches.map((item) => item.id === updated.id ? updated : item);
@@ -1528,12 +1557,129 @@ async function selectChessSquare(square) {
   }
 }
 
+async function claimChessDraw() {
+  if (!gameSelectedMatchId) {
+    setGameMsg("請先選擇要申請和棋的棋局。", false);
+    return;
+  }
+  const match = (gameState.matches || []).find((item) => item.id === gameSelectedMatchId);
+  if (!match) {
+    setGameMsg("找不到目前棋局，請先刷新遊戲區。", false);
+    return;
+  }
+  if (match.status !== "active") {
+    setGameMsg("這局已經結束，不需要再申請和棋。", false);
+    return;
+  }
+  if (!match.can_claim_draw) {
+    setGameMsg("目前沒有三次重複或 50 步和棋可申請。", false);
+    return;
+  }
+  try {
+    const json = await gameRequest(`/games/chess/matches/${encodeURIComponent(gameSelectedMatchId)}/claim-draw`, { method: "POST", body: {} });
+    gameSelectedSquare = null;
+    if (json?.match?.id) {
+      gameState.matches = (gameState.matches || []).map((item) => item.id === json.match.id ? json.match : item);
+      renderGameMatches(gameState.matches);
+    }
+    setGameMsg("已申請和棋並結束棋局。", true);
+    await loadGameZone();
+  } catch (err) {
+    setGameMsg(err.message || "申請和棋失敗", false);
+  }
+}
+
+async function offerChessDraw() {
+  if (!gameSelectedMatchId) {
+    setGameMsg("請先選擇要提和的棋局。", false);
+    return;
+  }
+  const match = (gameState.matches || []).find((item) => item.id === gameSelectedMatchId);
+  if (!match) {
+    setGameMsg("找不到目前棋局，請先刷新遊戲區。", false);
+    return;
+  }
+  if (match.status !== "active") {
+    setGameMsg("這局已經結束，不能再提和。", false);
+    return;
+  }
+  if (!match.can_offer_draw) {
+    setGameMsg("目前不能提和，可能已有待回覆的和棋。", false);
+    return;
+  }
+  try {
+    const json = await gameRequest(`/games/chess/matches/${encodeURIComponent(gameSelectedMatchId)}/offer-draw`, { method: "POST", body: {} });
+    gameSelectedSquare = null;
+    if (json?.match?.id) {
+      gameState.matches = (gameState.matches || []).map((item) => item.id === json.match.id ? json.match : item);
+      renderGameMatches(gameState.matches);
+    }
+    setGameMsg("已提出和棋，等待對方回覆。", true);
+    await loadGameZone();
+  } catch (err) {
+    setGameMsg(err.message || "提和失敗", false);
+  }
+}
+
+async function respondChessDraw(action) {
+  if (!gameSelectedMatchId) {
+    setGameMsg(`請先選擇要${action === "accept" ? "接受" : "拒絕"}和棋的棋局。`, false);
+    return;
+  }
+  const match = (gameState.matches || []).find((item) => item.id === gameSelectedMatchId);
+  if (!match) {
+    setGameMsg("找不到目前棋局，請先刷新遊戲區。", false);
+    return;
+  }
+  if (match.status !== "active") {
+    setGameMsg("這局已經結束，不需要再回覆和棋。", false);
+    return;
+  }
+  const canRespond = action === "accept" ? match.can_accept_draw_offer : match.can_reject_draw_offer;
+  if (!canRespond) {
+    setGameMsg("目前沒有待回覆的和棋。", false);
+    return;
+  }
+  try {
+    const json = await gameRequest(`/games/chess/matches/${encodeURIComponent(gameSelectedMatchId)}/respond-draw`, {
+      method: "POST",
+      body: { action },
+    });
+    gameSelectedSquare = null;
+    if (json?.match?.id) {
+      gameState.matches = (gameState.matches || []).map((item) => item.id === json.match.id ? json.match : item);
+      renderGameMatches(gameState.matches);
+    }
+    setGameMsg(action === "accept" ? "已接受和棋，棋局結束。": "已拒絕和棋。", true);
+    await loadGameZone();
+  } catch (err) {
+    setGameMsg(err.message || `${action === "accept" ? "接受" : "拒絕"}和棋失敗`, false);
+  }
+}
+
 async function resignGame() {
-  if (!gameSelectedMatchId) return;
+  if (!gameSelectedMatchId) {
+    setGameMsg("請先選擇要認輸的棋局。", false);
+    return;
+  }
+  const match = (gameState.matches || []).find((item) => item.id === gameSelectedMatchId);
+  if (!match) {
+    setGameMsg("找不到目前棋局，請先刷新遊戲區。", false);
+    return;
+  }
+  if (match.status !== "active") {
+    setGameMsg("這局已經結束，不需要再認輸。", false);
+    return;
+  }
   if (!confirm("確認認輸並結束這局？")) return;
   try {
-    await gameRequest(`/games/chess/matches/${encodeURIComponent(gameSelectedMatchId)}/resign`, { method: "POST", body: {} });
+    const json = await gameRequest(`/games/chess/matches/${encodeURIComponent(gameSelectedMatchId)}/resign`, { method: "POST", body: {} });
     gameSelectedSquare = null;
+    if (json?.match?.id) {
+      gameState.matches = (gameState.matches || []).map((item) => item.id === json.match.id ? json.match : item);
+      renderGameMatches(gameState.matches);
+    }
+    setGameMsg("已認輸並結束棋局。", true);
     await loadGameZone();
   } catch (err) {
     setGameMsg(err.message || "認輸失敗", false);
@@ -1542,7 +1688,10 @@ async function resignGame() {
 
 async function deleteFinishedGame(matchId) {
   const match = (gameState.matches || []).find((item) => String(item.id) === String(matchId));
-  if (!match) return;
+  if (!match) {
+    setGameMsg("找不到要刪除的棋局，請先刷新遊戲區。", false);
+    return;
+  }
   if (match.status === "active") {
     setGameMsg("進行中的棋局不能刪除，請先完成棋局或認輸。", false);
     return;
@@ -1690,6 +1839,26 @@ document.addEventListener("click", (event) => {
   const deleteMatchBtn = event.target?.closest?.("[data-game-delete-match]");
   if (deleteMatchBtn) {
     deleteFinishedGame(deleteMatchBtn.dataset.gameDeleteMatch);
+    return;
+  }
+  const offerDrawBtn = event.target?.closest?.("#game-offer-draw-btn");
+  if (offerDrawBtn) {
+    offerChessDraw();
+    return;
+  }
+  const acceptDrawBtn = event.target?.closest?.("#game-accept-draw-btn");
+  if (acceptDrawBtn) {
+    respondChessDraw("accept");
+    return;
+  }
+  const rejectDrawBtn = event.target?.closest?.("#game-reject-draw-btn");
+  if (rejectDrawBtn) {
+    respondChessDraw("reject");
+    return;
+  }
+  const claimDrawBtn = event.target?.closest?.("#game-claim-draw-btn");
+  if (claimDrawBtn) {
+    claimChessDraw();
     return;
   }
   const inviteBtn = event.target?.closest?.("[data-game-invite]");

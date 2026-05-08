@@ -1006,7 +1006,13 @@
               <div class="drive-card-title" id="game-current-title">尚未選擇棋局</div>
               <div class="drive-card-sub" id="game-current-status">選擇棋局後即可走棋</div>
             </div>
-            <button class="btn btn-danger" id="game-resign-btn" type="button" style="display:none;">認輸</button>
+            <div class="drive-file-actions">
+              <button class="btn" id="game-offer-draw-btn" type="button" style="display:none;">提和</button>
+              <button class="btn btn-primary" id="game-accept-draw-btn" type="button" style="display:none;">接受和棋</button>
+              <button class="btn" id="game-reject-draw-btn" type="button" style="display:none;">拒絕和棋</button>
+              <button class="btn" id="game-claim-draw-btn" type="button" style="display:none;">申請和棋</button>
+              <button class="btn btn-danger" id="game-resign-btn" type="button" style="display:none;">認輸</button>
+            </div>
           </div>
           <div id="chess-board" class="chess-board" aria-label="西洋棋棋盤"></div>
           <div id="game-move-history" class="game-move-history"></div>

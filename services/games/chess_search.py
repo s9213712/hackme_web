@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import random
+from time import perf_counter
 from typing import Callable
 
 import chess
@@ -93,10 +94,44 @@ class TranspositionTable:
 MoveOrderFn = Callable[[chess.Board, chess.Move, int], int]
 EvalFn = Callable[[chess.Board], int]
 QFilterFn = Callable[[chess.Board, chess.Move], bool]
+MoveScoreFn = Callable[[chess.Move], int]
+
+
+class SearchTimeout(RuntimeError):
+    pass
+
+
+def _check_deadline(deadline: float | None) -> None:
+    if deadline is not None and perf_counter() >= deadline:
+        raise SearchTimeout()
 
 
 def _default_qmove_filter(board: chess.Board, move: chess.Move) -> bool:
     return bool(board.is_capture(move) or move.promotion)
+
+
+def is_early_quiet_rook_move(board: chess.Board, move: chess.Move) -> bool:
+    piece = board.piece_at(move.from_square)
+    if piece is None or piece.piece_type != chess.ROOK:
+        return False
+    if board.fullmove_number > 10:
+        return False
+    if board.is_capture(move) or board.gives_check(move) or board.is_castling(move):
+        return False
+    king_square = board.king(piece.color)
+    if king_square is None:
+        return False
+    castled_squares = {chess.G1, chess.C1} if piece.color == chess.WHITE else {chess.G8, chess.C8}
+    return king_square not in castled_squares
+
+
+def opening_sanity_filter(board: chess.Board, best_move: chess.Move | None, *, score_move: MoveScoreFn) -> chess.Move | None:
+    if best_move is None or not is_early_quiet_rook_move(board, best_move):
+        return best_move
+    alternatives = [move for move in board.legal_moves if not is_early_quiet_rook_move(board, move)]
+    if not alternatives:
+        return best_move
+    return max(alternatives, key=lambda move: (score_move(move), move.uci()))
 
 
 def _terminal_score(board: chess.Board, *, color_sign: int, ply: int) -> int:
@@ -214,7 +249,9 @@ def _quiescence(
     evaluate: EvalFn,
     qmove_filter: QFilterFn,
     stats: SearchStats,
+    deadline: float | None,
 ) -> int:
+    _check_deadline(deadline)
     stats.qnodes += 1
     if board.is_game_over():
         return _terminal_score(board, color_sign=color_sign, ply=ply)
@@ -238,6 +275,7 @@ def _quiescence(
             evaluate=evaluate,
             qmove_filter=qmove_filter,
             stats=stats,
+            deadline=deadline,
         )
         board.pop()
         if score >= beta:
@@ -264,7 +302,9 @@ def _negamax(
     killer_moves: dict[int, list[str]],
     history_heuristic: dict[tuple[bool, str], int],
     quiescence_depth: int,
+    deadline: float | None,
 ) -> tuple[int, chess.Move | None]:
+    _check_deadline(deadline)
     stats.nodes += 1
     original_alpha = alpha
     if board.is_game_over():
@@ -295,6 +335,7 @@ def _negamax(
             evaluate=evaluate,
             qmove_filter=qmove_filter,
             stats=stats,
+            deadline=deadline,
         ), None
 
     best_score = -_INFINITY
@@ -327,6 +368,7 @@ def _negamax(
             killer_moves=killer_moves,
             history_heuristic=history_heuristic,
             quiescence_depth=quiescence_depth,
+            deadline=deadline,
         )
         score = -score
         board.pop()
@@ -371,6 +413,7 @@ def search_best_move(
     transposition: TranspositionTable | None = None,
     hasher: ZobristHasher | None = None,
     tt_max_entries: int = _DEFAULT_TT_MAX_ENTRIES,
+    time_budget_ms: int | None = None,
 ) -> SearchResult:
     if board.is_game_over():
         return SearchResult(best_move=None, score=0, depth=0, stats=SearchStats())
@@ -385,9 +428,30 @@ def search_best_move(
     root_sign = 1 if board.turn == chess.WHITE else -1
     best_move = None
     best_score = -_INFINITY
+    deadline = None
+    if time_budget_ms is not None:
+        try:
+            budget = int(time_budget_ms)
+        except Exception:
+            budget = 0
+        if budget > 0:
+            deadline = perf_counter() + (budget / 1000.0)
+
+    fallback_moves = _ordered_moves(
+        board,
+        board.legal_moves,
+        ply=0,
+        tt_move_uci=None,
+        killer_moves={},
+        history_heuristic={},
+        move_order_fn=move_order_fn,
+    )
+    fallback_move = fallback_moves[0] if fallback_moves else None
 
     depth_range = range(1, max_depth + 1) if use_iterative_deepening else [max_depth]
     for depth in depth_range:
+        if deadline is not None and perf_counter() >= deadline:
+            break
         window = max(20, int(aspiration_window or _DEFAULT_ASPIRATION_WINDOW))
         alpha = -_INFINITY
         beta = _INFINITY
@@ -395,23 +459,32 @@ def search_best_move(
             alpha = best_score - window
             beta = best_score + window
         while True:
-            score, move = _negamax(
-                board,
-                depth=depth,
-                alpha=alpha,
-                beta=beta,
-                color_sign=root_sign,
-                ply=0,
-                evaluate=evaluate,
-                move_order_fn=move_order_fn,
-                qmove_filter=qmove_filter,
-                stats=stats,
-                transposition=transposition,
-                hasher=hasher,
-                killer_moves=killer_moves,
-                history_heuristic=history_heuristic,
-                quiescence_depth=max(0, int(quiescence_depth)),
-            )
+            try:
+                score, move = _negamax(
+                    board,
+                    depth=depth,
+                    alpha=alpha,
+                    beta=beta,
+                    color_sign=root_sign,
+                    ply=0,
+                    evaluate=evaluate,
+                    move_order_fn=move_order_fn,
+                    qmove_filter=qmove_filter,
+                    stats=stats,
+                    transposition=transposition,
+                    hasher=hasher,
+                    killer_moves=killer_moves,
+                    history_heuristic=history_heuristic,
+                    quiescence_depth=max(0, int(quiescence_depth)),
+                    deadline=deadline,
+                )
+            except SearchTimeout:
+                return SearchResult(
+                    best_move=best_move or fallback_move,
+                    score=best_score if best_move is not None else 0,
+                    depth=stats.completed_depth,
+                    stats=stats,
+                )
             if best_move is None or move is not None:
                 candidate = move if move is not None else best_move
             else:

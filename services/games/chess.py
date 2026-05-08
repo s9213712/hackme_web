@@ -154,6 +154,29 @@ def move_to_uci(board, from_square, to_square, promotion=None, color=None):
     return _uci_for_request(board_obj, from_square, to_square, promotion)
 
 
+def history_move_to_uci(entry):
+    if not isinstance(entry, dict):
+        raise ValueError("history move must be object")
+    from_square = str(entry.get("from") or "").strip().lower()
+    to_square = str(entry.get("to") or "").strip().lower()
+    promotion = entry.get("promotion")
+    if promotion is None:
+        piece = str(entry.get("piece") or "")
+        if piece.lower() == "p" and len(to_square) == 2 and to_square[1] in {"1", "8"}:
+            promotion = "q"
+    return f"{from_square}{to_square}{str(promotion or '').lower()}"
+
+
+def replay_board_from_history(move_history, *, initial_fen=START_FEN):
+    board = chess.Board(str(initial_fen or START_FEN))
+    for entry in move_history or []:
+        move = chess.Move.from_uci(history_move_to_uci(entry))
+        if move not in board.legal_moves:
+            raise ValueError(f"history contains illegal move: {move.uci()}")
+        board.push(move)
+    return board
+
+
 def apply_move_to_board(board, from_square, to_square, promotion=None, color=None):
     board_obj = _board_from_state(board, color)
     move = chess.Move.from_uci(_uci_for_request(board_obj, from_square, to_square, promotion))
@@ -202,6 +225,25 @@ def game_status(board, turn):
     if board_obj.is_fivefold_repetition():
         return {"status": "finished", "winner_color": None, "reason": "fivefold_repetition"}
     return {"status": "active", "winner_color": None, "reason": "check" if board_obj.is_check() else ""}
+
+
+def draw_claim_status(board, turn=None, *, move_history=None, initial_fen=START_FEN):
+    if move_history is not None:
+        try:
+            board_obj = replay_board_from_history(move_history, initial_fen=initial_fen)
+        except Exception:
+            board_obj = _board_from_state(board, turn)
+    else:
+        board_obj = _board_from_state(board, turn)
+    reasons = []
+    if board_obj.can_claim_threefold_repetition():
+        reasons.append("threefold_repetition")
+    if board_obj.can_claim_fifty_moves():
+        reasons.append("fifty_moves")
+    return {
+        "can_claim": bool(reasons),
+        "reasons": reasons,
+    }
 
 
 def board_rows(board):

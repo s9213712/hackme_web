@@ -28,7 +28,7 @@ from services.games.chess_nn import (
     _heuristic_after_move,
     _input_size,
 )
-from services.games.chess_search import ZobristHasher, search_best_move
+from services.games.chess_search import ZobristHasher, opening_sanity_filter, search_best_move
 from services.games.chess_model_registry import bundled_seed_model_path, runtime_model_path
 
 
@@ -45,6 +45,11 @@ _BATCH_SIZE = 96
 _TRAIN_EPOCHS = 4
 _SEARCH_DEPTH = 2
 _SEARCH_QUIESCENCE_DEPTH = 4
+_SEARCH_PROFILES = {
+    "fast": {"depth": 1, "quiescence_depth": 1, "time_budget_ms": 140},
+    "balanced": {"depth": 2, "quiescence_depth": 2, "time_budget_ms": 320},
+    "strong": {"depth": 2, "quiescence_depth": 4, "time_budget_ms": 1000},
+}
 _MODEL_EVAL_MOVE_CAP = 6
 _MODEL_SCORE_SCALE = 140.0
 _PIECE_VALUES = {
@@ -204,6 +209,11 @@ def _blend_score(model_score: float, heuristic_score: float, sample_count: int) 
     return heuristic_score * (1.0 - learned_weight) + model_score * learned_weight
 
 
+def _resolve_search_profile(profile: str | None) -> dict:
+    normalized = str(profile or "balanced").strip().lower()
+    return dict(_SEARCH_PROFILES.get(normalized) or _SEARCH_PROFILES["balanced"])
+
+
 def _score_candidate_move(board: chess.Board, move: chess.Move, side: str, model: dict) -> float:
     ai_color = chess.WHITE if side == "white" else chess.BLACK
     before = board.copy(stack=False)
@@ -288,7 +298,7 @@ def _dl_static_eval(board: chess.Board, model: dict, eval_cache: dict[int, int],
     return score
 
 
-def choose_experiment_dl_move(board_state, side: str, *, model_path=None):
+def choose_experiment_dl_move(board_state, side: str, *, model_path=None, search_profile="balanced"):
     board = to_chess_board(board_state, side)
     ai_color = chess.WHITE if side == "white" else chess.BLACK
     if board.turn != ai_color:
@@ -320,6 +330,7 @@ def choose_experiment_dl_move(board_state, side: str, *, model_path=None):
     model = _load_model(Path(model_path or default_chess_dl_model_path()))
     hasher = ZobristHasher(seed=20260520)
     eval_cache: dict[int, int] = {}
+    profile = _resolve_search_profile(search_profile)
 
     def move_order_fn(current_board: chess.Board, move: chess.Move, _ply: int) -> int:
         current_side = "white" if current_board.turn == chess.WHITE else "black"
@@ -328,13 +339,29 @@ def choose_experiment_dl_move(board_state, side: str, *, model_path=None):
 
     search = search_best_move(
         board,
-        max_depth=_SEARCH_DEPTH,
+        max_depth=profile["depth"],
         evaluate=lambda current_board: _dl_static_eval(current_board, model, eval_cache, hasher),
         move_order_fn=move_order_fn,
         hasher=hasher,
-        quiescence_depth=_SEARCH_QUIESCENCE_DEPTH,
+        quiescence_depth=profile["quiescence_depth"],
+        time_budget_ms=profile.get("time_budget_ms"),
     )
     best_move = search.best_move
+    color_sign = 1 if ai_color == chess.WHITE else -1
+
+    def sanity_move_score(move: chess.Move) -> int:
+        score = move_order_fn(board, move, 0)
+        if board.is_capture(move):
+            captured = board.piece_at(move.to_square)
+            if captured is not None:
+                score += _PIECE_VALUES.get(captured.piece_type, 0) * 2
+        after = board.copy(stack=False)
+        after.push(move)
+        if after.is_checkmate():
+            return 9_000_000
+        return score + color_sign * _dl_static_eval(after, model, eval_cache, hasher)
+
+    best_move = opening_sanity_filter(board, best_move, score_move=sanity_move_score)
     if best_move is None:
         return None
     piece = board.piece_at(best_move.from_square)

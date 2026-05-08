@@ -37,6 +37,11 @@ _MAX_ABS_WEIGHT = 4.0
 _PV_VERSION = 1
 _SEARCH_DEPTH = 2
 _SEARCH_QUIESCENCE_DEPTH = 4
+_SEARCH_PROFILES = {
+    "fast": {"depth": 1, "quiescence_depth": 1, "time_budget_ms": 150},
+    "balanced": {"depth": 2, "quiescence_depth": 2, "time_budget_ms": 340},
+    "strong": {"depth": 2, "quiescence_depth": 4, "time_budget_ms": 1100},
+}
 _VALUE_SCORE_SCALE = 180.0
 _PIECE_VALUES = {
     chess.PAWN: 100,
@@ -46,6 +51,19 @@ _PIECE_VALUES = {
     chess.QUEEN: 900,
     chess.KING: 20000,
 }
+_WHITE_KNIGHT_STARTS = {chess.B1, chess.G1}
+_BLACK_KNIGHT_STARTS = {chess.B8, chess.G8}
+_WHITE_BISHOP_STARTS = {chess.C1, chess.F1}
+_BLACK_BISHOP_STARTS = {chess.C8, chess.F8}
+_WHITE_ROOK_STARTS = {chess.A1, chess.H1}
+_BLACK_ROOK_STARTS = {chess.A8, chess.H8}
+_WHITE_QUEEN_START = chess.D1
+_BLACK_QUEEN_START = chess.D8
+_WHITE_KING_HOME = chess.E1
+_BLACK_KING_HOME = chess.E8
+_WHITE_CASTLED_SQUARES = {chess.G1, chess.C1}
+_BLACK_CASTLED_SQUARES = {chess.G8, chess.C8}
+_CENTER_SQUARES = {chess.D4, chess.E4, chess.D5, chess.E5}
 
 
 def default_chess_pv_model_path() -> Path:
@@ -229,6 +247,177 @@ def _mobility_balance(board: chess.Board) -> int:
     return int((current_mobility - other_mobility) * 4 if current_turn == chess.WHITE else (other_mobility - current_mobility) * 4)
 
 
+def _side_minor_development(board: chess.Board, color: bool) -> int:
+    knight_starts = _WHITE_KNIGHT_STARTS if color == chess.WHITE else _BLACK_KNIGHT_STARTS
+    bishop_starts = _WHITE_BISHOP_STARTS if color == chess.WHITE else _BLACK_BISHOP_STARTS
+    developed = 0
+    for square in knight_starts:
+        piece = board.piece_at(square)
+        if piece is None or piece.color != color or piece.piece_type != chess.KNIGHT:
+            developed += 1
+    for square in bishop_starts:
+        piece = board.piece_at(square)
+        if piece is None or piece.color != color or piece.piece_type != chess.BISHOP:
+            developed += 1
+    return developed
+
+
+def _file_is_open_for_rook(board: chess.Board, square: int) -> bool:
+    file_index = chess.square_file(square)
+    for rank_index in range(8):
+        occupant = board.piece_at(chess.square(file_index, rank_index))
+        if occupant and occupant.piece_type == chess.PAWN:
+            return False
+    return True
+
+
+def _development_balance(board: chess.Board) -> int:
+    score = 0
+    white_developed = _side_minor_development(board, chess.WHITE)
+    black_developed = _side_minor_development(board, chess.BLACK)
+    score += (white_developed - black_developed) * 36
+
+    for square in _CENTER_SQUARES:
+        piece = board.piece_at(square)
+        if piece and piece.piece_type in {chess.PAWN, chess.KNIGHT, chess.BISHOP}:
+            score += 14 if piece.color == chess.WHITE else -14
+
+    white_king_square = board.king(chess.WHITE)
+    black_king_square = board.king(chess.BLACK)
+    if white_king_square in _WHITE_CASTLED_SQUARES:
+        score += 46
+    elif white_king_square == _WHITE_KING_HOME and white_developed >= 2:
+        score -= 20
+    if black_king_square in _BLACK_CASTLED_SQUARES:
+        score -= 46
+    elif black_king_square == _BLACK_KING_HOME and black_developed >= 2:
+        score += 20
+
+    opening_phase = board.fullmove_number <= 12
+    if not opening_phase:
+        return score
+
+    for square in chess.SquareSet(board.pieces(chess.ROOK, chess.WHITE)):
+        if square not in _WHITE_ROOK_STARTS and white_king_square not in _WHITE_CASTLED_SQUARES:
+            score -= 150 if not _file_is_open_for_rook(board, square) else 95
+    for square in chess.SquareSet(board.pieces(chess.ROOK, chess.BLACK)):
+        if square not in _BLACK_ROOK_STARTS and black_king_square not in _BLACK_CASTLED_SQUARES:
+            score += 150 if not _file_is_open_for_rook(board, square) else 95
+
+    white_queen_square = next(iter(board.pieces(chess.QUEEN, chess.WHITE)), None)
+    black_queen_square = next(iter(board.pieces(chess.QUEEN, chess.BLACK)), None)
+    if white_queen_square is not None and white_queen_square != _WHITE_QUEEN_START and white_developed < 2:
+        score -= 18
+    if black_queen_square is not None and black_queen_square != _BLACK_QUEEN_START and black_developed < 2:
+        score += 18
+    return score
+
+
+def _value_scale_for_phase(board: chess.Board) -> float:
+    if board.fullmove_number <= 4:
+        return 24.0
+    if board.fullmove_number <= 8:
+        return 54.0
+    if board.fullmove_number <= 14:
+        return 96.0
+    return _VALUE_SCORE_SCALE
+
+
+def _resolve_search_profile(profile: str | None) -> dict:
+    normalized = str(profile or "balanced").strip().lower()
+    return dict(_SEARCH_PROFILES.get(normalized) or _SEARCH_PROFILES["balanced"])
+
+
+def _move_development_bias(board: chess.Board, move: chess.Move) -> int:
+    piece = board.piece_at(move.from_square)
+    if piece is None:
+        return 0
+    score = 0
+    opening_phase = board.fullmove_number <= 12
+    if board.is_castling(move):
+        score += 280
+    if piece.piece_type in {chess.KNIGHT, chess.BISHOP}:
+        starts = (
+            _WHITE_KNIGHT_STARTS if piece.piece_type == chess.KNIGHT and piece.color == chess.WHITE else
+            _BLACK_KNIGHT_STARTS if piece.piece_type == chess.KNIGHT else
+            _WHITE_BISHOP_STARTS if piece.color == chess.WHITE else
+            _BLACK_BISHOP_STARTS
+        )
+        if move.from_square in starts:
+            score += 120
+        if move.to_square in _CENTER_SQUARES:
+            score += 35
+    if not opening_phase:
+        return score
+    if piece.piece_type == chess.ROOK and not board.is_capture(move) and not board.gives_check(move):
+        score -= 950 if move.from_square in (_WHITE_ROOK_STARTS | _BLACK_ROOK_STARTS) else 540
+    if piece.piece_type == chess.QUEEN:
+        developed = _side_minor_development(board, piece.color)
+        if developed < 2 and not board.is_capture(move) and not board.gives_check(move):
+            score -= 140
+    if piece.piece_type == chess.KING and not board.is_castling(move):
+        score -= 120
+    if piece.piece_type == chess.PAWN and move.to_square in _CENTER_SQUARES:
+        score += 28
+    return score
+
+
+def _is_early_quiet_rook_move(board: chess.Board, move: chess.Move) -> bool:
+    piece = board.piece_at(move.from_square)
+    if piece is None or piece.piece_type != chess.ROOK:
+        return False
+    if board.fullmove_number > 10:
+        return False
+    if board.is_capture(move) or board.gives_check(move) or board.is_castling(move):
+        return False
+    king_square = board.king(piece.color)
+    castled_squares = _WHITE_CASTLED_SQUARES if piece.color == chess.WHITE else _BLACK_CASTLED_SQUARES
+    return king_square not in castled_squares
+
+
+def _sanity_move_score(
+    board: chess.Board,
+    move: chess.Move,
+    *,
+    ai_color: bool,
+    model: dict,
+    eval_cache: dict[int, int],
+    hasher: ZobristHasher,
+) -> int:
+    score = _move_development_bias(board, move)
+    if board.is_capture(move):
+        captured = board.piece_at(move.to_square)
+        if captured is not None:
+            score += _PIECE_VALUES.get(captured.piece_type, 0) * 2
+    after = board.copy(stack=False)
+    after.push(move)
+    if after.is_checkmate():
+        return 9_000_000
+    color_sign = 1 if ai_color == chess.WHITE else -1
+    score += color_sign * _pv_static_eval(after, model, eval_cache, hasher)
+    return score
+
+
+def _opening_sanity_fallback(
+    board: chess.Board,
+    *,
+    ai_color: bool,
+    best_move: chess.Move,
+    model: dict,
+    eval_cache: dict[int, int],
+    hasher: ZobristHasher,
+) -> chess.Move:
+    if not _is_early_quiet_rook_move(board, best_move):
+        return best_move
+    alternatives = [move for move in board.legal_moves if not _is_early_quiet_rook_move(board, move)]
+    if not alternatives:
+        return best_move
+    return max(
+        alternatives,
+        key=lambda move: (_sanity_move_score(board, move, ai_color=ai_color, model=model, eval_cache=eval_cache, hasher=hasher), move.uci()),
+    )
+
+
 def _pv_static_eval(board: chess.Board, model: dict, eval_cache: dict[int, int], hasher: ZobristHasher) -> int:
     board_hash = hasher.hash_board(board)
     cached = eval_cache.get(board_hash)
@@ -239,9 +428,10 @@ def _pv_static_eval(board: chess.Board, model: dict, eval_cache: dict[int, int],
     value_score = _value_from_hidden(model, hidden)
     score = _material_balance(board)
     score += _mobility_balance(board)
+    score += _development_balance(board)
     if board.is_check():
         score += -30 if board.turn == chess.WHITE else 30
-    score += int(value_score * _VALUE_SCORE_SCALE)
+    score += int(value_score * _value_scale_for_phase(board))
     eval_cache[board_hash] = score
     return score
 
@@ -253,7 +443,7 @@ def _candidate_move_features(board: chess.Board, move: chess.Move, side: str) ->
     return _candidate_features(before, move, after, side)
 
 
-def choose_experiment_pv_move(board_state, side: str, *, model_path=None):
+def choose_experiment_pv_move(board_state, side: str, *, model_path=None, search_profile="balanced"):
     board = to_chess_board(board_state, side)
     ai_color = chess.WHITE if side == "white" else chess.BLACK
     if board.turn != ai_color:
@@ -272,23 +462,41 @@ def choose_experiment_pv_move(board_state, side: str, *, model_path=None):
         model = _load_model(Path(model_path or default_chess_pv_model_path()))
         hasher = ZobristHasher(seed=20260521)
         eval_cache: dict[int, int] = {}
+        profile = _resolve_search_profile(search_profile)
+        hidden_cache: dict[int, list[float]] = {}
 
         def move_order_fn(current_board: chess.Board, move: chess.Move, _ply: int) -> int:
             current_side = "white" if current_board.turn == chess.WHITE else "black"
-            board_features = _board_planes(current_board)
-            hidden = _forward_shared(model, board_features)
+            board_hash = hasher.hash_board(current_board)
+            hidden = hidden_cache.get(board_hash)
+            if hidden is None:
+                board_features = _board_planes(current_board)
+                hidden = _forward_shared(model, board_features)
+                hidden_cache[board_hash] = hidden
             move_features = _candidate_move_features(current_board, move, current_side)
-            return int(_policy_from_hidden(model, hidden, move_features) * 1000.0)
+            score = int(_policy_from_hidden(model, hidden, move_features) * 1000.0)
+            score += _move_development_bias(current_board, move)
+            return score
 
         search = search_best_move(
             board,
-            max_depth=_SEARCH_DEPTH,
+            max_depth=profile["depth"],
             evaluate=lambda current_board: _pv_static_eval(current_board, model, eval_cache, hasher),
             move_order_fn=move_order_fn,
             hasher=hasher,
-            quiescence_depth=_SEARCH_QUIESCENCE_DEPTH,
+            quiescence_depth=profile["quiescence_depth"],
+            time_budget_ms=profile.get("time_budget_ms"),
         )
         best_move = search.best_move
+        if best_move is not None:
+            best_move = _opening_sanity_fallback(
+                board,
+                ai_color=ai_color,
+                best_move=best_move,
+                model=model,
+                eval_cache=eval_cache,
+                hasher=hasher,
+            )
     if best_move is None:
         return None
     piece = board.piece_at(best_move.from_square)
