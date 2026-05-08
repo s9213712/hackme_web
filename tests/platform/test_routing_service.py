@@ -3,9 +3,10 @@
 Locks the contract:
 - production -> production tables
 - internal_test -> test_shadow_* tables
+- dev_ready -> production table names inside isolated runtime
 - points_chain_blocks always raises in non-production
-- everything else (dev_ready / test / maintenance / incident_lockdown /
-  superweak) raises RoutingNotAllowed
+- everything else (test / maintenance / incident_lockdown / superweak)
+  raises RoutingNotAllowed
 - unknown logical / None ctx / typo'd mode all raise loudly
 """
 
@@ -70,6 +71,26 @@ def test_internal_test_routes_points_ledger_to_shadow():
     assert routing.resolve_table("points_ledger", _ctx("internal_test")) == "test_shadow_ledger"
 
 
+def test_dev_ready_routes_wallets_to_prod_table_name():
+    assert routing.resolve_table("wallets", _ctx("dev_ready")) == "wallets"
+
+
+def test_dev_ready_routes_orders_to_trading_orders():
+    assert routing.resolve_table("orders", _ctx("dev_ready")) == "trading_orders"
+
+
+def test_dev_ready_routes_positions_to_trading_spot_positions():
+    assert routing.resolve_table("positions", _ctx("dev_ready")) == "trading_spot_positions"
+
+
+def test_dev_ready_routes_margin_positions_to_prod():
+    assert routing.resolve_table("margin_positions", _ctx("dev_ready")) == "trading_margin_positions"
+
+
+def test_dev_ready_routes_points_ledger_to_prod():
+    assert routing.resolve_table("points_ledger", _ctx("dev_ready")) == "points_ledger"
+
+
 def test_internal_test_chain_blocks_raises():
     """No shadow chain — chain is production-only, period."""
     with pytest.raises(ChainModeViolation) as exc:
@@ -81,7 +102,7 @@ def test_internal_test_chain_blocks_raises():
 # ── unsupported modes raise RoutingNotAllowed ─────────────────────────
 
 
-@pytest.mark.parametrize("mode", ["dev_ready", "test", "maintenance", "incident_lockdown", "superweak"])
+@pytest.mark.parametrize("mode", ["test", "maintenance", "incident_lockdown", "superweak"])
 @pytest.mark.parametrize("logical", ["wallets", "orders", "positions", "margin_positions", "points_ledger"])
 def test_unsupported_modes_raise_routing_not_allowed(mode, logical):
     with pytest.raises(routing.RoutingNotAllowed) as exc:
@@ -128,5 +149,6 @@ def test_strict_mode_equality():
 def test_resolve_table_for_mode_helper():
     assert routing.resolve_table_for_mode("orders", "production") == "trading_orders"
     assert routing.resolve_table_for_mode("orders", "internal_test") == "test_shadow_orders"
+    assert routing.resolve_table_for_mode("orders", "dev_ready") == "trading_orders"
     with pytest.raises(routing.RoutingNotAllowed):
-        routing.resolve_table_for_mode("orders", "dev_ready")
+        routing.resolve_table_for_mode("orders", "test")
