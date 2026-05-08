@@ -82,7 +82,7 @@ def test_idle_timeout_logout_revokes_session_without_csrf(tmp_path):
     client = _build_app(
         tmp_path / "timeout.db",
         {},
-        db_delete_session=lambda token: deleted_tokens.append(token),
+        db_delete_session=lambda token, **kwargs: deleted_tokens.append(token),
         db_get_user_from_token=lambda token: "alice" if token == "session-1" else None,
     ).test_client()
     client.set_cookie("session_token", "session-1")
@@ -106,7 +106,7 @@ def test_idle_timeout_logout_requires_idle_confirmation_header(tmp_path):
     client = _build_app(
         tmp_path / "timeout.db",
         {},
-        db_delete_session=lambda token: deleted_tokens.append(token),
+        db_delete_session=lambda token, **kwargs: deleted_tokens.append(token),
         db_get_user_from_token=lambda token: "alice",
     ).test_client()
     client.set_cookie("session_token", "session-1")

@@ -72,7 +72,9 @@ def _seed_chat_db(db_path):
         CREATE TABLE users (
             id INTEGER PRIMARY KEY,
             username TEXT NOT NULL UNIQUE,
-            role TEXT NOT NULL
+            role TEXT NOT NULL,
+            avatar_file_id TEXT,
+            avatar_crop_json TEXT
         );
         CREATE TABLE chat_rooms (
             id INTEGER PRIMARY KEY,

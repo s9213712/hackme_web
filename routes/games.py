@@ -17,6 +17,16 @@ from services.games.chess_engine import (
     choose_experiment_move,
     record_experiment_learning,
 )
+from services.games.chess_dl import (
+    EXPERIMENT_DL_DIFFICULTY,
+    choose_experiment_dl_move,
+    record_experiment_dl_learning,
+)
+from services.games.chess_pv import (
+    EXPERIMENT_PV_DIFFICULTY,
+    choose_experiment_pv_move,
+    record_experiment_pv_learning,
+)
 from services.games.chess_nn import (
     EXPERIMENT_NN_DIFFICULTY,
     choose_experiment_nn_move,
@@ -29,7 +39,7 @@ SOLO_GAME_KEYS = {"sudoku", "minesweeper", "1a2b", "tetris", "space_shooter"}
 SCORE_RANKED_SOLO_GAMES = {"tetris", "space_shooter"}
 SOLO_GAME_CHECK_SQL = "'sudoku', 'minesweeper', '1a2b', 'tetris', 'space_shooter'"
 WEEKLY_REWARDS = (300, 200, 100)
-COMPUTER_DIFFICULTIES = {"normal", "hard", EXPERIMENT_DIFFICULTY, EXPERIMENT_NN_DIFFICULTY}
+COMPUTER_DIFFICULTIES = {"normal", "hard", EXPERIMENT_DIFFICULTY, EXPERIMENT_NN_DIFFICULTY, EXPERIMENT_DL_DIFFICULTY, EXPERIMENT_PV_DIFFICULTY}
 MINESWEEPER_DIFFICULTIES = {"easy", "normal", "hard"}
 PIECE_VALUES = {
     "p": 100,
@@ -129,6 +139,14 @@ def choose_computer_move(board, side, difficulty="normal", learning_store=None):
         move = choose_experiment_nn_move(board, side)
         if move:
             return move
+    if difficulty == EXPERIMENT_DL_DIFFICULTY:
+        move = choose_experiment_dl_move(board, side)
+        if move:
+            return move
+    if difficulty == EXPERIMENT_PV_DIFFICULTY:
+        move = choose_experiment_pv_move(board, side)
+        if move:
+            return move
     return _choose_heuristic_move(board, side, difficulty)
 
 
@@ -173,7 +191,7 @@ def game_schema_sql():
         CHECK (status IN ('active', 'finished', 'cancelled')),
         CHECK (current_turn IN ('white', 'black')),
         CHECK (human_side IN ('white', 'black')),
-        CHECK (computer_difficulty IN ('easy', 'normal', 'hard', 'experiment', 'experiment 2:nn'))
+        CHECK (computer_difficulty IN ('easy', 'normal', 'hard', 'experiment', 'experiment 2:nn', 'experiment 3:dl', 'experiment 4:pv'))
     );
     CREATE TABLE IF NOT EXISTS game_invites (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -272,75 +290,87 @@ def rebuild_solo_score_table(conn):
 
 
 def rebuild_game_matches_table(conn):
-    conn.execute("ALTER TABLE game_matches RENAME TO game_matches_old")
-    conn.execute(
-        """
-        CREATE TABLE game_matches (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            game_key TEXT NOT NULL,
-            mode TEXT NOT NULL DEFAULT 'pvp',
-            status TEXT NOT NULL DEFAULT 'active',
-            white_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            black_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-            human_side TEXT NOT NULL DEFAULT 'white',
-            computer_difficulty TEXT NOT NULL DEFAULT 'normal',
-            current_turn TEXT NOT NULL DEFAULT 'white',
-            board_json TEXT NOT NULL,
-            move_history_json TEXT NOT NULL DEFAULT '[]',
-            winner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-            result_reason TEXT,
-            leaderboard_week TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            finished_at TEXT,
-            white_deleted_at TEXT,
-            black_deleted_at TEXT,
-            CHECK (game_key IN ('chess')),
-            CHECK (mode IN ('pvp', 'computer')),
-            CHECK (status IN ('active', 'finished', 'cancelled')),
-            CHECK (current_turn IN ('white', 'black')),
-            CHECK (human_side IN ('white', 'black')),
-            CHECK (computer_difficulty IN ('easy', 'normal', 'hard', 'experiment', 'experiment 2:nn'))
+    original_foreign_keys = int(conn.execute("PRAGMA foreign_keys").fetchone()[0] or 0)
+    original_legacy_alter_table = int(conn.execute("PRAGMA legacy_alter_table").fetchone()[0] or 0)
+    if original_foreign_keys:
+        conn.execute("PRAGMA foreign_keys=OFF")
+    if not original_legacy_alter_table:
+        conn.execute("PRAGMA legacy_alter_table=ON")
+    try:
+        conn.execute("ALTER TABLE game_matches RENAME TO game_matches_old")
+        conn.execute(
+            """
+            CREATE TABLE game_matches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                game_key TEXT NOT NULL,
+                mode TEXT NOT NULL DEFAULT 'pvp',
+                status TEXT NOT NULL DEFAULT 'active',
+                white_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                black_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                human_side TEXT NOT NULL DEFAULT 'white',
+                computer_difficulty TEXT NOT NULL DEFAULT 'normal',
+                current_turn TEXT NOT NULL DEFAULT 'white',
+                board_json TEXT NOT NULL,
+                move_history_json TEXT NOT NULL DEFAULT '[]',
+                winner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                result_reason TEXT,
+                leaderboard_week TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                finished_at TEXT,
+                white_deleted_at TEXT,
+                black_deleted_at TEXT,
+                CHECK (game_key IN ('chess')),
+                CHECK (mode IN ('pvp', 'computer')),
+                CHECK (status IN ('active', 'finished', 'cancelled')),
+                CHECK (current_turn IN ('white', 'black')),
+                CHECK (human_side IN ('white', 'black')),
+                CHECK (computer_difficulty IN ('easy', 'normal', 'hard', 'experiment', 'experiment 2:nn', 'experiment 3:dl', 'experiment 4:pv'))
+            )
+            """
         )
-        """
-    )
-    old_cols = {row["name"] for row in conn.execute("PRAGMA table_info(game_matches_old)").fetchall()}
+        old_cols = {row["name"] for row in conn.execute("PRAGMA table_info(game_matches_old)").fetchall()}
 
-    def old_expr(name, fallback_sql):
-        return name if name in old_cols else fallback_sql
+        def old_expr(name, fallback_sql):
+            return name if name in old_cols else fallback_sql
 
-    conn.execute(
-        f"""
-        INSERT INTO game_matches (
-            id, game_key, mode, status, white_user_id, black_user_id, human_side,
-            computer_difficulty, current_turn, board_json, move_history_json,
-            winner_user_id, result_reason, leaderboard_week, created_at, updated_at,
-            finished_at, white_deleted_at, black_deleted_at
+        conn.execute(
+            f"""
+            INSERT INTO game_matches (
+                id, game_key, mode, status, white_user_id, black_user_id, human_side,
+                computer_difficulty, current_turn, board_json, move_history_json,
+                winner_user_id, result_reason, leaderboard_week, created_at, updated_at,
+                finished_at, white_deleted_at, black_deleted_at
+            )
+            SELECT
+                id,
+                game_key,
+                COALESCE({old_expr('mode', "'pvp'")}, 'pvp'),
+                COALESCE({old_expr('status', "'active'")}, 'active'),
+                white_user_id,
+                {old_expr('black_user_id', 'NULL')},
+                COALESCE({old_expr('human_side', "'white'")}, 'white'),
+                COALESCE({old_expr('computer_difficulty', "'normal'")}, 'normal'),
+                COALESCE({old_expr('current_turn', "'white'")}, 'white'),
+                board_json,
+                COALESCE({old_expr('move_history_json', "'[]'")}, '[]'),
+                {old_expr('winner_user_id', 'NULL')},
+                {old_expr('result_reason', 'NULL')},
+                {old_expr('leaderboard_week', 'NULL')},
+                created_at,
+                updated_at,
+                {old_expr('finished_at', 'NULL')},
+                {old_expr('white_deleted_at', 'NULL')},
+                {old_expr('black_deleted_at', 'NULL')}
+            FROM game_matches_old
+            """
         )
-        SELECT
-            id,
-            game_key,
-            COALESCE({old_expr('mode', "'pvp'")}, 'pvp'),
-            COALESCE({old_expr('status', "'active'")}, 'active'),
-            white_user_id,
-            {old_expr('black_user_id', 'NULL')},
-            COALESCE({old_expr('human_side', "'white'")}, 'white'),
-            COALESCE({old_expr('computer_difficulty', "'normal'")}, 'normal'),
-            COALESCE({old_expr('current_turn', "'white'")}, 'white'),
-            board_json,
-            COALESCE({old_expr('move_history_json', "'[]'")}, '[]'),
-            {old_expr('winner_user_id', 'NULL')},
-            {old_expr('result_reason', 'NULL')},
-            {old_expr('leaderboard_week', 'NULL')},
-            created_at,
-            updated_at,
-            {old_expr('finished_at', 'NULL')},
-            {old_expr('white_deleted_at', 'NULL')},
-            {old_expr('black_deleted_at', 'NULL')}
-        FROM game_matches_old
-        """
-    )
-    conn.execute("DROP TABLE game_matches_old")
+        conn.execute("DROP TABLE game_matches_old")
+    finally:
+        if not original_legacy_alter_table:
+            conn.execute("PRAGMA legacy_alter_table=OFF")
+        if original_foreign_keys:
+            conn.execute("PRAGMA foreign_keys=ON")
 
 
 def ensure_game_schema(conn):
@@ -369,7 +399,7 @@ def ensure_game_schema(conn):
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='game_matches'"
     ).fetchone()
     match_sql = str(match_schema["sql"] or "") if match_schema else ""
-    if match_schema and ("experiment" not in match_sql or "experiment 2:nn" not in match_sql):
+    if match_schema and ("experiment" not in match_sql or "experiment 2:nn" not in match_sql or "experiment 3:dl" not in match_sql or "experiment 4:pv" not in match_sql):
         rebuild_game_matches_table(conn)
     cols = {row["name"] for row in conn.execute("PRAGMA table_info(game_matches)").fetchall()}
     if "white_deleted_at" not in cols:
@@ -645,6 +675,34 @@ def register_games_routes(app, deps):
                 ua=get_ua(),
                 detail=f"match_id={row['id']}, error={type(exc).__name__}: {exc}",
             )
+        try:
+            updated += record_experiment_dl_learning(
+                row,
+                winner_color=winner_color,
+            )
+        except Exception as exc:
+            audit(
+                "GAME_CHESS_EXPERIMENT_DL_LEARNING_FAILED",
+                get_client_ip(),
+                user=actor_username,
+                success=False,
+                ua=get_ua(),
+                detail=f"match_id={row['id']}, error={type(exc).__name__}: {exc}",
+            )
+        try:
+            updated += record_experiment_pv_learning(
+                row,
+                winner_color=winner_color,
+            )
+        except Exception as exc:
+            audit(
+                "GAME_CHESS_EXPERIMENT_PV_LEARNING_FAILED",
+                get_client_ip(),
+                user=actor_username,
+                success=False,
+                ua=get_ua(),
+                detail=f"match_id={row['id']}, error={type(exc).__name__}: {exc}",
+            )
         return updated
 
     @app.route("/api/games/catalog", methods=["GET"])
@@ -666,6 +724,8 @@ def register_games_routes(app, deps):
                     {"key": "hard", "label": "困難"},
                     {"key": EXPERIMENT_DIFFICULTY, "label": "實驗"},
                     {"key": EXPERIMENT_NN_DIFFICULTY, "label": "實驗 2：NN"},
+                    {"key": EXPERIMENT_DL_DIFFICULTY, "label": "實驗 3：DL"},
+                    {"key": EXPERIMENT_PV_DIFFICULTY, "label": "實驗 4：PV"},
                 ],
             }, {
                 "key": "sudoku",

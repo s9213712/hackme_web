@@ -60,6 +60,8 @@ CREATE TABLE IF NOT EXISTS game_matches (
     status TEXT NOT NULL DEFAULT 'active',
     white_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     black_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    human_side TEXT NOT NULL DEFAULT 'white',
+    computer_difficulty TEXT NOT NULL DEFAULT 'normal',
     current_turn TEXT NOT NULL DEFAULT 'white',
     board_json TEXT NOT NULL,
     move_history_json TEXT NOT NULL DEFAULT '[]',
@@ -74,7 +76,9 @@ CREATE TABLE IF NOT EXISTS game_matches (
     CHECK (game_key IN ('chess')),
     CHECK (mode IN ('pvp', 'computer')),
     CHECK (status IN ('active', 'finished', 'cancelled')),
-    CHECK (current_turn IN ('white', 'black'))
+    CHECK (current_turn IN ('white', 'black')),
+    CHECK (human_side IN ('white', 'black')),
+    CHECK (computer_difficulty IN ('easy', 'normal', 'hard', 'experiment', 'experiment 2:nn', 'experiment 3:dl'))
 );
 
 CREATE TABLE IF NOT EXISTS game_invites (

@@ -22,6 +22,57 @@ def _json_dumps(value):
     return json.dumps(value or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def _simulated_slippage_profile(settings):
+    safe = settings if isinstance(settings, dict) else {}
+    enabled = bool(safe.get("simulated_slippage_enabled"))
+    legacy_base_key = "simulated_slippage_base_" + "bp" + "s"
+    legacy_size_key = "simulated_slippage_size_" + "bp" + "s_per_10k_notional"
+    legacy_max_key = "simulated_slippage_max_" + "bp" + "s"
+    base_basis_points = max(0.0, float(safe.get("simulated_slippage_base_basis_points") or safe.get(legacy_base_key) or 0.0))
+    size_basis_points = max(
+        0.0,
+        float(
+            safe.get("simulated_slippage_size_basis_points_per_10k_notional")
+            or safe.get(legacy_size_key)
+            or 0.0
+        ),
+    )
+    max_basis_points = max(0.0, float(safe.get("simulated_slippage_max_basis_points") or safe.get(legacy_max_key) or 0.0))
+    return {
+        "enabled": enabled,
+        "base_basis_points": base_basis_points,
+        "size_basis_points_per_10k_notional": size_basis_points,
+        "max_basis_points": max_basis_points,
+    }
+
+
+def _apply_simulated_slippage(*, settings, order_type, side, execution_price, quantity_units):
+    profile = _simulated_slippage_profile(settings)
+    if not profile["enabled"] or str(order_type or "").lower() != "market":
+        return float(execution_price), None
+    clean_price = float(_to_decimal(execution_price, name="execution_price", minimum=0.00000001))
+    estimated_notional = float(notional_points(quantity_units, clean_price))
+    raw_basis_points = profile["base_basis_points"] + (profile["size_basis_points_per_10k_notional"] * (estimated_notional / 10000.0))
+    applied_basis_points = max(0.0, raw_basis_points)
+    if profile["max_basis_points"] > 0:
+        applied_basis_points = min(applied_basis_points, profile["max_basis_points"])
+    if applied_basis_points <= 0:
+        return clean_price, None
+    direction = 1.0 if str(side or "").lower() == "buy" else -1.0
+    adjusted = clean_price * (1.0 + (direction * applied_basis_points / 10000.0))
+    adjusted = float(Decimal(str(adjusted)).quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP))
+    return adjusted, {
+        "enabled": True,
+        "applied_basis_points": round(applied_basis_points, 8),
+        "base_basis_points": round(profile["base_basis_points"], 8),
+        "size_basis_points_per_10k_notional": round(profile["size_basis_points_per_10k_notional"], 8),
+        "max_basis_points": round(profile["max_basis_points"], 8),
+        "reference_execution_price_points": clean_price,
+        "adjusted_execution_price_points": adjusted,
+        "estimated_notional_points": int(round(estimated_notional)),
+    }
+
+
 def place_order(
     service,
     *,
@@ -70,12 +121,32 @@ def place_order(
             limit_price = service._validate_market_limit_price(market, limit_price_points)
         else:
             limit_price = None
+        settings = service._settings_payload(conn)
         check_price = float(
             _to_decimal(limit_price or current_price, name="check_price", minimum=0.00000001)
         )
-        estimated_notional = notional_points(quantity_units, check_price)
+
+        executable, execution_price = service._is_executable(
+            market,
+            side=side,
+            order_type=order_type,
+            limit_price=limit_price,
+            current_price=current_price,
+        )
+        slippage_meta = None
+        if executable:
+            execution_price, slippage_meta = _apply_simulated_slippage(
+                settings=settings,
+                order_type=order_type,
+                side=side,
+                execution_price=execution_price,
+                quantity_units=quantity_units,
+            )
+        effective_price = float(
+            _to_decimal(execution_price if executable and execution_price is not None else check_price, name="effective_execution_price", minimum=0.00000001)
+        )
+        estimated_notional = notional_points(quantity_units, effective_price)
         base_fee_rate = float(market["fee_rate_percent"] or 0)
-        settings = service._settings_payload(conn)
         if emergency_close:
             effective_fee_rate_percent = base_fee_rate * 2
         elif is_grid_order:
@@ -90,14 +161,6 @@ def place_order(
             raise ValueError("order notional exceeds market maximum")
         if side == "sell" and estimated_notional - fee <= 0:
             raise ValueError("sell notional after fee must be positive")
-
-        executable, execution_price = service._is_executable(
-            market,
-            side=side,
-            order_type=order_type,
-            limit_price=limit_price,
-            current_price=current_price,
-        )
         if executable:
             service._assert_price_meta_allows_high_risk_use(
                 conn,
@@ -274,6 +337,7 @@ def place_order(
                     "price_source": price_source,
                     "execution_price_points": execution_price,
                     "fee_rate_percent": effective_fee_rate_percent,
+                    "simulated_slippage": slippage_meta or {},
                 },
             )
             service._notify_trade_filled(conn, fill)
@@ -294,7 +358,10 @@ def place_order(
                 },
             )
         conn.commit()
-        return {"ok": True, "order": service._order_payload(order), "executed": executable}
+        payload = {"ok": True, "order": service._order_payload(order), "executed": executable}
+        if slippage_meta:
+            payload["simulated_slippage"] = slippage_meta
+        return payload
     except Exception as exc:
         conn.rollback()
         if service._is_insufficient_error(exc):

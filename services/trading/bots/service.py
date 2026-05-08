@@ -7,7 +7,7 @@ the sibling bot modules.
 
 import json
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_DOWN
 
 from services.system.notifications import create_notification_if_enabled, create_root_notification_if_enabled
@@ -38,6 +38,8 @@ from services.trading.notifications import (
 from services.trading._clock import now_text as _now_text
 from services.trading.payloads import bot_audit_eligibility_reason_label, bot_audit_label
 from services.trading.validators import _decimal_text, _to_decimal, _to_int, _to_price_float
+
+_LOCAL_TZ = datetime.now().astimezone().tzinfo or timezone.utc
 
 
 def _json_dumps(value):
@@ -97,6 +99,17 @@ def _workflow_state(value):
     state.setdefault("executed_action_ids", [])
     state.setdefault("branch_step_counts", {})
     return state
+
+
+def _utc_now():
+    return datetime.now(timezone.utc)
+
+
+def _coerce_utc_datetime(value):
+    dt = datetime.fromisoformat(str(value))
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=_LOCAL_TZ).astimezone(timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 def legacy_workflow(
@@ -664,12 +677,12 @@ def run_trading_bot_rows(service, rows):
     for row in rows:
         scanned += 1
         price_conn = None
-        now_dt = datetime.now()
+        now_dt = _utc_now()
         workflow_state = _workflow_state(row["execution_state_json"] if "execution_state_json" in row.keys() else None)
         decision = None
         if row["last_run_at"]:
             try:
-                last_run = datetime.fromisoformat(str(row["last_run_at"]))
+                last_run = _coerce_utc_datetime(row["last_run_at"])
                 if (now_dt - last_run).total_seconds() < int(row["cooldown_seconds"] or 0):
                     skipped.append({"bot_uuid": row["bot_uuid"], "reason": "cooldown"})
                     continue
@@ -804,7 +817,7 @@ def record_bot_run(service, bot, *, status, observed_price=None, order_uuid=None
         service.ensure_schema(conn)
         conn.commit()
         conn.execute("BEGIN IMMEDIATE")
-        now = _now_text()
+        now = _utc_now().isoformat()
         conn.execute(
             """
             INSERT INTO trading_bot_runs (

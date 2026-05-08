@@ -5,6 +5,7 @@ Hardened edition: timing-noise, account-enumeration protection,
 CSRF tokens, strict CSP, full security headers, rate-limit amplification.
 """
 
+import argparse
 import os, sqlite3, re, json, time, hashlib, secrets, hmac, threading, random, base64, fcntl, subprocess, signal, sys, platform, smtplib, ssl, urllib.parse
 from ipaddress import ip_address
 from datetime import datetime, timedelta
@@ -136,6 +137,7 @@ from services.server.runtime import (
     _load_db_setting_value,
     _load_or_create_binary_secret,
     _load_or_create_text_secret,
+    default_runtime_root,
     ensure_local_tls_files,
     load_chain_seed,
     load_json,
@@ -192,6 +194,10 @@ from services.server.startup import (
     start_trading_bot_worker as start_trading_bot_worker_helper,
     start_trading_liquidation_worker as start_trading_liquidation_worker_helper,
 )
+
+SERVER_SHUTDOWN_EVENT = None
+ENTRYPOINT_DOCTOR_MODE = __name__ == "__main__" and "--doctor" in sys.argv[1:]
+ENTRYPOINT_START_MODE = __name__ == "__main__" and not ENTRYPOINT_DOCTOR_MODE
 from services.server.request_guards import (
     enforce_browser_only_mode as enforce_browser_only_mode_helper,
     enforce_feature_flags as enforce_feature_flags_helper,
@@ -215,6 +221,8 @@ from services.security.upload_security import ensure_upload_security_schema
 from services.trading.trading_engine import TradingEngineService, ensure_trading_schema
 from services.trading.streams import TradingPriceStreamHub
 
+sys.dont_write_bytecode = True
+
 # ── Paths ───────────────────────────────────────────────────────────────────
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 _git_repo_dir_env = os.environ.get("HTML_LEARNING_GIT_REPO_DIR", "").strip()
@@ -230,7 +238,7 @@ SERVER_STARTED_AT = datetime.now().isoformat()
 SERVER_RELEASE_ID = APP_RELEASE_ID
 SERVER_VERSION = APP_RELEASE_ID
 
-RUNTIME_DIR = _env_path("HACKME_RUNTIME_DIR", os.path.join(BASE_DIR, "runtime"))
+RUNTIME_DIR = _env_path("HACKME_RUNTIME_DIR", default_runtime_root())
 RUNTIME_DIR = os.path.abspath(RUNTIME_DIR)
 RUNTIME_SECRETS_DIR = _env_path("HTML_LEARNING_RUNTIME_SECRETS_DIR", RUNTIME_DIR)
 RUNTIME_SECRETS_DIR = os.path.abspath(RUNTIME_SECRETS_DIR)
@@ -265,41 +273,150 @@ INTEGRITY_MANIFEST_PATH = _runtime_path("HTML_LEARNING_INTEGRITY_MANIFEST_PATH",
 CERT_FILE = _runtime_path("HTML_LEARNING_CERT_FILE", "cert.pem")
 KEY_FILE = _runtime_path("HTML_LEARNING_KEY_FILE", "key.pem")
 
-os.makedirs(RUNTIME_DIR, exist_ok=True)
-os.makedirs(RUNTIME_SECRETS_DIR, exist_ok=True)
-os.makedirs(DB_DIR, exist_ok=True)
-os.makedirs(LOG_DIR, exist_ok=True)
-os.makedirs(CHAT_DIR, exist_ok=True)
-os.makedirs(ANCHOR_DIR, exist_ok=True)
-os.makedirs(REPORTS_DIR, exist_ok=True)
+_RUNTIME_REQUIRED_DIRECTORIES = (
+    ("runtime_root", RUNTIME_DIR),
+    ("runtime_secrets", RUNTIME_SECRETS_DIR),
+    ("database", DB_DIR),
+    ("logs", LOG_DIR),
+    ("chats", CHAT_DIR),
+    ("anchors", ANCHOR_DIR),
+    ("storage", STORAGE_DIR),
+    ("reports", REPORTS_DIR),
+)
+RUNTIME_ENV_INCOMPLETE = False
+
+
+def _doctor_dir_status(path):
+    entry = {
+        "path": os.path.abspath(path),
+        "exists": os.path.exists(path),
+        "is_dir": os.path.isdir(path),
+        "writable": False,
+    }
+    if entry["exists"] and entry["is_dir"]:
+        entry["writable"] = os.access(path, os.W_OK | os.X_OK)
+    return entry
+
+
+def _doctor_report():
+    checks = {}
+    messages = []
+    ok = True
+    for label, path in _RUNTIME_REQUIRED_DIRECTORIES:
+        status = _doctor_dir_status(path)
+        checks[label] = status
+        if not status["exists"]:
+            ok = False
+            messages.append(f"missing runtime directory: {label} -> {status['path']}")
+        elif not status["is_dir"]:
+            ok = False
+            messages.append(f"runtime path is not a directory: {label} -> {status['path']}")
+        elif not status["writable"]:
+            ok = False
+            messages.append(f"runtime directory is not writable: {label} -> {status['path']}")
+    port_raw = str(os.environ.get("HTML_LEARNING_PORT", STARTUP_PORT)).strip() or str(STARTUP_PORT)
+    try:
+        port = int(port_raw)
+    except Exception:
+        port = 0
+        ok = False
+        messages.append(f"invalid HTML_LEARNING_PORT: {port_raw}")
+    if port < 1 or port > 65535:
+        ok = False
+        messages.append(f"port out of range: {port_raw}")
+    return {
+        "ok": ok,
+        "messages": messages,
+        "bind": {"host": STARTUP_HOST, "port": port},
+        "runtime": checks,
+        "entry_mode": "doctor" if ENTRYPOINT_DOCTOR_MODE else ("start" if ENTRYPOINT_START_MODE else "import"),
+    }
+
+
+def _print_doctor_report(report):
+    print("Hackme Web doctor")
+    print(f"- mode: {report.get('entry_mode')}")
+    bind = report.get("bind") or {}
+    print(f"- bind: {bind.get('host')}:{bind.get('port')}")
+    for label, status in (report.get("runtime") or {}).items():
+        state = "ok"
+        if not status.get("exists"):
+            state = "missing"
+        elif not status.get("is_dir"):
+            state = "not-a-directory"
+        elif not status.get("writable"):
+            state = "read-only"
+        print(f"- {label}: {state} -> {status.get('path')}")
+    if report.get("ok"):
+        print("doctor: ok")
+    else:
+        print("doctor: fail")
+        for message in report.get("messages") or []:
+            print(f"  * {message}")
+
+
+def run_doctor():
+    report = _doctor_report()
+    _print_doctor_report(report)
+    return report
+
+
+def _ensure_runtime_dir(path, label):
+    if os.path.isdir(path):
+        return True
+    if ENTRYPOINT_START_MODE or ENTRYPOINT_DOCTOR_MODE:
+        return False
+    os.makedirs(path, exist_ok=True)
+    return True
+
+
+for _label, _path in _RUNTIME_REQUIRED_DIRECTORIES:
+    _ensure_runtime_dir(_path, _label)
+RUNTIME_ENV_INCOMPLETE = any(not os.path.isdir(_path) for _, _path in _RUNTIME_REQUIRED_DIRECTORIES)
+RUNTIME_BOOTSTRAP_SUPPRESSED = ENTRYPOINT_DOCTOR_MODE or (ENTRYPOINT_START_MODE and RUNTIME_ENV_INCOMPLETE)
+
+if not RUNTIME_BOOTSTRAP_SUPPRESSED and str(os.environ.get("HACKME_RUNTIME_OUTPUT_CAPTURE", "1")).strip().lower() not in {"0", "false", "no"}:
+    install_runtime_output_capture(SERVER_LOG_PATH)
+get_server_output = get_runtime_output
 
 
 _configured_storage_root = _load_db_setting_value(DB_PATH, "cloud_drive_storage_root")
 if _configured_storage_root:
     STORAGE_DIR = _configured_storage_root
-STORAGE_DIR = str(validate_storage_root(STORAGE_DIR, base_dir=BASE_DIR, create=True))
+if RUNTIME_BOOTSTRAP_SUPPRESSED:
+    STORAGE_DIR = os.path.abspath(STORAGE_DIR)
+else:
+    STORAGE_DIR = str(validate_storage_root(STORAGE_DIR, base_dir=BASE_DIR, create=not (ENTRYPOINT_DOCTOR_MODE or ENTRYPOINT_START_MODE)))
 
 # ── Hash-chain seed (server-side only, not exposed to client) ─────────────────
-CHAIN_SEED = load_chain_seed(CHAIN_SEED_PATH)
+if RUNTIME_BOOTSTRAP_SUPPRESSED:
+    CHAIN_SEED = "doctor"
+else:
+    CHAIN_SEED = load_chain_seed(CHAIN_SEED_PATH)
 
 # ── Secrets ─────────────────────────────────────────────────────────────────
-SECRET_KEY = _load_or_create_text_secret(
-    "SESSION_SECRET",
-    SESSION_SECRET_PATH,
-    generator=lambda: secrets.token_hex(32),
-)
+if RUNTIME_BOOTSTRAP_SUPPRESSED:
+    SECRET_KEY = "doctor-session-secret"
+    SERVER_FILE_ENCRYPTION_KEY = Fernet.generate_key().decode("utf-8")
+    _INTEGRITY_KEY = b"doctor-integrity-key-32-bytes!!"
+else:
+    SECRET_KEY = _load_or_create_text_secret(
+        "SESSION_SECRET",
+        SESSION_SECRET_PATH,
+        generator=lambda: secrets.token_hex(32),
+    )
 
-SERVER_FILE_ENCRYPTION_KEY = _load_or_create_text_secret(
-    "SERVER_FILE_ENCRYPTION_KEY",
-    SERVER_FILE_KEY_PATH,
-    generator=lambda: Fernet.generate_key().decode("utf-8"),
-)
+    SERVER_FILE_ENCRYPTION_KEY = _load_or_create_text_secret(
+        "SERVER_FILE_ENCRYPTION_KEY",
+        SERVER_FILE_KEY_PATH,
+        generator=lambda: Fernet.generate_key().decode("utf-8"),
+    )
 
-_INTEGRITY_KEY = _load_or_create_binary_secret(
-    "INTEGRITY_SECRET_KEY",
-    INTEGRITY_KEY_PATH,
-    generator=lambda: secrets.token_bytes(32),
-)
+    _INTEGRITY_KEY = _load_or_create_binary_secret(
+        "INTEGRITY_SECRET_KEY",
+        INTEGRITY_KEY_PATH,
+        generator=lambda: secrets.token_bytes(32),
+    )
 
 
 fernet = _build_fernet(SECRET_KEY)
@@ -336,11 +453,14 @@ SESSION_COOKIE_HTTPONLY = _env_bool("SESSION_COOKIE_HTTPONLY", default=True)
 SESSION_COOKIE_SAMESITE = _env_session_samesite()
 
 # ── CSRF double-submit secret ─────────────────────────────────────────────────
-CSRF_SECRET_KEY = _load_or_create_text_secret(
-    "CSRF_SECRET_KEY",
-    CSRF_SECRET_PATH,
-    generator=lambda: secrets.token_hex(32),
-)
+if RUNTIME_BOOTSTRAP_SUPPRESSED:
+    CSRF_SECRET_KEY = "doctor-csrf-secret"
+else:
+    CSRF_SECRET_KEY = _load_or_create_text_secret(
+        "CSRF_SECRET_KEY",
+        CSRF_SECRET_PATH,
+        generator=lambda: secrets.token_hex(32),
+    )
 
 
 def get_client_ip():
@@ -709,6 +829,10 @@ def api_unhandled_exception(error):
                 "error": str(error.name or "http_error").strip().lower().replace(" ", "_"),
             }), int(error.code or 500)
         return error
+    try:
+        app.logger.exception("Unhandled exception while serving %s %s", request.method, request.path)
+    except Exception:
+        pass
     if request.path.startswith("/api"):
         return json_resp({
             "ok": False,
@@ -846,40 +970,54 @@ def enforce_required_password_change():
 register_server_routes(app, globals())
 
 
-def start_daily_snapshot_worker():
+def start_daily_snapshot_worker(shutdown_event=None):
     return start_daily_snapshot_worker_helper(
         snapshot_service=snapshot_service,
         get_system_settings=get_system_settings,
         save_settings=save_settings,
         audit=audit,
+        shutdown_event=shutdown_event or SERVER_SHUTDOWN_EVENT,
     )
 
 
-def start_storage_maintenance_worker():
+def start_storage_maintenance_worker(shutdown_event=None):
     return start_storage_maintenance_worker_helper(
         get_db=get_db,
         run_storage_maintenance_if_due=run_storage_maintenance_if_due,
         get_system_settings=get_system_settings,
         save_settings=save_settings,
         audit=audit,
+        shutdown_event=shutdown_event or SERVER_SHUTDOWN_EVENT,
     )
 
 
-def start_points_chain_block_worker():
+def start_points_chain_block_worker(shutdown_event=None):
     return start_points_chain_block_worker_helper(
         points_service=points_service,
         audit=audit,
         default_block_ledger_threshold=DEFAULT_BLOCK_LEDGER_THRESHOLD,
         default_block_max_interval_seconds=DEFAULT_BLOCK_MAX_INTERVAL_SECONDS,
+        get_system_settings=get_system_settings,
+        shutdown_event=shutdown_event or SERVER_SHUTDOWN_EVENT,
     )
 
 
-def start_trading_liquidation_worker():
-    return start_trading_liquidation_worker_helper(trading_service=trading_service, audit=audit)
+def start_trading_liquidation_worker(shutdown_event=None):
+    return start_trading_liquidation_worker_helper(
+        trading_service=trading_service,
+        audit=audit,
+        get_system_settings=get_system_settings,
+        shutdown_event=shutdown_event or SERVER_SHUTDOWN_EVENT,
+    )
 
 
-def start_trading_bot_worker():
-    return start_trading_bot_worker_helper(trading_service=trading_service, audit=audit)
+def start_trading_bot_worker(shutdown_event=None):
+    return start_trading_bot_worker_helper(
+        trading_service=trading_service,
+        audit=audit,
+        get_system_settings=get_system_settings,
+        shutdown_event=shutdown_event or SERVER_SHUTDOWN_EVENT,
+    )
 
 
 def measure_backtest_capacity_first_boot():
@@ -888,6 +1026,29 @@ def measure_backtest_capacity_first_boot():
 
 # ── Start ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Hackme Web server entrypoint")
+    parser.add_argument("--doctor", action="store_true", help="Validate the current runtime environment and exit")
+    args = parser.parse_args()
+
+    if args.doctor:
+        doctor = run_doctor()
+        raise SystemExit(0 if doctor.get("ok") else 2)
+
+    doctor = _doctor_report()
+    if not doctor.get("ok"):
+        _print_doctor_report(doctor)
+        raise SystemExit(2)
+
+    SERVER_SHUTDOWN_EVENT = threading.Event()
+
+    def _handle_shutdown(signum, frame):
+        print(f"[shutdown] signal {signum} received, draining workers...", flush=True)
+        SERVER_SHUTDOWN_EVENT.set()
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, _handle_shutdown)
+    signal.signal(signal.SIGINT, _handle_shutdown)
+
     run_server_main_helper(
         server_log_path=SERVER_LOG_PATH,
         install_runtime_output_capture=install_runtime_output_capture,
@@ -923,4 +1084,5 @@ if __name__ == "__main__":
         effective_server_bind=effective_server_bind,
         server_bind_state=SERVER_BIND_STATE,
         app=app,
+        shutdown_event=SERVER_SHUTDOWN_EVENT,
     )

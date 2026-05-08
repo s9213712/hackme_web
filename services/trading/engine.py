@@ -423,6 +423,11 @@ LIVE_PRICE_SOURCE_NAMES = {
 }
 
 
+def _warning_language(value):
+    text = str(value or "").strip().lower()
+    return "en" if text.startswith("en") else "zh-TW"
+
+
 def _now():
     return datetime.now().isoformat()
 
@@ -942,6 +947,15 @@ def ensure_trading_schema(conn):
         ("trading.price_fusion_min_orderbook_coverage_percent", str(DEFAULT_PRICE_FUSION_MIN_ORDERBOOK_COVERAGE_PERCENT)),
         ("trading.price_fusion_max_single_provider_weight_percent", str(DEFAULT_PRICE_FUSION_MAX_SINGLE_PROVIDER_WEIGHT_PERCENT)),
         ("trading.price_fusion_min_provider_count", str(DEFAULT_PRICE_FUSION_MIN_PROVIDER_COUNT)),
+        ("trading.price_fusion_trade_min_provider_count", "2"),
+        ("trading.warning_language", "zh-TW"),
+        ("trading.price_degrade_pause_market_orders", "false"),
+        ("trading.price_degrade_pause_bots", "false"),
+        ("trading.price_degrade_pause_borrowing", "false"),
+        ("trading.simulated_slippage_enabled", "false"),
+        ("trading.simulated_slippage_base_basis_points", "0"),
+        ("trading.simulated_slippage_size_basis_points_per_10k_notional", "0"),
+        ("trading.simulated_slippage_max_basis_points", "0"),
         ("trading.price_stream_ws_enabled", "true"),
         ("trading.price_stream_ws_stale_seconds", str(DEFAULT_PRICE_STREAM_WS_STALE_SECONDS)),
         ("trading.shadow_funding_publish_enabled", "false"),
@@ -2316,7 +2330,91 @@ class TradingEngineService:
             return
         if not bool(meta.get("high_risk_blocked")):
             return
-        reason = str(meta.get("high_risk_block_reason") or meta.get("fallback_reason") or "price source is in conservative mode").strip()
+        resolved_source = str(meta.get("resolved_source") or "").strip().lower()
+        hard_block_reason = str(meta.get("high_risk_block_reason") or meta.get("fallback_reason") or "").strip()
+        usage_text = str(usage or "").strip().lower()
+        # Caller-side policy: market/limit fills may use cached fallback at the caller's
+        # discretion (the caller reads `risk_grade_usable=false` from meta and decides).
+        # Higher-risk paths (grid scan, margin, contract, trial-credit, bot triggers) must
+        # still hard-block on cached fallback. manual_root always hard-blocks.
+        cached_fallback_allowed_usages = {
+            "market order",
+            "immediately executable limit order",
+            "limit order match",
+        }
+        if resolved_source == "manual_root" or (
+            resolved_source.endswith("_cached")
+            and usage_text not in cached_fallback_allowed_usages
+        ):
+            reason = hard_block_reason or "risk-grade price source is not available"
+            self._audit_event(
+                conn,
+                "TRADING_PRICE_HEALTH_BLOCKED",
+                "high-risk trading path blocked by non-risk-grade price source",
+                actor=actor,
+                market_symbol=market_symbol,
+                severity="critical",
+                metadata={
+                    "usage": usage,
+                    "reason": reason,
+                    "price_health": meta.get("price_health"),
+                    "warnings": meta.get("warnings") or [],
+                    "excluded_sources": meta.get("excluded_sources") or [],
+                    "resolved_source": resolved_source,
+                    "hard_block": True,
+                },
+            )
+            raise ValueError(reason)
+        # For allowed cached-fallback usages we fall through to the policy chain below
+        # so trading.price_degrade_pause_* (when enabled) can still pause the trade.
+        policy_key = ""
+        policy_label = "高風險交易"
+        if "bot" in usage_text:
+            policy_key = "trading.price_degrade_pause_bots"
+            policy_label = "機器人交易"
+        elif "margin" in usage_text or "borrow" in usage_text:
+            policy_key = "trading.price_degrade_pause_borrowing"
+            policy_label = "借貸交易"
+        elif "market order" in usage_text or "limit order match" in usage_text or "contract position" in usage_text:
+            policy_key = "trading.price_degrade_pause_market_orders"
+            policy_label = "市價交易"
+        trade_min_provider_count = 2
+        settings_rows = conn.execute(
+            """
+            SELECT key, value
+            FROM trading_settings
+            WHERE key IN (
+                'trading.warning_language',
+                'trading.price_fusion_trade_min_provider_count',
+                'trading.price_degrade_pause_market_orders',
+                'trading.price_degrade_pause_bots',
+                'trading.price_degrade_pause_borrowing'
+            )
+            """
+        ).fetchall()
+        settings_map = {str(row["key"] or ""): str(row["value"] or "") for row in settings_rows}
+        try:
+            trade_min_provider_count = max(
+                1,
+                int(settings_map.get("trading.price_fusion_trade_min_provider_count") or 2),
+            )
+        except Exception:
+            trade_min_provider_count = 2
+        warning_language = _warning_language(settings_map.get("trading.warning_language"))
+        policy_enabled = str(settings_map.get(policy_key, "false")).strip().lower() in {"1", "true", "yes", "on"} if policy_key else False
+        provider_count = max(
+            0,
+            int(meta.get("risk_grade_provider_count") or meta.get("provider_count") or 0),
+        )
+        conservative_mode = bool(meta.get("conservative_mode"))
+        stale = bool(meta.get("stale"))
+        fallback = bool(meta.get("fallback"))
+        degraded = bool(meta.get("degraded"))
+        if conservative_mode and provider_count >= trade_min_provider_count and not stale and not fallback:
+            return
+        if not policy_enabled:
+            return
+        reason = hard_block_reason or "price source is in conservative mode"
         self._audit_event(
             conn,
             "TRADING_PRICE_HEALTH_BLOCKED",
@@ -2332,7 +2430,21 @@ class TradingEngineService:
                 "excluded_sources": meta.get("excluded_sources") or [],
             },
         )
-        raise ValueError(f"{usage or 'high-risk trading action'} is blocked while fused price is in conservative mode: {reason}")
+        provider_note = f"healthy providers={provider_count}" if provider_count else "healthy providers=0"
+        if warning_language == "en":
+            policy_label_en = {
+                "市價交易": "Market-order trading",
+                "機器人交易": "Bot trading",
+                "借貸交易": "Borrowing / margin trading",
+                "高風險交易": "High-risk trading",
+            }.get(policy_label, "Trading")
+            raise ValueError(
+                f"{policy_label_en} paused because price health degraded: {reason} "
+                f"({provider_note}; need at least {trade_min_provider_count} healthy providers to keep trading enabled)"
+            )
+        raise ValueError(
+            f"{policy_label}已因價格降級暫停：{reason}（{provider_note}，需要至少 {trade_min_provider_count} 家才視為可交易）"
+        )
 
     def _provider_depth_request_limit(self, source, depth_levels):
         return provider_depth_request_limit(

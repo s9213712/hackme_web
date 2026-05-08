@@ -62,7 +62,9 @@ def _seed_community_db(db_path):
         CREATE TABLE users (
             id INTEGER PRIMARY KEY,
             username TEXT NOT NULL,
-            role TEXT NOT NULL
+            role TEXT NOT NULL,
+            avatar_file_id TEXT,
+            avatar_crop_json TEXT
         );
         """
     )
@@ -244,7 +246,9 @@ def test_manager_can_create_category_and_assign_board(tmp_path):
         CREATE TABLE users (
             id INTEGER PRIMARY KEY,
             username TEXT NOT NULL,
-            role TEXT NOT NULL
+            role TEXT NOT NULL,
+            avatar_file_id TEXT,
+            avatar_crop_json TEXT
         );
         INSERT INTO users (id, username, role) VALUES (1, 'root', 'super_admin');
         """
@@ -286,7 +290,9 @@ def test_non_manager_cannot_create_category(tmp_path):
         CREATE TABLE users (
             id INTEGER PRIMARY KEY,
             username TEXT NOT NULL,
-            role TEXT NOT NULL
+            role TEXT NOT NULL,
+            avatar_file_id TEXT,
+            avatar_crop_json TEXT
         );
         INSERT INTO users (id, username, role) VALUES (3, 'alice', 'user');
         """
