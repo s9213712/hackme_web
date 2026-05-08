@@ -27,6 +27,17 @@ from services.comfyui.template.capability import (
     iter_required_models,
     reset_object_info_cache,
 )
+from services.comfyui.template.safety import (
+    SafetyError,
+    enforce_allowlist,
+    next_safe_node_id,
+    rewrite_save_image_prefix,
+)
+from services.comfyui.template.ui_schema import (
+    UISchema,
+    build_ui_schema,
+    required_user_inputs,
+)
 
 __all__ = [
     "CORE_ALLOWLIST",
@@ -37,12 +48,19 @@ __all__ = [
     "FieldCategory",
     "InputField",
     "NodeAnalysis",
+    "SafetyError",
+    "UISchema",
     "WorkflowAnalysis",
     "analyze_workflow_json",
+    "build_ui_schema",
     "check_workflow_capability",
     "classify_input_field",
+    "enforce_allowlist",
     "is_allowed_class",
     "is_explicitly_denied_class",
     "iter_required_models",
+    "next_safe_node_id",
+    "required_user_inputs",
     "reset_object_info_cache",
+    "rewrite_save_image_prefix",
 ]
