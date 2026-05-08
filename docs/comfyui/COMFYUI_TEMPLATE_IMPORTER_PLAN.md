@@ -720,7 +720,7 @@ def comfyui_workflow_run(preset_id):
 | Phase | Scope | Acceptance |
 |---|---|---|
 | **0** | 規格文件（本檔）+ Codex review | 本檔 commit；Codex 在 cross_agent_sync 簽認 schema |
-| **1** | `services/comfyui/template/{analyzer,allowlist}.py` + 9 個 happy fixture + 6 個 sanitize fail fixture | `pytest tests/comfyui/template/ -q` 全綠；Analyzer 對所有 happy fixture 回傳正確 `class_types` + `fields` |
+| **1** | `services/comfyui/template/{analyzer,allowlist}.py` + 9 個 happy fixture + 6 個 sanitize fail fixture | `scripts/testing/pytest_in_tmp.sh tests/comfyui/template/ -q` 全綠；Analyzer 對所有 happy fixture 回傳正確 `class_types` + `fields` |
 | **2** | `services/comfyui/template/capability.py` + cache + 3 個 capability fail fixture | Capability 在 mocked client 下能正確分類 SUPPORTED / PARTIAL / UNSUPPORTED |
 | **3** | `services/comfyui/template/safety.py` + 5 個 allowlist fail + 2 個 safety fail | 4 個 hard-block 各自有 negative test 證明擋住 |
 | **3b** | refactor `services/comfyui/workflow/builder.py` 用 `next_safe_node_id` allocator | builder 既有 test 仍綠；新加 collision regression test |
@@ -801,6 +801,397 @@ def comfyui_workflow_run(preset_id):
 
 ---
 
-## 18. 變更履歷
+## 18. Phase 2 Addendum — Manifest-Driven Dynamic UI
 
-- 2026-05-07 · claude · 初稿
+> **狀態**：Plan / Spec — Phase 2 規劃
+>
+> **作者**：claude (Opus 4.7) · 2026-05-08
+>
+> **承接**：Phase 1（§0–§18）解決 *安全* 與 *能力比對* — 所有 workflow 走相同的 sanitize → preview → import → run 4-gate 流程。Phase 2 在這個底座上解 *使用體驗*：UI 不再硬寫、workflow 可獨立擴充、頁面預設極簡。
+>
+> **不會推翻 Phase 1**：本章新增的 manifest schema、panel 元件、registry 都是 *疊加層*，所有 run 路徑仍然必須通過 §7 / §10 的 4-gate；任何在本章沒重述的安全約束都繼續適用。
+
+---
+
+### 18.0 TL;DR — Phase 1 vs Phase 2
+
+| 面向 | Phase 1（§0–§18）| Phase 2（本章）|
+|---|---|---|
+| 入口 | 使用者上傳一份 workflow.json | 使用者從 registry 選 workflow |
+| UI 來源 | 後端從 workflow.json 自動推導 `UISchema`（§9）| `workflows/comfyui/<id>/manifest.json` 顯式描述 panels |
+| 前端架構 | 沿用既有 hardcoded 表單 + 自動 panel | 動態 panel 元件由 manifest 驅動，舊硬寫表單逐步退場 |
+| Workflow 來源 | user 上傳 → DB | `workflows/comfyui/<id>/` 目錄（system / user / shared visibility）|
+| Run 流程 | preview → import → run（4-gate）| **完全沿用** Phase 1 4-gate，只是輸入是「registry id + 使用者欄位」 |
+| Panel 數量 / 類型 | 固定 6 種（§9.2）| 可擴充元件庫；manifest 指名 type |
+
+---
+
+### 18.1 Directory Layout
+
+新增 repo 內目錄：
+
+```
+workflows/comfyui/
+  txt2img_basic/
+    workflow.json     # ComfyUI 原生 graph（API format，無 hackme_web 私有欄位）
+    manifest.json     # UI panel + binding 描述
+    README.md         # 給操作者的中文說明（可選）
+  img2img_basic/
+    workflow.json
+    manifest.json
+    README.md
+  inpaint_basic/
+    workflow.json
+    manifest.json
+    README.md
+```
+
+**命名注意**：
+
+- 跟既有 `workflows/system/`（交易 bot workflow，用途完全不同）區隔；不要把兩者放在同一層。
+- `<id>` 必須符合 `^[a-z][a-z0-9_]{0,63}$`，registry 載入時驗。
+
+User-uploaded workflow（Phase 1 的 import 流程）仍然落 DB；本目錄只放 *system / 共享 / 預打包* 的 workflow。
+
+---
+
+### 18.2 workflow.json 規範
+
+承接 §3 的所有要求。額外重申：
+
+- **必須** ComfyUI API format（`{node_id: {class_type, inputs}}`），不是 UI graph format。
+- **不得**塞 hackme_web 私有欄位（如 `__hackme_meta__`、`_ui_layout`、`_panel_id` 等）。所有 UI metadata 一律放 manifest.json。
+- 必須能直接：(a) 匯入 ComfyUI；(b) 從 ComfyUI 匯出後與 repo 內的版本 `diff` 為空（除了 `class_type` 順序之類無語意差異，由 §3.4 normalize 處理）。
+
+> 一句話：**workflow.json 是 ComfyUI 的；manifest.json 是 hackme_web 的**。
+
+---
+
+### 18.3 manifest.json Schema
+
+承接 §9.1 的 UISchema panel 形狀，補上以下頂層欄位 + 顯式 schema 版本。
+
+```json
+{
+  "schema_version": 1,
+  "id": "inpaint_basic",
+  "name": "Inpaint 基礎修圖",
+  "description": "局部重繪工作流",
+  "workflow_file": "workflow.json",
+  "ui": {
+    "initial_collapsed": true,
+    "panels": [
+      {
+        "type": "image_input",
+        "id": "source_image",
+        "title": "原圖",
+        "repeatable": false,
+        "required": true,
+        "bind": { "node_id": "12", "input": "image" }
+      },
+      {
+        "type": "image_input",
+        "id": "mask_image",
+        "title": "遮罩",
+        "repeatable": false,
+        "required": true,
+        "bind": { "node_id": "13", "input": "image" }
+      },
+      {
+        "type": "prompt",
+        "id": "prompt_positive",
+        "title": "正向提示詞",
+        "bind": { "node_id": "6", "input": "text" }
+      }
+    ]
+  }
+}
+```
+
+#### 必填頂層欄位
+
+| 欄位 | 用途 |
+|---|---|
+| `schema_version` | int；目前固定 `1`。registry 用這個做 forward-compat。 |
+| `id` | 跟目錄名一致；用於 URL 與 audit |
+| `name` | 顯示用繁中名稱 |
+| `description` | 一行簡介（不超過 200 字元）|
+| `workflow_file` | 通常為 `"workflow.json"`，預留多 graph 版本 |
+| `ui.panels[]` | 至少一個 panel；不得超過 24 個（DoS guard）|
+
+#### Panel 必填欄位
+
+| 欄位 | 用途 |
+|---|---|
+| `type` | 見 §19.4 |
+| `id` | 在這份 manifest 內唯一；用於 frontend state key |
+| `title` | 顯示名稱 |
+| `bind` | `{node_id, input}`，指向 workflow.json 中的特定節點欄位 |
+| `repeatable` | 可選；預設 `false`。`true` 代表使用者可動態 add/remove instance |
+| `required` | 可選；預設 `false`。frontend 先檢、backend run gate 也會再檢 |
+
+---
+
+### 18.4 Panel Type Catalog
+
+擴充 §9.2 的 6 種 panel：
+
+| `type` | 對應 §9.2 panel | 綁定的節點/欄位範例 | 備註 |
+|---|---|---|---|
+| `prompt` | `text` | `CLIPTextEncode.text` | textarea；max 2000 字元 |
+| `image_input` | `image` | `LoadImage.image`、`LoadImageMask.image` | 接受 `image/*`；走 §7.4 mime gate |
+| `mask_input` | `image`（特化）| `LoadImageMask.image` | 自動切灰階 / Mask 預覽 |
+| `slider` | `sampler`（部分）| `KSampler.steps`、`KSampler.cfg` | numeric + min/max/step |
+| `seed` | `sampler`（部分）| `KSampler.seed` | 含「鎖定 / 隨機」按鈕 |
+| `sampler` | `sampler` | `KSampler.{sampler_name, scheduler, denoise}` | 整組 |
+| `controlnet` | `model`（特化）| `ControlNetLoader.control_net_name` + `ControlNetApplyAdvanced.{strength,start_percent,end_percent}` | 第二版才支援 stack |
+| `select` | （新）| 任何 enum 型欄位 | 從 manifest constraints.options 取 |
+| `repeatable_image` | （新）| `repeatable: true` 的 image_input 集合 | 內部展開為多個 `bind` 串 |
+
+**`type` 必須在 allowlist**（registry 載入時驗）；任何未列入的 `type` → reject 整份 manifest。
+
+---
+
+### 18.5 Folding / Lazy / Repeatable
+
+- **folding**：所有 panel 預設 collapsed（`ui.initial_collapsed=true`）。一鍵 expand all / collapse all。每個 panel state 寫進 `localStorage` 以利 reload。
+- **lazy render**：尚未 expand 的 panel 不掛 input handler，避免大 manifest 一次塞滿 DOM。
+- **repeatable**：`repeatable: true` 的 panel 可被 add/remove。
+
+#### 18.5.1 Repeatable 的 graph patch 策略
+
+**選定策略 A**：workflow.json 預先放 N 個 placeholder 節點，每個 instance 只 patch input。**不**動態 clone 節點。理由：
+
+- clone 節點要重連 link / 處理 condition / 維持 graph 完整性 → 第一版風險過高
+- ComfyUI 原生匯出/匯入 placeholder 節點沒有問題
+
+manifest 必須宣告 `repeatable.max_instances`（≤ N，N 由 workflow.json 預配）：
+
+```json
+{
+  "type": "image_input",
+  "id": "ref_images",
+  "repeatable": true,
+  "repeatable_max_instances": 4,
+  "binds": [
+    { "node_id": "21", "input": "image" },
+    { "node_id": "22", "input": "image" },
+    { "node_id": "23", "input": "image" },
+    { "node_id": "24", "input": "image" }
+  ]
+}
+```
+
+未啟用的 instance 對應節點走 §3.6 的 `optional_input_skip` 規則。
+
+---
+
+### 18.6 Node Binding Validation（Phase 2 安全強化）
+
+承接 §7 的 4 個 hard-block，新增 **manifest-vs-workflow 一致性 gate**：
+
+registry 載入 manifest 時，對 `panels[].bind` / `binds[]` 一一驗：
+
+1. `bind.node_id` 必須存在於 workflow.json 的 nodes
+2. 該節點的 `class_type` 必須在 §4 allowlist
+3. `bind.input` 必須是該 `class_type` 在 §4 規範中可寫的 input 名稱
+4. panel `type` 與 input 的 §5 category 必須相容（例：`prompt` 只能綁 `TEXT` category；`image_input` 只能綁 `IMAGE`；`slider` 只能綁 `NUMERIC`）
+5. 同一個 `(node_id, input)` 不得被多個 panel 綁定（避免 race / 後綁覆蓋）
+6. 所有 §4 的 *required* input 必須要嘛被某 panel 綁定、要嘛 workflow.json 已寫死合法值；不能兩邊都沒給
+
+任一 fail → registry 拒絕載入該 workflow（system workflow 在 deploy 時就應該 fail；user workflow 由 import-time gate 擋）。
+
+---
+
+### 18.7 Workflow Registry
+
+#### 18.7.1 模組路徑
+
+`services/comfyui/workflow/registry.py`（**不是** `services/comfyui_workflow_registry.py`；保持跟既有 `workflow/builder.py`、`workflow/summary.py` 同 package）。
+
+#### 18.7.2 對外 API
+
+```python
+def list_workflows(*, actor) -> list[ManifestSummary]:
+    """List workflow manifests visible to actor (system / shared / private)."""
+
+def load_workflow(workflow_id: str) -> tuple[WorkflowJSON, ManifestJSON]:
+    """Raise WorkflowNotFound / ManifestInvalid as needed; do not auto-fix."""
+
+def patch_workflow_inputs(
+    workflow_id: str,
+    user_inputs: dict[str, Any],
+    *,
+    panels: list[Panel],
+) -> WorkflowJSON:
+    """Apply validated user inputs through manifest binds; never mutate
+    workflow.json on disk. Returns the patched-in-memory WorkflowJSON ready
+    for §10 run gate."""
+```
+
+#### 18.7.3 Cache / hot reload
+
+- registry 啟動時掃描 `workflows/comfyui/`，建記憶體 index。
+- root API `POST /api/admin/comfyui/registry/refresh` 可手動 invalidate；不做 file watcher（避免 inotify 在容器環境的 edge case）。
+- user upload 走 Phase 1 import 流程後，registry 把 DB row mount 進同一個 index（visibility 過濾在 `list_workflows` 裡做）。
+
+---
+
+### 18.8 API Surface
+
+跟 §10 的 run gate 整合。**沒有任何 API 繞過 §7 / §10 的 4-gate**。
+
+| Method + Path | 用途 | Gate |
+|---|---|---|
+| `GET /api/comfyui/workflows` | 列 visible workflows + manifest summary | RBAC + visibility |
+| `GET /api/comfyui/workflows/<id>` | 取 manifest + workflow metadata（**不**回 workflow.json 全文）| RBAC |
+| `POST /api/comfyui/workflows/<id>/run` | 取 manifest → patch user_inputs → §10 run | 4-gate（capability、sanitize、model availability、quota）|
+| `POST /api/comfyui/workflows/import` | Phase 1 import（不變動）| §8 preview token |
+| `GET /api/comfyui/workflows/<id>/export` | 匯出原生 workflow.json（不含 manifest）| RBAC |
+| `POST /api/admin/comfyui/registry/refresh` | invalidate registry cache | root only |
+
+#### 18.8.1 RBAC
+
+| 操作 | 預設權限 |
+|---|---|
+| list / view system workflows | 任何 logged-in user |
+| list / view shared workflows | 該 workflow `shared_with` 內的 user |
+| list / view private workflows | 該 workflow owner |
+| run any workflow | 同 view + 不在違規禁用名單 |
+| import (Phase 1) | user / manager / root（沿用 §17 Open Question 1 的決議：第一版 user 也能 import 自己的 private workflow）|
+| registry refresh | root only |
+
+---
+
+### 18.9 Frontend Module Split
+
+#### 18.9.1 現況問題
+
+`public/js/36-comfyui.js` 目前 **2728 行**，硬寫 txt2img / img2img / inpaint / controlnet 四種表單。直接在這支檔加 manifest dispatcher 會讓檔案爆到 5000+ 行。
+
+#### 18.9.2 目標檔案結構
+
+```
+public/js/
+  36-comfyui.js                # shell：頁面初始化、workflow selector、panel host
+  comfyui/                     # 新子目錄
+    panels/
+      prompt.js
+      image_input.js
+      mask_input.js
+      slider.js
+      seed.js
+      sampler.js
+      controlnet.js
+      select.js
+      repeatable_image.js
+    registry_client.js          # 包 GET /api/comfyui/workflows*
+    panel_dispatcher.js         # type → panel module 的 lookup
+    state.js                    # localStorage 狀態保存（folding、user inputs）
+```
+
+每個 `panels/*.js` 匯出一個 `mountPanel(rootEl, panel, ctx)` 函式，無 side effect、無全域變數寫入。
+
+#### 18.9.3 載入策略
+
+- 頁面初始：只載 `36-comfyui.js` shell + `registry_client.js`，呼叫 `GET /api/comfyui/workflows` 取列表。
+- 使用者選了 workflow → fetch manifest → `panel_dispatcher.js` 動態 import 對應的 `panels/<type>.js`（用 `<script type="module">` + `import()`）。
+- 沒被選到的 workflow / panel type 不會被載入（網路 + 解析雙省）。
+
+---
+
+### 18.10 Import / Export
+
+#### 18.10.1 Import
+
+承接 §8 的 preview/import 流程。Phase 2 額外：
+
+- import 時若 user 沒提供 manifest.json → 後端用 §6 / §9 的 auto-derive 邏輯產出 *minimal* manifest（每個必填 input 一個對應 panel，type 從 §5 category 推導）。
+- root / manager 可在 import 之後對該 user 的 manifest 做 UI metadata 補強（加 panel title、調整 panel 順序、把多個 input 合併進同一個 panel）。
+- user 自己**只能編輯 description / panel title**，不能改 bind（避免繞過 §19.6 一致性檢查）。
+
+#### 18.10.2 Export
+
+- `GET /api/comfyui/workflows/<id>/export` 永遠回 *原生 workflow.json*，**不含** manifest.json。
+- 想要連 manifest 一起拿走 → `?include_manifest=1`，回傳 zip（`workflow.json` + `manifest.json` + `README.md`）。
+- export 後的 workflow.json 可直接匯入 ComfyUI 並運作；這是 §19.2 「workflow.json 是 ComfyUI 的」的可驗證契約。
+
+---
+
+### 18.11 RBAC + Quota（Phase 2 specific）
+
+| 限制項 | 上限 | 強制位置 |
+|---|---|---|
+| manifest 大小 | 64 KB | registry load |
+| panels 數量 | 24 | registry load |
+| repeatable_max_instances | 8 | registry load + run-time |
+| user-imported workflow 數量 | 預設 50（root 可調）| import API |
+| `/run` 並發 per user | 預設 2 | §10 quota gate |
+
+---
+
+### 18.12 Phased Migration Plan
+
+舊硬寫表單不是一次拆掉，分三階段並行：
+
+#### Phase 2.A — 新舊並存（feature flag `comfyui_dynamic_ui_enabled`）
+
+- registry + manifest schema + 新 panel components 全上
+- 頁面有 toggle：「使用 manifest 動態 UI」/「使用既有快速表單」
+- 老用戶不變；新 workflow 必走 manifest
+
+#### Phase 2.B — 既有 4 種 workflow 遷移
+
+- 把現有的 txt2img / img2img / inpaint / controlnet 各做成一份 `workflows/comfyui/<id>/manifest.json`，放進 `workflows/comfyui/system/`
+- 對比測試：feature flag 兩端輸出 byte-identical（§3.4 normalize 後）
+
+#### Phase 2.C — 移除老表單
+
+- toggle 預設 ON，`feature_comfyui_legacy_forms_enabled=false`
+- 兩個 release 後刪除 `36-comfyui.js` 內舊表單程式碼
+- `2728 → 預估 800 行 shell` 
+
+---
+
+### 18.13 Test Plan
+
+| 範圍 | 必跑 test |
+|---|---|
+| manifest schema 驗證 | `tests/comfyui/test_manifest_schema.py` — 含正反例（ID 格式、panels 上限、必填欄位） |
+| §19.6 一致性 gate | `tests/comfyui/test_manifest_workflow_binding.py` — node_id 不存在、input 名稱不對、category 不相容、required 漏綁 |
+| Repeatable patch | `tests/comfyui/test_manifest_repeatable.py` — instance 數 vs `repeatable_max_instances`、optional_skip 行為 |
+| Registry list / load | `tests/comfyui/test_workflow_registry.py` — visibility filter、cache invalidate |
+| Run 4-gate（regression）| `tests/comfyui/test_workflow_run_gates.py` — manifest 路徑必須走完 §7 / §10，**不得**繞過 |
+| Import auto-manifest | `tests/comfyui/test_import_auto_manifest.py` — 無 manifest 時 auto-derive 結果合理 |
+| Frontend smoke | `tests/frontend/comfyui/test_dynamic_panels.py` — JS 字串檢查 + dispatcher table；類似 §11 既有的 frontend 字串檢查 |
+
+`pytest_in_tmp.sh -q tests/comfyui/ tests/frontend/comfyui/` 必須 100% 過才視為 Phase 2 完成。
+
+---
+
+### 18.14 不做的事（Phase 2）
+
+| 不做 | 理由 |
+|---|---|
+| ComfyUI UI graph format 自動轉 API format | 沿用 §16 的決議 |
+| 動態 clone 節點來支援 unbounded repeatable | §19.5.1 選定 placeholder 策略；unbounded clone 留 Phase 3 |
+| Mobile mask 編輯（畫遮罩）| 第一版 mobile 只能上傳已畫好的 mask 圖；in-browser brush 留下一階段 |
+| manifest 內含 JS / 表達式 | 純宣告式；任何條件邏輯放後端 §6 capability check |
+| user 自己改 manifest binds | §19.10.1 規定 user 只能改 description/title |
+
+---
+
+### 18.15 Open Questions（Phase 2）
+
+1. **Phase 2.A 的 feature flag 預設要 ON 還是 OFF？** 我傾向 **OFF（先 opt-in）**，再依使用回饋切到 ON。
+2. **`workflows/comfyui/system/` 內建幾個 workflow？** 我傾向最少 4 個（txt2img / img2img / inpaint / upscale），對應現有硬寫表單的 1:1 replacement。
+3. **manifest panel `title` 是否要支援 i18n？** 第一版只繁中；schema 預留 `title_i18n: {zh-TW, en}` 但 frontend 第一版只讀 `title`。
+4. **registry hot-reload 是 root 手動 refresh，還是 server start 時掃一次就固定？** 我傾向**啟動時 + root 手動 refresh** 雙軌；不做 watcher。
+5. **export zip 是否要簽章？** 第一版**不簽**；export 視為純使用者方便功能，不是 audit chain 的一環。
+
+---
+
+## 19. 變更履歷
+
+- 2026-05-07 · claude · 初稿（§0–§18，Phase 1）
+- 2026-05-08 · claude · 加上 §19 Phase 2 addendum（manifest-driven dynamic UI），承接 §9 的 panel 概念並補上 directory layout / registry / frontend module split / migration plan
