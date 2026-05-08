@@ -451,6 +451,32 @@ def run_server_main(
         conn.commit()
     finally:
         conn.close()
+    # §18.1 first-boot seeding for ComfyUI workflows.
+    # Idempotent: existing runtime customizations stay; only missing
+    # workflow_ids get copied from workflows/comfyui/.
+    try:
+        from services.comfyui.template.seeding import seed_default_comfyui_workflows
+        seed_report = seed_default_comfyui_workflows()
+        if seed_report.get("copied"):
+            audit(
+                "COMFYUI_TEMPLATE_SEED",
+                "0.0.0.0",
+                user="system",
+                success=True,
+                detail=(
+                    f"copied={seed_report['copied']} "
+                    f"skipped={seed_report.get('skipped', [])} "
+                    f"destination={seed_report['destination']}"
+                ),
+            )
+    except Exception as exc:  # pragma: no cover - seeding must never block boot
+        audit(
+            "COMFYUI_TEMPLATE_SEED_FAILED",
+            "0.0.0.0",
+            user="system",
+            success=False,
+            detail=str(exc),
+        )
     try:
         reseal_audit_chain_if_required_on_startup()
     except Exception as exc:

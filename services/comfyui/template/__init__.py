@@ -69,6 +69,12 @@ from services.comfyui.template.cleanup import (
     reset_registry,
     sweep_orphaned_run_dirs,
 )
+from services.comfyui.template.seeding import (
+    REPO_SOURCE_DIR,
+    list_runtime_workflows,
+    runtime_comfyui_dir,
+    seed_default_comfyui_workflows,
+)
 from services.comfyui.template import errors
 
 __all__ = [
@@ -83,12 +89,16 @@ __all__ = [
     "RunGateFailure",
     "RunGateResult",
     "COMFYUI_RUN_TTL_SECONDS",
+    "REPO_SOURCE_DIR",
     "cleanup_run_temp_files",
     "errors",
     "list_active_run_dirs",
+    "list_runtime_workflows",
     "register_run_dir",
     "registry_size",
     "reset_registry",
+    "runtime_comfyui_dir",
+    "seed_default_comfyui_workflows",
     "sweep_orphaned_run_dirs",
     "UploadCallback",
     "get_default_preview_store",
