@@ -398,7 +398,14 @@ def remap_load_image_to_cloud_file(
             raise SafetyError(f"image 檔 {cloud_file_id} 副檔名不允許")
         if int(row["byte_size"] or 0) > MAX_LOAD_IMAGE_BYTES:  # 例：8 MiB
             raise SafetyError(f"image 檔 {cloud_file_id} 超過大小上限")
-        if str(row["scan_status"] or "").lower() not in {"clean", "skipped"}:
+        # 預設只接受 scan_status="clean"。"skipped" 必須由 root 透過站內設定明確
+        # 開啟 (`security.upload_scan_skip_allowed=true`) 才視為合法 — 防止未掃描
+        # 圖片透過 LoadImage 餵進 ComfyUI（同於 services/security/upload_security.py
+        # 的整體掃描契約）。
+        allowed_scan_statuses = {"clean"}
+        if upload_scan_skip_allowed():
+            allowed_scan_statuses.add("skipped")
+        if str(row["scan_status"] or "").lower() not in allowed_scan_statuses:
             raise SafetyError(f"image 檔 {cloud_file_id} 未通過安全掃描")
         # 3. 必要時 decode 一次確認真的是合法影像（不只是改副檔名的 zip / shellcode）
         try:
@@ -605,8 +612,15 @@ def comfyui_workflow_run(preset_id):
     user_inputs = request.get_json().get("user_inputs") or {}
     run_id = uuid.uuid4().hex
     
-    # Gate 1: 重新 analyze（避免使用 import 時的快取結果；analyze 本身不擋 unknown）
-    workflow = preset.workflow_json
+    # Gate 1: sanitize + normalize + analyze
+    #   絕不信任 DB / 手動匯入 / 舊版本留下的 workflow_json — preview 時 sanitize 過，
+    #   import 時 sanitize 過，run 時還是要再 sanitize 一次（schema 漂移 / migration
+    #   bug / 直接寫 DB 都可能繞過先前 gates）。analyze 本身不擋 unknown，後面 gate 接手。
+    try:
+        workflow = sanitize_workflow_json(preset.workflow_json)        # path traversal / blocklist / size
+        workflow = normalize_workflow_api_format(workflow)             # 確認仍為 API format（§3.1）
+    except WorkflowValidationError as exc:
+        return _err(str(exc), 400, stage="gate1_sanitize")
     analysis = analyze_workflow_json(workflow)
     
     # Gate 2: 能力檢查（區分「本地 ComfyUI 沒有」vs「在 hackme_web allowlist 之外」）
@@ -622,7 +636,19 @@ def comfyui_workflow_run(preset_id):
     except SafetyError as exc:
         return _err(str(exc), 400, stage="gate3_allowlist")
     
-    # Gate 4: 安全改寫（filename / image remap / save prefix）
+    # Gate 4: 必要欄位 + numeric / enum / size constraints
+    #   先擋掉 user_inputs 缺漏 / 超範圍 / 類型錯誤，避免 Gate 5 已經 copy 圖片到
+    #   ComfyUI input/ 才發現 inputs 不合法（造成孤兒暫存檔）。
+    missing = required_user_inputs_unfilled(analysis, user_inputs)
+    if missing:
+        return _err(f"必要欄位未填：{missing}", 400, stage="gate4_inputs")
+    try:
+        validate_user_input_constraints(analysis, user_inputs)
+    except ValueError as exc:
+        return _err(str(exc), 400, stage="gate4_constraints")
+    
+    # Gate 5: 安全改寫 + image remap + apply user_inputs
+    #   到這裡才真正動 ComfyUI input/ 暫存檔；上面 4 個 gate 都過了才 copy 圖。
     try:
         workflow = rewrite_save_image_prefix(workflow, user_id=actor["id"], run_id=run_id)
         workflow = remap_load_image_to_cloud_file(
@@ -630,16 +656,11 @@ def comfyui_workflow_run(preset_id):
             image_field_assignments=user_inputs.get("images") or {},
             actor=actor, conn=conn, run_id=run_id,
         )
+        workflow = apply_user_inputs(workflow, analysis, user_inputs)
     except SafetyError as exc:
-        return _err(str(exc), 400, stage="gate4_safety")
+        return _err(str(exc), 400, stage="gate5_safety")
     
-    # Gate 5: 必要欄位都填了？
-    missing = required_user_inputs_unfilled(analysis, user_inputs)
-    if missing:
-        return _err(f"必要欄位未填：{missing}", 400, stage="gate5_inputs")
-    
-    # All clear — apply user_inputs and queue
-    workflow = apply_user_inputs(workflow, analysis, user_inputs)
+    # All gates passed — queue
     audit("COMFYUI_TEMPLATE_RUN_GATE_PASS", get_client_ip(),
           user=actor["username"], detail=f"preset_id={preset_id} run_id={run_id}")
     return _queue_and_return(workflow, run_id, ...)
@@ -824,10 +845,10 @@ def comfyui_workflow_run(preset_id):
 2. Codex 確認 schema 後 → branch `feature/comfyui-template-importer` 切出
 3. Phase 1-3 純 backend，每 phase 單獨 PR
 4. Phase 3b（builder allocator）跟 Phase 3 同 PR 也行（範圍小）
-5. Phase 4 加 endpoint，**舊 import endpoint 仍 work**（向後兼容）
+5. Phase 4 加 endpoint：`POST /api/comfyui/workflows/import` 的 **path 保留**，但行為改為 **必須帶 `preview_token`**；單純 sanitize-only 的舊路徑只能在 feature flag `feature_comfyui_template_importer_strict=false` 時暫時保留，且 **絕不允許 run bypass**（即舊路徑寫入的 workflow 仍須經 §10 5-gate 才能執行；新舊兩條 import 路徑落 DB 後共用同一個 run pipeline）。
 6. Phase 5 frontend 加新 modal，**舊 generate 介面不動**
-7. Phase 6 run gate — 加 feature flag `feature_comfyui_template_importer_strict`，預設 false；驗證一段時間後改 true
-8. 全 ship 一個 release 後，下一版才**刪**舊 import endpoint 的 sanitize-only 路徑
+7. Phase 6 run gate — flag `feature_comfyui_template_importer_strict` 切 true；同時把 `feature_comfyui_legacy_import_enabled` 切 false，舊 sanitize-only import 路徑全關
+8. 全 ship 一個 release 後，下一版才**刪**舊 import endpoint 的 sanitize-only 程式碼路徑與 feature flag
 
 ---
 
@@ -923,7 +944,9 @@ workflows/comfyui/system/
 
 - **必須** ComfyUI API format（`{node_id: {class_type, inputs}}`），不是 UI graph format。
 - **不得**塞 hackme_web 私有欄位（如 `__hackme_meta__`、`_ui_layout`、`_panel_id` 等）。所有 UI metadata 一律放 manifest.json。
-- 必須能直接：(a) 匯入 ComfyUI；(b) 從 ComfyUI 匯出後與 repo 內的版本 `diff` 為空（除了 `class_type` 順序之類無語意差異，由 §3.4 normalize 處理）。
+- **必須能被 ComfyUI API queue 執行**（送進 `/prompt` endpoint 後流程正常完成）。
+- **不承諾**可由 ComfyUI 前端 editor 完整還原 layout（節點位置 / 連線視覺 / 群組 / `pos` / `widgets_values` 等 UI graph 專屬欄位）— 那是 UI graph format 的職責，跟 API prompt format 是兩種不同 serialization。雙向 UI graph 回匯需求列為 Phase 3。
+- 從 ComfyUI 重新匯出（API format）後，與 repo 內的版本經 §3.4 normalize 後 `diff` 應為空（除 `class_type` 順序之類無語意差異）。
 
 > 一句話：**workflow.json 是 ComfyUI 的；manifest.json 是 hackme_web 的**。
 
@@ -1186,7 +1209,7 @@ public/js/
 
 - `GET /api/comfyui/workflows/<id>/export` 永遠回 *原生 workflow.json*，**不含** manifest.json。
 - 想要連 manifest 一起拿走 → `?include_manifest=1`，回傳 zip（`workflow.json` + `manifest.json` + `README.md`）。
-- export 後的 workflow.json 可直接匯入 ComfyUI 並運作；這是 §18.2 「workflow.json 是 ComfyUI 的」的可驗證契約。
+- export 後的 workflow.json 可送進 ComfyUI API queue 執行；UI editor layout 還原**不在保證範圍**。這是 §18.2 「workflow.json 是 ComfyUI API queue 的」的可驗證契約。
 
 ---
 
@@ -1276,3 +1299,9 @@ public/js/
   - §10 run gate 從 4 個拆成 5 個：analyze（不擋）/ capability / allowlist / safety rewrite / inputs，避免把 unknown_class 當最終判斷
   - §18.1 / §18.5.1 registry 目錄統一為 `workflows/comfyui/system/<id>/`（system 走 filesystem，user / shared 走 DB）
   - §18.5.1 repeatable 補 bounded placeholder 規範 + `unused_instance_strategy` 必填欄位
+- 2026-05-08 · claude · spec polish 5 處（pre-implementation review）：
+  - §10 Gate 1 從「analyze」擴成「sanitize + normalize + analyze」，避免 DB 內舊 workflow / 手動匯入資料繞過 sanitize（重新跑等於再驗一次 §3.x 限制）
+  - §10 Gate 4/5 順序改成：先 inputs + numeric/enum constraints，再 safety rewrite + image remap + apply_user_inputs；避免必填欄位錯時已產生 ComfyUI input 暫存檔（孤兒）
+  - §7.3 `scan_status="skipped"` 預設不接受；只有 root 設定 `security.upload_scan_skip_allowed=true` 時才視為合法
+  - §18.2 / §15 將「可直接匯入 ComfyUI」改成「可被 ComfyUI API queue 執行；不承諾 UI editor layout 還原」，跟 §3.1 已釐清的 API vs UI graph 區分一致
+  - §15 舊 import endpoint：path 保留但必須帶 `preview_token`；sanitize-only 路徑只在 feature flag `feature_comfyui_legacy_import_enabled=true` 時暫存活；**run bypass 永不允許**，新舊路徑落 DB 後共用同一個 §10 5-gate run pipeline
