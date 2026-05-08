@@ -24,7 +24,7 @@ import chess
 from services.games.chess import initial_board, move_to_uci, opponent, to_chess_board, validate_move
 from services.games.chess_nn import _candidate_features, _clip
 from services.games.chess_search import ZobristHasher, search_best_move
-from services.server.runtime import default_runtime_root_path
+from services.games.chess_model_registry import bundled_seed_model_path, runtime_model_path
 
 
 EXPERIMENT_PV_DIFFICULTY = "experiment 4:pv"
@@ -49,11 +49,11 @@ _PIECE_VALUES = {
 
 
 def default_chess_pv_model_path() -> Path:
-    runtime_dir = os.environ.get("HACKME_RUNTIME_DIR", "").strip()
-    if not runtime_dir:
-        runtime_dir = str(default_runtime_root_path())
-    override = os.environ.get("HTML_LEARNING_CHESS_ENGINE_PV_MODEL_PATH", "").strip()
-    return Path(override or os.path.join(runtime_dir, "models", DEFAULT_CHESS_PV_MODEL_NAME))
+    return runtime_model_path(DEFAULT_CHESS_PV_MODEL_NAME, env_var="HTML_LEARNING_CHESS_ENGINE_PV_MODEL_PATH")
+
+
+def bundled_chess_pv_model_path() -> Path:
+    return bundled_seed_model_path(DEFAULT_CHESS_PV_MODEL_NAME)
 
 
 def _now() -> str:

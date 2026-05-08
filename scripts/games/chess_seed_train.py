@@ -24,9 +24,10 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from services.games.chess_dl import default_chess_dl_model_path  # noqa: E402
-from services.games.chess_nn import default_chess_nn_model_path  # noqa: E402
-from services.games.chess_pv import default_chess_pv_model_path  # noqa: E402
+from services.games.chess_dl import bundled_chess_dl_model_path  # noqa: E402
+from services.games.chess_engine import bundled_chess_engine_db_path  # noqa: E402
+from services.games.chess_nn import bundled_chess_nn_model_path  # noqa: E402
+from services.games.chess_pv import bundled_chess_pv_model_path  # noqa: E402
 from services.games.self_play_training import (  # noqa: E402
     DEFAULT_MAX_PLIES,
     DEFAULT_STUDENT_EXPLORATION_RATE,
@@ -93,6 +94,23 @@ PRESETS = {
         "teacher_depth": 2,
         "max_plies": 28,
         "student_exploration_rate": 0.08,
+    },
+    "warmup10": {
+        "exp2_teacher_games": 12,
+        "exp3_teacher_games": 24,
+        "exp4_teacher_games": 24,
+        "hard_exp2_games": 6,
+        "hard_exp3_games": 12,
+        "hard_exp4_games": 12,
+        "cross_games": 0,
+        "cross_exp1_exp3_games": 10,
+        "cross_exp2_exp3_games": 8,
+        "cross_exp1_exp4_games": 10,
+        "cross_exp2_exp4_games": 8,
+        "cross_exp3_exp4_games": 10,
+        "teacher_depth": 2,
+        "max_plies": 24,
+        "student_exploration_rate": 0.05,
     },
     "strong": {
         "exp2_teacher_games": 16,
@@ -200,13 +218,33 @@ def _resolved_schedule(args: argparse.Namespace) -> dict:
     return schedule
 
 
+def _progress_log(event: dict) -> None:
+    phase = str(event.get("phase") or "")
+    if phase == "training_started":
+        sys.stderr.write(f"[chess-seed-train] training 0/{event.get('total', 0)}\n")
+    elif phase == "training_match_completed":
+        sys.stderr.write(
+            "[chess-seed-train] "
+            f"{event.get('completed', 0)}/{event.get('total', 0)} "
+            f"{event.get('white_engine')} vs {event.get('black_engine')} "
+            f"winner={event.get('winner_color') or 'draw'} "
+            f"plies={event.get('plies', 0)} reason={event.get('reason')}\n"
+        )
+    elif phase == "training_finished":
+        sys.stderr.write(
+            f"[chess-seed-train] training finished {event.get('completed', 0)}/{event.get('total', 0)} "
+            f"games={event.get('games_played', 0)}\n"
+        )
+    sys.stderr.flush()
+
+
 def main() -> int:
     args = parse_args()
     schedule = _resolved_schedule(args)
-    store = ChessExperimentStore(args.experiment_db_path or None)
-    nn_model_path = Path(args.experiment_2_model_path or default_chess_nn_model_path())
-    dl_model_path = Path(args.experiment_3_model_path or default_chess_dl_model_path())
-    pv_model_path = Path(args.experiment_4_model_path or default_chess_pv_model_path())
+    store = ChessExperimentStore(args.experiment_db_path or bundled_chess_engine_db_path())
+    nn_model_path = Path(args.experiment_2_model_path or bundled_chess_nn_model_path())
+    dl_model_path = Path(args.experiment_3_model_path or bundled_chess_dl_model_path())
+    pv_model_path = Path(args.experiment_4_model_path or bundled_chess_pv_model_path())
 
     with _temporary_search_depths(args):
         summary = run_training_session(
@@ -232,8 +270,11 @@ def main() -> int:
             nn_model_path=nn_model_path,
             dl_model_path=dl_model_path,
             pv_model_path=pv_model_path,
+            progress_hook=_progress_log,
         )
         if args.with_smoke:
+            sys.stderr.write("[chess-seed-train] smoke evaluation started\n")
+            sys.stderr.flush()
             summary["smoke_evaluation"] = run_post_training_smoke_evaluation(
                 store=store,
                 nn_model_path=nn_model_path,
@@ -244,7 +285,11 @@ def main() -> int:
                 games_per_pair=max(0, int(args.smoke_games_per_pair or 0)),
                 seed=int(args.seed) + 101,
             )
+            sys.stderr.write("[chess-seed-train] smoke evaluation finished\n")
+            sys.stderr.flush()
         if args.with_benchmark:
+            sys.stderr.write("[chess-seed-train] benchmark started\n")
+            sys.stderr.flush()
             summary["benchmark"] = run_round_robin_benchmark(
                 store=store,
                 nn_model_path=nn_model_path,
@@ -255,6 +300,8 @@ def main() -> int:
                 rounds=max(0, int(args.benchmark_rounds or 0)),
                 seed=int(args.seed) + 202,
             )
+            sys.stderr.write("[chess-seed-train] benchmark finished\n")
+            sys.stderr.flush()
 
     reports = write_training_report(summary, report_dir=Path(args.report_dir), basename="chess_seed_train")
     payload = {

@@ -14,9 +14,9 @@ def test_chess_self_play_train_script_generates_runtime_reports(tmp_path):
     env["PYTHONPATH"] = str(ROOT)
     env["HACKME_RUNTIME_DIR"] = str(runtime_dir)
     env["HTML_LEARNING_CHESS_ENGINE_DB_PATH"] = str(runtime_dir / "database" / "chess_experiment.db")
-    env["HTML_LEARNING_CHESS_ENGINE_NN_MODEL_PATH"] = str(runtime_dir / "models" / "chess_experiment_2_nn.json")
-    env["HTML_LEARNING_CHESS_ENGINE_DL_MODEL_PATH"] = str(runtime_dir / "models" / "chess_experiment_3_dl.json")
-    env["HTML_LEARNING_CHESS_ENGINE_PV_MODEL_PATH"] = str(runtime_dir / "models" / "chess_experiment_4_pv.json")
+    env["HTML_LEARNING_CHESS_ENGINE_NN_MODEL_PATH"] = str(runtime_dir / "games" / "models" / "chess_experiment_2_nn.json")
+    env["HTML_LEARNING_CHESS_ENGINE_DL_MODEL_PATH"] = str(runtime_dir / "games" / "models" / "chess_experiment_3_dl.json")
+    env["HTML_LEARNING_CHESS_ENGINE_PV_MODEL_PATH"] = str(runtime_dir / "games" / "models" / "chess_experiment_4_pv.json")
     report_dir = runtime_dir / "reports" / "games"
 
     proc = subprocess.run(

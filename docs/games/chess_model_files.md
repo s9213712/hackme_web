@@ -4,7 +4,13 @@
 
 Model path:
 
-- `runtime/models/chess_experiment_2_nn.json`
+`exp1` 不是 JSON 模型，而是搜尋器的 learning DB：
+
+- `services/games/models/chess_experiment.db`
+- runtime 工作副本：`runtime/database/chess_experiment.db`
+
+- `services/games/models/chess_experiment_2_nn.json`
+- runtime 工作副本：`runtime/games/models/chess_experiment_2_nn.json`
 
 Required JSON keys:
 
@@ -25,11 +31,12 @@ The loader rejects payloads whose shapes do not match the expected sizes.
 
 Model path:
 
-- `runtime/models/chess_experiment_3_dl.json`
+- `services/games/models/chess_experiment_3_dl.json`
+- runtime 工作副本：`runtime/games/models/chess_experiment_3_dl.json`
 
 Replay path:
 
-- `runtime/models/chess_experiment_3_dl_replay.jsonl`
+- `runtime/games/models/chess_experiment_3_dl_replay.jsonl`
 
 Required JSON keys:
 

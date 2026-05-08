@@ -100,6 +100,7 @@ The repository root keeps only [README.md](../README.md) and
 - [security/TRADING_STRESS_PENTEST.md](security/TRADING_STRESS_PENTEST.md): trading correctness/stress script
 - [security/SERVER_MODE_V2_RED_TEAM_PLAYBOOK.md](security/SERVER_MODE_V2_RED_TEAM_PLAYBOOK.md): adversarial mode tests
 - [SECURITY_MODES.md](SECURITY_MODES.md): legacy redirect for old links
+- [games/chess_training_pipeline.md](games/chess_training_pipeline.md): chess replay filtering, seed training, benchmark suites, and promotion flow
 
 ## Maintainer Structure
 

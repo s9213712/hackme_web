@@ -15,6 +15,7 @@ from services.games.chess import (
     to_chess_board,
     validate_move,
 )
+from services.games.chess_model_registry import bundled_seed_database_path
 from services.games.chess_search import ZobristHasher, search_best_move
 from services.server.runtime import default_runtime_root_path
 
@@ -102,6 +103,10 @@ def default_chess_engine_db_path():
     db_dir = os.environ.get("HTML_LEARNING_DB_DIR", "").strip() or os.path.join(runtime_dir, "database")
     override = os.environ.get("HTML_LEARNING_CHESS_ENGINE_DB_PATH", "").strip()
     return Path(override or os.path.join(db_dir, DEFAULT_CHESS_ENGINE_DB_NAME))
+
+
+def bundled_chess_engine_db_path() -> Path:
+    return bundled_seed_database_path(DEFAULT_CHESS_ENGINE_DB_NAME)
 
 
 def _open_store_conn(db_path):
