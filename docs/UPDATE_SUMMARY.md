@@ -2,13 +2,65 @@
 
 Release ID: `2026.05.07-155`
 
+## 2026.05.08 — Audit-cycle bugfixes (issues #183/#184/#185/#186/#187)
+
+- **#183 chess invite 500 / FK corruption** — `bootstrap.schema.sql` now ships
+  `game_matches` with the full new schema (`human_side`, `computer_difficulty`,
+  `white_deleted_at`, `black_deleted_at`, and the latest `experiment 2:nn` /
+  `experiment 3:dl` CHECK options) so the schema-rebuild path is no longer
+  triggered on a fresh deploy. `routes/games.py::rebuild_game_matches_table`
+  also wraps its rename/rebuild in `PRAGMA legacy_alter_table=ON` and
+  `PRAGMA foreign_keys=OFF`, so existing instances upgrading from the old
+  schema no longer leave `game_invites.match_id` pointing at a dangling
+  `game_matches_old` table.
+- **#184 trading conservative-price guard gaps** —
+  `_assert_price_meta_allows_high_risk_use` now runs at every previously
+  unguarded entry point: root contract open/close (`services/trading/funding.py`),
+  grid bot create/scan (`services/trading/grid.py`), trial-credit forced sell
+  (`services/trading/trial_credit.py`), bot trigger
+  (`services/trading/bots/service.py`), market/limit order open + match
+  (`services/trading/orders.py`), and margin position open
+  (`services/trading/margin.py`).
+- **#185 test fixture drift** — `test_account_lockout` lambdas accept the new
+  `notify_security_event` kwarg; chat/community `CREATE TABLE users` fixtures
+  carry `avatar_file_id` and `avatar_crop_json` columns; trading
+  `EXPECTED_SETTINGS_KEYS` lists the new `trading.price_degrade_pause_*`,
+  `trading.price_fusion_trade_min_provider_count`, `trading.warning_language`,
+  and `trading.simulated_slippage_*` defaults.
+- **#186 cached-fallback caller-side policy** —
+  `_assert_price_meta_allows_high_risk_use` now distinguishes hard-block
+  sources (`manual_root` always, `*_cached` for grid/margin/contract/
+  trial-credit/bot usages) from caller-side allow paths (`market order`,
+  `immediately executable limit order`, `limit order match` may use cached
+  fallback when the operator opts into it via meta and the
+  `trading.price_degrade_pause_*` policy is left disabled).
+- **#187 errorhandler swallowed traceback** — `server.py`'s global
+  `app.errorhandler(Exception)` now `app.logger.exception(...)` before
+  returning the sanitized 500 JSON, guarded by an inner try/except so logging
+  itself can't recurse.
+- **Pre-launch report shortcuts** — added `scripts/on_live_reports/` with one
+  `.py` entry per report type. Pure single-driver entries are symlinks; pytest
+  / API / composite drivers are thin Python wrappers. See the directory
+  README for the report-type → driver table.
+- Origin-side breakage uncovered while integrating the audit fixes was also
+  cleaned up: missing `ipaddress` import in `routes/system_admin.py`, missing
+  `register_comfyui_workflow_routes` import in `routes/comfyui.py`, and three
+  pentest scripts (`session_security_pentest.py`,
+  `functional_permission_pentest.py`, `trading_stress_pentest.py`) that ran as
+  entry points but imported `scripts.security.common_paths` without the
+  `repo-root → sys.path` prologue. Storage-album / upload-security imports in
+  the new `routes/file_sections/` and `routes/system_admin_sections/` modules
+  also point at the canonical `services.storage.storage_albums` /
+  `services.security.upload_security` paths instead of the legacy top-level
+  module names.
+
 ## 2026.05.07-155
 
 - Reorganized deep feature docs into bounded subdirectories so `docs/` root can
   stay focused on entry guides and cross-cutting references.
 - Trading deep references now live under `docs/trading/`; video/media
   architecture under `docs/video/`; runtime-boundary docs under
-  `docs/runtime/`; ComfyUI operator docs under `docs/comfyui/`; and Server
+  `docs/ops_boundaries/`; ComfyUI operator docs under `docs/comfyui/`; and Server
   Mode v2 spec bundles under `docs/server_mode/`.
 - Added per-folder `README.md` entry files plus updated canonical doc index and
   release policy coverage so future doc growth follows the same placement
@@ -431,7 +483,7 @@ Release ID: `2026.05.07-155`
 
 ## 2026.05.05-110
 
-- Added [ENCRYPTION_RUNTIME_BOUNDARY.md](runtime/ENCRYPTION_RUNTIME_BOUNDARY.md) as the canonical operator/engineer trust-boundary document for `standard_plain`, `server_encrypted`, strict `e2ee`, and E2EE shared-video envelopes.
+- Added [ENCRYPTION_RUNTIME_BOUNDARY.md](ops_boundaries/ENCRYPTION_RUNTIME_BOUNDARY.md) as the canonical operator/engineer trust-boundary document for `standard_plain`, `server_encrypted`, strict `e2ee`, and E2EE shared-video envelopes.
 - Added [EXTERNAL_API_COMMAND_MATRIX.md](EXTERNAL_API_COMMAND_MATRIX.md) to inventory the upstream exchange, Civitai, and ComfyUI commands currently used by the project, plus nearby capabilities not yet wired.
 - Added a regression proving that a runtime engineer can decrypt `server_encrypted` data with the runtime file key, but cannot decrypt strict `e2ee` data from runtime state alone.
 

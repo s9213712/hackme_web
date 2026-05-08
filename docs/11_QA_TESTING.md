@@ -126,10 +126,23 @@ PYTHONPATH=. python3 scripts/trading/probes/backtest_20000_probe.py --include-ro
   - `固定 N` 代表目前 repo 內對應 pytest 檔的 collected case 數。
 - `預設放置位置`：指生成腳本的預設輸出落點；若是站內手動匯出 / 上傳型報告，則列 canonical staging 路徑。
 
-若要一次生成這 13 份報告，直接使用 repo root 的：
+若要一次生成這 13 份報告，使用：
 
 ```bash
-./on_live_reports_make.sh --base-url https://127.0.0.1:5000 --root-password '<ROOT_PASSWORD>'
+python3 scripts/security/gate/on_live_reports_make.py --base-url https://127.0.0.1:5000 --root-password '<ROOT_PASSWORD>'
+```
+
+或從 `scripts/on_live_reports/` 的捷徑執行（每個 report type 一個 `.py` 入口；
+詳見 [scripts/on_live_reports/README.md](../scripts/on_live_reports/README.md)）：
+
+```bash
+# orchestrator (= 上面那行的 alias)
+python3 scripts/on_live_reports/on_live_reports_make.py --base-url ... --root-password ...
+# 單一 report type
+python3 scripts/on_live_reports/clean_smoke.py
+python3 scripts/on_live_reports/permission.py
+python3 scripts/on_live_reports/snapshot_restore.py
+# ... 共 13 個 entry
 ```
 
 它會把 raw artifacts 放到：
