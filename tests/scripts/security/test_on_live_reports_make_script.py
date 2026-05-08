@@ -9,11 +9,10 @@ from scripts.security.gate import on_live_reports_make as helper
 
 ROOT = Path(__file__).resolve().parents[3]
 
-
-def test_root_wrapper_delegates_to_security_gate_helper():
-    wrapper = (ROOT / "on_live_reports_make.sh").read_text(encoding="utf-8")
-
-    assert 'exec python3 "$REPO_ROOT/scripts/security/gate/on_live_reports_make.py" "$@"' in wrapper
+def test_root_wrapper_is_removed_and_helper_is_direct_entrypoint():
+    assert not (ROOT / "on_live_reports_make.sh").exists()
+    helper_source = (ROOT / "scripts" / "security" / "gate" / "on_live_reports_make.py").read_text(encoding="utf-8")
+    assert 'tester="scripts/security/gate/on_live_reports_make.py"' in helper_source
 
 
 def test_live_report_helper_covers_all_required_report_types_and_runtime_outputs():
@@ -52,8 +51,8 @@ def test_docs_and_frontend_expose_the_same_canonical_production_gate_paths():
     prod_docs = (ROOT / "docs" / "02_DEPLOY_PRODUCTION.md").read_text(encoding="utf-8")
     admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
 
-    assert "./on_live_reports_make.sh --base-url https://127.0.0.1:5000 --root-password '<ROOT_PASSWORD>'" in qa_docs
-    assert "./on_live_reports_make.sh --base-url https://<host> --root-password '<ROOT_PASSWORD>'" in prod_docs
+    assert "python3 scripts/security/gate/on_live_reports_make.py --base-url https://127.0.0.1:5000 --root-password '<ROOT_PASSWORD>'" in qa_docs
+    assert "python3 scripts/security/gate/on_live_reports_make.py --base-url https://<host> --root-password '<ROOT_PASSWORD>'" in prod_docs
     assert "runtime/reports/security/production_gate/log_chain_verify_report.json" in qa_docs
     assert "runtime/reports/security/production_gate/integrity_guard_report.json" in qa_docs
     assert "GET /api/root/server-mode/logs/verify" in qa_docs

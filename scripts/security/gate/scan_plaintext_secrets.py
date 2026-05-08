@@ -31,9 +31,12 @@ EXCLUDED_DIRS = {
     ".venv",
     "__pycache__",
     "build",
+    "cache",
     "coverage",
     "dist",
     "node_modules",
+    "runtime",
+    "storage",
     "vendor",
     "venv",
 }

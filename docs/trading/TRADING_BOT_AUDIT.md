@@ -94,7 +94,7 @@ python3 scripts/trading/validation/trading_workflow_template_validation.py --no-
 python3 scripts/trading/probes/backtest_20000_probe.py --include-route --json-out /tmp/trading_audit_check/backtest_20000.json
 
 # 6. 既有 pytest 回歸
-PYTHONPATH=. python3 -m pytest -q tests/test_trading_engine.py tests/test_points_chain.py
+scripts/testing/pytest_in_tmp.sh -q tests/test_trading_engine.py tests/test_points_chain.py
 ```
 
 目前這三支交易驗證腳本的分工是：

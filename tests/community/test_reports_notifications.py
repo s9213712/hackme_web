@@ -3,6 +3,7 @@ import sqlite3
 from flask import Flask, jsonify
 
 from routes.reports_notifications import register_reports_notification_routes
+from services.platform import settings as platform_settings
 from services.users.member_levels import ensure_member_level_rules_schema
 
 
@@ -167,3 +168,56 @@ def test_report_claim_blocks_other_manager(tmp_path):
     blocked = client.post(f"/api/admin/reports/{report_id}/resolve", json={"action": "reject"})
     assert blocked.status_code == 409
     assert "領取" in blocked.get_json()["msg"]
+
+
+def test_muted_admin_notice_is_not_created(tmp_path, monkeypatch):
+    db_path = tmp_path / "reports.db"
+    _seed_db(db_path)
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin", "member_level": "normal"}}
+    client = _build_app(db_path, actor_box, []).test_client()
+
+    monkeypatch.setattr(
+        platform_settings,
+        "get_system_settings",
+        lambda: {
+            "feature_reports_notifications_enabled": True,
+            "notification_muted_types": "admin_notice\nreport_submitted",
+        },
+    )
+
+    sent = client.post(
+        "/api/admin/notifications/send",
+        json={"user_id": 3, "title": "系統通知", "body": "請確認帳號狀態"},
+    )
+    assert sent.status_code == 200
+    assert sent.get_json()["sent"] == []
+
+    actor_box["actor"] = {"id": 3, "username": "alice", "role": "user", "member_level": "normal"}
+    notes = client.get("/api/notifications").get_json()
+    assert notes["unread_count"] == 0
+    assert notes["notifications"] == []
+
+
+def test_muted_report_submitted_notification_is_skipped(tmp_path, monkeypatch):
+    db_path = tmp_path / "reports.db"
+    _seed_db(db_path)
+    violations = []
+    actor_box = {"actor": {"id": 3, "username": "alice", "role": "user", "member_level": "normal"}}
+    client = _build_app(db_path, actor_box, violations).test_client()
+
+    monkeypatch.setattr(
+        platform_settings,
+        "get_system_settings",
+        lambda: {
+            "feature_reports_notifications_enabled": True,
+            "notification_muted_types": "report_submitted",
+        },
+    )
+
+    submitted = client.post("/api/reports", json={"target_type": "forum_post", "target_id": 20, "reason": "違規內容"})
+    assert submitted.status_code == 200
+
+    notes = client.get("/api/notifications")
+    assert notes.status_code == 200
+    assert notes.get_json()["unread_count"] == 0
+    assert notes.get_json()["notifications"] == []

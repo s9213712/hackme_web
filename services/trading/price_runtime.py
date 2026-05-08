@@ -11,6 +11,56 @@ def _engine_module():
     return engine
 
 
+def _warning_language_from(value):
+    if isinstance(value, dict):
+        text = str(
+            value.get("warning_language")
+            or value.get("trading.warning_language")
+            or value.get("language")
+            or ""
+        ).strip().lower()
+    else:
+        text = str(value or "").strip().lower()
+    return "en" if text.startswith("en") else "zh-TW"
+
+
+def _warning_text(value, key, **kwargs):
+    language = _warning_language_from(value)
+    if language == "en":
+        messages = {
+            "manual_price_short": "Manual root price is active",
+            "cached_price_short": "Using the last healthy cache",
+            "manual_price_detail": "Manual root price is active; do not treat it as normal live market depth.",
+            "cached_price_detail": "Using the last healthy cache; the price may already be stale.",
+            "test_provider_detail": "Using an injected test live-price provider; suitable for testing and reference display only, not for production risk pricing.",
+            "manual_root_block_reason": "Root manual price is active; manual prices are reference-only and must not be used for automatic execution or settlement.",
+            "cached_high_risk_block_reason": "The last healthy cache is active and cannot be used as a risk-grade price.",
+            "provider_coverage_partial": "Some provider snapshots are truncated. This does not prove real market depth is insufficient; reference price remains available, but the data is excluded from high-risk weighting.",
+            "provider_coverage_partial_provider": "Snapshot coverage is truncated. This does not prove the venue lacks real depth; it is kept for reference pricing only and excluded from high-risk weighting.",
+            "provider_count_low": f"Only {kwargs.get('provider_count', 0)} risk-grade order-book providers remain, below the recommended minimum of {kwargs.get('minimum_provider_count', 0)}.",
+            "conservative_reference_only": "Not enough risk-grade providers are available; reference price only.",
+            "conservative_status_message": "Price source degraded: the system has fallen back to a reduced provider set. High-risk trading should be paused.",
+            "excluded_sources_reweighted": "Some venues were excluded, and the system redistributed weights across the remaining healthy sources.",
+        }
+        return messages.get(key, key)
+    messages = {
+        "manual_price_short": "目前使用手動價格",
+        "cached_price_short": "目前使用最後健康快取",
+        "manual_price_detail": "目前使用手動價格，請勿將此價格視為正常即時市場深度。",
+        "cached_price_detail": "目前使用最後健康快取，請留意價格可能已過時。",
+        "test_provider_detail": "目前使用測試注入 live price provider；此來源只適合測試與 reference 顯示，不可視為 production 風控價格。",
+        "manual_root_block_reason": "目前使用 root 手動價格；手動價格只能做 reference 顯示，不可用於自動成交或結算。",
+        "cached_high_risk_block_reason": "目前使用最後健康快取，不能作為風控級價格。",
+        "provider_coverage_partial": "部分來源資料截斷，不代表該交易所真實深度不足；reference price 仍會納入，但不作為高風險風控權重。",
+        "provider_coverage_partial_provider": "資料截斷，不代表該交易所真實深度不足；目前僅納入 reference price，不納入高風險風控權重。",
+        "provider_count_low": f"風控級可用 order book 來源只剩 {kwargs.get('provider_count', 0)} 家，低於建議下限 {kwargs.get('minimum_provider_count', 0)} 家",
+        "conservative_reference_only": "目前風控級可用來源數不足，只能提供 reference price",
+        "conservative_status_message": "價格來源降級：目前已退回單一 ticker，建議暫停高風險交易。",
+        "excluded_sources_reweighted": "部分交易所來源已被排除，系統已用剩餘健康來源重新分配權重。",
+    }
+    return messages.get(key, key)
+
+
 def build_price_context(service, *, market_symbol, price_type, price_points, price_source, price_meta):
     engine = _engine_module()
     meta = price_meta or {}
@@ -27,19 +77,19 @@ def build_price_context(service, *, market_symbol, price_type, price_points, pri
     warning_only = bool(meta.get("warning_only")) or ((bool(warnings) or bool(meta.get("excluded_sources"))) and not degraded)
     warning_message = ""
     if source == "manual_root":
-        warning_message = "目前使用手動價格"
+        warning_message = _warning_text(meta, "manual_price_short")
     elif source.endswith("_cached"):
-        warning_message = "目前使用最後健康快取"
+        warning_message = _warning_text(meta, "cached_price_short")
     if not warning_message:
         warning_message = str(meta.get("high_risk_block_reason") or meta.get("fallback_reason") or "").strip()
     if not warning_message:
         warning_message = str(service._primary_price_fusion_warning(warnings).get("message") or "").strip()
     if not warning_message and source == "manual_root":
-        warning_message = "目前使用手動價格，請勿將此價格視為正常即時市場深度。"
+        warning_message = _warning_text(meta, "manual_price_detail")
     if not warning_message and stale:
-        warning_message = "目前使用最後健康快取，請留意價格可能已過時。"
+        warning_message = _warning_text(meta, "cached_price_detail")
     if not warning_message and synthetic_test_provider:
-        warning_message = "目前使用測試注入 live price provider；此來源只適合測試與 reference 顯示，不可視為 production 風控價格。"
+        warning_message = _warning_text(meta, "test_provider_detail")
     confidence = service._price_context_confidence(
         price_type=normalized_type,
         source=source,
@@ -112,24 +162,24 @@ def stored_market_price_contexts(service, market):
     }
     if source == "manual_root":
         price_meta["price_health"] = "warning"
-        price_meta["high_risk_block_reason"] = "目前使用 root 手動價格；手動價格只能做 reference 顯示，不可用於自動成交或結算。"
+        price_meta["high_risk_block_reason"] = _warning_text(price_meta, "manual_root_block_reason")
         price_meta["warnings"] = service._append_price_fusion_warning(
             [],
             "manual_price_active",
-            "目前使用手動價格，請勿視為正常即時市場深度。",
+            _warning_text(price_meta, "manual_price_detail"),
             severity="warning",
         )
         price_meta["fallback_reason"] = "manual_root_not_allowed_for_high_risk"
     elif source.endswith("_cached"):
         price_meta["price_health"] = "fallback"
-        price_meta["high_risk_block_reason"] = "目前使用最後健康快取，不能作為風控級價格。"
+        price_meta["high_risk_block_reason"] = _warning_text(price_meta, "cached_high_risk_block_reason")
         price_meta["warnings"] = service._append_price_fusion_warning(
             [],
             "cached_price_active",
-            "目前使用最後健康快取，請留意價格可能已過時。",
+            _warning_text(price_meta, "cached_price_detail"),
             severity="warning",
         )
-        price_meta["fallback_reason"] = "目前使用最後健康快取"
+        price_meta["fallback_reason"] = _warning_text(price_meta, "cached_price_short")
     reference_context = service._build_price_context(
         market_symbol=(market or {}).get("symbol"),
         price_type="reference",
@@ -588,13 +638,17 @@ def fetch_weighted_fused_price_points(service, market_symbol, *, settings, conn=
                 warnings = service._append_price_fusion_warning(
                     warnings,
                     "orderbook_unavailable",
-                    f"多交易所 order book 全部失敗，已降級為單一 ticker 價格來源 {engine.PRICE_PROVIDER_LABELS.get(fallback_source, fallback_source)}",
+                    (
+                        f"All multi-venue order books failed; degraded to single-ticker source {engine.PRICE_PROVIDER_LABELS.get(fallback_source, fallback_source)}"
+                        if _warning_language_from(settings) == "en"
+                        else f"多交易所 order book 全部失敗，已降級為單一 ticker 價格來源 {engine.PRICE_PROVIDER_LABELS.get(fallback_source, fallback_source)}"
+                    ),
                     severity="critical",
                 )
                 warnings = service._append_price_fusion_warning(
                     warnings,
                     "provider_count_low",
-                    f"風控級可用 order book 來源只剩 1 家，低於建議下限 {min_provider_count} 家",
+                    _warning_text(settings, "provider_count_low", provider_count=1, minimum_provider_count=min_provider_count),
                     severity="critical",
                 )
             primary_warning = service._primary_price_fusion_warning(warnings)
@@ -622,7 +676,7 @@ def fetch_weighted_fused_price_points(service, market_symbol, *, settings, conn=
                 "raw_normalized_weight_percent": 100.0,
                 "risk_grade_eligible": bool(synthetic_test_provider),
                 "coverage_insufficient": not bool(synthetic_test_provider),
-                "coverage_warning_message": "" if synthetic_test_provider else "資料截斷，不代表該交易所真實深度不足；目前僅納入 reference price，不納入高風險風控權重。",
+                "coverage_warning_message": "" if synthetic_test_provider else _warning_text(settings, "provider_coverage_partial_provider"),
                 "quantity_unit": "n/a",
                 "quantity_unit_label": "n/a",
                 "quantity_unit_confirmed": False,
@@ -674,7 +728,7 @@ def fetch_weighted_fused_price_points(service, market_symbol, *, settings, conn=
                 "raw_normalized_weight_percent": 100.0,
                 "risk_grade_eligible": False,
                 "coverage_insufficient": True,
-                "coverage_warning_message": "資料截斷，不代表該交易所真實深度不足；目前僅納入 reference price，不納入高風險風控權重。",
+                "coverage_warning_message": _warning_text(settings, "provider_coverage_partial_provider"),
                 "quantity_unit": "n/a",
                 "quantity_unit_label": "n/a",
                 "quantity_unit_confirmed": False,
@@ -790,7 +844,7 @@ def fetch_weighted_fused_price_points(service, market_symbol, *, settings, conn=
         snap["risk_grade_eligible"] = not coverage_insufficient
         snap["coverage_insufficient"] = coverage_insufficient
         snap["coverage_warning_message"] = (
-            "資料截斷，不代表該交易所真實深度不足；目前僅納入 reference price，不納入高風險風控權重。"
+            _warning_text(settings, "provider_coverage_partial_provider")
             if coverage_insufficient or bool(snap.get("orderbook_truncated"))
             else ""
         )
@@ -866,13 +920,17 @@ def fetch_weighted_fused_price_points(service, market_symbol, *, settings, conn=
                 warnings = service._append_price_fusion_warning(
                     warnings,
                     "orderbook_quality_rejected",
-                    f"多交易所 order book 已抓到，但全部被品質規則排除，已降級為單一 ticker 價格來源 {engine.PRICE_PROVIDER_LABELS.get(fallback_source, fallback_source)}",
+                    (
+                        f"Multi-venue order books were fetched, but all were excluded by quality rules; degraded to single-ticker source {engine.PRICE_PROVIDER_LABELS.get(fallback_source, fallback_source)}"
+                        if _warning_language_from(settings) == "en"
+                        else f"多交易所 order book 已抓到，但全部被品質規則排除，已降級為單一 ticker 價格來源 {engine.PRICE_PROVIDER_LABELS.get(fallback_source, fallback_source)}"
+                    ),
                     severity="critical",
                 )
                 warnings = service._append_price_fusion_warning(
                     warnings,
                     "provider_count_low",
-                    f"風控級可用 order book 來源只剩 1 家，低於建議下限 {min_provider_count} 家",
+                    _warning_text(settings, "provider_count_low", provider_count=1, minimum_provider_count=min_provider_count),
                     severity="critical",
                 )
             primary_warning = service._primary_price_fusion_warning(warnings)
@@ -891,7 +949,7 @@ def fetch_weighted_fused_price_points(service, market_symbol, *, settings, conn=
                 "raw_normalized_weight_percent": 100.0,
                 "risk_grade_eligible": bool(synthetic_test_provider),
                 "coverage_insufficient": not bool(synthetic_test_provider),
-                "coverage_warning_message": "" if synthetic_test_provider else "資料截斷，不代表該交易所真實深度不足；目前僅納入 reference price，不納入高風險風控權重。",
+                "coverage_warning_message": "" if synthetic_test_provider else _warning_text(settings, "provider_coverage_partial_provider"),
                 "quantity_unit": "n/a",
                 "quantity_unit_label": "n/a",
                 "quantity_unit_confirmed": False,
@@ -1095,7 +1153,7 @@ def fetch_weighted_fused_price_points(service, market_symbol, *, settings, conn=
         warnings = service._append_price_fusion_warning(
             warnings,
             "provider_coverage_partial",
-            "部分來源資料截斷，不代表該交易所真實深度不足；reference price 仍會納入，但不作為高風險風控權重。",
+            _warning_text(settings, "provider_coverage_partial"),
         )
     reference_sources = {snap["source"] for snap in snapshots}
     risk_sources = {snap["source"] for snap in risk_snapshots}
@@ -1104,7 +1162,12 @@ def fetch_weighted_fused_price_points(service, market_symbol, *, settings, conn=
         warnings = service._append_price_fusion_warning(
             warnings,
             "provider_count_low",
-            f"風控級可用 order book 來源只剩 {len(risk_sources)} 家，低於建議下限 {min_provider_count} 家",
+            _warning_text(
+                settings,
+                "provider_count_low",
+                provider_count=len(risk_sources),
+                minimum_provider_count=min_provider_count,
+            ),
             severity="critical",
         )
 
@@ -1166,7 +1229,7 @@ def fetch_weighted_fused_price_points(service, market_symbol, *, settings, conn=
         "fallback_active": fallback_active,
         "conservative_mode": conservative_mode,
         "high_risk_blocked": conservative_mode,
-        "high_risk_block_reason": "目前風控級可用來源數不足，只能提供 reference price" if conservative_mode else "",
+        "high_risk_block_reason": _warning_text(settings, "conservative_reference_only") if conservative_mode else "",
         "reference_price_points": reference_value,
         "risk_grade_price_points": risk_value,
         "reference_provider_count": len(reference_sources),
@@ -1358,9 +1421,9 @@ def root_price_fusion_status_on_conn(service, conn, *, market_symbol=""):
     warnings = list((details or {}).get("warnings") or [])
     warning_message = str((details or {}).get("warning_message") or "").strip()
     if conservative_mode and not warning_message:
-        warning_message = "價格來源降級：目前已退回單一 ticker，建議暫停高風險交易。"
+        warning_message = _warning_text(settings, "conservative_status_message")
     elif degraded and not warning_message and (details or {}).get("excluded_providers"):
-        warning_message = "部分交易所來源已被排除，系統已用剩餘健康來源重新分配權重。"
+        warning_message = _warning_text(settings, "excluded_sources_reweighted")
     payload.update({
         "state": "conservative" if conservative_mode else ("degraded" if degraded else "healthy"),
         "message": warning_message,
@@ -1417,8 +1480,11 @@ def get_live_market_quote(service, *, market_symbol=""):
             market_row = next(iter(market_row), None)
             if not market_row:
                 raise ValueError("market not found")
+        settings = service._settings_payload(conn)
         market = service._market_payload(market_row)
         current_price, price_source, price_meta = service._current_market_price_points(conn, market, with_meta=True)
+        price_meta = dict(price_meta or {})
+        price_meta.setdefault("warning_language", settings.get("warning_language", "zh-TW"))
         updated_row = conn.execute("SELECT * FROM trading_markets WHERE symbol=?", (market["symbol"],)).fetchone()
         conn.commit()
         payload = service._market_payload(updated_row or market_row)
@@ -1467,11 +1533,14 @@ def get_live_market_quote(service, *, market_symbol=""):
             "warnings": list((price_meta or {}).get("warnings") or []),
             "high_risk_blocked": bool((price_meta or {}).get("high_risk_blocked")),
             "high_risk_block_reason": str((price_meta or {}).get("high_risk_block_reason") or ""),
+            "conservative_mode": bool((price_meta or {}).get("conservative_mode")),
+            "minimum_provider_count": int((price_meta or {}).get("minimum_provider_count") or 0),
             "risk_grade_usable": bool((risk_grade_context or {}).get("risk_grade_usable")),
             "defaulted_market": defaulted_market,
             "reference_price_context": reference_context,
             "risk_grade_price_context": risk_grade_context,
             "transport_state": dict((price_meta or {}).get("transport_state") or {}),
+            "warning_language": str(settings.get("warning_language") or "zh-TW"),
         }
     finally:
         conn.close()
@@ -1584,6 +1653,8 @@ def current_market_price_points(service, conn, market, *, with_meta=False, high_
         "warnings": [],
         "high_risk_blocked": False,
         "high_risk_block_reason": "",
+        "conservative_mode": False,
+        "minimum_provider_count": 0,
         "requested_price_mode": "risk_grade" if high_risk else "reference",
         "reference_price_points": None,
         "risk_grade_price_points": None,
@@ -1769,6 +1840,8 @@ def current_market_price_points(service, conn, market, *, with_meta=False, high_
             "warnings": warnings,
             "high_risk_blocked": bool(fusion_details.get("high_risk_blocked")),
             "high_risk_block_reason": str(fusion_details.get("high_risk_block_reason") or ""),
+            "conservative_mode": bool(fusion_details.get("conservative_mode")),
+            "minimum_provider_count": int(fusion_details.get("min_provider_count") or 0),
             "reference_price_points": fusion_details.get("reference_price_points"),
             "risk_grade_price_points": fusion_details.get("risk_grade_price_points"),
             "resolved_source": str(fusion_details.get("resolved_source") or live_source or engine.FUSED_PRICE_SOURCE),
@@ -1835,6 +1908,8 @@ def current_market_price_points(service, conn, market, *, with_meta=False, high_
             "risk_grade_usable": risk_grade_usable,
             "high_risk_blocked": False,
             "high_risk_block_reason": "",
+            "conservative_mode": bool(fusion_details.get("conservative_mode")),
+            "minimum_provider_count": int(fusion_details.get("min_provider_count") or 0),
             "stale": bool(transport_state.get("stale")),
             "degraded": bool(transport_state.get("degraded")),
             "connected": bool(transport_state.get("connected")),
@@ -1873,6 +1948,8 @@ def current_market_price_points(service, conn, market, *, with_meta=False, high_
         price_meta["reference_provider_count"] = 1
         price_meta["risk_grade_provider_count"] = 0 if risk_grade_unusable else 1
         price_meta["high_risk_blocked"] = bool(risk_grade_unusable and not synthetic_test_provider)
+        price_meta["conservative_mode"] = False
+        price_meta["minimum_provider_count"] = 1
         if risk_grade_unusable and not synthetic_test_provider:
             price_meta["high_risk_block_reason"] = "目前 provider input 已降級 / stale / fallback，不能作為風控級價格。"
         price_meta["stale"] = bool(transport_state["stale"])

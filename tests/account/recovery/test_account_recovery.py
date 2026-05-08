@@ -190,6 +190,23 @@ def _latest_token(db_path, kind):
         conn.close()
 
 
+def _all_tokens(db_path, kind):
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT body FROM mail_outbox WHERE kind=? ORDER BY id ASC",
+            (kind,),
+        ).fetchall()
+        tokens = []
+        for row in rows:
+            match = re.search(r"\n([A-Za-z0-9_-]{20,})\n", row[0])
+            assert match
+            tokens.append(match.group(1))
+        return tokens
+    finally:
+        conn.close()
+
+
 def test_password_reset_defaults_to_admin_review_request(tmp_path):
     db_path = tmp_path / "recovery.db"
     _init_db(db_path)
@@ -241,6 +258,59 @@ def test_password_reset_email_token_mode_uses_one_time_token(tmp_path):
     assert latest_pw == "NewPassword123!"
     assert revoked == 1
     assert used_count == 1
+
+
+def test_password_reset_email_token_mode_rate_limits_per_user_without_leaking_identity(tmp_path):
+    db_path = tmp_path / "recovery.db"
+    _init_db(db_path)
+
+    def limiter(key, max_req, window_sec):
+        if key == "password-reset-user:1":
+            return True, {"limit": 2}
+        return False, {"limit": max_req}
+
+    client = _build_app(db_path, password_reset_mode="email_token", rate_limiter=limiter).test_client()
+    requested = client.post("/api/password-reset/request", json={"username_or_email": "alice"})
+
+    assert requested.status_code == 200
+    assert requested.get_json()["ok"] is True
+
+    conn = sqlite3.connect(db_path)
+    try:
+        mailed = conn.execute("SELECT COUNT(*) FROM mail_outbox WHERE kind='password_reset'").fetchone()[0]
+        token_rows = conn.execute("SELECT COUNT(*) FROM account_recovery_tokens WHERE purpose='password_reset'").fetchone()[0]
+    finally:
+        conn.close()
+
+    assert mailed == 0
+    assert token_rows == 0
+
+
+def test_password_reset_new_email_token_invalidates_previous_unused_token(tmp_path):
+    db_path = tmp_path / "recovery.db"
+    _init_db(db_path)
+    client = _build_app(db_path, password_reset_mode="email_token").test_client()
+
+    first = client.post("/api/password-reset/request", json={"username_or_email": "alice"})
+    second = client.post("/api/password-reset/request", json={"username_or_email": "alice"})
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+
+    first_token, second_token = _all_tokens(db_path, "password_reset")
+    assert first_token != second_token
+
+    old_confirm = client.post(
+        "/api/password-reset/confirm",
+        json={"token": first_token, PASSWORD_FIELD: "NewPassword123!", PASSWORD_CONFIRM_FIELD: "NewPassword123!"},
+    )
+    assert old_confirm.status_code == 400
+
+    new_confirm = client.post(
+        "/api/password-reset/confirm",
+        json={"token": second_token, PASSWORD_FIELD: "NewPassword123!", PASSWORD_CONFIRM_FIELD: "NewPassword123!"},
+    )
+    assert new_confirm.status_code == 200
 
 
 def test_password_reset_confirm_is_rate_limited(tmp_path):

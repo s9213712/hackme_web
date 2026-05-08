@@ -23,7 +23,7 @@ cleanup predictable, reviewable, and reversible.
 The repository root should contain only:
 
 - entry docs: `README.md`, `SECURITY.md`
-- bootstrap files: `requirements.txt`, `one_click_setup.sh`, `server.py`
+- bootstrap files: `requirements.txt`, `server.py`, `test_for_develop.sh`
 - top-level source trees: `routes/`, `services/`, `public/`
 - operator and validation tree: `scripts/`
 - documentation and tests: `docs/`, `tests/`
@@ -68,7 +68,7 @@ These files are canonical, short-entry or cross-cutting docs and may stay at
 - `docs/trading/`: trading, bot audit, risk-price, benchmark, and BTC_trade reference
 - `docs/video/`: deep video/media architecture docs
 - `docs/comfyui/`: ComfyUI operator docs
-- `docs/runtime/`: runtime-boundary and recovery docs
+- `docs/ops_boundaries/`: runtime-boundary and recovery docs
 - `docs/server_mode_v2/`: Server Mode v2 spec bundle
 - `docs/archive/`: retired attempts, historical notes, abandoned designs
 - `docs/research/`: research drafts and completed research artifacts
@@ -90,7 +90,7 @@ Before adding a new top-level doc, prefer one of these homes:
 
 - user/admin/operator guide: extend an existing numbered guide
 - low-level feature reference: extend `docs/trading/*`, `docs/video/*`,
-  `docs/runtime/*`, `WEB.md`, `For_developer.md`, or `API_REFERENCE.md`
+  `docs/ops_boundaries/*`, `WEB.md`, `For_developer.md`, or `API_REFERENCE.md`
 - historical or exploratory content: `docs/archive/` or `docs/research/`
 - agent-only process notes: `docs/AGENTS/`
 
@@ -101,8 +101,8 @@ well-known validation commands.
 
 ### Keep As Stable Operator Entry Points
 
-- repo root `one_click_setup.sh`
-- repo root `on_live_reports_make.sh`
+- repo root `server.py`
+- repo root `test_for_develop.sh`
 - `scripts/prepush/pre_push_checks.py`
 - `scripts/admin/root_recovery.py`
 

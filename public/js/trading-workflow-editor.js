@@ -291,7 +291,7 @@
   async function runWorkflowPreviewBacktest() {
     const errors = validateWorkflow().filter((item) => item.level === "err");
     if (errors.length) {
-      previewStatus("Workflow validation 未通過，請先修正紅色項目。", false);
+      previewStatus(workflowValidationErrorSummary(errors, "Workflow validation 未通過"), false);
       return;
     }
     const config = currentPreviewConfig();
@@ -693,8 +693,8 @@
   }
 
   function renderGraphEdgeLayer() {
-    const maxX = Math.max(1500, ...workflow.nodes.map((item) => Number(item.x || 0) + GRAPH_NODE_WIDTH + 180));
-    const maxY = Math.max(1000, ...workflow.nodes.map((item) => Number(item.y || 0) + GRAPH_NODE_HEIGHT + 160));
+    const maxX = Math.max(GRAPH_NODE_WIDTH + 260, ...workflow.nodes.map((item) => Number(item.x || 0) + GRAPH_NODE_WIDTH + 180));
+    const maxY = Math.max(GRAPH_NODE_HEIGHT + 260, ...workflow.nodes.map((item) => Number(item.y || 0) + GRAPH_NODE_HEIGHT + 160));
     return `
       <svg class="graph-edge-layer" width="${Math.ceil(maxX)}" height="${Math.ceil(maxY)}" viewBox="0 0 ${Math.ceil(maxX)} ${Math.ceil(maxY)}" aria-hidden="true">
         ${workflow.edges.map((item) => {
@@ -841,8 +841,8 @@
     const canvas = document.querySelector("[data-graph-canvas]");
     const layer = canvas?.querySelector(".graph-edge-layer");
     if (!canvas || !layer) return;
-    const maxX = Math.max(1500, ...workflow.nodes.map((item) => Number(item.x || 0) + GRAPH_NODE_WIDTH + 180));
-    const maxY = Math.max(1000, ...workflow.nodes.map((item) => Number(item.y || 0) + GRAPH_NODE_HEIGHT + 160));
+    const maxX = Math.max(GRAPH_NODE_WIDTH + 260, ...workflow.nodes.map((item) => Number(item.x || 0) + GRAPH_NODE_WIDTH + 180));
+    const maxY = Math.max(GRAPH_NODE_HEIGHT + 260, ...workflow.nodes.map((item) => Number(item.y || 0) + GRAPH_NODE_HEIGHT + 160));
     layer.setAttribute("width", String(Math.ceil(maxX)));
     layer.setAttribute("height", String(Math.ceil(maxY)));
     layer.setAttribute("viewBox", `0 0 ${Math.ceil(maxX)} ${Math.ceil(maxY)}`);
@@ -903,6 +903,17 @@
     badge.className = `badge ${issues.length ? (hasError ? "err" : "warn") : "ok"}`;
     badge.textContent = issues.length ? (hasError ? "需修正" : "有提醒") : "可儲存";
     list.innerHTML = issues.length ? issues.map((item) => `<li class="${item.level}">${html(item.text)}</li>`).join("") : "<li>Graph validation passed。節點、edge、port 目前可執行。</li>";
+  }
+
+  function workflowValidationErrorSummary(issues, prefix = "Graph validation 未通過") {
+    const errors = Array.isArray(issues) ? issues.filter((item) => item && item.level === "err") : [];
+    if (!errors.length) return prefix;
+    const details = errors
+      .slice(0, 3)
+      .map((item) => String(item.text || "").trim())
+      .filter(Boolean);
+    const suffix = errors.length > details.length ? `；另有 ${errors.length - details.length} 項錯誤，詳見「策略檢查」` : "；詳見「策略檢查」";
+    return `${prefix}：${details.join("；")}${suffix}`;
   }
 
   function syncJson() {
@@ -989,7 +1000,7 @@
     if (saveBtn) {
       const errors = validateWorkflow().filter((item) => item.level === "err");
       if (errors.length) {
-        setStatus("Graph validation 未通過，請先修正紅色項目。", false);
+        setStatus(workflowValidationErrorSummary(errors), false);
         return;
       }
       localStorage.setItem(STORAGE_KEY, JSON.stringify(workflow));

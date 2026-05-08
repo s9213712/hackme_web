@@ -6,11 +6,13 @@ import os
 import sqlite3
 from pathlib import Path
 
+import pytest
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from flask import Flask, jsonify, make_response
 
 import routes.videos as video_routes
+from services.media.e2ee_streaming import _normalize_manifest, resolve_e2ee_chunk_response
 from services.media import streaming as media_streaming
 from routes.videos import register_video_routes
 from services.storage.cloud_drive import ensure_cloud_drive_attachment_schema
@@ -1025,6 +1027,10 @@ def test_shared_video_page_mentions_hls_js_fallback_and_fragment_loss(tmp_path):
     assert "showSharedPlaybackAction" in js
     assert "開始 E2EE 播放" in js
     assert "未按下播放前，不會主動要求密碼或開始解密。" in js
+    assert "#player-host { width:100%; margin-top:.8rem; }" in html
+    assert "video { height:auto; max-height:min(70vh, 560px); aspect-ratio:16 / 9; object-fit:contain; }" in html
+    assert "@media (max-width: 640px)" in html
+    assert "video { max-height:52vh; }" in html
 
 
 def test_shared_e2ee_stream_v2_manifest_and_chunk_routes_work_and_stay_off_hls(tmp_path):
@@ -1145,6 +1151,107 @@ def test_shared_e2ee_stream_v2_manifest_and_chunk_routes_work_and_stay_off_hls(t
     direct_manifest = owner_client.get(f"/api/videos/{video_id}/e2ee-stream-v2/manifest")
     assert direct_manifest.status_code == 200
     assert direct_manifest.get_json()["available"] is True
+
+
+def test_e2ee_stream_v2_manifest_rejects_bundle_size_mismatch():
+    manifest = {
+        "e2ee_stream_version": 2,
+        "chunk_size": 8,
+        "chunk_count": 2,
+        "content_type": "video/mp4",
+        "duration_hint": 1.0,
+        "chunks": [
+            {
+                "chunk_index": 0,
+                "nonce": "AAAAAAAAAAAAAAAA",
+                "ciphertext_offset": 0,
+                "ciphertext_size": 5,
+                "plaintext_offset": 0,
+                "plaintext_size": 4,
+                "ciphertext_sha256": "11" * 32,
+            },
+            {
+                "chunk_index": 1,
+                "nonce": "BBBBBBBBBBBBBBBB",
+                "ciphertext_offset": 5,
+                "ciphertext_size": 6,
+                "plaintext_offset": 4,
+                "plaintext_size": 5,
+                "ciphertext_sha256": "22" * 32,
+            },
+        ],
+    }
+
+    with pytest.raises(ValueError, match="bundle 大小與 chunk metadata 不一致"):
+        _normalize_manifest(manifest, bundle_size=10)
+
+
+def test_e2ee_stream_v2_chunk_route_reports_bundle_truncated_when_bundle_shrinks(tmp_path):
+    db_path = tmp_path / "shared-e2ee-stream-v2-truncated.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        _seed_uploaded_file(
+            conn,
+            storage_root,
+            file_id="e2ee-video",
+            owner_user_id=1,
+            filename="secret.mp4",
+            mime="video/mp4",
+            privacy_mode="e2ee",
+            payload=b"ciphertext-video",
+        )
+        _mark_file_as_e2ee(conn, "e2ee-video")
+        file_row = conn.execute("SELECT * FROM uploaded_files WHERE id='e2ee-video'").fetchone()
+        manifest = {
+            "e2ee_stream_version": 2,
+            "chunk_size": 8,
+            "chunk_count": 2,
+            "content_type": "video/mp4",
+            "duration_hint": 1.0,
+            "chunks": [
+                {
+                    "chunk_index": 0,
+                    "nonce": "AAAAAAAAAAAAAAAA",
+                    "ciphertext_offset": 0,
+                    "ciphertext_size": 4,
+                    "plaintext_offset": 0,
+                    "plaintext_size": 4,
+                    "ciphertext_sha256": "11" * 32,
+                },
+                {
+                    "chunk_index": 1,
+                    "nonce": "BBBBBBBBBBBBBBBB",
+                    "ciphertext_offset": 4,
+                    "ciphertext_size": 4,
+                    "plaintext_offset": 4,
+                    "plaintext_size": 4,
+                    "ciphertext_sha256": "22" * 32,
+                },
+            ],
+        }
+        video_routes.upsert_e2ee_stream_v2_asset(
+            conn,
+            file_row=file_row,
+            storage_root=storage_root,
+            manifest_payload=manifest,
+            bundle_bytes=b"ABCDEFGH",
+        )
+        conn.commit()
+        (storage_root / "e2ee_stream_v2" / "e2ee-video" / "bundle.bin").write_bytes(b"ABCDEF")
+        payload, error = resolve_e2ee_chunk_response(
+            conn,
+            file_row=file_row,
+            storage_root=storage_root,
+            chunk_index=1,
+        )
+        assert payload is None
+        assert error["error"] == "bundle_truncated"
+    finally:
+        conn.close()
 
 
 def test_shared_e2ee_stream_v2_simulation_can_decrypt_chunked_plaintext(tmp_path):

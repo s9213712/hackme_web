@@ -107,6 +107,14 @@ def format_root_security_notification(event_type, ip, target_user=None, detail="
     return f"安全警訊：{label}", "\n".join(lines)
 
 
+def _should_create_root_notification(event_type, detail=""):
+    normalized_type = normalize_security_event_type(event_type)
+    if normalized_type != "session_revoked":
+        return normalized_type in ROOT_NOTIFICATION_EVENT_TYPES
+    detail_text = str(detail or "").strip()
+    return detail_text not in {"idle_timeout", "single_session_logout", "user_sessions_revoked"}
+
+
 def configure_security_events_service(*, get_db, get_system_settings, audit, is_ip_blocking_enabled):
     _STATE.update({
         "get_db": get_db,
@@ -194,7 +202,7 @@ def record_security_event(event_type, ip, target_user=None, detail="", created_a
                 created_at or datetime.now().isoformat(),
             ),
         )
-        if normalized_type in ROOT_NOTIFICATION_EVENT_TYPES:
+        if _should_create_root_notification(normalized_type, detail):
             title, body = format_root_security_notification(normalized_type, ip, target_user=target_user, detail=detail)
             create_root_notification_if_enabled(
                 conn,

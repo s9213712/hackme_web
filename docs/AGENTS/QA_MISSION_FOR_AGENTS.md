@@ -389,7 +389,7 @@ python3 scripts/prepush/pre_push_checks.py --full --keep-temp
 ### 2. 全量 pytest
 
 ```bash
-PYTHONPATH=. python3 -m pytest -q tests
+scripts/testing/pytest_in_tmp.sh -q tests
 ```
 
 ### 3. 分領域 pytest
@@ -397,7 +397,7 @@ PYTHONPATH=. python3 -m pytest -q tests
 #### 認證 / 帳號 / 權限
 
 ```bash
-PYTHONPATH=. python3 -m pytest -q \
+scripts/testing/pytest_in_tmp.sh -q \
   tests/security/auth/test_auth_csrf_safe.py \
   tests/security/auth/test_access_controls.py \
   tests/account/auth/test_account_lockout.py \
@@ -413,7 +413,7 @@ PYTHONPATH=. python3 -m pytest -q \
 #### 社群 / 聊天 / 檢舉 / 通知
 
 ```bash
-PYTHONPATH=. python3 -m pytest -q \
+scripts/testing/pytest_in_tmp.sh -q \
   tests/community/test_chat_permissions.py \
   tests/community/test_dm_routes.py \
   tests/community/test_community_permissions.py \
@@ -426,7 +426,7 @@ PYTHONPATH=. python3 -m pytest -q \
 #### Cloud Drive / 上傳 / 相簿 / 影片 / ComfyUI
 
 ```bash
-PYTHONPATH=. python3 -m pytest -q \
+scripts/testing/pytest_in_tmp.sh -q \
   tests/storage/test_upload_security.py \
   tests/storage/test_cloud_drive_attachments.py \
   tests/storage/test_remote_downloads.py \
@@ -449,7 +449,7 @@ PYTHONPATH=. python3 -m pytest -q \
 #### PointsChain / 健康中心 / Snapshot / 交易
 
 ```bash
-PYTHONPATH=. python3 -m pytest -q \
+scripts/testing/pytest_in_tmp.sh -q \
   tests/points/test_points_chain.py \
   tests/security/integrity/test_health_center.py \
   tests/security/integrity/test_integrity_guard.py \
@@ -465,7 +465,7 @@ PYTHONPATH=. python3 -m pytest -q \
 #### 前端 / 版面 / RWD / 互動回歸
 
 ```bash
-PYTHONPATH=. python3 -m pytest -q \
+scripts/testing/pytest_in_tmp.sh -q \
   tests/frontend \
   tests/trading/workflow/test_trading_workflow_editor_ui.py
 ```
@@ -653,7 +653,7 @@ qa_api GET /api/root/points/chain/verify
 ```bash
 PYTHONPATH=. scripts/security/pentest/run_pentest.sh --target "$QA_BASE_URL" --only server-mode-v2-live-http
 PYTHONPATH=. python3 scripts/security/pentest/trading_stress_pentest.py --base-url "$QA_BASE_URL" --root-password 'RootQa123!' --mode restore_consistency
-PYTHONPATH=. python3 -m pytest -q tests/test_snapshots.py
+scripts/testing/pytest_in_tmp.sh -q tests/test_snapshots.py
 ```
 
 ### Cloud Drive / 相簿 / 影片

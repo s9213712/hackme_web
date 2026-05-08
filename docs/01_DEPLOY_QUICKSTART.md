@@ -22,24 +22,22 @@
 
 ### 最短部署流程
 
-從 repo 根目錄執行：
+先檢查 runtime 環境：
 
 ```bash
-./one_click_setup.sh
+python3 server.py --doctor
 ```
 
-若你已經知道要接本地 ComfyUI 與 root-only Civitai 搜尋/下載，可直接：
+若 doctor 尚未通過，請先建立 runtime 目錄與部署環境；若你只是要開發，改用：
 
 ```bash
-./one_click_setup.sh --with-comfyui http://127.0.0.1:8192 --with-civitai-key '<CIVITAI_API_KEY>'
+./test_for_develop.sh --port 50785
 ```
 
-如果你想手動方式：
+如果你要手動啟動目前工作樹：
 
 ```bash
-python3 -m venv .venv
-. .venv/bin/activate
-python3 -m pip install -r requirements.txt
+python3 server.py --doctor
 python3 server.py
 ```
 
@@ -47,7 +45,7 @@ python3 server.py
 
 1. 先看 server console 印出的實際 URL，不要先假設一定是 HTTP 或 HTTPS。
 2. 一般情況：
-   - `./one_click_setup.sh` / production wizard：依設定可能是 HTTP 或 HTTPS
+   - `./test_for_develop.sh`：通常會是 `https://127.0.0.1:5000/`
    - `python3 server.py`：本機開發模式通常會自動準備本地 TLS，因此多半是
      `https://127.0.0.1:5000/`
 3. 若不確定，直接探測：
@@ -91,14 +89,9 @@ done
 
 ## 原理
 
-- `./one_click_setup.sh` 是推薦入口，會幫你建立 `.venv`、安裝 requirements、
-  視需要啟動部署精靈，並初始化 DB / 啟動服務。
-- 若 `.venv` 已備妥、你只想在隔離環境做快速檢查，可用：
-  `./one_click_setup.sh --check-only --skip-install`
-- `./one_click_setup.sh --check` 現在除了基本 env/路徑檢查，還會提醒你目前是否缺：
-  - `ffmpeg` / `ffprobe`（影音 HLS 衍生檔）
-  - `CIVITAI_API_KEY`（root-only Civitai 搜尋/下載）
-  這些不會阻擋一般部署，只是能力提示。
+- `python3 server.py --doctor` 會先檢查 runtime 目錄是否存在且可寫，不會靜默補建。
+- `./test_for_develop.sh` 會把 repo 複製到 `/tmp`，並關掉妨礙開發的安全限制。
+- 正式部署的 env、runtime、依賴與權限仍應由部署者自己明確準備。
 - `BT/magnet` 遠端下載需要 `aria2c`，upload malware 掃描若要啟用則需
   `clamscan` 或 `clamdscan`；完整依賴請看
   [SYSTEM_DEPENDENCIES.md](SYSTEM_DEPENDENCIES.md)。
@@ -108,8 +101,8 @@ done
 
 ## 失敗情境與提示
 
-- `./one_click_setup.sh` 找不到或權限不足：
-  請在 repo 根目錄執行，並確認檔案可執行。
+- `python3 server.py --doctor` 失敗：
+  代表 runtime 環境尚未準備完成；先補齊目錄與權限。
 - 能啟動但頁面打不開：
   先看 bind host / port 是否被占用，再看
   [12_TROUBLESHOOTING.md](12_TROUBLESHOOTING.md)。

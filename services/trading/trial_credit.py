@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime
 
 from services.server_mode.routing import resolve_table
+from services.trading.orders import _apply_simulated_slippage
 from services.trading.accounting.trial_credit import (
     trial_allocate_sell_result,
     trial_credit_expires_at,
@@ -422,6 +423,17 @@ def reclaim_trial_credit(service, conn, user_id, *, actor=None, reason="TRIAL_CR
         price_source = planned_sell["price_source"]
         order_uuid = str(uuid.uuid4())
         now = _now()
+        # Forced sell is a market-side liquidation; apply the same simulated
+        # slippage profile market orders go through (see services/trading/orders.py
+        # `_apply_simulated_slippage`). When the policy is disabled this is a no-op.
+        settings_payload = service._settings_payload(conn)
+        adjusted_price, slippage_meta = _apply_simulated_slippage(
+            settings=settings_payload,
+            order_type="market",
+            side="sell",
+            execution_price=current_price,
+            quantity_units=sell_units,
+        )
         conn.execute(
             f"""
             UPDATE {positions_table}
@@ -440,7 +452,7 @@ def reclaim_trial_credit(service, conn, user_id, *, actor=None, reason="TRIAL_CR
             ) VALUES (?, ?, ?, 'sell', 'market', 'trial_mixed', 'house_counterparty',
                 ?, NULL, ?, 'open', 0, 0, 0, 0, 0, ?, ?, ?)
             """,
-            (order_uuid, int(user_id), trial_pos["market_symbol"], sell_units, current_price, reason, now, now),
+            (order_uuid, int(user_id), trial_pos["market_symbol"], sell_units, adjusted_price, reason, now, now),
         )
         order = conn.execute(f"SELECT * FROM {orders_table} WHERE id=?", (cur.lastrowid,)).fetchone()
         fill = service._execute_order(conn, order, market, actor=actor, ctx=route_ctx)
@@ -453,7 +465,12 @@ def reclaim_trial_credit(service, conn, user_id, *, actor=None, reason="TRIAL_CR
             order_id=order["id"],
             market_symbol=market["symbol"],
             severity="warning",
-            metadata={"fill_id": fill["id"], "price_source": price_source, "reason": reason},
+            metadata={
+                "fill_id": fill["id"],
+                "price_source": price_source,
+                "reason": reason,
+                "simulated_slippage": slippage_meta or {},
+            },
         )
     final = service._trial_credit_row(conn, user_id)
     reclaimed_after_sell = int(final["available_points"] or 0)

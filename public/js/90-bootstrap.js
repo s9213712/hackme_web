@@ -254,6 +254,7 @@ function bindUiEvents() {
   if (tabReports)  tabReports.addEventListener("click",   () => switchAdminTab("reports"));
   if (liBtn)       liBtn.addEventListener("click",        doLogin);
   if (regBtn)      regBtn.addEventListener("click",       doRegister);
+  if (typeof bindRegisterFieldHelpers === "function") bindRegisterFieldHelpers();
   if (typeof bindAuthRecoveryControls === "function") bindAuthRecoveryControls();
   else {
     if (recoveryToggle) recoveryToggle.addEventListener("click", toggleRecoveryPanel);

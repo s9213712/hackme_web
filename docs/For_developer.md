@@ -13,7 +13,7 @@ deployer.
 
 Related technical references:
 
-- [ENCRYPTION_RUNTIME_BOUNDARY.md](runtime/ENCRYPTION_RUNTIME_BOUNDARY.md)
+- [ENCRYPTION_RUNTIME_BOUNDARY.md](ops_boundaries/ENCRYPTION_RUNTIME_BOUNDARY.md)
 - [EXTERNAL_API_COMMAND_MATRIX.md](EXTERNAL_API_COMMAND_MATRIX.md)
 
 ## Release and Schema
@@ -874,7 +874,7 @@ The hook bumps `APP_RELEASE_ID`, amends the tip commit, runs `--clean --yes
 Focused test run:
 
 ```bash
-PYTHONPATH=. python3 -m pytest -q tests
+scripts/testing/pytest_in_tmp.sh -q tests
 ```
 
 Functional smoke runner:

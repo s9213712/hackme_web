@@ -4,6 +4,7 @@ import zipfile
 import pytest
 
 from services.security.upload_security import (
+    canonical_privacy_mode,
     check_magic_mime_safety,
     check_office_macro_safety,
     check_zip_archive_safety,
@@ -89,6 +90,24 @@ def test_upload_security_schema_migrates_old_file_type_policy_columns():
         assert row["server_readable_allowed"] == 0
         decision = evaluate_upload_policy(conn, filename="note.txt", privacy_mode="server_encrypted", user={"effective_level": "vip"})
         assert decision.allowed is False
+    finally:
+        conn.close()
+
+
+def test_canonical_privacy_mode_preserves_unknown_mode_for_ui_echo():
+    assert canonical_privacy_mode("public") == "public"
+
+
+def test_evaluate_upload_policy_lists_supported_privacy_modes_for_invalid_input():
+    conn = _conn()
+    try:
+        with pytest.raises(ValueError, match=r"expected one of .*standard_plain.*server_encrypted.*e2ee"):
+            evaluate_upload_policy(
+                conn,
+                filename="note.txt",
+                privacy_mode="public",
+                user={"effective_level": "vip"},
+            )
     finally:
         conn.close()
 
@@ -753,6 +772,28 @@ def test_scan_uploaded_file_records_image_reencode_result(tmp_path):
         assert row["plaintext_sha256"]
     finally:
         conn.close()
+
+
+def test_image_reencode_uses_format_whitelist_and_explicit_pixel_limit(tmp_path, monkeypatch):
+    pytest.importorskip("PIL")
+    from PIL import Image
+
+    image_path = tmp_path / "avatar.jpg"
+    Image.new("RGB", (8, 8), color=(10, 20, 30)).save(image_path, format="JPEG")
+
+    seen = {}
+    real_open = Image.open
+
+    def wrapped_open(*args, **kwargs):
+        seen["formats"] = kwargs.get("formats")
+        return real_open(*args, **kwargs)
+
+    monkeypatch.setattr(Image, "open", wrapped_open)
+    result = reencode_image_strip_metadata(image_path, filename="avatar.jpg", max_pixels=12_345)
+
+    assert result["ok"] is True
+    assert seen["formats"] == ["JPEG", "PNG", "GIF", "WEBP"]
+    assert Image.MAX_IMAGE_PIXELS == 12_345
 
 
 def test_scan_uploaded_file_records_clean_clamav_result(tmp_path, monkeypatch):

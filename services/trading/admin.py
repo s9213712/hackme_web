@@ -135,6 +135,51 @@ def settings_payload(service, conn):
         "price_fusion_max_midpoint_deviation_percent": service.DEFAULT_PRICE_FUSION_MAX_MIDPOINT_DEVIATION_PERCENT,
         "price_fusion_min_side_balance_ratio_percent": round(service.DEFAULT_PRICE_FUSION_MIN_SIDE_BALANCE_RATIO * 100.0, 2),
         "price_fusion_min_provider_count": raw_int_setting(raw, "trading.price_fusion_min_provider_count", DEFAULT_PRICE_FUSION_MIN_PROVIDER_COUNT, name="price_fusion_min_provider_count", minimum=1, maximum=len(WEIGHTED_PRICE_PROVIDERS)),
+        "price_fusion_trade_min_provider_count": raw_int_setting(
+            raw,
+            "trading.price_fusion_trade_min_provider_count",
+            2,
+            name="price_fusion_trade_min_provider_count",
+            minimum=1,
+            maximum=len(WEIGHTED_PRICE_PROVIDERS),
+        ),
+        "warning_language": raw_choice_setting(
+            raw,
+            "trading.warning_language",
+            "zh-TW",
+            allowed={"zh-TW", "en"},
+        ),
+        "price_degrade_pause_market_orders": raw_bool_setting(raw, "trading.price_degrade_pause_market_orders", default=False),
+        "price_degrade_pause_bots": raw_bool_setting(raw, "trading.price_degrade_pause_bots", default=False),
+        "price_degrade_pause_borrowing": raw_bool_setting(raw, "trading.price_degrade_pause_borrowing", default=False),
+        "simulated_slippage_enabled": raw_bool_setting(raw, "trading.simulated_slippage_enabled", default=False),
+        "simulated_slippage_base_basis_points": raw_float_setting(
+            raw,
+            "trading.simulated_slippage_base_basis_points",
+            0,
+            name="simulated_slippage_base_basis_points",
+            minimum=0,
+            maximum=10000,
+            legacy_storage_key="trading.simulated_slippage_base_" + "bp" + "s",
+        ),
+        "simulated_slippage_size_basis_points_per_10k_notional": raw_float_setting(
+            raw,
+            "trading.simulated_slippage_size_basis_points_per_10k_notional",
+            0,
+            name="simulated_slippage_size_basis_points_per_10k_notional",
+            minimum=0,
+            maximum=10000,
+            legacy_storage_key="trading.simulated_slippage_size_" + "bp" + "s_per_10k_notional",
+        ),
+        "simulated_slippage_max_basis_points": raw_float_setting(
+            raw,
+            "trading.simulated_slippage_max_basis_points",
+            0,
+            name="simulated_slippage_max_basis_points",
+            minimum=0,
+            maximum=10000,
+            legacy_storage_key="trading.simulated_slippage_max_" + "bp" + "s",
+        ),
         "price_stream_ws_enabled": raw_bool_setting(raw, "trading.price_stream_ws_enabled", default=True),
         "price_stream_ws_stale_seconds": raw_int_setting(raw, "trading.price_stream_ws_stale_seconds", service.DEFAULT_PRICE_STREAM_WS_STALE_SECONDS, name="price_stream_ws_stale_seconds", minimum=1, maximum=120),
         "btc_trade_enabled": raw_bool_setting(raw, "trading.btc_trade_enabled", default=False),
@@ -553,6 +598,46 @@ def update_root_settings(service, *, actor, settings=None, markets=None):
                 ("trading.price_fusion_min_provider_count", value, now, service._actor_id(actor)),
             )
             setting_changes["trading.price_fusion_min_provider_count"] = value
+        if "price_fusion_trade_min_provider_count" in settings:
+            value = int_input_text(settings, "price_fusion_trade_min_provider_count", minimum=1, maximum=len(WEIGHTED_PRICE_PROVIDERS))
+            conn.execute(
+                "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                ("trading.price_fusion_trade_min_provider_count", value, now, service._actor_id(actor)),
+            )
+            setting_changes["trading.price_fusion_trade_min_provider_count"] = value
+        if "warning_language" in settings:
+            value = choice_input_value(
+                settings,
+                "warning_language",
+                allowed={"zh-TW", "en"},
+                error_message="warning_language must be zh-TW or en",
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                ("trading.warning_language", value, now, service._actor_id(actor)),
+            )
+            setting_changes["trading.warning_language"] = value
+        if "simulated_slippage_base_basis_points" in settings:
+            value = float_input_text(settings, "simulated_slippage_base_basis_points", minimum=0, maximum=10000)
+            conn.execute(
+                "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                ("trading.simulated_slippage_base_basis_points", value, now, service._actor_id(actor)),
+            )
+            setting_changes["trading.simulated_slippage_base_basis_points"] = value
+        if "simulated_slippage_size_basis_points_per_10k_notional" in settings:
+            value = float_input_text(settings, "simulated_slippage_size_basis_points_per_10k_notional", minimum=0, maximum=10000)
+            conn.execute(
+                "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                ("trading.simulated_slippage_size_basis_points_per_10k_notional", value, now, service._actor_id(actor)),
+            )
+            setting_changes["trading.simulated_slippage_size_basis_points_per_10k_notional"] = value
+        if "simulated_slippage_max_basis_points" in settings:
+            value = float_input_text(settings, "simulated_slippage_max_basis_points", minimum=0, maximum=10000)
+            conn.execute(
+                "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                ("trading.simulated_slippage_max_basis_points", value, now, service._actor_id(actor)),
+            )
+            setting_changes["trading.simulated_slippage_max_basis_points"] = value
         if "price_stream_ws_stale_seconds" in settings:
             value = int_input_text(settings, "price_stream_ws_stale_seconds", minimum=1, maximum=120)
             conn.execute(

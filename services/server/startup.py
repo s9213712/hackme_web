@@ -23,11 +23,33 @@ def _int_env(name, default, *, minimum=None, maximum=None):
     return value
 
 
-def start_daily_snapshot_worker(*, snapshot_service, get_system_settings, save_settings, audit):
+def _feature_flag_enabled(get_system_settings, key, *, default=False):
+    if get_system_settings is None:
+        return default
+    try:
+        settings = get_system_settings() or {}
+    except Exception:
+        return default
+    value = settings.get(key, default)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _wait_or_stop(shutdown_event, seconds):
+    if shutdown_event is not None:
+        return shutdown_event.wait(max(0, float(seconds or 0)))
+    time.sleep(seconds)
+    return False
+
+
+def start_daily_snapshot_worker(*, snapshot_service, get_system_settings, save_settings, audit, shutdown_event=None):
     interval = _int_env("HTML_LEARNING_SNAPSHOT_CHECK_INTERVAL_SECONDS", 3600, minimum=60)
 
     def loop():
         while True:
+            if shutdown_event is not None and shutdown_event.is_set():
+                break
             try:
                 result = snapshot_service.create_daily_snapshot_if_due(
                     actor={"id": 0, "username": "system"},
@@ -44,18 +66,21 @@ def start_daily_snapshot_worker(*, snapshot_service, get_system_settings, save_s
                     )
             except Exception as exc:
                 audit("DAILY_SNAPSHOT_FAILED", "0.0.0.0", user="system", success=False, detail=str(exc))
-            time.sleep(interval)
+            if _wait_or_stop(shutdown_event, interval):
+                break
 
     worker = threading.Thread(target=loop, name="daily-snapshot-worker", daemon=True)
     worker.start()
     return worker
 
 
-def start_storage_maintenance_worker(*, get_db, run_storage_maintenance_if_due, get_system_settings, save_settings, audit):
+def start_storage_maintenance_worker(*, get_db, run_storage_maintenance_if_due, get_system_settings, save_settings, audit, shutdown_event=None):
     interval = _int_env("HTML_LEARNING_STORAGE_MAINTENANCE_CHECK_INTERVAL_SECONDS", 3600, minimum=60)
 
     def loop():
         while True:
+            if shutdown_event is not None and shutdown_event.is_set():
+                break
             conn = None
             try:
                 conn = get_db()
@@ -83,7 +108,8 @@ def start_storage_maintenance_worker(*, get_db, run_storage_maintenance_if_due, 
             finally:
                 if conn:
                     conn.close()
-            time.sleep(interval)
+            if _wait_or_stop(shutdown_event, interval):
+                break
 
     worker = threading.Thread(target=loop, name="storage-maintenance-worker", daemon=True)
     worker.start()
@@ -96,6 +122,8 @@ def start_points_chain_block_worker(
     audit,
     default_block_ledger_threshold,
     default_block_max_interval_seconds,
+    get_system_settings=None,
+    shutdown_event=None,
 ):
     check_interval = _int_env("HTML_LEARNING_POINTS_BLOCK_CHECK_INTERVAL_SECONDS", 15, minimum=5)
     ledger_threshold = _int_env(
@@ -112,7 +140,13 @@ def start_points_chain_block_worker(
     def loop():
         actor = {"username": "system", "role": "system"}
         while True:
+            if shutdown_event is not None and shutdown_event.is_set():
+                break
             try:
+                if not _feature_flag_enabled(get_system_settings, "feature_economy_enabled", default=False):
+                    if _wait_or_stop(shutdown_event, check_interval):
+                        break
+                    continue
                 backup_result = points_service.create_scheduled_backup_if_due()
                 if backup_result.get("created"):
                     audit(
@@ -147,20 +181,29 @@ def start_points_chain_block_worker(
                     )
             except Exception as exc:
                 audit("POINTS_AUTO_BLOCK_FAILED", "0.0.0.0", user="system", success=False, detail=str(exc))
-            time.sleep(check_interval)
+            if _wait_or_stop(shutdown_event, check_interval):
+                break
 
     worker = threading.Thread(target=loop, name="points-chain-block-worker", daemon=True)
     worker.start()
     return worker
 
 
-def start_trading_liquidation_worker(*, trading_service, audit):
+def start_trading_liquidation_worker(*, trading_service, audit, get_system_settings=None, shutdown_event=None):
     check_interval = _int_env("HTML_LEARNING_TRADING_LIQUIDATION_CHECK_INTERVAL_SECONDS", 30, minimum=10)
 
     def loop():
         actor = {"username": "system", "role": "system"}
         while True:
+            if shutdown_event is not None and shutdown_event.is_set():
+                break
             try:
+                economy_enabled = _feature_flag_enabled(get_system_settings, "feature_economy_enabled", default=False)
+                trading_enabled = _feature_flag_enabled(get_system_settings, "feature_trading_enabled", default=False)
+                if not (economy_enabled and trading_enabled):
+                    if _wait_or_stop(shutdown_event, check_interval):
+                        break
+                    continue
                 match_result = trading_service.match_open_limit_orders(actor=actor, limit=200)
                 matched = match_result.get("matched") or []
                 match_errors = match_result.get("errors") or []
@@ -201,7 +244,8 @@ def start_trading_liquidation_worker(*, trading_service, audit):
                     )
             except Exception as exc:
                 audit("TRADING_AUTO_LIQUIDATION_FAILED", "0.0.0.0", user="system", success=False, detail=str(exc))
-            time.sleep(check_interval)
+            if _wait_or_stop(shutdown_event, check_interval):
+                break
 
     worker = threading.Thread(target=loop, name="trading-liquidation-worker", daemon=True)
     worker.start()
@@ -263,19 +307,28 @@ def measure_backtest_capacity_if_needed(*, trading_service, audit):
     return worker
 
 
-def start_trading_bot_worker(*, trading_service, audit):
+def start_trading_bot_worker(*, trading_service, audit, get_system_settings=None, shutdown_event=None):
     fallback_interval = _int_env("HTML_LEARNING_TRADING_BOT_SCAN_INTERVAL_SECONDS", 30, minimum=10, maximum=3600)
 
     def loop():
         actor = {"username": "system", "role": "system"}
         last_audit_started_at = 0.0
         while True:
+            if shutdown_event is not None and shutdown_event.is_set():
+                break
             interval = fallback_interval
             try:
+                economy_enabled = _feature_flag_enabled(get_system_settings, "feature_economy_enabled", default=False)
+                trading_enabled = _feature_flag_enabled(get_system_settings, "feature_trading_enabled", default=False)
+                if not (economy_enabled and trading_enabled):
+                    if _wait_or_stop(shutdown_event, interval):
+                        break
+                    continue
                 settings = (trading_service.get_root_settings().get("settings") or {})
                 interval = max(10, min(int(settings.get("bot_auto_scan_interval_seconds") or fallback_interval), 3600))
                 if not settings.get("enabled", True) or not settings.get("bot_auto_scan_enabled", True):
-                    time.sleep(interval)
+                    if _wait_or_stop(shutdown_event, interval):
+                        break
                     continue
                 limit = max(1, min(int(settings.get("bot_auto_scan_limit") or 50), 200))
                 result = trading_service.run_due_trading_bots(actor=actor, limit=limit)
@@ -315,7 +368,8 @@ def start_trading_bot_worker(*, trading_service, audit):
                         )
             except Exception as exc:
                 audit("TRADING_BOT_AUTO_SCAN_FAILED", "0.0.0.0", user="system", success=False, detail=str(exc))
-            time.sleep(interval)
+            if _wait_or_stop(shutdown_event, interval):
+                break
 
     worker = threading.Thread(target=loop, name="trading-bot-worker", daemon=True)
     worker.start()
@@ -349,6 +403,7 @@ def run_server_main(
     server_bind_state,
     app,
     measure_backtest_capacity_first_boot=None,
+    shutdown_event=None,
 ):
     install_runtime_output_capture(server_log_path)
     init_db(**init_db_kwargs)
@@ -418,11 +473,13 @@ def run_server_main(
                     )
                 except Exception:
                     pass
-    start_daily_snapshot_worker()
-    start_storage_maintenance_worker()
-    start_points_chain_block_worker()
-    start_trading_liquidation_worker()
-    start_trading_bot_worker()
+    workers = [
+        start_daily_snapshot_worker(shutdown_event=shutdown_event),
+        start_storage_maintenance_worker(shutdown_event=shutdown_event),
+        start_points_chain_block_worker(shutdown_event=shutdown_event),
+        start_trading_liquidation_worker(shutdown_event=shutdown_event),
+        start_trading_bot_worker(shutdown_event=shutdown_event),
+    ]
     if measure_backtest_capacity_first_boot is not None:
         try:
             measure_backtest_capacity_first_boot()
@@ -450,4 +507,13 @@ def run_server_main(
     kwargs = {"host": host, "port": port, "debug": False}
     if has_ssl:
         kwargs["ssl_context"] = (cert_file, key_file)
-    app.run(**kwargs)
+    try:
+        app.run(**kwargs)
+    except SystemExit:
+        pass
+    finally:
+        if shutdown_event is not None:
+            shutdown_event.set()
+            for worker in workers:
+                if worker and worker.is_alive():
+                    worker.join(timeout=5.0)

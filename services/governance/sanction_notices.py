@@ -38,6 +38,15 @@ def ensure_admin_sanction_appeal_schema(conn):
     if "points_ledger_uuid" not in cols:
         conn.execute("ALTER TABLE admin_sanction_appeal_contexts ADD COLUMN points_ledger_uuid TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_admin_sanction_context_user ON admin_sanction_appeal_contexts(user_id, created_at)")
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_admin_sanction_appeal_contexts_no_delete
+        BEFORE DELETE ON admin_sanction_appeal_contexts
+        BEGIN
+            SELECT RAISE(ABORT, 'sanction appeal contexts are immutable; mark withdrawn instead');
+        END;
+        """
+    )
 
 
 def _next_governance_notice_violation_id(conn):

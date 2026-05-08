@@ -6,7 +6,7 @@ from datetime import datetime
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_RUNTIME_ROOT = Path("/tmp/hackme_web_runtime")
+DEFAULT_RUNTIME_ROOT = REPO_ROOT / "runtime"
 
 
 def runtime_root() -> Path:

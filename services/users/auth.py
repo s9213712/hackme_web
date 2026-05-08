@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from functools import wraps
 
 import argon2
-from flask import has_request_context, jsonify, make_response, request
+from flask import current_app, has_request_context, jsonify, make_response, request
 
 from services.security.events import record_security_event
 
@@ -101,6 +101,31 @@ def _request_ip():
         except Exception:
             pass
     return request.remote_addr or "-"
+
+
+def _request_user_agent():
+    if not has_request_context():
+        return ""
+    try:
+        return str(request.headers.get("User-Agent") or "")
+    except Exception:
+        return ""
+
+
+def _read_bool_setting(conn, key, default=False):
+    try:
+        row = conn.execute("SELECT value FROM system_settings WHERE key=?", (key,)).fetchone()
+    except Exception:
+        return default
+    value = row["value"] if row and "value" in row.keys() else (row[0] if row else default)
+    if isinstance(value, bool):
+        return value
+    normalized = str(value or "").strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 def _record_csrf_failure(reason, username="-"):
@@ -321,6 +346,25 @@ def delete_csrf_tokens_for_username(username):
         conn.close()
 
 
+def _rotate_authenticated_csrf(response, csrf_tok, username):
+    resp = make_response(response)
+    if resp.status_code >= 400 or not csrf_tok or not username:
+        return resp
+    consume_csrf_token(csrf_tok, username)
+    new_csrf = make_csrf_token()
+    store_csrf_token(new_csrf, username)
+    resp.set_cookie(
+        "csrf_token",
+        new_csrf,
+        max_age=int(_STATE.get("csrf_token_ttl") or CSRF_TOKEN_TTL),
+        httponly=False,
+        samesite=current_app.config.get("SESSION_COOKIE_SAMESITE", "Lax"),
+        secure=bool(current_app.config.get("SESSION_COOKIE_SECURE", False)),
+        path="/",
+    )
+    return resp
+
+
 def require_csrf(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -366,7 +410,9 @@ def require_csrf(f):
                 csrf_owner = body_username
 
         response = f(*args, **kwargs)
-        if not user and csrf_tok:
+        if user:
+            response = _rotate_authenticated_csrf(response, csrf_tok, user)
+        elif csrf_tok:
             consume_csrf_token(csrf_tok, csrf_owner)
         return response
     return decorated
@@ -396,7 +442,9 @@ def require_csrf_safe(f):
         csrf_tok = get_request_csrf_token()
         if not verify_csrf_token(csrf_tok, user):
             return csrf_invalid_response("invalid_safe", user)
-        return f(*args, **kwargs)
+        response = f(*args, **kwargs)
+        response = _rotate_authenticated_csrf(response, csrf_tok, user)
+        return response
     return decorated
 
 
@@ -445,7 +493,7 @@ def db_save_session(user_id, token, ip, ua):
     conn.close()
 
 
-def db_delete_session(token):
+def db_delete_session(token, *, notify_security_event=False, detail="single_session_logout"):
     conn = _STATE["get_db"]()
     try:
         conn.execute(
@@ -453,7 +501,8 @@ def db_delete_session(token):
             (datetime.now().isoformat(), _hash_token(token))
         )
         conn.commit()
-        record_security_event("session_revoked", _request_ip(), detail="single_session_logout")
+        if notify_security_event:
+            record_security_event("session_revoked", _request_ip(), detail=detail)
     finally:
         conn.close()
 
@@ -495,7 +544,7 @@ def db_get_user_from_token(token):
             session_cols = set()
         session_epoch_expr = "s.session_epoch" if "session_epoch" in session_cols else "0"
         row = conn.execute(
-            f"SELECT s.id, s.last_seen, COALESCE({session_epoch_expr}, 0) AS session_epoch, u.username FROM sessions s "
+            f"SELECT s.id, s.last_seen, s.ip_address, s.user_agent, COALESCE({session_epoch_expr}, 0) AS session_epoch, u.username FROM sessions s "
             "JOIN users u ON u.id=s.user_id "
             "WHERE s.token_hash=? AND s.expires_at>? AND COALESCE(s.is_revoked, 0)=0 "
             "AND u.status='active'",
@@ -515,6 +564,37 @@ def db_get_user_from_token(token):
                 conn.rollback()
             record_security_event("session_revoked", "-", target_user=row["username"], detail="security_epoch_rotated")
             return None
+
+        stored_ip = str(row["ip_address"] or "").strip()
+        current_ip = _request_ip()
+        if stored_ip and current_ip and stored_ip != current_ip:
+            record_security_event(
+                "session_ip_mismatch",
+                current_ip,
+                target_user=row["username"],
+                detail=f"stored={stored_ip}",
+            )
+            if _read_bool_setting(conn, "session_strict_ip_binding", default=False):
+                try:
+                    conn.execute(
+                        "UPDATE sessions SET is_revoked=1, revoked_at=? WHERE id=?",
+                        (now_iso, row["id"])
+                    )
+                    conn.commit()
+                except sqlite3.OperationalError:
+                    conn.rollback()
+                record_security_event("session_revoked", current_ip, target_user=row["username"], detail=f"strict_ip_binding stored={stored_ip}")
+                return None
+
+        stored_ua = str(row["user_agent"] or "").strip()
+        current_ua = _request_user_agent().strip()
+        if stored_ua and current_ua and stored_ua != current_ua:
+            record_security_event(
+                "session_user_agent_mismatch",
+                current_ip or "-",
+                target_user=row["username"],
+                detail=f"stored={stored_ua[:120]},current={current_ua[:120]}",
+            )
 
         last_seen = row["last_seen"]
         idle_seconds = 0

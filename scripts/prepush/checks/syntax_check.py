@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import py_compile
 from pathlib import Path
 
 from scripts.prepush.context import PrepushContext
@@ -29,9 +28,12 @@ def run(ctx: PrepushContext) -> CheckResult:
     for path in iter_python_files(ctx.repo_root):
         count += 1
         try:
-            py_compile.compile(str(path), doraise=True)
-        except py_compile.PyCompileError as exc:
-            failures.append({"file": ctx.relpath(path), "error": str(exc.exc_value)})
+            source = path.read_text(encoding="utf-8")
+            compile(source, str(path), "exec")
+        except SyntaxError as exc:
+            failures.append({"file": ctx.relpath(path), "error": str(exc)})
+        except UnicodeDecodeError as exc:
+            failures.append({"file": ctx.relpath(path), "error": f"encoding error: {exc}"})
     if failures:
         return CheckResult.fail(
             "python syntax",

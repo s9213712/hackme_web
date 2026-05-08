@@ -41,7 +41,7 @@
 - [ ] 阻擋：本機自動測試通過。
   ```bash
   python3 scripts/prepush/pre_push_checks.py
-  PYTHONPATH=. python3 -m pytest -q tests
+  scripts/testing/pytest_in_tmp.sh -q tests
   ```
 
 - [ ] 阻擋：安全中心沒有未處理的高風險項目。

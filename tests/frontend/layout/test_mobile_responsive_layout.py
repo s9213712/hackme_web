@@ -55,3 +55,8 @@ def test_workflow_editor_has_mobile_responsive_overrides():
     assert ".flow" in css
     assert ".logic-node" in css
     assert "@media (max-width: 460px)" in css
+    assert ".graph-panel { overflow: auto; }" in css
+    assert "touch-action: pan-x pan-y;" in css
+    assert "min-width: 1450px;" not in css
+    assert "min-width: 980px;" not in css
+    assert "min-width: 100%;" in css

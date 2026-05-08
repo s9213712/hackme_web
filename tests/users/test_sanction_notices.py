@@ -1,5 +1,7 @@
 import sqlite3
 
+import pytest
+
 from services.governance.sanction_notices import record_admin_sanction_notice, restore_admin_sanction_context
 from services.governance.violations import get_latest_violation
 
@@ -178,6 +180,47 @@ def test_admin_sanction_notice_non_appealable_only_creates_plain_notification(tm
     assert "你可以到「申覆」分頁提出申覆" not in note["body"]
     context_count = conn.execute("SELECT COUNT(*) FROM admin_sanction_appeal_contexts").fetchone()[0]
     assert context_count == 0
+
+
+def test_admin_sanction_notice_contexts_are_immutable_against_delete(tmp_path):
+    conn = _db(tmp_path / "sanction-immutable.db")
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL,
+            role TEXT NOT NULL,
+            status TEXT NOT NULL,
+            member_level TEXT NOT NULL,
+            base_level TEXT NOT NULL,
+            effective_level TEXT NOT NULL,
+            sanction_status TEXT NOT NULL DEFAULT 'none',
+            sanction_until TEXT,
+            level_update_reason TEXT,
+            updated_at TEXT
+        );
+        INSERT INTO users (
+            id, username, role, status, member_level, base_level, effective_level, sanction_status
+        ) VALUES
+          (1, 'root', 'super_admin', 'active', 'normal', 'normal', 'normal', 'none'),
+          (2, 'test', 'user', 'active', 'trusted', 'trusted', 'trusted', 'none');
+        """
+    )
+    actor = conn.execute("SELECT * FROM users WHERE id=1").fetchone()
+    target = conn.execute("SELECT * FROM users WHERE id=2").fetchone()
+    record_admin_sanction_notice(
+        conn,
+        actor=actor,
+        target=target,
+        previous=dict(target),
+        violation_id=17,
+        action_label="角色 user -> manager",
+        reason="不可刪除治理脈絡",
+    )
+    conn.commit()
+
+    with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+        conn.execute("DELETE FROM admin_sanction_appeal_contexts WHERE violation_id=17")
 
 
 def test_get_latest_violation_returns_real_violation_even_if_context_table_exists(tmp_path):

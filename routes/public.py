@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import os
 import re
 from datetime import datetime, timedelta
 
@@ -100,6 +101,11 @@ def register_public_routes(app, deps):
         mode = str(get_system_settings().get("password_reset_mode") or "admin_review").strip().lower()
         return mode if mode in {"admin_review", "email_token"} else "admin_review"
 
+    def password_reset_success_response(mode):
+        if mode == "admin_review":
+            return json_resp({"ok": True, "msg": "如果資料符合，系統會建立密碼重設審核申請"})
+        return generic_recovery_response()
+
     def is_root_account_row(row):
         return bool(row and str(row.get("username") if isinstance(row, dict) else row["username"] or "").strip().lower() == "root")
 
@@ -110,6 +116,9 @@ def register_public_routes(app, deps):
             return "dev_ready" if mode == "preprod" else mode
         except Exception:
             return "test"
+
+    def login_autofill_block_enabled():
+        return bool(get_system_settings().get("login_autofill_block_enabled", False))
 
     def tester_token_login_allowed(conn, token, user_id):
         token = str(token or "").strip()
@@ -252,7 +261,16 @@ def register_public_routes(app, deps):
     @app.route("/")
     @app.route("/videos")
     def index():
-        resp = make_response(send_from_directory(PUBLIC_DIR, "index.html"))
+        with open(os.path.join(str(PUBLIC_DIR), "index.html"), "r", encoding="utf-8") as handle:
+            html = handle.read()
+        autofill_block = login_autofill_block_enabled()
+        html = (
+            html.replace("__LOGIN_AUTOFILL_BLOCK__", "1" if autofill_block else "0")
+            .replace("__LOGIN_USER_AUTOCOMPLETE__", "off" if autofill_block else "username")
+            .replace("__LOGIN_PASSWORD_AUTOCOMPLETE__", "off" if autofill_block else "current-password")
+        )
+        resp = make_response(html)
+        resp.headers["Content-Type"] = "text/html; charset=utf-8"
         tok = request.cookies.get("session_token")
         user = db_get_user_from_token(tok) if tok else None
         csrf_owner = user or "__public__"
@@ -314,6 +332,7 @@ def register_public_routes(app, deps):
                 "module_appeals_min_role": settings.get("module_appeals_min_role"),
                 "module_accounts_min_role": settings.get("module_accounts_min_role"),
                 "password_reset_mode": settings.get("password_reset_mode", "admin_review"),
+                "login_autofill_block_enabled": bool(settings.get("login_autofill_block_enabled", False)),
                 "maintenance_mode": bool(settings.get("maintenance_mode", False)),
                 **features,
             },
@@ -395,11 +414,13 @@ def register_public_routes(app, deps):
             audit("REGISTER_RATELIMIT", ip, ua=ua)
             return json_resp({"ok":False,"msg":f"請求太頻繁（{info['limit']}次/分鐘）"}), 429
 
-        try:    data = request.get_json(force=True)
-        except: return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤", "field": "request_body"}), 400
         if not isinstance(data, dict):
             audit("REGISTER_EMPTY", ip, ua=ua)
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "註冊資料格式錯誤", "field": "request_body"}), 400
 
         conn = get_db()
         try:
@@ -423,32 +444,34 @@ def register_public_routes(app, deps):
         email = normalize_email(data.get("email"))
 
         # Username validation
-        if not username:        return json_resp({"ok":False,"msg":"帳號不可為空"}), 400
-        if len(username) < 3:  return json_resp({"ok":False,"msg":"帳號至少需要 3 個字元"}), 400
-        if len(username) > 32: return json_resp({"ok":False,"msg":"帳號最長 32 字元"}), 400
+        if not username:        return json_resp({"ok":False,"msg":"帳號不可為空", "field": "username"}), 400
+        if len(username) < 3:  return json_resp({"ok":False,"msg":"帳號至少需要 3 個字元", "field": "username"}), 400
+        if len(username) > 32: return json_resp({"ok":False,"msg":"帳號最長 32 字元", "field": "username"}), 400
         if not re.fullmatch(r"[a-zA-Z0-9_\-]+", username):
-            return json_resp({"ok":False,"msg":"帳號只能包含英文、數字、底線、減號"}), 400
+            return json_resp({"ok":False,"msg":"帳號只能包含英文、數字、底線、減號", "field": "username"}), 400
         if not nickname:
-            return json_resp({"ok":False,"msg":"暱稱不可為空"}), 400
+            return json_resp({"ok":False,"msg":"暱稱不可為空", "field": "nickname"}), 400
+        if data.get("email") and not email:
+            return json_resp({"ok":False,"msg":"Email 格式錯誤", "field": "email"}), 400
         if id_number and not validate_id_number(id_number):
-            return json_resp({"ok":False,"msg":"身分證格式錯誤"}), 400
+            return json_resp({"ok":False,"msg":"身分證格式錯誤", "field": "id_number"}), 400
         if data.get("birthdate") and not birthdate:
-            return json_resp({"ok":False,"msg":"生日需為 YYYY-MM-DD"}), 400
+            return json_resp({"ok":False,"msg":"生日需為 YYYY-MM-DD", "field": "birthdate"}), 400
         if phone and not validate_phone(phone):
-            return json_resp({"ok":False,"msg":"電話格式錯誤"}), 400
+            return json_resp({"ok":False,"msg":"電話格式錯誤", "field": "phone"}), 400
         if password != password_confirm:
-            return json_resp({"ok":False,"msg":"兩次輸入的密碼不一致"}), 400
+            return json_resp({"ok":False,"msg":"兩次輸入的密碼不一致", "field": "password_confirm"}), 400
 
         ok, msg = validate_password(password)
         if not ok:
             audit("REGISTER_BAD_PW", ip, username, ua=ua, detail=msg)
-            return json_resp({"ok":False,"msg":msg}), 400
+            return json_resp({"ok":False,"msg":msg, "field": "password"}), 400
         strength = score_password_strength(password)
         if is_feature_enabled("feature_account_security_enabled"):
             strong_enough, msg, strength = enforce_password_strength(password, min_score=3)
             if not strong_enough:
                 audit("REGISTER_WEAK_PW", ip, username, ua=ua, detail=msg)
-                return json_resp({"ok": False, "msg": msg, "password_strength": strength}), 400
+                return json_resp({"ok": False, "msg": msg, "field": "password", "password_strength": strength}), 400
 
         conn = get_db()
         try:
@@ -704,6 +727,20 @@ def register_public_routes(app, deps):
             ensure_account_recovery_schema(conn)
             row = find_recovery_user(conn, identifier)
             mode = password_reset_mode()
+            if row and row["status"] == "active" and not is_root_account_row(row):
+                user_blocked, user_info = is_rate_limited(f"password-reset-user:{row['id']}", max_req=2, window_sec=3600)
+                if user_blocked:
+                    audit(
+                        "PASSWORD_RESET_USER_RATELIMIT",
+                        ip,
+                        user=row["username"],
+                        ua=ua,
+                        success=False,
+                        detail=f"limit={user_info['limit']}",
+                    )
+                    conn.commit()
+                    timing_delay()
+                    return password_reset_success_response(mode)
             if is_root_account_row(row):
                 audit(
                     "PASSWORD_RESET_ROOT_BLOCKED",
@@ -714,6 +751,11 @@ def register_public_routes(app, deps):
                     detail="offline_recovery_required",
                 )
             if mode == "email_token" and row and row["status"] == "active" and row["email"] and not is_root_account_row(row):
+                conn.execute(
+                    "UPDATE account_recovery_tokens SET used_at=? "
+                    "WHERE user_id=? AND purpose='password_reset' AND used_at IS NULL",
+                    (datetime.now().isoformat(), row["id"]),
+                )
                 token = create_recovery_token(conn, user_id=row["id"], purpose="password_reset", ip=ip, user_agent=ua, ttl_minutes=60)
                 queue_mail(
                     conn,
@@ -743,9 +785,7 @@ def register_public_routes(app, deps):
                 audit("PASSWORD_RESET_REQUESTED", ip, user="-", ua=ua, success=True, detail="generic_no_delivery")
             conn.commit()
             timing_delay()
-            if mode == "admin_review":
-                return json_resp({"ok": True, "msg": "如果資料符合，系統會建立密碼重設審核申請"})
-            return generic_recovery_response()
+            return password_reset_success_response(mode)
         finally:
             conn.close()
 
@@ -883,7 +923,7 @@ def register_public_routes(app, deps):
         ip, ua, tok = get_client_ip(), get_ua(), request.cookies.get("session_token")
         user = db_get_user_from_token(tok) if tok else None
         if tok:
-            db_delete_session(tok)
+            db_delete_session(tok, notify_security_event=False)
         if user:
             delete_csrf_tokens_for_username(user)
         else:
@@ -902,7 +942,7 @@ def register_public_routes(app, deps):
         ip, ua, tok = get_client_ip(), get_ua(), request.cookies.get("session_token")
         user = db_get_user_from_token(tok) if tok else None
         if tok:
-            db_delete_session(tok)
+            db_delete_session(tok, notify_security_event=False)
         if user:
             delete_csrf_tokens_for_username(user)
         else:
@@ -925,6 +965,7 @@ def register_public_routes(app, deps):
         settings = get_system_settings()
         conn = get_db()
         try:
+            avatar_row = conn.execute("SELECT avatar_file_id FROM users WHERE id=?", (ctx["id"],)).fetchone()
             appearance_settings = get_profile_appearance(conn, ctx["id"])
         finally:
             conn.close()
@@ -962,6 +1003,7 @@ def register_public_routes(app, deps):
             "is_default_password": bool(dict(ctx).get("is_default_password") or 0),
             "nickname": decrypt_field(ctx["nickname"]),
             "birthdate": decrypt_field(ctx["birthdate"]),
+            "avatar_file_id": ((avatar_row["avatar_file_id"] if avatar_row and "avatar_file_id" in avatar_row.keys() else dict(ctx).get("avatar_file_id")) or ""),
             "chat_violation_warned": dict(ctx).get("chat_violation_warned") or 0,
             "appearance_settings": appearance_settings,
         })

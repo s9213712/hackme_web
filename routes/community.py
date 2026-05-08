@@ -750,6 +750,7 @@ def register_community_routes(app, deps):
             "delete_reason": row_value(row, "delete_reason"),
             "author_user_id": row["author_user_id"],
             "author_username": row["author_username"],
+            "author_avatar_file_id": row_value(row, "author_avatar_file_id", ""),
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
@@ -1341,9 +1342,12 @@ def register_community_routes(app, deps):
                     tuple(params)
                 ).fetchone()["c"]
                 rows = conn.execute(
-                    f"SELECT id, board_id, title, content, status, review_note, reviewed_by, reviewed_at, post_type, "
-                    f"is_sticky, is_locked, is_curated, view_count, author_user_id, author_username, created_at, updated_at "
-                    f"FROM forum_threads WHERE {where} ORDER BY is_sticky DESC, created_at DESC LIMIT ? OFFSET ?",
+                    "SELECT t.id, t.board_id, t.title, t.content, t.status, t.review_note, t.reviewed_by, t.reviewed_at, t.post_type, "
+                    "t.is_sticky, t.is_locked, t.is_curated, t.view_count, t.author_user_id, t.author_username, "
+                    "COALESCE(u.avatar_file_id, '') AS author_avatar_file_id, t.created_at, t.updated_at "
+                    "FROM forum_threads t "
+                    "LEFT JOIN users u ON u.id=t.author_user_id "
+                    f"WHERE {where} ORDER BY t.is_sticky DESC, t.created_at DESC LIMIT ? OFFSET ?",
                     tuple(params + [limit, page * limit])
                 ).fetchall()
                 threads = []
@@ -1461,17 +1465,23 @@ def register_community_routes(app, deps):
             ensure_community_schema(conn)
             if can_manage_community(actor):
                 rows = conn.execute(
-                    "SELECT id, board_id, title, content, status, review_note, reviewed_by, reviewed_at, post_type, "
-                    "is_sticky, is_locked, is_curated, view_count, "
-                    "author_user_id, author_username, created_at, updated_at "
-                    "FROM forum_threads WHERE status='pending' AND is_deleted=0 ORDER BY created_at ASC"
+                    "SELECT t.id, t.board_id, t.title, t.content, t.status, t.review_note, t.reviewed_by, t.reviewed_at, t.post_type, "
+                    "t.is_sticky, t.is_locked, t.is_curated, t.view_count, "
+                    "t.author_user_id, t.author_username, COALESCE(u.avatar_file_id, '') AS author_avatar_file_id, "
+                    "t.created_at, t.updated_at "
+                    "FROM forum_threads t "
+                    "LEFT JOIN users u ON u.id=t.author_user_id "
+                    "WHERE t.status='pending' AND t.is_deleted=0 ORDER BY t.created_at ASC"
                 ).fetchall()
             else:
                 rows = conn.execute(
                     "SELECT t.id, t.board_id, t.title, t.content, t.status, t.review_note, t.reviewed_by, t.reviewed_at, "
                     "t.post_type, t.is_sticky, t.is_locked, t.is_curated, t.view_count, "
-                    "t.author_user_id, t.author_username, t.created_at, t.updated_at "
-                    "FROM forum_threads t JOIN board_moderators m ON m.board_id=t.board_id "
+                    "t.author_user_id, t.author_username, COALESCE(u.avatar_file_id, '') AS author_avatar_file_id, "
+                    "t.created_at, t.updated_at "
+                    "FROM forum_threads t "
+                    "JOIN board_moderators m ON m.board_id=t.board_id "
+                    "LEFT JOIN users u ON u.id=t.author_user_id "
                     "WHERE t.status='pending' AND t.is_deleted=0 AND m.user_id=? AND m.can_review_threads=1 "
                     "ORDER BY t.created_at ASC",
                     (actor["id"],)
@@ -1550,11 +1560,15 @@ def register_community_routes(app, deps):
             thread = conn.execute(
                 "SELECT t.id, t.board_id, t.title, t.content, t.status, t.review_note, t.reviewed_by, t.reviewed_at, "
                 "t.post_type, t.is_sticky, t.is_curated, t.view_count, "
-                "t.author_user_id, t.author_username, t.created_at, t.updated_at, t.is_locked, t.edited_at, t.edited_by, "
+                "t.author_user_id, t.author_username, COALESCE(tu.avatar_file_id, '') AS author_avatar_file_id, "
+                "t.created_at, t.updated_at, t.is_locked, t.edited_at, t.edited_by, "
                 "t.is_deleted, t.deleted_at, t.deleted_by, t.delete_reason, "
                 "b.status AS board_status, b.owner_user_id, b.owner_username, b.title AS board_title, "
                 "b.visibility AS board_visibility, b.is_active AS board_is_active "
-                "FROM forum_threads t JOIN forum_boards b ON b.id=t.board_id WHERE t.id=?",
+                "FROM forum_threads t "
+                "JOIN forum_boards b ON b.id=t.board_id "
+                "LEFT JOIN users tu ON tu.id=t.author_user_id "
+                "WHERE t.id=?",
                 (thread_id,)
             ).fetchone()
             if not thread:
@@ -1645,12 +1659,13 @@ def register_community_routes(app, deps):
             if not manageable:
                 post_where += " AND p.is_hidden=0"
             posts = conn.execute(
-                "SELECT p.id, p.content, p.author_user_id, p.author_username, p.is_pinned, p.is_hidden, p.hidden_reason, "
+                "SELECT p.id, p.content, p.author_user_id, p.author_username, COALESCE(u.avatar_file_id, '') AS author_avatar_file_id, p.is_pinned, p.is_hidden, p.hidden_reason, "
                 "p.created_at, p.updated_at, "
                 "COALESCE(SUM(CASE WHEN r.value=1 THEN 1 ELSE 0 END), 0) AS like_count, "
                 "COALESCE(SUM(CASE WHEN r.value=-1 THEN 1 ELSE 0 END), 0) AS dislike_count, "
                 "COALESCE(MAX(CASE WHEN r.user_id=? THEN r.value ELSE 0 END), 0) AS user_reaction "
                 "FROM forum_posts p "
+                "LEFT JOIN users u ON u.id=p.author_user_id "
                 "LEFT JOIN forum_post_reactions r ON r.post_id=p.id "
                 f"WHERE {post_where} "
                 "GROUP BY p.id "
@@ -1698,6 +1713,7 @@ def register_community_routes(app, deps):
                     "delete_reason": thread["delete_reason"],
                     "author_user_id": thread["author_user_id"],
                     "author_username": thread["author_username"],
+                    "author_avatar_file_id": thread["author_avatar_file_id"] or "",
                     "created_at": thread["created_at"],
                     "updated_at": thread["updated_at"],
                     "board_status": thread["board_status"],
@@ -1709,6 +1725,7 @@ def register_community_routes(app, deps):
                     "content": row["content"],
                     "author_user_id": row["author_user_id"],
                     "author_username": row["author_username"],
+                    "author_avatar_file_id": row["author_avatar_file_id"] or "",
                     "is_pinned": bool(row["is_pinned"]),
                     "is_hidden": bool(row["is_hidden"]),
                     "hidden_reason": row["hidden_reason"],

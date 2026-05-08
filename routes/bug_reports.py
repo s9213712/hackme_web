@@ -10,6 +10,7 @@ from pathlib import Path
 from flask import request
 
 from services.points_chain import DISPLAY_CURRENCY
+from services.server.runtime import default_runtime_root
 
 
 BUG_REPORT_REWARD_POINTS = {
@@ -93,7 +94,7 @@ def register_bug_report_routes(app, deps):
     runtime_root = Path(
         deps.get("RUNTIME_DIR")
         or os.environ.get("HACKME_RUNTIME_DIR")
-        or (Path.cwd() / "runtime")
+        or default_runtime_root()
     )
     reports_dir = Path(deps.get("REPORTS_DIR") or (runtime_root / "reports")).resolve()
     bug_dir = reports_dir / "bugs"

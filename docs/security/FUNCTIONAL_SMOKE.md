@@ -30,7 +30,7 @@ scripts/security/pentest/run_functional_smoke.sh --port 50740
 ```bash
 scripts/security/pentest/run_functional_smoke.sh \
   --runtime /tmp/hackme_web_functional_manual \
-  --out /tmp/hackme_web_runtime/reports/security
+  --out runtime/reports/security
 ```
 
 保留 runtime 目錄供人工檢查：

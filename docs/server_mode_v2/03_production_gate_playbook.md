@@ -42,7 +42,7 @@
 | 1 | `clean_smoke` | Server Mode v2 乾淨 smoke：boot path / state-machine / 基線 endpoints | `scripts/security/server_mode/server_mode_v2_clean_smoke.py` | JSON 結果檔 |
 | 2 | `adversarial` | Mode v2 對抗測試：injection / bypass / mode-spoof | `scripts/security/server_mode/server_mode_v2_adversarial.py` | JSON 結果檔 |
 | 3 | `redteam_l2` | Mode v2 red-team Level 2 攻擊樹 | `scripts/security/server_mode/server_mode_v2_redteam_l2.py` | JSON 結果檔 |
-| 4 | `pytest` | 全專案 pytest pass | `pytest tests/ -q` | pytest junit XML 或 stdout log |
+| 4 | `pytest` | 全專案 pytest pass | `scripts/testing/pytest_in_tmp.sh -q tests` | pytest junit XML 或 stdout log |
 | 5 | `log_chain_verify` | `mode_switch_logs` + audit chain hash 完整性 | 走 `/api/admin/health/audit-chain` 驗 + `services/server_mode_v2_log_chain_verify` 自寫 | JSON 結果檔 |
 | 6 | `integrity_guard` | IntegrityGuard 自檢、無 high-risk finding | `python -c "from server import integrity_guard; print(integrity_guard.run_self_check())"` 或 `/api/admin/integrity/repair?dry_run=true` | JSON 結果檔 |
 | 7 | `stress` | 流量 / trading 壓測 | `scripts/security/pentest/stress_test.py` + `scripts/security/pentest/trading_stress_pentest.py` | JSON 結果檔 |
@@ -247,16 +247,16 @@ step() {
 step clean_smoke    python3 scripts/security/server_mode/server_mode_v2_clean_smoke.py
 step adversarial    python3 scripts/security/server_mode/server_mode_v2_adversarial.py
 step redteam_l2     python3 scripts/security/server_mode/server_mode_v2_redteam_l2.py
-step pytest         PYTHONPATH=. python3 -m pytest -q tests
+step pytest         scripts/testing/pytest_in_tmp.sh -q tests
 step log_chain_verify  GET /api/root/server-mode/logs/verify
 step integrity_guard   POST /api/root/integrity/rescan + GET /api/root/integrity/report
 step stress         python3 scripts/security/pentest/stress_test.py
 step permission     python3 scripts/security/pentest/functional_permission_pentest.py
 step functional     bash    scripts/security/pentest/run_functional_smoke.sh
 step pentest        bash    scripts/security/pentest/run_pentest.sh
-step snapshot_restore  PYTHONPATH=. python3 -m pytest -q tests/snapshots/test_snapshots.py
-step points_chain_consistency PYTHONPATH=. python3 -m pytest -q tests/points/test_points_chain.py
-step cloud_drive_quota_permission PYTHONPATH=. python3 -m pytest -q tests/storage/test_cloud_drive_attachments.py tests/storage/test_storage_albums_schema.py
+step snapshot_restore  scripts/testing/pytest_in_tmp.sh -q tests/snapshots/test_snapshots.py
+step points_chain_consistency scripts/testing/pytest_in_tmp.sh -q tests/points/test_points_chain.py
+step cloud_drive_quota_permission scripts/testing/pytest_in_tmp.sh -q tests/storage/test_cloud_drive_attachments.py tests/storage/test_storage_albums_schema.py
 
 # Final verify
 curl -sk -b /tmp/_jar "$BASE_URL/api/root/production-report/status" | jq

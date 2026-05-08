@@ -24,4 +24,4 @@ jobs:
           python -m pip install -r requirements.txt
 
       - name: Run pre-push quality gate
-        run: python scripts/pre_push_checks.py --ci
+        run: python scripts/prepush/pre_push_checks.py --ci

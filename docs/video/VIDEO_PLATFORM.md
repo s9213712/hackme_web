@@ -14,7 +14,7 @@ Platform v1 is still the user-facing baseline, but Phase C-1 foundation is now
 implemented for prepared HLS playback, automatic stream preparation on eligible
 published media, and manual retry controls in the watch page.
 For the runtime trust boundary between `server_encrypted` and strict `e2ee`,
-see [ENCRYPTION_RUNTIME_BOUNDARY.md](../runtime/ENCRYPTION_RUNTIME_BOUNDARY.md).
+see [ENCRYPTION_RUNTIME_BOUNDARY.md](../ops_boundaries/ENCRYPTION_RUNTIME_BOUNDARY.md).
 
 ## Architecture
 

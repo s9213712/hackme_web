@@ -3,13 +3,23 @@ from pathlib import Path
 
 import chess
 
-from services.games.chess_engine import ChessExperimentStore
+from services.games import chess_dl as chess_dl_service
+from services.games import chess_pv as chess_pv_service
+from services.games.chess_search import TranspositionTable, ZobristHasher, search_best_move
+from services.games.chess_dl import default_chess_dl_model_path
+from services.games.chess_engine import ChessExperimentStore, default_chess_engine_db_path
+from services.games.chess_nn import default_chess_nn_model_path
+from services.games.chess_pv import default_chess_pv_model_path
 from services.games.self_play_training import (
     TEACHER_DIFFICULTY,
     choose_teacher_move,
+    default_training_report_dir,
+    run_post_training_smoke_evaluation,
+    run_round_robin_benchmark,
     run_training_session,
     write_training_report,
 )
+from services.server.runtime import default_runtime_root_path
 
 
 def test_teacher_engine_finds_mate_in_one():
@@ -28,35 +38,245 @@ def test_teacher_engine_finds_mate_in_one():
     assert chosen_uci in mating_moves
 
 
+def test_shared_search_iterative_deepening_uses_tt_and_finds_mate():
+    board = chess.Board("6k1/5Q2/6K1/8/8/8/8/8 w - - 0 1")
+    table = TranspositionTable(max_entries=256)
+
+    result = search_best_move(
+        board,
+        max_depth=2,
+        evaluate=lambda current: 0 if not current.is_checkmate() else (-10**7 if current.turn == chess.WHITE else 10**7),
+        hasher=ZobristHasher(seed=20260519),
+        transposition=table,
+    )
+
+    assert result.best_move is not None
+    assert result.best_move in board.legal_moves
+    assert result.score > 0
+    assert result.depth == 2
+    assert result.stats.tt_hits >= 1
+    assert result.stats.tt_stores >= 1
+    assert result.stats.history_updates >= 1
+
+
 def test_training_session_updates_runtime_db_and_nn_model(tmp_path, monkeypatch):
     runtime_dir = tmp_path / "runtime"
     experiment_db = runtime_dir / "database" / "chess_experiment.db"
     experiment_nn = runtime_dir / "models" / "chess_experiment_2_nn.json"
+    experiment_dl = runtime_dir / "models" / "chess_experiment_3_dl.json"
+    experiment_pv = runtime_dir / "models" / "chess_experiment_4_pv.json"
     monkeypatch.setenv("HACKME_RUNTIME_DIR", str(runtime_dir))
     monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_DB_PATH", str(experiment_db))
     monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_NN_MODEL_PATH", str(experiment_nn))
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_DL_MODEL_PATH", str(experiment_dl))
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_PV_MODEL_PATH", str(experiment_pv))
 
     summary = run_training_session(
         exp1_teacher_games=1,
         exp2_teacher_games=1,
+        exp3_teacher_games=1,
+        exp4_teacher_games=1,
+        hard_exp1_games=1,
+        hard_exp2_games=1,
+        hard_exp3_games=1,
+        hard_exp4_games=1,
         cross_games=1,
+        cross_exp1_exp3_games=1,
+        cross_exp2_exp3_games=1,
+        cross_exp1_exp4_games=1,
+        cross_exp2_exp4_games=1,
+        cross_exp3_exp4_games=1,
         teacher_depth=1,
         max_plies=12,
         student_exploration_rate=1.0,
         seed=7,
         store=ChessExperimentStore(experiment_db),
         nn_model_path=experiment_nn,
+        dl_model_path=experiment_dl,
+        pv_model_path=experiment_pv,
     )
 
-    assert summary["games_played"] == 3
+    assert summary["games_played"] == 14
     assert summary["experiment_db_path"] == str(experiment_db)
     assert summary["experiment_2_nn_model_path"] == str(experiment_nn)
+    assert summary["experiment_3_dl_model_path"] == str(experiment_dl)
+    assert summary["experiment_4_pv_model_path"] == str(experiment_pv)
     assert experiment_db.exists()
     assert experiment_nn.exists()
+    assert experiment_dl.exists()
+    assert experiment_pv.exists()
     assert any(match["white_engine"] == TEACHER_DIFFICULTY or match["black_engine"] == TEACHER_DIFFICULTY for match in summary["matches"])
+    assert any(match["white_engine"] == "hard" or match["black_engine"] == "hard" for match in summary["matches"])
+    assert summary["requested_games"]["hard_vs_exp1"] == 1
+    assert summary["requested_games"]["hard_vs_exp2"] == 1
+    assert summary["requested_games"]["hard_vs_exp3"] == 1
+    assert summary["requested_games"]["hard_vs_exp4"] == 1
+    assert summary["updates"]["teacher_distillation_exp3"] >= 1
 
     model = json.loads(experiment_nn.read_text(encoding="utf-8"))
     assert model["sample_count"] >= 1
+    dl_model = json.loads(experiment_dl.read_text(encoding="utf-8"))
+    assert dl_model["sample_count"] >= 1
+    assert dl_model["replay_size"] >= summary["updates"]["teacher_distillation_exp3"]
+    pv_model = json.loads(experiment_pv.read_text(encoding="utf-8"))
+    assert pv_model["sample_count"] >= 1
     reports = write_training_report(summary, report_dir=runtime_dir / "reports" / "games")
     assert Path(reports["json_report"]).exists()
     assert Path(reports["md_report"]).exists()
+
+
+def test_games_runtime_defaults_use_repo_runtime(monkeypatch):
+    monkeypatch.delenv("HACKME_RUNTIME_DIR", raising=False)
+    monkeypatch.delenv("HTML_LEARNING_DB_DIR", raising=False)
+    monkeypatch.delenv("HTML_LEARNING_CHESS_ENGINE_DB_PATH", raising=False)
+    monkeypatch.delenv("HTML_LEARNING_CHESS_ENGINE_NN_MODEL_PATH", raising=False)
+    monkeypatch.delenv("HTML_LEARNING_REPORTS_DIR", raising=False)
+
+    runtime_root = default_runtime_root_path().resolve()
+    assert default_chess_engine_db_path() == runtime_root / "database" / "chess_experiment.db"
+    assert default_chess_nn_model_path() == runtime_root / "models" / "chess_experiment_2_nn.json"
+    assert default_chess_dl_model_path() == runtime_root / "models" / "chess_experiment_3_dl.json"
+    assert default_chess_pv_model_path() == runtime_root / "models" / "chess_experiment_4_pv.json"
+    assert default_training_report_dir() == runtime_root / "reports" / "games"
+
+
+def test_training_session_can_run_hard_vs_experiment_only(tmp_path, monkeypatch):
+    runtime_dir = tmp_path / "runtime"
+    experiment_db = runtime_dir / "database" / "chess_experiment.db"
+    experiment_nn = runtime_dir / "models" / "chess_experiment_2_nn.json"
+    experiment_dl = runtime_dir / "models" / "chess_experiment_3_dl.json"
+    experiment_pv = runtime_dir / "models" / "chess_experiment_4_pv.json"
+    monkeypatch.setenv("HACKME_RUNTIME_DIR", str(runtime_dir))
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_DB_PATH", str(experiment_db))
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_NN_MODEL_PATH", str(experiment_nn))
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_DL_MODEL_PATH", str(experiment_dl))
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_PV_MODEL_PATH", str(experiment_pv))
+    monkeypatch.setattr(chess_dl_service, "_SEARCH_DEPTH", 1)
+    monkeypatch.setattr(chess_dl_service, "_SEARCH_QUIESCENCE_DEPTH", 1)
+    monkeypatch.setattr(chess_pv_service, "_SEARCH_DEPTH", 1)
+    monkeypatch.setattr(chess_pv_service, "_SEARCH_QUIESCENCE_DEPTH", 1)
+
+    summary = run_training_session(
+        exp1_teacher_games=0,
+        exp2_teacher_games=0,
+        exp3_teacher_games=0,
+        hard_exp1_games=1,
+        hard_exp2_games=1,
+        hard_exp3_games=1,
+        hard_exp4_games=1,
+        cross_games=0,
+        cross_exp1_exp3_games=0,
+        cross_exp2_exp3_games=0,
+        cross_exp1_exp4_games=0,
+        cross_exp2_exp4_games=0,
+        cross_exp3_exp4_games=0,
+        teacher_depth=1,
+        max_plies=10,
+        student_exploration_rate=0.0,
+        seed=17,
+        store=ChessExperimentStore(experiment_db),
+        nn_model_path=experiment_nn,
+        dl_model_path=experiment_dl,
+        pv_model_path=experiment_pv,
+    )
+
+    assert summary["games_played"] == 4
+    engines = {(match["white_engine"], match["black_engine"]) for match in summary["matches"]}
+    assert any("hard" in pairing for pairing in engines)
+    assert summary["requested_games"]["hard_vs_exp1"] == 1
+    assert summary["requested_games"]["hard_vs_exp2"] == 1
+    assert summary["requested_games"]["hard_vs_exp3"] == 1
+    assert summary["requested_games"]["hard_vs_exp4"] == 1
+
+
+def test_round_robin_benchmark_and_smoke_reports_use_all_engines(tmp_path, monkeypatch):
+    runtime_dir = tmp_path / "runtime"
+    experiment_db = runtime_dir / "database" / "chess_experiment.db"
+    experiment_nn = runtime_dir / "models" / "chess_experiment_2_nn.json"
+    experiment_dl = runtime_dir / "models" / "chess_experiment_3_dl.json"
+    experiment_pv = runtime_dir / "models" / "chess_experiment_4_pv.json"
+    monkeypatch.setenv("HACKME_RUNTIME_DIR", str(runtime_dir))
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_DB_PATH", str(experiment_db))
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_NN_MODEL_PATH", str(experiment_nn))
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_DL_MODEL_PATH", str(experiment_dl))
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_PV_MODEL_PATH", str(experiment_pv))
+    monkeypatch.setattr(chess_dl_service, "_SEARCH_DEPTH", 1)
+    monkeypatch.setattr(chess_dl_service, "_SEARCH_QUIESCENCE_DEPTH", 1)
+    monkeypatch.setattr(chess_pv_service, "_SEARCH_DEPTH", 1)
+    monkeypatch.setattr(chess_pv_service, "_SEARCH_QUIESCENCE_DEPTH", 1)
+
+    smoke = run_post_training_smoke_evaluation(
+        store=ChessExperimentStore(experiment_db),
+        nn_model_path=experiment_nn,
+        dl_model_path=experiment_dl,
+        pv_model_path=experiment_pv,
+        teacher_depth=1,
+        max_plies=2,
+        games_per_pair=1,
+        seed=32,
+    )
+    benchmark = run_round_robin_benchmark(
+        store=ChessExperimentStore(experiment_db),
+        nn_model_path=experiment_nn,
+        dl_model_path=experiment_dl,
+        pv_model_path=experiment_pv,
+        teacher_depth=1,
+        max_plies=2,
+        rounds=1,
+        seed=33,
+    )
+    assert smoke["target_engines"] == ["experiment", "experiment 2:nn", "experiment 3:dl", "experiment 4:pv"]
+    assert smoke["reference_engines"] == ["hard", "teacher"]
+    assert smoke["opening_split"] == "eval"
+    assert smoke["games_played"] == 16
+    assert benchmark["engines"] == ["teacher", "hard", "experiment", "experiment 2:nn", "experiment 3:dl", "experiment 4:pv"]
+    assert benchmark["games_played"] == 30
+    assert len(benchmark["standings"]) == 6
+    assert len(benchmark["elo"]) == 6
+    assert benchmark["matrix"]["teacher"]["hard"]["games"] == 2
+    assert benchmark["matrix"]["experiment"]["experiment 2:nn"]["games"] == 2
+    assert benchmark["matrix"]["experiment 3:dl"]["experiment 4:pv"]["games"] == 2
+    assert any(row["engine_a"] == "experiment" and row["engine_b"] == "experiment 2:nn" for row in benchmark["head_to_head"])
+    assert any(match["opening_label"] for match in benchmark["matches"])
+
+
+def test_teacher_only_training_distills_into_exp3_model(tmp_path, monkeypatch):
+    runtime_dir = tmp_path / "runtime"
+    experiment_db = runtime_dir / "database" / "chess_experiment.db"
+    experiment_nn = runtime_dir / "models" / "chess_experiment_2_nn.json"
+    experiment_dl = runtime_dir / "models" / "chess_experiment_3_dl.json"
+    experiment_pv = runtime_dir / "models" / "chess_experiment_4_pv.json"
+    monkeypatch.setenv("HACKME_RUNTIME_DIR", str(runtime_dir))
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_DB_PATH", str(experiment_db))
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_NN_MODEL_PATH", str(experiment_nn))
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_DL_MODEL_PATH", str(experiment_dl))
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_PV_MODEL_PATH", str(experiment_pv))
+    monkeypatch.setattr(chess_dl_service, "_SEARCH_DEPTH", 1)
+    monkeypatch.setattr(chess_dl_service, "_SEARCH_QUIESCENCE_DEPTH", 1)
+    monkeypatch.setattr(chess_pv_service, "_SEARCH_DEPTH", 1)
+    monkeypatch.setattr(chess_pv_service, "_SEARCH_QUIESCENCE_DEPTH", 1)
+
+    summary = run_training_session(
+        exp1_teacher_games=1,
+        exp2_teacher_games=0,
+        exp3_teacher_games=0,
+        hard_exp1_games=0,
+        hard_exp2_games=0,
+        hard_exp3_games=0,
+        cross_games=0,
+        cross_exp1_exp3_games=0,
+        cross_exp2_exp3_games=0,
+        teacher_depth=1,
+        max_plies=8,
+        student_exploration_rate=0.0,
+        seed=44,
+        store=ChessExperimentStore(experiment_db),
+        nn_model_path=experiment_nn,
+        dl_model_path=experiment_dl,
+        pv_model_path=experiment_pv,
+    )
+
+    assert summary["games_played"] == 1
+    assert summary["updates"]["teacher_distillation_exp3"] >= 1
+    dl_model = json.loads(experiment_dl.read_text(encoding="utf-8"))
+    assert dl_model["sample_count"] >= summary["updates"]["teacher_distillation_exp3"]

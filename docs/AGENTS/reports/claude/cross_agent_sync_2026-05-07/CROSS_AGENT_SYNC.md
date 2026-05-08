@@ -273,7 +273,7 @@ def ensure_trading_schema(conn):
 Lazy import（在 function 內）避免 circular dependency 風險。
 
 **Imperative migrations 仍在 engine.py**：PRAGMA-guarded ALTER TABLE、legacy unit 換算
-(`bps`→`percent`)、default `trading_settings` INSERT OR IGNORE、catalog seed sync —
+(`basis points`→`percent`)、default `trading_settings` INSERT OR IGNORE、catalog seed sync —
 都需要共用 `now` 與 helpers。拆這部分是 slice 4c（更高風險，需要設計 ctx 物件傳遞
 state）。
 

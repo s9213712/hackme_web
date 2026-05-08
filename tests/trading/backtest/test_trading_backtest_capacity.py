@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from scripts.trading.competition.workflow_template_backtest_benchmark import default_output_path
+from scripts.trading.competition.workflow_template_backtest_benchmark import REPO_ROOT, default_output_path
 from services.trading import backtest_capacity as backtest_capacity_module
 
 
@@ -11,15 +11,15 @@ ROOT = Path(__file__).resolve().parents[3]
 def test_default_output_path_uses_canonical_file_for_default_1h_asset():
     path = default_output_path("1h", use_relative_thresholds=False)
 
-    assert path == ROOT / "public" / "data" / "workflow_template_benchmarks.json"
+    assert path == REPO_ROOT / "public" / "data" / "workflow_template_benchmarks.json"
 
 
 def test_default_output_path_keeps_variant_suffix_for_noncanonical_outputs():
     assert default_output_path("4h", use_relative_thresholds=False) == (
-        ROOT / "public" / "data" / "workflow_template_benchmarks_4h.json"
+        REPO_ROOT / "public" / "data" / "workflow_template_benchmarks_4h.json"
     )
     assert default_output_path("1h", use_relative_thresholds=True) == (
-        ROOT / "public" / "data" / "workflow_template_benchmarks_1h_relative.json"
+        REPO_ROOT / "public" / "data" / "workflow_template_benchmarks_1h_relative.json"
     )
 
 

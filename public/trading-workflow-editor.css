@@ -230,11 +230,12 @@
     .node.action { border-color: rgba(54,211,153,.55); }
     .node.logic { border-color: rgba(167,139,250,.65); }
     .node.control { border-color: rgba(251,191,36,.58); }
-    .graph-panel { overflow: hidden; }
+    .graph-panel { overflow: auto; }
     .graph-canvas {
       position: relative;
-      min-width: 1450px;
-      min-height: 980px;
+      width: 100%;
+      min-width: 100%;
+      min-height: clamp(640px, 72dvh, 980px);
       margin: .8rem;
       border: 1px dashed var(--line-strong);
       border-radius: 8px;
@@ -244,6 +245,7 @@
         rgba(15, 23, 42, .62);
       background-size: 24px 24px;
       overflow: auto;
+      touch-action: pan-x pan-y;
     }
     .graph-edge-layer {
       position: absolute;
@@ -542,9 +544,9 @@
         padding: .52rem;
       }
       .graph-canvas {
-        min-width: 980px;
-        min-height: 760px;
-        margin: .62rem;
+        min-width: 100%;
+        min-height: min(68dvh, 760px);
+        margin: .45rem 0 0;
       }
 
       .graph-node {
@@ -574,5 +576,9 @@
 
       .palette {
         max-height: 46dvh;
+      }
+
+      .graph-canvas {
+        min-height: min(62dvh, 680px);
       }
     }

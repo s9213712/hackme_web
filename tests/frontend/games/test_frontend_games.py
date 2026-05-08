@@ -16,6 +16,23 @@ def test_game_zone_frontend_assets_are_wired():
     assert "/js/38-games.js?v=20260502-mobile-controls" in index_html
     assert 'id="game-practice-side"' in index_html
     assert 'id="game-practice-difficulty"' in index_html
+    assert 'id="game-root-chess-panel"' in index_html
+    assert 'id="game-root-chess-refresh-btn"' in index_html
+    assert 'id="game-root-chess-warm-start-btn"' in index_html
+    assert 'id="game-root-chess-pipeline"' in index_html
+    assert 'id="game-root-chess-prepare-command"' in index_html
+    assert 'id="game-root-chess-seed-command"' in index_html
+    assert 'id="game-root-chess-exp3-command"' in index_html
+    assert 'id="game-root-chess-benchmark-command"' in index_html
+    assert 'id="game-root-chess-pipeline-command"' in index_html
+    assert 'id="game-root-chess-stage-btn"' in index_html
+    assert 'id="game-root-chess-promote-btn"' in index_html
+    assert 'value="experiment 2:nn"' in index_html
+    assert 'value="experiment 3:dl"' in index_html
+    assert 'value="experiment 4:pv"' in index_html
+    assert "實驗 2：NN 小型神經網路" in index_html
+    assert "實驗 3：DL 深度學習" in index_html
+    assert "實驗 4：PV 策略價值網路" in index_html
     assert 'id="sudoku-game-panel"' in index_html
     assert 'id="sudoku-board"' in index_html
     assert 'id="minesweeper-game-panel"' in index_html
@@ -49,7 +66,30 @@ def test_game_zone_frontend_assets_are_wired():
     assert 'data-game-touch="tetris-left"' in index_html
     assert 'data-game-touch="shooter-fire"' in index_html
     assert "gameDifficultyLabel" in games_js
+    assert "gameOpponentColor" in games_js
+    assert "buildOptimisticChessMatch" in games_js
+    assert "renderChessRootDashboard" in games_js
+    assert "loadChessRootDashboard" in games_js
+    assert "warmStartChessModels" in games_js
+    assert "latest_replay_prepare" in games_js
+    assert "latest_seed_training_report" in games_js
+    assert "latest_pipeline_report" in games_js
+    assert "pipeline_recommendation" in games_js
+    assert "stageChessCandidate" in games_js
+    assert "promoteChessCandidate" in games_js
+    assert "renderChessPracticeDifficultyOptions" in games_js
+    assert 'if (difficulty === "experiment 4:pv") return "實驗 4：PV";' in games_js
+    assert 'if (difficulty === "experiment 2:nn") return "實驗 2：NN";' in games_js
+    assert 'if (difficulty === "experiment 3:dl") return "實驗 3：DL";' in games_js
     assert "/games/chess/leaderboard" in games_js
+    assert "/root/games/chess/engines/dashboard" in games_js
+    assert "/root/games/chess/warm-start" in games_js
+    assert "/root/games/chess/promotion/stage" in games_js
+    assert "/root/games/chess/promotion/promote" in games_js
+    assert "chess_replay_prepare.py" in games_js
+    assert "chess_seed_train.py" in games_js
+    assert "chess_exp3_dataset_train.py" in games_js
+    assert "chess_train_pipeline.py" in games_js
     assert "fetchCsrfToken({ force: true })" in games_js
     assert "gameRequestNeedsFreshCsrf" in games_js
     assert "const mutates = upperMethod !== \"GET\"" in games_js
@@ -60,6 +100,10 @@ def test_game_zone_frontend_assets_are_wired():
     assert "let chessMoveInFlight = false" in games_js
     assert "if (chessMoveInFlight) return;" in games_js
     assert "const from = gameSelectedSquare;" in games_js
+    assert "const optimisticMatch = buildOptimisticChessMatch(match, chosenMove);" in games_js
+    assert "pending_computer_response" in games_js
+    assert "你已走棋，電腦思考中" in games_js
+    assert "已送出走棋，等待電腦回應" in games_js
     assert "gameSelectedSquare = null;" in games_js
     assert "chessMoveInFlight = true;" in games_js
     assert "chessMoveInFlight = false;" in games_js

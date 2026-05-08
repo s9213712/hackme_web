@@ -54,6 +54,8 @@ The repository root keeps only [README.md](../README.md) and
 - [WEB.md](WEB.md): detailed page-by-page UI behavior
 - [DEPLOYMENT.md](DEPLOYMENT.md): script-level deployment and operations reference
 - [SECURITY.md](SECURITY.md): current security controls and known limits
+- [games/chess_model_files.md](games/chess_model_files.md): chess experiment model file formats and import compatibility
+- [games/chess_training_pipeline.md](games/chess_training_pipeline.md): chess replay collection, dataset prep, offline training, benchmark, and promotion flow
 
 ### Trading Reference Set
 
@@ -70,10 +72,10 @@ The repository root keeps only [README.md](../README.md) and
 - [VIDEO_PLATFORM.md](video/VIDEO_PLATFORM.md): detailed video module reference
 - [VIDEO_STREAMING_ARCHITECTURE.md](video/VIDEO_STREAMING_ARCHITECTURE.md): formal
   HLS / encrypted-media streaming Phase C design
-- [runtime/README.md](runtime/README.md): runtime boundary docs index
-- [ENCRYPTION_RUNTIME_BOUNDARY.md](runtime/ENCRYPTION_RUNTIME_BOUNDARY.md): what a
+- [ops_boundaries/README.md](ops_boundaries/README.md): runtime boundary docs index
+- [ENCRYPTION_RUNTIME_BOUNDARY.md](ops_boundaries/ENCRYPTION_RUNTIME_BOUNDARY.md): what a
   runtime engineer can decrypt vs what strict E2EE still protects
-- [RUNTIME_RESET_AND_RECOVERY.md](runtime/RUNTIME_RESET_AND_RECOVERY.md): detailed
+- [RUNTIME_RESET_AND_RECOVERY.md](ops_boundaries/RUNTIME_RESET_AND_RECOVERY.md): detailed
   reset/snapshot/PointsChain boundary notes
 
 ### ComfyUI And Server Mode Reference Set

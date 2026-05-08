@@ -59,7 +59,7 @@ default_report_root() {
     printf '%s/reports/security' "${HACKME_RUNTIME_DIR%/}"
     return
   fi
-  printf '/tmp/hackme_web_runtime/reports/security'
+  printf '%s/runtime/reports/security' "$REPO_ROOT"
 }
 
 REPORT_ROOT="${REPORT_ROOT:-$(default_report_root)}"

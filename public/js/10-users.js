@@ -195,7 +195,7 @@ function renderUsers() {
     onlineCell.appendChild(onlineDot);
     tr.appendChild(onlineCell);
     const usernameCell = document.createElement("td");
-    usernameCell.innerHTML = userIdentityMarkup(u.id, u.username || "", u.nickname || "", "user-table-identity");
+    usernameCell.innerHTML = userIdentityMarkup(u.id, u.username || "", u.nickname || "", "user-table-identity", u.avatar_file_id || "");
     tr.appendChild(usernameCell);
     appendTextCell(u.nickname || "");
     appendTextCell(u.real_name || "");

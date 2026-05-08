@@ -200,14 +200,14 @@ Required command set before merging this work:
 ```bash
 PROJECT_ROOT=/path/to/hackme_web
 
-PYTHONPATH="$PROJECT_ROOT" python3 -m pytest \
-  "$PROJECT_ROOT/tests/snapshots/test_snapshots.py" \
-  "$PROJECT_ROOT/tests/account/auth/test_account_lockout.py" \
-  "$PROJECT_ROOT/tests/storage/test_upload_security.py" \
-  "$PROJECT_ROOT/tests/security/integrity/test_integrity_guard.py" \
-  "$PROJECT_ROOT/tests/frontend/storage/test_frontend_drive_preview.py" \
-  "$PROJECT_ROOT/tests/platform/test_release_policy.py" \
-  "$PROJECT_ROOT/tests/frontend/layout/test_mobile_responsive_layout.py"
+"$PROJECT_ROOT/scripts/testing/pytest_in_tmp.sh" \
+  tests/snapshots/test_snapshots.py \
+  tests/account/auth/test_account_lockout.py \
+  tests/storage/test_upload_security.py \
+  tests/security/integrity/test_integrity_guard.py \
+  tests/frontend/storage/test_frontend_drive_preview.py \
+  tests/platform/test_release_policy.py \
+  tests/frontend/layout/test_mobile_responsive_layout.py
 
 PYTHONPATH="$PROJECT_ROOT" python3 -m py_compile \
   "$PROJECT_ROOT/server.py" \

@@ -3280,6 +3280,10 @@
     .msg.show { display: block; }
     .msg.ok   { background: rgba(0,212,170,.18); color: var(--accent2); border: 1px solid rgba(0,212,170,.35); }
     .msg.err  { background: rgba(255,79,109,.18); color: var(--danger); border: 1px solid rgba(255,79,109,.35); }
+    .field-error {
+      border-color: var(--danger) !important;
+      box-shadow: 0 0 0 1px rgba(255,79,109,.24);
+    }
 
     .info-grid {
       display: grid;

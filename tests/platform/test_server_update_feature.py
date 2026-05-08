@@ -34,6 +34,8 @@ def test_server_update_routes_are_root_only_and_use_safe_git_flow():
     assert "SERVER_UPDATE_WARNING" in system_admin
     assert "git reset --hard" not in system_admin
     assert "checkout -B" not in system_admin
+    assert 'return json_resp({"ok": bool(state.get("ok")), "update": state, "warning": SERVER_UPDATE_WARNING}), 200' in system_admin
+    assert 'app.logger.exception("Unhandled exception while serving %s %s", request.method, request.path)' in server_py
 
 
 def test_server_update_frontend_displays_update_summary():

@@ -1,7 +1,20 @@
 """Pure workflow validation and decision helpers."""
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
+
+_LOCAL_TZ = datetime.now().astimezone().tzinfo or timezone.utc
+
+
+def _utc_now():
+    return datetime.now(timezone.utc)
+
+
+def _coerce_utc_datetime(value):
+    dt = datetime.fromisoformat(str(value))
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=_LOCAL_TZ).astimezone(timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 def condition_label(cond):
@@ -430,13 +443,13 @@ def workflow_decision(
             execution_state=execution_state,
         )
     branches = sorted(workflow["branches"], key=lambda row: int(row.get("priority") or 0), reverse=True)
-    now_dt = datetime.now()
+    now_dt = _utc_now()
     branch_counts = (execution_state or {}).get("branch_step_counts") or {}
     for branch in branches:
         cooldown = int(branch.get("cooldown_seconds") or 0)
         if cooldown and last_run_at:
             try:
-                if (now_dt - datetime.fromisoformat(str(last_run_at))).total_seconds() < cooldown:
+                if (now_dt - _coerce_utc_datetime(last_run_at)).total_seconds() < cooldown:
                     continue
             except Exception:
                 pass
@@ -445,11 +458,11 @@ def workflow_decision(
         matched = all(hits) if branch.get("logic") == "AND" else any(hits)
         if not matched:
             continue
-        fallback_count = int(run_count or 0) if workflow.get("source") == "legacy_condition" else 0
-        step = int(branch_counts.get(branch.get("id"), fallback_count)) + 1
         actions = sorted(branch.get("actions") or [], key=lambda row: int(row.get("step") or 1))
-        action = next((row for row in actions if int(row.get("step") or 1) >= step), None)
-        if not action:
+        if not actions:
             continue
+        fallback_count = int(run_count or 0) if workflow.get("source") == "legacy_condition" else 0
+        branch_count = int(branch_counts.get(branch.get("id"), fallback_count))
+        action = actions[branch_count % len(actions)]
         return {"branch": branch, "action": action, "reason": branch.get("name") or branch.get("id") or "workflow"}
     return None

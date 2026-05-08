@@ -42,6 +42,13 @@ const TETRIS_PIECES = {
   J: [[1, 0, 0], [1, 1, 1]],
   L: [[0, 0, 1], [1, 1, 1]],
 };
+const CHESS_PIPELINE_FALLBACK_COMMANDS = {
+  prepare: "python3 scripts/games/chess_replay_prepare.py --replace-output --include-quarantine",
+  seed_train: "python3 scripts/games/chess_seed_train.py --preset standard",
+  exp3_refine: "python3 scripts/games/chess_exp3_dataset_train.py --input-jsonl runtime/reports/games/chess_datasets/train.jsonl",
+  benchmark: "python3 scripts/games/chess_self_play_train.py --exp1-games 0 --exp2-games 0 --exp3-games 0 --exp4-games 0 --hard-exp1-games 0 --hard-exp2-games 0 --hard-exp3-games 0 --hard-exp4-games 0 --cross-games 0 --cross-exp1-exp3-games 0 --cross-exp2-exp3-games 0 --cross-exp1-exp4-games 0 --cross-exp2-exp4-games 0 --cross-exp3-exp4-games 0 --benchmark-rounds 1 --smoke-games-per-pair 1",
+  full_pipeline: "python3 scripts/games/chess_train_pipeline.py --preset standard --include-quarantine",
+};
 
 function setOneA2BNotice(text, ms = 3500) {
   if (!oneA2BState) return;
@@ -114,6 +121,39 @@ function gameSubtitle(game) {
   if (game.key === "tetris") return "高分消除挑戰";
   if (game.key === "space_shooter") return "高分射擊挑戰";
   return game.supports_computer ? "玩家對戰 / 電腦練習" : "玩家對戰";
+}
+
+function gameDifficultyOptionDescription(difficulty) {
+  if (difficulty === "experiment 4:pv") return "實驗 4：PV 策略價值網路";
+  if (difficulty === "experiment 3:dl") return "實驗 3：DL 深度學習";
+  if (difficulty === "experiment 2:nn") return "實驗 2：NN 小型神經網路";
+  if (difficulty === "experiment") return "實驗：引擎搜尋 + 對局學習";
+  if (difficulty === "hard") return "困難：避免明顯送子";
+  return "普通：優先吃子與將軍";
+}
+
+function renderChessPracticeDifficultyOptions(games) {
+  const select = $("game-practice-difficulty");
+  if (!select) return;
+  const chessGame = (Array.isArray(games) ? games : []).find((game) => game?.key === "chess");
+  const rows = Array.isArray(chessGame?.computer_difficulties) && chessGame.computer_difficulties.length
+    ? chessGame.computer_difficulties
+    : [
+        { key: "normal", label: "普通" },
+        { key: "hard", label: "困難" },
+        { key: "experiment", label: "實驗" },
+        { key: "experiment 2:nn", label: "實驗 2：NN" },
+        { key: "experiment 3:dl", label: "實驗 3：DL" },
+        { key: "experiment 4:pv", label: "實驗 4：PV" },
+      ];
+  const current = select.value || "normal";
+  select.innerHTML = rows.map((row) => {
+    const key = String(row?.key || "normal");
+    const label = String(row?.label || gameDifficultyLabel(key));
+    return `<option value="${sanitize(key)}">${sanitize(gameDifficultyOptionDescription(key) || label)}</option>`;
+  }).join("");
+  const allowed = new Set(rows.map((row) => String(row?.key || "")));
+  select.value = allowed.has(current) ? current : (allowed.has("normal") ? "normal" : String(rows[0]?.key || "normal"));
 }
 
 function switchGameView(key) {
@@ -200,6 +240,7 @@ function renderGameCatalog(games) {
   const wrap = $("game-catalog-list");
   if (!wrap) return;
   const rows = Array.isArray(games) ? games : [];
+  renderChessPracticeDifficultyOptions(rows);
   wrap.innerHTML = rows.map((game) => `
     <button class="game-catalog-item ${game.key === gameSelectedKey ? "active" : ""}" type="button" data-game-key="${sanitize(game.key || "chess")}">
       <span class="game-catalog-icon">${sanitize(gameIcon(game.key))}</span>
@@ -257,9 +298,65 @@ function gameMatchLabel(match) {
 }
 
 function gameDifficultyLabel(difficulty) {
+  if (difficulty === "experiment 4:pv") return "實驗 4：PV";
+  if (difficulty === "experiment 3:dl") return "實驗 3：DL";
+  if (difficulty === "experiment 2:nn") return "實驗 2：NN";
   if (difficulty === "experiment") return "實驗";
   if (difficulty === "hard") return "困難";
   return "普通";
+}
+
+function gameOpponentColor(color) {
+  return color === "white" ? "black" : "white";
+}
+
+function buildOptimisticChessMatch(match, move) {
+  if (!match || !move) return match;
+  const board = { ...(match.board || {}) };
+  const piece = move.piece || board[move.from] || "";
+  delete board[move.from];
+  if (move.en_passant) {
+    const captureRank = (match.current_turn === "white" ? Number(move.to[1]) - 1 : Number(move.to[1]) + 1);
+    delete board[`${move.to[0]}${captureRank}`];
+  }
+  board[move.to] = move.promotion
+    ? (match.current_turn === "white" ? String(move.promotion || "q").toUpperCase() : String(move.promotion || "q").toLowerCase())
+    : piece;
+  if (move.castle) {
+    if (move.to === "g1") {
+      delete board.h1;
+      board.f1 = "R";
+    } else if (move.to === "c1") {
+      delete board.a1;
+      board.d1 = "R";
+    } else if (move.to === "g8") {
+      delete board.h8;
+      board.f8 = "r";
+    } else if (move.to === "c8") {
+      delete board.a8;
+      board.d8 = "r";
+    }
+  }
+  const moveHistory = Array.isArray(match.move_history) ? [...match.move_history] : [];
+  moveHistory.push({
+    by: match.current_turn,
+    from: move.from,
+    to: move.to,
+    piece,
+    captured: move.captured || null,
+    promotion: move.promotion || null,
+    castle: Boolean(move.castle),
+    en_passant: Boolean(move.en_passant),
+  });
+  return {
+    ...match,
+    board,
+    move_history: moveHistory,
+    current_turn: gameOpponentColor(match.current_turn),
+    legal_moves: [],
+    pending_computer_response: true,
+    pending_status_message: "你已走棋，電腦思考中...",
+  };
 }
 
 function renderGameMatches(matches) {
@@ -314,6 +411,8 @@ function renderChessBoard(match) {
   if (status) {
     if (match.status !== "active") {
       status.textContent = match.winner_username ? `已結束，勝者：${match.winner_username}` : `已結束：${match.result_reason || "平手"}`;
+    } else if (match.pending_computer_response) {
+      status.textContent = match.pending_status_message || "你已走棋，電腦思考中...";
     } else {
       status.textContent = myTurn ? "輪到你走棋" : `等待${match.current_turn === "white" ? "白方" : "黑方"}走棋`;
     }
@@ -396,6 +495,90 @@ function renderGameLeaderboard(data) {
   `).join("");
 }
 
+function gameRootChessPanelVisible() {
+  return currentUser === "root" && gameSelectedKey === "chess";
+}
+
+function renderChessRootDashboard(data) {
+  const panel = $("game-root-chess-panel");
+  const status = $("game-root-chess-status");
+  const production = $("game-root-chess-production");
+  const replay = $("game-root-chess-replay");
+  const pipeline = $("game-root-chess-pipeline");
+  const benchmark = $("game-root-chess-benchmark");
+  const promotion = $("game-root-chess-promotion");
+  const prepareCommand = $("game-root-chess-prepare-command");
+  const seedCommand = $("game-root-chess-seed-command");
+  const exp3Command = $("game-root-chess-exp3-command");
+  const benchmarkCommand = $("game-root-chess-benchmark-command");
+  const fullPipelineCommand = $("game-root-chess-pipeline-command");
+  if (!panel || !status || !production || !replay || !pipeline || !benchmark || !promotion) return;
+  panel.style.display = gameRootChessPanelVisible() ? "" : "none";
+  if (!gameRootChessPanelVisible()) return;
+  if (!data?.ok) {
+    status.textContent = "chess engine dashboard 讀取失敗。";
+    return;
+  }
+  const models = Array.isArray(data.production_models) ? data.production_models : [];
+  const replayInfo = data.replay_buffer || {};
+  const pipelineInfo = data.pipeline || {};
+  const pipelineCommands = pipelineInfo.commands || CHESS_PIPELINE_FALLBACK_COMMANDS;
+  const latestPrepare = data.latest_replay_prepare?.summary || {};
+  const latestSeed = data.latest_seed_training_report?.summary || {};
+  const latestPipeline = data.latest_pipeline_report?.summary || {};
+  const bench = data.latest_benchmark?.benchmark || {};
+  const smoke = data.latest_benchmark?.smoke_evaluation || {};
+  const promo = data.promotion?.status || {};
+  const recommendation = data.pipeline_recommendation || {};
+  const readyLabel = recommendation.ready ? "可重訓" : "暫不建議重訓";
+  status.textContent = `Warm Start ${data.warm_start?.ok ? "已就緒" : "失敗"} · usable replay ${Number(replayInfo.usable_replays || 0)} 筆 · ${readyLabel} · 最近 benchmark ${bench.games_played || 0} 場`;
+  production.innerHTML = models.length
+    ? models.map((row) => `<div class="drive-file-row game-list-row"><div><strong>${sanitize(row.engine || "-")}</strong><small>${sanitize(row.architecture || row.path || "-")}</small></div><strong>${sanitize(String(row.sample_count ?? row.size_bytes ?? 0))}</strong></div>`).join("")
+    : "<p style=\"color:var(--muted);\">尚無 production model</p>";
+  replay.innerHTML = `
+    <div class="drive-file-row game-list-row"><div><strong>Replay Buffer</strong><small>${sanitize(replayInfo.path || "-")}</small></div><strong>${Number(replayInfo.total_replays || 0)}</strong></div>
+    <div class="drive-file-row game-list-row"><div><strong>Usable Replays</strong><small>trusted / trainable</small></div><strong>${Number(replayInfo.usable_replays || 0)}</strong></div>
+    <div class="drive-file-row game-list-row"><div><strong>Quarantine</strong><small>${sanitize(replayInfo.quarantine_path || "-")}</small></div><strong>${Number(replayInfo.quarantine_replays || 0)}</strong></div>
+    <div class="drive-file-row game-list-row"><div><strong>Rejected</strong><small>${sanitize(replayInfo.rejected_path || "-")}</small></div><strong>${Number(replayInfo.rejected_replays || 0)}</strong></div>
+    <div class="drive-file-row game-list-row"><div><strong>Recent User Games</strong><small>最近 7 天</small></div><strong>${Number(replayInfo.recent_user_games || 0)}</strong></div>
+    <div class="drive-file-row game-list-row"><div><strong>Suspicious Replays</strong><small>待降權 / 隔離</small></div><strong>${Number(replayInfo.suspicious_count || 0)}</strong></div>
+    <div class="drive-file-row game-list-row"><div><strong>Duplicate / Resign Abuse</strong><small>資料污染風險</small></div><strong>${Number(replayInfo.duplicate_count || 0)} / ${Number(replayInfo.resign_abuse_count || 0)}</strong></div>
+  `;
+  pipeline.innerHTML = `
+    <div class="drive-file-row game-list-row"><div><strong>Retrain Recommendation</strong><small>${sanitize((recommendation.ready_reasons || recommendation.blocked_reasons || []).join(", ") || "no signal")}</small></div><strong>${recommendation.ready ? "READY" : "HOLD"}</strong></div>
+    <div class="drive-file-row game-list-row"><div><strong>Latest Prepare</strong><small>${sanitize(data.latest_replay_prepare?.path || "-")}</small></div><strong>${Number(latestPrepare.accepted_train_samples || 0)} / ${Number(latestPrepare.accepted_eval_samples || 0)}</strong></div>
+    <div class="drive-file-row game-list-row"><div><strong>Dataset Paths</strong><small>train / eval</small></div><strong>${sanitize(pipelineInfo.train_path || "-")} | ${sanitize(pipelineInfo.eval_path || "-")}</strong></div>
+    <div class="drive-file-row game-list-row"><div><strong>Latest Seed Train</strong><small>${sanitize(data.latest_seed_training_report?.path || "-")}</small></div><strong>${Number(latestSeed.games_played || 0)}</strong></div>
+    <div class="drive-file-row game-list-row"><div><strong>Latest Updates</strong><small>exp3 / exp4</small></div><strong>${Number((latestSeed.updates || {})["experiment 3:dl"] || 0)} / ${Number((latestSeed.updates || {})["experiment 4:pv"] || 0)}</strong></div>
+    <div class="drive-file-row game-list-row"><div><strong>Latest Full Pipeline</strong><small>${sanitize(data.latest_pipeline_report?.path || "-")}</small></div><strong>${sanitize(latestPipeline.run_id || "-")}</strong></div>
+  `;
+  const standings = Array.isArray(bench.standings) ? bench.standings.slice(0, 6) : [];
+  benchmark.innerHTML = standings.length
+    ? standings.map((row) => `<div class="drive-file-row game-list-row"><div><strong>${sanitize(row.engine || "-")}</strong><small>score_rate ${sanitize(String(row.score_rate ?? "-"))} · win_rate ${sanitize(String(row.win_rate ?? "-"))}</small></div><strong>${Number(row.games || 0)}</strong></div>`).join("")
+    : "<p style=\"color:var(--muted);\">尚無 benchmark report</p>";
+  const candidate = promo.candidate || null;
+  const last = promo.last_promotion_result || null;
+  promotion.innerHTML = `
+    <div class="drive-file-row game-list-row"><div><strong>Current Candidate</strong><small>${sanitize(candidate?.engine || "none")}</small></div><strong>${candidate?.promotion_gate?.pass ? "PASS" : (candidate ? "HOLD" : "-")}</strong></div>
+    <div class="drive-file-row game-list-row"><div><strong>Smoke</strong><small>post-training smoke</small></div><strong>${smoke.pass ? "PASS" : (smoke.games_played ? "FAIL" : "-")}</strong></div>
+    <div class="drive-file-row game-list-row"><div><strong>Promotion Gate</strong><small>${sanitize((candidate?.promotion_gate?.reasons || []).join(", ") || "ready")}</small></div><strong>${candidate?.promotion_gate?.pass ? "PASS" : (candidate ? "HOLD" : "-")}</strong></div>
+    <div class="drive-file-row game-list-row"><div><strong>Last Promotion</strong><small>${sanitize(last?.engine || "none")}</small></div><strong>${sanitize(last?.result || "-")}</strong></div>
+  `;
+  if (prepareCommand) prepareCommand.value = pipelineCommands.prepare || "";
+  if (seedCommand) seedCommand.value = pipelineCommands.seed_train || "";
+  if (exp3Command) exp3Command.value = pipelineCommands.exp3_refine || "";
+  if (benchmarkCommand) benchmarkCommand.value = pipelineCommands.benchmark || "";
+  if (fullPipelineCommand) fullPipelineCommand.value = pipelineCommands.full_pipeline || "";
+}
+
+async function loadChessRootDashboard() {
+  const panel = $("game-root-chess-panel");
+  if (panel) panel.style.display = gameRootChessPanelVisible() ? "" : "none";
+  if (!gameRootChessPanelVisible()) return;
+  const data = await gameRequest("/root/games/chess/engines/dashboard");
+  renderChessRootDashboard(data);
+}
+
 async function loadSelectedGameLeaderboard() {
   const key = gameSelectedKey || "chess";
   let path = "/games/chess/leaderboard";
@@ -416,6 +599,7 @@ async function loadSelectedGameLeaderboard() {
   renderGameLeaderboard(data);
   const awardBtn = $("game-award-btn");
   if (awardBtn) awardBtn.style.display = currentUser === "root" && key === "chess" ? "" : "none";
+  await loadChessRootDashboard().catch(() => {});
   return data;
 }
 
@@ -1305,9 +1489,18 @@ async function selectChessSquare(square) {
   }
   if (gameSelectedSquare && legal && selectedPiece) {
     const from = gameSelectedSquare;
+    const chosenMove = (match.legal_moves || []).find((move) => move.from === from && move.to === square) || {
+      from,
+      to: square,
+      piece: selectedPiece,
+    };
+    const previousMatch = match;
+    const optimisticMatch = buildOptimisticChessMatch(match, chosenMove);
     gameSelectedSquare = null;
     chessMoveInFlight = true;
-    renderChessBoard(match);
+    gameState.matches = gameState.matches.map((item) => item.id === previousMatch.id ? optimisticMatch : item);
+    renderGameMatches(gameState.matches);
+    setGameMsg("已送出走棋，等待電腦回應...", true);
     try {
       const json = await gameRequest(`/games/chess/matches/${encodeURIComponent(gameSelectedMatchId)}/move`, {
         method: "POST",
@@ -1318,6 +1511,7 @@ async function selectChessSquare(square) {
       renderGameMatches(gameState.matches);
       await loadGameZone();
     } catch (err) {
+      gameState.matches = gameState.matches.map((item) => item.id === previousMatch.id ? previousMatch : item);
       setGameMsg(err.message || "走棋失敗", false);
     } finally {
       chessMoveInFlight = false;
@@ -1376,6 +1570,47 @@ async function awardGameRewards() {
   }
 }
 
+async function warmStartChessModels() {
+  try {
+    const json = await gameRequest("/root/games/chess/warm-start", { method: "POST", body: {} });
+    setGameMsg(`warm start 完成，共檢查 ${json.artifacts?.length || 0} 個 artifact`, true);
+    await loadChessRootDashboard();
+  } catch (err) {
+    setGameMsg(err.message || "warm start 失敗", false);
+  }
+}
+
+async function stageChessCandidate() {
+  try {
+    const engine = $("game-root-chess-engine")?.value || "experiment 4:pv";
+    const sourcePath = $("game-root-chess-candidate-path")?.value || "";
+    const benchmarkPath = $("game-root-chess-benchmark-path")?.value || "";
+    const json = await gameRequest("/root/games/chess/promotion/stage", {
+      method: "POST",
+      body: { engine, source_path: sourcePath, benchmark_report_path: benchmarkPath },
+    });
+    setGameMsg(`candidate staged: ${json.engine}`, true);
+    await loadChessRootDashboard();
+  } catch (err) {
+    setGameMsg(err.message || "stage candidate 失敗", false);
+  }
+}
+
+async function promoteChessCandidate() {
+  try {
+    const engine = $("game-root-chess-engine")?.value || "experiment 4:pv";
+    const benchmarkPath = $("game-root-chess-benchmark-path")?.value || "";
+    const json = await gameRequest("/root/games/chess/promotion/promote", {
+      method: "POST",
+      body: { engine, benchmark_report_path: benchmarkPath },
+    });
+    setGameMsg(`promotion 完成: ${json.engine}`, true);
+    await loadChessRootDashboard();
+  } catch (err) {
+    setGameMsg(err.message || "promotion 失敗", false);
+  }
+}
+
 document.addEventListener("click", (event) => {
   const catalogBtn = event.target?.closest?.("[data-game-key]");
   if (catalogBtn) {
@@ -1420,6 +1655,26 @@ document.addEventListener("click", (event) => {
   const shooterNewBtn = event.target?.closest?.("#space-shooter-new-btn");
   if (shooterNewBtn) {
     startSpaceShooterGame();
+    return;
+  }
+  const rootRefreshBtn = event.target?.closest?.("#game-root-chess-refresh-btn");
+  if (rootRefreshBtn) {
+    loadChessRootDashboard().catch((err) => setGameMsg(err.message || "dashboard 讀取失敗", false));
+    return;
+  }
+  const rootWarmStartBtn = event.target?.closest?.("#game-root-chess-warm-start-btn");
+  if (rootWarmStartBtn) {
+    warmStartChessModels();
+    return;
+  }
+  const rootStageBtn = event.target?.closest?.("#game-root-chess-stage-btn");
+  if (rootStageBtn) {
+    stageChessCandidate();
+    return;
+  }
+  const rootPromoteBtn = event.target?.closest?.("#game-root-chess-promote-btn");
+  if (rootPromoteBtn) {
+    promoteChessCandidate();
     return;
   }
   const gameTouchBtn = event.target?.closest?.("[data-game-touch]");

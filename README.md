@@ -26,32 +26,38 @@ Server Mode 等能力。
 
 ## Quick Start
 
-推薦第一次部署直接從 repo 根目錄執行：
+本 repo 的公開入口現在只保留三條：
+
+- `python3 server.py --doctor`
+  檢查目前 runtime 環境是否已存在且可寫；缺目錄時會明確報錯，不會靜默補建。
+- `python3 server.py`
+  正式 / 手動啟動入口。只有 doctor 通過時才會繼續啟 server。
+- `./test_for_develop.sh`
+  開發專用入口。它會先把 repo 複製到 `/tmp/.../hackme_web`，把開發用 runtime、
+  cache、venv 都留在 `/tmp`，再從 `/tmp` 內的 `server.py` 啟動。
+
+日常原則仍然不變：**不要直接在 repo 工作樹內啟 server 或 pytest**。
+請優先使用 `/tmp` 複本，避免 `runtime/`、cache、pycache 汙染 repo。
+
+## Local Workflow
 
 ```bash
-./one_click_setup.sh
+python3 server.py --doctor
+./test_for_develop.sh --port 50785
+scripts/testing/pytest_in_tmp.sh -q tests
 ```
 
-若你一開始就知道要接本地 ComfyUI 與 root-only Civitai 搜尋/下載，可直接：
+若你真的要在目前工作樹直接啟動，先自己準備好 runtime 目錄，再執行：
 
 ```bash
-./one_click_setup.sh --with-comfyui http://127.0.0.1:8192 --with-civitai-key '<CIVITAI_API_KEY>'
-```
-
-手動開發啟動：
-
-```bash
-python3 -m venv .venv
-. .venv/bin/activate
-python3 -m pip install -r requirements.txt
+python3 server.py --doctor
 python3 server.py
 ```
 
-啟動後請以 server console 印出的實際 URL 為準。一般情況：
+啟動後請以 server console 或腳本印出的實際 URL 為準。一般情況：
 
-- `./one_click_setup.sh` / production wizard：依設定可能是 HTTP 或 HTTPS
-- `python3 server.py`：本機開發模式通常會自動準備本地 TLS，因此多半是
-  `https://127.0.0.1:5000/`
+- `./test_for_develop.sh`：通常會是 `https://127.0.0.1:<port>/`
+- `python3 server.py`：依 `server_ssl_enabled` 與 runtime cert 狀態決定 HTTP/HTTPS
 
 若不確定，直接探測：
 
@@ -67,7 +73,9 @@ Fresh local databases 會建立：
 - `admin/admin`
 - `test/test`
 
-第一次登入後會被要求立即改密碼。若要自訂 bootstrap 密碼，請在第一次建 DB 前先設：
+`test_for_develop.sh` 會額外關掉強制改密碼、登入安全限制、Integrity Guard、
+audit chain 等妨礙開發的保護，並保留預設帳密方便反覆 debug。若你要手動啟動，
+仍可在第一次建 DB 前先設：
 
 - `HTML_LEARNING_ROOT_PASSWORD`
 - `HTML_LEARNING_MANAGER_PASSWORD`
@@ -87,6 +95,6 @@ Fresh local databases 會建立：
 ## Local Checks
 
 ```bash
-python3 scripts/pre_push_checks.py
-PYTHONPATH=. python3 -m pytest -q tests
+python3 scripts/prepush/pre_push_checks.py
+scripts/testing/pytest_in_tmp.sh -q tests
 ```

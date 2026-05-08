@@ -6,6 +6,8 @@ This engine is intentionally lightweight:
 - It does not replace the existing ``experiment`` difficulty.
 - It starts from a heuristic bootstrap and gradually gives more weight to the
   learned model as more games are recorded.
+- The JSON payload is intentionally stable so external training programs can
+  emit a compatible model file without importing the app itself.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from pathlib import Path
 import chess
 
 from services.games.chess import initial_board, move_to_uci, opponent, to_chess_board, validate_move
+from services.server.runtime import default_runtime_root_path
 
 
 EXPERIMENT_NN_DIFFICULTY = "experiment 2:nn"
@@ -48,7 +51,7 @@ _TRACKED_PIECES = (
 def default_chess_nn_model_path() -> Path:
     runtime_dir = os.environ.get("HACKME_RUNTIME_DIR", "").strip()
     if not runtime_dir:
-        runtime_dir = os.path.join(os.getcwd(), "runtime")
+        runtime_dir = str(default_runtime_root_path())
     override = os.environ.get("HTML_LEARNING_CHESS_ENGINE_NN_MODEL_PATH", "").strip()
     return Path(override or os.path.join(runtime_dir, "models", DEFAULT_CHESS_NN_MODEL_NAME))
 
@@ -231,11 +234,12 @@ def _random_matrix(rows: int, cols: int, *, rng: random.Random) -> list[list[flo
     return [[rng.uniform(-0.08, 0.08) for _ in range(cols)] for _ in range(rows)]
 
 
-def _initial_model() -> dict:
+def experiment_nn_model_template() -> dict:
     rng = random.Random(20260507)
     inputs = _input_size()
     return {
         "version": _NN_VERSION,
+        "architecture": "mlp-49x16x1",
         "input_size": inputs,
         "hidden_size": _HIDDEN_SIZE,
         "w1": _random_matrix(_HIDDEN_SIZE, inputs, rng=rng),
@@ -247,6 +251,64 @@ def _initial_model() -> dict:
     }
 
 
+def _normalize_float_vector(values, expected_len: int) -> list[float] | None:
+    if not isinstance(values, list) or len(values) != expected_len:
+        return None
+    try:
+        return [float(value) for value in values]
+    except Exception:
+        return None
+
+
+def _normalize_float_matrix(values, rows: int, cols: int) -> list[list[float]] | None:
+    if not isinstance(values, list) or len(values) != rows:
+        return None
+    matrix: list[list[float]] = []
+    for row in values:
+        normalized = _normalize_float_vector(row, cols)
+        if normalized is None:
+            return None
+        matrix.append(normalized)
+    return matrix
+
+
+def normalize_experiment_nn_model_payload(model: dict) -> dict | None:
+    if not isinstance(model, dict):
+        return None
+    inputs = _input_size()
+    if int(model.get("version") or 0) != _NN_VERSION:
+        return None
+    if int(model.get("input_size") or 0) != inputs:
+        return None
+    if int(model.get("hidden_size") or 0) != _HIDDEN_SIZE:
+        return None
+    w1 = _normalize_float_matrix(model.get("w1"), _HIDDEN_SIZE, inputs)
+    b1 = _normalize_float_vector(model.get("b1"), _HIDDEN_SIZE)
+    w2 = _normalize_float_vector(model.get("w2"), _HIDDEN_SIZE)
+    if w1 is None or b1 is None or w2 is None:
+        return None
+    try:
+        b2 = float(model.get("b2"))
+    except Exception:
+        return None
+    return {
+        "version": _NN_VERSION,
+        "architecture": "mlp-49x16x1",
+        "input_size": inputs,
+        "hidden_size": _HIDDEN_SIZE,
+        "w1": w1,
+        "b1": b1,
+        "w2": w2,
+        "b2": b2,
+        "sample_count": max(0, int(model.get("sample_count") or 0)),
+        "updated_at": str(model.get("updated_at") or _now()),
+    }
+
+
+def _initial_model() -> dict:
+    return experiment_nn_model_template()
+
+
 def _load_model(model_path: Path) -> dict:
     path = Path(model_path)
     if not path.exists():
@@ -255,13 +317,8 @@ def _load_model(model_path: Path) -> dict:
         model = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return _initial_model()
-    if not isinstance(model, dict):
-        return _initial_model()
-    if int(model.get("version") or 0) != _NN_VERSION:
-        return _initial_model()
-    if int(model.get("input_size") or 0) != _input_size():
-        return _initial_model()
-    return model
+    normalized = normalize_experiment_nn_model_payload(model)
+    return normalized or _initial_model()
 
 
 def _save_model(model_path: Path, model: dict) -> None:
@@ -379,7 +436,8 @@ def record_experiment_nn_learning(row, *, winner_color: str | None, model_path=N
     ai_color = chess.WHITE if ai_side == "white" else chess.BLACK
     target = _training_target(ai_side, winner_color)
     model = _load_model(Path(model_path or default_chess_nn_model_path()))
-    board = initial_board()
+    initial_fen = str(row["initial_fen"] if "initial_fen" in row.keys() else "").strip()
+    board = {"__fen__": initial_fen} if initial_fen else initial_board()
     updated = 0
     for entry in moves:
         mover = str((entry or {}).get("by") or "").strip().lower()

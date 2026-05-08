@@ -69,7 +69,7 @@
 
 更完整的 runtime trust boundary 請看：
 
-- [ENCRYPTION_RUNTIME_BOUNDARY.md](runtime/ENCRYPTION_RUNTIME_BOUNDARY.md)
+- [ENCRYPTION_RUNTIME_BOUNDARY.md](ops_boundaries/ENCRYPTION_RUNTIME_BOUNDARY.md)
 - [WEB.md](WEB.md)
 - [VIDEO_PLATFORM.md](video/VIDEO_PLATFORM.md)
 

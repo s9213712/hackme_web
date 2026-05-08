@@ -70,9 +70,9 @@ def register_video_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return None, json_resp({"ok": False, "msg": "Invalid JSON", "error": "invalid_json"}), 400
+            return None, json_resp({"ok": False, "msg": "請求 JSON 格式錯誤", "error": "invalid_json"}), 400
         if not isinstance(data, dict):
-            return None, json_resp({"ok": False, "msg": "Invalid request", "error": "invalid_request"}), 400
+            return None, json_resp({"ok": False, "msg": "請求內容格式錯誤", "error": "invalid_request"}), 400
         return data, None, None
 
     def _actor_or_401():
@@ -445,21 +445,24 @@ def register_video_routes(app, deps):
   <title>分享影音</title>
   <style>
     body {{ margin:0; background:#111521; color:#eef2ff; font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }}
-    .wrap {{ max-width:960px; margin:0 auto; padding:1rem; }}
-    .card {{ background:#171c2b; border:1px solid #2a3150; border-radius:18px; padding:1rem; box-shadow:0 14px 40px rgba(0,0,0,.22); }}
+    .wrap {{ width:min(100%, 960px); margin:0 auto; padding:1rem; box-sizing:border-box; }}
+    .card {{ background:#171c2b; border:1px solid #2a3150; border-radius:18px; padding:1rem; box-shadow:0 14px 40px rgba(0,0,0,.22); overflow:hidden; }}
     .msg {{ min-height:1.4rem; color:#b9c2f0; margin:.75rem 0; white-space:pre-wrap; }}
     .field {{ display:grid; gap:.35rem; margin:.75rem 0; }}
     input, button, textarea {{ font:inherit; }}
     input[type=password] {{ width:100%; box-sizing:border-box; padding:.7rem .9rem; border-radius:12px; border:1px solid #39405c; background:#0f1422; color:#eef2ff; }}
     button {{ padding:.7rem 1rem; border-radius:12px; border:0; background:#3d78ff; color:#fff; cursor:pointer; }}
     button.secondary {{ background:#2b3148; }}
-    video, audio {{ width:100%; margin-top:.8rem; border-radius:14px; background:#070b15; }}
+    #player-host {{ width:100%; margin-top:.8rem; }}
+    video, audio {{ display:block; width:100%; max-width:100%; border-radius:14px; background:#070b15; }}
+    video {{ height:auto; max-height:min(70vh, 560px); aspect-ratio:16 / 9; object-fit:contain; }}
     .meta {{ color:#b8bfd8; font-size:.95rem; }}
     .hidden {{ display:none !important; }}
     @media (max-width: 640px) {{
       .wrap {{ padding:.75rem; }}
       .card {{ padding:.85rem; border-radius:14px; }}
       video, audio {{ border-radius:10px; }}
+      video {{ max-height:52vh; }}
       button {{ width:100%; }}
     }}
   </style>

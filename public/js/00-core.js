@@ -7,6 +7,7 @@ const CSRF_BROADCAST_CHANNEL = "hackme_web.csrf";
 let csrfBroadcast = null;
 let currentUser = null;
 let currentUserId = null;
+let currentUserAvatarFileId = "";
 let currentRole = "user";
 let currentRoleLabel = "user";
 let currentMustChangePassword = false;
@@ -326,7 +327,7 @@ function updateSidebarIdentity() {
   if (role) role.textContent = currentRoleLabel || currentRole || "-";
   if (level) level.textContent = currentUser ? (level.dataset.memberLevel || "-") : "-";
   if (avatar) {
-    avatar.innerHTML = currentUser ? userAvatarInnerMarkup(currentUserId, currentUser) : '<span class="user-avatar-fallback">-</span>';
+    avatar.innerHTML = currentUser ? userAvatarInnerMarkup(currentUserId, currentUser, currentUserAvatarFileId) : '<span class="user-avatar-fallback">-</span>';
     avatar.setAttribute("title", currentUser || "未登入");
     bindAvatarFallbacks(avatar);
   }
@@ -524,15 +525,15 @@ function avatarInitial(username) {
   return value ? value.slice(0, 1).toUpperCase() : "?";
 }
 
-function avatarUrlForUser(userId) {
-  if (!userId) return "";
+function avatarUrlForUser(userId, avatarFileId = "") {
+  if (!userId || !avatarFileId) return "";
   const bust = avatarCacheBustByUserId.get(String(userId));
   const suffix = bust ? `?v=${encodeURIComponent(bust)}` : "";
   return `${API}/admin/users/${encodeURIComponent(userId)}/avatar${suffix}`;
 }
 
-function userAvatarInnerMarkup(userId, username) {
-  const url = avatarUrlForUser(userId);
+function userAvatarInnerMarkup(userId, username, avatarFileId = "") {
+  const url = avatarUrlForUser(userId, avatarFileId);
   const label = `${username || "使用者"} 大頭貼`;
   return `
     <span class="user-avatar-fallback">${sanitize(avatarInitial(username))}</span>
@@ -540,14 +541,14 @@ function userAvatarInnerMarkup(userId, username) {
   `;
 }
 
-function userAvatarMarkup(userId, username, extraClass = "") {
-  return `<span class="user-avatar ${sanitize(extraClass)}" title="${sanitize(username || "使用者")}">${userAvatarInnerMarkup(userId, username)}</span>`;
+function userAvatarMarkup(userId, username, extraClass = "", avatarFileId = "") {
+  return `<span class="user-avatar ${sanitize(extraClass)}" title="${sanitize(username || "使用者")}">${userAvatarInnerMarkup(userId, username, avatarFileId)}</span>`;
 }
 
-function userIdentityMarkup(userId, username, meta = "", extraClass = "") {
+function userIdentityMarkup(userId, username, meta = "", extraClass = "", avatarFileId = "") {
   return `
     <span class="identity-with-avatar ${sanitize(extraClass)}">
-      ${userAvatarMarkup(userId, username)}
+      ${userAvatarMarkup(userId, username, "", avatarFileId)}
       <span class="identity-text">
         <strong>${sanitize(username || "系統")}</strong>
         ${meta ? `<small>${sanitize(meta)}</small>` : ""}
@@ -565,9 +566,12 @@ function bindAvatarFallbacks(root = document) {
   });
 }
 
-function markUserAvatarUpdated(userId) {
+function markUserAvatarUpdated(userId, avatarFileId = null) {
   if (!userId) return;
   avatarCacheBustByUserId.set(String(userId), Date.now());
+  if (String(userId) === String(currentUserId || "") && avatarFileId !== null && avatarFileId !== undefined) {
+    currentUserAvatarFileId = avatarFileId || "";
+  }
   updateSidebarIdentity();
 }
 
@@ -600,6 +604,58 @@ function updateLoginModeFields() {
   }
 }
 
+function loginAutofillBlockedForUi() {
+  if (siteConfig && typeof siteConfig === "object" && siteConfig.login_autofill_block_enabled === true) return true;
+  const authCard = $("auth-card");
+  return authCard?.dataset?.loginAutofillBlock === "1";
+}
+
+function bindLoginAutofillGuards() {
+  ["li-user", "li-pw"].forEach((id) => {
+    const input = $(id);
+    if (!input || input.dataset.autofillGuardBound === "1") return;
+    const unlock = () => {
+      if (input.dataset.autofillGuardEnabled === "1") input.readOnly = false;
+    };
+    input.addEventListener("focus", unlock);
+    input.addEventListener("pointerdown", unlock);
+    input.addEventListener("keydown", unlock);
+    input.dataset.autofillGuardBound = "1";
+  });
+}
+
+function updateLoginAutofillPolicy() {
+  bindLoginAutofillGuards();
+  const enabled = loginAutofillBlockedForUi();
+  const authCard = $("auth-card");
+  if (authCard) authCard.dataset.loginAutofillBlock = enabled ? "1" : "0";
+  const loginSection = $("sec-login");
+  const dummyId = "li-autofill-decoys";
+  const existingDummy = $(dummyId);
+  if (loginSection && enabled && !existingDummy) {
+    const decoys = document.createElement("div");
+    decoys.id = dummyId;
+    decoys.style.display = "none";
+    decoys.setAttribute("aria-hidden", "true");
+    decoys.innerHTML = '<input type="text" autocomplete="username"><input type="password" autocomplete="current-password">';
+    loginSection.insertBefore(decoys, loginSection.firstChild);
+  } else if (!enabled && existingDummy) {
+    existingDummy.remove();
+  }
+  [
+    { id: "li-user", normalAutocomplete: "username" },
+    { id: "li-pw", normalAutocomplete: "current-password" },
+  ].forEach(({ id, normalAutocomplete }) => {
+    const input = $(id);
+    if (!input) return;
+    input.autocomplete = enabled ? "off" : normalAutocomplete;
+    input.setAttribute("data-lpignore", enabled ? "true" : "false");
+    input.dataset.formType = enabled ? "other" : normalAutocomplete;
+    input.dataset.autofillGuardEnabled = enabled ? "1" : "0";
+    input.readOnly = enabled;
+  });
+}
+
 function extractSiteAppearanceConfig(config) {
   const out = {};
   if (!config || typeof config !== "object") return out;
@@ -613,6 +669,7 @@ function extractSiteAppearanceConfig(config) {
 function renderEffectiveSiteConfig() {
   siteConfig = { ...globalSiteConfig, ...userSiteAppearanceConfig };
   updateLoginModeFields();
+  updateLoginAutofillPolicy();
   const root = document.documentElement;
   const mappings = {
     site_bg: "--bg",
@@ -1020,7 +1077,7 @@ function renderChatMessages(messages) {
     return `
       <div class="${cls.join(" ")}">
         <div class="chat-msg-head">
-          ${userAvatarMarkup(m.sender_id, m.sender || "系統", "user-avatar-sm")}
+          ${userAvatarMarkup(m.sender_id, m.sender || "系統", "user-avatar-sm", m.sender_avatar_file_id || "")}
           <span class="meta"><strong>${sanitize(m.sender || "系統")}</strong><small>${sanitize(formatChatTime(m.created_at))}</small></span>
         </div>
         ${body}
@@ -1171,6 +1228,7 @@ $("admin-add-pw-confirm").addEventListener("input", updateAdminPwMatchHint);
 function setAuthState(json, showLoginHero = false) {
   currentUser = json.username || null;
   currentUserId = json.id || null;
+  currentUserAvatarFileId = json.avatar_file_id || "";
   currentRole = json.role || "user";
   currentRoleLabel = json.role_label || currentRole || "user";
   currentMustChangePassword = !!json.must_change_password;
@@ -1306,9 +1364,6 @@ function setAuthState(json, showLoginHero = false) {
     }
   }
   if (typeof startNotificationPoll === "function") startNotificationPoll();
-  if (typeof loadEconomyDashboard === "function" && canAccessModule("economy")) {
-    loadEconomyDashboard();
-  }
   if (canAccessModule("chat")) {
     loadChatRooms();
   }
@@ -1348,6 +1403,7 @@ function resetAuthState() {
   clearUserAppearanceConfig();
   currentUser = null;
   currentUserId = null;
+  currentUserAvatarFileId = "";
   currentRole = "user";
   currentRoleLabel = "user";
   currentMustChangePassword = false;

@@ -42,6 +42,11 @@ def test_runtime_reset_keeps_integrity_and_audit_chain_enabled():
     assert MANAGEMENT_ONLY_RESET_SETTINGS["integrity_guard_enabled"] is True
 
 
+def test_security_defaults_include_login_autofill_and_notification_mute_settings():
+    assert DEFAULT_SETTINGS["login_autofill_block_enabled"] is False
+    assert DEFAULT_SETTINGS["notification_muted_types"] == ""
+
+
 def test_server_upload_request_limit_is_env_driven_and_has_413_handler():
     server_py = (ROOT / "server.py").read_text(encoding="utf-8")
     assert 'HTML_LEARNING_MAX_CONTENT_MB' in server_py
@@ -52,9 +57,10 @@ def test_server_upload_request_limit_is_env_driven_and_has_413_handler():
     assert '"max_request_mb": limit_mb' in server_py
 
 
-def test_runtime_artifacts_default_to_runtime_subdir_and_not_repo_root():
+def test_runtime_artifacts_default_to_repo_runtime_root_and_not_repo_root():
     server_py = (ROOT / "server.py").read_text(encoding="utf-8")
-    assert 'RUNTIME_DIR = _env_path("HACKME_RUNTIME_DIR", os.path.join(BASE_DIR, "runtime"))' in server_py
+    assert 'default_runtime_root,' in server_py
+    assert 'RUNTIME_DIR = _env_path("HACKME_RUNTIME_DIR", default_runtime_root())' in server_py
     assert 'DB_DIR = _env_path("HTML_LEARNING_DB_DIR", os.path.join(RUNTIME_DIR, "database"))' in server_py
     assert 'CHESS_ENGINE_DB_PATH = _env_path("HTML_LEARNING_CHESS_ENGINE_DB_PATH", os.path.join(DB_DIR, "chess_experiment.db"))' in server_py
     assert 'LOG_DIR = _env_path("HTML_LEARNING_LOG_DIR", os.path.join(RUNTIME_DIR, "logs"))' in server_py

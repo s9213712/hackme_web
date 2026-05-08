@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import py_compile
 import shutil
 import subprocess
 import sys
@@ -113,8 +112,8 @@ def static_check(name: str, passed: bool, *, severity: str = "HIGH", evidence=No
 
 
 def pytest_check(files: list[str], *, timeout: int) -> Subcheck:
-    paths = [str(ROOT / "tests" / file) for file in files]
-    result = run_command([sys.executable, "-m", "pytest", "-q", *paths], timeout=timeout)
+    paths = [str(Path("tests") / file) for file in files]
+    result = run_command([str(ROOT / "scripts" / "testing" / "pytest_in_tmp.sh"), "-q", *paths], timeout=timeout)
     result.name = "pytest " + ", ".join(files)
     return result
 
@@ -143,8 +142,9 @@ def py_compile_all() -> Subcheck:
             continue
         checked += 1
         try:
-            py_compile.compile(str(path), doraise=True)
-        except Exception as exc:
+            source = path.read_text(encoding="utf-8")
+            compile(source, str(path), "exec")
+        except (SyntaxError, UnicodeDecodeError) as exc:
             failures.append({"path": rel_text, "error": str(exc)})
     return Subcheck(
         name="py_compile all tracked Python sources",
@@ -355,7 +355,7 @@ def build_modules(args) -> list[ModuleResult]:
     full_suite.add(git_diff_check())
     full_suite.add(reports_output_policy_check())
     if not args.skip_full_pytest:
-        full_suite.add(run_command([sys.executable, "-m", "pytest", "-q", "tests"], timeout=max(args.timeout, 900)))
+        full_suite.add(run_command([str(ROOT / "scripts" / "testing" / "pytest_in_tmp.sh"), "-q", "tests"], timeout=max(args.timeout, 900)))
     else:
         full_suite.add(static_check(
             "pytest full suite explicitly skipped",

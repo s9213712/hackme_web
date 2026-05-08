@@ -94,3 +94,25 @@ def test_public_auth_flows_force_refresh_public_csrf_tokens():
 
     assert auth.count("fetchCsrfToken({ force: true });") >= 3
     assert "fetchCsrfToken({ force: false });" not in auth
+
+
+def test_login_autofill_block_and_notification_mute_settings_are_wired():
+    index = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
+    core = (ROOT / "public" / "js" / "00-core.js").read_text(encoding="utf-8")
+    admin = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+
+    assert 'data-login-autofill-block="__LOGIN_AUTOFILL_BLOCK__"' in index
+    assert 'autocomplete="__LOGIN_USER_AUTOCOMPLETE__"' in index
+    assert 'autocomplete="__LOGIN_PASSWORD_AUTOCOMPLETE__"' in index
+    assert 'id="s-login-autofill-block-enabled"' in index
+    assert 'id="s-notification-muted-types"' in index
+
+    assert "function loginAutofillBlockedForUi()" in core
+    assert "function bindLoginAutofillGuards()" in core
+    assert "function updateLoginAutofillPolicy()" in core
+    assert "updateLoginAutofillPolicy();" in core
+    assert "input.readOnly = enabled;" in core
+    assert "data-lpignore" in core
+
+    assert "login_autofill_block_enabled" in admin
+    assert "notification_muted_types" in admin

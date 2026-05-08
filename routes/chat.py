@@ -458,11 +458,14 @@ def register_chat_routes(app, deps):
             added_usernames = []
             if invite_usernames and not is_private_room:
                 user_status_filter = "AND status='active'" if "status" in _table_columns(conn, "users") else ""
+                placeholders = ",".join("?" for _ in invite_usernames)
+                invite_rows = conn.execute(
+                    f"SELECT id, username FROM users WHERE username IN ({placeholders}) {user_status_filter}",
+                    tuple(invite_usernames),
+                ).fetchall()
+                invite_map = {str(row["username"]): row for row in invite_rows}
                 for username in invite_usernames:
-                    user_row = conn.execute(
-                        f"SELECT id, username FROM users WHERE username=? {user_status_filter}",
-                        (username,),
-                    ).fetchone()
+                    user_row = invite_map.get(username)
                     if not user_row:
                         continue
                     conn.execute(
@@ -796,7 +799,7 @@ def register_chat_routes(app, deps):
                 if limit is None:
                     return json_resp({"ok":False,"msg":"limit 參數錯誤"}), 400
                 rows = conn.execute(
-                    "SELECT m.id, m.sender_id, u.username, m.content, m.created_at, "
+                    "SELECT m.id, m.sender_id, u.username, u.avatar_file_id, m.content, m.created_at, "
                     "m.message_type, m.sticker_key, m.is_revoked, m.revoked_at "
                     "FROM chat_messages m "
                     "LEFT JOIN users u ON u.id = m.sender_id "
@@ -810,6 +813,7 @@ def register_chat_routes(app, deps):
                         "id": r["id"],
                         "sender_id": r["sender_id"],
                         "sender": r["username"] or "系統",
+                        "sender_avatar_file_id": r["avatar_file_id"] or "",
                         "content": "（訊息已收回）" if r["is_revoked"] else r["content"],
                         "created_at": r["created_at"],
                         "message_type": "text" if r["is_revoked"] else (r["message_type"] or "text"),

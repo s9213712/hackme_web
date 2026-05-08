@@ -13,6 +13,37 @@ def notifications_enabled(default=True):
         return bool(default)
 
 
+def parse_muted_notification_types(raw):
+    if isinstance(raw, (list, tuple, set)):
+        values = list(raw)
+    else:
+        text = str(raw or "")
+        values = text.replace(";", "\n").replace(",", "\n").splitlines()
+    muted = set()
+    for value in values:
+        item = str(value or "").strip().lower()
+        if item:
+            muted.add(item[:60])
+    return muted
+
+
+def notification_type_is_muted(notification_type, settings=None):
+    note_type = str(notification_type or "").strip().lower()
+    if not note_type:
+        return False
+    try:
+        from services.platform.settings import DEFAULT_SETTINGS, get_system_settings
+
+        active_settings = settings if isinstance(settings, dict) else get_system_settings()
+        raw = (active_settings or {}).get(
+            "notification_muted_types",
+            DEFAULT_SETTINGS.get("notification_muted_types", ""),
+        )
+        return note_type in parse_muted_notification_types(raw)
+    except Exception:
+        return False
+
+
 def ensure_notifications_schema(conn):
     conn.execute(
         """
@@ -34,6 +65,8 @@ def ensure_notifications_schema(conn):
 
 def create_notification(conn, *, user_id, type, title, body, link=None):
     ensure_notifications_schema(conn)
+    if notification_type_is_muted(type):
+        return False
     conn.execute(
         """
         INSERT INTO notifications (user_id, type, title, body, link, is_read, created_at)
@@ -48,17 +81,19 @@ def create_notification(conn, *, user_id, type, title, body, link=None):
             datetime.now().isoformat(),
         ),
     )
+    return True
 
 
 def create_notification_if_enabled(conn, *, user_id, type, title, body, link=None):
     if not notifications_enabled(default=True):
         return False
-    create_notification(conn, user_id=user_id, type=type, title=title, body=body, link=link)
-    return True
+    return create_notification(conn, user_id=user_id, type=type, title=title, body=body, link=link)
 
 
 def create_notification_once_if_enabled(conn, *, user_id, type, title, body, link=None):
     if not notifications_enabled(default=True):
+        return False
+    if notification_type_is_muted(type):
         return False
     ensure_notifications_schema(conn)
     existing = conn.execute(
@@ -71,8 +106,7 @@ def create_notification_once_if_enabled(conn, *, user_id, type, title, body, lin
     ).fetchone()
     if existing:
         return False
-    create_notification(conn, user_id=user_id, type=type, title=title, body=body, link=link)
-    return True
+    return create_notification(conn, user_id=user_id, type=type, title=title, body=body, link=link)
 
 
 def root_user_ids(conn):

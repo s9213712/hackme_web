@@ -16,13 +16,14 @@ set -uo pipefail
 cd "$(dirname "$0")/../../.."  # repo root
 
 PYTHON="${PYTHON:-python3}"
+PYTEST_IN_TMP="scripts/testing/pytest_in_tmp.sh"
 pass_count=0
 fail_count=0
 fail_blocks=()
 
 run_block() {
   local label="$1"; shift
-  printf '\n========== %s ==========\n' "$label"
+  printf '\n[block] %s\n' "$label"
   if "$@"; then
     printf '[PASS] %s\n' "$label"
     pass_count=$((pass_count + 1))
@@ -42,14 +43,14 @@ SMV2_TESTS=(
   tests/platform/test_routing_service.py
   tests/server_mode/test_shadow_schema.py
   tests/platform/test_cache_keys_namespace.py
-  tests/trading/runtime/test_trading_mode_gate.py
+  tests/trading/mode_boundaries/test_trading_mode_gate.py
   tests/security/gates/test_production_gate_enforcement.py
   tests/security/auth/test_auth_csrf_safe.py
   tests/snapshots/test_snapshots.py
   tests/points/test_points_chain.py
   tests/scripts/security/test_server_mode_v2_full_smoke_scripts.py
 )
-run_block "A-2 SMv2 phase suite" "$PYTHON" -m pytest -q "${SMV2_TESTS[@]}"
+run_block "A-2 SMv2 phase suite" "$PYTEST_IN_TMP" -q "${SMV2_TESTS[@]}"
 
 # --- A-3  Trading regression must not break --------------------------------
 TRADING_TESTS=(
@@ -59,7 +60,7 @@ TRADING_TESTS=(
   tests/frontend/trading/test_frontend_economy.py
   tests/scripts/security/test_functional_smoke_script.py
 )
-run_block "A-3 trading regression" "$PYTHON" -m pytest -q "${TRADING_TESTS[@]}"
+run_block "A-3 trading regression" "$PYTEST_IN_TMP" -q "${TRADING_TESTS[@]}"
 
 # --- A-4  Live full smoke (boots an isolated runtime, runs 6 .sh scripts) --
 run_block "A-4 live full smoke" "$PYTHON" scripts/security/server_mode/server_mode_v2_full_smoke.py
@@ -68,10 +69,10 @@ run_block "A-4 live full smoke" "$PYTHON" scripts/security/server_mode/server_mo
 # Every prod-table-name string in trading_engine.py must come from
 # resolve_table(...) — direct INSERT / UPDATE on a hardcoded prod table
 # is the contamination vector Phase 5b exists to remove.
-printf '\n========== A-5 source-grep regression ==========\n'
+printf '\n[block] A-5 source-grep regression\n'
 hits=$(grep -nE 'INSERT INTO (trading_orders|trading_spot_positions|trading_margin_positions|points_ledger|wallets)\b' services/trading/trading_engine.py || true)
 if [ -z "$hits" ]; then
-  printf '[PASS] A-5 source-grep regression — no hardcoded prod-table INSERTs\n'
+  printf '[PASS] A-5 source-grep regression - no hardcoded prod-table INSERTs\n'
   pass_count=$((pass_count + 1))
 else
   printf '[FAIL] A-5 source-grep regression — hardcoded prod-table INSERTs found:\n'
@@ -88,10 +89,10 @@ A6_TESTS=(
   tests/server_mode/test_smv2_acceptance.py::test_funding_rate_does_not_cross_world
   tests/server_mode/test_smv2_acceptance.py::test_matching_engine_namespaces_separate
 )
-run_block "A-6 acceptance regression" "$PYTHON" -m pytest -q "${A6_TESTS[@]}"
+run_block "A-6 acceptance regression" "$PYTEST_IN_TMP" -q "${A6_TESTS[@]}"
 
 # --- Summary ---------------------------------------------------------------
-printf '\n========== SUMMARY ==========\n'
+printf '\n[summary]\n'
 printf 'passed blocks: %d\n' "$pass_count"
 printf 'failed blocks: %d\n' "$fail_count"
 if [ "$fail_count" -gt 0 ]; then

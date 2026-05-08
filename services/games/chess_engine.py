@@ -15,6 +15,8 @@ from services.games.chess import (
     to_chess_board,
     validate_move,
 )
+from services.games.chess_search import ZobristHasher, search_best_move
+from services.server.runtime import default_runtime_root_path
 
 
 EXPERIMENT_DIFFICULTY = "experiment"
@@ -96,7 +98,7 @@ _PIECE_SQUARE = {
 def default_chess_engine_db_path():
     runtime_dir = os.environ.get("HACKME_RUNTIME_DIR", "").strip()
     if not runtime_dir:
-        runtime_dir = os.path.join(os.getcwd(), "runtime")
+        runtime_dir = str(default_runtime_root_path())
     db_dir = os.environ.get("HTML_LEARNING_DB_DIR", "").strip() or os.path.join(runtime_dir, "database")
     override = os.environ.get("HTML_LEARNING_CHESS_ENGINE_DB_PATH", "").strip()
     return Path(override or os.path.join(db_dir, DEFAULT_CHESS_ENGINE_DB_NAME))
@@ -242,34 +244,6 @@ def _move_order(board, move, learning_bias):
     return move_score
 
 
-def _negamax(board, depth, alpha, beta, color_sign, conn, transposition):
-    key = (position_key(board), depth, color_sign)
-    cached = transposition.get(key)
-    if cached is not None:
-        return cached
-    if depth <= 0 or board.is_game_over():
-        score = color_sign * _static_eval(board)
-        transposition[key] = score
-        return score
-
-    side = "white" if board.turn == chess.WHITE else "black"
-    learning_bias = _load_learning_bias(conn, board, side)
-    best = -_INFINITY
-    moves = sorted(board.legal_moves, key=lambda mv: _move_order(board, mv, learning_bias), reverse=True)
-    for move in moves:
-        board.push(move)
-        score = -_negamax(board, depth - 1, -beta, -alpha, -color_sign, conn, transposition)
-        board.pop()
-        if score > best:
-            best = score
-        if best > alpha:
-            alpha = best
-        if alpha >= beta:
-            break
-    transposition[key] = best
-    return best
-
-
 def _difficulty_depth(difficulty):
     if difficulty == EXPERIMENT_DIFFICULTY:
         return 3
@@ -283,24 +257,42 @@ def _choose_experiment_move_with_conn(board_state, side, *, conn=None, difficult
     if board.is_game_over():
         return None
     depth = _difficulty_depth(difficulty)
-    root_sign = 1 if board.turn == chess.WHITE else -1
-    transposition = {}
-    learning_bias = _load_learning_bias(conn, board, side)
-    best_move = None
-    best_score = -_INFINITY
-    alpha = -_INFINITY
-    beta = _INFINITY
-    moves = sorted(board.legal_moves, key=lambda mv: _move_order(board, mv, learning_bias), reverse=True)
-    for move in moves:
-        board.push(move)
-        score = -_negamax(board, depth - 1, -beta, -alpha, -root_sign, conn, transposition)
-        board.pop()
-        score += learning_bias.get(move.uci(), 0)
-        if best_move is None or score > best_score:
-            best_score = score
-            best_move = move
-        if score > alpha:
-            alpha = score
+    bias_cache = {}
+
+    def learning_bias_for(current_board, current_side):
+        key = (position_key(current_board), current_side)
+        cached = bias_cache.get(key)
+        if cached is not None:
+            return cached
+        cached = _load_learning_bias(conn, current_board, current_side)
+        bias_cache[key] = cached
+        return cached
+
+    def move_order_fn(current_board, move, _ply):
+        current_side = "white" if current_board.turn == chess.WHITE else "black"
+        return _move_order(current_board, move, learning_bias_for(current_board, current_side))
+
+    search = search_best_move(
+        board,
+        max_depth=depth,
+        evaluate=_static_eval,
+        move_order_fn=move_order_fn,
+        hasher=ZobristHasher(seed=20260518),
+    )
+    best_move = search.best_move
+    root_learning_bias = learning_bias_for(board, side)
+    if root_learning_bias:
+        best_bias_uci, best_bias_value = max(
+            root_learning_bias.items(),
+            key=lambda item: (item[1], item[0]),
+        )
+        current_bias_value = root_learning_bias.get(best_move.uci(), 0) if best_move is not None else 0
+        try:
+            biased_move = chess.Move.from_uci(best_bias_uci)
+        except Exception:
+            biased_move = None
+        if biased_move in board.legal_moves and best_bias_value >= 60 and best_bias_value > current_bias_value:
+            best_move = biased_move
     if best_move is None:
         return None
     piece = board.piece_at(best_move.from_square)
@@ -354,7 +346,8 @@ def _record_experiment_learning_with_conn(conn, row, *, winner_color):
     human_side = row["human_side"] if "human_side" in row.keys() else "white"
     ai_side = opponent(human_side)
     bucket, score_delta = _outcome_bucket(ai_side, winner_color)
-    board = initial_board()
+    initial_fen = str(row["initial_fen"] if "initial_fen" in row.keys() else "").strip()
+    board = {"__fen__": initial_fen} if initial_fen else initial_board()
     updated = 0
     for entry in moves:
         mover = str((entry or {}).get("by") or "").strip().lower()

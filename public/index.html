@@ -9,7 +9,7 @@
 </head>
 <body>
 <!-- ════════════════════ AUTH CARD ════════════════════ -->
-<div class="card" id="auth-card">
+<div class="card" id="auth-card" data-login-autofill-block="__LOGIN_AUTOFILL_BLOCK__">
 
   <h1>Help me improve, hack me please.</h1>
   <p class="subtitle">簡單的帳號註冊與登入系統</p>
@@ -28,12 +28,12 @@
   <div class="form-section active" id="sec-login">
     <div class="field">
       <label>帳號</label>
-      <input type="text" id="li-user" placeholder="請輸入帳號" autocomplete="username" />
+      <input type="text" id="li-user" placeholder="請輸入帳號" autocomplete="__LOGIN_USER_AUTOCOMPLETE__" />
     </div>
     <div class="field">
       <label>密碼</label>
       <div class="pw-wrap">
-        <input type="password" id="li-pw" placeholder="請輸入密碼" autocomplete="current-password" />
+        <input type="password" id="li-pw" placeholder="請輸入密碼" autocomplete="__LOGIN_PASSWORD_AUTOCOMPLETE__" />
         <button class="pw-toggle" id="li-pw-toggle" type="button" aria-label="顯示密碼">👁</button>
       </div>
     </div>
@@ -976,6 +976,9 @@
                 <option value="normal">普通：優先吃子與將軍</option>
                 <option value="hard">困難：避免明顯送子</option>
                 <option value="experiment">實驗：引擎搜尋 + 對局學習</option>
+                <option value="experiment 2:nn">實驗 2：NN 小型神經網路</option>
+                <option value="experiment 3:dl">實驗 3：DL 深度學習</option>
+                <option value="experiment 4:pv">實驗 4：PV 策略價值網路</option>
               </select>
             </div>
             <div class="field">
@@ -1142,6 +1145,69 @@
             <button class="btn" id="game-award-btn" type="button" style="display:none;">發放週獎勵</button>
           </div>
           <div id="game-leaderboard-list" class="drive-file-list compact-list"></div>
+          <details class="drive-collapsible-panel game-rules-panel" id="game-root-chess-panel" style="display:none;margin-top:1rem;">
+            <summary>Chess Engine Dashboard</summary>
+            <div class="drive-collapsible-body">
+              <div class="drive-card-sub">正式環境只做 warm start；user game 只累積 replay，不直接改 production model。</div>
+              <div class="drive-file-actions" style="margin:.65rem 0 1rem;">
+                <button class="btn" id="game-root-chess-refresh-btn" type="button">刷新引擎狀態</button>
+                <button class="btn btn-primary" id="game-root-chess-warm-start-btn" type="button">Warm Start</button>
+              </div>
+              <div id="game-root-chess-status" class="drive-card-sub">尚未讀取 chess engine dashboard。</div>
+              <div id="game-root-chess-production" class="drive-file-list compact-list"></div>
+              <div id="game-root-chess-replay" class="drive-file-list compact-list"></div>
+              <div id="game-root-chess-pipeline" class="drive-file-list compact-list"></div>
+              <div id="game-root-chess-benchmark" class="drive-file-list compact-list"></div>
+              <div id="game-root-chess-promotion" class="drive-file-list compact-list"></div>
+              <div class="settings-option-grid" style="margin-top:1rem;">
+                <div class="field" style="grid-column:1/-1;">
+                  <label>Prepare Replay Dataset</label>
+                  <textarea id="game-root-chess-prepare-command" rows="2" readonly></textarea>
+                </div>
+                <div class="field" style="grid-column:1/-1;">
+                  <label>Seed Train</label>
+                  <textarea id="game-root-chess-seed-command" rows="2" readonly></textarea>
+                </div>
+                <div class="field" style="grid-column:1/-1;">
+                  <label>exp3 Refine</label>
+                  <textarea id="game-root-chess-exp3-command" rows="2" readonly></textarea>
+                </div>
+                <div class="field" style="grid-column:1/-1;">
+                  <label>Benchmark / Promotion Gate</label>
+                  <textarea id="game-root-chess-benchmark-command" rows="2" readonly></textarea>
+                </div>
+                <div class="field" style="grid-column:1/-1;">
+                  <label>Full Pipeline</label>
+                  <textarea id="game-root-chess-pipeline-command" rows="2" readonly></textarea>
+                </div>
+              </div>
+              <div class="settings-option-grid" style="margin-top:1rem;">
+                <div class="field">
+                  <label>Candidate Engine</label>
+                  <select id="game-root-chess-engine">
+                    <option value="experiment 2:nn">實驗 2：NN</option>
+                    <option value="experiment 3:dl">實驗 3：DL</option>
+                    <option value="experiment 4:pv">實驗 4：PV</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label>Candidate Model Path</label>
+                  <input id="game-root-chess-candidate-path" type="text" placeholder="/tmp/.../candidate_model.json" />
+                </div>
+                <div class="field">
+                  <label>Benchmark Report Path</label>
+                  <input id="game-root-chess-benchmark-path" type="text" placeholder="/tmp/.../benchmark_report.json" />
+                </div>
+                <div class="field">
+                  <label>&nbsp;</label>
+                  <div class="drive-file-actions">
+                    <button class="btn" id="game-root-chess-stage-btn" type="button">Stage Candidate</button>
+                    <button class="btn btn-primary" id="game-root-chess-promote-btn" type="button">Promote</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </details>
         </section>
       </div>
       <div id="game-msg" class="msg"></div>
@@ -3238,6 +3304,10 @@
                 <label>CAPTCHA 到期秒數</label>
                 <input type="number" id="s-captcha-ttl-seconds" min="60" max="3600" />
               </div>
+              <div class="field">
+                <label><input type="checkbox" id="s-login-autofill-block-enabled" /> 阻擋登入頁瀏覽器自動填寫</label>
+                <div class="field-hint">開啟後，登入頁會改用反 autofill 防護，避免瀏覽器或密碼管理器自動代填帳密。</div>
+              </div>
               <div class="field" id="captcha-turnstile-site-key-field" style="display:none;">
                 <label>Turnstile site key</label>
                 <input type="text" id="s-captcha-turnstile-site-key" placeholder="未使用可留空" />
@@ -3450,6 +3520,11 @@
             <div class="field">
               <label>閒置登出時間（分鐘，0 或空白=停用）</label>
               <input type="number" id="s-session-idle-timeout" min="0" max="1440" placeholder="10" />
+            </div>
+            <div class="field">
+              <label>靜音通知類型（逗號或換行分隔）</label>
+              <textarea id="s-notification-muted-types" rows="4" placeholder="root_security_alert&#10;report_submitted&#10;admin_notice"></textarea>
+              <div class="field-hint">留空代表不靜音。儲存後，這些 type 的新通知會直接略過，不再寫入通知中心。</div>
             </div>
               </div>
             </details>
@@ -3807,17 +3882,29 @@
                     <div class="field-hint">系統會定期掃描低於維持保證金的借貸倉位，符合條件時自動平倉。</div>
                   </div>
                   <div class="field">
-                    <label><input type="checkbox" id="root-trading-futures-enabled" disabled /> 合約功能（保留，暫不開放）</label>
-                  </div>
-                  <div class="field">
-                    <label><input type="checkbox" id="root-trading-pvp-enabled" disabled /> PVP 撮合（保留，暫不開放）</label>
-                  </div>
-                  <div class="field">
                     <label>資金池目前統計</label>
                     <strong id="root-trading-reserve-pool">0 POINTS</strong>
                     <div class="field-hint">借貸交易的本金來源；手續費、借貸利息與 root 明確撥入會增加資金池。</div>
                   </div>
                 </div>
+                <details class="drive-collapsible-panel settings-collapse" style="margin-top:.75rem;">
+                  <summary>
+                    <div>
+                      <div class="drive-card-title">合約 / PVP 預留功能</div>
+                      <div class="drive-card-sub">目前僅保留 UI 開關，預設收合，不參與正式交易流程。</div>
+                    </div>
+                  </summary>
+                  <div class="drive-collapsible-body">
+                    <div class="settings-option-grid">
+                      <div class="field">
+                        <label><input type="checkbox" id="root-trading-futures-enabled" disabled /> 合約功能（保留，暫不開放）</label>
+                      </div>
+                      <div class="field">
+                        <label><input type="checkbox" id="root-trading-pvp-enabled" disabled /> PVP 撮合（保留，暫不開放）</label>
+                      </div>
+                    </div>
+                  </div>
+                </details>
               </div>
             </details>
             <details class="drive-collapsible-panel settings-collapse" open>
@@ -3882,6 +3969,31 @@
                     <div class="field-hint">低於這個數量時，融合價格會改標示為保守模式，不建議用於高風險判斷。</div>
                   </div>
                   <div class="field">
+                    <label>允許交易的最低健康來源數</label>
+                    <input type="number" id="root-trading-price-fusion-trade-min-provider-count" min="1" max="6" step="1" value="2" />
+                    <div class="field-hint">只要至少有這麼多家交易所 API 正常回傳，就可依 root 下方開關決定要不要自動暫停交易。預設 2 家。</div>
+                  </div>
+                  <div class="field">
+                    <label>交易風險警語語言</label>
+                    <select id="root-trading-warning-language">
+                      <option value="zh-TW">繁體中文</option>
+                      <option value="en">English</option>
+                    </select>
+                    <div class="field-hint">只影響交易風險警語與價格降級提示，不影響整站一般介面文字。</div>
+                  </div>
+                  <div class="field">
+                    <label><input type="checkbox" id="root-trading-price-degrade-pause-market-orders" /> 價格降級時自動暫停市價交易</label>
+                    <div class="field-hint">預設關閉。關閉時只顯示風險警示，不會自動鎖住市價單或成交中的即時撮合。</div>
+                  </div>
+                  <div class="field">
+                    <label><input type="checkbox" id="root-trading-price-degrade-pause-bots" /> 價格降級時自動暫停機器人交易</label>
+                    <div class="field-hint">預設關閉。關閉時機器人仍可執行，但交易風險由使用者自行承擔。</div>
+                  </div>
+                  <div class="field">
+                    <label><input type="checkbox" id="root-trading-price-degrade-pause-borrowing" /> 價格降級時自動暫停借貸交易</label>
+                    <div class="field-hint">預設關閉。僅影響新開的融資 / 借券，不影響既有倉位查詢或必要的風控計算。</div>
+                  </div>
+                  <div class="field">
                     <label><input type="checkbox" id="root-trading-price-stream-ws-enabled" checked /> 啟用 WebSocket provider input</label>
                     <div class="field-hint">支援 Binance / OKX / Coinbase / Kraken ticker 與 depth WebSocket。斷線時會自動切回 HTTP polling，但不會改變 reference / risk-grade 價格語義。</div>
                   </div>
@@ -3889,6 +4001,25 @@
                     <label>WebSocket 視為 stale 的秒數</label>
                     <input type="number" id="root-trading-price-stream-ws-stale-seconds" min="1" max="120" step="1" value="10" />
                     <div class="field-hint">超過這個時間沒收到 provider input，就標示 stale 並切回 HTTP polling。</div>
+                  </div>
+                  <div class="field">
+                    <label><input type="checkbox" id="root-trading-simulated-slippage-enabled" /> 啟用實驗性模擬滑價（僅市價單）</label>
+                    <div class="field-hint">本交易所目前仍以 CFD / 內部成交為主，預設不模擬滑價。開啟後只會影響市價單成交價，供實驗與策略壓力測試使用。</div>
+                  </div>
+                  <div class="field">
+                    <label>模擬滑價基礎值（基點）</label>
+                    <input type="number" id="root-trading-simulated-slippage-base-basis-points" min="0" max="10000" step="0.01" value="0" />
+                    <div class="field-hint">1 基點 = 0.01%。買單會加價、賣單會減價。</div>
+                  </div>
+                  <div class="field">
+                    <label>每 10,000 POINTS 名目量追加滑價（基點）</label>
+                    <input type="number" id="root-trading-simulated-slippage-size-basis-points-per-10k-notional" min="0" max="10000" step="0.01" value="0" />
+                    <div class="field-hint">名目量越大，模擬滑價越高；用來粗略模擬大單吃價。</div>
+                  </div>
+                  <div class="field">
+                    <label>模擬滑價上限（基點）</label>
+                    <input type="number" id="root-trading-simulated-slippage-max-basis-points" min="0" max="10000" step="0.01" value="0" />
+                    <div class="field-hint">0 代表不額外封頂；若設定大於 0，最終滑價不會超過這個上限。</div>
                   </div>
                   <div class="field" id="root-trading-price-fusion-weights-field">
                     <label>手動權重</label>

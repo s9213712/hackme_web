@@ -37,6 +37,13 @@
 - 更新 smoke test、pre-push check、QA runbook。
 - 重要功能必須有正常流程、錯誤流程、權限不足流程、邊界值流程測試。
 - 測試不得污染正式 runtime、DB、log、cache。
+- 所有 pytest 都必須在 `/tmp` 的 repo 複本內執行，不得直接在原 repo
+  執行。標準入口是 `scripts/testing/pytest_in_tmp.sh ...`；若手動操作，
+  必須先複製 repo 到 `/tmp/<run>/hackme_web`，再從該複本內設定
+  `HACKME_RUNTIME_DIR=/tmp/<run>/hackme_web/runtime` 執行。
+- 原 repo 不得出現 `runtime/`、`__pycache__/`、`.pytest_cache/` 或
+  其他測試/runtime cache。若發現污染，必須先找出漏網路徑並修正，
+  不得只刪資料夾。
 - 測試結果必須可重跑、可追蹤、可產生證據。
 
 最低要求：

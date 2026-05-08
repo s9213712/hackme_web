@@ -10,7 +10,7 @@ from scripts.prepush.context import PrepushContext
 from scripts.prepush.result import CheckResult
 
 
-REPO_CACHE_DIR_NAMES = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "htmlcov", "dist", "build"}
+REPO_CACHE_DIR_NAMES = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "cache", "htmlcov", "dist", "build"}
 REPO_CACHE_FILE_NAMES = {".coverage"}
 REPO_CACHE_FILE_SUFFIXES = {".pyc", ".pyo"}
 REPO_JUNK_FILE_SUFFIXES = {":Zone.Identifier"}

@@ -4,6 +4,7 @@ import json
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlencode
@@ -11,6 +12,7 @@ from urllib.request import Request, urlopen
 
 from flask import Response, request
 
+from services.server.runtime import default_runtime_root
 from services.trading.btc_bridge import (
     DEFAULT_BTC_TRADE_BRANCH,
     DEFAULT_BTC_TRADE_REPO_URL,
@@ -56,7 +58,7 @@ WORKFLOW_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$")
 
 
 def workflow_custom_root():
-    runtime_root = Path(os.environ.get("HACKME_RUNTIME_DIR") or "/tmp/hackme_web_runtime")
+    runtime_root = Path(os.environ.get("HACKME_RUNTIME_DIR") or default_runtime_root())
     return runtime_root / "workflows" / "custom"
 
 
@@ -111,9 +113,9 @@ def register_trading_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return None, json_resp({"ok": False, "msg": "Invalid JSON"}, 400)
+            return None, json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}, 400)
         if not isinstance(data, dict):
-            return None, json_resp({"ok": False, "msg": "Invalid request"}, 400)
+            return None, json_resp({"ok": False, "msg": "請求內容格式錯誤"}, 400)
         return data, None
 
     def csv_download_response(filename, fieldnames, rows):
@@ -510,23 +512,39 @@ def register_trading_routes(app, deps):
 
     def fetch_reference_candles_with_fallback(market_symbol, interval, limit):
         market_symbol = normalize_market_symbol_for_route(market_symbol)
-        providers = (
-            lambda: fetch_binance_reference_candles(market_provider_id_for_route(market_symbol, "binance_public_api"), interval, limit),
-            lambda: fetch_okx_reference_candles(market_provider_id_for_route(market_symbol, "okx_public_api"), interval, limit),
-            lambda: fetch_coinbase_reference_candles(market_provider_id_for_route(market_symbol, "coinbase_exchange"), interval, limit),
-            lambda: fetch_kraken_reference_candles(market_provider_id_for_route(market_symbol, "kraken_public_api"), interval, limit),
-            lambda: fetch_gemini_reference_candles(market_provider_id_for_route(market_symbol, "gemini_public_api"), interval, limit),
-            lambda: fetch_bitstamp_reference_candles(market_provider_id_for_route(market_symbol, "bitstamp_public_api"), interval, limit),
-        )
+        providers = [
+            ("binance_public_api", lambda: fetch_binance_reference_candles(market_provider_id_for_route(market_symbol, "binance_public_api"), interval, limit)),
+            ("okx_public_api", lambda: fetch_okx_reference_candles(market_provider_id_for_route(market_symbol, "okx_public_api"), interval, limit)),
+            ("coinbase_exchange", lambda: fetch_coinbase_reference_candles(market_provider_id_for_route(market_symbol, "coinbase_exchange"), interval, limit)),
+            ("kraken_public_api", lambda: fetch_kraken_reference_candles(market_provider_id_for_route(market_symbol, "kraken_public_api"), interval, limit)),
+            ("gemini_public_api", lambda: fetch_gemini_reference_candles(market_provider_id_for_route(market_symbol, "gemini_public_api"), interval, limit)),
+            ("bitstamp_public_api", lambda: fetch_bitstamp_reference_candles(market_provider_id_for_route(market_symbol, "bitstamp_public_api"), interval, limit)),
+        ]
         errors = []
-        for provider in providers:
-            try:
-                result = provider()
-                if result.get("candles"):
-                    return result
-                errors.append(f"{result.get('source', 'provider')}: no candles")
-            except Exception as exc:
-                errors.append(str(exc)[:160])
+        primary_name, primary_provider = providers[0]
+        try:
+            result = primary_provider()
+            if result.get("candles"):
+                return result
+            errors.append(f"{result.get('source', primary_name)}: no candles")
+        except Exception as exc:
+            errors.append(str(exc)[:160])
+
+        fallback_providers = providers[1:]
+        with ThreadPoolExecutor(max_workers=len(fallback_providers)) as executor:
+            futures = {
+                executor.submit(provider): provider_name
+                for provider_name, provider in fallback_providers
+            }
+            for future in as_completed(futures):
+                provider_name = futures[future]
+                try:
+                    result = future.result()
+                    if result.get("candles"):
+                        return result
+                    errors.append(f"{result.get('source', provider_name)}: no candles")
+                except Exception as exc:
+                    errors.append(str(exc)[:160])
         raise ValueError("; ".join(errors) or "all reference price providers failed")
 
     def parse_time_ms(value):

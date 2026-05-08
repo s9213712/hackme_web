@@ -151,7 +151,7 @@ channel，shadow funding settlement 也只會寫到 shadow wallet / ledger。
 - [API_REFERENCE.md](API_REFERENCE.md)
 - [CLI_ADMIN_PLAYBOOK.md](CLI_ADMIN_PLAYBOOK.md)
 - [For_developer.md](For_developer.md)
-- [ENCRYPTION_RUNTIME_BOUNDARY.md](runtime/ENCRYPTION_RUNTIME_BOUNDARY.md)
+- [ENCRYPTION_RUNTIME_BOUNDARY.md](ops_boundaries/ENCRYPTION_RUNTIME_BOUNDARY.md)
 - [EXTERNAL_API_COMMAND_MATRIX.md](EXTERNAL_API_COMMAND_MATRIX.md)
 - [WEB.md](WEB.md)
 - [TRADING.md](trading/TRADING.md)

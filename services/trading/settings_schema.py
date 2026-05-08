@@ -22,6 +22,10 @@ TRADING_ROOT_BOOL_SETTING_KEYS = {
     "bot_audit_enabled": "trading.bot_audit_enabled",
     "btc_trade_enabled": "trading.btc_trade_enabled",
     "price_stream_ws_enabled": "trading.price_stream_ws_enabled",
+    "price_degrade_pause_market_orders": "trading.price_degrade_pause_market_orders",
+    "price_degrade_pause_bots": "trading.price_degrade_pause_bots",
+    "price_degrade_pause_borrowing": "trading.price_degrade_pause_borrowing",
+    "simulated_slippage_enabled": "trading.simulated_slippage_enabled",
 }
 
 
@@ -30,8 +34,13 @@ def raw_bool_setting(raw, storage_key, default=False):
     return str(raw.get(storage_key, fallback)).lower() in TRUE_VALUES
 
 
-def raw_float_setting(raw, storage_key, default_value, *, name, minimum=0.0, maximum=10**12):
-    return _to_float(raw.get(storage_key, str(default_value)), name=name, minimum=minimum, maximum=maximum)
+def raw_float_setting(raw, storage_key, default_value, *, name, minimum=0.0, maximum=10**12, legacy_storage_key=None):
+    raw_value = raw.get(storage_key)
+    if raw_value in (None, "") and legacy_storage_key:
+        raw_value = raw.get(legacy_storage_key, str(default_value))
+    elif raw_value in (None, ""):
+        raw_value = str(default_value)
+    return _to_float(raw_value, name=name, minimum=minimum, maximum=maximum)
 
 
 def raw_int_setting(raw, storage_key, default_value, *, name, minimum=0, maximum=10**12):

@@ -1,6 +1,8 @@
 import sqlite3
 from datetime import datetime, timedelta
 
+from flask import Flask
+
 from services.users import auth
 
 
@@ -136,6 +138,81 @@ def test_db_save_session_stores_device_info_when_column_exists(tmp_path):
 
         assert "Chrome" in row[0]
         assert "Windows" in row[0]
+    finally:
+        auth._STATE.clear()
+        auth._STATE.update(original_state)
+
+
+def test_session_ip_mismatch_is_logged_but_soft_binding_keeps_session(tmp_path, monkeypatch):
+    db_path = tmp_path / "binding.db"
+    _seed_db(db_path)
+    original_state = dict(auth._STATE)
+    events = []
+
+    try:
+        auth.configure_auth_service(
+            get_db=_get_db_factory(str(db_path)),
+            get_user_by_username=lambda username: None,
+            fernet=None,
+            get_client_ip=lambda: "203.0.113.7",
+            session_ttl=3600,
+            csrf_token_ttl=3600,
+            session_idle_timeout=180,
+        )
+        monkeypatch.setattr(auth, "record_security_event", lambda event_type, ip, **kwargs: events.append((event_type, ip, kwargs)))
+        auth.db_save_session(1, "token", "127.0.0.1", "test-agent")
+        app = Flask(__name__)
+
+        with app.test_request_context("/", headers={"User-Agent": "test-agent"}):
+            assert auth.db_get_user_from_token("token") == "alice"
+
+        assert any(event_type == "session_ip_mismatch" and ip == "203.0.113.7" for event_type, ip, _ in events)
+
+        conn = sqlite3.connect(db_path)
+        row = conn.execute("SELECT is_revoked FROM sessions WHERE id=1").fetchone()
+        conn.close()
+        assert row[0] == 0
+    finally:
+        auth._STATE.clear()
+        auth._STATE.update(original_state)
+
+
+def test_session_strict_ip_binding_revokes_mismatched_session(tmp_path, monkeypatch):
+    db_path = tmp_path / "binding.db"
+    _seed_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE system_settings (key TEXT PRIMARY KEY, value TEXT)")
+    conn.execute("INSERT INTO system_settings (key, value) VALUES ('session_strict_ip_binding', 'true')")
+    conn.commit()
+    conn.close()
+    original_state = dict(auth._STATE)
+    events = []
+
+    try:
+        auth.configure_auth_service(
+            get_db=_get_db_factory(str(db_path)),
+            get_user_by_username=lambda username: None,
+            fernet=None,
+            get_client_ip=lambda: "203.0.113.7",
+            session_ttl=3600,
+            csrf_token_ttl=3600,
+            session_idle_timeout=180,
+        )
+        monkeypatch.setattr(auth, "record_security_event", lambda event_type, ip, **kwargs: events.append((event_type, ip, kwargs)))
+        auth.db_save_session(1, "token", "127.0.0.1", "test-agent")
+        app = Flask(__name__)
+
+        with app.test_request_context("/", headers={"User-Agent": "test-agent"}):
+            assert auth.db_get_user_from_token("token") is None
+
+        assert any(event_type == "session_ip_mismatch" for event_type, _, _ in events)
+        assert any(event_type == "session_revoked" for event_type, _, _ in events)
+
+        conn = sqlite3.connect(db_path)
+        row = conn.execute("SELECT is_revoked, revoked_at FROM sessions WHERE id=1").fetchone()
+        conn.close()
+        assert row[0] == 1
+        assert row[1]
     finally:
         auth._STATE.clear()
         auth._STATE.update(original_state)

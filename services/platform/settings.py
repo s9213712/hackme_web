@@ -34,6 +34,8 @@ DEFAULT_SETTINGS = {
     "allow_register": True,
     "require_email_verification": False,
     "password_reset_mode": "admin_review",
+    "login_autofill_block_enabled": False,
+    "notification_muted_types": "",
     "captcha_mode": "none",
     "captcha_ttl_seconds": 300,
     "captcha_turnstile_site_key": "",

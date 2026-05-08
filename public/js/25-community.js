@@ -611,7 +611,7 @@ function renderCommunityThreads(board) {
   list.innerHTML = communityThreads.map((thread) => `
     <button class="community-thread-item${Number(selectedCommunityThreadId) === Number(thread.id) ? " active" : ""}" type="button" data-open-thread="${thread.id}">
       <strong>${thread.is_sticky ? "置頂 · " : ""}${sanitize(thread.title || "")}</strong>
-      <div class="community-meta">${userIdentityMarkup(thread.author_user_id, thread.author_username || "", formatChatTime(thread.created_at || ""), "community-author-line")}</div>
+      <div class="community-meta">${userIdentityMarkup(thread.author_user_id, thread.author_username || "", formatChatTime(thread.created_at || ""), "community-author-line", thread.author_avatar_file_id || "")}</div>
       <div class="community-meta">${communityStatusLabel(thread.status)}${thread.review_note ? ` · ${sanitize(thread.review_note)}` : ""}</div>
       <div class="community-body">${sanitize(communityPlainContent(thread.content || "").slice(0, 140))}${communityPlainContent(thread.content || "").length > 140 ? "..." : ""}</div>
       <div class="community-meta">回覆 ${thread.reply_count || 0}</div>
@@ -656,7 +656,7 @@ function renderCommunityThreadDetail(thread, posts) {
     ? posts.map((post) => `
         <div class="community-card${post.is_hidden ? " community-hidden-post" : ""}">
           <div class="community-card-head">
-            <div class="community-meta">${post.is_pinned ? "置頂留言 · " : ""}${userIdentityMarkup(post.author_user_id, post.author_username || "", `${formatChatTime(post.created_at || "")}${post.is_hidden ? ` · 已隱藏：${post.hidden_reason || ""}` : ""}`, "community-author-line")}</div>
+            <div class="community-meta">${post.is_pinned ? "置頂留言 · " : ""}${userIdentityMarkup(post.author_user_id, post.author_username || "", `${formatChatTime(post.created_at || "")}${post.is_hidden ? ` · 已隱藏：${post.hidden_reason || ""}` : ""}`, "community-author-line", post.author_avatar_file_id || "")}</div>
             <div style="display:flex;gap:.35rem;flex-wrap:wrap;justify-content:flex-end;">
               ${canModerateThread && canPinPost ? `<button class="btn community-mini-btn" type="button" data-pin-community-post="${post.id}" data-pinned="${post.is_pinned ? "1" : "0"}">${post.is_pinned ? "取消置頂" : "置頂留言"}</button>` : ""}
               ${(canModerateThread || canDeleteCommunityItem(post.author_user_id, thread.author_user_id)) ? `<button class="btn community-mini-btn" type="button" data-delete-community-post="${post.id}">刪除</button>` : ""}
@@ -673,7 +673,7 @@ function renderCommunityThreadDetail(thread, posts) {
     : "<p style='color:var(--muted);'>尚無留言</p>";
   detail.innerHTML = `
     <div class="community-card">
-      <div class="community-meta">${thread.is_sticky ? "置頂主題 · " : ""}${userIdentityMarkup(thread.author_user_id, thread.author_username || "", `${formatChatTime(thread.created_at || "")} · ${thread.board_title || ""}${thread.is_locked ? " · 已鎖定" : ""}`, "community-author-line")}</div>
+      <div class="community-meta">${thread.is_sticky ? "置頂主題 · " : ""}${userIdentityMarkup(thread.author_user_id, thread.author_username || "", `${formatChatTime(thread.created_at || "")} · ${thread.board_title || ""}${thread.is_locked ? " · 已鎖定" : ""}`, "community-author-line", thread.author_avatar_file_id || "")}</div>
       <div class="community-meta">${communityStatusLabel(thread.status)}${thread.review_note ? ` · ${sanitize(thread.review_note)}` : ""}</div>
       ${renderCommunityBody(thread.content || "")}
       <div class="community-actions" style="margin-top:.45rem;">

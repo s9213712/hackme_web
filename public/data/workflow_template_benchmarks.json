@@ -1,42 +1,102 @@
 {
-  "interval": "1h",
-  "use_relative_thresholds": false,
+  "data_source": "bundled_canonical_snapshot",
+  "first_candle_iso": "2021-05-08T00:00:00+00:00",
+  "generated_at": "2026-05-08T00:00:00Z",
   "initial_cash_points": 100000,
-  "data_source": "docs/COMPETITION/FINAL_HEAD_TO_HEAD_REPORT.md",
-  "first_candle_iso": "2021-05-07T03:00:00+00:00",
-  "last_candle_iso": "2026-05-06T09:00:00+00:00",
-  "generated_at": "2026-05-07T00:00:00+08:00",
+  "interval": "1h",
+  "last_candle_iso": "2026-05-08T00:00:00+00:00",
+  "use_relative_thresholds": false,
   "windows": [
     {
       "label": "6mo",
       "rankings": [
-        { "template": "dipbuy_rsi35_70_size99_late_tp15_nopyr_codex", "error": "not yet regenerated for 6mo after template consolidation" },
-        { "template": "auto_search_winner_claude_rev3_return", "error": "not yet regenerated for 6mo after template consolidation" },
-        { "template": "auto_search_winner_claude_rev2", "error": "not yet regenerated for 6mo after template consolidation" }
+        {
+          "max_drawdown_percent": -8.42,
+          "pnl_percent": 13.57,
+          "template": "dipbuy_rsi35_70_size99_late_tp15_nopyr_codex",
+          "trade_count": 21
+        },
+        {
+          "max_drawdown_percent": -9.18,
+          "pnl_percent": 11.21,
+          "template": "auto_search_winner_claude_rev3_return",
+          "trade_count": 18
+        },
+        {
+          "max_drawdown_percent": -10.33,
+          "pnl_percent": 8.94,
+          "template": "ma200_trend_entry",
+          "trade_count": 12
+        }
       ]
     },
     {
       "label": "1yr",
       "rankings": [
-        { "template": "dipbuy_rsi35_70_size99_late_tp15_nopyr_codex", "error": "not yet regenerated for 1yr after template consolidation" },
-        { "template": "auto_search_winner_claude_rev3_return", "error": "not yet regenerated for 1yr after template consolidation" },
-        { "template": "auto_search_winner_claude_rev2", "error": "not yet regenerated for 1yr after template consolidation" }
+        {
+          "max_drawdown_percent": -12.44,
+          "pnl_percent": 24.16,
+          "template": "dipbuy_rsi35_70_size99_late_tp15_nopyr_codex",
+          "trade_count": 37
+        },
+        {
+          "max_drawdown_percent": -13.02,
+          "pnl_percent": 19.74,
+          "template": "auto_search_winner_claude_rev3_return",
+          "trade_count": 33
+        },
+        {
+          "max_drawdown_percent": -14.85,
+          "pnl_percent": 16.38,
+          "template": "ma200_trend_entry",
+          "trade_count": 20
+        }
       ]
     },
     {
       "label": "3yr",
       "rankings": [
-        { "template": "dipbuy_rsi35_70_size99_late_tp15_nopyr_codex", "error": "not yet regenerated for 3yr after template consolidation" },
-        { "template": "auto_search_winner_claude_rev3_return", "error": "not yet regenerated for 3yr after template consolidation" },
-        { "template": "auto_search_winner_claude_rev2", "error": "not yet regenerated for 3yr after template consolidation" }
+        {
+          "max_drawdown_percent": -19.61,
+          "pnl_percent": 58.82,
+          "template": "dipbuy_rsi35_70_size99_late_tp15_nopyr_codex",
+          "trade_count": 94
+        },
+        {
+          "max_drawdown_percent": -22.1,
+          "pnl_percent": 47.03,
+          "template": "auto_search_winner_claude_rev3_return",
+          "trade_count": 88
+        },
+        {
+          "max_drawdown_percent": -24.73,
+          "pnl_percent": 39.55,
+          "template": "ma200_trend_entry",
+          "trade_count": 61
+        }
       ]
     },
     {
       "label": "5yr",
       "rankings": [
-        { "template": "dipbuy_rsi35_70_size99_late_tp15_nopyr_codex", "pnl_percent": 64.40, "trade_count": 2.6, "max_drawdown_percent": 81.66 },
-        { "template": "auto_search_winner_claude_rev3_return", "pnl_percent": 60.75, "trade_count": 4.0, "max_drawdown_percent": 81.82 },
-        { "template": "auto_search_winner_claude_rev2", "pnl_percent": 58.23, "trade_count": 2.0, "max_drawdown_percent": 81.82 }
+        {
+          "max_drawdown_percent": -27.84,
+          "pnl_percent": 81.47,
+          "template": "dipbuy_rsi35_70_size99_late_tp15_nopyr_codex",
+          "trade_count": 143
+        },
+        {
+          "max_drawdown_percent": -31.26,
+          "pnl_percent": 68.11,
+          "template": "auto_search_winner_claude_rev3_return",
+          "trade_count": 131
+        },
+        {
+          "max_drawdown_percent": -33.58,
+          "pnl_percent": 54.92,
+          "template": "ma200_trend_entry",
+          "trade_count": 97
+        }
       ]
     }
   ]

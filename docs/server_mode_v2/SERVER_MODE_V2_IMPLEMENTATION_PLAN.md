@@ -195,7 +195,7 @@ def require_csrf(func):
 
 **測試指令**：
 ```bash
-pytest tests/test_auth_csrf_safe.py -v
+scripts/testing/pytest_in_tmp.sh tests/test_auth_csrf_safe.py -v
 ```
 
 **驗收條件**：
@@ -255,13 +255,13 @@ def current_ctx() -> SmV2Context:
 
 **測試指令**：
 ```bash
-pytest tests/test_smv2_context.py -v
+scripts/testing/pytest_in_tmp.sh tests/test_smv2_context.py -v
 ```
 
 **驗收條件**：
 - 100 個 concurrent request 跑 1000 次，沒有 ctx 串流（用 `request_id` UUID 比對）
 - 既有 6 個 before_request hook 不再呼叫 `get_runtime_server_mode()`（grep 確認）
-- `pytest tests/` 全綠
+- `scripts/testing/pytest_in_tmp.sh tests/` 全綠
 
 **失敗時提示**：
 - 若 `g.smv2_ctx` AttributeError → 確認 `attach_smv2_ctx` 是 register 的第一個 before_request
@@ -308,7 +308,7 @@ def _assert_production_mode(ctx):
 
 **測試指令**：
 ```bash
-pytest tests/test_chain_production_only.py -v
+scripts/testing/pytest_in_tmp.sh tests/test_chain_production_only.py -v
 ```
 
 **驗收條件**：
@@ -356,7 +356,7 @@ CREATE INDEX IF NOT EXISTS idx_shadow_orders_tester ON test_shadow_orders(tester
 
 **測試指令**：
 ```bash
-pytest tests/test_shadow_schema.py -v
+scripts/testing/pytest_in_tmp.sh tests/test_shadow_schema.py -v
 ```
 
 **驗收條件**：
@@ -413,7 +413,7 @@ def resolve_table(logical: str, ctx) -> str:
 
 **測試指令**：
 ```bash
-pytest tests/test_routing_service.py -v
+scripts/testing/pytest_in_tmp.sh tests/test_routing_service.py -v
 ```
 
 **驗收條件**：
@@ -455,7 +455,7 @@ pytest tests/test_routing_service.py -v
 
 **測試指令**：
 ```bash
-pytest tests/test_smv2_acceptance.py -v
+scripts/testing/pytest_in_tmp.sh tests/test_smv2_acceptance.py -v
 ```
 
 **驗收條件**：
@@ -501,7 +501,7 @@ def make_cache_key(logical: str, *, mode: str, tester_id: int | None = None, **d
 
 **測試指令**：
 ```bash
-pytest tests/test_cache_keys_namespace.py -v
+scripts/testing/pytest_in_tmp.sh tests/test_cache_keys_namespace.py -v
 ```
 
 **驗收條件**：
@@ -541,9 +541,9 @@ pytest tests/test_cache_keys_namespace.py -v
 
 **測試指令**：
 ```bash
-pytest tests/test_smv2_acceptance.py::test_tester_trade_does_not_change_production_wallet -v
-pytest tests/test_smv2_acceptance.py::test_liquidation_does_not_cross_world -v
-pytest tests/test_smv2_acceptance.py::test_matching_engine_namespaces_separate -v
+scripts/testing/pytest_in_tmp.sh tests/test_smv2_acceptance.py::test_tester_trade_does_not_change_production_wallet -v
+scripts/testing/pytest_in_tmp.sh tests/test_smv2_acceptance.py::test_liquidation_does_not_cross_world -v
+scripts/testing/pytest_in_tmp.sh tests/test_smv2_acceptance.py::test_matching_engine_namespaces_separate -v
 ```
 
 **驗收條件**：
@@ -609,7 +609,7 @@ EXECUTE FUNCTION forbid_nonprod_chain_insert();
 
 **測試指令**：
 ```bash
-pytest tests/test_db_mode_triggers.py -v
+scripts/testing/pytest_in_tmp.sh tests/test_db_mode_triggers.py -v
 ```
 
 **驗收條件**：
@@ -653,7 +653,7 @@ plan_done_when:
 ## 8. 每 phase 結束標準動作
 
 ```
-1. pytest tests/ 全綠
+1. `scripts/testing/pytest_in_tmp.sh tests/` 全綠
 2. 新增 docs/AGENTS/reports/claude/server_mode_v2_phase_<N>_<YYYY-MM-DD>/PHASE_REPORT.md
 3. ~/agent_communication.txt append "Claude side update — phase <N> done"
 4. 等用戶 review，明確 go ahead 才進下一 phase

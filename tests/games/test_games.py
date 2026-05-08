@@ -1,12 +1,21 @@
 import json
 import sqlite3
 from unittest.mock import patch
+from pathlib import Path
 
+import chess
 from flask import Flask, jsonify
 
 from routes.games import choose_computer_move, ensure_game_schema, register_games_routes
+from services.games.chess_dl import EXPERIMENT_DL_DIFFICULTY, choose_experiment_dl_move, record_experiment_dl_learning
 from services.games.chess_engine import ChessExperimentStore, choose_experiment_move, record_experiment_learning
 from services.games.chess_nn import EXPERIMENT_NN_DIFFICULTY, record_experiment_nn_learning
+from services.games.chess_pv import EXPERIMENT_PV_DIFFICULTY, choose_experiment_pv_move, record_experiment_pv_learning
+from services.games.chess_replay_buffer import (
+    classify_replay_record,
+    replay_buffer_summary,
+)
+from services.games.chess_pv import experiment_pv_model_template
 from services.games.chess import game_status, initial_board, legal_moves, validate_move
 
 
@@ -96,7 +105,7 @@ def test_game_catalog_includes_solo_games(tmp_path):
     games = response.get_json()["games"]
     by_key = {game["key"]: game for game in games}
     assert {"chess", "sudoku", "minesweeper", "1a2b", "tetris", "space_shooter"} <= set(by_key)
-    assert [item["key"] for item in by_key["chess"]["computer_difficulties"]] == ["normal", "hard", "experiment", "experiment 2:nn"]
+    assert [item["key"] for item in by_key["chess"]["computer_difficulties"]] == ["normal", "hard", "experiment", "experiment 2:nn", "experiment 3:dl", "experiment 4:pv"]
     assert by_key["sudoku"]["supports_invites"] is False
     assert by_key["minesweeper"]["supports_computer"] is False
     assert by_key["1a2b"]["supports_invites"] is False
@@ -185,6 +194,80 @@ def test_game_schema_migrates_existing_solo_scores_without_guess_count(tmp_path)
         assert conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_game_solo_scores_score_rank'").fetchone()
     finally:
         conn.close()
+
+
+def test_game_schema_rebuild_keeps_game_invites_fk_pointing_to_game_matches(tmp_path):
+    db_path = tmp_path / "games.db"
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            role TEXT NOT NULL DEFAULT 'user',
+            status TEXT NOT NULL DEFAULT 'active',
+            deleted_at TEXT
+        );
+        INSERT INTO users (id, username, role, status) VALUES
+          (1, 'root', 'super_admin', 'active'),
+          (2, 'alice', 'user', 'active'),
+          (3, 'bob', 'user', 'active');
+        CREATE TABLE game_matches (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            game_key TEXT NOT NULL,
+            mode TEXT NOT NULL DEFAULT 'pvp',
+            status TEXT NOT NULL DEFAULT 'active',
+            white_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            black_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            current_turn TEXT NOT NULL DEFAULT 'white',
+            board_json TEXT NOT NULL,
+            move_history_json TEXT NOT NULL DEFAULT '[]',
+            winner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            result_reason TEXT,
+            leaderboard_week TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            finished_at TEXT,
+            white_deleted_at TEXT,
+            black_deleted_at TEXT,
+            CHECK (game_key IN ('chess')),
+            CHECK (mode IN ('pvp', 'computer')),
+            CHECK (status IN ('active', 'finished', 'cancelled')),
+            CHECK (current_turn IN ('white', 'black'))
+        );
+        CREATE TABLE game_invites (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            game_key TEXT NOT NULL,
+            inviter_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            opponent_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            status TEXT NOT NULL DEFAULT 'pending',
+            match_id INTEGER REFERENCES game_matches(id) ON DELETE SET NULL,
+            message TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            expires_at TEXT,
+            CHECK (game_key IN ('chess')),
+            CHECK (status IN ('pending', 'accepted', 'rejected', 'cancelled', 'expired'))
+        );
+        """
+    )
+    ensure_game_schema(conn)
+    conn.commit()
+
+    invite_sql = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='game_invites'"
+    ).fetchone()["sql"]
+    assert "game_matches_old" not in str(invite_sql or "")
+    conn.execute(
+        """
+        INSERT INTO game_invites (
+            game_key, inviter_user_id, opponent_user_id, status, message, created_at, updated_at, expires_at
+        ) VALUES ('chess', 2, 3, 'pending', '', '2026-05-08T00:00:00+00:00', '2026-05-08T00:00:00+00:00', '2026-05-15T00:00:00+00:00')
+        """
+    )
+    conn.commit()
+    conn.close()
 
 
 def test_solo_games_use_elapsed_time_leaderboard(tmp_path):
@@ -459,6 +542,18 @@ def test_chess_practice_difficulty_is_persisted_and_rejects_invalid_value(tmp_pa
     experiment_nn_match = client.get(f"/api/games/chess/matches/{experiment_nn_id}").get_json()["match"]
     assert experiment_nn_match["computer_difficulty"] == "experiment 2:nn"
 
+    experiment_dl = client.post("/api/games/chess/practice", json={"difficulty": "experiment 3:dl"})
+    assert experiment_dl.status_code == 200
+    experiment_dl_id = experiment_dl.get_json()["match_id"]
+    experiment_dl_match = client.get(f"/api/games/chess/matches/{experiment_dl_id}").get_json()["match"]
+    assert experiment_dl_match["computer_difficulty"] == "experiment 3:dl"
+
+    experiment_pv = client.post("/api/games/chess/practice", json={"difficulty": "experiment 4:pv"})
+    assert experiment_pv.status_code == 200
+    experiment_pv_id = experiment_pv.get_json()["match_id"]
+    experiment_pv_match = client.get(f"/api/games/chess/matches/{experiment_pv_id}").get_json()["match"]
+    assert experiment_pv_match["computer_difficulty"] == "experiment 4:pv"
+
 
 def test_chess_computer_normal_difficulty_prefers_high_value_capture():
     board = {
@@ -529,11 +624,15 @@ def test_experiment_move_reads_learning_bias_from_store(tmp_path):
     assert move["to"] == "e4"
 
 
-def test_experiment_resign_persists_learning_to_runtime_store(tmp_path):
+def test_experiment_resign_collects_replay_without_online_learning(tmp_path, monkeypatch):
     db_path = tmp_path / "games.db"
     _seed_db(db_path)
     actor_box = {"actor": {"id": 2, "username": "alice", "role": "user"}}
     store = _build_chess_engine_store(tmp_path)
+    replay_path = tmp_path / "runtime" / "reports" / "games" / "chess_replays.jsonl"
+    rejected_path = tmp_path / "runtime" / "reports" / "games" / "chess_replays_rejected.jsonl"
+    monkeypatch.setenv("HTML_LEARNING_CHESS_REPLAY_BUFFER_PATH", str(replay_path))
+    monkeypatch.setenv("HTML_LEARNING_CHESS_REPLAY_REJECTED_PATH", str(rejected_path))
     app = _build_app(db_path, actor_box, chess_engine_store=store)
     client = app.test_client()
 
@@ -550,9 +649,18 @@ def test_experiment_resign_persists_learning_to_runtime_store(tmp_path):
         rows = learning_conn.execute(
             "SELECT COUNT(*) AS c FROM game_chess_engine_memory"
         ).fetchone()
-        assert rows["c"] >= 1
+        assert rows["c"] == 0
     finally:
         learning_conn.close()
+    lines = rejected_path.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+    replay = json.loads(lines[0])
+    assert replay["source"] == "user_games"
+    assert replay["engine_name"] == "experiment"
+    assert replay["confidence_score"] <= 0.42
+    assert replay["move_count"] == 1
+    assert replay["collection_tier"] == "rejected"
+    assert "too_short" in replay["quarantine_reasons"]
 
 
 def test_experiment_nn_learning_writes_separate_runtime_model(tmp_path, monkeypatch):
@@ -573,12 +681,16 @@ def test_experiment_nn_learning_writes_separate_runtime_model(tmp_path, monkeypa
     assert model["version"] >= 1
 
 
-def test_experiment_nn_resign_trains_runtime_model(tmp_path, monkeypatch):
+def test_experiment_nn_resign_collects_replay_without_mutating_model(tmp_path, monkeypatch):
     db_path = tmp_path / "games.db"
     _seed_db(db_path)
     actor_box = {"actor": {"id": 2, "username": "alice", "role": "user"}}
     model_path = tmp_path / "runtime" / "models" / "chess_experiment_2_nn.json"
+    replay_path = tmp_path / "runtime" / "reports" / "games" / "chess_replays.jsonl"
+    rejected_path = tmp_path / "runtime" / "reports" / "games" / "chess_replays_rejected.jsonl"
     monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_NN_MODEL_PATH", str(model_path))
+    monkeypatch.setenv("HTML_LEARNING_CHESS_REPLAY_BUFFER_PATH", str(replay_path))
+    monkeypatch.setenv("HTML_LEARNING_CHESS_REPLAY_REJECTED_PATH", str(rejected_path))
     app = _build_app(db_path, actor_box, chess_engine_store=_build_chess_engine_store(tmp_path))
     client = app.test_client()
 
@@ -588,9 +700,400 @@ def test_experiment_nn_resign_trains_runtime_model(tmp_path, monkeypatch):
 
     resigned = client.post(f"/api/games/chess/matches/{match_id}/resign", json={})
     assert resigned.status_code == 200
+    assert not model_path.exists()
+    replay = json.loads(rejected_path.read_text(encoding="utf-8").strip())
+    assert replay["engine_name"] == "experiment 2:nn"
+    assert replay["collection_tier"] == "rejected"
+
+
+def test_experiment_dl_learning_writes_runtime_model_and_replay(tmp_path, monkeypatch):
+    model_path = tmp_path / "runtime" / "models" / "chess_experiment_3_dl.json"
+    replay_path = tmp_path / "runtime" / "models" / "chess_experiment_3_dl_replay.jsonl"
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_DL_MODEL_PATH", str(model_path))
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_DL_REPLAY_PATH", str(replay_path))
+    row = {
+        "id": 9,
+        "mode": "computer",
+        "computer_difficulty": EXPERIMENT_DL_DIFFICULTY,
+        "human_side": "black",
+        "move_history_json": '[{"by":"white","from":"e2","to":"e4","piece":"P"}]',
+    }
+    updated = record_experiment_dl_learning(row, winner_color="white")
+    assert updated == 1
+    assert model_path.exists()
+    assert replay_path.exists()
+    model = json.loads(model_path.read_text(encoding="utf-8"))
+    assert model["sample_count"] >= 1
+    assert model["replay_size"] >= 1
+
+
+def test_experiment_dl_resign_collects_replay_without_mutating_model(tmp_path, monkeypatch):
+    db_path = tmp_path / "games.db"
+    _seed_db(db_path)
+    actor_box = {"actor": {"id": 2, "username": "alice", "role": "user"}}
+    model_path = tmp_path / "runtime" / "models" / "chess_experiment_3_dl.json"
+    replay_path = tmp_path / "runtime" / "models" / "chess_experiment_3_dl_replay.jsonl"
+    user_replay_path = tmp_path / "runtime" / "reports" / "games" / "chess_replays.jsonl"
+    rejected_path = tmp_path / "runtime" / "reports" / "games" / "chess_replays_rejected.jsonl"
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_DL_MODEL_PATH", str(model_path))
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_DL_REPLAY_PATH", str(replay_path))
+    monkeypatch.setenv("HTML_LEARNING_CHESS_REPLAY_BUFFER_PATH", str(user_replay_path))
+    monkeypatch.setenv("HTML_LEARNING_CHESS_REPLAY_REJECTED_PATH", str(rejected_path))
+    app = _build_app(db_path, actor_box, chess_engine_store=_build_chess_engine_store(tmp_path))
+    client = app.test_client()
+
+    created = client.post("/api/games/chess/practice", json={"difficulty": "experiment 3:dl", "side": "black"})
+    assert created.status_code == 200
+    match_id = created.get_json()["match_id"]
+
+    resigned = client.post(f"/api/games/chess/matches/{match_id}/resign", json={})
+    assert resigned.status_code == 200
+    assert not model_path.exists()
+    assert not replay_path.exists()
+    replay = json.loads(rejected_path.read_text(encoding="utf-8").strip())
+    assert replay["engine_name"] == "experiment 3:dl"
+    assert replay["collection_tier"] == "rejected"
+
+
+def test_experiment_dl_move_finds_mate_in_one(tmp_path, monkeypatch):
+    model_path = tmp_path / "runtime" / "models" / "chess_experiment_3_dl.json"
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_DL_MODEL_PATH", str(model_path))
+    board = {"__fen__": "6k1/5Q2/6K1/8/8/8/8/8 w - - 0 1"}
+
+    move = choose_experiment_dl_move(board, "white", model_path=model_path)
+
+    assert move is not None
+    chosen_uci = f"{move['from']}{move['to']}{move.get('promotion') or ''}"
+    board_obj = chess.Board(board["__fen__"])
+    board_obj.push(chess.Move.from_uci(chosen_uci))
+    assert board_obj.is_checkmate()
+
+
+def test_experiment_dl_move_returns_legal_move_on_fresh_model(tmp_path, monkeypatch):
+    model_path = tmp_path / "runtime" / "models" / "chess_experiment_3_dl.json"
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_DL_MODEL_PATH", str(model_path))
+    board = initial_board()
+
+    move = choose_experiment_dl_move(board, "white", model_path=model_path)
+
+    assert move is not None
+    applied = validate_move(board, "white", move["from"], move["to"], move.get("promotion"))
+    assert isinstance(applied["board"], dict)
+
+
+def test_experiment_pv_learning_writes_runtime_model(tmp_path, monkeypatch):
+    model_path = tmp_path / "runtime" / "models" / "chess_experiment_4_pv.json"
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_PV_MODEL_PATH", str(model_path))
+    row = {
+        "id": 10,
+        "mode": "computer",
+        "computer_difficulty": EXPERIMENT_PV_DIFFICULTY,
+        "human_side": "black",
+        "move_history_json": '[{"by":"white","from":"e2","to":"e4","piece":"P"}]',
+    }
+    updated = record_experiment_pv_learning(row, winner_color="white")
+    assert updated == 1
     assert model_path.exists()
     model = json.loads(model_path.read_text(encoding="utf-8"))
     assert model["sample_count"] >= 1
+    assert model["version"] >= 1
+
+
+def test_experiment_pv_resign_collects_replay_without_mutating_model(tmp_path, monkeypatch):
+    db_path = tmp_path / "games.db"
+    _seed_db(db_path)
+    actor_box = {"actor": {"id": 2, "username": "alice", "role": "user"}}
+    model_path = tmp_path / "runtime" / "models" / "chess_experiment_4_pv.json"
+    replay_path = tmp_path / "runtime" / "reports" / "games" / "chess_replays.jsonl"
+    rejected_path = tmp_path / "runtime" / "reports" / "games" / "chess_replays_rejected.jsonl"
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_PV_MODEL_PATH", str(model_path))
+    monkeypatch.setenv("HTML_LEARNING_CHESS_REPLAY_BUFFER_PATH", str(replay_path))
+    monkeypatch.setenv("HTML_LEARNING_CHESS_REPLAY_REJECTED_PATH", str(rejected_path))
+    app = _build_app(db_path, actor_box, chess_engine_store=_build_chess_engine_store(tmp_path))
+    client = app.test_client()
+
+    created = client.post("/api/games/chess/practice", json={"difficulty": "experiment 4:pv", "side": "black"})
+    assert created.status_code == 200
+    match_id = created.get_json()["match_id"]
+
+    resigned = client.post(f"/api/games/chess/matches/{match_id}/resign", json={})
+    assert resigned.status_code == 200
+    assert not model_path.exists()
+    replay = json.loads(rejected_path.read_text(encoding="utf-8").strip())
+    assert replay["engine_name"] == "experiment 4:pv"
+    assert replay["collection_tier"] == "rejected"
+
+
+def test_user_game_with_varied_moves_can_enter_trusted_replay_buffer(tmp_path, monkeypatch):
+    db_path = tmp_path / "games.db"
+    _seed_db(db_path)
+    actor_box = {"actor": {"id": 2, "username": "alice", "role": "user"}}
+    trusted_path = tmp_path / "runtime" / "reports" / "games" / "chess_replays.jsonl"
+    quarantine_path = tmp_path / "runtime" / "reports" / "games" / "chess_replays_quarantine.jsonl"
+    rejected_path = tmp_path / "runtime" / "reports" / "games" / "chess_replays_rejected.jsonl"
+    monkeypatch.setenv("HTML_LEARNING_CHESS_REPLAY_BUFFER_PATH", str(trusted_path))
+    monkeypatch.setenv("HTML_LEARNING_CHESS_REPLAY_QUARANTINE_PATH", str(quarantine_path))
+    monkeypatch.setenv("HTML_LEARNING_CHESS_REPLAY_REJECTED_PATH", str(rejected_path))
+    app = _build_app(db_path, actor_box, chess_engine_store=_build_chess_engine_store(tmp_path))
+    client = app.test_client()
+
+    created = client.post("/api/games/chess/practice", json={"difficulty": "experiment 4:pv", "side": "black"})
+    assert created.status_code == 200
+    match_id = created.get_json()["match_id"]
+    match = client.get(f"/api/games/chess/matches/{match_id}").get_json()["match"]
+    preferred_ucis = ["g8f6", "e7e6", "f8e7", "e8g8"]
+    for preferred in preferred_ucis:
+        options = legal_moves(match["board"], match["current_turn"])
+        move = next((cand for cand in options if f"{cand['from']}{cand['to']}{cand.get('promotion') or ''}" == preferred), options[0])
+        moved = client.post(
+            f"/api/games/chess/matches/{match_id}/move",
+            json={"from": move["from"], "to": move["to"], "promotion": move.get("promotion")},
+        )
+        assert moved.status_code == 200
+        match = moved.get_json()["match"]
+
+    resigned = client.post(f"/api/games/chess/matches/{match_id}/resign", json={})
+    assert resigned.status_code == 200
+
+    assert trusted_path.exists()
+    record = json.loads(trusted_path.read_text(encoding="utf-8").strip())
+    assert record["engine_name"] == "experiment 4:pv"
+    assert record["collection_tier"] == "trusted"
+    assert record["suspicious_flag"] is False
+    assert record["quarantine_reasons"] == []
+    assert not quarantine_path.exists()
+    assert not rejected_path.exists()
+
+
+def test_replay_classification_quarantines_duplicate_and_short_user_games(tmp_path):
+    base_record = {
+        "source": "user_games",
+        "move_count": 5,
+        "suspicious_flag": False,
+        "resign_abuse_flag": False,
+        "duplicate_signature": "sig-1",
+    }
+    duplicate = classify_replay_record(dict(base_record), existing_signatures={"sig-1"})
+    assert duplicate["collection_tier"] == "quarantine"
+    assert duplicate["duplicate_flag"] is True
+    assert "duplicate" in duplicate["quarantine_reasons"]
+    assert "low_move_count" in duplicate["quarantine_reasons"]
+
+    trusted = classify_replay_record(
+        {
+            "source": "teacher_guidance",
+            "move_count": 18,
+            "suspicious_flag": False,
+            "resign_abuse_flag": False,
+            "duplicate_signature": "sig-2",
+        },
+        existing_signatures=set(),
+    )
+    assert trusted["collection_tier"] == "trusted"
+    assert trusted["duplicate_flag"] is False
+
+
+def test_replay_buffer_summary_tracks_trusted_quarantine_and_rejected(tmp_path):
+    trusted_path = tmp_path / "runtime" / "reports" / "games" / "chess_replays.jsonl"
+    quarantine_path = tmp_path / "runtime" / "reports" / "games" / "chess_replays_quarantine.jsonl"
+    rejected_path = tmp_path / "runtime" / "reports" / "games" / "chess_replays_rejected.jsonl"
+    trusted_path.parent.mkdir(parents=True, exist_ok=True)
+    trusted_path.write_text(
+        json.dumps({"source": "user_games", "timestamp": "2026-05-08T00:00:00Z", "duplicate_flag": False, "resign_abuse_flag": False, "suspicious_flag": False, "quarantine_reasons": []}, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    quarantine_path.write_text(
+        json.dumps({"source": "user_games", "timestamp": "2026-05-08T00:00:01Z", "duplicate_flag": True, "resign_abuse_flag": True, "suspicious_flag": True, "quarantine_reasons": ["duplicate", "early_resign"]}, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    rejected_path.write_text(
+        json.dumps({"source": "user_games", "timestamp": "2026-05-08T00:00:02Z", "duplicate_flag": False, "resign_abuse_flag": False, "suspicious_flag": True, "quarantine_reasons": ["empty_history"]}, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    summary = replay_buffer_summary(path=trusted_path, quarantine_path=quarantine_path, rejected_path=rejected_path)
+
+    assert summary["total_replays"] == 3
+    assert summary["usable_replays"] == 1
+    assert summary["trusted_replays"] == 1
+    assert summary["quarantine_replays"] == 1
+    assert summary["rejected_replays"] == 1
+    assert summary["duplicate_count"] == 1
+    assert summary["resign_abuse_count"] == 1
+    assert summary["quarantine_reasons"]["duplicate"] == 1
+    assert summary["quarantine_reasons"]["empty_history"] == 1
+
+
+def test_experiment_pv_move_finds_mate_in_one(tmp_path, monkeypatch):
+    model_path = tmp_path / "runtime" / "models" / "chess_experiment_4_pv.json"
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_PV_MODEL_PATH", str(model_path))
+    board = {"__fen__": "6k1/5Q2/6K1/8/8/8/8/8 w - - 0 1"}
+
+    move = choose_experiment_pv_move(board, "white", model_path=model_path)
+
+    assert move is not None
+    chosen_uci = f"{move['from']}{move['to']}{move.get('promotion') or ''}"
+    board_obj = chess.Board(board["__fen__"])
+    board_obj.push(chess.Move.from_uci(chosen_uci))
+    assert board_obj.is_checkmate()
+
+
+def test_experiment_pv_move_returns_legal_move_on_fresh_model(tmp_path, monkeypatch):
+    model_path = tmp_path / "runtime" / "models" / "chess_experiment_4_pv.json"
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_PV_MODEL_PATH", str(model_path))
+    board = initial_board()
+
+    move = choose_experiment_pv_move(board, "white", model_path=model_path)
+
+    assert move is not None
+    applied = validate_move(board, "white", move["from"], move["to"], move.get("promotion"))
+    assert isinstance(applied["board"], dict)
+
+
+def test_root_chess_engine_dashboard_reports_warm_start_and_replay_summary(tmp_path, monkeypatch):
+    db_path = tmp_path / "games.db"
+    _seed_db(db_path)
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
+    replay_path = tmp_path / "runtime" / "reports" / "games" / "chess_replays.jsonl"
+    monkeypatch.setenv("HACKME_RUNTIME_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setenv("HTML_LEARNING_CHESS_REPLAY_BUFFER_PATH", str(replay_path))
+    app = _build_app(db_path, actor_box, chess_engine_store=_build_chess_engine_store(tmp_path))
+    client = app.test_client()
+
+    response = client.get("/api/root/games/chess/engines/dashboard")
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["ok"] is True
+    assert payload["warm_start"]["ok"] is True
+    assert any(row["engine"] == "experiment 4:pv" for row in payload["production_models"])
+    assert payload["replay_buffer"]["total_replays"] == 0
+    assert payload["pipeline"]["train_path"].endswith("train.jsonl")
+    assert "chess_replay_prepare.py" in payload["pipeline"]["commands"]["prepare"]
+    assert "chess_seed_train.py" in payload["pipeline"]["commands"]["seed_train"]
+    assert "chess_train_pipeline.py" in payload["pipeline"]["commands"]["full_pipeline"]
+    assert payload["pipeline_recommendation"]["ready"] is False
+    assert "no usable replays yet" in payload["pipeline_recommendation"]["blocked_reasons"]
+    assert Path(payload["promotion"]["path"]).name == "chess_promotion_status.json"
+
+
+def test_root_chess_promotion_stage_and_promote(tmp_path, monkeypatch):
+    db_path = tmp_path / "games.db"
+    _seed_db(db_path)
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
+    runtime_dir = tmp_path / "runtime"
+    benchmark_report = runtime_dir / "reports" / "games" / "fake_benchmark.json"
+    benchmark_report.parent.mkdir(parents=True, exist_ok=True)
+    benchmark_report.write_text(
+        json.dumps(
+            {
+                "smoke_evaluation": {"pass": True, "games_played": 8, "suspicious_matches": []},
+                "benchmark": {
+                    "standings": [
+                        {
+                            "engine": "experiment 4:pv",
+                            "score_rate": 0.62,
+                            "win_rate": 0.41,
+                            "games": 12,
+                            "draws": 3,
+                        }
+                    ],
+                    "suspicious_matches": [],
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    candidate_source = tmp_path / "candidate_exp4.json"
+    candidate_source.write_text(json.dumps(experiment_pv_model_template(), ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setenv("HACKME_RUNTIME_DIR", str(runtime_dir))
+    app = _build_app(db_path, actor_box, chess_engine_store=_build_chess_engine_store(tmp_path))
+    client = app.test_client()
+
+    staged = client.post(
+        "/api/root/games/chess/promotion/stage",
+        json={
+            "engine": "experiment 4:pv",
+            "source_path": str(candidate_source),
+            "benchmark_report_path": str(benchmark_report),
+        },
+    )
+    assert staged.status_code == 200
+    staged_payload = staged.get_json()
+    assert staged_payload["ok"] is True
+
+    promoted = client.post(
+        "/api/root/games/chess/promotion/promote",
+        json={
+            "engine": "experiment 4:pv",
+            "benchmark_report_path": str(benchmark_report),
+        },
+    )
+    assert promoted.status_code == 200
+    promoted_payload = promoted.get_json()
+    assert promoted_payload["ok"] is True
+    assert Path(promoted_payload["production_path"]).exists()
+
+    status_response = client.get("/api/root/games/chess/promotion/status")
+    assert status_response.status_code == 200
+    status_payload = status_response.get_json()["promotion"]["status"]
+    assert status_payload["last_promotion_result"]["engine"] == "experiment 4:pv"
+    assert status_payload["candidate"] is None
+
+
+def test_root_chess_promotion_gate_blocks_weak_candidate(tmp_path, monkeypatch):
+    db_path = tmp_path / "games.db"
+    _seed_db(db_path)
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
+    runtime_dir = tmp_path / "runtime"
+    benchmark_report = runtime_dir / "reports" / "games" / "weak_benchmark.json"
+    benchmark_report.parent.mkdir(parents=True, exist_ok=True)
+    benchmark_report.write_text(
+        json.dumps(
+            {
+                "smoke_evaluation": {"pass": False, "games_played": 4, "suspicious_matches": [{}]},
+                "benchmark": {
+                    "standings": [
+                        {
+                            "engine": "experiment 4:pv",
+                            "score_rate": 0.2,
+                            "win_rate": 0.1,
+                            "games": 4,
+                            "draws": 4,
+                        }
+                    ],
+                    "suspicious_matches": [{}],
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    candidate_source = tmp_path / "candidate_exp4_bad.json"
+    candidate_source.write_text(json.dumps(experiment_pv_model_template(), ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setenv("HACKME_RUNTIME_DIR", str(runtime_dir))
+    app = _build_app(db_path, actor_box, chess_engine_store=_build_chess_engine_store(tmp_path))
+    client = app.test_client()
+
+    staged = client.post(
+        "/api/root/games/chess/promotion/stage",
+        json={
+            "engine": "experiment 4:pv",
+            "source_path": str(candidate_source),
+            "benchmark_report_path": str(benchmark_report),
+        },
+    )
+    assert staged.status_code == 200
+
+    promoted = client.post(
+        "/api/root/games/chess/promotion/promote",
+        json={
+            "engine": "experiment 4:pv",
+            "benchmark_report_path": str(benchmark_report),
+        },
+    )
+    assert promoted.status_code == 400
+    assert "promotion gate failed" in promoted.get_json()["msg"]
 
 
 def test_chess_pvp_checkmate_finishes_match(tmp_path):

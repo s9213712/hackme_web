@@ -25,13 +25,19 @@ from services.games.chess_dl import (
 from services.games.chess_pv import (
     EXPERIMENT_PV_DIFFICULTY,
     choose_experiment_pv_move,
-    record_experiment_pv_learning,
 )
 from services.games.chess_nn import (
     EXPERIMENT_NN_DIFFICULTY,
     choose_experiment_nn_move,
-    record_experiment_nn_learning,
 )
+from services.games.chess_dashboard import build_chess_engine_dashboard
+from services.games.chess_promotion import (
+    ensure_warm_start_chess_environment,
+    promote_candidate_model,
+    promotion_status_summary,
+    stage_candidate_model,
+)
+from services.games.chess_replay_buffer import collect_match_replay
 from services.points_chain import DISPLAY_CURRENCY
 
 GAME_KEY = "chess"
@@ -643,67 +649,37 @@ def register_games_routes(app, deps):
                 awarded.append({"user_id": row["user_id"], "username": row["username"], "rank": index + 1, "reward_points": reward_points})
         return awarded
 
-    def persist_computer_learning(row, *, winner_color, actor_username):
-        updated = 0
-        if chess_engine_store is not None:
-            try:
-                updated += record_experiment_learning(
-                    row,
-                    winner_color=winner_color,
-                    store=chess_engine_store,
-                )
-            except Exception as exc:
-                audit(
-                    "GAME_CHESS_EXPERIMENT_LEARNING_FAILED",
-                    get_client_ip(),
-                    user=actor_username,
-                    success=False,
-                    ua=get_ua(),
-                    detail=f"match_id={row['id']}, error={type(exc).__name__}: {exc}",
-                )
+    def collect_computer_replay(row, *, winner_color, actor_username):
         try:
-            updated += record_experiment_nn_learning(
+            replay = collect_match_replay(
                 row,
                 winner_color=winner_color,
+                source="user_games",
+                actor_username=actor_username,
             )
+            audit(
+                "GAME_CHESS_REPLAY_COLLECTED",
+                get_client_ip(),
+                user=actor_username,
+                success=True,
+                ua=get_ua(),
+                detail=(
+                    f"match_id={row['id']}, replay_id={replay.get('replay_id')}, "
+                    f"stored={replay.get('stored')}, suspicious={replay.get('suspicious_flag')}, "
+                    f"confidence={replay.get('confidence_score')}"
+                ),
+            )
+            return replay
         except Exception as exc:
             audit(
-                "GAME_CHESS_EXPERIMENT_NN_LEARNING_FAILED",
+                "GAME_CHESS_REPLAY_COLLECTION_FAILED",
                 get_client_ip(),
                 user=actor_username,
                 success=False,
                 ua=get_ua(),
                 detail=f"match_id={row['id']}, error={type(exc).__name__}: {exc}",
             )
-        try:
-            updated += record_experiment_dl_learning(
-                row,
-                winner_color=winner_color,
-            )
-        except Exception as exc:
-            audit(
-                "GAME_CHESS_EXPERIMENT_DL_LEARNING_FAILED",
-                get_client_ip(),
-                user=actor_username,
-                success=False,
-                ua=get_ua(),
-                detail=f"match_id={row['id']}, error={type(exc).__name__}: {exc}",
-            )
-        try:
-            updated += record_experiment_pv_learning(
-                row,
-                winner_color=winner_color,
-            )
-        except Exception as exc:
-            audit(
-                "GAME_CHESS_EXPERIMENT_PV_LEARNING_FAILED",
-                get_client_ip(),
-                user=actor_username,
-                success=False,
-                ua=get_ua(),
-                detail=f"match_id={row['id']}, error={type(exc).__name__}: {exc}",
-            )
-        return updated
+            return None
 
     @app.route("/api/games/catalog", methods=["GET"])
     @require_csrf_safe
@@ -1131,10 +1107,11 @@ def register_games_routes(app, deps):
                 (json.dumps(board, ensure_ascii=False, sort_keys=True), json.dumps(history, ensure_ascii=False), next_turn, now, match_id),
             )
             if status_info["status"] == "finished":
-                refreshed = conn.execute("SELECT * FROM game_matches WHERE id=?", (match_id,)).fetchone()
-                finish_match(conn, refreshed, status_info, utc_now())
-                persist_computer_learning(
-                    refreshed,
+                match_before_finish = conn.execute("SELECT * FROM game_matches WHERE id=?", (match_id,)).fetchone()
+                finish_match(conn, match_before_finish, status_info, utc_now())
+                final_row = conn.execute("SELECT * FROM game_matches WHERE id=?", (match_id,)).fetchone()
+                collect_computer_replay(
+                    final_row,
                     winner_color=status_info.get("winner_color"),
                     actor_username=actor["username"],
                 )
@@ -1174,8 +1151,9 @@ def register_games_routes(app, deps):
                 """,
                 (winner, current_week_key(), now, now, match_id),
             )
-            persist_computer_learning(
-                row,
+            final_row = conn.execute("SELECT * FROM game_matches WHERE id=?", (match_id,)).fetchone()
+            collect_computer_replay(
+                final_row,
                 winner_color=opponent(side),
                 actor_username=actor["username"],
             )
@@ -1353,6 +1331,77 @@ def register_games_routes(app, deps):
         awarded = award_weekly_rewards(week, actor=actor)
         audit("GAME_WEEKLY_REWARDS_AWARDED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"week={week}")
         return json_resp({"ok": True, "week": week, "awarded": awarded})
+
+    @app.route("/api/root/games/chess/warm-start", methods=["POST"])
+    @require_csrf
+    def chess_warm_start():
+        actor, err, status = actor_or_401()
+        if err:
+            return err, status
+        if actor.get("username") != "root":
+            return json_resp({"ok": False, "msg": "只有 root 可執行此操作"}), 403
+        return json_resp(ensure_warm_start_chess_environment())
+
+    @app.route("/api/root/games/chess/engines/dashboard", methods=["GET"])
+    @require_csrf_safe
+    def chess_engines_dashboard():
+        actor, err, status = actor_or_401()
+        if err:
+            return err, status
+        if actor.get("username") != "root":
+            return json_resp({"ok": False, "msg": "只有 root 可查看此資訊"}), 403
+        return json_resp(build_chess_engine_dashboard())
+
+    @app.route("/api/root/games/chess/promotion/status", methods=["GET"])
+    @require_csrf_safe
+    def chess_promotion_status():
+        actor, err, status = actor_or_401()
+        if err:
+            return err, status
+        if actor.get("username") != "root":
+            return json_resp({"ok": False, "msg": "只有 root 可查看此資訊"}), 403
+        return json_resp({"ok": True, "promotion": promotion_status_summary()})
+
+    @app.route("/api/root/games/chess/promotion/stage", methods=["POST"])
+    @require_csrf
+    def chess_promotion_stage():
+        actor, err, status = actor_or_401()
+        if err:
+            return err, status
+        if actor.get("username") != "root":
+            return json_resp({"ok": False, "msg": "只有 root 可執行此操作"}), 403
+        data, err, status = parse_json_body()
+        if err:
+            return err, status
+        try:
+            result = stage_candidate_model(
+                engine=str(data.get("engine") or "").strip(),
+                source_path=data.get("source_path"),
+                benchmark_report_path=data.get("benchmark_report_path"),
+            )
+        except Exception as exc:
+            return json_resp({"ok": False, "msg": str(exc)}), 400
+        return json_resp(result)
+
+    @app.route("/api/root/games/chess/promotion/promote", methods=["POST"])
+    @require_csrf
+    def chess_promotion_promote():
+        actor, err, status = actor_or_401()
+        if err:
+            return err, status
+        if actor.get("username") != "root":
+            return json_resp({"ok": False, "msg": "只有 root 可執行此操作"}), 403
+        data, err, status = parse_json_body()
+        if err:
+            return err, status
+        try:
+            result = promote_candidate_model(
+                engine=str(data.get("engine") or "").strip(),
+                benchmark_report_path=data.get("benchmark_report_path"),
+            )
+        except Exception as exc:
+            return json_resp({"ok": False, "msg": str(exc)}), 400
+        return json_resp(result)
 
 
 def leaderboard_rows(conn, week):

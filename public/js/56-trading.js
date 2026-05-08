@@ -36,7 +36,111 @@ let tradingBotChartOverlay = null;
 const tradingGridExpandedBots = new Set();
 const TRADING_WORKFLOW_STORAGE_KEY = "hackme_trading_workflow_json";
 const TRADING_LIVE_PRICE_REFRESH_MS = 2000;
-const TRADING_RISK_GRADE_UNAVAILABLE_MESSAGE = "目前風控級價格不可用，已暫停市價單與高風險交易；限價單仍可使用";
+
+function tradingWarningLanguage() {
+  const raw = String(tradingState.settings?.warning_language || "zh-TW").trim().toLowerCase();
+  return raw.startsWith("en") ? "en" : "zh-TW";
+}
+
+function tradingWarningText(key, vars = {}) {
+  if (tradingWarningLanguage() === "en") {
+    const messages = {
+      risk_grade_unavailable: "Risk-grade price is unavailable. Market orders and other high-risk paths remain paused; limit orders are still allowed.",
+      degrade_light: "Price sources degraded. Whether trading auto-pauses depends on the root risk-control policy.",
+      market_kind: "Market-order trading",
+      bot_kind: "Bot trading",
+      borrowing_kind: "Borrowing / margin trading",
+      root_auto_pause: `Root auto-pause enabled: ${vars.kinds || "-"}`,
+      root_warn_only: `Root warning only; trading remains enabled (healthy providers ${vars.providerCount || 0}/${vars.tradeMinProviders || 0})`,
+      root_warn_only_short: "Root warning only; trading remains enabled",
+      risk_grade_unavailable_short: "Risk-grade price is unavailable",
+      reference_degraded: "Reference price degraded",
+      reference_healthy_risk_usable: "Reference price healthy; risk-grade price still usable",
+      reference_healthy_confidence: `Reference price healthy; risk-grade confidence ${vars.confidence || "-"}`,
+      auto_selected_market: `No market selected; automatically using ${vars.market || "-"}`,
+      pause_message: `${vars.kindLabel || "Trading"} paused because price health degraded: ${vars.reason || "-"}; healthy providers ${vars.providerCount || 0}, need at least ${vars.tradeMinProviders || 0}`,
+      risk_usable_yes: "risk usable yes",
+      risk_usable_no: "risk usable no",
+    };
+    return messages[key] || key;
+  }
+  const messages = {
+    risk_grade_unavailable: "目前風控級價格不可用，已暫停市價單與高風險交易；限價單仍可使用",
+    degrade_light: "價格來源降級，交易是否自動暫停由 root 風控開關決定",
+    market_kind: "市價交易",
+    bot_kind: "機器人交易",
+    borrowing_kind: "借貸交易",
+    root_auto_pause: `root 已設定自動暫停：${vars.kinds || "-"}`,
+    root_warn_only: `root 目前僅警示，不自動暫停交易（健康來源 ${vars.providerCount || 0}/${vars.tradeMinProviders || 0}）`,
+    root_warn_only_short: "root 目前僅警示，不自動暫停交易",
+    risk_grade_unavailable_short: "風控級價格目前不可用",
+    reference_degraded: "reference 價格降級",
+    reference_healthy_risk_usable: "reference 價格正常 · 風控級價格仍可用",
+    reference_healthy_confidence: `reference 價格正常 · 風控級來源信心 ${vars.confidence || "-"}`,
+    auto_selected_market: `未指定市場，已自動選用 ${vars.market || "-"}`,
+    pause_message: `${vars.kindLabel || "交易"}已因價格降級暫停：${vars.reason || "-"} · 目前健康來源 ${vars.providerCount || 0} 家，至少需要 ${vars.tradeMinProviders || 0} 家`,
+    risk_usable_yes: "風控可用 yes",
+    risk_usable_no: "風控可用 no",
+  };
+  return messages[key] || key;
+}
+
+function tradingPriceDegradePolicy(riskContext, kind = "market") {
+  const settings = tradingState.settings || {};
+  const safe = riskContext && typeof riskContext === "object" ? riskContext : {};
+  const warningLanguage = tradingWarningLanguage();
+  const tradeMinProviders = Math.max(1, Number(settings.price_fusion_trade_min_provider_count || 2));
+  const providerCount = Math.max(
+    0,
+    Number.isFinite(Number(safe.provider_count))
+      ? Number(safe.provider_count)
+      : Number(safe.risk_grade_provider_count || 0)
+  );
+  const conservativeMode = !!safe.conservative_mode;
+  const fallback = !!safe.fallback;
+  const stale = !!safe.stale;
+  const degraded = !!safe.degraded;
+  const providerShort = conservativeMode && providerCount < tradeMinProviders;
+  const severeDegrade = fallback || stale || (degraded && !conservativeMode) || providerShort;
+  let policyEnabled = false;
+  let kindLabel = warningLanguage === "en" ? "Trading" : "交易";
+  if (kind === "bot") {
+    policyEnabled = !!settings.price_degrade_pause_bots;
+    kindLabel = tradingWarningText("bot_kind");
+  } else if (kind === "borrowing") {
+    policyEnabled = !!settings.price_degrade_pause_borrowing;
+    kindLabel = tradingWarningText("borrowing_kind");
+  } else {
+    policyEnabled = !!settings.price_degrade_pause_market_orders;
+    kindLabel = tradingWarningText("market_kind");
+  }
+  return {
+    kind,
+    kindLabel,
+    policyEnabled,
+    shouldPause: policyEnabled && severeDegrade,
+    conservativeMode,
+    severeDegrade,
+    providerShort,
+    providerCount,
+    tradeMinProviders,
+  };
+}
+
+function tradingPriceDegradePauseMessage(kindLabel, riskContext, policy) {
+  const safe = riskContext && typeof riskContext === "object" ? riskContext : {};
+  const applied = policy || tradingPriceDegradePolicy(safe);
+  const fallbackReason = tradingWarningLanguage() === "en"
+    ? "Current price source is not suitable for risk-grade execution"
+    : "價格來源目前不適合風控級成交";
+  const reason = String(safe.warning_message || safe.high_risk_block_reason || safe.fallback_reason || fallbackReason).trim();
+  return tradingWarningText("pause_message", {
+    kindLabel,
+    reason,
+    providerCount: applied.providerCount,
+    tradeMinProviders: applied.tradeMinProviders,
+  });
+}
 
 function tradingRequestId(prefix = "trading") {
   if (typeof economyRequestId === "function") return economyRequestId(prefix);
@@ -124,8 +228,20 @@ function tradingMarketPriceContext(market, priceType = "reference") {
   const symbol = String(market?.symbol || "");
   const liveMeta = tradingState.livePriceMeta || {};
   const liveContext = liveMeta[symbol]?.[contextKey];
-  if (liveContext && typeof liveContext === "object") return liveContext;
-  if (market?.[contextKey] && typeof market[contextKey] === "object") return market[contextKey];
+  if (liveContext && typeof liveContext === "object") {
+    return {
+      ...liveContext,
+      conservative_mode: !!liveMeta[symbol]?.conservative_mode || liveMeta[symbol]?.price_health === "conservative",
+      minimum_provider_count: Number(liveMeta[symbol]?.minimum_provider_count || liveContext.minimum_provider_count || 0),
+    };
+  }
+  if (market?.[contextKey] && typeof market[contextKey] === "object") {
+    return {
+      ...market[contextKey],
+      conservative_mode: !!market?.conservative_mode || market?.price_health === "conservative",
+      minimum_provider_count: Number(market?.minimum_provider_count || market[contextKey].minimum_provider_count || 0),
+    };
+  }
   const source = String(market?.price_source || "manual_root");
   const pricePoints = type === "risk_grade"
     ? tradingNumber(market?.risk_grade_price_points ?? market?.manual_price_points, 0)
@@ -143,6 +259,8 @@ function tradingMarketPriceContext(market, priceType = "reference") {
     warning_message: source === "manual_root" ? "目前使用手動價格" : (source.endsWith("_cached") ? "目前使用最後健康快取" : ""),
     high_risk_blocked: false,
     risk_grade_usable: type === "risk_grade" && source !== "manual_root" && !source.endsWith("_cached"),
+    conservative_mode: false,
+    minimum_provider_count: 0,
     warnings: [],
     excluded_sources: [],
   };
@@ -171,7 +289,7 @@ function tradingPriceContextSummary(context, { compact = false } = {}) {
   const confidenceText = `信心 ${tradingPriceConfidenceLabel(safe.confidence)}`;
   const stateText = safe.stale ? "stale" : (safe.degraded ? "degraded" : "正常");
   const riskGradeUsableText = safe.price_type === "risk_grade"
-    ? `風控可用 ${safe.risk_grade_usable ? "yes" : "no"}`
+    ? (safe.risk_grade_usable ? tradingWarningText("risk_usable_yes") : tradingWarningText("risk_usable_no"))
     : "";
   const warning = String(safe.warning_message || "").trim();
   if (compact) {
@@ -215,6 +333,9 @@ function renderTradingCurrentPrice(market, options = {}) {
   const highRiskBlockReason = options.highRiskBlockReason || riskContext?.warning_message || liveMeta[symbol]?.high_risk_block_reason || "";
   const defaultedMarket = options.defaultedMarket === true || liveMeta[symbol]?.defaulted_market === true;
   const transportState = options.transportState || liveMeta[symbol]?.transport_state || {};
+  const marketPausePolicy = tradingPriceDegradePolicy(riskContext, "market");
+  const botPausePolicy = tradingPriceDegradePolicy(riskContext, "bot");
+  const borrowingPausePolicy = tradingPriceDegradePolicy(riskContext, "borrowing");
   if (labelEl) labelEl.textContent = "目前價格（reference）";
   if (purposeEl) purposeEl.textContent = `用途：展示 / 一般估值 · ${tradingPriceContextSummary(referenceContext, { compact: true })} · ${tradingTransportStateSummary(transportState, { compact: true })}`;
   const previousPrice = symbol && Number.isFinite(priceHistory[symbol]) ? Number(priceHistory[symbol]) : null;
@@ -274,7 +395,18 @@ function renderTradingCurrentPrice(market, options = {}) {
       if (excludedSources.length) notes.push(`排除 ${excludedSources.join(", ")}`);
       if (transportState.fallback) notes.push("WebSocket provider input 已退回 HTTP polling");
       if (transportState.stale) notes.push("provider input stale");
-      healthEl.textContent = `🟡 ${TRADING_RISK_GRADE_UNAVAILABLE_MESSAGE}${notes.length ? ` · ${notes.join(" · ")}` : ""}`;
+      const pauseKinds = [marketPausePolicy, botPausePolicy, borrowingPausePolicy]
+        .filter((item) => item.shouldPause)
+        .map((item) => item.kindLabel);
+      if (pauseKinds.length) {
+        notes.unshift(tradingWarningText("root_auto_pause", { kinds: pauseKinds.join(" / ") }));
+      } else {
+        notes.unshift(tradingWarningText("root_warn_only", {
+          providerCount: marketPausePolicy.providerCount,
+          tradeMinProviders: marketPausePolicy.tradeMinProviders,
+        }));
+      }
+      healthEl.textContent = `🟡 ${tradingWarningText("degrade_light")}${notes.length ? ` · ${notes.join(" · ")}` : ""}`;
       healthEl.classList.add("warning");
     } else if (
       health === "fallback"
@@ -292,21 +424,26 @@ function renderTradingCurrentPrice(market, options = {}) {
       if (!fallbackReason && !warnings.length && riskContext?.warning_message) notes.push(riskContext.warning_message);
       if (transportState.fallback) notes.push("WebSocket provider input 已退回 HTTP polling");
       if (transportState.stale) notes.push("provider input stale");
-      if (riskContext?.risk_grade_usable === false && !riskContext?.high_risk_blocked) notes.push(TRADING_RISK_GRADE_UNAVAILABLE_MESSAGE);
-      if (defaultedMarket) notes.push(`未指定市場，已改用 ${tradingDisplaySymbol(symbol)}`);
-      healthEl.textContent = `🟡 reference 價格降級${notes.length ? ` · ${notes.join(" · ")}` : ""}`;
+      if (riskContext?.risk_grade_usable === false && !riskContext?.high_risk_blocked) notes.push(tradingWarningText("risk_grade_unavailable_short"));
+      const pauseKinds = [marketPausePolicy, botPausePolicy, borrowingPausePolicy]
+        .filter((item) => item.shouldPause)
+        .map((item) => item.kindLabel);
+      if (pauseKinds.length) notes.unshift(tradingWarningText("root_auto_pause", { kinds: pauseKinds.join(" / ") }));
+      else notes.unshift(tradingWarningText("root_warn_only_short"));
+      if (defaultedMarket) notes.push(tradingWarningText("auto_selected_market", { market: tradingDisplaySymbol(symbol) }));
+      healthEl.textContent = `🟡 ${tradingWarningText("reference_degraded")}${notes.length ? ` · ${notes.join(" · ")}` : ""}`;
       healthEl.classList.add("warning");
     } else if (excludedSources.length || warnings.length || referenceContext?.warning_only || riskContext?.warning_only) {
       const notes = [];
       if (excludedSources.length) notes.push(`已自動排除 ${excludedSources.join(", ")}`);
       if (warnings.length) notes.push(String(warnings[0]?.message || warnings[0]?.code || ""));
-      healthEl.textContent = `🟢 reference 價格正常 · 風控級價格仍可用${notes.length ? ` · ${notes.join(" · ")}` : ""}`;
+      healthEl.textContent = `🟢 ${tradingWarningText("reference_healthy_risk_usable")}${notes.length ? ` · ${notes.join(" · ")}` : ""}`;
       healthEl.classList.remove("warning");
     } else if (defaultedMarket) {
-      healthEl.textContent = `🟢 未指定市場，已自動選用 ${tradingDisplaySymbol(symbol)}`;
+      healthEl.textContent = `🟢 ${tradingWarningText("auto_selected_market", { market: tradingDisplaySymbol(symbol) })}`;
       healthEl.classList.remove("warning");
     } else {
-      healthEl.textContent = `🟢 reference 價格正常 · 風控級來源信心 ${tradingPriceConfidenceLabel(riskContext?.confidence)}`;
+      healthEl.textContent = `🟢 ${tradingWarningText("reference_healthy_confidence", { confidence: tradingPriceConfidenceLabel(riskContext?.confidence) })}`;
       healthEl.classList.remove("warning");
     }
   }
@@ -579,7 +716,12 @@ function tradingOrderDraftEstimate() {
   const limitPrice = tradingNumber($("trading-limit-price")?.value, 0);
   const referenceContext = tradingMarketPriceContext(market, "reference");
   const riskContext = tradingMarketPriceContext(market, "risk_grade");
-  const price = orderType === "limit" ? limitPrice : tradingMarketPricePoints(market, "risk_grade");
+  const marketPausePolicy = tradingPriceDegradePolicy(riskContext, "market");
+  const riskGradePrice = tradingMarketPricePoints(market, "risk_grade");
+  const referencePrice = tradingMarketPricePoints(market, "reference");
+  const price = orderType === "limit"
+    ? limitPrice
+    : (riskGradePrice > 0 ? riskGradePrice : (marketPausePolicy.shouldPause ? riskGradePrice : referencePrice));
   const feeRate = tradingNumber(market.fee_rate_percent, 0) / 100;
   if (!inputValue || inputValue <= 0) {
     return {
@@ -589,13 +731,21 @@ function tradingOrderDraftEstimate() {
     };
   }
   if (!price || price <= 0) {
-    return { ok: false, blocking: true, message: orderType === "limit" ? "請輸入有效限價" : TRADING_RISK_GRADE_UNAVAILABLE_MESSAGE };
-  }
-  if (orderType !== "limit" && (riskContext?.high_risk_blocked || riskContext?.risk_grade_usable === false)) {
     return {
       ok: false,
       blocking: true,
-      message: `${TRADING_RISK_GRADE_UNAVAILABLE_MESSAGE} · ${riskContext.warning_message || "風控級價格目前不可用"} · ${tradingPriceContextSummary(riskContext, { compact: true })}`,
+      message: orderType === "limit"
+        ? "請輸入有效限價"
+        : (marketPausePolicy.shouldPause
+          ? tradingPriceDegradePauseMessage("市價交易", riskContext, marketPausePolicy)
+          : "目前無法取得可用成交估值，請稍後再試"),
+    };
+  }
+  if (orderType !== "limit" && marketPausePolicy.shouldPause) {
+    return {
+      ok: false,
+      blocking: true,
+      message: `${tradingPriceDegradePauseMessage("市價交易", riskContext, marketPausePolicy)} · ${tradingPriceContextSummary(riskContext, { compact: true })}`,
     };
   }
   let quantity = inputValue;
@@ -619,7 +769,9 @@ function tradingOrderDraftEstimate() {
   const sellableQuantity = Math.max(0, positionQuantity - lockedQuantity);
   const orderPriceNote = orderType === "limit"
     ? `限價單以你輸入的價格為準；目前 reference 價 ${formatTradingPointsValue(tradingMarketPricePoints(market, "reference"))} · ${tradingPriceContextSummary(referenceContext, { compact: true })}`
-    : `市價單估值採用風控級價格；${tradingPriceContextSummary(riskContext, { compact: true })}`;
+    : (riskGradePrice > 0
+      ? `市價單估值採用風控級價格；${tradingPriceContextSummary(riskContext, { compact: true })}`
+      : `市價單暫以 reference 價估值；${tradingPriceContextSummary(referenceContext, { compact: true })}`);
   if (side === "buy") {
     const total = notional + fee;
     return {
@@ -1242,9 +1394,16 @@ function renderTradingSummary() {
     const publicSpotSymbols = economySpotMarkets(tradingState.markets || [])
       .map((row) => tradingDisplaySymbol(row.symbol))
       .filter(Boolean);
+    const pauseKinds = [];
+    if (tradingState.settings?.price_degrade_pause_market_orders) pauseKinds.push("市價交易");
+    if (tradingState.settings?.price_degrade_pause_bots) pauseKinds.push("機器人");
+    if (tradingState.settings?.price_degrade_pause_borrowing) pauseKinds.push("借貸交易");
+    const degradeNote = pauseKinds.length
+      ? `價格降級時會自動暫停：${pauseKinds.join(" / ")}。`
+      : "價格降級時目前只警示，不自動暫停交易。";
     availabilityNote.textContent = currentUser === "root"
-      ? "root 可使用現貨、進階交易與合約模擬；root 以外用戶目前僅開放現貨與已啟用的進階交易。"
-      : `目前對 root 以外用戶開放 ${publicSpotSymbols.join("、") || "已啟用的積分現貨市場"} 現貨。`;
+      ? `root 可使用現貨、進階交易與合約模擬；root 以外用戶目前僅開放現貨與已啟用的進階交易。${degradeNote}`
+      : `目前對 root 以外用戶開放 ${publicSpotSymbols.join("、") || "已啟用的積分現貨市場"} 現貨。${degradeNote}`;
   }
   const trial = funding.trial_credit || null;
   const trialAvailable = trial ? Number(trial.available_points || 0) : 0;
@@ -2056,7 +2215,10 @@ function updateTradingMarginEstimate() {
   const quantity = tradingNumber($("trading-margin-quantity")?.value, 0);
   const collateral = tradingNumber($("trading-margin-collateral")?.value, 0);
   const riskContext = tradingMarketPriceContext(market, "risk_grade");
-  const price = tradingMarketPricePoints(market, "risk_grade");
+  const borrowingPausePolicy = tradingPriceDegradePolicy(riskContext, "borrowing");
+  const riskGradePrice = tradingMarketPricePoints(market, "risk_grade");
+  const referencePrice = tradingMarketPricePoints(market, "reference");
+  const price = riskGradePrice > 0 ? riskGradePrice : (borrowingPausePolicy.shouldPause ? riskGradePrice : referencePrice);
   const notional = quantity > 0 && price > 0 ? Math.ceil(quantity * price) : 0;
   const positionType = $("trading-margin-type")?.value || "margin_long";
   const marginLongFinancingRatePercent = tradingNumber(tradingState.settings?.margin_long_financing_percent, 90);
@@ -2089,15 +2251,17 @@ function updateTradingMarginEstimate() {
     return { ok: false, blocking: true, message: estimate.textContent };
   }
   let blocking = false;
-  if (riskContext?.high_risk_blocked || riskContext?.risk_grade_usable === false) {
-    const message = `${TRADING_RISK_GRADE_UNAVAILABLE_MESSAGE} · ${typeLabel} 暫停：${riskContext.warning_message || "風控級價格目前不可用"} · ${tradingPriceContextSummary(riskContext, { compact: true })}`;
+  if (borrowingPausePolicy.shouldPause) {
+    const message = `${tradingPriceDegradePauseMessage(typeLabel, riskContext, borrowingPausePolicy)} · ${tradingPriceContextSummary(riskContext, { compact: true })}`;
     blocking = true;
     estimate.textContent = message;
     estimate.style.color = "#ff6b7a";
     if (openBtn) openBtn.disabled = true;
     return { ok: false, blocking, message };
   }
-  let message = `${typeLabel} · 風控級價格 ${formatTradingPointsValue(price)} 點 · ${tradingPriceContextSummary(riskContext, { compact: true })} · 名目金額約 ${notional} 點 · 開倉費 ${fee} 點 · 原始保證金最低需求 ${minCollateral} 點 · 目前填寫 ${collateral} 點`;
+  const priceLabel = riskGradePrice > 0 ? "風控級價格" : "reference 價格";
+  const contextForMessage = riskGradePrice > 0 ? riskContext : tradingMarketPriceContext(market, "reference");
+  let message = `${typeLabel} · ${priceLabel} ${formatTradingPointsValue(price)} 點 · ${tradingPriceContextSummary(contextForMessage, { compact: true })} · 名目金額約 ${notional} 點 · 開倉費 ${fee} 點 · 原始保證金最低需求 ${minCollateral} 點 · 目前填寫 ${collateral} 點`;
   if (positionType === "short") {
     message = `${message}；借券放空風險：價格上漲會虧損並降低維持率；借券保證金比例 ${formatTradingPercent(shortCollateralRatePercent)}%`;
   } else {
@@ -3649,7 +3813,13 @@ function renderTradingRootReport(report) {
   if ($("trading-verification-status")) $("trading-verification-status").textContent = verification.ok === false ? "異常" : "正常";
   if ($("trading-verification-detail")) $("trading-verification-detail").textContent = `${Array.isArray(verification.errors) ? verification.errors.length : 0} 個問題`;
   const settings = safe.settings || {};
-  if ($("trading-risk-flags")) $("trading-risk-flags").textContent = `borrow=${settings.borrowing_enabled ? "true" : "false"} / liquidation=${settings.margin_liquidation_enabled ? "true" : "false"} / futures=${settings.futures_enabled ? "true" : "false"} / pvp=${settings.pvp_matching_enabled ? "true" : "false"}`;
+  if ($("trading-risk-flags")) {
+    const degradePauses = [];
+    if (settings.price_degrade_pause_market_orders) degradePauses.push("市價");
+    if (settings.price_degrade_pause_bots) degradePauses.push("bot");
+    if (settings.price_degrade_pause_borrowing) degradePauses.push("借貸");
+    $("trading-risk-flags").textContent = `borrow=${settings.borrowing_enabled ? "true" : "false"} / liquidation=${settings.margin_liquidation_enabled ? "true" : "false"} / futures=${settings.futures_enabled ? "true" : "false"} / pvp=${settings.pvp_matching_enabled ? "true" : "false"} / degrade_pause=${degradePauses.join("+") || "off"}`;
+  }
   if ($("trading-liquidation-status")) {
     $("trading-liquidation-status").textContent = settings.margin_liquidation_enabled
       ? `自動清算排程：啟用，維持保證金 ${formatTradingPercent(settings.margin_maintenance_percent || 0)}%`
@@ -3789,7 +3959,9 @@ async function loadTradingLivePrice() {
           confidence: json.confidence || "",
           stale: !!json.stale,
           degraded: !!json.degraded,
+          conservative_mode: json.price_health === "conservative" || !!json.conservative_mode,
           provider_count: Number.isFinite(Number(json.provider_count)) ? Number(json.provider_count) : null,
+          minimum_provider_count: Number.isFinite(Number(json.minimum_provider_count)) ? Number(json.minimum_provider_count) : null,
           connected: !!json.connected,
           fallback: !!json.fallback,
           last_update_at: json.last_update_at || "",

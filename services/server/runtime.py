@@ -8,12 +8,22 @@ import secrets
 import sqlite3
 from datetime import datetime, timedelta
 from ipaddress import ip_address
+from pathlib import Path
 
 from cryptography import x509
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
+
+
+def default_runtime_root_path(app_name="hackme_web"):
+    del app_name  # Kept for backward-compatible callers.
+    return (Path(__file__).resolve().parents[2] / "runtime").resolve()
+
+
+def default_runtime_root(app_name="hackme_web"):
+    return str(default_runtime_root_path(app_name))
 
 
 def _env_path(name, default_path):

@@ -373,8 +373,8 @@ def _script_report(out_root: Path, raw_dir: Path, report_type: str, command: lis
         report_type,
         raw_report,
         passed=result.ok,
-        tester="on_live_reports_make.sh",
-        report_source="on_live_reports_make.sh",
+        tester="scripts/security/gate/on_live_reports_make.py",
+        report_source="scripts/security/gate/on_live_reports_make.py",
         meta=meta,
         canonical_json=_report_paths(out_root, report_type)[0],
         canonical_md=_report_paths(out_root, report_type)[1],
@@ -385,13 +385,13 @@ def _script_report(out_root: Path, raw_dir: Path, report_type: str, command: lis
 
 def _pytest_report(out_root: Path, raw_dir: Path, report_type: str, test_args: list[str], *, timeout: int, signer: PayloadSigner, meta: dict) -> dict:
     log_path = raw_dir / f"{report_type}_pytest.log"
-    result = _run([sys.executable, "-m", "pytest", "-q", *test_args], timeout=timeout)
+    result = _run([str(ROOT / "scripts" / "testing" / "pytest_in_tmp.sh"), "-q", *test_args], timeout=timeout)
     _text_dump(log_path, result.stdout + ("\n" + result.stderr if result.stderr else ""))
     raw_report = {
         "report_type": report_type,
         "status": "pass" if result.ok else "fail",
         "summary": _last_nonempty_line(result.stdout) or _last_nonempty_line(result.stderr) or f"returncode={result.returncode}",
-        "generator": f"PYTHONPATH=. python3 -m pytest -q {' '.join(test_args)}",
+        "generator": f"scripts/testing/pytest_in_tmp.sh -q {' '.join(test_args)}",
         "artifacts": {"pytest_log": str(log_path)},
         "duration_ms": result.duration_ms,
     }
@@ -400,8 +400,8 @@ def _pytest_report(out_root: Path, raw_dir: Path, report_type: str, test_args: l
         report_type,
         raw_report,
         passed=result.ok,
-        tester="on_live_reports_make.sh",
-        report_source="on_live_reports_make.sh",
+        tester="scripts/security/gate/on_live_reports_make.py",
+        report_source="scripts/security/gate/on_live_reports_make.py",
         meta=meta,
         canonical_json=canonical_json,
         canonical_md=canonical_md,
@@ -440,7 +440,7 @@ def _functional_report(out_root: Path, raw_dir: Path, args, signer: PayloadSigne
         "duration_ms": result.duration_ms,
     }
     canonical_json, canonical_md = _report_paths(out_root, "functional")
-    return _make_payload("functional", raw_report, passed=result.ok, tester="on_live_reports_make.sh", report_source="on_live_reports_make.sh", meta=meta, canonical_json=canonical_json, canonical_md=canonical_md, signer=signer, high=0 if result.ok else 1)
+    return _make_payload("functional", raw_report, passed=result.ok, tester="scripts/security/gate/on_live_reports_make.py", report_source="scripts/security/gate/on_live_reports_make.py", meta=meta, canonical_json=canonical_json, canonical_md=canonical_md, signer=signer, high=0 if result.ok else 1)
 
 
 def _pentest_report(out_root: Path, raw_dir: Path, args, signer: PayloadSigner, meta: dict) -> dict:
@@ -477,7 +477,7 @@ def _pentest_report(out_root: Path, raw_dir: Path, args, signer: PayloadSigner, 
         "duration_ms": result.duration_ms,
     }
     canonical_json, canonical_md = _report_paths(out_root, "pentest")
-    return _make_payload("pentest", raw_report, passed=result.ok, tester="on_live_reports_make.sh", report_source="on_live_reports_make.sh", meta=meta, canonical_json=canonical_json, canonical_md=canonical_md, signer=signer, high=0 if result.ok else 1)
+    return _make_payload("pentest", raw_report, passed=result.ok, tester="scripts/security/gate/on_live_reports_make.py", report_source="scripts/security/gate/on_live_reports_make.py", meta=meta, canonical_json=canonical_json, canonical_md=canonical_md, signer=signer, high=0 if result.ok else 1)
 
 
 def _permission_report(out_root: Path, raw_dir: Path, args, signer: PayloadSigner, meta: dict) -> dict:
@@ -518,7 +518,7 @@ def _permission_report(out_root: Path, raw_dir: Path, args, signer: PayloadSigne
         "script_payload": report_payload,
     }
     canonical_json, canonical_md = _report_paths(out_root, "permission")
-    return _make_payload("permission", raw_report, passed=passed, tester="on_live_reports_make.sh", report_source="on_live_reports_make.sh", meta=meta, canonical_json=canonical_json, canonical_md=canonical_md, signer=signer, high=0 if passed else 1)
+    return _make_payload("permission", raw_report, passed=passed, tester="scripts/security/gate/on_live_reports_make.py", report_source="scripts/security/gate/on_live_reports_make.py", meta=meta, canonical_json=canonical_json, canonical_md=canonical_md, signer=signer, high=0 if passed else 1)
 
 
 def _current_live_mode(client: LiveClient) -> str:
@@ -634,7 +634,7 @@ def _stress_report(out_root: Path, raw_dir: Path, args, signer: PayloadSigner, m
         },
     }
     canonical_json, canonical_md = _report_paths(out_root, "stress")
-    return _make_payload("stress", raw_report, passed=passed, tester="on_live_reports_make.sh", report_source="on_live_reports_make.sh", meta=meta, canonical_json=canonical_json, canonical_md=canonical_md, signer=signer, high=0 if passed else 1)
+    return _make_payload("stress", raw_report, passed=passed, tester="scripts/security/gate/on_live_reports_make.py", report_source="scripts/security/gate/on_live_reports_make.py", meta=meta, canonical_json=canonical_json, canonical_md=canonical_md, signer=signer, high=0 if passed else 1)
 
 
 def _log_chain_report(out_root: Path, client: LiveClient, signer: PayloadSigner, meta: dict) -> dict:
@@ -650,7 +650,7 @@ def _log_chain_report(out_root: Path, client: LiveClient, signer: PayloadSigner,
         "artifacts": {},
     }
     canonical_json, canonical_md = _report_paths(out_root, "log_chain_verify")
-    return _make_payload("log_chain_verify", raw_report, passed=passed, tester="on_live_reports_make.sh", report_source="on_live_reports_make.sh", meta=meta, canonical_json=canonical_json, canonical_md=canonical_md, signer=signer, high=0 if passed else 1, unresolved=list(details.get("mismatches") or []))
+    return _make_payload("log_chain_verify", raw_report, passed=passed, tester="scripts/security/gate/on_live_reports_make.py", report_source="scripts/security/gate/on_live_reports_make.py", meta=meta, canonical_json=canonical_json, canonical_md=canonical_md, signer=signer, high=0 if passed else 1, unresolved=list(details.get("mismatches") or []))
 
 
 def _refresh_deploy_integrity_baseline_if_needed(client: LiveClient, report_payload: dict) -> dict:
@@ -716,7 +716,7 @@ def _integrity_report(out_root: Path, client: LiveClient, signer: PayloadSigner,
         "artifacts": {},
     }
     canonical_json, canonical_md = _report_paths(out_root, "integrity_guard")
-    return _make_payload("integrity_guard", raw_report, passed=passed, tester="on_live_reports_make.sh", report_source="on_live_reports_make.sh", meta=meta, canonical_json=canonical_json, canonical_md=canonical_md, signer=signer, high=high_pending)
+    return _make_payload("integrity_guard", raw_report, passed=passed, tester="scripts/security/gate/on_live_reports_make.py", report_source="scripts/security/gate/on_live_reports_make.py", meta=meta, canonical_json=canonical_json, canonical_md=canonical_md, signer=signer, high=high_pending)
 
 
 def _upload_payloads(client: LiveClient, payload_paths: list[Path]) -> list[dict]:

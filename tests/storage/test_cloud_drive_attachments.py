@@ -42,7 +42,7 @@ def _passthrough(fn):
     return fn
 
 
-def _build_app(db_path, storage_root, actor_box, points_service=None, server_file_fernet=None):
+def _build_app(db_path, storage_root, actor_box, points_service=None, server_file_fernet=None, settings=None):
     app = Flask(__name__)
     app.testing = True
 
@@ -57,7 +57,7 @@ def _build_app(db_path, storage_root, actor_box, points_service=None, server_fil
         "get_client_ip": lambda: "127.0.0.1",
         "get_current_user_ctx": lambda: actor_box["actor"],
         "get_db": get_db,
-        "get_system_settings": lambda: {"storage_trash_retention_days": 30},
+        "get_system_settings": lambda: settings or {"storage_trash_retention_days": 30},
         "get_member_level_rule": lambda conn, level: {
             "can_upload_attachment": True,
             "attachment_quota_mb": 1,
@@ -461,6 +461,49 @@ def test_server_encrypted_pdf_preview_content_encodes_unicode_filename_safely(tm
     assert 'filename="' in disposition
     assert "filename*=UTF-8''" in disposition
     assert "%E6%97%A5%E6%9C%AC%E8%AA%9E%E8%B3%87%E6%96%99.pdf" in disposition
+
+
+def test_streaming_preview_survives_file_unlink_after_first_chunk(tmp_path):
+    db_path = tmp_path / "stream-unlink.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    settings = {
+        "storage_trash_retention_days": 30,
+        "cloud_drive_transfer_limits_enabled": True,
+        "cloud_drive_transfer_limits_json": {
+            "trusted": {"download_kb_per_sec": 1, "upload_kb_per_sec": 1024, "priority": 50},
+            "normal": {"download_kb_per_sec": 1, "upload_kb_per_sec": 1024, "priority": 50},
+        },
+    }
+    client = _build_app(db_path, storage_root, actor_box, settings=settings).test_client()
+
+    payload = b"A" * 12000 + b"B" * 12000
+    uploaded = client.post(
+        "/api/cloud-drive/upload",
+        data={"file": (io.BytesIO(payload), "large.mp3", "audio/mpeg"), "privacy_mode": "standard_plain"},
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 200
+    file_id = uploaded.get_json()["file"]["file_id"]
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (file_id,)).fetchone()
+    finally:
+        conn.close()
+    target = storage_root / row["storage_path"]
+
+    response = client.get(f"/api/cloud-drive/files/{file_id}/preview/content", buffered=False)
+    chunks = response.response
+    first = next(chunks)
+    target.unlink()
+    rest = b"".join(chunks)
+
+    assert response.status_code == 200
+    assert first + rest == payload
 
 
 def test_cloud_drive_upload_repairs_legacy_uploaded_files_schema(tmp_path):

@@ -86,7 +86,7 @@ scan/preview/download support is still required. Use E2EE when confidentiality
 is more important than server-side scanning and recovery support. E2EE files can
 still be previewed by the browser after the user enters the file password.
 For the runtime trust boundary between `server_encrypted` and strict `e2ee`,
-see [ENCRYPTION_RUNTIME_BOUNDARY.md](runtime/ENCRYPTION_RUNTIME_BOUNDARY.md).
+see [ENCRYPTION_RUNTIME_BOUNDARY.md](ops_boundaries/ENCRYPTION_RUNTIME_BOUNDARY.md).
 
 E2EE uses a user-entered file encryption password in the browser. The browser
 derives a wrapping key with PBKDF2-SHA256 and uses it to encrypt the per-file
@@ -160,7 +160,7 @@ no longer available, the video page now fails safely: the cover endpoint shows
 an explanatory placeholder and stream/content endpoints return a structured
 `decrypt_unavailable` error instead of a generic server error.
 The strict E2EE publish/share boundary is also documented in
-[ENCRYPTION_RUNTIME_BOUNDARY.md](runtime/ENCRYPTION_RUNTIME_BOUNDARY.md).
+[ENCRYPTION_RUNTIME_BOUNDARY.md](ops_boundaries/ENCRYPTION_RUNTIME_BOUNDARY.md).
 
 ### ComfyUI
 
@@ -418,6 +418,6 @@ tracked by git:
 - bug reports
 - local security reports
 
-For clean deployments, clone the repository, install dependencies, and run
-`./one_click_setup.sh`. On first deployment it opens a setup wizard for bootstrap
-passwords, runtime paths, HTTPS policy, and Gunicorn settings.
+For clean deployments, clone the repository, prepare the runtime directories,
+and run `python3 server.py --doctor` followed by `python3 server.py`.
+For development, prefer `./test_for_develop.sh` so runtime stays under `/tmp`.

@@ -38,7 +38,9 @@ from services.security.upload_schema import (
 def normalize_privacy_mode(value):
     mode = str(value or "").strip()
     if mode not in UPLOAD_PRIVACY_MODES:
-        raise ValueError("unsupported upload privacy mode")
+        ordered_modes = ["standard_plain", "server_encrypted", "e2ee"]
+        supported = ", ".join(item for item in ordered_modes if item in UPLOAD_PRIVACY_MODES)
+        raise ValueError(f"unsupported upload privacy mode: expected one of {supported}")
     return mode
 
 

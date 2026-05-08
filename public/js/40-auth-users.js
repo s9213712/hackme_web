@@ -44,6 +44,63 @@ async function doLogin() {
   }
 }
 
+const REGISTER_FIELD_ID_MAP = {
+  username: "reg-user",
+  password: "reg-pw",
+  password_confirm: "reg-pw-confirm",
+  nickname: "reg-nickname",
+  email: "reg-email",
+  real_name: "reg-realname",
+  birthdate: "reg-birthdate",
+  phone: "reg-phone",
+};
+
+function clearRegisterFieldErrors() {
+  Object.values(REGISTER_FIELD_ID_MAP).forEach((id) => {
+    const el = $(id);
+    if (!el) return;
+    el.classList.remove("field-error");
+    el.removeAttribute("aria-invalid");
+  });
+}
+
+function markRegisterFieldError(field) {
+  const el = $(REGISTER_FIELD_ID_MAP[field] || "");
+  if (!el) return null;
+  el.classList.add("field-error");
+  el.setAttribute("aria-invalid", "true");
+  return el;
+}
+
+function guessRegisterFieldFromMessage(message) {
+  const text = String(message || "");
+  if (/帳號|username/i.test(text)) return "username";
+  if (/暱稱/.test(text)) return "nickname";
+  if (/email/i.test(text)) return "email";
+  if (/生日/.test(text)) return "birthdate";
+  if (/電話/.test(text)) return "phone";
+  if (/兩次.*密碼|確認密碼/.test(text)) return "password_confirm";
+  if (/密碼|password/i.test(text)) return "password";
+  return "";
+}
+
+function shouldClearRegisterPasswords(field, message) {
+  if (field === "password" || field === "password_confirm") return true;
+  return /密碼|password/i.test(String(message || ""));
+}
+
+function showRegisterError(message, field = "", { focus = true } = {}) {
+  clearRegisterFieldErrors();
+  const targetField = field || guessRegisterFieldFromMessage(message);
+  const target = targetField ? markRegisterFieldError(targetField) : null;
+  if (focus && target && typeof target.focus === "function") target.focus();
+  if (shouldClearRegisterPasswords(targetField, message)) {
+    if ($("reg-pw")) $("reg-pw").value = "";
+    if ($("reg-pw-confirm")) $("reg-pw-confirm").value = "";
+  }
+  flash($("reg-msg"), message || "註冊失敗", false);
+}
+
 const USER_APPEARANCE_FIELD_MAP = {
   site_font_family: "edit-user-site-font-family",
   site_background_style: "edit-user-site-background-style",
@@ -389,22 +446,23 @@ async function doRegister() {
   const birth = $("reg-birthdate").value;
   const phone = $("reg-phone").value.trim();
 
-  if (!user) { flash($("reg-msg"), "請填寫帳號", false); return; }
-  if (user.length < 3) { flash($("reg-msg"), "帳號至少 3 字元", false); return; }
-  if (!pw) { flash($("reg-msg"), "請輸入密碼", false); return; }
-  if (!pwConfirm) { flash($("reg-msg"), "請再次輸入密碼", false); return; }
-  if (pw !== pwConfirm) { flash($("reg-msg"), "兩次密碼輸入不一致", false); return; }
-  if (!nickname) { flash($("reg-msg"), "暱稱不可為空", false); return; }
+  clearRegisterFieldErrors();
+  if (!user) { showRegisterError("請填寫帳號", "username"); return; }
+  if (user.length < 3) { showRegisterError("帳號至少 3 字元", "username"); return; }
+  if (!pw) { showRegisterError("請輸入密碼", "password"); return; }
+  if (!pwConfirm) { showRegisterError("請再次輸入密碼", "password_confirm"); return; }
+  if (pw !== pwConfirm) { showRegisterError("兩次密碼輸入不一致", "password_confirm"); return; }
+  if (!nickname) { showRegisterError("暱稱不可為空", "nickname"); return; }
 
   if (!/^[a-zA-Z0-9_\-]+$/.test(user)) {
-    flash($("reg-msg"), "帳號只能包含英文、數字、底線、減號", false);
+    showRegisterError("帳號只能包含英文、數字、底線、減號", "username");
     return;
   }
 
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  if (!csrf) {
-    flash($("reg-msg"), "安全驗證狀態失效，請重新整理頁面", false);
+    if (!csrf) {
+    showRegisterError("安全驗證狀態失效，請重新整理頁面", "", { focus: false });
     setLoading("reg-btn", "reg-spinner", false);
     return;
   }
@@ -434,6 +492,7 @@ async function doRegister() {
     const json = await res.json();
     if (json.ok) {
       setCsrfToken(null);
+      clearRegisterFieldErrors();
       flash($("reg-msg"), "✓ " + sanitize(json.msg), true);
       setTimeout(() => {
         $("reg-pw").value = "";
@@ -444,15 +503,29 @@ async function doRegister() {
       setTimeout(() => showTab("login"), 2000);
     } else {
       setCsrfToken(null);
-      flash($("reg-msg"), json.msg || "註冊失敗", false);
+      showRegisterError(json.msg || "註冊失敗", json.field || "");
       loadCaptchaChallenge();
     }
   } catch (e) {
-    flash($("reg-msg"), "網路錯誤，請稍後再試", false);
+    showRegisterError("網路錯誤，請稍後再試", "", { focus: false });
     loadCaptchaChallenge();
   } finally {
     setLoading("reg-btn", "reg-spinner", false);
   }
+}
+
+function bindRegisterFieldHelpers() {
+  Object.values(REGISTER_FIELD_ID_MAP).forEach((id) => {
+    const el = $(id);
+    if (!el || el.dataset.registerFieldBound === "1") return;
+    const clearHandler = () => {
+      el.classList.remove("field-error");
+      el.removeAttribute("aria-invalid");
+    };
+    el.addEventListener("input", clearHandler);
+    el.addEventListener("change", clearHandler);
+    el.dataset.registerFieldBound = "1";
+  });
 }
 
 function setRecoveryMsg(text, ok) {
@@ -627,11 +700,15 @@ async function forceIdleTimeoutLogout() {
   markIdleTimeoutLogoutPending();
   showLoginScreen();
   try {
+    await fetchCsrfToken({ force: true });
     const res = await apiFetch(API + "/session/idle-timeout", {
       method: "POST",
       credentials: "same-origin",
       cache: "no-store",
-      headers: { "X-Idle-Timeout-Logout": "1" }
+      headers: {
+        "X-Idle-Timeout-Logout": "1",
+        "X-CSRF-Token": getCsrfToken() || "",
+      }
     });
     if (res.ok) clearIdleTimeoutLogoutPending();
   } catch (_) {}
@@ -798,7 +875,7 @@ async function submitUserAvatarUpload({ reloadUsers = true } = {}) {
   if (json && json.ok) {
     if (status) status.textContent = `頭像已更新 file_id: ${json.avatar_file_id}`;
     if (input) input.value = "";
-    markUserAvatarUpdated(editingUserId);
+    markUserAvatarUpdated(editingUserId, json.avatar_file_id || "");
     setUserEditMsg("頭像已更新", true);
     if (reloadUsers && ["manager", "super_admin"].includes(currentRole)) loadUsers();
   } else {

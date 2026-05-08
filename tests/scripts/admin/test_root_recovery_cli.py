@@ -4,6 +4,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from scripts.admin import root_recovery
 from services.users.auth import hash_password, verify_password
 
 
@@ -164,3 +165,9 @@ def test_root_recovery_cli_rejects_weak_password(tmp_path):
     payload = json.loads(result.stdout)
     assert payload["ok"] is False
     assert "密碼" in payload["msg"]
+
+
+def test_root_recovery_default_runtime_dir_uses_repo_runtime(monkeypatch):
+    monkeypatch.delenv("HACKME_RUNTIME_DIR", raising=False)
+
+    assert root_recovery.default_runtime_dir() == (Path(__file__).resolve().parents[3] / "runtime").resolve()

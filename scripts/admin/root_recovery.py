@@ -19,6 +19,7 @@ if str(ROOT) not in sys.path:
 from services.system.audit import audit, configure_audit_service
 from services.users.auth import hash_password, verify_password
 from services.security.password_strength import enforce_password_strength, score_password_strength
+from services.server.runtime import default_runtime_root_path
 
 
 def _env_path(name: str, default_path: Path) -> Path:
@@ -30,7 +31,7 @@ def _env_path(name: str, default_path: Path) -> Path:
 
 
 def default_runtime_dir() -> Path:
-    return _env_path("HACKME_RUNTIME_DIR", ROOT / "runtime")
+    return _env_path("HACKME_RUNTIME_DIR", default_runtime_root_path())
 
 
 def default_db_path(runtime_dir: Path) -> Path:

@@ -213,6 +213,16 @@ def test_launch_check_treats_production_profile_settings_as_auto_applied_not_man
     assert "請先切到 dev_ready 再開上線檢查" not in launch_body
 
 
+def test_launch_check_surfaces_failing_backend_endpoint_names():
+    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    launch_body = admin_js.split("async function loadLaunchCheck()", 1)[1].split("async function loadServerModeLogs()", 1)[0]
+
+    assert "const failures = [];" in launch_body
+    assert 'failures.push(`requirements: ${reqJson.msg || `HTTP ${reqRes.status}`}`);' in launch_body
+    assert 'failures.push(`security-center: ${scJson.msg || `HTTP ${scRes.status}`}`);' in launch_body
+    assert 'throw new Error(failures.join("；"));' in launch_body
+
+
 def test_settings_area_uses_collapsible_groups_to_reduce_clutter():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     css = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")

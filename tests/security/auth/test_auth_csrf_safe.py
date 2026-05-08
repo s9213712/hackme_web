@@ -1,3 +1,4 @@
+import re
 import sqlite3
 
 from flask import Flask
@@ -66,14 +67,24 @@ def test_require_csrf_safe_rejects_query_token_for_unsafe_methods(monkeypatch):
     assert seen == {"token": "", "username": "alice"}
 
 
-def test_require_csrf_accepts_reused_session_token(monkeypatch):
-    seen = []
+def test_require_csrf_rotates_authenticated_session_token_after_success(tmp_path, monkeypatch):
+    db_path = tmp_path / "csrf.sqlite"
+
+    def get_db():
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS csrf_tokens (token_hash TEXT PRIMARY KEY, username TEXT NOT NULL, expires_at TEXT NOT NULL)"
+        )
+        return conn
+
+    auth.configure_auth_service(get_db=get_db, get_user_by_username=lambda username: None, fernet=None)
+    monkeypatch.setattr(auth, "db_get_user_from_token", lambda token: "alice" if token == "session-1" else None)
+    auth.store_csrf_token("stable-token", "alice")
     app = Flask(__name__)
     app.testing = True
-
-    monkeypatch.setattr(auth, "db_get_user_from_token", lambda token: "alice" if token == "session-1" else None)
-    monkeypatch.setattr(auth, "verify_csrf_token", lambda token, username: seen.append((token, username)) or token == "stable-token" and username == "alice")
-    monkeypatch.setattr(auth, "delete_csrf_token", lambda token: (_ for _ in ()).throw(AssertionError("session CSRF token must not be single-use")))
+    app.config["SESSION_COOKIE_SAMESITE"] = "Strict"
+    app.config["SESSION_COOKIE_SECURE"] = False
 
     @app.route("/mutate", methods=["POST"])
     @auth.require_csrf
@@ -82,11 +93,56 @@ def test_require_csrf_accepts_reused_session_token(monkeypatch):
 
     client = app.test_client()
     client.set_cookie("session_token", "session-1")
-    for _ in range(2):
-        response = client.post("/mutate", headers={"X-CSRF-Token": "stable-token"})
-        assert response.status_code == 200
-        assert response.get_json()["ok"] is True
-    assert seen == [("stable-token", "alice"), ("stable-token", "alice")]
+    response = client.post("/mutate", headers={"X-CSRF-Token": "stable-token"})
+
+    assert response.status_code == 200
+    assert response.get_json()["ok"] is True
+    assert auth.verify_csrf_token("stable-token", "alice") is False
+    set_cookie = "\n".join(response.headers.getlist("Set-Cookie"))
+    match = re.search(r"csrf_token=([^;]+);", set_cookie)
+    assert match
+    rotated = match.group(1)
+    assert rotated != "stable-token"
+    assert auth.verify_csrf_token(rotated, "alice") is True
+
+
+def test_require_csrf_safe_rotates_authenticated_session_token_after_success(tmp_path, monkeypatch):
+    db_path = tmp_path / "csrf.sqlite"
+
+    def get_db():
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS csrf_tokens (token_hash TEXT PRIMARY KEY, username TEXT NOT NULL, expires_at TEXT NOT NULL)"
+        )
+        return conn
+
+    auth.configure_auth_service(get_db=get_db, get_user_by_username=lambda username: None, fernet=None)
+    monkeypatch.setattr(auth, "db_get_user_from_token", lambda token: "alice" if token == "session-1" else None)
+    auth.store_csrf_token("safe-token", "alice")
+    app = Flask(__name__)
+    app.testing = True
+    app.config["SESSION_COOKIE_SAMESITE"] = "Strict"
+    app.config["SESSION_COOKIE_SECURE"] = False
+
+    @app.route("/safe-mutate", methods=["POST"])
+    @auth.require_csrf_safe
+    def safe_mutate():
+        return auth.json_resp({"ok": True})
+
+    client = app.test_client()
+    client.set_cookie("session_token", "session-1")
+    response = client.post("/safe-mutate", headers={"X-CSRF-Token": "safe-token"})
+
+    assert response.status_code == 200
+    assert response.get_json()["ok"] is True
+    assert auth.verify_csrf_token("safe-token", "alice") is False
+    set_cookie = "\n".join(response.headers.getlist("Set-Cookie"))
+    match = re.search(r"csrf_token=([^;]+);", set_cookie)
+    assert match
+    rotated = match.group(1)
+    assert rotated != "safe-token"
+    assert auth.verify_csrf_token(rotated, "alice") is True
 
 
 def test_require_csrf_accepts_form_field_for_public_post(monkeypatch):

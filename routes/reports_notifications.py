@@ -112,13 +112,20 @@ def register_reports_notification_routes(app, deps):
         try:
             ensure_notifications_schema(conn)
             sent = []
-            for user_id in target_ids[:100]:
-                target = conn.execute("SELECT id, username, role FROM users WHERE id=?", (user_id,)).fetchone()
+            limited_target_ids = target_ids[:100]
+            placeholders = ",".join("?" for _ in limited_target_ids)
+            target_rows = conn.execute(
+                f"SELECT id, username, role FROM users WHERE id IN ({placeholders})",
+                tuple(limited_target_ids),
+            ).fetchall()
+            target_map = {int(row["id"]): row for row in target_rows}
+            for user_id in limited_target_ids:
+                target = target_map.get(int(user_id))
                 if not target:
                     continue
                 if actor_value(actor, "username") != "root" and role_rank(target["role"] or "user") >= role_rank(actor_role(actor)):
                     continue
-                create_notification(
+                created = create_notification(
                     conn,
                     user_id=target["id"],
                     type="admin_notice",
@@ -126,7 +133,8 @@ def register_reports_notification_routes(app, deps):
                     body=body,
                     link=str(data.get("link") or "")[:240] or None,
                 )
-                sent.append(target["username"])
+                if created:
+                    sent.append(target["username"])
             conn.commit()
             audit("ADMIN_NOTIFICATION_SENT", get_client_ip(), user=actor_value(actor, "username"), success=True, ua=get_ua(), detail=f"sent={','.join(sent)},title={title}")
             return json_resp({"ok": True, "msg": f"已發送 {len(sent)} 則通知", "sent": sent})

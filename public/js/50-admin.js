@@ -2325,6 +2325,15 @@ function renderRootTradingSettings(payload) {
   if ($("root-trading-price-fusion-min-coverage-percent")) $("root-trading-price-fusion-min-coverage-percent").value = Number(settings.price_fusion_min_orderbook_coverage_percent ?? 0.5);
   if ($("root-trading-price-fusion-max-provider-weight")) $("root-trading-price-fusion-max-provider-weight").value = adminPercentValue(settings.price_fusion_max_single_provider_weight_percent ?? 40, 40);
   if ($("root-trading-price-fusion-min-provider-count")) $("root-trading-price-fusion-min-provider-count").value = Number(settings.price_fusion_min_provider_count ?? 3);
+  if ($("root-trading-price-fusion-trade-min-provider-count")) $("root-trading-price-fusion-trade-min-provider-count").value = Number(settings.price_fusion_trade_min_provider_count ?? 2);
+  if ($("root-trading-warning-language")) $("root-trading-warning-language").value = settings.warning_language || "zh-TW";
+  if ($("root-trading-price-degrade-pause-market-orders")) $("root-trading-price-degrade-pause-market-orders").checked = !!settings.price_degrade_pause_market_orders;
+  if ($("root-trading-price-degrade-pause-bots")) $("root-trading-price-degrade-pause-bots").checked = !!settings.price_degrade_pause_bots;
+  if ($("root-trading-price-degrade-pause-borrowing")) $("root-trading-price-degrade-pause-borrowing").checked = !!settings.price_degrade_pause_borrowing;
+  if ($("root-trading-simulated-slippage-enabled")) $("root-trading-simulated-slippage-enabled").checked = !!settings.simulated_slippage_enabled;
+  if ($("root-trading-simulated-slippage-base-basis-points")) $("root-trading-simulated-slippage-base-basis-points").value = Number(settings.simulated_slippage_base_basis_points ?? 0);
+  if ($("root-trading-simulated-slippage-size-basis-points-per-10k-notional")) $("root-trading-simulated-slippage-size-basis-points-per-10k-notional").value = Number(settings.simulated_slippage_size_basis_points_per_10k_notional ?? 0);
+  if ($("root-trading-simulated-slippage-max-basis-points")) $("root-trading-simulated-slippage-max-basis-points").value = Number(settings.simulated_slippage_max_basis_points ?? 0);
   if ($("root-trading-price-stream-ws-enabled")) $("root-trading-price-stream-ws-enabled").checked = settings.price_stream_ws_enabled !== false;
   if ($("root-trading-price-stream-ws-stale-seconds")) $("root-trading-price-stream-ws-stale-seconds").value = Number(settings.price_stream_ws_stale_seconds ?? 10);
   renderRootTradingFusionWeightInputs(settings);
@@ -2500,6 +2509,15 @@ async function saveRootTradingSettings() {
       price_fusion_min_orderbook_coverage_percent: Number($("root-trading-price-fusion-min-coverage-percent")?.value || 0.5),
       price_fusion_max_single_provider_weight_percent: adminInputPercent($("root-trading-price-fusion-max-provider-weight")?.value || 40),
       price_fusion_min_provider_count: Number($("root-trading-price-fusion-min-provider-count")?.value || 3),
+      price_fusion_trade_min_provider_count: Number($("root-trading-price-fusion-trade-min-provider-count")?.value || 2),
+      warning_language: ($("root-trading-warning-language")?.value || "zh-TW"),
+      price_degrade_pause_market_orders: !!$("root-trading-price-degrade-pause-market-orders")?.checked,
+      price_degrade_pause_bots: !!$("root-trading-price-degrade-pause-bots")?.checked,
+      price_degrade_pause_borrowing: !!$("root-trading-price-degrade-pause-borrowing")?.checked,
+      simulated_slippage_enabled: !!$("root-trading-simulated-slippage-enabled")?.checked,
+      simulated_slippage_base_basis_points: Number($("root-trading-simulated-slippage-base-basis-points")?.value || 0),
+      simulated_slippage_size_basis_points_per_10k_notional: Number($("root-trading-simulated-slippage-size-basis-points-per-10k-notional")?.value || 0),
+      simulated_slippage_max_basis_points: Number($("root-trading-simulated-slippage-max-basis-points")?.value || 0),
       price_stream_ws_enabled: !!$("root-trading-price-stream-ws-enabled")?.checked,
       price_stream_ws_stale_seconds: Number($("root-trading-price-stream-ws-stale-seconds")?.value || 10),
       max_price_staleness_seconds: Number($("root-trading-max-price-staleness")?.value || 0),
@@ -3399,8 +3417,15 @@ async function loadLaunchCheck() {
     ]);
     const reqJson = await reqRes.json().catch(() => ({}));
     const scJson = await scRes.json().catch(() => ({}));
+    const failures = [];
     if (!reqRes.ok || (typeof reqJson.ok === "boolean" && !reqJson.ok && !Array.isArray(reqJson.required))) {
-      throw new Error(reqJson.msg || `HTTP ${reqRes.status}`);
+      failures.push(`requirements: ${reqJson.msg || `HTTP ${reqRes.status}`}`);
+    }
+    if (!scRes.ok || (typeof scJson.ok === "boolean" && !scJson.ok)) {
+      failures.push(`security-center: ${scJson.msg || `HTTP ${scRes.status}`}`);
+    }
+    if (failures.length) {
+      throw new Error(failures.join("；"));
     }
     const sc = (scJson.ok && scJson.security_center) ? scJson.security_center : {};
 
@@ -3767,6 +3792,7 @@ async function loadSettings() {
   if ($("s-allow-register")) $("s-allow-register").checked = !!s.allow_register;
   if ($("s-require-email")) $("s-require-email").checked = !!s.require_email_verification;
   if ($("s-password-reset-mode")) $("s-password-reset-mode").value = s.password_reset_mode || "admin_review";
+  if ($("s-login-autofill-block-enabled")) $("s-login-autofill-block-enabled").checked = !!s.login_autofill_block_enabled;
   if ($("s-captcha-mode")) $("s-captcha-mode").value = s.captcha_mode || "none";
   if ($("s-captcha-ttl-seconds")) $("s-captcha-ttl-seconds").value = s.captcha_ttl_seconds || 300;
   if ($("s-captcha-turnstile-site-key")) $("s-captcha-turnstile-site-key").value = s.captcha_turnstile_site_key || "";
@@ -3775,6 +3801,7 @@ async function loadSettings() {
   if ($("s-block-dur")) $("s-block-dur").value = s.block_duration_minutes || 30;
   if ($("s-session-ttl")) $("s-session-ttl").value = s.session_ttl_hours || 24;
   if ($("s-session-idle-timeout")) $("s-session-idle-timeout").value = s.session_idle_timeout_minutes || 10;
+  if ($("s-notification-muted-types")) $("s-notification-muted-types").value = s.notification_muted_types || "";
   if ($("s-server-ssl-enabled")) $("s-server-ssl-enabled").checked = !!s.server_ssl_enabled;
   if ($("s-server-listen-host")) $("s-server-listen-host").value = s.server_listen_host || "";
   if ($("s-server-listen-port")) $("s-server-listen-port").value = s.server_listen_port || "";
@@ -5393,6 +5420,7 @@ async function saveSettings() {
     allow_register: !!$("s-allow-register")?.checked,
     require_email_verification: !!$("s-require-email")?.checked,
     password_reset_mode: $("s-password-reset-mode")?.value || "admin_review",
+    login_autofill_block_enabled: !!$("s-login-autofill-block-enabled")?.checked,
     captcha_mode: captchaMode,
     captcha_ttl_seconds: parseInt($("s-captcha-ttl-seconds")?.value || "300"),
     captcha_turnstile_site_key: ($("s-captcha-turnstile-site-key")?.value || "").trim(),
@@ -5400,6 +5428,7 @@ async function saveSettings() {
     block_duration_minutes: parseInt($("s-block-dur")?.value || "30"),
     session_ttl_hours: parseInt($("s-session-ttl")?.value || "24"),
     session_idle_timeout_minutes: parseInt($("s-session-idle-timeout")?.value || "0") || null,
+    notification_muted_types: ($("s-notification-muted-types")?.value || "").trim(),
     server_ssl_enabled: $("s-server-ssl-enabled") ? !!$("s-server-ssl-enabled").checked : true,
     server_listen_host: ($("s-server-listen-host")?.value || "").trim(),
     server_listen_port: parseInt($("s-server-listen-port")?.value || "0"),

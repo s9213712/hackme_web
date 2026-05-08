@@ -262,7 +262,7 @@ def test_workflow_action_select():
 ```python
 # Good
 from decimal import Decimal
-fee = Decimal(quantity) * Decimal(price) * Decimal(fee_rate_bps) / Decimal(10000)
+fee = Decimal(quantity) * Decimal(price) * Decimal(fee_rate_basis_points) / Decimal(10000)
 return int(fee.quantize(Decimal("1")))  # round to integer points
 
 # Bad

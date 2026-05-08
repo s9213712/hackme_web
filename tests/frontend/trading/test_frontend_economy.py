@@ -196,6 +196,7 @@ def test_root_points_page_is_chain_operations_console():
     assert 'id="root-trading-maintenance-percent"' in index_html
     assert 'id="root-trading-futures-enabled"' in index_html
     assert 'id="root-trading-pvp-enabled"' in index_html
+    assert "合約 / PVP 預留功能" in index_html
     assert 'id="root-trading-reserve-pool"' in index_html
     assert 'id="root-trading-btc-trade-enabled"' in index_html
     assert 'id="root-trading-btc-trade-repo"' in index_html
@@ -719,9 +720,13 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "transport_state" in trading_js
     assert "WebSocket provider input 已退回 HTTP polling" in trading_js
     assert "provider input stale" in trading_js
-    assert "🟡 reference 價格降級" in trading_js
-    assert "🟢 reference 價格正常" in trading_js
+    assert 'tradingWarningText("reference_degraded")' in trading_js
+    assert 'tradingWarningText("reference_healthy_risk_usable")' in trading_js
+    assert 'tradingWarningText("reference_healthy_confidence"' in trading_js
     assert "目前風控級價格不可用，已暫停市價單與高風險交易；限價單仍可使用" in trading_js
+    assert "價格來源降級，交易是否自動暫停由 root 風控開關決定" in trading_js
+    assert "root 目前僅警示，不自動暫停交易" in trading_js
+    assert "root 已設定自動暫停：" in trading_js
     assert "風控可用" in trading_js
 
     workflow_editor = (ROOT / "public" / "trading-workflow-editor.html").read_text(encoding="utf-8")
@@ -796,14 +801,37 @@ def test_trading_ui_labels_reference_and_risk_grade_price_usage():
     trading_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
 
     assert "function tradingMarketPriceContext" in trading_js
+    assert "function tradingPriceDegradePolicy" in trading_js
+    assert "function tradingPriceDegradePauseMessage" in trading_js
+    assert "function tradingWarningLanguage" in trading_js
+    assert "function tradingWarningText" in trading_js
     assert "function tradingPriceContextSummary" in trading_js
     assert "risk_grade_usable" in trading_js
-    assert "riskContext?.high_risk_blocked || riskContext?.risk_grade_usable === false" in trading_js
-    assert "目前風控級價格不可用，已暫停市價單與高風險交易；限價單仍可使用" in trading_js
+    assert "riskContext?.high_risk_blocked" in trading_js
+    assert "riskContext?.risk_grade_usable === false" in trading_js
+    assert "Risk-grade price is unavailable. Market orders and other high-risk paths remain paused; limit orders are still allowed." in trading_js
+    assert 'id="root-trading-price-fusion-trade-min-provider-count"' in trading_html
+    assert 'id="root-trading-warning-language"' in trading_html
+    assert 'id="root-trading-price-degrade-pause-market-orders"' in trading_html
+    assert 'id="root-trading-price-degrade-pause-bots"' in trading_html
+    assert 'id="root-trading-price-degrade-pause-borrowing"' in trading_html
+    assert 'id="root-trading-simulated-slippage-enabled"' in trading_html
+    assert 'id="root-trading-simulated-slippage-base-basis-points"' in trading_html
+    assert 'id="root-trading-simulated-slippage-size-basis-points-per-10k-notional"' in trading_html
+    assert 'id="root-trading-simulated-slippage-max-basis-points"' in trading_html
     assert "目前價格（reference）" in trading_html
     assert "用途：展示 / 一般估值" in trading_html
     assert "市價單估值採用風控級價格" in trading_js
     assert "風控級價格用途：融資 / 強平 / 保證金 / PnL" in trading_js
     assert "目前部位價值採 reference price；未實現盈虧採 risk-grade price" in trading_js
     assert "reference price：" in trading_js
+    assert "warning_language" in admin_js
+    assert "price_fusion_trade_min_provider_count" in admin_js
+    assert "price_degrade_pause_market_orders" in admin_js
+    assert "price_degrade_pause_bots" in admin_js
+    assert "price_degrade_pause_borrowing" in admin_js
+    assert "simulated_slippage_enabled" in admin_js
+    assert "simulated_slippage_base_basis_points" in admin_js
+    assert "simulated_slippage_size_basis_points_per_10k_notional" in admin_js
+    assert "simulated_slippage_max_basis_points" in admin_js
     assert 'usable ${risk.risk_grade_usable ? "yes" : "no"}' in admin_js

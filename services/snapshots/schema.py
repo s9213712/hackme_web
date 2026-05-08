@@ -15,6 +15,7 @@ from pathlib import Path
 from services.platform.bootstrap import CURRENT_SCHEMA_VERSION
 from services.platform.release_info import APP_RELEASE_ID
 from services.platform.settings import MANAGEMENT_ONLY_RESET_SETTINGS
+from services.server.runtime import default_runtime_root_path
 
 SNAPSHOT_ID_RE = re.compile(r"^snap_\d{8}_\d{6}_[a-f0-9]{6}$")
 SHA256_REPORT_HASH_RE = re.compile(r"^sha256:[a-f0-9]{64}$")
@@ -55,8 +56,9 @@ TEST_ACCOUNT_NAMES = ("test",)
 def _default_runtime_base_dir():
     raw = str(os.environ.get("HACKME_RUNTIME_DIR") or "").strip()
     if raw:
-        return Path(os.path.expanduser(os.path.expandvars(raw))).resolve()
-    candidate = (Path.cwd() / "runtime").resolve()
+        candidate = Path(os.path.expanduser(os.path.expandvars(raw))).resolve()
+    else:
+        candidate = default_runtime_root_path()
     if candidate.exists() and not candidate.is_dir():
         raise RuntimeError(
             "runtime path is blocked by a non-directory file; set HACKME_RUNTIME_DIR "

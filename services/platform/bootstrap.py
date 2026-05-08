@@ -96,7 +96,14 @@ def _insert_password_record(conn, user_id, password, hash_password, now):
     _trim_password_history(conn, user_id)
 
 
+def _default_password_policy_disabled():
+    value = os.environ.get("HTML_LEARNING_DISABLE_DEFAULT_PASSWORD_POLICY", "")
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _mark_default_account_password(conn, user_id, now):
+    if _default_password_policy_disabled():
+        return
     conn.execute(
         "UPDATE users SET must_change_password=1, is_default_password=1, updated_at=? WHERE id=?",
         (now, user_id)
@@ -104,6 +111,8 @@ def _mark_default_account_password(conn, user_id, now):
 
 
 def _mark_default_account_if_unconfirmed(conn, user_id, now):
+    if _default_password_policy_disabled():
+        return
     row = conn.execute(
         "SELECT must_change_password, is_default_password, password_changed_at FROM users WHERE id=?",
         (user_id,),
@@ -115,6 +124,8 @@ def _mark_default_account_if_unconfirmed(conn, user_id, now):
 
 
 def _mark_default_account_if_password_matches(conn, user_id, raw_password, now):
+    if _default_password_policy_disabled():
+        return
     if not raw_password:
         return
     row = conn.execute(

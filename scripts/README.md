@@ -8,8 +8,14 @@ for one-off experiments.
 
 ## Canonical Entry Points
 
-- repo root [one_click_setup.sh](../one_click_setup.sh)
-  Production setup, environment check, DB init, and Gunicorn launch.
+- repo root `python3 server.py --doctor`
+  Validate that the current runtime directories already exist and are writable.
+  This is the required preflight before a direct `server.py` startup.
+- repo root [test_for_develop.sh](../test_for_develop.sh)
+  Canonical daily development launcher. It copies the repo to `/tmp` and
+  starts the copied `server.py` there with development-friendly defaults.
+- [testing/pytest_in_tmp.sh](testing/pytest_in_tmp.sh)
+  Canonical pytest entrypoint. Tests must run against a `/tmp` repo copy.
 - [prepush/pre_push_checks.py](prepush/pre_push_checks.py)
   Canonical local validation entrypoint.
 - [admin/root_recovery.py](admin/root_recovery.py)
@@ -19,6 +25,9 @@ for one-off experiments.
 
 - `scripts/admin/`
   Operator repair and recovery tooling.
+- `scripts/dev/`
+  Development docs only. The old tmp launch wrappers were removed; use
+  repo-root `test_for_develop.sh` instead.
 - `scripts/comfyui/`
   ComfyUI probe tooling and ComfyUI-specific local startup template.
 - `scripts/games/`

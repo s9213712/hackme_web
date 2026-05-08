@@ -2,6 +2,7 @@ import sys
 import threading
 from collections import deque
 from datetime import datetime
+from pathlib import Path
 
 
 class RuntimeOutputBuffer:
@@ -63,7 +64,9 @@ class TeeStream:
         self._file_lock = threading.Lock()
 
     def write(self, data):
-        if not isinstance(data, str):
+        if isinstance(data, (bytes, bytearray, memoryview)):
+            data = bytes(data).decode("utf-8", errors="replace")
+        elif not isinstance(data, str):
             data = str(data)
         try:
             self.original.write(data)
@@ -104,12 +107,24 @@ class TeeStream:
 
 _BUFFER = RuntimeOutputBuffer()
 _INSTALLED = False
+_RUNTIME_OUTPUT_MARKER_PREFIX = "[runtime-output] capture installed:"
+
+
+def _is_runtime_output_marker(line):
+    return str(line or "").strip().startswith(_RUNTIME_OUTPUT_MARKER_PREFIX)
 
 
 def install_runtime_output_capture(log_path=None):
     global _INSTALLED
     if _INSTALLED:
         return _BUFFER
+    if log_path:
+        try:
+            path = Path(log_path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch(exist_ok=True)
+        except Exception:
+            pass
     sys.stdout = TeeStream(sys.stdout, _BUFFER, "stdout", log_path=log_path)
     sys.stderr = TeeStream(sys.stderr, _BUFFER, "stderr", log_path=log_path)
     _INSTALLED = True
@@ -117,4 +132,9 @@ def install_runtime_output_capture(log_path=None):
 
 
 def get_runtime_output(limit=200):
-    return _BUFFER.tail(limit=limit)
+    payload = _BUFFER.tail(limit=limit)
+    payload["lines"] = [
+        item for item in payload.get("lines", [])
+        if not _is_runtime_output_marker(item.get("line"))
+    ]
+    return payload

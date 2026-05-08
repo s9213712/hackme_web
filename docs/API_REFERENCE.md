@@ -600,7 +600,7 @@ Workflow preset 補充：
 
 ```bash
 python3 scripts/prepush/pre_push_checks.py --ci
-PYTHONPATH=. python3 -m pytest -q tests
+scripts/testing/pytest_in_tmp.sh -q tests
 ```
 
 ## 相關文件連結

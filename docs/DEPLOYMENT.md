@@ -6,35 +6,17 @@ This file is the script-level reference. New deployers should start with
 they need exact command modes and script flags. For the canonical dependency
 matrix, see [SYSTEM_DEPENDENCIES.md](SYSTEM_DEPENDENCIES.md).
 
-## One-Command Deployment
+## Direct Deployment
 
-Use the root helper:
-
-```bash
-./one_click_setup.sh
-```
-
-On first run it creates `.venv`, installs `requirements.txt`, delegates the
-interactive production setup wizard inside `./one_click_setup.sh`, initializes
-the database, and starts Gunicorn.
-
-Useful modes:
+正式部署改成直接走 `server.py`：
 
 ```bash
-./one_click_setup.sh --check-only
-./one_click_setup.sh --init-db-only
-./one_click_setup.sh --with-comfyui http://127.0.0.1:8192
-./one_click_setup.sh --with-turnstile '<TURNSTILE_SECRET_KEY>'
-./one_click_setup.sh --with-civitai-key '<CIVITAI_API_KEY>'
-./one_click_setup.sh --lite-hint
-./one_click_setup.sh --check-only --skip-install
+python3 server.py --doctor
+python3 server.py
 ```
 
-`--skip-install` 適合已經有可用 `.venv`、但當前環境不想每次重新碰 pip 網路的情境。
-單獨執行 `./one_click_setup.sh --lite-hint` 時，現在只會輸出低配部署建議，不會先建立 `.venv`。
-`--with-civitai-key` 只會把 root-only Civitai 搜尋/下載所需的 `CIVITAI_API_KEY`
-寫進 `.env`；沒有這個 key，ComfyUI 本地模型上傳仍可用，只是無法直接搜尋/下載
-Civitai 模型。
+`--doctor` 會先檢查 runtime 目錄是否存在且可寫；若環境缺失，會直接報錯，不會靜默幫你補建。
+如果你只是要本機開發，不要走這條，改用 repo root `./test_for_develop.sh`。
 
 Generated runtime files remain local and must not be committed:
 
@@ -52,7 +34,7 @@ Generated runtime files remain local and must not be committed:
 
 ## Capability Checks
 
-`./one_click_setup.sh --check` 現在除了檢查必填 env 與 runtime 目錄，也會額外提示：
+`python3 server.py --doctor` 主要檢查的是 runtime 目錄是否完整可用；影音與第三方能力則仍需部署者自行確認：
 
 - `ffmpeg` / `ffprobe` 是否存在
   - 影響影音平台的 HLS 衍生檔與 metadata probe

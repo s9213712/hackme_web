@@ -11,8 +11,8 @@
 ### 推薦部署路線
 
 1. 先用 [01_DEPLOY_QUICKSTART.md](01_DEPLOY_QUICKSTART.md) 完成本機或 staging 驗證。
-2. 用 `./one_click_setup.sh` 或 `./one_click_setup.sh --wizard` 建立 `.env`。
-3. 把 runtime 根目錄放在獨立資料區，不要放 repo 內。
+2. 先建立部署用環境變數與 runtime 目錄，再執行 `python3 server.py --doctor`。
+3. 確認 runtime 根目錄集中在部署目錄的 `runtime/`，或明確用 `HACKME_RUNTIME_DIR` 指到隔離資料區。
 4. 決定是否由反向代理處理 HTTPS。
 5. 建立上線前 snapshot。
 6. 跑功能 smoke、權限 pentest、壓力測試與必要的 production gate。
@@ -21,13 +21,17 @@
 
 #### 1. Runtime 路徑
 
-建議把 runtime 放在部署地自己的資料目錄，例如：
+預設 runtime 放在目前部署目錄的 `runtime/`：
 
 ```text
-$HOME/.local/share/hackme_web
+./runtime
 ```
 
-至少要與 repo 分離：
+如果要在 `/tmp` 複製專案做隔離驗證，請在那份複製目錄內執行，或明確設定
+`HACKME_RUNTIME_DIR=/tmp/<run>/runtime`。不要讓測試流程回寫來源 repo 的
+`runtime/`。
+
+所有 runtime 產物都應集中在：
 
 - database
 - logs
@@ -96,7 +100,7 @@ $HOME/.local/share/hackme_web
 
 ```bash
 python3 scripts/prepush/pre_push_checks.py
-PYTHONPATH=. python3 -m pytest -q tests
+scripts/testing/pytest_in_tmp.sh -q tests
 scripts/security/pentest/run_functional_smoke.sh --port 50741
 scripts/security/pentest/run_pentest.sh --target https://<host>
 python3 scripts/security/pentest/stress_test.py --target https://<host> --i-own-this-target
@@ -113,7 +117,7 @@ PYTHONPATH=. scripts/security/pentest/run_pentest.sh \
 如果你要一次產出 production gate 要求的 13 份報告，可直接用：
 
 ```bash
-./on_live_reports_make.sh --base-url https://<host> --root-password '<ROOT_PASSWORD>'
+python3 scripts/security/gate/on_live_reports_make.py --base-url https://<host> --root-password '<ROOT_PASSWORD>'
 ```
 
 這會把 raw outputs 放進 `runtime/reports/security/production_gate/runs/<RUN_ID>/`，
@@ -126,7 +130,7 @@ PYTHONPATH=. scripts/security/pentest/run_pentest.sh \
 
 ## 原理
 
-- `./one_click_setup.sh` 會產生 `.env` 與本機 secret/key 類 runtime 檔案，這些不應從 Git 複製。
+- `python3 server.py --doctor` 不會幫你偷偷補建 runtime；部署者必須明確準備好目錄與權限。
 - HTTPS、secure cookies、proxy trust、runtime 路徑與備份策略，決定的是營運風險，不只是功能是否可用。
 - `hackme_web` 把 snapshot、PointsChain、audit chain、integrity guard 分開，是為了避免一個恢復動作默默覆蓋另一個保護層。
 

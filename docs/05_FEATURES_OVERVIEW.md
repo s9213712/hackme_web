@@ -114,7 +114,7 @@
 - 原理：ledger 是 source of truth，wallet 由 ledger replay 重建。
 - 失敗情境與提示：safe mode、chain verify fail、恢復需要人工確認、餘額顯示與鏈不一致。
 - 測試方式：credit/debit、seal/verify、backup/recovery、影片打賞、交易資金流。
-- 相關文件連結：[07_POINTSCHAIN.md](07_POINTSCHAIN.md), [08_TRADING_ENGINE.md](08_TRADING_ENGINE.md), [RUNTIME_RESET_AND_RECOVERY.md](runtime/RUNTIME_RESET_AND_RECOVERY.md)
+- 相關文件連結：[07_POINTSCHAIN.md](07_POINTSCHAIN.md), [08_TRADING_ENGINE.md](08_TRADING_ENGINE.md), [RUNTIME_RESET_AND_RECOVERY.md](ops_boundaries/RUNTIME_RESET_AND_RECOVERY.md)
 
 ### Trading / Bots / Backtest
 
@@ -142,7 +142,7 @@
 - 原理：server snapshot、PointsChain backup、audit chain、runtime reset 各自有明確所有權邊界。
 - 失敗情境與提示：snapshot restore 會回放 runtime secret files，若 restore event 出現 `runtime secret validation failed` 要先修這批檔案；reset 仍會清掉 runtime secrets 並要求重啟；PointsChain recovery 不能拿來代替全站 restore。
 - 測試方式：create/list/download/restore/upload-restore/reset、post-restore consistency、offline/reconnect reset smoke。
-- 相關文件連結：[09_SNAPSHOT_RESET_RESTORE.md](09_SNAPSHOT_RESET_RESTORE.md), [RUNTIME_RESET_AND_RECOVERY.md](runtime/RUNTIME_RESET_AND_RECOVERY.md), [11_QA_TESTING.md](11_QA_TESTING.md)
+- 相關文件連結：[09_SNAPSHOT_RESET_RESTORE.md](09_SNAPSHOT_RESET_RESTORE.md), [RUNTIME_RESET_AND_RECOVERY.md](ops_boundaries/RUNTIME_RESET_AND_RECOVERY.md), [11_QA_TESTING.md](11_QA_TESTING.md)
 
 ### WebTerminal
 

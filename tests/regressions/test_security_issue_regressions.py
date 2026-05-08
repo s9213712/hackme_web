@@ -15,7 +15,9 @@ def test_admin_mutation_routes_use_session_scoped_csrf_guards():
     assert '@app.route("/api/admin/security-center/thresholds", methods=["PUT"])\n    @require_csrf' in system_admin
     assert '@app.route("/api/admin/security-center/controls", methods=["PUT"])\n    @require_csrf' in system_admin
     assert 'CSRF_PROTECTED_METHODS = {"POST", "PUT", "PATCH", "DELETE"}' in auth
-    assert "if not user and csrf_tok:" in auth
+    assert "def _rotate_authenticated_csrf(response, csrf_tok, username):" in auth
+    assert 'response = _rotate_authenticated_csrf(response, csrf_tok, user)' in auth
+    assert "elif csrf_tok:" in auth
     assert "consume_csrf_token(csrf_tok, csrf_owner)" in auth
     assert '"error": "csrf_invalid"' in auth
 
@@ -111,6 +113,17 @@ def test_avatar_admin_endpoint_uses_role_rank():
     assert "Avatars are public identity assets inside authenticated areas" in avatar_get
     assert 'role_rank(actor_role) < role_rank("manager")' not in avatar_get
     assert 'actor_role not in {"admin", "super_admin"}' not in avatar_get
+
+
+def test_avatar_payloads_are_available_before_frontend_renders_images():
+    public = (ROOT / "routes" / "public.py").read_text(encoding="utf-8")
+    chat = (ROOT / "routes" / "chat.py").read_text(encoding="utf-8")
+    community = (ROOT / "routes" / "community.py").read_text(encoding="utf-8")
+
+    assert '"avatar_file_id": ((avatar_row["avatar_file_id"] if avatar_row and "avatar_file_id" in avatar_row.keys() else dict(ctx).get("avatar_file_id")) or "")' in public
+    assert '"sender_avatar_file_id": r["avatar_file_id"] or ""' in chat
+    assert '"author_avatar_file_id": row_value(row, "author_avatar_file_id", "")' in community
+    assert "COALESCE(u.avatar_file_id, '') AS author_avatar_file_id" in community
 
 
 def test_admin_users_post_uses_method_aware_csrf_guard():
@@ -291,11 +304,26 @@ def test_secure_cookie_defaults_are_secure():
     assert 'SESSION_COOKIE_SECURE = _env_bool("SESSION_COOKIE_SECURE", default=True)' in server
 
 
+def test_root_notifications_skip_normal_session_revocation_noise():
+    events = (ROOT / "services" / "security" / "events.py").read_text(encoding="utf-8")
+
+    assert "def _should_create_root_notification(event_type, detail=\"\"):" in events
+    assert 'return detail_text not in {"idle_timeout", "single_session_logout", "user_sessions_revoked"}' in events
+
+
 def test_frontend_boot_does_not_probe_disabled_chat_feature():
     core = (ROOT / "public" / "js" / "00-core.js").read_text(encoding="utf-8")
 
     assert 'if (canAccessModule("chat")) {' in core
     assert '    loadChatRooms();' in core
+
+
+def test_frontend_boot_does_not_eager_load_economy_before_module_selection():
+    core = (ROOT / "public" / "js" / "00-core.js").read_text(encoding="utf-8")
+    boot_body = core.split('if (currentRole === "manager" || currentRole === "super_admin") {', 1)[1].split("switchModuleTab(initialModule);", 1)[0]
+
+    assert "loadEconomyDashboard();" not in boot_body
+    assert "loadChatRooms();" in boot_body
 
 
 def test_trading_stress_pentest_covers_margin_risk_controls():

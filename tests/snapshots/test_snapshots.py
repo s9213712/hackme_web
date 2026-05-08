@@ -210,18 +210,17 @@ def test_restore_with_runtime_storage_roots_does_not_recreate_legacy_repo_dirs(t
 
 def test_server_mode_hmac_key_defaults_to_runtime_subdir_without_snapshot_service(tmp_path, monkeypatch):
     monkeypatch.delenv("HACKME_RUNTIME_DIR", raising=False)
-    monkeypatch.chdir(tmp_path)
     mode = ServerModeService(snapshot_service=None, get_db=lambda: None, audit=lambda *args, **kwargs: None)
 
     path = mode._local_hmac_key_path("server_mode_log")
 
-    assert path == (tmp_path / "runtime" / ".server_mode_log_hmac_key").resolve()
+    assert path == (Path(__file__).resolve().parents[2] / "runtime" / ".server_mode_log_hmac_key").resolve()
 
 
 def test_server_mode_hmac_key_fails_closed_when_runtime_path_is_a_file(tmp_path, monkeypatch):
-    monkeypatch.delenv("HACKME_RUNTIME_DIR", raising=False)
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "runtime").write_text("block repo pollution\n", encoding="utf-8")
+    blocked = tmp_path / "runtime"
+    blocked.write_text("block repo pollution\n", encoding="utf-8")
+    monkeypatch.setenv("HACKME_RUNTIME_DIR", str(blocked))
 
     with pytest.raises(RuntimeError, match="runtime path is blocked by a non-directory file"):
         ServerModeService(snapshot_service=None, get_db=lambda: None, audit=lambda *args, **kwargs: None)
@@ -1296,12 +1295,12 @@ class _FakeServerModeService:
         return {"ok": True, "balance_points": self.shadow_wallet_balance, "formal_points_chain_changed": False}
 
 
-def _build_admin_app(actor_box, snapshot_service, restart_calls=None):
+def _build_admin_app(actor_box, snapshot_service, restart_calls=None, extra_deps=None):
     app = Flask(__name__)
     app.testing = True
     if restart_calls is None:
         restart_calls = []
-    register_system_admin_routes(app, {
+    deps = {
         "ANCHOR_DIR": ".",
         "BASE_DIR": ".",
         "CHAT_DIR": ".",
@@ -1330,7 +1329,10 @@ def _build_admin_app(actor_box, snapshot_service, restart_calls=None):
         "snapshot_service": snapshot_service,
         "schedule_server_restart": lambda **kwargs: restart_calls.append(kwargs) or {"mode": "test"},
         "verify_audit_integrity": lambda: (True, None, "ok"),
-    })
+    }
+    if extra_deps:
+        deps.update(extra_deps)
+    register_system_admin_routes(app, deps)
     return app
 
 
@@ -1555,3 +1557,32 @@ def test_security_center_and_server_output_are_root_only():
     output = client.get("/api/admin/server-output?limit=10")
     assert output.status_code == 200
     assert output.get_json()["ok"] is True
+
+
+def test_server_output_falls_back_to_gunicorn_error_log_when_runtime_buffer_is_empty(tmp_path):
+    snapshot_service = _FakeSnapshotService()
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    (log_dir / "server.log").write_text("", encoding="utf-8")
+    (log_dir / "gunicorn_error.log").write_text(
+        "[2026-05-08 10:52:48 +0800] [837961] [INFO] Starting gunicorn 26.0.0\n",
+        encoding="utf-8",
+    )
+    client = _build_admin_app(
+        actor_box,
+        snapshot_service,
+        extra_deps={
+            "LOG_DIR": str(log_dir),
+            "SERVER_LOG_PATH": str(log_dir / "server.log"),
+            "get_server_output": lambda limit=200: {"lines": [], "max_lines": 2000},
+        },
+    ).test_client()
+
+    response = client.get("/api/admin/server-output?limit=10")
+
+    assert response.status_code == 200
+    payload = response.get_json()["server_output"]
+    assert payload["lines"]
+    assert payload["lines"][0]["stream"] == "info"
+    assert "Starting gunicorn 26.0.0" in payload["lines"][0]["line"]

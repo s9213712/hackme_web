@@ -34,6 +34,14 @@ def test_trading_workflow_editor_has_full_node_editor_surface():
     assert "TRUE/FALSE branch" in js
     assert "Nested AND" in js
     assert "validateWorkflow" in js
+    assert "workflowValidationErrorSummary" in js
+    assert 'previewStatus(workflowValidationErrorSummary(errors, "Workflow validation 未通過"), false);' in js
+    assert 'setStatus(workflowValidationErrorSummary(errors), false);' in js
+    assert '詳見「策略檢查」' in js
+    assert "Math.max(GRAPH_NODE_WIDTH + 260" in js
+    assert "Math.max(GRAPH_NODE_HEIGHT + 260" in js
+    assert "Math.max(1500" not in js
+    assert "Math.max(1000" not in js
     assert '"/trading/workflow-editor/backtest"' in js
     assert "runWorkflowPreviewBacktest" in js
     assert "workflow-preview-metrics" in js

@@ -58,7 +58,7 @@ def test_root_keeps_only_readme_markdown_and_docs_has_index():
         "WEB.md",
         "trading/TRADING.md",
         "video/VIDEO_PLATFORM.md",
-        "runtime/ENCRYPTION_RUNTIME_BOUNDARY.md",
+        "ops_boundaries/ENCRYPTION_RUNTIME_BOUNDARY.md",
         "server_mode_v2/SERVER_MODE_V2_PROFILE_MATRIX.md",
         "archive/research/README.md",
         "BRANCHING_AND_RELEASE.md",
