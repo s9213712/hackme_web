@@ -7,9 +7,17 @@ import pytest
 from flask import Flask, request as flask_request
 
 from routes.comfyui_sections.template_routes import register_comfyui_template_routes
+from services.comfyui.template.capability import reset_object_info_cache
 from services.comfyui.template.preview_store import (
     InMemoryPreviewStore,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_object_info_cache():
+    reset_object_info_cache()
+    yield
+    reset_object_info_cache()
 
 
 # Reused minimal txt2img workflow.

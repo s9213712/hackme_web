@@ -55,6 +55,11 @@ from services.comfyui.template.preview_store import (
     reset_default_preview_store,
     set_default_preview_store,
 )
+from services.comfyui.template.run_gate import (
+    RunGateFailure,
+    RunGateResult,
+    run_workflow_through_gates,
+)
 
 __all__ = [
     "ALLOWED_IMAGE_EXTENSIONS",
@@ -65,10 +70,13 @@ __all__ = [
     "PROTECTED_IMAGE_INPUTS",
     "PreviewEntry",
     "PreviewStore",
+    "RunGateFailure",
+    "RunGateResult",
     "UploadCallback",
     "get_default_preview_store",
     "remap_load_image_to_cloud_file",
     "reset_default_preview_store",
+    "run_workflow_through_gates",
     "set_default_preview_store",
     "CORE_ALLOWLIST",
     "CONTROLNET_PREPROCESSOR_ALLOWLIST",

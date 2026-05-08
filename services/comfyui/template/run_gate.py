@@ -1,0 +1,370 @@
+"""§10 Run-time 5-gate enforcement + §10.3 implementation notes.
+
+Spec reference: docs/comfyui/COMFYUI_TEMPLATE_IMPORTER_PLAN.md §10 / §10.3.
+
+This module is a *pure* gate runner — it never queues to ComfyUI itself.
+The route handler calls ``run_workflow_through_gates(...)`` and on success
+receives the patched workflow ready to be passed to the existing
+queue helper. On failure it gets a ``RunGateFailure`` carrying the failed
+gate index, stage tag, message, and audit metadata so the route can emit
+``COMFYUI_TEMPLATE_RUN_GATE_FAIL`` (per §10.3.1) and return a stage-tagged
+error to the user.
+
+§10.3 implementation notes covered here:
+1. Each gate failure produces a structured failure record; the route is
+   expected to audit each one before returning.
+2. Image upload to ComfyUI input/<run_id>/ is delegated to the caller-
+   supplied ``upload_callback`` — when Gate 5 raises after some images
+   were uploaded, the caller is expected to call ``cleanup_callback`` to
+   reap that run_id's subfolder (the caller knows the filesystem layout).
+3. ``apply_user_inputs`` patches user_input scalars *only on inputs that
+   are in the analysis's user_inputs list and not in PROTECTED_INPUTS*,
+   guaranteeing no overwrite of the LoadImage/LoadImageMask remap.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any, Callable, Mapping, Sequence
+
+from services.comfyui.template.analyzer import (
+    FieldCategory,
+    InputField,
+    WorkflowAnalysis,
+    analyze_workflow_json,
+)
+from services.comfyui.template.capability import (
+    CapabilityCheck,
+    check_workflow_capability,
+)
+from services.comfyui.template.remap import (
+    PROTECTED_IMAGE_INPUTS,
+    UploadCallback,
+    remap_load_image_to_cloud_file,
+)
+from services.comfyui.template.safety import (
+    SafetyError,
+    enforce_allowlist,
+    rewrite_save_image_prefix,
+)
+from services.comfyui.validation.rules import WorkflowValidationError
+from services.comfyui.validation.sanitize import sanitize_workflow_json
+
+
+# ----------------------------------------------------------------------------
+# Result containers
+# ----------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RunGateFailure(Exception):
+    """Raised when any of the five gates rejects the run."""
+
+    gate: int
+    stage: str
+    msg: str
+    audit_detail: dict[str, Any] = field(default_factory=dict)
+    http_status: int = 400
+
+    def __str__(self) -> str:  # pragma: no cover - dataclass cosmetic
+        return f"gate={self.gate} stage={self.stage} msg={self.msg}"
+
+
+@dataclass
+class RunGateResult:
+    """Return type on the happy path."""
+
+    workflow: dict[str, Any]
+    analysis: WorkflowAnalysis
+    capability: CapabilityCheck
+    audit_metadata: dict[str, Any] = field(default_factory=dict)
+
+
+# ----------------------------------------------------------------------------
+# Internal validators
+# ----------------------------------------------------------------------------
+
+
+def _is_user_editable(field_obj: InputField) -> bool:
+    """Mirror of services/comfyui/template/ui_schema.required_user_inputs filtering."""
+    if (field_obj.class_type, field_obj.input_name) == ("SaveImage", "filename_prefix"):
+        return False
+    if (field_obj.class_type, field_obj.input_name) in PROTECTED_IMAGE_INPUTS:
+        # protected image inputs go through remap, not user_inputs
+        return False
+    if field_obj.category == FieldCategory.UNKNOWN:
+        return False
+    return True
+
+
+def _required_input_keys(analysis: WorkflowAnalysis) -> set[tuple[str, str]]:
+    return {
+        (f.node_id, f.input_name)
+        for f in analysis.user_inputs
+        if _is_user_editable(f)
+    }
+
+
+def _check_user_input_constraints(
+    analysis: WorkflowAnalysis,
+    user_inputs: Mapping[str, Any],
+) -> None:
+    """Gate 4: required + numeric / text size constraints.
+
+    user_inputs shape: ``{node_id: {input_name: value}}`` — same as
+    ``apply_user_inputs`` consumes. Missing protected node assignments are
+    NOT checked here (they live in image_field_assignments and are
+    enforced inside Gate 5's remap).
+    """
+    required = _required_input_keys(analysis)
+    seen: set[tuple[str, str]] = set()
+
+    for node_id, patch in (user_inputs or {}).items():
+        if not isinstance(patch, Mapping):
+            raise RunGateFailure(
+                gate=4,
+                stage="gate4_constraints",
+                msg=f"user_inputs[{node_id}] 必須是物件",
+                audit_detail={"node_id": node_id, "type": type(patch).__name__},
+            )
+        for input_name, value in patch.items():
+            seen.add((str(node_id), str(input_name)))
+            field_obj = next(
+                (
+                    f
+                    for f in analysis.user_inputs
+                    if f.node_id == str(node_id) and f.input_name == str(input_name)
+                ),
+                None,
+            )
+            if field_obj is None:
+                raise RunGateFailure(
+                    gate=4,
+                    stage="gate4_constraints",
+                    msg=f"user_inputs[{node_id}].{input_name} 不在可編輯欄位清單中",
+                    audit_detail={"node_id": node_id, "input_name": input_name},
+                )
+            # Type / range checks. Spec says "numeric / enum / size".
+            if field_obj.category == FieldCategory.NUMERIC:
+                if not isinstance(value, (int, float)) or isinstance(value, bool):
+                    raise RunGateFailure(
+                        gate=4,
+                        stage="gate4_constraints",
+                        msg=(
+                            f"user_inputs[{node_id}].{input_name} 必須是數值，"
+                            f"目前型別為 {type(value).__name__}"
+                        ),
+                        audit_detail={"node_id": node_id, "input_name": input_name},
+                    )
+            elif field_obj.category == FieldCategory.TEXT:
+                if not isinstance(value, str):
+                    raise RunGateFailure(
+                        gate=4,
+                        stage="gate4_constraints",
+                        msg=(
+                            f"user_inputs[{node_id}].{input_name} 必須是字串，"
+                            f"目前型別為 {type(value).__name__}"
+                        ),
+                        audit_detail={"node_id": node_id, "input_name": input_name},
+                    )
+                if len(value) > 4000:
+                    raise RunGateFailure(
+                        gate=4,
+                        stage="gate4_constraints",
+                        msg=f"user_inputs[{node_id}].{input_name} 長度超過 4000 字元",
+                        audit_detail={"node_id": node_id, "input_name": input_name, "len": len(value)},
+                    )
+            elif field_obj.category == FieldCategory.SAMPLER:
+                if not isinstance(value, str):
+                    raise RunGateFailure(
+                        gate=4,
+                        stage="gate4_constraints",
+                        msg=(
+                            f"user_inputs[{node_id}].{input_name} 必須是字串 (sampler enum)"
+                        ),
+                        audit_detail={"node_id": node_id, "input_name": input_name},
+                    )
+            # MODEL fields are validated by capability check (Gate 2).
+            # IMAGE fields are protected; enforced in remap (Gate 5).
+
+    missing = required - seen
+    if missing:
+        raise RunGateFailure(
+            gate=4,
+            stage="gate4_inputs",
+            msg=(
+                f"必要欄位未填：{sorted(missing)}"
+            ),
+            audit_detail={"missing": sorted(missing)},
+        )
+
+
+def _apply_user_inputs(
+    workflow: dict[str, Any],
+    *,
+    analysis: WorkflowAnalysis,
+    user_inputs: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    """§10.3.3-compliant input patcher.
+
+    Hard-fails any patch that targets a PROTECTED_IMAGE_INPUTS slot (those
+    must come through the remap step, never through user_inputs).
+    """
+    for node_id, patch in (user_inputs or {}).items():
+        node = workflow.get(str(node_id))
+        if node is None:
+            continue
+        class_type = str(node.get("class_type") or "")
+        node_inputs = node.get("inputs")
+        if not isinstance(node_inputs, dict):
+            continue
+        for input_name, value in patch.items():
+            if (class_type, input_name) in PROTECTED_IMAGE_INPUTS:
+                raise SafetyError(
+                    f"node {node_id}.{input_name} 是受保護欄位 (LoadImage / LoadImageMask)，"
+                    f"不允許透過 user_inputs 覆蓋；必須走 image_field_assignments"
+                )
+            node_inputs[input_name] = value
+    return workflow
+
+
+# ----------------------------------------------------------------------------
+# Public API
+# ----------------------------------------------------------------------------
+
+
+def run_workflow_through_gates(
+    *,
+    raw_workflow: Mapping[str, Any],
+    user_inputs: Mapping[str, Any] | None,
+    image_field_assignments: Mapping[str, str] | None,
+    actor: Mapping[str, Any],
+    user_id: int,
+    run_id: str,
+    conn,
+    comfyui_client,
+    upload_callback: UploadCallback,
+    fetch_file_row: Callable[[Any, str], Mapping[str, Any] | None] | None = None,
+    upload_scan_skip_allowed: bool = False,
+    image_decoder: Callable[[bytes], None] | None = None,
+    file_bytes_loader: Callable[[Mapping[str, Any]], bytes] | None = None,
+) -> RunGateResult:
+    """Run a workflow through all five §10 gates. Returns a patched
+    workflow ready to be queued; raises RunGateFailure on any rejection.
+
+    Caller responsibilities:
+    - Re-fetch ``raw_workflow`` from DB / preset on each call (§10 Gate 1
+      explicitly re-sanitizes).
+    - Provide a fresh ``run_id`` (uuid hex) per call so Gate 5 can write
+      to ``ComfyUI input/<run_id>/`` and §10.3.2 cleanup can target it.
+    - On RunGateFailure for gate>=5, run cleanup_run_temp_files(run_id)
+      since image bytes may have been uploaded mid-flight.
+    - On RunGateFailure for any gate, audit a
+      ``COMFYUI_TEMPLATE_RUN_GATE_FAIL`` record with the failure's stage
+      and audit_detail (per §10.3.1).
+    """
+    # ----- Gate 1: sanitize + normalize + analyze --------------------------
+    try:
+        sanitized_wrapper = sanitize_workflow_json(raw_workflow)
+    except WorkflowValidationError as exc:
+        raise RunGateFailure(
+            gate=1,
+            stage="gate1_sanitize",
+            msg=str(exc),
+            audit_detail={},
+        ) from exc
+    workflow = sanitized_wrapper.get("workflow_json") or {}
+    try:
+        analysis = analyze_workflow_json(workflow)
+    except WorkflowValidationError as exc:
+        raise RunGateFailure(
+            gate=1,
+            stage="gate1_analyze",
+            msg=str(exc),
+            audit_detail={},
+        ) from exc
+
+    # ----- Gate 2: capability ---------------------------------------------
+    capability = check_workflow_capability(analysis, client=comfyui_client)
+    if capability.overall == "UNSUPPORTED":
+        raise RunGateFailure(
+            gate=2,
+            stage="gate2_capability",
+            msg=f"本地 ComfyUI 缺少節點：{capability.unsupported}",
+            audit_detail={
+                "unsupported": capability.unsupported,
+                "blockers": capability.blockers,
+            },
+        )
+    if capability.missing_models:
+        raise RunGateFailure(
+            gate=2,
+            stage="gate2_models",
+            msg=f"缺少模型：{capability.missing_models}",
+            audit_detail={"missing_models": capability.missing_models},
+        )
+
+    # ----- Gate 3: enforce allowlist --------------------------------------
+    try:
+        enforce_allowlist(analysis)
+    except SafetyError as exc:
+        raise RunGateFailure(
+            gate=3,
+            stage="gate3_allowlist",
+            msg=str(exc),
+            audit_detail={"unknown_or_denied": sorted(
+                analysis.unknown_classes | analysis.denied_classes
+            )},
+        ) from exc
+
+    # ----- Gate 4: required inputs + constraints --------------------------
+    try:
+        _check_user_input_constraints(analysis, user_inputs or {})
+    except RunGateFailure:
+        raise
+
+    # ----- Gate 5: safety rewrite + image remap + apply user_inputs -------
+    try:
+        workflow = rewrite_save_image_prefix(workflow, user_id=int(user_id), run_id=run_id)
+        workflow = remap_load_image_to_cloud_file(
+            workflow,
+            image_field_assignments=dict(image_field_assignments or {}),
+            actor=actor,
+            conn=conn,
+            run_id=run_id,
+            upload_callback=upload_callback,
+            fetch_file_row=fetch_file_row,
+            upload_scan_skip_allowed=upload_scan_skip_allowed,
+            image_decoder=image_decoder,
+            file_bytes_loader=file_bytes_loader,
+        )
+        workflow = _apply_user_inputs(
+            workflow,
+            analysis=analysis,
+            user_inputs=user_inputs or {},
+        )
+    except SafetyError as exc:
+        raise RunGateFailure(
+            gate=5,
+            stage="gate5_safety",
+            msg=str(exc),
+            audit_detail={},
+        ) from exc
+
+    return RunGateResult(
+        workflow=workflow,
+        analysis=analysis,
+        capability=capability,
+        audit_metadata={
+            "node_count": len(workflow),
+            "overall": capability.overall,
+            "image_remapped": len(image_field_assignments or {}),
+        },
+    )
+
+
+__all__ = [
+    "RunGateFailure",
+    "RunGateResult",
+    "run_workflow_through_gates",
+]
