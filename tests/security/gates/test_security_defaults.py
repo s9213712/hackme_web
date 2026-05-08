@@ -4,6 +4,9 @@ from services.platform.settings import DEFAULT_SETTINGS, MANAGEMENT_ONLY_RESET_S
 
 
 ROOT = Path(__file__).resolve().parents[3]
+ROLLOUT_ONLY_FEATURE_FLAGS = {
+    "feature_comfyui_legacy_import_enabled",
+}
 
 
 def test_initial_deploy_security_defaults_enable_integrity_and_audit_chain():
@@ -14,7 +17,7 @@ def test_initial_deploy_security_defaults_enable_integrity_and_audit_chain():
 def test_initial_deploy_defaults_only_enable_management_and_security_modules():
     enabled_features = {
         key for key, value in DEFAULT_SETTINGS.items()
-        if key.startswith("feature_") and value is True
+        if key.startswith("feature_") and value is True and key not in ROLLOUT_ONLY_FEATURE_FLAGS
     }
     assert enabled_features == {
         "feature_accounts_enabled",
