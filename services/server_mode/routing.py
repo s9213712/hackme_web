@@ -16,12 +16,13 @@ table the current request is allowed to write to. The mapping:
     | points_ledger        | points_ledger      | test_shadow_ledger    |
     | points_chain_blocks  | points_chain_blocks| RoutingNotAllowed     |
 
-Other modes (test / dev_ready / maintenance / incident_lockdown /
-superweak) are out of scope for trading-domain logical names — those
-modes either run in an isolated runtime (test) or have trading
-disabled (dev_ready / maintenance / incident_lockdown / superweak),
-so the route is rejected with RoutingNotAllowed. Callers should be
-gating on mode before they get here.
+Other modes (test / maintenance / incident_lockdown / superweak) are
+out of scope for trading-domain logical names — those modes either run
+in an isolated runtime without trading wiring yet (test) or have
+trading disabled (maintenance / incident_lockdown / superweak), so the
+route is rejected with RoutingNotAllowed. `dev_ready` shares the
+isolated runtime with pre-live verification and therefore routes to the
+same physical tables as `production` inside that runtime.
 
 Important contracts:
 1. The function accepts an `SmV2Context` (or anything with a `.mode`
@@ -60,7 +61,7 @@ LOGICAL_TO_SHADOW = {
 
 # Modes for which non-chain logical names are routable. Anything outside
 # this set triggers RoutingNotAllowed for trading-domain queries.
-_ROUTABLE_MODES = {"production", "internal_test"}
+_ROUTABLE_MODES = {"production", "internal_test", "dev_ready"}
 
 
 class RoutingNotAllowed(RuntimeError):
@@ -125,6 +126,8 @@ def resolve_table(logical: str, ctx: Optional[SmV2Context]) -> str:
         return LOGICAL_TO_PROD[logical]
     if mode == "internal_test":
         return LOGICAL_TO_SHADOW[logical]
+    if mode == "dev_ready":
+        return LOGICAL_TO_PROD[logical]
     raise RoutingNotAllowed(logical, mode)
 
 

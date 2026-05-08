@@ -145,9 +145,10 @@ def test_liquidation_does_not_cross_world():
         assert_same_world(inter_ctx, prod_ctx, action="liquidation_settle")
 
     # Non-trading modes refuse outright.
-    for bad_mode in ("dev_ready", "maintenance", "incident_lockdown", "superweak"):
+    for bad_mode in ("maintenance", "incident_lockdown", "superweak"):
         with pytest.raises(TradingDisabledInMode):
             liquidation_target_table(_ctx(bad_mode))
+    assert liquidation_target_table(_ctx("dev_ready")) == "trading_margin_positions"
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -192,9 +193,10 @@ def test_funding_rate_does_not_cross_world():
     assert ":production:" in prod
     assert ":internal_test:" in inter and "tester7" in inter
     # Non-trading modes refuse outright.
-    for bad_mode in ("dev_ready", "maintenance", "incident_lockdown", "superweak"):
+    for bad_mode in ("maintenance", "incident_lockdown", "superweak"):
         with pytest.raises(TradingDisabledInMode):
             funding_channel_key("BTC", _ctx(bad_mode))
+    assert ":dev_ready:" in funding_channel_key("BTC", _ctx("dev_ready"))
 
     # Runtime publish path must also stay isolated by world.
     import sqlite3
@@ -328,3 +330,14 @@ def test_superweak_trading_remains_disabled():
             routing.resolve_table(logical, _ctx("superweak"))
     with pytest.raises(ChainModeViolation):
         routing.resolve_table("points_chain_blocks", _ctx("superweak"))
+
+
+def test_dev_ready_trading_is_enabled_for_prelive_verification():
+    from services.snapshots import BUILTIN_SECURITY_PROFILES
+    profile = BUILTIN_SECURITY_PROFILES.get("dev_ready")
+    assert profile is not None, "dev_ready profile missing from BUILTIN_SECURITY_PROFILES"
+    settings = profile.get("settings") or {}
+    assert settings.get("feature_economy_enabled") is True, settings
+    assert settings.get("feature_trading_enabled") is True, settings
+    assert routing.resolve_table("wallets", _ctx("dev_ready")) == "wallets"
+    assert routing.resolve_table("orders", _ctx("dev_ready")) == "trading_orders"

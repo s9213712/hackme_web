@@ -17,8 +17,8 @@ Matrix Trading row):
     |-------------------|-----------------|-----------------------------|
     | production        | yes             | real wallets / chain        |
     | internal_test     | yes (shadow)    | tester-scoped shadow tables |
-    | test              | yes (isolated)  | isolated runtime             |
-    | dev_ready         | NO              | trading off by default      |
+    | test              | yes (isolated)  | isolated runtime            |
+    | dev_ready         | yes (isolated)  | isolated runtime / pre-live |
     | maintenance       | NO              | trading paused              |
     | incident_lockdown | NO              | read-only                   |
     | superweak         | NO              | weakest-mode hard rule      |
@@ -37,7 +37,7 @@ from services.server_mode.context import SmV2Context, assert_ctx
 from services.server_mode.routing import resolve_table
 
 
-_TRADING_MODES = {"production", "internal_test", "test"}
+_TRADING_MODES = {"production", "internal_test", "test", "dev_ready"}
 
 
 class TradingDisabledInMode(RuntimeError):
@@ -54,7 +54,7 @@ class TradingDisabledInMode(RuntimeError):
         self.action = action
         super().__init__(
             f"trading {action} forbidden in mode={mode!r} — "
-            "trading is enabled only in production / internal_test / test"
+            "trading is enabled only in production / internal_test / test / dev_ready"
         )
 
 

@@ -30,13 +30,13 @@ def _ctx(mode, tester_id=None):
 # ── assert_trading_allowed ────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("mode", ["production", "internal_test", "test"])
+@pytest.mark.parametrize("mode", ["production", "internal_test", "test", "dev_ready"])
 def test_trading_allowed_in_trading_modes(mode):
     ctx = _ctx(mode, tester_id=1 if mode == "internal_test" else None)
     assert assert_trading_allowed(ctx).mode == mode
 
 
-@pytest.mark.parametrize("mode", ["dev_ready", "maintenance", "incident_lockdown", "superweak", ""])
+@pytest.mark.parametrize("mode", ["maintenance", "incident_lockdown", "superweak", ""])
 def test_trading_refused_in_non_trading_modes(mode):
     with pytest.raises(TradingDisabledInMode) as exc:
         assert_trading_allowed(_ctx(mode))
@@ -81,9 +81,9 @@ def test_orderbook_internal_test_requires_tester_id():
         matching_orderbook_key("BTC/POINTS", _ctx("internal_test"))
 
 
-def test_orderbook_refused_in_non_trading_mode():
-    with pytest.raises(TradingDisabledInMode):
-        matching_orderbook_key("BTC/POINTS", _ctx("dev_ready"))
+def test_orderbook_key_allowed_in_dev_ready():
+    key = matching_orderbook_key("BTC/POINTS", _ctx("dev_ready"))
+    assert ":dev_ready:" in key
 
 
 # ── funding_channel_key ───────────────────────────────────────────────
@@ -98,9 +98,14 @@ def test_funding_channels_differ_per_mode():
 
 
 def test_funding_channel_refused_in_non_trading_mode():
-    for bad in ("dev_ready", "maintenance", "incident_lockdown", "superweak"):
+    for bad in ("maintenance", "incident_lockdown", "superweak"):
         with pytest.raises(TradingDisabledInMode):
             funding_channel_key("BTC", _ctx(bad))
+
+
+def test_funding_channel_allowed_in_dev_ready():
+    key = funding_channel_key("BTC", _ctx("dev_ready"))
+    assert ":dev_ready:" in key
 
 
 # ── liquidation tables ────────────────────────────────────────────────
@@ -114,6 +119,10 @@ def test_liquidation_target_in_internal_test_uses_shadow():
     assert liquidation_target_table(_ctx("internal_test", tester_id=1)) == "test_shadow_margin_positions"
 
 
+def test_liquidation_target_in_dev_ready_uses_isolated_runtime_prod_tables():
+    assert liquidation_target_table(_ctx("dev_ready")) == "trading_margin_positions"
+
+
 def test_liquidation_settle_in_production():
     assert liquidation_settle_table(_ctx("production")) == "wallets"
 
@@ -122,8 +131,12 @@ def test_liquidation_settle_in_internal_test_uses_shadow():
     assert liquidation_settle_table(_ctx("internal_test", tester_id=1)) == "test_shadow_wallets"
 
 
+def test_liquidation_settle_in_dev_ready_uses_isolated_runtime_prod_tables():
+    assert liquidation_settle_table(_ctx("dev_ready")) == "wallets"
+
+
 def test_liquidation_refused_in_non_trading_mode():
-    for bad in ("dev_ready", "maintenance", "incident_lockdown", "superweak"):
+    for bad in ("maintenance", "incident_lockdown", "superweak"):
         with pytest.raises(TradingDisabledInMode):
             liquidation_target_table(_ctx(bad))
 

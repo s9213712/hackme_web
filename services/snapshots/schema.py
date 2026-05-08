@@ -283,7 +283,7 @@ BUILTIN_SECURITY_PROFILES = {
     },
     "dev_ready": {
         "label": "dev ready（準上線 / 開發就緒）",
-        "description": "平時開發與準上線驗證模式；保留基本登入、root 權限與 CSRF，但暫停 production audit chain 與 integrity guard。",
+        "description": "平時開發與準上線驗證模式；保留基本登入、root 權限與 CSRF，但暫停 production audit chain 與 integrity guard。交易在隔離 runtime 內可直接驗證。",
         "settings": {
             "maintenance_mode": False,
             "server_ssl_enabled": True,
@@ -297,8 +297,8 @@ BUILTIN_SECURITY_PROFILES = {
             "integrity_guard_enabled": False,
             "integrity_guard_strict_mode": False,
             "feature_audit_log_enabled": True,
-            "feature_economy_enabled": False,
-            "feature_trading_enabled": False,
+            "feature_economy_enabled": True,
+            "feature_trading_enabled": True,
         },
         "thresholds": {
             "security_pending_chat_reports_threshold": 10,
