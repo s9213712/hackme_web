@@ -230,6 +230,8 @@ def register_trading_routes(app, deps):
         msg = str(exc) or exc.__class__.__name__
         status = 400
         lowered = msg.lower()
+        if "conservative mode" in lowered or "價格降級暫停" in msg or "高風險交易" in msg or "風控級" in msg:
+            return json_resp({"ok": False, "msg": msg}), 400
         if "decimal.invalidoperation" in lowered or "conversionsyntax" in lowered:
             msg = "交易數量格式錯誤，請輸入有效的數字"
             lowered = msg.lower()

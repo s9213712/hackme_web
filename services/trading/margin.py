@@ -1647,6 +1647,49 @@ def scan_margin_liquidations(service, *, actor=None, limit=100, ctx=None):
     finally:
         conn.close()
 
+    liquidated = []
+    for candidate in candidates:
+        try:
+            result = close_margin_position(
+                service,
+                actor=actor,
+                position_uuid=candidate["position_uuid"],
+                force_liquidation=True,
+                price_override_points=(candidate.get("risk") or {}).get("price_points"),
+                price_source_override=(candidate.get("risk") or {}).get("price_source"),
+                allow_internal_price_override=True,
+                ctx=ctx,
+            )
+            liquidated.append(
+                {
+                    "position_uuid": candidate["position_uuid"],
+                    "user_id": candidate["user_id"],
+                    "market_symbol": candidate["market_symbol"],
+                    "delta_points": int(result.get("delta_points") or 0),
+                    "interest_points": int(result.get("interest_points") or 0),
+                    "close_fee_points": int(result.get("close_fee_points") or 0),
+                    "risk": candidate["risk"],
+                    "account_risk": candidate.get("account_risk"),
+                    "liquidation_order": candidate.get("liquidation_order") or [],
+                }
+            )
+        except Exception as exc:
+            errors.append(
+                {
+                    "position_uuid": candidate["position_uuid"],
+                    "user_id": candidate["user_id"],
+                    "error": str(exc),
+                }
+            )
+    return {
+        "ok": not errors,
+        "enabled": True,
+        "scanned": scanned,
+        "candidates": candidates,
+        "liquidated": liquidated,
+        "errors": errors,
+    }
+
 
 def _margin_target_hit(position, *, observed_price, observed_low, observed_high):
     entry_price = float(_to_decimal(position["entry_price_points"] or 0, name="entry_price_points", minimum=0.00000001))
@@ -1778,46 +1821,3 @@ def scan_margin_risk_targets(service, *, actor=None, limit=100, ctx=None):
     finally:
         if conn is not None:
             conn.close()
-
-    liquidated = []
-    for candidate in candidates:
-        try:
-            result = close_margin_position(
-                service,
-                actor=actor,
-                position_uuid=candidate["position_uuid"],
-                force_liquidation=True,
-                price_override_points=(candidate.get("risk") or {}).get("price_points"),
-                price_source_override=(candidate.get("risk") or {}).get("price_source"),
-                allow_internal_price_override=True,
-                ctx=ctx,
-            )
-            liquidated.append(
-                {
-                    "position_uuid": candidate["position_uuid"],
-                    "user_id": candidate["user_id"],
-                    "market_symbol": candidate["market_symbol"],
-                    "delta_points": int(result.get("delta_points") or 0),
-                    "interest_points": int(result.get("interest_points") or 0),
-                    "close_fee_points": int(result.get("close_fee_points") or 0),
-                    "risk": candidate["risk"],
-                    "account_risk": candidate.get("account_risk"),
-                    "liquidation_order": candidate.get("liquidation_order") or [],
-                }
-            )
-        except Exception as exc:
-            errors.append(
-                {
-                    "position_uuid": candidate["position_uuid"],
-                    "user_id": candidate["user_id"],
-                    "error": str(exc),
-                }
-            )
-    return {
-        "ok": not errors,
-        "enabled": True,
-        "scanned": scanned,
-        "candidates": candidates,
-        "liquidated": liquidated,
-        "errors": errors,
-    }

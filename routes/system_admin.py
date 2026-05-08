@@ -52,6 +52,7 @@ from services.comfyui.settings import (
     validate_comfyui_relative_script,
 )
 from services.platform.settings import find_feature_dependency_violations
+from services.server.runtime import default_runtime_root
 
 
 SECURITY_TEST_JOBS = {}
@@ -202,7 +203,7 @@ def register_system_admin_routes(app, deps):
         else os.path.realpath(os.path.join(module_base_dir, raw_base_dir))
     )
     REPORTS_DIR = deps.get("REPORTS_DIR") or os.environ.get("HTML_LEARNING_REPORTS_DIR") or os.path.join(
-        os.environ.get("HACKME_RUNTIME_DIR") or "/tmp/hackme_web_runtime",
+        os.environ.get("HACKME_RUNTIME_DIR") or default_runtime_root(),
         "reports",
     )
     GIT_REPO_DIR = deps.get("GIT_REPO_DIR") or BASE_DIR

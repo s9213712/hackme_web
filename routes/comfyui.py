@@ -1037,10 +1037,17 @@ def register_comfyui_routes(app, deps):
         return f"http://{display_host}:{port}", {"mode": mode, "host": host, "port": port}, None
 
     def _validate_comfyui_api_url(value):
-        raw = validate_comfyui_api_url(value, allow_blank=True)
+        # Prefer shared_validate_comfyui_api_url with return_error=True so the
+        # specific reject reason (credentials / path / shape) surfaces in the UI
+        # instead of being collapsed into one catch-all message.
+        raw, reason = shared_validate_comfyui_api_url(value, allow_blank=True, return_error=True)
         if raw == "":
             return None, "ComfyUI API 位址不可空白"
         if raw is None:
+            if reason == "credentials":
+                return None, "ComfyUI API 位址不可包含帳密"
+            # path-or-query and shape errors share the same generic prompt because
+            # the user-recoverable answer is the same: drop everything but host:port.
             return None, "ComfyUI API 位址只需填主機與 port，不要包含路徑或參數"
         return raw, None
 

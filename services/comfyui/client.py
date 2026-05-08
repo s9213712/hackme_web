@@ -1,4 +1,5 @@
 import json
+import socket
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -62,6 +63,8 @@ class ComfyUIClient:
                     if allow_non_json:
                         return {"raw": raw}
                     raise ComfyUIError("ComfyUI 回應不是 JSON") from exc
+        except (TimeoutError, socket.timeout) as exc:
+            raise ComfyUIError("ComfyUI 連線逾時") from exc
         except urllib.error.URLError as exc:
             raise ComfyUIError(f"ComfyUI 連線失敗：{getattr(exc, 'reason', exc)}") from exc
 
@@ -102,6 +105,8 @@ class ComfyUIClient:
                     return json.loads(raw)
                 except json.JSONDecodeError as exc:
                     raise ComfyUIError("ComfyUI 回應不是 JSON") from exc
+        except (TimeoutError, socket.timeout) as exc:
+            raise ComfyUIError("ComfyUI 連線逾時") from exc
         except urllib.error.URLError as exc:
             raise ComfyUIError(f"ComfyUI 連線失敗：{getattr(exc, 'reason', exc)}") from exc
 
