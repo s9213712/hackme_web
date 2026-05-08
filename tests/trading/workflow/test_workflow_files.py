@@ -7,8 +7,8 @@ ROOT = Path(__file__).resolve().parents[3]
 
 def test_trading_workflow_templates_live_under_workflows_directory():
     workflow_root = ROOT / "workflows"
-    system_dir = workflow_root / "system"
-    assert system_dir.is_dir()
+    trading_bot_dir = workflow_root / "trading_bot"
+    assert trading_bot_dir.is_dir()
 
     # Plan B (N=11) — head-to-head finalists + 4 trend followers + 2
     # mean-reversion + 3 exit-only tools.  See workflows/README.md for
@@ -26,10 +26,10 @@ def test_trading_workflow_templates_live_under_workflows_directory():
         "staged_profit_taking",
         "stop_loss",
     }
-    found = {path.stem for path in system_dir.glob("*.json")}
+    found = {path.stem for path in trading_bot_dir.glob("*.json")}
     assert found == expected
 
-    for path in system_dir.glob("*.json"):
+    for path in trading_bot_dir.glob("*.json"):
         payload = json.loads(path.read_text(encoding="utf-8"))
         assert payload["scope"] == "system"
         explanation = payload.get("explanation")
