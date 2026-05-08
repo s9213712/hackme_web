@@ -37,6 +37,7 @@ from services.comfyui.template.capability import (
     CapabilityCheck,
     check_workflow_capability,
 )
+from services.comfyui.template import errors as template_errors
 from services.comfyui.template.remap import (
     PROTECTED_IMAGE_INPUTS,
     UploadCallback,
@@ -119,13 +120,18 @@ def _check_user_input_constraints(
     required = _required_input_keys(analysis)
     seen: set[tuple[str, str]] = set()
 
+    def _constraint_fail(detail: str, **audit_extra) -> RunGateFailure:
+        stage, msg = template_errors.gate4_constraints_msg(detail)
+        return RunGateFailure(
+            gate=4, stage=stage, msg=msg,
+            audit_detail=audit_extra,
+        )
+
     for node_id, patch in (user_inputs or {}).items():
         if not isinstance(patch, Mapping):
-            raise RunGateFailure(
-                gate=4,
-                stage="gate4_constraints",
-                msg=f"user_inputs[{node_id}] 必須是物件",
-                audit_detail={"node_id": node_id, "type": type(patch).__name__},
+            raise _constraint_fail(
+                f"user_inputs[{node_id}] 必須是物件",
+                node_id=str(node_id), type=type(patch).__name__,
             )
         for input_name, value in patch.items():
             seen.add((str(node_id), str(input_name)))
@@ -138,64 +144,46 @@ def _check_user_input_constraints(
                 None,
             )
             if field_obj is None:
-                raise RunGateFailure(
-                    gate=4,
-                    stage="gate4_constraints",
-                    msg=f"user_inputs[{node_id}].{input_name} 不在可編輯欄位清單中",
-                    audit_detail={"node_id": node_id, "input_name": input_name},
+                raise _constraint_fail(
+                    f"user_inputs[{node_id}].{input_name} 不在可編輯欄位清單中",
+                    node_id=str(node_id), input_name=str(input_name),
                 )
             # Type / range checks. Spec says "numeric / enum / size".
             if field_obj.category == FieldCategory.NUMERIC:
                 if not isinstance(value, (int, float)) or isinstance(value, bool):
-                    raise RunGateFailure(
-                        gate=4,
-                        stage="gate4_constraints",
-                        msg=(
-                            f"user_inputs[{node_id}].{input_name} 必須是數值，"
-                            f"目前型別為 {type(value).__name__}"
-                        ),
-                        audit_detail={"node_id": node_id, "input_name": input_name},
+                    raise _constraint_fail(
+                        f"user_inputs[{node_id}].{input_name} 必須是數值，"
+                        f"目前型別為 {type(value).__name__}",
+                        node_id=str(node_id), input_name=str(input_name),
                     )
             elif field_obj.category == FieldCategory.TEXT:
                 if not isinstance(value, str):
-                    raise RunGateFailure(
-                        gate=4,
-                        stage="gate4_constraints",
-                        msg=(
-                            f"user_inputs[{node_id}].{input_name} 必須是字串，"
-                            f"目前型別為 {type(value).__name__}"
-                        ),
-                        audit_detail={"node_id": node_id, "input_name": input_name},
+                    raise _constraint_fail(
+                        f"user_inputs[{node_id}].{input_name} 必須是字串，"
+                        f"目前型別為 {type(value).__name__}",
+                        node_id=str(node_id), input_name=str(input_name),
                     )
                 if len(value) > 4000:
-                    raise RunGateFailure(
-                        gate=4,
-                        stage="gate4_constraints",
-                        msg=f"user_inputs[{node_id}].{input_name} 長度超過 4000 字元",
-                        audit_detail={"node_id": node_id, "input_name": input_name, "len": len(value)},
+                    raise _constraint_fail(
+                        f"user_inputs[{node_id}].{input_name} 長度超過 4000 字元",
+                        node_id=str(node_id), input_name=str(input_name), len=len(value),
                     )
             elif field_obj.category == FieldCategory.SAMPLER:
                 if not isinstance(value, str):
-                    raise RunGateFailure(
-                        gate=4,
-                        stage="gate4_constraints",
-                        msg=(
-                            f"user_inputs[{node_id}].{input_name} 必須是字串 (sampler enum)"
-                        ),
-                        audit_detail={"node_id": node_id, "input_name": input_name},
+                    raise _constraint_fail(
+                        f"user_inputs[{node_id}].{input_name} 必須是字串 (sampler enum)",
+                        node_id=str(node_id), input_name=str(input_name),
                     )
             # MODEL fields are validated by capability check (Gate 2).
             # IMAGE fields are protected; enforced in remap (Gate 5).
 
     missing = required - seen
     if missing:
+        sorted_missing = sorted(missing)
+        stage, msg = template_errors.gate4_inputs_msg(sorted_missing)
         raise RunGateFailure(
-            gate=4,
-            stage="gate4_inputs",
-            msg=(
-                f"必要欄位未填：{sorted(missing)}"
-            ),
-            audit_detail={"missing": sorted(missing)},
+            gate=4, stage=stage, msg=msg,
+            audit_detail={"missing": sorted_missing},
         )
 
 
@@ -267,40 +255,30 @@ def run_workflow_through_gates(
     try:
         sanitized_wrapper = sanitize_workflow_json(raw_workflow)
     except WorkflowValidationError as exc:
-        raise RunGateFailure(
-            gate=1,
-            stage="gate1_sanitize",
-            msg=str(exc),
-            audit_detail={},
-        ) from exc
+        stage, msg = template_errors.gate1_sanitize_msg(str(exc))
+        raise RunGateFailure(gate=1, stage=stage, msg=msg, audit_detail={}) from exc
     workflow = sanitized_wrapper.get("workflow_json") or {}
     try:
         analysis = analyze_workflow_json(workflow)
     except WorkflowValidationError as exc:
-        raise RunGateFailure(
-            gate=1,
-            stage="gate1_analyze",
-            msg=str(exc),
-            audit_detail={},
-        ) from exc
+        stage, msg = template_errors.gate1_analyze_msg(str(exc))
+        raise RunGateFailure(gate=1, stage=stage, msg=msg, audit_detail={}) from exc
 
     # ----- Gate 2: capability ---------------------------------------------
     capability = check_workflow_capability(analysis, client=comfyui_client)
     if capability.overall == "UNSUPPORTED":
+        stage, msg = template_errors.gate2_capability_msg(capability.unsupported)
         raise RunGateFailure(
-            gate=2,
-            stage="gate2_capability",
-            msg=f"本地 ComfyUI 缺少節點：{capability.unsupported}",
+            gate=2, stage=stage, msg=msg,
             audit_detail={
                 "unsupported": capability.unsupported,
                 "blockers": capability.blockers,
             },
         )
     if capability.missing_models:
+        stage, msg = template_errors.gate2_models_msg(capability.missing_models)
         raise RunGateFailure(
-            gate=2,
-            stage="gate2_models",
-            msg=f"缺少模型：{capability.missing_models}",
+            gate=2, stage=stage, msg=msg,
             audit_detail={"missing_models": capability.missing_models},
         )
 
@@ -308,10 +286,9 @@ def run_workflow_through_gates(
     try:
         enforce_allowlist(analysis)
     except SafetyError as exc:
+        stage, msg = template_errors.gate3_allowlist_msg(str(exc))
         raise RunGateFailure(
-            gate=3,
-            stage="gate3_allowlist",
-            msg=str(exc),
+            gate=3, stage=stage, msg=msg,
             audit_detail={"unknown_or_denied": sorted(
                 analysis.unknown_classes | analysis.denied_classes
             )},
@@ -344,12 +321,8 @@ def run_workflow_through_gates(
             user_inputs=user_inputs or {},
         )
     except SafetyError as exc:
-        raise RunGateFailure(
-            gate=5,
-            stage="gate5_safety",
-            msg=str(exc),
-            audit_detail={},
-        ) from exc
+        stage, msg = template_errors.gate5_safety_msg(str(exc))
+        raise RunGateFailure(gate=5, stage=stage, msg=msg, audit_detail={}) from exc
 
     return RunGateResult(
         workflow=workflow,

@@ -60,6 +60,7 @@ from services.comfyui.template.run_gate import (
     RunGateResult,
     run_workflow_through_gates,
 )
+from services.comfyui.template import errors
 
 __all__ = [
     "ALLOWED_IMAGE_EXTENSIONS",
@@ -72,6 +73,7 @@ __all__ = [
     "PreviewStore",
     "RunGateFailure",
     "RunGateResult",
+    "errors",
     "UploadCallback",
     "get_default_preview_store",
     "remap_load_image_to_cloud_file",
