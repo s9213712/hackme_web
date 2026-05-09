@@ -100,6 +100,34 @@ def test_scripts_index_check_requires_registered_security_scripts(tmp_path):
     assert scripts_index_check.run(ctx).status != FAIL
 
 
+def test_scripts_index_check_requires_registered_user_facing_game_and_trading_scripts(tmp_path):
+    game_dir = tmp_path / "scripts" / "games"
+    trading_dir = tmp_path / "scripts" / "trading" / "probes"
+    game_dir.mkdir(parents=True)
+    trading_dir.mkdir(parents=True)
+    (game_dir / "new_trainer.py").write_text("print('train')\n", encoding="utf-8")
+    (trading_dir / "new_probe.py").write_text("print('probe')\n", encoding="utf-8")
+    index = tmp_path / "scripts" / "INDEX.md"
+    index.write_text("# Scripts Index\n", encoding="utf-8")
+
+    ctx = make_ctx(tmp_path)
+    result = scripts_index_check.run(ctx)
+
+    assert result.status == FAIL
+    assert result.name == "scripts index"
+    assert result.details == [
+        {"script": "scripts/games/new_trainer.py"},
+        {"script": "scripts/trading/probes/new_probe.py"},
+    ]
+
+    index.write_text(
+        "`scripts/games/new_trainer.py` | Games | Train | runtime/reports/games | Training failed |\n"
+        "`scripts/trading/probes/new_probe.py` | Trading | Probe | stdout | Probe failed |\n",
+        encoding="utf-8",
+    )
+    assert scripts_index_check.run(ctx).status != FAIL
+
+
 def test_gitkeep_is_not_forbidden_runtime_artifact():
     assert forbidden_paths_check.is_forbidden("runtime/.gitkeep") is False
     assert forbidden_paths_check.is_forbidden("runtime/storage/.gitkeep") is False

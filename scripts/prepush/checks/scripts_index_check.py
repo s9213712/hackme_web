@@ -7,9 +7,11 @@ from scripts.prepush.result import CheckResult
 
 
 WATCHED_ROOTS = (
+    Path("scripts/games"),
     Path("scripts/on_live_reports"),
     Path("scripts/security"),
     Path("scripts/testing"),
+    Path("scripts/trading"),
 )
 SCRIPT_SUFFIXES = {".py", ".sh"}
 HELPER_NAMES = {"__init__.py", "common_paths.py"}

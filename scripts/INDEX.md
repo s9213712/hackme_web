@@ -72,11 +72,23 @@ scripts.
 | `scripts/comfyui/feature_probe.py` | ComfyUI probe | ComfyUI | Probe local ComfyUI capability metadata. | Console output | Local ComfyUI capability detection failed. |
 | `scripts/comfyui/local_connection_smoke.py` | ComfyUI smoke | ComfyUI | Check local ComfyUI connectivity. | Console output | Local ComfyUI is unreachable or incompatible. |
 | `scripts/comfyui/materialize_system_workflows.py` | ComfyUI operator | ComfyUI | Materialize system workflow presets. | Runtime/database changes in selected environment | Workflow preset materialization failed. |
+| `scripts/games/chess_exp1_dataset_train.py` | Chess training | Games / ML | Train exp1 from replay-derived FEN/move JSONL datasets. | Target chess experiment DB path | Dataset parsing or exp1 training failed. |
+| `scripts/games/chess_exp2_dataset_train.py` | Chess training | Games / ML | Train exp2 neural model from replay-derived datasets. | Target exp2 model path | Dataset parsing or exp2 training failed. |
+| `scripts/games/chess_exp3_dataset_train.py` | Chess training | Games / ML | Train exp3 deep-learning model from external or teacher-distilled datasets. | Target exp3 model/replay paths | Dataset parsing, teacher distillation, or exp3 training failed. |
+| `scripts/games/chess_exp4_dataset_train.py` | Chess training | Games / ML | Train exp4 policy/value model from replay-derived datasets. | Target exp4 model path | Dataset parsing or exp4 training failed. |
+| `scripts/games/chess_live_learning_validation.py` | Chess validation | Games / QA | Validate live replay classification, quarantine, retraining, and promotion behavior. | `/tmp/chess_live_learning_validation_*` or selected output root | Chess live-learning regression or promotion gate behavior failed. |
+| `scripts/games/chess_model_import.py` | Chess operator | Games / ML | Validate and install external chess model weights. | Target runtime model path or validation JSON | Model shape, metadata, or install validation failed. |
+| `scripts/games/chess_replay_prepare.py` | Chess dataset prep | Games / ML | Build filtered train/eval JSONL datasets from replay ledgers. | Selected output directory under reports/runtime | Replay filtering or dataset generation failed. |
+| `scripts/games/chess_seed_train.py` | Chess training | Games / ML | Train directly usable seed artifacts for chess experiment engines. | `runtime/games/models/` and `runtime/reports/games/` or explicit paths | Seed training, smoke, or benchmark failed. |
+| `scripts/games/chess_self_play_train.py` | Chess training | Games / ML | Train chess practice engines through automated self-play. | `runtime/games/models/` and `runtime/reports/games/` or explicit paths | Self-play training, smoke, or benchmark failed. |
+| `scripts/games/chess_train_pipeline.py` | Chess pipeline | Games / ML | Run replay preparation, training, benchmark, staging, and promotion pipeline. | `runtime/reports/games/chess_train_pipeline_*` plus candidate model paths | Pipeline stage, benchmark, staging, or promotion failed. |
 | `scripts/prepush/pre_push_checks.py` | Pre-push runner | Release / QA | Run local pre-push checks. | Console output | The branch is not ready to push. |
+| `scripts/trading/bridges/btc_signal_bridge.py` | Trading bridge | Trading / Integration | Bridge optional BTC_trade runtime signals into hackme_web simulated spot orders. | Console JSON/status and trading DB side effects | BTC_trade status read or bridge order placement failed. |
 | `scripts/trading/validation/trading_exchange_validation.py` | Trading validation | Trading | Validate exchange integration assumptions. | Console output | Exchange integration is unavailable or inconsistent. |
 | `scripts/trading/validation/trading_workflow_template_validation.py` | Trading validation | Trading | Validate trading workflow templates. | Console output | Trading workflow template behavior regressed. |
 | `scripts/trading/competition/trading_backtest_benchmark.py` | Trading benchmark | Trading | Benchmark trading backtest behavior. | Benchmark output | Performance or correctness expectations failed. |
 | `scripts/trading/competition/workflow_template_backtest_benchmark.py` | Trading benchmark | Trading | Benchmark workflow-template backtests. | Benchmark output | Workflow backtest behavior or performance regressed. |
+| `scripts/trading/probes/backtest_20000_probe.py` | Trading probe | Trading / QA | Probe 20,000-candle segmented backtests and route payload behavior. | Console JSON or `--json-out` path | Backtest segmentation, route payload, or edge-case handling failed. |
 
 ## Wrapper Registration
 
