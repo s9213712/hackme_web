@@ -32,7 +32,8 @@ def test_video_platform_accepts_audio_media_in_ui():
     assert "browserSupportsNativeHls" in videos_js
     assert "loadVideoHlsLibrary" in videos_js
     assert "attachVideoHlsJsPlayer" in videos_js
-    assert "/js/vendor/hls.light.min.js?v=20260505-hlsjs" in videos_js
+    assert "/js/hls.light.min.js?v=20260505-hlsjs" in videos_js
+    assert "/js/vendor/hls.light.min.js" not in videos_js
     assert "HLS.js" in videos_js
     assert "HLS 串流" in videos_js
     assert "function humanVideoStreamStatus" in videos_js
@@ -40,6 +41,8 @@ def test_video_platform_accepts_audio_media_in_ui():
     assert "prepareVideoStream" in videos_js
     assert "VIDEO_SHARE_FRAGMENT_STORAGE_KEY" in videos_js
     assert "VIDEO_E2EE_STREAM_V2_WORKER_URL" in videos_js
+    assert "/js/e2ee-stream-v2-worker.js?v=20260505-e2eev2" in videos_js
+    assert "/js/workers/e2ee-stream-v2-worker.js" not in videos_js
     assert "buildVideoE2eeShareEnvelope" in videos_js
     assert "prepareVideoE2eeShareArtifacts" in videos_js
     assert "buildVideoE2eeStreamV2Package" in videos_js
@@ -115,6 +118,10 @@ def test_video_share_copy_and_shared_page_guardrails_are_visible_in_ui_code():
     assert "AbortController" in shared_page
     assert "setTimeout(() => controller.abort(), 10000);" in shared_page
     assert 'loadSharedVideo().catch((err) => setMsg(err.message || "分享影音載入失敗", true));' in shared_page
+    assert "/js/hls.light.min.js?v=20260505-hlsjs" in shared_page
+    assert "/js/e2ee-stream-v2-worker.js?v=20260505-e2eev2" in shared_page
+    assert "/js/vendor/hls.light.min.js" not in shared_page
+    assert "/js/workers/e2ee-stream-v2-worker.js" not in shared_page
 
 
 def test_shared_video_page_layout_is_viewport_bounded():
@@ -125,3 +132,5 @@ def test_shared_video_page_layout_is_viewport_bounded():
     assert "max-height:min(64dvh, 560px)" in html
     assert "max-height:min(48dvh, calc(100dvh - 210px))" in html
     assert "@media (max-height: 520px) and (orientation: landscape)" in html
+    assert 'mimetype="text/html"' in html
+    assert 'mimetype="text/html; charset=utf-8"' not in html

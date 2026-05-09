@@ -411,7 +411,7 @@ Release ID: `2026.05.07-155`
 ## 2026.05.05-122
 
 - `deploy.sh` now supports `--with-civitai-key '<CIVITAI_API_KEY>'`, so first-time deployments can seed root-only Civitai search/download access without manually editing `.env`.
-- `scripts/run_prod.sh --check` now reports optional capability status for `ffmpeg` / `ffprobe` (video HLS derivative pipeline), `CIVITAI_API_KEY` (root-only Civitai search/download), and the canonical offline root recovery entrypoint `python3 scripts/root_recovery.py`.
+- `python3 server.py --doctor` now reports deployment environment readiness, and the canonical offline root recovery entrypoint is `python3 scripts/admin/root_recovery.py`.
 - Deployment docs and quickstart guides now explain that these checks are advisory capability hints rather than hard blockers for normal deployment.
 
 ## 2026.05.05-121
@@ -430,12 +430,12 @@ Release ID: `2026.05.07-155`
 
 - Expanded the security validation script suite instead of only relying on product tests: `functional_permission_pentest.py` now covers root-only ComfyUI / Civitai search, inspect, model upload, and download-job endpoints across anonymous, user, manager, and root roles.
 - `trading_stress_pentest.py` now forces a conservative fused-price state and verifies that degraded `risk-grade price` input blocks high-risk market orders and financing opens rather than silently leaking degraded data into trading.
-- `video_module_pentest.py` now covers manager-side unlisted share-link regeneration, strict E2EE shared-video envelope boundaries, and revoked share-link blocking; `run_functional_smoke.sh` also confirms that the offline `scripts/root_recovery.py` CLI remains available.
+- `video_module_pentest.py` now covers manager-side unlisted share-link regeneration, strict E2EE shared-video envelope boundaries, and revoked share-link blocking; `run_functional_smoke.sh` also confirms that the offline `scripts/admin/root_recovery.py` CLI remains available.
 
 ## 2026.05.05-118
 
 - `root` 已正式脫離一般 Web 忘記密碼流程：`/api/password-reset/request` 與 `/api/password-reset/confirm` 對 root 帳號都會拒絕，避免把最高權限帳號降級成一般 email token / review reset 模式。
-- 新增離線 `scripts/root_recovery.py`，可在實體 runtime 上直接重設 root 臨時密碼、撤銷既有 session、清掉 CSRF token，並要求下次登入立刻修改密碼。
+- 新增離線 `scripts/admin/root_recovery.py`，可在實體 runtime 上直接重設 root 臨時密碼、撤銷既有 session、清掉 CSRF token，並要求下次登入立刻修改密碼。
 - README、Admin Guide、CLI Playbook、Troubleshooting、API Reference 與 QA 文件已同步改成以 offline root recovery CLI 為正式補救路徑。
 
 ## 2026.05.05-117

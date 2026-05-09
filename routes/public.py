@@ -4,6 +4,7 @@ import os
 import re
 import sqlite3
 import time
+import unicodedata
 from datetime import datetime, timedelta
 
 import argon2
@@ -24,6 +25,15 @@ from services.users.profiles import clear_profile_appearance, get_profile_appear
 
 
 def register_public_routes(app, deps):
+    RESERVED_REGISTRATION_USERNAMES = {"root", "admin", "test", "system", "anonymous"}
+    RESERVED_USERNAME_CONFUSABLE_TRANS = str.maketrans({
+        "0": "o",
+        "1": "l",
+        "3": "e",
+        "4": "a",
+        "5": "s",
+        "7": "t",
+    })
     CSRF_TOKEN_TTL = deps["CSRF_TOKEN_TTL"]
     PUBLIC_DIR = deps["PUBLIC_DIR"]
     ROLE_LABEL = deps["ROLE_LABEL"]
@@ -101,6 +111,11 @@ def register_public_routes(app, deps):
 
     def generic_recovery_response():
         return json_resp({"ok": True, "msg": "如果資料符合，系統會寄出後續操作通知"})
+
+    def reserved_registration_username(username):
+        folded = unicodedata.normalize("NFKC", str(username or "")).strip().casefold()
+        skeleton = folded.translate(RESERVED_USERNAME_CONFUSABLE_TRANS)
+        return folded in RESERVED_REGISTRATION_USERNAMES or skeleton in RESERVED_REGISTRATION_USERNAMES
 
     def password_reset_mode():
         mode = str(get_system_settings().get("password_reset_mode") or "admin_review").strip().lower()
@@ -490,6 +505,9 @@ def register_public_routes(app, deps):
         if len(username) > 32: return json_resp({"ok":False,"msg":"帳號最長 32 字元", "field": "username"}), 400
         if not re.fullmatch(r"[a-zA-Z0-9_\-]+", username):
             return json_resp({"ok":False,"msg":"帳號只能包含英文、數字、底線、減號", "field": "username"}), 400
+        if reserved_registration_username(username):
+            audit("REGISTER_RESERVED", ip, username, ua=ua, success=False)
+            return json_resp({"ok": False, "msg": "此帳號為系統保留字", "field": "username"}), 400
         if not nickname:
             return json_resp({"ok":False,"msg":"暱稱不可為空", "field": "nickname"}), 400
         if data.get("email") and not email:
@@ -516,7 +534,7 @@ def register_public_routes(app, deps):
 
         conn = get_db()
         try:
-            existing = conn.execute("SELECT 1 FROM users WHERE username=?",(username,)).fetchone()
+            existing = conn.execute("SELECT 1 FROM users WHERE lower(username)=lower(?)",(username,)).fetchone()
             if existing:
                 timing_delay()
                 audit("REGISTER_DUP", ip, username, ua=ua, success=False)

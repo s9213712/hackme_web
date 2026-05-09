@@ -543,7 +543,7 @@ def register_user_routes(app, deps):
         now = datetime.now().isoformat()
         conn.execute(
             "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (?, ?, ?)",
-            (request_row["user_id"], hash_password(password), now),
+            (request_row["user_id"], hash_password(new_credential), now),
         )
         conn.execute(
             """

@@ -13,8 +13,8 @@ const videoState = {
 };
 let videoPublishDriveFiles = [];
 const VIDEO_SHARE_FRAGMENT_STORAGE_KEY = "hackme_web.video_share_fragments";
-const VIDEO_HLS_JS_URL = "/js/vendor/hls.light.min.js?v=20260505-hlsjs";
-const VIDEO_E2EE_STREAM_V2_WORKER_URL = "/js/workers/e2ee-stream-v2-worker.js?v=20260505-e2eev2";
+const VIDEO_HLS_JS_URL = "/js/hls.light.min.js?v=20260505-hlsjs";
+const VIDEO_E2EE_STREAM_V2_WORKER_URL = "/js/e2ee-stream-v2-worker.js?v=20260505-e2eev2";
 const VIDEO_E2EE_STREAM_V2_CHUNK_SIZE = 512 * 1024;
 
 function videoMsg(text, ok = true) {

@@ -135,6 +135,14 @@ def test_admin_users_post_uses_method_aware_csrf_guard():
     assert '@app.route("/api/admin/users", methods=["GET","POST"])\n    @require_csrf_by_method' in users
 
 
+def test_admin_password_reset_review_hashes_reviewed_credential():
+    users = (ROOT / "routes" / "users.py").read_text(encoding="utf-8")
+    reset_helper = users.split("def _apply_reviewed_password_reset", 1)[1].split("def admin_users", 1)[0]
+
+    assert "hash_password(new_credential)" in reset_helper
+    assert "hash_password(password)" not in reset_helper
+
+
 def test_user_demote_accepts_optional_json_body_and_frontend_sends_json():
     users = (ROOT / "routes" / "users.py").read_text(encoding="utf-8")
     auth_users_js = (ROOT / "public" / "js" / "40-auth-users.js").read_text(encoding="utf-8")

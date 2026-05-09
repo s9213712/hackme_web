@@ -154,7 +154,7 @@
     return Boolean(window.MediaSource && window.Worker && window.crypto?.subtle);
   }
   function createSharedE2eeWorker() {
-    return new Worker("/js/workers/e2ee-stream-v2-worker.js?v=20260505-e2eev2");
+    return new Worker("/js/e2ee-stream-v2-worker.js?v=20260505-e2eev2");
   }
   function decryptSharedChunkWithWorker(worker, keyBytes, nonce, ciphertext) {
     return new Promise((resolve, reject) => {
@@ -445,7 +445,7 @@
     }
     if (playback.mode === "hls" && playback.master_url) {
       try {
-        const Hls = await loadSharedHlsLibrary(playback.hls_js_url || "/js/vendor/hls.light.min.js?v=20260505-hlsjs");
+        const Hls = await loadSharedHlsLibrary(playback.hls_js_url || "/js/hls.light.min.js?v=20260505-hlsjs");
         if (!Hls || typeof Hls.isSupported !== "function" || !Hls.isSupported()) {
           throw new Error("目前瀏覽器不支援 HLS.js 所需的 MediaSource");
         }

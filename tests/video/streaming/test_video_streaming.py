@@ -1009,7 +1009,7 @@ def test_shared_video_page_mentions_hls_js_fallback_and_fragment_loss(tmp_path):
     assert '<script id="share-token" type="application/json">' in html
     assert 'id="player-action"' in html
     assert "loadSharedHlsLibrary" in js
-    assert "/js/vendor/hls.light.min.js?v=20260505-hlsjs" in js
+    assert "/js/hls.light.min.js?v=20260505-hlsjs" in js
     assert "Chrome / Firefox / Edge" in js
     assert "完整連結" in js
     assert "無法復原" in js
