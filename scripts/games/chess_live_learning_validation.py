@@ -53,7 +53,7 @@ TOTAL_GAMES = 25
 INVALID_GAMES = 5
 VALID_GAMES = TOTAL_GAMES - INVALID_GAMES
 MAX_PLIES = 180
-AUTORUN_THRESHOLD = 5
+AUTORUN_THRESHOLD = 10
 MIN_VALID_PLIES = 16
 RETRAIN_ENGINE_ALIASES = {"exp2", "exp3", "exp4"}
 HUMAN_PROBE_OPENINGS = (
@@ -73,6 +73,21 @@ HUMAN_PROBE_OPENINGS = (
         "moves": ["d2d4", "c2c4", "b1c3", "c1g5"],
     },
     {
+        "label": "white_fried_liver_probe",
+        "human_side": "white",
+        "moves": ["e2e4", "g1f3", "f1c4", "f3g5"],
+    },
+    {
+        "label": "white_london_pressure",
+        "human_side": "white",
+        "moves": ["d2d4", "g1f3", "c1f4", "e2e3"],
+    },
+    {
+        "label": "white_english_probe",
+        "human_side": "white",
+        "moves": ["c2c4", "g2g3", "f1g2", "b1c3"],
+    },
+    {
         "label": "black_scholars_counterprobe",
         "human_side": "black",
         "moves": ["e7e5", "d8h4", "f8c5", "h4f2"],
@@ -86,6 +101,21 @@ HUMAN_PROBE_OPENINGS = (
         "label": "black_scandinavian_probe",
         "human_side": "black",
         "moves": ["d7d5", "d8d5", "b8c6", "c8g4"],
+    },
+    {
+        "label": "black_french_counterprobe",
+        "human_side": "black",
+        "moves": ["e7e6", "d7d5", "g8f6", "f8b4"],
+    },
+    {
+        "label": "black_caro_kann_probe",
+        "human_side": "black",
+        "moves": ["c7c6", "d7d5", "c8f5", "e7e6"],
+    },
+    {
+        "label": "black_pirc_probe",
+        "human_side": "black",
+        "moves": ["d7d6", "g8f6", "g7g6", "f8g7"],
     },
 )
 FIXED_PROBE_POSITIONS = (
@@ -107,6 +137,26 @@ FIXED_PROBE_POSITIONS = (
     {
         "id": "queen_hanging_white",
         "fen": "4k3/8/8/8/8/8/4r3/4KQ2 w - - 0 1",
+        "side": "white",
+    },
+    {
+        "id": "mate_in_one_black",
+        "fen": "8/8/8/8/8/6k1/5q2/6K1 b - - 0 1",
+        "side": "black",
+    },
+    {
+        "id": "promotion_white",
+        "fen": "k7/4P3/2K5/8/8/8/8/8 w - - 0 1",
+        "side": "white",
+    },
+    {
+        "id": "avoid_stalemate_white",
+        "fen": "k7/3Q4/2K5/8/8/8/8/8 w - - 0 1",
+        "side": "white",
+    },
+    {
+        "id": "free_queen_white",
+        "fen": "4k3/8/8/8/8/8/4q3/4KQ2 w - - 0 1",
         "side": "white",
     },
 )
@@ -131,7 +181,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-plies", type=int, default=MAX_PLIES)
     parser.add_argument("--wait-timeout", type=int, default=1800, help="Seconds to wait for autorun pipeline completion.")
     parser.add_argument("--engines", default="", help="Optional comma-separated subset: exp1,exp2,exp3,exp4")
-    parser.add_argument("--autorun-threshold", type=int, default=AUTORUN_THRESHOLD, help="Trusted replay count required before auto-retrain is launched for exp2/exp3.")
+    parser.add_argument("--autorun-threshold", type=int, default=AUTORUN_THRESHOLD, help="Trusted replay count required before auto-retrain is launched for exp2/exp3/exp4.")
+    parser.add_argument("--fast-retrain", action="store_true", help="Skip retrain checkpoint benchmarks plus autorun pipeline benchmark/promotion.")
+    parser.add_argument("--skip-autorun-benchmark", action="store_true", help="Set HTML_LEARNING_CHESS_AUTORUN_SKIP_BENCHMARK=1 before launching autorun retrain.")
+    parser.add_argument("--skip-autorun-promote", action="store_true", help="Set HTML_LEARNING_CHESS_AUTORUN_SKIP_PROMOTE=1 before launching autorun retrain.")
+    parser.add_argument("--skip-retrain-benchmark-snapshots", action="store_true", help="Skip validation benchmark snapshots before/after each retrain checkpoint.")
     return parser.parse_args()
 
 
@@ -245,10 +299,20 @@ def _run_json_subprocess(cmd: list[str], *, cwd: Path) -> dict:
     return payload
 
 
-def _set_runtime_env(runtime_dir: Path, *, min_usable_replays: int) -> None:
+def _set_runtime_env(
+    runtime_dir: Path,
+    *,
+    min_usable_replays: int,
+    skip_autorun_benchmark: bool = False,
+    skip_autorun_promote: bool = False,
+) -> None:
     os.environ["HACKME_RUNTIME_DIR"] = str(runtime_dir)
     os.environ["PYTHONPATH"] = str(ROOT)
     os.environ["HTML_LEARNING_CHESS_RETRAIN_MIN_REPLAYS"] = str(int(min_usable_replays))
+    if skip_autorun_benchmark:
+        os.environ["HTML_LEARNING_CHESS_AUTORUN_SKIP_BENCHMARK"] = "1"
+    if skip_autorun_promote:
+        os.environ["HTML_LEARNING_CHESS_AUTORUN_SKIP_PROMOTE"] = "1"
 
 
 def _move_uci(entry: dict) -> str:
@@ -325,9 +389,35 @@ def _engine_verdict(summary: dict) -> str:
         return "PARTIAL"
     benchmark_before = summary.get("before_after_eval", {}).get("benchmark_before") or {}
     benchmark_after = summary.get("before_after_eval", {}).get("benchmark_after") or {}
-    if float(benchmark_after.get("legal_rate") or 0.0) - float(benchmark_before.get("legal_rate") or 0.0) < -0.05:
+    benchmark_skipped = bool(benchmark_before.get("skipped") or benchmark_after.get("skipped"))
+    if not benchmark_skipped and float(benchmark_after.get("legal_rate") or 0.0) - float(benchmark_before.get("legal_rate") or 0.0) < -0.05:
         return "PARTIAL"
     return "PASS"
+
+
+def _summary_benchmark_skipped(summary: dict) -> bool:
+    before = summary.get("before_after_eval", {}).get("benchmark_before") or {}
+    after = summary.get("before_after_eval", {}).get("benchmark_after") or {}
+    return bool(before.get("skipped") or after.get("skipped"))
+
+
+def _summary_benchmark_changed(summary: dict) -> bool:
+    if _summary_benchmark_skipped(summary):
+        return False
+    before = summary.get("before_after_eval", {}).get("benchmark_before") or {}
+    after = summary.get("before_after_eval", {}).get("benchmark_after") or {}
+    return bool(before.get("win_rate") != after.get("win_rate") or before.get("low_quality_rate") != after.get("low_quality_rate"))
+
+
+def _summary_benchmark_expectation_met(summary: dict) -> bool:
+    if _summary_benchmark_skipped(summary):
+        return True
+    before = summary.get("before_after_eval", {}).get("benchmark_before") or {}
+    after = summary.get("before_after_eval", {}).get("benchmark_after") or {}
+    return bool(
+        (after.get("win_rate") or 0.0) >= (before.get("win_rate") or 0.0)
+        and (after.get("low_quality_rate") or 1.0) <= (before.get("low_quality_rate") or 1.0)
+    )
 
 
 def _piece_value(piece_symbol: str | None) -> int:
@@ -502,6 +592,7 @@ def _simulate_valid_game(
             result_reason = str(status_before.get("reason") or "")
             break
         board_before = str(board.get("__fen__") or "")
+        think_started = time.perf_counter()
         if mover == human_side:
             move, script_index, decision_source = _choose_human_move(
                 board,
@@ -516,6 +607,7 @@ def _simulate_valid_game(
             move = choose_computer_move(board, mover, engine_name, learning_store=store)
             is_computer = True
             decision_source = f"engine_{engine_name}"
+        think_ms = round((time.perf_counter() - think_started) * 1000.0, 3)
         if not move:
             break
         applied = validate_move(board, mover, move["from"], move["to"], move.get("promotion"))
@@ -542,6 +634,7 @@ def _simulate_valid_game(
                 "fen_before": board_before,
                 "fen_after": str(board.get("__fen__") or ""),
                 "decision_source": decision_source,
+                "think_ms": think_ms,
             }
         )
         status_after = game_status(board, opponent(mover))
@@ -770,6 +863,132 @@ def _blunder_then_resign_game(*, engine_name: str, game_id: int, actor_username:
     )
 
 
+def _short_low_signal_game(*, engine_name: str, game_id: int, actor_username: str, existing_signatures: set[str]) -> PlannedGame:
+    board = initial_board()
+    flow = []
+    history = []
+    script = [
+        ("white", "e2", "e4", None),
+        ("black", "e7", "e5", None),
+        ("white", "d1", "h5", None),
+    ]
+    for ply, (side, from_square, to_square, promotion) in enumerate(script, start=1):
+        before = str(board.get("__fen__") or "")
+        legal = legal_moves(board, side)
+        piece = next(move["piece"] for move in legal if move["from"] == from_square and move["to"] == to_square)
+        applied = validate_move(board, side, from_square, to_square, promotion)
+        entry = {
+            "by": side,
+            "from": from_square,
+            "to": to_square,
+            "piece": piece,
+            "captured": applied.get("captured"),
+            "promotion": promotion,
+            "computer": side == "black",
+            "at": _utc_now(),
+        }
+        board = applied["board"]
+        history.append(entry)
+        flow.append(
+            {
+                "ply": ply,
+                "by": side,
+                "role": "computer" if side == "black" else "human",
+                "move_uci": _move_uci(entry),
+                "captured": applied.get("captured"),
+                "fen_before": before,
+                "fen_after": str(board.get("__fen__") or ""),
+                "note": "intentionally short low-signal trap",
+            }
+        )
+    row = {
+        "id": game_id,
+        "game_key": "chess",
+        "mode": "computer",
+        "computer_difficulty": engine_name,
+        "human_side": "white",
+        "initial_fen": "",
+        "result_reason": "max_plies_low_signal_probe",
+        "updated_at": _utc_now(),
+        "move_history_json": json.dumps(history, ensure_ascii=False),
+    }
+    preview = _preview_record(row, winner_color=None, actor_username=actor_username, existing_signatures=existing_signatures)
+    return PlannedGame(
+        label="short_low_signal",
+        category="invalid_low_move_count",
+        expected_tier="quarantine",
+        row=row,
+        winner_color=None,
+        flow=flow,
+        notes=["short_low_signal_trap", "expected_low_move_count_quarantine"],
+        preview_record=preview,
+    )
+
+
+def _premature_resign_game(*, engine_name: str, game_id: int, actor_username: str, existing_signatures: set[str]) -> PlannedGame:
+    board = initial_board()
+    flow = []
+    history = []
+    script = [
+        ("white", "d2", "d4", None),
+        ("black", "d7", "d5", None),
+        ("white", "c2", "c4", None),
+        ("black", "e7", "e6", None),
+        ("white", "b1", "c3", None),
+    ]
+    for ply, (side, from_square, to_square, promotion) in enumerate(script, start=1):
+        before = str(board.get("__fen__") or "")
+        legal = legal_moves(board, side)
+        piece = next(move["piece"] for move in legal if move["from"] == from_square and move["to"] == to_square)
+        applied = validate_move(board, side, from_square, to_square, promotion)
+        entry = {
+            "by": side,
+            "from": from_square,
+            "to": to_square,
+            "piece": piece,
+            "captured": applied.get("captured"),
+            "promotion": promotion,
+            "computer": side == "black",
+            "at": _utc_now(),
+        }
+        board = applied["board"]
+        history.append(entry)
+        flow.append(
+            {
+                "ply": ply,
+                "by": side,
+                "role": "computer" if side == "black" else "human",
+                "move_uci": _move_uci(entry),
+                "captured": applied.get("captured"),
+                "fen_before": before,
+                "fen_after": str(board.get("__fen__") or ""),
+                "note": "premature resign trap before tactical resolution",
+            }
+        )
+    row = {
+        "id": game_id,
+        "game_key": "chess",
+        "mode": "computer",
+        "computer_difficulty": engine_name,
+        "human_side": "white",
+        "initial_fen": "",
+        "result_reason": "resign",
+        "updated_at": _utc_now(),
+        "move_history_json": json.dumps(history, ensure_ascii=False),
+    }
+    preview = _preview_record(row, winner_color="black", actor_username=actor_username, existing_signatures=existing_signatures)
+    return PlannedGame(
+        label="premature_resign",
+        category="invalid_premature_resign",
+        expected_tier="quarantine",
+        row=row,
+        winner_color="black",
+        flow=flow,
+        notes=["premature_resign_trap", "expected_early_resign_quarantine"],
+        preview_record=preview,
+    )
+
+
 def _plan_engine_games(
     *,
     engine_name: str,
@@ -789,24 +1008,27 @@ def _plan_engine_games(
     planned_signatures = {str(game.preview_record.get("duplicate_signature") or "") for game in valid_games}
     invalid_games = [
         _duplicate_game(valid_games[0], game_id=2001, actor_username=actor_username, existing_signatures=planned_signatures),
-        _duplicate_game(valid_games[1], game_id=2002, actor_username=actor_username, existing_signatures=planned_signatures),
         _meaningless_loop_game(
             engine_name=engine_name,
-            game_id=2003,
+            game_id=2002,
             human_side="white",
             actor_username=actor_username,
             existing_signatures=planned_signatures,
             variant=1,
         ),
-        _meaningless_loop_game(
+        _short_low_signal_game(
             engine_name=engine_name,
-            game_id=2004,
-            human_side="black",
+            game_id=2003,
             actor_username=actor_username,
             existing_signatures=planned_signatures,
-            variant=2,
         ),
         _blunder_then_resign_game(
+            engine_name=engine_name,
+            game_id=2004,
+            actor_username=actor_username,
+            existing_signatures=planned_signatures,
+        ),
+        _premature_resign_game(
             engine_name=engine_name,
             game_id=2005,
             actor_username=actor_username,
@@ -821,11 +1043,11 @@ def _plan_engine_games(
 
 def _extract_engine_move_samples(valid_games: list[PlannedGame]) -> list[dict]:
     samples: list[dict] = []
-    for game in valid_games:
+    for game_index, game in enumerate(valid_games, start=1):
         history = json.loads(game.row["move_history_json"] or "[]")
         board = initial_board()
         engine_side = opponent(str(game.row.get("human_side") or "white"))
-        for entry in history:
+        for ply, entry in enumerate(history, start=1):
             mover = str((entry or {}).get("by") or "").strip().lower()
             from_square = str((entry or {}).get("from") or "").strip().lower()
             to_square = str((entry or {}).get("to") or "").strip().lower()
@@ -836,6 +1058,10 @@ def _extract_engine_move_samples(valid_games: list[PlannedGame]) -> list[dict]:
                         "fen": str(board.get("__fen__") or ""),
                         "move_uci": f"{from_square}{to_square}{promotion or ''}",
                         "side": mover,
+                        "game_index": game_index,
+                        "game_id": int(game.row.get("id") or 0),
+                        "game_label": game.label,
+                        "ply": ply,
                     }
                 )
             board = validate_move(board, mover, from_square, to_square, promotion)["board"]
@@ -962,6 +1188,370 @@ def _evaluate_fixed_probe_positions(engine_alias: str, model_path: Path) -> dict
     }
 
 
+def _evaluate_retention_probe(engine_alias: str, before_model_path: Path, after_model_path: Path, samples: list[dict]) -> dict:
+    if not samples:
+        return {"supported": False, "reason": "no_old_samples", "counted_as_game": False}
+    sample = samples[0]
+    board_state = {"__fen__": str(sample.get("fen") or "")}
+    side = str(sample.get("side") or "white")
+    expected_move = str(sample.get("move_uci") or "").lower()
+    before_move = _choose_engine_move_for_eval(engine_alias, board_state, side, before_model_path)
+    after_move = _choose_engine_move_for_eval(engine_alias, board_state, side, after_model_path)
+    before_uci = _move_uci(before_move or {})
+    after_uci = _move_uci(after_move or {})
+    before_matches = before_uci == expected_move
+    after_matches = after_uci == expected_move
+    return {
+        "supported": True,
+        "counted_as_game": False,
+        "source": "old_trusted_engine_move",
+        "game_index": int(sample.get("game_index") or 0),
+        "game_id": int(sample.get("game_id") or 0),
+        "game_label": str(sample.get("game_label") or ""),
+        "ply": int(sample.get("ply") or 0),
+        "fen": str(sample.get("fen") or ""),
+        "side": side,
+        "expected_move": expected_move,
+        "before_move": before_uci,
+        "after_move": after_uci,
+        "before_matches_expected": before_matches,
+        "after_matches_expected": after_matches,
+        "model_response_changed": before_uci != after_uci,
+        "learning_signal": bool(after_matches or before_uci != after_uci),
+    }
+
+
+def _flow_timing_summary(games: list[PlannedGame]) -> dict:
+    values = []
+    by_role: dict[str, list[float]] = {}
+    for game in games:
+        for row in game.flow:
+            if "think_ms" not in row:
+                continue
+            try:
+                think_ms = float(row.get("think_ms") or 0.0)
+            except Exception:
+                continue
+            values.append(think_ms)
+            role = str(row.get("role") or "unknown")
+            by_role.setdefault(role, []).append(think_ms)
+    role_summary = {
+        role: {
+            "steps": len(items),
+            "avg_think_ms": round(sum(items) / len(items), 3) if items else 0.0,
+            "total_think_ms": round(sum(items), 3),
+        }
+        for role, items in sorted(by_role.items())
+    }
+    return {
+        "steps_measured": len(values),
+        "avg_think_ms_per_step": round(sum(values) / len(values), 3) if values else 0.0,
+        "total_think_ms": round(sum(values), 3),
+        "by_role": role_summary,
+    }
+
+
+def _checkpoint_timing_summary(checkpoints: list[dict]) -> dict:
+    retrain_seconds = [float(row.get("retrain_duration_seconds") or 0.0) for row in checkpoints]
+    checkpoint_seconds = [float(row.get("checkpoint_duration_seconds") or 0.0) for row in checkpoints]
+    return {
+        "checkpoint_count": len(checkpoints),
+        "total_retrain_seconds": round(sum(retrain_seconds), 3),
+        "avg_retrain_seconds": round(sum(retrain_seconds) / len(retrain_seconds), 3) if retrain_seconds else 0.0,
+        "total_checkpoint_seconds": round(sum(checkpoint_seconds), 3),
+        "avg_checkpoint_seconds": round(sum(checkpoint_seconds) / len(checkpoint_seconds), 3) if checkpoint_seconds else 0.0,
+    }
+
+
+def _game_phase_from_move_index(move_index: int) -> str:
+    if int(move_index or 0) <= 10:
+        return "opening"
+    if int(move_index or 0) <= 40:
+        return "middlegame"
+    return "endgame"
+
+
+def _rating_bucket(value) -> str:
+    try:
+        rating = int(value or 0)
+    except Exception:
+        rating = 0
+    if rating <= 0:
+        return "unknown"
+    if rating < 800:
+        return "under_800"
+    if rating < 1200:
+        return "800_1200"
+    if rating < 1600:
+        return "1200_1600"
+    return "1600_plus"
+
+
+def _dataset_integrity_summary(train_rows: list[dict], rejected_rows: list[dict], game_results: list[dict]) -> dict:
+    position_keys = []
+    invalid_fen = 0
+    illegal_moves = 0
+    side_mismatch = 0
+    terminal_positions = 0
+    mate_positions = 0
+    for row in train_rows:
+        fen = str(row.get("fen") or "")
+        side = str(row.get("side") or "").strip().lower()
+        move_uci = str(row.get("move_uci") or "").strip().lower()
+        key = f"{fen}|{side}|{move_uci}"
+        position_keys.append(key)
+        try:
+            board = chess.Board(fen)
+            if side and board.turn != (chess.WHITE if side == "white" else chess.BLACK):
+                side_mismatch += 1
+            if board.is_game_over():
+                terminal_positions += 1
+            if board.is_checkmate():
+                mate_positions += 1
+            try:
+                move = chess.Move.from_uci(move_uci)
+                if move not in board.legal_moves:
+                    illegal_moves += 1
+            except Exception:
+                illegal_moves += 1
+        except Exception:
+            invalid_fen += 1
+    unique_positions = len(set(position_keys))
+    total_rows = len(train_rows)
+    move_counts = []
+    short_resign_games = 0
+    for item in game_results:
+        stored = item.get("stored_replay") or {}
+        move_count = int(stored.get("move_count") or 0)
+        if move_count:
+            move_counts.append(move_count)
+        if str(stored.get("result_reason") or "").lower() == "resign" and move_count < 10:
+            short_resign_games += 1
+    return {
+        "total_rows": total_rows,
+        "accepted_rows": len(train_rows),
+        "rejected_rows": len(rejected_rows),
+        "unique_positions": unique_positions,
+        "duplicate_positions": max(0, total_rows - unique_positions),
+        "duplicate_ratio": round((max(0, total_rows - unique_positions) / total_rows), 4) if total_rows else 0.0,
+        "invalid_fen": invalid_fen,
+        "illegal_moves": illegal_moves,
+        "side_mismatch": side_mismatch,
+        "mate_positions": mate_positions,
+        "terminal_positions": terminal_positions,
+        "avg_game_length": round(sum(move_counts) / len(move_counts), 3) if move_counts else 0.0,
+        "short_resign_games": short_resign_games,
+    }
+
+
+def _replay_source_audit(game_results: list[dict]) -> dict:
+    sources = {"human_ranked": 0, "human_casual": 0, "engine_selfplay": 0, "synthetic": 0, "unknown": 0}
+    ratings = {"under_800": 0, "800_1200": 0, "1200_1600": 0, "1600_plus": 0, "unknown": 0}
+    for item in game_results:
+        category = str(item.get("category") or "")
+        stored = item.get("stored_replay") or {}
+        source = str(stored.get("source") or "").strip().lower()
+        if category.startswith("invalid_"):
+            sources["synthetic"] += 1
+        elif source == "user_games":
+            sources["human_casual"] += 1
+        elif source in {"self_play", "teacher_guidance", "benchmark"}:
+            sources["engine_selfplay"] += 1
+        else:
+            sources["unknown"] += 1
+        ratings[_rating_bucket(stored.get("rating_estimate"))] += 1
+    return {"replay_sources": sources, "rating_distribution": ratings}
+
+
+def _position_quality_summary(classification_rows: list[dict]) -> dict:
+    summary = {
+        "opening": {"trusted": 0, "quarantine": 0, "rejected": 0},
+        "middlegame": {"trusted": 0, "quarantine": 0, "rejected": 0},
+        "endgame": {"trusted": 0, "quarantine": 0, "rejected": 0},
+    }
+    for row in classification_rows:
+        move_count = int((row.get("stored_replay") or {}).get("move_count") or 0)
+        phase = _game_phase_from_move_index(move_count)
+        tier = str(row.get("actual_tier") or "rejected")
+        if tier not in summary[phase]:
+            tier = "rejected"
+        summary[phase][tier] += 1
+    return summary
+
+
+def _poison_detection_summary(classification_rows: list[dict]) -> dict:
+    total = max(1, len(classification_rows))
+    forced_repetition = 0
+    intentional_blunders = 0
+    engine_copy_suspected = 0
+    suspicious_resigns = 0
+    for row in classification_rows:
+        reasons = set(row.get("quarantine_reasons") or [])
+        label = str(row.get("label") or "")
+        if "suspicious_pattern" in reasons or "meaningless_loop" in label:
+            forced_repetition += 1
+        if "blunder" in label or "low_signal" in label:
+            intentional_blunders += 1
+        if row.get("duplicate_flag"):
+            engine_copy_suspected += 1
+        if "early_resign" in reasons:
+            suspicious_resigns += 1
+    return {
+        "forced_repetition_patterns": forced_repetition,
+        "intentional_blunders": intentional_blunders,
+        "engine_copy_suspected": engine_copy_suspected,
+        "suspicious_resign_rate": round(suspicious_resigns / total, 4),
+        "suspicious_resigns": suspicious_resigns,
+    }
+
+
+def _fixed_probe_regression(before_after_eval: dict, keywords: set[str]) -> float:
+    before_rows = (before_after_eval.get("fixed_probe_positions_before") or {}).get("positions") or []
+    after_rows = (before_after_eval.get("fixed_probe_positions_after") or {}).get("positions") or []
+    before_map = {str(row.get("position_id") or ""): row for row in before_rows}
+    after_map = {str(row.get("position_id") or ""): row for row in after_rows}
+    total = 0
+    regressed = 0
+    for position_id, before in before_map.items():
+        if not any(keyword in position_id for keyword in keywords):
+            continue
+        after = after_map.get(position_id) or {}
+        total += 1
+        before_ok = bool(before.get("legal")) and float(before.get("score") or 0) >= 0
+        after_ok = bool(after.get("legal")) and float(after.get("score") or 0) >= 0
+        if before_ok and not after_ok:
+            regressed += 1
+    return round(regressed / total, 4) if total else 0.0
+
+
+def _stability_summary(summary: dict) -> dict:
+    before_after = summary.get("before_after_eval") or {}
+    before_benchmark = before_after.get("benchmark_before") or {}
+    after_benchmark = before_after.get("benchmark_after") or {}
+    benchmark_skipped = bool(before_benchmark.get("skipped") or after_benchmark.get("skipped"))
+    illegal_move_delta = None
+    blunder_before = None
+    blunder_after = None
+    if not benchmark_skipped:
+        illegal_move_delta = round(float(after_benchmark.get("legal_rate") or 0.0) - float(before_benchmark.get("legal_rate") or 0.0), 4)
+        blunder_before = float(before_benchmark.get("low_quality_rate") or 0.0)
+        blunder_after = float(after_benchmark.get("low_quality_rate") or 0.0)
+    opening_regression = _fixed_probe_regression(before_after, {"opening", "scholar", "free_queen"})
+    tactical_regression = _fixed_probe_regression(before_after, {"mate", "fork", "capture", "queen", "rook"})
+    endgame_regression = _fixed_probe_regression(before_after, {"endgame", "promotion", "stalemate"})
+    catastrophic = bool(
+        (illegal_move_delta is not None and illegal_move_delta < -0.05)
+        or opening_regression > 0.10
+        or tactical_regression > 0.10
+        or endgame_regression > 0.10
+        or any(str(row.get("verdict") or "") == "FAIL" for row in before_after.get("checkpoints") or [])
+    )
+    return {
+        "catastrophic_regression": catastrophic,
+        "opening_regression": opening_regression,
+        "tactical_regression": tactical_regression,
+        "endgame_regression": endgame_regression,
+        "illegal_move_delta": illegal_move_delta,
+        "blunder_rate_before": blunder_before,
+        "blunder_rate_after": blunder_after,
+    }
+
+
+def _promotion_gate_summary(summary: dict) -> dict:
+    reasons = []
+    if summary.get("replay_summary", {}).get("trusted_replays") != VALID_GAMES:
+        reasons.append("insufficient trusted games")
+    if summary.get("replay_summary", {}).get("quarantine_replays") != INVALID_GAMES:
+        reasons.append("unexpected quarantine count")
+    if int((summary.get("dataset_integrity") or {}).get("contaminated_rows") or 0) > 0:
+        reasons.append("contaminated rows entered train dataset")
+    if float((summary.get("dataset_integrity") or {}).get("duplicate_ratio") or 0.0) > 0.25:
+        reasons.append("duplicate ratio exceeded threshold")
+    stability = summary.get("stability") or {}
+    if stability.get("catastrophic_regression"):
+        reasons.append("catastrophic regression detected")
+    if (summary.get("before_after_eval", {}).get("benchmark_before") or {}).get("skipped") or (summary.get("before_after_eval", {}).get("benchmark_after") or {}).get("skipped"):
+        reasons.append("benchmark skipped")
+    if str(summary.get("engine_verdict") or "") not in {"", "PASS"}:
+        reasons.append(f"engine verdict {summary.get('engine_verdict')}")
+    return {"passed": not reasons, "reasons": reasons}
+
+
+def _runtime_metrics_summary(summary: dict) -> dict:
+    dataset = summary.get("dataset_result") or {}
+    train_path = Path(str(dataset.get("train_dataset_path") or ""))
+    rejected_path = Path(str(dataset.get("rejected_dataset_path") or ""))
+    dataset_bytes = 0
+    for path in (train_path, rejected_path):
+        try:
+            if path.exists():
+                dataset_bytes += path.stat().st_size
+        except Exception:
+            continue
+    retrain_timing = summary.get("retrain_timing") or {}
+    eval_before = summary.get("evaluation_before") or {}
+    eval_after = summary.get("evaluation_after") or {}
+    return {
+        "train_seconds": retrain_timing.get("total_retrain_seconds", 0.0),
+        "eval_seconds": round((float(eval_before.get("total_think_ms") or 0.0) + float(eval_after.get("total_think_ms") or 0.0)) / 1000.0, 3),
+        "peak_memory_mb": None,
+        "checkpoint_count": retrain_timing.get("checkpoint_count", 0),
+        "dataset_bytes": dataset_bytes,
+    }
+
+
+def _git_dirty() -> bool:
+    try:
+        proc = subprocess.run(["git", "-C", str(ROOT), "status", "--porcelain"], text=True, capture_output=True, check=True)
+        return bool(str(proc.stdout or "").strip())
+    except Exception:
+        return True
+
+
+def _reproducibility_summary(summary: dict) -> dict:
+    dataset = summary.get("dataset_result") or {}
+    trainer_paths = [
+        ROOT / "scripts" / "games" / "chess_replay_prepare.py",
+        ROOT / "scripts" / "games" / "chess_train_pipeline.py",
+        ROOT / "scripts" / "games" / "chess_exp2_dataset_train.py",
+        ROOT / "scripts" / "games" / "chess_exp3_dataset_train.py",
+        ROOT / "scripts" / "games" / "chess_exp4_dataset_train.py",
+    ]
+    trainer_hash_payload = "".join(_sha256_file(path) for path in trainer_paths)
+    trainer_hash = hashlib.sha256(trainer_hash_payload.encode("utf-8")).hexdigest() if trainer_hash_payload else ""
+    env = summary.get("environment") or {}
+    return {
+        "python_version": env.get("python_version", ""),
+        "torch_version": env.get("torch_version", ""),
+        "cuda": env.get("gpu", ""),
+        "deterministic_mode": True,
+        "git_dirty": _git_dirty(),
+        "dataset_hash": f"sha256:{dataset.get('dataset_sha256', '')}",
+        "trainer_hash": f"sha256:{trainer_hash}" if trainer_hash else "",
+    }
+
+
+def _failure_explanations(summary: dict) -> list[str]:
+    reasons = []
+    gate = summary.get("promotion_gate") or {}
+    for reason in gate.get("reasons") or []:
+        reasons.append(str(reason))
+    integrity = summary.get("dataset_integrity") or {}
+    if float(integrity.get("duplicate_ratio") or 0.0) > 0.25:
+        reasons.append(f"{round(float(integrity.get('duplicate_ratio') or 0.0) * 100, 1)}% replay samples were duplicate positions")
+    if int(integrity.get("illegal_moves") or 0) > 0:
+        reasons.append(f"{integrity.get('illegal_moves')} illegal moves detected in prepared dataset")
+    poison = summary.get("poison_detection") or {}
+    if float(poison.get("suspicious_resign_rate") or 0.0) > 0.10:
+        reasons.append(f"suspicious resign rate {round(float(poison.get('suspicious_resign_rate') or 0.0) * 100, 1)}%")
+    stability = summary.get("stability") or {}
+    if stability.get("catastrophic_regression"):
+        reasons.append("catastrophic regression detected")
+    if not reasons and summary.get("engine_verdict") == "PASS":
+        return ["No blocking failure detected."]
+    return sorted(set(reasons))
+
+
 def _prepare_formal_dataset(
     engine_dir: Path,
     runtime_dir: Path,
@@ -1085,6 +1675,19 @@ def _run_benchmark_snapshot(*, focus_engine_name: str, model_overrides: dict[str
     }
 
 
+def _skipped_benchmark_snapshot(reason: str) -> dict:
+    return {
+        "ok": True,
+        "skipped": True,
+        "reason": reason,
+        "focus": {
+            "skipped": True,
+            "reason": reason,
+        },
+        "summary": {},
+    }
+
+
 def _run_trainer_probe(
     *,
     engine_alias: str,
@@ -1180,6 +1783,13 @@ def _write_engine_report(engine_dir: Path, summary: dict) -> None:
     autorun = summary.get("autorun") if isinstance(summary.get("autorun"), dict) else {}
     invalid_audit = summary.get("invalid_case_audit") or []
     exp1_live = summary.get("exp1_live_learning") or {}
+    game_timing = summary.get("game_timing") or {}
+    retrain_timing = summary.get("retrain_timing") or {}
+    dataset_integrity = summary.get("dataset_integrity") or {}
+    stability = summary.get("stability") or {}
+    promotion_gate = summary.get("promotion_gate") or {}
+    runtime_metrics = summary.get("runtime_metrics") or {}
+    reproducibility = summary.get("reproducibility") or {}
     engine_verdict = str(summary.get("engine_verdict") or "")
     lines = [
         f"# {summary['engine_alias']} validation",
@@ -1195,12 +1805,72 @@ def _write_engine_report(engine_dir: Path, summary: dict) -> None:
         f"- quarantine_replays: `{summary['replay_summary']['quarantine_replays']}`",
         f"- rejected_replays: `{summary['replay_summary']['rejected_replays']}`",
         f"- retrain_supported: `{summary.get('retrain_result', {}).get('retrain_supported')}`",
+        f"- avg_think_ms_per_step: `{game_timing.get('avg_think_ms_per_step')}`",
+        f"- think_steps_measured: `{game_timing.get('steps_measured')}`",
+        f"- total_retrain_seconds: `{retrain_timing.get('total_retrain_seconds')}`",
+        f"- avg_retrain_seconds: `{retrain_timing.get('avg_retrain_seconds')}`",
+        f"- dataset_duplicate_ratio: `{dataset_integrity.get('duplicate_ratio')}`",
+        f"- dataset_illegal_moves: `{dataset_integrity.get('illegal_moves')}`",
+        f"- catastrophic_regression: `{stability.get('catastrophic_regression')}`",
+        f"- promotion_gate_passed: `{promotion_gate.get('passed')}`",
         f"- autorun_launched: `{autorun.get('launched', False)}`",
         f"- pipeline_status: `{summary.get('autorun_status', {}).get('status', '')}`",
         "",
-        "## Invalid Cases",
+        "## Why This Run Failed",
         "",
     ]
+    for reason in _failure_explanations(summary):
+        lines.append(f"- {reason}")
+    lines.extend(
+        [
+            "",
+            "## Dataset Integrity",
+            "",
+            f"- total_rows: `{dataset_integrity.get('total_rows')}`",
+            f"- unique_positions: `{dataset_integrity.get('unique_positions')}`",
+            f"- duplicate_ratio: `{dataset_integrity.get('duplicate_ratio')}`",
+            f"- invalid_fen: `{dataset_integrity.get('invalid_fen')}`",
+            f"- illegal_moves: `{dataset_integrity.get('illegal_moves')}`",
+            f"- side_mismatch: `{dataset_integrity.get('side_mismatch')}`",
+            f"- short_resign_games: `{dataset_integrity.get('short_resign_games')}`",
+            "",
+            "## Stability",
+            "",
+            f"- catastrophic_regression: `{stability.get('catastrophic_regression')}`",
+            f"- opening_regression: `{stability.get('opening_regression')}`",
+            f"- tactical_regression: `{stability.get('tactical_regression')}`",
+            f"- endgame_regression: `{stability.get('endgame_regression')}`",
+            f"- illegal_move_delta: `{stability.get('illegal_move_delta')}`",
+            f"- blunder_rate_before: `{stability.get('blunder_rate_before')}`",
+            f"- blunder_rate_after: `{stability.get('blunder_rate_after')}`",
+            "",
+            "## Promotion Gate",
+            "",
+            f"- passed: `{promotion_gate.get('passed')}`",
+        ]
+    )
+    for reason in promotion_gate.get("reasons") or []:
+        lines.append(f"- reason: `{reason}`")
+    lines.extend(
+        [
+            "",
+            "## Runtime Metrics",
+            "",
+            f"- train_seconds: `{runtime_metrics.get('train_seconds')}`",
+            f"- eval_seconds: `{runtime_metrics.get('eval_seconds')}`",
+            f"- checkpoint_count: `{runtime_metrics.get('checkpoint_count')}`",
+            f"- dataset_bytes: `{runtime_metrics.get('dataset_bytes')}`",
+            "",
+            "## Reproducibility",
+            "",
+            f"- git_dirty: `{reproducibility.get('git_dirty')}`",
+            f"- dataset_hash: `{reproducibility.get('dataset_hash')}`",
+            f"- trainer_hash: `{reproducibility.get('trainer_hash')}`",
+            "",
+            "## Invalid Cases",
+            "",
+        ]
+    )
     for item in summary["games"]:
         if item["category"] == "valid":
             continue
@@ -1246,6 +1916,9 @@ def _write_engine_report(engine_dir: Path, summary: dict) -> None:
                     f"win_rate `{(row.get('benchmark_before') or {}).get('win_rate')}` -> `{(row.get('benchmark_after') or {}).get('win_rate')}` "
                     f"agreement `{(row.get('move_agreement_before') or {}).get('agreement')}` -> `{(row.get('move_agreement_after') or {}).get('agreement')}` "
                     f"think_ms `{(row.get('move_agreement_before') or {}).get('avg_think_ms')}` -> `{(row.get('move_agreement_after') or {}).get('avg_think_ms')}` "
+                    f"retrain_seconds=`{row.get('retrain_duration_seconds')}` "
+                    f"checkpoint_seconds=`{row.get('checkpoint_duration_seconds')}` "
+                    f"retention_probe=`{(row.get('retention_probe') or {}).get('learning_signal')}` "
                     f"status `{(row.get('autorun_status') or {}).get('status')}`"
                 )
     elif summary.get("retrain_result", {}).get("retrain_supported") is False:
@@ -1319,7 +1992,11 @@ def _run_retrain_checkpoint(
     autorun_threshold: int,
     seed: int,
     invalid_game_ids: set[int],
+    skip_autorun_benchmark: bool,
+    skip_autorun_promote: bool,
+    skip_retrain_benchmark_snapshots: bool,
 ) -> tuple[dict, Path, dict]:
+    checkpoint_started = time.perf_counter()
     checkpoint_dir = engine_dir / "checkpoints" / f"{trusted_replays:02d}"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1330,13 +2007,22 @@ def _run_retrain_checkpoint(
     before_model_meta = _model_meta(target_model_path)
     move_agreement_before = _evaluate_move_agreement(engine_alias, target_model_path, evaluation_samples)
     fixed_probes_before = _evaluate_fixed_probe_positions(engine_alias, target_model_path)
-    benchmark_before = _run_benchmark_snapshot(
-        focus_engine_name=focus_engine_name,
-        model_overrides=benchmark_overrides_before,
-        seed=seed,
-    )
+    if skip_retrain_benchmark_snapshots:
+        benchmark_before = _skipped_benchmark_snapshot("disabled_by_fast_retrain")
+    else:
+        benchmark_before = _run_benchmark_snapshot(
+            focus_engine_name=focus_engine_name,
+            model_overrides=benchmark_overrides_before,
+            seed=seed,
+        )
 
-    _set_runtime_env(runtime_dir, min_usable_replays=max(1, int(autorun_threshold)))
+    retrain_started = time.perf_counter()
+    _set_runtime_env(
+        runtime_dir,
+        min_usable_replays=max(1, int(autorun_threshold)),
+        skip_autorun_benchmark=skip_autorun_benchmark,
+        skip_autorun_promote=skip_autorun_promote,
+    )
     autorun = maybe_launch_chess_train_pipeline(
         replay=replay_buffer_summary(),
         trigger=f"trusted_checkpoint_{trusted_replays}",
@@ -1347,6 +2033,7 @@ def _run_retrain_checkpoint(
     while autorun_status.get("is_running") and (time.time() - start_wait) < max(30, int(wait_timeout)):
         time.sleep(5)
         autorun_status = latest_pipeline_autorun_status()
+    retrain_duration_seconds = round(time.perf_counter() - retrain_started, 3)
 
     pipeline_report = latest_pipeline_report()
     pipeline_summary = pipeline_report.get("summary") if isinstance(pipeline_report.get("summary"), dict) else {}
@@ -1366,11 +2053,15 @@ def _run_retrain_checkpoint(
     benchmark_overrides_after[_engine_model_slot(engine_alias)] = after_model_path
     move_agreement_after = _evaluate_move_agreement(engine_alias, after_model_path, evaluation_samples)
     fixed_probes_after = _evaluate_fixed_probe_positions(engine_alias, after_model_path)
-    benchmark_after = _run_benchmark_snapshot(
-        focus_engine_name=focus_engine_name,
-        model_overrides=benchmark_overrides_after,
-        seed=seed + 1,
-    )
+    retention_probe = _evaluate_retention_probe(engine_alias, target_model_path, after_model_path, evaluation_samples)
+    if skip_retrain_benchmark_snapshots:
+        benchmark_after = _skipped_benchmark_snapshot("disabled_by_fast_retrain")
+    else:
+        benchmark_after = _run_benchmark_snapshot(
+            focus_engine_name=focus_engine_name,
+            model_overrides=benchmark_overrides_after,
+            seed=seed + 1,
+        )
     move_change_count = sum(
         1
         for before_row, after_row in zip(fixed_probes_before.get("positions") or [], fixed_probes_after.get("positions") or [])
@@ -1378,22 +2069,28 @@ def _run_retrain_checkpoint(
     )
     benchmark_before_focus = benchmark_before["focus"]
     benchmark_after_focus = benchmark_after["focus"]
-    legal_rate_delta = round(float(benchmark_after_focus.get("legal_rate") or 0.0) - float(benchmark_before_focus.get("legal_rate") or 0.0), 4)
-    low_quality_rate_delta = round(float(benchmark_after_focus.get("low_quality_rate") or 0.0) - float(benchmark_before_focus.get("low_quality_rate") or 0.0), 4)
-    win_rate_delta = round(float(benchmark_after_focus.get("win_rate") or 0.0) - float(benchmark_before_focus.get("win_rate") or 0.0), 4)
+    benchmark_skipped = bool(benchmark_before_focus.get("skipped") or benchmark_after_focus.get("skipped"))
+    legal_rate_delta = None if benchmark_skipped else round(float(benchmark_after_focus.get("legal_rate") or 0.0) - float(benchmark_before_focus.get("legal_rate") or 0.0), 4)
+    low_quality_rate_delta = None if benchmark_skipped else round(float(benchmark_after_focus.get("low_quality_rate") or 0.0) - float(benchmark_before_focus.get("low_quality_rate") or 0.0), 4)
+    win_rate_delta = None if benchmark_skipped else round(float(benchmark_after_focus.get("win_rate") or 0.0) - float(benchmark_before_focus.get("win_rate") or 0.0), 4)
     ineffective_training = bool(before_model_meta["sha256"] != after_model_meta["sha256"] and move_change_count == 0)
     checkpoint_verdict = "PASS"
     if int(dataset_result.get("contaminated_rows") or 0) > 0:
         checkpoint_verdict = "FAIL"
     elif ineffective_training:
         checkpoint_verdict = "PARTIAL"
-    elif legal_rate_delta < -0.05:
+    elif legal_rate_delta is not None and legal_rate_delta < -0.05:
         checkpoint_verdict = "PARTIAL"
 
     checkpoint = {
         "trusted_replays": int(trusted_replays),
+        "retrain_duration_seconds": retrain_duration_seconds,
+        "checkpoint_duration_seconds": round(time.perf_counter() - checkpoint_started, 3),
         "dataset_result": dataset_result,
         "dataset_sha256": dataset_result.get("dataset_sha256", ""),
+        "autorun_skip_benchmark": bool(skip_autorun_benchmark),
+        "autorun_skip_promote": bool(skip_autorun_promote),
+        "retrain_benchmark_snapshots_skipped": bool(skip_retrain_benchmark_snapshots),
         "autorun": autorun,
         "autorun_status": autorun_status,
         "pipeline_report_path": pipeline_report.get("path", ""),
@@ -1407,6 +2104,7 @@ def _run_retrain_checkpoint(
         "model_after": after_model_meta,
         "move_agreement_before": move_agreement_before,
         "move_agreement_after": move_agreement_after,
+        "retention_probe": retention_probe,
         "fixed_probe_positions_before": fixed_probes_before,
         "fixed_probe_positions_after": fixed_probes_after,
         "probe_position_move_change_count": move_change_count,
@@ -1425,8 +2123,11 @@ def _run_retrain_checkpoint(
         checkpoint_dir / "before_after_eval.json",
         {
             "trusted_replays": int(trusted_replays),
+            "retrain_duration_seconds": retrain_duration_seconds,
+            "checkpoint_duration_seconds": checkpoint["checkpoint_duration_seconds"],
             "move_agreement_before": move_agreement_before,
             "move_agreement_after": move_agreement_after,
+            "retention_probe": retention_probe,
             "fixed_probe_positions_before": fixed_probes_before,
             "fixed_probe_positions_after": fixed_probes_after,
             "probe_position_move_change_count": move_change_count,
@@ -1452,6 +2153,9 @@ def _run_engine_validation(
     max_plies: int,
     wait_timeout: int,
     autorun_threshold: int,
+    skip_autorun_benchmark: bool,
+    skip_autorun_promote: bool,
+    skip_retrain_benchmark_snapshots: bool,
 ) -> dict:
     started_at = _utc_now()
     runtime_dir = runtime_root / engine_alias
@@ -1459,7 +2163,12 @@ def _run_engine_validation(
         shutil.rmtree(runtime_dir)
     runtime_dir.mkdir(parents=True, exist_ok=True)
     min_replays = 9999
-    _set_runtime_env(runtime_dir, min_usable_replays=min_replays)
+    _set_runtime_env(
+        runtime_dir,
+        min_usable_replays=min_replays,
+        skip_autorun_benchmark=skip_autorun_benchmark,
+        skip_autorun_promote=skip_autorun_promote,
+    )
     warm = ensure_warm_start_chess_environment()
     actor_username = f"{engine_alias}_validation_user"
     store = ChessExperimentStore()
@@ -1474,6 +2183,7 @@ def _run_engine_validation(
     )
     sys.stderr.write(f"[{engine_alias}] planned {len(planned_games)} games\n")
     sys.stderr.flush()
+    game_timing = _flow_timing_summary(planned_games)
     valid_games = [game for game in planned_games if game.category == "valid"]
     invalid_games = [game for game in planned_games if game.category != "valid"]
     invalid_game_ids = {int(game.row.get("id") or 0) for game in invalid_games}
@@ -1541,6 +2251,9 @@ def _run_engine_validation(
                 autorun_threshold=autorun_threshold,
                 seed=seed + trusted_replays * 100,
                 invalid_game_ids=invalid_game_ids,
+                skip_autorun_benchmark=skip_autorun_benchmark,
+                skip_autorun_promote=skip_autorun_promote,
+                skip_retrain_benchmark_snapshots=skip_retrain_benchmark_snapshots,
             )
             checkpoints.append(checkpoint)
             launch_result = checkpoint.get("autorun")
@@ -1627,6 +2340,7 @@ def _run_engine_validation(
     if engine_alias in RETRAIN_ENGINE_ALIASES:
         before_benchmark = checkpoints[0]["benchmark_before"] if checkpoints else None
         after_benchmark = checkpoints[-1]["benchmark_after"] if checkpoints else None
+        retrain_timing = _checkpoint_timing_summary(checkpoints)
         trainer_probe = _run_trainer_probe(
             engine_alias=engine_alias,
             engine_dir=engine_dir,
@@ -1645,11 +2359,14 @@ def _run_engine_validation(
             "trainer_probe": trainer_probe,
             "candidate_model_path": str(after_model_path),
             "checkpoints": checkpoints,
+            "timing": retrain_timing,
         }
     else:
+        retrain_timing = _checkpoint_timing_summary(checkpoints)
         retrain_result = {
             "retrain_supported": False,
             "reason": "no replay dataset trainer is implemented for this engine; validation limited to collection/classification only",
+            "timing": retrain_timing,
         }
         if engine_alias == "exp1":
             after_benchmark = _run_benchmark_snapshot(
@@ -1698,6 +2415,10 @@ def _run_engine_validation(
             "difficulty": difficulty,
             "max_plies": int(max_plies),
             "autorun_threshold": int(autorun_threshold),
+            "fast_retrain": bool(skip_autorun_benchmark or skip_autorun_promote),
+            "skip_autorun_benchmark": bool(skip_autorun_benchmark),
+            "skip_autorun_promote": bool(skip_autorun_promote),
+            "skip_retrain_benchmark_snapshots": bool(skip_retrain_benchmark_snapshots),
             "total_games": TOTAL_GAMES,
             "valid_games": VALID_GAMES,
             "invalid_games": INVALID_GAMES,
@@ -1705,6 +2426,7 @@ def _run_engine_validation(
         "runtime_dir": str(runtime_dir),
         "warm_start": warm,
         "total_games": len(planned_games),
+        "game_timing": game_timing,
         "games": game_results,
         "classification": classification_rows,
         "invalid_case_audit": invalid_case_audit,
@@ -1718,6 +2440,7 @@ def _run_engine_validation(
         "evaluation_after": evaluation_after,
         "before_after_eval": before_after_eval,
         "retrain_result": retrain_result,
+        "retrain_timing": retrain_timing,
         "model_before": before_model_meta,
         "model_after": after_model_meta,
         "evaluation_sample_count": len(evaluation_samples),
@@ -1734,8 +2457,18 @@ def _run_engine_validation(
         } if engine_alias == "exp1" else {},
         "environment": _environment_summary(),
     }
+    dataset_integrity = _dataset_integrity_summary(accepted_rows, rejected_rows, game_results)
+    dataset_integrity["contaminated_rows"] = int(dataset_result.get("contaminated_rows") or 0)
+    summary["dataset_integrity"] = dataset_integrity
+    summary.update(_replay_source_audit(game_results))
+    summary["position_quality"] = _position_quality_summary(classification_rows)
+    summary["poison_detection"] = _poison_detection_summary(classification_rows)
+    summary["stability"] = _stability_summary(summary)
+    summary["runtime_metrics"] = _runtime_metrics_summary(summary)
+    summary["reproducibility"] = _reproducibility_summary(summary)
     summary["engine_verdict"] = _engine_verdict(summary)
-    summary["suitable_for_production_self_learning"] = summary["engine_verdict"] == "PASS"
+    summary["promotion_gate"] = _promotion_gate_summary(summary)
+    summary["suitable_for_production_self_learning"] = summary["engine_verdict"] == "PASS" and bool(summary["promotion_gate"].get("passed"))
     _json_dump(engine_dir / "summary.json", summary)
     _write_engine_report(engine_dir, summary)
     return summary
@@ -1743,6 +2476,9 @@ def _run_engine_validation(
 
 def main() -> int:
     args = parse_args()
+    skip_autorun_benchmark = bool(args.fast_retrain or args.skip_autorun_benchmark)
+    skip_autorun_promote = bool(args.fast_retrain or args.skip_autorun_promote or skip_autorun_benchmark)
+    skip_retrain_benchmark_snapshots = bool(args.fast_retrain or args.skip_retrain_benchmark_snapshots)
     stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
     output_root = Path(args.output_root).expanduser().resolve() if args.output_root else (Path("/tmp") / f"chess_live_learning_validation_{stamp}")
     output_root.mkdir(parents=True, exist_ok=True)
@@ -1763,12 +2499,29 @@ def main() -> int:
             max_plies=int(args.max_plies),
             wait_timeout=int(args.wait_timeout),
             autorun_threshold=int(args.autorun_threshold),
+            skip_autorun_benchmark=skip_autorun_benchmark,
+            skip_autorun_promote=skip_autorun_promote,
+            skip_retrain_benchmark_snapshots=skip_retrain_benchmark_snapshots,
         )
         summaries.append(summary)
     root_summary = {
         "ok": True,
         "generated_at": _utc_now(),
         "output_root": str(output_root),
+        "fast_retrain": bool(skip_autorun_benchmark or skip_autorun_promote),
+        "skip_autorun_benchmark": bool(skip_autorun_benchmark),
+        "skip_autorun_promote": bool(skip_autorun_promote),
+        "skip_retrain_benchmark_snapshots": bool(skip_retrain_benchmark_snapshots),
+        "timing": {
+            "total_retrain_seconds": round(sum(float((summary.get("retrain_timing") or {}).get("total_retrain_seconds") or 0.0) for summary in summaries), 3),
+            "total_checkpoint_seconds": round(sum(float((summary.get("retrain_timing") or {}).get("total_checkpoint_seconds") or 0.0) for summary in summaries), 3),
+            "avg_game_think_ms_per_step": round(
+                sum(float((summary.get("game_timing") or {}).get("total_think_ms") or 0.0) for summary in summaries)
+                / max(1, sum(int((summary.get("game_timing") or {}).get("steps_measured") or 0) for summary in summaries)),
+                3,
+            ),
+            "think_steps_measured": sum(int((summary.get("game_timing") or {}).get("steps_measured") or 0) for summary in summaries),
+        },
         "environment": _environment_summary(),
         "engines": [
             {
@@ -1785,6 +2538,17 @@ def main() -> int:
                 "agreement_after": summary["evaluation_after"].get("agreement"),
                 "avg_think_ms_before": summary["evaluation_before"].get("avg_think_ms"),
                 "avg_think_ms_after": summary["evaluation_after"].get("avg_think_ms"),
+                "avg_game_think_ms_per_step": (summary.get("game_timing") or {}).get("avg_think_ms_per_step"),
+                "think_steps_measured": (summary.get("game_timing") or {}).get("steps_measured"),
+                "total_retrain_seconds": (summary.get("retrain_timing") or {}).get("total_retrain_seconds"),
+                "avg_retrain_seconds": (summary.get("retrain_timing") or {}).get("avg_retrain_seconds"),
+                "total_checkpoint_seconds": (summary.get("retrain_timing") or {}).get("total_checkpoint_seconds"),
+                "promotion_gate_passed": (summary.get("promotion_gate") or {}).get("passed"),
+                "promotion_gate_reasons": (summary.get("promotion_gate") or {}).get("reasons") or [],
+                "catastrophic_regression": (summary.get("stability") or {}).get("catastrophic_regression"),
+                "dataset_duplicate_ratio": (summary.get("dataset_integrity") or {}).get("duplicate_ratio"),
+                "dataset_illegal_moves": (summary.get("dataset_integrity") or {}).get("illegal_moves"),
+                "suspicious_resign_rate": (summary.get("poison_detection") or {}).get("suspicious_resign_rate"),
                 "win_rate_before": (summary.get("before_after_eval", {}).get("benchmark_before") or {}).get("win_rate"),
                 "win_rate_after": (summary.get("before_after_eval", {}).get("benchmark_after") or {}).get("win_rate"),
                 "legal_rate_before": (summary.get("before_after_eval", {}).get("benchmark_before") or {}).get("legal_rate"),
@@ -1797,12 +2561,8 @@ def main() -> int:
                     summary.get("evaluation_after", {}).get("agreement") != summary.get("evaluation_before", {}).get("agreement")
                     or summary.get("model_after", {}).get("sha256") != summary.get("model_before", {}).get("sha256")
                 ),
-                "benchmark_changed": (
-                    (summary.get("before_after_eval", {}).get("benchmark_before") or {}).get("win_rate")
-                    != (summary.get("before_after_eval", {}).get("benchmark_after") or {}).get("win_rate")
-                    or (summary.get("before_after_eval", {}).get("benchmark_before") or {}).get("low_quality_rate")
-                    != (summary.get("before_after_eval", {}).get("benchmark_after") or {}).get("low_quality_rate")
-                ),
+                "benchmark_skipped": _summary_benchmark_skipped(summary),
+                "benchmark_changed": _summary_benchmark_changed(summary),
                 "meets_expectation": (
                     summary["replay_summary"]["trusted_replays"] == VALID_GAMES
                     and summary["replay_summary"]["quarantine_replays"] == INVALID_GAMES
@@ -1820,14 +2580,7 @@ def main() -> int:
                             and (
                                 len(summary.get("before_after_eval", {}).get("checkpoints") or []) >= max(1, VALID_GAMES // max(1, int(summary.get("autorun_threshold") or 1)))
                             )
-                            and (
-                                ((summary.get("before_after_eval", {}).get("benchmark_after") or {}).get("win_rate") or 0.0)
-                                >= ((summary.get("before_after_eval", {}).get("benchmark_before") or {}).get("win_rate") or 0.0)
-                            )
-                            and (
-                                ((summary.get("before_after_eval", {}).get("benchmark_after") or {}).get("low_quality_rate") or 1.0)
-                                <= ((summary.get("before_after_eval", {}).get("benchmark_before") or {}).get("low_quality_rate") or 1.0)
-                            )
+                            and _summary_benchmark_expectation_met(summary)
                         )
                     )
                 ),
@@ -1840,7 +2593,7 @@ def main() -> int:
     engine_verdicts = [str(row.get("engine_verdict") or "") for row in root_summary["engines"]]
     if any(verdict == "FAIL" for verdict in engine_verdicts):
         overall_verdict = "FAIL"
-    elif any(verdict in {"PARTIAL", "HIGH_RISK"} for verdict in engine_verdicts):
+    elif any(verdict in {"PARTIAL", "HIGH_RISK"} for verdict in engine_verdicts) or any(not bool(row.get("promotion_gate_passed")) for row in root_summary["engines"]):
         overall_verdict = "PARTIAL"
     root_summary["overall_verdict"] = overall_verdict
     _json_dump(output_root / "summary.json", root_summary)
@@ -1850,6 +2603,9 @@ def main() -> int:
         f"- generated_at: `{root_summary['generated_at']}`",
         f"- output_root: `{root_summary['output_root']}`",
         f"- overall_verdict: `{root_summary['overall_verdict']}`",
+        f"- total_retrain_seconds: `{root_summary['timing']['total_retrain_seconds']}`",
+        f"- avg_game_think_ms_per_step: `{root_summary['timing']['avg_game_think_ms_per_step']}`",
+        f"- think_steps_measured: `{root_summary['timing']['think_steps_measured']}`",
         "",
         "## Engines",
         "",
@@ -1864,11 +2620,34 @@ def main() -> int:
             f"win `{row['win_rate_before']}` -> `{row['win_rate_after']}` "
             f"legal `{row['legal_rate_before']}` -> `{row['legal_rate_after']}` "
             f"think_ms `{row['avg_think_ms_before']}` -> `{row['avg_think_ms_after']}` "
+            f"game_step_think_ms=`{row['avg_game_think_ms_per_step']}` "
+            f"retrain_s=`{row['total_retrain_seconds']}` "
             f"low_quality `{row['low_quality_rate_before']}` -> `{row['low_quality_rate_after']}` "
             f"learning_changed=`{row['learning_changed']}` "
+            f"benchmark_skipped=`{row['benchmark_skipped']}` "
             f"benchmark_changed=`{row['benchmark_changed']}` "
+            f"promotion_gate=`{row['promotion_gate_passed']}` "
+            f"catastrophic=`{row['catastrophic_regression']}` "
             f"meets_expectation=`{row['meets_expectation']}`"
         )
+    lines.extend(
+        [
+            "",
+            "## Why This Run Failed",
+            "",
+        ]
+    )
+    failure_lines = []
+    for summary in summaries:
+        for reason in _failure_explanations(summary):
+            if reason == "No blocking failure detected.":
+                continue
+            failure_lines.append(f"{summary['engine_alias']}: {reason}")
+    if failure_lines:
+        for line in sorted(set(failure_lines)):
+            lines.append(f"- {line}")
+    else:
+        lines.append("- No blocking failure detected.")
     lines.extend(
         [
             "",

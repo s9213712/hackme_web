@@ -324,10 +324,10 @@ def test_round_robin_benchmark_and_smoke_reports_use_all_engines(tmp_path, monke
     assert benchmark["matrix"]["experiment 3:dl"]["experiment 4:pv"]["games"] == 2
     assert any(row["engine_a"] == "experiment" and row["engine_b"] == "experiment 2:nn" for row in benchmark["head_to_head"])
     assert any(match["opening_label"] for match in benchmark["matches"])
-    assert benchmark["human_probes"]["cases"] == 6
+    assert benchmark["human_probes"]["cases"] == 10
     assert benchmark["human_probes"]["engines"] == benchmark["engines"]
     assert len(benchmark["human_probes"]["standings"]) == 6
-    assert len(benchmark["human_probes"]["results"]) == 36
+    assert len(benchmark["human_probes"]["results"]) == 60
     assert all("reason" in row and "final_fen" in row for row in benchmark["human_probes"]["results"])
     assert benchmark["endgame_suite"]["cases"] == 6
     assert benchmark["endgame_suite"]["engines"] == benchmark["engines"]

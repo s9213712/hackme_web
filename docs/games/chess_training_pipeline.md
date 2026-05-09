@@ -309,17 +309,53 @@ python3 scripts/games/chess_live_learning_validation.py \
   --output-root /tmp/chess_live_validation_$(date +%Y%m%d_%H%M%S) \
   --engines exp1,exp2,exp3,exp4 \
   --wait-timeout 1800 \
-  --autorun-threshold 5
+  --autorun-threshold 10
 ```
 
 可調：
 
 - `--engines exp2,exp3` — 只跑特定 engine，跳過其餘
 - `--wait-timeout` — 等 autorun pipeline 完成的秒數（預設 1800）
-- `--autorun-threshold` — exp2/exp3 觸發 auto-retrain 所需的 trusted replay 數
+- `--autorun-threshold` — exp2/exp3/exp4 觸發 auto-retrain 所需的 trusted replay 數
+- `--fast-retrain` — retrain checkpoint 觸發 autorun 時跳過 pipeline 內部 benchmark / promote，也跳過 validation 腳本在 checkpoint 前後的 benchmark snapshot
+- `--skip-autorun-benchmark` / `--skip-autorun-promote` — 分別控制 autorun pipeline 的 benchmark / promote
+- `--skip-retrain-benchmark-snapshots` — 只跳過 validation 腳本在 retrain checkpoint 前後的 benchmark snapshot
 - `--seed` / `--max-plies` — 重現實驗 / 限制每局深度
 
+如果 exp2 ~ exp4 retrain 太久，優先用：
+
+```bash
+PYTHONPATH=. \
+python3 scripts/games/chess_live_learning_validation.py \
+  --output-root /tmp/chess_live_validation_fast_$(date +%Y%m%d_%H%M%S) \
+  --engines exp2,exp3,exp4 \
+  --fast-retrain \
+  --autorun-threshold 20 \
+  --wait-timeout 600
+```
+
+`--fast-retrain` 省掉每次 autorun retrain 內部的 round-robin benchmark，也省掉 validation checkpoint 前後的 snapshot benchmark；預設每 10 盤有效局 retrain 一次，`--autorun-threshold 20` 會把每個 engine 的 retrain checkpoint 從預設 2 次降成 1 次，通常比單純跳過 benchmark 更明顯。
+
 預設 output-root 在 `/tmp/chess_live_learning_validation_<timestamp>/`，內含每 engine 的 replay 樣本、autorun pipeline log、前後 model 的 move-agreement 對照。
+
+報告也會列出耗時資訊：
+
+- `game_timing.avg_think_ms_per_step` — 25 盤驗收棋局中有量測步驟的平均思考時間
+- `retrain_timing.total_retrain_seconds` / `avg_retrain_seconds` — retrain checkpoint 等待 autorun pipeline 完成的時間
+- `retrain_timing.total_checkpoint_seconds` — 包含 dataset prepare、前後 probe、retrain、benchmark snapshot 的 checkpoint 總耗時
+- 每個 checkpoint 的 `retrain_duration_seconds` / `checkpoint_duration_seconds` 會寫進 `checkpoints/*/retrain_result.json`
+
+報告會額外輸出 audit / gate 區塊：
+
+- `dataset_integrity` — train/rejected row 數、unique/duplicate positions、duplicate ratio、invalid FEN、illegal moves、side mismatch、terminal/mate positions、平均局長、短 resign 局數
+- `stability` — catastrophic regression、opening/tactical/endgame regression、illegal move delta、blunder rate before/after
+- `promotion_gate` — 明確的 `passed` 與 blocking reasons；benchmark skipped、資料污染、trusted games 不足、catastrophic regression 都會擋 promotion
+- `poison_detection` — repetition pattern、intentional blunder、duplicate/copy suspected、suspicious resign rate
+- `replay_sources` / `rating_distribution` — replay provenance 與 rating bucket 統計
+- `position_quality` — opening/middlegame/endgame 各階段 trusted/quarantine/rejected 分布
+- `runtime_metrics` — train/eval 秒數、checkpoint count、dataset bytes
+- `reproducibility` — python/torch/cuda、git dirty、dataset hash、trainer hash
+- `SUMMARY.md` 會產生 `Why This Run Failed`，用人可讀方式列出 promotion gate 或資料/退化原因
 
 ## 7. 正式原則
 
