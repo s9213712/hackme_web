@@ -268,6 +268,31 @@ promotion gate 至少會檢查：
 - `suspicious_matches == 0`
 - smoke pass
 
+## 6.5 線上學習回路 end-to-end 驗收
+
+`scripts/games/chess_live_learning_validation.py` 是一支獨立的驗收腳本，用來確認「user game → replay 收進來 → classify → 觸發 autorun retrain → benchmark」整條回路在 exp1 ~ exp4 上都能跑完。**不在 server boot / pipeline 裡，純手動驗收用。**
+
+預設會跑 4 個 engine alias（`exp1`, `exp2`, `exp3`, `exp4`），對每個各排幾局 scripted opening probe，把產生的 replay 存進 runtime，必要時等 `chess_train_pipeline` autorun 完成，最後對 model 做 move-agreement 評估，把每階段結果寫到 `--output-root`。
+
+```bash
+HACKME_RUNTIME_DIR=/tmp/chess_runtime \
+PYTHONPATH=. \
+python3 scripts/games/chess_live_learning_validation.py \
+  --output-root /tmp/chess_live_validation_$(date +%Y%m%d_%H%M%S) \
+  --engines exp1,exp2,exp3,exp4 \
+  --wait-timeout 1800 \
+  --autorun-threshold 5
+```
+
+可調：
+
+- `--engines exp2,exp3` — 只跑特定 engine，跳過其餘
+- `--wait-timeout` — 等 autorun pipeline 完成的秒數（預設 1800）
+- `--autorun-threshold` — exp2/exp3 觸發 auto-retrain 所需的 trusted replay 數
+- `--seed` / `--max-plies` — 重現實驗 / 限制每局深度
+
+預設 output-root 在 `/tmp/chess_live_learning_validation_<timestamp>/`，內含每 engine 的 replay 樣本、autorun pipeline log、前後 model 的 move-agreement 對照。
+
 ## 7. 正式原則
 
 禁止：
