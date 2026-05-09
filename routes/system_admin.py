@@ -709,7 +709,17 @@ def register_system_admin_routes(app, deps):
     def _start_security_test_job(kind, command, *, command_label, report_root, report_prefix, actor, env=None):
         job_id = f"{kind}_{uuid.uuid4().hex[:12]}"
         started_ts = time.time()
-        actor_username = actor.get("username") if actor else "root"
+        # actor may be a sqlite3.Row (no .get) or a dict (has .get) depending
+        # on caller. Both support __getitem__ but Row raises if the key is
+        # absent, so guard with a small helper.
+        def _username(a):
+            if a is None:
+                return "root"
+            try:
+                return a["username"]
+            except (KeyError, IndexError):
+                return "root"
+        actor_username = _username(actor)
         client_ip = get_client_ip()
         log_dir = os.path.join(report_root, "_jobs")
         os.makedirs(log_dir, exist_ok=True)
@@ -1307,8 +1317,9 @@ def register_system_admin_routes(app, deps):
         ]
         only = str(data.get("only") or "").strip()
         skip = str(data.get("skip") or "").strip()
-        if only:
-            command.extend(["--only", only])
+        if not only:
+            only = "curl-baseline,functional-permissions,session-security,header-security"
+        command.extend(["--only", only])
         if skip:
             command.extend(["--skip", skip])
         if bool(data.get("i_own_this_target")):
@@ -1316,8 +1327,18 @@ def register_system_admin_routes(app, deps):
         env = {}
         for key in ("ROOT_PASSWORD", "MANAGER_PASSWORD", "TEST_PASSWORD"):
             value = str(data.get(key.lower()) or "").strip()
+            if not value:
+                value = str(os.environ.get(f"HTML_LEARNING_{key}") or "").strip()
             if value:
                 env[key] = value
+        # Defaults match the seed users created by test_for_develop.sh /
+        # the bootstrap routine so a fresh dev site can run the privilege
+        # scan without forcing every operator to pass usernames in JSON.
+        username_defaults = {
+            "root_username": "root",
+            "manager_username": "admin",
+            "user_username": "test",
+        }
         username_env_keys = {
             "root_username": "PENTEST_ROOT_USERNAME",
             "manager_username": "PENTEST_MANAGER_USERNAME",
@@ -1325,8 +1346,9 @@ def register_system_admin_routes(app, deps):
         }
         for payload_key, env_key in username_env_keys.items():
             value = str(data.get(payload_key) or "").strip()
-            if value:
-                env[env_key] = value
+            if not value:
+                value = username_defaults[payload_key]
+            env[env_key] = value
         job = _start_security_test_job(
             "pentest",
             command,
@@ -1364,6 +1386,8 @@ def register_system_admin_routes(app, deps):
         env = {}
         for key in ("ROOT_PASSWORD", "ROOT_CHANGED_PASSWORD", "MANAGER_PASSWORD", "TEST_PASSWORD"):
             value = str(data.get(key.lower()) or "").strip()
+            if not value:
+                value = str(os.environ.get(f"HTML_LEARNING_{key}") or "").strip()
             if value:
                 env[key] = value
         job = _start_security_test_job(
@@ -1408,8 +1432,18 @@ def register_system_admin_routes(app, deps):
         env = {}
         for key in ("ROOT_PASSWORD", "MANAGER_PASSWORD", "TEST_PASSWORD"):
             value = str(data.get(key.lower()) or "").strip()
+            if not value:
+                value = str(os.environ.get(f"HTML_LEARNING_{key}") or "").strip()
             if value:
                 env[key] = value
+        # Defaults match the seed users created by test_for_develop.sh /
+        # the bootstrap routine so a fresh dev site can run the privilege
+        # scan without forcing every operator to pass usernames in JSON.
+        username_defaults = {
+            "root_username": "root",
+            "manager_username": "admin",
+            "user_username": "test",
+        }
         username_env_keys = {
             "root_username": "PENTEST_ROOT_USERNAME",
             "manager_username": "PENTEST_MANAGER_USERNAME",
@@ -1417,8 +1451,9 @@ def register_system_admin_routes(app, deps):
         }
         for payload_key, env_key in username_env_keys.items():
             value = str(data.get(payload_key) or "").strip()
-            if value:
-                env[env_key] = value
+            if not value:
+                value = username_defaults[payload_key]
+            env[env_key] = value
         job = _start_security_test_job(
             "privilege",
             command,
