@@ -669,6 +669,7 @@ def register_video_routes(app, deps):
         return Response(_shared_video_html(token), status=200, mimetype="text/html; charset=utf-8")
 
     @app.route("/api/videos/shared/<token>/unlock", methods=["POST"])
+    @require_csrf
     def shared_video_unlock(token):
         conn = get_db()
         try:

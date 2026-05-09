@@ -213,7 +213,7 @@ def test_place_order_rejects_non_trading_mode_before_sql(tmp_path):
             side="buy",
             order_type="market",
             quantity="0.1",
-            ctx=SmV2Context(mode="dev_ready", tester_id=None, actor_role="user", request_id="g1-order"),
+            ctx=SmV2Context(mode="maintenance", tester_id=None, actor_role="user", request_id="g1-order"),
         )
 
 

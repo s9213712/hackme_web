@@ -973,6 +973,8 @@ def ensure_snapshot_schema(conn):
         ("execution_mode", "ALTER TABLE test_shadow_orders ADD COLUMN execution_mode TEXT NOT NULL DEFAULT 'house_counterparty'"),
         ("trial_frozen_points", "ALTER TABLE test_shadow_orders ADD COLUMN trial_frozen_points INTEGER NOT NULL DEFAULT 0"),
         ("chain_frozen_points", "ALTER TABLE test_shadow_orders ADD COLUMN chain_frozen_points INTEGER NOT NULL DEFAULT 0"),
+        ("stop_loss_percent", "ALTER TABLE test_shadow_orders ADD COLUMN stop_loss_percent REAL"),
+        ("take_profit_percent", "ALTER TABLE test_shadow_orders ADD COLUMN take_profit_percent REAL"),
     ):
         if col not in shadow_order_cols:
             conn.execute(ddl)
@@ -1040,6 +1042,10 @@ def ensure_snapshot_schema(conn):
     shadow_margin_cols = {row["name"] for row in conn.execute("PRAGMA table_info(test_shadow_margin_positions)").fetchall()}
     if "user_id" not in shadow_margin_cols:
         conn.execute("ALTER TABLE test_shadow_margin_positions ADD COLUMN user_id INTEGER")
+    if "stop_loss_percent" not in shadow_margin_cols:
+        conn.execute("ALTER TABLE test_shadow_margin_positions ADD COLUMN stop_loss_percent REAL")
+    if "take_profit_percent" not in shadow_margin_cols:
+        conn.execute("ALTER TABLE test_shadow_margin_positions ADD COLUMN take_profit_percent REAL")
     conn.execute("UPDATE test_shadow_margin_positions SET user_id=tester_user_id WHERE user_id IS NULL")
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_shadow_margin_positions_tester_status ON test_shadow_margin_positions(tester_user_id, status, market_symbol)"

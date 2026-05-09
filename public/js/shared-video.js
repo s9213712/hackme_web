@@ -336,11 +336,25 @@
       pump().catch((err) => fallback(err.message || "E2EE Streaming v2 初始化失敗"));
     }, { once: true });
   }
+  async function fetchCsrfToken() {
+    // The shared-video page is standalone (no global core helpers loaded), so
+    // we fetch the CSRF token on demand rather than relying on getCsrfToken().
+    try {
+      const res = await fetch("/api/csrf-token", { credentials: "same-origin" });
+      const json = await res.json().catch(() => ({}));
+      return String(json?.csrf_token || "");
+    } catch (_) {
+      return "";
+    }
+  }
   async function unlockShare(password) {
+    const csrf = await fetchCsrfToken();
+    const headers = { "Content-Type": "application/json" };
+    if (csrf) headers["X-CSRF-Token"] = csrf;
     const res = await fetch(`/api/videos/shared/${encodeURIComponent(TOKEN)}/unlock`, {
       method: "POST",
       credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify({ password }),
     });
     const json = await res.json().catch(() => ({}));
