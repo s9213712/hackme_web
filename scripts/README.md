@@ -22,14 +22,17 @@ for one-off experiments.
   Canonical local validation entrypoint.
 - [admin/root_recovery.py](admin/root_recovery.py)
   Offline root recovery CLI.
+- [on_live_reports/](on_live_reports/)
+  Stable operator-facing compatibility wrappers for the production-gate,
+  permission, pentest, server-mode, and stress tooling.
+- [INDEX.md](INDEX.md)
+  Mandatory registration table for maintained QA, security, pentest, stress,
+  smoke, and production-gate scripts.
 
 ## Current Subtrees
 
 - `scripts/admin/`
   Operator repair and recovery tooling.
-- `scripts/dev/`
-  Development docs only. The old tmp launch wrappers were removed; use
-  repo-root `test_for_develop.sh` instead.
 - `scripts/comfyui/`
   ComfyUI probe tooling and ComfyUI-specific local startup template.
 - `scripts/games/`
@@ -54,9 +57,11 @@ top level.
 The final placement policy lives in:
 
 - [PLACEMENT_RULES.md](PLACEMENT_RULES.md)
+- [INDEX.md](INDEX.md)
 
-Use that file as the canonical rulebook for what may or may not live under
-`scripts/`.
+Use `PLACEMENT_RULES.md` as the canonical rulebook for what may or may not live
+under `scripts/`. Use `INDEX.md` to register maintained QA/security scripts and
+to define production-gate owner, purpose, artifact, and failure meaning.
 
 ## Production Gate Live Regression Rule
 

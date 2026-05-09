@@ -12,7 +12,15 @@ def test_public_registration_only_requires_account_password_and_nickname():
     assert 'id="reg-user"' in register_section
     assert 'id="reg-pw"' in register_section
     assert 'id="reg-pw-confirm"' in register_section
+    assert 'id="reg-autofill-decoys"' in register_section
+    assert 'id="reg-pw" placeholder="請設定密碼" autocomplete="off"' in register_section
+    assert 'id="reg-pw-confirm" placeholder="請再次輸入密碼" autocomplete="off"' in register_section
+    assert 'data-lpignore="true"' in register_section
     assert 'id="reg-nickname"' in register_section
+    assert "bindRegisterAutofillGuards" in auth_js
+    assert "registerAutofillGuardBound" in auth_js
+    assert 'input.setAttribute("data-1p-ignore", "true");' in auth_js
+    assert "input.readOnly = true;" in auth_js
     assert 'id="reg-idno"' not in register_section
     assert "身分證不可為空" not in auth_js
     assert "真實姓名不可為空" not in auth_js

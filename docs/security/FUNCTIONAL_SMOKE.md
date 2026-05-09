@@ -2,11 +2,17 @@
 
 For the higher-level validation map, read [../11_QA_TESTING.md](../11_QA_TESTING.md)
 first. This file documents the exact `run_functional_smoke.sh` behavior and options.
+For the governance rules, validation naming contract, and phase input/output
+catalog, read [QA_ARCHITECTURE.md](QA_ARCHITECTURE.md).
 
 `scripts/security/pentest/run_functional_smoke.sh` 是本專案的功能回歸測試腳本。它和
 `scripts/security/pentest/run_pentest.sh` 不同：pentest 腳本偏向外部安全掃描，functional
 smoke 腳本會啟動一個隔離 runtime server，登入 root，實際操作主要功能，最後產生
 Markdown 報告與原始回應紀錄。
+
+It is broad functional smoke, not full production validation. 任何只針對最近
+修補或單一風險的 pytest / script run 都只能稱為 focused regression 或 selected
+tests，不能在文件、報告或 PR 文字中稱為 full validation。
 
 這個腳本預設只打本機臨時 server，會把 database、log、chat、anchor、storage、
 reports 全部導向 `/tmp` 底下的隔離資料夾，避免污染 repo 內的 runtime 資料。
@@ -115,7 +121,7 @@ root 那個故意存在的 `runtime` fail-closed 哨兵檔。
 | video platform | upload/publish、shared page load、anonymous shared playback、revoke flow、missing file / non-media upload error guidance。 |
 | PointsChain | wallet、catalog/rules、admin adjustment、ledger、seal/verify、manual backup、recovery status、一鍵異常鏈處理、economy stats，並驗 custom profile / 非 production 模式下的 production-only chain seal rejection guidance。 |
 | trading extras | 先驗證 custom profile 下交易寫入會 fail closed，再切到 `test` 模式驗證 read-only diagnostics，之後旋轉 maintenance bypass token、切到 `internal_test` 驗證 tester token 寫路徑在 live warm-up 未確認前會被明確阻擋；同時覆蓋 `live-price` metadata / transport state、fee-aware `grid/preview`、root `price-fusion-status` transport state、root `bot-audit` dashboard / manual run。 |
-| ComfyUI integration | model/status wiring、optional backend availability、workflow preset list/import guards、share/discard error paths、root Civitai search API key guard。 |
+| ComfyUI integration | model/status wiring、optional backend availability、workflow preset list/import guards、template preview text panel `text:embeddings` / `embedding_shortcuts` child、share/discard error paths、root Civitai search API key guard。 |
 | reports/moderation | bug reports、reports、notifications、appeals、moderation actions/proposals、violations、message reports、mod notes、reputation endpoints。 |
 | hardening | unknown path `OPTIONS` 不應宣告 PUT/DELETE/PATCH 等危險方法；remote downloader rejections expose a user-facing message；known regressions: copy-share fallback and shared page loading timeout guard；custom profile trading block plus test-mode diagnostics and internal_test warm-up gate guidance；browser-only mode 需帶 maintenance bypass token 才能讓 operator script 繼續驗證。 |
 

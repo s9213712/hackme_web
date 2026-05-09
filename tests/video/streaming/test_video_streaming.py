@@ -1027,10 +1027,12 @@ def test_shared_video_page_mentions_hls_js_fallback_and_fragment_loss(tmp_path):
     assert "showSharedPlaybackAction" in js
     assert "開始 E2EE 播放" in js
     assert "未按下播放前，不會主動要求密碼或開始解密。" in js
-    assert "#player-host { width:100%; margin-top:.8rem; }" in html
-    assert "video { height:auto; max-height:min(70vh, 560px); aspect-ratio:16 / 9; object-fit:contain; }" in html
+    assert ".wrap { width:min(100%, 1120px); min-height:100dvh;" in html
+    assert "#player-host { width:100%; min-height:0; margin-top:.8rem; display:grid; place-items:center; }" in html
+    assert "#player-host video { inline-size:min(100%, calc((100dvh - 240px) * 16 / 9)); height:auto; max-height:min(64dvh, 560px); aspect-ratio:16 / 9; object-fit:contain; }" in html
     assert "@media (max-width: 640px)" in html
-    assert "video { max-height:52vh; }" in html
+    assert "#player-host video { inline-size:100%; max-height:min(48dvh, calc(100dvh - 210px)); }" in html
+    assert "@media (max-height: 520px) and (orientation: landscape)" in html
 
 
 def test_shared_e2ee_stream_v2_manifest_and_chunk_routes_work_and_stay_off_hls(tmp_path):

@@ -444,26 +444,37 @@ def register_video_routes(app, deps):
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>分享影音</title>
   <style>
-    body {{ margin:0; background:#111521; color:#eef2ff; font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }}
-    .wrap {{ width:min(100%, 960px); margin:0 auto; padding:1rem; box-sizing:border-box; }}
-    .card {{ background:#171c2b; border:1px solid #2a3150; border-radius:18px; padding:1rem; box-shadow:0 14px 40px rgba(0,0,0,.22); overflow:hidden; }}
+    html {{ min-height:100%; }}
+    body {{ min-height:100dvh; margin:0; overflow-x:hidden; background:#111521; color:#eef2ff; font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }}
+    .wrap {{ width:min(100%, 1120px); min-height:100dvh; margin:0 auto; padding:clamp(.75rem, 2vw, 1.25rem); box-sizing:border-box; display:flex; align-items:center; }}
+    .card {{ width:100%; max-height:calc(100dvh - 2rem); background:#171c2b; border:1px solid #2a3150; border-radius:18px; padding:clamp(.85rem, 2vw, 1.1rem); box-shadow:0 14px 40px rgba(0,0,0,.22); overflow:auto; box-sizing:border-box; }}
+    h1 {{ margin:.1rem 0 .35rem; font-size:clamp(1.25rem, 3vw, 1.85rem); line-height:1.2; overflow-wrap:anywhere; }}
     .msg {{ min-height:1.4rem; color:#b9c2f0; margin:.75rem 0; white-space:pre-wrap; }}
     .field {{ display:grid; gap:.35rem; margin:.75rem 0; }}
     input, button, textarea {{ font:inherit; }}
     input[type=password] {{ width:100%; box-sizing:border-box; padding:.7rem .9rem; border-radius:12px; border:1px solid #39405c; background:#0f1422; color:#eef2ff; }}
     button {{ padding:.7rem 1rem; border-radius:12px; border:0; background:#3d78ff; color:#fff; cursor:pointer; }}
     button.secondary {{ background:#2b3148; }}
-    #player-host {{ width:100%; margin-top:.8rem; }}
-    video, audio {{ display:block; width:100%; max-width:100%; border-radius:14px; background:#070b15; }}
-    video {{ height:auto; max-height:min(70vh, 560px); aspect-ratio:16 / 9; object-fit:contain; }}
+    #player-host {{ width:100%; min-height:0; margin-top:.8rem; display:grid; place-items:center; }}
+    #player-host video, #player-host audio {{ display:block; width:100%; max-width:100%; border-radius:14px; background:#070b15; }}
+    #player-host video {{ inline-size:min(100%, calc((100dvh - 240px) * 16 / 9)); height:auto; max-height:min(64dvh, 560px); aspect-ratio:16 / 9; object-fit:contain; }}
+    #player-host audio {{ min-height:44px; }}
     .meta {{ color:#b8bfd8; font-size:.95rem; }}
     .hidden {{ display:none !important; }}
     @media (max-width: 640px) {{
-      .wrap {{ padding:.75rem; }}
-      .card {{ padding:.85rem; border-radius:14px; }}
-      video, audio {{ border-radius:10px; }}
-      video {{ max-height:52vh; }}
+      body {{ background:#171c2b; }}
+      .wrap {{ width:100%; min-height:100dvh; padding:0; align-items:stretch; }}
+      .card {{ min-height:100dvh; max-height:none; border:0; border-radius:0; padding:.85rem; box-shadow:none; }}
+      h1 {{ font-size:1.35rem; }}
+      #player-host {{ margin-top:.55rem; }}
+      #player-host video, #player-host audio {{ border-radius:10px; }}
+      #player-host video {{ inline-size:100%; max-height:min(48dvh, calc(100dvh - 210px)); }}
       button {{ width:100%; }}
+    }}
+    @media (max-height: 520px) and (orientation: landscape) {{
+      .wrap {{ align-items:flex-start; }}
+      .card {{ max-height:none; }}
+      #player-host video {{ inline-size:min(100%, calc(72dvh * 16 / 9)); max-height:72dvh; }}
     }}
   </style>
 </head>
@@ -486,7 +497,7 @@ def register_video_routes(app, deps):
     </div>
   </div>
   <script id="share-token" type="application/json">{share_token_json}</script>
-  <script src="/js/shared-video.js?v=20260507-share"></script>
+  <script src="/js/shared-video.js?v=20260509-responsive-share"></script>
 </body>
 </html>"""
 

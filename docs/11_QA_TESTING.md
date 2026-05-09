@@ -313,6 +313,8 @@ python3 scripts/on_live_reports/snapshot_restore.py
   - LoRA metadata / `trained_words` 是否會在重新整理後仍存在，不是只在下載當下有
   - 使用者加入 LoRA 時，是否只會補上缺少的 trigger words，而不會每次重複疊加
   - prompt helper 是否能把 Embedding token 正確送進後端
+  - workflow template preview 若有正/負 `CLIPTextEncode.text`，`ui_schema.panels[text]` 是否包含 synthetic `text:embeddings` / `embedding_shortcuts` 子項，且不被列為必填欄位
+  - 前端從 template 文字面板插入 Embedding 後，已展開的 text panel 是否保持展開，不可被重新折疊
   - custom VAE 是否真的改到 workflow，而不是只有 UI 多一個欄位
   - Civitai inspect / download 是否顯示 trigger words，且 remote mode 不會誤顯示本地下載工具
   - Civitai 搜尋是否支援關鍵字、base model、Checkpoint / LoRA / Embedding / ControlNet、Safe/NSFW 篩選，且搜尋結果會顯示版本、檔案大小、hash、相容模型摘要

@@ -26,6 +26,17 @@ def test_comfyui_generate_retries_stale_unavailable_state():
     assert 'setComfyuiMessage("正在載入 ComfyUI 模型清單...", true);' in comfyui_js
 
 
+def test_comfyui_stop_button_stays_visible_while_local_runtime_is_starting():
+    comfyui_js = _read("public/js/36-comfyui.js")
+    assert "let comfyuiLocalRuntimeActive = false;" in comfyui_js
+    assert "const showLocalRuntimeStop = isRoot && localMode && (comfyuiServerAvailable === true || comfyuiLocalRuntimeActive);" in comfyui_js
+    assert 'start.style.display = localMode && comfyuiServerAvailable !== true && !comfyuiLocalRuntimeActive ? "" : "none";' in comfyui_js
+    assert 'stop.style.display = showLocalRuntimeStop ? "" : "none";' in comfyui_js
+    assert 'comfyuiLocalRuntimeActive = comfyuiConnectionMode === "local" && (available || starting || !!json.local_runtime);' in comfyui_js
+    assert "comfyuiLocalRuntimeActive = true;" in comfyui_js
+    assert "comfyuiLocalRuntimeActive = false;" in comfyui_js
+
+
 def test_comfyui_static_asset_cache_busted_for_idle_retry_fix():
     index_html = _read("public/index.html")
-    assert "/js/36-comfyui.js?v=20260509-comfyui-template-embeddings" in index_html
+    assert "/js/36-comfyui.js?v=20260509-comfyui-stop-local-runtime" in index_html

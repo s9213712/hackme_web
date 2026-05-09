@@ -86,14 +86,18 @@
 
   <!-- ── Register form ───────────────────────────────── -->
   <div class="form-section" id="sec-register">
+    <div id="reg-autofill-decoys" aria-hidden="true" style="display:none">
+      <input type="text" autocomplete="username" tabindex="-1" />
+      <input type="password" autocomplete="new-password" tabindex="-1" />
+    </div>
     <div class="field">
       <label>帳號</label>
-      <input type="text" id="reg-user" placeholder="選擇一個帳號（3 字以上）" autocomplete="username" />
+      <input type="text" id="reg-user" placeholder="選擇一個帳號（3 字以上）" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-form-type="other" />
     </div>
     <div class="field">
       <label>密碼</label>
       <div class="pw-wrap">
-        <input type="password" id="reg-pw" placeholder="請設定密碼" autocomplete="new-password" />
+        <input type="password" id="reg-pw" placeholder="請設定密碼" autocomplete="off" data-lpignore="true" data-1p-ignore="true" data-form-type="other" />
         <button class="pw-toggle" id="reg-pw-toggle" type="button" aria-label="顯示密碼">👁</button>
       </div>
       <div class="pw-rules">
@@ -107,7 +111,7 @@
     <div class="field">
       <label>確認密碼</label>
       <div class="pw-wrap">
-        <input type="password" id="reg-pw-confirm" placeholder="請再次輸入密碼" autocomplete="new-password" />
+        <input type="password" id="reg-pw-confirm" placeholder="請再次輸入密碼" autocomplete="off" data-lpignore="true" data-1p-ignore="true" data-form-type="other" />
         <button class="pw-toggle" id="reg-pw-confirm-toggle" type="button" aria-label="顯示密碼">👁</button>
       </div>
       <p style="margin-top:.4rem; color:#ff4f6d" id="reg-pw-confirm-hint"></p>
@@ -5071,7 +5075,7 @@
 <script src="/js/34-markdown-editor.js?v=20260428-forum-pages" defer></script>
 <script src="/js/35-drive.js?v=20260504-drive-media-rename" defer></script>
   <script src="/js/35-drive-preview-share.js?v=20260507-drive-preview-share-split" defer></script>
-<script src="/js/36-comfyui.js?v=20260509-comfyui-template-embeddings" defer></script>
+<script src="/js/36-comfyui.js?v=20260509-comfyui-stop-local-runtime" defer></script>
 <script src="/js/36-comfyui-workflows.js?v=20260509-comfyui-template-embeddings" defer></script>
 <script src="/js/37-bug-report.js?v=20260502-device-feature" defer></script>
 <script src="/js/38-games.js?v=20260502-mobile-controls" defer></script>

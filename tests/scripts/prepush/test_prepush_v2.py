@@ -11,6 +11,7 @@ from scripts.prepush.checks import (
     markdown_links_check,
     pytest_quick_check,
     release_check,
+    scripts_index_check,
     secrets_check,
 )
 from scripts.prepush.context import PrepushContext
@@ -78,6 +79,25 @@ def test_markdown_link_check_accepts_correct_relative_links_and_ignores_code(tmp
     result = markdown_links_check.run(ctx)
 
     assert result.status != FAIL
+
+
+def test_scripts_index_check_requires_registered_security_scripts(tmp_path):
+    script_dir = tmp_path / "scripts" / "security" / "pentest"
+    script_dir.mkdir(parents=True)
+    script = script_dir / "new_probe.py"
+    script.write_text("print('probe')\n", encoding="utf-8")
+    index = tmp_path / "scripts" / "INDEX.md"
+    index.write_text("# Scripts Index\n", encoding="utf-8")
+
+    ctx = make_ctx(tmp_path)
+    result = scripts_index_check.run(ctx)
+
+    assert result.status == FAIL
+    assert result.name == "scripts index"
+    assert result.details == [{"script": "scripts/security/pentest/new_probe.py"}]
+
+    index.write_text("`scripts/security/pentest/new_probe.py` | QA | Probe | stdout | Probe failed |\n", encoding="utf-8")
+    assert scripts_index_check.run(ctx).status != FAIL
 
 
 def test_gitkeep_is_not_forbidden_runtime_artifact():

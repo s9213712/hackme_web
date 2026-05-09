@@ -38,6 +38,9 @@ The repository root keeps only [README.md](../README.md) and
 
 - [11_QA_TESTING.md](11_QA_TESTING.md): test-layer map, script relationships,
   and operator-facing validation route
+- [security/QA_ARCHITECTURE.md](security/QA_ARCHITECTURE.md): QA/security
+  tooling governance, validation vocabulary, production-gate script contract,
+  and functional-smoke phase catalog
 - [12_TROUBLESHOOTING.md](12_TROUBLESHOOTING.md): common errors and first-pass diagnosis
 
 ## Deep Reference
@@ -95,6 +98,8 @@ The repository root keeps only [README.md](../README.md) and
 - [security/PRE_RELEASE_CHECKLIST.md](security/PRE_RELEASE_CHECKLIST.md): blocking release checklist
 - [security/PRODUCTION_SIGNOFF_CHECKLIST.md](security/PRODUCTION_SIGNOFF_CHECKLIST.md): whole-site sign-off criteria
 - [security/FUNCTIONAL_SMOKE.md](security/FUNCTIONAL_SMOKE.md): isolated runtime smoke runner
+- [security/QA_ARCHITECTURE.md](security/QA_ARCHITECTURE.md): QA/security
+  governance rules and validation naming contract
 - [security/FUNCTIONAL_PERMISSION_PENTEST.md](security/FUNCTIONAL_PERMISSION_PENTEST.md): role-based permission pentest
 - [security/PENTEST.md](security/PENTEST.md): security runner and whole-site gate usage
 - [security/TRADING_STRESS_PENTEST.md](security/TRADING_STRESS_PENTEST.md): trading correctness/stress script

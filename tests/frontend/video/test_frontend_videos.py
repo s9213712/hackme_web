@@ -115,3 +115,13 @@ def test_video_share_copy_and_shared_page_guardrails_are_visible_in_ui_code():
     assert "AbortController" in shared_page
     assert "setTimeout(() => controller.abort(), 10000);" in shared_page
     assert 'loadSharedVideo().catch((err) => setMsg(err.message || "分享影音載入失敗", true));' in shared_page
+
+
+def test_shared_video_page_layout_is_viewport_bounded():
+    html = (ROOT / "routes" / "videos.py").read_text(encoding="utf-8")
+
+    assert "min-height:100dvh" in html
+    assert "#player-host video" in html
+    assert "max-height:min(64dvh, 560px)" in html
+    assert "max-height:min(48dvh, calc(100dvh - 210px))" in html
+    assert "@media (max-height: 520px) and (orientation: landscape)" in html

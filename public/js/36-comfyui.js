@@ -21,6 +21,7 @@ let comfyuiAvailableEmbeddings = [];
 let comfyuiAvailableVaes = [];
 let comfyuiSelectedLoras = [];
 let comfyuiConnectionMode = "remote";
+let comfyuiLocalRuntimeActive = false;
 let comfyuiLocalStartPollTimer = null;
 let comfyuiCivitaiInspection = null;
 let comfyuiCivitaiSearchResults = [];
@@ -230,13 +231,15 @@ function updateComfyuiStartButton() {
   const start = $("comfyui-start-btn");
   const stop = $("comfyui-stop-btn");
   const isRoot = currentUser === "root";
+  const localMode = comfyuiConnectionMode === "local";
+  const showLocalRuntimeStop = isRoot && localMode && (comfyuiServerAvailable === true || comfyuiLocalRuntimeActive);
   updateComfyuiModeNote();
   if (start) {
-    start.style.display = comfyuiConnectionMode === "local" && comfyuiServerAvailable !== true ? "" : "none";
+    start.style.display = localMode && comfyuiServerAvailable !== true && !comfyuiLocalRuntimeActive ? "" : "none";
     start.disabled = !!comfyuiGenerateAbortController;
   }
   if (stop) {
-    stop.style.display = isRoot && comfyuiConnectionMode === "local" && comfyuiServerAvailable === true ? "" : "none";
+    stop.style.display = showLocalRuntimeStop ? "" : "none";
     stop.disabled = !!comfyuiGenerateAbortController;
   }
 }
@@ -1585,6 +1588,7 @@ async function refreshComfyuiStatus({ switchAway = true } = {}) {
     comfyuiConnectionMode = json.connection_mode || comfyuiConnectionMode || "remote";
     const available = !!json.available;
     const starting = !!json.starting;
+    comfyuiLocalRuntimeActive = comfyuiConnectionMode === "local" && (available || starting || !!json.local_runtime);
     applyComfyuiRuntimeLimits(json);
     const detail = available
       ? `已偵測 ${json.comfyui_url || "ComfyUI"}${comfyuiBackendLabel(json)}`
@@ -1601,6 +1605,7 @@ async function refreshComfyuiStatus({ switchAway = true } = {}) {
     return available;
   } catch (err) {
     const message = err.message || "ComfyUI 伺服器未連線";
+    comfyuiLocalRuntimeActive = false;
     setComfyuiTabAvailability(false, message);
     comfyuiModelsLoaded = false;
     setComfyuiBusy(false);
@@ -1638,6 +1643,7 @@ async function startLocalComfyui() {
     if (status) status.textContent = info.already_running ? "ComfyUI 已在執行中" : "已送出啟動請求，正在重新檢查連線...";
     if (info.started && info.available === false) {
       comfyuiServerAvailable = false;
+      comfyuiLocalRuntimeActive = true;
       setComfyuiTabAvailability(false, info.message || "ComfyUI 正在背景啟動中");
       if (status) status.textContent = info.message || "ComfyUI 正在背景啟動中，稍後請按重新整理模型";
       keepIdleSuspend = true;
@@ -1687,6 +1693,7 @@ async function stopLocalComfyui() {
     if (!res.ok || !json.ok) throw new Error(json.msg || `ComfyUI 停止失敗（HTTP ${res.status}）`);
     comfyuiConnectionMode = json.connection_mode || comfyuiConnectionMode || "local";
     comfyuiModelsLoaded = false;
+    comfyuiLocalRuntimeActive = false;
     setComfyuiTabAvailability(false, json.msg || "ComfyUI 已停止");
     if (status) status.textContent = json.msg || "ComfyUI 已停止";
     setComfyuiMessage(json.msg || "已停止本地 ComfyUI。", true);
