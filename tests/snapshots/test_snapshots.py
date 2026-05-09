@@ -643,7 +643,7 @@ def test_create_tester_token_rejects_expired_or_timezone_aware_expiry(tmp_path):
     assert "不含時區" in aware["msg"]
 
 
-def _insert_passing_production_reports(db_path):
+def _insert_passing_production_reports(db_path, *, server_mode="dev_ready"):
     from services.snapshots import PRODUCTION_REQUIRED_REPORT_TYPES
 
     conn = _db(db_path)
@@ -660,7 +660,11 @@ def _insert_passing_production_reports(db_path):
             "report_hash": report_hash,
             "target_commit": "test-commit",
             "target_branch": "test-branch",
-            "server_mode": "test",
+            # server_mode must match what _current_production_target() returns
+            # at runtime, otherwise target_match fails and the gate refuses to
+            # accept the report. Default `dev_ready` matches the runtime
+            # default when no server_modes row + no git repo dir is set.
+            "server_mode": server_mode,
             "test_result": "pass",
             "pass": 1,
             "critical_findings_count": 0,
@@ -678,12 +682,46 @@ def _insert_passing_production_reports(db_path):
             (id, report_type, report_hash, target_commit, target_branch, server_mode, test_result,
              pass, critical_findings_count, high_findings_count, unresolved_findings_json, tester, signature,
              raw_report_json, report_source, trust_level, key_version, verified_at, created_at)
-            VALUES (?, ?, ?, 'test-commit', 'test-branch', 'test', 'pass', 1, 0, 0, '[]', 'pytest', ?, ?, 'pytest_fixture', 'verified', ?, ?, ?)
+            VALUES (?, ?, ?, 'test-commit', 'test-branch', ?, 'pass', 1, 0, 0, '[]', 'pytest', ?, ?, 'pytest_fixture', 'verified', ?, ?, ?)
             """,
-            (f"rep_{report_type}", report_type, report_hash, signature, raw_report_json, key_version, now, now),
+            (f"rep_{report_type}", report_type, report_hash, server_mode, signature, raw_report_json, key_version, now, now),
         )
     conn.commit()
     conn.close()
+
+
+def _write_production_gate_report_file(runtime_root, report_type, payload, *, signed=True, key_version=None):
+    report_dir = Path(runtime_root) / "reports" / "security" / "production_gate"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    data = dict(payload)
+    data.setdefault("report_type", report_type)
+    if signed:
+        key = os.environ.setdefault("SERVER_MODE_REPORT_HMAC_KEY", "pytest-production-report-key")
+        key_version = key_version or os.environ.setdefault("SERVER_MODE_REPORT_HMAC_KEY_VERSION", "pytest-v1")
+        raw_report = data.get("raw_report") or {"report_type": data["report_type"], "status": data.get("test_result", "pass")}
+        raw_report_json = _canonical_json_text(raw_report)
+        report_hash = data.get("report_hash") or f"sha256:{hashlib.sha256(raw_report_json.encode('utf-8')).hexdigest()}"
+        signature_payload = {
+            "report_type": str(data.get("report_type") or report_type),
+            "report_hash": report_hash,
+            "target_commit": str(data.get("target_commit") or ""),
+            "target_branch": str(data.get("target_branch") or ""),
+            "server_mode": str(data.get("server_mode") or ""),
+            "test_result": str(data.get("test_result") or "pass"),
+            "pass": 1 if bool(data.get("pass", True)) else 0,
+            "critical_findings_count": int(data.get("critical_findings_count") or 0),
+            "high_findings_count": int(data.get("high_findings_count") or 0),
+            "unresolved_findings_json": json.dumps(data.get("unresolved_findings") or [], ensure_ascii=False, sort_keys=True),
+            "tester": str(data.get("tester") or "pytest"),
+            "raw_report_json": raw_report_json,
+            "report_source": str(data.get("report_source") or "filesystem_auto_detect"),
+            "key_version": key_version,
+        }
+        data["raw_report"] = raw_report
+        data["report_hash"] = report_hash
+        data["key_version"] = key_version
+        data["signature"] = f"hmac_sha256:{_hmac_sha256(key, _production_report_signature_payload(signature_payload))}"
+    (report_dir / f"{report_type}_report.json").write_text(json.dumps(data, ensure_ascii=False, sort_keys=True), encoding="utf-8")
 
 
 def test_production_report_upload_requires_signed_raw_report(tmp_path):
@@ -773,7 +811,14 @@ def test_production_report_upload_verifies_signature_and_hash(tmp_path):
     assert "signature" in bad_sig["msg"]
 
 
-def test_production_report_upload_reuses_current_connection_for_requirements(tmp_path):
+def test_production_report_upload_reuses_current_connection_for_requirements(tmp_path, monkeypatch):
+    # Clear cached HMAC env vars so this test deterministically exercises the
+    # "_hmac_key opens a control-db connection to read current mode" branch.
+    # An earlier test in the suite may have populated these via
+    # os.environ.setdefault and that would short-circuit _hmac_key, dropping
+    # the expected connection count from 2 → 1.
+    monkeypatch.delenv("SERVER_MODE_REPORT_HMAC_KEY", raising=False)
+    monkeypatch.delenv("SERVER_MODE_REPORT_HMAC_KEY_VERSION", raising=False)
     audit_log = []
     service, db_path, uploads = _service(tmp_path, audit_log)
     calls = {"count": 0}
@@ -864,6 +909,126 @@ def test_production_requirements_fail_when_latest_report_signature_is_tampered(t
     assert "stress" in requirements["failed"]
     assert requirements["reports"]["stress"]["signature_valid"] is False
     assert requirements["reports"]["stress"]["verification_reason"] in {"report_hash_mismatch", "signature_mismatch"}
+
+
+def test_unverified_filesystem_report_cannot_override_verified_db_report(tmp_path):
+    audit_log = []
+    runtime_root = tmp_path / "runtime"
+    service, db_path, _uploads = _service(tmp_path, audit_log, runtime_base_dir=runtime_root)
+    # This test patches _current_production_target to return server_mode='test'
+    # so the seed reports must be inserted with that same mode (otherwise the
+    # target_match check fails before this test even reaches its assertion).
+    _insert_passing_production_reports(db_path, server_mode="test")
+    mode = ServerModeService(snapshot_service=service, get_db=lambda: _db(db_path), audit=lambda *args, **kwargs: audit_log.append((args, kwargs)))
+    mode._current_production_target = lambda conn=None: {"target_commit": "test-commit", "target_branch": "test-branch", "server_mode": "test"}
+    _write_production_gate_report_file(
+        runtime_root,
+        "stress",
+        {
+            "report_type": "stress",
+            "target_commit": "test-commit",
+            "target_branch": "test-branch",
+            "server_mode": "test",
+            "test_result": "fail",
+            "pass": False,
+            "critical_findings_count": 0,
+            "high_findings_count": 1,
+            "unresolved_findings": [{"severity": "high"}],
+            "tester": "pytest",
+            "report_source": "filesystem_auto_detect",
+            "raw_report": {"report_type": "stress", "status": "fail"},
+        },
+        signed=False,
+    )
+    requirements = mode.production_requirements()
+    assert requirements["ok"] is True
+    assert requirements["reports"]["stress"]["report_source"] == "pytest_fixture"
+    assert requirements["reports"]["stress"]["trust_level"] == "verified"
+
+
+def test_unsigned_filesystem_report_never_satisfies_production_gate(tmp_path):
+    audit_log = []
+    runtime_root = tmp_path / "runtime"
+    service, db_path, _uploads = _service(tmp_path, audit_log, runtime_base_dir=runtime_root)
+    mode = ServerModeService(snapshot_service=service, get_db=lambda: _db(db_path), audit=lambda *args, **kwargs: audit_log.append((args, kwargs)))
+    mode._current_production_target = lambda conn=None: {"target_commit": "test-commit", "target_branch": "test-branch", "server_mode": "test"}
+    _write_production_gate_report_file(
+        runtime_root,
+        "stress",
+        {
+            "report_type": "stress",
+            "target_commit": "test-commit",
+            "target_branch": "test-branch",
+            "server_mode": "test",
+            "test_result": "pass",
+            "pass": True,
+            "tester": "pytest",
+            "report_source": "filesystem_auto_detect",
+            "raw_report": {"report_type": "stress", "status": "pass"},
+        },
+        signed=False,
+    )
+    requirements = mode.production_requirements()
+    assert "stress" in requirements["failed"]
+    assert requirements["reports"]["stress"]["trust_level"] == "unverified"
+    assert requirements["reports"]["stress"]["signature_valid"] is False
+
+
+def test_report_type_mismatch_file_is_rejected(tmp_path):
+    audit_log = []
+    runtime_root = tmp_path / "runtime"
+    service, db_path, _uploads = _service(tmp_path, audit_log, runtime_base_dir=runtime_root)
+    mode = ServerModeService(snapshot_service=service, get_db=lambda: _db(db_path), audit=lambda *args, **kwargs: audit_log.append((args, kwargs)))
+    mode._current_production_target = lambda conn=None: {"target_commit": "test-commit", "target_branch": "test-branch", "server_mode": "test"}
+    _write_production_gate_report_file(
+        runtime_root,
+        "stress",
+        {
+            "report_type": "permission",
+            "target_commit": "test-commit",
+            "target_branch": "test-branch",
+            "server_mode": "test",
+            "test_result": "pass",
+            "pass": True,
+            "tester": "pytest",
+            "report_source": "filesystem_auto_detect",
+            "raw_report": {"report_type": "permission", "status": "pass"},
+        },
+        signed=True,
+    )
+    requirements = mode.production_requirements()
+    assert "stress" in requirements["failed"]
+    assert requirements["reports"]["stress"]["verification_reason"] == "report_type_mismatch"
+    assert requirements["reports"]["stress"]["trust_level"] == "unverified"
+
+
+def test_invalid_json_filesystem_report_is_warning_only(tmp_path):
+    audit_log = []
+    runtime_root = tmp_path / "runtime"
+    report_dir = runtime_root / "reports" / "security" / "production_gate"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    (report_dir / "stress_report.json").write_text("{not-json", encoding="utf-8")
+    service, db_path, _uploads = _service(tmp_path, audit_log, runtime_base_dir=runtime_root)
+    mode = ServerModeService(snapshot_service=service, get_db=lambda: _db(db_path), audit=lambda *args, **kwargs: audit_log.append((args, kwargs)))
+    mode._current_production_target = lambda conn=None: {"target_commit": "test-commit", "target_branch": "test-branch", "server_mode": "test"}
+    requirements = mode.production_requirements()
+    assert "stress" in requirements["failed"]
+    assert requirements["reports"]["stress"]["verification_reason"] == "invalid_report_json"
+    assert requirements["reports"]["stress"]["trust_level"] == "unverified"
+
+
+def test_old_commit_signed_report_cannot_pass_current_target_gate(tmp_path):
+    audit_log = []
+    runtime_root = tmp_path / "runtime"
+    service, db_path, _uploads = _service(tmp_path, audit_log, runtime_base_dir=runtime_root)
+    _insert_passing_production_reports(db_path)
+    mode = ServerModeService(snapshot_service=service, get_db=lambda: _db(db_path), audit=lambda *args, **kwargs: audit_log.append((args, kwargs)))
+    mode._current_production_target = lambda conn=None: {"target_commit": "new-commit", "target_branch": "test-branch", "server_mode": "test"}
+    requirements = mode.production_requirements()
+    assert "stress" in requirements["failed"]
+    assert requirements["reports"]["stress"]["signature_valid"] is True
+    assert requirements["reports"]["stress"]["target_match"] is False
+    assert requirements["reports"]["stress"]["target_verification_reason"] == "target_commit_mismatch"
 
 
 def test_builtin_security_profiles_refresh_and_close_superweak_controls(tmp_path):

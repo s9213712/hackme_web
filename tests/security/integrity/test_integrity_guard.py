@@ -174,7 +174,10 @@ def test_production_mode_high_risk_integrity_finding_enters_incident_lockdown(tm
                 "report_hash": report_hash,
                 "target_commit": "commit",
                 "target_branch": "branch",
-                "server_mode": "test",
+                # server_mode must match _current_production_target() runtime
+                # default ("dev_ready") so target_match passes; otherwise the
+                # test never reaches the integrity-guard branch we're exercising.
+                "server_mode": "dev_ready",
                 "test_result": "pass",
                 "pass": 1,
                 "critical_findings_count": 0,
@@ -192,7 +195,7 @@ def test_production_mode_high_risk_integrity_finding_enters_incident_lockdown(tm
                 (id, report_type, report_hash, target_commit, target_branch, server_mode, test_result,
                  pass, critical_findings_count, high_findings_count, unresolved_findings_json, tester, signature,
                  raw_report_json, report_source, trust_level, key_version, verified_at, created_at)
-                VALUES (?, ?, ?, 'commit', 'branch', 'test', 'pass', 1, 0, 0, '[]', 'pytest', ?, ?, 'pytest_fixture', 'verified', ?, ?, ?)
+                VALUES (?, ?, ?, 'commit', 'branch', 'dev_ready', 'pass', 1, 0, 0, '[]', 'pytest', ?, ?, 'pytest_fixture', 'verified', ?, ?, ?)
                 """,
                 (f"rep_{report_type}", report_type, report_hash, signature, raw_report_json, key_version, now, now),
             )
