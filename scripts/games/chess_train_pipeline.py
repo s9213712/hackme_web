@@ -48,6 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pv-quiescence-depth", type=int, default=1)
     parser.add_argument("--smoke-games-per-pair", type=int, default=1)
     parser.add_argument("--benchmark-rounds", type=int, default=1)
+    parser.add_argument("--skip-benchmark", action="store_true")
     parser.add_argument(
         "--promote-engines",
         default="experiment 3:dl,experiment 4:pv",
@@ -88,6 +89,7 @@ def _write_report(summary: dict) -> dict:
         f"- exp2_refine_samples: `{summary.get('exp2_refine', {}).get('accepted_samples', 0)}`",
         f"- exp3_refine_samples: `{summary.get('exp3_refine', {}).get('accepted_samples', 0)}`",
         f"- exp4_refine_samples: `{summary.get('exp4_refine', {}).get('accepted_samples', 0)}`",
+        f"- benchmark_skipped: `{summary['benchmark'].get('skipped', False)}`",
         f"- benchmark_report: `{summary['benchmark'].get('reports', {}).get('json_report', '')}`",
         "",
         "## Stage / Promote",
@@ -200,46 +202,56 @@ def main() -> int:
         ]
         exp4_refine = _run_json(exp4_cmd)
 
-    benchmark_cmd = [
-        sys.executable,
-        str(ROOT / "scripts" / "games" / "chess_self_play_train.py"),
-        "--exp1-games", "0",
-        "--exp2-games", "0",
-        "--exp3-games", "0",
-        "--exp4-games", "0",
-        "--hard-exp1-games", "0",
-        "--hard-exp2-games", "0",
-        "--hard-exp3-games", "0",
-        "--hard-exp4-games", "0",
-        "--cross-games", "0",
-        "--cross-exp1-exp3-games", "0",
-        "--cross-exp2-exp3-games", "0",
-        "--cross-exp1-exp4-games", "0",
-        "--cross-exp2-exp4-games", "0",
-        "--cross-exp3-exp4-games", "0",
-        "--smoke-games-per-pair",
-        str(max(1, int(args.smoke_games_per_pair))),
-        "--benchmark-rounds",
-        str(max(1, int(args.benchmark_rounds))),
-        "--seed",
-        str(int(args.seed) + 1000),
-        "--experiment-db-path",
-        str(candidate_paths["experiment"]),
-        "--experiment-3-model-path",
-        str(candidate_paths["experiment 3:dl"]),
-        "--experiment-4-model-path",
-        str(candidate_paths["experiment 4:pv"]),
-    ]
-    if args.include_exp2:
-        benchmark_cmd.extend(["--experiment-2-model-path", str(candidate_paths["experiment 2:nn"])])
-    if int(args.teacher_depth) > 0:
-        benchmark_cmd.extend(["--teacher-depth", str(int(args.teacher_depth))])
-    if int(args.max_plies) > 0:
-        benchmark_cmd.extend(["--max-plies", str(int(args.max_plies))])
-    benchmark = _run_json(benchmark_cmd)
-    benchmark_report_path = str((benchmark.get("reports") or {}).get("json_report") or "")
+    benchmark_report_path = ""
+    if args.skip_benchmark:
+        benchmark = {
+            "ok": True,
+            "skipped": True,
+            "reason": "disabled_by_flag",
+            "reports": {},
+        }
+    else:
+        benchmark_cmd = [
+            sys.executable,
+            str(ROOT / "scripts" / "games" / "chess_self_play_train.py"),
+            "--exp1-games", "0",
+            "--exp2-games", "0",
+            "--exp3-games", "0",
+            "--exp4-games", "0",
+            "--hard-exp1-games", "0",
+            "--hard-exp2-games", "0",
+            "--hard-exp3-games", "0",
+            "--hard-exp4-games", "0",
+            "--cross-games", "0",
+            "--cross-exp1-exp3-games", "0",
+            "--cross-exp2-exp3-games", "0",
+            "--cross-exp1-exp4-games", "0",
+            "--cross-exp2-exp4-games", "0",
+            "--cross-exp3-exp4-games", "0",
+            "--smoke-games-per-pair",
+            str(max(1, int(args.smoke_games_per_pair))),
+            "--benchmark-rounds",
+            str(max(1, int(args.benchmark_rounds))),
+            "--seed",
+            str(int(args.seed) + 1000),
+            "--experiment-db-path",
+            str(candidate_paths["experiment"]),
+            "--experiment-3-model-path",
+            str(candidate_paths["experiment 3:dl"]),
+            "--experiment-4-model-path",
+            str(candidate_paths["experiment 4:pv"]),
+        ]
+        if args.include_exp2:
+            benchmark_cmd.extend(["--experiment-2-model-path", str(candidate_paths["experiment 2:nn"])])
+        if int(args.teacher_depth) > 0:
+            benchmark_cmd.extend(["--teacher-depth", str(int(args.teacher_depth))])
+        if int(args.max_plies) > 0:
+            benchmark_cmd.extend(["--max-plies", str(int(args.max_plies))])
+        benchmark = _run_json(benchmark_cmd)
+        benchmark_report_path = str((benchmark.get("reports") or {}).get("json_report") or "")
 
     promotion_results = []
+    skip_promote_effective = bool(args.skip_promote or args.skip_benchmark)
     requested_engines = [item.strip() for item in str(args.promote_engines or "").split(",") if item.strip()]
     for engine in requested_engines:
         source_path = candidate_paths.get(engine)
@@ -264,7 +276,7 @@ def main() -> int:
             "gate_pass": bool(((stage_result.get("promotion_gate") or {}) if isinstance(stage_result, dict) else {}) or False),
             "candidate_path": str(source_path),
         }
-        if not args.skip_promote and not args.stage_only:
+        if not skip_promote_effective and not args.stage_only:
             try:
                 promote_result = promote_candidate_model(
                     engine=engine,
@@ -275,6 +287,8 @@ def main() -> int:
                 row["gate_pass"] = True
             except Exception as exc:
                 row["reason"] = str(exc)
+        elif args.skip_benchmark:
+            row["reason"] = "promotion skipped because benchmark was disabled"
         promotion_results.append(row)
 
     finished_at = datetime.utcnow().isoformat() + "Z"

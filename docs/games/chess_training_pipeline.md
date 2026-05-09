@@ -268,6 +268,15 @@ promotion gate 至少會檢查：
 - `suspicious_matches == 0`
 - smoke pass
 
+`chess_train_pipeline.py --skip-benchmark` 只允許產生 candidate / stage candidate；因為沒有新的 benchmark report，pipeline 會自動禁止 promote，報告中會標記 `benchmark.skipped=true`。
+
+autorun 可以用環境變數保守降級：
+
+- `HTML_LEARNING_CHESS_AUTORUN_SKIP_BENCHMARK=1`
+  autorun command 追加 `--skip-benchmark`，只做 replay prepare / seed / refine / stage，不跑 benchmark。
+- `HTML_LEARNING_CHESS_AUTORUN_SKIP_PROMOTE=1`
+  autorun command 追加 `--skip-promote`，即使 benchmark 通過也不覆蓋 production model。
+
 ## 6.5 線上學習回路 end-to-end 驗收
 
 `scripts/games/chess_live_learning_validation.py` 是一支獨立的驗收腳本，用來確認「user game → replay 收進來 → classify → 觸發 autorun retrain → benchmark」整條回路在 exp1 ~ exp4 上都能跑完。**不在 server boot / pipeline 裡，純手動驗收用。**

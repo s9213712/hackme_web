@@ -1353,6 +1353,8 @@ def test_pipeline_autorun_starts_when_replay_threshold_is_met(tmp_path, monkeypa
     )
     monkeypatch.setenv("HACKME_RUNTIME_DIR", str(runtime_dir))
     monkeypatch.setenv("HTML_LEARNING_CHESS_RETRAIN_MIN_REPLAYS", "1")
+    monkeypatch.setenv("HTML_LEARNING_CHESS_AUTORUN_SKIP_BENCHMARK", "1")
+    monkeypatch.setenv("HTML_LEARNING_CHESS_AUTORUN_SKIP_PROMOTE", "1")
 
     popen_calls = []
 
@@ -1384,11 +1386,15 @@ def test_pipeline_autorun_starts_when_replay_threshold_is_met(tmp_path, monkeypa
     assert popen_calls
     assert "--include-quarantine" in popen_calls[0]["command"]
     assert "--min-usable-replays" in popen_calls[0]["command"]
+    assert "--skip-benchmark" in popen_calls[0]["command"]
+    assert "--skip-promote" in popen_calls[0]["command"]
 
     status = chess_pipeline_service.latest_pipeline_autorun_status()
     assert status["exists"] is True
     assert status["status"] == "passed"
     assert status["returncode"] == 0
+    assert "--skip-benchmark" in status["recommendation"]["recommended_command"]
+    assert "--skip-promote" in status["recommendation"]["recommended_command"]
 
 
 def test_root_chess_promotion_stage_and_promote(tmp_path, monkeypatch):

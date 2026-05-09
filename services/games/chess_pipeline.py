@@ -45,6 +45,14 @@ def retrain_max_age_hours() -> int:
     return max(1, value)
 
 
+def autorun_skip_benchmark() -> bool:
+    return str(os.environ.get("HTML_LEARNING_CHESS_AUTORUN_SKIP_BENCHMARK", "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def autorun_skip_promote() -> bool:
+    return str(os.environ.get("HTML_LEARNING_CHESS_AUTORUN_SKIP_PROMOTE", "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def default_chess_pipeline_dataset_root() -> Path:
     return default_chess_reports_dir() / "chess_datasets"
 
@@ -195,10 +203,14 @@ def pipeline_recommendation(*, replay: dict | None = None, pipeline_report: dict
         ready_reasons.append("replay threshold reached")
     command = (
         "python3 scripts/games/chess_train_pipeline.py "
-        "--preset standard --include-exp2 "
+        "--preset standard --include-exp2 --include-quarantine "
         "--promote-engines 'experiment 2:nn,experiment 3:dl,experiment 4:pv' "
         f"--min-usable-replays {thresholds['min_usable_replays']}"
     )
+    if autorun_skip_benchmark():
+        command += " --skip-benchmark"
+    if autorun_skip_promote():
+        command += " --skip-promote"
     return {
         "ready": bool(ready_reasons) and not blocked_reasons,
         "ready_reasons": ready_reasons,
@@ -249,11 +261,16 @@ def maybe_launch_chess_train_pipeline(
             "--preset",
             "standard",
             "--include-exp2",
+            "--include-quarantine",
             "--promote-engines",
             "experiment 2:nn,experiment 3:dl,experiment 4:pv",
             "--min-usable-replays",
             str(max(1, min_usable)),
         ]
+        if autorun_skip_benchmark():
+            cmd.append("--skip-benchmark")
+        if autorun_skip_promote():
+            cmd.append("--skip-promote")
         env = os.environ.copy()
         current_pythonpath = str(env.get("PYTHONPATH") or "").strip()
         root_text = str(root)

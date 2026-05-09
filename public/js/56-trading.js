@@ -3340,7 +3340,9 @@ async function renderGridBotPreview({ quiet = true } = {}) {
   const buyLevels = levels.filter((p) => p < refPrice);
   const sellLevels = levels.filter((p) => p > refPrice);
   // Buy orders: freeze amount + fee per level
-  const buyOrderCost = amount + feePerTrade;
+  const gridBuyFeePercent = tradingNumber(feePreview?.fee_model?.buy_fee_percent, feeRatePct * ((100 - gridDiscountPct) / 100));
+  const feePerBuyOrder = Math.max(0, amount * gridBuyFeePercent / 100);
+  const buyOrderCost = amount + feePerBuyOrder;
   const buyCostTotal = buyLevels.length * buyOrderCost;
   // Sell orders: need spot inventory (asset units); estimate cost at current price
   const spotUnitsNeeded = sellLevels.reduce((sum, p) => sum + (p > 0 ? amount / p : 0), 0);

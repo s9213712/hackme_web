@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 
 
-def test_chess_train_pipeline_runs_prepare_seed_benchmark_and_stage(tmp_path):
+def test_chess_train_pipeline_runs_prepare_seed_and_stages_without_benchmark(tmp_path):
     runtime_dir = tmp_path / "runtime"
     replay_path = runtime_dir / "reports" / "games" / "chess_replays.jsonl"
     replay_path.parent.mkdir(parents=True, exist_ok=True)
@@ -66,6 +66,7 @@ def test_chess_train_pipeline_runs_prepare_seed_benchmark_and_stage(tmp_path):
             "--min-usable-replays",
             "1",
             "--skip-promote",
+            "--skip-benchmark",
             "--promote-engines",
             "experiment 3:dl",
         ],
@@ -82,8 +83,11 @@ def test_chess_train_pipeline_runs_prepare_seed_benchmark_and_stage(tmp_path):
     assert payload["prepare"]["accepted_eval_samples"] >= 1
     assert payload["seed_train"]["games_played"] >= 1
     assert payload["seed_train"]["experiment_db_path"] == str(runtime_dir / "games" / "models" / "chess_experiment.db")
-    assert Path(payload["benchmark"]["reports"]["json_report"]).exists()
+    assert payload["benchmark"]["skipped"] is True
+    assert payload["benchmark_report_path"] == ""
     assert payload["promotion_results"][0]["engine"] == "experiment 3:dl"
     assert payload["promotion_results"][0]["staged"] is True
+    assert payload["promotion_results"][0]["promoted"] is False
+    assert payload["promotion_results"][0]["reason"] == "promotion skipped because benchmark was disabled"
     assert Path(payload["reports"]["json_report"]).exists()
     assert Path(payload["reports"]["md_report"]).exists()

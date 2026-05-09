@@ -297,6 +297,84 @@ focused live 驗收已在隔離副本完成，證據位於：
 - `scripts/security/gate/on_live_reports_make.py`
   - integrity `bulk-review` 與 `rescan` 前先刷新 CSRF，避免 report 已變綠但 helper 因 `csrf_invalid` 仍把 payload 簽成 fail
 
+### full-generator 實際產製順序
+
+這輪在隔離副本實際採用的順序如下：
+
+1. 先登入 root，保存 `00_browser_login.json`，再抓 `01_starting_mode.json` 確認起點仍在 `development`。
+2. 重設 gate 狀態與帳號密碼相關前置條件，保存 `03_account_reset.json` 與 `04_gate_state_reset.json`。
+3. 在整輪開始時凍結 target，保存 `05_run_target_meta.json`，後續 13 份 report 都以這個 `target_commit/target_branch` 為準，不允許中途漂移。
+4. 逐項產製 13 類真實 generator 報告。每一類都先保存 raw generator output，再正規化、簽章、上傳 DB，最後回讀 requirements 驗證 gate 對這份 report 的判定。
+5. 若 `integrity_guard` 因隔離副本內的預期變更先失敗，先 review pending findings，再 rerun integrity report，之後再做 final requirements 與 `GO_LIVE`。
+6. 在所有 13 類都轉綠後，保存 `90_final_requirements_before_go_live.json`，再呼叫 `92_enter_production.json`。
+7. production 後再做 browser login、強制改密、security-center 與 DB settings 對帳，最後保存 `97_final_target_meta.json` 與 `SUMMARY.json`。
+
+### full-generator 每份 report 要看哪些證據
+
+除了根目錄的 `SUMMARY.json` / `SUMMARY.md`，每一類 report 都在
+`reports/<report_type>/` 下保留同一套最小證據：
+
+- `00_context.json`
+  這份 report 當下的 base URL、mode、target 與 driver context。
+- `00_session_refresh_before_generator.json`
+  長跑前重新登入 root 的結果。若後面 upload 失敗，先看這份是否已失效。
+- `01_raw_report.json`
+  generator 的原始輸出。判斷問題是在 generator 本身還是 gate 包裝層，先看這份。
+- `02_normalized_payload.json`
+  上傳到 gate 前的正規化 payload。
+- `03_signature_metadata.json`
+  簽章與摘要資訊，確認 `signature_valid` 對應的是哪一版 payload。
+- `04_preupload_old_commit_requirements.json`
+  舊 commit 報告不得放行的檢查。
+- `05_preupload_report_type_mismatch_requirements.json`
+  `report_type` mismatch 不得放行的檢查。
+- `06_preupload_invalid_json_requirements.json`
+  invalid JSON 不得放行的檢查。
+- `07_preupload_real_requirements.json`
+  真實 payload 在 upload 前的 requirements snapshot。
+- `08_upload_response.json`
+  DB upload API 回應。`401`、`403`、schema 錯誤都先看這份。
+- `09_db_row_verification.json`
+  回讀 DB record，確認 `report_type`、`target_commit`、`target_branch`、`server_mode`、`trust_level=verified`。
+- `10_postupload_requirements.json`
+  真實 verified DB report 上傳後的 gate 狀態。
+- `11_postupload_old_commit_requirements.json`
+  上傳後再驗一次 old commit 不得放行。
+- `12_postupload_report_type_mismatch_requirements.json`
+  上傳後再驗一次 `report_type` mismatch 不得放行。
+- `13_postupload_invalid_json_requirements.json`
+  上傳後再驗一次 filesystem 壞檔不得蓋掉 verified DB report。
+- `14_validation_summary.json`
+  這一類 report 的總結。先判斷是否是 generator fail、upload fail、DB verify fail，直接看這份最快。
+
+`integrity_guard` 另有 rerun 證據，因為這輪第一個 `GO_LIVE` blocker 就在這裡：
+
+- `15_pending_findings_before_review.json`
+- `16_bulk_review_response.json`
+- `17` 到 `23` 的 rerun 組
+- `24` 到 `28` 的 rerun2 組
+
+### full-generator 除錯方法
+
+- `upload_response.json` 出現 `401 未登入`
+  先看 `00_session_refresh_before_generator.json`，再回頭檢查 harness 是否在每份 report 前 refresh root session。
+- `upload_response.json` 出現 `403` 或 `csrf_invalid`
+  先看 `03_signature_metadata.json` 是否對的是同一份 payload；若是 integrity review 流程，確認 helper 是否在 `bulk-review` / `rescan` 前重新取 CSRF。
+- 某份 report raw output 已經是綠的，但 `14_validation_summary.json` 仍是 fail
+  先比對 `01_raw_report.json`、`02_normalized_payload.json`、`08_upload_response.json`、`09_db_row_verification.json`，通常是包裝層欄位或登入態失效，不是 generator 本身壞掉。
+- requirements 一直 `ok=false`
+  先看各 report 的 `14_validation_summary.json`，再看根目錄 `90_final_requirements_before_go_live.json` 或 `98_final_requirements_after_integrity_review.json`，可以直接定位是哪一類 report 還未滿足 gate。
+- 懷疑 target commit 漂移
+  比對 `05_run_target_meta.json` 與 `97_final_target_meta.json`。若不同，這輪驗收無效，因為一部分 report 不是對同一個 target 產生。
+- `integrity_guard` 單獨卡住
+  先看 `reports/integrity_guard/15_pending_findings_before_review.json`。若裡面是這輪預期修改的 protected files，就先 review/approve，再看 `16_bulk_review_response.json`、`23_rerun_validation_summary.json` 或 `28_rerun2_postupload_requirements.json` 是否轉綠。
+- 懷疑 security-center 顯示值和 production DB 不一致
+  先比對 `95_security_center_after_go_live.json` / `103_security_center_after_integrity_review_go_live.json` 與 `96_security_center_db_settings.json` / `104_security_center_db_settings_after_integrity_review_go_live.json`，不要只看單一 API payload。
+- 懷疑上線後 operator flow 有問題
+  依序看 `93_browser_login_after_go_live.json`、`94_mode_after_go_live.json`、`105_browser_login_after_production_password_rotation.json`、`106_mode_after_production_password_rotation.json`、`107_security_center_after_production_password_rotation.json`。
+- 懷疑 SQLite 又互鎖
+  這輪最後是掃 isolated runtime 的 `server.log`，確認 `database is locked` 計數為 `0`。只看 API `200` 不夠，仍要掃 log。
+
 同一天又補了一輪更貼近 root 日常操作的 focused live 驗收，直接用隔離
 `test_for_develop.sh` 站做完整 happy-path：
 
