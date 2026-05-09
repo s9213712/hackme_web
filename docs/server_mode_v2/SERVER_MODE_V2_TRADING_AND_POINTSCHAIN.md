@@ -342,10 +342,10 @@ These extend the §QA Acceptance Checklist in the main mode matrix. Implementati
 | 文件 | 角色 |
 |---|---|
 | [`SERVER_MODE_V2_PROFILE_MATRIX.md`](SERVER_MODE_V2_PROFILE_MATRIX.md) | parent mode spec; this doc 是 trading/chain 子規範 |
-| [`BLOCKCHAIN/POINTSCHAIN_ENGINEERING.md`](../BLOCKCHAIN/POINTSCHAIN_ENGINEERING.md) | PointsChain v2 chain block + hash chain spec |
-| [`BLOCKCHAIN/POINTS_TRANSFER_API.md`](../BLOCKCHAIN/POINTS_TRANSFER_API.md) | Phase 3 transfer API (must respect production-only chain rule) |
-| [`BLOCKCHAIN/MULTISIG_WALLETS.md`](../BLOCKCHAIN/MULTISIG_WALLETS.md) | Phase 4 multisig (only valid in production) |
-| [`BLOCKCHAIN/POINTSCHAIN_QA.md`](../BLOCKCHAIN/POINTSCHAIN_QA.md) | per-phase chain QA gate |
+| [`BLOCKCHAIN/POINTSCHAIN_ENGINEERING.md`](../archive/research/BLOCKCHAIN/POINTSCHAIN_ENGINEERING.md) | PointsChain v2 chain block + hash chain spec |
+| [`BLOCKCHAIN/POINTS_TRANSFER_API.md`](../archive/research/BLOCKCHAIN/POINTS_TRANSFER_API.md) | Phase 3 transfer API (must respect production-only chain rule) |
+| [`BLOCKCHAIN/MULTISIG_WALLETS.md`](../archive/research/BLOCKCHAIN/MULTISIG_WALLETS.md) | Phase 4 multisig (only valid in production) |
+| [`BLOCKCHAIN/POINTSCHAIN_QA.md`](../archive/research/BLOCKCHAIN/POINTSCHAIN_QA.md) | per-phase chain QA gate |
 | [`08_TRADING_ENGINE.md`](../08_TRADING_ENGINE.md) | trading engine user/admin facing doc |
 
 ---

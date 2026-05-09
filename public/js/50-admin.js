@@ -2724,15 +2724,18 @@ async function startRootBtcTradePrediction() {
       $("root-trading-btc-trade-path").value = json.project_dir;
     }
     if (status) {
-      status.textContent = res.ok && json.ok
-        ? `${json.message || "BTC_trade 一鍵啟動已開始"}${job.job_id ? `；工作編號 ${job.job_id}` : ""}`
+      const steps = Array.isArray(job.steps) && job.steps.length
+        ? `；步驟：${job.steps.map(formatBtcTradeStepResult).join(" / ")}`
+        : "";
+      status.textContent = res.ok
+        ? `${json.message || json.msg || "BTC_trade 一鍵啟動已開始"}${job.job_id ? `；工作編號 ${job.job_id}` : ""}${steps}`
         : (json.msg || `HTTP ${res.status}`);
       status.style.color = res.ok && json.ok && json.start_ok ? "#4caf50" : "#ffb74d";
     }
-    if (res.ok && json.ok && job.job_id) {
+    if (res.ok && json.start_ok && job.job_id && job.status !== "completed" && job.status !== "error") {
       await pollRootBtcTradeStartJob(job.job_id);
     }
-    if (res.ok && json.ok && typeof loadTradingDashboard === "function") {
+    if (res.ok && json.ok && json.start_ok && typeof loadTradingDashboard === "function") {
       loadTradingDashboard();
     }
   } catch (err) {
@@ -2764,12 +2767,12 @@ async function pollRootBtcTradeStartJob(jobId) {
       const actionSummary = result.actions
         ? `；資料${result.actions.data_updated ? "已更新" : "沿用"} / 模型${result.actions.model_retrained ? "已重訓" : "沿用"} / 預測${result.actions.prediction_refreshed ? "已刷新" : "沿用有效結果"}`
         : "";
-      status.textContent = json.ok
-        ? `${job.status === "completed" ? "一鍵啟動完成" : (job.status === "error" ? "一鍵啟動失敗" : "一鍵啟動執行中")}：${job.message || "-"}${actionSummary}${steps}`
+      status.textContent = res.ok
+        ? `${job.status === "completed" ? "一鍵啟動完成" : (job.status === "error" ? "一鍵啟動失敗" : "一鍵啟動執行中")}：${job.message || json.msg || "-"}${actionSummary}${steps}`
         : (json.msg || `HTTP ${res.status}`);
       status.style.color = job.status === "completed" ? "#4caf50" : (job.status === "error" ? "#ff4f6d" : "#ffb74d");
     }
-    if (!json.ok || job.status === "completed" || job.status === "error") return;
+    if (!res.ok || job.status === "completed" || job.status === "error") return;
     await new Promise((resolve) => setTimeout(resolve, 1500));
   }
 }

@@ -15,6 +15,9 @@ scripts.
   promote them into a maintained entry with an owner and artifact contract.
 - Focused regression checks are not full validation and must not be labeled as
   full validation in docs, reports, PR descriptions, or script output.
+- User-facing scripts must print progress by default: target/runtime, phase
+  start, phase result, artifact path, and failure hint. Machine-readable
+  `--json` modes may suppress progress text.
 
 ## Production Gate Usable Scripts
 

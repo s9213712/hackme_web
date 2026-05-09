@@ -465,7 +465,7 @@ Runtime behavior:
 - Existing grid bots can be loaded into the backtest panel for what-if replay.
 
 The earlier design report is still useful background material:
-[Grid Trading Bot Design Report](../research/finished/GRID_TRADING_BOT_DESIGN_REPORT.md).
+[Grid Trading Bot Design Report](../archive/research/finished/GRID_TRADING_BOT_DESIGN_REPORT.md).
 
 ### Workflow Strategy Bot
 

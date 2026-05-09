@@ -703,7 +703,7 @@ plan_done_when:
 | [`SERVER_MODE_V2_TRADING_AND_POINTSCHAIN.md`](SERVER_MODE_V2_TRADING_AND_POINTSCHAIN.md) | trading + chain 子規範 |
 | [`SERVER_MODE_V2_MIGRATION_PLAN.md`](SERVER_MODE_V2_MIGRATION_PLAN.md) | Codex 寫的 migration 步驟 |
 | [`SERVER_MODE_V2_TEST_PLAN.md`](SERVER_MODE_V2_TEST_PLAN.md) | Codex 寫的 test plan |
-| [`examples/server_mode_v2/`](examples/server_mode_v2/) | token 教學 + 13 報告 playbook |
+| [`README.md`](README.md) | token 教學 + 13 報告 playbook |
 | [`AGENTS/reports/claude/server_mode_acceptance_2026-05-05/`](../AGENTS/reports/claude/server_mode_acceptance_2026-05-05/) | 13 節驗收報告 |
 
 ---

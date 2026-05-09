@@ -1777,13 +1777,20 @@ def register_trading_routes(app, deps):
             detail=f"project_dir={project_dir}; timeframe={timeframe}; started={job_result.get('started')}",
         )
         payload = {
-            "ok": True,
-            "start_ok": bool(job_result.get("ok")),
+            "ok": bool(job_result.get("ok")),
+            "start_ok": bool(job_result.get("job_ok", job_result.get("ok"))),
             "started": bool(job_result.get("started")),
             "project_dir": (job_result.get("job") or {}).get("project_dir"),
-            "message": "BTC_trade 一鍵啟動已在背景開始執行，會自動下載/更新、安裝依賴、訓練並產生預測" if job_result.get("started") else "BTC_trade 一鍵啟動已在背景執行中，沿用同一個工作",
             "job": job_result.get("job"),
         }
+        job = payload.get("job") or {}
+        if not payload["start_ok"]:
+            payload["msg"] = job.get("message") or "BTC_trade 一鍵啟動失敗"
+            payload["message"] = payload["msg"]
+        elif job_result.get("started"):
+            payload["message"] = "BTC_trade 一鍵啟動已在背景開始執行，會自動下載/更新、安裝依賴、訓練並產生預測"
+        else:
+            payload["message"] = "BTC_trade 一鍵啟動已在背景執行中，沿用同一個工作"
         return json_resp(payload)
 
     @app.route("/api/root/trading/btc-trade/start-status", methods=["GET"])
@@ -1796,7 +1803,8 @@ def register_trading_routes(app, deps):
         job = btc_trade_start_prediction_job_status(job_id)
         if not job:
             return json_resp({"ok": False, "msg": "找不到 BTC_trade 一鍵啟動工作"}, 404)
-        return json_resp({"ok": True, "job": job})
+        job_ok = job.get("status") != "error"
+        return json_resp({"ok": job_ok, "job_ok": job_ok, "msg": "" if job_ok else job.get("message") or "BTC_trade 一鍵啟動失敗", "job": job})
 
     @app.route("/api/root/trading/liquidations/scan", methods=["POST"])
     @require_csrf

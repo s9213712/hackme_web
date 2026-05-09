@@ -30,13 +30,16 @@ export PYTEST_ADDOPTS="${PYTEST_ADDOPTS:-} -o cache_dir=$HACKME_RUNTIME_DIR/pyte
 
 echo "[pytest-in-tmp] repo copy: $COPY_ROOT"
 echo "[pytest-in-tmp] runtime:   $HACKME_RUNTIME_DIR"
+echo "[pytest-in-tmp] running:   python3 -m pytest $*"
 
 set +e
 python3 -m pytest "$@"
 status=$?
 set -e
+echo "[pytest-in-tmp] exit code: $status"
 
 if [[ "$status" == "0" && "$KEEP_TMP" != "1" ]]; then
+  echo "[pytest-in-tmp] cleanup:   removing $RUN_ROOT"
   rm -rf "$RUN_ROOT"
 else
   echo "[pytest-in-tmp] kept tmp copy for debug: $COPY_ROOT"

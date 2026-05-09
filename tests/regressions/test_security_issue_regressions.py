@@ -137,10 +137,13 @@ def test_admin_users_post_uses_method_aware_csrf_guard():
 
 def test_admin_password_reset_review_hashes_reviewed_credential():
     users = (ROOT / "routes" / "users.py").read_text(encoding="utf-8")
+    recovery = (ROOT / "services" / "users" / "recovery.py").read_text(encoding="utf-8")
     reset_helper = users.split("def _apply_reviewed_password_reset", 1)[1].split("def admin_users", 1)[0]
 
     assert "hash_password(new_credential)" in reset_helper
     assert "hash_password(password)" not in reset_helper
+    assert "u.username AS username" in recovery
+    assert 'delete_csrf_tokens_for_username(request_row["username"])' in reset_helper
 
 
 def test_user_demote_accepts_optional_json_body_and_frontend_sends_json():

@@ -507,13 +507,13 @@ Workflow preset 補充：
 | GET/PUT | `/api/admin/access-controls` | manager | ACL / whitelist / lockdown |
 | POST | `/api/admin/access-controls/maintenance-bypass-token` | manager | 維護繞過 token |
 | POST | `/api/admin/access-controls/internal-test-token` | manager | 產生綁定單一帳號的 internal-test login token |
-| GET/POST | `/api/admin/snapshots` | manager | 列快照 / 建快照 |
-| GET/POST | `/api/admin/snapshots/daily` | manager | 日常快照設定 |
+| GET/POST | `/api/admin/snapshots` | root | 列快照 / 建快照 |
+| GET/POST | `/api/admin/snapshots/daily` | root | 日常快照設定 |
 | POST | `/api/admin/system-reset` | manager | 系統重置 |
-| GET/DELETE | `/api/admin/snapshots/<snapshot_id>` | manager | 單一快照 |
-| GET | `/api/admin/snapshots/<snapshot_id>/download` | manager | 下載快照 |
-| POST | `/api/admin/snapshots/upload-restore` | manager | 上傳快照恢復 |
-| POST | `/api/admin/snapshots/<snapshot_id>/restore` | manager | 恢復快照 |
+| GET/DELETE | `/api/admin/snapshots/<snapshot_id>` | root | 單一快照 |
+| GET | `/api/admin/snapshots/<snapshot_id>/download` | root | 下載快照 |
+| POST | `/api/admin/snapshots/upload-restore` | root | 上傳快照恢復 |
+| POST | `/api/admin/snapshots/<snapshot_id>/restore` | root | 恢復快照 |
 | GET/POST | `/api/admin/server-mode` | manager/root | 讀 mode / 切相容入口 |
 | POST | `/api/admin/server-mode/exit-superweak` | manager | 離開 superweak |
 | GET | `/api/root/server-mode` | root | root mode 狀態 |

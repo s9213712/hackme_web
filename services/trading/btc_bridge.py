@@ -885,9 +885,10 @@ def btc_trade_start_prediction_job(
     with BTC_TRADE_START_JOB_LOCK:
         for job in BTC_TRADE_START_JOBS.values():
             if job.get("project_key") == project_key and job.get("status") in {"queued", "running"}:
-                return {"ok": True, "started": False, "job": _btc_trade_job_payload(job)}
+                return {"ok": True, "job_ok": True, "started": False, "job": _btc_trade_job_payload(job)}
         job_id = uuid.uuid4().hex
         now = datetime.now(timezone.utc).isoformat()
+        done_event = threading.Event()
         job = {
             "job_id": job_id,
             "project_key": project_key,
@@ -900,6 +901,7 @@ def btc_trade_start_prediction_job(
             "finished_at": None,
             "steps": [],
             "result": None,
+            "_done_event": done_event,
         }
         BTC_TRADE_START_JOBS[job_id] = job
 
@@ -938,6 +940,7 @@ def btc_trade_start_prediction_job(
                 "steps": list(result.get("steps") or []),
                 "result": result,
             })
+            done_event.set()
         except Exception as exc:
             update_job({
                 "status": "error",
@@ -951,10 +954,16 @@ def btc_trade_start_prediction_job(
                     "message": f"BTC_trade 背景工作失敗：{exc.__class__.__name__}",
                 },
             })
+            done_event.set()
 
     threading.Thread(target=worker, name=f"btc-trade-start-{job_id[:8]}", daemon=True).start()
+    response_wait_seconds = min(max(int(wait_seconds or 0), 0), 5)
+    if response_wait_seconds:
+        done_event.wait(response_wait_seconds)
     with BTC_TRADE_START_JOB_LOCK:
-        return {"ok": True, "started": True, "job": _btc_trade_job_payload(BTC_TRADE_START_JOBS[job_id])}
+        payload = _btc_trade_job_payload(BTC_TRADE_START_JOBS[job_id])
+    job_ok = payload.get("status") != "error"
+    return {"ok": job_ok, "job_ok": job_ok, "started": True, "job": payload}
 
 
 def btc_trade_start_prediction_job_status(job_id):

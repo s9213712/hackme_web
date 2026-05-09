@@ -3,7 +3,7 @@
 > **目的**：要把 server 切到 `production`，必須先有 13 份「最新通過」的 report 上傳並通過驗證。
 > 本檔給操作者一張 step-by-step 對照表：每份 report 是什麼、怎麼產、怎麼上傳、怎麼驗 status、失敗怎麼辦。
 >
-> **依據**：[`docs/server_mode_v2/SERVER_MODE_V2_PROFILE_MATRIX.md §Production Gate Reports`](../../server_mode_v2/SERVER_MODE_V2_PROFILE_MATRIX.md#production-gate-reports) + `services/snapshots/schema.py:35-49 PRODUCTION_REQUIRED_REPORT_TYPES`。
+> **依據**：[`SERVER_MODE_V2_PROFILE_MATRIX.md §Production Gate Reports`](SERVER_MODE_V2_PROFILE_MATRIX.md#production-gate-reports) + `services/snapshots/schema.py:35-49 PRODUCTION_REQUIRED_REPORT_TYPES`。
 
 ---
 
@@ -354,4 +354,4 @@ curl -sk -b /tmp/_jar "$BASE_URL/api/root/production-report/status" | jq
 
 ---
 
-*Playbook end. 對應 spec：[`docs/server_mode_v2/SERVER_MODE_V2_PROFILE_MATRIX.md §Production Gate Reports`](../../server_mode_v2/SERVER_MODE_V2_PROFILE_MATRIX.md#production-gate-reports). 配套腳本：本資料夾 `01_internal_test_login_token.sh` + `02_tester_token_shadow_api.sh`。*
+*Playbook end. 對應 spec：[`SERVER_MODE_V2_PROFILE_MATRIX.md §Production Gate Reports`](SERVER_MODE_V2_PROFILE_MATRIX.md#production-gate-reports). 配套腳本：本資料夾 `01_internal_test_login_token.sh` + `02_tester_token_shadow_api.sh`。*

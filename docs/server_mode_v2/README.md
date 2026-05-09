@@ -2,7 +2,7 @@
 
 This folder contains runnable **教學範例** for the two distinct token classes used by Server Mode v2.
 
-> **The two tokens are not interchangeable.** Read [`docs/server_mode_v2/SERVER_MODE_V2_PROFILE_MATRIX.md` §Token Types](../../server_mode_v2/SERVER_MODE_V2_PROFILE_MATRIX.md#token-types) once before running anything.
+> **The two tokens are not interchangeable.** Read [`SERVER_MODE_V2_PROFILE_MATRIX.md` §Token Types](SERVER_MODE_V2_PROFILE_MATRIX.md#token-types) once before running anything.
 
 ## Quick mental model
 
@@ -102,7 +102,7 @@ or the production ledger namespace.
 
 ## Verified end-to-end (2026-05-05)
 
-Pre-Phase 0 of [`SERVER_MODE_V2_IMPLEMENTATION_PLAN.md`](../../server_mode/SERVER_MODE_V2_IMPLEMENTATION_PLAN.md) ran both scripts on an isolated runtime via `scripts/security/server_mode/server_mode_v2_token_smoke.py`. Result:
+Pre-Phase 0 of [`SERVER_MODE_V2_IMPLEMENTATION_PLAN.md`](SERVER_MODE_V2_IMPLEMENTATION_PLAN.md) ran both scripts on an isolated runtime via `scripts/security/server_mode/server_mode_v2_token_smoke.py`. Result:
 
 - `01_internal_test_login_token.sh` → **PASS** (rc=0). Demo flow: root login → forced password change → switch to `internal_test` → rotate login token → tester rejected without token → tester accepted with token → logout.
 - `02_tester_token_shadow_api.sh` → **PASS** (rc=0). Demo flow: scoped tester-token created → GET shadow-state → POST shadow-role (manager) → POST shadow-wallet (+100) → re-read state → negative tests on admin/root endpoints (all 401/403) → revoke → revoked-token denial.

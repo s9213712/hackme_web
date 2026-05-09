@@ -162,8 +162,12 @@ def main(argv: list[str] | None = None) -> int:
             return 1 if payload["status"] == "FAIL" else 0
 
     for check in collect_checks(ctx):
+        if not args.json:
+            print(f"[RUN] {check.__module__.rsplit('.', 1)[-1]}")
         result = run_check(check, ctx)
         results.append(result)
+        if not args.json:
+            print(f"[{result.status}] {result.name}: {result.message}")
 
     payload = to_payload(results)
     if args.json:

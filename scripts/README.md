@@ -29,6 +29,24 @@ for one-off experiments.
   Mandatory registration table for maintained QA, security, pentest, stress,
   smoke, and production-gate scripts.
 
+## User-Facing Progress Contract
+
+Scripts that are expected to be run directly by an operator, deployer, tester,
+or learner must print visible progress by default unless `--json` or another
+machine-readable mode is explicitly selected.
+
+Minimum console contract:
+
+1. Print the selected target/runtime before doing work.
+2. Print each major phase before it starts.
+3. Print pass/fail/skip status for each check or phase.
+4. Print artifact paths and temp-runtime paths.
+5. On failure, print the next useful log/report path instead of only a stack
+   trace or non-zero exit code.
+
+Focused regression scripts may stay concise, but they must not call themselves
+full validation and should still show which scope they covered.
+
 ## Current Subtrees
 
 - `scripts/admin/`
