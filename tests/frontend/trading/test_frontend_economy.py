@@ -290,7 +290,8 @@ def test_root_points_page_is_chain_operations_console():
     assert "pollRootBtcTradeStartJob" in admin_js
     assert "一鍵啟動預測" in index_html
     assert "資料是否過期" in index_html
-    assert "重訓模型，再執行預測腳本並等待新的預測資料" in index_html
+    assert "自動下載/更新、安裝依賴" in index_html
+    assert 'body: JSON.stringify({ project_dir: projectDir, repo_url: repoUrl, branch, timeframe: "4h" })' in admin_js
     assert "function checkRootBtcTradeStatus" in admin_js
     assert 'apiFetch(API + "/root/trading/btc-trade/check"' in admin_js
     assert "function setupRootBtcTrade" in admin_js

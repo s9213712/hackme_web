@@ -65,12 +65,12 @@ def default_runtime_root(base_dir=None):
     explicit = expand_server_path(os.environ.get("HACKME_RUNTIME_DIR"))
     if explicit:
         return explicit
-    root = Path(base_dir).resolve() if base_dir else Path(__file__).resolve().parents[1]
+    root = Path(base_dir).resolve() if base_dir else Path(__file__).resolve().parents[2]
     return root / "runtime"
 
 
 def default_btc_trade_project_dir(base_dir=None):
-    root = Path(base_dir).resolve() if base_dir else Path(__file__).resolve().parents[1]
+    root = Path(base_dir).resolve() if base_dir else Path(__file__).resolve().parents[2]
     return root / "external" / "BTC_trade"
 
 
@@ -691,14 +691,27 @@ def _btc_trade_job_payload(job):
     }
 
 
-def btc_trade_start_prediction_pipeline(project_dir, *, timeframe=DEFAULT_TIMEFRAME, timeout_per_step=None, wait_seconds=BTC_TRADE_START_WAIT_SECONDS, progress_cb=None):
-    root = expand_server_path(project_dir)
+def btc_trade_start_prediction_pipeline(
+    project_dir,
+    *,
+    timeframe=DEFAULT_TIMEFRAME,
+    timeout_per_step=None,
+    wait_seconds=BTC_TRADE_START_WAIT_SECONDS,
+    progress_cb=None,
+    setup_if_needed=False,
+    repo_url=None,
+    branch=None,
+    base_dir=None,
+):
+    root = expand_server_path(project_dir) or default_btc_trade_project_dir(base_dir)
     status = btc_trade_status(root)
     steps = []
+
     def record_step(step):
         steps.append(step)
         if callable(progress_cb):
             progress_cb({"steps": list(steps), "latest_step": step})
+
     if not root:
         return {
             "ok": False,
@@ -714,6 +727,35 @@ def btc_trade_start_prediction_pipeline(project_dir, *, timeframe=DEFAULT_TIMEFR
         "hourly_check.py": root / "hourly_check.py",
     }
     missing_scripts = [name for name, path in required_scripts.items() if not path.is_file()]
+    if missing_scripts and setup_if_needed:
+        record_step({
+            "label": "自動下載/安裝 BTC_trade",
+            "ok": True,
+            "skipped": False,
+            "message": "偵測到 BTC_trade 尚未可用，開始自動下載/更新、安裝依賴並建置",
+        })
+        setup_result = btc_trade_setup(
+            root,
+            repo_url=repo_url,
+            branch=branch,
+            base_dir=base_dir,
+            timeout_per_step=timeout_per_step or 900,
+        )
+        for setup_step in setup_result.get("steps") or []:
+            copied_step = dict(setup_step)
+            copied_step["label"] = f"準備 BTC_trade：{copied_step.get('label') or copied_step.get('command') or 'step'}"
+            record_step(copied_step)
+        status = setup_result.get("status") or btc_trade_status(root)
+        missing_scripts = [name for name, path in required_scripts.items() if not path.is_file()]
+        if not setup_result.get("ok") or missing_scripts:
+            return {
+                "ok": False,
+                "project_dir": str(root),
+                "timeframe": str(timeframe or DEFAULT_TIMEFRAME).lower(),
+                "steps": steps,
+                "status": status,
+                "message": setup_result.get("message") or f"BTC_trade 自動準備失敗：缺少 {', '.join(missing_scripts)}",
+            }
     if missing_scripts:
         return {
             "ok": False,
@@ -828,8 +870,17 @@ def btc_trade_start_prediction_pipeline(project_dir, *, timeframe=DEFAULT_TIMEFR
     }
 
 
-def btc_trade_start_prediction_job(project_dir, *, timeframe=DEFAULT_TIMEFRAME, wait_seconds=BTC_TRADE_START_WAIT_SECONDS):
-    root = expand_server_path(project_dir)
+def btc_trade_start_prediction_job(
+    project_dir,
+    *,
+    timeframe=DEFAULT_TIMEFRAME,
+    wait_seconds=BTC_TRADE_START_WAIT_SECONDS,
+    repo_url=None,
+    branch=None,
+    base_dir=None,
+    setup_if_needed=True,
+):
+    root = expand_server_path(project_dir) or default_btc_trade_project_dir(base_dir)
     project_key = f"{str(root) if root else ''}|{str(timeframe or DEFAULT_TIMEFRAME).lower()}"
     with BTC_TRADE_START_JOB_LOCK:
         for job in BTC_TRADE_START_JOBS.values():
@@ -863,7 +914,7 @@ def btc_trade_start_prediction_job(project_dir, *, timeframe=DEFAULT_TIMEFRAME, 
         update_job({
             "status": "running",
             "started_at": datetime.now(timezone.utc).isoformat(),
-            "message": "BTC_trade 背景工作執行中：檢查資料 / 模型，必要時更新並重訓",
+            "message": "BTC_trade 背景工作執行中：必要時自動下載/安裝，再更新資料、重訓並預測",
         })
         try:
             result = btc_trade_start_prediction_pipeline(
@@ -871,6 +922,10 @@ def btc_trade_start_prediction_job(project_dir, *, timeframe=DEFAULT_TIMEFRAME, 
                 timeframe=timeframe,
                 timeout_per_step=None,
                 wait_seconds=wait_seconds,
+                setup_if_needed=setup_if_needed,
+                repo_url=repo_url,
+                branch=branch,
+                base_dir=base_dir,
                 progress_cb=lambda payload: update_job({
                     "steps": payload.get("steps"),
                     "message": payload.get("latest_step", {}).get("message") or payload.get("latest_step", {}).get("label") or "BTC_trade 背景工作執行中",

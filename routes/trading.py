@@ -1755,12 +1755,18 @@ def register_trading_routes(app, deps):
             return err
         settings = trading_service.get_root_settings().get("settings", {})
         project_dir = data.get("project_dir") or settings.get("btc_trade_project_dir") or str(default_btc_trade_project_dir(Path(__file__).resolve().parents[1]))
+        repo_url = data.get("repo_url") or settings.get("btc_trade_repo_url") or DEFAULT_BTC_TRADE_REPO_URL
+        branch = data.get("branch") or settings.get("btc_trade_branch") or DEFAULT_BTC_TRADE_BRANCH
         timeframe = str(data.get("timeframe") or "4h").strip().lower() or "4h"
         wait_seconds = int(data.get("wait_seconds") or BTC_TRADE_START_WAIT_SECONDS)
         job_result = btc_trade_start_prediction_job(
             project_dir,
             timeframe=timeframe,
             wait_seconds=wait_seconds,
+            repo_url=repo_url,
+            branch=branch,
+            base_dir=Path(__file__).resolve().parents[1],
+            setup_if_needed=True,
         )
         audit(
             "BTC_TRADE_START",
@@ -1775,7 +1781,7 @@ def register_trading_routes(app, deps):
             "start_ok": bool(job_result.get("ok")),
             "started": bool(job_result.get("started")),
             "project_dir": (job_result.get("job") or {}).get("project_dir"),
-            "message": "BTC_trade 一鍵啟動已在背景開始執行，請等待新的預測資料" if job_result.get("started") else "BTC_trade 一鍵啟動已在背景執行中，沿用同一個工作",
+            "message": "BTC_trade 一鍵啟動已在背景開始執行，會自動下載/更新、安裝依賴、訓練並產生預測" if job_result.get("started") else "BTC_trade 一鍵啟動已在背景執行中，沿用同一個工作",
             "job": job_result.get("job"),
         }
         return json_resp(payload)

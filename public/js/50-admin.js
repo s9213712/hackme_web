@@ -2703,9 +2703,11 @@ async function startRootBtcTradePrediction() {
   const status = $("root-trading-btc-trade-status");
   const button = $("root-trading-btc-trade-start-btn");
   const projectDir = ($("root-trading-btc-trade-path")?.value || "").trim();
+  const repoUrl = ($("root-trading-btc-trade-repo")?.value || "").trim();
+  const branch = ($("root-trading-btc-trade-branch")?.value || "").trim();
   if (button) button.disabled = true;
   if (status) {
-    status.textContent = "BTC_trade 一鍵啟動中：檢查資料 / 模型，必要時補更新與重訓，再執行預測腳本...";
+    status.textContent = "BTC_trade 一鍵啟動中：必要時自動下載/更新、安裝依賴，再更新資料、重訓並執行預測腳本...";
     status.style.color = "var(--muted)";
   }
   try {
@@ -2714,7 +2716,7 @@ async function startRootBtcTradePrediction() {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
-      body: JSON.stringify({ project_dir: projectDir, timeframe: "4h" }),
+      body: JSON.stringify({ project_dir: projectDir, repo_url: repoUrl, branch, timeframe: "4h" }),
     });
     const json = await parseRootTradingSettingsResponse(res);
     const job = json.job || {};
