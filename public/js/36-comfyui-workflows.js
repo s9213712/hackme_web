@@ -176,6 +176,7 @@ function comfyuiTemplateInputKinds(detail) {
   const panels = Array.isArray(detail?.ui_schema?.panels) ? detail.ui_schema.panels : [];
   panels.forEach((panel) => {
     (panel?.fields || []).forEach((field) => {
+      if (field?.synthetic || field?.input_type === "embedding_shortcuts") return;
       const category = String(field?.category || "").trim().toUpperCase();
       if (category === "TEXT") counts.text += 1;
       else if (category === "IMAGE" || field?.input_type === "file_picker") counts.image += 1;
@@ -312,7 +313,26 @@ function comfyuiTemplateUpdateField(binding, field, rawValue) {
   }
 }
 
+function renderComfyuiTemplateEmbeddingShortcuts(field) {
+  const values = Array.isArray(comfyuiAvailableEmbeddings) ? comfyuiAvailableEmbeddings : [];
+  const content = values.length
+    ? values.map((value) => (
+      `<button class="comfyui-embedding-chip" type="button" data-comfyui-template-embedding="${sanitize(value)}" title="插入 ${sanitize(value)}">${sanitize(value)}</button>`
+    )).join("")
+    : '<span class="drive-card-sub">目前沒有可用的 Embedding。</span>';
+  return `
+    <div class="comfyui-template-field-card is-wide">
+      <label>${sanitize(field?.label || "Embedding 快速插入")}</label>
+      <div class="comfyui-embedding-shortcuts">${content}</div>
+      <div class="drive-card-sub">點一下會把 <code>&lt;embeddings:名稱&gt;</code> 插入正向或負面提示詞。</div>
+    </div>
+  `;
+}
+
 function renderComfyuiTemplateField(field, detail, ctx) {
+  if (field?.input_type === "embedding_shortcuts") {
+    return renderComfyuiTemplateEmbeddingShortcuts(field);
+  }
   const binding = comfyuiTemplateFieldBinding(field, detail, ctx);
   const cardClass = field?.input_type === "textarea" || binding.kind === "image" ? "comfyui-template-field-card is-wide" : "comfyui-template-field-card";
   if (binding.kind === "image") {
@@ -423,9 +443,17 @@ function bindRenderedComfyuiTemplateFields(detail) {
       renderSelectedComfyuiTemplate();
     });
   });
+  host.querySelectorAll("[data-comfyui-template-embedding]").forEach((button) => {
+    if (button.dataset.boundComfyuiTemplate === "1") return;
+    button.dataset.boundComfyuiTemplate = "1";
+    button.addEventListener("click", () => {
+      insertComfyuiEmbeddingToken(button.getAttribute("data-comfyui-template-embedding"));
+      renderSelectedComfyuiTemplate({ preserveOpenPanels: true });
+    });
+  });
 }
 
-function renderSelectedComfyuiTemplate() {
+function renderSelectedComfyuiTemplate({ preserveOpenPanels = false } = {}) {
   const summary = $("comfyui-template-summary");
   const host = $("comfyui-template-panels");
   const legacy = $("comfyui-legacy-form-panel");
@@ -439,12 +467,20 @@ function renderSelectedComfyuiTemplate() {
   const detail = comfyuiSelectedTemplateDetail;
   const ctx = { textFieldIndex: 0, loadImageIndex: 0 };
   const panels = (detail.ui_schema.panels || []).filter((panel) => !["compatibility", "raw"].includes(String(panel?.id || "")));
-  host.innerHTML = panels.map((panel) => `
-    <details class="drive-collapsible-panel settings-collapse comfyui-template-render-card"${panel?.collapsed_default ? "" : " open"}>
+  const openPanelIds = preserveOpenPanels
+    ? new Set(Array.from(host.querySelectorAll("[data-comfyui-template-panel-id]"))
+      .filter((section) => section.open)
+      .map((section) => section.getAttribute("data-comfyui-template-panel-id")))
+    : new Set();
+  host.innerHTML = panels.map((panel) => {
+    const panelId = String(panel?.id || "");
+    const isOpen = preserveOpenPanels ? openPanelIds.has(panelId) : !panel?.collapsed_default;
+    return `
+    <details class="drive-collapsible-panel settings-collapse comfyui-template-render-card" data-comfyui-template-panel-id="${sanitize(panelId)}"${isOpen ? " open" : ""}>
       <summary>
         <div>
           <div class="drive-card-title">${sanitize(panel?.label || panel?.id || "模板區塊")}</div>
-          <div class="drive-card-sub">${sanitize(String((panel?.fields || []).length || 0))} 個欄位</div>
+          <div class="drive-card-sub">${sanitize(String((panel?.fields || []).filter((field) => !field?.synthetic && field?.input_type !== "embedding_shortcuts").length || 0))} 個欄位</div>
         </div>
       </summary>
       <div class="drive-collapsible-body">
@@ -453,7 +489,8 @@ function renderSelectedComfyuiTemplate() {
         </div>
       </div>
     </details>
-  `).join("");
+  `;
+  }).join("");
   bindRenderedComfyuiTemplateFields(detail);
   if (legacy) legacy.style.display = "";
 }

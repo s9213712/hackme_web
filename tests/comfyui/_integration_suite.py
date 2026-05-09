@@ -3565,7 +3565,7 @@ def test_comfyui_frontend_is_wired():
     assert 'id="s-comfyui-civitai-api-key"' in index_html
     assert 'const show = currentUser === "root";' in comfyui_js
     assert '目前是雲端 / 遠端模式，所以這個區塊只保留說明。若要管理本站的本地 ComfyUI 模型，請先把 backend 切回本地模式。' in comfyui_js
-    assert "/js/36-comfyui.js?v=20260505-workflow-preset" in index_html
+    assert "/js/36-comfyui.js?v=20260509-comfyui-template-embeddings" in index_html
     assert "/styles.css?v=20260505-workflow-preset" in index_html
     assert "width: min(420px, 100%);" in css
     assert "max-height: 320px;" in css

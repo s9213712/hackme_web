@@ -52,6 +52,16 @@ def test_ui_schema_groups_text_inputs_onto_text_panel():
     assert "node:7:text" in field_ids
 
 
+def test_ui_schema_adds_embeddings_as_text_child_when_prompt_fields_exist():
+    schema = build_ui_schema(analysis=analyze_workflow_json(TXT2IMG))
+    text_panel = next(p for p in schema.panels if p["id"] == "text")
+    embedding_field = next(f for f in text_panel["fields"] if f["id"] == "text:embeddings")
+    assert embedding_field["input_type"] == "embedding_shortcuts"
+    assert embedding_field["synthetic"] is True
+    assert embedding_field["parent_category"] == "text"
+    assert embedding_field["constraints"]["target_field_ids"] == ["node:6:text", "node:7:text"]
+
+
 def test_ui_schema_routes_ksampler_numeric_to_sampler_panel():
     """KSampler.{seed, steps, cfg, denoise} sit on the sampler panel for cohesion."""
     schema = build_ui_schema(analysis=analyze_workflow_json(TXT2IMG))

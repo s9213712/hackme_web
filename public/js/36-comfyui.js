@@ -213,8 +213,11 @@ function setComfyuiBusy(busy) {
   const stop = $("comfyui-stop-btn");
   const unavailable = comfyuiServerAvailable === false;
   if (generate) {
-    generate.disabled = !!busy || unavailable;
+    generate.disabled = !!busy;
     generate.textContent = busy ? "產生中..." : "產生圖片";
+    generate.title = unavailable
+      ? "ComfyUI 目前標記為未連線；按下會重新檢查連線並嘗試載入模型。"
+      : "";
   }
   if (interrupt) interrupt.disabled = !busy;
   if (refresh) refresh.disabled = !!busy;
@@ -634,6 +637,18 @@ function stopComfyuiProgress({ complete = false, error = "" } = {}) {
     });
   } else {
     setComfyuiProgress({ visible: false });
+  }
+}
+
+function resetComfyuiIdleUi() {
+  comfyuiActiveJobId = null;
+  if (!comfyuiGenerateAbortController) {
+    setComfyuiBusy(false);
+  }
+  stopComfyuiProgress();
+  const preview = $("comfyui-preview");
+  if (preview && !comfyuiCurrentImage && !comfyuiGeneratedImages.length) {
+    preview.innerHTML = `<div class="drive-empty">尚未產生圖片</div>`;
   }
 }
 
@@ -1876,14 +1891,24 @@ async function preflightComfyuiBilling(payload, runCount, billingConfirmation) {
 
 async function generateComfyuiImage() {
   if (comfyuiServerAvailable === false) {
-    const hint = comfyuiConnectionMode === "local" ? "請先按「啟動 ComfyUI」，或確認已有其他使用者啟動服務。" : "ComfyUI 伺服器未連線，無法產圖。";
-    setComfyuiMessage(hint, false);
-    return;
+    setComfyuiMessage("正在重新檢查 ComfyUI 連線...", true);
+    const available = await refreshComfyuiStatus({ switchAway: false });
+    if (!available) {
+      const hint = comfyuiConnectionMode === "local" ? "請先按「啟動 ComfyUI」，或確認已有其他使用者啟動服務。" : "ComfyUI 伺服器未連線，無法產圖。";
+      setComfyuiMessage(hint, false);
+      resetComfyuiIdleUi();
+      return;
+    }
   }
   if (!comfyuiModelsLoaded) {
+    setComfyuiMessage("正在載入 ComfyUI 模型清單...", true);
     await loadComfyuiModels();
   }
-  if (!comfyuiModelsLoaded) return;
+  if (!comfyuiModelsLoaded) {
+    setComfyuiMessage("ComfyUI 模型尚未載入，請按「重新整理模型」查看詳細錯誤。", false);
+    resetComfyuiIdleUi();
+    return;
+  }
   const payload = comfyuiPayload();
   const validationMessage = comfyuiValidatePayloadForUi(payload);
   if (validationMessage) {
@@ -2856,6 +2881,27 @@ const ComfyUITemplateImporter = (() => {
     }
   }
 
+  function insertTemplateModalEmbeddingToken(name) {
+    if (!modalEl) return;
+    const cleanName = String(name || "").trim();
+    if (!cleanName) return;
+    const textInputs = Array.from(modalEl.querySelectorAll("[data-comfyui-template-importer-input='1']"))
+      .filter((el) => el.dataset.classType === "CLIPTextEncode" && el.dataset.inputName === "text");
+    if (!textInputs.length) return;
+    const promptType = typeof isNegativeComfyuiEmbedding === "function" && isNegativeComfyuiEmbedding(cleanName) ? "negative" : "prompt";
+    const target = promptType === "negative" && textInputs.length > 1 ? textInputs[1] : textInputs[0];
+    const embeddingTag = `<embeddings:${cleanName}>`;
+    const raw = target.value || "";
+    const start = Number.isInteger(target.selectionStart) ? target.selectionStart : raw.length;
+    const end = Number.isInteger(target.selectionEnd) ? target.selectionEnd : raw.length;
+    const prefix = start > 0 && !/[\s,\n]$/.test(raw.slice(0, start)) ? ", " : "";
+    const suffix = end < raw.length && !/^[\s,]/.test(raw.slice(end)) ? " " : "";
+    target.value = `${raw.slice(0, start)}${prefix}${embeddingTag}${suffix}${raw.slice(end)}`;
+    const cursor = start + prefix.length + embeddingTag.length + suffix.length;
+    target.focus();
+    if (typeof target.setSelectionRange === "function") target.setSelectionRange(cursor, cursor);
+  }
+
   function renderTemplatePanels(uiSchema, capability) {
     if (!modalEl) return;
     const panels = modalEl.querySelector("#comfyui-template-importer-panels");
@@ -2897,6 +2943,19 @@ const ComfyUITemplateImporter = (() => {
       }
       fields.forEach(field => {
         const row = document.createElement("div");
+        if (field.input_type === "embedding_shortcuts") {
+          row.style.display = "block";
+          row.style.padding = "6px 0";
+          const values = Array.isArray(comfyuiAvailableEmbeddings) ? comfyuiAvailableEmbeddings : [];
+          row.innerHTML = `<label style="display:block;margin-bottom:6px;color:var(--muted,#666);">${escapeHtmlSafe(field.label || "Embedding 快速插入")}</label>` +
+            `<div class="comfyui-embedding-shortcuts">` +
+            (values.length
+              ? values.map(value => `<button class="comfyui-embedding-chip" type="button" data-comfyui-template-importer-embedding="${escapeHtmlSafe(value)}" title="插入 ${escapeHtmlSafe(value)}">${escapeHtmlSafe(value)}</button>`).join("")
+              : '<span class="drive-card-sub">目前沒有可用的 Embedding。</span>') +
+            `</div>`;
+          section.appendChild(row);
+          return;
+        }
         row.style.display = "flex";
         row.style.gap = "8px";
         row.style.alignItems = "center";
@@ -2904,10 +2963,16 @@ const ComfyUITemplateImporter = (() => {
         const labelEl = document.createElement("label");
         labelEl.style.minWidth = "180px";
         labelEl.textContent = field.label || `${field.class_type}.${field.input_name}`;
-        const inputEl = document.createElement("input");
-        inputEl.type = field.input_type === "number" ? "number" : "text";
+        const inputEl = document.createElement(field.input_type === "textarea" ? "textarea" : "input");
+        if (inputEl.tagName !== "TEXTAREA") {
+          inputEl.type = field.input_type === "number" ? "number" : "text";
+        } else {
+          inputEl.rows = field?.constraints?.rows || 4;
+        }
+        inputEl.dataset.comfyuiTemplateImporterInput = "1";
         inputEl.dataset.fieldId = field.id || "";
         inputEl.dataset.nodeId = field.node_id || "";
+        inputEl.dataset.classType = field.class_type || "";
         inputEl.dataset.inputName = field.input_name || "";
         inputEl.value = field.current_value != null ? String(field.current_value) : "";
         inputEl.style.flex = "1";
@@ -2917,6 +2982,9 @@ const ComfyUITemplateImporter = (() => {
         section.appendChild(row);
       });
       container.appendChild(section);
+    });
+    container.querySelectorAll("[data-comfyui-template-importer-embedding]").forEach((button) => {
+      button.addEventListener("click", () => insertTemplateModalEmbeddingToken(button.getAttribute("data-comfyui-template-importer-embedding")));
     });
 
     panels.style.display = "block";

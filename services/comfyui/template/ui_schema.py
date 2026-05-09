@@ -144,6 +144,27 @@ def _serialize_field(field_obj: InputField) -> dict[str, Any]:
     return payload
 
 
+def _embedding_shortcuts_field(text_fields: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    field_ids = [str(field.get("id") or "") for field in text_fields if field.get("id")]
+    return {
+        "id": "text:embeddings",
+        "node_id": "",
+        "class_type": "EmbeddingShortcuts",
+        "input_name": "embeddings",
+        "category": FieldCategory.TEXT.value,
+        "label": "Embedding 快速插入",
+        "input_type": "embedding_shortcuts",
+        "required": False,
+        "current_value": "",
+        "synthetic": True,
+        "parent_category": "text",
+        "constraints": {
+            "target_field_ids": field_ids,
+            "token_prefix": "<embeddings:",
+        },
+    }
+
+
 def _safe_current_value(raw_value: Any) -> Any:
     """JSON-friendly clone of `raw_value` for the panel `current_value` slot."""
     try:
@@ -206,6 +227,13 @@ def build_ui_schema(
         if panel_key is None:
             continue
         by_panel[panel_key].append(_serialize_field(field_obj))
+
+    text_fields = by_panel.get("text", [])
+    if any(
+        field.get("class_type") == "CLIPTextEncode" and field.get("input_name") == "text"
+        for field in text_fields
+    ):
+        text_fields.append(_embedding_shortcuts_field(text_fields))
 
     for key, _category, label in _PANEL_ORDER:
         fields = by_panel.get(key, [])

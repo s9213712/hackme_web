@@ -385,6 +385,7 @@ function bindUiEvents() {
   if (rootTradingBtcTradeSetup) rootTradingBtcTradeSetup.addEventListener("click", setupRootBtcTrade);
   if (typeof bindComfyuiDraftPersistence === "function") bindComfyuiDraftPersistence();
   if (typeof bindComfyuiAdvancedUi === "function") bindComfyuiAdvancedUi();
+  if (typeof resetComfyuiIdleUi === "function") resetComfyuiIdleUi();
   if (typeof bindEconomyInlineEvents === "function") bindEconomyInlineEvents();
   if (sidebarToggle) sidebarToggle.addEventListener("click", () => {
     setSidebarCollapsed(!document.body.classList.contains("sidebar-collapsed"));

@@ -1,0 +1,33 @@
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[3]
+
+
+def _read(path):
+    return (ROOT / path).read_text(encoding="utf-8")
+
+
+def test_template_schema_declares_embeddings_as_text_child():
+    schema_py = _read("services/comfyui/template/ui_schema.py")
+    assert '"id": "text:embeddings"' in schema_py
+    assert '"input_type": "embedding_shortcuts"' in schema_py
+    assert '"parent_category": "text"' in schema_py
+
+
+def test_selected_template_renders_embedding_shortcuts_under_text_panel():
+    workflow_js = _read("public/js/36-comfyui-workflows.js")
+    assert 'field?.input_type === "embedding_shortcuts"' in workflow_js
+    assert "renderComfyuiTemplateEmbeddingShortcuts(field)" in workflow_js
+    assert "data-comfyui-template-embedding" in workflow_js
+    assert "insertComfyuiEmbeddingToken(button.getAttribute" in workflow_js
+    assert "renderSelectedComfyuiTemplate({ preserveOpenPanels: true });" in workflow_js
+    assert "data-comfyui-template-panel-id" in workflow_js
+
+
+def test_import_preview_modal_renders_embedding_shortcuts_for_text_fields():
+    comfyui_js = _read("public/js/36-comfyui.js")
+    assert 'field.input_type === "embedding_shortcuts"' in comfyui_js
+    assert "data-comfyui-template-importer-embedding" in comfyui_js
+    assert "function insertTemplateModalEmbeddingToken(name)" in comfyui_js
+    assert "dataset.classType === \"CLIPTextEncode\"" in comfyui_js
