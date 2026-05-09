@@ -340,6 +340,14 @@ try:
         # Lift the single-provider cap to 100% so dev runtime can run on
         # Binance alone without the provider_weight_cap_unenforceable warning.
         ("trading.price_fusion_max_single_provider_weight_percent", "100"),
+        # Dev default: pin BTC_trade prediction engine on, parked at the
+        # shared /tmp/BTC_trade workspace so multiple dev runs reuse the same
+        # cloned repo, downloaded data and trained models. The signal pipeline
+        # itself (clone → install → predict → retrain) is kicked off in the
+        # background after the server URL becomes available; see the autostart
+        # block further down.
+        ("trading.btc_trade_enabled", "true"),
+        ("trading.btc_trade_project_dir", "/tmp/BTC_trade"),
     ):
         conn.execute(
             "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
@@ -373,3 +381,34 @@ else
 fi
 say "[dev-tmp] accounts:   root/${ROOT_PASSWORD} admin/${MANAGER_PASSWORD} test/${TEST_PASSWORD}"
 say "[dev-tmp] log:       $LOG_CAPTURE"
+
+# BTC_trade autostart: kick the prediction pipeline off in the background
+# so the trading dashboard already has live BTC_trade signal data on first
+# page load. The server-side job uses setup_if_needed=True, so:
+#   - first run: clones BTC_trade into /tmp/BTC_trade, installs deps,
+#     trains the model, then predicts.
+#   - re-run when /tmp/BTC_trade already has the required scripts: skips
+#     clone/install and goes straight to update_data → retrain → predict.
+# This is intentionally fire-and-forget so test_for_develop.sh exits fast.
+if [[ -n "$SERVER_URL" ]]; then
+  BTC_LOG="$RUNTIME_ROOT/logs/btc_trade_autostart.log"
+  (
+    set +e
+    sleep 2
+    JAR="$(mktemp)"
+    LOGIN_BODY="$("$PYTHON_BIN" -c 'import json,os; print(json.dumps({"username":"root","password":os.environ["HTML_LEARNING_ROOT_PASSWORD"]}))')"
+    csrf="$(curl -ksS -c "$JAR" "$SERVER_URL/api/csrf-token" | "$PYTHON_BIN" -c 'import json,sys;print(json.load(sys.stdin).get("csrf_token",""))')"
+    curl -ksS -c "$JAR" -b "$JAR" \
+      -H "Content-Type: application/json" -H "X-CSRF-Token: $csrf" \
+      -X POST "$SERVER_URL/api/login" -d "$LOGIN_BODY" >/dev/null
+    csrf="$(curl -ksS -c "$JAR" -b "$JAR" "$SERVER_URL/api/csrf-token" | "$PYTHON_BIN" -c 'import json,sys;print(json.load(sys.stdin).get("csrf_token",""))')"
+    echo "[btc_trade_autostart] POST /api/root/trading/btc-trade/start"
+    curl -ksS -b "$JAR" \
+      -H "Content-Type: application/json" -H "X-CSRF-Token: $csrf" \
+      -X POST "$SERVER_URL/api/root/trading/btc-trade/start" \
+      -d '{"timeframe":"4h"}'
+    echo
+    rm -f "$JAR"
+  ) > "$BTC_LOG" 2>&1 &
+  say "[dev-tmp] btc_trade: autostart kicked off in background (log: $BTC_LOG)"
+fi
