@@ -770,9 +770,9 @@ def register_comfyui_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return None, None, "Invalid JSON"
+            return None, None, "請求 JSON 格式錯誤"
         if not isinstance(data, dict):
-            return None, None, "Invalid request"
+            return None, None, "請求內容格式錯誤"
         return data, uploaded_assets, None
 
     def _hydrate_generation_assets(actor, active_client, params, uploaded_assets):
@@ -3390,9 +3390,9 @@ def register_comfyui_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         url, endpoint, msg = _parse_comfyui_endpoint(data)
         if msg:
             return json_resp({"ok": False, "msg": msg}), 400
@@ -3497,9 +3497,9 @@ def register_comfyui_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         page_url = str(data.get("page_url") or data.get("url") or "").strip()
         result, msg = _inspect_civitai_model(page_url)
         audit(
@@ -3523,9 +3523,9 @@ def register_comfyui_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         query = str(data.get("query") or "").strip()
         base_model = str(data.get("base_model") or "").strip()
         model_type = str(data.get("model_type") or data.get("type") or "").strip()
@@ -3577,9 +3577,9 @@ def register_comfyui_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         request_data, msg = _parse_civitai_download_request(data)
         if msg:
             return json_resp({"ok": False, "msg": msg}), 400
@@ -3765,7 +3765,7 @@ def register_comfyui_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         data = data if isinstance(data, dict) else {}
         data = {**data, "skip_asset_validation": True}
         params, msg = _normalize_generation_payload(data)
@@ -4073,9 +4073,9 @@ def register_comfyui_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         image_ref = _image_ref_payload(data.get("image_ref"))
         if not image_ref:
             return json_resp({"ok": False, "msg": "圖片引用不合法"}), 400
@@ -4173,7 +4173,7 @@ def register_comfyui_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         data = data if isinstance(data, dict) else {}
         image_ref = data.get("image_ref")
         if not isinstance(image_ref, dict):
@@ -4209,7 +4209,7 @@ def register_comfyui_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         data = data if isinstance(data, dict) else {}
         image_ref = data.get("image_ref")
         if not isinstance(image_ref, dict):
@@ -4268,7 +4268,7 @@ def register_comfyui_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         data = data if isinstance(data, dict) else {}
         image_ref = data.get("image_ref")
         conn = get_db()

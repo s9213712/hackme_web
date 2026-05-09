@@ -270,7 +270,7 @@ def register_moderation_routes(app, deps):
             try:
                 data = request.get_json(force=True)
             except Exception:
-                return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+                return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
             note = normalize_text(data.get("note")) if isinstance(data, dict) else ""
             if not note:
                 return json_resp({"ok":False,"msg":"備註不可為空"}), 400
@@ -376,9 +376,9 @@ def register_moderation_routes(app, deps):
             try:
                 data = request.get_json(force=True)
             except Exception:
-                return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+                return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
             if not isinstance(data, dict):
-                return json_resp({"ok":False,"msg":"Invalid request"}), 400
+                return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
             target_user_id = data.get("target_user_id")
             action_type = normalize_text(data.get("action_type"))
             action_value = cast_action_value(data.get("action_value"))
@@ -441,7 +441,7 @@ def register_moderation_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         vote = normalize_text(data.get("vote")) if isinstance(data, dict) else ""
         if vote not in VOTES:
             return json_resp({"ok":False,"msg":"投票值錯誤"}), 400
@@ -908,9 +908,9 @@ def register_moderation_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         action = normalize_text(data.get("action"))
         note = normalize_text(data.get("note"))
         if action not in ("approve", "reject"):
@@ -959,9 +959,9 @@ def register_moderation_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         action = normalize_text(data.get("action"))
         note = normalize_text(data.get("note"))
         if action not in ("approve", "reject"):

@@ -738,9 +738,9 @@ def register_user_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
 
         username = normalize_text(data.get("username"))
         credential_text = data.get("password", "") if isinstance(data.get("password"), str) else ""
@@ -1062,9 +1062,9 @@ def register_user_routes(app, deps):
             try:
                 data = request.get_json(force=True)
             except Exception:
-                return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+                return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
             if not isinstance(data, dict):
-                return json_resp({"ok":False,"msg":"Invalid request"}), 400
+                return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
             if request.method == "PUT" and not is_self and role_rank(actor_role) < role_rank("super_admin"):
                 allowed_manager_keys = {"member_level", "base_level", "level_update_reason", "reason"}
                 if set(data.keys()) - allowed_manager_keys:
@@ -1265,9 +1265,9 @@ def register_user_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
 
         action = normalize_text(data.get("action"))
         if action not in ("approve", "reject"):
@@ -1378,9 +1378,9 @@ def register_user_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         temporary_credential = data.get("temporary_password", "") if isinstance(data.get("temporary_password"), str) else ""
         temporary_credential_confirm = data.get("temporary_password_confirm", "") if isinstance(data.get("temporary_password_confirm"), str) else ""
         note = normalize_text(data.get("note") or "password reset review approved")
@@ -1475,9 +1475,9 @@ def register_user_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
 
         action = (normalize_text(data.get("action")) or "").lower() or "block"
         minutes = data.get("minutes", 30)
@@ -1617,7 +1617,7 @@ def register_user_routes(app, deps):
 
         data = request.get_json(silent=True) or {}
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         target_status = str(data.get("target_status", "inactive")).strip()
         valid_statuses = {"restricted", "suspended", "inactive"}
         if target_status not in valid_statuses:
@@ -1725,10 +1725,10 @@ def register_user_routes(app, deps):
         try:
             data = request.get_json(force=True) or {}
         except:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
 
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         points = parse_positive_int(data.get("points", 1))
         if points is None:
             return json_resp({"ok":False,"msg":"違規點數格式錯誤"}), 400

@@ -537,7 +537,7 @@ def update_member_level_rule(conn, level, data):
     if level not in DEFAULT_MEMBER_LEVEL_RULES:
         return None, "會員等級錯誤"
     if not isinstance(data, dict):
-        return None, "Invalid request"
+        return None, "請求內容格式錯誤"
     updates = []
     params = []
     for key in BOOL_FIELDS:

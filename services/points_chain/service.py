@@ -353,9 +353,9 @@ class PointsLedgerService:
             ledger_count = int(conn.execute("SELECT COUNT(*) FROM points_ledger").fetchone()[0])
             block_count = int(conn.execute("SELECT COUNT(*) FROM points_chain_blocks").fetchone()[0])
             if ledger_count == 0 and block_count == 0:
-                return {"ok": True, "created": False, "msg": "empty chain has no scheduled backup"}
+                return {"ok": True, "created": False, "msg": "空的鏈無排程備份"}
             if not self._scheduled_backup_due(conn):
-                return {"ok": True, "created": False, "msg": "backup interval not due"}
+                return {"ok": True, "created": False, "msg": "尚未到下一次備份時間"}
             result = self._create_ledger_backup(conn, reason="scheduled_interval", kind="scheduled")
             conn.commit()
             result["created"] = True
@@ -667,7 +667,7 @@ class PointsLedgerService:
             conn.commit()
             return {
                 "ok": True,
-                "msg": "PointsChain restored and verified",
+                "msg": "PointsChain 已還原並驗證完成",
                 "backup_id": backup_id,
                 "pre_restore_backup_id": abnormal.get("backup_id"),
                 "wallet_rebuild": rebuild,
@@ -1912,7 +1912,7 @@ class PointsLedgerService:
             ).fetchall()
             if not rows:
                 conn.commit()
-                return {"ok": True, "sealed": False, "msg": "no unsealed ledger entries"}
+                return {"ok": True, "sealed": False, "msg": "沒有可封存的帳本紀錄"}
             last = conn.execute("SELECT * FROM points_chain_blocks ORDER BY block_number DESC LIMIT 1").fetchone()
             block_number = int(last["block_number"] + 1) if last else 1
             prev_hash = last["block_hash"] if last else None
@@ -1979,7 +1979,7 @@ class PointsLedgerService:
     def seal_due_block(self, *, actor=None, ledger_threshold=DEFAULT_BLOCK_LEDGER_THRESHOLD, max_interval_seconds=DEFAULT_BLOCK_MAX_INTERVAL_SECONDS, limit=100):
         schedule = self.block_schedule(ledger_threshold=ledger_threshold, max_interval_seconds=max_interval_seconds)
         if not schedule.get("chain_ok", True):
-            return {"ok": False, "sealed": False, "msg": "points chain verification failed", "schedule": schedule}
+            return {"ok": False, "sealed": False, "msg": "PointsChain 驗證失敗", "schedule": schedule}
         if not schedule.get("due"):
             return {"ok": True, "sealed": False, "msg": schedule.get("message") or "not due", "schedule": schedule}
         result = self.seal_block(actor=actor, limit=limit)
@@ -2004,7 +2004,7 @@ class PointsLedgerService:
             }
         verification = self.verify_chain()
         if verification.get("ok") is not True:
-            return {"ok": False, "sealed": False, "msg": "points chain verification failed", "verification": verification}
+            return {"ok": False, "sealed": False, "msg": "PointsChain 驗證失敗", "verification": verification}
         result = self.seal_block(actor=actor, limit=limit)
         result["forced"] = True
         result["reason"] = str(reason or "")

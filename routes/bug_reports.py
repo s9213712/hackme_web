@@ -161,9 +161,9 @@ def register_bug_report_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
 
         blocked, info = check_user_rate_limit(actor["id"], "bug_report_submit", max_req=5, window_sec=3600)
         if blocked:
@@ -246,13 +246,13 @@ def register_bug_report_routes(app, deps):
             data = {}
         decision = str(data.get("decision") or "").strip().lower()
         if decision not in {"approve", "reject"}:
-            return json_resp({"ok": False, "msg": "decision must be approve or reject"}), 400
+            return json_resp({"ok": False, "msg": "decision 必須為 approve 或 reject"}), 400
         path = _bug_report_path(report_id)
         if not path or not path.exists():
-            return json_resp({"ok": False, "msg": "bug report not found"}), 404
+            return json_resp({"ok": False, "msg": "找不到該 bug report"}), 404
         payload = json.loads(path.read_text(encoding="utf-8"))
         if payload.get("reward_status") in {"awarded", "rejected"} or payload.get("status") in {"approved", "rejected"}:
-            return json_resp({"ok": False, "msg": "bug report already reviewed"}), 409
+            return json_resp({"ok": False, "msg": "此 bug report 已被審核過"}), 409
         review_note = _clean_text(data.get("review_note"), 500)
         payload["reviewed_at"] = datetime.now().isoformat()
         payload["reviewed_by"] = _actor_value(actor, "username")

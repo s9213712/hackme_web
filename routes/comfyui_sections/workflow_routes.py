@@ -122,7 +122,7 @@ def register_comfyui_workflow_routes(app, ctx):
         try:
             data = ctx["request"].get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         data = data if isinstance(data, dict) else {}
         workflow_candidate = data.get("workflow_json") if "workflow_json" in data else data.get("workflow")
         if workflow_candidate in (None, ""):
@@ -164,7 +164,7 @@ def register_comfyui_workflow_routes(app, ctx):
         try:
             data = ctx["request"].get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         data = data if isinstance(data, dict) else {}
         params, msg = normalize_generation_payload(data)
         if msg:
@@ -224,7 +224,7 @@ def register_comfyui_workflow_routes(app, ctx):
         try:
             data = ctx["request"].get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         data = data if isinstance(data, dict) else {}
         conn = get_db()
         try:

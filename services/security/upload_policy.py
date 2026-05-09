@@ -213,7 +213,7 @@ def _validate_yara_rules_path(rules_path):
 def update_cloud_drive_security_policy(conn, data, scope="default"):
     ensure_upload_security_schema(conn)
     if not isinstance(data, dict):
-        return None, "Invalid request"
+        return None, "請求內容格式錯誤"
     updates = []
     params = []
     for key in CLOUD_DRIVE_POLICY_BOOL_FIELDS:

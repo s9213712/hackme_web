@@ -232,9 +232,9 @@ def register_appeal_routes(app, deps):
             try:
                 data = request.get_json(force=True)
             except Exception:
-                return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+                return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
             if not isinstance(data, dict):
-                return json_resp({"ok":False,"msg":"Invalid request"}), 400
+                return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
 
             raw_violation_id = data.get("violation_id")
             violation_id = None
@@ -392,9 +392,9 @@ def register_appeal_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
 
         action = (normalize_text(data.get("action")) or "").lower()
         if action not in ("approve", "reject"):

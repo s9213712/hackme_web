@@ -258,9 +258,9 @@ def register_system_admin_security_routes(app, ctx):
         try:
             data = request.get_json(force=True) if request.is_json else {}
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         target = str(data.get("target") or request.host_url or "").strip().rstrip("/")
         if not re.fullmatch(r"https?://[A-Za-z0-9.\-_\[\]:]+(?::\d+)?(?:/.*)?", target):
             return json_resp({"ok": False, "msg": "target 必須是 http(s) URL"}), 400
@@ -316,9 +316,9 @@ def register_system_admin_security_routes(app, ctx):
         try:
             data = request.get_json(force=True) if request.is_json else {}
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         port = safe_security_test_int(data.get("port"), 50741, 1, 65535)
         if port is None:
             return json_resp({"ok": False, "msg": "port 必須介於 1-65535"}), 400
@@ -355,9 +355,9 @@ def register_system_admin_security_routes(app, ctx):
         try:
             data = request.get_json(force=True) if request.is_json else {}
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         target = str(data.get("target") or request.host_url or "").strip().rstrip("/")
         if not re.fullmatch(r"https?://[A-Za-z0-9.\-_\[\]:]+(?::\d+)?(?:/.*)?", target):
             return json_resp({"ok": False, "msg": "target 必須是 http(s) URL"}), 400
@@ -413,9 +413,9 @@ def register_system_admin_security_routes(app, ctx):
         try:
             data = request.get_json(force=True) if request.is_json else {}
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         target = str(data.get("target") or request.host_url or "").strip().rstrip("/")
         if not re.fullmatch(r"https?://[A-Za-z0-9.\-_\[\]:]+(?::\d+)?(?:/.*)?", target):
             return json_resp({"ok": False, "msg": "target 必須是 http(s) URL"}), 400
@@ -490,9 +490,9 @@ def register_system_admin_security_routes(app, ctx):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         updates = {}
         for key in SECURITY_THRESHOLD_KEYS:
             if key not in data:
@@ -520,9 +520,9 @@ def register_system_admin_security_routes(app, ctx):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         updates = {key: data[key] for key in SECURITY_SETTING_KEYS if key in data}
         if not updates:
             return json_resp({"ok": False, "msg": "沒有可寫入的安全機制開關"}), 400
@@ -550,7 +550,7 @@ def register_system_admin_security_routes(app, ctx):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         branch = validate_git_branch_name((data or {}).get("branch"))
         if not branch:
             return json_resp({"ok": False, "msg": "請選擇合法的更新分支"}), 400
@@ -574,7 +574,7 @@ def register_system_admin_security_routes(app, ctx):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         branch = validate_git_branch_name((data or {}).get("branch"))
         confirm = str((data or {}).get("confirm") or "").strip()
         if not branch:
@@ -687,7 +687,7 @@ def register_system_admin_security_routes(app, ctx):
     @require_csrf_safe
     def admin_security_profiles():
         if not server_mode_service:
-            return json_resp({"ok": False, "msg": "server mode service unavailable"}), 503
+            return json_resp({"ok": False, "msg": "Server Mode 服務目前無法使用"}), 503
         if request.method == "GET":
             _, error = require_super_admin_actor()
             if error:
@@ -699,9 +699,9 @@ def register_system_admin_security_routes(app, ctx):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         profile_payload, err = security_profile_payload(data)
         if err:
             return json_resp({"ok": False, "msg": err}), 400
@@ -724,7 +724,7 @@ def register_system_admin_security_routes(app, ctx):
         if error:
             return error
         if not integrity_guard:
-            return json_resp({"ok":False,"msg":"integrity guard unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Integrity Guard 服務目前無法使用"}), 503
         return json_resp({"ok":True,"integrity":integrity_guard.status()})
 
     @app.route("/api/root/integrity/rescan", methods=["POST"])
@@ -734,7 +734,7 @@ def register_system_admin_security_routes(app, ctx):
         if error:
             return error
         if not integrity_guard:
-            return json_resp({"ok":False,"msg":"integrity guard unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Integrity Guard 服務目前無法使用"}), 503
         result = integrity_guard.scan(actor=actor["username"], create_initial_manifest=True)
         audit("INTEGRITY_RESCAN", get_client_ip(), user=actor["username"], success=bool(result.get("ok")), detail=f"status={result.get('status') or result.get('last_scan', {}).get('status')}")
         return json_resp({"ok":bool(result.get("ok", True)),"integrity":result}), (200 if result.get("ok", True) else 500)
@@ -746,7 +746,7 @@ def register_system_admin_security_routes(app, ctx):
         if error:
             return error
         if not integrity_guard:
-            return json_resp({"ok":False,"msg":"integrity guard unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Integrity Guard 服務目前無法使用"}), 503
         status = request.args.get("status") or None
         return json_resp({"ok":True,"findings":integrity_guard.list_findings(status=status)})
 
@@ -757,7 +757,7 @@ def register_system_admin_security_routes(app, ctx):
         if error:
             return error
         if not integrity_guard:
-            return json_resp({"ok":False,"msg":"integrity guard unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Integrity Guard 服務目前無法使用"}), 503
         finding = integrity_guard.get_finding(finding_id)
         if not finding:
             return json_resp({"ok":False,"msg":"找不到 integrity finding"}), 404
@@ -768,13 +768,13 @@ def register_system_admin_security_routes(app, ctx):
         if error:
             return error
         if not integrity_guard:
-            return json_resp({"ok":False,"msg":"integrity guard unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Integrity Guard 服務目前無法使用"}), 503
         try:
             data = request.get_json(force=True) if request.is_json else {}
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         result = integrity_guard.review_finding(
             finding_id,
             action=action,
@@ -791,16 +791,16 @@ def register_system_admin_security_routes(app, ctx):
         if error:
             return error
         if not integrity_guard:
-            return json_resp({"ok":False,"msg":"integrity guard unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Integrity Guard 服務目前無法使用"}), 503
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         action = str(data.get("action") or "").strip().lower()
         if action not in {"approve", "reject", "ignore"}:
-            return json_resp({"ok":False,"msg":"unsupported integrity action"}), 400
+            return json_resp({"ok":False,"msg": "不支援的 integrity 操作"}), 400
         raw_ids = data.get("finding_ids") or data.get("ids") or []
         if not isinstance(raw_ids, list) or not raw_ids:
             return json_resp({"ok":False,"msg":"finding_ids 不可為空"}), 400
@@ -810,7 +810,7 @@ def register_system_admin_security_routes(app, ctx):
             return json_resp({"ok":False,"msg":"finding_ids 格式錯誤"}), 400
         confirm = str(data.get("confirm") or "")
         if action == "approve" and confirm != CONFIRM_APPROVE:
-            return json_resp({"ok":False,"msg":"approve confirmation mismatch"}), 400
+            return json_resp({"ok":False,"msg": "確認字串不正確"}), 400
         note = str(data.get("note") or "")[:1000]
         results = []
         ok_count = 0
@@ -858,7 +858,7 @@ def register_system_admin_security_routes(app, ctx):
         if error:
             return error
         if not integrity_guard:
-            return json_resp({"ok":False,"msg":"integrity guard unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Integrity Guard 服務目前無法使用"}), 503
         return json_resp({"ok":True,"report":integrity_guard.export_report(),"approve_confirm":CONFIRM_APPROVE})
 
     @app.route("/api/admin/integrity/repair", methods=["POST"])

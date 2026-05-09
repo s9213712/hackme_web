@@ -541,7 +541,7 @@ def register_system_admin_routes(app, deps):
 
     def rebuild_integrity_baseline_after_update(actor, branch, preview):
         if not integrity_guard:
-            return {"ok": False, "msg": "integrity guard unavailable"}
+            return {"ok": False, "msg": "Integrity Guard 服務目前無法使用"}
         try:
             changed_paths = []
             for item in preview.get("changed_files") or []:
@@ -561,7 +561,7 @@ def register_system_admin_routes(app, deps):
 
     def run_integrity_scan_after_update(actor):
         if not integrity_guard:
-            return {"ok": False, "msg": "integrity guard unavailable"}
+            return {"ok": False, "msg": "Integrity Guard 服務目前無法使用"}
         try:
             result = integrity_guard.scan(actor=actor["username"], create_initial_manifest=False)
             return {"ok": bool(result.get("ok", True)), "result": result}
@@ -570,9 +570,9 @@ def register_system_admin_routes(app, deps):
 
     def prepare_server_update_recovery_points(actor, branch):
         if not snapshot_service:
-            return {"ok": False, "msg": "snapshot service unavailable"}
+            return {"ok": False, "msg": "Snapshot 服務目前無法使用"}
         if not points_service:
-            return {"ok": False, "msg": "PointsChain service unavailable"}
+            return {"ok": False, "msg": "PointsChain 服務目前無法使用"}
         snapshot = snapshot_service.create_snapshot(
             snapshot_type="pre_update",
             actor=actor,
@@ -1289,9 +1289,9 @@ def register_system_admin_routes(app, deps):
         try:
             data = request.get_json(force=True) if request.is_json else {}
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         target = str(data.get("target") or request.host_url or "").strip().rstrip("/")
         if not re.fullmatch(r"https?://[A-Za-z0-9.\-_\[\]:]+(?::\d+)?(?:/.*)?", target):
             return json_resp({"ok": False, "msg": "target 必須是 http(s) URL"}), 400
@@ -1347,9 +1347,9 @@ def register_system_admin_routes(app, deps):
         try:
             data = request.get_json(force=True) if request.is_json else {}
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         port = _safe_security_test_int(data.get("port"), 50741, 1, 65535)
         if port is None:
             return json_resp({"ok": False, "msg": "port 必須介於 1-65535"}), 400
@@ -1386,9 +1386,9 @@ def register_system_admin_routes(app, deps):
         try:
             data = request.get_json(force=True) if request.is_json else {}
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         target = str(data.get("target") or request.host_url or "").strip().rstrip("/")
         if not re.fullmatch(r"https?://[A-Za-z0-9.\-_\[\]:]+(?::\d+)?(?:/.*)?", target):
             return json_resp({"ok": False, "msg": "target 必須是 http(s) URL"}), 400
@@ -1444,9 +1444,9 @@ def register_system_admin_routes(app, deps):
         try:
             data = request.get_json(force=True) if request.is_json else {}
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         target = str(data.get("target") or request.host_url or "").strip().rstrip("/")
         if not re.fullmatch(r"https?://[A-Za-z0-9.\-_\[\]:]+(?::\d+)?(?:/.*)?", target):
             return json_resp({"ok": False, "msg": "target 必須是 http(s) URL"}), 400
@@ -1521,9 +1521,9 @@ def register_system_admin_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         updates = {}
         for key in SECURITY_THRESHOLD_KEYS:
             if key not in data:
@@ -1551,9 +1551,9 @@ def register_system_admin_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         updates = {key: data[key] for key in SECURITY_SETTING_KEYS if key in data}
         if not updates:
             return json_resp({"ok": False, "msg": "沒有可寫入的安全機制開關"}), 400
@@ -1581,7 +1581,7 @@ def register_system_admin_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         branch = validate_git_branch_name((data or {}).get("branch"))
         if not branch:
             return json_resp({"ok": False, "msg": "請選擇合法的更新分支"}), 400
@@ -1605,7 +1605,7 @@ def register_system_admin_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         branch = validate_git_branch_name((data or {}).get("branch"))
         confirm = str((data or {}).get("confirm") or "").strip()
         if not branch:
@@ -1721,7 +1721,7 @@ def register_system_admin_routes(app, deps):
     @require_csrf_safe
     def admin_security_profiles():
         if not server_mode_service:
-            return json_resp({"ok": False, "msg": "server mode service unavailable"}), 503
+            return json_resp({"ok": False, "msg": "Server Mode 服務目前無法使用"}), 503
         if request.method == "GET":
             _, error = require_super_admin_actor()
             if error:
@@ -1733,9 +1733,9 @@ def register_system_admin_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         profile_payload, err = security_profile_payload(data)
         if err:
             return json_resp({"ok": False, "msg": err}), 400
@@ -1758,7 +1758,7 @@ def register_system_admin_routes(app, deps):
         if error:
             return error
         if not integrity_guard:
-            return json_resp({"ok":False,"msg":"integrity guard unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Integrity Guard 服務目前無法使用"}), 503
         return json_resp({"ok":True,"integrity":integrity_guard.status()})
 
     @app.route("/api/root/integrity/rescan", methods=["POST"])
@@ -1768,7 +1768,7 @@ def register_system_admin_routes(app, deps):
         if error:
             return error
         if not integrity_guard:
-            return json_resp({"ok":False,"msg":"integrity guard unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Integrity Guard 服務目前無法使用"}), 503
         result = integrity_guard.scan(actor=actor["username"], create_initial_manifest=True)
         audit("INTEGRITY_RESCAN", get_client_ip(), user=actor["username"], success=bool(result.get("ok")), detail=f"status={result.get('status') or result.get('last_scan', {}).get('status')}")
         return json_resp({"ok":bool(result.get("ok", True)),"integrity":result}), (200 if result.get("ok", True) else 500)
@@ -1780,7 +1780,7 @@ def register_system_admin_routes(app, deps):
         if error:
             return error
         if not integrity_guard:
-            return json_resp({"ok":False,"msg":"integrity guard unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Integrity Guard 服務目前無法使用"}), 503
         status = request.args.get("status") or None
         return json_resp({"ok":True,"findings":integrity_guard.list_findings(status=status)})
 
@@ -1791,7 +1791,7 @@ def register_system_admin_routes(app, deps):
         if error:
             return error
         if not integrity_guard:
-            return json_resp({"ok":False,"msg":"integrity guard unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Integrity Guard 服務目前無法使用"}), 503
         finding = integrity_guard.get_finding(finding_id)
         if not finding:
             return json_resp({"ok":False,"msg":"找不到 integrity finding"}), 404
@@ -1802,13 +1802,13 @@ def register_system_admin_routes(app, deps):
         if error:
             return error
         if not integrity_guard:
-            return json_resp({"ok":False,"msg":"integrity guard unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Integrity Guard 服務目前無法使用"}), 503
         try:
             data = request.get_json(force=True) if request.is_json else {}
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         result = integrity_guard.review_finding(
             finding_id,
             action=action,
@@ -1825,16 +1825,16 @@ def register_system_admin_routes(app, deps):
         if error:
             return error
         if not integrity_guard:
-            return json_resp({"ok":False,"msg":"integrity guard unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Integrity Guard 服務目前無法使用"}), 503
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         action = str(data.get("action") or "").strip().lower()
         if action not in {"approve", "reject", "ignore"}:
-            return json_resp({"ok":False,"msg":"unsupported integrity action"}), 400
+            return json_resp({"ok":False,"msg": "不支援的 integrity 操作"}), 400
         raw_ids = data.get("finding_ids") or data.get("ids") or []
         if not isinstance(raw_ids, list) or not raw_ids:
             return json_resp({"ok":False,"msg":"finding_ids 不可為空"}), 400
@@ -1844,7 +1844,7 @@ def register_system_admin_routes(app, deps):
             return json_resp({"ok":False,"msg":"finding_ids 格式錯誤"}), 400
         confirm = str(data.get("confirm") or "")
         if action == "approve" and confirm != CONFIRM_APPROVE:
-            return json_resp({"ok":False,"msg":"approve confirmation mismatch"}), 400
+            return json_resp({"ok":False,"msg": "確認字串不正確"}), 400
         note = str(data.get("note") or "")[:1000]
         results = []
         ok_count = 0
@@ -1892,7 +1892,7 @@ def register_system_admin_routes(app, deps):
         if error:
             return error
         if not integrity_guard:
-            return json_resp({"ok":False,"msg":"integrity guard unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Integrity Guard 服務目前無法使用"}), 503
         return json_resp({"ok":True,"report":integrity_guard.export_report(),"approve_confirm":CONFIRM_APPROVE})
 
     # ── 系統參數（超級管理者 only）───────────────────────────────────────────────
@@ -1923,9 +1923,9 @@ def register_system_admin_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         current_settings = get_system_settings()
         bool_keys = {
             key for key, value in (current_settings or {}).items()
@@ -2099,7 +2099,7 @@ def register_system_admin_routes(app, deps):
             try:
                 data = request.get_json(force=True)
             except Exception:
-                return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+                return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
             policy, err = update_cloud_drive_security_policy(conn, data)
             if err:
                 return json_resp({"ok":False,"msg":err}), 400
@@ -2125,9 +2125,9 @@ def register_system_admin_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
 
         before_settings = get_system_settings()
         violations = find_feature_dependency_violations(before_settings, data)
@@ -2156,9 +2156,9 @@ def register_system_admin_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         before_settings = get_system_settings()
         updates = {}
         for key in ("root_ip_whitelist_enabled", "root_ip_whitelist", "browser_only_mode_enabled"):
@@ -2194,9 +2194,9 @@ def register_system_admin_routes(app, deps):
         try:
             data = request.get_json(force=True) if request.is_json else {}
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         if data.get("confirm") != "ROTATE":
             return json_resp({"ok":False,"msg":"confirm 必須等於 ROTATE"}), 400
         ttl_minutes = data.get("ttl_minutes", 30)
@@ -2237,9 +2237,9 @@ def register_system_admin_routes(app, deps):
         try:
             data = request.get_json(force=True) if request.is_json else {}
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         if data.get("confirm") != "ROTATE_INTERNAL_TEST_TOKEN":
             return json_resp({"ok":False,"msg":"confirm 必須等於 ROTATE_INTERNAL_TEST_TOKEN"}), 400
         ttl_minutes = data.get("ttl_minutes", 24 * 60)
@@ -2334,7 +2334,7 @@ def register_system_admin_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
 
         conn = get_db()
         try:
@@ -2352,7 +2352,7 @@ def register_system_admin_routes(app, deps):
     @require_csrf_safe
     def admin_snapshots():
         if not snapshot_service:
-            return json_resp({"ok":False,"msg":"snapshot service unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Snapshot 服務目前無法使用"}), 503
         actor, error = require_root_actor()
         if error:
             return error
@@ -2361,9 +2361,9 @@ def register_system_admin_routes(app, deps):
         try:
             data = request.get_json(force=True) if request.is_json else {}
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         snapshot_type = data.get("type") or "manual"
         if snapshot_type == "before_superweak" and actor["username"] != "root":
             return json_resp({"ok":False,"msg":"before_superweak snapshot 必須由 root 建立"}), 403
@@ -2380,7 +2380,7 @@ def register_system_admin_routes(app, deps):
     @require_csrf_safe
     def admin_daily_snapshots():
         if not snapshot_service:
-            return json_resp({"ok":False,"msg":"snapshot service unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Snapshot 服務目前無法使用"}), 503
         actor, error = require_root_actor()
         if error:
             return error
@@ -2390,9 +2390,9 @@ def register_system_admin_routes(app, deps):
         try:
             data = request.get_json(force=True) if request.is_json else {}
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         if data.get("confirm") != "RUN_DAILY_SNAPSHOT":
             return json_resp({"ok":False,"msg":"confirm 必須等於 RUN_DAILY_SNAPSHOT"}), 400
         result = snapshot_service.create_daily_snapshot_if_due(
@@ -2410,16 +2410,16 @@ def register_system_admin_routes(app, deps):
     @require_csrf
     def admin_system_reset():
         if not snapshot_service:
-            return json_resp({"ok":False,"msg":"snapshot service unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Snapshot 服務目前無法使用"}), 503
         actor, error = require_root_actor()
         if error:
             return error
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         result = snapshot_service.reset_runtime_state(
             actor=actor,
             confirm=data.get("confirm"),
@@ -2442,7 +2442,7 @@ def register_system_admin_routes(app, deps):
     @require_csrf_safe
     def admin_snapshot_detail(snapshot_id):
         if not snapshot_service:
-            return json_resp({"ok":False,"msg":"snapshot service unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Snapshot 服務目前無法使用"}), 503
         actor, error = require_root_actor()
         if error:
             return error
@@ -2461,7 +2461,7 @@ def register_system_admin_routes(app, deps):
     @require_csrf_safe
     def admin_snapshot_download(snapshot_id):
         if not snapshot_service:
-            return json_resp({"ok":False,"msg":"snapshot service unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Snapshot 服務目前無法使用"}), 503
         actor, error = require_root_actor()
         if error:
             return error
@@ -2482,7 +2482,7 @@ def register_system_admin_routes(app, deps):
     @require_csrf
     def admin_snapshot_upload_restore():
         if not snapshot_service:
-            return json_resp({"ok":False,"msg":"snapshot service unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Snapshot 服務目前無法使用"}), 503
         actor, error = require_root_actor()
         if error:
             return error
@@ -2509,16 +2509,16 @@ def register_system_admin_routes(app, deps):
     @require_csrf
     def admin_snapshot_restore(snapshot_id):
         if not snapshot_service:
-            return json_resp({"ok":False,"msg":"snapshot service unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Snapshot 服務目前無法使用"}), 503
         actor, error = require_root_actor()
         if error:
             return error
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         dry_run = bool(data.get("dry_run"))
         confirm = data.get("confirm")
         if dry_run:
@@ -2543,7 +2543,7 @@ def register_system_admin_routes(app, deps):
     @require_csrf_safe
     def admin_server_mode():
         if not server_mode_service:
-            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Server Mode 服務目前無法使用"}), 503
         actor, error = require_root_actor()
         if error:
             return error
@@ -2552,9 +2552,9 @@ def register_system_admin_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         result = server_mode_service.switch_mode(
             target_mode=data.get("mode"),
             actor=actor,
@@ -2576,7 +2576,7 @@ def register_system_admin_routes(app, deps):
     @require_csrf_safe
     def root_server_mode_status():
         if not server_mode_service:
-            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Server Mode 服務目前無法使用"}), 503
         actor, error = require_root_actor()
         if error:
             return error
@@ -2595,16 +2595,16 @@ def register_system_admin_routes(app, deps):
     @require_csrf
     def root_server_mode_checkpoint():
         if not server_mode_service:
-            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Server Mode 服務目前無法使用"}), 503
         actor, error = require_root_actor()
         if error:
             return error
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         result = server_mode_service.create_mode_checkpoint(
             actor=actor,
             target_mode=data.get("target_mode") or data.get("mode"),
@@ -2616,16 +2616,16 @@ def register_system_admin_routes(app, deps):
     @require_csrf
     def root_server_mode_restore_check():
         if not server_mode_service or not hasattr(server_mode_service, "validate_checkpoint_restore"):
-            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Server Mode 服務目前無法使用"}), 503
         actor, error = require_root_actor()
         if error:
             return error
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         result = server_mode_service.validate_checkpoint_restore(checkpoint_id=data.get("checkpoint_id"))
         return json_resp(result), (200 if result.get("ok") else 400)
 
@@ -2633,16 +2633,16 @@ def register_system_admin_routes(app, deps):
     @require_csrf
     def root_server_mode_switch():
         if not server_mode_service:
-            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Server Mode 服務目前無法使用"}), 503
         actor, error = require_root_actor()
         if error:
             return error
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         result = server_mode_service.switch_mode(
             target_mode=data.get("mode") or data.get("target_mode"),
             actor=actor,
@@ -2657,7 +2657,7 @@ def register_system_admin_routes(app, deps):
     @require_csrf_safe
     def root_server_mode_requirements():
         if not server_mode_service or not hasattr(server_mode_service, "production_requirements"):
-            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Server Mode 服務目前無法使用"}), 503
         actor, error = require_root_actor()
         if error:
             return error
@@ -2667,7 +2667,7 @@ def register_system_admin_routes(app, deps):
     @require_csrf_safe
     def root_server_mode_logs():
         if not server_mode_service or not hasattr(server_mode_service, "mode_switch_logs"):
-            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Server Mode 服務目前無法使用"}), 503
         actor, error = require_root_actor()
         if error:
             return error
@@ -2682,7 +2682,7 @@ def register_system_admin_routes(app, deps):
     @require_csrf_safe
     def root_server_mode_logs_verify():
         if not server_mode_service or not hasattr(server_mode_service, "verify_mode_switch_logs"):
-            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Server Mode 服務目前無法使用"}), 503
         actor, error = require_root_actor()
         if error:
             return error
@@ -2732,16 +2732,16 @@ def register_system_admin_routes(app, deps):
     @require_csrf
     def root_production_report_upload():
         if not server_mode_service or not hasattr(server_mode_service, "upload_production_report"):
-            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Server Mode 服務目前無法使用"}), 503
         actor, error = require_root_actor()
         if error:
             return error
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         result = server_mode_service.upload_production_report(
             actor=actor,
             report_type=data.get("report_type"),
@@ -2766,7 +2766,7 @@ def register_system_admin_routes(app, deps):
     @require_csrf_safe
     def root_production_report_status():
         if not server_mode_service or not hasattr(server_mode_service, "production_requirements"):
-            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Server Mode 服務目前無法使用"}), 503
         actor, error = require_root_actor()
         if error:
             return error
@@ -2776,16 +2776,16 @@ def register_system_admin_routes(app, deps):
     @require_csrf
     def root_production_enter():
         if not server_mode_service:
-            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Server Mode 服務目前無法使用"}), 503
         actor, error = require_root_actor()
         if error:
             return error
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         result = server_mode_service.switch_mode(
             target_mode="production",
             actor=actor,
@@ -2800,16 +2800,16 @@ def register_system_admin_routes(app, deps):
     @require_csrf
     def root_tester_token_create():
         if not server_mode_service or not hasattr(server_mode_service, "create_tester_token"):
-            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Server Mode 服務目前無法使用"}), 503
         actor, error = require_root_actor()
         if error:
             return error
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         result = server_mode_service.create_tester_token(
             actor=actor,
             tester_user_id=data.get("tester_user_id"),
@@ -2827,16 +2827,16 @@ def register_system_admin_routes(app, deps):
     @require_csrf
     def root_tester_token_revoke():
         if not server_mode_service or not hasattr(server_mode_service, "revoke_tester_token"):
-            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Server Mode 服務目前無法使用"}), 503
         actor, error = require_root_actor()
         if error:
             return error
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         result = server_mode_service.revoke_tester_token(
             actor=actor,
             token_id=data.get("token_id"),
@@ -2848,7 +2848,7 @@ def register_system_admin_routes(app, deps):
     @require_csrf_safe
     def root_tester_token_list():
         if not server_mode_service or not hasattr(server_mode_service, "list_tester_tokens"):
-            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Server Mode 服務目前無法使用"}), 503
         actor, error = require_root_actor()
         if error:
             return error
@@ -2871,7 +2871,7 @@ def register_system_admin_routes(app, deps):
     @app.route("/api/tester/shadow-state", methods=["GET"])
     def tester_shadow_state():
         if not server_mode_service or not hasattr(server_mode_service, "tester_shadow_state"):
-            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Server Mode 服務目前無法使用"}), 503
         actor, error = _require_tester_actor()
         if error:
             return error
@@ -2887,7 +2887,7 @@ def register_system_admin_routes(app, deps):
     @app.route("/api/tester/shadow-role", methods=["GET"])
     def tester_shadow_role_get():
         if not server_mode_service or not hasattr(server_mode_service, "tester_shadow_state"):
-            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Server Mode 服務目前無法使用"}), 503
         actor, error = _require_tester_actor()
         if error:
             return error
@@ -2911,16 +2911,16 @@ def register_system_admin_routes(app, deps):
     @require_csrf
     def tester_shadow_role():
         if not server_mode_service or not hasattr(server_mode_service, "set_tester_shadow_role"):
-            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Server Mode 服務目前無法使用"}), 503
         actor, error = _require_tester_actor()
         if error:
             return error
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         tester_header_value = _tester_token_from_request()
         result = server_mode_service.set_tester_shadow_role(
             actor=actor,
@@ -2934,7 +2934,7 @@ def register_system_admin_routes(app, deps):
     @app.route("/api/tester/shadow-wallet", methods=["GET"])
     def tester_shadow_wallet_get():
         if not server_mode_service or not hasattr(server_mode_service, "tester_shadow_state"):
-            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Server Mode 服務目前無法使用"}), 503
         actor, error = _require_tester_actor()
         if error:
             return error
@@ -2958,16 +2958,16 @@ def register_system_admin_routes(app, deps):
     @require_csrf
     def tester_shadow_wallet():
         if not server_mode_service or not hasattr(server_mode_service, "adjust_tester_shadow_wallet"):
-            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Server Mode 服務目前無法使用"}), 503
         actor, error = _require_tester_actor()
         if error:
             return error
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         tester_header_value = _tester_token_from_request()
         result = server_mode_service.adjust_tester_shadow_wallet(
             actor=actor,
@@ -2983,16 +2983,16 @@ def register_system_admin_routes(app, deps):
     @require_csrf
     def root_incident_enter():
         if not server_mode_service or not hasattr(server_mode_service, "enter_incident_lockdown"):
-            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Server Mode 服務目前無法使用"}), 503
         actor, error = require_root_actor()
         if error:
             return error
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         if data.get("confirm") != "ENTER_INCIDENT_LOCKDOWN":
             return json_resp({"ok":False,"msg":"confirm 必須等於 ENTER_INCIDENT_LOCKDOWN"}), 400
         result = server_mode_service.enter_incident_lockdown(
@@ -3007,7 +3007,7 @@ def register_system_admin_routes(app, deps):
     @require_csrf_safe
     def root_incident_status():
         if not server_mode_service or not hasattr(server_mode_service, "incident_status"):
-            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Server Mode 服務目前無法使用"}), 503
         actor, error = require_root_actor()
         if error:
             return error
@@ -3017,16 +3017,16 @@ def register_system_admin_routes(app, deps):
     @require_csrf
     def root_incident_resolve():
         if not server_mode_service or not hasattr(server_mode_service, "resolve_incident"):
-            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Server Mode 服務目前無法使用"}), 503
         actor, error = require_root_actor()
         if error:
             return error
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         result = server_mode_service.resolve_incident(
             actor=actor,
             confirm=data.get("confirm"),
@@ -3039,16 +3039,16 @@ def register_system_admin_routes(app, deps):
     @require_csrf
     def admin_exit_superweak():
         if not server_mode_service:
-            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Server Mode 服務目前無法使用"}), 503
         actor, error = require_root_actor()
         if error:
             return error
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         result = server_mode_service.exit_superweak(
             actor=actor,
             action=data.get("action"),
@@ -3200,4 +3200,4 @@ def register_system_admin_routes(app, deps):
             return resp
         ip, ua = get_client_ip(), get_ua()
         audit("404_CATCHALL", ip, ua=ua, detail=f"path={invalid}")
-        return json_resp({"ok":False,"msg":"Not found"}), 404
+        return json_resp({"ok":False,"msg": "找不到資源"}), 404

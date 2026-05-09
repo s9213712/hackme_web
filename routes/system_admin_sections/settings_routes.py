@@ -83,9 +83,9 @@ def register_system_admin_settings_routes(app, ctx):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         current_settings = get_system_settings()
         bool_keys = {
             key for key, value in (current_settings or {}).items()
@@ -268,7 +268,7 @@ def register_system_admin_settings_routes(app, ctx):
             try:
                 data = request.get_json(force=True)
             except Exception:
-                return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+                return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
             policy, err = update_cloud_drive_security_policy(conn, data)
             if err:
                 return json_resp({"ok":False,"msg":err}), 400
@@ -293,9 +293,9 @@ def register_system_admin_settings_routes(app, ctx):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
 
         before_settings = get_system_settings()
         violations = find_feature_dependency_violations(before_settings, data)
@@ -324,9 +324,9 @@ def register_system_admin_settings_routes(app, ctx):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         before_settings = get_system_settings()
         updates = {}
         for key in ("root_ip_whitelist_enabled", "root_ip_whitelist", "browser_only_mode_enabled"):
@@ -362,9 +362,9 @@ def register_system_admin_settings_routes(app, ctx):
         try:
             data = request.get_json(force=True) if request.is_json else {}
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         if data.get("confirm") != "ROTATE":
             return json_resp({"ok":False,"msg":"confirm 必須等於 ROTATE"}), 400
         ttl_minutes = data.get("ttl_minutes", 30)
@@ -405,9 +405,9 @@ def register_system_admin_settings_routes(app, ctx):
         try:
             data = request.get_json(force=True) if request.is_json else {}
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         if data.get("confirm") != "ROTATE_INTERNAL_TEST_TOKEN":
             return json_resp({"ok":False,"msg":"confirm 必須等於 ROTATE_INTERNAL_TEST_TOKEN"}), 400
         ttl_minutes = data.get("ttl_minutes", 24 * 60)
@@ -502,7 +502,7 @@ def register_system_admin_settings_routes(app, ctx):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
 
         conn = get_db()
         try:

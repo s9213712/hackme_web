@@ -68,7 +68,7 @@ def register_file_share_preview_routes(app, ctx):
             try:
                 data = request.get_json(force=True)
             except Exception:
-                return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+                return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
             link, msg = create_share_link(
                 conn,
                 actor=actor,

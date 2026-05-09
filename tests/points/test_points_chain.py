@@ -409,7 +409,7 @@ def test_points_chain_detects_wallet_tamper_and_restore_reports_success(tmp_path
 
     restored = service.restore_from_backup(actor=actor, backup_id=backup_id, confirm="RESTORE POINTSCHAIN")
     assert restored["ok"] is True
-    assert restored["msg"] == "PointsChain restored and verified"
+    assert restored["msg"] == "PointsChain 已還原並驗證完成"
     assert restored["wallet_rebuild"]["wallets_rebuilt"] >= 1
     assert restored["verification"]["ok"] is True
     assert restored["recovery"]["safe_mode"] is False

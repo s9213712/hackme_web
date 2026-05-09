@@ -40,9 +40,9 @@ def register_comfyui_admin_routes(app, ctx):
         try:
             data = ctx["request"].get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         url, endpoint, msg = parse_comfyui_endpoint(data)
         if msg:
             return json_resp({"ok": False, "msg": msg}), 400
@@ -124,9 +124,9 @@ def register_comfyui_admin_routes(app, ctx):
         try:
             data = ctx["request"].get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         page_url = str(data.get("page_url") or data.get("url") or "").strip()
         result, msg = inspect_civitai_model(page_url)
         audit(
@@ -150,9 +150,9 @@ def register_comfyui_admin_routes(app, ctx):
         try:
             data = ctx["request"].get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         query = str(data.get("query") or "").strip()
         base_model = str(data.get("base_model") or "").strip()
         model_type = str(data.get("model_type") or data.get("type") or "").strip()
@@ -204,9 +204,9 @@ def register_comfyui_admin_routes(app, ctx):
         try:
             data = ctx["request"].get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         request_data, msg = parse_civitai_download_request(data)
         if msg:
             return json_resp({"ok": False, "msg": msg}), 400

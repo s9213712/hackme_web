@@ -482,10 +482,10 @@ class SnapshotService:
         for name, digest in checksums.items():
             target = path / name
             if not target.exists() or _sha256_file(target) != digest:
-                return {"ok": False, "msg": "checksum mismatch", "file": name}
+                return {"ok": False, "msg": "checksum 不一致", "file": name}
         overall = hashlib.sha256(checksums_path.read_text(encoding="utf-8").encode("utf-8")).hexdigest()
         if metadata.get("checksum") != overall:
-            return {"ok": False, "msg": "metadata checksum mismatch"}
+            return {"ok": False, "msg": "metadata checksum 不一致"}
         conn = sqlite3.connect(str(path / "db.sqlite3.backup"))
         try:
             conn.execute("PRAGMA integrity_check").fetchone()
@@ -495,8 +495,8 @@ class SnapshotService:
             with tarfile.open(archive, "r:gz") as tar:
                 for member in tar.getmembers():
                     if not _safe_relative_tarinfo(member):
-                        return {"ok": False, "msg": "unsafe tar member", "file": member.name}
-        return {"ok": True, "msg": "snapshot verified", "metadata": metadata}
+                        return {"ok": False, "msg": "tar 內容包含不安全的成員", "file": member.name}
+        return {"ok": True, "msg": "snapshot 驗證通過", "metadata": metadata}
 
     def verify_snapshot(self, *, snapshot_id):
         return self._verify_snapshot_dir(self._snapshot_dir(snapshot_id))
@@ -971,7 +971,7 @@ class SnapshotService:
             self.audit("SYSTEM_RUNTIME_RESET", "-", user=actor_name, success=True, detail=audit_detail)
         return {
             "ok": True,
-            "msg": "runtime state reset",
+            "msg": "Runtime 狀態已重置",
             "pre_reset_snapshot_id": pre.snapshot_id,
             "cleared_tables": cleared_tables,
             "points_chain_reset": points_result,
@@ -1060,7 +1060,7 @@ class SnapshotService:
             )
             return {
                 "ok": False,
-                "msg": "restore preparation failed",
+                "msg": "還原準備失敗",
                 "error": str(exc),
                 "pre_restore_snapshot_id": pre.snapshot_id,
             }
@@ -1100,7 +1100,7 @@ class SnapshotService:
                 self.audit("MODE_SWITCH_LOG_RESTORE_PRESERVE_FAILED", "-", user=actor_name, success=False, detail=json.dumps(mode_log_merge, ensure_ascii=False, sort_keys=True))
                 return {
                     "ok": False,
-                    "msg": "mode switch log preservation failed after restore",
+                    "msg": "還原後 mode-switch log 保留失敗",
                     "event_id": event_id,
                     "pre_restore_snapshot_id": pre.snapshot_id,
                     "mode_switch_log_merge": mode_log_merge,
@@ -1136,7 +1136,7 @@ class SnapshotService:
                 )
                 return {
                     "ok": False,
-                    "msg": "runtime secret validation failed",
+                    "msg": "Runtime 密鑰驗證失敗",
                     "event_id": event_id,
                     "pre_restore_snapshot_id": pre.snapshot_id,
                     "runtime_secret_validation": runtime_secret_validation,
@@ -1167,7 +1167,7 @@ class SnapshotService:
                 self.audit("SNAPSHOT_RESTORE_VALIDATION_FAILED", "-", user=actor_name, success=False, detail=f"snapshot_id={snapshot_id},validation={post_restore_validation}")
                 return {
                     "ok": False,
-                    "msg": "post-restore validation failed",
+                    "msg": "Restore 後驗證失敗",
                     "event_id": event_id,
                     "pre_restore_snapshot_id": pre.snapshot_id,
                     "post_restore_validation": post_restore_validation,
@@ -1177,7 +1177,7 @@ class SnapshotService:
             self.audit("SNAPSHOT_RESTORE_COMPLETED", "-", user=actor_name, success=True, detail=f"snapshot_id={snapshot_id},pre_restore={pre.snapshot_id},reason={reason}")
             return {
                 "ok": True,
-                "msg": "snapshot restored",
+                "msg": "Snapshot 已還原",
                 "event_id": event_id,
                 "pre_restore_snapshot_id": pre.snapshot_id,
                 "post_restore_validation": post_restore_validation,
@@ -1198,7 +1198,7 @@ class SnapshotService:
             finally:
                 conn.close()
             self.audit("SNAPSHOT_RESTORE_FAILED", "-", user=actor_name, success=False, detail=f"snapshot_id={snapshot_id},error={exc}")
-            return {"ok": False, "msg": "restore failed", "error": str(exc), "pre_restore_snapshot_id": pre.snapshot_id}
+            return {"ok": False, "msg": "還原失敗", "error": str(exc), "pre_restore_snapshot_id": pre.snapshot_id}
         finally:
             if staged_snapshot_parent and staged_snapshot_parent.exists():
                 try:
@@ -1219,4 +1219,4 @@ class SnapshotService:
         finally:
             conn.close()
         self.audit("SNAPSHOT_DELETE", "-", user=actor_name, success=True, detail=f"snapshot_id={snapshot_id},reason={reason}")
-        return {"ok": True, "msg": "snapshot deleted"}
+        return {"ok": True, "msg": "Snapshot 已刪除"}

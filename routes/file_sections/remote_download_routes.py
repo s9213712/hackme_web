@@ -77,7 +77,7 @@ def register_file_remote_download_routes(app, ctx):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         data = data if isinstance(data, dict) else {}
         url = str(data.get("url") or "").strip()
         if not url:
@@ -258,7 +258,7 @@ def register_file_remote_download_routes(app, ctx):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         data = data if isinstance(data, dict) else {}
         url = str(data.get("url") or "").strip()
         privacy_mode = str(data.get("privacy_mode") or "standard_plain").strip() or "standard_plain"

@@ -86,9 +86,9 @@ def register_reports_notification_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         title = normalize_text(data.get("title"))[:120]
         body = str(data.get("body") or "").strip()[:1000]
         if not title or not body:
@@ -195,9 +195,9 @@ def register_reports_notification_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         target_type = normalize_text(data.get("target_type")) or ""
         if target_type not in REPORT_TARGET_TYPES:
             return json_resp({"ok": False, "msg": "檢舉目標類型錯誤"}), 400
@@ -311,7 +311,7 @@ def register_reports_notification_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         action = normalize_text(data.get("action"))
         note = normalize_text(data.get("note"))[:500]
         if action not in {"approve", "reject"}:

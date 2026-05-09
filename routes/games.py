@@ -598,9 +598,9 @@ def register_games_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return None, json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return None, json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return None, json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return None, json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         return data, None, None
 
     def user_row(conn, user_id):

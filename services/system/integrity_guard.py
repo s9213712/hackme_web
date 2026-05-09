@@ -779,7 +779,7 @@ class IntegrityGuard:
     def review_finding(self, finding_id, *, action, actor, note="", confirm=""):
         action = str(action or "").strip()
         if action not in {"approve", "reject", "ignore"}:
-            return {"ok": False, "msg": "unsupported integrity action"}
+            return {"ok": False, "msg": "不支援的 integrity 操作"}
         conn = self.get_db()
         try:
             self.ensure_schema(conn)

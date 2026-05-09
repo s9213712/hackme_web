@@ -364,7 +364,7 @@ def register_public_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         password = data.get("password", "") if isinstance(data, dict) and isinstance(data.get("password"), str) else ""
         result = score_password_strength(password)
         return json_resp({"ok": True, **result})
@@ -533,11 +533,11 @@ def register_public_routes(app, deps):
         except Exception:
             record_login_failure(ip, ua=ua, detail="invalid_json")
             timing_delay()
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
             record_login_failure(ip, ua=ua, detail="json_not_object")
             timing_delay()
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
 
         username = (data.get("username","") if isinstance(data.get("username"), str) else "").strip()
         password = data.get("password","") if isinstance(data.get("password"), str) else ""
@@ -719,7 +719,7 @@ def register_public_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         identifier = data.get("username_or_email") or data.get("username") or data.get("email") if isinstance(data, dict) else ""
         conn = get_db()
         try:
@@ -800,9 +800,9 @@ def register_public_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         token = str(data.get("token") or "").strip()
         password = data.get("password", "") if isinstance(data.get("password"), str) else ""
         password_confirm = data.get("password_confirm", "") if isinstance(data.get("password_confirm"), str) else ""
@@ -865,7 +865,7 @@ def register_public_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         identifier = data.get("username_or_email") or data.get("username") or data.get("email") if isinstance(data, dict) else ""
         conn = get_db()
         try:
@@ -897,7 +897,7 @@ def register_public_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         token = str(data.get("token") or "").strip() if isinstance(data, dict) else ""
         if not token:
             return json_resp({"ok": False, "msg": "驗證碼不可為空"}), 400
@@ -1032,7 +1032,7 @@ def register_public_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         conn = get_db()
         try:
             appearance = update_profile_appearance(conn, actor=ctx, data=data)
