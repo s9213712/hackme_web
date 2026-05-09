@@ -68,6 +68,22 @@ def _last_nonempty_line(text: str) -> str:
     return ""
 
 
+def _human_duration(seconds: float) -> str:
+    seconds = max(0, int(seconds))
+    minutes, sec = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h {minutes:02d}m {sec:02d}s"
+    if minutes:
+        return f"{minutes}m {sec:02d}s"
+    return f"{sec}s"
+
+
+def _foreground(message: str) -> None:
+    sys.stderr.write(f"{message}\n")
+    sys.stderr.flush()
+
+
 def _find_latest_paths(parent: Path, pattern: str) -> list[Path]:
     if not parent.exists():
         return []
@@ -114,19 +130,50 @@ def _run(command: list[str], *, env: dict | None = None, timeout: int = 3600) ->
     if env:
         merged.update(env)
     started = time.perf_counter()
-    proc = subprocess.run(
+    proc = subprocess.Popen(
         command,
         cwd=str(ROOT),
         text=True,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         env=merged,
-        timeout=timeout,
     )
+    heartbeat_seconds = int(os.environ.get("GO_LIVE_PROGRESS_HEARTBEAT_SECONDS", "30") or "30")
+    heartbeat_seconds = max(5, heartbeat_seconds)
+    next_heartbeat = started + heartbeat_seconds
+    deadline = started + max(1, int(timeout))
+    stdout = ""
+    stderr = ""
+    while True:
+        remaining = max(0.1, min(5.0, deadline - time.perf_counter()))
+        try:
+            stdout, stderr = proc.communicate(timeout=remaining)
+            break
+        except subprocess.TimeoutExpired:
+            now = time.perf_counter()
+            if now >= deadline:
+                proc.kill()
+                stdout, stderr = proc.communicate()
+                stderr = (stderr or "") + f"\ntimeout after {timeout}s"
+                return CommandResult(
+                    command=command,
+                    returncode=124,
+                    stdout=stdout or "",
+                    stderr=stderr,
+                    duration_ms=int((time.perf_counter() - started) * 1000),
+                )
+            if now >= next_heartbeat:
+                _foreground(
+                    f"  still running: {' '.join(command[:3])}"
+                    f"{' ...' if len(command) > 3 else ''}"
+                    f" elapsed={_human_duration(now - started)} timeout={_human_duration(timeout)}"
+                )
+                next_heartbeat = now + heartbeat_seconds
     return CommandResult(
         command=command,
-        returncode=proc.returncode,
-        stdout=proc.stdout,
-        stderr=proc.stderr,
+        returncode=int(proc.returncode or 0),
+        stdout=stdout or "",
+        stderr=stderr or "",
         duration_ms=int((time.perf_counter() - started) * 1000),
     )
 

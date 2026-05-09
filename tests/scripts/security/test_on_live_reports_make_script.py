@@ -1,9 +1,11 @@
 import argparse
 import json
 import os
+import sys
 import urllib.error
 from pathlib import Path
 
+from scripts.security.gate import full_generator_live_validate as full_gate
 from scripts.security.gate import on_live_reports_make as helper
 
 
@@ -48,6 +50,73 @@ def test_live_report_helper_covers_all_required_report_types_and_runtime_outputs
     assert "functional_port" in helper
     assert '{"production", "internal_test", "test", "dev_ready"}' in helper
     assert '_switch_live_mode(client, "dev_ready", notes="go_live trading stress precheck")' in helper
+
+
+def test_full_generator_parallel_long_defaults_keep_live_pentest_foreground():
+    args = argparse.Namespace(no_parallel_long_generators=False, parallel_live_pentest=False)
+
+    selected = full_gate._background_report_types(args)
+
+    assert selected == ("pytest", "functional", "cloud_drive_quota_permission")
+    assert "pentest" not in selected
+
+
+def test_full_generator_parallel_long_can_include_live_pentest_or_disable_parallelism():
+    args = argparse.Namespace(no_parallel_long_generators=False, parallel_live_pentest=True)
+    assert "pentest" in full_gate._background_report_types(args)
+
+    args.no_parallel_long_generators = True
+    assert full_gate._background_report_types(args) == ()
+
+
+def test_full_generator_root_password_defaults_to_environment(monkeypatch):
+    monkeypatch.setenv("ROOT_PASSWORD", "RootFromEnv123!")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "full_generator_live_validate.py",
+            "--runtime-dir",
+            "/tmp/runtime",
+            "--git-repo-dir",
+            str(ROOT),
+        ],
+    )
+
+    args = full_gate.parse_args()
+
+    assert args.root_password == "RootFromEnv123!"
+
+
+def test_full_generator_login_failure_records_attempt_without_noninteractive_prompt(monkeypatch):
+    class _FailingBrowser:
+        def __init__(self):
+            self.cookies = {}
+            self.csrf = ""
+
+        def login_with_rotation(self, username, password, *, rotate_to):
+            return 401, {"ok": False, "msg": "bad password"}, password, [{"step": "login", "http_status": 401}]
+
+    monkeypatch.setattr(full_gate.sys, "stdin", argparse.Namespace(isatty=lambda: False))
+    args = argparse.Namespace(root_username="root", root_password="bad", root_new_password="next")
+
+    status, payload, _, _, attempts = full_gate._browser_login_with_prompt(
+        _FailingBrowser(),
+        args,
+        auto_root_new_password=False,
+    )
+
+    assert status == 401
+    assert payload["msg"] == "bad password"
+    assert attempts == [
+        {
+            "attempt": 1,
+            "http_status": 401,
+            "ok": False,
+            "message": "bad password",
+            "prompted_after_failure": False,
+        }
+    ]
 
 
 def test_integrity_report_refreshes_csrf_before_mutating_calls():
