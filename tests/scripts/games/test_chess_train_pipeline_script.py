@@ -83,6 +83,8 @@ def test_chess_train_pipeline_runs_prepare_seed_and_stages_without_benchmark(tmp
     assert payload["prepare"]["accepted_eval_samples"] >= 1
     assert payload["seed_train"]["games_played"] >= 1
     assert payload["seed_train"]["experiment_db_path"] == str(runtime_dir / "games" / "models" / "chess_experiment.db")
+    assert payload["exp1_refine"]["accepted_samples"] >= 1
+    assert payload["exp1_refine"]["db_path"] == str(runtime_dir / "games" / "models" / "chess_experiment.db")
     assert payload["benchmark"]["skipped"] is True
     assert payload["benchmark_report_path"] == ""
     assert payload["promotion_results"][0]["engine"] == "experiment 3:dl"

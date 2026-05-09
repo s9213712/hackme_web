@@ -86,6 +86,7 @@ def _write_report(summary: dict) -> dict:
         f"- prepare_train_samples: `{summary['prepare'].get('accepted_train_samples', 0)}`",
         f"- prepare_eval_samples: `{summary['prepare'].get('accepted_eval_samples', 0)}`",
         f"- seed_games_played: `{summary['seed_train'].get('games_played', 0)}`",
+        f"- exp1_refine_samples: `{summary.get('exp1_refine', {}).get('accepted_samples', 0)}`",
         f"- exp2_refine_samples: `{summary.get('exp2_refine', {}).get('accepted_samples', 0)}`",
         f"- exp3_refine_samples: `{summary.get('exp3_refine', {}).get('accepted_samples', 0)}`",
         f"- exp4_refine_samples: `{summary.get('exp4_refine', {}).get('accepted_samples', 0)}`",
@@ -163,6 +164,18 @@ def main() -> int:
     if float(args.student_exploration_rate) >= 0:
         seed_cmd.extend(["--student-exploration-rate", str(float(args.student_exploration_rate))])
     seed_train = _run_json(seed_cmd)
+
+    exp1_refine = {"ok": False, "skipped": True, "reason": "exp1 refine not requested"}
+    if int(prepare.get("accepted_train_samples") or 0) > 0:
+        exp1_cmd = [
+            sys.executable,
+            str(ROOT / "scripts" / "games" / "chess_exp1_dataset_train.py"),
+            "--input-jsonl",
+            str(dataset_paths["train"]),
+            "--db-path",
+            str(candidate_paths["experiment"]),
+        ]
+        exp1_refine = _run_json(exp1_cmd)
 
     exp2_refine = {"ok": False, "skipped": True, "reason": "exp2 refine not requested"}
     if args.include_exp2 and int(prepare.get("accepted_train_samples") or 0) > 0:
@@ -300,6 +313,7 @@ def main() -> int:
         "recommendation": recommendation,
         "prepare": prepare,
         "seed_train": seed_train,
+        "exp1_refine": exp1_refine,
         "exp2_refine": exp2_refine,
         "exp3_refine": exp3_refine,
         "exp4_refine": exp4_refine,

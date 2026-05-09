@@ -124,6 +124,7 @@ python3 scripts/games/chess_seed_train.py --preset standard
 
 若你想直接覆蓋別的目標，也可以明確傳：
 
+- `--experiment-db-path`
 - `--experiment-2-model-path`
 - `--experiment-3-model-path`
 - `--experiment-4-model-path`
@@ -133,9 +134,10 @@ python3 scripts/games/chess_seed_train.py --preset standard
 - `runtime/reports/games/chess_seed_train_*.json`
 - `runtime/reports/games/chess_seed_train_*.md`
 
-## 4. exp3 用 user dataset 再 refine
+## 4. exp1-4 用 user dataset 再 refine
 
-如果這一輪要用使用者棋局繼續補強 exp3，再跑：
+如果這一輪要用使用者棋局繼續補強 exp1-4，可以用 `chess_replay_prepare.py`
+產出的同一份 `train.jsonl` 餵給各 engine 專用 trainer：
 
 ```bash
 REPO_ROOT=/path/to/hackme_web
@@ -144,11 +146,28 @@ RUNTIME_DIR=/tmp/chess_runtime
 cd "$REPO_ROOT"
 HACKME_RUNTIME_DIR="$RUNTIME_DIR" \
 PYTHONPATH="$REPO_ROOT" \
+python3 scripts/games/chess_exp1_dataset_train.py \
+  --input-jsonl "$RUNTIME_DIR/reports/games/chess_datasets/train.jsonl"
+
+HACKME_RUNTIME_DIR="$RUNTIME_DIR" \
+PYTHONPATH="$REPO_ROOT" \
+python3 scripts/games/chess_exp2_dataset_train.py \
+  --input-jsonl "$RUNTIME_DIR/reports/games/chess_datasets/train.jsonl"
+
+HACKME_RUNTIME_DIR="$RUNTIME_DIR" \
+PYTHONPATH="$REPO_ROOT" \
 python3 scripts/games/chess_exp3_dataset_train.py \
+  --input-jsonl "$RUNTIME_DIR/reports/games/chess_datasets/train.jsonl"
+
+HACKME_RUNTIME_DIR="$RUNTIME_DIR" \
+PYTHONPATH="$REPO_ROOT" \
+python3 scripts/games/chess_exp4_dataset_train.py \
   --input-jsonl "$RUNTIME_DIR/reports/games/chess_datasets/train.jsonl"
 ```
 
-這一步只針對 `exp3`。
+`chess_train_pipeline.py` 會自動在 seed 後跑 exp1 / exp3 / exp4 refine；
+若帶 `--include-exp2`，也會一起跑 exp2 refine。報告會列出
+`exp1_refine_samples` 到 `exp4_refine_samples`。
 
 ## 5. 跑 benchmark / smoke
 
