@@ -56,6 +56,12 @@ MAX_PLIES = 180
 AUTORUN_THRESHOLD = 10
 MIN_VALID_PLIES = 16
 RETRAIN_ENGINE_ALIASES = {"exp2", "exp3", "exp4"}
+DATASET_DUPLICATE_RATIO_LIMIT = 0.25
+DATASET_SHORT_RESIGN_LIMIT = 0
+POISON_REPETITION_LIMIT = 0
+POISON_INTENTIONAL_BLUNDER_LIMIT = 0
+POISON_ENGINE_COPY_LIMIT = 0
+POISON_SUSPICIOUS_RESIGN_RATE_LIMIT = 0.10
 HUMAN_PROBE_OPENINGS = (
     {
         "label": "white_scholars_mate_probe",
@@ -374,6 +380,8 @@ def _engine_verdict(summary: dict) -> str:
     invalid_audit = summary.get("invalid_case_audit") or []
     if any(bool(row.get("entered_train_dataset")) for row in invalid_audit):
         return "FAIL"
+    if bool((summary.get("stability") or {}).get("catastrophic_regression")):
+        return "HIGH_RISK"
     if summary.get("engine_alias") == "exp1":
         risk = str((summary.get("exp1_live_learning") or {}).get("contamination_risk") or "").upper()
         if risk in {"HIGH", "FAIL", "HIGH RISK"}:
@@ -1463,17 +1471,70 @@ def _promotion_gate_summary(summary: dict) -> dict:
         reasons.append("insufficient trusted games")
     if summary.get("replay_summary", {}).get("quarantine_replays") != INVALID_GAMES:
         reasons.append("unexpected quarantine count")
-    if int((summary.get("dataset_integrity") or {}).get("contaminated_rows") or 0) > 0:
+    integrity = summary.get("dataset_integrity") or {}
+    poison = summary.get("poison_detection") or {}
+    if int(integrity.get("contaminated_rows") or 0) > 0:
         reasons.append("contaminated rows entered train dataset")
-    if float((summary.get("dataset_integrity") or {}).get("duplicate_ratio") or 0.0) > 0.25:
+    if float(integrity.get("duplicate_ratio") or 0.0) > DATASET_DUPLICATE_RATIO_LIMIT:
         reasons.append("duplicate ratio exceeded threshold")
+    if int(integrity.get("invalid_fen") or 0) > 0:
+        reasons.append("invalid FEN detected in dataset")
+    if int(integrity.get("illegal_moves") or 0) > 0:
+        reasons.append("illegal moves detected in dataset")
+    if int(integrity.get("side_mismatch") or 0) > 0:
+        reasons.append("side mismatch detected in dataset")
+    if int(integrity.get("short_resign_games") or 0) > DATASET_SHORT_RESIGN_LIMIT:
+        reasons.append("short resign games exceeded threshold")
+    if int(poison.get("forced_repetition_patterns") or 0) > POISON_REPETITION_LIMIT:
+        reasons.append("forced repetition poison signal exceeded threshold")
+    if int(poison.get("intentional_blunders") or 0) > POISON_INTENTIONAL_BLUNDER_LIMIT:
+        reasons.append("intentional blunder poison signal exceeded threshold")
+    if int(poison.get("engine_copy_suspected") or 0) > POISON_ENGINE_COPY_LIMIT:
+        reasons.append("engine copy/duplicate poison signal exceeded threshold")
+    if float(poison.get("suspicious_resign_rate") or 0.0) > POISON_SUSPICIOUS_RESIGN_RATE_LIMIT:
+        reasons.append("suspicious resign rate exceeded threshold")
     stability = summary.get("stability") or {}
     if stability.get("catastrophic_regression"):
         reasons.append("catastrophic regression detected")
-    if (summary.get("before_after_eval", {}).get("benchmark_before") or {}).get("skipped") or (summary.get("before_after_eval", {}).get("benchmark_after") or {}).get("skipped"):
-        reasons.append("benchmark skipped")
+    before_benchmark = (summary.get("before_after_eval", {}).get("benchmark_before") or {})
+    after_benchmark = (summary.get("before_after_eval", {}).get("benchmark_after") or {})
+    if before_benchmark.get("skipped") or after_benchmark.get("skipped"):
+        skipped_reason = before_benchmark.get("reason") or after_benchmark.get("reason") or "unknown"
+        reasons.append(f"benchmark skipped: {skipped_reason}")
     if str(summary.get("engine_verdict") or "") not in {"", "PASS"}:
         reasons.append(f"engine verdict {summary.get('engine_verdict')}")
+    return {
+        "passed": not reasons,
+        "reasons": reasons,
+        "thresholds": {
+            "dataset_duplicate_ratio_limit": DATASET_DUPLICATE_RATIO_LIMIT,
+            "dataset_short_resign_limit": DATASET_SHORT_RESIGN_LIMIT,
+            "poison_repetition_limit": POISON_REPETITION_LIMIT,
+            "poison_intentional_blunder_limit": POISON_INTENTIONAL_BLUNDER_LIMIT,
+            "poison_engine_copy_limit": POISON_ENGINE_COPY_LIMIT,
+            "poison_suspicious_resign_rate_limit": POISON_SUSPICIOUS_RESIGN_RATE_LIMIT,
+        },
+    }
+
+
+def _checkpoint_gate_summary(
+    *,
+    dataset_result: dict,
+    benchmark_before_focus: dict,
+    benchmark_after_focus: dict,
+    legal_rate_delta,
+    ineffective_training: bool,
+) -> dict:
+    reasons = []
+    if int(dataset_result.get("contaminated_rows") or 0) > 0:
+        reasons.append("contaminated rows entered checkpoint dataset")
+    if ineffective_training:
+        reasons.append("model hash changed without probe move changes")
+    if bool(benchmark_before_focus.get("skipped") or benchmark_after_focus.get("skipped")):
+        skipped_reason = benchmark_before_focus.get("reason") or benchmark_after_focus.get("reason") or "unknown"
+        reasons.append(f"benchmark skipped: {skipped_reason}")
+    if legal_rate_delta is not None and legal_rate_delta < -0.05:
+        reasons.append("legal move rate regressed beyond threshold")
     return {"passed": not reasons, "reasons": reasons}
 
 
@@ -1550,6 +1611,260 @@ def _failure_explanations(summary: dict) -> list[str]:
     if not reasons and summary.get("engine_verdict") == "PASS":
         return ["No blocking failure detected."]
     return sorted(set(reasons))
+
+
+def _promotion_explanation(summary: dict) -> str:
+    gate = summary.get("promotion_gate") or {}
+    if gate.get("passed"):
+        return "Yes. Promotion gate passed and no blocking dataset, poison, benchmark, or regression reason was found."
+    reasons = [str(reason) for reason in gate.get("reasons") or []]
+    if not reasons:
+        return "No. Promotion gate did not pass, but no explicit reason was recorded."
+    return "No. " + "; ".join(reasons) + "."
+
+
+def _root_engine_row(summary: dict) -> dict:
+    return {
+        "engine_alias": summary["engine_alias"],
+        "difficulty": summary["difficulty"],
+        "engine_verdict": summary.get("engine_verdict"),
+        "replay_learning_supported": bool(summary.get("retrain_result", {}).get("retrain_supported")),
+        "effective_samples": int(summary.get("dataset_result", {}).get("accepted_rows") or 0),
+        "rejected_samples": int(summary.get("dataset_result", {}).get("rejected_rows") or 0),
+        "trusted_replays": summary["replay_summary"]["trusted_replays"],
+        "quarantine_replays": summary["replay_summary"]["quarantine_replays"],
+        "autorun_status": summary["autorun_status"].get("status", ""),
+        "agreement_before": summary["evaluation_before"].get("agreement"),
+        "agreement_after": summary["evaluation_after"].get("agreement"),
+        "avg_think_ms_before": summary["evaluation_before"].get("avg_think_ms"),
+        "avg_think_ms_after": summary["evaluation_after"].get("avg_think_ms"),
+        "avg_game_think_ms_per_step": (summary.get("game_timing") or {}).get("avg_think_ms_per_step"),
+        "think_steps_measured": (summary.get("game_timing") or {}).get("steps_measured"),
+        "total_retrain_seconds": (summary.get("retrain_timing") or {}).get("total_retrain_seconds"),
+        "avg_retrain_seconds": (summary.get("retrain_timing") or {}).get("avg_retrain_seconds"),
+        "total_checkpoint_seconds": (summary.get("retrain_timing") or {}).get("total_checkpoint_seconds"),
+        "promotion_gate_passed": (summary.get("promotion_gate") or {}).get("passed"),
+        "promotion_gate_reasons": (summary.get("promotion_gate") or {}).get("reasons") or [],
+        "catastrophic_regression": (summary.get("stability") or {}).get("catastrophic_regression"),
+        "can_be_promoted": _promotion_explanation(summary),
+        "dataset_duplicate_ratio": (summary.get("dataset_integrity") or {}).get("duplicate_ratio"),
+        "dataset_illegal_moves": (summary.get("dataset_integrity") or {}).get("illegal_moves"),
+        "suspicious_resign_rate": (summary.get("poison_detection") or {}).get("suspicious_resign_rate"),
+        "win_rate_before": (summary.get("before_after_eval", {}).get("benchmark_before") or {}).get("win_rate"),
+        "win_rate_after": (summary.get("before_after_eval", {}).get("benchmark_after") or {}).get("win_rate"),
+        "legal_rate_before": (summary.get("before_after_eval", {}).get("benchmark_before") or {}).get("legal_rate"),
+        "legal_rate_after": (summary.get("before_after_eval", {}).get("benchmark_after") or {}).get("legal_rate"),
+        "low_quality_rate_before": (summary.get("before_after_eval", {}).get("benchmark_before") or {}).get("low_quality_rate"),
+        "low_quality_rate_after": (summary.get("before_after_eval", {}).get("benchmark_after") or {}).get("low_quality_rate"),
+        "checkpoint_count": len(summary.get("before_after_eval", {}).get("checkpoints") or []),
+        "invalid_train_entries": sum(1 for row in (summary.get("invalid_case_audit") or []) if row.get("entered_train_dataset")),
+        "learning_changed": (
+            summary.get("evaluation_after", {}).get("agreement") != summary.get("evaluation_before", {}).get("agreement")
+            or summary.get("model_after", {}).get("sha256") != summary.get("model_before", {}).get("sha256")
+        ),
+        "benchmark_skipped": _summary_benchmark_skipped(summary),
+        "benchmark_changed": _summary_benchmark_changed(summary),
+        "meets_expectation": (
+            summary["replay_summary"]["trusted_replays"] == VALID_GAMES
+            and summary["replay_summary"]["quarantine_replays"] == INVALID_GAMES
+            and (
+                not summary.get("retrain_result", {}).get("retrain_supported")
+                or (
+                    (summary.get("retrain_result", {}).get("trainer_probe", {}).get("validation", {}) or {}).get("accepted_samples_gt_zero")
+                    and (summary.get("retrain_result", {}).get("trainer_probe", {}).get("validation", {}) or {}).get("rejected_samples_match")
+                    and (
+                        summary.get("evaluation_after", {}).get("agreement")
+                        != summary.get("evaluation_before", {}).get("agreement")
+                        or summary.get("model_after", {}).get("sha256")
+                        != summary.get("model_before", {}).get("sha256")
+                    )
+                    and (
+                        len(summary.get("before_after_eval", {}).get("checkpoints") or []) >= max(1, VALID_GAMES // max(1, int(summary.get("autorun_threshold") or 1)))
+                    )
+                    and _summary_benchmark_expectation_met(summary)
+                )
+            )
+        ),
+        "suitable_for_production_self_learning": bool(summary.get("suitable_for_production_self_learning")),
+    }
+
+
+def _build_root_summary(
+    *,
+    output_root: Path,
+    summaries: list[dict],
+    skip_autorun_benchmark: bool,
+    skip_autorun_promote: bool,
+    skip_retrain_benchmark_snapshots: bool,
+) -> dict:
+    root_summary = {
+        "ok": True,
+        "generated_at": _utc_now(),
+        "output_root": str(output_root),
+        "fast_retrain": bool(skip_autorun_benchmark or skip_autorun_promote),
+        "skip_autorun_benchmark": bool(skip_autorun_benchmark),
+        "skip_autorun_promote": bool(skip_autorun_promote),
+        "skip_retrain_benchmark_snapshots": bool(skip_retrain_benchmark_snapshots),
+        "timing": {
+            "total_retrain_seconds": round(sum(float((summary.get("retrain_timing") or {}).get("total_retrain_seconds") or 0.0) for summary in summaries), 3),
+            "total_checkpoint_seconds": round(sum(float((summary.get("retrain_timing") or {}).get("total_checkpoint_seconds") or 0.0) for summary in summaries), 3),
+            "avg_game_think_ms_per_step": round(
+                sum(float((summary.get("game_timing") or {}).get("total_think_ms") or 0.0) for summary in summaries)
+                / max(1, sum(int((summary.get("game_timing") or {}).get("steps_measured") or 0) for summary in summaries)),
+                3,
+            ),
+            "think_steps_measured": sum(int((summary.get("game_timing") or {}).get("steps_measured") or 0) for summary in summaries),
+        },
+        "environment": _environment_summary(),
+        "engines": [_root_engine_row(summary) for summary in summaries],
+    }
+    engine_verdicts = [str(row.get("engine_verdict") or "") for row in root_summary["engines"]]
+    if any(verdict == "FAIL" for verdict in engine_verdicts):
+        overall_verdict = "FAIL"
+    elif any(bool(row.get("catastrophic_regression")) for row in root_summary["engines"]):
+        overall_verdict = "HIGH_RISK"
+    elif any(verdict in {"PARTIAL", "HIGH_RISK"} for verdict in engine_verdicts) or any(not bool(row.get("promotion_gate_passed")) for row in root_summary["engines"]):
+        overall_verdict = "PARTIAL"
+    else:
+        overall_verdict = "PASS"
+    root_summary["overall_verdict"] = overall_verdict
+    return root_summary
+
+
+def _root_report_lines(root_summary: dict, summaries: list[dict]) -> list[str]:
+    lines = [
+        "# Chess Live Learning Validation",
+        "",
+        f"- generated_at: `{root_summary['generated_at']}`",
+        f"- output_root: `{root_summary['output_root']}`",
+        f"- overall_verdict: `{root_summary['overall_verdict']}`",
+        f"- total_retrain_seconds: `{root_summary['timing']['total_retrain_seconds']}`",
+        f"- avg_game_think_ms_per_step: `{root_summary['timing']['avg_game_think_ms_per_step']}`",
+        f"- think_steps_measured: `{root_summary['timing']['think_steps_measured']}`",
+        "",
+        "## Engines",
+        "",
+    ]
+    for row in root_summary["engines"]:
+        lines.append(
+            f"- {row['engine_alias']} `{row['difficulty']}` "
+            f"verdict=`{row['engine_verdict']}` "
+            f"support=`{row['replay_learning_supported']}` "
+            f"checkpoints=`{row['checkpoint_count']}` "
+            f"accepted=`{row['effective_samples']}` rejected=`{row['rejected_samples']}` "
+            f"win `{row['win_rate_before']}` -> `{row['win_rate_after']}` "
+            f"legal `{row['legal_rate_before']}` -> `{row['legal_rate_after']}` "
+            f"think_ms `{row['avg_think_ms_before']}` -> `{row['avg_think_ms_after']}` "
+            f"game_step_think_ms=`{row['avg_game_think_ms_per_step']}` "
+            f"retrain_s=`{row['total_retrain_seconds']}` "
+            f"low_quality `{row['low_quality_rate_before']}` -> `{row['low_quality_rate_after']}` "
+            f"learning_changed=`{row['learning_changed']}` "
+            f"benchmark_skipped=`{row['benchmark_skipped']}` "
+            f"benchmark_changed=`{row['benchmark_changed']}` "
+            f"promotion_gate=`{row['promotion_gate_passed']}` "
+            f"catastrophic=`{row['catastrophic_regression']}` "
+            f"meets_expectation=`{row['meets_expectation']}`"
+        )
+    lines.extend(["", "## Can This Model Be Promoted?", ""])
+    for row in root_summary["engines"]:
+        lines.append(f"- {row['engine_alias']}: {row['can_be_promoted']}")
+    lines.extend(["", "## Why This Run Failed", ""])
+    failure_lines = []
+    for summary in summaries:
+        for reason in _failure_explanations(summary):
+            if reason == "No blocking failure detected.":
+                continue
+            failure_lines.append(f"{summary['engine_alias']}: {reason}")
+    if failure_lines:
+        for line in sorted(set(failure_lines)):
+            lines.append(f"- {line}")
+    else:
+        lines.append("- No blocking failure detected.")
+    lines.extend(
+        [
+            "",
+            "## Known Limitations",
+            "",
+            "- Benchmark samples are finite and still subject to variance.",
+            "- Probe positions are intentionally fixed for comparability and may miss broader regressions.",
+            "",
+            "## False Positive Risks",
+            "",
+            "- Small hash or sample-count changes can overstate practical learning gains.",
+            "- Tactical probe improvements may not translate to broad opening or endgame strength.",
+            "",
+            "## Remaining Contamination Risks",
+            "",
+        ]
+    )
+    for row in root_summary["engines"]:
+        lines.append(
+            f"- {row['engine_alias']}: invalid_train_entries=`{row['invalid_train_entries']}` "
+            f"production_ok=`{row['suitable_for_production_self_learning']}`"
+        )
+    lines.extend(
+        [
+            "",
+            "## Production Suitability",
+            "",
+            f"- suitable_for_production_self_learning: `{all(bool(row.get('suitable_for_production_self_learning')) for row in root_summary['engines'])}`",
+        ]
+    )
+    return lines
+
+
+def _write_root_report(output_root: Path, root_summary: dict, summaries: list[dict]) -> None:
+    _json_dump(output_root / "summary.json", root_summary)
+    (output_root / "SUMMARY.md").write_text("\n".join(_root_report_lines(root_summary, summaries)).rstrip() + "\n", encoding="utf-8")
+
+
+def _report_consistency_issues(root_summary: dict, engine_summaries: list[dict], root_markdown: str, engine_markdown_by_alias: dict[str, str]) -> list[str]:
+    issues = []
+    engine_rows = {str(row.get("engine_alias") or ""): row for row in root_summary.get("engines") or []}
+    if any(bool(row.get("catastrophic_regression")) for row in engine_rows.values()) and root_summary.get("overall_verdict") not in {"HIGH_RISK", "FAIL"}:
+        issues.append("catastrophic regression did not elevate overall verdict")
+    if "## Can This Model Be Promoted?" not in root_markdown:
+        issues.append("root markdown missing promotion decision section")
+    for summary in engine_summaries:
+        alias = str(summary.get("engine_alias") or "")
+        row = engine_rows.get(alias)
+        if not row:
+            issues.append(f"{alias}: missing root engine row")
+            continue
+        engine_md = engine_markdown_by_alias.get(alias, "")
+        gate = summary.get("promotion_gate") or {}
+        catastrophic = bool((summary.get("stability") or {}).get("catastrophic_regression"))
+        benchmark_skipped = _summary_benchmark_skipped(summary)
+        skip_reason = ""
+        if benchmark_skipped:
+            before = (summary.get("before_after_eval") or {}).get("benchmark_before") or {}
+            after = (summary.get("before_after_eval") or {}).get("benchmark_after") or {}
+            skip_reason = str(before.get("reason") or after.get("reason") or "unknown")
+        if row.get("engine_verdict") != summary.get("engine_verdict"):
+            issues.append(f"{alias}: verdict mismatch")
+        if bool(row.get("promotion_gate_passed")) != bool(gate.get("passed")):
+            issues.append(f"{alias}: promotion gate mismatch")
+        if bool(row.get("catastrophic_regression")) != catastrophic:
+            issues.append(f"{alias}: catastrophic regression mismatch")
+        if bool(row.get("benchmark_skipped")) != benchmark_skipped:
+            issues.append(f"{alias}: benchmark skipped mismatch")
+        if benchmark_skipped and skip_reason not in ";".join(str(reason) for reason in gate.get("reasons") or []):
+            issues.append(f"{alias}: skipped benchmark reason missing from gate")
+        if "## Can This Model Be Promoted?" not in engine_md:
+            issues.append(f"{alias}: engine markdown missing promotion decision section")
+        if str(gate.get("passed")) not in engine_md:
+            issues.append(f"{alias}: engine markdown missing gate boolean")
+        if catastrophic and "catastrophic_regression: `True`" not in engine_md:
+            issues.append(f"{alias}: engine markdown missing catastrophic regression")
+        if benchmark_skipped and skip_reason and skip_reason not in root_markdown + engine_md:
+            issues.append(f"{alias}: skipped benchmark reason missing from markdown")
+        for index, checkpoint in enumerate((summary.get("before_after_eval") or {}).get("checkpoints") or [], start=1):
+            for key in ("dataset_hash", "pre_checkpoint_model_sha256", "post_checkpoint_model_sha256", "benchmark_skipped", "benchmark_skip_reason", "gate_decision"):
+                if key not in checkpoint:
+                    issues.append(f"{alias}: checkpoint {index} missing {key}")
+            if checkpoint.get("benchmark_skipped") and not checkpoint.get("benchmark_skip_reason"):
+                issues.append(f"{alias}: checkpoint {index} missing skipped benchmark reason")
+    return issues
 
 
 def _prepare_formal_dataset(
@@ -1847,6 +2162,10 @@ def _write_engine_report(engine_dir: Path, summary: dict) -> None:
             "## Promotion Gate",
             "",
             f"- passed: `{promotion_gate.get('passed')}`",
+            "",
+            "## Can This Model Be Promoted?",
+            "",
+            f"- {_promotion_explanation(summary)}",
         ]
     )
     for reason in promotion_gate.get("reasons") or []:
@@ -2081,6 +2400,16 @@ def _run_retrain_checkpoint(
         checkpoint_verdict = "PARTIAL"
     elif legal_rate_delta is not None and legal_rate_delta < -0.05:
         checkpoint_verdict = "PARTIAL"
+    checkpoint_gate = _checkpoint_gate_summary(
+        dataset_result=dataset_result,
+        benchmark_before_focus=benchmark_before_focus,
+        benchmark_after_focus=benchmark_after_focus,
+        legal_rate_delta=legal_rate_delta,
+        ineffective_training=ineffective_training,
+    )
+    benchmark_skip_reason = ""
+    if benchmark_skipped:
+        benchmark_skip_reason = str(benchmark_before_focus.get("reason") or benchmark_after_focus.get("reason") or "unknown")
 
     checkpoint = {
         "trusted_replays": int(trusted_replays),
@@ -2088,9 +2417,13 @@ def _run_retrain_checkpoint(
         "checkpoint_duration_seconds": round(time.perf_counter() - checkpoint_started, 3),
         "dataset_result": dataset_result,
         "dataset_sha256": dataset_result.get("dataset_sha256", ""),
+        "dataset_hash": f"sha256:{dataset_result.get('dataset_sha256', '')}",
         "autorun_skip_benchmark": bool(skip_autorun_benchmark),
         "autorun_skip_promote": bool(skip_autorun_promote),
         "retrain_benchmark_snapshots_skipped": bool(skip_retrain_benchmark_snapshots),
+        "benchmark_skipped": benchmark_skipped,
+        "benchmark_skip_reason": benchmark_skip_reason,
+        "gate_decision": checkpoint_gate,
         "autorun": autorun,
         "autorun_status": autorun_status,
         "pipeline_report_path": pipeline_report.get("path", ""),
@@ -2125,6 +2458,12 @@ def _run_retrain_checkpoint(
             "trusted_replays": int(trusted_replays),
             "retrain_duration_seconds": retrain_duration_seconds,
             "checkpoint_duration_seconds": checkpoint["checkpoint_duration_seconds"],
+            "dataset_hash": checkpoint["dataset_hash"],
+            "pre_checkpoint_model_sha256": before_model_meta["sha256"],
+            "post_checkpoint_model_sha256": after_model_meta["sha256"],
+            "benchmark_skipped": benchmark_skipped,
+            "benchmark_skip_reason": benchmark_skip_reason,
+            "gate_decision": checkpoint_gate,
             "move_agreement_before": move_agreement_before,
             "move_agreement_after": move_agreement_after,
             "retention_probe": retention_probe,
@@ -2504,6 +2843,16 @@ def main() -> int:
             skip_retrain_benchmark_snapshots=skip_retrain_benchmark_snapshots,
         )
         summaries.append(summary)
+    root_summary = _build_root_summary(
+        output_root=output_root,
+        summaries=summaries,
+        skip_autorun_benchmark=skip_autorun_benchmark,
+        skip_autorun_promote=skip_autorun_promote,
+        skip_retrain_benchmark_snapshots=skip_retrain_benchmark_snapshots,
+    )
+    _write_root_report(output_root, root_summary, summaries)
+    print(json.dumps(root_summary, ensure_ascii=False, indent=2))
+    return 0
     root_summary = {
         "ok": True,
         "generated_at": _utc_now(),
@@ -2546,6 +2895,7 @@ def main() -> int:
                 "promotion_gate_passed": (summary.get("promotion_gate") or {}).get("passed"),
                 "promotion_gate_reasons": (summary.get("promotion_gate") or {}).get("reasons") or [],
                 "catastrophic_regression": (summary.get("stability") or {}).get("catastrophic_regression"),
+                "can_be_promoted": _promotion_explanation(summary),
                 "dataset_duplicate_ratio": (summary.get("dataset_integrity") or {}).get("duplicate_ratio"),
                 "dataset_illegal_moves": (summary.get("dataset_integrity") or {}).get("illegal_moves"),
                 "suspicious_resign_rate": (summary.get("poison_detection") or {}).get("suspicious_resign_rate"),
@@ -2593,6 +2943,8 @@ def main() -> int:
     engine_verdicts = [str(row.get("engine_verdict") or "") for row in root_summary["engines"]]
     if any(verdict == "FAIL" for verdict in engine_verdicts):
         overall_verdict = "FAIL"
+    elif any(bool(row.get("catastrophic_regression")) for row in root_summary["engines"]):
+        overall_verdict = "HIGH_RISK"
     elif any(verdict in {"PARTIAL", "HIGH_RISK"} for verdict in engine_verdicts) or any(not bool(row.get("promotion_gate_passed")) for row in root_summary["engines"]):
         overall_verdict = "PARTIAL"
     root_summary["overall_verdict"] = overall_verdict
@@ -2630,6 +2982,15 @@ def main() -> int:
             f"catastrophic=`{row['catastrophic_regression']}` "
             f"meets_expectation=`{row['meets_expectation']}`"
         )
+    lines.extend(
+        [
+            "",
+            "## Can This Model Be Promoted?",
+            "",
+        ]
+    )
+    for row in root_summary["engines"]:
+        lines.append(f"- {row['engine_alias']}: {row['can_be_promoted']}")
     lines.extend(
         [
             "",

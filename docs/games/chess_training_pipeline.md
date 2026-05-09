@@ -357,6 +357,17 @@ python3 scripts/games/chess_live_learning_validation.py \
 - `reproducibility` — python/torch/cuda、git dirty、dataset hash、trainer hash
 - `SUMMARY.md` 會產生 `Why This Run Failed`，用人可讀方式列出 promotion gate 或資料/退化原因
 
+`promotion_gate` 是 promotion decision 的證據鏈，不是 dashboard-only 欄位。以下情況必須讓 `promotion_gate.passed=false`：
+
+- `--fast-retrain` 或其他路徑造成 benchmark skipped
+- `catastrophic_regression=true`
+- dataset integrity 超標：contaminated rows、duplicate ratio、invalid FEN、illegal moves、side mismatch、short resign games
+- poison detection 超標：forced repetition、intentional blunder、engine-copy/duplicate、suspicious resign rate
+- trusted/quarantine replay 數不符合驗收預期
+- engine verdict 不是 `PASS`
+
+每個 retrain checkpoint 也會保留 gate evidence：`dataset_hash`、before/after model hash、`benchmark_skipped`、`benchmark_skip_reason`、`gate_decision`。Root `SUMMARY.md` 和每個 engine `SUMMARY.md` 都會列出 `Can This Model Be Promoted?`，用人話說明可以或不可以。
+
 ## 7. 正式原則
 
 禁止：
