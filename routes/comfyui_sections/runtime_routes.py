@@ -16,6 +16,7 @@ def register_comfyui_runtime_routes(app, ctx):
     DEFAULT_GENERATION_TIMEOUT_SECONDS = ctx["DEFAULT_GENERATION_TIMEOUT_SECONDS"]
     MAX_GENERATION_TIMEOUT_SECONDS = ctx["MAX_GENERATION_TIMEOUT_SECONDS"]
     _actor_or_401 = ctx["actor_or_401"]
+    _root_or_403 = ctx["root_or_403"]
     _actor_value = ctx["actor_value"]
     _assert_generation_job_owner = ctx["assert_generation_job_owner"]
     _build_lora_details = ctx["build_lora_details"]
@@ -435,4 +436,3 @@ def register_comfyui_runtime_routes(app, ctx):
                 "progress": {"phase": "queued", "percent": 0, "detail": "已建立重跑工作"},
             },
         })
-
