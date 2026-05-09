@@ -20,6 +20,7 @@ from services.server.runtime import default_runtime_root_path
 DEFAULT_RETRAIN_MIN_USABLE_REPLAYS = 25
 DEFAULT_RETRAIN_MAX_AGE_HOURS = 24 * 7
 _PIPELINE_AUTORUN_LOCK = threading.Lock()
+PIPELINE_RETRAIN_ENGINES = ("experiment 2:nn", "experiment 3:dl", "experiment 4:pv")
 
 
 def _runtime_root() -> Path:
@@ -171,7 +172,49 @@ def _latest_train_timestamp(*, pipeline_report: dict | None = None, seed_report:
     return None
 
 
-def pipeline_recommendation(*, replay: dict | None = None, pipeline_report: dict | None = None, seed_report: dict | None = None) -> dict:
+def _normalize_target_engines(target_engines: list[str] | tuple[str, ...] | None) -> list[str]:
+    if target_engines is None:
+        return []
+    requested = [str(item or "").strip() for item in target_engines if str(item or "").strip()]
+    unknown = [item for item in requested if item not in PIPELINE_RETRAIN_ENGINES]
+    if unknown:
+        raise ValueError(f"unknown chess pipeline target engine: {','.join(unknown)}")
+    return requested
+
+
+def _pipeline_command_args(*, min_usable_replays: int, target_engines: list[str] | tuple[str, ...] | None = None) -> list[str]:
+    targets = _normalize_target_engines(target_engines)
+    cmd = [
+        "--preset",
+        "standard",
+        "--include-quarantine",
+        "--min-usable-replays",
+        str(max(1, int(min_usable_replays))),
+    ]
+    if targets:
+        cmd.extend(["--promote-engines", ",".join(targets), "--skip-exp1-refine"])
+        if "experiment 2:nn" in targets:
+            cmd.append("--include-exp2")
+        if "experiment 3:dl" not in targets:
+            cmd.append("--skip-exp3")
+        if "experiment 4:pv" not in targets:
+            cmd.append("--skip-exp4")
+    else:
+        cmd.extend([
+            "--include-exp2",
+            "--promote-engines",
+            "experiment 2:nn,experiment 3:dl,experiment 4:pv",
+        ])
+    return cmd
+
+
+def pipeline_recommendation(
+    *,
+    replay: dict | None = None,
+    pipeline_report: dict | None = None,
+    seed_report: dict | None = None,
+    target_engines: list[str] | tuple[str, ...] | None = None,
+) -> dict:
     replay = replay if isinstance(replay, dict) else replay_buffer_summary()
     pipeline_report = pipeline_report if isinstance(pipeline_report, dict) else latest_pipeline_report()
     thresholds = {
@@ -201,11 +244,9 @@ def pipeline_recommendation(*, replay: dict | None = None, pipeline_report: dict
         blocked_reasons.append("no usable replays yet")
     if not ready_reasons and not blocked_reasons and usable_replays >= thresholds["min_usable_replays"]:
         ready_reasons.append("replay threshold reached")
-    command = (
-        "python3 scripts/games/chess_train_pipeline.py "
-        "--preset standard --include-exp2 --include-quarantine "
-        "--promote-engines 'experiment 2:nn,experiment 3:dl,experiment 4:pv' "
-        f"--min-usable-replays {thresholds['min_usable_replays']}"
+    command_args = _pipeline_command_args(min_usable_replays=thresholds["min_usable_replays"], target_engines=target_engines)
+    command = "python3 scripts/games/chess_train_pipeline.py " + " ".join(
+        f"'{item}'" if "," in item or " " in item else item for item in command_args
     )
     if autorun_skip_benchmark():
         command += " --skip-benchmark"
@@ -227,9 +268,10 @@ def maybe_launch_chess_train_pipeline(
     replay: dict | None = None,
     trigger: str = "live_replay",
     actor_username: str | None = None,
+    target_engines: list[str] | tuple[str, ...] | None = None,
 ) -> dict:
     replay = replay if isinstance(replay, dict) else replay_buffer_summary()
-    recommendation = pipeline_recommendation(replay=replay)
+    recommendation = pipeline_recommendation(replay=replay, target_engines=target_engines)
     status_path = default_chess_pipeline_autorun_status_path()
     if not recommendation["ready"]:
         return {
@@ -258,14 +300,7 @@ def maybe_launch_chess_train_pipeline(
         cmd = [
             sys.executable,
             str(root / "scripts" / "games" / "chess_train_pipeline.py"),
-            "--preset",
-            "standard",
-            "--include-exp2",
-            "--include-quarantine",
-            "--promote-engines",
-            "experiment 2:nn,experiment 3:dl,experiment 4:pv",
-            "--min-usable-replays",
-            str(max(1, min_usable)),
+            *_pipeline_command_args(min_usable_replays=min_usable, target_engines=target_engines),
         ]
         if autorun_skip_benchmark():
             cmd.append("--skip-benchmark")

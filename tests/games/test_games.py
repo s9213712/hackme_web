@@ -1397,6 +1397,23 @@ def test_pipeline_autorun_starts_when_replay_threshold_is_met(tmp_path, monkeypa
     assert "--skip-promote" in status["recommendation"]["recommended_command"]
 
 
+def test_chess_pipeline_targeted_autorun_command_only_trains_requested_engine():
+    exp2_args = chess_pipeline_service._pipeline_command_args(min_usable_replays=10, target_engines=["experiment 2:nn"])
+
+    assert "--include-exp2" in exp2_args
+    assert "--skip-exp1-refine" in exp2_args
+    assert "--skip-exp3" in exp2_args
+    assert "--skip-exp4" in exp2_args
+    assert exp2_args[exp2_args.index("--promote-engines") + 1] == "experiment 2:nn"
+
+    exp3_args = chess_pipeline_service._pipeline_command_args(min_usable_replays=10, target_engines=["experiment 3:dl"])
+    assert "--include-exp2" not in exp3_args
+    assert "--skip-exp1-refine" in exp3_args
+    assert "--skip-exp3" not in exp3_args
+    assert "--skip-exp4" in exp3_args
+    assert exp3_args[exp3_args.index("--promote-engines") + 1] == "experiment 3:dl"
+
+
 def test_root_chess_promotion_stage_and_promote(tmp_path, monkeypatch):
     db_path = tmp_path / "games.db"
     _seed_db(db_path)

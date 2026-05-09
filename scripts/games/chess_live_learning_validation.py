@@ -49,8 +49,10 @@ ENGINE_MATRIX = [
     ("exp3", EXPERIMENT_DL_DIFFICULTY),
     ("exp4", EXPERIMENT_PV_DIFFICULTY),
 ]
-TOTAL_GAMES = 25
 INVALID_GAMES = 5
+BASE_VALID_GAMES = 20
+EXTRA_VALID_GAMES = 5
+TOTAL_GAMES = BASE_VALID_GAMES + EXTRA_VALID_GAMES + INVALID_GAMES
 VALID_GAMES = TOTAL_GAMES - INVALID_GAMES
 MAX_PLIES = 180
 AUTORUN_THRESHOLD = 10
@@ -168,6 +170,11 @@ FIXED_PROBE_POSITIONS = (
 )
 
 
+def _progress(message: str) -> None:
+    sys.stderr.write(f"[chess-live-learning-validation] {message}\n")
+    sys.stderr.flush()
+
+
 @dataclass
 class PlannedGame:
     label: str
@@ -186,12 +193,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=20260509)
     parser.add_argument("--max-plies", type=int, default=MAX_PLIES)
     parser.add_argument("--wait-timeout", type=int, default=1800, help="Seconds to wait for autorun pipeline completion.")
-    parser.add_argument("--engines", default="", help="Optional comma-separated subset: exp1,exp2,exp3,exp4")
+    parser.add_argument("--engines", default="", help="Required engine alias. Use one of: exp1,exp2,exp3,exp4.")
+    parser.add_argument("--allow-multi-engine", action="store_true", help="Allow comma-separated --engines for intentional multi-engine validation.")
     parser.add_argument("--autorun-threshold", type=int, default=AUTORUN_THRESHOLD, help="Trusted replay count required before auto-retrain is launched for exp2/exp3/exp4.")
     parser.add_argument("--fast-retrain", action="store_true", help="Skip retrain checkpoint benchmarks plus autorun pipeline benchmark/promotion.")
     parser.add_argument("--skip-autorun-benchmark", action="store_true", help="Set HTML_LEARNING_CHESS_AUTORUN_SKIP_BENCHMARK=1 before launching autorun retrain.")
     parser.add_argument("--skip-autorun-promote", action="store_true", help="Set HTML_LEARNING_CHESS_AUTORUN_SKIP_PROMOTE=1 before launching autorun retrain.")
     parser.add_argument("--skip-retrain-benchmark-snapshots", action="store_true", help="Skip validation benchmark snapshots before/after each retrain checkpoint.")
+    parser.add_argument("--benchmark-rounds", type=int, default=1, help="Round-robin benchmark rounds per pairing for formal validation snapshots.")
+    parser.add_argument("--benchmark-max-plies", type=int, default=90, help="Maximum plies per formal benchmark game.")
+    parser.add_argument("--benchmark-teacher-depth", type=int, default=2, help="Teacher search depth used by formal benchmark snapshots.")
     return parser.parse_args()
 
 
@@ -364,6 +375,19 @@ def _source_stage_label(artifact_dir: Path, engine_dir: Path) -> str:
     return f"checkpoint_{trusted:02d}"
 
 
+def _select_requested_engines(requested_arg: str, *, allow_multi_engine: bool = False) -> list[tuple[str, str]]:
+    requested = [item.strip() for item in str(requested_arg or "").split(",") if item.strip()]
+    available = {alias: difficulty for alias, difficulty in ENGINE_MATRIX}
+    if not requested:
+        raise ValueError("pass exactly one --engines alias, e.g. --engines exp2")
+    unknown = [alias for alias in requested if alias not in available]
+    if unknown:
+        raise ValueError(f"unknown engine alias: {','.join(unknown)}")
+    if len(requested) > 1 and not allow_multi_engine:
+        raise ValueError("multi-engine validation is disabled by default; pass --allow-multi-engine to run more than one")
+    return [(alias, available[alias]) for alias in requested]
+
+
 def _probe_position_score(board_state: dict, side: str) -> int:
     status = game_status(board_state, side)
     if status.get("status") == "finished":
@@ -406,7 +430,17 @@ def _engine_verdict(summary: dict) -> str:
 def _summary_benchmark_skipped(summary: dict) -> bool:
     before = summary.get("before_after_eval", {}).get("benchmark_before") or {}
     after = summary.get("before_after_eval", {}).get("benchmark_after") or {}
+    if summary.get("before_after_eval", {}).get("retrain_supported") and (not before or not after):
+        return True
     return bool(before.get("skipped") or after.get("skipped"))
+
+
+def _summary_benchmark_skip_reason(summary: dict) -> str:
+    before = summary.get("before_after_eval", {}).get("benchmark_before") or {}
+    after = summary.get("before_after_eval", {}).get("benchmark_after") or {}
+    if summary.get("before_after_eval", {}).get("retrain_supported") and (not before or not after):
+        return "missing_formal_benchmark"
+    return str(before.get("reason") or after.get("reason") or "")
 
 
 def _summary_benchmark_changed(summary: dict) -> bool:
@@ -689,11 +723,14 @@ def _generate_valid_games(
     seed: int,
     max_plies: int,
     store: ChessExperimentStore,
+    target_count: int = VALID_GAMES,
+    label_offset: int = 0,
+    existing_signatures: set[str] | None = None,
 ) -> list[PlannedGame]:
     planned: list[PlannedGame] = []
-    existing_signatures: set[str] = set()
+    known_signatures: set[str] = set(existing_signatures or set())
     attempt = 0
-    while len(planned) < VALID_GAMES:
+    while len(planned) < target_count:
         attempt += 1
         if attempt > 2500:
             raise RuntimeError(f"unable to generate enough trusted natural checkmates for {engine_name}")
@@ -714,14 +751,14 @@ def _generate_valid_games(
             row,
             winner_color=winner_color,
             actor_username=actor_username,
-            existing_signatures=existing_signatures,
+            existing_signatures=known_signatures,
         )
         if preview.get("collection_tier") != "trusted":
             continue
-        existing_signatures.add(str(preview.get("duplicate_signature") or ""))
+        known_signatures.add(str(preview.get("duplicate_signature") or ""))
         planned.append(
             PlannedGame(
-                label=f"valid_{len(planned) + 1:02d}",
+                label=f"valid_{label_offset + len(planned) + 1:02d}",
                 category="valid",
                 expected_tier="trusted",
                 row=row,
@@ -731,7 +768,7 @@ def _generate_valid_games(
                 preview_record=preview,
             )
         )
-        sys.stderr.write(f"[{engine_name}] trusted valid planned {len(planned)}/{VALID_GAMES}\n")
+        sys.stderr.write(f"[{engine_name}] trusted valid planned {label_offset + len(planned)}/{VALID_GAMES}\n")
         sys.stderr.flush()
     return planned
 
@@ -1005,17 +1042,18 @@ def _plan_engine_games(
     max_plies: int,
     store: ChessExperimentStore,
 ) -> list[PlannedGame]:
-    valid_games = _generate_valid_games(
+    base_valid_games = _generate_valid_games(
         engine_name=engine_name,
         actor_username=actor_username,
         game_start_id=1000,
         seed=seed,
         max_plies=max_plies,
         store=store,
+        target_count=BASE_VALID_GAMES,
     )
-    planned_signatures = {str(game.preview_record.get("duplicate_signature") or "") for game in valid_games}
+    planned_signatures = {str(game.preview_record.get("duplicate_signature") or "") for game in base_valid_games}
     invalid_games = [
-        _duplicate_game(valid_games[0], game_id=2001, actor_username=actor_username, existing_signatures=planned_signatures),
+        _duplicate_game(base_valid_games[0], game_id=2001, actor_username=actor_username, existing_signatures=planned_signatures),
         _meaningless_loop_game(
             engine_name=engine_name,
             game_id=2002,
@@ -1043,10 +1081,21 @@ def _plan_engine_games(
             existing_signatures=planned_signatures,
         ),
     ]
-    combined = list(valid_games) + invalid_games
+    combined = list(base_valid_games) + invalid_games
     rng = random.Random(seed + 909)
     rng.shuffle(combined)
-    return combined
+    extra_valid_games = _generate_valid_games(
+        engine_name=engine_name,
+        actor_username=actor_username,
+        game_start_id=3000,
+        seed=seed + 707,
+        max_plies=max_plies,
+        store=store,
+        target_count=EXTRA_VALID_GAMES,
+        label_offset=BASE_VALID_GAMES,
+        existing_signatures=planned_signatures,
+    )
+    return combined + extra_valid_games
 
 
 def _extract_engine_move_samples(valid_games: list[PlannedGame]) -> list[dict]:
@@ -1229,6 +1278,111 @@ def _evaluate_retention_probe(engine_alias: str, before_model_path: Path, after_
     }
 
 
+def _select_mistake_probe_sample(engine_alias: str, model_path: Path, samples: list[dict]) -> dict | None:
+    for sample in samples:
+        board_state = {"__fen__": str(sample.get("fen") or "")}
+        side = str(sample.get("side") or "white")
+        expected_move = str(sample.get("move_uci") or "").lower()
+        move = _choose_engine_move_for_eval(engine_alias, board_state, side, model_path)
+        before_uci = _move_uci(move or {})
+        if before_uci != expected_move:
+            selected = dict(sample)
+            selected["before_move"] = before_uci
+            return selected
+    return None
+
+
+def _evaluate_mistake_retention_probe(engine_alias: str, before_model_path: Path, after_model_path: Path, samples: list[dict]) -> dict:
+    if not samples:
+        return {
+            "supported": False,
+            "reason": "no_old_samples",
+            "counted_as_game": False,
+            "learning_signal": False,
+            "learning_signal_reason": "no old trusted move sample was available for a mistake-retention probe",
+            "human_explanation": "目前沒有足夠證據證明 retrain 改善了該錯誤，因為沒有可重測的舊題目。",
+        }
+    sample = _select_mistake_probe_sample(engine_alias, before_model_path, samples)
+    if not sample:
+        sample = dict(samples[0])
+        board_state = {"__fen__": str(sample.get("fen") or "")}
+        side = str(sample.get("side") or "white")
+        expected_move = str(sample.get("move_uci") or "").lower()
+        before_move = _choose_engine_move_for_eval(engine_alias, board_state, side, before_model_path)
+        after_move = _choose_engine_move_for_eval(engine_alias, board_state, side, after_model_path)
+        before_uci = _move_uci(before_move or {})
+        after_uci = _move_uci(after_move or {})
+        probe_case_id = f"game:{int(sample.get('game_id') or 0)}:ply:{int(sample.get('ply') or 0)}:{expected_move}"
+        return {
+            "supported": False,
+            "reason": "no_prior_mistake_sample",
+            "counted_as_game": False,
+            "source": "old_trusted_engine_move_mistake",
+            "probe_case_id": probe_case_id,
+            "game_index": int(sample.get("game_index") or 0),
+            "game_id": int(sample.get("game_id") or 0),
+            "game_label": str(sample.get("game_label") or ""),
+            "ply": int(sample.get("ply") or 0),
+            "fen": str(sample.get("fen") or ""),
+            "side": side,
+            "expected_move": expected_move,
+            "before_move": before_uci,
+            "after_move": after_uci,
+            "before_failed": False,
+            "after_fixed": after_uci == expected_move,
+            "avoided_same_error": False,
+            "model_response_changed": before_uci != after_uci,
+            "sample_count": len(samples),
+            "learning_signal": False,
+            "learning_signal_reason": "no prior mistake was found, so this probe cannot prove that retrain corrected a known error",
+            "human_explanation": "目前沒有足夠證據證明 retrain 改善了該錯誤，因為 before model 沒有在可選舊題目上犯錯。",
+        }
+    board_state = {"__fen__": str(sample.get("fen") or "")}
+    side = str(sample.get("side") or "white")
+    expected_move = str(sample.get("move_uci") or "").lower()
+    before_uci = str(sample.get("before_move") or "")
+    after_move = _choose_engine_move_for_eval(engine_alias, board_state, side, after_model_path)
+    after_uci = _move_uci(after_move or {})
+    before_failed = before_uci != expected_move
+    after_fixed = after_uci == expected_move
+    avoided_same_error = bool(before_failed and after_uci != before_uci)
+    probe_case_id = f"game:{int(sample.get('game_id') or 0)}:ply:{int(sample.get('ply') or 0)}:{expected_move}"
+    if before_failed and after_fixed:
+        reason = "before model failed the old mistake case and after model selected the expected move"
+        explanation = "舊錯題已被修正，這提供 retrain 改善該錯誤的直接證據。"
+    elif before_failed and avoided_same_error:
+        reason = "after model avoided the same wrong move but still did not select the expected move"
+        explanation = "模型避開了同一個錯誤，但尚未走到預期正解，因此不能視為學習成功。"
+    elif before_failed:
+        reason = "after model repeated the same wrong move"
+        explanation = "目前沒有足夠證據證明 retrain 改善了該錯誤，因為 after model 仍重複同一錯誤。"
+    else:
+        reason = "selected probe was not a prior mistake"
+        explanation = "目前沒有足夠證據證明 retrain 改善了該錯誤，因為此 probe 不是 before model 的舊錯題。"
+    return {
+        "supported": True,
+        "counted_as_game": False,
+        "source": "old_trusted_engine_move_mistake",
+        "probe_case_id": probe_case_id,
+        "game_index": int(sample.get("game_index") or 0),
+        "game_id": int(sample.get("game_id") or 0),
+        "game_label": str(sample.get("game_label") or ""),
+        "ply": int(sample.get("ply") or 0),
+        "fen": str(sample.get("fen") or ""),
+        "side": side,
+        "expected_move": expected_move,
+        "before_move": before_uci,
+        "after_move": after_uci,
+        "before_failed": before_failed,
+        "after_fixed": after_fixed,
+        "avoided_same_error": avoided_same_error,
+        "model_response_changed": before_uci != after_uci,
+        "learning_signal": bool(before_failed and after_fixed),
+        "learning_signal_reason": reason,
+        "human_explanation": explanation,
+    }
+
+
 def _flow_timing_summary(games: list[PlannedGame]) -> dict:
     values = []
     by_role: dict[str, list[float]] = {}
@@ -1269,6 +1423,78 @@ def _checkpoint_timing_summary(checkpoints: list[dict]) -> dict:
         "total_checkpoint_seconds": round(sum(checkpoint_seconds), 3),
         "avg_checkpoint_seconds": round(sum(checkpoint_seconds) / len(checkpoint_seconds), 3) if checkpoint_seconds else 0.0,
     }
+
+
+def _engine_game_outcome(*, human_side: str, winner_color: str | None) -> str:
+    engine_side = opponent(str(human_side or "white"))
+    winner = str(winner_color or "").strip().lower()
+    if winner not in {"white", "black"}:
+        return "draw"
+    return "win" if winner == engine_side else "loss"
+
+
+def _stage_game_win_rates(game_results: list[dict], *, autorun_threshold: int) -> list[dict]:
+    stage_size = max(1, int(autorun_threshold or AUTORUN_THRESHOLD))
+    stages: dict[tuple[int, int], dict] = {}
+    for stage_index, stage_start in enumerate(range(0, VALID_GAMES, stage_size), start=1):
+        stage_end = min(stage_start + stage_size, VALID_GAMES)
+        stages[(stage_start, stage_end)] = {
+            "stage": f"{stage_start}-{stage_end}",
+            "stage_index": stage_index,
+            "basis": "trusted_valid_games_only",
+            "invalid_games_excluded": True,
+            "trusted_replay_start_exclusive": stage_start,
+            "trusted_replay_end_inclusive": stage_end,
+            "normal_games": 0,
+            "wins": 0,
+            "losses": 0,
+            "draws": 0,
+            "skipped": False,
+        }
+    trusted_valid_index = 0
+    for item in game_results:
+        stored = item.get("stored_replay") or {}
+        if item.get("category") != "valid" or stored.get("collection_tier") != "trusted":
+            continue
+        trusted_valid_index += 1
+        stage_start = ((trusted_valid_index - 1) // stage_size) * stage_size
+        if stage_start >= VALID_GAMES:
+            continue
+        stage_end = min(stage_start + stage_size, VALID_GAMES)
+        bucket = stages[(stage_start, stage_end)]
+        outcome = _engine_game_outcome(
+            human_side=str(item.get("human_side") or "white"),
+            winner_color=item.get("winner_color"),
+        )
+        bucket["normal_games"] += 1
+        if outcome == "win":
+            bucket["wins"] += 1
+        elif outcome == "loss":
+            bucket["losses"] += 1
+        else:
+            bucket["draws"] += 1
+    rows = []
+    previous_stage = None
+    previous_win_rate = None
+    for key in sorted(stages):
+        row = stages[key]
+        games = int(row.get("normal_games") or 0)
+        if games:
+            row["win_rate"] = round(float(row.get("wins") or 0) / games, 4)
+        else:
+            row["skipped"] = True
+            row["win_rate"] = None
+        row["previous_stage"] = previous_stage
+        row["win_rate_delta_from_previous_stage"] = (
+            round(float(row["win_rate"]) - float(previous_win_rate), 4)
+            if row["win_rate"] is not None and previous_win_rate is not None
+            else None
+        )
+        previous_stage = str(row.get("stage") or "")
+        if row["win_rate"] is not None:
+            previous_win_rate = row["win_rate"]
+        rows.append(row)
+    return rows
 
 
 def _game_phase_from_move_index(move_index: int) -> str:
@@ -1432,6 +1658,26 @@ def _fixed_probe_regression(before_after_eval: dict, keywords: set[str]) -> floa
     return round(regressed / total, 4) if total else 0.0
 
 
+def _stage_regression_summary(stage_rates: list[dict]) -> dict:
+    by_stage = {str(row.get("stage") or ""): row for row in stage_rates or []}
+    first = by_stage.get("0-10") or {}
+    second = by_stage.get("10-20") or {}
+    first_rate = first.get("win_rate")
+    second_rate = second.get("win_rate")
+    if first_rate is None or second_rate is None:
+        return {
+            "stage_win_rate_drop_10_20_vs_0_10": None,
+            "stage_regression_threshold": 0.2,
+            "stage_catastrophic_regression": False,
+        }
+    drop = round(float(first_rate) - float(second_rate), 4)
+    return {
+        "stage_win_rate_drop_10_20_vs_0_10": drop,
+        "stage_regression_threshold": 0.2,
+        "stage_catastrophic_regression": drop > 0.2,
+    }
+
+
 def _stability_summary(summary: dict) -> dict:
     before_after = summary.get("before_after_eval") or {}
     before_benchmark = before_after.get("benchmark_before") or {}
@@ -1447,8 +1693,10 @@ def _stability_summary(summary: dict) -> dict:
     opening_regression = _fixed_probe_regression(before_after, {"opening", "scholar", "free_queen"})
     tactical_regression = _fixed_probe_regression(before_after, {"mate", "fork", "capture", "queen", "rook"})
     endgame_regression = _fixed_probe_regression(before_after, {"endgame", "promotion", "stalemate"})
+    stage_regression = _stage_regression_summary(summary.get("stage_game_win_rates") or [])
     catastrophic = bool(
         (illegal_move_delta is not None and illegal_move_delta < -0.05)
+        or bool(stage_regression.get("stage_catastrophic_regression"))
         or opening_regression > 0.10
         or tactical_regression > 0.10
         or endgame_regression > 0.10
@@ -1462,6 +1710,7 @@ def _stability_summary(summary: dict) -> dict:
         "illegal_move_delta": illegal_move_delta,
         "blunder_rate_before": blunder_before,
         "blunder_rate_after": blunder_after,
+        **stage_regression,
     }
 
 
@@ -1498,9 +1747,15 @@ def _promotion_gate_summary(summary: dict) -> dict:
         reasons.append("catastrophic regression detected")
     before_benchmark = (summary.get("before_after_eval", {}).get("benchmark_before") or {})
     after_benchmark = (summary.get("before_after_eval", {}).get("benchmark_after") or {})
-    if before_benchmark.get("skipped") or after_benchmark.get("skipped"):
-        skipped_reason = before_benchmark.get("reason") or after_benchmark.get("reason") or "unknown"
+    if _summary_benchmark_skipped(summary):
+        skipped_reason = _summary_benchmark_skip_reason(summary) or "unknown"
         reasons.append(f"benchmark skipped: {skipped_reason}")
+    for checkpoint in (summary.get("before_after_eval") or {}).get("checkpoints") or []:
+        mistake_probe = checkpoint.get("mistake_retention_probe") or {}
+        if mistake_probe.get("learning_signal") is False:
+            reason = str(mistake_probe.get("learning_signal_reason") or mistake_probe.get("reason") or "no mistake-retention learning signal")
+            trusted = checkpoint.get("trusted_count") or checkpoint.get("trusted_replays")
+            reasons.append(f"mistake retention probe failed at trusted={trusted}: {reason}")
     if str(summary.get("engine_verdict") or "") not in {"", "PASS"}:
         reasons.append(f"engine verdict {summary.get('engine_verdict')}")
     return {
@@ -1524,6 +1779,7 @@ def _checkpoint_gate_summary(
     benchmark_after_focus: dict,
     legal_rate_delta,
     ineffective_training: bool,
+    mistake_retention_probe: dict | None = None,
 ) -> dict:
     reasons = []
     if int(dataset_result.get("contaminated_rows") or 0) > 0:
@@ -1535,6 +1791,9 @@ def _checkpoint_gate_summary(
         reasons.append(f"benchmark skipped: {skipped_reason}")
     if legal_rate_delta is not None and legal_rate_delta < -0.05:
         reasons.append("legal move rate regressed beyond threshold")
+    if (mistake_retention_probe or {}).get("learning_signal") is False:
+        reason = str((mistake_retention_probe or {}).get("learning_signal_reason") or (mistake_retention_probe or {}).get("reason") or "no mistake-retention learning signal")
+        reasons.append(f"mistake retention probe failed: {reason}")
     return {"passed": not reasons, "reasons": reasons}
 
 
@@ -1656,6 +1915,29 @@ def _root_engine_row(summary: dict) -> dict:
         "legal_rate_after": (summary.get("before_after_eval", {}).get("benchmark_after") or {}).get("legal_rate"),
         "low_quality_rate_before": (summary.get("before_after_eval", {}).get("benchmark_before") or {}).get("low_quality_rate"),
         "low_quality_rate_after": (summary.get("before_after_eval", {}).get("benchmark_after") or {}).get("low_quality_rate"),
+        "stage_game_win_rates": summary.get("stage_game_win_rates") or [],
+        "benchmark_timeline": (summary.get("before_after_eval") or {}).get("benchmark_timeline") or [],
+        "mistake_retention_probe_results": [
+            {
+                "trusted_count": checkpoint.get("trusted_count") or checkpoint.get("trusted_replays"),
+                "learning_signal": (checkpoint.get("mistake_retention_probe") or {}).get("learning_signal"),
+                "probe_case_id": (checkpoint.get("mistake_retention_probe") or {}).get("probe_case_id"),
+                "before_move": (checkpoint.get("mistake_retention_probe") or {}).get("before_move"),
+                "after_move": (checkpoint.get("mistake_retention_probe") or {}).get("after_move"),
+                "avoided_same_error": (checkpoint.get("mistake_retention_probe") or {}).get("avoided_same_error"),
+                "learning_signal_reason": (checkpoint.get("mistake_retention_probe") or {}).get("learning_signal_reason"),
+            }
+            for checkpoint in (summary.get("before_after_eval", {}).get("checkpoints") or [])
+        ],
+        "checkpoint_hashes": [
+            {
+                "trusted_count": checkpoint.get("trusted_count") or checkpoint.get("trusted_replays"),
+                "previous_model_hash": checkpoint.get("previous_model_hash") or checkpoint.get("pre_checkpoint_model_sha256"),
+                "new_model_hash": checkpoint.get("new_model_hash") or checkpoint.get("post_checkpoint_model_sha256"),
+                "hash_changed": checkpoint.get("hash_changed") if "hash_changed" in checkpoint else checkpoint.get("model_hash_changed"),
+            }
+            for checkpoint in (summary.get("before_after_eval", {}).get("checkpoints") or [])
+        ],
         "checkpoint_count": len(summary.get("before_after_eval", {}).get("checkpoints") or []),
         "invalid_train_entries": sum(1 for row in (summary.get("invalid_case_audit") or []) if row.get("entered_train_dataset")),
         "learning_changed": (
@@ -1689,6 +1971,63 @@ def _root_engine_row(summary: dict) -> dict:
     }
 
 
+def _format_stage_win_rates(stage_rates: list[dict]) -> str:
+    if not stage_rates:
+        return "none"
+    parts = []
+    for row in stage_rates:
+        delta = row.get("win_rate_delta_from_previous_stage")
+        delta_text = "n/a" if delta is None else str(delta)
+        parts.append(
+            f"{row.get('stage')}={row.get('win_rate')} "
+            f"normal={row.get('normal_games')} "
+            f"delta={delta_text}"
+        )
+    return "; ".join(parts)
+
+
+def _benchmark_timeline(checkpoints: list[dict], *, baseline_model_hash: str, final_model_hash: str) -> list[dict]:
+    if not checkpoints:
+        return []
+    rows = []
+    first_before = checkpoints[0].get("benchmark_before") or {}
+    rows.append(
+        {
+            "label": "baseline_model",
+            "trusted_count": 0,
+            "model_hash": baseline_model_hash,
+            "benchmark": first_before,
+            "benchmark_skipped": bool(first_before.get("skipped")),
+            "benchmark_skip_reason": str(first_before.get("reason") or ""),
+        }
+    )
+    for checkpoint in checkpoints:
+        benchmark = checkpoint.get("benchmark_after") or {}
+        trusted_count = int(checkpoint.get("trusted_count") or checkpoint.get("trusted_replays") or 0)
+        rows.append(
+            {
+                "label": f"checkpoint_after_trusted_{trusted_count}",
+                "trusted_count": trusted_count,
+                "model_hash": str(checkpoint.get("new_model_hash") or checkpoint.get("post_checkpoint_model_sha256") or ""),
+                "benchmark": benchmark,
+                "benchmark_skipped": bool(benchmark.get("skipped")),
+                "benchmark_skip_reason": str(benchmark.get("reason") or ""),
+            }
+        )
+    last_benchmark = checkpoints[-1].get("benchmark_after") or {}
+    rows.append(
+        {
+            "label": "final_model",
+            "trusted_count": int(checkpoints[-1].get("trusted_count") or checkpoints[-1].get("trusted_replays") or 0),
+            "model_hash": final_model_hash,
+            "benchmark": last_benchmark,
+            "benchmark_skipped": bool(last_benchmark.get("skipped")),
+            "benchmark_skip_reason": str(last_benchmark.get("reason") or ""),
+        }
+    )
+    return rows
+
+
 def _build_root_summary(
     *,
     output_root: Path,
@@ -1696,6 +2035,9 @@ def _build_root_summary(
     skip_autorun_benchmark: bool,
     skip_autorun_promote: bool,
     skip_retrain_benchmark_snapshots: bool,
+    benchmark_rounds: int = 1,
+    benchmark_max_plies: int = 90,
+    benchmark_teacher_depth: int = 2,
 ) -> dict:
     root_summary = {
         "ok": True,
@@ -1705,6 +2047,11 @@ def _build_root_summary(
         "skip_autorun_benchmark": bool(skip_autorun_benchmark),
         "skip_autorun_promote": bool(skip_autorun_promote),
         "skip_retrain_benchmark_snapshots": bool(skip_retrain_benchmark_snapshots),
+        "benchmark_config": {
+            "rounds": int(benchmark_rounds),
+            "max_plies": int(benchmark_max_plies),
+            "teacher_depth": int(benchmark_teacher_depth),
+        },
         "timing": {
             "total_retrain_seconds": round(sum(float((summary.get("retrain_timing") or {}).get("total_retrain_seconds") or 0.0) for summary in summaries), 3),
             "total_checkpoint_seconds": round(sum(float((summary.get("retrain_timing") or {}).get("total_checkpoint_seconds") or 0.0) for summary in summaries), 3),
@@ -1765,6 +2112,55 @@ def _root_report_lines(root_summary: dict, summaries: list[dict]) -> list[str]:
             f"catastrophic=`{row['catastrophic_regression']}` "
             f"meets_expectation=`{row['meets_expectation']}`"
         )
+    lines.extend(
+        [
+            "",
+            "## Stage Game Win Rates",
+            "",
+            "- basis: `trusted_valid_games_only`; invalid_games_excluded=`True`",
+        ]
+    )
+    for row in root_summary["engines"]:
+        lines.append(f"- {row['engine_alias']}: {_format_stage_win_rates(row.get('stage_game_win_rates') or [])}")
+    lines.extend(["", "## Formal Benchmark Timeline", ""])
+    for row in root_summary["engines"]:
+        timeline = row.get("benchmark_timeline") or []
+        if not timeline:
+            lines.append(f"- {row['engine_alias']}: no formal benchmark timeline recorded")
+            continue
+        for item in timeline:
+            benchmark = item.get("benchmark") or {}
+            lines.append(
+                f"- {row['engine_alias']} {item.get('label')}: trusted=`{item.get('trusted_count')}` "
+                f"win_rate=`{benchmark.get('win_rate')}` legal_rate=`{benchmark.get('legal_rate')}` "
+                f"skipped=`{item.get('benchmark_skipped')}` reason=`{item.get('benchmark_skip_reason')}`"
+            )
+    lines.extend(["", "## Mistake Retention Probe", ""])
+    for row in root_summary["engines"]:
+        probes = row.get("mistake_retention_probe_results") or []
+        if not probes:
+            lines.append(f"- {row['engine_alias']}: no mistake-retention probe result recorded")
+            continue
+        for probe in probes:
+            lines.append(
+                f"- {row['engine_alias']} trusted=`{probe.get('trusted_count')}` "
+                f"case=`{probe.get('probe_case_id')}` before=`{probe.get('before_move')}` "
+                f"after=`{probe.get('after_move')}` avoided_same_error=`{probe.get('avoided_same_error')}` "
+                f"learning_signal=`{probe.get('learning_signal')}` reason=`{probe.get('learning_signal_reason')}`"
+            )
+    lines.extend(["", "## Checkpoint Hash Evidence", ""])
+    for row in root_summary["engines"]:
+        hashes = row.get("checkpoint_hashes") or []
+        if not hashes:
+            lines.append(f"- {row['engine_alias']}: no checkpoint hash evidence recorded")
+            continue
+        for item in hashes:
+            lines.append(
+                f"- {row['engine_alias']} trusted=`{item.get('trusted_count')}` "
+                f"previous=`{item.get('previous_model_hash')}` new=`{item.get('new_model_hash')}` "
+                f"hash_changed=`{item.get('hash_changed')}`"
+            )
+    lines.append("- note: hash_changed only proves model bytes changed; it is not accepted as learning success without probe or benchmark evidence.")
     lines.extend(["", "## Can This Model Be Promoted?", ""])
     for row in root_summary["engines"]:
         lines.append(f"- {row['engine_alias']}: {row['can_be_promoted']}")
@@ -1848,6 +2244,33 @@ def _report_consistency_issues(root_summary: dict, engine_summaries: list[dict],
             issues.append(f"{alias}: catastrophic regression mismatch")
         if bool(row.get("benchmark_skipped")) != benchmark_skipped:
             issues.append(f"{alias}: benchmark skipped mismatch")
+        if (row.get("stage_game_win_rates") or []) != (summary.get("stage_game_win_rates") or []):
+            issues.append(f"{alias}: stage win rates mismatch")
+        checkpoint_hashes = [
+            {
+                "trusted_count": checkpoint.get("trusted_count") or checkpoint.get("trusted_replays"),
+                "previous_model_hash": checkpoint.get("previous_model_hash") or checkpoint.get("pre_checkpoint_model_sha256"),
+                "new_model_hash": checkpoint.get("new_model_hash") or checkpoint.get("post_checkpoint_model_sha256"),
+                "hash_changed": checkpoint.get("hash_changed") if "hash_changed" in checkpoint else checkpoint.get("model_hash_changed"),
+            }
+            for checkpoint in (summary.get("before_after_eval") or {}).get("checkpoints") or []
+        ]
+        if (row.get("checkpoint_hashes") or []) != checkpoint_hashes:
+            issues.append(f"{alias}: checkpoint hash evidence mismatch")
+        mistake_results = [
+            {
+                "trusted_count": checkpoint.get("trusted_count") or checkpoint.get("trusted_replays"),
+                "learning_signal": (checkpoint.get("mistake_retention_probe") or {}).get("learning_signal"),
+                "probe_case_id": (checkpoint.get("mistake_retention_probe") or {}).get("probe_case_id"),
+                "before_move": (checkpoint.get("mistake_retention_probe") or {}).get("before_move"),
+                "after_move": (checkpoint.get("mistake_retention_probe") or {}).get("after_move"),
+                "avoided_same_error": (checkpoint.get("mistake_retention_probe") or {}).get("avoided_same_error"),
+                "learning_signal_reason": (checkpoint.get("mistake_retention_probe") or {}).get("learning_signal_reason"),
+            }
+            for checkpoint in (summary.get("before_after_eval") or {}).get("checkpoints") or []
+        ]
+        if (row.get("mistake_retention_probe_results") or []) != mistake_results:
+            issues.append(f"{alias}: mistake retention probe mismatch")
         if benchmark_skipped and skip_reason not in ";".join(str(reason) for reason in gate.get("reasons") or []):
             issues.append(f"{alias}: skipped benchmark reason missing from gate")
         if "## Can This Model Be Promoted?" not in engine_md:
@@ -1859,11 +2282,15 @@ def _report_consistency_issues(root_summary: dict, engine_summaries: list[dict],
         if benchmark_skipped and skip_reason and skip_reason not in root_markdown + engine_md:
             issues.append(f"{alias}: skipped benchmark reason missing from markdown")
         for index, checkpoint in enumerate((summary.get("before_after_eval") or {}).get("checkpoints") or [], start=1):
-            for key in ("dataset_hash", "pre_checkpoint_model_sha256", "post_checkpoint_model_sha256", "benchmark_skipped", "benchmark_skip_reason", "gate_decision"):
+            for key in ("dataset_hash", "trusted_count", "started_at", "finished_at", "duration_seconds", "previous_model_hash", "new_model_hash", "hash_changed", "pre_checkpoint_model_sha256", "post_checkpoint_model_sha256", "benchmark_skipped", "benchmark_skip_reason", "gate_decision"):
                 if key not in checkpoint:
                     issues.append(f"{alias}: checkpoint {index} missing {key}")
             if checkpoint.get("benchmark_skipped") and not checkpoint.get("benchmark_skip_reason"):
                 issues.append(f"{alias}: checkpoint {index} missing skipped benchmark reason")
+            mistake_probe = checkpoint.get("mistake_retention_probe") or {}
+            for key in ("probe_case_id", "before_move", "after_move", "avoided_same_error", "learning_signal", "learning_signal_reason", "human_explanation"):
+                if key not in mistake_probe:
+                    issues.append(f"{alias}: checkpoint {index} mistake probe missing {key}")
     return issues
 
 
@@ -1920,9 +2347,21 @@ def _prepare_formal_dataset(
             }
         )
     invalid_game_ids = invalid_game_ids or set()
+    clean_train_rows = []
+    blocked_contaminated_rows = []
+    for row in train_rows:
+        if int(row.get("source_game_id") or 0) in invalid_game_ids:
+            blocked = dict(row)
+            blocked["collection_tier"] = str(blocked.get("collection_tier") or "validation_blocked")
+            blocked["reject_reason"] = "validation_invalid_game"
+            blocked["quarantine_reasons"] = list(blocked.get("quarantine_reasons") or []) + ["validation_invalid_game"]
+            blocked["source_stage"] = stage_label
+            blocked_contaminated_rows.append(blocked)
+            continue
+        clean_train_rows.append(row)
+    train_rows = clean_train_rows
+    rejected_rows.extend(blocked_contaminated_rows)
     contaminated_rows = [row for row in train_rows if int(row.get("source_game_id") or 0) in invalid_game_ids]
-    for row in contaminated_rows:
-        row["accepted_reason"] = "contaminated_source"
     _jsonl_dump(target_dir / "train_dataset.jsonl", train_rows)
     _jsonl_dump(target_dir / "rejected_dataset.jsonl", rejected_rows)
     result["train_dataset_path"] = str(target_dir / "train_dataset.jsonl")
@@ -1931,6 +2370,7 @@ def _prepare_formal_dataset(
     result["rejected_rows"] = len(rejected_rows)
     result["dataset_sha256"] = _sha256_file(target_dir / "train_dataset.jsonl")
     result["contaminated_rows"] = len(contaminated_rows)
+    result["blocked_contaminated_rows"] = len(blocked_contaminated_rows)
     return result
 
 
@@ -1972,17 +2412,25 @@ def _focus_benchmark_metrics(summary: dict, engine_name: str) -> dict:
     }
 
 
-def _run_benchmark_snapshot(*, focus_engine_name: str, model_overrides: dict[str, Path], seed: int) -> dict:
+def _run_benchmark_snapshot(
+    *,
+    focus_engine_name: str,
+    model_overrides: dict[str, Path],
+    seed: int,
+    benchmark_rounds: int,
+    benchmark_max_plies: int,
+    benchmark_teacher_depth: int,
+) -> dict:
     store = ChessExperimentStore()
     summary = run_round_robin_benchmark(
         store=store,
         nn_model_path=model_overrides["nn"],
         dl_model_path=model_overrides["dl"],
         pv_model_path=model_overrides["pv"],
-        rounds=1,
-        max_plies=90,
+        rounds=max(1, int(benchmark_rounds)),
+        max_plies=max(8, int(benchmark_max_plies)),
         seed=seed,
-        teacher_depth=2,
+        teacher_depth=max(1, int(benchmark_teacher_depth)),
     )
     return {
         "focus": _focus_benchmark_metrics(summary, focus_engine_name),
@@ -2001,6 +2449,22 @@ def _skipped_benchmark_snapshot(reason: str) -> dict:
         },
         "summary": {},
     }
+
+
+def _should_launch_checkpoint(
+    *,
+    engine_alias: str,
+    game: PlannedGame,
+    stored_replay: dict,
+    trusted_replays: int,
+    pending_checkpoint_targets: set[int],
+) -> bool:
+    return (
+        engine_alias in RETRAIN_ENGINE_ALIASES
+        and game.category == "valid"
+        and trusted_replays in pending_checkpoint_targets
+        and bool(stored_replay.get("stored"))
+    )
 
 
 def _run_trainer_probe(
@@ -2155,6 +2619,9 @@ def _write_engine_report(engine_dir: Path, summary: dict) -> None:
             f"- opening_regression: `{stability.get('opening_regression')}`",
             f"- tactical_regression: `{stability.get('tactical_regression')}`",
             f"- endgame_regression: `{stability.get('endgame_regression')}`",
+            f"- stage_win_rate_drop_10_20_vs_0_10: `{stability.get('stage_win_rate_drop_10_20_vs_0_10')}`",
+            f"- stage_regression_threshold: `{stability.get('stage_regression_threshold')}`",
+            f"- stage_catastrophic_regression: `{stability.get('stage_catastrophic_regression')}`",
             f"- illegal_move_delta: `{stability.get('illegal_move_delta')}`",
             f"- blunder_rate_before: `{stability.get('blunder_rate_before')}`",
             f"- blunder_rate_after: `{stability.get('blunder_rate_after')}`",
@@ -2179,6 +2646,27 @@ def _write_engine_report(engine_dir: Path, summary: dict) -> None:
             f"- eval_seconds: `{runtime_metrics.get('eval_seconds')}`",
             f"- checkpoint_count: `{runtime_metrics.get('checkpoint_count')}`",
             f"- dataset_bytes: `{runtime_metrics.get('dataset_bytes')}`",
+        ]
+    )
+    stage_rates = summary.get("stage_game_win_rates") or []
+    if stage_rates:
+        lines.extend(
+            [
+                "",
+                "## Stage Game Win Rates",
+                "",
+                "- basis: `trusted_valid_games_only`; invalid_games_excluded=`True`",
+            ]
+        )
+        for row in stage_rates:
+            lines.append(
+                f"- stage `{row.get('stage')}` normal_games=`{row.get('normal_games')}` "
+                f"wins=`{row.get('wins')}` losses=`{row.get('losses')}` draws=`{row.get('draws')}` "
+                f"win_rate=`{row.get('win_rate')}` "
+                f"delta_from_previous=`{row.get('win_rate_delta_from_previous_stage')}`"
+            )
+    lines.extend(
+        [
             "",
             "## Reproducibility",
             "",
@@ -2208,6 +2696,7 @@ def _write_engine_report(engine_dir: Path, summary: dict) -> None:
             )
     eval_before = summary.get("evaluation_before") or {}
     eval_after = summary.get("evaluation_after") or {}
+    checkpoint_reported = False
     if eval_before.get("supported"):
         lines.extend(
             [
@@ -2228,17 +2717,41 @@ def _write_engine_report(engine_dir: Path, summary: dict) -> None:
         )
         checkpoints = summary.get("before_after_eval", {}).get("checkpoints") or []
         if checkpoints:
+            checkpoint_reported = True
             lines.extend(["", "## Checkpoints", ""])
             for row in checkpoints:
+                mistake_probe = row.get("mistake_retention_probe") or {}
                 lines.append(
-                    f"- trusted={row.get('trusted_replays')} "
+                    f"- trusted={row.get('trusted_count') or row.get('trusted_replays')} "
+                    f"started_at=`{row.get('started_at')}` finished_at=`{row.get('finished_at')}` "
+                    f"duration_seconds=`{row.get('duration_seconds')}` "
+                    f"previous_model_hash=`{row.get('previous_model_hash') or row.get('pre_checkpoint_model_sha256')}` "
+                    f"new_model_hash=`{row.get('new_model_hash') or row.get('post_checkpoint_model_sha256')}` "
+                    f"hash_changed=`{row.get('hash_changed') if 'hash_changed' in row else row.get('model_hash_changed')}` "
                     f"win_rate `{(row.get('benchmark_before') or {}).get('win_rate')}` -> `{(row.get('benchmark_after') or {}).get('win_rate')}` "
                     f"agreement `{(row.get('move_agreement_before') or {}).get('agreement')}` -> `{(row.get('move_agreement_after') or {}).get('agreement')}` "
                     f"think_ms `{(row.get('move_agreement_before') or {}).get('avg_think_ms')}` -> `{(row.get('move_agreement_after') or {}).get('avg_think_ms')}` "
-                    f"retrain_seconds=`{row.get('retrain_duration_seconds')}` "
-                    f"checkpoint_seconds=`{row.get('checkpoint_duration_seconds')}` "
                     f"retention_probe=`{(row.get('retention_probe') or {}).get('learning_signal')}` "
+                    f"mistake_probe=`{mistake_probe.get('learning_signal')}` "
+                    f"mistake_case=`{mistake_probe.get('probe_case_id')}` "
+                    f"mistake_before=`{mistake_probe.get('before_move')}` "
+                    f"mistake_after=`{mistake_probe.get('after_move')}` "
+                    f"avoided_same_error=`{mistake_probe.get('avoided_same_error')}` "
                     f"status `{(row.get('autorun_status') or {}).get('status')}`"
+                )
+                if mistake_probe.get("learning_signal") is False:
+                    lines.append(f"- mistake_probe_explanation: {mistake_probe.get('human_explanation')}")
+            lines.append("- hash_note: hash_changed only proves model bytes changed; it is not accepted as learning success without probe or benchmark evidence.")
+            benchmark_timeline = (summary.get("before_after_eval") or {}).get("benchmark_timeline") or []
+            if benchmark_timeline:
+                lines.extend(["", "## Formal Benchmark Timeline", ""])
+                for item in benchmark_timeline:
+                    benchmark = item.get("benchmark") or {}
+                    lines.append(
+                        f"- {item.get('label')}: trusted=`{item.get('trusted_count')}` "
+                        f"model_hash=`{item.get('model_hash')}` win_rate=`{benchmark.get('win_rate')}` "
+                        f"legal_rate=`{benchmark.get('legal_rate')}` low_quality_rate=`{benchmark.get('low_quality_rate')}` "
+                        f"skipped=`{item.get('benchmark_skipped')}` reason=`{item.get('benchmark_skip_reason')}`"
                 )
     elif summary.get("retrain_result", {}).get("retrain_supported") is False:
         lines.extend(
@@ -2249,6 +2762,27 @@ def _write_engine_report(engine_dir: Path, summary: dict) -> None:
                 f"- reason: `{summary.get('retrain_result', {}).get('reason', '')}`",
             ]
         )
+    checkpoints = summary.get("before_after_eval", {}).get("checkpoints") or []
+    if checkpoints and not checkpoint_reported:
+        lines.extend(["", "## Checkpoints", ""])
+        for row in checkpoints:
+            mistake_probe = row.get("mistake_retention_probe") or {}
+            lines.append(
+                f"- trusted={row.get('trusted_count') or row.get('trusted_replays')} "
+                f"started_at=`{row.get('started_at')}` finished_at=`{row.get('finished_at')}` "
+                f"duration_seconds=`{row.get('duration_seconds')}` "
+                f"previous_model_hash=`{row.get('previous_model_hash') or row.get('pre_checkpoint_model_sha256')}` "
+                f"new_model_hash=`{row.get('new_model_hash') or row.get('post_checkpoint_model_sha256')}` "
+                f"hash_changed=`{row.get('hash_changed') if 'hash_changed' in row else row.get('model_hash_changed')}` "
+                f"mistake_probe=`{mistake_probe.get('learning_signal')}` "
+                f"mistake_case=`{mistake_probe.get('probe_case_id')}` "
+                f"mistake_before=`{mistake_probe.get('before_move')}` "
+                f"mistake_after=`{mistake_probe.get('after_move')}` "
+                f"avoided_same_error=`{mistake_probe.get('avoided_same_error')}`"
+            )
+            if mistake_probe.get("learning_signal") is False:
+                lines.append(f"- mistake_probe_explanation: {mistake_probe.get('human_explanation')}")
+        lines.append("- hash_note: hash_changed only proves model bytes changed; it is not accepted as learning success without probe or benchmark evidence.")
     if exp1_live:
         lines.extend(
             [
@@ -2314,8 +2848,12 @@ def _run_retrain_checkpoint(
     skip_autorun_benchmark: bool,
     skip_autorun_promote: bool,
     skip_retrain_benchmark_snapshots: bool,
+    benchmark_rounds: int,
+    benchmark_max_plies: int,
+    benchmark_teacher_depth: int,
 ) -> tuple[dict, Path, dict]:
     checkpoint_started = time.perf_counter()
+    checkpoint_started_at = _utc_now()
     checkpoint_dir = engine_dir / "checkpoints" / f"{trusted_replays:02d}"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2333,9 +2871,14 @@ def _run_retrain_checkpoint(
             focus_engine_name=focus_engine_name,
             model_overrides=benchmark_overrides_before,
             seed=seed,
+            benchmark_rounds=benchmark_rounds,
+            benchmark_max_plies=benchmark_max_plies,
+            benchmark_teacher_depth=benchmark_teacher_depth,
         )
 
+    target_engine_name = _engine_focus_name(engine_alias)
     retrain_started = time.perf_counter()
+    retrain_started_at = _utc_now()
     _set_runtime_env(
         runtime_dir,
         min_usable_replays=max(1, int(autorun_threshold)),
@@ -2346,6 +2889,7 @@ def _run_retrain_checkpoint(
         replay=replay_buffer_summary(),
         trigger=f"trusted_checkpoint_{trusted_replays}",
         actor_username=actor_username,
+        target_engines=[target_engine_name],
     )
     autorun_status = latest_pipeline_autorun_status()
     start_wait = time.time()
@@ -2353,11 +2897,11 @@ def _run_retrain_checkpoint(
         time.sleep(5)
         autorun_status = latest_pipeline_autorun_status()
     retrain_duration_seconds = round(time.perf_counter() - retrain_started, 3)
+    retrain_finished_at = _utc_now()
 
     pipeline_report = latest_pipeline_report()
     pipeline_summary = pipeline_report.get("summary") if isinstance(pipeline_report.get("summary"), dict) else {}
     candidate_paths = pipeline_summary.get("candidate_paths") if isinstance(pipeline_summary.get("candidate_paths"), dict) else {}
-    target_engine_name = _engine_focus_name(engine_alias)
     after_model_path = Path(str(candidate_paths.get(target_engine_name) or target_model_path))
     after_model_meta = _model_meta(after_model_path)
     trainer_probe = _run_trainer_probe(
@@ -2373,6 +2917,7 @@ def _run_retrain_checkpoint(
     move_agreement_after = _evaluate_move_agreement(engine_alias, after_model_path, evaluation_samples)
     fixed_probes_after = _evaluate_fixed_probe_positions(engine_alias, after_model_path)
     retention_probe = _evaluate_retention_probe(engine_alias, target_model_path, after_model_path, evaluation_samples)
+    mistake_retention_probe = _evaluate_mistake_retention_probe(engine_alias, target_model_path, after_model_path, evaluation_samples)
     if skip_retrain_benchmark_snapshots:
         benchmark_after = _skipped_benchmark_snapshot("disabled_by_fast_retrain")
     else:
@@ -2380,6 +2925,9 @@ def _run_retrain_checkpoint(
             focus_engine_name=focus_engine_name,
             model_overrides=benchmark_overrides_after,
             seed=seed + 1,
+            benchmark_rounds=benchmark_rounds,
+            benchmark_max_plies=benchmark_max_plies,
+            benchmark_teacher_depth=benchmark_teacher_depth,
         )
     move_change_count = sum(
         1
@@ -2406,13 +2954,19 @@ def _run_retrain_checkpoint(
         benchmark_after_focus=benchmark_after_focus,
         legal_rate_delta=legal_rate_delta,
         ineffective_training=ineffective_training,
+        mistake_retention_probe=mistake_retention_probe,
     )
     benchmark_skip_reason = ""
     if benchmark_skipped:
         benchmark_skip_reason = str(benchmark_before_focus.get("reason") or benchmark_after_focus.get("reason") or "unknown")
 
     checkpoint = {
+        "trusted_count": int(trusted_replays),
         "trusted_replays": int(trusted_replays),
+        "started_at": retrain_started_at,
+        "finished_at": retrain_finished_at,
+        "duration_seconds": retrain_duration_seconds,
+        "checkpoint_started_at": checkpoint_started_at,
         "retrain_duration_seconds": retrain_duration_seconds,
         "checkpoint_duration_seconds": round(time.perf_counter() - checkpoint_started, 3),
         "dataset_result": dataset_result,
@@ -2431,13 +2985,19 @@ def _run_retrain_checkpoint(
         "trainer_result": (pipeline_summary.get(_trainer_key(engine_alias)) or {}),
         "trainer_probe": trainer_probe,
         "candidate_model_path": str(after_model_path),
+        "previous_model_hash": before_model_meta["sha256"],
+        "new_model_hash": after_model_meta["sha256"],
+        "hash_changed": before_model_meta["sha256"] != after_model_meta["sha256"],
+        "hash_change_explanation": "hash_changed only proves model bytes changed; it is not accepted as learning success without probe or benchmark evidence",
         "pre_checkpoint_model_sha256": before_model_meta["sha256"],
         "post_checkpoint_model_sha256": after_model_meta["sha256"],
+        "model_hash_changed": before_model_meta["sha256"] != after_model_meta["sha256"],
         "model_before": before_model_meta,
         "model_after": after_model_meta,
         "move_agreement_before": move_agreement_before,
         "move_agreement_after": move_agreement_after,
         "retention_probe": retention_probe,
+        "mistake_retention_probe": mistake_retention_probe,
         "fixed_probe_positions_before": fixed_probes_before,
         "fixed_probe_positions_after": fixed_probes_after,
         "probe_position_move_change_count": move_change_count,
@@ -2455,18 +3015,28 @@ def _run_retrain_checkpoint(
     _json_dump(
         checkpoint_dir / "before_after_eval.json",
         {
+            "trusted_count": int(trusted_replays),
             "trusted_replays": int(trusted_replays),
+            "started_at": retrain_started_at,
+            "finished_at": retrain_finished_at,
+            "duration_seconds": retrain_duration_seconds,
             "retrain_duration_seconds": retrain_duration_seconds,
             "checkpoint_duration_seconds": checkpoint["checkpoint_duration_seconds"],
             "dataset_hash": checkpoint["dataset_hash"],
+            "previous_model_hash": before_model_meta["sha256"],
+            "new_model_hash": after_model_meta["sha256"],
+            "hash_changed": before_model_meta["sha256"] != after_model_meta["sha256"],
+            "hash_change_explanation": checkpoint["hash_change_explanation"],
             "pre_checkpoint_model_sha256": before_model_meta["sha256"],
             "post_checkpoint_model_sha256": after_model_meta["sha256"],
+            "model_hash_changed": before_model_meta["sha256"] != after_model_meta["sha256"],
             "benchmark_skipped": benchmark_skipped,
             "benchmark_skip_reason": benchmark_skip_reason,
             "gate_decision": checkpoint_gate,
             "move_agreement_before": move_agreement_before,
             "move_agreement_after": move_agreement_after,
             "retention_probe": retention_probe,
+            "mistake_retention_probe": mistake_retention_probe,
             "fixed_probe_positions_before": fixed_probes_before,
             "fixed_probe_positions_after": fixed_probes_after,
             "probe_position_move_change_count": move_change_count,
@@ -2495,6 +3065,9 @@ def _run_engine_validation(
     skip_autorun_benchmark: bool,
     skip_autorun_promote: bool,
     skip_retrain_benchmark_snapshots: bool,
+    benchmark_rounds: int,
+    benchmark_max_plies: int,
+    benchmark_teacher_depth: int,
 ) -> dict:
     started_at = _utc_now()
     runtime_dir = runtime_root / engine_alias
@@ -2544,15 +3117,20 @@ def _run_engine_validation(
     trusted_valid_games_so_far: list[PlannedGame] = []
     checkpoints: list[dict] = []
     checkpoint_targets = []
+    pending_checkpoint_targets: set[int] = set()
     if engine_alias in RETRAIN_ENGINE_ALIASES:
         step = max(1, int(autorun_threshold))
         checkpoint_targets = [target for target in range(step, VALID_GAMES + 1, step)]
+        pending_checkpoint_targets = set(checkpoint_targets)
     exp1_before_benchmark = None
     if engine_alias == "exp1":
         exp1_before_benchmark = _run_benchmark_snapshot(
             focus_engine_name=focus_engine_name,
             model_overrides=baseline_overrides,
             seed=seed + 41,
+            benchmark_rounds=benchmark_rounds,
+            benchmark_max_plies=benchmark_max_plies,
+            benchmark_teacher_depth=benchmark_teacher_depth,
         )
     for index, game in enumerate(planned_games, start=1):
         stored_replay = collect_match_replay(
@@ -2572,9 +3150,16 @@ def _run_engine_validation(
             trusted_valid_games_so_far.append(game)
         launch_result = None
         trusted_replays = len(trusted_valid_games_so_far)
-        if engine_alias in RETRAIN_ENGINE_ALIASES and trusted_replays in checkpoint_targets and stored_replay.get("stored"):
+        if _should_launch_checkpoint(
+            engine_alias=engine_alias,
+            game=game,
+            stored_replay=stored_replay,
+            trusted_replays=trusted_replays,
+            pending_checkpoint_targets=pending_checkpoint_targets,
+        ):
             sys.stderr.write(f"[{engine_alias}] checkpoint retrain at trusted={trusted_replays}\n")
             sys.stderr.flush()
+            pending_checkpoint_targets.discard(trusted_replays)
             evaluation_samples = _extract_engine_move_samples(trusted_valid_games_so_far)
             checkpoint, current_model_path, current_benchmark_overrides = _run_retrain_checkpoint(
                 engine_alias=engine_alias,
@@ -2593,6 +3178,9 @@ def _run_engine_validation(
                 skip_autorun_benchmark=skip_autorun_benchmark,
                 skip_autorun_promote=skip_autorun_promote,
                 skip_retrain_benchmark_snapshots=skip_retrain_benchmark_snapshots,
+                benchmark_rounds=benchmark_rounds,
+                benchmark_max_plies=benchmark_max_plies,
+                benchmark_teacher_depth=benchmark_teacher_depth,
             )
             checkpoints.append(checkpoint)
             launch_result = checkpoint.get("autorun")
@@ -2603,6 +3191,8 @@ def _run_engine_validation(
                 "label": game.label,
                 "category": game.category,
                 "expected_tier": game.expected_tier,
+                "human_side": str(game.row.get("human_side") or ""),
+                "winner_color": game.winner_color,
                 "stored_replay": stored_replay,
                 "autorun_result": launch_result,
                 "learning_update_count": update_count,
@@ -2712,6 +3302,9 @@ def _run_engine_validation(
                 focus_engine_name=focus_engine_name,
                 model_overrides=baseline_overrides,
                 seed=seed + 42,
+                benchmark_rounds=benchmark_rounds,
+                benchmark_max_plies=benchmark_max_plies,
+                benchmark_teacher_depth=benchmark_teacher_depth,
             )
             before_benchmark = exp1_before_benchmark["focus"] if exp1_before_benchmark else None
             after_benchmark = after_benchmark["focus"] if after_benchmark else None
@@ -2736,6 +3329,11 @@ def _run_engine_validation(
         "benchmark_before": before_benchmark["focus"] if isinstance(before_benchmark, dict) and before_benchmark.get("focus") else before_benchmark,
         "benchmark_after": after_benchmark["focus"] if isinstance(after_benchmark, dict) and after_benchmark.get("focus") else after_benchmark,
         "checkpoints": checkpoints,
+        "benchmark_timeline": _benchmark_timeline(
+            checkpoints,
+            baseline_model_hash=before_model_meta["sha256"],
+            final_model_hash=after_model_meta["sha256"],
+        ),
     }
     _json_dump(engine_dir / "retrain_result.json", retrain_result)
     _json_dump(engine_dir / "before_after_eval.json", before_after_eval)
@@ -2758,6 +3356,9 @@ def _run_engine_validation(
             "skip_autorun_benchmark": bool(skip_autorun_benchmark),
             "skip_autorun_promote": bool(skip_autorun_promote),
             "skip_retrain_benchmark_snapshots": bool(skip_retrain_benchmark_snapshots),
+            "benchmark_rounds": int(benchmark_rounds),
+            "benchmark_max_plies": int(benchmark_max_plies),
+            "benchmark_teacher_depth": int(benchmark_teacher_depth),
             "total_games": TOTAL_GAMES,
             "valid_games": VALID_GAMES,
             "invalid_games": INVALID_GAMES,
@@ -2801,6 +3402,7 @@ def _run_engine_validation(
     summary["dataset_integrity"] = dataset_integrity
     summary.update(_replay_source_audit(game_results))
     summary["position_quality"] = _position_quality_summary(classification_rows)
+    summary["stage_game_win_rates"] = _stage_game_win_rates(game_results, autorun_threshold=autorun_threshold)
     summary["poison_detection"] = _poison_detection_summary(classification_rows)
     summary["stability"] = _stability_summary(summary)
     summary["runtime_metrics"] = _runtime_metrics_summary(summary)
@@ -2823,12 +3425,27 @@ def main() -> int:
     output_root.mkdir(parents=True, exist_ok=True)
     runtime_root = output_root / "_runtime"
     runtime_root.mkdir(parents=True, exist_ok=True)
-    requested = {item.strip() for item in str(args.engines or "").split(",") if item.strip()}
-    engines = [row for row in ENGINE_MATRIX if not requested or row[0] in requested]
+    _progress(f"output root: {output_root}")
+    _progress(f"runtime root: {runtime_root}")
+    _progress(
+        "flags: "
+        f"fast_retrain={bool(args.fast_retrain)} "
+        f"skip_autorun_benchmark={skip_autorun_benchmark} "
+        f"skip_autorun_promote={skip_autorun_promote} "
+        f"skip_retrain_benchmark_snapshots={skip_retrain_benchmark_snapshots}"
+    )
+    try:
+        engines = _select_requested_engines(str(args.engines or ""), allow_multi_engine=bool(args.allow_multi_engine))
+    except ValueError as exc:
+        _progress(f"FAIL: {exc}")
+        _progress("failure hint: pass exactly one --engines alias, or use --allow-multi-engine intentionally")
+        return 2
+    _progress(f"selected engines: {', '.join(alias for alias, _difficulty in engines)}")
     summaries = []
     for index, (engine_alias, difficulty) in enumerate(engines, start=1):
         engine_dir = output_root / engine_alias
         engine_dir.mkdir(parents=True, exist_ok=True)
+        _progress(f"phase engine validation started: {engine_alias} difficulty={difficulty} artifact={engine_dir}")
         summary = _run_engine_validation(
             engine_alias=engine_alias,
             difficulty=difficulty,
@@ -2841,17 +3458,26 @@ def main() -> int:
             skip_autorun_benchmark=skip_autorun_benchmark,
             skip_autorun_promote=skip_autorun_promote,
             skip_retrain_benchmark_snapshots=skip_retrain_benchmark_snapshots,
+            benchmark_rounds=int(args.benchmark_rounds),
+            benchmark_max_plies=int(args.benchmark_max_plies),
+            benchmark_teacher_depth=int(args.benchmark_teacher_depth),
         )
         summaries.append(summary)
+        _progress(f"phase result engine validation {engine_alias}: verdict={summary.get('engine_verdict')} artifact={engine_dir / 'summary.json'}")
     root_summary = _build_root_summary(
         output_root=output_root,
         summaries=summaries,
         skip_autorun_benchmark=skip_autorun_benchmark,
         skip_autorun_promote=skip_autorun_promote,
         skip_retrain_benchmark_snapshots=skip_retrain_benchmark_snapshots,
+        benchmark_rounds=int(args.benchmark_rounds),
+        benchmark_max_plies=int(args.benchmark_max_plies),
+        benchmark_teacher_depth=int(args.benchmark_teacher_depth),
     )
     _write_root_report(output_root, root_summary, summaries)
+    _progress(f"phase result report: json={output_root / 'summary.json'} md={output_root / 'SUMMARY.md'}")
     print(json.dumps(root_summary, ensure_ascii=False, indent=2))
+    _progress(f"phase result validation: {root_summary.get('overall_verdict')}")
     return 0
     root_summary = {
         "ok": True,
@@ -3045,4 +3671,9 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except Exception as exc:
+        _progress(f"FAIL: {exc}")
+        _progress("failure hint: inspect output_root/SUMMARY.md, per-engine summary.json, and the last phase printed above")
+        raise
