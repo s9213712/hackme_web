@@ -207,6 +207,21 @@ curl -sk -b jar -H "Content-Type: application/json" -H "X-CSRF-Token: $csrf" \
 
 ## 5. 完整 13-Report 跑表（範本 / 一鍵腳本骨架）
 
+> **真實 orchestrator**：`scripts/security/gate/full_generator_live_validate.py`
+> 跑完 13 份 generator 並把每份 report 串到 `/api/root/production-report/upload`，附 per-report live evidence。
+>
+> 範例：
+> ```bash
+> python3 scripts/security/gate/full_generator_live_validate.py \
+>   --base-url https://127.0.0.1:5000 \
+>   --runtime-dir /tmp/hackme_prodgate_runtime \
+>   --git-repo-dir "$(pwd)" \
+>   --root-password "$ROOT_PASSWORD" \
+>   --i-own-this-target
+> ```
+> 必填：`--runtime-dir`、`--git-repo-dir`（必須是有 `.git` 的真 repo，不是 `/tmp` copy）、`--root-password`、`--i-own-this-target`（明確聲明知道是會打活站的測試）。
+> 其他可調 timeout 見 `--help`。實際驗收紀錄見 [04_production_gate_validation_report.md](./04_production_gate_validation_report.md)。
+
 下面是給操作者抄的骨架。實際 generator 命令依各 script 的 CLI 而定；這裡只是一個 orchestrator 草稿（**不要視為現成腳本**，只是流程示意）：
 
 ```bash
