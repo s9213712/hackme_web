@@ -20,6 +20,9 @@ import urllib.error
 import urllib.request
 
 from routes.comfyui_sections import (
+    register_comfyui_admin_routes,
+    register_comfyui_image_routes,
+    register_comfyui_runtime_routes,
     register_comfyui_template_routes,
     register_comfyui_workflow_routes,
 )
@@ -3434,680 +3437,96 @@ def register_comfyui_routes(app, deps):
         ])
         return "\n".join(lines)[:3900]
 
-    @app.route("/api/comfyui/status", methods=["GET"])
-    @require_csrf_safe
-    def comfyui_status():
-        actor, err = _actor_or_401()
-        if err:
-            return err
-        binding = _comfyui_binding(actor)
-        active_client = _client_for_url(binding["url"])
-        try:
-            if hasattr(active_client, "health_check"):
-                status = active_client.health_check(timeout=3)
-            else:
-                active_client.get_models()
-                status = {"ok": True}
-        except ComfyUIError as exc:
-            runtime = _local_comfyui_runtime_status(_configured_comfyui_port())
-            if binding["connection_mode"] == "local" and runtime:
-                return json_resp({
-                    "ok": True,
-                    "available": False,
-                    "starting": True,
-                    "msg": runtime["message"],
-                    "startup_log_tail": runtime["startup_log_tail"],
-                    "connection_mode": binding["connection_mode"],
-                    "backend_scope": binding["backend_scope"],
-                    "comfyui_url": getattr(active_client, "base_url", binding["url"]),
-                    "max_batch_size": _configured_max_batch_size(),
-                    "default_width": _configured_default_dimensions()["width"],
-                    "default_height": _configured_default_dimensions()["height"],
-                    "billing": None if not _comfyui_charge_required(actor) else (_comfyui_price_quote(1)[0] or {}),
-                    "wallet": _comfyui_wallet_payload(actor),
-                    "lora_extra_unit_price": COMFYUI_LORA_EXTRA_PRICE_POINTS,
-                    "local_runtime": runtime,
-                })
-            return json_resp(_comfyui_unavailable_payload(exc, active_client))
-        return json_resp({
-            "ok": True,
-            "available": True,
-            "connection_mode": binding["connection_mode"],
-            "backend_scope": binding["backend_scope"],
-            "comfyui_url": getattr(active_client, "base_url", binding["url"]),
-            "max_batch_size": _configured_max_batch_size(),
-            "default_width": _configured_default_dimensions()["width"],
-            "default_height": _configured_default_dimensions()["height"],
-            "billing": None if not _comfyui_charge_required(actor) else (_comfyui_price_quote(1)[0] or {}),
-            "wallet": _comfyui_wallet_payload(actor),
-            "lora_extra_unit_price": COMFYUI_LORA_EXTRA_PRICE_POINTS,
-            "system": status.get("system") if isinstance(status, dict) else {},
-        })
+    register_comfyui_runtime_routes(app, {
+        "request": request,
+        "json_resp": json_resp,
+        "require_csrf": require_csrf,
+        "require_csrf_safe": require_csrf_safe,
+        "get_db": get_db,
+        "get_client_ip": get_client_ip,
+        "get_ua": get_ua,
+        "audit": audit,
+        "threading": threading,
+        "ComfyUIError": ComfyUIError,
+        "SAFE_SAMPLER_FALLBACK": SAFE_SAMPLER_FALLBACK,
+        "SAFE_SCHEDULER_FALLBACK": SAFE_SCHEDULER_FALLBACK,
+        "COMFYUI_LORA_EXTRA_PRICE_POINTS": COMFYUI_LORA_EXTRA_PRICE_POINTS,
+        "COMFYUI_HISTORY_LIMIT": COMFYUI_HISTORY_LIMIT,
+        "DEFAULT_GENERATION_TIMEOUT_SECONDS": DEFAULT_GENERATION_TIMEOUT_SECONDS,
+        "MAX_GENERATION_TIMEOUT_SECONDS": MAX_GENERATION_TIMEOUT_SECONDS,
+        "actor_or_401": _actor_or_401,
+        "actor_value": _actor_value,
+        "assert_generation_job_owner": _assert_generation_job_owner,
+        "build_lora_details": _build_lora_details,
+        "capture_request_audit_meta": _capture_request_audit_meta,
+        "charge_comfyui_generation": _charge_comfyui_generation,
+        "client_for_url": _client_for_url,
+        "coerce_bool": _coerce_bool,
+        "comfyui_binding": _comfyui_binding,
+        "comfyui_charge_required": _comfyui_charge_required,
+        "comfyui_lora_count": _comfyui_lora_count,
+        "comfyui_price_quote": _comfyui_price_quote,
+        "comfyui_total_quantity": _comfyui_total_quantity,
+        "comfyui_unavailable_payload": _comfyui_unavailable_payload,
+        "comfyui_wallet_payload": _comfyui_wallet_payload,
+        "configured_comfyui_port": _configured_comfyui_port,
+        "configured_comfyui_url": _configured_comfyui_url,
+        "configured_connection_mode": _configured_connection_mode,
+        "configured_default_dimensions": _configured_default_dimensions,
+        "configured_max_batch_size": _configured_max_batch_size,
+        "create_generation_job": _create_generation_job,
+        "ensure_comfyui_balance": _ensure_comfyui_balance,
+        "finalize_generation_records": _finalize_generation_records,
+        "hydrate_generation_assets": _hydrate_generation_assets,
+        "int_range": _int_range,
+        "json_error_from_comfy": _json_error_from_comfy,
+        "list_generation_history": _list_generation_history,
+        "load_generation_history": _load_generation_history,
+        "local_comfyui_runtime_status": _local_comfyui_runtime_status,
+        "normalize_generation_payload": _normalize_generation_payload,
+        "parse_generation_request": _parse_generation_request,
+        "record_generation_history": _record_generation_history,
+        "register_active_generation": _register_active_generation,
+        "run_comfyui_generation_job": _run_comfyui_generation_job,
+        "start_local_comfyui": _start_local_comfyui,
+        "stop_local_comfyui": _stop_local_comfyui,
+        "unregister_active_generation": _unregister_active_generation,
+        "validate_generation_capabilities": _validate_generation_capabilities,
+    })
 
-    @app.route("/api/root/comfyui/test-connection", methods=["POST"])
-    @require_csrf
-    def root_comfyui_test_connection():
-        actor, err = _root_or_403()
-        if err:
-            return err
-        try:
-            data = request.get_json(force=True)
-        except Exception:
-            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
-        if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
-        url, endpoint, msg = _parse_comfyui_endpoint(data)
-        if msg:
-            return json_resp({"ok": False, "msg": msg}), 400
-        local_script_status = _local_start_script_status(data) if isinstance(endpoint, dict) and endpoint.get("mode") == "local" else None
-        active_client = _client_for_url(url)
-        try:
-            status = active_client.health_check(timeout=3) if hasattr(active_client, "health_check") else {"ok": True}
-            audit(
-                "COMFYUI_CONNECTION_TEST",
-                get_client_ip(),
-                user=_actor_value(actor, "username"),
-                success=True,
-                ua=get_ua(),
-                detail=f"url={url}",
-            )
-            return json_resp({
-                "ok": True,
-                "available": True,
-                "comfyui_url": getattr(active_client, "base_url", url),
-                "endpoint": endpoint,
-                "connection_mode": endpoint.get("mode") if isinstance(endpoint, dict) else _configured_connection_mode(),
-                "local_script": local_script_status,
-                "system": status.get("system") if isinstance(status, dict) else {},
-            })
-        except ComfyUIError as exc:
-            autostart = {"attempted": False}
-            if isinstance(endpoint, dict) and endpoint.get("mode") == "local":
-                start_result, start_msg = _start_local_comfyui(actor, wait_seconds=6, data=data)
-                autostart = {
-                    "attempted": True,
-                    "ok": bool(start_result and not start_msg),
-                    "message": start_msg or (start_result or {}).get("message") or "",
-                    "available": bool((start_result or {}).get("available")),
-                    "start": start_result,
-                }
-                if start_result and (start_result.get("available") or start_result.get("already_running")):
-                    try:
-                        status = active_client.health_check(timeout=3) if hasattr(active_client, "health_check") else {"ok": True}
-                        return json_resp({
-                            "ok": True,
-                            "available": True,
-                            "comfyui_url": getattr(active_client, "base_url", url),
-                            "endpoint": endpoint,
-                            "connection_mode": endpoint.get("mode") if isinstance(endpoint, dict) else _configured_connection_mode(),
-                            "local_script": local_script_status,
-                            "autostart": autostart,
-                            "system": status.get("system") if isinstance(status, dict) else {},
-                        })
-                    except ComfyUIError as exc2:
-                        exc = exc2
-            runtime = _local_comfyui_runtime_status((endpoint or {}).get("port") if isinstance(endpoint, dict) else None)
-            audit(
-                "COMFYUI_CONNECTION_TEST",
-                get_client_ip(),
-                user=_actor_value(actor, "username"),
-                success=False,
-                ua=get_ua(),
-                detail=f"url={url}, error={exc}",
-            )
-            return json_resp({
-                "ok": True,
-                "available": False,
-                "starting": bool(runtime),
-                "msg": runtime["message"] if runtime else str(exc),
-                "comfyui_url": getattr(active_client, "base_url", url),
-                "endpoint": endpoint,
-                "connection_mode": endpoint.get("mode") if isinstance(endpoint, dict) else _configured_connection_mode(),
-                "local_script": local_script_status,
-                "autostart": autostart,
-                "local_runtime": runtime,
-            })
-
-    @app.route("/api/root/comfyui/local-start-template", methods=["GET"])
-    @require_csrf_safe
-    def root_comfyui_local_start_template():
-        actor, err = _root_or_403()
-        if err:
-            return err
-        if not COMFYUI_LOCAL_START_TEMPLATE_PATH.is_file():
-            return json_resp({"ok": False, "msg": "ComfyUI 啟動腳本範本不存在"}), 503
-        audit(
-            "COMFYUI_LOCAL_TEMPLATE_DOWNLOADED",
-            get_client_ip(),
-            user=_actor_value(actor, "username"),
-            success=True,
-            ua=get_ua(),
-            detail=f"filename={COMFYUI_LOCAL_START_TEMPLATE_PATH.name}",
-        )
-        return send_file(
-            COMFYUI_LOCAL_START_TEMPLATE_PATH,
-            as_attachment=True,
-            download_name=COMFYUI_LOCAL_START_TEMPLATE_PATH.name,
-            mimetype="text/x-shellscript",
-        )
-
-    @app.route("/api/root/comfyui/civitai/inspect", methods=["POST"])
-    @require_csrf
-    def root_comfyui_civitai_inspect():
-        actor, err = _root_or_403()
-        if err:
-            return err
-        try:
-            data = request.get_json(force=True)
-        except Exception:
-            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
-        if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
-        page_url = str(data.get("page_url") or data.get("url") or "").strip()
-        result, msg = _inspect_civitai_model(page_url)
-        audit(
-            "COMFYUI_CIVITAI_INSPECT",
-            get_client_ip(),
-            user=_actor_value(actor, "username"),
-            success=not bool(msg),
-            ua=get_ua(),
-            detail=f"model_id={(result or {}).get('model_id') or ''}, url_host={urlparse(page_url).hostname if page_url else ''}, error={msg or ''}"[:300],
-        )
-        if msg:
-            return json_resp({"ok": False, "msg": msg}), 400
-        return json_resp({"ok": True, "model": result, "msg": f"已讀取 {result['name']}，請選擇版本與檔案"})
-
-    @app.route("/api/root/comfyui/civitai/search", methods=["POST"])
-    @require_csrf
-    def root_comfyui_civitai_search():
-        actor, err = _root_or_403()
-        if err:
-            return err
-        try:
-            data = request.get_json(force=True)
-        except Exception:
-            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
-        if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
-        query = str(data.get("query") or "").strip()
-        base_model = str(data.get("base_model") or "").strip()
-        model_type = str(data.get("model_type") or data.get("type") or "").strip()
-        nsfw_mode = _normalize_civitai_nsfw_mode(data.get("nsfw_mode") or data.get("safety") or "safe")
-        try:
-            limit = max(1, min(24, int(data.get("limit") or 12)))
-        except Exception:
-            limit = 12
-        result, msg = _search_civitai_models(
-            query,
-            base_model=base_model,
-            model_type=model_type,
-            nsfw_mode=nsfw_mode,
-            limit=limit,
-        )
-        audit(
-            "COMFYUI_CIVITAI_SEARCH",
-            get_client_ip(),
-            user=_actor_value(actor, "username"),
-            success=not bool(msg),
-            ua=get_ua(),
-            detail=(
-                f"query={query[:80]}, type={_normalize_civitai_search_type(model_type) or '-'}, "
-                f"base_model={base_model[:40] or '-'}, nsfw={nsfw_mode}, "
-                f"count={len((result or {}).get('results') or [])}, error={msg or ''}"
-            )[:300],
-        )
-        if msg:
-            return json_resp({"ok": False, "msg": msg}), 400
-        total = int(result.get("total_items") or 0)
-        count = len(result.get("results") or [])
-        message = "沒有符合條件的 Civitai 模型，請調整關鍵字或篩選器。" if count == 0 else f"已找到 {count} 個 Civitai 模型（總數約 {total}）。"
-        return json_resp({
-            "ok": True,
-            "results": result.get("results") or [],
-            "filters": result.get("filters") or {},
-            "total_items": total,
-            "current_page": result.get("current_page") or 1,
-            "page_size": result.get("page_size") or count,
-            "msg": message,
-        })
-
-    @app.route("/api/root/comfyui/civitai/download", methods=["POST"])
-    @require_csrf
-    def root_comfyui_download_civitai_model():
-        actor, err = _root_or_403()
-        if err:
-            return err
-        try:
-            data = request.get_json(force=True)
-        except Exception:
-            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
-        if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
-        request_data, msg = _parse_civitai_download_request(data)
-        if msg:
-            return json_resp({"ok": False, "msg": msg}), 400
-        if _coerce_bool(data.get("async_progress")):
-            job_id = _create_model_download_job(actor)
-            request_meta = _capture_request_audit_meta()
-            worker = threading.Thread(
-                target=_run_comfyui_model_download_job,
-                args=(job_id, dict(actor), request_data, request_meta),
-                daemon=True,
-            )
-            worker.start()
-            return json_resp({
-                "ok": True,
-                "async": True,
-                "job": {
-                    "job_id": job_id,
-                    "status": "queued",
-                    "progress": {
-                        "phase": "queued",
-                        "percent": 0,
-                        "detail": "已建立模型下載工作",
-                    },
-                },
-            })
-        result, msg = _download_civitai_model_selection(
-            page_url=request_data["page_url"],
-            version_id=request_data["version_id"],
-            file_id=request_data["file_id"],
-            model_type=request_data["model_type"],
-            base_dir=request_data["base_dir"],
-            relative_dir=request_data["relative_dir"],
-        )
-        audit(
-            "COMFYUI_CIVITAI_DOWNLOAD",
-            get_client_ip(),
-            user=_actor_value(actor, "username"),
-            success=not bool(msg),
-            ua=get_ua(),
-            detail=f"type={request_data['model_type']}, version_id={request_data['version_id']}, file_id={request_data['file_id'] or ''}, url_host={urlparse(request_data['page_url']).hostname if request_data['page_url'] else ''}, filename={(result or {}).get('filename') or ''}, error={msg or ''}"[:300],
-        )
-        if msg:
-            return json_resp({"ok": False, "msg": msg}), 400
-        return json_resp({"ok": True, "download": result, "msg": f"已下載 {result['label']}：{result['filename']}"})
-
-    @app.route("/api/root/comfyui/model-upload", methods=["POST"])
-    @require_csrf
-    def root_comfyui_upload_model_file():
-        actor, err = _root_or_403()
-        if err:
-            return err
-        model_file = request.files.get("model_file")
-        model_type = str(request.form.get("type") or request.form.get("model_type") or "").strip().lower()
-        base_dir = request.form.get("base_dir")
-        relative_dir = request.form.get("relative_dir") or request.form.get("model_relative_path") or ""
-        result, msg = _upload_comfyui_model_file(
-            uploaded_file=model_file,
-            model_type=model_type,
-            base_dir=base_dir,
-            relative_dir=relative_dir,
-            actor=actor,
-        )
-        audit(
-            "COMFYUI_MODEL_UPLOAD",
-            get_client_ip(),
-            user=_actor_value(actor, "username"),
-            success=not bool(msg),
-            ua=get_ua(),
-            detail=f"type={model_type}, filename={getattr(model_file, 'filename', '') if model_file else ''}, saved={(result or {}).get('filename') or ''}, error={msg or ''}"[:300],
-        )
-        if msg:
-            return json_resp({"ok": False, "msg": msg}), 400
-        return json_resp({"ok": True, "upload": result, "msg": f"已匯入 {result['label']}：{result['filename']}"})
-
-    @app.route("/api/root/comfyui/download-jobs/<job_id>", methods=["GET"])
-    @require_csrf_safe
-    def root_comfyui_download_job_status(job_id):
-        actor, err = _root_or_403()
-        if err:
-            return err
-        job, err = _assert_model_download_job_owner(job_id, actor)
-        if err:
-            return err
-        return json_resp({
-            "ok": True,
-            "job": {
-                "job_id": job["job_id"],
-                "status": job["status"],
-                "progress": job.get("progress") or {},
-                "error": job.get("error") or "",
-                "result": job.get("result"),
-            },
-        })
-
-    @app.route("/api/comfyui/start", methods=["POST"])
-    @require_csrf
-    def comfyui_start_local():
-        actor, err = _actor_or_401()
-        if err:
-            return err
-        result, msg = _start_local_comfyui(actor, wait_seconds=2)
-        if msg:
-            return json_resp({"ok": False, "msg": msg, "connection_mode": _configured_connection_mode()}), 400
-        return json_resp({
-            "ok": True,
-            "connection_mode": _configured_connection_mode(),
-            "comfyui_url": _configured_comfyui_url(),
-            "start": result,
-            "msg": (result or {}).get("message") or ("ComfyUI 已在執行中" if (result or {}).get("already_running") else "已送出 ComfyUI 啟動請求"),
-        })
-
-    @app.route("/api/root/comfyui/stop", methods=["POST"])
-    @require_csrf
-    def root_comfyui_stop():
-        actor, err = _root_or_403()
-        if err:
-            return err
-        result, msg = _stop_local_comfyui(actor)
-        if msg:
-            return json_resp({"ok": False, "msg": msg, "connection_mode": _configured_connection_mode()}), 400
-        return json_resp({
-            "ok": True,
-            "connection_mode": _configured_connection_mode(),
-            "comfyui_url": _configured_comfyui_url(),
-            "stop": result,
-            "msg": "已停止本地 ComfyUI" if not (result or {}).get("already_stopped") else "ComfyUI 目前未在執行",
-        })
-
-    @app.route("/api/comfyui/models", methods=["GET"])
-    @require_csrf_safe
-    def comfyui_models():
-        actor, err = _actor_or_401()
-        if err:
-            return err
-        binding = _comfyui_binding(actor)
-        active_client = _client_for_url(binding["url"])
-        try:
-            models = active_client.get_models()
-            options = active_client.get_sampler_options()
-            loras = active_client.get_loras() if hasattr(active_client, "get_loras") else []
-            capabilities = active_client.get_capabilities() if hasattr(active_client, "get_capabilities") else {}
-        except ComfyUIError as exc:
-            return _json_error_from_comfy(exc, active_client)
-        try:
-            vaes = active_client.get_vaes() if hasattr(active_client, "get_vaes") else []
-        except ComfyUIError:
-            vaes = []
-        try:
-            embeddings = active_client.get_embeddings() if hasattr(active_client, "get_embeddings") else []
-        except ComfyUIError:
-            embeddings = []
-        lora_details = _build_lora_details(loras)
-        return json_resp({
-            "ok": True,
-            "models": models,
-            "loras": loras,
-            "lora_details": lora_details,
-            "vaes": vaes,
-            "embeddings": embeddings,
-            "connection_mode": binding["connection_mode"],
-            "backend_scope": binding["backend_scope"],
-            "samplers": options.get("samplers") or [SAFE_SAMPLER_FALLBACK],
-            "schedulers": options.get("schedulers") or [SAFE_SCHEDULER_FALLBACK],
-            "comfyui_url": getattr(active_client, "base_url", binding["url"]),
-            "max_batch_size": _configured_max_batch_size(),
-            "default_width": _configured_default_dimensions()["width"],
-            "default_height": _configured_default_dimensions()["height"],
-            "controlnet_models": (capabilities or {}).get("controlnet_models") or [],
-            "upscale_models": (capabilities or {}).get("upscale_models") or [],
-            "controlnet_types": (capabilities or {}).get("controlnet_types") or {},
-            "generation_modes": (capabilities or {}).get("generation_modes") or [],
-            "billing": None if not _comfyui_charge_required(actor) else (_comfyui_price_quote(1)[0] or {}),
-            "wallet": _comfyui_wallet_payload(actor),
-            "lora_extra_unit_price": COMFYUI_LORA_EXTRA_PRICE_POINTS,
-        })
-
-    @app.route("/api/comfyui/billing-quote", methods=["POST"])
-    @require_csrf
-    def comfyui_billing_quote():
-        actor, err = _actor_or_401()
-        if err:
-            return err
-        try:
-            data = request.get_json(force=True)
-        except Exception:
-            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
-        data = data if isinstance(data, dict) else {}
-        data = {**data, "skip_asset_validation": True}
-        params, msg = _normalize_generation_payload(data)
-        if msg:
-            return json_resp({"ok": False, "msg": msg}), 400
-        if not _comfyui_charge_required(actor):
-            return json_resp({"ok": True, "billing": {"charged": False, "exempt": "root"}, "wallet": _comfyui_wallet_payload(actor)})
-        total_quantity, run_count = _comfyui_total_quantity(data, params)
-        quote, msg = _comfyui_price_quote(total_quantity, lora_count=_comfyui_lora_count(params))
-        if msg:
-            return json_resp({"ok": False, "msg": msg}), 503
-        quote = {**quote, "batch_size": params["batch_size"], "run_count": run_count}
-        msg = _ensure_comfyui_balance(actor, quote)
-        if msg:
-            return json_resp({"ok": False, "msg": msg, "billing": quote, "wallet": _comfyui_wallet_payload(actor)}), 409
-        return json_resp({"ok": True, "billing": quote, "wallet": _comfyui_wallet_payload(actor)})
-
-    @app.route("/api/comfyui/generate", methods=["POST"])
-    @require_csrf
-    def comfyui_generate():
-        actor, err = _actor_or_401()
-        if err:
-            return err
-        data, uploaded_assets, request_msg = _parse_generation_request()
-        if request_msg:
-            return json_resp({"ok": False, "msg": request_msg}), 400
-        request_data = data if isinstance(data, dict) else {}
-        if uploaded_assets:
-            request_data = {**request_data, "skip_asset_validation": True}
-        params, msg = _normalize_generation_payload(request_data)
-        if msg:
-            return json_resp({"ok": False, "msg": msg}), 400
-        backend_binding = _comfyui_binding(actor)
-        active_client = _client_for_url(backend_binding["url"])
-        try:
-            params = _hydrate_generation_assets(actor, active_client, params, uploaded_assets)
-            capabilities, capability_msg = _validate_generation_capabilities(active_client, params)
-            if capability_msg:
-                return json_resp({"ok": False, "msg": capability_msg, "capabilities": capabilities or {}}), 409
-        except ComfyUIError as exc:
-            return _json_error_from_comfy(exc, active_client)
-        quote = None
-        timeout_seconds = _int_range(
-            data.get("timeout_seconds"),
-            DEFAULT_GENERATION_TIMEOUT_SECONDS,
-            30,
-            MAX_GENERATION_TIMEOUT_SECONDS,
-        )
-        if _comfyui_charge_required(actor):
-            quote, msg = _comfyui_price_quote(params["batch_size"], lora_count=_comfyui_lora_count(params))
-            if msg:
-                return json_resp({"ok": False, "msg": msg}), 503
-            msg = _ensure_comfyui_balance(actor, quote)
-            if msg:
-                return json_resp({"ok": False, "msg": msg}), 409
-            if not _coerce_bool(data.get("confirm_billing")):
-                return json_resp({
-                    "ok": False,
-                    "msg": (
-                        f"請先確認扣點：本次成功產圖將扣 {quote['total_price']} 點；"
-                        "產圖失敗不扣點，丟棄預覽不退款。"
-                    ),
-                    "billing": {**quote, "confirmation_required": True},
-                }), 409
-        if _coerce_bool(data.get("async_progress")):
-            job_id = _create_generation_job(actor)
-            request_meta = _capture_request_audit_meta()
-            worker = threading.Thread(
-                target=_run_comfyui_generation_job,
-                args=(job_id, dict(actor), params, quote, timeout_seconds, request_meta, backend_binding),
-                daemon=True,
-            )
-            worker.start()
-            return json_resp({
-                "ok": True,
-                "async": True,
-                "job": {
-                    "job_id": job_id,
-                    "status": "queued",
-                    "progress": {
-                        "phase": "queued",
-                        "percent": 0,
-                        "detail": "已建立產圖工作",
-                    },
-                },
-            })
-        generation_token = _register_active_generation(
-            actor,
-            backend_url=backend_binding.get("url"),
-            backend_scope=backend_binding.get("backend_scope"),
-        )
-        try:
-            result = active_client.generate_image(
-                params,
-                timeout_seconds=timeout_seconds,
-            )
-        except ComfyUIError as exc:
-            audit("COMFYUI_GENERATE_ERROR", get_client_ip(), user=actor["username"], success=False, ua=get_ua(), detail=str(exc)[:180])
-            return _json_error_from_comfy(exc, active_client)
-        finally:
-            _unregister_active_generation(generation_token)
-        billing = {"charged": False, "exempt": "root"} if not quote else None
-        if quote:
-            try:
-                billing = _charge_comfyui_generation(actor, quote, prompt_id=result.get("prompt_id"))
-            except Exception as exc:
-                audit("COMFYUI_BILLING_ERROR", get_client_ip(), user=actor["username"], success=False, ua=get_ua(), detail=str(exc)[:180])
-                return json_resp({"ok": False, "msg": f"產圖成功，但扣款失敗：{exc}"}), 409
-        images = _finalize_generation_records(actor, params, result, backend_url=backend_binding.get("url"))
-        history_id = None
-        conn = get_db()
-        try:
-            history_id = _record_generation_history(
-                conn,
-                actor=actor,
-                params=params,
-                backend_url=backend_binding.get("url"),
-                result_payload={
-                    "prompt_id": result.get("prompt_id") or "",
-                    "images": [
-                        {
-                            "image_ref": item.get("image_ref"),
-                            "mime_type": item.get("mime_type"),
-                            "size_bytes": item.get("size_bytes"),
-                        }
-                        for item in images
-                    ],
-                },
-            )
-            conn.commit()
-        except Exception:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
-        finally:
-            conn.close()
-        image = images[0]
-        image_ref = result["image_ref"]
-        audit("COMFYUI_GENERATE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"prompt_id={result['prompt_id']}, file={image_ref.get('filename')}, batch={len(images)}")
-        return json_resp({
-            "ok": True,
-            "image": image,
-            "images": images,
-            "billing": billing,
-            "history_id": history_id,
-            "wallet": (billing or {}).get("wallet") or _comfyui_wallet_payload(actor),
-            "backend_scope": backend_binding["backend_scope"],
-        })
-
-    @app.route("/api/comfyui/jobs/<job_id>", methods=["GET"])
-    @require_csrf_safe
-    def comfyui_generation_job_status(job_id):
-        actor, err = _actor_or_401()
-        if err:
-            return err
-        job, err = _assert_generation_job_owner(job_id, actor)
-        if err:
-            return err
-        return json_resp({
-            "ok": True,
-            "job": {
-                "job_id": job["job_id"],
-                "status": job["status"],
-                "progress": job.get("progress") or {},
-                "error": job.get("error") or "",
-                "result": job.get("result"),
-            },
-        })
-
-    @app.route("/api/comfyui/history", methods=["GET"])
-    @require_csrf_safe
-    def comfyui_generation_history():
-        actor, err = _actor_or_401()
-        if err:
-            return err
-        conn = get_db()
-        try:
-            items = _list_generation_history(conn, actor=actor, limit=COMFYUI_HISTORY_LIMIT)
-        finally:
-            conn.close()
-        return json_resp({"ok": True, "history": items})
-
-    @app.route("/api/comfyui/history/<int:history_id>/rerun", methods=["POST"])
-    @require_csrf
-    def comfyui_generation_history_rerun(history_id):
-        actor, err = _actor_or_401()
-        if err:
-            return err
-        conn = get_db()
-        try:
-            item = _load_generation_history(conn, actor=actor, history_id=history_id)
-        finally:
-            conn.close()
-        if not item:
-            return json_resp({"ok": False, "msg": "找不到這筆 ComfyUI 歷史紀錄"}), 404
-        payload = dict(item.get("payload") or {})
-        input_assets = dict(item.get("input_assets") or {})
-        controlnet = dict(item.get("controlnet") or {})
-        if controlnet:
-            controlnet["image_ref"] = input_assets.get("control_image_ref")
-            payload["controlnet"] = controlnet
-        payload["source_image_ref"] = input_assets.get("source_image_ref")
-        payload["mask_image_ref"] = input_assets.get("mask_image_ref")
-        payload["async_progress"] = True
-        payload["confirm_billing"] = True
-        payload["timeout_seconds"] = DEFAULT_GENERATION_TIMEOUT_SECONDS
-        active_client = _client_for_url(_comfyui_binding(actor, backend_url=item.get("backend_url")).get("url"))
-        try:
-            capabilities, capability_msg = _validate_generation_capabilities(active_client, payload)
-            if capability_msg:
-                return json_resp({"ok": False, "msg": capability_msg, "capabilities": capabilities or {}}), 409
-        except ComfyUIError as exc:
-            return _json_error_from_comfy(exc, active_client)
-        quote = None
-        if _comfyui_charge_required(actor):
-            quote, msg = _comfyui_price_quote(payload.get("batch_size") or 1, lora_count=_comfyui_lora_count(payload))
-            if msg:
-                return json_resp({"ok": False, "msg": msg}), 503
-            msg = _ensure_comfyui_balance(actor, quote)
-            if msg:
-                return json_resp({"ok": False, "msg": msg}), 409
-        job_id = _create_generation_job(actor)
-        request_meta = _capture_request_audit_meta()
-        worker = threading.Thread(
-            target=_run_comfyui_generation_job,
-            args=(job_id, dict(actor), payload, quote, DEFAULT_GENERATION_TIMEOUT_SECONDS, request_meta, _comfyui_binding(actor, backend_url=item.get("backend_url"))),
-            daemon=True,
-        )
-        worker.start()
-        return json_resp({
-            "ok": True,
-            "async": True,
-            "job": {
-                "job_id": job_id,
-                "status": "queued",
-                "progress": {"phase": "queued", "percent": 0, "detail": "已建立重跑工作"},
-            },
-        })
+    register_comfyui_admin_routes(app, {
+        "request": request,
+        "root_or_403": _root_or_403,
+        "actor_value": _actor_value,
+        "json_resp": json_resp,
+        "require_csrf": require_csrf,
+        "require_csrf_safe": require_csrf_safe,
+        "get_client_ip": get_client_ip,
+        "get_ua": get_ua,
+        "audit": audit,
+        "parse_comfyui_endpoint": _parse_comfyui_endpoint,
+        "local_start_script_status": _local_start_script_status,
+        "client_for_url": _client_for_url,
+        "ComfyUIError": ComfyUIError,
+        "configured_connection_mode": _configured_connection_mode,
+        "start_local_comfyui": _start_local_comfyui,
+        "local_comfyui_runtime_status": _local_comfyui_runtime_status,
+        "normalize_civitai_nsfw_mode": _normalize_civitai_nsfw_mode,
+        "normalize_civitai_search_type": _normalize_civitai_search_type,
+        "inspect_civitai_model": _inspect_civitai_model,
+        "search_civitai_models": _search_civitai_models,
+        "parse_civitai_download_request": _parse_civitai_download_request,
+        "coerce_bool": _coerce_bool,
+        "create_model_download_job": _create_model_download_job,
+        "capture_request_audit_meta": _capture_request_audit_meta,
+        "run_comfyui_model_download_job": _run_comfyui_model_download_job,
+        "download_civitai_model_selection": _download_civitai_model_selection,
+        "upload_comfyui_model_file": _upload_comfyui_model_file,
+        "assert_model_download_job_owner": _assert_model_download_job_owner,
+        "local_start_template_path": COMFYUI_LOCAL_START_TEMPLATE_PATH,
+        "send_file": send_file,
+        "threading": threading,
+    })
 
     register_comfyui_template_routes(app, {
         "request": request,
@@ -4170,293 +3589,37 @@ def register_comfyui_routes(app, deps):
         "threading": threading,
     })
 
-    @app.route("/api/comfyui/image-preview", methods=["POST"])
-    @require_csrf
-    def comfyui_image_preview():
-        actor, err = _actor_or_401()
-        if err:
-            return err
-        try:
-            data = request.get_json(force=True)
-        except Exception:
-            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
-        if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
-        image_ref = _image_ref_payload(data.get("image_ref"))
-        if not image_ref:
-            return json_resp({"ok": False, "msg": "圖片引用不合法"}), 400
-        conn = get_db()
-        try:
-            ref_row = _load_comfyui_image_ref_record(conn, actor=actor, image_ref=image_ref)
-        finally:
-            conn.close()
-        if not ref_row:
-            return json_resp({"ok": False, "msg": "無權讀取這張 ComfyUI 圖片"}), 403
-        active_client = _client_for_url(_comfyui_binding(actor, backend_url=(ref_row or {}).get("backend_url")).get("url"))
-        try:
-            image = active_client.fetch_image(image_ref)
-            _assert_reasonable_image_size(image)
-        except ComfyUIError as exc:
-            return _json_error_from_comfy(exc, active_client)
-        return json_resp({
-            "ok": True,
-            "image": {
-                "image_ref": image_ref,
-                "mime_type": image.mime_type,
-                "size_bytes": len(image.data),
-                "data_url": f"data:{image.mime_type};base64,{base64.b64encode(image.data).decode('ascii')}",
-            },
-        })
-
-    @app.route("/api/comfyui/interrupt", methods=["POST"])
-    @require_csrf
-    def comfyui_interrupt():
-        actor, err = _actor_or_401()
-        if err:
-            return err
-        try:
-            data = request.get_json(force=True, silent=True)
-        except TypeError:
-            data = None
-        data = data if isinstance(data, dict) else {}
-        allowed, reason, summary = _interrupt_policy(actor)
-        if not allowed:
-            audit(
-                "COMFYUI_INTERRUPT_SKIPPED",
-                get_client_ip(),
-                user=actor["username"],
-                success=True,
-                ua=get_ua(),
-                detail=f"reason={reason}, summary={summary}",
-            )
-            msg = "已中斷本頁等待；未送出 ComfyUI 全域中斷，避免影響其他使用者的產圖。"
-            if reason == "no_owned_generation":
-                msg = "目前沒有偵測到你的後端產圖任務；已中斷本頁等待。"
-            return json_resp({
-                "ok": True,
-                "msg": msg,
-                "interrupt": {
-                    "interrupted": False,
-                    "backend_interrupted": False,
-                    "reason": reason,
-                    **summary,
-                },
-            })
-        active_client = _client(actor)
-        if _is_root(actor):
-            own_active = [
-                item for item in _active_generation_snapshot()
-                if int(item.get("user_id") or 0) == int(_generation_owner_id(actor) or 0)
-            ]
-            own_backends = {
-                _normalize_comfyui_backend_url(item.get("backend_url"))
-                for item in own_active
-                if _normalize_comfyui_backend_url(item.get("backend_url"))
-            }
-            if len(own_backends) == 1:
-                active_client = _client_for_url(next(iter(own_backends)))
-        try:
-            if not hasattr(active_client, "interrupt"):
-                return json_resp({"ok": False, "msg": "ComfyUI 中斷產圖不支援"}), 501
-            result = active_client.interrupt()
-        except ComfyUIError as exc:
-            audit("COMFYUI_INTERRUPT_ERROR", get_client_ip(), user=actor["username"], success=False, ua=get_ua(), detail=str(exc)[:180])
-            return _json_error_from_comfy(exc, active_client)
-        payload = result if isinstance(result, dict) else {}
-        payload.setdefault("interrupted", True)
-        payload["backend_interrupted"] = True
-        payload["reason"] = reason
-        payload.update(summary)
-        audit("COMFYUI_INTERRUPT", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"interrupt requested, reason={reason}, summary={summary}")
-        return json_resp({"ok": True, "msg": "已送出中斷產圖請求", "interrupt": payload})
-
-    @app.route("/api/comfyui/save", methods=["POST"])
-    @require_csrf
-    def comfyui_save():
-        actor, err = _actor_or_401()
-        if err:
-            return err
-        try:
-            data = request.get_json(force=True)
-        except Exception:
-            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
-        data = data if isinstance(data, dict) else {}
-        image_ref = data.get("image_ref")
-        if not isinstance(image_ref, dict):
-            return json_resp({"ok": False, "msg": "缺少 image_ref"}), 400
-        conn = get_db()
-        try:
-            ref_row = _load_comfyui_image_ref_record(conn, actor=actor, image_ref=image_ref)
-            if not ref_row:
-                audit("COMFYUI_IMAGE_REF_DENIED", get_client_ip(), user=actor["username"], success=False, ua=get_ua(), detail=f"action=save,file={image_ref.get('filename', '-')}")
-                return json_resp({"ok": False, "msg": "找不到可存取的產圖預覽"}), 404
-            active_client = _client_for_url(_comfyui_binding(actor, backend_url=ref_row.get("backend_url")).get("url"))
-            try:
-                image = active_client.fetch_image(image_ref)
-                _assert_reasonable_image_size(image)
-            except ComfyUIError as exc:
-                return _json_error_from_comfy(exc, active_client)
-            upload_result, storage_file, album, msg = _save_fetched_image(conn, actor=actor, data=data, image=image)
-            if msg:
-                conn.rollback()
-                return json_resp({"ok": False, "msg": msg}), 400
-            conn.commit()
-            audit("COMFYUI_SAVE_TO_DRIVE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"file_id={upload_result['file_id']}, storage_file_id={storage_file['id']}")
-            return json_resp({"ok": True, "file": upload_result, "storage_file": storage_file, "album": album})
-        finally:
-            conn.close()
-
-    @app.route("/api/comfyui/discard", methods=["POST"])
-    @require_csrf
-    def comfyui_discard():
-        actor, err = _actor_or_401()
-        if err:
-            return err
-        try:
-            data = request.get_json(force=True)
-        except Exception:
-            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
-        data = data if isinstance(data, dict) else {}
-        image_ref = data.get("image_ref")
-        if not isinstance(image_ref, dict):
-            return json_resp({"ok": False, "msg": "缺少 image_ref"}), 400
-        conn = get_db()
-        try:
-            ref_row = _load_comfyui_image_ref_record(conn, actor=actor, image_ref=image_ref, prompt_id=data.get("prompt_id"))
-            if not ref_row:
-                audit("COMFYUI_IMAGE_REF_DENIED", get_client_ip(), user=actor["username"], success=False, ua=get_ua(), detail=f"action=discard,file={image_ref.get('filename', '-')}")
-                return json_resp({"ok": False, "msg": "找不到可丟棄的產圖預覽"}), 404
-            conn.commit()
-        finally:
-            conn.close()
-        image_binding = _comfyui_binding(actor, backend_url=(ref_row or {}).get("backend_url"))
-        if image_binding["connection_mode"] != "local":
-            result = {
-                "file_deleted": False,
-                "file_missing": False,
-                "file_delete_supported": False,
-                "history_deleted": False,
-                "remote_preview_only": True,
-            }
-            audit("COMFYUI_DISCARD_REMOTE_PREVIEW_ONLY", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"file={image_ref.get('filename')}")
-            return json_resp({
-                "ok": True,
-                "msg": "已移除網頁上的預覽；遠端 ComfyUI API 不支援刪除 output 原始檔。",
-                "discard": result,
-                "warning": "source_file_not_deleted",
-            })
-        active_client = _client_for_url(image_binding["url"])
-        try:
-            if not hasattr(active_client, "discard_image"):
-                return json_resp({"ok": False, "msg": "ComfyUI 原始檔刪除不支援"}), 501
-            result = active_client.discard_image(
-                image_ref,
-                prompt_id=data.get("prompt_id"),
-                local_base_dir=str(_configured_comfyui_project_dir() or _configured_comfyui_base_dir() or ""),
-                allow_api_delete=False,
-            )
-        except ComfyUIError as exc:
-            audit("COMFYUI_DISCARD_ERROR", get_client_ip(), user=actor["username"], success=False, ua=get_ua(), detail=str(exc)[:180])
-            return _json_error_from_comfy(exc, active_client)
-        if not (result.get("file_deleted") or result.get("file_missing")):
-            msg = "已丟棄前端預覽；ComfyUI 未提供刪除 output 檔案端點，原始檔可能仍留在 ComfyUI output。若要同步刪原檔，請設定 COMFYUI_OUTPUT_DIR 或 COMFYUI_BASE_DIR。"
-            audit("COMFYUI_DISCARD_UNSUPPORTED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=str(result)[:180])
-            return json_resp({"ok": True, "msg": msg, "discard": result, "warning": "source_file_not_deleted"})
-        audit("COMFYUI_DISCARD", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"file={image_ref.get('filename')}, result={result}")
-        return json_resp({"ok": True, "msg": "已丟棄預覽並刪除 ComfyUI 原始檔", "discard": result})
-
-    @app.route("/api/comfyui/share", methods=["POST"])
-    @require_csrf
-    def comfyui_share():
-        actor, err = _actor_or_401()
-        if err:
-            return err
-        try:
-            data = request.get_json(force=True)
-        except Exception:
-            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
-        data = data if isinstance(data, dict) else {}
-        image_ref = data.get("image_ref")
-        conn = get_db()
-        try:
-            existing = _existing_saved_image(conn, actor=actor, data=data)
-            if existing:
-                upload_result, storage_file, album, msg = existing
-                if msg:
-                    conn.rollback()
-                    return json_resp({"ok": False, "msg": msg}), 400
-            else:
-                if not isinstance(image_ref, dict):
-                    return json_resp({"ok": False, "msg": "缺少 image_ref"}), 400
-                ref_row = _load_comfyui_image_ref_record(conn, actor=actor, image_ref=image_ref)
-                if not ref_row:
-                    audit("COMFYUI_IMAGE_REF_DENIED", get_client_ip(), user=actor["username"], success=False, ua=get_ua(), detail=f"action=share,file={image_ref.get('filename', '-')}")
-                    conn.rollback()
-                    return json_resp({"ok": False, "msg": "找不到可分享的產圖預覽"}), 404
-                active_client = _client_for_url(_comfyui_binding(actor, backend_url=ref_row.get("backend_url")).get("url"))
-                try:
-                    image = active_client.fetch_image(image_ref)
-                    _assert_reasonable_image_size(image)
-                except ComfyUIError as exc:
-                    return _json_error_from_comfy(exc, active_client)
-                upload_result, storage_file, album, msg = _save_fetched_image(conn, actor=actor, data=data, image=image)
-                if msg:
-                    conn.rollback()
-                    return json_resp({"ok": False, "msg": msg}), 400
-            board = _find_or_create_comfyui_board(conn, actor)
-            title = _safe_text(data.get("title"), 120) or "ComfyUI 產圖分享"
-            content = _compose_comfyui_share_content(
-                data,
-                file_id=upload_result["file_id"],
-                storage_file=storage_file or {},
-            )
-            if not content.strip():
-                conn.rollback()
-                return json_resp({"ok": False, "msg": "分享內容不可為空"}), 400
-            level = _actor_value(actor, "effective_level") or _actor_value(actor, "base_level") or _actor_value(actor, "member_level") or "normal"
-            role = _actor_value(actor, "role", "user")
-            status = "pending" if role == "user" and level == "newbie" else "approved"
-            now = datetime.now().isoformat()
-            cur = conn.execute(
-                """
-                INSERT INTO forum_threads (
-                    board_id, title, content, status, post_type, author_user_id,
-                    author_username, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, 'normal', ?, ?, ?, ?)
-                """,
-                (board["id"], title, content, status, int(_actor_value(actor, "id")), _actor_value(actor, "username"), now, now),
-            )
-            thread_id = cur.lastrowid
-            conn.execute("UPDATE forum_boards SET last_activity_at=?, updated_at=? WHERE id=?", (now, now, board["id"]))
-            attached, msg = attach_existing_file(
-                conn,
-                actor=actor,
-                file_id=upload_result["file_id"],
-                context_type="forum_thread",
-                context_id=thread_id,
-                grant_role="user",
-                can_preview=True,
-            )
-            if msg:
-                conn.rollback()
-                return json_resp({"ok": False, "msg": msg}), 400
-            conn.commit()
-            audit(
-                "COMFYUI_SHARE_TO_COMMUNITY",
-                get_client_ip(),
-                user=actor["username"],
-                success=True,
-                ua=get_ua(),
-                detail=f"thread_id={thread_id}, file_id={upload_result['file_id']}, board_id={board['id']}",
-            )
-            return json_resp({
-                "ok": True,
-                "msg": "已分享到 ComfyUI 專區" if status == "approved" else "已送出分享，待審核後公開",
-                "thread": {"id": thread_id, "board_id": board["id"], "title": title, "status": status},
-                "file": upload_result,
-                "storage_file": storage_file,
-                "album": album,
-                "attachment": attached,
-            })
-        finally:
-            conn.close()
+    register_comfyui_image_routes(app, {
+        "base64": base64,
+        "request": request,
+        "json_resp": json_resp,
+        "require_csrf": require_csrf,
+        "get_db": get_db,
+        "get_client_ip": get_client_ip,
+        "get_ua": get_ua,
+        "audit": audit,
+        "attach_existing_file": attach_existing_file,
+        "datetime": datetime,
+        "ComfyUIError": ComfyUIError,
+        "active_generation_snapshot": _active_generation_snapshot,
+        "actor_or_401": _actor_or_401,
+        "actor_value": _actor_value,
+        "assert_reasonable_image_size": _assert_reasonable_image_size,
+        "client": _client,
+        "client_for_url": _client_for_url,
+        "comfyui_binding": _comfyui_binding,
+        "compose_comfyui_share_content": _compose_comfyui_share_content,
+        "configured_comfyui_base_dir": _configured_comfyui_base_dir,
+        "configured_comfyui_project_dir": _configured_comfyui_project_dir,
+        "existing_saved_image": _existing_saved_image,
+        "find_or_create_comfyui_board": _find_or_create_comfyui_board,
+        "generation_owner_id": _generation_owner_id,
+        "image_ref_payload": _image_ref_payload,
+        "interrupt_policy": _interrupt_policy,
+        "is_root": _is_root,
+        "json_error_from_comfy": _json_error_from_comfy,
+        "load_comfyui_image_ref_record": _load_comfyui_image_ref_record,
+        "normalize_comfyui_backend_url": _normalize_comfyui_backend_url,
+        "safe_text": _safe_text,
+        "save_fetched_image": _save_fetched_image,
+    })

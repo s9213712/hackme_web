@@ -5,7 +5,11 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_server_update_routes_are_root_only_and_use_safe_git_flow():
-    system_admin = (ROOT / "routes" / "system_admin.py").read_text(encoding="utf-8")
+    system_admin = (
+        (ROOT / "routes" / "system_admin.py").read_text(encoding="utf-8")
+        + "\n"
+        + (ROOT / "routes" / "system_admin_sections" / "security_routes.py").read_text(encoding="utf-8")
+    )
     server_py = (ROOT / "server.py").read_text(encoding="utf-8")
 
     assert '@app.route("/api/root/server-update/status", methods=["GET"])' in system_admin

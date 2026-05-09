@@ -29,6 +29,8 @@ def register_comfyui_admin_routes(app, ctx):
     download_civitai_model_selection = ctx["download_civitai_model_selection"]
     upload_comfyui_model_file = ctx["upload_comfyui_model_file"]
     assert_model_download_job_owner = ctx["assert_model_download_job_owner"]
+    local_start_template_path = ctx["local_start_template_path"]
+    send_file = ctx["send_file"]
     threading = ctx["threading"]
 
     @app.route("/api/root/comfyui/test-connection", methods=["POST"])
@@ -114,6 +116,29 @@ def register_comfyui_admin_routes(app, ctx):
                 "autostart": autostart,
                 "local_runtime": runtime,
             })
+
+    @app.route("/api/root/comfyui/local-start-template", methods=["GET"])
+    @require_csrf_safe
+    def root_comfyui_local_start_template():
+        actor, err = root_or_403()
+        if err:
+            return err
+        if not local_start_template_path.is_file():
+            return json_resp({"ok": False, "msg": "ComfyUI 啟動腳本範本不存在"}), 503
+        audit(
+            "COMFYUI_LOCAL_TEMPLATE_DOWNLOADED",
+            get_client_ip(),
+            user=actor_value(actor, "username"),
+            success=True,
+            ua=get_ua(),
+            detail=f"filename={local_start_template_path.name}",
+        )
+        return send_file(
+            local_start_template_path,
+            as_attachment=True,
+            download_name=local_start_template_path.name,
+            mimetype="text/x-shellscript",
+        )
 
     @app.route("/api/root/comfyui/civitai/inspect", methods=["POST"])
     @require_csrf
@@ -301,4 +326,3 @@ def register_comfyui_admin_routes(app, ctx):
                 "result": job.get("result"),
             },
         })
-

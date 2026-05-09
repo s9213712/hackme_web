@@ -162,6 +162,32 @@ Control-plane 專用 DB。
 
 而不是一開始就把所有模組一次拆散。
 
+## Schema Ownership Rule
+
+在下一輪實體 DB split 以前，先採用 **schema ownership 切分**：
+
+- 單一表只能由一個 domain schema module 建立與遷移。
+- `services/server/database.py` 只能 orchestration，不應直接放 domain DDL。
+- 新表必須登錄到所屬 schema module；跨 domain 讀寫要經過 service API。
+- migration / ensure schema 必須可重複執行，且 fresh DB 與 old DB path 都要測。
+
+目前主要 owner：
+
+| Domain | Schema owner | 主要 DB |
+|---|---|---|
+| auth/session/csrf/captcha | `services/users/*` + auth DB bootstrap | `auth.db` |
+| audit chain | platform audit bootstrap | `audit.db` |
+| server mode / production gate / incident | `services/snapshots/schema.py` | `control.db` |
+| snapshot metadata | `services/snapshots/schema.py` | `database.db` |
+| PointsChain / wallet / ledger | `services/points_chain/schema.py` | `database.db` |
+| trading | `services/trading/schema_ddl.py`, `services/trading/settings_schema.py` | `database.db` |
+| upload security | `services/security/upload_schema.py` | `database.db` |
+
+目前不建議把 trading / points 立刻拆成多個實體 DB，因為 snapshot、
+rollback、production gate、PointsChain block sealing、trading settlement
+仍需要同一份 runtime 狀態的一致備份。下一步應先把 schema ownership 和
+service ownership 固定，再評估是否把高寫入熱區拆成新的 DB。
+
 ## 下一個最值得拆的熱區
 
 依目前觀察，下一個最值得拆的是 **trading / points / storage-media / forum-social** 這類仍在主 DB 內的熱區。

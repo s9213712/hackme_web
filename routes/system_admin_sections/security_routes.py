@@ -303,7 +303,7 @@ def register_system_admin_security_routes(app, ctx):
             return json_resp({"ok": False, "msg": "tool_timeout_seconds 必須介於 1-3600"}), 400
         report_root = security_test_report_root()
         command = [
-            os.path.join(BASE_DIR, "security", "run_pentest.sh"),
+            os.path.join(BASE_DIR, "scripts", "security", "pentest", "run_pentest.sh"),
             "--target", target,
             "--out", report_root,
             "--tool-timeout", str(tool_timeout),
@@ -348,7 +348,7 @@ def register_system_admin_security_routes(app, ctx):
         job = start_security_test_job(
             "pentest",
             command,
-            command_label=["security/run_pentest.sh", "--target", target],
+            command_label=["scripts/security/pentest/run_pentest.sh", "--target", target],
             report_root=report_root,
             report_prefix="20",
             actor=actor,
@@ -373,7 +373,7 @@ def register_system_admin_security_routes(app, ctx):
             return json_resp({"ok": False, "msg": "port 必須介於 1-65535"}), 400
         report_root = security_test_report_root()
         command = [
-            os.path.join(BASE_DIR, "security", "run_functional_smoke.sh"),
+            os.path.join(BASE_DIR, "scripts", "security", "pentest", "run_functional_smoke.sh"),
             "--port", str(port),
             "--out", report_root,
         ]
@@ -389,7 +389,7 @@ def register_system_admin_security_routes(app, ctx):
         job = start_security_test_job(
             "functional",
             command,
-            command_label=["security/run_functional_smoke.sh", "--port", str(port)],
+            command_label=["scripts/security/pentest/run_functional_smoke.sh", "--port", str(port)],
             report_root=report_root,
             report_prefix="functional_",
             actor=actor,
@@ -418,7 +418,7 @@ def register_system_admin_security_routes(app, ctx):
         out_md = os.path.join(report_root, f"{artifact_prefix}.md")
         command = [
             sys.executable,
-            os.path.join(BASE_DIR, "security", "functional_permission_pentest.py"),
+            os.path.join(BASE_DIR, "scripts", "security", "pentest", "functional_permission_pentest.py"),
             "--base-url", target,
             "--out-json", out_json,
             "--out-md", out_md,
@@ -455,7 +455,7 @@ def register_system_admin_security_routes(app, ctx):
             command,
             command_label=[
                 "python3",
-                "security/functional_permission_pentest.py",
+                "scripts/security/pentest/functional_permission_pentest.py",
                 "--base-url",
                 target,
             ] + (["--destructive"] if bool(data.get("destructive")) else []),
@@ -509,7 +509,7 @@ def register_system_admin_security_routes(app, ctx):
         report_root = security_test_report_root()
         command = [
             sys.executable,
-            os.path.join(BASE_DIR, "security", "stress_test.py"),
+            os.path.join(BASE_DIR, "scripts", "security", "pentest", "stress_test.py"),
             "--target", target,
             "--mode", mode,
             "--concurrency", str(concurrency),
@@ -529,7 +529,7 @@ def register_system_admin_security_routes(app, ctx):
             command,
             command_label=[
                 "python3",
-                "security/stress_test.py",
+                "scripts/security/pentest/stress_test.py",
                 "--target",
                 target,
                 "--mode",

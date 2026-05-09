@@ -9,7 +9,11 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_admin_mutation_routes_use_session_scoped_csrf_guards():
-    system_admin = (ROOT / "routes" / "system_admin.py").read_text(encoding="utf-8")
+    system_admin = (
+        (ROOT / "routes" / "system_admin.py").read_text(encoding="utf-8")
+        + "\n"
+        + (ROOT / "routes" / "system_admin_sections" / "security_routes.py").read_text(encoding="utf-8")
+    )
     auth = (ROOT / "services" / "users" / "auth.py").read_text(encoding="utf-8")
 
     assert '@app.route("/api/admin/security-center/thresholds", methods=["PUT"])\n    @require_csrf' in system_admin
@@ -228,7 +232,11 @@ def test_pending_reward_review_enforces_maker_checker():
 
 
 def test_comfyui_image_refs_are_owner_bound():
-    comfyui = (ROOT / "routes" / "comfyui.py").read_text(encoding="utf-8")
+    comfyui = (
+        (ROOT / "routes" / "comfyui.py").read_text(encoding="utf-8")
+        + "\n"
+        + (ROOT / "routes" / "comfyui_sections" / "image_routes.py").read_text(encoding="utf-8")
+    )
 
     assert "CREATE TABLE IF NOT EXISTS comfyui_image_refs" in comfyui
     assert "_register_comfyui_image_refs" in comfyui
@@ -245,7 +253,11 @@ def test_pending_reward_review_enforces_maker_checker():
 
 
 def test_comfyui_image_refs_are_owner_bound():
-    comfyui = (ROOT / "routes" / "comfyui.py").read_text(encoding="utf-8")
+    comfyui = (
+        (ROOT / "routes" / "comfyui.py").read_text(encoding="utf-8")
+        + "\n"
+        + (ROOT / "routes" / "comfyui_sections" / "image_routes.py").read_text(encoding="utf-8")
+    )
 
     assert "CREATE TABLE IF NOT EXISTS comfyui_image_refs" in comfyui
     assert "_register_comfyui_image_refs" in comfyui
