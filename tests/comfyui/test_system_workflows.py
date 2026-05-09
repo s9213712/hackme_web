@@ -22,7 +22,11 @@ SYSTEM_DIR = REPO_ROOT / "workflows" / "comfyui"
 def _system_ids():
     if not SYSTEM_DIR.exists():
         return []
-    return sorted(p.name for p in SYSTEM_DIR.iterdir() if p.is_dir())
+    return sorted(
+        p.name
+        for p in SYSTEM_DIR.iterdir()
+        if p.is_dir() and not p.name.startswith("imported_")
+    )
 
 
 def test_system_dir_has_expected_workflows():

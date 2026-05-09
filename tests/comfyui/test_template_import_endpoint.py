@@ -19,6 +19,12 @@ def _isolate_object_info_cache():
     reset_object_info_cache()
 
 
+@pytest.fixture(autouse=True)
+def _isolate_template_bundle_materialization(tmp_path, monkeypatch):
+    monkeypatch.setattr(template_routes_module, "REPO_SOURCE_DIR", tmp_path / "repo_workflows")
+    monkeypatch.setattr(template_routes_module, "runtime_comfyui_dir", lambda: tmp_path / "runtime_workflows")
+
+
 TXT2IMG = {
     "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "v1-5.safetensors"}},
     "5": {"class_type": "EmptyLatentImage", "inputs": {"width": 512, "height": 512, "batch_size": 1}},

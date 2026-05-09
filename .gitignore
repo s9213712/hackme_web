@@ -21,6 +21,8 @@ test_backtest_full.py
 !workflows/comfyui/
 !workflows/comfyui/**/
 !workflows/comfyui/**/*.json
+workflows/comfyui/imported_*/
+workflows/comfyui/imported_*/*
 !public/data/
 !public/data/*.json
 public/data/workflow_template_benchmarks_*.json

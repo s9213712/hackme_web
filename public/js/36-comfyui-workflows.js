@@ -584,7 +584,8 @@ function renderComfyuiWorkflowPresets(payload = {}, { silentTemplateReload = tru
   setComfyuiWorkflowStatus(`目前可見 ${total} 個 workflow preset${warning}`);
 }
 
-async function loadComfyuiWorkflowPresets({ silentTemplateReload = true } = {}) {
+async function loadComfyuiWorkflowPresets() {
+  const { silentTemplateReload = true } = arguments[0] || {};
   if (!currentUser || !canAccessModule("comfyui")) return [];
   setComfyuiWorkflowStatus("正在讀取 workflow preset...");
   await fetchCsrfToken({ force: true });
