@@ -73,6 +73,9 @@ def register_comfyui_workflow_routes(app, ctx):
     validate_generation_capabilities = ctx["validate_generation_capabilities"]
     sanitize_workflow_json = ctx["sanitize_workflow_json"]
     workflow_json_to_pretty_text = ctx["workflow_json_to_pretty_text"]
+    analyze_workflow_json = ctx["analyze_workflow_json"]
+    build_ui_schema = ctx["build_ui_schema"]
+    check_workflow_capability = ctx["check_workflow_capability"]
     assert_workflow_dependencies_or_error = ctx["assert_workflow_dependencies_or_error"]
     create_workflow_run = ctx["create_workflow_run"]
     create_generation_job = ctx["create_generation_job"]
@@ -81,6 +84,23 @@ def register_comfyui_workflow_routes(app, ctx):
     DEFAULT_GENERATION_TIMEOUT_SECONDS = ctx["DEFAULT_GENERATION_TIMEOUT_SECONDS"]
     safe_text = ctx["safe_text"]
     threading = ctx["threading"]
+
+    def _workflow_output_kinds(workflow_json):
+        classes = {
+            str((node or {}).get("class_type") or "").strip()
+            for node in (workflow_json or {}).values()
+            if isinstance(node, dict)
+        }
+        output_kinds = []
+        if any(name in classes for name in {"SaveImage", "PreviewImage", "VAEDecode"}):
+            output_kinds.append("image")
+        if any("video" in name.lower() for name in classes):
+            output_kinds.append("video")
+        if any(token in name.lower() for name in classes for token in ("audio", "music", "wave", "wav")):
+            output_kinds.append("music")
+        if not output_kinds:
+            output_kinds.append("image")
+        return output_kinds
 
     @app.route("/api/comfyui/workflows", methods=["GET"])
     @require_csrf_safe
@@ -210,7 +230,20 @@ def register_comfyui_workflow_routes(app, ctx):
             dependency_status = workflow_dependency_status(active_client, row) if active_client is not None else None
             recent_runs = list_workflow_runs(conn, preset_id=preset_id, limit=ctx["COMFYUI_WORKFLOW_RUN_LIMIT"])
             payload = workflow_preset_summary(row, dependency_status=dependency_status, recent_runs=recent_runs, actor=actor)
-            payload["workflow_json"] = parse_json_field(row["workflow_json"], {}) or {}
+            workflow_json = parse_json_field(row["workflow_json"], {}) or {}
+            payload["workflow_json"] = workflow_json
+            try:
+                analysis = analyze_workflow_json(workflow_json)
+                capability = check_workflow_capability(analysis, client=active_client)
+                payload["ui_schema"] = build_ui_schema(
+                    analysis=analysis,
+                    capability=capability,
+                    raw_workflow=workflow_json,
+                ).to_dict()
+                payload["capability"] = capability.to_dict()
+            except Exception:
+                payload["ui_schema"] = None
+            payload["output_kinds"] = _workflow_output_kinds(workflow_json)
         finally:
             conn.close()
         return json_resp({"ok": True, "preset": payload})
@@ -251,6 +284,7 @@ def register_comfyui_workflow_routes(app, ctx):
                 default_params=default_params,
                 is_official=bool(row["is_official"]),
                 published_by_user_id=row["published_by_user_id"],
+                system_bundle_id=row["system_bundle_id"],
             )
             row = load_workflow_preset_row(conn, preset_id=updated_id)
             conn.commit()
@@ -467,6 +501,7 @@ def register_comfyui_workflow_routes(app, ctx):
                 default_params=parse_json_field(row["default_params_json"], {}) or {},
                 is_official=True,
                 published_by_user_id=actor_value(actor, "id"),
+                system_bundle_id=row["system_bundle_id"],
             )
             row = load_workflow_preset_row(conn, preset_id=updated_id)
             conn.commit()
@@ -474,4 +509,3 @@ def register_comfyui_workflow_routes(app, ctx):
             conn.close()
         audit("COMFYUI_WORKFLOW_PUBLISH_OFFICIAL", get_client_ip(), user=actor_value(actor, "username"), success=True, ua=get_ua(), detail=f"preset_id={preset_id}")
         return json_resp({"ok": True, "preset": workflow_preset_summary(row, actor=actor), "msg": "已發布為官方 preset"})
-

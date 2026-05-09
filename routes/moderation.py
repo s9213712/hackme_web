@@ -36,6 +36,7 @@ def register_moderation_routes(app, deps):
     audit = deps["audit"]
     get_client_ip = deps["get_client_ip"]
     get_current_user_ctx = deps["get_current_user_ctx"]
+    get_audit_db = deps.get("get_audit_db", deps["get_db"])
     get_db = deps["get_db"]
     is_feature_enabled = deps.get("is_feature_enabled", lambda key: True)
     is_audit_chain_enabled = deps["is_audit_chain_enabled"]
@@ -714,7 +715,7 @@ def register_moderation_routes(app, deps):
         offset = page * limit
 
         # 讀取 secure_audit 表（hash chain）
-        conn = get_db()
+        conn = get_audit_db()
         try:
             total = conn.execute("SELECT COUNT(*) as c FROM secure_audit").fetchone()["c"]
             rows  = conn.execute(

@@ -305,6 +305,7 @@ def _payload_md(payload: dict, canonical_path: Path) -> str:
 
 
 def _make_payload(report_type: str, raw_report: dict, *, passed: bool, tester: str, report_source: str, meta: dict, canonical_json: Path, canonical_md: Path, signer: PayloadSigner, critical: int = 0, high: int = 0, unresolved: list | None = None, server_mode: str = "") -> dict:
+    resolved_server_mode = str(server_mode or meta.get("server_mode") or "").strip()
     payload = signer.build(
         report_type=report_type,
         raw_report=raw_report,
@@ -317,7 +318,7 @@ def _make_payload(report_type: str, raw_report: dict, *, passed: bool, tester: s
         report_source=report_source,
         target_commit=meta["target_commit"],
         target_branch=meta["target_branch"],
-        server_mode=server_mode,
+        server_mode=resolved_server_mode,
     )
     _json_dump(canonical_json, payload)
     _text_dump(canonical_md, _payload_md(payload, canonical_json))
@@ -449,6 +450,10 @@ def _pentest_report(out_root: Path, raw_dir: Path, args, signer: PayloadSigner, 
         "ROOT_PASSWORD": args.root_password,
         "MANAGER_PASSWORD": args.manager_password,
         "TEST_PASSWORD": args.test_password,
+        "USER_A_USERNAME": "test",
+        "USER_A_PASSWORD": args.test_password,
+        "USER_B_USERNAME": "admin",
+        "USER_B_PASSWORD": args.manager_password,
     }
     command = [
         "bash",
@@ -541,6 +546,12 @@ def _switch_live_mode(client: LiveClient, target_mode: str, *, notes: str) -> di
     return payload
 
 
+def _refresh_root_session(client: LiveClient, args) -> None:
+    client.cookies.clear()
+    client.csrf = ""
+    args.root_password = client.login(args.root_username, args.root_password, rotate_to=args.root_new_password)
+
+
 def _stress_report(out_root: Path, raw_dir: Path, args, signer: PayloadSigner, meta: dict, client: LiveClient) -> dict:
     report_dir = raw_dir / "stress"
     report_dir.mkdir(parents=True, exist_ok=True)
@@ -572,10 +583,11 @@ def _stress_report(out_root: Path, raw_dir: Path, args, signer: PayloadSigner, m
     switched_mode = ""
     restore_error = ""
     try:
+        _refresh_root_session(client, args)
         previous_mode = _current_live_mode(client)
-        if previous_mode not in {"production", "internal_test", "test"}:
-            _switch_live_mode(client, "internal_test", notes="go_live trading stress precheck")
-            switched_mode = "internal_test"
+        if previous_mode not in {"production", "internal_test", "test", "dev_ready"}:
+            _switch_live_mode(client, "dev_ready", notes="go_live trading stress precheck")
+            switched_mode = "dev_ready"
         trading = _run(
             [
                 sys.executable,
@@ -601,6 +613,7 @@ def _stress_report(out_root: Path, raw_dir: Path, args, signer: PayloadSigner, m
     finally:
         if switched_mode and previous_mode and previous_mode != switched_mode:
             try:
+                _refresh_root_session(client, args)
                 _switch_live_mode(client, previous_mode, notes="restore live mode after trading stress")
             except Exception as exc:
                 restore_error = str(exc)
@@ -676,6 +689,7 @@ def _refresh_deploy_integrity_baseline_if_needed(client: LiveClient, report_payl
         }
 
     approve_confirm = str((report_payload or {}).get("approve_confirm") or "APPROVE INTEGRITY UPDATE")
+    client.fetch_csrf()
     review_status, review_payload, _ = client._request(
         "/api/root/integrity/findings/bulk-review",
         method="POST",
@@ -695,10 +709,12 @@ def _refresh_deploy_integrity_baseline_if_needed(client: LiveClient, report_payl
 
 
 def _integrity_report(out_root: Path, client: LiveClient, signer: PayloadSigner, meta: dict) -> dict:
+    client.fetch_csrf()
     rescan_status, rescan_payload, _ = client._request("/api/root/integrity/rescan", method="POST", body={})
     report_status, report_payload, _ = client._request("/api/root/integrity/report")
     baseline_refresh = _refresh_deploy_integrity_baseline_if_needed(client, report_payload)
     if baseline_refresh.get("attempted"):
+        client.fetch_csrf()
         rescan_status, rescan_payload, _ = client._request("/api/root/integrity/rescan", method="POST", body={})
         report_status, report_payload, _ = client._request("/api/root/integrity/report")
     report = report_payload.get("report") or {}

@@ -126,6 +126,19 @@ PYTHONPATH=. python3 scripts/trading/probes/backtest_20000_probe.py --include-ro
   - `固定 N` 代表目前 repo 內對應 pytest 檔的 collected case 數。
 - `預設放置位置`：指生成腳本的預設輸出落點；若是站內手動匯出 / 上傳型報告，則列 canonical staging 路徑。
 
+另外要注意：
+
+- `runtime/reports/security/production_gate/*.json` 的 filesystem auto-detect 只輔助顯示最新候選報告。
+- 這些檔案預設是 `unverified`，只有驗簽成功且 target 與當前 runtime 一致時才會被視為 `verified`。
+- unsigned、invalid JSON、`report_type` mismatch、replay 舊 commit 等檔案只能在後台顯示 warning，
+  不可讓 production gate 亮綠。
+- production gate 的 live 驗收至少要再補一條：
+  **13 份 verified 但 old/fake `target_commit` 的 reports 不得解鎖 production。**
+  這條不可只靠 `tests/snapshots/test_snapshots.py`；必須對隔離 `/tmp` server 實際呼叫：
+  - `GET /api/root/server-mode/requirements`
+  - `POST /api/root/production/enter`
+  並確認回應 reason 含 `target_commit_mismatch`。
+
 若要一次生成這 13 份報告，使用：
 
 ```bash
@@ -152,6 +165,70 @@ python3 scripts/on_live_reports/snapshot_restore.py
 並把上傳前的穩定 payload staging 到：
 
 - `runtime/reports/security/production_gate/<report_type>_report.json`
+
+若要做 live target-commit regression，建議另外保留一份驗收證據目錄，例如：
+
+- `runtime/reports/server_mode_gate_live_<RUN_ID>/`
+
+其中至少保存：
+
+- current target context
+- old-commit verified 13 份 scenario JSON
+- current-commit verified 13 份 scenario JSON
+- production enter response
+- final mode response
+
+若要把整條 happy-path 補齊，而不只驗 `target_commit mismatch`，至少再多做這 6 步：
+
+1. 先寫入 13 份 **signed + target 一致** 的
+   `runtime/reports/security/production_gate/<report_type>_report.json`，
+   再呼叫 `GET /api/root/server-mode/requirements`，確認 **只靠 filesystem
+   auto-detect 就能 `ok=true`**。
+2. 把同一批 13 份 payload 上傳到 `/api/root/production-report/upload`，再確認
+   `requirements ok=true`。
+3. 故意把其中一份 canonical filesystem report 改成 invalid JSON，再呼叫
+   `GET /api/root/server-mode/requirements`，確認 **仍是 `ok=true`**，
+   而且該 report 來源回退到 DB 的 verified `prodrep_*` record。
+4. `POST /api/root/production/enter`、`confirm=GO_LIVE`，確認切換成功。
+5. production 後用真正瀏覽器或 browser-like UA 重新登入 root，確認：
+   - `browser_only_mode` 會擋掉 script-style client
+   - root 預設帳號首次登入會被要求改密
+   - 改密後可重新登入並讀 `/api/root/server-mode`、`/api/admin/security-center`
+6. 對下面兩條 API 做並發 hammer，並掃描 server log：
+   - `GET /api/root/server-mode/requirements`
+   - `GET /api/admin/security-center`
+   期待：
+   - 沒有 500
+   - 沒有 `database is locked`
+   - `security-center.readiness.status = ok`
+   - `security-center.anomaly.signals = []`
+
+2026-05-09 的 live full-generator 驗收已在隔離副本實跑完一次：
+
+- 副本：`/tmp/hackme_web_dev_20260509_171716_15908/hackme_web`
+- 證據：`runtime/reports/server_mode_gate_full_generators_20260509T115237Z/`
+- focused happy-path 證據：`runtime/reports/server_mode_gate_live_20260509T092856Z/`
+
+這輪最後證明：
+
+- focused live gate：通過
+- full generator gate：通過
+- `database is locked`：`0`
+
+但有一個實務細節不能省略：
+
+- 若你在隔離副本上先修改了 protected files，再跑 `integrity_guard`，
+  integrity report 會先因 pending findings 失敗。
+- 正確流程不是跳過，而是：
+  1. `GET /api/root/integrity/findings?status=pending`
+  2. review/approve 預期變更
+  3. `POST /api/root/integrity/rescan`
+  4. `GET /api/root/integrity/report`
+  5. 重新上傳 `integrity_guard` report
+  6. 再做 final requirements / `GO_LIVE`
+
+換句話說，full-generator 驗收不是只看 13 份 raw reports，有改過隔離副本本身時，
+`integrity_guard` 的 finding review 也是正式流程的一部分。
 
 | report_type | 使用腳本 / 驗證面 | 測試筆數 | 預設放置位置 |
 |---|---|---:|---|
@@ -180,6 +257,10 @@ python3 scripts/on_live_reports/snapshot_restore.py
   - `runtime/reports/security/production_gate/on_live_reports_make_<RUN_ID>.json`
   - `runtime/reports/security/production_gate/on_live_reports_make_<RUN_ID>.md`
   這兩份是本次整批產製的總結，不是 13 份 required report 之一。
+- 若 production profile 內的某些鍵（例如 `allow_register`、`captcha_mode`、
+  `production_single_*`）沒有出現在 `security-center` payload，請直接查
+  runtime DB 的 `system_settings` 補核對，不要把「payload 沒帶出來」誤判成
+  「production hardening 沒套用」。
 
 ## 原理
 

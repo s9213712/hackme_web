@@ -195,7 +195,9 @@ def pipeline_recommendation(*, replay: dict | None = None, pipeline_report: dict
         ready_reasons.append("replay threshold reached")
     command = (
         "python3 scripts/games/chess_train_pipeline.py "
-        f"--preset standard --include-quarantine --min-usable-replays {thresholds['min_usable_replays']}"
+        "--preset standard --include-exp2 "
+        "--promote-engines 'experiment 2:nn,experiment 3:dl,experiment 4:pv' "
+        f"--min-usable-replays {thresholds['min_usable_replays']}"
     )
     return {
         "ready": bool(ready_reasons) and not blocked_reasons,
@@ -246,7 +248,9 @@ def maybe_launch_chess_train_pipeline(
             str(root / "scripts" / "games" / "chess_train_pipeline.py"),
             "--preset",
             "standard",
-            "--include-quarantine",
+            "--include-exp2",
+            "--promote-engines",
+            "experiment 2:nn,experiment 3:dl,experiment 4:pv",
             "--min-usable-replays",
             str(max(1, min_usable)),
         ]

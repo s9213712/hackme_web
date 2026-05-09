@@ -1422,6 +1422,91 @@
       min-height: 96px;
     }
 
+    .comfyui-template-selector {
+      display: grid;
+      gap: .85rem;
+      margin: .75rem 0 .9rem;
+    }
+
+    .comfyui-template-summary,
+    .comfyui-template-render-card,
+    .comfyui-template-field-card {
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 10px;
+      background: rgba(255,255,255,.035);
+      padding: .75rem;
+    }
+
+    .comfyui-template-panels {
+      display: grid;
+      gap: .75rem;
+    }
+
+    .comfyui-template-summary-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: .6rem;
+      flex-wrap: wrap;
+      margin-bottom: .45rem;
+    }
+
+    .comfyui-template-summary-title {
+      display: grid;
+      gap: .18rem;
+    }
+
+    .comfyui-template-summary-title strong {
+      font-size: .94rem;
+      color: var(--text);
+    }
+
+    .comfyui-template-output-list,
+    .comfyui-template-summary-flags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .38rem;
+      margin-top: .45rem;
+    }
+
+    .comfyui-template-panel-grid {
+      display: grid;
+      gap: .65rem;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    }
+
+    .comfyui-template-field-card {
+      padding: .7rem;
+    }
+
+    .comfyui-template-field-card label {
+      display: block;
+      margin-bottom: .38rem;
+      font-size: .8rem;
+      color: var(--muted);
+    }
+
+    .comfyui-template-field-card textarea,
+    .comfyui-template-field-card input,
+    .comfyui-template-field-card select {
+      width: 100%;
+    }
+
+    .comfyui-template-field-card textarea {
+      min-height: 96px;
+      resize: vertical;
+    }
+
+    .comfyui-template-field-card.is-wide {
+      grid-column: 1 / -1;
+    }
+
+    .comfyui-template-readonly {
+      font-size: .8rem;
+      color: var(--muted);
+      word-break: break-word;
+    }
+
     .comfyui-title-row {
       display: flex;
       flex-wrap: wrap;

@@ -51,6 +51,11 @@ _FIELD_CONSTRAINT_HINTS: dict[tuple[str, str], dict[str, Any]] = {
     ("KSampler", "steps"): {"min": 1, "max": 150, "step": 1},
     ("KSampler", "cfg"): {"min": 0.5, "max": 30.0, "step": 0.1},
     ("KSampler", "denoise"): {"min": 0.0, "max": 1.0, "step": 0.05},
+    ("KSamplerAdvanced", "noise_seed"): {"min": 0, "max": 2 ** 53, "step": 1},
+    ("KSamplerAdvanced", "steps"): {"min": 1, "max": 150, "step": 1},
+    ("KSamplerAdvanced", "cfg"): {"min": 0.5, "max": 30.0, "step": 0.1},
+    ("KSamplerAdvanced", "start_at_step"): {"min": 0, "max": 150, "step": 1},
+    ("KSamplerAdvanced", "end_at_step"): {"min": 0, "max": 150, "step": 1},
     ("LoraLoader", "strength_model"): {"min": -2.0, "max": 2.0, "step": 0.05},
     ("LoraLoader", "strength_clip"): {"min": -2.0, "max": 2.0, "step": 0.05},
     ("ControlNetApplyAdvanced", "strength"): {"min": 0.0, "max": 2.0, "step": 0.05},
@@ -91,6 +96,15 @@ def _label_zh(field_obj: InputField) -> str:
         ("KSampler", "denoise"): "Denoise",
         ("KSampler", "sampler_name"): "取樣器",
         ("KSampler", "scheduler"): "排程器",
+        ("KSamplerAdvanced", "add_noise"): "加入雜訊",
+        ("KSamplerAdvanced", "noise_seed"): "雜訊種子",
+        ("KSamplerAdvanced", "steps"): "步數",
+        ("KSamplerAdvanced", "cfg"): "CFG",
+        ("KSamplerAdvanced", "sampler_name"): "取樣器",
+        ("KSamplerAdvanced", "scheduler"): "排程器",
+        ("KSamplerAdvanced", "start_at_step"): "起始步數",
+        ("KSamplerAdvanced", "end_at_step"): "結束步數",
+        ("KSamplerAdvanced", "return_with_leftover_noise"): "保留剩餘雜訊",
         ("EmptyLatentImage", "width"): "寬度",
         ("EmptyLatentImage", "height"): "高度",
         ("EmptyLatentImage", "batch_size"): "批次大小",
@@ -248,7 +262,7 @@ def _panel_key_for_field(field_obj: InputField) -> str | None:
         # KSampler fields go onto the sampler panel for cohesion; everything
         # else (latent dims, controlnet strength, outpaint padding, lora
         # strength) goes onto the advanced numeric panel.
-        if field_obj.class_type == "KSampler":
+        if field_obj.class_type in {"KSampler", "KSamplerAdvanced"}:
             return "sampler"
         return "numeric"
     # FieldCategory.UNKNOWN — keep them out of UI so the user can't break the

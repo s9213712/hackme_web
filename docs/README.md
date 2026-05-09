@@ -46,6 +46,7 @@ The repository root keeps only [README.md](../README.md) and
 - [CLI_ADMIN_PLAYBOOK.md](CLI_ADMIN_PLAYBOOK.md): curl/cmd playbook for root,
   admin, and developer operations
 - [For_developer.md](For_developer.md): API, schema, runtime layout, feature flags
+- [architecture/DATABASE_LAYOUT.md](architecture/DATABASE_LAYOUT.md): current DB split, hot-path isolation, and next split candidates
 - [EXTERNAL_API_COMMAND_MATRIX.md](EXTERNAL_API_COMMAND_MATRIX.md): current
   exchange / Civitai / ComfyUI upstream command inventory
 - [WEB.md](WEB.md): detailed page-by-page UI behavior
@@ -81,6 +82,8 @@ The repository root keeps only [README.md](../README.md) and
 - [COMFYUI_ADMIN.md](comfyui/COMFYUI_ADMIN.md): root/admin-only ComfyUI and Civitai operations
 - [server_mode_v2/README.md](server_mode_v2/README.md): Server Mode v2 spec bundle index
 - [SERVER_MODE_V2_PROFILE_MATRIX.md](server_mode_v2/SERVER_MODE_V2_PROFILE_MATRIX.md): canonical mode matrix
+- [server_mode_v2/03_production_gate_playbook.md](server_mode_v2/03_production_gate_playbook.md): production gate 13 reports, signing rules, and filesystem auto-detect trust boundary
+- [server_mode_v2/04_production_gate_validation_report.md](server_mode_v2/04_production_gate_validation_report.md): 2026-05-09 production gate 驗收紀錄，含 warning / unverified / old-commit / all-green 實測與 live `50909` target-commit mismatch 收斂
 - [SERVER_MODE_V2_TEST_PLAN.md](server_mode_v2/SERVER_MODE_V2_TEST_PLAN.md): mode redesign coverage
 - [SERVER_MODE_V2_MIGRATION_PLAN.md](server_mode_v2/SERVER_MODE_V2_MIGRATION_PLAN.md): migration history
 

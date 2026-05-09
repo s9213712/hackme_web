@@ -42,6 +42,17 @@ python3 scripts/on_live_reports/on_live_reports_make.py \
 This is a symlink to `scripts/security/gate/on_live_reports_make.py`. It also
 writes a summary to `runtime/reports/security/production_gate/`.
 
+For production-gate acceptance, this one-shot generation is necessary but not
+sufficient. You must also prove the live server rejects:
+
+- unsigned reports
+- invalid JSON
+- `report_type` mismatch
+- verified reports whose `target_commit` is old/fake
+
+and only accepts the full 13-report set when all reports are verified and match
+the live server's current `target_commit`.
+
 ## Notes
 
 - `stress` covers `trading_stress_pentest.py`. The general HTTP stress driver
@@ -52,5 +63,14 @@ writes a summary to `runtime/reports/security/production_gate/`.
   expects a manual API rescan/report fetch (see
   [docs/11_QA_TESTING.md](../../docs/11_QA_TESTING.md)) — capture that JSON
   alongside the test output when assembling the gate package.
+- When driving integrity review through
+  `scripts/security/gate/on_live_reports_make.py`, the helper now refreshes
+  CSRF before `bulk-review` and `rescan` POSTs. If your isolated copy itself
+  was modified before the run, you still need to review/approve those expected
+  findings before the final `integrity_guard` report can pass.
 - These shortcuts intentionally do not move runtime artifacts. Each underlying
   driver still writes to its canonical location under `runtime/reports/`.
+- When the live server is started through `test_for_develop.sh`, keep
+  `HTML_LEARNING_GIT_REPO_DIR` pointed at a real git repo. A `/tmp` copy without
+  `.git` will break current-target detection and make `target_commit` gate
+  validation meaningless.

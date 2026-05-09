@@ -12,8 +12,8 @@ from services.comfyui.template.allowlist import (
 
 
 def test_core_allowlist_size_matches_spec():
-    """§4.1 says exactly 17 core class types."""
-    assert len(CORE_ALLOWLIST) == 17
+    """Keep the curated core allowlist explicit as importer support grows."""
+    assert len(CORE_ALLOWLIST) == 18
 
 
 def test_core_allowlist_required_classes_present():
@@ -23,6 +23,7 @@ def test_core_allowlist_required_classes_present():
         "CLIPTextEncode",
         "EmptyLatentImage",
         "KSampler",
+        "KSamplerAdvanced",
         "VAEDecode",
         "SaveImage",
         "LoadImage",
@@ -58,7 +59,7 @@ def test_denylist_named_high_risk_classes():
 def test_is_allowed_class_simple_cases():
     assert is_allowed_class("KSampler") is True
     assert is_allowed_class("CannyEdgePreprocessor") is True  # controlnet preprocessor
-    assert is_allowed_class("KSamplerAdvanced") is False  # not in v1 allowlist
+    assert is_allowed_class("KSamplerAdvanced") is True
     assert is_allowed_class("AnimateDiffLoader") is False
     assert is_allowed_class("") is False
     assert is_allowed_class(None) is False  # type: ignore[arg-type]

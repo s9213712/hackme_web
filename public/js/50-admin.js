@@ -3267,16 +3267,24 @@ function launchCheckShortcutHandler(shortcut) {
 function launchCheckConditionMarkup(condition, idx) {
   const escape = (text) => String(text == null ? "" : text)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const defaultOpen = condition.color === "#ff4f6d" || condition.color === "#ffb74d";
   const shortcutBtn = condition.shortcut
     ? `<button class="btn btn-sm" type="button" data-launch-shortcut="cond-${idx}" style="margin-top:.35rem;font-size:.7rem;padding:.18rem .5rem;">${escape(condition.shortcut.label || "前往")}</button>`
     : "";
   return `
-    <div class="health-metric-card" style="border-left:4px solid ${condition.color};">
-      <div class="health-metric-label">${escape(condition.label)}</div>
-      <div class="health-metric-value" style="color:${condition.color};">${escape(condition.value)}</div>
-      ${condition.hint ? `<div style="margin-top:.3rem;font-size:.7rem;color:var(--muted);">${escape(condition.hint)}</div>` : ""}
-      ${shortcutBtn}
-    </div>
+    <details class="drive-collapsible-panel settings-collapse" style="border-left:4px solid ${condition.color};"${defaultOpen ? " open" : ""}>
+      <summary>
+        <div>
+          <div class="drive-card-title">${escape(condition.label)}</div>
+          <div class="drive-card-sub">${escape(condition.value)}</div>
+        </div>
+        <span style="margin-left:auto;font-size:.78rem;color:${condition.color};font-weight:600;">${escape(condition.value)}</span>
+      </summary>
+      <div class="drive-collapsible-body">
+        ${condition.hint ? `<div style="font-size:.78rem;color:var(--muted);">${escape(condition.hint)}</div>` : ""}
+        ${shortcutBtn ? `<div style="margin-top:.45rem;">${shortcutBtn}</div>` : ""}
+      </div>
+    </details>
   `;
 }
 
@@ -3288,6 +3296,34 @@ function launchCheckMsg(text, ok = false) {
 }
 
 function launchCheckCardMarkup(reportType, reportRow, missing, failed, idx) {
+  const verificationReasonLabel = (reason) => {
+    switch (String(reason || "").trim()) {
+      case "missing_signature":
+        return "unsigned_report";
+      case "signature_mismatch":
+        return "signature_mismatch";
+      case "report_hash_mismatch":
+        return "report_hash_mismatch";
+      case "invalid_report_json":
+        return "invalid_report_json";
+      case "invalid_raw_report_json":
+        return "invalid_raw_report_json";
+      case "report_type_mismatch":
+        return "report_type_mismatch";
+      case "target_commit_mismatch":
+        return "target_commit_mismatch";
+      case "target_branch_mismatch":
+        return "target_branch_mismatch";
+      case "server_mode_mismatch":
+        return "server_mode_mismatch";
+      case "key_version_mismatch":
+        return "key_version_mismatch";
+      case "missing_raw_report_json":
+        return "missing_raw_report_json";
+      default:
+        return String(reason || "").trim() || "unknown_verification_error";
+    }
+  };
   const meta = LAUNCH_CHECK_REPORT_META[reportType] || {
     label: reportType,
     purpose: "（未登錄的 report 類型）",
@@ -3312,8 +3348,9 @@ function launchCheckCardMarkup(reportType, reportRow, missing, failed, idx) {
     if (reportRow && Number(reportRow.critical_findings_count || 0) > 0) reasons.push(`critical=${reportRow.critical_findings_count}`);
     if (reportRow && Number(reportRow.high_findings_count || 0) > 0) reasons.push(`high=${reportRow.high_findings_count}`);
     if (reportRow && !reportRow.report_hash) reasons.push("缺 report_hash");
-    if (reportRow && reportRow.signature_valid === false) reasons.push(`驗簽失敗${reportRow.verification_reason ? `(${reportRow.verification_reason})` : ""}`);
-    if (reportRow && String(reportRow.trust_level || "").trim() && String(reportRow.trust_level || "").trim() !== "verified") reasons.push(`trust=${reportRow.trust_level}`);
+    if (reportRow && reportRow.signature_valid === false) reasons.push(`驗簽失敗(${verificationReasonLabel(reportRow.verification_reason)})`);
+    if (reportRow && String(reportRow.trust_level || "").trim() && String(reportRow.trust_level || "").trim() !== "verified") reasons.push(`未驗證報告(${String(reportRow.trust_level || "").trim()})`);
+    if (reportRow && reportRow.target_match === false) reasons.push(`目標不符(${verificationReasonLabel(reportRow.target_verification_reason)})`);
     if (reasons.length) stateNote = `失敗原因：${reasons.join("、")}。修完後重跑並上傳新一份。`;
     else stateNote = "請看上傳的 report payload 內容，找出不通過的欄位。";
   } else if (reportRow) {
@@ -3322,27 +3359,32 @@ function launchCheckCardMarkup(reportType, reportRow, missing, failed, idx) {
   const escape = (text) => String(text == null ? "" : text)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const shortcut = meta.shortcut;
+  const defaultOpen = !!missing || !!failed;
   const shortcutBtn = shortcut
     ? `<button class="btn btn-sm" type="button" data-launch-shortcut="report-${idx}" style="margin-top:.5rem;font-size:.72rem;padding:.22rem .55rem;">${escape(shortcut.label || (shortcut.kind === "ui" ? "前往 UI" : "開啟 playbook"))}</button>`
     : "";
   const uploadBtn = `<button class="btn btn-sm" type="button" data-launch-upload="${escape(reportType)}" style="margin-top:.5rem;font-size:.72rem;padding:.22rem .55rem;">上傳報告</button>`;
   return `
-    <div class="security-profile-preview show" style="border-left:4px solid ${statusColor};padding-left:.7rem;">
-      <div style="display:flex;align-items:baseline;gap:.45rem;flex-wrap:wrap;">
-        <strong style="color:${statusColor};font-size:.95rem;">${statusIcon} ${escape(meta.label)}</strong>
-        <span style="font-size:.7rem;color:var(--muted);">${escape(reportType)}</span>
+    <details class="drive-collapsible-panel settings-collapse" style="border-left:4px solid ${statusColor};"${defaultOpen ? " open" : ""}>
+      <summary>
+        <div>
+          <div class="drive-card-title" style="color:${statusColor};">${statusIcon} ${escape(meta.label)}</div>
+          <div class="drive-card-sub">${escape(reportType)}${stateNote ? `｜${escape(stateNote)}` : ""}</div>
+        </div>
         <span style="margin-left:auto;font-size:.78rem;color:${statusColor};font-weight:600;">${escape(statusLabel)}</span>
+      </summary>
+      <div class="drive-collapsible-body">
+        <div style="color:var(--text);"><strong>用途</strong>：${escape(meta.purpose)}</div>
+        <div style="margin-top:.25rem;"><strong>產生方式</strong>：<code style="font-size:.7rem;">${escape(meta.generator)}</code></div>
+        ${meta.defaultOutput ? `<div style="margin-top:.25rem;"><strong>預設放置</strong>：<code style="font-size:.7rem;">${escape(meta.defaultOutput)}</code></div>` : ""}
+        <div style="margin-top:.25rem;"><strong>失敗對策</strong>：${escape(meta.tip)}</div>
+        ${stateNote ? `<div style="margin-top:.4rem;color:${statusColor};">⤷ ${escape(stateNote)}</div>` : ""}
+        <div style="display:flex;gap:.45rem;flex-wrap:wrap;align-items:center;">
+          ${shortcutBtn}
+          ${uploadBtn}
+        </div>
       </div>
-      <div style="margin-top:.35rem;color:var(--text);"><strong>用途</strong>：${escape(meta.purpose)}</div>
-      <div style="margin-top:.25rem;"><strong>產生方式</strong>：<code style="font-size:.7rem;">${escape(meta.generator)}</code></div>
-      ${meta.defaultOutput ? `<div style="margin-top:.25rem;"><strong>預設放置</strong>：<code style="font-size:.7rem;">${escape(meta.defaultOutput)}</code></div>` : ""}
-      <div style="margin-top:.25rem;"><strong>失敗對策</strong>：${escape(meta.tip)}</div>
-      ${stateNote ? `<div style="margin-top:.4rem;color:${statusColor};">⤷ ${escape(stateNote)}</div>` : ""}
-      <div style="display:flex;gap:.45rem;flex-wrap:wrap;align-items:center;">
-        ${shortcutBtn}
-        ${uploadBtn}
-      </div>
-    </div>
+    </details>
   `;
 }
 

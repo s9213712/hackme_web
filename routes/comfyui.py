@@ -50,6 +50,13 @@ from services.comfyui.workflows import (
     sanitize_workflow_json,
     workflow_json_to_pretty_text,
 )
+from services.comfyui.template import (
+    analyze_workflow_json,
+    build_ui_schema,
+    check_workflow_capability,
+    runtime_comfyui_dir,
+)
+from services.comfyui.template.seeding import SYSTEM_WORKFLOW_IDS
 from services.system.notifications import create_notification_if_enabled
 from services.storage.storage_albums import (
     add_album_file,
@@ -384,6 +391,7 @@ def register_comfyui_routes(app, deps):
                 description TEXT NOT NULL DEFAULT '',
                 visibility TEXT NOT NULL DEFAULT 'private',
                 is_official INTEGER NOT NULL DEFAULT 0,
+                system_bundle_id TEXT,
                 workflow_json TEXT NOT NULL,
                 workflow_hash TEXT NOT NULL DEFAULT '',
                 required_models_json TEXT NOT NULL DEFAULT '[]',
@@ -420,11 +428,16 @@ def register_comfyui_routes(app, deps):
             conn.execute("ALTER TABLE comfyui_workflow_presets ADD COLUMN published_by_user_id INTEGER")
         if "published_at" not in columns:
             conn.execute("ALTER TABLE comfyui_workflow_presets ADD COLUMN published_at TEXT")
+        if "system_bundle_id" not in columns:
+            conn.execute("ALTER TABLE comfyui_workflow_presets ADD COLUMN system_bundle_id TEXT")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_comfyui_workflow_presets_owner ON comfyui_workflow_presets(owner_user_id, updated_at DESC)"
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_comfyui_workflow_presets_official ON comfyui_workflow_presets(is_official, updated_at DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_comfyui_workflow_presets_system_bundle ON comfyui_workflow_presets(system_bundle_id)"
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_comfyui_workflow_runs_preset ON comfyui_workflow_runs(preset_id, created_at DESC)"
@@ -443,6 +456,7 @@ def register_comfyui_routes(app, deps):
             "description": row["description"] or "",
             "visibility": row["visibility"] or "private",
             "is_official": bool(row["is_official"]),
+            "system_bundle_id": row["system_bundle_id"] or "",
             "workflow_hash": row["workflow_hash"] or "",
             "required_models": _parse_json_field(row["required_models_json"], []) or [],
             "required_loras": _parse_json_field(row["required_loras_json"], []) or [],
@@ -519,6 +533,8 @@ def register_comfyui_routes(app, deps):
 
     def _list_workflow_presets(conn, *, actor, active_client=None):
         _ensure_comfyui_workflow_schema(conn)
+        if _sync_runtime_official_workflow_presets(conn):
+            conn.commit()
         rows = conn.execute(
             """
             SELECT *
@@ -538,6 +554,92 @@ def register_comfyui_routes(app, deps):
             recent_runs = _list_workflow_runs(conn, preset_id=row["id"], limit=3)
             items.append(_workflow_preset_summary(row, dependency_status=dependency_status, recent_runs=recent_runs, actor=actor))
         return items
+
+    def _official_workflow_owner_user_id(conn):
+        row = conn.execute(
+            "SELECT id FROM users WHERE username='root' ORDER BY id ASC LIMIT 1"
+        ).fetchone()
+        if row:
+            return int(row["id"])
+        row = conn.execute("SELECT id FROM users ORDER BY id ASC LIMIT 1").fetchone()
+        if row:
+            return int(row["id"])
+        return 1
+
+    def _sync_runtime_official_workflow_presets(conn):
+        _ensure_comfyui_workflow_schema(conn)
+        runtime_dir = runtime_comfyui_dir()
+        if not runtime_dir.is_dir():
+            return []
+
+        owner_user_id = _official_workflow_owner_user_id(conn)
+        bundle_rows = conn.execute(
+            """
+            SELECT *
+            FROM comfyui_workflow_presets
+            WHERE is_official=1
+            ORDER BY updated_at DESC, id DESC
+            """
+        ).fetchall()
+        by_bundle_id = {}
+        by_title = {}
+        by_hash = {}
+        for row in bundle_rows:
+            bundle_id = str(row["system_bundle_id"] or "").strip()
+            if bundle_id and bundle_id not in by_bundle_id:
+                by_bundle_id[bundle_id] = row
+            title = str(row["title"] or "").strip()
+            if title and title not in by_title:
+                by_title[title] = row
+            workflow_hash = str(row["workflow_hash"] or "").strip()
+            if workflow_hash and workflow_hash not in by_hash:
+                by_hash[workflow_hash] = row
+
+        synced = []
+        for bundle_id in SYSTEM_WORKFLOW_IDS:
+            bundle_dir = runtime_dir / bundle_id
+            workflow_path = bundle_dir / "workflow.json"
+            manifest_path = bundle_dir / "manifest.json"
+            if not workflow_path.is_file() or not manifest_path.is_file():
+                continue
+            try:
+                workflow_candidate = json.loads(workflow_path.read_text(encoding="utf-8"))
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            try:
+                workflow_payload = sanitize_workflow_json(workflow_candidate)
+            except WorkflowValidationError:
+                continue
+            manifest_bundle_id = str(manifest.get("id") or bundle_dir.name or "").strip()
+            if manifest_bundle_id != bundle_id:
+                continue
+            title = _safe_text(manifest.get("name") or bundle_id, 120)
+            description = _safe_text(manifest.get("description") or "", 1200)
+            default_params = manifest.get("default_params")
+            if not isinstance(default_params, dict):
+                default_params = workflow_payload.get("default_params") or {}
+            existing = (
+                by_bundle_id.get(bundle_id)
+                or by_hash.get(str(workflow_payload.get("workflow_hash") or "").strip())
+                or by_title.get(title)
+            )
+            update_actor_id = int(existing["owner_user_id"]) if existing else owner_user_id
+            preset_id = _upsert_workflow_preset(
+                conn,
+                preset_id=int(existing["id"]) if existing else None,
+                actor={"id": update_actor_id},
+                title=title,
+                description=description,
+                visibility="public",
+                workflow_payload=workflow_payload,
+                default_params=default_params,
+                is_official=True,
+                published_by_user_id=owner_user_id,
+                system_bundle_id=bundle_id,
+            )
+            synced.append({"bundle_id": bundle_id, "preset_id": int(preset_id)})
+        return synced
 
     def _normalize_workflow_default_params(data):
         candidate = data
@@ -562,7 +664,7 @@ def register_comfyui_routes(app, deps):
         default_params = parsed.get("default_params") or {}
         return parsed, default_params
 
-    def _upsert_workflow_preset(conn, *, preset_id=None, actor, title, description, visibility, workflow_payload, default_params, is_official=False, published_by_user_id=None):
+    def _upsert_workflow_preset(conn, *, preset_id=None, actor, title, description, visibility, workflow_payload, default_params, is_official=False, published_by_user_id=None, system_bundle_id=None):
         _ensure_comfyui_workflow_schema(conn)
         now = datetime.now().isoformat()
         workflow_json = workflow_payload["workflow_json"]
@@ -584,6 +686,7 @@ def register_comfyui_routes(app, deps):
             json.dumps(default_payload, ensure_ascii=False, sort_keys=True),
             int(published_by_user_id) if published_by_user_id else None,
             now if is_official else None,
+            str(system_bundle_id or "").strip() or None,
             now,
         )
         if preset_id is None:
@@ -593,8 +696,8 @@ def register_comfyui_routes(app, deps):
                     owner_user_id, title, description, visibility, is_official,
                     workflow_json, workflow_hash, required_models_json, required_loras_json,
                     required_controlnets_json, default_params_json, published_by_user_id,
-                    published_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    published_at, system_bundle_id, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     int(_actor_value(actor, "id")),
@@ -604,14 +707,14 @@ def register_comfyui_routes(app, deps):
             )
             return cur.lastrowid
         conn.execute(
-            """
-            UPDATE comfyui_workflow_presets
-            SET title=?, description=?, visibility=?, is_official=?, workflow_json=?, workflow_hash=?,
-                required_models_json=?, required_loras_json=?, required_controlnets_json=?,
-                default_params_json=?, published_by_user_id=?, published_at=?, updated_at=?
-            WHERE id=? AND owner_user_id=?
-            """,
-            (
+                """
+                UPDATE comfyui_workflow_presets
+                SET title=?, description=?, visibility=?, is_official=?, workflow_json=?, workflow_hash=?,
+                    required_models_json=?, required_loras_json=?, required_controlnets_json=?,
+                    default_params_json=?, published_by_user_id=?, published_at=?, system_bundle_id=?, updated_at=?
+                WHERE id=? AND owner_user_id=?
+                """,
+                (
                 *args,
                 int(preset_id),
                 int(_actor_value(actor, "id")),
@@ -4053,6 +4156,9 @@ def register_comfyui_routes(app, deps):
         "validate_generation_capabilities": _validate_generation_capabilities,
         "sanitize_workflow_json": sanitize_workflow_json,
         "workflow_json_to_pretty_text": workflow_json_to_pretty_text,
+        "analyze_workflow_json": analyze_workflow_json,
+        "build_ui_schema": build_ui_schema,
+        "check_workflow_capability": check_workflow_capability,
         "assert_workflow_dependencies_or_error": _assert_workflow_dependencies_or_error,
         "create_workflow_run": _create_workflow_run,
         "create_generation_job": _create_generation_job,

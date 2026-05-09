@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 SOURCE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEFAULT_GIT_REPO_DIR="$SOURCE_ROOT"
 RUN_ID="$(date +%Y%m%d_%H%M%S)"
 RUN_ROOT=""
 HOST="${HOST:-127.0.0.1}"
@@ -22,6 +23,11 @@ Purpose:
   Copy the repo to /tmp, initialize a development-friendly runtime, and launch
   server.py from the copied workspace so the repo never accumulates runtime or
   cache pollution.
+
+Important:
+  For server-mode / production-gate validation, HTML_LEARNING_GIT_REPO_DIR must
+  point at a real git repo with a readable .git directory. Do not point it at
+  the /tmp copied workspace unless that copy still preserves git metadata.
 
 Options:
   --host HOST              Default: 127.0.0.1
@@ -194,7 +200,13 @@ export HTML_LEARNING_ROOT_PASSWORD="$ROOT_PASSWORD"
 export HTML_LEARNING_MANAGER_PASSWORD="$MANAGER_PASSWORD"
 export HTML_LEARNING_TEST_PASSWORD="$TEST_PASSWORD"
 export HTML_LEARNING_DISABLE_DEFAULT_PASSWORD_POLICY=1
-export HTML_LEARNING_GIT_REPO_DIR="$COPY_ROOT"
+if [[ -z "${HTML_LEARNING_GIT_REPO_DIR:-}" ]]; then
+  if git -C "$DEFAULT_GIT_REPO_DIR" rev-parse HEAD >/dev/null 2>&1; then
+    export HTML_LEARNING_GIT_REPO_DIR="$DEFAULT_GIT_REPO_DIR"
+  else
+    export HTML_LEARNING_GIT_REPO_DIR="$COPY_ROOT"
+  fi
+fi
 export PYTHONPATH="$COPY_ROOT"
 export PYTHONPYCACHEPREFIX="$RUNTIME_ROOT/pycache"
 

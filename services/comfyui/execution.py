@@ -274,16 +274,27 @@ def generate_image(
     timeout_seconds=1800,
     progress_callback=None,
     build_generation_workflow_func,
+    generate_from_workflow_func=None,
     error_cls,
     websocket_module=None,
-    image_fetcher,
+    image_fetcher=None,
 ):
     workflow = build_generation_workflow_func(params)
+    expected_count = int(params.get("batch_size") or 1)
+    if generate_from_workflow_func is not None:
+        return generate_from_workflow_func(
+            workflow,
+            timeout_seconds=timeout_seconds,
+            expected_count=expected_count,
+            progress_callback=progress_callback,
+        )
+    if image_fetcher is None:
+        raise TypeError("generate_image() requires image_fetcher when generate_from_workflow_func is not provided")
     return generate_from_workflow(
         client,
         workflow,
         timeout_seconds=timeout_seconds,
-        expected_count=int(params.get("batch_size") or 1),
+        expected_count=expected_count,
         progress_callback=progress_callback,
         error_cls=error_cls,
         websocket_module=websocket_module,

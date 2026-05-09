@@ -35,6 +35,10 @@ Server Mode 等能力。
 - `./test_for_develop.sh`
   開發專用入口。它會先把 repo 複製到 `/tmp/.../hackme_web`，把開發用 runtime、
   cache、venv 都留在 `/tmp`，再從 `/tmp` 內的 `server.py` 啟動。
+  若你要驗 `server mode` / `production gate` 的 `target_commit` 規則，
+  `HTML_LEARNING_GIT_REPO_DIR` 必須指向**真實 git repo**，不可指向沒有 `.git`
+  的 `/tmp` copy；`test_for_develop.sh` 現在預設會保留 source repo 當 target
+  commit 來源。
 
 日常原則仍然不變：**不要直接在 repo 工作樹內啟 server 或 pytest**。
 請優先使用 `/tmp` 複本，避免 `runtime/`、cache、pycache 汙染 repo。

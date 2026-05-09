@@ -380,16 +380,24 @@ function launchCheckShortcutHandler(shortcut) {
 function launchCheckConditionMarkup(condition, idx) {
   const escape = (text) => String(text == null ? "" : text)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const defaultOpen = condition.color === "#ff4f6d" || condition.color === "#ffb74d";
   const shortcutBtn = condition.shortcut
     ? `<button class="btn btn-sm" type="button" data-launch-shortcut="cond-${idx}" style="margin-top:.35rem;font-size:.7rem;padding:.18rem .5rem;">${escape(condition.shortcut.label || "前往")}</button>`
     : "";
   return `
-    <div class="health-metric-card" style="border-left:4px solid ${condition.color};">
-      <div class="health-metric-label">${escape(condition.label)}</div>
-      <div class="health-metric-value" style="color:${condition.color};">${escape(condition.value)}</div>
-      ${condition.hint ? `<div style="margin-top:.3rem;font-size:.7rem;color:var(--muted);">${escape(condition.hint)}</div>` : ""}
-      ${shortcutBtn}
-    </div>
+    <details class="drive-collapsible-panel settings-collapse" style="border-left:4px solid ${condition.color};"${defaultOpen ? " open" : ""}>
+      <summary>
+        <div>
+          <div class="drive-card-title">${escape(condition.label)}</div>
+          <div class="drive-card-sub">${escape(condition.value)}</div>
+        </div>
+        <span style="margin-left:auto;font-size:.78rem;color:${condition.color};font-weight:600;">${escape(condition.value)}</span>
+      </summary>
+      <div class="drive-collapsible-body">
+        ${condition.hint ? `<div style="font-size:.78rem;color:var(--muted);">${escape(condition.hint)}</div>` : ""}
+        ${shortcutBtn ? `<div style="margin-top:.45rem;">${shortcutBtn}</div>` : ""}
+      </div>
+    </details>
   `;
 }
 
@@ -435,26 +443,31 @@ function launchCheckCardMarkup(reportType, reportRow, missing, failed, idx) {
   const escape = (text) => String(text == null ? "" : text)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const shortcut = meta.shortcut;
+  const defaultOpen = !!missing || !!failed;
   const shortcutBtn = shortcut
     ? `<button class="btn btn-sm" type="button" data-launch-shortcut="report-${idx}" style="margin-top:.5rem;font-size:.72rem;padding:.22rem .55rem;">${escape(shortcut.label || (shortcut.kind === "ui" ? "前往 UI" : "開啟 playbook"))}</button>`
     : "";
   const uploadBtn = `<button class="btn btn-sm" type="button" data-launch-upload="${escape(reportType)}" style="margin-top:.5rem;font-size:.72rem;padding:.22rem .55rem;">上傳報告</button>`;
   return `
-    <div class="security-profile-preview show" style="border-left:4px solid ${statusColor};padding-left:.7rem;">
-      <div style="display:flex;align-items:baseline;gap:.45rem;flex-wrap:wrap;">
-        <strong style="color:${statusColor};font-size:.95rem;">${statusIcon} ${escape(meta.label)}</strong>
-        <span style="font-size:.7rem;color:var(--muted);">${escape(reportType)}</span>
+    <details class="drive-collapsible-panel settings-collapse" style="border-left:4px solid ${statusColor};"${defaultOpen ? " open" : ""}>
+      <summary>
+        <div>
+          <div class="drive-card-title" style="color:${statusColor};">${statusIcon} ${escape(meta.label)}</div>
+          <div class="drive-card-sub">${escape(reportType)}${stateNote ? `｜${escape(stateNote)}` : ""}</div>
+        </div>
         <span style="margin-left:auto;font-size:.78rem;color:${statusColor};font-weight:600;">${escape(statusLabel)}</span>
+      </summary>
+      <div class="drive-collapsible-body">
+        <div style="color:var(--text);"><strong>用途</strong>：${escape(meta.purpose)}</div>
+        <div style="margin-top:.25rem;"><strong>產生方式</strong>：<code style="font-size:.7rem;">${escape(meta.generator)}</code></div>
+        <div style="margin-top:.25rem;"><strong>失敗對策</strong>：${escape(meta.tip)}</div>
+        ${stateNote ? `<div style="margin-top:.4rem;color:${statusColor};">⤷ ${escape(stateNote)}</div>` : ""}
+        <div style="display:flex;gap:.45rem;flex-wrap:wrap;align-items:center;">
+          ${shortcutBtn}
+          ${uploadBtn}
+        </div>
       </div>
-      <div style="margin-top:.35rem;color:var(--text);"><strong>用途</strong>：${escape(meta.purpose)}</div>
-      <div style="margin-top:.25rem;"><strong>產生方式</strong>：<code style="font-size:.7rem;">${escape(meta.generator)}</code></div>
-      <div style="margin-top:.25rem;"><strong>失敗對策</strong>：${escape(meta.tip)}</div>
-      ${stateNote ? `<div style="margin-top:.4rem;color:${statusColor};">⤷ ${escape(stateNote)}</div>` : ""}
-      <div style="display:flex;gap:.45rem;flex-wrap:wrap;align-items:center;">
-        ${shortcutBtn}
-        ${uploadBtn}
-      </div>
-    </div>
+    </details>
   `;
 }
 

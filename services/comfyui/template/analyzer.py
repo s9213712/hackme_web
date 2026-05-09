@@ -53,9 +53,21 @@ _FIELD_CATEGORY_TABLE: dict[tuple[str, str], FieldCategory] = {
     ("KSampler", "steps"): FieldCategory.NUMERIC,
     ("KSampler", "cfg"): FieldCategory.NUMERIC,
     ("KSampler", "denoise"): FieldCategory.NUMERIC,
+    ("KSampler", "control_after_generate"): FieldCategory.SAMPLER,
     # Sampler enum
     ("KSampler", "sampler_name"): FieldCategory.SAMPLER,
     ("KSampler", "scheduler"): FieldCategory.SAMPLER,
+    # Numeric / enum — KSamplerAdvanced
+    ("KSamplerAdvanced", "noise_seed"): FieldCategory.NUMERIC,
+    ("KSamplerAdvanced", "steps"): FieldCategory.NUMERIC,
+    ("KSamplerAdvanced", "cfg"): FieldCategory.NUMERIC,
+    ("KSamplerAdvanced", "start_at_step"): FieldCategory.NUMERIC,
+    ("KSamplerAdvanced", "end_at_step"): FieldCategory.NUMERIC,
+    ("KSamplerAdvanced", "add_noise"): FieldCategory.SAMPLER,
+    ("KSamplerAdvanced", "sampler_name"): FieldCategory.SAMPLER,
+    ("KSamplerAdvanced", "scheduler"): FieldCategory.SAMPLER,
+    ("KSamplerAdvanced", "return_with_leftover_noise"): FieldCategory.SAMPLER,
+    ("KSamplerAdvanced", "control_after_generate"): FieldCategory.SAMPLER,
     # Numeric — LoraLoader strengths
     ("LoraLoader", "strength_model"): FieldCategory.NUMERIC,
     ("LoraLoader", "strength_clip"): FieldCategory.NUMERIC,
@@ -153,9 +165,9 @@ def analyze_workflow_json(workflow: dict[str, Any]) -> WorkflowAnalysis:
     required_models: dict[str, list[str]] = {}
 
     for node_id, node in workflow.items():
-        if not isinstance(node_id, str) or not node_id.isdigit():
+        if not isinstance(node_id, str) or not node_id.strip():
             raise WorkflowValidationError(
-                f"workflow node id 必須為純數字字串：'{node_id}' 不合法"
+                f"workflow node id 必須是非空字串：'{node_id}' 不合法"
             )
         if not isinstance(node, dict):
             raise WorkflowValidationError(

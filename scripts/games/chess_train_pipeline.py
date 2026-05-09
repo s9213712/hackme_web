@@ -85,6 +85,9 @@ def _write_report(summary: dict) -> dict:
         f"- prepare_train_samples: `{summary['prepare'].get('accepted_train_samples', 0)}`",
         f"- prepare_eval_samples: `{summary['prepare'].get('accepted_eval_samples', 0)}`",
         f"- seed_games_played: `{summary['seed_train'].get('games_played', 0)}`",
+        f"- exp2_refine_samples: `{summary.get('exp2_refine', {}).get('accepted_samples', 0)}`",
+        f"- exp3_refine_samples: `{summary.get('exp3_refine', {}).get('accepted_samples', 0)}`",
+        f"- exp4_refine_samples: `{summary.get('exp4_refine', {}).get('accepted_samples', 0)}`",
         f"- benchmark_report: `{summary['benchmark'].get('reports', {}).get('json_report', '')}`",
         "",
         "## Stage / Promote",
@@ -159,6 +162,18 @@ def main() -> int:
         seed_cmd.extend(["--student-exploration-rate", str(float(args.student_exploration_rate))])
     seed_train = _run_json(seed_cmd)
 
+    exp2_refine = {"ok": False, "skipped": True, "reason": "exp2 refine not requested"}
+    if args.include_exp2 and int(prepare.get("accepted_train_samples") or 0) > 0:
+        exp2_cmd = [
+            sys.executable,
+            str(ROOT / "scripts" / "games" / "chess_exp2_dataset_train.py"),
+            "--input-jsonl",
+            str(dataset_paths["train"]),
+            "--model-path",
+            str(candidate_paths["experiment 2:nn"]),
+        ]
+        exp2_refine = _run_json(exp2_cmd)
+
     exp3_refine = {"ok": False, "skipped": True, "reason": "exp3 refine not requested"}
     if not args.skip_exp3 and not args.skip_exp3_refine and int(prepare.get("accepted_train_samples") or 0) > 0:
         exp3_cmd = [
@@ -172,7 +187,18 @@ def main() -> int:
             str(candidate_paths["experiment 3:dl replay"]),
         ]
         exp3_refine = _run_json(exp3_cmd)
-        exp3_refine["ok"] = True
+
+    exp4_refine = {"ok": False, "skipped": True, "reason": "exp4 refine not requested"}
+    if not args.skip_exp4 and int(prepare.get("accepted_train_samples") or 0) > 0:
+        exp4_cmd = [
+            sys.executable,
+            str(ROOT / "scripts" / "games" / "chess_exp4_dataset_train.py"),
+            "--input-jsonl",
+            str(dataset_paths["train"]),
+            "--model-path",
+            str(candidate_paths["experiment 4:pv"]),
+        ]
+        exp4_refine = _run_json(exp4_cmd)
 
     benchmark_cmd = [
         sys.executable,
@@ -260,7 +286,9 @@ def main() -> int:
         "recommendation": recommendation,
         "prepare": prepare,
         "seed_train": seed_train,
+        "exp2_refine": exp2_refine,
         "exp3_refine": exp3_refine,
+        "exp4_refine": exp4_refine,
         "benchmark": benchmark,
         "benchmark_report_path": benchmark_report_path,
         "candidate_paths": {key: str(value) for key, value in candidate_paths.items()},

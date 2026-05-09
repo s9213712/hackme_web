@@ -35,6 +35,7 @@ def register_user_routes(app, deps):
     ensure_user_official_room_membership = deps["ensure_user_official_room_membership"]
     get_client_ip = deps["get_client_ip"]
     get_current_user_ctx = deps["get_current_user_ctx"]
+    get_auth_db = deps.get("get_auth_db", deps["get_db"])
     get_db = deps["get_db"]
     get_ua = deps["get_ua"]
     hash_password = deps["hash_password"]
@@ -411,9 +412,9 @@ def register_user_routes(app, deps):
         except Exception:
             return {}
 
-    def active_session_map(conn):
+    def active_session_map(auth_conn):
         try:
-            session_cols = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+            session_cols = {r["name"] for r in auth_conn.execute("PRAGMA table_info(sessions)").fetchall()}
         except Exception:
             return {}
         if not {"user_id", "expires_at"}.issubset(session_cols):
@@ -423,7 +424,7 @@ def register_user_routes(app, deps):
         now_iso = datetime.now().isoformat()
         online_cutoff = (datetime.now() - timedelta(minutes=5)).isoformat()
         try:
-            rows = conn.execute(
+            rows = auth_conn.execute(
                 f"""
                 SELECT user_id, MAX({last_seen_expr}) AS last_seen, COUNT(*) AS session_count
                 FROM sessions
@@ -587,7 +588,7 @@ def register_user_routes(app, deps):
 
         token_hash = current_session_hash()
         now = datetime.now().isoformat()
-        conn = get_db()
+        conn = get_auth_db()
         try:
             rows = conn.execute(
                 "SELECT id, token_hash, ip_address, user_agent, device_info, ip_country, expires_at, is_revoked, revoked_at, last_seen, created_at "
@@ -625,7 +626,7 @@ def register_user_routes(app, deps):
             return json_resp({"ok":False,"msg":"帳號安全功能目前已關閉"}), 503
 
         token_hash = current_session_hash()
-        conn = get_db()
+        conn = get_auth_db()
         try:
             row = conn.execute(
                 "SELECT id, token_hash, is_revoked FROM sessions WHERE id=? AND user_id=?",
@@ -665,7 +666,7 @@ def register_user_routes(app, deps):
         if keep_current and token_hash:
             sql += " AND token_hash<>?"
             params.append(token_hash)
-        conn = get_db()
+        conn = get_auth_db()
         try:
             cur = conn.execute(sql, tuple(params))
             conn.commit()
@@ -712,7 +713,11 @@ def register_user_routes(app, deps):
                     f"FROM users{where} ORDER BY id ASC",
                     params,
                 ).fetchall()
-                sessions_by_user = active_session_map(conn)
+                auth_conn = get_auth_db()
+                try:
+                    sessions_by_user = active_session_map(auth_conn)
+                finally:
+                    auth_conn.close()
                 data = []
                 for r in rows:
                     item = user_public_payload(r, include_sensitive=False)

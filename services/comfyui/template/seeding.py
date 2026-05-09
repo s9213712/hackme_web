@@ -26,6 +26,14 @@ from typing import Iterable
 
 
 REPO_SOURCE_DIR = Path(__file__).resolve().parents[3] / "workflows" / "comfyui"
+SYSTEM_WORKFLOW_IDS = (
+    "txt2img_basic",
+    "img2img_basic",
+    "inpaint_basic",
+    "outpaint_basic",
+    "upscale_basic",
+    "controlnet_canny",
+)
 
 
 def _runtime_root() -> Path:
@@ -123,6 +131,7 @@ def list_runtime_workflows(*, runtime_root: Path | None = None) -> list[str]:
 
 __all__ = [
     "REPO_SOURCE_DIR",
+    "SYSTEM_WORKFLOW_IDS",
     "list_runtime_workflows",
     "runtime_comfyui_dir",
     "seed_default_comfyui_workflows",

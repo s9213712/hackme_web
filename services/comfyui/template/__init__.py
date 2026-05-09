@@ -55,6 +55,11 @@ from services.comfyui.template.preview_store import (
     reset_default_preview_store,
     set_default_preview_store,
 )
+from services.comfyui.template.normalize import (
+    convert_ui_graph_to_api_workflow,
+    is_ui_graph_workflow,
+    normalize_uploaded_workflow_json,
+)
 from services.comfyui.template.run_gate import (
     RunGateFailure,
     RunGateResult,
@@ -106,6 +111,9 @@ __all__ = [
     "reset_default_preview_store",
     "run_workflow_through_gates",
     "set_default_preview_store",
+    "convert_ui_graph_to_api_workflow",
+    "is_ui_graph_workflow",
+    "normalize_uploaded_workflow_json",
     "CORE_ALLOWLIST",
     "CONTROLNET_PREPROCESSOR_ALLOWLIST",
     "EXPLICIT_DENYLIST",

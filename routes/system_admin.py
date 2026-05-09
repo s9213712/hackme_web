@@ -1106,8 +1106,10 @@ def register_system_admin_routes(app, deps):
 
     SECURITY_SETTING_KEYS = (
         "maintenance_mode",
+        "allow_register",
         "server_ssl_enabled",
         "audit_chain_enabled",
+        "captcha_mode",
         "feature_audit_log_enabled",
         "ip_blocking_enabled",
         "login_violation_enabled",
@@ -1115,6 +1117,8 @@ def register_system_admin_routes(app, deps):
         "root_ip_whitelist_enabled",
         "root_ip_whitelist",
         "browser_only_mode_enabled",
+        "production_single_ip_account_lock_enabled",
+        "production_single_account_ip_lock_enabled",
         "integrity_guard_enabled",
         "integrity_guard_strict_mode",
         "feature_economy_enabled",
@@ -3309,6 +3313,7 @@ def register_system_admin_routes(app, deps):
             return error
 
         conn = get_db()
+        auth_conn = get_auth_db()
         try:
             now = datetime.utcnow()
             month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).strftime("%Y-%m-%d %H:%M:%S")

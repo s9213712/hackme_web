@@ -19,7 +19,7 @@ from services.comfyui.validation.rules import (
 )
 
 
-# §4.1 Core MVP allowlist (17 class types)
+# §4.1 Core MVP allowlist
 CORE_ALLOWLIST = frozenset(
     {
         # Loaders
@@ -38,6 +38,7 @@ CORE_ALLOWLIST = frozenset(
         "VAEEncodeForInpaint",
         # Sampling
         "KSampler",
+        "KSamplerAdvanced",
         # Decoders
         "VAEDecode",
         # ControlNet apply

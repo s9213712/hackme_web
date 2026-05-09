@@ -33,6 +33,8 @@ def test_live_report_helper_covers_all_required_report_types_and_runtime_outputs
     assert "trading_stress_pentest.py" in helper
     assert "args.target_root_password" not in helper
     assert '"ROOT_PASSWORD": args.root_password' in helper
+    assert '"USER_A_USERNAME": "test"' in helper
+    assert '"USER_B_USERNAME": "admin"' in helper
     assert "rotate_to=args.root_new_password" in helper
     assert "rerun with --root-new-password" in helper
     assert "--server-mode-timeout" in helper
@@ -44,6 +46,15 @@ def test_live_report_helper_covers_all_required_report_types_and_runtime_outputs
     assert "client.fetch_csrf()" in helper
     assert "MODE_CONFIRM_PHRASES" in helper
     assert "functional_port" in helper
+    assert '{"production", "internal_test", "test", "dev_ready"}' in helper
+    assert '_switch_live_mode(client, "dev_ready", notes="go_live trading stress precheck")' in helper
+
+
+def test_integrity_report_refreshes_csrf_before_mutating_calls():
+    helper_source = (ROOT / "scripts" / "security" / "gate" / "on_live_reports_make.py").read_text(encoding="utf-8")
+
+    assert "client.fetch_csrf()\n    review_status, review_payload, _ = client._request(\n        \"/api/root/integrity/findings/bulk-review\"" in helper_source
+    assert "client.fetch_csrf()\n    rescan_status, rescan_payload, _ = client._request(\"/api/root/integrity/rescan\", method=\"POST\", body={})" in helper_source
 
 
 def test_docs_and_frontend_expose_the_same_canonical_production_gate_paths():
@@ -133,3 +144,47 @@ def test_pick_available_port_falls_back_when_preferred_is_busy(monkeypatch):
     chosen = helper._pick_available_port(50741)
 
     assert chosen == 54321
+
+
+def test_make_payload_uses_meta_server_mode_by_default(tmp_path):
+    captured = {}
+
+    class _Signer:
+        def build(self, **kwargs):
+            captured.update(kwargs)
+            return {
+                "report_type": kwargs["report_type"],
+                "test_result": kwargs["test_result"],
+                "pass": kwargs["passed"],
+                "report_hash": "sha256:" + ("a" * 64),
+                "key_version": "local-dev-v1",
+                "target_branch": kwargs["target_branch"],
+                "target_commit": kwargs["target_commit"],
+                "server_mode": kwargs["server_mode"],
+                "report_source": kwargs["report_source"],
+                "raw_report": kwargs["raw_report"],
+            }
+
+    payload = helper._make_payload(
+        "clean_smoke",
+        {
+            "report_type": "clean_smoke",
+            "status": "pass",
+            "summary": "ok",
+            "artifacts": {},
+        },
+        passed=True,
+        tester="tests/scripts/security/test_on_live_reports_make_script.py",
+        report_source="tests/scripts/security/test_on_live_reports_make_script.py",
+        meta={
+            "target_commit": "deadbeef",
+            "target_branch": "main",
+            "server_mode": "dev_ready",
+        },
+        canonical_json=tmp_path / "clean_smoke_report.json",
+        canonical_md=tmp_path / "clean_smoke_report.md",
+        signer=_Signer(),
+    )
+
+    assert captured["server_mode"] == "dev_ready"
+    assert payload["server_mode"] == "dev_ready"

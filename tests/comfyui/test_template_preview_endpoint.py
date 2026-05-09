@@ -38,14 +38,158 @@ TXT2IMG = {
     "9": {"class_type": "SaveImage", "inputs": {"filename_prefix": "ComfyUI", "images": ["8", 0]}},
 }
 
+TXT2IMG_NON_DIGIT_IDS = {
+    "ckpt_main": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "v1-5.safetensors"}},
+    "latent_base": {"class_type": "EmptyLatentImage", "inputs": {"width": 512, "height": 512, "batch_size": 1}},
+    "prompt_pos": {"class_type": "CLIPTextEncode", "inputs": {"text": "cat", "clip": ["ckpt_main", 1]}},
+    "prompt_neg": {"class_type": "CLIPTextEncode", "inputs": {"text": "low quality", "clip": ["ckpt_main", 1]}},
+    "ksampler_main": {
+        "class_type": "KSampler",
+        "inputs": {
+            "seed": 0, "steps": 20, "cfg": 7.5, "denoise": 1.0,
+            "sampler_name": "euler", "scheduler": "normal",
+            "model": ["ckpt_main", 0], "positive": ["prompt_pos", 0], "negative": ["prompt_neg", 0], "latent_image": ["latent_base", 0],
+        },
+    },
+    "vae_decode": {"class_type": "VAEDecode", "inputs": {"samples": ["ksampler_main", 0], "vae": ["ckpt_main", 2]}},
+    "save_image": {"class_type": "SaveImage", "inputs": {"filename_prefix": "ComfyUI", "images": ["vae_decode", 0]}},
+}
+
+UI_GRAPH_TXT2IMG_ADV = {
+    "id": "demo-ui-graph",
+    "revision": 0,
+    "last_node_id": 19,
+    "last_link_id": 50,
+    "nodes": [
+        {
+            "id": 17,
+            "type": "VAEDecode",
+            "inputs": [
+                {"name": "samples", "type": "LATENT", "link": 49},
+                {"name": "vae", "type": "VAE", "link": 50},
+            ],
+            "outputs": [{"name": "IMAGE", "type": "IMAGE", "slot_index": 0, "links": [28]}],
+            "widgets_values": [],
+        },
+        {
+            "id": 7,
+            "type": "CLIPTextEncode",
+            "inputs": [
+                {"name": "clip", "type": "CLIP", "link": 5},
+                {"name": "text", "type": "STRING", "widget": {"name": "text"}, "link": 46},
+            ],
+            "outputs": [{"name": "CONDITIONING", "type": "CONDITIONING", "slot_index": 0, "links": [12]}],
+            "widgets_values": ["low quality"],
+        },
+        {
+            "id": 39,
+            "type": "Note",
+            "inputs": [],
+            "outputs": [],
+            "widgets_values": ["skip me"],
+        },
+        {
+            "id": 50,
+            "type": "PrimitiveNode",
+            "inputs": [],
+            "outputs": [{"name": "STRING", "type": "STRING", "widget": {"name": "text"}, "slot_index": 0, "links": [46]}],
+            "widgets_values": ["low quality"],
+        },
+        {
+            "id": 4,
+            "type": "CheckpointLoaderSimple",
+            "inputs": [{"name": "ckpt_name", "type": "COMBO", "widget": {"name": "ckpt_name"}, "link": None}],
+            "outputs": [
+                {"name": "MODEL", "type": "MODEL", "slot_index": 0, "links": [10]},
+                {"name": "CLIP", "type": "CLIP", "slot_index": 1, "links": [3, 5]},
+                {"name": "VAE", "type": "VAE", "slot_index": 2, "links": [50]},
+            ],
+            "widgets_values": ["sd_xl_base_1.0.safetensors"],
+        },
+        {
+            "id": 6,
+            "type": "CLIPTextEncode",
+            "inputs": [
+                {"name": "clip", "type": "CLIP", "link": 3},
+                {"name": "text", "type": "STRING", "widget": {"name": "text"}, "link": 45},
+            ],
+            "outputs": [{"name": "CONDITIONING", "type": "CONDITIONING", "slot_index": 0, "links": [11]}],
+            "widgets_values": ["a happy cat"],
+        },
+        {
+            "id": 19,
+            "type": "SaveImage",
+            "inputs": [
+                {"name": "images", "type": "IMAGE", "link": 28},
+                {"name": "filename_prefix", "type": "STRING", "widget": {"name": "filename_prefix"}, "link": None},
+            ],
+            "outputs": [],
+            "widgets_values": ["ComfyUI"],
+        },
+        {
+            "id": 5,
+            "type": "EmptyLatentImage",
+            "inputs": [
+                {"name": "width", "type": "INT", "widget": {"name": "width"}, "link": None},
+                {"name": "height", "type": "INT", "widget": {"name": "height"}, "link": None},
+                {"name": "batch_size", "type": "INT", "widget": {"name": "batch_size"}, "link": None},
+            ],
+            "outputs": [{"name": "LATENT", "type": "LATENT", "slot_index": 0, "links": [27]}],
+            "widgets_values": [1024, 1024, 1],
+        },
+        {
+            "id": 10,
+            "type": "KSamplerAdvanced",
+            "inputs": [
+                {"name": "model", "type": "MODEL", "link": 10},
+                {"name": "positive", "type": "CONDITIONING", "link": 11},
+                {"name": "negative", "type": "CONDITIONING", "link": 12},
+                {"name": "latent_image", "type": "LATENT", "link": 27},
+                {"name": "add_noise", "type": "COMBO", "widget": {"name": "add_noise"}, "link": None},
+                {"name": "noise_seed", "type": "INT", "widget": {"name": "noise_seed"}, "link": None},
+                {"name": "steps", "type": "INT", "widget": {"name": "steps"}, "link": None},
+                {"name": "cfg", "type": "FLOAT", "widget": {"name": "cfg"}, "link": None},
+                {"name": "sampler_name", "type": "COMBO", "widget": {"name": "sampler_name"}, "link": None},
+                {"name": "scheduler", "type": "COMBO", "widget": {"name": "scheduler"}, "link": None},
+                {"name": "start_at_step", "type": "INT", "widget": {"name": "start_at_step"}, "link": None},
+                {"name": "end_at_step", "type": "INT", "widget": {"name": "end_at_step"}, "link": None},
+                {"name": "return_with_leftover_noise", "type": "COMBO", "widget": {"name": "return_with_leftover_noise"}, "link": None},
+            ],
+            "outputs": [{"name": "LATENT", "type": "LATENT", "slot_index": 0, "links": [49]}],
+            "widgets_values": ["enable", 123456789, "randomize", 30, 6.5, "euler", "normal", 0, 30, "disable"],
+        },
+        {
+            "id": 51,
+            "type": "PrimitiveNode",
+            "inputs": [],
+            "outputs": [{"name": "STRING", "type": "STRING", "widget": {"name": "text"}, "slot_index": 0, "links": [45]}],
+            "widgets_values": ["a happy cat"],
+        },
+    ],
+    "links": [
+        [3, 4, 1, 6, 0, "CLIP"],
+        [5, 4, 1, 7, 0, "CLIP"],
+        [10, 4, 0, 10, 0, "MODEL"],
+        [11, 6, 0, 10, 1, "CONDITIONING"],
+        [12, 7, 0, 10, 2, "CONDITIONING"],
+        [27, 5, 0, 10, 3, "LATENT"],
+        [28, 17, 0, 19, 0, "IMAGE"],
+        [45, 51, 0, 6, 1, "STRING"],
+        [46, 50, 0, 7, 1, "STRING"],
+        [49, 10, 0, 17, 0, "LATENT"],
+        [50, 4, 2, 17, 1, "VAE"],
+    ],
+}
+
 
 def _stub_client(*, classes, models=None, samplers=None):
     info = {cls: {"input": {"required": {}}} for cls in classes}
     if "CheckpointLoaderSimple" in info and models is not None:
         info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"] = [list(models)]
-    if "KSampler" in info:
-        info["KSampler"]["input"]["required"]["sampler_name"] = [list(samplers or ["euler", "dpmpp_2m"])]
-        info["KSampler"]["input"]["required"]["scheduler"] = [["normal", "karras"]]
+    for class_type in ("KSampler", "KSamplerAdvanced"):
+        if class_type in info:
+            info[class_type]["input"]["required"]["sampler_name"] = [list(samplers or ["euler", "dpmpp_2m"])]
+            info[class_type]["input"]["required"]["scheduler"] = [["normal", "karras"]]
 
     class _Stub:
         base_url = "http://stub"
@@ -135,6 +279,19 @@ def test_preview_accepts_workflow_text_string():
     assert rv.status_code == 200
 
 
+def test_preview_accepts_non_digit_string_node_ids():
+    store = InMemoryPreviewStore()
+    client = _stub_client(
+        classes={"CheckpointLoaderSimple", "EmptyLatentImage", "CLIPTextEncode", "KSampler", "VAEDecode", "SaveImage"},
+        models=["v1-5.safetensors"],
+    )
+    app = _build_app(client=client, store=store)
+    with app.test_client() as c:
+        rv = c.post("/api/comfyui/templates/preview", json={"workflow": TXT2IMG_NON_DIGIT_IDS})
+    assert rv.status_code == 200
+    assert rv.get_json()["ok"] is True
+
+
 def test_preview_accepts_multipart_upload():
     store = InMemoryPreviewStore()
     client = _stub_client(
@@ -155,17 +312,35 @@ def test_preview_accepts_multipart_upload():
     assert rv.get_json()["ok"] is True
 
 
-def test_preview_rejects_ui_graph_format():
-    """UI graph (`{"nodes":[...]}`) must be rejected with the format hint."""
+def test_preview_accepts_ui_graph_format_and_converts_to_api_workflow():
     store = InMemoryPreviewStore()
-    app = _build_app(client=_stub_client(classes={"KSampler"}), store=store)
-    ui_graph_workflow = {"nodes": [{"id": 1, "type": "CLIPTextEncode"}], "links": []}
+    app = _build_app(
+        client=_stub_client(
+            classes={"CheckpointLoaderSimple", "EmptyLatentImage", "CLIPTextEncode", "KSamplerAdvanced", "VAEDecode", "SaveImage"},
+            models=["sd_xl_base_1.0.safetensors"],
+        ),
+        store=store,
+    )
     with app.test_client() as c:
-        rv = c.post("/api/comfyui/templates/preview", json={"workflow": ui_graph_workflow})
-    assert rv.status_code == 400
+        rv = c.post("/api/comfyui/templates/preview", json={"workflow": UI_GRAPH_TXT2IMG_ADV})
+    assert rv.status_code == 200
     body = rv.get_json()
-    assert body["ok"] is False
-    assert body["stage"] == "sanitize"
+    assert body["ok"] is True
+    stored = store.get(token=body["preview_token"], user_id=1)
+    assert stored is not None
+    workflow = stored.payload["workflow"]
+    assert workflow["6"]["class_type"] == "CLIPTextEncode"
+    assert workflow["6"]["inputs"]["text"] == "a happy cat"
+    assert workflow["7"]["inputs"]["text"] == "low quality"
+    assert workflow["10"]["class_type"] == "KSamplerAdvanced"
+    assert workflow["10"]["inputs"]["noise_seed"] == 123456789
+    assert workflow["10"]["inputs"]["steps"] == 30
+    assert workflow["10"]["inputs"]["cfg"] == 6.5
+    assert workflow["10"]["inputs"]["sampler_name"] == "euler"
+    assert workflow["10"]["inputs"]["return_with_leftover_noise"] == "disable"
+    assert "39" not in workflow
+    assert "50" not in workflow
+    assert "51" not in workflow
 
 
 def test_preview_rejects_explicitly_denied_class():

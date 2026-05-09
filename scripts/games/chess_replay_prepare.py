@@ -46,6 +46,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", default="")
     parser.add_argument("--train-path", default="")
     parser.add_argument("--eval-path", default="")
+    parser.add_argument("--source-stage-label", default="final")
     parser.add_argument("--min-move-count", type=int, default=8)
     parser.add_argument("--eval-mod", type=int, default=5, help="Deterministic split: replay hash %% eval_mod == 0 goes to eval.")
     parser.add_argument("--include-losing-moves", action="store_true")
@@ -105,6 +106,7 @@ def _prepared_samples_from_record(
     include_losing_moves: bool,
     from_quarantine: bool,
     eval_mod: int,
+    source_stage_label: str,
 ) -> list[PreparedSample]:
     if int(record.get("move_count") or 0) <= 0:
         return []
@@ -116,7 +118,7 @@ def _prepared_samples_from_record(
     bucket = _split_bucket(str(record.get("replay_id") or ""), int(eval_mod or 1))
     source_label = "user_games_quarantine" if from_quarantine else "user_games_trusted"
     samples: list[PreparedSample] = []
-    for entry in history:
+    for move_index, entry in enumerate(history, start=1):
         if not isinstance(entry, dict):
             continue
         move_side = str(entry.get("by") or "").strip().lower()
@@ -136,8 +138,13 @@ def _prepared_samples_from_record(
                 "side": move_side,
                 "target": target,
                 "weight": _source_weight(record, from_quarantine=from_quarantine),
+                "quality_weight": _source_weight(record, from_quarantine=from_quarantine),
                 "source": source_label,
                 "replay_id": str(record.get("replay_id") or ""),
+                "source_game_id": int(record.get("match_id") or 0),
+                "source_move_index": int(move_index),
+                "source_stage": str(source_stage_label or "final"),
+                "accepted_reason": "trusted_replay" if not from_quarantine else "quarantine_override",
             }
             samples.append(PreparedSample(sample=sample, bucket=bucket))
         board = validated["board"]
@@ -208,6 +215,7 @@ def main() -> int:
             include_losing_moves=bool(args.include_losing_moves),
             from_quarantine=False,
             eval_mod=int(args.eval_mod or 1),
+            source_stage_label=str(args.source_stage_label or "final"),
         )
         if not prepared:
             mark_skip("trusted_no_samples")
@@ -229,6 +237,7 @@ def main() -> int:
                 include_losing_moves=bool(args.include_losing_moves),
                 from_quarantine=True,
                 eval_mod=int(args.eval_mod or 1),
+                source_stage_label=str(args.source_stage_label or "final"),
             )
             if not prepared:
                 mark_skip("quarantine_no_samples")
@@ -251,6 +260,7 @@ def main() -> int:
         "trusted_replay_path": str(trusted_path),
         "quarantine_replay_path": str(quarantine_path),
         "include_quarantine": bool(args.include_quarantine),
+        "source_stage_label": str(args.source_stage_label or "final"),
         "trusted_replays_seen": trusted_seen,
         "quarantine_replays_seen": quarantine_seen,
         "accepted_train_samples": len(train_rows),

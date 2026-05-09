@@ -2,6 +2,8 @@ import base64
 import hashlib
 import os
 import re
+import sqlite3
+import time
 from datetime import datetime, timedelta
 
 import argon2
@@ -41,6 +43,8 @@ def register_public_routes(app, deps):
     decrypt_field = deps["decrypt_field"]
     encrypt_field = deps["encrypt_field"]
     ensure_user_official_room_membership = deps["ensure_user_official_room_membership"]
+    get_auth_db = deps.get("get_auth_db", deps["get_db"])
+    get_control_db = deps.get("get_control_db", deps["get_db"])
     get_client_ip = deps["get_client_ip"]
     get_current_user_ctx = deps["get_current_user_ctx"]
     get_db = deps["get_db"]
@@ -59,6 +63,7 @@ def register_public_routes(app, deps):
     parse_birthdate = deps["parse_birthdate"]
     points_service = deps.get("points_service")
     record_login_failure = deps["record_login_failure"]
+    record_login_attempt = deps.get("record_login_attempt")
     record_security_event = deps["record_security_event"]
     require_csrf = deps["require_csrf"]
     require_csrf_safe = deps["require_csrf_safe"]
@@ -111,11 +116,20 @@ def register_public_routes(app, deps):
 
     def current_server_mode(conn):
         try:
-            row = conn.execute("SELECT current_mode FROM server_modes WHERE id=1").fetchone()
+            control_conn = get_control_db()
+            try:
+                row = control_conn.execute("SELECT current_mode FROM server_modes WHERE id=1").fetchone()
+            finally:
+                control_conn.close()
             mode = str(row["current_mode"] or "test").strip().lower() if row else "test"
             return "dev_ready" if mode == "preprod" else mode
         except Exception:
-            return "test"
+            try:
+                row = conn.execute("SELECT current_mode FROM server_modes WHERE id=1").fetchone()
+                mode = str(row["current_mode"] or "test").strip().lower() if row else "test"
+                return "dev_ready" if mode == "preprod" else mode
+            except Exception:
+                return "test"
 
     def login_autofill_block_enabled():
         return bool(get_system_settings().get("login_autofill_block_enabled", False))
@@ -162,16 +176,15 @@ def register_public_routes(app, deps):
             bound_user_id = 0
         return not bound_user_id or int(user_id) == bound_user_id
 
-    def production_login_conflict(conn, user_id, ip, now_iso, settings):
-        if current_server_mode(conn) != "production":
+    def production_login_conflict(main_conn, auth_conn, user_id, ip, now_iso, settings):
+        if current_server_mode(main_conn) != "production":
             return None
         try:
             if bool(settings.get("production_single_ip_account_lock_enabled", False)):
-                ip_conflict = conn.execute(
+                ip_conflict = auth_conn.execute(
                     """
-                    SELECT s.user_id, u.username
+                    SELECT s.user_id
                     FROM sessions s
-                    LEFT JOIN users u ON u.id=s.user_id
                     WHERE COALESCE(s.is_revoked, 0)=0
                       AND s.expires_at>?
                       AND s.ip_address=?
@@ -181,13 +194,18 @@ def register_public_routes(app, deps):
                     (now_iso, ip, user_id),
                 ).fetchone()
                 if ip_conflict:
+                    conflict_user_id = int(ip_conflict["user_id"])
+                    conflict_user = main_conn.execute(
+                        "SELECT username FROM users WHERE id=?",
+                        (conflict_user_id,),
+                    ).fetchone()
                     return {
                         "kind": "ip_reused_by_other_account",
                         "msg": "正式上線模式禁止同一 IP 同時登入多個帳號，請先登出原帳號",
-                        "detail": f"active_user_id={ip_conflict['user_id']},active_username={ip_conflict['username'] or '-'}",
+                        "detail": f"active_user_id={conflict_user_id},active_username={(conflict_user['username'] if conflict_user else '-')}",
                     }
             if bool(settings.get("production_single_account_ip_lock_enabled", False)):
-                account_conflict = conn.execute(
+                account_conflict = auth_conn.execute(
                     """
                     SELECT ip_address
                     FROM sessions
@@ -213,6 +231,29 @@ def register_public_routes(app, deps):
                 "detail": f"error={exc}",
             }
         return None
+
+    def sync_official_room_membership(user_id):
+        last_exc = None
+        for _ in range(3):
+            room_conn = get_db()
+            try:
+                ensure_user_official_room_membership(room_conn, user_id)
+                room_conn.commit()
+                return True
+            except sqlite3.OperationalError as exc:
+                last_exc = exc
+                try:
+                    room_conn.rollback()
+                except Exception:
+                    pass
+                if "locked" not in str(exc).lower():
+                    raise
+                time.sleep(0.1)
+            finally:
+                room_conn.close()
+        if last_exc is not None:
+            audit("LOGIN_ROOM_MEMBERSHIP_FAILED", "-", detail=f"user_id={user_id};{last_exc}")
+        return False
 
     def find_recovery_user(conn, identifier):
         ident = str(identifier or "").strip()
@@ -383,7 +424,7 @@ def register_public_routes(app, deps):
                     "site_key": settings.get("captcha_turnstile_site_key", ""),
                 },
             })
-        conn = get_db()
+        conn = get_auth_db()
         try:
             challenge = create_captcha_challenge(
                 conn,
@@ -422,7 +463,7 @@ def register_public_routes(app, deps):
             audit("REGISTER_EMPTY", ip, ua=ua)
             return json_resp({"ok": False, "msg": "註冊資料格式錯誤", "field": "request_body"}), 400
 
-        conn = get_db()
+        conn = get_auth_db()
         try:
             captcha_ok, captcha_msg = verify_captcha_response(conn, settings, data, ip=ip)
             if captcha_ok:
@@ -611,21 +652,31 @@ def register_public_routes(app, deps):
                     return json_resp({"ok":False,"msg":"登入失敗（帳號或密碼錯誤）"}), 401
                 if current_server_mode(conn) == "internal_test" and user_row["username"] != "root":
                     if not internal_test_login_allowed(conn, settings, data, user_row["id"]):
-                        conn.execute(
-                            "INSERT INTO login_attempts (user_id, ip_address, user_agent, success, attempted_at) VALUES (?, ?, ?, 0, ?)",
-                            (user_row["id"], ip, ua, now),
-                        )
-                        conn.commit()
+                        if callable(record_login_attempt):
+                            record_login_attempt(
+                                user_id=user_row["id"],
+                                ip_address=ip,
+                                user_agent=ua,
+                                success=False,
+                                attempted_at=now,
+                            )
                         audit("LOGIN_INTERNAL_TEST_TOKEN_REQUIRED", ip, username, ua=ua, success=False)
                         return json_resp({"ok":False,"msg":"目前是內測模式，請輸入 root 提供的內測 token"}), 403
 
-                conflict = production_login_conflict(conn, user_row["id"], ip, now, settings)
+                auth_conn = get_auth_db()
+                try:
+                    conflict = production_login_conflict(conn, auth_conn, user_row["id"], ip, now, settings)
+                finally:
+                    auth_conn.close()
                 if conflict:
-                    conn.execute(
-                        "INSERT INTO login_attempts (user_id, ip_address, user_agent, success, attempted_at) VALUES (?, ?, ?, 0, ?)",
-                        (user_row["id"], ip, ua, now),
-                    )
-                    conn.commit()
+                    if callable(record_login_attempt):
+                        record_login_attempt(
+                            user_id=user_row["id"],
+                            ip_address=ip,
+                            user_agent=ua,
+                            success=False,
+                            attempted_at=now,
+                        )
                     audit(
                         "LOGIN_PRODUCTION_SESSION_CONFLICT",
                         ip,
@@ -637,10 +688,14 @@ def register_public_routes(app, deps):
                     return json_resp({"ok":False,"msg":conflict["msg"]}), 403
 
                 # Log successful attempt
-                conn.execute(
-                    "INSERT INTO login_attempts (user_id, ip_address, user_agent, success, attempted_at) VALUES (?, ?, ?, 1, ?)",
-                    (user_row["id"], ip, ua, now)
-                )
+                if callable(record_login_attempt):
+                    record_login_attempt(
+                        user_id=user_row["id"],
+                        ip_address=ip,
+                        user_agent=ua,
+                        success=True,
+                        attempted_at=now,
+                    )
                 if account_security_enabled:
                     conn.execute(
                         "UPDATE users SET failed_login_count=0, locked_until=NULL, last_login_at=?, updated_at=? WHERE id=?",
@@ -661,8 +716,7 @@ def register_public_routes(app, deps):
                 # Create token + save session to DB
                 token = make_token(username)
                 db_save_session(user_row["id"], token, ip, ua)
-                ensure_user_official_room_membership(conn, user_row["id"])
-                conn.commit()
+                sync_official_room_membership(user_row["id"])
 
                 audit("LOGIN_OK", ip, username, ua=ua, success=True)
                 resp = json_resp({
@@ -684,11 +738,14 @@ def register_public_routes(app, deps):
             else:
                 # Log failed attempt
                 user_id_for_log = user_row["id"] if user_row else None
-                conn.execute(
-                    "INSERT INTO login_attempts (user_id, ip_address, user_agent, success, attempted_at) VALUES (?, ?, ?, 0, ?)",
-                    (user_id_for_log, ip, ua, now)
-                )
-                conn.commit()
+                if callable(record_login_attempt):
+                    record_login_attempt(
+                        user_id=user_id_for_log,
+                        ip_address=ip,
+                        user_agent=ua,
+                        success=False,
+                        attempted_at=now,
+                    )
                 if account_security_enabled and user_row:
                     fail_count = int(user_row["failed_login_count"] or 0) + 1
                     lock_limit = max(1, int(settings.get("max_login_failures", 5)))

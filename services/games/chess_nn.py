@@ -400,9 +400,9 @@ def choose_experiment_nn_move(board_state, side: str, *, model_path=None):
     }
 
 
-def _train_single_sample(model: dict, features: list[float], target: float) -> None:
+def _train_single_sample(model: dict, features: list[float], target: float, weight: float = 1.0) -> None:
     prediction, hidden = _forward(model, features)
-    delta_out = (float(target) - float(prediction)) * (1.0 - float(prediction) * float(prediction))
+    delta_out = (float(target) - float(prediction)) * (1.0 - float(prediction) * float(prediction)) * float(weight)
     hidden_deltas = []
     for weight, hidden_value in zip(model["w2"], hidden):
         hidden_deltas.append((1.0 - hidden_value * hidden_value) * float(weight) * delta_out)
@@ -416,6 +416,100 @@ def _train_single_sample(model: dict, features: list[float], target: float) -> N
         model["b1"][row_index] = _clip(float(model["b1"][row_index]) + _LEARNING_RATE * delta_hidden, -_MAX_ABS_WEIGHT, _MAX_ABS_WEIGHT)
     model["sample_count"] = int(model.get("sample_count") or 0) + 1
     model["updated_at"] = _now()
+
+
+def build_experiment_nn_sample_from_position(
+    *,
+    fen: str,
+    move_uci: str,
+    side: str | None = None,
+    target: float = 1.0,
+    weight: float = 1.0,
+    source: str = "external",
+) -> dict | None:
+    fen_text = str(fen or "").strip()
+    move_text = str(move_uci or "").strip().lower()
+    if not fen_text or not move_text:
+        return None
+    try:
+        board_before = chess.Board(fen_text)
+    except Exception:
+        return None
+    mover = str(side or ("white" if board_before.turn == chess.WHITE else "black")).strip().lower()
+    if mover not in {"white", "black"}:
+        return None
+    target_turn = chess.WHITE if mover == "white" else chess.BLACK
+    if board_before.turn != target_turn:
+        board_before.turn = target_turn
+    try:
+        move = chess.Move.from_uci(move_text)
+    except Exception:
+        return None
+    if move not in board_before.legal_moves:
+        return None
+    board_after = board_before.copy(stack=False)
+    board_after.push(move)
+    return {
+        "features": _candidate_features(board_before, move, board_after, mover),
+        "target": _clip(float(target), -1.0, 1.0),
+        "weight": _clip(float(weight), 0.1, 3.0),
+        "source": str(source or "external"),
+    }
+
+
+def normalize_experiment_nn_replay_sample(sample: dict) -> dict | None:
+    if not isinstance(sample, dict):
+        return None
+    features = _normalize_float_vector(sample.get("features"), _input_size())
+    if features is None:
+        return build_experiment_nn_sample_from_position(
+            fen=str(sample.get("fen") or sample.get("board_fen") or "").strip(),
+            move_uci=str(sample.get("move_uci") or sample.get("uci") or sample.get("move") or "").strip(),
+            side=sample.get("side"),
+            target=float(sample.get("target", 1.0) or 0.0),
+            weight=float(sample.get("weight", 1.0) or 1.0),
+            source=str(sample.get("source") or "external"),
+        )
+    try:
+        target = float(sample.get("target"))
+        weight = float(sample.get("weight") or 1.0)
+    except Exception:
+        return None
+    return {
+        "features": features,
+        "target": _clip(target, -1.0, 1.0),
+        "weight": _clip(weight, 0.1, 3.0),
+        "source": str(sample.get("source") or "external"),
+    }
+
+
+def train_experiment_nn_from_replay_samples(samples: list[dict], *, model_path=None) -> dict:
+    normalized_samples = []
+    rejected = 0
+    for item in samples or []:
+        normalized = normalize_experiment_nn_replay_sample(item)
+        if normalized is None:
+            rejected += 1
+            continue
+        normalized_samples.append(normalized)
+    model_path = Path(model_path or default_chess_nn_model_path())
+    model = _load_model(model_path)
+    for sample in normalized_samples:
+        _train_single_sample(
+            model,
+            sample["features"],
+            float(sample["target"]),
+            float(sample.get("weight") or 1.0),
+        )
+    if normalized_samples:
+        _save_model(model_path, model)
+    return {
+        "ok": True,
+        "accepted_samples": len(normalized_samples),
+        "rejected_samples": rejected,
+        "model_path": str(model_path),
+        "sample_count": int(model.get("sample_count") or 0),
+    }
 
 
 def record_experiment_nn_learning(row, *, winner_color: str | None, model_path=None) -> int:

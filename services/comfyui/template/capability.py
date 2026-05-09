@@ -200,12 +200,13 @@ def check_workflow_capability(
             )
 
     # Capture sampler enums for the UI, even when unrelated to capability.
-    cap.sampler_options["KSampler.sampler_name"] = _node_input_options(
-        info, "KSampler", "sampler_name"
-    )
-    cap.sampler_options["KSampler.scheduler"] = _node_input_options(
-        info, "KSampler", "scheduler"
-    )
+    for class_type in ("KSampler", "KSamplerAdvanced"):
+        cap.sampler_options[f"{class_type}.sampler_name"] = _node_input_options(
+            info, class_type, "sampler_name"
+        )
+        cap.sampler_options[f"{class_type}.scheduler"] = _node_input_options(
+            info, class_type, "scheduler"
+        )
 
     # Decide overall verdict.
     if cap.unsupported:

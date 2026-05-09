@@ -247,6 +247,25 @@ user may need one or both depending on whether the task is simply entering
 | `GET /api/root/incident/status` | Read open incident status. |
 | `POST /api/root/incident/resolve` | Resolve the open incident after root confirmation. |
 
+### Production gate trust boundary
+
+- `GET /api/root/server-mode/requirements` 會同時讀取資料庫中的 `production_entry_reports` 與
+  `runtime/reports/security/production_gate/*.json` 穩定檔。
+- 但 filesystem auto-detect **只用來輔助顯示最新候選報告**，不是預設可信來源。
+- 任何來自 filesystem 的 report 預設 `trust_level=unverified`；只有驗簽成功且
+  `target_commit` / `target_branch` / `server_mode` 與目前 runtime 完全一致，才可視為
+  `verified`。
+- `verified` record 永遠優先於 `unverified` record。未驗證的 filesystem 報告只能形成
+  warning，不能覆蓋已驗證的資料庫 record，也不能單獨滿足 production gate。
+- `current target commit` 的來源必須在 live server 上唯一收斂：
+  `production requirements API`、`production enter API`、filesystem report loader、
+  DB verified report loader 都必須使用**同一個** target 判定來源。
+- 對 `test_for_develop.sh` 啟動路徑而言，這表示 `HTML_LEARNING_GIT_REPO_DIR`
+  必須指向真實 git repo，而不是沒有 `.git` 的 `/tmp` copy；否則 live target commit
+  會變空值，舊 commit 驗證將失真。
+- 正式 QA / pre-push / production-gate 驗收必須至少包含一個 live regression：
+  **13 份 verified 但 old/fake `target_commit` 的 reports 不得解鎖 production。**
+
 ## Tester APIs
 
 Tester APIs require `X-Tester-Token` or `Authorization: Bearer <token>`.

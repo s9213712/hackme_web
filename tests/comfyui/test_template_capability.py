@@ -35,9 +35,10 @@ def _local_payload(*, classes, models=None, samplers=None, schedulers=None):
         info["VAELoader"]["input"]["required"]["vae_name"] = [["bundled.vae.safetensors"]]
     if "LoraLoader" in info and models is not None:
         info["LoraLoader"]["input"]["required"]["lora_name"] = [["lcm.safetensors"]]
-    if "KSampler" in info:
-        info["KSampler"]["input"]["required"]["sampler_name"] = [list(samplers or ["euler", "dpmpp_2m"])]
-        info["KSampler"]["input"]["required"]["scheduler"] = [list(schedulers or ["normal", "karras"])]
+    for class_type in ("KSampler", "KSamplerAdvanced"):
+        if class_type in info:
+            info[class_type]["input"]["required"]["sampler_name"] = [list(samplers or ["euler", "dpmpp_2m"])]
+            info[class_type]["input"]["required"]["scheduler"] = [list(schedulers or ["normal", "karras"])]
     return info
 
 
@@ -66,12 +67,12 @@ def _reset_cache():
 
 def test_capability_supported_when_local_has_everything():
     info = _local_payload(
-        classes={"CheckpointLoaderSimple", "CLIPTextEncode", "KSampler", "VAEDecode", "SaveImage"},
+        classes={"CheckpointLoaderSimple", "CLIPTextEncode", "KSampler", "KSamplerAdvanced", "VAEDecode", "SaveImage"},
         models=["v1-5.safetensors", "another.safetensors"],
     )
     client = _StubClient(info)
     analysis = _analysis(
-        class_types={"CheckpointLoaderSimple", "CLIPTextEncode", "KSampler", "VAEDecode", "SaveImage"},
+        class_types={"CheckpointLoaderSimple", "CLIPTextEncode", "KSampler", "KSamplerAdvanced", "VAEDecode", "SaveImage"},
         models={"ckpt": ["v1-5.safetensors"]},
     )
     cap = check_workflow_capability(analysis, client=client)
@@ -79,6 +80,7 @@ def test_capability_supported_when_local_has_everything():
     assert cap.unsupported == []
     assert cap.missing_models == {}
     assert "euler" in cap.sampler_options["KSampler.sampler_name"]
+    assert "euler" in cap.sampler_options["KSamplerAdvanced.sampler_name"]
 
 
 def test_capability_unsupported_when_local_missing_class():

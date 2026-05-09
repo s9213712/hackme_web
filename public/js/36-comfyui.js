@@ -31,6 +31,8 @@ let comfyuiHistoryItems = [];
 let comfyuiWorkflowPresets = [];
 let comfyuiWorkflowCurrentPresetId = null;
 let comfyuiWorkflowEditorDefaults = null;
+let comfyuiSelectedTemplatePresetId = null;
+let comfyuiSelectedTemplateDetail = null;
 let comfyuiInputAssets = {
   source: { file: null, imageRef: null, previewUrl: "", filename: "" },
   mask: { file: null, imageRef: null, previewUrl: "", filename: "" },
@@ -507,6 +509,7 @@ function setComfyuiInputAssetFromFile(key, file) {
     filename: file?.name || "",
   };
   renderComfyuiInputAsset(key);
+  if (typeof queueRenderSelectedComfyuiTemplate === "function") queueRenderSelectedComfyuiTemplate();
 }
 
 function setComfyuiInputAssetFromRef(key, imageRef, previewUrl = "", filename = "") {
@@ -519,6 +522,7 @@ function setComfyuiInputAssetFromRef(key, imageRef, previewUrl = "", filename = 
     filename: filename || imageRef?.filename || "",
   };
   renderComfyuiInputAsset(key);
+  if (typeof queueRenderSelectedComfyuiTemplate === "function") queueRenderSelectedComfyuiTemplate();
 }
 
 function clearComfyuiInputAsset(key) {
@@ -526,6 +530,7 @@ function clearComfyuiInputAsset(key) {
   revokeComfyuiAssetPreview(asset);
   comfyuiInputAssets[key] = { file: null, imageRef: null, previewUrl: "", filename: "" };
   renderComfyuiInputAsset(key);
+  if (typeof queueRenderSelectedComfyuiTemplate === "function") queueRenderSelectedComfyuiTemplate();
 }
 
 async function loadComfyuiImageRefPreview(imageRef) {
@@ -1057,8 +1062,12 @@ function bindComfyuiDraftPersistence() {
         el.dataset.comfyuiAutoPath = "0";
       });
     }
-    el.addEventListener("input", writeComfyuiDraft);
-    el.addEventListener("change", writeComfyuiDraft);
+    const persist = () => {
+      writeComfyuiDraft();
+      if (typeof queueRenderSelectedComfyuiTemplate === "function") queueRenderSelectedComfyuiTemplate();
+    };
+    el.addEventListener("input", persist);
+    el.addEventListener("change", persist);
   });
 }
 
@@ -2730,7 +2739,7 @@ async function uploadComfyuiModelFile() {
 // =====================================================================
 // ComfyUI Template Importer (Phase 1 of docs/comfyui/COMFYUI_TEMPLATE_IMPORTER_PLAN.md)
 //
-// Adds a small modal flow that uploads a ComfyUI API-format workflow JSON,
+// Adds a small modal flow that uploads a ComfyUI workflow JSON,
 // renders the §9 6-panel preview, and persists the result via /import.
 //
 // Wires into the existing #comfyui-template-import-btn button (index.html).
@@ -2756,11 +2765,11 @@ const ComfyUITemplateImporter = (() => {
     modalEl.innerHTML = `
       <div class="modal-card" style="max-width:720px;margin:5vh auto;background:var(--surface,#fff);color:var(--text,#000);border-radius:8px;max-height:88vh;overflow:auto;">
         <header style="padding:16px 20px;border-bottom:1px solid rgba(127,127,127,0.2);display:flex;justify-content:space-between;align-items:center;">
-          <strong>匯入 ComfyUI workflow（API format）</strong>
+          <strong>匯入 ComfyUI workflow</strong>
           <button type="button" class="btn" id="comfyui-template-importer-close">關閉</button>
         </header>
         <section style="padding:16px 20px;">
-          <p style="margin:0 0 8px;">請上傳由 ComfyUI 「Save (API Format)」匯出的 workflow JSON；UI graph 格式（含 nodes/links）會被拒收。</p>
+          <p style="margin:0 0 8px;">支援 ComfyUI API format 與原生 workflow JSON（含 nodes/links）；系統會自動轉成可分析的 workflow。</p>
           <div style="display:flex;gap:8px;align-items:center;">
             <input type="file" id="comfyui-template-importer-file" accept=".json,application/json" />
             <button type="button" class="btn btn-primary" id="comfyui-template-importer-preview-btn">分析 workflow</button>
@@ -2826,14 +2835,15 @@ const ComfyUITemplateImporter = (() => {
     }
     setStatus("分析中...");
     try {
+      await fetchCsrfToken({ force: true });
       const formData = new FormData();
       formData.append("workflow", file);
-      const res = await fetch("/api/comfyui/templates/preview", {
+      const res = await apiFetch("/api/comfyui/templates/preview", {
         method: "POST",
-        headers: { "X-CSRF-Token": (window.csrfToken || "") },
+        headers: { "X-CSRF-Token": getCsrfToken() || "" },
         body: formData,
       });
-      const json = await res.json();
+      const json = await res.json().catch(() => ({}));
       if (!res.ok || !json.ok) {
         throw new Error(json.msg || `分析失敗（HTTP ${res.status}）`);
       }
@@ -2928,19 +2938,21 @@ const ComfyUITemplateImporter = (() => {
     }
     setStatus("匯入中...");
     try {
-      const res = await fetch("/api/comfyui/templates/import", {
+      await fetchCsrfToken({ force: true });
+      const res = await apiFetch("/api/comfyui/templates/import", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-CSRF-Token": (window.csrfToken || ""),
+          "X-CSRF-Token": getCsrfToken() || "",
         },
         body: JSON.stringify({ preview_token: currentToken, title }),
       });
-      const json = await res.json();
+      const json = await res.json().catch(() => ({}));
       if (!res.ok || !json.ok) {
         throw new Error(json.msg || `匯入失敗（HTTP ${res.status}）`);
       }
-      setStatus(`已建立 preset #${json.preset_id}`);
+      const bundleId = json.bundle && json.bundle.id ? `，bundle ${json.bundle.id}` : "";
+      setStatus(`已建立 preset #${json.preset_id}${bundleId}`);
       currentToken = null;
       // Refresh the existing preset list if the helper exists.
       if (typeof loadComfyuiWorkflowPresets === "function") {

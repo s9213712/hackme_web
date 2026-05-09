@@ -4,6 +4,7 @@ import sqlite3
 import time
 import urllib.parse
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from flask import Flask, jsonify, make_response, request
@@ -566,6 +567,85 @@ def _import_workflow_preset(client, workflow, *, title="Workflow Preset", descri
     response = client.post("/api/comfyui/workflows/import", json=payload)
     assert response.status_code == 200, response.get_json()
     return response.get_json()["preset"]
+
+
+def _write_runtime_workflow_bundle(runtime_dir, bundle_id, *, name=None, description=""):
+    workflow = FakeComfyUIClient().build_generation_workflow({
+        "generation_mode": "txt2img",
+        "model": "dream.safetensors",
+        "prompt": f"prompt:{bundle_id}",
+        "negative_prompt": "bad",
+        "width": 512,
+        "height": 512,
+        "steps": 20,
+        "cfg": 7.5,
+        "sampler_name": "euler",
+        "scheduler": "normal",
+        "seed": 42,
+        "batch_size": 1,
+    })
+    bundle_dir = Path(runtime_dir) / bundle_id
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+    (bundle_dir / "workflow.json").write_text(
+        json.dumps(workflow, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (bundle_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "id": bundle_id,
+                "name": name or bundle_id,
+                "description": description,
+                "schema_version": 1,
+                "workflow_file": "workflow.json",
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return bundle_dir
+
+
+def test_comfyui_workflow_list_syncs_only_builtin_runtime_bundles_as_official_presets(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    runtime_dir = tmp_path / "runtime" / "comfyui"
+    runtime_dir.mkdir(parents=True)
+    _write_runtime_workflow_bundle(
+        runtime_dir,
+        "txt2img_basic",
+        name="Text-to-Image（基礎）",
+        description="builtin bundle",
+    )
+    _write_runtime_workflow_bundle(
+        runtime_dir,
+        "imported_custom_demo",
+        name="Imported Demo",
+        description="should stay non-official",
+    )
+
+    with patch("routes.comfyui.runtime_comfyui_dir", lambda *args, **kwargs: runtime_dir):
+        client = _build_app(db_path, storage_root).test_client()
+        first = client.get("/api/comfyui/workflows")
+        assert first.status_code == 200
+        first_body = first.get_json()
+        assert [item["system_bundle_id"] for item in first_body["official_presets"]] == ["txt2img_basic"]
+        assert first_body["official_presets"][0]["title"] == "Text-to-Image（基礎）"
+
+        second = client.get("/api/comfyui/workflows")
+        assert second.status_code == 200
+        second_body = second.get_json()
+        assert [item["system_bundle_id"] for item in second_body["official_presets"]] == ["txt2img_basic"]
+
+    conn = sqlite3.connect(db_path)
+    rows = conn.execute(
+        "SELECT system_bundle_id, is_official FROM comfyui_workflow_presets ORDER BY id ASC"
+    ).fetchall()
+    conn.close()
+    assert rows == [("txt2img_basic", 1)]
 
 
 def test_comfyui_models_and_generate_routes(tmp_path):

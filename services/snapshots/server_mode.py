@@ -360,18 +360,29 @@ class ServerModeService:
             except Exception:
                 commit = ""
         current_mode = "dev_ready"
+        report_server_mode = "dev_ready"
         try:
             if conn is not None:
-                row = conn.execute("SELECT current_mode FROM server_modes WHERE id=1").fetchone()
+                row = conn.execute("SELECT current_mode, previous_mode FROM server_modes WHERE id=1").fetchone()
+                previous_mode = self._normalize_mode(row["previous_mode"] if row else "")
                 current_mode = self._normalize_mode(row["current_mode"] if row else current_mode)
             else:
-                current_mode = self._normalize_mode(self.get_current_mode().get("current_mode"))
+                row = self.get_current_mode()
+                previous_mode = self._normalize_mode(row.get("previous_mode"))
+                current_mode = self._normalize_mode(row.get("current_mode"))
         except Exception:
             current_mode = "dev_ready"
+            previous_mode = ""
+        if current_mode == "production" and previous_mode and previous_mode != "production":
+            report_server_mode = previous_mode
+        else:
+            report_server_mode = current_mode
         return {
             "target_commit": commit,
             "target_branch": branch,
-            "server_mode": current_mode,
+            "server_mode": report_server_mode,
+            "current_mode": current_mode,
+            "report_server_mode": report_server_mode,
         }
 
     def _report_matches_current_target(self, row, current_target):

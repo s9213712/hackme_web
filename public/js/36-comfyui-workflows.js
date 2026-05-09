@@ -82,6 +82,382 @@ function renderComfyuiWorkflowRunList(runs = []) {
   }).join("")}</div>`;
 }
 
+function comfyuiTemplateSelectGroups(payload = {}) {
+  return [
+    { label: "官方模板", items: Array.isArray(payload.official_presets) ? payload.official_presets : [] },
+    { label: "我的模板", items: Array.isArray(payload.my_presets) ? payload.my_presets : [] },
+    { label: "公開模板", items: Array.isArray(payload.shared_presets) ? payload.shared_presets : [] },
+  ].filter((group) => group.items.length);
+}
+
+let comfyuiTemplateRenderTimer = null;
+
+function queueRenderSelectedComfyuiTemplate() {
+  if (comfyuiTemplateRenderTimer) clearTimeout(comfyuiTemplateRenderTimer);
+  comfyuiTemplateRenderTimer = setTimeout(() => {
+    comfyuiTemplateRenderTimer = null;
+    renderSelectedComfyuiTemplate();
+  }, 0);
+}
+
+function renderComfyuiTemplateSelector(payload = {}, { silentReload = true } = {}) {
+  const select = $("comfyui-template-select");
+  if (!select) return;
+  const previous = String(comfyuiSelectedTemplatePresetId || select.value || "").trim();
+  const groups = comfyuiTemplateSelectGroups(payload);
+  const options = ['<option value="">先選擇模板</option>'].concat(groups.map((group) => `
+    <optgroup label="${sanitize(group.label)}">
+      ${group.items.map((item) => `
+        <option value="${sanitize(String(item.id))}">
+          ${sanitize(item.title || `Workflow #${item.id}`)}
+        </option>
+      `).join("")}
+    </optgroup>
+  `));
+  select.innerHTML = options.join("");
+  const exists = comfyuiWorkflowPresets.some((item) => String(item?.id || "") === previous);
+  select.value = exists ? previous : "";
+  comfyuiSelectedTemplatePresetId = select.value ? Number(select.value) : null;
+  if (!comfyuiSelectedTemplatePresetId) {
+    comfyuiSelectedTemplateDetail = null;
+  }
+  if (select.dataset.comfyuiTemplateBound !== "1") {
+    select.dataset.comfyuiTemplateBound = "1";
+    select.addEventListener("change", () => {
+      const presetId = Number(select.value || 0);
+      if (!presetId) {
+        comfyuiSelectedTemplatePresetId = null;
+        comfyuiSelectedTemplateDetail = null;
+        renderSelectedComfyuiTemplate();
+        return;
+      }
+      loadComfyuiSelectedTemplateDetail(presetId, { silent: false }).catch((err) => {
+        setComfyuiMessage(err.message || "模板讀取失敗", false);
+      });
+    });
+  }
+  if (comfyuiSelectedTemplatePresetId) {
+    const isSameDetail = Number(comfyuiSelectedTemplateDetail?.id || 0) === Number(comfyuiSelectedTemplatePresetId || 0);
+    if (silentReload && isSameDetail) {
+      renderSelectedComfyuiTemplate();
+    } else {
+      loadComfyuiSelectedTemplateDetail(comfyuiSelectedTemplatePresetId, {
+        silent: silentReload,
+        applyDefaults: !silentReload,
+      }).catch(() => {});
+    }
+  } else {
+    renderSelectedComfyuiTemplate();
+  }
+}
+
+async function loadComfyuiSelectedTemplateDetail(presetId, { silent = false, applyDefaults = true } = {}) {
+  if (!presetId) return;
+  await fetchCsrfToken({ force: true });
+  const res = await apiFetch(API + `/comfyui/workflows/${encodeURIComponent(presetId)}`, {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": getCsrfToken() || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json.ok) throw new Error(json.msg || `模板讀取失敗（HTTP ${res.status}）`);
+  comfyuiSelectedTemplatePresetId = Number(presetId);
+  comfyuiSelectedTemplateDetail = json.preset || null;
+  if (applyDefaults) {
+    applyComfyuiWorkflowPresetDefaults(comfyuiSelectedTemplateDetail?.default_params || {});
+  }
+  renderSelectedComfyuiTemplate();
+  if (!silent) {
+    setComfyuiMessage(`已切換到模板「${comfyuiSelectedTemplateDetail?.title || `Workflow #${presetId}`}」`, true);
+  }
+}
+
+function comfyuiTemplateInputKinds(detail) {
+  const counts = { text: 0, image: 0, parameter: 0 };
+  const panels = Array.isArray(detail?.ui_schema?.panels) ? detail.ui_schema.panels : [];
+  panels.forEach((panel) => {
+    (panel?.fields || []).forEach((field) => {
+      const category = String(field?.category || "").trim().toUpperCase();
+      if (category === "TEXT") counts.text += 1;
+      else if (category === "IMAGE" || field?.input_type === "file_picker") counts.image += 1;
+      else counts.parameter += 1;
+    });
+  });
+  return [
+    counts.text ? `文字 ${counts.text}` : "",
+    counts.image ? `圖片 ${counts.image}` : "",
+    counts.parameter ? `參數 ${counts.parameter}` : "",
+  ].filter(Boolean);
+}
+
+function comfyuiTemplateSummaryMarkup(detail) {
+  if (!detail) {
+    return '<div class="drive-empty">選好模板後，這裡會顯示需要的輸入與輸出卡片。</div>';
+  }
+  const mode = comfyuiReadableModeLabel(detail?.default_params?.generation_mode || "txt2img");
+  const outputs = Array.isArray(detail?.output_kinds) && detail.output_kinds.length ? detail.output_kinds : ["image"];
+  const inputKinds = comfyuiTemplateInputKinds(detail);
+  const dependency = detail?.dependency_status || detail?.capability || null;
+  const blockerItems = Array.isArray(dependency?.blockers) ? dependency.blockers : [];
+  const requirementBits = []
+    .concat((detail?.required_models || []).map((item) => `${item.kind || "model"}:${item.name || ""}`))
+    .concat((detail?.required_controlnets || []).map((item) => `controlnet:${item.name || item}`))
+    .concat((detail?.required_loras || []).map((item) => `lora:${item.name || item}`))
+    .filter(Boolean);
+  return `
+    <div class="comfyui-template-summary-head">
+      <div class="comfyui-template-summary-title">
+        <strong>${sanitize(detail?.title || `Workflow #${detail?.id || ""}`)}</strong>
+        <div class="drive-card-sub">${sanitize(detail?.description || "未填寫模板說明")}</div>
+      </div>
+      <div class="comfyui-template-summary-flags">
+        <span class="comfyui-workflow-chip">${sanitize(mode)}</span>
+        ${detail?.is_official ? '<span class="comfyui-workflow-chip">官方</span>' : ""}
+        <span class="comfyui-workflow-chip">${sanitize(detail?.visibility || "private")}</span>
+      </div>
+    </div>
+    <div class="drive-card-sub">這個模板會根據 workflow manifest 只顯示需要的欄位；其餘手動欄位收進下方進階區。</div>
+    ${requirementBits.length ? `<div class="drive-card-sub" style="margin-top:.35rem;">依賴：${sanitize(requirementBits.join("、"))}</div>` : ""}
+    ${inputKinds.length ? `<div class="comfyui-template-output-list">${inputKinds.map((kind) => `<span class="comfyui-workflow-chip">輸入 ${sanitize(kind)}</span>`).join("")}</div>` : ""}
+    <div class="comfyui-template-output-list">
+      ${outputs.map((kind) => `<span class="comfyui-workflow-chip">輸出 ${sanitize(String(kind))}</span>`).join("")}
+      ${dependency?.available === false ? '<span class="comfyui-workflow-chip bad">目前依賴不完整</span>' : ""}
+    </div>
+    ${blockerItems.length ? `<div class="drive-card-sub" style="margin-top:.45rem;color:#ffd2dc;">${sanitize(blockerItems.join("；"))}</div>` : ""}
+  `;
+}
+
+function comfyuiTemplateSelectOptions(targetId, field = {}) {
+  const target = $(targetId);
+  const options = [];
+  if (target && target.options && target.options.length) {
+    Array.from(target.options).forEach((option) => {
+      options.push({
+        value: String(option.value || ""),
+        label: String(option.textContent || option.label || option.value || ""),
+        disabled: !!option.disabled,
+      });
+    });
+  } else if (Array.isArray(field?.constraints?.options)) {
+    field.constraints.options.forEach((value) => {
+      options.push({ value: String(value), label: String(value), disabled: false });
+    });
+  } else if (field?.current_value !== undefined && field?.current_value !== null) {
+    options.push({ value: String(field.current_value), label: String(field.current_value), disabled: false });
+  }
+  return options;
+}
+
+function comfyuiTemplateFieldBinding(field, detail, ctx) {
+  const mode = String(detail?.default_params?.generation_mode || "txt2img").trim().toLowerCase();
+  if (field?.class_type === "CLIPTextEncode" && field?.input_name === "text") {
+    const binding = { kind: "field", targetId: ctx.textFieldIndex === 0 ? "comfyui-prompt" : "comfyui-negative-prompt" };
+    ctx.textFieldIndex += 1;
+    return binding;
+  }
+  if (field?.class_type === "CheckpointLoaderSimple" && field?.input_name === "ckpt_name") return { kind: "field", targetId: "comfyui-model-select" };
+  if (field?.class_type === "VAELoader" && field?.input_name === "vae_name") return { kind: "field", targetId: "comfyui-vae-select" };
+  if (field?.class_type === "UpscaleModelLoader" && field?.input_name === "model_name") return { kind: "field", targetId: "comfyui-upscale-model" };
+  if (field?.class_type === "ControlNetLoader" && field?.input_name === "control_net_name") return { kind: "field", targetId: "comfyui-controlnet-model", enableControlnet: true };
+  if (field?.class_type === "KSampler" && field?.input_name === "seed") return { kind: "field", targetId: "comfyui-seed" };
+  if (field?.class_type === "KSampler" && field?.input_name === "steps") return { kind: "field", targetId: "comfyui-steps" };
+  if (field?.class_type === "KSampler" && field?.input_name === "cfg") return { kind: "field", targetId: "comfyui-cfg" };
+  if (field?.class_type === "KSampler" && field?.input_name === "sampler_name") return { kind: "field", targetId: "comfyui-sampler" };
+  if (field?.class_type === "KSampler" && field?.input_name === "scheduler") return { kind: "field", targetId: "comfyui-scheduler" };
+  if (field?.class_type === "KSampler" && field?.input_name === "denoise") return { kind: "field", targetId: "comfyui-denoise-strength" };
+  if (field?.class_type === "EmptyLatentImage" && field?.input_name === "width") return { kind: "field", targetId: "comfyui-width" };
+  if (field?.class_type === "EmptyLatentImage" && field?.input_name === "height") return { kind: "field", targetId: "comfyui-height" };
+  if (field?.class_type === "EmptyLatentImage" && field?.input_name === "batch_size") return { kind: "field", targetId: "comfyui-batch-size" };
+  if (field?.class_type === "ControlNetApplyAdvanced" && field?.input_name === "strength") return { kind: "field", targetId: "comfyui-control-strength", enableControlnet: true };
+  if (field?.class_type === "ControlNetApplyAdvanced" && field?.input_name === "start_percent") return { kind: "field", targetId: "comfyui-control-start", enableControlnet: true };
+  if (field?.class_type === "ControlNetApplyAdvanced" && field?.input_name === "end_percent") return { kind: "field", targetId: "comfyui-control-end", enableControlnet: true };
+  if (field?.class_type === "ImagePadForOutpaint" && field?.input_name === "left") return { kind: "field", targetId: "comfyui-outpaint-left" };
+  if (field?.class_type === "ImagePadForOutpaint" && field?.input_name === "top") return { kind: "field", targetId: "comfyui-outpaint-top" };
+  if (field?.class_type === "ImagePadForOutpaint" && field?.input_name === "right") return { kind: "field", targetId: "comfyui-outpaint-right" };
+  if (field?.class_type === "ImagePadForOutpaint" && field?.input_name === "bottom") return { kind: "field", targetId: "comfyui-outpaint-bottom" };
+  if (field?.class_type === "ImagePadForOutpaint" && field?.input_name === "feathering") return { kind: "field", targetId: "comfyui-outpaint-feathering" };
+  if (field?.class_type === "LoadImageMask" && field?.input_name === "image") return { kind: "image", assetKey: "mask" };
+  if (field?.class_type === "LoadImageMask" && field?.input_name === "channel") return { kind: "readonly" };
+  if (field?.class_type === "LoadImage" && field?.input_name === "image") {
+    const hasControlnet = !!detail?.default_params?.controlnet?.type;
+    const usesSource = ["img2img", "inpaint", "outpaint", "upscale"].includes(mode);
+    let assetKey = "source";
+    if (usesSource && ctx.loadImageIndex === 0) assetKey = "source";
+    else if (hasControlnet) assetKey = "control";
+    else if (!usesSource) assetKey = "control";
+    ctx.loadImageIndex += 1;
+    return { kind: "image", assetKey };
+  }
+  return { kind: "readonly" };
+}
+
+function comfyuiTemplateFieldValue(binding, field = {}) {
+  if (binding.kind === "field") {
+    const el = $(binding.targetId);
+    return el ? String(el.value || "") : String(field?.current_value ?? "");
+  }
+  if (binding.kind === "image") {
+    return comfyuiAssetState(binding.assetKey);
+  }
+  return field?.current_value;
+}
+
+function comfyuiTemplateUpdateField(binding, field, rawValue) {
+  if (binding.enableControlnet && $("comfyui-controlnet-enabled")) {
+    $("comfyui-controlnet-enabled").checked = true;
+  }
+  if (binding.kind === "field") {
+    setComfyuiFieldValue(binding.targetId, rawValue);
+    updateComfyuiModeVisibility();
+    writeComfyuiDraft();
+  }
+}
+
+function renderComfyuiTemplateField(field, detail, ctx) {
+  const binding = comfyuiTemplateFieldBinding(field, detail, ctx);
+  const cardClass = field?.input_type === "textarea" || binding.kind === "image" ? "comfyui-template-field-card is-wide" : "comfyui-template-field-card";
+  if (binding.kind === "image") {
+    const asset = comfyuiTemplateFieldValue(binding, field) || {};
+    const previewHtml = asset.previewUrl
+      ? `<img src="${sanitize(asset.previewUrl)}" alt="${sanitize(field.label || "圖片預覽")}" />`
+      : `<span class="drive-card-sub">${sanitize(COMFYUI_INPUT_ASSET_META[binding.assetKey]?.emptyText || "尚未選擇圖片")}</span>`;
+    const metaText = asset.file
+      ? `已選擇本地檔：${asset.filename || asset.file.name || "未命名圖片"}`
+      : asset.imageRef?.filename
+        ? `使用已保存圖片：${asset.filename || asset.imageRef.filename}`
+        : (COMFYUI_INPUT_ASSET_META[binding.assetKey]?.emptyText || "尚未選擇圖片");
+    return `
+      <div class="${cardClass}">
+        <label>${sanitize(field.label || "圖片")}</label>
+        <input type="file" data-comfyui-template-image="${sanitize(binding.assetKey)}" accept="image/png,image/jpeg,image/webp" />
+        <div class="comfyui-input-preview" style="margin-top:.55rem;">${previewHtml}</div>
+        <div class="drive-card-sub" style="margin-top:.45rem;">${sanitize(metaText)}</div>
+        <div class="drive-file-actions" style="justify-content:flex-start;margin-top:.45rem;">
+          <button class="btn btn-sm" type="button" data-comfyui-template-image-clear="${sanitize(binding.assetKey)}">清除圖片</button>
+        </div>
+      </div>
+    `;
+  }
+  if (binding.kind === "readonly") {
+    return `
+      <div class="${cardClass}">
+        <label>${sanitize(field.label || field.input_name || "欄位")}</label>
+        <div class="comfyui-template-readonly">這個欄位目前沿用模板預設值：${sanitize(String(field?.current_value ?? ""))}</div>
+      </div>
+    `;
+  }
+  const value = comfyuiTemplateFieldValue(binding, field);
+  if (field?.input_type === "textarea") {
+    return `
+      <div class="${cardClass}">
+        <label for="tmpl-${sanitize(field.id || "")}">${sanitize(field.label || field.input_name || "欄位")}</label>
+        <textarea id="tmpl-${sanitize(field.id || "")}" rows="${sanitize(String(field?.constraints?.rows || 4))}" data-comfyui-template-target="${sanitize(binding.targetId)}">${sanitize(value)}</textarea>
+      </div>
+    `;
+  }
+  if (field?.input_type === "select") {
+    const options = comfyuiTemplateSelectOptions(binding.targetId, field);
+    const current = String(value || field?.current_value || "");
+    return `
+      <div class="${cardClass}">
+        <label for="tmpl-${sanitize(field.id || "")}">${sanitize(field.label || field.input_name || "欄位")}</label>
+        <select id="tmpl-${sanitize(field.id || "")}" data-comfyui-template-target="${sanitize(binding.targetId)}">
+          ${options.map((option) => `<option value="${sanitize(option.value)}"${option.value === current ? " selected" : ""}${option.disabled ? ' disabled="disabled"' : ""}>${sanitize(option.label)}</option>`).join("")}
+        </select>
+      </div>
+    `;
+  }
+  const inputType = field?.input_type === "number" ? "number" : "text";
+  const minAttr = field?.constraints?.min !== undefined ? ` min="${sanitize(String(field.constraints.min))}"` : "";
+  const maxAttr = field?.constraints?.max !== undefined ? ` max="${sanitize(String(field.constraints.max))}"` : "";
+  const stepAttr = field?.constraints?.step !== undefined ? ` step="${sanitize(String(field.constraints.step))}"` : "";
+  return `
+    <div class="${cardClass}">
+      <label for="tmpl-${sanitize(field.id || "")}">${sanitize(field.label || field.input_name || "欄位")}</label>
+      <input id="tmpl-${sanitize(field.id || "")}" type="${sanitize(inputType)}" value="${sanitize(String(value ?? ""))}"${minAttr}${maxAttr}${stepAttr} data-comfyui-template-target="${sanitize(binding.targetId)}" />
+    </div>
+  `;
+}
+
+function bindRenderedComfyuiTemplateFields(detail) {
+  const host = $("comfyui-template-panels");
+  if (!host) return;
+  host.querySelectorAll("[data-comfyui-template-target]").forEach((el) => {
+    const targetId = el.getAttribute("data-comfyui-template-target");
+    const hidden = $(targetId);
+    if (!hidden || el.dataset.boundComfyuiTemplate === "1") return;
+    el.dataset.boundComfyuiTemplate = "1";
+    const sync = () => {
+      hidden.value = el.value;
+      if (targetId === "comfyui-controlnet-model" && $("comfyui-controlnet-enabled")) $("comfyui-controlnet-enabled").checked = true;
+      updateComfyuiModeVisibility();
+      writeComfyuiDraft();
+    };
+    el.addEventListener("input", sync);
+    el.addEventListener("change", sync);
+  });
+  host.querySelectorAll("[data-comfyui-template-image]").forEach((input) => {
+    if (input.dataset.boundComfyuiTemplate === "1") return;
+    input.dataset.boundComfyuiTemplate = "1";
+    input.addEventListener("change", () => {
+      const assetKey = input.getAttribute("data-comfyui-template-image");
+      const file = input.files && input.files[0] ? input.files[0] : null;
+      if (!file) {
+        clearComfyuiInputAsset(assetKey);
+        renderSelectedComfyuiTemplate();
+        return;
+      }
+      if (!/^image\/(png|jpeg|webp)$/i.test(file.type || "")) {
+        setComfyuiMessage("模板圖片欄位只支援 PNG、JPG、WEBP。", false);
+        input.value = "";
+        return;
+      }
+      setComfyuiInputAssetFromFile(assetKey, file);
+      renderSelectedComfyuiTemplate();
+    });
+  });
+  host.querySelectorAll("[data-comfyui-template-image-clear]").forEach((button) => {
+    if (button.dataset.boundComfyuiTemplate === "1") return;
+    button.dataset.boundComfyuiTemplate = "1";
+    button.addEventListener("click", () => {
+      clearComfyuiInputAsset(button.getAttribute("data-comfyui-template-image-clear"));
+      renderSelectedComfyuiTemplate();
+    });
+  });
+}
+
+function renderSelectedComfyuiTemplate() {
+  const summary = $("comfyui-template-summary");
+  const host = $("comfyui-template-panels");
+  const legacy = $("comfyui-legacy-form-panel");
+  if (summary) summary.innerHTML = comfyuiTemplateSummaryMarkup(comfyuiSelectedTemplateDetail);
+  if (!host) return;
+  if (!comfyuiSelectedTemplateDetail?.ui_schema?.panels) {
+    host.innerHTML = "";
+    if (legacy) legacy.style.display = "none";
+    return;
+  }
+  const detail = comfyuiSelectedTemplateDetail;
+  const ctx = { textFieldIndex: 0, loadImageIndex: 0 };
+  const panels = (detail.ui_schema.panels || []).filter((panel) => !["compatibility", "raw"].includes(String(panel?.id || "")));
+  host.innerHTML = panels.map((panel) => `
+    <details class="drive-collapsible-panel settings-collapse comfyui-template-render-card"${panel?.collapsed_default ? "" : " open"}>
+      <summary>
+        <div>
+          <div class="drive-card-title">${sanitize(panel?.label || panel?.id || "模板區塊")}</div>
+          <div class="drive-card-sub">${sanitize(String((panel?.fields || []).length || 0))} 個欄位</div>
+        </div>
+      </summary>
+      <div class="drive-collapsible-body">
+        <div class="comfyui-template-panel-grid">
+          ${(panel?.fields || []).map((field) => renderComfyuiTemplateField(field, detail, ctx)).join("")}
+        </div>
+      </div>
+    </details>
+  `).join("");
+  bindRenderedComfyuiTemplateFields(detail);
+  if (legacy) legacy.style.display = "";
+}
+
 function renderComfyuiWorkflowPresetList(targetId, items, emptyText) {
   const list = $(targetId);
   if (!list) return;
@@ -160,17 +536,18 @@ function renderComfyuiWorkflowPresetList(targetId, items, emptyText) {
   });
 }
 
-function renderComfyuiWorkflowPresets(payload = {}) {
+function renderComfyuiWorkflowPresets(payload = {}, { silentTemplateReload = true } = {}) {
   comfyuiWorkflowPresets = Array.isArray(payload.presets) ? payload.presets : [];
   renderComfyuiWorkflowPresetList("comfyui-workflow-my-list", payload.my_presets || [], "尚無個人 preset");
   renderComfyuiWorkflowPresetList("comfyui-workflow-official-list", payload.official_presets || [], "尚無官方 preset");
   renderComfyuiWorkflowPresetList("comfyui-workflow-shared-list", payload.shared_presets || [], "尚無其他可讀 preset");
+  renderComfyuiTemplateSelector(payload, { silentReload: silentTemplateReload });
   const total = comfyuiWorkflowPresets.length;
   const warning = payload.dependency_warning ? `；依賴檢查警告：${payload.dependency_warning}` : "";
   setComfyuiWorkflowStatus(`目前可見 ${total} 個 workflow preset${warning}`);
 }
 
-async function loadComfyuiWorkflowPresets() {
+async function loadComfyuiWorkflowPresets({ silentTemplateReload = true } = {}) {
   if (!currentUser || !canAccessModule("comfyui")) return [];
   setComfyuiWorkflowStatus("正在讀取 workflow preset...");
   await fetchCsrfToken({ force: true });
@@ -184,7 +561,7 @@ async function loadComfyuiWorkflowPresets() {
     setComfyuiWorkflowStatus(message);
     throw new Error(message);
   }
-  renderComfyuiWorkflowPresets(json);
+  renderComfyuiWorkflowPresets(json, { silentTemplateReload });
   return comfyuiWorkflowPresets;
 }
 
@@ -464,4 +841,3 @@ async function loadComfyuiWorkflowFile() {
   comfyuiWorkflowEditorDefaults = null;
   setComfyuiMessage(`已載入 workflow 檔：${file.name}`, true);
 }
-

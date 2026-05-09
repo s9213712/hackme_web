@@ -308,6 +308,7 @@ def main() -> int:
         "ok": True,
         "preset": args.preset,
         "seed": int(args.seed),
+        "experiment_db_path": str(Path(args.experiment_db_path or bundled_chess_engine_db_path())),
         "games_played": int(summary.get("games_played") or 0),
         "teacher_depth": int(summary.get("teacher_depth") or 0),
         "max_plies": int(summary.get("max_plies") or 0),

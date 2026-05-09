@@ -299,6 +299,7 @@ def register_chat_routes(app, deps):
     ensure_user_official_room_membership = deps["ensure_user_official_room_membership"]
     get_client_ip = deps["get_client_ip"]
     get_current_user_ctx = deps["get_current_user_ctx"]
+    get_auth_db = deps.get("get_auth_db", deps["get_db"])
     get_db = deps["get_db"]
     json_resp = deps["json_resp"]
     normalize_text = deps["normalize_text"]
@@ -1237,20 +1238,30 @@ def register_chat_routes(app, deps):
             audit("AUDIT_FORBIDDEN", get_client_ip(), user, detail="non-root attempted audit access")
             return json_resp({"ok":False,"msg":"只有 root 可檢視審計紀錄"}), 403
 
-        conn = get_db()
+        auth_conn = get_auth_db()
+        main_conn = get_db()
         try:
-            rows = conn.execute(
-                "SELECT u.username, la.ip_address, la.user_agent, la.success, la.attempted_at "
-                "FROM login_attempts la LEFT JOIN users u ON u.id=la.user_id "
-                "ORDER BY la.attempted_at DESC LIMIT 200"
+            rows = auth_conn.execute(
+                "SELECT user_id, ip_address, user_agent, success, attempted_at "
+                "FROM login_attempts ORDER BY attempted_at DESC LIMIT 200"
             ).fetchall()
+            user_ids = sorted({int(r["user_id"]) for r in rows if r["user_id"] is not None})
+            usernames = {}
+            if user_ids:
+                placeholders = ",".join("?" for _ in user_ids)
+                for row in main_conn.execute(
+                    f"SELECT id, username FROM users WHERE id IN ({placeholders})",
+                    tuple(user_ids),
+                ).fetchall():
+                    usernames[int(row["id"])] = row["username"]
         finally:
-            conn.close()
+            auth_conn.close()
+            main_conn.close()
 
         entries = []
         for r in rows:
             entries.append({
-                "user":      r["username"] or "(未知)",
+                "user":      (usernames.get(int(r["user_id"])) if r["user_id"] is not None else None) or "(未知)",
                 "ip":        r["ip_address"],
                 "ua":        r["user_agent"],
                 "success":   bool(r["success"]),

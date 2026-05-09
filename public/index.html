@@ -1237,10 +1237,31 @@
             </div>
             <button class="btn" id="comfyui-refresh-btn" type="button">重新整理模型</button>
             <button class="btn" id="comfyui-load-draft-btn" type="button">載入上次設定</button>
-            <button class="btn" id="comfyui-template-import-btn" type="button">匯入 workflow（API format）</button>
+            <button class="btn" id="comfyui-template-import-btn" type="button">匯入模板檔（workflow JSON）</button>
             <button class="btn btn-primary" id="comfyui-start-btn" type="button" style="display:none;">啟動 ComfyUI</button>
             <button class="btn" id="comfyui-stop-btn" type="button" style="display:none;">停止 ComfyUI</button>
           </div>
+          <div class="comfyui-template-selector">
+            <div class="field">
+              <label>Workflow 模板</label>
+              <select id="comfyui-template-select">
+                <option value="">先選擇模板</option>
+              </select>
+              <div class="drive-card-sub" id="comfyui-template-select-hint">可從官方模板、自己的 preset、其他公開 preset，或先匯入模板檔後再建立簡化卡片頁面。</div>
+            </div>
+            <div id="comfyui-template-summary" class="comfyui-template-summary">
+              <div class="drive-empty">選好模板後，這裡會顯示需要的輸入與輸出卡片。</div>
+            </div>
+            <div id="comfyui-template-panels" class="comfyui-template-panels"></div>
+          </div>
+          <details class="drive-collapsible-panel settings-collapse" id="comfyui-legacy-form-panel" style="display:none;margin-top:.85rem;">
+            <summary>
+              <div>
+                <div class="drive-card-title">手動欄位</div>
+                <div class="drive-card-sub">模板卡片以外的原始欄位。只有在需要直接手動調整時才展開。</div>
+              </div>
+            </summary>
+            <div class="drive-collapsible-body">
           <div class="field">
             <label>模型</label>
             <select id="comfyui-model-select">
@@ -1414,6 +1435,8 @@
             <div class="field"><label>分享標題</label><input type="text" id="comfyui-share-title" maxlength="120" placeholder="ComfyUI 產圖分享" /></div>
             <div class="field"><label>心得留言</label><textarea id="comfyui-share-note" rows="3" maxlength="900" placeholder="這次想分享的心得、用途或調參想法"></textarea></div>
           </div>
+            </div>
+          </details>
           <div class="drive-file-actions" style="justify-content:flex-start;margin-top:.75rem;">
             <button class="btn btn-primary" id="comfyui-generate-btn" type="button">產生圖片</button>
             <button class="btn btn-danger" id="comfyui-interrupt-btn" type="button" disabled>中斷產圖</button>

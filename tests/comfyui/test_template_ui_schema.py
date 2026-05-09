@@ -63,6 +63,36 @@ def test_ui_schema_routes_ksampler_numeric_to_sampler_panel():
     assert "node:3:scheduler" in fids
 
 
+def test_ui_schema_routes_ksampler_advanced_fields_to_sampler_panel():
+    workflow = {
+        **TXT2IMG,
+        "10": {
+            "class_type": "KSamplerAdvanced",
+            "inputs": {
+                "noise_seed": 123,
+                "steps": 30,
+                "cfg": 6.5,
+                "sampler_name": "euler",
+                "scheduler": "normal",
+                "add_noise": "enable",
+                "start_at_step": 0,
+                "end_at_step": 30,
+                "return_with_leftover_noise": "disable",
+                "model": ["4", 0],
+                "positive": ["6", 0],
+                "negative": ["7", 0],
+                "latent_image": ["5", 0],
+            },
+        },
+    }
+    schema = build_ui_schema(analysis=analyze_workflow_json(workflow))
+    sampler_panel = next(p for p in schema.panels if p["id"] == "sampler")
+    fids = {f["id"] for f in sampler_panel["fields"]}
+    assert "node:10:noise_seed" in fids
+    assert "node:10:sampler_name" in fids
+    assert "node:10:start_at_step" in fids
+
+
 def test_ui_schema_routes_non_ksampler_numeric_to_advanced_panel():
     schema = build_ui_schema(analysis=analyze_workflow_json(TXT2IMG))
     panel_ids_present = _panel_ids(schema)

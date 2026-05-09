@@ -10,13 +10,20 @@ Spec reference: docs/comfyui/COMFYUI_TEMPLATE_IMPORTER_PLAN.md §8.
 from __future__ import annotations
 
 import json
+import re
+import shutil
+from datetime import datetime
+from pathlib import Path
 
 from services.comfyui.template import (
     PREVIEW_TOKEN_TTL_SECONDS,
+    REPO_SOURCE_DIR,
     analyze_workflow_json,
     build_ui_schema,
     check_workflow_capability,
     get_default_preview_store,
+    normalize_uploaded_workflow_json,
+    runtime_comfyui_dir,
 )
 from services.comfyui.validation.rules import (
     WORKFLOW_MAX_JSON_BYTES,
@@ -65,6 +72,100 @@ def register_comfyui_template_routes(app, ctx):
     upsert_workflow_preset = ctx.get("upsert_workflow_preset")
     load_workflow_preset_row = ctx.get("load_workflow_preset_row")
     workflow_preset_summary = ctx.get("workflow_preset_summary")
+
+    def _template_output_kinds(workflow_json):
+        classes = {
+            str((node or {}).get("class_type") or "").strip()
+            for node in (workflow_json or {}).values()
+            if isinstance(node, dict)
+        }
+        output_kinds = []
+        if any(name in classes for name in {"SaveImage", "PreviewImage", "VAEDecode"}):
+            output_kinds.append("image")
+        if any("video" in name.lower() for name in classes):
+            output_kinds.append("video")
+        if any(token in name.lower() for name in classes for token in ("audio", "music", "wave", "wav")):
+            output_kinds.append("music")
+        if not output_kinds:
+            output_kinds.append("image")
+        return output_kinds
+
+    def _slugify_template_name(text):
+        normalized = re.sub(r"[^a-z0-9]+", "_", str(text or "").strip().lower())
+        normalized = re.sub(r"_+", "_", normalized).strip("_")
+        return normalized or "workflow"
+
+    def _bundle_id_for_import(*, preset_id, title):
+        return f"imported_{int(preset_id)}_{_slugify_template_name(title)}"
+
+    def _write_json_file(path: Path, payload):
+        path.write_text(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+    def _materialize_template_bundle(
+        *,
+        preset_id,
+        actor,
+        title,
+        description,
+        visibility,
+        workflow_json,
+        default_params,
+        schema,
+        capability,
+        workflow_hash="",
+    ):
+        bundle_id = _bundle_id_for_import(preset_id=preset_id, title=title)
+        repo_dir = Path(REPO_SOURCE_DIR) / bundle_id
+        runtime_dir = Path(runtime_comfyui_dir()) / bundle_id
+        output_kinds = _template_output_kinds(workflow_json)
+        manifest = {
+            "schema_version": 1,
+            "id": bundle_id,
+            "name": title,
+            "description": description or "",
+            "workflow_file": "workflow.json",
+            "output_kinds": output_kinds,
+            "source": "imported",
+            "preset_id": int(preset_id),
+            "visibility": str(visibility or "private"),
+            "owner_username": _actor_field(actor, "username") or "",
+            "workflow_hash": str(workflow_hash or ""),
+            "default_params": default_params if isinstance(default_params, dict) else {},
+            "capability": capability.to_dict() if capability is not None else {},
+            "ui": {
+                "initial_collapsed": True,
+                "panels": (schema.to_dict().get("panels") if schema is not None else []) or [],
+            },
+        }
+        readme = (
+            f"# {title}\n\n"
+            f"{description or 'Imported from a ComfyUI API-format workflow JSON.'}\n\n"
+            f"- Source: `/api/comfyui/templates/import`\n"
+            f"- Preset ID: `{preset_id}`\n"
+            f"- Owner: `{_actor_field(actor, 'username') or '-'}\n"
+            f"- Visibility: `{visibility or 'private'}`\n"
+            f"- Imported At: `{datetime.now().isoformat()}`\n"
+            f"- Files: `workflow.json` for ComfyUI, `manifest.json` for hackme_web card rendering.\n"
+        )
+
+        repo_dir.mkdir(parents=True, exist_ok=True)
+        _write_json_file(repo_dir / "workflow.json", workflow_json)
+        _write_json_file(repo_dir / "manifest.json", manifest)
+        (repo_dir / "README.md").write_text(readme, encoding="utf-8")
+
+        runtime_dir.parent.mkdir(parents=True, exist_ok=True)
+        if runtime_dir.exists():
+            shutil.rmtree(runtime_dir)
+        shutil.copytree(repo_dir, runtime_dir)
+        return {
+            "bundle_id": bundle_id,
+            "repo_dir": str(repo_dir),
+            "runtime_dir": str(runtime_dir),
+            "manifest": manifest,
+        }
 
     def _err(msg, *, status=400, stage="", **extra):
         payload = {"ok": False, "msg": msg}
@@ -166,9 +267,15 @@ def register_comfyui_template_routes(app, ctx):
             _audit_preview(actor, success=False, stage="parse")
             return _err(
                 f"workflow JSON 格式錯誤：{exc.msg}（行 {exc.lineno}）。"
-                f"請確認上傳的是 ComfyUI API format（不是 UI graph）。",
+                f"請確認上傳的是合法的 ComfyUI workflow JSON。",
                 stage="parse",
             )
+
+        try:
+            workflow = normalize_uploaded_workflow_json(workflow)
+        except WorkflowValidationError as exc:
+            _audit_preview(actor, success=False, stage="normalize")
+            return _err(str(exc), stage="normalize")
 
         # ----- Sanitize (§3 + §7) ---------------------------------------------
         # sanitize_workflow_json wraps the cleaned graph in a dict like
@@ -379,6 +486,11 @@ def register_comfyui_template_routes(app, ctx):
                 unsupported=capability.unsupported,
                 blockers=capability.blockers,
             )
+        schema = build_ui_schema(
+            analysis=analysis,
+            capability=capability,
+            raw_workflow=sanitized_inner,
+        )
 
         # Persist as preset.
         conn = get_db()
@@ -395,7 +507,30 @@ def register_comfyui_template_routes(app, ctx):
                 is_official=False,
             )
             row = load_workflow_preset_row(conn, preset_id=preset_id)
+            bundle_info = _materialize_template_bundle(
+                preset_id=preset_id,
+                actor=actor,
+                title=title,
+                description=description,
+                visibility=visibility,
+                workflow_json=sanitized_inner,
+                default_params=(default_params or sanitized_wrapper.get("default_params") or {}),
+                schema=schema,
+                capability=capability,
+                workflow_hash=sanitized_wrapper.get("workflow_hash") or "",
+            )
             conn.commit()
+        except Exception as exc:
+            conn.rollback()
+            audit(
+                "COMFYUI_TEMPLATE_IMPORT_FAIL",
+                get_client_ip(),
+                user=actor_value(actor, "username") or "-",
+                success=False,
+                ua=get_ua(),
+                detail=f"stage=bundle_write error={exc}",
+            )
+            return _err(f"模板 bundle 寫入失敗：{exc}", stage="bundle_write", status=500)
         finally:
             conn.close()
 
@@ -405,7 +540,7 @@ def register_comfyui_template_routes(app, ctx):
             user=actor_value(actor, "username") or "-",
             success=True,
             ua=get_ua(),
-            detail=f"preset_id={preset_id} overall={capability.overall}",
+            detail=f"preset_id={preset_id} overall={capability.overall} bundle_id={bundle_info['bundle_id']}",
         )
         return json_resp(
             {
@@ -413,6 +548,12 @@ def register_comfyui_template_routes(app, ctx):
                 "preset_id": preset_id,
                 "preset": workflow_preset_summary(row, actor=actor),
                 "capability": capability.to_dict(),
+                "bundle": {
+                    "id": bundle_info["bundle_id"],
+                    "repo_dir": bundle_info["repo_dir"],
+                    "runtime_dir": bundle_info["runtime_dir"],
+                    "manifest": bundle_info["manifest"],
+                },
             }
         )
 

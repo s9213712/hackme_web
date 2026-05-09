@@ -110,7 +110,14 @@ def sanitize_appearance_settings(data):
 
 
 def get_profile_appearance(conn, user_id):
-    profile = get_or_create_profile(conn, user_id)
+    ensure_user_profile_schema(conn)
+    row = conn.execute(
+        "SELECT appearance_json FROM user_profiles WHERE user_id=?",
+        (int(user_id),),
+    ).fetchone()
+    if not row:
+        return {}
+    profile = dict(row)
     raw = profile.get("appearance_json") or "{}"
     try:
         parsed = json.loads(raw) if isinstance(raw, str) else raw

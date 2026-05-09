@@ -30,8 +30,23 @@
 
 **Replay 防護**：同 `(report_type, report_hash, target_commit)` 三元組已存在 → reject，避免複用過期 artifact。
 **可信驗證**：缺少 `raw_report`、`report_hash` 與 `raw_report` 不一致、`signature` 驗證失敗、`key_version` 不符，任何一項都不會被 production gate 接受。
+**Filesystem auto-detect 不是信任來源**：`runtime/reports/security/production_gate/*.json` 只作為後台頁面與 API 的輔助顯示來源。這些檔案預設 `trust_level=unverified`；只有 `_verify_production_report_signature()` 驗證成功，且 `target_commit` / `target_branch` / `server_mode` 與當前 runtime 完全一致時，才會升級成 `verified` 並真正滿足 production gate。
+**舊檔 / 偽造檔警告**：unsigned、invalid JSON、`report_type` mismatch、replay 舊 commit、target 不一致等 filesystem 報告都只應顯示 warning，不能覆蓋資料庫裡已驗證的 report，也不能放行 production。
 
 **Commit 對齊**：13 份 report 的 `target_commit` 必須**全部相同**才算「對同一個 commit 都通過」。任一份 commit hash 不一致 → 視為過期，重跑該份。
+
+**Live regression 必測**：不能只靠單元測試確認 target 規則。至少要在隔離
+`/tmp` runtime 實測一次：
+
+1. 製造 13 份 `verified` 但 `target_commit=old/fake` 的 reports。
+2. 驗 `GET /api/root/server-mode/requirements` 仍然 `ok=false`。
+3. 驗 `POST /api/root/production/enter` 被擋下，且 warning / reason 明確顯示
+   `target_commit_mismatch`。
+4. 再製造 13 份 `verified + current target_commit` 的 reports，確認
+   `requirements ok=true` 且 `production enter` 成功。
+
+實際已跑過的 live 範例見：
+- [04_production_gate_validation_report.md](./04_production_gate_validation_report.md)
 
 ---
 
@@ -190,6 +205,13 @@ curl -sk -b jar "$BASE_URL/api/root/production-report/status" \
 ```
 
 只挑跟主流不同的 commit 重跑。
+
+如果是 live 驗收，要另外確認：
+
+- 這個 `target_commit` 來源和 live server 自己看到的 `current target commit`
+  是同一個來源。
+- `test_for_develop.sh` 不可把 `HTML_LEARNING_GIT_REPO_DIR` 指向沒有 `.git`
+  的 `/tmp` copy，否則 old commit 驗證會退化成空 target 判定。
 
 ### 4.7 server 在 incident_lockdown 不能 enter production
 先解 incident：

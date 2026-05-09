@@ -12,6 +12,7 @@ import argparse
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -134,6 +135,20 @@ def shell_script_check(script: str, args: list[str], *, timeout: int) -> Subchec
     return result
 
 
+def pick_available_port(preferred: int) -> int:
+    preferred = int(preferred or 0)
+    if preferred > 0:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            try:
+                sock.bind(("127.0.0.1", preferred))
+                return preferred
+            except OSError:
+                pass
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
 def py_compile_all() -> Subcheck:
     started = time.perf_counter()
     excluded_parts = {".git", ".venv", "venv", "__pycache__", "storage", "database", "logs", "runtime"}
@@ -242,9 +257,10 @@ def build_modules(args) -> list[ModuleResult]:
     modules.append(auth)
 
     functional = ModuleResult("C. Functional Live Smoke")
+    functional_port = pick_available_port(args.functional_smoke_port)
     functional.add(shell_script_check(
         "scripts/security/pentest/run_functional_smoke.sh",
-        ["--port", str(args.functional_smoke_port), "--out", str(out_dir)],
+        ["--port", str(functional_port), "--out", str(out_dir)],
         timeout=max(args.timeout, 420),
     ))
     functional.unresolved_risks.append("Functional smoke validates major user/admin flows, but it is not a substitute for focused pentest or browser UX review.")

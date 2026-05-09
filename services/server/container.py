@@ -27,6 +27,7 @@ def build_runtime_services(*, config, deps):
     )
     configure_auth_service(
         get_db=deps["get_db"],
+        get_auth_db=deps.get("get_auth_db", deps["get_db"]),
         get_user_by_username=deps["get_user_by_username"],
         fernet=deps["fernet"],
         get_client_ip=deps["get_client_ip"],
@@ -37,7 +38,7 @@ def build_runtime_services(*, config, deps):
         get_runtime_server_mode=deps["get_runtime_server_mode"],
     )
     configure_audit_service(
-        get_db=deps["get_db"],
+        get_db=deps.get("get_audit_db", deps["get_db"]),
         chain_seed=config["chain_seed"],
         integrity_key=config["integrity_key"],
         audit_log_path=config["audit_log_path"],
@@ -133,6 +134,8 @@ def build_runtime_services(*, config, deps):
     server_mode_service = ServerModeService(
         snapshot_service=snapshot_service,
         get_db=deps["get_db"],
+        get_auth_db=deps.get("get_auth_db", deps["get_db"]),
+        get_control_db=deps.get("get_control_db", deps["get_db"]),
         audit=deps["audit"],
         integrity_guard=integrity_guard,
         save_settings=deps["save_settings"],

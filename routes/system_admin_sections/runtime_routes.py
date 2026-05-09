@@ -10,6 +10,7 @@ def register_system_admin_runtime_routes(app, ctx):
     json_resp = ctx["json_resp"]
     get_current_user_ctx = ctx["get_current_user_ctx"]
     get_client_ip = ctx["get_client_ip"]
+    get_auth_db = ctx.get("get_auth_db", ctx["get_db"])
     get_db = ctx["get_db"]
     audit = ctx["audit"]
     require_root_actor = ctx["require_root_actor"]
@@ -773,6 +774,7 @@ def register_system_admin_runtime_routes(app, ctx):
             return json_resp({"ok":False,"msg":"只有最高管理者可查看健康中心"}), 403
 
         conn = get_db()
+        auth_conn = get_auth_db()
         try:
             from datetime import datetime
             now = datetime.utcnow()
@@ -786,8 +788,8 @@ def register_system_admin_runtime_routes(app, ctx):
             ).fetchone()["c"]
 
             try:
-                active_sessions = conn.execute(
-                    "SELECT COUNT(*) AS c FROM sessions WHERE last_active_at >= datetime('now', '-15 minutes')"
+                active_sessions = auth_conn.execute(
+                    "SELECT COUNT(*) AS c FROM sessions WHERE COALESCE(last_seen, created_at) >= datetime('now', '-15 minutes') AND COALESCE(is_revoked, 0)=0"
                 ).fetchone()["c"]
             except Exception:
                 active_sessions = 0
@@ -834,6 +836,7 @@ def register_system_admin_runtime_routes(app, ctx):
                 }
             })
         finally:
+            auth_conn.close()
             conn.close()
 
     @app.route("/<path:invalid>", methods=["GET", "POST", "OPTIONS"], provide_automatic_options=False)

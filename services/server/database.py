@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import threading
 from datetime import datetime
 
 
-def get_db(db_path, *, register_app_mode=None):
+def _open_sqlite(db_path, *, register_app_mode=None):
     conn = sqlite3.connect(db_path, timeout=15)
     conn.row_factory = sqlite3.Row
     try:
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA busy_timeout = 15000")
     except Exception:
@@ -20,6 +23,52 @@ def get_db(db_path, *, register_app_mode=None):
             register_app_mode(conn)
     except Exception:
         pass
+    return conn
+
+
+def ensure_audit_db_schema(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS secure_audit (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL,
+            action TEXT NOT NULL,
+            ip TEXT,
+            user TEXT,
+            success INTEGER NOT NULL DEFAULT 0,
+            ua TEXT,
+            detail TEXT,
+            prev_hash TEXT NOT NULL DEFAULT '',
+            entry_hash TEXT NOT NULL DEFAULT '',
+            chain_hash TEXT NOT NULL DEFAULT ''
+        )
+        """
+    )
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(secure_audit)").fetchall()}
+    for col, ddl in (
+        ("prev_hash", "ALTER TABLE secure_audit ADD COLUMN prev_hash TEXT NOT NULL DEFAULT ''"),
+        ("entry_hash", "ALTER TABLE secure_audit ADD COLUMN entry_hash TEXT NOT NULL DEFAULT ''"),
+        ("chain_hash", "ALTER TABLE secure_audit ADD COLUMN chain_hash TEXT NOT NULL DEFAULT ''"),
+    ):
+        if col not in cols:
+            conn.execute(ddl)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_secure_audit_ts ON secure_audit(ts)")
+
+
+def get_db(db_path, *, register_app_mode=None):
+    conn = _open_sqlite(db_path, register_app_mode=register_app_mode)
+    return conn
+
+
+def get_audit_db(db_path):
+    conn = _open_sqlite(db_path)
+    path = str(db_path)
+    if path not in _ENSURED_AUDIT_DB_PATHS:
+        with _ENSURE_LOCK:
+            if path not in _ENSURED_AUDIT_DB_PATHS:
+                ensure_audit_db_schema(conn)
+                conn.commit()
+                _ENSURED_AUDIT_DB_PATHS.add(path)
     return conn
 
 
@@ -97,6 +146,94 @@ def ensure_session_columns(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_last_seen ON sessions(last_seen)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_revoked ON sessions(is_revoked)")
+
+
+def ensure_auth_db_schema(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS csrf_tokens (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            token_hash   TEXT NOT NULL UNIQUE,
+            username     TEXT NOT NULL,
+            expires_at   TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS captcha_challenges (
+            id           TEXT PRIMARY KEY,
+            mode         TEXT NOT NULL,
+            answer_hash  TEXT NOT NULL,
+            ip_hash      TEXT,
+            expires_at   TEXT NOT NULL,
+            used_at      TEXT,
+            created_at   TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS login_attempts (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id      INTEGER,
+            ip_address   TEXT,
+            user_agent   TEXT,
+            success      INTEGER NOT NULL DEFAULT 0,
+            attempted_at TEXT    NOT NULL DEFAULT (datetime('now'))
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sessions (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id       INTEGER NOT NULL,
+            token_hash    TEXT NOT NULL UNIQUE,
+            ip_address    TEXT,
+            user_agent    TEXT,
+            device_info   TEXT,
+            ip_country    TEXT,
+            expires_at    TEXT NOT NULL,
+            is_revoked    INTEGER NOT NULL DEFAULT 0,
+            revoked_at    TEXT,
+            last_seen     TEXT,
+            session_epoch INTEGER NOT NULL DEFAULT 0,
+            created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+        """
+    )
+    ensure_session_columns(conn)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_csrf_expires_at ON csrf_tokens(expires_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_captcha_expires_at ON captcha_challenges(expires_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_login_attempts_user_time ON login_attempts(user_id, attempted_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_login_attempts_ip_time ON login_attempts(ip_address, attempted_at)")
+
+
+def get_auth_db(db_path):
+    conn = _open_sqlite(db_path)
+    path = str(db_path)
+    if path not in _ENSURED_AUTH_DB_PATHS:
+        with _ENSURE_LOCK:
+            if path not in _ENSURED_AUTH_DB_PATHS:
+                ensure_auth_db_schema(conn)
+                conn.commit()
+                _ENSURED_AUTH_DB_PATHS.add(path)
+    return conn
+
+
+def get_control_db(db_path):
+    conn = _open_sqlite(db_path)
+    path = str(db_path)
+    if path not in _ENSURED_CONTROL_DB_PATHS:
+        with _ENSURE_LOCK:
+            if path not in _ENSURED_CONTROL_DB_PATHS:
+                from services.snapshots.schema import ensure_control_db_schema
+
+                ensure_control_db_schema(conn)
+                conn.commit()
+                _ENSURED_CONTROL_DB_PATHS.add(path)
+    return conn
 
 
 def ensure_security_support_schema(
@@ -212,3 +349,7 @@ def activate_emergency_lockdown(
         audit("EMERGENCY_LOCKDOWN_ENABLED", get_client_ip_func(), user="audit_guard", success=True, detail=reason)
     except Exception:
         pass
+_ENSURED_AUTH_DB_PATHS: set[str] = set()
+_ENSURED_AUDIT_DB_PATHS: set[str] = set()
+_ENSURED_CONTROL_DB_PATHS: set[str] = set()
+_ENSURE_LOCK = threading.Lock()

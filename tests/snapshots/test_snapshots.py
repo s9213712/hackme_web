@@ -1031,6 +1031,33 @@ def test_old_commit_signed_report_cannot_pass_current_target_gate(tmp_path):
     assert requirements["reports"]["stress"]["target_verification_reason"] == "target_commit_mismatch"
 
 
+def test_current_production_target_uses_previous_mode_after_entering_production(tmp_path):
+    audit_log = []
+    service, db_path, _uploads = _service(tmp_path, audit_log)
+    control_db_path = tmp_path / "app" / "control.db"
+    mode = ServerModeService(
+        snapshot_service=service,
+        get_db=lambda: _db(db_path),
+        get_control_db=lambda: _db(control_db_path),
+        audit=lambda *args, **kwargs: audit_log.append((args, kwargs)),
+    )
+    conn = _db(control_db_path)
+    mode.ensure_schema(conn)
+    conn.execute(
+        """
+        UPDATE server_modes
+        SET current_mode='production', previous_mode='dev_ready'
+        WHERE id=1
+        """
+    )
+    conn.commit()
+    target = mode._current_production_target(conn)
+    conn.close()
+    assert target["current_mode"] == "production"
+    assert target["server_mode"] == "dev_ready"
+    assert target["report_server_mode"] == "dev_ready"
+
+
 def test_builtin_security_profiles_refresh_and_close_superweak_controls(tmp_path):
     audit_log = []
     service, db_path, uploads = _service(tmp_path, audit_log)
@@ -1776,6 +1803,105 @@ def test_security_center_and_server_output_are_root_only():
     output = client.get("/api/admin/server-output?limit=10")
     assert output.status_code == 200
     assert output.get_json()["ok"] is True
+
+
+def test_security_center_payload_includes_full_production_gate_settings(tmp_path):
+    snapshot_service = _FakeSnapshotService()
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
+    settings = {
+        "allow_register": False,
+        "audit_chain_enabled": True,
+        "browser_only_mode_enabled": True,
+        "captcha_mode": "math",
+        "feature_audit_log_enabled": True,
+        "feature_economy_enabled": True,
+        "integrity_guard_enabled": True,
+        "integrity_guard_strict_mode": True,
+        "ip_blocking_enabled": True,
+        "login_violation_enabled": True,
+        "maintenance_mode": False,
+        "production_single_account_ip_lock_enabled": False,
+        "production_single_ip_account_lock_enabled": False,
+        "rate_limit_violation_enabled": True,
+        "root_ip_whitelist": "",
+        "root_ip_whitelist_enabled": False,
+        "server_ssl_enabled": True,
+    }
+    db_path = tmp_path / "database.db"
+    auth_db_path = tmp_path / "auth.db"
+    log_dir = tmp_path / "logs"
+    chat_dir = tmp_path / "chats"
+    anchor_dir = tmp_path / "anchors"
+    storage_dir = tmp_path / "storage"
+    for path in (log_dir, chat_dir, anchor_dir, storage_dir):
+        path.mkdir()
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active'
+        );
+        INSERT INTO users (id, username, status) VALUES (1, 'root', 'active');
+        """
+    )
+    conn.commit()
+    conn.close()
+    auth_conn = sqlite3.connect(auth_db_path)
+    auth_conn.row_factory = sqlite3.Row
+    auth_conn.executescript(
+        """
+        CREATE TABLE sessions (
+            id INTEGER PRIMARY KEY,
+            expires_at TEXT,
+            is_revoked INTEGER NOT NULL DEFAULT 0
+        );
+        """
+    )
+    auth_conn.commit()
+    auth_conn.close()
+
+    def _get_db():
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _get_auth_db():
+        conn = sqlite3.connect(auth_db_path)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    client = _build_admin_app(
+        actor_box,
+        snapshot_service,
+        extra_deps={
+            "ANCHOR_DIR": str(anchor_dir),
+            "CHAT_DIR": str(chat_dir),
+            "DB_PATH": str(db_path),
+            "LOG_DIR": str(log_dir),
+            "SERVER_LOG_PATH": str(log_dir / "server.log"),
+            "STORAGE_DIR": str(storage_dir),
+            "get_auth_db": _get_auth_db,
+            "get_db": _get_db,
+            "get_system_settings": lambda: settings,
+            "get_feature_settings": lambda: {"feature_audit_log_enabled": True, "feature_economy_enabled": True},
+            "verify_audit_integrity": lambda: (True, None, "ok"),
+        },
+    ).test_client()
+
+    res = client.get("/api/admin/security-center")
+    assert res.status_code == 200
+    payload = res.get_json()["security_center"]["settings"]
+    for key in (
+        "allow_register",
+        "captcha_mode",
+        "production_single_account_ip_lock_enabled",
+        "production_single_ip_account_lock_enabled",
+    ):
+        assert key in payload
+        assert payload[key] == settings[key]
 
 
 def test_server_output_falls_back_to_gunicorn_error_log_when_runtime_buffer_is_empty(tmp_path):
