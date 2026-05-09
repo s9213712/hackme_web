@@ -36,6 +36,10 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _progress(message: str) -> None:
+    print(f"[chess-exp2-train] {message}", file=sys.stderr, flush=True)
+
+
 def _iter_jsonl(path: Path):
     for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         if not line.strip():
@@ -51,19 +55,34 @@ def _iter_jsonl(path: Path):
 
 def main() -> int:
     args = parse_args()
+    input_paths = [Path(item).expanduser().resolve() for item in args.input_jsonl]
+    model_path = Path(args.model_path).expanduser().resolve() if args.model_path else default_chess_nn_model_path()
+    _progress(f"target model: {model_path}")
+    _progress(f"input files: {len(input_paths)}")
     samples: list[dict] = []
-    for input_path in args.input_jsonl:
-        samples.extend(_iter_jsonl(Path(input_path).expanduser().resolve()))
+    for input_path in input_paths:
+        _progress(f"phase read input: {input_path}")
+        before = len(samples)
+        samples.extend(_iter_jsonl(input_path))
+        _progress(f"phase result read input: {len(samples) - before} rows")
     if args.max_samples and int(args.max_samples) > 0:
         samples = samples[: int(args.max_samples)]
+        _progress(f"phase cap samples: {len(samples)} rows")
+    _progress(f"phase train started: {len(samples)} rows")
     result = train_experiment_nn_from_replay_samples(
         samples,
-        model_path=Path(args.model_path).expanduser().resolve() if args.model_path else default_chess_nn_model_path(),
+        model_path=model_path,
     )
     result["input_rows"] = len(samples)
+    _progress(f"phase result train: ok artifact={model_path}")
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except Exception as exc:
+        _progress(f"FAIL: {exc}")
+        _progress("failure hint: check input JSONL schema and the target model path permissions")
+        raise

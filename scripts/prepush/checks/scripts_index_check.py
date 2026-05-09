@@ -7,6 +7,8 @@ from scripts.prepush.result import CheckResult
 
 
 WATCHED_ROOTS = (
+    Path("scripts/admin"),
+    Path("scripts/comfyui"),
     Path("scripts/games"),
     Path("scripts/on_live_reports"),
     Path("scripts/security"),
@@ -14,7 +16,7 @@ WATCHED_ROOTS = (
     Path("scripts/trading"),
 )
 SCRIPT_SUFFIXES = {".py", ".sh"}
-HELPER_NAMES = {"__init__.py", "common_paths.py"}
+HELPER_NAMES = {"__init__.py", "common_paths.py", "comfyui_run_in_linux.template.sh"}
 
 
 def iter_index_required_scripts(repo_root: Path):

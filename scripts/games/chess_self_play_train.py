@@ -79,6 +79,11 @@ def _progress_log(event: dict) -> None:
     sys.stderr.flush()
 
 
+def _progress(message: str) -> None:
+    sys.stderr.write(f"[chess-self-play] {message}\n")
+    sys.stderr.flush()
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Auto-play trainer for chess experiment / experiment 2:nn."
@@ -153,6 +158,13 @@ def main() -> int:
     nn_model_path = Path(args.experiment_2_model_path or default_chess_nn_model_path())
     dl_model_path = Path(args.experiment_3_model_path or default_chess_dl_model_path())
     pv_model_path = Path(args.experiment_4_model_path or default_chess_pv_model_path())
+    _progress(f"runtime dir: {runtime_dir or '<default runtime>'}")
+    _progress(f"target exp1 db: {Path(args.experiment_db_path) if args.experiment_db_path else '<default>'}")
+    _progress(f"target exp2 model: {nn_model_path}")
+    _progress(f"target exp3 model: {dl_model_path}")
+    _progress(f"target exp4 model: {pv_model_path}")
+    _progress(f"report dir: {Path(args.report_dir)}")
+    _progress("phase self-play training started")
     with _temporary_search_depths(args):
         summary = run_training_session(
             exp1_teacher_games=args.exp1_games,
@@ -209,9 +221,16 @@ def main() -> int:
         sys.stderr.flush()
     reports = write_training_report(summary, report_dir=Path(args.report_dir))
     summary["reports"] = reports
+    _progress(f"phase result report: json={reports.get('json_report')} md={reports.get('md_report')}")
     print(json.dumps(summary, ensure_ascii=False, indent=2))
+    _progress("phase result self-play training: PASS")
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except Exception as exc:
+        _progress(f"FAIL: {exc}")
+        _progress("failure hint: check runtime/model/report paths and reduce game counts for a focused repro")
+        raise

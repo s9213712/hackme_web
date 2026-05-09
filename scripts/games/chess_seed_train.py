@@ -238,6 +238,11 @@ def _progress_log(event: dict) -> None:
     sys.stderr.flush()
 
 
+def _progress(message: str) -> None:
+    sys.stderr.write(f"[chess-seed-train] {message}\n")
+    sys.stderr.flush()
+
+
 def main() -> int:
     args = parse_args()
     schedule = _resolved_schedule(args)
@@ -245,6 +250,13 @@ def main() -> int:
     nn_model_path = Path(args.experiment_2_model_path or bundled_chess_nn_model_path())
     dl_model_path = Path(args.experiment_3_model_path or bundled_chess_dl_model_path())
     pv_model_path = Path(args.experiment_4_model_path or bundled_chess_pv_model_path())
+    _progress(f"preset: {args.preset} seed={int(args.seed)}")
+    _progress(f"target exp1 db: {Path(args.experiment_db_path or bundled_chess_engine_db_path())}")
+    _progress(f"target exp2 model: {nn_model_path}")
+    _progress(f"target exp3 model: {dl_model_path}")
+    _progress(f"target exp4 model: {pv_model_path}")
+    _progress(f"report dir: {Path(args.report_dir)}")
+    _progress("phase seed training started")
 
     with _temporary_search_depths(args):
         summary = run_training_session(
@@ -304,6 +316,7 @@ def main() -> int:
             sys.stderr.flush()
 
     reports = write_training_report(summary, report_dir=Path(args.report_dir), basename="chess_seed_train")
+    _progress(f"phase result report: json={reports.get('json_report')} md={reports.get('md_report')}")
     payload = {
         "ok": True,
         "preset": args.preset,
@@ -331,8 +344,14 @@ def main() -> int:
         },
     }
     print(json.dumps(payload, ensure_ascii=False, indent=2))
+    _progress("phase result seed training: PASS")
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except Exception as exc:
+        _progress(f"FAIL: {exc}")
+        _progress("failure hint: check model target paths, report dir permissions, and lower --preset for a smaller repro")
+        raise

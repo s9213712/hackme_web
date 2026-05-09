@@ -3,6 +3,7 @@ import argparse
 import json
 import math
 import sqlite3
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -12,6 +13,10 @@ from flask import Flask, jsonify
 from routes.trading import register_trading_routes
 from services.points_chain import PointsLedgerService, ensure_points_economy_schema
 from services.trading.trading_engine import ASSET_SCALE, TradingEngineService, ensure_trading_schema, fee_points
+
+
+def progress(message):
+    print(f"[backtest-20000-probe] {message}", file=sys.stderr, flush=True)
 
 
 def build_temp_services():
@@ -542,7 +547,9 @@ def parse_args():
 
 def main():
     args = parse_args()
+    progress("phase temp runtime started")
     temp_dir, _points, trading = build_temp_services()
+    progress(f"phase result temp runtime: {temp_dir}")
     started = time.perf_counter()
     probe_map = {
         "conditional": conditional_probe,
@@ -561,7 +568,13 @@ def main():
             case_names.append("route")
     else:
         case_names = [args.case]
-    cases = [probe_map[name](trading) for name in case_names]
+    progress(f"selected cases: {', '.join(case_names)}")
+    cases = []
+    for name in case_names:
+        progress(f"phase probe started: {name}")
+        case = probe_map[name](trading)
+        cases.append(case)
+        progress(f"phase result probe {name}: {'PASS' if case.get('match') else 'FAIL'}")
     report = {
         "runtime_dir": str(temp_dir),
         "elapsed_ms": round((time.perf_counter() - started) * 1000, 2),
@@ -571,9 +584,21 @@ def main():
         "all_passed": all(case["match"] for case in cases),
     }
     if args.json_out:
-        Path(args.json_out).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        json_out = Path(args.json_out).expanduser().resolve()
+        json_out.parent.mkdir(parents=True, exist_ok=True)
+        json_out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        progress(f"artifact json: {json_out}")
+    progress(f"phase result summary: {'PASS' if report['all_passed'] else 'FAIL'} runtime={temp_dir}")
+    if not report["all_passed"]:
+        progress("failure hint: inspect the failing case payload in stdout or --json-out")
     print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0 if report["all_passed"] else 1
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        raise SystemExit(main())
+    except Exception as exc:
+        progress(f"FAIL: {exc}")
+        progress("failure hint: rerun a single --case with --json-out to inspect the failing scenario")
+        raise
