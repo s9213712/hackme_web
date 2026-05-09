@@ -325,7 +325,21 @@ try:
         ("trading.simulated_slippage_base_basis_points", "0"),
         ("trading.simulated_slippage_size_basis_points_per_10k_notional", "0"),
         ("trading.simulated_slippage_max_basis_points", "0"),
-        ("trading.price_fusion_trade_min_provider_count", "2"),
+        # Dev default: pin price fusion to Binance public API only so the
+        # /tmp dev runtime does not require OKX/Coinbase/Kraken/Gemini/Bitstamp
+        # reachability for spot trading, live-price, or risk-grade gating.
+        ("trading.price_fusion_mode", "manual_weights"),
+        (
+            "trading.price_fusion_manual_weights_json",
+            '{"binance_public_api": 100.0, "okx_public_api": 0.0, '
+            '"coinbase_exchange": 0.0, "kraken_public_api": 0.0, '
+            '"gemini_public_api": 0.0, "bitstamp_public_api": 0.0}',
+        ),
+        ("trading.price_fusion_min_provider_count", "1"),
+        ("trading.price_fusion_trade_min_provider_count", "1"),
+        # Lift the single-provider cap to 100% so dev runtime can run on
+        # Binance alone without the provider_weight_cap_unenforceable warning.
+        ("trading.price_fusion_max_single_provider_weight_percent", "100"),
     ):
         conn.execute(
             "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
