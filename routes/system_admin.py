@@ -1264,7 +1264,39 @@ def register_system_admin_routes(app, deps):
         if error:
             return error
         limit = request.args.get("limit", 200)
-        return json_resp({"ok": True, "server_output": get_server_output(limit=limit)})
+        try:
+            limit_int = max(1, int(limit))
+        except (TypeError, ValueError):
+            limit_int = 200
+        result = get_server_output(limit=limit_int) or {"lines": [], "max_lines": 0}
+        # Fall back to tailing gunicorn_error.log when the runtime buffer is
+        # empty (post-boot, post-runtime-reset). See same logic in
+        # routes/system_admin_sections/security_routes.py.
+        lines = result.get("lines") or []
+        if not lines:
+            log_path = os.path.join(LOG_DIR, "gunicorn_error.log")
+            if os.path.isfile(log_path):
+                try:
+                    with open(log_path, "r", encoding="utf-8", errors="replace") as fh:
+                        tail = fh.readlines()[-limit_int:]
+                    parsed_lines = []
+                    for raw in tail:
+                        text = raw.rstrip("\n")
+                        stream = "info"
+                        m = re.search(r"\[(DEBUG|INFO|WARNING|ERROR|CRITICAL)\]", text)
+                        if m:
+                            stream = m.group(1).lower()
+                        elif " ERROR " in text or " Traceback" in text:
+                            stream = "error"
+                        parsed_lines.append({"stream": stream, "line": text})
+                    result = {
+                        "lines": parsed_lines,
+                        "max_lines": result.get("max_lines") or 0,
+                        "source": "gunicorn_error.log",
+                    }
+                except OSError:
+                    pass
+        return json_resp({"ok": True, "server_output": result})
 
     @app.route("/api/root/security-tests", methods=["GET"])
     @require_csrf_safe

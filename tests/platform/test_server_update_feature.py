@@ -34,7 +34,10 @@ def test_server_update_routes_are_root_only_and_use_safe_git_flow():
     assert "SERVER_UPDATE_WARNING" in system_admin
     assert "git reset --hard" not in system_admin
     assert "checkout -B" not in system_admin
-    assert 'return json_resp({"ok": bool(state.get("ok")), "update": state, "warning": SERVER_UPDATE_WARNING}), 200' in system_admin
+    # Status endpoint returns 200 on success, 500 on git/state failure so
+    # the frontend can distinguish "git is healthy" from "we couldn't even
+    # read the state". Earlier shape was always-200.
+    assert 'return json_resp({"ok": bool(state.get("ok")), "update": state, "warning": SERVER_UPDATE_WARNING}), (200 if state.get("ok") else 500)' in system_admin
     assert 'app.logger.exception("Unhandled exception while serving %s %s", request.method, request.path)' in server_py
 
 
