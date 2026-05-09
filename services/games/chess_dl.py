@@ -568,12 +568,22 @@ def train_experiment_dl_from_replay_samples(
     }
 
 
-def distill_experiment_dl_from_move_history(move_history: list[dict], *, teacher_side: str, model_path=None, replay_path=None, source: str = "teacher_distillation") -> int:
+def distill_experiment_dl_from_move_history(move_history: list[dict], *, teacher_side: str, model_path=None, replay_path=None, source: str = "teacher_distillation", initial_fen: str | None = None) -> int:
     if teacher_side not in {"white", "black"}:
         return 0
     if not isinstance(move_history, list) or not move_history:
         return 0
-    board = initial_board()
+    # When the match was launched from an opening-book position, replay must
+    # start from that FEN — otherwise the very first recorded move can refer
+    # to a piece that doesn't exist in the standard starting setup, and
+    # board.push() asserts on a pseudo-illegal move.
+    if initial_fen:
+        # _record_row_for_side already uses the {"__fen__": initial_fen}
+        # convention (see line 658) to seed the replay state, and
+        # _board_from_state honors __fen__ first when reconstructing.
+        board = {"__fen__": str(initial_fen)}
+    else:
+        board = initial_board()
     samples: list[dict] = []
     teacher_total = sum(1 for entry in move_history if str((entry or {}).get("by") or "").strip().lower() == teacher_side)
     seen_teacher = 0

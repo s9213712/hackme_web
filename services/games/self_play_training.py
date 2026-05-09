@@ -1134,6 +1134,7 @@ def _apply_training(
             teacher_side=teacher_side,
             model_path=dl_model_path,
             source="teacher_distillation",
+            initial_fen=initial_fen,
         )
     return student_updates, teacher_guidance, teacher_distillation_updates
 

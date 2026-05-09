@@ -145,7 +145,7 @@ def test_games_runtime_defaults_use_repo_runtime(monkeypatch):
     monkeypatch.delenv("HTML_LEARNING_REPORTS_DIR", raising=False)
 
     runtime_root = default_runtime_root_path().resolve()
-    assert default_chess_engine_db_path() == runtime_root / "database" / "chess_experiment.db"
+    assert default_chess_engine_db_path() == runtime_root / "games" / "models" / "chess_experiment.db"
     assert bundled_chess_engine_db_path().name == "chess_experiment.db"
     assert default_chess_nn_model_path() == runtime_root / "games" / "models" / "chess_experiment_2_nn.json"
     assert default_chess_dl_model_path() == runtime_root / "games" / "models" / "chess_experiment_3_dl.json"
