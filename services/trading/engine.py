@@ -2357,7 +2357,11 @@ class TradingEngineService:
         # Higher-risk paths (grid scan, margin, contract, trial-credit, bot triggers) must
         # still hard-block on cached fallback. manual_root always hard-blocks.
         cached_fallback_allowed_usages = {
-            "market order",
+            # Market orders intentionally NOT allowed: when the live feed is
+            # down and we fall back to last-good cached price, the user has no
+            # chance to react before the fill commits at a potentially stale
+            # price. Limit fills are bounded by the user's limit_price so
+            # cached fallback is safe there.
             "immediately executable limit order",
             "limit order match",
         }

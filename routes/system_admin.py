@@ -219,6 +219,8 @@ def register_system_admin_routes(app, deps):
     audit = deps["audit"]
     get_client_ip = deps["get_client_ip"]
     get_current_user_ctx = deps["get_current_user_ctx"]
+    get_audit_db = deps.get("get_audit_db", deps["get_db"])
+    get_auth_db = deps.get("get_auth_db", deps["get_db"])
     get_db = deps["get_db"]
     get_ua = deps.get("get_ua", lambda: "-")
     get_feature_settings = deps["get_feature_settings"]
@@ -670,6 +672,8 @@ def register_system_admin_routes(app, deps):
         )}
         payload["progress_percent"] = progress
         payload["log_tail"] = log_tail
+        if "production_report" in job:
+            payload["production_report"] = job["production_report"]
         return payload
 
     def _report_prefixes(prefix):
@@ -705,6 +709,90 @@ def register_system_admin_routes(app, deps):
             if os.path.isdir(os.path.join(BASE_DIR, artifact)):
                 return artifact
         return ""
+
+    def _maybe_upload_production_report(*, kind, report_artifacts, started_ts, actor_username, client_ip, job_id):
+        """Auto-upload a passed security-test report to ServerModeService so
+        the production gate can see it. Returns a dict suitable to attach to
+        ``job["production_report"]``:
+
+          - ``{"ok": True, "report_type": ..., "report_id": ...}`` on success
+          - ``{"ok": False, "skipped": True, "reason": "..."}`` when we choose
+            not to upload (e.g. stress run had failures)
+          - ``{"ok": False, "skipped": False, "reason": "..."}`` on errors
+        """
+        if not server_mode_service:
+            return {"ok": False, "skipped": True, "reason": "server_mode_service_unavailable", "report_type": kind}
+        json_path = ""
+        for artifact in report_artifacts or []:
+            full = os.path.join(BASE_DIR, artifact)
+            if os.path.isfile(full) and full.endswith(".json"):
+                json_path = full
+                break
+        raw_report = {
+            "report_type": kind,
+            "status": "pass",
+            "summary": f"job {job_id} passed",
+        }
+        if json_path:
+            try:
+                with open(json_path, "r", encoding="utf-8") as fh:
+                    raw_report = json.load(fh)
+            except Exception:
+                pass
+        if kind == "stress":
+            failed = int(raw_report.get("failed_count") or 0)
+            server_errors = int(raw_report.get("server_error_count") or 0)
+            if failed > 0 or server_errors > 0:
+                return {
+                    "ok": False,
+                    "skipped": True,
+                    "reason": "report_not_clean",
+                    "report_type": kind,
+                }
+        try:
+            current_target = {}
+            if hasattr(server_mode_service, "_current_production_target"):
+                try:
+                    current_target = server_mode_service._current_production_target() or {}
+                except Exception:
+                    current_target = {}
+            attestation = server_mode_service._prepare_production_report_attestation(
+                report_type=kind,
+                raw_report=raw_report,
+                target_commit=str(current_target.get("target_commit") or ""),
+                target_branch=str(current_target.get("target_branch") or ""),
+                server_mode=str(current_target.get("server_mode") or ""),
+                test_result="pass",
+                tester=actor_username or "root",
+            )
+        except Exception as exc:
+            return {"ok": False, "skipped": False, "reason": f"attestation_error:{exc}", "report_type": kind}
+        if not attestation or not attestation.get("ok"):
+            return {"ok": False, "skipped": False, "reason": "attestation_failed", "report_type": kind}
+        try:
+            upload = server_mode_service.upload_production_report(
+                report_type=kind,
+                test_result="pass",
+                report_hash=attestation.get("report_hash"),
+                signature=attestation.get("signature"),
+                key_version=attestation.get("key_version"),
+                raw_report=raw_report,
+                tester=actor_username or "root",
+                target_commit=str(current_target.get("target_commit") or ""),
+                target_branch=str(current_target.get("target_branch") or ""),
+                server_mode=str(current_target.get("server_mode") or ""),
+            )
+        except Exception as exc:
+            return {"ok": False, "skipped": False, "reason": f"upload_error:{exc}", "report_type": kind}
+        if not upload or not upload.get("ok"):
+            return {"ok": False, "skipped": False, "reason": "upload_failed", "report_type": kind}
+        return {
+            "ok": True,
+            "skipped": False,
+            "report_type": kind,
+            "report_id": upload.get("report_id"),
+            "report_hash": attestation.get("report_hash"),
+        }
 
     def _start_security_test_job(kind, command, *, command_label, report_root, report_prefix, actor, env=None):
         job_id = f"{kind}_{uuid.uuid4().hex[:12]}"
@@ -763,6 +851,16 @@ def register_system_admin_routes(app, deps):
                 status = "passed" if code == 0 else "failed"
                 report_dir = _find_latest_report_dir(report_root, report_prefix, started_ts)
                 report_artifacts = _find_latest_report_artifacts(report_root, report_prefix, started_ts)
+                production_report = None
+                if status == "passed":
+                    production_report = _maybe_upload_production_report(
+                        kind=kind,
+                        report_artifacts=report_artifacts,
+                        started_ts=started_ts,
+                        actor_username=actor_username,
+                        client_ip=client_ip,
+                        job_id=job_id,
+                    )
                 with SECURITY_TEST_JOBS_LOCK:
                     job.update({
                         "status": status,
@@ -772,6 +870,8 @@ def register_system_admin_routes(app, deps):
                         "report_artifacts": report_artifacts,
                         "progress_percent": 100,
                     })
+                    if production_report is not None:
+                        job["production_report"] = production_report
                 audit("SECURITY_TEST_FINISHED", client_ip, user=actor_username, success=(code == 0), detail=f"job_id={job_id},kind={kind},returncode={code},report_dir={report_dir}")
             except Exception as exc:
                 with SECURITY_TEST_JOBS_LOCK:
@@ -866,6 +966,7 @@ def register_system_admin_routes(app, deps):
 
     def health_counts():
         conn = get_db()
+        auth_conn = get_auth_db()
         errors = {}
         try:
             now = datetime.now().isoformat()
@@ -873,7 +974,6 @@ def register_system_admin_routes(app, deps):
             for key, table, where, params, optional in (
                 ("users_total", "users", "", (), False),
                 ("active_users", "users", "status='active'", (), False),
-                ("active_sessions", "sessions", "expires_at>? AND COALESCE(is_revoked, 0)=0", (now,), True),
                 ("chat_messages", "chat_messages", "", (), True),
                 ("pending_chat_reports", "chat_message_reports", "status='pending'", (), True),
                 ("pending_appeals", "violation_appeals", "status='pending'", (), True),
@@ -890,8 +990,19 @@ def register_system_admin_routes(app, deps):
                 counts[key] = value
                 if err:
                     errors[key] = err
+            active_sessions, err = safe_count(
+                auth_conn,
+                "sessions",
+                "expires_at>? AND COALESCE(is_revoked, 0)=0",
+                (now,),
+                optional=True,
+            )
+            counts["active_sessions"] = active_sessions
+            if err:
+                errors["active_sessions"] = err
             return counts, errors
         finally:
+            auth_conn.close()
             conn.close()
 
     def readiness_summary():
@@ -1035,7 +1146,7 @@ def register_system_admin_routes(app, deps):
 
     def recent_secure_audit(limit=50):
         limit = max(1, min(int(limit or 50), 200))
-        conn = get_db()
+        conn = get_audit_db()
         try:
             rows = conn.execute(
                 "SELECT id, ts, action, ip, user, success, ua, detail, chain_hash "
@@ -2159,6 +2270,7 @@ def register_system_admin_routes(app, deps):
         if error:
             return error
         conn = get_db()
+        auth_conn = get_auth_db()
         try:
             ensure_upload_security_schema(conn)
             if request.method == "GET":
@@ -3209,8 +3321,8 @@ def register_system_admin_routes(app, deps):
             ).fetchone()["c"]
 
             try:
-                active_sessions = conn.execute(
-                    "SELECT COUNT(*) AS c FROM sessions WHERE last_active_at >= datetime('now', '-15 minutes')"
+                active_sessions = auth_conn.execute(
+                    "SELECT COUNT(*) AS c FROM sessions WHERE COALESCE(last_seen, created_at) >= datetime('now', '-15 minutes') AND COALESCE(is_revoked, 0)=0"
                 ).fetchone()["c"]
             except Exception:
                 active_sessions = 0
@@ -3257,6 +3369,7 @@ def register_system_admin_routes(app, deps):
                 }
             })
         finally:
+            auth_conn.close()
             conn.close()
 
     @app.route("/<path:invalid>", methods=["GET", "POST", "OPTIONS"], provide_automatic_options=False)
