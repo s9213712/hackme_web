@@ -265,19 +265,21 @@ def _quiescence(
     qmoves = [move for move in board.legal_moves if qmove_filter(board, move)]
     for move in qmoves:
         board.push(move)
-        score = -_quiescence(
-            board,
-            alpha=-beta,
-            beta=-alpha,
-            color_sign=-color_sign,
-            ply=ply + 1,
-            remaining_depth=remaining_depth - 1,
-            evaluate=evaluate,
-            qmove_filter=qmove_filter,
-            stats=stats,
-            deadline=deadline,
-        )
-        board.pop()
+        try:
+            score = -_quiescence(
+                board,
+                alpha=-beta,
+                beta=-alpha,
+                color_sign=-color_sign,
+                ply=ply + 1,
+                remaining_depth=remaining_depth - 1,
+                evaluate=evaluate,
+                qmove_filter=qmove_filter,
+                stats=stats,
+                deadline=deadline,
+            )
+        finally:
+            board.pop()
         if score >= beta:
             return beta
         if score > alpha:
@@ -352,26 +354,28 @@ def _negamax(
     for move in ordered:
         moving_turn = board.turn
         board.push(move)
-        score, _child_move = _negamax(
-            board,
-            depth=depth - 1,
-            alpha=-beta,
-            beta=-alpha,
-            color_sign=-color_sign,
-            ply=ply + 1,
-            evaluate=evaluate,
-            move_order_fn=move_order_fn,
-            qmove_filter=qmove_filter,
-            stats=stats,
-            transposition=transposition,
-            hasher=hasher,
-            killer_moves=killer_moves,
-            history_heuristic=history_heuristic,
-            quiescence_depth=quiescence_depth,
-            deadline=deadline,
-        )
-        score = -score
-        board.pop()
+        try:
+            score, _child_move = _negamax(
+                board,
+                depth=depth - 1,
+                alpha=-beta,
+                beta=-alpha,
+                color_sign=-color_sign,
+                ply=ply + 1,
+                evaluate=evaluate,
+                move_order_fn=move_order_fn,
+                qmove_filter=qmove_filter,
+                stats=stats,
+                transposition=transposition,
+                hasher=hasher,
+                killer_moves=killer_moves,
+                history_heuristic=history_heuristic,
+                quiescence_depth=quiescence_depth,
+                deadline=deadline,
+            )
+            score = -score
+        finally:
+            board.pop()
         if score > best_score or (score == best_score and best_move is not None and move.uci() < best_move.uci()):
             best_score = score
             best_move = move

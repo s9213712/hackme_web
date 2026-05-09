@@ -32,6 +32,7 @@ from services.games.chess_nn import (
     choose_experiment_nn_move,
 )
 from services.games.chess_dashboard import build_chess_engine_dashboard
+from services.games.chess_pipeline import maybe_launch_chess_train_pipeline
 from services.games.chess_promotion import (
     ensure_warm_start_chess_environment,
     promote_candidate_model,
@@ -704,6 +705,18 @@ def register_games_routes(app, deps):
                     f"confidence={replay.get('confidence_score')}"
                 ),
             )
+            if replay.get("stored"):
+                try:
+                    maybe_launch_chess_train_pipeline(trigger="live_replay", actor_username=actor_username)
+                except Exception as exc:
+                    audit(
+                        "GAME_CHESS_PIPELINE_AUTORUN_FAILED",
+                        get_client_ip(),
+                        user=actor_username,
+                        success=False,
+                        ua=get_ua(),
+                        detail=f"match_id={row['id']}, error={type(exc).__name__}: {exc}",
+                    )
             return replay
         except Exception as exc:
             audit(

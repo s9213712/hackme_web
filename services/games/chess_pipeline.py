@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from services.games.chess_arena import default_chess_reports_dir
+from services.games.chess_engine import default_chess_engine_db_path
 from services.games.chess_promotion import default_chess_candidate_dir
 from services.games.chess_replay_buffer import replay_buffer_summary
 from services.server.runtime import default_runtime_root_path
@@ -15,6 +19,7 @@ from services.server.runtime import default_runtime_root_path
 
 DEFAULT_RETRAIN_MIN_USABLE_REPLAYS = 25
 DEFAULT_RETRAIN_MAX_AGE_HOURS = 24 * 7
+_PIPELINE_AUTORUN_LOCK = threading.Lock()
 
 
 def _runtime_root() -> Path:
@@ -55,7 +60,7 @@ def build_pipeline_run_id(prefix: str = "pipeline") -> str:
 def candidate_paths_for_run(run_id: str, *, include_exp2: bool = False) -> dict[str, Path]:
     root = default_chess_pipeline_candidate_root() / str(run_id)
     paths = {
-        "experiment": _runtime_root() / "database" / "chess_experiment.db",
+        "experiment": default_chess_engine_db_path(),
         "experiment 3:dl": root / "chess_experiment_3_dl.json",
         "experiment 3:dl replay": root / "chess_experiment_3_dl_replay.jsonl",
         "experiment 4:pv": root / "chess_experiment_4_pv.json",
@@ -93,6 +98,47 @@ def latest_pipeline_report(*, report_dir: Path | None = None) -> dict:
         "exists": bool(path and path.exists()),
         "summary": payload or {},
     }
+
+
+def default_chess_pipeline_autorun_status_path() -> Path:
+    return default_chess_reports_dir() / "chess_pipeline_autorun_status.json"
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _save_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp_path.replace(path)
+
+
+def _pid_running(pid: int) -> bool:
+    if int(pid or 0) <= 0:
+        return False
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except OSError:
+        return False
+
+
+def latest_pipeline_autorun_status(*, path: Path | None = None) -> dict:
+    status_path = Path(path or default_chess_pipeline_autorun_status_path())
+    payload = _load_json(status_path)
+    if not isinstance(payload, dict):
+        payload = {}
+    pid = int(payload.get("pid") or 0)
+    running = str(payload.get("status") or "").strip().lower() == "running" and _pid_running(pid)
+    if str(payload.get("status") or "").strip().lower() == "running" and not running:
+        payload["status"] = "stale"
+    payload["pid"] = pid
+    payload["is_running"] = running
+    payload["path"] = str(status_path)
+    payload["exists"] = status_path.exists()
+    return payload
 
 
 def _parse_iso_utc(value: str) -> datetime | None:
@@ -161,3 +207,113 @@ def pipeline_recommendation(*, replay: dict | None = None, pipeline_report: dict
         "recommended_command": command,
     }
 
+
+def maybe_launch_chess_train_pipeline(
+    *,
+    replay: dict | None = None,
+    trigger: str = "live_replay",
+    actor_username: str | None = None,
+) -> dict:
+    replay = replay if isinstance(replay, dict) else replay_buffer_summary()
+    recommendation = pipeline_recommendation(replay=replay)
+    status_path = default_chess_pipeline_autorun_status_path()
+    if not recommendation["ready"]:
+        return {
+            "ok": True,
+            "launched": False,
+            "reason": "not_ready",
+            "recommendation": recommendation,
+            "status": latest_pipeline_autorun_status(path=status_path),
+        }
+    with _PIPELINE_AUTORUN_LOCK:
+        current = latest_pipeline_autorun_status(path=status_path)
+        if current.get("is_running"):
+            return {
+                "ok": True,
+                "launched": False,
+                "reason": "already_running",
+                "recommendation": recommendation,
+                "status": current,
+            }
+        root = _repo_root()
+        min_usable = int(recommendation["thresholds"]["min_usable_replays"])
+        report_dir = default_chess_reports_dir()
+        report_dir.mkdir(parents=True, exist_ok=True)
+        run_id = build_pipeline_run_id("autorun")
+        log_path = report_dir / f"chess_train_pipeline_autorun_{run_id}.log"
+        cmd = [
+            sys.executable,
+            str(root / "scripts" / "games" / "chess_train_pipeline.py"),
+            "--preset",
+            "standard",
+            "--include-quarantine",
+            "--min-usable-replays",
+            str(max(1, min_usable)),
+        ]
+        env = os.environ.copy()
+        current_pythonpath = str(env.get("PYTHONPATH") or "").strip()
+        root_text = str(root)
+        if current_pythonpath:
+            paths = current_pythonpath.split(os.pathsep)
+            if root_text not in paths:
+                env["PYTHONPATH"] = os.pathsep.join([root_text, current_pythonpath])
+        else:
+            env["PYTHONPATH"] = root_text
+        log_handle = log_path.open("w", encoding="utf-8")
+        log_handle.write(f"$ {' '.join(cmd)}\n\n")
+        log_handle.flush()
+        started_at = datetime.utcnow().isoformat() + "Z"
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=str(root),
+                env=env,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                text=True,
+                start_new_session=True,
+            )
+        except Exception:
+            log_handle.close()
+            raise
+        status = {
+            "status": "running",
+            "trigger": str(trigger or "live_replay"),
+            "actor_username": str(actor_username or "").strip(),
+            "pid": int(proc.pid or 0),
+            "started_at": started_at,
+            "finished_at": "",
+            "returncode": None,
+            "log_path": str(log_path),
+            "command": cmd,
+            "run_id": run_id,
+            "recommendation": recommendation,
+            "replay_snapshot": replay,
+        }
+        _save_json(status_path, status)
+
+        def _monitor() -> None:
+            try:
+                returncode = proc.wait()
+            finally:
+                log_handle.close()
+            latest_report = latest_pipeline_report()
+            finished = dict(status)
+            finished.update(
+                {
+                    "status": "passed" if returncode == 0 else "failed",
+                    "finished_at": datetime.utcnow().isoformat() + "Z",
+                    "returncode": int(returncode),
+                    "latest_pipeline_report_path": str(latest_report.get("path") or ""),
+                }
+            )
+            _save_json(status_path, finished)
+
+        threading.Thread(target=_monitor, name="chess-pipeline-autorun", daemon=True).start()
+        return {
+            "ok": True,
+            "launched": True,
+            "reason": "started",
+            "recommendation": recommendation,
+            "status": latest_pipeline_autorun_status(path=status_path),
+        }

@@ -81,6 +81,7 @@ def test_chess_train_pipeline_runs_prepare_seed_benchmark_and_stage(tmp_path):
     assert payload["prepare"]["accepted_train_samples"] >= 1
     assert payload["prepare"]["accepted_eval_samples"] >= 1
     assert payload["seed_train"]["games_played"] >= 1
+    assert payload["seed_train"]["experiment_db_path"] == str(runtime_dir / "games" / "models" / "chess_experiment.db")
     assert Path(payload["benchmark"]["reports"]["json_report"]).exists()
     assert payload["promotion_results"][0]["engine"] == "experiment 3:dl"
     assert payload["promotion_results"][0]["staged"] is True

@@ -7,6 +7,7 @@ import chess
 from flask import Flask, jsonify
 
 from routes.games import choose_computer_move, ensure_game_schema, register_games_routes
+from services.games import chess_pipeline as chess_pipeline_service
 from services.games.chess_dl import (
     EXPERIMENT_DL_DIFFICULTY,
     bundled_chess_dl_model_path,
@@ -27,6 +28,7 @@ from services.games.chess_replay_buffer import (
 )
 from services.games.chess_pv import experiment_pv_model_template
 from services.games.chess import game_status, initial_board, legal_moves, validate_move
+from services.games.chess_search import ZobristHasher, search_best_move
 
 
 def _build_app(db_path, actor_box, points_service=None, chess_engine_store=None):
@@ -1186,6 +1188,40 @@ def test_experiment_move_avoids_early_rook_shuffle_after_edge_pawn(tmp_path):
     assert isinstance(applied["board"], dict)
 
 
+def test_search_best_move_restores_root_board_on_exception():
+    board = chess.Board()
+    original_fen = board.fen()
+
+    def exploding_eval(_board):
+        raise RuntimeError("boom")
+
+    try:
+        search_best_move(
+            board,
+            max_depth=2,
+            evaluate=exploding_eval,
+            move_order_fn=lambda current_board, move, _ply: 1 if current_board.is_capture(move) else 0,
+            hasher=ZobristHasher(seed=20260518),
+            time_budget_ms=250,
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "boom"
+    else:
+        raise AssertionError("search_best_move should propagate the injected failure")
+
+    assert board.fen() == original_fen
+
+
+def test_experiment_move_stays_legal_on_timeout_prone_position(tmp_path):
+    fen = "rnbqkbn1/pp2ppp1/2pp3B/8/P2PP2p/8/RPP2PPP/1N1QKBNR w Kq - 0 6"
+
+    move = choose_experiment_move({"__fen__": fen}, "white", store=ChessExperimentStore(tmp_path / "exp1.db"), search_profile="fast")
+
+    assert move is not None
+    applied = validate_move({"__fen__": fen}, "white", move["from"], move["to"], move.get("promotion"))
+    assert isinstance(applied["board"], dict)
+
+
 def test_experiment_dl_move_avoids_early_rook_shuffle_after_edge_pawn(tmp_path, monkeypatch):
     model_path = tmp_path / "runtime" / "models" / "chess_experiment_3_dl.json"
     monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_DL_MODEL_PATH", str(model_path))
@@ -1224,6 +1260,7 @@ def test_root_chess_engine_dashboard_reports_warm_start_and_replay_summary(tmp_p
     assert "chess_train_pipeline.py" in payload["pipeline"]["commands"]["full_pipeline"]
     assert payload["pipeline_recommendation"]["ready"] is False
     assert "no usable replays yet" in payload["pipeline_recommendation"]["blocked_reasons"]
+    assert payload["pipeline_autorun"]["exists"] is False
     assert Path(payload["promotion"]["path"]).name == "chess_promotion_status.json"
     runtime_models = tmp_path / "runtime" / "games" / "models"
     assert (runtime_models / bundled_chess_engine_db_path().name).exists()
@@ -1276,6 +1313,82 @@ def test_root_chess_warm_start_does_not_overwrite_existing_exp1_runtime_db(tmp_p
         assert row["sample_count"] == 1
     finally:
         conn.close()
+
+
+def test_pipeline_autorun_starts_when_replay_threshold_is_met(tmp_path, monkeypatch):
+    runtime_dir = tmp_path / "runtime"
+    replay_path = runtime_dir / "reports" / "games" / "chess_replays.jsonl"
+    replay_path.parent.mkdir(parents=True, exist_ok=True)
+    replay_path.write_text(
+        json.dumps(
+            {
+                "source": "user_games",
+                "engine_name": "experiment 4:pv",
+                "engine_version": "experiment 4:pv",
+                "white_engine": "experiment 4:pv",
+                "black_engine": "user",
+                "opening_seed": "standard_start",
+                "result": "white",
+                "winner_color": "white",
+                "adjudicated_or_natural": "natural",
+                "move_count": 18,
+                "timestamp": "2026-05-09T12:27:08.354707Z",
+                "rating_estimate": None,
+                "suspicious_flag": False,
+                "duplicate_flag": False,
+                "resign_abuse_flag": False,
+                "confidence_score": 0.42,
+                "collection_tier": "trusted",
+                "quarantine_reasons": [],
+                "replay_id": "autorun-test-replay",
+                "move_history": [
+                    {"by": "white", "from": "e2", "to": "e4"},
+                    {"by": "black", "from": "e7", "to": "e5"},
+                ],
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HACKME_RUNTIME_DIR", str(runtime_dir))
+    monkeypatch.setenv("HTML_LEARNING_CHESS_RETRAIN_MIN_REPLAYS", "1")
+
+    popen_calls = []
+
+    class _FakeProc:
+        pid = 424242
+
+        def wait(self):
+            return 0
+
+    class _ImmediateThread:
+        def __init__(self, *, target=None, name=None, daemon=None):
+            self._target = target
+
+        def start(self):
+            if self._target is not None:
+                self._target()
+
+    def _fake_popen(command, **kwargs):
+        popen_calls.append({"command": list(command), **kwargs})
+        return _FakeProc()
+
+    monkeypatch.setattr(chess_pipeline_service.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(chess_pipeline_service.threading, "Thread", _ImmediateThread)
+
+    result = chess_pipeline_service.maybe_launch_chess_train_pipeline(trigger="test_suite", actor_username="root")
+
+    assert result["ok"] is True
+    assert result["launched"] is True
+    assert popen_calls
+    assert "--include-quarantine" in popen_calls[0]["command"]
+    assert "--min-usable-replays" in popen_calls[0]["command"]
+
+    status = chess_pipeline_service.latest_pipeline_autorun_status()
+    assert status["exists"] is True
+    assert status["status"] == "passed"
+    assert status["returncode"] == 0
 
 
 def test_root_chess_promotion_stage_and_promote(tmp_path, monkeypatch):

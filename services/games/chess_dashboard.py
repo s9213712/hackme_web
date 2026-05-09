@@ -12,7 +12,7 @@ from services.games.chess_arena import (
     latest_seed_training_report,
     latest_training_report,
 )
-from services.games.chess_pipeline import pipeline_recommendation
+from services.games.chess_pipeline import latest_pipeline_autorun_status, pipeline_recommendation
 from services.games.chess_promotion import ensure_warm_start_chess_environment, production_engine_inventory, promotion_status_summary
 from services.games.chess_replay_buffer import replay_buffer_summary
 
@@ -53,6 +53,7 @@ def build_chess_engine_dashboard() -> dict:
         "replay_buffer": replay,
         "pipeline": _pipeline_defaults(),
         "pipeline_recommendation": recommendation,
+        "pipeline_autorun": latest_pipeline_autorun_status(),
         "latest_pipeline_report": pipeline_report,
         "latest_replay_prepare": prepare,
         "latest_seed_training_report": seed_training,
