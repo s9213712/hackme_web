@@ -253,6 +253,13 @@ feature_updates.update({
     "server_ssl_enabled": True,
     "session_idle_timeout_minutes": 1440,
     "session_ttl_hours": 168,
+    # Dev default: assume root has the Windows-portable ComfyUI bundle
+    # mounted under WSL at /mnt/d/share/ComfyUI_windows_portable and uses
+    # run_in_linux.sh as the entrypoint. Switch to local mode so the dev
+    # runtime calls the locally-launched ComfyUI on 127.0.0.1 by default.
+    "comfyui_connection_mode": "local",
+    "comfyui_base_dir": "/mnt/d/share/ComfyUI_windows_portable",
+    "comfyui_local_start_script": "run_in_linux.sh",
 })
 server.save_settings(feature_updates)
 
