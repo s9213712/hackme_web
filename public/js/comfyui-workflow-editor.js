@@ -162,6 +162,7 @@
   let dragState = null;
   let connectState = null;
   let lastImportWarnings = [];
+  let nodeCatalog = [];
   let workflow = loadState();
 
   function isUnknownNode(node) {
@@ -239,6 +240,32 @@
       else if (key === "scheduler") inputs[key] = "normal";
       else if (key === "filename_prefix") inputs[key] = "hackme_web";
       else inputs[key] = "";
+    });
+    return inputs;
+  }
+
+  function defaultValueForSpec(key, spec = {}) {
+    if (spec.type === "link") return undefined;
+    if (spec.type === "checkbox") return false;
+    if (spec.type === "number") {
+      if (key === "width" || key === "height") return 1024;
+      if (key === "batch_size") return 1;
+      if (key === "steps") return 20;
+      if (key === "cfg") return 7;
+      if (key === "seed" || key === "noise_seed") return 0;
+      if (key === "denoise" || key === "strength" || key === "strength_model" || key === "strength_clip" || key === "end_percent") return 1;
+      if (key === "start_percent") return 0;
+      return 0;
+    }
+    if (spec.type === "select") return Array.isArray(spec.options) && spec.options.length ? spec.options[0] : "";
+    return "";
+  }
+
+  function defaultInputsFromSpecs(specs = {}) {
+    const inputs = {};
+    Object.entries(specs || {}).forEach(([key, spec]) => {
+      const value = defaultValueForSpec(key, spec || {});
+      if (value !== undefined) inputs[key] = value;
     });
     return inputs;
   }
@@ -340,6 +367,34 @@
     selectedId = node.id;
     render();
     if (isCustom) setStatus("已新增 Custom / API node；請在右側填入實際 class_type。API Key 不要寫進 inputs，執行時由後端注入。");
+  }
+
+  function addCatalogNode(classType) {
+    const item = nodeCatalog.find((node) => node.class_type === classType);
+    if (!item) {
+      setStatus("找不到這個 ComfyUI 節點；請重新載入節點目錄。", false);
+      return;
+    }
+    const inputSpecs = item.inputs && typeof item.inputs === "object" ? item.inputs : {};
+    const node = {
+      id: uid(),
+      type: UNKNOWN_NODE_TYPE,
+      label: item.display_name || item.class_type,
+      originalType: item.class_type,
+      x: 100 + (workflow.nodes.length % 4) * 260,
+      y: 100 + Math.floor(workflow.nodes.length / 4) * 170,
+      inputs: defaultInputsFromSpecs(inputSpecs),
+      inputSpecs,
+      outputs: Array.isArray(item.outputs) && item.outputs.length ? item.outputs : unknownOutputs(3),
+      catalogCategory: item.category || "",
+      paidApiRequired: !!item.paid_api_required,
+    };
+    workflow.nodes.push(node);
+    selectedId = node.id;
+    render();
+    setStatus(item.paid_api_required
+      ? `已新增 ${item.class_type}。這可能是付費/API node；API Key 由後端設定注入，不要寫進 workflow。`
+      : `已新增 ${item.class_type}。`);
   }
 
   function nodeById(id) {
@@ -609,6 +664,7 @@
   ];
 
   function nodeLooksLikePaidApi(node) {
+    if (node?.paidApiRequired) return true;
     const type = String(isUnknownNode(node) ? node.originalType : node.type || "").toLowerCase().replace(/[\s_-]+/g, "");
     const label = String(node.label || "").toLowerCase();
     const keys = Object.keys(node.inputs || {}).join(" ").toLowerCase().replace(/[\s_-]+/g, "");
@@ -1005,6 +1061,7 @@
     }
     const def = nodeDef(node);
     if (isUnknownNode(node)) {
+      const fields = Object.entries(def.inputs || {}).filter(([, spec]) => spec.type !== "link");
       box.innerHTML = `
         <div class="warning-list">
           <div>這是未知/custom node placeholder。會保留原始 class_type 與 inputs；input/output schema 需等連上 ComfyUI object_info 才能嚴格驗證。</div>
@@ -1018,10 +1075,13 @@
           <label>原始 class_type</label>
           <input id="unknownClassInput" value="${html(node.originalType || "")}" maxlength="160">
         </div>
-        <div class="field">
-          <label>原始 inputs JSON</label>
-          <textarea id="unknownInputsInput" rows="10" spellcheck="false">${html(JSON.stringify(node.inputs || {}, null, 2))}</textarea>
+        <div class="inspector-grid">
+          ${fields.map(([key, spec]) => inspectorInputMarkup(node, key, spec)).join("") || '<div class="empty">這個 custom node 沒有可直接編輯的值；連線欄位請用下方連線面板處理。</div>'}
         </div>
+        <details class="advanced-json">
+          <summary>進階：原始 inputs JSON</summary>
+          <textarea id="unknownInputsInput" rows="10" spellcheck="false">${html(JSON.stringify(node.inputs || {}, null, 2))}</textarea>
+        </details>
       `;
       $("nodeLabelInput")?.addEventListener("input", () => {
         node.label = $("nodeLabelInput").value;
@@ -1029,8 +1089,9 @@
       });
       $("unknownClassInput")?.addEventListener("input", () => {
         node.originalType = $("unknownClassInput").value.trim() || "UnknownCustomNode";
-        renderJson();
+        render();
       });
+      bindInspectorValueFields(fields, node);
       $("unknownInputsInput")?.addEventListener("input", () => {
         try {
           const parsed = JSON.parse($("unknownInputsInput").value || "{}");
@@ -1061,18 +1122,35 @@
       node.label = labelInput.value;
       render();
     });
+    bindInspectorValueFields(fields, node);
+  }
+
+  function bindInspectorValueFields(fields, node) {
     fields.forEach(([key]) => {
       const input = $(`nodeInput-${key}`);
       if (!input) return;
       input.addEventListener("input", () => {
-        node.inputs[key] = input.type === "number" ? Number(input.value) : input.value;
+        node.inputs[key] = input.type === "number" ? Number(input.value) : input.type === "checkbox" ? input.checked : input.value;
         renderJson();
       });
+      if (input.type === "checkbox") {
+        input.addEventListener("change", () => {
+          node.inputs[key] = input.checked;
+          renderJson();
+        });
+      }
     });
   }
 
   function inspectorInputMarkup(node, key, spec) {
     const value = node.inputs?.[key] ?? "";
+    if (spec.type === "select") {
+      const options = Array.isArray(spec.options) ? spec.options : [];
+      return `<div class="field"><label>${html(spec.label || key)}</label><select id="nodeInput-${html(key)}">${options.map((item) => `<option value="${html(item)}" ${String(item) === String(value) ? "selected" : ""}>${html(item)}</option>`).join("")}</select></div>`;
+    }
+    if (spec.type === "checkbox") {
+      return `<div class="field checkbox-field"><label><input id="nodeInput-${html(key)}" type="checkbox" ${value ? "checked" : ""}> ${html(spec.label || key)}</label></div>`;
+    }
     if (spec.type === "textarea") {
       return `<div class="field"><label>${html(spec.label || key)}</label><textarea id="nodeInput-${html(key)}" rows="4">${html(value)}</textarea></div>`;
     }
@@ -1267,18 +1345,69 @@
     }
   }
 
+  function renderNodeCatalogList() {
+    const list = $("dynamicNodeCatalogList");
+    const group = $("dynamicNodeCatalogGroup");
+    if (!list || !group) return;
+    const query = String($("nodeSearchInput")?.value || "").trim().toLowerCase();
+    const items = nodeCatalog
+      .filter((node) => {
+        const haystack = `${node.class_type || ""} ${node.display_name || ""} ${node.category || ""}`.toLowerCase();
+        return !query || haystack.includes(query);
+      })
+      .slice(0, 120);
+    group.hidden = !nodeCatalog.length;
+    group.classList.toggle("is-hidden", !items.length && !!query);
+    list.innerHTML = items.length ? items.map((node) => `
+      <button data-add-catalog-node="${html(node.class_type)}" type="button" class="${node.paid_api_required ? "warn" : ""}">
+        <b>${html(node.display_name || node.class_type)}</b>
+        <span>${html(node.class_type)}${node.category ? ` · ${html(node.category)}` : ""}${node.paid_api_required ? " · 付費/API" : ""}</span>
+      </button>
+    `).join("") : '<div class="empty">沒有符合搜尋的 ComfyUI 節點。</div>';
+    list.querySelectorAll("[data-add-catalog-node]").forEach((button) => {
+      button.addEventListener("click", () => addCatalogNode(button.getAttribute("data-add-catalog-node")));
+    });
+  }
+
+  async function loadNodeCatalog() {
+    const status = $("nodeCatalogStatus");
+    if (status) status.textContent = "正在連線 ComfyUI /object_info...";
+    try {
+      const res = await fetch("/api/comfyui/node-catalog", { credentials: "same-origin" });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.ok) {
+        const msg = json.msg || `節點目錄載入失敗（HTTP ${res.status}）`;
+        if (status) status.textContent = msg;
+        setStatus(msg, false);
+        return;
+      }
+      nodeCatalog = Array.isArray(json.nodes) ? json.nodes : [];
+      renderNodeCatalogList();
+      const paidCount = nodeCatalog.filter((node) => node.paid_api_required).length;
+      const text = `已載入 ${nodeCatalog.length} 個節點${paidCount ? `，其中 ${paidCount} 個可能需要付費/API Key` : ""}。`;
+      if (status) status.textContent = text;
+      setStatus(text, true);
+    } catch (err) {
+      const msg = `節點目錄載入失敗：${err.message || err}`;
+      if (status) status.textContent = msg;
+      setStatus(msg, false);
+    }
+  }
+
   function filterNodePalette() {
     const query = String($("nodeSearchInput")?.value || "").trim().toLowerCase();
     let visibleCount = 0;
-    document.querySelectorAll("[data-add-node]").forEach((button) => {
-      const haystack = `${button.getAttribute("data-add-node") || ""} ${button.textContent || ""}`.toLowerCase();
+    document.querySelectorAll("[data-add-node], [data-add-catalog-node]").forEach((button) => {
+      const haystack = `${button.getAttribute("data-add-node") || ""} ${button.getAttribute("data-add-catalog-node") || ""} ${button.textContent || ""}`.toLowerCase();
       const visible = !query || haystack.includes(query);
       button.classList.toggle("is-hidden", !visible);
       if (visible) visibleCount += 1;
     });
     document.querySelectorAll(".tool-group").forEach((group) => {
-      group.classList.toggle("is-hidden", !group.querySelector("[data-add-node]:not(.is-hidden)"));
+      if (group.classList.contains("catalog-loader")) return;
+      group.classList.toggle("is-hidden", !group.querySelector("[data-add-node]:not(.is-hidden), [data-add-catalog-node]:not(.is-hidden)"));
     });
+    renderNodeCatalogList();
     if (query) setStatus(visibleCount ? `節點搜尋：${visibleCount} 個結果。` : "節點搜尋沒有結果。", !!visibleCount);
   }
 
@@ -1293,6 +1422,7 @@
     document.querySelectorAll("[data-add-node]").forEach((button) => {
       button.addEventListener("click", () => addNode(button.getAttribute("data-add-node")));
     });
+    $("loadNodeCatalogBtn")?.addEventListener("click", loadNodeCatalog);
     $("nodeSearchInput")?.addEventListener("input", filterNodePalette);
     $("starterTxt2ImgBtn")?.addEventListener("click", createTxt2ImgStarter);
     $("autoLayoutBtn")?.addEventListener("click", autoLayoutNodes);

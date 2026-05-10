@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>ComfyUI Workflow Visual Builder</title>
-  <link rel="stylesheet" href="/comfyui-workflow-editor.css?v=20260510-node-line-builder" />
+  <link rel="stylesheet" href="/comfyui-workflow-editor.css?v=20260511-node-catalog" />
 </head>
 <body>
   <header class="topbar">
@@ -32,6 +32,15 @@
           <label class="field palette-search">搜尋節點
             <input id="nodeSearchInput" type="search" placeholder="例如 checkpoint、inpaint、upscale、control">
           </label>
+          <div class="tool-group catalog-loader">
+            <div class="tool-title">目前 ComfyUI 節點</div>
+            <button id="loadNodeCatalogBtn" type="button"><b>載入節點目錄</b><span>從 /object_info 取得已安裝 custom nodes</span></button>
+            <div class="palette-status" id="nodeCatalogStatus">尚未載入；固定節點可先使用。</div>
+          </div>
+          <div class="tool-group" id="dynamicNodeCatalogGroup" hidden>
+            <div class="tool-title">已安裝節點目錄</div>
+            <div class="tool-grid" id="dynamicNodeCatalogList"></div>
+          </div>
           <div class="tool-group">
             <div class="tool-title">模型 / 文字</div>
             <div class="tool-grid">
@@ -129,6 +138,6 @@
     </aside>
   </main>
 
-  <script src="/js/comfyui-workflow-editor.js?v=20260510-node-line-builder"></script>
+  <script src="/js/comfyui-workflow-editor.js?v=20260511-node-catalog"></script>
 </body>
 </html>

@@ -66,6 +66,30 @@ def main() -> int:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             page = browser.new_page(viewport={"width": 1440, "height": 900})
+            page.route(
+                "**/api/comfyui/node-catalog",
+                lambda route: route.fulfill(
+                    status=200,
+                    content_type="application/json",
+                    body=json.dumps({
+                        "ok": True,
+                        "nodes": [
+                            {
+                                "class_type": "FluxProUltraImageNode",
+                                "display_name": "Flux Pro Ultra",
+                                "category": "api nodes/partner",
+                                "paid_api_required": True,
+                                "inputs": {
+                                    "prompt": {"type": "textarea", "label": "prompt"},
+                                    "model": {"type": "link", "label": "MODEL"},
+                                    "aspect_ratio": {"type": "select", "label": "aspect_ratio", "options": ["1:1", "16:9"]},
+                                },
+                                "outputs": ["IMAGE"],
+                            }
+                        ],
+                    }),
+                ),
+            )
             page.goto(f"http://127.0.0.1:{port}/comfyui-workflow-editor.html", wait_until="networkidle")
             page.locator(".wf-node").first.wait_for(state="visible", timeout=8000)
 
@@ -82,6 +106,22 @@ def main() -> int:
             if visible_tools < 1 or visible_tools >= page.locator("[data-add-node]").count():
                 raise AssertionError("node search did not filter the palette")
             page.locator("#nodeSearchInput").fill("")
+
+            page.locator("#loadNodeCatalogBtn").click()
+            page.locator('[data-add-catalog-node="FluxProUltraImageNode"]').wait_for(state="visible", timeout=5000)
+            catalog_status = page.locator("#nodeCatalogStatus").inner_text(timeout=5000)
+            if "已載入 1 個節點" not in catalog_status or "付費/API Key" not in catalog_status:
+                raise AssertionError(f"catalog status did not include loaded API node warning: {catalog_status!r}")
+            page.locator('[data-add-catalog-node="FluxProUltraImageNode"]').click()
+            page.locator('.wf-node.unknown:has-text("Flux Pro Ultra")').wait_for(state="visible", timeout=5000)
+            if page.locator("#nodeInput-aspect_ratio").count() != 1:
+                raise AssertionError("catalog node did not render schema-driven non-JSON controls")
+            page.locator("#nodeInput-aspect_ratio").select_option("16:9")
+            catalog_export = json.loads(page.locator("#jsonOut").input_value())
+            if "FluxProUltraImageNode" not in {node["class_type"] for node in catalog_export["workflow_json"].values()}:
+                raise AssertionError("catalog node class_type was not exported")
+            if "16:9" not in json.dumps(catalog_export["workflow_json"], ensure_ascii=False):
+                raise AssertionError("catalog node field edit was not exported")
 
             drag_between(
                 page,

@@ -36,6 +36,25 @@ Custom/API nodes are intentionally treated as placeholders until a live
 ComfyUI `object_info` check can verify their exact schema. The builder preserves
 their `class_type`, inputs, outputs, and layout metadata during import/export.
 
+## Live Node Catalog
+
+The visual builder can load a compact node catalog from:
+
+```text
+GET /api/comfyui/node-catalog
+```
+
+The endpoint requires login and uses the configured ComfyUI backend for the
+current user. It calls ComfyUI `/object_info`, then returns only a safe editor
+summary: `class_type`, display name, category, input schema summary, output
+names, and a paid/API-node flag. It does not return secrets or raw workflow
+payloads.
+
+After clicking `載入節點目錄`, installed custom nodes appear in the toolbox and
+can be added directly to the node graph. Non-link inputs render as normal form
+controls where possible, so users do not need to edit JSON for common fields.
+Link inputs still connect through the node/line UI.
+
 ## Import JSON
 
 The importer accepts either raw ComfyUI workflow JSON or the project wrapped

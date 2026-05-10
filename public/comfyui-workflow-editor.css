@@ -134,10 +134,17 @@ h1 { margin: 0; font-size: 1.08rem; }
 .tool-title { margin-bottom: .45rem; font-weight: 700; font-size: .9rem; }
 .tool-grid { display: grid; gap: .42rem; }
 .tool-grid button { text-align: left; display: grid; gap: .12rem; }
+.tool-grid button.warn { border-color: rgba(245,158,11,.55); background: rgba(120,53,15,.25); }
 .tool-grid button.is-hidden { display: none; }
 .tool-group.is-hidden { display: none; }
 .tool-grid b { font-size: .88rem; }
 .tool-grid span { color: var(--muted); font-size: .76rem; line-height: 1.35; }
+.palette-status {
+  margin-top: .45rem;
+  color: var(--muted);
+  font-size: .76rem;
+  line-height: 1.35;
+}
 .badges { display: flex; flex-wrap: wrap; gap: .38rem; align-items: center; }
 .badge {
   display: inline-flex;
@@ -243,6 +250,21 @@ h1 { margin: 0; font-size: 1.08rem; }
 }
 .node-actions { display: flex; gap: .35rem; justify-content: flex-end; padding: 0 .6rem .55rem; }
 .node-actions button { min-height: 28px; padding: .22rem .45rem; font-size: .74rem; }
+.advanced-json summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: .82rem;
+  margin-bottom: .45rem;
+}
+.checkbox-field label {
+  display: flex;
+  gap: .45rem;
+  align-items: center;
+  color: var(--text);
+}
+.checkbox-field input {
+  width: auto;
+}
 .edge-path {
   fill: none;
   stroke: #38bdf8;
