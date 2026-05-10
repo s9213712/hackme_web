@@ -1,6 +1,10 @@
+import threading
 from datetime import datetime
 
 from services.core.sqlite_safe import table_columns as safe_table_columns
+
+_MEMBER_LEVEL_SCHEMA_LOCK = threading.Lock()
+_MEMBER_LEVEL_SCHEMA_READY_PATHS = set()
 
 MEMBER_LEVEL_ORDER = ("newbie", "normal", "trusted", "vip", "restricted", "suspended")
 SANCTION_STATUSES = {"none", "restricted", "suspended"}
@@ -235,6 +239,26 @@ def ensure_member_level_user_columns(conn):
 
 
 def ensure_member_level_rules_schema(conn):
+    db_path = _connection_path(conn)
+    if db_path and db_path in _MEMBER_LEVEL_SCHEMA_READY_PATHS:
+        return
+    with _MEMBER_LEVEL_SCHEMA_LOCK:
+        if db_path and db_path in _MEMBER_LEVEL_SCHEMA_READY_PATHS:
+            return
+        _ensure_member_level_rules_schema_uncached(conn)
+        if db_path:
+            _MEMBER_LEVEL_SCHEMA_READY_PATHS.add(db_path)
+
+
+def _connection_path(conn):
+    try:
+        row = conn.execute("PRAGMA database_list").fetchone()
+        return str(row["file"] if hasattr(row, "keys") else row[2])
+    except Exception:
+        return ""
+
+
+def _ensure_member_level_rules_schema_uncached(conn):
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS member_level_rules (

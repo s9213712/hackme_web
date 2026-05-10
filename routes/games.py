@@ -673,7 +673,7 @@ def register_games_routes(app, deps):
                         row["score"],
                         reward_points,
                         ledger_uuid,
-                        int(actor["id"]) if actor and actor.get("id") else None,
+                        int(actor["id"]) if actor and "id" in actor.keys() else None,
                         now,
                     ),
                 )
@@ -1519,7 +1519,7 @@ def register_games_routes(app, deps):
         actor, err, status = actor_or_401()
         if err:
             return err, status
-        if actor.get("username") != "root":
+        if actor["username"] != "root":
             return json_resp({"ok": False, "msg": "只有 root 可執行此操作"}), 403
         data, err, status = parse_json_body()
         if err:
@@ -1535,7 +1535,7 @@ def register_games_routes(app, deps):
         actor, err, status = actor_or_401()
         if err:
             return err, status
-        if actor.get("username") != "root":
+        if actor["username"] != "root":
             return json_resp({"ok": False, "msg": "只有 root 可執行此操作"}), 403
         return json_resp(ensure_warm_start_chess_environment())
 
@@ -1545,7 +1545,7 @@ def register_games_routes(app, deps):
         actor, err, status = actor_or_401()
         if err:
             return err, status
-        if actor.get("username") != "root":
+        if actor["username"] != "root":
             return json_resp({"ok": False, "msg": "只有 root 可查看此資訊"}), 403
         return json_resp(build_chess_engine_dashboard())
 
@@ -1555,7 +1555,7 @@ def register_games_routes(app, deps):
         actor, err, status = actor_or_401()
         if err:
             return err, status
-        if actor.get("username") != "root":
+        if actor["username"] != "root":
             return json_resp({"ok": False, "msg": "只有 root 可查看此資訊"}), 403
         return json_resp({"ok": True, "promotion": promotion_status_summary()})
 
@@ -1565,7 +1565,7 @@ def register_games_routes(app, deps):
         actor, err, status = actor_or_401()
         if err:
             return err, status
-        if actor.get("username") != "root":
+        if actor["username"] != "root":
             return json_resp({"ok": False, "msg": "只有 root 可執行此操作"}), 403
         data, err, status = parse_json_body()
         if err:
@@ -1586,7 +1586,7 @@ def register_games_routes(app, deps):
         actor, err, status = actor_or_401()
         if err:
             return err, status
-        if actor.get("username") != "root":
+        if actor["username"] != "root":
             return json_resp({"ok": False, "msg": "只有 root 可執行此操作"}), 403
         data, err, status = parse_json_body()
         if err:

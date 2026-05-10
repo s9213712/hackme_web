@@ -12,7 +12,12 @@ def _open_sqlite(db_path, *, register_app_mode=None):
     conn = sqlite3.connect(db_path, timeout=15)
     conn.row_factory = sqlite3.Row
     try:
-        conn.execute("PRAGMA journal_mode = WAL")
+        path = str(db_path)
+        if path not in _WAL_READY_DB_PATHS:
+            with _ENSURE_LOCK:
+                if path not in _WAL_READY_DB_PATHS:
+                    conn.execute("PRAGMA journal_mode = WAL")
+                    _WAL_READY_DB_PATHS.add(path)
         conn.execute("PRAGMA synchronous = NORMAL")
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA busy_timeout = 15000")
@@ -352,4 +357,5 @@ def activate_emergency_lockdown(
 _ENSURED_AUTH_DB_PATHS: set[str] = set()
 _ENSURED_AUDIT_DB_PATHS: set[str] = set()
 _ENSURED_CONTROL_DB_PATHS: set[str] = set()
+_WAL_READY_DB_PATHS: set[str] = set()
 _ENSURE_LOCK = threading.Lock()

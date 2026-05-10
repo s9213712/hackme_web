@@ -1,11 +1,24 @@
 """PointsChain ledger, wallet, and verification service."""
 
+import threading
+
 from . import schema as _schema
 
 globals().update({name: value for name, value in _schema.__dict__.items() if not name.startswith("__")})
 
 
+def _connection_path(conn):
+    try:
+        row = conn.execute("PRAGMA database_list").fetchone()
+        return str(row["file"] if hasattr(row, "keys") else row[2])
+    except Exception:
+        return ""
+
+
 class PointsLedgerService:
+    _schema_lock = threading.Lock()
+    _schema_ready_paths = set()
+
     def __init__(self, *, get_db, chain_secret, audit=None, backup_dir=None, mode_reader=None, security_event_recorder=None):
         self.get_db = get_db
         self.chain_secret = chain_secret
@@ -21,7 +34,15 @@ class PointsLedgerService:
         self._security_event_recorder = security_event_recorder or (lambda *a, **kw: None)
 
     def ensure_schema(self, conn):
-        ensure_points_economy_schema(conn)
+        db_path = _connection_path(conn)
+        if db_path and db_path in self._schema_ready_paths:
+            return
+        with self._schema_lock:
+            if db_path and db_path in self._schema_ready_paths:
+                return
+            ensure_points_economy_schema(conn)
+            if db_path:
+                self._schema_ready_paths.add(db_path)
 
     def _public_account_id(self, user_id):
         return public_account_id(self.chain_secret, user_id)

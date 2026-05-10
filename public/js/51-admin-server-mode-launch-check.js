@@ -97,7 +97,7 @@ function renderServerModeRequirements(requirements) {
 // shortcut.kind:
 //   "ui"      -> jump to the in-app panel that triggers this report
 //   "doc"     -> link to the playbook / spec file (CLI-only generators)
-const LAUNCH_CHECK_REPORT_META = {
+const LAUNCH_CHECK_REPORT_META_V2 = {
   clean_smoke: {
     label: "Mode v2 乾淨 smoke",
     purpose: "boot path / state-machine / 基線 endpoints 在乾淨狀態下都過。",
@@ -301,7 +301,7 @@ function populateLaunchCheckUploadTypes(selected = "") {
   const select = $("launch-check-upload-report-type");
   if (!select) return;
   const current = selected || select.value || "";
-  const options = Object.entries(LAUNCH_CHECK_REPORT_META).map(([key, meta]) => {
+  const options = Object.entries(LAUNCH_CHECK_REPORT_META_V2).map(([key, meta]) => {
     const chosen = key === current ? " selected" : "";
     return `<option value="${key}"${chosen}>${meta.label} (${key})</option>`;
   });
@@ -317,7 +317,7 @@ function openLaunchCheckUpload(reportType = "") {
   const file = $("launch-check-upload-file");
   if (sub) sub.textContent = reportType ? `準備上傳 ${reportType} 的 production report JSON。` : "選擇 report 類型後，可貼上 JSON 或上傳 `.json` 檔。";
   if (hint) {
-    const meta = LAUNCH_CHECK_REPORT_META[reportType];
+    const meta = LAUNCH_CHECK_REPORT_META_V2[reportType];
     hint.textContent = meta
       ? `用途：${meta.purpose}｜建議產生方式：${meta.generator}｜注意：必須提供 raw_report + sha256 report_hash + 可驗證 signature，伺服器會重算 hash 並驗簽。`
       : "上傳的 JSON 必須包含 raw_report、sha256 report_hash 與可驗證 signature；未通過驗簽不會計入 production gate。";
@@ -409,7 +409,7 @@ function launchCheckMsg(text, ok = false) {
 }
 
 function launchCheckCardMarkup(reportType, reportRow, missing, failed, idx) {
-  const meta = LAUNCH_CHECK_REPORT_META[reportType] || {
+  const meta = LAUNCH_CHECK_REPORT_META_V2[reportType] || {
     label: reportType,
     purpose: "（未登錄的 report 類型）",
     generator: "（請查 docs/examples/server_mode_v2/03_production_gate_playbook.md）",
@@ -615,7 +615,7 @@ async function loadLaunchCheck() {
       .map((reportType, idx) => launchCheckCardMarkup(reportType, reports[reportType] || null, missing.has(reportType), failed.has(reportType), idx))
       .join("");
     required.forEach((reportType, idx) => {
-      const meta = LAUNCH_CHECK_REPORT_META[reportType];
+      const meta = LAUNCH_CHECK_REPORT_META_V2[reportType];
       if (!meta || !meta.shortcut) return;
       const btn = list.querySelector(`[data-launch-shortcut="report-${idx}"]`);
       const handler = launchCheckShortcutHandler(meta.shortcut);

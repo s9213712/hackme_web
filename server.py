@@ -1044,12 +1044,13 @@ app.config["SESSION_COOKIE_SAMESITE"] = SESSION_COOKIE_SAMESITE
 app.config["PREFERRED_URL_SCHEME"] = "https" if FORCE_HTTPS else "http"
 
 # ── Security Headers (via Flask-Talisman) ─────────────────────────────────────
-# CSP: strict mode (no inline scripts/styles)
+# CSP: keep scripts strict. The existing UI uses inline style attributes and
+# runtime element positioning, including the ComfyUI visual workflow editor.
 talisman = Talisman(app,
     content_security_policy={
         "default-src": "'self'",
         "script-src":  "'self'",
-        "style-src":   "'self'",
+        "style-src":   "'self' 'unsafe-inline'",
         "img-src":     "'self' data: blob:",
         "media-src":   "'self' blob:",
         "frame-src":   "'self' blob:",

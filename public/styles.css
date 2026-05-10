@@ -862,6 +862,8 @@
       border-radius: 8px;
       color: var(--text);
       font-size: .95rem;
+      line-height: 1.35;
+      min-height: 2.75rem;
       outline: none;
       transition: border-color .2s;
     }
@@ -3266,10 +3268,10 @@
       border: none;
       cursor: pointer;
       font-size: 1.1rem;
-      /* Issue #168: WCAG 2.5.5 — touch targets >= 24x24 (target 44x44). */
+      /* Keep password visibility controls at the 44px touch target baseline. */
       padding: .5rem;
-      min-width: 2.4rem;
-      min-height: 2.4rem;
+      min-width: 2.75rem;
+      min-height: 2.75rem;
       display: inline-grid;
       place-items: center;
       color: var(--muted);
@@ -3308,7 +3310,8 @@
       font: inherit;
       font-size: .85rem;
       font-weight: 700;
-      padding: .25rem;
+      min-height: 2.75rem;
+      padding: .5rem;
     }
 
     .auth-recovery-panel {

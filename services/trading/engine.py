@@ -2,6 +2,7 @@ import hashlib
 import inspect
 import json
 import math
+import threading
 import time
 import uuid
 from datetime import datetime, timedelta
@@ -1062,7 +1063,18 @@ def ensure_trading_schema(conn):
         conn.execute("UPDATE trading_grid_bots SET enabled_at=COALESCE(created_at, updated_at) WHERE enabled=1 AND COALESCE(enabled_at, '')=''")
 
 
+def _connection_path(conn):
+    try:
+        row = conn.execute("PRAGMA database_list").fetchone()
+        return str(row["file"] if hasattr(row, "keys") else row[2])
+    except Exception:
+        return ""
+
+
 class TradingEngineService:
+    _schema_lock = threading.Lock()
+    _schema_ready_paths = set()
+
     MAX_BACKTEST_CANDLES = MAX_BACKTEST_CANDLES
     BACKTEST_MAX_CANDLES_FLOOR = BACKTEST_MAX_CANDLES_FLOOR
     BACKTEST_MAX_CANDLES_CEILING = BACKTEST_MAX_CANDLES_CEILING
@@ -1107,8 +1119,16 @@ class TradingEngineService:
         self._funding_channels = {}
 
     def ensure_schema(self, conn):
-        self.points_service.ensure_schema(conn)
-        ensure_trading_schema(conn)
+        db_path = _connection_path(conn)
+        if db_path and db_path in self._schema_ready_paths:
+            return
+        with self._schema_lock:
+            if db_path and db_path in self._schema_ready_paths:
+                return
+            self.points_service.ensure_schema(conn)
+            ensure_trading_schema(conn)
+            if db_path:
+                self._schema_ready_paths.add(db_path)
 
     def _actor_id(self, actor):
         try:
