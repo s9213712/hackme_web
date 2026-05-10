@@ -780,6 +780,35 @@ Flank easy/medium/hard pass rate：
 - cp20 flank hard：`1/4 = 0.25`。
 - flank hard coverage 已完整，但實際能力沒有明顯提升；easy/medium 仍完全失敗。
 
+Flank failed case detail：
+
+- cp10 `gate_flank_easy_001`：expected `c2c4`，rank `11`；final/raw 都選 `e2e4`，錯到 `e_pawn_central_break`。
+- cp10 `gate_flank_easy_002`：expected `b2b3`，rank `17`；final/raw 都選 `e2e4`，錯到 `e_pawn_central_break`。
+- cp10 `gate_flank_easy_003`：expected `c7c5`，rank `6`；final/raw 都選 `e7e5`，錯到 `e_pawn_central_break`。
+- cp10 `gate_flank_medium_001`：expected `c7c5`，rank `4`；final/raw 都選 `e7e5`，錯到 `e_pawn_central_break`。
+- cp10 `gate_flank_medium_002`：expected `c7c5`，rank `6`；final/raw 都選 `e7e5`，錯到 `e_pawn_central_break`。
+- cp10 `gate_flank_medium_003`：expected `c2c4`，rank `6`；final/raw 都選 `h2h4`，錯到 `kingside_aggression`。
+- cp10 `gate_flank_hard_001`：expected `c7c5`，rank `8`；final/raw 都選 `f8a3`，錯到 `development_move`。
+- cp10 `gate_flank_hard_002`：expected `c7c5`，rank `5`；final/raw 都選 `e7e5`，錯到 `e_pawn_central_break`。
+- cp10 `gate_flank_hard_003`：expected `c7c5`，rank `1`；final/raw 都選 `c7c5`，唯一通過 flank hard case。
+- cp10 `gate_flank_hard_004`：expected `c7c5`，rank `5`；final/raw 都選 `d7d5`，錯到 `d_pawn_central_break`。
+- cp20 `gate_flank_easy_001`：expected `c2c4`，rank `9`；final/raw 都選 `e2e4`，錯到 `e_pawn_central_break`。
+- cp20 `gate_flank_easy_002`：expected `b2b3`，rank `12`；final/raw 都選 `e2e4`，錯到 `e_pawn_central_break`。
+- cp20 `gate_flank_easy_003`：expected `c7c5`，rank `5`；final/raw 都選 `d7d5`，錯到 `d_pawn_central_break`。
+- cp20 `gate_flank_medium_001`：expected `c7c5`，rank `3`；final/raw 都選 `e7e5`，錯到 `e_pawn_central_break`。
+- cp20 `gate_flank_medium_002`：expected `c7c5`，rank `6`；final/raw 都選 `e7e5`，錯到 `e_pawn_central_break`。
+- cp20 `gate_flank_medium_003`：expected `c2c4`，rank `7`；final/raw 都選 `f3e5`，錯到 `other`。
+- cp20 `gate_flank_hard_001`：expected `c7c5`，rank `4`；final/raw 都選 `a7a5`，semantic 仍是 `flank_pawn_push`，但不是指定 expected move。
+- cp20 `gate_flank_hard_002`：expected `c7c5`，rank `3`；final/raw 都選 `d5d4`，錯到 `d_pawn_central_break`。
+- cp20 `gate_flank_hard_003`：expected `c7c5`，rank `1`；final/raw 都選 `c7c5`，仍是唯一通過 flank hard case。
+- cp20 `gate_flank_hard_004`：expected `c7c5`，rank `5`；final/raw 都選 `d7d5`，錯到 `d_pawn_central_break`。
+
+Flank detail interpretation：
+
+- cp10 到 cp20 不是完全沒有變化，但變化主要是 `e_pawn` bias 轉成部分 `d_pawn` / `other` / generic flank move，沒有穩定學到 `c7c5` 或 `c2c4` 的觸發條件。
+- `gate_flank_hard_003` 是唯一穩定通過案例，代表模型可以在某個相對窄的 flank pattern 上選對，但無法遷移到 easy/medium 或其他 hard flank contexts。
+- cp20 `gate_flank_hard_001` 選 `a7a5`，semantic 被歸類為 flank，但 expected 是 `c7c5`；這說明模型可能學到「推側翼兵」這個粗語義，卻沒有學到「何時該推 c-pawn 而不是 a-pawn」。
+
 Central vs flank boundary：
 
 - cp10 central_to_flank_confusion：1；flank_to_central_confusion：7。
@@ -787,6 +816,9 @@ Central vs flank boundary：
 - cp20 central_to_flank_confusion：2；flank_to_central_confusion：7。
 - cp20 raw_policy_central_to_flank_confusion：2；raw_policy_flank_to_central_confusion：7。
 - 主要錯誤方向是 flank 被預測成 central push；這和 exp26 的「flank raw policy fail」一致。
+- cp10 confusion matrix 顯示：flank expected 10 題中，預測為 `e_pawn_central_break=6`、`d_pawn_central_break=1`、`development_move=1`、`kingside_aggression=1`、`flank_pawn_push=1`。
+- cp20 confusion matrix 顯示：flank expected 10 題中，預測為 `e_pawn_central_break=4`、`d_pawn_central_break=3`、`other=1`、`flank_pawn_push=2`。
+- cp20 flank 正確語義數從 1 提到 2，但 exact expected move pass 仍只有 1/10；semantic-level improvement 不足以作 promotion evidence。
 
 Flank specialist probe：
 
@@ -798,6 +830,19 @@ Flank specialist probe：
 - `flank_only` hard-negative min margin：`-0.02643851`。
 - `flank_only` by difficulty：easy `0.3333`、medium `0.0`、hard `0.0`。
 - 結論：flank_only 單獨訓練仍低，尤其 hard clean 0.0；這偏向 label/feature/representation 設計問題，不是 mixed semantic interference。
+- `flank_only` failed sample `gate_flank_easy_002`：expected `b2b3`，rank `3`，final/raw 都選 `c2c4`；同為 flank 類但 target move 不對，代表 specialist 在 flank 類內仍缺少 move-level boundary。
+- `flank_only` failed sample `gate_flank_easy_003`：expected `c7c5`，rank `5`，final/raw 都選 `a7a5`；同樣是 flank 類內錯誤。
+- `flank_only` failed sample `gate_flank_medium_001`：expected `c7c5`，rank `5`，final/raw 都選 `a7a5`；表示 black c-pawn counterplay 和 generic a-pawn flank push 邊界不清。
+- 因此 `flank_only passed=true` 只代表「有至少一個 clean held-out pass」，不能代表 flank specialist 已學會；實際判讀應以 clean `0.1`、hard clean `0.0`、min margin negative 為主。
+
+對 exp28 的具體經驗：
+
+- 不要再單純補 flank 題數，因為 hard coverage 已完整且 label audit clean。
+- 需要把 flank 類拆細：`c_pawn_counterplay`、`b_pawn_fianchetto_support`、`a_pawn_space_gain` 不能全部混成單一 `flank_pawn_push`。
+- Balanced gate 若要求 exact move，應確認 flank 類是否存在多個同等好 flank moves；例如 `a7a5` vs `c7c5` 目前都被 semantic 分到 flank，但棋理目標不同。
+- 下一輪應新增 flank sub-semantic confusion matrix，否則模型可能只學到「側翼兵可以推」，卻不知道推哪個側翼兵。
+- flank feature 需要明確描述：對手中心兵、己方 c-pawn 是否可安全挑戰、d/e pawn center 是否已鎖定、a/b/c pawn 推進的角色差異。
+- 如果 static evaluator 對所有 flank moves 都給 `static_cp_delta=0`，label audit 只能證明「不壞」，不能證明「唯一正解」；這應在 gate reason 中保留為多好棋風險。
 
 Promotion gate 仍失敗的主要原因：
 
