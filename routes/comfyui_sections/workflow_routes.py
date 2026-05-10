@@ -102,6 +102,105 @@ def register_comfyui_workflow_routes(app, ctx):
             output_kinds.append("image")
         return output_kinds
 
+    def _workflow_validation_stage(exc):
+        message = str(exc or "")
+        if any(token in message for token in ("絕對路徑", "外部 URL", "命令片段", "路徑穿越", "敏感路徑", "不允許的節點")):
+            return "sanitize"
+        return "schema_validation"
+
+    def _decode_workflow_jsonish(value):
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except json.JSONDecodeError as exc:
+                raise WorkflowValidationError("workflow JSON 格式不正確") from exc
+        return value
+
+    def _extract_layout_import_data(data):
+        workflow_candidate = data.get("workflow_json") if "workflow_json" in data else data.get("workflow")
+        if workflow_candidate in (None, ""):
+            raise WorkflowValidationError("請提供 workflow JSON")
+        decoded = _decode_workflow_jsonish(workflow_candidate)
+        wrapper = decoded
+        if isinstance(decoded, dict) and isinstance(decoded.get("workflow_preset_json"), dict):
+            wrapper = decoded.get("workflow_preset_json")
+        if isinstance(wrapper, dict) and "workflow_json" in wrapper and not all(
+            isinstance(value, dict) and "class_type" in value for value in wrapper.values()
+        ):
+            workflow_candidate = wrapper.get("workflow_json")
+            metadata = wrapper
+        else:
+            workflow_candidate = decoded
+            metadata = {}
+        merged = dict(metadata)
+        for key, value in data.items():
+            if value not in (None, ""):
+                merged[key] = value
+        return workflow_candidate, merged
+
+    def _workflow_layout_versions(conn, *, preset_id, limit=8):
+        rows = conn.execute(
+            """
+            SELECT version_no, created_by_user_id, workflow_hash, project_version,
+                   comfyui_version, workflow_schema_version, created_at
+            FROM comfyui_workflow_layout_versions
+            WHERE preset_id=?
+            ORDER BY version_no DESC
+            LIMIT ?
+            """,
+            (int(preset_id), int(limit)),
+        ).fetchall()
+        return [{
+            "version_no": int(row["version_no"]),
+            "created_by_user_id": int(row["created_by_user_id"]),
+            "workflow_hash": row["workflow_hash"] or "",
+            "project_version": row["project_version"] or "",
+            "comfyui_version": row["comfyui_version"] or "",
+            "workflow_schema_version": row["workflow_schema_version"] or "",
+            "created_at": row["created_at"],
+        } for row in rows]
+
+    def _workflow_preset_export_package(row, workflow_json):
+        layout_json = parse_json_field(row["layout_json"], {}) or {}
+        required_models = parse_json_field(row["required_models_json"], []) or []
+        required_loras = parse_json_field(row["required_loras_json"], []) or []
+        required_controlnets = parse_json_field(row["required_controlnets_json"], []) or []
+        required_custom_nodes = parse_json_field(row["required_custom_nodes_json"], []) or []
+        default_params = parse_json_field(row["default_params_json"], {}) or {}
+        preset_json = {
+            "format": "hackme_web_comfyui_workflow_preset",
+            "format_version": 1,
+            "name": row["title"] or f"Workflow #{row['id']}",
+            "description": row["description"] or "",
+            "purpose": row["purpose"] or "custom",
+            "project_version": row["project_version"] or "",
+            "comfyui_version": row["comfyui_version"] or "",
+            "workflow_schema_version": row["workflow_schema_version"] or "1",
+            "workflow_json": workflow_json,
+            "layout_json": layout_json,
+            "required_models": required_models,
+            "required_loras": required_loras,
+            "required_controlnets": required_controlnets,
+            "required_custom_nodes": required_custom_nodes,
+            "default_params": default_params,
+            "workflow_hash": row["workflow_hash"] or "",
+            "visibility": row["visibility"] or "private",
+            "is_official": bool(row["is_official"]),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+        return {
+            "raw_workflow_json": workflow_json,
+            "workflow_json": workflow_json,
+            "workflow_preset_json": preset_json,
+            "layout_json": layout_json,
+            "required_models": required_models,
+            "required_loras": required_loras,
+            "required_controlnets": required_controlnets,
+            "required_custom_nodes": required_custom_nodes,
+        }
+
+    @app.route("/api/comfyui/workflow-layouts", methods=["GET"])
     @app.route("/api/comfyui/workflows", methods=["GET"])
     @require_csrf_safe
     def comfyui_workflow_presets():
@@ -133,6 +232,8 @@ def register_comfyui_workflow_routes(app, ctx):
             "dependency_warning": dependency_warning,
         })
 
+    @app.route("/api/comfyui/workflow-layouts", methods=["POST"])
+    @app.route("/api/comfyui/workflow-layouts/import", methods=["POST"])
     @app.route("/api/comfyui/workflows/import", methods=["POST"])
     @require_csrf
     def comfyui_workflow_import():
@@ -142,31 +243,36 @@ def register_comfyui_workflow_routes(app, ctx):
         try:
             data = ctx["request"].get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤", "stage": "schema_validation"}), 400
         data = data if isinstance(data, dict) else {}
-        workflow_candidate = data.get("workflow_json") if "workflow_json" in data else data.get("workflow")
-        if workflow_candidate in (None, ""):
-            return json_resp({"ok": False, "msg": "請提供 workflow JSON"}), 400
         try:
+            workflow_candidate, layout_data = _extract_layout_import_data(data)
             workflow_payload, extracted_defaults = extract_workflow_payload(workflow_candidate)
             default_params = (
-                normalize_workflow_default_params(data.get("default_params_json") if "default_params_json" in data else data.get("default_params"))
-                if ("default_params_json" in data or "default_params" in data)
+                normalize_workflow_default_params(layout_data.get("default_params_json") if "default_params_json" in layout_data else layout_data.get("default_params"))
+                if ("default_params_json" in layout_data or "default_params" in layout_data)
                 else extracted_defaults
             )
         except WorkflowValidationError as exc:
-            return json_resp({"ok": False, "msg": str(exc)}), 400
-        title = safe_text(data.get("title") or data.get("name") or f"Workflow {datetime.now().strftime('%Y-%m-%d %H:%M')}", 120)
+            return json_resp({"ok": False, "msg": str(exc), "stage": _workflow_validation_stage(exc)}), 400
+        title = safe_text(layout_data.get("title") or layout_data.get("name") or f"Workflow {datetime.now().strftime('%Y-%m-%d %H:%M')}", 120)
         conn = get_db()
         try:
             preset_id = upsert_workflow_preset(
                 conn,
                 actor=actor,
                 title=title,
-                description=data.get("description") or "",
-                visibility=data.get("visibility") or "private",
+                description=layout_data.get("description") or "",
+                visibility=layout_data.get("visibility") or "private",
                 workflow_payload=workflow_payload,
                 default_params=default_params,
+                purpose=layout_data.get("purpose"),
+                comfyui_version=layout_data.get("comfyui_version"),
+                project_version=layout_data.get("project_version"),
+                workflow_schema_version=layout_data.get("workflow_schema_version"),
+                layout_json=layout_data.get("layout_json"),
+                required_custom_nodes=layout_data.get("required_custom_nodes"),
+                is_default=bool(layout_data.get("is_default")),
             )
             row = load_workflow_preset_row(conn, preset_id=preset_id)
             conn.commit()
@@ -175,6 +281,7 @@ def register_comfyui_workflow_routes(app, ctx):
         audit("COMFYUI_WORKFLOW_IMPORT", get_client_ip(), user=actor_value(actor, "username"), success=True, ua=get_ua(), detail=f"preset_id={preset_id}, title={title}")
         return json_resp({"ok": True, "preset": workflow_preset_summary(row, actor=actor), "msg": "已匯入 workflow preset"})
 
+    @app.route("/api/comfyui/workflow-layouts/export-current", methods=["POST"])
     @app.route("/api/comfyui/workflows/export-current", methods=["POST"])
     @require_csrf
     def comfyui_workflow_export_current():
@@ -184,7 +291,7 @@ def register_comfyui_workflow_routes(app, ctx):
         try:
             data = ctx["request"].get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤", "stage": "schema_validation"}), 400
         data = data if isinstance(data, dict) else {}
         params, msg = normalize_generation_payload(data)
         if msg:
@@ -197,18 +304,50 @@ def register_comfyui_workflow_routes(app, ctx):
             workflow = active_client.build_generation_workflow(params)
             workflow_payload = sanitize_workflow_json(workflow)
         except (ctx["ComfyUIError"], WorkflowValidationError) as exc:
-            return json_resp({"ok": False, "msg": str(exc)}), 400
+            return json_resp({"ok": False, "msg": str(exc), "stage": _workflow_validation_stage(exc)}), 400
+        layout_json = {
+            "layout_schema_version": "1",
+            "node_order": list(workflow_payload["workflow_json"].keys()),
+            "node_positions": {},
+            "field_overrides": {},
+        }
+        workflow_preset_json = {
+            "format": "hackme_web_comfyui_workflow_preset",
+            "format_version": 1,
+            "name": data.get("title") or f"Workflow {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            "description": data.get("description") or "",
+            "purpose": params.get("generation_mode") or "txt2img",
+            "project_version": ctx.get("APP_RELEASE_ID", ""),
+            "comfyui_version": data.get("comfyui_version") or "",
+            "workflow_schema_version": ctx.get("COMFYUI_WORKFLOW_SCHEMA_VERSION", "1"),
+            "workflow_json": workflow_payload["workflow_json"],
+            "layout_json": layout_json,
+            "required_models": workflow_payload["required_models"],
+            "required_loras": workflow_payload["required_loras"],
+            "required_controlnets": workflow_payload["required_controlnets"],
+            "required_custom_nodes": [],
+            "default_params": params,
+            "workflow_hash": workflow_payload["workflow_hash"],
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat(),
+        }
         return json_resp({
             "ok": True,
             "workflow_json": workflow_payload["workflow_json"],
             "workflow_text": workflow_json_to_pretty_text(workflow_payload["workflow_json"]),
+            "layout_json": layout_json,
+            "layout_text": workflow_json_to_pretty_text(layout_json),
+            "workflow_preset_json": workflow_preset_json,
+            "workflow_preset_text": workflow_json_to_pretty_text(workflow_preset_json),
             "workflow_hash": workflow_payload["workflow_hash"],
             "required_models": workflow_payload["required_models"],
             "required_loras": workflow_payload["required_loras"],
             "required_controlnets": workflow_payload["required_controlnets"],
+            "required_custom_nodes": [],
             "default_params": params,
         })
 
+    @app.route("/api/comfyui/workflow-layouts/<int:preset_id>", methods=["GET"])
     @app.route("/api/comfyui/workflows/<int:preset_id>", methods=["GET"])
     @require_csrf_safe
     def comfyui_workflow_detail(preset_id):
@@ -232,6 +371,8 @@ def register_comfyui_workflow_routes(app, ctx):
             payload = workflow_preset_summary(row, dependency_status=dependency_status, recent_runs=recent_runs, actor=actor)
             workflow_json = parse_json_field(row["workflow_json"], {}) or {}
             payload["workflow_json"] = workflow_json
+            payload["layout_json"] = parse_json_field(row["layout_json"], {}) or {}
+            payload["layout_versions"] = _workflow_layout_versions(conn, preset_id=preset_id)
             try:
                 analysis = analyze_workflow_json(workflow_json)
                 capability = check_workflow_capability(analysis, client=active_client)
@@ -248,6 +389,7 @@ def register_comfyui_workflow_routes(app, ctx):
             conn.close()
         return json_resp({"ok": True, "preset": payload})
 
+    @app.route("/api/comfyui/workflow-layouts/<int:preset_id>", methods=["PUT"])
     @app.route("/api/comfyui/workflows/<int:preset_id>", methods=["PUT"])
     @require_csrf
     def comfyui_workflow_update(preset_id):
@@ -257,7 +399,7 @@ def register_comfyui_workflow_routes(app, ctx):
         try:
             data = ctx["request"].get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤", "stage": "schema_validation"}), 400
         data = data if isinstance(data, dict) else {}
         conn = get_db()
         try:
@@ -265,11 +407,14 @@ def register_comfyui_workflow_routes(app, ctx):
             if err_resp:
                 return err_resp
             before = workflow_preset_summary(row, actor=actor)
-            workflow_candidate = data.get("workflow_json") if "workflow_json" in data else parse_json_field(row["workflow_json"], {})
+            if "workflow_json" in data or "workflow" in data:
+                workflow_candidate, layout_data = _extract_layout_import_data(data)
+            else:
+                workflow_candidate, layout_data = parse_json_field(row["workflow_json"], {}) or {}, dict(data)
             workflow_payload, extracted_defaults = extract_workflow_payload(workflow_candidate)
-            if "default_params_json" in data or "default_params" in data:
-                default_params = normalize_workflow_default_params(data.get("default_params_json") if "default_params_json" in data else data.get("default_params"))
-            elif "workflow_json" in data:
+            if "default_params_json" in layout_data or "default_params" in layout_data:
+                default_params = normalize_workflow_default_params(layout_data.get("default_params_json") if "default_params_json" in layout_data else layout_data.get("default_params"))
+            elif "workflow_json" in data or "workflow" in data:
                 default_params = extracted_defaults
             else:
                 default_params = parse_json_field(row["default_params_json"], {}) or {}
@@ -277,11 +422,18 @@ def register_comfyui_workflow_routes(app, ctx):
                 conn,
                 preset_id=preset_id,
                 actor=actor,
-                title=data.get("title") or row["title"],
-                description=data.get("description") if "description" in data else row["description"],
-                visibility=data.get("visibility") if "visibility" in data else row["visibility"],
+                title=layout_data.get("title") or row["title"],
+                description=layout_data.get("description") if "description" in layout_data else row["description"],
+                visibility=layout_data.get("visibility") if "visibility" in layout_data else row["visibility"],
                 workflow_payload=workflow_payload,
                 default_params=default_params,
+                purpose=layout_data.get("purpose") if "purpose" in layout_data else row["purpose"],
+                comfyui_version=layout_data.get("comfyui_version") if "comfyui_version" in layout_data else row["comfyui_version"],
+                project_version=layout_data.get("project_version") if "project_version" in layout_data else row["project_version"],
+                workflow_schema_version=layout_data.get("workflow_schema_version") if "workflow_schema_version" in layout_data else row["workflow_schema_version"],
+                layout_json=layout_data.get("layout_json") if "layout_json" in layout_data else parse_json_field(row["layout_json"], {}) or {},
+                required_custom_nodes=layout_data.get("required_custom_nodes") if "required_custom_nodes" in layout_data else parse_json_field(row["required_custom_nodes_json"], []) or [],
+                is_default=bool(layout_data.get("is_default")) if "is_default" in layout_data else bool(row["is_default"]),
                 is_official=bool(row["is_official"]),
                 published_by_user_id=row["published_by_user_id"],
                 system_bundle_id=row["system_bundle_id"],
@@ -290,7 +442,7 @@ def register_comfyui_workflow_routes(app, ctx):
             conn.commit()
         except WorkflowValidationError as exc:
             conn.rollback()
-            return json_resp({"ok": False, "msg": str(exc)}), 400
+            return json_resp({"ok": False, "msg": str(exc), "stage": _workflow_validation_stage(exc)}), 400
         finally:
             conn.close()
         after = workflow_preset_summary(row, actor=actor)
@@ -304,6 +456,7 @@ def register_comfyui_workflow_routes(app, ctx):
         )
         return json_resp({"ok": True, "preset": after, "msg": "已更新 workflow preset"})
 
+    @app.route("/api/comfyui/workflow-layouts/<int:preset_id>", methods=["DELETE"])
     @app.route("/api/comfyui/workflows/<int:preset_id>", methods=["DELETE"])
     @require_csrf
     def comfyui_workflow_delete(preset_id):
@@ -316,6 +469,7 @@ def register_comfyui_workflow_routes(app, ctx):
             if err_resp:
                 return err_resp
             conn.execute("DELETE FROM comfyui_workflow_runs WHERE preset_id=?", (int(preset_id),))
+            conn.execute("DELETE FROM comfyui_workflow_layout_versions WHERE preset_id=?", (int(preset_id),))
             conn.execute("DELETE FROM comfyui_workflow_presets WHERE id=? AND owner_user_id=?", (int(preset_id), int(actor_value(actor, "id"))))
             conn.commit()
         finally:
@@ -323,6 +477,7 @@ def register_comfyui_workflow_routes(app, ctx):
         audit("COMFYUI_WORKFLOW_DELETE", get_client_ip(), user=actor_value(actor, "username"), success=True, ua=get_ua(), detail=f"preset_id={preset_id}")
         return json_resp({"ok": True, "msg": "已刪除 workflow preset"})
 
+    @app.route("/api/comfyui/workflow-layouts/<int:preset_id>/run", methods=["POST"])
     @app.route("/api/comfyui/workflows/<int:preset_id>/run", methods=["POST"])
     @require_csrf
     def comfyui_workflow_run(preset_id):
@@ -362,7 +517,8 @@ def register_comfyui_workflow_routes(app, ctx):
             active_client = client_for_url(comfyui_url) if comfyui_url else None
             dependency_status, dependency_msg = assert_workflow_dependencies_or_error(active_client, row)
             if dependency_msg:
-                return json_resp({"ok": False, "msg": dependency_msg, "dependency_status": dependency_status}), 409
+                stage = "unknown_node" if dependency_status.get("missing_nodes") else "missing_model"
+                return json_resp({"ok": False, "msg": dependency_msg, "stage": stage, "dependency_status": dependency_status}), 409
             default_params = parse_json_field(row["default_params_json"], {}) or {}
             workflow_json = parse_json_field(row["workflow_json"], {}) or {}
 
@@ -450,6 +606,7 @@ def register_comfyui_workflow_routes(app, ctx):
             },
         })
 
+    @app.route("/api/comfyui/workflow-layouts/<int:preset_id>/export", methods=["POST"])
     @app.route("/api/comfyui/workflows/<int:preset_id>/export", methods=["POST"])
     @require_csrf
     def comfyui_workflow_export(preset_id):
@@ -462,14 +619,16 @@ def register_comfyui_workflow_routes(app, ctx):
             if err_resp:
                 return err_resp
             workflow_json = parse_json_field(row["workflow_json"], {}) or {}
+            package = _workflow_preset_export_package(row, workflow_json)
         finally:
             conn.close()
         return json_resp({
             "ok": True,
-            "filename": f"comfyui-workflow-{preset_id}.json",
+            "filename": f"comfyui-workflow-layout-{preset_id}.json",
             "workflow_hash": row["workflow_hash"] or "",
-            "workflow_json": workflow_json,
             "workflow_text": workflow_json_to_pretty_text(workflow_json),
+            "workflow_preset_text": workflow_json_to_pretty_text(package["workflow_preset_json"]),
+            **package,
         })
 
     @app.route("/api/admin/comfyui/workflows/<int:preset_id>/publish-official", methods=["POST"])
@@ -499,6 +658,13 @@ def register_comfyui_workflow_routes(app, ctx):
                     "default_params": parse_json_field(row["default_params_json"], {}) or {},
                 },
                 default_params=parse_json_field(row["default_params_json"], {}) or {},
+                purpose=row["purpose"],
+                comfyui_version=row["comfyui_version"],
+                project_version=row["project_version"],
+                workflow_schema_version=row["workflow_schema_version"],
+                layout_json=parse_json_field(row["layout_json"], {}) or {},
+                required_custom_nodes=parse_json_field(row["required_custom_nodes_json"], []) or [],
+                is_default=bool(row["is_default"]),
                 is_official=True,
                 published_by_user_id=actor_value(actor, "id"),
                 system_bundle_id=row["system_bundle_id"],

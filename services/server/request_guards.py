@@ -107,7 +107,18 @@ def protect_sensitive_static_page(
     record_security_event,
     make_response,
 ):
-    if request_obj.method == "OPTIONS" or request_obj.path != "/trading-workflow-editor.html":
+    protected_pages = {
+        "/trading-workflow-editor.html": {
+            "feature": "feature_trading_enabled",
+            "disabled_message": "Trading workflow editor is disabled",
+        },
+        "/comfyui-workflow-editor.html": {
+            "feature": "feature_comfyui_enabled",
+            "disabled_message": "ComfyUI workflow editor is disabled",
+        },
+    }
+    page = protected_pages.get(request_obj.path)
+    if request_obj.method == "OPTIONS" or not page:
         return None
     actor = get_current_user_ctx()
     if not actor:
@@ -117,19 +128,20 @@ def protect_sensitive_static_page(
             user="-",
             ua=get_ua(),
             success=False,
-            detail="path=/trading-workflow-editor.html",
+            detail=f"path={request_obj.path}",
         )
         resp = make_response("", 302)
         resp.headers["Location"] = "/"
         return resp
-    if not is_feature_enabled("feature_trading_enabled"):
+    feature = page["feature"]
+    if not is_feature_enabled(feature):
         record_security_event(
             "feature_disabled",
             get_client_ip(),
             target_user=actor["username"],
-            detail="path=/trading-workflow-editor.html,feature=feature_trading_enabled",
+            detail=f"path={request_obj.path},feature={feature}",
         )
-        return make_response("Trading workflow editor is disabled", 503)
+        return make_response(page["disabled_message"], 503)
     return None
 
 

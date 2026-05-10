@@ -1842,9 +1842,44 @@
 
     .comfyui-civitai-search-card {
       border: 1px solid rgba(255,255,255,.08);
-      border-radius: 10px;
+      border-radius: 8px;
       background: rgba(255,255,255,.03);
       padding: .75rem;
+      display: grid;
+      grid-template-columns: minmax(88px, 124px) minmax(0, 1fr);
+      gap: .45rem;
+    }
+
+    .comfyui-civitai-search-thumb {
+      width: 100%;
+      aspect-ratio: 1 / 1;
+      border-radius: 8px;
+      overflow: hidden;
+      background: rgba(255,255,255,.04);
+      border: 1px solid rgba(255,255,255,.08);
+      align-self: start;
+    }
+
+    .comfyui-civitai-search-thumb img {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: cover;
+    }
+
+    .comfyui-civitai-search-thumb-empty {
+      min-height: 88px;
+      height: 100%;
+      display: grid;
+      place-items: center;
+      padding: .5rem;
+      color: var(--muted);
+      font-size: .78rem;
+      text-align: center;
+    }
+
+    .comfyui-civitai-search-content {
+      min-width: 0;
       display: grid;
       gap: .45rem;
     }
@@ -1876,6 +1911,7 @@
 
     .comfyui-civitai-search-flags,
     .comfyui-civitai-search-meta,
+    .comfyui-civitai-search-link,
     .comfyui-civitai-search-hashes {
       display: flex;
       gap: .4rem;
@@ -1898,10 +1934,24 @@
     }
 
     .comfyui-civitai-search-meta span,
+    .comfyui-civitai-search-link a,
+    .comfyui-civitai-search-link span,
     .comfyui-civitai-search-hashes span {
       font-size: .74rem;
       color: var(--muted);
       word-break: break-word;
+    }
+
+    .comfyui-civitai-search-link a {
+      color: var(--accent);
+      text-decoration: none;
+      border-bottom: 1px solid rgba(125, 211, 252, .35);
+    }
+
+    .comfyui-civitai-search-link a:hover,
+    .comfyui-civitai-search-link a:focus {
+      color: var(--accent2);
+      border-bottom-color: currentColor;
     }
 
     .comfyui-history-list {
@@ -1932,6 +1982,34 @@
       font-size: .78rem;
       margin-top: .6rem;
       min-height: 14rem;
+    }
+
+    .comfyui-workflow-layout-details {
+      margin-top: .65rem;
+      background: rgba(255,255,255,.025);
+    }
+
+    .comfyui-workflow-builder-panel {
+      margin: .75rem 0;
+      padding: .75rem;
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 8px;
+      background: rgba(255,255,255,.025);
+    }
+
+    .comfyui-workflow-node-builder {
+      margin-top: .65rem;
+    }
+
+    .comfyui-workflow-builder-node-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .35rem;
+      margin-top: .45rem;
+    }
+
+    .comfyui-workflow-layout-details textarea {
+      min-height: 9rem;
     }
 
     .comfyui-workflow-list {
@@ -2028,6 +2106,15 @@
     @media (max-width: 860px) {
       .comfyui-workflow-grid {
         grid-template-columns: 1fr;
+      }
+
+      .comfyui-workflow-item .drive-file-actions .btn {
+        flex: 1 1 44%;
+        min-height: 44px;
+      }
+
+      .comfyui-civitai-search-card {
+        grid-template-columns: 82px minmax(0, 1fr);
       }
     }
 

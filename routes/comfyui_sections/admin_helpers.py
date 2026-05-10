@@ -21,7 +21,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlencode, urlparse, urlunparse
+from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse, urlunparse
 
 from services.comfyui.client import ComfyUIClient, ComfyUIError
 from services.comfyui.settings import (
@@ -63,6 +63,7 @@ def build_comfyui_admin_helpers(ctx):
         "MAX_COMFYUI_MODEL_DOWNLOAD_BYTES": ctx["MAX_COMFYUI_MODEL_DOWNLOAD_BYTES"],
         "CIVITAI_ALLOWED_HOSTS": ctx["CIVITAI_ALLOWED_HOSTS"],
         "CIVITAI_API_BASE": ctx["CIVITAI_API_BASE"],
+        "CIVITAI_API_BASES": ctx.get("CIVITAI_API_BASES") or [ctx["CIVITAI_API_BASE"]],
         "CIVITAI_MODEL_TYPE_TO_DOWNLOAD_TYPE": ctx["CIVITAI_MODEL_TYPE_TO_DOWNLOAD_TYPE"],
         "CIVITAI_SEARCH_TYPE_TO_API": ctx["CIVITAI_SEARCH_TYPE_TO_API"],
         "MemoryFile": ctx["MemoryFile"],
@@ -135,6 +136,8 @@ def build_comfyui_admin_helpers(ctx):
         "_serialize_civitai_file": _serialize_civitai_file,
         "_serialize_civitai_versions": _serialize_civitai_versions,
         "_build_civitai_page_url": _build_civitai_page_url,
+        "_safe_civitai_media_url": _safe_civitai_media_url,
+        "_fetch_civitai_media": _fetch_civitai_media,
         "_serialize_civitai_search_results": _serialize_civitai_search_results,
         "_search_civitai_models": _search_civitai_models,
         "_inspect_civitai_model": _inspect_civitai_model,
@@ -933,6 +936,25 @@ def _public_or_civitai_host(url, *, allow_civitai_only=False):
         return parsed, None
     return _public_download_host(url)
 
+def _civitai_site_from_host(host):
+    clean_host = str(host or "").strip().lower()
+    if clean_host.startswith("www."):
+        clean_host = clean_host[4:]
+    if clean_host in {"civitai.com", "civitai.red", "civitai.green"}:
+        return clean_host
+    return "civitai.com"
+
+def _civitai_site_from_api_base(api_base):
+    parsed = urlparse(str(api_base or ""))
+    return _civitai_site_from_host(parsed.hostname)
+
+def _civitai_api_base_for_site(source_site):
+    site = _civitai_site_from_host(source_site)
+    for base in list(CIVITAI_API_BASES or []):
+        if _civitai_site_from_api_base(base) == site:
+            return str(base).rstrip("/")
+    return f"https://{site}/api/v1"
+
 def _parse_civitai_reference(page_url):
     parsed, msg = _public_or_civitai_host(page_url, allow_civitai_only=True)
     if msg:
@@ -950,6 +972,7 @@ def _parse_civitai_reference(page_url):
         "page_url": urlunparse(parsed._replace(fragment="")),
         "model_id": int(path_match.group(1)),
         "version_id": version_id,
+        "source_site": _civitai_site_from_host(parsed.hostname),
     }, None
 
 def _fetch_json(url, *, headers=None, timeout=20):
@@ -958,10 +981,11 @@ def _fetch_json(url, *, headers=None, timeout=20):
         charset = resp.headers.get_content_charset() or "utf-8"
         return json.loads(resp.read().decode(charset, errors="replace"))
 
-def _civitai_api_get(path, *, auth_value):
+def _civitai_api_get(path, *, auth_value, api_base=None):
     if not auth_value:
         return None, "請先在 root 設定填入 Civitai API Key"
-    url = f"{CIVITAI_API_BASE}/{path.lstrip('/')}"
+    base_url = str(api_base or CIVITAI_API_BASE).rstrip("/")
+    url = f"{base_url}/{path.lstrip('/')}"
     try:
         return _fetch_json(url, headers=_civitai_headers(auth_value), timeout=20), None
     except urllib.error.HTTPError as exc:
@@ -1016,6 +1040,84 @@ def _serialize_civitai_file(file_entry, fallback_download_url):
         "type": str(file_entry.get("type") or "").strip(),
     }
 
+def _safe_civitai_media_url(value):
+    url = str(value or "").strip()
+    if not url:
+        return ""
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return ""
+    hostname = (parsed.hostname or "").lower()
+    allowed_hosts = {
+        "image.civitai.com",
+        "image.civitai.red",
+        "image.civitai.green",
+    }
+    if (
+        parsed.scheme != "https"
+        or not parsed.netloc
+        or parsed.username
+        or parsed.password
+        or hostname not in allowed_hosts
+    ):
+        return ""
+    return urlunparse(parsed)
+
+def _civitai_media_proxy_url(media_url):
+    safe_url = _safe_civitai_media_url(media_url)
+    if not safe_url:
+        return ""
+    return f"/api/root/comfyui/civitai/media?url={quote(safe_url, safe='')}"
+
+def _fetch_civitai_media(media_url, *, max_bytes=5 * 1024 * 1024):
+    safe_url = _safe_civitai_media_url(media_url)
+    if not safe_url:
+        return None, None, "Civitai 縮圖網址不安全或不支援"
+    request_obj = urllib.request.Request(
+        safe_url,
+        headers={
+            "User-Agent": "hackme_web-civitai-preview/1.0",
+            "Accept": "image/avif,image/webp,image/png,image/jpeg,*/*;q=0.8",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request_obj, timeout=12) as resp:
+            content_type = str(resp.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+            if content_type not in {"image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"}:
+                return None, None, "Civitai 縮圖不是允許的圖片格式"
+            data = resp.read(max_bytes + 1)
+    except urllib.error.HTTPError as exc:
+        return None, None, f"Civitai 縮圖讀取失敗：HTTP {exc.code}"
+    except urllib.error.URLError as exc:
+        return None, None, f"Civitai 縮圖連線失敗：{getattr(exc, 'reason', exc)}"
+    except Exception as exc:
+        return None, None, f"Civitai 縮圖讀取失敗：{exc}"
+    if len(data) > max_bytes:
+        return None, None, "Civitai 縮圖超過大小限制"
+    return data, content_type, None
+
+def _serialize_civitai_image(image_entry):
+    if not isinstance(image_entry, dict):
+        return None
+    image_url = _safe_civitai_media_url(image_entry.get("url"))
+    if not image_url:
+        return None
+    def _positive_int(value):
+        try:
+            number = int(value)
+        except Exception:
+            return None
+        return number if number > 0 else None
+    return {
+        "url": image_url,
+        "proxy_url": _civitai_media_proxy_url(image_url),
+        "nsfw": image_entry.get("nsfw"),
+        "width": _positive_int(image_entry.get("width")),
+        "height": _positive_int(image_entry.get("height")),
+        "hash": str(image_entry.get("hash") or "").strip(),
+    }
+
 def _serialize_civitai_versions(model_data, preferred_version_id=None):
     versions = []
     for version in list((model_data or {}).get("modelVersions") or []):
@@ -1027,6 +1129,11 @@ def _serialize_civitai_versions(model_data, preferred_version_id=None):
                 files.append(payload)
         if not files:
             continue
+        images = []
+        for image_entry in list(version.get("images") or []):
+            payload = _serialize_civitai_image(image_entry)
+            if payload:
+                images.append(payload)
         versions.append({
             "id": version_id,
             "name": str(version.get("name") or f"Version {version_id or '?'}").strip(),
@@ -1035,6 +1142,8 @@ def _serialize_civitai_versions(model_data, preferred_version_id=None):
             "trained_words": list(version.get("trainedWords") or []),
             "download_url": str(version.get("downloadUrl") or "").strip(),
             "files": files,
+            "images": images[:6],
+            "thumbnail_url": images[0]["url"] if images else "",
         })
     selected_version_id = None
     if preferred_version_id:
@@ -1046,14 +1155,16 @@ def _serialize_civitai_versions(model_data, preferred_version_id=None):
         selected_version_id = versions[0]["id"]
     return versions, selected_version_id
 
-def _build_civitai_page_url(model_id, version_id=None):
-    base_url = f"https://civitai.com/models/{int(model_id)}"
+def _build_civitai_page_url(model_id, version_id=None, *, source_site="civitai.com"):
+    site = _civitai_site_from_host(source_site)
+    base_url = f"https://{site}/models/{int(model_id)}"
     if version_id:
         return f"{base_url}?modelVersionId={int(version_id)}"
     return base_url
 
-def _serialize_civitai_search_results(search_data):
+def _serialize_civitai_search_results(search_data, *, source_site="civitai.com"):
     results = []
+    source_site = _civitai_site_from_host(source_site)
     items = list((search_data or {}).get("items") or [])
     for item in items:
         if not isinstance(item, dict):
@@ -1071,18 +1182,25 @@ def _serialize_civitai_search_results(search_data):
                 compatible_models.append(base_model)
         latest_version = versions[0]
         primary_file = dict((latest_version.get("files") or [None])[0] or {})
+        thumbnail_url = str(latest_version.get("thumbnail_url") or "").strip()
         suggested_model_type = _normalize_download_model_type(item.get("type"))
         if suggested_model_type not in COMFYUI_MODEL_DOWNLOAD_TYPES:
             suggested_model_type = "checkpoint"
+        thumbnail_proxy_url = _civitai_media_proxy_url(thumbnail_url)
         results.append({
             "model_id": model_id,
-            "page_url": _build_civitai_page_url(model_id),
-            "selected_page_url": _build_civitai_page_url(model_id, selected_version_id),
+            "source_site": source_site,
+            "source_label": source_site,
+            "select_key": f"{source_site}:{model_id}",
+            "page_url": _build_civitai_page_url(model_id, source_site=source_site),
+            "selected_page_url": _build_civitai_page_url(model_id, selected_version_id, source_site=source_site),
             "name": str(item.get("name") or f"Model {model_id}").strip(),
             "type": str(item.get("type") or "").strip(),
             "suggested_model_type": suggested_model_type,
             "creator": str(((item.get("creator") or {}).get("username") or "")).strip(),
             "nsfw": bool(item.get("nsfw")),
+            "thumbnail_url": thumbnail_url,
+            "thumbnail_proxy_url": thumbnail_proxy_url,
             "version_count": len(versions),
             "compatible_models": compatible_models,
             "selected_version_id": selected_version_id,
@@ -1094,6 +1212,9 @@ def _serialize_civitai_search_results(search_data):
                 "trained_words": list(latest_version.get("trained_words") or []),
                 "file_count": len(latest_version.get("files") or []),
                 "primary_file": primary_file or None,
+                "thumbnail_url": thumbnail_url,
+                "thumbnail_proxy_url": thumbnail_proxy_url,
+                "images": list(latest_version.get("images") or []),
             },
         })
     metadata = dict((search_data or {}).get("metadata") or {})
@@ -1124,10 +1245,42 @@ def _search_civitai_models(query="", *, base_model="", model_type="", nsfw_mode=
         params.append(("nsfw", "false"))
     elif safe_nsfw_mode == "nsfw":
         params.append(("nsfw", "true"))
-    search_data, err = _civitai_api_get(f"models?{urlencode(params, doseq=True)}", auth_value=_configured_civitai_api_key())
-    if err:
-        return None, err
-    payload = _serialize_civitai_search_results(search_data)
+    auth_value = _configured_civitai_api_key()
+    path = f"models?{urlencode(params, doseq=True)}"
+    results = []
+    source_errors = []
+    source_payloads = []
+    for api_base in list(CIVITAI_API_BASES or [CIVITAI_API_BASE]):
+        source_site = _civitai_site_from_api_base(api_base)
+        search_data, err = _civitai_api_get(path, auth_value=auth_value, api_base=api_base)
+        if err:
+            source_errors.append({"source_site": source_site, "error": err})
+            continue
+        payload_part = _serialize_civitai_search_results(search_data, source_site=source_site)
+        source_payloads.append({
+            "source_site": source_site,
+            "total_items": payload_part.get("total_items") or 0,
+            "current_page": payload_part.get("current_page") or 1,
+            "page_size": payload_part.get("page_size") or 0,
+        })
+        results.extend(payload_part.get("results") or [])
+    if not source_payloads and source_errors:
+        joined = "；".join(f"{item['source_site']}: {item['error']}" for item in source_errors[:3])
+        return None, f"Civitai API 失敗：{joined}"
+    payload = {
+        "results": results,
+        "total_items": sum(int(item.get("total_items") or 0) for item in source_payloads) or len(results),
+        "current_page": 1,
+        "page_size": sum(int(item.get("page_size") or 0) for item in source_payloads) or len(results),
+        "search_sources": source_payloads,
+        "source_errors": source_errors,
+    }
+    if safe_model_type:
+        payload["results"] = [
+            item for item in payload.get("results", [])
+            if item.get("suggested_model_type") == safe_model_type
+        ]
+        payload["total_items"] = len(payload["results"])
     payload["filters"] = {
         "query": safe_query,
         "base_model": safe_base_model,
@@ -1141,7 +1294,8 @@ def _inspect_civitai_model(page_url):
     ref, msg = _parse_civitai_reference(page_url)
     if msg:
         return None, msg
-    model_data, err = _civitai_api_get(f"models/{ref['model_id']}", auth_value=_configured_civitai_api_key())
+    api_base = _civitai_api_base_for_site(ref.get("source_site"))
+    model_data, err = _civitai_api_get(f"models/{ref['model_id']}", auth_value=_configured_civitai_api_key(), api_base=api_base)
     if err:
         return None, err
     versions, selected_version_id = _serialize_civitai_versions(model_data, preferred_version_id=ref.get("version_id"))
@@ -1153,6 +1307,8 @@ def _inspect_civitai_model(page_url):
     return {
         "page_url": ref["page_url"],
         "model_id": ref["model_id"],
+        "source_site": ref.get("source_site") or "civitai.com",
+        "source_label": ref.get("source_site") or "civitai.com",
         "name": str((model_data or {}).get("name") or f"Model {ref['model_id']}").strip(),
         "type": str((model_data or {}).get("type") or "").strip(),
         "suggested_model_type": model_type,

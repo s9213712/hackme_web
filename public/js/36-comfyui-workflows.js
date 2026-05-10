@@ -13,12 +13,252 @@ function resetComfyuiWorkflowEditor({ keepStatus = false } = {}) {
   setComfyuiFieldValue("comfyui-workflow-title", "");
   setComfyuiFieldValue("comfyui-workflow-description", "");
   setComfyuiFieldValue("comfyui-workflow-visibility", "private");
+  setComfyuiFieldValue("comfyui-workflow-purpose", "txt2img");
+  setComfyuiFieldValue("comfyui-workflow-comfyui-version", "");
+  setComfyuiFieldValue("comfyui-workflow-project-version", "");
+  setComfyuiFieldValue("comfyui-workflow-schema-version", "1");
   setComfyuiFieldValue("comfyui-workflow-json", "");
+  setComfyuiFieldValue("comfyui-workflow-layout-json", "");
+  const defaultInput = $("comfyui-workflow-is-default");
+  if (defaultInput) defaultInput.checked = false;
   const fileInput = $("comfyui-workflow-file");
   if (fileInput) fileInput.value = "";
   const updateBtn = $("comfyui-workflow-update-btn");
   if (updateBtn) updateBtn.disabled = true;
+  renderComfyuiWorkflowBuilderPreview();
   if (!keepStatus) setComfyuiWorkflowStatus("尚未選取 workflow preset");
+}
+
+function markComfyuiWorkflowEditorDirty() {
+  const note = $("comfyui-workflow-editor-note");
+  if (note) note.textContent = "有未儲存的版面修改；請按「新增版面」或「更新目前選擇」才會保存。";
+}
+
+const COMFYUI_WORKFLOW_NODE_TEMPLATES = {
+  checkpoint_loader: {
+    class_type: "CheckpointLoaderSimple",
+    label: "Checkpoint Loader",
+    inputs: { ckpt_name: "" },
+  },
+  positive_prompt: {
+    class_type: "CLIPTextEncode",
+    label: "Positive Prompt",
+    inputs: { text: "masterpiece, best quality", clip: "" },
+  },
+  negative_prompt: {
+    class_type: "CLIPTextEncode",
+    label: "Negative Prompt",
+    inputs: { text: "low quality, blurry", clip: "" },
+  },
+  ksampler: {
+    class_type: "KSampler",
+    label: "KSampler",
+    inputs: { seed: 0, steps: 20, cfg: 7, sampler_name: "euler", scheduler: "normal" },
+  },
+  vae_decode: {
+    class_type: "VAEDecode",
+    label: "VAE Decode",
+    inputs: { samples: "", vae: "" },
+  },
+  save_image: {
+    class_type: "SaveImage",
+    label: "Save Image",
+    inputs: { filename_prefix: "hackme_web" },
+  },
+  load_image: {
+    class_type: "LoadImage",
+    label: "Load Image",
+    inputs: { image: "" },
+  },
+  lora_loader: {
+    class_type: "LoraLoader",
+    label: "LoRA Loader",
+    inputs: { lora_name: "", strength_model: 1, strength_clip: 1, model: "", clip: "" },
+  },
+  controlnet_loader: {
+    class_type: "ControlNetLoader",
+    label: "ControlNet Loader",
+    inputs: { control_net_name: "" },
+  },
+  upscale_model_loader: {
+    class_type: "UpscaleModelLoader",
+    label: "Upscale Model Loader",
+    inputs: { model_name: "" },
+  },
+};
+
+function parseComfyuiWorkflowEditorJson(fieldId, fallback) {
+  const text = String($(fieldId)?.value || "").trim();
+  if (!text) return fallback;
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : fallback;
+  } catch (err) {
+    throw new Error(`${fieldId === "comfyui-workflow-layout-json" ? "UI Layout JSON" : "Workflow JSON"} 格式錯誤：${err.message || err}`);
+  }
+}
+
+function setComfyuiWorkflowEditorJson(workflow, layout) {
+  setComfyuiFieldValue("comfyui-workflow-json", JSON.stringify(workflow || {}, null, 2));
+  setComfyuiFieldValue("comfyui-workflow-layout-json", JSON.stringify(layout || {}, null, 2));
+  renderComfyuiWorkflowBuilderPreview();
+  markComfyuiWorkflowEditorDirty();
+}
+
+function nextComfyuiWorkflowNodeId(workflow) {
+  const ids = Object.keys(workflow || {})
+    .map((key) => Number(key))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  return String((ids.length ? Math.max(...ids) : 0) + 1);
+}
+
+function normalizeComfyuiLayoutJson(layout) {
+  const normalized = layout && typeof layout === "object" && !Array.isArray(layout) ? { ...layout } : {};
+  if (!Array.isArray(normalized.node_order)) normalized.node_order = [];
+  if (!normalized.node_positions || typeof normalized.node_positions !== "object" || Array.isArray(normalized.node_positions)) {
+    normalized.node_positions = {};
+  }
+  if (!normalized.field_overrides || typeof normalized.field_overrides !== "object" || Array.isArray(normalized.field_overrides)) {
+    normalized.field_overrides = {};
+  }
+  normalized.layout_schema_version = String(normalized.layout_schema_version || "1");
+  return normalized;
+}
+
+function addComfyuiWorkflowNode(templateKey, label = "") {
+  const template = COMFYUI_WORKFLOW_NODE_TEMPLATES[templateKey];
+  if (!template) throw new Error("請選擇要追加的節點類型。");
+  const workflow = parseComfyuiWorkflowEditorJson("comfyui-workflow-json", {});
+  const layout = normalizeComfyuiLayoutJson(parseComfyuiWorkflowEditorJson("comfyui-workflow-layout-json", {}));
+  const nodeId = nextComfyuiWorkflowNodeId(workflow);
+  workflow[nodeId] = {
+    class_type: template.class_type,
+    inputs: { ...(template.inputs || {}) },
+  };
+  const cleanLabel = String(label || template.label || template.class_type).trim().slice(0, 80);
+  if (cleanLabel) {
+    workflow[nodeId]._meta = { title: cleanLabel };
+    layout.field_overrides[nodeId] = { label: cleanLabel };
+  }
+  layout.node_order = layout.node_order.filter((item) => String(item) !== nodeId).concat([nodeId]);
+  const index = layout.node_order.length - 1;
+  layout.node_positions[nodeId] = [40 + (index % 3) * 280, 40 + Math.floor(index / 3) * 180];
+  setComfyuiWorkflowEditorJson(workflow, layout);
+  setComfyuiMessage(`已追加 ${template.label || template.class_type} 節點；尚未儲存。`, true);
+}
+
+function createBlankComfyuiWorkflowLayout() {
+  comfyuiWorkflowCurrentPresetId = null;
+  comfyuiWorkflowEditorDefaults = null;
+  if (!$("comfyui-workflow-title")?.value) setComfyuiFieldValue("comfyui-workflow-title", "我的 ComfyUI 工作流版面");
+  setComfyuiFieldValue("comfyui-workflow-purpose", "custom");
+  setComfyuiWorkflowEditorJson({}, {
+    layout_schema_version: "1",
+    node_order: [],
+    node_positions: {},
+    field_overrides: {},
+  });
+  const updateBtn = $("comfyui-workflow-update-btn");
+  if (updateBtn) updateBtn.disabled = true;
+  setComfyuiWorkflowStatus("已建立空白版面草稿；追加節點或貼上 workflow JSON 後可新增保存。");
+}
+
+function createTxt2ImgComfyuiStarterWorkflow() {
+  comfyuiWorkflowCurrentPresetId = null;
+  comfyuiWorkflowEditorDefaults = {
+    generation_mode: "txt2img",
+    steps: 20,
+    cfg: 7,
+    sampler_name: "euler",
+    scheduler: "normal",
+    width: 1024,
+    height: 1024,
+  };
+  if (!$("comfyui-workflow-title")?.value) setComfyuiFieldValue("comfyui-workflow-title", "txt2img 起始工作流");
+  setComfyuiFieldValue("comfyui-workflow-purpose", "txt2img");
+  const workflow = {
+    "1": { class_type: "CheckpointLoaderSimple", inputs: { ckpt_name: "" }, _meta: { title: "主模型" } },
+    "2": { class_type: "CLIPTextEncode", inputs: { clip: ["1", 1], text: "masterpiece, best quality" }, _meta: { title: "正向提示詞" } },
+    "3": { class_type: "CLIPTextEncode", inputs: { clip: ["1", 1], text: "low quality, blurry" }, _meta: { title: "負向提示詞" } },
+    "4": { class_type: "EmptyLatentImage", inputs: { width: 1024, height: 1024, batch_size: 1 }, _meta: { title: "畫布尺寸" } },
+    "5": { class_type: "KSampler", inputs: { model: ["1", 0], positive: ["2", 0], negative: ["3", 0], latent_image: ["4", 0], seed: 0, steps: 20, cfg: 7, sampler_name: "euler", scheduler: "normal", denoise: 1 }, _meta: { title: "採樣器" } },
+    "6": { class_type: "VAEDecode", inputs: { samples: ["5", 0], vae: ["1", 2] }, _meta: { title: "VAE 解碼" } },
+    "7": { class_type: "SaveImage", inputs: { images: ["6", 0], filename_prefix: "hackme_web" }, _meta: { title: "儲存圖片" } },
+  };
+  const layout = {
+    layout_schema_version: "1",
+    node_order: ["1", "2", "3", "4", "5", "6", "7"],
+    node_positions: {
+      "1": [40, 40],
+      "2": [320, 20],
+      "3": [320, 200],
+      "4": [320, 380],
+      "5": [620, 160],
+      "6": [900, 160],
+      "7": [1180, 160],
+    },
+    field_overrides: {
+      "1": { label: "主模型" },
+      "2": { label: "正向提示詞" },
+      "3": { label: "負向提示詞" },
+      "4": { label: "畫布尺寸" },
+      "5": { label: "Sampler / Scheduler / Steps / CFG / Seed" },
+      "6": { label: "VAE 解碼" },
+      "7": { label: "輸出檔名" },
+    },
+  };
+  setComfyuiWorkflowEditorJson(workflow, layout);
+  const updateBtn = $("comfyui-workflow-update-btn");
+  if (updateBtn) updateBtn.disabled = true;
+  setComfyuiWorkflowStatus("已建立 txt2img 起始版草稿；可繼續追加節點或新增保存。");
+}
+
+function renderComfyuiWorkflowBuilderPreview() {
+  const preview = $("comfyui-workflow-builder-preview");
+  if (!preview) return;
+  let workflow = {};
+  let layout = {};
+  try {
+    workflow = parseComfyuiWorkflowEditorJson("comfyui-workflow-json", {});
+    layout = normalizeComfyuiLayoutJson(parseComfyuiWorkflowEditorJson("comfyui-workflow-layout-json", {}));
+  } catch (err) {
+    preview.textContent = err.message || "Workflow JSON 尚無法預覽。";
+    return;
+  }
+  const ids = Object.keys(workflow || {});
+  if (!ids.length) {
+    preview.textContent = "目前尚未建立節點。";
+    return;
+  }
+  const ordered = (layout.node_order || []).filter((id) => workflow[id]).concat(ids.filter((id) => !(layout.node_order || []).includes(id)));
+  preview.innerHTML = `
+    <div class="comfyui-workflow-flags">
+      <span class="comfyui-workflow-chip">節點 ${sanitize(String(ids.length))}</span>
+      <span class="comfyui-workflow-chip">版面位置 ${sanitize(String(Object.keys(layout.node_positions || {}).length))}</span>
+    </div>
+    <div class="comfyui-workflow-builder-node-list">
+      ${ordered.slice(0, 12).map((id) => {
+        const node = workflow[id] || {};
+        const title = node?._meta?.title || layout.field_overrides?.[id]?.label || node.class_type || `Node ${id}`;
+        return `<span class="comfyui-workflow-chip">${sanitize(id)} · ${sanitize(title)}</span>`;
+      }).join("")}
+      ${ordered.length > 12 ? `<span class="comfyui-workflow-chip">另 ${sanitize(String(ordered.length - 12))} 個</span>` : ""}
+    </div>
+  `;
+}
+
+function comfyuiWorkflowEditorPayload() {
+  return {
+    title: $("comfyui-workflow-title")?.value || "",
+    description: $("comfyui-workflow-description")?.value || "",
+    visibility: $("comfyui-workflow-visibility")?.value || "private",
+    purpose: $("comfyui-workflow-purpose")?.value || "custom",
+    comfyui_version: $("comfyui-workflow-comfyui-version")?.value || "",
+    project_version: $("comfyui-workflow-project-version")?.value || "",
+    workflow_schema_version: $("comfyui-workflow-schema-version")?.value || "1",
+    layout_json: $("comfyui-workflow-layout-json")?.value || undefined,
+    is_default: !!$("comfyui-workflow-is-default")?.checked,
+  };
 }
 
 function downloadComfyuiWorkflowText(filename, text) {
@@ -31,6 +271,29 @@ function downloadComfyuiWorkflowText(filename, text) {
   link.click();
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function loadComfyuiVisualWorkflowEditorResult() {
+  let payload = null;
+  try {
+    payload = JSON.parse(localStorage.getItem("hackme_comfyui_workflow_editor_result") || "null");
+  } catch (_) {
+    payload = null;
+  }
+  if (!payload || typeof payload !== "object" || !payload.workflow_json) {
+    setComfyuiMessage("尚未找到視覺 Workflow 編輯器結果。請先開啟視覺編輯器並按「送回主頁」。", false);
+    return;
+  }
+  setComfyuiFieldValue("comfyui-workflow-title", payload.name || payload.title || "");
+  setComfyuiFieldValue("comfyui-workflow-description", payload.description || "");
+  setComfyuiFieldValue("comfyui-workflow-purpose", payload.purpose || "custom");
+  setComfyuiFieldValue("comfyui-workflow-schema-version", payload.workflow_schema_version || "1");
+  setComfyuiFieldValue("comfyui-workflow-json", JSON.stringify(payload.workflow_json || {}, null, 2));
+  setComfyuiFieldValue("comfyui-workflow-layout-json", JSON.stringify(payload.layout_json || {}, null, 2));
+  comfyuiWorkflowEditorDefaults = null;
+  renderComfyuiWorkflowBuilderPreview();
+  markComfyuiWorkflowEditorDirty();
+  setComfyuiMessage("已載入視覺 Workflow 編輯器結果；按「新增版面」即可保存。", true);
 }
 
 function comfyuiWorkflowDependencyHtml(status) {
@@ -507,17 +770,23 @@ function renderComfyuiWorkflowPresetList(targetId, items, emptyText) {
     const models = Array.isArray(item?.required_models) ? item.required_models.map((entry) => `${entry.kind || "model"}:${entry.name || ""}`) : [];
     const loras = Array.isArray(item?.required_loras) ? item.required_loras.map((entry) => entry.name || entry) : [];
     const controlnets = Array.isArray(item?.required_controlnets) ? item.required_controlnets.map((entry) => entry.name || entry) : [];
+    const customNodes = Array.isArray(item?.required_custom_nodes) ? item.required_custom_nodes : [];
     const mode = item?.default_params?.generation_mode ? comfyuiReadableModeLabel(item.default_params.generation_mode) : "Workflow";
+    const purpose = item?.purpose || item?.default_params?.generation_mode || "custom";
+    const versionWarnings = Array.isArray(item?.version_warnings) ? item.version_warnings : [];
     return `
       <div class="comfyui-workflow-item">
         <div class="comfyui-workflow-item-head">
           <div class="comfyui-workflow-item-title">
             <strong>${sanitize(item?.title || `Workflow #${item?.id || ""}`)}</strong>
-            <span>${sanitize(mode)} · ${sanitize(String(item?.updated_at || "").replace("T", " ").slice(0, 16))}</span>
+            <span>${sanitize(mode)} · ${sanitize(purpose)} · ${sanitize(String(item?.updated_at || "").replace("T", " ").slice(0, 16))}</span>
           </div>
           <div class="comfyui-workflow-flags">
             ${item?.is_official ? '<span class="comfyui-workflow-chip">官方</span>' : ""}
+            ${item?.is_default ? '<span class="comfyui-workflow-chip">預設</span>' : ""}
             <span class="comfyui-workflow-chip">${sanitize(item?.visibility || "private")}</span>
+            <span class="comfyui-workflow-chip">Project ${sanitize(item?.project_version || "-")}</span>
+            <span class="comfyui-workflow-chip">ComfyUI ${sanitize(item?.comfyui_version || "-")}</span>
             <span class="comfyui-workflow-chip">${sanitize(String((item?.workflow_hash || "").slice(0, 12) || "-"))}</span>
           </div>
         </div>
@@ -526,17 +795,22 @@ function renderComfyuiWorkflowPresetList(targetId, items, emptyText) {
           ${models.length ? `<span class="comfyui-workflow-chip">模型 ${sanitize(String(models.length))}</span>` : ""}
           ${loras.length ? `<span class="comfyui-workflow-chip">LoRA ${sanitize(String(loras.length))}</span>` : ""}
           ${controlnets.length ? `<span class="comfyui-workflow-chip">ControlNet ${sanitize(String(controlnets.length))}</span>` : ""}
+          ${customNodes.length ? `<span class="comfyui-workflow-chip warn">Custom nodes ${sanitize(String(customNodes.length))}</span>` : ""}
         </div>
+        ${versionWarnings.length ? `<div class="drive-card-sub" style="margin-top:.4rem;color:#ffe08a;">版本警告：${sanitize(versionWarnings.join("；"))}</div>` : ""}
         ${dependencyHtml}
         <div class="drive-card-sub">所需模型：${sanitize(models.join(", ") || "無")}</div>
         <div class="drive-card-sub">所需 LoRA：${sanitize(loras.join(", ") || "無")}</div>
         <div class="drive-card-sub">所需 ControlNet：${sanitize(controlnets.join(", ") || "無")}</div>
+        <div class="drive-card-sub">所需 Custom nodes：${sanitize(customNodes.join(", ") || "無")}</div>
         ${renderComfyuiWorkflowRunList(item?.recent_runs || [])}
         <div class="drive-file-actions" style="justify-content:flex-start;margin-top:.55rem;">
           <button class="btn btn-sm" type="button" data-comfyui-workflow-apply="${item.id}">套回表單</button>
           <button class="btn btn-sm" type="button" data-comfyui-workflow-run="${item.id}">執行</button>
           <button class="btn btn-sm" type="button" data-comfyui-workflow-export="${item.id}">匯出 JSON</button>
           <button class="btn btn-sm" type="button" data-comfyui-workflow-edit="${item.id}">載入編輯</button>
+          <button class="btn btn-sm" type="button" data-comfyui-workflow-duplicate="${item.id}">複製</button>
+          ${item?.can_edit ? `<button class="btn btn-sm" type="button" data-comfyui-workflow-default="${item.id}">設為預設</button>` : ""}
           ${item?.can_publish_official && !item?.is_official ? `<button class="btn btn-sm" type="button" data-comfyui-workflow-publish="${item.id}">發布官方</button>` : ""}
           ${item?.can_edit ? `<button class="btn btn-sm" type="button" data-comfyui-workflow-delete="${item.id}">刪除</button>` : ""}
         </div>
@@ -561,6 +835,16 @@ function renderComfyuiWorkflowPresetList(targetId, items, emptyText) {
       loadComfyuiWorkflowPresetIntoEditor(Number(button.getAttribute("data-comfyui-workflow-edit"))).catch((err) => setComfyuiMessage(err.message || "workflow 讀取失敗", false));
     });
   });
+  list.querySelectorAll("[data-comfyui-workflow-duplicate]").forEach((button) => {
+    button.addEventListener("click", () => {
+      duplicateComfyuiWorkflowPreset(Number(button.getAttribute("data-comfyui-workflow-duplicate"))).catch((err) => setComfyuiMessage(err.message || "workflow 複製失敗", false));
+    });
+  });
+  list.querySelectorAll("[data-comfyui-workflow-default]").forEach((button) => {
+    button.addEventListener("click", () => {
+      setDefaultComfyuiWorkflowPreset(Number(button.getAttribute("data-comfyui-workflow-default"))).catch((err) => setComfyuiMessage(err.message || "預設版面設定失敗", false));
+    });
+  });
   list.querySelectorAll("[data-comfyui-workflow-publish]").forEach((button) => {
     button.addEventListener("click", () => {
       publishComfyuiWorkflowPresetOfficial(Number(button.getAttribute("data-comfyui-workflow-publish"))).catch((err) => setComfyuiMessage(err.message || "官方 preset 發布失敗", false));
@@ -575,13 +859,13 @@ function renderComfyuiWorkflowPresetList(targetId, items, emptyText) {
 
 function renderComfyuiWorkflowPresets(payload = {}, { silentTemplateReload = true } = {}) {
   comfyuiWorkflowPresets = Array.isArray(payload.presets) ? payload.presets : [];
-  renderComfyuiWorkflowPresetList("comfyui-workflow-my-list", payload.my_presets || [], "尚無個人 preset");
-  renderComfyuiWorkflowPresetList("comfyui-workflow-official-list", payload.official_presets || [], "尚無官方 preset");
-  renderComfyuiWorkflowPresetList("comfyui-workflow-shared-list", payload.shared_presets || [], "尚無其他可讀 preset");
+  renderComfyuiWorkflowPresetList("comfyui-workflow-my-list", payload.my_presets || [], "尚無個人工作流版面");
+  renderComfyuiWorkflowPresetList("comfyui-workflow-official-list", payload.official_presets || [], "尚無官方工作流版面");
+  renderComfyuiWorkflowPresetList("comfyui-workflow-shared-list", payload.shared_presets || [], "尚無其他可讀工作流版面");
   renderComfyuiTemplateSelector(payload, { silentReload: silentTemplateReload });
   const total = comfyuiWorkflowPresets.length;
   const warning = payload.dependency_warning ? `；依賴檢查警告：${payload.dependency_warning}` : "";
-  setComfyuiWorkflowStatus(`目前可見 ${total} 個 workflow preset${warning}`);
+  setComfyuiWorkflowStatus(`目前可見 ${total} 個 workflow 版面${warning}`);
 }
 
 async function loadComfyuiWorkflowPresets() {
@@ -668,10 +952,21 @@ async function loadComfyuiWorkflowPresetIntoEditor(presetId) {
   setComfyuiFieldValue("comfyui-workflow-title", preset.title || "");
   setComfyuiFieldValue("comfyui-workflow-description", preset.description || "");
   setComfyuiFieldValue("comfyui-workflow-visibility", preset.visibility || "private");
+  setComfyuiFieldValue("comfyui-workflow-purpose", preset.purpose || preset.default_params?.generation_mode || "custom");
+  setComfyuiFieldValue("comfyui-workflow-comfyui-version", preset.comfyui_version || "");
+  setComfyuiFieldValue("comfyui-workflow-project-version", preset.project_version || "");
+  setComfyuiFieldValue("comfyui-workflow-schema-version", preset.workflow_schema_version || "1");
   setComfyuiFieldValue("comfyui-workflow-json", JSON.stringify(preset.workflow_json || {}, null, 2));
+  setComfyuiFieldValue("comfyui-workflow-layout-json", JSON.stringify(preset.layout_json || {}, null, 2));
+  renderComfyuiWorkflowBuilderPreview();
+  const defaultInput = $("comfyui-workflow-is-default");
+  if (defaultInput) defaultInput.checked = !!preset.is_default;
   const updateBtn = $("comfyui-workflow-update-btn");
   if (updateBtn) updateBtn.disabled = !preset.can_edit;
-  setComfyuiWorkflowStatus(`正在編輯 #${preset.id} ${preset.title || ""}`);
+  const versionCount = Array.isArray(preset.layout_versions) ? preset.layout_versions.length : 0;
+  setComfyuiWorkflowStatus(`正在編輯 #${preset.id} ${preset.title || ""}${versionCount ? `；保留 ${versionCount} 筆版本紀錄` : ""}`);
+  const note = $("comfyui-workflow-editor-note");
+  if (note) note.textContent = "已載入版面。修改後必須按「更新目前選擇」才會保存。";
 }
 
 function comfyuiCurrentWorkflowExportable() {
@@ -714,9 +1009,13 @@ async function exportCurrentComfyuiWorkflow() {
   if (!res.ok || !json.ok) throw new Error(json.msg || `workflow 匯出失敗（HTTP ${res.status}）`);
   comfyuiWorkflowEditorDefaults = json.default_params || payload;
   setComfyuiFieldValue("comfyui-workflow-json", json.workflow_text || JSON.stringify(json.workflow_json || {}, null, 2));
+  setComfyuiFieldValue("comfyui-workflow-layout-json", json.layout_text || JSON.stringify(json.layout_json || {}, null, 2));
+  if (!$("comfyui-workflow-purpose")?.value && json.default_params?.generation_mode) setComfyuiFieldValue("comfyui-workflow-purpose", json.default_params.generation_mode);
+  if (json.workflow_preset_json?.project_version) setComfyuiFieldValue("comfyui-workflow-project-version", json.workflow_preset_json.project_version);
+  if (json.workflow_preset_json?.workflow_schema_version) setComfyuiFieldValue("comfyui-workflow-schema-version", json.workflow_preset_json.workflow_schema_version);
   setComfyuiWorkflowStatus(`已匯出目前 workflow，hash ${String((json.workflow_hash || "").slice(0, 12) || "-")}`);
-  setComfyuiMessage("已把目前表單轉成 workflow JSON，可直接保存成 preset。", true);
-  downloadComfyuiWorkflowText(`comfyui-current-workflow-${Date.now()}.json`, json.workflow_text || JSON.stringify(json.workflow_json || {}, null, 2));
+  setComfyuiMessage("已把目前表單轉成 workflow 與 layout JSON，可直接保存成自訂版面。", true);
+  downloadComfyuiWorkflowText(`comfyui-current-workflow-layout-${Date.now()}.json`, json.workflow_preset_text || JSON.stringify(json.workflow_preset_json || json.workflow_json || {}, null, 2));
 }
 
 async function importComfyuiWorkflowPreset() {
@@ -734,9 +1033,7 @@ async function importComfyuiWorkflowPreset() {
       "X-CSRF-Token": getCsrfToken() || "",
     },
     body: JSON.stringify({
-      title: $("comfyui-workflow-title")?.value || "",
-      description: $("comfyui-workflow-description")?.value || "",
-      visibility: $("comfyui-workflow-visibility")?.value || "private",
+      ...comfyuiWorkflowEditorPayload(),
       workflow_json: workflowText,
       default_params: comfyuiWorkflowEditorDefaults || undefined,
     }),
@@ -766,9 +1063,7 @@ async function updateComfyuiWorkflowPreset() {
       "X-CSRF-Token": getCsrfToken() || "",
     },
     body: JSON.stringify({
-      title: $("comfyui-workflow-title")?.value || "",
-      description: $("comfyui-workflow-description")?.value || "",
-      visibility: $("comfyui-workflow-visibility")?.value || "private",
+      ...comfyuiWorkflowEditorPayload(),
       workflow_json: workflowText,
       default_params: comfyuiWorkflowEditorDefaults || undefined,
     }),
@@ -831,8 +1126,61 @@ async function exportComfyuiWorkflowPreset(presetId) {
   });
   const json = await res.json().catch(() => ({}));
   if (!res.ok || !json.ok) throw new Error(json.msg || `workflow 匯出失敗（HTTP ${res.status}）`);
-  downloadComfyuiWorkflowText(json.filename || `comfyui-workflow-${presetId}.json`, json.workflow_text || JSON.stringify(json.workflow_json || {}, null, 2));
-  setComfyuiMessage(`已匯出 workflow preset #${presetId}。`, true);
+  downloadComfyuiWorkflowText(json.filename || `comfyui-workflow-layout-${presetId}.json`, json.workflow_preset_text || JSON.stringify(json.workflow_preset_json || json.workflow_json || {}, null, 2));
+  setComfyuiMessage(`已匯出 workflow 版面 #${presetId}，內含原始 workflow、本專案 preset 包裝與 UI layout。`, true);
+}
+
+async function duplicateComfyuiWorkflowPreset(presetId) {
+  await fetchCsrfToken({ force: true });
+  const res = await apiFetch(API + `/comfyui/workflows/${encodeURIComponent(presetId)}`, {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": getCsrfToken() || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json.ok) throw new Error(json.msg || `workflow 讀取失敗（HTTP ${res.status}）`);
+  const preset = json.preset || {};
+  const create = await apiFetch(API + "/comfyui/workflow-layouts", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      "X-CSRF-Token": getCsrfToken() || "",
+    },
+    body: JSON.stringify({
+      title: `${preset.title || `Workflow #${presetId}`} copy`,
+      description: preset.description || "",
+      visibility: "private",
+      purpose: preset.purpose || "custom",
+      comfyui_version: preset.comfyui_version || "",
+      project_version: preset.project_version || "",
+      workflow_schema_version: preset.workflow_schema_version || "1",
+      layout_json: preset.layout_json || {},
+      workflow_json: preset.workflow_json || {},
+      default_params: preset.default_params || {},
+      required_custom_nodes: preset.required_custom_nodes || [],
+    }),
+  });
+  const created = await create.json().catch(() => ({}));
+  if (!create.ok || !created.ok) throw new Error(created.msg || `workflow 複製失敗（HTTP ${create.status}）`);
+  await loadComfyuiWorkflowPresets();
+  setComfyuiMessage(created.msg || "已複製為新的私人工作流版面。", true);
+}
+
+async function setDefaultComfyuiWorkflowPreset(presetId) {
+  await fetchCsrfToken({ force: true });
+  const res = await apiFetch(API + `/comfyui/workflows/${encodeURIComponent(presetId)}`, {
+    method: "PUT",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      "X-CSRF-Token": getCsrfToken() || "",
+    },
+    body: JSON.stringify({ is_default: true }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json.ok) throw new Error(json.msg || `預設版面設定失敗（HTTP ${res.status}）`);
+  await loadComfyuiWorkflowPresets();
+  setComfyuiMessage("已設為我的預設工作流版面。", true);
 }
 
 async function deleteComfyuiWorkflowPreset(presetId) {
@@ -876,6 +1224,24 @@ async function loadComfyuiWorkflowFile() {
   if (!file) return;
   const text = await file.text();
   setComfyuiFieldValue("comfyui-workflow-json", text);
+  try {
+    const parsed = JSON.parse(text);
+    const wrapped = parsed?.workflow_preset_json || parsed;
+    if (wrapped && typeof wrapped === "object" && wrapped.workflow_json) {
+      setComfyuiFieldValue("comfyui-workflow-json", JSON.stringify(wrapped.workflow_json || {}, null, 2));
+      setComfyuiFieldValue("comfyui-workflow-layout-json", JSON.stringify(wrapped.layout_json || {}, null, 2));
+      setComfyuiFieldValue("comfyui-workflow-title", wrapped.name || wrapped.title || "");
+      setComfyuiFieldValue("comfyui-workflow-description", wrapped.description || "");
+      setComfyuiFieldValue("comfyui-workflow-purpose", wrapped.purpose || "custom");
+      setComfyuiFieldValue("comfyui-workflow-comfyui-version", wrapped.comfyui_version || "");
+      setComfyuiFieldValue("comfyui-workflow-project-version", wrapped.project_version || "");
+      setComfyuiFieldValue("comfyui-workflow-schema-version", wrapped.workflow_schema_version || "1");
+    }
+  } catch (_) {
+    // Keep raw text in the workflow editor; backend will return a schema_validation stage.
+  }
   comfyuiWorkflowEditorDefaults = null;
+  renderComfyuiWorkflowBuilderPreview();
+  markComfyuiWorkflowEditorDirty();
   setComfyuiMessage(`已載入 workflow 檔：${file.name}`, true);
 }

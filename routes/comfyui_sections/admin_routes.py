@@ -1,3 +1,4 @@
+from flask import Response
 from urllib.parse import urlparse
 
 
@@ -21,6 +22,7 @@ def register_comfyui_admin_routes(app, ctx):
     normalize_civitai_search_type = ctx["normalize_civitai_search_type"]
     inspect_civitai_model = ctx["inspect_civitai_model"]
     search_civitai_models = ctx["search_civitai_models"]
+    fetch_civitai_media = ctx["fetch_civitai_media"]
     parse_civitai_download_request = ctx["parse_civitai_download_request"]
     coerce_bool = ctx["coerce_bool"]
     create_model_download_job = ctx["create_model_download_job"]
@@ -210,6 +212,10 @@ def register_comfyui_admin_routes(app, ctx):
         total = int(result.get("total_items") or 0)
         count = len(result.get("results") or [])
         message = "沒有符合條件的 Civitai 模型，請調整關鍵字或篩選器。" if count == 0 else f"已找到 {count} 個 Civitai 模型（總數約 {total}）。"
+        if result.get("source_errors"):
+            failed_sources = ", ".join(str(item.get("source_site") or "").strip() for item in result.get("source_errors") or [] if item.get("source_site"))
+            if failed_sources:
+                message = f"{message} 但部分來源暫時失敗：{failed_sources}。"
         return json_resp({
             "ok": True,
             "results": result.get("results") or [],
@@ -217,8 +223,33 @@ def register_comfyui_admin_routes(app, ctx):
             "total_items": total,
             "current_page": result.get("current_page") or 1,
             "page_size": result.get("page_size") or count,
+            "search_sources": result.get("search_sources") or [],
+            "source_errors": result.get("source_errors") or [],
             "msg": message,
         })
+
+    @app.route("/api/root/comfyui/civitai/media", methods=["GET"])
+    @require_csrf_safe
+    def root_comfyui_civitai_media():
+        actor, err = root_or_403()
+        if err:
+            return err
+        media_url = str(ctx["request"].args.get("url") or "").strip()
+        data, content_type, msg = fetch_civitai_media(media_url)
+        if msg:
+            audit(
+                "COMFYUI_CIVITAI_MEDIA_PROXY",
+                get_client_ip(),
+                user=actor_value(actor, "username"),
+                success=False,
+                ua=get_ua(),
+                detail=f"url_host={urlparse(media_url).hostname if media_url else ''}, error={msg}"[:300],
+            )
+            return json_resp({"ok": False, "msg": msg}), 400
+        response = Response(data, mimetype=content_type)
+        response.headers["Cache-Control"] = "private, max-age=3600"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
 
     @app.route("/api/root/comfyui/civitai/download", methods=["POST"])
     @require_csrf

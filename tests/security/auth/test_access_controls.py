@@ -1,6 +1,6 @@
 import json
 
-from flask import Flask, jsonify, make_response
+from flask import Flask, jsonify, make_response, request
 
 from routes.system_admin import register_system_admin_routes
 from services.security.access_controls import (
@@ -21,6 +21,7 @@ from services.server.bind import (
     validate_listen_host,
     validate_listen_port,
 )
+from services.server.request_guards import protect_sensitive_static_page
 
 
 def _json_resp(payload, status=200):
@@ -127,6 +128,49 @@ def test_maintenance_bypass_required_payload_names_token_header_not_hash():
     assert payload["requires"] == "maintenance_bypass_token"
     assert payload["header"] == "X-Maintenance-Bypass-Token"
     assert "hash" not in str(payload).lower()
+
+
+def test_comfyui_workflow_editor_static_page_requires_login():
+    app = Flask(__name__)
+    audit_log = []
+    with app.test_request_context("/comfyui-workflow-editor.html"):
+        resp = protect_sensitive_static_page(
+            request,
+            get_current_user_ctx=lambda: None,
+            audit=lambda *args, **kwargs: audit_log.append((args, kwargs)),
+            get_client_ip=lambda: "127.0.0.1",
+            get_ua=lambda: "pytest",
+            is_feature_enabled=lambda key: True,
+            record_security_event=lambda *args, **kwargs: None,
+            make_response=make_response,
+        )
+
+    assert resp.status_code == 302
+    assert resp.headers["Location"] == "/"
+    assert audit_log
+    assert audit_log[-1][0][0] == "STATIC_PAGE_UNAUTH_DENIED"
+    assert "path=/comfyui-workflow-editor.html" in audit_log[-1][1]["detail"]
+
+
+def test_comfyui_workflow_editor_static_page_respects_feature_flag():
+    app = Flask(__name__)
+    security_events = []
+    with app.test_request_context("/comfyui-workflow-editor.html"):
+        resp = protect_sensitive_static_page(
+            request,
+            get_current_user_ctx=lambda: {"id": 1, "username": "root"},
+            audit=lambda *args, **kwargs: None,
+            get_client_ip=lambda: "127.0.0.1",
+            get_ua=lambda: "pytest",
+            is_feature_enabled=lambda key: False,
+            record_security_event=lambda *args, **kwargs: security_events.append((args, kwargs)),
+            make_response=make_response,
+        )
+
+    assert resp.status_code == 503
+    assert b"ComfyUI workflow editor is disabled" in resp.data
+    assert security_events
+    assert "feature_comfyui_enabled" in security_events[-1][1]["detail"]
 
 
 def test_admin_access_controls_endpoint_updates_safe_payload():

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>hackme_web — 登入系統</title>
   <!-- Security headers via HTTP (set by server/Talisman) -->
-  <link rel="stylesheet" href="/styles.css?v=20260505-workflow-preset" />
+  <link rel="stylesheet" href="/styles.css?v=20260510-comfyui-visual-workflow" />
 </head>
 <body>
 <!-- ════════════════════ AUTH CARD ════════════════════ -->
@@ -1484,15 +1484,15 @@
       <div class="drive-card comfyui-workflow-card" style="margin-top:1rem;">
         <div class="drive-card-heading">
           <div>
-            <div class="drive-card-title">ComfyUI Workflow 工作台</div>
-            <div class="drive-card-sub">可匯入 / 匯出 workflow JSON、保存個人 preset、發布 root 官方 preset，並保留最近執行結果。</div>
+            <div class="drive-card-title">ComfyUI Workflow Layout Builder</div>
+            <div class="drive-card-sub">可新增、編輯、儲存、匯入、匯出自訂工作流版面；官方版面與個人版面分開管理。</div>
           </div>
           <button class="btn" id="comfyui-workflows-refresh-btn" type="button">重新整理 Workflow</button>
         </div>
         <div id="comfyui-workflow-status" class="drive-card-sub">尚未讀取 workflow preset</div>
         <div class="comfyui-workflow-grid">
           <div class="comfyui-workflow-editor">
-            <div class="field"><label>Preset 標題</label><input type="text" id="comfyui-workflow-title" maxlength="120" placeholder="例如：SDXL 商品圖 ControlNet 範本" /></div>
+            <div class="field"><label>版面名稱</label><input type="text" id="comfyui-workflow-title" maxlength="120" placeholder="例如：SDXL 商品圖 ControlNet 範本" /></div>
             <div class="field"><label>說明</label><textarea id="comfyui-workflow-description" rows="3" maxlength="1200" placeholder="描述用途、模型依賴與使用情境"></textarea></div>
             <div class="settings-option-grid">
               <div class="field">
@@ -1503,32 +1503,80 @@
                 </select>
               </div>
               <div class="field">
+                <label>適用用途</label>
+                <select id="comfyui-workflow-purpose">
+                  <option value="txt2img">txt2img</option>
+                  <option value="img2img">img2img</option>
+                  <option value="inpaint">inpaint</option>
+                  <option value="outpaint">outpaint</option>
+                  <option value="upscale">upscale</option>
+                  <option value="controlnet">ControlNet</option>
+                  <option value="custom">自訂</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>ComfyUI 版本</label>
+                <input type="text" id="comfyui-workflow-comfyui-version" maxlength="80" placeholder="例如：0.3.x 或留空" />
+              </div>
+              <div class="field">
+                <label>本專案版本</label>
+                <input type="text" id="comfyui-workflow-project-version" maxlength="80" placeholder="保存時自動帶入" />
+              </div>
+              <div class="field">
+                <label>Workflow Schema</label>
+                <input type="text" id="comfyui-workflow-schema-version" maxlength="40" value="1" />
+              </div>
+              <div class="field">
                 <label>匯入 JSON 檔</label>
                 <input type="file" id="comfyui-workflow-file" accept="application/json,.json" />
               </div>
             </div>
+            <label class="settings-toggle" style="margin:.45rem 0 .55rem;">
+              <input type="checkbox" id="comfyui-workflow-is-default" />
+              <span>設為我的預設版面</span>
+            </label>
             <div class="drive-card-sub">匯入的 workflow 會檢查節點結構、絕對路徑、外部 URL、惡意 shell/exec 片段；缺模型不會靜默 fallback。</div>
             <div class="drive-file-actions" style="justify-content:flex-start;">
+              <a class="btn" href="/comfyui-workflow-editor.html" target="_blank" rel="noopener">開啟視覺 Workflow 編輯器</a>
+              <button class="btn" id="comfyui-workflow-load-visual-btn" type="button">載入視覺編輯器結果</button>
               <button class="btn" id="comfyui-workflow-export-current-btn" type="button">匯出目前 Workflow</button>
-              <button class="btn btn-primary" id="comfyui-workflow-import-btn" type="button">匯入為新 Preset</button>
+              <button class="btn btn-primary" id="comfyui-workflow-import-btn" type="button">新增版面</button>
               <button class="btn" id="comfyui-workflow-update-btn" type="button" disabled>更新目前選擇</button>
               <button class="btn" id="comfyui-workflow-reset-btn" type="button">清空編輯器</button>
             </div>
-            <textarea id="comfyui-workflow-json" rows="16" spellcheck="false" placeholder='貼上 ComfyUI workflow JSON，或先按「匯出目前 Workflow」'></textarea>
-            <div class="drive-card-sub" id="comfyui-workflow-editor-note">可先從目前表單匯出 workflow，再保存成 preset；若 workflow 需要來源圖 / 遮罩 / 控制圖，請先確保目前表單已經有可用 image_ref。</div>
+            <div id="comfyui-workflow-builder-preview" class="drive-card-sub">視覺編輯器結果載入後會在這裡顯示節點摘要。</div>
+            <details class="drive-collapsible-panel settings-collapse comfyui-workflow-layout-details">
+              <summary>
+                <div>
+                  <div class="drive-card-title">進階 JSON 匯入 / 除錯</div>
+                  <div class="drive-card-sub">一般使用者請用視覺編輯器；這裡只保留匯入外部 workflow 或除錯。</div>
+                </div>
+              </summary>
+              <div class="drive-collapsible-body">
+                <div class="field">
+                  <label>Workflow JSON</label>
+                  <textarea id="comfyui-workflow-json" rows="16" spellcheck="false" placeholder='可貼上 ComfyUI workflow JSON，或從視覺編輯器載入'></textarea>
+                </div>
+                <div class="field">
+                  <label>UI Layout JSON</label>
+                <textarea id="comfyui-workflow-layout-json" rows="8" spellcheck="false" placeholder='{"layout_schema_version":"1","node_order":[],"node_positions":{},"field_overrides":{}}'></textarea>
+                </div>
+              </div>
+            </details>
+            <div class="drive-card-sub" id="comfyui-workflow-editor-note">可先從目前表單匯出 workflow，再保存成版面；編輯後需按「新增版面」或「更新目前選擇」才會保存。</div>
           </div>
           <div class="comfyui-workflow-library">
             <div class="comfyui-workflow-section">
-              <div class="drive-card-title">我的 Preset</div>
-              <div id="comfyui-workflow-my-list" class="comfyui-workflow-list"><div class="drive-empty">尚無個人 preset</div></div>
+              <div class="drive-card-title">我的工作流版面</div>
+              <div id="comfyui-workflow-my-list" class="comfyui-workflow-list"><div class="drive-empty">尚無個人版面</div></div>
             </div>
             <div class="comfyui-workflow-section" style="margin-top:.85rem;">
-              <div class="drive-card-title">官方 Preset</div>
-              <div id="comfyui-workflow-official-list" class="comfyui-workflow-list"><div class="drive-empty">尚無官方 preset</div></div>
+              <div class="drive-card-title">官方工作流版面</div>
+              <div id="comfyui-workflow-official-list" class="comfyui-workflow-list"><div class="drive-empty">尚無官方版面</div></div>
             </div>
             <div class="comfyui-workflow-section" style="margin-top:.85rem;">
-              <div class="drive-card-title">其他可讀 Preset</div>
-              <div id="comfyui-workflow-shared-list" class="comfyui-workflow-list"><div class="drive-empty">尚無其他可讀 preset</div></div>
+              <div class="drive-card-title">其他可讀版面</div>
+              <div id="comfyui-workflow-shared-list" class="comfyui-workflow-list"><div class="drive-empty">尚無其他可讀版面</div></div>
             </div>
           </div>
         </div>
@@ -5076,8 +5124,8 @@
 <script src="/js/35-drive.js?v=20260504-drive-media-rename" defer></script>
   <script src="/js/35-drive-preview-share.js?v=20260507-drive-preview-share-split" defer></script>
 <!-- cache marker retained for template-import regression: /js/36-comfyui.js?v=20260509-comfyui-template-embeddings -->
-<script src="/js/36-comfyui.js?v=20260509-comfyui-stop-local-runtime" defer></script>
-<script src="/js/36-comfyui-workflows.js?v=20260509-comfyui-template-embeddings" defer></script>
+<script src="/js/36-comfyui.js?v=20260510-comfyui-visual-workflow" defer></script>
+<script src="/js/36-comfyui-workflows.js?v=20260510-comfyui-visual-workflow" defer></script>
 <script src="/js/37-bug-report.js?v=20260502-device-feature" defer></script>
 <script src="/js/38-games.js?v=20260502-mobile-controls" defer></script>
 <script src="/js/39-videos.js?v=20260505-hlsjs-player" defer></script>

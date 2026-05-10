@@ -1149,7 +1149,7 @@ def attach_smv2_ctx():
 
 @app.before_request
 def protect_sensitive_static_pages():
-    if request.method == "OPTIONS" or request.path != "/trading-workflow-editor.html":
+    if request.method == "OPTIONS" or request.path not in {"/trading-workflow-editor.html", "/comfyui-workflow-editor.html"}:
         return None
     # Keep these protection markers visible in server.py while the heavy logic
     # lives in services.server_request_guards:
@@ -1157,6 +1157,7 @@ def protect_sensitive_static_pages():
     # STATIC_PAGE_UNAUTH_DENIED
     # resp.headers["Location"] = "/"
     # is_feature_enabled("feature_trading_enabled")
+    # is_feature_enabled("feature_comfyui_enabled")
     return protect_sensitive_static_page_helper(
         request,
         get_current_user_ctx=get_current_user_ctx,

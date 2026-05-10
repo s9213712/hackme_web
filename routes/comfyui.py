@@ -62,6 +62,12 @@ from services.comfyui.template import (
     runtime_comfyui_dir,
 )
 from services.comfyui.template.seeding import SYSTEM_WORKFLOW_IDS
+from services.comfyui.validation.rules import (
+    WORKFLOW_ABSOLUTE_PATH_RE,
+    WORKFLOW_BLOCKED_COMMAND_RE,
+    WORKFLOW_URL_RE,
+)
+from services.platform.release_info import APP_RELEASE_ID
 from services.system.notifications import create_notification_if_enabled
 from services.storage.storage_albums import (
     add_album_file,
@@ -102,6 +108,26 @@ CIVITAI_ALLOWED_HOSTS = {
     "www.civitai.green",
 }
 CIVITAI_API_BASE = os.environ.get("CIVITAI_API_BASE", "https://civitai.com/api/v1").rstrip("/")
+def _configured_civitai_api_bases():
+    raw = os.environ.get("CIVITAI_API_BASES", "")
+    if raw.strip():
+        candidates = [item.strip().rstrip("/") for item in raw.split(",")]
+    else:
+        candidates = [CIVITAI_API_BASE, "https://civitai.red/api/v1"]
+    bases = []
+    seen = set()
+    for item in candidates:
+        if not item or item in seen:
+            continue
+        parsed = urlparse(item)
+        host = (parsed.hostname or "").lower()
+        if parsed.scheme != "https" or host not in CIVITAI_ALLOWED_HOSTS:
+            continue
+        bases.append(item)
+        seen.add(item)
+    return bases or [CIVITAI_API_BASE]
+
+CIVITAI_API_BASES = _configured_civitai_api_bases()
 CIVITAI_MODEL_TYPE_TO_DOWNLOAD_TYPE = {
     "checkpoint": "checkpoint",
     "lora": "lora",
@@ -130,6 +156,46 @@ COMFYUI_HISTORY_LIMIT = 20
 COMFYUI_WORKFLOW_PRESET_LIMIT = 50
 COMFYUI_WORKFLOW_RUN_LIMIT = 8
 COMFYUI_WORKFLOW_VISIBILITY_VALUES = {"private", "public"}
+COMFYUI_WORKFLOW_PURPOSE_VALUES = {
+    "txt2img",
+    "img2img",
+    "inpaint",
+    "outpaint",
+    "upscale",
+    "controlnet",
+    "custom",
+}
+COMFYUI_WORKFLOW_SCHEMA_VERSION = "1"
+COMFYUI_WORKFLOW_LAYOUT_MAX_JSON_BYTES = 64_000
+COMFYUI_CORE_WORKFLOW_NODE_CLASSES = {
+    "CheckpointLoaderSimple",
+    "CLIPTextEncode",
+    "CLIPSetLastLayer",
+    "ConditioningConcat",
+    "ConditioningAverage",
+    "ConditioningCombine",
+    "ConditioningZeroOut",
+    "VAELoader",
+    "VAEEncode",
+    "VAEEncodeForInpaint",
+    "VAEDecode",
+    "KSampler",
+    "KSamplerAdvanced",
+    "EmptyLatentImage",
+    "LatentUpscale",
+    "LatentUpscaleBy",
+    "LoadImage",
+    "LoadImageMask",
+    "SaveImage",
+    "PreviewImage",
+    "LoraLoader",
+    "ControlNetLoader",
+    "ControlNetApply",
+    "ControlNetApplyAdvanced",
+    "ImagePadForOutpaint",
+    "UpscaleModelLoader",
+    "ImageUpscaleWithModel",
+}
 
 
 class _MemoryFile:
@@ -397,12 +463,19 @@ def register_comfyui_routes(app, deps):
                 visibility TEXT NOT NULL DEFAULT 'private',
                 is_official INTEGER NOT NULL DEFAULT 0,
                 system_bundle_id TEXT,
+                purpose TEXT NOT NULL DEFAULT 'custom',
+                comfyui_version TEXT NOT NULL DEFAULT '',
+                project_version TEXT NOT NULL DEFAULT '',
+                workflow_schema_version TEXT NOT NULL DEFAULT '1',
                 workflow_json TEXT NOT NULL,
                 workflow_hash TEXT NOT NULL DEFAULT '',
+                layout_json TEXT NOT NULL DEFAULT '{}',
                 required_models_json TEXT NOT NULL DEFAULT '[]',
                 required_loras_json TEXT NOT NULL DEFAULT '[]',
                 required_controlnets_json TEXT NOT NULL DEFAULT '[]',
+                required_custom_nodes_json TEXT NOT NULL DEFAULT '[]',
                 default_params_json TEXT NOT NULL DEFAULT '{}',
+                is_default INTEGER NOT NULL DEFAULT 0,
                 published_by_user_id INTEGER,
                 published_at TEXT,
                 created_at TEXT NOT NULL,
@@ -428,6 +501,32 @@ def register_comfyui_routes(app, deps):
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS comfyui_workflow_layout_versions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                preset_id INTEGER NOT NULL,
+                version_no INTEGER NOT NULL,
+                created_by_user_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                purpose TEXT NOT NULL DEFAULT 'custom',
+                comfyui_version TEXT NOT NULL DEFAULT '',
+                project_version TEXT NOT NULL DEFAULT '',
+                workflow_schema_version TEXT NOT NULL DEFAULT '1',
+                workflow_json TEXT NOT NULL,
+                workflow_hash TEXT NOT NULL DEFAULT '',
+                layout_json TEXT NOT NULL DEFAULT '{}',
+                required_models_json TEXT NOT NULL DEFAULT '[]',
+                required_loras_json TEXT NOT NULL DEFAULT '[]',
+                required_controlnets_json TEXT NOT NULL DEFAULT '[]',
+                required_custom_nodes_json TEXT NOT NULL DEFAULT '[]',
+                default_params_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                UNIQUE(preset_id, version_no)
+            )
+            """
+        )
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(comfyui_workflow_presets)").fetchall()}
         if "published_by_user_id" not in columns:
             conn.execute("ALTER TABLE comfyui_workflow_presets ADD COLUMN published_by_user_id INTEGER")
@@ -435,6 +534,17 @@ def register_comfyui_routes(app, deps):
             conn.execute("ALTER TABLE comfyui_workflow_presets ADD COLUMN published_at TEXT")
         if "system_bundle_id" not in columns:
             conn.execute("ALTER TABLE comfyui_workflow_presets ADD COLUMN system_bundle_id TEXT")
+        for column_name, ddl in {
+            "purpose": "ALTER TABLE comfyui_workflow_presets ADD COLUMN purpose TEXT NOT NULL DEFAULT 'custom'",
+            "comfyui_version": "ALTER TABLE comfyui_workflow_presets ADD COLUMN comfyui_version TEXT NOT NULL DEFAULT ''",
+            "project_version": "ALTER TABLE comfyui_workflow_presets ADD COLUMN project_version TEXT NOT NULL DEFAULT ''",
+            "workflow_schema_version": "ALTER TABLE comfyui_workflow_presets ADD COLUMN workflow_schema_version TEXT NOT NULL DEFAULT '1'",
+            "layout_json": "ALTER TABLE comfyui_workflow_presets ADD COLUMN layout_json TEXT NOT NULL DEFAULT '{}'",
+            "required_custom_nodes_json": "ALTER TABLE comfyui_workflow_presets ADD COLUMN required_custom_nodes_json TEXT NOT NULL DEFAULT '[]'",
+            "is_default": "ALTER TABLE comfyui_workflow_presets ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0",
+        }.items():
+            if column_name not in columns:
+                conn.execute(ddl)
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_comfyui_workflow_presets_owner ON comfyui_workflow_presets(owner_user_id, updated_at DESC)"
         )
@@ -447,10 +557,95 @@ def register_comfyui_routes(app, deps):
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_comfyui_workflow_runs_preset ON comfyui_workflow_runs(preset_id, created_at DESC)"
         )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_comfyui_workflow_layout_versions_preset ON comfyui_workflow_layout_versions(preset_id, version_no DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_comfyui_workflow_presets_default ON comfyui_workflow_presets(owner_user_id, is_default, updated_at DESC)"
+        )
 
     def _normalize_workflow_visibility(value):
         text = str(value or "private").strip().lower() or "private"
         return text if text in COMFYUI_WORKFLOW_VISIBILITY_VALUES else "private"
+
+    def _normalize_workflow_purpose(value, default_params=None):
+        text = str(value or "").strip().lower()
+        if text in COMFYUI_WORKFLOW_PURPOSE_VALUES:
+            return text
+        mode = str((default_params or {}).get("generation_mode") or "").strip().lower()
+        if mode in COMFYUI_WORKFLOW_PURPOSE_VALUES:
+            return mode
+        return "custom"
+
+    def _normalize_workflow_version(value, fallback=""):
+        return _safe_text(value if value not in (None, "") else fallback, 80)
+
+    def _sanitize_workflow_layout_json(value, workflow_json=None):
+        if value in (None, ""):
+            return {
+                "layout_schema_version": "1",
+                "node_order": list((workflow_json or {}).keys()) if isinstance(workflow_json, dict) else [],
+                "node_positions": {},
+                "field_overrides": {},
+            }
+        candidate = value
+        if isinstance(candidate, str):
+            if len(candidate.encode("utf-8")) > COMFYUI_WORKFLOW_LAYOUT_MAX_JSON_BYTES:
+                raise WorkflowValidationError("layout JSON 過大")
+            try:
+                candidate = json.loads(candidate)
+            except json.JSONDecodeError as exc:
+                raise WorkflowValidationError("layout JSON 格式不正確") from exc
+        if not isinstance(candidate, dict):
+            raise WorkflowValidationError("layout JSON 必須是物件")
+
+        def sanitize_value(item, *, path="layout", depth=0):
+            if depth > 8:
+                raise WorkflowValidationError(f"{path} 巢狀層級過深")
+            if isinstance(item, dict):
+                result = {}
+                for key, child in item.items():
+                    key_text = str(key or "").strip()
+                    if not key_text:
+                        raise WorkflowValidationError(f"{path} 含有空白欄位名稱")
+                    result[key_text[:80]] = sanitize_value(child, path=f"{path}.{key_text[:80]}", depth=depth + 1)
+                return result
+            if isinstance(item, list):
+                return [sanitize_value(child, path=f"{path}[{index}]", depth=depth + 1) for index, child in enumerate(item[:500])]
+            if isinstance(item, str):
+                text = item.strip()
+                if WORKFLOW_BLOCKED_COMMAND_RE.search(text):
+                    raise WorkflowValidationError(f"{path} 含有不允許的命令片段")
+                if WORKFLOW_URL_RE.match(text):
+                    raise WorkflowValidationError(f"{path} 不可包含外部 URL")
+                if WORKFLOW_ABSOLUTE_PATH_RE.match(text):
+                    raise WorkflowValidationError(f"{path} 不可包含絕對路徑")
+                return item[:2000]
+            if isinstance(item, (int, float, bool)) or item is None:
+                return item
+            raise WorkflowValidationError(f"{path} 類型不支援")
+
+        sanitized = sanitize_value(candidate)
+        if len(json.dumps(sanitized, ensure_ascii=False, sort_keys=True).encode("utf-8")) > COMFYUI_WORKFLOW_LAYOUT_MAX_JSON_BYTES:
+            raise WorkflowValidationError("layout JSON 過大")
+        return sanitized
+
+    def _infer_required_custom_nodes(workflow_json):
+        nodes = []
+        if not isinstance(workflow_json, dict):
+            return nodes
+        for node in workflow_json.values():
+            class_type = str((node or {}).get("class_type") or "").strip()
+            if class_type and class_type not in COMFYUI_CORE_WORKFLOW_NODE_CLASSES and class_type not in nodes:
+                nodes.append(class_type)
+        return sorted(nodes)
+
+    def _workflow_version_warnings(row):
+        warnings = []
+        schema_version = str(row["workflow_schema_version"] or COMFYUI_WORKFLOW_SCHEMA_VERSION)
+        if schema_version != COMFYUI_WORKFLOW_SCHEMA_VERSION:
+            warnings.append(f"workflow schema 版本 {schema_version} 與目前支援版本 {COMFYUI_WORKFLOW_SCHEMA_VERSION} 不一致")
+        return warnings
 
     def _workflow_preset_summary(row, *, dependency_status=None, recent_runs=None, actor=None):
         default_params = _parse_json_field(row["default_params_json"], {}) or {}
@@ -462,11 +657,18 @@ def register_comfyui_routes(app, deps):
             "visibility": row["visibility"] or "private",
             "is_official": bool(row["is_official"]),
             "system_bundle_id": row["system_bundle_id"] or "",
+            "purpose": row["purpose"] or "custom",
+            "comfyui_version": row["comfyui_version"] or "",
+            "project_version": row["project_version"] or "",
+            "workflow_schema_version": row["workflow_schema_version"] or COMFYUI_WORKFLOW_SCHEMA_VERSION,
             "workflow_hash": row["workflow_hash"] or "",
+            "layout_json": _parse_json_field(row["layout_json"], {}) or {},
             "required_models": _parse_json_field(row["required_models_json"], []) or [],
             "required_loras": _parse_json_field(row["required_loras_json"], []) or [],
             "required_controlnets": _parse_json_field(row["required_controlnets_json"], []) or [],
+            "required_custom_nodes": _parse_json_field(row["required_custom_nodes_json"], []) or [],
             "default_params": default_params,
+            "is_default": bool(row["is_default"]),
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
             "published_at": row["published_at"],
@@ -477,6 +679,7 @@ def register_comfyui_routes(app, deps):
                 and _actor_value(actor, "username") == "root"
                 and int(row["owner_user_id"]) == int(_actor_value(actor, "id"))
             ),
+            "version_warnings": _workflow_version_warnings(row),
         }
         if dependency_status is not None:
             result["dependency_status"] = dependency_status
@@ -669,7 +872,93 @@ def register_comfyui_routes(app, deps):
         default_params = parsed.get("default_params") or {}
         return parsed, default_params
 
-    def _upsert_workflow_preset(conn, *, preset_id=None, actor, title, description, visibility, workflow_payload, default_params, is_official=False, published_by_user_id=None, system_bundle_id=None):
+    def _record_workflow_layout_version(conn, row, *, actor, now=None):
+        if not row:
+            return
+        now = now or datetime.now().isoformat()
+        preset_id = int(row["id"])
+        existing = conn.execute(
+            "SELECT COALESCE(MAX(version_no), 0) AS max_version FROM comfyui_workflow_layout_versions WHERE preset_id=?",
+            (preset_id,),
+        ).fetchone()
+        version_no = int(existing["max_version"] if existing and existing["max_version"] is not None else 0) + 1
+        conn.execute(
+            """
+            INSERT INTO comfyui_workflow_layout_versions (
+                preset_id, version_no, created_by_user_id, title, description, purpose,
+                comfyui_version, project_version, workflow_schema_version, workflow_json,
+                workflow_hash, layout_json, required_models_json, required_loras_json,
+                required_controlnets_json, required_custom_nodes_json, default_params_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                preset_id,
+                version_no,
+                int(_actor_value(actor, "id")),
+                row["title"] or "",
+                row["description"] or "",
+                row["purpose"] or "custom",
+                row["comfyui_version"] or "",
+                row["project_version"] or "",
+                row["workflow_schema_version"] or COMFYUI_WORKFLOW_SCHEMA_VERSION,
+                row["workflow_json"] or "{}",
+                row["workflow_hash"] or "",
+                row["layout_json"] or "{}",
+                row["required_models_json"] or "[]",
+                row["required_loras_json"] or "[]",
+                row["required_controlnets_json"] or "[]",
+                row["required_custom_nodes_json"] or "[]",
+                row["default_params_json"] or "{}",
+                now,
+            ),
+        )
+
+    def _workflow_preset_revision_changed(before, after):
+        if before is None:
+            return True
+        keys = (
+            "title",
+            "description",
+            "visibility",
+            "is_official",
+            "system_bundle_id",
+            "purpose",
+            "comfyui_version",
+            "project_version",
+            "workflow_schema_version",
+            "workflow_json",
+            "workflow_hash",
+            "layout_json",
+            "required_models_json",
+            "required_loras_json",
+            "required_controlnets_json",
+            "required_custom_nodes_json",
+            "default_params_json",
+            "is_default",
+        )
+        return any(str(before[key] if before[key] is not None else "") != str(after[key] if after[key] is not None else "") for key in keys)
+
+    def _upsert_workflow_preset(
+        conn,
+        *,
+        preset_id=None,
+        actor,
+        title,
+        description,
+        visibility,
+        workflow_payload,
+        default_params,
+        purpose=None,
+        comfyui_version=None,
+        project_version=None,
+        workflow_schema_version=None,
+        layout_json=None,
+        required_custom_nodes=None,
+        is_default=False,
+        is_official=False,
+        published_by_user_id=None,
+        system_bundle_id=None,
+    ):
         _ensure_comfyui_workflow_schema(conn)
         now = datetime.now().isoformat()
         workflow_json = workflow_payload["workflow_json"]
@@ -678,17 +967,35 @@ def register_comfyui_routes(app, deps):
         required_loras = workflow_payload["required_loras"]
         required_controlnets = workflow_payload["required_controlnets"]
         default_payload = default_params or workflow_payload["default_params"] or {}
+        safe_layout = _sanitize_workflow_layout_json(layout_json, workflow_json=workflow_json)
+        safe_custom_nodes = (
+            [str(item).strip()[:160] for item in required_custom_nodes if str(item or "").strip()]
+            if isinstance(required_custom_nodes, list)
+            else _infer_required_custom_nodes(workflow_json)
+        )
+        safe_purpose = _normalize_workflow_purpose(purpose, default_payload)
+        safe_project_version = _normalize_workflow_version(project_version, APP_RELEASE_ID)
+        safe_comfyui_version = _normalize_workflow_version(comfyui_version, "")
+        safe_schema_version = _normalize_workflow_version(workflow_schema_version, COMFYUI_WORKFLOW_SCHEMA_VERSION)
+        safe_is_default = 1 if is_default else 0
         args = (
             title.strip()[:120],
             _safe_text(description, 1200),
             _normalize_workflow_visibility(visibility),
             1 if is_official else 0,
+            safe_purpose,
+            safe_comfyui_version,
+            safe_project_version,
+            safe_schema_version,
             json.dumps(workflow_json, ensure_ascii=False, sort_keys=True),
             workflow_hash,
+            json.dumps(safe_layout, ensure_ascii=False, sort_keys=True),
             json.dumps(required_models, ensure_ascii=False, sort_keys=True),
             json.dumps(required_loras, ensure_ascii=False, sort_keys=True),
             json.dumps(required_controlnets, ensure_ascii=False, sort_keys=True),
+            json.dumps(safe_custom_nodes, ensure_ascii=False, sort_keys=True),
             json.dumps(default_payload, ensure_ascii=False, sort_keys=True),
+            safe_is_default,
             int(published_by_user_id) if published_by_user_id else None,
             now if is_official else None,
             str(system_bundle_id or "").strip() or None,
@@ -699,10 +1006,11 @@ def register_comfyui_routes(app, deps):
                 """
                 INSERT INTO comfyui_workflow_presets (
                     owner_user_id, title, description, visibility, is_official,
-                    workflow_json, workflow_hash, required_models_json, required_loras_json,
-                    required_controlnets_json, default_params_json, published_by_user_id,
-                    published_at, system_bundle_id, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    purpose, comfyui_version, project_version, workflow_schema_version,
+                    workflow_json, workflow_hash, layout_json, required_models_json, required_loras_json,
+                    required_controlnets_json, required_custom_nodes_json, default_params_json, is_default,
+                    published_by_user_id, published_at, system_bundle_id, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     int(_actor_value(actor, "id")),
@@ -710,13 +1018,24 @@ def register_comfyui_routes(app, deps):
                     now,
                 ),
             )
-            return cur.lastrowid
+            preset_id = int(cur.lastrowid)
+            if safe_is_default:
+                conn.execute(
+                    "UPDATE comfyui_workflow_presets SET is_default=0 WHERE owner_user_id=? AND id<>?",
+                    (int(_actor_value(actor, "id")), preset_id),
+                )
+            row = _load_workflow_preset_row(conn, preset_id=preset_id)
+            _record_workflow_layout_version(conn, row, actor=actor, now=now)
+            return preset_id
+        before_row = _load_workflow_preset_row(conn, preset_id=preset_id)
         conn.execute(
                 """
                 UPDATE comfyui_workflow_presets
-                SET title=?, description=?, visibility=?, is_official=?, workflow_json=?, workflow_hash=?,
-                    required_models_json=?, required_loras_json=?, required_controlnets_json=?,
-                    default_params_json=?, published_by_user_id=?, published_at=?, system_bundle_id=?, updated_at=?
+                SET title=?, description=?, visibility=?, is_official=?, purpose=?, comfyui_version=?,
+                    project_version=?, workflow_schema_version=?, workflow_json=?, workflow_hash=?,
+                    layout_json=?, required_models_json=?, required_loras_json=?, required_controlnets_json=?,
+                    required_custom_nodes_json=?, default_params_json=?, is_default=?, published_by_user_id=?,
+                    published_at=?, system_bundle_id=?, updated_at=?
                 WHERE id=? AND owner_user_id=?
                 """,
                 (
@@ -725,6 +1044,14 @@ def register_comfyui_routes(app, deps):
                 int(_actor_value(actor, "id")),
             ),
         )
+        if safe_is_default:
+            conn.execute(
+                "UPDATE comfyui_workflow_presets SET is_default=0 WHERE owner_user_id=? AND id<>?",
+                (int(_actor_value(actor, "id")), int(preset_id)),
+            )
+        after_row = _load_workflow_preset_row(conn, preset_id=preset_id)
+        if _workflow_preset_revision_changed(before_row, after_row):
+            _record_workflow_layout_version(conn, after_row, actor=actor, now=now)
         return int(preset_id)
 
     def _create_workflow_run(conn, *, preset_id, actor, prompt, negative_prompt, params_json, workflow_json):
@@ -1130,6 +1457,7 @@ def register_comfyui_routes(app, deps):
         "MAX_COMFYUI_MODEL_DOWNLOAD_BYTES": MAX_COMFYUI_MODEL_DOWNLOAD_BYTES,
         "CIVITAI_ALLOWED_HOSTS": CIVITAI_ALLOWED_HOSTS,
         "CIVITAI_API_BASE": CIVITAI_API_BASE,
+        "CIVITAI_API_BASES": CIVITAI_API_BASES,
         "CIVITAI_MODEL_TYPE_TO_DOWNLOAD_TYPE": CIVITAI_MODEL_TYPE_TO_DOWNLOAD_TYPE,
         "CIVITAI_SEARCH_TYPE_TO_API": CIVITAI_SEARCH_TYPE_TO_API,
         "MemoryFile": _MemoryFile,
@@ -1199,6 +1527,8 @@ def register_comfyui_routes(app, deps):
     _serialize_civitai_file = _admin_helpers["_serialize_civitai_file"]
     _serialize_civitai_versions = _admin_helpers["_serialize_civitai_versions"]
     _build_civitai_page_url = _admin_helpers["_build_civitai_page_url"]
+    _safe_civitai_media_url = _admin_helpers["_safe_civitai_media_url"]
+    _fetch_civitai_media = _admin_helpers["_fetch_civitai_media"]
     _serialize_civitai_search_results = _admin_helpers["_serialize_civitai_search_results"]
     _search_civitai_models = _admin_helpers["_search_civitai_models"]
     _inspect_civitai_model = _admin_helpers["_inspect_civitai_model"]
@@ -2180,6 +2510,7 @@ def register_comfyui_routes(app, deps):
         "normalize_civitai_search_type": _normalize_civitai_search_type,
         "inspect_civitai_model": _inspect_civitai_model,
         "search_civitai_models": _search_civitai_models,
+        "fetch_civitai_media": _fetch_civitai_media,
         "parse_civitai_download_request": _parse_civitai_download_request,
         "coerce_bool": _coerce_bool,
         "create_model_download_job": _create_model_download_job,
@@ -2250,6 +2581,8 @@ def register_comfyui_routes(app, deps):
         "run_comfyui_workflow_preset_job": _run_comfyui_workflow_preset_job,
         "DEFAULT_GENERATION_TIMEOUT_SECONDS": DEFAULT_GENERATION_TIMEOUT_SECONDS,
         "COMFYUI_WORKFLOW_RUN_LIMIT": COMFYUI_WORKFLOW_RUN_LIMIT,
+        "COMFYUI_WORKFLOW_SCHEMA_VERSION": COMFYUI_WORKFLOW_SCHEMA_VERSION,
+        "APP_RELEASE_ID": APP_RELEASE_ID,
         "safe_text": _safe_text,
         "threading": threading,
     })
