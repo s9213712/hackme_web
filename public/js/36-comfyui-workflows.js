@@ -331,6 +331,35 @@ function loadComfyuiVisualWorkflowEditorResult() {
   setComfyuiMessage("已載入視覺 Workflow 編輯器結果；按「新增版面」即可保存。", true);
 }
 
+function prepareComfyuiVisualWorkflowEditorInput() {
+  let workflow = {};
+  let layout = {};
+  try {
+    workflow = parseComfyuiWorkflowEditorJson("comfyui-workflow-json", {});
+    layout = normalizeComfyuiLayoutJson(parseComfyuiWorkflowEditorJson("comfyui-workflow-layout-json", {}));
+  } catch (err) {
+    setComfyuiMessage(err.message || "目前 workflow JSON 無法送入視覺編輯器", false);
+    return;
+  }
+  const payload = {
+    name: $("comfyui-workflow-title")?.value || "ComfyUI 工作流版面",
+    description: $("comfyui-workflow-description")?.value || "",
+    purpose: $("comfyui-workflow-purpose")?.value || "custom",
+    project_version: $("comfyui-workflow-project-version")?.value || "",
+    comfyui_version: $("comfyui-workflow-comfyui-version")?.value || "",
+    workflow_schema_version: $("comfyui-workflow-schema-version")?.value || "1",
+    workflow_json: workflow,
+    layout_json: layout,
+  };
+  try {
+    localStorage.setItem("hackme_comfyui_workflow_editor_input", JSON.stringify(payload));
+  } catch (_) {
+    setComfyuiMessage("瀏覽器無法暫存 workflow 給視覺編輯器；請改用編輯器內匯入 JSON。", false);
+    return;
+  }
+  setComfyuiWorkflowStatus("已把目前 workflow 暫存給視覺節點編輯器。");
+}
+
 function comfyuiWorkflowDependencyHtml(status) {
   if (!status) return '<div class="drive-card-sub">尚未檢查目前節點與模型依賴。</div>';
   const chips = [];

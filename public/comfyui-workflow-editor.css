@@ -36,6 +36,18 @@ button:hover { border-color: #60a5fa; background: #111d31; }
 button.primary { background: #075985; border-color: #0ea5e9; }
 button.good { background: #14532d; border-color: #22c55e; }
 button.danger { background: #7f1d1d; border-color: #ef4444; }
+.file-action {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: .45rem .64rem;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #0b1220;
+  cursor: pointer;
+}
+.file-action:hover { border-color: #60a5fa; background: #111d31; }
+.file-action input { display: none; }
 input, select { width: 100%; padding: .52rem .62rem; }
 textarea {
   width: 100%;
@@ -227,6 +239,10 @@ h1 { margin: 0; font-size: 1.08rem; }
   stroke-dasharray: 8 7;
   opacity: .94;
 }
+.edge-path.warn {
+  stroke: var(--amber);
+  stroke-dasharray: 6 6;
+}
 .edge-dot {
   stroke: #020617;
   stroke-width: 2;
@@ -240,6 +256,39 @@ h1 { margin: 0; font-size: 1.08rem; }
   stroke: #020617;
   stroke-width: 3px;
 }
+.edge-label.warn { fill: #fde68a; }
+.warning-list {
+  display: grid;
+  gap: .28rem;
+  margin-bottom: .75rem;
+  padding: .55rem .65rem;
+  border: 1px solid rgba(245,158,11,.42);
+  border-radius: 7px;
+  color: #fde68a;
+  background: rgba(120,53,15,.32);
+  font-size: .82rem;
+  line-height: 1.35;
+}
+.edge-list { display: grid; gap: .42rem; margin-top: .7rem; }
+.edge-list-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: .5rem;
+  align-items: center;
+  padding: .5rem;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(8, 13, 24, .58);
+}
+.edge-list-row strong,
+.edge-list-row span,
+.edge-list-row small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.edge-list-row span { color: var(--muted); font-size: .78rem; }
+.edge-list-row small { color: #fde68a; margin-top: .16rem; }
+.edge-list-row.warn { border-color: rgba(245,158,11,.42); }
 .status { margin-top: .55rem; min-height: 1.2rem; color: var(--muted); font-size: .84rem; line-height: 1.45; }
 .inspector-grid { display: grid; gap: .55rem; }
 .row-actions { display: flex; flex-wrap: wrap; gap: .45rem; align-items: center; }

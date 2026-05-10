@@ -3919,6 +3919,7 @@ def test_comfyui_frontend_is_wired():
     assert 'id="comfyui-workflow-starter-txt2img-btn"' in index_html
     assert 'id="comfyui-workflow-node-template"' in index_html
     assert 'id="comfyui-workflow-add-node-btn"' in index_html
+    assert 'id="comfyui-workflow-open-visual-btn"' in index_html
     assert "開啟節點連線編輯器" in index_html
     assert 'id="comfyui-workflow-json"' in index_html
     assert 'id="comfyui-workflow-layout-json"' in index_html
@@ -3938,6 +3939,8 @@ def test_comfyui_frontend_is_wired():
     assert "ImagePadForOutpaint" in comfyui_js
     assert "ControlNetApplyAdvanced" in comfyui_js
     assert "ImageUpscaleWithModel" in comfyui_js
+    assert "function prepareComfyuiVisualWorkflowEditorInput()" in comfyui_js
+    assert "hackme_comfyui_workflow_editor_input" in comfyui_js
     assert 'apiFetch(API + "/comfyui/workflow-layouts"' in comfyui_js
     assert 'apiFetch(API + "/comfyui/workflows/export-current"' in comfyui_js
     assert 'apiFetch(API + "/comfyui/workflows/import"' in comfyui_js
@@ -3955,12 +3958,19 @@ def test_comfyui_frontend_is_wired():
     assert 'data-add-node="VAEEncodeForInpaint"' in visual_editor_html
     assert 'data-add-node="ImagePadForOutpaint"' in visual_editor_html
     assert 'data-add-node="ControlNetApplyAdvanced"' in visual_editor_html
+    assert 'id="importJsonFile"' in visual_editor_html
     assert 'data-port-node="' in visual_editor_js
+    assert "const INPUT_KEY = \"hackme_comfyui_workflow_editor_input\";" in visual_editor_js
+    assert "function stateFromPackage(payload)" in visual_editor_js
+    assert "function importJsonFile(event)" in visual_editor_js
     assert "function startConnection(event)" in visual_editor_js
     assert "function completeConnection(event)" in visual_editor_js
     assert "function portPoint(nodeId, kind, name)" in visual_editor_js
     assert "function addEdge({ from, output, to, input })" in visual_editor_js
+    assert "data-delete-edge" in visual_editor_js
     assert ".edge-path.temp" in visual_editor_css
+    assert ".edge-path.warn" in visual_editor_css
+    assert ".edge-list-row" in visual_editor_css
     assert ".port.output.connecting" in visual_editor_css
     assert ".port.input.compatible" in visual_editor_css
     assert "function bindComfyuiAdvancedUi()" in comfyui_js

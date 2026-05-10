@@ -3,6 +3,7 @@
 (function () {
   const STORAGE_KEY = "hackme_comfyui_workflow_visual_builder";
   const RESULT_KEY = "hackme_comfyui_workflow_editor_result";
+  const INPUT_KEY = "hackme_comfyui_workflow_editor_input";
   const $ = (id) => document.getElementById(id);
 
   const NODE_DEFS = {
@@ -159,6 +160,7 @@
   let selectedId = null;
   let dragState = null;
   let connectState = null;
+  let lastImportWarnings = [];
   let workflow = loadState();
 
   function html(value) {
@@ -208,7 +210,7 @@
   }
 
   function emptyState() {
-    return { name: "", description: "", nodes: [], edges: [] };
+    return { name: "", description: "", project_version: "", comfyui_version: "", workflow_schema_version: "1", nodes: [], edges: [], warnings: [] };
   }
 
   function normalizeState(raw) {
@@ -216,6 +218,9 @@
     return {
       name: String(safe.name || ""),
       description: String(safe.description || ""),
+      project_version: String(safe.project_version || ""),
+      comfyui_version: String(safe.comfyui_version || ""),
+      workflow_schema_version: String(safe.workflow_schema_version || "1"),
       nodes: Array.isArray(safe.nodes) ? safe.nodes.filter((node) => NODE_DEFS[node.type]).map((node) => ({
         id: String(node.id || uid()),
         type: String(node.type),
@@ -230,7 +235,9 @@
         output: String(edge.output || ""),
         to: String(edge.to || ""),
         input: String(edge.input || ""),
+        warning: String(edge.warning || ""),
       })).filter((edge) => edge.from && edge.to && edge.input) : [],
+      warnings: Array.isArray(safe.warnings) ? safe.warnings.map((item) => String(item || "")).filter(Boolean).slice(0, 50) : [],
     };
   }
 
@@ -246,6 +253,24 @@
     workflow.name = $("workflowName")?.value || workflow.name || "";
     workflow.description = $("workflowDescription")?.value || workflow.description || "";
     localStorage.setItem(STORAGE_KEY, JSON.stringify(workflow));
+  }
+
+  function takePendingInput() {
+    let payload = null;
+    try {
+      payload = JSON.parse(localStorage.getItem(INPUT_KEY) || "null");
+    } catch (_) {
+      payload = null;
+    }
+    if (!payload || typeof payload !== "object") return false;
+    localStorage.removeItem(INPUT_KEY);
+    const imported = stateFromPackage(payload);
+    workflow = normalizeState(imported.state);
+    selectedId = workflow.nodes[0]?.id || null;
+    lastImportWarnings = imported.warnings;
+    render();
+    setStatus(imported.warnings.length ? `已載入 workflow，但有 ${imported.warnings.length} 個提醒。` : "已載入既有 workflow，可直接編輯節點與線路。", !imported.warnings.length);
+    return true;
   }
 
   function addNode(type, x, y, label) {
@@ -273,16 +298,112 @@
     return Math.max(0, outputs.indexOf(outputName));
   }
 
+  function outputNameForIndex(node, index) {
+    const outputs = NODE_DEFS[node?.type]?.outputs || [];
+    return outputs[Number(index) || 0] || outputs[0] || "OUTPUT";
+  }
+
+  function layoutPosition(layout, id, index) {
+    const raw = layout?.node_positions?.[id] || layout?.node_positions?.[String(id)];
+    if (Array.isArray(raw) && raw.length >= 2 && Number.isFinite(Number(raw[0])) && Number.isFinite(Number(raw[1]))) {
+      return [Number(raw[0]), Number(raw[1])];
+    }
+    return [70 + (index % 4) * 290, 80 + Math.floor(index / 4) * 190];
+  }
+
+  function nodeLabelFromLayout(nodeId, node, layout) {
+    return String(
+      node?._meta?.title ||
+      layout?.field_overrides?.[nodeId]?.label ||
+      NODE_DEFS[node?.class_type]?.label ||
+      node?.class_type ||
+      `Node ${nodeId}`
+    );
+  }
+
+  function stateFromPackage(payload) {
+    const source = payload && typeof payload === "object" ? payload : {};
+    const prompt = source.workflow_json || source.prompt || source.workflow || source;
+    const layout = source.layout_json || source.ui_layout_json || {};
+    const warnings = [];
+    if (!prompt || typeof prompt !== "object" || Array.isArray(prompt)) {
+      return { state: emptyState(), warnings: ["Workflow JSON 必須是物件格式。"] };
+    }
+    const ids = Object.keys(prompt);
+    const layoutOrder = Array.isArray(layout.node_order) ? layout.node_order.map((item) => String(item)) : [];
+    const orderedIds = layoutOrder.filter((id) => prompt[id]).concat(ids.filter((id) => !layoutOrder.includes(id)));
+    const nodes = [];
+    const idSet = new Set();
+    orderedIds.forEach((id, index) => {
+      const raw = prompt[id] || {};
+      const type = String(raw.class_type || "");
+      if (!NODE_DEFS[type]) {
+        warnings.push(`未知節點 ${id}: ${type || "missing class_type"}，已略過。`);
+        return;
+      }
+      const [x, y] = layoutPosition(layout, id, index);
+      const inputs = defaultInputs(type);
+      Object.entries(raw.inputs || {}).forEach(([key, value]) => {
+        if (Array.isArray(value)) return;
+        if (Object.prototype.hasOwnProperty.call(inputs, key)) inputs[key] = value;
+      });
+      nodes.push({
+        id: String(id),
+        type,
+        label: nodeLabelFromLayout(id, raw, layout),
+        x,
+        y,
+        inputs,
+      });
+      idSet.add(String(id));
+    });
+    const edges = [];
+    orderedIds.forEach((id) => {
+      const raw = prompt[id] || {};
+      const target = nodes.find((node) => node.id === String(id));
+      if (!target) return;
+      Object.entries(raw.inputs || {}).forEach(([key, value]) => {
+        if (!Array.isArray(value) || value.length < 1) return;
+        const sourceId = String(value[0]);
+        const source = nodes.find((node) => node.id === sourceId);
+        if (!source || !idSet.has(sourceId)) {
+          warnings.push(`連線 ${sourceId} -> ${id}.${key} 找不到來源節點，已略過。`);
+          return;
+        }
+        const inputSpec = NODE_DEFS[target.type]?.inputs?.[key];
+        if (!inputSpec || inputSpec.type !== "link") {
+          warnings.push(`連線 ${sourceId} -> ${id}.${key} 指向非連線欄位，已略過。`);
+          return;
+        }
+        const output = outputNameForIndex(source, value[1]);
+        edges.push({ id: uid(), from: sourceId, output, to: String(id), input: key, warning: connectionWarningForNodes(source, output, target, key) });
+      });
+    });
+    const state = {
+      name: String(source.name || source.title || "匯入的 ComfyUI 工作流"),
+      description: String(source.description || ""),
+      project_version: String(source.project_version || ""),
+      comfyui_version: String(source.comfyui_version || ""),
+      workflow_schema_version: String(source.workflow_schema_version || layout.workflow_schema_version || "1"),
+      nodes,
+      edges,
+      warnings,
+    };
+    return { state, warnings };
+  }
+
   function exportPackage() {
+    const idMap = Object.fromEntries(workflow.nodes.map((node, index) => [node.id, String(index + 1)]));
     const layout = {
       layout_schema_version: "1",
       visual_builder_version: "1",
-      node_order: workflow.nodes.map((node) => node.id),
-      node_positions: Object.fromEntries(workflow.nodes.map((node) => [node.id, [Math.round(node.x), Math.round(node.y)]])),
-      field_overrides: Object.fromEntries(workflow.nodes.map((node) => [node.id, { label: node.label }])),
-      edges: workflow.edges.map((edge) => ({ from: edge.from, output: edge.output, to: edge.to, input: edge.input })),
+      node_order: workflow.nodes.map((node) => idMap[node.id]),
+      node_positions: Object.fromEntries(workflow.nodes.map((node) => [idMap[node.id], [Math.round(node.x), Math.round(node.y)]])),
+      field_overrides: Object.fromEntries(workflow.nodes.map((node) => [idMap[node.id], { label: node.label }])),
+      edges: workflow.edges
+        .filter((edge) => idMap[edge.from] && idMap[edge.to])
+        .map((edge) => ({ from: idMap[edge.from], output: edge.output, to: idMap[edge.to], input: edge.input })),
     };
-    const idMap = Object.fromEntries(workflow.nodes.map((node, index) => [node.id, String(index + 1)]));
     const prompt = {};
     workflow.nodes.forEach((node) => {
       const promptInputs = clone(node.inputs || {});
@@ -300,7 +421,9 @@
       name: workflow.name || "ComfyUI 視覺工作流",
       description: workflow.description || "",
       purpose: inferPurpose(),
-      workflow_schema_version: "1",
+      project_version: workflow.project_version || "",
+      comfyui_version: workflow.comfyui_version || "",
+      workflow_schema_version: workflow.workflow_schema_version || "1",
       workflow_json: prompt,
       layout_json: layout,
       required_models: collectRequiredModels(),
@@ -308,6 +431,33 @@
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
+  }
+
+  function normalizedPortKind(name) {
+    const raw = String(name || "").toUpperCase();
+    if (raw === "POSITIVE" || raw === "NEGATIVE") return "CONDITIONING";
+    if (raw.includes("CONDITIONING")) return "CONDITIONING";
+    if (raw.includes("CONTROL_NET")) return "CONTROL_NET";
+    if (raw.includes("UPSCALE_MODEL")) return "UPSCALE_MODEL";
+    if (raw.includes("MODEL")) return "MODEL";
+    if (raw.includes("CLIP")) return "CLIP";
+    if (raw.includes("VAE")) return "VAE";
+    if (raw.includes("LATENT")) return "LATENT";
+    if (raw.includes("MASK")) return "MASK";
+    if (raw.includes("IMAGE") || raw === "PIXELS") return "IMAGE";
+    return raw;
+  }
+
+  function connectionWarning(from, output, to, input) {
+    return connectionWarningForNodes(nodeById(from), output, nodeById(to), input);
+  }
+
+  function connectionWarningForNodes(source, output, target, input) {
+    const inputLabel = NODE_DEFS[target?.type]?.inputs?.[input]?.label || input;
+    const outKind = normalizedPortKind(output);
+    const inKind = normalizedPortKind(inputLabel);
+    if (!outKind || !inKind || outKind === inKind) return "";
+    return `${output} 連到 ${input} 型別可能不相容`;
   }
 
   function inferPurpose() {
@@ -349,12 +499,23 @@
     renderJson();
     const badges = $("summaryBadges");
     if (badges) {
+      const warnings = workflowWarnings();
       badges.innerHTML = `
         <span class="badge">${workflow.nodes.length} nodes</span>
         <span class="badge">${workflow.edges.length} edges</span>
         <span class="badge">${html(inferPurpose())}</span>
+        ${workflow.project_version ? `<span class="badge">project ${html(workflow.project_version)}</span>` : ""}
+        ${workflow.comfyui_version ? `<span class="badge">ComfyUI ${html(workflow.comfyui_version)}</span>` : ""}
+        ${warnings.length ? `<span class="badge warn">${warnings.length} warnings</span>` : '<span class="badge ok">ready</span>'}
       `;
     }
+  }
+
+  function workflowWarnings() {
+    return []
+      .concat(workflow.warnings || [])
+      .concat(workflow.edges.map((edge) => edge.warning || "").filter(Boolean))
+      .filter(Boolean);
   }
 
   function renderNodes() {
@@ -533,10 +694,10 @@
       const start = portPoint(edge.from, "output", edge.output);
       const end = portPoint(edge.to, "input", edge.input);
       const path = edgePath(start, end);
-      parts.push(`<path class="edge-path" d="${path}"></path>`);
+      parts.push(`<path class="edge-path ${edge.warning ? "warn" : ""}" data-edge-id="${html(edge.id)}" d="${path}"></path>`);
       parts.push(`<circle class="edge-dot output" cx="${start.x}" cy="${start.y}" r="4"></circle>`);
       parts.push(`<circle class="edge-dot input" cx="${end.x}" cy="${end.y}" r="4"></circle>`);
-      parts.push(`<text class="edge-label" x="${(start.x + end.x) / 2}" y="${(start.y + end.y) / 2 - 7}">${html(edge.output)} → ${html(edge.input)}</text>`);
+      parts.push(`<text class="edge-label ${edge.warning ? "warn" : ""}" x="${(start.x + end.x) / 2}" y="${(start.y + end.y) / 2 - 7}">${html(edge.output)} → ${html(edge.input)}</text>`);
     });
     if (connectState) {
       const start = portPoint(connectState.from, "output", connectState.output);
@@ -713,7 +874,15 @@
     const outputs = NODE_DEFS[source.type]?.outputs || [];
     const targets = workflow.nodes.filter((node) => node.id !== source.id);
     const target = targets[0] || null;
+    const selectedEdges = workflow.edges.filter((edge) => edge.from === source.id || edge.to === source.id);
+    const allWarnings = workflowWarnings();
     panel.innerHTML = `
+      ${allWarnings.length ? `
+        <div class="warning-list">
+          ${allWarnings.slice(0, 6).map((warning) => `<div>${html(warning)}</div>`).join("")}
+          ${allWarnings.length > 6 ? `<div>另 ${html(String(allWarnings.length - 6))} 個提醒</div>` : ""}
+        </div>
+      ` : '<div class="empty">從綠色 output 拉到紫色 input 可建立線路；同一個 input 只會保留最新一條線。</div>'}
       <div class="field">
         <label>來源 output</label>
         <select id="edgeOutput">${outputs.map((name) => `<option value="${html(name)}">${html(name)}</option>`).join("")}</select>
@@ -730,6 +899,9 @@
         <button class="primary" id="addEdgeBtn" type="button" ${!outputs.length || !targets.length ? "disabled" : ""}>建立連線</button>
         <button id="removeSelectedEdgesBtn" type="button">移除此節點連線</button>
       </div>
+      <div class="edge-list">
+        ${selectedEdges.length ? selectedEdges.map((edge) => edgeRow(edge)).join("") : '<div class="empty">目前選取節點沒有連線。</div>'}
+      </div>
     `;
     const targetSelect = $("edgeTarget");
     if (targetSelect) targetSelect.addEventListener("change", () => {
@@ -741,6 +913,32 @@
       workflow.edges = workflow.edges.filter((edge) => edge.from !== source.id && edge.to !== source.id);
       render();
     });
+    panel.querySelectorAll("[data-delete-edge]").forEach((button) => {
+      button.addEventListener("click", () => {
+        deleteEdge(button.getAttribute("data-delete-edge"));
+      });
+    });
+  }
+
+  function edgeRow(edge) {
+    const from = nodeById(edge.from);
+    const to = nodeById(edge.to);
+    return `
+      <div class="edge-list-row ${edge.warning ? "warn" : ""}">
+        <div>
+          <strong>${html(from?.label || edge.from)}</strong>
+          <span>${html(edge.output)} → ${html(to?.label || edge.to)}.${html(edge.input)}</span>
+          ${edge.warning ? `<small>${html(edge.warning)}</small>` : ""}
+        </div>
+        <button class="danger" type="button" data-delete-edge="${html(edge.id)}">刪除線</button>
+      </div>
+    `;
+  }
+
+  function deleteEdge(id) {
+    workflow.edges = workflow.edges.filter((edge) => edge.id !== id);
+    render();
+    setStatus("已刪除線路。");
   }
 
   function targetInputOptions(node) {
@@ -767,7 +965,7 @@
     const targetInput = NODE_DEFS[target.type]?.inputs?.[input];
     if (!targetInput || targetInput.type !== "link") return false;
     workflow.edges = workflow.edges.filter((edge) => !(edge.to === target.id && edge.input === input));
-    workflow.edges.push({ id: uid(), from: source.id, output, to: target.id, input });
+    workflow.edges.push({ id: uid(), from: source.id, output, to: target.id, input, warning: connectionWarning(source.id, output, target.id, input) });
     return true;
   }
 
@@ -828,6 +1026,29 @@
     }
   }
 
+  async function importJsonFile(event) {
+    const file = event.target?.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const payload = JSON.parse(text);
+      const imported = stateFromPackage(payload);
+      if (!imported.state.nodes.length) {
+        setStatus("匯入失敗：沒有可視覺化的 allowlist 節點。", false);
+        return;
+      }
+      workflow = normalizeState(imported.state);
+      selectedId = workflow.nodes[0]?.id || null;
+      lastImportWarnings = imported.warnings;
+      render();
+      setStatus(imported.warnings.length ? `已匯入 JSON，但有 ${imported.warnings.length} 個提醒。` : "已匯入 JSON 並轉成節點圖。", !imported.warnings.length);
+    } catch (err) {
+      setStatus(`匯入失敗：${err.message || err}`, false);
+    } finally {
+      if (event.target) event.target.value = "";
+    }
+  }
+
   function clearAll() {
     if (!confirm("清空目前畫布？")) return;
     workflow = emptyState();
@@ -841,6 +1062,7 @@
     });
     $("starterTxt2ImgBtn")?.addEventListener("click", createTxt2ImgStarter);
     $("autoLayoutBtn")?.addEventListener("click", autoLayoutNodes);
+    $("importJsonFile")?.addEventListener("change", (event) => importJsonFile(event));
     $("clearBtn")?.addEventListener("click", clearAll);
     $("sendBackBtn")?.addEventListener("click", sendBackToMainPage);
     $("copyJsonBtn")?.addEventListener("click", copyJson);
@@ -849,7 +1071,9 @@
   }
 
   bind();
-  if (!workflow.nodes.length) createTxt2ImgStarter();
+  if (takePendingInput()) {
+    // Loaded from main page or saved preset handoff.
+  } else if (!workflow.nodes.length) createTxt2ImgStarter();
   else {
     selectedId = workflow.nodes[0]?.id || null;
     render();

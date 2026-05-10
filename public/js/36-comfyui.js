@@ -1240,6 +1240,11 @@ function bindComfyuiAdvancedUi() {
     workflowLoadVisualBtn.dataset.comfyuiBound = "1";
     workflowLoadVisualBtn.addEventListener("click", () => loadComfyuiVisualWorkflowEditorResult());
   }
+  const workflowOpenVisualBtn = $("comfyui-workflow-open-visual-btn");
+  if (workflowOpenVisualBtn && workflowOpenVisualBtn.dataset.comfyuiBound !== "1") {
+    workflowOpenVisualBtn.dataset.comfyuiBound = "1";
+    workflowOpenVisualBtn.addEventListener("click", () => prepareComfyuiVisualWorkflowEditorInput());
+  }
   const workflowImportBtn = $("comfyui-workflow-import-btn");
   if (workflowImportBtn && workflowImportBtn.dataset.comfyuiBound !== "1") {
     workflowImportBtn.dataset.comfyuiBound = "1";

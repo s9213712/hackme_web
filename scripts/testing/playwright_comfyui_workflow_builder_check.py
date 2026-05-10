@@ -11,7 +11,9 @@ from __future__ import annotations
 import socket
 import subprocess
 import sys
+import tempfile
 import time
+import json
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
@@ -80,6 +82,13 @@ def main() -> int:
             status = page.locator("#status").inner_text(timeout=5000)
             if "已連線" not in status:
                 raise AssertionError(f"port drag did not create connection, status={status!r}")
+            edge_rows_before = page.locator("[data-delete-edge]").count()
+            if edge_rows_before < 1:
+                raise AssertionError("edge management panel did not list removable edges")
+            page.locator("[data-delete-edge]").first.click()
+            edge_rows_after = page.locator("[data-delete-edge]").count()
+            if edge_rows_after >= edge_rows_before:
+                raise AssertionError("deleting an edge did not update the edge list")
 
             first_node = page.locator(".wf-node").first
             first_node.scroll_into_view_if_needed()
@@ -101,6 +110,42 @@ def main() -> int:
             if page.locator('.wf-node:has-text("Outpaint Pad")').count() < 1:
                 raise AssertionError("Outpaint Pad node was not added")
 
+            with tempfile.NamedTemporaryFile("w", suffix=".json", encoding="utf-8", delete=False) as handle:
+                json.dump(
+                    {
+                        "name": "Imported visual graph",
+                        "workflow_json": {
+                            "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "demo.safetensors"}, "_meta": {"title": "Imported Model"}},
+                            "2": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["1", 1], "text": "hello"}, "_meta": {"title": "Imported Prompt"}},
+                        },
+                        "layout_json": {
+                            "node_order": ["1", "2"],
+                            "node_positions": {"1": [80, 80], "2": [360, 80]},
+                            "field_overrides": {"1": {"label": "Imported Model"}, "2": {"label": "Imported Prompt"}},
+                        },
+                    },
+                    handle,
+                )
+                import_path = handle.name
+            page.locator("#importJsonFile").set_input_files(import_path)
+            page.locator('.wf-node:has-text("Imported Model")').wait_for(state="visible", timeout=5000)
+            imported_status = page.locator("#status").inner_text(timeout=5000)
+            if "已匯入 JSON" not in imported_status:
+                raise AssertionError(f"JSON import did not report success, status={imported_status!r}")
+            exported = json.loads(page.locator("#jsonOut").input_value())
+            workflow_ids = set(exported["workflow_json"].keys())
+            layout_ids = set(exported["layout_json"]["node_order"])
+            if not layout_ids.issubset(workflow_ids):
+                raise AssertionError(f"exported layout ids do not match workflow ids: workflow={workflow_ids}, layout={layout_ids}")
+
+            mobile_page = browser.new_page(viewport={"width": 390, "height": 844})
+            mobile_page.goto(f"http://127.0.0.1:{port}/comfyui-workflow-editor.html", wait_until="networkidle")
+            mobile_page.locator(".wf-node").first.wait_for(state="visible", timeout=8000)
+            mobile_widths = mobile_page.evaluate("({body: document.body.scrollWidth, doc: document.documentElement.scrollWidth, inner: window.innerWidth})")
+            if mobile_widths["body"] > mobile_widths["inner"] or mobile_widths["doc"] > mobile_widths["inner"]:
+                raise AssertionError(f"mobile viewport has page-level horizontal overflow: {mobile_widths}")
+            mobile_page.close()
+
             browser.close()
     finally:
         server.terminate()
@@ -108,7 +153,7 @@ def main() -> int:
             server.wait(timeout=5)
         except subprocess.TimeoutExpired:
             server.kill()
-    print("PASS comfyui visual workflow builder: nodes render, drag updates edges, port-to-port wiring works")
+    print("PASS comfyui visual workflow builder: render, drag, wire, delete edge, import JSON, and mobile layout work")
     return 0
 
 
