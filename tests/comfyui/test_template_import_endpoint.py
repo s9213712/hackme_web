@@ -343,16 +343,22 @@ def test_import_materializes_bundle_files(tmp_path, monkeypatch):
     body = rv.get_json()
     bundle = body["bundle"]
     bundle_id = bundle["id"]
-    repo_dir = Path(bundle["repo_dir"])
     runtime_dir = Path(bundle["runtime_dir"])
     assert bundle_id.startswith("imported_")
-    assert repo_dir == repo_root / bundle_id
+    assert "repo_dir" not in bundle, (
+        "imported bundles must NOT expose a repo_dir — they are runtime-only "
+        "artifacts; writing to REPO_SOURCE_DIR would pollute workflows/comfyui/"
+    )
     assert runtime_dir == runtime_root / bundle_id
-    assert (repo_dir / "workflow.json").is_file()
-    assert (repo_dir / "manifest.json").is_file()
-    assert (repo_dir / "README.md").is_file()
     assert (runtime_dir / "workflow.json").is_file()
-    manifest = json.loads((repo_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert (runtime_dir / "manifest.json").is_file()
+    assert (runtime_dir / "README.md").is_file()
+    # The repo source dir must remain untouched by user imports.
+    if repo_root.exists():
+        assert not (repo_root / bundle_id).exists(), (
+            "import wrote to REPO_SOURCE_DIR; this pollutes workflows/comfyui/"
+        )
+    manifest = json.loads((runtime_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["id"] == bundle_id
     assert manifest["workflow_file"] == "workflow.json"
     assert manifest["source"] == "imported"
@@ -404,7 +410,7 @@ def test_import_accepts_ui_graph_and_materializes_api_workflow(tmp_path, monkeyp
         )
     assert rv.status_code == 200
     body = rv.get_json()
-    workflow_json = json.loads((Path(body["bundle"]["repo_dir"]) / "workflow.json").read_text(encoding="utf-8"))
+    workflow_json = json.loads((Path(body["bundle"]["runtime_dir"]) / "workflow.json").read_text(encoding="utf-8"))
     assert "39" not in workflow_json
     assert "50" not in workflow_json
     assert "51" not in workflow_json

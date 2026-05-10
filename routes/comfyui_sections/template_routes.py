@@ -117,8 +117,12 @@ def register_comfyui_template_routes(app, ctx):
         capability,
         workflow_hash="",
     ):
+        # User-imported workflows are runtime artifacts only. They MUST NOT be
+        # written into REPO_SOURCE_DIR (= workflows/comfyui/), which is the
+        # canonical read-only ship location for the 6 system workflow templates.
+        # Writing imports there pollutes dev source trees with imported_*/
+        # folders even when .gitignore hides them; runtime is the right home.
         bundle_id = _bundle_id_for_import(preset_id=preset_id, title=title)
-        repo_dir = Path(REPO_SOURCE_DIR) / bundle_id
         runtime_dir = Path(runtime_comfyui_dir()) / bundle_id
         output_kinds = _template_output_kinds(workflow_json)
         manifest = {
@@ -151,18 +155,14 @@ def register_comfyui_template_routes(app, ctx):
             f"- Files: `workflow.json` for ComfyUI, `manifest.json` for hackme_web card rendering.\n"
         )
 
-        repo_dir.mkdir(parents=True, exist_ok=True)
-        _write_json_file(repo_dir / "workflow.json", workflow_json)
-        _write_json_file(repo_dir / "manifest.json", manifest)
-        (repo_dir / "README.md").write_text(readme, encoding="utf-8")
-
-        runtime_dir.parent.mkdir(parents=True, exist_ok=True)
         if runtime_dir.exists():
             shutil.rmtree(runtime_dir)
-        shutil.copytree(repo_dir, runtime_dir)
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+        _write_json_file(runtime_dir / "workflow.json", workflow_json)
+        _write_json_file(runtime_dir / "manifest.json", manifest)
+        (runtime_dir / "README.md").write_text(readme, encoding="utf-8")
         return {
             "bundle_id": bundle_id,
-            "repo_dir": str(repo_dir),
             "runtime_dir": str(runtime_dir),
             "manifest": manifest,
         }
@@ -550,7 +550,6 @@ def register_comfyui_template_routes(app, ctx):
                 "capability": capability.to_dict(),
                 "bundle": {
                     "id": bundle_info["bundle_id"],
-                    "repo_dir": bundle_info["repo_dir"],
                     "runtime_dir": bundle_info["runtime_dir"],
                     "manifest": bundle_info["manifest"],
                 },
