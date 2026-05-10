@@ -173,6 +173,29 @@ def main() -> int:
             custom_validation = page.locator("#validationPanel").inner_text(timeout=5000)
             if "付費/API nodes" not in custom_validation or "FluxProUltraImageNode" not in custom_validation:
                 raise AssertionError(f"custom/API node was not visible in validation panel: {custom_validation!r}")
+            page.locator("#customInputName").fill("style_prompt")
+            page.locator("#customInputType").select_option("textarea")
+            page.locator("#customInputLabel").fill("Style Prompt")
+            page.locator("#addCustomInputBtn").click()
+            page.locator("#nodeInput-style_prompt").wait_for(state="visible", timeout=5000)
+            page.locator("#nodeInput-style_prompt").fill("cinematic product lighting")
+            page.locator("#customInputName").fill("source_model")
+            page.locator("#customInputType").select_option("link")
+            page.locator("#customInputLabel").fill("Source MODEL")
+            page.locator("#addCustomInputBtn").click()
+            page.locator('.wf-node.unknown:has-text("Custom / API Node") .port.input[data-port-name="source_model"]').wait_for(state="visible", timeout=5000)
+            page.locator("#customOutputName").fill("MASK")
+            page.locator("#addCustomOutputBtn").click()
+            page.locator('.wf-node.unknown:has-text("Custom / API Node") .port.output[data-port-name="MASK"]').wait_for(state="visible", timeout=5000)
+            schema_export = json.loads(page.locator("#jsonOut").input_value())
+            schema_prompt = json.dumps(schema_export["workflow_json"], ensure_ascii=False)
+            if "style_prompt" not in schema_prompt or "cinematic product lighting" not in schema_prompt:
+                raise AssertionError("visual custom input editor did not export text input edits")
+            if "source_model" in schema_prompt and "source_model\": [" not in schema_prompt:
+                raise AssertionError("visual link input editor exported a raw value instead of a link-only port")
+            schema_requirements = {node["class_type"] for node in schema_export.get("required_custom_nodes", [])}
+            if "FluxProUltraImageNode" not in schema_requirements:
+                raise AssertionError(f"visual custom schema edits lost custom node dependency: {schema_requirements}")
 
             with tempfile.NamedTemporaryFile("w", suffix=".json", encoding="utf-8", delete=False) as handle:
                 json.dump(

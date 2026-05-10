@@ -270,6 +270,41 @@
     return inputs;
   }
 
+  function normalizeSchemaName(raw, fallback = "") {
+    const value = String(raw || "").trim().replace(/\s+/g, "_").replace(/[^\w.-]/g, "_").replace(/^_+|_+$/g, "");
+    return (value || fallback).slice(0, 80);
+  }
+
+  function customSchemaInputTypeLabel(type) {
+    return {
+      text: "文字",
+      textarea: "多行文字",
+      number: "數字",
+      select: "下拉選單",
+      checkbox: "核取方塊",
+      link: "連線 input",
+    }[type] || "文字";
+  }
+
+  function parseOptionList(raw) {
+    return String(raw || "")
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .slice(0, 40);
+  }
+
+  function normalizeInputSpec(spec = {}) {
+    const type = ["text", "textarea", "number", "select", "checkbox", "link"].includes(spec.type) ? spec.type : "text";
+    const normalized = {
+      type,
+      label: String(spec.label || ""),
+    };
+    if (type === "number" && spec.step) normalized.step = String(spec.step);
+    if (type === "select") normalized.options = Array.isArray(spec.options) ? spec.options.map((item) => String(item)).filter(Boolean).slice(0, 40) : [];
+    return normalized;
+  }
+
   function emptyState() {
     return { name: "", description: "", project_version: "", comfyui_version: "", workflow_schema_version: "1", nodes: [], edges: [], warnings: [] };
   }
@@ -289,7 +324,9 @@
       };
       if (type === UNKNOWN_NODE_TYPE) {
         normalized.originalType = String(node.originalType || "UnknownCustomNode");
-        normalized.inputSpecs = node.inputSpecs && typeof node.inputSpecs === "object" ? node.inputSpecs : unknownInputSpecs(node.inputs || {});
+        normalized.inputSpecs = node.inputSpecs && typeof node.inputSpecs === "object"
+          ? Object.fromEntries(Object.entries(node.inputSpecs).map(([key, spec]) => [String(key), normalizeInputSpec(spec)]))
+          : unknownInputSpecs(node.inputs || {});
         normalized.outputs = Array.isArray(node.outputs) ? node.outputs.map((item) => String(item || "")).filter(Boolean) : unknownOutputs(3);
       }
       return normalized;
@@ -375,7 +412,9 @@
       setStatus("找不到這個 ComfyUI 節點；請重新載入節點目錄。", false);
       return;
     }
-    const inputSpecs = item.inputs && typeof item.inputs === "object" ? item.inputs : {};
+    const inputSpecs = item.inputs && typeof item.inputs === "object"
+      ? Object.fromEntries(Object.entries(item.inputs).map(([key, spec]) => [String(key), normalizeInputSpec(spec)]))
+      : {};
     const node = {
       id: uid(),
       type: UNKNOWN_NODE_TYPE,
@@ -1066,6 +1105,135 @@
     completeConnection({ currentTarget: event.currentTarget, preventDefault: () => event.preventDefault(), stopPropagation: () => event.stopPropagation() });
   }
 
+  function customSchemaEditorMarkup(node) {
+    const inputSpecs = Object.entries(node.inputSpecs || {});
+    const outputs = Array.isArray(node.outputs) ? node.outputs : [];
+    return `
+      <div class="schema-editor">
+        <div class="schema-editor-head">
+          <strong>Custom node 欄位設計</strong>
+          <span>用表單新增 input/output，不必手寫 JSON。</span>
+        </div>
+        <div class="schema-editor-block">
+          <div class="schema-mini-grid">
+            <input id="customInputName" maxlength="80" placeholder="input 名稱，例如 prompt">
+            <select id="customInputType">
+              <option value="text">文字</option>
+              <option value="textarea">多行文字</option>
+              <option value="number">數字</option>
+              <option value="select">下拉選單</option>
+              <option value="checkbox">核取方塊</option>
+              <option value="link">連線 input</option>
+            </select>
+            <input id="customInputLabel" maxlength="120" placeholder="顯示名稱，可留空">
+            <input id="customInputOptions" maxlength="240" placeholder="下拉選項，用逗號分隔">
+            <button class="primary" id="addCustomInputBtn" type="button">新增輸入</button>
+          </div>
+          <div class="schema-list">
+            ${inputSpecs.length ? inputSpecs.map(([key, spec]) => `
+              <div class="schema-row">
+                <div>
+                  <strong>${html(key)}</strong>
+                  <span>${html(customSchemaInputTypeLabel(spec.type))}${spec.label ? ` · ${html(spec.label)}` : ""}${Array.isArray(spec.options) && spec.options.length ? ` · ${html(spec.options.join(", "))}` : ""}</span>
+                </div>
+                <button class="danger" type="button" data-remove-custom-input="${html(key)}">刪除</button>
+              </div>
+            `).join("") : '<div class="empty">尚未定義 input。可新增文字欄位、下拉選單，或連線 input。</div>'}
+          </div>
+        </div>
+        <div class="schema-editor-block">
+          <div class="schema-mini-grid two">
+            <input id="customOutputName" maxlength="80" placeholder="output 名稱，例如 IMAGE">
+            <button class="primary" id="addCustomOutputBtn" type="button">新增輸出</button>
+          </div>
+          <div class="schema-list">
+            ${outputs.length ? outputs.map((name) => `
+              <div class="schema-row">
+                <div>
+                  <strong>${html(name)}</strong>
+                  <span>output port</span>
+                </div>
+                <button class="danger" type="button" data-remove-custom-output="${html(name)}">刪除</button>
+              </div>
+            `).join("") : '<div class="empty">尚未定義 output；此節點會視為終點或 side-effect node。</div>'}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function addCustomInputFromEditor(node) {
+    const name = normalizeSchemaName($("customInputName")?.value || "");
+    if (!name) {
+      setStatus("請先填 input 名稱。", false);
+      return;
+    }
+    if (node.inputSpecs?.[name]) {
+      setStatus(`input ${name} 已存在；請先刪除或換一個名稱。`, false);
+      return;
+    }
+    const spec = normalizeInputSpec({
+      type: $("customInputType")?.value || "text",
+      label: $("customInputLabel")?.value || name,
+      options: parseOptionList($("customInputOptions")?.value || ""),
+    });
+    if (spec.type === "select" && !spec.options.length) {
+      setStatus("下拉選單至少需要一個選項，請用逗號分隔。", false);
+      return;
+    }
+    node.inputSpecs = { ...(node.inputSpecs || {}), [name]: spec };
+    if (spec.type === "link") delete node.inputs[name];
+    else node.inputs[name] = defaultValueForSpec(name, spec);
+    render();
+    setStatus(`已新增 custom input：${name}`);
+  }
+
+  function removeCustomInput(node, name) {
+    const key = String(name || "");
+    if (!key || !node.inputSpecs?.[key]) return;
+    delete node.inputSpecs[key];
+    delete node.inputs[key];
+    workflow.edges = workflow.edges.filter((edge) => !(edge.to === node.id && edge.input === key));
+    render();
+    setStatus(`已刪除 custom input：${key}`);
+  }
+
+  function addCustomOutputFromEditor(node) {
+    const name = normalizeSchemaName($("customOutputName")?.value || "").toUpperCase();
+    if (!name) {
+      setStatus("請先填 output 名稱。", false);
+      return;
+    }
+    const outputs = Array.isArray(node.outputs) ? node.outputs : [];
+    if (outputs.includes(name)) {
+      setStatus(`output ${name} 已存在。`, false);
+      return;
+    }
+    node.outputs = outputs.concat(name).slice(0, 32);
+    render();
+    setStatus(`已新增 custom output：${name}`);
+  }
+
+  function removeCustomOutput(node, name) {
+    const output = String(name || "");
+    if (!output) return;
+    node.outputs = (node.outputs || []).filter((item) => item !== output);
+    workflow.edges = workflow.edges.filter((edge) => !(edge.from === node.id && edge.output === output));
+    render();
+    setStatus(`已刪除 custom output：${output}`);
+  }
+
+  function bindCustomSchemaEditor(node) {
+    $("addCustomInputBtn")?.addEventListener("click", () => addCustomInputFromEditor(node));
+    $("addCustomOutputBtn")?.addEventListener("click", () => addCustomOutputFromEditor(node));
+    document.querySelectorAll("[data-remove-custom-input]").forEach((button) => {
+      button.addEventListener("click", () => removeCustomInput(node, button.getAttribute("data-remove-custom-input")));
+    });
+    document.querySelectorAll("[data-remove-custom-output]").forEach((button) => {
+      button.addEventListener("click", () => removeCustomOutput(node, button.getAttribute("data-remove-custom-output")));
+    });
+  }
+
   function renderInspector() {
     const node = nodeById(selectedId);
     const badge = $("selectedBadge");
@@ -1092,6 +1260,7 @@
           <label>原始 class_type</label>
           <input id="unknownClassInput" value="${html(node.originalType || "")}" maxlength="160">
         </div>
+        ${customSchemaEditorMarkup(node)}
         <div class="inspector-grid">
           ${fields.map(([key, spec]) => inspectorInputMarkup(node, key, spec)).join("") || '<div class="empty">這個 custom node 沒有可直接編輯的值；連線欄位請用下方連線面板處理。</div>'}
         </div>
@@ -1108,6 +1277,7 @@
         node.originalType = $("unknownClassInput").value.trim() || "UnknownCustomNode";
         render();
       });
+      bindCustomSchemaEditor(node);
       bindInspectorValueFields(fields, node);
       $("unknownInputsInput")?.addEventListener("input", () => {
         try {
@@ -1115,7 +1285,7 @@
           if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
             node.inputs = parsed;
             node.inputSpecs = unknownInputSpecs(parsed);
-            renderJson();
+            render();
             setStatus("Custom node inputs 已更新。");
           }
         } catch (err) {
