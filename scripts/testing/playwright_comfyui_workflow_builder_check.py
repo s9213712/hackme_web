@@ -196,6 +196,11 @@ def main() -> int:
             schema_requirements = {node["class_type"] for node in schema_export.get("required_custom_nodes", [])}
             if "FluxProUltraImageNode" not in schema_requirements:
                 raise AssertionError(f"visual custom schema edits lost custom node dependency: {schema_requirements}")
+            with page.expect_download() as download_info:
+                page.locator("#downloadJsonBtn").click()
+            download = download_info.value
+            if not download.suggested_filename.endswith(".json"):
+                raise AssertionError(f"download did not produce a JSON filename: {download.suggested_filename!r}")
 
             with tempfile.NamedTemporaryFile("w", suffix=".json", encoding="utf-8", delete=False) as handle:
                 json.dump(

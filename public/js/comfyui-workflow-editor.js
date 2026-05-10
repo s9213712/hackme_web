@@ -1509,6 +1509,30 @@
     }
   }
 
+  function workflowExportFileName() {
+    const base = String(workflow.name || "comfyui-workflow")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9\u4e00-\u9fff._-]+/gi, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 80) || "comfyui-workflow";
+    return `${base}.json`;
+  }
+
+  function downloadJson() {
+    const text = JSON.stringify(exportPackage(), null, 2);
+    const blob = new Blob([text], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = workflowExportFileName();
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    setStatus("已下載 workflow preset JSON。");
+  }
+
   async function importJsonFile(event) {
     const file = event.target?.files?.[0];
     if (!file) return;
@@ -1616,6 +1640,7 @@
     $("importJsonFile")?.addEventListener("change", (event) => importJsonFile(event));
     $("clearBtn")?.addEventListener("click", clearAll);
     $("sendBackBtn")?.addEventListener("click", sendBackToMainPage);
+    $("downloadJsonBtn")?.addEventListener("click", downloadJson);
     $("copyJsonBtn")?.addEventListener("click", copyJson);
     $("workflowName")?.addEventListener("input", () => { workflow.name = $("workflowName").value; renderJson(); saveState(); });
     $("workflowDescription")?.addEventListener("input", () => { workflow.description = $("workflowDescription").value; renderJson(); saveState(); });
