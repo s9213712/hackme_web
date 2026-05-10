@@ -65,6 +65,14 @@ _FUSION_MODES = {
 }
 _MODEL_EVAL_MOVE_CAP = 6
 _MODEL_SCORE_SCALE = 140.0
+_ABLATION_MODES = {
+    "default",
+    "no_invariance_memory",
+    "invariance_memory_only",
+    "hard_negative_only",
+    "invariance_plus_hard_negative",
+    "stronger_hard_negative_margin",
+}
 _PIECE_VALUES = {
     chess.PAWN: 100,
     chess.KNIGHT: 320,
@@ -256,8 +264,23 @@ def _invariance_context_key(board: chess.Board, side: str) -> str:
             if piece and piece.piece_type == chess.PAWN:
                 color = "w" if piece.color == chess.WHITE else "b"
                 pawns.append(f"{color}{file_name}{rank}")
-    castling = str(board.castling_rights)
-    return f"{side}|turn={board.turn}|castle={castling}|pawns={','.join(pawns)}"
+    piece_count = len(board.piece_map())
+    opening_phase = "opening" if int(board.fullmove_number or 1) <= 10 and piece_count >= 24 else "post_opening"
+    watched_moves = ("e7e5", "d7d5", "c7c5", "a7a5", "h7h5")
+    legal = []
+    for item in watched_moves:
+        try:
+            legal.append(f"{item}:{int(chess.Move.from_uci(item) in board.legal_moves)}")
+        except Exception:
+            continue
+    king_square = board.king(board.turn)
+    king_file = chess.square_file(king_square) if king_square is not None else -1
+    king_rank = chess.square_rank(king_square) if king_square is not None else -1
+    king_safety = f"check={int(board.is_check())}|king_zone={king_file // 2},{king_rank // 2}|castle_any={int(bool(board.castling_rights))}"
+    return (
+        f"{side}|phase={opening_phase}|turn={board.turn}|"
+        f"pawns={','.join(pawns)}|legal={','.join(legal)}|safety={king_safety}"
+    )
 
 
 def _invariance_memory_key(board: chess.Board, side: str, move_uci: str) -> str:
@@ -287,6 +310,29 @@ def _update_invariance_memory(model: dict, board: chess.Board, side: str, move: 
         -_MAX_INVARIANCE_MEMORY_BIAS,
         _MAX_INVARIANCE_MEMORY_BIAS,
     )
+
+
+def _training_ablation_config() -> dict:
+    mode = str(os.environ.get("CHESS_EXP3_ABLATION_MODE") or "default").strip().lower()
+    if mode not in _ABLATION_MODES:
+        mode = "default"
+    use_invariance = mode not in {"no_invariance_memory", "hard_negative_only"}
+    use_hard_negatives = mode not in {"invariance_memory_only", "no_invariance_memory"}
+    hard_negative_weight = 0.85
+    negative_target = _CONTRASTIVE_NEGATIVE_TARGET
+    if mode == "stronger_hard_negative_margin":
+        use_invariance = True
+        use_hard_negatives = True
+        hard_negative_weight = 1.25
+        negative_target = -0.65
+    return {
+        "mode": mode,
+        "use_invariance_memory": use_invariance,
+        "use_hard_negatives": use_hard_negatives,
+        "hard_negative_weight": hard_negative_weight,
+        "ordinary_negative_weight": 0.55,
+        "negative_target": negative_target,
+    }
 
 
 def _resolve_search_profile(profile: str | None) -> dict:
@@ -785,6 +831,7 @@ def _legal_hard_negative_moves(board: chess.Board, expected_move: chess.Move, ha
 
 
 def _train_from_replay(model: dict, replay_entries: list[dict]) -> dict:
+    ablation = _training_ablation_config()
     stats = {
         "positive_updates": 0,
         "contrastive_negative_updates": 0,
@@ -792,6 +839,8 @@ def _train_from_replay(model: dict, replay_entries: list[dict]) -> dict:
         "hard_negative_updates": 0,
         "invariance_positive_updates": 0,
         "invariance_negative_updates": 0,
+        "ablation_mode": ablation["mode"],
+        "ablation_config": ablation,
     }
     if not replay_entries:
         return stats
@@ -819,7 +868,7 @@ def _train_from_replay(model: dict, replay_entries: list[dict]) -> dict:
                 board,
                 expected_move,
                 list(sample.get("hard_negatives") or []),
-            )
+            ) if bool(ablation["use_hard_negatives"]) else []
             ordinary_negatives = [
                 move
                 for move in sorted(board.legal_moves, key=lambda item: item.uci())
@@ -829,22 +878,23 @@ def _train_from_replay(model: dict, replay_entries: list[dict]) -> dict:
             for negative in negatives:
                 negative_after = board.copy(stack=False)
                 negative_after.push(negative)
-                _update_move_memory(model, board, side, negative, _CONTRASTIVE_NEGATIVE_TARGET)
-                if sample.get("invariance_group_id"):
-                    _update_invariance_memory(model, board, side, negative, _CONTRASTIVE_NEGATIVE_TARGET)
+                negative_target = float(ablation["negative_target"])
+                _update_move_memory(model, board, side, negative, negative_target)
+                if bool(ablation["use_invariance_memory"]) and sample.get("invariance_group_id"):
+                    _update_invariance_memory(model, board, side, negative, negative_target)
                     stats["invariance_negative_updates"] += 1
                 _train_single_sample(
                     model,
                     _candidate_features(board, negative, negative_after, side),
-                    _CONTRASTIVE_NEGATIVE_TARGET,
-                    0.65,
+                    negative_target,
+                    float(ablation["hard_negative_weight"]) if negative in hard_negatives else float(ablation["ordinary_negative_weight"]),
                 )
                 stats["contrastive_negative_updates"] += 1
                 if negative in hard_negatives:
                     stats["hard_negative_updates"] += 1
             for _reinforce in range(8):
                 _update_move_memory(model, board, side, expected_move, 1.0)
-                if sample.get("invariance_group_id"):
+                if bool(ablation["use_invariance_memory"]) and sample.get("invariance_group_id"):
                     _update_invariance_memory(model, board, side, expected_move, 1.0)
                     stats["invariance_positive_updates"] += 1
                 _train_single_sample(model, sample["features"], 1.0, 0.8)
@@ -1023,6 +1073,8 @@ def train_experiment_dl_from_replay_samples(
         "replay_path": str(replay_path),
         "sample_count": int(model.get("sample_count") or 0),
         "training_objective": "contrastive_policy_ranking",
+        "ablation_mode": train_stats.get("ablation_mode"),
+        "ablation_config": train_stats.get("ablation_config"),
         "contrastive_negative_target": _CONTRASTIVE_NEGATIVE_TARGET,
         "contrastive_max_negatives": _CONTRASTIVE_MAX_NEGATIVES,
         **train_stats,
