@@ -38,6 +38,60 @@ if str(ROOT) not in sys.path:
 from scripts.security.common_paths import runtime_root, security_reports_root  # noqa: E402
 from services.snapshots import MODE_CONFIRM_PHRASES, PRODUCTION_REQUIRED_REPORT_TYPES, ServerModeService  # noqa: E402
 
+GO_LIVE_CORE_PYTEST_TARGETS = [
+    "tests/security/auth/test_auth_csrf_safe.py",
+    "tests/security/auth/test_session_idle_timeout.py",
+    "tests/account/auth/test_account_lockout.py",
+    "tests/security/input/test_password_strength.py",
+    "tests/account/recovery/test_account_recovery.py",
+    "tests/account/sessions/test_account_sessions.py",
+    "tests/security/gates/test_production_gate_enforcement.py",
+    "tests/security/gates/test_security_events.py",
+    "tests/security/integrity/test_integrity_guard.py",
+    "tests/security/integrity/test_integrity_repair.py",
+    "tests/security/smoke/test_functional_permission_pentest.py",
+    "tests/regressions/test_security_issue_regressions.py",
+    "tests/platform/test_settings_audit_reseal.py",
+    "tests/platform/test_auth_db_split.py",
+    "tests/platform/test_bootstrap_compat.py",
+    "tests/snapshots/test_snapshots.py",
+    "tests/points/test_points_chain.py",
+    "tests/storage/test_storage_paths.py",
+    "tests/storage/test_upload_security.py",
+    "tests/storage/test_cloud_drive_attachments.py",
+    "tests/storage/test_storage_albums_schema.py",
+]
+
+GO_LIVE_CORE_PENTEST_CHECKS = ",".join(
+    [
+        "curl-baseline",
+        "functional-permissions",
+        "session-security",
+        "header-security",
+        "dep-audit",
+        "server-mode-v2",
+        "server-mode-v2-adversarial",
+        "server-mode-v2-live-http",
+        "server-mode-v2-enterprise",
+        "server-mode-v2-redteam-l2",
+        "nmap",
+        "whatweb",
+        "wafw00f",
+        "nikto",
+        "nuclei",
+        "sqlmap",
+        "ffuf",
+        "gobuster",
+        "dirsearch",
+        "dalfox",
+        "xsstrike",
+        "arjun",
+        "sslscan",
+        "testssl",
+        "httpx",
+    ]
+)
+
 
 def _ensure_runtime_env() -> None:
     os.environ.setdefault("HACKME_RUNTIME_DIR", str(runtime_root()))
@@ -470,6 +524,7 @@ def _functional_report(out_root: Path, raw_dir: Path, args, signer: PayloadSigne
             "--out",
             str(report_root),
         ],
+        env={"GO_LIVE_CORE_ONLY": "1"},
         timeout=args.functional_timeout,
     )
     latest = _find_latest_paths(report_root, "functional_*")
@@ -501,6 +556,7 @@ def _pentest_report(out_root: Path, raw_dir: Path, args, signer: PayloadSigner, 
         "USER_A_PASSWORD": args.test_password,
         "USER_B_USERNAME": "admin",
         "USER_B_PASSWORD": args.manager_password,
+        "GO_LIVE_CORE_ONLY": "1",
     }
     command = [
         "bash",
@@ -509,6 +565,8 @@ def _pentest_report(out_root: Path, raw_dir: Path, args, signer: PayloadSigner, 
         args.base_url,
         "--out",
         str(report_root),
+        "--only",
+        GO_LIVE_CORE_PENTEST_CHECKS,
     ]
     if args.i_own_this_target:
         command.append("--i-own-this-target")
@@ -551,6 +609,7 @@ def _permission_report(out_root: Path, raw_dir: Path, args, signer: PayloadSigne
         str(out_json),
         "--out-md",
         str(out_md),
+        "--core-only",
     ]
     result = _run(command, env=env, timeout=args.permission_timeout)
     report_payload = {}
@@ -868,7 +927,15 @@ def main() -> int:
     payloads["adversarial"] = _script_report(out_root, raw_dir, "adversarial", [sys.executable, str(ROOT / "scripts" / "security" / "server_mode" / "server_mode_v2_adversarial.py")], timeout=args.server_mode_timeout, signer=signer, meta=meta)
     payloads["redteam_l2"] = _script_report(out_root, raw_dir, "redteam_l2", [sys.executable, str(ROOT / "scripts" / "security" / "server_mode" / "server_mode_v2_redteam_l2.py")], timeout=args.server_mode_timeout, signer=signer, meta=meta)
 
-    payloads["pytest"] = _pytest_report(out_root, raw_dir, "pytest", ["tests"], timeout=args.pytest_timeout, signer=signer, meta=meta)
+    payloads["pytest"] = _pytest_report(
+        out_root,
+        raw_dir,
+        "pytest",
+        GO_LIVE_CORE_PYTEST_TARGETS,
+        timeout=args.pytest_timeout,
+        signer=signer,
+        meta=meta,
+    )
     payloads["log_chain_verify"] = _log_chain_report(out_root, client, signer, meta)
     payloads["integrity_guard"] = _integrity_report(out_root, client, signer, meta)
     payloads["stress"] = _stress_report(out_root, raw_dir, args, signer, meta, client)

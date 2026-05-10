@@ -69,6 +69,39 @@ def test_full_generator_parallel_long_can_include_live_pentest_or_disable_parall
     assert full_gate._background_report_types(args) == ()
 
 
+def test_go_live_scope_excludes_optional_product_suites_from_core_gate():
+    helper_source = (ROOT / "scripts" / "security" / "gate" / "on_live_reports_make.py").read_text(encoding="utf-8")
+    full_source = (ROOT / "scripts" / "security" / "gate" / "full_generator_live_validate.py").read_text(encoding="utf-8")
+    pentest_source = (ROOT / "scripts" / "security" / "pentest" / "run_pentest.sh").read_text(encoding="utf-8")
+    functional_source = (ROOT / "scripts" / "security" / "pentest" / "run_functional_smoke.sh").read_text(encoding="utf-8")
+    permission_source = (ROOT / "scripts" / "security" / "pentest" / "functional_permission_pentest.py").read_text(encoding="utf-8")
+    joined_targets = "\n".join(helper.GO_LIVE_CORE_PYTEST_TARGETS)
+
+    assert "GO_LIVE_CORE_PYTEST_TARGETS" in helper_source
+    assert helper.GO_LIVE_CORE_PYTEST_TARGETS
+    assert all("tests/" in target for target in helper.GO_LIVE_CORE_PYTEST_TARGETS)
+    assert "tests/games/" not in joined_targets
+    assert "tests/comfyui/" not in joined_targets
+    assert "tests/frontend/comfyui/" not in joined_targets
+    assert "tests/trading/" not in joined_targets
+    assert 'payloads["pytest"] = _pytest_report(out_root, raw_dir, "pytest", ["tests"]' not in helper_source
+    assert '["tests"],' not in full_source
+    assert "tests/games" not in helper_source
+    assert "tests/comfyui" not in helper_source
+    assert "functional-permissions" in helper.GO_LIVE_CORE_PENTEST_CHECKS
+    assert "session-security" in helper.GO_LIVE_CORE_PENTEST_CHECKS
+    assert "server-mode-v2-redteam-l2" in helper.GO_LIVE_CORE_PENTEST_CHECKS
+    assert '"whole-site-production-gate"' not in helper.GO_LIVE_CORE_PENTEST_CHECKS
+    assert '"video-module"' not in helper.GO_LIVE_CORE_PENTEST_CHECKS
+    assert "--only" in helper_source and "GO_LIVE_CORE_PENTEST_CHECKS" in helper_source
+    assert '"GO_LIVE_CORE_ONLY": "1"' in helper_source
+    assert '"--core-only"' in helper_source
+    assert 'GO_LIVE_CORE_ONLY:-0}" == "1"' in pentest_source
+    assert "--core-only" in permission_source
+    assert 'GO_LIVE_CORE_ONLY:-0}" != "1"' in functional_source
+    assert 'if [[ "${GO_LIVE_CORE_ONLY:-0}" != "1" ]]; then\n    login_smoke_user || return 1' in functional_source
+
+
 def test_full_generator_root_password_defaults_to_environment(monkeypatch):
     monkeypatch.setenv("ROOT_PASSWORD", "RootFromEnv123!")
     monkeypatch.setattr(
