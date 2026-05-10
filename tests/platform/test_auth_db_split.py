@@ -271,6 +271,13 @@ def test_public_login_and_me_work_with_split_auth_db(tmp_path):
     csrf_token = csrf_res.get_json()["csrf_token"]
     assert csrf_token
 
+    unauth_me_res = client.get("/api/me")
+    assert unauth_me_res.status_code == 401
+    optional_me_res = client.get("/api/me?optional=1")
+    assert optional_me_res.status_code == 200
+    optional_me_json = optional_me_res.get_json()
+    assert optional_me_json["ok"] is False
+
     login_res = client.post(
         "/api/login",
         json={"username": "alice", "password": "correct-horse-battery-staple"},

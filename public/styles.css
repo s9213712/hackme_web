@@ -5994,6 +5994,12 @@
         max-width: none;
       }
 
+      #module-economy .drive-card-heading .btn,
+      #module-economy .drive-file-actions .btn {
+        min-height: 2.75rem !important;
+        padding: .5rem .72rem !important;
+      }
+
       .app-shell,
       body.sidebar-collapsed .app-shell {
         display: block;

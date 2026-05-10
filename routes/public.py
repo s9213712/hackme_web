@@ -1032,6 +1032,8 @@ def register_public_routes(app, deps):
     def me():
         ctx = get_current_user_ctx()
         if not ctx:
+            if str(request.args.get("optional") or "").lower() in {"1", "true", "yes"}:
+                return json_resp({"ok": False, "msg": "未登入"})
             return json_resp({"ok":False,"msg":"未登入"}), 401
         role = "super_admin" if ctx["username"] == "root" else ctx["role"]
         is_special_account = ctx["username"] == "root" or role in {"super_admin", "manager"}
