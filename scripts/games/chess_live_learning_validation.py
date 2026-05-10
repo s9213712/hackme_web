@@ -195,6 +195,10 @@ QUICK_RETRAIN_MIN_CASES_PER_CATEGORY = 3
 SANITY_LEARNING_VARIANT_COUNT = 6
 SANITY_SEEN_VARIANT_PASS_THRESHOLD = 0.8
 SANITY_UNSEEN_VARIANT_PASS_THRESHOLD = 0.5
+SANITY_EASY_VARIANT_COUNT = 3
+SANITY_MEDIUM_VARIANT_COUNT = 3
+SANITY_HARD_VARIANT_COUNT = 6
+SANITY_VARIANT_DIFFICULTY_PAIRS = {"easy": 1, "medium": 2, "hard": 3}
 DETERMINISTIC_STRENGTH_CASES = (
     {
         "case_id": "opening_develop_white",
@@ -2119,12 +2123,69 @@ def _normalized_fen_hash(fen: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
+def _quiet_non_expected_moves(board: chess.Board, expected_move: chess.Move) -> list[chess.Move]:
+    return [
+        move
+        for move in sorted(board.legal_moves, key=lambda item: item.uci())
+        if move != expected_move and not board.is_capture(move) and move.promotion is None
+    ]
+
+
+def _build_sanity_variant_board(
+    base_board: chess.Board,
+    *,
+    expected_move: chess.Move,
+    first_decoy: chess.Move,
+    difficulty: str,
+    candidate_index: int,
+) -> tuple[chess.Board | None, list[str]]:
+    pair_count = int(SANITY_VARIANT_DIFFICULTY_PAIRS.get(str(difficulty), 1))
+    variant_board = base_board.copy(stack=False)
+    variation_moves: list[str] = []
+    for pair_index in range(pair_count):
+        candidates = _quiet_non_expected_moves(variant_board, expected_move)
+        if not candidates:
+            return None, []
+        decoy = first_decoy if pair_index == 0 else candidates[(candidate_index + pair_index * 3) % len(candidates)]
+        if decoy not in variant_board.legal_moves:
+            return None, []
+        variant_board.push(decoy)
+        variation_moves.append(decoy.uci())
+        replies = _quiet_non_expected_moves(variant_board, expected_move)
+        if not replies:
+            return None, []
+        reply = replies[(candidate_index + pair_index * 5) % len(replies)]
+        variant_board.push(reply)
+        variation_moves.append(reply.uci())
+        if variant_board.turn != base_board.turn or expected_move not in variant_board.legal_moves:
+            return None, []
+    return variant_board, variation_moves
+
+
+def _board_embedding_similarity(fen_a: str, fen_b: str) -> float:
+    try:
+        board_a = chess.Board(str(fen_a or ""))
+        board_b = chess.Board(str(fen_b or ""))
+    except Exception:
+        return 0.0
+    matches = 0
+    total = 64
+    for square in chess.SQUARES:
+        if board_a.piece_at(square) == board_b.piece_at(square):
+            matches += 1
+    if board_a.turn == board_b.turn:
+        matches += 1
+    total += 1
+    return round(matches / max(1, total), 4)
+
+
 def _sanity_learning_variants(
     case: dict,
     *,
     limit: int = SANITY_LEARNING_VARIANT_COUNT,
     offset: int = 0,
     split: str = "seen",
+    difficulty: str = "easy",
 ) -> list[dict]:
     expected = str(case.get("expected_move") or "").lower()
     try:
@@ -2135,44 +2196,72 @@ def _sanity_learning_variants(
     if expected_move not in base_board.legal_moves:
         return []
     variants = []
-    legal_quiet = [
-        move
-        for move in sorted(base_board.legal_moves, key=lambda item: item.uci())
-        if move != expected_move and not base_board.is_capture(move) and move.promotion is None
-    ]
+    seen_hashes: set[str] = set()
+    legal_quiet = _quiet_non_expected_moves(base_board, expected_move)
     for candidate_index, decoy_move in enumerate(legal_quiet, start=1):
-        variant_board = base_board.copy(stack=False)
-        variant_board.push(decoy_move)
-        replies = [
-            move
-            for move in sorted(variant_board.legal_moves, key=lambda item: item.uci())
-            if not variant_board.is_capture(move) and move.promotion is None
-        ]
-        if not replies:
-            continue
-        reply = replies[0]
-        variant_board.push(reply)
-        if variant_board.turn != base_board.turn or expected_move not in variant_board.legal_moves:
-            continue
         if candidate_index <= int(offset):
             continue
+        variant_board, variation_moves = _build_sanity_variant_board(
+            base_board,
+            expected_move=expected_move,
+            first_decoy=decoy_move,
+            difficulty=difficulty,
+            candidate_index=candidate_index,
+        )
+        if variant_board is None or expected_move not in variant_board.legal_moves:
+            continue
+        normalized_hash = _normalized_fen_hash(variant_board.fen())
+        if normalized_hash in seen_hashes:
+            continue
+        seen_hashes.add(normalized_hash)
         variant_index = len(variants) + 1
-        variant_id = f"{case.get('case_id')}:{split}_variant:{variant_index}"
+        variant_id = f"{case.get('case_id')}:{split}_{difficulty}_variant:{variant_index}"
         variants.append(
             {
                 "case_id": variant_id,
                 "variant_id": variant_id,
                 "variant_split": split,
+                "variant_difficulty": difficulty,
                 "fen": variant_board.fen(),
-                "normalized_fen_hash": _normalized_fen_hash(variant_board.fen()),
+                "normalized_fen_hash": normalized_hash,
+                "board_embedding_similarity": _board_embedding_similarity(str(case.get("fen") or ""), variant_board.fen()),
                 "side": str(case.get("side") or ""),
                 "expected_move": expected,
-                "variation_moves": [decoy_move.uci(), reply.uci()],
+                "variation_moves": variation_moves,
             }
         )
         if len(variants) >= int(limit):
             break
     return variants
+
+
+def _sanity_curriculum_variants(case: dict) -> dict:
+    easy_seen = _sanity_learning_variants(case, limit=SANITY_EASY_VARIANT_COUNT, offset=0, split="seen", difficulty="easy")
+    medium_seen = _sanity_learning_variants(case, limit=SANITY_MEDIUM_VARIANT_COUNT, offset=0, split="seen", difficulty="medium")
+    easy_unseen = _sanity_learning_variants(
+        case,
+        limit=SANITY_EASY_VARIANT_COUNT,
+        offset=SANITY_EASY_VARIANT_COUNT,
+        split="unseen",
+        difficulty="easy",
+    )
+    medium_unseen = _sanity_learning_variants(
+        case,
+        limit=SANITY_MEDIUM_VARIANT_COUNT,
+        offset=SANITY_MEDIUM_VARIANT_COUNT,
+        split="unseen",
+        difficulty="medium",
+    )
+    hard_unseen = _sanity_learning_variants(case, limit=SANITY_HARD_VARIANT_COUNT, offset=0, split="unseen", difficulty="hard")
+    return {
+        "seen": easy_seen + medium_seen,
+        "unseen": easy_unseen + medium_unseen + hard_unseen,
+        "by_difficulty": {
+            "easy": {"seen": easy_seen, "unseen": easy_unseen},
+            "medium": {"seen": medium_seen, "unseen": medium_unseen},
+            "hard": {"seen": [], "unseen": hard_unseen},
+        },
+    }
 
 
 def _select_sanity_learning_case(engine_alias: str, before_model_path: Path, samples: list[dict]) -> tuple[dict | None, dict | None]:
@@ -2191,9 +2280,27 @@ def _select_sanity_learning_case(engine_alias: str, before_model_path: Path, sam
 def _sanity_seen_variant_training_rows(engine_alias: str, before_model_path: Path, samples: list[dict]) -> dict:
     case, before_exact = _select_sanity_learning_case(engine_alias, before_model_path, samples)
     if not case:
-        return {"case": None, "before_exact": None, "rows": [], "seen_variants": []}
-    seen_variants = _sanity_learning_variants(case, limit=SANITY_LEARNING_VARIANT_COUNT, offset=0, split="seen")
-    rows = []
+        return {"case": None, "before_exact": None, "rows": [], "seen_variants": [], "curriculum": {}}
+    curriculum = _sanity_curriculum_variants(case)
+    seen_variants = list(curriculum.get("seen") or [])
+    rows = [
+        {
+            "fen": case["fen"],
+            "side": case["side"],
+            "move_uci": case["expected_move"],
+            "target": 1.0,
+            "weight": 1.6,
+            "source": "sanity_exact_replay",
+            "category": "mistake_retention",
+            "case_id": case.get("case_id"),
+            "variant_id": f"{case.get('case_id')}:exact",
+            "variant_split": "exact",
+            "variant_difficulty": "exact",
+            "normalized_fen_hash": _normalized_fen_hash(str(case.get("fen") or "")),
+            "expected_move": case["expected_move"],
+            "curriculum_stage": "exact_fen",
+        }
+    ]
     for variant in seen_variants:
         rows.append(
             {
@@ -2201,17 +2308,19 @@ def _sanity_seen_variant_training_rows(engine_alias: str, before_model_path: Pat
                 "side": variant["side"],
                 "move_uci": variant["expected_move"],
                 "target": 1.0,
-                "weight": 1.3,
-                "source": "sanity_seen_variant_replay",
+                "weight": 1.35 if variant.get("variant_difficulty") == "easy" else 1.2,
+                "source": "sanity_curriculum_variant_replay",
                 "category": "mistake_retention",
                 "case_id": case.get("case_id"),
                 "variant_id": variant.get("variant_id"),
                 "variant_split": "seen",
+                "variant_difficulty": variant.get("variant_difficulty"),
                 "normalized_fen_hash": variant.get("normalized_fen_hash"),
                 "expected_move": variant["expected_move"],
+                "curriculum_stage": f"{variant.get('variant_difficulty')}_seen_variant",
             }
         )
-    return {"case": case, "before_exact": before_exact, "rows": rows, "seen_variants": seen_variants}
+    return {"case": case, "before_exact": before_exact, "rows": rows, "seen_variants": seen_variants, "curriculum": curriculum}
 
 
 def _evaluate_sanity_learning_position(engine_alias: str, model_path: Path, case: dict) -> dict:
@@ -2232,6 +2341,37 @@ def _evaluate_sanity_learning_position(engine_alias: str, model_path: Path, case
         "expected_in_top3": expected in top3,
         "expected_is_top1": top1 == expected,
         "variation_moves": list(case.get("variation_moves") or []),
+    }
+
+
+def _evaluate_prior_sanity_case_retention(engine_alias: str, before_model_path: Path, after_model_path: Path, samples: list[dict]) -> dict:
+    rows = []
+    for case in _sanity_learning_cases_from_samples(samples):
+        before = _evaluate_sanity_learning_position(engine_alias, before_model_path, case)
+        if not before.get("expected_is_top1"):
+            continue
+        after = _evaluate_sanity_learning_position(engine_alias, after_model_path, case)
+        rows.append(
+            {
+                "case_id": case.get("case_id"),
+                "expected_move": case.get("expected_move"),
+                "before_top1": before.get("top1"),
+                "after_top1": after.get("top1"),
+                "retained": bool(after.get("expected_is_top1")),
+                "before": before,
+                "after": after,
+            }
+        )
+    failures = [row for row in rows if not row.get("retained")]
+    return {
+        "supported": True,
+        "checked_count": len(rows),
+        "retained_count": len(rows) - len(failures),
+        "failed_count": len(failures),
+        "learning_signal": not failures,
+        "cases": rows,
+        "failures": failures,
+        "reason": "all prior learned sanity cases retained" if not failures else "one or more prior learned sanity cases regressed",
     }
 
 
@@ -2403,8 +2543,9 @@ def _evaluate_sanity_learning_probe(engine_alias: str, before_model_path: Path, 
         "decision_breakdown_before": decision_before,
         "decision_breakdown_after": decision_after,
     }
-    seen_variants = _sanity_learning_variants(case, limit=SANITY_LEARNING_VARIANT_COUNT, offset=0, split="seen")
-    unseen_variants = _sanity_learning_variants(case, limit=SANITY_LEARNING_VARIANT_COUNT, offset=SANITY_LEARNING_VARIANT_COUNT, split="unseen")
+    curriculum = _sanity_curriculum_variants(case)
+    seen_variants = list(curriculum.get("seen") or [])
+    unseen_variants = list(curriculum.get("unseen") or [])
     before_seen_variants = [_evaluate_sanity_learning_position(engine_alias, before_model_path, variant) for variant in seen_variants]
     after_seen_variants = [_evaluate_sanity_learning_position(engine_alias, after_model_path, variant) for variant in seen_variants]
     before_unseen_variants = [_evaluate_sanity_learning_position(engine_alias, before_model_path, variant) for variant in unseen_variants]
@@ -2427,6 +2568,52 @@ def _evaluate_sanity_learning_probe(engine_alias: str, before_model_path: Path, 
     seen_passed = bool(seen_count > 0 and seen_variant_pass_rate >= SANITY_SEEN_VARIANT_PASS_THRESHOLD)
     unseen_passed = bool(unseen_count > 0 and unseen_variant_pass_rate >= SANITY_UNSEEN_VARIANT_PASS_THRESHOLD)
     generalized = bool(exact_learned and seen_passed and unseen_passed)
+    difficulty_scores = {}
+    for difficulty in ["easy", "medium", "hard"]:
+        seen_cases = list(((curriculum.get("by_difficulty") or {}).get(difficulty) or {}).get("seen") or [])
+        unseen_cases = list(((curriculum.get("by_difficulty") or {}).get(difficulty) or {}).get("unseen") or [])
+        seen_ids = {str(row.get("case_id") or "") for row in seen_cases}
+        unseen_ids = {str(row.get("case_id") or "") for row in unseen_cases}
+        seen_after = [row for row in after_seen_variants if str(row.get("case_id") or "") in seen_ids]
+        unseen_after = [row for row in after_unseen_variants if str(row.get("case_id") or "") in unseen_ids]
+        raw_seen = [row for row in raw_seen_after if str(row.get("case_id") or "") in seen_ids]
+        raw_unseen = [row for row in raw_unseen_after if str(row.get("case_id") or "") in unseen_ids]
+        seen_hits_difficulty = sum(1 for row in seen_after if row.get("expected_is_top1"))
+        unseen_hits_difficulty = sum(1 for row in unseen_after if row.get("expected_is_top1"))
+        raw_seen_hits_difficulty = sum(1 for row in raw_seen if row.get("expected_is_raw_top1"))
+        raw_unseen_hits_difficulty = sum(1 for row in raw_unseen if row.get("expected_is_raw_top1"))
+        difficulty_scores[difficulty] = {
+            "seen_count": len(seen_after),
+            "seen_pass_rate": round(seen_hits_difficulty / max(1, len(seen_after)), 4),
+            "seen_raw_policy_pass_rate": round(raw_seen_hits_difficulty / max(1, len(raw_seen)), 4),
+            "unseen_count": len(unseen_after),
+            "unseen_pass_rate": round(unseen_hits_difficulty / max(1, len(unseen_after)), 4),
+            "unseen_raw_policy_pass_rate": round(raw_unseen_hits_difficulty / max(1, len(raw_unseen)), 4),
+            "held_out_from_training": difficulty == "hard",
+        }
+    blocker_rows = []
+    for variant, final_row, raw_row in zip(seen_variants + unseen_variants, after_seen_variants + after_unseen_variants, raw_seen_after + raw_unseen_after):
+        if final_row.get("expected_is_top1"):
+            continue
+        breakdown = _engine_decision_breakdown(engine_alias, after_model_path, variant, old_move=old_move)
+        override = breakdown.get("policy_override") or {}
+        blocker_rows.append(
+            {
+                "case_id": variant.get("case_id"),
+                "variant_split": variant.get("variant_split"),
+                "variant_difficulty": variant.get("variant_difficulty"),
+                "expected_move": variant.get("expected_move"),
+                "final_top1": final_row.get("top1"),
+                "raw_policy_top1": raw_row.get("raw_policy_top1"),
+                "expected_rank": raw_row.get("expected_rank"),
+                "expected_margin_vs_old_move": raw_row.get("margin_vs_old_move"),
+                "blocked_by_search_or_static_eval": bool(raw_row.get("expected_is_raw_top1") and not final_row.get("expected_is_top1")),
+                "chosen_reason": breakdown.get("chosen_reason"),
+                "policy_override_used": bool(override.get("used")),
+                "policy_override_margin": override.get("margin"),
+                "watched_moves": breakdown.get("watched_moves") or [],
+            }
+        )
     if generalized:
         result_kind = "generalized_to_variants"
         explanation = "模型修正原始 FEN，且 seen/unseen 相似變體都達到泛化門檻。"
@@ -2460,6 +2647,11 @@ def _evaluate_sanity_learning_probe(engine_alias: str, before_model_path: Path, 
         "unseen_variant_count": unseen_count,
         "unseen_variant_top1_hits": unseen_hits,
         "unseen_variant_pass_rate": unseen_variant_pass_rate,
+        "easy_unseen_pass_rate": difficulty_scores.get("easy", {}).get("unseen_pass_rate"),
+        "medium_unseen_pass_rate": difficulty_scores.get("medium", {}).get("unseen_pass_rate"),
+        "hard_unseen_pass_rate": difficulty_scores.get("hard", {}).get("unseen_pass_rate"),
+        "variant_difficulty_scores": difficulty_scores,
+        "curriculum": curriculum,
         "raw_policy_generalization_rate": raw_policy_generalization_rate,
         "final_decision_generalization_rate": final_decision_generalization_rate,
         "variant_count": variant_count,
@@ -2482,6 +2674,40 @@ def _evaluate_sanity_learning_probe(engine_alias: str, before_model_path: Path, 
             "before": before_unseen_variants,
             "after": after_unseen_variants,
             "raw_policy_after": raw_unseen_after,
+        },
+        "feature_generalization_debug": {
+            "board_embedding_similarity": {
+                "seen_avg": round(
+                    sum(float(row.get("board_embedding_similarity") or 0.0) for row in seen_variants) / max(1, len(seen_variants)),
+                    4,
+                ),
+                "unseen_avg": round(
+                    sum(float(row.get("board_embedding_similarity") or 0.0) for row in unseen_variants) / max(1, len(unseen_variants)),
+                    4,
+                ),
+                "cases": [
+                    {
+                        "case_id": row.get("case_id"),
+                        "variant_split": row.get("variant_split"),
+                        "variant_difficulty": row.get("variant_difficulty"),
+                        "similarity": row.get("board_embedding_similarity"),
+                    }
+                    for row in seen_variants + unseen_variants
+                ],
+            },
+            "expected_move_rank_across_variants": [
+                {
+                    "case_id": row.get("case_id"),
+                    "variant_split": row.get("variant_split"),
+                    "variant_difficulty": row.get("variant_difficulty"),
+                    "expected_rank": row.get("expected_rank"),
+                    "expected_probability": row.get("expected_probability"),
+                    "expected_margin_vs_old_move": row.get("margin_vs_old_move"),
+                    "raw_policy_top1": row.get("raw_policy_top1"),
+                }
+                for row in raw_seen_after + raw_unseen_after
+            ],
+            "final_decision_blockers": blocker_rows,
         },
         "memorized_exact_fen": bool(result_kind == "memorized_exact_fen"),
         "generalized_to_variants": bool(result_kind == "generalized_to_variants"),
@@ -2909,16 +3135,63 @@ def _retrain_stability_report(summary: dict) -> dict:
         baseline_mistake is not None and final_mistake is not None and final_mistake < baseline_mistake
     )
     probe_failures = _mistake_probe_failures(checkpoints)
+    checkpoint10_probe = next(
+        (
+            checkpoint.get("sanity_learning_probe") or {}
+            for checkpoint in checkpoints
+            if int(checkpoint.get("trusted_count") or checkpoint.get("trusted_replays") or 0) == 10
+        ),
+        {},
+    )
+    checkpoint20_probe = next(
+        (
+            checkpoint.get("sanity_learning_probe") or {}
+            for checkpoint in checkpoints
+            if int(checkpoint.get("trusted_count") or checkpoint.get("trusted_replays") or 0) == 20
+        ),
+        {},
+    )
+    checkpoint10_case_id = str(((checkpoint10_probe.get("case") or {}).get("case_id") or ""))
+    checkpoint20_case_id = str(((checkpoint20_probe.get("case") or {}).get("case_id") or ""))
+    same_sanity_case = bool(checkpoint10_case_id and checkpoint10_case_id == checkpoint20_case_id)
+    prior_retention = checkpoint20_probe.get("prior_learned_case_retention") or {}
+    prior_retention_regressed = bool(int(prior_retention.get("failed_count") or 0) > 0)
+    checkpoint20_exact_regression = bool(
+        (same_sanity_case and checkpoint10_probe.get("exact_fen_pass") and checkpoint20_probe.get("exact_fen_pass") is False)
+        or prior_retention_regressed
+    )
+    checkpoint20_seen_regression = bool(
+        same_sanity_case
+        and
+        checkpoint10_probe
+        and checkpoint20_probe
+        and float(checkpoint20_probe.get("seen_variant_pass_rate") or 0.0)
+        < float(checkpoint10_probe.get("seen_variant_pass_rate") or 0.0) - 0.2
+    )
+    checkpoint20_unseen_regression = bool(
+        same_sanity_case
+        and
+        checkpoint10_probe
+        and checkpoint20_probe
+        and float(checkpoint20_probe.get("unseen_variant_pass_rate") or 0.0)
+        < float(checkpoint10_probe.get("unseen_variant_pass_rate") or 0.0) - 0.2
+    )
+    checkpoint20_decision_blocked = bool((checkpoint20_probe.get("final_decision_learning") or {}).get("learning_signal") is False)
     late_stage_collapse = bool(stage.get("late_stage_win_rate_collapse"))
     suspected = bool(
-        late_stage_collapse
-        and (
-            deterministic_regressed_vs_checkpoint10
-            or deterministic_regressed_vs_baseline
-            or deterministic_regressed_vs_checkpoint20
-            or mistake_retention_regressed
-            or bool(probe_failures)
+        (
+            late_stage_collapse
+            and (
+                deterministic_regressed_vs_checkpoint10
+                or deterministic_regressed_vs_baseline
+                or deterministic_regressed_vs_checkpoint20
+                or mistake_retention_regressed
+                or bool(probe_failures)
+            )
         )
+        or checkpoint20_exact_regression
+        or checkpoint20_seen_regression
+        or checkpoint20_unseen_regression
     )
     reasons = []
     if late_stage_collapse:
@@ -2935,6 +3208,16 @@ def _retrain_stability_report(summary: dict) -> dict:
         reasons.append("mistake_retention deterministic category regressed")
     if probe_failures:
         reasons.append("mistake_retention_probe did not prove correction of prior mistakes")
+    if prior_retention_regressed:
+        reasons.append("checkpoint@20 failed prior-learned sanity case retention")
+    elif checkpoint20_exact_regression:
+        reasons.append("checkpoint@20 regressed the same exact-FEN sanity case learned by checkpoint@10")
+    if checkpoint20_seen_regression:
+        reasons.append("checkpoint@20 seen-variant retention regressed by more than 0.2 from checkpoint@10")
+    if checkpoint20_unseen_regression:
+        reasons.append("checkpoint@20 unseen-variant retention regressed by more than 0.2 from checkpoint@10")
+    if checkpoint20_decision_blocked:
+        reasons.append("checkpoint@20 final decision learning is blocked by search/static eval or another final-decision path")
     integrity = summary.get("dataset_integrity") or {}
     replay_diversity = {
         "unique_positions": integrity.get("unique_positions"),
@@ -2973,6 +3256,30 @@ def _retrain_stability_report(summary: dict) -> dict:
             "final_score": final_mistake,
             "regressed": mistake_retention_regressed,
             "probe_failures": probe_failures,
+        },
+        "checkpoint10_vs_checkpoint20_retention": {
+            "checkpoint10": {
+                "exact_fen_pass": checkpoint10_probe.get("exact_fen_pass"),
+                "seen_variant_pass_rate": checkpoint10_probe.get("seen_variant_pass_rate"),
+                "unseen_variant_pass_rate": checkpoint10_probe.get("unseen_variant_pass_rate"),
+                "final_decision_generalization_rate": checkpoint10_probe.get("final_decision_generalization_rate"),
+                "result_kind": checkpoint10_probe.get("result_kind"),
+            },
+            "checkpoint20": {
+                "exact_fen_pass": checkpoint20_probe.get("exact_fen_pass"),
+                "seen_variant_pass_rate": checkpoint20_probe.get("seen_variant_pass_rate"),
+                "unseen_variant_pass_rate": checkpoint20_probe.get("unseen_variant_pass_rate"),
+                "final_decision_generalization_rate": checkpoint20_probe.get("final_decision_generalization_rate"),
+                "result_kind": checkpoint20_probe.get("result_kind"),
+                "blocked_by_search_or_static_eval": checkpoint20_probe.get("blocked_by_search_or_static_eval"),
+                "blocked_reason": (checkpoint20_probe.get("final_decision_learning") or {}).get("blocked_reason"),
+            },
+            "exact_regression": checkpoint20_exact_regression,
+            "seen_variant_regression": checkpoint20_seen_regression,
+            "unseen_variant_regression": checkpoint20_unseen_regression,
+            "final_decision_blocked": checkpoint20_decision_blocked,
+            "same_sanity_case": same_sanity_case,
+            "prior_learned_case_retention": prior_retention,
         },
         "late_stage": {
             "stage": stage.get("late_stage"),
@@ -3125,6 +3432,9 @@ def _promotion_gate_summary(summary: dict) -> dict:
                 reasons.append(f"sanity unseen variants missing at trusted={trusted}")
             elif float(sanity_probe.get("unseen_variant_pass_rate") or 0.0) < SANITY_UNSEEN_VARIANT_PASS_THRESHOLD:
                 reasons.append(f"sanity unseen variant pass rate below threshold at trusted={trusted}")
+            prior_retention = sanity_probe.get("prior_learned_case_retention") or {}
+            if int(prior_retention.get("failed_count") or 0) > 0:
+                reasons.append(f"prior learned sanity case retention regressed at trusted={trusted}")
     fixture_health = summary.get("replay_fixture_health") or {}
     if fixture_health and not fixture_health.get("passed"):
         reasons.extend([f"replay fixture health failed: {reason}" for reason in fixture_health.get("reasons") or []])
@@ -3314,10 +3624,15 @@ def _root_engine_row(summary: dict) -> dict:
                 "exact_fen_pass": (checkpoint.get("sanity_learning_probe") or {}).get("exact_fen_pass"),
                 "seen_variant_pass_rate": (checkpoint.get("sanity_learning_probe") or {}).get("seen_variant_pass_rate"),
                 "unseen_variant_pass_rate": (checkpoint.get("sanity_learning_probe") or {}).get("unseen_variant_pass_rate"),
+                "easy_unseen_pass_rate": (checkpoint.get("sanity_learning_probe") or {}).get("easy_unseen_pass_rate"),
+                "medium_unseen_pass_rate": (checkpoint.get("sanity_learning_probe") or {}).get("medium_unseen_pass_rate"),
+                "hard_unseen_pass_rate": (checkpoint.get("sanity_learning_probe") or {}).get("hard_unseen_pass_rate"),
+                "variant_difficulty_scores": (checkpoint.get("sanity_learning_probe") or {}).get("variant_difficulty_scores") or {},
                 "raw_policy_generalization_rate": (checkpoint.get("sanity_learning_probe") or {}).get("raw_policy_generalization_rate"),
                 "final_decision_generalization_rate": (checkpoint.get("sanity_learning_probe") or {}).get("final_decision_generalization_rate"),
                 "raw_policy_learning": (checkpoint.get("sanity_learning_probe") or {}).get("raw_policy_learning") or {},
                 "final_decision_learning": (checkpoint.get("sanity_learning_probe") or {}).get("final_decision_learning") or {},
+                "prior_learned_case_retention": (checkpoint.get("sanity_learning_probe") or {}).get("prior_learned_case_retention") or {},
                 "blocked_by_search_or_static_eval": (checkpoint.get("sanity_learning_probe") or {}).get("blocked_by_search_or_static_eval"),
                 "learning_signal_reason": (checkpoint.get("sanity_learning_probe") or {}).get("learning_signal_reason"),
             }
@@ -3663,6 +3978,9 @@ def _root_report_lines(root_summary: dict, summaries: list[dict]) -> list[str]:
                 f"exact_fen_pass=`{probe.get('exact_fen_pass')}` "
                 f"seen_variant_pass_rate=`{probe.get('seen_variant_pass_rate')}` "
                 f"unseen_variant_pass_rate=`{probe.get('unseen_variant_pass_rate')}` "
+                f"easy_unseen=`{probe.get('easy_unseen_pass_rate')}` "
+                f"medium_unseen=`{probe.get('medium_unseen_pass_rate')}` "
+                f"hard_unseen=`{probe.get('hard_unseen_pass_rate')}` "
                 f"raw_policy_generalization_rate=`{probe.get('raw_policy_generalization_rate')}` "
                 f"final_decision_generalization_rate=`{probe.get('final_decision_generalization_rate')}` "
                 f"variants=`{probe.get('variant_top1_hits')}/{probe.get('variant_count')}` "
@@ -3823,10 +4141,15 @@ def _report_consistency_issues(root_summary: dict, engine_summaries: list[dict],
                 "exact_fen_pass": (checkpoint.get("sanity_learning_probe") or {}).get("exact_fen_pass"),
                 "seen_variant_pass_rate": (checkpoint.get("sanity_learning_probe") or {}).get("seen_variant_pass_rate"),
                 "unseen_variant_pass_rate": (checkpoint.get("sanity_learning_probe") or {}).get("unseen_variant_pass_rate"),
+                "easy_unseen_pass_rate": (checkpoint.get("sanity_learning_probe") or {}).get("easy_unseen_pass_rate"),
+                "medium_unseen_pass_rate": (checkpoint.get("sanity_learning_probe") or {}).get("medium_unseen_pass_rate"),
+                "hard_unseen_pass_rate": (checkpoint.get("sanity_learning_probe") or {}).get("hard_unseen_pass_rate"),
+                "variant_difficulty_scores": (checkpoint.get("sanity_learning_probe") or {}).get("variant_difficulty_scores") or {},
                 "raw_policy_generalization_rate": (checkpoint.get("sanity_learning_probe") or {}).get("raw_policy_generalization_rate"),
                 "final_decision_generalization_rate": (checkpoint.get("sanity_learning_probe") or {}).get("final_decision_generalization_rate"),
                 "raw_policy_learning": (checkpoint.get("sanity_learning_probe") or {}).get("raw_policy_learning") or {},
                 "final_decision_learning": (checkpoint.get("sanity_learning_probe") or {}).get("final_decision_learning") or {},
+                "prior_learned_case_retention": (checkpoint.get("sanity_learning_probe") or {}).get("prior_learned_case_retention") or {},
                 "blocked_by_search_or_static_eval": (checkpoint.get("sanity_learning_probe") or {}).get("blocked_by_search_or_static_eval"),
                 "learning_signal_reason": (checkpoint.get("sanity_learning_probe") or {}).get("learning_signal_reason"),
             }
@@ -4375,6 +4698,18 @@ def _write_engine_report(engine_dir: Path, summary: dict) -> None:
                 f"- trainer_loss_delta: `{hyper.get('loss_delta')}`",
             ]
         )
+        checkpoint_retention = retrain_stability.get("checkpoint10_vs_checkpoint20_retention") or {}
+        if checkpoint_retention:
+            cp10 = checkpoint_retention.get("checkpoint10") or {}
+            cp20 = checkpoint_retention.get("checkpoint20") or {}
+            lines.append(
+                f"- checkpoint10_vs_checkpoint20_retention: "
+                f"cp10_exact=`{cp10.get('exact_fen_pass')}` cp20_exact=`{cp20.get('exact_fen_pass')}` "
+                f"cp10_seen=`{cp10.get('seen_variant_pass_rate')}` cp20_seen=`{cp20.get('seen_variant_pass_rate')}` "
+                f"cp10_unseen=`{cp10.get('unseen_variant_pass_rate')}` cp20_unseen=`{cp20.get('unseen_variant_pass_rate')}` "
+                f"cp20_blocked=`{checkpoint_retention.get('final_decision_blocked')}` "
+                f"blocked_reason=`{cp20.get('blocked_reason')}`"
+            )
         for reason in retrain_stability.get("reasons") or []:
             lines.append(f"- stability_reason: `{reason}`")
     deterministic = summary.get("deterministic_strength_snapshot") or {}
@@ -4557,14 +4892,32 @@ def _write_engine_report(engine_dir: Path, summary: dict) -> None:
                         f"exact_fen_pass=`{sanity_probe.get('exact_fen_pass')}` "
                         f"seen_variant_pass_rate=`{sanity_probe.get('seen_variant_pass_rate')}` "
                         f"unseen_variant_pass_rate=`{sanity_probe.get('unseen_variant_pass_rate')}` "
+                        f"easy_unseen=`{sanity_probe.get('easy_unseen_pass_rate')}` "
+                        f"medium_unseen=`{sanity_probe.get('medium_unseen_pass_rate')}` "
+                        f"hard_unseen=`{sanity_probe.get('hard_unseen_pass_rate')}` "
                         f"raw_policy_generalization_rate=`{sanity_probe.get('raw_policy_generalization_rate')}` "
                         f"final_decision_generalization_rate=`{sanity_probe.get('final_decision_generalization_rate')}` "
                         f"variant_top1_hits=`{sanity_probe.get('variant_top1_hits')}` "
                         f"variant_count=`{sanity_probe.get('variant_count')}` "
                         f"reason=`{sanity_probe.get('learning_signal_reason')}`"
                     )
+                    for difficulty, score in sorted((sanity_probe.get("variant_difficulty_scores") or {}).items()):
+                        lines.append(
+                            f"- sanity_{difficulty}: seen_pass_rate=`{score.get('seen_pass_rate')}` "
+                            f"unseen_pass_rate=`{score.get('unseen_pass_rate')}` "
+                            f"seen_raw_policy_pass_rate=`{score.get('seen_raw_policy_pass_rate')}` "
+                            f"unseen_raw_policy_pass_rate=`{score.get('unseen_raw_policy_pass_rate')}` "
+                            f"held_out_from_training=`{score.get('held_out_from_training')}`"
+                        )
                     if final.get("blocked_reason"):
                         lines.append(f"- sanity_decision_blocked_reason: `{final.get('blocked_reason')}`")
+                    prior_retention = sanity_probe.get("prior_learned_case_retention") or {}
+                    if prior_retention:
+                        lines.append(
+                            f"- prior_learned_case_retention: checked=`{prior_retention.get('checked_count')}` "
+                            f"retained=`{prior_retention.get('retained_count')}` failed=`{prior_retention.get('failed_count')}` "
+                            f"reason=`{prior_retention.get('reason')}`"
+                        )
                     after_breakdown = final.get("decision_breakdown_after") or {}
                     for move_row in after_breakdown.get("watched_moves") or []:
                         lines.append(
@@ -4575,6 +4928,16 @@ def _write_engine_report(engine_dir: Path, summary: dict) -> None:
                             f"legal_move_bonus_penalty=`{move_row.get('legal_move_bonus_penalty')}` "
                             f"final_combined_score=`{move_row.get('final_combined_score')}` "
                             f"chosen=`{move_row.get('chosen')}`"
+                        )
+                    blockers = ((sanity_probe.get("feature_generalization_debug") or {}).get("final_decision_blockers") or [])[:5]
+                    for blocker in blockers:
+                        lines.append(
+                            f"- sanity_variant_blocker `{blocker.get('case_id')}` "
+                            f"split=`{blocker.get('variant_split')}` difficulty=`{blocker.get('variant_difficulty')}` "
+                            f"expected=`{blocker.get('expected_move')}` final_top1=`{blocker.get('final_top1')}` "
+                            f"raw_top1=`{blocker.get('raw_policy_top1')}` expected_rank=`{blocker.get('expected_rank')}` "
+                            f"blocked_by_search_or_static_eval=`{blocker.get('blocked_by_search_or_static_eval')}` "
+                            f"chosen_reason=`{blocker.get('chosen_reason')}`"
                         )
             lines.append("- hash_note: hash_changed only proves model bytes changed; it is not accepted as learning success without probe or benchmark evidence.")
             benchmark_timeline = (summary.get("before_after_eval") or {}).get("benchmark_timeline") or []
@@ -4637,10 +5000,28 @@ def _write_engine_report(engine_dir: Path, summary: dict) -> None:
                     f"exact_fen_pass=`{sanity_probe.get('exact_fen_pass')}` "
                     f"seen_variant_pass_rate=`{sanity_probe.get('seen_variant_pass_rate')}` "
                     f"unseen_variant_pass_rate=`{sanity_probe.get('unseen_variant_pass_rate')}` "
+                    f"easy_unseen=`{sanity_probe.get('easy_unseen_pass_rate')}` "
+                    f"medium_unseen=`{sanity_probe.get('medium_unseen_pass_rate')}` "
+                    f"hard_unseen=`{sanity_probe.get('hard_unseen_pass_rate')}` "
                     f"result=`{sanity_probe.get('result_kind')}` reason=`{sanity_probe.get('learning_signal_reason')}`"
                 )
+                for difficulty, score in sorted((sanity_probe.get("variant_difficulty_scores") or {}).items()):
+                    lines.append(
+                        f"- sanity_{difficulty}: seen_pass_rate=`{score.get('seen_pass_rate')}` "
+                        f"unseen_pass_rate=`{score.get('unseen_pass_rate')}` "
+                        f"seen_raw_policy_pass_rate=`{score.get('seen_raw_policy_pass_rate')}` "
+                        f"unseen_raw_policy_pass_rate=`{score.get('unseen_raw_policy_pass_rate')}` "
+                        f"held_out_from_training=`{score.get('held_out_from_training')}`"
+                    )
                 if final.get("blocked_reason"):
                     lines.append(f"- sanity_decision_blocked_reason: `{final.get('blocked_reason')}`")
+                prior_retention = sanity_probe.get("prior_learned_case_retention") or {}
+                if prior_retention:
+                    lines.append(
+                        f"- prior_learned_case_retention: checked=`{prior_retention.get('checked_count')}` "
+                        f"retained=`{prior_retention.get('retained_count')}` failed=`{prior_retention.get('failed_count')}` "
+                        f"reason=`{prior_retention.get('reason')}`"
+                    )
                 after_breakdown = final.get("decision_breakdown_after") or {}
                 for move_row in after_breakdown.get("watched_moves") or []:
                     lines.append(
@@ -4952,7 +5333,9 @@ def _run_quick_retrain_checkpoint(
         _jsonl_dump(checkpoint_dir / "train_dataset.jsonl", accepted_rows)
         dataset_result["accepted_rows"] = len(accepted_rows)
         dataset_result["dataset_sha256"] = _sha256_file(checkpoint_dir / "train_dataset.jsonl")
-        dataset_result["sanity_seen_variant_rows"] = len(variant_rows)
+        dataset_result["sanity_curriculum_rows"] = len(variant_rows)
+        dataset_result["sanity_seen_variant_rows"] = len([row for row in variant_rows if str(row.get("variant_split") or "") == "seen"])
+        dataset_result["sanity_exact_rows"] = len([row for row in variant_rows if str(row.get("variant_split") or "") == "exact"])
         dataset_result["sanity_seen_variant_hashes"] = [str(row.get("normalized_fen_hash") or "") for row in variant_rows]
     move_agreement_before = _evaluate_move_agreement(engine_alias, target_model_path, evaluation_samples)
     fixed_probes_before = _evaluate_fixed_probe_positions(engine_alias, target_model_path)
@@ -5035,6 +5418,8 @@ def _run_quick_retrain_checkpoint(
     retention_probe = _evaluate_retention_probe(engine_alias, target_model_path, candidate_model_path, evaluation_samples)
     mistake_retention_probe = _evaluate_mistake_retention_probe(engine_alias, target_model_path, candidate_model_path, evaluation_samples)
     sanity_learning_probe = _evaluate_sanity_learning_probe(engine_alias, target_model_path, candidate_model_path, evaluation_samples)
+    prior_sanity_retention = _evaluate_prior_sanity_case_retention(engine_alias, target_model_path, candidate_model_path, evaluation_samples)
+    sanity_learning_probe["prior_learned_case_retention"] = prior_sanity_retention
     targeted_probe = _targeted_probe_summary(fixed_probes_before, fixed_probes_after)
     move_change_count = sum(
         1
@@ -5077,6 +5462,9 @@ def _run_quick_retrain_checkpoint(
     if (sanity_learning_probe.get("final_decision_learning") or {}).get("learning_signal") is False:
         checkpoint_gate["passed"] = False
         checkpoint_gate.setdefault("reasons", []).append("sanity final decision learning failed")
+    if int((sanity_learning_probe.get("prior_learned_case_retention") or {}).get("failed_count") or 0) > 0:
+        checkpoint_gate["passed"] = False
+        checkpoint_gate.setdefault("reasons", []).append("prior learned sanity case retention regressed")
     if not bool(train_result.get("ok")):
         checkpoint_gate["passed"] = False
         checkpoint_gate.setdefault("reasons", []).append("quick retrain command failed")
@@ -5105,8 +5493,10 @@ def _run_quick_retrain_checkpoint(
         "sanity_variant_training": {
             "case": variant_training.get("case") or {},
             "before_exact": variant_training.get("before_exact") or {},
-            "seen_variants_added": len(variant_rows),
+            "curriculum_rows_added": len(variant_rows),
+            "seen_variants_added": len([row for row in variant_rows if str(row.get("variant_split") or "") == "seen"]),
             "seen_variants": variant_training.get("seen_variants") or [],
+            "curriculum": variant_training.get("curriculum") or {},
             "rows": variant_rows,
         },
         "candidate_model_path": str(candidate_model_path),

@@ -497,6 +497,13 @@ def test_sanity_learning_probe_requires_after_top1_and_variant_generalization(mo
     assert result["exact_fen_pass"] is True
     assert "seen_variant_pass_rate" in result
     assert "unseen_variant_pass_rate" in result
+    assert "easy_unseen_pass_rate" in result
+    assert "medium_unseen_pass_rate" in result
+    assert "hard_unseen_pass_rate" in result
+    assert result["variant_difficulty_scores"]["hard"]["held_out_from_training"] is True
+    assert result["feature_generalization_debug"]["board_embedding_similarity"]["cases"]
+    assert "expected_move_rank_across_variants" in result["feature_generalization_debug"]
+    assert "final_decision_blockers" in result["feature_generalization_debug"]
     assert "raw_policy_generalization_rate" in result
     assert "final_decision_generalization_rate" in result
     assert "replay_loss" in result["not_learning_success_sources"]
@@ -523,9 +530,13 @@ def test_sanity_variant_training_rows_record_seen_variant_evidence(monkeypatch):
 
     assert result["case"]["expected_move"] == "e7e5"
     assert result["rows"]
-    assert all(row["variant_split"] == "seen" for row in result["rows"])
+    assert any(row["variant_split"] == "exact" for row in result["rows"])
+    assert any(row["variant_split"] == "seen" for row in result["rows"])
     assert all(row["move_uci"] == "e7e5" for row in result["rows"])
     assert all(row["variant_id"] and row["normalized_fen_hash"] for row in result["rows"])
+    assert result["curriculum"]["by_difficulty"]["easy"]["seen"]
+    assert result["curriculum"]["by_difficulty"]["medium"]["seen"]
+    assert result["curriculum"]["by_difficulty"]["hard"]["unseen"]
 
 
 def test_sanity_learning_probe_failed_when_after_top1_is_not_expected(monkeypatch):
