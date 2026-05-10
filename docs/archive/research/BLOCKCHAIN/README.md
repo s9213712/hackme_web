@@ -100,14 +100,14 @@ Phase G-6  Dispute full version                    DISPUTE_AND_APPEALS full
 
 | 類型 | 路徑 |
 |---|---|
-| Pre-Blockchain Readiness baseline | [../AGENTS/reports/claude/prechain_qa_2026-05-04/](../AGENTS/reports/claude/prechain_qa_2026-05-04/) |
-| Final open-issues cleanup / isolated final review | [../AGENTS/reports/codex/](../AGENTS/reports/codex/) |
-| 全站鏈化設計討論存檔 | [../AGENTS/reports/claude/blockchain_design_2026-05-04/](../AGENTS/reports/claude/blockchain_design_2026-05-04/) |
-| QA Mining 設計討論存檔 | [../AGENTS/reports/claude/mining_design_2026-05-04/](../AGENTS/reports/claude/mining_design_2026-05-04/) |
-| Multi-role audit | [../AGENTS/reports/claude/multi_role_audit_2026-05-04/](../AGENTS/reports/claude/multi_role_audit_2026-05-04/) |
-| **AI Agent Stage A 設計（Design approved 2026-05-04，implementation NOT authorized）** | [../AGENTS/reports/claude/ai_agent_design_2026-05-04/](../AGENTS/reports/claude/ai_agent_design_2026-05-04/) |
-| Cross-Agent Issue Reconciliation | [../AGENTS/reports/README.md](../AGENTS/reports/README.md) |
-| 既有 PointsChain v1 概念 | [../07_POINTSCHAIN.md](../07_POINTSCHAIN.md) |
+| Pre-Blockchain Readiness baseline | [`../../../AGENTS/reports/claude/prechain_qa_2026-05-04/`](../../../AGENTS/reports/claude/prechain_qa_2026-05-04/) |
+| Final open-issues cleanup / isolated final review | [`../../../AGENTS/reports/codex/`](../../../AGENTS/reports/codex/) |
+| Multi-role audit | [`../../../AGENTS/reports/claude/multi_role_audit_2026-05-04/`](../../../AGENTS/reports/claude/multi_role_audit_2026-05-04/) |
+| Cross-Agent Issue Reconciliation | [`../../../AGENTS/reports/README.md`](../../../AGENTS/reports/README.md) |
+| 既有 PointsChain v1 概念 | [`../../../07_POINTSCHAIN.md`](../../../07_POINTSCHAIN.md) |
+
+> 上表是仍能取得的 historical evidence。原本列在這裡的 `blockchain_design_2026-05-04/`、
+> `mining_design_2026-05-04/`、`ai_agent_design_2026-05-04/` 三個目錄已不在 repo（僅留設計文件本身）。
 
 > 上表全部是 **historical evidence / design discussion**。目前是否可動工、是否准進 Phase 1，
 > 以本資料夾的正式文件與最新 test / live validation 結果為準，不以 AGENTS 報告單獨決定。

@@ -1,8 +1,16 @@
 # Phase 0 Cleanup Gate — PointsChain v2 鏈化前清債清單
 
-> **Status:** Updated 2026-05-04 final review round（blockers closed, isolated live API verification passed, full pytest green）
+> **Status: ✅ CLOSED — 2026-05-04 final review round**
+> **本檔僅作歷史紀錄，下一個 agent 從 Phase 1 起算，不要再跑 Phase 0 cleanup。**
+>
+> Closure evidence:
+> - 12 件 blocker / recommend issues（#122 / #129–#131 / #135–#142）已 RESOLVED 並在 GitHub 上 CLOSED
+> - isolated live API verification PASSED
+> - full pytest green
+> - release verdict ✅ ALLOW PHASE 1 CANDIDATE（pending root explicit Phase 1 authorization）
+>
 > **Owner:** root（個別授權）
-> **動工依據:** [IMPLEMENTATION_GUIDE.md §0](IMPLEMENTATION_GUIDE.md#0-動工流程-必讀必走) — Phase 0 cleanup 本身也是源碼變更，**動工前同樣需要 root 個別授權**。
+> **動工依據:** 本檔 §0 與 [IMPLEMENTATION_GUIDE.md §0](IMPLEMENTATION_GUIDE.md#0-動工流程-必讀必走)。下方 §2 保留每筆 issue 的歷史 evidence 供回溯，不再作為現役 backlog。
 
 ---
 
