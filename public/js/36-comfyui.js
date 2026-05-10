@@ -164,6 +164,17 @@ function comfyuiBackendLabel(payload = {}) {
   return "";
 }
 
+function comfyuiPaidApiStatusText(payload = {}) {
+  const paid = payload?.paid_api_nodes;
+  if (!paid || typeof paid !== "object") return "";
+  if (!paid.enabled) return "；付費/API nodes 未啟用";
+  if (!paid.key_configured) return "；付費/API nodes 已啟用但尚未設定 Account API Key";
+  const creditText = paid.credit_balance_available && paid.credit_balance !== null && paid.credit_balance !== undefined
+    ? `，credits ${paid.credit_balance}`
+    : "，credits 請至 ComfyUI UI 查看";
+  return `；付費/API nodes 可用${creditText}`;
+}
+
 function comfyuiConnectionModeLabel(mode = comfyuiConnectionMode) {
   return String(mode || "remote").trim().toLowerCase() === "local"
     ? "本地 ComfyUI"
@@ -1646,7 +1657,7 @@ async function loadComfyuiModels() {
     loadComfyuiHistory().catch(() => {});
     loadComfyuiWorkflowPresets().catch(() => {});
     setComfyuiTabAvailability(true);
-    if (status) status.textContent = `已連線 ${json.comfyui_url || "ComfyUI"}${comfyuiBackendLabel(json)}，模型 ${Number((json.models || []).length)} 個，LoRA ${Number((json.loras || []).length)} 個，Embedding ${Number((json.embeddings || []).length)} 個，VAE ${Number((json.vaes || []).length)} 個`;
+    if (status) status.textContent = `已連線 ${json.comfyui_url || "ComfyUI"}${comfyuiBackendLabel(json)}，模型 ${Number((json.models || []).length)} 個，LoRA ${Number((json.loras || []).length)} 個，Embedding ${Number((json.embeddings || []).length)} 個，VAE ${Number((json.vaes || []).length)} 個${comfyuiPaidApiStatusText(json)}`;
   } catch (err) {
     comfyuiModelsLoaded = false;
     comfyuiLoraDetails = {};
@@ -1679,7 +1690,7 @@ async function refreshComfyuiStatus({ switchAway = true } = {}) {
     comfyuiLocalRuntimeActive = comfyuiConnectionMode === "local" && (available || starting || !!json.local_runtime);
     applyComfyuiRuntimeLimits(json);
     const detail = available
-      ? `已偵測 ${json.comfyui_url || "ComfyUI"}${comfyuiBackendLabel(json)}`
+      ? `已偵測 ${json.comfyui_url || "ComfyUI"}${comfyuiBackendLabel(json)}${comfyuiPaidApiStatusText(json)}`
       : (json.msg || `找不到 ${json.comfyui_url || "ComfyUI"} 伺服器`);
     setComfyuiTabAvailability(available, detail);
     if (available) stopComfyuiLocalStartPolling();
