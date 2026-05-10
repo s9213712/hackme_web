@@ -100,3 +100,7 @@ Evidence:
 - `QA-20260511-003`: Fixed in the follow-up fine-detail patch. Sidebar collapsed state is now role-scoped, so a root/manager collapsed sidebar preference no longer makes a normal user's first desktop session icon-only by default.
 
 Current status: **FIXED for all confirmed findings in this report**.
+
+## Final Closure Note - 2026-05-11
+
+All confirmed findings in this report have been fixed. The current closure status supersedes the earlier exploratory finding text above; the original finding descriptions are retained as historical evidence.

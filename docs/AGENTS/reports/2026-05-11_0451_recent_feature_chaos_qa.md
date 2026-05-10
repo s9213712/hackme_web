@@ -145,3 +145,7 @@ Evidence: pytest temp copy kept at `/tmp/hackme_web_pytest_IlP8ja/hackme_web`
 - `QA-20260511-CHAOS-006`: Fixed in `8b2061b`. ComfyUI async audit ordering and ComfyUI frontend cache-bust snapshot were updated.
 
 Current status: **FIXED for all confirmed findings in this report**.
+
+## Final Closure Note - 2026-05-11
+
+All confirmed findings in this report have been fixed. The original `FAIL` verdict is retained as historical QA context, but the current closure status supersedes it after fixes in `8b2061b` and the follow-up fine-detail patch.
