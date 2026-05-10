@@ -186,13 +186,15 @@ function switchModuleTab(tab) {
   const canAccessAlbums = canAccessDrive && (!isFeatureEnabledForUi || isFeatureEnabledForUi("feature_storage_albums_enabled", false));
   const canAccessVideos = !!currentUser && canAccessModule("videos");
   const canAccessGames = !!currentUser && canAccessModule("games");
+  const canAccessJobs = !!currentUser && canAccessModule("jobs");
+  const canAccessShares = !!currentUser && canAccessModule("shares");
   const canUseComfyuiTab = typeof isComfyuiAvailableForNavigation !== "function" || isComfyuiAvailableForNavigation();
   const canAccessComfyui = !!currentUser && canAccessModule("comfyui") && canUseComfyuiTab;
   const canAccessEconomy = !!currentUser && canAccessModule("economy");
   const canAccessTrading = canAccessEconomy && canAccessModule("trading");
 
   let normTab = tab;
-  const fallbackModule = () => canAccessChat ? "chat" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : (canAccessVideos ? "videos" : (canAccessGames ? "games" : (canAccessComfyui ? "comfyui" : (canAccessEconomy ? "economy" : (canAccessAppeals ? "appeals" : (canAccessAccounts ? "accounts" : "chat"))))))));
+  const fallbackModule = () => canAccessChat ? "chat" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : (canAccessVideos ? "videos" : (canAccessGames ? "games" : (canAccessJobs ? "jobs" : (canAccessShares ? "shares" : (canAccessComfyui ? "comfyui" : (canAccessEconomy ? "economy" : (canAccessAppeals ? "appeals" : (canAccessAccounts ? "accounts" : "chat"))))))))));
   if (tab === "chat" && !canAccessChat) normTab = fallbackModule();
   if (tab === "dm") normTab = fallbackModule();
   if (tab === "announcements" && !canAccessAnnouncements) normTab = fallbackModule();
@@ -201,6 +203,8 @@ function switchModuleTab(tab) {
   if (tab === "albums" && !canAccessAlbums) normTab = fallbackModule();
   if (tab === "videos" && !canAccessVideos) normTab = fallbackModule();
   if (tab === "games" && !canAccessGames) normTab = fallbackModule();
+  if (tab === "jobs" && !canAccessJobs) normTab = fallbackModule();
+  if (tab === "shares" && !canAccessShares) normTab = fallbackModule();
   if (tab === "comfyui" && !canAccessComfyui) normTab = fallbackModule();
   if (tab === "economy" && !canAccessEconomy) normTab = fallbackModule();
   if (tab === "trading" && !canAccessTrading) normTab = fallbackModule();
@@ -216,6 +220,8 @@ function switchModuleTab(tab) {
   const modAlbums = $("module-albums");
   const modVideos = $("module-videos");
   const modGames = $("module-games");
+  const modJobs = $("module-jobs");
+  const modShares = $("module-shares");
   const modComfyui = $("module-comfyui");
   const modEconomy = $("module-economy");
   const modTrading = $("module-trading");
@@ -229,6 +235,8 @@ function switchModuleTab(tab) {
   const mAlbums = $("tab-module-albums");
   const mVideos = $("tab-module-videos");
   const mGames = $("tab-module-games");
+  const mJobs = $("tab-module-jobs");
+  const mShares = $("tab-module-shares");
   const mComfyui = $("tab-module-comfyui");
   const mEconomy = $("tab-module-economy");
   const mTrading = $("tab-module-trading");
@@ -243,6 +251,8 @@ function switchModuleTab(tab) {
   if (modAlbums) modAlbums.classList.toggle("active", normTab === "albums");
   if (modVideos) modVideos.classList.toggle("active", normTab === "videos");
   if (modGames) modGames.classList.toggle("active", normTab === "games");
+  if (modJobs) modJobs.classList.toggle("active", normTab === "jobs");
+  if (modShares) modShares.classList.toggle("active", normTab === "shares");
   if (modComfyui) modComfyui.classList.toggle("active", normTab === "comfyui");
   if (modEconomy) modEconomy.classList.toggle("active", normTab === "economy");
   if (modTrading) modTrading.classList.toggle("active", normTab === "trading");
@@ -256,6 +266,8 @@ function switchModuleTab(tab) {
   if (mAlbums) mAlbums.classList.toggle("active", normTab === "albums");
   if (mVideos) mVideos.classList.toggle("active", normTab === "videos");
   if (mGames) mGames.classList.toggle("active", normTab === "games");
+  if (mJobs) mJobs.classList.toggle("active", normTab === "jobs");
+  if (mShares) mShares.classList.toggle("active", normTab === "shares");
   if (mComfyui) mComfyui.classList.toggle("active", normTab === "comfyui");
   if (mEconomy) mEconomy.classList.toggle("active", normTab === "economy");
   if (mTrading) mTrading.classList.toggle("active", normTab === "trading");
@@ -284,6 +296,12 @@ function switchModuleTab(tab) {
   }
   if (normTab === "games" && canAccessGames && typeof loadGameZone === "function") {
     loadGameZone();
+  }
+  if (normTab === "jobs" && canAccessJobs && typeof loadJobCenter === "function") {
+    loadJobCenter();
+  }
+  if (normTab === "shares" && canAccessShares && typeof loadShareCenter === "function") {
+    loadShareCenter();
   }
   if (normTab === "comfyui" && canAccessComfyui && typeof loadComfyuiModels === "function") {
     loadComfyuiModels();

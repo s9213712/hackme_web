@@ -167,6 +167,7 @@ curl -k -sS https://127.0.0.1:5000/api/version
 |---|---|---|---|
 | GET | `/api/notifications` | logged-in | 通知列表 |
 | POST | `/api/notifications/<notification_id>/read` | logged-in | 單筆已讀 |
+| POST | `/api/notifications/<notification_id>/dismiss` | logged-in | 隱藏通知並寫入 `dismissed_at` |
 | POST | `/api/notifications/read-all` | logged-in | 全部已讀 |
 | POST | `/api/admin/notifications/send` | manager | 發送通知 |
 | POST | `/api/reports` | logged-in | 一般檢舉 |
@@ -176,6 +177,24 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | GET/POST | `/api/appeals` | logged-in | 申覆列表 / 建立申覆 |
 | GET | `/api/admin/appeals` | manager | 申覆列表 |
 | POST | `/api/admin/appeals/<appeal_id>/review` | manager | 審核申覆 |
+
+### Platform Centers
+
+來源：`routes/jobs.py`, `routes/share_management.py`, `routes/trading.py`
+
+| Method | Path | 角色 | 用途 |
+|---|---|---|---|
+| GET | `/api/jobs` | logged-in | 目前使用者任務列表，支援 `status` / `limit` |
+| GET | `/api/admin/jobs` | manager | 全站任務列表 |
+| GET | `/api/jobs/<job_uuid>` | owner / manager | 單一任務 |
+| GET | `/api/jobs/<job_uuid>/events` | owner / manager | 任務事件 |
+| POST | `/api/jobs/<job_uuid>/cancel` | owner / manager | 要求取消任務 |
+| POST | `/api/jobs/<job_uuid>/retry` | owner / manager | 重試 failed / cancelled / retry_wait 任務 |
+| GET | `/api/shares` | logged-in | 分享連結列表，manager 可用 `all=1` |
+| POST | `/api/shares/<type>/<id>/revoke` | owner / manager | 撤銷 file / album / video 分享 |
+| GET | `/api/shares/<type>/<id>/access-events` | owner / manager | 分享建立、存取、到期、撤銷事件 |
+| GET | `/api/trading/asset-overview` | logged-in | 交易資產總覽 |
+| GET | `/api/admin/trading/asset-overview` | manager | 全站交易資產 / 低信心價格摘要 |
 
 ### Cloud Drive / Files / Remote Download
 

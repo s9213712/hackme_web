@@ -136,6 +136,9 @@ daily development:
 
 pytest:
   scripts/testing/pytest_in_tmp.sh -q tests
+
+platform center Playwright acceptance:
+  python3 scripts/testing/playwright_platform_health_check.py
 ```
 
 `server.py` 不再接 `--host` / `--port` CLI 參數。若要改 bind，請使用
@@ -296,12 +299,42 @@ that asset needs custom handling.
 
 - `GET /api/notifications`
 - `POST /api/notifications/{id}/read`
+- `POST /api/notifications/{id}/dismiss`
 - `POST /api/notifications/read-all`
 - `POST /api/admin/notifications/send`
 - `POST /api/reports`
 - `GET /api/admin/reports`
 - `POST /api/admin/reports/{id}/claim`
 - `POST /api/admin/reports/{id}/resolve`
+
+Notifications include `severity`, `audience`, `source_module`, `source_ref`,
+`read_at`, and `dismissed_at`. Default notification reads hide dismissed rows
+and exclude them from unread counts; pass `include_dismissed=1` only for
+explicit diagnostics. User-scoped notification APIs must reject cross-user
+reads.
+
+### Platform Centers
+
+- `GET /api/jobs?limit=80`
+- `GET /api/admin/jobs?limit=80`
+- `GET /api/jobs/{job_uuid}`
+- `GET /api/jobs/{job_uuid}/events`
+- `POST /api/jobs/{job_uuid}/cancel`
+- `POST /api/jobs/{job_uuid}/retry`
+- `GET /api/shares?limit=120`
+- `GET /api/shares?limit=120&all=1`
+- `POST /api/shares/{type}/{id}/revoke`
+- `GET /api/shares/{type}/{id}/access-events`
+- `GET /api/trading/asset-overview`
+- `GET /api/admin/trading/asset-overview`
+
+Job Center rows expose `status`, `stage`, `stage_detail`, `progress_percent`,
+`source_module`, `job_type`, `error_stage`, and `error_message`; frontend cancel
+actions must show a confirmation prompt. Share management supports `file`,
+`album`, and `video` share types and must not render external `share_url` values
+as trusted copy targets. Trading Asset Overview is display-only and includes
+spot plus margin / lending equity and accrued interest; frontend failures must
+write a visible error to the economy panel instead of failing silently.
 
 ### Appeals and Violations
 

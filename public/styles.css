@@ -6785,6 +6785,41 @@
       margin: .12rem 0;
     }
 
+    .mini-progress {
+      width: 100%;
+      height: 7px;
+      border-radius: 999px;
+      background: rgba(148, 163, 184, 0.22);
+      overflow: hidden;
+      margin-top: .45rem;
+    }
+
+    .mini-progress > span {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #38bdf8, #22c55e);
+    }
+
+    .badge.info,
+    .badge.success,
+    .badge.danger,
+    .badge.muted {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 24px;
+      padding: .18rem .5rem;
+      border-radius: 999px;
+      font-size: .76rem;
+      white-space: nowrap;
+    }
+
+    .badge.info { background: rgba(56, 189, 248, .14); color: #7dd3fc; }
+    .badge.success { background: rgba(34, 197, 94, .14); color: #86efac; }
+    .badge.danger { background: rgba(248, 113, 113, .16); color: #fecaca; }
+    .badge.muted { background: rgba(148, 163, 184, .14); color: var(--muted); }
+
     @media (max-width: 420px) {
       .tetris-touch-controls {
         grid-template-columns: repeat(3, minmax(0, 1fr));

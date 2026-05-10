@@ -9,6 +9,8 @@ function bindUiEvents() {
   const tabModuleAlbums = $("tab-module-albums");
   const tabModuleVideos = $("tab-module-videos");
   const tabModuleGames = $("tab-module-games");
+  const tabModuleJobs = $("tab-module-jobs");
+  const tabModuleShares = $("tab-module-shares");
   const tabModuleComfyui = $("tab-module-comfyui");
   const tabModuleEconomy = $("tab-module-economy");
   const tabModuleTrading = $("tab-module-trading");
@@ -190,6 +192,8 @@ function bindUiEvents() {
   const gamePracticeBtn = $("game-practice-btn");
   const gameResignBtn = $("game-resign-btn");
   const gameAwardBtn = $("game-award-btn");
+  const jobCenterRefreshBtn = $("job-center-refresh-btn");
+  const shareCenterRefreshBtn = $("share-center-refresh-btn");
   const comfyuiRefreshBtn = $("comfyui-refresh-btn");
   const comfyuiLoadDraftBtn = $("comfyui-load-draft-btn");
   const comfyuiStartBtn = $("comfyui-start-btn");
@@ -224,6 +228,8 @@ function bindUiEvents() {
   if (tabModuleAlbums) tabModuleAlbums.addEventListener("click", () => switchModuleTab("albums"));
   if (tabModuleVideos) tabModuleVideos.addEventListener("click", () => switchModuleTab("videos"));
   if (tabModuleGames) tabModuleGames.addEventListener("click", () => switchModuleTab("games"));
+  if (tabModuleJobs) tabModuleJobs.addEventListener("click", () => switchModuleTab("jobs"));
+  if (tabModuleShares) tabModuleShares.addEventListener("click", () => switchModuleTab("shares"));
   if (tabModuleComfyui) tabModuleComfyui.addEventListener("click", () => switchModuleTab("comfyui"));
   if (tabModuleEconomy) tabModuleEconomy.addEventListener("click", () => switchModuleTab("economy"));
   if (tabModuleTrading) tabModuleTrading.addEventListener("click", () => switchModuleTab("trading"));
@@ -252,6 +258,8 @@ function bindUiEvents() {
   if (tabNotices) tabNotices.addEventListener("click", () => switchAdminTab("notices"));
   if (tabAppeals)  tabAppeals.addEventListener("click",   () => switchAdminTab("appeals"));
   if (tabReports)  tabReports.addEventListener("click",   () => switchAdminTab("reports"));
+  if (jobCenterRefreshBtn) jobCenterRefreshBtn.addEventListener("click", () => loadJobCenter());
+  if (shareCenterRefreshBtn) shareCenterRefreshBtn.addEventListener("click", () => loadShareCenter());
   if (liBtn)       liBtn.addEventListener("click",        doLogin);
   if (regBtn)      regBtn.addEventListener("click",       doRegister);
   if (typeof bindRegisterFieldHelpers === "function") bindRegisterFieldHelpers();

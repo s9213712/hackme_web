@@ -385,6 +385,7 @@ def register_reports_notification_routes(app, deps):
             if requested_user_id_int != int(actor["id"]):
                 return json_resp({"ok": False, "msg": "不可讀取其他使用者通知"}), 403
         unread_only = request.args.get("unread") in {"1", "true", "yes"}
+        include_dismissed = request.args.get("include_dismissed") in {"1", "true", "yes"}
         limit = parse_positive_int(request.args.get("limit", 30), default=30, min_value=1, max_value=100)
         conn = get_db()
         try:
@@ -393,12 +394,31 @@ def register_reports_notification_routes(app, deps):
             params = [actor["id"]]
             if unread_only:
                 where += " AND is_read=0"
+            if not include_dismissed:
+                where += " AND dismissed_at IS NULL"
             rows = conn.execute(
                 f"SELECT * FROM notifications WHERE {where} ORDER BY created_at DESC LIMIT ?",
                 tuple(params + [limit]),
             ).fetchall()
-            unread_count = conn.execute("SELECT COUNT(*) AS c FROM notifications WHERE user_id=? AND is_read=0", (actor["id"],)).fetchone()["c"]
+            unread_count = conn.execute("SELECT COUNT(*) AS c FROM notifications WHERE user_id=? AND is_read=0 AND dismissed_at IS NULL", (actor["id"],)).fetchone()["c"]
             return json_resp({"ok": True, "notifications": [serialize_notification(row) for row in rows], "unread_count": unread_count})
+        finally:
+            conn.close()
+
+    @app.route("/api/notifications/unread-count", methods=["GET"])
+    @require_csrf_safe
+    def notifications_unread_count():
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok": False, "msg": "未登入"}), 401
+        conn = get_db()
+        try:
+            ensure_notifications_schema(conn)
+            unread_count = conn.execute(
+                "SELECT COUNT(*) AS c FROM notifications WHERE user_id=? AND is_read=0 AND dismissed_at IS NULL",
+                (actor["id"],),
+            ).fetchone()["c"]
+            return json_resp({"ok": True, "unread_count": unread_count})
         finally:
             conn.close()
 
@@ -417,6 +437,28 @@ def register_reports_notification_routes(app, deps):
             conn.execute("UPDATE notifications SET is_read=1, read_at=? WHERE id=? AND user_id=?", (datetime.now().isoformat(), notification_id, actor["id"]))
             conn.commit()
             return json_resp({"ok": True, "msg": "通知已讀"})
+        finally:
+            conn.close()
+
+    @app.route("/api/notifications/<int:notification_id>/dismiss", methods=["POST"])
+    @require_csrf
+    def notification_dismiss(notification_id):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok": False, "msg": "未登入"}), 401
+        conn = get_db()
+        try:
+            ensure_notifications_schema(conn)
+            row = conn.execute("SELECT id FROM notifications WHERE id=? AND user_id=?", (notification_id, actor["id"])).fetchone()
+            if not row:
+                return json_resp({"ok": False, "msg": "找不到通知"}), 404
+            now = datetime.now().isoformat()
+            conn.execute(
+                "UPDATE notifications SET is_read=1, read_at=COALESCE(read_at, ?), dismissed_at=? WHERE id=? AND user_id=?",
+                (now, now, notification_id, actor["id"]),
+            )
+            conn.commit()
+            return json_resp({"ok": True, "msg": "通知已隱藏"})
         finally:
             conn.close()
 

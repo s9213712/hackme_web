@@ -4029,6 +4029,7 @@ async function loadTradingDashboard() {
     renderTradingMarginPositions(tradingState.marginPositions);
     renderTradingMarginAccountSummary(tradingState.marginSummary);
     renderTradingWalletSummary(payload);
+    if (typeof loadTradingAssetOverview === "function") loadTradingAssetOverview().catch(() => {});
     if (currentUser === "root") {
       await loadTradingRootReport();
     }

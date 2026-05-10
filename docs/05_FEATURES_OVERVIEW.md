@@ -90,10 +90,29 @@
 - 一句話說明：提供違規通知、治理通知、申訴與審核流。
 - 設計目的：讓權限、處分與可回溯治理流程可被記錄與追蹤。
 - 使用方法：使用者查看通知、提申訴；管理者審核、批准、拒絕。
-- 原理：通知、申訴、治理動作會連動權限與審計記錄。
-- 失敗情境與提示：功能關閉、身分不足、通知不存在或已處理。
+- 原理：通知、申訴、治理動作會連動權限與審計記錄；通知列含 `severity`、
+  `audience`、來源模組與 `dismissed_at`，使用者隱藏通知後會從預設清單與未讀數排除。
+- 失敗情境與提示：功能關閉、身分不足、通知不存在、通知已處理或已隱藏；跨使用者 /
+  跨 audience 讀取會被拒絕。
 - 測試方式：多角色逐步測申訴、通知、審核、審計記錄。
 - 相關文件連結：[WEB.md](WEB.md), [11_QA_TESTING.md](11_QA_TESTING.md)
+
+### Platform Center
+
+- 一句話說明：集中顯示背景任務、分享連結、通知入口與交易資產總覽。
+- 設計目的：讓使用者與管理者看得到長任務進度、stage、錯誤、分享狀態與經濟總覽，
+  避免按了沒反應或 API 失敗靜默消失。
+- 使用方法：Job Center 可取消 / 重試任務；Share Link Management 可查看 file /
+  album / video 分享、到期、次數、密碼狀態、存取紀錄與撤銷；Trading Asset Overview
+  會顯示可用點數、鎖定點數、現貨市值、借貸 / 融資倉位權益、累積利息與低信心價格數。
+- 原理：一般使用者只看自己的 `/api/jobs` 與 `/api/shares`；manager / root 可讀
+  `/api/admin/jobs` 與 `all=1` 分享列表。交易總覽只做顯示，不取代交易結算；價格信心
+  是風險提示，不再阻擋積分交易。
+- 失敗情境與提示：ComfyUI 或外部工作失敗會顯示 `stage`、`stage_detail` 與錯誤訊息；
+  Trading Asset Overview API 失敗會在經濟頁顯示錯誤；分享撤銷或到期後，分享頁應顯示
+  結束訊息，底層 API 則拒絕繼續取資料。
+- 測試方式：`python3 scripts/testing/playwright_platform_health_check.py`，再檢查
+  產出的 JSON/Markdown 報告。
 
 ### Security Center / Server Mode
 

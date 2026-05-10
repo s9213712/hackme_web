@@ -37,6 +37,9 @@ The repository root keeps only [README.md](../README.md) and
 
 - [11_QA_TESTING.md](11_QA_TESTING.md): test-layer map, script relationships,
   and operator-facing validation route
+- [../scripts/testing/playwright_platform_health_check.py](../scripts/testing/playwright_platform_health_check.py):
+  isolated Playwright acceptance for Job Center, Notification Center, Share Link
+  Management, Trading Asset Overview, and mobile viewport health
 - [security/QA_ARCHITECTURE.md](security/QA_ARCHITECTURE.md): QA/security
   tooling governance, validation vocabulary, production-gate script contract,
   and functional-smoke phase catalog

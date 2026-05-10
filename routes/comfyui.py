@@ -1364,6 +1364,32 @@ def register_comfyui_routes(app, deps):
         }
         with generation_jobs_lock:
             generation_jobs[job_id] = job
+        try:
+            from services.job_center import create_job as create_platform_job
+
+            conn = get_db()
+            try:
+                create_platform_job(
+                    conn,
+                    owner_user_id=_generation_owner_id(actor),
+                    created_by_user_id=_generation_owner_id(actor),
+                    job_type="comfyui.generate",
+                    title="ComfyUI 產圖",
+                    description="ComfyUI 產圖 / workflow 執行工作",
+                    source_module="comfyui",
+                    source_ref=job_id,
+                    status="queued",
+                    progress_percent=0,
+                    stage="queued",
+                    stage_detail="已建立產圖工作",
+                    cancellable=False,
+                    metadata={"comfyui_job_id": job_id},
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception:
+            pass
         return job_id
 
     def _capture_request_audit_meta():
@@ -1388,7 +1414,33 @@ def register_comfyui_routes(app, deps):
             for key, value in changes.items():
                 job[key] = value
             job["updated_at"] = time.time()
-            return dict(job)
+            updated = dict(job)
+        try:
+            from services.job_center import add_job_event, get_job_by_source, update_job as update_platform_job
+
+            conn = get_db()
+            try:
+                platform_job = get_job_by_source(conn, "comfyui", job_id)
+                if platform_job:
+                    status_map = {"completed": "succeeded", "error": "failed", "running": "running", "queued": "queued"}
+                    next_status = status_map.get(str(updated.get("status") or ""), None)
+                    payload = {}
+                    if next_status:
+                        payload["status"] = next_status
+                        payload["stage"] = next_status
+                    if next_status in {"succeeded", "failed", "cancelled", "expired"}:
+                        payload["finished_at"] = __import__("datetime").datetime.utcnow().replace(microsecond=0).isoformat()
+                    if updated.get("error"):
+                        payload["error_message"] = str(updated.get("error") or "")[:1000]
+                        payload["error_stage"] = "comfyui"
+                    update_platform_job(conn, platform_job["job_uuid"], **payload)
+                    add_job_event(conn, platform_job["job_uuid"], event_type="updated", stage=payload.get("stage"), message=payload.get("error_message") or "ComfyUI 任務狀態更新")
+                    conn.commit()
+            finally:
+                conn.close()
+        except Exception:
+            pass
+        return updated
 
     def _update_generation_job_progress(job_id, progress):
         with generation_jobs_lock:
@@ -1403,7 +1455,26 @@ def register_comfyui_routes(app, deps):
             if job["status"] in {"queued", "running"}:
                 job["status"] = "running"
             job["updated_at"] = time.time()
-            return dict(job)
+            updated = dict(job)
+        try:
+            from services.job_center import add_job_event, get_job_by_source, update_job as update_platform_job
+
+            conn = get_db()
+            try:
+                platform_job = get_job_by_source(conn, "comfyui", job_id)
+                if platform_job:
+                    progress_data = updated.get("progress") or {}
+                    percent = int(float(progress_data.get("percent") or 0))
+                    stage = str(progress_data.get("phase") or "running")[:80]
+                    detail = str(progress_data.get("detail") or "")[:1000]
+                    update_platform_job(conn, platform_job["job_uuid"], status="running", progress_percent=percent, stage=stage, stage_detail=detail)
+                    add_job_event(conn, platform_job["job_uuid"], event_type="progress", stage=stage, message=detail, progress_percent=percent, payload=progress_data)
+                    conn.commit()
+            finally:
+                conn.close()
+        except Exception:
+            pass
+        return updated
 
     def _get_generation_job(job_id):
         with generation_jobs_lock:

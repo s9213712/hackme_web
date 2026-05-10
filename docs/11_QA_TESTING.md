@@ -59,7 +59,30 @@ scripts/testing/pytest_in_tmp.sh -q \
   tests/frontend/comfyui tests/frontend/games
 ```
 
-#### 4. 權限與安全掃描
+#### 4. 平台中心 Playwright 驗收
+
+```bash
+python3 scripts/testing/playwright_platform_health_check.py
+```
+
+這支腳本會自建 `/tmp/hackme_web_platform_phase15_*` 隔離 runtime、挑選隨機非
+`5000` port、啟動 QA server，並用 Playwright Chromium 進行真實頁面互動。它會
+驗證：
+
+- Job Center 的 queued/running/succeeded/failed 顯示、取消確認、retry、一般使用者
+  不可讀 `/api/admin/jobs`
+- Notification Center 的 info / warning / error、unread count、dismissed_at 與
+  audience 隔離
+- Share Link Management 的 file / album / video 顯示、撤銷、max views、expires、
+  password_required 與外部 URL 防誤用
+- Trading Asset Overview 的可用點數、鎖定點數、現貨市值、借貸 / 融資權益、利息與
+  API 失敗前端錯誤提示
+- `390x844`、`768x1024`、`1366x768` viewport 不爆版、不水平捲動
+
+報告會輸出到該次隔離 runtime 的 `reports/qa/playwright_platform_health_check_*.json`
+與 `.md`。這是前後端實測，不能用單純 pytest passed 取代。
+
+#### 5. 權限與安全掃描
 
 ```bash
 scripts/security/pentest/run_pentest.sh --target https://127.0.0.1:5000
@@ -68,13 +91,13 @@ scripts/security/pentest/run_pentest.sh --target https://127.0.0.1:5000
 若只跑 `whole-site-production-gate`，wrapper 會自動把 timeout floor 拉高到
 `900s`，避免舊版預設 `180s` 永遠先把 gate timeout 掉。
 
-#### 5. 角色 / 權限專測
+#### 6. 角色 / 權限專測
 
 ```bash
 scripts/security/pentest/run_pentest.sh --target https://127.0.0.1:5000 --only functional-permissions
 ```
 
-#### 6. 交易壓力 / 正確性
+#### 7. 交易壓力 / 正確性
 
 ```bash
 python3 scripts/security/pentest/trading_stress_pentest.py --target https://127.0.0.1:5000

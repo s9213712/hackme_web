@@ -2,6 +2,30 @@
 
 Release ID: `2026.05.07-155`
 
+## 2026.05.10 — Platform Center Phase 1.5
+
+- Added a platform-center surface for background jobs, notifications, share
+  links, and trading asset overview. Job Center reads `/api/jobs` for normal
+  users and `/api/admin/jobs` for manager/root, displays progress/stage/error
+  details, asks for confirmation before cancel, and can retry failed/cancelled
+  jobs.
+- Notification Center now tracks `dismissed_at`; dismissed notifications are
+  hidden from the default list and unread count, while admin/root audience
+  boundaries remain enforced.
+- Share Link Management lists file / album / video shares, shows expires/max
+  views/password status, records access events, and revokes through
+  `/api/shares/<type>/<id>/revoke`. External share URLs are not copied blindly
+  by the frontend.
+- Trading Asset Overview now includes available points, locked points, spot
+  market value, margin / lending position equity, accrued interest, and low
+  confidence price count. Price confidence is advisory for points trading and
+  API failures are surfaced in-page instead of being silently ignored.
+- Added `scripts/testing/playwright_platform_health_check.py`, which starts an
+  isolated `/tmp` QA server on a random non-5000 port and uses Playwright to
+  exercise Job Center, notifications, share management, trading overview, and
+  mobile viewport layout. The script writes JSON and Markdown evidence under
+  the isolated runtime's `reports/qa/` directory.
+
 ## 2026.05.08 — Audit-cycle bugfixes (issues #183/#184/#185/#186/#187)
 
 - **#183 chess invite 500 / FK corruption** — `bootstrap.schema.sql` now ships

@@ -224,6 +224,8 @@
         <button class="tab" id="tab-module-albums" style="display:none;">相簿</button>
         <button class="tab" id="tab-module-videos" style="display:none;">影音</button>
         <button class="tab" id="tab-module-games" style="display:none;">遊戲區</button>
+        <button class="tab" id="tab-module-jobs" style="display:none;">任務中心</button>
+        <button class="tab" id="tab-module-shares" style="display:none;">分享管理</button>
         <button class="tab" id="tab-module-comfyui" style="display:none;">AI 產圖</button>
         <button class="tab" id="tab-module-economy" style="display:none;">積分系統</button>
         <button class="tab" id="tab-module-trading" style="display:none;">積分交易所</button>
@@ -334,6 +336,45 @@
           </details>
         </div>
       </div>
+    </div>
+  </div>
+
+  <div class="module-section" id="module-jobs">
+    <div class="admin-tools" style="margin-top:.95rem;text-align:left;">
+      <div class="section-head">
+        <div>
+          <h2>任務中心</h2>
+          <p>集中查看 ComfyUI、影音轉碼、報告、檢查與其他長時間任務。</p>
+        </div>
+        <button class="btn" id="job-center-refresh-btn" type="button">重新整理</button>
+      </div>
+      <div class="settings-option-grid economy-wallet-grid">
+        <div><span class="drive-card-sub">進行中</span><strong id="job-center-running-count">0</strong><small>running / waiting</small></div>
+        <div><span class="drive-card-sub">失敗</span><strong id="job-center-failed-count">0</strong><small>可檢查錯誤階段</small></div>
+        <div><span class="drive-card-sub">完成</span><strong id="job-center-done-count">0</strong><small>最近任務</small></div>
+      </div>
+      <div id="job-center-msg" class="msg"></div>
+      <div id="job-center-list" class="drive-file-list" style="margin-top:.75rem;"></div>
+    </div>
+  </div>
+
+  <div class="module-section" id="module-shares">
+    <div class="admin-tools" style="margin-top:.95rem;text-align:left;">
+      <div class="section-head">
+        <div>
+          <h2>分享管理</h2>
+          <p>查看、複製與撤銷自己的檔案、相簿與影音分享連結。</p>
+        </div>
+        <button class="btn" id="share-center-refresh-btn" type="button">重新整理</button>
+      </div>
+      <div class="settings-option-grid economy-wallet-grid">
+        <div><span class="drive-card-sub">啟用中</span><strong id="share-center-active-count">0</strong><small>仍可存取</small></div>
+        <div><span class="drive-card-sub">已結束</span><strong id="share-center-ended-count">0</strong><small>到期 / 次數用完 / 撤銷</small></div>
+        <div><span class="drive-card-sub">總存取</span><strong id="share-center-access-count">0</strong><small>所有分享累計</small></div>
+      </div>
+      <div id="share-center-msg" class="msg"></div>
+      <div id="share-center-events" class="msg" style="display:none;"></div>
+      <div id="share-center-list" class="drive-file-list" style="margin-top:.75rem;"></div>
     </div>
   </div>
 
@@ -1808,6 +1849,22 @@
             </div>
           </div>
         </div>
+      </div>
+      <div class="drive-card" id="economy-asset-overview-card" style="margin-top:.75rem;">
+        <div class="drive-card-heading">
+          <div>
+            <div class="drive-card-title">交易資產總覽</div>
+            <div class="drive-card-sub" id="economy-asset-confidence">價格可信度只作風險提示，不阻擋積分交易。</div>
+          </div>
+          <button class="btn btn-sm" type="button" onclick="loadTradingAssetOverview()" style="font-size:.8rem;padding:.2rem .5rem;">更新</button>
+        </div>
+        <div class="settings-option-grid economy-wallet-grid">
+          <div><span class="drive-card-sub">總權益</span><strong id="economy-asset-total-equity">-</strong><small>可用 + 鎖定 + 現貨 + 借貸</small></div>
+          <div><span class="drive-card-sub">可用積分</span><strong id="economy-asset-available">-</strong><small id="economy-asset-locked">鎖定 -</small></div>
+          <div><span class="drive-card-sub">現貨估值</span><strong id="economy-asset-spot">-</strong><small>依目前市場價估算</small></div>
+          <div><span class="drive-card-sub">借貸權益</span><strong id="economy-asset-margin">-</strong><small id="economy-asset-interest">利息 -</small></div>
+        </div>
+        <div id="economy-asset-admin-risk" class="drive-card-sub" style="display:none;margin-top:.5rem;"></div>
       </div>
       <div class="drive-card" id="economy-user-ledger-card" style="margin-top:.75rem;">
         <div class="drive-card-heading">
@@ -5152,6 +5209,7 @@
 <script src="/js/51-admin-server-mode-launch-check.js?v=20260507-admin-launch-check-split" defer></script>
 <script src="/js/55-economy.js?v=20260501-wallet-auto-refresh" defer></script>
 <script src="/js/56-trading.js?v=20260502-grid-spot" defer></script>
+<script src="/js/57-platform-centers.js?v=20260510-job-share-centers" defer></script>
 <script src="/js/90-bootstrap.js?v=20260505-civitai-search" defer></script>
 </body>
 </html>

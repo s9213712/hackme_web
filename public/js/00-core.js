@@ -164,6 +164,8 @@ const SIDEBAR_MENU_CONFIG = [
   },
   { tabId: "tab-module-videos", module: "videos", tab: "videos", icon: "video", label: "影音", group: "工具" },
   { tabId: "tab-module-games", module: "games", tab: "games", icon: "game", label: "遊戲區", group: "工具" },
+  { tabId: "tab-module-jobs", module: "jobs", tab: "jobs", icon: "bell", label: "任務中心", group: "工具" },
+  { tabId: "tab-module-shares", module: "shares", tab: "shares", icon: "drive", label: "分享管理", group: "工具" },
   { tabId: "tab-module-comfyui", module: "comfyui", tab: "comfyui", icon: "spark", label: "AI 產圖", group: "工具" },
   { tabId: "tab-module-economy", module: "economy", tab: "economy", icon: "wallet", label: "積分錢包", group: "工具" },
   { tabId: "tab-module-trading", module: "trading", tab: "trading", icon: "wallet", label: "積分交易所", group: "工具" },
@@ -1324,6 +1326,8 @@ function setAuthState(json, showLoginHero = false) {
   const tabModuleAlbums = $("tab-module-albums");
   const tabModuleVideos = $("tab-module-videos");
   const tabModuleGames = $("tab-module-games");
+  const tabModuleJobs = $("tab-module-jobs");
+  const tabModuleShares = $("tab-module-shares");
   const tabModuleComfyui = $("tab-module-comfyui");
   const tabModuleEconomy = $("tab-module-economy");
   const tabModuleTrading = $("tab-module-trading");
@@ -1341,6 +1345,8 @@ function setAuthState(json, showLoginHero = false) {
   if (tabModuleAlbums) tabModuleAlbums.style.display = (canAccessModule("privacy_uploads") && isFeatureEnabledForUi("feature_storage_albums_enabled", false)) ? "" : "none";
   if (tabModuleVideos) tabModuleVideos.style.display = canAccessModule("videos") ? "" : "none";
   if (tabModuleGames) tabModuleGames.style.display = canAccessModule("games") ? "" : "none";
+  if (tabModuleJobs) tabModuleJobs.style.display = canAccessModule("jobs") ? "" : "none";
+  if (tabModuleShares) tabModuleShares.style.display = canAccessModule("shares") ? "" : "none";
   if (tabModuleComfyui) tabModuleComfyui.style.display = canAccessModule("comfyui") ? "" : "none";
   if (tabModuleEconomy) tabModuleEconomy.style.display = canAccessModule("economy") ? "" : "none";
   if (tabModuleTrading) tabModuleTrading.style.display = (canAccessModule("economy") && canAccessModule("trading")) ? "" : "none";
@@ -1437,6 +1443,8 @@ function resetAuthState() {
   const moduleAlbums = $("module-albums");
   const moduleVideos = $("module-videos");
   const moduleGames = $("module-games");
+  const moduleJobs = $("module-jobs");
+  const moduleShares = $("module-shares");
   const moduleComfyui = $("module-comfyui");
   const moduleEconomy = $("module-economy");
   const moduleTrading = $("module-trading");
@@ -1450,6 +1458,8 @@ function resetAuthState() {
   if (moduleAlbums) moduleAlbums.classList.remove("active");
   if (moduleVideos) moduleVideos.classList.remove("active");
   if (moduleGames) moduleGames.classList.remove("active");
+  if (moduleJobs) moduleJobs.classList.remove("active");
+  if (moduleShares) moduleShares.classList.remove("active");
   if (moduleComfyui) moduleComfyui.classList.remove("active");
   if (moduleEconomy) moduleEconomy.classList.remove("active");
   if (moduleTrading) moduleTrading.classList.remove("active");

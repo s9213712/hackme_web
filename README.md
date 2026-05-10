@@ -104,4 +104,10 @@ Grid Bot 與借貸交易整體封死。若你要手動啟動，
 ```bash
 python3 scripts/prepush/pre_push_checks.py
 scripts/testing/pytest_in_tmp.sh -q tests
+python3 scripts/testing/playwright_platform_health_check.py
 ```
+
+`playwright_platform_health_check.py` 會啟動隔離 QA server 到 `/tmp`、使用隨機非
+`5000` port，並以真實瀏覽器驗 Job Center、Notification Center、Share Link
+Management、Trading Asset Overview 與 mobile viewport。它不是正式 runtime 測試，
+報告會寫到該次 `/tmp/.../reports/qa/`。
