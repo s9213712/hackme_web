@@ -146,7 +146,8 @@ def test_live_learning_validation_reports_audit_gate_and_failure_context():
 def test_live_learning_validation_gate_is_decision_evidence_not_dashboard_only():
     source = SCRIPT.read_text(encoding="utf-8")
 
-    assert "benchmark skipped:" in source
+    assert "deterministic strength gate skipped:" in source
+    assert "Stochastic Auxiliary Game Benchmark" in source
     assert "catastrophic_regression" in source
     assert 'overall_verdict = "HIGH_RISK"' in source
     assert "forced repetition poison signal exceeded threshold" in source
@@ -157,6 +158,8 @@ def test_live_learning_validation_gate_is_decision_evidence_not_dashboard_only()
     assert "## Can This Model Be Promoted?" in source
     assert "_promotion_explanation" in source
     assert "_report_consistency_issues" in source
+    assert "_evaluate_deterministic_strength_snapshot" in source
+    assert "hash_changed only proves model bytes changed" in source
 
 
 def test_live_learning_validation_expands_traps_and_probe_range():
@@ -292,6 +295,62 @@ def test_stage_win_rate_drop_marks_catastrophic_regression():
     assert stability["catastrophic_regression"] is True
 
 
+def test_deterministic_strength_gate_blocks_regression_without_using_game_benchmark():
+    module = _load_validation_module()
+    snapshots = [
+        {"model_label": "baseline", "model_hash": "base", "aggregate": {"overall_deterministic_score": 0.8, "illegal_rate": 0.0, "blunder_avoid_rate": 1.0, "category_score": {"mistake_retention": {"score": 1.0}}}},
+        {"model_label": "checkpoint@10", "model_hash": "c10", "aggregate": {"overall_deterministic_score": 0.8, "illegal_rate": 0.0, "blunder_avoid_rate": 1.0, "category_score": {"mistake_retention": {"score": 1.0}}}},
+        {"model_label": "checkpoint@20", "model_hash": "c20", "aggregate": {"overall_deterministic_score": 0.75, "illegal_rate": 0.0, "blunder_avoid_rate": 1.0, "category_score": {"mistake_retention": {"score": 1.0}}}},
+        {"model_label": "final", "model_hash": "final", "aggregate": {"overall_deterministic_score": 0.6, "illegal_rate": 0.0, "blunder_avoid_rate": 1.0, "category_score": {"mistake_retention": {"score": 1.0}}}},
+    ]
+
+    report = module._deterministic_strength_report(snapshots)
+
+    assert report["passed"] is False
+    assert "final deterministic score regressed below baseline" in report["reasons"]
+    assert "final deterministic score regressed beyond checkpoint@20 threshold" in report["reasons"]
+
+
+def test_stochastic_benchmark_hash_perft_and_runtime_do_not_release_promotion():
+    module = _load_validation_module()
+    summary = {
+        "engine_alias": "exp2",
+        "replay_summary": {"trusted_replays": module.VALID_GAMES, "quarantine_replays": module.INVALID_GAMES},
+        "dataset_integrity": {"contaminated_rows": 0, "duplicate_ratio": 0.0, "invalid_fen": 0, "illegal_moves": 0, "side_mismatch": 0, "short_resign_games": 0},
+        "poison_detection": {"forced_repetition_patterns": 0, "intentional_blunders": 0, "engine_copy_suspected": 0, "suspicious_resign_rate": 0.0},
+        "stability": {"catastrophic_regression": False},
+        "before_after_eval": {
+            "benchmark_before": {"skipped": True, "reason": "stochastic_auxiliary_disabled"},
+            "benchmark_after": {"skipped": True, "reason": "stochastic_auxiliary_disabled"},
+            "checkpoints": [
+                {
+                    "trusted_count": 10,
+                    "trusted_replays": 10,
+                    "hash_changed": True,
+                    "model_hash_changed": True,
+                    "previous_model_hash": "before",
+                    "new_model_hash": "after",
+                    "pre_checkpoint_model_sha256": "before",
+                    "post_checkpoint_model_sha256": "after",
+                    "ineffective_training": False,
+                    "mistake_retention_probe": {"learning_signal": True},
+                }
+            ],
+        },
+        "deterministic_strength_snapshot": {"supported": True, "skipped": False, "passed": False, "reasons": ["deterministic fixture failed"], "final": {"illegal_rate": 0.0, "blunder_avoid_rate": 1.0}},
+        "stochastic_auxiliary_benchmark": {"skipped": True, "strength_evidence": False},
+        "perft": {"strength_evidence": False},
+        "runtime_metrics": {"train_seconds": 1.0},
+        "engine_verdict": "PASS",
+    }
+
+    gate = module._promotion_gate_summary(summary)
+
+    assert gate["passed"] is False
+    assert "deterministic strength gate failed: deterministic fixture failed" in gate["reasons"]
+    assert not any("stochastic_auxiliary_disabled" in reason for reason in gate["reasons"])
+
+
 def test_live_learning_validation_minimal_gate_failure_fixture_writes_consistent_reports(tmp_path):
     module = _load_validation_module()
     module._environment_summary = lambda: {"python_version": "test", "platform": "test", "cpu": "test", "gpu": "", "torch_version": ""}
@@ -369,6 +428,28 @@ def test_live_learning_validation_minimal_gate_failure_fixture_writes_consistent
                 }
             ],
         },
+        "deterministic_strength_snapshot": {
+            "supported": True,
+            "skipped": False,
+            "passed": False,
+            "reasons": ["final deterministic score regressed below baseline"],
+            "regression_vs_baseline": -0.2,
+            "regression_vs_checkpoint10": -0.1,
+            "regression_vs_checkpoint20": -0.1,
+            "score_table": [
+                {"model_label": "baseline", "model_hash": "before", "overall_deterministic_score": 0.8, "top1_correct_rate": 0.8, "top3_contains_rate": 0.8, "illegal_rate": 0.0, "blunder_avoid_rate": 1.0},
+                {"model_label": "checkpoint@10", "model_hash": "after", "overall_deterministic_score": 0.6, "top1_correct_rate": 0.6, "top3_contains_rate": 0.6, "illegal_rate": 0.0, "blunder_avoid_rate": 1.0},
+                {"model_label": "final", "model_hash": "after", "overall_deterministic_score": 0.6, "top1_correct_rate": 0.6, "top3_contains_rate": 0.6, "illegal_rate": 0.0, "blunder_avoid_rate": 1.0},
+            ],
+            "final": {"overall_deterministic_score": 0.6, "top1_correct_rate": 0.6, "top3_contains_rate": 0.6, "illegal_rate": 0.0, "blunder_avoid_rate": 1.0, "category_score": {"mistake_retention": {"score": 0.5, "count": 1, "top1_correct_rate": 0.5, "top3_contains_rate": 0.5, "illegal_rate": 0.0, "blunder_rate": 0.0}}},
+        },
+        "stochastic_auxiliary_benchmark": {
+            "purpose": "sanity signal only; not primary promotion evidence",
+            "strength_evidence": False,
+            "skipped": True,
+            "skip_reason": skip_reason,
+        },
+        "perft": {"purpose": "move generation correctness only; not strength evidence", "strength_evidence": False, "skipped": True, "reason": "fixture"},
         "stability": {
             "catastrophic_regression": True,
             "opening_regression": 0.0,
@@ -407,13 +488,14 @@ def test_live_learning_validation_minimal_gate_failure_fixture_writes_consistent
     assert root_json["overall_verdict"] == "HIGH_RISK"
     assert root_json["engines"][0]["promotion_gate_passed"] is False
     assert engine_json["promotion_gate"]["passed"] is False
-    assert f"benchmark skipped: {skip_reason}" in engine_json["promotion_gate"]["reasons"]
+    assert "deterministic strength gate failed: final deterministic score regressed below baseline" in engine_json["promotion_gate"]["reasons"]
     assert any("mistake retention probe failed" in reason for reason in engine_json["promotion_gate"]["reasons"])
     assert "illegal moves detected in dataset" in engine_json["promotion_gate"]["reasons"]
     assert "forced repetition poison signal exceeded threshold" in engine_json["promotion_gate"]["reasons"]
     assert "## Can This Model Be Promoted?" in root_md
     assert "## Can This Model Be Promoted?" in engine_md
-    assert f"benchmark skipped: {skip_reason}" in root_md
-    assert f"benchmark skipped: {skip_reason}" in engine_md
+    assert "Stochastic Auxiliary Game Benchmark" in root_md
+    assert "Stochastic Auxiliary Game Benchmark" in engine_md
+    assert "strength_evidence: `False`" in engine_md
     assert "目前沒有足夠證據證明 retrain 改善了該錯誤" in engine_md
     assert module._report_consistency_issues(root_json, [engine_json], root_md, {"exp2": engine_md}) == []

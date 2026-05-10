@@ -168,6 +168,83 @@ FIXED_PROBE_POSITIONS = (
         "side": "white",
     },
 )
+DETERMINISTIC_STRENGTH_DEPTH = 1
+DETERMINISTIC_STRENGTH_MAX_NODES = 0
+DETERMINISTIC_STRENGTH_TIME_LIMIT_MS = 0
+DETERMINISTIC_MIN_BLUNDER_AVOID_RATE = 1.0
+DETERMINISTIC_CHECKPOINT20_DROP_LIMIT = 0.05
+DETERMINISTIC_STRENGTH_CASES = (
+    {
+        "case_id": "opening_develop_white",
+        "category": "opening",
+        "fen": chess.STARTING_FEN,
+        "side": "white",
+        "expected_best_moves": ["e2e4", "d2d4", "g1f3", "c2c4"],
+    },
+    {
+        "case_id": "opening_develop_black",
+        "category": "human_probe",
+        "fen": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
+        "side": "black",
+        "expected_best_moves": ["e7e5", "c7c5", "e7e6", "c7c6"],
+    },
+    {
+        "case_id": "mate_in_one_white",
+        "category": "tactic",
+        "fen": "6k1/5Q2/6K1/8/8/8/8/8 w - - 0 1",
+        "side": "white",
+        "expected_best_moves": ["f7e8", "f7g7"],
+    },
+    {
+        "case_id": "mate_in_one_black",
+        "category": "tactic",
+        "fen": "8/8/8/8/8/6k1/5q2/6K1 b - - 0 1",
+        "side": "black",
+        "expected_best_moves": ["f2g2", "f2e1"],
+    },
+    {
+        "case_id": "promotion_white",
+        "category": "endgame",
+        "fen": "k7/4P3/2K5/8/8/8/8/8 w - - 0 1",
+        "side": "white",
+        "expected_best_moves": ["e7e8q"],
+    },
+    {
+        "case_id": "avoid_stalemate_white",
+        "category": "endgame",
+        "fen": "k7/3Q4/2K5/8/8/8/8/8 w - - 0 1",
+        "side": "white",
+        "expected_best_moves": ["d7b7"],
+    },
+    {
+        "case_id": "queen_hanging_white",
+        "category": "trap",
+        "fen": "4k3/8/8/8/8/8/4r3/4KQ2 w - - 0 1",
+        "side": "white",
+        "expected_best_moves": ["e1e2", "f1e2"],
+    },
+    {
+        "case_id": "free_queen_white",
+        "category": "blunder_avoid",
+        "fen": "4k3/8/8/8/8/8/4q3/4KQ2 w - - 0 1",
+        "side": "white",
+        "expected_best_moves": ["e1e2", "f1e2"],
+    },
+    {
+        "case_id": "scholar_trap_black",
+        "category": "trap",
+        "fen": "r1bqkbnr/pppp1Qpp/2n5/4p3/4P3/8/PPPP1PPP/RNB1KBNR b KQkq - 0 3",
+        "side": "black",
+        "expected_best_moves": ["e8f7"],
+    },
+    {
+        "case_id": "fried_liver_human_probe_black",
+        "category": "human_probe",
+        "fen": "r1bqkb1r/pppp1ppp/2n2n2/4N3/2B1P3/8/PPPP1PPP/RNBQK2R b KQkq - 0 4",
+        "side": "black",
+        "expected_best_moves": ["d7d5", "f6e4", "c6e5"],
+    },
+)
 
 
 def _progress(message: str) -> None:
@@ -419,6 +496,9 @@ def _engine_verdict(summary: dict) -> str:
         return "PARTIAL"
     if any(bool(row.get("ineffective_training")) for row in checkpoints):
         return "PARTIAL"
+    deterministic = summary.get("deterministic_strength_snapshot") or {}
+    if deterministic and not deterministic.get("passed"):
+        return "PARTIAL"
     benchmark_before = summary.get("before_after_eval", {}).get("benchmark_before") or {}
     benchmark_after = summary.get("before_after_eval", {}).get("benchmark_after") or {}
     benchmark_skipped = bool(benchmark_before.get("skipped") or benchmark_after.get("skipped"))
@@ -452,6 +532,9 @@ def _summary_benchmark_changed(summary: dict) -> bool:
 
 
 def _summary_benchmark_expectation_met(summary: dict) -> bool:
+    deterministic = summary.get("deterministic_strength_snapshot") or {}
+    if deterministic:
+        return bool(deterministic.get("passed"))
     if _summary_benchmark_skipped(summary):
         return True
     before = summary.get("before_after_eval", {}).get("benchmark_before") or {}
@@ -460,6 +543,10 @@ def _summary_benchmark_expectation_met(summary: dict) -> bool:
         (after.get("win_rate") or 0.0) >= (before.get("win_rate") or 0.0)
         and (after.get("low_quality_rate") or 1.0) <= (before.get("low_quality_rate") or 1.0)
     )
+
+
+def _move_uci_from_engine_move(move: dict | None) -> str:
+    return f"{(move or {}).get('from') or ''}{(move or {}).get('to') or ''}{(move or {}).get('promotion') or ''}".lower()
 
 
 def _piece_value(piece_symbol: str | None) -> int:
@@ -1207,6 +1294,220 @@ def _choose_engine_move_for_eval(engine_alias: str, board_state: dict, side: str
     return None
 
 
+def _rank_deterministic_top3(engine_alias: str, board_state: dict, side: str, model_path: Path, top1_move: dict | None) -> list[str]:
+    top1 = _move_uci_from_engine_move(top1_move)
+    board_obj = chess.Board(str(board_state.get("__fen__") or chess.STARTING_FEN))
+    legal_uci = {move.uci() for move in board_obj.legal_moves}
+    scored: list[tuple[int, str]] = []
+    for move in board_obj.legal_moves:
+        after = board_obj.copy(stack=False)
+        after.push(move)
+        score = _probe_position_score({"__fen__": after.fen()}, opponent(side))
+        scored.append((score, move.uci()))
+    ranked = [uci for _score, uci in sorted(scored, key=lambda item: (-item[0], item[1]))]
+    if top1 in legal_uci:
+        ranked = [top1] + [uci for uci in ranked if uci != top1]
+    return ranked[:3]
+
+
+def _deterministic_case_policy_score(fen: str, side: str, move_uci: str) -> int | None:
+    if not move_uci:
+        return None
+    board_state = {"__fen__": str(fen or "")}
+    try:
+        board_after = validate_move(board_state, side, move_uci[:2], move_uci[2:4], move_uci[4:] or None)["board"]
+    except Exception:
+        return None
+    return _probe_position_score(board_after, opponent(side))
+
+
+def _deterministic_strength_cases(samples: list[dict]) -> list[dict]:
+    cases = [dict(case) for case in DETERMINISTIC_STRENGTH_CASES]
+    for sample in samples[:3]:
+        expected = str(sample.get("move_uci") or "").lower()
+        if not expected:
+            continue
+        cases.append(
+            {
+                "case_id": f"mistake_retention_game_{int(sample.get('game_id') or 0)}_ply_{int(sample.get('ply') or 0)}",
+                "category": "mistake_retention",
+                "fen": str(sample.get("fen") or ""),
+                "side": str(sample.get("side") or "white"),
+                "expected_best_moves": [expected],
+                "source_game_id": int(sample.get("game_id") or 0),
+                "source_ply": int(sample.get("ply") or 0),
+            }
+        )
+    return cases
+
+
+def _aggregate_deterministic_strength(rows: list[dict]) -> dict:
+    total = max(1, len(rows))
+    top1 = sum(1 for row in rows if row.get("top1_correct"))
+    top3 = sum(1 for row in rows if row.get("top3_contains"))
+    illegal = sum(1 for row in rows if row.get("illegal_move"))
+    blunder_cases = [row for row in rows if row.get("category") == "blunder_avoid"]
+    blunders = sum(1 for row in blunder_cases if row.get("blunder"))
+    categories: dict[str, dict] = {}
+    for row in rows:
+        category = str(row.get("category") or "unknown")
+        bucket = categories.setdefault(category, {"count": 0, "top1": 0, "top3": 0, "illegal": 0, "blunders": 0})
+        bucket["count"] += 1
+        bucket["top1"] += 1 if row.get("top1_correct") else 0
+        bucket["top3"] += 1 if row.get("top3_contains") else 0
+        bucket["illegal"] += 1 if row.get("illegal_move") else 0
+        bucket["blunders"] += 1 if row.get("blunder") else 0
+    category_score = {}
+    for category, bucket in categories.items():
+        count = max(1, int(bucket["count"]))
+        category_score[category] = {
+            "count": int(bucket["count"]),
+            "top1_correct_rate": round(bucket["top1"] / count, 4),
+            "top3_contains_rate": round(bucket["top3"] / count, 4),
+            "illegal_rate": round(bucket["illegal"] / count, 4),
+            "blunder_rate": round(bucket["blunders"] / count, 4),
+            "score": round((0.7 * bucket["top1"] + 0.3 * bucket["top3"]) / count, 4),
+        }
+    top1_rate = round(top1 / total, 4)
+    top3_rate = round(top3 / total, 4)
+    illegal_rate = round(illegal / total, 4)
+    blunder_avoid_rate = round((len(blunder_cases) - blunders) / max(1, len(blunder_cases)), 4) if blunder_cases else 1.0
+    overall = round(max(0.0, 0.7 * top1_rate + 0.3 * top3_rate - illegal_rate - (1.0 - blunder_avoid_rate) * 0.25), 4)
+    return {
+        "case_count": len(rows),
+        "top1_correct_rate": top1_rate,
+        "top3_contains_rate": top3_rate,
+        "illegal_rate": illegal_rate,
+        "blunder_avoid_rate": blunder_avoid_rate,
+        "category_score": category_score,
+        "overall_deterministic_score": overall,
+    }
+
+
+def _evaluate_deterministic_strength_snapshot(
+    *,
+    engine_alias: str,
+    model_path: Path,
+    model_label: str,
+    cases: list[dict],
+    seed: int,
+    depth: int = DETERMINISTIC_STRENGTH_DEPTH,
+    nodes: int = DETERMINISTIC_STRENGTH_MAX_NODES,
+    time_limit_ms: int = DETERMINISTIC_STRENGTH_TIME_LIMIT_MS,
+) -> dict:
+    model_meta = _model_meta(model_path)
+    rows = []
+    for case in cases:
+        fen = str(case.get("fen") or "")
+        side = str(case.get("side") or "white")
+        expected = [str(move).lower() for move in (case.get("expected_best_moves") or [])]
+        board_state = {"__fen__": fen}
+        started = time.perf_counter()
+        move = _choose_engine_move_for_eval(engine_alias, board_state, side, model_path)
+        think_ms = round((time.perf_counter() - started) * 1000.0, 3)
+        top1 = _move_uci_from_engine_move(move)
+        top3 = _rank_deterministic_top3(engine_alias, board_state, side, model_path, move)
+        illegal = False
+        if top1:
+            try:
+                validate_move(board_state, side, top1[:2], top1[2:4], top1[4:] or None)
+            except Exception:
+                illegal = True
+        else:
+            illegal = True
+        top1_correct = top1 in expected
+        top3_contains = any(move_uci in top3 for move_uci in expected)
+        blunder = bool(str(case.get("category") or "") == "blunder_avoid" and not top3_contains)
+        rows.append(
+            {
+                "case_id": str(case.get("case_id") or ""),
+                "category": str(case.get("category") or ""),
+                "fen": fen,
+                "side": side,
+                "expected_best_moves": expected,
+                "engine_top1": top1,
+                "engine_top3": top3,
+                "top1_correct": top1_correct,
+                "top3_contains": top3_contains,
+                "illegal_move": illegal,
+                "blunder": blunder,
+                "score_cp": _deterministic_case_policy_score(fen, side, top1),
+                "policy_score": _deterministic_case_policy_score(fen, side, top1),
+                "model_hash": model_meta["sha256"],
+                "seed": int(seed),
+                "depth": int(depth),
+                "nodes": int(nodes),
+                "time_limit_ms": int(time_limit_ms),
+                "think_ms": think_ms,
+            }
+        )
+    aggregate = _aggregate_deterministic_strength(rows)
+    return {
+        "model_label": model_label,
+        "model_path": str(model_path),
+        "model_hash": model_meta["sha256"],
+        "seed": int(seed),
+        "depth": int(depth),
+        "nodes": int(nodes),
+        "time_limit_ms": int(time_limit_ms),
+        "cases": rows,
+        "aggregate": aggregate,
+    }
+
+
+def _deterministic_strength_report(snapshots: list[dict]) -> dict:
+    if not snapshots:
+        return {"supported": False, "skipped": True, "reason": "no_deterministic_snapshots", "passed": False}
+    by_label = {str(row.get("model_label") or ""): row for row in snapshots}
+    baseline = by_label.get("baseline") or snapshots[0]
+    checkpoint10 = by_label.get("checkpoint@10")
+    checkpoint20 = by_label.get("checkpoint@20")
+    final = by_label.get("final") or snapshots[-1]
+    baseline_score = float((baseline.get("aggregate") or {}).get("overall_deterministic_score") or 0.0)
+    checkpoint10_score = float(((checkpoint10 or {}).get("aggregate") or {}).get("overall_deterministic_score") or baseline_score)
+    checkpoint20_score = float(((checkpoint20 or {}).get("aggregate") or {}).get("overall_deterministic_score") or checkpoint10_score)
+    final_aggregate = final.get("aggregate") or {}
+    final_score = float(final_aggregate.get("overall_deterministic_score") or 0.0)
+    mistake_baseline = ((baseline.get("aggregate") or {}).get("category_score") or {}).get("mistake_retention", {}).get("score")
+    mistake_final = (final_aggregate.get("category_score") or {}).get("mistake_retention", {}).get("score")
+    reasons = []
+    if final_score < baseline_score:
+        reasons.append("final deterministic score regressed below baseline")
+    if checkpoint20 and final_score < checkpoint20_score - DETERMINISTIC_CHECKPOINT20_DROP_LIMIT:
+        reasons.append("final deterministic score regressed beyond checkpoint@20 threshold")
+    if float(final_aggregate.get("illegal_rate") or 0.0) != 0.0:
+        reasons.append("deterministic illegal_rate is nonzero")
+    if float(final_aggregate.get("blunder_avoid_rate") or 0.0) < DETERMINISTIC_MIN_BLUNDER_AVOID_RATE:
+        reasons.append("deterministic blunder_avoid_rate below threshold")
+    if mistake_baseline is not None and mistake_final is not None and float(mistake_final) < float(mistake_baseline):
+        reasons.append("mistake_retention deterministic category regressed below baseline")
+    return {
+        "supported": True,
+        "skipped": False,
+        "passed": not reasons,
+        "reasons": reasons,
+        "snapshots": snapshots,
+        "score_table": [
+            {
+                "model_label": str(row.get("model_label") or ""),
+                "model_hash": str(row.get("model_hash") or ""),
+                **(row.get("aggregate") or {}),
+            }
+            for row in snapshots
+        ],
+        "final": final_aggregate,
+        "regression_vs_baseline": round(final_score - baseline_score, 4),
+        "regression_vs_checkpoint10": round(final_score - checkpoint10_score, 4),
+        "regression_vs_checkpoint20": round(final_score - checkpoint20_score, 4),
+        "thresholds": {
+            "final_score_must_be_at_least_baseline": True,
+            "checkpoint20_drop_limit": DETERMINISTIC_CHECKPOINT20_DROP_LIMIT,
+            "illegal_rate_required": 0.0,
+            "min_blunder_avoid_rate": DETERMINISTIC_MIN_BLUNDER_AVOID_RATE,
+        },
+    }
+
+
 def _evaluate_fixed_probe_positions(engine_alias: str, model_path: Path) -> dict:
     if engine_alias not in {"exp1", "exp2", "exp3", "exp4"}:
         return {"supported": False, "positions": [], "move_change_count": 0}
@@ -1745,11 +2046,17 @@ def _promotion_gate_summary(summary: dict) -> dict:
     stability = summary.get("stability") or {}
     if stability.get("catastrophic_regression"):
         reasons.append("catastrophic regression detected")
-    before_benchmark = (summary.get("before_after_eval", {}).get("benchmark_before") or {})
-    after_benchmark = (summary.get("before_after_eval", {}).get("benchmark_after") or {})
-    if _summary_benchmark_skipped(summary):
-        skipped_reason = _summary_benchmark_skip_reason(summary) or "unknown"
-        reasons.append(f"benchmark skipped: {skipped_reason}")
+    deterministic = summary.get("deterministic_strength_snapshot") or {}
+    if not deterministic or deterministic.get("skipped"):
+        reasons.append(f"deterministic strength gate skipped: {deterministic.get('reason') or 'missing'}")
+    elif not deterministic.get("passed"):
+        reasons.extend([f"deterministic strength gate failed: {reason}" for reason in deterministic.get("reasons") or []])
+    final_det = (deterministic.get("final") or {}) if deterministic else {}
+    if final_det:
+        if float(final_det.get("illegal_rate") or 0.0) != 0.0:
+            reasons.append("deterministic illegal_rate is nonzero")
+        if float(final_det.get("blunder_avoid_rate") or 0.0) < DETERMINISTIC_MIN_BLUNDER_AVOID_RATE:
+            reasons.append("deterministic blunder_avoid_rate below threshold")
     for checkpoint in (summary.get("before_after_eval") or {}).get("checkpoints") or []:
         mistake_probe = checkpoint.get("mistake_retention_probe") or {}
         if mistake_probe.get("learning_signal") is False:
@@ -1786,9 +2093,6 @@ def _checkpoint_gate_summary(
         reasons.append("contaminated rows entered checkpoint dataset")
     if ineffective_training:
         reasons.append("model hash changed without probe move changes")
-    if bool(benchmark_before_focus.get("skipped") or benchmark_after_focus.get("skipped")):
-        skipped_reason = benchmark_before_focus.get("reason") or benchmark_after_focus.get("reason") or "unknown"
-        reasons.append(f"benchmark skipped: {skipped_reason}")
     if legal_rate_delta is not None and legal_rate_delta < -0.05:
         reasons.append("legal move rate regressed beyond threshold")
     if (mistake_retention_probe or {}).get("learning_signal") is False:
@@ -1917,6 +2221,9 @@ def _root_engine_row(summary: dict) -> dict:
         "low_quality_rate_after": (summary.get("before_after_eval", {}).get("benchmark_after") or {}).get("low_quality_rate"),
         "stage_game_win_rates": summary.get("stage_game_win_rates") or [],
         "benchmark_timeline": (summary.get("before_after_eval") or {}).get("benchmark_timeline") or [],
+        "deterministic_strength_snapshot": summary.get("deterministic_strength_snapshot") or {},
+        "stochastic_auxiliary_benchmark": summary.get("stochastic_auxiliary_benchmark") or {},
+        "perft": summary.get("perft") or {},
         "mistake_retention_probe_results": [
             {
                 "trusted_count": checkpoint.get("trusted_count") or checkpoint.get("trusted_replays"),
@@ -2122,6 +2429,36 @@ def _root_report_lines(root_summary: dict, summaries: list[dict]) -> list[str]:
     )
     for row in root_summary["engines"]:
         lines.append(f"- {row['engine_alias']}: {_format_stage_win_rates(row.get('stage_game_win_rates') or [])}")
+    lines.extend(["", "## Deterministic Strength Gate", ""])
+    for row in root_summary["engines"]:
+        det = row.get("deterministic_strength_snapshot") or {}
+        final_det = det.get("final") or {}
+        lines.append(
+            f"- {row['engine_alias']}: passed=`{det.get('passed')}` "
+            f"overall=`{final_det.get('overall_deterministic_score')}` "
+            f"top1=`{final_det.get('top1_correct_rate')}` top3=`{final_det.get('top3_contains_rate')}` "
+            f"illegal_rate=`{final_det.get('illegal_rate')}` blunder_avoid_rate=`{final_det.get('blunder_avoid_rate')}` "
+            f"regression_vs_baseline=`{det.get('regression_vs_baseline')}` "
+            f"regression_vs_checkpoint20=`{det.get('regression_vs_checkpoint20')}`"
+        )
+        for item in det.get("score_table") or []:
+            lines.append(
+                f"- {row['engine_alias']} {item.get('model_label')}: "
+                f"score=`{item.get('overall_deterministic_score')}` top1=`{item.get('top1_correct_rate')}` "
+                f"top3=`{item.get('top3_contains_rate')}` illegal=`{item.get('illegal_rate')}` "
+                f"blunder_avoid=`{item.get('blunder_avoid_rate')}`"
+            )
+    lines.extend(["", "## Stochastic Auxiliary Game Benchmark", ""])
+    for row in root_summary["engines"]:
+        aux = row.get("stochastic_auxiliary_benchmark") or {}
+        lines.append(
+            f"- {row['engine_alias']}: skipped=`{aux.get('skipped')}` reason=`{aux.get('skip_reason')}` "
+            f"strength_evidence=`{aux.get('strength_evidence')}` note=`{aux.get('purpose')}`"
+        )
+    lines.extend(["", "## Perft And Runtime Separation", ""])
+    for row in root_summary["engines"]:
+        perft = row.get("perft") or {}
+        lines.append(f"- {row['engine_alias']}: perft_strength_evidence=`{perft.get('strength_evidence')}` reason=`{perft.get('reason')}`")
     lines.extend(["", "## Formal Benchmark Timeline", ""])
     for row in root_summary["engines"]:
         timeline = row.get("benchmark_timeline") or []
@@ -2246,6 +2583,12 @@ def _report_consistency_issues(root_summary: dict, engine_summaries: list[dict],
             issues.append(f"{alias}: benchmark skipped mismatch")
         if (row.get("stage_game_win_rates") or []) != (summary.get("stage_game_win_rates") or []):
             issues.append(f"{alias}: stage win rates mismatch")
+        if (row.get("deterministic_strength_snapshot") or {}) != (summary.get("deterministic_strength_snapshot") or {}):
+            issues.append(f"{alias}: deterministic strength snapshot mismatch")
+        if (row.get("stochastic_auxiliary_benchmark") or {}) != (summary.get("stochastic_auxiliary_benchmark") or {}):
+            issues.append(f"{alias}: stochastic auxiliary benchmark mismatch")
+        if "## Deterministic Strength Gate" not in root_markdown or "## Deterministic Strength Snapshot" not in engine_md:
+            issues.append(f"{alias}: deterministic strength markdown missing")
         checkpoint_hashes = [
             {
                 "trusted_count": checkpoint.get("trusted_count") or checkpoint.get("trusted_replays"),
@@ -2271,8 +2614,6 @@ def _report_consistency_issues(root_summary: dict, engine_summaries: list[dict],
         ]
         if (row.get("mistake_retention_probe_results") or []) != mistake_results:
             issues.append(f"{alias}: mistake retention probe mismatch")
-        if benchmark_skipped and skip_reason not in ";".join(str(reason) for reason in gate.get("reasons") or []):
-            issues.append(f"{alias}: skipped benchmark reason missing from gate")
         if "## Can This Model Be Promoted?" not in engine_md:
             issues.append(f"{alias}: engine markdown missing promotion decision section")
         if str(gate.get("passed")) not in engine_md:
@@ -2665,6 +3006,62 @@ def _write_engine_report(engine_dir: Path, summary: dict) -> None:
                 f"win_rate=`{row.get('win_rate')}` "
                 f"delta_from_previous=`{row.get('win_rate_delta_from_previous_stage')}`"
             )
+    deterministic = summary.get("deterministic_strength_snapshot") or {}
+    if deterministic:
+        final_det = deterministic.get("final") or {}
+        lines.extend(
+            [
+                "",
+                "## Deterministic Strength Snapshot",
+                "",
+                f"- passed: `{deterministic.get('passed')}`",
+                f"- regression_vs_baseline: `{deterministic.get('regression_vs_baseline')}`",
+                f"- regression_vs_checkpoint10: `{deterministic.get('regression_vs_checkpoint10')}`",
+                f"- regression_vs_checkpoint20: `{deterministic.get('regression_vs_checkpoint20')}`",
+                f"- final_overall_deterministic_score: `{final_det.get('overall_deterministic_score')}`",
+                f"- final_top1_correct_rate: `{final_det.get('top1_correct_rate')}`",
+                f"- final_top3_contains_rate: `{final_det.get('top3_contains_rate')}`",
+                f"- final_illegal_rate: `{final_det.get('illegal_rate')}`",
+                f"- final_blunder_avoid_rate: `{final_det.get('blunder_avoid_rate')}`",
+                "",
+                "## Deterministic Score Table",
+                "",
+            ]
+        )
+        for item in deterministic.get("score_table") or []:
+            lines.append(
+                f"- {item.get('model_label')}: score=`{item.get('overall_deterministic_score')}` "
+                f"top1=`{item.get('top1_correct_rate')}` top3=`{item.get('top3_contains_rate')}` "
+                f"illegal=`{item.get('illegal_rate')}` blunder_avoid=`{item.get('blunder_avoid_rate')}`"
+            )
+        category_score = final_det.get("category_score") or {}
+        if category_score:
+            lines.extend(["", "## Deterministic Category Scores", ""])
+            for category, item in sorted(category_score.items()):
+                lines.append(
+                    f"- {category}: score=`{item.get('score')}` count=`{item.get('count')}` "
+                    f"top1=`{item.get('top1_correct_rate')}` top3=`{item.get('top3_contains_rate')}` "
+                    f"illegal=`{item.get('illegal_rate')}` blunder_rate=`{item.get('blunder_rate')}`"
+                )
+    aux = summary.get("stochastic_auxiliary_benchmark") or {}
+    lines.extend(
+        [
+            "",
+            "## Stochastic Auxiliary Game Benchmark",
+            "",
+            f"- skipped: `{aux.get('skipped')}`",
+            f"- skip_reason: `{aux.get('skip_reason')}`",
+            f"- strength_evidence: `{aux.get('strength_evidence')}`",
+            f"- note: `{aux.get('purpose')}`",
+            "",
+            "## Perft And Runtime Separation",
+            "",
+            f"- perft_strength_evidence: `{(summary.get('perft') or {}).get('strength_evidence')}`",
+            f"- perft_reason: `{(summary.get('perft') or {}).get('reason')}`",
+            "- runtime_strength_evidence: `False`",
+            "- runtime_note: `runtime only measures speed/cost, not chess strength`",
+        ]
+    )
     lines.extend(
         [
             "",
@@ -3335,6 +3732,38 @@ def _run_engine_validation(
             final_model_hash=after_model_meta["sha256"],
         ),
     }
+    deterministic_cases = _deterministic_strength_cases(evaluation_samples)
+    deterministic_snapshots = [
+        _evaluate_deterministic_strength_snapshot(
+            engine_alias=engine_alias,
+            model_path=before_model_path,
+            model_label="baseline",
+            cases=deterministic_cases,
+            seed=seed,
+        )
+    ]
+    for checkpoint in checkpoints:
+        trusted = int(checkpoint.get("trusted_count") or checkpoint.get("trusted_replays") or 0)
+        deterministic_snapshots.append(
+            _evaluate_deterministic_strength_snapshot(
+                engine_alias=engine_alias,
+                model_path=Path(str(checkpoint.get("candidate_model_path") or current_model_path)),
+                model_label=f"checkpoint@{trusted}",
+                cases=deterministic_cases,
+                seed=seed,
+            )
+        )
+    deterministic_snapshots.append(
+        _evaluate_deterministic_strength_snapshot(
+            engine_alias=engine_alias,
+            model_path=after_model_path,
+            model_label="final",
+            cases=deterministic_cases,
+            seed=seed,
+        )
+    )
+    deterministic_strength = _deterministic_strength_report(deterministic_snapshots)
+    _json_dump(engine_dir / "deterministic_strength_snapshot.json", deterministic_strength)
     _json_dump(engine_dir / "retrain_result.json", retrain_result)
     _json_dump(engine_dir / "before_after_eval.json", before_after_eval)
 
@@ -3379,6 +3808,21 @@ def _run_engine_validation(
         "evaluation_before": evaluation_before,
         "evaluation_after": evaluation_after,
         "before_after_eval": before_after_eval,
+        "deterministic_strength_snapshot": deterministic_strength,
+        "stochastic_auxiliary_benchmark": {
+            "purpose": "sanity signal only; not primary promotion evidence",
+            "strength_evidence": False,
+            "skipped": _summary_benchmark_skipped({"before_after_eval": before_after_eval}),
+            "skip_reason": _summary_benchmark_skip_reason({"before_after_eval": before_after_eval}),
+            "benchmark_before": before_after_eval.get("benchmark_before"),
+            "benchmark_after": before_after_eval.get("benchmark_after"),
+        },
+        "perft": {
+            "purpose": "move generation correctness only; not strength evidence",
+            "strength_evidence": False,
+            "skipped": True,
+            "reason": "not part of live-learning promotion gate",
+        },
         "retrain_result": retrain_result,
         "retrain_timing": retrain_timing,
         "model_before": before_model_meta,
