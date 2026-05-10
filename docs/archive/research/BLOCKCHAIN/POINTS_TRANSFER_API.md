@@ -41,7 +41,7 @@ X-CSRF-Token: ...
 {
   "to_address": "PNT1xyz...",
   "amount": "100",
-  "currency_type": "soft",
+  "currency_type": "points",
   "memo": "thanks"
 }
 ```
@@ -58,7 +58,7 @@ Response 200：
     "to_address_label": null,
     "amount": "100",
     "fee_amount": "0",
-    "currency_type": "soft",
+    "currency_type": "points",
     "estimated_balance_after": "4910",
     "warnings": [],
     "expires_in_seconds": 60
@@ -76,7 +76,7 @@ X-CSRF-Token: ...
 {
   "to_address": "PNT1xyz...",
   "amount": "100",
-  "currency_type": "soft",
+  "currency_type": "points",
   "memo": "thanks",
   "client_nonce": "550e8400-e29b-41d4-a716-446655440000",
   "timestamp": "2026-05-04T08:00:00Z"
@@ -131,7 +131,8 @@ Response 200：
 - `amount` 為 string-encoded integer（與 DB 一致）
 - `amount > 0`
 - `amount + fee ≤ free_balance`
-- `currency_type ∈ {soft, hard}`；不可混用（一筆 transfer 只能是其中一種）
+- `currency_type` 必須等於 `points`
+- legacy API 若收到 `soft` / `hard`，必須明確拒絕或先轉換成 `points` 後在 response 中回傳 `currency_type='points'`；v2 ledger 不得寫入 `soft` / `hard`
 
 ### 4.4 Nonce / Replay
 
@@ -248,7 +249,7 @@ assert supply_state_unchanged()
 - [ ] 手機版 RWD 通過所有 breakpoint
 - [ ] memo 256+ 字元被拒
 - [ ] timestamp 偏離 > 5 分鐘被拒
-- [ ] currency_type 混用被拒（soft + hard 同筆）
+- [ ] currency_type 不等於 `points` 必拒，或 legacy adapter 轉換後 response 明確回 `points`
 - [ ] event_id / payload_hash 全部 unique（10k 樣本驗證）
 
 ---

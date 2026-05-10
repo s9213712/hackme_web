@@ -1,7 +1,8 @@
 # BLOCKCHAIN/ — PointsChain v2 設計文件總集
 
-> Status: **Design approved (root, 2026-05-04). ✅ Phase 0 cleanup closed the blocker issues and full verification passed.**
+> Status: **Core PointsChain v2 design approved (root, 2026-05-04). ✅ Phase 0 cleanup closed the blocker issues and full verification passed.**
 > Current release verdict: **ALLOW PHASE 1 CANDIDATE**, pending root approval to start implementation work.
+> Scope: this is a permissioned in-site PointsChain upgrade for `hackme_web`, not a public decentralized chain.
 
 本資料夾收斂 `hackme_web` 全站區塊鏈化（PointsChain v2）所有正式設計文件，包含 wallet 地址化、ledger v2、轉帳、多簽、self-custody、explorer、QA Mining。
 
@@ -28,10 +29,10 @@
 | [MULTISIG_WALLETS.md](MULTISIG_WALLETS.md) | dev | 5-role signer / 3-of-5 / proposal / approve / execute | Phase 4 |
 | [POINTS_MINING_REWARDS.md](POINTS_MINING_REWARDS.md) | dev / admin / user | QA Mining 公式 + 雙人審核 + signer 排除 + trust_score + retroactive | **Phase 7** |
 | [POINTSCHAIN_QA.md](POINTSCHAIN_QA.md) | qa | 14 項必測 + 各 Phase 出口 gate + invariants + Release Blocker | all |
-| [POINTS_MONETARY_POLICY.md](POINTS_MONETARY_POLICY.md) | dev / treasurer | mint / burn / fee / reserve rebalancing 制度 | Governance G-2 |
-| [TREASURY_BUDGET_POLICY.md](TREASURY_BUDGET_POLICY.md) | dev / committee | 預算 buckets + committee 結構 + reconciliation | Governance G-2 |
+| [POINTS_MONETARY_POLICY.md](POINTS_MONETARY_POLICY.md) | dev / treasurer | mint / burn / fee / reserve rebalancing 制度 | Draft, blocked |
+| [TREASURY_BUDGET_POLICY.md](TREASURY_BUDGET_POLICY.md) | dev / committee | 預算 buckets + committee 結構 + reconciliation | Draft, blocked |
 
-> 遠期 governance / voting / dispute 文件已移出本資料夾；目前只保留 PointsChain MVP 動工、上線 gate、貨幣政策與 treasury 必要規格。
+> 遠期 governance / voting / dispute 文件已移出本資料夾且不授權實作；目前只保留 PointsChain MVP 動工、上線 gate、貨幣政策與 treasury 必要規格。Monetary / Treasury policy 仍是 design draft，必須等 Phase 1 / 1A / 2 / 4 / 6 完成且 root 另行授權後才可實作。
 
 ## Phase 順序與依賴
 
@@ -86,6 +87,8 @@ Phase 7  QA Mining                 ★ Phase 0 cleanup closed.
 2. 對應 docs / pytest / smoke / pentest / regression 都同步
 3. 在 commit message 或外部工作紀錄保存 phase gate 摘要
 4. root 簽核
+
+目前唯一建議的 MVP 動工範圍是 Phase 1 + Phase 1A + Phase 2；Phase 3+ 不得在前三者驗收前預先落地。
 
 ## 維護規則
 

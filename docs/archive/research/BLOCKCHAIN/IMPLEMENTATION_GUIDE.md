@@ -207,7 +207,7 @@ and explicit root approval.
 
 **對 PointsChain v2 phase plan 的依賴**：
 - Stage A：不依賴 wallet_addresses，可在 root 核准後動
-- Stage B：依賴 Phase 1（wallet_addresses）+ Phase 2（ledger v2）；新增第 10 個官方地址 `AI_AGENT_OPS` + `AI_AGENT_OPS_ESCROW`
+- Stage B：依賴 Phase 1（wallet_addresses）+ Phase 2（ledger v2）；如需 AI operation pool，必須作為第 11+ 個官方地址提案，不得覆蓋 10 個既定官方地址
 - Stage C：依賴 Phase 4 multisig（30 天觀察期後）
 - Stage D：依賴 Phase 7 QA Mining
 
@@ -229,7 +229,7 @@ AI Agent 詳細設計文件已移出 tracked docs；需要追溯時查 Git histo
 ### 3.2 動工順序
 
 1. **Schema migration** 寫好 + ALTER + 自動 backfill
-2. **Service layer** (`services/points_chain.py` 或新 module) — 含所有 invariant guard
+2. **PointsChain package** (`services/points_chain/schema.py` + `services/points_chain/service.py`) — 含 schema/hash helpers、migration、service orchestration 與所有 invariant guard
 3. **Routes** (`routes/economy.py` 或新 file) — 含 CSRF / role check / rate limit
 4. **Pytest** — 對應 phase 的 QA 文件項目逐項驗
 5. **smoke / pentest** — 跑 `tests/smoke_suite.py` + 對應的 pentest scripts
@@ -295,10 +295,11 @@ AI Agent 詳細設計文件已移出 tracked docs；需要追溯時查 Git histo
 
 | Phase | 預期改動檔案 |
 |---|---|
-| 1 | `services/points_chain.py`（schema migration + 9 官方地址）、`routes/economy.py`（讀地址 endpoint）、`public/js/55-economy.js`（個人頁地址欄）、`tests/test_points_wallet_addresses.py` (新)、`tests/test_supply_invariant.py` (新) |
-| 2 | `services/points_chain.py`（dual-write）、`services/trading_engine.py`（fee_pool dual-write）、`services/videos.py`（tip event）、`services/snapshots.py`（manifest 加 supply_state hash） |
-| 3 | `routes/economy.py`（transfer endpoints）、`services/points_chain.py`（transfer service）、`public/js/55-economy.js`（轉帳頁）、`tests/test_points_transfer.py` (新) |
-| 4 | `services/points_chain.py`（multisig service）、`routes/economy.py`（multisig endpoints）、`public/js/50-admin.js`（後台 proposal 頁） |
+| 1 | `services/points_chain/schema.py`（schema migration、wallet address table、supply_state、official address constants、address validation helpers）、`services/points_chain/service.py`（address migration / lookup、supply invariant check）、`routes/economy.py`（讀地址 endpoint）、`public/js/55-economy.js`（個人頁地址欄）、`tests/test_points_wallet_addresses.py` (新)、`tests/test_supply_invariant.py` (新) |
+| 1A | `services/points_chain/schema.py`（economy observability schema / indexes，如需要）、`services/points_chain/service.py`（source/sink、pool runway、exchange fund solvency、mint precheck read model）、`routes/economy.py`（read-only admin / explorer endpoint）、admin dashboard、`tests/test_points_economy_observability.py` (新) |
+| 2 | `services/points_chain/schema.py`（ledger_v2 / state root / supply root schema）、`services/points_chain/service.py`（dual-write orchestration、replay diff、invariant gate）、`services/trading_engine.py`（fee_pool dual-write）、`services/videos.py`（tip event）、`services/snapshots.py`（manifest 加 supply_state hash） |
+| 3 | `routes/economy.py`（transfer endpoints）、`services/points_chain/service.py`（transfer service）、`public/js/55-economy.js`（轉帳頁）、`tests/test_points_transfer.py` (新) |
+| 4 | `services/points_chain/service.py`（multisig service）、`routes/economy.py`（multisig endpoints）、`public/js/50-admin.js`（後台 proposal 頁） |
 | 5 | `public/js/55-economy.js`（self-custody 啟用 + 簽章）、`services/auth.py`（signer 整合？）、`tests/test_self_custody_signature.py` (新) |
 | 6 | `routes/economy.py`（explorer endpoints）、`public/explorer.html` (新) + `public/js/explorer.js` (新)、`tests/test_explorer.py` (新) |
 | 7 | `routes/bug_reports.py`（升級欄 + mining claim 連結）、`services/mining/...` (新 module)、`public/js/mining-center.js` (新)、`tests/test_mining_*.py` (新 5 個) |

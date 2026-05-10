@@ -407,7 +407,7 @@ PointsChain v2 對既有 snapshot/restore 的明確策略：
 | 註冊送點 | `mint`：from=Mint, to=你；reward_pool 同步 +N |
 | 任務獎勵 | `reward`：from=Reward Pool, to=你 |
 | 現貨買賣 | `trade_buy` / `trade_sell` 在 Trading Settlement；fee 進 Fee Pool |
-| 影片投幣 | `transfer` from=投幣者, to=你；可能 `transfer_fee` 進 Fee Pool |
+| 影片投幣 | `transfer_out` + `transfer_in`；可能 `transfer_fee` + `fee_pool_income` 進 Fee Pool |
 | 朋友互轉 | `transfer_out` + `transfer_in`；fee 進 Fee Pool |
 | 商城購買 | `transfer_out` to=賣家；糾紛期 to=Dispute Escrow |
 | 系統異常 | `incident_marker` event；後續修復進 `restore_marker` |

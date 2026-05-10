@@ -209,8 +209,8 @@ CREATE TABLE points_ledger_v2 (
     event_id TEXT UNIQUE NOT NULL,                       -- UUID
     block_id INTEGER REFERENCES points_chain_blocks_v2(block_id),
     event_type TEXT NOT NULL CHECK (event_type IN (
-      'mint','burn','transfer','transfer_fee','trade_buy','trade_sell','trade_fee',
-      'reward','refund','escrow_lock','escrow_release','admin_adjustment',
+      'mint','burn','transfer_out','transfer_in','transfer_fee','fee_pool_income',
+      'trade_buy','trade_sell','trade_fee','reward','refund','escrow_lock','escrow_release','admin_adjustment',
       'dispute_payout','bot_trade','restore_marker','incident_marker','multisig_execute'
     )),
     from_address TEXT,                                   -- NULL only for mint
@@ -621,7 +621,7 @@ def effective_signers_for_mining(proposal, all_signers):
 | 系統 | 改動 | 哪一 phase |
 |---|---|---|
 | `services/trading_engine.py` | fee dual-write 進 fee_pool；trade event 寫 ledger_v2 | Phase 2-3 |
-| `services/points_chain.py` | invariant boot gate；block 加 state_root/supply_root | Phase 1-2 |
+| `services/points_chain/schema.py` + `services/points_chain/service.py` | schema/hash helpers、invariant boot gate；block 加 state_root/supply_root | Phase 1-2 |
 | `services/snapshots.py` | manifest 含 v2 ledger + supply_state hash；restore 寫 marker；reconcile gate | Phase 2 |
 | `services/videos.py` | tip 寫 v2 transfer event | Phase 3 |
 | `services/cloud_drive.py` 商城路徑 | 商城購買 / 糾紛 escrow_lock/release 寫 v2 | Phase 3-4 |

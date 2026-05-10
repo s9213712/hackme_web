@@ -1,8 +1,8 @@
 # Treasury Budget Policy v1
 
-> **Status：Design draft (Claude, 2026-05-05). Approval pending. Implementation blocked until PointsChain v2 Phase 1 / 1A / 2 / 4 / 6 complete + Governance Phase G-2 authorization.**
+> **Status：Design draft (Claude, 2026-05-05). Approval pending. Implementation blocked until PointsChain v2 Phase 1 / 1A / 2 / 4 / 6 complete + separate root authorization.**
 >
-> Treasury / budget 規則保留於本檔；遠期 governance framework 已移出本資料夾。
+> Treasury / budget 規則保留於本檔；遠期 governance framework 已移出本資料夾且不授權實作。
 
 ---
 
@@ -354,7 +354,7 @@ Pending L3 proposals:   2 (re-appoint security_council seat 3, mid-quarter top-u
 ## 11. Implementation Phase
 
 ```
-Governance Phase G-2:
+Future authorization gate:
   - governance_budgets / governance_budget_spends / reconciliation schema
   - committee schema + appointment proposal type
   - fast track authorization API（multisig，不走 proposal）

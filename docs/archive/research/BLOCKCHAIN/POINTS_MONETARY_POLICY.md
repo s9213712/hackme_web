@@ -1,6 +1,8 @@
 # PointsChain Monetary Policy v1
 
-> **Status：Design draft (Claude, 2026-05-05). Approval pending. Implementation blocked until PointsChain v2 Phase 1 / 1A / 2 / 4 / 6 complete + Governance Phase G-2 authorization.**
+> **Status：Design draft (Claude, 2026-05-05). Approval pending. Implementation blocked until PointsChain v2 Phase 1 / 1A / 2 / 4 / 6 complete + separate root authorization.**
+>
+> 遠期 governance framework 已移出本資料夾且不授權實作；本檔只保留未來 monetary policy 的設計草案，不等於目前可動工範圍。
 >
 > 配合 [POINTSCHAIN_WHITEPAPER.md §3.4–3.8](POINTSCHAIN_WHITEPAPER.md#34-supply-hard-cap) 的供給結構。
 
@@ -331,10 +333,10 @@ Top sink reasons            storage / ComfyUI / server rental / fee / redemption
 
 ---
 
-## 11. Governance Phase 對應
+## 11. Future Authorization Gate
 
 ```
-Governance Phase G-2  Treasury budget + monetary policy enforcement
+Future authorization gate: Treasury budget + monetary policy enforcement
   - 完成 governance_parameters 表 + parameter registry
   - mint / burn proposal flow (本檔 §4 / §6)
   - hard cap raise L4 flow

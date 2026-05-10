@@ -157,7 +157,7 @@ CREATE INDEX idx_multisig_proposals_status_expires
   "payload": {
     "to_address": "PNT1xyz...",
     "amount": "10000",
-    "currency_type": "soft",
+    "currency_type": "points",
     "memo_hash": "...",
     "reason": "Phase 4 啟用測試"
   },
