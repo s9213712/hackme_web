@@ -23,8 +23,12 @@
   - 交易系統專用深度 QA 任務書
 - `TRADING_QA_REGRESSION_MATRIX.md`
   - 交易系統固定必跑的 reject-path / adversarial / accounting 回歸矩陣
+- `research/`
+  - agent-facing long-form research and future-work specs, including PointsChain v2, LLM WebChat / Agent platform control, Discord sync, and semi-autonomous AI-managed web
+
 ## 維護原則
 
 - `docs/AGENTS` 是 agent 工作規則與 QA 任務書的正式入口。
+- `docs/AGENTS/research` 是仍會影響未來動工的研究規格；不是 runtime evidence 或一次性 QA 報告。
 - 歷史 QA 報告已移出 tracked docs；需要追溯時使用 Git history 或外部工作紀錄。
 - 不要再新增第二套平行目錄，例如 `docs/codex/...` 或 repo 根層 `reports/...` 的新副本。

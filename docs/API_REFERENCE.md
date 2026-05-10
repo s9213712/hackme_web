@@ -16,7 +16,7 @@
 
 不在這份文件內的內容：
 
-- `docs/archive/research/BLOCKCHAIN/POINTS_TRANSFER_API.md` 這種「已拍板但尚未實作」規格
+- `docs/AGENTS/research/BLOCKCHAIN/POINTS_TRANSFER_API.md` 這種「已拍板但尚未實作」規格
 - 細到每個 JSON 欄位的完整 schema
 
 如果某支 API 已有專屬深層文件，這份文件會優先連過去，而不是重複抄第二份規格。
@@ -355,7 +355,7 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | POST | `/api/root/points/ledger/<ledger_uuid>/rollback` | root | rollback |
 | GET | `/api/admin/points/economy/stats` | manager | economy stats |
 
-> 注意：`docs/archive/research/BLOCKCHAIN/POINTS_TRANSFER_API.md` 是 Phase 3 規格，不代表現在已可呼叫。
+> 注意：`docs/AGENTS/research/BLOCKCHAIN/POINTS_TRANSFER_API.md` 是 Phase 3 規格，不代表現在已可呼叫。
 
 ### Trading / Bots / Margin
 
@@ -583,7 +583,7 @@ Workflow preset 補充：
 ## 失敗情境與提示
 
 - `200 OK` 不代表輸入一定原樣存入。若你在驗證設定、ACL、交易或風控，請同步查回讀 API 或 DB evidence。
-- `docs/archive/research/BLOCKCHAIN/*` 有些是已拍板但未實作規格，不可直接當成現行 API。
+- `docs/AGENTS/research/BLOCKCHAIN/*` 有些是已拍板但未實作規格，不可直接當成現行 API。
 - `live-price` 不是純 read-only，它會同步刷新後端快取價格狀態，請不要把它當成完全無副作用的 health probe。
 - `live-price` 目前回傳 canonical `price_type`、`source`、`confidence`、`stale`、`degraded`、`provider_count`，並附 `reference_price_context` / `risk_grade_price_context`；UI 展示價與風控價不可再混用。
 - `live-price` 與 root `price-fusion-status` 現在也回傳 canonical `connected`、`fallback`、`last_update_at`、`exclusion_reason` 與完整 `transport_state`。Binance / OKX / Coinbase / Kraken 的 websocket 只是 provider input，不可直接把單一 WS provider 當成風控價格。

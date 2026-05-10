@@ -61,7 +61,7 @@ directory needs to exist in a fresh checkout.
 - Historical abandoned work lives under `docs/archive/`.
 - Internal scratchpad research belongs under `research/` (gitignored) and
   must not be part of release commits. Long-form research that should ship
-  with the repo lives under `docs/archive/research/`.
+  with the repo lives under `docs/AGENTS/research/`.
 
 ## Security Script Policy
 

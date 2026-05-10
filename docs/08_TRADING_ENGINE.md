@@ -175,12 +175,12 @@
 
 本模組未來將與全站 PointsChain v2 區塊鏈化整合：
 
-- 工程設計：[`docs/archive/research/BLOCKCHAIN/POINTSCHAIN_ENGINEERING.md`](archive/research/BLOCKCHAIN/POINTSCHAIN_ENGINEERING.md)
-- 用戶白皮書：[`docs/archive/research/BLOCKCHAIN/POINTSCHAIN_WHITEPAPER.md`](archive/research/BLOCKCHAIN/POINTSCHAIN_WHITEPAPER.md)
-- 地址規格：[`docs/archive/research/BLOCKCHAIN/POINTS_WALLET_ADDRESSING.md`](archive/research/BLOCKCHAIN/POINTS_WALLET_ADDRESSING.md)
-- 轉帳 API：[`docs/archive/research/BLOCKCHAIN/POINTS_TRANSFER_API.md`](archive/research/BLOCKCHAIN/POINTS_TRANSFER_API.md)
-- 多簽錢包：[`docs/archive/research/BLOCKCHAIN/MULTISIG_WALLETS.md`](archive/research/BLOCKCHAIN/MULTISIG_WALLETS.md)
-- QA Mining / 貢獻獎勵 (Phase 7)：[`docs/archive/research/BLOCKCHAIN/POINTS_MINING_REWARDS.md`](archive/research/BLOCKCHAIN/POINTS_MINING_REWARDS.md)
-- QA / Release Gate：[`docs/archive/research/BLOCKCHAIN/POINTSCHAIN_QA.md`](archive/research/BLOCKCHAIN/POINTSCHAIN_QA.md)
+- 工程設計：[`docs/AGENTS/research/BLOCKCHAIN/POINTSCHAIN_ENGINEERING.md`](AGENTS/research/BLOCKCHAIN/POINTSCHAIN_ENGINEERING.md)
+- 用戶白皮書：[`docs/AGENTS/research/BLOCKCHAIN/POINTSCHAIN_WHITEPAPER.md`](AGENTS/research/BLOCKCHAIN/POINTSCHAIN_WHITEPAPER.md)
+- 地址規格：[`docs/AGENTS/research/BLOCKCHAIN/POINTS_WALLET_ADDRESSING.md`](AGENTS/research/BLOCKCHAIN/POINTS_WALLET_ADDRESSING.md)
+- 轉帳 API：[`docs/AGENTS/research/BLOCKCHAIN/POINTS_TRANSFER_API.md`](AGENTS/research/BLOCKCHAIN/POINTS_TRANSFER_API.md)
+- 多簽錢包：[`docs/AGENTS/research/BLOCKCHAIN/MULTISIG_WALLETS.md`](AGENTS/research/BLOCKCHAIN/MULTISIG_WALLETS.md)
+- QA Mining / 貢獻獎勵 (Phase 7)：[`docs/AGENTS/research/BLOCKCHAIN/POINTS_MINING_REWARDS.md`](AGENTS/research/BLOCKCHAIN/POINTS_MINING_REWARDS.md)
+- QA / Release Gate：[`docs/AGENTS/research/BLOCKCHAIN/POINTSCHAIN_QA.md`](AGENTS/research/BLOCKCHAIN/POINTSCHAIN_QA.md)
 
 **狀態：設計已拍板（root, 2026-05-04），尚未實作完成。**

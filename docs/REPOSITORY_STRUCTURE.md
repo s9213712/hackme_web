@@ -63,14 +63,14 @@ These files are canonical, short-entry or cross-cutting docs and may stay at
 
 - `docs/security/`: release gates, pentest, smoke, signoff
 - `docs/AGENTS/`: agent rules, QA runbooks, reports
-- `docs/archive/research/BLOCKCHAIN/`: PointsChain and governance design set (specs only; implementation pending root authorization)
+- `docs/AGENTS/research/BLOCKCHAIN/`: PointsChain and governance design set (specs only; implementation pending root authorization)
 - `docs/COMPETITION/`: backtest and strategy competition evidence
 - `docs/trading/`: trading, bot audit, risk-price, benchmark, and BTC_trade reference
 - `docs/video/`: deep video/media architecture docs
 - `docs/comfyui/`: ComfyUI operator docs
 - `docs/ops_boundaries/`: runtime-boundary and recovery docs
 - `docs/server_mode_v2/`: Server Mode v2 spec bundle
-- `docs/archive/`: retired attempts, historical notes, abandoned designs (includes `archive/research/`)
+- `docs/archive/`: retired attempts, historical notes, abandoned designs
 
 ### Merge / Archive Candidates
 
@@ -90,7 +90,8 @@ Before adding a new top-level doc, prefer one of these homes:
 - user/admin/operator guide: extend an existing numbered guide
 - low-level feature reference: extend `docs/trading/*`, `docs/video/*`,
   `docs/ops_boundaries/*`, `WEB.md`, `For_developer.md`, or `API_REFERENCE.md`
-- historical or exploratory content: `docs/archive/` (long-form research lives under `docs/archive/research/`)
+- retired historical content: `docs/archive/`
+- long-form agent research that remains relevant to future work: `docs/AGENTS/research/`
 - agent-only process notes: `docs/AGENTS/`
 
 ## Scripts Placement Logic

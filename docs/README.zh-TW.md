@@ -172,4 +172,4 @@ channel，shadow funding settlement 也只會寫到 shadow wallet / ledger。
 
 - [UPDATE_SUMMARY.md](UPDATE_SUMMARY.md)
 - [VERSION_STORY.md](VERSION_STORY.md)
-- [archive/research/BLOCKCHAIN/README.md](archive/research/BLOCKCHAIN/README.md)
+- [AGENTS/research/BLOCKCHAIN/README.md](AGENTS/research/BLOCKCHAIN/README.md)

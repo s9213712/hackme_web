@@ -10,7 +10,7 @@
 | 取捨 | 拍板結果 |
 |---|---|
 | 升級策略 | **漸進 v2 dual-write**，不另起 fork |
-| 鏈化前提 | **Phase 0 清債** 已完成；進入 Phase 1 前仍需 root 對 `docs/BLOCKCHAIN/` 正式動工另行批准 |
+| 鏈化前提 | **Phase 0 清債** 已完成；進入 Phase 1 前仍需 root 對 `docs/AGENTS/research/BLOCKCHAIN/` 正式動工另行批准 |
 | 託管模型 | **Hybrid Custody**，預設 custodial，self-custody opt-in |
 | 官方錢包 | **永遠多簽**，禁止 root 一鍵 mint，連 internal_test 都不能 1-of-1 |
 | Supply | **Hybrid hard cap**：Core Points 有 cap，Reward Pool 不在 cap 內；改 cap 須 3-of-5 multisig |
@@ -65,7 +65,7 @@ Phase 7  QA Mining  ~3-4 週  公式 reward + multisig + signer 排除 + trust s
 **進 Phase 1 條件（拍板）**：
 - `#129/#130/#131/PB-1` 全 close ✅
 - 交易 follow-up 測試 58/58 PASS ✅
-- root 對 `docs/BLOCKCHAIN/` 的 Phase 1 動工另行批准
+- root 對 `docs/AGENTS/research/BLOCKCHAIN/` 的 Phase 1 動工另行批准
 
 ---
 

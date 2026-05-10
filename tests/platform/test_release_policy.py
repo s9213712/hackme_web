@@ -59,7 +59,7 @@ def test_root_keeps_only_readme_markdown_and_docs_has_index():
         "video/VIDEO_PLATFORM.md",
         "ops_boundaries/ENCRYPTION_RUNTIME_BOUNDARY.md",
         "server_mode_v2/SERVER_MODE_V2_PROFILE_MATRIX.md",
-        "archive/research/BLOCKCHAIN/README.md",
+        "AGENTS/research/BLOCKCHAIN/README.md",
         "BRANCHING_AND_RELEASE.md",
         "UPDATE_SUMMARY.md",
         "security/PRE_RELEASE_CHECKLIST.md",

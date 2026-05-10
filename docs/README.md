@@ -115,7 +115,7 @@ The repository root keeps only [README.md](../README.md) and
 
 - [README.zh-TW.md](README.zh-TW.md): concise Traditional Chinese shortcut
 - [VERSION_STORY.md](VERSION_STORY.md): project history and abandoned branches
-- [archive/research/BLOCKCHAIN/README.md](archive/research/BLOCKCHAIN/README.md): PointsChain v2 design specs (Phase 1+ pending root authorization)
+- [AGENTS/research/BLOCKCHAIN/README.md](AGENTS/research/BLOCKCHAIN/README.md): PointsChain v2 design specs (Phase 1+ pending root authorization)
 
 Archive content is historical evidence, not canonical operator guidance. Prefer
 the files listed above unless you are tracing old implementation decisions.

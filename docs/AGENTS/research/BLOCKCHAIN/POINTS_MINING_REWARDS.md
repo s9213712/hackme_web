@@ -389,7 +389,7 @@ ALTER TABLE points_mining_claims ADD COLUMN risk_flags TEXT;  -- JSON array
 
 明確寫進：
 
-- `docs/BLOCKCHAIN/POINTS_MINING_REWARDS.md`（本文件 §10）
+- `docs/AGENTS/research/BLOCKCHAIN/POINTS_MINING_REWARDS.md`（本文件 §10）
 - `docs/03_ADMIN_GUIDE.md` 隱私段落
 - 隱私政策
 

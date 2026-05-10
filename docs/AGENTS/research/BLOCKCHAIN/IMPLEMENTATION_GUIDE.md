@@ -18,7 +18,7 @@
 1. 檢視 `git status`，把目前所有與**區塊鏈計畫無關**的變更整理好：
    - `services/` / `routes/` / `public/` / `server.py` / `tests/` 的既有 fix（例如 codex follow-up 對 #129 / #130 / #131 / PB-1 的修補與 bot audit dashboard）必須先 **commit + push** 到目前分支（`03b.strategy_workflow` 或當下的開發分支）
    - `docs/` 內**非 BLOCKCHAIN/** 的變更（README、03_ADMIN_GUIDE、08_TRADING_ENGINE、TRADING_BOT_AUDIT、09_SNAPSHOT_RESET_RESTORE、server_mode_v2 安全模式文件、RUNTIME_RESET_AND_RECOVERY 中本次只是補連結的部分）也必須先 push
-2. **`docs/archive/research/BLOCKCHAIN/`** 是 PointsChain v2 規格的 canonical 位置，可以**一起或分批** push，但要在 commit message 註明「設計拍板，尚未實作」狀態。
+2. **`docs/AGENTS/research/BLOCKCHAIN/`** 是 PointsChain v2 規格的 canonical 位置，可以**一起或分批** push，但要在 commit message 註明「設計拍板，尚未實作」狀態。
 3. CI / pytest / pre-push 必須綠燈。若後續又出現新的 blocker / high issue，必須先在主線收斂，不可直接帶進 `04.blockchain`。
 
 > **不允許帶著未 push 的中間狀態直接開鏈化分支。**
@@ -47,8 +47,8 @@ git checkout -b 04.blockchain
 > - QA gate 補強（例如某 invariant 沒涵蓋）
 >
 > **但是**：
-> - 提出 → 等 root 拍板 → 才能寫進 `docs/archive/research/BLOCKCHAIN/` 與動工
-> - **不可** 自行修改 `docs/archive/research/BLOCKCHAIN/` 既有取捨（除非是純補強而非取代）
+> - 提出 → 等 root 拍板 → 才能寫進 `docs/AGENTS/research/BLOCKCHAIN/` 與動工
+> - **不可** 自行修改 `docs/AGENTS/research/BLOCKCHAIN/` 既有取捨（除非是純補強而非取代）
 > - **不可** 在分支裡先寫一版「等之後再說」，導致設計文件與實作偏離
 > - 用 issue / PR description / external work log 寫提案，直接 ping root，不要自己決定
 
@@ -72,7 +72,7 @@ git checkout -b 04.blockchain
 ## 風險 / 替代方案
 ```
 
-root 拍板後，先改 `docs/archive/research/BLOCKCHAIN/`、把 status 加上「root approved YYYY-MM-DD」，再動源碼。
+root 拍板後，先改 `docs/AGENTS/research/BLOCKCHAIN/`、把 status 加上「root approved YYYY-MM-DD」，再動源碼。
 
 ### 0.4 第四步：Phase 0 Cleanup Gate（進 Phase 1 前必過清單）
 
@@ -87,7 +87,7 @@ Phase 0 = PointsChain v2 鏈化前的清債項目。歷史完整證據請查 Git
 >
 > 這不代表可以自動開工。進 Phase 1 仍需要：
 > - root 對 `04.blockchain` 的明確批准
-> - 使用本文件與 `docs/archive/research/BLOCKCHAIN/` 正式規格作為 canonical source
+> - 使用本文件與 `docs/AGENTS/research/BLOCKCHAIN/` 正式規格作為 canonical source
 > - 保持主線工作樹乾淨、test 全綠
 
 #### 19 項整體狀態
@@ -221,7 +221,7 @@ AI Agent 詳細設計文件已移出 tracked docs；需要追溯時查 Git histo
 
 ### 3.1 phase 啟動 checklist
 
-- [ ] 上一 phase 出口 gate 100% 過（`docs/archive/research/BLOCKCHAIN/POINTSCHAIN_QA.md` 對應 §）
+- [ ] 上一 phase 出口 gate 100% 過（`docs/AGENTS/research/BLOCKCHAIN/POINTSCHAIN_QA.md` 對應 §）
 - [ ] 已通知 root「準備動 Phase N」並獲准
 - [ ] 準備 phase gate 摘要（commit message / PR description / external work log）
 - [ ] 開好 isolated QA workspace（`/tmp/hackme_web_blockchain_qa_<phase>_<ts>/`）
@@ -282,7 +282,7 @@ AI Agent 詳細設計文件已移出 tracked docs；需要追溯時查 Git histo
 ### 4.3 流程紅線
 
 - ❌ 跳過上一 phase 出口 gate 直接做下一 phase
-- ❌ 私自修改 `docs/archive/research/BLOCKCHAIN/` 既有設計取捨而沒先 root 拍板
+- ❌ 私自修改 `docs/AGENTS/research/BLOCKCHAIN/` 既有設計取捨而沒先 root 拍板
 - ❌ 跳過 isolated QA 直接動 production runtime
 - ❌ 鏈化分支 fast-forward 整個 trunk
 - ❌ Phase 7 在 Phase 1 / 1A / 2 / 4 / 6 完成且 root 個別授權 Phase 7 之前真實 payout（Phase 0 cleanup 已 closed，不再是阻擋條件）
@@ -321,7 +321,7 @@ Required fixes
 Evidence command outputs or artifact paths
 ```
 
-Canonical 狀態仍以 `docs/archive/research/BLOCKCHAIN/` 為準。
+Canonical 狀態仍以 `docs/AGENTS/research/BLOCKCHAIN/` 為準。
 
 ---
 
@@ -364,7 +364,7 @@ Canonical 狀態仍以 `docs/archive/research/BLOCKCHAIN/` 為準。
 如果你不是第一個動工的 agent，動工前：
 
 1. `git log 04.blockchain --oneline` 看歷史
-2. 看 `docs/archive/research/BLOCKCHAIN/` 是否已有「Phase N 實作完成」狀態標記
+2. 看 `docs/AGENTS/research/BLOCKCHAIN/` 是否已有「Phase N 實作完成」狀態標記
 3. 開工前 ping root「我準備接手 Phase X 從 step Y 開始」
 
 避免：
@@ -411,7 +411,7 @@ Canonical 狀態仍以 `docs/archive/research/BLOCKCHAIN/` 為準。
 
 ### Phase-specific required reading
 
-不要要求每個 agent 都讀完整個 `docs/archive/research/BLOCKCHAIN/`（含 governance / mining / dispute）。下表列每個 phase 的**必讀最小集**，其他文件按需查閱：
+不要要求每個 agent 都讀完整個 `docs/AGENTS/research/BLOCKCHAIN/`（含 governance / mining / dispute）。下表列每個 phase 的**必讀最小集**，其他文件按需查閱：
 
 | Phase | 必讀（依序） |
 |---|---|
@@ -435,7 +435,7 @@ Canonical 狀態仍以 `docs/archive/research/BLOCKCHAIN/` 為準。
 ## 11. 文件關係圖
 
 ```
-docs/archive/research/BLOCKCHAIN/
+docs/AGENTS/research/BLOCKCHAIN/
 ├── README.md                          ← 進入點 / 索引
 ├── IMPLEMENTATION_GUIDE.md            ← 本文件 / 給 agent
 ├── POINTSCHAIN_WHITEPAPER.md          ← user 看的承諾
