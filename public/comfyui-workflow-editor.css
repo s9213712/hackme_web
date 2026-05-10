@@ -180,6 +180,13 @@ h1 { margin: 0; font-size: 1.08rem; }
   z-index: 5;
 }
 .wf-node.selected { border-color: var(--blue); box-shadow: 0 0 0 2px rgba(56,189,248,.2), 0 14px 32px rgba(0,0,0,.3); }
+.wf-node.unknown {
+  border-color: rgba(251,191,36,.58);
+  background: rgba(28, 22, 11, .97);
+}
+.wf-node.unknown .wf-node-head {
+  background: rgba(80, 48, 12, .72);
+}
 .wf-node-head {
   display: flex;
   align-items: center;

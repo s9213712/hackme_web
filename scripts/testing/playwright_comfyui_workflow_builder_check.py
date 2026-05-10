@@ -138,6 +138,29 @@ def main() -> int:
             if not layout_ids.issubset(workflow_ids):
                 raise AssertionError(f"exported layout ids do not match workflow ids: workflow={workflow_ids}, layout={layout_ids}")
 
+            with tempfile.NamedTemporaryFile("w", suffix=".json", encoding="utf-8", delete=False) as handle:
+                json.dump(
+                    {
+                        "name": "Unknown custom graph",
+                        "workflow_json": {
+                            "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "demo.safetensors"}},
+                            "2": {"class_type": "CustomMagicNode", "inputs": {"model": ["1", 0], "strength": 0.7}, "_meta": {"title": "Custom Magic"}},
+                        },
+                        "layout_json": {
+                            "node_order": ["1", "2"],
+                            "node_positions": {"1": [80, 80], "2": [360, 80]},
+                        },
+                    },
+                    handle,
+                )
+                unknown_import_path = handle.name
+            page.locator("#importJsonFile").set_input_files(unknown_import_path)
+            page.locator('.wf-node.unknown:has-text("Custom Magic")').wait_for(state="visible", timeout=5000)
+            unknown_export = json.loads(page.locator("#jsonOut").input_value())
+            class_types = {node["class_type"] for node in unknown_export["workflow_json"].values()}
+            if "CustomMagicNode" not in class_types:
+                raise AssertionError(f"unknown custom node class_type was not preserved: {class_types}")
+
             mobile_page = browser.new_page(viewport={"width": 390, "height": 844})
             mobile_page.goto(f"http://127.0.0.1:{port}/comfyui-workflow-editor.html", wait_until="networkidle")
             mobile_page.locator(".wf-node").first.wait_for(state="visible", timeout=8000)

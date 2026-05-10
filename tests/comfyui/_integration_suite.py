@@ -3963,6 +3963,10 @@ def test_comfyui_frontend_is_wired():
     assert "const INPUT_KEY = \"hackme_comfyui_workflow_editor_input\";" in visual_editor_js
     assert "function stateFromPackage(payload)" in visual_editor_js
     assert "function importJsonFile(event)" in visual_editor_js
+    assert "const UNKNOWN_NODE_TYPE = \"__UnknownCustomNode__\";" in visual_editor_js
+    assert "function isUnknownNode(node)" in visual_editor_js
+    assert "function unknownInputSpecs(rawInputs = {})" in visual_editor_js
+    assert "UnknownCustomNode" in visual_editor_js
     assert "function startConnection(event)" in visual_editor_js
     assert "function completeConnection(event)" in visual_editor_js
     assert "function portPoint(nodeId, kind, name)" in visual_editor_js
@@ -3971,6 +3975,7 @@ def test_comfyui_frontend_is_wired():
     assert ".edge-path.temp" in visual_editor_css
     assert ".edge-path.warn" in visual_editor_css
     assert ".edge-list-row" in visual_editor_css
+    assert ".wf-node.unknown" in visual_editor_css
     assert ".port.output.connecting" in visual_editor_css
     assert ".port.input.compatible" in visual_editor_css
     assert "function bindComfyuiAdvancedUi()" in comfyui_js

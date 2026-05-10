@@ -4,6 +4,7 @@
   const STORAGE_KEY = "hackme_comfyui_workflow_visual_builder";
   const RESULT_KEY = "hackme_comfyui_workflow_editor_result";
   const INPUT_KEY = "hackme_comfyui_workflow_editor_input";
+  const UNKNOWN_NODE_TYPE = "__UnknownCustomNode__";
   const $ = (id) => document.getElementById(id);
 
   const NODE_DEFS = {
@@ -163,6 +164,23 @@
   let lastImportWarnings = [];
   let workflow = loadState();
 
+  function isUnknownNode(node) {
+    return node?.type === UNKNOWN_NODE_TYPE;
+  }
+
+  function nodeDef(nodeOrType) {
+    const node = typeof nodeOrType === "object" ? nodeOrType : null;
+    const type = node ? node.type : String(nodeOrType || "");
+    if (type === UNKNOWN_NODE_TYPE) {
+      return {
+        label: `Custom: ${node?.originalType || "Unknown"}`,
+        inputs: node?.inputSpecs || {},
+        outputs: Array.isArray(node?.outputs) && node.outputs.length ? node.outputs : ["OUT0", "OUT1", "OUT2", "OUT3"],
+      };
+    }
+    return NODE_DEFS[type] || null;
+  }
+
   function html(value) {
     return String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[ch]));
   }
@@ -180,7 +198,23 @@
     return JSON.parse(JSON.stringify(value));
   }
 
-  function defaultInputs(type) {
+  function unknownInputSpecs(rawInputs = {}) {
+    const specs = {};
+    Object.entries(rawInputs || {}).forEach(([key, value]) => {
+      specs[key] = Array.isArray(value)
+        ? { type: "link", label: key }
+        : { type: typeof value === "number" ? "number" : "text", label: key };
+    });
+    return specs;
+  }
+
+  function unknownOutputs(maxIndex = 3) {
+    const count = Math.max(4, Math.min(12, Number(maxIndex || 0) + 1));
+    return Array.from({ length: count }, (_item, index) => `OUT${index}`);
+  }
+
+  function defaultInputs(type, node = null) {
+    if (type === UNKNOWN_NODE_TYPE) return { ...(node?.inputs || {}) };
     const inputs = {};
     Object.entries(NODE_DEFS[type]?.inputs || {}).forEach(([key, spec]) => {
       if (spec.type === "link") return;
@@ -215,20 +249,31 @@
 
   function normalizeState(raw) {
     const safe = raw && typeof raw === "object" ? raw : {};
+    const normalizedNodes = Array.isArray(safe.nodes) ? safe.nodes.filter((node) => node && (NODE_DEFS[node.type] || node.type === UNKNOWN_NODE_TYPE)).map((node) => {
+      const type = String(node.type);
+      const def = nodeDef(node);
+      const normalized = {
+        id: String(node.id || uid()),
+        type,
+        label: String(node.label || def?.label || type),
+        x: Number.isFinite(Number(node.x)) ? Number(node.x) : 80,
+        y: Number.isFinite(Number(node.y)) ? Number(node.y) : 80,
+        inputs: { ...defaultInputs(type, node), ...(node.inputs || {}) },
+      };
+      if (type === UNKNOWN_NODE_TYPE) {
+        normalized.originalType = String(node.originalType || "UnknownCustomNode");
+        normalized.inputSpecs = node.inputSpecs && typeof node.inputSpecs === "object" ? node.inputSpecs : unknownInputSpecs(node.inputs || {});
+        normalized.outputs = Array.isArray(node.outputs) ? node.outputs.map((item) => String(item || "")).filter(Boolean) : unknownOutputs(3);
+      }
+      return normalized;
+    }) : [];
     return {
       name: String(safe.name || ""),
       description: String(safe.description || ""),
       project_version: String(safe.project_version || ""),
       comfyui_version: String(safe.comfyui_version || ""),
       workflow_schema_version: String(safe.workflow_schema_version || "1"),
-      nodes: Array.isArray(safe.nodes) ? safe.nodes.filter((node) => NODE_DEFS[node.type]).map((node) => ({
-        id: String(node.id || uid()),
-        type: String(node.type),
-        label: String(node.label || NODE_DEFS[node.type].label),
-        x: Number.isFinite(Number(node.x)) ? Number(node.x) : 80,
-        y: Number.isFinite(Number(node.y)) ? Number(node.y) : 80,
-        inputs: { ...defaultInputs(node.type), ...(node.inputs || {}) },
-      })) : [],
+      nodes: normalizedNodes,
       edges: Array.isArray(safe.edges) ? safe.edges.map((edge) => ({
         id: String(edge.id || uid()),
         from: String(edge.from || ""),
@@ -294,12 +339,15 @@
   }
 
   function outputIndex(node, outputName) {
-    const outputs = NODE_DEFS[node?.type]?.outputs || [];
+    const outputs = nodeDef(node)?.outputs || [];
+    if (isUnknownNode(node) && /^OUT\d+$/i.test(String(outputName || ""))) {
+      return Number(String(outputName).replace(/\D/g, "")) || 0;
+    }
     return Math.max(0, outputs.indexOf(outputName));
   }
 
   function outputNameForIndex(node, index) {
-    const outputs = NODE_DEFS[node?.type]?.outputs || [];
+    const outputs = nodeDef(node)?.outputs || [];
     return outputs[Number(index) || 0] || outputs[0] || "OUTPUT";
   }
 
@@ -336,25 +384,39 @@
     const idSet = new Set();
     orderedIds.forEach((id, index) => {
       const raw = prompt[id] || {};
-      const type = String(raw.class_type || "");
-      if (!NODE_DEFS[type]) {
-        warnings.push(`未知節點 ${id}: ${type || "missing class_type"}，已略過。`);
-        return;
-      }
+      const rawType = String(raw.class_type || "");
+      const known = !!NODE_DEFS[rawType];
+      const type = known ? rawType : UNKNOWN_NODE_TYPE;
+      let maxOutputIndex = 3;
       const [x, y] = layoutPosition(layout, id, index);
-      const inputs = defaultInputs(type);
+      const inputs = known ? defaultInputs(type) : {};
+      const inputSpecs = known ? null : unknownInputSpecs(raw.inputs || {});
       Object.entries(raw.inputs || {}).forEach(([key, value]) => {
-        if (Array.isArray(value)) return;
+        if (Array.isArray(value)) {
+          if (!known) inputSpecs[key] = { type: "link", label: key };
+          return;
+        }
         if (Object.prototype.hasOwnProperty.call(inputs, key)) inputs[key] = value;
+        else if (!known) inputs[key] = value;
       });
-      nodes.push({
+      Object.values(raw.inputs || {}).forEach((value) => {
+        if (Array.isArray(value) && Number.isFinite(Number(value[1]))) maxOutputIndex = Math.max(maxOutputIndex, Number(value[1]));
+      });
+      const parsedNode = {
         id: String(id),
         type,
-        label: nodeLabelFromLayout(id, raw, layout),
+        label: known ? nodeLabelFromLayout(id, raw, layout) : nodeLabelFromLayout(id, { ...raw, class_type: rawType || "UnknownCustomNode" }, layout),
         x,
         y,
         inputs,
-      });
+      };
+      if (!known) {
+        parsedNode.originalType = rawType || "UnknownCustomNode";
+        parsedNode.inputSpecs = inputSpecs;
+        parsedNode.outputs = unknownOutputs(maxOutputIndex);
+        warnings.push(`未知/custom node ${id}: ${parsedNode.originalType}，已保留為 placeholder。`);
+      }
+      nodes.push(parsedNode);
       idSet.add(String(id));
     });
     const edges = [];
@@ -370,7 +432,7 @@
           warnings.push(`連線 ${sourceId} -> ${id}.${key} 找不到來源節點，已略過。`);
           return;
         }
-        const inputSpec = NODE_DEFS[target.type]?.inputs?.[key];
+        const inputSpec = nodeDef(target)?.inputs?.[key];
         if (!inputSpec || inputSpec.type !== "link") {
           warnings.push(`連線 ${sourceId} -> ${id}.${key} 指向非連線欄位，已略過。`);
           return;
@@ -412,7 +474,7 @@
         if (source) promptInputs[edge.input] = [idMap[source.id], outputIndex(source, edge.output)];
       });
       prompt[idMap[node.id]] = {
-        class_type: node.type,
+        class_type: isUnknownNode(node) ? (node.originalType || "UnknownCustomNode") : node.type,
         inputs: promptInputs,
         _meta: { title: node.label || NODE_DEFS[node.type].label },
       };
@@ -453,7 +515,7 @@
   }
 
   function connectionWarningForNodes(source, output, target, input) {
-    const inputLabel = NODE_DEFS[target?.type]?.inputs?.[input]?.label || input;
+    const inputLabel = nodeDef(target)?.inputs?.[input]?.label || input;
     const outKind = normalizedPortKind(output);
     const inKind = normalizedPortKind(inputLabel);
     if (!outKind || !inKind || outKind === inKind) return "";
@@ -522,15 +584,15 @@
     const layer = $("nodeLayer");
     if (!layer) return;
     layer.innerHTML = workflow.nodes.map((node) => {
-      const def = NODE_DEFS[node.type];
+      const def = nodeDef(node);
       const inputRows = Object.entries(def.inputs || {});
       const linkInputs = inputRows.filter(([, spec]) => spec.type === "link");
       const valueInputs = inputRows.filter(([, spec]) => spec.type !== "link");
       return `
-        <div class="wf-node ${node.id === selectedId ? "selected" : ""}" data-node-id="${html(node.id)}" data-drag-node="${html(node.id)}" style="left:${Math.round(node.x)}px;top:${Math.round(node.y)}px;">
+        <div class="wf-node ${node.id === selectedId ? "selected" : ""} ${isUnknownNode(node) ? "unknown" : ""}" data-node-id="${html(node.id)}" data-drag-node="${html(node.id)}" style="left:${Math.round(node.x)}px;top:${Math.round(node.y)}px;">
           <div class="wf-node-head" data-drag-node="${html(node.id)}">
             <strong>${html(node.label || def.label)}</strong>
-            <span class="wf-node-kind">${html(node.type)}</span>
+            <span class="wf-node-kind">${html(isUnknownNode(node) ? node.originalType : node.type)}</span>
           </div>
           <div class="wf-node-body">
             <div class="port-row input-row">
@@ -827,7 +889,48 @@
       box.innerHTML = '<div class="empty">先從左側新增節點，再選取節點調整屬性。</div>';
       return;
     }
-    const def = NODE_DEFS[node.type];
+    const def = nodeDef(node);
+    if (isUnknownNode(node)) {
+      box.innerHTML = `
+        <div class="warning-list">
+          <div>這是未知/custom node placeholder。會保留原始 class_type 與 inputs；input/output schema 需等連上 ComfyUI object_info 才能嚴格驗證。</div>
+        </div>
+        <div class="field">
+          <label>節點名稱</label>
+          <input id="nodeLabelInput" value="${html(node.label || def.label)}" maxlength="80">
+        </div>
+        <div class="field">
+          <label>原始 class_type</label>
+          <input id="unknownClassInput" value="${html(node.originalType || "")}" maxlength="160">
+        </div>
+        <div class="field">
+          <label>原始 inputs JSON</label>
+          <textarea id="unknownInputsInput" rows="10" spellcheck="false">${html(JSON.stringify(node.inputs || {}, null, 2))}</textarea>
+        </div>
+      `;
+      $("nodeLabelInput")?.addEventListener("input", () => {
+        node.label = $("nodeLabelInput").value;
+        render();
+      });
+      $("unknownClassInput")?.addEventListener("input", () => {
+        node.originalType = $("unknownClassInput").value.trim() || "UnknownCustomNode";
+        renderJson();
+      });
+      $("unknownInputsInput")?.addEventListener("input", () => {
+        try {
+          const parsed = JSON.parse($("unknownInputsInput").value || "{}");
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            node.inputs = parsed;
+            node.inputSpecs = unknownInputSpecs(parsed);
+            renderJson();
+            setStatus("Custom node inputs 已更新。");
+          }
+        } catch (err) {
+          setStatus(`Custom node inputs JSON 格式錯誤：${err.message || err}`, false);
+        }
+      });
+      return;
+    }
     const fields = Object.entries(def.inputs || {}).filter(([, spec]) => spec.type !== "link");
     box.innerHTML = `
       <div class="field">
@@ -871,7 +974,7 @@
       panel.innerHTML = '<div class="empty">選取來源節點後，可把它的 output 連到其他節點 input。</div>';
       return;
     }
-    const outputs = NODE_DEFS[source.type]?.outputs || [];
+    const outputs = nodeDef(source)?.outputs || [];
     const targets = workflow.nodes.filter((node) => node.id !== source.id);
     const target = targets[0] || null;
     const selectedEdges = workflow.edges.filter((edge) => edge.from === source.id || edge.to === source.id);
@@ -889,7 +992,7 @@
       </div>
       <div class="field">
         <label>目標節點</label>
-        <select id="edgeTarget">${targets.map((node) => `<option value="${html(node.id)}">${html(node.label || NODE_DEFS[node.type].label)}</option>`).join("")}</select>
+        <select id="edgeTarget">${targets.map((node) => `<option value="${html(node.id)}">${html(node.label || nodeDef(node)?.label || node.type)}</option>`).join("")}</select>
       </div>
       <div class="field">
         <label>目標 input</label>
@@ -943,7 +1046,7 @@
 
   function targetInputOptions(node) {
     if (!node) return [];
-    return Object.entries(NODE_DEFS[node.type]?.inputs || {})
+    return Object.entries(nodeDef(node)?.inputs || {})
       .filter(([, spec]) => spec.type === "link")
       .map(([key, spec]) => `<option value="${html(key)}">${html(spec.label || key)}</option>`);
   }
@@ -962,7 +1065,7 @@
     const source = nodeById(from);
     const target = nodeById(to);
     if (!source || !target || source.id === target.id || !output || !input) return false;
-    const targetInput = NODE_DEFS[target.type]?.inputs?.[input];
+    const targetInput = nodeDef(target)?.inputs?.[input];
     if (!targetInput || targetInput.type !== "link") return false;
     workflow.edges = workflow.edges.filter((edge) => !(edge.to === target.id && edge.input === input));
     workflow.edges.push({ id: uid(), from: source.id, output, to: target.id, input, warning: connectionWarning(source.id, output, target.id, input) });
