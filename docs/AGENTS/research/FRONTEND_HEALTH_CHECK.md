@@ -55,6 +55,27 @@ scripts/testing/playwright_mobile_viewports.py
 
 目前已先保留 `scripts/testing/playwright_platform_health_check.py` 作為平台中心檢查入口；它委派既有 deep-site checker，並保留 `--interactive-comfyui` 讓測試者自行輸入 ComfyUI / Civitai 設定，不把 API key 寫入腳本或 repo。
 
+已新增 `scripts/testing/run_playwright_acceptance.sh` 作為本機與 CI 可共用入口：
+
+```bash
+bash scripts/testing/run_playwright_acceptance.sh
+```
+
+預設執行：
+
+- `scripts/testing/playwright_comfyui_workflow_builder_check.py`
+- `scripts/testing/playwright_platform_health_check.py`
+
+深度全站檢查需明確開啟，避免每次 CI 跑過長：
+
+```bash
+RUN_DEEP_PLAYWRIGHT=1 bash scripts/testing/run_playwright_acceptance.sh
+```
+
+此入口會使用 `/tmp/hackme_web_playwright_acceptance_*` 隔離 runtime，不使用 port 5000，也不寫入 repo 的 `runtime/` 或 `storage/`。
+
+GitHub Actions workflow 範本留在 `scripts/testing/playwright-qa.workflow.yml`。目前 GitHub token 若缺少 `workflow` scope，不能直接 push `.github/workflows/*.yml`；補權限後可把該範本複製到 `.github/workflows/playwright-qa.yml` 啟用。
+
 ## 測試 viewport
 
 ```text

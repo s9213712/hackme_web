@@ -1,0 +1,30 @@
+name: playwright-qa
+
+on:
+  pull_request:
+  push:
+    branches: [main, 03b.Comfyui]
+
+jobs:
+  playwright-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
+
+      - name: Run Playwright acceptance checks
+        env:
+          RUN_DEEP_PLAYWRIGHT: "0"
+        run: bash scripts/testing/run_playwright_acceptance.sh
