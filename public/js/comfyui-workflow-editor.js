@@ -320,18 +320,26 @@
 
   function addNode(type, x, y, label) {
     const def = NODE_DEFS[type];
-    if (!def) return;
+    if (!def && type !== UNKNOWN_NODE_TYPE) return;
+    const isCustom = type === UNKNOWN_NODE_TYPE;
+    const customInputs = { prompt: "" };
     const node = {
       id: uid(),
       type,
-      label: label || def.label,
+      label: label || (isCustom ? "Custom / API Node" : def.label),
       x: Number.isFinite(x) ? x : 100 + (workflow.nodes.length % 4) * 260,
       y: Number.isFinite(y) ? y : 100 + Math.floor(workflow.nodes.length / 4) * 170,
-      inputs: defaultInputs(type),
+      inputs: isCustom ? customInputs : defaultInputs(type),
     };
+    if (isCustom) {
+      node.originalType = "FluxProUltraImageNode";
+      node.inputSpecs = unknownInputSpecs(customInputs);
+      node.outputs = unknownOutputs(3);
+    }
     workflow.nodes.push(node);
     selectedId = node.id;
     render();
+    if (isCustom) setStatus("已新增 Custom / API node；請在右側填入實際 class_type。API Key 不要寫進 inputs，執行時由後端注入。");
   }
 
   function nodeById(id) {
@@ -1000,6 +1008,7 @@
       box.innerHTML = `
         <div class="warning-list">
           <div>這是未知/custom node placeholder。會保留原始 class_type 與 inputs；input/output schema 需等連上 ComfyUI object_info 才能嚴格驗證。</div>
+          <div>不要把 API Key、token、secret 寫進 inputs；ComfyUI Account API Key 由後端在執行時注入。</div>
         </div>
         <div class="field">
           <label>節點名稱</label>

@@ -118,6 +118,18 @@ def main() -> int:
             page.locator('[data-add-node="ImagePadForOutpaint"]').click()
             if page.locator('.wf-node:has-text("Outpaint Pad")').count() < 1:
                 raise AssertionError("Outpaint Pad node was not added")
+            page.locator('[data-add-node="__UnknownCustomNode__"]').click()
+            page.locator('.wf-node.unknown:has-text("Custom / API Node")').wait_for(state="visible", timeout=5000)
+            custom_status = page.locator("#status").inner_text(timeout=5000)
+            if "API Key 不要寫進 inputs" not in custom_status:
+                raise AssertionError(f"custom/API node warning was not shown: {custom_status!r}")
+            page.locator("#unknownClassInput").fill("FluxProUltraImageNode")
+            custom_export = json.loads(page.locator("#jsonOut").input_value())
+            if "FluxProUltraImageNode" not in {node["class_type"] for node in custom_export["workflow_json"].values()}:
+                raise AssertionError("custom/API node class_type was not exported")
+            custom_validation = page.locator("#validationPanel").inner_text(timeout=5000)
+            if "付費/API nodes" not in custom_validation or "FluxProUltraImageNode" not in custom_validation:
+                raise AssertionError(f"custom/API node was not visible in validation panel: {custom_validation!r}")
 
             with tempfile.NamedTemporaryFile("w", suffix=".json", encoding="utf-8", delete=False) as handle:
                 json.dump(
