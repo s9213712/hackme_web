@@ -466,6 +466,53 @@ def test_root_can_configure_comfyui_batch_limit_without_restart_hint():
     assert res.get_json()["settings"]["comfyui_max_batch_size"] == 4
 
 
+def test_comfyui_account_api_key_is_write_only_and_clearable():
+    audit_log = []
+    app, state = _admin_app(audit_log=audit_log)
+    client = app.test_client()
+
+    saved = client.put(
+        "/api/admin/settings",
+        json={
+            "comfyui_paid_api_nodes_enabled": True,
+            "comfyui_account_api_key": "comfyui-secret-key",
+        },
+    )
+
+    assert saved.status_code == 200, saved.get_json()
+    assert state["comfyui_paid_api_nodes_enabled"] is True
+    assert state["comfyui_account_api_key"] == "comfyui-secret-key"
+    payload = saved.get_json()["settings"]
+    assert payload["comfyui_account_api_key"] == ""
+    assert payload["comfyui_account_api_key_configured"] is True
+    assert "comfyui-secret-key" not in json.dumps(saved.get_json(), ensure_ascii=False)
+    assert "comfyui-secret-key" not in json.dumps(audit_log, ensure_ascii=False)
+
+    readback = client.get("/api/admin/settings").get_json()["settings"]
+    assert readback["comfyui_account_api_key"] == ""
+    assert readback["comfyui_account_api_key_configured"] is True
+
+    unchanged = client.put("/api/admin/settings", json={"comfyui_account_api_key": "", "comfyui_max_batch_size": 2})
+    assert unchanged.status_code == 200, unchanged.get_json()
+    assert state["comfyui_account_api_key"] == "comfyui-secret-key"
+    assert unchanged.get_json()["settings"]["comfyui_account_api_key_configured"] is True
+
+    cleared = client.put("/api/admin/settings", json={"comfyui_account_api_key_clear": True})
+    assert cleared.status_code == 200, cleared.get_json()
+    assert state["comfyui_account_api_key"] == ""
+    assert cleared.get_json()["settings"]["comfyui_account_api_key_configured"] is False
+
+
+def test_comfyui_account_api_key_rejects_whitespace():
+    app, state = _admin_app()
+    client = app.test_client()
+
+    res = client.put("/api/admin/settings", json={"comfyui_account_api_key": "bad key with spaces"})
+
+    assert res.status_code == 400
+    assert "comfyui_account_api_key" not in state
+
+
 def test_root_can_configure_comfyui_default_dimensions_without_restart_hint():
     app, state = _admin_app()
     client = app.test_client()

@@ -158,11 +158,13 @@ def register_system_admin_settings_routes(app, ctx):
             data["comfyui_api_port"] = port
         if "comfyui_civitai_api_key" in data:
             data["comfyui_civitai_api_key"] = str(data.get("comfyui_civitai_api_key") or "").strip()
+        clear_comfyui_account_api_key = False
         if "comfyui_account_api_key_clear" in data:
             clear_key = parse_strict_bool(data.pop("comfyui_account_api_key_clear"))
             if clear_key is None:
                 return json_resp({"ok":False,"msg":"comfyui_account_api_key_clear 必須是布林值 true/false"}), 400
             if clear_key:
+                clear_comfyui_account_api_key = True
                 data["comfyui_account_api_key"] = ""
         if "comfyui_account_api_key" in data:
             account_api_key = str(data.get("comfyui_account_api_key") or "").strip()
@@ -170,7 +172,7 @@ def register_system_admin_settings_routes(app, ctx):
                 if len(account_api_key) > 512 or any(ch.isspace() for ch in account_api_key):
                     return json_resp({"ok":False,"msg":"comfyui_account_api_key 不可包含空白，且長度不可超過 512"}), 400
                 data["comfyui_account_api_key"] = account_api_key
-            else:
+            elif not clear_comfyui_account_api_key:
                 data.pop("comfyui_account_api_key", None)
         if "comfyui_max_batch_size" in data:
             try:
