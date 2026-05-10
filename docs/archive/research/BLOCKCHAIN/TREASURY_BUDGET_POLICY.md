@@ -1,14 +1,21 @@
 # Treasury Budget Policy v1
 
-> **Status：Design draft (Claude, 2026-05-05). Approval pending. Implementation blocked until PointsChain v2 Phase 1 / 2 / 4 / 6 complete + Governance Phase G-2 authorization.**
+> **Status：Design draft (Claude, 2026-05-05). Approval pending. Implementation blocked until PointsChain v2 Phase 1 / 1A / 2 / 4 / 6 complete + Governance Phase G-2 authorization.**
 >
-> 屬 [GOVERNANCE_FRAMEWORK.md](GOVERNANCE_FRAMEWORK.md) §2 維度 5。
+> Treasury / budget 規則保留於本檔；遠期 governance framework 已移出本資料夾。
 
 ---
 
 ## 1. 為什麼需要預算制度
 
 Treasury 不能變成「root 隨手撥款」的池子。對標 Lido committee + Easy Track：日常 routine 在預算內可由授權地址快速處理，但所有 spending 都受治理約束 + explorer 公開。
+
+Treasury 也不能被拿來掩蓋 exchange fund 壞帳或 reward pool 超支。官方池必須分帳：
+
+- `PNT1TREASURY`：長期儲備與預算支出。
+- `PNT1RESERVE`：危機儲備與跨池補位，仍需 multisig。
+- `PNT1REWARD`：貢獻獎勵與 mining payout，只能按 budget / solvency 支出。
+- `PNT1EXCHFUND`：交易所基金，獨立承擔交易 payout / market making risk；不得和 treasury 混帳。
 
 本 policy 把 treasury 切成多個 budget bucket，每個 bucket 有：
 
@@ -162,7 +169,7 @@ over_budget_amount       超額（觸發 alert + 必須 L3 補預算）
 
 由 committee multisig 2-of-3 sign-off；sign-off 後寫入 chain block 並公開。
 
-未 sign-off 預設 30 天 → 自動進 dispute（[DISPUTE_AND_APPEALS](DISPUTE_AND_APPEALS.md)）。
+未 sign-off 預設 30 天 → 自動進 `budget_dispute` 狀態，由 root / finance_admin / independent reviewer 走人工處理；不得自動放行下季同名 budget。
 
 ### 4.4 Budget 關閉
 
@@ -237,9 +244,23 @@ budget_utilization_pct         所有 budget 平均使用率
 over_budget_count              本季超支次數
 emergency_spending_total       本季 emergency 累計
 oldest_unsigned_reconcile      最舊未 sign-off reconciliation
+source_sink_ratio              earned / spent / burned / locked
+reward_pool_runway_weeks       reward pool 依 weekly_budget 可支撐週數
+exchange_fund_health           交易所基金健康度（完整 denominator）
 ```
 
 `treasury_runway_months < 24` → 自動建議 L3 提案（增 mint to treasury / 砍 budget）。
+
+任一情況不得用 treasury 直接靜默補洞：
+
+| 情況 | 正確處置 |
+|---|---|
+| reward_pool < pending payouts | 暫停 payout execute，產 `mining_pool_refill` proposal |
+| exchange_fund_health < 0.75 | trading reduce-only，產 reserve top-up proposal |
+| exchange bad debt 產生 | 寫 bad debt ledger + incident report，不得用 treasury adjustment 抹平 |
+| source/sink 連續 2 週失衡 | freeze 新 campaign budget，產 inflation-risk review |
+
+root dashboard 必須顯示「可支出預算」與「不可動用儲備」分開的數字；不能只顯示總餘額。
 
 ---
 
@@ -344,16 +365,13 @@ Governance Phase G-2:
 依賴：
 
 - PointsChain v2 Phase 4 multisig 完成
-- GOVERNANCE_PROPOSAL_LIFECYCLE 完成
+- proposal / timelock / simulation / execution flow 完成
 - POINTS_MONETARY_POLICY 完成（為了精確 cap 計算）
 
 ---
 
 ## 12. 跨參考
 
-- [GOVERNANCE_FRAMEWORK.md](GOVERNANCE_FRAMEWORK.md)
-- [GOVERNANCE_PROPOSAL_LIFECYCLE.md](GOVERNANCE_PROPOSAL_LIFECYCLE.md)
 - [POINTS_MONETARY_POLICY.md](POINTS_MONETARY_POLICY.md)
-- [EMERGENCY_GOVERNANCE.md](EMERGENCY_GOVERNANCE.md)
 - [MULTISIG_WALLETS.md](MULTISIG_WALLETS.md)
 - [POINTSCHAIN_WHITEPAPER.md §3.5](POINTSCHAIN_WHITEPAPER.md#35-genesis-allocation初始分配)

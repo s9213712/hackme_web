@@ -22,7 +22,6 @@
 | PointsChain | 經濟功能 | wallet、ledger、video tips、trading | [07_POINTSCHAIN.md](07_POINTSCHAIN.md) |
 | Trading / Bots / Backtest | 交易站點 | PointsChain、economy、price feeds、chart indicators、QA scripts | [08_TRADING_ENGINE.md](08_TRADING_ENGINE.md), [TRADING.md](trading/TRADING.md) |
 | Snapshot / Restore / Reset | root / 運維 | server mode、audit、integrity、PointsChain | [09_SNAPSHOT_RESET_RESTORE.md](09_SNAPSHOT_RESET_RESTORE.md) |
-| WebTerminal | 已封存 | 不在 active main line | [10_WEB_TERMINAL.md](10_WEB_TERMINAL.md) |
 
 ## 模組詳解
 
@@ -143,16 +142,6 @@
 - 失敗情境與提示：snapshot restore 會回放 runtime secret files，若 restore event 出現 `runtime secret validation failed` 要先修這批檔案；reset 仍會清掉 runtime secrets 並要求重啟；PointsChain recovery 不能拿來代替全站 restore。
 - 測試方式：create/list/download/restore/upload-restore/reset、post-restore consistency、offline/reconnect reset smoke。
 - 相關文件連結：[09_SNAPSHOT_RESET_RESTORE.md](09_SNAPSHOT_RESET_RESTORE.md), [RUNTIME_RESET_AND_RECOVERY.md](ops_boundaries/RUNTIME_RESET_AND_RECOVERY.md), [11_QA_TESTING.md](11_QA_TESTING.md)
-
-### WebTerminal
-
-- 一句話說明：WebTerminal 是歷史封存主題，不是 active main line 的現行功能。
-- 設計目的：保留曾嘗試過的 Docker / QEMU 設計，供未來重新設計時參考。
-- 使用方法：只讀 archive，不要把它當現行部署功能。
-- 原理：封存保留歷史脈絡，但避免誤導部署者以為目前站點有 terminal 模組。
-- 失敗情境與提示：找不到前端入口、找不到設定、找不到服務，都是正常狀態。
-- 測試方式：確認 active main line 沒有 routes / UI / settings 對外暴露 WebTerminal。
-- 相關文件連結：[10_WEB_TERMINAL.md](10_WEB_TERMINAL.md), [docs/archive/webterminal/README.md](archive/webterminal/README.md)
 
 ## 相關文件連結
 

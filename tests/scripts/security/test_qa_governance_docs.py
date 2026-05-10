@@ -60,7 +60,6 @@ def test_functional_smoke_phase_catalog_has_operational_contract_columns():
 def test_active_docs_do_not_point_to_missing_deployment_scripts():
     production = (ROOT / "docs" / "02_DEPLOY_PRODUCTION.md").read_text(encoding="utf-8")
     updates = (ROOT / "docs" / "UPDATE_SUMMARY.md").read_text(encoding="utf-8")
-    comfy_redirect = (ROOT / "docs" / "COMFYUI_ADMIN.md").read_text(encoding="utf-8")
     comfy_canonical = (ROOT / "docs" / "comfyui" / "COMFYUI_ADMIN.md").read_text(encoding="utf-8")
 
     active_docs = production + "\n" + updates
@@ -69,6 +68,4 @@ def test_active_docs_do_not_point_to_missing_deployment_scripts():
     assert "python3 server.py --doctor" in production
     assert "scripts/admin/root_recovery.py" in updates
 
-    assert "正式版本已移到" in comfy_redirect
-    assert "## 管理順序" not in comfy_redirect
     assert "## 管理順序" in comfy_canonical

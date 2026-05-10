@@ -142,7 +142,6 @@ channel，shadow funding settlement 也只會寫到 shadow wallet / ledger。
 - [07_POINTSCHAIN.md](07_POINTSCHAIN.md)
 - [08_TRADING_ENGINE.md](08_TRADING_ENGINE.md)
 - [09_SNAPSHOT_RESET_RESTORE.md](09_SNAPSHOT_RESET_RESTORE.md)
-- [10_WEB_TERMINAL.md](10_WEB_TERMINAL.md)
 
 ### 深層參考
 
@@ -174,4 +173,3 @@ channel，shadow funding settlement 也只會寫到 shadow wallet / ledger。
 - [UPDATE_SUMMARY.md](UPDATE_SUMMARY.md)
 - [VERSION_STORY.md](VERSION_STORY.md)
 - [archive/research/BLOCKCHAIN/README.md](archive/research/BLOCKCHAIN/README.md)
-- [archive/webterminal/README.md](archive/webterminal/README.md)

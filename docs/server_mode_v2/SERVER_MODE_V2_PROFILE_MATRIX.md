@@ -1,6 +1,6 @@
 # Server Mode v2 Profile Matrix
 
-> **Status (2026-05-05):** Updated by root direction; aligned with current implementation in `services/snapshots/schema.py` and `services/snapshots/server_mode.py`. Previous "驗收差異 D-1 / D-2 / D-3"（CSRF always-on, 13 production reports, per-mechanism enforcement）皆已併入本主規格。Companion acceptance report: [`docs/AGENTS/reports/claude/server_mode_acceptance_2026-05-05/SERVER_MODE_ACCEPTANCE_REPORT.md`](../AGENTS/reports/claude/server_mode_acceptance_2026-05-05/SERVER_MODE_ACCEPTANCE_REPORT.md).
+> **Status (2026-05-05):** Updated by root direction; aligned with current implementation in `services/snapshots/schema.py` and `services/snapshots/server_mode.py`. Previous "驗收差異 D-1 / D-2 / D-3"（CSRF always-on, 13 production reports, per-mechanism enforcement）皆已併入本主規格；舊 companion acceptance report 已從 tracked docs 移除，必要時查 Git history。
 >
 > **Companion specs:**
 > - [`SERVER_MODE_V2_TRADING_AND_POINTSCHAIN.md`](SERVER_MODE_V2_TRADING_AND_POINTSCHAIN.md) — engineering-grade trading + chain rules per mode.

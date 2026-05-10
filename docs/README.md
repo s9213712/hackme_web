@@ -32,7 +32,6 @@ The repository root keeps only [README.md](../README.md) and
   limits, and validation path
 - [09_SNAPSHOT_RESET_RESTORE.md](09_SNAPSHOT_RESET_RESTORE.md): restore/reset
   boundaries and recovery workflow
-- [10_WEB_TERMINAL.md](10_WEB_TERMINAL.md): archived feature status and links
 
 ## QA And Support
 
@@ -104,7 +103,6 @@ The repository root keeps only [README.md](../README.md) and
 - [security/PENTEST.md](security/PENTEST.md): security runner and whole-site gate usage
 - [security/TRADING_STRESS_PENTEST.md](security/TRADING_STRESS_PENTEST.md): trading correctness/stress script
 - [security/SERVER_MODE_V2_RED_TEAM_PLAYBOOK.md](security/SERVER_MODE_V2_RED_TEAM_PLAYBOOK.md): adversarial mode tests
-- [SECURITY_MODES.md](SECURITY_MODES.md): legacy redirect for old links
 
 ## Maintainer Structure
 
@@ -118,8 +116,6 @@ The repository root keeps only [README.md](../README.md) and
 - [README.zh-TW.md](README.zh-TW.md): concise Traditional Chinese shortcut
 - [VERSION_STORY.md](VERSION_STORY.md): project history and abandoned branches
 - [archive/research/BLOCKCHAIN/README.md](archive/research/BLOCKCHAIN/README.md): PointsChain v2 design specs (Phase 1+ pending root authorization)
-- [archive/webterminal/README.md](archive/webterminal/README.md): archived WebTerminal attempts
 
-Archive and `docs/AGENTS/reports/` content is historical evidence, not canonical
-operator guidance. Prefer the files listed above unless you are tracing old
-implementation decisions.
+Archive content is historical evidence, not canonical operator guidance. Prefer
+the files listed above unless you are tracing old implementation decisions.

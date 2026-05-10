@@ -1,10 +1,10 @@
 # PointsChain Mining Rewards v1
 
-> **Status：Design approved (root, 2026-05-04). Phase 0 cleanup closed. Phase 7 implementation blocked until Phase 1 / 2 / 4 / 6 complete and root separately authorizes Phase 7.**
+> **Status：Design approved (root, 2026-05-04). Phase 0 cleanup closed. Phase 7 implementation blocked until Phase 1 / 1A / 2 / 4 / 6 complete and root separately authorizes Phase 7.**
 >
 > 此文件是 PointsChain v2 **Phase 7** 正式設計書。
 >
-> Phase 0 cleanup 已關閉，但在 Phase 1 / 2 / 4 / 6 完成前，Phase 7 僅允許 DRAFT / mock / dry-run；不准真實 payout。
+> Phase 0 cleanup 已關閉，但在 Phase 1 / 1A / 2 / 4 / 6 完成前，Phase 7 僅允許 DRAFT / mock / dry-run；不准真實 payout。
 
 ---
 
@@ -12,7 +12,7 @@
 
 | # | 拍板 | 來源 |
 |---|---|---|
-| 1 | 列為 PointsChain v2 **Phase 7**；Phase 0 cleanup closed，但 Phase 7 implementation blocked until Phase 1 / 2 / 4 / 6 complete and root separately authorizes Phase 7 | §1 |
+| 1 | 列為 PointsChain v2 **Phase 7**；Phase 0 cleanup closed，但 Phase 7 implementation blocked until Phase 1 / 1A / 2 / 4 / 6 complete and root separately authorizes Phase 7 | §1 |
 | 2 | reward 公式：`base × repro × novelty × security × trust_multiplier`；**有 hard cap** | §2 |
 | 3 | reward ≥ 1000 必走 multisig；root 自己領一律 3-of-5；**signer 對自己相關 reward 自動排除投票** | §3 |
 | 4 | reporter ≠ verifier 是紅線；連 root 都不能同人；DB + API + UI + 測試覆蓋 | §4 |
@@ -42,11 +42,14 @@
 |---|---|
 | Phase 0 清債 | 讓錯誤計算不被永久寫入鏈 |
 | Phase 1 地址化 | 提供 `OFFICIAL_REWARD_POOL` address |
+| Phase 1A Economy Observability | 提供 source/sink、reward runway、mint precheck；避免 reward 公式變成無預算印鈔 |
 | Phase 2 Ledger v2 | 提供 address-centric ledger 與 chain block |
 | Phase 4 Multisig | 提供 reward ≥ 1000 + retroactive batch + 罰金路徑的多簽 |
 | Phase 6 Explorer | 提供公開查詢介面 |
 
 **前置未完前只允許 DRAFT / mock / dry-run；不准真實 payout。**
+
+Phase 7 開真實 payout 前，必須連續 30 天產生 economy observability report，且 reward pool runway / source-sink unknown 分類 / pending payout gate 全綠。
 
 ---
 
@@ -112,6 +115,20 @@ API response `claim` 必含：
 
 - admin review 時可向**下調**（風控判斷），不可向**上**超過 hard_cap
 - 任何調整都寫 audit event `mining_reward_adjusted` 含 reason
+
+### 2.5 Proof-of-reproduction 與唯一性
+
+Contribution mining 的 reward 不是「提交次數」獎勵，而是「可驗證、可復現、對平台有價值」的貢獻獎勵。每筆 claim 必須有：
+
+| Requirement | Gate |
+|---|---|
+| reproduction proof | 至少一個可重放步驟、測試輸出、截圖 hash、log hash 或 failing test reference |
+| independent verifier | verifier 必須能重現或確認修復價值；reporter 不得自驗 |
+| uniqueness key | 以 affected module + root cause + normalized stack / route / symbol 產生 |
+| duplicate policy | 同 uniqueness key 的後續 claim 預設 duplicate；除非證明是不同 root cause |
+| delayed large payout | `approved_reward >= 1000` 先 approved，multisig execute 後才 paid |
+
+缺 proof 的 claim 可保留為 feedback，但不得進 payout；安全漏洞若因保密不能公開 repro，proof hash 仍要寫入內部 evidence。
 
 ---
 
@@ -525,6 +542,8 @@ CREATE TABLE points_mining_claims (
     reference_id TEXT NOT NULL,
     severity TEXT CHECK (severity IN ('low','medium','high','blocker') OR severity IS NULL),
     evidence_json TEXT,
+    reproduction_proof_hash TEXT,
+    uniqueness_key TEXT,
     formula_json TEXT,                                              -- 公式拆解
     requested_reward INTEGER,
     suggested_reward INTEGER,
@@ -539,10 +558,12 @@ CREATE TABLE points_mining_claims (
     client_ip_hash TEXT,
     device_fingerprint TEXT,
     account_age_days INTEGER,
+    reproduction_verified_at TEXT,
     expires_at TEXT NOT NULL,
     created_at TEXT NOT NULL,
     reviewed_at TEXT,
     UNIQUE(reference_type, reference_id, claim_type),
+    UNIQUE(uniqueness_key, claim_type),
     CHECK (verified_by IS NULL OR user_id != verified_by),                                    -- §4 紅線
     CHECK (second_reviewer_id IS NULL OR
            (second_reviewer_id != user_id AND second_reviewer_id != verified_by))             -- §15 雙人不重疊
@@ -719,6 +740,9 @@ CREATE TABLE points_reward_payouts (
 | 規則 | 觸發 | 動作 |
 |---|---|---|
 | 同 (reference_type, reference_id, claim_type) 重複 | DB UNIQUE | reject `duplicate` |
+| 同 (uniqueness_key, claim_type) 重複 | DB UNIQUE / clustering | 預設 duplicate；人工確認不同 root cause 才可拆分 |
+| 缺 reproduction_proof_hash | submit / approve | 可收件但不得 approve payout |
+| verifier 未填 reproduction_verified_at | approve | reject approve |
 | reporter == verifier | DB CHECK + service check | reject + 通知 root |
 | 第二審 == reporter or verifier | DB CHECK | reject 該 approve |
 | 同 IP 24h 多 user | risk_flags `same_ip_24h_multi_user` | reward × 0.3 + 進 manual review |
@@ -733,6 +757,7 @@ CREATE TABLE points_reward_payouts (
 | 個人 daily/weekly cap 達 | approve 時 | claim → `pending_next_period` |
 | 連續 5 次 FP | trust_state | suspend 7 days + trust = 30 |
 | incident_lockdown | server mode | 暫停所有 payout execute（可繼續 submit/review/approve） |
+| economy observability 紅燈 | nightly | 真實 payout 暫停；只保留 dry-run score |
 
 ---
 
@@ -742,7 +767,9 @@ CREATE TABLE points_reward_payouts (
 
 - [ ] 6 張 mining 表 + bug_reports 升級欄全建立
 - [ ] 所有 CHECK constraint 啟用（reporter≠verifier / second≠reporter,verifier / share_bp 1-10000 / status enum）
+- [ ] `reproduction_proof_hash` / `uniqueness_key` / `reproduction_verified_at` 欄位存在
 - [ ] OFFICIAL_REWARD_POOL address 存在（依賴 Phase 1）
+- [ ] Phase 1A economy observability 連續 30 天全綠
 
 ### 21.2 公式
 
@@ -750,6 +777,8 @@ CREATE TABLE points_reward_payouts (
 - [ ] formula_json 內每項都記錄
 - [ ] admin 試圖向上超過 hard cap → reject
 - [ ] formula breakdown 在前後台都顯示
+- [ ] 缺 reproduction proof 的 claim 不得 approve payout
+- [ ] duplicate uniqueness key 預設 duplicate，不得重複領完整 reward
 
 ### 21.3 Reporter ≠ Verifier
 
@@ -884,4 +913,4 @@ mining payout 不寫 ledger_v2 + chain_block
 
 ---
 
-*Approved by root, 2026-05-04. Phase 0 cleanup closed. Phase 7 implementation blocked until PointsChain v2 Phase 1 / 2 / 4 / 6 complete and root separately authorizes Phase 7.*
+*Approved by root, 2026-05-04. Phase 0 cleanup closed. Phase 7 implementation blocked until PointsChain v2 Phase 1 / 1A / 2 / 4 / 6 complete and root separately authorizes Phase 7.*

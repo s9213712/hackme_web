@@ -1,6 +1,6 @@
 """Slice 4a — schema snapshot test for services.trading.engine.ensure_trading_schema.
 
-Companion to docs/AGENTS/reports/claude/readability_refactor_2026-05-07/
+Companion coverage for the trading schema split.
 REFACTOR_PLAN.md slice 4.
 
 The function is 740 lines / 77 SQL statements. Splitting it into a

@@ -146,8 +146,8 @@ mainnet 起跑時固定一次的分配，hash 上鏈成 genesis block。**任何
 |---|---|---|---|
 | `PNT1TREASURY` | **30%** | 平台長期儲備 / 戰略資金 | 鎖定，多簽提案才出 |
 | `PNT1RESERVE` | **15%** | 市場儲備池（穩定機制 / 危機注流） | 多簽 2-of-3 |
-| `PNT1EXCHFUND` | **20%** | 交易所基金（見 §3.6） | 多簽 2-of-3 |
-| `PNT1REWARD` | **15%** | QA mining / 貢獻獎勵預先注入 | 自動發 + 公式驅動 |
+| `PNT1EXCHFUND` | **20%** | 交易所基金（見 §3.6） | 多簽 2-of-3；受 solvency gate 限制 |
+| `PNT1REWARD` | **15%** | QA mining / 貢獻獎勵預先注入 | 公式驅動，但受 weekly budget / pool solvency 限制 |
 | `PNT1AIRDROP` | **5%** | 活動空投 / 早期用戶激勵 | 多簽 2-of-3 |
 | 早期用戶分配 | **10%** | 公開申請、KYC 通過後直接撥款 | 直接到 user wallet |
 | `PNT1FEEPOOL` | **0%**（運行時累積） | 手續費自動入帳 | 自動 |
@@ -176,11 +176,20 @@ genesis block hash 與 10 個官方地址的初始餘額快照永久公開。任
 
 ```
 PNT1EXCHFUND 入帳來源（流入）：
-  + 交易手續費的 X%（建議初值 50%；其餘進 PNT1FEEPOOL 或 burn）
+  + 交易手續費的 X%（建議初值 40%；其餘進 PNT1FEEPOOL / PNT1RESERVE / PNT1BURN）
   + 融資 / 借券利息收入（margin interest payments）
   + CFD 對坐 user 虧損方的 settle（platform 是贏家時）
   + 強平回收（liquidation fee 的一部分）
 ```
+
+建議第一版 trading fee recycling split：
+
+| 目的地 | 比例 | 用途 |
+|---|---:|---|
+| `PNT1EXCHFUND` | 40% | 補交易所基金，承擔 user profit payout / market making risk |
+| `PNT1FEEPOOL` | 30% | 一般 fee pool，後續按 governance 決定 treasury / burn / grants |
+| `PNT1RESERVE` | 20% | 危機儲備，避免所有壓力都落到 emergency mint |
+| `PNT1BURN` | 10% | 小比例供給 sink；若系統仍處成長期可由 multisig 調為 0% |
 
 **出帳規則**（嚴格）
 
@@ -196,24 +205,46 @@ PNT1EXCHFUND 出帳路徑（流出）：
 
 ```
 exchange_fund_health =
-  exchange_fund_balance / max(open_cfd_exposure + pvp_market_making_lockup, 1)
+  exchange_fund_balance / max(required_exchange_fund, 1)
+
+required_exchange_fund =
+  open_cfd_exposure
+  + pvp_market_making_lockup
+  + pending_user_profit_payouts
+  + liquidation_gap_var_99
+  + oracle_failure_buffer
+  + withdrawal_or_transfer_pending_settlement
 ```
 
 警戒線（公開、可調，但要 multisig）：
 
 | 健康度 | 動作 |
 |---|---|
-| ≥ 2.0 | 健康；可能會把多餘的轉一部分回 Treasury（每月一次，多簽） |
-| 1.0–2.0 | 正常營運區間 |
-| 0.5–1.0 | warn；自動暫停接收高槓桿開倉、降低新單 max-leverage |
-| ≤ 0.5 | critical；自動切 trading 至 read-only + 觸發 PNT1RESERVE 補注提案 |
+| ≥ 2.0 | 健康；只可透過 proposal 考慮把超額移回 Treasury |
+| 1.25–2.0 | 正常營運區間 |
+| 1.0–1.25 | warn；降低 max-leverage 與 market maker inventory |
+| 0.75–1.0 | 新 margin disabled；spot / reduce-only 視 settlement 安全性開放 |
+| 0.5–0.75 | reduce-only；自動產 PNT1RESERVE 補注提案 |
+| < 0.5 | trading read-only；只允許 liquidation / settlement / close |
 | 持續 ≤ 0.3 超過 24h | 觸發**緊急增發**機制（見 §3.7） |
 
 `exchange_fund_balance` / `exchange_fund_health` 公開於 explorer + 上線前檢查分頁。
 
+**交易安全 gate**
+
+任何會增加平台風險的交易寫路徑，都必須同時滿足：
+
+- oracle health = healthy，且 price source 達 risk-grade provider 門檻
+- per-user / per-market / global open exposure 未超 cap
+- liquidation worker SLA 與 price staleness 在門檻內
+- stress VaR 日測通過，且 bad debt ledger 無未解 critical
+- `exchange_fund_health >= 1.0`；低於 1.0 只允許 close / reduce-only
+
+長期方向：優先把交易從 house-counterparty CFD 遷到 PVP / spot-like matching。平台應主要承擔 fee / settlement / 做市庫存風險，而不是無上限 directional exposure。
+
 ### 3.7 Emission Schedule（發行 / 增發）
 
-**第一原則**：每筆 mint 都上鏈、explorer 可查；single root 永遠不能單人 mint。
+**第一原則**：每筆 mint 都上鏈、explorer 可查；single root 永遠不能單人 mint。Mint 是最後手段，不是日常營運工具；日常獎勵與活動支出先消耗既有 official pool，再依 pool runway 產生 proposal。
 
 **三條發行路徑**
 
@@ -230,6 +261,7 @@ exchange_fund_health =
 - mint 的目的地受限：**只能進**`PNT1TREASURY` / `PNT1RESERVE` / `PNT1REWARD` / `PNT1EXCHFUND` / `PNT1AIRDROP`，**不能直接進** user wallet（必須先進池再撥）
 - mint 提案在 explorer 公開 + 寫進 mode_switch_logs / governance ledger
 - mint 進池後 30 天內未動用，會自動產生審計提醒，但不會自動退回（人為決策）
+- mint 前必須附 source/sink report、官方池 runway、30/90 天支出預估、替代方案（budget cut / fee split / reserve transfer）與 dry-run simulation hash
 
 **緊急增發專屬規範**
 
@@ -400,7 +432,7 @@ PointsChain v2 對既有 snapshot/restore 的明確策略：
 
 ### 10a. Phase 7：QA Mining / 貢獻獎勵
 
-> Status: **Design approved (2026-05-04). Phase 0 cleanup closed. Phase 7 implementation blocked until Phase 1 / 2 / 4 / 6 complete and root separately authorizes Phase 7.**
+> Status: **Design approved (2026-05-04). Phase 0 cleanup closed. Phase 7 implementation blocked until Phase 1 / 1A / 2 / 4 / 6 complete and root separately authorizes Phase 7.**
 > 完整規格見 [POINTS_MINING_REWARDS.md](POINTS_MINING_REWARDS.md)。
 
 #### 你能做什麼
@@ -455,7 +487,7 @@ reward ≥ 1000 一律 multisig（無論 severity）。
 | QA Mining / 貢獻獎勵（Phase 7） | [POINTS_MINING_REWARDS.md](POINTS_MINING_REWARDS.md) |
 | QA / Release Gate | [POINTSCHAIN_QA.md](POINTSCHAIN_QA.md) |
 | 既有 PointsChain 概念（v1） | [07_POINTSCHAIN.md](../07_POINTSCHAIN.md) |
-| 鏈化前的清債（Phase 0） | 參考 [PHASE_0_CLEANUP_GATE.md](PHASE_0_CLEANUP_GATE.md) 的 final review 結論與歷史 evidence |
+| 鏈化前的清債（Phase 0） | 摘要見 [IMPLEMENTATION_GUIDE.md](IMPLEMENTATION_GUIDE.md)，歷史 evidence 必要時查 Git history |
 
 ---
 

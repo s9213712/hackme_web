@@ -1,8 +1,8 @@
 # PointsChain Monetary Policy v1
 
-> **Status：Design draft (Claude, 2026-05-05). Approval pending. Implementation blocked until PointsChain v2 Phase 1 / 2 / 4 / 6 complete + Governance Phase G-2 authorization.**
+> **Status：Design draft (Claude, 2026-05-05). Approval pending. Implementation blocked until PointsChain v2 Phase 1 / 1A / 2 / 4 / 6 complete + Governance Phase G-2 authorization.**
 >
-> 屬 [GOVERNANCE_FRAMEWORK.md](GOVERNANCE_FRAMEWORK.md) §2 維度 6 的細節 spec。配合 [POINTSCHAIN_WHITEPAPER.md §3.4–3.8](POINTSCHAIN_WHITEPAPER.md#34-supply-hard-cap) 的供給結構。
+> 配合 [POINTSCHAIN_WHITEPAPER.md §3.4–3.8](POINTSCHAIN_WHITEPAPER.md#34-supply-hard-cap) 的供給結構。
 
 ---
 
@@ -10,7 +10,14 @@
 
 技術上有 mint / burn / cap 的 SQL；制度上要寫死「**什麼情況可以 mint、上限多少、誰能簽、要等多久**」，否則 mint 就只是技術功能、不是經濟制度。
 
-本 policy 是 **proposal-driven**：所有 mint / burn / fee / emission 改動都走 [GOVERNANCE_PROPOSAL_LIFECYCLE.md](GOVERNANCE_PROPOSAL_LIFECYCLE.md)。
+本 policy 是 **proposal-driven**：所有 mint / burn / fee / emission 改動都必須經 proposal、simulation、multisig/timelock、explorer 公開後才能 execute。
+
+經濟原則：
+
+- Points 是站內 utility / reputation / settlement unit，不承諾投資報酬，不以法幣掛鉤，不以外部交易流通作為第一版目標。
+- Mint 是最後手段；日常 reward / airdrop / market support 先用既有 official pool、fee recycling、reserve transfer。
+- Earn 必須對平台有可驗證貢獻；spend 必須對平台有真實成本、稀缺性、風控價值或 user utility。
+- 所有 policy change 都必須先產 dry-run simulation，再進 proposal。
 
 ---
 
@@ -54,6 +61,34 @@ PNT1AIRDROP      L3 / 3-of-5（time-bound campaigns）
 | Reward | 季度 ≤ 3% | reward pool 補充（mining cap 增加時） |
 | ExchFund | scheduled 季度 ≤ 1.5%；**emergency 單次 ≤ 3%** | CFD / PVP 流動性、health critical |
 | Airdrop | 單次 ≤ 1%；年化 ≤ 1.5% | 活動空投 |
+
+---
+
+## 3.1 Mint 前置決策樹
+
+任何 mint proposal 建立前，系統必須先產生 `mint_precheck_report`，確認以下問題：
+
+| 問題 | 若答案為否 |
+|---|---|
+| 對應 official pool runway 是否低於 policy 下限？ | 不准 mint；改用既有 pool |
+| 是否已評估 treasury / reserve transfer 替代方案？ | 不准 mint |
+| 是否有最近 30 / 90 天 source-sink report？ | 不准 mint |
+| 是否有 dry-run simulation，且 hard cap / 30-day cap / pool invariant 全通過？ | 不准 mint |
+| 是否明確定義 mint 後的支出窗口與失效提醒？ | 不准 mint |
+| 是否公開於 explorer 且可被 governance review？ | 不准 mint |
+
+建議決策順序：
+
+```
+pool shortage
+  -> reduce spending / pause payout?
+  -> fee split / fee rate adjustment?
+  -> treasury or reserve transfer?
+  -> scheduled / targeted mint?
+  -> emergency mint only if exchange/reserve health is critical
+```
+
+Mint 執行目的地仍只能是 official pool。任何「mint 後立即對 user 發放」必須拆成兩筆：`mint_to_pool` proposal + pool payout proposal / budget authorization。
 
 ---
 
@@ -143,7 +178,7 @@ total_supply == circulating + treasury + reserve + exchange_fund + reward
               + fee_pool + airdrop + escrow + settle + burned
 ```
 
-任一不等成立 → 拒 seal block + 進 incident_lockdown + 觸發 EMERGENCY_GOVERNANCE 事件。
+任一不等成立 → 拒 seal block + 進 incident_lockdown + 觸發 emergency governance audit event。
 
 **Hard cap 上修**走 L4：
 
@@ -204,7 +239,7 @@ governance:
 
 ## 7. Fee Recycling Policy
 
-當前狀態：transfer fee_rate=0；本節為未來啟用後的政策。
+當前狀態：transfer fee_rate=0；本節為未來啟用後的政策。Trading fee 可先啟用，但必須受 exchange fund health gate 約束。
 
 ```
 governance.parameters:
@@ -216,11 +251,20 @@ governance.parameters:
     exchange_fund_percent: 20        # 進 PNT1EXCHFUND（CFD / PVP 流動性）
     reward_percent:      5           # 進 PNT1REWARD
     # sum = 100%
+
+  trading.fee_recycle_split:
+    exchange_fund_percent: 40        # 承擔 trading payout / market making risk
+    fee_pool_percent:      30
+    reserve_percent:       20
+    burn_percent:          10
+    # sum = 100%
 ```
 
 每筆 fee 4 個 ledger event（已在 [POINTS_TRANSFER_API §3](POINTS_TRANSFER_API.md) 設計，service 層必須完整支援）。
 
 **改 fee_rate 走 L3**；改 split 走 L3；新增 split 對象走 L4（需動 governance schema）。
+
+交易 fee split 的 `burn_percent` 第一版可設為 0，但必須明確寫入 governance parameter；不可在程式碼中硬編隱藏比例。
 
 ---
 
@@ -275,9 +319,15 @@ Exchange fund health       (per WHITEPAPER §3.6)
 Treasury runway            (預估按目前支出能撐多久)
 Pending mint proposals     (in voting / queued)
 Pending burn proposals
+Source / sink ratio         earned vs spent vs burned vs locked
+Pool runway                 treasury / reserve / reward / exchange fund
+Top emission reasons        login / bug bounty / mining / airdrop / manual adjustment
+Top sink reasons            storage / ComfyUI / server rental / fee / redemption / burn
 ```
 
 每年 Q1 自動產 5-year emission projection（非綁定，但要公開）。
+
+上線後前 90 天改為每週產出 source/sink report；任一週 `earned_total > spent_total + burned_total + locked_total` 且差距超過 25%，自動產 inflation-risk alert。
 
 ---
 
@@ -285,7 +335,7 @@ Pending burn proposals
 
 ```
 Governance Phase G-2  Treasury budget + monetary policy enforcement
-  - 完成 governance_parameters 表 + parameter registry §6 (FRAMEWORK)
+  - 完成 governance_parameters 表 + parameter registry
   - mint / burn proposal flow (本檔 §4 / §6)
   - hard cap raise L4 flow
   - automatic suspend triggers（§9）
@@ -297,17 +347,14 @@ Governance Phase G-2  Treasury budget + monetary policy enforcement
 ```
 PointsChain v2 Phase 4（multisig）完成
 PointsChain v2 Phase 6（explorer）完成（公開報表需要 explorer）
-GOVERNANCE_PROPOSAL_LIFECYCLE 完整實作
+proposal / timelock / simulation / execution flow 完整實作
 ```
 
 ---
 
 ## 12. 跨參考
 
-- 主框架：[GOVERNANCE_FRAMEWORK.md](GOVERNANCE_FRAMEWORK.md)
-- 提案 lifecycle：[GOVERNANCE_PROPOSAL_LIFECYCLE.md](GOVERNANCE_PROPOSAL_LIFECYCLE.md)
 - 預算：[TREASURY_BUDGET_POLICY.md](TREASURY_BUDGET_POLICY.md)
-- 緊急：[EMERGENCY_GOVERNANCE.md](EMERGENCY_GOVERNANCE.md)
 - 供給結構：[POINTSCHAIN_WHITEPAPER.md §3.4-3.8](POINTSCHAIN_WHITEPAPER.md)
 - multisig：[MULTISIG_WALLETS.md](MULTISIG_WALLETS.md)
 - transfer fee：[POINTS_TRANSFER_API.md](POINTS_TRANSFER_API.md)

@@ -71,7 +71,7 @@ CREATE TABLE points_wallet_addresses (
     address TEXT UNIQUE NOT NULL,
     wallet_type TEXT NOT NULL CHECK (wallet_type IN (
       'custodial','self_custody','official','multisig',
-      'burn','mint','reserve','fee_pool','reward_pool',
+      'burn','mint','reserve','fee_pool','reward_pool','exchange_fund',
       'dispute_escrow','trading_settlement','airdrop'
     )),
     public_key TEXT NOT NULL,                                  -- ed25519 hex (64 chars)

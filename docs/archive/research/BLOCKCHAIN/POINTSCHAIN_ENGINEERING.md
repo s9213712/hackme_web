@@ -16,6 +16,7 @@
 | Supply | **Hybrid hard cap**：Core Points 有 cap，Reward Pool 不在 cap 內；改 cap 須 3-of-5 multisig |
 | Invariant | **boot-time gate + 每次 seal 區塊前 gate**；不過拒啟動 + 進 incident_lockdown |
 | Incident Lockdown | **同時擋 trading / transfer / mint / multisig execute** |
+| Economy Observability | **先觀測再發放**；真實 mint / mining payout / trading risk 擴張前，必須有 source-sink、pool runway、exchange solvency dashboard |
 | 地址格式 | `PNT1` + base58check（4-byte checksum） |
 | 密鑰演算法 | **ed25519**（保留未來 secp256k1 擴充） |
 | Nonce | **client UUID + per-address unique 約束 + timestamp window** |
@@ -29,17 +30,18 @@
 
 ```
 Phase 0  清債       ~1 週    blocker issues 收斂、isolated live API 驗證、runtime cleanup、full pytest
-Phase 1  地址化     ~2 週    wallet_addresses + 9 official + supply_state
+Phase 1  地址化     ~2 週    wallet_addresses + 10 official + supply_state
+Phase 1A EconomyObs ~1 週    source/sink + official pool runway + exchange solvency read-only dashboard
 Phase 2  Ledger v2  ~3 週    address-centric + dual-write + state/supply root
 Phase 3  Transfer   ~2 週    custodial only + UUID nonce + preview + fee path
 Phase 4  Multisig   ~2.5 週  5-role signer + 3-of-5 mainnet / 2-of-3 internal_test
 Phase 5  Self-cust  ~3 週    opt-in + 前端 ed25519 + 私鑰絕不上 server
 Phase 6  Explorer   ~2 週    公開 + merkle proof + 手機版
 Phase 7  QA Mining  ~3-4 週  公式 reward + multisig + signer 排除 + trust score
-                   ~19-20 週 (~4.5-5 個月)
+                   ~20-21 週 (~4.5-5 個月)
 ```
 
-> Phase 0 cleanup closed. Phase 7 implementation blocked until Phase 1 / 2 / 4 / 6 complete and root separately authorizes Phase 7. 前置未完前只允許 DRAFT / mock / dry-run。
+> Phase 0 cleanup closed. Phase 7 implementation blocked until Phase 1 / 1A / 2 / 4 / 6 complete and root separately authorizes Phase 7. 前置未完前只允許 DRAFT / mock / dry-run。
 > 完整 Phase 7 設計見 [POINTS_MINING_REWARDS.md](POINTS_MINING_REWARDS.md)。
 
 每個 phase 完成都必須過 [POINTSCHAIN_QA.md](POINTSCHAIN_QA.md) 的對應 gate 才能進下一個。
@@ -67,6 +69,50 @@ Phase 7  QA Mining  ~3-4 週  公式 reward + multisig + signer 排除 + trust s
 
 ---
 
+## 2A. Phase 1A：Economy Observability（真實經濟前置）
+
+Phase 1A 是 Phase 1 完成後、任何真實 mint / mining payout / exchange fund risk 擴張前的唯讀觀測層。它不改 user balance，只把現有 v1 economy 和 v2 official pool 設計映射成可審計 dashboard。
+
+### 2A.1 目標
+
+- root 可以看到 points 從哪裡產生、流到哪裡、在哪些 sink 消耗。
+- treasurer 可以看到 `PNT1TREASURY` / `PNT1RESERVE` / `PNT1REWARD` / `PNT1EXCHFUND` runway。
+- risk reviewer 可以看到 exchange fund health 使用完整 denominator，而不是只看 open exposure。
+- release owner 可以在上線前檢查「現在是否只是 ledger 可用，但經濟不可用」。
+
+### 2A.2 最小 schema
+
+```sql
+CREATE TABLE points_economy_daily_metrics (
+    metric_date TEXT PRIMARY KEY,
+    earned_total INTEGER NOT NULL DEFAULT 0,
+    spent_total INTEGER NOT NULL DEFAULT 0,
+    burned_total INTEGER NOT NULL DEFAULT 0,
+    locked_total INTEGER NOT NULL DEFAULT 0,
+    minted_total INTEGER NOT NULL DEFAULT 0,
+    source_breakdown_json TEXT NOT NULL,
+    sink_breakdown_json TEXT NOT NULL,
+    pool_balances_json TEXT NOT NULL,
+    pool_runway_json TEXT NOT NULL,
+    exchange_required_fund INTEGER NOT NULL DEFAULT 0,
+    exchange_fund_health REAL NOT NULL DEFAULT 0,
+    inflation_risk_level TEXT NOT NULL CHECK (inflation_risk_level IN ('green','yellow','red')),
+    generated_at TEXT NOT NULL
+);
+```
+
+### 2A.3 Exit gate
+
+- [ ] 30 天回填報表可產生，且 source / sink 分類無 unknown > 1%
+- [ ] pool runway 至少包含 treasury / reserve / reward / exchange fund
+- [ ] exchange fund health denominator 包含 pending payout / liquidation VaR / oracle buffer / pending settlement
+- [ ] dashboard 顯示 inflation risk、pool low-watermark、mint-precheck 是否可提案
+- [ ] 所有數字可從 ledger replay 或 trading accounting 重算
+
+Phase 1A 未完成時，Phase 7 仍只允許 dry-run；任何 mint proposal 只能建立 draft，不能 execute。
+
+---
+
 ## 3. Phase 1：地址化基礎建設
 
 ### 3.1 新增 schema
@@ -78,7 +124,7 @@ CREATE TABLE points_wallet_addresses (
     address TEXT UNIQUE NOT NULL,                             -- PNT1 + base58check(pubkey_hash + checksum)
     wallet_type TEXT NOT NULL CHECK (wallet_type IN (
       'custodial','self_custody','official','multisig',
-      'burn','mint','reserve','fee_pool','reward_pool',
+      'burn','mint','reserve','fee_pool','reward_pool','exchange_fund',
       'dispute_escrow','trading_settlement','airdrop'
     )),
     public_key TEXT NOT NULL,                                  -- ed25519 hex (32 bytes = 64 hex chars)
@@ -490,7 +536,7 @@ CREATE TABLE points_multisig_approvals (
 
 ## 8a. Phase 7：QA Mining / Contribution Rewards
 
-**狀態：Design approved (root, 2026-05-04). Phase 0 cleanup closed. Phase 7 implementation blocked until Phase 1 / 2 / 4 / 6 complete and root separately authorizes Phase 7.**
+**狀態：Design approved (root, 2026-05-04). Phase 0 cleanup closed. Phase 7 implementation blocked until Phase 1 / 1A / 2 / 4 / 6 complete and root separately authorizes Phase 7.**
 
 完整設計與 schema / API / gate 見 [POINTS_MINING_REWARDS.md](POINTS_MINING_REWARDS.md)。本章只列工程整合要點。
 
@@ -634,7 +680,7 @@ def effective_signers_for_mining(proposal, all_signers):
 | 5 | POINTS_SELF_CUSTODY.md | test_self_custody_signature, test_secret_redaction | pentest_signature_bypass | signature failure rate |
 | 6 | （Explorer 內建說明） | test_explorer_endpoints, test_merkle_proof | smoke_explorer_query | explorer query p95 |
 
-每個 phase 完成同步更新：README.md / 03_ADMIN_GUIDE.md / 08_TRADING_ENGINE.md / TRADING_BOT_AUDIT.md / 09_SNAPSHOT_RESET_RESTORE.md / SECURITY_MODES.md。
+每個 phase 完成同步更新：README.md / 03_ADMIN_GUIDE.md / 08_TRADING_ENGINE.md / TRADING_BOT_AUDIT.md / 09_SNAPSHOT_RESET_RESTORE.md / server_mode_v2 安全模式文件。
 
 ---
 

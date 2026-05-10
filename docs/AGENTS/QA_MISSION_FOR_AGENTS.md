@@ -141,7 +141,7 @@ QA 不只要找 bug，還要檢查功能是否符合
 不要把封存功能誤當成現行 regression fail。
 
 - `WebTerminal` 目前是封存設計，不在現行 `routes/` / `public/js/` 主線。
-- 參考文件在 `docs/archive/webterminal/` 與 `VERSION_STORY.md`。
+- 舊設計文件已從 tracked docs 移除；需要追溯時查 Git history 與 `VERSION_STORY.md`。
 - 若現行 release 沒宣稱它存在，就不要把「找不到 WebTerminal UI」直接當功能 bug。
 - 只有當新 release 明確重新啟用 terminal 類功能時，才建立對應 QA 任務。
 

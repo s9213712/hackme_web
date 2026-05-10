@@ -1,6 +1,6 @@
 """Slice 2 — strict parser invariants for services/trading/validators.py.
 
-Companion to docs/AGENTS/reports/claude/readability_refactor_2026-05-07/
+Companion coverage for the trading validator split.
 REFACTOR_PLAN.md slice 2.
 
 The slice is additive: no callers migrated, no behavior change for the

@@ -142,8 +142,8 @@ Two WebTerminal branches are intentionally preserved but abandoned:
 They are not deleted so their history remains auditable, but they should not be
 merged into the active main line.
 
-Detailed historical notes are archived under
-[docs/archive/webterminal](archive/webterminal/README.md).
+Detailed historical notes were removed from tracked docs during documentation
+cleanup. Use Git history if the old design notes are needed.
 
 ### Docker Attempt
 

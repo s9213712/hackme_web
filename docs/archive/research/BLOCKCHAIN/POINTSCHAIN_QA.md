@@ -33,7 +33,7 @@
 
 > **2026-05-04 final review update**: 原先 Phase 0 blockers / recommend / low issues 已完成收斂；
 > isolated live API 驗證、runtime cleanup、today feature regression 與 full pytest 皆通過。
-> `docs/AGENTS/reports/*` 只保留歷史 baseline / evidence，不作 current gate 的 canonical 規格來源。
+> 歷史 baseline / evidence 不作 current gate 的 canonical 規格來源；必要時查 Git history 或重新跑 validation。
 
 - [x] **#129 close** ✅ — `test_backtest_does_not_silently_replace_isolated_single_candle` PASS
 - [x] **#130 close** ✅ — `test_backtest_skips_outlier_jump_candles_instead_of_booking_fake_profit` PASS
@@ -89,6 +89,39 @@
 - [ ] 官方地址 badge 顯示
 - [ ] supply 狀態燈在 admin dashboard
 - [ ] mobile RWD 8 breakpoint 全綠
+
+---
+
+## 3A. Phase 1A 出口 Gate（Economy Observability）
+
+> Phase 1A 是真實 mint / mining payout / trading risk 擴張前的前置 gate。它只允許 read-only metrics，不得改 user balance。
+
+### 3A.1 Source / Sink 分類
+
+- [ ] 最近 30 天 `earned_total / spent_total / burned_total / locked_total / minted_total` 可回填
+- [ ] source breakdown 至少包含 login / post / comment / like / bug_bounty / game_quest / admin_grant / mining_dry_run
+- [ ] sink breakdown 至少包含 post_cost / storage / ComfyUI / server_rental / username_change / profile_decoration / trading_fee / redemption / burn
+- [ ] unknown source 或 unknown sink 各自不得超過總量 1%；超過直接 BLOCK 真實 payout
+
+### 3A.2 Official Pool Runway
+
+- [ ] treasury / reserve / reward / exchange fund 四池餘額都可由 ledger replay 重算
+- [ ] reward pool runway 顯示 4 週 / 1 週門檻與 pending payouts
+- [ ] treasury runway 顯示月數與 budget utilization
+- [ ] reserve low-watermark 低於 policy 下限時只產 draft proposal，不自動執行
+
+### 3A.3 Exchange Fund Solvency
+
+- [ ] `required_exchange_fund` 包含 open_cfd_exposure / pvp_lockup / pending_user_profit_payouts / liquidation_gap_var_99 / oracle_failure_buffer / pending_settlement
+- [ ] `exchange_fund_health < 1.0` 時所有新增 margin / CFD risk path 必拒，只允許 close / reduce-only
+- [ ] `exchange_fund_health < 0.5` 時 trading read-only，保留 liquidation / settlement
+- [ ] bad debt event 必須獨立記錄，不能藏在 treasury adjustment
+
+### 3A.4 Mint Precheck
+
+- [ ] 任一 mint proposal 建立前必有 `mint_precheck_report`
+- [ ] precheck 內含 source/sink report、pool runway、30/90 天 projection、替代方案、dry-run simulation hash
+- [ ] precheck fail 時只能建立 draft，不能 execute
 
 ---
 
@@ -264,7 +297,7 @@
 
 ## 8a. Phase 7 出口 Gate（QA Mining / Contribution Rewards）
 
-> Status: design approved. Phase 0 cleanup closed. Phase 7 implementation blocked until Phase 1 / 2 / 4 / 6 complete and root separately authorizes Phase 7.
+> Status: design approved. Phase 0 cleanup closed. Phase 7 implementation blocked until Phase 1 / 1A / 2 / 4 / 6 complete and root separately authorizes Phase 7.
 > 完整規格 [POINTS_MINING_REWARDS.md](POINTS_MINING_REWARDS.md) §21。
 
 ### 8a.1 Schema / 結構
@@ -372,7 +405,10 @@
 11. closed order 不得再次成交
 12. canceled order 不得成交
 13. fee_pool_balance == Σ fee_amount across all fee events
-14. circulating + reserve + reward_pool + fee_pool + burned == total_supply
+14. circulating + treasury + reserve + exchange_fund + reward_pool + fee_pool
+    + airdrop + escrow + settle + burned == total_supply
+15. exchange_fund_health < 1.0 時不得新增槓桿 / CFD 風險，只能 close / reduce-only
+16. mint proposal 無 mint_precheck_report 或 dry-run simulation hash → 不得 execute
 ```
 
 每項都有對應的 pytest 與 nightly job；任何破壞自動進 incident_lockdown。
@@ -398,6 +434,10 @@ multisig threshold = 1
 incident_lockdown 期間可 execute multisig（除 release）
 chain block hash 鏈中斷
 state_root / supply_root 對不上實際 wallet 與 supply
+exchange_fund_health < 1.0 仍接受新 margin / CFD risk
+exchange_fund bad debt 未獨立入 ledger
+mint proposal 沒有 source/sink + pool runway + dry-run precheck
+source/sink unknown 分類超過 1% 仍允許真實 payout
 
 # Phase 7 Mining Release Blocker（補充）
 mining reward 公式繞過 hard cap
@@ -418,17 +458,15 @@ mining payout 不寫 ledger_v2 + chain_block
 
 ## 11. 測試腳本與重現
 
-每個 phase 完成都歸檔對應腳本到：
+每個 phase 完成都要在 commit message 或外部工作紀錄保留對應摘要：
 
 ```
-docs/AGENTS/reports/claude/pointschain_v2_phaseN_<date>/
-├── README.md
-├── PHASE_GATE_REPORT.md
-├── scripts/
-└── evidence/
+Verdict
+Branch / commit
+Coverage matrix
+Findings
+Required fixes
 ```
-
-模板沿用 [`docs/AGENTS/reports/claude/prechain_qa_2026-05-04/`](../AGENTS/reports/claude/prechain_qa_2026-05-04/) 的結構。
 
 ---
 
@@ -453,6 +491,5 @@ docs/AGENTS/reports/claude/pointschain_v2_phaseN_<date>/
 - [POINTS_WALLET_ADDRESSING.md](POINTS_WALLET_ADDRESSING.md)
 - [POINTS_TRANSFER_API.md](POINTS_TRANSFER_API.md)
 - [MULTISIG_WALLETS.md](MULTISIG_WALLETS.md)
-- [AGENTS/reports/claude/prechain_qa_2026-05-04/PRE_BLOCKCHAIN_READINESS_REPORT.md](../AGENTS/reports/claude/prechain_qa_2026-05-04/PRE_BLOCKCHAIN_READINESS_REPORT.md) — Phase 0 base line
 - [AGENTS/QA_MISSION_FOR_AGENTS.md](../AGENTS/QA_MISSION_FOR_AGENTS.md) — 整站 QA runbook
 - [AGENTS/TRADING_SYSTEM_QA_FOR_AGENTS.md](../AGENTS/TRADING_SYSTEM_QA_FOR_AGENTS.md) — 交易 QA

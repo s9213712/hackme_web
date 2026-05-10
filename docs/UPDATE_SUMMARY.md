@@ -593,7 +593,7 @@ Release ID: `2026.05.07-155`
 
 - `PYTHONPATH=. python3 -m pytest -q tests/test_trading_reference_prices.py tests/test_frontend_economy.py tests/test_release_policy.py`
 - `PYTHONPATH=. python3 -m pytest -q tests`
-- isolated live API validation script under `docs/AGENTS/reports/codex/final_open_issues_review_*/scripts/live_api_validation.sh`
+- isolated live API validation script from the final open-issues review artifacts
 - `python3 scripts/pre_push_checks.py --ci`
 - `git diff --check`
 
