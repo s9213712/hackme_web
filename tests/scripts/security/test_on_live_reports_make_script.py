@@ -72,18 +72,22 @@ def test_full_generator_parallel_long_can_include_live_pentest_or_disable_parall
 def test_go_live_scope_excludes_optional_product_suites_from_core_gate():
     helper_source = (ROOT / "scripts" / "security" / "gate" / "on_live_reports_make.py").read_text(encoding="utf-8")
     full_source = (ROOT / "scripts" / "security" / "gate" / "full_generator_live_validate.py").read_text(encoding="utf-8")
+    functional_wrapper_source = (ROOT / "scripts" / "on_live_reports" / "functional.py").read_text(encoding="utf-8")
     pentest_source = (ROOT / "scripts" / "security" / "pentest" / "run_pentest.sh").read_text(encoding="utf-8")
     functional_source = (ROOT / "scripts" / "security" / "pentest" / "run_functional_smoke.sh").read_text(encoding="utf-8")
     permission_source = (ROOT / "scripts" / "security" / "pentest" / "functional_permission_pentest.py").read_text(encoding="utf-8")
     joined_targets = "\n".join(helper.GO_LIVE_CORE_PYTEST_TARGETS)
 
     assert "GO_LIVE_CORE_PYTEST_TARGETS" in helper_source
+    assert "GO_LIVE_CORE_PYTEST_ARGS" in helper_source
     assert helper.GO_LIVE_CORE_PYTEST_TARGETS
     assert all("tests/" in target for target in helper.GO_LIVE_CORE_PYTEST_TARGETS)
+    assert helper.GO_LIVE_CORE_PYTEST_ARGS[: len(helper.GO_LIVE_CORE_PYTEST_TARGETS)] == helper.GO_LIVE_CORE_PYTEST_TARGETS
+    assert "-k" in helper.GO_LIVE_CORE_PYTEST_ARGS
     assert "tests/games/" not in joined_targets
     assert "tests/comfyui/" not in joined_targets
     assert "tests/frontend/comfyui/" not in joined_targets
-    assert "tests/trading/" not in joined_targets
+    assert "tests/trading/" in joined_targets
     assert 'payloads["pytest"] = _pytest_report(out_root, raw_dir, "pytest", ["tests"]' not in helper_source
     assert '["tests"],' not in full_source
     assert "tests/games" not in helper_source
@@ -96,9 +100,19 @@ def test_go_live_scope_excludes_optional_product_suites_from_core_gate():
     assert "--only" in helper_source and "GO_LIVE_CORE_PENTEST_CHECKS" in helper_source
     assert '"GO_LIVE_CORE_ONLY": "1"' in helper_source
     assert '"--core-only"' in helper_source
+    assert 'smoke_args.append("--core-only")' in functional_wrapper_source
+    assert 'env["GO_LIVE_CORE_ONLY"] = "1"' in functional_wrapper_source
+    assert '"--qa-full" not in smoke_args and "--core-only" not in smoke_args' in functional_wrapper_source
     assert 'GO_LIVE_CORE_ONLY:-0}" == "1"' in pentest_source
     assert "--core-only" in permission_source
     assert 'GO_LIVE_CORE_ONLY:-0}" != "1"' in functional_source
+    assert "--qa-full" in functional_source
+    assert "--core-only" in functional_source
+    assert "Scope: go-live core only; broad QA product workflows are skipped" in functional_source
+    assert "Scope: QA full functional smoke" in functional_source
+    assert "scope: \\`$FUNCTIONAL_SCOPE\\`" in functional_source
+    assert 'if [[ "${GO_LIVE_CORE_ONLY:-0}" == "1" ]]; then\n    return 0\n  fi' in functional_source
+    assert 'if [[ "${GO_LIVE_CORE_ONLY:-0}" != "1" ]]; then\n    create_forum_post_flow' in functional_source
     assert 'if [[ "${GO_LIVE_CORE_ONLY:-0}" != "1" ]]; then\n    login_smoke_user || return 1' in functional_source
 
 

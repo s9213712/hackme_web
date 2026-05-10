@@ -23,7 +23,7 @@ relevant API, or compose multiple sub-drivers.
 | `integrity_guard` | `integrity_guard.py` (wrapper) | `tests/security/integrity/test_integrity_guard.py` |
 | `stress` | `stress.py` (symlink) | `scripts/security/pentest/trading_stress_pentest.py` |
 | `permission` | `permission.py` (symlink) | `scripts/security/pentest/functional_permission_pentest.py` |
-| `functional` | `functional.py` (wrapper) | `run_functional_smoke.sh` + `tests/security/smoke/smoke_suite.py` |
+| `functional` | `functional.py` (wrapper) | `run_functional_smoke.sh --core-only` + `tests/security/smoke/smoke_suite.py` |
 | `pentest` | `pentest.py` (symlink) | `scripts/security/pentest/session_security_pentest.py` |
 | `snapshot_restore` | `snapshot_restore.py` (wrapper) | `tests/snapshots/test_snapshots.py` |
 | `points_chain_consistency` | `points_chain_consistency.py` (wrapper) | `tests/points/test_points_chain.py` |

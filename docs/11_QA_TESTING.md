@@ -38,12 +38,26 @@ scripts/testing/pytest_in_tmp.sh -q tests
 #### 3. 功能 smoke
 
 ```bash
-scripts/security/pentest/run_functional_smoke.sh --port 50741
+scripts/security/pentest/run_functional_smoke.sh --qa-full --port 50741
 ```
 
 `tests/security/smoke/smoke_suite.py`、`scripts/security/pentest/run_functional_smoke.sh`、`scripts/security/pentest/run_pentest.sh`
 的 smoke 預設帳密現在已對齊為
 `RootSmoke123! / ManagerSmoke123! / TestSmoke123!`。
+
+`--qa-full` 是既有 QA 腳本的完整產品回歸模式，包含 community/chat/storage/video/
+ComfyUI/reports/moderation 等較廣的功能 bug 類檢查。上線前 production gate
+呼叫同一支腳本時只用 `--core-only`，不把 ComfyUI、chess/game、video 等產品 QA
+混進解鎖條件。
+
+產品 QA pytest 也走既有 QA pytest wrapper，例如：
+
+```bash
+scripts/testing/pytest_in_tmp.sh -q \
+  tests/community tests/storage tests/video tests/comfyui tests/games \
+  tests/frontend/community tests/frontend/storage tests/frontend/video \
+  tests/frontend/comfyui tests/frontend/games
+```
 
 #### 4. 權限與安全掃描
 
@@ -84,8 +98,11 @@ PYTHONPATH=. python3 scripts/trading/probes/backtest_20000_probe.py --include-ro
 
 - `scripts/prepush/pre_push_checks.py`
   是本機快速 gate，不預設啟 server。
-- `scripts/security/pentest/run_functional_smoke.sh`
-  是隔離 runtime 的主要功能回歸；它會保留自己的 `/tmp` runtime 邊界。
+- `scripts/security/pentest/run_functional_smoke.sh --qa-full`
+  是隔離 runtime 的主要功能 QA 回歸；它會保留自己的 `/tmp` runtime 邊界。
+- `scripts/security/pentest/run_functional_smoke.sh --core-only`
+  是 production gate 用的核心模式，只保留 auth、admin、security-center、用戶、
+  PointsChain、trading、越權與必要 runtime hardening 檢查。
 - `scripts/security/pentest/run_pentest.sh`
   是外層 orchestrator，會呼叫多種檢查，包含 `functional-permissions`、
   server-mode-v2、whole-site-production-gate 等子檢查；whole-site gate 會套
@@ -240,7 +257,7 @@ python3 scripts/on_live_reports/snapshot_restore.py
 | `integrity_guard` | `POST /api/root/integrity/rescan` + `GET /api/root/integrity/report` + `tests/security/integrity/test_integrity_guard.py` | 固定 15 | `runtime/reports/security/production_gate/integrity_guard_report.json` |
 | `stress` | `python3 scripts/security/pentest/stress_test.py` + `python3 scripts/security/pentest/trading_stress_pentest.py` | 動態 | `runtime/reports/security/stress_<timestamp>.json|.md`；`runtime/reports/security/trading_stress_report_<timestamp>.json|.md` |
 | `permission` | `python3 scripts/security/pentest/functional_permission_pentest.py` | 動態 | `runtime/reports/security/functional_permission_pentest_<timestamp>.json|.md` |
-| `functional` | `scripts/security/pentest/run_functional_smoke.sh` + `tests/security/smoke/smoke_suite.py` | 動態 | `runtime/reports/security/functional_<run_id>/00_FUNCTIONAL_SMOKE.md`、`results.tsv`、`server.out`、`raw/` |
+| `functional` | `scripts/security/pentest/run_functional_smoke.sh --core-only` + `tests/security/smoke/smoke_suite.py` | 動態 | `runtime/reports/security/functional_<run_id>/00_FUNCTIONAL_SMOKE.md`、`results.tsv`、`server.out`、`raw/` |
 | `pentest` | `scripts/security/pentest/run_pentest.sh` + `python3 scripts/security/pentest/session_security_pentest.py` | 動態 | `runtime/reports/security/<run_id>/00_SUMMARY.md` + `raw/*.json|*.md|*.txt` |
 | `snapshot_restore` | `scripts/testing/pytest_in_tmp.sh -q tests/snapshots/test_snapshots.py` + 手動 `create → restore → verify` | 固定 40 | `runtime/reports/security/production_gate/snapshot_restore_report.json` |
 | `points_chain_consistency` | `scripts/testing/pytest_in_tmp.sh -q tests/points/test_points_chain.py` + `services/points_chain.verify_chain()` | 固定 27 | `runtime/reports/security/production_gate/points_chain_consistency_report.json` |

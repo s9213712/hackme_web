@@ -43,6 +43,7 @@ GO_LIVE_CORE_PYTEST_TARGETS = [
     "tests/security/auth/test_session_idle_timeout.py",
     "tests/account/auth/test_account_lockout.py",
     "tests/security/input/test_password_strength.py",
+    "tests/security/input/test_plaintext_secrets_scan.py",
     "tests/account/recovery/test_account_recovery.py",
     "tests/account/sessions/test_account_sessions.py",
     "tests/security/gates/test_production_gate_enforcement.py",
@@ -56,10 +57,16 @@ GO_LIVE_CORE_PYTEST_TARGETS = [
     "tests/platform/test_bootstrap_compat.py",
     "tests/snapshots/test_snapshots.py",
     "tests/points/test_points_chain.py",
-    "tests/storage/test_storage_paths.py",
-    "tests/storage/test_upload_security.py",
-    "tests/storage/test_cloud_drive_attachments.py",
-    "tests/storage/test_storage_albums_schema.py",
+    "tests/trading/core/test_trading_engine.py",
+    "tests/trading/core/test_trading_markets.py",
+    "tests/trading/pricing/test_trading_reference_prices.py",
+    "tests/trading/grid/test_grid_preview_api.py",
+    "tests/trading/mode_boundaries/test_trading_mode_gate.py",
+]
+GO_LIVE_CORE_PYTEST_ARGS = GO_LIVE_CORE_PYTEST_TARGETS + [
+    "-k",
+    "not live_price_provider_blocks_market_order_when_binance_is_down and "
+    "not live_price_provider_blocks_market_order_when_public_fallback_chain_is_unhealthy",
 ]
 
 GO_LIVE_CORE_PENTEST_CHECKS = ",".join(
@@ -523,6 +530,7 @@ def _functional_report(out_root: Path, raw_dir: Path, args, signer: PayloadSigne
             str(functional_port),
             "--out",
             str(report_root),
+            "--core-only",
         ],
         env={"GO_LIVE_CORE_ONLY": "1"},
         timeout=args.functional_timeout,
@@ -931,7 +939,7 @@ def main() -> int:
         out_root,
         raw_dir,
         "pytest",
-        GO_LIVE_CORE_PYTEST_TARGETS,
+        GO_LIVE_CORE_PYTEST_ARGS,
         timeout=args.pytest_timeout,
         signer=signer,
         meta=meta,

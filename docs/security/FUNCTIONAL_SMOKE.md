@@ -22,8 +22,13 @@ reports 全部導向 `/tmp` 底下的隔離資料夾，避免污染 repo 內的 
 從 repo 根目錄執行：
 
 ```bash
-scripts/security/pentest/run_functional_smoke.sh
+scripts/security/pentest/run_functional_smoke.sh --qa-full
 ```
+
+`--qa-full` 是預設行為，保留在命令中是為了讓意圖清楚：這條路線跑 broad
+product QA，例如 community/chat/storage/video/ComfyUI/reports/moderation
+工作流。上線前 production gate 只應使用 `--core-only`，聚焦 auth、admin、
+security-center、用戶、PointsChain、trading、越權與必要 runtime 安全邊界。
 
 指定 port：
 
@@ -56,6 +61,8 @@ scripts/security/pentest/run_functional_smoke.sh --keep-runtime
 | `--runtime DIR` | 隔離 runtime 根目錄。預設 `/tmp/hackme_web_functional_<RUN_ID>`。 |
 | `--out DIR` | 報告根目錄。預設 `runtime/reports/security`。 |
 | `--keep-runtime` | 測試後保留 runtime，但會還原到 pre-start snapshot。 |
+| `--qa-full` | 跑完整 QA functional smoke；包含 community/chat/storage/video/ComfyUI/reports/moderation 等產品回歸。這是預設模式。 |
+| `--core-only` | 只跑上線前必要核心功能與安全邊界；跳過 QA 類產品工作流。production gate 使用這個模式。 |
 | `-h`, `--help` | 顯示腳本內建說明。 |
 
 ## Environment Overrides
@@ -74,6 +81,7 @@ scripts/security/pentest/run_functional_smoke.sh --keep-runtime
 | `START_TIMEOUT` | `45` | 等待 server ready 的秒數。 |
 | `RESET_OFFLINE_TIMEOUT` | `20` | reset server 後等待服務短暫離線的秒數；若 process 很快完成重啟且 `started_at` 已變更，也視為通過。 |
 | `RESET_RECONNECT_TIMEOUT` | `180` | reset server 後等待服務重新連線且 `started_at` 變更的秒數。 |
+| `GO_LIVE_CORE_ONLY` | `0` | 設為 `1` 等同 `--core-only`；保留給 production-gate wrapper 相容使用。 |
 
 ## Runtime Isolation
 
@@ -104,6 +112,13 @@ root 那個故意存在的 `runtime` fail-closed 哨兵檔。
 ## Functional Coverage
 
 目前腳本會覆蓋：
+
+`--core-only` 只跑上線前核心區：public/auth/admin/security-center、用戶建立、
+account sessions、PointsChain、trading、maintenance bypass / tester token 與必要
+runtime hardening guidance。QA 類產品工作流保留在
+`--qa-full`：community/chat/DM、storage 檔案整理、ComfyUI、video/E2EE share、
+bug report、moderation、appeals、reputation，以及 snapshot restore/reset 的
+廣泛殘留資料檢查。
 
 | Area | Checked Behaviors |
 |---|---|

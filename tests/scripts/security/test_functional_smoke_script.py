@@ -28,6 +28,32 @@ def test_functional_smoke_waits_for_reset_restart_reconnect():
     assert "refresh_base_url()" in script
 
 
+def test_functional_smoke_has_explicit_qa_full_and_core_only_modes():
+    script = (ROOT / "scripts" / "security" / "pentest" / "run_functional_smoke.sh").read_text(encoding="utf-8")
+    docs = (ROOT / "docs" / "security" / "FUNCTIONAL_SMOKE.md").read_text(encoding="utf-8")
+    qa_docs = (ROOT / "docs" / "11_QA_TESTING.md").read_text(encoding="utf-8")
+    index = (ROOT / "scripts" / "INDEX.md").read_text(encoding="utf-8")
+    architecture = (ROOT / "docs" / "security" / "QA_ARCHITECTURE.md").read_text(encoding="utf-8")
+
+    assert "[--qa-full|--core-only]" in script
+    assert "--qa-full" in script
+    assert "--core-only" in script
+    assert "FUNCTIONAL_SCOPE=\"go_live_core\"" in script
+    assert "Scope: go-live core only; broad QA product workflows are skipped" in script
+    assert "Scope: QA full functional smoke" in script
+    assert "QA full functional smoke" in script
+    assert "production-gate core coverage and skips broad product QA workflows" in script
+    assert "`--qa-full` 是預設行為" in docs
+    assert "`--core-only`" in docs
+    assert "ComfyUI/reports/moderation" in docs
+    assert "scripts/security/pentest/run_functional_smoke.sh --qa-full --port 50741" in qa_docs
+    assert "scripts/testing/pytest_in_tmp.sh -q \\" in qa_docs
+    assert "tests/frontend/games" in qa_docs
+    assert "run_functional_smoke.sh --core-only" in index
+    assert "run_functional_smoke.sh --qa-full" in index
+    assert "QA-only product workflows" in architecture
+
+
 def test_functional_smoke_covers_latest_trading_and_announcement_paths():
     script = (ROOT / "scripts" / "security" / "pentest" / "run_functional_smoke.sh").read_text(encoding="utf-8")
     docs = (ROOT / "docs" / "security" / "FUNCTIONAL_SMOKE.md").read_text(encoding="utf-8")

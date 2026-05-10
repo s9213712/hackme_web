@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""On-live-report driver: functional. Runs run_functional_smoke.sh + smoke_suite.py."""
+"""On-live-report driver: functional. Runs core functional smoke + smoke_suite.py."""
 import os
 import subprocess
 import sys
@@ -21,8 +21,12 @@ if not SMOKE_SH.exists():
 env = {**os.environ}
 progress(f"target repo: {REPO_ROOT}")
 progress(f"artifact hint: {REPORT_HINT}")
-progress("phase functional smoke started")
-rc = subprocess.run(["bash", str(SMOKE_SH), *sys.argv[1:]], cwd=REPO_ROOT, env=env).returncode
+smoke_args = list(sys.argv[1:])
+if "--qa-full" not in smoke_args and "--core-only" not in smoke_args:
+    smoke_args.append("--core-only")
+    env["GO_LIVE_CORE_ONLY"] = "1"
+progress(f"phase functional smoke started args={' '.join(smoke_args) or '<none>'}")
+rc = subprocess.run(["bash", str(SMOKE_SH), *smoke_args], cwd=REPO_ROOT, env=env).returncode
 progress(f"phase result functional smoke: exit={rc}")
 if rc != 0:
     progress("failure hint: inspect run_functional_smoke raw outputs under the functional report directory")

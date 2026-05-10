@@ -22,13 +22,13 @@
   - 報告路徑：
   - 結論：沒有未處理的 high / critical 風險；若有 findings，已建立 issue 並完成修復或由 root 明確接受風險。
 
-- [ ] 阻擋：已完成全功能測試。
+- [ ] QA：已完成產品全功能測試。
   - 指令：
     ```bash
-    scripts/security/pentest/run_functional_smoke.sh --port 50741
+    scripts/security/pentest/run_functional_smoke.sh --qa-full --port 50741
     ```
   - 報告路徑：
-  - 結論：`failures` 必須為 `0`；若有 `skip`，必須確認是外部服務未啟用或預期條件，而不是功能缺失。
+  - 結論：`failures` 必須為 `0`；若有 `skip`，必須確認是外部服務未啟用或預期條件，而不是功能缺失。這是 QA 產品回歸，不是 production unlock 的核心 gate。
 
 - [ ] 阻擋：已完成基礎壓力測試。
   - 指令：
