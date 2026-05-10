@@ -4,6 +4,7 @@ from services.comfyui.api_nodes import (
     detect_paid_api_nodes,
 )
 from services.comfyui.execution import queue_prompt_with_client_id
+from services.comfyui.workflows import WorkflowValidationError, sanitize_workflow_json
 
 
 class _FakeClient:
@@ -74,3 +75,19 @@ def test_queue_prompt_includes_extra_data_only_when_provided():
         error_cls=RuntimeError,
     )
     assert "extra_data" not in client.calls[0]["payload"]
+
+
+def test_workflow_sanitize_rejects_inline_api_keys():
+    workflow = {
+        "1": {
+            "class_type": "FluxProUltraImageNode",
+            "inputs": {"prompt": "cat", "api_key": "comfyui-secret-key"},
+        }
+    }
+
+    try:
+        sanitize_workflow_json(workflow)
+    except WorkflowValidationError as exc:
+        assert "敏感" in str(exc)
+    else:
+        raise AssertionError("workflow JSON with inline api_key should be rejected")
