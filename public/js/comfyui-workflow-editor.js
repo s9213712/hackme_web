@@ -1222,6 +1222,21 @@
     }
   }
 
+  function filterNodePalette() {
+    const query = String($("nodeSearchInput")?.value || "").trim().toLowerCase();
+    let visibleCount = 0;
+    document.querySelectorAll("[data-add-node]").forEach((button) => {
+      const haystack = `${button.getAttribute("data-add-node") || ""} ${button.textContent || ""}`.toLowerCase();
+      const visible = !query || haystack.includes(query);
+      button.classList.toggle("is-hidden", !visible);
+      if (visible) visibleCount += 1;
+    });
+    document.querySelectorAll(".tool-group").forEach((group) => {
+      group.classList.toggle("is-hidden", !group.querySelector("[data-add-node]:not(.is-hidden)"));
+    });
+    if (query) setStatus(visibleCount ? `節點搜尋：${visibleCount} 個結果。` : "節點搜尋沒有結果。", !!visibleCount);
+  }
+
   function clearAll() {
     if (!confirm("清空目前畫布？")) return;
     workflow = emptyState();
@@ -1233,6 +1248,7 @@
     document.querySelectorAll("[data-add-node]").forEach((button) => {
       button.addEventListener("click", () => addNode(button.getAttribute("data-add-node")));
     });
+    $("nodeSearchInput")?.addEventListener("input", filterNodePalette);
     $("starterTxt2ImgBtn")?.addEventListener("click", createTxt2ImgStarter);
     $("autoLayoutBtn")?.addEventListener("click", autoLayoutNodes);
     $("importJsonFile")?.addEventListener("change", (event) => importJsonFile(event));

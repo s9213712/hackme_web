@@ -74,6 +74,15 @@ def main() -> int:
             if node_count < 7 or edge_count < 8:
                 raise AssertionError(f"starter graph incomplete: nodes={node_count}, edges={edge_count}")
 
+            page.locator("#nodeSearchInput").fill("upscale")
+            search_status = page.locator("#status").inner_text(timeout=5000)
+            if "節點搜尋" not in search_status:
+                raise AssertionError(f"node search did not update status: {search_status!r}")
+            visible_tools = page.locator("[data-add-node]:not(.is-hidden)").count()
+            if visible_tools < 1 or visible_tools >= page.locator("[data-add-node]").count():
+                raise AssertionError("node search did not filter the palette")
+            page.locator("#nodeSearchInput").fill("")
+
             drag_between(
                 page,
                 '.wf-node:has-text("主模型") .port.output[data-port-name="VAE"]',

@@ -124,9 +124,18 @@ h1 { margin: 0; font-size: 1.08rem; }
 .field { display: grid; gap: .32rem; margin-bottom: .68rem; }
 .field label, label.field { color: var(--muted); font-size: .82rem; }
 .tool-group { margin-bottom: .95rem; }
+.palette-search {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding-bottom: .65rem;
+  background: rgba(17, 24, 39, .96);
+}
 .tool-title { margin-bottom: .45rem; font-weight: 700; font-size: .9rem; }
 .tool-grid { display: grid; gap: .42rem; }
 .tool-grid button { text-align: left; display: grid; gap: .12rem; }
+.tool-grid button.is-hidden { display: none; }
+.tool-group.is-hidden { display: none; }
 .tool-grid b { font-size: .88rem; }
 .tool-grid span { color: var(--muted); font-size: .76rem; line-height: 1.35; }
 .badges { display: flex; flex-wrap: wrap; gap: .38rem; align-items: center; }
