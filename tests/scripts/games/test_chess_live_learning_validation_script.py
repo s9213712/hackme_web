@@ -34,6 +34,169 @@ def test_live_learning_validation_fast_retrain_flags_are_wired():
     assert '"autorun_skip_benchmark"' in source
     assert '"autorun_skip_promote"' in source
     assert '"retrain_benchmark_snapshots_skipped"' in source
+    assert "--semantic-specialist-probes" in source
+    assert "--kingside-development-audit" in source
+    assert "_run_semantic_specialist_probes" in source
+    assert "_run_kingside_development_audit" in source
+    assert "kingside_development_audit" in source
+    assert "BALANCED_PROMOTION_SEMANTIC_CLASSES" in source
+    assert "STYLE_AUDIT_SEMANTIC_CLASSES" in source
+    assert "balanced_clean_heldout_by_semantic" in source
+    assert "development_multi_good_credit" in source
+    assert "attacking_style_audit" in source
+    assert "CENTRAL_FLANK_FOCUS_SEMANTICS" in source
+    assert "central_flank_targeted_curriculum" in source
+    assert "central_flank_failed_case_analysis" in source
+
+
+def test_semantic_specialist_training_rows_are_weighted():
+    module = _load_validation_module()
+    variant = {
+        "case_id": "kingside_probe",
+        "variant_id": "kingside_probe:train",
+        "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+        "side": "white",
+        "expected_move": "h2h4",
+        "expected_semantic": "kingside_aggression",
+        "semantic_class": "kingside_aggression",
+        "variant_difficulty": "easy",
+    }
+
+    row = module._specialist_training_row(variant, weight=2.2)
+
+    assert row["variant_split"] == "specialist_train"
+    assert row["source"] == "semantic_specialist_replay"
+    assert row["move_uci"] == "h2h4"
+    assert row["expected_semantic"] == "kingside_aggression"
+    assert row["hard_negatives"]
+    sampling = module._apply_semantic_class_balanced_weights([row])
+    assert sampling["enabled"] is True
+    assert sampling["sample_weight_by_semantic"]["kingside_aggression"] > 0
+
+
+def test_balanced_gate_excludes_style_and_credits_development_multigood():
+    module = _load_validation_module()
+    variants = [
+        {
+            "case_id": "dev_case",
+            "fen": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
+            "side": "black",
+            "expected_move": "g8f6",
+            "expected_semantic": "development_move",
+            "semantic_class": "development_move",
+            "variant_split": "held_out",
+            "variant_difficulty": "medium",
+        },
+        {
+            "case_id": "style_case",
+            "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            "side": "white",
+            "expected_move": "h2h4",
+            "expected_semantic": "kingside_aggression",
+            "semantic_class": "kingside_aggression",
+            "variant_split": "held_out",
+            "variant_difficulty": "easy",
+        },
+    ]
+    final_rows = [
+        {"case_id": "dev_case", "top1": "e7e5", "top3": ["e7e5", "d7d5", "g8f6"], "expected_is_top1": False},
+        {"case_id": "style_case", "top1": "e2e4", "top3": ["e2e4"], "expected_is_top1": False},
+    ]
+    raw_rows = [
+        {"case_id": "dev_case", "raw_policy_top1": "e7e5", "raw_policy_top3": ["e7e5", "d7d5", "g8f6"], "expected_is_raw_top1": False},
+        {"case_id": "style_case", "raw_policy_top1": "e2e4", "raw_policy_top3": ["e2e4"], "expected_is_raw_top1": False},
+    ]
+
+    result = module._balanced_gate_performance_for_case_ids(
+        variants,
+        final_rows,
+        raw_rows,
+        {"dev_case", "style_case"},
+        label_quality={
+            "cases": [
+                {"case_id": "dev_case", "static_cp_delta": -20},
+                {"case_id": "style_case", "static_cp_delta": -20},
+            ]
+        },
+    )
+
+    assert result["count"] == 1
+    assert result["balanced_hits"] == 1
+    assert result["balanced_pass_rate"] == 1.0
+    assert result["cases"][0]["case_id"] == "dev_case"
+    assert result["cases"][0]["multi_good_credit_applied"] is True
+    assert result["cases"][0]["multi_good_credit_reason"] == "expected_in_final_top3"
+
+
+def test_compact_sanity_probe_preserves_balanced_gate_evidence():
+    module = _load_validation_module()
+
+    compact = module._compact_sanity_probe_for_summary(
+        {
+            "balanced_gate_semantic_set": ["development_move"],
+            "excluded_style_semantics": ["kingside_aggression"],
+            "balanced_clean_held_out_count": 9,
+            "balanced_clean_held_out_pass_rate": 0.6667,
+            "balanced_clean_heldout_by_semantic": {"development_move": {"passed": 6, "total": 9}},
+            "development_multi_good_credit": {"multi_good_credit_applied_count": 4},
+            "attacking_style_audit": {"case_count": 9, "strict_final_pass_rate": 0.0},
+        }
+    )
+
+    assert compact["balanced_gate_semantic_set"] == ["development_move"]
+    assert compact["excluded_style_semantics"] == ["kingside_aggression"]
+    assert compact["balanced_clean_held_out_count"] == 9
+    assert compact["balanced_clean_held_out_pass_rate"] == 0.6667
+    assert compact["balanced_clean_heldout_by_semantic"]["development_move"]["passed"] == 6
+    assert compact["development_multi_good_credit"]["multi_good_credit_applied_count"] == 4
+    assert compact["attacking_style_audit"]["case_count"] == 9
+
+
+def test_exp26_central_flank_curriculum_and_semantic_negatives_are_wired():
+    module = _load_validation_module()
+
+    variants = module._central_flank_targeted_supervised_variants(
+        split="train",
+        offsets=(2,),
+    )
+    semantics = {row["semantic_class"] for row in variants}
+
+    assert {"e_pawn_central_break", "d_pawn_central_break", "flank_pawn_push"} <= semantics
+    assert "development_move" not in semantics
+    assert "kingside_aggression" not in semantics
+    assert all(row["curriculum_focus"] == "central_flank_semantic_improvement" for row in variants)
+
+    negatives = module._semantic_negative_moves(module.chess.STARTING_FEN, "white", "e2e4", limit=3)
+    negative_semantics = [
+        module._move_semantic_class(module.chess.STARTING_FEN, "white", move)
+        for move in negatives
+    ]
+
+    assert negative_semantics[0] == "d_pawn_central_break"
+    assert "flank_pawn_push" in negative_semantics
+    assert "kingside_aggression" not in negative_semantics[:2]
+
+
+def test_compact_checkpoint_preserves_central_flank_curriculum_summary():
+    module = _load_validation_module()
+
+    compact = module._compact_checkpoint_for_summary(
+        {
+            "sanity_variant_training": {
+                "rows": [{"variant_id": "row"}],
+                "central_flank_targeted_curriculum": {
+                    "enabled": True,
+                    "train_rows_added": 27,
+                    "focus_semantics": ["e_pawn_central_break", "d_pawn_central_break", "flank_pawn_push"],
+                },
+            }
+        }
+    )
+
+    training = compact["sanity_variant_training"]
+    assert training["rows"] == []
+    assert training["central_flank_targeted_curriculum"]["enabled"] is True
+    assert training["central_flank_targeted_curriculum"]["train_rows_added"] == 27
 
 
 def test_live_learning_validation_requires_individual_engine_selection():
