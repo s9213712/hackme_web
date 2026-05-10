@@ -35,7 +35,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-id", default="")
     parser.add_argument("--preset", choices=["micro", "quick", "standard", "strong"], default="standard")
     parser.add_argument("--include-quarantine", action="store_true")
-    parser.add_argument("--include-exp2", action="store_true")
+    parser.add_argument("--include-exp2", action="store_true", help="Deprecated no-op; exp2 was removed from the promotion pipeline.")
     parser.add_argument("--skip-exp3", action="store_true")
     parser.add_argument("--skip-exp4", action="store_true")
     parser.add_argument("--skip-exp1-refine", action="store_true")
@@ -100,7 +100,6 @@ def _write_report(summary: dict) -> dict:
         f"- prepare_eval_samples: `{summary['prepare'].get('accepted_eval_samples', 0)}`",
         f"- seed_games_played: `{summary['seed_train'].get('games_played', 0)}`",
         f"- exp1_refine_samples: `{summary.get('exp1_refine', {}).get('accepted_samples', 0)}`",
-        f"- exp2_refine_samples: `{summary.get('exp2_refine', {}).get('accepted_samples', 0)}`",
         f"- exp3_refine_samples: `{summary.get('exp3_refine', {}).get('accepted_samples', 0)}`",
         f"- exp4_refine_samples: `{summary.get('exp4_refine', {}).get('accepted_samples', 0)}`",
         f"- benchmark_skipped: `{summary['benchmark'].get('skipped', False)}`",
@@ -133,7 +132,7 @@ def main() -> int:
         )
 
     dataset_paths = dataset_paths_for_run(run_id)
-    candidate_paths = candidate_paths_for_run(run_id, include_exp2=bool(args.include_exp2))
+    candidate_paths = candidate_paths_for_run(run_id)
     _progress(f"dataset root: {dataset_paths['root']}")
     _progress(f"candidate root: {candidate_paths.get('root', '<derived paths>')}")
 
@@ -170,8 +169,6 @@ def main() -> int:
         "--experiment-4-model-path",
         str(candidate_paths["experiment 4:pv"]),
     ]
-    if args.include_exp2:
-        seed_cmd.extend(["--include-exp2", "--experiment-2-model-path", str(candidate_paths["experiment 2:nn"])])
     if args.skip_exp3:
         seed_cmd.append("--skip-exp3")
     if args.skip_exp4:
@@ -198,19 +195,7 @@ def main() -> int:
     else:
         _progress(f"phase exp1 refine skipped: {exp1_refine['reason']}")
 
-    exp2_refine = {"ok": False, "skipped": True, "reason": "exp2 refine not requested"}
-    if args.include_exp2 and int(prepare.get("accepted_train_samples") or 0) > 0:
-        exp2_cmd = [
-            sys.executable,
-            str(ROOT / "scripts" / "games" / "chess_exp2_dataset_train.py"),
-            "--input-jsonl",
-            str(dataset_paths["train"]),
-            "--model-path",
-            str(candidate_paths["experiment 2:nn"]),
-        ]
-        exp2_refine = _run_json(exp2_cmd, label="exp2 refine")
-    else:
-        _progress(f"phase exp2 refine skipped: {exp2_refine['reason']}")
+    _progress("phase exp2 refine skipped: exp2 removed; exp3 is the replacement promotion trainer")
 
     exp3_refine = {"ok": False, "skipped": True, "reason": "exp3 refine not requested"}
     if not args.skip_exp3 and not args.skip_exp3_refine and int(prepare.get("accepted_train_samples") or 0) > 0:
@@ -282,8 +267,6 @@ def main() -> int:
             "--experiment-4-model-path",
             str(candidate_paths["experiment 4:pv"]),
         ]
-        if args.include_exp2:
-            benchmark_cmd.extend(["--experiment-2-model-path", str(candidate_paths["experiment 2:nn"])])
         if int(args.teacher_depth) > 0:
             benchmark_cmd.extend(["--teacher-depth", str(int(args.teacher_depth))])
         if int(args.max_plies) > 0:
@@ -346,7 +329,6 @@ def main() -> int:
         "prepare": prepare,
         "seed_train": seed_train,
         "exp1_refine": exp1_refine,
-        "exp2_refine": exp2_refine,
         "exp3_refine": exp3_refine,
         "exp4_refine": exp4_refine,
         "benchmark": benchmark,

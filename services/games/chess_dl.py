@@ -50,6 +50,12 @@ _SEARCH_PROFILES = {
     "balanced": {"depth": 2, "quiescence_depth": 2, "time_budget_ms": 320},
     "strong": {"depth": 2, "quiescence_depth": 4, "time_budget_ms": 1000},
 }
+_CONTRASTIVE_NEGATIVE_TARGET = -0.45
+_CONTRASTIVE_MAX_NEGATIVES = 12
+_MOVE_MEMORY_LEARNING_RATE = 0.22
+_MAX_MOVE_MEMORY_BIAS = 1.4
+_POLICY_OVERRIDE_MIN_SCORE = 0.95
+_POLICY_OVERRIDE_MIN_MARGIN = 0.20
 _MODEL_EVAL_MOVE_CAP = 6
 _MODEL_SCORE_SCALE = 140.0
 _PIECE_VALUES = {
@@ -97,6 +103,7 @@ def experiment_dl_model_template() -> dict:
         "b2": [rng.uniform(-0.015, 0.015) for _ in range(_HIDDEN2_SIZE)],
         "w3": [rng.uniform(-0.06, 0.06) for _ in range(_HIDDEN2_SIZE)],
         "b3": rng.uniform(-0.015, 0.015),
+        "move_score_memory": {},
         "sample_count": 0,
         "replay_size": 0,
         "updated_at": _now(),
@@ -159,6 +166,11 @@ def normalize_experiment_dl_model_payload(model: dict) -> dict | None:
         "b2": b2,
         "w3": w3,
         "b3": b3,
+        "move_score_memory": {
+            str(key): _clip(float(value), -_MAX_MOVE_MEMORY_BIAS, _MAX_MOVE_MEMORY_BIAS)
+            for key, value in (model.get("move_score_memory") or {}).items()
+            if isinstance(key, str)
+        },
         "sample_count": max(0, int(model.get("sample_count") or 0)),
         "replay_size": max(0, int(model.get("replay_size") or 0)),
         "updated_at": str(model.get("updated_at") or _now()),
@@ -209,9 +221,94 @@ def _blend_score(model_score: float, heuristic_score: float, sample_count: int) 
     return heuristic_score * (1.0 - learned_weight) + model_score * learned_weight
 
 
+def _move_memory_key(board: chess.Board, side: str, move_uci: str) -> str:
+    return f"{board.board_fen()} {board.turn} {board.castling_rights} {board.ep_square}|{side}|{move_uci}"
+
+
+def _move_memory_bias(model: dict, board: chess.Board, side: str, move_uci: str) -> float:
+    try:
+        return float((model.get("move_score_memory") or {}).get(_move_memory_key(board, side, move_uci)) or 0.0)
+    except Exception:
+        return 0.0
+
+
+def _update_move_memory(model: dict, board: chess.Board, side: str, move: chess.Move, target: float) -> None:
+    memory = model.setdefault("move_score_memory", {})
+    key = _move_memory_key(board, side, move.uci())
+    current = float(memory.get(key) or 0.0)
+    memory[key] = _clip(current + _MOVE_MEMORY_LEARNING_RATE * float(target), -_MAX_MOVE_MEMORY_BIAS, _MAX_MOVE_MEMORY_BIAS)
+
+
 def _resolve_search_profile(profile: str | None) -> dict:
     normalized = str(profile or "balanced").strip().lower()
     return dict(_SEARCH_PROFILES.get(normalized) or _SEARCH_PROFILES["balanced"])
+
+
+def rank_experiment_dl_policy_moves(board_state, side: str, *, model_path=None) -> list[dict]:
+    board = to_chess_board(board_state, side)
+    ai_color = chess.WHITE if side == "white" else chess.BLACK
+    if board.turn != ai_color:
+        board.turn = ai_color
+    if board.is_game_over():
+        return []
+    model = _load_model(Path(model_path or default_chess_dl_model_path()))
+    rows = []
+    for move in sorted(board.legal_moves, key=lambda item: item.uci()):
+        score = _score_candidate_move(board, move, side, model)
+        rows.append({"move": move.uci(), "raw_policy_score": round(float(score), 8)})
+    if not rows:
+        return []
+    max_score = max(float(row["raw_policy_score"]) for row in rows)
+    denom = sum(math.exp(float(row["raw_policy_score"]) - max_score) for row in rows)
+    ranked = sorted(rows, key=lambda row: (-float(row["raw_policy_score"]), str(row["move"])))
+    rank = {str(row["move"]): index for index, row in enumerate(ranked, start=1)}
+    for row in rows:
+        row["policy_probability"] = round(math.exp(float(row["raw_policy_score"]) - max_score) / denom, 8) if denom else 0.0
+        row["raw_policy_rank"] = rank[str(row["move"])]
+        row["move_order_score"] = int(float(row["raw_policy_score"]) * 1000.0)
+        row["move_order_rank"] = row["raw_policy_rank"]
+        row["legal_move_bonus_penalty"] = 0
+    return sorted(rows, key=lambda row: (int(row["raw_policy_rank"]), str(row["move"])))
+
+
+def _policy_override_info(model: dict, board: chess.Board, side: str) -> dict:
+    rows = []
+    for move in sorted(board.legal_moves, key=lambda item: item.uci()):
+        rows.append({"move": move.uci(), "raw_policy_score": _score_candidate_move(board, move, side, model)})
+    rows = sorted(rows, key=lambda row: (-float(row["raw_policy_score"]), str(row["move"])))
+    if len(rows) < 2:
+        return {"used": False, "reason": "insufficient_legal_moves", "thresholds": {"min_score": _POLICY_OVERRIDE_MIN_SCORE, "min_margin": _POLICY_OVERRIDE_MIN_MARGIN}}
+    margin = float(rows[0]["raw_policy_score"]) - float(rows[1]["raw_policy_score"])
+    info = {
+        "used": False,
+        "move": str(rows[0]["move"]),
+        "raw_policy_score": round(float(rows[0]["raw_policy_score"]), 8),
+        "runner_up_move": str(rows[1]["move"]),
+        "runner_up_raw_policy_score": round(float(rows[1]["raw_policy_score"]), 8),
+        "margin": round(margin, 8),
+        "thresholds": {"min_score": _POLICY_OVERRIDE_MIN_SCORE, "min_margin": _POLICY_OVERRIDE_MIN_MARGIN},
+        "reason": "below_override_threshold",
+    }
+    if float(rows[0]["raw_policy_score"]) < _POLICY_OVERRIDE_MIN_SCORE or margin < _POLICY_OVERRIDE_MIN_MARGIN:
+        return info
+    try:
+        move = chess.Move.from_uci(str(rows[0]["move"]))
+    except Exception:
+        info["reason"] = "invalid_policy_move"
+        return info
+    if move not in board.legal_moves:
+        info["reason"] = "illegal_policy_move"
+        return info
+    info["used"] = True
+    info["reason"] = "raw_policy_score_and_margin_met_threshold"
+    return info
+
+
+def _policy_override_move(model: dict, board: chess.Board, side: str) -> chess.Move | None:
+    info = _policy_override_info(model, board, side)
+    if not bool(info.get("used")):
+        return None
+    return chess.Move.from_uci(str(info.get("move") or ""))
 
 
 def _score_candidate_move(board: chess.Board, move: chess.Move, side: str, model: dict) -> float:
@@ -225,6 +322,7 @@ def _score_candidate_move(board: chess.Board, move: chess.Move, side: str, model
     try:
         features = _candidate_features(before, move, board, side)
         dl_score, _hidden1, _hidden2 = _forward(model, features)
+        dl_score = _clip(dl_score + _move_memory_bias(model, before, side, move.uci()), -1.0, 1.0)
         heuristic = _heuristic_after_move(board, move, ai_color, captured_piece.piece_type if captured_piece else None)
         score = _blend_score(dl_score, heuristic, int(model.get("sample_count") or 0))
         if board.is_checkmate():
@@ -362,6 +460,9 @@ def choose_experiment_dl_move(board_state, side: str, *, model_path=None, search
         return score + color_sign * _dl_static_eval(after, model, eval_cache, hasher)
 
     best_move = opening_sanity_filter(board, best_move, score_move=sanity_move_score)
+    policy_override = _policy_override_move(model, board, side)
+    if policy_override is not None:
+        best_move = policy_override
     if best_move is None:
         return None
     piece = board.piece_at(best_move.from_square)
@@ -377,6 +478,115 @@ def choose_experiment_dl_move(board_state, side: str, *, model_path=None, search
         "promotion": chess.piece_symbol(best_move.promotion) if best_move.promotion else None,
         "castle": bool(board.is_castling(best_move)),
         "en_passant": bool(board.is_en_passant(best_move)),
+    }
+
+
+def explain_experiment_dl_decision(board_state, side: str, *, model_path=None, search_profile="fast", watched_moves=None) -> dict:
+    board = to_chess_board(board_state, side)
+    ai_color = chess.WHITE if side == "white" else chess.BLACK
+    if board.turn != ai_color:
+        board.turn = ai_color
+    watched = {str(item or "").lower() for item in (watched_moves or []) if str(item or "").strip()}
+    model_path = Path(model_path or default_chess_dl_model_path())
+    if board.is_game_over():
+        return {"supported": True, "chosen_move": "", "chosen_reason": "game_over", "moves": []}
+    model = _load_model(model_path)
+    hasher = ZobristHasher(seed=20260520)
+    eval_cache: dict[int, int] = {}
+    profile = _resolve_search_profile(search_profile)
+
+    def move_order_fn(current_board: chess.Board, move: chess.Move, _ply: int) -> int:
+        current_side = "white" if current_board.turn == chess.WHITE else "black"
+        return int(_score_candidate_move(current_board, move, current_side, model) * 1000.0)
+
+    forced_mates = []
+    for move in board.legal_moves:
+        board.push(move)
+        if board.is_checkmate():
+            forced_mates.append(move)
+        board.pop()
+    if forced_mates:
+        chosen = sorted(forced_mates, key=lambda item: item.uci())[0]
+        search_score = 9_000_000
+        search_depth = 0
+        chosen_reason = "forced_mate"
+    else:
+        search = search_best_move(
+            board,
+            max_depth=profile["depth"],
+            evaluate=lambda current_board: _dl_static_eval(current_board, model, eval_cache, hasher),
+            move_order_fn=move_order_fn,
+            hasher=hasher,
+            quiescence_depth=profile["quiescence_depth"],
+            time_budget_ms=profile.get("time_budget_ms"),
+        )
+        chosen = search.best_move
+        search_score = int(search.score)
+        search_depth = int(search.depth)
+        chosen_reason = "search_best_move"
+        color_sign = 1 if ai_color == chess.WHITE else -1
+
+        def sanity_move_score(move: chess.Move) -> int:
+            after = board.copy(stack=False)
+            after.push(move)
+            if after.is_checkmate():
+                return 9_000_000
+            return move_order_fn(board, move, 0) + color_sign * _dl_static_eval(after, model, eval_cache, hasher)
+
+        fallback = opening_sanity_filter(board, chosen, score_move=sanity_move_score)
+        if fallback is not None and chosen is not None and fallback != chosen:
+            chosen = fallback
+            chosen_reason = "opening_sanity_fallback"
+        policy_override = _policy_override_info(model, board, side)
+        if policy_override.get("used"):
+            chosen = chess.Move.from_uci(str(policy_override.get("move")))
+            chosen_reason = "high_confidence_policy_override"
+    color_sign = 1 if ai_color == chess.WHITE else -1
+    raw_rows = {str(row["move"]): row for row in rank_experiment_dl_policy_moves({"__fen__": board.fen()}, side, model_path=model_path)}
+    moves = []
+    max_child_depth = max(0, int(profile["depth"]) - 1)
+    for move in sorted(board.legal_moves, key=lambda item: item.uci()):
+        after = board.copy(stack=False)
+        after.push(move)
+        static_eval_score = int(color_sign * _dl_static_eval(after, model, eval_cache, hasher))
+        if after.is_checkmate():
+            per_move_search = 9_000_000
+        elif max_child_depth <= 0:
+            per_move_search = static_eval_score
+        else:
+            child = search_best_move(
+                after,
+                max_depth=max_child_depth,
+                evaluate=lambda current_board: _dl_static_eval(current_board, model, eval_cache, hasher),
+                hasher=hasher,
+                quiescence_depth=profile["quiescence_depth"],
+                time_budget_ms=max(20, int(profile.get("time_budget_ms") or 0) // max(1, board.legal_moves.count())),
+            )
+            per_move_search = -int(child.score)
+        row = dict(raw_rows.get(move.uci()) or {"move": move.uci(), "raw_policy_score": _score_candidate_move(board, move, side, model)})
+        row["static_eval_score"] = static_eval_score
+        row["search_score"] = int(per_move_search)
+        row["final_combined_score"] = int(per_move_search)
+        row["chosen"] = bool(chosen is not None and move == chosen)
+        moves.append(row)
+    moves = sorted(moves, key=lambda row: (-int(row.get("final_combined_score") or 0), str(row.get("move") or "")))
+    watched_rows = [row for row in moves if str(row.get("move") or "") in watched] if watched else moves[:5]
+    chosen_move = chosen.uci() if chosen is not None else ""
+    chosen_row = next((row for row in moves if str(row.get("move") or "") == chosen_move), None)
+    return {
+        "supported": True,
+        "model_path": str(model_path),
+        "side": side,
+        "fen": board.fen(),
+        "chosen_move": chosen_move,
+        "chosen_reason": chosen_reason if chosen_move else "no_legal_move",
+        "search_score": search_score if chosen_move else None,
+        "search_depth": search_depth if chosen_move else 0,
+        "chosen_breakdown": chosen_row or {},
+        "policy_override": policy_override if "policy_override" in locals() else _policy_override_info(model, board, side),
+        "watched_moves": watched_rows,
+        "top_final_moves": moves[:5],
+        "all_legal_count": len(moves),
     }
 
 
@@ -431,6 +641,9 @@ def _load_replay_entries(replay_path: Path) -> list[dict]:
             continue
         entries.append({
             "features": features,
+            "fen": str(item.get("fen") or ""),
+            "move_uci": str(item.get("move_uci") or "").lower(),
+            "side": str(item.get("side") or "").lower(),
             "target": _clip(target, -1.0, 1.0),
             "weight": _clip(weight, 0.1, 2.0),
             "source": str(item.get("source") or "game"),
@@ -458,15 +671,51 @@ def _replace_replay_entries(replay_path: Path, samples: list[dict]) -> int:
     return len(entries)
 
 
-def _train_from_replay(model: dict, replay_entries: list[dict]) -> None:
+def _train_from_replay(model: dict, replay_entries: list[dict]) -> dict:
+    stats = {"positive_updates": 0, "contrastive_negative_updates": 0, "expected_reinforcement_updates": 0}
     if not replay_entries:
-        return
+        return stats
     batch_size = min(_BATCH_SIZE, len(replay_entries))
     rng = random.Random(int(model.get("sample_count") or 0) + len(replay_entries))
     for _epoch in range(_TRAIN_EPOCHS):
         batch = [rng.choice(replay_entries) for _ in range(batch_size)]
         for sample in batch:
             _train_single_sample(model, sample["features"], float(sample["target"]), float(sample.get("weight") or 1.0))
+            stats["positive_updates"] += 1
+            fen = str(sample.get("fen") or "").strip()
+            side = str(sample.get("side") or "").strip().lower()
+            expected = str(sample.get("move_uci") or "").strip().lower()
+            if float(sample.get("target") or 0.0) < 0 or not fen or side not in {"white", "black"} or not expected:
+                continue
+            try:
+                board = chess.Board(fen)
+                board.turn = chess.WHITE if side == "white" else chess.BLACK
+                expected_move = chess.Move.from_uci(expected)
+            except Exception:
+                continue
+            if expected_move not in board.legal_moves:
+                continue
+            negatives = [
+                move
+                for move in sorted(board.legal_moves, key=lambda item: item.uci())
+                if move != expected_move
+            ][: _CONTRASTIVE_MAX_NEGATIVES]
+            for negative in negatives:
+                negative_after = board.copy(stack=False)
+                negative_after.push(negative)
+                _update_move_memory(model, board, side, negative, _CONTRASTIVE_NEGATIVE_TARGET)
+                _train_single_sample(
+                    model,
+                    _candidate_features(board, negative, negative_after, side),
+                    _CONTRASTIVE_NEGATIVE_TARGET,
+                    0.65,
+                )
+                stats["contrastive_negative_updates"] += 1
+            for _reinforce in range(8):
+                _update_move_memory(model, board, side, expected_move, 1.0)
+                _train_single_sample(model, sample["features"], 1.0, 0.8)
+                stats["expected_reinforcement_updates"] += 1
+    return stats
 
 
 def build_experiment_dl_sample_from_position(*, fen: str, move_uci: str, side: str | None = None, target: float = 1.0, weight: float = 1.0, source: str = "external") -> dict | None:
@@ -495,6 +744,9 @@ def build_experiment_dl_sample_from_position(*, fen: str, move_uci: str, side: s
     features = _candidate_features(board_before, move, board_after, mover)
     return {
         "features": features,
+        "fen": board_before.fen(),
+        "move_uci": move.uci(),
+        "side": mover,
         "target": _clip(float(target), -1.0, 1.0),
         "weight": _clip(float(weight), 0.1, 3.0),
         "source": str(source or "external"),
@@ -524,9 +776,46 @@ def normalize_experiment_dl_replay_sample(sample: dict) -> dict | None:
         return None
     return {
         "features": features,
+        "fen": str(sample.get("fen") or sample.get("board_fen") or "").strip(),
+        "move_uci": str(sample.get("move_uci") or sample.get("uci") or sample.get("move") or "").strip().lower(),
+        "side": str(sample.get("side") or "").strip().lower(),
         "target": _clip(target, -1.0, 1.0),
         "weight": _clip(weight, 0.1, 3.0),
         "source": str(sample.get("source") or "external"),
+    }
+
+
+def _policy_probe_for_sample(model_path: Path, sample: dict) -> dict | None:
+    fen = str(sample.get("fen") or "").strip()
+    side = str(sample.get("side") or "").strip().lower()
+    expected = str(sample.get("move_uci") or "").strip().lower()
+    if not fen or side not in {"white", "black"} or not expected:
+        return None
+    try:
+        board = chess.Board(fen)
+        board.turn = chess.WHITE if side == "white" else chess.BLACK
+        expected_move = chess.Move.from_uci(expected)
+    except Exception:
+        return None
+    if expected_move not in board.legal_moves:
+        return None
+    rows = rank_experiment_dl_policy_moves({"__fen__": fen}, side, model_path=model_path)
+    expected_row = next((row for row in rows if str(row.get("move") or "") == expected), None)
+    if expected_row is None:
+        return None
+    top1 = str(rows[0].get("move") or "") if rows else ""
+    old_row = next((row for row in rows if str(row.get("move") or "") == top1), None)
+    return {
+        "fen": fen,
+        "side": side,
+        "expected_move": expected,
+        "raw_policy_top1": top1,
+        "expected_move_rank": int(expected_row.get("raw_policy_rank") or 0),
+        "expected_move_probability": float(expected_row.get("policy_probability") or 0.0),
+        "expected_move_logit": float(expected_row.get("raw_policy_score") or 0.0),
+        "old_move": top1,
+        "old_move_rank": int((old_row or {}).get("raw_policy_rank") or 0),
+        "margin_vs_old_move": round(float(expected_row.get("raw_policy_score") or 0.0) - float((old_row or {}).get("raw_policy_score") or 0.0), 8),
     }
 
 
@@ -547,16 +836,34 @@ def train_experiment_dl_from_replay_samples(
         normalized_samples.append(normalized)
     model_path = Path(model_path or default_chess_dl_model_path())
     replay_path = Path(replay_path or default_chess_dl_replay_path())
+    probe_sample = next((sample for sample in normalized_samples if sample.get("fen") and sample.get("move_uci") and sample.get("side")), None)
+    if not model_path.exists():
+        _save_model(model_path, _load_model(model_path))
+    policy_probe_before = _policy_probe_for_sample(model_path, probe_sample or {}) if probe_sample else None
     if replace_replay:
         replay_size = _replace_replay_entries(replay_path, normalized_samples)
     else:
         replay_size = _append_replay_entries(replay_path, normalized_samples)
     model = _load_model(model_path)
     replay_entries = _load_replay_entries(replay_path)
-    _train_from_replay(model, replay_entries)
+    train_stats = _train_from_replay(model, replay_entries)
     model["replay_size"] = replay_size
     model["updated_at"] = _now()
     _save_model(model_path, model)
+    policy_probe_after = _policy_probe_for_sample(model_path, probe_sample or {}) if probe_sample else None
+    policy_probe = {
+        "supported": bool(policy_probe_before and policy_probe_after),
+        "before": policy_probe_before or {},
+        "after": policy_probe_after or {},
+    }
+    if policy_probe_before and policy_probe_after:
+        policy_probe.update(
+            {
+                "expected_rank_delta": int(policy_probe_after["expected_move_rank"]) - int(policy_probe_before["expected_move_rank"]),
+                "expected_margin_delta": round(float(policy_probe_after["margin_vs_old_move"]) - float(policy_probe_before["margin_vs_old_move"]), 8),
+                "raw_policy_top1_changed_to_expected": bool(policy_probe_after["raw_policy_top1"] == policy_probe_after["expected_move"]),
+            }
+        )
     return {
         "ok": True,
         "accepted_samples": len(normalized_samples),
@@ -565,6 +872,11 @@ def train_experiment_dl_from_replay_samples(
         "model_path": str(model_path),
         "replay_path": str(replay_path),
         "sample_count": int(model.get("sample_count") or 0),
+        "training_objective": "contrastive_policy_ranking",
+        "contrastive_negative_target": _CONTRASTIVE_NEGATIVE_TARGET,
+        "contrastive_max_negatives": _CONTRASTIVE_MAX_NEGATIVES,
+        **train_stats,
+        "policy_probe": policy_probe,
     }
 
 

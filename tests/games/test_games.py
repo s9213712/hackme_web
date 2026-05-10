@@ -12,7 +12,10 @@ from services.games.chess_dl import (
     EXPERIMENT_DL_DIFFICULTY,
     bundled_chess_dl_model_path,
     choose_experiment_dl_move,
+    explain_experiment_dl_decision,
+    rank_experiment_dl_policy_moves,
     record_experiment_dl_learning,
+    train_experiment_dl_from_replay_samples,
 )
 from services.games.chess_engine import bundled_chess_engine_db_path, ChessExperimentStore, choose_experiment_move, ensure_chess_engine_schema, record_experiment_learning
 from services.games.chess_nn import EXPERIMENT_NN_DIFFICULTY, bundled_chess_nn_model_path, record_experiment_nn_learning
@@ -20,7 +23,10 @@ from services.games.chess_pv import (
     EXPERIMENT_PV_DIFFICULTY,
     bundled_chess_pv_model_path,
     choose_experiment_pv_move,
+    explain_experiment_pv_decision,
+    rank_experiment_pv_policy_moves,
     record_experiment_pv_learning,
+    train_experiment_pv_from_replay_samples,
 )
 from services.games.chess_replay_buffer import (
     classify_replay_record,
@@ -972,6 +978,64 @@ def test_experiment_dl_move_returns_legal_move_on_fresh_model(tmp_path, monkeypa
     assert isinstance(applied["board"], dict)
 
 
+def test_experiment_dl_contrastive_replay_can_make_expected_raw_policy_top1(tmp_path, monkeypatch):
+    model_path = tmp_path / "runtime" / "models" / "chess_experiment_3_dl.json"
+    replay_path = tmp_path / "runtime" / "models" / "chess_experiment_3_dl_replay.jsonl"
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_DL_MODEL_PATH", str(model_path))
+    fen = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"
+
+    before = rank_experiment_dl_policy_moves({"__fen__": fen}, "black", model_path=model_path)
+    result = train_experiment_dl_from_replay_samples(
+        [{"fen": fen, "side": "black", "move_uci": "f7f5", "target": 1.0, "weight": 1.0}],
+        model_path=model_path,
+        replay_path=replay_path,
+        replace_replay=True,
+    )
+    after = rank_experiment_dl_policy_moves({"__fen__": fen}, "black", model_path=model_path)
+
+    assert before[0]["move"] != "f7f5"
+    assert after[0]["move"] == "f7f5"
+    assert result["training_objective"] == "contrastive_policy_ranking"
+    assert result["contrastive_negative_updates"] > 0
+    assert result["policy_probe"]["raw_policy_top1_changed_to_expected"] is True
+
+
+def test_experiment_dl_decision_explain_reports_raw_policy_and_final_scores(tmp_path, monkeypatch):
+    model_path = tmp_path / "runtime" / "models" / "chess_experiment_3_dl.json"
+    replay_path = tmp_path / "runtime" / "models" / "chess_experiment_3_dl_replay.jsonl"
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_DL_MODEL_PATH", str(model_path))
+    fen = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"
+    train_experiment_dl_from_replay_samples(
+        [{"fen": fen, "side": "black", "move_uci": "f7f5", "target": 1.0, "weight": 1.0}],
+        model_path=model_path,
+        replay_path=replay_path,
+        replace_replay=True,
+    )
+
+    move = choose_experiment_dl_move({"__fen__": fen}, "black", model_path=model_path, search_profile="fast")
+    explanation = explain_experiment_dl_decision(
+        {"__fen__": fen},
+        "black",
+        model_path=model_path,
+        search_profile="fast",
+        watched_moves=["f7f5", "e7e5"],
+    )
+
+    assert f"{move['from']}{move['to']}" == "f7f5"
+    assert explanation["chosen_move"] == "f7f5"
+    assert explanation["chosen_reason"] in {"high_confidence_policy_override", "search_best_move", "opening_sanity_fallback"}
+    override = explanation["policy_override"]
+    assert "margin" in override
+    assert "thresholds" in override
+    assert "reason" in override
+    watched = {row["move"]: row for row in explanation["watched_moves"]}
+    assert {"f7f5", "e7e5"} <= set(watched)
+    assert "raw_policy_score" in watched["f7f5"]
+    assert "static_eval_score" in watched["f7f5"]
+    assert "search_score" in watched["f7f5"]
+    assert "final_combined_score" in watched["f7f5"]
+
+
 def test_experiment_pv_learning_writes_runtime_model(tmp_path, monkeypatch):
     model_path = tmp_path / "runtime" / "models" / "chess_experiment_4_pv.json"
     monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_PV_MODEL_PATH", str(model_path))
@@ -988,6 +1052,57 @@ def test_experiment_pv_learning_writes_runtime_model(tmp_path, monkeypatch):
     model = json.loads(model_path.read_text(encoding="utf-8"))
     assert model["sample_count"] >= 1
     assert model["version"] >= 1
+
+
+def test_experiment_pv_contrastive_replay_can_make_expected_raw_policy_top1(tmp_path, monkeypatch):
+    model_path = tmp_path / "runtime" / "models" / "chess_experiment_4_pv.json"
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_PV_MODEL_PATH", str(model_path))
+    fen = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"
+
+    before = rank_experiment_pv_policy_moves({"__fen__": fen}, "black", model_path=model_path)
+    result = train_experiment_pv_from_replay_samples(
+        [{"fen": fen, "side": "black", "move_uci": "e7e5", "target": 1.0, "weight": 1.0}],
+        model_path=model_path,
+    )
+    after = rank_experiment_pv_policy_moves({"__fen__": fen}, "black", model_path=model_path)
+
+    assert before[0]["move"] != "e7e5"
+    assert after[0]["move"] == "e7e5"
+    assert result["training_objective"] == "contrastive_policy_ranking"
+    assert result["contrastive_negative_updates"] > 0
+    assert result["policy_probe"]["raw_policy_top1_changed_to_expected"] is True
+
+
+def test_experiment_pv_decision_explain_reports_policy_override_scores(tmp_path, monkeypatch):
+    model_path = tmp_path / "runtime" / "models" / "chess_experiment_4_pv.json"
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_PV_MODEL_PATH", str(model_path))
+    fen = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"
+    train_experiment_pv_from_replay_samples(
+        [{"fen": fen, "side": "black", "move_uci": "e7e5", "target": 1.0, "weight": 1.0}],
+        model_path=model_path,
+    )
+
+    move = choose_experiment_pv_move({"__fen__": fen}, "black", model_path=model_path, search_profile="fast")
+    explanation = explain_experiment_pv_decision(
+        {"__fen__": fen},
+        "black",
+        model_path=model_path,
+        search_profile="fast",
+        watched_moves=["e7e5", "a7a5"],
+    )
+
+    assert f"{move['from']}{move['to']}" == "e7e5"
+    assert explanation["chosen_move"] == "e7e5"
+    assert explanation["chosen_reason"] == "high_confidence_policy_override"
+    assert explanation["policy_override"]["used"] is True
+    assert explanation["policy_override"]["margin"] >= explanation["policy_override"]["thresholds"]["min_margin"]
+    assert explanation["policy_override"]["reason"] == "raw_policy_score_and_margin_met_threshold"
+    watched = {row["move"]: row for row in explanation["watched_moves"]}
+    assert {"e7e5", "a7a5"} <= set(watched)
+    assert "raw_policy_score" in watched["e7e5"]
+    assert "static_eval_score" in watched["e7e5"]
+    assert "search_score" in watched["e7e5"]
+    assert "final_combined_score" in watched["e7e5"]
 
 
 def test_experiment_pv_resign_collects_replay_without_mutating_model(tmp_path, monkeypatch):
@@ -1398,13 +1513,12 @@ def test_pipeline_autorun_starts_when_replay_threshold_is_met(tmp_path, monkeypa
 
 
 def test_chess_pipeline_targeted_autorun_command_only_trains_requested_engine():
-    exp2_args = chess_pipeline_service._pipeline_command_args(min_usable_replays=10, target_engines=["experiment 2:nn"])
-
-    assert "--include-exp2" in exp2_args
-    assert "--skip-exp1-refine" in exp2_args
-    assert "--skip-exp3" in exp2_args
-    assert "--skip-exp4" in exp2_args
-    assert exp2_args[exp2_args.index("--promote-engines") + 1] == "experiment 2:nn"
+    try:
+        chess_pipeline_service._pipeline_command_args(min_usable_replays=10, target_engines=["experiment 2:nn"])
+    except ValueError as exc:
+        assert "unknown chess pipeline target engine" in str(exc)
+    else:
+        raise AssertionError("exp2 should be removed from retrain pipeline targets")
 
     exp3_args = chess_pipeline_service._pipeline_command_args(min_usable_replays=10, target_engines=["experiment 3:dl"])
     assert "--include-exp2" not in exp3_args

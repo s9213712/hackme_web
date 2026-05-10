@@ -20,7 +20,7 @@ from services.server.runtime import default_runtime_root_path
 DEFAULT_RETRAIN_MIN_USABLE_REPLAYS = 25
 DEFAULT_RETRAIN_MAX_AGE_HOURS = 24 * 7
 _PIPELINE_AUTORUN_LOCK = threading.Lock()
-PIPELINE_RETRAIN_ENGINES = ("experiment 2:nn", "experiment 3:dl", "experiment 4:pv")
+PIPELINE_RETRAIN_ENGINES = ("experiment 3:dl", "experiment 4:pv")
 
 
 def _runtime_root() -> Path:
@@ -68,15 +68,12 @@ def build_pipeline_run_id(prefix: str = "pipeline") -> str:
 
 def candidate_paths_for_run(run_id: str, *, include_exp2: bool = False) -> dict[str, Path]:
     root = default_chess_pipeline_candidate_root() / str(run_id)
-    paths = {
+    return {
         "experiment": default_chess_engine_db_path(),
         "experiment 3:dl": root / "chess_experiment_3_dl.json",
         "experiment 3:dl replay": root / "chess_experiment_3_dl_replay.jsonl",
         "experiment 4:pv": root / "chess_experiment_4_pv.json",
     }
-    if include_exp2:
-        paths["experiment 2:nn"] = root / "chess_experiment_2_nn.json"
-    return paths
 
 
 def dataset_paths_for_run(run_id: str) -> dict[str, Path]:
@@ -193,17 +190,14 @@ def _pipeline_command_args(*, min_usable_replays: int, target_engines: list[str]
     ]
     if targets:
         cmd.extend(["--promote-engines", ",".join(targets), "--skip-exp1-refine"])
-        if "experiment 2:nn" in targets:
-            cmd.append("--include-exp2")
         if "experiment 3:dl" not in targets:
             cmd.append("--skip-exp3")
         if "experiment 4:pv" not in targets:
             cmd.append("--skip-exp4")
     else:
         cmd.extend([
-            "--include-exp2",
             "--promote-engines",
-            "experiment 2:nn,experiment 3:dl,experiment 4:pv",
+            "experiment 3:dl,experiment 4:pv",
         ])
     return cmd
 

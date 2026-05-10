@@ -28,16 +28,28 @@ if str(ROOT) not in sys.path:
 from routes.games import choose_computer_move  # noqa: E402
 from services.games.chess import game_status, initial_board, legal_moves, opponent, validate_move  # noqa: E402
 from services.games.chess_arena import latest_pipeline_report  # noqa: E402
-from services.games.chess_dl import EXPERIMENT_DL_DIFFICULTY, choose_experiment_dl_move  # noqa: E402
+from services.games.chess_dl import (  # noqa: E402
+    EXPERIMENT_DL_DIFFICULTY,
+    choose_experiment_dl_move,
+    explain_experiment_dl_decision,
+    rank_experiment_dl_policy_moves,
+)
 from services.games.chess_engine import ChessExperimentStore, EXPERIMENT_DIFFICULTY, record_experiment_learning  # noqa: E402
-from services.games.chess_nn import EXPERIMENT_NN_DIFFICULTY, choose_experiment_nn_move  # noqa: E402
 from services.games.chess_pipeline import latest_pipeline_autorun_status, maybe_launch_chess_train_pipeline  # noqa: E402
 from services.games.chess_promotion import ensure_warm_start_chess_environment, production_engine_inventory  # noqa: E402
-from services.games.chess_pv import EXPERIMENT_PV_DIFFICULTY, choose_experiment_pv_move  # noqa: E402
+from services.games.chess_pv import (  # noqa: E402
+    EXPERIMENT_PV_DIFFICULTY,
+    choose_experiment_pv_move,
+    explain_experiment_pv_decision,
+    rank_experiment_pv_policy_moves,
+)
 from services.games.chess_replay_buffer import (  # noqa: E402
     build_replay_record,
     classify_replay_record,
     collect_match_replay,
+    default_chess_replay_buffer_path,
+    default_chess_replay_quarantine_path,
+    default_chess_replay_rejected_path,
     replay_buffer_summary,
 )
 from services.games.self_play_training import run_round_robin_benchmark  # noqa: E402
@@ -45,7 +57,6 @@ from services.games.self_play_training import run_round_robin_benchmark  # noqa:
 
 ENGINE_MATRIX = [
     ("exp1", EXPERIMENT_DIFFICULTY),
-    ("exp2", EXPERIMENT_NN_DIFFICULTY),
     ("exp3", EXPERIMENT_DL_DIFFICULTY),
     ("exp4", EXPERIMENT_PV_DIFFICULTY),
 ]
@@ -57,7 +68,7 @@ VALID_GAMES = TOTAL_GAMES - INVALID_GAMES
 MAX_PLIES = 180
 AUTORUN_THRESHOLD = 10
 MIN_VALID_PLIES = 16
-RETRAIN_ENGINE_ALIASES = {"exp2", "exp3", "exp4"}
+RETRAIN_ENGINE_ALIASES = {"exp3", "exp4"}
 DATASET_DUPLICATE_RATIO_LIMIT = 0.25
 DATASET_SHORT_RESIGN_LIMIT = 0
 POISON_REPETITION_LIMIT = 0
@@ -173,6 +184,17 @@ DETERMINISTIC_STRENGTH_MAX_NODES = 0
 DETERMINISTIC_STRENGTH_TIME_LIMIT_MS = 0
 DETERMINISTIC_MIN_BLUNDER_AVOID_RATE = 1.0
 DETERMINISTIC_CHECKPOINT20_DROP_LIMIT = 0.05
+LATE_STAGE_COLLAPSE_MIN_GAMES = 5
+LATE_STAGE_COLLAPSE_WIN_RATE = 0.0
+QUICK_RETRAIN_GATE_TRUSTED_REPLAYS = 20
+QUICK_RETRAIN_GATE_CHECKPOINTS = (10, 20)
+QUICK_RETRAIN_MAX_SAMPLES = 256
+QUICK_RETRAIN_MAX_SECONDS = 60
+QUICK_RETRAIN_EVAL_SAMPLE_LIMIT = 8
+QUICK_RETRAIN_MIN_CASES_PER_CATEGORY = 3
+SANITY_LEARNING_VARIANT_COUNT = 6
+SANITY_SEEN_VARIANT_PASS_THRESHOLD = 0.8
+SANITY_UNSEEN_VARIANT_PASS_THRESHOLD = 0.5
 DETERMINISTIC_STRENGTH_CASES = (
     {
         "case_id": "opening_develop_white",
@@ -270,9 +292,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=20260509)
     parser.add_argument("--max-plies", type=int, default=MAX_PLIES)
     parser.add_argument("--wait-timeout", type=int, default=1800, help="Seconds to wait for autorun pipeline completion.")
-    parser.add_argument("--engines", default="", help="Required engine alias. Use one of: exp1,exp2,exp3,exp4.")
+    parser.add_argument("--engines", default="", help="Required engine alias. Use one of: exp1,exp3,exp4. exp2 was removed in favor of exp3.")
     parser.add_argument("--allow-multi-engine", action="store_true", help="Allow comma-separated --engines for intentional multi-engine validation.")
-    parser.add_argument("--autorun-threshold", type=int, default=AUTORUN_THRESHOLD, help="Trusted replay count required before auto-retrain is launched for exp2/exp3/exp4.")
+    parser.add_argument("--autorun-threshold", type=int, default=AUTORUN_THRESHOLD, help="Trusted replay count required before auto-retrain is launched for exp3/exp4.")
     parser.add_argument("--fast-retrain", action="store_true", help="Skip retrain checkpoint benchmarks plus autorun pipeline benchmark/promotion.")
     parser.add_argument("--skip-autorun-benchmark", action="store_true", help="Set HTML_LEARNING_CHESS_AUTORUN_SKIP_BENCHMARK=1 before launching autorun retrain.")
     parser.add_argument("--skip-autorun-promote", action="store_true", help="Set HTML_LEARNING_CHESS_AUTORUN_SKIP_PROMOTE=1 before launching autorun retrain.")
@@ -280,6 +302,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--benchmark-rounds", type=int, default=1, help="Round-robin benchmark rounds per pairing for formal validation snapshots.")
     parser.add_argument("--benchmark-max-plies", type=int, default=90, help="Maximum plies per formal benchmark game.")
     parser.add_argument("--benchmark-teacher-depth", type=int, default=2, help="Teacher search depth used by formal benchmark snapshots.")
+    parser.add_argument("--quick-retrain-gate", action="store_true", help="Run fixed-replay quick retrain gate instead of full 30-game validation.")
+    parser.add_argument("--quick-retrain-max-samples", type=int, default=QUICK_RETRAIN_MAX_SAMPLES)
+    parser.add_argument("--quick-retrain-max-seconds", type=int, default=QUICK_RETRAIN_MAX_SECONDS)
     return parser.parse_args()
 
 
@@ -321,6 +346,290 @@ def _read_jsonl(path: Path) -> list[dict]:
         if isinstance(payload, dict):
             rows.append(payload)
     return rows
+
+
+def _fen_after_moves(uci_moves: list[str]) -> str:
+    board = chess.Board()
+    for move_text in uci_moves:
+        move = chess.Move.from_uci(str(move_text).lower())
+        if move not in board.legal_moves:
+            raise ValueError(f"quick fixture prefix contains illegal move {move_text} at {board.fen()}")
+        board.push(move)
+    return board.fen()
+
+
+def _quick_fixture_case_bank() -> list[dict]:
+    return [
+        {"label": "mr_e4_e5", "category": "mistake_retention", "fen": _fen_after_moves(["e2e4"]), "expected": "e7e5"},
+        {"label": "mr_d4_d5", "category": "mistake_retention", "fen": _fen_after_moves(["d2d4"]), "expected": "d7d5"},
+        {"label": "mr_nf3_d5", "category": "mistake_retention", "fen": _fen_after_moves(["g1f3"]), "expected": "d7d5"},
+        {"label": "mr_c4_nf6", "category": "mistake_retention", "fen": _fen_after_moves(["c2c4"]), "expected": "g8f6"},
+        {"label": "open_start_e4", "category": "opening", "fen": chess.STARTING_FEN, "expected": "e2e4"},
+        {"label": "open_c3_d5", "category": "opening", "fen": _fen_after_moves(["c2c3"]), "expected": "d7d5"},
+        {"label": "open_b3_e5", "category": "opening", "fen": _fen_after_moves(["b2b3"]), "expected": "e7e5"},
+        {"label": "open_f4_d5", "category": "opening", "fen": _fen_after_moves(["f2f4"]), "expected": "d7d5"},
+        {"label": "tactic_scholar_king_capture", "category": "tactic", "fen": "r1bqkbnr/pppp1Qpp/2n5/4p3/4P3/8/PPPP1PPP/RNB1KBNR b KQkq - 0 3", "expected": "e8f7"},
+        {"label": "tactic_bishop_fork", "category": "tactic", "fen": _fen_after_moves(["e2e4", "e7e5", "g1f3", "b8c6", "f1c4"]), "expected": "g8f6"},
+        {"label": "tactic_capture_center", "category": "tactic", "fen": _fen_after_moves(["e2e4", "e7e5", "g1f3", "b8c6", "d2d4"]), "expected": "e5d4"},
+        {"label": "tactic_pin_break", "category": "tactic", "fen": _fen_after_moves(["d2d4", "d7d5", "c2c4", "e7e6", "b1c3", "g8f6", "c1g5"]), "expected": "f8e7"},
+        {"label": "endgame_pawn_push_1", "category": "endgame", "fen": "8/8/8/8/8/2k5/4P3/2K5 w - - 0 1", "expected": "e2e4"},
+        {"label": "endgame_pawn_push_2", "category": "endgame", "fen": "8/8/8/8/2k5/8/4P3/2K5 w - - 0 1", "expected": "e2e3"},
+        {"label": "endgame_black_promote", "category": "endgame", "fen": "8/8/2k5/8/8/8/4p3/2K5 b - - 0 1", "expected": "e2e1q"},
+        {"label": "endgame_king_support", "category": "endgame", "fen": "8/8/8/2k5/8/8/2K1P3/8 w - - 0 1", "expected": "e2e4"},
+        {"label": "avoid_free_queen", "category": "blunder_avoid", "fen": "4k3/8/8/8/8/8/4q3/4KQ2 w - - 0 1", "expected": "e1e2"},
+        {"label": "avoid_queen_trap", "category": "blunder_avoid", "fen": _fen_after_moves(["e2e4", "e7e5", "g1f3", "d8h4"]), "expected": "f3h4"},
+        {"label": "avoid_center_capture", "category": "blunder_avoid", "fen": _fen_after_moves(["e2e4", "d7d5"]), "expected": "e4d5"},
+        {"label": "avoid_recapture", "category": "blunder_avoid", "fen": _fen_after_moves(["e2e4", "e7e5", "g1f3", "b8c6", "f1b5", "a7a6", "b5c6"]), "expected": "d7c6"},
+    ]
+
+
+def _quick_fixture_moves_from_case(fen: str, expected_move: str, *, target_plies: int = 8) -> list[str]:
+    board = chess.Board(str(fen))
+    expected = chess.Move.from_uci(str(expected_move).lower())
+    if expected not in board.legal_moves:
+        raise ValueError(f"quick fixture expected move {expected_move} is illegal at {board.fen()}")
+    moves = [expected.uci()]
+    board.push(expected)
+    while len(moves) < max(1, int(target_plies)) and not board.is_game_over():
+        legal = sorted(board.legal_moves, key=lambda move: move.uci())
+        if not legal:
+            break
+        chosen = legal[0]
+        for move in legal:
+            probe = board.copy(stack=False)
+            probe.push(move)
+            if not probe.is_game_over():
+                chosen = move
+                break
+        moves.append(chosen.uci())
+        board.push(chosen)
+    return moves
+
+
+def _quick_fixture_move_history(uci_moves: list[str], *, started_at: str, initial_fen: str = chess.STARTING_FEN) -> list[dict]:
+    board = chess.Board(str(initial_fen or chess.STARTING_FEN))
+    history = []
+    for move_text in uci_moves:
+        move = chess.Move.from_uci(str(move_text).lower())
+        if move not in board.legal_moves:
+            raise ValueError(f"quick replay fixture contains illegal move {move_text} at {board.fen()}")
+        piece = board.piece_at(move.from_square)
+        captured = board.piece_at(move.to_square)
+        mover = "white" if board.turn == chess.WHITE else "black"
+        history.append(
+            {
+                "at": started_at,
+                "by": mover,
+                "from": chess.square_name(move.from_square),
+                "to": chess.square_name(move.to_square),
+                "promotion": chess.piece_symbol(move.promotion) if move.promotion else None,
+                "piece": piece.symbol() if piece else "",
+                "captured": captured.symbol() if captured else None,
+                "computer": False,
+            }
+        )
+        board.push(move)
+    return history
+
+
+def _quick_retrain_fixture_records(*, engine_alias: str, difficulty: str, actor_username: str, seed: int) -> list[dict]:
+    cases = _quick_fixture_case_bank()
+    records = []
+    stamp = _utc_now()
+    rng = random.Random(seed + 303)
+    for index, case in enumerate(cases[:QUICK_RETRAIN_GATE_TRUSTED_REPLAYS]):
+        label = str(case["label"])
+        category = str(case["category"])
+        initial_fen = str(case["fen"])
+        expected_move = str(case["expected"])
+        board = chess.Board(initial_fen)
+        engine_side = "white" if board.turn == chess.WHITE else "black"
+        human_side = opponent(engine_side)
+        winner_color = engine_side
+        moves = _quick_fixture_moves_from_case(initial_fen, expected_move, target_plies=8)
+        move_history = _quick_fixture_move_history(moves, started_at=stamp, initial_fen=initial_fen)
+        for entry in move_history:
+            entry["computer"] = str(entry.get("by")) == engine_side
+        match_id = 900000 + index + 1
+        replay_id = f"{engine_alias}_quick_gate_{index + 1:02d}_{label}"
+        record = {
+            "actor_username": actor_username,
+            "adjudicated_or_natural": "adjudicated",
+            "black_engine": difficulty if engine_side == "black" else "",
+            "collection_tier": "trusted",
+            "computer_difficulty": difficulty,
+            "confidence_score": 0.92,
+            "duplicate_flag": False,
+            "duplicate_signature": hashlib.sha256((replay_id + json.dumps(moves)).encode("utf-8")).hexdigest(),
+            "engine_name": difficulty,
+            "engine_version": difficulty,
+            "game_key": "chess",
+            "human_side": human_side,
+            "match_id": match_id,
+            "mode": "computer",
+            "move_count": len(move_history),
+            "move_history": move_history,
+            "opening_seed": initial_fen,
+            "quarantine_reasons": [],
+            "quick_category": category,
+            "quick_expected_move": expected_move,
+            "rating_estimate": 1500 + rng.randint(-120, 120),
+            "replay_id": replay_id,
+            "resign_abuse_flag": False,
+            "result": winner_color,
+            "result_reason": "quick_retrain_gate_fixture",
+            "source": "quick_retrain_gate_fixture",
+            "stored": True,
+            "suspicious_flag": False,
+            "timestamp": stamp,
+            "updated_at": stamp,
+            "white_engine": difficulty if engine_side == "white" else "",
+            "winner_color": winner_color,
+        }
+        records.append(record)
+    return records
+
+
+def _write_quick_replay_fixture(records: list[dict], *, trusted_count: int) -> dict:
+    trusted = [dict(row) for row in records[: int(trusted_count)]]
+    trusted_path = default_chess_replay_buffer_path()
+    quarantine_path = default_chess_replay_quarantine_path()
+    rejected_path = default_chess_replay_rejected_path()
+    _jsonl_dump(trusted_path, trusted)
+    _jsonl_dump(quarantine_path, [])
+    _jsonl_dump(rejected_path, [])
+    return {
+        "trusted_replay_path": str(trusted_path),
+        "quarantine_replay_path": str(quarantine_path),
+        "rejected_replay_path": str(rejected_path),
+        "trusted_records_written": len(trusted),
+        "quarantine_records_written": 0,
+    }
+
+
+def _quick_game_results(records: list[dict]) -> list[dict]:
+    return [
+        {
+            "index": index,
+            "game_id": int(record.get("match_id") or 0),
+            "label": str(record.get("replay_id") or f"quick_{index:02d}"),
+            "category": "valid",
+            "expected_tier": "trusted",
+            "human_side": str(record.get("human_side") or "white"),
+            "winner_color": str(record.get("winner_color") or ""),
+            "stored_replay": record,
+            "autorun_result": None,
+            "learning_update_count": 0,
+        }
+        for index, record in enumerate(records, start=1)
+    ]
+
+
+def _extract_engine_move_samples_from_records(records: list[dict]) -> list[dict]:
+    samples: list[dict] = []
+    for game_index, record in enumerate(records, start=1):
+        history = record.get("move_history") or []
+        if not isinstance(history, list):
+            continue
+        opening_seed = str(record.get("opening_seed") or "").strip()
+        board = {"__fen__": opening_seed} if opening_seed and opening_seed != "standard_start" else initial_board()
+        engine_side = opponent(str(record.get("human_side") or "white"))
+        for ply, entry in enumerate(history, start=1):
+            mover = str((entry or {}).get("by") or "").strip().lower()
+            from_square = str((entry or {}).get("from") or "").strip().lower()
+            to_square = str((entry or {}).get("to") or "").strip().lower()
+            promotion = (entry or {}).get("promotion")
+            if mover == engine_side:
+                samples.append(
+                    {
+                        "fen": str(board.get("__fen__") or ""),
+                        "move_uci": f"{from_square}{to_square}{promotion or ''}",
+                        "side": mover,
+                        "game_index": game_index,
+                        "game_id": int(record.get("match_id") or 0),
+                        "game_label": str(record.get("replay_id") or ""),
+                        "category": str(record.get("quick_category") or "unknown"),
+                        "ply": ply,
+                    }
+                )
+            board = validate_move(board, mover, from_square, to_square, promotion)["board"]
+    return samples
+
+
+def _quick_replay_fixture_health(records: list[dict], accepted_rows: list[dict], rejected_rows: list[dict]) -> dict:
+    category_distribution: dict[str, int] = {}
+    poison_or_quarantine = 0
+    for record in records or []:
+        category = str(record.get("quick_category") or "unknown")
+        category_distribution[category] = category_distribution.get(category, 0) + 1
+        if (
+            str(record.get("collection_tier") or "") != "trusted"
+            or bool(record.get("suspicious_flag"))
+            or bool(record.get("resign_abuse_flag"))
+            or bool(record.get("duplicate_flag"))
+            or record.get("quarantine_reasons")
+        ):
+            poison_or_quarantine += 1
+
+    fen_keys = []
+    target_moves = []
+    position_target_keys = []
+    normalized_board_keys = []
+    for row in accepted_rows or []:
+        fen = str(row.get("fen") or row.get("board_fen") or "").strip()
+        target = str(row.get("move_uci") or row.get("uci") or row.get("move") or "").strip().lower()
+        side = str(row.get("side") or "").strip().lower()
+        fen_keys.append(fen)
+        target_moves.append(target)
+        position_target_keys.append(f"{fen}|{side}|{target}")
+        try:
+            board = chess.Board(fen)
+            normalized_board_keys.append(board.board_fen())
+        except Exception:
+            normalized_board_keys.append(fen)
+
+    total_rows = len(accepted_rows or [])
+    unique_position_targets = len(set(position_target_keys))
+    duplicate_ratio = round((total_rows - unique_position_targets) / max(1, total_rows), 4)
+    required_categories = ["opening", "tactic", "endgame", "blunder_avoid", "mistake_retention"]
+    missing_categories = [
+        category
+        for category in required_categories
+        if int(category_distribution.get(category) or 0) < QUICK_RETRAIN_MIN_CASES_PER_CATEGORY
+    ]
+    reasons = []
+    if duplicate_ratio > DATASET_DUPLICATE_RATIO_LIMIT:
+        reasons.append("quick replay fixture duplicate_ratio exceeded gate threshold")
+    if missing_categories:
+        reasons.append(f"quick replay fixture category coverage below minimum: {','.join(missing_categories)}")
+    if poison_or_quarantine > 0 or rejected_rows:
+        reasons.append("quick replay fixture contains poison/quarantine/rejected rows")
+
+    fixture_material = {
+        "records": records or [],
+        "accepted_position_targets": sorted(set(position_target_keys)),
+        "category_distribution": category_distribution,
+    }
+    fixture_hash = hashlib.sha256(json.dumps(fixture_material, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+    return {
+        "passed": not reasons,
+        "reasons": reasons,
+        "thresholds": {
+            "duplicate_ratio_limit": DATASET_DUPLICATE_RATIO_LIMIT,
+            "min_cases_per_category": QUICK_RETRAIN_MIN_CASES_PER_CATEGORY,
+        },
+        "duplicate_ratio": duplicate_ratio,
+        "category_distribution": dict(sorted(category_distribution.items())),
+        "unique_fen_count": len(set(fen_keys)),
+        "unique_normalized_board_count": len(set(normalized_board_keys)),
+        "unique_target_move_count": len(set(target_moves)),
+        "unique_position_target_count": unique_position_targets,
+        "total_rows": total_rows,
+        "poison_quarantine_count": poison_or_quarantine,
+        "rejected_row_count": len(rejected_rows or []),
+        "fixture_hash": f"sha256:{fixture_hash}",
+        "dedupe_basis": ["fen_hash", "normalized_board", "move_target"],
+    }
 
 
 def _git_commit() -> str:
@@ -456,7 +765,7 @@ def _select_requested_engines(requested_arg: str, *, allow_multi_engine: bool = 
     requested = [item.strip() for item in str(requested_arg or "").split(",") if item.strip()]
     available = {alias: difficulty for alias, difficulty in ENGINE_MATRIX}
     if not requested:
-        raise ValueError("pass exactly one --engines alias, e.g. --engines exp2")
+        raise ValueError("pass exactly one --engines alias, e.g. --engines exp3")
     unknown = [alias for alias in requested if alias not in available]
     if unknown:
         raise ValueError(f"unknown engine alias: {','.join(unknown)}")
@@ -492,6 +801,11 @@ def _engine_verdict(summary: dict) -> str:
     expected_checkpoints = max(1, VALID_GAMES // max(1, int(summary.get("autorun_threshold") or 1)))
     if len(checkpoints) < expected_checkpoints:
         return "FAIL"
+    sanity_results = {str((row.get("sanity_learning_probe") or {}).get("result_kind") or "") for row in checkpoints}
+    if "partial_policy_learned_but_decision_unchanged" in sanity_results:
+        return "PARTIAL_POLICY_LEARNED_BUT_DECISION_UNCHANGED"
+    if "partial_seen_variants_only" in sanity_results:
+        return "PARTIAL_SEEN_VARIANTS_ONLY"
     if any(str(row.get("pre_checkpoint_model_sha256") or "") == str(row.get("post_checkpoint_model_sha256") or "") for row in checkpoints):
         return "PARTIAL"
     if any(bool(row.get("ineffective_training")) for row in checkpoints):
@@ -1215,7 +1529,6 @@ def _extract_engine_move_samples(valid_games: list[PlannedGame]) -> list[dict]:
 def _engine_focus_name(engine_alias: str) -> str:
     return {
         "exp1": "experiment",
-        "exp2": "experiment 2:nn",
         "exp3": "experiment 3:dl",
         "exp4": "experiment 4:pv",
     }[engine_alias]
@@ -1223,7 +1536,6 @@ def _engine_focus_name(engine_alias: str) -> str:
 
 def _engine_model_slot(engine_alias: str) -> str:
     return {
-        "exp2": "nn",
         "exp3": "dl",
         "exp4": "pv",
     }[engine_alias]
@@ -1231,7 +1543,6 @@ def _engine_model_slot(engine_alias: str) -> str:
 
 def _inventory_model_overrides(inventory_map: dict[str, dict]) -> dict[str, Path]:
     return {
-        "nn": Path(str(inventory_map.get("experiment 2:nn", {}).get("path") or "")),
         "dl": Path(str(inventory_map.get("experiment 3:dl", {}).get("path") or "")),
         "pv": Path(str(inventory_map.get("experiment 4:pv", {}).get("path") or "")),
     }
@@ -1239,14 +1550,13 @@ def _inventory_model_overrides(inventory_map: dict[str, dict]) -> dict[str, Path
 
 def _trainer_key(engine_alias: str) -> str:
     return {
-        "exp2": "exp2_refine",
         "exp3": "exp3_refine",
         "exp4": "exp4_refine",
     }[engine_alias]
 
 
 def _evaluate_move_agreement(engine_alias: str, model_path: Path, samples: list[dict]) -> dict:
-    if engine_alias not in {"exp1", "exp2", "exp3", "exp4"}:
+    if engine_alias not in {"exp1", "exp3", "exp4"}:
         return {"supported": False, "matches": 0, "total": 0, "agreement": 0.0, "avg_think_ms": 0.0}
     matches = 0
     elapsed_total_ms = 0.0
@@ -1260,8 +1570,6 @@ def _evaluate_move_agreement(engine_alias: str, model_path: Path, samples: list[
                 EXPERIMENT_DIFFICULTY,
                 learning_store=ChessExperimentStore(db_path=model_path),
             )
-        elif engine_alias == "exp2":
-            move = choose_experiment_nn_move(board_state, str(sample["side"] or "white"), model_path=model_path)
         elif engine_alias == "exp3":
             move = choose_experiment_dl_move(board_state, str(sample["side"] or "white"), model_path=model_path, search_profile="fast")
         else:
@@ -1285,8 +1593,6 @@ def _evaluate_move_agreement(engine_alias: str, model_path: Path, samples: list[
 def _choose_engine_move_for_eval(engine_alias: str, board_state: dict, side: str, model_path: Path) -> dict | None:
     if engine_alias == "exp1":
         return choose_computer_move(board_state, side, EXPERIMENT_DIFFICULTY, learning_store=ChessExperimentStore(db_path=model_path))
-    if engine_alias == "exp2":
-        return choose_experiment_nn_move(board_state, side, model_path=model_path)
     if engine_alias == "exp3":
         return choose_experiment_dl_move(board_state, side, model_path=model_path, search_profile="fast")
     if engine_alias == "exp4":
@@ -1323,7 +1629,9 @@ def _deterministic_case_policy_score(fen: str, side: str, move_uci: str) -> int 
 
 def _deterministic_strength_cases(samples: list[dict]) -> list[dict]:
     cases = [dict(case) for case in DETERMINISTIC_STRENGTH_CASES]
-    for sample in samples[:3]:
+    mistake_samples = [sample for sample in samples if str(sample.get("category") or "") == "mistake_retention"]
+    ordered_samples = mistake_samples + [sample for sample in samples if sample not in mistake_samples]
+    for sample in ordered_samples[:3]:
         expected = str(sample.get("move_uci") or "").lower()
         if not expected:
             continue
@@ -1508,8 +1816,63 @@ def _deterministic_strength_report(snapshots: list[dict]) -> dict:
     }
 
 
+def _policy_override_audit(engine_alias: str, model_path: Path, cases: list[dict], deterministic_report: dict) -> dict:
+    rows = []
+    for case in cases or []:
+        explanation = _engine_decision_breakdown(
+            engine_alias,
+            model_path,
+            {"fen": case.get("fen"), "side": case.get("side"), "expected_move": (case.get("expected_best_moves") or [""])[0]},
+        )
+        override = explanation.get("policy_override") or {}
+        if not override:
+            continue
+        rows.append(
+            {
+                "case_id": case.get("case_id"),
+                "category": case.get("category"),
+                "chosen_move": explanation.get("chosen_move"),
+                "chosen_reason": explanation.get("chosen_reason"),
+                "override_used": bool(override.get("used")),
+                "override_move": override.get("move"),
+                "margin": override.get("margin"),
+                "thresholds": override.get("thresholds") or {},
+                "override_reason": override.get("reason"),
+            }
+        )
+    baseline_scores = {
+        str(category): data
+        for category, data in ((((deterministic_report.get("score_table") or [{}])[0]).get("category_score") or {}).items())
+    }
+    final_scores = {
+        str(category): data
+        for category, data in ((deterministic_report.get("final") or {}).get("category_score") or {}).items()
+    }
+    used_count = sum(1 for row in rows if row.get("override_used"))
+    regression_reasons = []
+    if used_count:
+        for category in ("tactic", "blunder_avoid"):
+            before = float((baseline_scores.get(category) or {}).get("score") or 0.0)
+            after = float((final_scores.get(category) or {}).get("score") or 0.0)
+            if after < before:
+                regression_reasons.append(f"{category} deterministic score regressed while policy override was active")
+    return {
+        "override_usage_count": used_count,
+        "override_cases": [row for row in rows if row.get("override_used")],
+        "all_case_override_decisions": rows,
+        "regression_reasons": regression_reasons,
+        "passed": not regression_reasons,
+    }
+
+
+def _clone_deterministic_snapshot(snapshot: dict, *, model_label: str) -> dict:
+    cloned = deepcopy(snapshot)
+    cloned["model_label"] = model_label
+    return cloned
+
+
 def _evaluate_fixed_probe_positions(engine_alias: str, model_path: Path) -> dict:
-    if engine_alias not in {"exp1", "exp2", "exp3", "exp4"}:
+    if engine_alias not in {"exp1", "exp3", "exp4"}:
         return {"supported": False, "positions": [], "move_change_count": 0}
     rows = []
     for probe in FIXED_PROBE_POSITIONS:
@@ -1580,7 +1943,9 @@ def _evaluate_retention_probe(engine_alias: str, before_model_path: Path, after_
 
 
 def _select_mistake_probe_sample(engine_alias: str, model_path: Path, samples: list[dict]) -> dict | None:
-    for sample in samples:
+    mistake_samples = [sample for sample in samples if str(sample.get("category") or "") == "mistake_retention"]
+    ordered_samples = mistake_samples + [sample for sample in samples if sample not in mistake_samples]
+    for sample in ordered_samples:
         board_state = {"__fen__": str(sample.get("fen") or "")}
         side = str(sample.get("side") or "white")
         expected_move = str(sample.get("move_uci") or "").lower()
@@ -1599,6 +1964,13 @@ def _evaluate_mistake_retention_probe(engine_alias: str, before_model_path: Path
             "supported": False,
             "reason": "no_old_samples",
             "counted_as_game": False,
+            "expected_move": "",
+            "before_move": "",
+            "after_move": "",
+            "avoided_old_mistake": False,
+            "avoided_same_error": False,
+            "matched_expected": False,
+            "result_kind": "fail",
             "learning_signal": False,
             "learning_signal_reason": "no old trusted move sample was available for a mistake-retention probe",
             "human_explanation": "目前沒有足夠證據證明 retrain 改善了該錯誤，因為沒有可重測的舊題目。",
@@ -1613,10 +1985,12 @@ def _evaluate_mistake_retention_probe(engine_alias: str, before_model_path: Path
         after_move = _choose_engine_move_for_eval(engine_alias, board_state, side, after_model_path)
         before_uci = _move_uci(before_move or {})
         after_uci = _move_uci(after_move or {})
+        retained_expected = before_uci == expected_move and after_uci == expected_move
+        regressed_from_expected = before_uci == expected_move and after_uci != expected_move
         probe_case_id = f"game:{int(sample.get('game_id') or 0)}:ply:{int(sample.get('ply') or 0)}:{expected_move}"
         return {
-            "supported": False,
-            "reason": "no_prior_mistake_sample",
+            "supported": retained_expected,
+            "reason": "retained_expected_move" if retained_expected else "regressed_from_expected_move" if regressed_from_expected else "no_prior_mistake_sample",
             "counted_as_game": False,
             "source": "old_trusted_engine_move_mistake",
             "probe_case_id": probe_case_id,
@@ -1629,14 +2003,29 @@ def _evaluate_mistake_retention_probe(engine_alias: str, before_model_path: Path
             "expected_move": expected_move,
             "before_move": before_uci,
             "after_move": after_uci,
-            "before_failed": False,
+            "before_failed": before_uci != expected_move,
             "after_fixed": after_uci == expected_move,
+            "avoided_old_mistake": False,
             "avoided_same_error": False,
+            "matched_expected": after_uci == expected_move,
+            "result_kind": "retained_expected" if retained_expected else "regressed_from_expected" if regressed_from_expected else "not_prior_mistake",
             "model_response_changed": before_uci != after_uci,
             "sample_count": len(samples),
-            "learning_signal": False,
-            "learning_signal_reason": "no prior mistake was found, so this probe cannot prove that retrain corrected a known error",
-            "human_explanation": "目前沒有足夠證據證明 retrain 改善了該錯誤，因為 before model 沒有在可選舊題目上犯錯。",
+            "learning_signal": bool(retained_expected),
+            "learning_signal_reason": (
+                "before model had already learned the expected move and after model retained it"
+                if retained_expected
+                else "before model had learned the expected move but after model regressed"
+                if regressed_from_expected
+                else "no prior mistake was found, so this probe cannot prove that retrain corrected a known error"
+            ),
+            "human_explanation": (
+                "舊錯題在前一 checkpoint 已被修正，這次 retrain 後仍保留正解。"
+                if retained_expected
+                else "模型曾經修正此錯題，但這次 retrain 後退步。"
+                if regressed_from_expected
+                else "目前沒有足夠證據證明 retrain 改善了該錯誤，因為 before model 沒有在可選舊題目上犯錯。"
+            ),
         }
     board_state = {"__fen__": str(sample.get("fen") or "")}
     side = str(sample.get("side") or "white")
@@ -1646,18 +2035,24 @@ def _evaluate_mistake_retention_probe(engine_alias: str, before_model_path: Path
     after_uci = _move_uci(after_move or {})
     before_failed = before_uci != expected_move
     after_fixed = after_uci == expected_move
-    avoided_same_error = bool(before_failed and after_uci != before_uci)
+    avoided_old_mistake = bool(before_failed and after_uci != before_uci)
+    avoided_same_error = avoided_old_mistake
+    matched_expected = bool(after_fixed)
     probe_case_id = f"game:{int(sample.get('game_id') or 0)}:ply:{int(sample.get('ply') or 0)}:{expected_move}"
     if before_failed and after_fixed:
+        result_kind = "matched_expected"
         reason = "before model failed the old mistake case and after model selected the expected move"
         explanation = "舊錯題已被修正，這提供 retrain 改善該錯誤的直接證據。"
-    elif before_failed and avoided_same_error:
+    elif before_failed and avoided_old_mistake:
+        result_kind = "avoided_old_but_not_expected"
         reason = "after model avoided the same wrong move but still did not select the expected move"
         explanation = "模型避開了同一個錯誤，但尚未走到預期正解，因此不能視為學習成功。"
     elif before_failed:
+        result_kind = "repeated_old_mistake"
         reason = "after model repeated the same wrong move"
         explanation = "目前沒有足夠證據證明 retrain 改善了該錯誤，因為 after model 仍重複同一錯誤。"
     else:
+        result_kind = "not_prior_mistake"
         reason = "selected probe was not a prior mistake"
         explanation = "目前沒有足夠證據證明 retrain 改善了該錯誤，因為此 probe 不是 before model 的舊錯題。"
     return {
@@ -1676,11 +2071,438 @@ def _evaluate_mistake_retention_probe(engine_alias: str, before_model_path: Path
         "after_move": after_uci,
         "before_failed": before_failed,
         "after_fixed": after_fixed,
+        "avoided_old_mistake": avoided_old_mistake,
         "avoided_same_error": avoided_same_error,
+        "matched_expected": matched_expected,
+        "result_kind": result_kind,
         "model_response_changed": before_uci != after_uci,
-        "learning_signal": bool(before_failed and after_fixed),
+        "learning_signal": bool(before_failed and matched_expected),
         "learning_signal_reason": reason,
         "human_explanation": explanation,
+    }
+
+
+def _sanity_learning_cases_from_samples(samples: list[dict]) -> list[dict]:
+    cases = []
+    for sample in samples or []:
+        if str(sample.get("category") or "") != "mistake_retention":
+            continue
+        expected = str(sample.get("move_uci") or "").lower()
+        fen = str(sample.get("fen") or "").strip()
+        side = str(sample.get("side") or "").strip().lower()
+        if fen and expected and side:
+            cases.append(
+                {
+                    "case_id": f"sanity:{int(sample.get('game_id') or 0)}:ply:{int(sample.get('ply') or 0)}:{expected}",
+                    "fen": fen,
+                    "side": side,
+                    "expected_move": expected,
+                    "source_game_id": int(sample.get("game_id") or 0),
+                    "source_ply": int(sample.get("ply") or 0),
+                    "source_label": str(sample.get("game_label") or ""),
+                }
+            )
+    return cases
+
+
+def _sanity_learning_case_from_samples(samples: list[dict]) -> dict | None:
+    cases = _sanity_learning_cases_from_samples(samples)
+    return cases[0] if cases else None
+
+
+def _normalized_fen_hash(fen: str) -> str:
+    try:
+        board = chess.Board(str(fen or ""))
+        normalized = f"{board.board_fen()} {board.turn} {board.castling_rights} {board.ep_square}"
+    except Exception:
+        normalized = str(fen or "")
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _sanity_learning_variants(
+    case: dict,
+    *,
+    limit: int = SANITY_LEARNING_VARIANT_COUNT,
+    offset: int = 0,
+    split: str = "seen",
+) -> list[dict]:
+    expected = str(case.get("expected_move") or "").lower()
+    try:
+        base_board = chess.Board(str(case.get("fen") or ""))
+        expected_move = chess.Move.from_uci(expected)
+    except Exception:
+        return []
+    if expected_move not in base_board.legal_moves:
+        return []
+    variants = []
+    legal_quiet = [
+        move
+        for move in sorted(base_board.legal_moves, key=lambda item: item.uci())
+        if move != expected_move and not base_board.is_capture(move) and move.promotion is None
+    ]
+    for candidate_index, decoy_move in enumerate(legal_quiet, start=1):
+        variant_board = base_board.copy(stack=False)
+        variant_board.push(decoy_move)
+        replies = [
+            move
+            for move in sorted(variant_board.legal_moves, key=lambda item: item.uci())
+            if not variant_board.is_capture(move) and move.promotion is None
+        ]
+        if not replies:
+            continue
+        reply = replies[0]
+        variant_board.push(reply)
+        if variant_board.turn != base_board.turn or expected_move not in variant_board.legal_moves:
+            continue
+        if candidate_index <= int(offset):
+            continue
+        variant_index = len(variants) + 1
+        variant_id = f"{case.get('case_id')}:{split}_variant:{variant_index}"
+        variants.append(
+            {
+                "case_id": variant_id,
+                "variant_id": variant_id,
+                "variant_split": split,
+                "fen": variant_board.fen(),
+                "normalized_fen_hash": _normalized_fen_hash(variant_board.fen()),
+                "side": str(case.get("side") or ""),
+                "expected_move": expected,
+                "variation_moves": [decoy_move.uci(), reply.uci()],
+            }
+        )
+        if len(variants) >= int(limit):
+            break
+    return variants
+
+
+def _select_sanity_learning_case(engine_alias: str, before_model_path: Path, samples: list[dict]) -> tuple[dict | None, dict | None]:
+    cases = _sanity_learning_cases_from_samples(samples)
+    evaluated_before = []
+    for candidate in cases:
+        candidate_before = _evaluate_sanity_learning_position(engine_alias, before_model_path, candidate)
+        evaluated_before.append(candidate_before)
+        if not candidate_before.get("expected_is_top1"):
+            return candidate, candidate_before
+    if cases:
+        return cases[0], evaluated_before[0] if evaluated_before else _evaluate_sanity_learning_position(engine_alias, before_model_path, cases[0])
+    return None, None
+
+
+def _sanity_seen_variant_training_rows(engine_alias: str, before_model_path: Path, samples: list[dict]) -> dict:
+    case, before_exact = _select_sanity_learning_case(engine_alias, before_model_path, samples)
+    if not case:
+        return {"case": None, "before_exact": None, "rows": [], "seen_variants": []}
+    seen_variants = _sanity_learning_variants(case, limit=SANITY_LEARNING_VARIANT_COUNT, offset=0, split="seen")
+    rows = []
+    for variant in seen_variants:
+        rows.append(
+            {
+                "fen": variant["fen"],
+                "side": variant["side"],
+                "move_uci": variant["expected_move"],
+                "target": 1.0,
+                "weight": 1.3,
+                "source": "sanity_seen_variant_replay",
+                "category": "mistake_retention",
+                "case_id": case.get("case_id"),
+                "variant_id": variant.get("variant_id"),
+                "variant_split": "seen",
+                "normalized_fen_hash": variant.get("normalized_fen_hash"),
+                "expected_move": variant["expected_move"],
+            }
+        )
+    return {"case": case, "before_exact": before_exact, "rows": rows, "seen_variants": seen_variants}
+
+
+def _evaluate_sanity_learning_position(engine_alias: str, model_path: Path, case: dict) -> dict:
+    fen = str(case.get("fen") or "")
+    side = str(case.get("side") or "white")
+    expected = str(case.get("expected_move") or "").lower()
+    board_state = {"__fen__": fen}
+    move = _choose_engine_move_for_eval(engine_alias, board_state, side, model_path)
+    top1 = _move_uci_from_engine_move(move)
+    top3 = _rank_deterministic_top3(engine_alias, board_state, side, model_path, move)
+    return {
+        "case_id": str(case.get("case_id") or ""),
+        "fen": fen,
+        "side": side,
+        "expected_move": expected,
+        "top1": top1,
+        "top3": top3,
+        "expected_in_top3": expected in top3,
+        "expected_is_top1": top1 == expected,
+        "variation_moves": list(case.get("variation_moves") or []),
+    }
+
+
+def _evaluate_engine_raw_policy_position(engine_alias: str, model_path: Path, case: dict, *, old_move: str = "") -> dict:
+    fen = str(case.get("fen") or "")
+    side = str(case.get("side") or "white")
+    expected = str(case.get("expected_move") or "").lower()
+    board_state = {"__fen__": fen}
+    if not expected:
+        return {"supported": False, "reason": "missing expected_move"}
+    try:
+        if engine_alias == "exp3":
+            rows = rank_experiment_dl_policy_moves(board_state, side, model_path=model_path)
+        elif engine_alias == "exp4":
+            rows = rank_experiment_pv_policy_moves(board_state, side, model_path=model_path)
+        else:
+            return {"supported": False, "reason": f"raw policy probe is not available for {engine_alias}"}
+    except Exception as exc:
+        return {"supported": False, "reason": str(exc)}
+    expected_row = next((row for row in rows if str(row.get("move") or "") == expected), None)
+    if expected_row is None:
+        return {"supported": False, "reason": "expected move missing from legal policy rows", "expected_move": expected}
+    top1 = str((rows[0] or {}).get("move") or "") if rows else ""
+    old = str(old_move or top1).lower()
+    old_row = next((row for row in rows if str(row.get("move") or "") == old), None)
+    expected_score = float(expected_row.get("raw_policy_score") or 0.0)
+    old_score = float((old_row or {}).get("raw_policy_score") or 0.0)
+    return {
+        "supported": True,
+        "case_id": str(case.get("case_id") or ""),
+        "fen": fen,
+        "side": side,
+        "expected_move": expected,
+        "raw_policy_top1": top1,
+        "raw_policy_top3": [str(row.get("move") or "") for row in rows[:3]],
+        "expected_rank": int(expected_row.get("raw_policy_rank") or 0),
+        "expected_probability": float(expected_row.get("policy_probability") or 0.0),
+        "expected_logit": expected_score,
+        "old_move": old,
+        "old_move_rank": int((old_row or {}).get("raw_policy_rank") or 0),
+        "old_move_probability": float((old_row or {}).get("policy_probability") or 0.0),
+        "old_move_logit": old_score,
+        "margin_vs_old_move": round(expected_score - old_score, 8),
+        "expected_is_raw_top1": top1 == expected,
+    }
+
+
+def _evaluate_exp4_raw_policy_position(model_path: Path, case: dict, *, old_move: str = "") -> dict:
+    return _evaluate_engine_raw_policy_position("exp4", model_path, case, old_move=old_move)
+
+
+def _engine_decision_breakdown(engine_alias: str, model_path: Path, case: dict, *, old_move: str = "") -> dict:
+    fen = str(case.get("fen") or "")
+    side = str(case.get("side") or "white")
+    expected = str(case.get("expected_move") or "").lower()
+    watched = [move for move in [expected, old_move] if move]
+    try:
+        if engine_alias == "exp3":
+            return explain_experiment_dl_decision({"__fen__": fen}, side, model_path=model_path, search_profile="fast", watched_moves=watched)
+        if engine_alias == "exp4":
+            return explain_experiment_pv_decision({"__fen__": fen}, side, model_path=model_path, search_profile="fast", watched_moves=watched)
+        return {"supported": False, "reason": f"decision breakdown is not available for {engine_alias}", "expected_move": expected, "old_move": old_move}
+    except Exception as exc:
+        return {"supported": False, "reason": str(exc), "expected_move": expected, "old_move": old_move}
+
+
+def _exp4_decision_breakdown(model_path: Path, case: dict, *, old_move: str = "") -> dict:
+    return _engine_decision_breakdown("exp4", model_path, case, old_move=old_move)
+
+
+def _evaluate_sanity_learning_probe(engine_alias: str, before_model_path: Path, after_model_path: Path, samples: list[dict]) -> dict:
+    case, before_exact = _select_sanity_learning_case(engine_alias, before_model_path, samples)
+    if not case:
+        return {
+            "supported": False,
+            "learning_signal": False,
+            "result_kind": "failed_to_learn",
+            "raw_policy_learning": {"supported": False, "learning_signal": False},
+            "final_decision_learning": {"supported": False, "learning_signal": False},
+            "reason": "no mistake_retention replay sample with explicit expected_move was available",
+            "human_explanation": "目前沒有足夠證據證明 retrain 學會指定錯誤，因為缺少對齊 expected_move 的 replay 樣本。",
+        }
+    before_exact = before_exact or _evaluate_sanity_learning_position(engine_alias, before_model_path, case)
+    old_move = str(before_exact.get("top1") or "")
+    raw_before = _evaluate_engine_raw_policy_position(engine_alias, before_model_path, case, old_move=old_move)
+    if before_exact["expected_is_top1"]:
+        after_exact = _evaluate_sanity_learning_position(engine_alias, after_model_path, case)
+        raw_after = _evaluate_engine_raw_policy_position(engine_alias, after_model_path, case, old_move=old_move)
+        retained = bool(after_exact.get("expected_is_top1"))
+        return {
+            "supported": True,
+            "learning_signal": retained,
+            "result_kind": "retained_learned_decision" if retained else "regressed_from_learned_decision",
+            "raw_policy_learning": {
+                "supported": bool(raw_before.get("supported") and raw_after.get("supported")),
+                "learning_signal": bool(retained and raw_after.get("expected_is_raw_top1")),
+                "before": raw_before,
+                "after": raw_after,
+                "raw_policy_top1_before": raw_before.get("raw_policy_top1"),
+                "raw_policy_top1_after": raw_after.get("raw_policy_top1"),
+                "expected_rank_before": raw_before.get("expected_rank"),
+                "expected_rank_after": raw_after.get("expected_rank"),
+                "expected_margin_before": raw_before.get("margin_vs_old_move"),
+                "expected_margin_after": raw_after.get("margin_vs_old_move"),
+                "learning_signal_reason": "expected_move was already raw top1 and remained available" if retained else "expected_move decision regressed",
+            },
+            "final_decision_learning": {
+                "supported": True,
+                "learning_signal": retained,
+                "before_top1": before_exact.get("top1"),
+                "after_top1": after_exact.get("top1"),
+                "expected_move": case.get("expected_move"),
+                "blocked_by_search_or_static_eval": False,
+                "blocked_reason": "",
+            },
+            "reason": "baseline already selected expected_move and after model retained it" if retained else "baseline selected expected_move but after model regressed",
+            "case": case,
+            "before_exact": before_exact,
+            "after_exact": after_exact,
+            "human_explanation": "此 sanity probe 顯示前一 checkpoint 已學會該錯題，且本次 retrain 後仍保留正解。" if retained else "此 sanity probe 顯示本次 retrain 讓已學會的錯題退步。",
+        }
+    after_exact = _evaluate_sanity_learning_position(engine_alias, after_model_path, case)
+    raw_after = _evaluate_engine_raw_policy_position(engine_alias, after_model_path, case, old_move=old_move)
+    before_rank = int(raw_before.get("expected_rank") or 0) if raw_before.get("supported") else 0
+    after_rank = int(raw_after.get("expected_rank") or 0) if raw_after.get("supported") else 0
+    before_margin = float(raw_before.get("margin_vs_old_move") or 0.0) if raw_before.get("supported") else 0.0
+    after_margin = float(raw_after.get("margin_vs_old_move") or 0.0) if raw_after.get("supported") else 0.0
+    raw_rank_improved = bool(raw_before.get("supported") and raw_after.get("supported") and after_rank > 0 and (before_rank == 0 or after_rank < before_rank))
+    raw_margin_turned_positive = bool(raw_before.get("supported") and raw_after.get("supported") and before_margin <= 0.0 and after_margin > 0.0)
+    raw_top1_expected = bool(raw_after.get("expected_is_raw_top1"))
+    raw_policy_learning = {
+        "supported": bool(raw_before.get("supported") and raw_after.get("supported")),
+        "learning_signal": bool(raw_top1_expected and (raw_rank_improved or raw_margin_turned_positive or after_margin > 0.0)),
+        "before": raw_before,
+        "after": raw_after,
+        "expected_rank_before": before_rank or None,
+        "expected_rank_after": after_rank or None,
+        "expected_rank_improved": raw_rank_improved,
+        "expected_margin_before": before_margin if raw_before.get("supported") else None,
+        "expected_margin_after": after_margin if raw_after.get("supported") else None,
+        "expected_margin_vs_chosen_old_move": after_margin if raw_after.get("supported") else None,
+        "expected_margin_turned_positive": raw_margin_turned_positive,
+        "old_move_rank_before": raw_before.get("old_move_rank") if raw_before.get("supported") else None,
+        "old_move_rank_after": raw_after.get("old_move_rank") if raw_after.get("supported") else None,
+        "raw_policy_top1_before": raw_before.get("raw_policy_top1"),
+        "raw_policy_top1_after": raw_after.get("raw_policy_top1"),
+        "learning_signal_reason": (
+            "raw policy top1 changed to expected_move and expected margin is positive"
+            if raw_top1_expected and after_margin > 0.0
+            else "raw policy did not make expected_move top1 with positive margin"
+        ),
+    }
+    decision_before = _engine_decision_breakdown(engine_alias, before_model_path, case, old_move=old_move)
+    decision_after = _engine_decision_breakdown(engine_alias, after_model_path, case, old_move=old_move)
+    final_decision_signal = bool(after_exact.get("expected_is_top1"))
+    blocked_by_search_or_static_eval = bool(raw_policy_learning["learning_signal"] and not final_decision_signal)
+    final_decision_learning = {
+        "supported": True,
+        "learning_signal": final_decision_signal,
+        "before_top1": before_exact.get("top1"),
+        "after_top1": after_exact.get("top1"),
+        "expected_move": case.get("expected_move"),
+        "blocked_by_search_or_static_eval": blocked_by_search_or_static_eval,
+        "blocked_reason": (
+            f"raw policy learned expected_move but final decision stayed {after_exact.get('top1')} via {(decision_after.get('chosen_reason') or 'unknown')}"
+            if blocked_by_search_or_static_eval
+            else ""
+        ),
+        "decision_breakdown_before": decision_before,
+        "decision_breakdown_after": decision_after,
+    }
+    seen_variants = _sanity_learning_variants(case, limit=SANITY_LEARNING_VARIANT_COUNT, offset=0, split="seen")
+    unseen_variants = _sanity_learning_variants(case, limit=SANITY_LEARNING_VARIANT_COUNT, offset=SANITY_LEARNING_VARIANT_COUNT, split="unseen")
+    before_seen_variants = [_evaluate_sanity_learning_position(engine_alias, before_model_path, variant) for variant in seen_variants]
+    after_seen_variants = [_evaluate_sanity_learning_position(engine_alias, after_model_path, variant) for variant in seen_variants]
+    before_unseen_variants = [_evaluate_sanity_learning_position(engine_alias, before_model_path, variant) for variant in unseen_variants]
+    after_unseen_variants = [_evaluate_sanity_learning_position(engine_alias, after_model_path, variant) for variant in unseen_variants]
+    raw_seen_after = [_evaluate_engine_raw_policy_position(engine_alias, after_model_path, variant, old_move=old_move) for variant in seen_variants]
+    raw_unseen_after = [_evaluate_engine_raw_policy_position(engine_alias, after_model_path, variant, old_move=old_move) for variant in unseen_variants]
+    seen_hits = sum(1 for row in after_seen_variants if row.get("expected_is_top1"))
+    unseen_hits = sum(1 for row in after_unseen_variants if row.get("expected_is_top1"))
+    raw_seen_hits = sum(1 for row in raw_seen_after if row.get("expected_is_raw_top1"))
+    raw_unseen_hits = sum(1 for row in raw_unseen_after if row.get("expected_is_raw_top1"))
+    seen_count = len(after_seen_variants)
+    unseen_count = len(after_unseen_variants)
+    variant_count = seen_count + unseen_count
+    variant_top1_hits = seen_hits + unseen_hits
+    seen_variant_pass_rate = round(seen_hits / max(1, seen_count), 4)
+    unseen_variant_pass_rate = round(unseen_hits / max(1, unseen_count), 4)
+    raw_policy_generalization_rate = round((raw_seen_hits + raw_unseen_hits) / max(1, seen_count + unseen_count), 4)
+    final_decision_generalization_rate = round((seen_hits + unseen_hits) / max(1, seen_count + unseen_count), 4)
+    exact_learned = bool(after_exact.get("expected_is_top1"))
+    seen_passed = bool(seen_count > 0 and seen_variant_pass_rate >= SANITY_SEEN_VARIANT_PASS_THRESHOLD)
+    unseen_passed = bool(unseen_count > 0 and unseen_variant_pass_rate >= SANITY_UNSEEN_VARIANT_PASS_THRESHOLD)
+    generalized = bool(exact_learned and seen_passed and unseen_passed)
+    if generalized:
+        result_kind = "generalized_to_variants"
+        explanation = "模型修正原始 FEN，且 seen/unseen 相似變體都達到泛化門檻。"
+    elif exact_learned and seen_passed and unseen_count == 0:
+        result_kind = "partial_seen_variants_only"
+        explanation = "模型修正原始 FEN 並通過 seen variants，但沒有 unseen variants，不能證明泛化。"
+    elif exact_learned and seen_passed:
+        result_kind = "partial_seen_variants_only"
+        explanation = "模型修正原始 FEN 並通過 seen variants，但 unseen variants 未達門檻，不能 promotion。"
+    elif exact_learned:
+        result_kind = "memorized_exact_fen"
+        explanation = "模型修正了原始 FEN，但 seen/unseen 變體未達門檻，仍可能只是記住原局面。"
+    elif raw_policy_learning["learning_signal"]:
+        result_kind = "partial_policy_learned_but_decision_unchanged"
+        explanation = "raw policy 已經把 expected_move 學成優先選項，但最終 search/static eval 決策仍未選 expected_move，因此不可 promotion。"
+    else:
+        result_kind = "failed_to_learn"
+        explanation = "目前沒有足夠證據證明 retrain 學會指定錯誤，因為 after_top1 仍不是 expected_move。"
+    return {
+        "supported": True,
+        "source": "fixed_replay_sanity_learning_probe",
+        "case": case,
+        "generalization_thresholds": {
+            "seen_variant_pass_rate_min": SANITY_SEEN_VARIANT_PASS_THRESHOLD,
+            "unseen_variant_pass_rate_min": SANITY_UNSEEN_VARIANT_PASS_THRESHOLD,
+        },
+        "exact_fen_pass": exact_learned,
+        "seen_variant_count": seen_count,
+        "seen_variant_top1_hits": seen_hits,
+        "seen_variant_pass_rate": seen_variant_pass_rate,
+        "unseen_variant_count": unseen_count,
+        "unseen_variant_top1_hits": unseen_hits,
+        "unseen_variant_pass_rate": unseen_variant_pass_rate,
+        "raw_policy_generalization_rate": raw_policy_generalization_rate,
+        "final_decision_generalization_rate": final_decision_generalization_rate,
+        "variant_count": variant_count,
+        "variant_top1_hits": variant_top1_hits,
+        "variant_top1_rate": round(variant_top1_hits / max(1, variant_count), 4),
+        "before_exact": before_exact,
+        "after_exact": after_exact,
+        "raw_policy_learning": raw_policy_learning,
+        "final_decision_learning": final_decision_learning,
+        "before_variants": before_seen_variants + before_unseen_variants,
+        "after_variants": after_seen_variants + after_unseen_variants,
+        "seen_variants": {
+            "cases": seen_variants,
+            "before": before_seen_variants,
+            "after": after_seen_variants,
+            "raw_policy_after": raw_seen_after,
+        },
+        "unseen_variants": {
+            "cases": unseen_variants,
+            "before": before_unseen_variants,
+            "after": after_unseen_variants,
+            "raw_policy_after": raw_unseen_after,
+        },
+        "memorized_exact_fen": bool(result_kind == "memorized_exact_fen"),
+        "generalized_to_variants": bool(result_kind == "generalized_to_variants"),
+        "partial_seen_variants_only": bool(result_kind == "partial_seen_variants_only"),
+        "failed_to_learn": bool(result_kind == "failed_to_learn"),
+        "blocked_by_search_or_static_eval": blocked_by_search_or_static_eval,
+        "result_kind": result_kind,
+        "learning_signal": bool(result_kind == "generalized_to_variants"),
+        "learning_signal_reason": (
+            "exact FEN, seen variants, and unseen variants met generalization thresholds"
+            if result_kind == "generalized_to_variants"
+            else "exact FEN and seen variants passed, but unseen generalization was not proven"
+            if result_kind == "partial_seen_variants_only"
+            else "after_top1 matched expected_move only on exact FEN"
+            if result_kind == "memorized_exact_fen"
+            else "raw policy learned expected_move but final decision did not change"
+            if result_kind == "partial_policy_learned_but_decision_unchanged"
+            else "after_top1 did not match expected_move"
+        ),
+        "human_explanation": explanation,
+        "not_learning_success_sources": ["replay_loss", "hash_changed"],
     }
 
 
@@ -1963,19 +2785,216 @@ def _stage_regression_summary(stage_rates: list[dict]) -> dict:
     by_stage = {str(row.get("stage") or ""): row for row in stage_rates or []}
     first = by_stage.get("0-10") or {}
     second = by_stage.get("10-20") or {}
+    ordered = [row for row in stage_rates or [] if row.get("win_rate") is not None]
+    last = ordered[-1] if ordered else {}
+    previous = ordered[-2] if len(ordered) >= 2 else {}
     first_rate = first.get("win_rate")
     second_rate = second.get("win_rate")
+    last_rate = last.get("win_rate")
+    late_stage_games = int(last.get("normal_games") or 0)
+    late_stage_collapse = bool(
+        last_rate is not None
+        and late_stage_games >= LATE_STAGE_COLLAPSE_MIN_GAMES
+        and float(last_rate) <= LATE_STAGE_COLLAPSE_WIN_RATE
+    )
+    late_stage_delta = (
+        round(float(last_rate) - float(previous.get("win_rate")), 4)
+        if last_rate is not None and previous.get("win_rate") is not None
+        else None
+    )
     if first_rate is None or second_rate is None:
         return {
             "stage_win_rate_drop_10_20_vs_0_10": None,
             "stage_regression_threshold": 0.2,
             "stage_catastrophic_regression": False,
+            "late_stage": last.get("stage"),
+            "late_stage_win_rate": last_rate,
+            "late_stage_normal_games": late_stage_games,
+            "late_stage_win_rate_delta_from_previous": late_stage_delta,
+            "late_stage_win_rate_collapse": late_stage_collapse,
         }
     drop = round(float(first_rate) - float(second_rate), 4)
     return {
         "stage_win_rate_drop_10_20_vs_0_10": drop,
         "stage_regression_threshold": 0.2,
         "stage_catastrophic_regression": drop > 0.2,
+        "late_stage": last.get("stage"),
+        "late_stage_win_rate": last_rate,
+        "late_stage_normal_games": late_stage_games,
+        "late_stage_win_rate_delta_from_previous": late_stage_delta,
+        "late_stage_win_rate_collapse": late_stage_collapse,
+    }
+
+
+def _score_for_label(deterministic: dict, label: str) -> float | None:
+    for row in deterministic.get("score_table") or []:
+        if str(row.get("model_label") or "") == label:
+            return float(row.get("overall_deterministic_score") or 0.0)
+    return None
+
+
+def _category_score_for_label(deterministic: dict, label: str, category: str) -> float | None:
+    for row in deterministic.get("score_table") or []:
+        if str(row.get("model_label") or "") != label:
+            continue
+        bucket = (row.get("category_score") or {}).get(category) or {}
+        if "score" not in bucket:
+            return None
+        return float(bucket.get("score") or 0.0)
+    return None
+
+
+def _mistake_probe_failures(checkpoints: list[dict]) -> list[dict]:
+    failures = []
+    for checkpoint in checkpoints or []:
+        probe = checkpoint.get("mistake_retention_probe") or {}
+        if probe.get("learning_signal") is not False:
+            continue
+        failures.append(
+            {
+                "trusted_count": checkpoint.get("trusted_count") or checkpoint.get("trusted_replays"),
+                "probe_case_id": probe.get("probe_case_id"),
+                "before_move": probe.get("before_move"),
+                "after_move": probe.get("after_move"),
+                "expected_move": probe.get("expected_move"),
+                "avoided_same_error": probe.get("avoided_same_error"),
+                "avoided_old_mistake": probe.get("avoided_old_mistake"),
+                "matched_expected": probe.get("matched_expected"),
+                "result_kind": probe.get("result_kind"),
+                "learning_signal_reason": probe.get("learning_signal_reason") or probe.get("reason"),
+            }
+        )
+    return failures
+
+
+def _trainer_numeric(summary: dict, key_names: set[str]) -> float | None:
+    stack = [summary.get("retrain_result") or {}]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            for key, value in item.items():
+                normalized = str(key).lower()
+                if normalized in key_names:
+                    try:
+                        return float(value)
+                    except Exception:
+                        continue
+                if isinstance(value, (dict, list)):
+                    stack.append(value)
+        elif isinstance(item, list):
+            stack.extend(value for value in item if isinstance(value, (dict, list)))
+    return None
+
+
+def _retrain_stability_report(summary: dict) -> dict:
+    deterministic = summary.get("deterministic_strength_snapshot") or {}
+    stage = _stage_regression_summary(summary.get("stage_game_win_rates") or [])
+    checkpoints = (summary.get("before_after_eval") or {}).get("checkpoints") or []
+    baseline_score = _score_for_label(deterministic, "baseline")
+    checkpoint10_score = _score_for_label(deterministic, "checkpoint@10")
+    checkpoint20_score = _score_for_label(deterministic, "checkpoint@20")
+    final_score = _score_for_label(deterministic, "final")
+    baseline_mistake = _category_score_for_label(deterministic, "baseline", "mistake_retention")
+    final_mistake = _category_score_for_label(deterministic, "final", "mistake_retention")
+    deterministic_regressed_vs_baseline = bool(
+        baseline_score is not None and final_score is not None and final_score < baseline_score
+    )
+    deterministic_regressed_vs_checkpoint10 = bool(
+        checkpoint10_score is not None and final_score is not None and final_score < checkpoint10_score
+    )
+    deterministic_regressed_vs_checkpoint20 = bool(
+        checkpoint20_score is not None and final_score is not None and final_score < checkpoint20_score
+    )
+    mistake_retention_regressed = bool(
+        baseline_mistake is not None and final_mistake is not None and final_mistake < baseline_mistake
+    )
+    probe_failures = _mistake_probe_failures(checkpoints)
+    late_stage_collapse = bool(stage.get("late_stage_win_rate_collapse"))
+    suspected = bool(
+        late_stage_collapse
+        and (
+            deterministic_regressed_vs_checkpoint10
+            or deterministic_regressed_vs_baseline
+            or deterministic_regressed_vs_checkpoint20
+            or mistake_retention_regressed
+            or bool(probe_failures)
+        )
+    )
+    reasons = []
+    if late_stage_collapse:
+        reasons.append(
+            f"late trusted-valid stage {stage.get('late_stage')} collapsed to win_rate={stage.get('late_stage_win_rate')}"
+        )
+    if deterministic_regressed_vs_baseline:
+        reasons.append("final deterministic score regressed below baseline")
+    if deterministic_regressed_vs_checkpoint10:
+        reasons.append("final deterministic score regressed below checkpoint@10")
+    if deterministic_regressed_vs_checkpoint20:
+        reasons.append("final deterministic score regressed below checkpoint@20")
+    if mistake_retention_regressed:
+        reasons.append("mistake_retention deterministic category regressed")
+    if probe_failures:
+        reasons.append("mistake_retention_probe did not prove correction of prior mistakes")
+    integrity = summary.get("dataset_integrity") or {}
+    replay_diversity = {
+        "unique_positions": integrity.get("unique_positions"),
+        "duplicate_positions": integrity.get("duplicate_positions"),
+        "duplicate_ratio": integrity.get("duplicate_ratio"),
+        "position_quality": summary.get("position_quality") or {},
+    }
+    return {
+        "suspected_catastrophic_regression": suspected,
+        "reasons": reasons,
+        "replay_size": {
+            "trusted_replays": (summary.get("replay_summary") or {}).get("trusted_replays"),
+            "quarantine_replays": (summary.get("replay_summary") or {}).get("quarantine_replays"),
+            "accepted_rows": (summary.get("dataset_result") or {}).get("accepted_rows"),
+            "accepted_train_samples": (summary.get("dataset_result") or {}).get("accepted_train_samples"),
+            "accepted_eval_samples": (summary.get("dataset_result") or {}).get("accepted_eval_samples"),
+        },
+        "replay_diversity": replay_diversity,
+        "trainer_hyperparameters": {
+            "learning_rate": _trainer_numeric(summary, {"learning_rate", "lr"}),
+            "epochs": _trainer_numeric(summary, {"epochs", "epoch_count"}),
+            "gradient_norm": _trainer_numeric(summary, {"gradient_norm", "grad_norm"}),
+            "loss_delta": _trainer_numeric(summary, {"loss_delta"}),
+        },
+        "deterministic_scores": {
+            "baseline": baseline_score,
+            "checkpoint@10": checkpoint10_score,
+            "checkpoint@20": checkpoint20_score,
+            "final": final_score,
+            "regressed_vs_baseline": deterministic_regressed_vs_baseline,
+            "regressed_vs_checkpoint10": deterministic_regressed_vs_checkpoint10,
+            "regressed_vs_checkpoint20": deterministic_regressed_vs_checkpoint20,
+        },
+        "mistake_retention": {
+            "baseline_score": baseline_mistake,
+            "final_score": final_mistake,
+            "regressed": mistake_retention_regressed,
+            "probe_failures": probe_failures,
+        },
+        "late_stage": {
+            "stage": stage.get("late_stage"),
+            "normal_games": stage.get("late_stage_normal_games"),
+            "win_rate": stage.get("late_stage_win_rate"),
+            "delta_from_previous": stage.get("late_stage_win_rate_delta_from_previous"),
+            "collapsed": late_stage_collapse,
+        },
+        "checkpoint_evidence": [
+            {
+                "trusted_count": checkpoint.get("trusted_count") or checkpoint.get("trusted_replays"),
+                "dataset_hash": checkpoint.get("dataset_hash"),
+                "accepted_rows": (checkpoint.get("dataset_result") or {}).get("accepted_rows"),
+                "started_at": checkpoint.get("started_at"),
+                "finished_at": checkpoint.get("finished_at"),
+                "duration_seconds": checkpoint.get("duration_seconds"),
+                "previous_model_hash": checkpoint.get("previous_model_hash") or checkpoint.get("pre_checkpoint_model_sha256"),
+                "new_model_hash": checkpoint.get("new_model_hash") or checkpoint.get("post_checkpoint_model_sha256"),
+                "hash_changed": checkpoint.get("hash_changed") if "hash_changed" in checkpoint else checkpoint.get("model_hash_changed"),
+            }
+            for checkpoint in checkpoints
+        ],
     }
 
 
@@ -1995,9 +3014,11 @@ def _stability_summary(summary: dict) -> dict:
     tactical_regression = _fixed_probe_regression(before_after, {"mate", "fork", "capture", "queen", "rook"})
     endgame_regression = _fixed_probe_regression(before_after, {"endgame", "promotion", "stalemate"})
     stage_regression = _stage_regression_summary(summary.get("stage_game_win_rates") or [])
+    retrain_stability = summary.get("retrain_stability_report") or _retrain_stability_report(summary)
     catastrophic = bool(
         (illegal_move_delta is not None and illegal_move_delta < -0.05)
         or bool(stage_regression.get("stage_catastrophic_regression"))
+        or bool(retrain_stability.get("suspected_catastrophic_regression"))
         or opening_regression > 0.10
         or tactical_regression > 0.10
         or endgame_regression > 0.10
@@ -2017,9 +3038,11 @@ def _stability_summary(summary: dict) -> dict:
 
 def _promotion_gate_summary(summary: dict) -> dict:
     reasons = []
-    if summary.get("replay_summary", {}).get("trusted_replays") != VALID_GAMES:
+    expected_trusted = int(summary.get("expected_trusted_replays") or VALID_GAMES)
+    expected_quarantine = int(summary.get("expected_quarantine_replays") if summary.get("expected_quarantine_replays") is not None else INVALID_GAMES)
+    if summary.get("replay_summary", {}).get("trusted_replays") != expected_trusted:
         reasons.append("insufficient trusted games")
-    if summary.get("replay_summary", {}).get("quarantine_replays") != INVALID_GAMES:
+    if summary.get("replay_summary", {}).get("quarantine_replays") != expected_quarantine:
         reasons.append("unexpected quarantine count")
     integrity = summary.get("dataset_integrity") or {}
     poison = summary.get("poison_detection") or {}
@@ -2046,6 +3069,12 @@ def _promotion_gate_summary(summary: dict) -> dict:
     stability = summary.get("stability") or {}
     if stability.get("catastrophic_regression"):
         reasons.append("catastrophic regression detected")
+    retrain_stability = summary.get("retrain_stability_report") or {}
+    if retrain_stability.get("suspected_catastrophic_regression"):
+        reasons.extend([f"retrain stability risk: {reason}" for reason in retrain_stability.get("reasons") or []])
+    override_audit = summary.get("policy_override_audit") or {}
+    if override_audit and not override_audit.get("passed", True):
+        reasons.extend([f"policy override risk: {reason}" for reason in override_audit.get("regression_reasons") or []])
     deterministic = summary.get("deterministic_strength_snapshot") or {}
     if not deterministic or deterministic.get("skipped"):
         reasons.append(f"deterministic strength gate skipped: {deterministic.get('reason') or 'missing'}")
@@ -2057,12 +3086,48 @@ def _promotion_gate_summary(summary: dict) -> dict:
             reasons.append("deterministic illegal_rate is nonzero")
         if float(final_det.get("blunder_avoid_rate") or 0.0) < DETERMINISTIC_MIN_BLUNDER_AVOID_RATE:
             reasons.append("deterministic blunder_avoid_rate below threshold")
+        if bool((summary.get("quick_retrain_gate") or {}).get("enabled")):
+            score_by_label = {
+                str(row.get("model_label") or ""): float(row.get("overall_deterministic_score") or 0.0)
+                for row in deterministic.get("score_table") or []
+            }
+            if "baseline" in score_by_label and "final" in score_by_label and score_by_label["final"] <= score_by_label["baseline"]:
+                reasons.append("deterministic score did not improve over baseline; learning success not proven")
     for checkpoint in (summary.get("before_after_eval") or {}).get("checkpoints") or []:
         mistake_probe = checkpoint.get("mistake_retention_probe") or {}
         if mistake_probe.get("learning_signal") is False:
             reason = str(mistake_probe.get("learning_signal_reason") or mistake_probe.get("reason") or "no mistake-retention learning signal")
             trusted = checkpoint.get("trusted_count") or checkpoint.get("trusted_replays")
             reasons.append(f"mistake retention probe failed at trusted={trusted}: {reason}")
+        if mistake_probe and mistake_probe.get("matched_expected") is False:
+            trusted = checkpoint.get("trusted_count") or checkpoint.get("trusted_replays")
+            reasons.append(f"mistake retention probe did not match expected move at trusted={trusted}")
+        sanity_probe = checkpoint.get("sanity_learning_probe") or {}
+        if sanity_probe:
+            trusted = checkpoint.get("trusted_count") or checkpoint.get("trusted_replays")
+            final_learning = sanity_probe.get("final_decision_learning") or {}
+            if final_learning and final_learning.get("learning_signal") is False:
+                reasons.append(f"sanity final decision learning failed at trusted={trusted}: {final_learning.get('blocked_reason') or sanity_probe.get('learning_signal_reason') or 'final top1 did not match expected_move'}")
+            if sanity_probe.get("result_kind") == "failed_to_learn":
+                reasons.append(f"sanity learning probe failed at trusted={trusted}: {sanity_probe.get('learning_signal_reason') or sanity_probe.get('reason')}")
+            elif sanity_probe.get("result_kind") == "memorized_exact_fen":
+                reasons.append(f"sanity learning probe only memorized exact FEN at trusted={trusted}")
+            elif sanity_probe.get("result_kind") == "partial_seen_variants_only":
+                reasons.append(f"sanity learning probe only proved seen variants at trusted={trusted}")
+            elif sanity_probe.get("result_kind") == "partial_policy_learned_but_decision_unchanged":
+                reasons.append(f"sanity raw policy learned but final decision unchanged at trusted={trusted}")
+            if sanity_probe.get("exact_fen_pass") is False:
+                reasons.append(f"sanity exact FEN did not pass at trusted={trusted}")
+            if float(sanity_probe.get("seen_variant_pass_rate") or 0.0) < SANITY_SEEN_VARIANT_PASS_THRESHOLD:
+                reasons.append(f"sanity seen variant pass rate below threshold at trusted={trusted}")
+            unseen_count = int(sanity_probe.get("unseen_variant_count") or 0)
+            if unseen_count <= 0:
+                reasons.append(f"sanity unseen variants missing at trusted={trusted}")
+            elif float(sanity_probe.get("unseen_variant_pass_rate") or 0.0) < SANITY_UNSEEN_VARIANT_PASS_THRESHOLD:
+                reasons.append(f"sanity unseen variant pass rate below threshold at trusted={trusted}")
+    fixture_health = summary.get("replay_fixture_health") or {}
+    if fixture_health and not fixture_health.get("passed"):
+        reasons.extend([f"replay fixture health failed: {reason}" for reason in fixture_health.get("reasons") or []])
     if str(summary.get("engine_verdict") or "") not in {"", "PASS"}:
         reasons.append(f"engine verdict {summary.get('engine_verdict')}")
     return {
@@ -2098,6 +3163,8 @@ def _checkpoint_gate_summary(
     if (mistake_retention_probe or {}).get("learning_signal") is False:
         reason = str((mistake_retention_probe or {}).get("learning_signal_reason") or (mistake_retention_probe or {}).get("reason") or "no mistake-retention learning signal")
         reasons.append(f"mistake retention probe failed: {reason}")
+    if mistake_retention_probe and mistake_retention_probe.get("matched_expected") is False:
+        reasons.append("mistake retention probe did not match expected move")
     return {"passed": not reasons, "reasons": reasons}
 
 
@@ -2137,7 +3204,6 @@ def _reproducibility_summary(summary: dict) -> dict:
     trainer_paths = [
         ROOT / "scripts" / "games" / "chess_replay_prepare.py",
         ROOT / "scripts" / "games" / "chess_train_pipeline.py",
-        ROOT / "scripts" / "games" / "chess_exp2_dataset_train.py",
         ROOT / "scripts" / "games" / "chess_exp3_dataset_train.py",
         ROOT / "scripts" / "games" / "chess_exp4_dataset_train.py",
     ]
@@ -2190,6 +3256,9 @@ def _root_engine_row(summary: dict) -> dict:
     return {
         "engine_alias": summary["engine_alias"],
         "difficulty": summary["difficulty"],
+        "validation_mode": summary.get("validation_mode") or "full_30_game_expensive_validation",
+        "timing_breakdown": summary.get("timing_breakdown") or {},
+        "quick_retrain_gate": summary.get("quick_retrain_gate") or {},
         "engine_verdict": summary.get("engine_verdict"),
         "replay_learning_supported": bool(summary.get("retrain_result", {}).get("retrain_supported")),
         "effective_samples": int(summary.get("dataset_result", {}).get("accepted_rows") or 0),
@@ -2222,8 +3291,38 @@ def _root_engine_row(summary: dict) -> dict:
         "stage_game_win_rates": summary.get("stage_game_win_rates") or [],
         "benchmark_timeline": (summary.get("before_after_eval") or {}).get("benchmark_timeline") or [],
         "deterministic_strength_snapshot": summary.get("deterministic_strength_snapshot") or {},
+        "policy_override_audit": summary.get("policy_override_audit") or {},
         "stochastic_auxiliary_benchmark": summary.get("stochastic_auxiliary_benchmark") or {},
         "perft": summary.get("perft") or {},
+        "retrain_stability_report": summary.get("retrain_stability_report") or {},
+        "replay_fixture_health": summary.get("replay_fixture_health") or {},
+        "sanity_learning_probe_results": [
+            {
+                "trusted_count": checkpoint.get("trusted_count") or checkpoint.get("trusted_replays"),
+                "learning_signal": (checkpoint.get("sanity_learning_probe") or {}).get("learning_signal"),
+                "result_kind": (checkpoint.get("sanity_learning_probe") or {}).get("result_kind"),
+                "expected_move": ((checkpoint.get("sanity_learning_probe") or {}).get("case") or {}).get("expected_move"),
+                "before_top1": ((checkpoint.get("sanity_learning_probe") or {}).get("before_exact") or {}).get("top1"),
+                "before_top3": ((checkpoint.get("sanity_learning_probe") or {}).get("before_exact") or {}).get("top3"),
+                "before_expected_in_top3": ((checkpoint.get("sanity_learning_probe") or {}).get("before_exact") or {}).get("expected_in_top3"),
+                "after_top1": ((checkpoint.get("sanity_learning_probe") or {}).get("after_exact") or {}).get("top1"),
+                "after_top3": ((checkpoint.get("sanity_learning_probe") or {}).get("after_exact") or {}).get("top3"),
+                "after_expected_is_top1": ((checkpoint.get("sanity_learning_probe") or {}).get("after_exact") or {}).get("expected_is_top1"),
+                "variant_count": (checkpoint.get("sanity_learning_probe") or {}).get("variant_count"),
+                "variant_top1_hits": (checkpoint.get("sanity_learning_probe") or {}).get("variant_top1_hits"),
+                "variant_top1_rate": (checkpoint.get("sanity_learning_probe") or {}).get("variant_top1_rate"),
+                "exact_fen_pass": (checkpoint.get("sanity_learning_probe") or {}).get("exact_fen_pass"),
+                "seen_variant_pass_rate": (checkpoint.get("sanity_learning_probe") or {}).get("seen_variant_pass_rate"),
+                "unseen_variant_pass_rate": (checkpoint.get("sanity_learning_probe") or {}).get("unseen_variant_pass_rate"),
+                "raw_policy_generalization_rate": (checkpoint.get("sanity_learning_probe") or {}).get("raw_policy_generalization_rate"),
+                "final_decision_generalization_rate": (checkpoint.get("sanity_learning_probe") or {}).get("final_decision_generalization_rate"),
+                "raw_policy_learning": (checkpoint.get("sanity_learning_probe") or {}).get("raw_policy_learning") or {},
+                "final_decision_learning": (checkpoint.get("sanity_learning_probe") or {}).get("final_decision_learning") or {},
+                "blocked_by_search_or_static_eval": (checkpoint.get("sanity_learning_probe") or {}).get("blocked_by_search_or_static_eval"),
+                "learning_signal_reason": (checkpoint.get("sanity_learning_probe") or {}).get("learning_signal_reason"),
+            }
+            for checkpoint in (summary.get("before_after_eval", {}).get("checkpoints") or [])
+        ],
         "mistake_retention_probe_results": [
             {
                 "trusted_count": checkpoint.get("trusted_count") or checkpoint.get("trusted_replays"),
@@ -2231,7 +3330,11 @@ def _root_engine_row(summary: dict) -> dict:
                 "probe_case_id": (checkpoint.get("mistake_retention_probe") or {}).get("probe_case_id"),
                 "before_move": (checkpoint.get("mistake_retention_probe") or {}).get("before_move"),
                 "after_move": (checkpoint.get("mistake_retention_probe") or {}).get("after_move"),
+                "expected_move": (checkpoint.get("mistake_retention_probe") or {}).get("expected_move"),
                 "avoided_same_error": (checkpoint.get("mistake_retention_probe") or {}).get("avoided_same_error"),
+                "avoided_old_mistake": (checkpoint.get("mistake_retention_probe") or {}).get("avoided_old_mistake"),
+                "matched_expected": (checkpoint.get("mistake_retention_probe") or {}).get("matched_expected"),
+                "result_kind": (checkpoint.get("mistake_retention_probe") or {}).get("result_kind"),
                 "learning_signal_reason": (checkpoint.get("mistake_retention_probe") or {}).get("learning_signal_reason"),
             }
             for checkpoint in (summary.get("before_after_eval", {}).get("checkpoints") or [])
@@ -2254,13 +3357,18 @@ def _root_engine_row(summary: dict) -> dict:
         "benchmark_skipped": _summary_benchmark_skipped(summary),
         "benchmark_changed": _summary_benchmark_changed(summary),
         "meets_expectation": (
-            summary["replay_summary"]["trusted_replays"] == VALID_GAMES
-            and summary["replay_summary"]["quarantine_replays"] == INVALID_GAMES
+            summary["replay_summary"]["trusted_replays"] == int(summary.get("expected_trusted_replays") or VALID_GAMES)
+            and summary["replay_summary"]["quarantine_replays"] == int(summary.get("expected_quarantine_replays") if summary.get("expected_quarantine_replays") is not None else INVALID_GAMES)
             and (
                 not summary.get("retrain_result", {}).get("retrain_supported")
                 or (
-                    (summary.get("retrain_result", {}).get("trainer_probe", {}).get("validation", {}) or {}).get("accepted_samples_gt_zero")
-                    and (summary.get("retrain_result", {}).get("trainer_probe", {}).get("validation", {}) or {}).get("rejected_samples_match")
+                    (
+                        bool((summary.get("quick_retrain_gate") or {}).get("enabled"))
+                        or (
+                            (summary.get("retrain_result", {}).get("trainer_probe", {}).get("validation", {}) or {}).get("accepted_samples_gt_zero")
+                            and (summary.get("retrain_result", {}).get("trainer_probe", {}).get("validation", {}) or {}).get("rejected_samples_match")
+                        )
+                    )
                     and (
                         summary.get("evaluation_after", {}).get("agreement")
                         != summary.get("evaluation_before", {}).get("agreement")
@@ -2268,7 +3376,11 @@ def _root_engine_row(summary: dict) -> dict:
                         != summary.get("model_before", {}).get("sha256")
                     )
                     and (
-                        len(summary.get("before_after_eval", {}).get("checkpoints") or []) >= max(1, VALID_GAMES // max(1, int(summary.get("autorun_threshold") or 1)))
+                        len(summary.get("before_after_eval", {}).get("checkpoints") or []) >= (
+                            len(QUICK_RETRAIN_GATE_CHECKPOINTS)
+                            if bool((summary.get("quick_retrain_gate") or {}).get("enabled"))
+                            else max(1, VALID_GAMES // max(1, int(summary.get("autorun_threshold") or 1)))
+                        )
                     )
                     and _summary_benchmark_expectation_met(summary)
                 )
@@ -2377,7 +3489,7 @@ def _build_root_summary(
         overall_verdict = "FAIL"
     elif any(bool(row.get("catastrophic_regression")) for row in root_summary["engines"]):
         overall_verdict = "HIGH_RISK"
-    elif any(verdict in {"PARTIAL", "HIGH_RISK"} for verdict in engine_verdicts) or any(not bool(row.get("promotion_gate_passed")) for row in root_summary["engines"]):
+    elif any(verdict in {"PARTIAL", "HIGH_RISK", "PARTIAL_POLICY_LEARNED_BUT_DECISION_UNCHANGED", "PARTIAL_SEEN_VARIANTS_ONLY"} for verdict in engine_verdicts) or any(not bool(row.get("promotion_gate_passed")) for row in root_summary["engines"]):
         overall_verdict = "PARTIAL"
     else:
         overall_verdict = "PASS"
@@ -2402,6 +3514,7 @@ def _root_report_lines(root_summary: dict, summaries: list[dict]) -> list[str]:
     for row in root_summary["engines"]:
         lines.append(
             f"- {row['engine_alias']} `{row['difficulty']}` "
+            f"mode=`{row.get('validation_mode')}` "
             f"verdict=`{row['engine_verdict']}` "
             f"support=`{row['replay_learning_supported']}` "
             f"checkpoints=`{row['checkpoint_count']}` "
@@ -2419,6 +3532,20 @@ def _root_report_lines(root_summary: dict, summaries: list[dict]) -> list[str]:
             f"catastrophic=`{row['catastrophic_regression']}` "
             f"meets_expectation=`{row['meets_expectation']}`"
         )
+        timing = row.get("timing_breakdown") or {}
+        if timing:
+            lines.append(
+                f"- {row['engine_alias']} timing: replay_generation_s=`{timing.get('replay_generation_seconds')}` "
+                f"retrain_s=`{timing.get('retrain_seconds')}` deterministic_eval_s=`{timing.get('deterministic_eval_seconds')}` "
+                f"report_write_s=`{timing.get('report_write_seconds')}` total_wall_s=`{timing.get('total_wall_seconds')}`"
+            )
+        quick = row.get("quick_retrain_gate") or {}
+        if quick.get("enabled"):
+            lines.append(
+                f"- {row['engine_alias']} quick_gate: fixture_trusted_replays=`{quick.get('fixture_trusted_replays')}` "
+                f"full_30_game_generation_skipped=`{quick.get('full_30_game_generation_skipped')}` "
+                f"stochastic_auxiliary_only=`{quick.get('stochastic_auxiliary_only')}`"
+            )
     lines.extend(
         [
             "",
@@ -2429,6 +3556,32 @@ def _root_report_lines(root_summary: dict, summaries: list[dict]) -> list[str]:
     )
     for row in root_summary["engines"]:
         lines.append(f"- {row['engine_alias']}: {_format_stage_win_rates(row.get('stage_game_win_rates') or [])}")
+    lines.extend(["", "## Replay Fixture Health", ""])
+    for row in root_summary["engines"]:
+        health = row.get("replay_fixture_health") or {}
+        if not health:
+            lines.append(f"- {row['engine_alias']}: no replay fixture health recorded")
+            continue
+        lines.append(
+            f"- {row['engine_alias']}: passed=`{health.get('passed')}` duplicate_ratio=`{health.get('duplicate_ratio')}` "
+            f"unique_fen=`{health.get('unique_fen_count')}` unique_target_moves=`{health.get('unique_target_move_count')}` "
+            f"poison_quarantine=`{health.get('poison_quarantine_count')}` fixture_hash=`{health.get('fixture_hash')}`"
+        )
+        lines.append(f"- {row['engine_alias']} category_distribution: `{health.get('category_distribution')}`")
+    lines.extend(["", "## Retrain Stability Report", ""])
+    for row in root_summary["engines"]:
+        stability = row.get("retrain_stability_report") or {}
+        late_stage = stability.get("late_stage") or {}
+        scores = stability.get("deterministic_scores") or {}
+        retention = stability.get("mistake_retention") or {}
+        lines.append(
+            f"- {row['engine_alias']}: suspected_catastrophic=`{stability.get('suspected_catastrophic_regression')}` "
+            f"late_stage=`{late_stage.get('stage')}` late_win_rate=`{late_stage.get('win_rate')}` "
+            f"det_final=`{scores.get('final')}` det_checkpoint10=`{scores.get('checkpoint@10')}` "
+            f"mistake_retention_final=`{retention.get('final_score')}`"
+        )
+        for reason in stability.get("reasons") or []:
+            lines.append(f"- {row['engine_alias']} stability_reason: `{reason}`")
     lines.extend(["", "## Deterministic Strength Gate", ""])
     for row in root_summary["engines"]:
         det = row.get("deterministic_strength_snapshot") or {}
@@ -2482,7 +3635,37 @@ def _root_report_lines(root_summary: dict, summaries: list[dict]) -> list[str]:
             lines.append(
                 f"- {row['engine_alias']} trusted=`{probe.get('trusted_count')}` "
                 f"case=`{probe.get('probe_case_id')}` before=`{probe.get('before_move')}` "
-                f"after=`{probe.get('after_move')}` avoided_same_error=`{probe.get('avoided_same_error')}` "
+                f"after=`{probe.get('after_move')}` expected=`{probe.get('expected_move')}` "
+                f"avoided_old_mistake=`{probe.get('avoided_old_mistake')}` matched_expected=`{probe.get('matched_expected')}` "
+                f"result_kind=`{probe.get('result_kind')}` avoided_same_error=`{probe.get('avoided_same_error')}` "
+                f"learning_signal=`{probe.get('learning_signal')}` reason=`{probe.get('learning_signal_reason')}`"
+            )
+    lines.extend(["", "## Sanity Learning Probe", ""])
+    for row in root_summary["engines"]:
+        probes = row.get("sanity_learning_probe_results") or []
+        if not probes:
+            lines.append(f"- {row['engine_alias']}: no sanity learning probe result recorded")
+            continue
+        for probe in probes:
+            raw = probe.get("raw_policy_learning") or {}
+            final = probe.get("final_decision_learning") or {}
+            lines.append(
+                f"- {row['engine_alias']} trusted=`{probe.get('trusted_count')}` "
+                f"result=`{probe.get('result_kind')}` expected=`{probe.get('expected_move')}` "
+                f"before_top1=`{probe.get('before_top1')}` before_top3=`{probe.get('before_top3')}` "
+                f"before_expected_in_top3=`{probe.get('before_expected_in_top3')}` "
+                f"after_top1=`{probe.get('after_top1')}` after_top3=`{probe.get('after_top3')}` "
+                f"after_expected_is_top1=`{probe.get('after_expected_is_top1')}` "
+                f"raw_policy_learning=`{raw.get('learning_signal')}` raw_top1 `{raw.get('raw_policy_top1_before')}` -> `{raw.get('raw_policy_top1_after')}` "
+                f"expected_rank `{raw.get('expected_rank_before')}` -> `{raw.get('expected_rank_after')}` "
+                f"expected_margin_after=`{raw.get('expected_margin_after')}` "
+                f"final_decision_learning=`{final.get('learning_signal')}` blocked_by_search_or_static_eval=`{probe.get('blocked_by_search_or_static_eval')}` "
+                f"exact_fen_pass=`{probe.get('exact_fen_pass')}` "
+                f"seen_variant_pass_rate=`{probe.get('seen_variant_pass_rate')}` "
+                f"unseen_variant_pass_rate=`{probe.get('unseen_variant_pass_rate')}` "
+                f"raw_policy_generalization_rate=`{probe.get('raw_policy_generalization_rate')}` "
+                f"final_decision_generalization_rate=`{probe.get('final_decision_generalization_rate')}` "
+                f"variants=`{probe.get('variant_top1_hits')}/{probe.get('variant_count')}` "
                 f"learning_signal=`{probe.get('learning_signal')}` reason=`{probe.get('learning_signal_reason')}`"
             )
     lines.extend(["", "## Checkpoint Hash Evidence", ""])
@@ -2587,6 +3770,10 @@ def _report_consistency_issues(root_summary: dict, engine_summaries: list[dict],
             issues.append(f"{alias}: deterministic strength snapshot mismatch")
         if (row.get("stochastic_auxiliary_benchmark") or {}) != (summary.get("stochastic_auxiliary_benchmark") or {}):
             issues.append(f"{alias}: stochastic auxiliary benchmark mismatch")
+        if (row.get("retrain_stability_report") or {}) != (summary.get("retrain_stability_report") or {}):
+            issues.append(f"{alias}: retrain stability report mismatch")
+        if (row.get("replay_fixture_health") or {}) != (summary.get("replay_fixture_health") or {}):
+            issues.append(f"{alias}: replay fixture health mismatch")
         if "## Deterministic Strength Gate" not in root_markdown or "## Deterministic Strength Snapshot" not in engine_md:
             issues.append(f"{alias}: deterministic strength markdown missing")
         checkpoint_hashes = [
@@ -2607,13 +3794,46 @@ def _report_consistency_issues(root_summary: dict, engine_summaries: list[dict],
                 "probe_case_id": (checkpoint.get("mistake_retention_probe") or {}).get("probe_case_id"),
                 "before_move": (checkpoint.get("mistake_retention_probe") or {}).get("before_move"),
                 "after_move": (checkpoint.get("mistake_retention_probe") or {}).get("after_move"),
+                "expected_move": (checkpoint.get("mistake_retention_probe") or {}).get("expected_move"),
                 "avoided_same_error": (checkpoint.get("mistake_retention_probe") or {}).get("avoided_same_error"),
+                "avoided_old_mistake": (checkpoint.get("mistake_retention_probe") or {}).get("avoided_old_mistake"),
+                "matched_expected": (checkpoint.get("mistake_retention_probe") or {}).get("matched_expected"),
+                "result_kind": (checkpoint.get("mistake_retention_probe") or {}).get("result_kind"),
                 "learning_signal_reason": (checkpoint.get("mistake_retention_probe") or {}).get("learning_signal_reason"),
             }
             for checkpoint in (summary.get("before_after_eval") or {}).get("checkpoints") or []
         ]
         if (row.get("mistake_retention_probe_results") or []) != mistake_results:
             issues.append(f"{alias}: mistake retention probe mismatch")
+        sanity_results = [
+            {
+                "trusted_count": checkpoint.get("trusted_count") or checkpoint.get("trusted_replays"),
+                "learning_signal": (checkpoint.get("sanity_learning_probe") or {}).get("learning_signal"),
+                "result_kind": (checkpoint.get("sanity_learning_probe") or {}).get("result_kind"),
+                "expected_move": ((checkpoint.get("sanity_learning_probe") or {}).get("case") or {}).get("expected_move"),
+                "before_top1": ((checkpoint.get("sanity_learning_probe") or {}).get("before_exact") or {}).get("top1"),
+                "before_top3": ((checkpoint.get("sanity_learning_probe") or {}).get("before_exact") or {}).get("top3"),
+                "before_expected_in_top3": ((checkpoint.get("sanity_learning_probe") or {}).get("before_exact") or {}).get("expected_in_top3"),
+                "after_top1": ((checkpoint.get("sanity_learning_probe") or {}).get("after_exact") or {}).get("top1"),
+                "after_top3": ((checkpoint.get("sanity_learning_probe") or {}).get("after_exact") or {}).get("top3"),
+                "after_expected_is_top1": ((checkpoint.get("sanity_learning_probe") or {}).get("after_exact") or {}).get("expected_is_top1"),
+                "variant_count": (checkpoint.get("sanity_learning_probe") or {}).get("variant_count"),
+                "variant_top1_hits": (checkpoint.get("sanity_learning_probe") or {}).get("variant_top1_hits"),
+                "variant_top1_rate": (checkpoint.get("sanity_learning_probe") or {}).get("variant_top1_rate"),
+                "exact_fen_pass": (checkpoint.get("sanity_learning_probe") or {}).get("exact_fen_pass"),
+                "seen_variant_pass_rate": (checkpoint.get("sanity_learning_probe") or {}).get("seen_variant_pass_rate"),
+                "unseen_variant_pass_rate": (checkpoint.get("sanity_learning_probe") or {}).get("unseen_variant_pass_rate"),
+                "raw_policy_generalization_rate": (checkpoint.get("sanity_learning_probe") or {}).get("raw_policy_generalization_rate"),
+                "final_decision_generalization_rate": (checkpoint.get("sanity_learning_probe") or {}).get("final_decision_generalization_rate"),
+                "raw_policy_learning": (checkpoint.get("sanity_learning_probe") or {}).get("raw_policy_learning") or {},
+                "final_decision_learning": (checkpoint.get("sanity_learning_probe") or {}).get("final_decision_learning") or {},
+                "blocked_by_search_or_static_eval": (checkpoint.get("sanity_learning_probe") or {}).get("blocked_by_search_or_static_eval"),
+                "learning_signal_reason": (checkpoint.get("sanity_learning_probe") or {}).get("learning_signal_reason"),
+            }
+            for checkpoint in (summary.get("before_after_eval") or {}).get("checkpoints") or []
+        ]
+        if (row.get("sanity_learning_probe_results") or []) != sanity_results:
+            issues.append(f"{alias}: sanity learning probe mismatch")
         if "## Can This Model Be Promoted?" not in engine_md:
             issues.append(f"{alias}: engine markdown missing promotion decision section")
         if str(gate.get("passed")) not in engine_md:
@@ -2727,6 +3947,102 @@ def _model_meta(path: Path) -> dict:
     }
 
 
+def _exp3_replay_loss(model_path: Path, samples: list[dict]) -> dict:
+    if not samples:
+        return {"supported": True, "sample_count": 0, "loss": None}
+    try:
+        from services.games import chess_dl as chess_dl_module  # noqa: PLC0415
+    except Exception as exc:
+        return {"supported": False, "sample_count": 0, "loss": None, "reason": str(exc)}
+    model = chess_dl_module._load_model(Path(model_path))  # noqa: SLF001
+    total = 0.0
+    weight_total = 0.0
+    used = 0
+    for row in samples:
+        normalized = chess_dl_module.normalize_experiment_dl_replay_sample(row)
+        if normalized is None:
+            continue
+        prediction, _hidden1, _hidden2 = chess_dl_module._forward(model, normalized["features"])  # noqa: SLF001
+        target = float(normalized.get("target") or 0.0)
+        weight = float(normalized.get("weight") or 1.0)
+        total += ((prediction - target) ** 2) * weight
+        weight_total += weight
+        used += 1
+    return {
+        "supported": True,
+        "sample_count": used,
+        "loss": round(total / weight_total, 6) if weight_total else None,
+    }
+
+
+def _quick_replay_loss(engine_alias: str, model_path: Path, samples: list[dict]) -> dict:
+    if engine_alias == "exp3":
+        return _exp3_replay_loss(model_path, samples)
+    if engine_alias != "exp4":
+        return {"supported": False, "sample_count": 0, "loss": None, "reason": f"unsupported engine {engine_alias}"}
+    if not samples:
+        return {"supported": True, "sample_count": 0, "loss": None}
+    try:
+        from services.games import chess_pv as chess_pv_module  # noqa: PLC0415
+    except Exception as exc:
+        return {"supported": False, "sample_count": 0, "loss": None, "reason": str(exc)}
+    model = chess_pv_module._load_model(Path(model_path))  # noqa: SLF001
+    total = 0.0
+    weight_total = 0.0
+    used = 0
+    for row in samples:
+        normalized = chess_pv_module.normalize_experiment_pv_replay_sample(row)
+        if normalized is None:
+            continue
+        hidden = chess_pv_module._forward_shared(model, normalized["board_features"])  # noqa: SLF001
+        value_pred = chess_pv_module._value_from_hidden(model, hidden)  # noqa: SLF001
+        policy_pred = chess_pv_module._policy_from_hidden(model, hidden, normalized["move_features"])  # noqa: SLF001
+        target = float(normalized.get("target") or 0.0)
+        policy_target = 1.0 if target >= 0.0 else -0.35
+        weight = float(normalized.get("weight") or 1.0)
+        sample_loss = ((value_pred - target) ** 2) + ((policy_pred - policy_target) ** 2)
+        total += sample_loss * weight
+        weight_total += weight
+        used += 1
+    return {
+        "supported": True,
+        "sample_count": used,
+        "loss": round(total / weight_total, 6) if weight_total else None,
+    }
+
+
+def _targeted_probe_summary(before: dict, after: dict) -> dict:
+    before_rows = (before.get("positions") or []) if isinstance(before, dict) else []
+    after_rows = (after.get("positions") or []) if isinstance(after, dict) else []
+    after_map = {str(row.get("position_id") or ""): row for row in after_rows}
+    for before_row in before_rows:
+        position_id = str(before_row.get("position_id") or "")
+        after_row = after_map.get(position_id) or {}
+        before_move = str(before_row.get("chosen_move") or "")
+        after_move = str(after_row.get("chosen_move") or "")
+        if before_move != after_move:
+            return {
+                "position_id": position_id,
+                "before_move": before_move,
+                "after_move": after_move,
+                "changed": True,
+                "before_score": before_row.get("score"),
+                "after_score": after_row.get("score"),
+            }
+    if before_rows:
+        first = before_rows[0]
+        after_first = after_map.get(str(first.get("position_id") or "")) or {}
+        return {
+            "position_id": first.get("position_id"),
+            "before_move": first.get("chosen_move"),
+            "after_move": after_first.get("chosen_move"),
+            "changed": False,
+            "before_score": first.get("score"),
+            "after_score": after_first.get("score"),
+        }
+    return {"changed": False, "reason": "no targeted probe positions"}
+
+
 def _focus_benchmark_metrics(summary: dict, engine_name: str) -> dict:
     standings = summary.get("standings") if isinstance(summary.get("standings"), list) else []
     row = next((item for item in standings if str(item.get("engine") or "") == engine_name), {})
@@ -2836,16 +4152,7 @@ def _run_trainer_probe(
     probe_dataset_path = engine_dir / "_trainer_probe_dataset.jsonl"
     _jsonl_dump(probe_dataset_path, probe_rows)
     before_meta = _model_meta(probe_model_path)
-    if engine_alias == "exp2":
-        cmd = [
-            sys.executable,
-            str(ROOT / "scripts" / "games" / "chess_exp2_dataset_train.py"),
-            "--input-jsonl",
-            str(probe_dataset_path),
-            "--model-path",
-            str(probe_model_path),
-        ]
-    elif engine_alias == "exp3":
+    if engine_alias == "exp3":
         probe_replay_path = engine_dir / f"{engine_alias}_trainer_probe_replay.jsonl"
         cmd = [
             sys.executable,
@@ -2910,6 +4217,7 @@ def _write_engine_report(engine_dir: Path, summary: dict) -> None:
     promotion_gate = summary.get("promotion_gate") or {}
     runtime_metrics = summary.get("runtime_metrics") or {}
     reproducibility = summary.get("reproducibility") or {}
+    timing_breakdown = summary.get("timing_breakdown") or {}
     engine_verdict = str(summary.get("engine_verdict") or "")
     lines = [
         f"# {summary['engine_alias']} validation",
@@ -2920,6 +4228,7 @@ def _write_engine_report(engine_dir: Path, summary: dict) -> None:
         f"- started_at: `{summary.get('started_at')}`",
         f"- finished_at: `{summary.get('finished_at')}`",
         f"- commit: `{summary.get('commit')}`",
+        f"- validation_mode: `{summary.get('validation_mode') or 'full_30_game_expensive_validation'}`",
         f"- total_games: `{summary['total_games']}`",
         f"- trusted_replays: `{summary['replay_summary']['trusted_replays']}`",
         f"- quarantine_replays: `{summary['replay_summary']['quarantine_replays']}`",
@@ -2963,6 +4272,9 @@ def _write_engine_report(engine_dir: Path, summary: dict) -> None:
             f"- stage_win_rate_drop_10_20_vs_0_10: `{stability.get('stage_win_rate_drop_10_20_vs_0_10')}`",
             f"- stage_regression_threshold: `{stability.get('stage_regression_threshold')}`",
             f"- stage_catastrophic_regression: `{stability.get('stage_catastrophic_regression')}`",
+            f"- late_stage: `{stability.get('late_stage')}`",
+            f"- late_stage_win_rate: `{stability.get('late_stage_win_rate')}`",
+            f"- late_stage_win_rate_collapse: `{stability.get('late_stage_win_rate_collapse')}`",
             f"- illegal_move_delta: `{stability.get('illegal_move_delta')}`",
             f"- blunder_rate_before: `{stability.get('blunder_rate_before')}`",
             f"- blunder_rate_after: `{stability.get('blunder_rate_after')}`",
@@ -2989,6 +4301,39 @@ def _write_engine_report(engine_dir: Path, summary: dict) -> None:
             f"- dataset_bytes: `{runtime_metrics.get('dataset_bytes')}`",
         ]
     )
+    if timing_breakdown:
+        lines.extend(
+            [
+                "",
+                "## Timing Breakdown",
+                "",
+                f"- replay_generation_seconds: `{timing_breakdown.get('replay_generation_seconds')}`",
+                f"- retrain_seconds: `{timing_breakdown.get('retrain_seconds')}`",
+                f"- deterministic_eval_seconds: `{timing_breakdown.get('deterministic_eval_seconds')}`",
+                f"- report_write_seconds: `{timing_breakdown.get('report_write_seconds')}`",
+                f"- total_wall_seconds: `{timing_breakdown.get('total_wall_seconds')}`",
+            ]
+        )
+    fixture_health = summary.get("replay_fixture_health") or {}
+    if fixture_health:
+        lines.extend(
+            [
+                "",
+                "## Replay Fixture Health",
+                "",
+                f"- passed: `{fixture_health.get('passed')}`",
+                f"- duplicate_ratio: `{fixture_health.get('duplicate_ratio')}`",
+                f"- category_distribution: `{fixture_health.get('category_distribution')}`",
+                f"- unique_fen_count: `{fixture_health.get('unique_fen_count')}`",
+                f"- unique_normalized_board_count: `{fixture_health.get('unique_normalized_board_count')}`",
+                f"- unique_target_move_count: `{fixture_health.get('unique_target_move_count')}`",
+                f"- poison_quarantine_count: `{fixture_health.get('poison_quarantine_count')}`",
+                f"- rejected_row_count: `{fixture_health.get('rejected_row_count')}`",
+                f"- fixture_hash: `{fixture_health.get('fixture_hash')}`",
+            ]
+        )
+        for reason in fixture_health.get("reasons") or []:
+            lines.append(f"- fixture_health_reason: `{reason}`")
     stage_rates = summary.get("stage_game_win_rates") or []
     if stage_rates:
         lines.extend(
@@ -3006,6 +4351,32 @@ def _write_engine_report(engine_dir: Path, summary: dict) -> None:
                 f"win_rate=`{row.get('win_rate')}` "
                 f"delta_from_previous=`{row.get('win_rate_delta_from_previous_stage')}`"
             )
+    retrain_stability = summary.get("retrain_stability_report") or {}
+    if retrain_stability:
+        late_stage = retrain_stability.get("late_stage") or {}
+        scores = retrain_stability.get("deterministic_scores") or {}
+        retention = retrain_stability.get("mistake_retention") or {}
+        hyper = retrain_stability.get("trainer_hyperparameters") or {}
+        lines.extend(
+            [
+                "",
+                "## Retrain Stability Report",
+                "",
+                f"- suspected_catastrophic_regression: `{retrain_stability.get('suspected_catastrophic_regression')}`",
+                f"- late_stage: `{late_stage.get('stage')}` win_rate=`{late_stage.get('win_rate')}` normal_games=`{late_stage.get('normal_games')}` collapsed=`{late_stage.get('collapsed')}`",
+                f"- deterministic_scores: baseline=`{scores.get('baseline')}` checkpoint@10=`{scores.get('checkpoint@10')}` checkpoint@20=`{scores.get('checkpoint@20')}` final=`{scores.get('final')}`",
+                f"- deterministic_regressed_vs_baseline: `{scores.get('regressed_vs_baseline')}`",
+                f"- deterministic_regressed_vs_checkpoint10: `{scores.get('regressed_vs_checkpoint10')}`",
+                f"- deterministic_regressed_vs_checkpoint20: `{scores.get('regressed_vs_checkpoint20')}`",
+                f"- mistake_retention: baseline=`{retention.get('baseline_score')}` final=`{retention.get('final_score')}` regressed=`{retention.get('regressed')}`",
+                f"- trainer_learning_rate: `{hyper.get('learning_rate')}`",
+                f"- trainer_epochs: `{hyper.get('epochs')}`",
+                f"- trainer_gradient_norm: `{hyper.get('gradient_norm')}`",
+                f"- trainer_loss_delta: `{hyper.get('loss_delta')}`",
+            ]
+        )
+        for reason in retrain_stability.get("reasons") or []:
+            lines.append(f"- stability_reason: `{reason}`")
     deterministic = summary.get("deterministic_strength_snapshot") or {}
     if deterministic:
         final_det = deterministic.get("final") or {}
@@ -3043,6 +4414,27 @@ def _write_engine_report(engine_dir: Path, summary: dict) -> None:
                     f"top1=`{item.get('top1_correct_rate')}` top3=`{item.get('top3_contains_rate')}` "
                     f"illegal=`{item.get('illegal_rate')}` blunder_rate=`{item.get('blunder_rate')}`"
                 )
+    override_audit = summary.get("policy_override_audit") or {}
+    if override_audit:
+        lines.extend(
+            [
+                "",
+                "## Policy Override Audit",
+                "",
+                f"- override_usage_count: `{override_audit.get('override_usage_count')}`",
+                f"- passed: `{override_audit.get('passed')}`",
+            ]
+        )
+        for reason in override_audit.get("regression_reasons") or []:
+            lines.append(f"- override_regression_reason: `{reason}`")
+        for item in override_audit.get("override_cases") or []:
+            thresholds = item.get("thresholds") or {}
+            lines.append(
+                f"- case `{item.get('case_id')}` category=`{item.get('category')}` "
+                f"move=`{item.get('override_move')}` margin=`{item.get('margin')}` "
+                f"min_margin=`{thresholds.get('min_margin')}` min_score=`{thresholds.get('min_score')}` "
+                f"reason=`{item.get('override_reason')}`"
+            )
     aux = summary.get("stochastic_auxiliary_benchmark") or {}
     lines.extend(
         [
@@ -3127,17 +4519,63 @@ def _write_engine_report(engine_dir: Path, summary: dict) -> None:
                     f"hash_changed=`{row.get('hash_changed') if 'hash_changed' in row else row.get('model_hash_changed')}` "
                     f"win_rate `{(row.get('benchmark_before') or {}).get('win_rate')}` -> `{(row.get('benchmark_after') or {}).get('win_rate')}` "
                     f"agreement `{(row.get('move_agreement_before') or {}).get('agreement')}` -> `{(row.get('move_agreement_after') or {}).get('agreement')}` "
+                    f"replay_loss `{(row.get('replay_loss_before') or {}).get('loss')}` -> `{(row.get('replay_loss_after') or {}).get('loss')}` "
+                    f"targeted_probe `{(row.get('targeted_probe') or {}).get('before_move')}` -> `{(row.get('targeted_probe') or {}).get('after_move')}` "
                     f"think_ms `{(row.get('move_agreement_before') or {}).get('avg_think_ms')}` -> `{(row.get('move_agreement_after') or {}).get('avg_think_ms')}` "
                     f"retention_probe=`{(row.get('retention_probe') or {}).get('learning_signal')}` "
                     f"mistake_probe=`{mistake_probe.get('learning_signal')}` "
                     f"mistake_case=`{mistake_probe.get('probe_case_id')}` "
                     f"mistake_before=`{mistake_probe.get('before_move')}` "
                     f"mistake_after=`{mistake_probe.get('after_move')}` "
+                    f"mistake_expected=`{mistake_probe.get('expected_move')}` "
+                    f"avoided_old_mistake=`{mistake_probe.get('avoided_old_mistake')}` "
+                    f"matched_expected=`{mistake_probe.get('matched_expected')}` "
+                    f"result_kind=`{mistake_probe.get('result_kind')}` "
                     f"avoided_same_error=`{mistake_probe.get('avoided_same_error')}` "
+                    f"sanity_learning_probe=`{(row.get('sanity_learning_probe') or {}).get('learning_signal')}` "
+                    f"sanity_result=`{(row.get('sanity_learning_probe') or {}).get('result_kind')}` "
+                    f"sanity_before_top1=`{((row.get('sanity_learning_probe') or {}).get('before_exact') or {}).get('top1')}` "
+                    f"sanity_after_top1=`{((row.get('sanity_learning_probe') or {}).get('after_exact') or {}).get('top1')}` "
                     f"status `{(row.get('autorun_status') or {}).get('status')}`"
                 )
                 if mistake_probe.get("learning_signal") is False:
                     lines.append(f"- mistake_probe_explanation: {mistake_probe.get('human_explanation')}")
+                sanity_probe = row.get("sanity_learning_probe") or {}
+                if sanity_probe:
+                    raw = sanity_probe.get("raw_policy_learning") or {}
+                    final = sanity_probe.get("final_decision_learning") or {}
+                    lines.append(
+                        f"- sanity_learning_probe: expected=`{(sanity_probe.get('case') or {}).get('expected_move')}` "
+                        f"before_top3=`{(sanity_probe.get('before_exact') or {}).get('top3')}` "
+                        f"after_top3=`{(sanity_probe.get('after_exact') or {}).get('top3')}` "
+                        f"raw_policy_learning=`{raw.get('learning_signal')}` "
+                        f"raw_top1 `{raw.get('raw_policy_top1_before')}` -> `{raw.get('raw_policy_top1_after')}` "
+                        f"expected_rank `{raw.get('expected_rank_before')}` -> `{raw.get('expected_rank_after')}` "
+                        f"expected_margin_after=`{raw.get('expected_margin_after')}` "
+                        f"final_decision_learning=`{final.get('learning_signal')}` "
+                        f"blocked_by_search_or_static_eval=`{sanity_probe.get('blocked_by_search_or_static_eval')}` "
+                        f"exact_fen_pass=`{sanity_probe.get('exact_fen_pass')}` "
+                        f"seen_variant_pass_rate=`{sanity_probe.get('seen_variant_pass_rate')}` "
+                        f"unseen_variant_pass_rate=`{sanity_probe.get('unseen_variant_pass_rate')}` "
+                        f"raw_policy_generalization_rate=`{sanity_probe.get('raw_policy_generalization_rate')}` "
+                        f"final_decision_generalization_rate=`{sanity_probe.get('final_decision_generalization_rate')}` "
+                        f"variant_top1_hits=`{sanity_probe.get('variant_top1_hits')}` "
+                        f"variant_count=`{sanity_probe.get('variant_count')}` "
+                        f"reason=`{sanity_probe.get('learning_signal_reason')}`"
+                    )
+                    if final.get("blocked_reason"):
+                        lines.append(f"- sanity_decision_blocked_reason: `{final.get('blocked_reason')}`")
+                    after_breakdown = final.get("decision_breakdown_after") or {}
+                    for move_row in after_breakdown.get("watched_moves") or []:
+                        lines.append(
+                            f"- sanity_decision_after {move_row.get('move')}: "
+                            f"raw_policy_score=`{move_row.get('raw_policy_score')}` "
+                            f"static_eval_score=`{move_row.get('static_eval_score')}` "
+                            f"search_score=`{move_row.get('search_score')}` "
+                            f"legal_move_bonus_penalty=`{move_row.get('legal_move_bonus_penalty')}` "
+                            f"final_combined_score=`{move_row.get('final_combined_score')}` "
+                            f"chosen=`{move_row.get('chosen')}`"
+                        )
             lines.append("- hash_note: hash_changed only proves model bytes changed; it is not accepted as learning success without probe or benchmark evidence.")
             benchmark_timeline = (summary.get("before_after_eval") or {}).get("benchmark_timeline") or []
             if benchmark_timeline:
@@ -3175,10 +4613,45 @@ def _write_engine_report(engine_dir: Path, summary: dict) -> None:
                 f"mistake_case=`{mistake_probe.get('probe_case_id')}` "
                 f"mistake_before=`{mistake_probe.get('before_move')}` "
                 f"mistake_after=`{mistake_probe.get('after_move')}` "
-                f"avoided_same_error=`{mistake_probe.get('avoided_same_error')}`"
+                f"mistake_expected=`{mistake_probe.get('expected_move')}` "
+                f"avoided_old_mistake=`{mistake_probe.get('avoided_old_mistake')}` "
+                f"matched_expected=`{mistake_probe.get('matched_expected')}` "
+                f"result_kind=`{mistake_probe.get('result_kind')}` "
+                f"avoided_same_error=`{mistake_probe.get('avoided_same_error')}` "
+                f"sanity_learning_probe=`{(row.get('sanity_learning_probe') or {}).get('learning_signal')}` "
+                f"sanity_result=`{(row.get('sanity_learning_probe') or {}).get('result_kind')}`"
             )
             if mistake_probe.get("learning_signal") is False:
                 lines.append(f"- mistake_probe_explanation: {mistake_probe.get('human_explanation')}")
+            sanity_probe = row.get("sanity_learning_probe") or {}
+            if sanity_probe:
+                raw = sanity_probe.get("raw_policy_learning") or {}
+                final = sanity_probe.get("final_decision_learning") or {}
+                lines.append(
+                    f"- sanity_learning_probe: expected=`{(sanity_probe.get('case') or {}).get('expected_move')}` "
+                    f"before_top1=`{(sanity_probe.get('before_exact') or {}).get('top1')}` "
+                    f"after_top1=`{(sanity_probe.get('after_exact') or {}).get('top1')}` "
+                    f"raw_policy_learning=`{raw.get('learning_signal')}` "
+                    f"final_decision_learning=`{final.get('learning_signal')}` "
+                    f"blocked_by_search_or_static_eval=`{sanity_probe.get('blocked_by_search_or_static_eval')}` "
+                    f"exact_fen_pass=`{sanity_probe.get('exact_fen_pass')}` "
+                    f"seen_variant_pass_rate=`{sanity_probe.get('seen_variant_pass_rate')}` "
+                    f"unseen_variant_pass_rate=`{sanity_probe.get('unseen_variant_pass_rate')}` "
+                    f"result=`{sanity_probe.get('result_kind')}` reason=`{sanity_probe.get('learning_signal_reason')}`"
+                )
+                if final.get("blocked_reason"):
+                    lines.append(f"- sanity_decision_blocked_reason: `{final.get('blocked_reason')}`")
+                after_breakdown = final.get("decision_breakdown_after") or {}
+                for move_row in after_breakdown.get("watched_moves") or []:
+                    lines.append(
+                        f"- sanity_decision_after {move_row.get('move')}: "
+                        f"raw_policy_score=`{move_row.get('raw_policy_score')}` "
+                        f"static_eval_score=`{move_row.get('static_eval_score')}` "
+                        f"search_score=`{move_row.get('search_score')}` "
+                        f"legal_move_bonus_penalty=`{move_row.get('legal_move_bonus_penalty')}` "
+                        f"final_combined_score=`{move_row.get('final_combined_score')}` "
+                        f"chosen=`{move_row.get('chosen')}`"
+                    )
         lines.append("- hash_note: hash_changed only proves model bytes changed; it is not accepted as learning success without probe or benchmark evidence.")
     if exp1_live:
         lines.extend(
@@ -3447,6 +4920,511 @@ def _run_retrain_checkpoint(
         },
     )
     return checkpoint, after_model_path, benchmark_overrides_after
+
+
+def _run_quick_retrain_checkpoint(
+    *,
+    engine_alias: str,
+    engine_dir: Path,
+    runtime_dir: Path,
+    records: list[dict],
+    focus_engine_name: str,
+    target_model_path: Path,
+    evaluation_samples: list[dict],
+    trusted_replays: int,
+    seed: int,
+    max_samples: int,
+    max_seconds: int,
+) -> tuple[dict, Path]:
+    checkpoint_started = time.perf_counter()
+    checkpoint_started_at = _utc_now()
+    checkpoint_dir = engine_dir / "checkpoints" / f"{trusted_replays:02d}"
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    fixture_write = _write_quick_replay_fixture(records, trusted_count=trusted_replays)
+    dataset_result = _prepare_formal_dataset(engine_dir, runtime_dir, artifact_dir=checkpoint_dir, invalid_game_ids=set())
+    accepted_rows = _read_jsonl(checkpoint_dir / "train_dataset.jsonl")
+    rejected_rows = _read_jsonl(checkpoint_dir / "rejected_dataset.jsonl")
+    before_model_meta = _model_meta(target_model_path)
+    variant_training = _sanity_seen_variant_training_rows(engine_alias, target_model_path, evaluation_samples)
+    variant_rows = list(variant_training.get("rows") or [])
+    if variant_rows:
+        accepted_rows = list(accepted_rows) + variant_rows
+        _jsonl_dump(checkpoint_dir / "train_dataset.jsonl", accepted_rows)
+        dataset_result["accepted_rows"] = len(accepted_rows)
+        dataset_result["dataset_sha256"] = _sha256_file(checkpoint_dir / "train_dataset.jsonl")
+        dataset_result["sanity_seen_variant_rows"] = len(variant_rows)
+        dataset_result["sanity_seen_variant_hashes"] = [str(row.get("normalized_fen_hash") or "") for row in variant_rows]
+    move_agreement_before = _evaluate_move_agreement(engine_alias, target_model_path, evaluation_samples)
+    fixed_probes_before = _evaluate_fixed_probe_positions(engine_alias, target_model_path)
+    replay_loss_before = _quick_replay_loss(engine_alias, target_model_path, accepted_rows)
+    retrain_started = time.perf_counter()
+    retrain_started_at = _utc_now()
+    candidate_model_path = checkpoint_dir / f"{engine_alias}_quick_candidate_model.json"
+    candidate_replay_path = checkpoint_dir / f"{engine_alias}_quick_candidate_replay.jsonl"
+    if target_model_path.exists():
+        shutil.copyfile(target_model_path, candidate_model_path)
+    if engine_alias == "exp3":
+        cmd = [
+            sys.executable,
+            str(ROOT / "scripts" / "games" / "chess_exp3_dataset_train.py"),
+            "--input-jsonl",
+            str(checkpoint_dir / "train_dataset.jsonl"),
+            "--model-path",
+            str(candidate_model_path),
+            "--replay-path",
+            str(candidate_replay_path),
+            "--replace-replay",
+            "--max-samples",
+            str(max(1, int(max_samples))),
+        ]
+        trainer_epochs = 4
+        trainer_learning_rate = 0.012
+    else:
+        cmd = [
+            sys.executable,
+            str(ROOT / "scripts" / "games" / "chess_exp4_dataset_train.py"),
+            "--input-jsonl",
+            str(checkpoint_dir / "train_dataset.jsonl"),
+            "--model-path",
+            str(candidate_model_path),
+            "--max-samples",
+            str(max(1, int(max_samples))),
+        ]
+        trainer_epochs = 1
+        trainer_learning_rate = 0.008
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(ROOT),
+            text=True,
+            capture_output=True,
+            timeout=max(1, int(max_seconds)),
+        )
+        train_result = {
+            "command": cmd,
+            "returncode": int(proc.returncode),
+            "stdout": proc.stdout,
+            "stderr": proc.stderr,
+            "ok": False,
+            "timeout": False,
+        }
+        if proc.returncode == 0:
+            try:
+                parsed = json.loads(proc.stdout)
+                if isinstance(parsed, dict):
+                    train_result.update(parsed)
+                train_result["ok"] = bool(train_result.get("ok"))
+            except Exception:
+                train_result["stderr"] = (proc.stderr or "") + "\nstdout did not contain valid JSON"
+    except subprocess.TimeoutExpired as exc:
+        train_result = {
+            "command": cmd,
+            "returncode": -1,
+            "stdout": exc.stdout or "",
+            "stderr": exc.stderr or "",
+            "ok": False,
+            "timeout": True,
+            "reason": f"quick retrain exceeded {int(max_seconds)} seconds",
+        }
+    retrain_duration_seconds = round(time.perf_counter() - retrain_started, 3)
+    retrain_finished_at = _utc_now()
+    after_model_meta = _model_meta(candidate_model_path)
+    replay_loss_after = _quick_replay_loss(engine_alias, candidate_model_path, accepted_rows)
+    move_agreement_after = _evaluate_move_agreement(engine_alias, candidate_model_path, evaluation_samples)
+    fixed_probes_after = _evaluate_fixed_probe_positions(engine_alias, candidate_model_path)
+    retention_probe = _evaluate_retention_probe(engine_alias, target_model_path, candidate_model_path, evaluation_samples)
+    mistake_retention_probe = _evaluate_mistake_retention_probe(engine_alias, target_model_path, candidate_model_path, evaluation_samples)
+    sanity_learning_probe = _evaluate_sanity_learning_probe(engine_alias, target_model_path, candidate_model_path, evaluation_samples)
+    targeted_probe = _targeted_probe_summary(fixed_probes_before, fixed_probes_after)
+    move_change_count = sum(
+        1
+        for before_row, after_row in zip(fixed_probes_before.get("positions") or [], fixed_probes_after.get("positions") or [])
+        if str(before_row.get("chosen_move") or "") != str(after_row.get("chosen_move") or "")
+    )
+    ineffective_training = bool(before_model_meta["sha256"] != after_model_meta["sha256"] and move_change_count == 0)
+    benchmark_before_focus = _skipped_benchmark_snapshot("stochastic_auxiliary_disabled_by_quick_retrain_gate")["focus"]
+    benchmark_after_focus = _skipped_benchmark_snapshot("stochastic_auxiliary_disabled_by_quick_retrain_gate")["focus"]
+    checkpoint_gate = _checkpoint_gate_summary(
+        dataset_result=dataset_result,
+        benchmark_before_focus=benchmark_before_focus,
+        benchmark_after_focus=benchmark_after_focus,
+        legal_rate_delta=None,
+        ineffective_training=ineffective_training,
+        mistake_retention_probe=mistake_retention_probe,
+    )
+    if sanity_learning_probe.get("result_kind") == "failed_to_learn":
+        checkpoint_gate["passed"] = False
+        checkpoint_gate.setdefault("reasons", []).append("sanity learning probe failed to learn expected move")
+    elif sanity_learning_probe.get("result_kind") == "memorized_exact_fen":
+        checkpoint_gate["passed"] = False
+        checkpoint_gate.setdefault("reasons", []).append("sanity learning probe only memorized exact FEN")
+    elif sanity_learning_probe.get("result_kind") == "partial_seen_variants_only":
+        checkpoint_gate["passed"] = False
+        checkpoint_gate.setdefault("reasons", []).append("sanity learning probe only proved seen variants")
+    elif sanity_learning_probe.get("result_kind") == "partial_policy_learned_but_decision_unchanged":
+        checkpoint_gate["passed"] = False
+        checkpoint_gate.setdefault("reasons", []).append("sanity raw policy learned but final decision unchanged")
+    if float(sanity_learning_probe.get("seen_variant_pass_rate") or 0.0) < SANITY_SEEN_VARIANT_PASS_THRESHOLD:
+        checkpoint_gate["passed"] = False
+        checkpoint_gate.setdefault("reasons", []).append("sanity seen variant pass rate below threshold")
+    unseen_count = int(sanity_learning_probe.get("unseen_variant_count") or 0)
+    if unseen_count <= 0:
+        checkpoint_gate["passed"] = False
+        checkpoint_gate.setdefault("reasons", []).append("sanity unseen variants missing")
+    elif float(sanity_learning_probe.get("unseen_variant_pass_rate") or 0.0) < SANITY_UNSEEN_VARIANT_PASS_THRESHOLD:
+        checkpoint_gate["passed"] = False
+        checkpoint_gate.setdefault("reasons", []).append("sanity unseen variant pass rate below threshold")
+    if (sanity_learning_probe.get("final_decision_learning") or {}).get("learning_signal") is False:
+        checkpoint_gate["passed"] = False
+        checkpoint_gate.setdefault("reasons", []).append("sanity final decision learning failed")
+    if not bool(train_result.get("ok")):
+        checkpoint_gate["passed"] = False
+        checkpoint_gate.setdefault("reasons", []).append("quick retrain command failed")
+    checkpoint = {
+        "trusted_count": int(trusted_replays),
+        "trusted_replays": int(trusted_replays),
+        "started_at": retrain_started_at,
+        "finished_at": retrain_finished_at,
+        "duration_seconds": retrain_duration_seconds,
+        "checkpoint_started_at": checkpoint_started_at,
+        "retrain_duration_seconds": retrain_duration_seconds,
+        "checkpoint_duration_seconds": round(time.perf_counter() - checkpoint_started, 3),
+        "quick_retrain_gate": True,
+        "fixture_write": fixture_write,
+        "dataset_result": dataset_result,
+        "dataset_sha256": dataset_result.get("dataset_sha256", ""),
+        "dataset_hash": f"sha256:{dataset_result.get('dataset_sha256', '')}",
+        "trainer_result": train_result,
+        "trainer_hyperparameters": {
+            "fixed_seed": int(seed),
+            "epochs": trainer_epochs,
+            "max_samples": max(1, int(max_samples)),
+            "max_seconds": max(1, int(max_seconds)),
+            "learning_rate": trainer_learning_rate,
+        },
+        "sanity_variant_training": {
+            "case": variant_training.get("case") or {},
+            "before_exact": variant_training.get("before_exact") or {},
+            "seen_variants_added": len(variant_rows),
+            "seen_variants": variant_training.get("seen_variants") or [],
+            "rows": variant_rows,
+        },
+        "candidate_model_path": str(candidate_model_path),
+        "candidate_replay_path": str(candidate_replay_path),
+        "previous_model_hash": before_model_meta["sha256"],
+        "new_model_hash": after_model_meta["sha256"],
+        "hash_changed": before_model_meta["sha256"] != after_model_meta["sha256"],
+        "hash_change_explanation": "hash_changed only proves model bytes changed; it is not accepted as learning success without probe or deterministic evidence",
+        "pre_checkpoint_model_sha256": before_model_meta["sha256"],
+        "post_checkpoint_model_sha256": after_model_meta["sha256"],
+        "model_hash_changed": before_model_meta["sha256"] != after_model_meta["sha256"],
+        "model_before": before_model_meta,
+        "model_after": after_model_meta,
+        "move_agreement_before": move_agreement_before,
+        "move_agreement_after": move_agreement_after,
+        "replay_loss_before": replay_loss_before,
+        "replay_loss_after": replay_loss_after,
+        "replay_loss_delta": (
+            round(float(replay_loss_after.get("loss")) - float(replay_loss_before.get("loss")), 6)
+            if replay_loss_before.get("loss") is not None and replay_loss_after.get("loss") is not None
+            else None
+        ),
+        "retention_probe": retention_probe,
+        "mistake_retention_probe": mistake_retention_probe,
+        "sanity_learning_probe": sanity_learning_probe,
+        "targeted_probe": targeted_probe,
+        "fixed_probe_positions_before": fixed_probes_before,
+        "fixed_probe_positions_after": fixed_probes_after,
+        "probe_position_move_change_count": move_change_count,
+        "benchmark_skipped": True,
+        "benchmark_skip_reason": "stochastic_auxiliary_disabled_by_quick_retrain_gate",
+        "benchmark_before": benchmark_before_focus,
+        "benchmark_after": benchmark_after_focus,
+        "benchmark_delta": {"win_rate_delta": None, "legal_rate_delta": None, "low_quality_rate_delta": None},
+        "gate_decision": checkpoint_gate,
+        "ineffective_training": ineffective_training,
+        "verdict": "PASS" if bool(train_result.get("ok")) and not checkpoint_gate.get("reasons") else "PARTIAL",
+    }
+    _json_dump(checkpoint_dir / "retrain_result.json", checkpoint)
+    _json_dump(checkpoint_dir / "before_after_eval.json", checkpoint)
+    return checkpoint, candidate_model_path
+
+
+def _run_quick_retrain_gate_validation(
+    *,
+    engine_alias: str,
+    difficulty: str,
+    engine_dir: Path,
+    runtime_root: Path,
+    seed: int,
+    wait_timeout: int,
+    quick_retrain_max_samples: int,
+    quick_retrain_max_seconds: int,
+) -> dict:
+    wall_started = time.perf_counter()
+    started_at = _utc_now()
+    runtime_dir = runtime_root / engine_alias
+    if runtime_dir.exists():
+        shutil.rmtree(runtime_dir)
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    _set_runtime_env(
+        runtime_dir,
+        min_usable_replays=QUICK_RETRAIN_GATE_CHECKPOINTS[0],
+        skip_autorun_benchmark=True,
+        skip_autorun_promote=True,
+    )
+    warm = ensure_warm_start_chess_environment()
+    actor_username = f"{engine_alias}_quick_gate_user"
+    focus_engine_name = _engine_focus_name(engine_alias)
+    inventory_before = production_engine_inventory()
+    inventory_before_map = {row["engine"]: row for row in inventory_before}
+    before_row = inventory_before_map.get(focus_engine_name, {})
+    before_model_path = Path(str(before_row.get("path") or ""))
+    before_model_meta = _model_meta(before_model_path)
+
+    replay_generation_started = time.perf_counter()
+    records = _quick_retrain_fixture_records(
+        engine_alias=engine_alias,
+        difficulty=difficulty,
+        actor_username=actor_username,
+        seed=seed,
+    )
+    fixture_write = _write_quick_replay_fixture(records, trusted_count=len(records))
+    replay_generation_seconds = round(time.perf_counter() - replay_generation_started, 3)
+    game_results = _quick_game_results(records)
+    classification_rows = [
+        {
+            "index": item["index"],
+            "label": item["label"],
+            "category": item["category"],
+            "expected_tier": item["expected_tier"],
+            "actual_tier": item["stored_replay"].get("collection_tier"),
+            "stored": bool(item["stored_replay"].get("stored")),
+            "quarantine_reasons": item["stored_replay"].get("quarantine_reasons") or [],
+            "confidence_score": item["stored_replay"].get("confidence_score"),
+            "duplicate_flag": bool(item["stored_replay"].get("duplicate_flag")),
+            "suspicious_flag": bool(item["stored_replay"].get("suspicious_flag")),
+            "resign_abuse_flag": bool(item["stored_replay"].get("resign_abuse_flag")),
+        }
+        for item in game_results
+    ]
+    _json_dump(engine_dir / "classification.json", classification_rows)
+
+    all_evaluation_samples = _extract_engine_move_samples_from_records(records)
+    evaluation_samples = all_evaluation_samples[:QUICK_RETRAIN_EVAL_SAMPLE_LIMIT]
+    checkpoints: list[dict] = []
+    current_model_path = before_model_path
+    retrain_seconds_total = 0.0
+    for trusted in QUICK_RETRAIN_GATE_CHECKPOINTS:
+        _progress(f"phase quick retrain checkpoint started: {engine_alias} trusted={trusted}")
+        checkpoint, current_model_path = _run_quick_retrain_checkpoint(
+            engine_alias=engine_alias,
+            engine_dir=engine_dir,
+            runtime_dir=runtime_dir,
+            records=records,
+            focus_engine_name=focus_engine_name,
+            target_model_path=current_model_path,
+            evaluation_samples=evaluation_samples,
+            trusted_replays=int(trusted),
+            seed=seed + int(trusted) * 100,
+            max_samples=quick_retrain_max_samples,
+            max_seconds=quick_retrain_max_seconds,
+        )
+        retrain_seconds_total += float(checkpoint.get("retrain_duration_seconds") or 0.0)
+        checkpoints.append(checkpoint)
+
+    dataset_started = time.perf_counter()
+    fixture_write = _write_quick_replay_fixture(records, trusted_count=len(records))
+    replay_summary = replay_buffer_summary()
+    dataset_result = _prepare_formal_dataset(engine_dir, runtime_dir, invalid_game_ids=set())
+    dataset_seconds = round(time.perf_counter() - dataset_started, 3)
+    accepted_rows = _read_jsonl(engine_dir / "train_dataset.jsonl")
+    rejected_rows = _read_jsonl(engine_dir / "rejected_dataset.jsonl")
+    replay_fixture_health = _quick_replay_fixture_health(records, accepted_rows, rejected_rows)
+    after_model_path = current_model_path
+    after_model_meta = _model_meta(after_model_path)
+    evaluation_before = _evaluate_move_agreement(engine_alias, before_model_path, evaluation_samples)
+    evaluation_after = _evaluate_move_agreement(engine_alias, after_model_path, evaluation_samples)
+    fixed_probes_before = _evaluate_fixed_probe_positions(engine_alias, before_model_path)
+    fixed_probes_after = _evaluate_fixed_probe_positions(engine_alias, after_model_path)
+    before_after_eval = {
+        "retrain_supported": True,
+        "move_agreement_before": evaluation_before,
+        "move_agreement_after": evaluation_after,
+        "fixed_probe_positions_before": fixed_probes_before,
+        "fixed_probe_positions_after": fixed_probes_after,
+        "probe_position_move_change_count": sum(
+            1
+            for before_row, after_row in zip(fixed_probes_before.get("positions") or [], fixed_probes_after.get("positions") or [])
+            if str(before_row.get("chosen_move") or "") != str(after_row.get("chosen_move") or "")
+        ),
+        "benchmark_before": _skipped_benchmark_snapshot("stochastic_auxiliary_disabled_by_quick_retrain_gate")["focus"],
+        "benchmark_after": _skipped_benchmark_snapshot("stochastic_auxiliary_disabled_by_quick_retrain_gate")["focus"],
+        "checkpoints": checkpoints,
+        "benchmark_timeline": _benchmark_timeline(
+            checkpoints,
+            baseline_model_hash=before_model_meta["sha256"],
+            final_model_hash=after_model_meta["sha256"],
+        ),
+    }
+
+    deterministic_started = time.perf_counter()
+    deterministic_cases = _deterministic_strength_cases(evaluation_samples)
+    deterministic_snapshots = [
+        _evaluate_deterministic_strength_snapshot(
+            engine_alias=engine_alias,
+            model_path=before_model_path,
+            model_label="baseline",
+            cases=deterministic_cases,
+            seed=seed,
+        )
+    ]
+    for checkpoint in checkpoints:
+        trusted = int(checkpoint.get("trusted_count") or checkpoint.get("trusted_replays") or 0)
+        deterministic_snapshots.append(
+            _evaluate_deterministic_strength_snapshot(
+                engine_alias=engine_alias,
+                model_path=Path(str(checkpoint.get("candidate_model_path") or after_model_path)),
+                model_label=f"checkpoint@{trusted}",
+                cases=deterministic_cases,
+                seed=seed,
+            )
+        )
+    if deterministic_snapshots and checkpoints and str(checkpoints[-1].get("new_model_hash") or "") == after_model_meta["sha256"]:
+        deterministic_snapshots.append(_clone_deterministic_snapshot(deterministic_snapshots[-1], model_label="final"))
+    else:
+        deterministic_snapshots.append(
+            _evaluate_deterministic_strength_snapshot(
+                engine_alias=engine_alias,
+                model_path=after_model_path,
+                model_label="final",
+                cases=deterministic_cases,
+                seed=seed,
+            )
+        )
+    deterministic_strength = _deterministic_strength_report(deterministic_snapshots)
+    policy_override_audit = _policy_override_audit(engine_alias, after_model_path, deterministic_cases, deterministic_strength)
+    deterministic_eval_seconds = round(time.perf_counter() - deterministic_started, 3)
+    _json_dump(engine_dir / "deterministic_strength_snapshot.json", deterministic_strength)
+    _json_dump(engine_dir / "policy_override_audit.json", policy_override_audit)
+
+    retrain_result = {
+        "retrain_supported": True,
+        "quick_retrain_gate": True,
+        "nightly_expensive_validation": False,
+        "expensive_validation_command": f"python3 scripts/games/chess_live_learning_validation.py --engines {engine_alias} --fast-retrain",
+        "fixture": {
+            "type": "fixed_trusted_replay_fixture",
+            "trusted_replays": len(records),
+            **fixture_write,
+        },
+        "checkpoints": checkpoints,
+        "trainer_result": (checkpoints[-1].get("trainer_result") if checkpoints else {}),
+    }
+    retrain_timing = _checkpoint_timing_summary(checkpoints)
+    game_timing = {"steps_measured": 0, "avg_think_ms_per_step": 0.0, "total_think_ms": 0.0, "by_role": {}}
+    summary = {
+        "engine_alias": engine_alias,
+        "difficulty": difficulty,
+        "seed": int(seed),
+        "validation_mode": "quick_retrain_gate",
+        "expensive_validation": False,
+        "started_at": started_at,
+        "finished_at": _utc_now(),
+        "commit": _git_commit(),
+        "engine_config": {
+            "difficulty": difficulty,
+            "quick_retrain_gate": True,
+            "fixed_seed": int(seed),
+            "quick_retrain_checkpoints": list(QUICK_RETRAIN_GATE_CHECKPOINTS),
+            "quick_retrain_max_samples": int(quick_retrain_max_samples),
+            "quick_retrain_max_seconds": int(quick_retrain_max_seconds),
+            "quick_retrain_eval_sample_limit": QUICK_RETRAIN_EVAL_SAMPLE_LIMIT,
+            "full_game_generation": False,
+            "nightly_expensive_validation_available": True,
+        },
+        "runtime_dir": str(runtime_dir),
+        "warm_start": warm,
+        "total_games": len(records),
+        "expected_trusted_replays": QUICK_RETRAIN_GATE_TRUSTED_REPLAYS,
+        "expected_quarantine_replays": 0,
+        "game_timing": game_timing,
+        "games": game_results,
+        "classification": classification_rows,
+        "invalid_case_audit": [],
+        "replay_summary": replay_summary,
+        "autorun_threshold": QUICK_RETRAIN_GATE_CHECKPOINTS[0],
+        "dataset_result": dataset_result,
+        "autorun": {"launched": False, "reason": "quick_retrain_gate_direct_trainer"},
+        "autorun_status": {"status": "skipped", "reason": "quick_retrain_gate_direct_trainer"},
+        "pipeline_report": {"exists": False, "reason": "quick_retrain_gate_direct_trainer"},
+        "evaluation_before": evaluation_before,
+        "evaluation_after": evaluation_after,
+        "before_after_eval": before_after_eval,
+        "deterministic_strength_snapshot": deterministic_strength,
+        "policy_override_audit": policy_override_audit,
+        "stochastic_auxiliary_benchmark": {
+            "purpose": "sanity signal only; not primary promotion evidence",
+            "strength_evidence": False,
+            "skipped": True,
+            "skip_reason": "stochastic_auxiliary_disabled_by_quick_retrain_gate",
+            "benchmark_before": before_after_eval.get("benchmark_before"),
+            "benchmark_after": before_after_eval.get("benchmark_after"),
+        },
+        "perft": {
+            "purpose": "move generation correctness only; not strength evidence",
+            "strength_evidence": False,
+            "skipped": True,
+            "reason": "not part of quick retrain promotion gate",
+        },
+        "retrain_result": retrain_result,
+        "retrain_timing": retrain_timing,
+        "model_before": before_model_meta,
+        "model_after": after_model_meta,
+        "evaluation_sample_count": len(evaluation_samples),
+        "available_evaluation_sample_count": len(all_evaluation_samples),
+        "exp1_live_learning": {},
+        "environment": _environment_summary(),
+        "replay_fixture_health": replay_fixture_health,
+        "quick_retrain_gate": {
+            "enabled": True,
+            "fixture_trusted_replays": len(records),
+            "fixture_hash": replay_fixture_health.get("fixture_hash"),
+            "checkpoints": list(QUICK_RETRAIN_GATE_CHECKPOINTS),
+            "full_30_game_generation_skipped": True,
+            "stochastic_auxiliary_only": True,
+        },
+    }
+    dataset_integrity = _dataset_integrity_summary(accepted_rows, rejected_rows, game_results)
+    dataset_integrity["contaminated_rows"] = int(dataset_result.get("contaminated_rows") or 0)
+    summary["dataset_integrity"] = dataset_integrity
+    summary.update(_replay_source_audit(game_results))
+    summary["position_quality"] = _position_quality_summary(classification_rows)
+    summary["stage_game_win_rates"] = []
+    summary["poison_detection"] = _poison_detection_summary(classification_rows)
+    summary["retrain_stability_report"] = _retrain_stability_report(summary)
+    summary["stability"] = _stability_summary(summary)
+    summary["timing_breakdown"] = {
+        "replay_generation_seconds": replay_generation_seconds,
+        "dataset_prepare_seconds": dataset_seconds,
+        "retrain_seconds": round(retrain_seconds_total, 3),
+        "deterministic_eval_seconds": deterministic_eval_seconds,
+        "report_write_seconds": 0.0,
+        "total_wall_seconds": round(time.perf_counter() - wall_started, 3),
+    }
+    summary["runtime_metrics"] = _runtime_metrics_summary(summary)
+    summary["reproducibility"] = _reproducibility_summary(summary)
+    summary["engine_verdict"] = _engine_verdict(summary)
+    summary["promotion_gate"] = _promotion_gate_summary(summary)
+    summary["suitable_for_production_self_learning"] = summary["engine_verdict"] == "PASS" and bool(summary["promotion_gate"].get("passed"))
+    report_started = time.perf_counter()
+    _json_dump(engine_dir / "summary.json", summary)
+    _write_engine_report(engine_dir, summary)
+    summary["timing_breakdown"]["report_write_seconds"] = round(time.perf_counter() - report_started, 3)
+    summary["timing_breakdown"]["total_wall_seconds"] = round(time.perf_counter() - wall_started, 3)
+    _json_dump(engine_dir / "summary.json", summary)
+    _write_engine_report(engine_dir, summary)
+    return summary
 
 
 def _run_engine_validation(
@@ -3753,17 +5731,22 @@ def _run_engine_validation(
                 seed=seed,
             )
         )
-    deterministic_snapshots.append(
-        _evaluate_deterministic_strength_snapshot(
-            engine_alias=engine_alias,
-            model_path=after_model_path,
-            model_label="final",
-            cases=deterministic_cases,
-            seed=seed,
+    if deterministic_snapshots and checkpoints and str(checkpoints[-1].get("new_model_hash") or "") == after_model_meta["sha256"]:
+        deterministic_snapshots.append(_clone_deterministic_snapshot(deterministic_snapshots[-1], model_label="final"))
+    else:
+        deterministic_snapshots.append(
+            _evaluate_deterministic_strength_snapshot(
+                engine_alias=engine_alias,
+                model_path=after_model_path,
+                model_label="final",
+                cases=deterministic_cases,
+                seed=seed,
+            )
         )
-    )
     deterministic_strength = _deterministic_strength_report(deterministic_snapshots)
+    policy_override_audit = _policy_override_audit(engine_alias, after_model_path, deterministic_cases, deterministic_strength)
     _json_dump(engine_dir / "deterministic_strength_snapshot.json", deterministic_strength)
+    _json_dump(engine_dir / "policy_override_audit.json", policy_override_audit)
     _json_dump(engine_dir / "retrain_result.json", retrain_result)
     _json_dump(engine_dir / "before_after_eval.json", before_after_eval)
 
@@ -3809,6 +5792,7 @@ def _run_engine_validation(
         "evaluation_after": evaluation_after,
         "before_after_eval": before_after_eval,
         "deterministic_strength_snapshot": deterministic_strength,
+        "policy_override_audit": policy_override_audit,
         "stochastic_auxiliary_benchmark": {
             "purpose": "sanity signal only; not primary promotion evidence",
             "strength_evidence": False,
@@ -3848,6 +5832,7 @@ def _run_engine_validation(
     summary["position_quality"] = _position_quality_summary(classification_rows)
     summary["stage_game_win_rates"] = _stage_game_win_rates(game_results, autorun_threshold=autorun_threshold)
     summary["poison_detection"] = _poison_detection_summary(classification_rows)
+    summary["retrain_stability_report"] = _retrain_stability_report(summary)
     summary["stability"] = _stability_summary(summary)
     summary["runtime_metrics"] = _runtime_metrics_summary(summary)
     summary["reproducibility"] = _reproducibility_summary(summary)
@@ -3874,6 +5859,7 @@ def main() -> int:
     _progress(
         "flags: "
         f"fast_retrain={bool(args.fast_retrain)} "
+        f"quick_retrain_gate={bool(args.quick_retrain_gate)} "
         f"skip_autorun_benchmark={skip_autorun_benchmark} "
         f"skip_autorun_promote={skip_autorun_promote} "
         f"skip_retrain_benchmark_snapshots={skip_retrain_benchmark_snapshots}"
@@ -3890,22 +5876,37 @@ def main() -> int:
         engine_dir = output_root / engine_alias
         engine_dir.mkdir(parents=True, exist_ok=True)
         _progress(f"phase engine validation started: {engine_alias} difficulty={difficulty} artifact={engine_dir}")
-        summary = _run_engine_validation(
-            engine_alias=engine_alias,
-            difficulty=difficulty,
-            engine_dir=engine_dir,
-            runtime_root=runtime_root,
-            seed=int(args.seed) + index * 1000,
-            max_plies=int(args.max_plies),
-            wait_timeout=int(args.wait_timeout),
-            autorun_threshold=int(args.autorun_threshold),
-            skip_autorun_benchmark=skip_autorun_benchmark,
-            skip_autorun_promote=skip_autorun_promote,
-            skip_retrain_benchmark_snapshots=skip_retrain_benchmark_snapshots,
-            benchmark_rounds=int(args.benchmark_rounds),
-            benchmark_max_plies=int(args.benchmark_max_plies),
-            benchmark_teacher_depth=int(args.benchmark_teacher_depth),
-        )
+        if args.quick_retrain_gate:
+            if engine_alias not in {"exp3", "exp4"}:
+                _progress("FAIL: --quick-retrain-gate currently supports exp3 and exp4 only")
+                return 2
+            summary = _run_quick_retrain_gate_validation(
+                engine_alias=engine_alias,
+                difficulty=difficulty,
+                engine_dir=engine_dir,
+                runtime_root=runtime_root,
+                seed=int(args.seed) + index * 1000,
+                wait_timeout=int(args.wait_timeout),
+                quick_retrain_max_samples=int(args.quick_retrain_max_samples),
+                quick_retrain_max_seconds=int(args.quick_retrain_max_seconds),
+            )
+        else:
+            summary = _run_engine_validation(
+                engine_alias=engine_alias,
+                difficulty=difficulty,
+                engine_dir=engine_dir,
+                runtime_root=runtime_root,
+                seed=int(args.seed) + index * 1000,
+                max_plies=int(args.max_plies),
+                wait_timeout=int(args.wait_timeout),
+                autorun_threshold=int(args.autorun_threshold),
+                skip_autorun_benchmark=skip_autorun_benchmark,
+                skip_autorun_promote=skip_autorun_promote,
+                skip_retrain_benchmark_snapshots=skip_retrain_benchmark_snapshots,
+                benchmark_rounds=int(args.benchmark_rounds),
+                benchmark_max_plies=int(args.benchmark_max_plies),
+                benchmark_teacher_depth=int(args.benchmark_teacher_depth),
+            )
         summaries.append(summary)
         _progress(f"phase result engine validation {engine_alias}: verdict={summary.get('engine_verdict')} artifact={engine_dir / 'summary.json'}")
     root_summary = _build_root_summary(
@@ -4015,7 +6016,7 @@ def main() -> int:
         overall_verdict = "FAIL"
     elif any(bool(row.get("catastrophic_regression")) for row in root_summary["engines"]):
         overall_verdict = "HIGH_RISK"
-    elif any(verdict in {"PARTIAL", "HIGH_RISK"} for verdict in engine_verdicts) or any(not bool(row.get("promotion_gate_passed")) for row in root_summary["engines"]):
+    elif any(verdict in {"PARTIAL", "HIGH_RISK", "PARTIAL_POLICY_LEARNED_BUT_DECISION_UNCHANGED"} for verdict in engine_verdicts) or any(not bool(row.get("promotion_gate_passed")) for row in root_summary["engines"]):
         overall_verdict = "PARTIAL"
     root_summary["overall_verdict"] = overall_verdict
     _json_dump(output_root / "summary.json", root_summary)

@@ -39,7 +39,13 @@ def test_live_learning_validation_fast_retrain_flags_are_wired():
 def test_live_learning_validation_requires_individual_engine_selection():
     module = _load_validation_module()
 
-    assert module._select_requested_engines("exp2") == [("exp2", module.EXPERIMENT_NN_DIFFICULTY)]
+    assert module._select_requested_engines("exp3") == [("exp3", module.EXPERIMENT_DL_DIFFICULTY)]
+    try:
+        module._select_requested_engines("exp2")
+    except ValueError as exc:
+        assert "unknown engine alias" in str(exc)
+    else:
+        raise AssertionError("exp2 should be removed from validation engine selection")
     try:
         module._select_requested_engines("")
     except ValueError as exc:
@@ -47,14 +53,14 @@ def test_live_learning_validation_requires_individual_engine_selection():
     else:
         raise AssertionError("empty engine selection should fail")
     try:
-        module._select_requested_engines("exp2,exp3")
+        module._select_requested_engines("exp3,exp4")
     except ValueError as exc:
         assert "multi-engine validation is disabled" in str(exc)
     else:
         raise AssertionError("multi-engine selection should fail without override")
-    assert module._select_requested_engines("exp2,exp3", allow_multi_engine=True) == [
-        ("exp2", module.EXPERIMENT_NN_DIFFICULTY),
+    assert module._select_requested_engines("exp3,exp4", allow_multi_engine=True) == [
         ("exp3", module.EXPERIMENT_DL_DIFFICULTY),
+        ("exp4", module.EXPERIMENT_PV_DIFFICULTY),
     ]
 
 
@@ -87,7 +93,7 @@ def test_mistake_retention_probe_requires_before_failure_and_after_fix(monkeypat
 
     monkeypatch.setattr(module, "_choose_engine_move_for_eval", fake_choose)
 
-    result = module._evaluate_mistake_retention_probe("exp2", Path("before"), Path("after"), samples)
+    result = module._evaluate_mistake_retention_probe("exp3", Path("before"), Path("after"), samples)
 
     assert result["counted_as_game"] is False
     assert result["source"] == "old_trusted_engine_move_mistake"
@@ -95,27 +101,32 @@ def test_mistake_retention_probe_requires_before_failure_and_after_fix(monkeypat
     assert result["before_failed"] is True
     assert result["after_fixed"] is True
     assert result["avoided_same_error"] is True
+    assert result["avoided_old_mistake"] is True
+    assert result["matched_expected"] is True
+    assert result["result_kind"] == "matched_expected"
     assert result["learning_signal"] is True
     assert "before model failed" in result["learning_signal_reason"]
 
 
-def test_mistake_retention_probe_does_not_claim_learning_without_prior_mistake(monkeypatch):
+def test_mistake_retention_probe_treats_already_fixed_case_as_retained(monkeypatch):
     module = _load_validation_module()
     samples = [{"fen": "fixture", "side": "white", "move_uci": "e2e4"}]
 
     monkeypatch.setattr(module, "_choose_engine_move_for_eval", lambda *args, **kwargs: {"from": "e2", "to": "e4"})
 
-    result = module._evaluate_mistake_retention_probe("exp2", Path("before"), Path("after"), samples)
+    result = module._evaluate_mistake_retention_probe("exp3", Path("before"), Path("after"), samples)
 
-    assert result["supported"] is False
-    assert result["reason"] == "no_prior_mistake_sample"
+    assert result["supported"] is True
+    assert result["reason"] == "retained_expected_move"
     assert result["counted_as_game"] is False
     assert result["probe_case_id"] == "game:0:ply:0:e2e4"
     assert result["before_move"] == "e2e4"
     assert result["after_move"] == "e2e4"
     assert result["avoided_same_error"] is False
-    assert result["learning_signal"] is False
-    assert "目前沒有足夠證據證明 retrain 改善了該錯誤" in result["human_explanation"]
+    assert result["matched_expected"] is True
+    assert result["result_kind"] == "retained_expected"
+    assert result["learning_signal"] is True
+    assert "仍保留正解" in result["human_explanation"]
 
 
 def test_live_learning_validation_reports_retrain_and_step_timing():
@@ -160,6 +171,7 @@ def test_live_learning_validation_gate_is_decision_evidence_not_dashboard_only()
     assert "_report_consistency_issues" in source
     assert "_evaluate_deterministic_strength_snapshot" in source
     assert "hash_changed only proves model bytes changed" in source
+    assert "retrain_stability_report" in source
 
 
 def test_live_learning_validation_expands_traps_and_probe_range():
@@ -175,7 +187,7 @@ def test_live_learning_validation_expands_traps_and_probe_range():
 
 def test_prepare_formal_dataset_blocks_validation_invalid_rows(tmp_path, monkeypatch):
     module = _load_validation_module()
-    engine_dir = tmp_path / "exp2"
+    engine_dir = tmp_path / "exp3"
     runtime_dir = tmp_path / "runtime"
     reports_dir = runtime_dir / "reports" / "games"
     reports_dir.mkdir(parents=True)
@@ -187,8 +199,8 @@ def test_prepare_formal_dataset_blocks_validation_invalid_rows(tmp_path, monkeyp
         module._jsonl_dump(
             output_dir / "train.jsonl",
             [
-                {"source_game_id": 1001, "engine_name": "experiment 2:nn", "move_count": 20},
-                {"source_game_id": 2001, "engine_name": "experiment 2:nn", "move_count": 20},
+                {"source_game_id": 1001, "engine_name": "experiment 3:dl", "move_count": 20},
+                {"source_game_id": 2001, "engine_name": "experiment 3:dl", "move_count": 20},
             ],
         )
         return {"ok": True}
@@ -295,6 +307,97 @@ def test_stage_win_rate_drop_marks_catastrophic_regression():
     assert stability["catastrophic_regression"] is True
 
 
+def test_late_stage_collapse_with_deterministic_and_mistake_retention_regression_blocks_gate():
+    module = _load_validation_module()
+    summary = {
+        "engine_alias": "exp3",
+        "replay_summary": {"trusted_replays": module.VALID_GAMES, "quarantine_replays": module.INVALID_GAMES},
+        "dataset_integrity": {"contaminated_rows": 0, "duplicate_ratio": 0.0, "invalid_fen": 0, "illegal_moves": 0, "side_mismatch": 0, "short_resign_games": 0, "unique_positions": 20, "duplicate_positions": 0},
+        "dataset_result": {"accepted_rows": 25},
+        "poison_detection": {"forced_repetition_patterns": 0, "intentional_blunders": 0, "engine_copy_suspected": 0, "suspicious_resign_rate": 0.0},
+        "position_quality": {},
+        "stage_game_win_rates": [
+            {"stage": "0-10", "win_rate": 0.2, "normal_games": 10},
+            {"stage": "10-20", "win_rate": 0.3, "normal_games": 10},
+            {"stage": "20-25", "win_rate": 0.0, "normal_games": 5},
+        ],
+        "before_after_eval": {
+            "benchmark_before": {"skipped": True},
+            "benchmark_after": {"skipped": True},
+            "checkpoints": [
+                {
+                    "trusted_count": 20,
+                    "mistake_retention_probe": {
+                        "learning_signal": False,
+                        "probe_case_id": "fixture",
+                        "before_move": "h4e4",
+                        "after_move": "h4e4",
+                        "expected_move": "e2e4",
+                        "avoided_same_error": False,
+                        "avoided_old_mistake": False,
+                        "matched_expected": False,
+                        "result_kind": "repeated_old_mistake",
+                        "learning_signal_reason": "after model repeated the same wrong move",
+                    },
+                }
+            ],
+        },
+        "deterministic_strength_snapshot": {
+            "supported": True,
+            "skipped": False,
+            "passed": False,
+            "reasons": ["final deterministic score regressed below baseline"],
+            "score_table": [
+                {"model_label": "baseline", "overall_deterministic_score": 1.0, "category_score": {"mistake_retention": {"score": 1.0}}},
+                {"model_label": "checkpoint@10", "overall_deterministic_score": 0.9231, "category_score": {"mistake_retention": {"score": 0.6667}}},
+                {"model_label": "checkpoint@20", "overall_deterministic_score": 0.9231, "category_score": {"mistake_retention": {"score": 0.6667}}},
+                {"model_label": "final", "overall_deterministic_score": 0.9231, "category_score": {"mistake_retention": {"score": 0.6667}}},
+            ],
+            "final": {"illegal_rate": 0.0, "blunder_avoid_rate": 1.0},
+        },
+        "engine_verdict": "PASS",
+    }
+
+    summary["retrain_stability_report"] = module._retrain_stability_report(summary)
+    summary["stability"] = module._stability_summary(summary)
+    gate = module._promotion_gate_summary(summary)
+
+    assert summary["retrain_stability_report"]["suspected_catastrophic_regression"] is True
+    assert summary["stability"]["late_stage_win_rate_collapse"] is True
+    assert summary["stability"]["catastrophic_regression"] is True
+    assert gate["passed"] is False
+    assert "catastrophic regression detected" in gate["reasons"]
+    assert "retrain stability risk: late trusted-valid stage 20-25 collapsed to win_rate=0.0" in gate["reasons"]
+    assert "retrain stability risk: mistake_retention deterministic category regressed" in gate["reasons"]
+
+
+def test_quick_retrain_gate_fixture_is_fixed_legal_and_extracts_engine_samples():
+    module = _load_validation_module()
+
+    records = module._quick_retrain_fixture_records(
+        engine_alias="exp3",
+        difficulty="experiment 3:dl",
+        actor_username="fixture_user",
+        seed=20260509,
+    )
+    samples = module._extract_engine_move_samples_from_records(records)
+
+    assert len(records) == module.QUICK_RETRAIN_GATE_TRUSTED_REPLAYS
+    assert all(record["collection_tier"] == "trusted" for record in records)
+    assert all(record["source"] == "quick_retrain_gate_fixture" for record in records)
+    assert all(int(record["move_count"]) >= 8 for record in records)
+    assert samples
+    assert all(sample["side"] in {"white", "black"} for sample in samples)
+    categories = {str(record.get("quick_category")) for record in records}
+    assert {"opening", "tactic", "endgame", "blunder_avoid", "mistake_retention"} <= categories
+    for category in categories:
+        assert sum(1 for record in records if record.get("quick_category") == category) >= module.QUICK_RETRAIN_MIN_CASES_PER_CATEGORY
+    health = module._quick_replay_fixture_health(records, samples, [])
+    assert health["passed"] is True
+    assert health["duplicate_ratio"] <= module.DATASET_DUPLICATE_RATIO_LIMIT
+    assert health["unique_target_move_count"] >= len(categories)
+
+
 def test_deterministic_strength_gate_blocks_regression_without_using_game_benchmark():
     module = _load_validation_module()
     snapshots = [
@@ -311,10 +414,248 @@ def test_deterministic_strength_gate_blocks_regression_without_using_game_benchm
     assert "final deterministic score regressed beyond checkpoint@20 threshold" in report["reasons"]
 
 
+def test_quick_gate_does_not_promote_on_loss_or_hash_without_score_and_matched_probe():
+    module = _load_validation_module()
+    summary = {
+        "engine_alias": "exp4",
+        "expected_trusted_replays": 20,
+        "expected_quarantine_replays": 0,
+        "quick_retrain_gate": {"enabled": True},
+        "replay_summary": {"trusted_replays": 20, "quarantine_replays": 0},
+        "dataset_integrity": {"contaminated_rows": 0, "duplicate_ratio": 0.0, "invalid_fen": 0, "illegal_moves": 0, "side_mismatch": 0, "short_resign_games": 0},
+        "dataset_result": {"accepted_rows": 20},
+        "poison_detection": {"forced_repetition_patterns": 0, "intentional_blunders": 0, "engine_copy_suspected": 0, "suspicious_resign_rate": 0.0},
+        "replay_fixture_health": {"passed": True, "reasons": []},
+        "stability": {"catastrophic_regression": False},
+        "before_after_eval": {
+            "checkpoints": [
+                {
+                    "trusted_count": 10,
+                    "hash_changed": True,
+                    "replay_loss_before": {"loss": 0.9},
+                    "replay_loss_after": {"loss": 0.1},
+                    "mistake_retention_probe": {
+                        "learning_signal": False,
+                        "matched_expected": False,
+                        "learning_signal_reason": "after model repeated the same wrong move",
+                    },
+                }
+            ]
+        },
+        "deterministic_strength_snapshot": {
+            "supported": True,
+            "skipped": False,
+            "passed": True,
+            "reasons": [],
+            "score_table": [
+                {"model_label": "baseline", "overall_deterministic_score": 0.5},
+                {"model_label": "final", "overall_deterministic_score": 0.5},
+            ],
+            "final": {"overall_deterministic_score": 0.5, "illegal_rate": 0.0, "blunder_avoid_rate": 1.0},
+        },
+        "engine_verdict": "PASS",
+    }
+
+    gate = module._promotion_gate_summary(summary)
+
+    assert gate["passed"] is False
+    assert "deterministic score did not improve over baseline; learning success not proven" in gate["reasons"]
+    assert any("mistake retention probe failed" in reason for reason in gate["reasons"])
+    assert "mistake retention probe did not match expected move at trusted=10" in gate["reasons"]
+
+
+def test_sanity_learning_probe_requires_after_top1_and_variant_generalization(monkeypatch):
+    module = _load_validation_module()
+    samples = [
+        {
+            "fen": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
+            "side": "black",
+            "move_uci": "e7e5",
+            "game_id": 900001,
+            "game_label": "mr_e4_e5",
+            "ply": 1,
+            "category": "mistake_retention",
+        }
+    ]
+
+    def fake_choose(_engine_alias, board_state, _side, model_path):
+        if str(model_path) == "before":
+            return {"from": "a7", "to": "a5"}
+        return {"from": "e7", "to": "e5"} if " e6 " not in str(board_state.get("__fen__")) else {"from": "a7", "to": "a5"}
+
+    monkeypatch.setattr(module, "_choose_engine_move_for_eval", fake_choose)
+
+    result = module._evaluate_sanity_learning_probe("exp4", Path("before"), Path("after"), samples)
+
+    assert result["supported"] is True
+    assert result["before_exact"]["top1"] == "a7a5"
+    assert result["after_exact"]["top1"] == "e7e5"
+    assert result["after_exact"]["expected_is_top1"] is True
+    assert result["result_kind"] in {"memorized_exact_fen", "generalized_to_variants"}
+    assert result["learning_signal"] is (result["result_kind"] == "generalized_to_variants")
+    assert result["variant_count"] >= 5
+    assert result["exact_fen_pass"] is True
+    assert "seen_variant_pass_rate" in result
+    assert "unseen_variant_pass_rate" in result
+    assert "raw_policy_generalization_rate" in result
+    assert "final_decision_generalization_rate" in result
+    assert "replay_loss" in result["not_learning_success_sources"]
+    assert "hash_changed" in result["not_learning_success_sources"]
+
+
+def test_sanity_variant_training_rows_record_seen_variant_evidence(monkeypatch):
+    module = _load_validation_module()
+    samples = [
+        {
+            "fen": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
+            "side": "black",
+            "move_uci": "e7e5",
+            "game_id": 900001,
+            "game_label": "mr_e4_e5",
+            "ply": 1,
+            "category": "mistake_retention",
+        }
+    ]
+
+    monkeypatch.setattr(module, "_choose_engine_move_for_eval", lambda *_args, **_kwargs: {"from": "a7", "to": "a5"})
+
+    result = module._sanity_seen_variant_training_rows("exp3", Path("before"), samples)
+
+    assert result["case"]["expected_move"] == "e7e5"
+    assert result["rows"]
+    assert all(row["variant_split"] == "seen" for row in result["rows"])
+    assert all(row["move_uci"] == "e7e5" for row in result["rows"])
+    assert all(row["variant_id"] and row["normalized_fen_hash"] for row in result["rows"])
+
+
+def test_sanity_learning_probe_failed_when_after_top1_is_not_expected(monkeypatch):
+    module = _load_validation_module()
+    samples = [
+        {
+            "fen": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
+            "side": "black",
+            "move_uci": "e7e5",
+            "game_id": 900001,
+            "game_label": "mr_e4_e5",
+            "ply": 1,
+            "category": "mistake_retention",
+        }
+    ]
+
+    monkeypatch.setattr(module, "_choose_engine_move_for_eval", lambda *_args, **_kwargs: {"from": "a7", "to": "a5"})
+
+    result = module._evaluate_sanity_learning_probe("exp4", Path("before"), Path("after"), samples)
+
+    assert result["result_kind"] == "failed_to_learn"
+    assert result["learning_signal"] is False
+    assert result["after_exact"]["top1"] == "a7a5"
+    assert result["after_exact"]["expected_is_top1"] is False
+
+
+def test_sanity_learning_probe_marks_partial_when_raw_policy_learns_but_final_decision_does_not(monkeypatch):
+    module = _load_validation_module()
+    samples = [
+        {
+            "fen": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
+            "side": "black",
+            "move_uci": "e7e5",
+            "game_id": 900001,
+            "game_label": "mr_e4_e5",
+            "ply": 1,
+            "category": "mistake_retention",
+        }
+    ]
+
+    monkeypatch.setattr(module, "_choose_engine_move_for_eval", lambda *_args, **_kwargs: {"from": "a7", "to": "a5"})
+    monkeypatch.setattr(
+        module,
+        "_evaluate_engine_raw_policy_position",
+        lambda engine_alias, model_path, case, old_move="": {
+            "supported": True,
+            "expected_move": "e7e5",
+            "raw_policy_top1": "a7a5" if str(model_path) == "before" else "e7e5",
+            "expected_rank": 4 if str(model_path) == "before" else 1,
+            "old_move": "a7a5",
+            "old_move_rank": 1 if str(model_path) == "before" else 3,
+            "margin_vs_old_move": -0.5 if str(model_path) == "before" else 0.4,
+            "expected_is_raw_top1": str(model_path) == "after",
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "_engine_decision_breakdown",
+        lambda *_args, **_kwargs: {
+            "supported": True,
+            "chosen_move": "a7a5",
+            "chosen_reason": "search_best_move",
+            "watched_moves": [
+                {"move": "e7e5", "raw_policy_score": 1.0, "static_eval_score": 0, "search_score": 0, "legal_move_bonus_penalty": 28, "final_combined_score": 0},
+                {"move": "a7a5", "raw_policy_score": 0.2, "static_eval_score": 50, "search_score": 50, "legal_move_bonus_penalty": 0, "final_combined_score": 50},
+            ],
+        },
+    )
+
+    result = module._evaluate_sanity_learning_probe("exp4", Path("before"), Path("after"), samples)
+
+    assert result["result_kind"] == "partial_policy_learned_but_decision_unchanged"
+    assert result["raw_policy_learning"]["learning_signal"] is True
+    assert result["final_decision_learning"]["learning_signal"] is False
+    assert result["blocked_by_search_or_static_eval"] is True
+    assert "final decision stayed" in result["final_decision_learning"]["blocked_reason"]
+
+
+def test_promotion_gate_blocks_partial_policy_learning_without_final_decision_learning():
+    module = _load_validation_module()
+    summary = {
+        "engine_alias": "exp4",
+        "replay_summary": {"trusted_replays": module.VALID_GAMES, "quarantine_replays": module.INVALID_GAMES},
+        "dataset_integrity": {"contaminated_rows": 0, "duplicate_ratio": 0.0, "invalid_fen": 0, "illegal_moves": 0, "side_mismatch": 0, "short_resign_games": 0},
+        "poison_detection": {"forced_repetition_patterns": 0, "intentional_blunders": 0, "engine_copy_suspected": 0, "suspicious_resign_rate": 0.0},
+        "stability": {"catastrophic_regression": False},
+        "quick_retrain_gate": {"enabled": True},
+        "before_after_eval": {
+            "benchmark_before": {"skipped": True, "reason": "stochastic_auxiliary_disabled"},
+            "benchmark_after": {"skipped": True, "reason": "stochastic_auxiliary_disabled"},
+            "checkpoints": [
+                {
+                    "trusted_count": 10,
+                    "mistake_retention_probe": {"learning_signal": True, "matched_expected": True},
+                    "sanity_learning_probe": {
+                        "result_kind": "partial_policy_learned_but_decision_unchanged",
+                        "learning_signal_reason": "raw policy learned expected_move but final decision did not change",
+                        "final_decision_learning": {
+                            "learning_signal": False,
+                            "blocked_reason": "raw policy learned expected_move but final decision stayed a7a5 via search_best_move",
+                        },
+                    },
+                }
+            ],
+        },
+        "deterministic_strength_snapshot": {
+            "supported": True,
+            "skipped": False,
+            "passed": True,
+            "reasons": [],
+            "score_table": [
+                {"model_label": "baseline", "overall_deterministic_score": 0.5},
+                {"model_label": "final", "overall_deterministic_score": 0.8},
+            ],
+            "final": {"overall_deterministic_score": 0.8, "illegal_rate": 0.0, "blunder_avoid_rate": 1.0},
+        },
+        "engine_verdict": "PASS",
+    }
+
+    gate = module._promotion_gate_summary(summary)
+
+    assert gate["passed"] is False
+    assert any("sanity final decision learning failed" in reason for reason in gate["reasons"])
+    assert "sanity raw policy learned but final decision unchanged at trusted=10" in gate["reasons"]
+
+
 def test_stochastic_benchmark_hash_perft_and_runtime_do_not_release_promotion():
     module = _load_validation_module()
     summary = {
-        "engine_alias": "exp2",
+        "engine_alias": "exp3",
         "replay_summary": {"trusted_replays": module.VALID_GAMES, "quarantine_replays": module.INVALID_GAMES},
         "dataset_integrity": {"contaminated_rows": 0, "duplicate_ratio": 0.0, "invalid_fen": 0, "illegal_moves": 0, "side_mismatch": 0, "short_resign_games": 0},
         "poison_detection": {"forced_repetition_patterns": 0, "intentional_blunders": 0, "engine_copy_suspected": 0, "suspicious_resign_rate": 0.0},
@@ -356,8 +697,8 @@ def test_live_learning_validation_minimal_gate_failure_fixture_writes_consistent
     module._environment_summary = lambda: {"python_version": "test", "platform": "test", "cpu": "test", "gpu": "", "torch_version": ""}
     skip_reason = "disabled_by_fast_retrain"
     summary = {
-        "engine_alias": "exp2",
-        "difficulty": "experiment 2:nn",
+        "engine_alias": "exp3",
+        "difficulty": "experiment 3:dl",
         "seed": 7,
         "started_at": "2026-05-09T00:00:00+00:00",
         "finished_at": "2026-05-09T00:01:00+00:00",
@@ -420,7 +761,11 @@ def test_live_learning_validation_minimal_gate_failure_fixture_writes_consistent
                         "probe_case_id": "game:7:ply:3:e2e4",
                         "before_move": "g1f3",
                         "after_move": "g1f3",
+                        "expected_move": "e2e4",
                         "avoided_same_error": False,
+                        "avoided_old_mistake": False,
+                        "matched_expected": False,
+                        "result_kind": "repeated_old_mistake",
                         "learning_signal": False,
                         "learning_signal_reason": "after model repeated the same wrong move",
                         "human_explanation": "目前沒有足夠證據證明 retrain 改善了該錯誤，因為 after model 仍重複同一錯誤。",
@@ -467,7 +812,7 @@ def test_live_learning_validation_minimal_gate_failure_fixture_writes_consistent
     summary["promotion_gate"] = module._promotion_gate_summary(summary)
     summary["suitable_for_production_self_learning"] = summary["engine_verdict"] == "PASS" and summary["promotion_gate"]["passed"]
 
-    engine_dir = tmp_path / "exp2"
+    engine_dir = tmp_path / "exp3"
     engine_dir.mkdir()
     module._json_dump(engine_dir / "summary.json", summary)
     module._write_engine_report(engine_dir, summary)
@@ -498,4 +843,4 @@ def test_live_learning_validation_minimal_gate_failure_fixture_writes_consistent
     assert "Stochastic Auxiliary Game Benchmark" in engine_md
     assert "strength_evidence: `False`" in engine_md
     assert "目前沒有足夠證據證明 retrain 改善了該錯誤" in engine_md
-    assert module._report_consistency_issues(root_json, [engine_json], root_md, {"exp2": engine_md}) == []
+    assert module._report_consistency_issues(root_json, [engine_json], root_md, {"exp3": engine_md}) == []

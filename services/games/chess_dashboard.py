@@ -31,7 +31,7 @@ def _pipeline_defaults() -> dict:
             "seed_train": "python3 scripts/games/chess_seed_train.py --preset warmup10",
             "exp3_refine": f"python3 scripts/games/chess_exp3_dataset_train.py --input-jsonl {train_path}",
             "benchmark": "python3 scripts/games/chess_self_play_train.py --exp1-games 0 --exp2-games 0 --exp3-games 0 --exp4-games 0 --hard-exp1-games 0 --hard-exp2-games 0 --hard-exp3-games 0 --hard-exp4-games 0 --cross-games 0 --cross-exp1-exp3-games 0 --cross-exp2-exp3-games 0 --cross-exp1-exp4-games 0 --cross-exp2-exp4-games 0 --cross-exp3-exp4-games 0 --benchmark-rounds 1 --smoke-games-per-pair 1",
-            "full_pipeline": "python3 scripts/games/chess_train_pipeline.py --preset standard --include-exp2 --include-quarantine --promote-engines 'experiment 2:nn,experiment 3:dl,experiment 4:pv'",
+            "full_pipeline": "python3 scripts/games/chess_train_pipeline.py --preset standard --include-quarantine --promote-engines 'experiment 3:dl,experiment 4:pv'",
         },
     }
 
