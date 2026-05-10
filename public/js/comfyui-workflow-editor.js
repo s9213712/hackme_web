@@ -558,6 +558,7 @@
     renderEdges();
     renderInspector();
     renderConnectionPanel();
+    renderValidationPanel();
     renderJson();
     const badges = $("summaryBadges");
     if (badges) {
@@ -577,7 +578,76 @@
     return []
       .concat(workflow.warnings || [])
       .concat(workflow.edges.map((edge) => edge.warning || "").filter(Boolean))
+      .concat(workflowValidationIssues().filter((item) => item.level !== "info").map((item) => item.message))
       .filter(Boolean);
+  }
+
+  function workflowValidationIssues() {
+    const issues = [];
+    const classes = new Set(workflow.nodes.map((node) => isUnknownNode(node) ? node.originalType : node.type));
+    const models = collectRequiredModels();
+    models.forEach((item) => {
+      if (!String(item.name || "").trim()) {
+        issues.push({ level: "warn", message: `${item.kind} 模型尚未指定名稱。` });
+      }
+    });
+    workflow.nodes.filter(isUnknownNode).forEach((node) => {
+      issues.push({ level: "warn", message: `Custom node 需要 ComfyUI object_info 驗證：${node.originalType || node.label}` });
+    });
+    if (!classes.has("SaveImage")) {
+      issues.push({ level: "warn", message: "workflow 沒有 SaveImage 節點，執行後可能沒有可保存的輸出。" });
+    }
+    if (!workflow.edges.length && workflow.nodes.length > 1) {
+      issues.push({ level: "warn", message: "目前沒有線路，節點可能不會形成可執行 workflow。" });
+    }
+    workflow.nodes.forEach((node) => {
+      const def = nodeDef(node);
+      Object.entries(def?.inputs || {}).forEach(([key, spec]) => {
+        if (spec.type === "link") {
+          const hasEdge = workflow.edges.some((edge) => edge.to === node.id && edge.input === key);
+          if (!hasEdge) issues.push({ level: "info", message: `${node.label || node.id}.${key} 尚未接線。` });
+        }
+      });
+    });
+    if (!workflow.project_version) issues.push({ level: "info", message: "未記錄本專案版本；保存時主頁可補上。" });
+    if (!workflow.comfyui_version) issues.push({ level: "info", message: "未記錄 ComfyUI 版本；跨機器匯入時建議補上。" });
+    return issues;
+  }
+
+  function renderValidationPanel() {
+    const panel = $("validationPanel");
+    const badge = $("validationBadge");
+    if (!panel) return;
+    const issues = workflowValidationIssues();
+    const blocking = issues.filter((item) => item.level === "warn");
+    if (badge) {
+      badge.textContent = blocking.length ? `${blocking.length} warn` : "ready";
+      badge.className = `badge ${blocking.length ? "warn" : "ok"}`;
+    }
+    const models = collectRequiredModels();
+    const customNodes = workflow.nodes.filter(isUnknownNode);
+    panel.innerHTML = `
+      <div class="dependency-list">
+        <div class="dependency-row">
+          <strong>模型依賴</strong>
+          <span>${models.length ? html(models.map((item) => `${item.kind}:${item.name || "(未指定)"}`).join("、")) : "目前沒有已填名稱的模型依賴"}</span>
+        </div>
+        <div class="dependency-row">
+          <strong>Custom nodes</strong>
+          <span>${customNodes.length ? html(customNodes.map((node) => node.originalType || node.label).join("、")) : "未偵測到 placeholder"}</span>
+        </div>
+        <div class="dependency-row">
+          <strong>版本</strong>
+          <span>project ${html(workflow.project_version || "-")} · ComfyUI ${html(workflow.comfyui_version || "-")} · schema ${html(workflow.workflow_schema_version || "1")}</span>
+        </div>
+      </div>
+      ${issues.length ? `
+        <div class="validation-issue-list">
+          ${issues.slice(0, 12).map((item) => `<div class="${item.level === "warn" ? "warn" : "info"}">${html(item.message)}</div>`).join("")}
+          ${issues.length > 12 ? `<div class="info">另 ${html(String(issues.length - 12))} 個提示</div>` : ""}
+        </div>
+      ` : '<div class="empty">目前沒有發現依賴或結構提醒。</div>'}
+    `;
   }
 
   function renderNodes() {

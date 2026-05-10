@@ -156,6 +156,9 @@ def main() -> int:
                 unknown_import_path = handle.name
             page.locator("#importJsonFile").set_input_files(unknown_import_path)
             page.locator('.wf-node.unknown:has-text("Custom Magic")').wait_for(state="visible", timeout=5000)
+            validation_text = page.locator("#validationPanel").inner_text(timeout=5000)
+            if "CustomMagicNode" not in validation_text:
+                raise AssertionError(f"validation panel did not report custom node dependency: {validation_text!r}")
             unknown_export = json.loads(page.locator("#jsonOut").input_value())
             class_types = {node["class_type"] for node in unknown_export["workflow_json"].values()}
             if "CustomMagicNode" not in class_types:

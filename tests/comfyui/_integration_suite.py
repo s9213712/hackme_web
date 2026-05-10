@@ -3959,10 +3959,15 @@ def test_comfyui_frontend_is_wired():
     assert 'data-add-node="ImagePadForOutpaint"' in visual_editor_html
     assert 'data-add-node="ControlNetApplyAdvanced"' in visual_editor_html
     assert 'id="importJsonFile"' in visual_editor_html
+    assert 'id="validationPanel"' in visual_editor_html
+    assert 'id="validationBadge"' in visual_editor_html
     assert 'data-port-node="' in visual_editor_js
     assert "const INPUT_KEY = \"hackme_comfyui_workflow_editor_input\";" in visual_editor_js
     assert "function stateFromPackage(payload)" in visual_editor_js
     assert "function importJsonFile(event)" in visual_editor_js
+    assert "function workflowValidationIssues()" in visual_editor_js
+    assert "function renderValidationPanel()" in visual_editor_js
+    assert "Custom node 需要 ComfyUI object_info 驗證" in visual_editor_js
     assert "const UNKNOWN_NODE_TYPE = \"__UnknownCustomNode__\";" in visual_editor_js
     assert "function isUnknownNode(node)" in visual_editor_js
     assert "function unknownInputSpecs(rawInputs = {})" in visual_editor_js
@@ -3976,6 +3981,8 @@ def test_comfyui_frontend_is_wired():
     assert ".edge-path.warn" in visual_editor_css
     assert ".edge-list-row" in visual_editor_css
     assert ".wf-node.unknown" in visual_editor_css
+    assert ".dependency-list" in visual_editor_css
+    assert ".validation-issue-list" in visual_editor_css
     assert ".port.output.connecting" in visual_editor_css
     assert ".port.input.compatible" in visual_editor_css
     assert "function bindComfyuiAdvancedUi()" in comfyui_js
