@@ -605,8 +605,19 @@ if (typeof bindAuthRecoveryControls === "function") bindAuthRecoveryControls();
       if (typeof forceIdleTimeoutLogout === "function") await forceIdleTimeoutLogout();
       return;
     }
+    let hasSessionHint = false;
+    try {
+      hasSessionHint = localStorage.getItem(AUTH_SESSION_HINT_STORAGE_KEY) === "1";
+    } catch (_) {}
+    if (!hasSessionHint) return;
     const res = await safeFetch(API + "/me", { credentials: "same-origin" });
     const json = await res.json().catch(() => ({}));
-    if (json.ok) setAuthState(json);
+    if (json.ok) {
+      setAuthState(json);
+    } else if (res.status === 401) {
+      try {
+        localStorage.removeItem(AUTH_SESSION_HINT_STORAGE_KEY);
+      } catch (_) {}
+    }
   } catch (_) { /* 網路問題或 timeout，不影響操作 */ }
 })();

@@ -237,6 +237,7 @@ function askDriveUploadPrivacyOptions({ allowE2ee = true, title = "選擇隱私�
       confirmBtn.removeEventListener("click", onConfirm);
       cancelBtn.removeEventListener("click", onCancel);
       overlay.removeEventListener("click", onOverlayClick);
+      document.removeEventListener("keydown", onKeyDown);
       radios.forEach((radio) => radio.removeEventListener("change", sync));
       overlay.classList.remove("show");
       overlay.setAttribute("aria-hidden", "true");
@@ -246,6 +247,9 @@ function askDriveUploadPrivacyOptions({ allowE2ee = true, title = "選擇隱私�
     const onCancel = () => cleanup(null);
     const onOverlayClick = (event) => {
       if (event.target === overlay) cleanup(null);
+    };
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") cleanup(null);
     };
     const onConfirm = () => {
       const privacyMode = selectedMode();
@@ -281,9 +285,14 @@ function askDriveUploadPrivacyOptions({ allowE2ee = true, title = "選擇隱私�
     confirmBtn.addEventListener("click", onConfirm);
     cancelBtn.addEventListener("click", onCancel);
     overlay.addEventListener("click", onOverlayClick);
+    document.addEventListener("keydown", onKeyDown);
     overlay.classList.add("show");
     overlay.setAttribute("aria-hidden", "false");
     document.body.classList.add("modal-open");
+    setTimeout(() => {
+      const checked = radios.find((radio) => radio.checked && !radio.disabled);
+      (checked || confirmBtn).focus?.();
+    }, 0);
   });
 }
 

@@ -139,9 +139,9 @@ Evidence: pytest temp copy kept at `/tmp/hackme_web_pytest_IlP8ja/hackme_web`
 
 - `QA-20260511-CHAOS-001`: Fixed in `8b2061b`. Trading quantity `<= 0` is blocked in the frontend with a visible message before the order request is sent.
 - `QA-20260511-CHAOS-002`: No code fix needed from this report. The later full-feature probe confirmed the failure was caused by checking shared playback before password unlock; unlocked shared HLS playback passed.
-- `QA-20260511-CHAOS-003`: Not fixed. The advanced JSON textarea is still inside a collapsed/details debugging area by design; the main intended path is the visual node/line workflow builder. A separate UX decision is needed if raw JSON must be directly visible by default.
-- `QA-20260511-CHAOS-004`: Not fixed. Upload mode overlay interception remains a UX follow-up.
+- `QA-20260511-CHAOS-003`: Fixed in the follow-up fine-detail patch. The advanced JSON/debug details block is now open by default, so the workflow JSON textarea is measurable and directly editable when the user chooses the advanced path.
+- `QA-20260511-CHAOS-004`: Fixed in the follow-up fine-detail patch. The upload mode dialog is now an explicit modal dialog with higher stacking priority, clearer blocking text, keyboard focus, and Esc/backdrop cancel behavior.
 - `QA-20260511-CHAOS-005`: Fixed in `8b2061b`. `/api/comfyui/models` now returns a 200 degraded/offline payload instead of 503 when ComfyUI is unavailable.
 - `QA-20260511-CHAOS-006`: Fixed in `8b2061b`. ComfyUI async audit ordering and ComfyUI frontend cache-bust snapshot were updated.
 
-Current status: **PARTIAL**, because the UX-only ComfyUI raw JSON visibility and upload overlay findings remain open.
+Current status: **FIXED for all confirmed findings in this report**.

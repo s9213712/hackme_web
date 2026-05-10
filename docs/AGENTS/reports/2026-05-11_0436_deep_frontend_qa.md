@@ -95,8 +95,8 @@ Evidence:
 
 ## Fix Status - 2026-05-11
 
-- `QA-20260511-001`: Partially fixed in `8b2061b`. App action bar buttons and sidebar toggle were raised to a 44px touch target baseline. Dense account table row actions still need a separate UX pass if strict 44px row controls are required.
-- `QA-20260511-002`: Partially fixed in `8b2061b`. `/api/comfyui/models` now returns a 200 degraded/offline payload when ComfyUI is unavailable. The unauthenticated `/api/me` 401 remains an expected auth probe and should be treated as QA noise unless product wants a separate unauthenticated status endpoint.
-- `QA-20260511-003`: Not fixed. Normal-user icon-only sidebar discoverability remains a UX follow-up.
+- `QA-20260511-001`: Fixed across `8b2061b` and the follow-up fine-detail patch. App action bar buttons, sidebar toggle, and dense account table row actions now use a 44px touch target baseline.
+- `QA-20260511-002`: Fixed across `8b2061b` and the follow-up fine-detail patch. `/api/comfyui/models` now returns a 200 degraded/offline payload when ComfyUI is unavailable, and the unauthenticated startup path skips `/api/me` unless the browser has a local authenticated-session hint.
+- `QA-20260511-003`: Fixed in the follow-up fine-detail patch. Sidebar collapsed state is now role-scoped, so a root/manager collapsed sidebar preference no longer makes a normal user's first desktop session icon-only by default.
 
-Current status: **PARTIAL**, not all findings in this report are fully closed.
+Current status: **FIXED for all confirmed findings in this report**.

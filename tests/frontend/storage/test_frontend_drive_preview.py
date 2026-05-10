@@ -327,7 +327,8 @@ def test_album_viewer_has_dedicated_module():
     assert "server-connection-light" not in index_html
     assert "startClock" not in core_js
     assert "SIDEBAR_COLLAPSED_STORAGE_KEY" in core_js
-    assert "localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY" in core_js
+    assert "function sidebarCollapsedStorageKey()" in core_js
+    assert "localStorage.setItem(sidebarCollapsedStorageKey()" in core_js
     assert "data-sidebar-action" in core_js
     assert 'switchModuleTab("albums")' in bootstrap_js
     assert "sidebarToggle.addEventListener" in bootstrap_js

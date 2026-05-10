@@ -4154,6 +4154,22 @@
       font-weight: 600;
     }
 
+    .user-table .action {
+      align-items: center;
+      gap: .5rem;
+    }
+
+    .user-table .action .btn,
+    .user-table .action select {
+      min-width: 2.75rem;
+      min-height: 2.75rem;
+    }
+
+    .user-table .action .btn {
+      padding: .5rem .72rem;
+      white-space: nowrap;
+    }
+
     .user-edit-overlay {
       position: fixed;
       inset: 0;
@@ -4162,7 +4178,7 @@
       justify-content: center;
       padding: 1.2rem;
       background: rgba(0,0,0,.58);
-      z-index: 20;
+      z-index: 1000;
       overflow: auto;
     }
 

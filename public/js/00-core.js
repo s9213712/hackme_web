@@ -35,6 +35,7 @@ let chatPollTimer = null;
 const CHAT_POLL_MS = 2500;
 const DEFAULT_INACTIVITY_LOGOUT_MS = 10 * 60 * 1000;
 const IDLE_TIMEOUT_LOGOUT_STORAGE_KEY = "hackme_web.idle_timeout_logout_pending";
+const AUTH_SESSION_HINT_STORAGE_KEY = "hackme_web.auth.session_hint";
 let inactivityLogoutMs = DEFAULT_INACTIVITY_LOGOUT_MS;
 let inactivityTimer = null;
 let inactivityCountdownTimer = null;
@@ -272,15 +273,20 @@ function setSidebarCollapsed(collapsed) {
     toggle.textContent = isMobile ? (collapsed ? "☰" : "×") : "‹";
   }
   try {
-    localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, collapsed ? "1" : "0");
+    localStorage.setItem(sidebarCollapsedStorageKey(), collapsed ? "1" : "0");
   } catch (err) {}
   updateSidebarActiveState();
+}
+
+function sidebarCollapsedStorageKey() {
+  const roleKey = currentRole || "guest";
+  return `${SIDEBAR_COLLAPSED_STORAGE_KEY}.${roleKey}`;
 }
 
 function restoreSidebarState() {
   let collapsed = typeof window !== "undefined" && window.matchMedia && window.matchMedia("(max-width: 860px)").matches;
   try {
-    const stored = localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY);
+    const stored = localStorage.getItem(sidebarCollapsedStorageKey());
     if (stored !== null) collapsed = stored === "1";
   } catch (err) {}
   setSidebarCollapsed(collapsed);
@@ -1239,6 +1245,9 @@ function setAuthState(json, showLoginHero = false) {
   currentRole = json.role || "user";
   currentRoleLabel = json.role_label || currentRole || "user";
   currentMustChangePassword = !!json.must_change_password;
+  try {
+    localStorage.setItem(AUTH_SESSION_HINT_STORAGE_KEY, "1");
+  } catch (err) {}
   const idleMinutes = Number(json.session_idle_timeout_minutes ?? 10);
   inactivityLogoutMs = idleMinutes > 0 ? Math.max(1, idleMinutes) * 60 * 1000 : 0;
   if (inactivityLogoutMs > 0) resetInactivityTimer();
@@ -1411,6 +1420,9 @@ function setAuthState(json, showLoginHero = false) {
 
 function resetAuthState() {
   showLoginScreen();
+  try {
+    localStorage.removeItem(AUTH_SESSION_HINT_STORAGE_KEY);
+  } catch (err) {}
   clearUserAppearanceConfig();
   currentUser = null;
   currentUserId = null;
