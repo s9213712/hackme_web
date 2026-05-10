@@ -245,13 +245,28 @@ def _move_memory_bias(model: dict, board: chess.Board, side: str, move_uci: str)
         return 0.0
 
 
-def _invariance_memory_key(side: str, move_uci: str) -> str:
-    return f"{side}|{move_uci}"
+def _invariance_context_key(board: chess.Board, side: str) -> str:
+    central_files = "cdef"
+    central_ranks = range(2, 7)
+    pawns = []
+    for file_name in central_files:
+        for rank in central_ranks:
+            square = chess.parse_square(f"{file_name}{rank}")
+            piece = board.piece_at(square)
+            if piece and piece.piece_type == chess.PAWN:
+                color = "w" if piece.color == chess.WHITE else "b"
+                pawns.append(f"{color}{file_name}{rank}")
+    castling = str(board.castling_rights)
+    return f"{side}|turn={board.turn}|castle={castling}|pawns={','.join(pawns)}"
 
 
-def _invariance_memory_bias(model: dict, side: str, move_uci: str) -> float:
+def _invariance_memory_key(board: chess.Board, side: str, move_uci: str) -> str:
+    return f"{_invariance_context_key(board, side)}|{move_uci}"
+
+
+def _invariance_memory_bias(model: dict, board: chess.Board, side: str, move_uci: str) -> float:
     try:
-        return float((model.get("policy_invariance_memory") or {}).get(_invariance_memory_key(side, move_uci)) or 0.0)
+        return float((model.get("policy_invariance_memory") or {}).get(_invariance_memory_key(board, side, move_uci)) or 0.0)
     except Exception:
         return 0.0
 
@@ -263,9 +278,9 @@ def _update_move_memory(model: dict, board: chess.Board, side: str, move: chess.
     memory[key] = _clip(current + _MOVE_MEMORY_LEARNING_RATE * float(target), -_MAX_MOVE_MEMORY_BIAS, _MAX_MOVE_MEMORY_BIAS)
 
 
-def _update_invariance_memory(model: dict, side: str, move: chess.Move, target: float) -> None:
+def _update_invariance_memory(model: dict, board: chess.Board, side: str, move: chess.Move, target: float) -> None:
     memory = model.setdefault("policy_invariance_memory", {})
-    key = _invariance_memory_key(side, move.uci())
+    key = _invariance_memory_key(board, side, move.uci())
     current = float(memory.get(key) or 0.0)
     memory[key] = _clip(
         current + _INVARIANCE_MEMORY_LEARNING_RATE * float(target),
@@ -394,7 +409,7 @@ def _score_candidate_move(board: chess.Board, move: chess.Move, side: str, model
         dl_score = _clip(
             dl_score
             + _move_memory_bias(model, before, side, move.uci())
-            + _invariance_memory_bias(model, side, move.uci()),
+            + _invariance_memory_bias(model, before, side, move.uci()),
             -1.0,
             1.0,
         )
@@ -816,7 +831,7 @@ def _train_from_replay(model: dict, replay_entries: list[dict]) -> dict:
                 negative_after.push(negative)
                 _update_move_memory(model, board, side, negative, _CONTRASTIVE_NEGATIVE_TARGET)
                 if sample.get("invariance_group_id"):
-                    _update_invariance_memory(model, side, negative, _CONTRASTIVE_NEGATIVE_TARGET)
+                    _update_invariance_memory(model, board, side, negative, _CONTRASTIVE_NEGATIVE_TARGET)
                     stats["invariance_negative_updates"] += 1
                 _train_single_sample(
                     model,
@@ -830,7 +845,7 @@ def _train_from_replay(model: dict, replay_entries: list[dict]) -> dict:
             for _reinforce in range(8):
                 _update_move_memory(model, board, side, expected_move, 1.0)
                 if sample.get("invariance_group_id"):
-                    _update_invariance_memory(model, side, expected_move, 1.0)
+                    _update_invariance_memory(model, board, side, expected_move, 1.0)
                     stats["invariance_positive_updates"] += 1
                 _train_single_sample(model, sample["features"], 1.0, 0.8)
                 stats["expected_reinforcement_updates"] += 1
