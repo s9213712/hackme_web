@@ -3897,6 +3897,14 @@ async function loadSettings() {
   if ($("s-comfyui-api-host")) $("s-comfyui-api-host").value = s.comfyui_api_host || "localhost";
   if ($("s-comfyui-api-port")) $("s-comfyui-api-port").value = s.comfyui_api_port || 8192;
   if ($("s-comfyui-civitai-api-key")) $("s-comfyui-civitai-api-key").value = s.comfyui_civitai_api_key || "";
+  if ($("s-comfyui-paid-api-nodes-enabled")) $("s-comfyui-paid-api-nodes-enabled").checked = !!s.comfyui_paid_api_nodes_enabled;
+  if ($("s-comfyui-account-api-key")) $("s-comfyui-account-api-key").value = "";
+  if ($("s-comfyui-account-api-key-clear")) $("s-comfyui-account-api-key-clear").checked = false;
+  if ($("comfyui-account-api-key-state")) {
+    $("comfyui-account-api-key-state").textContent = s.comfyui_account_api_key_configured
+      ? "目前已儲存 ComfyUI Account API Key；留空儲存不會變更。"
+      : "目前未儲存 ComfyUI Account API Key。";
+  }
   updateComfyuiConnectionModeFields();
   if ($("s-comfyui-max-batch-size")) $("s-comfyui-max-batch-size").value = s.comfyui_max_batch_size || 1;
   if ($("s-comfyui-default-width")) $("s-comfyui-default-width").value = s.comfyui_default_width || 1024;
@@ -5550,6 +5558,9 @@ async function saveSettings() {
     comfyui_api_host: ($("s-comfyui-api-host")?.value || "localhost").trim(),
     comfyui_api_port: parseInt($("s-comfyui-api-port")?.value || "8192"),
     comfyui_civitai_api_key: ($("s-comfyui-civitai-api-key")?.value || "").trim(),
+    comfyui_paid_api_nodes_enabled: !!$("s-comfyui-paid-api-nodes-enabled")?.checked,
+    comfyui_account_api_key: ($("s-comfyui-account-api-key")?.value || "").trim(),
+    comfyui_account_api_key_clear: !!$("s-comfyui-account-api-key-clear")?.checked,
     comfyui_max_batch_size: parseInt($("s-comfyui-max-batch-size")?.value || "1"),
     comfyui_default_width: parseInt($("s-comfyui-default-width")?.value || "1024"),
     comfyui_default_height: parseInt($("s-comfyui-default-height")?.value || "1024"),
