@@ -122,6 +122,9 @@ def main() -> int:
                 raise AssertionError("catalog node class_type was not exported")
             if "16:9" not in json.dumps(catalog_export["workflow_json"], ensure_ascii=False):
                 raise AssertionError("catalog node field edit was not exported")
+            catalog_custom_nodes = {node["class_type"]: node for node in catalog_export.get("required_custom_nodes", [])}
+            if not catalog_custom_nodes.get("FluxProUltraImageNode", {}).get("paid_api_required"):
+                raise AssertionError(f"catalog API node was not exported as a paid required custom node: {catalog_custom_nodes}")
 
             drag_between(
                 page,
@@ -224,6 +227,9 @@ def main() -> int:
             class_types = {node["class_type"] for node in unknown_export["workflow_json"].values()}
             if "CustomMagicNode" not in class_types:
                 raise AssertionError(f"unknown custom node class_type was not preserved: {class_types}")
+            custom_requirements = {node["class_type"] for node in unknown_export.get("required_custom_nodes", [])}
+            if "CustomMagicNode" not in custom_requirements:
+                raise AssertionError(f"unknown custom node was not exported as a required custom node: {custom_requirements}")
 
             mobile_page = browser.new_page(viewport={"width": 390, "height": 844})
             mobile_page.goto(f"http://127.0.0.1:{port}/comfyui-workflow-editor.html", wait_until="networkidle")

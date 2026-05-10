@@ -552,7 +552,7 @@
       workflow_json: prompt,
       layout_json: layout,
       required_models: collectRequiredModels(),
-      required_custom_nodes: [],
+      required_custom_nodes: collectRequiredCustomNodes(),
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
@@ -604,6 +604,23 @@
       if (node.type === "VAELoader" && node.inputs.vae_name) models.push({ kind: "vae", name: node.inputs.vae_name });
     });
     return models;
+  }
+
+  function collectRequiredCustomNodes() {
+    const seen = new Set();
+    const items = [];
+    workflow.nodes.filter(isUnknownNode).forEach((node) => {
+      const classType = String(node.originalType || "").trim();
+      if (!classType || classType === "UnknownCustomNode" || seen.has(classType)) return;
+      seen.add(classType);
+      items.push({
+        class_type: classType,
+        display_name: node.label || classType,
+        category: node.catalogCategory || "",
+        paid_api_required: !!node.paidApiRequired || nodeLooksLikePaidApi(node),
+      });
+    });
+    return items;
   }
 
   function setStatus(message, good = true) {

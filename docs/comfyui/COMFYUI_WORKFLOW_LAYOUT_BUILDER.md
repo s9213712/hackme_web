@@ -55,6 +55,10 @@ can be added directly to the node graph. Non-link inputs render as normal form
 controls where possible, so users do not need to edit JSON for common fields.
 Link inputs still connect through the node/line UI.
 
+Catalog and imported custom nodes are exported in `required_custom_nodes` with
+their `class_type`, display name, category, and paid/API flag. This lets another
+server warn users about missing custom node packages before execution.
+
 ## Import JSON
 
 The importer accepts either raw ComfyUI workflow JSON or the project wrapped
