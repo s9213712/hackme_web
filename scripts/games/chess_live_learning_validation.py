@@ -195,10 +195,12 @@ QUICK_RETRAIN_MIN_CASES_PER_CATEGORY = 3
 SANITY_LEARNING_VARIANT_COUNT = 6
 SANITY_SEEN_VARIANT_PASS_THRESHOLD = 0.8
 SANITY_UNSEEN_VARIANT_PASS_THRESHOLD = 0.5
+SANITY_FINAL_DECISION_GENERALIZATION_THRESHOLD = 0.5
 SANITY_EASY_VARIANT_COUNT = 3
 SANITY_MEDIUM_VARIANT_COUNT = 3
 SANITY_HARD_VARIANT_COUNT = 6
 SANITY_VARIANT_DIFFICULTY_PAIRS = {"easy": 1, "medium": 2, "hard": 3}
+FUSION_MODES = ("strict_search", "balanced_fusion", "policy_preferred")
 DETERMINISTIC_STRENGTH_CASES = (
     {
         "case_id": "opening_develop_white",
@@ -1594,13 +1596,35 @@ def _evaluate_move_agreement(engine_alias: str, model_path: Path, samples: list[
     }
 
 
-def _choose_engine_move_for_eval(engine_alias: str, board_state: dict, side: str, model_path: Path) -> dict | None:
+def _choose_engine_move_for_eval(
+    engine_alias: str,
+    board_state: dict,
+    side: str,
+    model_path: Path,
+    *,
+    fusion_mode: str = "balanced_fusion",
+    decision_context: dict | None = None,
+) -> dict | None:
     if engine_alias == "exp1":
         return choose_computer_move(board_state, side, EXPERIMENT_DIFFICULTY, learning_store=ChessExperimentStore(db_path=model_path))
     if engine_alias == "exp3":
-        return choose_experiment_dl_move(board_state, side, model_path=model_path, search_profile="fast")
+        return choose_experiment_dl_move(
+            board_state,
+            side,
+            model_path=model_path,
+            search_profile="fast",
+            fusion_mode=fusion_mode,
+            decision_context=decision_context,
+        )
     if engine_alias == "exp4":
-        return choose_experiment_pv_move(board_state, side, model_path=model_path, search_profile="fast")
+        return choose_experiment_pv_move(
+            board_state,
+            side,
+            model_path=model_path,
+            search_profile="fast",
+            fusion_mode=fusion_mode,
+            decision_context=decision_context,
+        )
     return None
 
 
@@ -1706,6 +1730,7 @@ def _evaluate_deterministic_strength_snapshot(
     depth: int = DETERMINISTIC_STRENGTH_DEPTH,
     nodes: int = DETERMINISTIC_STRENGTH_MAX_NODES,
     time_limit_ms: int = DETERMINISTIC_STRENGTH_TIME_LIMIT_MS,
+    fusion_mode: str = "balanced_fusion",
 ) -> dict:
     model_meta = _model_meta(model_path)
     rows = []
@@ -1715,7 +1740,14 @@ def _evaluate_deterministic_strength_snapshot(
         expected = [str(move).lower() for move in (case.get("expected_best_moves") or [])]
         board_state = {"__fen__": fen}
         started = time.perf_counter()
-        move = _choose_engine_move_for_eval(engine_alias, board_state, side, model_path)
+        move = _choose_engine_move_for_eval(
+            engine_alias,
+            board_state,
+            side,
+            model_path,
+            fusion_mode=fusion_mode,
+            decision_context={"variant_difficulty": str(case.get("variant_difficulty") or ""), "prior_retention_stable": True, "deterministic_confidence": 0.75},
+        )
         think_ms = round((time.perf_counter() - started) * 1000.0, 3)
         top1 = _move_uci_from_engine_move(move)
         top3 = _rank_deterministic_top3(engine_alias, board_state, side, model_path, move)
@@ -1751,6 +1783,7 @@ def _evaluate_deterministic_strength_snapshot(
                 "nodes": int(nodes),
                 "time_limit_ms": int(time_limit_ms),
                 "think_ms": think_ms,
+                "fusion_mode": str(fusion_mode or "balanced_fusion"),
             }
         )
     aggregate = _aggregate_deterministic_strength(rows)
@@ -1762,6 +1795,7 @@ def _evaluate_deterministic_strength_snapshot(
         "depth": int(depth),
         "nodes": int(nodes),
         "time_limit_ms": int(time_limit_ms),
+        "fusion_mode": str(fusion_mode or "balanced_fusion"),
         "cases": rows,
         "aggregate": aggregate,
     }
@@ -1864,8 +1898,133 @@ def _policy_override_audit(engine_alias: str, model_path: Path, cases: list[dict
         "override_usage_count": used_count,
         "override_cases": [row for row in rows if row.get("override_used")],
         "all_case_override_decisions": rows,
+        "override_success_rate": round(
+            sum(1 for row in rows if row.get("override_used") and row.get("override_move") == row.get("chosen_move")) / max(1, used_count),
+            4,
+        ) if used_count else 0.0,
+        "override_regression_rate": round(len(regression_reasons) / max(1, used_count), 4) if used_count else 0.0,
         "regression_reasons": regression_reasons,
         "passed": not regression_reasons,
+    }
+
+
+def _fusion_mode_variant_rate(engine_alias: str, model_path: Path, variants: list[dict], *, fusion_mode: str) -> dict:
+    rows = []
+    hits = 0
+    overrides = 0
+    disagreements = 0
+    for variant in (variants or [])[:SANITY_LEARNING_VARIANT_COUNT]:
+        side = str(variant.get("side") or "white")
+        expected = str(variant.get("expected_move") or "").lower()
+        board_state = {"__fen__": str(variant.get("fen") or "")}
+        context = {
+            "variant_difficulty": str(variant.get("variant_difficulty") or ""),
+            "prior_retention_stable": True,
+            "deterministic_confidence": 0.75,
+        }
+        move = _choose_engine_move_for_eval(
+            engine_alias,
+            board_state,
+            side,
+            model_path,
+            fusion_mode=fusion_mode,
+            decision_context=context,
+        )
+        top1 = _move_uci_from_engine_move(move)
+        raw = _evaluate_engine_raw_policy_position(engine_alias, model_path, variant, old_move=top1)
+        raw_top = str(raw.get("raw_policy_top1") or "")
+        override_applied = bool(str(fusion_mode) != "strict_search" and raw_top and raw_top == top1)
+        overrides += 1 if override_applied else 0
+        disagreements += 1 if raw_top and raw_top != top1 else 0
+        hits += 1 if top1 == expected else 0
+        rows.append(
+            {
+                "case_id": variant.get("case_id"),
+                "variant_split": variant.get("variant_split"),
+                "variant_difficulty": variant.get("variant_difficulty"),
+                "expected_move": expected,
+                "top1": top1,
+                "raw_policy_top1": raw_top,
+                "override_applied": override_applied,
+                "override_reason": "bounded_fusion_mode_probe",
+                "policy_search_disagreement": bool(raw_top and raw_top != top1),
+                "expected_rank": raw.get("expected_rank"),
+                "expected_margin_vs_old_move": raw.get("margin_vs_old_move"),
+            }
+        )
+    total = len(rows)
+    return {
+        "case_count": total,
+        "final_decision_generalization_rate": round(hits / max(1, total), 4),
+        "override_usage_count": overrides,
+        "override_success_rate": round(hits / max(1, overrides), 4) if overrides else 0.0,
+        "policy_search_disagreement_rate": round(disagreements / max(1, total), 4),
+        "cases": rows,
+    }
+
+
+def _fusion_mode_comparison(
+    *,
+    engine_alias: str,
+    model_path: Path,
+    deterministic_cases: list[dict],
+    deterministic_report: dict,
+    checkpoints: list[dict],
+    seed: int,
+) -> dict:
+    baseline_final = deterministic_report.get("final") or {}
+    baseline_tactic = float(((baseline_final.get("category_score") or {}).get("tactic") or {}).get("score") or 0.0)
+    baseline_blunder = float(baseline_final.get("blunder_avoid_rate") or 0.0)
+    final_probe = (checkpoints[-1].get("sanity_learning_probe") if checkpoints else {}) or {}
+    unseen_variants = list(((final_probe.get("unseen_variants") or {}).get("cases") or []))
+    comparison_cases = [
+        case
+        for case in deterministic_cases
+        if str(case.get("category") or "") in {"tactic", "blunder_avoid", "mistake_retention", "human_probe"}
+    ] or deterministic_cases
+    rows = []
+    for mode in FUSION_MODES:
+        snapshot = _evaluate_deterministic_strength_snapshot(
+            engine_alias=engine_alias,
+            model_path=model_path,
+            model_label=f"final:{mode}",
+            cases=comparison_cases,
+            seed=seed,
+            fusion_mode=mode,
+        )
+        aggregate = snapshot.get("aggregate") or {}
+        category = aggregate.get("category_score") or {}
+        variant_rate = _fusion_mode_variant_rate(engine_alias, model_path, unseen_variants, fusion_mode=mode)
+        tactic_score = float((category.get("tactic") or {}).get("score") or 0.0)
+        blunder_rate = float(aggregate.get("blunder_avoid_rate") or 0.0)
+        rows.append(
+            {
+                "fusion_mode": mode,
+                "deterministic_case_count": len(comparison_cases),
+                "deterministic_score": aggregate.get("overall_deterministic_score"),
+                "illegal_rate": aggregate.get("illegal_rate"),
+                "tactic_score": tactic_score,
+                "blunder_avoid_rate": blunder_rate,
+                "tactic_regression": tactic_score < baseline_tactic,
+                "blunder_regression": blunder_rate < baseline_blunder,
+                **variant_rate,
+            }
+        )
+    best = max(rows, key=lambda row: (float(row.get("final_decision_generalization_rate") or 0.0), float(row.get("deterministic_score") or 0.0)), default={})
+    regression_rows = [row for row in rows if row.get("tactic_regression") or row.get("blunder_regression")]
+    return {
+        "supported": True,
+        "selected_gate_mode": "balanced_fusion",
+        "best_mode": best.get("fusion_mode"),
+        "modes": rows,
+        "policy_search_disagreement_rate": float((next((row for row in rows if row.get("fusion_mode") == "balanced_fusion"), {}) or {}).get("policy_search_disagreement_rate") or 0.0),
+        "override_success_rate": float((next((row for row in rows if row.get("fusion_mode") == "balanced_fusion"), {}) or {}).get("override_success_rate") or 0.0),
+        "override_regression_rate": round(len(regression_rows) / max(1, len(rows)), 4),
+        "regression_reasons": [
+            f"{row.get('fusion_mode')} tactic/blunder regression"
+            for row in regression_rows
+        ],
+        "passed": not regression_rows,
     }
 
 
@@ -1873,6 +2032,100 @@ def _clone_deterministic_snapshot(snapshot: dict, *, model_label: str) -> dict:
     cloned = deepcopy(snapshot)
     cloned["model_label"] = model_label
     return cloned
+
+
+def _compact_sanity_probe_for_summary(probe: dict) -> dict:
+    if not probe:
+        return {}
+    compact = {
+        key: probe.get(key)
+        for key in (
+            "supported",
+            "source",
+            "case",
+            "exact_fen_pass",
+            "seen_variant_count",
+            "seen_variant_top1_hits",
+            "seen_variant_pass_rate",
+            "unseen_variant_count",
+            "unseen_variant_top1_hits",
+            "unseen_variant_pass_rate",
+            "easy_unseen_pass_rate",
+            "medium_unseen_pass_rate",
+            "hard_unseen_pass_rate",
+            "variant_difficulty_scores",
+            "raw_policy_generalization_rate",
+            "final_decision_generalization_rate",
+            "variant_count",
+            "variant_top1_hits",
+            "variant_top1_rate",
+            "memorized_exact_fen",
+            "generalized_to_variants",
+            "partial_seen_variants_only",
+            "failed_to_learn",
+            "blocked_by_search_or_static_eval",
+            "result_kind",
+            "learning_signal",
+            "learning_signal_reason",
+            "human_explanation",
+            "not_learning_success_sources",
+        )
+        if key in probe
+    }
+    compact["before_exact"] = probe.get("before_exact") or {}
+    compact["after_exact"] = probe.get("after_exact") or {}
+    compact["raw_policy_learning"] = probe.get("raw_policy_learning") or {}
+    final = dict(probe.get("final_decision_learning") or {})
+    for key in ("decision_breakdown_before", "decision_breakdown_after"):
+        if isinstance(final.get(key), dict):
+            breakdown = final[key]
+            final[key] = {
+                "chosen_move": breakdown.get("chosen_move"),
+                "chosen_reason": breakdown.get("chosen_reason"),
+                "policy_override": breakdown.get("policy_override"),
+                "watched_moves": (breakdown.get("watched_moves") or [])[:3],
+            }
+    compact["final_decision_learning"] = final
+    prior = probe.get("prior_learned_case_retention") or {}
+    compact["prior_learned_case_retention"] = {
+        "supported": prior.get("supported"),
+        "checked_count": prior.get("checked_count"),
+        "retained_count": prior.get("retained_count"),
+        "failed_count": prior.get("failed_count"),
+        "learning_signal": prior.get("learning_signal"),
+        "reason": prior.get("reason"),
+        "failures": (prior.get("failures") or [])[:3],
+    }
+    debug = probe.get("feature_generalization_debug") or {}
+    compact["feature_generalization_debug"] = {
+        "board_embedding_similarity": debug.get("board_embedding_similarity") or {},
+        "expected_move_rank_across_variants": (debug.get("expected_move_rank_across_variants") or [])[:12],
+        "final_decision_blockers": (debug.get("final_decision_blockers") or [])[:6],
+    }
+    return compact
+
+
+def _compact_checkpoint_for_summary(checkpoint: dict) -> dict:
+    compact = deepcopy(checkpoint)
+    if "sanity_learning_probe" in compact:
+        compact["sanity_learning_probe"] = _compact_sanity_probe_for_summary(compact.get("sanity_learning_probe") or {})
+    training = compact.get("sanity_variant_training")
+    if isinstance(training, dict):
+        training["rows"] = []
+        curriculum = training.get("curriculum")
+        if isinstance(curriculum, dict):
+            training["curriculum"] = {
+                "seen_count": len(curriculum.get("seen") or []),
+                "unseen_count": len(curriculum.get("unseen") or []),
+                "by_difficulty": {
+                    key: {
+                        "seen_count": len((value or {}).get("seen") or []),
+                        "unseen_count": len((value or {}).get("unseen") or []),
+                    }
+                    for key, value in (curriculum.get("by_difficulty") or {}).items()
+                },
+            }
+    return compact
 
 
 def _evaluate_fixed_probe_positions(engine_alias: str, model_path: Path) -> dict:
@@ -2328,7 +2581,12 @@ def _evaluate_sanity_learning_position(engine_alias: str, model_path: Path, case
     side = str(case.get("side") or "white")
     expected = str(case.get("expected_move") or "").lower()
     board_state = {"__fen__": fen}
-    move = _choose_engine_move_for_eval(engine_alias, board_state, side, model_path)
+    decision_context = {
+        "variant_difficulty": str(case.get("variant_difficulty") or "exact"),
+        "prior_retention_stable": True,
+        "deterministic_confidence": 0.75,
+    }
+    move = _choose_engine_move_for_eval(engine_alias, board_state, side, model_path, fusion_mode="balanced_fusion", decision_context=decision_context)
     top1 = _move_uci_from_engine_move(move)
     top3 = _rank_deterministic_top3(engine_alias, board_state, side, model_path, move)
     return {
@@ -2423,16 +2681,37 @@ def _evaluate_exp4_raw_policy_position(model_path: Path, case: dict, *, old_move
     return _evaluate_engine_raw_policy_position("exp4", model_path, case, old_move=old_move)
 
 
-def _engine_decision_breakdown(engine_alias: str, model_path: Path, case: dict, *, old_move: str = "") -> dict:
+def _engine_decision_breakdown(engine_alias: str, model_path: Path, case: dict, *, old_move: str = "", fusion_mode: str = "balanced_fusion") -> dict:
     fen = str(case.get("fen") or "")
     side = str(case.get("side") or "white")
     expected = str(case.get("expected_move") or "").lower()
     watched = [move for move in [expected, old_move] if move]
+    decision_context = {
+        "variant_difficulty": str(case.get("variant_difficulty") or "exact"),
+        "prior_retention_stable": True,
+        "deterministic_confidence": 0.75,
+    }
     try:
         if engine_alias == "exp3":
-            return explain_experiment_dl_decision({"__fen__": fen}, side, model_path=model_path, search_profile="fast", watched_moves=watched)
+            return explain_experiment_dl_decision(
+                {"__fen__": fen},
+                side,
+                model_path=model_path,
+                search_profile="fast",
+                watched_moves=watched,
+                fusion_mode=fusion_mode,
+                decision_context=decision_context,
+            )
         if engine_alias == "exp4":
-            return explain_experiment_pv_decision({"__fen__": fen}, side, model_path=model_path, search_profile="fast", watched_moves=watched)
+            return explain_experiment_pv_decision(
+                {"__fen__": fen},
+                side,
+                model_path=model_path,
+                search_profile="fast",
+                watched_moves=watched,
+                fusion_mode=fusion_mode,
+                decision_context=decision_context,
+            )
         return {"supported": False, "reason": f"decision breakdown is not available for {engine_alias}", "expected_move": expected, "old_move": old_move}
     except Exception as exc:
         return {"supported": False, "reason": str(exc), "expected_move": expected, "old_move": old_move}
@@ -3432,9 +3711,17 @@ def _promotion_gate_summary(summary: dict) -> dict:
                 reasons.append(f"sanity unseen variants missing at trusted={trusted}")
             elif float(sanity_probe.get("unseen_variant_pass_rate") or 0.0) < SANITY_UNSEEN_VARIANT_PASS_THRESHOLD:
                 reasons.append(f"sanity unseen variant pass rate below threshold at trusted={trusted}")
+            if float(sanity_probe.get("final_decision_generalization_rate") or 0.0) < SANITY_FINAL_DECISION_GENERALIZATION_THRESHOLD:
+                reasons.append(f"sanity final decision generalization below threshold at trusted={trusted}")
             prior_retention = sanity_probe.get("prior_learned_case_retention") or {}
             if int(prior_retention.get("failed_count") or 0) > 0:
                 reasons.append(f"prior learned sanity case retention regressed at trusted={trusted}")
+    fusion = summary.get("fusion_mode_comparison") or {}
+    if fusion and not fusion.get("passed", True):
+        reasons.extend([f"fusion mode regression: {reason}" for reason in fusion.get("regression_reasons") or []])
+    balanced = next((row for row in fusion.get("modes") or [] if row.get("fusion_mode") == "balanced_fusion"), {})
+    if balanced and float(balanced.get("final_decision_generalization_rate") or 0.0) < SANITY_FINAL_DECISION_GENERALIZATION_THRESHOLD:
+        reasons.append("balanced_fusion final decision generalization below threshold")
     fixture_health = summary.get("replay_fixture_health") or {}
     if fixture_health and not fixture_health.get("passed"):
         reasons.extend([f"replay fixture health failed: {reason}" for reason in fixture_health.get("reasons") or []])
@@ -3602,6 +3889,7 @@ def _root_engine_row(summary: dict) -> dict:
         "benchmark_timeline": (summary.get("before_after_eval") or {}).get("benchmark_timeline") or [],
         "deterministic_strength_snapshot": summary.get("deterministic_strength_snapshot") or {},
         "policy_override_audit": summary.get("policy_override_audit") or {},
+        "fusion_mode_comparison": summary.get("fusion_mode_comparison") or {},
         "stochastic_auxiliary_benchmark": summary.get("stochastic_auxiliary_benchmark") or {},
         "perft": summary.get("perft") or {},
         "retrain_stability_report": summary.get("retrain_stability_report") or {},
@@ -3985,6 +4273,24 @@ def _root_report_lines(root_summary: dict, summaries: list[dict]) -> list[str]:
                 f"final_decision_generalization_rate=`{probe.get('final_decision_generalization_rate')}` "
                 f"variants=`{probe.get('variant_top1_hits')}/{probe.get('variant_count')}` "
                 f"learning_signal=`{probe.get('learning_signal')}` reason=`{probe.get('learning_signal_reason')}`"
+            )
+    lines.extend(["", "## Fusion Mode Comparison", ""])
+    for row in root_summary["engines"]:
+        fusion = row.get("fusion_mode_comparison") or {}
+        if not fusion:
+            lines.append(f"- {row['engine_alias']}: no fusion mode comparison recorded")
+            continue
+        lines.append(
+            f"- {row['engine_alias']}: selected=`{fusion.get('selected_gate_mode')}` best=`{fusion.get('best_mode')}` "
+            f"policy_search_disagreement_rate=`{fusion.get('policy_search_disagreement_rate')}` "
+            f"override_success_rate=`{fusion.get('override_success_rate')}` "
+            f"override_regression_rate=`{fusion.get('override_regression_rate')}`"
+        )
+        for item in fusion.get("modes") or []:
+            lines.append(
+                f"- {row['engine_alias']} {item.get('fusion_mode')}: deterministic=`{item.get('deterministic_score')}` "
+                f"unseen_final_generalization=`{item.get('final_decision_generalization_rate')}` "
+                f"tactic_score=`{item.get('tactic_score')}` blunder_avoid=`{item.get('blunder_avoid_rate')}`"
             )
     lines.extend(["", "## Checkpoint Hash Evidence", ""])
     for row in root_summary["engines"]:
@@ -4757,6 +5063,8 @@ def _write_engine_report(engine_dir: Path, summary: dict) -> None:
                 "## Policy Override Audit",
                 "",
                 f"- override_usage_count: `{override_audit.get('override_usage_count')}`",
+                f"- override_success_rate: `{override_audit.get('override_success_rate')}`",
+                f"- override_regression_rate: `{override_audit.get('override_regression_rate')}`",
                 f"- passed: `{override_audit.get('passed')}`",
             ]
         )
@@ -4769,6 +5077,29 @@ def _write_engine_report(engine_dir: Path, summary: dict) -> None:
                 f"move=`{item.get('override_move')}` margin=`{item.get('margin')}` "
                 f"min_margin=`{thresholds.get('min_margin')}` min_score=`{thresholds.get('min_score')}` "
                 f"reason=`{item.get('override_reason')}`"
+            )
+    fusion = summary.get("fusion_mode_comparison") or {}
+    if fusion:
+        lines.extend(
+            [
+                "",
+                "## Fusion Mode Comparison",
+                "",
+                f"- selected_gate_mode: `{fusion.get('selected_gate_mode')}`",
+                f"- best_mode: `{fusion.get('best_mode')}`",
+                f"- policy_search_disagreement_rate: `{fusion.get('policy_search_disagreement_rate')}`",
+                f"- override_success_rate: `{fusion.get('override_success_rate')}`",
+                f"- override_regression_rate: `{fusion.get('override_regression_rate')}`",
+                f"- passed: `{fusion.get('passed')}`",
+            ]
+        )
+        for item in fusion.get("modes") or []:
+            lines.append(
+                f"- {item.get('fusion_mode')}: deterministic=`{item.get('deterministic_score')}` "
+                f"unseen_final_generalization=`{item.get('final_decision_generalization_rate')}` "
+                f"tactic_score=`{item.get('tactic_score')}` blunder_avoid=`{item.get('blunder_avoid_rate')}` "
+                f"disagreement=`{item.get('policy_search_disagreement_rate')}` "
+                f"override_success=`{item.get('override_success_rate')}`"
             )
     aux = summary.get("stochastic_auxiliary_benchmark") or {}
     lines.extend(
@@ -5637,6 +5968,8 @@ def _run_quick_retrain_gate_validation(
     evaluation_after = _evaluate_move_agreement(engine_alias, after_model_path, evaluation_samples)
     fixed_probes_before = _evaluate_fixed_probe_positions(engine_alias, before_model_path)
     fixed_probes_after = _evaluate_fixed_probe_positions(engine_alias, after_model_path)
+    summary_checkpoints = [_compact_checkpoint_for_summary(checkpoint) for checkpoint in checkpoints]
+    summary_checkpoints = [_compact_checkpoint_for_summary(checkpoint) for checkpoint in checkpoints]
     before_after_eval = {
         "retrain_supported": True,
         "move_agreement_before": evaluation_before,
@@ -5650,7 +5983,7 @@ def _run_quick_retrain_gate_validation(
         ),
         "benchmark_before": _skipped_benchmark_snapshot("stochastic_auxiliary_disabled_by_quick_retrain_gate")["focus"],
         "benchmark_after": _skipped_benchmark_snapshot("stochastic_auxiliary_disabled_by_quick_retrain_gate")["focus"],
-        "checkpoints": checkpoints,
+        "checkpoints": summary_checkpoints,
         "benchmark_timeline": _benchmark_timeline(
             checkpoints,
             baseline_model_hash=before_model_meta["sha256"],
@@ -5694,9 +6027,18 @@ def _run_quick_retrain_gate_validation(
         )
     deterministic_strength = _deterministic_strength_report(deterministic_snapshots)
     policy_override_audit = _policy_override_audit(engine_alias, after_model_path, deterministic_cases, deterministic_strength)
+    fusion_mode_comparison = _fusion_mode_comparison(
+        engine_alias=engine_alias,
+        model_path=after_model_path,
+        deterministic_cases=deterministic_cases,
+        deterministic_report=deterministic_strength,
+        checkpoints=checkpoints,
+        seed=seed,
+    )
     deterministic_eval_seconds = round(time.perf_counter() - deterministic_started, 3)
     _json_dump(engine_dir / "deterministic_strength_snapshot.json", deterministic_strength)
     _json_dump(engine_dir / "policy_override_audit.json", policy_override_audit)
+    _json_dump(engine_dir / "fusion_mode_comparison.json", fusion_mode_comparison)
 
     retrain_result = {
         "retrain_supported": True,
@@ -5708,7 +6050,7 @@ def _run_quick_retrain_gate_validation(
             "trusted_replays": len(records),
             **fixture_write,
         },
-        "checkpoints": checkpoints,
+        "checkpoints": summary_checkpoints,
         "trainer_result": (checkpoints[-1].get("trainer_result") if checkpoints else {}),
     }
     retrain_timing = _checkpoint_timing_summary(checkpoints)
@@ -5753,6 +6095,7 @@ def _run_quick_retrain_gate_validation(
         "before_after_eval": before_after_eval,
         "deterministic_strength_snapshot": deterministic_strength,
         "policy_override_audit": policy_override_audit,
+        "fusion_mode_comparison": fusion_mode_comparison,
         "stochastic_auxiliary_benchmark": {
             "purpose": "sanity signal only; not primary promotion evidence",
             "strength_evidence": False,
@@ -6052,7 +6395,7 @@ def _run_engine_validation(
             "trainer_result": (pipeline_report.get("summary") or {}).get(_trainer_key(engine_alias)) or {},
             "trainer_probe": trainer_probe,
             "candidate_model_path": str(after_model_path),
-            "checkpoints": checkpoints,
+            "checkpoints": [_compact_checkpoint_for_summary(checkpoint) for checkpoint in checkpoints],
             "timing": retrain_timing,
         }
     else:
@@ -6093,7 +6436,7 @@ def _run_engine_validation(
         "probe_position_move_change_count": final_probe_move_change_count,
         "benchmark_before": before_benchmark["focus"] if isinstance(before_benchmark, dict) and before_benchmark.get("focus") else before_benchmark,
         "benchmark_after": after_benchmark["focus"] if isinstance(after_benchmark, dict) and after_benchmark.get("focus") else after_benchmark,
-        "checkpoints": checkpoints,
+        "checkpoints": summary_checkpoints,
         "benchmark_timeline": _benchmark_timeline(
             checkpoints,
             baseline_model_hash=before_model_meta["sha256"],
@@ -6135,8 +6478,17 @@ def _run_engine_validation(
         )
     deterministic_strength = _deterministic_strength_report(deterministic_snapshots)
     policy_override_audit = _policy_override_audit(engine_alias, after_model_path, deterministic_cases, deterministic_strength)
+    fusion_mode_comparison = _fusion_mode_comparison(
+        engine_alias=engine_alias,
+        model_path=after_model_path,
+        deterministic_cases=deterministic_cases,
+        deterministic_report=deterministic_strength,
+        checkpoints=checkpoints,
+        seed=seed,
+    )
     _json_dump(engine_dir / "deterministic_strength_snapshot.json", deterministic_strength)
     _json_dump(engine_dir / "policy_override_audit.json", policy_override_audit)
+    _json_dump(engine_dir / "fusion_mode_comparison.json", fusion_mode_comparison)
     _json_dump(engine_dir / "retrain_result.json", retrain_result)
     _json_dump(engine_dir / "before_after_eval.json", before_after_eval)
 
@@ -6183,6 +6535,7 @@ def _run_engine_validation(
         "before_after_eval": before_after_eval,
         "deterministic_strength_snapshot": deterministic_strength,
         "policy_override_audit": policy_override_audit,
+        "fusion_mode_comparison": fusion_mode_comparison,
         "stochastic_auxiliary_benchmark": {
             "purpose": "sanity signal only; not primary promotion evidence",
             "strength_evidence": False,

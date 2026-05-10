@@ -1033,6 +1033,9 @@ def test_experiment_dl_decision_explain_reports_raw_policy_and_final_scores(tmp_
     assert "raw_policy_score" in watched["f7f5"]
     assert "static_eval_score" in watched["f7f5"]
     assert "search_score" in watched["f7f5"]
+    assert "fused_score" in watched["f7f5"]
+    assert "override_applied" in watched["f7f5"]
+    assert "override_reason" in watched["f7f5"]
     assert "final_combined_score" in watched["f7f5"]
 
 
@@ -1096,12 +1099,15 @@ def test_experiment_pv_decision_explain_reports_policy_override_scores(tmp_path,
     assert explanation["chosen_reason"] == "high_confidence_policy_override"
     assert explanation["policy_override"]["used"] is True
     assert explanation["policy_override"]["margin"] >= explanation["policy_override"]["thresholds"]["min_margin"]
-    assert explanation["policy_override"]["reason"] == "raw_policy_score_and_margin_met_threshold"
+    assert explanation["policy_override"]["reason"] == "adaptive_policy_score_and_margin_met_threshold"
     watched = {row["move"]: row for row in explanation["watched_moves"]}
     assert {"e7e5", "a7a5"} <= set(watched)
     assert "raw_policy_score" in watched["e7e5"]
     assert "static_eval_score" in watched["e7e5"]
     assert "search_score" in watched["e7e5"]
+    assert "fused_score" in watched["e7e5"]
+    assert "override_applied" in watched["e7e5"]
+    assert "override_reason" in watched["e7e5"]
     assert "final_combined_score" in watched["e7e5"]
 
 

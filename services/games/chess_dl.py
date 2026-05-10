@@ -56,6 +56,11 @@ _MOVE_MEMORY_LEARNING_RATE = 0.22
 _MAX_MOVE_MEMORY_BIAS = 1.4
 _POLICY_OVERRIDE_MIN_SCORE = 0.95
 _POLICY_OVERRIDE_MIN_MARGIN = 0.20
+_FUSION_MODES = {
+    "strict_search": {"policy_weight": 0, "min_score": 1.20, "min_margin": 9.0},
+    "balanced_fusion": {"policy_weight": 45, "min_score": 0.88, "min_margin": 0.02},
+    "policy_preferred": {"policy_weight": 120, "min_score": 0.82, "min_margin": 0.01},
+}
 _MODEL_EVAL_MOVE_CAP = 6
 _MODEL_SCORE_SCALE = 140.0
 _PIECE_VALUES = {
@@ -271,13 +276,44 @@ def rank_experiment_dl_policy_moves(board_state, side: str, *, model_path=None) 
     return sorted(rows, key=lambda row: (int(row["raw_policy_rank"]), str(row["move"])))
 
 
-def _policy_override_info(model: dict, board: chess.Board, side: str) -> dict:
+def _adaptive_policy_thresholds(*, fusion_mode: str, decision_context: dict | None = None) -> dict:
+    mode = str(fusion_mode or "balanced_fusion")
+    base = dict(_FUSION_MODES.get(mode) or _FUSION_MODES["balanced_fusion"])
+    context = decision_context or {}
+    difficulty = str(context.get("variant_difficulty") or "")
+    prior_stable = bool(context.get("prior_retention_stable", True))
+    confidence = float(context.get("deterministic_confidence") or 0.75)
+    if difficulty == "hard":
+        base["min_score"] += 0.04
+        base["min_margin"] += 0.03
+    elif difficulty in {"exact", "easy", "medium"}:
+        base["min_score"] -= 0.02
+        base["min_margin"] -= 0.01
+    if not prior_stable:
+        base["min_score"] += 0.08
+        base["min_margin"] += 0.08
+    if confidence >= 0.75:
+        base["min_score"] -= 0.02
+        base["min_margin"] -= 0.01
+    return {
+        "min_score": round(max(0.0, float(base["min_score"])), 4),
+        "min_margin": round(max(0.0, float(base["min_margin"])), 4),
+        "policy_weight": int(base["policy_weight"]),
+        "fusion_mode": mode,
+        "variant_difficulty": difficulty,
+        "prior_retention_stable": prior_stable,
+        "deterministic_confidence": round(confidence, 4),
+    }
+
+
+def _policy_override_info(model: dict, board: chess.Board, side: str, *, fusion_mode: str = "balanced_fusion", decision_context: dict | None = None) -> dict:
     rows = []
     for move in sorted(board.legal_moves, key=lambda item: item.uci()):
         rows.append({"move": move.uci(), "raw_policy_score": _score_candidate_move(board, move, side, model)})
     rows = sorted(rows, key=lambda row: (-float(row["raw_policy_score"]), str(row["move"])))
+    thresholds = _adaptive_policy_thresholds(fusion_mode=fusion_mode, decision_context=decision_context)
     if len(rows) < 2:
-        return {"used": False, "reason": "insufficient_legal_moves", "thresholds": {"min_score": _POLICY_OVERRIDE_MIN_SCORE, "min_margin": _POLICY_OVERRIDE_MIN_MARGIN}}
+        return {"used": False, "reason": "insufficient_legal_moves", "thresholds": thresholds}
     margin = float(rows[0]["raw_policy_score"]) - float(rows[1]["raw_policy_score"])
     info = {
         "used": False,
@@ -286,10 +322,13 @@ def _policy_override_info(model: dict, board: chess.Board, side: str) -> dict:
         "runner_up_move": str(rows[1]["move"]),
         "runner_up_raw_policy_score": round(float(rows[1]["raw_policy_score"]), 8),
         "margin": round(margin, 8),
-        "thresholds": {"min_score": _POLICY_OVERRIDE_MIN_SCORE, "min_margin": _POLICY_OVERRIDE_MIN_MARGIN},
+        "thresholds": thresholds,
         "reason": "below_override_threshold",
     }
-    if float(rows[0]["raw_policy_score"]) < _POLICY_OVERRIDE_MIN_SCORE or margin < _POLICY_OVERRIDE_MIN_MARGIN:
+    if str(thresholds.get("fusion_mode")) == "strict_search":
+        info["reason"] = "strict_search_disables_policy_override"
+        return info
+    if float(rows[0]["raw_policy_score"]) < float(thresholds["min_score"]) or margin < float(thresholds["min_margin"]):
         return info
     try:
         move = chess.Move.from_uci(str(rows[0]["move"]))
@@ -300,12 +339,12 @@ def _policy_override_info(model: dict, board: chess.Board, side: str) -> dict:
         info["reason"] = "illegal_policy_move"
         return info
     info["used"] = True
-    info["reason"] = "raw_policy_score_and_margin_met_threshold"
+    info["reason"] = "adaptive_policy_score_and_margin_met_threshold"
     return info
 
 
-def _policy_override_move(model: dict, board: chess.Board, side: str) -> chess.Move | None:
-    info = _policy_override_info(model, board, side)
+def _policy_override_move(model: dict, board: chess.Board, side: str, *, fusion_mode: str = "balanced_fusion", decision_context: dict | None = None) -> chess.Move | None:
+    info = _policy_override_info(model, board, side, fusion_mode=fusion_mode, decision_context=decision_context)
     if not bool(info.get("used")):
         return None
     return chess.Move.from_uci(str(info.get("move") or ""))
@@ -396,7 +435,7 @@ def _dl_static_eval(board: chess.Board, model: dict, eval_cache: dict[int, int],
     return score
 
 
-def choose_experiment_dl_move(board_state, side: str, *, model_path=None, search_profile="balanced"):
+def choose_experiment_dl_move(board_state, side: str, *, model_path=None, search_profile="balanced", fusion_mode="balanced_fusion", decision_context=None):
     board = to_chess_board(board_state, side)
     ai_color = chess.WHITE if side == "white" else chess.BLACK
     if board.turn != ai_color:
@@ -460,7 +499,7 @@ def choose_experiment_dl_move(board_state, side: str, *, model_path=None, search
         return score + color_sign * _dl_static_eval(after, model, eval_cache, hasher)
 
     best_move = opening_sanity_filter(board, best_move, score_move=sanity_move_score)
-    policy_override = _policy_override_move(model, board, side)
+    policy_override = _policy_override_move(model, board, side, fusion_mode=fusion_mode, decision_context=decision_context)
     if policy_override is not None:
         best_move = policy_override
     if best_move is None:
@@ -481,7 +520,7 @@ def choose_experiment_dl_move(board_state, side: str, *, model_path=None, search
     }
 
 
-def explain_experiment_dl_decision(board_state, side: str, *, model_path=None, search_profile="fast", watched_moves=None) -> dict:
+def explain_experiment_dl_decision(board_state, side: str, *, model_path=None, search_profile="fast", watched_moves=None, fusion_mode="balanced_fusion", decision_context=None) -> dict:
     board = to_chess_board(board_state, side)
     ai_color = chess.WHITE if side == "white" else chess.BLACK
     if board.turn != ai_color:
@@ -537,11 +576,13 @@ def explain_experiment_dl_decision(board_state, side: str, *, model_path=None, s
         if fallback is not None and chosen is not None and fallback != chosen:
             chosen = fallback
             chosen_reason = "opening_sanity_fallback"
-        policy_override = _policy_override_info(model, board, side)
+        policy_override = _policy_override_info(model, board, side, fusion_mode=fusion_mode, decision_context=decision_context)
         if policy_override.get("used"):
             chosen = chess.Move.from_uci(str(policy_override.get("move")))
             chosen_reason = "high_confidence_policy_override"
     color_sign = 1 if ai_color == chess.WHITE else -1
+    thresholds = _adaptive_policy_thresholds(fusion_mode=fusion_mode, decision_context=decision_context)
+    policy_weight = int(thresholds.get("policy_weight") or 0)
     raw_rows = {str(row["move"]): row for row in rank_experiment_dl_policy_moves({"__fen__": board.fen()}, side, model_path=model_path)}
     moves = []
     max_child_depth = max(0, int(profile["depth"]) - 1)
@@ -566,10 +607,13 @@ def explain_experiment_dl_decision(board_state, side: str, *, model_path=None, s
         row = dict(raw_rows.get(move.uci()) or {"move": move.uci(), "raw_policy_score": _score_candidate_move(board, move, side, model)})
         row["static_eval_score"] = static_eval_score
         row["search_score"] = int(per_move_search)
-        row["final_combined_score"] = int(per_move_search)
+        row["fused_score"] = round(float(per_move_search) + float(row.get("raw_policy_score") or 0.0) * policy_weight, 4)
+        row["final_combined_score"] = row["fused_score"]
+        row["override_applied"] = bool(policy_override.get("used") and str(policy_override.get("move") or "") == move.uci()) if "policy_override" in locals() else False
+        row["override_reason"] = str((policy_override if "policy_override" in locals() else {}).get("reason") or "")
         row["chosen"] = bool(chosen is not None and move == chosen)
         moves.append(row)
-    moves = sorted(moves, key=lambda row: (-int(row.get("final_combined_score") or 0), str(row.get("move") or "")))
+    moves = sorted(moves, key=lambda row: (-float(row.get("final_combined_score") or 0), str(row.get("move") or "")))
     watched_rows = [row for row in moves if str(row.get("move") or "") in watched] if watched else moves[:5]
     chosen_move = chosen.uci() if chosen is not None else ""
     chosen_row = next((row for row in moves if str(row.get("move") or "") == chosen_move), None)
@@ -583,7 +627,8 @@ def explain_experiment_dl_decision(board_state, side: str, *, model_path=None, s
         "search_score": search_score if chosen_move else None,
         "search_depth": search_depth if chosen_move else 0,
         "chosen_breakdown": chosen_row or {},
-        "policy_override": policy_override if "policy_override" in locals() else _policy_override_info(model, board, side),
+        "fusion_mode": str(fusion_mode or "balanced_fusion"),
+        "policy_override": policy_override if "policy_override" in locals() else _policy_override_info(model, board, side, fusion_mode=fusion_mode, decision_context=decision_context),
         "watched_moves": watched_rows,
         "top_final_moves": moves[:5],
         "all_legal_count": len(moves),

@@ -85,7 +85,7 @@ def test_mistake_retention_probe_requires_before_failure_and_after_fix(monkeypat
     samples = [{"fen": "fixture", "side": "white", "move_uci": "e2e4", "game_index": 1, "game_id": 7, "game_label": "old_error", "ply": 3}]
     calls = []
 
-    def fake_choose(engine_alias, board_state, side, model_path):
+    def fake_choose(engine_alias, board_state, side, model_path, **_kwargs):
         calls.append(str(model_path))
         if str(model_path) == "before":
             return {"from": "g1", "to": "f3"}
@@ -478,7 +478,7 @@ def test_sanity_learning_probe_requires_after_top1_and_variant_generalization(mo
         }
     ]
 
-    def fake_choose(_engine_alias, board_state, _side, model_path):
+    def fake_choose(_engine_alias, board_state, _side, model_path, **_kwargs):
         if str(model_path) == "before":
             return {"from": "a7", "to": "a5"}
         return {"from": "e7", "to": "e5"} if " e6 " not in str(board_state.get("__fen__")) else {"from": "a7", "to": "a5"}
