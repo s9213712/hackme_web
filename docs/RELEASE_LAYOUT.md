@@ -59,8 +59,9 @@ directory needs to exist in a fresh checkout.
 - Placement and cleanup policy lives in `docs/REPOSITORY_STRUCTURE.md`.
 - Security test usage guides live under `docs/security/`.
 - Historical abandoned work lives under `docs/archive/`.
-- Internal research belongs under `research/` or `docs/research/`; both are
-  ignored and should not be part of release commits.
+- Internal scratchpad research belongs under `research/` (gitignored) and
+  must not be part of release commits. Long-form research that should ship
+  with the repo lives under `docs/archive/research/`.
 
 ## Security Script Policy
 

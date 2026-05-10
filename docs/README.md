@@ -117,9 +117,7 @@ The repository root keeps only [README.md](../README.md) and
 
 - [README.zh-TW.md](README.zh-TW.md): concise Traditional Chinese shortcut
 - [VERSION_STORY.md](VERSION_STORY.md): project history and abandoned branches
-- [archive/research/README.md](archive/research/README.md): archived research
-  notes and retired implementation workflows
-- [archive/research/finished/GRID_TRADING_BOT_DESIGN_REPORT.md](archive/research/finished/GRID_TRADING_BOT_DESIGN_REPORT.md): future grid-bot research
+- [archive/research/BLOCKCHAIN/README.md](archive/research/BLOCKCHAIN/README.md): PointsChain v2 design specs (Phase 1+ pending root authorization)
 - [archive/webterminal/README.md](archive/webterminal/README.md): archived WebTerminal attempts
 
 Archive and `docs/AGENTS/reports/` content is historical evidence, not canonical

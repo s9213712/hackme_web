@@ -464,8 +464,8 @@ Runtime behavior:
   level even when no external matching engine event is received.
 - Existing grid bots can be loaded into the backtest panel for what-if replay.
 
-The earlier design report is still useful background material:
-[Grid Trading Bot Design Report](../archive/research/finished/GRID_TRADING_BOT_DESIGN_REPORT.md).
+Live grid implementation reference: `services/trading/grid.py`,
+`services/trading/schema_ddl.py` (`trading_grid_bots` table).
 
 ### Workflow Strategy Bot
 
