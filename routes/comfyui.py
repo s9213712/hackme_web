@@ -39,6 +39,7 @@ from services.comfyui.settings import (
     validate_comfyui_api_url,
 )
 from services.comfyui.api_nodes import build_comfyui_account_extra_data, detect_paid_api_nodes
+from services.comfyui.node_catalog import build_node_catalog
 from services.storage.cloud_drive import attach_existing_file, ensure_cloud_drive_attachment_schema, store_cloud_upload
 from services.platform.admin_validation import (
     validate_comfyui_api_host as shared_validate_comfyui_api_host,
@@ -2609,6 +2610,7 @@ def register_comfyui_routes(app, deps):
         "load_generation_history": _load_generation_history,
         "local_comfyui_runtime_status": _local_comfyui_runtime_status,
         "comfyui_paid_api_status_payload": _comfyui_paid_api_status_payload,
+        "build_node_catalog": build_node_catalog,
         "normalize_generation_payload": _normalize_generation_payload,
         "parse_generation_request": _parse_generation_request,
         "record_generation_history": _record_generation_history,

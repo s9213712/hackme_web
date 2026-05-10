@@ -32,6 +32,7 @@ def register_comfyui_runtime_routes(app, ctx):
     _comfyui_unavailable_payload = ctx["comfyui_unavailable_payload"]
     _comfyui_wallet_payload = ctx["comfyui_wallet_payload"]
     _comfyui_paid_api_status_payload = ctx.get("comfyui_paid_api_status_payload", lambda: {})
+    _build_node_catalog = ctx.get("build_node_catalog")
     _configured_comfyui_port = ctx["configured_comfyui_port"]
     _configured_comfyui_url = ctx["configured_comfyui_url"]
     _configured_connection_mode = ctx["configured_connection_mode"]
@@ -188,6 +189,32 @@ def register_comfyui_runtime_routes(app, ctx):
             "billing": None if not _comfyui_charge_required(actor) else (_comfyui_price_quote(1)[0] or {}),
             "wallet": _comfyui_wallet_payload(actor),
             "lora_extra_unit_price": COMFYUI_LORA_EXTRA_PRICE_POINTS,
+            "paid_api_nodes": _comfyui_paid_api_status_payload(),
+        })
+
+    @app.route("/api/comfyui/node-catalog", methods=["GET"])
+    @require_csrf_safe
+    def comfyui_node_catalog():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        if not _build_node_catalog:
+            return json_resp({"ok": False, "msg": "ComfyUI 節點目錄摘要器未載入", "stage": "node_catalog_unavailable"}), 503
+        binding = _comfyui_binding(actor)
+        active_client = _client_for_url(binding["url"])
+        try:
+            object_info = active_client.get_object_info()
+            catalog = _build_node_catalog(object_info)
+        except ComfyUIError as exc:
+            return _json_error_from_comfy(exc, active_client)
+        return json_resp({
+            "ok": True,
+            "nodes": catalog["nodes"],
+            "count": catalog["count"],
+            "truncated": catalog["truncated"],
+            "connection_mode": binding["connection_mode"],
+            "backend_scope": binding["backend_scope"],
+            "comfyui_url": getattr(active_client, "base_url", binding["url"]),
             "paid_api_nodes": _comfyui_paid_api_status_payload(),
         })
 
