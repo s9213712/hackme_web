@@ -3915,6 +3915,11 @@ def test_comfyui_frontend_is_wired():
     assert 'id="comfyui-workflow-project-version"' in index_html
     assert 'id="comfyui-workflow-schema-version"' in index_html
     assert 'id="comfyui-workflow-is-default"' in index_html
+    assert 'id="comfyui-workflow-new-btn"' in index_html
+    assert 'id="comfyui-workflow-starter-txt2img-btn"' in index_html
+    assert 'id="comfyui-workflow-node-template"' in index_html
+    assert 'id="comfyui-workflow-add-node-btn"' in index_html
+    assert "開啟節點連線編輯器" in index_html
     assert 'id="comfyui-workflow-json"' in index_html
     assert 'id="comfyui-workflow-layout-json"' in index_html
     assert 'id="comfyui-workflow-my-list"' in index_html
@@ -3928,6 +3933,11 @@ def test_comfyui_frontend_is_wired():
     assert "function duplicateComfyuiWorkflowPreset(presetId)" in comfyui_js
     assert "function setDefaultComfyuiWorkflowPreset(presetId)" in comfyui_js
     assert "function publishComfyuiWorkflowPresetOfficial(presetId)" in comfyui_js
+    assert "LoadImageMask" in comfyui_js
+    assert "VAEEncodeForInpaint" in comfyui_js
+    assert "ImagePadForOutpaint" in comfyui_js
+    assert "ControlNetApplyAdvanced" in comfyui_js
+    assert "ImageUpscaleWithModel" in comfyui_js
     assert 'apiFetch(API + "/comfyui/workflow-layouts"' in comfyui_js
     assert 'apiFetch(API + "/comfyui/workflows/export-current"' in comfyui_js
     assert 'apiFetch(API + "/comfyui/workflows/import"' in comfyui_js
@@ -3939,6 +3949,20 @@ def test_comfyui_frontend_is_wired():
     assert ".comfyui-workflow-chip.warn" in css
     assert ".comfyui-workflow-chip.bad" in css
     assert "@media (max-width: 860px)" in css
+    visual_editor_html = (ROOT / "public" / "comfyui-workflow-editor.html").read_text(encoding="utf-8")
+    visual_editor_js = (ROOT / "public" / "js" / "comfyui-workflow-editor.js").read_text(encoding="utf-8")
+    visual_editor_css = (ROOT / "public" / "comfyui-workflow-editor.css").read_text(encoding="utf-8")
+    assert 'data-add-node="VAEEncodeForInpaint"' in visual_editor_html
+    assert 'data-add-node="ImagePadForOutpaint"' in visual_editor_html
+    assert 'data-add-node="ControlNetApplyAdvanced"' in visual_editor_html
+    assert 'data-port-node="' in visual_editor_js
+    assert "function startConnection(event)" in visual_editor_js
+    assert "function completeConnection(event)" in visual_editor_js
+    assert "function portPoint(nodeId, kind, name)" in visual_editor_js
+    assert "function addEdge({ from, output, to, input })" in visual_editor_js
+    assert ".edge-path.temp" in visual_editor_css
+    assert ".port.output.connecting" in visual_editor_css
+    assert ".port.input.compatible" in visual_editor_css
     assert "function bindComfyuiAdvancedUi()" in comfyui_js
     assert "function updateComfyuiModeNote(modeOverride = null)" in comfyui_js
     assert 'badge.textContent = normalizedMode === "local" ? "本地模式" : "雲端 / 遠端模式";' in comfyui_js

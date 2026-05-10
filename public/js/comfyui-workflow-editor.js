@@ -46,6 +46,29 @@
       inputs: { image: { type: "text", label: "圖片檔名 / image ref" } },
       outputs: ["IMAGE", "MASK"],
     },
+    LoadImageMask: {
+      label: "Load Mask",
+      inputs: {
+        image: { type: "text", label: "遮罩檔名 / mask ref" },
+        channel: { type: "text", label: "Channel" },
+      },
+      outputs: ["IMAGE", "MASK"],
+    },
+    VAEEncode: {
+      label: "VAE Encode",
+      inputs: { pixels: { type: "link", label: "IMAGE" }, vae: { type: "link", label: "VAE" } },
+      outputs: ["LATENT"],
+    },
+    VAEEncodeForInpaint: {
+      label: "VAE Encode Inpaint",
+      inputs: {
+        pixels: { type: "link", label: "IMAGE" },
+        vae: { type: "link", label: "VAE" },
+        mask: { type: "link", label: "MASK" },
+        grow_mask_by: { type: "number", label: "Mask grow", step: "1" },
+      },
+      outputs: ["LATENT"],
+    },
     KSampler: {
       label: "KSampler",
       inputs: {
@@ -59,6 +82,25 @@
         sampler_name: { type: "text", label: "Sampler" },
         scheduler: { type: "text", label: "Scheduler" },
         denoise: { type: "number", label: "Denoise", step: "0.05" },
+      },
+      outputs: ["LATENT"],
+    },
+    KSamplerAdvanced: {
+      label: "KSampler Advanced",
+      inputs: {
+        model: { type: "link", label: "MODEL" },
+        positive: { type: "link", label: "正向 CONDITIONING" },
+        negative: { type: "link", label: "負向 CONDITIONING" },
+        latent_image: { type: "link", label: "LATENT" },
+        add_noise: { type: "text", label: "Add noise" },
+        noise_seed: { type: "number", label: "Noise seed", step: "1" },
+        steps: { type: "number", label: "Steps", step: "1" },
+        cfg: { type: "number", label: "CFG", step: "0.5" },
+        sampler_name: { type: "text", label: "Sampler" },
+        scheduler: { type: "text", label: "Scheduler" },
+        start_at_step: { type: "number", label: "Start step", step: "1" },
+        end_at_step: { type: "number", label: "End step", step: "1" },
+        return_with_leftover_noise: { type: "text", label: "Return leftover noise" },
       },
       outputs: ["LATENT"],
     },
@@ -77,15 +119,30 @@
       inputs: { control_net_name: { type: "text", label: "ControlNet" } },
       outputs: ["CONTROL_NET"],
     },
-    ControlNetApply: {
-      label: "ControlNet Apply",
+    ControlNetApplyAdvanced: {
+      label: "ControlNet Apply Advanced",
       inputs: {
-        conditioning: { type: "link", label: "CONDITIONING" },
+        positive: { type: "link", label: "正向 CONDITIONING" },
+        negative: { type: "link", label: "負向 CONDITIONING" },
         control_net: { type: "link", label: "CONTROL_NET" },
         image: { type: "link", label: "IMAGE" },
         strength: { type: "number", label: "強度", step: "0.05" },
+        start_percent: { type: "number", label: "起始比例", step: "0.05" },
+        end_percent: { type: "number", label: "結束比例", step: "0.05" },
       },
-      outputs: ["CONDITIONING"],
+      outputs: ["positive", "negative"],
+    },
+    ImagePadForOutpaint: {
+      label: "Outpaint Pad",
+      inputs: {
+        image: { type: "link", label: "IMAGE" },
+        left: { type: "number", label: "Left", step: "8" },
+        top: { type: "number", label: "Top", step: "8" },
+        right: { type: "number", label: "Right", step: "8" },
+        bottom: { type: "number", label: "Bottom", step: "8" },
+        feathering: { type: "number", label: "Feathering", step: "1" },
+      },
+      outputs: ["IMAGE"],
     },
     UpscaleModelLoader: {
       label: "Upscale Loader",
@@ -101,10 +158,16 @@
 
   let selectedId = null;
   let dragState = null;
+  let connectState = null;
   let workflow = loadState();
 
   function html(value) {
     return String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[ch]));
+  }
+
+  function cssIdent(value) {
+    if (window.CSS && typeof window.CSS.escape === "function") return window.CSS.escape(String(value));
+    return String(value).replace(/[^a-zA-Z0-9_-]/g, "\\$&");
   }
 
   function uid() {
@@ -125,8 +188,17 @@
       else if (key === "steps") inputs[key] = 20;
       else if (key === "cfg") inputs[key] = 7;
       else if (key === "seed") inputs[key] = 0;
+      else if (key === "noise_seed") inputs[key] = 0;
+      else if (key === "start_at_step") inputs[key] = 0;
+      else if (key === "end_at_step") inputs[key] = 20;
       else if (key === "denoise") inputs[key] = 1;
-      else if (key === "strength" || key === "strength_model" || key === "strength_clip") inputs[key] = 1;
+      else if (key === "strength" || key === "strength_model" || key === "strength_clip" || key === "end_percent") inputs[key] = 1;
+      else if (key === "start_percent") inputs[key] = 0;
+      else if (key === "grow_mask_by") inputs[key] = 6;
+      else if (key === "left" || key === "top" || key === "right" || key === "bottom") inputs[key] = 0;
+      else if (key === "feathering") inputs[key] = 40;
+      else if (key === "add_noise" || key === "return_with_leftover_noise") inputs[key] = "enable";
+      else if (key === "channel") inputs[key] = "alpha";
       else if (key === "sampler_name") inputs[key] = "euler";
       else if (key === "scheduler") inputs[key] = "normal";
       else if (key === "filename_prefix") inputs[key] = "hackme_web";
@@ -239,8 +311,10 @@
   }
 
   function inferPurpose() {
-    if (workflow.nodes.some((node) => node.type === "ControlNetApply")) return "controlnet";
+    if (workflow.nodes.some((node) => node.type === "ControlNetApplyAdvanced")) return "controlnet";
     if (workflow.nodes.some((node) => node.type === "ImageUpscaleWithModel")) return "upscale";
+    if (workflow.nodes.some((node) => node.type === "ImagePadForOutpaint")) return "outpaint";
+    if (workflow.nodes.some((node) => node.type === "VAEEncodeForInpaint" || node.type === "LoadImageMask")) return "inpaint";
     if (workflow.nodes.some((node) => node.type === "LoadImage")) return "img2img";
     return "txt2img";
   }
@@ -288,6 +362,9 @@
     if (!layer) return;
     layer.innerHTML = workflow.nodes.map((node) => {
       const def = NODE_DEFS[node.type];
+      const inputRows = Object.entries(def.inputs || {});
+      const linkInputs = inputRows.filter(([, spec]) => spec.type === "link");
+      const valueInputs = inputRows.filter(([, spec]) => spec.type !== "link");
       return `
         <div class="wf-node ${node.id === selectedId ? "selected" : ""}" data-node-id="${html(node.id)}" data-drag-node="${html(node.id)}" style="left:${Math.round(node.x)}px;top:${Math.round(node.y)}px;">
           <div class="wf-node-head" data-drag-node="${html(node.id)}">
@@ -295,8 +372,13 @@
             <span class="wf-node-kind">${html(node.type)}</span>
           </div>
           <div class="wf-node-body">
-            <div class="port-row">${Object.keys(def.inputs || {}).map((key) => `<span class="port input">${html(key)}</span>`).join("") || '<span class="port input">no input</span>'}</div>
-            <div class="port-row">${(def.outputs || []).map((key) => `<span class="port output">${html(key)}</span>`).join("") || '<span class="port output">final</span>'}</div>
+            <div class="port-row input-row">
+              ${linkInputs.map(([key, spec]) => `<span class="port input" role="button" tabindex="0" title="input: ${html(spec.label || key)}" data-port-node="${html(node.id)}" data-port-kind="input" data-port-name="${html(key)}">${html(key)}</span>`).join("") || '<span class="port muted">no link input</span>'}
+            </div>
+            ${valueInputs.length ? `<div class="port-row value-row">${valueInputs.slice(0, 4).map(([key]) => `<span class="port value">${html(key)}</span>`).join("")}</div>` : ""}
+            <div class="port-row output-row">
+              ${(def.outputs || []).map((key) => `<span class="port output" role="button" tabindex="0" title="output: ${html(key)}" data-port-node="${html(node.id)}" data-port-kind="output" data-port-name="${html(key)}">${html(key)}</span>`).join("") || '<span class="port muted">final</span>'}
+            </div>
           </div>
           <div class="node-actions">
             <button type="button" data-select-node="${html(node.id)}">設定</button>
@@ -318,6 +400,16 @@
       head.addEventListener("pointerdown", startDrag);
       head.addEventListener("mousedown", startDrag);
     });
+    layer.querySelectorAll('.port.output[data-port-node]').forEach((port) => {
+      port.addEventListener("pointerdown", startConnection);
+      port.addEventListener("mousedown", startConnection);
+      port.addEventListener("keydown", startConnectionFromKeyboard);
+    });
+    layer.querySelectorAll('.port.input[data-port-node]').forEach((port) => {
+      port.addEventListener("pointerup", completeConnection);
+      port.addEventListener("mouseup", completeConnection);
+      port.addEventListener("keydown", completeConnectionFromKeyboard);
+    });
   }
 
   function deleteNode(id) {
@@ -329,13 +421,13 @@
 
   function startDrag(event) {
     if (dragState) return;
-    if (event.target && event.target.closest && event.target.closest("button, input, select, textarea, a")) return;
+    if (event.target && event.target.closest && event.target.closest("button, input, select, textarea, a, .port")) return;
     const id = event.currentTarget.getAttribute("data-drag-node");
     const node = nodeById(id);
     if (!node) return;
     selectedId = id;
     document.querySelectorAll(".wf-node.selected").forEach((item) => item.classList.remove("selected"));
-    const nodeEl = document.querySelector(`[data-node-id="${CSS.escape(id)}"]`);
+    const nodeEl = document.querySelector(`[data-node-id="${cssIdent(id)}"]`);
     nodeEl?.classList.add("selected");
     nodeEl?.classList.add("dragging");
     renderInspector();
@@ -363,7 +455,7 @@
     if (!node) return;
     node.x = Math.max(0, dragState.nodeX + event.clientX - dragState.startX);
     node.y = Math.max(0, dragState.nodeY + event.clientY - dragState.startY);
-    const el = document.querySelector(`[data-node-id="${CSS.escape(node.id)}"]`);
+    const el = document.querySelector(`[data-node-id="${cssIdent(node.id)}"]`);
     if (el) {
       el.style.left = `${Math.round(node.x)}px`;
       el.style.top = `${Math.round(node.y)}px`;
@@ -377,7 +469,7 @@
     window.removeEventListener("pointermove", onDrag);
     window.removeEventListener("mousemove", onDrag);
     window.removeEventListener("blur", endDrag);
-    if (id) document.querySelector(`[data-node-id="${CSS.escape(id)}"]`)?.classList.remove("dragging");
+    if (id) document.querySelector(`[data-node-id="${cssIdent(id)}"]`)?.classList.remove("dragging");
     render();
   }
 
@@ -396,37 +488,172 @@
     setStatus("已重新排列節點，連線會重新貼齊節點。");
   }
 
+  function canvasPoint(event) {
+    const canvas = $("canvas");
+    const rect = canvas?.getBoundingClientRect();
+    if (!rect) return { x: 0, y: 0 };
+    return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+  }
+
+  function portPoint(nodeId, kind, name) {
+    const canvas = $("canvas");
+    const selector = `.port[data-port-node="${cssIdent(nodeId)}"][data-port-kind="${cssIdent(kind)}"][data-port-name="${cssIdent(name)}"]`;
+    const port = document.querySelector(selector);
+    const canvasRect = canvas?.getBoundingClientRect();
+    if (port && canvasRect) {
+      const rect = port.getBoundingClientRect();
+      return {
+        x: rect.left - canvasRect.left + (kind === "output" ? rect.width : 0),
+        y: rect.top - canvasRect.top + rect.height / 2,
+      };
+    }
+    const node = nodeById(nodeId);
+    const nodeEl = node ? document.querySelector(`[data-node-id="${cssIdent(node.id)}"]`) : null;
+    const width = nodeEl?.offsetWidth || 220;
+    const height = nodeEl?.offsetHeight || 116;
+    return {
+      x: (node?.x || 0) + (kind === "output" ? width : 0),
+      y: (node?.y || 0) + height / 2,
+    };
+  }
+
+  function edgePath(start, end) {
+    const mid = Math.max(70, Math.abs(end.x - start.x) / 2);
+    return `M ${start.x} ${start.y} C ${start.x + mid} ${start.y}, ${end.x - mid} ${end.y}, ${end.x} ${end.y}`;
+  }
+
   function renderEdges() {
     const svg = $("edgeLayer");
     if (!svg) return;
     const parts = [];
-    const anchorFor = (node, side) => {
-      const el = document.querySelector(`[data-node-id="${CSS.escape(node.id)}"]`);
-      const width = el?.offsetWidth || 220;
-      const height = el?.offsetHeight || 116;
-      return {
-        x: node.x + (side === "out" ? width : 0),
-        y: node.y + height / 2,
-      };
-    };
     workflow.edges.forEach((edge) => {
       const from = nodeById(edge.from);
       const to = nodeById(edge.to);
       if (!from || !to) return;
-      const start = anchorFor(from, "out");
-      const end = anchorFor(to, "in");
-      const x1 = start.x;
-      const y1 = start.y;
-      const x2 = end.x;
-      const y2 = end.y;
-      const mid = Math.max(70, Math.abs(x2 - x1) / 2);
-      const path = `M ${x1} ${y1} C ${x1 + mid} ${y1}, ${x2 - mid} ${y2}, ${x2} ${y2}`;
+      const start = portPoint(edge.from, "output", edge.output);
+      const end = portPoint(edge.to, "input", edge.input);
+      const path = edgePath(start, end);
       parts.push(`<path class="edge-path" d="${path}"></path>`);
-      parts.push(`<circle class="edge-dot output" cx="${x1}" cy="${y1}" r="4"></circle>`);
-      parts.push(`<circle class="edge-dot input" cx="${x2}" cy="${y2}" r="4"></circle>`);
-      parts.push(`<text class="edge-label" x="${(x1 + x2) / 2}" y="${(y1 + y2) / 2 - 7}">${html(edge.output)} → ${html(edge.input)}</text>`);
+      parts.push(`<circle class="edge-dot output" cx="${start.x}" cy="${start.y}" r="4"></circle>`);
+      parts.push(`<circle class="edge-dot input" cx="${end.x}" cy="${end.y}" r="4"></circle>`);
+      parts.push(`<text class="edge-label" x="${(start.x + end.x) / 2}" y="${(start.y + end.y) / 2 - 7}">${html(edge.output)} → ${html(edge.input)}</text>`);
     });
+    if (connectState) {
+      const start = portPoint(connectState.from, "output", connectState.output);
+      const end = connectState.current || start;
+      parts.push(`<path class="edge-path temp" d="${edgePath(start, end)}"></path>`);
+    }
     svg.innerHTML = parts.join("");
+  }
+
+  function markConnectionPorts() {
+    document.querySelectorAll(".port.connecting, .port.compatible").forEach((port) => {
+      port.classList.remove("connecting", "compatible");
+    });
+    if (!connectState) return;
+    document.querySelector(`.port.output[data-port-node="${cssIdent(connectState.from)}"][data-port-name="${cssIdent(connectState.output)}"]`)?.classList.add("connecting");
+    document.querySelectorAll('.port.input[data-port-node]').forEach((port) => {
+      if (port.getAttribute("data-port-node") !== connectState.from) port.classList.add("compatible");
+    });
+  }
+
+  function startConnection(event) {
+    if (event.button !== undefined && event.button !== 0) return;
+    const port = event.currentTarget?.closest?.(".port.output");
+    if (!port) return;
+    const from = port.getAttribute("data-port-node") || "";
+    const output = port.getAttribute("data-port-name") || "";
+    if (!from || !output) return;
+    selectedId = from;
+    connectState = { from, output, current: portPoint(from, "output", output) };
+    markConnectionPorts();
+    renderInspector();
+    renderConnectionPanel();
+    renderEdges();
+    setStatus(`正在連線：${output}。拉到紫色 input 放開即可建立連線。`);
+    event.preventDefault();
+    event.stopPropagation();
+    window.addEventListener("pointermove", onConnectionMove);
+    window.addEventListener("mousemove", onConnectionMove);
+    window.addEventListener("pointerup", onConnectionPointerUp, { once: true });
+    window.addEventListener("mouseup", onConnectionPointerUp, { once: true });
+    window.addEventListener("keydown", cancelConnectionOnEscape);
+  }
+
+  function startConnectionFromKeyboard(event) {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    const port = event.currentTarget?.closest?.(".port.output");
+    if (!port) return;
+    const from = port.getAttribute("data-port-node") || "";
+    const output = port.getAttribute("data-port-name") || "";
+    if (!from || !output) return;
+    selectedId = from;
+    connectState = { from, output, current: portPoint(from, "output", output) };
+    markConnectionPorts();
+    renderInspector();
+    renderConnectionPanel();
+    renderEdges();
+    setStatus(`已選取 output：${output}。移到紫色 input 按 Enter 建立連線。`);
+    event.preventDefault();
+    event.stopPropagation();
+    window.addEventListener("keydown", cancelConnectionOnEscape);
+  }
+
+  function onConnectionMove(event) {
+    if (!connectState) return;
+    connectState.current = canvasPoint(event);
+    renderEdges();
+  }
+
+  function onConnectionPointerUp(event) {
+    const input = event.target?.closest?.(".port.input[data-port-node]");
+    if (input) {
+      completeConnection({ currentTarget: input, preventDefault: () => event.preventDefault(), stopPropagation: () => event.stopPropagation() });
+      return;
+    }
+    cancelConnection("連線已取消。");
+  }
+
+  function cancelConnectionOnEscape(event) {
+    if (event.key === "Escape") cancelConnection("連線已取消。");
+  }
+
+  function cancelConnection(message = "") {
+    connectState = null;
+    window.removeEventListener("pointermove", onConnectionMove);
+    window.removeEventListener("mousemove", onConnectionMove);
+    window.removeEventListener("keydown", cancelConnectionOnEscape);
+    markConnectionPorts();
+    renderEdges();
+    if (message) setStatus(message);
+  }
+
+  function completeConnection(event) {
+    if (!connectState) return;
+    const port = event.currentTarget?.closest?.(".port.input");
+    const to = port?.getAttribute("data-port-node") || "";
+    const input = port?.getAttribute("data-port-name") || "";
+    const output = connectState.output;
+    if (!to || !input || to === connectState.from) {
+      cancelConnection("不能把節點連到自己。");
+      return;
+    }
+    const ok = addEdge({ from: connectState.from, output: connectState.output, to, input });
+    event.preventDefault();
+    event.stopPropagation();
+    cancelConnection();
+    if (!ok) {
+      setStatus("這條連線無效，請確認目標是可連接的 input。", false);
+      return;
+    }
+    selectedId = to;
+    render();
+    setStatus(`已連線：${output} → ${input}`);
+  }
+
+  function completeConnectionFromKeyboard(event) {
+    if (!connectState || (event.key !== "Enter" && event.key !== " ")) return;
+    completeConnection({ currentTarget: event.currentTarget, preventDefault: () => event.preventDefault(), stopPropagation: () => event.stopPropagation() });
   }
 
   function renderInspector() {
@@ -529,9 +756,19 @@
     const output = $("edgeOutput")?.value || "";
     const input = $("edgeInput")?.value || "";
     if (!from || !to || !output || !input) return;
-    workflow.edges = workflow.edges.filter((edge) => !(edge.to === to.id && edge.input === input));
-    workflow.edges.push({ id: uid(), from: from.id, output, to: to.id, input });
+    addEdge({ from: from.id, output, to: to.id, input });
     render();
+  }
+
+  function addEdge({ from, output, to, input }) {
+    const source = nodeById(from);
+    const target = nodeById(to);
+    if (!source || !target || source.id === target.id || !output || !input) return false;
+    const targetInput = NODE_DEFS[target.type]?.inputs?.[input];
+    if (!targetInput || targetInput.type !== "link") return false;
+    workflow.edges = workflow.edges.filter((edge) => !(edge.to === target.id && edge.input === input));
+    workflow.edges.push({ id: uid(), from: source.id, output, to: target.id, input });
+    return true;
   }
 
   function renderJson() {

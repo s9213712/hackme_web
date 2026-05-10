@@ -180,6 +180,9 @@ h1 { margin: 0; font-size: 1.08rem; }
 .wf-node-kind { color: var(--muted); font-size: .72rem; }
 .wf-node-body { padding: .55rem .6rem; display: grid; gap: .42rem; }
 .port-row { display: flex; flex-wrap: wrap; gap: .3rem; align-items: center; }
+.input-row { justify-content: flex-start; }
+.output-row { justify-content: flex-end; }
+.value-row { opacity: .9; }
 .port {
   display: inline-flex;
   align-items: center;
@@ -189,9 +192,27 @@ h1 { margin: 0; font-size: 1.08rem; }
   border-radius: 999px;
   font-size: .72rem;
   color: var(--muted);
+  user-select: none;
 }
-.port.input { border-color: rgba(167,139,250,.45); color: #ddd6fe; }
-.port.output { border-color: rgba(54,211,153,.45); color: #bbf7d0; }
+.port.input,
+.port.output {
+  cursor: crosshair;
+  position: relative;
+}
+.port.input { border-color: rgba(167,139,250,.45); color: #ddd6fe; background: rgba(76,29,149,.24); }
+.port.output { border-color: rgba(54,211,153,.45); color: #bbf7d0; background: rgba(20,83,45,.24); }
+.port.value { border-style: dashed; color: #bfdbfe; }
+.port.muted { opacity: .62; border-style: dashed; }
+.port.input:hover,
+.port.input.compatible {
+  border-color: var(--violet);
+  box-shadow: 0 0 0 2px rgba(167,139,250,.18);
+}
+.port.output:hover,
+.port.output.connecting {
+  border-color: var(--green);
+  box-shadow: 0 0 0 2px rgba(54,211,153,.18);
+}
 .node-actions { display: flex; gap: .35rem; justify-content: flex-end; padding: 0 .6rem .55rem; }
 .node-actions button { min-height: 28px; padding: .22rem .45rem; font-size: .74rem; }
 .edge-path {
@@ -200,6 +221,11 @@ h1 { margin: 0; font-size: 1.08rem; }
   stroke-width: 3;
   stroke-linecap: round;
   opacity: .86;
+}
+.edge-path.temp {
+  stroke: var(--amber);
+  stroke-dasharray: 8 7;
+  opacity: .94;
 }
 .edge-dot {
   stroke: #020617;

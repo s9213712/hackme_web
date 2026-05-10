@@ -1586,12 +1586,47 @@
             </label>
             <div class="drive-card-sub">匯入的 workflow 會檢查節點結構、絕對路徑、外部 URL、惡意 shell/exec 片段；缺模型不會靜默 fallback。</div>
             <div class="drive-file-actions" style="justify-content:flex-start;">
-              <a class="btn" href="/comfyui-workflow-editor.html" target="_blank" rel="noopener">開啟視覺 Workflow 編輯器</a>
+              <button class="btn" id="comfyui-workflow-new-btn" type="button">新增空白版面</button>
+              <button class="btn" id="comfyui-workflow-starter-txt2img-btn" type="button">建立 txt2img 起始版</button>
+              <a class="btn btn-primary" href="/comfyui-workflow-editor.html" target="_blank" rel="noopener">開啟節點連線編輯器</a>
               <button class="btn" id="comfyui-workflow-load-visual-btn" type="button">載入視覺編輯器結果</button>
               <button class="btn" id="comfyui-workflow-export-current-btn" type="button">匯出目前 Workflow</button>
               <button class="btn btn-primary" id="comfyui-workflow-import-btn" type="button">新增版面</button>
               <button class="btn" id="comfyui-workflow-update-btn" type="button" disabled>更新目前選擇</button>
               <button class="btn" id="comfyui-workflow-reset-btn" type="button">清空編輯器</button>
+            </div>
+            <div class="settings-option-grid" style="margin-top:.6rem;">
+              <div class="field">
+                <label>快速追加節點</label>
+                <select id="comfyui-workflow-node-template">
+                  <option value="">選擇節點</option>
+                  <option value="checkpoint_loader">Checkpoint Loader</option>
+                  <option value="positive_prompt">Positive Prompt</option>
+                  <option value="negative_prompt">Negative Prompt</option>
+                  <option value="lora_loader">LoRA Loader</option>
+                  <option value="load_image">Load Image</option>
+                  <option value="load_image_mask">Load Mask</option>
+                  <option value="vae_encode">VAE Encode</option>
+                  <option value="vae_encode_for_inpaint">VAE Encode Inpaint</option>
+                  <option value="image_pad_for_outpaint">Outpaint Pad</option>
+                  <option value="ksampler">KSampler</option>
+                  <option value="ksampler_advanced">KSampler Advanced</option>
+                  <option value="vae_decode">VAE Decode</option>
+                  <option value="save_image">Save Image</option>
+                  <option value="controlnet_loader">ControlNet Loader</option>
+                  <option value="controlnet_apply_advanced">ControlNet Apply Advanced</option>
+                  <option value="upscale_model_loader">Upscale Model Loader</option>
+                  <option value="image_upscale">Image Upscale</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>節點顯示名稱</label>
+                <input id="comfyui-workflow-node-label" type="text" maxlength="80" placeholder="可留空使用預設名稱" />
+              </div>
+              <div class="field" style="align-self:end;">
+                <label>&nbsp;</label>
+                <button class="btn" id="comfyui-workflow-add-node-btn" type="button">追加節點</button>
+              </div>
             </div>
             <div id="comfyui-workflow-builder-preview" class="drive-card-sub">視覺編輯器結果載入後會在這裡顯示節點摘要。</div>
             <details class="drive-collapsible-panel settings-collapse comfyui-workflow-layout-details">

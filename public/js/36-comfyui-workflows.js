@@ -70,20 +70,55 @@ const COMFYUI_WORKFLOW_NODE_TEMPLATES = {
     label: "Load Image",
     inputs: { image: "" },
   },
+  load_image_mask: {
+    class_type: "LoadImageMask",
+    label: "Load Mask",
+    inputs: { image: "", channel: "alpha" },
+  },
+  vae_encode: {
+    class_type: "VAEEncode",
+    label: "VAE Encode",
+    inputs: { pixels: "", vae: "" },
+  },
+  vae_encode_for_inpaint: {
+    class_type: "VAEEncodeForInpaint",
+    label: "VAE Encode Inpaint",
+    inputs: { pixels: "", vae: "", mask: "", grow_mask_by: 6 },
+  },
+  image_pad_for_outpaint: {
+    class_type: "ImagePadForOutpaint",
+    label: "Outpaint Pad",
+    inputs: { image: "", left: 0, top: 0, right: 0, bottom: 0, feathering: 40 },
+  },
   lora_loader: {
     class_type: "LoraLoader",
     label: "LoRA Loader",
     inputs: { lora_name: "", strength_model: 1, strength_clip: 1, model: "", clip: "" },
+  },
+  ksampler_advanced: {
+    class_type: "KSamplerAdvanced",
+    label: "KSampler Advanced",
+    inputs: { add_noise: "enable", noise_seed: 0, steps: 20, cfg: 7, sampler_name: "euler", scheduler: "normal", start_at_step: 0, end_at_step: 20, return_with_leftover_noise: "enable", model: "", positive: "", negative: "", latent_image: "" },
   },
   controlnet_loader: {
     class_type: "ControlNetLoader",
     label: "ControlNet Loader",
     inputs: { control_net_name: "" },
   },
+  controlnet_apply_advanced: {
+    class_type: "ControlNetApplyAdvanced",
+    label: "ControlNet Apply Advanced",
+    inputs: { positive: "", negative: "", control_net: "", image: "", strength: 1, start_percent: 0, end_percent: 1 },
+  },
   upscale_model_loader: {
     class_type: "UpscaleModelLoader",
     label: "Upscale Model Loader",
     inputs: { model_name: "" },
+  },
+  image_upscale: {
+    class_type: "ImageUpscaleWithModel",
+    label: "Image Upscale",
+    inputs: { upscale_model: "", image: "" },
   },
 };
 
