@@ -47,6 +47,10 @@ def test_live_learning_validation_fast_retrain_flags_are_wired():
     assert "CENTRAL_FLANK_FOCUS_SEMANTICS" in source
     assert "central_flank_targeted_curriculum" in source
     assert "central_flank_failed_case_analysis" in source
+    assert "FLANK_REPAIR_SEMANTIC" in source
+    assert "flank_label_audit" in source
+    assert "flank_difficulty_performance" in source
+    assert "central_vs_flank_boundary" in source
 
 
 def test_semantic_specialist_training_rows_are_weighted():
@@ -197,6 +201,77 @@ def test_compact_checkpoint_preserves_central_flank_curriculum_summary():
     assert training["rows"] == []
     assert training["central_flank_targeted_curriculum"]["enabled"] is True
     assert training["central_flank_targeted_curriculum"]["train_rows_added"] == 27
+
+
+def test_exp27_flank_hard_coverage_and_label_audit_are_clean():
+    module = _load_validation_module()
+    curriculum = module._sanity_curriculum_variants(
+        {
+            "case_id": "probe",
+            "fen": module.chess.STARTING_FEN,
+            "side": "white",
+            "expected_move": "e2e4",
+            "expected_semantic": "e_pawn_central_break",
+        },
+        trusted_replays=20,
+    )
+    pool = curriculum["held_out_pool"]
+    audit = module._flank_label_audit_for_cases(pool["all_cases"], pool["label_quality"])
+    hard_flank = [
+        row for row in pool["clean_gate_cases"]
+        if row["semantic_class"] == "flank_pawn_push" and row["difficulty"] == "hard"
+    ]
+
+    assert "flank_pawn_push:hard" not in pool["semantic_coverage_missing"]
+    assert len(hard_flank) >= module.SEMANTIC_BALANCED_GATE_MIN_PER_DIFFICULTY
+    assert audit["questionable_count"] == 0
+    assert audit["invalid_count"] == 0
+    assert audit["by_difficulty"]["hard"]["clean"] >= module.SEMANTIC_BALANCED_GATE_MIN_PER_DIFFICULTY
+
+
+def test_exp27_flank_performance_and_boundary_report_shapes():
+    module = _load_validation_module()
+    variants = [
+        {
+            "case_id": "flank_easy",
+            "fen": module.chess.STARTING_FEN,
+            "side": "white",
+            "expected_move": "c2c4",
+            "expected_semantic": "flank_pawn_push",
+            "semantic_class": "flank_pawn_push",
+            "variant_split": "held_out",
+            "variant_difficulty": "easy",
+        },
+        {
+            "case_id": "e_case",
+            "fen": module.chess.STARTING_FEN,
+            "side": "white",
+            "expected_move": "e2e4",
+            "expected_semantic": "e_pawn_central_break",
+            "semantic_class": "e_pawn_central_break",
+            "variant_split": "held_out",
+            "variant_difficulty": "easy",
+        },
+    ]
+    final_rows = [
+        {"case_id": "flank_easy", "top1": "e2e4", "top3": ["e2e4"], "expected_is_top1": False},
+        {"case_id": "e_case", "top1": "c2c4", "top3": ["c2c4"], "expected_is_top1": False},
+    ]
+    raw_rows = [
+        {"case_id": "flank_easy", "raw_policy_top1": "e2e4", "raw_policy_top3": ["e2e4"], "expected_is_raw_top1": False},
+        {"case_id": "e_case", "raw_policy_top1": "c2c4", "raw_policy_top3": ["c2c4"], "expected_is_raw_top1": False},
+    ]
+    ids = {"flank_easy", "e_case"}
+
+    flank_perf = module._flank_difficulty_performance(variants, final_rows, raw_rows, ids)
+    boundary = module._central_vs_flank_boundary_report(
+        module._semantic_confusion_for_case_ids(variants, final_rows, raw_rows, ids)
+    )
+
+    assert flank_perf["by_difficulty"]["easy"]["total"] == 1
+    assert flank_perf["hard_coverage_complete"] is False
+    assert boundary["flank_to_central_confusion"] == 1
+    assert boundary["central_to_flank_confusion"] == 1
 
 
 def test_live_learning_validation_requires_individual_engine_selection():

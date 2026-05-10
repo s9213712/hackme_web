@@ -244,6 +244,12 @@ CENTRAL_FLANK_FOCUS_SEMANTICS = (
     "d_pawn_central_break",
     "flank_pawn_push",
 )
+FLANK_REPAIR_SEMANTIC = "flank_pawn_push"
+CENTRAL_VS_FLANK_BOUNDARY_SEMANTICS = (
+    "e_pawn_central_break",
+    "d_pawn_central_break",
+    "flank_pawn_push",
+)
 CENTRAL_FLANK_TARGETED_TRAIN_OFFSETS = (2, 4, 8)
 CENTRAL_FLANK_TARGETED_VALIDATION_OFFSETS = (7,)
 SEMANTIC_SAMPLING_MAX_SKEW_RATIO = 2.0
@@ -2267,6 +2273,9 @@ def _compact_sanity_probe_for_summary(probe: dict) -> dict:
             "development_multi_good_credit",
             "attacking_style_audit",
             "central_flank_failed_case_analysis",
+            "flank_label_audit",
+            "flank_difficulty_performance",
+            "central_vs_flank_boundary",
             "failed_by_semantic_top3",
             "overall_clean_heldout_pass_rate",
             "semantic_confusion_matrix",
@@ -2341,6 +2350,9 @@ def _compact_sanity_probe_for_summary(probe: dict) -> dict:
         "excluded_from_gate_cases": (debug.get("excluded_from_gate_cases") or [])[:8],
         "clean_vs_questionable_performance": debug.get("clean_vs_questionable_performance") or {},
         "central_flank_failed_case_analysis": debug.get("central_flank_failed_case_analysis") or ((debug.get("clean_vs_questionable_performance") or {}).get("central_flank_failed_case_analysis") or {}),
+        "flank_label_audit": debug.get("flank_label_audit") or {},
+        "flank_difficulty_performance": debug.get("flank_difficulty_performance") or {},
+        "central_vs_flank_boundary": debug.get("central_vs_flank_boundary") or {},
         "semantic_analysis": debug.get("semantic_analysis") or {},
         "failed_clean_cases_top3": debug.get("failed_clean_cases_top3") or [],
     }
@@ -3327,8 +3339,9 @@ def _semantic_balanced_gate_templates() -> list[dict]:
         case("gate_flank_medium_002", ["d2d4"], "c7c5", "flank_pawn_push", "medium", "Black c-pawn flank counter against d-pawn center."),
         case("gate_flank_medium_003", ["g1f3", "d7d5"], "c2c4", "flank_pawn_push", "medium", "White c-pawn flank pressure against d-pawn center."),
         case("gate_flank_hard_001", ["e2e4", "e7e5", "g1f3"], "c7c5", "flank_pawn_push", "hard", "Black adds flank pressure in an open e-pawn position."),
-        case("gate_flank_hard_002", ["d2d4", "d7d5", "g1f3"], "c7c5", "flank_pawn_push", "hard", "Black c-pawn pressure in queen-pawn structure."),
+        case("gate_flank_hard_002", ["g1f3", "d7d5", "b2b3"], "c7c5", "flank_pawn_push", "hard", "Black c-pawn pressure against a d-pawn center with quiet flank development."),
         case("gate_flank_hard_003", ["c2c4", "g8f6", "g1f3"], "c7c5", "flank_pawn_push", "hard", "Black contests flank space without material concession."),
+        case("gate_flank_hard_004", ["b1c3", "g8f6", "g1f3"], "c7c5", "flank_pawn_push", "hard", "Black keeps flank counterplay available after both white knights develop."),
         case("gate_kingside_easy_001", [], "g2g4", "kingside_aggression", "easy", "A legal kingside pawn push used only to test semantic recognition."),
         case("gate_kingside_easy_002", [], "h2h4", "kingside_aggression", "easy", "A legal rook-pawn aggression marker in a low-tension position."),
         case("gate_kingside_easy_003", ["b2b3"], "h7h5", "kingside_aggression", "easy", "Black kingside pawn push is legal and materially safe."),
@@ -4491,6 +4504,167 @@ def _central_flank_failed_case_analysis(
     }
 
 
+def _flank_label_audit_for_cases(cases: list[dict], label_quality: dict | None = None) -> dict:
+    label_by_id = _quality_rows_by_case(label_quality or {})
+    rows: list[dict] = []
+    by_difficulty = {
+        difficulty: {"total": 0, "clean": 0, "questionable": 0, "invalid": 0}
+        for difficulty in ["easy", "medium", "hard"]
+    }
+    for case in cases or []:
+        semantic = str(case.get("expected_semantic") or case.get("semantic_class") or "")
+        if semantic != FLANK_REPAIR_SEMANTIC:
+            continue
+        case_id = str(case.get("case_id") or "")
+        fen = str(case.get("fen") or "")
+        side = str(case.get("side") or "")
+        expected = str(case.get("expected_move") or "").lower()
+        quality = label_by_id.get(case_id) or (case.get("label_quality_detail") if isinstance(case.get("label_quality_detail"), dict) else {}) or (case.get("label_quality") if isinstance(case.get("label_quality"), dict) else {})
+        quality_name = str(quality.get("label_quality") or case.get("label_quality") or "unknown")
+        if quality_name not in {"clean", "questionable", "invalid"}:
+            quality_name = "unknown"
+        difficulty = str(case.get("variant_difficulty") or case.get("difficulty") or "unknown")
+        if difficulty in by_difficulty:
+            by_difficulty[difficulty]["total"] += 1
+            if quality_name in by_difficulty[difficulty]:
+                by_difficulty[difficulty][quality_name] += 1
+        try:
+            board = chess.Board(fen)
+            legal = chess.Move.from_uci(expected) in board.legal_moves
+            semantic_matches = _move_semantic_class_for_board(board, expected) == FLANK_REPAIR_SEMANTIC
+        except Exception:
+            legal = False
+            semantic_matches = False
+        style_like = bool(
+            quality_name == "questionable"
+            or float(quality.get("static_cp_delta") or 0.0) < SANITY_LABEL_QUESTIONABLE_CP_DELTA
+            or not semantic_matches
+        )
+        rows.append(
+            {
+                "case_id": case_id,
+                "difficulty": difficulty,
+                "fen": fen,
+                "expected_move": expected,
+                "label_quality": quality_name,
+                "legal_moves_contains_expected": legal,
+                "semantic_matches_expected": semantic_matches,
+                "static_best_move": quality.get("static_best_move") or case.get("static_best_move"),
+                "static_cp_delta": quality.get("static_cp_delta") if quality.get("static_cp_delta") is not None else case.get("static_cp_delta"),
+                "source_reason": case.get("source_reason"),
+                "balanced_gate_eligible": bool(quality_name == "clean" and legal and semantic_matches),
+                "questionable_style_or_bad_label": style_like,
+                "reason": quality.get("reason") or case.get("label_quality_reason") or "",
+            }
+        )
+    return {
+        "supported": True,
+        "source": "exp27_flank_label_audit",
+        "semantic_class": FLANK_REPAIR_SEMANTIC,
+        "case_count": len(rows),
+        "clean_count": sum(1 for row in rows if row.get("label_quality") == "clean"),
+        "questionable_count": sum(1 for row in rows if row.get("label_quality") == "questionable"),
+        "invalid_count": sum(1 for row in rows if row.get("label_quality") == "invalid"),
+        "by_difficulty": by_difficulty,
+        "questionable_or_invalid_cases": [
+            row for row in rows
+            if row.get("label_quality") in {"questionable", "invalid"} or row.get("questionable_style_or_bad_label")
+        ],
+        "cases": rows,
+    }
+
+
+def _flank_difficulty_performance(
+    variants: list[dict],
+    final_rows: list[dict],
+    raw_rows: list[dict],
+    case_ids: set[str],
+    *,
+    label_quality: dict | None = None,
+) -> dict:
+    by_difficulty = {}
+    for difficulty in ["easy", "medium", "hard"]:
+        ids = {
+            str(variant.get("case_id") or "")
+            for variant in variants or []
+            if str(variant.get("case_id") or "") in case_ids
+            and str(variant.get("expected_semantic") or variant.get("semantic_class") or "") == FLANK_REPAIR_SEMANTIC
+            and str(variant.get("variant_difficulty") or variant.get("difficulty") or "") == difficulty
+        }
+        row = _balanced_gate_performance_for_case_ids(
+            variants,
+            final_rows,
+            raw_rows,
+            ids,
+            label_quality=label_quality,
+        )
+        by_difficulty[difficulty] = {
+            "total": int(row.get("count") or 0),
+            "passed": int(row.get("balanced_hits") or 0),
+            "pass_rate": row.get("balanced_pass_rate"),
+            "raw_policy_passed": int(row.get("raw_policy_hits") or 0),
+            "raw_policy_pass_rate": row.get("raw_policy_pass_rate"),
+            "cases": row.get("cases") or [],
+        }
+    hard_total = int((by_difficulty.get("hard") or {}).get("total") or 0)
+    return {
+        "supported": True,
+        "source": "exp27_flank_difficulty_performance",
+        "semantic_class": FLANK_REPAIR_SEMANTIC,
+        "by_difficulty": by_difficulty,
+        "hard_coverage_complete": hard_total >= SEMANTIC_BALANCED_GATE_MIN_PER_DIFFICULTY,
+        "required_hard_cases": SEMANTIC_BALANCED_GATE_MIN_PER_DIFFICULTY,
+    }
+
+
+def _central_vs_flank_boundary_report(confusion: dict) -> dict:
+    matrix = confusion.get("matrix") or {}
+    raw_matrix = confusion.get("raw_policy_matrix") or {}
+
+    def pick(src: dict, expected: str, predicted: str) -> int:
+        return int(((src.get(expected) or {}).get(predicted)) or 0)
+
+    central_to_flank = (
+        pick(matrix, "e_pawn_central_break", "flank_pawn_push")
+        + pick(matrix, "d_pawn_central_break", "flank_pawn_push")
+    )
+    flank_to_central = (
+        pick(matrix, "flank_pawn_push", "e_pawn_central_break")
+        + pick(matrix, "flank_pawn_push", "d_pawn_central_break")
+    )
+    raw_central_to_flank = (
+        pick(raw_matrix, "e_pawn_central_break", "flank_pawn_push")
+        + pick(raw_matrix, "d_pawn_central_break", "flank_pawn_push")
+    )
+    raw_flank_to_central = (
+        pick(raw_matrix, "flank_pawn_push", "e_pawn_central_break")
+        + pick(raw_matrix, "flank_pawn_push", "d_pawn_central_break")
+    )
+    focus_rows = [
+        row for row in confusion.get("cases") or []
+        if str(row.get("expected_semantic") or "") in CENTRAL_VS_FLANK_BOUNDARY_SEMANTICS
+    ]
+    return {
+        "supported": True,
+        "source": "exp27_central_vs_flank_boundary_report",
+        "focus_semantics": list(CENTRAL_VS_FLANK_BOUNDARY_SEMANTICS),
+        "case_count": len(focus_rows),
+        "matrix": {
+            semantic: matrix.get(semantic) or {}
+            for semantic in CENTRAL_VS_FLANK_BOUNDARY_SEMANTICS
+        },
+        "raw_policy_matrix": {
+            semantic: raw_matrix.get(semantic) or {}
+            for semantic in CENTRAL_VS_FLANK_BOUNDARY_SEMANTICS
+        },
+        "central_to_flank_confusion": central_to_flank,
+        "flank_to_central_confusion": flank_to_central,
+        "raw_policy_central_to_flank_confusion": raw_central_to_flank,
+        "raw_policy_flank_to_central_confusion": raw_flank_to_central,
+        "cases": focus_rows,
+    }
+
+
 def _semantic_confusion_for_case_ids(
     variants: list[dict],
     final_rows: list[dict],
@@ -5110,6 +5284,18 @@ def _evaluate_sanity_learning_probe(
         case_ids=balanced_clean_ids,
         label_quality=label_quality,
     )
+    flank_label_audit = _flank_label_audit_for_cases(
+        list(held_out_pool.get("all_cases") or unseen_variants),
+        held_out_pool_quality or label_quality,
+    )
+    flank_difficulty_performance = _flank_difficulty_performance(
+        unseen_variants,
+        after_unseen_variants,
+        raw_unseen_after,
+        balanced_clean_ids,
+        label_quality=label_quality,
+    )
+    central_vs_flank_boundary = _central_vs_flank_boundary_report(clean_semantic_confusion)
     failed_by_semantic_top3 = {
         semantic: [
             row
@@ -5419,6 +5605,9 @@ def _evaluate_sanity_learning_probe(
             "cases": attacking_style_audit.get("cases") or [],
         },
         "central_flank_failed_case_analysis": central_flank_failed_case_analysis,
+        "flank_label_audit": flank_label_audit,
+        "flank_difficulty_performance": flank_difficulty_performance,
+        "central_vs_flank_boundary": central_vs_flank_boundary,
         "failed_by_semantic_top3": failed_by_semantic_top3,
         "overall_clean_heldout_pass_rate": clean_held_out_performance.get("final_pass_rate"),
         "semantic_confusion_matrix": clean_semantic_confusion.get("matrix") if clean_semantic_confusion else {},
@@ -5482,6 +5671,9 @@ def _evaluate_sanity_learning_probe(
                 "required_per_semantic_difficulty": held_out_pool.get("required_per_semantic_difficulty"),
                 "source": held_out_pool.get("source"),
             },
+            "flank_label_audit": flank_label_audit,
+            "flank_difficulty_performance": flank_difficulty_performance,
+            "central_vs_flank_boundary": central_vs_flank_boundary,
             "semantic_distribution_by_split": {
                 "train": _semantic_positive_distribution(curriculum.get("train") or []),
                 "validation": _semantic_positive_distribution(curriculum.get("validation") or []),
@@ -5511,6 +5703,9 @@ def _evaluate_sanity_learning_probe(
                 "clean_held_out_by_semantic": clean_held_out_by_semantic,
                 "clean_heldout_by_semantic": clean_heldout_by_semantic,
                 "central_flank_failed_case_analysis": central_flank_failed_case_analysis,
+                "flank_label_audit": flank_label_audit,
+                "flank_difficulty_performance": flank_difficulty_performance,
+                "central_vs_flank_boundary": central_vs_flank_boundary,
                 "failed_by_semantic_top3": failed_by_semantic_top3,
                 "questionable": questionable_performance,
                 "invalid": invalid_performance,
@@ -6343,6 +6538,9 @@ def _checkpoint_consistency_report(summary: dict) -> dict:
                 row_reasons.append(f"semantic_coverage_missing: {semantic}")
             elif int(semantic_row.get("passed") or 0) <= 0:
                 row_reasons.append(f"semantic class {semantic} clean held-out pass count is zero")
+        flank_difficulty = probe.get("flank_difficulty_performance") or feature_debug.get("flank_difficulty_performance") or ((feature_debug.get("clean_vs_questionable_performance") or {}).get("flank_difficulty_performance") or {})
+        if flank_difficulty and not bool(flank_difficulty.get("hard_coverage_complete", True)):
+            row_reasons.append("flank hard clean gate coverage missing")
         if prior_failed > 0:
             row_reasons.append("prior learned case retention regressed")
         if hard_margin is not None and hard_margin < 0.0:
@@ -6394,6 +6592,9 @@ def _checkpoint_consistency_report(summary: dict) -> dict:
             "development_multi_good_credit": probe.get("development_multi_good_credit") or {},
             "attacking_style_audit": probe.get("attacking_style_audit") or {},
             "central_flank_failed_case_analysis": probe.get("central_flank_failed_case_analysis") or feature_debug.get("central_flank_failed_case_analysis") or {},
+            "flank_label_audit": probe.get("flank_label_audit") or feature_debug.get("flank_label_audit") or ((feature_debug.get("clean_vs_questionable_performance") or {}).get("flank_label_audit") or {}),
+            "flank_difficulty_performance": probe.get("flank_difficulty_performance") or feature_debug.get("flank_difficulty_performance") or ((feature_debug.get("clean_vs_questionable_performance") or {}).get("flank_difficulty_performance") or {}),
+            "central_vs_flank_boundary": probe.get("central_vs_flank_boundary") or feature_debug.get("central_vs_flank_boundary") or ((feature_debug.get("clean_vs_questionable_performance") or {}).get("central_vs_flank_boundary") or {}),
             "failed_by_semantic_top3": feature_debug.get("failed_by_semantic_top3") or ((feature_debug.get("clean_vs_questionable_performance") or {}).get("failed_by_semantic_top3") or {}),
             "clean_held_out_pool_sufficient": clean_pool_sufficient,
             "questionable_held_out_count": int(probe.get("questionable_held_out_count") or 0),
@@ -8052,10 +8253,28 @@ def _write_engine_report(engine_dir: Path, summary: dict) -> None:
         for item in checkpoint_consistency.get("checkpoint_consistency_table") or []:
             focus = item.get("central_flank_targeted_curriculum") or {}
             analysis = item.get("central_flank_failed_case_analysis") or {}
+            flank_audit = item.get("flank_label_audit") or {}
+            flank_perf = item.get("flank_difficulty_performance") or {}
+            boundary = item.get("central_vs_flank_boundary") or {}
             lines.append(
                 f"- trusted=`{item.get('trusted_count')}` focus_semantics=`{focus.get('focus_semantics')}` "
                 f"targeted_train_rows=`{focus.get('train_rows_added')}` "
                 f"semantic_pair_contrast=`{focus.get('semantic_pair_contrast')}`"
+            )
+            lines.append(
+                f"- trusted=`{item.get('trusted_count')}` flank_label_audit clean=`{flank_audit.get('clean_count')}` "
+                f"questionable=`{flank_audit.get('questionable_count')}` invalid=`{flank_audit.get('invalid_count')}` "
+                f"by_difficulty=`{flank_audit.get('by_difficulty')}`"
+            )
+            lines.append(
+                f"- trusted=`{item.get('trusted_count')}` flank_difficulty_performance=`{flank_perf.get('by_difficulty')}` "
+                f"hard_coverage_complete=`{flank_perf.get('hard_coverage_complete')}`"
+            )
+            lines.append(
+                f"- trusted=`{item.get('trusted_count')}` central_vs_flank_boundary "
+                f"central_to_flank=`{boundary.get('central_to_flank_confusion')}` "
+                f"flank_to_central=`{boundary.get('flank_to_central_confusion')}` "
+                f"raw_flank_to_central=`{boundary.get('raw_policy_flank_to_central_confusion')}`"
             )
             for semantic, row in (analysis.get("by_semantic") or {}).items():
                 lines.append(
@@ -9656,6 +9875,10 @@ def _run_semantic_specialist_probes(
         exact_cases = [row for row in train_pool if str(row.get("semantic_class") or row.get("expected_semantic")) in semantics]
         seen_cases = list(exact_cases)
         clean_heldout = [row for row in clean_heldout_pool if str(row.get("semantic_class") or row.get("expected_semantic")) in semantics]
+        hard_clean_heldout = [
+            row for row in clean_heldout
+            if str(row.get("variant_difficulty") or row.get("difficulty") or "") == "hard"
+        ]
         train_rows = [_specialist_training_row(row, weight=2.2) for row in exact_cases]
         _apply_semantic_class_balanced_weights(train_rows)
         train_path = group_dir / "train_dataset.jsonl"
@@ -9716,6 +9939,19 @@ def _run_semantic_specialist_probes(
         exact_perf = _position_set_performance(engine_alias=engine_alias, model_path=candidate_model_path, cases=exact_cases, label=f"{group_name} exact")
         seen_perf = _position_set_performance(engine_alias=engine_alias, model_path=candidate_model_path, cases=seen_cases, label=f"{group_name} seen")
         heldout_perf = _position_set_performance(engine_alias=engine_alias, model_path=candidate_model_path, cases=clean_heldout, label=f"{group_name} clean held-out")
+        hard_heldout_perf = _position_set_performance(engine_alias=engine_alias, model_path=candidate_model_path, cases=hard_clean_heldout, label=f"{group_name} hard clean held-out")
+        heldout_by_difficulty = {
+            difficulty: _position_set_performance(
+                engine_alias=engine_alias,
+                model_path=candidate_model_path,
+                cases=[
+                    row for row in clean_heldout
+                    if str(row.get("variant_difficulty") or row.get("difficulty") or "") == difficulty
+                ],
+                label=f"{group_name} {difficulty} clean held-out",
+            )
+            for difficulty in ["easy", "medium", "hard"]
+        }
         margin = _specialist_hard_negative_margin(engine_alias=engine_alias, model_path=candidate_model_path, cases=clean_heldout or exact_cases)
         label_quality = _sanity_label_quality_audit(clean_heldout)
         blocker_rows = []
@@ -9739,6 +9975,8 @@ def _run_semantic_specialist_probes(
             "exact": exact_perf,
             "seen_variants": seen_perf,
             "clean_held_out": heldout_perf,
+            "hard_clean_held_out": hard_heldout_perf,
+            "clean_held_out_by_difficulty": heldout_by_difficulty,
             "hard_negative_margin": margin,
             "retention": {
                 "exact_retained": exact_perf.get("final_pass_rate"),

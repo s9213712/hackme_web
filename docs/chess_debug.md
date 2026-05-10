@@ -723,3 +723,103 @@ Promotion gate 仍失敗的主要原因：
 - exp26 targeted curriculum 有改善 d/e pawn 類與 overall balanced score，但 flank 仍是最弱類別；尤其 cp10 flank 0/8、cp20 flank 1/8。
 - final decision path 不是主要 blocker；e/d/flank 失敗大多在 raw policy 階段已經沒有把 expected move 排上來。
 - 下一步不應再調 gate，而應針對 flank hard coverage、central-vs-flank semantic boundary、hard-negative margin 轉正與 cp20 retention 做更細的資料/表徵設計。
+
+## Exp27 - Flank Pawn Push Specialist Repair
+
+目標要求：
+
+- 保持 exp26 已改善的 e/d central 與 development retention，專門修 `flank_pawn_push` 泛化不足。
+- 補齊 `flank_pawn_push:hard` clean gate cases；若 hard flank coverage missing，promotion gate 必須 false。
+- 對每個 flank expected move 做 label audit；若只是風格偏好或 static/search 落後太多，標 questionable，不進 balanced hard gate。
+- 新增 flank specialist probe：`flank_only` 訓練，測 exact、seen、clean held-out、hard clean。
+- 建立 central push vs flank push confusion matrix；flank positive 時 e/d pawn push 作 semantic negatives。
+- Gate 條件維持：balanced clean >= 0.5、flank pass > 0 且 hard flank coverage complete、e/d/development 不退步、mistake retention 不得 fail、illegal=0、blunder_avoid=1、tactic 不退步。
+
+目前實作：
+
+- 新增 `FLANK_REPAIR_SEMANTIC` 與 `CENTRAL_VS_FLANK_BOUNDARY_SEMANTICS`，明確把 exp27 聚焦在 flank repair。
+- 修正 `gate_flank_hard_002`，避免和 train/validation key 撞到；新增 `gate_flank_hard_004`，讓 hard flank clean gate coverage 有冗餘。
+- 新增 `_flank_label_audit_for_cases()`，輸出 flank clean/questionable/invalid、合法性、semantic match、static cp delta、source reason 與 easy/medium/hard 分布。
+- 新增 `_flank_difficulty_performance()`，輸出 flank easy/medium/hard pass rate 與 hard coverage 是否完整。
+- 新增 `_central_vs_flank_boundary_report()`，量化 central-to-flank 與 flank-to-central confusion，並分 raw policy / final decision。
+- semantic specialist probe 新增 hard clean held-out 與 by-difficulty held-out 結果，讓 `flank_only` 是否真能學 hard flank 可直接審計。
+- `SUMMARY.md` 的 Central / Flank Semantic Improvement 區塊會列出 flank label audit、flank difficulty performance、central-vs-flank boundary。
+
+結果：
+
+- 實跑目錄：`/home/s92137/chess_results/exp27_flank_pawn_push_specialist_repair`。
+- 整體 verdict：`HIGH_RISK`，promotion 維持 false。
+- `timing_breakdown.total_wall_seconds=1515.086`，其中 `retrain_seconds=44.623`、`deterministic_eval_seconds=48.935`、`semantic_specialist_probe_seconds=81.598`、`report_write_seconds=1.346`。
+- Artifact consistency 自檢通過：root/engine JSON verdict 與 promotion gate 一致，root/engine Markdown 存在，engine SUMMARY 含 `Can This Model Be Promoted?`、`flank_label_audit` 與 `central_vs_flank_boundary`。
+
+Flank label audit：
+
+- cp10/cp20 flank label audit 都是：clean=10、questionable=0、invalid=0。
+- flank easy：3 clean / 0 questionable / 0 invalid。
+- flank medium：3 clean / 0 questionable / 0 invalid。
+- flank hard：4 clean / 0 questionable / 0 invalid。
+- `hard_coverage_complete=true`，`flank_pawn_push:hard` coverage missing 已修正。
+- 這代表 exp27 已排除「flank hard 題庫缺題或明顯錯標」這個 blocker。
+
+Balanced clean held-out 結果：
+
+- cp10 overall balanced clean pass rate：`0.3514`。
+- cp10 by semantic：`e_pawn_central_break=4/9`、`d_pawn_central_break=0/9`、`flank_pawn_push=1/10`、`development_move=8/9`。
+- cp20 overall balanced clean pass rate：`0.3784`。
+- cp20 by semantic：`e_pawn_central_break=4/9`、`d_pawn_central_break=1/9`、`flank_pawn_push=1/10`、`development_move=8/9`。
+- Development retention 仍維持 `8/9`，沒有被 flank repair 破壞。
+- Mistake retention 在 trusted=20 這輪已 match expected：`before=f8a3`、`after=a5a4`、`expected=a5a4`。
+
+Flank easy/medium/hard pass rate：
+
+- cp10 flank easy：`0/3 = 0.0`。
+- cp10 flank medium：`0/3 = 0.0`。
+- cp10 flank hard：`1/4 = 0.25`。
+- cp20 flank easy：`0/3 = 0.0`。
+- cp20 flank medium：`0/3 = 0.0`。
+- cp20 flank hard：`1/4 = 0.25`。
+- flank hard coverage 已完整，但實際能力沒有明顯提升；easy/medium 仍完全失敗。
+
+Central vs flank boundary：
+
+- cp10 central_to_flank_confusion：1；flank_to_central_confusion：7。
+- cp10 raw_policy_central_to_flank_confusion：1；raw_policy_flank_to_central_confusion：7。
+- cp20 central_to_flank_confusion：2；flank_to_central_confusion：7。
+- cp20 raw_policy_central_to_flank_confusion：2；raw_policy_flank_to_central_confusion：7。
+- 主要錯誤方向是 flank 被預測成 central push；這和 exp26 的「flank raw policy fail」一致。
+
+Flank specialist probe：
+
+- `flank_only` specialist：`passed=true` 只是因為 clean held-out 有少量 >0 pass，不能解讀為 flank 已可用。
+- `flank_only` exact final pass rate：`0.2`。
+- `flank_only` seen final pass rate：`0.2`。
+- `flank_only` clean held-out final pass rate：`0.1`。
+- `flank_only` hard clean held-out final pass rate：`0.0`。
+- `flank_only` hard-negative min margin：`-0.02643851`。
+- `flank_only` by difficulty：easy `0.3333`、medium `0.0`、hard `0.0`。
+- 結論：flank_only 單獨訓練仍低，尤其 hard clean 0.0；這偏向 label/feature/representation 設計問題，不是 mixed semantic interference。
+
+Promotion gate 仍失敗的主要原因：
+
+- catastrophic regression detected。
+- cp10/cp20 seen retention below threshold。
+- cp10/cp20 clean held-out retention below threshold。
+- cp10 `d_pawn_central_break` pass count 仍為 0。
+- cp10/cp20 hard-negative margin 與 semantic hard-negative margin 仍為負。
+- cp10/cp20 targeted semantic centroid distance below threshold。
+- cp10/cp20 sanity learning probe 仍只算 memorized exact FEN，seen/clean held-out 未達門檻。
+- 整體 balanced clean 仍低於 `>=0.5`。
+
+驗證：
+
+- `python3 -m py_compile scripts/games/chess_live_learning_validation.py services/games/chess_dl.py` 通過。
+- `PYTHONPATH=/home/s92137/hackme_web python3 -m pytest tests/scripts/games/test_chess_live_learning_validation_script.py -q`：`31 passed in 489.75s`。
+- `PYTHONPATH=/home/s92137/hackme_web python3 -m pytest tests/games -q`：`67 passed in 23.83s`。
+- quick deterministic gate + semantic specialist probes 實跑完成，artifact 寫入 `/home/s92137/chess_results/exp27_flank_pawn_push_specialist_repair`。
+
+經驗：
+
+- exp27 成功修掉 flank hard coverage missing，但沒有修掉 flank semantic generalization。
+- flank labels 在目前 static audit 下是 clean，代表問題不再是題庫缺題或明顯錯標。
+- flank_only specialist 仍無法通過 hard clean，顯示模型目前對 flank pawn push 的 feature/representation 不足；不是混合任務互相干擾造成。
+- 下一步不應再只補 flank hard cases，而應重審 flank 類的 feature 設計：什麼盤面條件讓 c-pawn/b-pawn flank push 是「棋力正解」，以及如何和 generic central push bias 分離。
