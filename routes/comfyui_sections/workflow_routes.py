@@ -81,6 +81,7 @@ def register_comfyui_workflow_routes(app, ctx):
     create_generation_job = ctx["create_generation_job"]
     capture_request_audit_meta = ctx["capture_request_audit_meta"]
     run_comfyui_workflow_preset_job = ctx["run_comfyui_workflow_preset_job"]
+    comfyui_paid_api_policy = ctx.get("comfyui_paid_api_policy")
     DEFAULT_GENERATION_TIMEOUT_SECONDS = ctx["DEFAULT_GENERATION_TIMEOUT_SECONDS"]
     safe_text = ctx["safe_text"]
     threading = ctx["threading"]
@@ -498,7 +499,7 @@ def register_comfyui_workflow_routes(app, ctx):
             # tests stay green.
             strict_mode = False
         try:
-            body = ctx["request"].get_json(force=True, silent=True) if strict_mode else {}
+            body = ctx["request"].get_json(force=True, silent=True) or {}
         except Exception:
             body = {}
         body = body if isinstance(body, dict) else {}
@@ -573,6 +574,15 @@ def register_comfyui_workflow_routes(app, ctx):
                     ),
                 )
 
+            prompt_extra_data = {}
+            if comfyui_paid_api_policy:
+                prompt_extra_data, paid_api_error = comfyui_paid_api_policy(
+                    workflow_json,
+                    confirm=bool(body.get("confirm_paid_api_nodes")),
+                )
+                if paid_api_error:
+                    return paid_api_error
+
             run_id = create_workflow_run(
                 conn,
                 preset_id=preset_id,
@@ -589,7 +599,7 @@ def register_comfyui_workflow_routes(app, ctx):
         request_meta = capture_request_audit_meta()
         worker = threading.Thread(
             target=run_comfyui_workflow_preset_job,
-            args=(job_id, dict(actor), dict(row), run_id, DEFAULT_GENERATION_TIMEOUT_SECONDS, request_meta),
+            args=(job_id, dict(actor), dict(row), run_id, DEFAULT_GENERATION_TIMEOUT_SECONDS, request_meta, prompt_extra_data, workflow_json),
             daemon=True,
         )
         worker.start()

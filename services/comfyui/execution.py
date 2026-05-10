@@ -10,17 +10,20 @@ QUEUE_TIMEOUT_EXTENSION_SECONDS = 1800
 QUEUE_MAX_TIMEOUT_SECONDS = 21600
 
 
-def queue_prompt_with_client_id(client, workflow, *, client_id=None, error_cls):
+def queue_prompt_with_client_id(client, workflow, *, client_id=None, extra_data=None, error_cls):
     client_id = str(client_id or uuid.uuid4().hex)
-    data = client._json_request("/prompt", method="POST", payload={"prompt": workflow, "client_id": client_id})
+    payload = {"prompt": workflow, "client_id": client_id}
+    if isinstance(extra_data, dict) and extra_data:
+        payload["extra_data"] = dict(extra_data)
+    data = client._json_request("/prompt", method="POST", payload=payload)
     prompt_id = data.get("prompt_id") if isinstance(data, dict) else None
     if not prompt_id:
         raise error_cls("ComfyUI 未回傳 prompt_id")
     return {"prompt_id": str(prompt_id), "client_id": client_id}
 
 
-def queue_prompt(client, workflow, *, error_cls):
-    return queue_prompt_with_client_id(client, workflow, client_id=None, error_cls=error_cls)["prompt_id"]
+def queue_prompt(client, workflow, *, extra_data=None, error_cls):
+    return queue_prompt_with_client_id(client, workflow, client_id=None, extra_data=extra_data, error_cls=error_cls)["prompt_id"]
 
 
 def interrupt(client):
@@ -239,6 +242,7 @@ def generate_from_workflow(
     timeout_seconds=1800,
     expected_count=1,
     progress_callback=None,
+    extra_data=None,
     error_cls,
     websocket_module=None,
     image_fetcher,
@@ -251,7 +255,13 @@ def generate_from_workflow(
                 websocket_conn = client._open_progress_socket(client_id, timeout=min(5, client.timeout))
             except error_cls:
                 websocket_conn = None
-        queued = queue_prompt_with_client_id(client, workflow, client_id=client_id, error_cls=error_cls)
+        queued = queue_prompt_with_client_id(
+            client,
+            workflow,
+            client_id=client_id,
+            extra_data=extra_data,
+            error_cls=error_cls,
+        )
         prompt_id = queued["prompt_id"]
         emit_progress(progress_callback, {
             "prompt_id": prompt_id,
@@ -311,6 +321,7 @@ def generate_image(
     *,
     timeout_seconds=1800,
     progress_callback=None,
+    extra_data=None,
     build_generation_workflow_func,
     generate_from_workflow_func=None,
     error_cls,
@@ -325,6 +336,7 @@ def generate_image(
             timeout_seconds=timeout_seconds,
             expected_count=expected_count,
             progress_callback=progress_callback,
+            extra_data=extra_data,
         )
     if image_fetcher is None:
         raise TypeError("generate_image() requires image_fetcher when generate_from_workflow_func is not provided")
@@ -334,6 +346,7 @@ def generate_image(
         timeout_seconds=timeout_seconds,
         expected_count=expected_count,
         progress_callback=progress_callback,
+        extra_data=extra_data,
         error_cls=error_cls,
         websocket_module=websocket_module,
         image_fetcher=image_fetcher,

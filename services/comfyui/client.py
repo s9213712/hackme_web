@@ -289,16 +289,17 @@ class ComfyUIClient:
     def build_generation_workflow(self, params):
         return workflow_builder.build_generation_workflow(params, error_cls=ComfyUIError)
 
-    def queue_prompt_with_client_id(self, workflow, *, client_id=None):
+    def queue_prompt_with_client_id(self, workflow, *, client_id=None, extra_data=None):
         return comfy_execution.queue_prompt_with_client_id(
             self,
             workflow,
             client_id=client_id,
+            extra_data=extra_data,
             error_cls=ComfyUIError,
         )
 
-    def queue_prompt(self, workflow):
-        return comfy_execution.queue_prompt(self, workflow, error_cls=ComfyUIError)
+    def queue_prompt(self, workflow, *, extra_data=None):
+        return comfy_execution.queue_prompt(self, workflow, extra_data=extra_data, error_cls=ComfyUIError)
 
     def interrupt(self):
         return comfy_execution.interrupt(self)
@@ -368,24 +369,26 @@ class ComfyUIClient:
             error_cls=ComfyUIError,
         )
 
-    def generate_from_workflow(self, workflow, *, timeout_seconds=1800, expected_count=1, progress_callback=None):
+    def generate_from_workflow(self, workflow, *, timeout_seconds=1800, expected_count=1, progress_callback=None, extra_data=None):
         return comfy_execution.generate_from_workflow(
             self,
             workflow,
             timeout_seconds=timeout_seconds,
             expected_count=expected_count,
             progress_callback=progress_callback,
+            extra_data=extra_data,
             error_cls=ComfyUIError,
             websocket_module=websocket,
             image_fetcher=self.fetch_image,
         )
 
-    def generate_image(self, params, *, timeout_seconds=1800, progress_callback=None):
+    def generate_image(self, params, *, timeout_seconds=1800, progress_callback=None, extra_data=None):
         return comfy_execution.generate_image(
             self,
             params,
             timeout_seconds=timeout_seconds,
             progress_callback=progress_callback,
+            extra_data=extra_data,
             error_cls=ComfyUIError,
             build_generation_workflow_func=self.build_generation_workflow,
             generate_from_workflow_func=self.generate_from_workflow,

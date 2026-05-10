@@ -38,6 +38,7 @@ from services.comfyui.settings import (
     validate_comfyui_api_port,
     validate_comfyui_api_url,
 )
+from services.comfyui.api_nodes import build_comfyui_account_extra_data, detect_paid_api_nodes
 from services.storage.cloud_drive import attach_existing_file, ensure_cloud_drive_attachment_schema, store_cloud_upload
 from services.platform.admin_validation import (
     validate_comfyui_api_host as shared_validate_comfyui_api_host,
@@ -1815,25 +1816,69 @@ def register_comfyui_routes(app, deps):
         finally:
             _unregister_active_generation(generation_token)
 
-    def _run_comfyui_workflow_preset_job(job_id, actor, row, run_id, timeout_seconds, request_meta=None):
+    def _comfyui_account_api_key():
+        return str((get_system_settings() or {}).get("comfyui_account_api_key") or os.environ.get("COMFYUI_ACCOUNT_API_KEY") or "").strip()
+
+    def _comfyui_paid_api_policy(workflow_json, *, confirm=False, object_info=None):
+        paid_api = detect_paid_api_nodes(workflow_json, object_info=object_info)
+        if not paid_api.get("required"):
+            return {}, None
+        settings = get_system_settings() or {}
+        if not bool(settings.get("comfyui_paid_api_nodes_enabled")):
+            return None, (
+                json_resp({
+                    "ok": False,
+                    "msg": "這個 workflow 含有可能需要付費的 ComfyUI API node，但伺服器尚未允許付費/API nodes。",
+                    "stage": "paid_api_nodes_disabled",
+                    "paid_api_nodes": paid_api,
+                }),
+                409,
+            )
+        api_key = _comfyui_account_api_key()
+        if not api_key:
+            return None, (
+                json_resp({
+                    "ok": False,
+                    "msg": "這個 workflow 需要 ComfyUI Account API Key；請先由 root 在伺服器設定中保存 key。",
+                    "stage": "paid_api_key_missing",
+                    "paid_api_nodes": paid_api,
+                }),
+                409,
+            )
+        if not confirm:
+            return None, (
+                json_resp({
+                    "ok": False,
+                    "msg": "這個 workflow 可能消耗 ComfyUI API credits，請先確認後再執行。",
+                    "stage": "paid_api_confirmation_required",
+                    "paid_api_nodes": paid_api,
+                    "confirmation_required": True,
+                }),
+                409,
+            )
+        return build_comfyui_account_extra_data(api_key), None
+
+    def _run_comfyui_workflow_preset_job(job_id, actor, row, run_id, timeout_seconds, request_meta=None, prompt_extra_data=None, workflow_override=None):
         backend_binding = _comfyui_binding(actor)
         active_client = _client_for_url(backend_binding["url"])
         request_meta = request_meta if isinstance(request_meta, dict) else {}
         audit_ip = request_meta.get("client_ip") or "-"
         audit_ua = request_meta.get("user_agent") or "-"
         _update_generation_job(job_id, status="running")
-        workflow_json = _parse_json_field(row["workflow_json"], {}) or {}
+        workflow_json = workflow_override if isinstance(workflow_override, dict) else (_parse_json_field(row["workflow_json"], {}) or {})
         default_params = _parse_json_field(row["default_params_json"], {}) or {}
         prompt = str(default_params.get("prompt") or "")
         negative_prompt = str(default_params.get("negative_prompt") or "")
         expected_count = max(1, int(default_params.get("batch_size") or 1))
         try:
-            result = active_client.generate_from_workflow(
-                workflow_json,
-                timeout_seconds=timeout_seconds,
-                expected_count=expected_count,
-                progress_callback=lambda progress: _update_generation_job_progress(job_id, progress),
-            )
+            run_kwargs = {
+                "timeout_seconds": timeout_seconds,
+                "expected_count": expected_count,
+                "progress_callback": lambda progress: _update_generation_job_progress(job_id, progress),
+            }
+            if prompt_extra_data:
+                run_kwargs["extra_data"] = prompt_extra_data
+            result = active_client.generate_from_workflow(workflow_json, **run_kwargs)
             images = _finalize_generation_records(actor, default_params, result, backend_url=backend_binding.get("url"))
             output_refs = {
                 "prompt_id": result.get("prompt_id") or "",
@@ -2650,6 +2695,7 @@ def register_comfyui_routes(app, deps):
         "create_generation_job": _create_generation_job,
         "capture_request_audit_meta": _capture_request_audit_meta,
         "run_comfyui_workflow_preset_job": _run_comfyui_workflow_preset_job,
+        "comfyui_paid_api_policy": _comfyui_paid_api_policy,
         "DEFAULT_GENERATION_TIMEOUT_SECONDS": DEFAULT_GENERATION_TIMEOUT_SECONDS,
         "COMFYUI_WORKFLOW_RUN_LIMIT": COMFYUI_WORKFLOW_RUN_LIMIT,
         "COMFYUI_WORKFLOW_SCHEMA_VERSION": COMFYUI_WORKFLOW_SCHEMA_VERSION,
