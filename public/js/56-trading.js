@@ -753,7 +753,8 @@ function tradingOrderDraftEstimate() {
   const side = $("trading-side")?.value || "buy";
   const orderType = $("trading-order-type")?.value || "market";
   const inputMode = tradingOrderInputMode();
-  const inputValue = tradingNumber($("trading-quantity")?.value, 0);
+  const rawInputValue = String($("trading-quantity")?.value || "").trim();
+  const inputValue = tradingNumber(rawInputValue, 0);
   const limitPrice = tradingNumber($("trading-limit-price")?.value, 0);
   const referenceContext = tradingMarketPriceContext(market, "reference");
   const riskContext = tradingMarketPriceContext(market, "risk_grade");
@@ -765,7 +766,14 @@ function tradingOrderDraftEstimate() {
     ? limitPrice
     : (riskGradePrice > 0 ? riskGradePrice : (marketPausePolicy.shouldPause ? riskGradePrice : referencePrice));
   const feeRate = tradingNumber(market.fee_rate_percent, 0) / 100;
-  if (!inputValue || inputValue <= 0) {
+  if (rawInputValue && inputValue <= 0) {
+    return {
+      ok: false,
+      blocking: true,
+      message: inputMode === "points" ? "點數金額必須大於 0" : "交易數量必須大於 0",
+    };
+  }
+  if (!inputValue) {
     return {
       ok: false,
       blocking: false,

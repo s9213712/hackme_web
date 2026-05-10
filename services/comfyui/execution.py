@@ -1,6 +1,7 @@
 """Prompt queue, progress, and image generation orchestration helpers."""
 
 import json
+import inspect
 import time
 import urllib.parse
 import uuid
@@ -331,13 +332,23 @@ def generate_image(
     workflow = build_generation_workflow_func(params)
     expected_count = int(params.get("batch_size") or 1)
     if generate_from_workflow_func is not None:
-        return generate_from_workflow_func(
-            workflow,
-            timeout_seconds=timeout_seconds,
-            expected_count=expected_count,
-            progress_callback=progress_callback,
-            extra_data=extra_data,
-        )
+        kwargs = {
+            "timeout_seconds": timeout_seconds,
+            "expected_count": expected_count,
+            "progress_callback": progress_callback,
+        }
+        if extra_data:
+            try:
+                signature = inspect.signature(generate_from_workflow_func)
+                accepts_extra_data = (
+                    "extra_data" in signature.parameters
+                    or any(param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values())
+                )
+            except (TypeError, ValueError):
+                accepts_extra_data = True
+            if accepts_extra_data:
+                kwargs["extra_data"] = extra_data
+        return generate_from_workflow_func(workflow, **kwargs)
     if image_fetcher is None:
         raise TypeError("generate_image() requires image_fetcher when generate_from_workflow_func is not provided")
     return generate_from_workflow(

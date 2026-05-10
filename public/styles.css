@@ -496,8 +496,10 @@
     .sidebar-toggle {
       display: inline-grid;
       place-items: center;
-      width: 2rem;
-      height: 2rem;
+      width: 2.75rem;
+      height: 2.75rem;
+      min-width: 2.75rem;
+      min-height: 2.75rem;
       border: 1px solid rgba(255,255,255,.12);
       border-radius: 8px;
       background: rgba(255,255,255,.06);
@@ -1094,10 +1096,10 @@
     #logout-btn.icon-action-btn {
       display: inline-grid;
       place-items: center;
-      width: 2rem;
-      height: 2rem;
-      min-width: 2rem;
-      min-height: 2rem;
+      width: 2.75rem;
+      height: 2.75rem;
+      min-width: 2.75rem;
+      min-height: 2.75rem;
       padding: 0;
       margin: 0;
       border-radius: 8px;
@@ -5954,9 +5956,10 @@
       .icon-action-btn,
       .app-action-bar .notification-toggle,
       #logout-btn.icon-action-btn {
-        width: 2.15rem;
-        height: 2.15rem;
-        min-width: 2.15rem;
+        width: 2.75rem;
+        height: 2.75rem;
+        min-width: 2.75rem;
+        min-height: 2.75rem;
       }
 
       .notification-badge {
@@ -6303,9 +6306,11 @@
 
       .sidebar-toggle {
         display: inline-grid !important;
-        flex: 0 0 2.15rem;
-        width: 2.15rem;
-        height: 2.15rem;
+        flex: 0 0 2.75rem;
+        width: 2.75rem;
+        height: 2.75rem;
+        min-width: 2.75rem;
+        min-height: 2.75rem;
         font-size: 1rem;
         transform: none !important;
       }

@@ -46,6 +46,7 @@ def register_file_remote_download_routes(app, ctx):
     download_torrent_url_with_aria2 = ctx["download_torrent_url_with_aria2"]
     remote_download_capabilities = ctx["remote_download_capabilities"]
     validate_remote_url = ctx["validate_remote_url"]
+    validate_torrent_file_trackers = ctx.get("validate_torrent_file_trackers")
     RemoteDownloadError = ctx["RemoteDownloadError"]
 
     def _actor_snapshot(actor):
@@ -173,6 +174,12 @@ def register_file_remote_download_routes(app, ctx):
             if torrent_size > 2 * 1024 * 1024:
                 shutil.rmtree(tmpdir, ignore_errors=True)
                 return json_resp({"ok": False, "msg": "BT 種子檔太大，請上傳 2MB 以內的 .torrent"}), 400
+            if validate_torrent_file_trackers:
+                try:
+                    validate_torrent_file_trackers(torrent_path)
+                except RemoteDownloadError as exc:
+                    shutil.rmtree(tmpdir, ignore_errors=True)
+                    return json_resp({"ok": False, "msg": str(exc)}), 400
             privacy_mode = str(request.form.get("privacy_mode") or "standard_plain").strip() or "standard_plain"
             virtual_path = str(request.form.get("virtual_path") or "").strip()
             task_id = uuid.uuid4().hex

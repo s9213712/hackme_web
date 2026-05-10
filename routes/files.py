@@ -43,6 +43,7 @@ from services.storage.remote_downloads import (
     download_torrent_file_with_aria2,
     download_torrent_url_with_aria2,
     remote_download_capabilities,
+    validate_torrent_file_trackers,
     validate_remote_url,
 )
 from services.storage.storage_albums import (
@@ -1110,6 +1111,7 @@ def register_file_routes(app, deps):
         "storage_root": storage_root,
         "task_snapshot": _task_snapshot,
         "validate_remote_url": lambda url: validate_remote_url(url),
+        "validate_torrent_file_trackers": lambda path: validate_torrent_file_trackers(path),
     }
     register_file_remote_download_routes(app, file_remote_download_ctx)
 
@@ -1415,24 +1417,28 @@ def register_file_routes(app, deps):
             if upload_policy_error:
                 return upload_policy_error
             rule = get_member_level_rule(conn, _actor_value(actor, "effective_level") or _actor_value(actor, "member_level"))
-            upload_result, msg = store_cloud_upload(
-                conn,
-                actor=actor,
-                member_rule=rule,
-                storage_root=storage_root,
-                file_storage=request.files["file"],
-                privacy_mode=(request.form.get("privacy_mode") or "standard_plain").strip(),
-                encrypted_metadata=(request.form.get("encrypted_metadata") or "").strip() or None,
-                encrypted_file_key=(request.form.get("encrypted_file_key") or "").strip() or None,
-                wrapped_by=(request.form.get("wrapped_by") or "user_public_key").strip() or "user_public_key",
-                ciphertext_sha256=(request.form.get("ciphertext_sha256") or "").strip() or None,
-                encryption_algorithm=(request.form.get("encryption_algorithm") or "").strip() or None,
-                encryption_version=(request.form.get("encryption_version") or "").strip() or None,
-                nonce=(request.form.get("nonce") or "").strip() or None,
-                client_scan_report=_form_json_value("client_scan_report"),
-                scan_now=True,
-                server_file_fernet=server_file_fernet,
-            )
+            try:
+                upload_result, msg = store_cloud_upload(
+                    conn,
+                    actor=actor,
+                    member_rule=rule,
+                    storage_root=storage_root,
+                    file_storage=request.files["file"],
+                    privacy_mode=(request.form.get("privacy_mode") or "standard_plain").strip(),
+                    encrypted_metadata=(request.form.get("encrypted_metadata") or "").strip() or None,
+                    encrypted_file_key=(request.form.get("encrypted_file_key") or "").strip() or None,
+                    wrapped_by=(request.form.get("wrapped_by") or "user_public_key").strip() or "user_public_key",
+                    ciphertext_sha256=(request.form.get("ciphertext_sha256") or "").strip() or None,
+                    encryption_algorithm=(request.form.get("encryption_algorithm") or "").strip() or None,
+                    encryption_version=(request.form.get("encryption_version") or "").strip() or None,
+                    nonce=(request.form.get("nonce") or "").strip() or None,
+                    client_scan_report=_form_json_value("client_scan_report"),
+                    scan_now=True,
+                    server_file_fernet=server_file_fernet,
+                )
+            except ValueError as exc:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": f"雲端硬碟上傳失敗：{str(exc) or exc.__class__.__name__}", "error_code": exc.__class__.__name__}), 400
             if msg:
                 conn.rollback()
                 return json_resp({"ok": False, "msg": msg}), 400

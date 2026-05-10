@@ -506,8 +506,7 @@ def download_magnet_with_aria2(url, *, timeout_seconds=300, max_bytes=None, prog
 def download_torrent_file_with_aria2(torrent_path, *, display_name="BT 檔案", timeout_seconds=300, max_bytes=None, progress_callback=None, rate_limit_kb_per_sec=None):
     if not os.path.isfile(torrent_path):
         raise RemoteDownloadError("找不到 BT 種子檔")
-    tracker_report = inspect_torrent_file_trackers(torrent_path)
-    excluded_trackers = [item["url"] for item in tracker_report.get("blocked", [])]
+    validate_torrent_file_trackers(torrent_path)
     return _download_bt_with_aria2(
         torrent_path,
         source_label=display_name or "BT 檔案",
@@ -515,7 +514,6 @@ def download_torrent_file_with_aria2(torrent_path, *, display_name="BT 檔案", 
         max_bytes=max_bytes,
         progress_callback=progress_callback,
         rate_limit_kb_per_sec=rate_limit_kb_per_sec,
-        exclude_trackers=excluded_trackers,
     )
 
 

@@ -1782,6 +1782,14 @@ def register_comfyui_routes(app, deps):
                 "history_id": history_id,
                 "wallet": (billing or {}).get("wallet") or _comfyui_wallet_payload(actor),
             }
+            audit(
+                "COMFYUI_GENERATE",
+                audit_ip,
+                user=_actor_value(actor, "username"),
+                success=True,
+                ua=audit_ua,
+                detail=f"job_id={job_id}, prompt_id={result['prompt_id']}, file={result['image_ref'].get('filename')}, batch={len(images)}",
+            )
             _update_generation_job(
                 job_id,
                 status="completed",
@@ -1794,14 +1802,6 @@ def register_comfyui_routes(app, deps):
                 "completed": True,
                 "detail": f"已完成，共 {len(images)} 張",
             })
-            audit(
-                "COMFYUI_GENERATE",
-                audit_ip,
-                user=_actor_value(actor, "username"),
-                success=True,
-                ua=audit_ua,
-                detail=f"job_id={job_id}, prompt_id={result['prompt_id']}, file={result['image_ref'].get('filename')}, batch={len(images)}",
-            )
         except ComfyUIError as exc:
             _update_generation_job(job_id, status="error", error=str(exc), result=None)
             _update_generation_job_progress(job_id, {

@@ -64,8 +64,8 @@ def test_pw_toggle_meets_wcag_touch_target_size():
     """
     css = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
     pw = _block(css, ".pw-toggle {")
-    assert "min-width: 2.4rem;" in pw, ".pw-toggle min-width must be >= 2.4rem (38.4px)"
-    assert "min-height: 2.4rem;" in pw, ".pw-toggle min-height must be >= 2.4rem (38.4px)"
+    assert "min-width: 2.75rem;" in pw, ".pw-toggle min-width must stay at the 44px touch target baseline"
+    assert "min-height: 2.75rem;" in pw, ".pw-toggle min-height must stay at the 44px touch target baseline"
     assert "padding: .5rem;" in pw, ".pw-toggle padding bumped to .5rem"
     assert "place-items: center;" in pw
 

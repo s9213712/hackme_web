@@ -157,7 +157,28 @@ def register_comfyui_runtime_routes(app, ctx):
             loras = active_client.get_loras() if hasattr(active_client, "get_loras") else []
             capabilities = active_client.get_capabilities() if hasattr(active_client, "get_capabilities") else {}
         except ComfyUIError as exc:
-            return _json_error_from_comfy(exc, active_client)
+            unavailable = _comfyui_unavailable_payload(exc, active_client)
+            return json_resp({
+                **unavailable,
+                "models": [],
+                "loras": [],
+                "lora_details": [],
+                "vaes": [],
+                "embeddings": [],
+                "samplers": [SAFE_SAMPLER_FALLBACK],
+                "schedulers": [SAFE_SCHEDULER_FALLBACK],
+                "max_batch_size": _configured_max_batch_size(),
+                "default_width": _configured_default_dimensions()["width"],
+                "default_height": _configured_default_dimensions()["height"],
+                "controlnet_models": [],
+                "upscale_models": [],
+                "controlnet_types": {},
+                "generation_modes": [],
+                "billing": None if not _comfyui_charge_required(actor) else (_comfyui_price_quote(1)[0] or {}),
+                "wallet": _comfyui_wallet_payload(actor),
+                "lora_extra_unit_price": COMFYUI_LORA_EXTRA_PRICE_POINTS,
+                "paid_api_nodes": _comfyui_paid_api_status_payload(),
+            })
         try:
             vaes = active_client.get_vaes() if hasattr(active_client, "get_vaes") else []
         except ComfyUIError:

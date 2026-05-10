@@ -1,4 +1,5 @@
 from tests.comfyui._integration_suite import _build_app, _init_db
+from services.comfyui.client import ComfyUIError
 from services.comfyui.node_catalog import build_node_catalog
 
 
@@ -37,6 +38,11 @@ class CatalogClient:
         return OBJECT_INFO
 
 
+class OfflineModelsClient(CatalogClient):
+    def get_models(self):
+        raise ComfyUIError("ComfyUI 連線失敗：offline")
+
+
 def test_build_node_catalog_compacts_object_info_for_editor():
     catalog = build_node_catalog(OBJECT_INFO)
 
@@ -67,3 +73,20 @@ def test_comfyui_node_catalog_endpoint_returns_safe_summary(tmp_path):
     assert payload["nodes"][0]["class_type"]
     assert any(node["paid_api_required"] for node in payload["nodes"])
     assert "input" not in payload["nodes"][0]
+
+
+def test_comfyui_models_endpoint_returns_degraded_payload_when_offline(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    app = _build_app(db_path, storage_root, comfyui_client=OfflineModelsClient())
+
+    response = app.test_client().get("/api/comfyui/models")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["ok"] is True
+    assert payload["available"] is False
+    assert payload["models"] == []
+    assert payload["samplers"]
