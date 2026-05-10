@@ -2,6 +2,22 @@ function comfyuiWorkflowPresetById(presetId) {
   return comfyuiWorkflowPresets.find((item) => Number(item?.id) === Number(presetId)) || null;
 }
 
+function comfyuiWorkflowPaidApiNodes(detail) {
+  const nodes = detail?.paid_api_nodes;
+  return nodes && nodes.required && Array.isArray(nodes.nodes) ? nodes.nodes : [];
+}
+
+function comfyuiWorkflowPaidApiWarningHtml(detail) {
+  const nodes = comfyuiWorkflowPaidApiNodes(detail);
+  if (!nodes.length) return "";
+  const labels = nodes.map((node) => `${node.node_id || "-"}:${node.class_type || node.title || "API node"}`).slice(0, 6);
+  return `
+    <div class="comfyui-workflow-paid-api-warning">
+      可能使用 ComfyUI 付費/API node，執行前會要求確認。節點：${sanitize(labels.join(", "))}${nodes.length > labels.length ? `，另 ${sanitize(String(nodes.length - labels.length))} 個` : ""}
+    </div>
+  `;
+}
+
 function setComfyuiWorkflowStatus(text) {
   const status = $("comfyui-workflow-status");
   if (status) status.textContent = text || "";
@@ -545,6 +561,7 @@ function comfyuiTemplateSummaryMarkup(detail) {
     </div>
     <div class="drive-card-sub">這個模板會根據 workflow manifest 只顯示需要的欄位；其餘手動欄位收進下方進階區。</div>
     ${requirementBits.length ? `<div class="drive-card-sub" style="margin-top:.35rem;">依賴：${sanitize(requirementBits.join("、"))}</div>` : ""}
+    ${comfyuiWorkflowPaidApiWarningHtml(detail)}
     ${inputKinds.length ? `<div class="comfyui-template-output-list">${inputKinds.map((kind) => `<span class="comfyui-workflow-chip">輸入 ${sanitize(kind)}</span>`).join("")}</div>` : ""}
     <div class="comfyui-template-output-list">
       ${outputs.map((kind) => `<span class="comfyui-workflow-chip">輸出 ${sanitize(String(kind))}</span>`).join("")}
@@ -862,6 +879,7 @@ function renderComfyuiWorkflowPresetList(targetId, items, emptyText) {
           ${customNodes.length ? `<span class="comfyui-workflow-chip warn">Custom nodes ${sanitize(String(customNodes.length))}</span>` : ""}
         </div>
         ${versionWarnings.length ? `<div class="drive-card-sub" style="margin-top:.4rem;color:#ffe08a;">版本警告：${sanitize(versionWarnings.join("；"))}</div>` : ""}
+        ${comfyuiWorkflowPaidApiWarningHtml(item)}
         ${dependencyHtml}
         <div class="drive-card-sub">所需模型：${sanitize(models.join(", ") || "無")}</div>
         <div class="drive-card-sub">所需 LoRA：${sanitize(loras.join(", ") || "無")}</div>
@@ -1140,24 +1158,44 @@ async function updateComfyuiWorkflowPreset() {
 
 async function runComfyuiWorkflowPreset(presetId) {
   if (!presetId) return;
+  const preset = comfyuiWorkflowPresetById(presetId);
+  const paidApiNodes = comfyuiWorkflowPaidApiNodes(preset);
+  let confirmPaidApiNodes = false;
+  if (paidApiNodes.length) {
+    const labels = paidApiNodes.map((node) => `${node.node_id || "-"}:${node.class_type || node.title || "API node"}`).slice(0, 8);
+    confirmPaidApiNodes = window.confirm(
+      `這個 workflow 可能會消耗 ComfyUI API credits。\n\n節點：${labels.join(", ")}${paidApiNodes.length > labels.length ? `，另 ${paidApiNodes.length - labels.length} 個` : ""}\n\n要繼續執行嗎？`
+    );
+    if (!confirmPaidApiNodes) return;
+  }
   await fetchCsrfToken({ force: true });
   setComfyuiBusy(true);
   setComfyuiMessage("正在建立 workflow 執行工作...", true);
   startComfyuiProgress(COMFYUI_GENERATION_TIMEOUT_SECONDS);
   const controller = new AbortController();
   comfyuiGenerateAbortController = controller;
+  const runRequest = (confirmed) => apiFetch(API + `/comfyui/workflows/${encodeURIComponent(presetId)}/run`, {
+    method: "POST",
+    credentials: "same-origin",
+    signal: controller.signal,
+    headers: {
+      "Content-Type": "application/json",
+      "X-CSRF-Token": getCsrfToken() || "",
+    },
+    body: JSON.stringify({ confirm_paid_api_nodes: !!confirmed }),
+  });
   try {
-    const res = await apiFetch(API + `/comfyui/workflows/${encodeURIComponent(presetId)}/run`, {
-      method: "POST",
-      credentials: "same-origin",
-      signal: controller.signal,
-      headers: {
-        "Content-Type": "application/json",
-        "X-CSRF-Token": getCsrfToken() || "",
-      },
-      body: JSON.stringify({}),
-    });
-    const json = await res.json().catch(() => ({}));
+    let res = await runRequest(confirmPaidApiNodes);
+    let json = await res.json().catch(() => ({}));
+    if ((!res.ok || !json.ok) && json.stage === "paid_api_confirmation_required") {
+      const nodes = Array.isArray(json.paid_api_nodes?.nodes) ? json.paid_api_nodes.nodes : [];
+      const labels = nodes.map((node) => `${node.node_id || "-"}:${node.class_type || node.title || "API node"}`).slice(0, 8);
+      if (!window.confirm(`這個 workflow 可能會消耗 ComfyUI API credits。\n\n節點：${labels.join(", ") || "API node"}\n\n要繼續執行嗎？`)) {
+        throw new Error("已取消付費/API node workflow 執行");
+      }
+      res = await runRequest(true);
+      json = await res.json().catch(() => ({}));
+    }
     if (!res.ok || !json.ok) throw new Error(json.msg || `workflow 執行失敗（HTTP ${res.status}）`);
     const result = await pollComfyuiJobUntilDone(json.job?.job_id, controller, COMFYUI_GENERATION_TIMEOUT_SECONDS);
     const images = Array.isArray(result.images) && result.images.length ? result.images : [result.image].filter(Boolean);

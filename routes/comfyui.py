@@ -650,6 +650,8 @@ def register_comfyui_routes(app, deps):
 
     def _workflow_preset_summary(row, *, dependency_status=None, recent_runs=None, actor=None):
         default_params = _parse_json_field(row["default_params_json"], {}) or {}
+        workflow_json = _parse_json_field(row["workflow_json"], {}) or {}
+        paid_api_nodes = detect_paid_api_nodes(workflow_json)
         result = {
             "id": int(row["id"]),
             "owner_user_id": int(row["owner_user_id"]),
@@ -681,6 +683,8 @@ def register_comfyui_routes(app, deps):
                 and int(row["owner_user_id"]) == int(_actor_value(actor, "id"))
             ),
             "version_warnings": _workflow_version_warnings(row),
+            "paid_api_nodes": paid_api_nodes,
+            "requires_paid_api_confirmation": bool(paid_api_nodes.get("required")),
         }
         if dependency_status is not None:
             result["dependency_status"] = dependency_status

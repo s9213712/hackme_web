@@ -2082,6 +2082,17 @@
       color: #ffd2dc;
     }
 
+    .comfyui-workflow-paid-api-warning {
+      margin-top: .45rem;
+      padding: .48rem .6rem;
+      border: 1px solid rgba(255,193,7,.28);
+      border-radius: 8px;
+      background: rgba(255,193,7,.1);
+      color: #ffe08a;
+      font-size: .78rem;
+      line-height: 1.45;
+    }
+
     .comfyui-workflow-run-list {
       display: grid;
       gap: .35rem;
