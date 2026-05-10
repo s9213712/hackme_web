@@ -6,6 +6,10 @@ import urllib.parse
 import uuid
 
 
+QUEUE_TIMEOUT_EXTENSION_SECONDS = 1800
+QUEUE_MAX_TIMEOUT_SECONDS = 21600
+
+
 def queue_prompt_with_client_id(client, workflow, *, client_id=None, error_cls):
     client_id = str(client_id or uuid.uuid4().hex)
     data = client._json_request("/prompt", method="POST", payload={"prompt": workflow, "client_id": client_id})
@@ -27,6 +31,21 @@ def emit_progress(progress_callback, snapshot):
     if not progress_callback:
         return
     progress_callback(dict(snapshot))
+
+
+def _queued_deadline(now, *, start_time, deadline, extension_seconds=None, max_seconds=None):
+    extension_seconds = QUEUE_TIMEOUT_EXTENSION_SECONDS if extension_seconds is None else extension_seconds
+    max_seconds = QUEUE_MAX_TIMEOUT_SECONDS if max_seconds is None else max_seconds
+    extension_seconds = max(int(extension_seconds or 0), 0)
+    refresh_window = max(5, min(60, extension_seconds // 10 if extension_seconds else 5))
+    if deadline - now > refresh_window:
+        return deadline, False
+    max_deadline = start_time + max(int(max_seconds or 0), 0)
+    if max_deadline <= start_time:
+        return deadline, False
+    extended = min(max_deadline, now + extension_seconds)
+    new_deadline = max(deadline, extended)
+    return new_deadline, new_deadline > deadline
 
 
 def apply_ws_message_to_progress(snapshot, message, prompt_id):
@@ -110,9 +129,11 @@ def wait_for_images(
     error_cls,
     websocket_module=None,
 ):
-    deadline = time.time() + int(timeout_seconds)
+    start_time = time.time()
+    deadline = start_time + int(timeout_seconds)
     last_status = None
     expected = max(1, int(expected_count or 1))
+    running_started = False
     snapshot = {
         "prompt_id": str(prompt_id),
         "phase": "queued",
@@ -123,10 +144,27 @@ def wait_for_images(
         "queue_remaining": None,
         "detail": "已送出至 ComfyUI 佇列",
         "completed": False,
+        "timeout_seconds": int(timeout_seconds),
+        "timeout_extended": False,
         "updated_at": time.time(),
     }
     next_history_poll = 0.0
-    while time.time() < deadline:
+    while True:
+        now = time.time()
+        if snapshot.get("phase") == "running" and not running_started:
+            running_started = True
+            deadline = max(deadline, now + int(timeout_seconds))
+            snapshot["timeout_seconds"] = max(int(snapshot.get("timeout_seconds") or 0), int(deadline - start_time))
+            emit_progress(progress_callback, snapshot)
+        if not running_started and snapshot.get("phase") == "queued":
+            deadline, extended = _queued_deadline(now, start_time=start_time, deadline=deadline)
+            if extended:
+                snapshot["timeout_extended"] = True
+                snapshot["timeout_seconds"] = max(int(snapshot.get("timeout_seconds") or 0), int(deadline - start_time))
+                snapshot["detail"] = "仍在 ComfyUI 佇列中，已自動延長等待時間"
+                emit_progress(progress_callback, snapshot)
+        if now >= deadline:
+            break
         if websocket_conn is not None and websocket_module is not None:
             for _ in range(20):
                 try:

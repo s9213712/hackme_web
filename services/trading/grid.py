@@ -329,7 +329,7 @@ def create_grid_bot(service, *, actor, payload):
         market = service._market(conn, market_symbol)
         if not int(market.get("allow_bots") or 0):
             raise ValueError("bots are disabled for this market")
-        service._assert_market_boot_ready(market, usage="grid bot create")
+        service._assert_market_boot_ready(market, usage="grid bot create", conn=conn)
         current_price, _price_source, price_meta = service._current_market_price_points(
             conn,
             market,
@@ -569,7 +569,7 @@ def scan_one_grid_bot(service, bot, *, actor):
         service.ensure_schema(conn)
         market = service._market(conn, bot["market_symbol"])
         try:
-            service._assert_market_boot_ready(market, usage="grid bot scan")
+            service._assert_market_boot_ready(market, usage="grid bot scan", conn=conn)
             current_price, _price_source, price_meta = service._current_market_price_points(
                 conn,
                 market,

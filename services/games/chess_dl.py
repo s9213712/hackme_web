@@ -65,6 +65,14 @@ _FUSION_MODES = {
 }
 _MODEL_EVAL_MOVE_CAP = 6
 _MODEL_SCORE_SCALE = 140.0
+_SEMANTIC_MEMORY_LEARNING_RATE = 0.10
+_STYLE_MAX_CP_DROP = 100
+_STYLE_BONUS_CP = 45
+_SEMANTIC_SEPARATION_PAIRS = {
+    ("e_pawn_central_break", "kingside_aggression"),
+    ("d_pawn_central_break", "kingside_aggression"),
+    ("d_pawn_central_break", "flank_pawn_push"),
+}
 _ABLATION_MODES = {
     "default",
     "no_invariance_memory",
@@ -73,6 +81,32 @@ _ABLATION_MODES = {
     "invariance_plus_hard_negative",
     "stronger_hard_negative_margin",
 }
+
+
+def _move_semantic_class_for_board(board: chess.Board, move_uci: str) -> str:
+    try:
+        move = chess.Move.from_uci(str(move_uci or "").lower())
+    except Exception:
+        return "other"
+    piece = board.piece_at(move.from_square)
+    from_file = chess.square_file(move.from_square)
+    to_file = chess.square_file(move.to_square)
+    if piece and piece.piece_type == chess.PAWN:
+        if from_file == chess.FILE_NAMES.index("e"):
+            return "e_pawn_central_break"
+        if from_file == chess.FILE_NAMES.index("d"):
+            return "d_pawn_central_break"
+        if from_file in {chess.FILE_NAMES.index("f"), chess.FILE_NAMES.index("g"), chess.FILE_NAMES.index("h")} or to_file in {chess.FILE_NAMES.index("g"), chess.FILE_NAMES.index("h")}:
+            return "kingside_aggression"
+        if from_file in {chess.FILE_NAMES.index("a"), chess.FILE_NAMES.index("b"), chess.FILE_NAMES.index("c")}:
+            return "flank_pawn_push"
+    if piece and piece.piece_type in {chess.KNIGHT, chess.BISHOP}:
+        home_rank = 0 if piece.color == chess.WHITE else 7
+        if chess.square_rank(move.from_square) == home_rank:
+            return "development_move"
+    if to_file in {chess.FILE_NAMES.index("g"), chess.FILE_NAMES.index("h")}:
+        return "kingside_aggression"
+    return "other"
 _PIECE_VALUES = {
     chess.PAWN: 100,
     chess.KNIGHT: 320,
@@ -120,6 +154,7 @@ def experiment_dl_model_template() -> dict:
         "b3": rng.uniform(-0.015, 0.015),
         "move_score_memory": {},
         "policy_invariance_memory": {},
+        "semantic_score_memory": {},
         "sample_count": 0,
         "replay_size": 0,
         "updated_at": _now(),
@@ -190,6 +225,11 @@ def normalize_experiment_dl_model_payload(model: dict) -> dict | None:
         "policy_invariance_memory": {
             str(key): _clip(float(value), -_MAX_INVARIANCE_MEMORY_BIAS, _MAX_INVARIANCE_MEMORY_BIAS)
             for key, value in (model.get("policy_invariance_memory") or {}).items()
+            if isinstance(key, str)
+        },
+        "semantic_score_memory": {
+            str(key): _clip(float(value), -_MAX_INVARIANCE_MEMORY_BIAS, _MAX_INVARIANCE_MEMORY_BIAS)
+            for key, value in (model.get("semantic_score_memory") or {}).items()
             if isinstance(key, str)
         },
         "sample_count": max(0, int(model.get("sample_count") or 0)),
@@ -287,9 +327,21 @@ def _invariance_memory_key(board: chess.Board, side: str, move_uci: str) -> str:
     return f"{_invariance_context_key(board, side)}|{move_uci}"
 
 
+def _semantic_memory_key(board: chess.Board, side: str, semantic: str) -> str:
+    return f"{_invariance_context_key(board, side)}|semantic:{semantic}"
+
+
 def _invariance_memory_bias(model: dict, board: chess.Board, side: str, move_uci: str) -> float:
     try:
         return float((model.get("policy_invariance_memory") or {}).get(_invariance_memory_key(board, side, move_uci)) or 0.0)
+    except Exception:
+        return 0.0
+
+
+def _semantic_memory_bias(model: dict, board: chess.Board, side: str, move_uci: str) -> float:
+    try:
+        semantic = _move_semantic_class_for_board(board, move_uci)
+        return float((model.get("semantic_score_memory") or {}).get(_semantic_memory_key(board, side, semantic)) or 0.0)
     except Exception:
         return 0.0
 
@@ -312,6 +364,18 @@ def _update_invariance_memory(model: dict, board: chess.Board, side: str, move: 
     )
 
 
+def _update_semantic_memory(model: dict, board: chess.Board, side: str, move: chess.Move, target: float) -> None:
+    memory = model.setdefault("semantic_score_memory", {})
+    semantic = _move_semantic_class_for_board(board, move.uci())
+    key = _semantic_memory_key(board, side, semantic)
+    current = float(memory.get(key) or 0.0)
+    memory[key] = _clip(
+        current + _SEMANTIC_MEMORY_LEARNING_RATE * float(target),
+        -_MAX_INVARIANCE_MEMORY_BIAS,
+        _MAX_INVARIANCE_MEMORY_BIAS,
+    )
+
+
 def _training_ablation_config() -> dict:
     mode = str(os.environ.get("CHESS_EXP3_ABLATION_MODE") or "default").strip().lower()
     if mode not in _ABLATION_MODES:
@@ -320,16 +384,19 @@ def _training_ablation_config() -> dict:
     use_hard_negatives = mode not in {"invariance_memory_only", "no_invariance_memory"}
     hard_negative_weight = 0.85
     negative_target = _CONTRASTIVE_NEGATIVE_TARGET
+    semantic_separation_weight = 1.15
     if mode == "stronger_hard_negative_margin":
         use_invariance = True
         use_hard_negatives = True
         hard_negative_weight = 1.25
         negative_target = -0.65
+        semantic_separation_weight = 1.35
     return {
         "mode": mode,
         "use_invariance_memory": use_invariance,
         "use_hard_negatives": use_hard_negatives,
         "hard_negative_weight": hard_negative_weight,
+        "semantic_separation_weight": semantic_separation_weight,
         "ordinary_negative_weight": 0.55,
         "negative_target": negative_target,
     }
@@ -441,6 +508,97 @@ def _policy_override_move(model: dict, board: chess.Board, side: str, *, fusion_
     return chess.Move.from_uci(str(info.get("move") or ""))
 
 
+def _style_bonus(board: chess.Board, move: chess.Move, side: str, style_profile: str) -> int:
+    normalized = str(style_profile or "balanced").strip().lower()
+    if normalized == "balanced":
+        return 0
+    after = board.copy(stack=False)
+    after.push(move)
+    semantic = _move_semantic_class_for_board(board, move.uci())
+    if normalized == "attacking":
+        bonus = 0
+        if semantic == "kingside_aggression":
+            bonus += _STYLE_BONUS_CP
+        if after.is_check():
+            bonus += 30
+        if board.is_capture(move):
+            bonus += 15
+        return bonus
+    if normalized == "defensive":
+        bonus = 0
+        ai_color = chess.WHITE if side == "white" else chess.BLACK
+        if not _board_is_check_for(after, ai_color):
+            bonus += 20
+        if semantic in {"development_move", "d_pawn_central_break", "e_pawn_central_break"}:
+            bonus += 20
+        if after.is_check():
+            bonus -= 20
+        return bonus
+    return 0
+
+
+def _apply_style_profile(
+    board: chess.Board,
+    side: str,
+    base_move: chess.Move | None,
+    *,
+    score_move,
+    style_profile: str = "balanced",
+) -> tuple[chess.Move | None, dict]:
+    normalized = str(style_profile or "balanced").strip().lower()
+    if normalized not in {"balanced", "attacking", "defensive"}:
+        normalized = "balanced"
+    audit = {
+        "style_profile": normalized,
+        "candidate_moves": [],
+        "rejected_style_moves": [],
+        "selected_move_before_style": base_move.uci() if base_move else "",
+        "selected_move_after_style": base_move.uci() if base_move else "",
+        "cp_threshold": _STYLE_MAX_CP_DROP,
+        "applied": False,
+    }
+    if normalized == "balanced" or base_move is None:
+        return base_move, audit
+    legal = sorted(board.legal_moves, key=lambda item: item.uci())
+    if not legal:
+        return base_move, audit
+    scored = []
+    for move in legal:
+        base_score = int(score_move(move))
+        style_bonus = int(_style_bonus(board, move, side, normalized))
+        row = {
+            "move": move.uci(),
+            "semantic": _move_semantic_class_for_board(board, move.uci()),
+            "base_score": base_score,
+            "style_bonus": style_bonus,
+            "final_score": base_score + style_bonus,
+            "legal": True,
+        }
+        scored.append((move, row))
+    best_base = max(int(row["base_score"]) for _move, row in scored)
+    eligible = []
+    for move, row in scored:
+        cp_delta = int(row["base_score"]) - best_base
+        row["cp_delta_vs_best"] = cp_delta
+        if cp_delta < -_STYLE_MAX_CP_DROP:
+            row["rejected"] = True
+            row["rejection_reason"] = f"style move below best candidate by {abs(cp_delta)}cp"
+            audit["rejected_style_moves"].append(row)
+        else:
+            row["rejected"] = False
+            row["rejection_reason"] = ""
+            eligible.append((move, row))
+    if not eligible:
+        audit["candidate_moves"] = [row for _move, row in scored[:8]]
+        return base_move, audit
+    selected_move, selected_row = max(eligible, key=lambda item: (int(item[1]["final_score"]), item[0].uci()))
+    audit["candidate_moves"] = sorted((row for _move, row in scored), key=lambda row: (-int(row["final_score"]), str(row["move"])))[:8]
+    audit["selected_move_after_style"] = selected_move.uci()
+    audit["applied"] = selected_move != base_move
+    audit["selection"] = selected_row
+    return selected_move, audit
+
+
 def _score_candidate_move(board: chess.Board, move: chess.Move, side: str, model: dict) -> float:
     ai_color = chess.WHITE if side == "white" else chess.BLACK
     before = board.copy(stack=False)
@@ -455,7 +613,8 @@ def _score_candidate_move(board: chess.Board, move: chess.Move, side: str, model
         dl_score = _clip(
             dl_score
             + _move_memory_bias(model, before, side, move.uci())
-            + _invariance_memory_bias(model, before, side, move.uci()),
+            + _invariance_memory_bias(model, before, side, move.uci())
+            + _semantic_memory_bias(model, before, side, move.uci()),
             -1.0,
             1.0,
         )
@@ -532,7 +691,7 @@ def _dl_static_eval(board: chess.Board, model: dict, eval_cache: dict[int, int],
     return score
 
 
-def choose_experiment_dl_move(board_state, side: str, *, model_path=None, search_profile="balanced", fusion_mode="balanced_fusion", decision_context=None):
+def choose_experiment_dl_move(board_state, side: str, *, model_path=None, search_profile="balanced", fusion_mode="balanced_fusion", decision_context=None, style_profile="balanced"):
     board = to_chess_board(board_state, side)
     ai_color = chess.WHITE if side == "white" else chess.BLACK
     if board.turn != ai_color:
@@ -599,6 +758,13 @@ def choose_experiment_dl_move(board_state, side: str, *, model_path=None, search
     policy_override = _policy_override_move(model, board, side, fusion_mode=fusion_mode, decision_context=decision_context)
     if policy_override is not None:
         best_move = policy_override
+    best_move, _style_audit = _apply_style_profile(
+        board,
+        side,
+        best_move,
+        score_move=sanity_move_score,
+        style_profile=style_profile,
+    )
     if best_move is None:
         return None
     piece = board.piece_at(best_move.from_square)
@@ -617,7 +783,7 @@ def choose_experiment_dl_move(board_state, side: str, *, model_path=None, search
     }
 
 
-def explain_experiment_dl_decision(board_state, side: str, *, model_path=None, search_profile="fast", watched_moves=None, fusion_mode="balanced_fusion", decision_context=None) -> dict:
+def explain_experiment_dl_decision(board_state, side: str, *, model_path=None, search_profile="fast", watched_moves=None, fusion_mode="balanced_fusion", decision_context=None, style_profile="balanced") -> dict:
     board = to_chess_board(board_state, side)
     ai_color = chess.WHITE if side == "white" else chess.BLACK
     if board.turn != ai_color:
@@ -677,6 +843,15 @@ def explain_experiment_dl_decision(board_state, side: str, *, model_path=None, s
         if policy_override.get("used"):
             chosen = chess.Move.from_uci(str(policy_override.get("move")))
             chosen_reason = "high_confidence_policy_override"
+        chosen, style_profile_audit = _apply_style_profile(
+            board,
+            side,
+            chosen,
+            score_move=sanity_move_score,
+            style_profile=style_profile,
+        )
+        if bool(style_profile_audit.get("applied")):
+            chosen_reason = f"{style_profile_audit.get('style_profile')}_style_profile"
     color_sign = 1 if ai_color == chess.WHITE else -1
     thresholds = _adaptive_policy_thresholds(fusion_mode=fusion_mode, decision_context=decision_context)
     policy_weight = int(thresholds.get("policy_weight") or 0)
@@ -705,7 +880,10 @@ def explain_experiment_dl_decision(board_state, side: str, *, model_path=None, s
         row["static_eval_score"] = static_eval_score
         row["search_score"] = int(per_move_search)
         row["fused_score"] = round(float(per_move_search) + float(row.get("raw_policy_score") or 0.0) * policy_weight, 4)
-        row["final_combined_score"] = row["fused_score"]
+        row["base_score"] = row["fused_score"]
+        row["style_profile"] = str(style_profile or "balanced").strip().lower()
+        row["style_bonus"] = int(_style_bonus(board, move, side, style_profile))
+        row["final_combined_score"] = row["fused_score"] + row["style_bonus"]
         row["override_applied"] = bool(policy_override.get("used") and str(policy_override.get("move") or "") == move.uci()) if "policy_override" in locals() else False
         row["override_reason"] = str((policy_override if "policy_override" in locals() else {}).get("reason") or "")
         row["chosen"] = bool(chosen is not None and move == chosen)
@@ -726,6 +904,7 @@ def explain_experiment_dl_decision(board_state, side: str, *, model_path=None, s
         "chosen_breakdown": chosen_row or {},
         "fusion_mode": str(fusion_mode or "balanced_fusion"),
         "policy_override": policy_override if "policy_override" in locals() else _policy_override_info(model, board, side, fusion_mode=fusion_mode, decision_context=decision_context),
+        "style_profile": style_profile_audit if "style_profile_audit" in locals() else {"style_profile": str(style_profile or "balanced").strip().lower(), "applied": False},
         "watched_moves": watched_rows,
         "top_final_moves": moves[:5],
         "all_legal_count": len(moves),
@@ -830,6 +1009,15 @@ def _legal_hard_negative_moves(board: chess.Board, expected_move: chess.Move, ha
     return moves
 
 
+def _semantic_negative_moves(board: chess.Board, expected_move: chess.Move, hard_negatives: list[str]) -> list[chess.Move]:
+    expected_semantic = _move_semantic_class_for_board(board, expected_move.uci())
+    moves = []
+    for move in _legal_hard_negative_moves(board, expected_move, hard_negatives):
+        if _move_semantic_class_for_board(board, move.uci()) != expected_semantic:
+            moves.append(move)
+    return moves
+
+
 def _train_from_replay(model: dict, replay_entries: list[dict]) -> dict:
     ablation = _training_ablation_config()
     stats = {
@@ -837,6 +1025,9 @@ def _train_from_replay(model: dict, replay_entries: list[dict]) -> dict:
         "contrastive_negative_updates": 0,
         "expected_reinforcement_updates": 0,
         "hard_negative_updates": 0,
+        "semantic_positive_updates": 0,
+        "semantic_negative_updates": 0,
+        "semantic_separation_updates": 0,
         "invariance_positive_updates": 0,
         "invariance_negative_updates": 0,
         "ablation_mode": ablation["mode"],
@@ -864,22 +1055,36 @@ def _train_from_replay(model: dict, replay_entries: list[dict]) -> dict:
                 continue
             if expected_move not in board.legal_moves:
                 continue
+            _update_semantic_memory(model, board, side, expected_move, 1.0)
+            stats["semantic_positive_updates"] += 1
             hard_negatives = _legal_hard_negative_moves(
                 board,
                 expected_move,
                 list(sample.get("hard_negatives") or []),
             ) if bool(ablation["use_hard_negatives"]) else []
+            semantic_negatives = _semantic_negative_moves(board, expected_move, list(sample.get("hard_negatives") or []))
             ordinary_negatives = [
                 move
                 for move in sorted(board.legal_moves, key=lambda item: item.uci())
                 if move != expected_move
             ]
-            negatives = (hard_negatives + [move for move in ordinary_negatives if move not in hard_negatives])[: _CONTRASTIVE_MAX_NEGATIVES]
+            negatives = (semantic_negatives + [move for move in hard_negatives if move not in semantic_negatives] + [move for move in ordinary_negatives if move not in hard_negatives])[: _CONTRASTIVE_MAX_NEGATIVES]
             for negative in negatives:
                 negative_after = board.copy(stack=False)
                 negative_after.push(negative)
                 negative_target = float(ablation["negative_target"])
+                expected_semantic = _move_semantic_class_for_board(board, expected_move.uci())
+                negative_semantic = _move_semantic_class_for_board(board, negative.uci())
+                separation_pair = (expected_semantic, negative_semantic)
+                is_targeted_semantic_pair = separation_pair in _SEMANTIC_SEPARATION_PAIRS
                 _update_move_memory(model, board, side, negative, negative_target)
+                if negative in semantic_negatives:
+                    _update_semantic_memory(model, board, side, negative, negative_target)
+                    stats["semantic_negative_updates"] += 1
+                if is_targeted_semantic_pair:
+                    _update_semantic_memory(model, board, side, expected_move, 1.0)
+                    _update_semantic_memory(model, board, side, negative, negative_target)
+                    stats["semantic_separation_updates"] += 1
                 if bool(ablation["use_invariance_memory"]) and sample.get("invariance_group_id"):
                     _update_invariance_memory(model, board, side, negative, negative_target)
                     stats["invariance_negative_updates"] += 1
@@ -887,7 +1092,9 @@ def _train_from_replay(model: dict, replay_entries: list[dict]) -> dict:
                     model,
                     _candidate_features(board, negative, negative_after, side),
                     negative_target,
-                    float(ablation["hard_negative_weight"]) if negative in hard_negatives else float(ablation["ordinary_negative_weight"]),
+                    float(ablation["semantic_separation_weight"])
+                    if is_targeted_semantic_pair
+                    else float(ablation["hard_negative_weight"]) if negative in hard_negatives else float(ablation["ordinary_negative_weight"]),
                 )
                 stats["contrastive_negative_updates"] += 1
                 if negative in hard_negatives:
@@ -946,6 +1153,7 @@ def build_experiment_dl_sample_from_position(
         "source": str(source or "external"),
         "hard_negatives": [str(item).strip().lower() for item in (hard_negatives or []) if str(item).strip()],
         "invariance_group_id": str(invariance_group_id or "").strip(),
+        "expected_semantic": _move_semantic_class_for_board(board_before, move),
     }
 
 
@@ -966,6 +1174,8 @@ def normalize_experiment_dl_replay_sample(sample: dict) -> dict | None:
             hard_negatives=list(sample.get("hard_negatives") or []),
             invariance_group_id=str(sample.get("invariance_group_id") or ""),
         )
+        if derived is not None and sample.get("expected_semantic"):
+            derived["expected_semantic"] = str(sample.get("expected_semantic") or "")
         return derived
     try:
         target = float(sample.get("target"))
@@ -982,6 +1192,7 @@ def normalize_experiment_dl_replay_sample(sample: dict) -> dict | None:
         "source": str(sample.get("source") or "external"),
         "hard_negatives": [str(item).strip().lower() for item in (sample.get("hard_negatives") or []) if str(item).strip()],
         "invariance_group_id": str(sample.get("invariance_group_id") or "").strip(),
+        "expected_semantic": str(sample.get("expected_semantic") or "").strip(),
     }
 
 

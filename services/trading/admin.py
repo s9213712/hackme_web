@@ -152,6 +152,11 @@ def settings_payload(service, conn):
         "price_degrade_pause_market_orders": raw_bool_setting(raw, "trading.price_degrade_pause_market_orders", default=False),
         "price_degrade_pause_bots": raw_bool_setting(raw, "trading.price_degrade_pause_bots", default=False),
         "price_degrade_pause_borrowing": raw_bool_setting(raw, "trading.price_degrade_pause_borrowing", default=False),
+        "allow_unready_markets": raw_bool_setting(raw, "trading.allow_unready_markets", default=True),
+        "disable_price_confidence_gates": raw_bool_setting(raw, "trading.disable_price_confidence_gates", default=True),
+        "dev_allow_conservative_market_orders": raw_bool_setting(raw, "trading.dev_allow_conservative_market_orders", default=False),
+        "dev_allow_unready_markets": raw_bool_setting(raw, "trading.dev_allow_unready_markets", default=False),
+        "dev_disable_price_confidence_gates": raw_bool_setting(raw, "trading.dev_disable_price_confidence_gates", default=False),
         "simulated_slippage_enabled": raw_bool_setting(raw, "trading.simulated_slippage_enabled", default=False),
         "simulated_slippage_base_basis_points": raw_float_setting(
             raw,

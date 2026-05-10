@@ -491,7 +491,7 @@ def test_sanity_learning_probe_requires_after_top1_and_variant_generalization(mo
     assert result["before_exact"]["top1"] == "a7a5"
     assert result["after_exact"]["top1"] == "e7e5"
     assert result["after_exact"]["expected_is_top1"] is True
-    assert result["result_kind"] in {"memorized_exact_fen", "generalized_to_variants"}
+    assert result["result_kind"] in {"memorized_exact_fen", "partial_seen_variants_only", "generalized_to_variants"}
     assert result["learning_signal"] is (result["result_kind"] == "generalized_to_variants")
     assert result["variant_count"] >= 5
     assert result["exact_fen_pass"] is True
@@ -539,10 +539,11 @@ def test_sanity_variant_training_rows_record_seen_variant_evidence(monkeypatch):
     assert result["rows"]
     assert any(row["variant_split"] == "exact" for row in result["rows"])
     assert any(row["variant_split"] == "train" for row in result["rows"])
-    assert all(row["move_uci"] == "e7e5" for row in result["rows"])
+    assert any(row["move_uci"] == "e7e5" for row in result["rows"])
+    assert len({row["move_uci"] for row in result["rows"]}) > 1
     assert all(row["variant_id"] and row["normalized_fen_hash"] for row in result["rows"])
     assert any(row["hard_negatives"] for row in result["rows"])
-    assert all(row["invariance_group_id"] == "black|e7e5" for row in result["rows"])
+    assert any(row["invariance_group_id"] == "black|e7e5" for row in result["rows"])
     assert any(row["pairwise_role"] == "positive_variant" for row in result["rows"])
     assert result["curriculum"]["train"]
     assert result["curriculum"]["validation"]
@@ -550,6 +551,15 @@ def test_sanity_variant_training_rows_record_seen_variant_evidence(monkeypatch):
     assert result["curriculum"]["by_difficulty"]["easy"]["seen"]
     assert result["curriculum"]["by_difficulty"]["medium"]["seen"]
     assert result["curriculum"]["by_difficulty"]["hard"]["held_out"]
+    assert result["semantic_coverage_by_split"]["train"]["complete"] is True
+    assert result["semantic_coverage_by_split"]["validation"]["complete"] is True
+    assert all(count > 0 for count in result["semantic_distribution_by_split"]["train"].values())
+    assert all(count > 0 for count in result["semantic_distribution_by_split"]["validation"].values())
+    assert result["semantic_sampling"]["method"] == "inverse_frequency_row_weight"
+    assert result["semantic_sampling"]["passed"] is True
+    assert result["semantic_sampling"]["skew_ratio"] <= module.SEMANTIC_SAMPLING_MAX_SKEW_RATIO
+    assert all(weight > 0 for weight in result["effective_sample_weight_by_semantic"].values())
+    assert result["train_effective_distribution"]
     trained_hashes = {row["normalized_fen_hash"] for row in result["rows"]}
     held_out_hashes = {row["normalized_fen_hash"] for row in result["curriculum"]["held_out"]}
     assert trained_hashes.isdisjoint(held_out_hashes)

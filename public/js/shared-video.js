@@ -72,6 +72,37 @@
   }
   let sharedHls = null;
   let sharedHlsLoadPromise = null;
+  let shareSessionId = "";
+  function withShareSession(url) {
+    const raw = String(url || "");
+    if (!raw || !shareSessionId) return raw;
+    try {
+      const parsed = new URL(raw, window.location.origin);
+      parsed.searchParams.set("share_session", shareSessionId);
+      return parsed.pathname + parsed.search + parsed.hash;
+    } catch (_err) {
+      const separator = raw.includes("?") ? "&" : "?";
+      return `${raw}${separator}share_session=${encodeURIComponent(shareSessionId)}`;
+    }
+  }
+  function rememberShareSession(value) {
+    shareSessionId = String(value || "").trim();
+  }
+  function applyShareSessionToPlayback(playback) {
+    if (!playback || typeof playback !== "object") return playback || {};
+    [
+      "fallback_url",
+      "stream_url",
+      "ciphertext_url",
+      "e2ee_key_url",
+      "manifest_url",
+      "chunk_url_template",
+      "master_url",
+    ].forEach((key) => {
+      if (playback[key]) playback[key] = withShareSession(playback[key]);
+    });
+    return playback;
+  }
   function destroySharedPlaybackArtifacts() {
     if (sharedHls && typeof sharedHls.destroy === "function") {
       try { sharedHls.destroy(); } catch (_) {}
@@ -245,10 +276,10 @@
   async function fallbackSharedE2eeToFullDecrypt(player, playback, fragmentKey, message, seekTarget = null) {
     setMsg(message || "已退回舊版完整解密播放。", false);
     setMsg("正在讀取 E2EE 分享授權：伺服器只會提供密文與分享封裝，不會接收原始密碼、raw file key 或 #vk。");
-    const keyRes = await fetch(playback.e2ee_key_url, { credentials: "same-origin" });
+    const keyRes = await fetch(withShareSession(playback.e2ee_key_url), { credentials: "same-origin" });
     const keyJson = await keyRes.json().catch(() => ({}));
     if (!keyRes.ok || !keyJson.ok || !keyJson.e2ee_share) throw new Error(keyJson.msg || "E2EE 分享解密資訊讀取失敗");
-    const cipherRes = await fetch(playback.ciphertext_url, { credentials: "same-origin" });
+    const cipherRes = await fetch(withShareSession(playback.ciphertext_url), { credentials: "same-origin" });
     if (!cipherRes.ok) throw new Error("E2EE 密文讀取失敗");
     const cipherBlob = await readBlobWithProgress(cipherRes, (loaded, total) => {
       const summary = total > 0
@@ -271,13 +302,13 @@
       return;
     }
     setMsg("正在讀取 E2EE 分享授權：strict E2EE 仍由瀏覽器端持有 fragment 與解密能力。");
-    const manifestRes = await fetch(playback.manifest_url, { credentials: "same-origin" });
+    const manifestRes = await fetch(withShareSession(playback.manifest_url), { credentials: "same-origin" });
     const manifestJson = await manifestRes.json().catch(() => ({}));
     if (!manifestRes.ok || manifestJson.available === false) {
       await fallbackSharedE2eeToFullDecrypt(player, playback, fragmentKey, manifestJson.msg || "此 strict E2EE 影音尚未建立 Streaming v2 manifest，已退回舊版完整解密播放。");
       return;
     }
-    const rawKey = new Uint8Array(await unwrapSharedFileKeyBytes((await (await fetch(playback.e2ee_key_url, { credentials: "same-origin" })).json()).e2ee_share.wrapped_file_key_envelope, fragmentKey));
+    const rawKey = new Uint8Array(await unwrapSharedFileKeyBytes((await (await fetch(withShareSession(playback.e2ee_key_url), { credentials: "same-origin" })).json()).e2ee_share.wrapped_file_key_envelope, fragmentKey));
     const mediaSource = new MediaSource();
     const objectUrl = URL.createObjectURL(mediaSource);
     player.src = objectUrl;
@@ -319,7 +350,7 @@
           return;
         }
         const meta = manifestJson.chunks?.[nextChunk];
-        const chunkRes = await fetch(playback.chunk_url_template.replace("__INDEX__", String(meta.chunk_index)), { credentials: "same-origin" });
+        const chunkRes = await fetch(withShareSession(playback.chunk_url_template.replace("__INDEX__", String(meta.chunk_index))), { credentials: "same-origin" });
         if (!chunkRes.ok) {
           const payload = await chunkRes.json().catch(() => ({}));
           throw new Error(payload.msg || `HTTP ${chunkRes.status}`);
@@ -359,13 +390,14 @@
     });
     const json = await res.json().catch(() => ({}));
     if (!res.ok || !json.ok) throw new Error(json.msg || `HTTP ${res.status}`);
+    rememberShareSession(json.share_session_id);
     return json;
   }
   async function fetchJson(url) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 10000);
     try {
-      const res = await fetch(url, {
+      const res = await fetch(withShareSession(url), {
         credentials: "same-origin",
         signal: controller.signal,
       });
@@ -384,6 +416,7 @@
       return;
     }
     if (!meta.res.ok || !meta.json.ok) throw new Error(meta.json.msg || `HTTP ${meta.res.status}`);
+    rememberShareSession(meta.json.share_session_id);
     const video = meta.json.video || {};
     $("title").textContent = video.title || "分享影音";
     $("meta").textContent = `${video.owner_nickname || video.owner_username || "使用者"} · ${video.visibility || "unlisted"}`;
@@ -401,7 +434,8 @@
       return;
     }
     if (!playback.res.ok || !playback.json.ok) throw new Error(playback.json.msg || `HTTP ${playback.res.status}`);
-    await renderPlayback(video, playback.json);
+    rememberShareSession(playback.json.share_session_id);
+    await renderPlayback(video, applyShareSessionToPlayback(playback.json));
   }
   async function renderPlayback(video, playback) {
     const host = $("player-host");

@@ -990,9 +990,8 @@
                 <option value="normal">普通：優先吃子與將軍</option>
                 <option value="hard">困難：避免明顯送子</option>
                 <option value="experiment">實驗：引擎搜尋 + 對局學習</option>
-                <option value="experiment 2:nn">實驗 2：NN 小型神經網路</option>
-                <option value="experiment 3:dl">實驗 3：DL 深度學習</option>
-                <option value="experiment 4:pv">實驗 4：PV 策略價值網路</option>
+                <option value="experiment 3:dl">實驗 3：DL 語義平衡學習</option>
+                <option value="experiment 4:pv">實驗 4：PV 策略價值搜尋</option>
               </select>
             </div>
             <div class="field">
@@ -1205,9 +1204,8 @@
                 <div class="field">
                   <label>Candidate Engine</label>
                   <select id="game-root-chess-engine">
-                    <option value="experiment 2:nn">實驗 2：NN</option>
-                    <option value="experiment 3:dl">實驗 3：DL</option>
-                    <option value="experiment 4:pv">實驗 4：PV</option>
+                    <option value="experiment 3:dl">實驗 3：DL 語義平衡</option>
+                    <option value="experiment 4:pv">實驗 4：PV 策略價值</option>
                   </select>
                 </div>
                 <div class="field">
@@ -1754,9 +1752,10 @@
         </div>
         <div id="economy-root-virtual-body">
           <div class="settings-option-grid economy-wallet-grid">
-            <div><span class="drive-card-sub">目前總價值</span><strong id="economy-root-virtual-total">-</strong><small>剩餘積分 + 現貨估值</small></div>
+            <div><span class="drive-card-sub">目前總價值</span><strong id="economy-root-virtual-total">-</strong><small>剩餘積分 + 現貨估值 + 借貸權益</small></div>
             <div><span class="drive-card-sub">剩餘積分</span><strong id="economy-root-virtual-available">-</strong><small id="economy-root-virtual-locked">鎖定 -</small></div>
             <div><span class="drive-card-sub">現貨估值</span><strong id="economy-root-virtual-spot-value">-</strong><small id="economy-root-virtual-spot-summary">尚無現貨</small></div>
+            <div><span class="drive-card-sub">借貸權益</span><strong id="economy-root-virtual-margin-value">-</strong><small id="economy-root-virtual-margin-summary">尚無借貸倉位</small></div>
           </div>
         </div>
       </div>
@@ -1990,6 +1989,7 @@
           <button class="btn" id="trading-refresh-btn" type="button">重新整理</button>
         </div>
         <div id="trading-safe-mode" class="drive-card-sub">交易狀態讀取中</div>
+        <div id="trading-inline-msg" class="msg trading-inline-msg"></div>
         <div class="settings-option-grid" id="trading-order-form" style="margin-top:.65rem;">
           <div class="field">
             <label>市場</label>
@@ -4096,6 +4096,14 @@
                   <div class="field">
                     <label><input type="checkbox" id="root-trading-price-degrade-pause-borrowing" /> 價格降級時自動暫停借貸交易</label>
                     <div class="field-hint">預設關閉。僅影響新開的融資 / 借券，不影響既有倉位查詢或必要的風控計算。</div>
+                  </div>
+                  <div class="field">
+                    <label><input type="checkbox" id="root-trading-allow-unready-markets" checked /> 允許未完成價格暖機的市場交易</label>
+                    <div class="field-hint">開啟後，市場尚未取得即時價格也不會阻擋下單；價格狀態仍會顯示為警告。</div>
+                  </div>
+                  <div class="field">
+                    <label><input type="checkbox" id="root-trading-disable-price-confidence-gates" checked /> 價格可信度只警告，不阻擋交易</label>
+                    <div class="field-hint">開啟後，risk-grade / conservative / provider count 不足只顯示提示，不再鎖住現貨、進階交易、機器人或合約流程。</div>
                   </div>
                   <div class="field">
                     <label><input type="checkbox" id="root-trading-price-stream-ws-enabled" checked /> 啟用 WebSocket provider input</label>

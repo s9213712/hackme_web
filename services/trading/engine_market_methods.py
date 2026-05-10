@@ -5,6 +5,8 @@ method bodies can reuse the same module-level helpers and constants without
 changing runtime behavior.
 """
 
+import os
+
 from services.trading import engine as _engine
 
 globals().update({name: value for name, value in _engine.__dict__.items() if not name.startswith("__")})
@@ -502,6 +504,56 @@ def _assert_price_meta_allows_high_risk_use(self, conn, *, actor=None, market_sy
     #     opt-in via policy must opt-in via *_cached resolved_source
     is_cached_source = bool(resolved_source) and resolved_source.endswith("_cached")
     cached_caller_allowed = is_cached_source and usage_text in cached_fallback_allowed_usages
+    price_confidence_override = False
+    env_allows_price_override = str(os.environ.get("HACKME_DEV_TRADING_DISABLE_PRICE_CONFIDENCE_GATES") or "").strip().lower() in {"1", "true", "yes", "on"}
+    env_allows_market_override = str(os.environ.get("HACKME_DEV_TRADING_ALLOW_CONSERVATIVE_MARKET_ORDERS") or "").strip().lower() in {"1", "true", "yes", "on"}
+    rows = conn.execute(
+        """
+        SELECT key, value
+        FROM trading_settings
+        WHERE key IN (?, ?, ?, ?)
+        """,
+        (
+            "trading.disable_price_confidence_gates",
+            "trading.allow_conservative_market_orders",
+            "trading.dev_disable_price_confidence_gates",
+            "trading.dev_allow_conservative_market_orders",
+        ),
+    ).fetchall()
+    settings = {str(row["key"] or ""): str(row["value"] or "") for row in rows}
+    price_confidence_override = (
+        env_allows_price_override
+        or str(settings.get("trading.disable_price_confidence_gates") or "").strip().lower() in {"1", "true", "yes", "on"}
+        or str(settings.get("trading.dev_disable_price_confidence_gates") or "").strip().lower() in {"1", "true", "yes", "on"}
+        or (
+            usage_text == "market order"
+            and (
+                env_allows_market_override
+                or str(settings.get("trading.allow_conservative_market_orders") or "").strip().lower() in {"1", "true", "yes", "on"}
+                or str(settings.get("trading.dev_allow_conservative_market_orders") or "").strip().lower() in {"1", "true", "yes", "on"}
+            )
+        )
+    )
+    if price_confidence_override:
+        self._audit_event(
+            conn,
+            "TRADING_PRICE_HEALTH_OVERRIDE",
+            "root setting allowed trading action despite conservative risk-grade price source",
+            actor=actor,
+            market_symbol=market_symbol,
+            severity="warning",
+            metadata={
+                "usage": usage,
+                "reason": hard_block_reason or "risk-grade price source is not available",
+                "price_health": meta.get("price_health"),
+                "warnings": meta.get("warnings") or [],
+                "excluded_sources": meta.get("excluded_sources") or [],
+                "resolved_source": resolved_source,
+                "hard_block": False,
+                "price_confidence_gate_disabled": True,
+            },
+        )
+        return
     if not cached_caller_allowed:
         reason = hard_block_reason or "risk-grade price source is not available"
         usage_label = usage_text or "high-risk trading action"
@@ -1437,4 +1489,3 @@ def _scan_one_grid_bot(self, bot, *, actor):
     return scan_one_grid_bot_helper(self, bot, actor=actor)
 
 # ── End Grid Trading Bot ─────────────────────────────────────────────────
-

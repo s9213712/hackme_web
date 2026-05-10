@@ -40,6 +40,8 @@ let comfyuiInputAssets = {
   control: { file: null, imageRef: null, previewUrl: "", filename: "" },
 };
 const COMFYUI_GENERATION_TIMEOUT_SECONDS = 1800;
+const COMFYUI_QUEUE_TIMEOUT_EXTENSION_SECONDS = 1800;
+const COMFYUI_QUEUE_MAX_TIMEOUT_SECONDS = 21600;
 const COMFYUI_MAX_LORAS = 8;
 const COMFYUI_LORA_EXTRA_PRICE = 1;
 const COMFYUI_VAE_BUILTIN = "__checkpoint_builtin__";
@@ -689,9 +691,25 @@ function applyComfyuiJobProgress(progress = {}, timeoutSeconds = COMFYUI_GENERAT
   });
 }
 
+function isComfyuiJobQueued(job = {}) {
+  const phase = String(job?.progress?.phase || "").toLowerCase();
+  return phase === "queued" || String(job?.status || "").toLowerCase() === "queued";
+}
+
+function extendComfyuiDeadlineForQueue(deadline, startedAt) {
+  const now = Date.now();
+  const refreshWindowMs = Math.max(5000, Math.min(60000, COMFYUI_QUEUE_TIMEOUT_EXTENSION_SECONDS * 100));
+  if (deadline - now > refreshWindowMs) return deadline;
+  const maxDeadline = startedAt + COMFYUI_QUEUE_MAX_TIMEOUT_SECONDS * 1000 + 15000;
+  const extended = Math.min(maxDeadline, now + COMFYUI_QUEUE_TIMEOUT_EXTENSION_SECONDS * 1000 + 15000);
+  return Math.max(deadline, extended);
+}
+
 async function pollComfyuiJobUntilDone(jobId, controller, timeoutSeconds) {
   comfyuiActiveJobId = jobId;
-  const deadline = Date.now() + timeoutSeconds * 1000 + 15000;
+  const startedAt = Date.now();
+  let deadline = startedAt + timeoutSeconds * 1000 + 15000;
+  let displayTimeoutSeconds = timeoutSeconds;
   while (Date.now() < deadline) {
     if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
     const res = await apiFetch(API + `/comfyui/jobs/${encodeURIComponent(jobId)}`, {
@@ -702,7 +720,15 @@ async function pollComfyuiJobUntilDone(jobId, controller, timeoutSeconds) {
     const json = await res.json().catch(() => ({}));
     if (!res.ok || !json.ok) throw new Error(json.msg || `ComfyUI 工作狀態讀取失敗（HTTP ${res.status}）`);
     const job = json.job || {};
-    applyComfyuiJobProgress(job.progress || {}, timeoutSeconds);
+    if (isComfyuiJobQueued(job)) {
+      deadline = extendComfyuiDeadlineForQueue(deadline, startedAt);
+    }
+    displayTimeoutSeconds = Math.max(
+      displayTimeoutSeconds,
+      Number(job.progress?.timeout_seconds) || 0,
+      Math.max(timeoutSeconds, Math.floor((deadline - startedAt - 15000) / 1000))
+    );
+    applyComfyuiJobProgress(job.progress || {}, displayTimeoutSeconds);
     if (job.status === "completed" && job.result) return job.result;
     if (job.status === "error") throw new Error(job.error || job.progress?.detail || "ComfyUI 產圖失敗");
     await new Promise((resolve) => setTimeout(resolve, 800));

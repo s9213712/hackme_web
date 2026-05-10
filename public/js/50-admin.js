@@ -2343,6 +2343,8 @@ function renderRootTradingSettings(payload) {
   if ($("root-trading-price-degrade-pause-market-orders")) $("root-trading-price-degrade-pause-market-orders").checked = !!settings.price_degrade_pause_market_orders;
   if ($("root-trading-price-degrade-pause-bots")) $("root-trading-price-degrade-pause-bots").checked = !!settings.price_degrade_pause_bots;
   if ($("root-trading-price-degrade-pause-borrowing")) $("root-trading-price-degrade-pause-borrowing").checked = !!settings.price_degrade_pause_borrowing;
+  if ($("root-trading-allow-unready-markets")) $("root-trading-allow-unready-markets").checked = settings.allow_unready_markets !== false;
+  if ($("root-trading-disable-price-confidence-gates")) $("root-trading-disable-price-confidence-gates").checked = settings.disable_price_confidence_gates !== false;
   if ($("root-trading-simulated-slippage-enabled")) $("root-trading-simulated-slippage-enabled").checked = !!settings.simulated_slippage_enabled;
   if ($("root-trading-simulated-slippage-base-basis-points")) $("root-trading-simulated-slippage-base-basis-points").value = Number(settings.simulated_slippage_base_basis_points ?? 0);
   if ($("root-trading-simulated-slippage-size-basis-points-per-10k-notional")) $("root-trading-simulated-slippage-size-basis-points-per-10k-notional").value = Number(settings.simulated_slippage_size_basis_points_per_10k_notional ?? 0);
@@ -2527,6 +2529,8 @@ async function saveRootTradingSettings() {
       price_degrade_pause_market_orders: !!$("root-trading-price-degrade-pause-market-orders")?.checked,
       price_degrade_pause_bots: !!$("root-trading-price-degrade-pause-bots")?.checked,
       price_degrade_pause_borrowing: !!$("root-trading-price-degrade-pause-borrowing")?.checked,
+      allow_unready_markets: $("root-trading-allow-unready-markets")?.checked !== false,
+      disable_price_confidence_gates: $("root-trading-disable-price-confidence-gates")?.checked !== false,
       simulated_slippage_enabled: !!$("root-trading-simulated-slippage-enabled")?.checked,
       simulated_slippage_base_basis_points: Number($("root-trading-simulated-slippage-base-basis-points")?.value || 0),
       simulated_slippage_size_basis_points_per_10k_notional: Number($("root-trading-simulated-slippage-size-basis-points-per-10k-notional")?.value || 0),

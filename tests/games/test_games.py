@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from datetime import datetime, timezone
 from unittest.mock import patch
 from pathlib import Path
 
@@ -149,7 +150,7 @@ def test_game_catalog_includes_solo_games(tmp_path):
     games = response.get_json()["games"]
     by_key = {game["key"]: game for game in games}
     assert {"chess", "sudoku", "minesweeper", "1a2b", "tetris", "space_shooter"} <= set(by_key)
-    assert [item["key"] for item in by_key["chess"]["computer_difficulties"]] == ["normal", "hard", "experiment", "experiment 2:nn", "experiment 3:dl", "experiment 4:pv"]
+    assert [item["key"] for item in by_key["chess"]["computer_difficulties"]] == ["normal", "hard", "experiment", "experiment 3:dl", "experiment 4:pv"]
     assert by_key["sudoku"]["supports_invites"] is False
     assert by_key["minesweeper"]["supports_computer"] is False
     assert by_key["1a2b"]["supports_invites"] is False
@@ -703,10 +704,8 @@ def test_chess_practice_difficulty_is_persisted_and_rejects_invalid_value(tmp_pa
     assert experiment_match["computer_difficulty"] == "experiment"
 
     experiment_nn = client.post("/api/games/chess/practice", json={"difficulty": "experiment 2:nn"})
-    assert experiment_nn.status_code == 200
-    experiment_nn_id = experiment_nn.get_json()["match_id"]
-    experiment_nn_match = client.get(f"/api/games/chess/matches/{experiment_nn_id}").get_json()["match"]
-    assert experiment_nn_match["computer_difficulty"] == "experiment 2:nn"
+    assert experiment_nn.status_code == 400
+    assert "難度" in experiment_nn.get_json()["msg"]
 
     experiment_dl = client.post("/api/games/chess/practice", json={"difficulty": "experiment 3:dl"})
     assert experiment_dl.status_code == 200
@@ -866,7 +865,7 @@ def test_experiment_nn_learning_writes_separate_runtime_model(tmp_path, monkeypa
     assert model["version"] >= 1
 
 
-def test_experiment_nn_resign_collects_replay_without_mutating_model(tmp_path, monkeypatch):
+def test_experiment_nn_legacy_match_resign_collects_replay_without_mutating_model(tmp_path, monkeypatch):
     db_path = tmp_path / "games.db"
     _seed_db(db_path)
     actor_box = {"actor": {"id": 2, "username": "alice", "role": "user"}}
@@ -879,9 +878,39 @@ def test_experiment_nn_resign_collects_replay_without_mutating_model(tmp_path, m
     app = _build_app(db_path, actor_box, chess_engine_store=_build_chess_engine_store(tmp_path))
     client = app.test_client()
 
-    created = client.post("/api/games/chess/practice", json={"difficulty": "experiment 2:nn", "side": "black"})
-    assert created.status_code == 200
-    match_id = created.get_json()["match_id"]
+    conn = sqlite3.connect(db_path)
+    try:
+        now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        cur = conn.execute(
+            """
+            INSERT INTO game_matches (
+                game_key, mode, status, white_user_id, black_user_id, human_side, computer_difficulty, current_turn,
+                board_json, move_history_json, created_at, updated_at
+            ) VALUES ('chess', 'computer', 'active', 2, NULL, 'black', 'experiment 2:nn', 'black', ?, ?, ?, ?)
+            """,
+            (
+                json.dumps(initial_board(), ensure_ascii=False, sort_keys=True),
+                json.dumps(
+                    [
+                        {
+                            "by": "white",
+                            "from": "e2",
+                            "to": "e4",
+                            "piece": "P",
+                            "computer": True,
+                            "at": now,
+                        }
+                    ],
+                    ensure_ascii=False,
+                ),
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+        match_id = cur.lastrowid
+    finally:
+        conn.close()
     model_before = model_path.read_text(encoding="utf-8") if model_path.exists() else None
 
     resigned = client.post(f"/api/games/chess/matches/{match_id}/resign", json={})
@@ -1037,6 +1066,65 @@ def test_experiment_dl_decision_explain_reports_raw_policy_and_final_scores(tmp_
     assert "override_applied" in watched["f7f5"]
     assert "override_reason" in watched["f7f5"]
     assert "final_combined_score" in watched["f7f5"]
+    assert explanation["style_profile"]["style_profile"] == "balanced"
+    assert explanation["style_profile"]["applied"] is False
+    assert watched["f7f5"]["base_score"] == watched["f7f5"]["fused_score"]
+    assert watched["f7f5"]["style_bonus"] == 0
+
+
+def test_experiment_dl_style_profile_reports_bounded_candidates(tmp_path, monkeypatch):
+    model_path = tmp_path / "runtime" / "models" / "chess_experiment_3_dl.json"
+    replay_path = tmp_path / "runtime" / "models" / "chess_experiment_3_dl_replay.jsonl"
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_DL_MODEL_PATH", str(model_path))
+    fen = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"
+    train_experiment_dl_from_replay_samples(
+        [{"fen": fen, "side": "black", "move_uci": "f7f5", "target": 1.0, "weight": 1.0}],
+        model_path=model_path,
+        replay_path=replay_path,
+        replace_replay=True,
+    )
+
+    explanation = explain_experiment_dl_decision(
+        {"__fen__": fen},
+        "black",
+        model_path=model_path,
+        search_profile="fast",
+        watched_moves=["f7f5", "e7e5", "d7d5"],
+        style_profile="attacking",
+    )
+
+    style = explanation["style_profile"]
+    assert style["style_profile"] == "attacking"
+    assert "candidate_moves" in style
+    assert "rejected_style_moves" in style
+    assert explanation["chosen_breakdown"]["style_profile"] == "attacking"
+    assert "base_score" in explanation["chosen_breakdown"]
+    assert "style_bonus" in explanation["chosen_breakdown"]
+    assert "final_combined_score" in explanation["chosen_breakdown"]
+    selected = next(
+        (row for row in style["candidate_moves"] if row["move"] == explanation["chosen_move"]),
+        None,
+    )
+    if selected is not None:
+        assert selected["cp_delta_vs_best"] >= -100
+    for rejected in style["rejected_style_moves"]:
+        assert rejected["cp_delta_vs_best"] < -100
+        assert rejected["rejection_reason"]
+
+
+def test_experiment_dl_style_profile_does_not_override_forced_mate(tmp_path, monkeypatch):
+    model_path = tmp_path / "runtime" / "models" / "chess_experiment_3_dl.json"
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_DL_MODEL_PATH", str(model_path))
+    board = {"__fen__": "6k1/5Q2/6K1/8/8/8/8/8 w - - 0 1"}
+
+    balanced = explain_experiment_dl_decision(board, "white", model_path=model_path, style_profile="balanced")
+    attacking = explain_experiment_dl_decision(board, "white", model_path=model_path, style_profile="attacking")
+    defensive = explain_experiment_dl_decision(board, "white", model_path=model_path, style_profile="defensive")
+
+    assert balanced["chosen_reason"] == "forced_mate"
+    assert attacking["chosen_reason"] == "forced_mate"
+    assert defensive["chosen_reason"] == "forced_mate"
+    assert attacking["chosen_move"] == balanced["chosen_move"] == defensive["chosen_move"]
 
 
 def test_experiment_pv_learning_writes_runtime_model(tmp_path, monkeypatch):

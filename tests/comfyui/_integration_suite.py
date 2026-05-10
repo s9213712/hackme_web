@@ -11,6 +11,7 @@ from flask import Flask, jsonify, make_response, request
 
 from routes import comfyui as comfyui_routes
 from routes.comfyui import register_comfyui_routes
+from services.comfyui import execution as comfy_execution
 from services.storage.cloud_drive import ensure_cloud_drive_attachment_schema
 from services.comfyui.client import ComfyUIClient, ComfyUIError, ComfyUIImage
 from services.users.member_levels import ensure_member_level_rules_schema
@@ -3611,6 +3612,50 @@ def test_comfyui_health_check_timeout_is_reported_as_comfyui_error(monkeypatch):
         ComfyUIClient("http://fake-comfyui").health_check(timeout=1)
 
 
+def test_comfyui_wait_extends_timeout_while_prompt_is_queued(monkeypatch):
+    clock = {"now": 0.0}
+    progress_events = []
+
+    class QueuedThenDoneClient:
+        timeout = 1
+
+        def _json_request(self, path, *, timeout=None):
+            assert path == "/history/queued-prompt"
+            if clock["now"] < 12:
+                return {}
+            return {
+                "queued-prompt": {
+                    "status": {"completed": True, "status_str": "success"},
+                    "outputs": {"9": {"images": [{"filename": "done.png", "subfolder": "", "type": "output"}]}},
+                }
+            }
+
+    def fake_time():
+        return clock["now"]
+
+    def fake_sleep(seconds):
+        clock["now"] += max(float(seconds), 0.15)
+
+    monkeypatch.setattr(comfy_execution.time, "time", fake_time)
+    monkeypatch.setattr(comfy_execution.time, "sleep", fake_sleep)
+    monkeypatch.setattr(comfy_execution, "QUEUE_TIMEOUT_EXTENSION_SECONDS", 5)
+    monkeypatch.setattr(comfy_execution, "QUEUE_MAX_TIMEOUT_SECONDS", 20)
+
+    images = comfy_execution.wait_for_images(
+        QueuedThenDoneClient(),
+        "queued-prompt",
+        timeout_seconds=3,
+        poll_interval=1,
+        expected_count=1,
+        error_cls=ComfyUIError,
+        progress_callback=progress_events.append,
+    )
+
+    assert images == [{"filename": "done.png", "subfolder": "", "type": "output"}]
+    assert any(event.get("timeout_extended") is True for event in progress_events)
+    assert any(int(event.get("timeout_seconds") or 0) > 3 for event in progress_events)
+
+
 def test_comfyui_save_can_add_generated_image_to_album(tmp_path):
     db_path = tmp_path / "comfyui.db"
     storage_root = tmp_path / "storage"
@@ -3819,7 +3864,7 @@ def test_comfyui_frontend_is_wired():
     assert 'const show = currentUser === "root";' in comfyui_js
     assert '目前是雲端 / 遠端模式，所以這個區塊只保留說明。若要管理本站的本地 ComfyUI 模型，請先把 backend 切回本地模式。' in comfyui_js
     assert "/js/36-comfyui.js?v=20260509-comfyui-template-embeddings" in index_html
-    assert "/styles.css?v=20260505-workflow-preset" in index_html
+    assert "/styles.css?v=20260510-comfyui-visual-workflow" in index_html
     assert "width: min(420px, 100%);" in css
     assert "max-height: 320px;" in css
     assert ".comfyui-root-details" in css
@@ -3903,6 +3948,8 @@ def test_comfyui_frontend_is_wired():
     assert "function pollComfyuiJobUntilDone(jobId, controller, timeoutSeconds)" in comfyui_js
     assert "function pollComfyuiModelDownloadJob(jobId)" in comfyui_js
     assert "const COMFYUI_GENERATION_TIMEOUT_SECONDS = 1800;" in comfyui_js
+    assert "const COMFYUI_QUEUE_TIMEOUT_EXTENSION_SECONDS = 1800;" in comfyui_js
+    assert "function extendComfyuiDeadlineForQueue(deadline, startedAt)" in comfyui_js
     assert "function setComfyuiModelDownloadProgress" in comfyui_js
     assert "function comfyuiRequestPayloadExtras()" in comfyui_js
     assert '"async_progress": True' not in comfyui_js

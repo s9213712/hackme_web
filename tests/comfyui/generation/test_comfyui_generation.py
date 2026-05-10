@@ -18,5 +18,5 @@ from tests.comfyui._integration_suite import (
     test_comfyui_img2img_controlnet_generate_uploads_assets_and_records_history,
     test_comfyui_lora_billing_quote_adds_one_point_per_lora_per_image,
     test_comfyui_models_and_generate_routes,
+    test_comfyui_wait_extends_timeout_while_prompt_is_queued,
 )
-

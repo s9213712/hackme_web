@@ -47,7 +47,8 @@ SOLO_GAME_KEYS = {"sudoku", "minesweeper", "1a2b", "tetris", "space_shooter"}
 SCORE_RANKED_SOLO_GAMES = {"tetris", "space_shooter"}
 SOLO_GAME_CHECK_SQL = "'sudoku', 'minesweeper', '1a2b', 'tetris', 'space_shooter'"
 WEEKLY_REWARDS = (300, 200, 100)
-COMPUTER_DIFFICULTIES = {"normal", "hard", EXPERIMENT_DIFFICULTY, EXPERIMENT_NN_DIFFICULTY, EXPERIMENT_DL_DIFFICULTY, EXPERIMENT_PV_DIFFICULTY}
+COMPUTER_DIFFICULTIES = {"normal", "hard", EXPERIMENT_DIFFICULTY, EXPERIMENT_DL_DIFFICULTY, EXPERIMENT_PV_DIFFICULTY}
+LEGACY_COMPUTER_DIFFICULTIES = {EXPERIMENT_NN_DIFFICULTY}
 MINESWEEPER_DIFFICULTIES = {"easy", "normal", "hard"}
 PIECE_VALUES = {
     "p": 100,
@@ -83,6 +84,13 @@ def normalize_computer_difficulty(value):
     if difficulty == "easy":
         difficulty = "normal"
     return difficulty if difficulty in COMPUTER_DIFFICULTIES else None
+
+
+def normalize_stored_computer_difficulty(value):
+    difficulty = str(value or "normal").strip().lower()
+    if difficulty == "easy":
+        difficulty = "normal"
+    return difficulty if difficulty in COMPUTER_DIFFICULTIES or difficulty in LEGACY_COMPUTER_DIFFICULTIES else "normal"
 
 
 def move_material_value(move):
@@ -462,7 +470,7 @@ def serialize_match(row, actor_id=None):
     side = None
     human_side = row["human_side"] if "human_side" in row.keys() else "white"
     computer_difficulty = row["computer_difficulty"] if "computer_difficulty" in row.keys() else "normal"
-    computer_difficulty = normalize_computer_difficulty(computer_difficulty) or "normal"
+    computer_difficulty = normalize_stored_computer_difficulty(computer_difficulty)
     if actor_id:
         if row["mode"] == "computer" and int(row["white_user_id"]) == int(actor_id):
             side = human_side
@@ -747,9 +755,8 @@ def register_games_routes(app, deps):
                     {"key": "normal", "label": "普通"},
                     {"key": "hard", "label": "困難"},
                     {"key": EXPERIMENT_DIFFICULTY, "label": "實驗"},
-                    {"key": EXPERIMENT_NN_DIFFICULTY, "label": "實驗 2：NN"},
-                    {"key": EXPERIMENT_DL_DIFFICULTY, "label": "實驗 3：DL"},
-                    {"key": EXPERIMENT_PV_DIFFICULTY, "label": "實驗 4：PV"},
+                    {"key": EXPERIMENT_DL_DIFFICULTY, "label": "實驗 3：DL 語義平衡"},
+                    {"key": EXPERIMENT_PV_DIFFICULTY, "label": "實驗 4：PV 策略價值"},
                 ],
             }, {
                 "key": "sudoku",

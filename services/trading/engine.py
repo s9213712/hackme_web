@@ -2,6 +2,7 @@ import hashlib
 import inspect
 import json
 import math
+import os
 import threading
 import time
 import uuid
@@ -955,6 +956,11 @@ def ensure_trading_schema(conn):
         ("trading.price_degrade_pause_market_orders", "false"),
         ("trading.price_degrade_pause_bots", "false"),
         ("trading.price_degrade_pause_borrowing", "false"),
+        ("trading.allow_unready_markets", "true"),
+        ("trading.disable_price_confidence_gates", "true"),
+        ("trading.dev_allow_conservative_market_orders", "false"),
+        ("trading.dev_allow_unready_markets", "false"),
+        ("trading.dev_disable_price_confidence_gates", "false"),
         ("trading.simulated_slippage_enabled", "false"),
         ("trading.simulated_slippage_base_basis_points", "0"),
         ("trading.simulated_slippage_size_basis_points_per_10k_notional", "0"),
@@ -1610,16 +1616,27 @@ class TradingEngineService:
             raise ValueError("only house_counterparty execution is enabled in v1")
         return dict(row)
 
-    def _is_market_boot_ready(self, market):
+    def _allow_unready_markets(self, conn=None):
+        if str(os.environ.get("HACKME_DEV_TRADING_ALLOW_UNREADY_MARKETS") or "").strip().lower() in {"1", "true", "yes", "on"}:
+            return True
+        if conn is None:
+            return False
+        row = conn.execute(
+            "SELECT value FROM trading_settings WHERE key IN (?, ?) ORDER BY CASE key WHEN ? THEN 0 ELSE 1 END LIMIT 1",
+            ("trading.allow_unready_markets", "trading.dev_allow_unready_markets", "trading.allow_unready_markets"),
+        ).fetchone()
+        return str(row["value"] if row else "").strip().lower() in {"1", "true", "yes", "on"}
+
+    def _is_market_boot_ready(self, market, conn=None):
         """Boot-ready gate (2026-05-06).
 
         ``trading_markets.live_price_confirmed_at`` is NULL until the market
-        has survived warmup with at least two stable live quotes. Until that
-        timestamp is set, any operation that takes price as truth (spot order,
-        margin open, liquidation, bot decision) MUST refuse — otherwise we
-        risk acting either on the seed default that ``manual_price_points`` was
-        first inserted with, or on a single unconfirmed startup spike.
+        has survived warmup with at least two stable live quotes. Root can turn
+        this gate into a warning-only state because this project trades site
+        points, not fiat-backed assets.
         """
+        if self._allow_unready_markets(conn):
+            return True
         if not isinstance(market, dict) and "live_price_confirmed_at" not in (getattr(market, "keys", lambda: ())()):
             return False
         try:
@@ -1628,8 +1645,8 @@ class TradingEngineService:
             confirmed_at = None
         return bool(str(confirmed_at or "").strip())
 
-    def _assert_market_boot_ready(self, market, *, usage="trading"):
-        if not self._is_market_boot_ready(market):
+    def _assert_market_boot_ready(self, market, *, usage="trading", conn=None):
+        if not self._is_market_boot_ready(market, conn=conn):
             symbol = ""
             try:
                 symbol = str(market["symbol"])

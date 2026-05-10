@@ -200,6 +200,9 @@ export HTML_LEARNING_ROOT_PASSWORD="$ROOT_PASSWORD"
 export HTML_LEARNING_MANAGER_PASSWORD="$MANAGER_PASSWORD"
 export HTML_LEARNING_TEST_PASSWORD="$TEST_PASSWORD"
 export HTML_LEARNING_DISABLE_DEFAULT_PASSWORD_POLICY=1
+export HACKME_DEV_TRADING_ALLOW_CONSERVATIVE_MARKET_ORDERS=1
+export HACKME_DEV_TRADING_ALLOW_UNREADY_MARKETS=1
+export HACKME_DEV_TRADING_DISABLE_PRICE_CONFIDENCE_GATES=1
 if [[ -z "${HTML_LEARNING_GIT_REPO_DIR:-}" ]]; then
   if git -C "$DEFAULT_GIT_REPO_DIR" rev-parse HEAD >/dev/null 2>&1; then
     export HTML_LEARNING_GIT_REPO_DIR="$DEFAULT_GIT_REPO_DIR"
@@ -320,6 +323,11 @@ try:
         ("trading.price_degrade_pause_market_orders", "false"),
         ("trading.price_degrade_pause_bots", "false"),
         ("trading.price_degrade_pause_borrowing", "false"),
+        ("trading.allow_unready_markets", "true"),
+        ("trading.disable_price_confidence_gates", "true"),
+        ("trading.dev_allow_conservative_market_orders", "true"),
+        ("trading.dev_allow_unready_markets", "true"),
+        ("trading.dev_disable_price_confidence_gates", "true"),
         ("trading.warning_language", "zh-TW"),
         ("trading.simulated_slippage_enabled", "false"),
         ("trading.simulated_slippage_base_basis_points", "0"),

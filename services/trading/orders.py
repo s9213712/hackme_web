@@ -119,7 +119,7 @@ def place_order(
         conn.execute("BEGIN IMMEDIATE")
         service._assert_writable(conn)
         market = service._market(conn, market_symbol)
-        service._assert_market_boot_ready(market, usage="spot order")
+        service._assert_market_boot_ready(market, usage="spot order", conn=conn)
         service._validate_market_quantity_constraints(market, quantity_units)
         if int(market["futures_enabled"] or 0):
             raise ValueError("futures interface is reserved but not enabled in v1")
@@ -433,7 +433,7 @@ def match_open_limit_orders(service, *, actor=None, market_symbol=None, limit=20
                 skipped += 1
                 continue
             market = service._market(conn, order["market_symbol"])
-            if not service._is_market_boot_ready(market):
+            if not service._is_market_boot_ready(market, conn=conn):
                 conn.rollback()
                 skipped += 1
                 continue
@@ -998,7 +998,7 @@ def scan_spot_risk_targets(service, *, actor=None, limit=200, ctx=None):
         for row in rows:
             try:
                 market = service._market(conn, row["market_symbol"])
-                if not service._is_market_boot_ready(market):
+                if not service._is_market_boot_ready(market, conn=conn):
                     skipped.append({"user_id": int(row["user_id"]), "market_symbol": row["market_symbol"], "reason": "market_boot_pending"})
                     continue
                 observed_price, _price_source, price_meta = service._current_market_price_points(

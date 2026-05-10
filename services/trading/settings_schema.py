@@ -25,6 +25,8 @@ TRADING_ROOT_BOOL_SETTING_KEYS = {
     "price_degrade_pause_market_orders": "trading.price_degrade_pause_market_orders",
     "price_degrade_pause_bots": "trading.price_degrade_pause_bots",
     "price_degrade_pause_borrowing": "trading.price_degrade_pause_borrowing",
+    "allow_unready_markets": "trading.allow_unready_markets",
+    "disable_price_confidence_gates": "trading.disable_price_confidence_gates",
     "simulated_slippage_enabled": "trading.simulated_slippage_enabled",
 }
 

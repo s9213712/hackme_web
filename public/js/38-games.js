@@ -124,9 +124,8 @@ function gameSubtitle(game) {
 }
 
 function gameDifficultyOptionDescription(difficulty) {
-  if (difficulty === "experiment 4:pv") return "實驗 4：PV 策略價值網路";
-  if (difficulty === "experiment 3:dl") return "實驗 3：DL 深度學習";
-  if (difficulty === "experiment 2:nn") return "實驗 2：NN 小型神經網路";
+  if (difficulty === "experiment 4:pv") return "實驗 4：PV 策略價值搜尋";
+  if (difficulty === "experiment 3:dl") return "實驗 3：DL 語義平衡學習";
   if (difficulty === "experiment") return "實驗：引擎搜尋 + 對局學習";
   if (difficulty === "hard") return "困難：避免明顯送子";
   return "普通：優先吃子與將軍";
@@ -142,9 +141,8 @@ function renderChessPracticeDifficultyOptions(games) {
         { key: "normal", label: "普通" },
         { key: "hard", label: "困難" },
         { key: "experiment", label: "實驗" },
-        { key: "experiment 2:nn", label: "實驗 2：NN" },
-        { key: "experiment 3:dl", label: "實驗 3：DL" },
-        { key: "experiment 4:pv", label: "實驗 4：PV" },
+        { key: "experiment 3:dl", label: "實驗 3：DL 語義平衡" },
+        { key: "experiment 4:pv", label: "實驗 4：PV 策略價值" },
       ];
   const current = select.value || "normal";
   select.innerHTML = rows.map((row) => {
@@ -298,9 +296,8 @@ function gameMatchLabel(match) {
 }
 
 function gameDifficultyLabel(difficulty) {
-  if (difficulty === "experiment 4:pv") return "實驗 4：PV";
-  if (difficulty === "experiment 3:dl") return "實驗 3：DL";
-  if (difficulty === "experiment 2:nn") return "實驗 2：NN";
+  if (difficulty === "experiment 4:pv") return "實驗 4：PV 策略價值";
+  if (difficulty === "experiment 3:dl") return "實驗 3：DL 語義平衡";
   if (difficulty === "experiment") return "實驗";
   if (difficulty === "hard") return "困難";
   return "普通";

@@ -23,6 +23,25 @@ from services.games.self_play_training import (
 from services.server.runtime import default_runtime_root_path
 
 
+def _fast_legal_training_move(_board_state, side):
+    board = chess.Board(str(_board_state.get("__fen__") or chess.STARTING_FEN))
+    if board.turn != (chess.WHITE if side == "white" else chess.BLACK):
+        board.turn = chess.WHITE if side == "white" else chess.BLACK
+    legal = sorted(board.legal_moves, key=lambda move: move.uci())
+    if not legal:
+        return None
+    move = legal[0]
+    piece = board.piece_at(move.from_square)
+    captured = board.piece_at(move.to_square)
+    return {
+        "from": chess.square_name(move.from_square),
+        "to": chess.square_name(move.to_square),
+        "piece": piece.symbol() if piece else "",
+        "captured": captured.symbol() if captured else None,
+        "promotion": chess.piece_symbol(move.promotion) if move.promotion else None,
+    }
+
+
 def test_teacher_engine_finds_mate_in_one():
     board = {"__fen__": "6k1/5Q2/6K1/8/8/8/8/8 w - - 0 1"}
     move = choose_teacher_move({"__fen__": "6k1/5Q2/6K1/8/8/8/8/8 w - - 0 1"}, "white", depth=2)
@@ -82,6 +101,7 @@ def test_training_session_updates_runtime_db_and_nn_model(tmp_path, monkeypatch)
     monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_NN_MODEL_PATH", str(experiment_nn))
     monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_DL_MODEL_PATH", str(experiment_dl))
     monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_PV_MODEL_PATH", str(experiment_pv))
+    monkeypatch.setattr(self_play_training_service, "_choose_training_move", lambda board_state, side, *_args, **_kwargs: _fast_legal_training_move(board_state, side))
 
     summary = run_training_session(
         exp1_teacher_games=1,
@@ -171,6 +191,7 @@ def test_training_session_can_run_hard_vs_experiment_only(tmp_path, monkeypatch)
     monkeypatch.setattr(chess_dl_service, "_SEARCH_QUIESCENCE_DEPTH", 1)
     monkeypatch.setattr(chess_pv_service, "_SEARCH_DEPTH", 1)
     monkeypatch.setattr(chess_pv_service, "_SEARCH_QUIESCENCE_DEPTH", 1)
+    monkeypatch.setattr(self_play_training_service, "_choose_training_move", lambda board_state, side, *_args, **_kwargs: _fast_legal_training_move(board_state, side))
 
     summary = run_training_session(
         exp1_teacher_games=0,
@@ -291,6 +312,36 @@ def test_round_robin_benchmark_and_smoke_reports_use_all_engines(tmp_path, monke
     monkeypatch.setattr(chess_pv_service, "_SEARCH_DEPTH", 1)
     monkeypatch.setattr(chess_pv_service, "_SEARCH_QUIESCENCE_DEPTH", 1)
 
+    def fast_training_match(white_engine, black_engine, **kwargs):
+        opening_label = str(kwargs.get("opening_label") or "fixture_opening")
+        return self_play_training_service.TrainingMatch(
+            white_engine=white_engine,
+            black_engine=black_engine,
+            winner_color="white",
+            reason="fixture_fast_match",
+            move_count=4,
+            final_fen=chess.STARTING_FEN,
+            uci_moves=["e2e4", "e7e5", "g1f3", "b8c6"],
+            opening_label=opening_label,
+            student_updates={},
+            teacher_guidance_updates={},
+            teacher_distillation_updates=0,
+        )
+
+    def fast_benchmark_move(_difficulty, board_state, side, **_kwargs):
+        board = chess.Board(str(board_state.get("__fen__")))
+        for legal in sorted(board.legal_moves, key=lambda move: move.uci()):
+            if board.turn == (chess.WHITE if side == "white" else chess.BLACK):
+                return {
+                    "from": chess.square_name(legal.from_square),
+                    "to": chess.square_name(legal.to_square),
+                    "promotion": chess.piece_symbol(legal.promotion) if legal.promotion else None,
+                }
+        return None
+
+    monkeypatch.setattr(self_play_training_service, "play_training_match", fast_training_match)
+    monkeypatch.setattr(self_play_training_service, "_engine_move_for_benchmark", fast_benchmark_move)
+
     smoke = run_post_training_smoke_evaluation(
         store=ChessExperimentStore(experiment_db),
         nn_model_path=experiment_nn,
@@ -351,6 +402,7 @@ def test_teacher_only_training_distills_into_exp3_model(tmp_path, monkeypatch):
     monkeypatch.setattr(chess_dl_service, "_SEARCH_QUIESCENCE_DEPTH", 1)
     monkeypatch.setattr(chess_pv_service, "_SEARCH_DEPTH", 1)
     monkeypatch.setattr(chess_pv_service, "_SEARCH_QUIESCENCE_DEPTH", 1)
+    monkeypatch.setattr(self_play_training_service, "_choose_training_move", lambda board_state, side, *_args, **_kwargs: _fast_legal_training_move(board_state, side))
 
     summary = run_training_session(
         exp1_teacher_games=1,

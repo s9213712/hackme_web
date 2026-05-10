@@ -65,6 +65,8 @@ def test_root_points_page_is_chain_operations_console():
     assert "<pre id=\"economy-chain-status\"" not in index_html
     assert 'id="economy-root-virtual-card"' in index_html
     assert 'id="economy-root-virtual-total"' in index_html
+    assert 'id="economy-root-virtual-margin-value"' in index_html
+    assert "剩餘積分 + 現貨估值 + 借貸權益" in index_html
     assert "剩餘積分 + 現貨估值" in index_html
     assert 'id="economy-manual-adjust-details"' in index_html
     assert 'id="economy-chain-backup-details"' in index_html
@@ -647,7 +649,9 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert '"trading-limit-match-btn", matchTradingLimitOrders' in trading_js
     assert '"trading-liquidation-scan-btn", scanTradingLiquidations' in trading_js
     assert "economy-root-virtual-total" in trading_js
-    assert "available + spotValue" in trading_js
+    assert "rootVirtualMarginPositionEquity" in trading_js
+    assert "available + spotValue + marginValue" in trading_js
+    assert "economy-root-virtual-margin-value" in trading_js
     assert "trial_credit" in trading_js
     assert "function tradingTrialCountdownText" in trading_js
     assert "setInterval(updateTradingTrialCountdown, 1000)" in trading_js

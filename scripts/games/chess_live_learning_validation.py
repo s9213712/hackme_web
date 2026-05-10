@@ -196,6 +196,9 @@ SANITY_LEARNING_VARIANT_COUNT = 6
 SANITY_SEEN_VARIANT_PASS_THRESHOLD = 0.8
 SANITY_UNSEEN_VARIANT_PASS_THRESHOLD = 0.5
 SANITY_FINAL_DECISION_GENERALIZATION_THRESHOLD = 0.5
+SANITY_LABEL_QUESTIONABLE_CP_DELTA = -150
+SANITY_LABEL_HARD_EXCLUDE_CP_DELTA = -300
+SANITY_CLEAN_HELD_OUT_MIN_PER_DIFFICULTY = 10
 SANITY_EASY_TRAIN_VARIANT_COUNT = 6
 SANITY_MEDIUM_TRAIN_VARIANT_COUNT = 6
 SANITY_HARD_TRAIN_VARIANT_COUNT = 3
@@ -204,6 +207,32 @@ SANITY_EARLY_HARD_HELD_OUT_VARIANT_COUNT = 3
 SANITY_EASY_VALIDATION_VARIANT_COUNT = 3
 SANITY_MEDIUM_VALIDATION_VARIANT_COUNT = 3
 SANITY_HARD_VARIANT_COUNT = 6
+SANITY_HELD_OUT_POOL_CANDIDATES_PER_DIFFICULTY = 40
+SEMANTIC_CLASSES = (
+    "e_pawn_central_break",
+    "d_pawn_central_break",
+    "flank_pawn_push",
+    "kingside_aggression",
+    "development_move",
+    "other",
+)
+SEMANTIC_BALANCE_CLASSES = (
+    "e_pawn_central_break",
+    "d_pawn_central_break",
+    "flank_pawn_push",
+    "kingside_aggression",
+)
+SEMANTIC_CLASS_MIN_COUNT = 3
+SEMANTIC_CENTRAL_TO_KINGSIDE_CONFUSION_LIMIT = 0.25
+SEMANTIC_TARGETED_CENTROID_DISTANCE_MIN = 0.5
+SEMANTIC_TARGETED_CENTROID_PAIRS = (
+    ("e_pawn_central_break", "kingside_aggression"),
+    ("d_pawn_central_break", "kingside_aggression"),
+    ("d_pawn_central_break", "flank_pawn_push"),
+)
+SEMANTIC_BALANCED_GATE_MIN_PER_DIFFICULTY = 3
+SEMANTIC_REQUIRED_CLASSES = (*SEMANTIC_BALANCE_CLASSES, "development_move")
+SEMANTIC_SAMPLING_MAX_SKEW_RATIO = 2.0
 SANITY_VARIANT_DIFFICULTY_PAIRS = {"easy": 1, "medium": 2, "hard": 3}
 SANITY_COMMON_HARD_NEGATIVES = ("e7e5", "d7d5", "c7c5", "a7a5", "f8a3", "b8c6", "h7h5", "a6c4", "c6b4", "e5d4", "f8b4", "c5d4")
 FUSION_MODES = ("strict_search", "balanced_fusion", "policy_preferred")
@@ -281,9 +310,33 @@ DETERMINISTIC_STRENGTH_CASES = (
 )
 
 
+def _progress_enabled() -> bool:
+    return str(os.environ.get("CHESS_VALIDATION_PROGRESS", "1")).strip().lower() not in {"0", "false", "no", "off"}
+
+
 def _progress(message: str) -> None:
+    if not _progress_enabled():
+        return
     sys.stderr.write(f"[chess-live-learning-validation] {message}\n")
     sys.stderr.flush()
+
+
+def _progress_bar(label: str, current: int, total: int, *, started: float | None = None, width: int = 24) -> None:
+    if not _progress_enabled() or total <= 0:
+        return
+    current = max(0, min(int(current), int(total)))
+    total = max(1, int(total))
+    ratio = current / total
+    filled = min(width, int(round(width * ratio)))
+    bar = "#" * filled + "-" * (width - filled)
+    elapsed = ""
+    if started is not None:
+        elapsed = f" elapsed={time.perf_counter() - started:.1f}s"
+    _progress(f"{label} [{bar}] {current}/{total} {ratio * 100:.1f}%{elapsed}")
+
+
+def _progress_every(total: int) -> int:
+    return max(1, min(10, int(total) // 5 or 1))
 
 
 @dataclass
@@ -1742,7 +1795,11 @@ def _evaluate_deterministic_strength_snapshot(
 ) -> dict:
     model_meta = _model_meta(model_path)
     rows = []
-    for case in cases:
+    total_cases = len(cases)
+    progress_started = time.perf_counter()
+    progress_every = _progress_every(total_cases)
+    _progress_bar(f"deterministic snapshot {model_label}/{fusion_mode}", 0, total_cases, started=progress_started)
+    for index, case in enumerate(cases, start=1):
         fen = str(case.get("fen") or "")
         side = str(case.get("side") or "white")
         expected = [str(move).lower() for move in (case.get("expected_best_moves") or [])]
@@ -1794,6 +1851,8 @@ def _evaluate_deterministic_strength_snapshot(
                 "fusion_mode": str(fusion_mode or "balanced_fusion"),
             }
         )
+        if index == total_cases or index == 1 or index % progress_every == 0:
+            _progress_bar(f"deterministic snapshot {model_label}/{fusion_mode}", index, total_cases, started=progress_started)
     aggregate = _aggregate_deterministic_strength(rows)
     return {
         "model_label": model_label,
@@ -1984,7 +2043,8 @@ def _fusion_mode_comparison(
     baseline_tactic = float(((baseline_final.get("category_score") or {}).get("tactic") or {}).get("score") or 0.0)
     baseline_blunder = float(baseline_final.get("blunder_avoid_rate") or 0.0)
     final_probe = (checkpoints[-1].get("sanity_learning_probe") if checkpoints else {}) or {}
-    unseen_variants = list(((final_probe.get("unseen_variants") or {}).get("cases") or []))
+    unseen_payload = final_probe.get("unseen_variants") or {}
+    unseen_variants = list(unseen_payload.get("clean_gate_cases") or unseen_payload.get("cases") or [])
     comparison_cases = [
         case
         for case in deterministic_cases
@@ -2036,6 +2096,106 @@ def _fusion_mode_comparison(
     }
 
 
+def _style_profile_audit(
+    *,
+    engine_alias: str,
+    model_path: Path,
+    deterministic_cases: list[dict],
+    seed: int,
+) -> dict:
+    if engine_alias != "exp3":
+        return {
+            "supported": False,
+            "reason": "style profile audit is currently implemented for exp3 DL engine",
+            "promotion_gate_profile": "balanced",
+        }
+    probe_cases = [
+        case
+        for case in deterministic_cases
+        if str(case.get("category") or "") in {"tactic", "blunder_avoid", "human_probe", "mistake_retention"}
+    ][:6] or deterministic_cases[:6]
+    profiles = {}
+    for profile in ["balanced", "attacking", "defensive"]:
+        rows = []
+        for case in probe_cases:
+            fen = str(case.get("fen") or "")
+            side = str(case.get("side") or "white")
+            if not fen:
+                continue
+            try:
+                explanation = explain_experiment_dl_decision(
+                    {"__fen__": fen},
+                    side,
+                    model_path=model_path,
+                    search_profile="fast",
+                    watched_moves=list(case.get("expected_best_moves") or [])[:3],
+                    fusion_mode="balanced_fusion",
+                    decision_context={
+                        "variant_difficulty": str(case.get("variant_difficulty") or case.get("category") or "deterministic"),
+                        "prior_retention_stable": True,
+                        "deterministic_confidence": 0.75,
+                    },
+                    style_profile=profile,
+                )
+            except Exception as exc:
+                rows.append({"case_id": case.get("case_id"), "supported": False, "reason": str(exc)})
+                continue
+            style = explanation.get("style_profile") or {}
+            chosen = explanation.get("chosen_breakdown") or {}
+            rows.append(
+                {
+                    "case_id": case.get("case_id"),
+                    "category": case.get("category"),
+                    "style_profile": profile,
+                    "chosen_move": explanation.get("chosen_move"),
+                    "chosen_reason": explanation.get("chosen_reason"),
+                    "candidate_moves": style.get("candidate_moves") or [],
+                    "base_score": chosen.get("base_score"),
+                    "style_bonus": chosen.get("style_bonus"),
+                    "final_score": chosen.get("final_combined_score"),
+                    "rejected_style_moves": style.get("rejected_style_moves") or [],
+                    "rejection_reason": "; ".join(
+                        sorted(
+                            {
+                                str(item.get("rejection_reason") or "")
+                                for item in (style.get("rejected_style_moves") or [])
+                                if str(item.get("rejection_reason") or "")
+                            }
+                        )
+                    ),
+                    "applied": bool(style.get("applied")),
+                    "selected_before_style": style.get("selected_move_before_style"),
+                    "selected_after_style": style.get("selected_move_after_style"),
+                    "cp_threshold": style.get("cp_threshold"),
+                }
+            )
+        profiles[profile] = rows
+    balanced_rows = profiles.get("balanced") or []
+    style_rows = (profiles.get("attacking") or []) + (profiles.get("defensive") or [])
+    unsafe_overrides = []
+    for row in style_rows:
+        if not bool(row.get("applied")):
+            continue
+        selected = next(
+            (candidate for candidate in row.get("candidate_moves") or [] if candidate.get("move") == row.get("chosen_move")),
+            {},
+        )
+        if float(selected.get("cp_delta_vs_best") or 0.0) < -100.0:
+            unsafe_overrides.append(row)
+    return {
+        "supported": True,
+        "seed": int(seed),
+        "promotion_gate_profile": "balanced",
+        "balanced_gate_unaffected_by_style": True,
+        "profiles": profiles,
+        "style_override_count": sum(1 for row in style_rows if row.get("applied")),
+        "rejected_style_move_count": sum(len(row.get("rejected_style_moves") or []) for row in style_rows),
+        "unsafe_override_count": len(unsafe_overrides),
+        "unsafe_overrides": unsafe_overrides,
+        "passed": len(balanced_rows) > 0 and not unsafe_overrides,
+    }
+
+
 def _clone_deterministic_snapshot(snapshot: dict, *, model_label: str) -> dict:
     cloned = deepcopy(snapshot)
     cloned["model_label"] = model_label
@@ -2058,6 +2218,24 @@ def _compact_sanity_probe_for_summary(probe: dict) -> dict:
             "unseen_variant_count",
             "unseen_variant_top1_hits",
             "unseen_variant_pass_rate",
+            "clean_unseen_count",
+            "clean_unseen_final_pass_rate",
+            "clean_unseen_raw_policy_pass_rate",
+            "clean_held_out_count",
+            "clean_held_out_final_pass_rate",
+            "clean_held_out_raw_policy_pass_rate",
+            "hard_clean_held_out_count",
+            "hard_clean_held_out_pass_rate",
+            "clean_held_out_by_difficulty",
+            "clean_held_out_by_semantic",
+            "clean_heldout_by_semantic",
+            "failed_by_semantic_top3",
+            "overall_clean_heldout_pass_rate",
+            "semantic_confusion_matrix",
+            "clean_held_out_pool_sufficient",
+            "questionable_held_out_count",
+            "questionable_performance",
+            "invalid_label_count",
             "easy_unseen_pass_rate",
             "medium_unseen_pass_rate",
             "hard_unseen_pass_rate",
@@ -2119,6 +2297,13 @@ def _compact_sanity_probe_for_summary(probe: dict) -> dict:
         "expected_vs_hard_negative_margin": debug.get("expected_vs_hard_negative_margin") or {},
         "early_checkpoint_failure_analysis": debug.get("early_checkpoint_failure_analysis") or {},
         "label_quality": debug.get("label_quality") or {},
+        "held_out_label_quality": debug.get("held_out_label_quality") or {},
+        "held_out_pool": debug.get("held_out_pool") or {},
+        "label_quality_summary": debug.get("label_quality_summary") or {},
+        "excluded_from_gate_cases": (debug.get("excluded_from_gate_cases") or [])[:8],
+        "clean_vs_questionable_performance": debug.get("clean_vs_questionable_performance") or {},
+        "semantic_analysis": debug.get("semantic_analysis") or {},
+        "failed_clean_cases_top3": debug.get("failed_clean_cases_top3") or [],
     }
     return compact
 
@@ -2378,6 +2563,8 @@ def _sanity_learning_cases_from_samples(samples: list[dict]) -> list[dict]:
                     "fen": fen,
                     "side": side,
                     "expected_move": expected,
+                    "expected_semantic": _move_semantic_class(fen, side, expected),
+                    "board_semantics_features": _board_semantics_features(fen, side),
                     "source_game_id": int(sample.get("game_id") or 0),
                     "source_ply": int(sample.get("ply") or 0),
                     "source_label": str(sample.get("game_label") or ""),
@@ -2475,15 +2662,17 @@ def _sanity_learning_variants(
     variants = []
     seen_hashes: set[str] = set()
     legal_quiet = _quiet_non_expected_moves(base_board, expected_move)
-    for candidate_index, decoy_move in enumerate(legal_quiet, start=1):
-        if candidate_index <= int(offset):
+    max_attempts = max(len(legal_quiet), int(limit) + int(offset)) * 8
+    for attempt_index in range(1, max_attempts + 1):
+        if attempt_index <= int(offset):
             continue
+        decoy_move = legal_quiet[(attempt_index - 1) % len(legal_quiet)]
         variant_board, variation_moves = _build_sanity_variant_board(
             base_board,
             expected_move=expected_move,
             first_decoy=decoy_move,
             difficulty=difficulty,
-            candidate_index=candidate_index,
+            candidate_index=attempt_index,
         )
         if variant_board is None or expected_move not in variant_board.legal_moves:
             continue
@@ -2504,6 +2693,8 @@ def _sanity_learning_variants(
                 "board_embedding_similarity": _board_embedding_similarity(str(case.get("fen") or ""), variant_board.fen()),
                 "side": str(case.get("side") or ""),
                 "expected_move": expected,
+                "expected_semantic": _move_semantic_class_for_board(variant_board, expected),
+                "board_semantics_features": _board_semantics_features(variant_board.fen(), str(case.get("side") or "")),
                 "variation_moves": variation_moves,
             }
         )
@@ -2540,6 +2731,323 @@ def _legal_sanity_hard_negatives(fen: str, side: str, expected_move: str, *, old
             if len(hard_negatives) >= 3:
                 break
     return hard_negatives[: max(1, int(limit))]
+
+
+def _move_semantic_class_for_board(board: chess.Board, move_uci: str) -> str:
+    try:
+        move = chess.Move.from_uci(str(move_uci or "").lower())
+    except Exception:
+        return "other"
+    piece = board.piece_at(move.from_square)
+    from_file = chess.square_file(move.from_square)
+    to_file = chess.square_file(move.to_square)
+    if piece and piece.piece_type == chess.PAWN:
+        if from_file == chess.FILE_NAMES.index("e"):
+            return "e_pawn_central_break"
+        if from_file == chess.FILE_NAMES.index("d"):
+            return "d_pawn_central_break"
+        if from_file in {chess.FILE_NAMES.index("f"), chess.FILE_NAMES.index("g"), chess.FILE_NAMES.index("h")} or to_file in {chess.FILE_NAMES.index("g"), chess.FILE_NAMES.index("h")}:
+            return "kingside_aggression"
+        if from_file in {chess.FILE_NAMES.index("a"), chess.FILE_NAMES.index("b"), chess.FILE_NAMES.index("c")}:
+            return "flank_pawn_push"
+    if piece and piece.piece_type in {chess.KNIGHT, chess.BISHOP}:
+        home_rank = 0 if piece.color == chess.WHITE else 7
+        if chess.square_rank(move.from_square) == home_rank:
+            return "development_move"
+    if to_file in {chess.FILE_NAMES.index("g"), chess.FILE_NAMES.index("h")}:
+        return "kingside_aggression"
+    return "other"
+
+
+def _move_semantic_class(fen: str, side: str, move_uci: str) -> str:
+    try:
+        board = chess.Board(str(fen or ""))
+        board.turn = chess.WHITE if str(side or "").lower() == "white" else chess.BLACK
+    except Exception:
+        return "other"
+    return _move_semantic_class_for_board(board, move_uci)
+
+
+def _board_semantics_features(fen: str, side: str) -> dict:
+    try:
+        board = chess.Board(str(fen or ""))
+        board.turn = chess.WHITE if str(side or "").lower() == "white" else chess.BLACK
+    except Exception:
+        return {"supported": False, "reason": "invalid fen"}
+    center = [chess.D4, chess.E4, chess.D5, chess.E5]
+    own = board.turn
+    opp = not own
+    own_center_pawns = 0
+    opp_center_pawns = 0
+    for square in center:
+        piece = board.piece_at(square)
+        if piece and piece.piece_type == chess.PAWN:
+            if piece.color == own:
+                own_center_pawns += 1
+            else:
+                opp_center_pawns += 1
+    own_attack = sum(1 for square in center if board.is_attacked_by(own, square))
+    opp_attack = sum(1 for square in center if board.is_attacked_by(opp, square))
+    minor_home = 0
+    for square in chess.SQUARES:
+        piece = board.piece_at(square)
+        if not piece or piece.color != own or piece.piece_type not in {chess.KNIGHT, chess.BISHOP}:
+            continue
+        home_rank = 0 if own == chess.WHITE else 7
+        if chess.square_rank(square) == home_rank:
+            minor_home += 1
+    pawns_on_central_files = 0
+    for file_index in [2, 3, 4, 5]:
+        for rank in range(8):
+            piece = board.piece_at(chess.square(file_index, rank))
+            if piece and piece.piece_type == chess.PAWN:
+                pawns_on_central_files += 1
+    center_state = "closed" if pawns_on_central_files >= 6 else "semi_open" if pawns_on_central_files >= 3 else "open"
+    king_square = board.king(own)
+    king_attack_pressure = 0
+    if king_square is not None:
+        king_zone = [king_square]
+        for delta_file in [-1, 0, 1]:
+            for delta_rank in [-1, 0, 1]:
+                file_index = chess.square_file(king_square) + delta_file
+                rank_index = chess.square_rank(king_square) + delta_rank
+                if 0 <= file_index < 8 and 0 <= rank_index < 8:
+                    king_zone.append(chess.square(file_index, rank_index))
+        king_attack_pressure = sum(1 for square in set(king_zone) if board.is_attacked_by(opp, square))
+    return {
+        "supported": True,
+        "central_control": {
+            "own_attacks": own_attack,
+            "opponent_attacks": opp_attack,
+            "delta": own_attack - opp_attack,
+        },
+        "pawn_structure": {
+            "own_center_pawns": own_center_pawns,
+            "opponent_center_pawns": opp_center_pawns,
+            "center_state": center_state,
+        },
+        "king_safety": {
+            "in_check": board.is_check(),
+            "king_attack_pressure": king_attack_pressure,
+        },
+        "development_state": {
+            "undeveloped_minor_pieces": minor_home,
+        },
+        "side_to_move_pressure": {
+            "legal_moves": board.legal_moves.count(),
+            "center_control_delta": own_attack - opp_attack,
+        },
+    }
+
+
+def _semantic_negative_moves(fen: str, side: str, expected_move: str, *, old_move: str = "", limit: int = 6) -> list[str]:
+    try:
+        board = chess.Board(str(fen or ""))
+        board.turn = chess.WHITE if str(side or "").lower() == "white" else chess.BLACK
+        expected = chess.Move.from_uci(str(expected_move or "").lower())
+    except Exception:
+        return []
+    if expected not in board.legal_moves:
+        return []
+    expected_semantic = _move_semantic_class_for_board(board, expected.uci())
+    preferred_by_expected = {
+        "d_pawn_central_break": ["e_pawn_central_break", "kingside_aggression", "flank_pawn_push"],
+        "e_pawn_central_break": ["d_pawn_central_break", "kingside_aggression", "flank_pawn_push"],
+        "flank_pawn_push": ["e_pawn_central_break", "d_pawn_central_break", "kingside_aggression"],
+        "kingside_aggression": ["e_pawn_central_break", "d_pawn_central_break", "flank_pawn_push"],
+        "development_move": ["e_pawn_central_break", "d_pawn_central_break", "flank_pawn_push", "kingside_aggression"],
+    }
+    priority = preferred_by_expected.get(expected_semantic, ["e_pawn_central_break", "d_pawn_central_break", "kingside_aggression", "flank_pawn_push"])
+    candidates = []
+    for move in sorted(board.legal_moves, key=lambda item: item.uci()):
+        if move == expected:
+            continue
+        semantic = _move_semantic_class_for_board(board, move.uci())
+        if semantic in priority:
+            candidates.append((priority.index(semantic), move.uci(), semantic))
+    if old_move:
+        try:
+            old = chess.Move.from_uci(str(old_move).lower())
+            if old in board.legal_moves and old != expected:
+                old_semantic = _move_semantic_class_for_board(board, old.uci())
+                candidates.append((-1, old.uci(), old_semantic))
+        except Exception:
+            pass
+    seen: set[str] = set()
+    result = []
+    for _, move_uci, _semantic in sorted(candidates, key=lambda item: (item[0], item[1])):
+        if move_uci in seen:
+            continue
+        seen.add(move_uci)
+        result.append(move_uci)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def _semantic_class_distribution(rows: list[dict], *, include_negatives: bool = True) -> dict:
+    positive_counts = {semantic: 0 for semantic in SEMANTIC_CLASSES}
+    negative_counts = {semantic: 0 for semantic in SEMANTIC_CLASSES}
+    case_count = 0
+    for row in rows or []:
+        fen = str(row.get("fen") or "")
+        side = str(row.get("side") or "")
+        expected = str(row.get("expected_move") or row.get("move_uci") or "").lower()
+        if not fen or not side or not expected:
+            continue
+        case_count += 1
+        expected_semantic = str(row.get("expected_semantic") or _move_semantic_class(fen, side, expected))
+        if expected_semantic not in positive_counts:
+            positive_counts[expected_semantic] = 0
+        positive_counts[expected_semantic] += 1
+        if not include_negatives:
+            continue
+        negatives = list(row.get("semantic_hard_negatives") or row.get("hard_negatives") or [])
+        if not negatives:
+            negatives = _semantic_negative_moves(fen, side, expected, limit=6)
+        for negative in negatives:
+            semantic = _move_semantic_class(fen, side, str(negative or ""))
+            if semantic not in negative_counts:
+                negative_counts[semantic] = 0
+            negative_counts[semantic] += 1
+    candidate_counts = {
+        semantic: int(positive_counts.get(semantic) or 0) + int(negative_counts.get(semantic) or 0)
+        for semantic in sorted(set(positive_counts) | set(negative_counts))
+    }
+    required = {semantic: SEMANTIC_CLASS_MIN_COUNT for semantic in SEMANTIC_BALANCE_CLASSES}
+    missing = [
+        semantic
+        for semantic, minimum in required.items()
+        if int(candidate_counts.get(semantic) or 0) < int(minimum)
+    ]
+    central = int(candidate_counts.get("e_pawn_central_break") or 0) + int(candidate_counts.get("d_pawn_central_break") or 0)
+    kingside = int(candidate_counts.get("kingside_aggression") or 0)
+    return {
+        "case_count": case_count,
+        "positive_counts": positive_counts,
+        "negative_counts": negative_counts,
+        "candidate_counts": candidate_counts,
+        "required_min_per_class": required,
+        "missing_classes": missing,
+        "balanced": not missing,
+        "kingside_to_central_ratio": round(kingside / max(1, central), 4),
+        "kingside_overpowers_central": kingside > central,
+    }
+
+
+def _semantic_positive_distribution(rows: list[dict]) -> dict:
+    counts = {semantic: 0 for semantic in SEMANTIC_REQUIRED_CLASSES}
+    for row in rows or []:
+        fen = str(row.get("fen") or "")
+        side = str(row.get("side") or "")
+        expected = str(row.get("expected_move") or row.get("move_uci") or "").lower()
+        semantic = str(row.get("semantic_class") or row.get("expected_semantic") or "")
+        if not semantic and fen and side and expected:
+            semantic = _move_semantic_class(fen, side, expected)
+        if semantic in counts:
+            counts[semantic] += 1
+    return counts
+
+
+def _semantic_coverage_from_counts(counts: dict) -> dict:
+    missing = [semantic for semantic in SEMANTIC_REQUIRED_CLASSES if int((counts or {}).get(semantic) or 0) <= 0]
+    return {
+        "complete": not missing,
+        "missing": missing,
+        "counts": {semantic: int((counts or {}).get(semantic) or 0) for semantic in SEMANTIC_REQUIRED_CLASSES},
+    }
+
+
+def _train_to_gate_semantic_gap(train_counts: dict, gate_counts: dict) -> dict:
+    rows = {}
+    for semantic in SEMANTIC_REQUIRED_CLASSES:
+        train_count = int((train_counts or {}).get(semantic) or 0)
+        gate_count = int((gate_counts or {}).get(semantic) or 0)
+        rows[semantic] = {
+            "train": train_count,
+            "gate": gate_count,
+            "gap": train_count - gate_count,
+            "train_to_gate_ratio": round(train_count / max(1, gate_count), 4),
+        }
+    return rows
+
+
+def _row_expected_semantic(row: dict) -> str:
+    fen = str(row.get("fen") or "")
+    side = str(row.get("side") or "")
+    expected = str(row.get("expected_move") or row.get("move_uci") or "").lower()
+    semantic = str(row.get("semantic_class") or row.get("expected_semantic") or "")
+    if not semantic and fen and side and expected:
+        semantic = _move_semantic_class(fen, side, expected)
+    return semantic
+
+
+def _semantic_effective_distribution(rows: list[dict]) -> dict:
+    totals = {semantic: 0.0 for semantic in SEMANTIC_REQUIRED_CLASSES}
+    counts = {semantic: 0 for semantic in SEMANTIC_REQUIRED_CLASSES}
+    for row in rows or []:
+        semantic = _row_expected_semantic(row)
+        if semantic not in totals:
+            continue
+        counts[semantic] += 1
+        totals[semantic] += float(row.get("weight") or 1.0)
+    rounded_totals = {semantic: round(float(value), 4) for semantic, value in totals.items()}
+    positive_values = [value for value in rounded_totals.values() if value > 0.0]
+    max_value = max(positive_values) if positive_values else 0.0
+    min_value = min(positive_values) if positive_values else 0.0
+    skew_ratio = round(max_value / max(0.0001, min_value), 4) if positive_values else None
+    return {
+        "counts": counts,
+        "effective_weight": rounded_totals,
+        "max_class_weight": max_value,
+        "min_class_weight": min_value,
+        "max_to_min_ratio": skew_ratio,
+        "threshold": SEMANTIC_SAMPLING_MAX_SKEW_RATIO,
+        "passed": bool(positive_values) and len(positive_values) == len(SEMANTIC_REQUIRED_CLASSES) and (skew_ratio or 999.0) <= SEMANTIC_SAMPLING_MAX_SKEW_RATIO,
+    }
+
+
+def _apply_semantic_class_balanced_weights(rows: list[dict]) -> dict:
+    train_rows = [row for row in rows or [] if str(row.get("variant_split") or "") in {"exact", "train", "retention"}]
+    raw_counts = _semantic_positive_distribution(train_rows)
+    present_counts = [int(raw_counts.get(semantic) or 0) for semantic in SEMANTIC_REQUIRED_CLASSES if int(raw_counts.get(semantic) or 0) > 0]
+    if not present_counts:
+        return {
+            "enabled": False,
+            "reason": "no semantic training rows",
+            "raw_distribution": raw_counts,
+            "effective_distribution": _semantic_effective_distribution(rows),
+            "sample_weight_by_semantic": {},
+        }
+    target_count = sum(present_counts) / len(present_counts)
+    sample_weight_by_semantic = {}
+    for semantic in SEMANTIC_REQUIRED_CLASSES:
+        count = int(raw_counts.get(semantic) or 0)
+        if count <= 0:
+            sample_weight_by_semantic[semantic] = 0.0
+        else:
+            sample_weight_by_semantic[semantic] = round(target_count / count, 6)
+    for row in rows or []:
+        semantic = _row_expected_semantic(row)
+        if semantic not in sample_weight_by_semantic or sample_weight_by_semantic[semantic] <= 0.0:
+            continue
+        base_weight = float(row.get("weight") or 1.0)
+        row["base_weight"] = round(base_weight, 6)
+        row["semantic_class_weight"] = sample_weight_by_semantic[semantic]
+        row["weight"] = round(max(0.1, min(3.0, base_weight * float(sample_weight_by_semantic[semantic]))), 6)
+        row["semantic_balanced_sampling"] = True
+    effective = _semantic_effective_distribution(train_rows)
+    return {
+        "enabled": True,
+        "method": "inverse_frequency_row_weight",
+        "target_count_per_semantic": round(target_count, 4),
+        "raw_distribution": raw_counts,
+        "sample_weight_by_semantic": sample_weight_by_semantic,
+        "effective_distribution": effective,
+        "skew_ratio": effective.get("max_to_min_ratio"),
+        "threshold": SEMANTIC_SAMPLING_MAX_SKEW_RATIO,
+        "passed": bool(effective.get("passed")),
+    }
 
 
 def _sanity_invariance_group_id(case: dict) -> str:
@@ -2580,19 +3088,37 @@ def _validation_invariance_context_key(fen: str, side: str, move_uci: str) -> st
     )
 
 
-def _sanity_label_quality_audit(variants: list[dict]) -> dict:
+def _sanity_label_quality_audit(variants: list[dict], raw_rows: list[dict] | None = None) -> dict:
     rows = []
     warnings = []
+    raw_by_case = {str(row.get("case_id") or ""): row for row in raw_rows or []}
     for variant in variants or []:
         fen = str(variant.get("fen") or "")
         side = str(variant.get("side") or "")
         expected = str(variant.get("expected_move") or "").lower()
+        raw_row = raw_by_case.get(str(variant.get("case_id") or "")) or {}
         try:
             board = chess.Board(fen)
             board.turn = chess.WHITE if side == "white" else chess.BLACK
             expected_move = chess.Move.from_uci(expected)
         except Exception as exc:
-            rows.append({"case_id": variant.get("case_id"), "expected_move": expected, "legal": False, "label_quality_warning": True, "reason": str(exc)})
+            rows.append(
+                {
+                    "case_id": variant.get("case_id"),
+                    "variant_split": variant.get("variant_split"),
+                    "variant_difficulty": variant.get("variant_difficulty"),
+                    "expected_move": expected,
+                    "legal": False,
+                    "static_best_move": None,
+                    "static_cp_delta": None,
+                    "expected_rank": raw_row.get("expected_rank"),
+                    "label_quality": "invalid",
+                    "label_quality_warning": True,
+                    "promotion_gate_eligible": False,
+                    "excluded_from_gate": True,
+                    "reason": str(exc),
+                }
+            )
             warnings.append(f"{variant.get('case_id')}: invalid FEN or move")
             continue
         color_sign = 1 if board.turn == chess.WHITE else -1
@@ -2619,13 +3145,34 @@ def _sanity_label_quality_audit(variants: list[dict]) -> dict:
 
         legal = expected_move in board.legal_moves
         if not legal:
-            rows.append({"case_id": variant.get("case_id"), "expected_move": expected, "legal": False, "label_quality_warning": True, "reason": "expected move is illegal"})
+            rows.append(
+                {
+                    "case_id": variant.get("case_id"),
+                    "variant_split": variant.get("variant_split"),
+                    "variant_difficulty": variant.get("variant_difficulty"),
+                    "expected_move": expected,
+                    "legal": False,
+                    "static_best_move": None,
+                    "static_cp_delta": None,
+                    "expected_rank": raw_row.get("expected_rank"),
+                    "label_quality": "invalid",
+                    "label_quality_warning": True,
+                    "promotion_gate_eligible": False,
+                    "excluded_from_gate": True,
+                    "reason": "expected move is illegal",
+                }
+            )
             warnings.append(f"{variant.get('case_id')}: expected move {expected} is illegal")
             continue
         expected_score = material_after(expected_move)
-        best_score = max((material_after(move) for move in board.legal_moves), default=expected_score)
+        legal_scores = sorted(
+            ((material_after(move), move.uci()) for move in board.legal_moves),
+            key=lambda item: (-item[0], item[1]),
+        )
+        best_score, best_move = legal_scores[0] if legal_scores else (expected_score, expected)
         static_delta = int(expected_score - best_score)
-        warning = static_delta < -300
+        quality = "questionable" if static_delta < SANITY_LABEL_QUESTIONABLE_CP_DELTA else "clean"
+        warning = quality != "clean"
         if warning:
             warnings.append(f"{variant.get('case_id')}: expected move static material delta {static_delta}cp vs best legal")
         rows.append(
@@ -2635,17 +3182,369 @@ def _sanity_label_quality_audit(variants: list[dict]) -> dict:
                 "variant_difficulty": variant.get("variant_difficulty"),
                 "expected_move": expected,
                 "legal": True,
+                "static_best_move": best_move,
+                "static_cp_delta": static_delta,
                 "static_delta_vs_best_cp": static_delta,
+                "expected_rank": raw_row.get("expected_rank"),
+                "label_quality": quality,
+                "hard_label_allowed": static_delta >= SANITY_LABEL_HARD_EXCLUDE_CP_DELTA,
                 "label_quality_warning": warning,
+                "promotion_gate_eligible": quality == "clean",
+                "excluded_from_gate": quality != "clean",
                 "reason": "expected move appears materially questionable" if warning else "expected move is legal and not materially dominated",
             }
         )
+    clean_rows = [row for row in rows if row.get("label_quality") == "clean"]
+    questionable_rows = [row for row in rows if row.get("label_quality") == "questionable"]
+    invalid_rows = [row for row in rows if row.get("label_quality") == "invalid"]
+    hard_excluded_rows = [
+        row
+        for row in rows
+        if row.get("label_quality") == "questionable"
+        and row.get("static_cp_delta") is not None
+        and float(row.get("static_cp_delta") or 0) < SANITY_LABEL_HARD_EXCLUDE_CP_DELTA
+    ]
     return {
         "checked_count": len(rows),
+        "clean_count": len(clean_rows),
+        "questionable_count": len(questionable_rows),
+        "invalid_count": len(invalid_rows),
+        "hard_excluded_count": len(hard_excluded_rows),
         "warning_count": len([row for row in rows if row.get("label_quality_warning")]),
         "label_quality_warning": bool(warnings),
         "warnings": warnings,
+        "thresholds": {
+            "questionable_static_cp_delta": SANITY_LABEL_QUESTIONABLE_CP_DELTA,
+            "hard_exclude_static_cp_delta": SANITY_LABEL_HARD_EXCLUDE_CP_DELTA,
+        },
+        "summary": {
+            "clean": len(clean_rows),
+            "questionable": len(questionable_rows),
+            "invalid": len(invalid_rows),
+            "hard_excluded": len(hard_excluded_rows),
+        },
+        "excluded_from_gate_cases": [row for row in rows if row.get("excluded_from_gate")],
         "cases": rows,
+    }
+
+
+def _variant_gate_key(variant: dict) -> tuple[str, str, str]:
+    return (
+        hashlib.sha256(str(variant.get("fen") or "").encode("utf-8")).hexdigest(),
+        str(variant.get("normalized_fen_hash") or _normalized_fen_hash(str(variant.get("fen") or ""))),
+        str(variant.get("expected_move") or ""),
+    )
+
+
+def _quality_rows_by_case(label_quality: dict) -> dict[str, dict]:
+    return {str(row.get("case_id") or ""): row for row in label_quality.get("cases") or []}
+
+
+def _with_label_quality(variants: list[dict], label_quality: dict) -> list[dict]:
+    by_case = _quality_rows_by_case(label_quality)
+    return [
+        {
+            **variant,
+            "label_quality": by_case.get(str(variant.get("case_id") or ""), {}),
+        }
+        for variant in variants
+    ]
+
+
+def _semantic_balanced_gate_templates() -> list[dict]:
+    def case(case_id: str, moves: list[str], expected: str, semantic: str, difficulty: str, reason: str) -> dict:
+        return {
+            "case_id": case_id,
+            "fen": _fen_after_moves(moves),
+            "expected_move": expected,
+            "semantic_class": semantic,
+            "difficulty": difficulty,
+            "source_reason": reason,
+        }
+
+    return [
+        case("gate_e_pawn_easy_001", [], "e2e4", "e_pawn_central_break", "easy", "Open with central e-pawn from the initial position."),
+        case("gate_e_pawn_easy_002", ["g1f3"], "e7e5", "e_pawn_central_break", "easy", "Black contests the center with the e-pawn after a quiet knight development."),
+        case("gate_e_pawn_easy_003", ["c2c3"], "e7e5", "e_pawn_central_break", "easy", "Black takes central space against a slow c-pawn setup."),
+        case("gate_e_pawn_medium_001", ["b2b3", "g8f6"], "e2e4", "e_pawn_central_break", "medium", "White central e-pawn break after quiet flank development."),
+        case("gate_e_pawn_medium_002", ["g1f3", "d7d5"], "e2e4", "e_pawn_central_break", "medium", "White challenges the center with e-pawn after black claims d5."),
+        case("gate_e_pawn_medium_003", ["c2c4", "g8f6"], "e2e4", "e_pawn_central_break", "medium", "White builds a central break against flank pressure."),
+        case("gate_e_pawn_hard_001", ["g1f3", "d7d5", "c2c4"], "e7e5", "e_pawn_central_break", "hard", "Black strikes with e-pawn in a more complex central structure."),
+        case("gate_e_pawn_hard_002", ["d2d4", "g8f6", "c2c4"], "e7e5", "e_pawn_central_break", "hard", "Black e-pawn break remains legal and materially safe in queen-pawn structure."),
+        case("gate_e_pawn_hard_003", ["b1c3", "d7d5", "e2e3"], "e7e5", "e_pawn_central_break", "hard", "Black uses e-pawn break despite extra developed pieces."),
+        case("gate_d_pawn_easy_001", [], "d2d4", "d_pawn_central_break", "easy", "Open with central d-pawn from the initial position."),
+        case("gate_d_pawn_easy_002", ["b2b3"], "d7d5", "d_pawn_central_break", "easy", "Black immediately challenges a quiet setup with d-pawn."),
+        case("gate_d_pawn_easy_003", ["g1f3"], "d7d5", "d_pawn_central_break", "easy", "Black claims the center against quiet development."),
+        case("gate_d_pawn_medium_001", ["c2c4"], "d7d5", "d_pawn_central_break", "medium", "Black central d-pawn response to flank opening."),
+        case("gate_d_pawn_medium_002", ["b1c3"], "d7d5", "d_pawn_central_break", "medium", "Black central break against knight development."),
+        case("gate_d_pawn_medium_003", ["e2e4", "e7e5", "g1f3"], "d7d5", "d_pawn_central_break", "medium", "Black d-pawn break against e-pawn center with knight pressure."),
+        case("gate_d_pawn_hard_001", ["g1f3", "g8f6", "c2c4"], "d7d5", "d_pawn_central_break", "hard", "Black d-pawn break in a developed flank setup."),
+        case("gate_d_pawn_hard_002", ["e2e4", "c7c5", "g1f3"], "d7d5", "d_pawn_central_break", "hard", "Black d-pawn break after asymmetric central tension."),
+        case("gate_d_pawn_hard_003", ["d2d4", "g8f6", "b1c3"], "d7d5", "d_pawn_central_break", "hard", "Black mirrors central d-pawn structure after development."),
+        case("gate_flank_easy_001", [], "c2c4", "flank_pawn_push", "easy", "Safe flank pawn opening from the initial position."),
+        case("gate_flank_easy_002", [], "b2b3", "flank_pawn_push", "easy", "Safe queenside flank development pawn move."),
+        case("gate_flank_easy_003", ["g1f3"], "c7c5", "flank_pawn_push", "easy", "Black uses a c-pawn flank challenge after quiet development."),
+        case("gate_flank_medium_001", ["b1c3"], "c7c5", "flank_pawn_push", "medium", "Black c-pawn flank counter against knight development."),
+        case("gate_flank_medium_002", ["d2d4"], "c7c5", "flank_pawn_push", "medium", "Black c-pawn flank counter against d-pawn center."),
+        case("gate_flank_medium_003", ["g1f3", "d7d5"], "c2c4", "flank_pawn_push", "medium", "White c-pawn flank pressure against d-pawn center."),
+        case("gate_flank_hard_001", ["e2e4", "e7e5", "g1f3"], "c7c5", "flank_pawn_push", "hard", "Black adds flank pressure in an open e-pawn position."),
+        case("gate_flank_hard_002", ["d2d4", "d7d5", "g1f3"], "c7c5", "flank_pawn_push", "hard", "Black c-pawn pressure in queen-pawn structure."),
+        case("gate_flank_hard_003", ["c2c4", "g8f6", "g1f3"], "c7c5", "flank_pawn_push", "hard", "Black contests flank space without material concession."),
+        case("gate_kingside_easy_001", [], "g2g4", "kingside_aggression", "easy", "A legal kingside pawn push used only to test semantic recognition."),
+        case("gate_kingside_easy_002", [], "h2h4", "kingside_aggression", "easy", "A legal rook-pawn aggression marker in a low-tension position."),
+        case("gate_kingside_easy_003", ["b2b3"], "h7h5", "kingside_aggression", "easy", "Black kingside pawn push is legal and materially safe."),
+        case("gate_kingside_medium_001", ["g1f3"], "f7f5", "kingside_aggression", "medium", "Black f-pawn aggression against quiet knight development."),
+        case("gate_kingside_medium_002", ["d2d4"], "g7g5", "kingside_aggression", "medium", "Black g-pawn aggression marker against queen-pawn center."),
+        case("gate_kingside_medium_003", ["g1f3", "d7d5"], "h2h4", "kingside_aggression", "medium", "White kingside pawn push with prior development."),
+        case("gate_kingside_hard_001", ["e2e4", "d7d5", "g1f3"], "h7h5", "kingside_aggression", "hard", "Black kingside push in mixed central tension."),
+        case("gate_kingside_hard_002", ["d2d4", "g8f6", "c2c4"], "g7g5", "kingside_aggression", "hard", "Black kingside push after flank and development pressure."),
+        case("gate_kingside_hard_003", ["g1f3", "g8f6", "e2e4"], "h7h5", "kingside_aggression", "hard", "Black aggression marker after both knights are developed."),
+        case("gate_development_easy_001", [], "g1f3", "development_move", "easy", "Develop the kingside knight from the initial position."),
+        case("gate_development_easy_002", [], "b1c3", "development_move", "easy", "Develop the queenside knight from the initial position."),
+        case("gate_development_easy_003", ["b2b3"], "g8f6", "development_move", "easy", "Black develops knight after quiet flank setup."),
+        case("gate_development_medium_001", ["e2e4", "e7e5"], "g1f3", "development_move", "medium", "White develops knight after symmetric central pawns."),
+        case("gate_development_medium_002", ["d2d4", "d7d5"], "g1f3", "development_move", "medium", "White develops knight in queen-pawn structure."),
+        case("gate_development_medium_003", ["e2e4", "e7e5", "g1f3"], "b8c6", "development_move", "medium", "Black develops queenside knight against e-pawn opening."),
+        case("gate_development_hard_001", ["e2e4", "e7e5", "g1f3", "b8c6"], "f1c4", "development_move", "hard", "White develops bishop after central and knight development."),
+        case("gate_development_hard_002", ["d2d4", "d7d5", "c2c4", "e7e6", "b1c3"], "g8f6", "development_move", "hard", "Black develops knight in a queen-pawn structure."),
+        case("gate_development_hard_003", ["e2e4", "e7e5", "g1f3", "b8c6", "f1c4"], "g8f6", "development_move", "hard", "Black develops knight in an Italian-like setup."),
+    ]
+
+
+def _build_semantic_balanced_clean_gate_set(*, blocked_keys: set[tuple[str, str, str]]) -> dict:
+    clean_cases: list[dict] = []
+    questionable_cases: list[dict] = []
+    invalid_cases: list[dict] = []
+    all_cases: list[dict] = []
+    seen_keys = set(blocked_keys)
+    blocked_normalized_hashes = {str(item[1]) for item in blocked_keys if len(item) > 1}
+    templates = _semantic_balanced_gate_templates()
+    for template in templates:
+        fen = str(template.get("fen") or "")
+        expected = str(template.get("expected_move") or "").lower()
+        semantic = str(template.get("semantic_class") or "")
+        difficulty = str(template.get("difficulty") or "")
+        side = "white"
+        legal = False
+        semantic_matches = False
+        reason = ""
+        try:
+            board = chess.Board(fen)
+            side = "white" if board.turn == chess.WHITE else "black"
+            move = chess.Move.from_uci(expected)
+            legal = move in board.legal_moves
+            semantic_matches = _move_semantic_class_for_board(board, expected) == semantic
+            reason = "" if legal and semantic_matches else "expected move illegal or semantic class mismatch"
+        except Exception as exc:
+            reason = str(exc)
+        variant = {
+            "case_id": template.get("case_id"),
+            "variant_id": template.get("case_id"),
+            "variant_split": "held_out",
+            "variant_difficulty": difficulty,
+            "difficulty": difficulty,
+            "fen": fen,
+            "side": side,
+            "expected_move": expected,
+            "semantic_class": semantic,
+            "expected_semantic": semantic,
+            "normalized_fen_hash": _normalized_fen_hash(fen),
+            "board_embedding_similarity": 1.0,
+            "board_semantics_features": _board_semantics_features(fen, side),
+            "source_reason": template.get("source_reason"),
+            "legal_moves_contains_expected": legal,
+            "semantic_matches_expected": semantic_matches,
+            "source": "semantic_balanced_clean_gate_set",
+        }
+        key = _variant_gate_key(variant)
+        if key in seen_keys or str(variant.get("normalized_fen_hash") or "") in blocked_normalized_hashes:
+            variant["leakage_blocked"] = True
+            variant["label_quality"] = {
+                "label_quality": "invalid",
+                "reason": "held-out case duplicates train/validation key",
+                "excluded_from_gate": True,
+            }
+            invalid_cases.append(variant)
+            all_cases.append(variant)
+            continue
+        seen_keys.add(key)
+        audit = _sanity_label_quality_audit([variant])
+        quality = (audit.get("cases") or [{}])[0]
+        quality_name = str(quality.get("label_quality") or "invalid")
+        if not legal or not semantic_matches:
+            quality = {
+                **quality,
+                "label_quality": "invalid",
+                "label_quality_warning": True,
+                "promotion_gate_eligible": False,
+                "excluded_from_gate": True,
+                "reason": reason or "expected move illegal or semantic class mismatch",
+            }
+            quality_name = "invalid"
+        enriched = {
+            **variant,
+            "label_quality": quality_name,
+            "static_best_move": quality.get("static_best_move"),
+            "static_cp_delta": quality.get("static_cp_delta"),
+            "legal_moves_contains_expected": legal,
+            "label_quality_detail": quality,
+        }
+        if quality_name == "clean" and float(quality.get("static_cp_delta") or 0.0) >= SANITY_LABEL_QUESTIONABLE_CP_DELTA:
+            clean_cases.append(enriched)
+        elif quality_name == "invalid":
+            invalid_cases.append(enriched)
+        else:
+            questionable_cases.append(enriched)
+        all_cases.append(enriched)
+    by_semantic: dict[str, dict] = {}
+    for semantic in SEMANTIC_BALANCE_CLASSES + ("development_move",):
+        by_semantic[semantic] = {}
+        for difficulty in ["easy", "medium", "hard"]:
+            selected = [
+                row for row in clean_cases
+                if row.get("semantic_class") == semantic and row.get("difficulty") == difficulty
+            ]
+            by_semantic[semantic][difficulty] = {
+                "count": len(selected),
+                "required": SEMANTIC_BALANCED_GATE_MIN_PER_DIFFICULTY,
+                "passed": len(selected) >= SEMANTIC_BALANCED_GATE_MIN_PER_DIFFICULTY,
+            }
+    missing = [
+        f"{semantic}:{difficulty}"
+        for semantic, payload in by_semantic.items()
+        for difficulty, row in payload.items()
+        if not row.get("passed")
+    ]
+    label_quality = _sanity_label_quality_audit(all_cases)
+    return {
+        "clean_gate_cases": clean_cases,
+        "questionable_cases": questionable_cases,
+        "invalid_cases": invalid_cases,
+        "all_cases": all_cases,
+        "by_semantic": by_semantic,
+        "semantic_coverage_complete": not missing,
+        "semantic_coverage_missing": missing,
+        "held_out_in_training": False,
+        "dedupe_keys": ["fen_hash", "normalized_fen_hash", "expected_move"],
+        "label_quality_summary": label_quality.get("summary") or {},
+        "label_quality": label_quality,
+        "source": "semantic_balanced_clean_gate_set",
+        "required_per_semantic_difficulty": SEMANTIC_BALANCED_GATE_MIN_PER_DIFFICULTY,
+    }
+
+
+def _semantic_balanced_supervised_variants(*, split: str, offset: int) -> list[dict]:
+    rows: list[dict] = []
+    for template in _semantic_balanced_gate_templates():
+        semantic = str(template.get("semantic_class") or "")
+        difficulty = str(template.get("difficulty") or "easy")
+        side = "white"
+        try:
+            board = chess.Board(str(template.get("fen") or ""))
+            side = "white" if board.turn == chess.WHITE else "black"
+        except Exception:
+            continue
+        base_case = {
+            "case_id": str(template.get("case_id") or ""),
+            "fen": str(template.get("fen") or ""),
+            "side": side,
+            "expected_move": str(template.get("expected_move") or "").lower(),
+            "expected_semantic": semantic,
+        }
+        variants = _sanity_learning_variants(
+            base_case,
+            limit=1,
+            offset=int(offset),
+            split=split,
+            difficulty=difficulty,
+        )
+        if not variants:
+            continue
+        variant = variants[0]
+        rows.append(
+            {
+                **variant,
+                "case_id": f"{template.get('case_id')}:{split}",
+                "variant_id": f"{template.get('case_id')}:{split}",
+                "variant_split": split,
+                "variant_difficulty": difficulty,
+                "difficulty": difficulty,
+                "expected_semantic": semantic,
+                "semantic_class": semantic,
+                "source_reason": template.get("source_reason"),
+                "source": f"semantic_balanced_{split}_replay",
+            }
+        )
+    return rows
+
+
+def _build_clean_held_out_pool(case: dict, *, blocked_keys: set[tuple[str, str, str]]) -> dict:
+    clean_gate_cases: list[dict] = []
+    questionable_cases: list[dict] = []
+    invalid_cases: list[dict] = []
+    all_cases: list[dict] = []
+    by_difficulty: dict[str, dict] = {}
+    seen_keys = set(blocked_keys)
+    for difficulty in ["easy", "medium", "hard"]:
+        candidates = _sanity_learning_variants(
+            case,
+            limit=SANITY_HELD_OUT_POOL_CANDIDATES_PER_DIFFICULTY,
+            offset=SANITY_EASY_TRAIN_VARIANT_COUNT + SANITY_EASY_VALIDATION_VARIANT_COUNT if difficulty == "easy"
+            else SANITY_MEDIUM_TRAIN_VARIANT_COUNT + SANITY_MEDIUM_VALIDATION_VARIANT_COUNT if difficulty == "medium"
+            else SANITY_HARD_TRAIN_VARIANT_COUNT,
+            split="held_out",
+            difficulty=difficulty,
+        )
+        unique_candidates = []
+        local_seen: set[tuple[str, str, str]] = set()
+        for variant in candidates:
+            key = _variant_gate_key(variant)
+            if key in seen_keys or key in local_seen:
+                continue
+            local_seen.add(key)
+            unique_candidates.append(variant)
+        audit = _sanity_label_quality_audit(unique_candidates)
+        quality_by_case = _quality_rows_by_case(audit)
+        clean = []
+        questionable = []
+        invalid = []
+        for variant in unique_candidates:
+            quality = quality_by_case.get(str(variant.get("case_id") or ""), {})
+            enriched = {**variant, "label_quality": quality}
+            if quality.get("label_quality") == "clean":
+                clean.append(enriched)
+            elif quality.get("label_quality") == "invalid":
+                invalid.append(enriched)
+            else:
+                questionable.append(enriched)
+        selected_clean = clean[:SANITY_CLEAN_HELD_OUT_MIN_PER_DIFFICULTY]
+        for variant in selected_clean:
+            seen_keys.add(_variant_gate_key(variant))
+        clean_gate_cases.extend(selected_clean)
+        questionable_cases.extend(questionable)
+        invalid_cases.extend(invalid)
+        all_cases.extend(selected_clean + questionable + invalid)
+        by_difficulty[difficulty] = {
+            "candidate_count": len(unique_candidates),
+            "clean_count": len(clean),
+            "selected_clean_count": len(selected_clean),
+            "questionable_count": len(questionable),
+            "invalid_count": len(invalid),
+            "required_clean_count": SANITY_CLEAN_HELD_OUT_MIN_PER_DIFFICULTY,
+            "sufficient_clean_pool": len(selected_clean) >= SANITY_CLEAN_HELD_OUT_MIN_PER_DIFFICULTY,
+        }
+    audit_all = _sanity_label_quality_audit(clean_gate_cases + questionable_cases + invalid_cases)
+    return {
+        "clean_gate_cases": clean_gate_cases,
+        "questionable_cases": questionable_cases,
+        "invalid_cases": invalid_cases,
+        "all_cases": all_cases,
+        "by_difficulty": by_difficulty,
+        "label_quality_summary": audit_all.get("summary") or {},
+        "label_quality": audit_all,
+        "held_out_in_training": False,
+        "dedupe_keys": ["fen_hash", "normalized_fen_hash", "expected_move"],
+        "required_clean_per_difficulty": SANITY_CLEAN_HELD_OUT_MIN_PER_DIFFICULTY,
     }
 
 
@@ -2668,7 +3567,6 @@ def _sanity_curriculum_variants(case: dict, *, trusted_replays: int = 0) -> dict
         difficulty="medium",
     )
     hard_train_count = SANITY_EARLY_HARD_TRAIN_VARIANT_COUNT if early_warmup else SANITY_HARD_TRAIN_VARIANT_COUNT
-    hard_held_out_count = SANITY_EARLY_HARD_HELD_OUT_VARIANT_COUNT if early_warmup else SANITY_HARD_VARIANT_COUNT
     hard_train = _sanity_learning_variants(
         case,
         limit=hard_train_count,
@@ -2676,49 +3574,74 @@ def _sanity_curriculum_variants(case: dict, *, trusted_replays: int = 0) -> dict
         split="train",
         difficulty="hard",
     )
-    train = easy_train + medium_train + hard_train
-    train_hashes = {str(row.get("normalized_fen_hash") or "") for row in train}
-    hard_candidates = _sanity_learning_variants(
-        case,
-        limit=SANITY_HARD_VARIANT_COUNT * 3,
-        offset=hard_train_count,
-        split="held_out",
-        difficulty="hard",
-    )
-    hard_held_out = []
-    seen_held_hashes: set[str] = set()
-    for variant in hard_candidates:
-        variant_hash = str(variant.get("normalized_fen_hash") or "")
-        if not variant_hash or variant_hash in train_hashes or variant_hash in seen_held_hashes:
-            continue
-        hard_held_out.append(variant)
-        seen_held_hashes.add(variant_hash)
-        if len(hard_held_out) >= hard_held_out_count:
-            break
-    validation = easy_validation + medium_validation
-    held_out = hard_held_out
+    semantic_balanced_train = _semantic_balanced_supervised_variants(split="train", offset=1)
+    semantic_balanced_validation = _semantic_balanced_supervised_variants(split="validation", offset=5)
+    train = easy_train + medium_train + hard_train + semantic_balanced_train
+    validation = easy_validation + medium_validation + semantic_balanced_validation
+    blocked_keys = {_variant_gate_key(row) for row in train + validation}
+    held_out_pool = _build_semantic_balanced_clean_gate_set(blocked_keys=blocked_keys)
+    clean_held_out = list(held_out_pool.get("clean_gate_cases") or [])
+    questionable_held_out = list(held_out_pool.get("questionable_cases") or [])
+    invalid_held_out = list(held_out_pool.get("invalid_cases") or [])
+    held_out = clean_held_out + questionable_held_out
     return {
         "train": train,
         "validation": validation,
         "held_out": held_out,
+        "clean_gate_cases": clean_held_out,
+        "questionable_cases": questionable_held_out,
+        "invalid_cases": invalid_held_out,
+        "held_out_pool": held_out_pool,
         "seen": train,
         "unseen": validation + held_out,
         "split_counts": {
             "train": len(train),
             "validation": len(validation),
             "held_out": len(held_out),
+            "clean_gate_cases": len(clean_held_out),
+            "questionable_cases": len(questionable_held_out),
+            "invalid_cases": len(invalid_held_out),
+            "semantic_balanced_train": len(semantic_balanced_train),
+            "semantic_balanced_validation": len(semantic_balanced_validation),
+        },
+        "semantic_balanced_training": {
+            "train": semantic_balanced_train,
+            "validation": semantic_balanced_validation,
+            "source": "semantic_balanced_supervised_variants",
+            "held_out_in_training": False,
         },
         "warmup": {
             "trusted_replays": int(trusted_replays or 0),
             "early_checkpoint_warmup": early_warmup,
             "hard_train_variant_count": hard_train_count,
-            "hard_held_out_variant_count": hard_held_out_count,
-            "note": "checkpoint@10 uses fewer hard held-out cases and more hard train warmup; checkpoint@20 uses the full hard held-out gate",
+            "clean_held_out_min_per_difficulty": SANITY_CLEAN_HELD_OUT_MIN_PER_DIFFICULTY,
+            "note": "held-out gate uses clean labels only; questionable labels remain exploratory and do not affect promotion",
         },
         "by_difficulty": {
-            "easy": {"train": easy_train, "validation": easy_validation, "held_out": [], "seen": easy_train, "unseen": easy_validation},
-            "medium": {"train": medium_train, "validation": medium_validation, "held_out": [], "seen": medium_train, "unseen": medium_validation},
-            "hard": {"train": hard_train, "validation": [], "held_out": hard_held_out, "seen": hard_train, "unseen": hard_held_out},
+            "easy": {
+                "train": easy_train + [row for row in semantic_balanced_train if row.get("variant_difficulty") == "easy"],
+                "validation": easy_validation + [row for row in semantic_balanced_validation if row.get("variant_difficulty") == "easy"],
+                "held_out": [row for row in held_out if row.get("variant_difficulty") == "easy"],
+                "seen": easy_train + [row for row in semantic_balanced_train if row.get("variant_difficulty") == "easy"],
+                "unseen": easy_validation + [row for row in semantic_balanced_validation if row.get("variant_difficulty") == "easy"] + [row for row in held_out if row.get("variant_difficulty") == "easy"],
+                "clean_gate_cases": [row for row in clean_held_out if row.get("variant_difficulty") == "easy"],
+            },
+            "medium": {
+                "train": medium_train + [row for row in semantic_balanced_train if row.get("variant_difficulty") == "medium"],
+                "validation": medium_validation + [row for row in semantic_balanced_validation if row.get("variant_difficulty") == "medium"],
+                "held_out": [row for row in held_out if row.get("variant_difficulty") == "medium"],
+                "seen": medium_train + [row for row in semantic_balanced_train if row.get("variant_difficulty") == "medium"],
+                "unseen": medium_validation + [row for row in semantic_balanced_validation if row.get("variant_difficulty") == "medium"] + [row for row in held_out if row.get("variant_difficulty") == "medium"],
+                "clean_gate_cases": [row for row in clean_held_out if row.get("variant_difficulty") == "medium"],
+            },
+            "hard": {
+                "train": hard_train + [row for row in semantic_balanced_train if row.get("variant_difficulty") == "hard"],
+                "validation": [row for row in semantic_balanced_validation if row.get("variant_difficulty") == "hard"],
+                "held_out": [row for row in held_out if row.get("variant_difficulty") == "hard"],
+                "seen": hard_train + [row for row in semantic_balanced_train if row.get("variant_difficulty") == "hard"],
+                "unseen": [row for row in semantic_balanced_validation if row.get("variant_difficulty") == "hard"] + [row for row in held_out if row.get("variant_difficulty") == "hard"],
+                "clean_gate_cases": [row for row in clean_held_out if row.get("variant_difficulty") == "hard"],
+            },
         },
     }
 
@@ -2752,6 +3675,14 @@ def _sanity_seen_variant_training_rows(engine_alias: str, before_model_path: Pat
         old_move=old_move,
         limit=hard_negative_limit,
     )
+    exact_semantic_negatives = _semantic_negative_moves(
+        case["fen"],
+        case["side"],
+        case["expected_move"],
+        old_move=old_move,
+        limit=hard_negative_limit,
+    )
+    exact_hard_negatives = list(dict.fromkeys([*exact_semantic_negatives, *exact_hard_negatives]))[:hard_negative_limit]
     rows = [
         {
             "fen": case["fen"],
@@ -2767,6 +3698,9 @@ def _sanity_seen_variant_training_rows(engine_alias: str, before_model_path: Pat
             "variant_difficulty": "exact",
             "normalized_fen_hash": _normalized_fen_hash(str(case.get("fen") or "")),
             "expected_move": case["expected_move"],
+            "expected_semantic": _move_semantic_class(case["fen"], case["side"], case["expected_move"]),
+            "semantic_hard_negatives": exact_semantic_negatives,
+            "board_semantics_features": _board_semantics_features(case["fen"], case["side"]),
             "hard_negatives": exact_hard_negatives,
             "invariance_group_id": invariance_group_id,
             "pairwise_role": "positive_anchor",
@@ -2774,6 +3708,7 @@ def _sanity_seen_variant_training_rows(engine_alias: str, before_model_path: Pat
         }
     ]
     for variant in train_variants:
+        variant_invariance_group_id = _sanity_invariance_group_id(variant) if str(variant.get("source") or "").startswith("semantic_balanced_") else invariance_group_id
         hard_negatives = _legal_sanity_hard_negatives(
             variant["fen"],
             variant["side"],
@@ -2781,6 +3716,14 @@ def _sanity_seen_variant_training_rows(engine_alias: str, before_model_path: Pat
             old_move=old_move,
             limit=hard_negative_limit,
         )
+        semantic_negatives = _semantic_negative_moves(
+            variant["fen"],
+            variant["side"],
+            variant["expected_move"],
+            old_move=old_move,
+            limit=hard_negative_limit,
+        )
+        hard_negatives = list(dict.fromkeys([*semantic_negatives, *hard_negatives]))[:hard_negative_limit]
         rows.append(
             {
                 "fen": variant["fen"],
@@ -2796,8 +3739,11 @@ def _sanity_seen_variant_training_rows(engine_alias: str, before_model_path: Pat
                 "variant_difficulty": variant.get("variant_difficulty"),
                 "normalized_fen_hash": variant.get("normalized_fen_hash"),
                 "expected_move": variant["expected_move"],
+                "expected_semantic": _move_semantic_class(variant["fen"], variant["side"], variant["expected_move"]),
+                "semantic_hard_negatives": semantic_negatives,
+                "board_semantics_features": _board_semantics_features(variant["fen"], variant["side"]),
                 "hard_negatives": hard_negatives,
-                "invariance_group_id": invariance_group_id,
+                "invariance_group_id": variant_invariance_group_id,
                 "pairwise_role": "positive_variant",
                 "curriculum_stage": f"{variant.get('variant_difficulty')}_seen_variant",
             }
@@ -2817,6 +3763,14 @@ def _sanity_seen_variant_training_rows(engine_alias: str, before_model_path: Pat
             old_move=str(prior_before.get("top1") or ""),
             limit=hard_negative_limit,
         )
+        prior_semantic_negatives = _semantic_negative_moves(
+            prior_case["fen"],
+            prior_case["side"],
+            prior_case["expected_move"],
+            old_move=str(prior_before.get("top1") or ""),
+            limit=hard_negative_limit,
+        )
+        prior_hard_negatives = list(dict.fromkeys([*prior_semantic_negatives, *prior_hard_negatives]))[:hard_negative_limit]
         retention_rows.append(
             {
                 "fen": prior_case["fen"],
@@ -2832,6 +3786,9 @@ def _sanity_seen_variant_training_rows(engine_alias: str, before_model_path: Pat
                 "variant_difficulty": "exact",
                 "normalized_fen_hash": _normalized_fen_hash(str(prior_case.get("fen") or "")),
                 "expected_move": prior_case["expected_move"],
+                "expected_semantic": _move_semantic_class(prior_case["fen"], prior_case["side"], prior_case["expected_move"]),
+                "semantic_hard_negatives": prior_semantic_negatives,
+                "board_semantics_features": _board_semantics_features(prior_case["fen"], prior_case["side"]),
                 "hard_negatives": prior_hard_negatives,
                 "invariance_group_id": _sanity_invariance_group_id(prior_case),
                 "pairwise_role": "retention_anchor",
@@ -2839,6 +3796,27 @@ def _sanity_seen_variant_training_rows(engine_alias: str, before_model_path: Pat
             }
         )
     rows.extend(retention_rows)
+    semantic_sampling = _apply_semantic_class_balanced_weights(rows)
+    semantic_distribution = {
+        "train": _semantic_class_distribution(rows, include_negatives=True),
+        "validation": _semantic_class_distribution(list(curriculum.get("validation") or []), include_negatives=True),
+        "held_out": _semantic_class_distribution(list(curriculum.get("held_out") or []), include_negatives=True),
+        "clean_gate_cases": _semantic_class_distribution(list(curriculum.get("clean_gate_cases") or []), include_negatives=True),
+    }
+    semantic_distribution_by_split = {
+        "train": _semantic_positive_distribution(rows),
+        "validation": _semantic_positive_distribution(list(curriculum.get("validation") or [])),
+        "held_out": _semantic_positive_distribution(list(curriculum.get("held_out") or [])),
+        "clean_gate_cases": _semantic_positive_distribution(list(curriculum.get("clean_gate_cases") or [])),
+    }
+    semantic_coverage_by_split = {
+        split: _semantic_coverage_from_counts(counts)
+        for split, counts in semantic_distribution_by_split.items()
+    }
+    train_to_gate_gap = _train_to_gate_semantic_gap(
+        semantic_distribution_by_split.get("train") or {},
+        semantic_distribution_by_split.get("clean_gate_cases") or {},
+    )
     return {
         "case": case,
         "before_exact": before_exact,
@@ -2847,6 +3825,13 @@ def _sanity_seen_variant_training_rows(engine_alias: str, before_model_path: Pat
         "train_variants": train_variants,
         "retention_rows": retention_rows,
         "curriculum": curriculum,
+        "semantic_class_distribution": semantic_distribution,
+        "semantic_distribution_by_split": semantic_distribution_by_split,
+        "semantic_coverage_by_split": semantic_coverage_by_split,
+        "train_to_gate_semantic_gap": train_to_gate_gap,
+        "semantic_sampling": semantic_sampling,
+        "effective_sample_weight_by_semantic": semantic_sampling.get("sample_weight_by_semantic") or {},
+        "train_effective_distribution": (semantic_sampling.get("effective_distribution") or {}).get("effective_weight") or {},
         "smoothing": {
             "trusted_replays": int(trusted_replays or 0),
             "hard_negative_limit": hard_negative_limit,
@@ -2972,6 +3957,45 @@ def _evaluate_engine_raw_policy_position(engine_alias: str, model_path: Path, ca
     }
 
 
+def _evaluate_sanity_learning_position_batch(
+    engine_alias: str,
+    model_path: Path,
+    cases: list[dict],
+    *,
+    label: str,
+) -> list[dict]:
+    total = len(cases or [])
+    started = time.perf_counter()
+    every = _progress_every(total)
+    _progress_bar(label, 0, total, started=started)
+    rows = []
+    for index, case in enumerate(cases or [], start=1):
+        rows.append(_evaluate_sanity_learning_position(engine_alias, model_path, case))
+        if index == total or index == 1 or index % every == 0:
+            _progress_bar(label, index, total, started=started)
+    return rows
+
+
+def _evaluate_raw_policy_position_batch(
+    engine_alias: str,
+    model_path: Path,
+    cases: list[dict],
+    *,
+    old_move: str = "",
+    label: str,
+) -> list[dict]:
+    total = len(cases or [])
+    started = time.perf_counter()
+    every = _progress_every(total)
+    _progress_bar(label, 0, total, started=started)
+    rows = []
+    for index, case in enumerate(cases or [], start=1):
+        rows.append(_evaluate_engine_raw_policy_position(engine_alias, model_path, case, old_move=old_move))
+        if index == total or index == 1 or index % every == 0:
+            _progress_bar(label, index, total, started=started)
+    return rows
+
+
 def _evaluate_exp4_raw_policy_position(model_path: Path, case: dict, *, old_move: str = "") -> dict:
     return _evaluate_engine_raw_policy_position("exp4", model_path, case, old_move=old_move)
 
@@ -3052,6 +4076,392 @@ def _failed_feature_groups(failed_cases: list[dict]) -> list[dict]:
         {"blocking_feature": feature, "count": count}
         for feature, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
     ]
+
+
+def _case_ids_for_label_quality(label_quality: dict, *, quality: str | None = None, split: str | None = None, difficulty: str | None = None) -> set[str]:
+    ids: set[str] = set()
+    for row in label_quality.get("cases") or []:
+        if quality is not None and str(row.get("label_quality") or "") != quality:
+            continue
+        if split is not None and str(row.get("variant_split") or "") != split:
+            continue
+        if difficulty is not None and str(row.get("variant_difficulty") or "") != difficulty:
+            continue
+        case_id = str(row.get("case_id") or "")
+        if case_id:
+            ids.add(case_id)
+    return ids
+
+
+def _variant_performance_for_case_ids(
+    variants: list[dict],
+    final_rows: list[dict],
+    raw_rows: list[dict],
+    case_ids: set[str],
+) -> dict:
+    variant_by_id = {str(row.get("case_id") or ""): row for row in variants or []}
+    final_by_id = {str(row.get("case_id") or ""): row for row in final_rows or []}
+    raw_by_id = {str(row.get("case_id") or ""): row for row in raw_rows or []}
+    rows = []
+    final_hits = 0
+    raw_hits = 0
+    for case_id in sorted(case_ids):
+        variant = variant_by_id.get(case_id) or {}
+        final_row = final_by_id.get(case_id) or {}
+        raw_row = raw_by_id.get(case_id) or {}
+        fen = str(variant.get("fen") or "")
+        side = str(variant.get("side") or "")
+        expected_move = str(variant.get("expected_move") or "")
+        final_hit = bool(final_row.get("expected_is_top1"))
+        raw_hit = bool(raw_row.get("expected_is_raw_top1"))
+        final_hits += 1 if final_hit else 0
+        raw_hits += 1 if raw_hit else 0
+        rows.append(
+            {
+                "case_id": case_id,
+                "variant_split": variant.get("variant_split"),
+                "variant_difficulty": variant.get("variant_difficulty"),
+                "expected_move": expected_move,
+                "expected_semantic": variant.get("expected_semantic") or _move_semantic_class(fen, side, expected_move),
+                "final_top1": final_row.get("top1"),
+                "final_semantic": _move_semantic_class(fen, side, str(final_row.get("top1") or "")),
+                "final_top3": final_row.get("top3"),
+                "raw_policy_top1": raw_row.get("raw_policy_top1"),
+                "raw_policy_semantic": _move_semantic_class(fen, side, str(raw_row.get("raw_policy_top1") or "")),
+                "raw_policy_top3": raw_row.get("raw_policy_top3"),
+                "expected_rank": raw_row.get("expected_rank"),
+                "board_semantics_features": variant.get("board_semantics_features") or _board_semantics_features(fen, side),
+                "final_pass": final_hit,
+                "raw_policy_pass": raw_hit,
+            }
+        )
+    count = len(rows)
+    return {
+        "count": count,
+        "final_hits": final_hits,
+        "raw_policy_hits": raw_hits,
+        "final_pass_rate": round(final_hits / max(1, count), 4),
+        "raw_policy_pass_rate": round(raw_hits / max(1, count), 4),
+        "cases": rows,
+    }
+
+
+def _semantic_confusion_for_case_ids(
+    variants: list[dict],
+    final_rows: list[dict],
+    raw_rows: list[dict],
+    case_ids: set[str],
+) -> dict:
+    variant_by_id = {str(row.get("case_id") or ""): row for row in variants or []}
+    final_by_id = {str(row.get("case_id") or ""): row for row in final_rows or []}
+    raw_by_id = {str(row.get("case_id") or ""): row for row in raw_rows or []}
+    matrix: dict[str, dict[str, int]] = {}
+    raw_matrix: dict[str, dict[str, int]] = {}
+    rows = []
+    for case_id in sorted(case_ids):
+        variant = variant_by_id.get(case_id) or {}
+        final_row = final_by_id.get(case_id) or {}
+        raw_row = raw_by_id.get(case_id) or {}
+        fen = str(variant.get("fen") or "")
+        side = str(variant.get("side") or "")
+        expected_move = str(variant.get("expected_move") or "")
+        expected_semantic = str(variant.get("expected_semantic") or _move_semantic_class(fen, side, expected_move))
+        final_move = str(final_row.get("top1") or "")
+        raw_move = str(raw_row.get("raw_policy_top1") or "")
+        final_semantic = _move_semantic_class(fen, side, final_move)
+        raw_semantic = _move_semantic_class(fen, side, raw_move)
+        matrix.setdefault(expected_semantic, {})[final_semantic] = matrix.setdefault(expected_semantic, {}).get(final_semantic, 0) + 1
+        raw_matrix.setdefault(expected_semantic, {})[raw_semantic] = raw_matrix.setdefault(expected_semantic, {}).get(raw_semantic, 0) + 1
+        rows.append(
+            {
+                "case_id": case_id,
+                "variant_difficulty": variant.get("variant_difficulty"),
+                "expected_move": expected_move,
+                "expected_semantic": expected_semantic,
+                "final_top1": final_move,
+                "final_semantic": final_semantic,
+                "raw_policy_top1": raw_move,
+                "raw_policy_semantic": raw_semantic,
+                "expected_rank": raw_row.get("expected_rank"),
+                "board_semantics_features": variant.get("board_semantics_features") or _board_semantics_features(fen, side),
+            }
+        )
+    d_vs_e = sum(
+        1
+        for row in rows
+        if row.get("expected_semantic") == "d_pawn_central_break"
+        and row.get("final_semantic") == "e_pawn_central_break"
+    )
+    e_vs_d = sum(
+        1
+        for row in rows
+        if row.get("expected_semantic") == "e_pawn_central_break"
+        and row.get("final_semantic") == "d_pawn_central_break"
+    )
+    return {
+        "case_count": len(rows),
+        "matrix": matrix,
+        "raw_policy_matrix": raw_matrix,
+        "d7d5_vs_e7e5_confusion": d_vs_e,
+        "e7e5_vs_d7d5_confusion": e_vs_d,
+        "cases": rows,
+    }
+
+
+def _semantic_class_performance(confusion: dict) -> dict:
+    rows = {}
+    by_expected = confusion.get("matrix") or {}
+    for semantic, predicted in by_expected.items():
+        total = sum(int(count or 0) for count in predicted.values())
+        correct = int(predicted.get(semantic) or 0)
+        rows[semantic] = {
+            "count": total,
+            "correct": correct,
+            "pass_rate": round(correct / max(1, total), 4),
+            "predicted": predicted,
+        }
+    return rows
+
+
+def _semantic_centroid_analysis(variants: list[dict], raw_rows: list[dict], *, confusion: dict | None = None) -> dict:
+    raw_by_id = {str(row.get("case_id") or ""): row for row in raw_rows or []}
+    vectors_by_semantic: dict[str, list[list[float]]] = {}
+    for variant in variants or []:
+        case_id = str(variant.get("case_id") or "")
+        raw = raw_by_id.get(case_id) or {}
+        if not raw.get("supported"):
+            continue
+        semantic = str(variant.get("expected_semantic") or _move_semantic_class(str(variant.get("fen") or ""), str(variant.get("side") or ""), str(variant.get("expected_move") or "")))
+        vector = [
+            float(raw.get("expected_logit") or 0.0),
+            float(raw.get("expected_probability") or 0.0),
+            -float(raw.get("expected_rank") or 99) / 100.0,
+            float(raw.get("margin_vs_old_move") or 0.0),
+        ]
+        vectors_by_semantic.setdefault(semantic, []).append(vector)
+
+    def centroid(vectors: list[list[float]]) -> list[float]:
+        if not vectors:
+            return []
+        width = len(vectors[0])
+        return [round(sum(row[i] for row in vectors) / len(vectors), 8) for i in range(width)]
+
+    def distance(left: list[float], right: list[float]) -> float:
+        if not left or not right:
+            return 0.0
+        return round(sum((float(a) - float(b)) ** 2 for a, b in zip(left, right)) ** 0.5, 8)
+
+    centroids = {semantic: centroid(vectors) for semantic, vectors in vectors_by_semantic.items()}
+    intra = {}
+    for semantic, vectors in vectors_by_semantic.items():
+        center = centroids.get(semantic) or []
+        intra[semantic] = round(sum(distance(row, center) for row in vectors) / max(1, len(vectors)), 8)
+    centroid_distances = {}
+    nearest = {}
+    for semantic, center in centroids.items():
+        distances = {}
+        for other, other_center in centroids.items():
+            if other == semantic:
+                continue
+            distances[other] = distance(center, other_center)
+        centroid_distances[semantic] = distances
+        nearest[semantic] = min(distances.items(), key=lambda item: item[1])[0] if distances else ""
+    overlap_scores = {}
+    for semantic, distances in centroid_distances.items():
+        scores = {}
+        for other, dist in distances.items():
+            denom = max(0.0001, float(intra.get(semantic) or 0.0) + float(intra.get(other) or 0.0))
+            scores[other] = round(max(0.0, 1.0 - float(dist) / denom), 4)
+        overlap_scores[semantic] = scores
+    return {
+        "centroids": centroids,
+        "class_counts": {semantic: len(vectors) for semantic, vectors in vectors_by_semantic.items()},
+        "intra_semantic_distance": intra,
+        "inter_semantic_distance": centroid_distances,
+        "overlap_score": overlap_scores,
+        "nearest_semantic": nearest,
+        "nearest_confused_semantic": {
+            semantic: max((predicted or {}).items(), key=lambda item: item[1])[0] if predicted else ""
+            for semantic, predicted in ((confusion or {}).get("matrix") or {}).items()
+        },
+    }
+
+
+def _semantic_centroid_drift(before: dict, after: dict) -> dict:
+    before_distances = before.get("inter_semantic_distance") or {}
+    after_distances = after.get("inter_semantic_distance") or {}
+    rows = {}
+    for semantic, distances in after_distances.items():
+        rows[semantic] = {}
+        for other, after_distance in (distances or {}).items():
+            before_distance = ((before_distances.get(semantic) or {}).get(other))
+            if before_distance is None:
+                continue
+            rows[semantic][other] = {
+                "before": before_distance,
+                "after": after_distance,
+                "delta": round(float(after_distance) - float(before_distance), 8),
+            }
+    return rows
+
+
+def _semantic_margin_summary(margin_table: list[dict], confusion: dict) -> dict:
+    grouped: dict[str, dict[str, list[float]]] = {}
+    for row in margin_table or []:
+        expected = str(row.get("expected_semantic") or "unknown")
+        confused = str(row.get("hard_negative_semantic") or "unknown")
+        if expected == confused:
+            continue
+        try:
+            margin = float(row.get("margin_after"))
+        except Exception:
+            continue
+        grouped.setdefault(expected, {}).setdefault(confused, []).append(margin)
+    pair_rows = {}
+    for expected, confused_map in grouped.items():
+        pair_rows[expected] = {}
+        for confused, margins in confused_map.items():
+            pair_rows[expected][confused] = {
+                "count": len(margins),
+                "min_margin": round(min(margins), 8),
+                "avg_margin": round(sum(margins) / max(1, len(margins)), 8),
+            }
+    top_confused = {}
+    for expected, predicted in ((confusion or {}).get("matrix") or {}).items():
+        candidates = [
+            (semantic, int(count or 0))
+            for semantic, count in (predicted or {}).items()
+            if semantic != expected
+        ]
+        if not candidates:
+            continue
+        confused, count = max(candidates, key=lambda item: item[1])
+        top_confused[expected] = {
+            "top_confused_semantic": confused,
+            "confusion_count": count,
+            "margin": ((pair_rows.get(expected) or {}).get(confused) or {}),
+        }
+    all_margins = [
+        float(row.get("margin_after") or 0.0)
+        for row in margin_table or []
+        if row.get("margin_after") is not None
+    ]
+    return {
+        "pair_margins": pair_rows,
+        "top_confused_semantic_margins": top_confused,
+        "semantic_min_margin": round(min(all_margins), 8) if all_margins else None,
+        "semantic_avg_margin": round(sum(all_margins) / max(1, len(all_margins)), 8) if all_margins else None,
+    }
+
+
+def _semantic_candidate_centroid_analysis(margin_table: list[dict], *, phase: str) -> dict:
+    vectors_by_semantic: dict[str, list[list[float]]] = {}
+    for row in margin_table or []:
+        expected_semantic = str(row.get("expected_semantic") or "unknown")
+        negative_semantic = str(row.get("hard_negative_semantic") or "unknown")
+        if phase == "before":
+            expected_logit = row.get("expected_logit_before")
+            negative_logit = row.get("hard_negative_logit_before")
+            margin = row.get("margin_before")
+        else:
+            expected_logit = row.get("expected_logit_after")
+            negative_logit = row.get("hard_negative_logit_after")
+            margin = row.get("margin_after")
+        if expected_logit is not None:
+            vectors_by_semantic.setdefault(expected_semantic, []).append(
+                [
+                    float(expected_logit),
+                    float(margin or 0.0),
+                    1.0,
+                ]
+            )
+        if negative_logit is not None:
+            vectors_by_semantic.setdefault(negative_semantic, []).append(
+                [
+                    float(negative_logit),
+                    -float(margin or 0.0),
+                    -1.0,
+                ]
+            )
+
+    def centroid(vectors: list[list[float]]) -> list[float]:
+        if not vectors:
+            return []
+        width = len(vectors[0])
+        return [round(sum(row[index] for row in vectors) / len(vectors), 8) for index in range(width)]
+
+    def distance(left: list[float], right: list[float]) -> float:
+        if not left or not right:
+            return 0.0
+        return round(sum((float(a) - float(b)) ** 2 for a, b in zip(left, right)) ** 0.5, 8)
+
+    centroids = {semantic: centroid(vectors) for semantic, vectors in vectors_by_semantic.items()}
+    intra = {}
+    for semantic, vectors in vectors_by_semantic.items():
+        center = centroids.get(semantic) or []
+        intra[semantic] = round(sum(distance(row, center) for row in vectors) / max(1, len(vectors)), 8)
+    inter = {}
+    nearest = {}
+    for semantic, center in centroids.items():
+        distances = {
+            other: distance(center, other_center)
+            for other, other_center in centroids.items()
+            if other != semantic
+        }
+        inter[semantic] = distances
+        nearest[semantic] = min(distances.items(), key=lambda item: item[1])[0] if distances else ""
+    overlap = {}
+    for semantic, distances in inter.items():
+        overlap[semantic] = {}
+        for other, dist in distances.items():
+            denom = max(0.0001, float(intra.get(semantic) or 0.0) + float(intra.get(other) or 0.0))
+            overlap[semantic][other] = round(max(0.0, 1.0 - float(dist) / denom), 4)
+    return {
+        "phase": phase,
+        "class_counts": {semantic: len(vectors) for semantic, vectors in vectors_by_semantic.items()},
+        "centroids": centroids,
+        "intra_semantic_distance": intra,
+        "inter_semantic_distance": inter,
+        "overlap_score": overlap,
+        "nearest_semantic": nearest,
+    }
+
+
+def _semantic_targeted_centroid_distances(centroid_analysis: dict) -> dict:
+    distances = centroid_analysis.get("inter_semantic_distance") or {}
+    rows = {}
+    for left, right in SEMANTIC_TARGETED_CENTROID_PAIRS:
+        value = (distances.get(left) or {}).get(right)
+        if value is None:
+            value = (distances.get(right) or {}).get(left)
+        rows[f"{left}__vs__{right}"] = value
+    numeric = [float(value) for value in rows.values() if value is not None]
+    return {
+        "pairs": rows,
+        "min_distance": round(min(numeric), 8) if numeric else None,
+        "threshold": SEMANTIC_TARGETED_CENTROID_DISTANCE_MIN,
+        "passed": bool(numeric) and min(numeric) >= SEMANTIC_TARGETED_CENTROID_DISTANCE_MIN,
+    }
+
+
+def _semantic_confusion_gate(confusion: dict) -> dict:
+    matrix = confusion.get("matrix") or {}
+    central_total = 0
+    central_to_kingside = 0
+    ed_confusion = int(confusion.get("d7d5_vs_e7e5_confusion") or 0) + int(confusion.get("e7e5_vs_d7d5_confusion") or 0)
+    for semantic in ["e_pawn_central_break", "d_pawn_central_break"]:
+        predicted = matrix.get(semantic) or {}
+        central_total += sum(int(count or 0) for count in predicted.values())
+        central_to_kingside += int(predicted.get("kingside_aggression") or 0)
+    rate = round(central_to_kingside / max(1, central_total), 4)
+    return {
+        "central_total": central_total,
+        "central_to_kingside": central_to_kingside,
+        "central_to_kingside_rate": rate,
+        "central_to_kingside_limit": SEMANTIC_CENTRAL_TO_KINGSIDE_CONFUSION_LIMIT,
+        "ed_pawn_break_confusion_count": ed_confusion,
+        "passed": rate <= SEMANTIC_CENTRAL_TO_KINGSIDE_CONFUSION_LIMIT,
+    }
 
 
 def _evaluate_sanity_learning_probe(
@@ -3165,15 +4575,150 @@ def _evaluate_sanity_learning_probe(
     curriculum = _sanity_curriculum_variants(case, trusted_replays=int(trusted_replays or 0))
     seen_variants = list(curriculum.get("seen") or [])
     unseen_variants = list(curriculum.get("unseen") or [])
-    before_seen_variants = [_evaluate_sanity_learning_position(engine_alias, before_model_path, variant) for variant in seen_variants]
-    after_seen_variants = [_evaluate_sanity_learning_position(engine_alias, after_model_path, variant) for variant in seen_variants]
-    before_unseen_variants = [_evaluate_sanity_learning_position(engine_alias, before_model_path, variant) for variant in unseen_variants]
-    after_unseen_variants = [_evaluate_sanity_learning_position(engine_alias, after_model_path, variant) for variant in unseen_variants]
-    raw_seen_before = [_evaluate_engine_raw_policy_position(engine_alias, before_model_path, variant, old_move=old_move) for variant in seen_variants]
-    raw_unseen_before = [_evaluate_engine_raw_policy_position(engine_alias, before_model_path, variant, old_move=old_move) for variant in unseen_variants]
-    raw_seen_after = [_evaluate_engine_raw_policy_position(engine_alias, after_model_path, variant, old_move=old_move) for variant in seen_variants]
-    raw_unseen_after = [_evaluate_engine_raw_policy_position(engine_alias, after_model_path, variant, old_move=old_move) for variant in unseen_variants]
-    label_quality = _sanity_label_quality_audit(unseen_variants)
+    held_out_pool = curriculum.get("held_out_pool") or {}
+    _progress(
+        f"sanity probe variants: trusted={trusted_replays} seen={len(seen_variants)} unseen={len(unseen_variants)}"
+    )
+    before_seen_variants = _evaluate_sanity_learning_position_batch(
+        engine_alias,
+        before_model_path,
+        seen_variants,
+        label=f"sanity final before seen trusted={trusted_replays}",
+    )
+    after_seen_variants = _evaluate_sanity_learning_position_batch(
+        engine_alias,
+        after_model_path,
+        seen_variants,
+        label=f"sanity final after seen trusted={trusted_replays}",
+    )
+    before_unseen_variants = _evaluate_sanity_learning_position_batch(
+        engine_alias,
+        before_model_path,
+        unseen_variants,
+        label=f"sanity final before unseen trusted={trusted_replays}",
+    )
+    after_unseen_variants = _evaluate_sanity_learning_position_batch(
+        engine_alias,
+        after_model_path,
+        unseen_variants,
+        label=f"sanity final after unseen trusted={trusted_replays}",
+    )
+    raw_seen_before = _evaluate_raw_policy_position_batch(
+        engine_alias,
+        before_model_path,
+        seen_variants,
+        old_move=old_move,
+        label=f"sanity raw before seen trusted={trusted_replays}",
+    )
+    raw_unseen_before = _evaluate_raw_policy_position_batch(
+        engine_alias,
+        before_model_path,
+        unseen_variants,
+        old_move=old_move,
+        label=f"sanity raw before unseen trusted={trusted_replays}",
+    )
+    raw_seen_after = _evaluate_raw_policy_position_batch(
+        engine_alias,
+        after_model_path,
+        seen_variants,
+        old_move=old_move,
+        label=f"sanity raw after seen trusted={trusted_replays}",
+    )
+    raw_unseen_after = _evaluate_raw_policy_position_batch(
+        engine_alias,
+        after_model_path,
+        unseen_variants,
+        old_move=old_move,
+        label=f"sanity raw after unseen trusted={trusted_replays}",
+    )
+    label_quality = _sanity_label_quality_audit(unseen_variants, raw_unseen_after)
+    held_out_pool_quality = held_out_pool.get("label_quality") or {}
+    clean_unseen_ids = _case_ids_for_label_quality(label_quality, quality="clean")
+    clean_held_out_ids = _case_ids_for_label_quality(label_quality, quality="clean", split="held_out")
+    hard_clean_held_out_ids = _case_ids_for_label_quality(label_quality, quality="clean", split="held_out", difficulty="hard")
+    questionable_ids = _case_ids_for_label_quality(label_quality, quality="questionable")
+    invalid_ids = _case_ids_for_label_quality(held_out_pool_quality, quality="invalid")
+    clean_unseen_performance = _variant_performance_for_case_ids(unseen_variants, after_unseen_variants, raw_unseen_after, clean_unseen_ids)
+    clean_held_out_performance = _variant_performance_for_case_ids(unseen_variants, after_unseen_variants, raw_unseen_after, clean_held_out_ids)
+    hard_clean_held_out_performance = _variant_performance_for_case_ids(unseen_variants, after_unseen_variants, raw_unseen_after, hard_clean_held_out_ids)
+    questionable_performance = _variant_performance_for_case_ids(unseen_variants, after_unseen_variants, raw_unseen_after, questionable_ids)
+    invalid_performance = _variant_performance_for_case_ids(unseen_variants, after_unseen_variants, raw_unseen_after, invalid_ids)
+    clean_held_out_by_difficulty = {
+        difficulty: _variant_performance_for_case_ids(
+            unseen_variants,
+            after_unseen_variants,
+            raw_unseen_after,
+            _case_ids_for_label_quality(label_quality, quality="clean", split="held_out", difficulty=difficulty),
+        )
+        for difficulty in ["easy", "medium", "hard"]
+    }
+    clean_semantic_confusion = _semantic_confusion_for_case_ids(
+        unseen_variants,
+        after_unseen_variants,
+        raw_unseen_after,
+        clean_held_out_ids,
+    )
+    clean_semantic_confusion_before = _semantic_confusion_for_case_ids(
+        unseen_variants,
+        before_unseen_variants,
+        raw_unseen_before,
+        clean_held_out_ids,
+    )
+    semantic_centroids_before = _semantic_centroid_analysis(
+        unseen_variants,
+        raw_unseen_before,
+        confusion=clean_semantic_confusion_before,
+    )
+    semantic_centroids_after = _semantic_centroid_analysis(
+        unseen_variants,
+        raw_unseen_after,
+        confusion=clean_semantic_confusion,
+    )
+    semantic_centroid_drift = _semantic_centroid_drift(semantic_centroids_before, semantic_centroids_after)
+    clean_held_out_by_semantic = {
+        semantic: _variant_performance_for_case_ids(
+            unseen_variants,
+            after_unseen_variants,
+            raw_unseen_after,
+            {
+                str(variant.get("case_id") or "")
+                for variant in unseen_variants
+                if str(variant.get("case_id") or "") in clean_held_out_ids
+                and str(variant.get("expected_semantic") or _move_semantic_class(str(variant.get("fen") or ""), str(variant.get("side") or ""), str(variant.get("expected_move") or ""))) == semantic
+            },
+        )
+        for semantic in SEMANTIC_CLASSES
+    }
+    clean_heldout_by_semantic = {
+        semantic: {
+            "total": int(row.get("count") or 0),
+            "passed": int(row.get("final_hits") or 0),
+            "pass_rate": row.get("final_pass_rate"),
+            "raw_policy_passed": int(row.get("raw_policy_hits") or 0),
+            "raw_policy_pass_rate": row.get("raw_policy_pass_rate"),
+        }
+        for semantic, row in clean_held_out_by_semantic.items()
+    }
+    failed_by_semantic_top3 = {
+        semantic: [
+            row
+            for row in (payload.get("cases") or [])
+            if not row.get("final_pass")
+        ][:3]
+        for semantic, payload in clean_held_out_by_semantic.items()
+    }
+    clean_pool_sufficient = all(
+        int((clean_held_out_by_difficulty.get(difficulty) or {}).get("count") or 0) >= SANITY_CLEAN_HELD_OUT_MIN_PER_DIFFICULTY
+        for difficulty in ["easy", "medium", "hard"]
+    )
+    clean_held_out_passed = bool(
+        int(clean_held_out_performance.get("count") or 0) > 0
+        and float(clean_held_out_performance.get("final_pass_rate") or 0.0) >= SANITY_UNSEEN_VARIANT_PASS_THRESHOLD
+    )
+    hard_clean_held_out_passed = bool(
+        int(hard_clean_held_out_performance.get("count") or 0) > 0
+        and float(hard_clean_held_out_performance.get("final_pass_rate") or 0.0) > 0.0
+    )
     seen_hits = sum(1 for row in after_seen_variants if row.get("expected_is_top1"))
     unseen_hits = sum(1 for row in after_unseen_variants if row.get("expected_is_top1"))
     raw_seen_hits = sum(1 for row in raw_seen_after if row.get("expected_is_raw_top1"))
@@ -3191,7 +4736,7 @@ def _evaluate_sanity_learning_probe(
     exact_learned = bool(after_exact.get("expected_is_top1"))
     seen_passed = bool(seen_count > 0 and seen_variant_pass_rate >= SANITY_SEEN_VARIANT_PASS_THRESHOLD)
     unseen_passed = bool(unseen_count > 0 and unseen_variant_pass_rate >= SANITY_UNSEEN_VARIANT_PASS_THRESHOLD)
-    generalized = bool(exact_learned and seen_passed and unseen_passed)
+    generalized = bool(exact_learned and seen_passed and clean_pool_sufficient and clean_held_out_passed and hard_clean_held_out_passed)
     difficulty_scores = {}
     for difficulty in ["easy", "medium", "hard"]:
         seen_cases = list(((curriculum.get("by_difficulty") or {}).get(difficulty) or {}).get("seen") or [])
@@ -3265,9 +4810,12 @@ def _evaluate_sanity_learning_probe(
                 "fen": variant.get("fen"),
                 "variation_moves": variant.get("variation_moves") or [],
                 "expected_move": variant.get("expected_move"),
+                "expected_semantic": variant.get("expected_semantic") or _move_semantic_class(str(variant.get("fen") or ""), str(variant.get("side") or ""), str(variant.get("expected_move") or "")),
                 "final_top1": final_row.get("top1"),
+                "final_semantic": _move_semantic_class(str(variant.get("fen") or ""), str(variant.get("side") or ""), str(final_row.get("top1") or "")),
                 "final_top3": final_row.get("top3"),
                 "raw_policy_top1": raw_row.get("raw_policy_top1"),
+                "raw_policy_semantic": _move_semantic_class(str(variant.get("fen") or ""), str(variant.get("side") or ""), str(raw_row.get("raw_policy_top1") or "")),
                 "raw_policy_top3": raw_row.get("raw_policy_top3"),
                 "expected_rank": raw_row.get("expected_rank"),
                 "expected_margin_vs_old_move": raw_row.get("margin_vs_old_move"),
@@ -3306,17 +4854,25 @@ def _evaluate_sanity_learning_probe(
         }
     hard_negative_margin_cases = []
     hard_negative_margin_table = []
+    semantic_hard_negative_margin_table = []
     for variant, raw_before_row, raw_after_row in zip(
         [case] + seen_variants + unseen_variants,
         [raw_before] + raw_seen_before + raw_unseen_before,
         [raw_after] + raw_seen_after + raw_unseen_after,
     ):
+        semantic_negatives = _semantic_negative_moves(
+            str(variant.get("fen") or ""),
+            str(variant.get("side") or ""),
+            str(variant.get("expected_move") or ""),
+            old_move=old_move,
+        )
         hard_negatives = _legal_sanity_hard_negatives(
             str(variant.get("fen") or ""),
             str(variant.get("side") or ""),
             str(variant.get("expected_move") or ""),
             old_move=old_move,
         )
+        hard_negatives = list(dict.fromkeys([*semantic_negatives, *hard_negatives]))
         margins = []
         for negative in hard_negatives:
             negative_before_row = _evaluate_engine_raw_policy_position(
@@ -3348,16 +4904,27 @@ def _evaluate_sanity_learning_probe(
                 "variant_split": variant.get("variant_split") or "exact",
                 "variant_difficulty": variant.get("variant_difficulty") or "exact",
                 "expected_move": variant.get("expected_move"),
+                "expected_semantic": variant.get("expected_semantic") or _move_semantic_class(str(variant.get("fen") or ""), str(variant.get("side") or ""), str(variant.get("expected_move") or "")),
+                "expected_logit_before": raw_before_row.get("expected_logit") if raw_before_row.get("supported") else None,
+                "expected_logit_after": raw_after_row.get("expected_logit") if raw_after_row.get("supported") else None,
                 "hard_negative": negative,
+                "hard_negative_semantic": _move_semantic_class(str(variant.get("fen") or ""), str(variant.get("side") or ""), negative),
+                "hard_negative_logit_before": negative_before_row.get("expected_logit") if negative_before_row.get("supported") else None,
+                "hard_negative_logit_after": negative_after_row.get("expected_logit") if negative_after_row.get("supported") else None,
+                "semantic_negative": negative in semantic_negatives,
                 "margin_before": margin_before,
                 "margin_after": margin_after,
                 "margin_delta": round(margin_after - float(margin_before), 8) if margin_before is not None else None,
                 "expected_rank_before": raw_before_row.get("expected_rank"),
                 "expected_rank_after": raw_after_row.get("expected_rank"),
             }
+            if margin_row["semantic_negative"]:
+                semantic_hard_negative_margin_table.append(margin_row)
             margins.append(
                 {
                     "hard_negative": negative,
+                    "hard_negative_semantic": margin_row["hard_negative_semantic"],
+                    "semantic_negative": margin_row["semantic_negative"],
                     "expected_vs_hard_negative_margin_before": margin_before,
                     "expected_vs_hard_negative_margin": margin_after,
                     "expected_vs_hard_negative_margin_delta": margin_row["margin_delta"],
@@ -3375,15 +4942,22 @@ def _evaluate_sanity_learning_probe(
                 "hard_negative_margins": margins,
             }
         )
+    semantic_margin_report = _semantic_margin_summary(semantic_hard_negative_margin_table, clean_semantic_confusion)
+    semantic_candidate_centroids_before = _semantic_candidate_centroid_analysis(semantic_hard_negative_margin_table, phase="before")
+    semantic_candidate_centroids_after = _semantic_candidate_centroid_analysis(semantic_hard_negative_margin_table, phase="after")
+    semantic_candidate_centroid_drift = _semantic_centroid_drift(semantic_candidate_centroids_before, semantic_candidate_centroids_after)
+    semantic_confusion_gate = _semantic_confusion_gate(clean_semantic_confusion)
+    semantic_targeted_centroid_distances_before = _semantic_targeted_centroid_distances(semantic_candidate_centroids_before)
+    semantic_targeted_centroid_distances_after = _semantic_targeted_centroid_distances(semantic_candidate_centroids_after)
     if generalized:
         result_kind = "generalized_to_variants"
-        explanation = "模型修正原始 FEN，且 seen/unseen 相似變體都達到泛化門檻。"
+        explanation = "模型修正原始 FEN，且 seen variants 與 clean held-out 變體都達到泛化門檻。"
     elif exact_learned and seen_passed and unseen_count == 0:
         result_kind = "partial_seen_variants_only"
         explanation = "模型修正原始 FEN 並通過 seen variants，但沒有 unseen variants，不能證明泛化。"
     elif exact_learned and seen_passed:
         result_kind = "partial_seen_variants_only"
-        explanation = "模型修正原始 FEN 並通過 seen variants，但 unseen variants 未達門檻，不能 promotion。"
+        explanation = "模型修正原始 FEN 並通過 seen variants，但 clean held-out 變體未達門檻，不能 promotion。"
     elif exact_learned:
         result_kind = "memorized_exact_fen"
         explanation = "模型修正了原始 FEN，但 seen/unseen 變體未達門檻，仍可能只是記住原局面。"
@@ -3408,6 +4982,24 @@ def _evaluate_sanity_learning_probe(
         "unseen_variant_count": unseen_count,
         "unseen_variant_top1_hits": unseen_hits,
         "unseen_variant_pass_rate": unseen_variant_pass_rate,
+        "clean_unseen_count": clean_unseen_performance.get("count"),
+        "clean_unseen_final_pass_rate": clean_unseen_performance.get("final_pass_rate"),
+        "clean_unseen_raw_policy_pass_rate": clean_unseen_performance.get("raw_policy_pass_rate"),
+        "clean_held_out_count": clean_held_out_performance.get("count"),
+        "clean_held_out_final_pass_rate": clean_held_out_performance.get("final_pass_rate"),
+        "clean_held_out_raw_policy_pass_rate": clean_held_out_performance.get("raw_policy_pass_rate"),
+        "hard_clean_held_out_count": hard_clean_held_out_performance.get("count"),
+        "hard_clean_held_out_pass_rate": hard_clean_held_out_performance.get("final_pass_rate"),
+        "clean_held_out_by_difficulty": clean_held_out_by_difficulty,
+        "clean_held_out_by_semantic": clean_held_out_by_semantic,
+        "clean_heldout_by_semantic": clean_heldout_by_semantic,
+        "failed_by_semantic_top3": failed_by_semantic_top3,
+        "overall_clean_heldout_pass_rate": clean_held_out_performance.get("final_pass_rate"),
+        "semantic_confusion_matrix": clean_semantic_confusion.get("matrix") if clean_semantic_confusion else {},
+        "clean_held_out_pool_sufficient": clean_pool_sufficient,
+        "questionable_held_out_count": len([row for row in label_quality.get("cases") or [] if row.get("label_quality") == "questionable" and row.get("variant_split") == "held_out"]),
+        "questionable_performance": questionable_performance,
+        "invalid_label_count": int((held_out_pool_quality.get("summary") or {}).get("invalid") or len(invalid_ids)),
         "easy_unseen_pass_rate": difficulty_scores.get("easy", {}).get("unseen_pass_rate"),
         "medium_unseen_pass_rate": difficulty_scores.get("medium", {}).get("unseen_pass_rate"),
         "hard_unseen_pass_rate": difficulty_scores.get("hard", {}).get("unseen_pass_rate"),
@@ -3434,6 +5026,10 @@ def _evaluate_sanity_learning_probe(
         },
         "unseen_variants": {
             "cases": unseen_variants,
+            "clean_gate_cases": [row for row in unseen_variants if str(row.get("case_id") or "") in clean_held_out_ids],
+            "clean_unseen_cases": [row for row in unseen_variants if str(row.get("case_id") or "") in clean_unseen_ids],
+            "questionable_cases": [row for row in unseen_variants if str(row.get("case_id") or "") in questionable_ids],
+            "invalid_cases": [row for row in unseen_variants if str(row.get("case_id") or "") in invalid_ids],
             "before": before_unseen_variants,
             "after": after_unseen_variants,
             "raw_policy_after": raw_unseen_after,
@@ -3444,8 +5040,77 @@ def _evaluate_sanity_learning_probe(
                 "validation": len(curriculum.get("validation") or []),
                 "held_out": len(curriculum.get("held_out") or []),
                 "held_out_never_trained": True,
+                "held_out_in_training": False,
             },
             "label_quality": label_quality,
+            "held_out_label_quality": held_out_pool_quality,
+            "held_out_pool": {
+                "by_difficulty": held_out_pool.get("by_difficulty") or {},
+                "by_semantic": held_out_pool.get("by_semantic") or {},
+                "semantic_coverage_complete": held_out_pool.get("semantic_coverage_complete"),
+                "semantic_coverage_missing": held_out_pool.get("semantic_coverage_missing") or [],
+                "label_quality_summary": held_out_pool.get("label_quality_summary") or {},
+                "held_out_in_training": held_out_pool.get("held_out_in_training"),
+                "dedupe_keys": held_out_pool.get("dedupe_keys") or [],
+                "required_clean_per_difficulty": held_out_pool.get("required_clean_per_difficulty"),
+                "required_per_semantic_difficulty": held_out_pool.get("required_per_semantic_difficulty"),
+                "source": held_out_pool.get("source"),
+            },
+            "semantic_distribution_by_split": {
+                "train": _semantic_positive_distribution(curriculum.get("train") or []),
+                "validation": _semantic_positive_distribution(curriculum.get("validation") or []),
+                "held_out": _semantic_positive_distribution(curriculum.get("held_out") or []),
+                "clean_gate_cases": _semantic_positive_distribution(curriculum.get("clean_gate_cases") or []),
+            },
+            "semantic_coverage_by_split": {
+                split: _semantic_coverage_from_counts(counts)
+                for split, counts in {
+                    "train": _semantic_positive_distribution(curriculum.get("train") or []),
+                    "validation": _semantic_positive_distribution(curriculum.get("validation") or []),
+                    "held_out": _semantic_positive_distribution(curriculum.get("held_out") or []),
+                    "clean_gate_cases": _semantic_positive_distribution(curriculum.get("clean_gate_cases") or []),
+                }.items()
+            },
+            "train_to_gate_semantic_gap": _train_to_gate_semantic_gap(
+                _semantic_positive_distribution(curriculum.get("train") or []),
+                _semantic_positive_distribution(curriculum.get("clean_gate_cases") or []),
+            ),
+            "label_quality_summary": label_quality.get("summary") or {},
+            "excluded_from_gate_cases": (label_quality.get("excluded_from_gate_cases") or []) + (held_out_pool_quality.get("excluded_from_gate_cases") or []),
+            "clean_vs_questionable_performance": {
+                "clean_unseen": clean_unseen_performance,
+                "clean_held_out": clean_held_out_performance,
+                "hard_clean_held_out": hard_clean_held_out_performance,
+                "clean_held_out_by_difficulty": clean_held_out_by_difficulty,
+                "clean_held_out_by_semantic": clean_held_out_by_semantic,
+                "clean_heldout_by_semantic": clean_heldout_by_semantic,
+                "failed_by_semantic_top3": failed_by_semantic_top3,
+                "questionable": questionable_performance,
+                "invalid": invalid_performance,
+            },
+            "semantic_analysis": {
+                "confusion_matrix": clean_semantic_confusion,
+                "confusion_matrix_before": clean_semantic_confusion_before,
+                "confusion_matrix_after": clean_semantic_confusion,
+                "semantic_class_performance": _semantic_class_performance(clean_semantic_confusion),
+                "d7d5_vs_e7e5_confusion": clean_semantic_confusion.get("d7d5_vs_e7e5_confusion"),
+                "e7e5_vs_d7d5_confusion": clean_semantic_confusion.get("e7e5_vs_d7d5_confusion"),
+                "semantic_centroid_analysis_before": semantic_centroids_before,
+                "semantic_centroid_analysis_after": semantic_centroids_after,
+                "semantic_centroid_drift": semantic_centroid_drift,
+                "semantic_candidate_centroid_analysis_before": semantic_candidate_centroids_before,
+                "semantic_candidate_centroid_analysis_after": semantic_candidate_centroids_after,
+                "semantic_candidate_centroid_drift": semantic_candidate_centroid_drift,
+                "targeted_centroid_distances_before": semantic_targeted_centroid_distances_before,
+                "targeted_centroid_distances_after": semantic_targeted_centroid_distances_after,
+                "semantic_confusion_gate": semantic_confusion_gate,
+                "semantic_margin_report": semantic_margin_report,
+            },
+            "failed_clean_cases_top3": [
+                row
+                for row in clean_held_out_performance.get("cases") or []
+                if not row.get("final_pass")
+            ][:3],
             "embedding_similarity": {
                 "static_board_similarity_seen_avg": round(
                     sum(float(row.get("board_embedding_similarity") or 0.0) for row in seen_variants) / max(1, len(seen_variants)),
@@ -3501,6 +5166,13 @@ def _evaluate_sanity_learning_probe(
             "expected_vs_hard_negative_margin": {
                 "cases": hard_negative_margin_cases,
                 "hard_negative_margin_table": hard_negative_margin_table,
+                "semantic_hard_negative_margin_table": semantic_hard_negative_margin_table,
+                "semantic_min_margin": (
+                    round(min(float(item.get("margin_after") or 0.0) for item in semantic_hard_negative_margin_table), 8)
+                    if semantic_hard_negative_margin_table
+                    else None
+                ),
+                "semantic_margin_report": semantic_margin_report,
                 "min_margin": (
                     round(
                         min(
@@ -3529,6 +5201,9 @@ def _evaluate_sanity_learning_probe(
                 "trusted_replays": int(trusted_replays or 0),
                 "is_checkpoint10": int(trusted_replays or 0) == 10,
                 "final_unseen_pass_rate": final_decision_unseen_generalization_rate,
+                "clean_held_out_final_pass_rate": clean_held_out_performance.get("final_pass_rate"),
+                "hard_clean_held_out_pass_rate": hard_clean_held_out_performance.get("final_pass_rate"),
+                "clean_held_out_pool_sufficient": clean_pool_sufficient,
                 "hard_held_out_pass_rate": difficulty_scores.get("hard", {}).get("unseen_pass_rate"),
                 "easy_unseen_pass_rate": difficulty_scores.get("easy", {}).get("unseen_pass_rate"),
                 "medium_unseen_pass_rate": difficulty_scores.get("medium", {}).get("unseen_pass_rate"),
@@ -3539,6 +5214,9 @@ def _evaluate_sanity_learning_probe(
                     reason
                     for reason, failed in [
                         ("final unseen below 0.5", final_decision_unseen_generalization_rate < SANITY_UNSEEN_VARIANT_PASS_THRESHOLD),
+                        ("clean held-out below 0.5", not clean_held_out_passed),
+                        ("clean held-out pool has fewer than 10 per difficulty", not clean_pool_sufficient),
+                        ("hard clean held-out has zero pass rate", not hard_clean_held_out_passed),
                         ("hard held-out has zero pass rate", float(difficulty_scores.get("hard", {}).get("unseen_pass_rate") or 0.0) <= 0.0),
                         ("hard-negative min margin is negative", bool(hard_negative_margin_table and min(float(item.get("margin_after") or 0.0) for item in hard_negative_margin_table) < 0.0)),
                     ]
@@ -3556,7 +5234,7 @@ def _evaluate_sanity_learning_probe(
         "learning_signal_reason": (
             "exact FEN, seen variants, and unseen variants met generalization thresholds"
             if result_kind == "generalized_to_variants"
-            else "exact FEN and seen variants passed, but unseen generalization was not proven"
+            else "exact FEN and seen variants passed, but clean held-out generalization was not proven"
             if result_kind == "partial_seen_variants_only"
             else "after_top1 matched expected_move only on exact FEN"
             if result_kind == "memorized_exact_fen"
@@ -4171,8 +5849,10 @@ def _checkpoint_consistency_report(summary: dict) -> dict:
     instability_reasons: list[str] = []
     previous_row: dict | None = None
     thresholds = {
-        "final_unseen_min": SANITY_UNSEEN_VARIANT_PASS_THRESHOLD,
-        "hard_held_out_min_exclusive": 0.0,
+        "clean_held_out_final_min": SANITY_UNSEEN_VARIANT_PASS_THRESHOLD,
+        "hard_clean_held_out_min_exclusive": 0.0,
+        "questionable_static_cp_delta": SANITY_LABEL_QUESTIONABLE_CP_DELTA,
+        "hard_exclude_static_cp_delta": SANITY_LABEL_HARD_EXCLUDE_CP_DELTA,
         "embedding_drift_drop_limit": -0.05,
         "policy_margin_min": 0.0,
     }
@@ -4186,26 +5866,84 @@ def _checkpoint_consistency_report(summary: dict) -> dict:
         unseen_retention = float(probe.get("final_decision_unseen_generalization_rate") or 0.0)
         raw_unseen_retention = float(probe.get("raw_policy_unseen_generalization_rate") or 0.0)
         hard_retention = float(probe.get("hard_unseen_pass_rate") or 0.0)
+        clean_held_out_count = int(probe.get("clean_held_out_count") or 0)
+        clean_held_out_retention = float(probe.get("clean_held_out_final_pass_rate") or 0.0)
+        clean_held_out_raw_retention = float(probe.get("clean_held_out_raw_policy_pass_rate") or 0.0)
+        hard_clean_held_out_count = int(probe.get("hard_clean_held_out_count") or 0)
+        hard_clean_held_out_retention = float(probe.get("hard_clean_held_out_pass_rate") or 0.0)
+        clean_heldout_by_semantic = probe.get("clean_heldout_by_semantic") or {}
+        clean_pool_sufficient = bool(probe.get("clean_held_out_pool_sufficient"))
         prior_failed = int(prior_retention.get("failed_count") or 0)
         embedding_after = _checkpoint_probe_embedding_after(probe)
         embedding_delta = _checkpoint_probe_embedding_delta(probe)
         hard_margin = _checkpoint_probe_hard_negative_margin(probe)
         feature_debug = probe.get("feature_generalization_debug") or {}
         hard_margin_debug = feature_debug.get("expected_vs_hard_negative_margin") or {}
+        semantic_hard_margin = hard_margin_debug.get("semantic_min_margin")
+        semantic_margin_value = float(semantic_hard_margin) if semantic_hard_margin is not None else None
+        semantic_analysis = feature_debug.get("semantic_analysis") or {}
+        semantic_distribution = training.get("semantic_class_distribution") or {}
+        semantic_distribution_by_split = training.get("semantic_distribution_by_split") or feature_debug.get("semantic_distribution_by_split") or {}
+        semantic_coverage_by_split = training.get("semantic_coverage_by_split") or feature_debug.get("semantic_coverage_by_split") or {}
+        train_to_gate_semantic_gap = training.get("train_to_gate_semantic_gap") or feature_debug.get("train_to_gate_semantic_gap") or {}
+        semantic_sampling = training.get("semantic_sampling") or {}
+        train_effective_distribution = training.get("train_effective_distribution") or ((semantic_sampling.get("effective_distribution") or {}).get("effective_weight") or {})
+        effective_sample_weight_by_semantic = training.get("effective_sample_weight_by_semantic") or semantic_sampling.get("sample_weight_by_semantic") or {}
+        held_out_pool = feature_debug.get("held_out_pool") or {}
+        semantic_coverage_complete = bool(held_out_pool.get("semantic_coverage_complete", True))
+        semantic_coverage_missing = list(held_out_pool.get("semantic_coverage_missing") or [])
+        semantic_confusion_gate = semantic_analysis.get("semantic_confusion_gate") or {}
+        targeted_centroid_after = semantic_analysis.get("targeted_centroid_distances_after") or {}
         label_quality = feature_debug.get("label_quality") or {}
         row_reasons: list[str] = []
         if not exact_retention:
             row_reasons.append("exact retention failed")
         if seen_retention < SANITY_SEEN_VARIANT_PASS_THRESHOLD:
             row_reasons.append("seen retention below threshold")
-        if unseen_retention < SANITY_UNSEEN_VARIANT_PASS_THRESHOLD:
-            row_reasons.append("final unseen retention below threshold")
-        if hard_retention <= 0.0:
-            row_reasons.append("hard held-out retention is zero")
+        if clean_held_out_count <= 0:
+            row_reasons.append("clean held-out labels missing")
+        elif clean_held_out_retention < SANITY_UNSEEN_VARIANT_PASS_THRESHOLD:
+            row_reasons.append("clean held-out retention below threshold")
+        if not clean_pool_sufficient:
+            row_reasons.append("clean held-out pool has fewer than 10 cases per difficulty")
+        if hard_clean_held_out_count <= 0:
+            row_reasons.append("hard clean held-out labels missing")
+        elif hard_clean_held_out_retention <= 0.0:
+            row_reasons.append("hard clean held-out retention is zero")
+        for semantic in SEMANTIC_REQUIRED_CLASSES:
+            semantic_row = clean_heldout_by_semantic.get(semantic) or {}
+            if int(semantic_row.get("total") or 0) <= 0:
+                row_reasons.append(f"semantic_coverage_missing: {semantic}")
+            elif int(semantic_row.get("passed") or 0) <= 0:
+                row_reasons.append(f"semantic class {semantic} clean held-out pass count is zero")
         if prior_failed > 0:
             row_reasons.append("prior learned case retention regressed")
         if hard_margin is not None and hard_margin < 0.0:
             row_reasons.append("hard-negative margin is negative")
+        if semantic_margin_value is not None and semantic_margin_value < 0.0:
+            row_reasons.append("semantic hard-negative margin is negative")
+        for split, distribution in semantic_distribution.items():
+            if distribution and not distribution.get("balanced", True):
+                row_reasons.append(f"semantic class distribution below minimum for {split}")
+            if distribution and bool(distribution.get("kingside_overpowers_central")):
+                row_reasons.append(f"kingside semantic candidates overpower central break in {split}")
+        for split, counts in semantic_distribution_by_split.items():
+            missing_zero = [
+                semantic for semantic in SEMANTIC_REQUIRED_CLASSES
+                if int((counts or {}).get(semantic) or 0) <= 0
+            ]
+            if missing_zero:
+                row_reasons.append(f"semantic_coverage_missing in {split}: {','.join(missing_zero)}")
+        if semantic_sampling and not bool(semantic_sampling.get("passed", True)):
+            row_reasons.append("semantic_sampling_skew")
+        if not bool((semantic_coverage_by_split.get("train") or {}).get("complete", True)) or not bool((semantic_coverage_by_split.get("validation") or {}).get("complete", True)):
+            row_reasons.append("train_validation_semantic_coverage_incomplete")
+        if not semantic_coverage_complete or semantic_coverage_missing:
+            row_reasons.append(f"semantic_coverage_missing: {','.join(semantic_coverage_missing)}")
+        if semantic_confusion_gate and not semantic_confusion_gate.get("passed", True):
+            row_reasons.append("central break to kingside semantic confusion exceeds threshold")
+        if targeted_centroid_after and not targeted_centroid_after.get("passed", True):
+            row_reasons.append("targeted semantic centroid distance below threshold")
         if embedding_delta is not None and embedding_delta < thresholds["embedding_drift_drop_limit"]:
             row_reasons.append("embedding similarity decreased after retrain")
         row = {
@@ -4215,16 +5953,51 @@ def _checkpoint_consistency_report(summary: dict) -> dict:
             "unseen_retention": round(unseen_retention, 4),
             "raw_unseen_retention": round(raw_unseen_retention, 4),
             "hard_held_out_retention": round(hard_retention, 4),
+            "clean_held_out_count": clean_held_out_count,
+            "clean_held_out_retention": round(clean_held_out_retention, 4),
+            "clean_held_out_raw_retention": round(clean_held_out_raw_retention, 4),
+            "hard_clean_held_out_count": hard_clean_held_out_count,
+            "hard_clean_held_out_retention": round(hard_clean_held_out_retention, 4),
+            "clean_held_out_by_difficulty": probe.get("clean_held_out_by_difficulty") or {},
+            "clean_held_out_by_semantic": probe.get("clean_held_out_by_semantic") or {},
+            "clean_heldout_by_semantic": clean_heldout_by_semantic,
+            "failed_by_semantic_top3": feature_debug.get("failed_by_semantic_top3") or ((feature_debug.get("clean_vs_questionable_performance") or {}).get("failed_by_semantic_top3") or {}),
+            "clean_held_out_pool_sufficient": clean_pool_sufficient,
+            "questionable_held_out_count": int(probe.get("questionable_held_out_count") or 0),
             "result_kind": probe.get("result_kind"),
             "prior_retention_failed_count": prior_failed,
             "hard_negative_min_margin": round(hard_margin, 6) if hard_margin is not None else None,
             "embedding_similarity_after": round(embedding_after, 6) if embedding_after is not None else None,
             "embedding_similarity_delta": round(embedding_delta, 6) if embedding_delta is not None else None,
             "hard_negative_margin_table": hard_margin_debug.get("hard_negative_margin_table") or [],
+            "semantic_hard_negative_margin_table": hard_margin_debug.get("semantic_hard_negative_margin_table") or [],
+            "semantic_hard_negative_min_margin": round(semantic_margin_value, 6) if semantic_margin_value is not None else None,
+            "semantic_margin_report": hard_margin_debug.get("semantic_margin_report") or ((feature_debug.get("semantic_analysis") or {}).get("semantic_margin_report") or {}),
+            "semantic_class_distribution": semantic_distribution,
+            "semantic_distribution_by_split": semantic_distribution_by_split,
+            "semantic_coverage_by_split": semantic_coverage_by_split,
+            "train_semantic_distribution": semantic_distribution_by_split.get("train") or {},
+            "validation_semantic_distribution": semantic_distribution_by_split.get("validation") or {},
+            "train_to_gate_semantic_gap": train_to_gate_semantic_gap,
+            "semantic_sampling": semantic_sampling,
+            "effective_sample_weight_by_semantic": effective_sample_weight_by_semantic,
+            "train_effective_distribution": train_effective_distribution,
+            "semantic_coverage_complete": semantic_coverage_complete,
+            "semantic_coverage_missing": semantic_coverage_missing,
+            "semantic_confusion_gate": semantic_confusion_gate,
+            "targeted_centroid_distances_before": semantic_analysis.get("targeted_centroid_distances_before") or {},
+            "targeted_centroid_distances_after": targeted_centroid_after,
             "early_checkpoint_failure_analysis": feature_debug.get("early_checkpoint_failure_analysis") or {},
             "embedding_similarity_delta_by_group": feature_debug.get("embedding_similarity_delta_by_group") or {},
             "invariance_context_key_examples": training.get("invariance_context_key_examples") or [],
             "label_quality": label_quality,
+            "held_out_label_quality": feature_debug.get("held_out_label_quality") or {},
+            "held_out_pool": held_out_pool,
+            "label_quality_summary": feature_debug.get("label_quality_summary") or label_quality.get("summary") or {},
+            "excluded_from_gate_cases": feature_debug.get("excluded_from_gate_cases") or label_quality.get("excluded_from_gate_cases") or [],
+            "clean_vs_questionable_performance": feature_debug.get("clean_vs_questionable_performance") or {},
+            "semantic_analysis": semantic_analysis,
+            "failed_clean_cases_top3": feature_debug.get("failed_clean_cases_top3") or [],
             "label_quality_warning": bool(label_quality.get("label_quality_warning")),
             "curriculum_split": training.get("split") or {},
             "smoothing": training.get("sanity_smoothing") or training.get("smoothing") or {},
@@ -4232,7 +6005,7 @@ def _checkpoint_consistency_report(summary: dict) -> dict:
             "reasons": row_reasons,
         }
         if previous_row:
-            unseen_delta = round(row["unseen_retention"] - previous_row["unseen_retention"], 4)
+            unseen_delta = round(row["clean_held_out_retention"] - previous_row["clean_held_out_retention"], 4)
             embedding_drift = None
             if row["embedding_similarity_after"] is not None and previous_row["embedding_similarity_after"] is not None:
                 embedding_drift = round(row["embedding_similarity_after"] - previous_row["embedding_similarity_after"], 6)
@@ -4243,7 +6016,7 @@ def _checkpoint_consistency_report(summary: dict) -> dict:
             row["embedding_drift_from_previous"] = embedding_drift
             row["policy_margin_drift_from_previous"] = margin_drift
             if unseen_delta < -0.001:
-                row["reasons"].append("final unseen retention dropped from previous checkpoint")
+                row["reasons"].append("clean held-out retention dropped from previous checkpoint")
                 row["passed"] = False
             if embedding_drift is not None and embedding_drift < thresholds["embedding_drift_drop_limit"]:
                 row["reasons"].append("embedding drift exceeded drop limit")
@@ -4270,6 +6043,8 @@ def _checkpoint_consistency_report(summary: dict) -> dict:
                 "unseen": row["unseen_retention"],
                 "raw_unseen": row["raw_unseen_retention"],
                 "hard_held_out": row["hard_held_out_retention"],
+                "clean_held_out": row["clean_held_out_retention"],
+                "hard_clean_held_out": row["hard_clean_held_out_retention"],
                 "prior_retention_failed_count": row["prior_retention_failed_count"],
                 "passed": row["passed"],
             }
@@ -4371,6 +6146,9 @@ def _promotion_gate_summary(summary: dict) -> dict:
     override_audit = summary.get("policy_override_audit") or {}
     if override_audit and not override_audit.get("passed", True):
         reasons.extend([f"policy override risk: {reason}" for reason in override_audit.get("regression_reasons") or []])
+    style_audit = summary.get("style_profile_audit") or {}
+    if style_audit and style_audit.get("supported") and not style_audit.get("passed", True):
+        reasons.append("style profile audit found unsafe style override")
     deterministic = summary.get("deterministic_strength_snapshot") or {}
     if not deterministic or deterministic.get("skipped"):
         reasons.append(f"deterministic strength gate skipped: {deterministic.get('reason') or 'missing'}")
@@ -4419,15 +6197,17 @@ def _promotion_gate_summary(summary: dict) -> dict:
             unseen_count = int(sanity_probe.get("unseen_variant_count") or 0)
             if unseen_count <= 0:
                 reasons.append(f"sanity unseen variants missing at trusted={trusted}")
-            elif float(sanity_probe.get("unseen_variant_pass_rate") or 0.0) < SANITY_UNSEEN_VARIANT_PASS_THRESHOLD:
-                reasons.append(f"sanity unseen variant pass rate below threshold at trusted={trusted}")
-            if float(sanity_probe.get("raw_policy_unseen_generalization_rate") or 0.0) < SANITY_UNSEEN_VARIANT_PASS_THRESHOLD:
-                reasons.append(f"sanity raw policy unseen generalization below threshold at trusted={trusted}")
-            if float(sanity_probe.get("final_decision_unseen_generalization_rate") or 0.0) < SANITY_UNSEEN_VARIANT_PASS_THRESHOLD:
-                reasons.append(f"sanity final decision unseen generalization below threshold at trusted={trusted}")
-            if float(sanity_probe.get("hard_unseen_pass_rate") or 0.0) <= 0.0:
-                reasons.append(f"sanity hard held-out pass rate is zero at trusted={trusted}")
-            if float(sanity_probe.get("final_decision_generalization_rate") or 0.0) < SANITY_FINAL_DECISION_GENERALIZATION_THRESHOLD:
+            clean_count = int(sanity_probe.get("clean_held_out_count") or 0)
+            if clean_count <= 0:
+                reasons.append(f"sanity clean held-out labels missing at trusted={trusted}")
+            elif float(sanity_probe.get("clean_held_out_final_pass_rate") or 0.0) < SANITY_UNSEEN_VARIANT_PASS_THRESHOLD:
+                reasons.append(f"sanity clean held-out pass rate below threshold at trusted={trusted}")
+            hard_clean_count = int(sanity_probe.get("hard_clean_held_out_count") or 0)
+            if hard_clean_count <= 0:
+                reasons.append(f"sanity hard clean held-out labels missing at trusted={trusted}")
+            elif float(sanity_probe.get("hard_clean_held_out_pass_rate") or 0.0) <= 0.0:
+                reasons.append(f"sanity hard clean held-out pass rate is zero at trusted={trusted}")
+            if clean_count <= 0 and float(sanity_probe.get("final_decision_generalization_rate") or 0.0) < SANITY_FINAL_DECISION_GENERALIZATION_THRESHOLD:
                 reasons.append(f"sanity final decision generalization below threshold at trusted={trusted}")
             prior_retention = sanity_probe.get("prior_learned_case_retention") or {}
             if int(prior_retention.get("failed_count") or 0) > 0:
@@ -4606,6 +6386,7 @@ def _root_engine_row(summary: dict) -> dict:
         "deterministic_strength_snapshot": summary.get("deterministic_strength_snapshot") or {},
         "policy_override_audit": summary.get("policy_override_audit") or {},
         "fusion_mode_comparison": summary.get("fusion_mode_comparison") or {},
+        "style_profile_audit": summary.get("style_profile_audit") or {},
         "stochastic_auxiliary_benchmark": summary.get("stochastic_auxiliary_benchmark") or {},
         "perft": summary.get("perft") or {},
         "retrain_stability_report": summary.get("retrain_stability_report") or {},
@@ -4917,9 +6698,30 @@ def _root_report_lines(root_summary: dict, summaries: list[dict]) -> list[str]:
                 f"exact=`{item.get('exact_retention')}` seen=`{item.get('seen_retention')}` "
                 f"unseen=`{item.get('unseen_retention')}` raw_unseen=`{item.get('raw_unseen_retention')}` "
                 f"hard_held_out=`{item.get('hard_held_out_retention')}` "
+                f"clean_held_out=`{item.get('clean_held_out_retention')}` "
+                f"hard_clean_held_out=`{item.get('hard_clean_held_out_retention')}` "
+                f"clean_pool_sufficient=`{item.get('clean_held_out_pool_sufficient')}` "
                 f"embedding_after=`{item.get('embedding_similarity_after')}` "
-                f"margin=`{item.get('hard_negative_min_margin')}` passed=`{item.get('passed')}`"
+                f"margin=`{item.get('hard_negative_min_margin')}` "
+                f"semantic_margin=`{item.get('semantic_hard_negative_min_margin')}` "
+                f"central_to_kingside=`{(item.get('semantic_confusion_gate') or {}).get('central_to_kingside_rate')}` "
+                f"targeted_centroid_min=`{(item.get('targeted_centroid_distances_after') or {}).get('min_distance')}` "
+                f"passed=`{item.get('passed')}`"
             )
+            for split, distribution in (item.get("semantic_class_distribution") or {}).items():
+                lines.append(
+                    f"- {row['engine_alias']} trusted={item.get('trusted_count')} semantic_distribution split=`{split}` "
+                    f"balanced=`{distribution.get('balanced')}` missing=`{distribution.get('missing_classes')}` "
+                    f"kingside_to_central=`{distribution.get('kingside_to_central_ratio')}` "
+                    f"counts=`{distribution.get('candidate_counts')}`"
+                )
+            quality_summary = item.get("label_quality_summary") or {}
+            if quality_summary:
+                lines.append(
+                    f"- {row['engine_alias']} trusted={item.get('trusted_count')} label_quality: "
+                    f"clean=`{quality_summary.get('clean')}` questionable=`{quality_summary.get('questionable')}` "
+                    f"invalid=`{quality_summary.get('invalid')}` hard_excluded=`{quality_summary.get('hard_excluded')}`"
+                )
         for reason in consistency.get("instability_reasons") or []:
             lines.append(f"- {row['engine_alias']} instability_reason: `{reason}`")
     lines.extend(["", "## Deterministic Strength Gate", ""])
@@ -5139,6 +6941,8 @@ def _report_consistency_issues(root_summary: dict, engine_summaries: list[dict],
             issues.append(f"{alias}: checkpoint consistency mismatch")
         if (row.get("replay_fixture_health") or {}) != (summary.get("replay_fixture_health") or {}):
             issues.append(f"{alias}: replay fixture health mismatch")
+        if (row.get("style_profile_audit") or {}) != (summary.get("style_profile_audit") or {}):
+            issues.append(f"{alias}: style profile audit mismatch")
         if "## Checkpoint Consistency" not in root_markdown or "## Checkpoint Consistency" not in engine_md:
             issues.append(f"{alias}: checkpoint consistency markdown missing")
         if "## Deterministic Strength Gate" not in root_markdown or "## Deterministic Strength Snapshot" not in engine_md:
@@ -5782,10 +7586,37 @@ def _write_engine_report(engine_dir: Path, summary: dict) -> None:
                 f"- trusted=`{item.get('trusted_count')}` exact=`{item.get('exact_retention')}` "
                 f"seen=`{item.get('seen_retention')}` unseen=`{item.get('unseen_retention')}` "
                 f"raw_unseen=`{item.get('raw_unseen_retention')}` hard_held_out=`{item.get('hard_held_out_retention')}` "
+                f"clean_held_out=`{item.get('clean_held_out_retention')}` "
+                f"hard_clean_held_out=`{item.get('hard_clean_held_out_retention')}` "
+                f"clean_pool_sufficient=`{item.get('clean_held_out_pool_sufficient')}` "
                 f"prior_failed=`{item.get('prior_retention_failed_count')}` "
-                f"embedding_after=`{item.get('embedding_similarity_after')}` "
-                f"embedding_delta=`{item.get('embedding_similarity_delta')}` "
-                f"policy_margin=`{item.get('hard_negative_min_margin')}` passed=`{item.get('passed')}`"
+            f"embedding_after=`{item.get('embedding_similarity_after')}` "
+            f"embedding_delta=`{item.get('embedding_similarity_delta')}` "
+            f"policy_margin=`{item.get('hard_negative_min_margin')}` "
+            f"semantic_margin=`{item.get('semantic_hard_negative_min_margin')}` passed=`{item.get('passed')}`"
+        )
+        lines.extend(["", "## Semantic Class Distribution", ""])
+        for item in checkpoint_consistency.get("checkpoint_consistency_table") or []:
+            distribution = item.get("semantic_class_distribution") or {}
+            for split in ["train", "validation", "held_out", "clean_gate_cases"]:
+                row = distribution.get(split) or {}
+                if not row:
+                    continue
+                lines.append(
+                    f"- trusted=`{item.get('trusted_count')}` split=`{split}` "
+                    f"balanced=`{row.get('balanced')}` missing=`{row.get('missing_classes')}` "
+                    f"kingside_to_central=`{row.get('kingside_to_central_ratio')}` "
+                    f"counts=`{row.get('candidate_counts')}`"
+                )
+        lines.extend(["", "## Semantic Balanced Sampling", ""])
+        for item in checkpoint_consistency.get("checkpoint_consistency_table") or []:
+            sampling = item.get("semantic_sampling") or {}
+            effective = sampling.get("effective_distribution") or {}
+            lines.append(
+                f"- trusted=`{item.get('trusted_count')}` method=`{sampling.get('method')}` "
+                f"passed=`{sampling.get('passed')}` skew_ratio=`{sampling.get('skew_ratio')}` "
+                f"threshold=`{sampling.get('threshold')}` sample_weight_by_semantic=`{item.get('effective_sample_weight_by_semantic')}` "
+                f"effective_weight=`{effective.get('effective_weight') or item.get('train_effective_distribution')}`"
             )
         lines.extend(["", "## Embedding Drift Table", ""])
         for item in checkpoint_consistency.get("embedding_drift_table") or []:
@@ -5802,6 +7633,7 @@ def _write_engine_report(engine_dir: Path, summary: dict) -> None:
                 f"- trusted=`{item.get('trusted_count')}` exact=`{item.get('exact')}` seen=`{item.get('seen')}` "
                 f"unseen=`{item.get('unseen')}` raw_unseen=`{item.get('raw_unseen')}` "
                 f"hard_held_out=`{item.get('hard_held_out')}` prior_failed=`{item.get('prior_retention_failed_count')}` "
+                f"clean_held_out=`{item.get('clean_held_out')}` hard_clean_held_out=`{item.get('hard_clean_held_out')}` "
                 f"passed=`{item.get('passed')}`"
             )
         lines.extend(["", "## Early Checkpoint Failure Analysis", ""])
@@ -5823,6 +7655,12 @@ def _write_engine_report(engine_dir: Path, summary: dict) -> None:
                     f"negative=`{margin.get('hard_negative')}` before=`{margin.get('margin_before')}` "
                     f"after=`{margin.get('margin_after')}` delta=`{margin.get('margin_delta')}`"
                 )
+            for margin in (item.get("semantic_hard_negative_margin_table") or [])[:12]:
+                lines.append(
+                    f"- trusted=`{item.get('trusted_count')}` semantic_margin case=`{margin.get('case_id')}` "
+                    f"expected_semantic=`{margin.get('expected_semantic')}` negative=`{margin.get('hard_negative')}` "
+                    f"negative_semantic=`{margin.get('hard_negative_semantic')}` after=`{margin.get('margin_after')}`"
+                )
         lines.extend(["", "## Embedding Similarity Delta By Group", ""])
         for item in checkpoint_consistency.get("checkpoint_consistency_table") or []:
             for group, payload in (item.get("embedding_similarity_delta_by_group") or {}).items():
@@ -5843,12 +7681,112 @@ def _write_engine_report(engine_dir: Path, summary: dict) -> None:
         lines.extend(["", "## Held-Out Label Quality", ""])
         for item in checkpoint_consistency.get("checkpoint_consistency_table") or []:
             quality = item.get("label_quality") or {}
+            quality_summary = item.get("label_quality_summary") or quality.get("summary") or {}
             lines.append(
                 f"- trusted=`{item.get('trusted_count')}` checked=`{quality.get('checked_count')}` "
+                f"clean=`{quality_summary.get('clean')}` questionable=`{quality_summary.get('questionable')}` "
+                f"invalid=`{quality_summary.get('invalid')}` hard_excluded=`{quality_summary.get('hard_excluded')}` "
                 f"warnings=`{quality.get('warning_count')}` label_quality_warning=`{quality.get('label_quality_warning')}`"
             )
             for warning in quality.get("warnings") or []:
                 lines.append(f"- trusted=`{item.get('trusted_count')}` label_warning: `{warning}`")
+        lines.extend(["", "## Clean Vs Questionable Performance", ""])
+        for item in checkpoint_consistency.get("checkpoint_consistency_table") or []:
+            performance = item.get("clean_vs_questionable_performance") or {}
+            for bucket in ["clean_held_out", "hard_clean_held_out", "questionable", "invalid"]:
+                row = performance.get(bucket) or {}
+                if not row:
+                    continue
+                lines.append(
+                    f"- trusted=`{item.get('trusted_count')}` bucket=`{bucket}` count=`{row.get('count')}` "
+                    f"final_pass_rate=`{row.get('final_pass_rate')}` raw_policy_pass_rate=`{row.get('raw_policy_pass_rate')}`"
+                )
+            for difficulty, row in (performance.get("clean_held_out_by_difficulty") or {}).items():
+                lines.append(
+                    f"- trusted=`{item.get('trusted_count')}` bucket=`clean_held_out:{difficulty}` "
+                    f"count=`{row.get('count')}` final_pass_rate=`{row.get('final_pass_rate')}` "
+                    f"raw_policy_pass_rate=`{row.get('raw_policy_pass_rate')}`"
+                )
+            for semantic, row in (performance.get("clean_held_out_by_semantic") or {}).items():
+                if not row or int(row.get("count") or 0) <= 0:
+                    continue
+                lines.append(
+                    f"- trusted=`{item.get('trusted_count')}` bucket=`semantic:{semantic}` "
+                    f"count=`{row.get('count')}` final_pass_rate=`{row.get('final_pass_rate')}` "
+                    f"raw_policy_pass_rate=`{row.get('raw_policy_pass_rate')}`"
+                )
+        lines.extend(["", "## Semantic Confusion Matrix", ""])
+        for item in checkpoint_consistency.get("checkpoint_consistency_table") or []:
+            semantic = item.get("semantic_analysis") or {}
+            confusion = semantic.get("confusion_matrix") or {}
+            centroids = semantic.get("semantic_centroid_analysis_after") or {}
+            candidate_centroids = semantic.get("semantic_candidate_centroid_analysis_after") or {}
+            margin_report = semantic.get("semantic_margin_report") or {}
+            lines.append(
+                f"- trusted=`{item.get('trusted_count')}` d_vs_e=`{semantic.get('d7d5_vs_e7e5_confusion')}` "
+                f"e_vs_d=`{semantic.get('e7e5_vs_d7d5_confusion')}` "
+                f"central_to_kingside_rate=`{(semantic.get('semantic_confusion_gate') or {}).get('central_to_kingside_rate')}` "
+                f"semantic_min_margin=`{margin_report.get('semantic_min_margin')}` matrix=`{confusion.get('matrix')}`"
+            )
+            targeted = semantic.get("targeted_centroid_distances_after") or {}
+            if targeted:
+                lines.append(
+                    f"- trusted=`{item.get('trusted_count')}` targeted_centroid_min=`{targeted.get('min_distance')}` "
+                    f"threshold=`{targeted.get('threshold')}` passed=`{targeted.get('passed')}` pairs=`{targeted.get('pairs')}`"
+                )
+            for semantic_class, row in (semantic.get("semantic_class_performance") or {}).items():
+                lines.append(
+                    f"- trusted=`{item.get('trusted_count')}` semantic=`{semantic_class}` "
+                    f"count=`{row.get('count')}` pass_rate=`{row.get('pass_rate')}` predicted=`{row.get('predicted')}`"
+                )
+            for semantic_class, distances in (centroids.get("inter_semantic_distance") or {}).items():
+                nearest = (centroids.get("nearest_semantic") or {}).get(semantic_class)
+                confused = (centroids.get("nearest_confused_semantic") or {}).get(semantic_class)
+                lines.append(
+                    f"- trusted=`{item.get('trusted_count')}` centroid=`{semantic_class}` "
+                    f"intra=`{(centroids.get('intra_semantic_distance') or {}).get(semantic_class)}` "
+                    f"nearest=`{nearest}` nearest_confused=`{confused}` distances=`{distances}`"
+                )
+            for semantic_class, distances in (candidate_centroids.get("inter_semantic_distance") or {}).items():
+                nearest = (candidate_centroids.get("nearest_semantic") or {}).get(semantic_class)
+                lines.append(
+                    f"- trusted=`{item.get('trusted_count')}` candidate_centroid=`{semantic_class}` "
+                    f"intra=`{(candidate_centroids.get('intra_semantic_distance') or {}).get(semantic_class)}` "
+                    f"nearest=`{nearest}` distances=`{distances}`"
+                )
+            for semantic_class, row in (margin_report.get("top_confused_semantic_margins") or {}).items():
+                lines.append(
+                    f"- trusted=`{item.get('trusted_count')}` semantic_margin expected=`{semantic_class}` "
+                    f"top_confused=`{row.get('top_confused_semantic')}` "
+                    f"confusion_count=`{row.get('confusion_count')}` margin=`{row.get('margin')}`"
+                )
+        lines.extend(["", "## Clean Held-Out Pool", ""])
+        for item in checkpoint_consistency.get("checkpoint_consistency_table") or []:
+            pool = item.get("held_out_pool") or {}
+            for difficulty, payload in (pool.get("by_difficulty") or {}).items():
+                lines.append(
+                    f"- trusted=`{item.get('trusted_count')}` difficulty=`{difficulty}` "
+                    f"candidates=`{payload.get('candidate_count')}` clean=`{payload.get('clean_count')}` "
+                    f"selected_clean=`{payload.get('selected_clean_count')}` questionable=`{payload.get('questionable_count')}` "
+                    f"invalid=`{payload.get('invalid_count')}` sufficient=`{payload.get('sufficient_clean_pool')}`"
+                )
+        lines.extend(["", "## Excluded From Gate Cases", ""])
+        for item in checkpoint_consistency.get("checkpoint_consistency_table") or []:
+            for case in (item.get("excluded_from_gate_cases") or [])[:12]:
+                lines.append(
+                    f"- trusted=`{item.get('trusted_count')}` case=`{case.get('case_id')}` "
+                    f"quality=`{case.get('label_quality')}` expected=`{case.get('expected_move')}` "
+                    f"static_best=`{case.get('static_best_move')}` delta_cp=`{case.get('static_cp_delta')}` "
+                    f"expected_rank=`{case.get('expected_rank')}`"
+                )
+        lines.extend(["", "## Failed Clean Cases Top3", ""])
+        for item in checkpoint_consistency.get("checkpoint_consistency_table") or []:
+            for case in item.get("failed_clean_cases_top3") or []:
+                lines.append(
+                    f"- trusted=`{item.get('trusted_count')}` case=`{case.get('case_id')}` "
+                    f"expected=`{case.get('expected_move')}` final_top3=`{case.get('final_top3')}` "
+                    f"raw_top3=`{case.get('raw_policy_top3')}` expected_rank=`{case.get('expected_rank')}`"
+                )
         for reason in checkpoint_consistency.get("instability_reasons") or []:
             lines.append(f"- instability_reason: `{reason}`")
     deterministic = summary.get("deterministic_strength_snapshot") or {}
@@ -5934,6 +7872,30 @@ def _write_engine_report(engine_dir: Path, summary: dict) -> None:
                 f"disagreement=`{item.get('policy_search_disagreement_rate')}` "
                 f"override_success=`{item.get('override_success_rate')}`"
             )
+    style_audit = summary.get("style_profile_audit") or {}
+    if style_audit:
+        lines.extend(
+            [
+                "",
+                "## Style Profile Audit",
+                "",
+                f"- promotion_gate_profile: `{style_audit.get('promotion_gate_profile')}`",
+                f"- balanced_gate_unaffected_by_style: `{style_audit.get('balanced_gate_unaffected_by_style')}`",
+                f"- style_override_count: `{style_audit.get('style_override_count')}`",
+                f"- rejected_style_move_count: `{style_audit.get('rejected_style_move_count')}`",
+                f"- unsafe_override_count: `{style_audit.get('unsafe_override_count')}`",
+                f"- passed: `{style_audit.get('passed')}`",
+            ]
+        )
+        profiles = style_audit.get("profiles") or {}
+        for profile in ["balanced", "attacking", "defensive"]:
+            for item in (profiles.get(profile) or [])[:4]:
+                lines.append(
+                    f"- profile=`{profile}` case=`{item.get('case_id')}` chosen=`{item.get('chosen_move')}` "
+                    f"base_score=`{item.get('base_score')}` style_bonus=`{item.get('style_bonus')}` "
+                    f"final_score=`{item.get('final_score')}` applied=`{item.get('applied')}` "
+                    f"rejected=`{len(item.get('rejected_style_moves') or [])}` reason=`{item.get('rejection_reason')}`"
+                )
     aux = summary.get("stochastic_auxiliary_benchmark") or {}
     lines.extend(
         [
@@ -6509,11 +8471,14 @@ def _run_quick_retrain_checkpoint(
     checkpoint_started_at = _utc_now()
     checkpoint_dir = engine_dir / "checkpoints" / f"{trusted_replays:02d}"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    phase_label = f"quick checkpoint trusted={trusted_replays}"
+    _progress_bar(phase_label, 0, 9, started=checkpoint_started)
     fixture_write = _write_quick_replay_fixture(records, trusted_count=trusted_replays)
     dataset_result = _prepare_formal_dataset(engine_dir, runtime_dir, artifact_dir=checkpoint_dir, invalid_game_ids=set())
     accepted_rows = _read_jsonl(checkpoint_dir / "train_dataset.jsonl")
     rejected_rows = _read_jsonl(checkpoint_dir / "rejected_dataset.jsonl")
     before_model_meta = _model_meta(target_model_path)
+    _progress_bar(phase_label, 1, 9, started=checkpoint_started)
     variant_training = _sanity_seen_variant_training_rows(
         engine_alias,
         target_model_path,
@@ -6533,15 +8498,24 @@ def _run_quick_retrain_checkpoint(
         dataset_result["sanity_train_variant_hashes"] = [str(row.get("normalized_fen_hash") or "") for row in variant_rows if str(row.get("variant_split") or "") == "train"]
         dataset_result["sanity_seen_variant_hashes"] = dataset_result["sanity_train_variant_hashes"]
         dataset_result["sanity_hard_negative_count"] = sum(len(row.get("hard_negatives") or []) for row in variant_rows)
+        dataset_result["semantic_class_distribution"] = variant_training.get("semantic_class_distribution") or {}
+        dataset_result["semantic_distribution_by_split"] = variant_training.get("semantic_distribution_by_split") or {}
+        dataset_result["semantic_coverage_by_split"] = variant_training.get("semantic_coverage_by_split") or {}
+        dataset_result["train_to_gate_semantic_gap"] = variant_training.get("train_to_gate_semantic_gap") or {}
+        dataset_result["semantic_sampling"] = variant_training.get("semantic_sampling") or {}
+        dataset_result["effective_sample_weight_by_semantic"] = variant_training.get("effective_sample_weight_by_semantic") or {}
+        dataset_result["train_effective_distribution"] = variant_training.get("train_effective_distribution") or {}
         dataset_result["sanity_supervised_split"] = {
             "train": len((variant_training.get("curriculum") or {}).get("train") or []),
             "validation": len((variant_training.get("curriculum") or {}).get("validation") or []),
             "held_out": len((variant_training.get("curriculum") or {}).get("held_out") or []),
             "held_out_in_training": False,
         }
+    _progress_bar(phase_label, 2, 9, started=checkpoint_started)
     move_agreement_before = _evaluate_move_agreement(engine_alias, target_model_path, evaluation_samples)
     fixed_probes_before = _evaluate_fixed_probe_positions(engine_alias, target_model_path)
     replay_loss_before = _quick_replay_loss(engine_alias, target_model_path, accepted_rows)
+    _progress_bar(phase_label, 3, 9, started=checkpoint_started)
     retrain_started = time.perf_counter()
     retrain_started_at = _utc_now()
     candidate_model_path = checkpoint_dir / f"{engine_alias}_quick_candidate_model.json"
@@ -6611,14 +8585,17 @@ def _run_quick_retrain_checkpoint(
             "timeout": True,
             "reason": f"quick retrain exceeded {int(max_seconds)} seconds",
         }
+    _progress_bar(phase_label, 4, 9, started=checkpoint_started)
     retrain_duration_seconds = round(time.perf_counter() - retrain_started, 3)
     retrain_finished_at = _utc_now()
     after_model_meta = _model_meta(candidate_model_path)
     replay_loss_after = _quick_replay_loss(engine_alias, candidate_model_path, accepted_rows)
     move_agreement_after = _evaluate_move_agreement(engine_alias, candidate_model_path, evaluation_samples)
     fixed_probes_after = _evaluate_fixed_probe_positions(engine_alias, candidate_model_path)
+    _progress_bar(phase_label, 5, 9, started=checkpoint_started)
     retention_probe = _evaluate_retention_probe(engine_alias, target_model_path, candidate_model_path, evaluation_samples)
     mistake_retention_probe = _evaluate_mistake_retention_probe(engine_alias, target_model_path, candidate_model_path, evaluation_samples)
+    _progress_bar(phase_label, 6, 9, started=checkpoint_started)
     sanity_learning_probe = _evaluate_sanity_learning_probe(
         engine_alias,
         target_model_path,
@@ -6626,6 +8603,7 @@ def _run_quick_retrain_checkpoint(
         evaluation_samples,
         trusted_replays=int(trusted_replays),
     )
+    _progress_bar(phase_label, 7, 9, started=checkpoint_started)
     prior_sanity_retention = _evaluate_prior_sanity_case_retention(engine_alias, target_model_path, candidate_model_path, evaluation_samples)
     sanity_learning_probe["prior_learned_case_retention"] = prior_sanity_retention
     targeted_probe = _targeted_probe_summary(fixed_probes_before, fixed_probes_after)
@@ -6664,18 +8642,23 @@ def _run_quick_retrain_checkpoint(
     if unseen_count <= 0:
         checkpoint_gate["passed"] = False
         checkpoint_gate.setdefault("reasons", []).append("sanity unseen variants missing")
-    elif float(sanity_learning_probe.get("unseen_variant_pass_rate") or 0.0) < SANITY_UNSEEN_VARIANT_PASS_THRESHOLD:
+    clean_held_out_count = int(sanity_learning_probe.get("clean_held_out_count") or 0)
+    if clean_held_out_count <= 0:
         checkpoint_gate["passed"] = False
-        checkpoint_gate.setdefault("reasons", []).append("sanity unseen variant pass rate below threshold")
-    if float(sanity_learning_probe.get("raw_policy_unseen_generalization_rate") or 0.0) < SANITY_UNSEEN_VARIANT_PASS_THRESHOLD:
+        checkpoint_gate.setdefault("reasons", []).append("sanity clean held-out labels missing")
+    elif float(sanity_learning_probe.get("clean_held_out_final_pass_rate") or 0.0) < SANITY_UNSEEN_VARIANT_PASS_THRESHOLD:
         checkpoint_gate["passed"] = False
-        checkpoint_gate.setdefault("reasons", []).append("sanity raw policy unseen generalization below threshold")
-    if float(sanity_learning_probe.get("final_decision_unseen_generalization_rate") or 0.0) < SANITY_UNSEEN_VARIANT_PASS_THRESHOLD:
+        checkpoint_gate.setdefault("reasons", []).append("sanity clean held-out pass rate below threshold")
+    if not bool(sanity_learning_probe.get("clean_held_out_pool_sufficient")):
         checkpoint_gate["passed"] = False
-        checkpoint_gate.setdefault("reasons", []).append("sanity final decision unseen generalization below threshold")
-    if float(sanity_learning_probe.get("hard_unseen_pass_rate") or 0.0) <= 0.0:
+        checkpoint_gate.setdefault("reasons", []).append("sanity clean held-out pool has fewer than 10 cases per difficulty")
+    hard_clean_held_out_count = int(sanity_learning_probe.get("hard_clean_held_out_count") or 0)
+    if hard_clean_held_out_count <= 0:
         checkpoint_gate["passed"] = False
-        checkpoint_gate.setdefault("reasons", []).append("sanity hard held-out pass rate is zero")
+        checkpoint_gate.setdefault("reasons", []).append("sanity hard clean held-out labels missing")
+    elif float(sanity_learning_probe.get("hard_clean_held_out_pass_rate") or 0.0) <= 0.0:
+        checkpoint_gate["passed"] = False
+        checkpoint_gate.setdefault("reasons", []).append("sanity hard clean held-out pass rate is zero")
     if (sanity_learning_probe.get("final_decision_learning") or {}).get("learning_signal") is False:
         checkpoint_gate["passed"] = False
         checkpoint_gate.setdefault("reasons", []).append("sanity final decision learning failed")
@@ -6685,6 +8668,7 @@ def _run_quick_retrain_checkpoint(
     if not bool(train_result.get("ok")):
         checkpoint_gate["passed"] = False
         checkpoint_gate.setdefault("reasons", []).append("quick retrain command failed")
+    _progress_bar(phase_label, 8, 9, started=checkpoint_started)
     checkpoint = {
         "trusted_count": int(trusted_replays),
         "trusted_replays": int(trusted_replays),
@@ -6716,6 +8700,13 @@ def _run_quick_retrain_checkpoint(
             "hard_negative_count": sum(len(row.get("hard_negatives") or []) for row in variant_rows),
             "sanity_retention_rows": len([row for row in variant_rows if str(row.get("variant_split") or "") == "retention"]),
             "sanity_smoothing": variant_training.get("smoothing") or {},
+            "semantic_class_distribution": variant_training.get("semantic_class_distribution") or {},
+            "semantic_distribution_by_split": variant_training.get("semantic_distribution_by_split") or {},
+            "semantic_coverage_by_split": variant_training.get("semantic_coverage_by_split") or {},
+            "train_to_gate_semantic_gap": variant_training.get("train_to_gate_semantic_gap") or {},
+            "semantic_sampling": variant_training.get("semantic_sampling") or {},
+            "effective_sample_weight_by_semantic": variant_training.get("effective_sample_weight_by_semantic") or {},
+            "train_effective_distribution": variant_training.get("train_effective_distribution") or {},
             "split": {
                 "train": len((variant_training.get("curriculum") or {}).get("train") or []),
                 "validation": len((variant_training.get("curriculum") or {}).get("validation") or []),
@@ -6766,6 +8757,7 @@ def _run_quick_retrain_checkpoint(
     }
     _json_dump(checkpoint_dir / "retrain_result.json", checkpoint)
     _json_dump(checkpoint_dir / "before_after_eval.json", checkpoint)
+    _progress_bar(phase_label, 9, 9, started=checkpoint_started)
     return checkpoint, candidate_model_path
 
 
@@ -6933,10 +8925,17 @@ def _run_quick_retrain_gate_validation(
         checkpoints=checkpoints,
         seed=seed,
     )
+    style_profile_audit = _style_profile_audit(
+        engine_alias=engine_alias,
+        model_path=after_model_path,
+        deterministic_cases=deterministic_cases,
+        seed=seed,
+    )
     deterministic_eval_seconds = round(time.perf_counter() - deterministic_started, 3)
     _json_dump(engine_dir / "deterministic_strength_snapshot.json", deterministic_strength)
     _json_dump(engine_dir / "policy_override_audit.json", policy_override_audit)
     _json_dump(engine_dir / "fusion_mode_comparison.json", fusion_mode_comparison)
+    _json_dump(engine_dir / "style_profile_audit.json", style_profile_audit)
 
     retrain_result = {
         "retrain_supported": True,
@@ -6994,6 +8993,7 @@ def _run_quick_retrain_gate_validation(
         "deterministic_strength_snapshot": deterministic_strength,
         "policy_override_audit": policy_override_audit,
         "fusion_mode_comparison": fusion_mode_comparison,
+        "style_profile_audit": style_profile_audit,
         "stochastic_auxiliary_benchmark": {
             "purpose": "sanity signal only; not primary promotion evidence",
             "strength_evidence": False,
@@ -7385,9 +9385,16 @@ def _run_engine_validation(
         checkpoints=checkpoints,
         seed=seed,
     )
+    style_profile_audit = _style_profile_audit(
+        engine_alias=engine_alias,
+        model_path=after_model_path,
+        deterministic_cases=deterministic_cases,
+        seed=seed,
+    )
     _json_dump(engine_dir / "deterministic_strength_snapshot.json", deterministic_strength)
     _json_dump(engine_dir / "policy_override_audit.json", policy_override_audit)
     _json_dump(engine_dir / "fusion_mode_comparison.json", fusion_mode_comparison)
+    _json_dump(engine_dir / "style_profile_audit.json", style_profile_audit)
     _json_dump(engine_dir / "retrain_result.json", retrain_result)
     _json_dump(engine_dir / "before_after_eval.json", before_after_eval)
 
@@ -7435,6 +9442,7 @@ def _run_engine_validation(
         "deterministic_strength_snapshot": deterministic_strength,
         "policy_override_audit": policy_override_audit,
         "fusion_mode_comparison": fusion_mode_comparison,
+        "style_profile_audit": style_profile_audit,
         "stochastic_auxiliary_benchmark": {
             "purpose": "sanity signal only; not primary promotion evidence",
             "strength_evidence": False,

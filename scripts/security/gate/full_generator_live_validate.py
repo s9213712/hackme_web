@@ -638,7 +638,7 @@ def _generator_map():
             payload_root,
             raw_root,
             "pytest",
-            gate_helpers.GO_LIVE_CORE_PYTEST_TARGETS,
+            gate_helpers.GO_LIVE_CORE_PYTEST_ARGS,
             timeout=args.pytest_timeout,
             signer=signer,
             meta=meta,

@@ -92,6 +92,13 @@ def _build_app(db_path, storage_root, fernet, current_user, *, audit_func=None):
     return app
 
 
+def _share_session_query(unlock_response):
+    payload = unlock_response.get_json() or {}
+    share_session_id = str(payload.get("share_session_id") or "").strip()
+    assert share_session_id
+    return f"?share_session={share_session_id}"
+
+
 def _configure_real_audit_for_test(db_path, runtime_root):
     runtime_root.mkdir(parents=True, exist_ok=True)
     log_dir = runtime_root / "logs"
@@ -794,15 +801,16 @@ def test_shared_e2ee_video_requires_password_fragment_and_exposes_browser_side_p
     )
     assert unlocked.status_code == 200
     assert unlocked.get_json()["ok"] is True
+    share_session = _share_session_query(unlocked)
 
-    detail = client.get(f"/api/videos/shared/{token}")
+    detail = client.get(f"/api/videos/shared/{token}{share_session}")
     assert detail.status_code == 200
     video_payload = detail.get_json()["video"]
     assert video_payload["share_password_required"] is True
     assert video_payload["share_requires_fragment_key"] is True
     assert video_payload["share_max_views"] == 5
 
-    playback = client.get(f"/api/videos/shared/{token}/playback")
+    playback = client.get(f"/api/videos/shared/{token}/playback{share_session}")
     assert playback.status_code == 200
     playback_json = playback.get_json()
     assert playback_json["mode"] == "e2ee_direct"
@@ -812,14 +820,14 @@ def test_shared_e2ee_video_requires_password_fragment_and_exposes_browser_side_p
     assert playback_json["hls_js_url"] == ""
     assert playback_json["stream_v2_available"] is False
 
-    e2ee_key = client.get(f"/api/videos/shared/{token}/e2ee-key")
+    e2ee_key = client.get(f"/api/videos/shared/{token}/e2ee-key{share_session}")
     assert e2ee_key.status_code == 200
     key_payload = e2ee_key.get_json()["e2ee_share"]
     assert key_payload["wrapped_file_key_envelope"]
     assert "encrypted_file_key" not in key_payload
     assert key_payload["ciphertext_sha256"] == "a" * 64
 
-    ciphertext = client.get(f"/api/videos/shared/{token}/ciphertext")
+    ciphertext = client.get(f"/api/videos/shared/{token}/ciphertext{share_session}")
     assert ciphertext.status_code == 200
     assert ciphertext.data == b"ciphertext-video"
 
@@ -857,9 +865,11 @@ def test_shared_e2ee_video_simulation_can_decrypt_original_plaintext(tmp_path):
         owner_conn.close()
 
     viewer = _build_app(db_path, storage_root, Fernet(Fernet.generate_key()), current_user=None).test_client()
-    assert viewer.post(f"/api/videos/shared/{token}/unlock", json={"password": "SharePass123"}).status_code == 200
+    unlocked = viewer.post(f"/api/videos/shared/{token}/unlock", json={"password": "SharePass123"})
+    assert unlocked.status_code == 200
+    share_session = _share_session_query(unlocked)
 
-    playback = viewer.get(f"/api/videos/shared/{token}/playback")
+    playback = viewer.get(f"/api/videos/shared/{token}/playback{share_session}")
     assert playback.status_code == 200
     playback_json = playback.get_json()
     assert playback_json["player_strategy"] == "browser_e2ee_full_fallback"
@@ -934,8 +944,15 @@ def test_shared_video_password_lock_max_views_and_revoke_routes(tmp_path):
     first_viewer = _build_app(db_path, storage_root, Fernet(Fernet.generate_key()), current_user=None).test_client()
     unlock = first_viewer.post(f"/api/videos/shared/{new_token}/unlock", json={"password": "SharePass123"})
     assert unlock.status_code == 200
-    ok = first_viewer.get(f"/api/videos/shared/{new_token}/playback")
+    share_session = _share_session_query(unlock)
+    ok = first_viewer.get(f"/api/videos/shared/{new_token}/playback{share_session}")
     assert ok.status_code == 200
+    same_session_detail = first_viewer.get(f"/api/videos/shared/{new_token}{share_session}")
+    assert same_session_detail.status_code == 200
+    exhausted_page_same_viewer = first_viewer.get(f"/shared/videos/{new_token}")
+    assert exhausted_page_same_viewer.status_code == 410
+    assert "分享已結束" in exhausted_page_same_viewer.get_data(as_text=True)
+    assert "最大觀看次數" in exhausted_page_same_viewer.get_data(as_text=True)
 
     second_viewer = _build_app(db_path, storage_root, Fernet(Fernet.generate_key()), current_user=None).test_client()
     second_unlock = second_viewer.post(f"/api/videos/shared/{new_token}/unlock", json={"password": "SharePass123"})
@@ -1134,8 +1151,9 @@ def test_shared_e2ee_stream_v2_manifest_and_chunk_routes_work_and_stay_off_hls(t
     viewer = _build_app(db_path, storage_root, Fernet(Fernet.generate_key()), current_user=None).test_client()
     unlocked = viewer.post(f"/api/videos/shared/{token}/unlock", json={"password": "SharePass123"})
     assert unlocked.status_code == 200
+    share_session = _share_session_query(unlocked)
 
-    playback = viewer.get(f"/api/videos/shared/{token}/playback")
+    playback = viewer.get(f"/api/videos/shared/{token}/playback{share_session}")
     assert playback.status_code == 200
     playback_json = playback.get_json()
     assert playback_json["mode"] == "e2ee_stream_v2"
@@ -1147,7 +1165,7 @@ def test_shared_e2ee_stream_v2_manifest_and_chunk_routes_work_and_stay_off_hls(t
     assert "manifest_url" in playback_json
     assert "chunk_url_template" in playback_json
 
-    shared_manifest = viewer.get(f"/api/videos/shared/{token}/e2ee-stream-v2/manifest")
+    shared_manifest = viewer.get(f"/api/videos/shared/{token}/e2ee-stream-v2/manifest{share_session}")
     assert shared_manifest.status_code == 200
     shared_manifest_json = shared_manifest.get_json()
     assert shared_manifest_json["available"] is True
@@ -1156,12 +1174,12 @@ def test_shared_e2ee_stream_v2_manifest_and_chunk_routes_work_and_stay_off_hls(t
     assert shared_manifest_json["chunks"][0]["ciphertext_size"] == 5
     assert "ciphertext_offset" not in shared_manifest_json["chunks"][0]
 
-    chunk0 = viewer.get(f"/api/videos/shared/{token}/e2ee-stream-v2/chunks/0")
+    chunk0 = viewer.get(f"/api/videos/shared/{token}/e2ee-stream-v2/chunks/0{share_session}")
     assert chunk0.status_code == 200
     assert chunk0.data == b"abcde"
     assert chunk0.headers["Cache-Control"] == "private, max-age=0, no-store"
 
-    missing_chunk = viewer.get(f"/api/videos/shared/{token}/e2ee-stream-v2/chunks/9")
+    missing_chunk = viewer.get(f"/api/videos/shared/{token}/e2ee-stream-v2/chunks/9{share_session}")
     assert missing_chunk.status_code == 404
     assert missing_chunk.get_json()["error"] == "chunk_not_found"
 
@@ -1326,9 +1344,11 @@ def test_shared_e2ee_stream_v2_simulation_can_decrypt_chunked_plaintext(tmp_path
     assert prepared.get_json()["asset"]["available"] is True
 
     viewer = _build_app(db_path, storage_root, Fernet(Fernet.generate_key()), current_user=None).test_client()
-    assert viewer.post(f"/api/videos/shared/{token}/unlock", json={"password": "SharePass123"}).status_code == 200
+    unlocked = viewer.post(f"/api/videos/shared/{token}/unlock", json={"password": "SharePass123"})
+    assert unlocked.status_code == 200
+    share_session = _share_session_query(unlocked)
 
-    playback = viewer.get(f"/api/videos/shared/{token}/playback")
+    playback = viewer.get(f"/api/videos/shared/{token}/playback{share_session}")
     assert playback.status_code == 200
     playback_json = playback.get_json()
     assert playback_json["player_strategy"] == "browser_e2ee_stream_v2"
@@ -1438,6 +1458,10 @@ def test_shared_e2ee_stream_v2_endpoints_respect_revoked_expired_and_view_limits
     expired_conn.commit()
     expired_conn.close()
     expired_client = _build_app(db_path, storage_root, Fernet(Fernet.generate_key()), current_user=None).test_client()
+    expired_page = expired_client.get(f"/shared/videos/{token}")
+    assert expired_page.status_code == 410
+    assert "分享已結束" in expired_page.get_data(as_text=True)
+    assert "已到期" in expired_page.get_data(as_text=True)
     expired_manifest = expired_client.get(f"/api/videos/shared/{token}/e2ee-stream-v2/manifest")
     assert expired_manifest.status_code == 410
     assert expired_manifest.get_json()["reason"] == "expired"
@@ -1451,8 +1475,10 @@ def test_shared_e2ee_stream_v2_endpoints_respect_revoked_expired_and_view_limits
     reopen_conn.commit()
     reopen_conn.close()
     first_viewer = _build_app(db_path, storage_root, Fernet(Fernet.generate_key()), current_user=None).test_client()
-    assert first_viewer.post(f"/api/videos/shared/{token}/unlock", json={"password": "SharePass123"}).status_code == 200
-    assert first_viewer.get(f"/api/videos/shared/{token}/e2ee-stream-v2/manifest").status_code == 200
+    first_unlock = first_viewer.post(f"/api/videos/shared/{token}/unlock", json={"password": "SharePass123"})
+    assert first_unlock.status_code == 200
+    share_session = _share_session_query(first_unlock)
+    assert first_viewer.get(f"/api/videos/shared/{token}/e2ee-stream-v2/manifest{share_session}").status_code == 200
 
     second_viewer = _build_app(db_path, storage_root, Fernet(Fernet.generate_key()), current_user=None).test_client()
     exhausted = second_viewer.post(f"/api/videos/shared/{token}/unlock", json={"password": "SharePass123"})
@@ -1695,9 +1721,10 @@ def test_shared_video_three_privacy_modes_complete_unlock_flow(tmp_path):
             f"body={unlock.get_json()}"
         )
         assert unlock.get_json()["ok"] is True
+        share_session = _share_session_query(unlock)
 
         # 5) Metadata after unlock → 200 with video payload
-        detail = client.get(f"/api/videos/shared/{token}")
+        detail = client.get(f"/api/videos/shared/{token}{share_session}")
         assert detail.status_code == 200, (
             f"{privacy_mode}: post-unlock detail expected 200, got {detail.status_code} "
             f"body={detail.get_json()}"
@@ -1705,7 +1732,7 @@ def test_shared_video_three_privacy_modes_complete_unlock_flow(tmp_path):
         assert detail.get_json()["video"]["share_password_required"] is True
 
         # 6) Playback descriptor available
-        playback = client.get(f"/api/videos/shared/{token}/playback")
+        playback = client.get(f"/api/videos/shared/{token}/playback{share_session}")
         assert playback.status_code == 200, (
             f"{privacy_mode}: playback expected 200, got {playback.status_code} "
             f"body={playback.get_json()}"
@@ -1931,12 +1958,13 @@ def test_shared_video_page_browser_realistic_full_flow_for_three_modes(tmp_path)
             f"{privacy_mode}: unlock with island-parsed token failed "
             f"(status={unlock.status_code}, body={unlock.get_json()})"
         )
-        detail = client.get(f"/api/videos/shared/{parsed_token}")
+        share_session = _share_session_query(unlock)
+        detail = client.get(f"/api/videos/shared/{parsed_token}{share_session}")
         assert detail.status_code == 200, (
             f"{privacy_mode}: post-unlock metadata expected 200, "
             f"got {detail.status_code}"
         )
-        playback = client.get(f"/api/videos/shared/{parsed_token}/playback")
+        playback = client.get(f"/api/videos/shared/{parsed_token}/playback{share_session}")
         assert playback.status_code == 200, (
             f"{privacy_mode}: playback descriptor expected 200, "
             f"got {playback.status_code}"

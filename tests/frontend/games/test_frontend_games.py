@@ -31,12 +31,12 @@ def test_game_zone_frontend_assets_are_wired():
     assert 'id="game-root-chess-pipeline-command"' in index_html
     assert 'id="game-root-chess-stage-btn"' in index_html
     assert 'id="game-root-chess-promote-btn"' in index_html
-    assert 'value="experiment 2:nn"' in index_html
     assert 'value="experiment 3:dl"' in index_html
     assert 'value="experiment 4:pv"' in index_html
-    assert "實驗 2：NN 小型神經網路" in index_html
-    assert "實驗 3：DL 深度學習" in index_html
-    assert "實驗 4：PV 策略價值網路" in index_html
+    assert 'value="experiment 2:nn"' not in index_html
+    assert "實驗 2：NN 小型神經網路" not in index_html
+    assert "實驗 3：DL 語義平衡學習" in index_html
+    assert "實驗 4：PV 策略價值搜尋" in index_html
     assert 'id="sudoku-game-panel"' in index_html
     assert 'id="sudoku-board"' in index_html
     assert 'id="minesweeper-game-panel"' in index_html
@@ -93,9 +93,9 @@ def test_game_zone_frontend_assets_are_wired():
     assert "stageChessCandidate" in games_js
     assert "promoteChessCandidate" in games_js
     assert "renderChessPracticeDifficultyOptions" in games_js
-    assert 'if (difficulty === "experiment 4:pv") return "實驗 4：PV";' in games_js
-    assert 'if (difficulty === "experiment 2:nn") return "實驗 2：NN";' in games_js
-    assert 'if (difficulty === "experiment 3:dl") return "實驗 3：DL";' in games_js
+    assert 'if (difficulty === "experiment 4:pv") return "實驗 4：PV 策略價值";' in games_js
+    assert 'if (difficulty === "experiment 2:nn") return "實驗 2：NN";' not in games_js
+    assert 'if (difficulty === "experiment 3:dl") return "實驗 3：DL 語義平衡";' in games_js
     assert "/games/chess/leaderboard" in games_js
     assert "/root/games/chess/engines/dashboard" in games_js
     assert "/root/games/chess/warm-start" in games_js
