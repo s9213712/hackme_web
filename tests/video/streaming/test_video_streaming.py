@@ -393,7 +393,11 @@ def test_prepare_stream_asset_builds_hls_derivatives_for_plain_video(tmp_path, m
     assert len(asset["variants"]) == 1
     assert asset["variants"][0]["name"] == "source"
     assert [seg["filename"] for seg in asset["variants"][0]["segments"]] == ["seg_00001.m4s", "seg_00002.m4s"]
-    assert (storage_root / "media_derivatives" / "plain-video" / "master.m3u8").exists()
+    master = storage_root / "media_derivatives" / "plain-video" / "master.m3u8"
+    assert master.exists()
+    master_text = master.read_text(encoding="utf-8")
+    assert 'CODECS="avc1.64001f,mp4a.40.2"' in master_text
+    assert 'CODECS="h264"' not in master_text
 
 
 def test_prepare_stream_asset_decrypts_server_encrypted_media_before_packaging(tmp_path, monkeypatch):
@@ -519,13 +523,24 @@ def test_video_playback_and_hls_routes_use_ready_stream_asset(tmp_path, monkeypa
     assert payload["can_prepare_stream"] is False
     assert payload["player_strategy"] == "native_hls_or_hlsjs"
     assert payload["stream_warning"] == ""
-    assert payload["hls_js_url"].endswith("hls.light.min.js?v=20260505-hlsjs")
+    assert payload["hls_js_url"] == "/js/hls.light.min.js?v=20260505-hlsjs"
     assert payload["master_url"].endswith(f"/api/videos/{video_id}/hls/master.m3u8")
     assert payload["fallback_url"].endswith(f"/api/videos/{video_id}/stream")
+
+    master_path = storage_root / "media_derivatives" / "video-1" / "master.m3u8"
+    master_path.write_text(
+        "#EXTM3U\n"
+        "#EXT-X-VERSION:7\n"
+        "#EXT-X-STREAM-INF:BANDWIDTH=1024000,RESOLUTION=1280x720,CODECS=\"h264\"\n"
+        "source/playlist.m3u8\n",
+        encoding="utf-8",
+    )
 
     master = client.get(f"/api/videos/{video_id}/hls/master.m3u8")
     assert master.status_code == 200
     assert master.mimetype == "application/vnd.apple.mpegurl"
+    assert 'CODECS="avc1.64001f,mp4a.40.2"' in master.get_data(as_text=True)
+    assert 'CODECS="h264"' not in master.get_data(as_text=True)
 
     playlist = client.get(f"/api/videos/{video_id}/hls/source/playlist.m3u8")
     assert playlist.status_code == 200

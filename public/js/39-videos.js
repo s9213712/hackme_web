@@ -22,6 +22,73 @@ function videoMsg(text, ok = true) {
   if (el) flash(el, text, ok);
 }
 
+function videoFormatBytes(bytes) {
+  if (typeof formatDriveBytes === "function") return formatDriveBytes(bytes);
+  const value = Number(bytes || 0);
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  if (value < 1024 * 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MB`;
+  return `${(value / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
+function setVideoUploadProgress({ visible = true, percent = 0, loaded = 0, total = 0, status = "準備上傳", indeterminate = false } = {}) {
+  const panel = $("video-upload-progress");
+  const fill = $("video-upload-progress-fill");
+  const statusEl = $("video-upload-progress-status");
+  const bytesEl = $("video-upload-progress-bytes");
+  const percentEl = $("video-upload-progress-percent");
+  if (!panel) return;
+  panel.hidden = !visible;
+  if (!visible) return;
+  const normalized = Number.isFinite(Number(percent)) ? Math.max(0, Math.min(100, Number(percent))) : 0;
+  if (statusEl) statusEl.textContent = status || "處理中";
+  if (fill) {
+    fill.classList.toggle("indeterminate", !!indeterminate);
+    fill.style.width = indeterminate ? "45%" : `${normalized}%`;
+  }
+  if (bytesEl) {
+    bytesEl.textContent = total
+      ? `${videoFormatBytes(loaded || 0)} / ${videoFormatBytes(total)}`
+      : loaded
+        ? videoFormatBytes(loaded)
+        : "計算中";
+  }
+  if (percentEl) percentEl.textContent = indeterminate ? "處理中" : `${Math.round(normalized)}%`;
+}
+
+function videoUploadFormWithProgress(url, form, onProgress) {
+  const send = async (csrf) => new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.withCredentials = true;
+    if (csrf) xhr.setRequestHeader("X-CSRF-Token", csrf);
+    xhr.upload.onprogress = (event) => {
+      if (typeof onProgress === "function") onProgress(event);
+    };
+    xhr.onload = () => {
+      let json = {};
+      try {
+        json = JSON.parse(xhr.responseText || "{}");
+      } catch (err) {
+        json = {};
+      }
+      resolve({ status: xhr.status, ok: xhr.status >= 200 && xhr.status < 300, json });
+    };
+    xhr.onerror = () => reject(new Error("上傳連線失敗"));
+    xhr.ontimeout = () => reject(new Error("上傳逾時"));
+    xhr.send(form);
+  });
+  return (async () => {
+    const firstCsrf = typeof fetchCsrfToken === "function" ? await fetchCsrfToken() : "";
+    let result = await send(firstCsrf);
+    if (result.status === 403 && result.json?.error === "csrf_invalid" && typeof fetchCsrfToken === "function") {
+      const refreshed = await fetchCsrfToken({ force: true });
+      result = await send(refreshed);
+    }
+    return result;
+  })();
+}
+
 function destroyCurrentVideoPlaybackArtifacts() {
   if (videoState.currentHls && typeof videoState.currentHls.destroy === "function") {
     try {
@@ -410,7 +477,8 @@ async function publishVideoFromDrive() {
   }
   if (button) button.disabled = true;
   try {
-    let res;
+    let status = 0;
+    let json = {};
     if (directFile) {
       const form = new FormData();
       form.append("video", directFile);
@@ -423,11 +491,23 @@ async function publishVideoFromDrive() {
       form.append("privacy_mode", $("video-upload-privacy-mode")?.value || "standard_plain");
       if (coverFile) form.append("cover", coverFile);
       videoMsg("影音檔上傳中，請稍候...", true);
-      res = await apiFetch(API + "/videos/upload", {
-        method: "POST",
-        credentials: "same-origin",
-        body: form,
+      setVideoUploadProgress({ visible: true, percent: 0, loaded: 0, total: directFile.size, status: `準備上傳 ${directFile.name}` });
+      const upload = await videoUploadFormWithProgress(API + "/videos/upload", form, (event) => {
+        if (event.lengthComputable) {
+          const percent = (event.loaded / event.total) * 100;
+          setVideoUploadProgress({
+            visible: true,
+            percent,
+            loaded: event.loaded,
+            total: event.total,
+            status: event.loaded >= event.total ? "上傳完成，伺服器儲存、掃描與串流準備中" : "影音檔上傳中",
+          });
+        } else {
+          setVideoUploadProgress({ visible: true, percent: 0, loaded: event.loaded || 0, total: 0, status: "影音檔上傳中", indeterminate: true });
+        }
       });
+      status = upload.status;
+      json = upload.json || {};
     } else if (coverFile) {
       const form = new FormData();
       form.append("cloud_file_id", payload.cloud_file_id);
@@ -440,21 +520,37 @@ async function publishVideoFromDrive() {
       if (payload.share_wrapped_file_key_envelope) form.append("share_wrapped_file_key_envelope", payload.share_wrapped_file_key_envelope);
       form.append("cover", coverFile);
       videoMsg("影音封面上傳中，請稍候...", true);
-      res = await apiFetch(API + "/videos/publish", {
-        method: "POST",
-        credentials: "same-origin",
-        body: form,
+      setVideoUploadProgress({ visible: true, percent: 0, loaded: 0, total: coverFile.size, status: `準備上傳封面 ${coverFile.name}` });
+      const upload = await videoUploadFormWithProgress(API + "/videos/publish", form, (event) => {
+        if (event.lengthComputable) {
+          const percent = (event.loaded / event.total) * 100;
+          setVideoUploadProgress({
+            visible: true,
+            percent,
+            loaded: event.loaded,
+            total: event.total,
+            status: event.loaded >= event.total ? "封面上傳完成，伺服器處理中" : "封面上傳中",
+          });
+        } else {
+          setVideoUploadProgress({ visible: true, percent: 0, loaded: event.loaded || 0, total: 0, status: "封面上傳中", indeterminate: true });
+        }
       });
+      status = upload.status;
+      json = upload.json || {};
     } else {
-      res = await apiFetch(API + "/videos/publish", {
+      const res = await apiFetch(API + "/videos/publish", {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
+      status = res.status;
+      json = await res.json().catch(() => ({}));
     }
-    const json = await res.json().catch(() => ({}));
-    if (!res.ok || !json.ok) throw new Error(json.msg || `HTTP ${res.status}`);
+    if (status < 200 || status >= 300 || !json.ok) throw new Error(json.msg || `HTTP ${status}`);
+    if (directFile || coverFile) {
+      setVideoUploadProgress({ visible: true, percent: 100, loaded: directFile?.size || coverFile?.size || 0, total: directFile?.size || coverFile?.size || 0, status: "處理完成" });
+    }
     const input = $("video-upload-file");
     if (input) input.value = "";
     const coverInput = $("video-cover-file");
@@ -488,6 +584,9 @@ async function publishVideoFromDrive() {
     await loadVideos(videoState.sort);
     openVideoDetail(json.video.id);
   } catch (err) {
+    if (directFile || coverFile) {
+      setVideoUploadProgress({ visible: true, percent: 100, loaded: 0, total: 0, status: err.message || "影音發布失敗" });
+    }
     videoMsg(err.message || "影音發布失敗", false);
   } finally {
     if (button) button.disabled = false;

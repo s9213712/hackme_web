@@ -926,6 +926,16 @@
                 <button class="btn btn-primary" id="video-publish-btn" type="button">發布</button>
               </div>
             </div>
+            <div id="video-upload-progress" class="video-upload-progress" hidden aria-live="polite">
+              <div class="drive-card-sub" id="video-upload-progress-status">準備上傳</div>
+              <div class="drive-progress" aria-label="影音上傳進度">
+                <div class="drive-progress-fill" id="video-upload-progress-fill" style="width:0%;"></div>
+              </div>
+              <div class="video-upload-progress-meta">
+                <span id="video-upload-progress-bytes">0 B / 0 B</span>
+                <span id="video-upload-progress-percent">0%</span>
+              </div>
+            </div>
           </div>
         </details>
         <div class="drive-card-heading video-sort-bar" style="margin-top:1rem;">

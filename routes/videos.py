@@ -18,6 +18,7 @@ from services.media.streaming import (
     ensure_media_stream_schema,
     get_stream_status,
     prepare_stream_asset,
+    repair_hls_master_manifest_text,
     should_auto_prepare_stream,
     stream_playback_payload,
 )
@@ -135,6 +136,10 @@ def register_video_routes(app, deps):
         if int(row["owner_user_id"]) == int(actor["id"]) or _is_manager_or_root(actor):
             return
         raise PermissionError("只有檔案擁有者或管理者可以準備串流衍生檔")
+
+    def _send_hls_master_manifest(path):
+        text = repair_hls_master_manifest_text(Path(path).read_text(encoding="utf-8"))
+        return Response(text, status=200, mimetype="application/vnd.apple.mpegurl")
 
     def _maybe_prepare_stream_asset(conn, *, file_row, visibility):
         if not _settings_bool("video_stream_auto_prepare_enabled", True):
@@ -916,7 +921,7 @@ def register_video_routes(app, deps):
                 return json_resp({"ok": False, "msg": "影音串流尚未準備完成", "error": "stream_not_ready"}), 409
             path = resolve_file_storage_path(storage_root, {"storage_path": asset["master_manifest_path"]})
             conn.commit()
-            return send_file(path, as_attachment=False, download_name="master.m3u8", mimetype="application/vnd.apple.mpegurl", conditional=True)
+            return _send_hls_master_manifest(path)
         finally:
             conn.close()
 
@@ -1306,7 +1311,7 @@ def register_video_routes(app, deps):
             if not asset or asset.get("status") != "ready" or not asset.get("master_manifest_path"):
                 return json_resp({"ok": False, "msg": "影音串流尚未準備完成", "error": "stream_not_ready"}), 409
             path = resolve_file_storage_path(storage_root, {"storage_path": asset["master_manifest_path"]})
-            return send_file(path, as_attachment=False, download_name="master.m3u8", mimetype="application/vnd.apple.mpegurl", conditional=True)
+            return _send_hls_master_manifest(path)
         except PermissionError as exc:
             return _error_response(exc)
         except ValueError as exc:

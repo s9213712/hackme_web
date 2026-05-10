@@ -309,6 +309,22 @@ def fetch_json(page, method: str, path: str, payload: dict[str, Any] | None = No
     )
 
 
+def fetch_text(page, path: str) -> dict[str, Any]:
+    return page.evaluate(
+        """async path => {
+            const response = await fetch(path, {credentials: 'same-origin'});
+            const text = await response.text();
+            return {
+                status: response.status,
+                ok: response.ok,
+                text: text.slice(0, 4000),
+                contentType: response.headers.get('content-type') || ''
+            };
+        }""",
+        path,
+    )
+
+
 def fetch_multipart(page, path: str, fields: dict[str, Any], files: list[dict[str, Any]]) -> dict[str, Any]:
     csrf = cookie_value(page, "csrf_token")
     return page.evaluate(
@@ -874,35 +890,102 @@ def check_drive_e2ee_journey(rec: Recorder, page) -> dict[str, Any]:
 
 def check_video_share_journey(rec: Recorder, page) -> dict[str, Any]:
     video_bytes = generate_tiny_mp4()
-    upload = fetch_multipart(
-        page,
-        "/api/videos/upload",
-        {
-            "title": "Playwright QA 影音",
-            "description": "全站巡檢上傳的最小測試影音。",
-            "visibility": "unlisted",
-            "privacy_mode": "standard_plain",
-        },
-        [bytes_file("qa-video.mp4", video_bytes, field="video", mime="video/mp4")],
-    )
-    video = (upload.get("body") or {}).get("video") or {}
-    share = {"status": 0, "body": {}}
-    if video.get("id"):
-        share = fetch_json(page, "PUT", f"/api/videos/{int(video['id'])}/share-link", {"share_password": "ShareDeep123!", "share_max_views": 3})
-    videos = fetch_json(page, "GET", "/api/videos")
-    switch_module(page, "videos")
-    page.click("#video-refresh-btn")
-    page.wait_for_timeout(900)
-    check_ui_quality(rec, page, "videos_desktop")
-    ok = upload["status"] == 200 and share["status"] == 200 and videos["status"] == 200
-    rec.add(
-        "video_upload_share_flow",
-        ok,
-        f"upload={upload['status']}, share={share['status']}, list={videos['status']}",
-        upload=upload.get("body"),
-        share=share.get("body"),
-    )
-    return {"video_id": video.get("id"), "share": share.get("body")}
+    video_path = Path(tempfile.gettempdir()) / f"hackme_web_ui_video_{os.getpid()}_{int(time.time() * 1000)}.mp4"
+    video_path.write_bytes(video_bytes)
+    try:
+        switch_module(page, "videos")
+        page.locator("#video-publish-panel").evaluate("el => { el.open = true; }")
+        page.set_input_files("#video-upload-file", str(video_path))
+        page.fill("#video-publish-title", "Playwright QA 影音")
+        page.fill("#video-publish-description", "全站巡檢透過前端直接上傳的最小測試影音。")
+        page.select_option("#video-publish-visibility", "unlisted")
+        page.fill("#video-share-password", "ShareDeep123!")
+        page.fill("#video-share-max-views", "3")
+        page.click("#video-publish-btn")
+        page.wait_for_selector("#video-upload-progress:not([hidden])", timeout=5000)
+        progress_seen = page.locator("#video-upload-progress").is_visible(timeout=1000)
+        page.wait_for_function(
+            """() => {
+                const msg = document.querySelector('#video-msg')?.textContent || '';
+                const status = document.querySelector('#video-upload-progress-status')?.textContent || '';
+                const percent = document.querySelector('#video-upload-progress-percent')?.textContent || '';
+                return /影音已發布/.test(msg) || /處理完成/.test(status) || percent.trim() === '100%';
+            }""",
+            timeout=45000,
+        )
+        video_msg = page.locator("#video-msg").inner_text(timeout=1000)
+        progress_status = page.locator("#video-upload-progress-status").inner_text(timeout=1000)
+        progress_percent = page.locator("#video-upload-progress-percent").inner_text(timeout=1000)
+        upload_success = (
+            "影音已發布" in video_msg
+            or "處理完成" in progress_status
+            or progress_percent.strip() == "100%"
+        )
+        videos = fetch_json(page, "GET", "/api/videos")
+        page.click("#video-refresh-btn")
+        page.wait_for_timeout(900)
+        check_ui_quality(rec, page, "videos_desktop")
+        videos_body = videos.get("body") or {}
+        video_items = videos_body.get("videos") or videos_body.get("items") or videos_body.get("data") or []
+        latest = video_items[0] if video_items else {}
+        video_id_attr = page.locator("[data-video-like]").first.get_attribute("data-video-like", timeout=2000)
+        video_id = int(video_id_attr or latest.get("id") or 0)
+        playback = fetch_json(page, "GET", f"/api/videos/{video_id}/playback") if video_id else {"status": 0, "body": {}}
+        master = fetch_text(page, (playback.get("body") or {}).get("master_url") or "") if (playback.get("body") or {}).get("master_url") else {"status": 0, "text": ""}
+        detail = fetch_json(page, "GET", f"/api/videos/{video_id}") if video_id else {"status": 0, "body": {}}
+        share_url = (((detail.get("body") or {}).get("video") or {}).get("share_url") or "").strip()
+        shared_playback = {"status": 0, "body": {}}
+        shared_master = {"status": 0, "text": ""}
+        if share_url:
+            token = share_url.rstrip("/").split("/")[-1]
+            unlock = fetch_json(page, "POST", f"/api/videos/shared/{token}/unlock", {"password": "ShareDeep123!"})
+            if unlock["status"] == 200:
+                shared_playback = fetch_json(page, "GET", f"/api/videos/shared/{token}/playback")
+                shared_master_url = (shared_playback.get("body") or {}).get("master_url") or ""
+                if shared_master_url:
+                    shared_master = fetch_text(page, shared_master_url)
+        hls_master_ok = (
+            playback["status"] == 200
+            and (playback.get("body") or {}).get("mode") == "hls"
+            and master["status"] == 200
+            and 'CODECS="h264"' not in master.get("text", "")
+            and "avc1." in master.get("text", "")
+        )
+        shared_hls_ok = (
+            not share_url
+            or (
+                shared_playback["status"] == 200
+                and (shared_playback.get("body") or {}).get("mode") == "hls"
+                and (shared_playback.get("body") or {}).get("hls_js_url") == "/js/hls.light.min.js?v=20260505-hlsjs"
+                and shared_master["status"] == 200
+                and 'CODECS="h264"' not in shared_master.get("text", "")
+                and "avc1." in shared_master.get("text", "")
+            )
+        )
+        ok = bool(progress_seen) and bool(upload_success) and videos["status"] == 200 and hls_master_ok and shared_hls_ok
+        rec.add(
+            "video_upload_share_flow",
+            ok,
+            f"ui_progress={progress_seen}, progress={progress_percent}, list={videos['status']}, hls={hls_master_ok}, shared_hls={shared_hls_ok}",
+            progress_seen=progress_seen,
+            progress_status=progress_status,
+            progress_percent=progress_percent,
+            video_msg=video_msg,
+            upload_success=upload_success,
+            video_count=len(video_items),
+            video_id=video_id,
+            playback=playback.get("body"),
+            master_status=master.get("status"),
+            shared_playback=shared_playback.get("body"),
+            shared_master_status=shared_master.get("status"),
+            latest_video=latest,
+        )
+        return {"video_id": video_id or latest.get("id"), "progress_seen": progress_seen}
+    finally:
+        try:
+            video_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def check_economy_trading_journey(rec: Recorder, page, base_url: str) -> None:
