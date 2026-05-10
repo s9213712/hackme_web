@@ -582,6 +582,34 @@
       .filter(Boolean);
   }
 
+  const PAID_API_NODE_MARKERS = [
+    "api",
+    "api_key",
+    "apikey",
+    "comfyapi",
+    "fluxpro",
+    "openai",
+    "stability",
+    "runway",
+    "kling",
+    "luma",
+    "minimax",
+    "ideogram",
+    "recraft",
+    "pixverse",
+    "veo",
+  ];
+
+  function nodeLooksLikePaidApi(node) {
+    const type = String(isUnknownNode(node) ? node.originalType : node.type || "").toLowerCase().replace(/[\s_-]+/g, "");
+    const label = String(node.label || "").toLowerCase();
+    const keys = Object.keys(node.inputs || {}).join(" ").toLowerCase().replace(/[\s_-]+/g, "");
+    return PAID_API_NODE_MARKERS.some((marker) => {
+      const normalized = String(marker).toLowerCase().replace(/[\s_-]+/g, "");
+      return type.includes(normalized) || label.includes(marker) || keys.includes(normalized);
+    });
+  }
+
   function workflowValidationIssues() {
     const issues = [];
     const classes = new Set(workflow.nodes.map((node) => isUnknownNode(node) ? node.originalType : node.type));
@@ -593,6 +621,9 @@
     });
     workflow.nodes.filter(isUnknownNode).forEach((node) => {
       issues.push({ level: "warn", message: `Custom node 需要 ComfyUI object_info 驗證：${node.originalType || node.label}` });
+    });
+    workflow.nodes.filter(nodeLooksLikePaidApi).forEach((node) => {
+      issues.push({ level: "warn", message: `可能是付費/API node，執行前需 root 啟用並確認：${isUnknownNode(node) ? node.originalType : node.type}` });
     });
     if (!classes.has("SaveImage")) {
       issues.push({ level: "warn", message: "workflow 沒有 SaveImage 節點，執行後可能沒有可保存的輸出。" });
@@ -626,6 +657,7 @@
     }
     const models = collectRequiredModels();
     const customNodes = workflow.nodes.filter(isUnknownNode);
+    const paidApiNodes = workflow.nodes.filter(nodeLooksLikePaidApi);
     panel.innerHTML = `
       <div class="dependency-list">
         <div class="dependency-row">
@@ -635,6 +667,10 @@
         <div class="dependency-row">
           <strong>Custom nodes</strong>
           <span>${customNodes.length ? html(customNodes.map((node) => node.originalType || node.label).join("、")) : "未偵測到 placeholder"}</span>
+        </div>
+        <div class="dependency-row">
+          <strong>付費/API nodes</strong>
+          <span>${paidApiNodes.length ? html(paidApiNodes.map((node) => isUnknownNode(node) ? node.originalType : node.type).join("、")) : "未偵測到"}</span>
         </div>
         <div class="dependency-row">
           <strong>版本</strong>
