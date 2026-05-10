@@ -1823,6 +1823,16 @@ def register_comfyui_routes(app, deps):
     def _comfyui_account_api_key():
         return str((get_system_settings() or {}).get("comfyui_account_api_key") or os.environ.get("COMFYUI_ACCOUNT_API_KEY") or "").strip()
 
+    def _comfyui_paid_api_status_payload():
+        settings = get_system_settings() or {}
+        return {
+            "enabled": bool(settings.get("comfyui_paid_api_nodes_enabled")),
+            "key_configured": bool(_comfyui_account_api_key()),
+            "credit_balance_available": False,
+            "credit_balance": None,
+            "credits_msg": "ComfyUI credits 目前沒有穩定官方 REST endpoint；請在 ComfyUI UI 的 Settings / Credits 查看餘額。",
+        }
+
     def _comfyui_paid_api_policy(workflow_json, *, confirm=False, object_info=None):
         paid_api = detect_paid_api_nodes(workflow_json, object_info=object_info)
         if not paid_api.get("required"):
@@ -2598,6 +2608,7 @@ def register_comfyui_routes(app, deps):
         "list_generation_history": _list_generation_history,
         "load_generation_history": _load_generation_history,
         "local_comfyui_runtime_status": _local_comfyui_runtime_status,
+        "comfyui_paid_api_status_payload": _comfyui_paid_api_status_payload,
         "normalize_generation_payload": _normalize_generation_payload,
         "parse_generation_request": _parse_generation_request,
         "record_generation_history": _record_generation_history,

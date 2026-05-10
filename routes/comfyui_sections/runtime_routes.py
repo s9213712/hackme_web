@@ -31,6 +31,7 @@ def register_comfyui_runtime_routes(app, ctx):
     _comfyui_total_quantity = ctx["comfyui_total_quantity"]
     _comfyui_unavailable_payload = ctx["comfyui_unavailable_payload"]
     _comfyui_wallet_payload = ctx["comfyui_wallet_payload"]
+    _comfyui_paid_api_status_payload = ctx.get("comfyui_paid_api_status_payload", lambda: {})
     _configured_comfyui_port = ctx["configured_comfyui_port"]
     _configured_comfyui_url = ctx["configured_comfyui_url"]
     _configured_connection_mode = ctx["configured_connection_mode"]
@@ -87,6 +88,7 @@ def register_comfyui_runtime_routes(app, ctx):
                     "billing": None if not _comfyui_charge_required(actor) else (_comfyui_price_quote(1)[0] or {}),
                     "wallet": _comfyui_wallet_payload(actor),
                     "lora_extra_unit_price": COMFYUI_LORA_EXTRA_PRICE_POINTS,
+                    "paid_api_nodes": _comfyui_paid_api_status_payload(),
                     "local_runtime": runtime,
                 })
             return json_resp(_comfyui_unavailable_payload(exc, active_client))
@@ -102,6 +104,7 @@ def register_comfyui_runtime_routes(app, ctx):
             "billing": None if not _comfyui_charge_required(actor) else (_comfyui_price_quote(1)[0] or {}),
             "wallet": _comfyui_wallet_payload(actor),
             "lora_extra_unit_price": COMFYUI_LORA_EXTRA_PRICE_POINTS,
+            "paid_api_nodes": _comfyui_paid_api_status_payload(),
             "system": status.get("system") if isinstance(status, dict) else {},
         })
 
@@ -185,6 +188,7 @@ def register_comfyui_runtime_routes(app, ctx):
             "billing": None if not _comfyui_charge_required(actor) else (_comfyui_price_quote(1)[0] or {}),
             "wallet": _comfyui_wallet_payload(actor),
             "lora_extra_unit_price": COMFYUI_LORA_EXTRA_PRICE_POINTS,
+            "paid_api_nodes": _comfyui_paid_api_status_payload(),
         })
 
     @app.route("/api/comfyui/billing-quote", methods=["POST"])
