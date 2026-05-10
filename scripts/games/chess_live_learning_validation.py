@@ -196,10 +196,13 @@ SANITY_LEARNING_VARIANT_COUNT = 6
 SANITY_SEEN_VARIANT_PASS_THRESHOLD = 0.8
 SANITY_UNSEEN_VARIANT_PASS_THRESHOLD = 0.5
 SANITY_FINAL_DECISION_GENERALIZATION_THRESHOLD = 0.5
-SANITY_EASY_VARIANT_COUNT = 3
-SANITY_MEDIUM_VARIANT_COUNT = 3
+SANITY_EASY_TRAIN_VARIANT_COUNT = 6
+SANITY_MEDIUM_TRAIN_VARIANT_COUNT = 6
+SANITY_EASY_VALIDATION_VARIANT_COUNT = 3
+SANITY_MEDIUM_VALIDATION_VARIANT_COUNT = 3
 SANITY_HARD_VARIANT_COUNT = 6
 SANITY_VARIANT_DIFFICULTY_PAIRS = {"easy": 1, "medium": 2, "hard": 3}
+SANITY_COMMON_HARD_NEGATIVES = ("a7a5", "f8a3", "b8c6", "h7h5", "a6c4", "c6b4", "e5d4", "f8b4", "c5d4")
 FUSION_MODES = ("strict_search", "balanced_fusion", "policy_preferred")
 DETERMINISTIC_STRENGTH_CASES = (
     {
@@ -2056,6 +2059,8 @@ def _compact_sanity_probe_for_summary(probe: dict) -> dict:
             "variant_difficulty_scores",
             "raw_policy_generalization_rate",
             "final_decision_generalization_rate",
+            "raw_policy_unseen_generalization_rate",
+            "final_decision_unseen_generalization_rate",
             "variant_count",
             "variant_top1_hits",
             "variant_top1_rate",
@@ -2099,8 +2104,13 @@ def _compact_sanity_probe_for_summary(probe: dict) -> dict:
     debug = probe.get("feature_generalization_debug") or {}
     compact["feature_generalization_debug"] = {
         "board_embedding_similarity": debug.get("board_embedding_similarity") or {},
+        "split": debug.get("split") or {},
         "expected_move_rank_across_variants": (debug.get("expected_move_rank_across_variants") or [])[:12],
         "final_decision_blockers": (debug.get("final_decision_blockers") or [])[:6],
+        "failed_unseen_cases": (debug.get("failed_unseen_cases") or [])[:8],
+        "failed_feature_groups": (debug.get("failed_feature_groups") or [])[:8],
+        "embedding_similarity": debug.get("embedding_similarity") or {},
+        "expected_vs_hard_negative_margin": debug.get("expected_vs_hard_negative_margin") or {},
     }
     return compact
 
@@ -2115,10 +2125,16 @@ def _compact_checkpoint_for_summary(checkpoint: dict) -> dict:
         curriculum = training.get("curriculum")
         if isinstance(curriculum, dict):
             training["curriculum"] = {
+                "train_count": len(curriculum.get("train") or []),
+                "validation_count": len(curriculum.get("validation") or []),
+                "held_out_count": len(curriculum.get("held_out") or []),
                 "seen_count": len(curriculum.get("seen") or []),
                 "unseen_count": len(curriculum.get("unseen") or []),
                 "by_difficulty": {
                     key: {
+                        "train_count": len((value or {}).get("train") or []),
+                        "validation_count": len((value or {}).get("validation") or []),
+                        "held_out_count": len((value or {}).get("held_out") or []),
                         "seen_count": len((value or {}).get("seen") or []),
                         "unseen_count": len((value or {}).get("unseen") or []),
                     }
@@ -2488,31 +2504,76 @@ def _sanity_learning_variants(
     return variants
 
 
+def _legal_sanity_hard_negatives(fen: str, side: str, expected_move: str, *, old_move: str = "") -> list[str]:
+    try:
+        board = chess.Board(str(fen or ""))
+        board.turn = chess.WHITE if str(side or "").lower() == "white" else chess.BLACK
+        expected = chess.Move.from_uci(str(expected_move or "").lower())
+    except Exception:
+        return []
+    candidates = [str(old_move or "").lower(), *SANITY_COMMON_HARD_NEGATIVES]
+    hard_negatives: list[str] = []
+    seen: set[str] = set()
+    for item in candidates:
+        try:
+            move = chess.Move.from_uci(str(item or "").strip().lower())
+        except Exception:
+            continue
+        if move == expected or move not in board.legal_moves or move.uci() in seen:
+            continue
+        seen.add(move.uci())
+        hard_negatives.append(move.uci())
+    if len(hard_negatives) < 3:
+        for move in sorted(board.legal_moves, key=lambda item: item.uci()):
+            if move == expected or move.uci() in seen:
+                continue
+            hard_negatives.append(move.uci())
+            seen.add(move.uci())
+            if len(hard_negatives) >= 3:
+                break
+    return hard_negatives[:5]
+
+
+def _sanity_invariance_group_id(case: dict) -> str:
+    return f"{case.get('side')}|{case.get('expected_move')}"
+
+
 def _sanity_curriculum_variants(case: dict) -> dict:
-    easy_seen = _sanity_learning_variants(case, limit=SANITY_EASY_VARIANT_COUNT, offset=0, split="seen", difficulty="easy")
-    medium_seen = _sanity_learning_variants(case, limit=SANITY_MEDIUM_VARIANT_COUNT, offset=0, split="seen", difficulty="medium")
-    easy_unseen = _sanity_learning_variants(
+    easy_train = _sanity_learning_variants(case, limit=SANITY_EASY_TRAIN_VARIANT_COUNT, offset=0, split="train", difficulty="easy")
+    medium_train = _sanity_learning_variants(case, limit=SANITY_MEDIUM_TRAIN_VARIANT_COUNT, offset=0, split="train", difficulty="medium")
+    easy_validation = _sanity_learning_variants(
         case,
-        limit=SANITY_EASY_VARIANT_COUNT,
-        offset=SANITY_EASY_VARIANT_COUNT,
-        split="unseen",
+        limit=SANITY_EASY_VALIDATION_VARIANT_COUNT,
+        offset=SANITY_EASY_TRAIN_VARIANT_COUNT,
+        split="validation",
         difficulty="easy",
     )
-    medium_unseen = _sanity_learning_variants(
+    medium_validation = _sanity_learning_variants(
         case,
-        limit=SANITY_MEDIUM_VARIANT_COUNT,
-        offset=SANITY_MEDIUM_VARIANT_COUNT,
-        split="unseen",
+        limit=SANITY_MEDIUM_VALIDATION_VARIANT_COUNT,
+        offset=SANITY_MEDIUM_TRAIN_VARIANT_COUNT,
+        split="validation",
         difficulty="medium",
     )
-    hard_unseen = _sanity_learning_variants(case, limit=SANITY_HARD_VARIANT_COUNT, offset=0, split="unseen", difficulty="hard")
+    hard_held_out = _sanity_learning_variants(case, limit=SANITY_HARD_VARIANT_COUNT, offset=0, split="held_out", difficulty="hard")
+    train = easy_train + medium_train
+    validation = easy_validation + medium_validation
+    held_out = hard_held_out
     return {
-        "seen": easy_seen + medium_seen,
-        "unseen": easy_unseen + medium_unseen + hard_unseen,
+        "train": train,
+        "validation": validation,
+        "held_out": held_out,
+        "seen": train,
+        "unseen": validation + held_out,
+        "split_counts": {
+            "train": len(train),
+            "validation": len(validation),
+            "held_out": len(held_out),
+        },
         "by_difficulty": {
-            "easy": {"seen": easy_seen, "unseen": easy_unseen},
-            "medium": {"seen": medium_seen, "unseen": medium_unseen},
-            "hard": {"seen": [], "unseen": hard_unseen},
+            "easy": {"train": easy_train, "validation": easy_validation, "held_out": [], "seen": easy_train, "unseen": easy_validation},
+            "medium": {"train": medium_train, "validation": medium_validation, "held_out": [], "seen": medium_train, "unseen": medium_validation},
+            "hard": {"train": [], "validation": [], "held_out": hard_held_out, "seen": [], "unseen": hard_held_out},
         },
     }
 
@@ -2535,7 +2596,10 @@ def _sanity_seen_variant_training_rows(engine_alias: str, before_model_path: Pat
     if not case:
         return {"case": None, "before_exact": None, "rows": [], "seen_variants": [], "curriculum": {}}
     curriculum = _sanity_curriculum_variants(case)
-    seen_variants = list(curriculum.get("seen") or [])
+    train_variants = list(curriculum.get("train") or curriculum.get("seen") or [])
+    old_move = str((before_exact or {}).get("top1") or "")
+    invariance_group_id = _sanity_invariance_group_id(case)
+    exact_hard_negatives = _legal_sanity_hard_negatives(case["fen"], case["side"], case["expected_move"], old_move=old_move)
     rows = [
         {
             "fen": case["fen"],
@@ -2551,29 +2615,41 @@ def _sanity_seen_variant_training_rows(engine_alias: str, before_model_path: Pat
             "variant_difficulty": "exact",
             "normalized_fen_hash": _normalized_fen_hash(str(case.get("fen") or "")),
             "expected_move": case["expected_move"],
+            "hard_negatives": exact_hard_negatives,
+            "invariance_group_id": invariance_group_id,
+            "pairwise_role": "positive_anchor",
             "curriculum_stage": "exact_fen",
         }
     ]
-    for variant in seen_variants:
+    for variant in train_variants:
+        hard_negatives = _legal_sanity_hard_negatives(
+            variant["fen"],
+            variant["side"],
+            variant["expected_move"],
+            old_move=old_move,
+        )
         rows.append(
             {
                 "fen": variant["fen"],
                 "side": variant["side"],
                 "move_uci": variant["expected_move"],
                 "target": 1.0,
-                "weight": 1.35 if variant.get("variant_difficulty") == "easy" else 1.2,
+                "weight": 1.45 if variant.get("variant_difficulty") == "easy" else 1.3,
                 "source": "sanity_curriculum_variant_replay",
                 "category": "mistake_retention",
                 "case_id": case.get("case_id"),
                 "variant_id": variant.get("variant_id"),
-                "variant_split": "seen",
+                "variant_split": "train",
                 "variant_difficulty": variant.get("variant_difficulty"),
                 "normalized_fen_hash": variant.get("normalized_fen_hash"),
                 "expected_move": variant["expected_move"],
+                "hard_negatives": hard_negatives,
+                "invariance_group_id": invariance_group_id,
+                "pairwise_role": "positive_variant",
                 "curriculum_stage": f"{variant.get('variant_difficulty')}_seen_variant",
             }
         )
-    return {"case": case, "before_exact": before_exact, "rows": rows, "seen_variants": seen_variants, "curriculum": curriculum}
+    return {"case": case, "before_exact": before_exact, "rows": rows, "seen_variants": train_variants, "train_variants": train_variants, "curriculum": curriculum}
 
 
 def _evaluate_sanity_learning_position(engine_alias: str, model_path: Path, case: dict) -> dict:
@@ -2721,6 +2797,44 @@ def _exp4_decision_breakdown(model_path: Path, case: dict, *, old_move: str = ""
     return _engine_decision_breakdown("exp4", model_path, case, old_move=old_move)
 
 
+def _policy_embedding_similarity(exact_raw: dict, variant_raw_rows: list[dict]) -> dict:
+    if not exact_raw.get("supported") or not variant_raw_rows:
+        return {"supported": False, "avg_similarity": None, "cases": []}
+    exact_logit = float(exact_raw.get("expected_logit") or 0.0)
+    cases = []
+    for row in variant_raw_rows:
+        if not row.get("supported"):
+            continue
+        delta = abs(float(row.get("expected_logit") or 0.0) - exact_logit)
+        cases.append(
+            {
+                "case_id": row.get("case_id"),
+                "expected_rank": row.get("expected_rank"),
+                "expected_logit": row.get("expected_logit"),
+                "logit_delta_from_exact": round(delta, 8),
+                "similarity": round(1.0 / (1.0 + delta), 4),
+            }
+        )
+    if not cases:
+        return {"supported": False, "avg_similarity": None, "cases": []}
+    return {
+        "supported": True,
+        "avg_similarity": round(sum(float(row["similarity"]) for row in cases) / max(1, len(cases)), 4),
+        "cases": cases,
+    }
+
+
+def _failed_feature_groups(failed_cases: list[dict]) -> list[dict]:
+    counts: dict[str, int] = {}
+    for case in failed_cases:
+        for feature in case.get("blocking_features") or []:
+            counts[str(feature)] = counts.get(str(feature), 0) + 1
+    return [
+        {"blocking_feature": feature, "count": count}
+        for feature, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    ]
+
+
 def _evaluate_sanity_learning_probe(engine_alias: str, before_model_path: Path, after_model_path: Path, samples: list[dict]) -> dict:
     case, before_exact = _select_sanity_learning_case(engine_alias, before_model_path, samples)
     if not case:
@@ -2829,6 +2943,8 @@ def _evaluate_sanity_learning_probe(engine_alias: str, before_model_path: Path, 
     after_seen_variants = [_evaluate_sanity_learning_position(engine_alias, after_model_path, variant) for variant in seen_variants]
     before_unseen_variants = [_evaluate_sanity_learning_position(engine_alias, before_model_path, variant) for variant in unseen_variants]
     after_unseen_variants = [_evaluate_sanity_learning_position(engine_alias, after_model_path, variant) for variant in unseen_variants]
+    raw_seen_before = [_evaluate_engine_raw_policy_position(engine_alias, before_model_path, variant, old_move=old_move) for variant in seen_variants]
+    raw_unseen_before = [_evaluate_engine_raw_policy_position(engine_alias, before_model_path, variant, old_move=old_move) for variant in unseen_variants]
     raw_seen_after = [_evaluate_engine_raw_policy_position(engine_alias, after_model_path, variant, old_move=old_move) for variant in seen_variants]
     raw_unseen_after = [_evaluate_engine_raw_policy_position(engine_alias, after_model_path, variant, old_move=old_move) for variant in unseen_variants]
     seen_hits = sum(1 for row in after_seen_variants if row.get("expected_is_top1"))
@@ -2843,6 +2959,8 @@ def _evaluate_sanity_learning_probe(engine_alias: str, before_model_path: Path, 
     unseen_variant_pass_rate = round(unseen_hits / max(1, unseen_count), 4)
     raw_policy_generalization_rate = round((raw_seen_hits + raw_unseen_hits) / max(1, seen_count + unseen_count), 4)
     final_decision_generalization_rate = round((seen_hits + unseen_hits) / max(1, seen_count + unseen_count), 4)
+    raw_policy_unseen_generalization_rate = round(raw_unseen_hits / max(1, unseen_count), 4)
+    final_decision_unseen_generalization_rate = unseen_variant_pass_rate
     exact_learned = bool(after_exact.get("expected_is_top1"))
     seen_passed = bool(seen_count > 0 and seen_variant_pass_rate >= SANITY_SEEN_VARIANT_PASS_THRESHOLD)
     unseen_passed = bool(unseen_count > 0 and unseen_variant_pass_rate >= SANITY_UNSEEN_VARIANT_PASS_THRESHOLD)
@@ -2893,6 +3011,83 @@ def _evaluate_sanity_learning_probe(engine_alias: str, before_model_path: Path, 
                 "watched_moves": breakdown.get("watched_moves") or [],
             }
         )
+    failed_unseen_cases = []
+    for variant, final_row, raw_row in zip(unseen_variants, after_unseen_variants, raw_unseen_after):
+        if final_row.get("expected_is_top1"):
+            continue
+        blocking_features = []
+        difficulty = str(variant.get("variant_difficulty") or "")
+        if difficulty == "hard":
+            blocking_features.append("hard_held_out_multi_pair_variation")
+        elif difficulty == "medium":
+            blocking_features.append("medium_two_pair_variation")
+        elif difficulty == "easy":
+            blocking_features.append("easy_single_pair_variation")
+        similarity = float(variant.get("board_embedding_similarity") or 0.0)
+        if similarity < 0.9:
+            blocking_features.append("low_board_embedding_similarity")
+        if float(raw_row.get("margin_vs_old_move") or 0.0) <= 0.0:
+            blocking_features.append("expected_policy_margin_not_positive")
+        if int(raw_row.get("expected_rank") or 99) > 3:
+            blocking_features.append("expected_not_in_raw_top3")
+        failed_unseen_cases.append(
+            {
+                "case_id": variant.get("case_id"),
+                "variant_split": variant.get("variant_split"),
+                "variant_difficulty": difficulty,
+                "fen": variant.get("fen"),
+                "variation_moves": variant.get("variation_moves") or [],
+                "expected_move": variant.get("expected_move"),
+                "final_top1": final_row.get("top1"),
+                "final_top3": final_row.get("top3"),
+                "raw_policy_top1": raw_row.get("raw_policy_top1"),
+                "raw_policy_top3": raw_row.get("raw_policy_top3"),
+                "expected_rank": raw_row.get("expected_rank"),
+                "expected_margin_vs_old_move": raw_row.get("margin_vs_old_move"),
+                "board_embedding_similarity": variant.get("board_embedding_similarity"),
+                "blocking_features": blocking_features,
+            }
+        )
+    failed_feature_groups = _failed_feature_groups(failed_unseen_cases)
+    policy_embedding_before = _policy_embedding_similarity(raw_before, raw_seen_before + raw_unseen_before)
+    policy_embedding_after = _policy_embedding_similarity(raw_after, raw_seen_after + raw_unseen_after)
+    hard_negative_margin_cases = []
+    for variant, raw_row in zip([case] + seen_variants + unseen_variants, [raw_after] + raw_seen_after + raw_unseen_after):
+        hard_negatives = _legal_sanity_hard_negatives(
+            str(variant.get("fen") or ""),
+            str(variant.get("side") or ""),
+            str(variant.get("expected_move") or ""),
+            old_move=old_move,
+        )
+        margins = []
+        for negative in hard_negatives:
+            negative_row = _evaluate_engine_raw_policy_position(
+                engine_alias,
+                after_model_path,
+                {**variant, "expected_move": negative},
+                old_move=str(variant.get("expected_move") or ""),
+            )
+            if negative_row.get("supported") and raw_row.get("supported"):
+                margins.append(
+                    {
+                        "hard_negative": negative,
+                        "expected_vs_hard_negative_margin": round(
+                            float(raw_row.get("expected_logit") or 0.0) - float(negative_row.get("expected_logit") or 0.0),
+                            8,
+                        ),
+                    }
+                )
+        hard_negative_margin_cases.append(
+            {
+                "case_id": variant.get("case_id"),
+                "variant_split": variant.get("variant_split") or "exact",
+                "variant_difficulty": variant.get("variant_difficulty") or "exact",
+                "expected_move": variant.get("expected_move"),
+                "expected_rank": raw_row.get("expected_rank"),
+                "expected_margin_vs_old_move": raw_row.get("margin_vs_old_move"),
+                "hard_negative_margins": margins,
+            }
+        )
     if generalized:
         result_kind = "generalized_to_variants"
         explanation = "模型修正原始 FEN，且 seen/unseen 相似變體都達到泛化門檻。"
@@ -2933,6 +3128,8 @@ def _evaluate_sanity_learning_probe(engine_alias: str, before_model_path: Path, 
         "curriculum": curriculum,
         "raw_policy_generalization_rate": raw_policy_generalization_rate,
         "final_decision_generalization_rate": final_decision_generalization_rate,
+        "raw_policy_unseen_generalization_rate": raw_policy_unseen_generalization_rate,
+        "final_decision_unseen_generalization_rate": final_decision_unseen_generalization_rate,
         "variant_count": variant_count,
         "variant_top1_hits": variant_top1_hits,
         "variant_top1_rate": round(variant_top1_hits / max(1, variant_count), 4),
@@ -2955,6 +3152,29 @@ def _evaluate_sanity_learning_probe(engine_alias: str, before_model_path: Path, 
             "raw_policy_after": raw_unseen_after,
         },
         "feature_generalization_debug": {
+            "split": {
+                "train": len(curriculum.get("train") or []),
+                "validation": len(curriculum.get("validation") or []),
+                "held_out": len(curriculum.get("held_out") or []),
+                "held_out_never_trained": True,
+            },
+            "embedding_similarity": {
+                "static_board_similarity_seen_avg": round(
+                    sum(float(row.get("board_embedding_similarity") or 0.0) for row in seen_variants) / max(1, len(seen_variants)),
+                    4,
+                ),
+                "static_board_similarity_unseen_avg": round(
+                    sum(float(row.get("board_embedding_similarity") or 0.0) for row in unseen_variants) / max(1, len(unseen_variants)),
+                    4,
+                ),
+                "policy_embedding_similarity_before": policy_embedding_before,
+                "policy_embedding_similarity_after": policy_embedding_after,
+                "avg_similarity_delta": (
+                    round(float(policy_embedding_after.get("avg_similarity") or 0.0) - float(policy_embedding_before.get("avg_similarity") or 0.0), 4)
+                    if policy_embedding_before.get("avg_similarity") is not None and policy_embedding_after.get("avg_similarity") is not None
+                    else None
+                ),
+            },
             "board_embedding_similarity": {
                 "seen_avg": round(
                     sum(float(row.get("board_embedding_similarity") or 0.0) for row in seen_variants) / max(1, len(seen_variants)),
@@ -2987,6 +3207,23 @@ def _evaluate_sanity_learning_probe(engine_alias: str, before_model_path: Path, 
                 for row in raw_seen_after + raw_unseen_after
             ],
             "final_decision_blockers": blocker_rows,
+            "failed_unseen_cases": failed_unseen_cases,
+            "failed_feature_groups": failed_feature_groups,
+            "expected_vs_hard_negative_margin": {
+                "cases": hard_negative_margin_cases,
+                "min_margin": (
+                    round(
+                        min(
+                            float(item.get("expected_vs_hard_negative_margin") or 0.0)
+                            for row in hard_negative_margin_cases
+                            for item in row.get("hard_negative_margins") or []
+                        ),
+                        8,
+                    )
+                    if any(row.get("hard_negative_margins") for row in hard_negative_margin_cases)
+                    else None
+                ),
+            },
         },
         "memorized_exact_fen": bool(result_kind == "memorized_exact_fen"),
         "generalized_to_variants": bool(result_kind == "generalized_to_variants"),
@@ -3711,6 +3948,12 @@ def _promotion_gate_summary(summary: dict) -> dict:
                 reasons.append(f"sanity unseen variants missing at trusted={trusted}")
             elif float(sanity_probe.get("unseen_variant_pass_rate") or 0.0) < SANITY_UNSEEN_VARIANT_PASS_THRESHOLD:
                 reasons.append(f"sanity unseen variant pass rate below threshold at trusted={trusted}")
+            if float(sanity_probe.get("raw_policy_unseen_generalization_rate") or 0.0) < SANITY_UNSEEN_VARIANT_PASS_THRESHOLD:
+                reasons.append(f"sanity raw policy unseen generalization below threshold at trusted={trusted}")
+            if float(sanity_probe.get("final_decision_unseen_generalization_rate") or 0.0) < SANITY_UNSEEN_VARIANT_PASS_THRESHOLD:
+                reasons.append(f"sanity final decision unseen generalization below threshold at trusted={trusted}")
+            if float(sanity_probe.get("hard_unseen_pass_rate") or 0.0) <= 0.0:
+                reasons.append(f"sanity hard held-out pass rate is zero at trusted={trusted}")
             if float(sanity_probe.get("final_decision_generalization_rate") or 0.0) < SANITY_FINAL_DECISION_GENERALIZATION_THRESHOLD:
                 reasons.append(f"sanity final decision generalization below threshold at trusted={trusted}")
             prior_retention = sanity_probe.get("prior_learned_case_retention") or {}
@@ -3918,6 +4161,8 @@ def _root_engine_row(summary: dict) -> dict:
                 "variant_difficulty_scores": (checkpoint.get("sanity_learning_probe") or {}).get("variant_difficulty_scores") or {},
                 "raw_policy_generalization_rate": (checkpoint.get("sanity_learning_probe") or {}).get("raw_policy_generalization_rate"),
                 "final_decision_generalization_rate": (checkpoint.get("sanity_learning_probe") or {}).get("final_decision_generalization_rate"),
+                "raw_policy_unseen_generalization_rate": (checkpoint.get("sanity_learning_probe") or {}).get("raw_policy_unseen_generalization_rate"),
+                "final_decision_unseen_generalization_rate": (checkpoint.get("sanity_learning_probe") or {}).get("final_decision_unseen_generalization_rate"),
                 "raw_policy_learning": (checkpoint.get("sanity_learning_probe") or {}).get("raw_policy_learning") or {},
                 "final_decision_learning": (checkpoint.get("sanity_learning_probe") or {}).get("final_decision_learning") or {},
                 "prior_learned_case_retention": (checkpoint.get("sanity_learning_probe") or {}).get("prior_learned_case_retention") or {},
@@ -4271,6 +4516,8 @@ def _root_report_lines(root_summary: dict, summaries: list[dict]) -> list[str]:
                 f"hard_unseen=`{probe.get('hard_unseen_pass_rate')}` "
                 f"raw_policy_generalization_rate=`{probe.get('raw_policy_generalization_rate')}` "
                 f"final_decision_generalization_rate=`{probe.get('final_decision_generalization_rate')}` "
+                f"raw_policy_unseen_generalization_rate=`{probe.get('raw_policy_unseen_generalization_rate')}` "
+                f"final_decision_unseen_generalization_rate=`{probe.get('final_decision_unseen_generalization_rate')}` "
                 f"variants=`{probe.get('variant_top1_hits')}/{probe.get('variant_count')}` "
                 f"learning_signal=`{probe.get('learning_signal')}` reason=`{probe.get('learning_signal_reason')}`"
             )
@@ -4453,6 +4700,8 @@ def _report_consistency_issues(root_summary: dict, engine_summaries: list[dict],
                 "variant_difficulty_scores": (checkpoint.get("sanity_learning_probe") or {}).get("variant_difficulty_scores") or {},
                 "raw_policy_generalization_rate": (checkpoint.get("sanity_learning_probe") or {}).get("raw_policy_generalization_rate"),
                 "final_decision_generalization_rate": (checkpoint.get("sanity_learning_probe") or {}).get("final_decision_generalization_rate"),
+                "raw_policy_unseen_generalization_rate": (checkpoint.get("sanity_learning_probe") or {}).get("raw_policy_unseen_generalization_rate"),
+                "final_decision_unseen_generalization_rate": (checkpoint.get("sanity_learning_probe") or {}).get("final_decision_unseen_generalization_rate"),
                 "raw_policy_learning": (checkpoint.get("sanity_learning_probe") or {}).get("raw_policy_learning") or {},
                 "final_decision_learning": (checkpoint.get("sanity_learning_probe") or {}).get("final_decision_learning") or {},
                 "prior_learned_case_retention": (checkpoint.get("sanity_learning_probe") or {}).get("prior_learned_case_retention") or {},
@@ -5228,6 +5477,8 @@ def _write_engine_report(engine_dir: Path, summary: dict) -> None:
                         f"hard_unseen=`{sanity_probe.get('hard_unseen_pass_rate')}` "
                         f"raw_policy_generalization_rate=`{sanity_probe.get('raw_policy_generalization_rate')}` "
                         f"final_decision_generalization_rate=`{sanity_probe.get('final_decision_generalization_rate')}` "
+                        f"raw_policy_unseen_generalization_rate=`{sanity_probe.get('raw_policy_unseen_generalization_rate')}` "
+                        f"final_decision_unseen_generalization_rate=`{sanity_probe.get('final_decision_unseen_generalization_rate')}` "
                         f"variant_top1_hits=`{sanity_probe.get('variant_top1_hits')}` "
                         f"variant_count=`{sanity_probe.get('variant_count')}` "
                         f"reason=`{sanity_probe.get('learning_signal_reason')}`"
@@ -5270,6 +5521,28 @@ def _write_engine_report(engine_dir: Path, summary: dict) -> None:
                             f"blocked_by_search_or_static_eval=`{blocker.get('blocked_by_search_or_static_eval')}` "
                             f"chosen_reason=`{blocker.get('chosen_reason')}`"
                         )
+                    failed_unseen = ((sanity_probe.get("feature_generalization_debug") or {}).get("failed_unseen_cases") or [])[:5]
+                    for failed in failed_unseen:
+                        lines.append(
+                            f"- failed_unseen_case `{failed.get('case_id')}` "
+                            f"difficulty=`{failed.get('variant_difficulty')}` expected=`{failed.get('expected_move')}` "
+                            f"final_top1=`{failed.get('final_top1')}` raw_top3=`{failed.get('raw_policy_top3')}` "
+                            f"expected_rank=`{failed.get('expected_rank')}` margin=`{failed.get('expected_margin_vs_old_move')}` "
+                            f"blocking_features=`{','.join(failed.get('blocking_features') or [])}`"
+                        )
+                    hard_margin = ((sanity_probe.get("feature_generalization_debug") or {}).get("expected_vs_hard_negative_margin") or {})
+                    if hard_margin:
+                        lines.append(f"- expected_vs_hard_negative_min_margin: `{hard_margin.get('min_margin')}`")
+                    embedding = ((sanity_probe.get("feature_generalization_debug") or {}).get("embedding_similarity") or {})
+                    if embedding:
+                        lines.append(
+                            f"- embedding_similarity: before=`{(embedding.get('policy_embedding_similarity_before') or {}).get('avg_similarity')}` "
+                            f"after=`{(embedding.get('policy_embedding_similarity_after') or {}).get('avg_similarity')}` "
+                            f"delta=`{embedding.get('avg_similarity_delta')}`"
+                        )
+                    feature_groups = ((sanity_probe.get("feature_generalization_debug") or {}).get("failed_feature_groups") or [])[:5]
+                    for group in feature_groups:
+                        lines.append(f"- failed_feature_group `{group.get('blocking_feature')}` count=`{group.get('count')}`")
             lines.append("- hash_note: hash_changed only proves model bytes changed; it is not accepted as learning success without probe or benchmark evidence.")
             benchmark_timeline = (summary.get("before_after_eval") or {}).get("benchmark_timeline") or []
             if benchmark_timeline:
@@ -5665,9 +5938,18 @@ def _run_quick_retrain_checkpoint(
         dataset_result["accepted_rows"] = len(accepted_rows)
         dataset_result["dataset_sha256"] = _sha256_file(checkpoint_dir / "train_dataset.jsonl")
         dataset_result["sanity_curriculum_rows"] = len(variant_rows)
-        dataset_result["sanity_seen_variant_rows"] = len([row for row in variant_rows if str(row.get("variant_split") or "") == "seen"])
+        dataset_result["sanity_train_variant_rows"] = len([row for row in variant_rows if str(row.get("variant_split") or "") == "train"])
+        dataset_result["sanity_seen_variant_rows"] = dataset_result["sanity_train_variant_rows"]
         dataset_result["sanity_exact_rows"] = len([row for row in variant_rows if str(row.get("variant_split") or "") == "exact"])
-        dataset_result["sanity_seen_variant_hashes"] = [str(row.get("normalized_fen_hash") or "") for row in variant_rows]
+        dataset_result["sanity_train_variant_hashes"] = [str(row.get("normalized_fen_hash") or "") for row in variant_rows if str(row.get("variant_split") or "") == "train"]
+        dataset_result["sanity_seen_variant_hashes"] = dataset_result["sanity_train_variant_hashes"]
+        dataset_result["sanity_hard_negative_count"] = sum(len(row.get("hard_negatives") or []) for row in variant_rows)
+        dataset_result["sanity_supervised_split"] = {
+            "train": len((variant_training.get("curriculum") or {}).get("train") or []),
+            "validation": len((variant_training.get("curriculum") or {}).get("validation") or []),
+            "held_out": len((variant_training.get("curriculum") or {}).get("held_out") or []),
+            "held_out_in_training": False,
+        }
     move_agreement_before = _evaluate_move_agreement(engine_alias, target_model_path, evaluation_samples)
     fixed_probes_before = _evaluate_fixed_probe_positions(engine_alias, target_model_path)
     replay_loss_before = _quick_replay_loss(engine_alias, target_model_path, accepted_rows)
@@ -5790,6 +6072,15 @@ def _run_quick_retrain_checkpoint(
     elif float(sanity_learning_probe.get("unseen_variant_pass_rate") or 0.0) < SANITY_UNSEEN_VARIANT_PASS_THRESHOLD:
         checkpoint_gate["passed"] = False
         checkpoint_gate.setdefault("reasons", []).append("sanity unseen variant pass rate below threshold")
+    if float(sanity_learning_probe.get("raw_policy_unseen_generalization_rate") or 0.0) < SANITY_UNSEEN_VARIANT_PASS_THRESHOLD:
+        checkpoint_gate["passed"] = False
+        checkpoint_gate.setdefault("reasons", []).append("sanity raw policy unseen generalization below threshold")
+    if float(sanity_learning_probe.get("final_decision_unseen_generalization_rate") or 0.0) < SANITY_UNSEEN_VARIANT_PASS_THRESHOLD:
+        checkpoint_gate["passed"] = False
+        checkpoint_gate.setdefault("reasons", []).append("sanity final decision unseen generalization below threshold")
+    if float(sanity_learning_probe.get("hard_unseen_pass_rate") or 0.0) <= 0.0:
+        checkpoint_gate["passed"] = False
+        checkpoint_gate.setdefault("reasons", []).append("sanity hard held-out pass rate is zero")
     if (sanity_learning_probe.get("final_decision_learning") or {}).get("learning_signal") is False:
         checkpoint_gate["passed"] = False
         checkpoint_gate.setdefault("reasons", []).append("sanity final decision learning failed")
@@ -5825,7 +6116,16 @@ def _run_quick_retrain_checkpoint(
             "case": variant_training.get("case") or {},
             "before_exact": variant_training.get("before_exact") or {},
             "curriculum_rows_added": len(variant_rows),
-            "seen_variants_added": len([row for row in variant_rows if str(row.get("variant_split") or "") == "seen"]),
+            "train_variants_added": len([row for row in variant_rows if str(row.get("variant_split") or "") == "train"]),
+            "seen_variants_added": len([row for row in variant_rows if str(row.get("variant_split") or "") == "train"]),
+            "hard_negative_count": sum(len(row.get("hard_negatives") or []) for row in variant_rows),
+            "split": {
+                "train": len((variant_training.get("curriculum") or {}).get("train") or []),
+                "validation": len((variant_training.get("curriculum") or {}).get("validation") or []),
+                "held_out": len((variant_training.get("curriculum") or {}).get("held_out") or []),
+                "held_out_in_training": False,
+            },
+            "train_variants": variant_training.get("train_variants") or [],
             "seen_variants": variant_training.get("seen_variants") or [],
             "curriculum": variant_training.get("curriculum") or {},
             "rows": variant_rows,

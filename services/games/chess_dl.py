@@ -54,6 +54,8 @@ _CONTRASTIVE_NEGATIVE_TARGET = -0.45
 _CONTRASTIVE_MAX_NEGATIVES = 12
 _MOVE_MEMORY_LEARNING_RATE = 0.22
 _MAX_MOVE_MEMORY_BIAS = 1.4
+_INVARIANCE_MEMORY_LEARNING_RATE = 0.08
+_MAX_INVARIANCE_MEMORY_BIAS = 0.85
 _POLICY_OVERRIDE_MIN_SCORE = 0.95
 _POLICY_OVERRIDE_MIN_MARGIN = 0.20
 _FUSION_MODES = {
@@ -109,6 +111,7 @@ def experiment_dl_model_template() -> dict:
         "w3": [rng.uniform(-0.06, 0.06) for _ in range(_HIDDEN2_SIZE)],
         "b3": rng.uniform(-0.015, 0.015),
         "move_score_memory": {},
+        "policy_invariance_memory": {},
         "sample_count": 0,
         "replay_size": 0,
         "updated_at": _now(),
@@ -176,6 +179,11 @@ def normalize_experiment_dl_model_payload(model: dict) -> dict | None:
             for key, value in (model.get("move_score_memory") or {}).items()
             if isinstance(key, str)
         },
+        "policy_invariance_memory": {
+            str(key): _clip(float(value), -_MAX_INVARIANCE_MEMORY_BIAS, _MAX_INVARIANCE_MEMORY_BIAS)
+            for key, value in (model.get("policy_invariance_memory") or {}).items()
+            if isinstance(key, str)
+        },
         "sample_count": max(0, int(model.get("sample_count") or 0)),
         "replay_size": max(0, int(model.get("replay_size") or 0)),
         "updated_at": str(model.get("updated_at") or _now()),
@@ -237,11 +245,33 @@ def _move_memory_bias(model: dict, board: chess.Board, side: str, move_uci: str)
         return 0.0
 
 
+def _invariance_memory_key(side: str, move_uci: str) -> str:
+    return f"{side}|{move_uci}"
+
+
+def _invariance_memory_bias(model: dict, side: str, move_uci: str) -> float:
+    try:
+        return float((model.get("policy_invariance_memory") or {}).get(_invariance_memory_key(side, move_uci)) or 0.0)
+    except Exception:
+        return 0.0
+
+
 def _update_move_memory(model: dict, board: chess.Board, side: str, move: chess.Move, target: float) -> None:
     memory = model.setdefault("move_score_memory", {})
     key = _move_memory_key(board, side, move.uci())
     current = float(memory.get(key) or 0.0)
     memory[key] = _clip(current + _MOVE_MEMORY_LEARNING_RATE * float(target), -_MAX_MOVE_MEMORY_BIAS, _MAX_MOVE_MEMORY_BIAS)
+
+
+def _update_invariance_memory(model: dict, side: str, move: chess.Move, target: float) -> None:
+    memory = model.setdefault("policy_invariance_memory", {})
+    key = _invariance_memory_key(side, move.uci())
+    current = float(memory.get(key) or 0.0)
+    memory[key] = _clip(
+        current + _INVARIANCE_MEMORY_LEARNING_RATE * float(target),
+        -_MAX_INVARIANCE_MEMORY_BIAS,
+        _MAX_INVARIANCE_MEMORY_BIAS,
+    )
 
 
 def _resolve_search_profile(profile: str | None) -> dict:
@@ -361,7 +391,13 @@ def _score_candidate_move(board: chess.Board, move: chess.Move, side: str, model
     try:
         features = _candidate_features(before, move, board, side)
         dl_score, _hidden1, _hidden2 = _forward(model, features)
-        dl_score = _clip(dl_score + _move_memory_bias(model, before, side, move.uci()), -1.0, 1.0)
+        dl_score = _clip(
+            dl_score
+            + _move_memory_bias(model, before, side, move.uci())
+            + _invariance_memory_bias(model, side, move.uci()),
+            -1.0,
+            1.0,
+        )
         heuristic = _heuristic_after_move(board, move, ai_color, captured_piece.piece_type if captured_piece else None)
         score = _blend_score(dl_score, heuristic, int(model.get("sample_count") or 0))
         if board.is_checkmate():
@@ -690,8 +726,10 @@ def _load_replay_entries(replay_path: Path) -> list[dict]:
             "move_uci": str(item.get("move_uci") or "").lower(),
             "side": str(item.get("side") or "").lower(),
             "target": _clip(target, -1.0, 1.0),
-            "weight": _clip(weight, 0.1, 2.0),
+            "weight": _clip(weight, 0.1, 3.0),
             "source": str(item.get("source") or "game"),
+            "hard_negatives": [str(value).strip().lower() for value in (item.get("hard_negatives") or []) if str(value).strip()],
+            "invariance_group_id": str(item.get("invariance_group_id") or "").strip(),
         })
     return entries[-_REPLAY_CAPACITY:]
 
@@ -716,8 +754,30 @@ def _replace_replay_entries(replay_path: Path, samples: list[dict]) -> int:
     return len(entries)
 
 
+def _legal_hard_negative_moves(board: chess.Board, expected_move: chess.Move, hard_negatives: list[str]) -> list[chess.Move]:
+    moves: list[chess.Move] = []
+    seen: set[str] = set()
+    for item in hard_negatives or []:
+        try:
+            move = chess.Move.from_uci(str(item or "").strip().lower())
+        except Exception:
+            continue
+        if move == expected_move or move not in board.legal_moves or move.uci() in seen:
+            continue
+        seen.add(move.uci())
+        moves.append(move)
+    return moves
+
+
 def _train_from_replay(model: dict, replay_entries: list[dict]) -> dict:
-    stats = {"positive_updates": 0, "contrastive_negative_updates": 0, "expected_reinforcement_updates": 0}
+    stats = {
+        "positive_updates": 0,
+        "contrastive_negative_updates": 0,
+        "expected_reinforcement_updates": 0,
+        "hard_negative_updates": 0,
+        "invariance_positive_updates": 0,
+        "invariance_negative_updates": 0,
+    }
     if not replay_entries:
         return stats
     batch_size = min(_BATCH_SIZE, len(replay_entries))
@@ -740,15 +800,24 @@ def _train_from_replay(model: dict, replay_entries: list[dict]) -> dict:
                 continue
             if expected_move not in board.legal_moves:
                 continue
-            negatives = [
+            hard_negatives = _legal_hard_negative_moves(
+                board,
+                expected_move,
+                list(sample.get("hard_negatives") or []),
+            )
+            ordinary_negatives = [
                 move
                 for move in sorted(board.legal_moves, key=lambda item: item.uci())
                 if move != expected_move
-            ][: _CONTRASTIVE_MAX_NEGATIVES]
+            ]
+            negatives = (hard_negatives + [move for move in ordinary_negatives if move not in hard_negatives])[: _CONTRASTIVE_MAX_NEGATIVES]
             for negative in negatives:
                 negative_after = board.copy(stack=False)
                 negative_after.push(negative)
                 _update_move_memory(model, board, side, negative, _CONTRASTIVE_NEGATIVE_TARGET)
+                if sample.get("invariance_group_id"):
+                    _update_invariance_memory(model, side, negative, _CONTRASTIVE_NEGATIVE_TARGET)
+                    stats["invariance_negative_updates"] += 1
                 _train_single_sample(
                     model,
                     _candidate_features(board, negative, negative_after, side),
@@ -756,14 +825,29 @@ def _train_from_replay(model: dict, replay_entries: list[dict]) -> dict:
                     0.65,
                 )
                 stats["contrastive_negative_updates"] += 1
+                if negative in hard_negatives:
+                    stats["hard_negative_updates"] += 1
             for _reinforce in range(8):
                 _update_move_memory(model, board, side, expected_move, 1.0)
+                if sample.get("invariance_group_id"):
+                    _update_invariance_memory(model, side, expected_move, 1.0)
+                    stats["invariance_positive_updates"] += 1
                 _train_single_sample(model, sample["features"], 1.0, 0.8)
                 stats["expected_reinforcement_updates"] += 1
     return stats
 
 
-def build_experiment_dl_sample_from_position(*, fen: str, move_uci: str, side: str | None = None, target: float = 1.0, weight: float = 1.0, source: str = "external") -> dict | None:
+def build_experiment_dl_sample_from_position(
+    *,
+    fen: str,
+    move_uci: str,
+    side: str | None = None,
+    target: float = 1.0,
+    weight: float = 1.0,
+    source: str = "external",
+    hard_negatives: list[str] | None = None,
+    invariance_group_id: str | None = None,
+) -> dict | None:
     fen_text = str(fen or "").strip()
     move_text = str(move_uci or "").strip().lower()
     if not fen_text or not move_text:
@@ -795,6 +879,8 @@ def build_experiment_dl_sample_from_position(*, fen: str, move_uci: str, side: s
         "target": _clip(float(target), -1.0, 1.0),
         "weight": _clip(float(weight), 0.1, 3.0),
         "source": str(source or "external"),
+        "hard_negatives": [str(item).strip().lower() for item in (hard_negatives or []) if str(item).strip()],
+        "invariance_group_id": str(invariance_group_id or "").strip(),
     }
 
 
@@ -812,6 +898,8 @@ def normalize_experiment_dl_replay_sample(sample: dict) -> dict | None:
             target=float(sample.get("target", 1.0) or 0.0),
             weight=float(sample.get("weight", 1.0) or 1.0),
             source=str(sample.get("source") or "external"),
+            hard_negatives=list(sample.get("hard_negatives") or []),
+            invariance_group_id=str(sample.get("invariance_group_id") or ""),
         )
         return derived
     try:
@@ -827,6 +915,8 @@ def normalize_experiment_dl_replay_sample(sample: dict) -> dict | None:
         "target": _clip(target, -1.0, 1.0),
         "weight": _clip(weight, 0.1, 3.0),
         "source": str(sample.get("source") or "external"),
+        "hard_negatives": [str(item).strip().lower() for item in (sample.get("hard_negatives") or []) if str(item).strip()],
+        "invariance_group_id": str(sample.get("invariance_group_id") or "").strip(),
     }
 
 

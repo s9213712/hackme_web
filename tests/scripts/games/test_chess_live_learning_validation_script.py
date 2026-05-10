@@ -506,6 +506,13 @@ def test_sanity_learning_probe_requires_after_top1_and_variant_generalization(mo
     assert "final_decision_blockers" in result["feature_generalization_debug"]
     assert "raw_policy_generalization_rate" in result
     assert "final_decision_generalization_rate" in result
+    assert "raw_policy_unseen_generalization_rate" in result
+    assert "final_decision_unseen_generalization_rate" in result
+    assert result["feature_generalization_debug"]["split"]["held_out_never_trained"] is True
+    assert "failed_unseen_cases" in result["feature_generalization_debug"]
+    assert "failed_feature_groups" in result["feature_generalization_debug"]
+    assert "embedding_similarity" in result["feature_generalization_debug"]
+    assert "expected_vs_hard_negative_margin" in result["feature_generalization_debug"]
     assert "replay_loss" in result["not_learning_success_sources"]
     assert "hash_changed" in result["not_learning_success_sources"]
 
@@ -531,12 +538,21 @@ def test_sanity_variant_training_rows_record_seen_variant_evidence(monkeypatch):
     assert result["case"]["expected_move"] == "e7e5"
     assert result["rows"]
     assert any(row["variant_split"] == "exact" for row in result["rows"])
-    assert any(row["variant_split"] == "seen" for row in result["rows"])
+    assert any(row["variant_split"] == "train" for row in result["rows"])
     assert all(row["move_uci"] == "e7e5" for row in result["rows"])
     assert all(row["variant_id"] and row["normalized_fen_hash"] for row in result["rows"])
+    assert any(row["hard_negatives"] for row in result["rows"])
+    assert all(row["invariance_group_id"] == "black|e7e5" for row in result["rows"])
+    assert any(row["pairwise_role"] == "positive_variant" for row in result["rows"])
+    assert result["curriculum"]["train"]
+    assert result["curriculum"]["validation"]
+    assert result["curriculum"]["held_out"]
     assert result["curriculum"]["by_difficulty"]["easy"]["seen"]
     assert result["curriculum"]["by_difficulty"]["medium"]["seen"]
-    assert result["curriculum"]["by_difficulty"]["hard"]["unseen"]
+    assert result["curriculum"]["by_difficulty"]["hard"]["held_out"]
+    trained_hashes = {row["normalized_fen_hash"] for row in result["rows"]}
+    held_out_hashes = {row["normalized_fen_hash"] for row in result["curriculum"]["held_out"]}
+    assert trained_hashes.isdisjoint(held_out_hashes)
 
 
 def test_sanity_learning_probe_failed_when_after_top1_is_not_expected(monkeypatch):

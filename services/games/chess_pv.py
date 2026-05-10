@@ -46,6 +46,8 @@ _CONTRASTIVE_NEGATIVE_TARGET = -0.45
 _CONTRASTIVE_MAX_NEGATIVES = 32
 _MOVE_MEMORY_LEARNING_RATE = 0.22
 _MAX_MOVE_MEMORY_BIAS = 1.4
+_INVARIANCE_MEMORY_LEARNING_RATE = 0.08
+_MAX_INVARIANCE_MEMORY_BIAS = 0.85
 _POLICY_OVERRIDE_MIN_SCORE = 0.95
 _POLICY_OVERRIDE_MIN_MARGIN = 0.20
 _FUSION_MODES = {
@@ -109,6 +111,7 @@ def experiment_pv_model_template() -> dict:
         "policy_move_w": [rng.uniform(-0.05, 0.05) for _ in range(_MOVE_INPUT_SIZE)],
         "policy_b": rng.uniform(-0.01, 0.01),
         "policy_move_memory": {},
+        "policy_invariance_memory": {},
         "sample_count": 0,
         "updated_at": _now(),
     }
@@ -174,6 +177,11 @@ def normalize_experiment_pv_model_payload(model: dict) -> dict | None:
         "policy_move_memory": {
             str(key): _clip(float(value), -_MAX_MOVE_MEMORY_BIAS, _MAX_MOVE_MEMORY_BIAS)
             for key, value in (model.get("policy_move_memory") or {}).items()
+            if isinstance(key, str)
+        },
+        "policy_invariance_memory": {
+            str(key): _clip(float(value), -_MAX_INVARIANCE_MEMORY_BIAS, _MAX_INVARIANCE_MEMORY_BIAS)
+            for key, value in (model.get("policy_invariance_memory") or {}).items()
             if isinstance(key, str)
         },
         "sample_count": max(0, int(model.get("sample_count") or 0)),
@@ -257,9 +265,21 @@ def _move_memory_bias(model: dict, board: chess.Board, side: str, move_uci: str)
         return 0.0
 
 
+def _invariance_memory_key(side: str, move_uci: str) -> str:
+    return f"{side}|{move_uci}"
+
+
+def _invariance_memory_bias(model: dict, side: str, move_uci: str) -> float:
+    memory = model.get("policy_invariance_memory") or {}
+    try:
+        return float(memory.get(_invariance_memory_key(side, move_uci)) or 0.0)
+    except Exception:
+        return 0.0
+
+
 def _policy_score_for_move(model: dict, hidden: list[float], board: chess.Board, move: chess.Move, side: str) -> float:
     base = _policy_from_hidden(model, hidden, _candidate_move_features(board, move, side))
-    return _clip(base + _move_memory_bias(model, board, side, move.uci()), -1.0, 1.0)
+    return _clip(base + _move_memory_bias(model, board, side, move.uci()) + _invariance_memory_bias(model, side, move.uci()), -1.0, 1.0)
 
 
 def _update_move_memory(model: dict, board: chess.Board, side: str, move: chess.Move, target: float) -> None:
@@ -267,6 +287,17 @@ def _update_move_memory(model: dict, board: chess.Board, side: str, move: chess.
     key = _move_memory_key(board, side, move.uci())
     current = float(memory.get(key) or 0.0)
     memory[key] = _clip(current + _MOVE_MEMORY_LEARNING_RATE * float(target), -_MAX_MOVE_MEMORY_BIAS, _MAX_MOVE_MEMORY_BIAS)
+
+
+def _update_invariance_memory(model: dict, side: str, move: chess.Move, target: float) -> None:
+    memory = model.setdefault("policy_invariance_memory", {})
+    key = _invariance_memory_key(side, move.uci())
+    current = float(memory.get(key) or 0.0)
+    memory[key] = _clip(
+        current + _INVARIANCE_MEMORY_LEARNING_RATE * float(target),
+        -_MAX_INVARIANCE_MEMORY_BIAS,
+        _MAX_INVARIANCE_MEMORY_BIAS,
+    )
 
 
 def _policy_rank_rows(model: dict, board: chess.Board, side: str) -> list[dict]:
@@ -844,6 +875,8 @@ def build_experiment_pv_sample_from_position(
     target: float = 1.0,
     weight: float = 1.0,
     source: str = "external",
+    hard_negatives: list[str] | None = None,
+    invariance_group_id: str | None = None,
 ) -> dict | None:
     fen = str(fen or "").strip()
     move_uci = str(move_uci or "").strip().lower()
@@ -867,6 +900,8 @@ def build_experiment_pv_sample_from_position(
         "target": _clip(float(target), -1.0, 1.0),
         "weight": _clip(float(weight), 0.1, 3.0),
         "source": str(source or "external"),
+        "hard_negatives": [str(item).strip().lower() for item in (hard_negatives or []) if str(item).strip()],
+        "invariance_group_id": str(invariance_group_id or "").strip(),
     }
 
 
@@ -885,6 +920,8 @@ def normalize_experiment_pv_replay_sample(sample: dict) -> dict | None:
             target=float(sample.get("target", 1.0) or 0.0),
             weight=float(sample.get("weight", 1.0) or 1.0),
             source=str(sample.get("source") or "external"),
+            hard_negatives=list(sample.get("hard_negatives") or []),
+            invariance_group_id=str(sample.get("invariance_group_id") or ""),
         )
     try:
         target = float(sample.get("target"))
@@ -900,7 +937,24 @@ def normalize_experiment_pv_replay_sample(sample: dict) -> dict | None:
         "target": _clip(target, -1.0, 1.0),
         "weight": _clip(weight, 0.1, 3.0),
         "source": str(sample.get("source") or "external"),
+        "hard_negatives": [str(item).strip().lower() for item in (sample.get("hard_negatives") or []) if str(item).strip()],
+        "invariance_group_id": str(sample.get("invariance_group_id") or "").strip(),
     }
+
+
+def _legal_hard_negative_moves(board: chess.Board, expected_move: chess.Move, hard_negatives: list[str]) -> list[chess.Move]:
+    moves: list[chess.Move] = []
+    seen: set[str] = set()
+    for item in hard_negatives or []:
+        try:
+            move = chess.Move.from_uci(str(item or "").strip().lower())
+        except Exception:
+            continue
+        if move == expected_move or move not in board.legal_moves or move.uci() in seen:
+            continue
+        seen.add(move.uci())
+        moves.append(move)
+    return moves
 
 
 def _policy_probe_for_sample(model: dict, sample: dict) -> dict | None:
@@ -952,6 +1006,9 @@ def train_experiment_pv_from_replay_samples(samples: list[dict], *, model_path=N
     policy_probe_before = _policy_probe_for_sample(model, probe_sample or {}) if probe_sample else None
     contrastive_negative_updates = 0
     contrastive_positive_updates = 0
+    hard_negative_updates = 0
+    invariance_positive_updates = 0
+    invariance_negative_updates = 0
     for sample in normalized_samples:
         repeat = max(1, int(round(float(sample.get("weight") or 1.0))))
         for _ in range(repeat):
@@ -975,13 +1032,22 @@ def train_experiment_pv_from_replay_samples(samples: list[dict], *, model_path=N
                     board = None
                     expected_move = None
                 if board is not None and expected_move in board.legal_moves:
-                    negatives = [
+                    hard_negatives = _legal_hard_negative_moves(
+                        board,
+                        expected_move,
+                        list(sample.get("hard_negatives") or []),
+                    )
+                    ordinary_negatives = [
                         move
                         for move in sorted(board.legal_moves, key=lambda item: item.uci())
                         if move != expected_move
-                    ][: _CONTRASTIVE_MAX_NEGATIVES]
+                    ]
+                    negatives = (hard_negatives + [move for move in ordinary_negatives if move not in hard_negatives])[: _CONTRASTIVE_MAX_NEGATIVES]
                     for negative in negatives:
                         _update_move_memory(model, board, side, negative, _CONTRASTIVE_NEGATIVE_TARGET)
+                        if sample.get("invariance_group_id"):
+                            _update_invariance_memory(model, side, negative, _CONTRASTIVE_NEGATIVE_TARGET)
+                            invariance_negative_updates += 1
                         _train_single_sample(
                             model,
                             sample["board_features"],
@@ -993,8 +1059,13 @@ def train_experiment_pv_from_replay_samples(samples: list[dict], *, model_path=N
                             train_policy_bias=False,
                         )
                         contrastive_negative_updates += 1
+                        if negative in hard_negatives:
+                            hard_negative_updates += 1
                     for _positive_reinforcement in range(48):
                         _update_move_memory(model, board, side, expected_move, 1.0)
+                        if sample.get("invariance_group_id"):
+                            _update_invariance_memory(model, side, expected_move, 1.0)
+                            invariance_positive_updates += 1
                         _train_single_sample(
                             model,
                             sample["board_features"],
@@ -1033,6 +1104,9 @@ def train_experiment_pv_from_replay_samples(samples: list[dict], *, model_path=N
         "contrastive_max_negatives": _CONTRASTIVE_MAX_NEGATIVES,
         "contrastive_positive_updates": contrastive_positive_updates,
         "contrastive_negative_updates": contrastive_negative_updates,
+        "hard_negative_updates": hard_negative_updates,
+        "invariance_positive_updates": invariance_positive_updates,
+        "invariance_negative_updates": invariance_negative_updates,
         "policy_probe": policy_probe,
     }
 
