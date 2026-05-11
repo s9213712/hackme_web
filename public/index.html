@@ -4546,6 +4546,10 @@
               <label>儲存根目錄（空白代表沿用 HTML_LEARNING_STORAGE_DIR / 目前啟動設定）</label>
               <input type="text" id="s-cloud-drive-storage-root" placeholder="/srv/hackme_web/storage" />
             </div>
+            <div class="field">
+              <label>全用戶雲端硬碟容量上限 MB（-1 代表儲存磁碟總容量 95%）</label>
+              <input type="number" id="s-cloud-drive-global-capacity-limit-mb" min="-1" step="1" placeholder="-1" />
+            </div>
             <div id="cloud-drive-storage-status" style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .9rem;"></div>
               </div>
             </details>

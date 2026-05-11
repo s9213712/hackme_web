@@ -644,8 +644,10 @@ function renderDriveDashboard(payload) {
   if (limitLabel) {
     const maxFile = formatDriveBytes(quota.max_file_size_bytes);
     const daily = quota.upload_rate_limit_per_day === null || quota.upload_rate_limit_per_day === undefined ? "無上限" : `${quota.upload_rate_limit_per_day} 次`;
-    const diskNote = quota.quota_source === "root_disk_available_90_percent"
-      ? ` · root 上限：儲存磁碟可用空間 90%，${quota.warning_threshold_percent || 80}% 起警示`
+    const diskNote = quota.quota_source === "root_disk_total_95_percent"
+      ? ` · root 上限：全用戶容量設定（磁碟總容量 95%），${quota.warning_threshold_percent || 80}% 起警示`
+      : quota.quota_source === "root_global_capacity_limit_mb"
+        ? ` · root 上限：全用戶容量設定，${quota.warning_threshold_percent || 80}% 起警示`
       : String(quota.quota_source || "").startsWith("manager_role_fixed_1gb")
         ? " · manager 上限：1 GB"
       : "";

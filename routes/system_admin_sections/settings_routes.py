@@ -3,6 +3,7 @@ import re
 from flask import request
 
 from services.security.captcha import normalize_captcha_mode
+from services.storage.global_capacity import parse_global_capacity_limit_mb
 from services.storage.paths import validate_storage_root
 from services.security.upload_security import (
     ensure_upload_security_schema,
@@ -200,6 +201,11 @@ def register_system_admin_settings_routes(app, ctx):
                     return json_resp({"ok":False,"msg":f"cloud_drive_storage_root 不安全或格式錯誤：{exc}"}), 400
             else:
                 data["cloud_drive_storage_root"] = ""
+        if "cloud_drive_global_capacity_limit_mb" in data:
+            try:
+                data["cloud_drive_global_capacity_limit_mb"] = parse_global_capacity_limit_mb(data.get("cloud_drive_global_capacity_limit_mb"))
+            except ValueError as exc:
+                return json_resp({"ok":False,"msg":str(exc)}), 400
         if "captcha_mode" in data:
             raw_mode = str(data.get("captcha_mode") or "").strip().lower()
             if raw_mode and normalize_captcha_mode(raw_mode) != raw_mode:

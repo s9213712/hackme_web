@@ -365,10 +365,10 @@ def test_root_role_uses_disk_backed_quota(tmp_path, monkeypatch):
             storage_root=tmp_path,
         )
         assert usage["can_upload"] is True
-        assert usage["total_bytes"] == 9_000
-        assert usage["max_file_size_bytes"] == 9_000
+        assert usage["total_bytes"] == 19_000
+        assert usage["max_file_size_bytes"] == 19_000
         assert usage["upload_rate_limit_per_day"] is None
-        assert usage["quota_source"] == "root_disk_available_90_percent"
+        assert usage["quota_source"] == "root_disk_total_95_percent"
         assert usage["warning_threshold_percent"] == 80
         assert usage["warning_active"] is False
 
@@ -377,7 +377,7 @@ def test_root_role_uses_disk_backed_quota(tmp_path, monkeypatch):
             owner_user_id=1,
             storage_path="storage/admin/large.txt",
             privacy_mode="standard_plain",
-            size_bytes=7_300,
+            size_bytes=16_000,
             original_filename="large.txt",
             user=admin,
         )
@@ -546,9 +546,9 @@ def test_root_storage_quota_ignores_purchased_storage(tmp_path, monkeypatch):
         )
         root = {"id": 1, "username": "root", "role": "super_admin", "effective_level": "vip", "sanction_status": "none"}
         usage = get_user_cloud_drive_usage(conn, root, member_rule={"can_upload_attachment": True}, storage_root=tmp_path)
-        assert usage["total_bytes"] == 9_000
+        assert usage["total_bytes"] == 19_000
         assert usage["purchased_extra_bytes"] == 0
-        assert usage["quota_source"] == "root_disk_available_90_percent"
+        assert usage["quota_source"] == "root_disk_total_95_percent"
     finally:
         conn.close()
 
@@ -596,13 +596,15 @@ def test_storage_capacity_audit_detects_host_overcommit(tmp_path, monkeypatch):
         set_storage_quota_override(conn, 2, quota_bytes=0, reason="baseline", actor_user_id=2)
         audit = audit_storage_capacity(conn, tmp_path)
         assert audit["status"] == "ok"
-        assert audit["allocatable_cloud_capacity_bytes"] == 450
-        assert audit["available_cloud_capacity_bytes"] == 450
+        assert audit["allocatable_cloud_capacity_bytes"] == 475
+        assert audit["available_cloud_capacity_bytes"] == 950
+        assert audit["global_capacity"]["configured_limit_mb"] == -1
+        assert audit["global_capacity"]["limit_source"] == "disk_total_95_percent"
 
         set_storage_quota_override(
             conn,
             1,
-            quota_bytes=800,
+            quota_bytes=1_000,
             reason="overcommit test",
             actor_user_id=2,
         )
@@ -630,6 +632,23 @@ def test_storage_capacity_guard_blocks_new_quota_when_host_is_full(tmp_path, mon
         assert "Host" in msg
         assert projected["projected_total_commitment_over_available_by_bytes"] > 0
         assert projected["projected_total_overcommitted_by_bytes"] > 0
+    finally:
+        conn.close()
+
+
+def test_storage_capacity_audit_uses_root_configured_global_limit(tmp_path, monkeypatch):
+    class FakeDiskUsage:
+        total = 10 * 1024 * 1024
+        used = 0
+        free = 10 * 1024 * 1024
+
+    monkeypatch.setattr("services.storage.capacity_audit.shutil.disk_usage", lambda path: FakeDiskUsage())
+    conn = _conn()
+    try:
+        audit = audit_storage_capacity(conn, tmp_path, settings={"cloud_drive_global_capacity_limit_mb": 3})
+        assert audit["available_cloud_capacity_bytes"] == 3 * 1024 * 1024
+        assert audit["global_capacity"]["configured_limit_mb"] == 3
+        assert audit["global_capacity"]["limit_source"] == "root_setting"
     finally:
         conn.close()
 

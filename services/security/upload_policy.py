@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from services.security.identity import is_admin_role
+from services.storage.global_capacity import resolve_global_capacity_limit
 from services.storage.quota_overrides import apply_storage_quota_override, get_storage_quota_override
 from services.storage.quota_purchases import purchased_storage_summary
 
@@ -341,9 +342,14 @@ def get_user_cloud_drive_usage(conn, user, member_rule=None, storage_root=None):
     purchased_extra_bytes = int(purchased_summary.get("purchased_extra_bytes") or 0)
     disk = _disk_usage_for_storage_root(storage_root) if root_actor and storage_root else None
     if disk:
-        total_bytes = int(disk["free_bytes"] * ADMIN_DISK_QUOTA_RATIO)
+        capacity_limit = resolve_global_capacity_limit(disk)
+        total_bytes = capacity_limit["limit_bytes"]
         base_quota_bytes = total_bytes
-        quota_source = "root_disk_available_90_percent"
+        quota_source = (
+            "root_global_capacity_limit_mb"
+            if capacity_limit.get("limit_source") == "root_setting"
+            else "root_disk_total_95_percent"
+        )
     elif manager_quota_actor:
         base_quota_bytes = MANAGER_CLOUD_DRIVE_QUOTA_BYTES
         total_bytes = base_quota_bytes + purchased_extra_bytes

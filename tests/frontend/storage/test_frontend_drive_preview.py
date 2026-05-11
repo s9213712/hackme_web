@@ -67,6 +67,7 @@ def test_cloud_drive_preview_ui_is_wired():
 def test_filemanager_and_albummanager_ui_are_wired():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     drive_js = ((ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8") + "\n" + (ROOT / "public" / "js" / "35-drive-preview-share.js").read_text(encoding="utf-8"))
+    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
     bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
 
     assert 'id="storage-upload-file"' in index_html
@@ -155,6 +156,9 @@ def test_filemanager_and_albummanager_ui_are_wired():
     assert 'storageFolderCreateBtn.addEventListener("click", createStorageFolder)' in bootstrap_js
     assert 'storageFolderMoveBtn.addEventListener("click", moveStorageFolder)' in bootstrap_js
     assert 'albumCreateBtn.addEventListener("click", createAlbum)' in bootstrap_js
+    assert 'id="s-cloud-drive-global-capacity-limit-mb"' in index_html
+    assert "cloud_drive_global_capacity_limit_mb" in admin_js
+    assert "全用戶容量上限" in admin_js
 
 
 def test_album_viewer_has_dedicated_module():
@@ -383,7 +387,8 @@ def test_cloud_drive_privacy_modes_use_human_labels():
     assert "解密預覽" in drive_js
     assert "isDriveE2eeServerPreviewError" in drive_js
     assert "return previewDriveE2eeFile(fileId);" in drive_js
-    assert "root 上限：儲存磁碟可用空間 90%" in drive_js
+    assert "root 上限：全用戶容量設定（磁碟總容量 95%）" in drive_js
+    assert "root_global_capacity_limit_mb" in drive_js
     assert "manager 上限：1 GB" in drive_js
     assert "warning_active" in drive_js
 

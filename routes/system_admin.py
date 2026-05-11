@@ -42,7 +42,8 @@ from services.server.bind import (
 )
 from services.security.captcha import normalize_captcha_mode
 from services.storage.paths import validate_storage_root
-from services.storage.capacity_audit import audit_storage_capacity
+from services.storage.capacity_audit import audit_storage_capacity, storage_disk_usage
+from services.storage.global_capacity import resolve_global_capacity_limit
 from services.security.upload_security import (
     ensure_upload_security_schema,
     get_cloud_drive_security_policy,
@@ -610,6 +611,7 @@ def register_system_admin_routes(app, deps):
         configured = str(settings.get("cloud_drive_storage_root") or "").strip()
         current = os.path.abspath(STORAGE_DIR) if STORAGE_DIR else ""
         effective = configured or current
+        capacity = resolve_global_capacity_limit(storage_disk_usage(effective or current or "."), settings=settings)
         restart_required = False
         if configured and current:
             try:
@@ -621,6 +623,7 @@ def register_system_admin_routes(app, deps):
             "current_root": current,
             "effective_next_root": effective,
             "restart_required": restart_required,
+            "global_capacity": capacity,
         }
 
     def ssl_cert_exists():

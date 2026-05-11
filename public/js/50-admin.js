@@ -3910,6 +3910,7 @@ async function loadSettings() {
   if ($("s-comfyui-default-width")) $("s-comfyui-default-width").value = s.comfyui_default_width || 1024;
   if ($("s-comfyui-default-height")) $("s-comfyui-default-height").value = s.comfyui_default_height || 1024;
   if ($("s-cloud-drive-storage-root")) $("s-cloud-drive-storage-root").value = s.cloud_drive_storage_root || "";
+  if ($("s-cloud-drive-global-capacity-limit-mb")) $("s-cloud-drive-global-capacity-limit-mb").value = s.cloud_drive_global_capacity_limit_mb ?? -1;
   if ($("s-cloud-drive-transfer-limits-enabled")) $("s-cloud-drive-transfer-limits-enabled").checked = !!s.cloud_drive_transfer_limits_enabled;
   renderCloudDriveTransferLimits(s.cloud_drive_transfer_limits_json);
   if ($("s-storage-maintenance-auto-enabled")) $("s-storage-maintenance-auto-enabled").checked = !!s.storage_maintenance_auto_enabled;
@@ -3937,7 +3938,11 @@ async function loadSettings() {
   const driveStorageStatus = $("cloud-drive-storage-status");
   if (driveStorageStatus) {
     const restartText = driveStorage.restart_required ? "需重啟服務器才會切到新儲存根目錄" : "目前執行中的儲存根目錄已一致";
-    driveStorageStatus.textContent = `目前 ${driveStorage.current_root || "-"}，下次啟動 ${driveStorage.effective_next_root || "-"}。${restartText}`;
+    const globalCapacity = driveStorage.global_capacity || {};
+    const capacityText = globalCapacity.configured_limit_mb === -1
+      ? `全用戶容量上限：磁碟總容量 95%（${formatBytes(globalCapacity.limit_bytes)}）`
+      : `全用戶容量上限：${formatBytes(globalCapacity.limit_bytes)}`;
+    driveStorageStatus.textContent = `目前 ${driveStorage.current_root || "-"}，下次啟動 ${driveStorage.effective_next_root || "-"}。${restartText}。${capacityText}`;
     driveStorageStatus.style.color = driveStorage.restart_required ? "#ffb74d" : "var(--muted)";
   }
   if ($("s-module-chat-min-role")) $("s-module-chat-min-role").value = s.module_chat_min_role || "user";
@@ -5295,7 +5300,7 @@ async function loadServerHealth() {
     {
       label: "會員雲端容量審計",
       value: capacity.status === "critical" ? "超額" : capacity.status === "warning" ? "接近上限" : "正常",
-      detail: `會員總配額 ${formatBytes(capacity.committed_total_bytes)} / Host 安全可用 ${formatBytes(capacity.available_cloud_capacity_bytes ?? capacity.disk?.safe_free_bytes)}，剩餘承諾 ${formatBytes(capacity.committed_remaining_bytes)} / 安全剩餘 ${formatBytes(capacity.disk?.safe_free_bytes)}`,
+      detail: `會員總配額 ${formatBytes(capacity.committed_total_bytes)} / 全用戶上限 ${formatBytes(capacity.available_cloud_capacity_bytes ?? capacity.disk?.safe_free_bytes)}，剩餘承諾 ${formatBytes(capacity.committed_remaining_bytes)} / 實際安全剩餘 ${formatBytes(capacity.disk?.safe_free_bytes)}`,
       color: capacity.status === "critical" ? "#ff4f6d" : capacity.status === "warning" ? "#ffb74d" : "#4caf50",
     },
     {
@@ -5619,6 +5624,7 @@ async function saveSettings() {
     comfyui_default_width: parseInt($("s-comfyui-default-width")?.value || "1024"),
     comfyui_default_height: parseInt($("s-comfyui-default-height")?.value || "1024"),
     cloud_drive_storage_root: ($("s-cloud-drive-storage-root")?.value || "").trim(),
+    cloud_drive_global_capacity_limit_mb: parseInt($("s-cloud-drive-global-capacity-limit-mb")?.value || "-1"),
     cloud_drive_transfer_limits_enabled: !!$("s-cloud-drive-transfer-limits-enabled")?.checked,
     cloud_drive_transfer_limits_json: JSON.stringify(collectCloudDriveTransferLimits()),
     storage_maintenance_auto_enabled: !!$("s-storage-maintenance-auto-enabled")?.checked,
