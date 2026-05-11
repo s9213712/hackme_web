@@ -43,7 +43,7 @@ Notification Center
 - 進度型操作必須有進度或階段。
 - HLS/影音播放失敗需顯示原因。
 
-## 建議腳本
+## 腳本入口
 
 ```text
 scripts/testing/playwright_platform_health_check.py
@@ -53,7 +53,9 @@ scripts/testing/playwright_visual_health_check.py
 scripts/testing/playwright_mobile_viewports.py
 ```
 
-目前已先保留 `scripts/testing/playwright_platform_health_check.py` 作為平台中心檢查入口；它委派既有 deep-site checker，並保留 `--interactive-comfyui` 讓測試者自行輸入 ComfyUI / Civitai 設定，不把 API key 寫入腳本或 repo。
+目前已保留 `scripts/testing/playwright_platform_health_check.py` 作為平台中心檢查入口；它委派既有 deep-site checker 的共用 helper，並保留 `--interactive-comfyui` 讓測試者自行輸入 ComfyUI / Civitai 設定，不把 API key 寫入腳本或 repo。
+
+`playwright_full_site_check.py`、`playwright_visual_health_check.py`、`playwright_mobile_viewports.py` 是穩定 wrapper 入口，分別委派 deep-site、visual builder + platform、platform mobile coverage，避免後續文件命名與實作入口分岔。
 
 已新增 `scripts/testing/run_playwright_acceptance.sh` 作為本機與 CI 可共用入口：
 

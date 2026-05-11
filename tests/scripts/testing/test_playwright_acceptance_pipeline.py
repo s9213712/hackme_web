@@ -58,3 +58,16 @@ def test_deep_playwright_shared_video_uses_unlock_share_session():
     assert "share_session_id" in script
     assert 'share_session_query = f"?share_session={share_session_id}"' in script
     assert 'f"/api/videos/shared/{token}/playback{share_session_query}"' in script
+
+
+def test_documented_playwright_health_entrypoints_exist_and_delegate():
+    testing_dir = ROOT / "scripts" / "testing"
+    full_site = (testing_dir / "playwright_full_site_check.py").read_text(encoding="utf-8")
+    visual = (testing_dir / "playwright_visual_health_check.py").read_text(encoding="utf-8")
+    mobile = (testing_dir / "playwright_mobile_viewports.py").read_text(encoding="utf-8")
+
+    assert "playwright_deep_site_check.py" in full_site
+    assert "--max-chess-human-moves" in full_site
+    assert "playwright_comfyui_workflow_builder_check.py" in visual
+    assert "playwright_platform_health_check.py" in visual
+    assert "playwright_platform_health_check.py" in mobile
