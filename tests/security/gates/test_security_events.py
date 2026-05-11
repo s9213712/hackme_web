@@ -124,6 +124,91 @@ def test_root_security_event_creates_root_notification(tmp_path):
         conn.close()
 
 
+def test_csrf_root_notifications_are_burst_throttled_but_events_are_kept(tmp_path):
+    db_path = tmp_path / "events.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE
+        );
+        CREATE TABLE security_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type TEXT NOT NULL,
+            ip_address TEXT NOT NULL,
+            target_user TEXT,
+            detail TEXT,
+            created_at TEXT NOT NULL
+        );
+        """
+    )
+    conn.execute("INSERT INTO users (id, username) VALUES (1, 'root')")
+    conn.commit()
+    conn.close()
+
+    original_state = dict(security_events._STATE)
+    original_cleanup_at = security_events._LAST_EVENT_CLEANUP_AT
+    try:
+        security_events._LAST_EVENT_CLEANUP_AT = 10**12
+        security_events.configure_security_events_service(
+            get_db=_get_db_factory(str(db_path)),
+            get_system_settings=lambda: {},
+            audit=lambda *args, **kwargs: None,
+            is_ip_blocking_enabled=lambda: False,
+        )
+
+        security_events.record_security_event(
+            "csrf_fail",
+            "10.0.0.5",
+            target_user="root",
+            detail="path=/api/admin/system-reset,reason=invalid_authenticated",
+            created_at="2026-05-11T10:32:00",
+        )
+        security_events.record_security_event(
+            "csrf_fail",
+            "10.0.0.5",
+            target_user="root",
+            detail="path=/api/admin/server-mode,reason=invalid_safe",
+            created_at="2026-05-11T10:32:30",
+        )
+        security_events.record_security_event(
+            "csrf_fail",
+            "10.0.0.6",
+            target_user="root",
+            detail="path=/api/admin/system-reset,reason=invalid_authenticated",
+            created_at="2026-05-11T10:33:00",
+        )
+        security_events.record_security_event(
+            "csrf_fail",
+            "10.0.0.5",
+            target_user="root",
+            detail="path=/api/admin/snapshots/not-a-snapshot/restore,reason=invalid_authenticated",
+            created_at="2026-05-11T10:38:01",
+        )
+    finally:
+        security_events._STATE.clear()
+        security_events._STATE.update(original_state)
+        security_events._LAST_EVENT_CLEANUP_AT = original_cleanup_at
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        event_count = conn.execute(
+            "SELECT COUNT(*) AS c FROM security_events WHERE event_type='csrf_fail'"
+        ).fetchone()["c"]
+        notes = conn.execute(
+            "SELECT body FROM notifications WHERE user_id=1 AND type='root_security_alert' ORDER BY id"
+        ).fetchall()
+        assert event_count == 4
+        assert len(notes) == 3
+        assert "通知彙總" in notes[0]["body"]
+        assert "/api/admin/system-reset" in notes[0]["body"]
+        assert "/api/admin/server-mode" not in notes[0]["body"]
+    finally:
+        conn.close()
+
+
 def test_rate_limit_block_records_security_event(tmp_path):
     db_path = tmp_path / "rate-limit.db"
     conn = sqlite3.connect(db_path)
