@@ -150,7 +150,8 @@ exp5 需要另建的驗證：
    - 已完成：固定 deterministic suite，輸出 gate JSON/Markdown。
    - 標準判斷：不完全沿用 exp3/4；共用 legal/suspicious/score safety floors，但 exp5 必須另外通過 NNUE/PVS deterministic case 與 candidate rank trace。
 4. 把 exp5 接入 full pipeline 的 adapter interface
-   - 只在 exp5 strength gate 成熟後，再加入 autorun/promotion。
+   - 已完成第一版：full pipeline 可產 exp5 candidate/replay，autorun target 允許 `experiment 5:nnue`，dashboard command 也列出 exp5。
+   - promotion 仍受 exp5 strength gate 保護；gate skipped/failed 時不 stage/promote exp5。
 
 ## 目前不可宣稱
 

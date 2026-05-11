@@ -27,6 +27,7 @@ if str(ROOT) not in sys.path:
 from services.games.chess_dl import bundled_chess_dl_model_path  # noqa: E402
 from services.games.chess_engine import bundled_chess_engine_db_path  # noqa: E402
 from services.games.chess_nn import bundled_chess_nn_model_path  # noqa: E402
+from services.games.chess_nnue import bundled_chess_nnue_model_path  # noqa: E402
 from services.games.chess_pv import bundled_chess_pv_model_path  # noqa: E402
 from services.games.self_play_training import (  # noqa: E402
     DEFAULT_MAX_PLIES,
@@ -155,6 +156,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--experiment-2-model-path", default="")
     parser.add_argument("--experiment-3-model-path", default="")
     parser.add_argument("--experiment-4-model-path", default="")
+    parser.add_argument("--experiment-5-model-path", default="")
     return parser.parse_args()
 
 
@@ -250,11 +252,13 @@ def main() -> int:
     nn_model_path = Path(args.experiment_2_model_path or bundled_chess_nn_model_path())
     dl_model_path = Path(args.experiment_3_model_path or bundled_chess_dl_model_path())
     pv_model_path = Path(args.experiment_4_model_path or bundled_chess_pv_model_path())
+    nnue_model_path = Path(args.experiment_5_model_path or bundled_chess_nnue_model_path())
     _progress(f"preset: {args.preset} seed={int(args.seed)}")
     _progress(f"target exp1 db: {Path(args.experiment_db_path or bundled_chess_engine_db_path())}")
     _progress(f"target exp2 model: {nn_model_path}")
     _progress(f"target exp3 model: {dl_model_path}")
     _progress(f"target exp4 model: {pv_model_path}")
+    _progress(f"target exp5 model: {nnue_model_path}")
     _progress(f"report dir: {Path(args.report_dir)}")
     _progress("phase seed training started")
 
@@ -282,6 +286,7 @@ def main() -> int:
             nn_model_path=nn_model_path,
             dl_model_path=dl_model_path,
             pv_model_path=pv_model_path,
+            nnue_model_path=nnue_model_path,
             progress_hook=_progress_log,
         )
         if args.with_smoke:
@@ -292,6 +297,7 @@ def main() -> int:
                 nn_model_path=nn_model_path,
                 dl_model_path=dl_model_path,
                 pv_model_path=pv_model_path,
+                nnue_model_path=nnue_model_path,
                 teacher_depth=int(schedule["teacher_depth"] or DEFAULT_TEACHER_DEPTH),
                 max_plies=int(schedule["max_plies"] or DEFAULT_MAX_PLIES),
                 games_per_pair=max(0, int(args.smoke_games_per_pair or 0)),
@@ -307,6 +313,7 @@ def main() -> int:
                 nn_model_path=nn_model_path,
                 dl_model_path=dl_model_path,
                 pv_model_path=pv_model_path,
+                nnue_model_path=nnue_model_path,
                 teacher_depth=int(schedule["teacher_depth"] or DEFAULT_TEACHER_DEPTH),
                 max_plies=int(schedule["max_plies"] or DEFAULT_MAX_PLIES),
                 rounds=max(0, int(args.benchmark_rounds or 0)),
@@ -333,6 +340,7 @@ def main() -> int:
             "exp2": _model_stats(nn_model_path),
             "exp3": _model_stats(dl_model_path),
             "exp4": _model_stats(pv_model_path),
+            "exp5": _model_stats(nnue_model_path),
         },
         "with_smoke": bool(args.with_smoke),
         "with_benchmark": bool(args.with_benchmark),

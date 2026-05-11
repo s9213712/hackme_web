@@ -3,6 +3,7 @@ import sqlite3
 
 from routes import games as games_routes
 from routes.games import choose_computer_move, ensure_game_schema
+from services.games import chess_pipeline
 from services.games import self_play_training
 from services.games.chess_nnue import EXPERIMENT_NNUE_DIFFICULTY
 
@@ -100,3 +101,15 @@ def test_exp5_is_benchmark_engine_and_uses_nnue_model_path(monkeypatch, tmp_path
         "model_path": model_path,
         "search_profile": "strong",
     }
+
+
+def test_exp5_is_supported_pipeline_autorun_target():
+    assert EXPERIMENT_NNUE_DIFFICULTY in chess_pipeline.PIPELINE_RETRAIN_ENGINES
+    args = chess_pipeline._pipeline_command_args(
+        min_usable_replays=3,
+        target_engines=[EXPERIMENT_NNUE_DIFFICULTY],
+    )
+    assert args[args.index("--promote-engines") + 1] == EXPERIMENT_NNUE_DIFFICULTY
+    assert "--skip-exp3" in args
+    assert "--skip-exp4" in args
+    assert "--skip-exp5" not in args

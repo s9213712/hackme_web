@@ -93,3 +93,87 @@ def test_chess_train_pipeline_runs_prepare_seed_and_stages_without_benchmark(tmp
     assert payload["promotion_results"][0]["reason"] == "promotion skipped because benchmark was disabled"
     assert Path(payload["reports"]["json_report"]).exists()
     assert Path(payload["reports"]["md_report"]).exists()
+
+
+def test_chess_train_pipeline_can_build_exp5_candidate_without_promotion(tmp_path):
+    runtime_dir = tmp_path / "runtime"
+    replay_path = runtime_dir / "reports" / "games" / "chess_replays.jsonl"
+    replay_path.parent.mkdir(parents=True, exist_ok=True)
+    replay_path.write_text(
+        json.dumps(
+            {
+                "source": "user_games",
+                "engine_name": "experiment 5:nnue",
+                "engine_version": "experiment 5:nnue",
+                "white_engine": "experiment 5:nnue",
+                "black_engine": "user",
+                "opening_seed": "standard_start",
+                "result": "white",
+                "winner_color": "white",
+                "adjudicated_or_natural": "natural",
+                "move_count": 9,
+                "timestamp": "2026-05-11T12:27:08.354707Z",
+                "rating_estimate": None,
+                "suspicious_flag": False,
+                "duplicate_flag": False,
+                "resign_abuse_flag": False,
+                "confidence_score": 0.3,
+                "collection_tier": "trusted",
+                "quarantine_reasons": [],
+                "replay_id": "pipeline-test-replay",
+                "move_history": [
+                    {"by": "white", "from": "b1", "to": "c3"},
+                    {"by": "black", "from": "g8", "to": "f6"},
+                    {"by": "white", "from": "c3", "to": "b5"},
+                    {"by": "black", "from": "e7", "to": "e6"},
+                    {"by": "white", "from": "a1", "to": "b1"},
+                    {"by": "black", "from": "f8", "to": "e7"},
+                    {"by": "white", "from": "a2", "to": "a3"},
+                    {"by": "black", "from": "e8", "to": "g8"},
+                    {"by": "white", "from": "a3", "to": "a4"},
+                ],
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(ROOT)
+    env["HACKME_RUNTIME_DIR"] = str(runtime_dir)
+    env["HTML_LEARNING_CHESS_RETRAIN_MIN_REPLAYS"] = "1"
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "games" / "chess_train_pipeline.py"),
+            "--preset",
+            "micro",
+            "--min-usable-replays",
+            "1",
+            "--skip-exp1-refine",
+            "--skip-exp3",
+            "--skip-exp4",
+            "--skip-promote",
+            "--skip-benchmark",
+            "--promote-engines",
+            "experiment 5:nnue",
+        ],
+        cwd=str(ROOT),
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is True
+    assert payload["exp5_refine"]["engine"] == "experiment 5:nnue"
+    assert payload["exp5_refine"]["accepted_samples"] >= 1
+    assert payload["exp5_strength_gate"]["skipped"] is True
+    assert payload["exp5_strength_gate"]["reason"] == "exp5 strength gate requires benchmark report"
+    assert payload["promotion_results"][0]["engine"] == "experiment 5:nnue"
+    assert payload["promotion_results"][0]["staged"] is False
+    assert payload["promotion_results"][0]["exp5_strength_gate_pass"] is False
+    assert Path(payload["candidate_paths"]["experiment 5:nnue"]).exists()

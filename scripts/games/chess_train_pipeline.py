@@ -38,8 +38,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--include-exp2", action="store_true", help="Deprecated no-op; exp2 was removed from the promotion pipeline.")
     parser.add_argument("--skip-exp3", action="store_true")
     parser.add_argument("--skip-exp4", action="store_true")
+    parser.add_argument("--skip-exp5", action="store_true")
     parser.add_argument("--skip-exp1-refine", action="store_true")
     parser.add_argument("--skip-exp3-refine", action="store_true")
+    parser.add_argument("--skip-exp5-refine", action="store_true")
     parser.add_argument("--skip-promote", action="store_true")
     parser.add_argument("--stage-only", action="store_true")
     parser.add_argument("--min-usable-replays", type=int, default=-1)
@@ -56,7 +58,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-benchmark", action="store_true")
     parser.add_argument(
         "--promote-engines",
-        default="experiment 3:dl,experiment 4:pv",
+        default="experiment 3:dl,experiment 4:pv,experiment 5:nnue",
         help="Comma-separated engines to auto stage/promote if their gate passes.",
     )
     return parser.parse_args()
@@ -102,6 +104,8 @@ def _write_report(summary: dict) -> dict:
         f"- exp1_refine_samples: `{summary.get('exp1_refine', {}).get('accepted_samples', 0)}`",
         f"- exp3_refine_samples: `{summary.get('exp3_refine', {}).get('accepted_samples', 0)}`",
         f"- exp4_refine_samples: `{summary.get('exp4_refine', {}).get('accepted_samples', 0)}`",
+        f"- exp5_refine_samples: `{summary.get('exp5_refine', {}).get('accepted_samples', 0)}`",
+        f"- exp5_strength_gate: `{summary.get('exp5_strength_gate', {}).get('pass', False)}`",
         f"- benchmark_skipped: `{summary['benchmark'].get('skipped', False)}`",
         f"- benchmark_report: `{summary['benchmark'].get('reports', {}).get('json_report', '')}`",
         "",
@@ -168,6 +172,8 @@ def main() -> int:
         str(candidate_paths["experiment 3:dl"]),
         "--experiment-4-model-path",
         str(candidate_paths["experiment 4:pv"]),
+        "--experiment-5-model-path",
+        str(candidate_paths["experiment 5:nnue"]),
     ]
     if args.skip_exp3:
         seed_cmd.append("--skip-exp3")
@@ -227,6 +233,22 @@ def main() -> int:
     else:
         _progress(f"phase exp4 refine skipped: {exp4_refine['reason']}")
 
+    exp5_refine = {"ok": False, "skipped": True, "reason": "exp5 refine not requested"}
+    if not args.skip_exp5 and not args.skip_exp5_refine and int(prepare.get("accepted_train_samples") or 0) > 0:
+        exp5_cmd = [
+            sys.executable,
+            str(ROOT / "scripts" / "games" / "chess_exp5_dataset_train.py"),
+            "--input-jsonl",
+            str(dataset_paths["train"]),
+            "--model-path",
+            str(candidate_paths["experiment 5:nnue"]),
+            "--replay-path",
+            str(candidate_paths["experiment 5:nnue replay"]),
+        ]
+        exp5_refine = _run_json(exp5_cmd, label="exp5 refine")
+    else:
+        _progress(f"phase exp5 refine skipped: {exp5_refine['reason']}")
+
     benchmark_report_path = ""
     if args.skip_benchmark:
         benchmark = {
@@ -266,6 +288,8 @@ def main() -> int:
             str(candidate_paths["experiment 3:dl"]),
             "--experiment-4-model-path",
             str(candidate_paths["experiment 4:pv"]),
+            "--experiment-5-model-path",
+            str(candidate_paths["experiment 5:nnue"]),
         ]
         if int(args.teacher_depth) > 0:
             benchmark_cmd.extend(["--teacher-depth", str(int(args.teacher_depth))])
@@ -274,6 +298,26 @@ def main() -> int:
         benchmark = _run_json(benchmark_cmd, label="benchmark")
         benchmark_report_path = str((benchmark.get("reports") or {}).get("json_report") or "")
         _progress(f"benchmark artifact: {benchmark_report_path or '<none>'}")
+
+    exp5_strength_gate = {"ok": False, "skipped": True, "reason": "exp5 strength gate not requested"}
+    if not args.skip_exp5 and Path(candidate_paths["experiment 5:nnue"]).exists() and benchmark_report_path:
+        exp5_gate_cmd = [
+            sys.executable,
+            str(ROOT / "scripts" / "games" / "chess_exp5_strength_gate.py"),
+            "--candidate-model-path",
+            str(candidate_paths["experiment 5:nnue"]),
+            "--benchmark-report-path",
+            str(benchmark_report_path),
+        ]
+        exp5_strength_gate = _run_json(exp5_gate_cmd, label="exp5 strength gate")
+    else:
+        if args.skip_exp5:
+            exp5_strength_gate["reason"] = "exp5 disabled by --skip-exp5"
+        elif not Path(candidate_paths["experiment 5:nnue"]).exists():
+            exp5_strength_gate["reason"] = "exp5 candidate model missing"
+        elif not benchmark_report_path:
+            exp5_strength_gate["reason"] = "exp5 strength gate requires benchmark report"
+        _progress(f"phase exp5 strength gate skipped: {exp5_strength_gate['reason']}")
 
     promotion_results = []
     skip_promote_effective = bool(args.skip_promote or args.skip_benchmark)
@@ -291,6 +335,19 @@ def main() -> int:
             })
             _progress(f"phase result stage/promote {engine}: skipped candidate model missing")
             continue
+        if engine == "experiment 5:nnue" and not bool(exp5_strength_gate.get("pass")):
+            promotion_results.append({
+                "engine": engine,
+                "staged": False,
+                "promoted": False,
+                "gate_pass": False,
+                "exp5_strength_gate_pass": False,
+                "candidate_path": str(source_path),
+                "reason": "exp5 strength gate failed or was skipped",
+                "exp5_strength_gate": exp5_strength_gate,
+            })
+            _progress(f"phase result stage/promote {engine}: skipped exp5 strength gate")
+            continue
         stage_result = stage_candidate_model(
             engine=engine,
             source_path=Path(source_path),
@@ -304,6 +361,8 @@ def main() -> int:
             "promotion_report_consistency_pass": bool((stage_result.get("promotion_report_consistency") or {}).get("pass")) if isinstance(stage_result, dict) else False,
             "candidate_path": str(source_path),
         }
+        if engine == "experiment 5:nnue":
+            row["exp5_strength_gate_pass"] = True
         if not skip_promote_effective and not args.stage_only:
             try:
                 promote_result = promote_candidate_model(
@@ -332,6 +391,8 @@ def main() -> int:
         "exp1_refine": exp1_refine,
         "exp3_refine": exp3_refine,
         "exp4_refine": exp4_refine,
+        "exp5_refine": exp5_refine,
+        "exp5_strength_gate": exp5_strength_gate,
         "benchmark": benchmark,
         "benchmark_report_path": benchmark_report_path,
         "candidate_paths": {key: str(value) for key, value in candidate_paths.items()},

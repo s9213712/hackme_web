@@ -20,7 +20,7 @@ from services.server.runtime import default_runtime_root_path
 DEFAULT_RETRAIN_MIN_USABLE_REPLAYS = 25
 DEFAULT_RETRAIN_MAX_AGE_HOURS = 24 * 7
 _PIPELINE_AUTORUN_LOCK = threading.Lock()
-PIPELINE_RETRAIN_ENGINES = ("experiment 3:dl", "experiment 4:pv")
+PIPELINE_RETRAIN_ENGINES = ("experiment 3:dl", "experiment 4:pv", "experiment 5:nnue")
 
 
 def _runtime_root() -> Path:
@@ -196,10 +196,12 @@ def _pipeline_command_args(*, min_usable_replays: int, target_engines: list[str]
             cmd.append("--skip-exp3")
         if "experiment 4:pv" not in targets:
             cmd.append("--skip-exp4")
+        if "experiment 5:nnue" not in targets:
+            cmd.append("--skip-exp5")
     else:
         cmd.extend([
             "--promote-engines",
-            "experiment 3:dl,experiment 4:pv",
+            "experiment 3:dl,experiment 4:pv,experiment 5:nnue",
         ])
     return cmd
 
