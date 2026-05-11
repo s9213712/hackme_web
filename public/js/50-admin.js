@@ -5166,6 +5166,59 @@ function renderHealthRows(rows) {
   `).join("");
 }
 
+async function loadPlaywrightCiHealth() {
+  const host = $("server-health-playwright-ci");
+  if (!host || !currentUser || currentRole !== "super_admin") return;
+  host.innerHTML = `<p class="health-empty">讀取 Playwright CI 中...</p>`;
+  try {
+    await fetchCsrfToken({ force: true });
+    const csrf = getCsrfToken();
+    const res = await apiFetch(API + "/admin/health/playwright-ci", {
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" },
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) throw new Error(json.msg || `HTTP ${res.status}`);
+    const ci = json.playwright_ci || {};
+    const latest = ci.latest || {};
+    const color = ci.status === "success" ? "#4caf50" : ci.status === "unreachable" ? "#ffb74d" : "#ff4f6d";
+    const rows = [
+      {
+        label: "Workflow",
+        value: ci.status || "unknown",
+        detail: `${ci.repo || "-"} · ${ci.branch || "-"} · ${ci.workflow_file || "-"}`,
+        color,
+      },
+      {
+        label: "Latest run",
+        value: latest.conclusion || latest.status || "-",
+        detail: `${latest.display_title || latest.name || "-"} · ${latest.event || "-"} · ${latest.updated_at || latest.created_at || "-"}`,
+        color: latest.conclusion === "success" ? "#4caf50" : latest.status && latest.status !== "completed" ? "#ffb74d" : color,
+      },
+      {
+        label: "Auth",
+        value: ci.auth_configured ? "token" : "public API",
+        detail: ci.workflow_present ? "workflow file exists locally" : "workflow file missing locally",
+        color: ci.workflow_present ? "#82b1ff" : "#ff4f6d",
+      },
+    ];
+    host.innerHTML = renderHealthRows(rows);
+    if (latest.html_url) {
+      host.insertAdjacentHTML("beforeend", `<div class="health-row"><div class="health-row-main"><strong>GitHub Actions</strong><small>${sanitize(latest.html_url)}</small></div><a class="btn btn-sm" href="${sanitize(latest.html_url)}" target="_blank" rel="noopener">開啟</a></div>`);
+    }
+    if (ci.msg && ci.status !== "success") {
+      host.insertAdjacentHTML("beforeend", `<div class="drive-card-sub" style="color:${color};margin-top:.35rem;">${sanitize(ci.msg)}</div>`);
+    }
+  } catch (err) {
+    host.innerHTML = renderHealthRows([{
+      label: "Playwright CI",
+      value: "unavailable",
+      detail: err && err.message ? err.message : "CI 狀態讀取失敗",
+      color: "#ffb74d",
+    }]);
+  }
+}
+
 async function loadServerHealth() {
   if (!currentUser || currentRole !== "super_admin") return;
   await fetchCsrfToken({ force: true });
@@ -5283,6 +5336,7 @@ async function loadServerHealth() {
   if (repairBtn) {
     repairBtn.disabled = currentUser !== "root" || !auditEnabled || auditOk !== false;
   }
+  loadPlaywrightCiHealth().catch(() => {});
 }
 
 async function repairIntegrityChains() {

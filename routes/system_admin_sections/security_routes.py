@@ -7,6 +7,8 @@ import uuid
 
 from flask import request
 
+from services.system.ci_status import playwright_ci_status
+
 
 def register_system_admin_security_routes(app, ctx):
     BASE_DIR = ctx["BASE_DIR"]
@@ -207,6 +209,16 @@ def register_system_admin_security_routes(app, ctx):
         if error:
             return error
         return json_resp({"ok": True, "database": db_integrity_summary()})
+
+    @app.route("/api/admin/health/playwright-ci", methods=["GET"])
+    @require_csrf_safe
+    def admin_health_playwright_ci():
+        _, error = require_super_admin_actor()
+        if error:
+            return error
+        workflow = str(request.args.get("workflow") or "playwright-qa.yml").strip() or "playwright-qa.yml"
+        result = playwright_ci_status(repo_dir=GIT_REPO_DIR, workflow_file=workflow)
+        return json_resp({"ok": True, "playwright_ci": result})
 
     @app.route("/api/admin/security-center", methods=["GET"])
     @require_csrf_safe
