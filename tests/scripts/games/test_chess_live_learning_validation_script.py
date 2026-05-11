@@ -51,6 +51,79 @@ def test_live_learning_validation_fast_retrain_flags_are_wired():
     assert "flank_label_audit" in source
     assert "flank_difficulty_performance" in source
     assert "central_vs_flank_boundary" in source
+    assert "FLANK_REASON_TAGS" in source
+    assert "_flank_context_features" in source
+    assert "_contextual_flank_performance_from_rows" in source
+    assert "flank_only_contextual" in source
+    assert "contextual_flank_pass_rate" in source
+    assert "bad_random_flank_push" in source
+    assert "_distill_quick_replay_rows" in source
+    assert "distilled_replay_preprocessing" in source
+    assert "distilled_replay.jsonl" in source
+    assert "opening_target_margin_audit" in source
+    assert "multi_good_tie_not_failure" in source
+    assert "low_margin_override_rejected" in source
+    assert "broad_strength_improvement" in source
+    assert "mcts_visit_count" in source
+
+
+def test_exp4_quick_retrain_sample_cap_scales_with_timeout():
+    module = _load_validation_module()
+
+    requested = 256
+    assert module._exp4_quick_retrain_sample_cap(requested, 30)[0] == 128
+    assert module._exp4_quick_retrain_sample_cap(requested, 75)[0] == 128
+    assert module._exp4_quick_retrain_sample_cap(requested, 90)[0] == 192
+    assert module._exp4_quick_retrain_sample_cap(requested, 180)[0] == 256
+
+    capped, reason = module._exp4_quick_retrain_sample_cap(requested, 30)
+    assert capped == 128
+    assert "exp4 quick gate cap" in reason
+
+
+def test_exp4_opening_target_margin_audit_reports_mcts_and_multigood(tmp_path):
+    module = _load_validation_module()
+    model_path = tmp_path / "chess_experiment_4_pv.json"
+    fen = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"
+    module.train_experiment_pv_from_replay_samples(
+        [{"fen": fen, "side": "black", "move_uci": "e7e5", "target": 1.0, "weight": 1.0}],
+        model_path=model_path,
+    )
+
+    audit = module._opening_target_margin_audit(
+        engine_alias="exp4",
+        model_path=model_path,
+        deterministic_cases=[
+            {
+                "case_id": "opening_black_reply",
+                "category": "opening",
+                "fen": fen,
+                "side": "black",
+                "expected_best_moves": ["e7e5", "d7d5", "c7c5"],
+            }
+        ],
+        deterministic_report={
+            "score_table": [
+                {"model_label": "baseline", "overall_deterministic_score": 0.8},
+                {"model_label": "final", "overall_deterministic_score": 0.8},
+            ]
+        },
+        checkpoints=[
+            {
+                "trusted_count": 20,
+                "mistake_retention_probe": {
+                    "matched_expected": True,
+                    "result_kind": "matched_expected",
+                },
+            }
+        ],
+    )
+
+    assert audit["supported"] is True
+    assert audit["targeted_learning_success"] is True
+    assert audit["broad_strength_improvement"] is False
+    assert audit["cases"][0]["mcts_visit_count"] is not None
+    assert "teacher_distribution" in audit["cases"][0]
 
 
 def test_semantic_specialist_training_rows_are_weighted():
@@ -274,6 +347,663 @@ def test_exp27_flank_performance_and_boundary_report_shapes():
     assert boundary["central_to_flank_confusion"] == 1
 
 
+def test_exp28_flank_context_features_and_reason_tags_are_wired():
+    module = _load_validation_module()
+    fen = module.chess.STARTING_FEN
+
+    features = module._flank_context_features(fen, "white")
+    reason = module._flank_reason_tag_for_move(fen, "white", "c2c4")
+    bad_reason = module._flank_reason_tag_for_move(fen, "white", "e2e4")
+
+    assert features["supported"] is True
+    assert "open_closed_center" in features
+    assert "wing_space_advantage" in features
+    assert "central_tension" in features
+    assert "attack_lane_availability" in features
+    assert reason in module.FLANK_REASON_TAGS
+    assert bad_reason == "bad_random_flank_push"
+
+
+def test_exp28_contextual_flank_performance_reports_bad_random_confusion():
+    module = _load_validation_module()
+    variants = [
+        {
+            "case_id": "flank_context",
+            "fen": module.chess.STARTING_FEN,
+            "side": "white",
+            "expected_move": "c2c4",
+            "expected_semantic": "flank_pawn_push",
+            "semantic_class": "flank_pawn_push",
+            "variant_difficulty": "hard",
+            "flank_reason_tag": module._flank_reason_tag_for_move(module.chess.STARTING_FEN, "white", "c2c4"),
+            "flank_context_features": module._flank_context_features(module.chess.STARTING_FEN, "white"),
+        }
+    ]
+    rows = [
+        {
+            "case_id": "flank_context",
+            "expected_move": "c2c4",
+            "final_top1": "e2e4",
+            "raw_policy_top1": "e2e4",
+            "final_pass": False,
+            "raw_policy_pass": False,
+        }
+    ]
+
+    result = module._contextual_flank_performance_from_rows(variants, rows, label="unit")
+
+    assert result["count"] == 1
+    assert result["hard_clean_count"] == 1
+    assert result["contextual_flank_pass_rate"] == 0.0
+    assert result["non_flank_move_confusion"]["count"] == 1
+    assert result["bad_random_flank_push_confusion"]["promoted_count"] == 0
+    assert result["flank_reason_distribution"][variants[0]["flank_reason_tag"]] == 1
+    assert result["context_feature_importance"]
+
+
+def test_exp28_flank_label_audit_v2_excludes_bad_random_from_balanced_gate():
+    module = _load_validation_module()
+    cases = [
+        {
+            "case_id": "bad_flank",
+            "fen": module.chess.STARTING_FEN,
+            "side": "white",
+            "expected_move": "e2e4",
+            "expected_semantic": "flank_pawn_push",
+            "semantic_class": "flank_pawn_push",
+            "variant_difficulty": "easy",
+            "difficulty": "easy",
+            "label_quality": "clean",
+        }
+    ]
+
+    audit = module._flank_label_audit_for_cases(
+        cases,
+        {"cases": [{"case_id": "bad_flank", "label_quality": "clean", "static_cp_delta": -10}]},
+    )
+
+    assert audit["source"] == "exp28_flank_label_audit_v2"
+    assert audit["bad_random_flank_push_count"] == 1
+    assert audit["flank_reason_distribution"]["bad_random_flank_push"] == 1
+    assert audit["cases"][0]["balanced_gate_eligible"] is False
+
+
+def test_exp28_5_distilled_replay_preprocessing_dedupes_and_annotates(tmp_path):
+    module = _load_validation_module()
+    rows = [
+        {
+            "fen": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
+            "side": "black",
+            "move_uci": "e7e5",
+            "source_game_id": 1,
+            "source_move_index": 1,
+            "replay_id": "dup_a",
+            "weight": 1.0,
+        },
+        {
+            "fen": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
+            "side": "black",
+            "move_uci": "e7e5",
+            "source_game_id": 2,
+            "source_move_index": 1,
+            "replay_id": "dup_b",
+            "weight": 1.0,
+        },
+        {
+            "fen": module.chess.STARTING_FEN,
+            "side": "white",
+            "move_uci": "a2a3",
+            "source_game_id": 3,
+            "source_move_index": 1,
+            "replay_id": "flank",
+            "weight": 1.0,
+        },
+        {
+            "fen": module.chess.STARTING_FEN,
+            "side": "white",
+            "move_uci": "h2h4",
+            "source_game_id": 4,
+            "source_move_index": 1,
+            "replay_id": "style",
+            "weight": 1.0,
+        },
+    ]
+
+    distilled, report = module._distill_quick_replay_rows(rows, checkpoint_dir=tmp_path, held_out_cases=[])
+
+    assert report["source"] == "exp28_5_distilled_replay_preprocessing"
+    assert report["original_rows"] == 4
+    assert report["distilled_rows"] == 2
+    assert report["compression_ratio"] == 0.5
+    assert report["duplicate_ratio_before"] > report["duplicate_ratio_after"]
+    assert report["style_audit_rows_excluded"] == 1
+    assert report["held_out_in_training"] is False
+    assert (tmp_path / "distilled_replay.jsonl").exists()
+    assert {row["semantic_class"] for row in distilled} == {"e_pawn_central_break", "flank_pawn_push"}
+    flank = next(row for row in distilled if row["semantic_class"] == "flank_pawn_push")
+    assert flank["teacher_top3"]
+    assert flank["teacher_top5"]
+    assert flank["hard_negatives"]
+    assert flank["reason_tag"] in module.FLANK_REASON_TAGS
+    assert flank["flank_context_features"]["supported"] is True
+    assert len(flank["flank_context_feature_vector"]) == 8
+    assert flank["flank_context_feature_injection"] is True
+    assert sorted(next(row for row in distilled if row["move_uci"] == "e7e5")["source_game_ids"]) == ["1", "2"]
+
+
+def test_exp28_5_distilled_replay_reports_heldout_leakage(tmp_path):
+    module = _load_validation_module()
+    row = {
+        "fen": module.chess.STARTING_FEN,
+        "side": "white",
+        "move_uci": "c2c4",
+        "source_game_id": 1,
+        "source_move_index": 1,
+        "replay_id": "leak",
+    }
+    held_out = [
+        {
+            "fen": module.chess.STARTING_FEN,
+            "expected_move": "c2c4",
+            "normalized_fen_hash": module._normalized_fen_hash(module.chess.STARTING_FEN),
+        }
+    ]
+
+    distilled, report = module._distill_quick_replay_rows([row], checkpoint_dir=tmp_path, held_out_cases=held_out)
+
+    assert distilled == []
+    assert report["pre_filter_overlap_count"] == 1
+    assert report["blocked_leakage_candidate_count"] == 1
+    assert report["leakage_detected"] is False
+    assert report["leakage_count"] == 0
+    assert report["held_out_in_training"] is False
+
+
+def test_exp30a_evaluation_cache_key_contains_required_fields(tmp_path):
+    module = _load_validation_module()
+    model_path = tmp_path / "model.json"
+    model_path.write_text('{"policy": {"e2e4": 1.0}}', encoding="utf-8")
+    cases = [
+        {
+            "case_id": "cache_case",
+            "fen": module.chess.STARTING_FEN,
+            "side": "white",
+            "expected_move": "e2e4",
+            "semantic_class": "e_pawn_central_break",
+            "difficulty": "easy",
+        }
+    ]
+
+    result, cache = module._cached_position_set_performance(
+        engine_alias="exp3",
+        model_path=model_path,
+        cases=cases,
+        label="cache test",
+        cache_dir=tmp_path / "cache",
+    )
+    cached_result, cached = module._cached_position_set_performance(
+        engine_alias="exp3",
+        model_path=model_path,
+        cases=cases,
+        label="cache test",
+        cache_dir=tmp_path / "cache",
+    )
+
+    assert result["cache_key"]["model_hash"]
+    assert result["cache_key"]["case_set_hash"]
+    assert result["cache_key"]["evaluator_config_hash"]
+    assert result["cache_key"]["decision_mode"] == "balanced_fusion"
+    assert result["cache_key"]["style_profile"] == "balanced"
+    assert result["cache_key"]["semantic_gate_version"]
+    assert cache["cache_hit"] is False
+    assert cached["cache_hit"] is True
+    assert cached_result["cache_key"] == result["cache_key"]
+
+
+def test_exp30a_smoke_gate_failed_probe_skips_full_gate():
+    module = _load_validation_module()
+    smoke = {
+        "passed": False,
+        "reasons": ["distilled_replay_heldout_leakage"],
+        "case_count": 8,
+        "final_pass_rate": 0.25,
+        "by_semantic": {"e_pawn_central_break": {"total": 2, "passed": 1, "pass_rate": 0.5}},
+    }
+
+    probe = module._skipped_sanity_learning_probe_from_smoke(smoke)
+
+    assert probe["result_kind"] == "smoke_gate_failed_full_gate_skipped"
+    assert probe["full_gate_skipped"] is True
+    assert "distilled_replay_heldout_leakage" in probe["full_gate_skip_reason"]
+    assert probe["final_decision_learning"]["learning_signal"] is False
+
+
+def test_exp30b_semantic_routing_weights_are_scoped():
+    module = _load_validation_module()
+    central = {
+        "case_id": "central",
+        "fen": module.chess.STARTING_FEN,
+        "side": "white",
+        "expected_move": "e2e4",
+        "semantic_class": "e_pawn_central_break",
+    }
+    flank = {
+        "case_id": "flank",
+        "fen": module.chess.STARTING_FEN,
+        "side": "white",
+        "expected_move": "c2c4",
+        "semantic_class": "flank_pawn_push",
+        "flank_context_features": module._flank_context_features(module.chess.STARTING_FEN, "white"),
+    }
+
+    central_weights = module._semantic_routing_weights_for_case(central)
+    flank_weights = module._semantic_routing_weights_for_case(flank)
+
+    assert central_weights["central_head"] > central_weights["flank_head"]
+    assert flank_weights["flank_head"] > flank_weights["central_head"]
+    assert round(sum(central_weights.values()), 4) == 1.0
+    assert round(sum(flank_weights.values()), 4) == 1.0
+
+
+def test_exp29_flank_context_feature_vector_and_trainer_auxiliary(tmp_path):
+    module = _load_validation_module()
+    from services.games import chess_dl
+
+    context = module._flank_context_features(module.chess.STARTING_FEN, "white")
+    vector = module._flank_context_feature_vector(context)
+    sample = {
+        "fen": module.chess.STARTING_FEN,
+        "side": "white",
+        "move_uci": "c2c4",
+        "target": 1.0,
+        "weight": 2.0,
+        "expected_semantic": "flank_pawn_push",
+        "semantic_class": "flank_pawn_push",
+        "flank_context_features": context,
+        "flank_context_feature_vector": vector,
+        "flank_reason_tag": module._flank_reason_tag_for_move(module.chess.STARTING_FEN, "white", "c2c4"),
+        "hard_negatives": ["e2e4", "d2d4", "g1f3", "a2a4"],
+    }
+
+    result = chess_dl.train_experiment_dl_from_replay_samples(
+        [sample],
+        model_path=tmp_path / "exp3_model.json",
+        replay_path=tmp_path / "exp3_replay.jsonl",
+        replace_replay=True,
+    )
+
+    assert len(vector) == 8
+    assert result["ok"] is True
+    assert result["training_objective"] == "contrastive_policy_ranking_with_flank_context_auxiliary_semantic_adapters_budget_scheduler"
+    assert result["auxiliary_objectives"]["flank_context_classification_loss"] is True
+    assert result["auxiliary_objectives"]["semantic_specific_adapter_loss"] is True
+    assert result["auxiliary_objectives"]["retention_aware_update_scheduler"] is True
+    assert result["semantic_loss_budget_scheduler"] is True
+    assert result["flank_context_feature_vector_used"] is True
+    assert result["flank_context_classification_updates"] > 0
+    assert result["flank_reason_tag_updates"] > 0
+    assert result["flank_vs_nonflank_margin_updates"] > 0
+    assert result["semantic_specific_adapters"] is True
+    assert result["semantic_head_update_count"]["flank_head"] > 0
+    assert result["loss_budget_by_semantic"]["flank_pawn_push"] > 0
+    assert result["consumed_budget_by_semantic"]["flank_pawn_push"] > 0
+    assert result["update_schedule_trace"]
+    assert result["anchor_check_after_each_semantic"]
+    assert result["gradient_conflict_matrix"]
+
+
+def test_exp31_semantic_loss_budget_scheduler_report_blocks_interference():
+    module = _load_validation_module()
+    semantic_interference = {
+        "pass_rate_delta_by_semantic": {
+            "e_pawn_central_break": -0.5,
+            "d_pawn_central_break": -0.5,
+            "flank_pawn_push": 0.5,
+            "development_move": 0.0,
+        },
+        "after_pass_rate_by_semantic": {
+            "e_pawn_central_break": {"pass_rate": 0.0},
+            "d_pawn_central_break": {"pass_rate": 0.0},
+            "flank_pawn_push": {"pass_rate": 0.5},
+            "development_move": {"pass_rate": 1.0},
+        },
+        "central_retention": {"e_pawn": 0.0, "d_pawn": 0.0, "min_delta": -0.5},
+        "flank_retention": {"pass_rate": 0.5, "delta": 0.5},
+        "development_retention": {"pass_rate": 1.0, "delta": 0.0},
+    }
+    train_result = {
+        "loss_budget_by_semantic": {"e_pawn_central_break": 10, "d_pawn_central_break": 10, "flank_pawn_push": 10, "development_move": 10},
+        "consumed_budget_by_semantic": {"e_pawn_central_break": 4, "d_pawn_central_break": 4, "flank_pawn_push": 20, "development_move": 4},
+        "effective_gradient_norm_by_semantic": {"flank_pawn_push": 12.0},
+        "update_count_by_semantic": {"flank_pawn_push": 20},
+        "margin_delta_by_semantic": {"flank_pawn_push": 0.8, "d_pawn_central_break": -0.2},
+        "semantic_loss_budget_skew": True,
+        "update_schedule_trace": [{"semantic": "flank_pawn_push"}],
+        "anchor_check_after_each_semantic": [{"after_semantic_update": "flank_pawn_push"}],
+        "retention_delta_after_update": [{"semantic": "d_pawn_central_break", "margin_delta_proxy": -0.2}],
+        "rollback_applied": True,
+        "rollback_reason": "semantic_loss_budget_skew_detected_weight_dampening_applied",
+        "dampened_semantic": "flank_pawn_push",
+        "adjusted_loss_weight": {"flank_pawn_push": 0.55},
+        "gradient_conflict_matrix": {"d_pawn_central_break": {"flank_pawn_push": -0.2}},
+        "negative_cosine_like_conflict_count": 1,
+        "conflict_pair_examples": [{"semantic_pair": ["d_pawn_central_break", "flank_pawn_push"]}],
+    }
+
+    report = module._semantic_loss_budget_scheduler_report(
+        semantic_interference=semantic_interference,
+        train_result=train_result,
+        mistake_retention_probe={"learning_signal": True, "matched_expected": True, "result_kind": "matched_expected"},
+    )
+
+    assert report["semantic_interference"] is True
+    assert report["catastrophic_semantic_interference"] is True
+    assert report["rollback_applied"] is True
+    assert "semantic_loss_budget_skew" in report["interference_reasons"]
+    assert report["central_retention_after_flank_updates"]["e_pawn"] == 0.0
+
+
+def test_exp32_smoke_gate_cases_are_stratified():
+    module = _load_validation_module()
+
+    cases = module._exp30a_smoke_gate_cases()
+    by_semantic = {}
+    for case in cases:
+        by_semantic.setdefault(case["semantic_class"], []).append(case)
+
+    for semantic in ["e_pawn_central_break", "d_pawn_central_break", "flank_pawn_push", "development_move"]:
+        rows = by_semantic[semantic]
+        difficulties = {row["difficulty"] for row in rows}
+        assert len(rows) == 2
+        assert difficulties & {"easy", "medium"}
+        assert "hard" in difficulties
+
+
+def test_exp32_development_multi_good_credit_can_lift_smoke_pass(monkeypatch, tmp_path):
+    module = _load_validation_module()
+    case = {
+        "case_id": "dev_smoke",
+        "fen": module.chess.STARTING_FEN,
+        "side": "white",
+        "expected_move": "g1f3",
+        "semantic_class": "development_move",
+        "difficulty": "easy",
+        "label_quality_detail": {"static_cp_delta": -20},
+    }
+
+    monkeypatch.setattr(
+        module,
+        "_evaluate_sanity_learning_position_batch",
+        lambda *args, **kwargs: [{"case_id": "dev_smoke", "top1": "b1c3", "top3": ["b1c3", "g1f3"], "expected_is_top1": False}],
+    )
+    monkeypatch.setattr(
+        module,
+        "_evaluate_raw_policy_position_batch",
+        lambda *args, **kwargs: [{"case_id": "dev_smoke", "raw_policy_top1": "b1c3", "raw_policy_top3": ["b1c3", "g1f3"], "expected_rank": 2, "expected_is_raw_top1": False}],
+    )
+
+    without_credit = module._position_set_performance(
+        engine_alias="exp3",
+        model_path=tmp_path / "model.json",
+        cases=[case],
+        label="unit",
+        use_development_multi_good_credit=False,
+    )
+    with_credit = module._position_set_performance(
+        engine_alias="exp3",
+        model_path=tmp_path / "model.json",
+        cases=[case],
+        label="unit",
+        use_development_multi_good_credit=True,
+    )
+
+    assert without_credit["final_pass_rate"] == 0.0
+    assert with_credit["final_pass_rate"] == 1.0
+    assert with_credit["development_smoke_after_credit"]["passed"] == 1
+
+
+def test_exp33_safe_checkpoint_selection_falls_back_to_cp10(tmp_path):
+    module = _load_validation_module()
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text("{}")
+    checkpoints = [
+        {
+            "trusted_count": 10,
+            "candidate_model_path": str(tmp_path / "cp10.json"),
+            "new_model_hash": "cp10hash",
+            "mistake_retention_probe": {
+                "learning_signal": True,
+                "matched_expected": True,
+                "result_kind": "matched_expected",
+            },
+        },
+        {
+            "trusted_count": 20,
+            "candidate_model_path": str(tmp_path / "cp20.json"),
+            "new_model_hash": "cp20hash",
+            "mistake_retention_probe": {
+                "learning_signal": False,
+                "matched_expected": False,
+                "result_kind": "repeated_old_mistake",
+                "before_move": "f8a3",
+                "after_move": "f8a3",
+                "expected_move": "a7a5",
+            },
+        },
+    ]
+
+    selected = module._safe_checkpoint_selection(checkpoints, baseline_model_path=baseline)
+
+    assert selected["selected_safe_checkpoint"] == "cp10_fallback"
+    assert selected["cp20_retention_pass"] is False
+    assert selected["cp10_retention_pass"] is True
+    assert selected["selected_model_hash"] == "cp10hash"
+
+
+def test_exp33_e_pawn_dampening_audit_marks_overapplied():
+    module = _load_validation_module()
+    audit = module._exp33_e_pawn_dampening_audit(
+        {
+            "update_count_by_semantic": {
+                "e_pawn_central_break": 10,
+                "d_pawn_central_break": 100,
+                "flank_pawn_push": 100,
+            },
+            "consumed_budget_by_semantic": {"e_pawn_central_break": 1.0},
+            "effective_gradient_norm_by_semantic": {"e_pawn_central_break": 0.1},
+            "margin_delta_by_semantic": {"e_pawn_central_break": -0.2},
+            "dampened_semantic": "e_pawn_central_break",
+            "rollback_reason": "central retention guard",
+        }
+    )
+
+    assert audit["possibly_overapplied"] is True
+    assert audit["dampening_applied_steps"] == 10
+
+
+def test_exp34_retention_case_version_audit_detects_expected_conflict():
+    module = _load_validation_module()
+    checkpoints = [
+        {
+            "trusted_count": 10,
+            "mistake_retention_probe": {
+                "probe_case_id": "game:7:ply:3:e2e4",
+                "fen": module.chess.STARTING_FEN,
+                "before_move": "f8a3",
+                "expected_move": "a5a4",
+                "result_kind": "matched_expected",
+            },
+        },
+        {
+            "trusted_count": 20,
+            "mistake_retention_probe": {
+                "probe_case_id": "game:7:ply:3:e2e4",
+                "fen": module.chess.STARTING_FEN,
+                "before_move": "f8a3",
+                "expected_move": "a7a5",
+                "result_kind": "repeated_old_mistake",
+            },
+        },
+    ]
+
+    audit = module._exp34_retention_case_version_audit(checkpoints)
+
+    assert audit["retention_label_version_conflict"] is True
+    assert audit["conflicts"][0]["expected_moves"] == ["a5a4", "a7a5"]
+
+
+def test_exp34_smoke_level_report_separates_foundation_and_hard_failures():
+    module = _load_validation_module()
+    checkpoints = [
+        {
+            "trusted_count": 10,
+            "mistake_retention_probe": {"learning_signal": True, "matched_expected": True},
+            "incremental_gate": {
+                "smoke_gate": {
+                    "leakage_check": {"held_out_in_training": False, "leakage_detected": False},
+                    "smoke_anchor_audit": {
+                        "cases": [
+                            {"semantic_class": "e_pawn_central_break", "difficulty": "easy", "final_pass": True},
+                            {"semantic_class": "flank_pawn_push", "difficulty": "easy", "final_pass": True},
+                            {"semantic_class": "development_move", "difficulty": "easy", "final_pass": True},
+                            {"semantic_class": "e_pawn_central_break", "difficulty": "hard", "final_pass": False},
+                            {"semantic_class": "flank_pawn_push", "difficulty": "hard", "final_pass": False},
+                        ]
+                    },
+                }
+            },
+        },
+        {
+            "trusted_count": 20,
+            "mistake_retention_probe": {"learning_signal": False, "matched_expected": False},
+            "incremental_gate": {
+                "smoke_gate": {
+                    "leakage_check": {"held_out_in_training": False, "leakage_detected": False},
+                    "smoke_anchor_audit": {
+                        "cases": [
+                            {"semantic_class": "e_pawn_central_break", "difficulty": "easy", "final_pass": False},
+                            {"semantic_class": "flank_pawn_push", "difficulty": "easy", "final_pass": False},
+                            {"semantic_class": "development_move", "difficulty": "easy", "final_pass": True},
+                        ]
+                    },
+                }
+            },
+        },
+    ]
+
+    report = module._exp34_smoke_level_report(
+        checkpoints,
+        retention_audit={"retention_label_version_conflict": False},
+        safe_checkpoint_selection={"selected_safe_checkpoint": "cp10_fallback"},
+    )
+
+    assert report[0]["smoke_level_1_passed"] is True
+    assert report[0]["smoke_level_2_passed"] is False
+    assert report[0]["failure_classification"] == "hard_generalization_fail"
+    assert report[1]["smoke_level_1_passed"] is False
+    assert report[1]["failure_classification"] == "foundation_fail"
+
+
+def test_exp34_hard_flank_audit_quarantines_questionable_label():
+    module = _load_validation_module()
+    checkpoints = [
+        {
+            "trusted_count": 20,
+            "exp33_failed_anchor_isolated_probes": {
+                "cases": [
+                    {
+                        "case_id": "gate_flank_hard_001",
+                        "isolated_exact_pass": False,
+                        "isolated_variant_pass_rate": 0.25,
+                    }
+                ]
+            },
+            "incremental_gate": {
+                "smoke_gate": {
+                    "smoke_anchor_audit": {
+                        "cases": [
+                            {
+                                "case_id": "gate_flank_hard_001",
+                                "semantic_class": "flank_pawn_push",
+                                "difficulty": "hard",
+                                "expected_move": "h7h5",
+                                "expected_rank": 9,
+                                "final_top3": ["e7e5", "g8f6", "d7d5"],
+                                "static_cp_delta": -220,
+                                "decision_breakdown": {"reason": "static_eval_rejected_expected"},
+                            }
+                        ]
+                    }
+                }
+            },
+        }
+    ]
+
+    hard_e, hard_flank = module._exp34_hard_case_decision_audits(checkpoints)
+
+    assert hard_e == []
+    assert hard_flank[0]["questionable_hard_flank_label"] is True
+    assert hard_flank[0]["hard_flank_capability_gap"] is False
+
+
+def test_exp29_flank_context_feature_injection_report_shape(tmp_path):
+    module = _load_validation_module()
+    model_path = tmp_path / "model.json"
+    from services.games import chess_dl
+
+    chess_dl.train_experiment_dl_from_replay_samples(
+        [
+            {
+                "fen": module.chess.STARTING_FEN,
+                "side": "white",
+                "move_uci": "c2c4",
+                "target": 1.0,
+                "weight": 2.0,
+                "expected_semantic": "flank_pawn_push",
+                "semantic_class": "flank_pawn_push",
+                "flank_context_features": module._flank_context_features(module.chess.STARTING_FEN, "white"),
+                "flank_context_feature_vector": module._flank_context_feature_vector(module._flank_context_features(module.chess.STARTING_FEN, "white")),
+                "flank_reason_tag": module._flank_reason_tag_for_move(module.chess.STARTING_FEN, "white", "c2c4"),
+                "hard_negatives": ["e2e4", "d2d4", "g1f3", "a2a4"],
+            }
+        ],
+        model_path=model_path,
+        replay_path=tmp_path / "replay.jsonl",
+        replace_replay=True,
+    )
+    report = module._flank_context_feature_injection_report(
+        engine_alias="exp3",
+        model_path=model_path,
+        cases=[
+            {
+                "case_id": "flank_case",
+                "fen": module.chess.STARTING_FEN,
+                "side": "white",
+                "expected_move": "c2c4",
+                "expected_semantic": "flank_pawn_push",
+                "semantic_class": "flank_pawn_push",
+                "variant_difficulty": "hard",
+                "flank_context_features": module._flank_context_features(module.chess.STARTING_FEN, "white"),
+                "flank_context_feature_vector": module._flank_context_feature_vector(module._flank_context_features(module.chess.STARTING_FEN, "white")),
+                "flank_reason_tag": module._flank_reason_tag_for_move(module.chess.STARTING_FEN, "white", "c2c4"),
+            }
+        ],
+        trainer_result={
+            "flank_context_feature_vector_used": True,
+            "flank_context_classification_updates": 1,
+            "flank_reason_tag_updates": 1,
+            "flank_vs_nonflank_margin_updates": 1,
+            "auxiliary_objectives": {"flank_context_classification_loss": True},
+        },
+    )
+
+    assert report["source"] == "exp29_flank_context_feature_injection"
+    assert report["trainer_feature_injection"] is True
+    assert report["flank_context_classification_loss"]["updates"] == 1
+    assert report["flank_vs_central_margin"]["count"] > 0
+    assert report["case_count"] == 1
+
+
 def test_live_learning_validation_requires_individual_engine_selection():
     module = _load_validation_module()
 
@@ -320,7 +1050,18 @@ def test_live_learning_validation_retrains_every_ten_valid_games_and_records_old
 
 def test_mistake_retention_probe_requires_before_failure_and_after_fix(monkeypatch):
     module = _load_validation_module()
-    samples = [{"fen": "fixture", "side": "white", "move_uci": "e2e4", "game_index": 1, "game_id": 7, "game_label": "old_error", "ply": 3}]
+    samples = [
+        {
+            "category": "mistake_retention",
+            "fen": "fixture",
+            "side": "white",
+            "move_uci": "e2e4",
+            "game_index": 1,
+            "game_id": 7,
+            "game_label": "old_error",
+            "ply": 3,
+        }
+    ]
     calls = []
 
     def fake_choose(engine_alias, board_state, side, model_path, **_kwargs):
@@ -348,7 +1089,7 @@ def test_mistake_retention_probe_requires_before_failure_and_after_fix(monkeypat
 
 def test_mistake_retention_probe_treats_already_fixed_case_as_retained(monkeypatch):
     module = _load_validation_module()
-    samples = [{"fen": "fixture", "side": "white", "move_uci": "e2e4"}]
+    samples = [{"category": "mistake_retention", "fen": "fixture", "side": "white", "move_uci": "e2e4"}]
 
     monkeypatch.setattr(module, "_choose_engine_move_for_eval", lambda *args, **kwargs: {"from": "e2", "to": "e4"})
 
@@ -365,6 +1106,29 @@ def test_mistake_retention_probe_treats_already_fixed_case_as_retained(monkeypat
     assert result["result_kind"] == "retained_expected"
     assert result["learning_signal"] is True
     assert "仍保留正解" in result["human_explanation"]
+
+
+def test_mistake_retention_probe_rejects_fixture_continuation(monkeypatch):
+    module = _load_validation_module()
+    samples = [
+        {
+            "category": "fixture_continuation",
+            "fen": "fixture",
+            "side": "black",
+            "move_uci": "a7a5",
+            "game_index": 1,
+            "game_id": 8,
+            "game_label": "continuation",
+            "ply": 5,
+        }
+    ]
+    monkeypatch.setattr(module, "_choose_engine_move_for_eval", lambda *args, **kwargs: {"from": "a7", "to": "a5"})
+
+    result = module._evaluate_mistake_retention_probe("exp3", Path("before"), Path("after"), samples)
+
+    assert result["supported"] is False
+    assert result["reason"] == "no_mistake_retention_samples"
+    assert result["learning_signal"] is False
 
 
 def test_live_learning_validation_reports_retrain_and_step_timing():
@@ -722,6 +1486,32 @@ def test_sanity_learning_probe_requires_after_top1_and_variant_generalization(mo
         return {"from": "e7", "to": "e5"} if " e6 " not in str(board_state.get("__fen__")) else {"from": "a7", "to": "a5"}
 
     monkeypatch.setattr(module, "_choose_engine_move_for_eval", fake_choose)
+    monkeypatch.setattr(
+        module,
+        "_engine_decision_breakdown",
+        lambda _engine_alias, _model_path, case, **_kwargs: {
+            "chosen_move": case.get("expected_move"),
+            "chosen_reason": "fixture_fast_decision",
+            "candidate_scores": [],
+        },
+    )
+
+    def fake_raw_policy(_engine_alias, model_path, case, **_kwargs):
+        expected = str(case.get("expected_move") or "e7e5")
+        before = str(model_path) == "before"
+        return {
+            "supported": True,
+            "raw_policy_top1": "a7a5" if before else expected,
+            "raw_policy_top3": ["a7a5", expected, "b8c6"] if before else [expected, "a7a5", "b8c6"],
+            "expected_rank": 2 if before else 1,
+            "old_move_rank": 1 if before else 2,
+            "expected_is_raw_top1": not before,
+            "margin_vs_old_move": -1.0 if before else 1.0,
+            "expected_score": 0.0 if before else 1.0,
+            "old_move_score": 1.0 if before else 0.0,
+        }
+
+    monkeypatch.setattr(module, "_evaluate_engine_raw_policy_position", fake_raw_policy)
 
     result = module._evaluate_sanity_learning_probe("exp4", Path("before"), Path("after"), samples)
 
@@ -818,6 +1608,24 @@ def test_sanity_learning_probe_failed_when_after_top1_is_not_expected(monkeypatc
     ]
 
     monkeypatch.setattr(module, "_choose_engine_move_for_eval", lambda *_args, **_kwargs: {"from": "a7", "to": "a5"})
+    monkeypatch.setattr(
+        module,
+        "_engine_decision_breakdown",
+        lambda *_args, **_kwargs: {"chosen_move": "a7a5", "chosen_reason": "fixture_fast_decision"},
+    )
+    monkeypatch.setattr(
+        module,
+        "_evaluate_engine_raw_policy_position",
+        lambda *_args, **_kwargs: {
+            "supported": True,
+            "raw_policy_top1": "a7a5",
+            "raw_policy_top3": ["a7a5", "b8c6", "g8f6"],
+            "expected_rank": 4,
+            "old_move_rank": 1,
+            "expected_is_raw_top1": False,
+            "margin_vs_old_move": -1.0,
+        },
+    )
 
     result = module._evaluate_sanity_learning_probe("exp4", Path("before"), Path("after"), samples)
 
@@ -1119,3 +1927,132 @@ def test_live_learning_validation_minimal_gate_failure_fixture_writes_consistent
     assert "strength_evidence: `False`" in engine_md
     assert "目前沒有足夠證據證明 retrain 改善了該錯誤" in engine_md
     assert module._report_consistency_issues(root_json, [engine_json], root_md, {"exp3": engine_md}) == []
+
+
+def test_quick_retrain_skip_heavy_sanity_flag_is_wired():
+    source = SCRIPT.read_text(encoding="utf-8")
+
+    assert "--quick-retrain-skip-heavy-sanity" in source
+    assert "skip_heavy_sanity=bool(args.quick_retrain_skip_heavy_sanity)" in source
+    assert "skip_heavy_sanity=bool(skip_heavy_sanity)" in source
+    assert "def _skipped_sanity_learning_probe_heavy_skip" in source
+    assert "def _skipped_semantic_interference_isolation_report" in source
+    assert "def _skipped_prior_sanity_case_retention" in source
+    assert "def _skipped_flank_context_feature_injection_report" in source
+    assert "skipped_heavy_diagnostics" in source
+    assert "heavy_sanity_skipped" in source
+    assert "generalization_blocker" in source
+    assert "targeted_mistake_fixed" in source
+    assert "trainer_timeout" in source
+
+
+def test_skipped_sanity_learning_probe_heavy_skip_shape():
+    module = _load_validation_module()
+    stub = module._skipped_sanity_learning_probe_heavy_skip(
+        {
+            "passed": True,
+            "case_count": 12,
+            "final_pass_rate": 0.875,
+            "by_semantic": {"central_head": 0.9},
+            "smoke_anchor_audit": {"checked": 3},
+        }
+    )
+
+    assert stub["result_kind"] == "skipped_heavy_diagnostics"
+    assert stub["heavy_sanity_skipped"] is True
+    assert stub["full_gate_skipped"] is True
+    assert stub["full_gate_skip_reason"] == "quick_retrain_skip_heavy_sanity"
+    assert stub["seen_variant_pass_rate"] is None
+    assert stub["balanced_clean_held_out_pass_rate"] is None
+    assert stub["final_decision_learning"]["blocked_reason"] == "heavy_sanity_diagnostics_skipped"
+    assert stub["clean_heldout_by_semantic"] == {"central_head": 0.9}
+
+
+def test_skipped_semantic_interference_and_prior_retention_stubs_are_inert():
+    module = _load_validation_module()
+    semantic = module._skipped_semantic_interference_isolation_report()
+    prior = module._skipped_prior_sanity_case_retention()
+    flank = module._skipped_flank_context_feature_injection_report()
+
+    assert semantic["skipped"] is True
+    assert semantic["interference"] is False
+    assert semantic["interference_reasons"] == []
+    assert prior["skipped"] is True
+    assert prior["failed_count"] == 0
+    assert prior["learning_signal"] is None
+    assert flank["skipped"] is True
+    assert flank["cases"] == []
+
+
+def test_promotion_gate_short_circuits_on_heavy_sanity_skip():
+    module = _load_validation_module()
+    summary = {
+        "engine_alias": "exp4",
+        "replay_summary": {"trusted_replays": module.VALID_GAMES, "quarantine_replays": module.INVALID_GAMES},
+        "dataset_integrity": {"contaminated_rows": 0, "duplicate_ratio": 0.0, "invalid_fen": 0, "illegal_moves": 0, "side_mismatch": 0, "short_resign_games": 0},
+        "poison_detection": {"forced_repetition_patterns": 0, "intentional_blunders": 0, "engine_copy_suspected": 0, "suspicious_resign_rate": 0.0},
+        "stability": {"catastrophic_regression": False},
+        "quick_retrain_gate": {"enabled": True},
+        "before_after_eval": {
+            "benchmark_before": {"skipped": True, "reason": "stochastic_auxiliary_disabled"},
+            "benchmark_after": {"skipped": True, "reason": "stochastic_auxiliary_disabled"},
+            "checkpoints": [
+                {
+                    "trusted_count": 10,
+                    "heavy_sanity_skipped": True,
+                    "trainer_timeout": False,
+                    "hash_changed": True,
+                    "targeted_mistake_fixed": True,
+                    "broad_strength_improvement": False,
+                    "generalization_blocker": "heavy_sanity_skipped",
+                    "mistake_retention_probe": {"learning_signal": True, "matched_expected": True},
+                    "sanity_learning_probe": {
+                        "result_kind": "skipped_heavy_diagnostics",
+                        "heavy_sanity_skipped": True,
+                        "full_gate_skipped": True,
+                        "learning_signal": False,
+                        "learning_signal_reason": "full deterministic sanity probe skipped by --quick-retrain-skip-heavy-sanity",
+                        "seen_variant_pass_rate": None,
+                        "unseen_variant_count": 0,
+                        "balanced_clean_held_out_count": 0,
+                        "hard_clean_held_out_count": 0,
+                        "final_decision_learning": {"learning_signal": None, "blocked_reason": "heavy_sanity_diagnostics_skipped"},
+                    },
+                }
+            ],
+        },
+        "deterministic_strength_snapshot": {
+            "supported": True,
+            "skipped": False,
+            "passed": True,
+            "reasons": [],
+            "score_table": [
+                {"model_label": "baseline", "overall_deterministic_score": 0.8},
+                {"model_label": "final", "overall_deterministic_score": 0.8},
+            ],
+            "final": {"overall_deterministic_score": 0.8, "illegal_rate": 0.0, "blunder_avoid_rate": 1.0},
+        },
+        "engine_verdict": "PARTIAL",
+    }
+
+    gate = module._promotion_gate_summary(summary)
+
+    skip_reasons = [reason for reason in gate["reasons"] if "heavy sanity diagnostics skipped" in reason]
+    assert len(skip_reasons) == 1
+    assert "broad strength improvement not evaluated" in skip_reasons[0]
+    cascade_reasons = [
+        reason
+        for reason in gate["reasons"]
+        if any(
+            tag in reason
+            for tag in (
+                "sanity seen variant pass rate",
+                "sanity unseen variants missing",
+                "sanity clean held-out labels",
+                "sanity hard clean held-out",
+                "sanity final decision learning",
+            )
+        )
+    ]
+    assert cascade_reasons == []
+    assert gate["passed"] is False

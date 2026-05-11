@@ -5,9 +5,10 @@ This module is the pragmatic final-phase prototype:
 - better board encoding than the move-feature-only NN/DL engines
 - a dual-head model with policy prior + value estimation
 - integration with the shared alpha-beta search stack
+- a deterministic root MCTS/PUCT decision mode for the policy/value route
 
 It deliberately stays CPU-friendly and JSON-serializable so it fits the
-current Python repo without introducing heavyweight NNUE/MCTS machinery.
+current Python repo without introducing heavyweight external dependencies.
 """
 
 from __future__ import annotations
@@ -41,6 +42,11 @@ _SEARCH_PROFILES = {
     "fast": {"depth": 1, "quiescence_depth": 1, "time_budget_ms": 150},
     "balanced": {"depth": 2, "quiescence_depth": 2, "time_budget_ms": 340},
     "strong": {"depth": 2, "quiescence_depth": 4, "time_budget_ms": 1100},
+}
+_MCTS_SIMULATIONS = {
+    "fast": 32,
+    "balanced": 72,
+    "strong": 160,
 }
 _CONTRASTIVE_NEGATIVE_TARGET = -0.45
 _CONTRASTIVE_MAX_NEGATIVES = 32
@@ -77,6 +83,8 @@ _BLACK_KING_HOME = chess.E8
 _WHITE_CASTLED_SQUARES = {chess.G1, chess.C1}
 _BLACK_CASTLED_SQUARES = {chess.G8, chess.C8}
 _CENTER_SQUARES = {chess.D4, chess.E4, chess.D5, chess.E5}
+_HOME_PAWN_RANKS = {chess.WHITE: 1, chess.BLACK: 6}
+_HOME_MINOR_RANKS = {chess.WHITE: 0, chess.BLACK: 7}
 
 
 def default_chess_pv_model_path() -> Path:
@@ -474,6 +482,69 @@ def _move_development_bias(board: chess.Board, move: chess.Move) -> int:
     return score
 
 
+def _opening_principle_score(board: chess.Board, move: chess.Move) -> int:
+    if board.fullmove_number > 8:
+        return 0
+    piece = board.piece_at(move.from_square)
+    if piece is None:
+        return 0
+    from_file = chess.square_file(move.from_square)
+    from_rank = chess.square_rank(move.from_square)
+    to_file = chess.square_file(move.to_square)
+    to_rank = chess.square_rank(move.to_square)
+    advance = abs(to_rank - from_rank)
+    score = 0
+    if piece.piece_type == chess.PAWN:
+        if from_file in {chess.FILE_NAMES.index("d"), chess.FILE_NAMES.index("e")}:
+            score += 1450 if advance == 2 and from_rank == _HOME_PAWN_RANKS[piece.color] else 520
+        elif from_file == chess.FILE_NAMES.index("c"):
+            score += 1300 if advance == 2 and from_rank == _HOME_PAWN_RANKS[piece.color] else 430
+        elif from_file in {chess.FILE_NAMES.index("a"), chess.FILE_NAMES.index("h")}:
+            score -= 900
+        elif from_file in {chess.FILE_NAMES.index("b"), chess.FILE_NAMES.index("g")}:
+            score -= 380
+        elif from_file == chess.FILE_NAMES.index("f"):
+            score -= 180
+    elif piece.piece_type == chess.KNIGHT:
+        if from_rank == _HOME_MINOR_RANKS[piece.color]:
+            score += 920
+        if move.to_square in _CENTER_SQUARES or to_file in {chess.FILE_NAMES.index("c"), chess.FILE_NAMES.index("f")}:
+            score += 180
+    elif piece.piece_type == chess.BISHOP:
+        if from_rank == _HOME_MINOR_RANKS[piece.color]:
+            score += 700
+        if to_file in {
+            chess.FILE_NAMES.index("b"),
+            chess.FILE_NAMES.index("c"),
+            chess.FILE_NAMES.index("e"),
+            chess.FILE_NAMES.index("g"),
+        }:
+            score += 90
+    elif piece.piece_type == chess.QUEEN and board.fullmove_number <= 5 and not board.is_capture(move) and not board.gives_check(move):
+        score -= 500
+    elif piece.piece_type == chess.ROOK and board.fullmove_number <= 10 and not board.is_castling(move):
+        score -= 700
+    if board.is_castling(move):
+        score += 780
+    if board.is_capture(move):
+        score += 160
+    if board.gives_check(move):
+        score += 120
+    return score
+
+
+def _opening_principle_fallback(board: chess.Board, best_move: chess.Move | None) -> chess.Move | None:
+    if best_move is None or board.fullmove_number > 8:
+        return best_move
+    legal = sorted(board.legal_moves, key=lambda item: item.uci())
+    if not legal:
+        return best_move
+    principled = max(legal, key=lambda move: (_opening_principle_score(board, move), move.uci()))
+    if _opening_principle_score(board, principled) >= _opening_principle_score(board, best_move) + 500:
+        return principled
+    return best_move
+
+
 def _is_early_quiet_rook_move(board: chess.Board, move: chess.Move) -> bool:
     piece = board.piece_at(move.from_square)
     if piece is None or piece.piece_type != chess.ROOK:
@@ -496,7 +567,7 @@ def _sanity_move_score(
     eval_cache: dict[int, int],
     hasher: ZobristHasher,
 ) -> int:
-    score = _move_development_bias(board, move)
+    score = _move_development_bias(board, move) + _opening_principle_score(board, move)
     if board.is_capture(move):
         captured = board.piece_at(move.to_square)
         if captured is not None:
@@ -621,6 +692,117 @@ def _pv_static_eval(board: chess.Board, model: dict, eval_cache: dict[int, int],
     return score
 
 
+def _policy_value_mcts_root_analysis(
+    board: chess.Board,
+    *,
+    model: dict,
+    side: str,
+    profile_name: str,
+    hasher: ZobristHasher,
+    eval_cache: dict[int, int],
+) -> dict:
+    legal = sorted(board.legal_moves, key=lambda item: item.uci())
+    if not legal:
+        return {"best_move": None, "stats": [], "simulations": 0}
+    hidden = _forward_shared(model, _board_planes(board))
+    priors: dict[str, float] = {}
+    for move in legal:
+        raw = _policy_score_for_move(model, hidden, board, move, side)
+        priors[move.uci()] = math.exp(float(raw))
+    prior_total = sum(priors.values()) or 1.0
+    for move_uci in list(priors):
+        priors[move_uci] = priors[move_uci] / prior_total
+
+    color_sign = 1 if board.turn == chess.WHITE else -1
+    stats = {
+        move.uci(): {
+            "move": move,
+            "visits": 0,
+            "total": 0.0,
+            "prior": float(priors.get(move.uci()) or 0.0),
+        }
+        for move in legal
+    }
+    simulations = int(_MCTS_SIMULATIONS.get(str(profile_name or "balanced"), _MCTS_SIMULATIONS["balanced"]))
+    exploration = 1.25
+    for _index in range(max(1, simulations)):
+        total_visits = sum(int(row["visits"]) for row in stats.values())
+
+        def select_score(row: dict) -> tuple[float, str]:
+            visits = int(row["visits"])
+            average = float(row["total"]) / visits if visits else 0.0
+            prior_bonus = exploration * float(row["prior"]) * math.sqrt(total_visits + 1.0) / (1.0 + visits)
+            return average + prior_bonus, str(row["move"].uci())
+
+        selected = max(stats.values(), key=select_score)
+        move = selected["move"]
+        after = board.copy(stack=False)
+        after.push(move)
+        if after.is_checkmate():
+            value = 1_000_000.0
+        else:
+            value = float(color_sign * _pv_static_eval(after, model, eval_cache, hasher))
+        value += float(_move_development_bias(board, move) * 10)
+        value += float(_opening_principle_score(board, move) * 4)
+        piece = board.piece_at(move.from_square)
+        if board.fullmove_number <= 4 and piece and piece.piece_type == chess.PAWN:
+            from_file = chess.square_file(move.from_square)
+            if from_file in {chess.FILE_NAMES.index("d"), chess.FILE_NAMES.index("e")}:
+                value += 420.0
+            elif from_file in {chess.FILE_NAMES.index("a"), chess.FILE_NAMES.index("b"), chess.FILE_NAMES.index("g"), chess.FILE_NAMES.index("h")}:
+                value -= 320.0
+        selected["visits"] = int(selected["visits"]) + 1
+        selected["total"] = float(selected["total"]) + value
+
+    def final_score(row: dict) -> tuple[float, int, str]:
+        visits = int(row["visits"])
+        average = float(row["total"]) / visits if visits else -1_000_000.0
+        policy_bonus = float(row["prior"]) * 35.0
+        return average + policy_bonus, visits, str(row["move"].uci())
+
+    rows = []
+    for row in stats.values():
+        visits = int(row["visits"])
+        q_value = float(row["total"]) / visits if visits else -1_000_000.0
+        score, _visits, _uci = final_score(row)
+        rows.append(
+            {
+                "move": row["move"].uci(),
+                "mcts_prior": round(float(row["prior"]), 8),
+                "mcts_visit_count": visits,
+                "mcts_q_value": round(q_value, 4),
+                "mcts_final_score": round(float(score), 4),
+            }
+        )
+    rows.sort(key=lambda item: (-float(item["mcts_final_score"]), -int(item["mcts_visit_count"]), str(item["move"])))
+    best = rows[0]["move"] if rows else ""
+    return {
+        "best_move": chess.Move.from_uci(best) if best else None,
+        "best_move_uci": best,
+        "stats": rows,
+        "simulations": max(1, simulations),
+    }
+
+
+def _policy_value_mcts_move(
+    board: chess.Board,
+    *,
+    model: dict,
+    side: str,
+    profile_name: str,
+    hasher: ZobristHasher,
+    eval_cache: dict[int, int],
+) -> chess.Move | None:
+    return _policy_value_mcts_root_analysis(
+        board,
+        model=model,
+        side=side,
+        profile_name=profile_name,
+        hasher=hasher,
+        eval_cache=eval_cache,
+    )["best_move"]
+
+
 def _candidate_move_features(board: chess.Board, move: chess.Move, side: str) -> list[float]:
     before = board.copy(stack=False)
     after = before.copy(stack=False)
@@ -628,7 +810,16 @@ def _candidate_move_features(board: chess.Board, move: chess.Move, side: str) ->
     return _candidate_features(before, move, after, side)
 
 
-def choose_experiment_pv_move(board_state, side: str, *, model_path=None, search_profile="balanced", fusion_mode="balanced_fusion", decision_context=None):
+def choose_experiment_pv_move(
+    board_state,
+    side: str,
+    *,
+    model_path=None,
+    search_profile="balanced",
+    fusion_mode="balanced_fusion",
+    decision_context=None,
+    decision_mode="alpha_beta",
+):
     board = to_chess_board(board_state, side)
     ai_color = chess.WHITE if side == "white" else chess.BLACK
     if board.turn != ai_color:
@@ -647,7 +838,8 @@ def choose_experiment_pv_move(board_state, side: str, *, model_path=None, search
         model = _load_model(Path(model_path or default_chess_pv_model_path()))
         hasher = ZobristHasher(seed=20260521)
         eval_cache: dict[int, int] = {}
-        profile = _resolve_search_profile(search_profile)
+        profile_name = str(search_profile or "balanced").strip().lower()
+        profile = _resolve_search_profile(profile_name)
         hidden_cache: dict[int, list[float]] = {}
 
         def move_order_fn(current_board: chess.Board, move: chess.Move, _ply: int) -> int:
@@ -660,18 +852,29 @@ def choose_experiment_pv_move(board_state, side: str, *, model_path=None, search
                 hidden_cache[board_hash] = hidden
             score = int(_policy_score_for_move(model, hidden, current_board, move, current_side) * 1000.0)
             score += _move_development_bias(current_board, move)
+            score += _opening_principle_score(current_board, move)
             return score
 
-        search = search_best_move(
-            board,
-            max_depth=profile["depth"],
-            evaluate=lambda current_board: _pv_static_eval(current_board, model, eval_cache, hasher),
-            move_order_fn=move_order_fn,
-            hasher=hasher,
-            quiescence_depth=profile["quiescence_depth"],
-            time_budget_ms=profile.get("time_budget_ms"),
-        )
-        best_move = search.best_move
+        if str(decision_mode or "alpha_beta").strip().lower() == "mcts":
+            best_move = _policy_value_mcts_move(
+                board,
+                model=model,
+                side=side,
+                profile_name=profile_name,
+                hasher=hasher,
+                eval_cache=eval_cache,
+            )
+        else:
+            search = search_best_move(
+                board,
+                max_depth=profile["depth"],
+                evaluate=lambda current_board: _pv_static_eval(current_board, model, eval_cache, hasher),
+                move_order_fn=move_order_fn,
+                hasher=hasher,
+                quiescence_depth=profile["quiescence_depth"],
+                time_budget_ms=profile.get("time_budget_ms"),
+            )
+            best_move = search.best_move
         if best_move is not None:
             best_move = _opening_sanity_fallback(
                 board,
@@ -681,8 +884,12 @@ def choose_experiment_pv_move(board_state, side: str, *, model_path=None, search
                 eval_cache=eval_cache,
                 hasher=hasher,
             )
+            best_move = _opening_principle_fallback(board, best_move)
         policy_override = _policy_override_move(model, board, side, fusion_mode=fusion_mode, decision_context=decision_context)
-        if policy_override is not None:
+        if policy_override is not None and (
+            best_move is None
+            or _opening_principle_score(board, policy_override) + 500 >= _opening_principle_score(board, best_move)
+        ):
             best_move = policy_override
     if best_move is None:
         return None
@@ -702,7 +909,17 @@ def choose_experiment_pv_move(board_state, side: str, *, model_path=None, search
     }
 
 
-def explain_experiment_pv_decision(board_state, side: str, *, model_path=None, search_profile="fast", watched_moves=None, fusion_mode="balanced_fusion", decision_context=None) -> dict:
+def explain_experiment_pv_decision(
+    board_state,
+    side: str,
+    *,
+    model_path=None,
+    search_profile="fast",
+    watched_moves=None,
+    fusion_mode="balanced_fusion",
+    decision_context=None,
+    decision_mode="alpha_beta",
+) -> dict:
     board = to_chess_board(board_state, side)
     ai_color = chess.WHITE if side == "white" else chess.BLACK
     if board.turn != ai_color:
@@ -734,19 +951,34 @@ def explain_experiment_pv_decision(board_state, side: str, *, model_path=None, s
             raw = _policy_score_for_move(model, hidden, current_board, move, current_side)
             return int(raw * 1000.0) + _move_development_bias(current_board, move)
 
-        search = search_best_move(
-            board,
-            max_depth=profile["depth"],
-            evaluate=lambda current_board: _pv_static_eval(current_board, model, eval_cache, hasher),
-            move_order_fn=move_order_fn,
-            hasher=hasher,
-            quiescence_depth=profile["quiescence_depth"],
-            time_budget_ms=profile.get("time_budget_ms"),
-        )
-        chosen = search.best_move
-        search_score = int(search.score)
-        search_depth = int(search.depth)
-        chosen_reason = "search_best_move"
+        mcts_analysis = {"stats": [], "simulations": 0}
+        if str(decision_mode or "alpha_beta").strip().lower() == "mcts":
+            mcts_analysis = _policy_value_mcts_root_analysis(
+                board,
+                model=model,
+                side=side,
+                profile_name=str(search_profile or "fast").strip().lower(),
+                hasher=hasher,
+                eval_cache=eval_cache,
+            )
+            chosen = mcts_analysis["best_move"]
+            search_score = 0
+            search_depth = 0
+            chosen_reason = "policy_value_mcts"
+        else:
+            search = search_best_move(
+                board,
+                max_depth=profile["depth"],
+                evaluate=lambda current_board: _pv_static_eval(current_board, model, eval_cache, hasher),
+                move_order_fn=move_order_fn,
+                hasher=hasher,
+                quiescence_depth=profile["quiescence_depth"],
+                time_budget_ms=profile.get("time_budget_ms"),
+            )
+            chosen = search.best_move
+            search_score = int(search.score)
+            search_depth = int(search.depth)
+            chosen_reason = "search_best_move"
         fallback = _opening_sanity_fallback(
             board,
             ai_color=ai_color,
@@ -758,20 +990,35 @@ def explain_experiment_pv_decision(board_state, side: str, *, model_path=None, s
         if fallback is not None and chosen is not None and fallback != chosen:
             chosen = fallback
             chosen_reason = "opening_sanity_fallback"
+        principled = _opening_principle_fallback(board, chosen)
+        if principled is not None and chosen is not None and principled != chosen:
+            chosen = principled
+            chosen_reason = "opening_principle_fallback"
         policy_override = _policy_override_info(model, board, side, fusion_mode=fusion_mode, decision_context=decision_context)
         if policy_override.get("used"):
-            chosen = chess.Move.from_uci(str(policy_override.get("move")))
-            chosen_reason = "high_confidence_policy_override"
+            override_move = chess.Move.from_uci(str(policy_override.get("move")))
+            if chosen is None or _opening_principle_score(board, override_move) + 500 >= _opening_principle_score(board, chosen):
+                chosen = override_move
+                chosen_reason = "high_confidence_policy_override"
     color_sign = 1 if ai_color == chess.WHITE else -1
     thresholds = _adaptive_policy_thresholds(fusion_mode=fusion_mode, decision_context=decision_context)
     policy_weight = int(thresholds.get("policy_weight") or 0)
     moves = []
     max_child_depth = max(0, int(profile["depth"]) - 1)
+    mcts_stats_by_move = {
+        str(row.get("move") or ""): row
+        for row in (mcts_analysis.get("stats") if "mcts_analysis" in locals() else []) or []
+    }
     for move in sorted(board.legal_moves, key=lambda item: item.uci()):
         after = board.copy(stack=False)
         after.push(move)
         static_eval_score = int(color_sign * _pv_static_eval(after, model, eval_cache, hasher))
-        if after.is_checkmate():
+        mcts_row = mcts_stats_by_move.get(move.uci()) or {}
+        if str(decision_mode or "alpha_beta").strip().lower() == "mcts":
+            # Root MCTS already evaluated all legal moves; avoid an extra alpha-beta
+            # search per candidate when this function is used for audit reports.
+            per_move_search = int(float(mcts_row.get("mcts_final_score") or static_eval_score))
+        elif after.is_checkmate():
             per_move_search = 9_000_000
         elif max_child_depth <= 0:
             per_move_search = static_eval_score
@@ -788,7 +1035,14 @@ def explain_experiment_pv_decision(board_state, side: str, *, model_path=None, s
         policy = dict(policy_rows.get(move.uci()) or {"move": move.uci()})
         policy["static_eval_score"] = static_eval_score
         policy["search_score"] = int(per_move_search)
-        policy["fused_score"] = round(float(per_move_search) + float(policy.get("raw_policy_score") or 0.0) * policy_weight, 4)
+        policy.update(mcts_row)
+        policy["opening_principle_score"] = int(_opening_principle_score(board, move))
+        policy["fused_score"] = round(
+            float(per_move_search)
+            + float(policy.get("raw_policy_score") or 0.0) * policy_weight
+            + float(policy["opening_principle_score"]),
+            4,
+        )
         policy["final_combined_score"] = policy["fused_score"]
         policy["override_applied"] = bool(policy_override.get("used") and str(policy_override.get("move") or "") == move.uci()) if "policy_override" in locals() else False
         policy["override_reason"] = str((policy_override if "policy_override" in locals() else {}).get("reason") or "")
@@ -812,6 +1066,12 @@ def explain_experiment_pv_decision(board_state, side: str, *, model_path=None, s
         "search_depth": search_depth if chosen_move else 0,
         "chosen_breakdown": chosen_row or {},
         "fusion_mode": str(fusion_mode or "balanced_fusion"),
+        "decision_mode": str(decision_mode or "alpha_beta"),
+        "mcts": (
+            {**mcts_analysis, "best_move": str(mcts_analysis.get("best_move_uci") or "")}
+            if "mcts_analysis" in locals()
+            else {"stats": [], "simulations": 0}
+        ),
         "policy_override": policy_override if "policy_override" in locals() else _policy_override_info(model, board, side, fusion_mode=fusion_mode, decision_context=decision_context),
         "watched_moves": watched_moves_rows,
         "top_final_moves": moves[:5],

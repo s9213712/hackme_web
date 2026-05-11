@@ -712,7 +712,7 @@ def _choose_student_move(
     if difficulty == EXPERIMENT_DL_DIFFICULTY:
         return choose_experiment_dl_move(board_state, side, model_path=dl_model_path, search_profile="strong")
     if difficulty == EXPERIMENT_PV_DIFFICULTY:
-        return choose_experiment_pv_move(board_state, side, model_path=pv_model_path, search_profile="strong")
+        return choose_experiment_pv_move(board_state, side, model_path=pv_model_path, search_profile="strong", decision_mode="mcts")
     if difficulty == EXPERIMENT_NNUE_DIFFICULTY:
         return choose_experiment_nnue_move(board_state, side, model_path=nnue_model_path, search_profile="strong")
     raise ValueError(f"unsupported student difficulty: {difficulty}")

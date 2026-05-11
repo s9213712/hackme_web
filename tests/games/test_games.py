@@ -33,6 +33,7 @@ from services.games.chess_replay_buffer import (
     classify_replay_record,
     replay_buffer_summary,
 )
+from services.games.chess_model_registry import ensure_runtime_model_from_bundle
 from services.games.chess_pv import experiment_pv_model_template
 from services.games.chess import game_status, initial_board, legal_moves, validate_move
 from services.games.chess_search import ZobristHasher, search_best_move
@@ -150,7 +151,14 @@ def test_game_catalog_includes_solo_games(tmp_path):
     games = response.get_json()["games"]
     by_key = {game["key"]: game for game in games}
     assert {"chess", "sudoku", "minesweeper", "1a2b", "tetris", "space_shooter"} <= set(by_key)
-    assert [item["key"] for item in by_key["chess"]["computer_difficulties"]] == ["normal", "hard", "experiment", "experiment 3:dl", "experiment 4:pv"]
+    assert [item["key"] for item in by_key["chess"]["computer_difficulties"]] == [
+        "normal",
+        "hard",
+        "experiment",
+        "experiment 3:dl",
+        "experiment 4:pv",
+        "experiment 5:nnue",
+    ]
     assert by_key["sudoku"]["supports_invites"] is False
     assert by_key["minesweeper"]["supports_computer"] is False
     assert by_key["1a2b"]["supports_invites"] is False
@@ -719,6 +727,12 @@ def test_chess_practice_difficulty_is_persisted_and_rejects_invalid_value(tmp_pa
     experiment_pv_match = client.get(f"/api/games/chess/matches/{experiment_pv_id}").get_json()["match"]
     assert experiment_pv_match["computer_difficulty"] == "experiment 4:pv"
 
+    experiment_nnue = client.post("/api/games/chess/practice", json={"difficulty": "experiment 5:nnue"})
+    assert experiment_nnue.status_code == 200
+    experiment_nnue_id = experiment_nnue.get_json()["match_id"]
+    experiment_nnue_match = client.get(f"/api/games/chess/matches/{experiment_nnue_id}").get_json()["match"]
+    assert experiment_nnue_match["computer_difficulty"] == "experiment 5:nnue"
+
 
 def test_chess_computer_normal_difficulty_prefers_high_value_capture():
     board = {
@@ -1024,8 +1038,15 @@ def test_experiment_dl_contrastive_replay_can_make_expected_raw_policy_top1(tmp_
 
     assert before[0]["move"] != "f7f5"
     assert after[0]["move"] == "f7f5"
-    assert result["training_objective"] == "contrastive_policy_ranking"
+    assert result["training_objective"] == "contrastive_policy_ranking_with_flank_context_auxiliary_semantic_adapters_budget_scheduler"
+    assert result["auxiliary_objectives"]["flank_context_classification_loss"] is True
+    assert result["auxiliary_objectives"]["semantic_specific_adapter_loss"] is True
+    assert result["auxiliary_objectives"]["retention_aware_update_scheduler"] is True
     assert result["contrastive_negative_updates"] > 0
+    assert result["semantic_head_update_count"]
+    assert result["semantic_loss_budget_scheduler"] is True
+    assert result["loss_budget_by_semantic"]
+    assert result["update_schedule_trace"]
     assert result["policy_probe"]["raw_policy_top1_changed_to_expected"] is True
 
 
@@ -1197,6 +1218,33 @@ def test_experiment_pv_decision_explain_reports_policy_override_scores(tmp_path,
     assert "override_applied" in watched["e7e5"]
     assert "override_reason" in watched["e7e5"]
     assert "final_combined_score" in watched["e7e5"]
+
+
+def test_experiment_pv_mcts_decision_explain_reports_root_stats(tmp_path, monkeypatch):
+    model_path = tmp_path / "runtime" / "models" / "chess_experiment_4_pv.json"
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_PV_MODEL_PATH", str(model_path))
+    fen = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"
+    train_experiment_pv_from_replay_samples(
+        [{"fen": fen, "side": "black", "move_uci": "e7e5", "target": 1.0, "weight": 1.0}],
+        model_path=model_path,
+    )
+
+    explanation = explain_experiment_pv_decision(
+        {"__fen__": fen},
+        "black",
+        model_path=model_path,
+        search_profile="fast",
+        watched_moves=["e7e5", "a7a5"],
+        decision_mode="mcts",
+    )
+
+    assert explanation["decision_mode"] == "mcts"
+    assert explanation["mcts"]["simulations"] > 0
+    assert explanation["mcts"]["stats"]
+    watched = {row["move"]: row for row in explanation["watched_moves"]}
+    assert "mcts_prior" in watched["e7e5"]
+    assert "mcts_visit_count" in watched["e7e5"]
+    assert "mcts_q_value" in watched["e7e5"]
 
 
 def test_experiment_pv_resign_collects_replay_without_mutating_model(tmp_path, monkeypatch):
@@ -1462,6 +1510,7 @@ def test_root_chess_engine_dashboard_reports_warm_start_and_replay_summary(tmp_p
     assert payload["ok"] is True
     assert payload["warm_start"]["ok"] is True
     assert any(row["engine"] == "experiment 4:pv" for row in payload["production_models"])
+    assert any(row["engine"] == "experiment 5:nnue" for row in payload["production_models"])
     assert payload["replay_buffer"]["total_replays"] == 0
     assert payload["pipeline"]["train_path"].endswith("train.jsonl")
     assert "chess_replay_prepare.py" in payload["pipeline"]["commands"]["prepare"]
@@ -1678,13 +1727,32 @@ def test_root_chess_promotion_stage_and_promote(tmp_path, monkeypatch):
     assert promoted.status_code == 200
     promoted_payload = promoted.get_json()
     assert promoted_payload["ok"] is True
-    assert Path(promoted_payload["production_path"]).exists()
+    production_path = Path(promoted_payload["production_path"])
+    assert production_path.exists()
+    assert production_path.read_text(encoding="utf-8") == candidate_source.read_text(encoding="utf-8")
 
     status_response = client.get("/api/root/games/chess/promotion/status")
     assert status_response.status_code == 200
     status_payload = status_response.get_json()["promotion"]["status"]
     assert status_payload["last_promotion_result"]["engine"] == "experiment 4:pv"
     assert status_payload["candidate"] is None
+
+
+def test_chess_warm_start_does_not_overwrite_existing_runtime_model(tmp_path):
+    bundled = tmp_path / "services" / "games" / "models" / "seed.json"
+    runtime = tmp_path / "runtime" / "games" / "models" / "model.json"
+    bundled.parent.mkdir(parents=True)
+    runtime.parent.mkdir(parents=True)
+    bundled.write_text('{"source":"bundle"}\n', encoding="utf-8")
+    runtime.write_text('{"source":"runtime_retrained"}\n', encoding="utf-8")
+
+    result = ensure_runtime_model_from_bundle(runtime, bundled)
+
+    assert result["ok"] is True
+    assert result["source"] == "runtime_existing"
+    assert result["copied"] is False
+    assert runtime.read_text(encoding="utf-8") == '{"source":"runtime_retrained"}\n'
+    assert bundled.read_text(encoding="utf-8") == '{"source":"bundle"}\n'
 
 
 def test_root_chess_promotion_gate_blocks_weak_candidate(tmp_path, monkeypatch):
