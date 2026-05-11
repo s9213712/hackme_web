@@ -719,6 +719,11 @@ def register_system_admin_routes(app, deps):
                 return artifact
         return ""
 
+    def _production_report_type_for_security_job(kind):
+        return {
+            "privilege": "permission",
+        }.get(str(kind or "").strip(), str(kind or "").strip())
+
     def _maybe_upload_production_report(*, kind, report_artifacts, started_ts, actor_username, client_ip, job_id):
         """Auto-upload a passed security-test report to ServerModeService so
         the production gate can see it. Returns a dict suitable to attach to
@@ -729,8 +734,9 @@ def register_system_admin_routes(app, deps):
             not to upload (e.g. stress run had failures)
           - ``{"ok": False, "skipped": False, "reason": "..."}`` on errors
         """
+        report_type = _production_report_type_for_security_job(kind)
         if not server_mode_service:
-            return {"ok": False, "skipped": True, "reason": "server_mode_service_unavailable", "report_type": kind}
+            return {"ok": False, "skipped": True, "reason": "server_mode_service_unavailable", "report_type": report_type}
         json_path = ""
         for artifact in report_artifacts or []:
             full = os.path.join(BASE_DIR, artifact)
@@ -738,7 +744,8 @@ def register_system_admin_routes(app, deps):
                 json_path = full
                 break
         raw_report = {
-            "report_type": kind,
+            "report_type": report_type,
+            "security_test_kind": kind,
             "status": "pass",
             "summary": f"job {job_id} passed",
         }
@@ -756,7 +763,7 @@ def register_system_admin_routes(app, deps):
                     "ok": False,
                     "skipped": True,
                     "reason": "report_not_clean",
-                    "report_type": kind,
+                    "report_type": report_type,
                 }
         try:
             current_target = {}
@@ -766,7 +773,7 @@ def register_system_admin_routes(app, deps):
                 except Exception:
                     current_target = {}
             attestation = server_mode_service._prepare_production_report_attestation(
-                report_type=kind,
+                report_type=report_type,
                 raw_report=raw_report,
                 target_commit=str(current_target.get("target_commit") or ""),
                 target_branch=str(current_target.get("target_branch") or ""),
@@ -775,12 +782,12 @@ def register_system_admin_routes(app, deps):
                 tester=actor_username or "root",
             )
         except Exception as exc:
-            return {"ok": False, "skipped": False, "reason": f"attestation_error:{exc}", "report_type": kind}
+            return {"ok": False, "skipped": False, "reason": f"attestation_error:{exc}", "report_type": report_type}
         if not attestation or not attestation.get("ok"):
-            return {"ok": False, "skipped": False, "reason": "attestation_failed", "report_type": kind}
+            return {"ok": False, "skipped": False, "reason": "attestation_failed", "report_type": report_type}
         try:
             upload = server_mode_service.upload_production_report(
-                report_type=kind,
+                report_type=report_type,
                 test_result="pass",
                 report_hash=attestation.get("report_hash"),
                 signature=attestation.get("signature"),
@@ -792,13 +799,14 @@ def register_system_admin_routes(app, deps):
                 server_mode=str(current_target.get("server_mode") or ""),
             )
         except Exception as exc:
-            return {"ok": False, "skipped": False, "reason": f"upload_error:{exc}", "report_type": kind}
+            return {"ok": False, "skipped": False, "reason": f"upload_error:{exc}", "report_type": report_type}
         if not upload or not upload.get("ok"):
-            return {"ok": False, "skipped": False, "reason": "upload_failed", "report_type": kind}
+            return {"ok": False, "skipped": False, "reason": "upload_failed", "report_type": report_type}
         return {
             "ok": True,
             "skipped": False,
-            "report_type": kind,
+            "report_type": report_type,
+            "security_test_kind": kind,
             "report_id": upload.get("report_id"),
             "report_hash": attestation.get("report_hash"),
         }

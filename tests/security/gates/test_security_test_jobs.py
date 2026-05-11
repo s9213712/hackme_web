@@ -337,6 +337,26 @@ def test_successful_security_job_auto_uploads_production_report(tmp_path, monkey
     assert service.uploaded[0]["test_result"] == "pass"
 
 
+def test_privilege_security_job_auto_uploads_permission_report(tmp_path, monkeypatch):
+    system_admin.SECURITY_TEST_JOBS.clear()
+    service = _FakeServerModeService()
+    monkeypatch.setattr(system_admin.subprocess, "Popen", _FakeProcess)
+    client = _app(tmp_path, server_mode_service=service).test_client()
+
+    res = client.post("/api/root/security-tests/privilege", json={"target": "https://127.0.0.1:5443"})
+    data = res.get_json()
+    job = _wait_for_job_done(client, data["job"]["job_id"])
+
+    assert res.status_code == 202
+    assert job["status"] == "passed"
+    assert job["production_report"]["ok"] is True
+    assert job["production_report"]["report_type"] == "permission"
+    assert job["production_report"]["security_test_kind"] == "privilege"
+    assert service.prepared[0]["report_type"] == "permission"
+    assert service.uploaded[0]["report_type"] == "permission"
+    assert service.uploaded[0]["test_result"] == "pass"
+
+
 def test_stress_job_does_not_upload_production_report_when_requests_fail(tmp_path, monkeypatch):
     system_admin.SECURITY_TEST_JOBS.clear()
     service = _FakeServerModeService()
