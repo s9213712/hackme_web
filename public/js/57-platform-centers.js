@@ -316,10 +316,22 @@ async function loadShareCenterEvents(type, id) {
       panel.textContent = "目前沒有分享紀錄。";
       return;
     }
-    panel.innerHTML = `<strong>分享紀錄</strong><br>${events.map((event) => {
-      const when = formatChatTime(event.created_at || "");
-      return `${sanitize(when)} · ${sanitize(event.label || event.event_type || "-")}：${sanitize(event.detail || "")}`;
-    }).join("<br>")}`;
+    panel.innerHTML = `<strong>分享紀錄</strong><div class="share-center-event-list">${events.map((event) => {
+      const when = formatChatTime(event.opened_at || event.created_at || "");
+      const ip = event.source_ip || event.ip || "";
+      const detail = event.detail || "";
+      const userAgent = event.user_agent || "";
+      const eventType = event.event_type || "";
+      const isOpenEvent = event.opened_at || eventType === "opened" || eventType === "accessed";
+      const timeLabel = isOpenEvent ? "開啟時間" : "時間";
+      const ipText = ip ? ` · IP 來源：${sanitize(ip)}` : (isOpenEvent ? " · IP 來源：未記錄" : "");
+      return `<div class="share-center-event-row">
+        <div class="share-center-event-title">${sanitize(event.label || event.event_type || "-")}</div>
+        <div class="share-center-event-meta">${timeLabel}：${sanitize(when || "-")}${ipText}</div>
+        ${detail ? `<div class="share-center-event-detail">${sanitize(detail)}</div>` : ""}
+        ${userAgent ? `<div class="share-center-event-detail">${sanitize(userAgent)}</div>` : ""}
+      </div>`;
+    }).join("")}</div>`;
   } catch (_) {
     if (panel) {
       panel.className = "msg err";

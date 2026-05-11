@@ -34,5 +34,9 @@ def test_platform_center_frontend_surfaces_are_wired():
     assert 'setInterval(updateShareCenterCountdowns, 1000)' in platform_js
     assert 'share-center-countdown' in platform_js
     assert '.share-center-countdown' in (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
+    assert 'const timeLabel = isOpenEvent ? "開啟時間" : "時間"' in platform_js
+    assert 'IP 來源：${sanitize(ip)}' in platform_js
+    assert 'event.source_ip || event.ip' in platform_js
+    assert '.share-center-event-row' in (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
     assert '/admin/trading/asset-overview' in platform_js
     assert '交易資產總覽讀取失敗' in platform_js

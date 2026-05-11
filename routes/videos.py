@@ -33,6 +33,7 @@ from services.media.e2ee_streaming import (
 )
 from services.storage.storage_albums import create_storage_file_entry, ensure_storage_album_schema
 from services.security.upload_security import safe_public_filename
+from services.share_access_events import log_share_access_event
 from services.media.videos import (
     add_video_comment,
     ensure_video_schema,
@@ -369,7 +370,9 @@ def register_video_routes(app, deps):
     def _count_shared_video_access(conn, row, share_session_id, counted_in_session):
         if counted_in_session:
             return True
-        mark_video_share_link_accessed(conn, row["share_id"] if "share_id" in row.keys() else row["id"])
+        share_id = row["share_id"] if "share_id" in row.keys() else row["id"]
+        mark_video_share_link_accessed(conn, share_id)
+        log_share_access_event(conn, share_type="video", share_id=share_id, ip=get_client_ip(), user_agent=get_ua())
         _mark_shared_video_session_counted(share_session_id)
         return True
 

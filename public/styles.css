@@ -2196,6 +2196,33 @@
       font-weight: 700;
     }
 
+    .share-center-event-list {
+      display: grid;
+      gap: .55rem;
+      margin-top: .55rem;
+    }
+
+    .share-center-event-row {
+      display: grid;
+      gap: .2rem;
+      padding: .55rem .65rem;
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 8px;
+      background: rgba(255,255,255,.04);
+    }
+
+    .share-center-event-title {
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    .share-center-event-meta,
+    .share-center-event-detail {
+      color: var(--muted);
+      font-size: .78rem;
+      overflow-wrap: anywhere;
+    }
+
     .drive-share-password-note {
       color: var(--warning, #b7791f);
       font-size: .76rem;

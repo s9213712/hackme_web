@@ -3,6 +3,7 @@ from datetime import datetime
 from flask import request
 
 from services.media.videos import ensure_video_schema
+from services.share_access_events import ensure_share_access_event_schema, list_share_access_events
 from services.storage.catalog import ensure_storage_album_schema
 
 
@@ -136,6 +137,7 @@ def register_share_management_routes(app, deps):
     def ensure_share_tables(conn):
         ensure_storage_album_schema(conn)
         ensure_video_schema(conn)
+        ensure_share_access_event_schema(conn)
 
     def get_share_row(conn, share_type, share_id):
         table_map = share_table_map()
@@ -152,9 +154,21 @@ def register_share_management_routes(app, deps):
             return json_resp({"ok": False, "msg": "不可管理他人的分享連結"}), 403
         return None, None
 
-    def share_access_events(row, status):
+    def share_access_events(conn, share_type, row, status):
         data = dict(row)
         events = []
+        for event in list_share_access_events(conn, share_type=share_type, share_id=data.get("id"), limit=80):
+            ip = event.get("ip") or ""
+            events.append({
+                "event_type": event.get("event_type") or "opened",
+                "label": "分享已開啟",
+                "created_at": event.get("created_at"),
+                "opened_at": event.get("created_at"),
+                "ip": ip,
+                "source_ip": ip,
+                "user_agent": event.get("user_agent") or "",
+                "detail": "分享連結被開啟。",
+            })
         if data.get("created_at"):
             events.append({
                 "event_type": "created",
@@ -167,6 +181,7 @@ def register_share_management_routes(app, deps):
                 "event_type": "accessed",
                 "label": "最近一次存取",
                 "created_at": data.get("last_accessed_at"),
+                "opened_at": data.get("last_accessed_at"),
                 "detail": f"累計存取 {row_int(data, 'access_count')} 次。",
             })
         if status == "view_limit_reached":
@@ -190,7 +205,7 @@ def register_share_management_routes(app, deps):
                 "created_at": data.get("revoked_at"),
                 "detail": "分享連結已由擁有者或管理員撤銷。",
             })
-        return sorted(events, key=lambda item: str(item.get("created_at") or ""))
+        return sorted(events, key=lambda item: str(item.get("created_at") or ""), reverse=True)
 
     @app.route("/api/shares", methods=["GET"])
     @require_csrf_safe
@@ -294,6 +309,6 @@ def register_share_management_routes(app, deps):
             if err:
                 return err, status_code
             status = share_status(dict(row))
-            return json_resp({"ok": True, "status": status, "events": share_access_events(row, status)})
+            return json_resp({"ok": True, "status": status, "events": share_access_events(conn, share_type, row, status)})
         finally:
             conn.close()
