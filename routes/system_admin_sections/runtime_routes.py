@@ -5,6 +5,7 @@ from flask import request, send_file
 from services.system.release_artifacts import (
     build_qa_artifact_index,
     create_release_bundle,
+    register_qa_run,
     release_bundle_status,
 )
 
@@ -491,6 +492,32 @@ def register_system_admin_runtime_routes(app, ctx):
             git_repo_dir=GIT_REPO_DIR,
             limit=max(25, min(limit, 1000)),
             persist=True,
+        )
+        return json_resp(result)
+
+    @app.route("/api/root/qa-artifacts/runs", methods=["POST"])
+    @require_csrf
+    def root_qa_artifacts_register_run():
+        actor, error = require_root_actor()
+        if error:
+            return error
+        try:
+            data = request.get_json(force=True) if request.is_json else {}
+        except Exception:
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
+        artifact_paths = data.get("artifact_paths") if isinstance(data.get("artifact_paths"), list) else []
+        result = register_qa_run(
+            base_dir=BASE_DIR,
+            reports_dir=REPORTS_DIR,
+            git_repo_dir=GIT_REPO_DIR,
+            suite=data.get("suite") or "manual",
+            status=data.get("status") or "unknown",
+            command=data.get("command") or "",
+            summary=data.get("summary") if isinstance(data.get("summary"), dict) else {},
+            run_id=data.get("run_id") or None,
+            artifact_paths=[str(item) for item in artifact_paths],
         )
         return json_resp(result)
 

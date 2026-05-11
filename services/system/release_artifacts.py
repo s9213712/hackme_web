@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 from collections import Counter
 from datetime import datetime, timezone
@@ -23,6 +24,7 @@ ARTIFACT_EXTENSIONS = {
     ".webp",
     ".zip",
 }
+QA_RUNS_INDEX = "runs_index.json"
 
 
 def utc_stamp() -> str:
@@ -49,6 +51,12 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
 def write_text(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content.rstrip() + "\n", encoding="utf-8")
+
+
+def _safe_slug(value: str, fallback: str = "qa") -> str:
+    text = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in str(value or "").strip())
+    text = text.strip("._-")
+    return text[:80] or fallback
 
 
 def git_meta(repo_dir: str | os.PathLike[str]) -> dict[str, str]:
@@ -92,6 +100,24 @@ def _artifact_kind(path: Path) -> str:
     return "artifact"
 
 
+def _artifact_record(path: Path, *, source: str, base_dir: Path, reports_dir: Path) -> dict[str, Any] | None:
+    if not path.is_file() or path.suffix.lower() not in ARTIFACT_EXTENSIONS:
+        return None
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return {
+        "source": source,
+        "kind": _artifact_kind(path),
+        "path": _public_path(path, base_dir=base_dir, reports_dir=reports_dir),
+        "absolute_path": str(path.resolve()),
+        "name": path.name,
+        "size_bytes": int(stat.st_size),
+        "modified_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+    }
+
+
 def _public_path(path: Path, *, base_dir: Path, reports_dir: Path) -> str:
     resolved = path.resolve()
     for root, prefix in ((reports_dir.resolve(), "reports"), (base_dir.resolve(), "repo")):
@@ -104,6 +130,9 @@ def _public_path(path: Path, *, base_dir: Path, reports_dir: Path) -> str:
 
 def _iter_artifact_roots(base_dir: Path, reports_dir: Path, tmp_root: Path) -> list[tuple[str, Path]]:
     roots: list[tuple[str, Path]] = []
+    qa_runs = reports_dir / "qa_runs"
+    if qa_runs.exists():
+        roots.append(("qa_run", qa_runs))
     if reports_dir.exists():
         roots.append(("runtime_reports", reports_dir))
     docs_reports = base_dir / "docs" / "AGENTS" / "reports"
@@ -121,6 +150,143 @@ def _iter_artifact_roots(base_dir: Path, reports_dir: Path, tmp_root: Path) -> l
         for _, item in sorted(tmp_candidates, reverse=True)[:20]:
             roots.append(("tmp_run", item))
     return roots
+
+
+def _runs_index_path(reports_dir: Path) -> Path:
+    return reports_dir / "qa_artifacts" / QA_RUNS_INDEX
+
+
+def _load_qa_runs(reports_dir: Path) -> list[dict[str, Any]]:
+    payload = safe_read_json(_runs_index_path(reports_dir))
+    runs = payload.get("runs") if isinstance(payload, dict) else []
+    runs = runs if isinstance(runs, list) else []
+    return [run for run in runs if isinstance(run, dict)]
+
+
+def _write_qa_runs(reports_dir: Path, runs: list[dict[str, Any]]) -> dict[str, Any]:
+    normalized = sorted(runs, key=lambda item: str(item.get("created_at") or ""), reverse=True)[:200]
+    by_status = Counter(str(item.get("status") or "unknown") for item in normalized)
+    payload = {
+        "ok": True,
+        "generated_at": utc_iso(),
+        "summary": {
+            "run_count": len(normalized),
+            "by_status": dict(sorted(by_status.items())),
+            "latest_status": str(normalized[0].get("status") or "") if normalized else "",
+            "latest_run_id": str(normalized[0].get("run_id") or "") if normalized else "",
+        },
+        "runs": normalized,
+    }
+    write_json(_runs_index_path(reports_dir), payload)
+    return payload
+
+
+def _iter_source_artifact_paths(paths: list[str | os.PathLike[str]], *, limit: int) -> list[Path]:
+    found: list[Path] = []
+    seen: set[str] = set()
+    for raw in paths or []:
+        path = Path(raw).expanduser()
+        candidates = []
+        if path.is_dir():
+            try:
+                candidates = sorted(path.rglob("*"), key=lambda p: p.stat().st_mtime, reverse=True)
+            except OSError:
+                candidates = []
+        else:
+            candidates = [path]
+        for candidate in candidates:
+            if len(found) >= max(1, int(limit or 100)):
+                return found
+            if not candidate.is_file() or candidate.suffix.lower() not in ARTIFACT_EXTENSIONS:
+                continue
+            resolved = str(candidate.resolve())
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            found.append(candidate)
+    return found
+
+
+def register_qa_run(
+    *,
+    base_dir: str | os.PathLike[str],
+    reports_dir: str | os.PathLike[str],
+    git_repo_dir: str | os.PathLike[str] | None = None,
+    suite: str,
+    status: str,
+    artifact_paths: list[str | os.PathLike[str]] | None = None,
+    command: str = "",
+    summary: dict[str, Any] | None = None,
+    run_id: str | None = None,
+    max_artifacts: int = 100,
+    max_copy_bytes: int = 25 * 1024 * 1024,
+) -> dict[str, Any]:
+    base = Path(base_dir).resolve()
+    reports = Path(reports_dir).resolve()
+    created_at = utc_iso()
+    clean_suite = _safe_slug(suite or "qa")
+    normalized_status = str(status or "unknown").strip().lower() or "unknown"
+    if normalized_status in {"ok", "passed", "green"}:
+        normalized_status = "pass"
+    elif normalized_status in {"failed", "red"}:
+        normalized_status = "fail"
+    clean_run_id = _safe_slug(run_id or f"{utc_stamp()}_{clean_suite}", clean_suite)
+    run_dir = reports / "qa_runs" / clean_run_id
+    archived: list[dict[str, Any]] = []
+    for source_path in _iter_source_artifact_paths(list(artifact_paths or []), limit=max_artifacts):
+        try:
+            if source_path.stat().st_size > max_copy_bytes:
+                record = _artifact_record(source_path, source="external_reference", base_dir=base, reports_dir=reports)
+                if record:
+                    record["archived"] = False
+                    record["reason"] = "file exceeds max_copy_bytes"
+                    archived.append(record)
+                continue
+            kind = _artifact_kind(source_path)
+            target_dir = run_dir / kind
+            target_dir.mkdir(parents=True, exist_ok=True)
+            target = target_dir / source_path.name
+            if target.exists():
+                target = target_dir / f"{source_path.stem}_{len(archived) + 1}{source_path.suffix}"
+            shutil.copy2(source_path, target)
+            record = _artifact_record(target, source="qa_run", base_dir=base, reports_dir=reports)
+            if record:
+                record["archived"] = True
+                record["source_absolute_path"] = str(source_path.resolve())
+                archived.append(record)
+        except OSError:
+            continue
+    manifest = {
+        "ok": True,
+        "run_id": clean_run_id,
+        "suite": str(suite or "qa"),
+        "status": normalized_status,
+        "passed": normalized_status == "pass",
+        "created_at": created_at,
+        "command": str(command or ""),
+        "git": git_meta(git_repo_dir or base),
+        "summary": summary if isinstance(summary, dict) else {},
+        "artifact_count": len(archived),
+        "artifacts": archived,
+    }
+    manifest_path = run_dir / "manifest.json"
+    write_json(manifest_path, manifest)
+    manifest["manifest_path"] = str(manifest_path)
+    runs = [run for run in _load_qa_runs(reports) if run.get("run_id") != clean_run_id]
+    runs.insert(0, {
+        "run_id": clean_run_id,
+        "suite": manifest["suite"],
+        "status": manifest["status"],
+        "passed": manifest["passed"],
+        "created_at": created_at,
+        "command": manifest["command"],
+        "commit": manifest["git"].get("commit", ""),
+        "branch": manifest["git"].get("branch", ""),
+        "artifact_count": len(archived),
+        "manifest_path": str(manifest_path),
+    })
+    manifest["runs_index"] = _write_qa_runs(reports, runs)
+    return manifest
 
 
 def build_qa_artifact_index(
@@ -171,6 +337,8 @@ def build_qa_artifact_index(
 
     by_kind = Counter(item["kind"] for item in artifacts)
     by_source = Counter(item["source"] for item in artifacts)
+    qa_runs = _load_qa_runs(reports)
+    run_status_counts = Counter(str(item.get("status") or "unknown") for item in qa_runs)
     payload = {
         "ok": True,
         "generated_at": utc_iso(),
@@ -179,7 +347,10 @@ def build_qa_artifact_index(
             "artifact_count": len(artifacts),
             "by_kind": dict(sorted(by_kind.items())),
             "by_source": dict(sorted(by_source.items())),
+            "qa_run_count": len(qa_runs),
+            "qa_runs_by_status": dict(sorted(run_status_counts.items())),
         },
+        "qa_runs": qa_runs[:20],
         "artifacts": artifacts,
     }
     if persist:

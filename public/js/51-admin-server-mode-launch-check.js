@@ -428,6 +428,7 @@ function renderLaunchCheckReleaseDetails(payload, mode = "bundle") {
     const artifactSummary = payload.summary || {};
     summary.innerHTML = `
       <div class="health-card"><strong>Artifacts</strong><span>${Number(artifactSummary.artifact_count || 0)}</span></div>
+      <div class="health-card"><strong>QA runs</strong><span>${Number(artifactSummary.qa_run_count || 0)}</span></div>
       <div class="health-card"><strong>Sources</strong><span>${escape(Object.keys(artifactSummary.by_source || {}).join(", ") || "-")}</span></div>
       <div class="health-card"><strong>Index</strong><span>${escape(payload.index_path || "-")}</span></div>
     `;
@@ -435,6 +436,7 @@ function renderLaunchCheckReleaseDetails(payload, mode = "bundle") {
       generated_at: payload.generated_at,
       summary: payload.summary,
       index_path: payload.index_path,
+      qa_runs: payload.qa_runs || [],
       latest: (payload.artifacts || []).slice(0, 20),
     }, null, 2);
     return;

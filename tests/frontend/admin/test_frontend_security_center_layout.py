@@ -226,6 +226,8 @@ def test_launch_check_release_bundle_and_artifact_controls_are_available():
     assert 'id="launch-check-release-panel"' in index_html
     assert "/root/production-release/bundle" in admin_js
     assert "/root/qa-artifacts/index" in admin_js
+    assert "QA runs" in admin_js
+    assert "qa_runs" in admin_js
     assert "createLaunchCheckReleaseBundle" in admin_js
     assert "refreshLaunchCheckQaArtifacts" in admin_js
 

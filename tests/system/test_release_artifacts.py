@@ -3,6 +3,7 @@ from pathlib import Path
 from services.system.release_artifacts import (
     build_qa_artifact_index,
     create_release_bundle,
+    register_qa_run,
     release_bundle_status,
 )
 
@@ -31,6 +32,45 @@ def test_qa_artifact_index_collects_runtime_docs_and_tmp_artifacts(tmp_path):
     assert index["summary"]["by_kind"]["playwright"] == 1
     assert index["summary"]["by_kind"]["screenshot"] == 1
     assert Path(index["index_path"]).exists()
+
+
+def test_register_qa_run_archives_artifacts_and_updates_index(tmp_path):
+    base = tmp_path / "repo"
+    reports = tmp_path / "runtime" / "reports"
+    tmp_run = tmp_path / "tmp" / "hackme_web_playwright"
+    base.mkdir()
+    tmp_run.mkdir(parents=True)
+    (tmp_run / "result.json").write_text('{"ok": true}\n', encoding="utf-8")
+    (tmp_run / "server.log").write_text("server ready\n", encoding="utf-8")
+    (tmp_run / "screen.png").write_bytes(b"png")
+
+    run = register_qa_run(
+        base_dir=base,
+        reports_dir=reports,
+        git_repo_dir=base,
+        suite="playwright_deep_site_check",
+        status="pass",
+        command="python3 scripts/testing/playwright_deep_site_check.py",
+        artifact_paths=[tmp_run],
+        summary={"passed": 12},
+        run_id="run-1",
+    )
+
+    assert run["passed"] is True
+    assert run["artifact_count"] == 3
+    assert Path(run["manifest_path"]).exists()
+    assert run["runs_index"]["summary"]["latest_run_id"] == "run-1"
+
+    index = build_qa_artifact_index(
+        base_dir=base,
+        reports_dir=reports,
+        tmp_root=tmp_path / "tmp",
+        persist=True,
+    )
+    assert index["summary"]["qa_run_count"] == 1
+    assert index["summary"]["qa_runs_by_status"]["pass"] == 1
+    assert index["qa_runs"][0]["run_id"] == "run-1"
+    assert any(item["source"] == "qa_run" for item in index["artifacts"])
 
 
 def test_release_bundle_marks_ready_only_when_gate_is_green(tmp_path):
