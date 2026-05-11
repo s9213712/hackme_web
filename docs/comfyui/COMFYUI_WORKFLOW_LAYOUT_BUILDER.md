@@ -102,16 +102,19 @@ See the official ComfyUI credits documentation and API Key integration guide:
 
 ## Export JSON
 
-Export returns three forms in one file:
+The visual editor has three explicit export actions:
 
-- `raw_workflow_json`: the ComfyUI workflow graph.
-- `workflow_preset_json`: the project wrapper containing project version,
-  ComfyUI version, workflow schema version, dependencies, timestamps, and
-  default parameters.
-- `layout_json`: UI layout metadata for panels, node order, node positions, and
-  field overrides.
+- `下載 ComfyUI Workflow`: exports ComfyUI UI workflow JSON (`nodes`, `links`,
+  `groups`, `config`, `extra`, `version`) for the ComfyUI Load button.
+- `下載 API Prompt`: exports the raw ComfyUI API prompt (`{"1": {"class_type":
+  ..., "inputs": ...}}`) for `/prompt` or the site backend runner.
+- `下載本站 Preset`: exports the project wrapper containing project version,
+  ComfyUI version, workflow schema version, dependencies, timestamps,
+  `workflow_json`, and `layout_json`.
 
-The exported wrapper can be imported again later.
+The site preset wrapper can be imported again later, but ComfyUI itself cannot
+load that wrapper directly. Use `下載 ComfyUI Workflow` for manual ComfyUI UI
+imports, or `下載 API Prompt` for API execution.
 
 ## Permissions
 

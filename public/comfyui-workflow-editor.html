@@ -18,8 +18,10 @@
       <label class="file-action">匯入 JSON <input id="importJsonFile" type="file" accept="application/json,.json" /></label>
       <button id="clearBtn" type="button">清空</button>
       <button class="primary" id="sendBackBtn" type="button">送回主頁</button>
-      <button id="downloadJsonBtn" type="button">下載 JSON</button>
-      <button class="good" id="copyJsonBtn" type="button">複製 JSON</button>
+      <button id="downloadJsonBtn" type="button">下載 ComfyUI Workflow</button>
+      <button id="downloadApiJsonBtn" type="button">下載 API Prompt</button>
+      <button id="downloadPresetJsonBtn" type="button">下載本站 Preset</button>
+      <button class="good" id="copyJsonBtn" type="button">複製 ComfyUI Workflow</button>
     </div>
   </header>
 
@@ -130,7 +132,7 @@
       <div class="panel json-panel">
         <div class="panel-body">
           <details>
-            <summary>輸出的 workflow/layout JSON</summary>
+            <summary>本站 preset/layout JSON</summary>
             <textarea id="jsonOut" spellcheck="false"></textarea>
           </details>
           <div class="status" id="status"></div>

@@ -42,14 +42,29 @@ def test_playwright_qa_workflow_is_installed_in_github_actions():
     assert "03b.Comfyui" in text
 
 
-def test_comfyui_workflow_editor_can_download_preset_json():
+def test_comfyui_workflow_editor_exports_comfyui_and_project_json_formats():
     html = (ROOT / "public" / "comfyui-workflow-editor.html").read_text(encoding="utf-8")
     js = (ROOT / "public" / "js" / "comfyui-workflow-editor.js").read_text(encoding="utf-8")
 
     assert 'id="downloadJsonBtn"' in html
+    assert 'id="downloadApiJsonBtn"' in html
+    assert 'id="downloadPresetJsonBtn"' in html
+    assert "下載 ComfyUI Workflow" in html
+    assert "下載本站 Preset" in html
     assert "function downloadJson()" in js
+    assert "function exportComfyUiWorkflowGraph()" in js
+    assert "function exportComfyUiApiPrompt()" in js
+    assert "function uiWidgetValues(node)" in js
+    assert '"randomize"' in js
+    assert "function downloadApiJson()" in js
+    assert "function downloadPresetJson()" in js
     assert "workflowExportFileName()" in js
+    assert "workflowExportFileName(\".api-prompt\")" in js
+    assert "workflowExportFileName(\".hackme-preset\")" in js
+    assert "ComfyUI 不能直接載入" in js
     assert 'downloadJsonBtn")?.addEventListener("click", downloadJson)' in js
+    assert 'downloadApiJsonBtn")?.addEventListener("click", downloadApiJson)' in js
+    assert 'downloadPresetJsonBtn")?.addEventListener("click", downloadPresetJson)' in js
 
 
 def test_deep_playwright_shared_video_uses_unlock_share_session():

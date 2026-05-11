@@ -597,6 +597,162 @@
     };
   }
 
+  function newWorkflowId() {
+    if (window.crypto && typeof window.crypto.randomUUID === "function") return window.crypto.randomUUID();
+    return `hackme-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+
+  function widgetInputEntries(node) {
+    return Object.entries(nodeDef(node)?.inputs || {}).filter(([, spec]) => spec.type !== "link");
+  }
+
+  function nodeInputEntries(node) {
+    return Object.entries(nodeDef(node)?.inputs || {});
+  }
+
+  function liteGraphInputType(spec = {}, key = "") {
+    if (spec.type === "link") return normalizedPortKind(spec.label || key) || "UNKNOWN";
+    if (spec.type === "number") {
+      const lowered = String(key || "").toLowerCase();
+      return lowered.includes("cfg") || lowered.includes("denoise") || lowered.includes("strength") || lowered.includes("percent")
+        ? "FLOAT"
+        : "INT";
+    }
+    if (spec.type === "checkbox") return "BOOLEAN";
+    if (spec.type === "select") return "COMBO";
+    return "STRING";
+  }
+
+  function liteGraphNodeSize(node) {
+    const inputCount = nodeInputEntries(node).length;
+    const outputCount = nodeDef(node)?.outputs?.length || 0;
+    const widgetCount = widgetInputEntries(node).length;
+    const height = Math.max(96, 72 + inputCount * 20 + outputCount * 16 + widgetCount * 10);
+    const width = isUnknownNode(node) ? 360 : node.type === "SaveImage" ? 420 : node.type === "CLIPTextEncode" ? 425 : 315;
+    return [width, Math.min(620, height)];
+  }
+
+  function uiWidgetValues(node) {
+    const inputs = node.inputs || {};
+    if (node.type === "KSampler") {
+      return [
+        inputs.seed ?? 0,
+        "randomize",
+        inputs.steps ?? 20,
+        inputs.cfg ?? 7,
+        inputs.sampler_name || "euler",
+        inputs.scheduler || "normal",
+        inputs.denoise ?? 1,
+      ];
+    }
+    if (node.type === "KSamplerAdvanced") {
+      return [
+        inputs.add_noise || "enable",
+        inputs.noise_seed ?? 0,
+        "randomize",
+        inputs.steps ?? 20,
+        inputs.cfg ?? 7,
+        inputs.sampler_name || "euler",
+        inputs.scheduler || "normal",
+        inputs.start_at_step ?? 0,
+        inputs.end_at_step ?? 20,
+        inputs.return_with_leftover_noise || "enable",
+      ];
+    }
+    return widgetInputEntries(node).map(([key, spec]) => inputs[key] ?? defaultValueForSpec(key, spec || {}));
+  }
+
+  function exportComfyUiWorkflowGraph() {
+    const idMap = Object.fromEntries(workflow.nodes.map((node, index) => [node.id, index + 1]));
+    const linkIds = new Map();
+    workflow.edges
+      .filter((edge) => idMap[edge.from] && idMap[edge.to])
+      .forEach((edge, index) => linkIds.set(edge.id, index + 1));
+    const links = workflow.edges
+      .filter((edge) => idMap[edge.from] && idMap[edge.to])
+      .map((edge) => {
+        const source = nodeById(edge.from);
+        const target = nodeById(edge.to);
+        const inputSlot = Math.max(0, nodeInputEntries(target).findIndex(([key]) => key === edge.input));
+        return [
+          linkIds.get(edge.id),
+          idMap[edge.from],
+          outputIndex(source, edge.output),
+          idMap[edge.to],
+          inputSlot,
+          normalizedPortKind(edge.output) || edge.output || "*",
+        ];
+      });
+    const outputLinksByNodeSlot = {};
+    const inputLinkByNodeInput = {};
+    workflow.edges.forEach((edge) => {
+      if (!idMap[edge.from] || !idMap[edge.to]) return;
+      const source = nodeById(edge.from);
+      const slot = outputIndex(source, edge.output);
+      const sourceKey = `${idMap[edge.from]}:${slot}`;
+      const targetKey = `${idMap[edge.to]}:${edge.input}`;
+      outputLinksByNodeSlot[sourceKey] = (outputLinksByNodeSlot[sourceKey] || []).concat(linkIds.get(edge.id));
+      inputLinkByNodeInput[targetKey] = linkIds.get(edge.id);
+    });
+    const nodes = workflow.nodes.map((node, index) => {
+      const nodeId = idMap[node.id];
+      const classType = isUnknownNode(node) ? (node.originalType || "UnknownCustomNode") : node.type;
+      const inputs = nodeInputEntries(node).map(([key, spec]) => {
+        const link = inputLinkByNodeInput[`${nodeId}:${key}`] || null;
+        const item = {
+          name: key,
+          type: liteGraphInputType(spec, key),
+          link,
+        };
+        if (spec.type !== "link") item.widget = { name: key };
+        return item;
+      });
+      const outputs = (nodeDef(node)?.outputs || []).map((name, slot) => ({
+        name,
+        type: normalizedPortKind(name) || name || "UNKNOWN",
+        slot_index: slot,
+        links: outputLinksByNodeSlot[`${nodeId}:${slot}`] || [],
+      }));
+      return {
+        id: nodeId,
+        type: classType,
+        pos: [Math.round(node.x), Math.round(node.y)],
+        size: liteGraphNodeSize(node),
+        flags: {},
+        order: index,
+        mode: 0,
+        inputs,
+        outputs,
+        properties: {
+          "Node name for S&R": classType,
+        },
+        widgets_values: uiWidgetValues(node),
+        title: node.label || classType,
+      };
+    });
+    return {
+      id: newWorkflowId(),
+      revision: 0,
+      last_node_id: workflow.nodes.length,
+      last_link_id: links.length,
+      nodes,
+      links,
+      groups: [],
+      config: {},
+      extra: {
+        ds: {
+          scale: 1,
+          offset: [0, 0],
+        },
+      },
+      version: 0.4,
+    };
+  }
+
+  function exportComfyUiApiPrompt() {
+    return exportPackage().workflow_json;
+  }
+
   function normalizedPortKind(name) {
     const raw = String(name || "").toUpperCase();
     if (raw === "POSITIVE" || raw === "NEGATIVE") return "CONDITIONING";
@@ -1498,10 +1654,10 @@
   }
 
   async function copyJson() {
-    const text = JSON.stringify(exportPackage(), null, 2);
+    const text = JSON.stringify(exportComfyUiWorkflowGraph(), null, 2);
     try {
       await navigator.clipboard.writeText(text);
-      setStatus("已複製 workflow preset JSON。");
+      setStatus("已複製 ComfyUI workflow JSON，可貼到 ComfyUI 或另存為 .json 後載入。");
     } catch (_) {
       $("jsonOut").value = text;
       $("jsonOut").select();
@@ -1509,28 +1665,52 @@
     }
   }
 
-  function workflowExportFileName() {
+  function workflowExportFileName(suffix = "") {
     const base = String(workflow.name || "comfyui-workflow")
       .trim()
       .toLowerCase()
       .replace(/[^a-z0-9\u4e00-\u9fff._-]+/gi, "-")
       .replace(/^-+|-+$/g, "")
       .slice(0, 80) || "comfyui-workflow";
-    return `${base}.json`;
+    return `${base}${suffix}.json`;
   }
 
-  function downloadJson() {
-    const text = JSON.stringify(exportPackage(), null, 2);
+  function downloadJsonObject(payload, filename, statusMessage) {
+    const text = JSON.stringify(payload, null, 2);
     const blob = new Blob([text], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = workflowExportFileName();
+    link.download = filename;
     document.body.appendChild(link);
     link.click();
     link.remove();
     URL.revokeObjectURL(url);
-    setStatus("已下載 workflow preset JSON。");
+    setStatus(statusMessage);
+  }
+
+  function downloadJson() {
+    downloadJsonObject(
+      exportComfyUiWorkflowGraph(),
+      workflowExportFileName(),
+      "已下載 ComfyUI workflow JSON，可用 ComfyUI 介面的 Load 載入。"
+    );
+  }
+
+  function downloadApiJson() {
+    downloadJsonObject(
+      exportComfyUiApiPrompt(),
+      workflowExportFileName(".api-prompt"),
+      "已下載 ComfyUI API prompt JSON，適合送到 /prompt 或本站後端執行。"
+    );
+  }
+
+  function downloadPresetJson() {
+    downloadJsonObject(
+      exportPackage(),
+      workflowExportFileName(".hackme-preset"),
+      "已下載本站 preset JSON；這份包含 layout/metadata，ComfyUI 不能直接載入。"
+    );
   }
 
   async function importJsonFile(event) {
@@ -1641,6 +1821,8 @@
     $("clearBtn")?.addEventListener("click", clearAll);
     $("sendBackBtn")?.addEventListener("click", sendBackToMainPage);
     $("downloadJsonBtn")?.addEventListener("click", downloadJson);
+    $("downloadApiJsonBtn")?.addEventListener("click", downloadApiJson);
+    $("downloadPresetJsonBtn")?.addEventListener("click", downloadPresetJson);
     $("copyJsonBtn")?.addEventListener("click", copyJson);
     $("workflowName")?.addEventListener("input", () => { workflow.name = $("workflowName").value; renderJson(); saveState(); });
     $("workflowDescription")?.addEventListener("input", () => { workflow.description = $("workflowDescription").value; renderJson(); saveState(); });

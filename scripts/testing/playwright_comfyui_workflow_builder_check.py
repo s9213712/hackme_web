@@ -201,6 +201,22 @@ def main() -> int:
             download = download_info.value
             if not download.suggested_filename.endswith(".json"):
                 raise AssertionError(f"download did not produce a JSON filename: {download.suggested_filename!r}")
+            workflow_download_path = Path(tempfile.gettempdir()) / f"comfyui-workflow-download-{int(time.time() * 1000)}.json"
+            download.save_as(str(workflow_download_path))
+            downloaded_workflow = json.loads(workflow_download_path.read_text(encoding="utf-8"))
+            if not isinstance(downloaded_workflow.get("nodes"), list) or not isinstance(downloaded_workflow.get("links"), list):
+                raise AssertionError(f"downloaded ComfyUI workflow is not UI-loadable graph JSON: {downloaded_workflow.keys()}")
+            if "workflow_json" in downloaded_workflow or "layout_json" in downloaded_workflow:
+                raise AssertionError("downloaded ComfyUI workflow leaked the site preset wrapper")
+
+            with page.expect_download() as api_download_info:
+                page.locator("#downloadApiJsonBtn").click()
+            api_download = api_download_info.value
+            api_download_path = Path(tempfile.gettempdir()) / f"comfyui-api-prompt-download-{int(time.time() * 1000)}.json"
+            api_download.save_as(str(api_download_path))
+            api_prompt = json.loads(api_download_path.read_text(encoding="utf-8"))
+            if not api_prompt or not all(isinstance(node, dict) and "class_type" in node for node in api_prompt.values()):
+                raise AssertionError("downloaded API prompt is not ComfyUI API-format node JSON")
 
             with tempfile.NamedTemporaryFile("w", suffix=".json", encoding="utf-8", delete=False) as handle:
                 json.dump(
