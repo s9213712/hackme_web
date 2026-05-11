@@ -21,7 +21,8 @@ instead of only overwriting the active row.
 The standalone visual builder is available from the ComfyUI workflow area. It
 lets users add nodes, drag nodes, connect output ports to input ports, delete
 edges, import existing workflow JSON, and send the generated workflow/layout
-back to the main ComfyUI page for saving.
+back to the main ComfyUI page for saving. Users can also download the generated
+workflow preset JSON directly from the visual builder.
 
 Supported built-in node groups include:
 
@@ -61,10 +62,12 @@ server warn users about missing custom node packages before execution.
 
 ## Import JSON
 
-The importer accepts either raw ComfyUI workflow JSON or the project wrapped
-workflow preset JSON exported by this site. Import validation rejects malformed
-JSON, unsafe absolute paths, external URLs, path traversal, blocked command
-fragments, inline API keys/tokens/secrets, and unsupported layout value types.
+The importer accepts raw ComfyUI API workflow JSON, project wrapped workflow
+preset JSON exported by this site, and common ComfyUI UI graph exports
+(`nodes` / `links`) that can be normalized into API format. Import validation
+rejects malformed JSON, unsafe absolute paths, external URLs, path traversal,
+blocked command fragments, inline API keys/tokens/secrets, and unsupported
+layout value types.
 
 If a layout needs models or custom nodes that are not available, the UI shows a
 clear dependency warning. Execution returns a stage such as `missing_model`,

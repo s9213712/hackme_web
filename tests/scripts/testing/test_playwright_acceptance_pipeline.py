@@ -46,3 +46,11 @@ def test_comfyui_workflow_editor_can_download_preset_json():
     assert "function downloadJson()" in js
     assert "workflowExportFileName()" in js
     assert 'downloadJsonBtn")?.addEventListener("click", downloadJson)' in js
+
+
+def test_deep_playwright_shared_video_uses_unlock_share_session():
+    script = (ROOT / "scripts" / "testing" / "playwright_deep_site_check.py").read_text(encoding="utf-8")
+
+    assert "share_session_id" in script
+    assert 'share_session_query = f"?share_session={share_session_id}"' in script
+    assert 'f"/api/videos/shared/{token}/playback{share_session_query}"' in script

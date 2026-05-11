@@ -936,11 +936,15 @@ def check_video_share_journey(rec: Recorder, page) -> dict[str, Any]:
         share_url = (((detail.get("body") or {}).get("video") or {}).get("share_url") or "").strip()
         shared_playback = {"status": 0, "body": {}}
         shared_master = {"status": 0, "text": ""}
+        share_session_query = ""
         if share_url:
             token = share_url.rstrip("/").split("/")[-1]
             unlock = fetch_json(page, "POST", f"/api/videos/shared/{token}/unlock", {"password": "ShareDeep123!"})
             if unlock["status"] == 200:
-                shared_playback = fetch_json(page, "GET", f"/api/videos/shared/{token}/playback")
+                share_session_id = str((unlock.get("body") or {}).get("share_session_id") or "").strip()
+                if share_session_id:
+                    share_session_query = f"?share_session={share_session_id}"
+                shared_playback = fetch_json(page, "GET", f"/api/videos/shared/{token}/playback{share_session_query}")
                 shared_master_url = (shared_playback.get("body") or {}).get("master_url") or ""
                 if shared_master_url:
                     shared_master = fetch_text(page, shared_master_url)
@@ -976,6 +980,7 @@ def check_video_share_journey(rec: Recorder, page) -> dict[str, Any]:
             video_id=video_id,
             playback=playback.get("body"),
             master_status=master.get("status"),
+            share_session_present=bool(share_session_query),
             shared_playback=shared_playback.get("body"),
             shared_master_status=shared_master.get("status"),
             latest_video=latest,
