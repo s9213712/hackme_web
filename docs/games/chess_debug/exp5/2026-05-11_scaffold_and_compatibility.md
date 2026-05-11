@@ -147,7 +147,8 @@ exp5 需要另建的驗證：
    - 已完成：`chess_self_play_train.py` / `self_play_training.py` 可載入 exp5 model path，round-robin、human probes、endgame suite 都會列入 `experiment 5:nnue`。
    - 此階段只做 benchmark support，不做 promotion。
 3. 建 `chess_exp5_strength_gate.py`
-   - 固定 deterministic suite，輸出 gate JSON。
+   - 已完成：固定 deterministic suite，輸出 gate JSON/Markdown。
+   - 標準判斷：不完全沿用 exp3/4；共用 legal/suspicious/score safety floors，但 exp5 必須另外通過 NNUE/PVS deterministic case 與 candidate rank trace。
 4. 把 exp5 接入 full pipeline 的 adapter interface
    - 只在 exp5 strength gate 成熟後，再加入 autorun/promotion。
 
