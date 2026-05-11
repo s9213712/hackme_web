@@ -27,6 +27,10 @@ from services.games.chess_pv import (
     EXPERIMENT_PV_DIFFICULTY,
     choose_experiment_pv_move,
 )
+from services.games.chess_nnue import (
+    EXPERIMENT_NNUE_DIFFICULTY,
+    choose_experiment_nnue_move,
+)
 from services.games.chess_nn import (
     EXPERIMENT_NN_DIFFICULTY,
     choose_experiment_nn_move,
@@ -47,7 +51,14 @@ SOLO_GAME_KEYS = {"sudoku", "minesweeper", "1a2b", "tetris", "space_shooter"}
 SCORE_RANKED_SOLO_GAMES = {"tetris", "space_shooter"}
 SOLO_GAME_CHECK_SQL = "'sudoku', 'minesweeper', '1a2b', 'tetris', 'space_shooter'"
 WEEKLY_REWARDS = (300, 200, 100)
-COMPUTER_DIFFICULTIES = {"normal", "hard", EXPERIMENT_DIFFICULTY, EXPERIMENT_DL_DIFFICULTY, EXPERIMENT_PV_DIFFICULTY}
+COMPUTER_DIFFICULTIES = {
+    "normal",
+    "hard",
+    EXPERIMENT_DIFFICULTY,
+    EXPERIMENT_DL_DIFFICULTY,
+    EXPERIMENT_PV_DIFFICULTY,
+    EXPERIMENT_NNUE_DIFFICULTY,
+}
 LEGACY_COMPUTER_DIFFICULTIES = {EXPERIMENT_NN_DIFFICULTY}
 MINESWEEPER_DIFFICULTIES = {"easy", "normal", "hard"}
 PIECE_VALUES = {
@@ -160,7 +171,11 @@ def choose_computer_move(board, side, difficulty="normal", learning_store=None):
         if move:
             return move
     if difficulty == EXPERIMENT_PV_DIFFICULTY:
-        move = choose_experiment_pv_move(board, side, search_profile="fast")
+        move = choose_experiment_pv_move(board, side, search_profile="fast", decision_mode="mcts")
+        if move:
+            return move
+    if difficulty == EXPERIMENT_NNUE_DIFFICULTY:
+        move = choose_experiment_nnue_move(board, side, search_profile="fast")
         if move:
             return move
     return _choose_heuristic_move(board, side, difficulty)
@@ -209,7 +224,7 @@ def game_schema_sql():
         CHECK (status IN ('active', 'finished', 'cancelled')),
         CHECK (current_turn IN ('white', 'black')),
         CHECK (human_side IN ('white', 'black')),
-        CHECK (computer_difficulty IN ('easy', 'normal', 'hard', 'experiment', 'experiment 2:nn', 'experiment 3:dl', 'experiment 4:pv'))
+        CHECK (computer_difficulty IN ('easy', 'normal', 'hard', 'experiment', 'experiment 2:nn', 'experiment 3:dl', 'experiment 4:pv', 'experiment 5:nnue'))
     );
     CREATE TABLE IF NOT EXISTS game_invites (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -345,7 +360,7 @@ def rebuild_game_matches_table(conn):
                 CHECK (status IN ('active', 'finished', 'cancelled')),
                 CHECK (current_turn IN ('white', 'black')),
                 CHECK (human_side IN ('white', 'black')),
-                CHECK (computer_difficulty IN ('easy', 'normal', 'hard', 'experiment', 'experiment 2:nn', 'experiment 3:dl', 'experiment 4:pv'))
+                CHECK (computer_difficulty IN ('easy', 'normal', 'hard', 'experiment', 'experiment 2:nn', 'experiment 3:dl', 'experiment 4:pv', 'experiment 5:nnue'))
             )
             """
         )
@@ -421,7 +436,13 @@ def ensure_game_schema(conn):
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='game_matches'"
     ).fetchone()
     match_sql = str(match_schema["sql"] or "") if match_schema else ""
-    if match_schema and ("experiment" not in match_sql or "experiment 2:nn" not in match_sql or "experiment 3:dl" not in match_sql or "experiment 4:pv" not in match_sql):
+    if match_schema and (
+        "experiment" not in match_sql
+        or "experiment 2:nn" not in match_sql
+        or "experiment 3:dl" not in match_sql
+        or "experiment 4:pv" not in match_sql
+        or "experiment 5:nnue" not in match_sql
+    ):
         rebuild_game_matches_table(conn)
     cols = {row["name"] for row in conn.execute("PRAGMA table_info(game_matches)").fetchall()}
     if "white_deleted_at" not in cols:
@@ -756,7 +777,8 @@ def register_games_routes(app, deps):
                     {"key": "hard", "label": "困難"},
                     {"key": EXPERIMENT_DIFFICULTY, "label": "實驗"},
                     {"key": EXPERIMENT_DL_DIFFICULTY, "label": "實驗 3：DL 語義平衡"},
-                    {"key": EXPERIMENT_PV_DIFFICULTY, "label": "實驗 4：PV 策略價值"},
+                    {"key": EXPERIMENT_PV_DIFFICULTY, "label": "實驗 4：Policy/Value + MCTS"},
+                    {"key": EXPERIMENT_NNUE_DIFFICULTY, "label": "實驗 5：NNUE + AlphaBeta/PVS"},
                 ],
             }, {
                 "key": "sudoku",

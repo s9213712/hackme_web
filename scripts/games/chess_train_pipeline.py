@@ -300,7 +300,8 @@ def main() -> int:
             "engine": engine,
             "staged": bool(stage_result.get("ok")),
             "promoted": False,
-            "gate_pass": bool(((stage_result.get("promotion_gate") or {}) if isinstance(stage_result, dict) else {}) or False),
+            "gate_pass": bool((stage_result.get("promotion_gate") or {}).get("pass")) if isinstance(stage_result, dict) else False,
+            "promotion_report_consistency_pass": bool((stage_result.get("promotion_report_consistency") or {}).get("pass")) if isinstance(stage_result, dict) else False,
             "candidate_path": str(source_path),
         }
         if not skip_promote_effective and not args.stage_only:

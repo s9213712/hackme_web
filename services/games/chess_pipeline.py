@@ -73,6 +73,8 @@ def candidate_paths_for_run(run_id: str, *, include_exp2: bool = False) -> dict[
         "experiment 3:dl": root / "chess_experiment_3_dl.json",
         "experiment 3:dl replay": root / "chess_experiment_3_dl_replay.jsonl",
         "experiment 4:pv": root / "chess_experiment_4_pv.json",
+        "experiment 5:nnue": root / "chess_experiment_5_nnue.json",
+        "experiment 5:nnue replay": root / "chess_experiment_5_nnue_replay.jsonl",
     }
 
 

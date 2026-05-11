@@ -1,0 +1,1 @@
+{"architecture":"nnue-like-sparse-accumulator-v1","feature_weights":{"center_control":18.0,"extended_center_control":8.0},"king_safety_weight":18,"mobility_weight":3,"piece_square_weights":{},"sample_count":0,"tempo":12,"training_objective":"position_move_evaluator_delta","updated_at":"2026-05-11T00:00:00","version":1}
