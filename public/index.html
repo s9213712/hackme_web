@@ -1071,6 +1071,11 @@
             </div>
           </div>
           <div id="chess-board" class="chess-board" aria-label="西洋棋棋盤"></div>
+          <form class="chess-uci-form" id="game-chess-uci-form" autocomplete="off">
+            <label for="game-chess-uci-input">UCI</label>
+            <input id="game-chess-uci-input" type="text" inputmode="latin" spellcheck="false" maxlength="5" placeholder="d1c2 / e7e8q" />
+            <button class="btn game-mini-btn btn-primary" id="game-chess-uci-submit-btn" type="submit">送出</button>
+          </form>
           <div id="game-move-history" class="game-move-history"></div>
           </div>
           <div id="sudoku-game-panel" class="single-game-panel" style="display:none;">

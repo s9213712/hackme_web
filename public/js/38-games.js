@@ -310,6 +310,22 @@ function gameOpponentColor(color) {
   return color === "white" ? "black" : "white";
 }
 
+function chessKingSquare(boardMap, color) {
+  const king = color === "black" ? "k" : "K";
+  for (const [square, piece] of Object.entries(boardMap || {})) {
+    if (piece === king) return square;
+  }
+  return "";
+}
+
+function normalizeChessUciInput(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-h1-8qrbn]/g, "")
+    .slice(0, 5);
+}
+
 function chessResultText(match) {
   if (!match || match.status === "active") return "";
   const reason = String(match.result_reason || "");
@@ -438,6 +454,8 @@ function renderChessBoard(match) {
   const title = $("game-current-title");
   const status = $("game-current-status");
   const history = $("game-move-history");
+  const uciInput = $("game-chess-uci-input");
+  const uciSubmit = $("game-chess-uci-submit-btn");
   const resign = $("game-resign-btn");
   const offerDraw = $("game-offer-draw-btn");
   const acceptDraw = $("game-accept-draw-btn");
@@ -449,6 +467,11 @@ function renderChessBoard(match) {
     if (title) title.textContent = "尚未選擇棋局";
     if (status) status.textContent = "選擇棋局後即可走棋";
     if (history) history.innerHTML = "";
+    if (uciInput) {
+      uciInput.value = "";
+      uciInput.disabled = true;
+    }
+    if (uciSubmit) uciSubmit.disabled = true;
     if (resign) resign.style.display = "none";
     if (offerDraw) offerDraw.style.display = "none";
     if (acceptDraw) acceptDraw.style.display = "none";
@@ -459,6 +482,8 @@ function renderChessBoard(match) {
   const boardMap = match.board || {};
   if (title) title.textContent = gameMatchLabel(match);
   const myTurn = match.status === "active" && match.my_side === match.current_turn;
+  if (uciInput) uciInput.disabled = !myTurn || chessMoveInFlight;
+  if (uciSubmit) uciSubmit.disabled = !myTurn || chessMoveInFlight;
   if (status) {
     if (match.status !== "active") {
       status.textContent = match.winner_username ? `已結束，勝者：${match.winner_username}` : `已結束：${match.result_reason || "平手"}`;
@@ -484,6 +509,9 @@ function renderChessBoard(match) {
   const specialTargets = new Map((match.legal_moves || [])
     .filter((move) => move.from === gameSelectedSquare && (move.castle || move.en_passant || move.promotion))
     .map((move) => [move.to, move]));
+  const checkmatedKingSquare = match.status !== "active" && match.result_reason === "checkmate"
+    ? chessKingSquare(boardMap, match.current_turn)
+    : "";
   const squares = [];
   for (let rank = 8; rank >= 1; rank -= 1) {
     for (const file of "abcdefgh") {
@@ -495,7 +523,7 @@ function renderChessBoard(match) {
       const specialClass = special?.castle ? " castle-target" : (special?.en_passant ? " en-passant-target" : (special?.promotion ? " promotion-target" : ""));
       const specialLabel = special?.castle ? "王車易位" : (special?.en_passant ? "吃過路兵" : (special?.promotion ? "升變" : ""));
       squares.push(`
-        <button class="chess-square ${isDark ? "dark" : "light"} ${square === gameSelectedSquare ? "selected" : ""} ${legalTargets.has(square) ? `target${specialClass}` : ""}"
+        <button class="chess-square ${isDark ? "dark" : "light"} ${square === gameSelectedSquare ? "selected" : ""} ${legalTargets.has(square) ? `target${specialClass}` : ""} ${square === checkmatedKingSquare ? "checkmated-king" : ""}"
                 type="button" data-chess-square="${square}" title="${sanitize(specialLabel || square)}" ${match.status !== "active" || chessMoveInFlight ? "disabled" : ""}>
           <span>${sanitize(CHESS_PIECES[piece] || "")}</span>
           <small>${specialLabel ? sanitize(specialLabel) : (selectable || legalTargets.has(square) ? sanitize(square) : "")}</small>
@@ -503,13 +531,100 @@ function renderChessBoard(match) {
       `);
     }
   }
-  board.innerHTML = squares.join("");
+  board.innerHTML = `
+    <div class="chess-rank-labels" aria-hidden="true">${[8, 7, 6, 5, 4, 3, 2, 1].map((rank) => `<span>${rank}</span>`).join("")}</div>
+    <div class="chess-board-grid">${squares.join("")}</div>
+    <div class="chess-file-labels" aria-hidden="true">${"abcdefgh".split("").map((file) => `<span>${file}</span>`).join("")}</div>
+  `;
   if (history) {
     const moves = Array.isArray(match.move_history) ? match.move_history : [];
     history.innerHTML = moves.length
       ? moves.slice(-16).map((move, index) => `<span>${moves.length - 16 + index + 1 > 0 ? moves.length - 16 + index + 1 : index + 1}. ${sanitize(move.from)}→${sanitize(move.to)}${move.computer ? " · CPU" : ""}</span>`).join("")
       : "<span style=\"color:var(--muted);\">尚未走棋</span>";
   }
+}
+
+async function submitChessMove(match, chosenMove, { from, to, promotion = null, optimisticMessage = "已送出走棋，等待電腦回應..." } = {}) {
+  if (!match || chessMoveInFlight) return;
+  const previousMatch = match;
+  const optimisticMatch = buildOptimisticChessMatch(match, chosenMove);
+  gameSelectedSquare = null;
+  chessMoveInFlight = true;
+  gameState.matches = gameState.matches.map((item) => item.id === previousMatch.id ? optimisticMatch : item);
+  renderGameMatches(gameState.matches);
+  setGameMsg(optimisticMessage, true);
+  try {
+    const json = await gameRequest(`/games/chess/matches/${encodeURIComponent(gameSelectedMatchId)}/move`, {
+      method: "POST",
+      body: { from, to, promotion },
+    });
+    const updated = json.match;
+    gameState.matches = gameState.matches.map((item) => item.id === updated.id ? updated : item);
+    renderGameMatches(gameState.matches);
+    await loadGameZone();
+  } catch (err) {
+    gameState.matches = gameState.matches.map((item) => item.id === previousMatch.id ? previousMatch : item);
+    setGameMsg(err.message || "走棋失敗", false);
+  } finally {
+    chessMoveInFlight = false;
+    const latest = (gameState.matches || []).find((item) => item.id === gameSelectedMatchId);
+    if (latest) renderChessBoard(latest);
+  }
+}
+
+function resolveChessPromotionMove(candidateMoves, requestedPromotion) {
+  const normalized = String(requestedPromotion || "").trim().toLowerCase();
+  if (normalized) {
+    return candidateMoves.find((move) => String(move.promotion || "").toLowerCase() === normalized) || null;
+  }
+  if (candidateMoves.some((move) => move.promotion)) {
+    return candidateMoves.find((move) => String(move.promotion || "").toLowerCase() === "q") || candidateMoves[0] || null;
+  }
+  return candidateMoves[0] || null;
+}
+
+async function submitChessUciMove() {
+  if (chessMoveInFlight) return;
+  const input = $("game-chess-uci-input");
+  const raw = normalizeChessUciInput(input?.value || "");
+  if (input) input.value = raw;
+  if (!/^[a-h][1-8][a-h][1-8][qrbn]?$/.test(raw)) {
+    setGameMsg("UCI 格式需為 d1c2 或 e7e8q。", false);
+    return;
+  }
+  const match = (gameState.matches || []).find((item) => item.id === gameSelectedMatchId);
+  if (!match || match.status !== "active") {
+    setGameMsg("請先選擇進行中的棋局。", false);
+    return;
+  }
+  if (match.my_side !== match.current_turn) {
+    setGameMsg("還沒輪到你", false);
+    return;
+  }
+  const from = raw.slice(0, 2);
+  const to = raw.slice(2, 4);
+  const requestedPromotion = raw.slice(4, 5);
+  const candidateMoves = (match.legal_moves || []).filter((move) => move.from === from && move.to === to);
+  if (requestedPromotion && !candidateMoves.some((move) => move.promotion)) {
+    setGameMsg(`這步不需要升變棋子：${raw}`, false);
+    return;
+  }
+  const chosenMove = resolveChessPromotionMove(candidateMoves, requestedPromotion);
+  if (!chosenMove) {
+    setGameMsg(`不是合法走法：${raw}`, false);
+    return;
+  }
+  if (chosenMove.promotion && requestedPromotion && String(chosenMove.promotion || "").toLowerCase() !== requestedPromotion) {
+    setGameMsg(`升變棋子不合法：${requestedPromotion}`, false);
+    return;
+  }
+  await submitChessMove(match, chosenMove, {
+    from,
+    to,
+    promotion: chosenMove.promotion || requestedPromotion || null,
+    optimisticMessage: `已送出 ${raw}，等待電腦回應...`,
+  });
+  if (input) input.value = "";
 }
 
 function renderGameLeaderboard(data) {
@@ -1577,29 +1692,7 @@ async function selectChessSquare(square) {
       promotion = chosenMove.promotion || resolved;
     }
     const previousMatch = match;
-    const optimisticMatch = buildOptimisticChessMatch(match, chosenMove);
-    gameSelectedSquare = null;
-    chessMoveInFlight = true;
-    gameState.matches = gameState.matches.map((item) => item.id === previousMatch.id ? optimisticMatch : item);
-    renderGameMatches(gameState.matches);
-    setGameMsg("已送出走棋，等待電腦回應...", true);
-    try {
-      const json = await gameRequest(`/games/chess/matches/${encodeURIComponent(gameSelectedMatchId)}/move`, {
-        method: "POST",
-        body: { from, to: targetSquare, promotion },
-      });
-      const updated = json.match;
-      gameState.matches = gameState.matches.map((item) => item.id === updated.id ? updated : item);
-      renderGameMatches(gameState.matches);
-      await loadGameZone();
-    } catch (err) {
-      gameState.matches = gameState.matches.map((item) => item.id === previousMatch.id ? previousMatch : item);
-      setGameMsg(err.message || "走棋失敗", false);
-    } finally {
-      chessMoveInFlight = false;
-      const latest = (gameState.matches || []).find((item) => item.id === gameSelectedMatchId);
-      if (latest) renderChessBoard(latest);
-    }
+    await submitChessMove(previousMatch, chosenMove, { from, to: targetSquare, promotion });
     return;
   }
   if (isOwnPiece && myTurn) {
@@ -1935,6 +2028,13 @@ document.addEventListener("click", (event) => {
   }
 });
 
+document.addEventListener("submit", (event) => {
+  const uciForm = event.target?.closest?.("#game-chess-uci-form");
+  if (!uciForm) return;
+  event.preventDefault();
+  submitChessUciMove();
+});
+
 document.addEventListener("input", (event) => {
   const sudokuInput = event.target?.closest?.("[data-sudoku-index]");
   if (sudokuInput) {
@@ -1944,6 +2044,11 @@ document.addEventListener("input", (event) => {
   const oneA2BInput = event.target?.closest?.("#onea2b-guess-input");
   if (oneA2BInput) {
     oneA2BInput.value = normalizeOneA2BGuess(oneA2BInput.value || "");
+    return;
+  }
+  const chessUciInput = event.target?.closest?.("#game-chess-uci-input");
+  if (chessUciInput) {
+    chessUciInput.value = normalizeChessUciInput(chessUciInput.value || "");
   }
 });
 

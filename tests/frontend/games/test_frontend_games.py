@@ -20,6 +20,9 @@ def test_game_zone_frontend_assets_are_wired():
     assert 'id="game-accept-draw-btn"' in index_html
     assert 'id="game-reject-draw-btn"' in index_html
     assert 'id="game-claim-draw-btn"' in index_html
+    assert 'id="game-chess-uci-form"' in index_html
+    assert 'id="game-chess-uci-input"' in index_html
+    assert 'placeholder="d1c2 / e7e8q"' in index_html
     assert 'id="game-root-chess-panel"' in index_html
     assert 'id="game-root-chess-refresh-btn"' in index_html
     assert 'id="game-root-chess-warm-start-btn"' in index_html
@@ -74,6 +77,10 @@ def test_game_zone_frontend_assets_are_wired():
     assert "gameDifficultyLabel" in games_js
     assert "gameOpponentColor" in games_js
     assert "buildOptimisticChessMatch" in games_js
+    assert "normalizeChessUciInput" in games_js
+    assert "submitChessUciMove" in games_js
+    assert "chessKingSquare" in games_js
+    assert "checkmated-king" in games_js
     assert "兵升變請輸入 q / r / b / n" in games_js
     assert "/games/chess/matches/${encodeURIComponent(gameSelectedMatchId)}/offer-draw" in games_js
     assert "/games/chess/matches/${encodeURIComponent(gameSelectedMatchId)}/respond-draw" in games_js
@@ -119,6 +126,9 @@ def test_game_zone_frontend_assets_are_wired():
     assert "if (chessMoveInFlight) return;" in games_js
     assert "const from = gameSelectedSquare;" in games_js
     assert "const optimisticMatch = buildOptimisticChessMatch(match, chosenMove);" in games_js
+    assert "UCI 格式需為 d1c2 或 e7e8q。" in games_js
+    assert "不是合法走法" in games_js
+    assert "這步不需要升變棋子" in games_js
     assert "pending_computer_response" in games_js
     assert "你已走棋，電腦思考中" in games_js
     assert "已送出走棋，等待電腦回應" in games_js
@@ -171,6 +181,11 @@ def test_game_zone_frontend_assets_are_wired():
     assert "找不到要刪除的棋局，請先刷新遊戲區" in games_js
     assert "method: \"DELETE\"" in games_js
     assert "grid-template-rows: repeat(8, minmax(0, 1fr))" in styles_css
+    assert ".chess-board-grid" in styles_css
+    assert ".chess-rank-labels" in styles_css
+    assert ".chess-file-labels" in styles_css
+    assert ".chess-square.checkmated-king" in styles_css
+    assert ".chess-uci-form" in styles_css
     assert "padding: 0" in styles_css
     assert ".chess-square span" in styles_css
     assert ".game-match-item" in styles_css
