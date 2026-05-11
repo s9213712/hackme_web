@@ -3799,11 +3799,13 @@
             <div class="field">
               <label><input type="checkbox" id="s-comfyui-paid-api-nodes-enabled" /> 允許 ComfyUI 付費 / API nodes</label>
               <div class="drive-card-sub">僅允許後端在執行 workflow 時注入 ComfyUI Account API Key；前端 workflow JSON、匯出檔與 audit 不會包含明文 key。</div>
+              <div class="drive-card-sub">ComfyUI 官方 credits 不是本站積分；本站錢包、交易所體驗金與任務獎勵不能支付 ComfyUI 官方 Partner/API nodes。</div>
             </div>
             <div class="field">
               <label>ComfyUI Account API Key</label>
               <input type="password" id="s-comfyui-account-api-key" placeholder="留空代表不變更；只供付費/API nodes 執行時使用" autocomplete="off" />
               <div class="drive-card-sub" id="comfyui-account-api-key-state">尚未讀取 key 狀態。</div>
+              <div class="drive-card-sub">餘額與購買請到 ComfyUI UI 的 Settings / Credits；本站目前只顯示 key 是否已設定與執行風險提示。</div>
               <label style="margin-top:.35rem;"><input type="checkbox" id="s-comfyui-account-api-key-clear" /> 清除已儲存的 ComfyUI Account API Key</label>
             </div>
             <div class="field">

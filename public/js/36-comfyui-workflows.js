@@ -1166,7 +1166,7 @@ async function runComfyuiWorkflowPreset(presetId) {
   if (paidApiNodes.length) {
     const labels = paidApiNodes.map((node) => `${node.node_id || "-"}:${node.class_type || node.title || "API node"}`).slice(0, 8);
     confirmPaidApiNodes = window.confirm(
-      `這個 workflow 可能會消耗 ComfyUI API credits。\n\n節點：${labels.join(", ")}${paidApiNodes.length > labels.length ? `，另 ${paidApiNodes.length - labels.length} 個` : ""}\n\n要繼續執行嗎？`
+      `這個 workflow 可能會消耗 ComfyUI 官方 credits，不會扣本站積分。\n\n節點：${labels.join(", ")}${paidApiNodes.length > labels.length ? `，另 ${paidApiNodes.length - labels.length} 個` : ""}\n\n餘額與購買請到 ComfyUI UI 的 Settings / Credits 查看。\n\n要繼續執行嗎？`
     );
     if (!confirmPaidApiNodes) return;
   }
@@ -1192,7 +1192,7 @@ async function runComfyuiWorkflowPreset(presetId) {
     if ((!res.ok || !json.ok) && json.stage === "paid_api_confirmation_required") {
       const nodes = Array.isArray(json.paid_api_nodes?.nodes) ? json.paid_api_nodes.nodes : [];
       const labels = nodes.map((node) => `${node.node_id || "-"}:${node.class_type || node.title || "API node"}`).slice(0, 8);
-      if (!window.confirm(`這個 workflow 可能會消耗 ComfyUI API credits。\n\n節點：${labels.join(", ") || "API node"}\n\n要繼續執行嗎？`)) {
+      if (!window.confirm(`這個 workflow 可能會消耗 ComfyUI 官方 credits，不會扣本站積分。\n\n節點：${labels.join(", ") || "API node"}\n\n餘額與購買請到 ComfyUI UI 的 Settings / Credits 查看。\n\n要繼續執行嗎？`)) {
         throw new Error("已取消付費/API node workflow 執行");
       }
       res = await runRequest(true);

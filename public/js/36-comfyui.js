@@ -171,8 +171,8 @@ function comfyuiPaidApiStatusText(payload = {}) {
   if (!paid.key_configured) return "；付費/API nodes 已啟用但尚未設定 Account API Key";
   const creditText = paid.credit_balance_available && paid.credit_balance !== null && paid.credit_balance !== undefined
     ? `，credits ${paid.credit_balance}`
-    : "，credits 請至 ComfyUI UI 查看";
-  return `；付費/API nodes 可用${creditText}`;
+    : "，官方 credits 請至 ComfyUI UI 的 Settings / Credits 查看";
+  return `；付費/API nodes 可用${creditText}；ComfyUI credits 不是本站積分`;
 }
 
 function comfyuiConnectionModeLabel(mode = comfyuiConnectionMode) {
