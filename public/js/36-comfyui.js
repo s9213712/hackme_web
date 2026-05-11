@@ -799,6 +799,7 @@ function restoreComfyuiDraft({ includeDynamicSelects = true } = {}) {
         name: String(item.name),
         strength_model: Number.isFinite(Number(item.strength_model)) ? Number(item.strength_model) : 1,
         strength_clip: Number.isFinite(Number(item.strength_clip)) ? Number(item.strength_clip) : 1,
+        template_node_id: item.template_node_id ? String(item.template_node_id) : "",
       }));
     renderComfyuiSelectedLoras();
   }
@@ -1483,6 +1484,7 @@ async function applyComfyuiHistoryToForm(historyId) {
       name: String(entry.name),
       strength_model: Number.isFinite(Number(entry.strength_model)) ? Number(entry.strength_model) : 1,
       strength_clip: Number.isFinite(Number(entry.strength_clip)) ? Number(entry.strength_clip) : 1,
+      template_node_id: entry.template_node_id ? String(entry.template_node_id) : "",
     }));
   renderComfyuiSelectedLoras();
   [

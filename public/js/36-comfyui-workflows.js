@@ -434,6 +434,7 @@ function comfyuiTemplateSelectGroups(payload = {}) {
 }
 
 let comfyuiTemplateRenderTimer = null;
+let comfyuiTemplateLoraOverrides = {};
 
 function queueRenderSelectedComfyuiTemplate() {
   if (comfyuiTemplateRenderTimer) clearTimeout(comfyuiTemplateRenderTimer);
@@ -471,6 +472,7 @@ function renderComfyuiTemplateSelector(payload = {}, { silentReload = true } = {
       if (!presetId) {
         comfyuiSelectedTemplatePresetId = null;
         comfyuiSelectedTemplateDetail = null;
+        comfyuiTemplateLoraOverrides = {};
         renderSelectedComfyuiTemplate();
         return;
       }
@@ -504,6 +506,7 @@ async function loadComfyuiSelectedTemplateDetail(presetId, { silent = false, app
   const json = await res.json().catch(() => ({}));
   if (!res.ok || !json.ok) throw new Error(json.msg || `模板讀取失敗（HTTP ${res.status}）`);
   comfyuiSelectedTemplatePresetId = Number(presetId);
+  comfyuiTemplateLoraOverrides = {};
   comfyuiSelectedTemplateDetail = json.preset || null;
   if (applyDefaults) {
     applyComfyuiWorkflowPresetDefaults(comfyuiSelectedTemplateDetail?.default_params || {});
@@ -592,6 +595,105 @@ function comfyuiTemplateSelectOptions(targetId, field = {}) {
   return options;
 }
 
+function comfyuiTemplateLoraSelectOptions(field = {}) {
+  const seen = new Set();
+  const options = [];
+  const addOption = (value, label = value, disabled = false) => {
+    const cleanValue = String(value || "");
+    if (seen.has(cleanValue)) return;
+    seen.add(cleanValue);
+    options.push({ value: cleanValue, label: String(label || cleanValue), disabled: !!disabled });
+  };
+  addOption("", "不使用 LoRA（可略過）");
+  const current = String(field?.current_value || "").trim();
+  if (current) addOption(current, current, false);
+  const source = $("comfyui-lora-select");
+  if (source && source.options && source.options.length) {
+    Array.from(source.options).forEach((option) => {
+      addOption(option.value || "", option.textContent || option.label || option.value || "", option.disabled);
+    });
+  } else {
+    (Array.isArray(comfyuiAvailableLoras) ? comfyuiAvailableLoras : []).forEach((name) => {
+      const detail = comfyuiLoraDetails?.[name] || {};
+      const supported = detail.supported === true;
+      const reason = detail.base_model ? `${detail.base_model} 不支援` : "base model 未知，暫不可用";
+      addOption(name, supported ? name : `${name}（不可用：${reason}）`, !supported);
+    });
+  }
+  return options;
+}
+
+function comfyuiSelectedLoraIndexForTemplateNode(nodeId) {
+  const cleanNodeId = String(nodeId || "");
+  if (!cleanNodeId) return -1;
+  return comfyuiSelectedLoras.findIndex((item) => String(item?.template_node_id || "") === cleanNodeId);
+}
+
+function comfyuiSelectedLoraForTemplateNode(nodeId) {
+  const index = comfyuiSelectedLoraIndexForTemplateNode(nodeId);
+  return index >= 0 ? comfyuiSelectedLoras[index] : null;
+}
+
+function upsertComfyuiTemplateLora(nodeId, name, { notify = true } = {}) {
+  const cleanNodeId = String(nodeId || "");
+  const cleanName = String(name || "").trim();
+  if (cleanNodeId) comfyuiTemplateLoraOverrides[cleanNodeId] = cleanName;
+  const existingIndex = comfyuiSelectedLoraIndexForTemplateNode(cleanNodeId);
+  if (!cleanName) {
+    if (existingIndex >= 0) removeComfyuiSelectedLoraByIndex(existingIndex);
+    else renderComfyuiSelectedLoras();
+    writeComfyuiDraft();
+    return true;
+  }
+  if (comfyuiSelectedLoras.some((item, index) => index !== existingIndex && item?.name === cleanName)) {
+    setComfyuiMessage("這個 LoRA 已經加入。", false);
+    return false;
+  }
+  const detail = comfyuiLoraDetails?.[cleanName] || {};
+  if (detail.supported !== true) {
+    setComfyuiMessage(detail.support_message || "這個 LoRA 目前不支援；只允許 SDXL、Pony、Illustrious、Noob 系列。", false);
+    return false;
+  }
+  if (existingIndex < 0 && comfyuiSelectedLoras.length >= COMFYUI_MAX_LORAS) {
+    setComfyuiMessage(`已達 LoRA 數量上限 ${COMFYUI_MAX_LORAS} 個。`, false);
+    return false;
+  }
+  if (existingIndex >= 0 && comfyuiSelectedLoras[existingIndex]?.name !== cleanName) {
+    removeComfyuiSelectedLoraByIndex(existingIndex);
+  }
+  const nextIndex = comfyuiSelectedLoraIndexForTemplateNode(cleanNodeId);
+  const item = {
+    name: cleanName,
+    strength_model: nextIndex >= 0 ? (comfyuiSelectedLoras[nextIndex].strength_model ?? 1) : 1,
+    strength_clip: nextIndex >= 0 ? (comfyuiSelectedLoras[nextIndex].strength_clip ?? 1) : 1,
+    template_node_id: cleanNodeId,
+  };
+  if (nextIndex >= 0) comfyuiSelectedLoras[nextIndex] = item;
+  else comfyuiSelectedLoras.push(item);
+  const insertedTerms = applyComfyuiPromptTerms(detail.trained_words || []);
+  renderComfyuiSelectedLoras();
+  writeComfyuiDraft();
+  if (notify && insertedTerms.length) {
+    setComfyuiMessage(`已加入 LoRA，並自動補上 trigger words：${insertedTerms.join(", ")}`, true);
+  }
+  return true;
+}
+
+function updateComfyuiTemplateLoraStrength(nodeId, fieldName, rawValue) {
+  const index = comfyuiSelectedLoraIndexForTemplateNode(nodeId);
+  if (index < 0 || !comfyuiSelectedLoras[index]) {
+    setComfyuiMessage("請先選擇 LoRA，再調整權重。", false);
+    return null;
+  }
+  const field = fieldName === "strength_clip" ? "strength_clip" : "strength_model";
+  const value = Number(rawValue);
+  const normalized = Math.max(-2, Math.min(2, Number.isFinite(value) ? value : 1));
+  comfyuiSelectedLoras[index][field] = Math.round(normalized * 100) / 100;
+  renderComfyuiSelectedLoras();
+  writeComfyuiDraft();
+  return comfyuiSelectedLoras[index][field];
+}
+
 function comfyuiTemplateFieldBinding(field, detail, ctx) {
   const mode = String(detail?.default_params?.generation_mode || "txt2img").trim().toLowerCase();
   if (field?.class_type === "CLIPTextEncode" && field?.input_name === "text") {
@@ -601,6 +703,10 @@ function comfyuiTemplateFieldBinding(field, detail, ctx) {
   }
   if (field?.class_type === "CheckpointLoaderSimple" && field?.input_name === "ckpt_name") return { kind: "field", targetId: "comfyui-model-select" };
   if (field?.class_type === "VAELoader" && field?.input_name === "vae_name") return { kind: "field", targetId: "comfyui-vae-select" };
+  if (field?.class_type === "LoraLoader" && field?.input_name === "lora_name") return { kind: "lora", nodeId: field.node_id };
+  if (field?.class_type === "LoraLoader" && (field?.input_name === "strength_model" || field?.input_name === "strength_clip")) {
+    return { kind: "lora_strength", nodeId: field.node_id, strengthField: field.input_name };
+  }
   if (field?.class_type === "UpscaleModelLoader" && field?.input_name === "model_name") return { kind: "field", targetId: "comfyui-upscale-model" };
   if (field?.class_type === "ControlNetLoader" && field?.input_name === "control_net_name") return { kind: "field", targetId: "comfyui-controlnet-model", enableControlnet: true };
   if (field?.class_type === "KSampler" && field?.input_name === "seed") return { kind: "field", targetId: "comfyui-seed" };
@@ -644,6 +750,50 @@ function comfyuiTemplateFieldValue(binding, field = {}) {
     return comfyuiAssetState(binding.assetKey);
   }
   return field?.current_value;
+}
+
+function comfyuiTemplateRuntimeValue(binding, field = {}) {
+  if (binding.kind === "field") {
+    const el = $(binding.targetId);
+    return el ? el.value : field?.current_value;
+  }
+  if (binding.kind === "lora") {
+    const selected = comfyuiSelectedLoraForTemplateNode(binding.nodeId);
+    if (Object.prototype.hasOwnProperty.call(comfyuiTemplateLoraOverrides, String(binding.nodeId || ""))) {
+      return comfyuiTemplateLoraOverrides[String(binding.nodeId || "")];
+    }
+    return selected?.name || field?.current_value || "";
+  }
+  if (binding.kind === "lora_strength") {
+    const selected = comfyuiSelectedLoraForTemplateNode(binding.nodeId);
+    return selected?.[binding.strengthField] ?? field?.current_value ?? 1;
+  }
+  return field?.current_value;
+}
+
+function normalizeComfyuiTemplateRuntimeValue(field, value) {
+  if (field?.category === "NUMERIC" || field?.input_type === "number") {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : Number(field?.current_value || 0);
+  }
+  return value === undefined || value === null ? "" : String(value);
+}
+
+function collectComfyuiTemplateUserInputs(detail) {
+  const userInputs = {};
+  const ctx = { textFieldIndex: 0, loadImageIndex: 0 };
+  const panels = Array.isArray(detail?.ui_schema?.panels) ? detail.ui_schema.panels : [];
+  panels.forEach((panel) => {
+    (panel?.fields || []).forEach((field) => {
+      if (!field || field.synthetic || field.input_type === "embedding_shortcuts" || !field.node_id || !field.input_name) return;
+      const binding = comfyuiTemplateFieldBinding(field, detail, ctx);
+      if (binding.kind === "image") return;
+      const rawValue = comfyuiTemplateRuntimeValue(binding, field);
+      if (!userInputs[field.node_id]) userInputs[field.node_id] = {};
+      userInputs[field.node_id][field.input_name] = normalizeComfyuiTemplateRuntimeValue(field, rawValue);
+    });
+  });
+  return userInputs;
 }
 
 function comfyuiTemplateUpdateField(binding, field, rawValue) {
@@ -706,6 +856,36 @@ function renderComfyuiTemplateField(field, detail, ctx) {
       <div class="${cardClass}">
         <label>${sanitize(field.label || field.input_name || "欄位")}</label>
         <div class="comfyui-template-readonly">這個欄位目前沿用模板預設值：${sanitize(String(field?.current_value ?? ""))}</div>
+      </div>
+    `;
+  }
+  if (binding.kind === "lora") {
+    const selected = comfyuiSelectedLoraForTemplateNode(binding.nodeId);
+    const overrideKey = String(binding.nodeId || "");
+    const current = Object.prototype.hasOwnProperty.call(comfyuiTemplateLoraOverrides, overrideKey)
+      ? comfyuiTemplateLoraOverrides[overrideKey]
+      : (selected?.name || String(field?.current_value || ""));
+    const options = comfyuiTemplateLoraSelectOptions(field);
+    return `
+      <div class="${cardClass}">
+        <label for="tmpl-${sanitize(field.id || "")}">${sanitize(field.label || "LoRA 模型")}</label>
+        <select id="tmpl-${sanitize(field.id || "")}" data-comfyui-template-lora-node="${sanitize(binding.nodeId)}">
+          ${options.map((option) => `<option value="${sanitize(option.value)}"${option.value === current ? " selected" : ""}${option.disabled ? ' disabled="disabled"' : ""}>${sanitize(option.label)}</option>`).join("")}
+        </select>
+        <div class="drive-card-sub">選擇後會加入 LoRA 清單，並自動把 Civitai trigger words 補到正向提示詞。</div>
+      </div>
+    `;
+  }
+  if (binding.kind === "lora_strength") {
+    const selected = comfyuiSelectedLoraForTemplateNode(binding.nodeId);
+    const value = selected?.[binding.strengthField] ?? field?.current_value ?? 1;
+    const minAttr = field?.constraints?.min !== undefined ? ` min="${sanitize(String(field.constraints.min))}"` : "";
+    const maxAttr = field?.constraints?.max !== undefined ? ` max="${sanitize(String(field.constraints.max))}"` : "";
+    const stepAttr = field?.constraints?.step !== undefined ? ` step="${sanitize(String(field.constraints.step))}"` : "";
+    return `
+      <div class="${cardClass}">
+        <label for="tmpl-${sanitize(field.id || "")}">${sanitize(field.label || field.input_name || "LoRA 權重")}</label>
+        <input id="tmpl-${sanitize(field.id || "")}" type="number" value="${sanitize(String(value ?? 1))}"${minAttr}${maxAttr}${stepAttr} data-comfyui-template-lora-strength="${sanitize(binding.nodeId)}" data-comfyui-template-lora-strength-field="${sanitize(binding.strengthField)}" />
       </div>
     `;
   }
@@ -786,6 +966,28 @@ function bindRenderedComfyuiTemplateFields(detail) {
       clearComfyuiInputAsset(button.getAttribute("data-comfyui-template-image-clear"));
       renderSelectedComfyuiTemplate();
     });
+  });
+  host.querySelectorAll("[data-comfyui-template-lora-node]").forEach((select) => {
+    if (select.dataset.boundComfyuiTemplate === "1") return;
+    select.dataset.boundComfyuiTemplate = "1";
+    select.addEventListener("change", () => {
+      const nodeId = select.getAttribute("data-comfyui-template-lora-node");
+      if (upsertComfyuiTemplateLora(nodeId, select.value)) {
+        renderSelectedComfyuiTemplate({ preserveOpenPanels: true });
+      }
+    });
+  });
+  host.querySelectorAll("[data-comfyui-template-lora-strength]").forEach((input) => {
+    if (input.dataset.boundComfyuiTemplate === "1") return;
+    input.dataset.boundComfyuiTemplate = "1";
+    const sync = () => {
+      const nodeId = input.getAttribute("data-comfyui-template-lora-strength");
+      const field = input.getAttribute("data-comfyui-template-lora-strength-field");
+      const normalized = updateComfyuiTemplateLoraStrength(nodeId, field, input.value);
+      if (normalized !== null) input.value = String(normalized);
+    };
+    input.addEventListener("input", sync);
+    input.addEventListener("change", sync);
   });
   host.querySelectorAll("[data-comfyui-template-embedding]").forEach((button) => {
     if (button.dataset.boundComfyuiTemplate === "1") return;
@@ -1161,6 +1363,8 @@ async function updateComfyuiWorkflowPreset() {
 async function runComfyuiWorkflowPreset(presetId) {
   if (!presetId) return;
   const preset = comfyuiWorkflowPresetById(presetId);
+  const templateDetail = Number(comfyuiSelectedTemplateDetail?.id || 0) === Number(presetId) ? comfyuiSelectedTemplateDetail : null;
+  const userInputs = templateDetail ? collectComfyuiTemplateUserInputs(templateDetail) : {};
   const paidApiNodes = comfyuiWorkflowPaidApiNodes(preset);
   let confirmPaidApiNodes = false;
   if (paidApiNodes.length) {
@@ -1184,7 +1388,7 @@ async function runComfyuiWorkflowPreset(presetId) {
       "Content-Type": "application/json",
       "X-CSRF-Token": getCsrfToken() || "",
     },
-    body: JSON.stringify({ confirm_paid_api_nodes: !!confirmed }),
+    body: JSON.stringify({ confirm_paid_api_nodes: !!confirmed, user_inputs: userInputs }),
   });
   try {
     let res = await runRequest(confirmPaidApiNodes);

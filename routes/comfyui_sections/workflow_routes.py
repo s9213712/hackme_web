@@ -87,6 +87,26 @@ def register_comfyui_workflow_routes(app, ctx):
     safe_text = ctx["safe_text"]
     threading = ctx["threading"]
 
+    def _apply_legacy_workflow_user_inputs(workflow_json, user_inputs):
+        if not isinstance(workflow_json, dict) or not isinstance(user_inputs, dict):
+            return workflow_json
+        patched = json.loads(json.dumps(workflow_json))
+        for node_id, patch in user_inputs.items():
+            if not isinstance(patch, dict):
+                continue
+            node = patched.get(str(node_id))
+            if not isinstance(node, dict):
+                continue
+            inputs = node.get("inputs")
+            if not isinstance(inputs, dict):
+                continue
+            for input_name, value in patch.items():
+                key = str(input_name)
+                if key not in inputs or isinstance(inputs.get(key), list):
+                    continue
+                inputs[key] = value
+        return patched
+
     def _workflow_output_kinds(workflow_json):
         classes = {
             str((node or {}).get("class_type") or "").strip()
@@ -575,6 +595,8 @@ def register_comfyui_workflow_routes(app, ctx):
                         f"image_remapped={gate_result.audit_metadata.get('image_remapped')}"
                     ),
                 )
+            elif user_inputs:
+                workflow_json = _apply_legacy_workflow_user_inputs(workflow_json, user_inputs)
 
             prompt_extra_data = {}
             if comfyui_paid_api_policy:
