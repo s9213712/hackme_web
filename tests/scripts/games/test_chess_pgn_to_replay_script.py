@@ -300,7 +300,7 @@ def test_chess_pgn_to_replay_valid_game_filter_strength_is_adjustable(tmp_path):
 [Result "1-0"]
 [Variant "Standard"]
 [Termination "Normal"]
-[TimeControl "1800+0"]
+[TimeControl "G: 90 minutes + 30 seconds added per move"]
 
 1. d4 d5 2. c4 e6 3. Nc3 Nf6 4. Bg5 Be7 5. e3 O-O 6. Nf3 h6 7. Bh4 b6 8. cxd5 Nxd5 9. Bxe7 Qxe7 10. Nxd5 exd5 1-0
 """.strip(),

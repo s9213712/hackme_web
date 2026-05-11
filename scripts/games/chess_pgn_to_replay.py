@@ -19,6 +19,7 @@ import io
 import json
 from pathlib import Path
 import random
+import re
 import shutil
 import subprocess
 import sys
@@ -332,6 +333,19 @@ def _time_control_class(value: str) -> str:
     if not value or value == "?":
         return "unknown_time_control"
     first = value.split("+", 1)[0]
+    minute_match = re.search(r"(\d+)\s*minutes?", value, re.IGNORECASE)
+    if minute_match:
+        first_seconds = int(minute_match.group(1)) * 60
+        if first_seconds < 180:
+            return "bullet"
+        if first_seconds < 600:
+            return "blitz"
+        if first_seconds < 1800:
+            return "rapid"
+        return "classical"
+    hour_match = re.search(r"(\d+)\s*hours?", value, re.IGNORECASE)
+    if hour_match:
+        return "classical"
     if not first.isdigit():
         return "unknown_time_control"
     seconds = int(first)
