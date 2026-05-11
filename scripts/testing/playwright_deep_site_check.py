@@ -725,7 +725,11 @@ def check_auth_registration_journey(rec: Recorder, browser, base_url: str, root_
         page.fill("#reg-nickname", "QA 行動註冊")
         page.fill("#reg-email", f"{username}@example.test")
         page.click("#reg-btn")
-        page.wait_for_timeout(1600)
+        page.locator("#reg-msg").wait_for(state="visible", timeout=8000)
+        page.wait_for_function(
+            "() => document.querySelector('#reg-msg')?.innerText.trim().length > 0",
+            timeout=8000,
+        )
         reg_msg = page.locator("#reg-msg").inner_text(timeout=3000)
         pending_login = fetch_json(page, "POST", "/api/login", {"username": username, "password": password})
         users = fetch_json(root_page, "GET", "/api/admin/users?include_deleted=1")
@@ -749,6 +753,7 @@ def check_auth_registration_journey(rec: Recorder, browser, base_url: str, root_
             ok,
             f"user={username}, pending_status={pending_login['status']}, approved_status={approved_login['status']}",
             username=username,
+            reg_msg=reg_msg,
             pending_login=pending_login.get("body"),
             approved_login=approved_login.get("body"),
         )
