@@ -1,3 +1,4 @@
+import hashlib
 import json
 from datetime import datetime
 from pathlib import Path
@@ -19,6 +20,15 @@ E2EE_STREAM_V2_FORBIDDEN_FIELDS = {
     "share_key",
     "share_key_bytes",
 }
+
+
+def _stream_v2_capabilities():
+    return {
+        "segment_integrity_sha256": True,
+        "client_memory_cache": True,
+        "chunk_retry": True,
+        "seek_recovery": "sequential_segment_resume",
+    }
 
 
 def _now():
@@ -300,6 +310,7 @@ def get_e2ee_stream_v2_status(conn, *, file_row, storage_root):
         "created_at": str(manifest.get("created_at") or asset["created_at"]),
         "manifest_path": str(asset["manifest_path"]),
         "bundle_path": str(asset["bundle_path"]),
+        "capabilities": _stream_v2_capabilities(),
     }
 
 
@@ -321,6 +332,7 @@ def serialize_manifest_for_client(conn, *, file_row, storage_root):
         "byte_range_hint": manifest.get("byte_range_hint") or {},
         "source_size_bytes": int(manifest.get("source_size_bytes") or 0),
         "created_at": str(manifest.get("created_at") or ""),
+        "capabilities": _stream_v2_capabilities(),
         "chunks": [
             {
                 "chunk_index": int(item["chunk_index"]),
@@ -355,6 +367,9 @@ def resolve_e2ee_chunk_response(conn, *, file_row, storage_root, chunk_index):
         payload = fh.read(size)
     if len(payload) != size:
         return None, {"ok": False, "error": "bundle_truncated", "msg": "E2EE 串流密文資料不完整"}
+    expected_sha256 = str(chunk.get("ciphertext_sha256") or "").strip().lower()
+    if expected_sha256 and hashlib.sha256(payload).hexdigest() != expected_sha256:
+        return None, {"ok": False, "error": "bundle_corrupt", "msg": "E2EE 串流密文分段完整性驗證失敗"}
     return {
         "payload": payload,
         "chunk": chunk,

@@ -1124,7 +1124,7 @@ def test_shared_e2ee_stream_v2_manifest_and_chunk_routes_work_and_stay_off_hls(t
                 "ciphertext_size": 5,
                 "plaintext_offset": 0,
                 "plaintext_size": 4,
-                "ciphertext_sha256": "11" * 32,
+                "ciphertext_sha256": "36bbe50ed96841d10443bcb670d6554f0a34b761be67ec9c4a8ad2c0c44ca42c",
             },
             {
                 "chunk_index": 1,
@@ -1133,7 +1133,7 @@ def test_shared_e2ee_stream_v2_manifest_and_chunk_routes_work_and_stay_off_hls(t
                 "ciphertext_size": 4,
                 "plaintext_offset": 4,
                 "plaintext_size": 5,
-                "ciphertext_sha256": "22" * 32,
+                "ciphertext_sha256": "21e32f5321cad49ab4cf78ba5ed231e0f36d0c78d34108fda1be939f33fba149",
             },
         ],
     }
@@ -1172,6 +1172,8 @@ def test_shared_e2ee_stream_v2_manifest_and_chunk_routes_work_and_stay_off_hls(t
     assert shared_manifest_json["player_strategy"] == "browser_e2ee_stream_v2"
     assert shared_manifest_json["chunk_count"] == 2
     assert shared_manifest_json["chunks"][0]["ciphertext_size"] == 5
+    assert shared_manifest_json["capabilities"]["segment_integrity_sha256"] is True
+    assert shared_manifest_json["capabilities"]["seek_recovery"] == "sequential_segment_resume"
     assert "ciphertext_offset" not in shared_manifest_json["chunks"][0]
 
     chunk0 = viewer.get(f"/api/videos/shared/{token}/e2ee-stream-v2/chunks/0{share_session}")
@@ -1285,6 +1287,63 @@ def test_e2ee_stream_v2_chunk_route_reports_bundle_truncated_when_bundle_shrinks
         )
         assert payload is None
         assert error["error"] == "bundle_truncated"
+    finally:
+        conn.close()
+
+
+def test_e2ee_stream_v2_chunk_route_rejects_corrupt_ciphertext_hash(tmp_path):
+    db_path = tmp_path / "shared-e2ee-stream-v2-corrupt.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        _seed_uploaded_file(
+            conn,
+            storage_root,
+            file_id="e2ee-video",
+            owner_user_id=1,
+            filename="secret.mp4",
+            mime="video/mp4",
+            privacy_mode="e2ee",
+            payload=b"ciphertext-video",
+        )
+        _mark_file_as_e2ee(conn, "e2ee-video")
+        file_row = conn.execute("SELECT * FROM uploaded_files WHERE id='e2ee-video'").fetchone()
+        video_routes.upsert_e2ee_stream_v2_asset(
+            conn,
+            file_row=file_row,
+            storage_root=storage_root,
+            manifest_payload={
+                "e2ee_stream_version": 2,
+                "chunk_size": 8,
+                "chunk_count": 1,
+                "content_type": "video/mp4",
+                "duration_hint": 1.0,
+                "chunks": [
+                    {
+                        "chunk_index": 0,
+                        "nonce": "AAAAAAAAAAAAAAAA",
+                        "ciphertext_offset": 0,
+                        "ciphertext_size": 4,
+                        "plaintext_offset": 0,
+                        "plaintext_size": 4,
+                        "ciphertext_sha256": "00" * 32,
+                    },
+                ],
+            },
+            bundle_bytes=b"ABCD",
+        )
+        conn.commit()
+        payload, error = resolve_e2ee_chunk_response(
+            conn,
+            file_row=file_row,
+            storage_root=storage_root,
+            chunk_index=0,
+        )
+        assert payload is None
+        assert error["error"] == "bundle_corrupt"
     finally:
         conn.close()
 

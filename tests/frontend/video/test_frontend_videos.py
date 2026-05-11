@@ -61,6 +61,10 @@ def test_video_platform_accepts_audio_media_in_ui():
     assert 'getRememberedVideoShareFragment' in videos_js
     assert 'mode === "e2ee_stream_v2"' in videos_js
     assert 'mode === "e2ee_direct"' in videos_js
+    assert "fetchVideoE2eeChunkWithRetry" in videos_js
+    assert "pruneVideoE2eeChunkCache" in videos_js
+    assert "videoE2eeChunkIndexForTime" in videos_js
+    assert "正在追上快轉目標" in videos_js
     assert 'setVideoPlaybackActionButton(' in videos_js
     assert '開始 E2EE 播放' in videos_js
     assert '未按下播放前，不會主動要求 E2EE 密碼。' in videos_js
@@ -120,6 +124,10 @@ def test_video_share_copy_and_shared_page_guardrails_are_visible_in_ui_code():
     assert 'loadSharedVideo().catch((err) => setMsg(err.message || "分享影音載入失敗", true));' in shared_page
     assert "/js/hls.light.min.js?v=20260505-hlsjs" in shared_page
     assert "/js/e2ee-stream-v2-worker.js?v=20260505-e2eev2" in shared_page
+    assert "fetchSharedE2eeChunkWithRetry" in shared_page
+    assert "pruneSharedE2eeChunkCache" in shared_page
+    assert "sharedE2eeChunkIndexForTime" in shared_page
+    assert "正在追上快轉目標" in shared_page
     assert "/js/vendor/hls.light.min.js" not in shared_page
     assert "/js/workers/e2ee-stream-v2-worker.js" not in shared_page
 

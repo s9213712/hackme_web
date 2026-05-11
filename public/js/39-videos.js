@@ -16,6 +16,8 @@ const VIDEO_SHARE_FRAGMENT_STORAGE_KEY = "hackme_web.video_share_fragments";
 const VIDEO_HLS_JS_URL = "/js/hls.light.min.js?v=20260505-hlsjs";
 const VIDEO_E2EE_STREAM_V2_WORKER_URL = "/js/e2ee-stream-v2-worker.js?v=20260505-e2eev2";
 const VIDEO_E2EE_STREAM_V2_CHUNK_SIZE = 512 * 1024;
+const VIDEO_E2EE_STREAM_V2_MAX_RETRIES = 2;
+const VIDEO_E2EE_STREAM_V2_CACHE_LIMIT = 16;
 
 function videoMsg(text, ok = true) {
   const el = $("video-msg");
@@ -930,6 +932,44 @@ function appendSourceBufferAsync(sourceBuffer, payload) {
   });
 }
 
+function videoE2eeChunkIndexForTime(manifest, timeSeconds) {
+  const chunkCount = Number(manifest?.chunk_count || 0);
+  const duration = Number(manifest?.duration_hint || 0);
+  const target = Number(timeSeconds || 0);
+  if (!Number.isFinite(chunkCount) || chunkCount <= 0 || !Number.isFinite(duration) || duration <= 0) return null;
+  if (!Number.isFinite(target) || target <= 0) return 0;
+  return Math.max(0, Math.min(chunkCount - 1, Math.floor((target / duration) * chunkCount)));
+}
+
+function pruneVideoE2eeChunkCache(cache, keepAroundIndex) {
+  if (!cache || cache.size <= VIDEO_E2EE_STREAM_V2_CACHE_LIMIT) return;
+  const keep = Number(keepAroundIndex || 0);
+  const keys = Array.from(cache.keys()).sort((a, b) => Math.abs(a - keep) - Math.abs(b - keep));
+  const keepSet = new Set(keys.slice(0, VIDEO_E2EE_STREAM_V2_CACHE_LIMIT));
+  for (const key of cache.keys()) {
+    if (!keepSet.has(key)) cache.delete(key);
+  }
+}
+
+async function fetchVideoE2eeChunkWithRetry(url, retries = VIDEO_E2EE_STREAM_V2_MAX_RETRIES) {
+  let lastError = null;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      const chunkRes = await apiFetch(url, { credentials: "same-origin" });
+      if (!chunkRes.ok) {
+        const payload = await chunkRes.json().catch(() => ({}));
+        throw new Error(payload.msg || `HTTP ${chunkRes.status}`);
+      }
+      return chunkRes.arrayBuffer();
+    } catch (err) {
+      lastError = err;
+      if (attempt >= retries) break;
+      await new Promise((resolve) => setTimeout(resolve, 200 * (attempt + 1)));
+    }
+  }
+  throw lastError || new Error("E2EE Streaming v2 分段下載失敗");
+}
+
 async function resolveVideoE2eePlaybackKey(video, playback) {
   const csrf = getCsrfToken() || "";
   const e2ee = await fetchDriveE2eeKey(video.cloud_file_id, csrf);
@@ -979,6 +1019,8 @@ async function attachVideoE2eeStreamV2Player(video, playback, sessionId) {
   let nextChunk = 0;
   let closed = false;
   let sourceBuffer = null;
+  let pendingSeekChunk = null;
+  const chunkCache = new Map();
   const cleanup = () => {
     if (closed) return;
     closed = true;
@@ -999,6 +1041,12 @@ async function attachVideoE2eeStreamV2Player(video, playback, sessionId) {
   player.addEventListener("seeking", () => {
     if (closed || !sourceBuffer) return;
     const target = Number(player.currentTime || 0);
+    const targetChunk = videoE2eeChunkIndexForTime(manifestJson, target);
+    if (!playerTimeBuffered(player, target) && targetChunk !== null && targetChunk >= nextChunk) {
+      pendingSeekChunk = targetChunk;
+      setVideoPlaybackStatus(`快轉目標尚未緩衝，正在以 Streaming v2 追上分段 ${targetChunk + 1}。`, false);
+      return;
+    }
     if (!playerTimeBuffered(player, target) && nextChunk < Number(manifestJson.chunk_count || 0)) {
       fallbackToFull("偵測到尚未緩衝區段的快轉，已退回舊版完整解密播放以確保可用性。", target).catch((err) => {
         setVideoPlaybackStatus(err?.message || "E2EE 影音快轉 fallback 失敗", true);
@@ -1032,17 +1080,19 @@ async function attachVideoE2eeStreamV2Player(video, playback, sessionId) {
         return;
       }
       try {
-        const chunkUrl = playback.chunk_url_template.replace("__INDEX__", String(chunkMeta.chunk_index));
-        const chunkRes = await apiFetch(chunkUrl, { credentials: "same-origin" });
-        if (!chunkRes.ok) {
-          const payload = await chunkRes.json().catch(() => ({}));
-          throw new Error(payload.msg || `HTTP ${chunkRes.status}`);
+        let plaintext = chunkCache.get(Number(chunkMeta.chunk_index));
+        if (!plaintext) {
+          const chunkUrl = playback.chunk_url_template.replace("__INDEX__", String(chunkMeta.chunk_index));
+          const cipher = await fetchVideoE2eeChunkWithRetry(chunkUrl);
+          plaintext = await decryptVideoE2eeChunkWithWorker(worker, new Uint8Array(rawKeyBytes), chunkMeta.nonce, cipher);
+          chunkCache.set(Number(chunkMeta.chunk_index), plaintext);
+          pruneVideoE2eeChunkCache(chunkCache, Number(chunkMeta.chunk_index));
         }
-        const cipher = await chunkRes.arrayBuffer();
-        const plaintext = await decryptVideoE2eeChunkWithWorker(worker, new Uint8Array(rawKeyBytes), chunkMeta.nonce, cipher);
         await appendSourceBufferAsync(sourceBuffer, new Uint8Array(plaintext));
         nextChunk += 1;
-        setVideoPlaybackStatus(`正在使用 E2EE Streaming v2：已解密分段 ${nextChunk} / ${manifestJson.chunk_count}。`, false);
+        if (pendingSeekChunk !== null && nextChunk > pendingSeekChunk) pendingSeekChunk = null;
+        const seekNote = pendingSeekChunk !== null ? "，正在追上快轉目標" : "";
+        setVideoPlaybackStatus(`正在使用 E2EE Streaming v2：已解密分段 ${nextChunk} / ${manifestJson.chunk_count}${seekNote}。`, false);
         queueMicrotask(() => { pump().catch(() => {}); });
       } catch (err) {
         fallbackToFull(`E2EE Streaming v2 分段播放失敗，已退回舊版完整解密播放。${err?.message ? ` (${err.message})` : ""}`).catch(() => {});
