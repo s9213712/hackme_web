@@ -1246,6 +1246,7 @@ def register_system_admin_routes(app, deps):
         "DB_PATH": DB_PATH,
         "GIT_REPO_DIR": GIT_REPO_DIR,
         "LOG_DIR": LOG_DIR,
+        "REPORTS_DIR": REPORTS_DIR,
         "SECURITY_SETTING_KEYS": SECURITY_SETTING_KEYS,
         "SECURITY_TEST_JOBS": SECURITY_TEST_JOBS,
         "SECURITY_TEST_JOBS_LOCK": SECURITY_TEST_JOBS_LOCK,

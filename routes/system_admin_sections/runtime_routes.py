@@ -2,9 +2,17 @@ import os
 
 from flask import request, send_file
 
+from services.system.release_artifacts import (
+    build_qa_artifact_index,
+    create_release_bundle,
+    release_bundle_status,
+)
+
 
 def register_system_admin_runtime_routes(app, ctx):
     BASE_DIR = ctx["BASE_DIR"]
+    REPORTS_DIR = ctx.get("REPORTS_DIR") or os.path.join(BASE_DIR, "runtime", "reports")
+    GIT_REPO_DIR = ctx.get("GIT_REPO_DIR") or BASE_DIR
     require_csrf = ctx["require_csrf"]
     require_csrf_safe = ctx["require_csrf_safe"]
     json_resp = ctx["json_resp"]
@@ -466,6 +474,74 @@ def register_system_admin_runtime_routes(app, ctx):
         if error:
             return error
         return json_resp(server_mode_service.production_requirements())
+
+    @app.route("/api/root/qa-artifacts/index", methods=["GET", "POST"])
+    @require_csrf_safe
+    def root_qa_artifacts_index():
+        actor, error = require_root_actor()
+        if error:
+            return error
+        try:
+            limit = int(request.args.get("limit") or 300)
+        except Exception:
+            limit = 300
+        result = build_qa_artifact_index(
+            base_dir=BASE_DIR,
+            reports_dir=REPORTS_DIR,
+            git_repo_dir=GIT_REPO_DIR,
+            limit=max(25, min(limit, 1000)),
+            persist=True,
+        )
+        return json_resp(result)
+
+    @app.route("/api/root/production-release/bundle/status", methods=["GET"])
+    @require_csrf_safe
+    def root_production_release_bundle_status():
+        actor, error = require_root_actor()
+        if error:
+            return error
+        return json_resp(release_bundle_status(reports_dir=REPORTS_DIR))
+
+    @app.route("/api/root/production-release/bundle", methods=["POST"])
+    @require_csrf
+    def root_production_release_bundle_create():
+        if not server_mode_service or not hasattr(server_mode_service, "production_requirements"):
+            return json_resp({"ok":False,"msg": "Server Mode 服務目前無法使用"}), 503
+        actor, error = require_root_actor()
+        if error:
+            return error
+        try:
+            data = request.get_json(force=True) if request.is_json else {}
+        except Exception:
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
+        requirements = server_mode_service.production_requirements()
+        qa_index = build_qa_artifact_index(
+            base_dir=BASE_DIR,
+            reports_dir=REPORTS_DIR,
+            git_repo_dir=GIT_REPO_DIR,
+            limit=500,
+            persist=True,
+        )
+        bundle = create_release_bundle(
+            base_dir=BASE_DIR,
+            reports_dir=REPORTS_DIR,
+            git_repo_dir=GIT_REPO_DIR,
+            created_by=actor["username"],
+            production_requirements=requirements,
+            qa_artifacts=qa_index,
+            mark_ready=data.get("mark_ready", True) is not False,
+        )
+        audit(
+            "PRODUCTION_RELEASE_BUNDLE_CREATED",
+            get_client_ip(),
+            user=actor["username"],
+            success=bool(bundle.get("ready")),
+            detail=f"status={bundle.get('status')},bundle={bundle.get('bundle_path')}",
+        )
+        status_code = 200 if bundle.get("ready") else 409
+        return json_resp(bundle), status_code
 
     @app.route("/api/root/production/enter", methods=["POST"])
     @require_csrf

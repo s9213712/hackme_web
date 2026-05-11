@@ -408,6 +408,110 @@ function launchCheckMsg(text, ok = false) {
   msg.style.color = ok ? "#4caf50" : "#ff4f6d";
 }
 
+function launchCheckReleasePanelStatus(text, ok = false) {
+  const panel = $("launch-check-release-panel");
+  const sub = $("launch-check-release-sub");
+  if (panel) panel.open = true;
+  if (sub) {
+    sub.textContent = text || "";
+    sub.style.color = ok ? "#4caf50" : (text ? "#ff4f6d" : "var(--muted)");
+  }
+}
+
+function renderLaunchCheckReleaseDetails(payload, mode = "bundle") {
+  const summary = $("launch-check-release-summary");
+  const details = $("launch-check-release-details");
+  if (!summary || !details) return;
+  const escape = (text) => String(text == null ? "" : text)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  if (mode === "artifacts") {
+    const artifactSummary = payload.summary || {};
+    summary.innerHTML = `
+      <div class="health-card"><strong>Artifacts</strong><span>${Number(artifactSummary.artifact_count || 0)}</span></div>
+      <div class="health-card"><strong>Sources</strong><span>${escape(Object.keys(artifactSummary.by_source || {}).join(", ") || "-")}</span></div>
+      <div class="health-card"><strong>Index</strong><span>${escape(payload.index_path || "-")}</span></div>
+    `;
+    details.textContent = JSON.stringify({
+      generated_at: payload.generated_at,
+      summary: payload.summary,
+      index_path: payload.index_path,
+      latest: (payload.artifacts || []).slice(0, 20),
+    }, null, 2);
+    return;
+  }
+  const req = payload.production_requirements || {};
+  const qa = payload.qa_artifacts || {};
+  const git = payload.git || {};
+  summary.innerHTML = `
+    <div class="health-card"><strong>Release</strong><span>${payload.ready ? "ready" : "blocked"}</span></div>
+    <div class="health-card"><strong>Gate</strong><span>${req.ok ? "pass" : "blocked"}</span></div>
+    <div class="health-card"><strong>Reports</strong><span>${(req.required || []).length - (req.missing || []).length - (req.failed || []).length}/${(req.required || []).length}</span></div>
+    <div class="health-card"><strong>QA artifacts</strong><span>${Number((qa.summary || {}).artifact_count || 0)}</span></div>
+  `;
+  details.textContent = JSON.stringify({
+    status: payload.status,
+    ready: payload.ready,
+    branch: git.branch,
+    commit: git.commit,
+    bundle_path: payload.bundle_path,
+    markdown_path: payload.markdown_path,
+    ready_marker: payload.ready_marker || null,
+    missing: req.missing || [],
+    failed: req.failed || [],
+    qa_artifacts: qa,
+  }, null, 2);
+}
+
+async function refreshLaunchCheckQaArtifacts() {
+  launchCheckReleasePanelStatus("QA artifact index 產生中...", true);
+  try {
+    await fetchCsrfToken({ force: true });
+    const csrf = getCsrfToken();
+    const res = await apiFetch(API + "/root/qa-artifacts/index", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" },
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) throw new Error(json.msg || `HTTP ${res.status}`);
+    renderLaunchCheckReleaseDetails(json, "artifacts");
+    launchCheckReleasePanelStatus(`QA artifact index 已更新：${Number((json.summary || {}).artifact_count || 0)} 個檔案`, true);
+    launchCheckMsg("QA artifact index 已更新", true);
+  } catch (err) {
+    const message = err && err.message ? err.message : "QA artifact index 產生失敗";
+    launchCheckReleasePanelStatus(message, false);
+    launchCheckMsg(message, false);
+  }
+}
+
+async function createLaunchCheckReleaseBundle() {
+  launchCheckReleasePanelStatus("Release bundle 產生中...", true);
+  try {
+    await fetchCsrfToken({ force: true });
+    const csrf = getCsrfToken();
+    const res = await apiFetch(API + "/root/production-release/bundle", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+      body: JSON.stringify({ mark_ready: true }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!json.ok) throw new Error(json.msg || `HTTP ${res.status}`);
+    renderLaunchCheckReleaseDetails(json, "bundle");
+    const ready = !!json.ready;
+    launchCheckReleasePanelStatus(
+      ready ? `Release bundle 已產生並標記可上線：${json.bundle_path || "-"}` : `Release bundle 已產生但 gate 未全綠：${json.bundle_path || "-"}`,
+      ready,
+    );
+    launchCheckMsg(ready ? "Release bundle 已標記 ready" : "Release bundle 已建立，但仍有 gate blocker", ready);
+    await loadLaunchCheck();
+  } catch (err) {
+    const message = err && err.message ? err.message : "Release bundle 產生失敗";
+    launchCheckReleasePanelStatus(message, false);
+    launchCheckMsg(message, false);
+  }
+}
+
 function launchCheckCardMarkup(reportType, reportRow, missing, failed, idx) {
   const meta = LAUNCH_CHECK_REPORT_META_V2[reportType] || {
     label: reportType,

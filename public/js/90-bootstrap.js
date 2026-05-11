@@ -101,6 +101,8 @@ function bindUiEvents() {
   const testerTokenList = $("tester-token-list-btn");
   const healthRefresh = $("health-refresh-btn");
   const launchCheckRefresh = $("launch-check-refresh-btn");
+  const launchCheckBundle = $("launch-check-bundle-btn");
+  const launchCheckArtifacts = $("launch-check-artifacts-btn");
   const launchCheckUploadFile = $("launch-check-upload-file");
   const launchCheckUploadSubmit = $("launch-check-upload-submit-btn");
   const launchCheckUploadClear = $("launch-check-upload-clear-btn");
@@ -522,6 +524,8 @@ function bindUiEvents() {
   if (healthRefresh) healthRefresh.addEventListener("click", loadServerHealth);
   if (integrityRefresh) integrityRefresh.addEventListener("click", loadIntegrityGuard);
   if (launchCheckRefresh) launchCheckRefresh.addEventListener("click", () => loadLaunchCheck());
+  if (launchCheckBundle) launchCheckBundle.addEventListener("click", () => createLaunchCheckReleaseBundle());
+  if (launchCheckArtifacts) launchCheckArtifacts.addEventListener("click", () => refreshLaunchCheckQaArtifacts());
   if (launchCheckUploadFile) launchCheckUploadFile.addEventListener("change", async () => {
     const file = launchCheckUploadFile.files && launchCheckUploadFile.files[0];
     if (!file) return;

@@ -3159,6 +3159,8 @@
       <div class="form-section" id="sec-server-launch-check">
         <div class="admin-toolbar" style="margin-bottom:.5rem;display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;">
           <button class="btn btn-primary" type="button" id="launch-check-refresh-btn">🔄 重新檢查</button>
+          <button class="btn btn-secondary" type="button" id="launch-check-bundle-btn">產生 Release Bundle</button>
+          <button class="btn btn-secondary" type="button" id="launch-check-artifacts-btn">刷新 QA Artifacts</button>
           <span id="launch-check-overall" style="font-weight:600;font-size:.95rem;">尚未檢查</span>
           <span id="launch-check-summary" style="font-size:.78rem;color:var(--muted);"></span>
         </div>
@@ -3175,6 +3177,18 @@
         <div class="health-section-title">B. 13 份必過 Production Gate Reports</div>
         <div id="launch-check-list" class="security-log-grid"></div>
         <div id="launch-check-msg" class="msg" style="margin-top:.6rem;"></div>
+        <details class="drive-collapsible-panel settings-collapse" id="launch-check-release-panel" style="margin-top:.75rem;">
+          <summary>
+            <div>
+              <div class="drive-card-title">Release Bundle / QA Artifacts</div>
+              <div class="drive-card-sub" id="launch-check-release-sub">尚未產生 release bundle。</div>
+            </div>
+          </summary>
+          <div class="drive-collapsible-body">
+            <div id="launch-check-release-summary" class="health-summary-grid" style="margin-bottom:.55rem;"></div>
+            <pre id="launch-check-release-details" class="security-log-box security-log-pre" style="max-height:320px;overflow:auto;">按「產生 Release Bundle」後會整理 production gate 狀態與 QA artifact index。</pre>
+          </div>
+        </details>
         <details class="drive-collapsible-panel settings-collapse" id="launch-check-upload-panel" style="margin-top:.75rem;">
           <summary>
             <div>
