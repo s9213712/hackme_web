@@ -240,6 +240,7 @@ def test_human_probe_case_rejects_illegal_engine_move(tmp_path, monkeypatch):
         nn_model_path=tmp_path / "exp2.json",
         dl_model_path=tmp_path / "exp3.json",
         pv_model_path=tmp_path / "exp4.json",
+        nnue_model_path=tmp_path / "exp5.json",
         teacher_depth=1,
     )
 
@@ -263,6 +264,7 @@ def test_endgame_case_requires_queen_promotion(tmp_path, monkeypatch):
         nn_model_path=tmp_path / "exp2.json",
         dl_model_path=tmp_path / "exp3.json",
         pv_model_path=tmp_path / "exp4.json",
+        nnue_model_path=tmp_path / "exp5.json",
         teacher_depth=1,
     )
 
@@ -286,6 +288,7 @@ def test_human_probe_case_records_mate_window_and_material_gain(tmp_path, monkey
         nn_model_path=tmp_path / "exp2.json",
         dl_model_path=tmp_path / "exp3.json",
         pv_model_path=tmp_path / "exp4.json",
+        nnue_model_path=tmp_path / "exp5.json",
         teacher_depth=1,
     )
 
@@ -302,11 +305,13 @@ def test_round_robin_benchmark_and_smoke_reports_use_all_engines(tmp_path, monke
     experiment_nn = runtime_dir / "games" / "models" / "chess_experiment_2_nn.json"
     experiment_dl = runtime_dir / "games" / "models" / "chess_experiment_3_dl.json"
     experiment_pv = runtime_dir / "games" / "models" / "chess_experiment_4_pv.json"
+    experiment_nnue = runtime_dir / "games" / "models" / "chess_experiment_5_nnue.json"
     monkeypatch.setenv("HACKME_RUNTIME_DIR", str(runtime_dir))
     monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_DB_PATH", str(experiment_db))
     monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_NN_MODEL_PATH", str(experiment_nn))
     monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_DL_MODEL_PATH", str(experiment_dl))
     monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_PV_MODEL_PATH", str(experiment_pv))
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_NNUE_MODEL_PATH", str(experiment_nnue))
     monkeypatch.setattr(chess_dl_service, "_SEARCH_DEPTH", 1)
     monkeypatch.setattr(chess_dl_service, "_SEARCH_QUIESCENCE_DEPTH", 1)
     monkeypatch.setattr(chess_pv_service, "_SEARCH_DEPTH", 1)
@@ -347,6 +352,7 @@ def test_round_robin_benchmark_and_smoke_reports_use_all_engines(tmp_path, monke
         nn_model_path=experiment_nn,
         dl_model_path=experiment_dl,
         pv_model_path=experiment_pv,
+        nnue_model_path=experiment_nnue,
         teacher_depth=1,
         max_plies=2,
         games_per_pair=1,
@@ -357,19 +363,34 @@ def test_round_robin_benchmark_and_smoke_reports_use_all_engines(tmp_path, monke
         nn_model_path=experiment_nn,
         dl_model_path=experiment_dl,
         pv_model_path=experiment_pv,
+        nnue_model_path=experiment_nnue,
         teacher_depth=1,
         max_plies=2,
         rounds=1,
         seed=33,
     )
-    assert smoke["target_engines"] == ["experiment", "experiment 2:nn", "experiment 3:dl", "experiment 4:pv"]
+    assert smoke["target_engines"] == [
+        "experiment",
+        "experiment 2:nn",
+        "experiment 3:dl",
+        "experiment 4:pv",
+        "experiment 5:nnue",
+    ]
     assert smoke["reference_engines"] == ["hard", "teacher"]
     assert smoke["opening_split"] == "eval"
-    assert smoke["games_played"] == 16
-    assert benchmark["engines"] == ["teacher", "hard", "experiment", "experiment 2:nn", "experiment 3:dl", "experiment 4:pv"]
-    assert benchmark["games_played"] == 30
-    assert len(benchmark["standings"]) == 6
-    assert len(benchmark["elo"]) == 6
+    assert smoke["games_played"] == 20
+    assert benchmark["engines"] == [
+        "teacher",
+        "hard",
+        "experiment",
+        "experiment 2:nn",
+        "experiment 3:dl",
+        "experiment 4:pv",
+        "experiment 5:nnue",
+    ]
+    assert benchmark["games_played"] == 42
+    assert len(benchmark["standings"]) == 7
+    assert len(benchmark["elo"]) == 7
     assert benchmark["matrix"]["teacher"]["hard"]["games"] == 2
     assert benchmark["matrix"]["experiment"]["experiment 2:nn"]["games"] == 2
     assert benchmark["matrix"]["experiment 3:dl"]["experiment 4:pv"]["games"] == 2
@@ -377,13 +398,13 @@ def test_round_robin_benchmark_and_smoke_reports_use_all_engines(tmp_path, monke
     assert any(match["opening_label"] for match in benchmark["matches"])
     assert benchmark["human_probes"]["cases"] == 10
     assert benchmark["human_probes"]["engines"] == benchmark["engines"]
-    assert len(benchmark["human_probes"]["standings"]) == 6
-    assert len(benchmark["human_probes"]["results"]) == 60
+    assert len(benchmark["human_probes"]["standings"]) == 7
+    assert len(benchmark["human_probes"]["results"]) == 70
     assert all("reason" in row and "final_fen" in row for row in benchmark["human_probes"]["results"])
     assert benchmark["endgame_suite"]["cases"] == 6
     assert benchmark["endgame_suite"]["engines"] == benchmark["engines"]
-    assert len(benchmark["endgame_suite"]["standings"]) == 6
-    assert len(benchmark["endgame_suite"]["results"]) == 36
+    assert len(benchmark["endgame_suite"]["standings"]) == 7
+    assert len(benchmark["endgame_suite"]["results"]) == 42
     assert all("reason" in row and "final_fen" in row for row in benchmark["endgame_suite"]["results"])
 
 
