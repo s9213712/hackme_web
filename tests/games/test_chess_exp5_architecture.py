@@ -3,6 +3,7 @@ import sqlite3
 
 from routes import games as games_routes
 from routes.games import choose_computer_move, ensure_game_schema
+from services.games import self_play_training
 from services.games.chess_nnue import EXPERIMENT_NNUE_DIFFICULTY
 
 
@@ -64,3 +65,38 @@ def test_exp5_computer_move_dispatches_to_nnue_engine(monkeypatch):
     board = {"__fen__": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR b KQkq - 0 1"}
     assert choose_computer_move(board, "black", EXPERIMENT_NNUE_DIFFICULTY) == sentinel
     assert called == {"board": board, "side": "black", "search_profile": "fast"}
+
+
+def test_exp5_is_benchmark_engine_and_uses_nnue_model_path(monkeypatch, tmp_path):
+    sentinel = {"from": "e7", "to": "e5", "piece": "p"}
+    called = {}
+
+    def fake_choose_nnue_move(board, side, *, model_path=None, search_profile="balanced"):
+        called["board"] = board
+        called["side"] = side
+        called["model_path"] = model_path
+        called["search_profile"] = search_profile
+        return sentinel
+
+    model_path = tmp_path / "exp5.json"
+    monkeypatch.setattr(self_play_training, "choose_experiment_nnue_move", fake_choose_nnue_move)
+
+    board = {"__fen__": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR b KQkq - 0 1"}
+    assert EXPERIMENT_NNUE_DIFFICULTY in self_play_training.BENCHMARK_ENGINES
+    assert self_play_training._engine_move_for_benchmark(
+        EXPERIMENT_NNUE_DIFFICULTY,
+        board,
+        "black",
+        store=self_play_training.ChessExperimentStore(tmp_path / "exp1.db"),
+        nn_model_path=tmp_path / "exp2.json",
+        dl_model_path=tmp_path / "exp3.json",
+        pv_model_path=tmp_path / "exp4.json",
+        nnue_model_path=model_path,
+        teacher_depth=1,
+    ) == sentinel
+    assert called == {
+        "board": board,
+        "side": "black",
+        "model_path": model_path,
+        "search_profile": "strong",
+    }

@@ -24,6 +24,7 @@ All generated artifacts stay under ``runtime/``:
 - exp2 model: ``runtime/games/models/chess_experiment_2_nn.json``
 - exp3 model: ``runtime/games/models/chess_experiment_3_dl.json``
 - exp4 model: ``runtime/games/models/chess_experiment_4_pv.json``
+- exp5 model: ``runtime/games/models/chess_experiment_5_nnue.json``
 - training reports: ``runtime/reports/games/``
 """
 
@@ -48,6 +49,7 @@ from services.games.self_play_training import (  # noqa: E402
     ChessExperimentStore,
     default_chess_dl_model_path,
     default_chess_nn_model_path,
+    default_chess_nnue_model_path,
     default_chess_pv_model_path,
     default_training_report_dir,
     run_post_training_smoke_evaluation,
@@ -122,6 +124,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--experiment-2-model-path", default="")
     parser.add_argument("--experiment-3-model-path", default="")
     parser.add_argument("--experiment-4-model-path", default="")
+    parser.add_argument("--experiment-5-model-path", default="")
     return parser.parse_args()
 
 
@@ -158,11 +161,13 @@ def main() -> int:
     nn_model_path = Path(args.experiment_2_model_path or default_chess_nn_model_path())
     dl_model_path = Path(args.experiment_3_model_path or default_chess_dl_model_path())
     pv_model_path = Path(args.experiment_4_model_path or default_chess_pv_model_path())
+    nnue_model_path = Path(args.experiment_5_model_path or default_chess_nnue_model_path())
     _progress(f"runtime dir: {runtime_dir or '<default runtime>'}")
     _progress(f"target exp1 db: {Path(args.experiment_db_path) if args.experiment_db_path else '<default>'}")
     _progress(f"target exp2 model: {nn_model_path}")
     _progress(f"target exp3 model: {dl_model_path}")
     _progress(f"target exp4 model: {pv_model_path}")
+    _progress(f"target exp5 model: {nnue_model_path}")
     _progress(f"report dir: {Path(args.report_dir)}")
     _progress("phase self-play training started")
     with _temporary_search_depths(args):
@@ -189,6 +194,7 @@ def main() -> int:
             nn_model_path=nn_model_path,
             dl_model_path=dl_model_path,
             pv_model_path=pv_model_path,
+            nnue_model_path=nnue_model_path,
             progress_hook=_progress_log,
         )
         sys.stderr.write("[chess-self-play] smoke evaluation started\n")
@@ -198,6 +204,7 @@ def main() -> int:
             nn_model_path=nn_model_path,
             dl_model_path=dl_model_path,
             pv_model_path=pv_model_path,
+            nnue_model_path=nnue_model_path,
             teacher_depth=args.teacher_depth,
             max_plies=args.max_plies,
             games_per_pair=args.smoke_games_per_pair,
@@ -212,6 +219,7 @@ def main() -> int:
             nn_model_path=nn_model_path,
             dl_model_path=dl_model_path,
             pv_model_path=pv_model_path,
+            nnue_model_path=nnue_model_path,
             teacher_depth=args.teacher_depth,
             max_plies=args.max_plies,
             rounds=args.benchmark_rounds,

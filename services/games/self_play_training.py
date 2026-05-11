@@ -6,6 +6,7 @@ This module trains the runtime-backed chess learning artifacts:
 - ``experiment 2:nn`` model: ``runtime/games/models/chess_experiment_2_nn.json``
 - ``experiment 3:dl`` model: ``runtime/games/models/chess_experiment_3_dl.json``
 - ``experiment 4:pv`` model: ``runtime/games/models/chess_experiment_4_pv.json``
+- ``experiment 5:nnue`` model: ``runtime/games/models/chess_experiment_5_nnue.json``
 
 The training loop intentionally includes a stronger search-based teacher.
 Pure student-vs-student self-play tends to collapse into repetitive openings
@@ -55,6 +56,11 @@ from services.games.chess_pv import (
     default_chess_pv_model_path,
     record_experiment_pv_learning,
 )
+from services.games.chess_nnue import (
+    EXPERIMENT_NNUE_DIFFICULTY,
+    choose_experiment_nnue_move,
+    default_chess_nnue_model_path,
+)
 from services.games.chess_nn import (
     EXPERIMENT_NN_DIFFICULTY,
     choose_experiment_nn_move,
@@ -74,6 +80,7 @@ BENCHMARK_ENGINES = (
     EXPERIMENT_NN_DIFFICULTY,
     EXPERIMENT_DL_DIFFICULTY,
     EXPERIMENT_PV_DIFFICULTY,
+    EXPERIMENT_NNUE_DIFFICULTY,
 )
 DEFAULT_MAX_PLIES = 180
 DEFAULT_TEACHER_DEPTH = 3
@@ -282,12 +289,14 @@ def _evaluation_empty_updates() -> tuple[dict[str, int], dict[str, int]]:
             EXPERIMENT_NN_DIFFICULTY: 0,
             EXPERIMENT_DL_DIFFICULTY: 0,
             EXPERIMENT_PV_DIFFICULTY: 0,
+            EXPERIMENT_NNUE_DIFFICULTY: 0,
         },
         {
             EXPERIMENT_DIFFICULTY: 0,
             EXPERIMENT_NN_DIFFICULTY: 0,
             EXPERIMENT_DL_DIFFICULTY: 0,
             EXPERIMENT_PV_DIFFICULTY: 0,
+            EXPERIMENT_NNUE_DIFFICULTY: 0,
         },
     )
 
@@ -688,6 +697,7 @@ def _choose_student_move(
     nn_model_path: Path,
     dl_model_path: Path,
     pv_model_path: Path,
+    nnue_model_path: Path,
     rng: random.Random,
     exploration_rate: float,
 ):
@@ -703,6 +713,8 @@ def _choose_student_move(
         return choose_experiment_dl_move(board_state, side, model_path=dl_model_path, search_profile="strong")
     if difficulty == EXPERIMENT_PV_DIFFICULTY:
         return choose_experiment_pv_move(board_state, side, model_path=pv_model_path, search_profile="strong")
+    if difficulty == EXPERIMENT_NNUE_DIFFICULTY:
+        return choose_experiment_nnue_move(board_state, side, model_path=nnue_model_path, search_profile="strong")
     raise ValueError(f"unsupported student difficulty: {difficulty}")
 
 
@@ -715,6 +727,7 @@ def _choose_training_move(
     nn_model_path: Path,
     dl_model_path: Path,
     pv_model_path: Path,
+    nnue_model_path: Path,
     rng: random.Random,
     teacher_depth: int,
     exploration_rate: float,
@@ -729,6 +742,7 @@ def _choose_training_move(
         nn_model_path=nn_model_path,
         dl_model_path=dl_model_path,
         pv_model_path=pv_model_path,
+        nnue_model_path=nnue_model_path,
         rng=rng,
         exploration_rate=exploration_rate,
     )
@@ -743,6 +757,7 @@ def _engine_move_for_benchmark(
     nn_model_path: Path,
     dl_model_path: Path,
     pv_model_path: Path,
+    nnue_model_path: Path,
     teacher_depth: int,
 ) -> dict | None:
     return _choose_training_move(
@@ -753,6 +768,7 @@ def _engine_move_for_benchmark(
         nn_model_path=nn_model_path,
         dl_model_path=dl_model_path,
         pv_model_path=pv_model_path,
+        nnue_model_path=nnue_model_path,
         rng=random.Random(0),
         teacher_depth=teacher_depth,
         exploration_rate=0.0,
@@ -767,6 +783,7 @@ def _run_human_probe_case(
     nn_model_path: Path,
     dl_model_path: Path,
     pv_model_path: Path,
+    nnue_model_path: Path,
     teacher_depth: int,
 ) -> dict:
     board = chess.Board(str(case["initial_fen"]))
@@ -787,6 +804,7 @@ def _run_human_probe_case(
             nn_model_path=nn_model_path,
             dl_model_path=dl_model_path,
             pv_model_path=pv_model_path,
+            nnue_model_path=nnue_model_path,
             teacher_depth=teacher_depth,
         )
         if move is None:
@@ -835,6 +853,7 @@ def _run_human_probe_case(
                 nn_model_path=nn_model_path,
                 dl_model_path=dl_model_path,
                 pv_model_path=pv_model_path,
+                nnue_model_path=nnue_model_path,
                 teacher_depth=teacher_depth,
             )
             if move is None:
@@ -903,12 +922,14 @@ def run_human_probe_suite(
     nn_model_path: Path | None = None,
     dl_model_path: Path | None = None,
     pv_model_path: Path | None = None,
+    nnue_model_path: Path | None = None,
     teacher_depth: int = DEFAULT_TEACHER_DEPTH,
 ) -> dict:
     store = store or ChessExperimentStore()
     nn_model_path = Path(nn_model_path or default_chess_nn_model_path())
     dl_model_path = Path(dl_model_path or default_chess_dl_model_path())
     pv_model_path = Path(pv_model_path or default_chess_pv_model_path())
+    nnue_model_path = Path(nnue_model_path or default_chess_nnue_model_path())
     rows: list[dict] = []
     by_engine: dict[str, dict] = {}
     for engine in BENCHMARK_ENGINES:
@@ -922,6 +943,7 @@ def run_human_probe_suite(
                 nn_model_path=nn_model_path,
                 dl_model_path=dl_model_path,
                 pv_model_path=pv_model_path,
+                nnue_model_path=nnue_model_path,
                 teacher_depth=teacher_depth,
             )
             rows.append(row)
@@ -953,6 +975,7 @@ def _evaluate_endgame_case(
     nn_model_path: Path,
     dl_model_path: Path,
     pv_model_path: Path,
+    nnue_model_path: Path,
     teacher_depth: int,
 ) -> dict:
     board = chess.Board(str(case["initial_fen"]))
@@ -966,6 +989,7 @@ def _evaluate_endgame_case(
         nn_model_path=nn_model_path,
         dl_model_path=dl_model_path,
         pv_model_path=pv_model_path,
+        nnue_model_path=nnue_model_path,
         teacher_depth=teacher_depth,
     )
     if move is None:
@@ -1035,12 +1059,14 @@ def run_endgame_benchmark_suite(
     nn_model_path: Path | None = None,
     dl_model_path: Path | None = None,
     pv_model_path: Path | None = None,
+    nnue_model_path: Path | None = None,
     teacher_depth: int = DEFAULT_TEACHER_DEPTH,
 ) -> dict:
     store = store or ChessExperimentStore()
     nn_model_path = Path(nn_model_path or default_chess_nn_model_path())
     dl_model_path = Path(dl_model_path or default_chess_dl_model_path())
     pv_model_path = Path(pv_model_path or default_chess_pv_model_path())
+    nnue_model_path = Path(nnue_model_path or default_chess_nnue_model_path())
     rows: list[dict] = []
     by_engine: dict[str, dict] = {}
     for engine in BENCHMARK_ENGINES:
@@ -1054,6 +1080,7 @@ def run_endgame_benchmark_suite(
                 nn_model_path=nn_model_path,
                 dl_model_path=dl_model_path,
                 pv_model_path=pv_model_path,
+                nnue_model_path=nnue_model_path,
                 teacher_depth=teacher_depth,
             )
             rows.append(row)
@@ -1088,6 +1115,7 @@ def _record_row_for_side(
     nn_model_path: Path,
     dl_model_path: Path,
     pv_model_path: Path,
+    nnue_model_path: Path,
     learning_source: str = "game",
 ) -> int:
     row = {
@@ -1106,6 +1134,8 @@ def _record_row_for_side(
         return record_experiment_dl_learning(row, winner_color=winner_color, model_path=dl_model_path)
     if difficulty == EXPERIMENT_PV_DIFFICULTY:
         return record_experiment_pv_learning(row, winner_color=winner_color, model_path=pv_model_path)
+    if difficulty == EXPERIMENT_NNUE_DIFFICULTY:
+        return 0
     return 0
 
 
@@ -1120,22 +1150,25 @@ def _apply_training(
     nn_model_path: Path,
     dl_model_path: Path,
     pv_model_path: Path,
+    nnue_model_path: Path,
 ) -> tuple[dict[str, int], dict[str, int], int]:
     student_updates = {
         EXPERIMENT_DIFFICULTY: 0,
         EXPERIMENT_NN_DIFFICULTY: 0,
         EXPERIMENT_DL_DIFFICULTY: 0,
         EXPERIMENT_PV_DIFFICULTY: 0,
+        EXPERIMENT_NNUE_DIFFICULTY: 0,
     }
     teacher_guidance = {
         EXPERIMENT_DIFFICULTY: 0,
         EXPERIMENT_NN_DIFFICULTY: 0,
         EXPERIMENT_DL_DIFFICULTY: 0,
         EXPERIMENT_PV_DIFFICULTY: 0,
+        EXPERIMENT_NNUE_DIFFICULTY: 0,
     }
     engines_by_side = {"white": white_engine, "black": black_engine}
     for side, difficulty in engines_by_side.items():
-        if difficulty in {EXPERIMENT_DIFFICULTY, EXPERIMENT_NN_DIFFICULTY, EXPERIMENT_DL_DIFFICULTY, EXPERIMENT_PV_DIFFICULTY}:
+        if difficulty in {EXPERIMENT_DIFFICULTY, EXPERIMENT_NN_DIFFICULTY, EXPERIMENT_DL_DIFFICULTY, EXPERIMENT_PV_DIFFICULTY, EXPERIMENT_NNUE_DIFFICULTY}:
             student_updates[difficulty] += _record_row_for_side(
                 difficulty=difficulty,
                 side=side,
@@ -1146,6 +1179,7 @@ def _apply_training(
                 nn_model_path=nn_model_path,
                 dl_model_path=dl_model_path,
                 pv_model_path=pv_model_path,
+                nnue_model_path=nnue_model_path,
                 learning_source="self_play",
             )
     teacher_side = None
@@ -1154,7 +1188,7 @@ def _apply_training(
             teacher_side = side
             break
     if teacher_side and winner_color in {teacher_side, None}:
-        for target_difficulty in (EXPERIMENT_DIFFICULTY, EXPERIMENT_NN_DIFFICULTY, EXPERIMENT_DL_DIFFICULTY, EXPERIMENT_PV_DIFFICULTY):
+        for target_difficulty in (EXPERIMENT_DIFFICULTY, EXPERIMENT_NN_DIFFICULTY, EXPERIMENT_DL_DIFFICULTY, EXPERIMENT_PV_DIFFICULTY, EXPERIMENT_NNUE_DIFFICULTY):
             if target_difficulty in engines_by_side.values():
                 teacher_guidance[target_difficulty] += _record_row_for_side(
                     difficulty=target_difficulty,
@@ -1166,6 +1200,7 @@ def _apply_training(
                     nn_model_path=nn_model_path,
                     dl_model_path=dl_model_path,
                     pv_model_path=pv_model_path,
+                    nnue_model_path=nnue_model_path,
                     learning_source="teacher_guidance",
                 )
     teacher_distillation_updates = 0
@@ -1188,6 +1223,7 @@ def play_training_match(
     nn_model_path: Path,
     dl_model_path: Path,
     pv_model_path: Path,
+    nnue_model_path: Path,
     rng: random.Random,
     teacher_depth: int = DEFAULT_TEACHER_DEPTH,
     student_exploration_rate: float = DEFAULT_STUDENT_EXPLORATION_RATE,
@@ -1220,6 +1256,7 @@ def play_training_match(
             nn_model_path=nn_model_path,
             dl_model_path=dl_model_path,
             pv_model_path=pv_model_path,
+            nnue_model_path=nnue_model_path,
             rng=rng,
             teacher_depth=teacher_depth,
             exploration_rate=student_exploration_rate,
@@ -1263,6 +1300,7 @@ def play_training_match(
             nn_model_path=nn_model_path,
             dl_model_path=dl_model_path,
             pv_model_path=pv_model_path,
+            nnue_model_path=nnue_model_path,
         )
     else:
         student_updates, teacher_guidance = _evaluation_empty_updates()
@@ -1308,6 +1346,7 @@ def _run_evaluation_matchups(
     nn_model_path: Path,
     dl_model_path: Path,
     pv_model_path: Path,
+    nnue_model_path: Path,
     teacher_depth: int,
     max_plies: int,
     seed: int,
@@ -1326,6 +1365,7 @@ def _run_evaluation_matchups(
             nn_model_path=nn_model_path,
             dl_model_path=dl_model_path,
             pv_model_path=pv_model_path,
+            nnue_model_path=nnue_model_path,
             rng=rng,
             teacher_depth=teacher_depth,
             student_exploration_rate=0.0,
@@ -1398,6 +1438,7 @@ def run_post_training_smoke_evaluation(
     nn_model_path: Path | None = None,
     dl_model_path: Path | None = None,
     pv_model_path: Path | None = None,
+    nnue_model_path: Path | None = None,
     teacher_depth: int = DEFAULT_TEACHER_DEPTH,
     max_plies: int = DEFAULT_MAX_PLIES,
     games_per_pair: int = 1,
@@ -1407,6 +1448,7 @@ def run_post_training_smoke_evaluation(
     nn_model_path = Path(nn_model_path or default_chess_nn_model_path())
     dl_model_path = Path(dl_model_path or default_chess_dl_model_path())
     pv_model_path = Path(pv_model_path or default_chess_pv_model_path())
+    nnue_model_path = Path(nnue_model_path or default_chess_nnue_model_path())
     matchups: list[tuple[str, str]] = []
     for _ in range(max(0, int(games_per_pair or 0))):
         matchups.extend([
@@ -1426,6 +1468,10 @@ def run_post_training_smoke_evaluation(
             (HARD_DIFFICULTY, EXPERIMENT_PV_DIFFICULTY),
             (EXPERIMENT_PV_DIFFICULTY, TEACHER_DIFFICULTY),
             (TEACHER_DIFFICULTY, EXPERIMENT_PV_DIFFICULTY),
+            (EXPERIMENT_NNUE_DIFFICULTY, HARD_DIFFICULTY),
+            (HARD_DIFFICULTY, EXPERIMENT_NNUE_DIFFICULTY),
+            (EXPERIMENT_NNUE_DIFFICULTY, TEACHER_DIFFICULTY),
+            (TEACHER_DIFFICULTY, EXPERIMENT_NNUE_DIFFICULTY),
         ])
     summary = _run_evaluation_matchups(
         matchups,
@@ -1434,12 +1480,13 @@ def run_post_training_smoke_evaluation(
         nn_model_path=nn_model_path,
         dl_model_path=dl_model_path,
         pv_model_path=pv_model_path,
+        nnue_model_path=nnue_model_path,
         teacher_depth=teacher_depth,
         max_plies=max_plies,
         seed=seed,
         opening_split="eval",
     )
-    summary["target_engines"] = [EXPERIMENT_DIFFICULTY, EXPERIMENT_NN_DIFFICULTY, EXPERIMENT_DL_DIFFICULTY, EXPERIMENT_PV_DIFFICULTY]
+    summary["target_engines"] = [EXPERIMENT_DIFFICULTY, EXPERIMENT_NN_DIFFICULTY, EXPERIMENT_DL_DIFFICULTY, EXPERIMENT_PV_DIFFICULTY, EXPERIMENT_NNUE_DIFFICULTY]
     summary["reference_engines"] = [HARD_DIFFICULTY, TEACHER_DIFFICULTY]
     return summary
 
@@ -1450,6 +1497,7 @@ def run_round_robin_benchmark(
     nn_model_path: Path | None = None,
     dl_model_path: Path | None = None,
     pv_model_path: Path | None = None,
+    nnue_model_path: Path | None = None,
     teacher_depth: int = DEFAULT_TEACHER_DEPTH,
     max_plies: int = DEFAULT_MAX_PLIES,
     rounds: int = 2,
@@ -1459,6 +1507,7 @@ def run_round_robin_benchmark(
     nn_model_path = Path(nn_model_path or default_chess_nn_model_path())
     dl_model_path = Path(dl_model_path or default_chess_dl_model_path())
     pv_model_path = Path(pv_model_path or default_chess_pv_model_path())
+    nnue_model_path = Path(nnue_model_path or default_chess_nnue_model_path())
     rounds = max(0, int(rounds or 0))
     matchups: list[tuple[str, str]] = []
     for engine_a, engine_b in combinations(BENCHMARK_ENGINES, 2):
@@ -1472,6 +1521,7 @@ def run_round_robin_benchmark(
         nn_model_path=nn_model_path,
         dl_model_path=dl_model_path,
         pv_model_path=pv_model_path,
+        nnue_model_path=nnue_model_path,
         teacher_depth=teacher_depth,
         max_plies=max_plies,
         seed=seed,
@@ -1525,6 +1575,7 @@ def run_round_robin_benchmark(
         nn_model_path=nn_model_path,
         dl_model_path=dl_model_path,
         pv_model_path=pv_model_path,
+        nnue_model_path=nnue_model_path,
         teacher_depth=teacher_depth,
     )
     summary["endgame_suite"] = run_endgame_benchmark_suite(
@@ -1532,6 +1583,7 @@ def run_round_robin_benchmark(
         nn_model_path=nn_model_path,
         dl_model_path=dl_model_path,
         pv_model_path=pv_model_path,
+        nnue_model_path=nnue_model_path,
         teacher_depth=teacher_depth,
     )
     return summary
@@ -1561,6 +1613,7 @@ def run_training_session(
     nn_model_path: Path | None = None,
     dl_model_path: Path | None = None,
     pv_model_path: Path | None = None,
+    nnue_model_path: Path | None = None,
     progress_hook=None,
 ) -> dict:
     rng = random.Random(seed)
@@ -1568,6 +1621,7 @@ def run_training_session(
     nn_model_path = Path(nn_model_path or default_chess_nn_model_path())
     dl_model_path = Path(dl_model_path or default_chess_dl_model_path())
     pv_model_path = Path(pv_model_path or default_chess_pv_model_path())
+    nnue_model_path = Path(nnue_model_path or default_chess_nnue_model_path())
     matches: list[TrainingMatch] = []
 
     schedule: list[tuple[str, str]] = []
@@ -1652,6 +1706,7 @@ def run_training_session(
         "experiment_2_nn_model_path": str(nn_model_path),
         "experiment_3_dl_model_path": str(dl_model_path),
         "experiment_4_pv_model_path": str(pv_model_path),
+        "experiment_5_nnue_model_path": str(nnue_model_path),
         "requested_games": {
             "teacher_vs_exp1": int(exp1_teacher_games or 0),
             "teacher_vs_exp2": int(exp2_teacher_games or 0),
@@ -1679,10 +1734,12 @@ def run_training_session(
             EXPERIMENT_NN_DIFFICULTY: 0,
             EXPERIMENT_DL_DIFFICULTY: 0,
             EXPERIMENT_PV_DIFFICULTY: 0,
+            EXPERIMENT_NNUE_DIFFICULTY: 0,
             "teacher_guidance_exp1": 0,
             "teacher_guidance_exp2": 0,
             "teacher_guidance_exp3": 0,
             "teacher_guidance_exp4": 0,
+            "teacher_guidance_exp5": 0,
             "teacher_distillation_exp3": 0,
         },
         "matches": [],
@@ -1703,6 +1760,7 @@ def run_training_session(
             nn_model_path=nn_model_path,
             dl_model_path=dl_model_path,
             pv_model_path=pv_model_path,
+            nnue_model_path=nnue_model_path,
             rng=rng,
             teacher_depth=teacher_depth,
             student_exploration_rate=student_exploration_rate,
@@ -1723,10 +1781,12 @@ def run_training_session(
         summary["updates"][EXPERIMENT_NN_DIFFICULTY] += int(match.student_updates.get(EXPERIMENT_NN_DIFFICULTY) or 0)
         summary["updates"][EXPERIMENT_DL_DIFFICULTY] += int(match.student_updates.get(EXPERIMENT_DL_DIFFICULTY) or 0)
         summary["updates"][EXPERIMENT_PV_DIFFICULTY] += int(match.student_updates.get(EXPERIMENT_PV_DIFFICULTY) or 0)
+        summary["updates"][EXPERIMENT_NNUE_DIFFICULTY] += int(match.student_updates.get(EXPERIMENT_NNUE_DIFFICULTY) or 0)
         summary["updates"]["teacher_guidance_exp1"] += int(match.teacher_guidance_updates.get(EXPERIMENT_DIFFICULTY) or 0)
         summary["updates"]["teacher_guidance_exp2"] += int(match.teacher_guidance_updates.get(EXPERIMENT_NN_DIFFICULTY) or 0)
         summary["updates"]["teacher_guidance_exp3"] += int(match.teacher_guidance_updates.get(EXPERIMENT_DL_DIFFICULTY) or 0)
         summary["updates"]["teacher_guidance_exp4"] += int(match.teacher_guidance_updates.get(EXPERIMENT_PV_DIFFICULTY) or 0)
+        summary["updates"]["teacher_guidance_exp5"] += int(match.teacher_guidance_updates.get(EXPERIMENT_NNUE_DIFFICULTY) or 0)
         summary["updates"]["teacher_distillation_exp3"] += int(match.teacher_distillation_updates or 0)
         summary["matches"].append(
             {
@@ -1780,6 +1840,7 @@ def write_training_report(summary: dict, *, report_dir: Path | None = None, base
         f"- experiment_2_nn_model_path: `{summary.get('experiment_2_nn_model_path')}`",
         f"- experiment_3_dl_model_path: `{summary.get('experiment_3_dl_model_path')}`",
         f"- experiment_4_pv_model_path: `{summary.get('experiment_4_pv_model_path')}`",
+        f"- experiment_5_nnue_model_path: `{summary.get('experiment_5_nnue_model_path')}`",
         "",
         "## Results",
         "",
@@ -1793,10 +1854,12 @@ def write_training_report(summary: dict, *, report_dir: Path | None = None, base
         f"- experiment 2:nn: `{summary.get('updates', {}).get(EXPERIMENT_NN_DIFFICULTY, 0)}`",
         f"- experiment 3:dl: `{summary.get('updates', {}).get(EXPERIMENT_DL_DIFFICULTY, 0)}`",
         f"- experiment 4:pv: `{summary.get('updates', {}).get(EXPERIMENT_PV_DIFFICULTY, 0)}`",
+        f"- experiment 5:nnue: `{summary.get('updates', {}).get(EXPERIMENT_NNUE_DIFFICULTY, 0)}`",
         f"- teacher_guidance_exp1: `{summary.get('updates', {}).get('teacher_guidance_exp1', 0)}`",
         f"- teacher_guidance_exp2: `{summary.get('updates', {}).get('teacher_guidance_exp2', 0)}`",
         f"- teacher_guidance_exp3: `{summary.get('updates', {}).get('teacher_guidance_exp3', 0)}`",
         f"- teacher_guidance_exp4: `{summary.get('updates', {}).get('teacher_guidance_exp4', 0)}`",
+        f"- teacher_guidance_exp5: `{summary.get('updates', {}).get('teacher_guidance_exp5', 0)}`",
         f"- teacher_distillation_exp3: `{summary.get('updates', {}).get('teacher_distillation_exp3', 0)}`",
         "",
         "## Requested Games",
