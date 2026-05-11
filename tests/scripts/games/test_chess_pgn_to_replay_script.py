@@ -175,3 +175,123 @@ def test_chess_pgn_to_replay_reads_zip_archives(tmp_path):
     rows = [json.loads(line) for line in output_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert summary["written_records"] == 1
     assert rows[0]["pgn_labels"]["event"] == "Zip sample"
+
+
+def test_chess_pgn_to_replay_fails_loudly_when_filters_write_nothing(tmp_path):
+    input_path = tmp_path / "games.pgn"
+    output_path = tmp_path / "replays.jsonl"
+    input_path.write_text(
+        """
+[Event "Low rated"]
+[Site "local"]
+[White "A"]
+[Black "B"]
+[WhiteElo "900"]
+[BlackElo "900"]
+[Result "1-0"]
+
+1. e4 e5 2. Qh5 Nc6 3. Bc4 Nf6 4. Qxf7# 1-0
+""".strip(),
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(ROOT)
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "games" / "chess_pgn_to_replay.py"),
+            "--input-pgn",
+            str(input_path),
+            "--output-jsonl",
+            str(output_path),
+            "--replace-output",
+            "--min-elo",
+            "2200",
+            "--min-ply",
+            "1",
+            "--no-progress",
+        ],
+        cwd=str(ROOT),
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    summary = json.loads(proc.stdout)
+    assert proc.returncode == 1
+    assert summary["ok"] is False
+    assert summary["written_records"] == 0
+    assert summary["skipped"]["elo_below_min"] == 1
+    assert summary["errors"][-1]["stage"] == "selection"
+    assert not output_path.exists()
+
+
+def test_chess_pgn_to_replay_interactive_prepared_dataset_and_distill_manifest(tmp_path):
+    input_path = tmp_path / "games.pgn"
+    output_path = tmp_path / "interactive_replays.jsonl"
+    dataset_dir = tmp_path / "dataset"
+    manifest_path = tmp_path / "distill_manifest.json"
+    input_path.write_text(
+        """
+[Event "Interactive sample"]
+[Site "local"]
+[White "A"]
+[Black "B"]
+[WhiteElo "2300"]
+[BlackElo "2320"]
+[Result "1-0"]
+
+1. e4 e5 2. Nf3 Nc6 3. Bc4 Nf6 4. Qe2 Be7 5. O-O O-O 6. Re1 d6 7. c3 Bg4 8. d3 Qd7 1-0
+""".strip(),
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(ROOT)
+    answers = "\n".join(
+        [
+            "1",  # local source
+            str(input_path),
+            "1",  # master decisive preset
+            "2200",
+            "2",  # decisive
+            "1",  # sample size
+            "1",  # max games
+            "0",  # scan limit
+            "99",  # seed
+            "1",  # min ply
+            "2",  # complete games
+            "2",  # prepared-dataset
+            str(output_path),
+            "y",  # replace
+            str(dataset_dir),
+            "y",  # distill manifest
+            str(manifest_path),
+            "interactive_test",
+        ]
+    ) + "\n"
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "games" / "chess_pgn_to_replay.py"),
+            "--interactive",
+            "--no-progress",
+        ],
+        cwd=str(ROOT),
+        env=env,
+        input=answers,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    summary = json.loads(proc.stdout)
+    rows = [json.loads(line) for line in output_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert summary["ok"] is True
+    assert summary["output_format"] == "prepared-dataset"
+    assert summary["written_records"] == 1
+    assert summary["prepared_dataset"]["ok"] is True
+    assert Path(summary["prepared_dataset"]["summary"]["train_path"]).exists()
+    assert manifest["record_count"] == 1
+    assert rows[0]["pgn_labels"]["source_label"] == "interactive_test"

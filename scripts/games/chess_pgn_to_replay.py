@@ -20,6 +20,7 @@ import json
 from pathlib import Path
 import random
 import shutil
+import subprocess
 import sys
 import tempfile
 from typing import Iterable
@@ -34,6 +35,38 @@ import chess.pgn
 DEFAULT_OUTPUT_PATH = Path.home() / "chess_results" / "chess_replays_imported.jsonl"
 DEFAULT_DOWNLOAD_DIR = Path.home() / "chess_results" / "pgn_sources"
 TRUSTED_SOURCES = {"imported_dataset", "teacher_guidance", "benchmark", "external"}
+RUNTIME_ROOT = Path(__file__).resolve().parents[2]
+REQUIRE_TAG_CHOICES = {
+    "club",
+    "strong_club",
+    "master",
+    "elite",
+    "rapid",
+    "classical",
+    "decisive",
+    "draw_or_unknown",
+    "short_game",
+    "medium_game",
+    "long_game",
+    "full_material",
+    "reduced_material",
+    "endgame_material",
+    "contains_capture",
+    "contains_check",
+    "contains_castling",
+    "contains_promotion",
+    "contains_en_passant",
+    "checkmate",
+    "short_decisive",
+}
+INTERACTIVE_PRESETS = {
+    "1": ("master_decisive", {"min_elo": 2200, "result": "decisive", "require_tag": []}),
+    "2": ("elite_any", {"min_elo": 2500, "result": "any", "require_tag": []}),
+    "3": ("rapid_or_classical", {"min_elo": 1800, "result": "any", "require_tag": []}),
+    "4": ("endgame_material", {"min_elo": 0, "result": "any", "require_tag": ["endgame_material"]}),
+    "5": ("special_rules", {"min_elo": 0, "result": "any", "require_tag": []}),
+    "6": ("custom", {"min_elo": 0, "result": "any", "require_tag": []}),
+}
 
 
 class _ZipPgnText:
@@ -66,6 +99,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Convert local or downloaded PGN games into chess replay JSONL records."
     )
+    parser.add_argument("--interactive", action="store_true", help="Prompt for source, filters, output path, and options.")
     parser.add_argument("--input-pgn", action="append", default=[], help="Local PGN path. Can be used more than once.")
     parser.add_argument("--source-url", action="append", default=[], help="Download a PGN/ZIP/GZ/BZ2/ZST URL first.")
     parser.add_argument("--download-dir", default=str(DEFAULT_DOWNLOAD_DIR))
@@ -80,12 +114,131 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-elo", type=int, default=0)
     parser.add_argument("--min-ply", type=int, default=8)
     parser.add_argument("--result", choices=["any", "decisive", "draw"], default="any")
+    parser.add_argument("--require-tag", action="append", default=[], choices=sorted(REQUIRE_TAG_CHOICES))
+    parser.add_argument("--position-scope", choices=["any", "complete", "fragment"], default="any")
     parser.add_argument("--skip-nonstandard-start", action="store_true")
+    parser.add_argument("--output-format", choices=["replay-jsonl", "prepared-dataset"], default="replay-jsonl")
+    parser.add_argument("--prepared-output-dir", default="")
+    parser.add_argument("--distill-manifest", default="", help="Write a manifest for a later teacher-distill run.")
+    parser.add_argument("--allow-empty-output", action="store_true")
+    parser.add_argument("--no-progress", action="store_true")
     parser.add_argument("--source", choices=sorted(TRUSTED_SOURCES), default="imported_dataset")
     parser.add_argument("--collection-tier", choices=["trusted", "quarantine"], default="trusted")
     parser.add_argument("--computer-difficulty", default="imported_pgn")
     parser.add_argument("--source-label", default="", help="Optional dataset label stored in pgn_labels.source_label.")
     return parser.parse_args()
+
+
+def _prompt(message: str, default: str = "") -> str:
+    suffix = f" [{default}]" if default else ""
+    print(f"{message}{suffix}: ", file=sys.stderr, end="", flush=True)
+    value = input().strip()
+    return value or default
+
+
+def _prompt_bool(message: str, default: bool = False) -> bool:
+    default_label = "Y/n" if default else "y/N"
+    value = _prompt(f"{message} ({default_label})", "y" if default else "n").strip().lower()
+    return value in {"y", "yes", "1", "true", "t", "是", "好"}
+
+
+def _prompt_choice(message: str, choices: dict[str, str], default: str) -> str:
+    print(message, file=sys.stderr)
+    for key, label in choices.items():
+        print(f"  {key}. {label}", file=sys.stderr)
+    while True:
+        value = _prompt("選項", default)
+        if value in choices:
+            return value
+        print(f"無效選項：{value}", file=sys.stderr)
+
+
+def _default_output_for_source(source_value: str, *, output_format: str) -> str:
+    safe = Path(urlparse(source_value).path).name if source_value.startswith(("http://", "https://")) else Path(source_value).stem
+    safe = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in (safe or "imported"))
+    suffix = "prepared" if output_format == "prepared-dataset" else "replay"
+    return str(Path.home() / "chess_results" / f"{safe}_{suffix}.jsonl")
+
+
+def _run_interactive(args: argparse.Namespace) -> argparse.Namespace:
+    print("Chess PGN import interactive mode", file=sys.stderr)
+    source_kind = _prompt_choice(
+        "選來源",
+        {"1": "本地 PGN/ZIP/GZ/BZ2/ZST", "2": "下載 URL"},
+        "1",
+    )
+    if source_kind == "1":
+        args.input_pgn = [_prompt("本地檔案路徑")]
+        args.source_url = []
+    else:
+        args.source_url = [_prompt("PGN/ZIP/GZ/BZ2/ZST URL")]
+        args.input_pgn = []
+
+    preset_key = _prompt_choice(
+        "選分類/篩選類型",
+        {
+            "1": "Master decisive: Elo >= 2200 且決勝局",
+            "2": "Elite: Elo >= 2500",
+            "3": "Strong rapid/classical candidate: Elo >= 1800",
+            "4": "Endgame material: 殘局材料標籤",
+            "5": "Special rules: 王車易位/升變/吃過路兵",
+            "6": "自訂",
+        },
+        "1",
+    )
+    preset_name, preset = INTERACTIVE_PRESETS[preset_key]
+    args.min_elo = int(_prompt("最低平均 Elo", str(preset["min_elo"])))
+    args.result = _prompt_choice("結果", {"1": "any", "2": "decisive", "3": "draw"}, "2" if preset["result"] == "decisive" else "1")
+    args.result = {"1": "any", "2": "decisive", "3": "draw"}[args.result]
+    args.require_tag = list(preset["require_tag"])
+    if preset_name == "special_rules":
+        tag_key = _prompt_choice(
+            "特殊規則標籤",
+            {"1": "contains_castling", "2": "contains_promotion", "3": "contains_en_passant"},
+            "1",
+        )
+        args.require_tag = [{"1": "contains_castling", "2": "contains_promotion", "3": "contains_en_passant"}[tag_key]]
+    elif preset_name == "custom":
+        tag = _prompt("必要 training tag，留空表示不限制", "")
+        args.require_tag = [tag] if tag else []
+
+    count = int(_prompt("隨機抽樣數量，0 表示不抽樣", "20"))
+    args.sample_size = max(0, count)
+    args.max_games = int(_prompt("最多輸出幾局，0 表示不限", str(count or 100)))
+    args.scan_limit = int(_prompt("最多掃描幾局，0 表示不限", "0"))
+    args.seed = int(_prompt("隨機 seed", str(args.seed)))
+    args.min_ply = int(_prompt("最少 ply 數", str(args.min_ply)))
+
+    scope_key = _prompt_choice(
+        "選完整棋局或殘局/FEN fragment",
+        {"1": "any", "2": "complete", "3": "fragment"},
+        "2",
+    )
+    args.position_scope = {"1": "any", "2": "complete", "3": "fragment"}[scope_key]
+    args.skip_nonstandard_start = args.position_scope == "complete"
+
+    format_key = _prompt_choice(
+        "選輸出格式",
+        {"1": "replay-jsonl", "2": "prepared-dataset"},
+        "1",
+    )
+    args.output_format = {"1": "replay-jsonl", "2": "prepared-dataset"}[format_key]
+    default_output = _default_output_for_source((args.source_url or args.input_pgn or ["imported"])[0], output_format=args.output_format)
+    args.output_jsonl = _prompt("replay JSONL 儲存位置/檔名", default_output)
+    args.replace_output = _prompt_bool("覆蓋輸出檔", True)
+    if args.output_format == "prepared-dataset":
+        args.prepared_output_dir = _prompt(
+            "prepared dataset 輸出資料夾",
+            str(Path(args.output_jsonl).expanduser().with_suffix("").parent / (Path(args.output_jsonl).stem + "_dataset")),
+        )
+    if _prompt_bool("是否建立蒸餾 manifest", False):
+        args.distill_manifest = _prompt(
+            "distill manifest 儲存位置",
+            str(Path(args.output_jsonl).expanduser().with_suffix(".distill_manifest.json")),
+        )
+    args.source_label = _prompt("來源標籤", args.source_label or preset_name)
+    args.no_progress = False
+    return args
 
 
 def _now() -> str:
@@ -466,16 +619,33 @@ def _iter_games(path: Path) -> Iterable[chess.pgn.Game]:
             yield game
 
 
-def _eligible_record(record: dict, *, min_elo: int, min_ply: int, result: str, skip_nonstandard_start: bool) -> str | None:
+def _eligible_record(
+    record: dict,
+    *,
+    min_elo: int,
+    min_ply: int,
+    result: str,
+    skip_nonstandard_start: bool,
+    position_scope: str,
+    require_tags: list[str],
+) -> str | None:
     if int(record.get("move_count") or 0) < min_ply:
         return "too_short"
     if skip_nonstandard_start and str(record.get("opening_seed") or "") != "standard_start":
         return "nonstandard_start"
+    if position_scope == "complete" and str(record.get("opening_seed") or "") != "standard_start":
+        return "nonstandard_start"
+    if position_scope == "fragment" and str(record.get("opening_seed") or "") == "standard_start":
+        return "not_fragment"
     if min_elo and int(record.get("rating_estimate") or 0) < min_elo:
         return "elo_below_min"
     pgn_result = str((record.get("pgn_headers") or {}).get("Result") or "")
     if not _result_filter_ok(pgn_result, result):
         return "result_filter"
+    tags = set(record.get("training_tags") or [])
+    missing_tags = [tag for tag in require_tags if tag and tag not in tags]
+    if missing_tags:
+        return "missing_required_tag:" + ",".join(missing_tags)
     return None
 
 
@@ -499,19 +669,93 @@ def _write_jsonl(path: Path, records: list[dict], *, replace_output: bool) -> No
             handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
 
 
+def _progress(scanned: int, eligible: int, selected_count: int, *, limit: int, enabled: bool, final: bool = False) -> None:
+    if not enabled:
+        return
+    if limit > 0:
+        ratio = min(1.0, scanned / max(1, limit))
+        width = 24
+        filled = int(width * ratio)
+        bar = "#" * filled + "-" * (width - filled)
+        text = f"\r[pgn-import] [{bar}] {ratio:6.1%} scanned={scanned} eligible={eligible} selected={selected_count}"
+    else:
+        text = f"\r[pgn-import] scanned={scanned} eligible={eligible} selected={selected_count}"
+    print(text, file=sys.stderr, end="\n" if final else "", flush=True)
+
+
+def _write_distill_manifest(path: Path, *, replay_path: Path, records: list[dict], summary: dict) -> dict:
+    manifest = {
+        "generated_at": _now(),
+        "replay_jsonl": str(replay_path),
+        "record_count": len(records),
+        "replay_ids": [str(record.get("replay_id") or "") for record in records],
+        "recommended_next_step": "Run the exp5 teacher distill pipeline against this replay JSONL before retraining.",
+        "import_summary": summary,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return {"distill_manifest": str(path), "distill_requested": True}
+
+
+def _prepare_dataset(replay_path: Path, output_dir: Path) -> dict:
+    command = [
+        sys.executable,
+        str(RUNTIME_ROOT / "scripts" / "games" / "chess_replay_prepare.py"),
+        "--trusted-replay-path",
+        str(replay_path),
+        "--output-dir",
+        str(output_dir),
+        "--replace-output",
+    ]
+    proc = subprocess.run(
+        command,
+        cwd=str(RUNTIME_ROOT),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    payload = {}
+    if proc.stdout.strip():
+        try:
+            payload = json.loads(proc.stdout)
+        except Exception:
+            payload = {"raw_stdout": proc.stdout}
+    return {
+        "ok": proc.returncode == 0 and bool(payload.get("ok", proc.returncode == 0)),
+        "returncode": proc.returncode,
+        "command": command,
+        "stdout": proc.stdout[-4000:],
+        "stderr": proc.stderr[-4000:],
+        "summary": payload,
+    }
+
+
 def main() -> int:
     args = parse_args()
+    if args.interactive:
+        args = _run_interactive(args)
     input_paths = [Path(path).expanduser().resolve() for path in args.input_pgn]
+    errors: list[dict] = []
     for url in args.source_url:
-        input_paths.append(
-            _download_url(
-                url,
-                Path(args.download_dir).expanduser().resolve(),
-                refresh=bool(args.refresh_downloads),
-            ).resolve()
-        )
+        try:
+            input_paths.append(
+                _download_url(
+                    url,
+                    Path(args.download_dir).expanduser().resolve(),
+                    refresh=bool(args.refresh_downloads),
+                ).resolve()
+            )
+        except Exception as exc:
+            errors.append({"stage": "download", "source": url, "error": str(exc)})
     if not input_paths:
-        print("At least one --input-pgn or --source-url is required.", file=sys.stderr)
+        summary = {
+            "ok": False,
+            "generated_at": _now(),
+            "input_paths": [],
+            "output_jsonl": str(Path(args.output_jsonl).expanduser()),
+            "errors": errors or [{"stage": "input", "error": "At least one --input-pgn or --source-url is required."}],
+        }
+        print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
         return 2
 
     output_path = Path(args.output_jsonl).expanduser().resolve()
@@ -522,51 +766,67 @@ def main() -> int:
     scanned = 0
     eligible_seen = 0
     emitted_cap = int(args.sample_size or args.max_games or 0)
+    progress_enabled = not bool(args.no_progress)
+    progress_limit = int(args.scan_limit or args.max_games or args.sample_size or 0)
 
     for input_path in input_paths:
         if not input_path.exists():
             skipped["missing_input"] += 1
+            errors.append({"stage": "read", "source": str(input_path), "error": "missing_input"})
             continue
-        for index, game in enumerate(_iter_games(input_path), start=1):
-            scanned += 1
-            if args.scan_limit and scanned > int(args.scan_limit):
-                break
-            record, error = _record_from_game(
-                game,
-                input_label=str(input_path),
-                input_index=index,
-                source=str(args.source),
-                collection_tier=str(args.collection_tier),
-                computer_difficulty=str(args.computer_difficulty),
-                source_label=str(args.source_label or ""),
-            )
-            if error or record is None:
-                skipped[error or "parse_error"] += 1
-                continue
-            ineligible = _eligible_record(
-                record,
-                min_elo=int(args.min_elo or 0),
-                min_ply=int(args.min_ply or 0),
-                result=str(args.result),
-                skip_nonstandard_start=bool(args.skip_nonstandard_start),
-            )
-            if ineligible:
-                skipped[ineligible] += 1
-                continue
-            if not args.allow_duplicates and (
-                str(record.get("replay_id") or "") in existing_ids
-                or str(record.get("duplicate_signature") or "") in existing_signatures
-            ):
-                skipped["duplicate"] += 1
-                continue
-            eligible_seen += 1
-            _reservoir_insert(selected, record, seen=eligible_seen, sample_size=int(args.sample_size or 0), rng=rng)
-            if not args.sample_size and args.max_games and len(selected) >= int(args.max_games):
-                break
+        try:
+            for index, game in enumerate(_iter_games(input_path), start=1):
+                scanned += 1
+                if args.scan_limit and scanned > int(args.scan_limit):
+                    break
+                record, error = _record_from_game(
+                    game,
+                    input_label=str(input_path),
+                    input_index=index,
+                    source=str(args.source),
+                    collection_tier=str(args.collection_tier),
+                    computer_difficulty=str(args.computer_difficulty),
+                    source_label=str(args.source_label or ""),
+                )
+                if error or record is None:
+                    reason = error or "parse_error"
+                    skipped[reason] += 1
+                    errors.append({"stage": "parse", "source": str(input_path), "game_index": index, "error": reason})
+                    _progress(scanned, eligible_seen, len(selected), limit=progress_limit, enabled=progress_enabled)
+                    continue
+                ineligible = _eligible_record(
+                    record,
+                    min_elo=int(args.min_elo or 0),
+                    min_ply=int(args.min_ply or 0),
+                    result=str(args.result),
+                    skip_nonstandard_start=bool(args.skip_nonstandard_start),
+                    position_scope=str(args.position_scope or "any"),
+                    require_tags=[str(tag) for tag in (args.require_tag or []) if str(tag).strip()],
+                )
+                if ineligible:
+                    skipped[ineligible] += 1
+                    _progress(scanned, eligible_seen, len(selected), limit=progress_limit, enabled=progress_enabled)
+                    continue
+                if not args.allow_duplicates and (
+                    str(record.get("replay_id") or "") in existing_ids
+                    or str(record.get("duplicate_signature") or "") in existing_signatures
+                ):
+                    skipped["duplicate"] += 1
+                    _progress(scanned, eligible_seen, len(selected), limit=progress_limit, enabled=progress_enabled)
+                    continue
+                eligible_seen += 1
+                _reservoir_insert(selected, record, seen=eligible_seen, sample_size=int(args.sample_size or 0), rng=rng)
+                _progress(scanned, eligible_seen, len(selected), limit=progress_limit, enabled=progress_enabled)
+                if not args.sample_size and args.max_games and len(selected) >= int(args.max_games):
+                    break
+        except Exception as exc:
+            skipped["read_error"] += 1
+            errors.append({"stage": "read", "source": str(input_path), "error": str(exc)})
         if args.scan_limit and scanned >= int(args.scan_limit):
             break
         if not args.sample_size and args.max_games and len(selected) >= int(args.max_games):
-            break
+                break
+    _progress(scanned, eligible_seen, len(selected), limit=progress_limit, enabled=progress_enabled, final=True)
 
     if args.sample_size and args.max_games and len(selected) > int(args.max_games):
         selected = selected[: int(args.max_games)]
@@ -577,7 +837,8 @@ def main() -> int:
         existing_ids.add(str(record.get("replay_id") or ""))
         existing_signatures.add(str(record.get("duplicate_signature") or ""))
 
-    _write_jsonl(output_path, selected, replace_output=bool(args.replace_output))
+    if selected or args.allow_empty_output:
+        _write_jsonl(output_path, selected, replace_output=bool(args.replace_output))
     category_counts = Counter()
     special_counts = Counter()
     for record in selected:
@@ -585,22 +846,47 @@ def main() -> int:
         category_counts.update(labels.get("categories") or [])
         special_counts.update(labels.get("special_rules") or [])
     summary = {
-        "ok": True,
+        "ok": bool(selected) or bool(args.allow_empty_output),
         "generated_at": _now(),
         "input_paths": [str(path) for path in input_paths],
         "output_jsonl": str(output_path),
+        "output_format": str(args.output_format),
         "replace_output": bool(args.replace_output),
         "scanned_games": scanned,
         "eligible_games": eligible_seen,
         "written_records": len(selected),
         "sample_size": int(args.sample_size or 0),
         "seed": int(args.seed),
+        "filters": {
+            "min_elo": int(args.min_elo or 0),
+            "min_ply": int(args.min_ply or 0),
+            "result": str(args.result),
+            "position_scope": str(args.position_scope or "any"),
+            "require_tag": list(args.require_tag or []),
+            "skip_nonstandard_start": bool(args.skip_nonstandard_start),
+        },
         "skipped": dict(sorted(skipped.items())),
+        "errors": errors,
         "category_counts": dict(sorted(category_counts.items())),
         "special_rule_counts": dict(sorted(special_counts.items())),
     }
+    if selected and args.output_format == "prepared-dataset":
+        prepared_dir = Path(args.prepared_output_dir).expanduser().resolve() if args.prepared_output_dir else output_path.with_suffix("").parent / (output_path.stem + "_dataset")
+        summary["prepared_dataset"] = _prepare_dataset(output_path, prepared_dir)
+        if not summary["prepared_dataset"]["ok"]:
+            summary["ok"] = False
+            errors.append({"stage": "prepare_dataset", "error": "chess_replay_prepare failed"})
+    if selected and args.distill_manifest:
+        try:
+            summary.update(_write_distill_manifest(Path(args.distill_manifest).expanduser().resolve(), replay_path=output_path, records=selected, summary=summary))
+        except Exception as exc:
+            summary["ok"] = False
+            errors.append({"stage": "distill_manifest", "error": str(exc)})
+    if not selected and not args.allow_empty_output:
+        errors.append({"stage": "selection", "error": "No games were written. Check filters, source path, parse errors, or duplicate filtering."})
+        summary["errors"] = errors
     print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
-    return 0
+    return 0 if summary["ok"] else 1
 
 
 if __name__ == "__main__":

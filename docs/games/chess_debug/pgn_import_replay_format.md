@@ -31,6 +31,43 @@ python3 scripts/games/chess_pgn_to_replay.py \
   --seed 42
 ```
 
+## Interactive mode
+
+Use interactive mode when selecting a source manually:
+
+```bash
+python3 scripts/games/chess_pgn_to_replay.py --interactive
+```
+
+It prompts for:
+
+- source: local file or download URL
+- classification/filter preset: master decisive, elite, strong rapid/classical, endgame material, special rules, or custom tag
+- game count, scan limit, seed, and minimum ply count
+- position scope: any, complete games from the standard start, or FEN fragments
+- output format: replay JSONL only, or replay JSONL plus prepared train/eval dataset
+- optional distill manifest for a later teacher-distill run
+- output directory and filename
+
+The script prints progress to stderr and the final machine-readable JSON summary to stdout. By default, if filters match no games, it returns a non-zero exit code and writes an explicit `errors` entry instead of silently creating an empty success report.
+
+For non-interactive automation, the same controls are available through flags:
+
+```bash
+python3 scripts/games/chess_pgn_to_replay.py \
+  --input-pgn ~/Downloads/games.pgn \
+  --output-format prepared-dataset \
+  --output-jsonl ~/chess_results/master_replays.jsonl \
+  --prepared-output-dir ~/chess_results/master_dataset \
+  --min-elo 2200 \
+  --result decisive \
+  --require-tag contains_castling \
+  --position-scope complete \
+  --sample-size 100 \
+  --seed 20260511 \
+  --distill-manifest ~/chess_results/master_replays.distill_manifest.json
+```
+
 Supported input/download formats:
 
 - `.pgn`
