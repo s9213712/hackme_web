@@ -1434,6 +1434,145 @@ function renderTradingMarketOptions() {
   });
 }
 
+function tradingReadinessClass(state) {
+  if (state === "bad") return "trading-readiness-bad";
+  if (state === "warn") return "trading-readiness-warn";
+  return "trading-readiness-ok";
+}
+
+function tradingMarketBootSummary() {
+  const liveMarkets = (tradingState.markets || []).filter((market) => market.live_price_enabled !== false);
+  const liveMeta = tradingState.livePriceMeta || {};
+  let ready = 0;
+  let warming = 0;
+  let pending = 0;
+  let degraded = 0;
+  liveMarkets.forEach((market) => {
+    const meta = liveMeta[market.symbol] || {};
+    const health = String(meta.price_health || market.price_health || "").trim();
+    if (health === "boot_pending") {
+      pending += 1;
+      return;
+    }
+    if (health === "fallback" || health === "degraded" || health === "conservative" || meta.high_risk_blocked || meta.risk_grade_price_context?.risk_grade_usable === false) {
+      degraded += 1;
+    }
+    if (market.live_price_confirmed_at) ready += 1;
+    else if (market.live_price_warmup_started_at) warming += 1;
+    else pending += 1;
+  });
+  return {
+    total: liveMarkets.length,
+    ready,
+    warming,
+    pending,
+    degraded,
+    state: pending > 0 || degraded > 0 ? "warn" : "ok",
+  };
+}
+
+function tradingSelectedPriceReadiness(market) {
+  if (!market) return { state: "warn", value: "no market", detail: "尚未選擇市場" };
+  const symbol = market.symbol;
+  const meta = (tradingState.livePriceMeta || {})[symbol] || {};
+  const referenceContext = tradingMarketPriceContext(market, "reference");
+  const riskContext = tradingMarketPriceContext(market, "risk_grade");
+  const health = String(meta.price_health || referenceContext?.health || "healthy").trim();
+  const providerCount = Number(meta.provider_count ?? riskContext?.provider_count ?? 0);
+  const minimum = Number(meta.minimum_provider_count ?? riskContext?.minimum_provider_count ?? 0);
+  const reason = meta.fallback_reason || meta.high_risk_block_reason || riskContext?.warning_message || referenceContext?.warning_message || "";
+  let state = "ok";
+  if (health === "boot_pending" || health === "fallback" || health === "degraded" || health === "conservative" || riskContext?.risk_grade_usable === false) {
+    state = health === "boot_pending" ? "warn" : "bad";
+  }
+  return {
+    state,
+    value: health === "boot_pending" ? "boot pending" : (riskContext?.risk_grade_usable === false ? "risk paused" : health),
+    detail: `${tradingDisplaySymbol(symbol)} · provider ${providerCount || 0}/${minimum || 0}${reason ? ` · ${reason}` : ""}`,
+  };
+}
+
+function renderTradingRiskDashboard() {
+  const grid = $("trading-risk-dashboard-grid");
+  if (!grid) return;
+  const market = selectedTradingMarket();
+  const boot = tradingMarketBootSummary();
+  const selectedPrice = tradingSelectedPriceReadiness(market);
+  const funding = tradingState.funding || {};
+  const trial = funding.trial_credit || null;
+  const fundingPool = tradingState.fundingPool || {};
+  const settings = tradingState.settings || {};
+  const bots = tradingState.bots || [];
+  const enabledBots = bots.filter((bot) => bot.enabled);
+  const runnableBots = enabledBots.filter((bot) => bot.can_run !== false);
+  const botMarkets = (tradingState.markets || []).filter((row) => row.allow_bots !== false);
+  const marginSummary = tradingState.marginSummary || tradingLiveMarginSummary(tradingState.marginPositions || []);
+  const openMargins = (tradingState.marginPositions || []).filter((row) => row.status === "open");
+  const reserve = tradingState.rootReport?.reserve_pool || null;
+  const reserveBalance = reserve ? Number(reserve.balance_points || 0) : Number(fundingPool.available_points || 0);
+  const botState = boot.pending > 0 || boot.degraded > 0 ? "warn" : (enabledBots.length && runnableBots.length === 0 ? "warn" : "ok");
+  const trialState = trial?.pending_reclaim ? "warn" : (trial && trial.status !== "active" ? "warn" : "ok");
+  const marginRatio = marginSummary.cross_margin_ratio_percent ?? marginSummary.maintenance_ratio_percent;
+  const marginState = !settings.borrowing_enabled ? "warn" : (marginRatio != null && Number(marginRatio) < Number(settings.margin_maintenance_percent || 0) ? "bad" : "ok");
+  const items = [
+    {
+      label: "價格健康",
+      value: selectedPrice.value,
+      detail: selectedPrice.detail,
+      state: selectedPrice.state,
+    },
+    {
+      label: "Live price gate",
+      value: `${boot.ready}/${boot.total || 0} ready`,
+      detail: `boot pending ${boot.pending} · warming ${boot.warming} · degraded ${boot.degraded}`,
+      state: boot.state,
+    },
+    {
+      label: "Bot / backtest",
+      value: `${runnableBots.length}/${enabledBots.length} runnable`,
+      detail: `可用 bot 市場 ${botMarkets.length} · 回測上限 ${Number(settings.backtest_max_candles || 0).toLocaleString()} candles`,
+      state: botState,
+    },
+    {
+      label: currentUser === "root" ? "Reserve / pool" : "Funding pool",
+      value: `${formatTradingPointsValue(reserveBalance)} POINTS`,
+      detail: reserve
+        ? `root reserve · events ${(tradingState.rootReport?.reserve_events || []).length}`
+        : `借出 ${formatTradingPointsValue(fundingPool.outstanding_principal_points || 0)} · 使用率 ${formatTradingPercent(fundingPool.utilization_percent || 0)}%`,
+      state: reserveBalance > 0 ? "ok" : "warn",
+    },
+    {
+      label: "Trial credit",
+      value: trial ? String(trial.status || "unknown") : "root / none",
+      detail: trial
+        ? `可用 ${formatTradingPointsValue(trial.available_points || 0)} · 鎖定 ${formatTradingPointsValue(trial.locked_points || 0)}${trial.reclaim_blocked_reason ? ` · ${trial.reclaim_blocked_reason}` : ""}`
+        : "root 不使用體驗金",
+      state: trialState,
+    },
+    {
+      label: "Margin / lending",
+      value: settings.borrowing_enabled ? `${openMargins.length} open` : "disabled",
+      detail: settings.borrowing_enabled
+        ? `強平 ${settings.margin_liquidation_enabled ? "on" : "off"} · 維持率 ${marginRatio == null ? "-" : `${formatTradingPointsValue(marginRatio)}%`} · pool ${formatTradingPercent(fundingPool.utilization_percent || 0)}%`
+        : "root 尚未開啟借貸交易",
+      state: marginState,
+    },
+  ];
+  grid.innerHTML = items.map((item) => `
+    <div class="trading-readiness-item ${tradingReadinessClass(item.state)}">
+      <span>${sanitize(item.label)}</span>
+      <strong>${sanitize(item.value)}</strong>
+      <small>${sanitize(item.detail)}</small>
+    </div>
+  `).join("");
+  const badge = $("trading-risk-dashboard-badge");
+  const sub = $("trading-risk-dashboard-sub");
+  const badCount = items.filter((item) => item.state === "bad").length;
+  const warnCount = items.filter((item) => item.state === "warn").length;
+  if (badge) badge.textContent = badCount ? `${badCount} blocked` : (warnCount ? `${warnCount} watch` : "ready");
+  if (sub) sub.textContent = `價格健康、boot pending、reserve、trial credit、margin/lending 與 bot/backtest readiness`;
+}
+
 function renderTradingSummary() {
   const market = selectedTradingMarket();
   const funding = tradingState.funding || {};
@@ -1501,6 +1640,7 @@ function renderTradingSummary() {
   }
   updateTradingTrialCountdown();
   renderTradingCurrentPrice(market, { animate: false, ...(tradingState.livePriceMeta?.[market?.symbol] || {}) });
+  renderTradingRiskDashboard();
   if ($("trading-fee-rate-percent")) $("trading-fee-rate-percent").textContent = market ? formatTradingPercent(market.fee_rate_percent || 0) : "-";
   const position = market ? tradingState.positions.find((row) => row.market_symbol === market.symbol) : null;
   if ($("trading-position-quantity")) $("trading-position-quantity").textContent = position ? sanitize(position.quantity || "0") : "0";
@@ -4113,6 +4253,7 @@ async function loadTradingLivePrice() {
       });
       updateTradingOrderEstimate();
       updateTradingMarginEstimate();
+      renderTradingRiskDashboard();
       const limit = $("trading-limit-price");
       if (limit) {
         limit.placeholder = `目前 ${formatTradingPointsValue(tradingMarketPricePoints(selected, "reference"))}`;
@@ -4133,6 +4274,7 @@ async function loadTradingRootReport() {
     const json = await fetchTradingJson("/admin/trading/report");
     tradingState.rootReport = json.report || {};
     renderTradingRootReport(tradingState.rootReport);
+    renderTradingRiskDashboard();
   } catch (err) {
     tradingSetMsg(tradingFriendlyErrorText(err.message || "交易報告讀取失敗"), false);
   }

@@ -731,9 +731,20 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert '"economy-root-virtual-open-btn", openTradingModuleFromWallet' in trading_js
     assert 'id="trading-current-delta"' in trading_section
     assert 'id="trading-current-health"' in trading_section
+    assert 'id="trading-risk-dashboard"' in trading_section
+    assert 'id="trading-risk-dashboard-grid"' in trading_section
+    assert "交易控制台" in trading_section
     assert "TRADING_LIVE_PRICE_REFRESH_MS = 2000" in trading_js
     assert "function loadTradingLivePrice()" in trading_js
     assert "function renderTradingCurrentPrice" in trading_js
+    assert "function renderTradingRiskDashboard" in trading_js
+    assert "function tradingMarketBootSummary" in trading_js
+    assert "function tradingSelectedPriceReadiness" in trading_js
+    assert "Bot / backtest" in trading_js
+    assert "Reserve / pool" in trading_js
+    assert "Trial credit" in trading_js
+    assert "Margin / lending" in trading_js
+    assert "boot pending" in trading_js
     assert "/trading/live-price?market=" in trading_js
     assert "updateTradingOrderEstimate();" in trading_js
     assert "price_health" in trading_js
@@ -802,6 +813,9 @@ def test_trading_live_price_polling_uses_two_second_timer_and_health_badges():
     assert "#trading-current-price.trading-price-up" in styles
     assert "#trading-current-price.trading-price-down" in styles
     assert "#trading-current-health.warning" in styles
+    assert ".trading-readiness-grid" in styles
+    assert ".trading-readiness-item" in styles
+    assert ".trading-readiness-warn" in styles
 
 
 def test_spot_position_details_show_holding_cost_and_break_even_price():
