@@ -87,9 +87,18 @@ side gate:
 - Exports, layout JSON, run records, and audit summaries must not contain the
   cleartext key.
 
+ComfyUI Account credits are not hackme_web points. The site economy, wallet,
+trial credit, task rewards, and trading points cannot pay for ComfyUI official
+Partner/API nodes. Those nodes use the official ComfyUI account credit balance,
+which must be purchased and inspected in the ComfyUI UI.
+
 Credit balance is not queried from this app because ComfyUI does not currently
 document a stable REST endpoint for it. Users should inspect credits in the
-ComfyUI UI under Settings / Credits.
+ComfyUI UI under Settings / Credits after logging into their ComfyUI account.
+See the official ComfyUI credits documentation and API Key integration guide:
+
+- <https://docs.comfy.org/interface/credits>
+- <https://docs.comfy.org/development/comfyui-server/api-key-integration>
 
 ## Export JSON
 
