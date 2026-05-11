@@ -130,10 +130,18 @@ def _rank_for_move(model_path: Path, case: dict, move_uci: str, *, search_profil
     return int((row or {}).get("raw_policy_rank") or 0)
 
 
-def _evaluate_case(candidate_path: Path, baseline_path: Path, case: dict, *, search_profile: str) -> dict:
+def _case_category(case: dict) -> str:
+    if case.get("must_checkmate") or case.get("requires_capture"):
+        return "tactic"
+    if case.get("must_promote") or case.get("must_not_stalemate"):
+        return "endgame"
+    return "smoke"
+
+
+def _evaluate_model_case(model_path: Path, case: dict, *, search_profile: str) -> dict:
     board_before = chess.Board(str(case["fen"]))
     side = str(case["side"])
-    move = choose_experiment_nnue_move({"__fen__": board_before.fen()}, side, model_path=candidate_path, search_profile=search_profile)
+    move = choose_experiment_nnue_move({"__fen__": board_before.fen()}, side, model_path=model_path, search_profile=search_profile)
     chosen = _move_to_uci(move)
     reasons: list[str] = []
     board_after = board_before.copy(stack=False)
@@ -169,28 +177,78 @@ def _evaluate_case(candidate_path: Path, baseline_path: Path, case: dict, *, sea
                 reasons.append("unexpected_promotion_piece")
             if case.get("min_material_gain") is not None and material_gain < int(case["min_material_gain"]):
                 reasons.append("material_gain_below_min")
-    baseline_rank = _rank_for_move(baseline_path, case, chosen, search_profile=search_profile) if chosen else 0
-    candidate_rank = _rank_for_move(candidate_path, case, chosen, search_profile=search_profile) if chosen else 0
+    rank = _rank_for_move(model_path, case, chosen, search_profile=search_profile) if chosen else 0
     explanation = explain_experiment_nnue_decision(
         {"__fen__": str(case["fen"])},
         side,
-        model_path=candidate_path,
+        model_path=model_path,
         search_profile=search_profile,
         watched_moves=[chosen] if chosen else [],
     )
+    expected = [str(item).lower() for item in (case.get("expected_uci_any") or [])]
+    teacher_agreement = bool(chosen in expected) if expected else bool(not reasons)
     return {
-        "id": str(case["id"]),
-        "side": side,
-        "fen": str(case["fen"]),
         "pass": not reasons,
         "reasons": reasons,
         "chosen_move": chosen,
         "legal": legal,
+        "suspicious": bool((not legal) or "stalemate_after_move" in reasons),
+        "teacher_agreement": teacher_agreement,
+        "pvs_selected_move": bool(chosen and legal),
         "material_gain": material_gain,
-        "baseline_rank_for_chosen": baseline_rank,
-        "candidate_rank_for_chosen": candidate_rank,
-        "candidate_top_moves": explanation.get("top_final_moves", [])[:3],
+        "rank_for_chosen": rank,
+        "top_moves": explanation.get("top_final_moves", [])[:3],
         "final_fen": board_after.fen() if legal else board_before.fen(),
+    }
+
+
+def _evaluate_case(candidate_path: Path, baseline_path: Path, case: dict, *, search_profile: str) -> dict:
+    baseline = _evaluate_model_case(baseline_path, case, search_profile=search_profile)
+    candidate = _evaluate_model_case(candidate_path, case, search_profile=search_profile)
+    return {
+        "id": str(case["id"]),
+        "category": _case_category(case),
+        "side": str(case["side"]),
+        "fen": str(case["fen"]),
+        "pass": bool(candidate["pass"]),
+        "reasons": list(candidate["reasons"]),
+        "baseline": baseline,
+        "candidate": candidate,
+        "chosen_move": candidate["chosen_move"],
+        "legal": bool(candidate["legal"]),
+        "suspicious": bool(candidate["suspicious"]),
+        "teacher_agreement": bool(candidate["teacher_agreement"]),
+        "pvs_selected_move": bool(candidate["pvs_selected_move"]),
+        "material_gain": int(candidate["material_gain"]),
+        "baseline_rank_for_candidate_move": _rank_for_move(baseline_path, case, str(candidate["chosen_move"]), search_profile=search_profile) if candidate["chosen_move"] else 0,
+        "candidate_rank_for_candidate_move": int(candidate["rank_for_chosen"]),
+        "candidate_top_moves": candidate["top_moves"],
+        "final_fen": candidate["final_fen"],
+    }
+
+
+def _score_rows(rows: list[dict], *, key: str) -> dict:
+    total = max(1, len(rows))
+    selected = [row[key] for row in rows]
+    passed = sum(1 for row in selected if bool(row.get("pass")))
+    legal = sum(1 for row in selected if bool(row.get("legal")))
+    suspicious = sum(1 for row in selected if bool(row.get("suspicious")))
+    teacher_agreement = sum(1 for row in selected if bool(row.get("teacher_agreement")))
+    pvs_selected = sum(1 for row in selected if bool(row.get("pvs_selected_move")))
+    categories = {}
+    for category in ("tactic", "endgame", "smoke"):
+        scoped = [row[key] for row in rows if row.get("category") == category]
+        categories[category] = round(sum(1 for row in scoped if bool(row.get("pass"))) / max(1, len(scoped)), 6)
+    return {
+        "score": round(passed / total, 6),
+        "legal_rate": round(legal / total, 6),
+        "illegal_rate": round(1.0 - (legal / total), 6),
+        "suspicious_rate": round(suspicious / total, 6),
+        "teacher_agreement_rate": round(teacher_agreement / total, 6),
+        "pvs_selected_move_rate": round(pvs_selected / total, 6),
+        "tactic_score": categories["tactic"],
+        "endgame_score": categories["endgame"],
+        "smoke_score": categories["smoke"],
     }
 
 
@@ -240,6 +298,9 @@ def _write_report(summary: dict, output_dir: Path) -> dict:
         f"- candidate_model_path: `{summary['candidate_model_path']}`",
         f"- baseline_model_path: `{summary['baseline_model_path']}`",
         f"- pass: `{summary['pass']}`",
+        f"- baseline_score: `{summary['baseline_score']}`",
+        f"- candidate_score: `{summary['candidate_score']}`",
+        f"- score_delta: `{summary['score_delta']}`",
         f"- case_pass_rate: `{summary['case_pass_rate']}`",
         f"- benchmark_gate_pass: `{summary['benchmark_gate'].get('pass')}`",
         "",
@@ -269,6 +330,9 @@ def main() -> int:
     ]
     passed = sum(1 for row in rows if row["pass"])
     case_pass_rate = round(passed / max(1, len(rows)), 4)
+    baseline_metrics = _score_rows(rows, key="baseline")
+    candidate_metrics = _score_rows(rows, key="candidate")
+    score_delta = round(float(candidate_metrics["score"]) - float(baseline_metrics["score"]), 6)
     benchmark_gate = _load_benchmark_gate(
         benchmark_path,
         min_score_rate=float(args.min_benchmark_score_rate),
@@ -279,6 +343,16 @@ def main() -> int:
         reasons.extend([f"consistency:{reason}" for reason in consistency.get("reasons") or []])
     if case_pass_rate < float(args.min_case_pass_rate):
         reasons.append("deterministic_case_pass_rate_too_low")
+    if float(candidate_metrics["score"]) <= float(baseline_metrics["score"]):
+        reasons.append("candidate_score_not_above_baseline")
+    if float(candidate_metrics["illegal_rate"]) > 0:
+        reasons.append("candidate_illegal_rate_nonzero")
+    if float(candidate_metrics["suspicious_rate"]) > float(baseline_metrics["suspicious_rate"]):
+        reasons.append("candidate_suspicious_rate_regressed")
+    if float(candidate_metrics["tactic_score"]) < float(baseline_metrics["tactic_score"]):
+        reasons.append("candidate_tactic_regression")
+    if float(candidate_metrics["endgame_score"]) < float(baseline_metrics["endgame_score"]):
+        reasons.append("candidate_endgame_regression")
     if benchmark_gate.get("provided") and not benchmark_gate.get("pass"):
         reasons.extend([f"benchmark:{reason}" for reason in benchmark_gate.get("reasons") or []])
     finished_at = datetime.utcnow().isoformat() + "Z"
@@ -296,6 +370,39 @@ def main() -> int:
             "reason": "Exp5 can share legal/suspicious/score safety floors, but not exp3 semantic replay evidence or exp4 policy/value feature assumptions.",
         },
         "promotion_gate_supported": True,
+        "promotion_gate": {
+            "passed": not reasons,
+            "blocked_by_strength_gate": bool(reasons),
+            "blocked_by_gate_skipped": False,
+            "candidate_can_be_staged": not reasons,
+            "candidate_can_be_promoted": not reasons,
+        },
+        "baseline_score": baseline_metrics["score"],
+        "candidate_score": candidate_metrics["score"],
+        "score_delta": score_delta,
+        "baseline_metrics": baseline_metrics,
+        "candidate_metrics": candidate_metrics,
+        "legal_rate": candidate_metrics["legal_rate"],
+        "illegal_rate": candidate_metrics["illegal_rate"],
+        "suspicious_rate": candidate_metrics["suspicious_rate"],
+        "teacher_agreement_rate": candidate_metrics["teacher_agreement_rate"],
+        "pvs_selected_move_rate": candidate_metrics["pvs_selected_move_rate"],
+        "endgame_score": candidate_metrics["endgame_score"],
+        "tactic_score": candidate_metrics["tactic_score"],
+        "smoke_score": candidate_metrics["smoke_score"],
+        "safety_guard": {
+            "pass": not any(reason in reasons for reason in {
+                "candidate_illegal_rate_nonzero",
+                "candidate_suspicious_rate_regressed",
+                "candidate_tactic_regression",
+                "candidate_endgame_regression",
+            }),
+            "illegal_rate_zero": float(candidate_metrics["illegal_rate"]) == 0.0,
+            "suspicious_rate_not_worse": float(candidate_metrics["suspicious_rate"]) <= float(baseline_metrics["suspicious_rate"]),
+            "score_rate_not_below_baseline": float(candidate_metrics["score"]) >= float(baseline_metrics["score"]),
+            "tactic_not_regressed": float(candidate_metrics["tactic_score"]) >= float(baseline_metrics["tactic_score"]),
+            "endgame_not_regressed": float(candidate_metrics["endgame_score"]) >= float(baseline_metrics["endgame_score"]),
+        },
         "case_pass_rate": case_pass_rate,
         "min_case_pass_rate": float(args.min_case_pass_rate),
         "cases_passed": passed,

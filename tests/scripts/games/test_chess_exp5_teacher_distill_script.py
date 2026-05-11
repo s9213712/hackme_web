@@ -49,8 +49,16 @@ def test_chess_exp5_teacher_distill_script_writes_exp5_samples(tmp_path):
     assert payload["ok"] is True
     assert payload["engine"] == "experiment 5:nnue"
     assert payload["accepted_samples"] == 1
+    assert payload["input_fen_count"] == 1
+    assert payload["distilled_rows"] == 1
     assert payload["sample_format"] == "exp5_nnue_position_move_v1"
     assert payload["retrain_input_compatible"] is True
+    assert payload["quality_audit"]["duplicate_ratio"] == 0.0
+    assert payload["quality_audit"]["legal_teacher_move_rate"] == 1.0
+    assert payload["quality_audit"]["suspicious_teacher_move_rate"] == 0.0
+    assert payload["quality_audit"]["teacher_top1_available_rate"] == 1.0
+    assert payload["quality_audit"]["teacher_score_available_rate"] == 0.0
+    assert payload["quality_audit"]["label_quality_summary"]["pass"] is True
 
     rows = [json.loads(line) for line in output_path.read_text(encoding="utf-8").splitlines()]
     assert len(rows) == 1

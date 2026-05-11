@@ -9,11 +9,14 @@ improvement or promotion readiness.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from datetime import datetime
 from pathlib import Path
+import shutil
 import subprocess
 import sys
+import time
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -22,6 +25,7 @@ if str(ROOT) not in sys.path:
 
 from services.games.chess_arena import default_chess_reports_dir  # noqa: E402
 from services.games.chess_pipeline import candidate_paths_for_run  # noqa: E402
+from services.games.chess_nnue import default_chess_nnue_model_path  # noqa: E402
 
 
 def _progress(message: str) -> None:
@@ -34,6 +38,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-id", default="")
     parser.add_argument("--candidate-model-path", default="")
     parser.add_argument("--candidate-replay-path", default="")
+    parser.add_argument("--baseline-model-path", default="")
     parser.add_argument("--max-samples", type=int, default=0)
     parser.add_argument("--replace-replay", action="store_true")
     return parser.parse_args()
@@ -53,6 +58,27 @@ def _run_json(cmd: list[str]) -> dict:
         raise RuntimeError(f"trainer did not emit JSON\nstdout={proc.stdout}\nstderr={proc.stderr}") from exc
 
 
+def _sha256_file(path: Path) -> str:
+    path = Path(path)
+    if not path.exists():
+        return ""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _sha256_inputs(paths: list[Path]) -> str:
+    digest = hashlib.sha256()
+    for path in sorted(paths, key=lambda item: str(item)):
+        digest.update(str(path).encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(_sha256_file(path).encode("ascii"))
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
 def _write_report(summary: dict) -> dict:
     reports_dir = default_chess_reports_dir()
     reports_dir.mkdir(parents=True, exist_ok=True)
@@ -64,7 +90,11 @@ def _write_report(summary: dict) -> dict:
         "# chess_exp5_retrain_pipeline",
         "",
         f"- run_id: `{summary['run_id']}`",
+        f"- baseline_model_path: `{summary['baseline_model_path']}`",
         f"- candidate_model_path: `{summary['candidate_model_path']}`",
+        f"- baseline_hash: `{summary['baseline_hash']}`",
+        f"- candidate_hash: `{summary['candidate_hash']}`",
+        f"- dataset_hash: `{summary['dataset_hash']}`",
         f"- accepted_samples: `{summary['trainer_result'].get('accepted_samples', 0)}`",
         f"- rejected_samples: `{summary['trainer_result'].get('rejected_samples', 0)}`",
         f"- strength_validation_supported: `{summary['strength_validation_supported']}`",
@@ -94,7 +124,24 @@ def main() -> int:
         if args.candidate_replay_path
         else default_candidates["experiment 5:nnue replay"]
     )
+    baseline_model_path = Path(args.baseline_model_path).expanduser().resolve() if args.baseline_model_path else default_chess_nnue_model_path()
     input_paths = [Path(item).expanduser().resolve() for item in args.input_jsonl]
+    if baseline_model_path.exists() and not candidate_model_path.exists():
+        candidate_model_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(baseline_model_path, candidate_model_path)
+    baseline_hash = _sha256_file(baseline_model_path)
+    dataset_hash = _sha256_inputs(input_paths)
+    distill_config_hash = hashlib.sha256(
+        json.dumps(
+            {
+                "input_jsonl": [str(path) for path in input_paths],
+                "max_samples": int(args.max_samples or 0),
+                "replace_replay": bool(args.replace_replay),
+                "baseline_model_hash": baseline_hash,
+            },
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
     trainer_cmd = [
         sys.executable,
         str(ROOT / "scripts" / "games" / "chess_exp5_dataset_train.py"),
@@ -109,15 +156,25 @@ def main() -> int:
         trainer_cmd.append("--replace-replay")
     if int(args.max_samples) > 0:
         trainer_cmd.extend(["--max-samples", str(int(args.max_samples))])
+    started = time.perf_counter()
     trainer_result = _run_json(trainer_cmd)
+    retrain_seconds = round(time.perf_counter() - started, 6)
+    candidate_hash = _sha256_file(candidate_model_path)
     finished_at = datetime.utcnow().isoformat() + "Z"
     summary = {
         "ok": bool(trainer_result.get("ok")),
         "run_id": run_id,
         "finished_at": finished_at,
         "engine": "experiment 5:nnue",
+        "baseline_model_path": str(baseline_model_path),
         "candidate_model_path": str(candidate_model_path),
         "candidate_replay_path": str(candidate_replay_path),
+        "baseline_hash": baseline_hash,
+        "candidate_hash": candidate_hash,
+        "hash_changed": bool(baseline_hash and candidate_hash and baseline_hash != candidate_hash),
+        "dataset_hash": dataset_hash,
+        "distill_config_hash": distill_config_hash,
+        "retrain_seconds": retrain_seconds,
         "input_jsonl": [str(path) for path in input_paths],
         "trainer_result": trainer_result,
         "strength_validation_supported": False,

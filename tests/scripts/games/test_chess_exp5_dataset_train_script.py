@@ -88,6 +88,8 @@ def test_chess_exp5_retrain_pipeline_reports_pending_strength_gate(tmp_path):
             str(model_path),
             "--candidate-replay-path",
             str(replay_path),
+            "--baseline-model-path",
+            str(ROOT / "services" / "games" / "models" / "chess_experiment_5_nnue.json"),
             "--replace-replay",
         ],
         cwd=str(ROOT),
@@ -101,6 +103,14 @@ def test_chess_exp5_retrain_pipeline_reports_pending_strength_gate(tmp_path):
     assert payload["ok"] is True
     assert payload["engine"] == "experiment 5:nnue"
     assert payload["trainer_result"]["accepted_samples"] == 1
+    assert payload["baseline_model_path"]
+    assert payload["candidate_model_path"] == str(model_path)
+    assert payload["candidate_replay_path"] == str(replay_path)
+    assert payload["candidate_hash"]
+    assert payload["dataset_hash"]
+    assert payload["distill_config_hash"]
+    assert payload["retrain_seconds"] >= 0
+    assert payload["hash_changed"] is True
     assert payload["strength_validation_supported"] is False
     assert payload["promotion_gate_supported"] is False
     assert "exp5-only" in payload["boundary"]

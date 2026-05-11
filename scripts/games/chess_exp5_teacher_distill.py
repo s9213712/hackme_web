@@ -8,6 +8,8 @@ import json
 from pathlib import Path
 import sys
 
+import chess
+
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -54,16 +56,56 @@ def _side_from_row(row: dict, fen: str) -> str:
     return "white" if " w " in fen else "black"
 
 
-def _distill_row(row: dict, *, teacher_depth: int, default_target: float, default_weight: float, default_source: str) -> dict | None:
+def _opponent(side: str) -> str:
+    return "black" if side == "white" else "white"
+
+
+def _immediate_checkmate_moves(board: chess.Board) -> list[str]:
+    moves: list[str] = []
+    for move in board.legal_moves:
+        board.push(move)
+        is_mate = board.is_checkmate()
+        board.pop()
+        if is_mate:
+            moves.append(move.uci())
+    return sorted(moves)
+
+
+def _teacher_move_quality(*, fen: str, side: str, move_uci: str) -> dict:
+    try:
+        board = chess.Board(fen)
+        board.turn = chess.WHITE if side == "white" else chess.BLACK
+        move = chess.Move.from_uci(move_uci)
+    except Exception:
+        return {"legal": False, "suspicious": True, "reasons": ["invalid_fen_or_move"], "opponent_mate_in_one": []}
+    if move not in board.legal_moves:
+        return {"legal": False, "suspicious": True, "reasons": ["illegal_teacher_move"], "opponent_mate_in_one": []}
+    board.push(move)
+    opponent_mates = _immediate_checkmate_moves(board) if board.turn == (chess.WHITE if _opponent(side) == "white" else chess.BLACK) else []
+    reasons = ["allows_opponent_mate_in_one"] if opponent_mates else []
+    return {
+        "legal": True,
+        "suspicious": bool(reasons),
+        "reasons": reasons,
+        "opponent_mate_in_one": opponent_mates,
+    }
+
+
+def _distill_row(row: dict, *, teacher_depth: int, default_target: float, default_weight: float, default_source: str) -> tuple[dict | None, dict]:
     fen = str(row.get("fen") or row.get("board_fen") or "").strip()
     if not fen:
-        return None
+        return None, {"accepted": False, "reason": "missing_fen"}
     side = _side_from_row(row, fen)
     move = choose_teacher_move({"__fen__": fen}, side, depth=max(1, int(teacher_depth)))
     if not move:
-        return None
+        return None, {"accepted": False, "reason": "teacher_no_move", "fen": fen, "side": side}
     move_uci = f"{move['from']}{move['to']}{move.get('promotion') or ''}".lower()
-    return build_experiment_nnue_sample_from_position(
+    quality = _teacher_move_quality(fen=fen, side=side, move_uci=move_uci)
+    if not quality["legal"]:
+        return None, {"accepted": False, "reason": "illegal_teacher_move", "fen": fen, "side": side, "move_uci": move_uci, "quality": quality}
+    if quality["suspicious"]:
+        return None, {"accepted": False, "reason": "suspicious_teacher_move", "fen": fen, "side": side, "move_uci": move_uci, "quality": quality}
+    sample = build_experiment_nnue_sample_from_position(
         fen=fen,
         side=side,
         move_uci=move_uci,
@@ -73,6 +115,32 @@ def _distill_row(row: dict, *, teacher_depth: int, default_target: float, defaul
         hard_negatives=list(row.get("hard_negatives") or []),
         search_profile=str(row.get("search_profile") or "fast"),
     )
+    if sample is None:
+        return None, {"accepted": False, "reason": "sample_normalization_failed", "fen": fen, "side": side, "move_uci": move_uci, "quality": quality}
+    return sample, {"accepted": True, "reason": "accepted", "fen": fen, "side": side, "move_uci": move_uci, "quality": quality}
+
+
+def _quality_summary(*, input_rows: int, rows: list[dict], audit_rows: list[dict], rejected_reasons: dict[str, int]) -> dict:
+    unique_keys = {f"{row.get('fen')}|{row.get('side')}|{row.get('move_uci')}" for row in rows}
+    legal_count = sum(1 for row in audit_rows if bool((row.get("quality") or {}).get("legal")))
+    suspicious_count = sum(1 for row in audit_rows if bool((row.get("quality") or {}).get("suspicious")))
+    accepted = len(rows)
+    duplicate_ratio = round(0.0 if accepted <= 0 else 1.0 - (len(unique_keys) / accepted), 6)
+    return {
+        "input_fen_count": int(input_rows),
+        "distilled_rows": accepted,
+        "duplicate_ratio": duplicate_ratio,
+        "legal_teacher_move_rate": round(legal_count / max(1, input_rows), 6),
+        "suspicious_teacher_move_rate": round(suspicious_count / max(1, input_rows), 6),
+        "teacher_top1_available_rate": round(len(audit_rows) / max(1, input_rows), 6),
+        "teacher_score_available_rate": 0.0,
+        "rejected_reasons": rejected_reasons,
+        "clean_training_rows": accepted,
+        "label_quality_summary": {
+            "pass": accepted > 0 and suspicious_count == 0 and legal_count == len(audit_rows),
+            "policy": "illegal or suspicious teacher rows are excluded from clean exp5 training targets",
+        },
+    }
 
 
 def main() -> int:
@@ -81,8 +149,10 @@ def main() -> int:
     output_path = Path(args.output_jsonl).expanduser().resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     rows: list[dict] = []
+    audit_rows: list[dict] = []
     input_rows = 0
     skipped_rows = 0
+    rejected_reasons: dict[str, int] = {}
     _progress(f"input files: {len(input_paths)}")
     _progress(f"output jsonl: {output_path}")
     _progress(f"teacher_depth: {int(args.teacher_depth)}")
@@ -93,15 +163,18 @@ def main() -> int:
             if int(args.max_samples or 0) > 0 and len(rows) >= int(args.max_samples):
                 skipped_rows += 1
                 continue
-            sample = _distill_row(
+            sample, audit = _distill_row(
                 row,
                 teacher_depth=int(args.teacher_depth),
                 default_target=float(args.target),
                 default_weight=float(args.weight),
                 default_source=str(args.source or "teacher_distill_exp5"),
             )
+            audit_rows.append(audit)
             if sample is None:
                 skipped_rows += 1
+                reason = str(audit.get("reason") or "skipped")
+                rejected_reasons[reason] = int(rejected_reasons.get(reason) or 0) + 1
                 continue
             rows.append(sample)
         _progress(f"phase result read input: accepted={len(rows)} skipped={skipped_rows}")
@@ -114,11 +187,14 @@ def main() -> int:
         "engine": "experiment 5:nnue",
         "teacher_depth": int(args.teacher_depth),
         "input_rows": input_rows,
+        "input_fen_count": input_rows,
         "accepted_samples": len(rows),
+        "distilled_rows": len(rows),
         "skipped_rows": skipped_rows,
         "output_jsonl": str(output_path),
         "sample_format": "exp5_nnue_position_move_v1",
         "retrain_input_compatible": True,
+        "quality_audit": _quality_summary(input_rows=input_rows, rows=rows, audit_rows=audit_rows, rejected_reasons=rejected_reasons),
         "strength_validation_supported": False,
         "promotion_gate_supported": False,
     }

@@ -45,6 +45,15 @@ def test_chess_exp5_strength_gate_reports_standard_policy(tmp_path):
     assert payload["standard_policy"]["same_as_exp3_exp4"] is False
     assert payload["standard_policy"]["common_safety_floor_shared"] is True
     assert payload["standard_policy"]["exp5_specific_deterministic_gate_required"] is True
+    assert payload["baseline_score"] == payload["candidate_score"]
+    assert payload["score_delta"] == 0.0
+    assert payload["pass"] is False
+    assert "candidate_score_not_above_baseline" in payload["reasons"]
+    assert payload["promotion_gate"]["passed"] is False
+    assert payload["promotion_gate"]["blocked_by_strength_gate"] is True
+    assert payload["promotion_gate"]["candidate_can_be_staged"] is False
+    assert payload["legal_rate"] == 1.0
+    assert payload["safety_guard"]["illegal_rate_zero"] is True
     assert payload["cases_total"] >= 1
     assert Path(payload["reports"]["json_report"]).exists()
     assert Path(payload["reports"]["md_report"]).exists()
