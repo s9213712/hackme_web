@@ -4841,10 +4841,29 @@
       background: rgba(63,140,255,.65);
       position: absolute;
     }
+    .chess-square.castle-target::after {
+      width: 46%;
+      height: 46%;
+      border: 3px solid rgba(38, 142, 255, .78);
+      background: transparent;
+    }
+    .chess-square.en-passant-target::after {
+      background: rgba(234, 179, 8, .72);
+    }
+    .chess-square.promotion-target::after {
+      width: 40%;
+      height: 40%;
+      border-radius: 8px;
+      background: rgba(34, 197, 94, .72);
+    }
     .chess-square small {
       position: absolute;
       left: .2rem;
       bottom: .14rem;
+      max-width: calc(100% - .35rem);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
       font-size: .55rem;
       color: rgba(0,0,0,.52);
     }

@@ -495,6 +495,8 @@ def test_chess_engine_supports_castling_en_passant_and_promotion():
         ("black", "g8", "f6"),
     ):
         board = validate_move(board, color, from_square, to_square)["board"]
+    castle_options = [move for move in legal_moves(board, "white") if move["from"] == "e1" and move["castle"]]
+    assert any(move["to"] == "g1" for move in castle_options)
     castle = validate_move(board, "white", "e1", "g1")
     assert castle["castle"] is True
     assert castle["board"]["g1"] == "K"
@@ -508,6 +510,8 @@ def test_chess_engine_supports_castling_en_passant_and_promotion():
         ("black", "d7", "d5"),
     ):
         board = validate_move(board, color, from_square, to_square)["board"]
+    ep_options = [move for move in legal_moves(board, "white") if move["en_passant"]]
+    assert any(move["from"] == "e5" and move["to"] == "d6" for move in ep_options)
     en_passant = validate_move(board, "white", "e5", "d6")
     assert en_passant["en_passant"] is True
     assert en_passant["captured"] == "p"
@@ -515,9 +519,14 @@ def test_chess_engine_supports_castling_en_passant_and_promotion():
     assert en_passant["board"]["d6"] == "P"
 
     promotion_board = {"e1": "K", "a8": "k", "e7": "P"}
+    promotion_options = [move for move in legal_moves(promotion_board, "white") if move["from"] == "e7" and move["to"] == "e8"]
+    assert {move["promotion"] for move in promotion_options} == {"q", "r", "b", "n"}
     promoted = validate_move(promotion_board, "white", "e7", "e8")
     assert promoted["promotion"] == "q"
     assert promoted["board"]["e8"] == "Q"
+    promoted_knight = validate_move(promotion_board, "white", "e7", "e8", "n")
+    assert promoted_knight["promotion"] == "n"
+    assert promoted_knight["board"]["e8"] == "N"
 
 
 def test_chess_match_payload_exposes_claimable_draw_and_claim_endpoint(tmp_path):

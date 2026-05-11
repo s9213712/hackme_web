@@ -310,6 +310,29 @@ function gameOpponentColor(color) {
   return color === "white" ? "black" : "white";
 }
 
+function chessResultText(match) {
+  if (!match || match.status === "active") return "";
+  const reason = String(match.result_reason || "");
+  const winnerId = String(match.winner_user_id || "");
+  const me = String(currentUserId || "");
+  if (reason === "resign") {
+    if (winnerId && winnerId === me) return "對手已認輸，你獲勝";
+    if (winnerId) return `${match.winner_username || "對手"} 因對方認輸獲勝`;
+    return "你已認輸，棋局結束";
+  }
+  if (reason === "checkmate") {
+    return match.winner_username ? `將死，勝者：${match.winner_username}` : "將死，棋局結束";
+  }
+  if (reason === "agreed_draw") return "雙方同意和棋";
+  if (reason === "stalemate") return "逼和，棋局結束";
+  if (reason === "insufficient_material") return "子力不足，和棋";
+  if (reason === "threefold_repetition") return "三次重複，和棋";
+  if (reason === "fifty_moves") return "50 步規則，和棋";
+  if (reason === "seventyfive_moves") return "75 步規則，和棋";
+  if (reason === "fivefold_repetition") return "五次重複，和棋";
+  return match.winner_username ? `已結束，勝者：${match.winner_username}` : `已結束：${reason || "平手"}`;
+}
+
 function buildOptimisticChessMatch(match, move) {
   if (!match || !move) return match;
   const board = { ...(match.board || {}) };
@@ -359,6 +382,23 @@ function buildOptimisticChessMatch(match, move) {
   };
 }
 
+function resolveChessMoveSelection(match, from, clickedSquare, selectedPiece, clickedPiece) {
+  const moves = match.legal_moves || [];
+  const direct = moves.filter((move) => move.from === from && move.to === clickedSquare);
+  if (direct.length) {
+    return { moves: direct, to: clickedSquare, castleByRookClick: false };
+  }
+  const isKing = selectedPiece === "K" || selectedPiece === "k";
+  const isOwnRook = clickedPiece
+    && ((match.my_side === "white" && clickedPiece === "R") || (match.my_side === "black" && clickedPiece === "r"));
+  if (!isKing || !isOwnRook) return { moves: [], to: clickedSquare, castleByRookClick: false };
+  const rank = match.my_side === "white" ? "1" : "8";
+  const castleTo = clickedSquare === `h${rank}` ? `g${rank}` : (clickedSquare === `a${rank}` ? `c${rank}` : "");
+  if (!castleTo) return { moves: [], to: clickedSquare, castleByRookClick: false };
+  const castleMoves = moves.filter((move) => move.from === from && move.to === castleTo && move.castle);
+  return { moves: castleMoves, to: castleTo, castleByRookClick: castleMoves.length > 0 };
+}
+
 function renderGameMatches(matches) {
   const wrap = $("game-match-list");
   if (!wrap) return;
@@ -373,10 +413,13 @@ function renderGameMatches(matches) {
   }
   wrap.innerHTML = rows.map((match) => {
     const canDelete = match.status !== "active";
+    const meta = match.status === "active"
+      ? `${match.current_turn === "white" ? "白方走" : "黑方走"}`
+      : chessResultText(match);
     return `
       <div class="game-match-item ${match.id === gameSelectedMatchId ? "active" : ""}">
         <button class="game-match-row ${match.id === gameSelectedMatchId ? "active" : ""}" type="button" data-game-match-id="${match.id}">
-          <span><strong>${sanitize(gameMatchLabel(match))}</strong><small>${sanitize(match.status)} · ${sanitize(match.current_turn === "white" ? "白方走" : "黑方走")}</small></span>
+          <span><strong>${sanitize(gameMatchLabel(match))}</strong><small>${sanitize(match.status)} · ${sanitize(meta)}</small></span>
           <span>${match.mode === "computer" ? "練習" : "對戰"}</span>
         </button>
         ${canDelete ? `<button class="btn btn-danger game-mini-btn" type="button" data-game-delete-match="${match.id}" title="刪除已結束棋局">刪除</button>` : ""}
@@ -438,6 +481,9 @@ function renderChessBoard(match) {
   const legalTargets = new Set((match.legal_moves || [])
     .filter((move) => move.from === gameSelectedSquare)
     .map((move) => move.to));
+  const specialTargets = new Map((match.legal_moves || [])
+    .filter((move) => move.from === gameSelectedSquare && (move.castle || move.en_passant || move.promotion))
+    .map((move) => [move.to, move]));
   const squares = [];
   for (let rank = 8; rank >= 1; rank -= 1) {
     for (const file of "abcdefgh") {
@@ -445,11 +491,14 @@ function renderChessBoard(match) {
       const piece = boardMap[square] || "";
       const isDark = (file.charCodeAt(0) + rank) % 2 === 0;
       const selectable = myTurn && piece && ((match.my_side === "white" && piece === piece.toUpperCase()) || (match.my_side === "black" && piece === piece.toLowerCase()));
+      const special = specialTargets.get(square);
+      const specialClass = special?.castle ? " castle-target" : (special?.en_passant ? " en-passant-target" : (special?.promotion ? " promotion-target" : ""));
+      const specialLabel = special?.castle ? "王車易位" : (special?.en_passant ? "吃過路兵" : (special?.promotion ? "升變" : ""));
       squares.push(`
-        <button class="chess-square ${isDark ? "dark" : "light"} ${square === gameSelectedSquare ? "selected" : ""} ${legalTargets.has(square) ? "target" : ""}"
-                type="button" data-chess-square="${square}" ${match.status !== "active" || chessMoveInFlight ? "disabled" : ""}>
+        <button class="chess-square ${isDark ? "dark" : "light"} ${square === gameSelectedSquare ? "selected" : ""} ${legalTargets.has(square) ? `target${specialClass}` : ""}"
+                type="button" data-chess-square="${square}" title="${sanitize(specialLabel || square)}" ${match.status !== "active" || chessMoveInFlight ? "disabled" : ""}>
           <span>${sanitize(CHESS_PIECES[piece] || "")}</span>
-          <small>${selectable || legalTargets.has(square) ? sanitize(square) : ""}</small>
+          <small>${specialLabel ? sanitize(specialLabel) : (selectable || legalTargets.has(square) ? sanitize(square) : "")}</small>
         </button>
       `);
     }
@@ -1497,7 +1546,10 @@ async function selectChessSquare(square) {
   const selectedPiece = gameSelectedSquare ? (match.board?.[gameSelectedSquare] || "") : "";
   const myTurn = match.my_side === match.current_turn;
   const isOwnPiece = piece && ((match.my_side === "white" && piece === piece.toUpperCase()) || (match.my_side === "black" && piece === piece.toLowerCase()));
-  const legal = (match.legal_moves || []).some((move) => move.from === gameSelectedSquare && move.to === square);
+  const resolvedSelection = gameSelectedSquare
+    ? resolveChessMoveSelection(match, gameSelectedSquare, square, selectedPiece, piece)
+    : { moves: [], to: square, castleByRookClick: false };
+  const legal = resolvedSelection.moves.length > 0;
   if (gameSelectedSquare && !selectedPiece) {
     gameSelectedSquare = null;
     renderChessBoard(match);
@@ -1505,10 +1557,11 @@ async function selectChessSquare(square) {
   }
   if (gameSelectedSquare && legal && selectedPiece) {
     const from = gameSelectedSquare;
-    const candidateMoves = (match.legal_moves || []).filter((move) => move.from === from && move.to === square);
+    const targetSquare = resolvedSelection.to || square;
+    const candidateMoves = resolvedSelection.moves;
     let chosenMove = candidateMoves[0] || {
       from,
-      to: square,
+      to: targetSquare,
       piece: selectedPiece,
     };
     let promotion = chosenMove.promotion || null;
@@ -1533,7 +1586,7 @@ async function selectChessSquare(square) {
     try {
       const json = await gameRequest(`/games/chess/matches/${encodeURIComponent(gameSelectedMatchId)}/move`, {
         method: "POST",
-        body: { from, to: square, promotion },
+        body: { from, to: targetSquare, promotion },
       });
       const updated = json.match;
       gameState.matches = gameState.matches.map((item) => item.id === updated.id ? updated : item);
@@ -1552,6 +1605,9 @@ async function selectChessSquare(square) {
   if (isOwnPiece && myTurn) {
     gameSelectedSquare = square;
     renderChessBoard(match);
+    if ((piece === "K" || piece === "k") && (match.legal_moves || []).some((move) => move.from === square && move.castle)) {
+      setGameMsg("可王車易位：點亮起的 g/c 目標格，或直接點同側車。", true);
+    }
   } else if (piece && !myTurn) {
     setGameMsg("還沒輪到你", false);
   }
