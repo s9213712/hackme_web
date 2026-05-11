@@ -142,7 +142,7 @@ exp5 需要另建的驗證：
 ## 下一步建議順序
 
 1. 補 `chess_exp5_teacher_distill.py`
-   - 只做 FEN -> teacher move -> exp5 JSONL，不碰 gate。
+   - 已完成：只做 FEN -> teacher move -> exp5 JSONL，不碰 gate。
 2. 讓 benchmark runner 支援 exp5 model path 與 engine dispatch
    - 先只做 benchmark support，不做 promotion。
 3. 建 `chess_exp5_strength_gate.py`
