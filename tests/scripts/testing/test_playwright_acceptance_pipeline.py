@@ -23,7 +23,9 @@ def test_playwright_qa_workflow_template_installs_browser_and_runs_runner():
 
     assert "python -m playwright install --with-deps chromium" in text
     assert "bash scripts/testing/run_playwright_acceptance.sh" in text
-    assert "RUN_DEEP_PLAYWRIGHT: \"0\"" in text
+    assert "workflow_dispatch:" in text
+    assert "schedule:" in text
+    assert "github.event.inputs.run_deep_playwright" in text
     assert "03b.Comfyui" in text
 
 
@@ -34,7 +36,9 @@ def test_playwright_qa_workflow_is_installed_in_github_actions():
     assert "name: playwright-qa" in text
     assert "python -m playwright install --with-deps chromium" in text
     assert "bash scripts/testing/run_playwright_acceptance.sh" in text
-    assert "RUN_DEEP_PLAYWRIGHT: \"0\"" in text
+    assert "workflow_dispatch:" in text
+    assert "schedule:" in text
+    assert "github.event.inputs.run_deep_playwright" in text
     assert "03b.Comfyui" in text
 
 

@@ -4,6 +4,18 @@ on:
   pull_request:
   push:
     branches: [main, 03b.Comfyui]
+  workflow_dispatch:
+    inputs:
+      run_deep_playwright:
+        description: Run the full deep Playwright site flow
+        required: false
+        default: "1"
+        type: choice
+        options:
+          - "1"
+          - "0"
+  schedule:
+    - cron: "30 18 * * *"
 
 jobs:
   playwright-acceptance:
@@ -26,5 +38,5 @@ jobs:
 
       - name: Run Playwright acceptance checks
         env:
-          RUN_DEEP_PLAYWRIGHT: "0"
+          RUN_DEEP_PLAYWRIGHT: ${{ github.event_name == 'schedule' && '1' || github.event.inputs.run_deep_playwright || '0' }}
         run: bash scripts/testing/run_playwright_acceptance.sh
