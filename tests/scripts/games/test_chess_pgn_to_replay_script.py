@@ -227,6 +227,140 @@ def test_chess_pgn_to_replay_fails_loudly_when_filters_write_nothing(tmp_path):
     assert not output_path.exists()
 
 
+def test_chess_pgn_to_replay_valid_games_only_filters_invalid_games(tmp_path):
+    input_path = tmp_path / "games.pgn"
+    output_path = tmp_path / "replays.jsonl"
+    input_path.write_text(
+        """
+[Event "No rating"]
+[Site "local"]
+[White "A"]
+[Black "B"]
+[Result "1-0"]
+
+1. e4 e5 2. Nf3 Nc6 3. Bc4 Nf6 4. Qe2 Be7 5. O-O O-O 6. Re1 d6 1-0
+
+[Event "Rated valid"]
+[Site "local"]
+[White "C"]
+[Black "D"]
+[WhiteElo "2300"]
+[BlackElo "2310"]
+[Result "1-0"]
+[Variant "Standard"]
+[Termination "Normal"]
+
+1. d4 d5 2. c4 e6 3. Nc3 Nf6 4. Bg5 Be7 5. e3 O-O 6. Nf3 h6 7. Bh4 b6 1-0
+""".strip(),
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(ROOT)
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "games" / "chess_pgn_to_replay.py"),
+            "--input-pgn",
+            str(input_path),
+            "--output-jsonl",
+            str(output_path),
+            "--replace-output",
+            "--valid-games-only",
+            "--min-ply",
+            "1",
+            "--no-progress",
+        ],
+        cwd=str(ROOT),
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    summary = json.loads(proc.stdout)
+    rows = [json.loads(line) for line in output_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert summary["ok"] is True
+    assert summary["written_records"] == 1
+    assert summary["skipped"]["missing_rating"] == 1
+    assert summary["filters"]["valid_game_filter"] == "basic"
+    assert rows[0]["pgn_labels"]["event"] == "Rated valid"
+
+
+def test_chess_pgn_to_replay_valid_game_filter_strength_is_adjustable(tmp_path):
+    input_path = tmp_path / "games.pgn"
+    output_path = tmp_path / "replays.jsonl"
+    input_path.write_text(
+        """
+[Event "Master strict but not elite"]
+[Site "local"]
+[White "C"]
+[Black "D"]
+[WhiteElo "2300"]
+[BlackElo "2310"]
+[Result "1-0"]
+[Variant "Standard"]
+[Termination "Normal"]
+[TimeControl "1800+0"]
+
+1. d4 d5 2. c4 e6 3. Nc3 Nf6 4. Bg5 Be7 5. e3 O-O 6. Nf3 h6 7. Bh4 b6 8. cxd5 Nxd5 9. Bxe7 Qxe7 10. Nxd5 exd5 1-0
+""".strip(),
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(ROOT)
+    strict_proc = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "games" / "chess_pgn_to_replay.py"),
+            "--input-pgn",
+            str(input_path),
+            "--output-jsonl",
+            str(output_path),
+            "--replace-output",
+            "--valid-game-filter",
+            "strict",
+            "--min-ply",
+            "1",
+            "--no-progress",
+        ],
+        cwd=str(ROOT),
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    elite_proc = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "games" / "chess_pgn_to_replay.py"),
+            "--input-pgn",
+            str(input_path),
+            "--output-jsonl",
+            str(output_path),
+            "--replace-output",
+            "--valid-game-filter",
+            "elite",
+            "--min-ply",
+            "1",
+            "--no-progress",
+        ],
+        cwd=str(ROOT),
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    strict_summary = json.loads(strict_proc.stdout)
+    elite_summary = json.loads(elite_proc.stdout)
+    assert strict_summary["ok"] is True
+    assert strict_summary["filters"]["valid_game_filter"] == "strict"
+    assert elite_proc.returncode == 1
+    assert elite_summary["ok"] is False
+    assert elite_summary["filters"]["valid_game_filter"] == "elite"
+    assert elite_summary["skipped"]["elite_rating_below_min"] == 1
+
+
 def test_chess_pgn_to_replay_interactive_prepared_dataset_and_distill_manifest(tmp_path):
     input_path = tmp_path / "games.pgn"
     output_path = tmp_path / "interactive_replays.jsonl"
@@ -255,6 +389,7 @@ def test_chess_pgn_to_replay_interactive_prepared_dataset_and_distill_manifest(t
             "1",  # master decisive preset
             "2200",
             "2",  # decisive
+            "2",  # valid-game filter basic
             "1",  # sample size
             "1",  # max games
             "0",  # scan limit
@@ -291,6 +426,7 @@ def test_chess_pgn_to_replay_interactive_prepared_dataset_and_distill_manifest(t
     assert summary["ok"] is True
     assert summary["output_format"] == "prepared-dataset"
     assert summary["written_records"] == 1
+    assert summary["filters"]["valid_game_filter"] == "basic"
     assert summary["prepared_dataset"]["ok"] is True
     assert Path(summary["prepared_dataset"]["summary"]["train_path"]).exists()
     assert manifest["record_count"] == 1

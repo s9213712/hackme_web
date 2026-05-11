@@ -116,6 +116,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--result", choices=["any", "decisive", "draw"], default="any")
     parser.add_argument("--require-tag", action="append", default=[], choices=sorted(REQUIRE_TAG_CHOICES))
     parser.add_argument("--position-scope", choices=["any", "complete", "fragment"], default="any")
+    parser.add_argument("--valid-games-only", action="store_true", help="Shortcut for --valid-game-filter basic.")
+    parser.add_argument("--valid-game-filter", choices=["off", "basic", "strict", "elite"], default="off")
     parser.add_argument("--skip-nonstandard-start", action="store_true")
     parser.add_argument("--output-format", choices=["replay-jsonl", "prepared-dataset"], default="replay-jsonl")
     parser.add_argument("--prepared-output-dir", default="")
@@ -191,6 +193,13 @@ def _run_interactive(args: argparse.Namespace) -> argparse.Namespace:
     args.result = _prompt_choice("結果", {"1": "any", "2": "decisive", "3": "draw"}, "2" if preset["result"] == "decisive" else "1")
     args.result = {"1": "any", "2": "decisive", "3": "draw"}[args.result]
     args.require_tag = list(preset["require_tag"])
+    valid_key = _prompt_choice(
+        "有效棋局篩選強度",
+        {"1": "off", "2": "basic", "3": "strict", "4": "elite"},
+        "2",
+    )
+    args.valid_game_filter = {"1": "off", "2": "basic", "3": "strict", "4": "elite"}[valid_key]
+    args.valid_games_only = args.valid_game_filter != "off"
     if preset_name == "special_rules":
         tag_key = _prompt_choice(
             "特殊規則標籤",
@@ -619,6 +628,46 @@ def _iter_games(path: Path) -> Iterable[chess.pgn.Game]:
             yield game
 
 
+def _valid_game_rejection(record: dict, strength: str) -> str | None:
+    strength = str(strength or "off").strip().lower()
+    if strength in {"", "off", "false", "none"}:
+        return None
+    headers = record.get("pgn_headers") or {}
+    labels = record.get("pgn_labels") or {}
+    variant = str(headers.get("Variant") or "Standard").strip().lower()
+    if variant not in {"", "standard"}:
+        return "invalid_variant"
+    if str(headers.get("Result") or "").strip() not in {"1-0", "0-1", "1/2-1/2"}:
+        return "invalid_result"
+    if str(labels.get("termination") or "").strip().lower() in {"abandoned", "unterminated", "time forfeit", "rules infraction"}:
+        return "invalid_termination"
+    if record.get("rating_estimate") is None:
+        return "missing_rating"
+    if float(record.get("confidence_score") or 0.0) < 0.75:
+        return "low_confidence"
+    if record.get("suspicious_flag") or record.get("resign_abuse_flag"):
+        return "suspicious_or_abuse"
+    if int(record.get("move_count") or 0) < 12:
+        return "invalid_too_short"
+    if strength in {"strict", "elite"}:
+        if str(labels.get("termination") or "").strip().lower() not in {"normal", ""}:
+            return "non_normal_termination"
+        if str(record.get("opening_seed") or "") != "standard_start":
+            return "nonstandard_start"
+        if float(record.get("confidence_score") or 0.0) < 0.85:
+            return "strict_low_confidence"
+        if int(record.get("move_count") or 0) < 20:
+            return "strict_too_short"
+        if str(labels.get("time_control_class") or "") in {"bullet", "unknown_time_control"}:
+            return "strict_time_control"
+    if strength == "elite":
+        if int(record.get("rating_estimate") or 0) < 2500:
+            return "elite_rating_below_min"
+        if str(labels.get("time_control_class") or "") not in {"rapid", "classical"}:
+            return "elite_time_control"
+    return None
+
+
 def _eligible_record(
     record: dict,
     *,
@@ -628,7 +677,12 @@ def _eligible_record(
     skip_nonstandard_start: bool,
     position_scope: str,
     require_tags: list[str],
+    valid_game_filter: str,
 ) -> str | None:
+    if valid_game_filter and valid_game_filter != "off":
+        invalid_reason = _valid_game_rejection(record, valid_game_filter)
+        if invalid_reason:
+            return invalid_reason
     if int(record.get("move_count") or 0) < min_ply:
         return "too_short"
     if skip_nonstandard_start and str(record.get("opening_seed") or "") != "standard_start":
@@ -802,6 +856,7 @@ def main() -> int:
                     skip_nonstandard_start=bool(args.skip_nonstandard_start),
                     position_scope=str(args.position_scope or "any"),
                     require_tags=[str(tag) for tag in (args.require_tag or []) if str(tag).strip()],
+                    valid_game_filter="basic" if bool(args.valid_games_only) and str(args.valid_game_filter) == "off" else str(args.valid_game_filter),
                 )
                 if ineligible:
                     skipped[ineligible] += 1
@@ -863,6 +918,7 @@ def main() -> int:
             "result": str(args.result),
             "position_scope": str(args.position_scope or "any"),
             "require_tag": list(args.require_tag or []),
+            "valid_game_filter": "basic" if bool(args.valid_games_only) and str(args.valid_game_filter) == "off" else str(args.valid_game_filter),
             "skip_nonstandard_start": bool(args.skip_nonstandard_start),
         },
         "skipped": dict(sorted(skipped.items())),

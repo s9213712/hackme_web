@@ -45,6 +45,7 @@ It prompts for:
 - classification/filter preset: master decisive, elite, strong rapid/classical, endgame material, special rules, or custom tag
 - game count, scan limit, seed, and minimum ply count
 - position scope: any, complete games from the standard start, or FEN fragments
+- valid-game filtering strength: `off`, `basic`, `strict`, or `elite`
 - output format: replay JSONL only, or replay JSONL plus prepared train/eval dataset
 - optional distill manifest for a later teacher-distill run
 - output directory and filename
@@ -62,6 +63,7 @@ python3 scripts/games/chess_pgn_to_replay.py \
   --min-elo 2200 \
   --result decisive \
   --require-tag contains_castling \
+  --valid-game-filter strict \
   --position-scope complete \
   --sample-size 100 \
   --seed 20260511 \
