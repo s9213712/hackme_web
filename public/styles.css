@@ -2191,6 +2191,11 @@
       overflow-wrap: anywhere;
     }
 
+    .share-center-countdown {
+      color: #7ee787;
+      font-weight: 700;
+    }
+
     .drive-share-password-note {
       color: var(--warning, #b7791f);
       font-size: .76rem;

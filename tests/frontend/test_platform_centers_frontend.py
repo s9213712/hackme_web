@@ -27,5 +27,12 @@ def test_platform_center_frontend_surfaces_are_wired():
     assert 'parsed.origin === location.origin' in platform_js
     assert 'loadShareCenterEvents' in platform_js
     assert '/access-events' in platform_js
+    assert 'function formatShareCenterCountdown(ms)' in platform_js
+    assert '倒數計時：${formatShareCenterCountdown' in platform_js
+    assert 'data-share-countdown-until' in platform_js
+    assert 'scheduleShareCenterCountdowns()' in platform_js
+    assert 'setInterval(updateShareCenterCountdowns, 1000)' in platform_js
+    assert 'share-center-countdown' in platform_js
+    assert '.share-center-countdown' in (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
     assert '/admin/trading/asset-overview' in platform_js
     assert '交易資產總覽讀取失敗' in platform_js

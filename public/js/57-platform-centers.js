@@ -32,6 +32,52 @@ function platformSeverityClass(status) {
   return "muted";
 }
 
+let shareCenterCountdownTimer = null;
+
+function parseShareCenterExpiresAt(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  const normalized = /[zZ]|[+-]\d{2}:?\d{2}$/.test(raw) ? raw : raw.replace(" ", "T");
+  const timestamp = Date.parse(normalized);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function formatShareCenterCountdown(ms) {
+  if (!Number.isFinite(ms) || ms <= 0) return "已到期";
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (days > 0) return `剩餘 ${days} 天 ${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  return `剩餘 ${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function updateShareCenterCountdowns() {
+  const items = Array.from(document.querySelectorAll("[data-share-countdown-until]"));
+  const now = Date.now();
+  items.forEach((item) => {
+    const timestamp = parseShareCenterExpiresAt(item.getAttribute("data-share-countdown-until"));
+    item.textContent = timestamp ? `倒數計時：${formatShareCenterCountdown(timestamp - now)}` : "";
+  });
+  if (!items.length && shareCenterCountdownTimer) {
+    clearInterval(shareCenterCountdownTimer);
+    shareCenterCountdownTimer = null;
+  }
+}
+
+function scheduleShareCenterCountdowns() {
+  updateShareCenterCountdowns();
+  const hasCountdown = !!document.querySelector("[data-share-countdown-until]");
+  if (hasCountdown && !shareCenterCountdownTimer) {
+    shareCenterCountdownTimer = setInterval(updateShareCenterCountdowns, 1000);
+  }
+  if (!hasCountdown && shareCenterCountdownTimer) {
+    clearInterval(shareCenterCountdownTimer);
+    shareCenterCountdownTimer = null;
+  }
+}
+
 function renderJobCenterJobs(jobs = []) {
   const list = $("job-center-list");
   if (!list) return;
@@ -138,6 +184,7 @@ function renderShareCenter(shares = []) {
   if ($("share-center-access-count")) $("share-center-access-count").textContent = String(accesses);
   if (!shares.length) {
     list.innerHTML = '<p style="color:var(--muted);">目前沒有分享連結。</p>';
+    scheduleShareCenterCountdowns();
     return;
   }
   list.innerHTML = shares.map((share) => {
@@ -156,12 +203,16 @@ function renderShareCenter(shares = []) {
     const revoke = share.status === "active"
       ? `<button class="btn btn-danger" type="button" data-share-revoke-type="${sanitize(share.share_type)}" data-share-revoke-id="${sanitize(share.id)}">撤銷</button>`
       : "";
+    const countdown = share.expires_at
+      ? `<div class="drive-card-sub share-center-countdown" data-share-countdown-until="${sanitize(share.expires_at)}">倒數計時：${sanitize(formatShareCenterCountdown((parseShareCenterExpiresAt(share.expires_at) || 0) - Date.now()))}</div>`
+      : "";
     return `
       <div class="drive-file-row">
         <div>
           <strong>${sanitize(share.resource_title || "分享連結")}</strong>
           <div class="drive-card-sub">${sanitize(share.share_type || "-")} · 建立 ${sanitize(formatChatTime(share.created_at || ""))}</div>
           <div class="drive-card-sub">到期 ${sanitize(share.expires_at || "無")} · 次數 ${sanitize(String(share.access_count || 0))}${share.max_views ? " / " + sanitize(String(share.max_views)) : ""} · 密碼 ${share.password_required ? "是" : "否"}</div>
+          ${countdown}
           ${url ? `<div class="drive-card-sub drive-share-link">${sanitize(url)}</div>` : ""}
         </div>
         <div class="drive-file-actions">
@@ -190,6 +241,7 @@ function renderShareCenter(shares = []) {
   list.querySelectorAll("[data-share-events-id]").forEach((btn) => {
     btn.addEventListener("click", () => loadShareCenterEvents(btn.dataset.shareEventsType || "", btn.dataset.shareEventsId || ""));
   });
+  scheduleShareCenterCountdowns();
 }
 
 async function loadShareCenter() {
