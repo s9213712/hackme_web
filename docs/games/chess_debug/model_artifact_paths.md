@@ -257,6 +257,48 @@ dashboard selection path：
 - promotion path if gate passes：`$HACKME_RUNTIME_DIR/games/models/chess_experiment_5_nnue.json`
 - result：gate failed because candidate score did not exceed baseline; candidate was not staged or promoted.
 
+2026-05-11 exp5_02 decision delta audit paths：
+
+- baseline exp5 model：`/home/s92137/hackme_web/services/games/models/chess_experiment_5_nnue.json`
+- baseline sha256：`6fbafae703b94c173e10079aae09763a547719b410895332cbbfdf990ca487ec`
+- input train rows：`/tmp/hackme_exp5_02_candidate_audit/positions_train_raw.jsonl`（60 筆）
+- held-out rows：`/tmp/hackme_exp5_02_candidate_audit/positions_heldout_raw.jsonl`（4 筆）
+- distilled dataset：`/tmp/hackme_exp5_02_candidate_audit/distilled_exp5_exp02.jsonl`
+- distilled sha256：`7db42aa08bee26396dfb15b9374cac00db677190311c674330ced12220ae36a3`
+- strength cases：`/tmp/hackme_exp5_02_candidate_audit/strength_cases_exp5_02.jsonl`
+- candidate exp5 model：`/tmp/hackme_exp5_02_candidate_audit/candidate/chess_experiment_5_nnue.json`
+- candidate sha256：`a18338ca8f5e41bca2169fdd981808ea1083edc19cfc5e49dbd7a9eda1ef5de1`
+- candidate replay：`/tmp/hackme_exp5_02_candidate_audit/candidate/chess_experiment_5_nnue_replay.jsonl`
+- replay sha256：`7db42aa08bee26396dfb15b9374cac00db677190311c674330ced12220ae36a3`
+- focused benchmark report：`/tmp/hackme_exp5_01_real_dry_run/benchmark_focused_report.json`
+- strength gate report：`/tmp/hackme_exp5_02_candidate_audit/chess_exp5_strength_gate_20260511_074705.014534.json`
+- result root：`/tmp/hackme_exp5_02_candidate_audit`
+- promotion path if gate passes：`$HACKME_RUNTIME_DIR/games/models/chess_experiment_5_nnue.json`
+- result：gate passed（`promotion_gate.passed=true`），但提升幅度/學習可見性仍需下一輪驗證收斂。
+
+2026-05-11 exp5_03 repeatability/stability paths：
+
+- baseline exp5 model：`/home/s92137/hackme_web/services/games/models/chess_experiment_5_nnue.json`
+- baseline sha256：`6fbafae703b94c173e10079aae09763a547719b410895332cbbfdf990ca487ec`
+- input train rows：`/tmp/hackme_exp5_02_candidate_audit/positions_train_raw.jsonl`（60 筆）
+- distilled dataset：`/tmp/hackme_exp5_02_candidate_audit/distilled_exp5_exp02.jsonl`（60 筆）
+- distilled hash：`c0479267994f767341ce48bf7049f76151995680af85e1e87e21be3580e8e4ea`
+- strength cases：`/tmp/hackme_exp5_02_candidate_audit/strength_cases_exp5_02.jsonl`（60 筆）
+- held-out output（run）：`/home/s92137/chess_results/exp5_03_repeatability_fix3/heldout_rows_exp5_03.jsonl`（24 筆）
+- smoke output（run）：`/home/s92137/chess_results/exp5_03_repeatability_fix3/smoke_rows_exp5_03.jsonl`（4 筆）
+- focused benchmark report：`/tmp/hackme_exp5_01_real_dry_run/benchmark_focused_report.json`
+- repeatability report：`/home/s92137/chess_results/exp5_03_repeatability_fix3/chess_exp5_repeatability_20260511_082907.153618.json`
+- repeatability md：`/home/s92137/chess_results/exp5_03_repeatability_fix3/chess_exp5_repeatability_20260511_082907.153618.md`
+- run_1 candidate（seed 11）：`/home/s92137/chess_results/exp5_03_repeatability_fix3/run_1_seed_11/candidate/chess_experiment_5_nnue.json`
+  - sha256：`c2d464d38bda8c038e0dd729ff4da390ba1958260d2d575a8f1666d5924f041f`
+- run_2 candidate（seed 12）：`/home/s92137/chess_results/exp5_03_repeatability_fix3/run_2_seed_12/candidate/chess_experiment_5_nnue.json`
+  - sha256：`8a61db88c41fccc54717dc27afe3e3dda997014ae926553a905357bffa28806f`
+- run_3 candidate（seed 13）：`/home/s92137/chess_results/exp5_03_repeatability_fix3/run_3_seed_13/candidate/chess_experiment_5_nnue.json`
+  - sha256：`38fe192712c4b1086846cf67c80273b4f387208e04f4f82326b7bd5122dc970e`
+- gate payload（固定）：`/home/s92137/hackme_web/services/games/chess_exp5_strength_gate.py`
+- promotion path if gate passes：`$HACKME_RUNTIME_DIR/games/models/chess_experiment_5_nnue.json`（尚未放行）
+- result：repeatability 有穩定 +0.046875，gate 未通過（`all_runs_failed`），結果仍 blocked；stage/shadow/production promote 全為 false。
+
 ## auto-retrain 與 promotion 關係
 
 auto-retrain 入口：

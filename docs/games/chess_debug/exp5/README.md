@@ -22,6 +22,9 @@ exp5 是後續主要棋力路線之一，方向是：
 - auto-retrain / promotion 外層已支援 exp5，但 promotion 必須先通過 exp5 專用 strength gate；quick retrain gate 仍不沿用 exp3/exp4 semantic evidence。
 - 修改歷程與相容性判斷：`2026-05-11_scaffold_and_compatibility.md`
 - real candidate dry-run：`2026-05-11_exp5_01_real_candidate_dry_run.md`
+- exp5_02 decision delta audit：`2026-05-11_exp5_02_candidate_decision_audit.md`
+- exp5_03 repeatability stability：`2026-05-11_exp5_03_repeatability_stability.md`
+- next learning / strength plan：`2026-05-11_exp5_next_learning_strength_plan.md`
 
 ## Difficulty
 
