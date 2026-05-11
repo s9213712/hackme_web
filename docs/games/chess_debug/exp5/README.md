@@ -20,6 +20,7 @@ exp5 是後續主要棋力路線之一，方向是：
 - `chess_exp5_dataset_train.py` 是 exp5 專用最小 trainer，能從 FEN/move JSONL 更新 exp5 NNUE-like JSON model/replay。
 - `chess_exp5_retrain_pipeline.py` 是 exp5 專用最小 retrain pipeline，只產 candidate 與 report，不接 exp3/exp4 semantic gate。
 - quick retrain gate / auto-retrain / promotion learning evidence 暫不支援 exp5；後續需先決定 exp5 專用棋力驗證與 promotion gate。
+- 修改歷程與相容性判斷：`2026-05-11_scaffold_and_compatibility.md`
 
 ## Difficulty
 
