@@ -635,11 +635,16 @@ def test_comfyui_workflow_list_syncs_only_builtin_runtime_bundles_as_official_pr
         first_body = first.get_json()
         assert [item["system_bundle_id"] for item in first_body["official_presets"]] == ["txt2img_basic"]
         assert first_body["official_presets"][0]["title"] == "Text-to-Image（基礎）"
+        assert first_body["official_presets"][0]["manifest_summary"]["available"] is True
+        assert first_body["official_presets"][0]["manifest_summary"]["id"] == "txt2img_basic"
 
         second = client.get("/api/comfyui/workflows")
         assert second.status_code == 200
         second_body = second.get_json()
         assert [item["system_bundle_id"] for item in second_body["official_presets"]] == ["txt2img_basic"]
+        detail = client.get(f"/api/comfyui/workflows/{second_body['official_presets'][0]['id']}")
+        assert detail.status_code == 200
+        assert detail.get_json()["preset"]["manifest_json"]["id"] == "txt2img_basic"
 
     conn = sqlite3.connect(db_path)
     rows = conn.execute(

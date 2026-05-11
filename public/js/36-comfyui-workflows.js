@@ -852,6 +852,7 @@ function renderComfyuiWorkflowPresetList(targetId, items, emptyText) {
     const loras = Array.isArray(item?.required_loras) ? item.required_loras.map((entry) => entry.name || entry) : [];
     const controlnets = Array.isArray(item?.required_controlnets) ? item.required_controlnets.map((entry) => entry.name || entry) : [];
     const customNodes = Array.isArray(item?.required_custom_nodes) ? item.required_custom_nodes : [];
+    const manifest = item?.manifest_summary || {};
     const mode = item?.default_params?.generation_mode ? comfyuiReadableModeLabel(item.default_params.generation_mode) : "Workflow";
     const purpose = item?.purpose || item?.default_params?.generation_mode || "custom";
     const versionWarnings = Array.isArray(item?.version_warnings) ? item.version_warnings : [];
@@ -868,6 +869,7 @@ function renderComfyuiWorkflowPresetList(targetId, items, emptyText) {
             <span class="comfyui-workflow-chip">${sanitize(item?.visibility || "private")}</span>
             <span class="comfyui-workflow-chip">Project ${sanitize(item?.project_version || "-")}</span>
             <span class="comfyui-workflow-chip">ComfyUI ${sanitize(item?.comfyui_version || "-")}</span>
+            ${manifest?.available ? `<span class="comfyui-workflow-chip">Manifest ${sanitize(String(manifest.panel_count || 0))} panels</span>` : ""}
             <span class="comfyui-workflow-chip">${sanitize(String((item?.workflow_hash || "").slice(0, 12) || "-"))}</span>
           </div>
         </div>

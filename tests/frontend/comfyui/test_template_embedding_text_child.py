@@ -25,6 +25,12 @@ def test_selected_template_renders_embedding_shortcuts_under_text_panel():
     assert "data-comfyui-template-panel-id" in workflow_js
 
 
+def test_workflow_registry_list_surfaces_manifest_summary_badge():
+    workflow_js = _read("public/js/36-comfyui-workflows.js")
+    assert "manifest_summary" in workflow_js
+    assert "Manifest ${sanitize(String(manifest.panel_count || 0))} panels" in workflow_js
+
+
 def test_import_preview_modal_renders_embedding_shortcuts_for_text_fields():
     comfyui_js = _read("public/js/36-comfyui.js")
     assert 'field.input_type === "embedding_shortcuts"' in comfyui_js

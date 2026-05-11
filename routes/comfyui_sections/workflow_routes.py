@@ -60,6 +60,7 @@ def register_comfyui_workflow_routes(app, ctx):
     client_for_url = ctx["client_for_url"]
     load_workflow_preset = ctx["load_workflow_preset"]
     workflow_preset_summary = ctx["workflow_preset_summary"]
+    workflow_manifest_for_row = ctx.get("workflow_manifest_for_row")
     parse_json_field = ctx["parse_json_field"]
     extract_workflow_payload = ctx["extract_workflow_payload"]
     normalize_workflow_default_params = ctx["normalize_workflow_default_params"]
@@ -373,6 +374,7 @@ def register_comfyui_workflow_routes(app, ctx):
             workflow_json = parse_json_field(row["workflow_json"], {}) or {}
             payload["workflow_json"] = workflow_json
             payload["layout_json"] = parse_json_field(row["layout_json"], {}) or {}
+            payload["manifest_json"] = workflow_manifest_for_row(row) if workflow_manifest_for_row else None
             payload["layout_versions"] = _workflow_layout_versions(conn, preset_id=preset_id)
             try:
                 analysis = analyze_workflow_json(workflow_json)

@@ -649,6 +649,41 @@ def register_comfyui_routes(app, deps):
             warnings.append(f"workflow schema 版本 {schema_version} 與目前支援版本 {COMFYUI_WORKFLOW_SCHEMA_VERSION} 不一致")
         return warnings
 
+    def _workflow_manifest_for_row(row):
+        bundle_id = str(row["system_bundle_id"] or "").strip()
+        if not bundle_id or not re.match(r"^[a-z][a-z0-9_]{0,63}$", bundle_id):
+            return None
+        manifest_path = runtime_comfyui_dir() / bundle_id / "manifest.json"
+        if not manifest_path.is_file():
+            return None
+        try:
+            if manifest_path.stat().st_size > 64 * 1024:
+                return None
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+        if not isinstance(manifest, dict):
+            return None
+        if str(manifest.get("id") or "").strip() != bundle_id:
+            return None
+        return manifest
+
+    def _workflow_manifest_summary(row):
+        manifest = _workflow_manifest_for_row(row)
+        if not manifest:
+            return {"available": False}
+        panels = ((manifest.get("ui") or {}).get("panels") or [])
+        return {
+            "available": True,
+            "id": str(manifest.get("id") or ""),
+            "schema_version": int(manifest.get("schema_version") or 1),
+            "name": str(manifest.get("name") or ""),
+            "description": str(manifest.get("description") or ""),
+            "workflow_file": str(manifest.get("workflow_file") or "workflow.json"),
+            "panel_count": len(panels) if isinstance(panels, list) else 0,
+            "source": str(manifest.get("source") or "system"),
+        }
+
     def _workflow_preset_summary(row, *, dependency_status=None, recent_runs=None, actor=None):
         default_params = _parse_json_field(row["default_params_json"], {}) or {}
         workflow_json = _parse_json_field(row["workflow_json"], {}) or {}
@@ -686,6 +721,7 @@ def register_comfyui_routes(app, deps):
             "version_warnings": _workflow_version_warnings(row),
             "paid_api_nodes": paid_api_nodes,
             "requires_paid_api_confirmation": bool(paid_api_nodes.get("required")),
+            "manifest_summary": _workflow_manifest_summary(row),
         }
         if dependency_status is not None:
             result["dependency_status"] = dependency_status
@@ -2690,6 +2726,7 @@ def register_comfyui_routes(app, deps):
         "client_for_url": _client_for_url,
         "load_workflow_preset": _load_workflow_preset,
         "workflow_preset_summary": _workflow_preset_summary,
+        "workflow_manifest_for_row": _workflow_manifest_for_row,
         "parse_json_field": _parse_json_field,
         "extract_workflow_payload": _extract_workflow_payload,
         "normalize_workflow_default_params": _normalize_workflow_default_params,
