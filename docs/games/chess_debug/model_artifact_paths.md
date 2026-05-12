@@ -474,6 +474,27 @@ dashboard selection path：
 - bundled baseline opening score：`1/31 = 0.032258`
 - decision：`exp5_14b pass=true`; clean opening curriculum is ready for exp5_15, but this is not promotion evidence
 
+2026-05-12 exp5_15 opening curriculum candidate search：
+
+- search script：`scripts/games/chess_exp5_opening_candidate_search.py`
+- output root：`/home/s92137/chess_results/exp5_15_opening_candidate_search/`
+- summary：`/home/s92137/chess_results/exp5_15_opening_candidate_search/summary.json`
+- summary md：`/home/s92137/chess_results/exp5_15_opening_candidate_search/SUMMARY.md`
+- opening samples：`/home/s92137/chess_results/exp5_15_opening_candidate_search/opening_train_samples.jsonl`
+- retention samples：`/home/s92137/chess_results/exp5_15_opening_candidate_search/retention_train_samples.jsonl`
+- current model source：`promoted_stage_candidate_fallback`
+- current production sha actual：`c47ef752aa69d7b8c813b587468228593f44d69c9b947313325e03797e4450dc`
+- trainer fix：black positive samples now increase black piece-square feature weights; regression test added in `tests/games/test_chess_exp5_architecture.py`
+- A candidate：`/home/s92137/chess_results/exp5_15_opening_candidate_search/A_opening_only_e8_hn4/chess_experiment_5_nnue_candidate.json`
+- A candidate sha：`3acde277bb8b70219c59a3a0a954934315ab0deca38df0e62a860aa353bc75f5`
+- A result：opening `1/31 = 0.032258`, retention `112/137 = 0.817518`, clean regressions `5`, verdict `blocked`
+- B candidate：`/home/s92137/chess_results/exp5_15_opening_candidate_search/B_opening_retention_e8_hn4/chess_experiment_5_nnue_candidate.json`
+- B candidate sha：`cf19fcd97b8f0803395c4080cc7c8c3fc0547170c023754522795dde52b9fc95`
+- B result：opening `1/31 = 0.032258`, retention `111/137 = 0.810219`, clean regressions `4`, verdict `blocked`
+- runtime mutation：`false`
+- stage/promote attempted：`false`
+- decision：no exp5_15 candidate is stageable; current exp5 production model remains runtime
+
 ## auto-retrain 與 promotion 關係
 
 auto-retrain 入口：

@@ -59,6 +59,7 @@ exp5 是後續主要棋力路線之一，方向是：
 - exp5_13 rule smoke + stalemate fix：`2026-05-12_exp5_13_rule_smoke_and_stalemate_fix.md`
 - exp5_14 opening label audit：`2026-05-12_exp5_14_opening_label_audit.md`
 - exp5_14b clean opening held-out expansion：`2026-05-12_exp5_14b_clean_opening_heldout_expansion.md`
+- exp5_15 opening curriculum candidate search：`2026-05-12_exp5_15_opening_candidate_search.md`
 
 ## 歷程總表
 
@@ -83,6 +84,7 @@ exp5 是後續主要棋力路線之一，方向是：
 | exp5_13 | 2026-05-12 | rule-priority + fixture cleanup + stalemate avoidance；137-case validation Δ +0.021898，smoke 18/18，suspicious 0，5/5 repeatability | **production runtime improved; model sha unchanged** |
 | exp5_14 | 2026-05-12 | opening label audit；27/27 opening rows are questionable，15 failed rows classified as 17 teacher-too-narrow / 6 multi-good / 4 do-not-gate，0 clean true opening regressions | **not a production blocker; no clean opening curriculum yet** |
 | exp5_14b | 2026-05-12 | curated clean opening expansion；31 kept clean multi-good rows，kept overlap 0，dataset hash `d8888d511...`；current production-equivalent scores 1/31 | **clean opening curriculum ready for exp5_15; no runtime mutation** |
+| exp5_15 | 2026-05-12 | opening curriculum candidate search；fixed black-sample trainer sign bug；A/B candidates both fail clean opening pool (1/31) and regress endgame retention | **blocked; no stage/promote; runtime unchanged** |
 
 ## Difficulty
 

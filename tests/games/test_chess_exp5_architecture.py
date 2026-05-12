@@ -7,7 +7,11 @@ from routes import games as games_routes
 from routes.games import choose_computer_move, ensure_game_schema
 from services.games import chess_pipeline
 from services.games import self_play_training
-from services.games.chess_nnue import EXPERIMENT_NNUE_DIFFICULTY, choose_experiment_nnue_move
+from services.games.chess_nnue import (
+    EXPERIMENT_NNUE_DIFFICULTY,
+    choose_experiment_nnue_move,
+    train_experiment_nnue_from_replay_samples,
+)
 
 
 def test_exp5_difficulty_is_schema_supported():
@@ -152,3 +156,28 @@ def test_exp5_avoids_stalemate_when_legal_alternative_exists(tmp_path):
     assert chosen in board.legal_moves
     board.push(chosen)
     assert not board.is_stalemate()
+
+
+def test_exp5_training_positive_black_sample_increases_black_piece_weight(tmp_path):
+    model_path = tmp_path / "exp5.json"
+    replay_path = tmp_path / "exp5_replay.jsonl"
+
+    result = train_experiment_nnue_from_replay_samples(
+        [
+            {
+                "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR b KQkq - 0 1",
+                "side": "black",
+                "move_uci": "e7e5",
+                "target": 1.0,
+                "weight": 4.0,
+            }
+        ],
+        model_path=model_path,
+        replay_path=replay_path,
+        replace_replay=True,
+        epochs=1,
+    )
+
+    payload = json.loads(model_path.read_text(encoding="utf-8"))
+    assert result["accepted_samples"] == 1
+    assert payload["piece_square_weights"]["b:p:e5"] > 0

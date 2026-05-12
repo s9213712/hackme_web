@@ -643,7 +643,13 @@ def _train_position_move(model: dict, sample: dict, *, target_override: float | 
     target = float(sample.get("target") or 0.0) if target_override is None else float(target_override)
     weight = float(sample.get("weight") or 1.0) if weight_override is None else float(weight_override)
     side_sign = 1.0 if side == "white" else -1.0
-    delta = side_sign * _clip(target, -1.0, 1.0) * _clip(weight, 0.1, 8.0) * _LEARNING_RATE
+    # Piece-square and shared center weights are evaluated with the piece color
+    # sign in _sparse_feature_score. A positive target should therefore
+    # increase the moved piece's own feature weight for BOTH colors: white gets
+    # +weight in eval, black gets -weight in eval. The tempo term is still
+    # side-signed below because tempo is keyed to side-to-move rather than a
+    # piece-color feature.
+    delta = _clip(target, -1.0, 1.0) * _clip(weight, 0.1, 8.0) * _LEARNING_RATE
     after = board.copy(stack=False)
     after.push(move)
     moved_piece = after.piece_at(move.to_square)
