@@ -12,6 +12,7 @@ import sqlite3
 from pathlib import Path
 
 import chess
+import pytest
 
 from routes.games import ensure_game_schema
 from scripts.games.chess_pvp_history_to_replay import (
@@ -19,8 +20,10 @@ from scripts.games.chess_pvp_history_to_replay import (
     HVE_SAMPLE_WEIGHT_CAP,
     PVP_SAMPLE_WEIGHT_CAP,
     _classify_match,
+    _open_db,
     _parse_hve_whitelist,
     _quality_user_set,
+    _resolve_db_path,
     _winner_side,
     run_export,
 )
@@ -252,6 +255,59 @@ def test_classify_match_pvp_accepts_when_both_qualify():
     outcome, reason = _classify_match(row, move_history=_make_history_legal(24), quality_users={2, 3}, min_plies=20)
     assert outcome == "pvp_filtered"
     assert reason == ""
+
+
+def test_resolve_db_path_cli_arg_wins(monkeypatch, tmp_path):
+    monkeypatch.setenv("HACKME_RUNTIME_DIR", str(tmp_path / "rt"))
+    monkeypatch.setenv("HTML_LEARNING_DB_DIR", str(tmp_path / "alt"))
+    p = _resolve_db_path(str(tmp_path / "explicit.db"))
+    assert p == (tmp_path / "explicit.db").resolve()
+
+
+def test_resolve_db_path_html_learning_db_dir_overrides_runtime(monkeypatch, tmp_path):
+    monkeypatch.setenv("HACKME_RUNTIME_DIR", str(tmp_path / "rt"))
+    monkeypatch.setenv("HTML_LEARNING_DB_DIR", str(tmp_path / "alt"))
+    p = _resolve_db_path("")
+    assert p == (tmp_path / "alt" / "database.db").resolve()
+
+
+def test_resolve_db_path_runtime_default_matches_server_py(monkeypatch, tmp_path):
+    """server.py:258 places database.db under $HACKME_RUNTIME_DIR/database/,
+    not at the runtime root. Converter default must follow."""
+    monkeypatch.delenv("HTML_LEARNING_DB_DIR", raising=False)
+    monkeypatch.setenv("HACKME_RUNTIME_DIR", str(tmp_path / "rt"))
+    p = _resolve_db_path("")
+    assert p == (tmp_path / "rt" / "database" / "database.db").resolve()
+
+
+def test_open_db_opens_in_read_only_mode(tmp_path):
+    """Converter must not be able to write to the main app DB."""
+    db = tmp_path / "test.db"
+    setup = sqlite3.connect(str(db))
+    setup.execute("CREATE TABLE t (k INTEGER PRIMARY KEY, v TEXT)")
+    setup.execute("INSERT INTO t VALUES (1, 'hello')")
+    setup.commit()
+    setup.close()
+
+    conn = _open_db(db)
+    try:
+        row = conn.execute("SELECT v FROM t WHERE k=1").fetchone()
+        assert row["v"] == "hello"
+        with pytest.raises(sqlite3.OperationalError):
+            conn.execute("INSERT INTO t VALUES (2, 'mutated')")
+    finally:
+        conn.close()
+
+
+def test_resolve_db_path_errors_when_nothing_set(monkeypatch):
+    monkeypatch.delenv("HTML_LEARNING_DB_DIR", raising=False)
+    monkeypatch.delenv("HACKME_RUNTIME_DIR", raising=False)
+    try:
+        _resolve_db_path("")
+    except SystemExit as exc:
+        assert "HACKME_RUNTIME_DIR" in str(exc)
+    else:
+        raise AssertionError("expected SystemExit when no DB hint is set")
 
 
 def test_parse_hve_whitelist_default_and_empty():

@@ -109,20 +109,44 @@ def _err(msg: str) -> None:
 
 
 def _resolve_db_path(cli_db_path: str) -> Path:
+    """Resolve the main app SQLite path mirroring server.py:258 conventions.
+
+    server.py treats ``$HTML_LEARNING_DB_DIR/database.db`` as primary, falling
+    back to ``$HACKME_RUNTIME_DIR/database/database.db`` (note the
+    ``database/`` subdirectory) — initialising the converter from
+    ``$HACKME_RUNTIME_DIR/database.db`` directly missed the real schema.
+    """
     if cli_db_path:
         return Path(cli_db_path).expanduser().resolve()
+    db_dir_env = os.environ.get("HTML_LEARNING_DB_DIR", "").strip()
+    if db_dir_env:
+        return Path(db_dir_env).expanduser().resolve() / "database.db"
     runtime_dir = os.environ.get("HACKME_RUNTIME_DIR", "").strip()
     if runtime_dir:
-        return Path(runtime_dir).expanduser().resolve() / "database.db"
+        return Path(runtime_dir).expanduser().resolve() / "database" / "database.db"
     raise SystemExit(
-        "error: provide --db-path or set HACKME_RUNTIME_DIR (which contains database.db)"
+        "error: provide --db-path or set HACKME_RUNTIME_DIR (server.py puts "
+        "the main SQLite at $HACKME_RUNTIME_DIR/database/database.db) or "
+        "$HTML_LEARNING_DB_DIR (with database.db inside)."
     )
 
 
 def _open_db(db_path: Path) -> sqlite3.Connection:
+    """Open the main app DB in SQLite URI ``mode=ro`` (read-only).
+
+    PvP / human-vs-engine history lives in ``game_matches`` inside the main
+    app SQLite (the dedicated ``chess_experiment.db`` only holds engine
+    learning state). Forcing read-only access means:
+
+    - we never compete with the live server for a write lock,
+    - we cannot accidentally mutate ``database.db`` even if the converter
+      grows a bug later,
+    - matches the diagnostic-only policy in [[feedback-pvp-replay-discipline]].
+    """
     if not db_path.exists():
         raise SystemExit(f"error: db path does not exist: {db_path}")
-    conn = sqlite3.connect(str(db_path))
+    uri = f"file:{db_path.as_posix()}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
     conn.row_factory = sqlite3.Row
     return conn
 
