@@ -1,5 +1,23 @@
 # PvP / human-vs-engine replay pipeline v1 (2026-05-12)
 
+## Operator UX (W5)
+
+For day-to-day use, prefer the operator CLI over the raw scripts:
+
+```bash
+python3 scripts/games/chess_replay_operator.py detect
+python3 scripts/games/chess_replay_operator.py export --since 2026-04-01
+python3 scripts/games/chess_replay_operator.py dry-run --run-dir <pvp_replay_*>
+python3 scripts/games/chess_replay_operator.py review  --run-dir <pvp_replay_*>
+python3 scripts/games/chess_replay_operator.py generate-staging-command \
+    --run-dir <pvp_replay_*> --candidate-dir <staging-dir>
+python3 scripts/games/chess_replay_operator.py wizard   # interactive menu
+```
+
+Same safety contract as below — no new training logic, no production
+mutation, no auto-train. Details + rejection-reason explanations + tests
+are in [`2026-05-12_replay_operator_ux.md`](./2026-05-12_replay_operator_ux.md).
+
 ## Safety contract (W4.2)
 
 The safety surface for every external-replay-aware CLI lives in one
