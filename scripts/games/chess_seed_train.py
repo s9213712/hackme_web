@@ -441,19 +441,31 @@ def _apply_external_caps(
     }
 
 
-def _write_dryrun_payload_artifact(payload: dict, report_dir: Path) -> Path:
+def _dryrun_artifact_path(report_dir: Path) -> Path:
+    """Compute the timestamped dry-run artifact path without writing it yet.
+
+    Split from the writer so callers can inject the planned path into
+    `payload['dry_run_artifact']` BEFORE serialisation, ensuring the on-disk
+    JSON and the stdout JSON are byte-identical.
+    """
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return report_dir / f"chess_seed_train_dryrun_{ts}.json"
+
+
+def _write_dryrun_payload_artifact(payload: dict, artifact_path: Path) -> Path:
     """Persist the final payload to disk when dry-run skips write_training_report.
 
     Dry-run is supposed to give the operator a tangible inspection target for
     load_stats / cap_stats / normalize_validation / train_result.skipped_reason
-    — stdout alone is too easy to lose. Writes a timestamped JSON next to the
-    real training reports so existing report tooling can pick it up.
+    — stdout alone is too easy to lose. Caller is expected to set
+    `payload['dry_run_artifact']` to `artifact_path` before invocation so the
+    saved file self-references its own location.
     """
-    report_dir.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    path = report_dir / f"chess_seed_train_dryrun_{ts}.json"
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-    return path
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
+    )
+    return artifact_path
 
 
 def _validate_normalize(samples: list[dict]) -> dict:
@@ -784,8 +796,9 @@ def main() -> int:
         },
     }
     if args.dry_run and args.include_replay_jsonl:
-        artifact_path = _write_dryrun_payload_artifact(payload, Path(args.report_dir))
+        artifact_path = _dryrun_artifact_path(Path(args.report_dir))
         payload["dry_run_artifact"] = str(artifact_path)
+        _write_dryrun_payload_artifact(payload, artifact_path)
         _progress(f"dry-run JSON artifact written: {artifact_path}")
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     _progress("phase result seed training: PASS")

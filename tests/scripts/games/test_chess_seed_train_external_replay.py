@@ -20,6 +20,7 @@ from scripts.games.chess_seed_train import (
     TRUSTED_SOURCE_WHITELIST,
     _apply_external_caps,
     _assert_external_replay_safety,
+    _dryrun_artifact_path,
     _is_default_model_path,
     _load_external_replay,
     _train_with_external_replay,
@@ -459,15 +460,38 @@ def test_safety_guard_allow_flag_overrides_bundled_detection():
 # ---- _write_dryrun_payload_artifact -----------------------------------
 
 
-def test_write_dryrun_payload_artifact_writes_json_under_report_dir(tmp_path):
-    payload = {"ok": True, "dry_run": True, "external_replay": {"enabled": False}}
+def test_dryrun_artifact_path_is_timestamped_under_report_dir(tmp_path):
     report_dir = tmp_path / "reports"
-    artifact = _write_dryrun_payload_artifact(payload, report_dir)
-    assert artifact.parent == report_dir
-    assert artifact.name.startswith("chess_seed_train_dryrun_")
-    assert artifact.name.endswith(".json")
-    loaded = json.loads(artifact.read_text(encoding="utf-8"))
+    path = _dryrun_artifact_path(report_dir)
+    assert path.parent == report_dir
+    assert path.name.startswith("chess_seed_train_dryrun_")
+    assert path.name.endswith(".json")
+
+
+def test_write_dryrun_payload_artifact_writes_json_to_explicit_path(tmp_path):
+    payload = {"ok": True, "dry_run": True, "external_replay": {"enabled": False}}
+    artifact_path = tmp_path / "reports" / "chess_seed_train_dryrun_test.json"
+    written = _write_dryrun_payload_artifact(payload, artifact_path)
+    assert written == artifact_path
+    loaded = json.loads(artifact_path.read_text(encoding="utf-8"))
     assert loaded == payload
+
+
+def test_dryrun_artifact_matches_stdout_when_self_referenced(tmp_path):
+    """Regression for W4.1f: disk artifact must contain the same
+    `dry_run_artifact` field as the stdout JSON, not the pre-injection
+    payload. Caller wires this by computing the path first, injecting it
+    into payload, then writing — which is exactly what main() now does.
+    """
+    payload = {"ok": True, "dry_run": True, "external_replay": {"enabled": True}}
+    artifact_path = _dryrun_artifact_path(tmp_path / "reports")
+    payload["dry_run_artifact"] = str(artifact_path)
+    _write_dryrun_payload_artifact(payload, artifact_path)
+
+    on_disk = json.loads(artifact_path.read_text(encoding="utf-8"))
+    on_stdout = payload  # main() prints `payload` after the same mutation
+    assert on_disk == on_stdout
+    assert on_disk["dry_run_artifact"] == str(artifact_path)
 
 
 def test_train_with_external_replay_skip_exp4_blocks_pv_training(monkeypatch, tmp_path):
