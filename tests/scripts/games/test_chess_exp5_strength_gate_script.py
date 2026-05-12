@@ -5,8 +5,51 @@ import subprocess
 import sys
 from pathlib import Path
 
+import chess
+
+from scripts.games.chess_exp5_production_readiness import (
+    _normalize_case,
+    _soft_label_near_equivalent_audit,
+)
+
 
 ROOT = Path(__file__).resolve().parents[3]
+
+
+def test_exp5_audited_multigood_moves_are_explicit_not_broad_endgame_credit():
+    quiet = _normalize_case({
+        "id": "exp5_09_bench_d400404a65f3",
+        "fen": "8/8/6k1/8/8/5K1P/8/8 w - - 0 1",
+        "side": "white",
+        "category": "quiet_positional",
+        "teacher_move": "g3f2",
+        "expected_uci_any": ["g3f2"],
+    })
+    assert "h2h4" in quiet["expected_uci_any"]
+    assert quiet["audited_multi_good_uci_any"] == ["h2h4"]
+
+    endgame = _normalize_case({
+        "id": "exp5_10_teacher_012",
+        "fen": "8/5p2/2r3p1/3pk2p/8/1P1K1R1P/5PP1/8 b - - 15 58",
+        "side": "black",
+        "category": "endgame",
+        "teacher_move": "e5d6",
+        "expected_uci_any": ["e5d6"],
+    })
+    assert "c6a6" in endgame["expected_uci_any"]
+    assert endgame["audited_multi_good_uci_any"] == ["c6a6"]
+
+    unaudited_endgame = _normalize_case({
+        "id": "not_a_pinned_audit_case",
+        "fen": "8/5p2/2r3p1/3pk2p/8/1P1K1R1P/5PP1/8 b - - 15 58",
+        "side": "black",
+        "category": "endgame",
+        "teacher_move": "e5d6",
+        "expected_uci_any": ["e5d6"],
+    })
+    audit = _soft_label_near_equivalent_audit(unaudited_endgame, chess.Board(unaudited_endgame["fen"]), "c6a6")
+    assert audit["applied"] is False
+    assert audit["accepted"] is False
 
 
 def test_chess_exp5_strength_gate_reports_standard_policy(tmp_path):

@@ -401,6 +401,26 @@ dashboard selection path：
 - post-fix quiet audit：`/home/s92137/chess_results/exp5_11b_quiet_regression_audit/summary.json`（`quiet_clean_regression_count=0`）
 - final state：`production_promote_request_ready=True`, `production_promote=False`, `runtime_model_mutated=False`
 
+2026-05-12 exp5_12 production promote：
+
+- promotion script：`scripts/games/chess_exp5_promote_candidate.py`
+- promotion summary：`/home/s92137/chess_results/exp5_12_production_promote/summary.json`
+- promoted candidate artifact：`/home/s92137/chess_results/exp5_08_stage_candidate/chess_experiment_5_nnue_stage_candidate.json`
+- candidate sha256：`c47ef752aa69d7b8c813b587468228593f44d69c9b947313325e03797e4450dc`
+- runtime production model：`/home/s92137/hackme_web/runtime/games/models/chess_experiment_5_nnue.json`
+- staged runtime candidate：`/home/s92137/hackme_web/runtime/games/models/candidates/experiment_5_nnue`
+- previous runtime existed：`False`
+- rollback marker：`/home/s92137/chess_results/exp5_12_production_promote/rollback/previous_runtime_absent.json`
+- post-promote validation summary：`/home/s92137/chess_results/exp5_12_post_promote_check/summary.json`
+- post-promote benchmark：`/home/s92137/chess_results/exp5_12_post_promote_check/focused_benchmark_expanded.json`
+- post-promote strength gate：`/home/s92137/chess_results/exp5_12_post_promote_check/strength_gate_expanded.json`
+- post-promote repeatability：`/home/s92137/chess_results/exp5_12_post_promote_check/repeatability_5_seed.json`
+- post-promote result：baseline `103/135 = 0.762963`, runtime candidate `106/135 = 0.785185`, delta `+0.022222`
+- endgame result：baseline `54/66 = 0.818182`, runtime candidate `60/66 = 0.909091`, delta `+0.090909`
+- safety：`illegal_rate=0.0`, `suspicious_rate=0.0`, `clean_regressed_count=0`
+- repeatability：`5/5`, `std_delta=0.0`, `score_delta_per_seed=[0.022222, 0.022222, 0.022222, 0.022222, 0.022222]`
+- final state：`production_promote=True`, `runtime_model_mutated=True`
+
 ## auto-retrain 與 promotion 關係
 
 auto-retrain 入口：

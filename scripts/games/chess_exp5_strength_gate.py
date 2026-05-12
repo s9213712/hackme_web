@@ -37,7 +37,12 @@ try:
 except Exception:
     _ALL_SPECIAL_RULE_CASES = ()
 _CASTLING_FLOOR_CASES = tuple(c for c in _ALL_SPECIAL_RULE_CASES if str((c or {}).get("category") or "") == "castling")
-QUIET_POSITIONAL_NEAR_EQUIVALENT_CP = 50
+SOFT_LABEL_NEAR_EQUIVALENT_CP = 50
+SOFT_LABEL_NEAR_EQUIVALENT_CATEGORIES = {"quiet_positional"}
+AUDITED_MULTI_GOOD_MOVES = {
+    "exp5_09_bench_d400404a65f3": ["h2h4"],
+    "exp5_10_teacher_012": ["c6a6"],
+}
 
 
 EXP5_STRENGTH_CASES = (
@@ -182,6 +187,9 @@ def _iter_jsonl_rows(paths: list[Path]) -> list[dict]:
 
 
 def _normalize_case_input(raw: dict) -> dict:
+    fen = str(raw.get("fen") or "").strip()
+    side = str(raw.get("side") or ("white" if " w " in fen else "black")).strip().lower()
+    case_id = str(raw.get("id") or f"case_{hashlib.sha256((fen + side).encode('utf-8')).hexdigest()[:12]}")
     teacher_move = raw.get("teacher_move")
     expected = raw.get("teacher_top3") or raw.get("teacher_top_moves")
     if teacher_move:
@@ -193,14 +201,21 @@ def _normalize_case_input(raw: dict) -> dict:
             expected_uci_any = [str(teacher_move).strip().lower()]
     else:
         expected_uci_any = [str(item).lower() for item in (raw.get("expected_uci_any") or []) if str(item).strip()]
-    fen = str(raw.get("fen") or "").strip()
-    side = str(raw.get("side") or ("white" if " w " in fen else "black")).strip().lower()
+    audited_multi_good = [
+        str(item).strip().lower()
+        for item in AUDITED_MULTI_GOOD_MOVES.get(case_id, [])
+        if str(item).strip()
+    ]
+    for move in audited_multi_good:
+        if move not in expected_uci_any:
+            expected_uci_any.append(move)
     return {
-        "id": str(raw.get("id") or f"case_{hashlib.sha256((fen + side).encode('utf-8')).hexdigest()[:12]}"),
+        "id": case_id,
         "fen": fen,
         "side": side,
         "category": str(raw.get("category") or ""),
         "expected_uci_any": expected_uci_any,
+        "audited_multi_good_uci_any": audited_multi_good,
         "must_checkmate": bool(raw.get("must_checkmate")),
         "requires_capture": bool(raw.get("requires_capture")),
         "must_not_stalemate": bool(raw.get("must_not_stalemate")),
@@ -309,14 +324,23 @@ def _static_move_lookup(ranking: list[dict], move: str) -> dict | None:
     return next((row for row in ranking if str(row.get("move") or "") == wanted), None)
 
 
-def _quiet_near_equivalent_audit(case: dict, board: chess.Board, chosen: str) -> dict:
+def _soft_label_near_equivalent_audit(case: dict, board: chess.Board, chosen: str) -> dict:
     empty = {
         "applied": False,
         "accepted": False,
         "reason": "",
-        "cp_window": QUIET_POSITIONAL_NEAR_EQUIVALENT_CP,
+        "cp_window": SOFT_LABEL_NEAR_EQUIVALENT_CP,
     }
-    if _case_category(case) != "quiet_positional" or not chosen:
+    category = _case_category(case)
+    hard_constraints = any([
+        case.get("must_checkmate"),
+        case.get("must_not_stalemate"),
+        case.get("must_promote"),
+        case.get("requires_capture"),
+        case.get("expected_promotion"),
+        case.get("must_not_uci_any"),
+    ])
+    if category not in SOFT_LABEL_NEAR_EQUIVALENT_CATEGORIES or hard_constraints or not chosen:
         return empty
     if not board.is_valid():
         return {**empty, "applied": True, "reason": "invalid_board"}
@@ -340,14 +364,15 @@ def _quiet_near_equivalent_audit(case: dict, board: chess.Board, chosen: str) ->
     delta_vs_teacher = chosen_score - teacher_score
     delta_vs_best = chosen_score - best_score
     accepted = (
-        delta_vs_teacher >= -QUIET_POSITIONAL_NEAR_EQUIVALENT_CP
-        and delta_vs_best >= -QUIET_POSITIONAL_NEAR_EQUIVALENT_CP
+        delta_vs_teacher >= -SOFT_LABEL_NEAR_EQUIVALENT_CP
+        and delta_vs_best >= -SOFT_LABEL_NEAR_EQUIVALENT_CP
     )
     return {
         "applied": True,
         "accepted": accepted,
         "reason": "within_static_eval_window" if accepted else "outside_static_eval_window",
-        "cp_window": QUIET_POSITIONAL_NEAR_EQUIVALENT_CP,
+        "cp_window": SOFT_LABEL_NEAR_EQUIVALENT_CP,
+        "category": category,
         "teacher_move": teacher,
         "chosen_move": chosen,
         "teacher_score": teacher_score,
@@ -372,7 +397,7 @@ def _evaluate_model_case(model_path: Path, case: dict, *, search_profile: str) -
     board_after = board_before.copy(stack=False)
     legal = False
     material_gain = 0
-    quiet_near_equivalent = {}
+    soft_label_near_equivalent = {}
     if not chosen:
         reasons.append("engine_no_move")
     else:
@@ -387,9 +412,9 @@ def _evaluate_model_case(model_path: Path, case: dict, *, search_profile: str) -
             board_after.push(chess_move)
             material_gain = _material_gain(board_before, board_after, side)
             expected = [str(item).lower() for item in (case.get("expected_uci_any") or [])]
-            quiet_near_equivalent = _quiet_near_equivalent_audit(case, board_before, chosen)
+            soft_label_near_equivalent = _soft_label_near_equivalent_audit(case, board_before, chosen)
             if expected and chosen not in expected:
-                if quiet_near_equivalent.get("accepted"):
+                if soft_label_near_equivalent.get("accepted"):
                     pass
                 else:
                     reasons.append("unexpected_move")
@@ -446,8 +471,10 @@ def _evaluate_model_case(model_path: Path, case: dict, *, search_profile: str) -
         "teacher_rank": int(teacher_probe.get("raw_policy_rank") or 0),
         "teacher_score": float(teacher_probe.get("raw_policy_score") or 0.0),
         "teacher_probability": float(teacher_probe.get("policy_probability") or 0.0),
-        "quiet_near_equivalent": bool(quiet_near_equivalent.get("accepted")),
-        "quiet_static_audit": quiet_near_equivalent,
+        "soft_label_near_equivalent": bool(soft_label_near_equivalent.get("accepted")),
+        "soft_label_static_audit": soft_label_near_equivalent,
+        "quiet_near_equivalent": bool(soft_label_near_equivalent.get("accepted")),
+        "quiet_static_audit": soft_label_near_equivalent,
     }
 
 

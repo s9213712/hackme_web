@@ -55,6 +55,7 @@ exp5 是後續主要棋力路線之一，方向是：
 - exp5_11a suspicious-rate root-cause audit：`2026-05-12_exp5_11a_suspicious_rate_audit.md`
 - exp5_11b quiet positional regression audit：`2026-05-12_exp5_11b_quiet_regression_audit.md`
 - exp5_11c quiet positional gate-label fix：`2026-05-12_exp5_11c_quiet_gate_fix.md`
+- exp5_12 production promote：`2026-05-12_exp5_12_production_promote.md`
 
 ## 歷程總表
 
@@ -75,6 +76,7 @@ exp5 是後續主要棋力路線之一，方向是：
 | exp5_11a | 2026-05-12 | suspicious-rate audit；pre-fix 2/2 suspicious rows were invalid rook-mate fixtures；after fixture fix + exp5_10 rerun，suspicious_row_count=0 | **shadow_candidate=True; production still held by quiet regression** |
 | exp5_11b | 2026-05-12 | quiet regression audit；唯一 clean regression 是 `k_and_p_symmetric` multi-good scoring issue，candidate 只比 teacher 低 16cp、比 baseline 低 4cp | **shadow_candidate=True; production held pending gate/label fix + exp5_10 rerun** |
 | exp5_11c | 2026-05-12 | quiet positional near-equivalence gate；ordinal rank 7 / dense rank 3 tie-break clarified；exp5_10 rerun overall Δ +0.014815，quiet regression cleared | **production_promote_request_ready=True; runtime unchanged** |
+| exp5_12 | 2026-05-12 | promoted exact staged candidate sha `c47ef752...` to runtime；post-promote 135-case validation Δ +0.022222，endgame +0.090909，5/5 repeatability，0 clean regressions | **production_promote=True; runtime_model_mutated=True** |
 
 ## Difficulty
 
@@ -85,6 +87,7 @@ exp5 是後續主要棋力路線之一，方向是：
 - runtime model：`$HACKME_RUNTIME_DIR/games/models/chess_experiment_5_nnue.json`
 - env override：`HTML_LEARNING_CHESS_ENGINE_NNUE_MODEL_PATH`
 - bundled seed：`services/games/models/chess_experiment_5_nnue.json`
+- current promoted runtime sha256：`c47ef752aa69d7b8c813b587468228593f44d69c9b947313325e03797e4450dc`
 
 模型生命週期：
 
