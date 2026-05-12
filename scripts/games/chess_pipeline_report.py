@@ -37,13 +37,28 @@ STAGE_PVP_EXPORT = "pvp_export"
 STAGE_SPARRING_RUN = "sparring_run"
 STAGE_SEED_TRAIN_DRY_RUN = "seed_train_dry_run"
 STAGE_SPARRING_TO_REPLAY = "sparring_to_replay"
+STAGE_PGN_TO_REPLAY = "pgn_to_replay"
 STAGE_UNKNOWN = "unknown"
+
+_KNOWN_STAGES = {
+    STAGE_PVP_EXPORT,
+    STAGE_SPARRING_RUN,
+    STAGE_SEED_TRAIN_DRY_RUN,
+    STAGE_SPARRING_TO_REPLAY,
+    STAGE_PGN_TO_REPLAY,
+}
 
 
 def detect_stage(payload: dict) -> str:
     """Return a stage identifier for a raw summary/payload dict."""
     if not isinstance(payload, dict):
         return STAGE_UNKNOWN
+    # Self-stamped 'stage' field wins over structural fingerprinting
+    # (W7+ convention; older stages don't set this so the fingerprint
+    # path below is still authoritative for them).
+    explicit = payload.get("stage")
+    if isinstance(explicit, str) and explicit in _KNOWN_STAGES:
+        return explicit
     # seed_train dry-run payload
     if "external_replay" in payload and "dry_run" in payload:
         return STAGE_SEED_TRAIN_DRY_RUN
@@ -195,6 +210,21 @@ def normalize_stage(payload: dict, *, source_path: str = "") -> dict:
             "samples_emitted": counts.get("samples_emitted", 0),
             "reject_reasons": dict(counts.get("reject_reasons") or {}),
             "run_dir": payload.get("run_dir", ""),
+        }
+        return base
+
+    if stage == STAGE_PGN_TO_REPLAY:
+        counts = dict(payload.get("counts") or {})
+        policy = dict(payload.get("policy") or {})
+        base["diagnostic_only"] = bool(policy.get("diagnostic_only", True))
+        base["key_metrics"] = {
+            "pgn_paths_processed": counts.get("pgn_paths_processed", 0),
+            "prepared_jsonls_attached": counts.get("prepared_jsonls_attached", 0),
+            "games_imported": counts.get("games_imported", 0),
+            "per_ply_samples_emitted": counts.get("per_ply_samples_emitted", 0),
+            "output_jsonls": list(payload.get("output_jsonls") or []),
+            "input_pgn_paths": list(payload.get("input_pgn_paths") or []),
+            "raw_internet_download": bool(policy.get("raw_internet_download")),
         }
         return base
 

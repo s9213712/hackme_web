@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from scripts.games.chess_pipeline_report import (
+    STAGE_PGN_TO_REPLAY,
     STAGE_PVP_EXPORT,
     STAGE_SEED_TRAIN_DRY_RUN,
     STAGE_SPARRING_RUN,
@@ -61,6 +62,47 @@ def test_detect_seed_train_dry_run_by_external_replay_and_dry_run():
 def test_detect_sparring_to_replay_by_games_accepted_and_samples_emitted():
     payload = {"counts": {"games_accepted": 1, "samples_emitted": 1, "games_total": 12}}
     assert detect_stage(payload) == STAGE_SPARRING_TO_REPLAY
+
+
+def test_detect_pgn_to_replay_by_self_stamped_stage_field():
+    payload = {"stage": "pgn_to_replay", "counts": {"per_ply_samples_emitted": 16}}
+    assert detect_stage(payload) == STAGE_PGN_TO_REPLAY
+
+
+def test_detect_ignores_unrecognised_stage_field_and_falls_through():
+    payload = {"stage": "totally_made_up", "counts": {"matches_accepted_pvp_filtered": 1}}
+    assert detect_stage(payload) == STAGE_PVP_EXPORT
+
+
+def test_normalize_pgn_to_replay_extracts_metrics():
+    payload = {
+        "stage": "pgn_to_replay",
+        "timestamp": "2026-05-12T12:00:00+00:00",
+        "output_dir": "/x",
+        "input_pgn_paths": ["/x/games.pgn"],
+        "output_jsonls": ["/x/per_ply.jsonl"],
+        "counts": {
+            "pgn_paths_processed": 1,
+            "prepared_jsonls_attached": 0,
+            "games_imported": 2,
+            "per_ply_samples_emitted": 16,
+        },
+        "policy": {
+            "diagnostic_only": True,
+            "production_runtime_mutation": False,
+            "raw_internet_download": False,
+        },
+    }
+    out = normalize_stage(payload)
+    assert out["stage"] == STAGE_PGN_TO_REPLAY
+    assert out["diagnostic_only"] is True
+    assert out["model_mutation_in_this_stage"] is False
+    m = out["key_metrics"]
+    assert m["pgn_paths_processed"] == 1
+    assert m["games_imported"] == 2
+    assert m["per_ply_samples_emitted"] == 16
+    assert m["raw_internet_download"] is False
+    assert m["output_jsonls"] == ["/x/per_ply.jsonl"]
 
 
 def test_detect_unknown_for_empty_payload():

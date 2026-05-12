@@ -20,9 +20,11 @@ from pathlib import Path
 
 from scripts.games.chess_pipeline_dryrun import (
     SEED_TRAIN,
+    _expand_game_level_to_per_ply,
     _latest_subdir,
     build_suggested_staging_command,
     run_aggregate_stage,
+    run_pgn_input_stage,
     run_pvp_export_stage,
     run_seed_train_dryrun_stage,
     run_sparring_stage,
@@ -147,6 +149,157 @@ def test_aggregate_skips_with_no_summaries(tmp_path):
     )
     assert result["status"] == "skipped"
     assert "no summaries collected" in result["reason"]
+
+
+# ---- W7: PGN input stage ----------------------------------------------
+
+
+def _write_game_level_jsonl(path: Path, games: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(json.dumps(g) for g in games) + "\n", encoding="utf-8"
+    )
+
+
+def _history_entry(uci: str, *, side: str) -> dict:
+    promo = uci[4] if len(uci) == 5 else None
+    return {
+        "by": side,
+        "from": uci[:2],
+        "to": uci[2:4],
+        "piece": "P",
+        "captured": None,
+        "promotion": promo,
+        "at": "2026-05-12T00:00:00Z",
+    }
+
+
+def _build_white_winning_game() -> dict:
+    """A short Ruy Lopez-ish stub ending in white win."""
+    seq = ["e2e4", "e7e5", "g1f3", "b8c6", "f1b5", "a7a6", "b5a4", "g8f6"]
+    history = []
+    for i, uci in enumerate(seq):
+        history.append(_history_entry(uci, side="white" if i % 2 == 0 else "black"))
+    return {
+        "match_id": 1,
+        "replay_id": "pgn_test_white_win",
+        "winner_color": "white",
+        "move_history": history,
+        "move_count": len(history),
+        "source": "imported_dataset",
+    }
+
+
+def test_expand_game_level_emits_winner_side_only(tmp_path):
+    game = _build_white_winning_game()
+    src = tmp_path / "game_level.jsonl"
+    _write_game_level_jsonl(src, [game])
+    out = tmp_path / "per_ply.jsonl"
+    games, samples = _expand_game_level_to_per_ply(src, out)
+    assert games == 1
+    assert samples == 4  # 8 plies, 4 white moves
+    rows = [
+        json.loads(line)
+        for line in out.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert all(r["side"] == "white" for r in rows)
+    assert all(r["target"] == 1.0 for r in rows)
+    assert all(r["trusted_source"] == "imported_dataset" for r in rows)
+    assert all(r["label_quality"] == "clean" for r in rows)
+    assert all(r["source_id"].startswith("pgn:pgn_test_white_win:ply:") for r in rows)
+
+
+def test_expand_game_level_skips_draws_and_invalid(tmp_path):
+    drawn = {
+        "match_id": 2,
+        "replay_id": "drawn",
+        "winner_color": None,
+        "move_history": [_history_entry("e2e4", side="white")],
+        "move_count": 1,
+    }
+    missing_history = {
+        "match_id": 3,
+        "replay_id": "no_hist",
+        "winner_color": "white",
+        "move_history": "not-a-list",
+    }
+    src = tmp_path / "game_level.jsonl"
+    _write_game_level_jsonl(src, [drawn, missing_history])
+    out = tmp_path / "per_ply.jsonl"
+    games, samples = _expand_game_level_to_per_ply(src, out)
+    assert games == 2
+    assert samples == 0
+    assert out.read_text(encoding="utf-8") == ""
+
+
+def test_expand_game_level_breaks_on_illegal_move(tmp_path):
+    bad = {
+        "match_id": 4,
+        "replay_id": "bad",
+        "winner_color": "white",
+        "move_history": [
+            _history_entry("e2e4", side="white"),
+            _history_entry("e7e5", side="black"),
+            # Illegal: knight from e2 cannot go to e9.
+            {"by": "white", "from": "e2", "to": "e9", "piece": "N"},
+        ],
+        "move_count": 3,
+    }
+    src = tmp_path / "game_level.jsonl"
+    _write_game_level_jsonl(src, [bad])
+    out = tmp_path / "per_ply.jsonl"
+    games, samples = _expand_game_level_to_per_ply(src, out)
+    assert games == 1
+    # Only the first (legal white) move should have been emitted before break.
+    assert samples == 1
+
+
+def test_pgn_input_stage_skipped_with_no_inputs(tmp_path):
+    result = run_pgn_input_stage(
+        pgn_paths=[],
+        prepared_jsonls=[],
+        output_root=tmp_path / "00_pgn_input",
+        log_dir=tmp_path / "logs",
+    )
+    assert result["status"] == "skipped"
+    assert "no --pgn-path" in result["reason"]
+
+
+def test_pgn_input_stage_pass_through_prepared_jsonl(tmp_path):
+    prepared = tmp_path / "pre.jsonl"
+    prepared.write_text(
+        json.dumps({"fen": "x", "move_uci": "e2e4", "side": "white"}) + "\n",
+        encoding="utf-8",
+    )
+    result = run_pgn_input_stage(
+        pgn_paths=[],
+        prepared_jsonls=[str(prepared)],
+        output_root=tmp_path / "00_pgn_input",
+        log_dir=tmp_path / "logs",
+    )
+    assert result["status"] == "ok"
+    assert str(prepared) in result["output_jsonls"]
+    summary = json.loads(
+        (Path(result["summary_path"])).read_text(encoding="utf-8")
+    )
+    assert summary["stage"] == "pgn_to_replay"
+    assert summary["counts"]["prepared_jsonls_attached"] == 1
+    assert summary["counts"]["pgn_paths_processed"] == 0
+    assert summary["policy"]["raw_internet_download"] is False
+
+
+def test_pgn_input_stage_ignores_missing_prepared(tmp_path):
+    result = run_pgn_input_stage(
+        pgn_paths=[],
+        prepared_jsonls=[str(tmp_path / "does_not_exist.jsonl")],
+        output_root=tmp_path / "00_pgn_input",
+        log_dir=tmp_path / "logs",
+    )
+    assert result["status"] == "ok"
+    assert result["output_jsonls"] == []
+    summary = json.loads(Path(result["summary_path"]).read_text(encoding="utf-8"))
+    assert summary["counts"]["prepared_jsonls_attached"] == 0
 
 
 # ---- subprocess smoke -------------------------------------------------

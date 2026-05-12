@@ -47,6 +47,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from services.games.chess import history_move_to_uci  # noqa: E402
+from services.games.external_replay_safety import serialize_json_payload  # noqa: E402
+import chess  # noqa: E402
+
+PGN_CONVERTER = REPO_ROOT / "scripts" / "games" / "chess_pgn_to_replay.py"
 PVP_CONVERTER = REPO_ROOT / "scripts" / "games" / "chess_pvp_history_to_replay.py"
 SPARRING_RUNNER = REPO_ROOT / "scripts" / "games" / "chess_exp4_vs_exp5_sparring.py"
 SPARRING_HARVESTER = REPO_ROOT / "scripts" / "games" / "chess_sparring_to_replay.py"
@@ -54,8 +59,18 @@ SEED_TRAIN = REPO_ROOT / "scripts" / "games" / "chess_seed_train.py"
 AGGREGATOR = REPO_ROOT / "scripts" / "games" / "chess_pipeline_report.py"
 
 
+# Default scoring for PGN-derived samples. weight=0.5 sits between
+# pvp_filtered (0.15) and unclamped trust (1.0); the W4 seed_train cap for
+# trusted_source='imported_dataset' is 200 samples per warm-up run.
+_PGN_DEFAULT_WEIGHT = 0.5
+
+
 def _now_dirname() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ")
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def _latest_subdir(root: Path, prefix: str) -> Path | None:
@@ -86,6 +101,187 @@ def _run_subprocess(cmd: list[str], *, label: str, log_file: Path) -> int:
 
 
 # ---- stage runners (each returns dict with status + artefacts) --------
+
+
+def _expand_game_level_to_per_ply(
+    game_level_jsonl: Path,
+    output_jsonl: Path,
+    *,
+    weight: float = _PGN_DEFAULT_WEIGHT,
+) -> tuple[int, int]:
+    """Expand chess_pgn_to_replay's game-level JSONL → canonical per-ply replay.
+
+    For each decisive game (winner_color ∈ {white, black}), replay the
+    move_history via python-chess and emit ONE replay sample per winner-side
+    ply. Loser-side moves and draws are skipped to mirror
+    [[feedback-pvp-replay-discipline]] (winner-side only when no teacher
+    audit is wired in yet). Each emitted sample carries
+    ``trusted_source='imported_dataset'`` (already in the W4 whitelist) and
+    ``label_quality='clean'`` so chess_seed_train's normalize_validation
+    accepts the row and the operator can tell at a glance where it came from.
+
+    Returns (games_processed, samples_emitted).
+    """
+    games_processed = 0
+    samples_emitted = 0
+    output_jsonl.parent.mkdir(parents=True, exist_ok=True)
+    with output_jsonl.open("w", encoding="utf-8") as out_fh:
+        for raw in game_level_jsonl.read_text(encoding="utf-8").splitlines():
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                rec = json.loads(raw)
+            except Exception:
+                continue
+            games_processed += 1
+            winner_color = str(rec.get("winner_color") or "")
+            if winner_color not in {"white", "black"}:
+                continue
+            move_history = rec.get("move_history") or []
+            if not isinstance(move_history, list) or not move_history:
+                continue
+            board = chess.Board()
+            replay_id = str(rec.get("replay_id") or "")
+            for ply_index, entry in enumerate(move_history):
+                if not isinstance(entry, dict):
+                    break
+                try:
+                    uci = history_move_to_uci(entry)
+                    move = chess.Move.from_uci(uci)
+                except Exception:
+                    break
+                if move not in board.legal_moves:
+                    break
+                side = "white" if board.turn == chess.WHITE else "black"
+                fen_before = board.fen()
+                if side == winner_color:
+                    sample = {
+                        "fen": fen_before,
+                        "move_uci": uci,
+                        "side": side,
+                        "target": 1.0,
+                        "weight": float(weight),
+                        "source": "imported_dataset",
+                        "trusted_source": "imported_dataset",
+                        "label_quality": "clean",
+                        "training_eligible": True,
+                        "source_id": f"pgn:{replay_id or 'unknown'}:ply:{ply_index}",
+                        "result_backed": True,
+                        "teacher_audit_status": "not_run",
+                        "winner_color": winner_color,
+                    }
+                    out_fh.write(json.dumps(sample, sort_keys=True) + "\n")
+                    samples_emitted += 1
+                board.push(move)
+    return games_processed, samples_emitted
+
+
+def run_pgn_input_stage(
+    *,
+    pgn_paths: list[str],
+    prepared_jsonls: list[str],
+    output_root: Path,
+    log_dir: Path,
+    weight: float = _PGN_DEFAULT_WEIGHT,
+) -> dict:
+    """Stage 00: convert PGN sources to canonical per-ply replay JSONL.
+
+    Two parallel input lanes:
+      * ``--pgn-path``: raw PGN(s) → chess_pgn_to_replay → game-level JSONL
+        → expand to per-ply via :func:`_expand_game_level_to_per_ply`.
+      * ``--prepared-replay-jsonl``: already-canonical per-ply JSONL, passed
+        straight through to stage 4 (no re-validation here; the seed_train
+        normalize_validation step is the bouncer).
+
+    Synthesises ``summary.json`` with ``stage='pgn_to_replay'`` so the
+    aggregator picks it up via the self-stamped stage field (additive to the
+    fingerprint-based detection used for the older stages).
+
+    No network access in W7 v1 — ``raw_internet_download=False`` is asserted
+    in the policy block.
+    """
+    if not pgn_paths and not prepared_jsonls:
+        return {
+            "stage": "pgn_to_replay",
+            "status": "skipped",
+            "reason": "no --pgn-path / --prepared-replay-jsonl",
+        }
+    output_root.mkdir(parents=True, exist_ok=True)
+    output_jsonls: list[str] = []
+    games_imported = 0
+    samples_emitted = 0
+
+    for i, pgn_path in enumerate(pgn_paths):
+        sub_dir = output_root / f"pgn_{i:02d}"
+        sub_dir.mkdir(parents=True, exist_ok=True)
+        game_level = sub_dir / "pgn_game_level.jsonl"
+        cmd = [
+            sys.executable,
+            str(PGN_CONVERTER),
+            "--input-pgn",
+            pgn_path,
+            "--output-jsonl",
+            str(game_level),
+            "--replace-output",
+            "--allow-empty-output",
+        ]
+        log = log_dir / f"00_pgn_to_replay_{i:02d}.log"
+        rc = _run_subprocess(cmd, label=f"pgn_to_replay_{i:02d}", log_file=log)
+        if rc != 0:
+            return {
+                "stage": "pgn_to_replay",
+                "status": "failed",
+                "exit_code": rc,
+                "log": str(log),
+            }
+        if not game_level.exists():
+            continue
+        per_ply = sub_dir / "pgn_per_ply_replay.jsonl"
+        g_count, s_count = _expand_game_level_to_per_ply(
+            game_level, per_ply, weight=weight
+        )
+        games_imported += g_count
+        samples_emitted += s_count
+        if s_count > 0:
+            output_jsonls.append(str(per_ply))
+
+    prepared_attached: list[str] = []
+    for p in prepared_jsonls:
+        path = Path(p).expanduser()
+        if path.exists():
+            output_jsonls.append(str(path))
+            prepared_attached.append(str(path))
+
+    summary = {
+        "stage": "pgn_to_replay",
+        "timestamp": _now_iso(),
+        "output_dir": str(output_root),
+        "input_pgn_paths": list(pgn_paths),
+        "prepared_replay_jsonls": prepared_attached,
+        "output_jsonls": output_jsonls,
+        "counts": {
+            "pgn_paths_processed": len(pgn_paths),
+            "prepared_jsonls_attached": len(prepared_attached),
+            "games_imported": games_imported,
+            "per_ply_samples_emitted": samples_emitted,
+        },
+        "policy": {
+            "diagnostic_only": True,
+            "production_runtime_mutation": False,
+            "raw_internet_download": False,
+        },
+    }
+    summary_path = output_root / "summary.json"
+    summary_path.write_text(serialize_json_payload(summary), encoding="utf-8")
+    return {
+        "stage": "pgn_to_replay",
+        "status": "ok",
+        "summary_path": str(summary_path),
+        "output_jsonls": output_jsonls,
+        "games_imported": games_imported,
+        "samples_emitted": samples_emitted,
+    }
 
 
 def run_pvp_export_stage(
@@ -369,6 +565,15 @@ def run_pipeline(args: argparse.Namespace) -> dict:
 
     stages: list[dict] = []
 
+    # Stage 00: PGN / prepared replay input (W7)
+    pgn_input = run_pgn_input_stage(
+        pgn_paths=list(args.pgn_path or []),
+        prepared_jsonls=list(args.prepared_replay_jsonl or []),
+        output_root=run_root / "00_pgn_input",
+        log_dir=log_dir,
+    )
+    stages.append(pgn_input)
+
     # Stage 1: PvP export
     pvp = run_pvp_export_stage(
         runtime_dir=args.runtime_dir or "",
@@ -398,10 +603,11 @@ def run_pipeline(args: argparse.Namespace) -> dict:
     stages.append(sparring_to_replay)
 
     # Stage 4: seed_train dry-run with whatever replay JSONLs we have
-    include_jsonls = [
-        pvp.get("training_eligible_jsonl") or "",
-        sparring_to_replay.get("training_eligible_jsonl") or "",
-    ]
+    include_jsonls = (
+        list(pgn_input.get("output_jsonls") or [])
+        + [pvp.get("training_eligible_jsonl") or ""]
+        + [sparring_to_replay.get("training_eligible_jsonl") or ""]
+    )
     dry_run = run_seed_train_dryrun_stage(
         include_jsonls=include_jsonls,
         report_dir=run_root / "04_seed_train_dryrun" / "reports",
@@ -444,6 +650,27 @@ def parse_args() -> argparse.Namespace:
         "--output-root",
         default=str(Path.home() / "chess_results"),
         help="Parent dir for the timestamped pipeline_run_<ts>/ run root.",
+    )
+    p.add_argument(
+        "--pgn-path",
+        action="append",
+        default=[],
+        help=(
+            "Local PGN file. Repeatable. The orchestrator runs "
+            "chess_pgn_to_replay on each path, then expands the game-level "
+            "JSONL to canonical per-ply replay samples "
+            "(winner-side only, trusted_source='imported_dataset')."
+        ),
+    )
+    p.add_argument(
+        "--prepared-replay-jsonl",
+        action="append",
+        default=[],
+        help=(
+            "Pre-prepared canonical per-ply replay JSONL. Repeatable. "
+            "Passed straight through to stage 4 (seed_train --dry-run) "
+            "without re-conversion."
+        ),
     )
     p.add_argument(
         "--runtime-dir",
