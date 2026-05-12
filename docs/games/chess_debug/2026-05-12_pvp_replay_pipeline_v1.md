@@ -19,14 +19,20 @@ exp4 / exp5 warm-up **offline**:
   strictly a human-invoked offline job.
 - ❌ **No cron / startup auto-train**: warm-up only runs when you call
   `chess_seed_train.py` yourself.
-- ❌ **No production runtime mutation outside the manual warm-up call**: the
-  converter writes only under `~/chess_results/pvp_replay_<ts>/`. The warm-up
-  call writes to model paths you pass via `--experiment-4-model-path` /
-  `--experiment-5-model-path` (or bundled paths if you omit them — same as
-  before this PR).
+- ❌ **No production runtime mutation outside an explicit non-dry-run
+  warm-up call**: the converter writes only under
+  `~/chess_results/pvp_replay_<ts>/`. `chess_seed_train.py --dry-run`
+  skips every state-mutating call (run_training_session, smoke,
+  benchmark, write_training_report, external-replay trainer). Only a
+  non-dry-run warm-up touches model files at the paths you pass via
+  `--experiment-4-model-path` / `--experiment-5-model-path`.
 - ❌ **No raw-PvP-as-positive-training-data**: every accepted sample passes
   through the filter and is tagged `label_quality` ∈ {clean, review} with
   weight ≤ 0.20.
+- ❌ **No human-beat-easy-engine harvest**: `--hve-difficulties` defaults to
+  the target-engine whitelist (`experiment 4:pv` + `experiment 5:nnue`).
+  Wins against the older / non-target engines are rejected with reason
+  `non_target_engine:<difficulty>`.
 - ❌ **No teacher-audit gate**: v1 trusts winner-side moves at face value once
   the match passes filter. v2 will add `teacher_audit_status` enforcement.
 - ❌ **No hard-negative mining**: loser-side moves are dropped (not collected
@@ -87,7 +93,14 @@ The converter recognises two filter outcomes:
 | source | `human_vs_engine` |
 | label_quality | `clean` (higher than pvp_filtered) |
 | weight default | 0.20 (cap 0.25) |
-| Gate | mode='computer', `winner_user_id == white_user_id` (human won), human in quality set |
+| Gate | mode='computer', `winner_user_id == white_user_id` (human won), human in quality set, `computer_difficulty` in `--hve-difficulties` (default `experiment 4:pv,experiment 5:nnue`) |
+
+The `--hve-difficulties` whitelist defaults to **just the target engines** so
+wins against `easy`/`normal`/`hard`/`experiment`/`experiment 2:nn`/`experiment
+3:dl` are rejected with reason `non_target_engine:<difficulty>`. Pass an
+empty string to disable the filter (collect any computer win). See
+[[feedback-pvp-replay-discipline]] for why we don't feed back wins against
+non-target engines by default.
 
 Both paths collect only **winner-side moves** as `target=1.0` (loser side is
 discarded). Both require:
@@ -138,7 +151,17 @@ W4:
 - `--include-replay-jsonl` reads JSONL, rejects rows lacking required fields
   or with non-whitelisted trusted_source.
 - Per-source + total caps enforced; deterministic via seed.
-- `--dry-run` reports what would be trained without touching models.
+- `--dry-run` skips **everything that mutates state**: `run_training_session`,
+  smoke, benchmark, `write_training_report`, and the external-replay
+  trainer. It still loads + caps + normalize-validates the
+  `--include-replay-jsonl` rows so schema bugs surface before the first
+  real run.
+- `external_replay.normalize_validation` (always populated when external
+  replay is enabled, even on dry-run) exposes `exp4_ok / exp4_failed /
+  exp5_ok / exp5_failed` plus up to 5 failing source_ids per engine.
+- `--skip-exp5` mirrors `--skip-exp4` for the external-replay trainer
+  (gate exp5 NNUE independently from exp4 PV — exp5 is closer to
+  production / stage-candidate state).
 - Final payload includes `external_replay` block with full breakdown.
 
 ## What v2 should add
@@ -154,20 +177,37 @@ W4:
 ## Quick recipes
 
 ```bash
-# Offline export PvP + human-vs-engine replay (interactive review then run)
+# 1) Offline export PvP + human-beat-engine replay (target engines only by default).
 HACKME_RUNTIME_DIR=/path/to/runtime python3 scripts/games/chess_pvp_history_to_replay.py \
   --since 2026-04-01 \
   --output-root ~/chess_results \
   --min-plies 20 \
   --quality-top-pct 30 \
-  --quality-weeks 4
+  --quality-weeks 4 \
+  --hve-difficulties "experiment 4:pv,experiment 5:nnue"
 
-# Warm-up with PvP + PGN external replay (dry-run first to inspect)
+# Inspect SUMMARY.md; check matches_accepted_pvp_filtered /
+# matches_accepted_human_beat_engine / reject_reasons distribution.
+
+# 2) Dry-run warm-up: validates schema, caps, and normalize WITHOUT calling
+#    run_training_session OR the external-replay trainer. Safe to run any time.
 python3 scripts/games/chess_seed_train.py \
   --preset warmup10 \
   --include-replay-jsonl ~/chess_results/pvp_replay_20260512_010101/pvp_replay_training_eligible.jsonl \
   --include-replay-jsonl ~/chess_results/imported_pgn_prepared.jsonl \
   --dry-run
 
-# When dry-run report looks healthy, drop --dry-run to actually train.
+# Inspect the output JSON:
+#   external_replay.load_stats               (whitelist hits, rejected rows)
+#   external_replay.cap_stats                (per-source + total cap)
+#   external_replay.normalize_validation     (exp4_ok/exp4_failed/exp5_ok/exp5_failed)
+#   external_replay.train_result.skipped_reason == 'dry_run'
+
+# 3) Real warm-up. Drop --dry-run only after the dry-run report looks healthy.
+#    Optionally gate exp5 with --skip-exp5 while exp5 is near stage_candidate.
+python3 scripts/games/chess_seed_train.py \
+  --preset warmup10 \
+  --include-replay-jsonl ~/chess_results/pvp_replay_20260512_010101/pvp_replay_training_eligible.jsonl \
+  --include-replay-jsonl ~/chess_results/imported_pgn_prepared.jsonl \
+  --skip-exp5
 ```
