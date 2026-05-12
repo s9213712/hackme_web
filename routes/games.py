@@ -27,6 +27,10 @@ from services.games.chess_pv import (
     EXPERIMENT_PV_DIFFICULTY,
     choose_experiment_pv_move,
 )
+from services.games.chess_pv_guarded_overlay import (
+    choose_experiment_pv_guarded_overlay_move,
+    guarded_overlay_enabled,
+)
 from services.games.chess_nnue import (
     EXPERIMENT_NNUE_DIFFICULTY,
     choose_experiment_nnue_move,
@@ -171,7 +175,10 @@ def choose_computer_move(board, side, difficulty="normal", learning_store=None):
         if move:
             return move
     if difficulty == EXPERIMENT_PV_DIFFICULTY:
-        move = choose_experiment_pv_move(board, side, search_profile="fast", decision_mode="mcts")
+        if guarded_overlay_enabled():
+            move = choose_experiment_pv_guarded_overlay_move(board, side, search_profile="fast", decision_mode="mcts")
+        else:
+            move = choose_experiment_pv_move(board, side, search_profile="fast", decision_mode="mcts")
         if move:
             return move
     if difficulty == EXPERIMENT_NNUE_DIFFICULTY:

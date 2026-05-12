@@ -254,6 +254,17 @@ exp4_20 runtime guarded overlay simulator（2026-05-12）：
 - `mistake_retention_game_900002_ply_1`：採用 final `d7d5`；`promotion_white`：擋住 final `e7e8n`，回退 baseline `e7e8q`。
 - 判讀：exp4_20 已證明 runtime guard 規則本身有效，但尚未接到 production choose path；promotion 仍 false。
 
+exp4_21 runtime guarded overlay integration draft（2026-05-12）：
+
+- 詳細報告：[`exp4/2026-05-12_exp4_21_runtime_guarded_overlay_integration.md`](exp4/2026-05-12_exp4_21_runtime_guarded_overlay_integration.md)。
+- 新增 `services/games/chess_pv_guarded_overlay.py`，讓 validation simulator 與 runtime path 共用同一個 no-label guard。
+- 前台 exp4 path 已可透過 `HTML_LEARNING_CHESS_EXP4_GUARDED_OVERLAY=1` 啟用 guarded overlay；預設關閉，不改 production 行為。
+- guard input 已 sanitized，只吃 `fen / side / baseline_move_uci / final_move_uci / score_cp / final_illegal`，不吃 expected label / top1_correct / pass-fail。
+- result dir：`/home/s92137/chess_results/exp4_21_runtime_guarded_overlay_integration`
+- quick targeted gate：baseline `0.8693`，full final replacement `0.8693`，runtime guarded `0.9231`，delta `+0.0538`，`unsafe_override_after_scoring=0`，special-rule `7/7`。
+- 關鍵 case：`mistake_retention_game_900002_ply_1` 採用 final `d7d5`；`promotion_white` fallback baseline `e7e8q`。
+- 判讀：這是 runtime integration draft，不是 promotion；quick targeted gate 已驗證 shared guard 行為，但 heavy sanity skipped、production flag 預設關閉，仍需 full broad diagnostic。
+
 exp4_14 balanced curriculum + retention rehearsal + budget + rollback guard（2026-05-12）：
 
 - special-rule weights 大幅下調（castling/e.p. 3→1.5、knight_mate/underpromote 4→2、queen 1→0.75）；新增 3 個 short-castle FEN 變體。

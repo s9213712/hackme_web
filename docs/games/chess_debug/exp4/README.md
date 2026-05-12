@@ -109,6 +109,7 @@ move = choose_experiment_pv_move(
 - `/home/s92137/chess_results/exp4_18_e_pawn_gate_accounting_fix`（exp4_18 e_pawn opening-book equivalence gate accounting fix）
 - `/home/s92137/chess_results/exp4_19_guarded_overlay_attribution`（exp4_19 baseline-default guarded overlay attribution）
 - `/home/s92137/chess_results/exp4_20_runtime_guarded_overlay`（exp4_20 no-label runtime guarded overlay simulator）
+- exp4_21 runtime guarded overlay integration draft（預設關閉，尚未 promotion）
 
 其中 `exp4_04_probe_policy_fixed` 是目前用來驗證「probe policy 修正後」的正式 quick gate artifact。
 
@@ -189,6 +190,38 @@ exp4_19 還是 label-based attribution。exp4_20 把同一思路改成 no-label 
 - `promotion_white`：runtime guard 擋住 final `e7e8n`，回退 baseline `e7e8q`。
 - guarded simulator 不偷看 label 也重現 exp4_19 的 `0.9231` 上界。
 - 仍不能 promotion：production choose path 尚未接入、heavy sanity skipped、broad generalization 未證明。
+
+## exp4_21 runtime guarded overlay integration draft（2026-05-12）
+
+詳細報告：[`2026-05-12_exp4_21_runtime_guarded_overlay_integration.md`](2026-05-12_exp4_21_runtime_guarded_overlay_integration.md)
+
+exp4_21 把 exp4_20 的 no-label guard 抽成共用 runtime helper，並接到前台 exp4 choose path，但預設關閉：
+
+```bash
+HTML_LEARNING_CHESS_EXP4_GUARDED_OVERLAY=1
+HTML_LEARNING_CHESS_EXP4_OVERLAY_CANDIDATE_MODEL_PATH=/path/to/exp4_candidate.json
+```
+
+重點：
+
+- `services/games/chess_pv_guarded_overlay.py` 是 runtime 與 validation 共用 guard。
+- guard input 已 sanitized，不吃完整 deterministic row，不可接觸 expected label / top1_correct / pass-fail outcome。
+- `routes/games.py` 只有在 env flag 開啟時才走 `choose_experiment_pv_guarded_overlay_move(...)`。
+- production 預設仍是原本 exp4 runtime model，不改行為。
+- quick targeted gate 已跑：
+  - result dir：`/home/s92137/chess_results/exp4_21_runtime_guarded_overlay_integration`
+  - runtime guarded score：`0.9231`，delta vs baseline `+0.0538`
+  - full replacement score：`0.8693`，等於 baseline
+  - `runtime_guard_allowed=2`
+  - `runtime_guard_fallback=1`
+  - `positive_override_after_scoring=1`
+  - `prevented_regression_after_scoring=1`
+  - `unsafe_override_after_scoring=0`
+  - `special_rule=7/7`
+- 關鍵 case：
+  - `mistake_retention_game_900002_ply_1`：baseline `e7e5`，candidate `d7d5`，guard 採用 final。
+  - `promotion_white`：baseline `e7e8q`，candidate `e7e8n`，guard fallback baseline。
+- 仍不能 promotion；原因是 heavy sanity skipped、production flag 預設關閉、broad unseen generalization 尚未用 full diagnostic 證明。
 
 ## exp4_07 evidence accounting cleanup（2026-05-11）
 
@@ -304,6 +337,7 @@ aggregate 新增 `multi_good_revoked_by_search_guard_count`。
 | exp4_18 | full broad learning diagnostic + e_pawn gate accounting fix | **0.8693 (=baseline)** ⚠ | **7/7** ✅ | full heavy sanity 確認 broad generalization 仍未過；`d7d5` 等 opening-book 等價回應修正 e_pawn 假 blocker |
 | exp4_19 | guarded overlay attribution | **overlay 0.9231 (+0.0538)** ✅ | **7/7** ✅ | full replacement 仍等於 baseline，但 baseline-default guarded overlay 上界可提升；目前是 label-based diagnostic，下一步要實作 runtime guard |
 | exp4_20 | no-label runtime guarded overlay simulator | **runtime overlay 0.9231 (+0.0538)** ✅ | **7/7** ✅ | 不讀 expected label 也能採用 `d7d5` 並擋住 `e7e8n` promotion regression；production choose path 尚未接入 |
+| exp4_21 | runtime guarded overlay integration draft | **runtime overlay 0.9231 (+0.0538)** ✅ | **7/7** ✅ | 共用 no-label guard 已接入前台 exp4 choose path；env flag 預設關閉；quick targeted gate 重現 exp4_20 分數，unsafe override=0；heavy sanity skipped，promotion false |
 
 ## exp4_17 special-rule subtype + gate accounting cleanup（2026-05-12）
 
@@ -748,6 +782,7 @@ exp4_08 顯示 e_pawn 真失敗只剩 1 個 case (`gate_e_pawn_hard_001` × cp10
 
 - [2026-05-12 Exp4_19 guarded overlay attribution](2026-05-12_exp4_19_guarded_overlay_attribution.md)
 - [2026-05-12 Exp4_20 runtime guarded overlay simulator](2026-05-12_exp4_20_runtime_guarded_overlay.md)
+- [2026-05-12 Exp4_21 runtime guarded overlay integration draft](2026-05-12_exp4_21_runtime_guarded_overlay_integration.md)
 - [2026-05-12 Exp4_18 full broad learning diagnostic](2026-05-12_exp4_18_full_broad_learning_diagnostic.md)
 - [2026-05-12 Exp4_17 special-rule subtype consistency](2026-05-12_exp4_17_special_rule_subtype_consistency.md)
 - [2026-05-12 Exp4_16 vs Exp5_08 diagnostic sparring](2026-05-12_exp4_16_vs_exp5_08_sparring.md)

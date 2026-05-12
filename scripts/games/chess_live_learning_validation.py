@@ -45,6 +45,7 @@ from services.games.chess_pv import (  # noqa: E402
     rank_experiment_pv_policy_moves,
     train_experiment_pv_from_replay_samples,
 )
+from services.games.chess_pv_guarded_overlay import exp4_runtime_overlay_allows_final  # noqa: E402
 from services.games.chess_nnue import (  # noqa: E402
     EXPERIMENT_NNUE_DIFFICULTY,
     choose_experiment_nnue_move,
@@ -2678,85 +2679,6 @@ def _exp4_guarded_overlay_attribution(deterministic_report: dict) -> dict:
     }
 
 
-def _parse_legal_uci_move(board: chess.Board, move_uci: str) -> chess.Move | None:
-    try:
-        move = chess.Move.from_uci(str(move_uci or "").lower())
-    except ValueError:
-        return None
-    return move if move in board.legal_moves else None
-
-
-def _exp4_runtime_promotion_subtype_guard(board: chess.Board, baseline_move: chess.Move | None, final_move: chess.Move) -> tuple[bool, str]:
-    """No-label promotion subtype guard for the exp4 runtime overlay simulator."""
-    if not final_move.promotion or final_move.promotion == chess.QUEEN:
-        return True, "not_nonqueen_promotion"
-
-    after_final = board.copy(stack=False)
-    after_final.push(final_move)
-    if after_final.is_checkmate():
-        return True, "nonqueen_promotion_gives_immediate_mate"
-
-    queen_move = chess.Move(final_move.from_square, final_move.to_square, promotion=chess.QUEEN)
-    if queen_move in board.legal_moves:
-        after_queen = board.copy(stack=False)
-        after_queen.push(queen_move)
-        if after_queen.is_stalemate() and not after_final.is_stalemate():
-            return True, "nonqueen_promotion_avoids_queen_stalemate"
-
-    if baseline_move and baseline_move.promotion == chess.QUEEN:
-        return False, "nonqueen_promotion_downgrade_without_runtime_tactical_reason"
-    return False, "nonqueen_promotion_without_runtime_tactical_reason"
-
-
-def _exp4_runtime_overlay_allows_final(
-    *,
-    fen: str,
-    baseline_move_uci: str,
-    final_move_uci: str,
-    baseline_row: dict,
-    final_row: dict,
-) -> tuple[bool, str, dict]:
-    """Runtime-feasible guard: no expected labels, no pass/fail outcome."""
-    if not final_move_uci:
-        return False, "final_missing", {}
-    if final_move_uci == baseline_move_uci:
-        return True, "same_move", {"same_move": True}
-    if bool(final_row.get("illegal_move")):
-        return False, "final_illegal", {}
-    try:
-        board = chess.Board(str(fen or ""))
-    except ValueError:
-        return False, "invalid_fen", {}
-    baseline_move = _parse_legal_uci_move(board, baseline_move_uci)
-    final_move = _parse_legal_uci_move(board, final_move_uci)
-    if final_move is None:
-        return False, "final_not_legal_in_position", {}
-
-    promotion_allowed, promotion_reason = _exp4_runtime_promotion_subtype_guard(board, baseline_move, final_move)
-    if not promotion_allowed:
-        return False, promotion_reason, {"promotion_subtype_guard": promotion_reason}
-
-    baseline_score = baseline_row.get("score_cp")
-    final_score = final_row.get("score_cp")
-    score_delta = None
-    if baseline_score is not None and final_score is not None:
-        score_delta = float(final_score) - float(baseline_score)
-        if score_delta < -150:
-            return False, "static_score_delta_below_runtime_window", {
-                "score_delta": round(score_delta, 4),
-                "baseline_score_cp": baseline_score,
-                "final_score_cp": final_score,
-                "promotion_subtype_guard": promotion_reason,
-            }
-
-    return True, "runtime_static_and_rule_guard_passed", {
-        "score_delta": round(score_delta, 4) if score_delta is not None else None,
-        "baseline_score_cp": baseline_score,
-        "final_score_cp": final_score,
-        "promotion_subtype_guard": promotion_reason,
-    }
-
-
 def _exp4_runtime_guarded_overlay_report(deterministic_report: dict) -> dict:
     """exp4_20 no-label guarded overlay simulator.
 
@@ -2795,12 +2717,14 @@ def _exp4_runtime_guarded_overlay_report(deterministic_report: dict) -> dict:
         expected = [str(move).lower() for move in (baseline_row.get("expected_best_moves") or [])]
         baseline_move = str(baseline_row.get("engine_top1") or "")
         final_move = str(final_row.get("engine_top1") or "")
-        allowed, reason, guard_detail = _exp4_runtime_overlay_allows_final(
+        allowed, reason, guard_detail = exp4_runtime_overlay_allows_final(
             fen=str(baseline_row.get("fen") or final_row.get("fen") or ""),
+            side=str(baseline_row.get("side") or final_row.get("side") or "white"),
             baseline_move_uci=baseline_move,
             final_move_uci=final_move,
-            baseline_row=baseline_row,
-            final_row=final_row,
+            baseline_score_cp=baseline_row.get("score_cp"),
+            final_score_cp=final_row.get("score_cp"),
+            final_illegal=bool(final_row.get("illegal_move")),
         )
         selected_source = "final" if allowed and final_move != baseline_move else "baseline"
         selected = final_row if selected_source == "final" else baseline_row

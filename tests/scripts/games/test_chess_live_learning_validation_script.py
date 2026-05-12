@@ -2116,6 +2116,7 @@ def test_exp4_guarded_overlay_keeps_baseline_default_and_only_adopts_safe_positi
 
 def test_exp4_runtime_guarded_overlay_uses_no_labels_and_blocks_promotion_piece_regression():
     module = _load_validation_module()
+    from services.games.chess_pv_guarded_overlay import exp4_runtime_overlay_allows_final
 
     def case(case_id, fen, expected, top1, top3=None, score_cp=0, category="opening", illegal=False):
         top3 = top3 or [top1]
@@ -2175,6 +2176,19 @@ def test_exp4_runtime_guarded_overlay_uses_no_labels_and_blocks_promotion_piece_
     assert selected["safe_opening"]["guard_reason"] == "runtime_static_and_rule_guard_passed"
     assert selected["promotion_regression"]["selected_source"] == "baseline"
     assert selected["promotion_regression"]["guard_reason"] == "nonqueen_promotion_downgrade_without_runtime_tactical_reason"
+
+    allowed, reason, detail = exp4_runtime_overlay_allows_final(
+        fen=opening_fen,
+        side="black",
+        baseline_move_uci="e7e5",
+        final_move_uci="d7d5",
+        baseline_score_cp=None,
+        final_score_cp=None,
+    )
+    assert allowed is True
+    assert reason == "runtime_static_and_rule_guard_passed"
+    assert detail["baseline_score_cp"] is not None
+    assert detail["final_score_cp"] is not None
 
 
 def test_quick_gate_does_not_promote_on_loss_or_hash_without_score_and_matched_probe():
