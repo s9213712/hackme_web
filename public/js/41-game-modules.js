@@ -12,9 +12,9 @@
     { key: "snake", title: "貪食蛇", subtitle: "滑動或方向鍵控制蛇吃食物" },
     { key: "game_2048", title: "2048", subtitle: "合併數字方塊，挑戰最高分" },
     { key: "brick_breaker", title: "打磚塊", subtitle: "移動擋板反彈球打掉磚塊" },
-    { key: "reversi", title: "黑白棋", subtitle: "本機雙人輪流翻子" },
-    { key: "go", title: "圍棋", subtitle: "9 路簡化圍棋，本機雙人" },
-    { key: "gomoku", title: "五子棋", subtitle: "15 路本機雙人，五子連線勝" },
+    { key: "reversi", title: "黑白棋", subtitle: "AI 練習 / 本機雙人" },
+    { key: "go", title: "圍棋", subtitle: "9 路簡化圍棋，AI 練習 / 本機雙人" },
+    { key: "gomoku", title: "五子棋", subtitle: "15 路 AI 練習 / 本機雙人" },
   ];
 
   const modules = window.HACKME_GAME_MODULES || {};

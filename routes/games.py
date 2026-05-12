@@ -4,6 +4,11 @@ from datetime import datetime, timedelta, timezone
 
 from flask import request
 
+from services.games.board_ai import (
+    BOARD_AI_DIFFICULTIES,
+    BOARD_AI_GAME_KEYS,
+    choose_board_game_ai_move,
+)
 from services.games.chess import (
     board_rows,
     draw_claim_status,
@@ -869,19 +874,34 @@ def register_games_routes(app, deps):
                 "title": "黑白棋",
                 "status": "available",
                 "supports_invites": False,
-                "supports_computer": False,
+                "supports_computer": True,
+                "computer_difficulties": [
+                    {"key": "easy", "label": "簡單"},
+                    {"key": "normal", "label": "普通"},
+                    {"key": "hard", "label": "困難"},
+                ],
             }, {
                 "key": "go",
                 "title": "圍棋",
                 "status": "available",
                 "supports_invites": False,
-                "supports_computer": False,
+                "supports_computer": True,
+                "computer_difficulties": [
+                    {"key": "easy", "label": "簡單"},
+                    {"key": "normal", "label": "普通"},
+                    {"key": "hard", "label": "困難"},
+                ],
             }, {
                 "key": "gomoku",
                 "title": "五子棋",
                 "status": "available",
                 "supports_invites": False,
-                "supports_computer": False,
+                "supports_computer": True,
+                "computer_difficulties": [
+                    {"key": "easy", "label": "簡單"},
+                    {"key": "normal", "label": "普通"},
+                    {"key": "hard", "label": "困難"},
+                ],
             }],
         })
 
@@ -908,6 +928,32 @@ def register_games_routes(app, deps):
             return json_resp({"ok": True, "users": [dict(row) for row in rows]})
         finally:
             conn.close()
+
+    @app.route("/api/games/<game_key>/ai-move", methods=["POST"])
+    @require_csrf
+    def board_game_ai_move(game_key):
+        actor, err, status = actor_or_401()
+        if err:
+            return err, status
+        game_key = str(game_key or "").strip().lower()
+        if game_key not in BOARD_AI_GAME_KEYS:
+            return json_resp({"ok": False, "msg": "不支援的棋類 AI"}), 404
+        data, err, status = parse_json_body()
+        if err:
+            return err, status
+        difficulty = str(data.get("difficulty") or "normal").strip().lower()
+        if difficulty not in BOARD_AI_DIFFICULTIES:
+            return json_resp({"ok": False, "msg": "不支援的 AI 難度"}), 400
+        try:
+            decision = choose_board_game_ai_move(
+                game_key,
+                data.get("board"),
+                data.get("turn"),
+                difficulty,
+            )
+        except ValueError as exc:
+            return json_resp({"ok": False, "msg": str(exc)}), 400
+        return json_resp({"ok": True, **decision})
 
     @app.route("/api/games/chess/invites", methods=["GET"])
     @require_csrf_safe

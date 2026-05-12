@@ -134,9 +134,9 @@ function gameSubtitle(game) {
   if (game.key === "snake") return "手機滑動 / 鍵盤皆可玩";
   if (game.key === "game_2048") return "手機滑動合併數字";
   if (game.key === "brick_breaker") return "手機按鍵控制擋板";
-  if (game.key === "reversi") return "本機雙人黑白棋";
-  if (game.key === "go") return "9 路本機雙人圍棋";
-  if (game.key === "gomoku") return "15 路本機雙人五子棋";
+  if (game.key === "reversi") return "AI 練習 / 本機雙人黑白棋";
+  if (game.key === "go") return "9 路 AI 練習 / 本機雙人圍棋";
+  if (game.key === "gomoku") return "15 路 AI 練習 / 本機雙人五子棋";
   if (game.key === "sudoku") return "單人邏輯解題";
   if (game.key === "minesweeper") return "單人推理挑戰";
   if (game.key === "1a2b") return "單人猜數字";
@@ -253,6 +253,7 @@ function createLocalGameModuleApi(key) {
     status(text) { $("local-module-game-status").textContent = text || ""; },
     setActions(html) { actions.innerHTML = html || ""; },
     setControls(html) { controls.innerHTML = html || ""; },
+    request(path, options) { return gameRequest(path, options); },
     submitScore(body) { return submitLocalGameModuleScore(key, body); },
   };
 }

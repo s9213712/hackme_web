@@ -130,6 +130,11 @@ def test_game_zone_frontend_assets_are_wired():
     assert 'registerHackmeLocalGameModule("game_2048"' in local_2048_js
     assert 'registerHackmeLocalGameModule("brick_breaker"' in local_brick_js
     assert "mountHackmeLocalDiscGame" in local_board_shared_js
+    assert "/ai-move" in local_board_shared_js
+    assert "AI 思考中" in local_board_shared_js
+    assert 'data-action="mode"' in local_board_shared_js
+    assert 'data-action="difficulty"' in local_board_shared_js
+    assert "api.request" in local_board_shared_js
     assert 'registerHackmeLocalGameModule("reversi"' in local_reversi_js
     assert 'registerHackmeLocalGameModule("go"' in local_go_js
     assert 'registerHackmeLocalGameModule("gomoku"' in local_gomoku_js
