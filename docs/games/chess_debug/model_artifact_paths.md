@@ -369,12 +369,12 @@ dashboard selection path：
 - summary：`/home/s92137/chess_results/exp5_10_production_readiness/summary.json`
 - markdown summary：`/home/s92137/chess_results/exp5_10_production_readiness/SUMMARY.md`
 - overlap audit：`train_vs_benchmark_overlap_count=0`, `train_vs_heldout_overlap_count=0`, `position_id_overlap_count=0`, `overlap_counts_hardcoded=false`
-- expanded benchmark：candidate 102/135 = 0.755556, baseline 101/135 = 0.748148, Δ `+0.007407`
+- expanded benchmark：candidate 104/135 = 0.770370, baseline 103/135 = 0.762963, Δ `+0.007407`
 - per-cluster：endgame `+0.075758`, tactic/special_rule/blunder/smoke hold, quiet_positional `-0.125` with 1 clean regression, opening `-0.111111` with questionable regressions
-- repeatability：`case_order_repeatability`, no model retraining, 5 seeds all Δ `+0.007407`, std `0.0`; stage 5/5, shadow/production 0/5 because suspicious_rate is non-zero
-- safety：legal_rate `1.0`, illegal_rate `0.0`, suspicious_rate `0.014815`; suspicious smoke cases are rook mate stalemate-after-move outcomes
+- repeatability：`case_order_repeatability`, no model retraining, 5 seeds all Δ `+0.007407`, std `0.0`; stage/shadow/production-internal 5/5 after rook mate fixture fix
+- safety：legal_rate `1.0`, illegal_rate `0.0`, suspicious_rate `0.0`; suspicious matches cleared after replacing invalid K+R mate smoke FENs
 - runtime check：bundled baseline unchanged; production runtime path `/home/s92137/hackme_web/runtime/games/models/chess_experiment_5_nnue.json` did not exist before/after, so `production_runtime_model_checked=false`, `production_runtime_unchanged=true_by_no_write_only`
-- verdict：`shadow_candidate=True`, `production_promote_request_ready=False`, `production_promote=False`; blockers are `repeatability_not_passed`, `quiet_positional_clean_regression`, `suspicious_rate_nonzero`
+- verdict：`shadow_candidate=True`, `production_promote_request_ready=False`, `production_promote=False`; blocker is `quiet_positional_clean_regression`
 
 ## auto-retrain 與 promotion 關係
 

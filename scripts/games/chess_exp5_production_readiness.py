@@ -282,8 +282,8 @@ def _curated_smoke_cases() -> list[dict]:
     cases = [
         _case("exp5_10_smoke_mate_in_1_white_q", "6k1/5Q2/6K1/8/8/8/8/8 w - - 0 1", "white", "smoke", subcategory="mate_in_1", must_checkmate=True),
         _case("exp5_10_smoke_mate_in_1_black_q", "8/8/8/8/8/6k1/5q2/6K1 b - - 0 1", "black", "smoke", subcategory="mate_in_1", must_checkmate=True),
-        _case("exp5_10_smoke_mate_in_1_rook_white", "6k1/6R1/6K1/8/8/8/8/8 w - - 0 1", "white", "smoke", subcategory="mate_in_1", must_checkmate=True),
-        _case("exp5_10_smoke_mate_in_1_rook_black", "8/8/8/8/8/6k1/6r1/6K1 b - - 0 1", "black", "smoke", subcategory="mate_in_1", must_checkmate=True),
+        _case("exp5_10_smoke_mate_in_1_rook_white", "7k/8/6K1/8/8/8/8/R7 w - - 0 1", "white", "smoke", subcategory="mate_in_1", must_checkmate=True),
+        _case("exp5_10_smoke_mate_in_1_rook_black", "r7/8/8/8/8/6k1/8/7K b - - 0 1", "black", "smoke", subcategory="mate_in_1", must_checkmate=True),
         _case("exp5_10_smoke_hanging_queen_white", "4k3/8/8/8/8/8/4q3/4K3 w - - 0 1", "white", "smoke", subcategory="hanging_queen", expected_uci_any=["e1e2"], requires_capture=True),
         _case("exp5_10_smoke_hanging_queen_black", "4k3/4Q3/8/8/8/8/8/4K3 b - - 0 1", "black", "smoke", subcategory="hanging_queen", expected_uci_any=["e8e7"], requires_capture=True),
         _case("exp5_10_smoke_hanging_rook_white", "4k3/8/8/8/8/8/4r3/4K3 w - - 0 1", "white", "smoke", subcategory="hanging_rook", expected_uci_any=["e1e2"], requires_capture=True),

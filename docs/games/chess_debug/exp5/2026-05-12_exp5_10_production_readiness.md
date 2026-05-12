@@ -37,6 +37,20 @@ The official run records:
 - `do_not_use_for_production_readiness=false`
 - `supersedes_previous_provisional_hardcoded_overlap_run=true`
 
+## Retest fix before final data
+
+The first official exp5_10 run exposed two invalid rook mate smoke fixtures:
+
+- `exp5_10_smoke_mate_in_1_rook_white`
+- `exp5_10_smoke_mate_in_1_rook_black`
+
+Both old FENs started from invalid positions where the opposite side was already in check, which polluted `suspicious_rate` with stalemate-after-move artifacts. The fixtures were replaced with valid K+R mate-in-1 positions:
+
+- white: `7k/8/6K1/8/8/8/8/R7 w - - 0 1`, expected mate move `a1a8`
+- black: `r7/8/8/8/8/6k1/8/7K b - - 0 1`, expected mate move `a8a1`
+
+Both positions validate as legal initial boards and the expected move produces checkmate, not stalemate. exp5_10 was then rerun from scratch.
+
 ## Expanded held-out
 
 - cases: `135`
@@ -76,12 +90,12 @@ Label distribution:
 
 | metric | baseline | candidate | delta |
 |---|---:|---:|---:|
-| overall | 101/135 = 0.748148 | 102/135 = 0.755556 | +0.007407 |
+| overall | 103/135 = 0.762963 | 104/135 = 0.770370 | +0.007407 |
 | endgame | 54/66 = 0.818182 | 59/66 = 0.893939 | +0.075758 |
 | tactic | 10/10 = 1.0 | 10/10 = 1.0 | 0.0 |
 | special_rule | 4/4 = 1.0 | 4/4 = 1.0 | 0.0 |
 | blunder_avoid | 2/2 = 1.0 | 2/2 = 1.0 | 0.0 |
-| smoke | 6/18 = 0.333333 | 6/18 = 0.333333 | 0.0 |
+| smoke | 8/18 = 0.444444 | 8/18 = 0.444444 | 0.0 |
 | quiet_positional | 7/8 = 0.875 | 6/8 = 0.75 | -0.125 |
 | opening | 18/27 = 0.666667 | 15/27 = 0.555556 | -0.111111 |
 
@@ -89,10 +103,8 @@ Safety:
 
 - legal_rate: `1.0`
 - illegal_rate: `0.0`
-- suspicious_rate: `0.014815`
-- suspicious matches:
-  - `exp5_10_smoke_mate_in_1_rook_white`: `candidate_stalemate_after_move`
-  - `exp5_10_smoke_mate_in_1_rook_black`: `candidate_stalemate_after_move`
+- suspicious_rate: `0.0`
+- suspicious matches: `[]`
 
 ## Regression audit
 
@@ -111,11 +123,11 @@ The quiet positional regression is clean and blocks production. Opening regressi
 ## Smoke
 
 - smoke cases: `18`
-- baseline smoke score: `0.333333`
-- candidate smoke score: `0.333333`
+- baseline smoke score: `0.444444`
+- candidate smoke score: `0.444444`
 - smoke delta: `0.0`
 - candidate regressions: `0`
-- shared limitations remain, especially rook mate and underpromotion/promotion special handling.
+- shared limitations remain in promotion, underpromotion, castling, en-passant, hanging-rook, and blunder-avoid probes.
 - smoke pass under current policy: `true` because there is no candidate-only smoke regression.
 
 ## Repeatability
@@ -132,11 +144,11 @@ This is deterministic case-order repeatability, not repeated model training.
 - min_delta: `0.007407`
 - max_delta: `0.007407`
 - stage_pass_count: `5/5`
-- shadow_pass_count: `0/5`
-- production_pass_count: `0/5`
-- pass: `false`
+- shadow_pass_count: `5/5`
+- production_pass_count: `5/5`
+- pass: `true`
 
-The deterministic delta is stable, but repeatability fails under the shadow/production interpretation because suspicious_rate is non-zero.
+The deterministic delta is stable under case-order repeatability. This is not repeated training; it only proves the fixed model pair and fixed case set are order-independent.
 
 ## Runtime model check
 
@@ -154,7 +166,7 @@ Because the runtime file did not exist in this checkout, this round proves the r
 
 - expanded_heldout_pass: `true`
 - comprehensive_smoke_pass: `true`
-- repeatability_pass: `false`
+- repeatability_pass: `true`
 - shadow_candidate: `true`
 - production_promote_request_ready: `false`
 - production_promote: `false`
@@ -162,9 +174,7 @@ Because the runtime file did not exist in this checkout, this round proves the r
 
 Blocking reasons:
 
-- `repeatability_not_passed`
 - `quiet_positional_clean_regression`
-- `suspicious_rate_nonzero`
 
 ## Artefacts
 
@@ -178,11 +188,14 @@ Blocking reasons:
 ## Tests
 
 - `python3 -m py_compile scripts/games/chess_exp5_production_readiness.py`
+- `python3 -m py_compile scripts/games/chess_exp5_suspicious_audit.py`
+- valid K+R rook mate fixture check with python-chess
 - `python3 scripts/games/chess_exp5_production_readiness.py --help`
-- official exp5_10 run completed and wrote all artefacts above
+- retested official exp5_10 run completed and wrote all artefacts above
+- `python3 scripts/games/chess_exp5_suspicious_audit.py`
 
 ## Verdict
 
 `exp5_10` keeps `shadow_candidate=true` but does not make the candidate production-ready.
 
-The endgame improvement survives the expanded set, but the score delta shrinks to `+0.007407`, quiet clean regression repeats, and two rook mate smoke cases produce suspicious stalemate-after-move outcomes. Runtime production model remains unmodified.
+The invalid rook mate smoke fixtures were fixed and `suspicious_rate` is now `0.0`; repeatability is now 5/5. The endgame improvement survives the expanded set, but the overall score delta remains thin at `+0.007407` and the clean quiet positional regression repeats. Runtime production model remains unmodified, so production remains held by `quiet_positional_clean_regression`.
