@@ -257,14 +257,16 @@ def _nnue_eval(board: chess.Board, model: dict, eval_cache: dict[int, int], hash
 def _move_order_score(board: chess.Board, move: chess.Move) -> int:
     score = 0
     if board.is_capture(move):
-        captured = board.piece_at(move.to_square)
+        captured = _captured_piece(board, move)
         attacker = board.piece_at(move.from_square)
         if captured is not None:
             score += _PIECE_VALUES.get(captured.piece_type, 0) * 10
         if attacker is not None:
             score -= _PIECE_VALUES.get(attacker.piece_type, 0)
     if move.promotion:
-        score += 8_000
+        score += 8_000 + _promotion_priority(move) * 250
+    if board.is_en_passant(move):
+        score += 3_000
     if board.gives_check(move):
         score += 1_500
     # exp3-example2 lesson item 10: castling itself is desirable. Without this
@@ -283,12 +285,117 @@ def _move_order_score(board: chess.Board, move: chess.Move) -> int:
     return score
 
 
-def _move_dict(board: chess.Board, move: chess.Move) -> dict:
-    piece = board.piece_at(move.from_square)
-    captured = board.piece_at(move.to_square)
+def _promotion_priority(move: chess.Move) -> int:
+    return {
+        chess.QUEEN: 4,
+        chess.ROOK: 3,
+        chess.BISHOP: 2,
+        chess.KNIGHT: 1,
+    }.get(move.promotion, 0)
+
+
+def _captured_piece(board: chess.Board, move: chess.Move) -> chess.Piece | None:
     if board.is_en_passant(move):
         capture_square = chess.square(chess.square_file(move.to_square), chess.square_rank(move.from_square))
-        captured = board.piece_at(capture_square)
+        return board.piece_at(capture_square)
+    return board.piece_at(move.to_square)
+
+
+def _captured_piece_value(board: chess.Board, move: chess.Move) -> int:
+    captured = _captured_piece(board, move)
+    return _PIECE_VALUES.get(captured.piece_type, 0) if captured else 0
+
+
+def _legal_after_move(board: chess.Board, move: chess.Move) -> chess.Board:
+    after = board.copy(stack=False)
+    after.push(move)
+    return after
+
+
+def _would_stalemate(board: chess.Board, move: chess.Move) -> bool:
+    return _legal_after_move(board, move).is_stalemate()
+
+
+def _avoid_stalemate_filter(board: chess.Board, move: chess.Move | None, *, score_move) -> chess.Move | None:
+    if move is None or not _would_stalemate(board, move):
+        return move
+    alternatives = [candidate for candidate in board.legal_moves if not _would_stalemate(board, candidate)]
+    if not alternatives:
+        return move
+    mates = []
+    for candidate in alternatives:
+        after = _legal_after_move(board, candidate)
+        if after.is_checkmate():
+            mates.append(candidate)
+    if mates:
+        return sorted(mates, key=lambda candidate: candidate.uci())[0]
+    return sorted(alternatives, key=lambda candidate: (score_move(candidate), candidate.uci()), reverse=True)[0]
+
+
+def _special_rule_priority_move(board: chess.Board) -> chess.Move | None:
+    """Conservative rule/tactic priority before the shallow NNUE/PVS search.
+
+    The NNUE-like eval is intentionally small, so depth-limited search can miss
+    rule-specific forcing moves that are obvious to humans: promotion, legal
+    en-passant, and high-value captures. This helper only preempts search for
+    clear, legal, non-stalemating moves; normal positional choices still go
+    through alpha-beta/PVS.
+    """
+    legal_moves = sorted(board.legal_moves, key=lambda item: item.uci())
+    if not legal_moves:
+        return None
+
+    promotions = [move for move in legal_moves if move.promotion and not _legal_after_move(board, move).is_stalemate()]
+    if promotions:
+        return sorted(
+            promotions,
+            key=lambda move: (
+                _legal_after_move(board, move).is_checkmate(),
+                move.promotion == chess.QUEEN,
+                _promotion_priority(move),
+                board.gives_check(move),
+                _captured_piece_value(board, move),
+                -ord(move.uci()[0]),
+            ),
+            reverse=True,
+        )[0]
+
+    en_passant = [move for move in legal_moves if board.is_en_passant(move) and not _would_stalemate(board, move)]
+    if en_passant:
+        return en_passant[0]
+
+    high_value_captures = [
+        move
+        for move in legal_moves
+        if (
+            board.is_capture(move)
+            and _captured_piece_value(board, move) >= _PIECE_VALUES[chess.ROOK]
+            and not _would_stalemate(board, move)
+        )
+    ]
+    if high_value_captures:
+        return sorted(
+            high_value_captures,
+            key=lambda move: (
+                _captured_piece_value(board, move),
+                board.gives_check(move),
+                -_PIECE_VALUES.get((board.piece_at(move.from_square) or chess.Piece(chess.PAWN, board.turn)).piece_type, 0),
+                move.uci(),
+            ),
+            reverse=True,
+        )[0]
+
+    castles = [move for move in legal_moves if board.is_castling(move) and not _would_stalemate(board, move)]
+    if castles and board.fullmove_number <= 12 and not board.is_check():
+        kingside = [move for move in castles if chess.square_file(move.to_square) > chess.square_file(move.from_square)]
+        return sorted(kingside or castles, key=lambda item: item.uci())[0]
+
+    return None
+
+
+def _move_dict(board: chess.Board, move: chess.Move) -> dict:
+    piece = board.piece_at(move.from_square)
+    captured = _captured_piece(board, move)
     return {
         "from": chess.square_name(move.from_square),
         "to": chess.square_name(move.to_square),
@@ -382,7 +489,21 @@ def choose_experiment_nnue_move(board_state, side: str, *, model_path=None, sear
             forced_mates.append(move)
         board.pop()
     if forced_mates:
-        return _move_dict(board, sorted(forced_mates, key=lambda item: item.uci())[0])
+        best_mate = sorted(
+            forced_mates,
+            key=lambda move: (
+                bool(move.promotion),
+                _promotion_priority(move),
+                board.gives_check(move),
+                _captured_piece_value(board, move),
+                move.uci(),
+            ),
+            reverse=True,
+        )[0]
+        return _move_dict(board, best_mate)
+    priority_move = _special_rule_priority_move(board)
+    if priority_move is not None:
+        return _move_dict(board, priority_move)
 
     model = _load_model(Path(model_path or default_chess_nnue_model_path()))
     profile = _resolve_search_profile(search_profile)
@@ -398,6 +519,7 @@ def choose_experiment_nnue_move(board_state, side: str, *, model_path=None, sear
         time_budget_ms=profile.get("time_budget_ms"),
     )
     best_move = opening_sanity_filter(board, result.best_move, score_move=lambda move: _move_order_score(board, move))
+    best_move = _avoid_stalemate_filter(board, best_move, score_move=lambda move: _move_order_score(board, move))
     return _move_dict(board, best_move) if best_move is not None else None
 
 

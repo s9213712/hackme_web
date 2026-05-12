@@ -1,11 +1,13 @@
 import json
 import sqlite3
 
+import chess
+
 from routes import games as games_routes
 from routes.games import choose_computer_move, ensure_game_schema
 from services.games import chess_pipeline
 from services.games import self_play_training
-from services.games.chess_nnue import EXPERIMENT_NNUE_DIFFICULTY
+from services.games.chess_nnue import EXPERIMENT_NNUE_DIFFICULTY, choose_experiment_nnue_move
 
 
 def test_exp5_difficulty_is_schema_supported():
@@ -113,3 +115,40 @@ def test_exp5_is_supported_pipeline_autorun_target():
     assert "--skip-exp3" in args
     assert "--skip-exp4" in args
     assert "--skip-exp5" not in args
+
+
+def test_exp5_rule_priority_handles_core_special_moves(tmp_path):
+    model_path = tmp_path / "exp5.json"
+    cases = [
+        ("k7/4P3/2K5/8/8/8/8/8 w - - 0 1", "white", "e7e8q"),
+        ("7k/8/8/3pP3/8/8/8/4K3 w - d6 0 1", "white", "e5d6"),
+        ("4k3/8/8/8/8/8/4r3/4K3 w - - 0 1", "white", "e1e2"),
+        ("4k3/8/8/8/8/8/8/4K2R w K - 0 1", "white", "e1g1"),
+        ("r3k3/8/8/8/8/8/8/4K3 b q - 0 1", "black", "e8c8"),
+        ("3K4/1PQ2p2/k7/4b3/4Q3/3R4/8/1Q6 w - - 0 1", "white", "b7b8n"),
+    ]
+    for fen, side, expected in cases:
+        move = choose_experiment_nnue_move(
+            {"__fen__": fen},
+            side,
+            model_path=model_path,
+            search_profile="fixed_depth_fast",
+        )
+        chosen = f"{move['from']}{move['to']}{move.get('promotion') or ''}"
+        assert chosen == expected
+
+
+def test_exp5_avoids_stalemate_when_legal_alternative_exists(tmp_path):
+    model_path = tmp_path / "exp5.json"
+    fen = "4Q3/8/8/4k3/8/4K3/8/8 w - - 0 1"
+    move = choose_experiment_nnue_move(
+        {"__fen__": fen},
+        "white",
+        model_path=model_path,
+        search_profile="fixed_depth_fast",
+    )
+    chosen = chess.Move.from_uci(f"{move['from']}{move['to']}{move.get('promotion') or ''}")
+    board = chess.Board(fen)
+    assert chosen in board.legal_moves
+    board.push(chosen)
+    assert not board.is_stalemate()

@@ -406,16 +406,16 @@ def _curated_smoke_cases() -> list[dict]:
         _case("exp5_10_smoke_hanging_rook_black", "4k3/4R3/8/8/8/8/8/4K3 b - - 0 1", "black", "smoke", subcategory="hanging_rook", expected_uci_any=["e8e7"], requires_capture=True),
         _case("exp5_10_smoke_promotion_q_white", "8/P7/8/8/8/8/8/k1K5 w - - 0 1", "white", "smoke", subcategory="promotion_to_queen", expected_uci_any=["a7a8q"], must_promote=True, expected_promotion="q"),
         _case("exp5_10_smoke_promotion_q_black", "K1k5/8/8/8/8/8/p7/8 b - - 0 1", "black", "smoke", subcategory="promotion_to_queen", expected_uci_any=["a2a1q"], must_promote=True, expected_promotion="q"),
-        _case("exp5_10_smoke_underpromotion_white", "8/P7/1K6/8/8/8/8/k7 w - - 0 1", "white", "smoke", subcategory="underpromotion_mate", expected_uci_any=["a7a8n"], must_promote=True, expected_promotion="n"),
-        _case("exp5_10_smoke_underpromotion_black", "K7/8/8/8/8/1k6/p7/8 b - - 0 1", "black", "smoke", subcategory="underpromotion_mate", expected_uci_any=["a2a1n"], must_promote=True, expected_promotion="n"),
-        _case("exp5_10_smoke_castle_short_white", "r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1", "white", "smoke", subcategory="castling_short", expected_uci_any=["e1g1"]),
-        _case("exp5_10_smoke_castle_long_black", "r3k2r/8/8/8/8/8/8/R3K2R b KQkq - 0 1", "black", "smoke", subcategory="castling_long", expected_uci_any=["e8c8"]),
+        _case("exp5_10_smoke_underpromotion_white", "3K4/1PQ2p2/k7/4b3/4Q3/3R4/8/1Q6 w - - 0 1", "white", "smoke", subcategory="underpromotion_mate", expected_uci_any=["b7b8n"], must_checkmate=True, must_promote=True, expected_promotion="n"),
+        _case("exp5_10_smoke_underpromotion_black", "1q6/8/3r4/4q3/4B3/K7/1pq2P2/3k4 b - - 0 1", "black", "smoke", subcategory="underpromotion_mate", expected_uci_any=["b2b1n"], must_checkmate=True, must_promote=True, expected_promotion="n"),
+        _case("exp5_10_smoke_castle_short_white", "4k3/8/8/8/8/8/8/4K2R w K - 0 1", "white", "smoke", subcategory="castling_short", expected_uci_any=["e1g1"]),
+        _case("exp5_10_smoke_castle_long_black", "r3k3/8/8/8/8/8/8/4K3 b q - 0 1", "black", "smoke", subcategory="castling_long", expected_uci_any=["e8c8"]),
         _case("exp5_10_smoke_en_passant_white", "7k/8/8/3pP3/8/8/8/4K3 w - d6 0 1", "white", "smoke", subcategory="legal_en_passant", expected_uci_any=["e5d6"], requires_capture=True),
         _case("exp5_10_smoke_en_passant_black", "4k3/8/8/8/3Pp3/8/8/7K b - d3 0 1", "black", "smoke", subcategory="legal_en_passant", expected_uci_any=["e4d3"], requires_capture=True),
         _case("exp5_10_smoke_illegal_en_passant_avoid", "7k/8/8/3pP3/8/8/8/4K3 w - - 0 1", "white", "smoke", subcategory="illegal_en_passant_avoid", must_not_uci_any=["e5d6"]),
         _case("exp5_10_smoke_stalemate_avoid", "k7/2Q5/2K5/8/8/8/8/8 w - - 0 1", "white", "smoke", subcategory="stalemate_avoid", must_not_stalemate=True),
-        _case("exp5_10_smoke_blunder_avoid_white", "4k3/8/8/8/8/8/3q4/3KQ3 w - - 0 1", "white", "smoke", subcategory="blunder_avoid", expected_uci_any=["e1d2"], requires_capture=True),
-        _case("exp5_10_smoke_blunder_avoid_black", "3kq3/3Q4/8/8/8/8/8/4K3 b - - 0 1", "black", "smoke", subcategory="blunder_avoid", expected_uci_any=["e8d7"], requires_capture=True),
+        _case("exp5_10_smoke_blunder_avoid_white", "k7/8/8/8/8/8/3q4/3KQ3 w - - 0 1", "white", "smoke", subcategory="blunder_avoid", expected_uci_any=["e1d2", "d1d2"], requires_capture=True),
+        _case("exp5_10_smoke_blunder_avoid_black", "3kq3/3Q4/8/8/8/8/8/K7 b - - 0 1", "black", "smoke", subcategory="blunder_avoid", expected_uci_any=["e8d7", "d8d7"], requires_capture=True),
     ]
     return cases
 

@@ -421,6 +421,21 @@ dashboard selection path：
 - repeatability：`5/5`, `std_delta=0.0`, `score_delta_per_seed=[0.022222, 0.022222, 0.022222, 0.022222, 0.022222]`
 - final state：`production_promote=True`, `runtime_model_mutated=True`
 
+2026-05-12 exp5_13 rule smoke and stalemate fix：
+
+- updated runtime engine code：`services/games/chess_nnue.py`
+- updated validation fixtures：`scripts/games/chess_exp5_production_readiness.py`
+- validation summary：`/home/s92137/chess_results/exp5_13_rule_smoke_stalemate_fix_check/summary.json`
+- benchmark：`/home/s92137/chess_results/exp5_13_rule_smoke_stalemate_fix_check/focused_benchmark_expanded.json`
+- strength gate：`/home/s92137/chess_results/exp5_13_rule_smoke_stalemate_fix_check/strength_gate_expanded.json`
+- repeatability：`/home/s92137/chess_results/exp5_13_rule_smoke_stalemate_fix_check/repeatability_5_seed.json`
+- model artifact：unchanged runtime sha `c47ef752aa69d7b8c813b587468228593f44d69c9b947313325e03797e4450dc`
+- post-fix result：baseline `112/137 = 0.817518`, runtime candidate `115/137 = 0.839416`, delta `+0.021898`
+- smoke：baseline `18/18 = 1.0`, runtime candidate `18/18 = 1.0`
+- safety：`illegal_rate=0.0`, `suspicious_rate=0.0`, `clean_regressed_count=0`
+- repeatability：`5/5`, `std_delta=0.0`, `score_delta_per_seed=[0.021898, 0.021898, 0.021898, 0.021898, 0.021898]`
+- final state：production model already promoted by exp5_12; exp5_13 improves runtime behavior and validation fixture correctness without replacing the model artifact
+
 ## auto-retrain 與 promotion 關係
 
 auto-retrain 入口：
