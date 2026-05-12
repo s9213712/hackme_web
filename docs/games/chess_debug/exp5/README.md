@@ -63,6 +63,7 @@ exp5 是後續主要棋力路線之一，方向是：
 - exp5_16 opening overlay candidate：`2026-05-12_exp5_16_opening_overlay_candidate.md`
 - exp5_17 opening overlay staging validation：`2026-05-12_exp5_17_opening_overlay_staging_validation.md`
 - exp5_18 opening overlay promotion review：`2026-05-12_exp5_18_opening_overlay_promotion_review.md`
+- exp5 final promotion：`2026-05-12_exp5_final_promotion.md`
 
 ## 歷程總表
 
@@ -91,6 +92,7 @@ exp5 是後續主要棋力路線之一，方向是：
 | exp5_16 | 2026-05-12 | exact-position opening overlay candidate；clean opening improves 1/31 → 31/31；exp5_13 retention remains 115/137 with 0 clean regression；5/5 repeatability | **stageable for exp5_17; no runtime mutation** |
 | exp5_17 | 2026-05-12 | staging validation for exp5_16 overlay；31/31 opening, 12/12 fresh non-overlay fallback unchanged, runtime priority safety pass, 5/5 repeatability | **ready_for_exp5_18_promotion_review=True; no runtime mutation** |
 | exp5_18 | 2026-05-12 | promotion review only；candidate/baseline sha confirmed；exp5_17 gates re-confirmed；W7 dry-run smoke from clean worktree ok；rollback plan written | **approve separate promotion step; no runtime mutation** |
+| final | 2026-05-12 | promoted reviewed opening overlay to runtime；post-promotion gates pass；runtime/bundled warm-up seed sha `d35c047...` | **promoted_and_frozen; no exp5_19** |
 
 ## Difficulty
 
@@ -101,7 +103,8 @@ exp5 是後續主要棋力路線之一，方向是：
 - runtime model：`$HACKME_RUNTIME_DIR/games/models/chess_experiment_5_nnue.json`
 - env override：`HTML_LEARNING_CHESS_ENGINE_NNUE_MODEL_PATH`
 - bundled seed：`services/games/models/chess_experiment_5_nnue.json`
-- current promoted runtime sha256：`c47ef752aa69d7b8c813b587468228593f44d69c9b947313325e03797e4450dc`
+- current promoted runtime sha256：`d35c04707fd7c10e8b6efe07740e69da533dea524d31aa63308afea891d006c9`
+- exp5_status：`promoted_and_frozen`
 
 模型生命週期：
 
