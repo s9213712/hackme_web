@@ -406,8 +406,13 @@ def _dryrun_artifact_path(report_dir: Path) -> Path:
     Split from the writer so callers can inject the planned path into
     `payload['dry_run_artifact']` BEFORE serialisation, ensuring the on-disk
     JSON and the stdout JSON are byte-identical.
+
+    Uses microsecond precision so two concurrent dry-runs in the same wall-
+    clock second do not collide on the same filename (a second-resolution
+    timestamp made the artifact path technically race-prone even though the
+    surrounding pipeline is single-process).
     """
-    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ")
     return report_dir / f"chess_seed_train_dryrun_{ts}.json"
 
 

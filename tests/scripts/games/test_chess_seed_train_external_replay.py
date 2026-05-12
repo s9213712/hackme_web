@@ -468,6 +468,18 @@ def test_dryrun_artifact_path_is_timestamped_under_report_dir(tmp_path):
     assert path.name.endswith(".json")
 
 
+def test_dryrun_artifact_path_avoids_same_second_collisions(tmp_path):
+    """Microsecond precision: two consecutive calls must not collide on the
+    same filename even when invoked within the same wall-clock second."""
+    report_dir = tmp_path / "reports"
+    a = _dryrun_artifact_path(report_dir)
+    b = _dryrun_artifact_path(report_dir)
+    assert a != b, (
+        "_dryrun_artifact_path produced the same filename twice in a row "
+        "— timestamp precision regressed below microseconds"
+    )
+
+
 def test_write_dryrun_payload_artifact_writes_json_to_explicit_path(tmp_path):
     payload = {"ok": True, "dry_run": True, "external_replay": {"enabled": False}}
     artifact_path = tmp_path / "reports" / "chess_seed_train_dryrun_test.json"
