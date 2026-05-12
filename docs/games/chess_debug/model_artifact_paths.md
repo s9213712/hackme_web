@@ -376,6 +376,19 @@ dashboard selection path：
 - runtime check：bundled baseline unchanged; production runtime path `/home/s92137/hackme_web/runtime/games/models/chess_experiment_5_nnue.json` did not exist before/after, so `production_runtime_model_checked=false`, `production_runtime_unchanged=true_by_no_write_only`
 - verdict：`shadow_candidate=True`, `production_promote_request_ready=False`, `production_promote=False`; blocker is `quiet_positional_clean_regression`
 
+2026-05-12 exp5_11b quiet positional regression audit：
+
+- audit root：`/home/s92137/chess_results/exp5_11b_quiet_regression_audit/`
+- rows：`/home/s92137/chess_results/exp5_11b_quiet_regression_audit/quiet_regression_rows.jsonl`
+- summary：`/home/s92137/chess_results/exp5_11b_quiet_regression_audit/summary.json`
+- markdown summary：`/home/s92137/chess_results/exp5_11b_quiet_regression_audit/SUMMARY.md`
+- audited blocker：`quiet_positional_clean_regression`
+- regression row：`exp5_09_bench_d400404a65f3`, `k_and_p_symmetric`
+- teacher / baseline / candidate：`g3f2` / `f3f4` / `h2h4`
+- static eval：teacher `44`, baseline `32`, candidate `28`; candidate is `-16cp` vs teacher and `-4cp` vs baseline
+- classification：`multi_good_scoring_issue=1`, `true_model_regression=0`, `fixture_issue=0`
+- recommendation：replace the production blocker with `quiet_positional_gate_label_audit_required`, then rerun exp5_10 after gate/label fix; do not retrain before that
+
 ## auto-retrain 與 promotion 關係
 
 auto-retrain 入口：
