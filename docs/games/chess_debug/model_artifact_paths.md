@@ -545,6 +545,27 @@ dashboard selection path：
 - stage/promote attempted：`false`
 - decision：`ready_for_exp5_18_promotion_review=true`; not production-promoted in exp5_17
 
+2026-05-12 exp5_18 opening overlay promotion review：
+
+- review doc：`docs/games/chess_debug/exp5/2026-05-12_exp5_18_opening_overlay_promotion_review.md`
+- review summary：`/home/s92137/chess_results/exp5_18_opening_overlay_promotion_review/summary.json`
+- review summary md：`/home/s92137/chess_results/exp5_18_opening_overlay_promotion_review/SUMMARY.md`
+- candidate path：`/home/s92137/chess_results/exp5_16_opening_overlay_candidate/chess_experiment_5_nnue_opening_overlay_candidate.json`
+- candidate sha：`d35c04707fd7c10e8b6efe07740e69da533dea524d31aa63308afea891d006c9`
+- runtime path：`/home/s92137/hackme_web/runtime/games/models/chess_experiment_5_nnue.json`
+- runtime exists at review time：`false`
+- fallback production-equivalent path：`/home/s92137/chess_results/exp5_08_stage_candidate/chess_experiment_5_nnue_stage_candidate.json`
+- fallback production-equivalent sha：`c47ef752aa69d7b8c813b587468228593f44d69c9b947313325e03797e4450dc`
+- exp5_17 summary：`/home/s92137/chess_results/exp5_17_opening_overlay_staging_validation/summary.json`
+- W7 dry-run smoke aggregate：`/home/s92137/chess_results/exp5_18_w7_dryrun_smoke/pipeline_run_20260512T130122_069288Z/06_aggregate/pipeline_summary.json`
+- W7 dry-run smoke result：sparring ok, sparring_to_replay ok, seed_train_dry_run ok, aggregate ok
+- W7 mutation invariants：`any_production_runtime_mutation=false`, `any_model_mutation=false`
+- production mutation attempted：`false`
+- runtime mutated：`false`
+- decision：`approve_separate_promotion_step_after_explicit_user_approval`
+- rollback if runtime absent：delete runtime override file to restore fallback sha `c47ef752...`
+- rollback if runtime exists：restore backup from `/home/s92137/chess_results/exp5_18_promotion_backup/`
+
 ## auto-retrain 與 promotion 關係
 
 auto-retrain 入口：

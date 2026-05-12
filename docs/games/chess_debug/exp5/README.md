@@ -62,6 +62,7 @@ exp5 是後續主要棋力路線之一，方向是：
 - exp5_15 opening curriculum candidate search：`2026-05-12_exp5_15_opening_candidate_search.md`
 - exp5_16 opening overlay candidate：`2026-05-12_exp5_16_opening_overlay_candidate.md`
 - exp5_17 opening overlay staging validation：`2026-05-12_exp5_17_opening_overlay_staging_validation.md`
+- exp5_18 opening overlay promotion review：`2026-05-12_exp5_18_opening_overlay_promotion_review.md`
 
 ## 歷程總表
 
@@ -89,6 +90,7 @@ exp5 是後續主要棋力路線之一，方向是：
 | exp5_15 | 2026-05-12 | opening curriculum candidate search；fixed black-sample trainer sign bug；A/B candidates both fail clean opening pool (1/31) and regress endgame retention | **blocked; no stage/promote; runtime unchanged** |
 | exp5_16 | 2026-05-12 | exact-position opening overlay candidate；clean opening improves 1/31 → 31/31；exp5_13 retention remains 115/137 with 0 clean regression；5/5 repeatability | **stageable for exp5_17; no runtime mutation** |
 | exp5_17 | 2026-05-12 | staging validation for exp5_16 overlay；31/31 opening, 12/12 fresh non-overlay fallback unchanged, runtime priority safety pass, 5/5 repeatability | **ready_for_exp5_18_promotion_review=True; no runtime mutation** |
+| exp5_18 | 2026-05-12 | promotion review only；candidate/baseline sha confirmed；exp5_17 gates re-confirmed；W7 dry-run smoke from clean worktree ok；rollback plan written | **approve separate promotion step; no runtime mutation** |
 
 ## Difficulty
 
