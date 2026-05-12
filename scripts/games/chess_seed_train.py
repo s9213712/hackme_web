@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 from contextlib import contextmanager
 from pathlib import Path
 import sys
@@ -42,6 +43,36 @@ from services.games.self_play_training import (  # noqa: E402
 )
 import services.games.chess_dl as chess_dl_service  # noqa: E402
 import services.games.chess_pv as chess_pv_service  # noqa: E402
+from services.games.chess_pv import train_experiment_pv_from_replay_samples  # noqa: E402
+from services.games.chess_nnue import train_experiment_nnue_from_replay_samples  # noqa: E402
+
+
+# v1 external replay policy (see [[feedback-pvp-replay-discipline]]). Absolute
+# per-source caps; v2 should switch to fraction-of-self-play once
+# run_training_session exposes a sample count. Trusted-source whitelist
+# rejects rows whose trusted_source is not in this set.
+TRUSTED_SOURCE_WHITELIST = frozenset(
+    {
+        "imported_dataset",
+        "teacher_guidance",
+        "benchmark",
+        "external",
+        "pvp_filtered",
+        "human_beat_engine",
+        "sparring_objective_hit",
+    }
+)
+
+DEFAULT_EXTERNAL_CAPS = {
+    "imported_dataset": 200,
+    "teacher_guidance": 200,
+    "benchmark": 100,
+    "external": 100,
+    "pvp_filtered": 100,
+    "human_beat_engine": 100,
+    "sparring_objective_hit": 50,
+}
+DEFAULT_EXTERNAL_TOTAL_CAP = 300
 
 
 PRESETS = {
@@ -157,7 +188,153 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--experiment-3-model-path", default="")
     parser.add_argument("--experiment-4-model-path", default="")
     parser.add_argument("--experiment-5-model-path", default="")
+    parser.add_argument(
+        "--include-replay-jsonl",
+        action="append",
+        default=[],
+        help=(
+            "External replay JSONL path (repeatable). Rows must carry trusted_source "
+            "in the whitelist (pvp_filtered / human_beat_engine / imported_dataset / "
+            "teacher_guidance / benchmark / external / sparring_objective_hit). "
+            "Per-source absolute caps apply; see chess_seed_train.DEFAULT_EXTERNAL_CAPS."
+        ),
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Skip actual training; only load + cap + report distribution.",
+    )
     return parser.parse_args()
+
+
+def _load_external_replay(paths: list[str]) -> tuple[list[dict], dict]:
+    """Load + validate external replay JSONL rows.
+
+    Returns (samples, stats). Rejected reasons:
+      - invalid_json (per line)
+      - invalid_trusted_source (not in whitelist)
+      - missing_required_fields (fen / move_uci / side)
+    """
+    samples: list[dict] = []
+    stats: dict = {
+        "files_read": 0,
+        "files_missing": [],
+        "rows_total": 0,
+        "rows_kept": 0,
+        "rejected_invalid_json": 0,
+        "rejected_invalid_trusted_source": 0,
+        "rejected_missing_fields": 0,
+        "source_breakdown_raw": {},
+    }
+    for raw_path in paths or []:
+        path = Path(raw_path).expanduser().resolve()
+        if not path.exists():
+            stats["files_missing"].append(str(path))
+            continue
+        stats["files_read"] += 1
+        with path.open(encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                stats["rows_total"] += 1
+                try:
+                    row = json.loads(line)
+                except Exception:
+                    stats["rejected_invalid_json"] += 1
+                    continue
+                trusted = str(row.get("trusted_source") or "")
+                if trusted not in TRUSTED_SOURCE_WHITELIST:
+                    stats["rejected_invalid_trusted_source"] += 1
+                    continue
+                if not row.get("fen") or not row.get("move_uci") or not row.get("side"):
+                    stats["rejected_missing_fields"] += 1
+                    continue
+                samples.append(row)
+                stats["source_breakdown_raw"][trusted] = (
+                    stats["source_breakdown_raw"].get(trusted, 0) + 1
+                )
+    stats["rows_kept"] = len(samples)
+    return samples, stats
+
+
+def _apply_external_caps(
+    samples: list[dict],
+    *,
+    caps: dict[str, int] | None = None,
+    total_cap: int = DEFAULT_EXTERNAL_TOTAL_CAP,
+    seed: int = 0,
+) -> tuple[list[dict], dict]:
+    """Group by trusted_source, downsample to per-source cap, then enforce total."""
+    caps = dict(caps if caps is not None else DEFAULT_EXTERNAL_CAPS)
+    rng = random.Random(seed)
+    by_source: dict[str, list[dict]] = {}
+    for s in samples:
+        by_source.setdefault(str(s.get("trusted_source") or ""), []).append(s)
+    per_source: dict[str, dict] = {}
+    capped: list[dict] = []
+    for source in sorted(by_source):
+        items = list(by_source[source])
+        cap = int(caps.get(source, 100))
+        if len(items) > cap:
+            rng.shuffle(items)
+            kept = items[:cap]
+        else:
+            kept = items
+        per_source[source] = {
+            "raw": len(by_source[source]),
+            "cap": cap,
+            "kept_after_per_source_cap": len(kept),
+        }
+        capped.extend(kept)
+    pre_total = len(capped)
+    if pre_total > total_cap:
+        rng.shuffle(capped)
+        capped = capped[:total_cap]
+    final = {}
+    for s in capped:
+        ts = str(s.get("trusted_source") or "")
+        final[ts] = final.get(ts, 0) + 1
+    return capped, {
+        "per_source": per_source,
+        "after_total_cap": final,
+        "total_cap": int(total_cap),
+        "pre_total_cap_count": pre_total,
+        "total_kept": len(capped),
+    }
+
+
+def _train_with_external_replay(
+    samples: list[dict],
+    *,
+    pv_model_path: Path,
+    nnue_model_path: Path,
+    dry_run: bool,
+    skip_exp4: bool,
+    skip_exp5: bool = False,
+) -> dict:
+    """Train exp4 PV and exp5 NNUE with external replay samples.
+
+    No-ops on empty sample list or dry_run.
+    """
+    result: dict = {"trained_exp4": False, "trained_exp5": False, "sample_count": len(samples)}
+    if not samples:
+        result["skipped_reason"] = "no_samples"
+        return result
+    if dry_run:
+        result["skipped_reason"] = "dry_run"
+        return result
+    if not skip_exp4:
+        result["exp4_train_report"] = train_experiment_pv_from_replay_samples(
+            samples, model_path=pv_model_path
+        )
+        result["trained_exp4"] = True
+    if not skip_exp5:
+        result["exp5_train_report"] = train_experiment_nnue_from_replay_samples(
+            samples, model_path=nnue_model_path
+        )
+        result["trained_exp5"] = True
+    return result
 
 
 def _model_stats(path: Path) -> dict:
@@ -324,6 +501,36 @@ def main() -> int:
 
     reports = write_training_report(summary, report_dir=Path(args.report_dir), basename="chess_seed_train")
     _progress(f"phase result report: json={reports.get('json_report')} md={reports.get('md_report')}")
+
+    external_block: dict = {"enabled": False}
+    if args.include_replay_jsonl:
+        external_block["enabled"] = True
+        external_block["paths"] = list(args.include_replay_jsonl)
+        loaded_samples, load_stats = _load_external_replay(args.include_replay_jsonl)
+        capped_samples, cap_stats = _apply_external_caps(
+            loaded_samples, seed=int(args.seed)
+        )
+        external_block["load_stats"] = load_stats
+        external_block["cap_stats"] = cap_stats
+        external_block["dry_run"] = bool(args.dry_run)
+        external_block["skip_exp4"] = bool(args.skip_exp4)
+        train_result = _train_with_external_replay(
+            capped_samples,
+            pv_model_path=pv_model_path,
+            nnue_model_path=nnue_model_path,
+            dry_run=bool(args.dry_run),
+            skip_exp4=bool(args.skip_exp4),
+        )
+        external_block["train_result"] = train_result
+        _progress(
+            "external replay: "
+            f"files={load_stats['files_read']} "
+            f"raw_rows={load_stats['rows_total']} "
+            f"kept={load_stats['rows_kept']} "
+            f"after_caps={cap_stats['total_kept']} "
+            f"trained_exp4={train_result['trained_exp4']} "
+            f"trained_exp5={train_result['trained_exp5']}"
+        )
     payload = {
         "ok": True,
         "preset": args.preset,
@@ -344,6 +551,8 @@ def main() -> int:
         },
         "with_smoke": bool(args.with_smoke),
         "with_benchmark": bool(args.with_benchmark),
+        "external_replay": external_block,
+        "dry_run": bool(args.dry_run),
         "search_depth_overrides": {
             "exp3_depth": max(1, int(args.dl_search_depth or 1)),
             "exp3_qdepth": max(0, int(args.dl_quiescence_depth or 0)),
