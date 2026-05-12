@@ -3857,6 +3857,10 @@ def _compact_sanity_probe_for_summary(probe: dict) -> dict:
             "guarded_overlay_generalization_rate",
             "guarded_overlay_seen_variant_pass_rate",
             "guarded_overlay_unseen_variant_pass_rate",
+            "guarded_overlay_seen_baseline_pass_rate",
+            "guarded_overlay_unseen_baseline_pass_rate",
+            "guarded_overlay_seen_final_pass_rate",
+            "guarded_overlay_unseen_final_pass_rate",
             "guarded_overlay_unsafe_override_count",
             "guarded_overlay_sanity",
             "variant_count",
@@ -6256,11 +6260,17 @@ def _exp4_guarded_overlay_sanity_from_rows(before_rows: list[dict], after_rows: 
         )
     total = len(rows)
     hits = sum(1 for row in rows if row.get("expected_is_top1"))
+    baseline_hits = sum(1 for row in rows if row.get("baseline_correct"))
+    final_hits = sum(1 for row in rows if row.get("final_correct"))
     return {
         "supported": True,
         "case_count": total,
         "top1_hits": hits,
         "pass_rate": round(hits / max(1, total), 4),
+        "baseline_top1_hits": baseline_hits,
+        "baseline_pass_rate": round(baseline_hits / max(1, total), 4),
+        "final_top1_hits": final_hits,
+        "final_pass_rate": round(final_hits / max(1, total), 4),
         "decision_counts": counts,
         "fallback_reasons": fallback_reasons,
         "unsafe_override_count": int(counts["unsafe_override_after_scoring"]),
@@ -7558,6 +7568,10 @@ def _evaluate_sanity_learning_probe(
     final_decision_unseen_generalization_rate = unseen_variant_pass_rate
     guarded_overlay_seen_variant_pass_rate = float(guarded_seen_variants.get("pass_rate") or 0.0)
     guarded_overlay_unseen_variant_pass_rate = float(guarded_unseen_variants.get("pass_rate") or 0.0)
+    guarded_overlay_seen_baseline_pass_rate = float(guarded_seen_variants.get("baseline_pass_rate") or 0.0)
+    guarded_overlay_unseen_baseline_pass_rate = float(guarded_unseen_variants.get("baseline_pass_rate") or 0.0)
+    guarded_overlay_seen_final_pass_rate = float(guarded_seen_variants.get("final_pass_rate") or 0.0)
+    guarded_overlay_unseen_final_pass_rate = float(guarded_unseen_variants.get("final_pass_rate") or 0.0)
     guarded_overlay_generalization_rate = round(
         (
             int(guarded_seen_variants.get("top1_hits") or 0)
@@ -7872,6 +7886,10 @@ def _evaluate_sanity_learning_probe(
         "guarded_overlay_generalization_rate": guarded_overlay_generalization_rate,
         "guarded_overlay_seen_variant_pass_rate": guarded_overlay_seen_variant_pass_rate,
         "guarded_overlay_unseen_variant_pass_rate": guarded_overlay_unseen_variant_pass_rate,
+        "guarded_overlay_seen_baseline_pass_rate": guarded_overlay_seen_baseline_pass_rate,
+        "guarded_overlay_unseen_baseline_pass_rate": guarded_overlay_unseen_baseline_pass_rate,
+        "guarded_overlay_seen_final_pass_rate": guarded_overlay_seen_final_pass_rate,
+        "guarded_overlay_unseen_final_pass_rate": guarded_overlay_unseen_final_pass_rate,
         "guarded_overlay_unsafe_override_count": guarded_overlay_unsafe_override_count,
         "guarded_overlay_sanity": {
             "supported": bool(engine_alias == "exp4"),
@@ -11243,6 +11261,7 @@ def _sanity_learning_summary(summary: dict) -> dict:
         raw_unseen_rate = float(probe.get("raw_policy_unseen_generalization_rate") or 0.0)
         final_unseen_rate = float(probe.get("final_decision_unseen_generalization_rate") or 0.0)
         guarded_unseen_rate = float(probe.get("guarded_overlay_unseen_variant_pass_rate") or 0.0)
+        guarded_unseen_baseline_rate = float(probe.get("guarded_overlay_unseen_baseline_pass_rate") or 0.0)
         raw_generalization = float(probe.get("raw_policy_generalization_rate") or 0.0)
         final_generalization = float(probe.get("final_decision_generalization_rate") or 0.0)
         guarded_generalization = float(probe.get("guarded_overlay_generalization_rate") or 0.0)
@@ -11269,6 +11288,7 @@ def _sanity_learning_summary(summary: dict) -> dict:
                 "final_decision_unseen_generalization_rate": round(final_unseen_rate, 4),
                 "guarded_overlay_generalization_rate": round(guarded_generalization, 4),
                 "guarded_overlay_unseen_variant_pass_rate": round(guarded_unseen_rate, 4),
+                "guarded_overlay_unseen_baseline_pass_rate": round(guarded_unseen_baseline_rate, 4),
                 "guarded_overlay_unsafe_override_count": guarded_unsafe,
                 "learning_signal": learning_signal,
                 "learning_signal_reason": learning_signal_reason,
@@ -11290,6 +11310,89 @@ def _sanity_learning_summary(summary: dict) -> dict:
             "PARTIAL_EXACT_OR_LOW_MARGIN_ONLY: exact-FEN matched but unseen-variant generalization below threshold",
             "low_margin_override_counted_success_count must be 0; low-margin overrides cannot count as learning success",
             "broad generalization is only claimed when verdict=GENERALIZED at all trusted checkpoints",
+        ],
+    }
+
+
+def _guarded_overlay_broad_sanity_gate(summary: dict) -> dict:
+    """exp4 guarded-overlay promotion-shape gate.
+
+    This does not approve production by itself. It answers the narrower
+    question: if runtime remains baseline-default and only uses the guarded
+    overlay, does the candidate improve deterministic score without broad
+    sanity regression or unsafe overrides?
+    """
+    if str(summary.get("engine_alias") or "") != "exp4":
+        return {"supported": False, "passed": False, "reason": "only_supported_for_exp4"}
+    actual = summary.get("exp4_actual_runtime_guarded_overlay") or {}
+    reasons: list[str] = []
+    if not actual.get("supported"):
+        reasons.append("actual runtime guarded overlay report missing")
+    if actual.get("candidate_worth_runtime_overlay") is not True:
+        reasons.append("actual runtime guarded overlay did not improve over baseline safely")
+    if int(actual.get("unsafe_override_count") or 0) != 0:
+        reasons.append("actual runtime guarded overlay has unsafe overrides")
+    if int(actual.get("simulator_selected_mismatch_count") or 0) != 0:
+        reasons.append("actual runtime guarded overlay differs from simulator")
+    if float(actual.get("delta_vs_baseline") or 0.0) <= 0.0:
+        reasons.append("actual runtime guarded overlay score did not improve over baseline")
+
+    checkpoints = (summary.get("before_after_eval") or {}).get("checkpoints") or []
+    if not checkpoints:
+        reasons.append("guarded overlay broad sanity checkpoints missing")
+    per_trusted = []
+    for checkpoint in checkpoints:
+        trusted = checkpoint.get("trusted_count") or checkpoint.get("trusted_replays")
+        probe = checkpoint.get("sanity_learning_probe") or {}
+        seen = probe.get("guarded_overlay_sanity", {}).get("seen_variants") or {}
+        unseen = probe.get("guarded_overlay_sanity", {}).get("unseen_variants") or {}
+        if not (seen.get("supported") and unseen.get("supported")):
+            reasons.append(f"guarded overlay sanity missing at trusted={trusted}")
+            continue
+        seen_rate = float(seen.get("pass_rate") or 0.0)
+        seen_baseline = float(seen.get("baseline_pass_rate") or 0.0)
+        unseen_rate = float(unseen.get("pass_rate") or 0.0)
+        unseen_baseline = float(unseen.get("baseline_pass_rate") or 0.0)
+        unsafe = int(seen.get("unsafe_override_count") or 0) + int(unseen.get("unsafe_override_count") or 0)
+        row = {
+            "trusted_count": trusted,
+            "seen_variant_pass_rate": round(seen_rate, 4),
+            "seen_baseline_pass_rate": round(seen_baseline, 4),
+            "unseen_variant_pass_rate": round(unseen_rate, 4),
+            "unseen_baseline_pass_rate": round(unseen_baseline, 4),
+            "unsafe_override_count": unsafe,
+            "seen_non_regression": seen_rate + 1e-9 >= seen_baseline,
+            "unseen_non_regression": unseen_rate + 1e-9 >= unseen_baseline,
+        }
+        if not row["seen_non_regression"]:
+            reasons.append(f"guarded overlay seen variant pass rate regressed at trusted={trusted}")
+        if not row["unseen_non_regression"]:
+            reasons.append(f"guarded overlay unseen variant pass rate regressed at trusted={trusted}")
+        if unsafe != 0:
+            reasons.append(f"guarded overlay sanity unsafe override at trusted={trusted}")
+        per_trusted.append(row)
+
+    special_rule = summary.get("special_rule_deterministic_gate") or {}
+    if special_rule and float(special_rule.get("pass_rate") or 0.0) < 1.0:
+        reasons.append("special-rule gate below 1.0")
+    return {
+        "supported": True,
+        "passed": not reasons,
+        "production_enablement_required": True,
+        "scope": "guarded_overlay_candidate",
+        "reasons": reasons,
+        "per_trusted": per_trusted,
+        "actual_runtime_guarded_overlay": {
+            "actual_runtime_guarded_score": actual.get("actual_runtime_guarded_score"),
+            "baseline_score": actual.get("baseline_score"),
+            "delta_vs_baseline": actual.get("delta_vs_baseline"),
+            "unsafe_override_count": actual.get("unsafe_override_count"),
+            "simulator_selected_mismatch_count": actual.get("simulator_selected_mismatch_count"),
+            "candidate_worth_runtime_overlay": actual.get("candidate_worth_runtime_overlay"),
+        },
+        "notes": [
+            "This gate evaluates the guarded-overlay promotion shape, not full model replacement.",
+            "passed=true means eligible for a guarded overlay promotion request; it does not auto-enable production.",
         ],
     }
 
@@ -11608,6 +11711,7 @@ def _promotion_gate_summary(summary: dict) -> dict:
     if str(summary.get("engine_verdict") or "") not in {"", "PASS"}:
         reasons.append(f"engine verdict {summary.get('engine_verdict')}")
     classified = _classify_promotion_blockers(reasons, summary)
+    guarded_overlay_gate = _guarded_overlay_broad_sanity_gate(summary)
     opening_specialist_gate = {
         "passed": not classified["opening_specialist_gate_blockers"],
         "reasons": classified["opening_specialist_gate_blockers"],
@@ -11629,6 +11733,7 @@ def _promotion_gate_summary(summary: dict) -> dict:
         "general_model_promotion_blockers": classified["general_model_promotion_blockers"],
         "opening_specialist_gate": opening_specialist_gate,
         "general_model_promotion_gate": general_model_promotion_gate,
+        "guarded_overlay_broad_sanity_gate": guarded_overlay_gate,
         "thresholds": {
             "dataset_duplicate_ratio_limit": DATASET_DUPLICATE_RATIO_LIMIT,
             "dataset_short_resign_limit": DATASET_SHORT_RESIGN_LIMIT,
@@ -11881,6 +11986,7 @@ def _root_engine_row(summary: dict) -> dict:
         "promotion_gate_general_model_promotion_blockers": (summary.get("promotion_gate") or {}).get("general_model_promotion_blockers") or [],
         "opening_specialist_gate": (summary.get("promotion_gate") or {}).get("opening_specialist_gate") or {},
         "general_model_promotion_gate": (summary.get("promotion_gate") or {}).get("general_model_promotion_gate") or {},
+        "guarded_overlay_broad_sanity_gate": (summary.get("promotion_gate") or {}).get("guarded_overlay_broad_sanity_gate") or {},
         "catastrophic_regression": (summary.get("stability") or {}).get("catastrophic_regression"),
         "catastrophic_regression_source": (summary.get("stability") or {}).get("catastrophic_regression_source") or {},
         "e_pawn_clean_held_out_diagnosis": summary.get("e_pawn_clean_held_out_diagnosis") or {},

@@ -2215,6 +2215,128 @@ def test_exp4_guarded_overlay_actual_runtime_helper_uses_real_board_state(monkey
     assert decision["guard_detail"]["final_score_cp"] is not None
 
 
+def test_exp4_guarded_overlay_broad_sanity_gate_uses_no_label_runtime_overlay_shape():
+    module = _load_validation_module()
+    summary = {
+        "engine_alias": "exp4",
+        "exp4_actual_runtime_guarded_overlay": {
+            "supported": True,
+            "candidate_worth_runtime_overlay": True,
+            "unsafe_override_count": 0,
+            "simulator_selected_mismatch_count": 0,
+            "baseline_score": 0.8693,
+            "actual_runtime_guarded_score": 0.9231,
+            "delta_vs_baseline": 0.0538,
+        },
+        "special_rule_deterministic_gate": {"supported": True, "pass_rate": 1.0},
+        "before_after_eval": {
+            "checkpoints": [
+                {
+                    "trusted_count": 10,
+                    "sanity_learning_probe": {
+                        "guarded_overlay_sanity": {
+                            "seen_variants": {
+                                "supported": True,
+                                "pass_rate": 0.5,
+                                "baseline_pass_rate": 0.4,
+                                "unsafe_override_count": 0,
+                            },
+                            "unseen_variants": {
+                                "supported": True,
+                                "pass_rate": 0.45,
+                                "baseline_pass_rate": 0.45,
+                                "unsafe_override_count": 0,
+                            },
+                        }
+                    },
+                }
+            ]
+        },
+    }
+
+    gate = module._guarded_overlay_broad_sanity_gate(summary)
+
+    assert gate["supported"] is True
+    assert gate["passed"] is True
+    assert gate["production_enablement_required"] is True
+    assert gate["actual_runtime_guarded_overlay"]["delta_vs_baseline"] == 0.0538
+    assert gate["per_trusted"][0]["seen_non_regression"] is True
+    assert gate["per_trusted"][0]["unseen_non_regression"] is True
+
+
+def test_exp4_guarded_overlay_broad_sanity_gate_blocks_runtime_regression_and_mismatch():
+    module = _load_validation_module()
+    summary = {
+        "engine_alias": "exp4",
+        "exp4_actual_runtime_guarded_overlay": {
+            "supported": True,
+            "candidate_worth_runtime_overlay": False,
+            "unsafe_override_count": 1,
+            "simulator_selected_mismatch_count": 1,
+            "baseline_score": 0.8693,
+            "actual_runtime_guarded_score": 0.86,
+            "delta_vs_baseline": -0.0093,
+        },
+        "special_rule_deterministic_gate": {"supported": True, "pass_rate": 0.8571},
+        "before_after_eval": {
+            "checkpoints": [
+                {
+                    "trusted_count": 20,
+                    "sanity_learning_probe": {
+                        "guarded_overlay_sanity": {
+                            "seen_variants": {
+                                "supported": True,
+                                "pass_rate": 0.3,
+                                "baseline_pass_rate": 0.5,
+                                "unsafe_override_count": 0,
+                            },
+                            "unseen_variants": {
+                                "supported": True,
+                                "pass_rate": 0.2,
+                                "baseline_pass_rate": 0.3,
+                                "unsafe_override_count": 1,
+                            },
+                        }
+                    },
+                }
+            ]
+        },
+    }
+
+    gate = module._guarded_overlay_broad_sanity_gate(summary)
+
+    assert gate["passed"] is False
+    assert "actual runtime guarded overlay did not improve over baseline safely" in gate["reasons"]
+    assert "actual runtime guarded overlay has unsafe overrides" in gate["reasons"]
+    assert "actual runtime guarded overlay differs from simulator" in gate["reasons"]
+    assert "actual runtime guarded overlay score did not improve over baseline" in gate["reasons"]
+    assert "guarded overlay seen variant pass rate regressed at trusted=20" in gate["reasons"]
+    assert "guarded overlay unseen variant pass rate regressed at trusted=20" in gate["reasons"]
+    assert "guarded overlay sanity unsafe override at trusted=20" in gate["reasons"]
+    assert "special-rule gate below 1.0" in gate["reasons"]
+
+
+def test_compact_sanity_probe_preserves_guarded_overlay_baseline_rates():
+    module = _load_validation_module()
+    compact = module._compact_sanity_probe_for_summary(
+        {
+            "guarded_overlay_generalization_rate": 0.4,
+            "guarded_overlay_seen_variant_pass_rate": 0.5,
+            "guarded_overlay_unseen_variant_pass_rate": 0.3,
+            "guarded_overlay_seen_baseline_pass_rate": 0.45,
+            "guarded_overlay_unseen_baseline_pass_rate": 0.35,
+            "guarded_overlay_seen_final_pass_rate": 0.48,
+            "guarded_overlay_unseen_final_pass_rate": 0.32,
+            "guarded_overlay_unsafe_override_count": 2,
+        }
+    )
+
+    assert compact["guarded_overlay_seen_baseline_pass_rate"] == 0.45
+    assert compact["guarded_overlay_unseen_baseline_pass_rate"] == 0.35
+    assert compact["guarded_overlay_seen_final_pass_rate"] == 0.48
+    assert compact["guarded_overlay_unseen_final_pass_rate"] == 0.32
+
+
 def test_quick_gate_does_not_promote_on_loss_or_hash_without_score_and_matched_probe():
     module = _load_validation_module()
     summary = {

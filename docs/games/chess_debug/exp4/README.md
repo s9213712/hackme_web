@@ -813,8 +813,22 @@ exp4_08 顯示 e_pawn 真失敗只剩 1 個 case (`gate_e_pawn_hard_001` × cp10
 - mistake_retention probe 仍保留 strict mode；mistake-retention fallback 仍獨立記錄在 `targeted_mistake_retention_success`，不可被 label audit 改成 broad opening generalization。
 - audits/*.jsonl 已包含 exp4_08 的 opening_target_margin_audit + e_pawn_clean_held_out_diagnosis；本輪 `opening_label_audit` 的 case rows 仍留在 summary（總筆數 ~6 不大）。
 
+## 最新狀態（exp4_23）
+
+exp4 的 guarded overlay 路線目前不是 promotion-ready。
+
+exp4_23 將 exp4_20-22 的 deterministic guarded overlay 訊號放到 broad sanity variants 上檢查，結果如下：
+
+- deterministic guarded overlay 仍有正向訊號：baseline / full replacement `0.8693`，actual runtime guarded `0.9231`，delta `+0.0538`。
+- deterministic 小題庫內 unsafe override 仍是 `0`，simulator mismatch 仍是 `0`。
+- full broad sanity gate 擋下：trusted=10 unsafe override `14`，trusted=20 unsafe override `12`，trusted=20 unseen guarded pass rate `0.3889` 低於 baseline `0.3968`。
+- 結論：guarded overlay 可作為候選方向，但 runtime guard 太寬，不能 production enable。
+
+下一步應優先做 unsafe override row audit 與 guard 收斂，不要先 retrain。
+
 ## 歷程報告
 
+- [2026-05-12 Exp4_23 guarded overlay broad sanity gate](2026-05-12_exp4_23_guarded_overlay_broad_sanity_gate.md)
 - [2026-05-12 Exp4_22 actual runtime guarded overlay full diagnostic](2026-05-12_exp4_22_actual_runtime_guarded_overlay_full.md)
 - [2026-05-12 Exp4_19 guarded overlay attribution](2026-05-12_exp4_19_guarded_overlay_attribution.md)
 - [2026-05-12 Exp4_20 runtime guarded overlay simulator](2026-05-12_exp4_20_runtime_guarded_overlay.md)

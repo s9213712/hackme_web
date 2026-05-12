@@ -275,6 +275,16 @@ exp4_22 actual runtime guarded overlay full diagnostic（2026-05-12）：
 - full diagnostic verdict：`HIGH_RISK`，promotion `false`，total wall seconds `2515.596`。
 - 判讀：actual runtime overlay 本身沒 drift；真正問題是 current broad sanity 仍評估 full final replacement，不是 guarded overlay。已新增 `guarded_overlay_sanity` 派生欄位，下一輪 full run 要用它判斷 guarded overlay broad behavior。
 
+exp4_23 guarded overlay broad sanity gate（2026-05-12）：
+
+- 詳細報告：[`exp4/2026-05-12_exp4_23_guarded_overlay_broad_sanity_gate.md`](exp4/2026-05-12_exp4_23_guarded_overlay_broad_sanity_gate.md)。
+- quick result dir：`/home/s92137/hackme_web/runtime/chess_results/exp4_23_guarded_overlay_broad_sanity_gate_quick`
+- full result dir：`/home/s92137/hackme_web/runtime/chess_results/exp4_23_guarded_overlay_broad_sanity_gate_full`
+- actual runtime guarded deterministic score 仍是 `0.9231`，baseline / full replacement 仍是 `0.8693`，delta `+0.0538`，deterministic unsafe override `0`，simulator mismatch `0`。
+- 新增 `guarded_overlay_broad_sanity_gate`，把 guarded overlay promotion shape 放到 seen/unseen variants 上檢查。full diagnostic 結果 gate `passed=false`。
+- 關鍵 blocker：trusted=10 guarded sanity unsafe override `14`；trusted=20 guarded sanity unsafe override `12`；trusted=20 unseen guarded pass rate `0.3889` 低於 baseline `0.3968`。
+- 判讀：exp4_23 正確證明 deterministic 小題庫的 guarded overlay 安全性不足以 promotion。下一步不是 retrain，而是 audit unsafe override rows 並收緊 runtime guard。
+
 exp4_14 balanced curriculum + retention rehearsal + budget + rollback guard（2026-05-12）：
 
 - special-rule weights 大幅下調（castling/e.p. 3→1.5、knight_mate/underpromote 4→2、queen 1→0.75）；新增 3 個 short-castle FEN 變體。
