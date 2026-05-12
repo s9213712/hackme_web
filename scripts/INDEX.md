@@ -72,6 +72,7 @@ scripts.
 | `scripts/comfyui/feature_probe.py` | ComfyUI probe | ComfyUI | Probe local ComfyUI capability metadata. | Console output | Local ComfyUI capability detection failed. |
 | `scripts/comfyui/local_connection_smoke.py` | ComfyUI smoke | ComfyUI | Check local ComfyUI connectivity. | Console output | Local ComfyUI is unreachable or incompatible. |
 | `scripts/comfyui/materialize_system_workflows.py` | ComfyUI operator | ComfyUI | Materialize system workflow presets. | Runtime/database changes in selected environment | Workflow preset materialization failed. |
+| `scripts/games/board_ai_benchmark.py` | Board-game benchmark | Games / ML | Quantify Reversi, Go, and Gomoku local AI strength with round-robin Elo and deterministic skill probes. | `runtime/reports/games/board_ai_benchmark_*` | A board-game AI candidate regressed, produced illegal moves, or lacks measurable strength evidence. |
 | `scripts/games/chess_exp1_dataset_train.py` | Chess training | Games / ML | Train exp1 from replay-derived FEN/move JSONL datasets. | Target chess experiment DB path | Dataset parsing or exp1 training failed. |
 | `scripts/games/chess_exp2_dataset_train.py` | Chess training | Games / ML | Train exp2 neural model from replay-derived datasets. | Target exp2 model path | Dataset parsing or exp2 training failed. |
 | `scripts/games/chess_exp3_dataset_train.py` | Chess training | Games / ML | Train exp3 deep-learning model from external or teacher-distilled datasets. | Target exp3 model/replay paths | Dataset parsing, teacher distillation, or exp3 training failed. |
