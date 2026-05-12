@@ -1390,9 +1390,15 @@ function setAuthState(json, showLoginHero = false) {
   if (currentRole !== "super_admin" && canAccessModule("appeals")) {
     loadUserAppeals();
   }
+  let requestedModuleParam = "";
+  try {
+    requestedModuleParam = new URLSearchParams(location.search || "").get("module") || "";
+  } catch (err) {}
   const requestedInitialModule = ((location.pathname === "/videos" || (location.hash || "").startsWith("#videos/")) && canAccessModule("videos"))
     ? "videos"
-    : "";
+    : (requestedModuleParam === "games" && canAccessModule("games"))
+      ? "games"
+      : "";
   const initialModule = requestedInitialModule || (canAccessModule("accounts")
     ? "accounts"
     : canAccessModule("chat")

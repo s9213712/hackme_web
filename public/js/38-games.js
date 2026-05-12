@@ -2,10 +2,16 @@
 
 let gameSelectedMatchId = null;
 let gameSelectedSquare = null;
-let gameSelectedKey = "chess";
+let gameSelectedKey = gameInitialSelectedKey();
 let chessMoveInFlight = false;
 let gameState = { matches: [], invites: [], leaderboard: [] };
 let soloGameTimer = null;
+let inlineModuleCleanup = null;
+let inlineModuleActiveApi = null;
+let inlineModuleMountedKey = "";
+let inlineModuleTouchStart = null;
+let inlineModulePressedControl = null;
+const INLINE_MODULE_GAME_KEYS = new Set(["snake", "game_2048", "brick_breaker", "reversi", "go", "gomoku"]);
 const CHESS_PIECES = {
   K: "♔", Q: "♕", R: "♖", B: "♗", N: "♘", P: "♙",
   k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟",
@@ -50,6 +56,18 @@ const CHESS_PIPELINE_FALLBACK_COMMANDS = {
   full_pipeline: "python3 scripts/games/chess_train_pipeline.py --preset standard --include-quarantine",
 };
 
+function gameUrlParams() {
+  try {
+    return new URLSearchParams(window.location.search || "");
+  } catch (err) {
+    return new URLSearchParams("");
+  }
+}
+
+function gameInitialSelectedKey() {
+  return String(gameUrlParams().get("game") || "chess").trim() || "chess";
+}
+
 function setOneA2BNotice(text, ms = 3500) {
   if (!oneA2BState) return;
   oneA2BState.notice = text || "";
@@ -83,6 +101,7 @@ function ensureSoloGameTimer() {
     if (gameSelectedKey === "1a2b") updateOneA2BStatus();
     if (gameSelectedKey === "tetris") updateTetrisStatus();
     if (gameSelectedKey === "space_shooter") updateSpaceShooterStatus();
+    if (gameSelectedKey === "fps_arena" && typeof window.updateFpsArenaStatus === "function") window.updateFpsArenaStatus();
   }, 250);
 }
 
@@ -92,7 +111,8 @@ function stopSoloGameTimerIfIdle() {
   const oneA2BActive = oneA2BState && !oneA2BState.completedAt;
   const tetrisActive = tetrisState && tetrisState.status === "active";
   const shooterActive = spaceShooterState && spaceShooterState.status === "active";
-  if (!sudokuActive && !minesActive && !oneA2BActive && !tetrisActive && !shooterActive && soloGameTimer) {
+  const fpsActive = typeof window.isFpsArenaActive === "function" && window.isFpsArenaActive();
+  if (!sudokuActive && !minesActive && !oneA2BActive && !tetrisActive && !shooterActive && !fpsActive && soloGameTimer) {
     clearInterval(soloGameTimer);
     soloGameTimer = null;
   }
@@ -106,20 +126,34 @@ function setGameMsg(text, ok) {
 }
 
 function gameIcon(key) {
+  if (key === "snake") return "S";
+  if (key === "game_2048") return "2";
+  if (key === "brick_breaker") return "▤";
+  if (key === "reversi") return "●";
+  if (key === "go") return "○";
+  if (key === "gomoku") return "五";
   if (key === "sudoku") return "9";
   if (key === "minesweeper") return "!";
   if (key === "1a2b") return "A";
   if (key === "tetris") return "▦";
   if (key === "space_shooter") return "▲";
+  if (key === "fps_arena") return "◎";
   return "♟";
 }
 
 function gameSubtitle(game) {
+  if (game.key === "snake") return "手機滑動 / 鍵盤皆可玩";
+  if (game.key === "game_2048") return "手機滑動合併數字";
+  if (game.key === "brick_breaker") return "手機按鍵控制擋板";
+  if (game.key === "reversi") return "本機雙人黑白棋";
+  if (game.key === "go") return "9 路本機雙人圍棋";
+  if (game.key === "gomoku") return "15 路本機雙人五子棋";
   if (game.key === "sudoku") return "單人邏輯解題";
   if (game.key === "minesweeper") return "單人推理挑戰";
   if (game.key === "1a2b") return "單人猜數字";
   if (game.key === "tetris") return "高分消除挑戰";
   if (game.key === "space_shooter") return "高分射擊挑戰";
+  if (game.key === "fps_arena") return "四模式 3D 射擊訓練";
   return game.supports_computer ? "玩家對戰 / 電腦練習" : "玩家對戰";
 }
 
@@ -159,7 +193,10 @@ function renderChessPracticeDifficultyOptions(games) {
 function switchGameView(key) {
   setGameMsg("", true);
   gameSelectedKey = key || "chess";
+  const select = $("game-select");
+  if (select && select.value !== gameSelectedKey) select.value = gameSelectedKey;
   const isChess = gameSelectedKey === "chess";
+  const isInlineModule = INLINE_MODULE_GAME_KEYS.has(gameSelectedKey);
   const chessLobby = $("chess-lobby-panel");
   const chessPanel = $("chess-game-panel");
   const sudokuPanel = $("sudoku-game-panel");
@@ -167,6 +204,8 @@ function switchGameView(key) {
   const oneA2BPanel = $("onea2b-game-panel");
   const tetrisPanel = $("tetris-game-panel");
   const shooterPanel = $("space-shooter-game-panel");
+  const fpsPanel = $("fps-arena-game-panel");
+  const inlineModulePanel = $("inline-module-game-panel");
   if (chessLobby) chessLobby.style.display = isChess ? "" : "none";
   if (chessPanel) chessPanel.style.display = isChess ? "" : "none";
   if (sudokuPanel) sudokuPanel.style.display = gameSelectedKey === "sudoku" ? "" : "none";
@@ -174,9 +213,16 @@ function switchGameView(key) {
   if (oneA2BPanel) oneA2BPanel.style.display = gameSelectedKey === "1a2b" ? "" : "none";
   if (tetrisPanel) tetrisPanel.style.display = gameSelectedKey === "tetris" ? "" : "none";
   if (shooterPanel) shooterPanel.style.display = gameSelectedKey === "space_shooter" ? "" : "none";
+  if (fpsPanel) fpsPanel.style.display = gameSelectedKey === "fps_arena" ? "" : "none";
+  if (inlineModulePanel) inlineModulePanel.style.display = isInlineModule ? "" : "none";
   document.querySelectorAll("[data-game-key]").forEach((btn) => {
     btn.classList.toggle("active", btn.getAttribute("data-game-key") === gameSelectedKey);
   });
+  if (isInlineModule) {
+    mountInlineModuleGame(gameSelectedKey);
+  } else {
+    cleanupInlineModuleGame();
+  }
   if (gameSelectedKey === "sudoku" && !sudokuState) {
     renderSudokuBoard();
     updateSudokuStatus();
@@ -196,6 +242,10 @@ function switchGameView(key) {
   if (gameSelectedKey === "space_shooter" && !spaceShooterState) {
     renderSpaceShooterBoard();
     updateSpaceShooterStatus();
+  }
+  if (gameSelectedKey === "fps_arena" && typeof window.renderFpsArenaBoard === "function") {
+    window.renderFpsArenaBoard();
+    if (typeof window.updateFpsArenaStatus === "function") window.updateFpsArenaStatus();
   }
   loadSelectedGameLeaderboard().catch((err) => setGameMsg(err.message || "排行榜讀取失敗", false));
 }
@@ -236,17 +286,84 @@ async function gameRequest(path, { method = "GET", body = null } = {}) {
   return json;
 }
 
+function cleanupInlineModuleGame() {
+  if (inlineModuleCleanup) inlineModuleCleanup();
+  inlineModuleCleanup = null;
+  inlineModuleActiveApi = null;
+  inlineModuleMountedKey = "";
+  inlineModuleTouchStart = null;
+  inlineModulePressedControl = null;
+  const root = $("inline-module-game-root");
+  if (root) {
+    root.onclick = null;
+    root.innerHTML = "";
+  }
+  const actions = $("inline-module-game-actions");
+  if (actions) actions.innerHTML = "";
+  const controls = $("inline-module-game-controls");
+  if (controls) controls.innerHTML = "";
+}
+
+async function submitInlineModuleScore(key, body) {
+  try {
+    await gameRequest(`/games/${encodeURIComponent(key)}/solo-scores`, { method: "POST", body });
+    setGameMsg("成績已送出", true);
+    await loadSelectedGameLeaderboard();
+  } catch (err) {
+    setGameMsg(err.message || "成績送出失敗", false);
+  }
+}
+
+function createInlineModuleApi(key) {
+  const root = $("inline-module-game-root");
+  const actions = $("inline-module-game-actions");
+  const controls = $("inline-module-game-controls");
+  return {
+    key,
+    root,
+    actions,
+    controls,
+    onAction: null,
+    onControl: null,
+    onKey: null,
+    setTitle(text) { $("inline-module-game-title").textContent = text || ""; },
+    status(text) { $("inline-module-game-status").textContent = text || ""; },
+    setActions(html) { actions.innerHTML = html || ""; },
+    setControls(html) { controls.innerHTML = html || ""; },
+    submitScore(body) { return submitInlineModuleScore(key, body); },
+  };
+}
+
+function mountInlineModuleGame(key) {
+  if (inlineModuleMountedKey === key && inlineModuleActiveApi) return;
+  cleanupInlineModuleGame();
+  const game = window.hackmeGameByKey?.(key) || {};
+  const module = window.HACKME_GAME_MODULES?.[key];
+  $("inline-module-game-title").textContent = game.title || "遊戲";
+  $("inline-module-game-status").textContent = game.subtitle || "準備中";
+  if (!module?.mount) {
+    $("inline-module-game-root").innerHTML = "<div class=\"game-page-empty\"><strong>遊戲模組尚未載入</strong></div>";
+    return;
+  }
+  const api = createInlineModuleApi(key);
+  inlineModuleActiveApi = api;
+  inlineModuleMountedKey = key;
+  inlineModuleCleanup = module.mount(api) || null;
+}
+
 function renderGameCatalog(games) {
   const wrap = $("game-catalog-list");
   if (!wrap) return;
   const rows = Array.isArray(games) ? games : [];
   renderChessPracticeDifficultyOptions(rows);
-  wrap.innerHTML = rows.map((game) => `
-    <button class="game-catalog-item ${game.key === gameSelectedKey ? "active" : ""}" type="button" data-game-key="${sanitize(game.key || "chess")}">
-      <span class="game-catalog-icon">${sanitize(gameIcon(game.key))}</span>
-      <span><strong>${sanitize(game.title || "西洋棋")}</strong><small>${sanitize(gameSubtitle(game))}</small></span>
-    </button>
-  `).join("") || "<p style=\"color:var(--muted);\">尚未開放遊戲</p>";
+  wrap.innerHTML = rows.length ? `
+    <div class="game-select-panel">
+      <label for="game-select">選擇遊戲</label>
+      <select id="game-select" aria-label="選擇遊戲">
+        ${rows.map((game) => `<option value="${sanitize(game.key || "chess")}" ${game.key === gameSelectedKey ? "selected" : ""}>${sanitize(game.title || "西洋棋")} · ${sanitize(gameSubtitle(game))}</option>`).join("")}
+      </select>
+    </div>
+  ` : "<p style=\"color:var(--muted);\">尚未開放遊戲</p>";
   if (!rows.some((game) => game.key === gameSelectedKey)) gameSelectedKey = "chess";
   switchGameView(gameSelectedKey);
 }
@@ -773,6 +890,11 @@ async function loadSelectedGameLeaderboard() {
     path = "/games/tetris/solo-leaderboard";
   } else if (key === "space_shooter") {
     path = "/games/space_shooter/solo-leaderboard";
+  } else if (key === "fps_arena") {
+    const mode = typeof window.currentFpsArenaMode === "function" ? window.currentFpsArenaMode() : "aim";
+    path = `/games/fps_arena/solo-leaderboard?difficulty=${encodeURIComponent(mode)}`;
+  } else if (INLINE_MODULE_GAME_KEYS.has(key)) {
+    path = `/games/${encodeURIComponent(key)}/solo-leaderboard`;
   }
   const data = await gameRequest(path);
   gameState.leaderboard = data.leaderboard || [];
@@ -1506,6 +1628,7 @@ function handleGameTouchAction(action) {
   if (action === "shooter-left") return nudgeSpaceShooter(-34);
   if (action === "shooter-right") return nudgeSpaceShooter(34);
   if (action === "shooter-fire") return shootSpaceShooter();
+  if (action.startsWith("fps-") && typeof window.handleFpsArenaTouch === "function") return window.handleFpsArenaTouch(action);
 }
 
 function renderSpaceShooterBoard() {
@@ -1910,6 +2033,11 @@ async function promoteChessCandidate() {
 }
 
 document.addEventListener("click", (event) => {
+  const inlineModuleAction = event.target?.closest?.("#inline-module-game-panel [data-action]");
+  if (inlineModuleAction && inlineModuleActiveApi?.onAction) {
+    inlineModuleActiveApi.onAction(inlineModuleAction.dataset.action || "");
+    return;
+  }
   const catalogBtn = event.target?.closest?.("[data-game-key]");
   if (catalogBtn) {
     switchGameView(catalogBtn.dataset.gameKey || "chess");
@@ -1953,6 +2081,16 @@ document.addEventListener("click", (event) => {
   const shooterNewBtn = event.target?.closest?.("#space-shooter-new-btn");
   if (shooterNewBtn) {
     startSpaceShooterGame();
+    return;
+  }
+  const fpsNewBtn = event.target?.closest?.("#fps-arena-new-btn");
+  if (fpsNewBtn) {
+    if (typeof window.startFpsArenaGame === "function") window.startFpsArenaGame();
+    return;
+  }
+  const fpsStopBtn = event.target?.closest?.("#fps-arena-stop-btn");
+  if (fpsStopBtn) {
+    if (typeof window.finishFpsArenaGame === "function") window.finishFpsArenaGame("manual");
     return;
   }
   const rootRefreshBtn = event.target?.closest?.("#game-root-chess-refresh-btn");
@@ -2028,6 +2166,54 @@ document.addEventListener("click", (event) => {
   }
 });
 
+document.addEventListener("pointerdown", (event) => {
+  const control = event.target?.closest?.("#inline-module-game-controls button");
+  if (!control || !inlineModuleActiveApi?.onControl) return;
+  event.preventDefault();
+  inlineModulePressedControl = control;
+  inlineModuleActiveApi.onControl(control, true);
+});
+
+document.addEventListener("pointerup", () => {
+  if (!inlineModulePressedControl || !inlineModuleActiveApi?.onControl) {
+    inlineModulePressedControl = null;
+    return;
+  }
+  if (inlineModulePressedControl.dataset.hold) {
+    inlineModuleActiveApi.onControl(inlineModulePressedControl, false);
+  }
+  inlineModulePressedControl = null;
+});
+
+document.addEventListener("pointercancel", () => {
+  if (inlineModulePressedControl?.dataset.hold && inlineModuleActiveApi?.onControl) {
+    inlineModuleActiveApi.onControl(inlineModulePressedControl, false);
+  }
+  inlineModulePressedControl = null;
+});
+
+document.addEventListener("touchstart", (event) => {
+  const root = event.target?.closest?.("#inline-module-game-root");
+  if (!root) return;
+  const touch = event.changedTouches[0];
+  inlineModuleTouchStart = touch ? { x: touch.clientX, y: touch.clientY } : null;
+}, { passive: true });
+
+document.addEventListener("touchend", (event) => {
+  const root = event.target?.closest?.("#inline-module-game-root");
+  if (!root || !inlineModuleTouchStart || !inlineModuleActiveApi?.onKey) return;
+  const touch = event.changedTouches[0];
+  if (!touch) return;
+  const dx = touch.clientX - inlineModuleTouchStart.x;
+  const dy = touch.clientY - inlineModuleTouchStart.y;
+  inlineModuleTouchStart = null;
+  if (Math.max(Math.abs(dx), Math.abs(dy)) < 24) return;
+  const key = Math.abs(dx) > Math.abs(dy)
+    ? (dx > 0 ? "ArrowRight" : "ArrowLeft")
+    : (dy > 0 ? "ArrowDown" : "ArrowUp");
+  inlineModuleActiveApi.onKey({ key, preventDefault() {} }, true);
+}, { passive: true });
+
 document.addEventListener("submit", (event) => {
   const uciForm = event.target?.closest?.("#game-chess-uci-form");
   if (!uciForm) return;
@@ -2060,6 +2246,10 @@ document.addEventListener("keydown", (event) => {
   }
   const tag = String(event.target?.tagName || "").toLowerCase();
   const editing = ["input", "textarea", "select"].includes(tag);
+  if (!editing && INLINE_MODULE_GAME_KEYS.has(gameSelectedKey) && inlineModuleActiveApi?.onKey) {
+    if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", " "].includes(event.key)) event.preventDefault();
+    inlineModuleActiveApi.onKey(event, true);
+  }
   if (!editing && gameSelectedKey === "tetris" && tetrisState?.status === "active") {
     if (["ArrowLeft", "ArrowRight", "ArrowDown", "ArrowUp", " "].includes(event.key)) {
       event.preventDefault();
@@ -2076,18 +2266,37 @@ document.addEventListener("keydown", (event) => {
       spaceShooterState.keys[event.key] = true;
     }
   }
+  if (!editing && gameSelectedKey === "fps_arena" && typeof window.handleFpsArenaKey === "function") {
+    window.handleFpsArenaKey(event, true);
+  }
 });
 
 document.addEventListener("keyup", (event) => {
+  if (INLINE_MODULE_GAME_KEYS.has(gameSelectedKey) && inlineModuleActiveApi?.onKey) {
+    inlineModuleActiveApi.onKey(event, false);
+  }
   if (spaceShooterState?.keys) {
     spaceShooterState.keys[event.key] = false;
+  }
+  if (gameSelectedKey === "fps_arena" && typeof window.handleFpsArenaKey === "function") {
+    window.handleFpsArenaKey(event, false);
   }
 });
 
 document.addEventListener("change", (event) => {
   const difficulty = event.target?.closest?.("#minesweeper-difficulty");
-  if (!difficulty) return;
-  if (gameSelectedKey === "minesweeper") {
+  const fpsMode = event.target?.closest?.("#fps-arena-mode");
+  const gameSelect = event.target?.closest?.("#game-select");
+  if (gameSelect) {
+    const key = gameSelect.value || "chess";
+    switchGameView(key);
+    return;
+  }
+  if (difficulty && gameSelectedKey === "minesweeper") {
+    loadSelectedGameLeaderboard().catch((err) => setGameMsg(err.message || "排行榜讀取失敗", false));
+  }
+  if (fpsMode && gameSelectedKey === "fps_arena") {
+    if (typeof window.renderFpsArenaBoard === "function") window.renderFpsArenaBoard();
     loadSelectedGameLeaderboard().catch((err) => setGameMsg(err.message || "排行榜讀取失敗", false));
   }
 });

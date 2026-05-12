@@ -6,14 +6,20 @@ ROOT = Path(__file__).resolve().parents[3]
 
 def test_game_zone_frontend_assets_are_wired():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
+    trading_workflow_html = (ROOT / "public" / "trading-workflow-editor.html").read_text(encoding="utf-8")
+    trading_workflow_css = (ROOT / "public" / "trading-workflow-editor.css").read_text(encoding="utf-8")
+    comfyui_workflow_html = (ROOT / "public" / "comfyui-workflow-editor.html").read_text(encoding="utf-8")
+    comfyui_workflow_css = (ROOT / "public" / "comfyui-workflow-editor.css").read_text(encoding="utf-8")
     games_js = (ROOT / "public" / "js" / "38-games.js").read_text(encoding="utf-8")
+    game_modules_js = (ROOT / "public" / "js" / "41-game-modules.js").read_text(encoding="utf-8")
+    fps_js = (ROOT / "public" / "js" / "38-fps-arena.js").read_text(encoding="utf-8")
     core_js = (ROOT / "public" / "js" / "00-core.js").read_text(encoding="utf-8")
     bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
     styles_css = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
 
     assert 'id="tab-module-games"' in index_html
     assert 'id="module-games"' in index_html
-    assert "/js/38-games.js?v=20260502-mobile-controls" in index_html
+    assert "/js/38-games.js?v=20260512-inline-games" in index_html
     assert 'id="game-practice-side"' in index_html
     assert 'id="game-practice-difficulty"' in index_html
     assert 'id="game-offer-draw-btn"' in index_html
@@ -57,6 +63,45 @@ def test_game_zone_frontend_assets_are_wired():
     assert 'id="tetris-pause-btn"' in index_html
     assert 'id="space-shooter-game-panel"' in index_html
     assert 'id="space-shooter-board"' in index_html
+    assert 'id="fps-arena-game-panel"' in index_html
+    assert 'id="fps-arena-stage"' in index_html
+    assert 'id="fps-arena-mode"' in index_html
+    assert 'class="fps-arena-scope"' in index_html
+    assert 'class="fps-arena-damage"' in index_html
+    assert "/js/three.min.js?v=0.160.0" in index_html
+    assert "/js/41-game-modules.js?v=20260512-arcade-six" in index_html
+    assert "/js/38-fps-arena.js?v=20260512-fps-feedback" in index_html
+    assert 'id="game-select"' in games_js
+    assert 'id="game-open-page-btn"' not in games_js
+    assert "openStandaloneGamePage" not in games_js
+    assert "gameShouldOpenInStandalonePage" not in games_js
+    assert "mountInlineModuleGame" in games_js
+    assert "INLINE_MODULE_GAME_KEYS" in games_js
+    assert 'id="inline-module-game-panel"' in index_html
+    assert 'id="inline-module-game-root"' in index_html
+    assert 'id="inline-module-game-controls"' in index_html
+    assert "貪食蛇" in index_html
+    assert "2048" in index_html
+    assert "打磚塊" in index_html
+    assert "黑白棋" in index_html
+    assert "圍棋" in index_html
+    assert "五子棋" in index_html
+    assert "使用下拉選單在同一頁切換遊戲" in index_html
+    assert "/game.html" not in index_html
+    assert "/js/42-game-page.js" not in index_html
+    assert "HACKME_GAME_CATALOG" in game_modules_js
+    assert "modules.snake" in game_modules_js
+    assert "modules.game_2048" in game_modules_js
+    assert "modules.brick_breaker" in game_modules_js
+    assert "modules.reversi" in game_modules_js
+    assert "modules.go" in game_modules_js
+    assert "modules.gomoku" in game_modules_js
+    assert "touchstart" in games_js
+    assert "submitInlineModuleScore" in games_js
+    assert "gameInitialSelectedKey" in games_js
+    assert "requestedModuleParam === \"games\"" in core_js
+    assert "game-standalone-mode" not in games_js
+    assert "game-standalone-mode" not in styles_css
     assert 'class="drive-collapsible-panel game-rules-panel"' in index_html
     assert "西洋棋玩法說明" in index_html
     assert "數獨玩法說明" in index_html
@@ -64,6 +109,7 @@ def test_game_zone_frontend_assets_are_wired():
     assert "1A2B 玩法說明" in index_html
     assert "俄羅斯方塊玩法說明" in index_html
     assert "宇宙戰機玩法說明" in index_html
+    assert "3D 射擊場玩法說明" in index_html
     assert "<details" in index_html
     assert "<details class=\"drive-collapsible-panel game-rules-panel\" open" not in index_html
     assert 'module: "games"' in core_js
@@ -74,6 +120,7 @@ def test_game_zone_frontend_assets_are_wired():
     assert "隨機走棋" not in index_html
     assert 'data-game-touch="tetris-left"' in index_html
     assert 'data-game-touch="shooter-fire"' in index_html
+    assert 'data-game-touch="fps-fire"' in index_html
     assert "gameDifficultyLabel" in games_js
     assert "gameOpponentColor" in games_js
     assert "buildOptimisticChessMatch" in games_js
@@ -151,6 +198,30 @@ def test_game_zone_frontend_assets_are_wired():
     assert "data-tetris-cell" in games_js
     assert "startSpaceShooterGame" in games_js
     assert "tickSpaceShooterGame" in games_js
+    assert "fps_arena" in games_js
+    assert "currentFpsArenaMode" in games_js
+    assert "startFpsArenaGame" in fps_js
+    assert "Aim Trainer" in fps_js
+    assert "PvE Arena" in fps_js
+    assert "Bomb Defuse" in fps_js
+    assert "Bot Match" in fps_js
+    assert 'submitSoloGameScore("fps_arena", state)' in fps_js
+    assert "new THREE.WebGLRenderer" in fps_js
+    assert "new THREE.CapsuleGeometry" in fps_js
+    assert "fpsArenaRegisterHumanPart" in fps_js
+    assert "breathOffset" in fps_js
+    assert "FPS_ARENA_SCOPE_SWAY" in fps_js
+    assert "FPS_ARENA_BOT_FIRE_RANGE" in fps_js
+    assert "fpsArenaUpdateBotFire" in fps_js
+    assert "fpsArenaLineOfSightClear" in fps_js
+    assert "botTracers" in fps_js
+    assert "botProjectiles" in fps_js
+    assert "fpsArenaUpdateBotProjectiles" in fps_js
+    assert "fpsArenaProjectileHitsCover" in fps_js
+    assert "fpsArenaAddPlayerFireEffects" in fps_js
+    assert "fpsArenaPlaySound" in fps_js
+    assert "fpsArenaAddShake" in fps_js
+    assert "navigator.vibrate" in fps_js
     assert "handleGameTouchAction" in games_js
     assert "setOneA2BNotice" in games_js
     assert "generateOneA2BSecret" in games_js
@@ -194,3 +265,20 @@ def test_game_zone_frontend_assets_are_wired():
     assert ".onea2b-history" in styles_css
     assert ".tetris-board" in styles_css
     assert ".space-shooter-board" in styles_css
+    assert ".fps-arena-stage" in styles_css
+    assert ".fps-arena-scope" in styles_css
+    assert ".fps-arena-reticle" in styles_css
+    assert ".fps-arena-damage" in styles_css
+    assert "--fps-shake-x" in styles_css
+    assert "var(--panel)" in styles_css
+    assert ".arcade-canvas" in styles_css
+    assert ".game-2048-board" in styles_css
+    assert ".board-game-grid" in styles_css
+    assert 'class="standalone-editor-page"' in trading_workflow_html
+    assert 'class="editor-bg-grid"' in trading_workflow_html
+    assert "radial-gradient(circle at 18% 8%" in trading_workflow_css
+    assert "backdrop-filter: blur(12px)" in trading_workflow_css
+    assert 'class="standalone-editor-page"' in comfyui_workflow_html
+    assert 'class="editor-bg-grid"' in comfyui_workflow_html
+    assert "radial-gradient(circle at 18% 8%" in comfyui_workflow_css
+    assert "backdrop-filter: blur(12px)" in comfyui_workflow_css

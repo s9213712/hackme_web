@@ -165,7 +165,21 @@ def test_game_catalog_includes_solo_games(tmp_path):
     assert response.status_code == 200
     games = response.get_json()["games"]
     by_key = {game["key"]: game for game in games}
-    assert {"chess", "sudoku", "minesweeper", "1a2b", "tetris", "space_shooter"} <= set(by_key)
+    assert {
+        "chess",
+        "sudoku",
+        "minesweeper",
+        "1a2b",
+        "tetris",
+        "space_shooter",
+        "fps_arena",
+        "snake",
+        "game_2048",
+        "brick_breaker",
+        "reversi",
+        "go",
+        "gomoku",
+    } <= set(by_key)
     assert [item["key"] for item in by_key["chess"]["computer_difficulties"]] == [
         "normal",
         "hard",
@@ -179,6 +193,13 @@ def test_game_catalog_includes_solo_games(tmp_path):
     assert by_key["1a2b"]["supports_invites"] is False
     assert by_key["tetris"]["supports_invites"] is False
     assert by_key["space_shooter"]["supports_computer"] is False
+    assert by_key["fps_arena"]["supports_invites"] is False
+    assert by_key["snake"]["supports_invites"] is False
+    assert by_key["game_2048"]["supports_computer"] is False
+    assert by_key["brick_breaker"]["title"] == "打磚塊"
+    assert by_key["reversi"]["title"] == "黑白棋"
+    assert by_key["go"]["title"] == "圍棋"
+    assert by_key["gomoku"]["title"] == "五子棋"
 
 
 def test_games_users_and_invites_work_with_legacy_users_table_without_deleted_at(tmp_path):
@@ -433,6 +454,18 @@ def test_score_ranked_solo_games_use_high_score_leaderboard(tmp_path):
     assert [row["username"] for row in payload["leaderboard"][:2]] == ["alice", "bob"]
     assert payload["leaderboard"][0]["score"] == 2200
     assert payload["leaderboard"][0]["attempts"] == 2
+
+    fps = client.post(
+        "/api/games/fps_arena/solo-scores",
+        json={"score": 3200, "raw_elapsed_ms": 60000, "penalty_seconds": 0, "elapsed_ms": 60000, "difficulty": "aim", "puzzle_id": "fps-arena-aim"},
+    )
+    assert fps.status_code == 200
+    fps_board = client.get("/api/games/fps_arena/solo-leaderboard?difficulty=aim")
+    assert fps_board.status_code == 200
+    fps_payload = fps_board.get_json()
+    assert fps_payload["rank_mode"] == "score_desc"
+    assert fps_payload["difficulty"] == "aim"
+    assert fps_payload["leaderboard"][0]["score"] == 3200
 
     bad = client.post(
         "/api/games/space_shooter/solo-scores",

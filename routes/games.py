@@ -51,9 +51,32 @@ from services.games.chess_replay_buffer import collect_match_replay
 from services.points_chain import DISPLAY_CURRENCY
 
 GAME_KEY = "chess"
-SOLO_GAME_KEYS = {"sudoku", "minesweeper", "1a2b", "tetris", "space_shooter"}
-SCORE_RANKED_SOLO_GAMES = {"tetris", "space_shooter"}
-SOLO_GAME_CHECK_SQL = "'sudoku', 'minesweeper', '1a2b', 'tetris', 'space_shooter'"
+SOLO_GAME_KEYS = {
+    "sudoku",
+    "minesweeper",
+    "1a2b",
+    "tetris",
+    "space_shooter",
+    "fps_arena",
+    "snake",
+    "game_2048",
+    "brick_breaker",
+    "reversi",
+    "go",
+    "gomoku",
+}
+SCORE_RANKED_SOLO_GAMES = {
+    "tetris",
+    "space_shooter",
+    "fps_arena",
+    "snake",
+    "game_2048",
+    "brick_breaker",
+    "reversi",
+    "go",
+    "gomoku",
+}
+SOLO_GAME_CHECK_SQL = "'sudoku', 'minesweeper', '1a2b', 'tetris', 'space_shooter', 'fps_arena', 'snake', 'game_2048', 'brick_breaker', 'reversi', 'go', 'gomoku'"
 WEEKLY_REWARDS = (300, 200, 100)
 COMPUTER_DIFFICULTIES = {
     "normal",
@@ -273,7 +296,7 @@ def game_schema_sql():
         penalty_seconds INTEGER NOT NULL DEFAULT 0,
         elapsed_ms INTEGER NOT NULL,
         created_at TEXT NOT NULL,
-        CHECK (game_key IN ('sudoku', 'minesweeper', '1a2b', 'tetris', 'space_shooter')),
+        CHECK (game_key IN ('sudoku', 'minesweeper', '1a2b', 'tetris', 'space_shooter', 'fps_arena')),
         CHECK (elapsed_ms > 0),
         CHECK (raw_elapsed_ms > 0),
         CHECK (penalty_seconds >= 0)
@@ -308,7 +331,7 @@ def rebuild_solo_score_table(conn):
             penalty_seconds INTEGER NOT NULL DEFAULT 0,
             elapsed_ms INTEGER NOT NULL,
             created_at TEXT NOT NULL,
-            CHECK (game_key IN ('sudoku', 'minesweeper', '1a2b', 'tetris', 'space_shooter')),
+            CHECK (game_key IN ('sudoku', 'minesweeper', '1a2b', 'tetris', 'space_shooter', 'fps_arena')),
             CHECK (elapsed_ms > 0),
             CHECK (raw_elapsed_ms > 0),
             CHECK (penalty_seconds >= 0)
@@ -814,6 +837,48 @@ def register_games_routes(app, deps):
             }, {
                 "key": "space_shooter",
                 "title": "宇宙戰機",
+                "status": "available",
+                "supports_invites": False,
+                "supports_computer": False,
+            }, {
+                "key": "fps_arena",
+                "title": "3D 射擊場",
+                "status": "available",
+                "supports_invites": False,
+                "supports_computer": False,
+            }, {
+                "key": "snake",
+                "title": "貪食蛇",
+                "status": "available",
+                "supports_invites": False,
+                "supports_computer": False,
+            }, {
+                "key": "game_2048",
+                "title": "2048",
+                "status": "available",
+                "supports_invites": False,
+                "supports_computer": False,
+            }, {
+                "key": "brick_breaker",
+                "title": "打磚塊",
+                "status": "available",
+                "supports_invites": False,
+                "supports_computer": False,
+            }, {
+                "key": "reversi",
+                "title": "黑白棋",
+                "status": "available",
+                "supports_invites": False,
+                "supports_computer": False,
+            }, {
+                "key": "go",
+                "title": "圍棋",
+                "status": "available",
+                "supports_invites": False,
+                "supports_computer": False,
+            }, {
+                "key": "gomoku",
+                "title": "五子棋",
                 "status": "available",
                 "supports_invites": False,
                 "supports_computer": False,

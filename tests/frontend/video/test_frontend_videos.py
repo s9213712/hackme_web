@@ -136,6 +136,8 @@ def test_shared_video_page_layout_is_viewport_bounded():
     html = (ROOT / "routes" / "videos.py").read_text(encoding="utf-8")
 
     assert "min-height:100dvh" in html
+    assert "radial-gradient(circle at 18% 8%" in html
+    assert "backdrop-filter:blur(12px)" in html
     assert "#player-host video" in html
     assert "max-height:min(64dvh, 560px)" in html
     assert "max-height:min(48dvh, calc(100dvh - 210px))" in html

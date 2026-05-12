@@ -448,8 +448,9 @@ def register_video_routes(app, deps):
   <title>分享已結束</title>
   <style>
     html {{ min-height:100%; }}
-    body {{ min-height:100dvh; margin:0; display:grid; place-items:center; background:#111521; color:#eef2ff; font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }}
-    .card {{ width:min(92vw, 520px); box-sizing:border-box; padding:1.35rem; border-radius:18px; background:#171c2b; border:1px solid #2a3150; box-shadow:0 14px 40px rgba(0,0,0,.22); }}
+    body {{ min-height:100dvh; margin:0; display:grid; place-items:center; background:radial-gradient(circle at 18% 8%, rgba(61,120,255,.16), transparent 28rem), radial-gradient(circle at 82% 2%, rgba(54,211,153,.08), transparent 26rem), #111521; color:#eef2ff; font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }}
+    body::before {{ content:""; position:fixed; inset:0; pointer-events:none; background-image:linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px); background-size:42px 42px; mask-image:linear-gradient(to bottom, rgba(0,0,0,.72), transparent 72%); }}
+    .card {{ position:relative; width:min(92vw, 520px); box-sizing:border-box; padding:1.35rem; border-radius:8px; background:rgba(23,28,43,.88); border:1px solid #2a3150; box-shadow:0 18px 48px rgba(0,0,0,.22); backdrop-filter:blur(12px); }}
     h1 {{ margin:0 0 .55rem; font-size:clamp(1.35rem, 4vw, 1.9rem); line-height:1.2; }}
     p {{ margin:0; color:#b9c2f0; line-height:1.6; }}
     a {{ display:inline-flex; margin-top:1rem; color:#fff; background:#3d78ff; text-decoration:none; border-radius:12px; padding:.7rem 1rem; }}
@@ -555,9 +556,10 @@ def register_video_routes(app, deps):
   <title>分享影音</title>
   <style>
     html {{ min-height:100%; }}
-    body {{ min-height:100dvh; margin:0; overflow-x:hidden; background:#111521; color:#eef2ff; font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }}
+    body {{ min-height:100dvh; margin:0; overflow-x:hidden; background:radial-gradient(circle at 18% 8%, rgba(61,120,255,.16), transparent 28rem), radial-gradient(circle at 82% 2%, rgba(54,211,153,.08), transparent 26rem), #111521; color:#eef2ff; font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }}
+    body::before {{ content:""; position:fixed; inset:0; pointer-events:none; background-image:linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px); background-size:42px 42px; mask-image:linear-gradient(to bottom, rgba(0,0,0,.72), transparent 72%); }}
     .wrap {{ width:min(100%, 1120px); min-height:100dvh; margin:0 auto; padding:clamp(.75rem, 2vw, 1.25rem); box-sizing:border-box; display:flex; align-items:center; }}
-    .card {{ width:100%; max-height:calc(100dvh - 2rem); background:#171c2b; border:1px solid #2a3150; border-radius:18px; padding:clamp(.85rem, 2vw, 1.1rem); box-shadow:0 14px 40px rgba(0,0,0,.22); overflow:auto; box-sizing:border-box; }}
+    .card {{ position:relative; width:100%; max-height:calc(100dvh - 2rem); background:rgba(23,28,43,.88); border:1px solid #2a3150; border-radius:8px; padding:clamp(.85rem, 2vw, 1.1rem); box-shadow:0 18px 48px rgba(0,0,0,.22); overflow:auto; box-sizing:border-box; backdrop-filter:blur(12px); }}
     h1 {{ margin:.1rem 0 .35rem; font-size:clamp(1.25rem, 3vw, 1.85rem); line-height:1.2; overflow-wrap:anywhere; }}
     .msg {{ min-height:1.4rem; color:#b9c2f0; margin:.75rem 0; white-space:pre-wrap; }}
     .field {{ display:grid; gap:.35rem; margin:.75rem 0; }}
@@ -572,9 +574,8 @@ def register_video_routes(app, deps):
     .meta {{ color:#b8bfd8; font-size:.95rem; }}
     .hidden {{ display:none !important; }}
     @media (max-width: 640px) {{
-      body {{ background:#171c2b; }}
       .wrap {{ width:100%; min-height:100dvh; padding:0; align-items:stretch; }}
-      .card {{ min-height:100dvh; max-height:none; border:0; border-radius:0; padding:.85rem; box-shadow:none; }}
+      .card {{ min-height:100dvh; max-height:none; border:0; border-radius:0; padding:.85rem; box-shadow:none; background:rgba(23,28,43,.92); }}
       h1 {{ font-size:1.35rem; }}
       #player-host {{ margin-top:.55rem; }}
       #player-host video, #player-host audio {{ border-radius:10px; }}
