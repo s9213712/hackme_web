@@ -105,8 +105,34 @@ move = choose_experiment_pv_move(
 - `/home/s92137/chess_results/exp4_vs_exp5_smoke_20260512_032501`（exp4_16 vs exp5_08 diagnostic sparring，非 promotion evidence）
 - `/home/s92137/chess_results/exp4_17_special_rule_subtype_consistency`（exp4_17 special-rule subtype + choose/explain consistency）
 - `/home/s92137/chess_results/exp4_17_gate_accounting_cleanup`（exp4_17 gate accounting cleanup）
+- `/home/s92137/chess_results/exp4_18_full_broad_learning_diagnostic`（exp4_18 full heavy sanity；確認 broad generalization 仍未通過）
+- `/home/s92137/chess_results/exp4_18_e_pawn_gate_accounting_fix`（exp4_18 e_pawn opening-book equivalence gate accounting fix）
 
 其中 `exp4_04_probe_policy_fixed` 是目前用來驗證「probe policy 修正後」的正式 quick gate artifact。
+
+## exp4_18 broad learning diagnostic（2026-05-12）
+
+exp4_18 不再修 special-rule，而是跑不跳過 heavy sanity 的 broad learning diagnostic。
+
+主要結論：
+
+- special-rule gate 保持 `7/7`，不再是主 blocker。
+- deterministic final `0.8693`，與 baseline `0.8693` 打平，不能 promotion。
+- mistake retention 有改善，但只是 targeted evidence。
+- sanity unseen 約 `0.39`，仍偏 exact-FEN memorization，沒有 broad generalization。
+- full sanity 成本高：`total_wall_seconds=2438.614`、`total_checkpoint_seconds=2264.592`。
+- e_pawn false blocker 已修：`1.Nf3` / `1.c3` 後黑方 `d7d5` 不再被誤判為 e7e5 learning failure，而是 opening multi-good tie。
+
+目前 exp4 的下一個真 blocker：
+
+- broad learning / generalization
+- endgame retention
+- full sanity 評估成本
+- hard flank general-model gap
+
+詳細報告：
+
+- [`2026-05-12_exp4_18_full_broad_learning_diagnostic.md`](2026-05-12_exp4_18_full_broad_learning_diagnostic.md)
 
 ## exp4_07 evidence accounting cleanup（2026-05-11）
 

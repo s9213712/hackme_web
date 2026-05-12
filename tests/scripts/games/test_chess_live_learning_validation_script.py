@@ -211,6 +211,15 @@ def test_exp4_08_e_pawn_equivalence_audit_classifies_multi_good_tie():
             "expected_rank": 4,
             "variant_difficulty": "easy",
         },
+        {  # exp4_18: black e7e5 vs d7d5 after quiet development is also a multi-good opening response
+            "case_id": "gate_e_pawn_easy_003",
+            "expected_move": "e7e5",
+            "expected_semantic": "e_pawn_central_break",
+            "raw_policy_top1": "d7d5",
+            "final_top1": "d7d5",
+            "expected_rank": 2,
+            "variant_difficulty": "easy",
+        },
     ]
     summary = {
         "checkpoint_consistency": {
@@ -221,7 +230,7 @@ def test_exp4_08_e_pawn_equivalence_audit_classifies_multi_good_tie():
                     "clean_heldout_by_semantic": {
                         "e_pawn_central_break": {
                             "passed": 1,
-                            "total": 3,
+                            "total": 4,
                             "raw_policy_passed": 1,
                         }
                     },
@@ -238,10 +247,10 @@ def test_exp4_08_e_pawn_equivalence_audit_classifies_multi_good_tie():
     assert "central_opening_equivalent_credit" in classifications
     assert "opening_multi_good_tie" in classifications
     # equivalent-credit pass rate counts strict + equivalent
-    assert cp["e_pawn_equivalent_credit_pass_count"] == 3
+    assert cp["e_pawn_equivalent_credit_pass_count"] == 4
     assert cp["true_e_pawn_raw_policy_fail_count"] == 0
     assert cp["true_e_pawn_final_decision_blocked_count"] == 0
-    assert cp["excluded_multi_good_negative_count"] == 2
+    assert cp["excluded_multi_good_negative_count"] == 3
     # totals roll up to the aggregate dict
     assert diag["totals"]["e_pawn_equivalent_credit_pass_rate"] == 1.0
 

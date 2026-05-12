@@ -225,6 +225,18 @@ exp4_17 special-rule subtype + gate accounting cleanup（2026-05-12）：
 - gate accounting cleanup：low-margin override 只要沒有 counted_as_learning_success 就不再作 blocker；opening alignment 排除 mistake_retention rows。
 - promotion 仍 false：deterministic final 沒高於 baseline，heavy sanity skipped，balanced_fusion final decision generalization 未過，hard flank gap 未解。
 
+exp4_18 full broad learning diagnostic + e_pawn gate accounting fix（2026-05-12）：
+
+- 詳細報告：[`exp4/2026-05-12_exp4_18_full_broad_learning_diagnostic.md`](exp4/2026-05-12_exp4_18_full_broad_learning_diagnostic.md)。
+- result dirs：
+  - `/home/s92137/chess_results/exp4_18_full_broad_learning_diagnostic`
+  - `/home/s92137/chess_results/exp4_18_e_pawn_gate_accounting_fix`
+- full heavy sanity 結論：`HIGH_RISK`，promotion false；special-rule 維持 `7/7`，但 deterministic final `0.8693` 與 baseline 打平。
+- sanity generalization：trusted=10 unseen `0.3968`，trusted=20 unseen `0.3889`；exact FEN 會，但 broad generalization 未證明。
+- timing：full diagnostic `total_wall_seconds=2438.614`、`total_checkpoint_seconds=2264.592`；瓶頸是 final decision seen/unseen before/after，不是 retrain。
+- 修正：`gate_e_pawn_easy_002/003` 中黑方 `d7d5` 這類 quiet-opening 合理中央回應不再被誤判為 `e7e5` learning failure；新 classifier 把 `true_e_pawn_final_decision_blocked` 從 4 降為 0，`e_pawn_equivalent_credit_pass_rate` 從 0.7778 升到 1.0。
+- quick confirmation：`PARTIAL`，promotion false；e_pawn false blocker 已移除，但 heavy sanity skipped、deterministic 未提升、balanced_fusion generalization 未證明仍阻擋 promotion。
+
 exp4_14 balanced curriculum + retention rehearsal + budget + rollback guard（2026-05-12）：
 
 - special-rule weights 大幅下調（castling/e.p. 3→1.5、knight_mate/underpromote 4→2、queen 1→0.75）；新增 3 個 short-castle FEN 變體。
