@@ -15,6 +15,7 @@ import chess
 
 
 DEFAULT_STATIC_SCORE_WINDOW_CP = 150
+DEFAULT_ORDINARY_OVERRIDE_MIN_DELTA_CP = 125
 
 
 def guarded_overlay_enabled() -> bool:
@@ -93,6 +94,18 @@ def exp4_promotion_subtype_guard(
     return False, "nonqueen_promotion_without_runtime_tactical_reason"
 
 
+def _move_family(board: chess.Board, move: chess.Move) -> str:
+    if board.is_castling(move):
+        return "castling"
+    if board.is_en_passant(move):
+        return "en_passant"
+    if move.promotion is not None:
+        return "promotion"
+    if board.is_capture(move):
+        return "capture"
+    return "ordinary"
+
+
 def exp4_runtime_overlay_allows_final(
     *,
     fen: str,
@@ -103,6 +116,7 @@ def exp4_runtime_overlay_allows_final(
     final_score_cp: int | float | None = None,
     final_illegal: bool = False,
     static_score_window_cp: int = DEFAULT_STATIC_SCORE_WINDOW_CP,
+    ordinary_override_min_delta_cp: int = DEFAULT_ORDINARY_OVERRIDE_MIN_DELTA_CP,
 ) -> tuple[bool, str, dict[str, Any]]:
     """No-label runtime guard used by validation and the optional runtime path."""
     if not final_move_uci:
@@ -120,6 +134,7 @@ def exp4_runtime_overlay_allows_final(
     if final_move is None:
         return False, "final_not_legal_in_position", {}
 
+    final_move_family = _move_family(board, final_move)
     promotion_allowed, promotion_reason = exp4_promotion_subtype_guard(board, baseline_move, final_move)
     if not promotion_allowed:
         return False, promotion_reason, {"promotion_subtype_guard": promotion_reason}
@@ -134,7 +149,9 @@ def exp4_runtime_overlay_allows_final(
             "baseline_score_cp": baseline_score_cp,
             "final_score_cp": final_score_cp,
             "promotion_subtype_guard": promotion_reason,
+            "final_move_family": final_move_family,
             "static_score_window_cp": int(static_score_window_cp),
+            "ordinary_override_min_delta_cp": int(ordinary_override_min_delta_cp),
         }
 
     score_delta = float(final_score_cp) - float(baseline_score_cp)
@@ -144,7 +161,20 @@ def exp4_runtime_overlay_allows_final(
             "baseline_score_cp": baseline_score_cp,
             "final_score_cp": final_score_cp,
             "promotion_subtype_guard": promotion_reason,
+            "final_move_family": final_move_family,
             "static_score_window_cp": int(static_score_window_cp),
+            "ordinary_override_min_delta_cp": int(ordinary_override_min_delta_cp),
+        }
+
+    if final_move_family not in {"castling", "en_passant", "promotion"} and score_delta < int(ordinary_override_min_delta_cp):
+        return False, "ordinary_runtime_margin_insufficient", {
+            "score_delta": round(score_delta, 4),
+            "baseline_score_cp": baseline_score_cp,
+            "final_score_cp": final_score_cp,
+            "promotion_subtype_guard": promotion_reason,
+            "final_move_family": final_move_family,
+            "static_score_window_cp": int(static_score_window_cp),
+            "ordinary_override_min_delta_cp": int(ordinary_override_min_delta_cp),
         }
 
     return True, "runtime_static_and_rule_guard_passed", {
@@ -152,7 +182,9 @@ def exp4_runtime_overlay_allows_final(
         "baseline_score_cp": baseline_score_cp,
         "final_score_cp": final_score_cp,
         "promotion_subtype_guard": promotion_reason,
+        "final_move_family": final_move_family,
         "static_score_window_cp": int(static_score_window_cp),
+        "ordinary_override_min_delta_cp": int(ordinary_override_min_delta_cp),
     }
 
 

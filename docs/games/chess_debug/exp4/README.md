@@ -831,11 +831,24 @@ exp4_24 已完成 unsafe override row audit：
 - 全部 unsafe 都是 `runtime_static_and_rule_guard_passed` 放行；主要集中在 e/d-pawn central break 互相覆蓋。
 - 結論：目前 guard 對 ordinary central pawn override 太寬，不能 promotion。
 
-下一步應優先收緊 `runtime_static_and_rule_guard_passed`，特別是「baseline 已正確時不可用 0-margin ordinary move 覆蓋」。不要先 retrain。
+exp4_25 已完成 runtime guard tightening：
+
+- 詳細報告：[`2026-05-12_exp4_25_guarded_overlay_runtime_guard_tightening.md`](2026-05-12_exp4_25_guarded_overlay_runtime_guard_tightening.md)
+- 不 retrain、不 promotion、不啟用 production runtime overlay。
+- 非特殊 ordinary/capture move 現在必須有 `final_score_cp - baseline_score_cp >= 125` 才能覆蓋 baseline。
+- exp4_24 的 26 筆 unsafe rows targeted replay 後：
+  - blocked_after_guard_tightening `26`
+  - still_unsafe `0`
+  - regression_rows_after_guard `0`
+  - guard_reason_after 全部是 `ordinary_runtime_margin_insufficient`
+- deterministic actual runtime guarded score 從 exp4_23 的 `0.9231` 回到 baseline `0.8693`，unsafe 仍為 `0`。
+
+判讀：exp4_25 修掉 broad sanity regression，但也犧牲了原本的 +0.0538 deterministic overlay 訊號。下一步不要 retrain，應做更精細的 no-label guard feature audit，找出能保留正向 override 且不重新產生 unsafe 的 runtime evidence。
 
 ## 歷程報告
 
 - [2026-05-12 Exp4_24 guarded overlay unsafe override audit](2026-05-12_exp4_24_guarded_overlay_unsafe_override_audit.md)
+- [2026-05-12 Exp4_25 guarded overlay runtime guard tightening](2026-05-12_exp4_25_guarded_overlay_runtime_guard_tightening.md)
 - [2026-05-12 Exp4_23 guarded overlay broad sanity gate](2026-05-12_exp4_23_guarded_overlay_broad_sanity_gate.md)
 - [2026-05-12 Exp4_22 actual runtime guarded overlay full diagnostic](2026-05-12_exp4_22_actual_runtime_guarded_overlay_full.md)
 - [2026-05-12 Exp4_19 guarded overlay attribution](2026-05-12_exp4_19_guarded_overlay_attribution.md)

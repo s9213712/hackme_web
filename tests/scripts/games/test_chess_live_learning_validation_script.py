@@ -2072,8 +2072,8 @@ def test_exp4_guarded_overlay_keeps_baseline_default_and_only_adopts_safe_positi
 
     deterministic_report = {
         "score_table": [
-            {"model_label": "baseline", "overall_deterministic_score": 0.45},
-            {"model_label": "final", "overall_deterministic_score": 0.45},
+            {"model_label": "baseline", "overall_deterministic_score": 0.5},
+            {"model_label": "final", "overall_deterministic_score": 0.5},
         ],
         "snapshots": [
             {
@@ -2140,8 +2140,8 @@ def test_exp4_runtime_guarded_overlay_uses_no_labels_and_blocks_promotion_piece_
     promotion_fen = "k7/4P3/2K5/8/8/8/8/8 w - - 0 1"
     deterministic_report = {
         "score_table": [
-            {"model_label": "baseline", "overall_deterministic_score": 0.45},
-            {"model_label": "final", "overall_deterministic_score": 0.45},
+            {"model_label": "baseline", "overall_deterministic_score": 0.5},
+            {"model_label": "final", "overall_deterministic_score": 0.5},
         ],
         "snapshots": [
             {
@@ -2166,14 +2166,14 @@ def test_exp4_runtime_guarded_overlay_uses_no_labels_and_blocks_promotion_piece_
     assert report["supported"] is True
     assert report["diagnostic_uses_expected_labels_for_decision"] is False
     assert report["production_ready"] is False
-    assert report["decision_counts"]["positive_override_after_scoring"] == 1
+    assert report["decision_counts"]["positive_override_after_scoring"] == 0
     assert report["decision_counts"]["prevented_regression_after_scoring"] == 1
     assert report["unsafe_override_count"] == 0
-    assert report["runtime_guarded_score"] > report["baseline_score"]
-    assert report["candidate_worth_runtime_overlay"] is True
+    assert report["runtime_guarded_score"] == report["baseline_score"]
+    assert report["candidate_worth_runtime_overlay"] is False
     selected = {row["case_id"]: row for row in report["cases"]}
-    assert selected["safe_opening"]["selected_source"] == "final"
-    assert selected["safe_opening"]["guard_reason"] == "runtime_static_and_rule_guard_passed"
+    assert selected["safe_opening"]["selected_source"] == "baseline"
+    assert selected["safe_opening"]["guard_reason"] == "ordinary_runtime_margin_insufficient"
     assert selected["promotion_regression"]["selected_source"] == "baseline"
     assert selected["promotion_regression"]["guard_reason"] == "nonqueen_promotion_downgrade_without_runtime_tactical_reason"
 
@@ -2185,10 +2185,22 @@ def test_exp4_runtime_guarded_overlay_uses_no_labels_and_blocks_promotion_piece_
         baseline_score_cp=None,
         final_score_cp=None,
     )
-    assert allowed is True
-    assert reason == "runtime_static_and_rule_guard_passed"
+    assert allowed is False
+    assert reason == "ordinary_runtime_margin_insufficient"
     assert detail["baseline_score_cp"] is not None
     assert detail["final_score_cp"] is not None
+
+    allowed, reason, detail = exp4_runtime_overlay_allows_final(
+        fen=opening_fen,
+        side="black",
+        baseline_move_uci="e7e5",
+        final_move_uci="d7d5",
+        baseline_score_cp=0,
+        final_score_cp=200,
+    )
+    assert allowed is True
+    assert reason == "runtime_static_and_rule_guard_passed"
+    assert detail["ordinary_override_min_delta_cp"] == 125
 
 
 def test_exp4_guarded_overlay_actual_runtime_helper_uses_real_board_state(monkeypatch):
@@ -2208,9 +2220,9 @@ def test_exp4_guarded_overlay_actual_runtime_helper_uses_real_board_state(monkey
         candidate_model_path=Path("candidate_model.json"),
     )
 
-    assert decision["selected_source"] == "final"
-    assert decision["selected_move_uci"] == "d7d5"
-    assert decision["guard_reason"] == "runtime_static_and_rule_guard_passed"
+    assert decision["selected_source"] == "baseline"
+    assert decision["selected_move_uci"] == "e7e5"
+    assert decision["guard_reason"] == "ordinary_runtime_margin_insufficient"
     assert decision["guard_detail"]["baseline_score_cp"] is not None
     assert decision["guard_detail"]["final_score_cp"] is not None
 

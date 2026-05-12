@@ -296,6 +296,20 @@ exp4_24 guarded overlay unsafe override audit（2026-05-12）：
 - unsafe_by_guard_reason 全部是 `runtime_static_and_rule_guard_passed`；unsafe_by_semantic：`e_pawn_central_break=12`、`d_pawn_central_break=12`、`flank_pawn_push=2`。
 - 判讀：guard 對 ordinary central pawn move 的 0-margin/static window 放行太寬，會把 baseline 正確步替換成另一個 central pawn candidate。exp4_25 應先收緊 guard，不要 retrain。
 
+exp4_25 guarded overlay runtime guard tightening（2026-05-12）：
+
+- 詳細報告：[`exp4/2026-05-12_exp4_25_guarded_overlay_runtime_guard_tightening.md`](exp4/2026-05-12_exp4_25_guarded_overlay_runtime_guard_tightening.md)。
+- 本輪不 retrain、不 promotion、不啟用 production runtime overlay。
+- 修改 `services/games/chess_pv_guarded_overlay.py`：非特殊 ordinary/capture move 必須有 `final_score_cp - baseline_score_cp >= 125` 才能覆蓋 baseline；不足時回傳 `ordinary_runtime_margin_insufficient`。
+- targeted replay 使用 exp4_24 的 26 筆 unsafe rows：
+  - unsafe_rows_total `26`
+  - blocked_after_guard_tightening `26`
+  - still_unsafe `0`
+  - regression_rows_after_guard `0`
+  - guard_reason_after 全部是 `ordinary_runtime_margin_insufficient`
+- deterministic actual runtime guarded score 從 `0.9231` 回到 baseline `0.8693`，unsafe `0`、simulator mismatch `0`。
+- 判讀：安全修正成功，但正向 overlay 訊號暫時消失。下一步不要 retrain；應做更細的 no-label guard feature audit，找出能保留正向 override 且不重新產生 unsafe 的 runtime evidence。
+
 exp4_14 balanced curriculum + retention rehearsal + budget + rollback guard（2026-05-12）：
 
 - special-rule weights 大幅下調（castling/e.p. 3→1.5、knight_mate/underpromote 4→2、queen 1→0.75）；新增 3 個 short-castle FEN 變體。
