@@ -17,8 +17,10 @@ import argparse
 import json
 import random
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 import sys
+from typing import Callable
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -28,8 +30,14 @@ if str(ROOT) not in sys.path:
 from services.games.chess_dl import bundled_chess_dl_model_path  # noqa: E402
 from services.games.chess_engine import bundled_chess_engine_db_path  # noqa: E402
 from services.games.chess_nn import bundled_chess_nn_model_path  # noqa: E402
-from services.games.chess_nnue import bundled_chess_nnue_model_path  # noqa: E402
-from services.games.chess_pv import bundled_chess_pv_model_path  # noqa: E402
+from services.games.chess_nnue import (  # noqa: E402
+    bundled_chess_nnue_model_path,
+    default_chess_nnue_model_path,
+)
+from services.games.chess_pv import (  # noqa: E402
+    bundled_chess_pv_model_path,
+    default_chess_pv_model_path,
+)
 from services.games.self_play_training import (  # noqa: E402
     DEFAULT_MAX_PLIES,
     DEFAULT_STUDENT_EXPLORATION_RATE,
@@ -240,6 +248,45 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _is_default_model_path(
+    explicit_path: str,
+    *,
+    bundled_resolver: Callable[[], Path],
+    default_resolver: Callable[[], Path],
+) -> tuple[bool, str]:
+    """Return (is_default, reason).
+
+    Treats an explicit `--experiment-X-model-path` as "default" if it resolves
+    to the bundled artifact, the runtime default artifact, or any file under
+    `services/games/models/`. Blocks the W4.1d escape "user explicitly typed
+    the bundled path so the guard let it through".
+    """
+    if not explicit_path:
+        return False, ""
+    try:
+        explicit = Path(explicit_path).expanduser().resolve()
+    except Exception:
+        return False, ""
+    try:
+        bundled = bundled_resolver().resolve()
+    except Exception:
+        bundled = None
+    try:
+        runtime_default = default_resolver().resolve()
+    except Exception:
+        runtime_default = None
+    if bundled is not None and explicit == bundled:
+        return True, f"resolves to bundled path {bundled}"
+    if runtime_default is not None and explicit == runtime_default:
+        return True, f"resolves to runtime default {runtime_default}"
+    bundled_models_dir = (ROOT / "services" / "games" / "models").resolve()
+    try:
+        explicit.relative_to(bundled_models_dir)
+    except ValueError:
+        return False, ""
+    return True, f"resides under bundled-models dir {bundled_models_dir}"
+
+
 def _assert_external_replay_safety(args: argparse.Namespace) -> None:
     """Block non-dry-run external replay from silently writing default models.
 
@@ -255,16 +302,34 @@ def _assert_external_replay_safety(args: argparse.Namespace) -> None:
     if args.allow_default_model_paths:
         return
     problems: list[str] = []
-    if not args.skip_exp4 and not args.experiment_4_model_path:
-        problems.append(
-            "exp4 PV: pass --experiment-4-model-path <staging/candidate.json> "
-            "or --skip-exp4 to gate exp4 out of this run."
-        )
-    if not args.skip_exp5 and not args.experiment_5_model_path:
-        problems.append(
-            "exp5 NNUE: pass --experiment-5-model-path <staging/candidate.json> "
-            "or --skip-exp5 to gate exp5 out of this run."
-        )
+    if not args.skip_exp4:
+        if not args.experiment_4_model_path:
+            problems.append(
+                "exp4 PV: pass --experiment-4-model-path <staging/candidate.json> "
+                "or --skip-exp4 to gate exp4 out of this run."
+            )
+        else:
+            is_default, reason = _is_default_model_path(
+                args.experiment_4_model_path,
+                bundled_resolver=bundled_chess_pv_model_path,
+                default_resolver=default_chess_pv_model_path,
+            )
+            if is_default:
+                problems.append(f"exp4 PV: --experiment-4-model-path {reason}")
+    if not args.skip_exp5:
+        if not args.experiment_5_model_path:
+            problems.append(
+                "exp5 NNUE: pass --experiment-5-model-path <staging/candidate.json> "
+                "or --skip-exp5 to gate exp5 out of this run."
+            )
+        else:
+            is_default, reason = _is_default_model_path(
+                args.experiment_5_model_path,
+                bundled_resolver=bundled_chess_nnue_model_path,
+                default_resolver=default_chess_nnue_model_path,
+            )
+            if is_default:
+                problems.append(f"exp5 NNUE: --experiment-5-model-path {reason}")
     if not problems:
         return
     msg_lines = [
@@ -374,6 +439,21 @@ def _apply_external_caps(
         "pre_total_cap_count": pre_total,
         "total_kept": len(capped),
     }
+
+
+def _write_dryrun_payload_artifact(payload: dict, report_dir: Path) -> Path:
+    """Persist the final payload to disk when dry-run skips write_training_report.
+
+    Dry-run is supposed to give the operator a tangible inspection target for
+    load_stats / cap_stats / normalize_validation / train_result.skipped_reason
+    — stdout alone is too easy to lose. Writes a timestamped JSON next to the
+    real training reports so existing report tooling can pick it up.
+    """
+    report_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    path = report_dir / f"chess_seed_train_dryrun_{ts}.json"
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    return path
 
 
 def _validate_normalize(samples: list[dict]) -> dict:
@@ -703,6 +783,10 @@ def main() -> int:
             "exp4_qdepth": max(0, int(args.pv_quiescence_depth or 0)),
         },
     }
+    if args.dry_run and args.include_replay_jsonl:
+        artifact_path = _write_dryrun_payload_artifact(payload, Path(args.report_dir))
+        payload["dry_run_artifact"] = str(artifact_path)
+        _progress(f"dry-run JSON artifact written: {artifact_path}")
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     _progress("phase result seed training: PASS")
     return 0

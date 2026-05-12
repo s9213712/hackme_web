@@ -10,15 +10,21 @@ import json
 from pathlib import Path
 
 import argparse
+import json
+
+from services.games.chess_nnue import bundled_chess_nnue_model_path
+from services.games.chess_pv import bundled_chess_pv_model_path
 
 from scripts.games.chess_seed_train import (
     DEFAULT_EXTERNAL_TOTAL_CAP,
     TRUSTED_SOURCE_WHITELIST,
     _apply_external_caps,
     _assert_external_replay_safety,
+    _is_default_model_path,
     _load_external_replay,
     _train_with_external_replay,
     _validate_normalize,
+    _write_dryrun_payload_artifact,
 )
 
 
@@ -339,6 +345,129 @@ def test_safety_guard_allows_mixed_path_and_skip(tmp_path):
 def test_safety_guard_opt_out_with_allow_default_flag():
     # Explicit opt-in for the unsafe case still works.
     _assert_external_replay_safety(_safety_args(allow_default_model_paths=True))
+
+
+# ---- _is_default_model_path -------------------------------------------
+
+
+def test_is_default_model_path_matches_bundled_exact_path():
+    bundled = str(bundled_chess_pv_model_path())
+    is_default, reason = _is_default_model_path(
+        bundled,
+        bundled_resolver=bundled_chess_pv_model_path,
+        default_resolver=lambda: bundled_chess_pv_model_path(),  # runtime irrelevant here
+    )
+    assert is_default is True
+    assert "bundled" in reason
+
+
+def test_is_default_model_path_flags_paths_under_bundled_models_dir(tmp_path):
+    bundled = bundled_chess_pv_model_path()
+    sibling = bundled.parent / "chess_experiment_4_pv_my_local_copy.json"
+    is_default, reason = _is_default_model_path(
+        str(sibling),
+        bundled_resolver=bundled_chess_pv_model_path,
+        default_resolver=bundled_chess_pv_model_path,
+    )
+    assert is_default is True
+    assert "bundled-models dir" in reason
+
+
+def test_is_default_model_path_allows_unrelated_path(tmp_path):
+    candidate = tmp_path / "candidate" / "chess_experiment_4_pv_candidate.json"
+    is_default, reason = _is_default_model_path(
+        str(candidate),
+        bundled_resolver=bundled_chess_pv_model_path,
+        default_resolver=bundled_chess_pv_model_path,
+    )
+    assert is_default is False
+    assert reason == ""
+
+
+def test_is_default_model_path_handles_empty_input():
+    is_default, reason = _is_default_model_path(
+        "",
+        bundled_resolver=bundled_chess_pv_model_path,
+        default_resolver=bundled_chess_pv_model_path,
+    )
+    assert is_default is False
+    assert reason == ""
+
+
+# ---- safety guard rejects explicit-but-default paths ------------------
+
+
+def test_safety_guard_rejects_bundled_path_as_explicit_exp4():
+    """User typing the bundled path explicitly must not bypass the guard."""
+    bundled = str(bundled_chess_pv_model_path())
+    try:
+        _assert_external_replay_safety(
+            _safety_args(experiment_4_model_path=bundled, skip_exp5=True)
+        )
+    except SystemExit as exc:
+        assert "exp4 PV" in str(exc)
+        assert "bundled" in str(exc).lower()
+    else:
+        raise AssertionError(
+            "expected SystemExit when explicit exp4 path equals bundled artifact"
+        )
+
+
+def test_safety_guard_rejects_paths_under_models_dir_for_exp5():
+    """File next to the bundled NNUE artifact must trip the guard."""
+    sibling = str(
+        bundled_chess_nnue_model_path().parent / "chess_experiment_5_nnue_local.json"
+    )
+    try:
+        _assert_external_replay_safety(
+            _safety_args(experiment_5_model_path=sibling, skip_exp4=True)
+        )
+    except SystemExit as exc:
+        assert "exp5 NNUE" in str(exc)
+        assert "models" in str(exc)
+    else:
+        raise AssertionError(
+            "expected SystemExit when explicit exp5 path sits under services/games/models/"
+        )
+
+
+def test_safety_guard_accepts_distinct_candidate_paths(tmp_path):
+    """Path far away from services/games/models/ must pass the guard."""
+    pv_candidate = tmp_path / "candidate" / "chess_experiment_4_pv_candidate.json"
+    nnue_candidate = tmp_path / "candidate" / "chess_experiment_5_nnue_candidate.json"
+    _assert_external_replay_safety(
+        _safety_args(
+            experiment_4_model_path=str(pv_candidate),
+            experiment_5_model_path=str(nnue_candidate),
+        )
+    )
+
+
+def test_safety_guard_allow_flag_overrides_bundled_detection():
+    bundled = str(bundled_chess_pv_model_path())
+    # --allow-default-model-paths bypasses both the missing-path check AND
+    # the resolved-to-default check, for one-off recovery runs.
+    _assert_external_replay_safety(
+        _safety_args(
+            experiment_4_model_path=bundled,
+            skip_exp5=True,
+            allow_default_model_paths=True,
+        )
+    )
+
+
+# ---- _write_dryrun_payload_artifact -----------------------------------
+
+
+def test_write_dryrun_payload_artifact_writes_json_under_report_dir(tmp_path):
+    payload = {"ok": True, "dry_run": True, "external_replay": {"enabled": False}}
+    report_dir = tmp_path / "reports"
+    artifact = _write_dryrun_payload_artifact(payload, report_dir)
+    assert artifact.parent == report_dir
+    assert artifact.name.startswith("chess_seed_train_dryrun_")
+    assert artifact.name.endswith(".json")
+    loaded = json.loads(artifact.read_text(encoding="utf-8"))
+    assert loaded == payload
 
 
 def test_train_with_external_replay_skip_exp4_blocks_pv_training(monkeypatch, tmp_path):

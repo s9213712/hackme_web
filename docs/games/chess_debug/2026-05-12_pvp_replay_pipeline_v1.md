@@ -30,8 +30,12 @@ exp4 / exp5 warm-up **offline**:
   non-dry-run `--include-replay-jsonl` refuses to start unless the
   caller passes explicit `--experiment-4-model-path` /
   `--experiment-5-model-path` (or `--skip-exp4` / `--skip-exp5` for
-  whichever engine should sit this run out). `--allow-default-model-paths`
-  is the opt-in escape hatch for one-off recovery runs.
+  whichever engine should sit this run out). Explicit paths that
+  resolve to the bundled artifact, the runtime default artifact, or
+  anywhere under `services/games/models/` are also rejected so the
+  guard cannot be bypassed by typing the default path verbatim.
+  `--allow-default-model-paths` is the opt-in escape hatch for one-off
+  recovery runs.
 - ❌ **No raw-PvP-as-positive-training-data**: every accepted sample passes
   through the filter and is tagged `label_quality` ∈ {clean, review} with
   weight ≤ 0.20.
@@ -170,8 +174,16 @@ W4:
   production / stage-candidate state).
 - **Safety guard**: a non-dry-run run with `--include-replay-jsonl` must
   point at explicit candidate model paths (or use `--skip-exp4` /
-  `--skip-exp5`). `--allow-default-model-paths` is the opt-out for
-  intentional default-path writes.
+  `--skip-exp5`). The guard also resolves the explicit path and rejects
+  it if it equals the bundled / runtime-default artifact, or sits under
+  `services/games/models/`. `--allow-default-model-paths` is the opt-out
+  for intentional default-path writes.
+- **Dry-run JSON artifact**: when `--dry-run` runs together with
+  `--include-replay-jsonl`, the final payload is also written to
+  `<report-dir>/chess_seed_train_dryrun_<UTC-timestamp>.json`. Stdout
+  alone is too easy to lose, and the dry-run is precisely where you
+  want a persistent record of `load_stats / cap_stats /
+  normalize_validation / train_result.skipped_reason` for review.
 - Final payload includes `external_replay` block with full breakdown.
 
 ## What v2 should add
