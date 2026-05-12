@@ -285,6 +285,17 @@ exp4_23 guarded overlay broad sanity gate（2026-05-12）：
 - 關鍵 blocker：trusted=10 guarded sanity unsafe override `14`；trusted=20 guarded sanity unsafe override `12`；trusted=20 unseen guarded pass rate `0.3889` 低於 baseline `0.3968`。
 - 判讀：exp4_23 正確證明 deterministic 小題庫的 guarded overlay 安全性不足以 promotion。下一步不是 retrain，而是 audit unsafe override rows 並收緊 runtime guard。
 
+exp4_24 guarded overlay unsafe override audit（2026-05-12）：
+
+- 詳細報告：[`exp4/2026-05-12_exp4_24_guarded_overlay_unsafe_override_audit.md`](exp4/2026-05-12_exp4_24_guarded_overlay_unsafe_override_audit.md)。
+- input result dir：`/home/s92137/hackme_web/runtime/chess_results/exp4_23_guarded_overlay_broad_sanity_gate_full`
+- output JSON：`/home/s92137/hackme_web/runtime/chess_results/exp4_23_guarded_overlay_broad_sanity_gate_full/exp4/audits/exp4_guarded_overlay_unsafe_override_audit.json`
+- 本輪不 retrain、不 promote、不改 runtime production。
+- audit 重建 `537` 筆 guarded broad sanity rows；unsafe override `26`，regression rows `26`。
+- unsafe_by_trusted：trusted=10 `14`，trusted=20 `12`；unsafe_by_split：seen `16`，unseen `10`。
+- unsafe_by_guard_reason 全部是 `runtime_static_and_rule_guard_passed`；unsafe_by_semantic：`e_pawn_central_break=12`、`d_pawn_central_break=12`、`flank_pawn_push=2`。
+- 判讀：guard 對 ordinary central pawn move 的 0-margin/static window 放行太寬，會把 baseline 正確步替換成另一個 central pawn candidate。exp4_25 應先收緊 guard，不要 retrain。
+
 exp4_14 balanced curriculum + retention rehearsal + budget + rollback guard（2026-05-12）：
 
 - special-rule weights 大幅下調（castling/e.p. 3→1.5、knight_mate/underpromote 4→2、queen 1→0.75）；新增 3 個 short-castle FEN 變體。

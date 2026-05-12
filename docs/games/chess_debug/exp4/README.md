@@ -824,10 +824,18 @@ exp4_23 將 exp4_20-22 的 deterministic guarded overlay 訊號放到 broad sani
 - full broad sanity gate 擋下：trusted=10 unsafe override `14`，trusted=20 unsafe override `12`，trusted=20 unseen guarded pass rate `0.3889` 低於 baseline `0.3968`。
 - 結論：guarded overlay 可作為候選方向，但 runtime guard 太寬，不能 production enable。
 
-下一步應優先做 unsafe override row audit 與 guard 收斂，不要先 retrain。
+exp4_24 已完成 unsafe override row audit：
+
+- 從 exp4_23 full artifact 重建 `537` 筆 seen/unseen guarded overlay rows。
+- unsafe override 總數 `26`：trusted=10 有 `14`，trusted=20 有 `12`。
+- 全部 unsafe 都是 `runtime_static_and_rule_guard_passed` 放行；主要集中在 e/d-pawn central break 互相覆蓋。
+- 結論：目前 guard 對 ordinary central pawn override 太寬，不能 promotion。
+
+下一步應優先收緊 `runtime_static_and_rule_guard_passed`，特別是「baseline 已正確時不可用 0-margin ordinary move 覆蓋」。不要先 retrain。
 
 ## 歷程報告
 
+- [2026-05-12 Exp4_24 guarded overlay unsafe override audit](2026-05-12_exp4_24_guarded_overlay_unsafe_override_audit.md)
 - [2026-05-12 Exp4_23 guarded overlay broad sanity gate](2026-05-12_exp4_23_guarded_overlay_broad_sanity_gate.md)
 - [2026-05-12 Exp4_22 actual runtime guarded overlay full diagnostic](2026-05-12_exp4_22_actual_runtime_guarded_overlay_full.md)
 - [2026-05-12 Exp4_19 guarded overlay attribution](2026-05-12_exp4_19_guarded_overlay_attribution.md)
