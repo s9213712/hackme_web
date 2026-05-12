@@ -32,13 +32,13 @@ exp3 的價值已經完成：它證明了 replay validation、deterministic gate
 - exp4：推進 Policy/Value + MCTS。
 - exp5：推進 NNUE-like evaluator + alpha-beta/PVS。
 
-### exp5 最新進度（截至 2026-05-12 exp5_10）
+### exp5 最新進度（截至 2026-05-12 exp5_14）
 
-- **`shadow_candidate=True`** 首次解鎖（Cell B from exp5_08, 116-row clean distill, 3/3 seeds under `fixed_depth_strong`）。
-- exp5_10 production-readiness validation 已完成：135 cases、70 true held-out、`train_vs_benchmark_overlap_count=0`、`position_id_overlap_count=0`。
-- expanded benchmark：candidate 102/135 = 0.755556，baseline 101/135 = 0.748148，Δ +0.007407；endgame improvement still positive (+0.075758)。
-- production_promote 仍 blocked：quiet_positional clean regression、rook-mate smoke suspicious stalemate、repeatability 在 shadow/production safety 解讀下未通過。
-- runtime production model 未動；stage candidate sits at `/home/s92137/chess_results/exp5_08_stage_candidate/`（sha256 `c47ef752...`）。
+- exp5_12 已把 exp5_08 / exp5_10 validated candidate promoted 到 runtime production model（sha256 `c47ef752...`）。
+- exp5_13 補上 runtime rule-priority / stalemate hardening；model artifact unchanged，但 production runtime behavior changed by code path。
+- exp5_13 validation：137 cases、72 true held-out、overlap audit 0；runtime candidate 115/137 = 0.839416，baseline 112/137 = 0.817518，Δ +0.021898。
+- rule smoke 18/18，illegal_rate 0.0，suspicious_rate 0.0，clean_regressed_count 0，repeatability 5/5 且 std_delta 0.0。
+- exp5_14 opening audit：27/27 opening rows are questionable；0 clean true opening regressions；opening weakness is not a production blocker but cannot be used as clean training evidence yet。
 - 詳見 [`exp5/README.md`](exp5/) 歷程總表 + 各輪 ledger。
 
 ## Experiment 1：基礎搜尋與對局學習

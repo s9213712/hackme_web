@@ -436,6 +436,22 @@ dashboard selection path：
 - repeatability：`5/5`, `std_delta=0.0`, `score_delta_per_seed=[0.021898, 0.021898, 0.021898, 0.021898, 0.021898]`
 - final state：production model already promoted by exp5_12; exp5_13 improves runtime behavior and validation fixture correctness without replacing the model artifact
 
+2026-05-12 exp5_14 opening label audit：
+
+- audit script：`scripts/games/chess_exp5_opening_label_audit.py`
+- source summary：`/home/s92137/chess_results/exp5_13_rule_smoke_stalemate_fix_check/summary.json`
+- output root：`/home/s92137/chess_results/exp5_14_opening_label_audit/`
+- summary：`/home/s92137/chess_results/exp5_14_opening_label_audit/summary.json`
+- opening audit rows：`/home/s92137/chess_results/exp5_14_opening_label_audit/opening_label_audit.jsonl`
+- opening fail rows：`/home/s92137/chess_results/exp5_14_opening_label_audit/opening_fail_rows.jsonl`
+- clean opening curriculum：`/home/s92137/chess_results/exp5_14_opening_label_audit/clean_opening_curriculum.jsonl`
+- model artifact：unchanged runtime sha `c47ef752aa69d7b8c813b587468228593f44d69c9b947313325e03797e4450dc`
+- result：opening rows `27`, failed rows `15`, candidate regressed rows `3`
+- label quality：`questionable=27`, `clean=0`
+- classification：`teacher_label_too_narrow=17`, `multi_good_opening_equivalent=6`, `questionable_label_do_not_gate=4`
+- decision：`production_blocker=false`, `clean_true_opening_regressions=0`, `exp5_15_clean_opening_curriculum_rows=0`
+- next：build curated opening-book / stronger-teacher labels before exp5_15 candidate training
+
 ## auto-retrain 與 promotion 關係
 
 auto-retrain 入口：

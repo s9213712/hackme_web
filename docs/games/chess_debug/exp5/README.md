@@ -57,6 +57,7 @@ exp5 是後續主要棋力路線之一，方向是：
 - exp5_11c quiet positional gate-label fix：`2026-05-12_exp5_11c_quiet_gate_fix.md`
 - exp5_12 production promote：`2026-05-12_exp5_12_production_promote.md`
 - exp5_13 rule smoke + stalemate fix：`2026-05-12_exp5_13_rule_smoke_and_stalemate_fix.md`
+- exp5_14 opening label audit：`2026-05-12_exp5_14_opening_label_audit.md`
 
 ## 歷程總表
 
@@ -79,6 +80,7 @@ exp5 是後續主要棋力路線之一，方向是：
 | exp5_11c | 2026-05-12 | quiet positional near-equivalence gate；ordinal rank 7 / dense rank 3 tie-break clarified；exp5_10 rerun overall Δ +0.014815，quiet regression cleared | **production_promote_request_ready=True; runtime unchanged** |
 | exp5_12 | 2026-05-12 | promoted exact staged candidate sha `c47ef752...` to runtime；post-promote 135-case validation Δ +0.022222，endgame +0.090909，5/5 repeatability，0 clean regressions | **production_promote=True; runtime_model_mutated=True** |
 | exp5_13 | 2026-05-12 | rule-priority + fixture cleanup + stalemate avoidance；137-case validation Δ +0.021898，smoke 18/18，suspicious 0，5/5 repeatability | **production runtime improved; model sha unchanged** |
+| exp5_14 | 2026-05-12 | opening label audit；27/27 opening rows are questionable，15 failed rows classified as 17 teacher-too-narrow / 6 multi-good / 4 do-not-gate，0 clean true opening regressions | **not a production blocker; no clean opening curriculum yet** |
 
 ## Difficulty
 
