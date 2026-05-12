@@ -125,6 +125,632 @@ def test_exp4_opening_target_margin_audit_reports_mcts_and_multigood(tmp_path):
     assert audit["cases"][0]["mcts_visit_count"] is not None
     assert "teacher_distribution" in audit["cases"][0]
 
+    # exp4_07 evidence accounting cleanup
+    assert audit["source"] == "exp4_07_opening_evidence_cleanup"
+    assert audit["low_margin_override_counted_success_count"] == 0
+    assert "override_applied_for_move_selection_count" in audit
+    assert "override_counted_as_learning_success_count" in audit
+    assert "opening_final_decision_alignment_passed" in audit
+    assert "opening_specific_learning_evidence_passed" in audit
+    assert "targeted_mistake_retention_success" in audit
+    assert "opening_learning_evidence_passed" in audit
+    assert "audit_table" in audit
+    audit_row = audit["audit_table"][0]
+    for field in (
+        "teacher_top3",
+        "static_best_move",
+        "search_best_move",
+        "final_top1",
+        "raw_policy_rank",
+        "margin_vs_second_best",
+        "multi_good_tie",
+        "override_applied_for_move_selection",
+        "override_counted_as_learning_success",
+        "low_margin_override_counted_as_learning_success",
+        "failure_type",
+    ):
+        assert field in audit_row
+    case_row = audit["cases"][0]
+    assert case_row["low_margin_override_counted_as_learning_success"] is False
+
+
+def test_exp4_07_promotion_gate_classifies_blockers_by_scope():
+    module = _load_validation_module()
+
+    classified = module._classify_promotion_blockers(
+        [
+            "exp4 opening final decision alignment failed or remains unresolved",
+            "exp34 hard flank capability gap remains unresolved",
+            "contextual flank hard clean pass rate is zero",
+            "exp31 semantic scheduler: central_retention_zero_after_semantic_updates",
+        ],
+        {"opening_target_margin_audit": {"model_scope": "opening_specialist_candidate"}},
+    )
+
+    assert "exp31 semantic scheduler: central_retention_zero_after_semantic_updates" in classified["historical_cross_experiment_risk_references"]
+    assert "exp4 opening final decision alignment failed or remains unresolved" in classified["current_exp4_measured_blockers"]
+    # exp34 hard flank is measured this run (current) but excluded from opening-specialist scope
+    assert "exp34 hard flank capability gap remains unresolved" in classified["current_exp4_measured_blockers"]
+    assert "exp34 hard flank capability gap remains unresolved" in classified["general_model_promotion_blockers"]
+    assert "exp34 hard flank capability gap remains unresolved" not in classified["opening_specialist_gate_blockers"]
+    assert "contextual flank hard clean pass rate is zero" not in classified["opening_specialist_gate_blockers"]
+    # historical reference must not block opening specialist
+    assert "exp31 semantic scheduler: central_retention_zero_after_semantic_updates" not in classified["opening_specialist_gate_blockers"]
+
+
+def test_exp4_08_e_pawn_equivalence_audit_classifies_multi_good_tie():
+    module = _load_validation_module()
+    # Build a synthetic summary that exercises the equivalence classifier.
+    # central_vs_flank_boundary supplies the per-case data; templates provide
+    # the FEN so the teacher annotation can run.
+    e_pawn_cases = [
+        {  # strict pass
+            "case_id": "gate_e_pawn_easy_001",
+            "expected_move": "e2e4",
+            "expected_semantic": "e_pawn_central_break",
+            "raw_policy_top1": "e2e4",
+            "final_top1": "e2e4",
+            "expected_rank": 1,
+            "variant_difficulty": "easy",
+        },
+        {  # white e2e4 multi-good tie -> central_opening_equivalent_credit
+            "case_id": "gate_e_pawn_medium_001",
+            "expected_move": "e2e4",
+            "expected_semantic": "e_pawn_central_break",
+            "raw_policy_top1": "d2d4",
+            "final_top1": "d2d4",
+            "expected_rank": 2,
+            "variant_difficulty": "medium",
+        },
+        {  # black e7e5 vs c7c5 -> opening_multi_good_tie
+            "case_id": "gate_e_pawn_easy_002",
+            "expected_move": "e7e5",
+            "expected_semantic": "e_pawn_central_break",
+            "raw_policy_top1": "c7c5",
+            "final_top1": "c7c5",
+            "expected_rank": 4,
+            "variant_difficulty": "easy",
+        },
+    ]
+    summary = {
+        "checkpoint_consistency": {
+            "checkpoint_consistency_table": [
+                {
+                    "trusted_count": 20,
+                    "central_vs_flank_boundary": {"cases": e_pawn_cases},
+                    "clean_heldout_by_semantic": {
+                        "e_pawn_central_break": {
+                            "passed": 1,
+                            "total": 3,
+                            "raw_policy_passed": 1,
+                        }
+                    },
+                }
+            ]
+        }
+    }
+    diag = module._e_pawn_clean_held_out_diagnosis(summary)
+    assert diag["supported"] is True
+    cp = diag["per_checkpoint"][0]
+    classifications = [case["classification"] for case in cp["cases"]]
+    assert classifications[0] == "strict_pass"
+    # remaining classifications should reflect multi-good tie credit
+    assert "central_opening_equivalent_credit" in classifications
+    assert "opening_multi_good_tie" in classifications
+    # equivalent-credit pass rate counts strict + equivalent
+    assert cp["e_pawn_equivalent_credit_pass_count"] == 3
+    assert cp["true_e_pawn_raw_policy_fail_count"] == 0
+    assert cp["true_e_pawn_final_decision_blocked_count"] == 0
+    assert cp["excluded_multi_good_negative_count"] == 2
+    # totals roll up to the aggregate dict
+    assert diag["totals"]["e_pawn_equivalent_credit_pass_rate"] == 1.0
+
+
+def test_exp4_08_e_pawn_diagnosis_runs_with_teacher_coverage_stats():
+    """Real call covers the function body so a missing initialization (e.g. NameError) surfaces."""
+    module = _load_validation_module()
+    summary = {
+        "checkpoint_consistency": {
+            "checkpoint_consistency_table": [
+                {
+                    "trusted_count": 20,
+                    "central_vs_flank_boundary": {
+                        "cases": [
+                            {
+                                "case_id": "gate_e_pawn_easy_001",
+                                "expected_move": "e2e4",
+                                "expected_semantic": "e_pawn_central_break",
+                                "raw_policy_top1": "e2e4",
+                                "final_top1": "e2e4",
+                                "expected_rank": 1,
+                                "variant_difficulty": "easy",
+                            }
+                        ]
+                    },
+                    "clean_heldout_by_semantic": {
+                        "e_pawn_central_break": {"passed": 1, "total": 1, "raw_policy_passed": 1}
+                    },
+                }
+            ]
+        }
+    }
+    diag = module._e_pawn_clean_held_out_diagnosis(summary)
+    cp = diag["per_checkpoint"][0]
+    assert "teacher_annotation_supported_count" in cp
+    assert "teacher_annotation_missing_count" in cp
+    assert "teacher_top3_empty_count" in cp
+    assert "teacher_top5_empty_count" in cp
+    assert cp["teacher_annotation_supported_count"] + cp["teacher_annotation_missing_count"] == cp["case_count"]
+
+
+def test_exp4_08_c7c5_not_equivalent_without_teacher_or_margin_support():
+    module = _load_validation_module()
+    # Build a synthetic checkpoint row where the case carries no template
+    # (so teacher annotation falls back to unsupported). This forces the
+    # classifier into the "no positive evidence" branch.
+    summary = {
+        "checkpoint_consistency": {
+            "checkpoint_consistency_table": [
+                {
+                    "trusted_count": 20,
+                    "central_vs_flank_boundary": {
+                        "cases": [
+                            {
+                                "case_id": "synthetic_no_template",
+                                "expected_move": "e7e5",
+                                "expected_semantic": "e_pawn_central_break",
+                                "raw_policy_top1": "c7c5",
+                                "final_top1": "c7c5",
+                                "expected_rank": 6,
+                                "variant_difficulty": "easy",
+                            }
+                        ]
+                    },
+                    "clean_heldout_by_semantic": {
+                        "e_pawn_central_break": {"passed": 0, "total": 1, "raw_policy_passed": 0}
+                    },
+                }
+            ]
+        }
+    }
+    diag = module._e_pawn_clean_held_out_diagnosis(summary)
+    case = diag["per_checkpoint"][0]["cases"][0]
+    # No template -> no teacher coverage -> must NOT be classified as multi-good tie
+    assert case["classification"] != "opening_multi_good_tie"
+    assert case["classification"] in {"true_e_pawn_raw_policy_fail", "label_questionable", "undertrained_opening_pattern"}
+
+
+def test_exp4_08_d2d4_c2c4_not_equivalent_without_teacher_or_margin_support():
+    module = _load_validation_module()
+    summary = {
+        "checkpoint_consistency": {
+            "checkpoint_consistency_table": [
+                {
+                    "trusted_count": 20,
+                    "central_vs_flank_boundary": {
+                        "cases": [
+                            {
+                                "case_id": "synthetic_no_template_white",
+                                "expected_move": "e2e4",
+                                "expected_semantic": "e_pawn_central_break",
+                                "raw_policy_top1": "d2d4",
+                                "final_top1": "d2d4",
+                                "expected_rank": 2,
+                                "variant_difficulty": "medium",
+                            }
+                        ]
+                    },
+                    "clean_heldout_by_semantic": {
+                        "e_pawn_central_break": {"passed": 0, "total": 1, "raw_policy_passed": 0}
+                    },
+                }
+            ]
+        }
+    }
+    diag = module._e_pawn_clean_held_out_diagnosis(summary)
+    case = diag["per_checkpoint"][0]["cases"][0]
+    assert case["classification"] != "central_opening_equivalent_credit"
+    assert case["classification"] in {"true_e_pawn_final_decision_blocked", "label_questionable", "undertrained_opening_pattern"}
+
+
+def test_exp4_08_write_audit_artifacts_preserves_totals(tmp_path):
+    module = _load_validation_module()
+    summary = {
+        "opening_target_margin_audit": {
+            "supported": True,
+            "audit_table": [{"case_id": "c1"}, {"case_id": "c2"}, {"case_id": "c3"}, {"case_id": "c4"}],
+            "cases": [{"case_id": "c1"}, {"case_id": "c2"}, {"case_id": "c3"}, {"case_id": "c4"}],
+        },
+        "e_pawn_clean_held_out_diagnosis": {
+            "supported": True,
+            "totals": {"e_pawn_strict_pass_rate": 0.0, "e_pawn_equivalent_credit_pass_rate": 0.5},
+            "per_checkpoint": [
+                {"trusted_count": 10, "cases": [{"case_id": "x1"}, {"case_id": "x2"}]},
+                {"trusted_count": 20, "cases": [{"case_id": "y1"}]},
+            ],
+        },
+    }
+    artifacts = module._write_audit_artifacts(tmp_path, summary)
+    assert (tmp_path / "audits" / "opening_target_margin_audit.jsonl").exists()
+    assert (tmp_path / "audits" / "e_pawn_clean_held_out_diagnosis.jsonl").exists()
+    # totals + path retained, per-case lists trimmed
+    assert summary["opening_target_margin_audit"]["audit_table"] == []
+    assert summary["opening_target_margin_audit"]["audit_table_full_row_count"] == 4
+    assert summary["opening_target_margin_audit"]["audit_table_artifact_path"].endswith(".jsonl")
+    assert summary["opening_target_margin_audit"]["cases"] == []
+    for checkpoint in summary["e_pawn_clean_held_out_diagnosis"]["per_checkpoint"]:
+        assert checkpoint["cases"] == []
+        assert isinstance(checkpoint["cases_full_count"], int)
+    assert summary["e_pawn_clean_held_out_diagnosis"]["totals"]["e_pawn_equivalent_credit_pass_rate"] == 0.5
+    assert artifacts["e_pawn_clean_held_out_diagnosis"]["row_count"] == 3
+
+
+def test_exp4_08_classify_promotion_blockers_excuses_e_pawn_when_equivalent():
+    module = _load_validation_module()
+    classified = module._classify_promotion_blockers(
+        [
+            "checkpoint instability: trusted=10: semantic class e_pawn_central_break clean held-out pass count is zero",
+            "exp4 opening final decision alignment failed or remains unresolved",
+        ],
+        {
+            "opening_target_margin_audit": {"model_scope": "opening_specialist_candidate"},
+            "e_pawn_clean_held_out_diagnosis": {
+                "supported": True,
+                "totals": {
+                    "e_pawn_equivalent_credit_pass_rate": 0.5,
+                    "central_opening_equivalent_pass_rate": 0.4,
+                    "true_e_pawn_raw_policy_fail": 0,
+                },
+            },
+        },
+    )
+    e_pawn_marker = "semantic class e_pawn_central_break clean held-out pass count is zero"
+    assert not any(e_pawn_marker in reason for reason in classified["opening_specialist_gate_blockers"])
+    assert any(e_pawn_marker in reason for reason in classified["general_model_promotion_blockers"])
+    # alignment failure still blocks opening specialist
+    assert any("opening final decision alignment" in reason for reason in classified["opening_specialist_gate_blockers"])
+
+
+def test_exp4_09_label_audit_classifies_quarantine_and_clean():
+    module = _load_validation_module()
+
+    summary = {
+        "e_pawn_clean_held_out_diagnosis": {
+            "supported": True,
+            "totals": {
+                "true_e_pawn_raw_policy_fail": 2,
+                "true_e_pawn_final_decision_blocked": 0,
+            },
+            "per_checkpoint": [
+                {
+                    "trusted_count": 20,
+                    "cases": [
+                        {
+                            "case_id": "gate_e_pawn_hard_001",
+                            "fen": "rnbqkbnr/ppp1pppp/8/3p4/2P5/5N2/PP1PPPPP/RNBQKB1R b KQkq - 1 2",
+                            "side": "black",
+                            "expected_move": "e7e5",
+                            "raw_top1": "c7c5",
+                            "raw_top3": ["c7c5", "g7g5", "h7h5"],
+                            "final_top1": "c7c5",
+                            "final_top3": [],
+                            "expected_rank": 5,
+                            "classification": "true_e_pawn_raw_policy_fail",
+                        },
+                        {
+                            "case_id": "synth_clean_true_fail",
+                            "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+                            "side": "white",
+                            "expected_move": "e2e4",
+                            "raw_top1": "h2h4",
+                            "raw_top3": ["h2h4", "a2a4", "b2b4"],
+                            "final_top1": "h2h4",
+                            "final_top3": [],
+                            "expected_rank": 7,
+                            "classification": "true_e_pawn_raw_policy_fail",
+                        },
+                    ],
+                }
+            ],
+        },
+        "opening_target_margin_audit": {"supported": False, "cases": []},
+    }
+    audit = module._opening_label_audit(summary)
+    rows = {row["case_id"]: row for row in audit["cases"]}
+    # hard_001: e7e5 drops the d5 pawn -> teacher static_cp_delta is around -100
+    # which falls into questionable_label (cp <= -50 and no teacher coverage).
+    hard = rows["gate_e_pawn_hard_001"]
+    assert hard["label_quality"] in {"questionable_label", "relabel_recommended", "quarantine_recommended"}
+    assert hard["clean_true_failure"] is False
+    # synth opening case: e2e4 is teacher-supported, should be clean and a true fail
+    clean = rows["synth_clean_true_fail"]
+    assert clean["label_quality"] == "clean_label"
+    assert clean["clean_true_failure"] is True
+    # totals
+    assert audit["clean_true_failure_count"] >= 1
+    # the questionable case must reduce true_raw_fail_count by 1
+    assert audit["e_pawn_true_raw_policy_fail_count_clean"] == 1
+
+
+def test_exp4_09_classify_label_quality_bands():
+    module = _load_validation_module()
+    # cp > -50 with teacher coverage -> clean
+    assert module._classify_label_quality(-10, expected_in_teacher_top3=True, expected_in_teacher_top5=True) == "clean_label"
+    # cp between -150 and -50 without teacher coverage -> questionable
+    assert module._classify_label_quality(-100, expected_in_teacher_top3=False, expected_in_teacher_top5=False) == "questionable_label"
+    # cp between -300 and -150 -> relabel recommended
+    assert module._classify_label_quality(-200, expected_in_teacher_top3=False, expected_in_teacher_top5=False) == "relabel_recommended"
+    # cp <= -300 -> quarantine
+    assert module._classify_label_quality(-500, expected_in_teacher_top3=True, expected_in_teacher_top5=True) == "quarantine_recommended"
+    # No cp data -> label_unverified unless teacher covers expected
+    assert module._classify_label_quality(None, expected_in_teacher_top3=False, expected_in_teacher_top5=False) == "label_unverified"
+    assert module._classify_label_quality(None, expected_in_teacher_top3=True, expected_in_teacher_top5=True) == "clean_label"
+
+
+def test_exp4_10_replay_blunder_screen_flags_bishop_for_pawn_trade():
+    module = _load_validation_module()
+    # Synthetic exp3-style replay: 1.e4 e5 2.Bb5 c6 3.Bxc6 — the bishop trades
+    # for a pawn and the screen should flag it.
+    records = [
+        {
+            "replay_id": "synth_blunder_replay",
+            "match_id": 1,
+            "opening_seed": "standard_start",
+            "move_history": [
+                {"by": "white", "from": "e2", "to": "e4", "piece": "P", "captured": None, "promotion": None},
+                {"by": "black", "from": "e7", "to": "e5", "piece": "p", "captured": None, "promotion": None},
+                {"by": "white", "from": "f1", "to": "b5", "piece": "B", "captured": None, "promotion": None},
+                {"by": "black", "from": "c7", "to": "c6", "piece": "p", "captured": None, "promotion": None},
+                {"by": "white", "from": "b5", "to": "c6", "piece": "B", "captured": "p", "promotion": None},
+                {"by": "black", "from": "b8", "to": "c6", "piece": "n", "captured": "B", "promotion": None},
+            ],
+            "confidence_score": 0.42,
+        }
+    ]
+    screen = module._replay_blunder_screen(records)
+    assert screen["flagged_replay_count"] == 1
+    assert any(row["material_delta_cp"] <= -200 for row in screen["flagged"])
+
+
+def test_exp4_10_replay_blunder_screen_passes_clean_replay():
+    module = _load_validation_module()
+    records = [
+        {
+            "replay_id": "clean_opening",
+            "match_id": 2,
+            "opening_seed": "standard_start",
+            "move_history": [
+                {"by": "white", "from": "e2", "to": "e4", "piece": "P", "captured": None, "promotion": None},
+                {"by": "black", "from": "e7", "to": "e5", "piece": "p", "captured": None, "promotion": None},
+                {"by": "white", "from": "g1", "to": "f3", "piece": "N", "captured": None, "promotion": None},
+                {"by": "black", "from": "b8", "to": "c6", "piece": "n", "captured": None, "promotion": None},
+            ],
+            "confidence_score": 0.92,
+        }
+    ]
+    screen = module._replay_blunder_screen(records)
+    assert screen["flagged_replay_count"] == 0
+
+
+def test_exp4_10_resignation_audit_flags_early_low_confidence_resign():
+    module = _load_validation_module()
+    records = [
+        {
+            "replay_id": "early_resign",
+            "match_id": 1,
+            "confidence_score": 0.42,
+            "result": "black",
+            "result_reason": "resign",
+            "move_count": 8,
+            "move_history": [{"by": "white"}] * 8,
+            "winner_color": "black",
+            "human_side": "black",
+        },
+        {
+            "replay_id": "normal_loss",
+            "match_id": 2,
+            "confidence_score": 0.85,
+            "result": "white",
+            "result_reason": "checkmate",
+            "move_count": 60,
+            "move_history": [{"by": "white"}] * 60,
+            "winner_color": "white",
+            "human_side": "black",
+        },
+    ]
+    audit = module._resignation_audit(records)
+    assert audit["suspicious_count"] == 1
+    assert audit["early_resign_count"] == 1
+    assert audit["suspicious_replays"][0]["replay_id"] == "early_resign"
+
+
+def test_exp4_11_low_confidence_trusted_audit_flags_low_conf():
+    module = _load_validation_module()
+    records = [
+        {"replay_id": "r1", "match_id": 1, "collection_tier": "trusted", "confidence_score": 0.42},
+        {"replay_id": "r2", "match_id": 2, "collection_tier": "trusted", "confidence_score": 0.92},
+        {"replay_id": "r3", "match_id": 3, "collection_tier": "unverified", "confidence_score": 0.10},
+    ]
+    audit = module._low_confidence_trusted_audit(records)
+    assert audit["flagged_replay_count"] == 1
+    assert audit["flagged_replay_ids"] == ["r1"]
+
+
+def test_exp4_11_misclassified_resign_audit_flags_resign_after_capture():
+    module = _load_validation_module()
+    records = [
+        {
+            "replay_id": "r_resign_with_capture",
+            "match_id": 1,
+            "result_reason": "resign",
+            "winner_color": "black",
+            "move_history": [
+                {"by": "white", "captured": None},
+                {"by": "black", "captured": None},
+                {"by": "white", "captured": "n"},  # white capturing right before "resign"
+            ],
+        },
+        {
+            "replay_id": "r_genuine_resign",
+            "match_id": 2,
+            "result_reason": "resign",
+            "winner_color": "white",
+            "move_history": [
+                {"by": "white", "captured": None},
+                {"by": "black", "captured": None},
+                {"by": "white", "captured": None},
+            ],
+        },
+    ]
+    audit = module._misclassified_resign_audit(records)
+    assert audit["flagged_replay_count"] == 1
+    assert audit["flagged_replay_ids"] == ["r_resign_with_capture"]
+
+
+def test_exp4_11_build_replay_quarantine_index_merges_sources():
+    module = _load_validation_module()
+    summary = {
+        "replay_blunder_screen": {
+            "flagged": [
+                {"replay_id": "r1", "ply": 5, "move_uci": "b5c6", "side": "white", "material_delta_cp": -230, "material_after_best_recapture_cp": -230},
+                {"replay_id": "r1", "ply": 7, "move_uci": "g1h3", "side": "white", "material_delta_cp": -250, "material_after_best_recapture_cp": -300},
+            ],
+        },
+        "low_confidence_trusted_audit": {
+            "flagged": [{"replay_id": "r2", "match_id": 2, "confidence_score": 0.42, "collection_tier": "trusted"}],
+        },
+        "misclassified_resign_audit": {
+            "flagged": [{"replay_id": "r3", "match_id": 3, "resigning_side": "white", "recent_captures_by_resigning_side": [{"captured_piece": "n"}]}],
+        },
+    }
+    idx = module._build_replay_quarantine_index(summary)
+    # r1 had 2 plies flagged -> escalated to replay-level
+    assert "r1" in idx["quarantine_replay_ids"]
+    assert "r2" in idx["quarantine_replay_ids"]
+    assert "r3" in idx["quarantine_replay_ids"]
+    # Ply-level still recorded for r1
+    assert ["r1", 5] in idx["quarantine_ply_keys"]
+    assert idx["by_source_count"]["replay_blunder_screen"] >= 2
+    assert idx["by_source_count"]["low_confidence_trusted_audit"] == 1
+    assert idx["by_source_count"]["misclassified_resign_audit"] == 1
+
+
+def test_exp4_11_extract_engine_samples_respects_quarantine():
+    module = _load_validation_module()
+    records = [
+        {
+            "replay_id": "good",
+            "match_id": 1,
+            "human_side": "black",  # engine plays white
+            "opening_seed": "standard_start",
+            "move_history": [
+                {"by": "white", "from": "e2", "to": "e4", "promotion": None},
+                {"by": "black", "from": "e7", "to": "e5", "promotion": None},
+            ],
+        },
+        {
+            "replay_id": "bad",
+            "match_id": 2,
+            "human_side": "black",
+            "opening_seed": "standard_start",
+            "move_history": [
+                {"by": "white", "from": "e2", "to": "e4", "promotion": None},
+                {"by": "black", "from": "e7", "to": "e5", "promotion": None},
+            ],
+        },
+    ]
+    all_samples = module._extract_engine_move_samples_from_records(records)
+    assert any(s["game_label"] == "bad" for s in all_samples)
+    filtered = module._extract_engine_move_samples_from_records(
+        records, quarantine_replay_ids={"bad"}
+    )
+    assert all(s["game_label"] != "bad" for s in filtered)
+    assert any(s["game_label"] == "good" for s in filtered)
+
+
+def test_exp4_12_should_resign_helper_invariants():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "chess_pv_t", ROOT / "services" / "games" / "chess_pv.py"
+    )
+    chess_pv = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = chess_pv
+    spec.loader.exec_module(chess_pv)
+    import chess
+    board = chess.Board()
+    # Early game: never resign
+    r = chess_pv.should_resign(board, search_score=-2000, ply_count=10, mate_distance=None)
+    assert r["should_resign"] is False
+    assert r["resign_forbidden"] is True
+    # Forced mate within distance: allow
+    r = chess_pv.should_resign(board, search_score=-9_000_000, ply_count=50, mate_distance=3)
+    assert r["should_resign"] is True
+    assert r["resign_allowed"] is True
+    # Drawable losing: keep playing
+    r = chess_pv.should_resign(board, search_score=-700, ply_count=40, mate_distance=None)
+    assert r["should_resign"] is False
+    # Mate distance beyond threshold should NOT resign
+    r = chess_pv.should_resign(board, search_score=-2000, ply_count=40, mate_distance=15)
+    assert r["should_resign"] is False
+
+
+def test_exp4_12_chess_label_features_emits_castling_and_promotion():
+    module = _load_validation_module()
+    # Castling-eligible position
+    feats = module._chess_label_features(
+        "r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/2N2N2/PPPP1PPP/R1BQK2R w KQkq - 4 5",
+        "white",
+        "e1g1",
+    )
+    assert feats["supported"] is True
+    assert feats["is_castling_move"] is True
+    assert feats["can_castle_kingside"] is True
+    # Queen promotion
+    feats = module._chess_label_features("8/4P3/8/8/8/8/8/4K2k w - - 0 1", "white", "e7e8q")
+    assert feats["is_promotion"] is True
+    assert feats["promotion_piece"] == "q"
+
+
+def test_exp4_07_catastrophic_regression_source_marks_score_not_regressed():
+    module = _load_validation_module()
+    summary = {
+        "deterministic_strength_snapshot": {
+            "score_table": [
+                {"model_label": "baseline", "overall_deterministic_score": 0.8693},
+                {"model_label": "final", "overall_deterministic_score": 0.9231},
+            ]
+        },
+        "checkpoint_consistency": {
+            "instability": True,
+            "instability_reasons": [
+                "trusted=10: seen retention below threshold",
+                "trusted=10: clean held-out retention below threshold",
+                "trusted=10: hard-negative margin is negative",
+                "trusted=10: prior learned case retention regressed",
+            ],
+        },
+        "fusion_mode_comparison": {
+            "modes": [{"fusion_mode": "balanced_fusion", "final_decision_generalization_rate": 0.41}]
+        },
+        "before_after_eval": {"checkpoints": []},
+    }
+    source = module._catastrophic_regression_source(
+        summary=summary,
+        illegal_move_delta=None,
+        stage_regression={"stage_catastrophic_regression": False},
+        retrain_stability={"suspected_catastrophic_regression": False},
+        checkpoint_consistency=summary["checkpoint_consistency"],
+        before_after=summary["before_after_eval"],
+    )
+    assert source["deterministic_score_regression"] is False
+    assert source["deterministic_score_delta"] == 0.0538
+    assert source["checkpoint_retention_instability"] is True
+    assert source["clean_heldout_retention_failure"] is True
+    assert source["seen_retention_failure"] is True
+    assert source["semantic_margin_failure"] is True
+    assert source["prior_retention_failure"] is True
+    assert source["final_decision_generalization_failure"] is True
+
 
 def test_semantic_specialist_training_rows_are_weighted():
     module = _load_validation_module()

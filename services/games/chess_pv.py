@@ -42,11 +42,17 @@ _SEARCH_PROFILES = {
     "fast": {"depth": 1, "quiescence_depth": 1, "time_budget_ms": 150},
     "balanced": {"depth": 2, "quiescence_depth": 2, "time_budget_ms": 340},
     "strong": {"depth": 2, "quiescence_depth": 4, "time_budget_ms": 1100},
+    "fixed_depth_fast": {"depth": 1, "quiescence_depth": 1, "time_budget_ms": None},
+    "fixed_depth_balanced": {"depth": 2, "quiescence_depth": 2, "time_budget_ms": None},
+    "fixed_depth_strong": {"depth": 2, "quiescence_depth": 4, "time_budget_ms": None},
 }
 _MCTS_SIMULATIONS = {
     "fast": 32,
     "balanced": 72,
     "strong": 160,
+    "fixed_depth_fast": 32,
+    "fixed_depth_balanced": 72,
+    "fixed_depth_strong": 160,
 }
 _CONTRASTIVE_NEGATIVE_TARGET = -0.45
 _CONTRASTIVE_MAX_NEGATIVES = 32
@@ -56,6 +62,22 @@ _INVARIANCE_MEMORY_LEARNING_RATE = 0.08
 _MAX_INVARIANCE_MEMORY_BIAS = 0.85
 _POLICY_OVERRIDE_MIN_SCORE = 0.95
 _POLICY_OVERRIDE_MIN_MARGIN = 0.20
+_RULE_AWARE_SEARCH_DISAGREEMENT_CP = 200
+_RULE_AWARE_RAW_RANK_LIMIT = 3
+_RULE_AWARE_BONUS_BY_TYPE = {
+    "castling": 420,
+    "castling_short": 420,
+    "castling_long": 420,
+    "en_passant": 420,
+    "underpromotion": 650,
+    "underpromotion_knight": 360,
+    "underpromotion_bishop": 360,
+    "underpromotion_rook": 520,
+    "underpromotion_rook_avoid_stalemate": 780,
+    "promotion_knight_mate": 850,
+    "promotion": 320,
+    "promotion_queen": 320,
+}
 _FUSION_MODES = {
     "strict_search": {"policy_weight": 0, "min_score": 1.20, "min_margin": 9.0},
     "balanced_fusion": {"policy_weight": 45, "min_score": 0.88, "min_margin": 0.02},
@@ -533,6 +555,62 @@ def _opening_principle_score(board: chess.Board, move: chess.Move) -> int:
     return score
 
 
+def _queen_promotion_stalemates(board: chess.Board, move: chess.Move) -> bool:
+    if move.promotion is None or move.promotion == chess.QUEEN:
+        return False
+    queen_move = chess.Move(move.from_square, move.to_square, promotion=chess.QUEEN)
+    if queen_move not in board.legal_moves:
+        return False
+    after = board.copy(stack=False)
+    after.push(queen_move)
+    return bool(after.is_stalemate())
+
+
+def _special_rule_type(board: chess.Board, move: chess.Move) -> str:
+    if board.is_castling(move):
+        return "castling_short" if chess.square_file(move.to_square) > chess.square_file(move.from_square) else "castling_long"
+    if board.is_en_passant(move):
+        return "en_passant"
+    if move.promotion is not None:
+        if move.promotion == chess.QUEEN:
+            return "promotion_queen"
+        after = board.copy(stack=False)
+        after.push(move)
+        if move.promotion == chess.KNIGHT and after.is_checkmate():
+            return "promotion_knight_mate"
+        if move.promotion == chess.ROOK and _queen_promotion_stalemates(board, move):
+            return "underpromotion_rook_avoid_stalemate"
+        piece_name = chess.piece_name(move.promotion).replace(" ", "_")
+        return f"underpromotion_{piece_name}"
+    return ""
+
+
+def _special_rule_family(rule_type: str) -> str:
+    value = str(rule_type or "")
+    if value.startswith("castling"):
+        return "castling"
+    if value.startswith("promotion") or value.startswith("underpromotion"):
+        return "promotion"
+    if value.startswith("en_passant"):
+        return "en_passant"
+    return value
+
+
+def _ordinary_opening_pawn_push(board: chess.Board, move: chess.Move | None) -> bool:
+    if move is None or board.fullmove_number > 8:
+        return False
+    piece = board.piece_at(move.from_square)
+    if piece is None or piece.piece_type != chess.PAWN:
+        return False
+    if board.is_capture(move) or board.gives_check(move) or board.is_en_passant(move) or move.promotion is not None:
+        return False
+    return chess.square_file(move.from_square) in {
+        chess.FILE_NAMES.index("c"),
+        chess.FILE_NAMES.index("d"),
+        chess.FILE_NAMES.index("e"),
+    }
+
+
 def _opening_principle_fallback(board: chess.Board, best_move: chess.Move | None) -> chess.Move | None:
     if best_move is None or board.fullmove_number > 8:
         return best_move
@@ -631,6 +709,319 @@ def _adaptive_policy_thresholds(*, fusion_mode: str, decision_context: dict | No
     }
 
 
+OVERRIDE_SEARCH_GUARD_DISAGREEMENT_CP = 200
+OVERRIDE_SEARCH_GUARD_MATE_LIKE_CP = 100_000
+
+RESIGN_GUARD_MIN_PLY = 30
+RESIGN_GUARD_FORCED_MATE_DISTANCE_LIMIT = 5
+RESIGN_GUARD_SEARCH_SCORE_THRESHOLD_CP = -900
+
+
+def should_resign(
+    board: chess.Board,
+    *,
+    search_score: int | float | None = None,
+    ply_count: int | None = None,
+    mate_distance: int | None = None,
+    min_ply: int = RESIGN_GUARD_MIN_PLY,
+    forced_mate_distance_limit: int = RESIGN_GUARD_FORCED_MATE_DISTANCE_LIMIT,
+    search_score_threshold_cp: int = RESIGN_GUARD_SEARCH_SCORE_THRESHOLD_CP,
+) -> dict:
+    """exp4_12 diagnostic resign decision.
+
+    Conservative rules (engine never actually resigns yet — this is consulted by
+    the deterministic resignation gate only):
+
+      * Forced mate within ``forced_mate_distance_limit`` against side-to-move
+        → should_resign=True (resign_allowed=True)
+      * ply_count < ``min_ply``  → should_resign=False, even if search_score
+        is bad (resign_forbidden=True; avoid early-resign poison)
+      * search_score (from side-to-move's perspective) above
+        ``search_score_threshold_cp`` → should_resign=False
+      * Otherwise: should_resign=False by default — only forced mate triggers
+        a resign. This keeps the bar high.
+    """
+    effective_ply = int(ply_count if ply_count is not None else board.fullmove_number * 2 - (0 if board.turn == chess.WHITE else 1))
+    score = float(search_score) if search_score is not None else None
+    if mate_distance is not None and 0 < int(mate_distance) <= int(forced_mate_distance_limit):
+        return {
+            "should_resign": True,
+            "reason": "forced_mate_within_resign_distance",
+            "mate_distance": int(mate_distance),
+            "ply_count": effective_ply,
+            "search_score": score,
+            "resign_allowed": True,
+            "resign_forbidden": False,
+        }
+    if effective_ply < int(min_ply):
+        return {
+            "should_resign": False,
+            "reason": "early_game_resign_forbidden",
+            "mate_distance": int(mate_distance) if mate_distance is not None else None,
+            "ply_count": effective_ply,
+            "search_score": score,
+            "resign_allowed": False,
+            "resign_forbidden": True,
+        }
+    if score is None or score > float(search_score_threshold_cp):
+        return {
+            "should_resign": False,
+            "reason": "search_score_above_threshold_or_unknown",
+            "mate_distance": int(mate_distance) if mate_distance is not None else None,
+            "ply_count": effective_ply,
+            "search_score": score,
+            "resign_allowed": False,
+            "resign_forbidden": False,
+        }
+    return {
+        "should_resign": False,
+        "reason": "conservative_default_keep_playing",
+        "mate_distance": int(mate_distance) if mate_distance is not None else None,
+        "ply_count": effective_ply,
+        "search_score": score,
+        "resign_allowed": False,
+        "resign_forbidden": False,
+    }
+
+
+def _override_search_guard(
+    model: dict,
+    board: chess.Board,
+    override_move: chess.Move,
+    *,
+    disagreement_cp_threshold: int = OVERRIDE_SEARCH_GUARD_DISAGREEMENT_CP,
+    mate_like_cp_threshold: int = OVERRIDE_SEARCH_GUARD_MATE_LIKE_CP,
+) -> dict:
+    """exp4_11: hard guard preventing policy override from overruling search.
+
+    Rejects when:
+      - search's best move score is mate-like (abs >= mate_like_cp_threshold), OR
+      - search prefers its best over the override candidate by more than
+        disagreement_cp_threshold centipawns.
+
+    A shallow alpha-beta search (depth 2 with quiescence depth 1) is run from
+    the current position and from the override candidate's position so the cost
+    stays bounded; the search uses _pv_static_eval as the leaf evaluator.
+    """
+    hasher = ZobristHasher(seed=20260521)
+    eval_cache: dict[int, int] = {}
+    try:
+        search = search_best_move(
+            board,
+            max_depth=2,
+            evaluate=lambda current_board: _pv_static_eval(current_board, model, eval_cache, hasher),
+            hasher=hasher,
+            quiescence_depth=1,
+            time_budget_ms=None,
+        )
+    except Exception as exc:
+        return {"rejected": False, "reason": f"search_error: {exc}"}
+    search_best = search.best_move
+    chosen_search_score = int(search.score)
+    if search_best is None:
+        return {"rejected": False, "reason": "search_no_best_move"}
+    if search_best == override_move:
+        return {
+            "rejected": False,
+            "reason": "search_agrees_with_override",
+            "search_best_move": search_best.uci(),
+            "chosen_search_score": chosen_search_score,
+        }
+    if abs(chosen_search_score) >= int(mate_like_cp_threshold):
+        return {
+            "rejected": True,
+            "reason": "search_score_is_mate_like",
+            "search_best_move": search_best.uci(),
+            "chosen_search_score": chosen_search_score,
+            "mate_like_cp_threshold": int(mate_like_cp_threshold),
+        }
+    after = board.copy(stack=False)
+    try:
+        after.push(override_move)
+    except Exception as exc:
+        return {"rejected": False, "reason": f"override_move_invalid: {exc}"}
+    try:
+        sub = search_best_move(
+            after,
+            max_depth=1,
+            evaluate=lambda current_board: _pv_static_eval(current_board, model, eval_cache, hasher),
+            hasher=hasher,
+            quiescence_depth=1,
+            time_budget_ms=None,
+        )
+    except Exception as exc:
+        return {"rejected": False, "reason": f"override_sub_search_error: {exc}"}
+    override_search_score = -int(sub.score)
+    disagreement_cp = chosen_search_score - override_search_score
+    if disagreement_cp > int(disagreement_cp_threshold):
+        return {
+            "rejected": True,
+            "reason": "search_disagreement_above_threshold",
+            "search_best_move": search_best.uci(),
+            "chosen_search_score": chosen_search_score,
+            "override_search_score": override_search_score,
+            "disagreement_cp": disagreement_cp,
+            "threshold_cp": int(disagreement_cp_threshold),
+        }
+    return {
+        "rejected": False,
+        "reason": "search_disagreement_within_tolerance",
+        "search_best_move": search_best.uci(),
+        "chosen_search_score": chosen_search_score,
+        "override_search_score": override_search_score,
+        "disagreement_cp": disagreement_cp,
+    }
+
+
+def _candidate_alpha_beta_score(model: dict, board: chess.Board, move: chess.Move) -> int | None:
+    after = board.copy(stack=False)
+    try:
+        after.push(move)
+    except Exception:
+        return None
+    if after.is_checkmate():
+        return 9_000_000
+    hasher = ZobristHasher(seed=20260521)
+    eval_cache: dict[int, int] = {}
+    try:
+        child = search_best_move(
+            after,
+            max_depth=1,
+            evaluate=lambda current_board: _pv_static_eval(current_board, model, eval_cache, hasher),
+            hasher=hasher,
+            quiescence_depth=1,
+            time_budget_ms=None,
+        )
+    except Exception:
+        return None
+    return -int(child.score)
+
+
+def _rule_aware_final_fusion_info(
+    model: dict,
+    board: chess.Board,
+    side: str,
+    selected_move: chess.Move | None,
+    *,
+    fusion_mode: str = "balanced_fusion",
+    decision_context: dict | None = None,
+) -> dict:
+    rows = {str(row.get("move") or ""): row for row in _policy_rank_rows(model, board, side)}
+    thresholds = _adaptive_policy_thresholds(fusion_mode=fusion_mode, decision_context=decision_context)
+    policy_weight = int(thresholds.get("policy_weight") or 0)
+    selected_uci = selected_move.uci() if selected_move is not None else ""
+    selected_row = rows.get(selected_uci) or {}
+    selected_search_score = _candidate_alpha_beta_score(model, board, selected_move) if selected_move is not None else None
+    selected_opening = _opening_principle_score(board, selected_move) if selected_move is not None else 0
+    selected_score = (
+        float(selected_search_score if selected_search_score is not None else -1_000_000)
+        + float(selected_row.get("raw_policy_score") or 0.0) * policy_weight
+        + float(selected_opening)
+    )
+    candidates: list[dict] = []
+    for move in sorted(board.legal_moves, key=lambda item: item.uci()):
+        rule_type = _special_rule_type(board, move)
+        if not rule_type:
+            continue
+        row = rows.get(move.uci()) or {}
+        raw_rank = int(row.get("raw_policy_rank") or 999)
+        bonus = int(_RULE_AWARE_BONUS_BY_TYPE.get(rule_type) or 0)
+        guard = _override_search_guard(
+            model,
+            board,
+            move,
+            disagreement_cp_threshold=_RULE_AWARE_SEARCH_DISAGREEMENT_CP,
+        )
+        guard_passed = bool(not guard.get("rejected"))
+        search_score = guard.get("override_search_score")
+        if search_score is None and str(guard.get("search_best_move") or "") == move.uci():
+            search_score = guard.get("chosen_search_score")
+        if search_score is None:
+            search_score = _candidate_alpha_beta_score(model, board, move)
+        rule_context_suppresses_opening_push = bool(
+            raw_rank == 1
+            and _ordinary_opening_pawn_push(board, selected_move)
+            and guard_passed
+        )
+        adjusted_score = (
+            float(search_score if search_score is not None else -1_000_000)
+            + float(row.get("raw_policy_score") or 0.0) * policy_weight
+            + float(_opening_principle_score(board, move))
+            + float(bonus if guard_passed and raw_rank <= _RULE_AWARE_RAW_RANK_LIMIT else 0)
+        )
+        applies = bool(
+            guard_passed
+            and raw_rank <= _RULE_AWARE_RAW_RANK_LIMIT
+            and (adjusted_score >= selected_score or rule_context_suppresses_opening_push)
+        )
+        candidates.append(
+            {
+                "move": move.uci(),
+                "rule_type": rule_type,
+                "rule_family": _special_rule_family(rule_type),
+                "rule_subtype": rule_type,
+                "raw_policy_rank": raw_rank,
+                "raw_policy_score": row.get("raw_policy_score"),
+                "raw_policy_top1": raw_rank == 1,
+                "rule_bonus_before": 0,
+                "rule_bonus_after": bonus if guard_passed and raw_rank <= _RULE_AWARE_RAW_RANK_LIMIT else 0,
+                "guard_passed": guard_passed,
+                "guard": guard,
+                "alpha_beta_score": search_score,
+                "opening_principle_score": _opening_principle_score(board, move),
+                "adjusted_final_score": round(adjusted_score, 4),
+                "selected_move": selected_uci,
+                "selected_alpha_beta_score": selected_search_score,
+                "selected_opening_principle_score": selected_opening,
+                "selected_final_score": round(selected_score, 4),
+                "opening_push_suppressed_by_rule_context": rule_context_suppresses_opening_push,
+                "applies": applies,
+                "rejection_reason": (
+                    "applied"
+                    if applies
+                    else "raw_policy_rank_below_threshold"
+                    if raw_rank > _RULE_AWARE_RAW_RANK_LIMIT
+                    else f"search_guard:{guard.get('reason')}"
+                    if not guard_passed
+                    else "adjusted_score_below_selected"
+                ),
+            }
+        )
+    best = next(
+        (
+            row
+            for row in sorted(
+                candidates,
+                key=lambda item: (
+                    -int(bool(item.get("applies"))),
+                    int(item.get("raw_policy_rank") or 999),
+                    -int(item.get("rule_bonus_after") or 0),
+                    -float(item.get("adjusted_final_score") or -1_000_000),
+                    str(item.get("move") or ""),
+                ),
+            )
+            if row.get("applies")
+        ),
+        None,
+    )
+    return {
+        "supported": True,
+        "used": bool(best),
+        "move": str((best or {}).get("move") or ""),
+        "reason": "rule_aware_bonus_guard_passed" if best else "no_rule_aware_candidate_passed_guard",
+        "selected_before": selected_uci,
+        "selected_score_before": round(selected_score, 4),
+        "thresholds": {
+            "raw_policy_rank_limit": _RULE_AWARE_RAW_RANK_LIMIT,
+            "search_disagreement_cp": _RULE_AWARE_SEARCH_DISAGREEMENT_CP,
+            "bonus_by_rule_type": dict(_RULE_AWARE_BONUS_BY_TYPE),
+            **thresholds,
+        },
+        "candidate": best or {},
+        "candidates": candidates,
+    }
+
+
 def _policy_override_info(model: dict, board: chess.Board, side: str, *, fusion_mode: str = "balanced_fusion", decision_context: dict | None = None) -> dict:
     rows = _policy_rank_rows(model, board, side)
     thresholds = _adaptive_policy_thresholds(fusion_mode=fusion_mode, decision_context=decision_context)
@@ -661,6 +1052,13 @@ def _policy_override_info(model: dict, board: chess.Board, side: str, *, fusion_
         return info
     if move not in board.legal_moves:
         info["reason"] = "illegal_policy_move"
+        return info
+    # exp4_11 search-disagreement guard: reject override when search clearly
+    # prefers a different move by >200cp or its best is mate-like.
+    guard = _override_search_guard(model, board, move)
+    info["search_guard"] = guard
+    if bool(guard.get("rejected")):
+        info["reason"] = f"rejected_by_search_guard:{guard.get('reason')}"
         return info
     info["used"] = True
     info["reason"] = "adaptive_policy_score_and_margin_met_threshold"
@@ -885,12 +1283,26 @@ def choose_experiment_pv_move(
                 hasher=hasher,
             )
             best_move = _opening_principle_fallback(board, best_move)
-        policy_override = _policy_override_move(model, board, side, fusion_mode=fusion_mode, decision_context=decision_context)
-        if policy_override is not None and (
-            best_move is None
-            or _opening_principle_score(board, policy_override) + 500 >= _opening_principle_score(board, best_move)
-        ):
-            best_move = policy_override
+        rule_fusion = _rule_aware_final_fusion_info(
+            model,
+            board,
+            side,
+            best_move,
+            fusion_mode=fusion_mode,
+            decision_context=decision_context,
+        )
+        if rule_fusion.get("used"):
+            try:
+                best_move = chess.Move.from_uci(str(rule_fusion.get("move") or ""))
+            except Exception:
+                pass
+        if not rule_fusion.get("used"):
+            policy_override = _policy_override_move(model, board, side, fusion_mode=fusion_mode, decision_context=decision_context)
+            if policy_override is not None and (
+                best_move is None
+                or _opening_principle_score(board, policy_override) + 500 >= _opening_principle_score(board, best_move)
+            ):
+                best_move = policy_override
     if best_move is None:
         return None
     piece = board.piece_at(best_move.from_square)
@@ -994,8 +1406,28 @@ def explain_experiment_pv_decision(
         if principled is not None and chosen is not None and principled != chosen:
             chosen = principled
             chosen_reason = "opening_principle_fallback"
+        rule_fusion = _rule_aware_final_fusion_info(
+            model,
+            board,
+            side,
+            chosen,
+            fusion_mode=fusion_mode,
+            decision_context=decision_context,
+        )
+        if rule_fusion.get("used"):
+            chosen = chess.Move.from_uci(str(rule_fusion.get("move") or ""))
+            chosen_reason = "rule_aware_final_fusion_bonus"
         policy_override = _policy_override_info(model, board, side, fusion_mode=fusion_mode, decision_context=decision_context)
-        if policy_override.get("used"):
+        if chosen_reason == "rule_aware_final_fusion_bonus":
+            policy_override = {
+                **policy_override,
+                "would_have_used": bool(policy_override.get("used")),
+                "would_have_move": policy_override.get("move"),
+                "used": False,
+                "reason": "rule_aware_fusion_locked_final_move",
+                "rejected_reason": "rule_aware_fusion_locked_final_move",
+            }
+        elif policy_override.get("used"):
             override_move = chess.Move.from_uci(str(policy_override.get("move")))
             if chosen is None or _opening_principle_score(board, override_move) + 500 >= _opening_principle_score(board, chosen):
                 chosen = override_move
@@ -1008,6 +1440,18 @@ def explain_experiment_pv_decision(
     mcts_stats_by_move = {
         str(row.get("move") or ""): row
         for row in (mcts_analysis.get("stats") if "mcts_analysis" in locals() else []) or []
+    }
+    rule_fusion_info = rule_fusion if "rule_fusion" in locals() else _rule_aware_final_fusion_info(
+        model,
+        board,
+        side,
+        chosen,
+        fusion_mode=fusion_mode,
+        decision_context=decision_context,
+    )
+    rule_fusion_by_move = {
+        str(row.get("move") or ""): row
+        for row in rule_fusion_info.get("candidates") or []
     }
     for move in sorted(board.legal_moves, key=lambda item: item.uci()):
         after = board.copy(stack=False)
@@ -1023,13 +1467,16 @@ def explain_experiment_pv_decision(
         elif max_child_depth <= 0:
             per_move_search = static_eval_score
         else:
+            child_time_budget = None
+            if profile.get("time_budget_ms") is not None:
+                child_time_budget = max(20, int(profile.get("time_budget_ms") or 0) // max(1, board.legal_moves.count()))
             child = search_best_move(
                 after,
                 max_depth=max_child_depth,
                 evaluate=lambda current_board: _pv_static_eval(current_board, model, eval_cache, hasher),
                 hasher=hasher,
                 quiescence_depth=profile["quiescence_depth"],
-                time_budget_ms=max(20, int(profile.get("time_budget_ms") or 0) // max(1, board.legal_moves.count())),
+                time_budget_ms=child_time_budget,
             )
             per_move_search = -int(child.score)
         policy = dict(policy_rows.get(move.uci()) or {"move": move.uci()})
@@ -1037,13 +1484,23 @@ def explain_experiment_pv_decision(
         policy["search_score"] = int(per_move_search)
         policy.update(mcts_row)
         policy["opening_principle_score"] = int(_opening_principle_score(board, move))
+        rule_row = rule_fusion_by_move.get(move.uci()) or {}
+        rule_bonus_after = int(rule_row.get("rule_bonus_after") or 0)
         policy["fused_score"] = round(
             float(per_move_search)
             + float(policy.get("raw_policy_score") or 0.0) * policy_weight
-            + float(policy["opening_principle_score"]),
+            + float(policy["opening_principle_score"])
+            + float(rule_bonus_after),
             4,
         )
         policy["final_combined_score"] = policy["fused_score"]
+        policy["rule_type"] = rule_row.get("rule_type") or _special_rule_type(board, move)
+        policy["rule_bonus_before"] = int(rule_row.get("rule_bonus_before") or 0)
+        policy["rule_bonus_after"] = rule_bonus_after
+        policy["rule_bonus_guard_passed"] = bool(rule_row.get("guard_passed"))
+        policy["rule_bonus_guard"] = rule_row.get("guard") or {}
+        policy["opening_push_suppressed_by_rule_context"] = bool(rule_row.get("opening_push_suppressed_by_rule_context"))
+        policy["rule_aware_rejection_reason"] = str(rule_row.get("rejection_reason") or "")
         policy["override_applied"] = bool(policy_override.get("used") and str(policy_override.get("move") or "") == move.uci()) if "policy_override" in locals() else False
         policy["override_reason"] = str((policy_override if "policy_override" in locals() else {}).get("reason") or "")
         policy["chosen"] = bool(chosen is not None and move == chosen)
@@ -1073,6 +1530,7 @@ def explain_experiment_pv_decision(
             else {"stats": [], "simulations": 0}
         ),
         "policy_override": policy_override if "policy_override" in locals() else _policy_override_info(model, board, side, fusion_mode=fusion_mode, decision_context=decision_context),
+        "rule_aware_fusion": rule_fusion_info,
         "watched_moves": watched_moves_rows,
         "top_final_moves": moves[:5],
         "all_legal_count": len(moves),
@@ -1137,6 +1595,7 @@ def build_experiment_pv_sample_from_position(
     source: str = "external",
     hard_negatives: list[str] | None = None,
     invariance_group_id: str | None = None,
+    rule_type: str | None = None,
 ) -> dict | None:
     fen = str(fen or "").strip()
     move_uci = str(move_uci or "").strip().lower()
@@ -1162,6 +1621,7 @@ def build_experiment_pv_sample_from_position(
         "source": str(source or "external"),
         "hard_negatives": [str(item).strip().lower() for item in (hard_negatives or []) if str(item).strip()],
         "invariance_group_id": str(invariance_group_id or "").strip(),
+        "rule_type": str(rule_type or "").strip().lower(),
     }
 
 
@@ -1182,6 +1642,7 @@ def normalize_experiment_pv_replay_sample(sample: dict) -> dict | None:
             source=str(sample.get("source") or "external"),
             hard_negatives=list(sample.get("hard_negatives") or []),
             invariance_group_id=str(sample.get("invariance_group_id") or ""),
+            rule_type=str(sample.get("rule_type") or sample.get("semantic_class") or ""),
         )
     try:
         target = float(sample.get("target"))
@@ -1199,6 +1660,10 @@ def normalize_experiment_pv_replay_sample(sample: dict) -> dict | None:
         "source": str(sample.get("source") or "external"),
         "hard_negatives": [str(item).strip().lower() for item in (sample.get("hard_negatives") or []) if str(item).strip()],
         "invariance_group_id": str(sample.get("invariance_group_id") or "").strip(),
+        # exp4_15: preserve rule_type so the trainer can boost rule-specific
+        # reinforcement for castling / en-passant / promotion / underpromotion
+        # rows. fen + move_uci alone underweights these rules in raw policy.
+        "rule_type": str(sample.get("rule_type") or sample.get("semantic_class") or "").strip().lower(),
     }
 
 
@@ -1251,6 +1716,27 @@ def _policy_probe_for_sample(model: dict, sample: dict) -> dict | None:
     }
 
 
+RULE_FEATURE_BOOST_TYPES = {
+    "castling_short": 2.5,
+    "castling_long": 2.5,
+    "en_passant": 2.5,
+    "en_passant_window_closed": 1.5,
+    "promotion_knight_mate": 2.0,
+    "underpromotion_rook": 2.0,
+    "promotion_queen": 1.0,
+}
+
+
+def _rule_feature_repeat_bonus(rule_type: str) -> float:
+    """exp4_15: extra positive-reinforcement repeats for rule-specific rows.
+
+    Returns a multiplier applied on top of the row's `weight` so castling /
+    en-passant / underpromotion rows train through more passes than raw
+    fen+move_uci weight alone (which only repeats based on rounded weight).
+    """
+    return float(RULE_FEATURE_BOOST_TYPES.get(str(rule_type or "").strip().lower()) or 0.0)
+
+
 def train_experiment_pv_from_replay_samples(samples: list[dict], *, model_path=None) -> dict:
     normalized_samples = []
     rejected = 0
@@ -1269,8 +1755,22 @@ def train_experiment_pv_from_replay_samples(samples: list[dict], *, model_path=N
     hard_negative_updates = 0
     invariance_positive_updates = 0
     invariance_negative_updates = 0
+    rule_feature_rows_consumed = 0
+    rule_feature_bonus_updates = 0
+    rule_feature_breakdown: dict[str, int] = {}
     for sample in normalized_samples:
         repeat = max(1, int(round(float(sample.get("weight") or 1.0))))
+        # exp4_15: rule-feature consumption — add extra reinforcement rounds
+        # for castling / en-passant / underpromotion rows so they survive
+        # the dominant opening-pawn prior.
+        rule_type = str(sample.get("rule_type") or "").strip().lower()
+        rule_bonus_multiplier = _rule_feature_repeat_bonus(rule_type)
+        if rule_bonus_multiplier > 0.0:
+            bonus_repeats = max(1, int(round(rule_bonus_multiplier * max(1.0, float(sample.get("weight") or 1.0)))))
+            repeat = max(repeat, repeat + bonus_repeats)
+            rule_feature_rows_consumed += 1
+            rule_feature_breakdown[rule_type] = rule_feature_breakdown.get(rule_type, 0) + bonus_repeats
+            rule_feature_bonus_updates += bonus_repeats
         for _ in range(repeat):
             _train_single_sample(
                 model,
@@ -1367,6 +1867,9 @@ def train_experiment_pv_from_replay_samples(samples: list[dict], *, model_path=N
         "hard_negative_updates": hard_negative_updates,
         "invariance_positive_updates": invariance_positive_updates,
         "invariance_negative_updates": invariance_negative_updates,
+        "rule_feature_rows_consumed": rule_feature_rows_consumed,
+        "rule_feature_bonus_updates": rule_feature_bonus_updates,
+        "rule_feature_breakdown": dict(sorted(rule_feature_breakdown.items())),
         "policy_probe": policy_probe,
     }
 

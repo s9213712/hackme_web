@@ -32,6 +32,15 @@ exp3 的價值已經完成：它證明了 replay validation、deterministic gate
 - exp4：推進 Policy/Value + MCTS。
 - exp5：推進 NNUE-like evaluator + alpha-beta/PVS。
 
+### exp5 最新進度（截至 2026-05-12 exp5_10）
+
+- **`shadow_candidate=True`** 首次解鎖（Cell B from exp5_08, 116-row clean distill, 3/3 seeds under `fixed_depth_strong`）。
+- exp5_10 production-readiness validation 已完成：135 cases、70 true held-out、`train_vs_benchmark_overlap_count=0`、`position_id_overlap_count=0`。
+- expanded benchmark：candidate 102/135 = 0.755556，baseline 101/135 = 0.748148，Δ +0.007407；endgame improvement still positive (+0.075758)。
+- production_promote 仍 blocked：quiet_positional clean regression、rook-mate smoke suspicious stalemate、repeatability 在 shadow/production safety 解讀下未通過。
+- runtime production model 未動；stage candidate sits at `/home/s92137/chess_results/exp5_08_stage_candidate/`（sha256 `c47ef752...`）。
+- 詳見 [`exp5/README.md`](exp5/) 歷程總表 + 各輪 ledger。
+
 ## Experiment 1：基礎搜尋與對局學習
 
 角色：
@@ -156,6 +165,146 @@ Difficulty：
 - 檢查 tactic/blunder regression，避免 policy prior 或 override 蓋掉明顯戰術。
 - 建立 exp4 專用 report 與 promotion gate，不直接沿用 exp3 的語義 replay 成功定義。
 
+exp4 棋力小結（2026-05-12，exp4_06 → exp4_13）：
+
+- 會：合法棋、mate-in-1、free-queen avoid、開局多好棋等價、long castle、queen/knight/rook promotion、stalemate avoidance、mistake retention、認輸 invariants。
+- 不會：short castle、en-passant take、失子後王安全（4-anchor curriculum × 3 weight 還沒效）、unseen variant broad generalization、hard flank。
+- 致命弱點與 exp3 example/example2 同類：ply 5 Bxc6 主教換兵、失子後王走中央、engine-lost replay 進訓練（quarantine 已防 source，trainer side label weight 待改）。
+- 對標：~1100-1400 elo / stockfish level 1-3；HIGH_RISK，promotion 從未 pass。
+- 詳細能力矩陣與量化指標進程見 [`exp4/README.md`](exp4/)。
+
+exp4 歷程 (2026-05-11 → 2026-05-12)：
+
+- exp4_06：deterministic +0.0538 baseline，但 evidence accounting 不可信
+- exp4_07-09：cleanup — catastrophic_regression_source 拆出、e_pawn=0 是 multi-good scoring 而非真錯、`opening_develop_white` MCTS artifact 識別、`gate_e_pawn_hard_001` 是 label_questionable
+- exp4_10-11：anti-poison + chess_pv override search guard + multi-good revoke + 5 ply quarantine wiring
+- exp4_12：audit/guard score-source 一致性（real alpha-beta 取代 MCTS unvisited −999996 artifact）
+- exp4_13：special-rule curriculum 1/7→5/7，但 catastrophic forgetting（deterministic −0.0539、sanity exact 失敗、d_pawn 歸零）
+- exp4_14：降權 + 18 row retention rehearsal + budget + rollback guard，翻盤 forgetting：deterministic +0.0538、special_rule 保 5/7、d_pawn 回來、sanity exact 過、gate reasons 從 33 縮減到 21；唯一新 blocker 是 `mistake_retention_regressed`
+
+詳細歷程總表見 [`exp4/README.md`](exp4/)。
+
+exp4_15 retention guard bug fix + chess_pv rule_type trainer consumption + king-safety isolated probe（2026-05-12）：
+
+- 修 retention guard bug：exp4_14 `mistake_retention_regressed` 是 false alarm（guard 讀錯來源），實際 probe 兩個 checkpoint 都 pass。改讀 `before_after_eval.checkpoints[*].mistake_retention_probe`。
+- chess_pv `train_experiment_pv_from_replay_samples` 真的消費 `rule_type`：`RULE_FEATURE_BOOST_TYPES`（castling/e.p. 2.5、underpromote 2.0、knight_mate 2.0）給 rule rows 額外 reinforcement repeats。`rule_feature_metadata_only` 從 True 翻為 False。
+- 新 `_king_safety_isolated_probe_run`：複製 baseline，只訓練 king-safety anchors × 3 weight，eval king_safety gate；isolated 0/2 即可確認是 feature/decision-path gap，不是 weight 問題。
+- 新 `_rule_targeted_probe`：targeted castle_short_white + en_passant_white before vs after；`rank_improved_count` 才是真進步訊號。
+- 詳細欄位變更見 [`exp4/README.md`](exp4/)。
+
+exp4_16 rule-aware final fusion for special moves（2026-05-12）：
+
+- 核心修正：exp4_15 已證明 raw policy 學到 short castle / en-passant，但 final decision 不採用；exp4_16 改 final fusion，而不是再加 anchors 或 weights。
+- `chess_pv` 新增 guarded rule-aware bonus：castling / en-passant / promotion / underpromotion 只有在 legal、raw rank <= 3、real alpha-beta guard 不反對時才可採用。
+- rule-aware final fusion 成功後會鎖住 final move，ordinary policy override 不可再覆蓋；explain path 會標 `rule_aware_fusion_locked_final_move`。
+- `_candidate_alpha_beta_score` 改 deterministic fixed-depth (`time_budget_ms=None`)。
+- result：`/home/s92137/chess_results/exp4_16_rule_aware_final_fusion_locked`
+- deterministic：`0.8693 -> 0.9231`，但 promotion 仍 false。
+- targeted：short castle `d2d4 -> e1g1`，en-passant 維持 `d5e6`；兩者 `rule_bonus_after=420`、guard pass。
+- special-rule gate：`6/7`，新 blocker 是 `promotion_white_knight_mate` 選成 `e7e8r` 而非 `e7e8n`。
+- exp3 replay lesson：example/example2 顯示 king-safety 崩、早后/側翼/中央兵 prior 過強、trusted replay 污染風險；exp4 保留 quarantine + real alpha-beta guard，但 king-safety feature gap 留 exp4_17。
+- 詳細報告：[`exp4/2026-05-12_exp4_16_rule_aware_final_fusion.md`](exp4/2026-05-12_exp4_16_rule_aware_final_fusion.md)。
+
+exp4_16 vs exp5_08 diagnostic sparring（2026-05-12）：
+
+- 詳細報告：[`exp4/2026-05-12_exp4_16_vs_exp5_08_sparring.md`](exp4/2026-05-12_exp4_16_vs_exp5_08_sparring.md)。
+- result dir：`/home/s92137/chess_results/exp4_vs_exp5_smoke_20260512_032501`
+- 性質：6-game smoke，`diagnostic_only=true`，不可作 promotion evidence，也不可作正式 strength evidence。
+- 結果：exp4 3 wins / exp5 0 wins / draws 3，illegal=0，exp4 audit coverage 65/65，exp5 audit coverage 60/60。
+- 判讀：exp4_16 special-rule final fusion 已進真 choose path，但暴露 subtype 問題：expected kingside castling 可能選 queenside castling，promotion 也有 queen/rook/knight piece selection 不穩。
+- 下一步：exp4_17 優先修 `castling_short vs castling_long` 與 `promotion_piece_subtype`，並為 exp4 sparring 補 deterministic / fixed-depth profile，避免 time-budget variance。
+
+exp4_17 special-rule subtype + gate accounting cleanup（2026-05-12）：
+
+- 詳細報告：[`exp4/2026-05-12_exp4_17_special_rule_subtype_consistency.md`](exp4/2026-05-12_exp4_17_special_rule_subtype_consistency.md)。
+- result dirs：
+  - `/home/s92137/chess_results/exp4_17_special_rule_subtype_consistency`
+  - `/home/s92137/chess_results/exp4_17_gate_accounting_cleanup`
+- 修正：`castling_short` / `castling_long`、`promotion_queen` / `promotion_knight_mate` / `underpromotion_*` 分成 subtype；新增 `fixed_depth_*` profile。
+- special-rule deterministic gate：`7/7`，`promotion_white_knight_mate` 從 `e7e8r` 修成 `e7e8n`。
+- gate accounting cleanup：low-margin override 只要沒有 counted_as_learning_success 就不再作 blocker；opening alignment 排除 mistake_retention rows。
+- promotion 仍 false：deterministic final 沒高於 baseline，heavy sanity skipped，balanced_fusion final decision generalization 未過，hard flank gap 未解。
+
+exp4_14 balanced curriculum + retention rehearsal + budget + rollback guard（2026-05-12）：
+
+- special-rule weights 大幅下調（castling/e.p. 3→1.5、knight_mate/underpromote 4→2、queen 1→0.75）；新增 3 個 short-castle FEN 變體。
+- 新 `_retention_rehearsal_anchors`（~16 row）：開局 multi-good × 10、d/e_pawn easy retention × N、mistake_retention echo × 2，weights 1.5–2.0。
+- `_curriculum_budget_summary` 報告 special_rule_mass_ratio、retention_mass_ratio、special_rule_mass_budget_passed (≤0.30)。
+- `_checkpoint_retention_guard` 偵測 catastrophic forgetting：deterministic delta < −0.02 / sanity_exact_fen_failed / d_pawn=0 / mistake_retention regressed 任一觸發 rollback_recommended。
+- 新 gate reasons：`special_rule_curriculum_budget_exceeded`、`checkpoint_retention_guard: <reason>`。
+- `rule_feature_metadata_only=True`：明示 trainer 不用 chess_label_features flags；en-passant 學習要 wait for 下一輪 trainer 改造。
+- `king_safety_isolated_probe` 旗標：本輪不跑 isolated，留給 exp4_15。
+- artifact path 修正：curriculum jsonl 從 engine_dir/checkpoints/audits 改回 engine_dir/audits。
+- 詳細欄位變更見 [`exp4/README.md`](exp4/)。
+
+exp4_13 special-rule curriculum + king-safety recovery curriculum + draw fixture（2026-05-12）：
+
+- 修 `draw_lone_king_must_play_legal.good_moves` 加 `e1c1`（castle 在該 FEN 合法）。
+- 新增 `_special_rule_curriculum_anchors`（8 row）與 `_king_safety_recovery_curriculum_anchors`（4 row），weight × 1–4，注入 quick retrain checkpoint training。
+- summary 加 `special_rule_pass_rate_before/after`、`king_safety_pass_rate_before/after`、`*_by_rule_type` before/after。
+- 新 gate scope policy：castling 阻擋 opening_specialist；en-passant / underpromotion / king-safety / draw_handling 只阻擋 general_model。
+- 詳細欄位變更見 [`exp4/README.md`](exp4/)。
+
+exp4_12 audit/guard score-source 一致性 + quarantine post-filter semantics（2026-05-11）：
+
+- `policy_override_audit` 改用 `policy_override.search_guard.disagreement_cp`（chess_pv 真實 alpha-beta）取代 MCTS final_combined_score 差距；舊 MCTS 路徑保留為 `mcts_disagreement_cp / mcts_score_diagnostic_only=True`。
+- 新欄位：`override_against_search_count_after_fix`, `override_rejected_by_engine_guard_count`, `mcts_artifact_false_alarm_count`, `max_real_disagreement_cp`, `max_mcts_artifact_disagreement_cp`。`opening_develop_white` 不再因 MCTS unvisited -999996 artifact 被誤報。
+- `_opening_target_margin_audit` 內 multi_good_revoke 同樣改用 real_disagreement_cp；新欄位 `multi_good_revoked_by_real_search_guard_count` 與 `multi_good_revoked_by_mcts_artifact_count`。
+- `quarantine_summary` 拆 `raw_trusted_replay_blunder_flagged_count` vs `post_filter_poison_training_rows / post_filter_poison_eval_rows`。promotion_gate 不再因 raw flag > 0 而 fail；只在 `poison_filter_not_applied` 或 `post_filter_poison_*` 非 0 時 block。
+- 詳細欄位變更見 [`exp4/README.md`](exp4/)。
+
+exp4_12 求和 + 認輸 + 特殊走法擴充 + chess label features（2026-05-11，延後並合進 exp4_13 範圍）：
+
+- 新增 `resignation_deterministic_gate`（4 case）、`draw_handling_deterministic_gate`（3 case，含 avoid_stalemate_when_winning / 50move_reset / lone_king_legal_move）。
+- `_special_rule_deterministic_gate` 擴充：加入 `underpromotion_rook_avoid_stalemate`、`en_passant_window_closed`，從 5 → 7 case。
+- `services/games/chess_pv.py` 新增 `should_resign` 診斷函式（30 ply forbidden + mate-distance ≤ 5 allowed + 預設不認輸）。引擎本身仍不會自動投降。
+- 新增 `_chess_label_features` 暴露 castling / en_passant / promotion / threefold / 50-move / mate_distance / resign_allowed 等 row-label flags（待 trainer 消費）。
+- 詳細欄位變更見 [`exp4/README.md`](exp4/)。
+
+exp4_11 anti-poison quarantine + chess_pv override search guard + multi-good revoke（2026-05-11）：
+
+- 新增 `low_confidence_trusted_audit`（confidence<0.5 + trusted）、`misclassified_resign_audit`（resign 但最後 3 ply 內有吃子）、`replay_quarantine_index`（合併三個 audit）。
+- `_extract_engine_move_samples_from_records` 接受 `quarantine_replay_ids` / `quarantine_ply_keys`；quick gate 在訓練前自動 quarantine 並寫 `audits/replay_blunder_quarantine.jsonl`。
+- `services/games/chess_pv.py` 的 `_policy_override_info` 新增 `_override_search_guard`：search 偏好其它 move >200cp 或 chosen_search_score 為 mate-like 時 reject override。
+- `_opening_target_margin_audit` 新增 `multi_good_revoked_by_search_guard`：當 best_other_search_score - chosen_search_score > 200cp 時 multi-good credit 失效。
+- 詳細欄位變更見 [`exp4/README.md`](exp4/)。
+
+exp4_10 anti-poison + special-rule + king-safety + override-search guard 診斷（2026-05-11）：
+
+- 新增 `replay_blunder_screen`（see-after-recapture material loss）、`resignation_audit`、`king_safety_after_material_loss_audit`、`special_rule_deterministic_gate`、`policy_override_audit.override_against_search_count`。
+- 全部為 diagnostic，不影響 promotion behavior；exp4_11 接成實際 filter / guard。
+- 詳細欄位變更見 [`exp4/README.md`](exp4/)。
+
+exp4_09 opening label audit + specialist gate cleanup（2026-05-11）：
+
+- 新增 `opening_label_audit`：對每個 `true_e_pawn_raw_policy_fail` / `true_e_pawn_final_decision_blocked` / opening `raw_policy_fail` case 逐題給 `label_quality ∈ {clean_label, questionable_label, label_unverified, relabel_recommended, quarantine_recommended}` 與 `clean_true_failure` 旗標。
+- `e_pawn_true_raw_policy_fail_count_clean` / `e_pawn_true_final_decision_blocked_count_clean` 把 questionable / relabel / quarantine 排除後重算；opening specialist gate 改用 `*_clean` count。
+- `opening_specific_learning_evidence_status` 給出 `insufficient_clean_true_fail_cases` 或 `clean_true_failure_present`；前者代表剩下的真失敗是 label noise。
+- `previous_e_pawn_failure_was_label_or_multigood_issue=true` 當且僅當 raw/final-blocked count 在 clean 後歸零。
+- `engine_verdict_extension = PARTIAL_LABEL_AUDIT_CLEANUP_NO_BROAD_GENERALIZATION` 當 label cleanup 完成但 broad gate 未過。
+- `summary_size_top_contributors`：列 summary.json top-8 最大 key（artifact slimming v2 的量化依據）。
+- 本輪不做 rehearsal。詳細欄位變更見 [`exp4/README.md`](exp4/)。
+
+exp4_08 e_pawn opening specialist repair（2026-05-11）：
+
+- 對 e_pawn clean held-out 18 cases（trusted=10/20）做 case-level equivalence audit：teacher_top3/top5、static_best_move、static_cp_delta、margin、multi_good_equivalent。
+- 失敗分類拆成 `strict_pass`、`equivalent_credit_pass`、`central_opening_equivalent_credit`、`opening_multi_good_tie`、`true_e_pawn_raw_policy_fail`、`true_e_pawn_final_decision_blocked`、`label_questionable`、`undertrained_opening_pattern`；equivalent credit 必須有 teacher_top3/top5 命中或 static_cp_delta 在 `OPENING_MULTI_GOOD_CP_THRESHOLD` 內的正面證據。
+- 詳細 rows 寫入 `audits/opening_target_margin_audit.jsonl` 與 `audits/e_pawn_clean_held_out_diagnosis.jsonl`；summary.json 只留 totals + artifact path + inline_sample，預期 size 大幅下降。
+- 新增 promotion_gate reasons：`true_e_pawn_raw_policy_fail_count_nonzero (N)`、`true_e_pawn_final_decision_blocked_count_nonzero (N)`；`e_pawn_strict_pass_zero_but_equivalent_credit_present` 屬 informational 放在 `non_blocking_notes`。
+- opening specialist gate 不再被 e_pawn strict=0 擋（前提：equivalent-credit pass rate > 0）；general model gate 仍保留。
+- 詳細欄位變更見 [`exp4/README.md`](exp4/)。
+
+exp4_07 evidence accounting cleanup（2026-05-11）：
+
+- `opening_target_margin_audit` 拆出 `override_applied_for_move_selection_count` 與 `override_counted_as_learning_success_count`；low-margin override 的 `low_margin_override_counted_success_count` 固定為 0。
+- `opening_final_decision_alignment_passed` 與 `opening_specific_learning_evidence_passed` / `targeted_mistake_retention_success` / `opening_learning_evidence_passed` 拆開列出。
+- 新增 `e_pawn_clean_held_out_diagnosis`：每個 e_pawn case 給 `raw_policy_fail` / `final_decision_blocked` / `multi_good_tie` / `undertrained_opening_pattern` classification。
+- 新增 `hard_flank_scope_isolation`：`hard_flank_used_in_opening_specialist_gate=false`、`hard_flank_general_model_blocker` 獨立記錄；contextual flank hard clean=0 不再擋 opening specialist。
+- 新增 `sanity_learning_summary`：trusted=10/20 各自給 verdict（含 `PARTIAL_EXACT_OR_LOW_MARGIN_ONLY`），不讓 exact-FEN 偽裝成 broad generalization。
+- `stability.catastrophic_regression_source` 拆出 deterministic / retention / margin / generalization 各獨立來源，deterministic score 上升時 `deterministic_score_regression=false`。
+- `promotion_gate` 提供 `opening_specialist_gate` 與 `general_model_promotion_gate` 兩個 scope，並把 `current_exp4_measured_blockers` 與 `historical_cross_experiment_risk_references` 分開。歷史 reference 不再阻擋 opening specialist。
+- 詳細欄位變更見 [`exp4/README.md`](exp4/)。
+
 演進文件：
 
 - [`exp4/`](exp4/)
@@ -198,6 +347,7 @@ Difficulty：
 演進文件：
 
 - [`exp5/`](exp5/)
+- latest production-readiness ledger：[`exp5/2026-05-12_exp5_10_production_readiness.md`](exp5/2026-05-12_exp5_10_production_readiness.md)
 
 ## 常用操作
 

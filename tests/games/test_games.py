@@ -9,6 +9,7 @@ from flask import Flask, jsonify
 
 from routes.games import choose_computer_move, ensure_game_schema, register_games_routes
 from services.games import chess_pipeline as chess_pipeline_service
+from services.games import chess_pv as chess_pv_service
 from services.games.chess_dl import (
     EXPERIMENT_DL_DIFFICULTY,
     bundled_chess_dl_model_path,
@@ -1227,6 +1228,316 @@ def test_experiment_pv_decision_explain_reports_policy_override_scores(tmp_path,
     assert "override_applied" in watched["e7e5"]
     assert "override_reason" in watched["e7e5"]
     assert "final_combined_score" in watched["e7e5"]
+
+
+def test_experiment_pv_rule_aware_fusion_adopts_learned_special_moves(tmp_path, monkeypatch):
+    model_path = tmp_path / "runtime" / "models" / "chess_experiment_4_pv.json"
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_PV_MODEL_PATH", str(model_path))
+    cases = [
+        {
+            "fen": "r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/2N2N2/PPPP1PPP/R1BQK2R w KQkq - 4 5",
+            "side": "white",
+            "move_uci": "e1g1",
+            "rule_type": "castling_short",
+        },
+        {
+            "fen": "rnbqkbnr/pppp1ppp/8/3Pp3/8/8/PPP1PPPP/RNBQKBNR w KQkq e6 0 3",
+            "side": "white",
+            "move_uci": "d5e6",
+            "rule_type": "en_passant",
+        },
+    ]
+
+    result = train_experiment_pv_from_replay_samples(
+        [
+            {
+                **case,
+                "target": 1.0,
+                "weight": 3.0,
+                "hard_negatives": ["d2d4", "e2e4", "c2c4"],
+            }
+            for case in cases
+        ],
+        model_path=model_path,
+    )
+
+    assert result["rule_feature_rows_consumed"] == 2
+    assert result["rule_feature_breakdown"]["castling_short"] > 0
+    assert result["rule_feature_breakdown"]["en_passant"] > 0
+    for case in cases:
+        move = choose_experiment_pv_move(
+            {"__fen__": case["fen"]},
+            case["side"],
+            model_path=model_path,
+            search_profile="fast",
+        )
+        assert f"{move['from']}{move['to']}{move.get('promotion') or ''}" == case["move_uci"]
+        explanation = explain_experiment_pv_decision(
+            {"__fen__": case["fen"]},
+            case["side"],
+            model_path=model_path,
+            search_profile="fast",
+            watched_moves=[case["move_uci"], "d2d4", "e2e4"],
+        )
+        assert explanation["chosen_move"] == case["move_uci"]
+        assert explanation["chosen_reason"] == "rule_aware_final_fusion_bonus"
+        rule_fusion = explanation["rule_aware_fusion"]
+        assert rule_fusion["used"] is True
+        assert rule_fusion["move"] == case["move_uci"]
+        candidate = rule_fusion["candidate"]
+        assert candidate["guard_passed"] is True
+        assert candidate["raw_policy_rank"] <= 3
+        watched = {row["move"]: row for row in explanation["watched_moves"]}
+        assert watched[case["move_uci"]]["rule_bonus_after"] > 0
+        assert watched[case["move_uci"]]["rule_bonus_guard_passed"] is True
+
+
+def test_experiment_pv_rule_aware_fusion_locks_policy_override(tmp_path, monkeypatch):
+    model_path = tmp_path / "runtime" / "models" / "chess_experiment_4_pv.json"
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_PV_MODEL_PATH", str(model_path))
+    fen = "r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/2N2N2/PPPP1PPP/R1BQK2R w KQkq - 4 5"
+    train_experiment_pv_from_replay_samples(
+        [
+            {
+                "fen": fen,
+                "side": "white",
+                "move_uci": "e1g1",
+                "rule_type": "castling_short",
+                "target": 1.0,
+                "weight": 3.0,
+                "hard_negatives": ["d2d4", "e2e4", "c2c4"],
+            }
+        ],
+        model_path=model_path,
+    )
+
+    def forbidden_policy_override(*args, **kwargs):
+        raise AssertionError("policy override must not run after rule-aware fusion locks a final move")
+
+    monkeypatch.setattr(chess_pv_service, "_policy_override_move", forbidden_policy_override)
+    move = choose_experiment_pv_move({"__fen__": fen}, "white", model_path=model_path, search_profile="fast")
+    assert f"{move['from']}{move['to']}{move.get('promotion') or ''}" == "e1g1"
+
+    monkeypatch.setattr(
+        chess_pv_service,
+        "_policy_override_info",
+        lambda *args, **kwargs: {
+            "used": True,
+            "move": "d2d4",
+            "raw_policy_score": 1.0,
+            "runner_up_move": "e1g1",
+            "runner_up_raw_policy_score": 0.99,
+            "margin": 0.01,
+            "reason": "test_override_should_be_locked",
+            "thresholds": {},
+        },
+    )
+    explanation = explain_experiment_pv_decision(
+        {"__fen__": fen},
+        "white",
+        model_path=model_path,
+        search_profile="fast",
+        watched_moves=["e1g1", "d2d4"],
+    )
+    assert explanation["chosen_move"] == "e1g1"
+    assert explanation["chosen_reason"] == "rule_aware_final_fusion_bonus"
+    assert explanation["policy_override"]["used"] is False
+    assert explanation["policy_override"]["would_have_used"] is True
+    assert explanation["policy_override"]["would_have_move"] == "d2d4"
+    assert explanation["policy_override"]["rejected_reason"] == "rule_aware_fusion_locked_final_move"
+
+
+def test_experiment_pv_rule_aware_fusion_requires_rank_and_search_guard(tmp_path, monkeypatch):
+    fen = "r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/2N2N2/PPPP1PPP/R1BQK2R w KQkq - 4 5"
+    board = chess.Board(fen)
+    baseline_info = chess_pv_service._rule_aware_final_fusion_info(
+        experiment_pv_model_template(),
+        board,
+        "white",
+        chess.Move.from_uci("d2d4"),
+    )
+    assert baseline_info["used"] is False
+    candidate = next(row for row in baseline_info["candidates"] if row["move"] == "e1g1")
+    assert candidate["raw_policy_rank"] > 3
+    assert candidate["rule_bonus_after"] == 0
+    assert candidate["rejection_reason"] == "raw_policy_rank_below_threshold"
+
+    model_path = tmp_path / "runtime" / "models" / "chess_experiment_4_pv.json"
+    train_experiment_pv_from_replay_samples(
+        [
+            {
+                "fen": fen,
+                "side": "white",
+                "move_uci": "e1g1",
+                "rule_type": "castling_short",
+                "target": 1.0,
+                "weight": 3.0,
+                "hard_negatives": ["d2d4", "e2e4", "c2c4"],
+            }
+        ],
+        model_path=model_path,
+    )
+    model = chess_pv_service._load_model(model_path)
+    monkeypatch.setattr(
+        chess_pv_service,
+        "_override_search_guard",
+        lambda *args, **kwargs: {
+            "rejected": True,
+            "reason": "test_decisive_search_disagreement",
+            "search_best_move": "d2d4",
+            "chosen_search_score": 250,
+            "override_search_score": 0,
+            "disagreement_cp": 250,
+        },
+    )
+    rejected_info = chess_pv_service._rule_aware_final_fusion_info(
+        model,
+        board,
+        "white",
+        chess.Move.from_uci("d2d4"),
+    )
+    assert rejected_info["used"] is False
+    rejected_candidate = next(row for row in rejected_info["candidates"] if row["move"] == "e1g1")
+    assert rejected_candidate["guard_passed"] is False
+    assert rejected_candidate["rule_bonus_after"] == 0
+    assert rejected_candidate["rejection_reason"] == "search_guard:test_decisive_search_disagreement"
+
+
+def test_experiment_pv_rule_aware_fusion_preserves_special_rule_subtype(tmp_path, monkeypatch):
+    model_path = tmp_path / "runtime" / "models" / "chess_experiment_4_pv.json"
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_PV_MODEL_PATH", str(model_path))
+    cases = [
+        {
+            "fen": "r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/2N2N2/PPPP1PPP/R1BQK2R w KQkq - 4 5",
+            "side": "white",
+            "move_uci": "e1g1",
+            "rule_type": "castling_short",
+            "hard_negatives": ["d2d4", "e2e4", "c2c4"],
+            "watch": ["e1g1", "d2d4", "e2e4"],
+        },
+        {
+            "fen": "5k2/4P3/5K2/8/8/8/8/8 w - - 0 1",
+            "side": "white",
+            "move_uci": "e7e8n",
+            "rule_type": "promotion_knight_mate",
+            "hard_negatives": ["e7e8r", "e7e8q", "e7e8b"],
+            "watch": ["e7e8n", "e7e8r", "e7e8q", "e7e8b"],
+        },
+        {
+            "fen": "8/4P3/8/8/8/8/8/4K2k w - - 0 1",
+            "side": "white",
+            "move_uci": "e7e8q",
+            "rule_type": "promotion_queen",
+            "hard_negatives": ["e7e8r", "e7e8n", "e7e8b"],
+            "watch": ["e7e8q", "e7e8r", "e7e8n", "e7e8b"],
+        },
+    ]
+    train_experiment_pv_from_replay_samples(
+        [
+            {
+                "fen": case["fen"],
+                "side": case["side"],
+                "move_uci": case["move_uci"],
+                "rule_type": case["rule_type"],
+                "target": 1.0,
+                "weight": 3.0,
+                "hard_negatives": case["hard_negatives"],
+            }
+            for case in cases
+        ],
+        model_path=model_path,
+    )
+
+    for case in cases:
+        move = choose_experiment_pv_move(
+            {"__fen__": case["fen"]},
+            case["side"],
+            model_path=model_path,
+            search_profile="fixed_depth_fast",
+        )
+        chosen = f"{move['from']}{move['to']}{move.get('promotion') or ''}"
+        explanation = explain_experiment_pv_decision(
+            {"__fen__": case["fen"]},
+            case["side"],
+            model_path=model_path,
+            search_profile="fixed_depth_fast",
+            watched_moves=case["watch"],
+        )
+        assert chosen == case["move_uci"]
+        assert explanation["chosen_move"] == case["move_uci"]
+        assert explanation["chosen_reason"] in {"rule_aware_final_fusion_bonus", "opening_sanity_fallback", "search_best_move"}
+        candidate = explanation["rule_aware_fusion"]["candidate"]
+        if explanation["chosen_reason"] == "rule_aware_final_fusion_bonus":
+            assert candidate["move"] == case["move_uci"]
+            assert candidate["rule_family"] in {"castling", "promotion"}
+            assert candidate["raw_policy_rank"] == 1
+
+
+def test_experiment_pv_choose_and_explain_special_rule_consistency(tmp_path, monkeypatch):
+    model_path = tmp_path / "runtime" / "models" / "chess_experiment_4_pv.json"
+    monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_PV_MODEL_PATH", str(model_path))
+    cases = [
+        {
+            "fen": "r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/2N2N2/PPPP1PPP/R1BQK2R w KQkq - 4 5",
+            "side": "white",
+            "move_uci": "e1g1",
+            "rule_type": "castling_short",
+            "hard_negatives": ["d2d4", "e2e4", "c2c4"],
+        },
+        {
+            "fen": "r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/2N2N2/PPPP1PPP/R1BQK2R b kq - 4 5",
+            "side": "black",
+            "move_uci": "e8g8",
+            "rule_type": "castling_short",
+            "hard_negatives": ["d7d5", "e7e5", "c7c5"],
+        },
+        {
+            "fen": "rnbqkbnr/pppp1ppp/8/3Pp3/8/8/PPP1PPPP/RNBQKBNR w KQkq e6 0 3",
+            "side": "white",
+            "move_uci": "d5e6",
+            "rule_type": "en_passant",
+            "hard_negatives": ["e2e4"],
+        },
+        {
+            "fen": "8/4P3/8/8/8/8/8/4K2k w - - 0 1",
+            "side": "white",
+            "move_uci": "e7e8q",
+            "rule_type": "promotion_queen",
+            "hard_negatives": ["e7e8r", "e7e8n", "e7e8b"],
+        },
+    ]
+    train_experiment_pv_from_replay_samples(
+        [
+            {
+                "fen": case["fen"],
+                "side": case["side"],
+                "move_uci": case["move_uci"],
+                "rule_type": case["rule_type"],
+                "target": 1.0,
+                "weight": 3.0,
+                "hard_negatives": case["hard_negatives"],
+            }
+            for case in cases
+        ],
+        model_path=model_path,
+    )
+
+    for case in cases:
+        move = choose_experiment_pv_move(
+            {"__fen__": case["fen"]},
+            case["side"],
+            model_path=model_path,
+            search_profile="fixed_depth_fast",
+        )
+        chosen = f"{move['from']}{move['to']}{move.get('promotion') or ''}"
+        explanation = explain_experiment_pv_decision(
+            {"__fen__": case["fen"]},
+            case["side"],
+            model_path=model_path,
+            search_profile="fixed_depth_fast",
+            watched_moves=[case["move_uci"]],
+        )
+        assert chosen == explanation["chosen_move"] == case["move_uci"]
 
 
 def test_experiment_pv_mcts_decision_explain_reports_root_stats(tmp_path, monkeypatch):

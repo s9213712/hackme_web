@@ -39,106 +39,275 @@ from services.games.chess_sparring_adapter import (  # noqa: E402
 )
 
 
-# ----- bundled smoke seeds (no external JSONL needed) ---------------------
-
+# ----- bundled smoke seeds (fair smoke v2: 12 games, 6 mirror pairs) ------
+#
+# v2 retired Phase 1's mate-in-1 and forced-queen-capture fixtures; all seeds
+# below are strength_counted=true or objective_counted=true (subtype probes).
+# Each mirror group has two seeds that share a FEN and differ only in which
+# engine plays which colour, so the pair yields an A/B comparison from the
+# same position. Castling is split kingside-only / queenside-only via FEN
+# rights to remove the "either-side picks O-O-O" ambiguity that C' surfaced.
+# Promotion subtype probe targets the e7e8r underpromotion bug C' exposed.
 SMOKE_SEEDS: list[dict] = [
+    # ===== Group 1: opening_italian (1.e4 e5 2.Nf3 Nc6 3.Bc4, black to move) =====
     {
-        "seed_id": "smoke_01_mate_in_one_white",
-        "fen": "6k1/5Q2/6K1/8/8/8/8/8 w - - 0 1",
-        "side_to_move": "white",
-        "exp4_plays": "white",
-        "cluster_tag": "tactic",
-        "oracle_source": "python_chess_rule",
-        "label_quality": "objective",
-        "expected_move_any": ["f7e8", "f7f8"],
-        "audit_rules": {"must_checkmate_in_one": True},
-        "source_ref": "EXP5_STRENGTH_CASES.mate_in_one_white",
-        "forced_fixture_win": True,
-        "strength_counted": False,
-        "color_mirror_group": "mate_in_one_kqk",
-    },
-    {
-        "seed_id": "smoke_02_mate_in_one_black",
-        "fen": "8/8/8/8/8/6k1/5q2/6K1 b - - 0 1",
+        "seed_id": "fair_1a_opening_italian__exp4_black",
+        "fen": "r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3",
         "side_to_move": "black",
         "exp4_plays": "black",
-        "cluster_tag": "tactic",
+        "cluster_tag": "opening",
         "oracle_source": "python_chess_rule",
-        "label_quality": "objective",
-        "expected_move_any": ["f2e1", "f2f1"],
-        "audit_rules": {"must_checkmate_in_one": True},
-        "source_ref": "EXP5_STRENGTH_CASES.mate_in_one_black",
-        "forced_fixture_win": True,
-        "strength_counted": False,
-        "color_mirror_group": "mate_in_one_kqk",
+        "label_quality": "review",
+        "expected_move_any": ["f8c5", "g8f6", "f8e7", "d7d6", "f7f5"],
+        "audit_rules": {"opening_response": "italian_after_3_Bc4"},
+        "source_ref": "fair_smoke_v2.opening_italian",
+        "forced_fixture_win": False,
+        "strength_counted": True,
+        "objective_counted": True,
+        "objective_type": "opening_sanity",
+        "color_mirror_group": "opening_italian",
+        "expected_rule_family": None,
+        "expected_rule_subtype": None,
+        "expected_promotion_piece": None,
     },
     {
-        "seed_id": "smoke_03_castle_kingside_white",
-        "fen": "r3k2r/pppq1ppp/2n2n2/2bpp3/2BPP3/2N2N2/PPPQ1PPP/R3K2R w KQkq - 0 1",
+        "seed_id": "fair_1b_opening_italian__exp4_white",
+        "fen": "r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3",
+        "side_to_move": "black",
+        "exp4_plays": "white",
+        "cluster_tag": "opening",
+        "oracle_source": "python_chess_rule",
+        "label_quality": "review",
+        "expected_move_any": ["f8c5", "g8f6", "f8e7", "d7d6", "f7f5"],
+        "audit_rules": {"opening_response": "italian_after_3_Bc4"},
+        "source_ref": "fair_smoke_v2.opening_italian",
+        "forced_fixture_win": False,
+        "strength_counted": True,
+        "objective_counted": True,
+        "objective_type": "opening_sanity",
+        "color_mirror_group": "opening_italian",
+        "expected_rule_family": None,
+        "expected_rule_subtype": None,
+        "expected_promotion_piece": None,
+    },
+    # ===== Group 2: kp_endgame_king_activity (king-first plan) =====
+    {
+        "seed_id": "fair_2a_kp_endgame_king_activity__exp4_white",
+        "fen": "8/8/8/3k4/8/8/3KP3/8 w - - 0 1",
+        "side_to_move": "white",
+        "exp4_plays": "white",
+        "cluster_tag": "endgame",
+        "oracle_source": "python_chess_rule",
+        "label_quality": "review",
+        "expected_move_any": ["d2d3", "d2e3", "d2c3", "d2e1", "d2d1", "d2c1"],
+        "audit_rules": {"endgame_plan": "king_first_then_pawn"},
+        "source_ref": "fair_smoke_v2.kp_endgame_king_activity",
+        "forced_fixture_win": False,
+        "strength_counted": True,
+        "objective_counted": True,
+        "objective_type": "endgame_plan",
+        "color_mirror_group": "kp_endgame_king_activity",
+        "expected_rule_family": None,
+        "expected_rule_subtype": None,
+        "expected_promotion_piece": None,
+    },
+    {
+        "seed_id": "fair_2b_kp_endgame_king_activity__exp4_black",
+        "fen": "8/8/8/3k4/8/8/3KP3/8 w - - 0 1",
+        "side_to_move": "white",
+        "exp4_plays": "black",
+        "cluster_tag": "endgame",
+        "oracle_source": "python_chess_rule",
+        "label_quality": "review",
+        "expected_move_any": ["d2d3", "d2e3", "d2c3", "d2e1", "d2d1", "d2c1"],
+        "audit_rules": {"endgame_plan": "king_first_then_pawn"},
+        "source_ref": "fair_smoke_v2.kp_endgame_king_activity",
+        "forced_fixture_win": False,
+        "strength_counted": True,
+        "objective_counted": True,
+        "objective_type": "endgame_plan",
+        "color_mirror_group": "kp_endgame_king_activity",
+        "expected_rule_family": None,
+        "expected_rule_subtype": None,
+        "expected_promotion_piece": None,
+    },
+    # ===== Group 3: castling_kingside_only (rights restricted to short) =====
+    {
+        "seed_id": "fair_3a_castle_kingside_only_white__exp4_white",
+        "fen": "r3k2r/pppq1ppp/2n2n2/2bpp3/2BPP3/2N2N2/PPPQ1PPP/R3K2R w K - 0 1",
         "side_to_move": "white",
         "exp4_plays": "white",
         "cluster_tag": "special_rule",
         "oracle_source": "python_chess_rule",
         "label_quality": "objective",
         "expected_move_any": ["e1g1"],
-        "audit_rules": {"expected_castle": True},
-        "source_ref": "SPECIAL_RULE_CASES.castle_kingside_white",
+        "audit_rules": {"expected_rule_subtype": "castling_short"},
+        "source_ref": "fair_smoke_v2.castle_kingside_only_white",
         "forced_fixture_win": False,
-        "strength_counted": True,
-        "color_mirror_group": "castle_kingside_symmetric",
+        "strength_counted": False,
+        "objective_counted": True,
+        "objective_type": "rule_subtype",
+        "color_mirror_group": "castling_kingside_only",
+        "expected_rule_family": "castling",
+        "expected_rule_subtype": "castling_short",
+        "expected_promotion_piece": None,
     },
     {
-        "seed_id": "smoke_04_castle_kingside_black",
-        "fen": "r3k2r/pppq1ppp/2n2n2/2bpp3/2BPP3/2N2N2/PPPQ1PPP/R3K2R b KQkq - 1 1",
+        "seed_id": "fair_3b_castle_kingside_only_black__exp4_black",
+        "fen": "r3k2r/pppq1ppp/2n2n2/2bpp3/2BPP3/2N2N2/PPPQ1PPP/R3K2R b k - 0 1",
         "side_to_move": "black",
         "exp4_plays": "black",
         "cluster_tag": "special_rule",
         "oracle_source": "python_chess_rule",
         "label_quality": "objective",
         "expected_move_any": ["e8g8"],
-        "audit_rules": {"expected_castle": True},
-        "source_ref": "SPECIAL_RULE_CASES.castle_kingside_black",
+        "audit_rules": {"expected_rule_subtype": "castling_short"},
+        "source_ref": "fair_smoke_v2.castle_kingside_only_black",
         "forced_fixture_win": False,
-        "strength_counted": True,
-        "color_mirror_group": "castle_kingside_symmetric",
+        "strength_counted": False,
+        "objective_counted": True,
+        "objective_type": "rule_subtype",
+        "color_mirror_group": "castling_kingside_only",
+        "expected_rule_family": "castling",
+        "expected_rule_subtype": "castling_short",
+        "expected_promotion_piece": None,
+    },
+    # ===== Group 4: castling_queenside_only (rights restricted to long) =====
+    {
+        "seed_id": "fair_4a_castle_queenside_only_white__exp4_white",
+        "fen": "r3k2r/pppq1ppp/2n2n2/2bpp3/2BPP3/2N2N2/PPPQ1PPP/R3K2R w Q - 0 1",
+        "side_to_move": "white",
+        "exp4_plays": "white",
+        "cluster_tag": "special_rule",
+        "oracle_source": "python_chess_rule",
+        "label_quality": "objective",
+        "expected_move_any": ["e1c1"],
+        "audit_rules": {"expected_rule_subtype": "castling_long"},
+        "source_ref": "fair_smoke_v2.castle_queenside_only_white",
+        "forced_fixture_win": False,
+        "strength_counted": False,
+        "objective_counted": True,
+        "objective_type": "rule_subtype",
+        "color_mirror_group": "castling_queenside_only",
+        "expected_rule_family": "castling",
+        "expected_rule_subtype": "castling_long",
+        "expected_promotion_piece": None,
     },
     {
-        "seed_id": "smoke_05_promotion_to_queen_white",
+        "seed_id": "fair_4b_castle_queenside_only_black__exp4_black",
+        "fen": "r3k2r/pppq1ppp/2n2n2/2bpp3/2BPP3/2N2N2/PPPQ1PPP/R3K2R b q - 0 1",
+        "side_to_move": "black",
+        "exp4_plays": "black",
+        "cluster_tag": "special_rule",
+        "oracle_source": "python_chess_rule",
+        "label_quality": "objective",
+        "expected_move_any": ["e8c8"],
+        "audit_rules": {"expected_rule_subtype": "castling_long"},
+        "source_ref": "fair_smoke_v2.castle_queenside_only_black",
+        "forced_fixture_win": False,
+        "strength_counted": False,
+        "objective_counted": True,
+        "objective_type": "rule_subtype",
+        "color_mirror_group": "castling_queenside_only",
+        "expected_rule_family": "castling",
+        "expected_rule_subtype": "castling_long",
+        "expected_promotion_piece": None,
+    },
+    # ===== Group 5: promotion_queen_subtype (e7e8q / e2e1q; C' bug probe) =====
+    # knight-mate underpromotion subtype deferred to v3; clean queen probe
+    # mirror on both sides catches the e7e8r underpromotion bug C' exposed.
+    {
+        "seed_id": "fair_5a_promotion_queen_white__exp4_white",
         "fen": "k7/4P3/2K5/8/8/8/8/8 w - - 0 1",
         "side_to_move": "white",
         "exp4_plays": "white",
-        "cluster_tag": "endgame",
+        "cluster_tag": "special_rule",
         "oracle_source": "python_chess_rule",
         "label_quality": "objective",
         "expected_move_any": ["e7e8q"],
-        "audit_rules": {"must_promote": True, "expected_promotion": "q"},
-        "source_ref": "SPECIAL_RULE_CASES.promotion_to_queen_white",
+        "audit_rules": {"expected_rule_subtype": "promotion_queen", "expected_promotion_piece": "q"},
+        "source_ref": "fair_smoke_v2.promotion_queen_white",
         "forced_fixture_win": False,
-        "strength_counted": True,
-        "color_mirror_group": "promotion_to_queen_white_only",
+        "strength_counted": False,
+        "objective_counted": True,
+        "objective_type": "rule_subtype",
+        "color_mirror_group": "promotion_queen_subtype",
+        "expected_rule_family": "promotion",
+        "expected_rule_subtype": "promotion_queen",
+        "expected_promotion_piece": "q",
     },
     {
-        "seed_id": "smoke_06_forced_queen_capture_black",
-        "fen": "4k3/4Q3/8/8/8/8/8/4K3 b - - 0 1",
+        "seed_id": "fair_5b_promotion_queen_black__exp4_black",
+        "fen": "8/8/8/8/8/2k5/4p3/K7 b - - 0 1",
         "side_to_move": "black",
         "exp4_plays": "black",
-        "cluster_tag": "tactic",
+        "cluster_tag": "special_rule",
         "oracle_source": "python_chess_rule",
         "label_quality": "objective",
-        "expected_move_any": ["e8e7"],
-        "audit_rules": {"requires_capture": True, "min_material_gain": 800},
-        "source_ref": "EXP5_STRENGTH_CASES.forced_queen_capture",
-        "forced_fixture_win": True,
+        "expected_move_any": ["e2e1q"],
+        "audit_rules": {"expected_rule_subtype": "promotion_queen", "expected_promotion_piece": "q"},
+        "source_ref": "fair_smoke_v2.promotion_queen_black",
+        "forced_fixture_win": False,
         "strength_counted": False,
-        "color_mirror_group": "forced_queen_capture_black_only",
+        "objective_counted": True,
+        "objective_type": "rule_subtype",
+        "color_mirror_group": "promotion_queen_subtype",
+        "expected_rule_family": "promotion",
+        "expected_rule_subtype": "promotion_queen",
+        "expected_promotion_piece": "q",
+    },
+    # ===== Group 6: en_passant_legal (capture window open, both colours) =====
+    {
+        "seed_id": "fair_6a_en_passant_black_take__exp4_black",
+        "fen": "8/8/8/8/pP6/8/8/4K2k b - b3 0 1",
+        "side_to_move": "black",
+        "exp4_plays": "black",
+        "cluster_tag": "special_rule",
+        "oracle_source": "python_chess_rule",
+        "label_quality": "objective",
+        "expected_move_any": ["a4b3"],
+        "audit_rules": {"expected_rule_subtype": "en_passant_take"},
+        "source_ref": "fair_smoke_v2.en_passant_black_take",
+        "forced_fixture_win": False,
+        "strength_counted": False,
+        "objective_counted": True,
+        "objective_type": "rule_subtype",
+        "color_mirror_group": "en_passant_legal",
+        "expected_rule_family": "en_passant",
+        "expected_rule_subtype": "en_passant_take",
+        "expected_promotion_piece": None,
+    },
+    {
+        "seed_id": "fair_6b_en_passant_white_take__exp4_white",
+        "fen": "4k2K/8/8/Pp6/8/8/8/8 w - b6 0 1",
+        "side_to_move": "white",
+        "exp4_plays": "white",
+        "cluster_tag": "special_rule",
+        "oracle_source": "python_chess_rule",
+        "label_quality": "objective",
+        "expected_move_any": ["a5b6"],
+        "audit_rules": {"expected_rule_subtype": "en_passant_take"},
+        "source_ref": "fair_smoke_v2.en_passant_white_take",
+        "forced_fixture_win": False,
+        "strength_counted": False,
+        "objective_counted": True,
+        "objective_type": "rule_subtype",
+        "color_mirror_group": "en_passant_legal",
+        "expected_rule_family": "en_passant",
+        "expected_rule_subtype": "en_passant_take",
+        "expected_promotion_piece": None,
     },
 ]
 
 MODE_PRESETS = {
     "single": [0],  # default; overridden by --seed-id / interactive picker
-    "castling": [2, 3],
-    "tactic": [0, 1, 5],
-    "smoke": [0, 1, 2, 3, 4, 5],
+    "opening": [0, 1],
+    "endgame": [2, 3],
+    "castling": [4, 5, 6, 7],
+    "promotion": [8, 9],
+    "en_passant": [10, 11],
+    "special_rule": [4, 5, 6, 7, 8, 9, 10, 11],
+    "smoke": list(range(12)),
 }
 
 EXP4_KNOWN_CANDIDATES: list[tuple[str, str]] = [
@@ -242,16 +411,30 @@ def _select_model(label: str, candidates: list[tuple[str, str]]) -> Path:
 
 def _select_mode_and_seeds() -> tuple[str, list[int]]:
     _say("")
-    _say("=== select game mode ===")
-    _say("  [1] single   — one seed (you'll pick which)")
-    _say("  [2] castling — 2 games (kingside white + black)")
-    _say("  [3] tactic   — 3 games (mate_in_one ×2 + forced queen capture)")
-    _say("  [4] smoke    — all 6 baked-in seeds")
-    _say("  [5] custom   — pick a subset by number")
-    choice = _prompt("choose 1..5", default="1")
-    mode_map = {"1": "single", "2": "castling", "3": "tactic", "4": "smoke", "5": "custom"}
+    _say("=== select game mode (fair smoke v2 — 12-seed mirror set) ===")
+    _say("  [1] single        — one seed (you'll pick which)")
+    _say("  [2] opening       — group 1 (italian, 2 games)")
+    _say("  [3] endgame       — group 2 (KP king-activity, 2 games)")
+    _say("  [4] castling      — groups 3+4 (kingside-only + queenside-only, 4 games)")
+    _say("  [5] promotion     — group 5 (queen subtype mirror, 2 games)")
+    _say("  [6] en_passant    — group 6 (legal e.p. mirror, 2 games)")
+    _say("  [7] special_rule  — groups 3+4+5+6 (8 games)")
+    _say("  [8] smoke         — all 12 seeds")
+    _say("  [9] custom        — pick a subset by number")
+    choice = _prompt("choose 1..9", default="1")
+    mode_map = {
+        "1": "single",
+        "2": "opening",
+        "3": "endgame",
+        "4": "castling",
+        "5": "promotion",
+        "6": "en_passant",
+        "7": "special_rule",
+        "8": "smoke",
+        "9": "custom",
+    }
     mode = mode_map.get(choice, "single")
-    if mode in ("castling", "tactic", "smoke"):
+    if mode in MODE_PRESETS and mode != "single":
         return mode, list(MODE_PRESETS[mode])
     if mode == "single":
         _say("")
@@ -499,6 +682,42 @@ def play_one_game(
         else False
     )
 
+    first_move_piece_type: str | None = None
+    first_move_was_king: bool | None = None
+    first_move_was_pawn: bool | None = None
+    first_move_promotion_piece: str | None = None
+    if ply_records and ply_records[0].get("legal"):
+        try:
+            first_uci = ply_records[0].get("move") or ""
+            if len(first_uci) >= 4:
+                from_sq = chess.parse_square(first_uci[:2])
+                start_board = chess.Board(seed["fen"])
+                piece = start_board.piece_at(from_sq)
+                if piece:
+                    first_move_piece_type = chess.piece_symbol(piece.piece_type)
+                    first_move_was_king = piece.piece_type == chess.KING
+                    first_move_was_pawn = piece.piece_type == chess.PAWN
+                if len(first_uci) == 5:
+                    first_move_promotion_piece = first_uci[4].lower()
+        except Exception:
+            pass
+
+    objective_type = str(seed.get("objective_type") or "")
+    objective_counted = bool(seed.get("objective_counted"))
+    objective_hit = False
+    if objective_counted and ply_records:
+        first_move_uci = ply_records[0].get("move") or ""
+        first_move_legal = bool(ply_records[0].get("legal"))
+        if objective_type == "playout":
+            objective_hit = first_move_legal
+        elif objective_type in ("opening_sanity", "rule_subtype"):
+            expected = seed.get("expected_move_any") or []
+            objective_hit = bool(first_move_uci and first_move_uci in expected)
+        elif objective_type == "endgame_plan":
+            objective_hit = bool(first_move_was_king)
+        else:
+            objective_hit = first_move_legal
+
     return {
         "seed_id": seed["seed_id"],
         "cluster_tag": seed["cluster_tag"],
@@ -507,6 +726,16 @@ def play_one_game(
         "source_ref": seed["source_ref"],
         "forced_fixture_win": bool(seed.get("forced_fixture_win")),
         "strength_counted": bool(seed.get("strength_counted")),
+        "objective_counted": objective_counted,
+        "objective_type": objective_type,
+        "objective_hit": objective_hit,
+        "expected_rule_family": seed.get("expected_rule_family"),
+        "expected_rule_subtype": seed.get("expected_rule_subtype"),
+        "expected_promotion_piece": seed.get("expected_promotion_piece"),
+        "first_move_piece_type": first_move_piece_type,
+        "first_move_was_king": first_move_was_king,
+        "first_move_was_pawn": first_move_was_pawn,
+        "first_move_promotion_piece": first_move_promotion_piece,
         "color_mirror_group": str(seed.get("color_mirror_group") or ""),
         "start_fen": seed["fen"],
         "side_to_move": seed["side_to_move"],
@@ -582,6 +811,12 @@ def write_artifacts(out_dir: Path, game_reports: list[dict], meta: dict) -> None
     audit_success_total = {"exp4": 0, "exp5": 0}
     audit_error_total = {"exp4": 0, "exp5": 0}
     expected_match = {"hit": 0, "miss": 0, "no_label": 0}
+    objective_summary: dict = {
+        "by_type": {},
+        "by_subtype": {},
+        "games_counted_total": 0,
+        "games_hit_total": 0,
+    }
 
     for g in game_reports:
         outcome = g["outcome"]
@@ -636,6 +871,28 @@ def write_artifacts(out_dir: Path, game_reports: list[dict], meta: dict) -> None
                 expected_match["miss"] += 1
         else:
             expected_match["no_label"] += 1
+        if g.get("objective_counted"):
+            objective_summary["games_counted_total"] += 1
+            otype = str(g.get("objective_type") or "unknown")
+            slot_t = objective_summary["by_type"].setdefault(
+                otype, {"counted": 0, "hit": 0, "miss": 0}
+            )
+            slot_t["counted"] += 1
+            if g.get("objective_hit"):
+                slot_t["hit"] += 1
+                objective_summary["games_hit_total"] += 1
+            else:
+                slot_t["miss"] += 1
+            subtype = str(g.get("expected_rule_subtype") or "")
+            if subtype:
+                slot_s = objective_summary["by_subtype"].setdefault(
+                    subtype, {"counted": 0, "hit": 0, "miss": 0}
+                )
+                slot_s["counted"] += 1
+                if g.get("objective_hit"):
+                    slot_s["hit"] += 1
+                else:
+                    slot_s["miss"] += 1
 
     audit_coverage_rate = {}
     for k in ("exp4", "exp5"):
@@ -646,6 +903,7 @@ def write_artifacts(out_dir: Path, game_reports: list[dict], meta: dict) -> None
         "meta": meta,
         "raw_outcome": raw_outcome,
         "strength_counted_outcome": strength_counted_outcome,
+        "objective_summary": objective_summary,
         "forced_fixture_count": forced_fixture_count,
         "mirror_group_breakdown": mirror_group_breakdown,
         "color_split": color_split,
@@ -684,7 +942,17 @@ def write_artifacts(out_dir: Path, game_reports: list[dict], meta: dict) -> None
     )
 
     lines = [
-        "# exp4 vs exp5 sparring smoke — diagnostic only",
+        "# exp4 vs exp5 sparring smoke — diagnostic only (fair smoke v2)",
+        "",
+        "## Prior C' reference (bundled exp4 production replaced; see commit history)",
+        "- C' (exp4_16 vs exp5_08): raw_outcome = exp4_win=2 / exp5_win=0 / draw=4;",
+        "  strength_counted_outcome = 0W / 0W / 3D; forced_fixture_count = 3.",
+        "- Interpretation: no strength conclusion. exp4_16 restored castling family",
+        "  adoption (rule_aware_final_fusion_bonus fires on castle FEN) but exposed",
+        "  subtype bugs: O-O expected → O-O-O picked; e7e8q expected → e7e8r picked.",
+        "- This v2 seed set removes forced-fixture seeds entirely and adds rule",
+        "  subtype probes (castling_short / castling_long / promotion_queen /",
+        "  en_passant_take) so the underpromotion bug is observable side-by-side.",
         "",
         f"- timestamp: {meta['timestamp']}",
         f"- mode: {meta['mode']}",
@@ -725,6 +993,27 @@ def write_artifacts(out_dir: Path, game_reports: list[dict], meta: dict) -> None
         f"- games_counted: {strength_counted_outcome['games_counted']}",
         f"- forced_fixture_count (excluded): {forced_fixture_count}",
         "",
+        "## objective_summary (rule subtype / opening sanity / endgame plan)",
+        f"- games_counted_total: {objective_summary['games_counted_total']}",
+        f"- games_hit_total: {objective_summary['games_hit_total']}",
+        "",
+        "### by_type",
+    ]
+    for otype, slot in sorted(objective_summary.get("by_type", {}).items()):
+        lines.append(
+            f"- {otype}: counted={slot['counted']} hit={slot['hit']} miss={slot['miss']}"
+        )
+    lines.append("")
+    lines.append("### by_subtype")
+    if objective_summary.get("by_subtype"):
+        for subtype, slot in sorted(objective_summary["by_subtype"].items()):
+            lines.append(
+                f"- {subtype}: counted={slot['counted']} hit={slot['hit']} miss={slot['miss']}"
+            )
+    else:
+        lines.append("- (no rule_subtype labels in this run)")
+    lines.extend([
+        "",
         "## Color split (exp4 side)",
         f"- exp4_white: {color_split['exp4_white']}",
         f"- exp4_black: {color_split['exp4_black']}",
@@ -745,7 +1034,7 @@ def write_artifacts(out_dir: Path, game_reports: list[dict], meta: dict) -> None
         f"- no_label: {expected_match['no_label']}",
         "",
         "## Cluster breakdown",
-    ]
+    ])
     for ct, slot in sorted(cluster_breakdown.items()):
         lines.append(
             f"- {ct}: games={slot['games']} exp4_win={slot['exp4_win']} "
@@ -783,13 +1072,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--mode",
         default="",
-        choices=["", "single", "castling", "tactic", "smoke", "custom"],
+        choices=["", "single", "opening", "endgame", "castling", "promotion", "en_passant", "special_rule", "smoke", "custom"],
         help="Game mode preset.",
     )
     p.add_argument(
         "--seed-id",
         default="",
-        help="For --mode single: the seed_id to play (e.g. smoke_01_mate_in_one_white).",
+        help="For --mode single: the seed_id to play (e.g. fair_1a_opening_italian__exp4_black).",
     )
     p.add_argument(
         "--seed-indices",
