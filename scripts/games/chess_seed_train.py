@@ -224,7 +224,59 @@ def parse_args() -> argparse.Namespace:
             "you can verify schema + normalize + caps before a real run."
         ),
     )
+    parser.add_argument(
+        "--allow-default-model-paths",
+        action="store_true",
+        help=(
+            "Opt-in: allow non-dry-run --include-replay-jsonl to write to "
+            "the default exp4 / exp5 model paths. Without this flag the "
+            "script refuses to train external replay into the bundled / "
+            "runtime defaults — you must pass --experiment-4-model-path "
+            "(or --skip-exp4) and --experiment-5-model-path (or "
+            "--skip-exp5) so external replay only lands in explicit "
+            "staging / candidate artifacts."
+        ),
+    )
     return parser.parse_args()
+
+
+def _assert_external_replay_safety(args: argparse.Namespace) -> None:
+    """Block non-dry-run external replay from silently writing default models.
+
+    Self-play warm-up (no --include-replay-jsonl) keeps its pre-existing
+    behaviour of writing to bundled paths; this guard only fires for the
+    new external-replay code path. Pass --allow-default-model-paths to
+    override (useful for one-off recovery runs, not the default flow).
+    """
+    if not args.include_replay_jsonl:
+        return
+    if args.dry_run:
+        return
+    if args.allow_default_model_paths:
+        return
+    problems: list[str] = []
+    if not args.skip_exp4 and not args.experiment_4_model_path:
+        problems.append(
+            "exp4 PV: pass --experiment-4-model-path <staging/candidate.json> "
+            "or --skip-exp4 to gate exp4 out of this run."
+        )
+    if not args.skip_exp5 and not args.experiment_5_model_path:
+        problems.append(
+            "exp5 NNUE: pass --experiment-5-model-path <staging/candidate.json> "
+            "or --skip-exp5 to gate exp5 out of this run."
+        )
+    if not problems:
+        return
+    msg_lines = [
+        "error: refusing to train --include-replay-jsonl into default model paths.",
+        "Real (non-dry-run) external-replay warm-up must target explicit "
+        "candidate / staging artifacts, not bundled or runtime defaults:",
+    ]
+    msg_lines.extend(f"  - {p}" for p in problems)
+    msg_lines.append(
+        "Pass --allow-default-model-paths if you really intend to write defaults."
+    )
+    raise SystemExit("\n".join(msg_lines))
 
 
 def _load_external_replay(paths: list[str]) -> tuple[list[dict], dict]:
@@ -491,6 +543,7 @@ def _progress(message: str) -> None:
 
 def main() -> int:
     args = parse_args()
+    _assert_external_replay_safety(args)
     schedule = _resolved_schedule(args)
     store = ChessExperimentStore(args.experiment_db_path or bundled_chess_engine_db_path())
     nn_model_path = Path(args.experiment_2_model_path or bundled_chess_nn_model_path())

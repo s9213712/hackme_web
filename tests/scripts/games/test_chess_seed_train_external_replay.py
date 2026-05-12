@@ -9,10 +9,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import argparse
+
 from scripts.games.chess_seed_train import (
     DEFAULT_EXTERNAL_TOTAL_CAP,
     TRUSTED_SOURCE_WHITELIST,
     _apply_external_caps,
+    _assert_external_replay_safety,
     _load_external_replay,
     _train_with_external_replay,
     _validate_normalize,
@@ -268,6 +271,74 @@ def test_train_with_external_replay_skip_exp5_blocks_nnue_training(monkeypatch, 
     assert result["trained_exp5"] is False
     assert len(pv_calls) == 1
     assert nnue_calls == []
+
+
+# ---- _assert_external_replay_safety -----------------------------------
+
+
+def _safety_args(**overrides) -> argparse.Namespace:
+    defaults = dict(
+        include_replay_jsonl=["/tmp/x.jsonl"],
+        dry_run=False,
+        allow_default_model_paths=False,
+        skip_exp4=False,
+        skip_exp5=False,
+        experiment_4_model_path="",
+        experiment_5_model_path="",
+    )
+    defaults.update(overrides)
+    return argparse.Namespace(**defaults)
+
+
+def test_safety_guard_passes_when_no_external_replay():
+    # Pure self-play warm-up keeps its old behaviour (no guard).
+    _assert_external_replay_safety(_safety_args(include_replay_jsonl=[]))
+
+
+def test_safety_guard_passes_on_dry_run():
+    _assert_external_replay_safety(_safety_args(dry_run=True))
+
+
+def test_safety_guard_blocks_when_real_run_without_paths():
+    try:
+        _assert_external_replay_safety(_safety_args())
+    except SystemExit as exc:
+        message = str(exc)
+        assert "refusing to train" in message
+        assert "exp4 PV" in message
+        assert "exp5 NNUE" in message
+        assert "--allow-default-model-paths" in message
+    else:
+        raise AssertionError("expected SystemExit when paths are implicit defaults")
+
+
+def test_safety_guard_allows_explicit_paths(tmp_path):
+    _assert_external_replay_safety(
+        _safety_args(
+            experiment_4_model_path=str(tmp_path / "pv_candidate.json"),
+            experiment_5_model_path=str(tmp_path / "nnue_candidate.json"),
+        )
+    )
+
+
+def test_safety_guard_allows_skip_flags_in_place_of_paths():
+    _assert_external_replay_safety(
+        _safety_args(skip_exp4=True, skip_exp5=True)
+    )
+
+
+def test_safety_guard_allows_mixed_path_and_skip(tmp_path):
+    _assert_external_replay_safety(
+        _safety_args(
+            experiment_4_model_path=str(tmp_path / "pv_candidate.json"),
+            skip_exp5=True,
+        )
+    )
+
+
+def test_safety_guard_opt_out_with_allow_default_flag():
+    # Explicit opt-in for the unsafe case still works.
+    _assert_external_replay_safety(_safety_args(allow_default_model_paths=True))
 
 
 def test_train_with_external_replay_skip_exp4_blocks_pv_training(monkeypatch, tmp_path):

@@ -26,6 +26,12 @@ exp4 / exp5 warm-up **offline**:
   benchmark, write_training_report, external-replay trainer). Only a
   non-dry-run warm-up touches model files at the paths you pass via
   `--experiment-4-model-path` / `--experiment-5-model-path`.
+- ❌ **No silent default-path mutation from external replay**:
+  non-dry-run `--include-replay-jsonl` refuses to start unless the
+  caller passes explicit `--experiment-4-model-path` /
+  `--experiment-5-model-path` (or `--skip-exp4` / `--skip-exp5` for
+  whichever engine should sit this run out). `--allow-default-model-paths`
+  is the opt-in escape hatch for one-off recovery runs.
 - ❌ **No raw-PvP-as-positive-training-data**: every accepted sample passes
   through the filter and is tagged `label_quality` ∈ {clean, review} with
   weight ≤ 0.20.
@@ -162,6 +168,10 @@ W4:
 - `--skip-exp5` mirrors `--skip-exp4` for the external-replay trainer
   (gate exp5 NNUE independently from exp4 PV — exp5 is closer to
   production / stage-candidate state).
+- **Safety guard**: a non-dry-run run with `--include-replay-jsonl` must
+  point at explicit candidate model paths (or use `--skip-exp4` /
+  `--skip-exp5`). `--allow-default-model-paths` is the opt-out for
+  intentional default-path writes.
 - Final payload includes `external_replay` block with full breakdown.
 
 ## What v2 should add
@@ -204,10 +214,14 @@ python3 scripts/games/chess_seed_train.py \
 #   external_replay.train_result.skipped_reason == 'dry_run'
 
 # 3) Real warm-up. Drop --dry-run only after the dry-run report looks healthy.
-#    Optionally gate exp5 with --skip-exp5 while exp5 is near stage_candidate.
+#    Safety guard refuses default-path writes for the external-replay step,
+#    so you must point exp4 (and/or exp5) at explicit candidate artifacts
+#    — or pass --skip-exp* to gate that engine out — or use
+#    --allow-default-model-paths to bypass (NOT recommended).
 python3 scripts/games/chess_seed_train.py \
   --preset warmup10 \
   --include-replay-jsonl ~/chess_results/pvp_replay_20260512_010101/pvp_replay_training_eligible.jsonl \
   --include-replay-jsonl ~/chess_results/imported_pgn_prepared.jsonl \
+  --experiment-4-model-path ~/chess_results/pvp_replay_warmup_20260512/chess_experiment_4_pv_candidate.json \
   --skip-exp5
 ```
