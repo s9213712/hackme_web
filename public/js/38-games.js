@@ -6,12 +6,12 @@ let gameSelectedKey = gameInitialSelectedKey();
 let chessMoveInFlight = false;
 let gameState = { matches: [], invites: [], leaderboard: [] };
 let soloGameTimer = null;
-let inlineModuleCleanup = null;
-let inlineModuleActiveApi = null;
-let inlineModuleMountedKey = "";
-let inlineModuleTouchStart = null;
-let inlineModulePressedControl = null;
-const INLINE_MODULE_GAME_KEYS = new Set(["snake", "game_2048", "brick_breaker", "reversi", "go", "gomoku"]);
+let localGameModuleCleanup = null;
+let localGameModuleActiveApi = null;
+let localGameModuleMountedKey = "";
+let localGameModuleTouchStart = null;
+let localGameModulePressedControl = null;
+const LOCAL_GAME_MODULE_KEYS = new Set(["snake", "game_2048", "brick_breaker", "reversi", "go", "gomoku"]);
 
 function gameUrlParams() {
   try {
@@ -134,7 +134,7 @@ function switchGameView(key) {
   gameSelectedKey = key || "chess";
   const select = $("game-select");
   if (select && select.value !== gameSelectedKey) select.value = gameSelectedKey;
-  const isInlineModule = INLINE_MODULE_GAME_KEYS.has(gameSelectedKey);
+  const isLocalGameModule = LOCAL_GAME_MODULE_KEYS.has(gameSelectedKey);
   const selectedViewModule = activeGameViewModule();
   Object.values(gameViewModules()).forEach((module) => {
     (module.panelIds || []).forEach((id) => {
@@ -142,17 +142,17 @@ function switchGameView(key) {
       if (panel) panel.style.display = module.key === gameSelectedKey ? "" : "none";
     });
   });
-  const inlineModulePanel = $("inline-module-game-panel");
-  if (inlineModulePanel) inlineModulePanel.style.display = isInlineModule ? "" : "none";
+  const localGameModulePanel = $("local-module-game-panel");
+  if (localGameModulePanel) localGameModulePanel.style.display = isLocalGameModule ? "" : "none";
   document.querySelectorAll("[data-game-key]").forEach((btn) => {
     btn.classList.toggle("active", btn.getAttribute("data-game-key") === gameSelectedKey);
   });
-  if (isInlineModule) {
-    mountInlineModuleGame(gameSelectedKey);
+  if (isLocalGameModule) {
+    mountLocalGameModule(gameSelectedKey);
   } else {
-    cleanupInlineModuleGame();
+    cleanupLocalGameModule();
   }
-  if (!isInlineModule && selectedViewModule?.ensure) selectedViewModule.ensure(legacyGameRuntime());
+  if (!isLocalGameModule && selectedViewModule?.ensure) selectedViewModule.ensure(legacyGameRuntime());
   loadSelectedGameLeaderboard().catch((err) => setGameMsg(err.message || "排行榜讀取失敗", false));
 }
 
@@ -192,25 +192,25 @@ async function gameRequest(path, { method = "GET", body = null } = {}) {
   return json;
 }
 
-function cleanupInlineModuleGame() {
-  if (inlineModuleCleanup) inlineModuleCleanup();
-  inlineModuleCleanup = null;
-  inlineModuleActiveApi = null;
-  inlineModuleMountedKey = "";
-  inlineModuleTouchStart = null;
-  inlineModulePressedControl = null;
-  const root = $("inline-module-game-root");
+function cleanupLocalGameModule() {
+  if (localGameModuleCleanup) localGameModuleCleanup();
+  localGameModuleCleanup = null;
+  localGameModuleActiveApi = null;
+  localGameModuleMountedKey = "";
+  localGameModuleTouchStart = null;
+  localGameModulePressedControl = null;
+  const root = $("local-module-game-root");
   if (root) {
     root.onclick = null;
     root.innerHTML = "";
   }
-  const actions = $("inline-module-game-actions");
+  const actions = $("local-module-game-actions");
   if (actions) actions.innerHTML = "";
-  const controls = $("inline-module-game-controls");
+  const controls = $("local-module-game-controls");
   if (controls) controls.innerHTML = "";
 }
 
-async function submitInlineModuleScore(key, body) {
+async function submitLocalGameModuleScore(key, body) {
   try {
     await gameRequest(`/games/${encodeURIComponent(key)}/solo-scores`, { method: "POST", body });
     setGameMsg("成績已送出", true);
@@ -220,10 +220,10 @@ async function submitInlineModuleScore(key, body) {
   }
 }
 
-function createInlineModuleApi(key) {
-  const root = $("inline-module-game-root");
-  const actions = $("inline-module-game-actions");
-  const controls = $("inline-module-game-controls");
+function createLocalGameModuleApi(key) {
+  const root = $("local-module-game-root");
+  const actions = $("local-module-game-actions");
+  const controls = $("local-module-game-controls");
   return {
     key,
     root,
@@ -232,29 +232,29 @@ function createInlineModuleApi(key) {
     onAction: null,
     onControl: null,
     onKey: null,
-    setTitle(text) { $("inline-module-game-title").textContent = text || ""; },
-    status(text) { $("inline-module-game-status").textContent = text || ""; },
+    setTitle(text) { $("local-module-game-title").textContent = text || ""; },
+    status(text) { $("local-module-game-status").textContent = text || ""; },
     setActions(html) { actions.innerHTML = html || ""; },
     setControls(html) { controls.innerHTML = html || ""; },
-    submitScore(body) { return submitInlineModuleScore(key, body); },
+    submitScore(body) { return submitLocalGameModuleScore(key, body); },
   };
 }
 
-function mountInlineModuleGame(key) {
-  if (inlineModuleMountedKey === key && inlineModuleActiveApi) return;
-  cleanupInlineModuleGame();
+function mountLocalGameModule(key) {
+  if (localGameModuleMountedKey === key && localGameModuleActiveApi) return;
+  cleanupLocalGameModule();
   const game = window.hackmeGameByKey?.(key) || {};
   const module = window.HACKME_GAME_MODULES?.[key];
-  $("inline-module-game-title").textContent = game.title || "遊戲";
-  $("inline-module-game-status").textContent = game.subtitle || "準備中";
+  $("local-module-game-title").textContent = game.title || "遊戲";
+  $("local-module-game-status").textContent = game.subtitle || "準備中";
   if (!module?.mount) {
-    $("inline-module-game-root").innerHTML = "<div class=\"game-page-empty\"><strong>遊戲模組尚未載入</strong></div>";
+    $("local-module-game-root").innerHTML = "<div class=\"game-page-empty\"><strong>遊戲模組尚未載入</strong></div>";
     return;
   }
-  const api = createInlineModuleApi(key);
-  inlineModuleActiveApi = api;
-  inlineModuleMountedKey = key;
-  inlineModuleCleanup = module.mount(api) || null;
+  const api = createLocalGameModuleApi(key);
+  localGameModuleActiveApi = api;
+  localGameModuleMountedKey = key;
+  localGameModuleCleanup = module.mount(api) || null;
 }
 
 function renderGameCatalog(games) {
@@ -367,7 +367,7 @@ async function loadSelectedGameLeaderboard() {
   const key = gameSelectedKey || "chess";
   const viewModule = activeGameViewModule();
   let path = viewModule?.leaderboardPath ? viewModule.leaderboardPath(legacyGameRuntime()) : "/games/chess/leaderboard";
-  if (INLINE_MODULE_GAME_KEYS.has(key)) {
+  if (LOCAL_GAME_MODULE_KEYS.has(key)) {
     path = `/games/${encodeURIComponent(key)}/solo-leaderboard`;
   }
   const data = await gameRequest(path);
@@ -441,9 +441,9 @@ async function refreshGameZoneAfterMutation(successMessage) {
 
 
 document.addEventListener("click", (event) => {
-  const inlineModuleAction = event.target?.closest?.("#inline-module-game-panel [data-action]");
-  if (inlineModuleAction && inlineModuleActiveApi?.onAction) {
-    inlineModuleActiveApi.onAction(inlineModuleAction.dataset.action || "");
+  const localGameModuleAction = event.target?.closest?.("#local-module-game-panel [data-action]");
+  if (localGameModuleAction && localGameModuleActiveApi?.onAction) {
+    localGameModuleActiveApi.onAction(localGameModuleAction.dataset.action || "");
     return;
   }
   const catalogBtn = event.target?.closest?.("[data-game-key]");
@@ -518,51 +518,51 @@ document.addEventListener("click", (event) => {
 });
 
 document.addEventListener("pointerdown", (event) => {
-  const control = event.target?.closest?.("#inline-module-game-controls button");
-  if (!control || !inlineModuleActiveApi?.onControl) return;
+  const control = event.target?.closest?.("#local-module-game-controls button");
+  if (!control || !localGameModuleActiveApi?.onControl) return;
   event.preventDefault();
-  inlineModulePressedControl = control;
-  inlineModuleActiveApi.onControl(control, true);
+  localGameModulePressedControl = control;
+  localGameModuleActiveApi.onControl(control, true);
 });
 
 document.addEventListener("pointerup", () => {
-  if (!inlineModulePressedControl || !inlineModuleActiveApi?.onControl) {
-    inlineModulePressedControl = null;
+  if (!localGameModulePressedControl || !localGameModuleActiveApi?.onControl) {
+    localGameModulePressedControl = null;
     return;
   }
-  if (inlineModulePressedControl.dataset.hold) {
-    inlineModuleActiveApi.onControl(inlineModulePressedControl, false);
+  if (localGameModulePressedControl.dataset.hold) {
+    localGameModuleActiveApi.onControl(localGameModulePressedControl, false);
   }
-  inlineModulePressedControl = null;
+  localGameModulePressedControl = null;
 });
 
 document.addEventListener("pointercancel", () => {
-  if (inlineModulePressedControl?.dataset.hold && inlineModuleActiveApi?.onControl) {
-    inlineModuleActiveApi.onControl(inlineModulePressedControl, false);
+  if (localGameModulePressedControl?.dataset.hold && localGameModuleActiveApi?.onControl) {
+    localGameModuleActiveApi.onControl(localGameModulePressedControl, false);
   }
-  inlineModulePressedControl = null;
+  localGameModulePressedControl = null;
 });
 
 document.addEventListener("touchstart", (event) => {
-  const root = event.target?.closest?.("#inline-module-game-root");
+  const root = event.target?.closest?.("#local-module-game-root");
   if (!root) return;
   const touch = event.changedTouches[0];
-  inlineModuleTouchStart = touch ? { x: touch.clientX, y: touch.clientY } : null;
+  localGameModuleTouchStart = touch ? { x: touch.clientX, y: touch.clientY } : null;
 }, { passive: true });
 
 document.addEventListener("touchend", (event) => {
-  const root = event.target?.closest?.("#inline-module-game-root");
-  if (!root || !inlineModuleTouchStart || !inlineModuleActiveApi?.onKey) return;
+  const root = event.target?.closest?.("#local-module-game-root");
+  if (!root || !localGameModuleTouchStart || !localGameModuleActiveApi?.onKey) return;
   const touch = event.changedTouches[0];
   if (!touch) return;
-  const dx = touch.clientX - inlineModuleTouchStart.x;
-  const dy = touch.clientY - inlineModuleTouchStart.y;
-  inlineModuleTouchStart = null;
+  const dx = touch.clientX - localGameModuleTouchStart.x;
+  const dy = touch.clientY - localGameModuleTouchStart.y;
+  localGameModuleTouchStart = null;
   if (Math.max(Math.abs(dx), Math.abs(dy)) < 24) return;
   const key = Math.abs(dx) > Math.abs(dy)
     ? (dx > 0 ? "ArrowRight" : "ArrowLeft")
     : (dy > 0 ? "ArrowDown" : "ArrowUp");
-  inlineModuleActiveApi.onKey({ key, preventDefault() {} }, true);
+  localGameModuleActiveApi.onKey({ key, preventDefault() {} }, true);
 }, { passive: true });
 
 document.addEventListener("submit", (event) => {
@@ -588,9 +588,9 @@ document.addEventListener("keydown", (event) => {
   if ((!editing || gameSelectedKey === "1a2b") && dispatchActiveGameViewEvent("keydown", event)) {
     return;
   }
-  if (!editing && INLINE_MODULE_GAME_KEYS.has(gameSelectedKey) && inlineModuleActiveApi?.onKey) {
+  if (!editing && LOCAL_GAME_MODULE_KEYS.has(gameSelectedKey) && localGameModuleActiveApi?.onKey) {
     if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", " "].includes(event.key)) event.preventDefault();
-    inlineModuleActiveApi.onKey(event, true);
+    localGameModuleActiveApi.onKey(event, true);
   }
 });
 
@@ -598,8 +598,8 @@ document.addEventListener("keyup", (event) => {
   if (dispatchActiveGameViewEvent("keyup", event)) {
     return;
   }
-  if (INLINE_MODULE_GAME_KEYS.has(gameSelectedKey) && inlineModuleActiveApi?.onKey) {
-    inlineModuleActiveApi.onKey(event, false);
+  if (LOCAL_GAME_MODULE_KEYS.has(gameSelectedKey) && localGameModuleActiveApi?.onKey) {
+    localGameModuleActiveApi.onKey(event, false);
   }
 });
 

@@ -42,9 +42,9 @@
 
   window.HACKME_GAME_CATALOG = catalog;
   window.HACKME_GAME_MODULES = modules;
-  window.HACKME_INLINE_GAME_HELPERS = { cell, clamp, makeCtx, registerScore };
+  window.HACKME_LOCAL_GAME_HELPERS = { cell, clamp, makeCtx, registerScore };
   window.hackmeGameByKey = byKey;
-  window.registerHackmeInlineGameModule = function registerHackmeInlineGameModule(key, module) {
+  window.registerHackmeLocalGameModule = function registerHackmeLocalGameModule(key, module) {
     if (!key || !module?.mount) return;
     modules[key] = module;
   };

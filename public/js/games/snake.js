@@ -1,8 +1,8 @@
 'use strict';
 
 (function () {
-  const { makeCtx, registerScore } = window.HACKME_INLINE_GAME_HELPERS;
-window.registerHackmeInlineGameModule("snake", {
+  const { makeCtx, registerScore } = window.HACKME_LOCAL_GAME_HELPERS;
+window.registerHackmeLocalGameModule("snake", {
     mount(api) {
       makeCtx(api, "貪食蛇");
       const size = 18;

@@ -1,8 +1,8 @@
 'use strict';
 
 (function () {
-  const { makeCtx, registerScore, cell } = window.HACKME_INLINE_GAME_HELPERS;
-window.registerHackmeInlineGameModule("game_2048", {
+  const { makeCtx, registerScore, cell } = window.HACKME_LOCAL_GAME_HELPERS;
+window.registerHackmeLocalGameModule("game_2048", {
     mount(api) {
       makeCtx(api, "2048");
       const state = { startedAt: Date.now(), board: [], score: 0 };

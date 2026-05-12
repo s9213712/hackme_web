@@ -20,13 +20,13 @@ def test_game_zone_frontend_assets_are_wired():
     tetris_module_js = (ROOT / "public" / "js" / "games" / "tetris.js").read_text(encoding="utf-8")
     shooter_module_js = (ROOT / "public" / "js" / "games" / "space-shooter.js").read_text(encoding="utf-8")
     fps_module_js = (ROOT / "public" / "js" / "games" / "fps-arena.js").read_text(encoding="utf-8")
-    inline_snake_js = (ROOT / "public" / "js" / "games" / "inline" / "snake.js").read_text(encoding="utf-8")
-    inline_2048_js = (ROOT / "public" / "js" / "games" / "inline" / "game-2048.js").read_text(encoding="utf-8")
-    inline_brick_js = (ROOT / "public" / "js" / "games" / "inline" / "brick-breaker.js").read_text(encoding="utf-8")
-    inline_board_shared_js = (ROOT / "public" / "js" / "games" / "inline" / "board-game-shared.js").read_text(encoding="utf-8")
-    inline_reversi_js = (ROOT / "public" / "js" / "games" / "inline" / "reversi.js").read_text(encoding="utf-8")
-    inline_go_js = (ROOT / "public" / "js" / "games" / "inline" / "go.js").read_text(encoding="utf-8")
-    inline_gomoku_js = (ROOT / "public" / "js" / "games" / "inline" / "gomoku.js").read_text(encoding="utf-8")
+    local_snake_js = (ROOT / "public" / "js" / "games" / "snake.js").read_text(encoding="utf-8")
+    local_2048_js = (ROOT / "public" / "js" / "games" / "game-2048.js").read_text(encoding="utf-8")
+    local_brick_js = (ROOT / "public" / "js" / "games" / "brick-breaker.js").read_text(encoding="utf-8")
+    local_board_shared_js = (ROOT / "public" / "js" / "games" / "board-game-shared.js").read_text(encoding="utf-8")
+    local_reversi_js = (ROOT / "public" / "js" / "games" / "reversi.js").read_text(encoding="utf-8")
+    local_go_js = (ROOT / "public" / "js" / "games" / "go.js").read_text(encoding="utf-8")
+    local_gomoku_js = (ROOT / "public" / "js" / "games" / "gomoku.js").read_text(encoding="utf-8")
     fps_js = (ROOT / "public" / "js" / "38-fps-arena.js").read_text(encoding="utf-8")
     core_js = (ROOT / "public" / "js" / "00-core.js").read_text(encoding="utf-8")
     bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
@@ -85,13 +85,13 @@ def test_game_zone_frontend_assets_are_wired():
     assert 'class="fps-arena-damage"' in index_html
     assert "/js/three.min.js?v=0.160.0" in index_html
     assert "/js/41-game-modules.js?v=20260513-game-registry" in index_html
-    assert "/js/games/inline/snake.js?v=20260513-game-modules" in index_html
-    assert "/js/games/inline/game-2048.js?v=20260513-game-modules" in index_html
-    assert "/js/games/inline/brick-breaker.js?v=20260513-game-modules" in index_html
-    assert "/js/games/inline/board-game-shared.js?v=20260513-game-modules" in index_html
-    assert "/js/games/inline/reversi.js?v=20260513-game-modules" in index_html
-    assert "/js/games/inline/go.js?v=20260513-game-modules" in index_html
-    assert "/js/games/inline/gomoku.js?v=20260513-game-modules" in index_html
+    assert "/js/games/snake.js?v=20260513-game-modules" in index_html
+    assert "/js/games/game-2048.js?v=20260513-game-modules" in index_html
+    assert "/js/games/brick-breaker.js?v=20260513-game-modules" in index_html
+    assert "/js/games/board-game-shared.js?v=20260513-game-modules" in index_html
+    assert "/js/games/reversi.js?v=20260513-game-modules" in index_html
+    assert "/js/games/go.js?v=20260513-game-modules" in index_html
+    assert "/js/games/gomoku.js?v=20260513-game-modules" in index_html
     assert "/js/games/game-view-registry.js?v=20260513-legacy-modules" in index_html
     assert "/js/games/chess.js?v=20260513-legacy-modules" in index_html
     assert "/js/games/sudoku.js?v=20260513-legacy-modules" in index_html
@@ -105,11 +105,11 @@ def test_game_zone_frontend_assets_are_wired():
     assert 'id="game-open-page-btn"' not in games_js
     assert "openStandaloneGamePage" not in games_js
     assert "gameShouldOpenInStandalonePage" not in games_js
-    assert "mountInlineModuleGame" in games_js
-    assert "INLINE_MODULE_GAME_KEYS" in games_js
-    assert 'id="inline-module-game-panel"' in index_html
-    assert 'id="inline-module-game-root"' in index_html
-    assert 'id="inline-module-game-controls"' in index_html
+    assert "mountLocalGameModule" in games_js
+    assert "LOCAL_GAME_MODULE_KEYS" in games_js
+    assert 'id="local-module-game-panel"' in index_html
+    assert 'id="local-module-game-root"' in index_html
+    assert 'id="local-module-game-controls"' in index_html
     assert "貪食蛇" in index_html
     assert "2048" in index_html
     assert "打磚塊" in index_html
@@ -120,19 +120,19 @@ def test_game_zone_frontend_assets_are_wired():
     assert "/game.html" not in index_html
     assert "/js/42-game-page.js" not in index_html
     assert "HACKME_GAME_CATALOG" in game_modules_js
-    assert "registerHackmeInlineGameModule" in game_modules_js
-    assert "HACKME_INLINE_GAME_HELPERS" in game_modules_js
+    assert "registerHackmeLocalGameModule" in game_modules_js
+    assert "HACKME_LOCAL_GAME_HELPERS" in game_modules_js
     assert "modules.snake" not in game_modules_js
     assert "modules.game_2048" not in game_modules_js
-    assert 'registerHackmeInlineGameModule("snake"' in inline_snake_js
-    assert 'registerHackmeInlineGameModule("game_2048"' in inline_2048_js
-    assert 'registerHackmeInlineGameModule("brick_breaker"' in inline_brick_js
-    assert "mountHackmeInlineDiscGame" in inline_board_shared_js
-    assert 'registerHackmeInlineGameModule("reversi"' in inline_reversi_js
-    assert 'registerHackmeInlineGameModule("go"' in inline_go_js
-    assert 'registerHackmeInlineGameModule("gomoku"' in inline_gomoku_js
+    assert 'registerHackmeLocalGameModule("snake"' in local_snake_js
+    assert 'registerHackmeLocalGameModule("game_2048"' in local_2048_js
+    assert 'registerHackmeLocalGameModule("brick_breaker"' in local_brick_js
+    assert "mountHackmeLocalDiscGame" in local_board_shared_js
+    assert 'registerHackmeLocalGameModule("reversi"' in local_reversi_js
+    assert 'registerHackmeLocalGameModule("go"' in local_go_js
+    assert 'registerHackmeLocalGameModule("gomoku"' in local_gomoku_js
     assert "touchstart" in games_js
-    assert "submitInlineModuleScore" in games_js
+    assert "submitLocalGameModuleScore" in games_js
     assert "HACKME_GAME_VIEW_MODULES" in game_view_registry_js
     assert "registerHackmeGameViewModule" in game_view_registry_js
     assert 'key: "chess"' in chess_module_js
@@ -296,7 +296,7 @@ def test_game_zone_frontend_assets_are_wired():
     assert "超過 5 分鐘，不列入排行榜" in onea2b_module_js
     assert "startedAt: Date.now()" in sudoku_module_js
     assert "startedAt: Date.now()" in tetris_module_js
-    assert "startedAt: Date.now()" in inline_snake_js
+    assert "startedAt: Date.now()" in local_snake_js
     assert "solo-leaderboard" in games_js
     assert "solo-scores" in games_js
     assert "rank_mode === \"time_asc\"" in games_js

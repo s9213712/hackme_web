@@ -1,8 +1,8 @@
 'use strict';
 
 (function () {
-  const { makeCtx, registerScore } = window.HACKME_INLINE_GAME_HELPERS;
-  function mountInlineDiscGame(api, type) {
+  const { makeCtx, registerScore } = window.HACKME_LOCAL_GAME_HELPERS;
+  function mountLocalDiscGame(api, type) {
     const isReversi = type === "reversi";
     const size = type === "gomoku" ? 15 : (type === "go" ? 9 : 8);
     const title = { reversi: "黑白棋", go: "圍棋", gomoku: "五子棋" }[type];
@@ -79,5 +79,5 @@
     reset();
   }
 
-  window.mountHackmeInlineDiscGame = mountInlineDiscGame;
+  window.mountHackmeLocalDiscGame = mountLocalDiscGame;
 }());

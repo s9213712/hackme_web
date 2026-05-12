@@ -1,8 +1,8 @@
 'use strict';
 
 (function () {
-  const { makeCtx, registerScore, clamp } = window.HACKME_INLINE_GAME_HELPERS;
-window.registerHackmeInlineGameModule("brick_breaker", {
+  const { makeCtx, registerScore, clamp } = window.HACKME_LOCAL_GAME_HELPERS;
+window.registerHackmeLocalGameModule("brick_breaker", {
     mount(api) {
       makeCtx(api, "打磚塊");
       const state = { startedAt: Date.now(), score: 0, lives: 3, x: 180, ball: [180, 280, 3, -4], bricks: [], left: false, right: false, timer: null };
