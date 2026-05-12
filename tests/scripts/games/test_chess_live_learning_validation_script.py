@@ -2191,6 +2191,30 @@ def test_exp4_runtime_guarded_overlay_uses_no_labels_and_blocks_promotion_piece_
     assert detail["final_score_cp"] is not None
 
 
+def test_exp4_guarded_overlay_actual_runtime_helper_uses_real_board_state(monkeypatch):
+    from services.games import chess_pv
+    from services.games.chess_pv_guarded_overlay import explain_experiment_pv_guarded_overlay_decision
+
+    def fake_choose(_board_state, _side, *, model_path=None, **_kwargs):
+        if "candidate" in str(model_path):
+            return {"from": "d7", "to": "d5"}
+        return {"from": "e7", "to": "e5"}
+
+    monkeypatch.setattr(chess_pv, "choose_experiment_pv_move", fake_choose)
+    decision = explain_experiment_pv_guarded_overlay_decision(
+        {"__fen__": "rnbqkbnr/pppppppp/8/8/3P4/8/PPP1PPPP/RNBQKBNR b KQkq - 0 1"},
+        "black",
+        baseline_model_path=Path("baseline_model.json"),
+        candidate_model_path=Path("candidate_model.json"),
+    )
+
+    assert decision["selected_source"] == "final"
+    assert decision["selected_move_uci"] == "d7d5"
+    assert decision["guard_reason"] == "runtime_static_and_rule_guard_passed"
+    assert decision["guard_detail"]["baseline_score_cp"] is not None
+    assert decision["guard_detail"]["final_score_cp"] is not None
+
+
 def test_quick_gate_does_not_promote_on_loss_or_hash_without_score_and_matched_probe():
     module = _load_validation_module()
     summary = {

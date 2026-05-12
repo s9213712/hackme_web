@@ -266,6 +266,15 @@ exp4_21 runtime guarded overlay integration draft（2026-05-12）：
 - 關鍵 case：`mistake_retention_game_900002_ply_1` 採用 final `d7d5`；`promotion_white` fallback baseline `e7e8q`。
 - 判讀：這是 runtime integration draft，不是 promotion；quick targeted gate 已驗證 shared guard 行為，但 heavy sanity skipped、production flag 預設關閉，仍需 full broad diagnostic。
 
+exp4_22 actual runtime guarded overlay full diagnostic（2026-05-12）：
+
+- 詳細報告：[`exp4/2026-05-12_exp4_22_actual_runtime_guarded_overlay_full.md`](exp4/2026-05-12_exp4_22_actual_runtime_guarded_overlay_full.md)。
+- quick result dir：`/home/s92137/chess_results/exp4_22_actual_runtime_guarded_overlay_quick`
+- full result dir：`/home/s92137/chess_results/exp4_22_actual_runtime_guarded_overlay_full`
+- actual runtime guarded score：`0.9231`，delta vs baseline `+0.0538`，`unsafe_override=0`，`simulator_selected_mismatch=0`。
+- full diagnostic verdict：`HIGH_RISK`，promotion `false`，total wall seconds `2515.596`。
+- 判讀：actual runtime overlay 本身沒 drift；真正問題是 current broad sanity 仍評估 full final replacement，不是 guarded overlay。已新增 `guarded_overlay_sanity` 派生欄位，下一輪 full run 要用它判斷 guarded overlay broad behavior。
+
 exp4_14 balanced curriculum + retention rehearsal + budget + rollback guard（2026-05-12）：
 
 - special-rule weights 大幅下調（castling/e.p. 3→1.5、knight_mate/underpromote 4→2、queen 1→0.75）；新增 3 個 short-castle FEN 變體。

@@ -176,6 +176,29 @@ def choose_experiment_pv_guarded_overlay_move(
     default and adopts the candidate PV model only when the shared no-label
     guard passes.
     """
+    decision = explain_experiment_pv_guarded_overlay_decision(
+        board_state,
+        side,
+        baseline_model_path=baseline_model_path,
+        candidate_model_path=candidate_model_path,
+        search_profile=search_profile,
+        fusion_mode=fusion_mode,
+        decision_mode=decision_mode,
+    )
+    return decision.get("selected_move")
+
+
+def explain_experiment_pv_guarded_overlay_decision(
+    board_state,
+    side: str,
+    *,
+    baseline_model_path=None,
+    candidate_model_path=None,
+    search_profile: str = "fast",
+    fusion_mode: str = "balanced_fusion",
+    decision_mode: str = "mcts",
+) -> dict[str, Any]:
+    """Return the no-label runtime overlay decision and guard evidence."""
     from services.games.chess import to_chess_board
     from services.games.chess_pv import choose_experiment_pv_move, default_chess_pv_model_path
 
@@ -190,7 +213,17 @@ def choose_experiment_pv_guarded_overlay_move(
         decision_mode=decision_mode,
     )
     if not candidate_path:
-        return baseline_move
+        return {
+            "selected_source": "baseline",
+            "selected_move": baseline_move,
+            "baseline_move": baseline_move,
+            "final_move": None,
+            "guard_allowed": False,
+            "guard_reason": "candidate_model_path_missing",
+            "guard_detail": {},
+            "baseline_model_path": str(baseline_path),
+            "candidate_model_path": None,
+        }
     final_move = choose_experiment_pv_move(
         board_state,
         side,
@@ -200,7 +233,17 @@ def choose_experiment_pv_guarded_overlay_move(
         decision_mode=decision_mode,
     )
     if not final_move:
-        return baseline_move
+        return {
+            "selected_source": "baseline",
+            "selected_move": baseline_move,
+            "baseline_move": baseline_move,
+            "final_move": None,
+            "guard_allowed": False,
+            "guard_reason": "final_move_missing",
+            "guard_detail": {},
+            "baseline_model_path": str(baseline_path),
+            "candidate_model_path": str(candidate_path),
+        }
     board = to_chess_board(board_state, side)
     ai_color = chess.WHITE if side == "white" else chess.BLACK
     if board.turn != ai_color:
@@ -212,7 +255,7 @@ def choose_experiment_pv_guarded_overlay_move(
     final_chess_move = _parse_legal_uci_move(board, final_uci)
     baseline_score = exp4_static_score_after_move(board, baseline_chess_move, side) if baseline_chess_move else None
     final_score = exp4_static_score_after_move(board, final_chess_move, side) if final_chess_move else None
-    allowed, _reason, _detail = exp4_runtime_overlay_allows_final(
+    allowed, reason, detail = exp4_runtime_overlay_allows_final(
         fen=fen,
         side=side,
         baseline_move_uci=baseline_uci,
@@ -221,4 +264,23 @@ def choose_experiment_pv_guarded_overlay_move(
         final_score_cp=final_score,
         final_illegal=final_chess_move is None,
     )
-    return final_move if allowed and final_uci != baseline_uci else baseline_move
+    selected_source = "final" if allowed and final_uci != baseline_uci else "baseline"
+    return {
+        "fen": fen,
+        "side": str(side or ""),
+        "selected_source": selected_source,
+        "selected_move": final_move if selected_source == "final" else baseline_move,
+        "selected_move_uci": final_uci if selected_source == "final" else baseline_uci,
+        "baseline_move": baseline_move,
+        "baseline_move_uci": baseline_uci,
+        "final_move": final_move,
+        "final_move_uci": final_uci,
+        "guard_allowed": bool(allowed and final_uci != baseline_uci),
+        "guard_reason": reason,
+        "guard_detail": detail,
+        "baseline_model_path": str(baseline_path),
+        "candidate_model_path": str(candidate_path),
+        "search_profile": str(search_profile),
+        "fusion_mode": str(fusion_mode),
+        "decision_mode": str(decision_mode),
+    }

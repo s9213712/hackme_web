@@ -110,6 +110,7 @@ move = choose_experiment_pv_move(
 - `/home/s92137/chess_results/exp4_19_guarded_overlay_attribution`（exp4_19 baseline-default guarded overlay attribution）
 - `/home/s92137/chess_results/exp4_20_runtime_guarded_overlay`（exp4_20 no-label runtime guarded overlay simulator）
 - exp4_21 runtime guarded overlay integration draft（預設關閉，尚未 promotion）
+- `/home/s92137/chess_results/exp4_22_actual_runtime_guarded_overlay_full`（exp4_22 actual runtime guarded overlay full diagnostic）
 
 其中 `exp4_04_probe_policy_fixed` 是目前用來驗證「probe policy 修正後」的正式 quick gate artifact。
 
@@ -222,6 +223,39 @@ HTML_LEARNING_CHESS_EXP4_OVERLAY_CANDIDATE_MODEL_PATH=/path/to/exp4_candidate.js
   - `mistake_retention_game_900002_ply_1`：baseline `e7e5`，candidate `d7d5`，guard 採用 final。
   - `promotion_white`：baseline `e7e8q`，candidate `e7e8n`，guard fallback baseline。
 - 仍不能 promotion；原因是 heavy sanity skipped、production flag 預設關閉、broad unseen generalization 尚未用 full diagnostic 證明。
+
+## exp4_22 actual runtime guarded overlay full diagnostic（2026-05-12）
+
+詳細報告：[`2026-05-12_exp4_22_actual_runtime_guarded_overlay_full.md`](2026-05-12_exp4_22_actual_runtime_guarded_overlay_full.md)
+
+exp4_22 補上 actual runtime evidence：
+
+- `exp4_actual_runtime_guarded_overlay` 逐 deterministic case 呼叫前台共用 helper。
+- simulator 與 actual runtime path 比對：`simulator_selected_mismatch_count=0`。
+- quick 與 full diagnostic 都維持 actual runtime guarded score `0.9231`，delta vs baseline `+0.0538`。
+- `unsafe_override_count=0`。
+- `promotion_white` 仍 fallback baseline `e7e8q`。
+- `mistake_retention_game_900002_ply_1` 仍採用 final `d7d5`。
+
+Full diagnostic：
+
+- result dir：`/home/s92137/chess_results/exp4_22_actual_runtime_guarded_overlay_full`
+- verdict：`HIGH_RISK`
+- promotion：`false`
+- total wall seconds：`2515.596`
+- full final replacement：`0.8693`，仍等於 baseline
+- actual runtime guarded：`0.9231`
+
+本輪真正發現：
+
+- runtime guarded overlay 本身可用，且 actual choose path 沒 drift。
+- 但現有 broad sanity 仍評估 full final replacement，不是 guarded overlay。
+- 因此新增 `guarded_overlay_sanity` 派生欄位，後續 full run 可直接比較 guarded seen/unseen pass rate 與 unsafe override。
+
+下一步：
+
+- exp4_23 要跑 guarded-overlay broad sanity full diagnostic。
+- 若 guarded overlay broad sanity 不退步、unsafe override 維持 0，才可建立 guarded overlay promotion gate。
 
 ## exp4_07 evidence accounting cleanup（2026-05-11）
 
@@ -338,6 +372,7 @@ aggregate 新增 `multi_good_revoked_by_search_guard_count`。
 | exp4_19 | guarded overlay attribution | **overlay 0.9231 (+0.0538)** ✅ | **7/7** ✅ | full replacement 仍等於 baseline，但 baseline-default guarded overlay 上界可提升；目前是 label-based diagnostic，下一步要實作 runtime guard |
 | exp4_20 | no-label runtime guarded overlay simulator | **runtime overlay 0.9231 (+0.0538)** ✅ | **7/7** ✅ | 不讀 expected label 也能採用 `d7d5` 並擋住 `e7e8n` promotion regression；production choose path 尚未接入 |
 | exp4_21 | runtime guarded overlay integration draft | **runtime overlay 0.9231 (+0.0538)** ✅ | **7/7** ✅ | 共用 no-label guard 已接入前台 exp4 choose path；env flag 預設關閉；quick targeted gate 重現 exp4_20 分數，unsafe override=0；heavy sanity skipped，promotion false |
+| exp4_22 | actual runtime guarded overlay full diagnostic | **actual overlay 0.9231 (+0.0538)** ✅ | **7/7** ✅ | actual runtime helper 與 simulator mismatch=0；full replacement broad sanity 仍 HIGH_RISK；新增 guarded_overlay_sanity 欄位供下一輪評估 guarded broad behavior |
 
 ## exp4_17 special-rule subtype + gate accounting cleanup（2026-05-12）
 
@@ -780,6 +815,7 @@ exp4_08 顯示 e_pawn 真失敗只剩 1 個 case (`gate_e_pawn_hard_001` × cp10
 
 ## 歷程報告
 
+- [2026-05-12 Exp4_22 actual runtime guarded overlay full diagnostic](2026-05-12_exp4_22_actual_runtime_guarded_overlay_full.md)
 - [2026-05-12 Exp4_19 guarded overlay attribution](2026-05-12_exp4_19_guarded_overlay_attribution.md)
 - [2026-05-12 Exp4_20 runtime guarded overlay simulator](2026-05-12_exp4_20_runtime_guarded_overlay.md)
 - [2026-05-12 Exp4_21 runtime guarded overlay integration draft](2026-05-12_exp4_21_runtime_guarded_overlay_integration.md)

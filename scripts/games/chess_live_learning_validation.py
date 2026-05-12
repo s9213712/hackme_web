@@ -45,7 +45,10 @@ from services.games.chess_pv import (  # noqa: E402
     rank_experiment_pv_policy_moves,
     train_experiment_pv_from_replay_samples,
 )
-from services.games.chess_pv_guarded_overlay import exp4_runtime_overlay_allows_final  # noqa: E402
+from services.games.chess_pv_guarded_overlay import (  # noqa: E402
+    exp4_runtime_overlay_allows_final,
+    explain_experiment_pv_guarded_overlay_decision,
+)
 from services.games.chess_nnue import (  # noqa: E402
     EXPERIMENT_NNUE_DIFFICULTY,
     choose_experiment_nnue_move,
@@ -2829,6 +2832,171 @@ def _exp4_runtime_guarded_overlay_report(deterministic_report: dict) -> dict:
     }
 
 
+def _exp4_actual_runtime_guarded_overlay_report(deterministic_report: dict) -> dict:
+    """Run the actual exp4 guarded-overlay helper on deterministic cases.
+
+    exp4_20/21 scored the shared guard from already-computed baseline/final
+    rows. This report calls the same helper used by the optional runtime path,
+    so it catches choose-path drift while still using labels only after the
+    decision for offline scoring.
+    """
+    snapshots = deterministic_report.get("snapshots") or []
+    by_label = {str(row.get("model_label") or ""): row for row in snapshots}
+    baseline = by_label.get("baseline") or (snapshots[0] if snapshots else {})
+    final = by_label.get("final") or (snapshots[-1] if snapshots else {})
+    baseline_cases = {str(row.get("case_id") or ""): row for row in (baseline.get("cases") or [])}
+    final_cases = {str(row.get("case_id") or ""): row for row in (final.get("cases") or [])}
+    baseline_model_path = Path(str(baseline.get("model_path") or ""))
+    final_model_path = Path(str(final.get("model_path") or ""))
+    if not baseline_cases or not final_cases or not baseline_model_path.exists() or not final_model_path.exists():
+        return {
+            "supported": False,
+            "source": "exp4_22_actual_runtime_guarded_overlay",
+            "reason": "baseline_or_final_cases_or_model_paths_missing",
+            "production_ready": False,
+        }
+
+    rows: list[dict] = []
+    counts = {
+        "same_move": 0,
+        "runtime_guard_allowed": 0,
+        "runtime_guard_fallback": 0,
+        "prevented_regression_after_scoring": 0,
+        "positive_override_after_scoring": 0,
+        "unsafe_override_after_scoring": 0,
+        "simulator_selected_mismatch": 0,
+    }
+    fallback_reasons: dict[str, int] = {}
+    for case_id, baseline_row in baseline_cases.items():
+        final_row = final_cases.get(case_id)
+        if not final_row:
+            continue
+        fen = str(baseline_row.get("fen") or final_row.get("fen") or "")
+        side = str(baseline_row.get("side") or final_row.get("side") or "white")
+        expected = [str(move).lower() for move in (baseline_row.get("expected_best_moves") or [])]
+        baseline_move = str(baseline_row.get("engine_top1") or "")
+        final_move = str(final_row.get("engine_top1") or "")
+        sim_allowed, sim_reason, _sim_detail = exp4_runtime_overlay_allows_final(
+            fen=fen,
+            side=side,
+            baseline_move_uci=baseline_move,
+            final_move_uci=final_move,
+            baseline_score_cp=baseline_row.get("score_cp"),
+            final_score_cp=final_row.get("score_cp"),
+            final_illegal=bool(final_row.get("illegal_move")),
+        )
+        simulator_selected = final_move if sim_allowed and final_move != baseline_move else baseline_move
+        decision = explain_experiment_pv_guarded_overlay_decision(
+            {"__fen__": fen},
+            side,
+            baseline_model_path=baseline_model_path,
+            candidate_model_path=final_model_path,
+            search_profile="fast",
+            fusion_mode=str(final_row.get("fusion_mode") or "balanced_fusion"),
+            decision_mode="mcts",
+        )
+        selected_move = str(decision.get("selected_move_uci") or "")
+        selected_source = str(decision.get("selected_source") or "baseline")
+        guard_reason = str(decision.get("guard_reason") or "")
+        baseline_correct = bool(baseline_row.get("top1_correct"))
+        final_correct = bool(final_row.get("top1_correct"))
+        selected = final_row if selected_source == "final" else baseline_row
+        if selected_move == baseline_move and final_move == baseline_move:
+            counts["same_move"] += 1
+        elif selected_source == "final":
+            counts["runtime_guard_allowed"] += 1
+        else:
+            counts["runtime_guard_fallback"] += 1
+            fallback_reasons[guard_reason] = int(fallback_reasons.get(guard_reason) or 0) + 1
+        if selected_move != simulator_selected:
+            counts["simulator_selected_mismatch"] += 1
+        if selected_source == "final" and final_correct and not baseline_correct:
+            counts["positive_override_after_scoring"] += 1
+        if selected_source == "baseline" and baseline_correct and not final_correct:
+            counts["prevented_regression_after_scoring"] += 1
+        if selected_source == "final" and baseline_correct and not final_correct:
+            counts["unsafe_override_after_scoring"] += 1
+
+        top3 = list(selected.get("engine_top3") or [])
+        top1_correct = selected_move in expected
+        top3_contains = any(move_uci in top3 for move_uci in expected)
+        blunder = bool(str(selected.get("category") or "") == "blunder_avoid" and not top3_contains)
+        rows.append(
+            {
+                "case_id": case_id,
+                "category": str(selected.get("category") or baseline_row.get("category") or ""),
+                "fen": fen,
+                "side": side,
+                "expected_best_moves": expected,
+                "baseline_move": baseline_move,
+                "baseline_top1_correct": baseline_correct,
+                "final_move": final_move,
+                "final_top1_correct": final_correct,
+                "selected_source": selected_source,
+                "selected_move": selected_move,
+                "simulator_selected_move": simulator_selected,
+                "simulator_selected_mismatch": bool(selected_move != simulator_selected),
+                "simulator_guard_reason": sim_reason,
+                "guard_allowed": bool(decision.get("guard_allowed")),
+                "guard_reason": guard_reason,
+                "guard_detail": decision.get("guard_detail") or {},
+                "top1_correct": top1_correct,
+                "top3_contains": top3_contains,
+                "illegal_move": bool(selected.get("illegal_move")),
+                "blunder": blunder,
+                "score_cp": selected.get("score_cp"),
+                "policy_score": selected.get("policy_score"),
+                "model_hash": str(selected.get("model_hash") or ""),
+                "seed": selected.get("seed"),
+                "depth": selected.get("depth"),
+                "nodes": selected.get("nodes"),
+                "time_limit_ms": selected.get("time_limit_ms"),
+                "fusion_mode": selected.get("fusion_mode"),
+            }
+        )
+
+    aggregate = _aggregate_deterministic_strength(rows)
+    score_table = deterministic_report.get("score_table") or []
+    baseline_score = next(
+        (float(row.get("overall_deterministic_score") or 0.0) for row in score_table if str(row.get("model_label") or "") == "baseline"),
+        float(((baseline.get("aggregate") or {}).get("overall_deterministic_score") or 0.0)),
+    )
+    final_score = next(
+        (float(row.get("overall_deterministic_score") or 0.0) for row in score_table if str(row.get("model_label") or "") == "final"),
+        float(((final.get("aggregate") or {}).get("overall_deterministic_score") or 0.0)),
+    )
+    actual_score = float(aggregate.get("overall_deterministic_score") or 0.0)
+    return {
+        "supported": True,
+        "source": "exp4_22_actual_runtime_guarded_overlay",
+        "actual_runtime_path_exercised": True,
+        "diagnostic_uses_expected_labels_for_decision": False,
+        "labels_used_only_for_offline_scoring": True,
+        "production_ready": False,
+        "production_ready_reason": "actual runtime helper is exercised, but full broad diagnostic and explicit enablement are still required before promotion",
+        "baseline_default": True,
+        "full_model_replacement": False,
+        "baseline_score": round(baseline_score, 4),
+        "final_score": round(final_score, 4),
+        "actual_runtime_guarded_score": round(actual_score, 4),
+        "delta_vs_baseline": round(actual_score - baseline_score, 4),
+        "delta_vs_final": round(actual_score - final_score, 4),
+        "decision_counts": counts,
+        "fallback_reasons": fallback_reasons,
+        "unsafe_override_count": int(counts["unsafe_override_after_scoring"]),
+        "simulator_selected_mismatch_count": int(counts["simulator_selected_mismatch"]),
+        "candidate_worth_runtime_overlay": bool(
+            actual_score > baseline_score
+            and int(counts["positive_override_after_scoring"]) > 0
+            and int(counts["unsafe_override_after_scoring"]) == 0
+            and int(counts["simulator_selected_mismatch"]) == 0
+            and aggregate.get("illegal_rate") == 0.0
+        ),
+        "aggregate": aggregate,
+        "cases": rows,
+    }
+
+
 def _policy_override_audit(engine_alias: str, model_path: Path, cases: list[dict], deterministic_report: dict) -> dict:
     rows = []
     search_disagreement_cp_limit = 200  # exp4_10: search > fused by >200cp = clear search disagreement
@@ -3686,6 +3854,11 @@ def _compact_sanity_probe_for_summary(probe: dict) -> dict:
             "final_decision_generalization_rate",
             "raw_policy_unseen_generalization_rate",
             "final_decision_unseen_generalization_rate",
+            "guarded_overlay_generalization_rate",
+            "guarded_overlay_seen_variant_pass_rate",
+            "guarded_overlay_unseen_variant_pass_rate",
+            "guarded_overlay_unsafe_override_count",
+            "guarded_overlay_sanity",
             "variant_count",
             "variant_top1_hits",
             "variant_top1_rate",
@@ -6019,6 +6192,84 @@ def _evaluate_sanity_learning_position_batch(
     return rows
 
 
+def _exp4_guarded_overlay_sanity_from_rows(before_rows: list[dict], after_rows: list[dict]) -> dict:
+    """Score sanity variants as guarded overlay without re-running expensive search."""
+    rows: list[dict] = []
+    counts = {
+        "same_move": 0,
+        "guard_allowed": 0,
+        "guard_fallback": 0,
+        "positive_override_after_scoring": 0,
+        "prevented_regression_after_scoring": 0,
+        "unsafe_override_after_scoring": 0,
+    }
+    fallback_reasons: dict[str, int] = {}
+    for before, after in zip(before_rows or [], after_rows or []):
+        expected = str(before.get("expected_move") or after.get("expected_move") or "").lower()
+        before_move = str(before.get("top1") or "")
+        after_move = str(after.get("top1") or "")
+        allowed, reason, detail = exp4_runtime_overlay_allows_final(
+            fen=str(before.get("fen") or after.get("fen") or ""),
+            side=str(before.get("side") or after.get("side") or "white"),
+            baseline_move_uci=before_move,
+            final_move_uci=after_move,
+            baseline_score_cp=None,
+            final_score_cp=None,
+            final_illegal=not bool(after_move),
+        )
+        selected_source = "final" if allowed and after_move != before_move else "baseline"
+        selected = after if selected_source == "final" else before
+        selected_move = str(selected.get("top1") or "")
+        before_correct = bool(before.get("expected_is_top1"))
+        after_correct = bool(after.get("expected_is_top1"))
+        selected_correct = selected_move == expected
+        if after_move == before_move:
+            counts["same_move"] += 1
+        elif selected_source == "final":
+            counts["guard_allowed"] += 1
+        else:
+            counts["guard_fallback"] += 1
+            fallback_reasons[reason] = int(fallback_reasons.get(reason) or 0) + 1
+        if selected_source == "final" and after_correct and not before_correct:
+            counts["positive_override_after_scoring"] += 1
+        if selected_source == "baseline" and before_correct and not after_correct:
+            counts["prevented_regression_after_scoring"] += 1
+        if selected_source == "final" and before_correct and not after_correct:
+            counts["unsafe_override_after_scoring"] += 1
+        rows.append(
+            {
+                "case_id": str(before.get("case_id") or after.get("case_id") or ""),
+                "fen": str(before.get("fen") or after.get("fen") or ""),
+                "side": str(before.get("side") or after.get("side") or ""),
+                "expected_move": expected,
+                "baseline_move": before_move,
+                "final_move": after_move,
+                "selected_source": selected_source,
+                "selected_move": selected_move,
+                "guard_reason": reason,
+                "guard_detail": detail,
+                "baseline_correct": before_correct,
+                "final_correct": after_correct,
+                "expected_is_top1": selected_correct,
+                "expected_in_top3": bool(selected.get("expected_in_top3")),
+            }
+        )
+    total = len(rows)
+    hits = sum(1 for row in rows if row.get("expected_is_top1"))
+    return {
+        "supported": True,
+        "case_count": total,
+        "top1_hits": hits,
+        "pass_rate": round(hits / max(1, total), 4),
+        "decision_counts": counts,
+        "fallback_reasons": fallback_reasons,
+        "unsafe_override_count": int(counts["unsafe_override_after_scoring"]),
+        "positive_override_count": int(counts["positive_override_after_scoring"]),
+        "prevented_regression_count": int(counts["prevented_regression_after_scoring"]),
+        "cases_inline_sample": rows[:8],
+    }
+
+
 def _evaluate_raw_policy_position_batch(
     engine_alias: str,
     model_path: Path,
@@ -7073,6 +7324,16 @@ def _evaluate_sanity_learning_probe(
         unseen_variants,
         label=f"sanity final after unseen trusted={trusted_replays}",
     )
+    guarded_seen_variants = (
+        _exp4_guarded_overlay_sanity_from_rows(before_seen_variants, after_seen_variants)
+        if engine_alias == "exp4"
+        else {"supported": False, "reason": "only_supported_for_exp4"}
+    )
+    guarded_unseen_variants = (
+        _exp4_guarded_overlay_sanity_from_rows(before_unseen_variants, after_unseen_variants)
+        if engine_alias == "exp4"
+        else {"supported": False, "reason": "only_supported_for_exp4"}
+    )
     raw_seen_before = _evaluate_raw_policy_position_batch(
         engine_alias,
         before_model_path,
@@ -7295,6 +7556,19 @@ def _evaluate_sanity_learning_probe(
     final_decision_generalization_rate = round((seen_hits + unseen_hits) / max(1, seen_count + unseen_count), 4)
     raw_policy_unseen_generalization_rate = round(raw_unseen_hits / max(1, unseen_count), 4)
     final_decision_unseen_generalization_rate = unseen_variant_pass_rate
+    guarded_overlay_seen_variant_pass_rate = float(guarded_seen_variants.get("pass_rate") or 0.0)
+    guarded_overlay_unseen_variant_pass_rate = float(guarded_unseen_variants.get("pass_rate") or 0.0)
+    guarded_overlay_generalization_rate = round(
+        (
+            int(guarded_seen_variants.get("top1_hits") or 0)
+            + int(guarded_unseen_variants.get("top1_hits") or 0)
+        )
+        / max(1, int(guarded_seen_variants.get("case_count") or 0) + int(guarded_unseen_variants.get("case_count") or 0)),
+        4,
+    )
+    guarded_overlay_unsafe_override_count = int(guarded_seen_variants.get("unsafe_override_count") or 0) + int(
+        guarded_unseen_variants.get("unsafe_override_count") or 0
+    )
     exact_learned = bool(after_exact.get("expected_is_top1"))
     seen_passed = bool(seen_count > 0 and seen_variant_pass_rate >= SANITY_SEEN_VARIANT_PASS_THRESHOLD)
     unseen_passed = bool(unseen_count > 0 and unseen_variant_pass_rate >= SANITY_UNSEEN_VARIANT_PASS_THRESHOLD)
@@ -7595,6 +7869,16 @@ def _evaluate_sanity_learning_probe(
         "final_decision_generalization_rate": final_decision_generalization_rate,
         "raw_policy_unseen_generalization_rate": raw_policy_unseen_generalization_rate,
         "final_decision_unseen_generalization_rate": final_decision_unseen_generalization_rate,
+        "guarded_overlay_generalization_rate": guarded_overlay_generalization_rate,
+        "guarded_overlay_seen_variant_pass_rate": guarded_overlay_seen_variant_pass_rate,
+        "guarded_overlay_unseen_variant_pass_rate": guarded_overlay_unseen_variant_pass_rate,
+        "guarded_overlay_unsafe_override_count": guarded_overlay_unsafe_override_count,
+        "guarded_overlay_sanity": {
+            "supported": bool(engine_alias == "exp4"),
+            "seen_variants": guarded_seen_variants,
+            "unseen_variants": guarded_unseen_variants,
+            "note": "No-label guard applied to already-computed before/after sanity decisions; labels are used only afterward for scoring.",
+        },
         "variant_count": variant_count,
         "variant_top1_hits": variant_top1_hits,
         "variant_top1_rate": round(variant_top1_hits / max(1, variant_count), 4),
@@ -8910,6 +9194,18 @@ def _write_audit_artifacts(engine_dir: Path, summary: dict) -> dict:
         runtime_overlay["cases_full_count"] = count
         runtime_overlay["cases_artifact_path"] = artifacts["exp4_runtime_guarded_overlay"]["path"]
         runtime_overlay["cases"] = []
+    actual_runtime_overlay = summary.get("exp4_actual_runtime_guarded_overlay") or {}
+    if actual_runtime_overlay.get("supported") and isinstance(actual_runtime_overlay.get("cases"), list):
+        out = audits_dir / "exp4_actual_runtime_guarded_overlay.jsonl"
+        count = _write_jsonl(out, actual_runtime_overlay.get("cases") or [])
+        artifacts["exp4_actual_runtime_guarded_overlay"] = {
+            "path": str(out.relative_to(engine_dir)),
+            "row_count": count,
+        }
+        actual_runtime_overlay["cases_inline_sample"] = (actual_runtime_overlay.get("cases") or [])[:inline_sample_limit]
+        actual_runtime_overlay["cases_full_count"] = count
+        actual_runtime_overlay["cases_artifact_path"] = artifacts["exp4_actual_runtime_guarded_overlay"]["path"]
+        actual_runtime_overlay["cases"] = []
     return artifacts
 
 
@@ -10946,8 +11242,11 @@ def _sanity_learning_summary(summary: dict) -> dict:
         unseen_rate = float(probe.get("unseen_variant_pass_rate") or 0.0)
         raw_unseen_rate = float(probe.get("raw_policy_unseen_generalization_rate") or 0.0)
         final_unseen_rate = float(probe.get("final_decision_unseen_generalization_rate") or 0.0)
+        guarded_unseen_rate = float(probe.get("guarded_overlay_unseen_variant_pass_rate") or 0.0)
         raw_generalization = float(probe.get("raw_policy_generalization_rate") or 0.0)
         final_generalization = float(probe.get("final_decision_generalization_rate") or 0.0)
+        guarded_generalization = float(probe.get("guarded_overlay_generalization_rate") or 0.0)
+        guarded_unsafe = int(probe.get("guarded_overlay_unsafe_override_count") or 0)
         learning_signal = bool(probe.get("learning_signal"))
         learning_signal_reason = str(probe.get("learning_signal_reason") or "")
         if not exact_pass:
@@ -10968,6 +11267,9 @@ def _sanity_learning_summary(summary: dict) -> dict:
                 "final_decision_generalization_rate": round(final_generalization, 4),
                 "raw_policy_unseen_generalization_rate": round(raw_unseen_rate, 4),
                 "final_decision_unseen_generalization_rate": round(final_unseen_rate, 4),
+                "guarded_overlay_generalization_rate": round(guarded_generalization, 4),
+                "guarded_overlay_unseen_variant_pass_rate": round(guarded_unseen_rate, 4),
+                "guarded_overlay_unsafe_override_count": guarded_unsafe,
                 "learning_signal": learning_signal,
                 "learning_signal_reason": learning_signal_reason,
                 "verdict": verdict,
@@ -11599,6 +11901,7 @@ def _root_engine_row(summary: dict) -> dict:
         "deterministic_strength_snapshot": summary.get("deterministic_strength_snapshot") or {},
         "exp4_guarded_overlay_attribution": summary.get("exp4_guarded_overlay_attribution") or {},
         "exp4_runtime_guarded_overlay": summary.get("exp4_runtime_guarded_overlay") or {},
+        "exp4_actual_runtime_guarded_overlay": summary.get("exp4_actual_runtime_guarded_overlay") or {},
         "policy_override_audit": summary.get("policy_override_audit") or {},
         "opening_target_margin_audit": summary.get("opening_target_margin_audit") or {},
         "fusion_mode_comparison": summary.get("fusion_mode_comparison") or {},
@@ -16954,6 +17257,10 @@ def _run_quick_retrain_gate_validation(
         "supported": False,
         "reason": "only_supported_for_exp4",
     }
+    exp4_actual_runtime_overlay = _exp4_actual_runtime_guarded_overlay_report(deterministic_strength) if engine_alias == "exp4" else {
+        "supported": False,
+        "reason": "only_supported_for_exp4",
+    }
     policy_override_audit = _policy_override_audit(engine_alias, after_model_path, deterministic_cases, deterministic_strength)
     opening_target_margin_audit = _opening_target_margin_audit(
         engine_alias=engine_alias,
@@ -16980,6 +17287,7 @@ def _run_quick_retrain_gate_validation(
     _json_dump(engine_dir / "deterministic_strength_snapshot.json", deterministic_strength)
     _json_dump(engine_dir / "exp4_guarded_overlay_attribution.json", exp4_guarded_overlay)
     _json_dump(engine_dir / "exp4_runtime_guarded_overlay.json", exp4_runtime_overlay)
+    _json_dump(engine_dir / "exp4_actual_runtime_guarded_overlay.json", exp4_actual_runtime_overlay)
     _json_dump(engine_dir / "policy_override_audit.json", policy_override_audit)
     _json_dump(engine_dir / "opening_target_margin_audit.json", opening_target_margin_audit)
     _json_dump(engine_dir / "fusion_mode_comparison.json", fusion_mode_comparison)
@@ -17585,6 +17893,7 @@ def _run_quick_retrain_gate_validation(
         "deterministic_strength_snapshot": deterministic_strength,
         "exp4_guarded_overlay_attribution": exp4_guarded_overlay,
         "exp4_runtime_guarded_overlay": exp4_runtime_overlay,
+        "exp4_actual_runtime_guarded_overlay": exp4_actual_runtime_overlay,
         "policy_override_audit": policy_override_audit,
         "opening_target_margin_audit": opening_target_margin_audit,
         "fusion_mode_comparison": fusion_mode_comparison,
@@ -18159,6 +18468,10 @@ def _run_engine_validation(
         "supported": False,
         "reason": "only_supported_for_exp4",
     }
+    exp4_actual_runtime_overlay = _exp4_actual_runtime_guarded_overlay_report(deterministic_strength) if engine_alias == "exp4" else {
+        "supported": False,
+        "reason": "only_supported_for_exp4",
+    }
     policy_override_audit = _policy_override_audit(engine_alias, after_model_path, deterministic_cases, deterministic_strength)
     opening_target_margin_audit = _opening_target_margin_audit(
         engine_alias=engine_alias,
@@ -18184,6 +18497,7 @@ def _run_engine_validation(
     _json_dump(engine_dir / "deterministic_strength_snapshot.json", deterministic_strength)
     _json_dump(engine_dir / "exp4_guarded_overlay_attribution.json", exp4_guarded_overlay)
     _json_dump(engine_dir / "exp4_runtime_guarded_overlay.json", exp4_runtime_overlay)
+    _json_dump(engine_dir / "exp4_actual_runtime_guarded_overlay.json", exp4_actual_runtime_overlay)
     _json_dump(engine_dir / "policy_override_audit.json", policy_override_audit)
     _json_dump(engine_dir / "opening_target_margin_audit.json", opening_target_margin_audit)
     _json_dump(engine_dir / "fusion_mode_comparison.json", fusion_mode_comparison)
@@ -18235,6 +18549,7 @@ def _run_engine_validation(
         "deterministic_strength_snapshot": deterministic_strength,
         "exp4_guarded_overlay_attribution": exp4_guarded_overlay,
         "exp4_runtime_guarded_overlay": exp4_runtime_overlay,
+        "exp4_actual_runtime_guarded_overlay": exp4_actual_runtime_overlay,
         "policy_override_audit": policy_override_audit,
         "opening_target_margin_audit": opening_target_margin_audit,
         "fusion_mode_comparison": fusion_mode_comparison,
