@@ -1,5 +1,47 @@
 # PvP / human-vs-engine replay pipeline v1 (2026-05-12)
 
+## Safety contract (W4.2)
+
+The safety surface for every external-replay-aware CLI lives in one
+module:
+
+- **`services/games/external_replay_safety.py`**
+  - `serialize_json_payload(payload)` — canonical JSON serializer used
+    by stdout, dry-run artifacts, and future ledger writers.
+    `sort_keys=True`, `ensure_ascii=False`, `indent=2`, trailing
+    newline. Locked so disk / stdout / future writers are
+    byte-identical, not merely "same dict".
+  - `is_default_model_path(...)` — three-layer detector (bundled,
+    runtime-default, anywhere under `services/games/models/`).
+  - `EngineMutationSpec` + `MutationPolicy` + `validate_mutation_policy(...)`
+    — CLI-agnostic policy validator returning the list of blocking
+    problems. Every external-replay-aware CLI builds a
+    `MutationPolicy` from its argparse.Namespace and asks one question
+    instead of re-implementing the guard.
+
+`chess_seed_train.py` is now a thin wrapper that translates
+`argparse.Namespace → MutationPolicy → validate_mutation_policy` and
+uses `serialize_json_payload` for stdout AND the dry-run artifact.
+
+### CLI mode matrix (enforced by `validate_mutation_policy`)
+
+| Mode | external_replay | dry-run | path | result |
+|---|---|---|---|---|
+| A | no | — | — | allowed (pre-W4 baseline) |
+| B | yes | yes | — | allowed (no mutation, writes dry-run artifact) |
+| C | yes | no | none | **rejected** |
+| D | yes | no | bundled artifact | **rejected** |
+| E | yes | no | runtime-default artifact | **rejected** |
+| F | yes | no | sibling under `services/games/models/` | **rejected** |
+| G | yes | no | explicit staging / candidate path | allowed |
+| H | yes | no | default + `--allow-default-model-paths` | allowed (logged opt-out) |
+
+Tests live in `tests/services/games/test_external_replay_safety.py`
+(validator-level, all 8 modes) and
+`tests/scripts/games/test_chess_seed_train_cli_contract.py`
+(subprocess-level for modes B / C / D plus a bundled-mtime mutation
+sentinel and a stdout==artifact byte-identity check).
+
 ## Scope
 
 `pvp_replay v1` lands four pieces that let real-player game history feed into
