@@ -7,7 +7,7 @@ from pathlib import Path
 import chess
 from flask import Flask, jsonify
 
-from routes.games import choose_computer_move, ensure_game_schema, register_games_routes
+from routes.games import choose_computer_move, ensure_game_schema, game_schema_sql, register_games_routes
 from services.games import chess_pipeline as chess_pipeline_service
 from services.games import chess_pv as chess_pv_service
 from services.games.chess_dl import (
@@ -138,6 +138,20 @@ def _seed_legacy_user_db(db_path):
     ensure_game_schema(conn)
     conn.commit()
     conn.close()
+
+
+def test_game_matches_difficulty_enum_in_sync_across_bootstrap_and_runtime():
+    """bootstrap.schema.sql and routes.games.game_schema_sql() must keep the
+    computer_difficulty CHECK list aligned. Otherwise fresh installs and the
+    runtime ensure-schema migration end up with different enum sets."""
+    bootstrap_sql = (Path(__file__).resolve().parents[2] / "bootstrap.schema.sql").read_text(encoding="utf-8")
+    runtime_sql = game_schema_sql()
+    for value in (
+        "'experiment 4:pv'",
+        "'experiment 5:nnue'",
+    ):
+        assert value in bootstrap_sql, f"{value} missing from bootstrap.schema.sql"
+        assert value in runtime_sql, f"{value} missing from routes.games.game_schema_sql()"
 
 
 def test_game_catalog_includes_solo_games(tmp_path):
