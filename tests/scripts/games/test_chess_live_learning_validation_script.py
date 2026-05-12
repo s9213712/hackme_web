@@ -2051,6 +2051,132 @@ def test_deterministic_strength_gate_blocks_regression_without_using_game_benchm
     assert "final deterministic score regressed beyond checkpoint@20 threshold" in report["reasons"]
 
 
+def test_exp4_guarded_overlay_keeps_baseline_default_and_only_adopts_safe_positive_cases():
+    module = _load_validation_module()
+
+    def case(case_id, category, expected, top1, top3=None, illegal=False):
+        top3 = top3 or [top1]
+        return {
+            "case_id": case_id,
+            "category": category,
+            "fen": "8/8/8/8/8/8/8/8 w - - 0 1",
+            "side": "white",
+            "expected_best_moves": [expected],
+            "engine_top1": top1,
+            "engine_top3": top3,
+            "top1_correct": top1 == expected,
+            "top3_contains": expected in top3,
+            "illegal_move": illegal,
+            "blunder": False,
+        }
+
+    deterministic_report = {
+        "score_table": [
+            {"model_label": "baseline", "overall_deterministic_score": 0.45},
+            {"model_label": "final", "overall_deterministic_score": 0.45},
+        ],
+        "snapshots": [
+            {
+                "model_label": "baseline",
+                "cases": [
+                    case("same", "opening", "e2e4", "e2e4"),
+                    case("final_improves", "mistake_retention", "d7d5", "e7e5", ["e7e5", "g8f6"]),
+                    case("final_regresses", "blunder_avoid", "g1f3", "g1f3"),
+                    case("both_wrong", "tactic", "c2c4", "b1c3", ["b1c3", "d2d4"]),
+                ],
+            },
+            {
+                "model_label": "final",
+                "cases": [
+                    case("same", "opening", "e2e4", "e2e4"),
+                    case("final_improves", "mistake_retention", "d7d5", "d7d5"),
+                    case("final_regresses", "blunder_avoid", "g1f3", "h2h4", ["h2h4", "a2a4"]),
+                    case("both_wrong", "tactic", "c2c4", "g1f3", ["g1f3", "d2d4"]),
+                ],
+            },
+        ],
+    }
+
+    report = module._exp4_guarded_overlay_attribution(deterministic_report)
+
+    assert report["supported"] is True
+    assert report["production_ready"] is False
+    assert report["full_model_replacement"] is False
+    assert report["decision_counts"]["positive_override"] == 1
+    assert report["decision_counts"]["prevented_regression"] == 1
+    assert report["decision_counts"]["unresolved_no_gain"] == 1
+    assert report["unsafe_override_count"] == 0
+    assert report["guarded_overlay_score"] > report["baseline_score"]
+    assert report["candidate_worth_runtime_overlay"] is True
+    selected = {row["case_id"]: row for row in report["cases"]}
+    assert selected["final_improves"]["selected_source"] == "final"
+    assert selected["final_regresses"]["selected_source"] == "baseline"
+    assert selected["both_wrong"]["selected_source"] == "baseline"
+
+
+def test_exp4_runtime_guarded_overlay_uses_no_labels_and_blocks_promotion_piece_regression():
+    module = _load_validation_module()
+
+    def case(case_id, fen, expected, top1, top3=None, score_cp=0, category="opening", illegal=False):
+        top3 = top3 or [top1]
+        return {
+            "case_id": case_id,
+            "category": category,
+            "fen": fen,
+            "side": "white" if " w " in fen else "black",
+            "expected_best_moves": [expected],
+            "engine_top1": top1,
+            "engine_top3": top3,
+            "top1_correct": top1 == expected,
+            "top3_contains": expected in top3,
+            "illegal_move": illegal,
+            "blunder": False,
+            "score_cp": score_cp,
+            "policy_score": score_cp,
+        }
+
+    opening_fen = "rnbqkbnr/pppppppp/8/8/3P4/8/PPP1PPPP/RNBQKBNR b KQkq - 0 1"
+    promotion_fen = "k7/4P3/2K5/8/8/8/8/8 w - - 0 1"
+    deterministic_report = {
+        "score_table": [
+            {"model_label": "baseline", "overall_deterministic_score": 0.45},
+            {"model_label": "final", "overall_deterministic_score": 0.45},
+        ],
+        "snapshots": [
+            {
+                "model_label": "baseline",
+                "cases": [
+                    case("safe_opening", opening_fen, "d7d5", "e7e5", ["e7e5", "c7c5"], category="mistake_retention"),
+                    case("promotion_regression", promotion_fen, "e7e8q", "e7e8q", ["e7e8q", "e7e8n"], score_cp=-9, category="endgame"),
+                ],
+            },
+            {
+                "model_label": "final",
+                "cases": [
+                    case("safe_opening", opening_fen, "d7d5", "d7d5", ["d7d5", "e7e5"], category="mistake_retention"),
+                    case("promotion_regression", promotion_fen, "e7e8q", "e7e8n", ["e7e8n", "e7e8q"], score_cp=-3, category="endgame"),
+                ],
+            },
+        ],
+    }
+
+    report = module._exp4_runtime_guarded_overlay_report(deterministic_report)
+
+    assert report["supported"] is True
+    assert report["diagnostic_uses_expected_labels_for_decision"] is False
+    assert report["production_ready"] is False
+    assert report["decision_counts"]["positive_override_after_scoring"] == 1
+    assert report["decision_counts"]["prevented_regression_after_scoring"] == 1
+    assert report["unsafe_override_count"] == 0
+    assert report["runtime_guarded_score"] > report["baseline_score"]
+    assert report["candidate_worth_runtime_overlay"] is True
+    selected = {row["case_id"]: row for row in report["cases"]}
+    assert selected["safe_opening"]["selected_source"] == "final"
+    assert selected["safe_opening"]["guard_reason"] == "runtime_static_and_rule_guard_passed"
+    assert selected["promotion_regression"]["selected_source"] == "baseline"
+    assert selected["promotion_regression"]["guard_reason"] == "nonqueen_promotion_downgrade_without_runtime_tactical_reason"
+
+
 def test_quick_gate_does_not_promote_on_loss_or_hash_without_score_and_matched_probe():
     module = _load_validation_module()
     summary = {

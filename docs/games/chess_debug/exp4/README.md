@@ -107,6 +107,8 @@ move = choose_experiment_pv_move(
 - `/home/s92137/chess_results/exp4_17_gate_accounting_cleanup`（exp4_17 gate accounting cleanup）
 - `/home/s92137/chess_results/exp4_18_full_broad_learning_diagnostic`（exp4_18 full heavy sanity；確認 broad generalization 仍未通過）
 - `/home/s92137/chess_results/exp4_18_e_pawn_gate_accounting_fix`（exp4_18 e_pawn opening-book equivalence gate accounting fix）
+- `/home/s92137/chess_results/exp4_19_guarded_overlay_attribution`（exp4_19 baseline-default guarded overlay attribution）
+- `/home/s92137/chess_results/exp4_20_runtime_guarded_overlay`（exp4_20 no-label runtime guarded overlay simulator）
 
 其中 `exp4_04_probe_policy_fixed` 是目前用來驗證「probe policy 修正後」的正式 quick gate artifact。
 
@@ -133,6 +135,60 @@ exp4_18 不再修 special-rule，而是跑不跳過 heavy sanity 的 broad learn
 詳細報告：
 
 - [`2026-05-12_exp4_18_full_broad_learning_diagnostic.md`](2026-05-12_exp4_18_full_broad_learning_diagnostic.md)
+
+## exp4_19 guarded overlay attribution（2026-05-12）
+
+詳細報告：[`2026-05-12_exp4_19_guarded_overlay_attribution.md`](2026-05-12_exp4_19_guarded_overlay_attribution.md)
+
+exp4_18 證明 full final replacement 仍等於 baseline：`0.8693 -> 0.8693`。exp4_19 不再盲目加訓練資料，而是評估「baseline 預設 + 只接受 deterministic 正向 / 不退步覆蓋」是否值得做成 runtime guard。
+
+實跑結果：
+
+| 指標 | 數值 |
+|---|---:|
+| baseline_score | `0.8693` |
+| final_score | `0.8693` |
+| guarded_overlay_score | `0.9231` |
+| delta_vs_baseline | `+0.0538` |
+| positive_override_count | `1` |
+| prevented_regression_count | `1` |
+| unsafe_override_count | `0` |
+| candidate_worth_runtime_overlay | `true` |
+
+判讀：
+
+- full replacement 會讓「final 修正 mistake_retention」與「final 在 promotion_white 退步」互相抵消。
+- guarded overlay 會採用 `mistake_retention_game_900002_ply_1: d7d5`，但在 `promotion_white` 回退 baseline `e7e8q`。
+- 這是 label-based attribution upper-bound，不能直接當 production evidence；下一步要把它改成不依賴 expected label 的 runtime guarded overlay。
+- promotion 仍 false，因為本輪是 `--quick-retrain-skip-heavy-sanity` 且 broad generalization 未證明。
+
+## exp4_20 runtime guarded overlay simulator（2026-05-12）
+
+詳細報告：[`2026-05-12_exp4_20_runtime_guarded_overlay.md`](2026-05-12_exp4_20_runtime_guarded_overlay.md)
+
+exp4_19 還是 label-based attribution。exp4_20 把同一思路改成 no-label runtime simulator：決策時不讀 expected label，只用合法性、static-like score window 與 promotion subtype oracle 決定是否採用 final。
+
+實跑結果：
+
+| 指標 | 數值 |
+|---|---:|
+| baseline_score | `0.8693` |
+| final_score | `0.8693` |
+| runtime_guarded_score | `0.9231` |
+| delta_vs_baseline | `+0.0538` |
+| runtime_guard_allowed | `2` |
+| runtime_guard_fallback | `1` |
+| positive_override_after_scoring | `1` |
+| prevented_regression_after_scoring | `1` |
+| unsafe_override_after_scoring | `0` |
+| diagnostic_uses_expected_labels_for_decision | `false` |
+
+判讀：
+
+- `mistake_retention_game_900002_ply_1`：runtime guard 採用 final `d7d5`。
+- `promotion_white`：runtime guard 擋住 final `e7e8n`，回退 baseline `e7e8q`。
+- guarded simulator 不偷看 label 也重現 exp4_19 的 `0.9231` 上界。
+- 仍不能 promotion：production choose path 尚未接入、heavy sanity skipped、broad generalization 未證明。
 
 ## exp4_07 evidence accounting cleanup（2026-05-11）
 
@@ -245,6 +301,9 @@ aggregate 新增 `multi_good_revoked_by_search_guard_count`。
 | exp4_15 | retention guard bug fix + chess_pv 消費 rule_type + king-safety isolated probe + targeted rule probe | TBD | TBD | exp4_14 `mistake_retention_regressed` 確認是 retention_guard 讀錯來源的 false alarm；trainer 新增 `RULE_FEATURE_BOOST_TYPES` 在 castling/e.p./underpromotion rows 加 extra repeat；king-safety isolated probe 真訓練單獨 model 確認 feature/decision-path gap |
 | exp4_16 | rule-aware final fusion for special moves | **0.9231 (+0.0538)** ✅ | **6/7** ⚠ | short castle final 從 `d2d4` 改為 `e1g1`；en-passant 保持 `d5e6`；rule-aware 成功後鎖住 final move，不再被 ordinary policy override 蓋掉；但 knight mate promotion 退成 rook promotion，promotion 仍 false |
 | exp4_17 | special-rule subtype + choose/explain consistency + gate accounting cleanup | **0.8693 (=baseline)** ⚠ | **7/7** ✅ | promotion subtype 修正，`e7e8n` 不再被 `e7e8r` 蓋掉；新增 `fixed_depth_*` profile；low-margin override 不再因 move selection 被錯列 blocker；opening alignment 排除 mistake_retention rows；promotion 仍 false，因 broad learning / heavy sanity / deterministic improvement 未過 |
+| exp4_18 | full broad learning diagnostic + e_pawn gate accounting fix | **0.8693 (=baseline)** ⚠ | **7/7** ✅ | full heavy sanity 確認 broad generalization 仍未過；`d7d5` 等 opening-book 等價回應修正 e_pawn 假 blocker |
+| exp4_19 | guarded overlay attribution | **overlay 0.9231 (+0.0538)** ✅ | **7/7** ✅ | full replacement 仍等於 baseline，但 baseline-default guarded overlay 上界可提升；目前是 label-based diagnostic，下一步要實作 runtime guard |
+| exp4_20 | no-label runtime guarded overlay simulator | **runtime overlay 0.9231 (+0.0538)** ✅ | **7/7** ✅ | 不讀 expected label 也能採用 `d7d5` 並擋住 `e7e8n` promotion regression；production choose path 尚未接入 |
 
 ## exp4_17 special-rule subtype + gate accounting cleanup（2026-05-12）
 
@@ -687,5 +746,11 @@ exp4_08 顯示 e_pawn 真失敗只剩 1 個 case (`gate_e_pawn_hard_001` × cp10
 
 ## 歷程報告
 
+- [2026-05-12 Exp4_19 guarded overlay attribution](2026-05-12_exp4_19_guarded_overlay_attribution.md)
+- [2026-05-12 Exp4_20 runtime guarded overlay simulator](2026-05-12_exp4_20_runtime_guarded_overlay.md)
+- [2026-05-12 Exp4_18 full broad learning diagnostic](2026-05-12_exp4_18_full_broad_learning_diagnostic.md)
+- [2026-05-12 Exp4_17 special-rule subtype consistency](2026-05-12_exp4_17_special_rule_subtype_consistency.md)
+- [2026-05-12 Exp4_16 vs Exp5_08 diagnostic sparring](2026-05-12_exp4_16_vs_exp5_08_sparring.md)
+- [2026-05-12 Exp4_16 rule-aware final fusion](2026-05-12_exp4_16_rule_aware_final_fusion.md)
 - [2026-05-11 Exp4 對齊 Exp3 Exp34 驗收鏈](2026-05-11_exp4_exp34_gate_alignment.md)
 - [2026-05-11 Exp4_05 暫存工作紀錄：opening margin / MCTS 對齊](2026-05-11_exp4_05_working_state_tmp.md)

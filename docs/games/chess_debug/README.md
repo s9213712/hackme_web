@@ -237,6 +237,23 @@ exp4_18 full broad learning diagnostic + e_pawn gate accounting fix（2026-05-12
 - 修正：`gate_e_pawn_easy_002/003` 中黑方 `d7d5` 這類 quiet-opening 合理中央回應不再被誤判為 `e7e5` learning failure；新 classifier 把 `true_e_pawn_final_decision_blocked` 從 4 降為 0，`e_pawn_equivalent_credit_pass_rate` 從 0.7778 升到 1.0。
 - quick confirmation：`PARTIAL`，promotion false；e_pawn false blocker 已移除，但 heavy sanity skipped、deterministic 未提升、balanced_fusion generalization 未證明仍阻擋 promotion。
 
+exp4_19 guarded overlay attribution（2026-05-12）：
+
+- 詳細報告：[`exp4/2026-05-12_exp4_19_guarded_overlay_attribution.md`](exp4/2026-05-12_exp4_19_guarded_overlay_attribution.md)。
+- result dir：`/home/s92137/chess_results/exp4_19_guarded_overlay_attribution`
+- 結果：full replacement 仍是 `0.8693`，但 baseline-default guarded overlay attribution 可到 `0.9231`，delta `+0.0538`。
+- 關鍵：採用 final 的 `mistake_retention_game_900002_ply_1: d7d5`，但對 `promotion_white` 回退 baseline `e7e8q`，因此避免 final candidate 的局部 regression。
+- 判讀：這是 label-based upper-bound，不是 production evidence；promotion 仍 false。下一步應把它改成 runtime 可用的 guarded overlay，使用 search/static/special-rule/oracle 等 runtime 訊號，而不是 deterministic expected label。
+
+exp4_20 runtime guarded overlay simulator（2026-05-12）：
+
+- 詳細報告：[`exp4/2026-05-12_exp4_20_runtime_guarded_overlay.md`](exp4/2026-05-12_exp4_20_runtime_guarded_overlay.md)。
+- result dir：`/home/s92137/chess_results/exp4_20_runtime_guarded_overlay`
+- 結果：no-label runtime simulator 也達到 `0.9231`，delta vs baseline `+0.0538`，`unsafe_override_after_scoring=0`。
+- 關鍵：guard 不讀 expected label；用合法性、static-like score window、promotion subtype oracle 判斷是否採用 final。
+- `mistake_retention_game_900002_ply_1`：採用 final `d7d5`；`promotion_white`：擋住 final `e7e8n`，回退 baseline `e7e8q`。
+- 判讀：exp4_20 已證明 runtime guard 規則本身有效，但尚未接到 production choose path；promotion 仍 false。
+
 exp4_14 balanced curriculum + retention rehearsal + budget + rollback guard（2026-05-12）：
 
 - special-rule weights 大幅下調（castling/e.p. 3→1.5、knight_mate/underpromote 4→2、queen 1→0.75）；新增 3 個 short-castle FEN 變體。
