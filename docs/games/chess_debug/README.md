@@ -32,13 +32,14 @@ exp3 的價值已經完成：它證明了 replay validation、deterministic gate
 - exp4：推進 Policy/Value + MCTS。
 - exp5：推進 NNUE-like evaluator + alpha-beta/PVS。
 
-### exp5 最新進度（截至 2026-05-12 exp5_14）
+### exp5 最新進度（截至 2026-05-12 exp5_14b）
 
 - exp5_12 已把 exp5_08 / exp5_10 validated candidate promoted 到 runtime production model（sha256 `c47ef752...`）。
 - exp5_13 補上 runtime rule-priority / stalemate hardening；model artifact unchanged，但 production runtime behavior changed by code path。
 - exp5_13 validation：137 cases、72 true held-out、overlap audit 0；runtime candidate 115/137 = 0.839416，baseline 112/137 = 0.817518，Δ +0.021898。
 - rule smoke 18/18，illegal_rate 0.0，suspicious_rate 0.0，clean_regressed_count 0，repeatability 5/5 且 std_delta 0.0。
 - exp5_14 opening audit：27/27 opening rows are questionable；0 clean true opening regressions；opening weakness is not a production blocker but cannot be used as clean training evidence yet。
+- exp5_14b clean opening expansion：31 clean multi-good rows，kept overlap 0；current production-equivalent opening score is only 1/31, so exp5_15 should target opening curriculum against current production。
 - 詳見 [`exp5/README.md`](exp5/) 歷程總表 + 各輪 ledger。
 
 ## Experiment 1：基礎搜尋與對局學習

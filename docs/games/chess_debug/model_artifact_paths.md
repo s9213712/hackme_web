@@ -452,6 +452,28 @@ dashboard selection path：
 - decision：`production_blocker=false`, `clean_true_opening_regressions=0`, `exp5_15_clean_opening_curriculum_rows=0`
 - next：build curated opening-book / stronger-teacher labels before exp5_15 candidate training
 
+2026-05-12 exp5_14b clean opening held-out expansion：
+
+- builder script：`scripts/games/chess_exp5_clean_opening_expansion.py`
+- output root：`/home/s92137/chess_results/exp5_14b_clean_opening_heldout/`
+- summary：`/home/s92137/chess_results/exp5_14b_clean_opening_heldout/summary.json`
+- clean opening cases：`/home/s92137/chess_results/exp5_14b_clean_opening_heldout/clean_opening_cases.jsonl`
+- clean opening held-out：`/home/s92137/chess_results/exp5_14b_clean_opening_heldout/clean_opening_heldout.jsonl`
+- clean opening curriculum：`/home/s92137/chess_results/exp5_14b_clean_opening_heldout/clean_opening_curriculum.jsonl`
+- evaluation：`/home/s92137/chess_results/exp5_14b_clean_opening_heldout/clean_opening_evaluation.json`
+- raw curated rows：`40`
+- kept clean opening rows：`31`
+- label quality：`clean=31`
+- multi-good rows：`31`
+- kept overlap：`train=0`, `benchmark=0`, `position_id=0`
+- skipped overlap before keep：`raw_train=1`, `raw_benchmark=8`, `skipped_rows=9`
+- dataset hash：`d8888d5116cb9ffd542748c2187b08c4db6535cd24ece4c1722bcf87df55dd70`
+- evaluation model：`/home/s92137/chess_results/exp5_08_stage_candidate/chess_experiment_5_nnue_stage_candidate.json`
+- evaluation model source：`promoted_stage_candidate_fallback` because local repo runtime override path was absent
+- current production-equivalent opening score：`1/31 = 0.032258`
+- bundled baseline opening score：`1/31 = 0.032258`
+- decision：`exp5_14b pass=true`; clean opening curriculum is ready for exp5_15, but this is not promotion evidence
+
 ## auto-retrain 與 promotion 關係
 
 auto-retrain 入口：
