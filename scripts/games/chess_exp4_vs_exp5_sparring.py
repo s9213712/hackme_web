@@ -53,6 +53,9 @@ SMOKE_SEEDS: list[dict] = [
         "expected_move_any": ["f7e8", "f7f8"],
         "audit_rules": {"must_checkmate_in_one": True},
         "source_ref": "EXP5_STRENGTH_CASES.mate_in_one_white",
+        "forced_fixture_win": True,
+        "strength_counted": False,
+        "color_mirror_group": "mate_in_one_kqk",
     },
     {
         "seed_id": "smoke_02_mate_in_one_black",
@@ -65,6 +68,9 @@ SMOKE_SEEDS: list[dict] = [
         "expected_move_any": ["f2e1", "f2f1"],
         "audit_rules": {"must_checkmate_in_one": True},
         "source_ref": "EXP5_STRENGTH_CASES.mate_in_one_black",
+        "forced_fixture_win": True,
+        "strength_counted": False,
+        "color_mirror_group": "mate_in_one_kqk",
     },
     {
         "seed_id": "smoke_03_castle_kingside_white",
@@ -77,6 +83,9 @@ SMOKE_SEEDS: list[dict] = [
         "expected_move_any": ["e1g1"],
         "audit_rules": {"expected_castle": True},
         "source_ref": "SPECIAL_RULE_CASES.castle_kingside_white",
+        "forced_fixture_win": False,
+        "strength_counted": True,
+        "color_mirror_group": "castle_kingside_symmetric",
     },
     {
         "seed_id": "smoke_04_castle_kingside_black",
@@ -89,6 +98,9 @@ SMOKE_SEEDS: list[dict] = [
         "expected_move_any": ["e8g8"],
         "audit_rules": {"expected_castle": True},
         "source_ref": "SPECIAL_RULE_CASES.castle_kingside_black",
+        "forced_fixture_win": False,
+        "strength_counted": True,
+        "color_mirror_group": "castle_kingside_symmetric",
     },
     {
         "seed_id": "smoke_05_promotion_to_queen_white",
@@ -101,6 +113,9 @@ SMOKE_SEEDS: list[dict] = [
         "expected_move_any": ["e7e8q"],
         "audit_rules": {"must_promote": True, "expected_promotion": "q"},
         "source_ref": "SPECIAL_RULE_CASES.promotion_to_queen_white",
+        "forced_fixture_win": False,
+        "strength_counted": True,
+        "color_mirror_group": "promotion_to_queen_white_only",
     },
     {
         "seed_id": "smoke_06_forced_queen_capture_black",
@@ -113,6 +128,9 @@ SMOKE_SEEDS: list[dict] = [
         "expected_move_any": ["e8e7"],
         "audit_rules": {"requires_capture": True, "min_material_gain": 800},
         "source_ref": "EXP5_STRENGTH_CASES.forced_queen_capture",
+        "forced_fixture_win": True,
+        "strength_counted": False,
+        "color_mirror_group": "forced_queen_capture_black_only",
     },
 ]
 
@@ -487,6 +505,9 @@ def play_one_game(
         "oracle_source": seed["oracle_source"],
         "label_quality": seed["label_quality"],
         "source_ref": seed["source_ref"],
+        "forced_fixture_win": bool(seed.get("forced_fixture_win")),
+        "strength_counted": bool(seed.get("strength_counted")),
+        "color_mirror_group": str(seed.get("color_mirror_group") or ""),
         "start_fen": seed["fen"],
         "side_to_move": seed["side_to_move"],
         "exp4_color": exp4_color,
@@ -536,7 +557,24 @@ def write_artifacts(out_dir: Path, game_reports: list[dict], meta: dict) -> None
     for g in game_reports:
         (pgn_dir / f"{g['seed_id']}.pgn").write_text(g["pgn"], encoding="utf-8")
 
-    wdl = {"exp4_win": 0, "exp5_win": 0, "draw": 0, "illegal_exp4": 0, "illegal_exp5": 0}
+    raw_outcome = {
+        "exp4_win": 0,
+        "exp5_win": 0,
+        "draw": 0,
+        "illegal_exp4": 0,
+        "illegal_exp5": 0,
+        "games_total": 0,
+    }
+    strength_counted_outcome = {
+        "exp4_win": 0,
+        "exp5_win": 0,
+        "draw": 0,
+        "illegal_exp4": 0,
+        "illegal_exp5": 0,
+        "games_counted": 0,
+    }
+    forced_fixture_count = 0
+    mirror_group_breakdown: dict[str, dict] = {}
     color_split = {"exp4_white": 0, "exp4_black": 0}
     illegal_count = 0
     suspicious_count = 0
@@ -546,7 +584,33 @@ def write_artifacts(out_dir: Path, game_reports: list[dict], meta: dict) -> None
     expected_match = {"hit": 0, "miss": 0, "no_label": 0}
 
     for g in game_reports:
-        wdl[g["outcome"]] = wdl.get(g["outcome"], 0) + 1
+        outcome = g["outcome"]
+        raw_outcome[outcome] = raw_outcome.get(outcome, 0) + 1
+        raw_outcome["games_total"] += 1
+        if g.get("strength_counted"):
+            strength_counted_outcome[outcome] = strength_counted_outcome.get(outcome, 0) + 1
+            strength_counted_outcome["games_counted"] += 1
+        if g.get("forced_fixture_win"):
+            forced_fixture_count += 1
+        group = str(g.get("color_mirror_group") or "")
+        if group:
+            slot_g = mirror_group_breakdown.setdefault(
+                group,
+                {"games": 0, "exp4_win": 0, "exp5_win": 0, "draw": 0, "illegal": 0, "members": []},
+            )
+            slot_g["games"] += 1
+            if outcome in ("exp4_win", "exp5_win", "draw"):
+                slot_g[outcome] += 1
+            else:
+                slot_g["illegal"] += 1
+            slot_g["members"].append(
+                {
+                    "seed_id": g["seed_id"],
+                    "exp4_color": g["exp4_color"],
+                    "outcome": outcome,
+                    "plies": g["plies"],
+                }
+            )
         color_split[f"exp4_{g['exp4_color']}"] += 1
         illegal_count += g["illegal_count"]
         for record in g["ply_records"]:
@@ -561,8 +625,8 @@ def write_artifacts(out_dir: Path, game_reports: list[dict], meta: dict) -> None
             {"games": 0, "exp4_win": 0, "exp5_win": 0, "draw": 0, "illegal": 0},
         )
         slot["games"] += 1
-        if g["outcome"] in ("exp4_win", "exp5_win", "draw"):
-            slot[g["outcome"]] += 1
+        if outcome in ("exp4_win", "exp5_win", "draw"):
+            slot[outcome] += 1
         else:
             slot["illegal"] += 1
         if g.get("expected_move_any"):
@@ -580,7 +644,10 @@ def write_artifacts(out_dir: Path, game_reports: list[dict], meta: dict) -> None
 
     summary = {
         "meta": meta,
-        "wdl": wdl,
+        "raw_outcome": raw_outcome,
+        "strength_counted_outcome": strength_counted_outcome,
+        "forced_fixture_count": forced_fixture_count,
+        "mirror_group_breakdown": mirror_group_breakdown,
         "color_split": color_split,
         "illegal_count": illegal_count,
         "suspicious_count": suspicious_count,
@@ -641,12 +708,22 @@ def write_artifacts(out_dir: Path, game_reports: list[dict], meta: dict) -> None
         "- diagnostic_only = true",
         "- production_model_unchanged = true",
         "",
-        "## W/D/L",
-        f"- exp4_win: {wdl['exp4_win']}",
-        f"- exp5_win: {wdl['exp5_win']}",
-        f"- draw: {wdl['draw']}",
-        f"- illegal_exp4: {wdl.get('illegal_exp4', 0)}",
-        f"- illegal_exp5: {wdl.get('illegal_exp5', 0)}",
+        "## raw_outcome (all games, includes forced-fixture seeds)",
+        f"- exp4_win: {raw_outcome['exp4_win']}",
+        f"- exp5_win: {raw_outcome['exp5_win']}",
+        f"- draw: {raw_outcome['draw']}",
+        f"- illegal_exp4: {raw_outcome.get('illegal_exp4', 0)}",
+        f"- illegal_exp5: {raw_outcome.get('illegal_exp5', 0)}",
+        f"- games_total: {raw_outcome['games_total']}",
+        "",
+        "## strength_counted_outcome (forced-fixture seeds excluded)",
+        f"- exp4_win: {strength_counted_outcome['exp4_win']}",
+        f"- exp5_win: {strength_counted_outcome['exp5_win']}",
+        f"- draw: {strength_counted_outcome['draw']}",
+        f"- illegal_exp4: {strength_counted_outcome.get('illegal_exp4', 0)}",
+        f"- illegal_exp5: {strength_counted_outcome.get('illegal_exp5', 0)}",
+        f"- games_counted: {strength_counted_outcome['games_counted']}",
+        f"- forced_fixture_count (excluded): {forced_fixture_count}",
         "",
         "## Color split (exp4 side)",
         f"- exp4_white: {color_split['exp4_white']}",
@@ -674,6 +751,15 @@ def write_artifacts(out_dir: Path, game_reports: list[dict], meta: dict) -> None
             f"- {ct}: games={slot['games']} exp4_win={slot['exp4_win']} "
             f"exp5_win={slot['exp5_win']} draw={slot['draw']} illegal={slot['illegal']}"
         )
+
+    if mirror_group_breakdown:
+        lines.append("")
+        lines.append("## Color mirror groups")
+        for group, slot in sorted(mirror_group_breakdown.items()):
+            lines.append(
+                f"- {group}: games={slot['games']} exp4_win={slot['exp4_win']} "
+                f"exp5_win={slot['exp5_win']} draw={slot['draw']} illegal={slot['illegal']}"
+            )
 
     if suspicious_count or illegal_count:
         lines.append("")
