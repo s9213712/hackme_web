@@ -75,6 +75,7 @@ from services.games.external_replay_safety import (  # noqa: E402
 TRUSTED_SOURCE_WHITELIST = frozenset(
     {
         "imported_dataset",
+        "imported_dataset_teacher_audited",
         "teacher_guidance",
         "benchmark",
         "external",
@@ -86,6 +87,7 @@ TRUSTED_SOURCE_WHITELIST = frozenset(
 
 DEFAULT_EXTERNAL_CAPS = {
     "imported_dataset": 200,
+    "imported_dataset_teacher_audited": 200,
     "teacher_guidance": 200,
     "benchmark": 100,
     "external": 100,
