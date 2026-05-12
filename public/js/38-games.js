@@ -11,7 +11,24 @@ let localGameModuleActiveApi = null;
 let localGameModuleMountedKey = "";
 let localGameModuleTouchStart = null;
 let localGameModulePressedControl = null;
-const LOCAL_GAME_MODULE_KEYS = new Set(["snake", "game_2048", "brick_breaker", "reversi", "go", "gomoku"]);
+
+function localGameCatalogKeys() {
+  const catalog = Array.isArray(window.HACKME_GAME_CATALOG) ? window.HACKME_GAME_CATALOG : [];
+  return new Set(catalog.filter((game) => !game.legacy).map((game) => game.key));
+}
+
+function isLocalGameCatalogKey(key) {
+  return localGameCatalogKeys().has(key);
+}
+
+function isLocalGameModuleAvailable(key) {
+  return Boolean(window.HACKME_GAME_MODULES?.[key]?.mount);
+}
+
+function filterAvailableGameCatalog(games) {
+  const rows = Array.isArray(games) ? games : [];
+  return rows.filter((game) => !isLocalGameCatalogKey(game.key) || isLocalGameModuleAvailable(game.key));
+}
 
 function gameUrlParams() {
   try {
@@ -134,7 +151,7 @@ function switchGameView(key) {
   gameSelectedKey = key || "chess";
   const select = $("game-select");
   if (select && select.value !== gameSelectedKey) select.value = gameSelectedKey;
-  const isLocalGameModule = LOCAL_GAME_MODULE_KEYS.has(gameSelectedKey);
+  const isLocalGameModule = isLocalGameModuleAvailable(gameSelectedKey);
   const selectedViewModule = activeGameViewModule();
   Object.values(gameViewModules()).forEach((module) => {
     (module.panelIds || []).forEach((id) => {
@@ -260,7 +277,7 @@ function mountLocalGameModule(key) {
 function renderGameCatalog(games) {
   const wrap = $("game-catalog-list");
   if (!wrap) return;
-  const rows = Array.isArray(games) ? games : [];
+  const rows = filterAvailableGameCatalog(games);
   if (typeof renderChessPracticeDifficultyOptions === "function") renderChessPracticeDifficultyOptions(rows);
   wrap.innerHTML = rows.length ? `
     <div class="game-select-panel">
@@ -367,7 +384,7 @@ async function loadSelectedGameLeaderboard() {
   const key = gameSelectedKey || "chess";
   const viewModule = activeGameViewModule();
   let path = viewModule?.leaderboardPath ? viewModule.leaderboardPath(legacyGameRuntime()) : "/games/chess/leaderboard";
-  if (LOCAL_GAME_MODULE_KEYS.has(key)) {
+  if (isLocalGameModuleAvailable(key)) {
     path = `/games/${encodeURIComponent(key)}/solo-leaderboard`;
   }
   const data = await gameRequest(path);
@@ -588,7 +605,7 @@ document.addEventListener("keydown", (event) => {
   if ((!editing || gameSelectedKey === "1a2b") && dispatchActiveGameViewEvent("keydown", event)) {
     return;
   }
-  if (!editing && LOCAL_GAME_MODULE_KEYS.has(gameSelectedKey) && localGameModuleActiveApi?.onKey) {
+  if (!editing && isLocalGameModuleAvailable(gameSelectedKey) && localGameModuleActiveApi?.onKey) {
     if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", " "].includes(event.key)) event.preventDefault();
     localGameModuleActiveApi.onKey(event, true);
   }
@@ -598,7 +615,7 @@ document.addEventListener("keyup", (event) => {
   if (dispatchActiveGameViewEvent("keyup", event)) {
     return;
   }
-  if (LOCAL_GAME_MODULE_KEYS.has(gameSelectedKey) && localGameModuleActiveApi?.onKey) {
+  if (isLocalGameModuleAvailable(gameSelectedKey) && localGameModuleActiveApi?.onKey) {
     localGameModuleActiveApi.onKey(event, false);
   }
 });

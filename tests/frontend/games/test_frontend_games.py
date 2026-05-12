@@ -106,7 +106,9 @@ def test_game_zone_frontend_assets_are_wired():
     assert "openStandaloneGamePage" not in games_js
     assert "gameShouldOpenInStandalonePage" not in games_js
     assert "mountLocalGameModule" in games_js
-    assert "LOCAL_GAME_MODULE_KEYS" in games_js
+    assert "filterAvailableGameCatalog" in games_js
+    assert "isLocalGameModuleAvailable" in games_js
+    assert "isLocalGameCatalogKey" in games_js
     assert 'id="local-module-game-panel"' in index_html
     assert 'id="local-module-game-root"' in index_html
     assert 'id="local-module-game-controls"' in index_html
@@ -131,6 +133,9 @@ def test_game_zone_frontend_assets_are_wired():
     assert 'registerHackmeLocalGameModule("reversi"' in local_reversi_js
     assert 'registerHackmeLocalGameModule("go"' in local_go_js
     assert 'registerHackmeLocalGameModule("gomoku"' in local_gomoku_js
+    assert 'typeof window.mountHackmeLocalDiscGame !== "function"' in local_reversi_js
+    assert 'typeof window.mountHackmeLocalDiscGame !== "function"' in local_go_js
+    assert 'typeof window.mountHackmeLocalDiscGame !== "function"' in local_gomoku_js
     assert "touchstart" in games_js
     assert "submitLocalGameModuleScore" in games_js
     assert "HACKME_GAME_VIEW_MODULES" in game_view_registry_js
