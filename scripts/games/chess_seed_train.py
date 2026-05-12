@@ -20,7 +20,6 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 import sys
-from typing import Callable
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -58,6 +57,14 @@ from services.games.chess_pv import (  # noqa: E402
 from services.games.chess_nnue import (  # noqa: E402
     normalize_experiment_nnue_replay_sample,
     train_experiment_nnue_from_replay_samples,
+)
+from services.games.external_replay_safety import (  # noqa: E402
+    EngineMutationSpec,
+    MutationPolicy,
+    format_policy_violation,
+    is_default_model_path,
+    serialize_json_payload,
+    validate_mutation_policy,
 )
 
 
@@ -248,100 +255,52 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _is_default_model_path(
-    explicit_path: str,
-    *,
-    bundled_resolver: Callable[[], Path],
-    default_resolver: Callable[[], Path],
-) -> tuple[bool, str]:
-    """Return (is_default, reason).
-
-    Treats an explicit `--experiment-X-model-path` as "default" if it resolves
-    to the bundled artifact, the runtime default artifact, or any file under
-    `services/games/models/`. Blocks the W4.1d escape "user explicitly typed
-    the bundled path so the guard let it through".
-    """
-    if not explicit_path:
-        return False, ""
-    try:
-        explicit = Path(explicit_path).expanduser().resolve()
-    except Exception:
-        return False, ""
-    try:
-        bundled = bundled_resolver().resolve()
-    except Exception:
-        bundled = None
-    try:
-        runtime_default = default_resolver().resolve()
-    except Exception:
-        runtime_default = None
-    if bundled is not None and explicit == bundled:
-        return True, f"resolves to bundled path {bundled}"
-    if runtime_default is not None and explicit == runtime_default:
-        return True, f"resolves to runtime default {runtime_default}"
-    bundled_models_dir = (ROOT / "services" / "games" / "models").resolve()
-    try:
-        explicit.relative_to(bundled_models_dir)
-    except ValueError:
-        return False, ""
-    return True, f"resides under bundled-models dir {bundled_models_dir}"
+def _build_mutation_policy(args: argparse.Namespace) -> MutationPolicy:
+    """Translate argparse.Namespace into the shared MutationPolicy contract."""
+    return MutationPolicy(
+        dry_run=bool(args.dry_run),
+        allow_default_model_paths=bool(args.allow_default_model_paths),
+        include_external_replay=bool(args.include_replay_jsonl),
+        engines=(
+            EngineMutationSpec(
+                engine_id="exp4 PV",
+                cli_path_flag="--experiment-4-model-path",
+                cli_skip_flag="--skip-exp4",
+                explicit_path=str(args.experiment_4_model_path or ""),
+                skip=bool(args.skip_exp4),
+                bundled_resolver=bundled_chess_pv_model_path,
+                default_resolver=default_chess_pv_model_path,
+            ),
+            EngineMutationSpec(
+                engine_id="exp5 NNUE",
+                cli_path_flag="--experiment-5-model-path",
+                cli_skip_flag="--skip-exp5",
+                explicit_path=str(args.experiment_5_model_path or ""),
+                skip=bool(args.skip_exp5),
+                bundled_resolver=bundled_chess_nnue_model_path,
+                default_resolver=default_chess_nnue_model_path,
+            ),
+        ),
+    )
 
 
 def _assert_external_replay_safety(args: argparse.Namespace) -> None:
-    """Block non-dry-run external replay from silently writing default models.
+    """Thin wrapper around the shared mutation-policy validator.
 
     Self-play warm-up (no --include-replay-jsonl) keeps its pre-existing
-    behaviour of writing to bundled paths; this guard only fires for the
-    new external-replay code path. Pass --allow-default-model-paths to
-    override (useful for one-off recovery runs, not the default flow).
+    behaviour; the validator is a no-op in that case. See
+    services.games.external_replay_safety.validate_mutation_policy for the
+    full CLI mode matrix.
     """
-    if not args.include_replay_jsonl:
-        return
-    if args.dry_run:
-        return
-    if args.allow_default_model_paths:
-        return
-    problems: list[str] = []
-    if not args.skip_exp4:
-        if not args.experiment_4_model_path:
-            problems.append(
-                "exp4 PV: pass --experiment-4-model-path <staging/candidate.json> "
-                "or --skip-exp4 to gate exp4 out of this run."
-            )
-        else:
-            is_default, reason = _is_default_model_path(
-                args.experiment_4_model_path,
-                bundled_resolver=bundled_chess_pv_model_path,
-                default_resolver=default_chess_pv_model_path,
-            )
-            if is_default:
-                problems.append(f"exp4 PV: --experiment-4-model-path {reason}")
-    if not args.skip_exp5:
-        if not args.experiment_5_model_path:
-            problems.append(
-                "exp5 NNUE: pass --experiment-5-model-path <staging/candidate.json> "
-                "or --skip-exp5 to gate exp5 out of this run."
-            )
-        else:
-            is_default, reason = _is_default_model_path(
-                args.experiment_5_model_path,
-                bundled_resolver=bundled_chess_nnue_model_path,
-                default_resolver=default_chess_nnue_model_path,
-            )
-            if is_default:
-                problems.append(f"exp5 NNUE: --experiment-5-model-path {reason}")
-    if not problems:
-        return
-    msg_lines = [
-        "error: refusing to train --include-replay-jsonl into default model paths.",
-        "Real (non-dry-run) external-replay warm-up must target explicit "
-        "candidate / staging artifacts, not bundled or runtime defaults:",
-    ]
-    msg_lines.extend(f"  - {p}" for p in problems)
-    msg_lines.append(
-        "Pass --allow-default-model-paths if you really intend to write defaults."
-    )
-    raise SystemExit("\n".join(msg_lines))
+    problems = validate_mutation_policy(_build_mutation_policy(args))
+    if problems:
+        raise SystemExit(format_policy_violation(problems))
+
+
+# Local alias preserved so existing tests that imported the helper from
+# chess_seed_train keep working. New code should import directly from the
+# services.games.external_replay_safety module.
+_is_default_model_path = is_default_model_path
 
 
 def _load_external_replay(paths: list[str]) -> tuple[list[dict], dict]:
@@ -455,16 +414,14 @@ def _dryrun_artifact_path(report_dir: Path) -> Path:
 def _write_dryrun_payload_artifact(payload: dict, artifact_path: Path) -> Path:
     """Persist the final payload to disk when dry-run skips write_training_report.
 
-    Dry-run is supposed to give the operator a tangible inspection target for
-    load_stats / cap_stats / normalize_validation / train_result.skipped_reason
-    — stdout alone is too easy to lose. Caller is expected to set
-    `payload['dry_run_artifact']` to `artifact_path` before invocation so the
-    saved file self-references its own location.
+    Caller is expected to set ``payload['dry_run_artifact']`` to
+    ``artifact_path`` before invocation so the saved file self-references its
+    own location. Uses the shared :func:`serialize_json_payload` so the disk
+    artifact is byte-identical to stdout (matched key order, ensure_ascii,
+    trailing newline) — not merely "same dict".
     """
     artifact_path.parent.mkdir(parents=True, exist_ok=True)
-    artifact_path.write_text(
-        json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
-    )
+    artifact_path.write_text(serialize_json_payload(payload), encoding="utf-8")
     return artifact_path
 
 
@@ -800,7 +757,11 @@ def main() -> int:
         payload["dry_run_artifact"] = str(artifact_path)
         _write_dryrun_payload_artifact(payload, artifact_path)
         _progress(f"dry-run JSON artifact written: {artifact_path}")
-    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    # Stdout uses the SAME canonical serializer as the dry-run artifact so
+    # the two streams are byte-identical (matched key order, ensure_ascii,
+    # trailing newline). Do not switch to json.dumps inline — that's the
+    # exact drift W4.2 closes.
+    sys.stdout.write(serialize_json_payload(payload))
     _progress("phase result seed training: PASS")
     return 0
 
