@@ -361,6 +361,43 @@ def test_compute_invariants_no_seed_train_means_no_unaudited():
     assert inv["unaudited_imported_dataset_used_for_seed_train"] is False
 
 
+def test_compute_invariants_flags_network_pgn_download_when_url_used():
+    """W9: a pgn_to_replay stage with raw_internet_download=True
+    flips the any_network_pgn_download invariant. Audit gate is
+    separate (still required); the invariant is just for visibility."""
+    stages = [
+        {
+            "stage": STAGE_PGN_TO_REPLAY,
+            "diagnostic_only": True,
+            "model_mutation_in_this_stage": False,
+            "production_runtime_mutation": False,
+            "key_metrics": {
+                "source_urls_processed": 1,
+                "raw_internet_download": True,
+            },
+        }
+    ]
+    inv = compute_invariants(stages)
+    assert inv["any_network_pgn_download"] is True
+
+
+def test_compute_invariants_no_url_means_no_network():
+    stages = [
+        {
+            "stage": STAGE_PGN_TO_REPLAY,
+            "diagnostic_only": True,
+            "model_mutation_in_this_stage": False,
+            "production_runtime_mutation": False,
+            "key_metrics": {
+                "source_urls_processed": 0,
+                "raw_internet_download": False,
+            },
+        }
+    ]
+    inv = compute_invariants(stages)
+    assert inv["any_network_pgn_download"] is False
+
+
 # ---- build / render ----------------------------------------------------
 
 

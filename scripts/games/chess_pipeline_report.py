@@ -251,12 +251,16 @@ def normalize_stage(payload: dict, *, source_path: str = "") -> dict:
         base["diagnostic_only"] = bool(policy.get("diagnostic_only", True))
         base["key_metrics"] = {
             "pgn_paths_processed": counts.get("pgn_paths_processed", 0),
+            "source_urls_processed": counts.get("source_urls_processed", 0),
             "prepared_jsonls_attached": counts.get("prepared_jsonls_attached", 0),
             "games_imported": counts.get("games_imported", 0),
             "per_ply_samples_emitted": counts.get("per_ply_samples_emitted", 0),
             "output_jsonls": list(payload.get("output_jsonls") or []),
             "input_pgn_paths": list(payload.get("input_pgn_paths") or []),
+            "input_source_urls": list(payload.get("input_source_urls") or []),
+            "download_dir": payload.get("download_dir", ""),
             "raw_internet_download": bool(policy.get("raw_internet_download")),
+            "audit_gate_required": bool(policy.get("audit_gate_required", True)),
         }
         return base
 
@@ -279,6 +283,16 @@ def compute_invariants(stages: list[dict]) -> dict:
         if isinstance(breakdown, dict) and int(breakdown.get(_UNAUDITED_IMPORTED_DATASET, 0) or 0) > 0:
             unaudited_used = True
             break
+    # W9: surface whether any pgn_to_replay stage downloaded from the
+    # network. Even when True the audit gate (stage 00b) still runs;
+    # the invariant exists so a reviewer can see at-a-glance that
+    # network content reached the pipeline and decide whether the
+    # provenance is acceptable.
+    network_pgn_download = any(
+        s.get("stage") == STAGE_PGN_TO_REPLAY
+        and (s.get("key_metrics") or {}).get("raw_internet_download")
+        for s in stages
+    )
     return {
         "all_stages_diagnostic_only": all(s.get("diagnostic_only", True) for s in stages),
         "any_production_runtime_mutation": any(
@@ -286,6 +300,7 @@ def compute_invariants(stages: list[dict]) -> dict:
         ),
         "any_model_mutation": any(s.get("model_mutation_in_this_stage") for s in stages),
         "unaudited_imported_dataset_used_for_seed_train": unaudited_used,
+        "any_network_pgn_download": network_pgn_download,
         "stage_count": len(stages),
         "stages_seen": sorted({s["stage"] for s in stages}),
     }

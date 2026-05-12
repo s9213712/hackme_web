@@ -191,67 +191,102 @@ def run_pgn_input_stage(
     output_root: Path,
     log_dir: Path,
     weight: float = _PGN_DEFAULT_WEIGHT,
+    pgn_source_urls: list[str] | None = None,
+    pgn_download_dir: str = "",
+    pgn_refresh_downloads: bool = False,
 ) -> dict:
     """Stage 00: convert PGN sources to canonical per-ply replay JSONL.
 
-    Two parallel input lanes:
-      * ``--pgn-path``: raw PGN(s) → chess_pgn_to_replay → game-level JSONL
-        → expand to per-ply via :func:`_expand_game_level_to_per_ply`.
-      * ``--prepared-replay-jsonl``: already-canonical per-ply JSONL, passed
-        straight through to stage 4 (no re-validation here; the seed_train
-        normalize_validation step is the bouncer).
+    Three parallel input lanes:
+      * ``--pgn-path``: raw local PGN(s) → chess_pgn_to_replay → game-level
+        JSONL → expand to per-ply via :func:`_expand_game_level_to_per_ply`.
+      * ``--pgn-source-url`` (W9): remote PGN/archive URL → downloaded into
+        ``--pgn-download-dir`` (or chess_pgn_to_replay's default cache) →
+        same conversion + expansion pipeline. Each URL gets its own
+        ``pgn_url_<i>`` subdir. ``policy.raw_internet_download`` flips to
+        True for the run when any URL is given so the aggregator can
+        surface the network event as a cross-stage invariant.
+      * ``--prepared-replay-jsonl``: already-canonical per-ply JSONL,
+        passed straight through; the seed_train normalize_validation
+        step is the bouncer.
 
-    Synthesises ``summary.json`` with ``stage='pgn_to_replay'`` so the
-    aggregator picks it up via the self-stamped stage field (additive to the
-    fingerprint-based detection used for the older stages).
-
-    No network access in W7 v1 — ``raw_internet_download=False`` is asserted
-    in the policy block.
+    Whether the input is a local file or a downloaded URL, the row still
+    leaves stage 00 stamped ``training_eligible=False`` /
+    ``label_quality='review'`` — stage 00b's teacher audit is the only
+    gate that can produce training-safe rows.
     """
-    if not pgn_paths and not prepared_jsonls:
+    url_list = list(pgn_source_urls or [])
+    if not pgn_paths and not prepared_jsonls and not url_list:
         return {
             "stage": "pgn_to_replay",
             "status": "skipped",
-            "reason": "no --pgn-path / --prepared-replay-jsonl",
+            "reason": "no --pgn-path / --pgn-source-url / --prepared-replay-jsonl",
         }
     output_root.mkdir(parents=True, exist_ok=True)
     output_jsonls: list[str] = []
     games_imported = 0
     samples_emitted = 0
 
-    for i, pgn_path in enumerate(pgn_paths):
-        sub_dir = output_root / f"pgn_{i:02d}"
+    def _convert(
+        sub_dir: Path,
+        *,
+        cmd_args: list[str],
+        log_name: str,
+    ) -> tuple[int, int] | None:
         sub_dir.mkdir(parents=True, exist_ok=True)
         game_level = sub_dir / "pgn_game_level.jsonl"
-        cmd = [
-            sys.executable,
-            str(PGN_CONVERTER),
-            "--input-pgn",
-            pgn_path,
-            "--output-jsonl",
-            str(game_level),
-            "--replace-output",
-            "--allow-empty-output",
-        ]
-        log = log_dir / f"00_pgn_to_replay_{i:02d}.log"
-        rc = _run_subprocess(cmd, label=f"pgn_to_replay_{i:02d}", log_file=log)
+        cmd = [sys.executable, str(PGN_CONVERTER), *cmd_args,
+               "--output-jsonl", str(game_level),
+               "--replace-output", "--allow-empty-output"]
+        rc = _run_subprocess(cmd, label=log_name, log_file=log_dir / f"{log_name}.log")
         if rc != 0:
+            return None
+        if not game_level.exists():
+            return (0, 0)
+        per_ply = sub_dir / "pgn_per_ply_replay.jsonl"
+        g, s = _expand_game_level_to_per_ply(game_level, per_ply, weight=weight)
+        if s > 0:
+            output_jsonls.append(str(per_ply))
+        return g, s
+
+    for i, pgn_path in enumerate(pgn_paths):
+        result = _convert(
+            output_root / f"pgn_path_{i:02d}",
+            cmd_args=["--input-pgn", pgn_path],
+            log_name=f"00_pgn_to_replay_path_{i:02d}",
+        )
+        if result is None:
             return {
                 "stage": "pgn_to_replay",
                 "status": "failed",
-                "exit_code": rc,
-                "log": str(log),
+                "exit_code": 1,
+                "log": str(log_dir / f"00_pgn_to_replay_path_{i:02d}.log"),
             }
-        if not game_level.exists():
-            continue
-        per_ply = sub_dir / "pgn_per_ply_replay.jsonl"
-        g_count, s_count = _expand_game_level_to_per_ply(
-            game_level, per_ply, weight=weight
+        g, s = result
+        games_imported += g
+        samples_emitted += s
+
+    for i, url in enumerate(url_list):
+        cmd_args = ["--source-url", url]
+        if pgn_download_dir:
+            cmd_args.extend(["--download-dir", pgn_download_dir])
+        if pgn_refresh_downloads:
+            cmd_args.append("--refresh-downloads")
+        result = _convert(
+            output_root / f"pgn_url_{i:02d}",
+            cmd_args=cmd_args,
+            log_name=f"00_pgn_to_replay_url_{i:02d}",
         )
-        games_imported += g_count
-        samples_emitted += s_count
-        if s_count > 0:
-            output_jsonls.append(str(per_ply))
+        if result is None:
+            return {
+                "stage": "pgn_to_replay",
+                "status": "failed",
+                "exit_code": 1,
+                "log": str(log_dir / f"00_pgn_to_replay_url_{i:02d}.log"),
+            }
+        g, s = result
+        games_imported += g
+        samples_emitted += s
 
     prepared_attached: list[str] = []
     for p in prepared_jsonls:
@@ -260,15 +295,20 @@ def run_pgn_input_stage(
             output_jsonls.append(str(path))
             prepared_attached.append(str(path))
 
+    network_download_used = bool(url_list)
     summary = {
         "stage": "pgn_to_replay",
         "timestamp": _now_iso(),
         "output_dir": str(output_root),
         "input_pgn_paths": list(pgn_paths),
+        "input_source_urls": url_list,
+        "download_dir": pgn_download_dir or "",
+        "refresh_downloads": bool(pgn_refresh_downloads),
         "prepared_replay_jsonls": prepared_attached,
         "output_jsonls": output_jsonls,
         "counts": {
             "pgn_paths_processed": len(pgn_paths),
+            "source_urls_processed": len(url_list),
             "prepared_jsonls_attached": len(prepared_attached),
             "games_imported": games_imported,
             "per_ply_samples_emitted": samples_emitted,
@@ -276,7 +316,8 @@ def run_pgn_input_stage(
         "policy": {
             "diagnostic_only": True,
             "production_runtime_mutation": False,
-            "raw_internet_download": False,
+            "raw_internet_download": network_download_used,
+            "audit_gate_required": True,
         },
     }
     summary_path = output_root / "summary.json"
@@ -641,12 +682,15 @@ def run_pipeline(args: argparse.Namespace) -> dict:
 
     stages: list[dict] = []
 
-    # Stage 00: PGN / prepared replay input (W7)
+    # Stage 00: PGN / prepared replay input (W7) + optional URL download (W9)
     pgn_input = run_pgn_input_stage(
         pgn_paths=list(args.pgn_path or []),
         prepared_jsonls=list(args.prepared_replay_jsonl or []),
         output_root=run_root / "00_pgn_input",
         log_dir=log_dir,
+        pgn_source_urls=list(args.pgn_source_url or []),
+        pgn_download_dir=str(args.pgn_download_dir or ""),
+        pgn_refresh_downloads=bool(args.pgn_refresh_downloads),
     )
     stages.append(pgn_input)
 
@@ -789,6 +833,32 @@ def parse_args() -> argparse.Namespace:
             "Passed straight through to stage 4 (seed_train --dry-run) "
             "without re-conversion."
         ),
+    )
+    p.add_argument(
+        "--pgn-source-url",
+        action="append",
+        default=[],
+        help=(
+            "W9: PGN/ZIP/GZ/BZ2 URL to download into the local cache and "
+            "process the same way as --pgn-path. Repeatable. The "
+            "downloaded content still flows through stage 00b teacher "
+            "audit before reaching seed_train; only audited rows become "
+            "training-safe."
+        ),
+    )
+    p.add_argument(
+        "--pgn-download-dir",
+        default="",
+        help=(
+            "Local cache directory for --pgn-source-url downloads. "
+            "Empty defaults to chess_pgn_to_replay's "
+            "~/chess_results/pgn_sources/."
+        ),
+    )
+    p.add_argument(
+        "--pgn-refresh-downloads",
+        action="store_true",
+        help="Force re-download even if the URL is already cached locally.",
     )
     p.add_argument(
         "--pgn-skip-audit",

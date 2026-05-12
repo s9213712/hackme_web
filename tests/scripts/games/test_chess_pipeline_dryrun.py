@@ -17,6 +17,7 @@ import sys
 import time
 from pathlib import Path
 
+import scripts.games.chess_pipeline_dryrun  # noqa: F401  (monkeypatch target)
 
 from scripts.games.chess_pipeline_dryrun import (
     SEED_TRAIN,
@@ -268,7 +269,96 @@ def test_pgn_input_stage_skipped_with_no_inputs(tmp_path):
         log_dir=tmp_path / "logs",
     )
     assert result["status"] == "skipped"
-    assert "no --pgn-path" in result["reason"]
+    # Reason mentions all three input flags so the operator knows
+    # they need to supply at least one.
+    assert "--pgn-path" in result["reason"]
+    assert "--pgn-source-url" in result["reason"]
+
+
+def test_pgn_input_stage_url_flow_records_network_policy(tmp_path, monkeypatch):
+    """W9: when --pgn-source-url is provided, the orchestrator forwards
+    --source-url to chess_pgn_to_replay and stamps
+    raw_internet_download=True so the aggregator's
+    any_network_pgn_download invariant flips True downstream.
+    Subprocess is monkeypatched — no real network is hit in the test."""
+    captured_cmds: list[list[str]] = []
+
+    valid_game_level = {
+        "match_id": 1,
+        "replay_id": "url_test",
+        "winner_color": "white",
+        "move_history": [
+            {"by": "white", "from": "e2", "to": "e4", "piece": "P", "promotion": None},
+            {"by": "black", "from": "e7", "to": "e5", "piece": "p", "promotion": None},
+        ],
+        "move_count": 2,
+        "source": "imported_dataset",
+    }
+
+    def fake_run(cmd, env=None, stdout=None, stderr=None, text=None, **kwargs):
+        captured_cmds.append(list(cmd))
+        # Write a single-game game-level JSONL to the --output-jsonl path so
+        # _expand_game_level_to_per_ply has something to read.
+        out_idx = cmd.index("--output-jsonl") + 1
+        out_path = Path(cmd[out_idx])
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(valid_game_level) + "\n", encoding="utf-8")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(
+        "scripts.games.chess_pipeline_dryrun.subprocess.run", fake_run
+    )
+
+    result = run_pgn_input_stage(
+        pgn_paths=[],
+        prepared_jsonls=[],
+        output_root=tmp_path / "00_pgn_input",
+        log_dir=tmp_path / "logs",
+        pgn_source_urls=["https://example.com/test.pgn"],
+        pgn_download_dir=str(tmp_path / "cache"),
+        pgn_refresh_downloads=True,
+    )
+    assert result["status"] == "ok"
+    assert len(captured_cmds) == 1
+    cmd = captured_cmds[0]
+    assert "--source-url" in cmd
+    assert "https://example.com/test.pgn" in cmd
+    assert "--download-dir" in cmd
+    assert "--refresh-downloads" in cmd
+
+    summary = json.loads(Path(result["summary_path"]).read_text(encoding="utf-8"))
+    assert summary["policy"]["raw_internet_download"] is True
+    assert summary["policy"]["audit_gate_required"] is True
+    assert summary["counts"]["source_urls_processed"] == 1
+    assert summary["counts"]["games_imported"] == 1
+    # Winner-side moves only: white played 1 move in the 2-ply fixture.
+    assert summary["counts"]["per_ply_samples_emitted"] == 1
+
+
+def test_pgn_input_stage_path_flow_raw_internet_download_false(tmp_path, monkeypatch):
+    """--pgn-path alone must not flip raw_internet_download."""
+    def fake_run(cmd, env=None, stdout=None, stderr=None, text=None, **kwargs):
+        out_idx = cmd.index("--output-jsonl") + 1
+        out_path = Path(cmd[out_idx])
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text("", encoding="utf-8")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(
+        "scripts.games.chess_pipeline_dryrun.subprocess.run", fake_run
+    )
+
+    fake_pgn = tmp_path / "fixture.pgn"
+    fake_pgn.write_text("[Result \"1-0\"]\n\n1. e4 e5 1-0\n", encoding="utf-8")
+    result = run_pgn_input_stage(
+        pgn_paths=[str(fake_pgn)],
+        prepared_jsonls=[],
+        output_root=tmp_path / "00_pgn_input",
+        log_dir=tmp_path / "logs",
+    )
+    summary = json.loads(Path(result["summary_path"]).read_text(encoding="utf-8"))
+    assert summary["policy"]["raw_internet_download"] is False
+    assert summary["counts"]["source_urls_processed"] == 0
 
 
 def test_pgn_input_stage_pass_through_prepared_jsonl(tmp_path):
