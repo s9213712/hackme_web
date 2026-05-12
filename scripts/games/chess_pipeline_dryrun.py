@@ -247,12 +247,21 @@ def run_seed_train_dryrun_stage(
         cmd.extend(["--include-replay-jsonl", jsonl])
     log = log_dir / "04_seed_train_dryrun.log"
     log.parent.mkdir(parents=True, exist_ok=True)
+    # chess_seed_train prints JSON payload to stdout and progress to stderr.
+    # Capture them SEPARATELY so the JSON parse below doesn't choke on
+    # progress lines (the original bug was stderr=STDOUT — fixed now).
+    proc = subprocess.run(
+        cmd,
+        env=os.environ.copy(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
     with log.open("w", encoding="utf-8") as fh:
         fh.write("# seed_train_dryrun\n# cmd: " + " ".join(shlex.quote(c) for c in cmd) + "\n\n")
-        fh.flush()
-        proc = subprocess.run(
-            cmd, env=os.environ.copy(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
-        )
+        fh.write("# stderr (progress):\n")
+        fh.write(proc.stderr or "")
+        fh.write("\n# stdout (JSON payload):\n")
         fh.write(proc.stdout or "")
     if proc.returncode != 0:
         return {
