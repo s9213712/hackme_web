@@ -299,6 +299,83 @@ dashboard selection path：
 - promotion path if gate passes：`$HACKME_RUNTIME_DIR/games/models/chess_experiment_5_nnue.json`（尚未放行）
 - result：repeatability 有穩定 +0.046875，gate 未通過（`all_runs_failed`），結果仍 blocked；stage/shadow/production promote 全為 false。
 
+2026-05-12 exp5_07 stage candidate paths（Cell B from exp5_06）：
+
+- baseline exp5 model：`/home/s92137/hackme_web/services/games/models/chess_experiment_5_nnue.json`
+- baseline sha256：`6fbafae703b94c173e10079aae09763a547719b410895332cbbfdf990ca487ec`
+- stage candidate model：`/home/s92137/chess_results/exp5_07_stage_candidate/chess_experiment_5_nnue_stage_candidate.json`
+- stage candidate sha256：`f0bfa376432b734994a7e8b7e9af3cfd74211b6ee7f054959b7d2c258fd2378f`
+- source distill：`/home/s92137/chess_results/exp5_06_clean_pool/inputs/exp5_06_train_clean_only.jsonl`（60 rows, all `label_quality=clean`）
+- training config：epochs=4, auto-hard-negative-topk=2, multi-good-margin-cp=30.0, label-quality-weight={clean=1.0, review=0.4, questionable=0.0}, search-profile=fixed_depth_strong
+- strength gate dry-run：`/home/s92137/chess_results/exp5_07_stage_candidate/stage_gate_dry_run.json`
+- repeatability rerun (3 seeds)：`/home/s92137/chess_results/exp5_06_clean_pool/ablation/cell_B_e4_t2_exp507_rerun/stdout.json`
+- runtime production model 不變（NOT staged into runtime path）：`$HACKME_RUNTIME_DIR/games/models/chess_experiment_5_nnue.json`
+- promotion path if shadow_candidate / production_promote 之後通過：`$HACKME_RUNTIME_DIR/games/models/candidates/experiment_5_nnue/` → `$HACKME_RUNTIME_DIR/games/models/chess_experiment_5_nnue.json`
+- promotion_gate (new tier semantics):
+  - candidate_can_be_staged: **True**
+  - candidate_can_be_shadowed: False (`benchmark_report_missing_for_shadow_or_production`)
+  - candidate_can_be_production_promoted: False (same)
+  - stage_pass_count: 3/3 seeds
+  - shadow_pass_count: 0/3 (benchmark missing)
+- result：deterministic strength criteria 全 3 seeds 通過（candidate 0.8043 > baseline 0.7826, case_pass_rate 0.8043, train_agreement_delta +0.283, regression 0/46, castling floor no regress, leakage clean）。**exp5 第一個 stage_candidate=True 的 candidate**。benchmark report 缺 → shadow/production 仍 blocked。candidate 尚未複製到 runtime；本路徑僅供 exp5_07 staging artifact 留檔。
+
+2026-05-12 exp5_08 stage candidate paths（Cell B smokefix from larger 116-row clean pool）：
+
+- baseline exp5 model：`/home/s92137/hackme_web/services/games/models/chess_experiment_5_nnue.json`
+- baseline sha256：`6fbafae703b94c173e10079aae09763a547719b410895332cbbfdf990ca487ec`
+- stage candidate model：`/home/s92137/chess_results/exp5_08_stage_candidate/chess_experiment_5_nnue_stage_candidate.json`
+- stage candidate sha256：`c47ef752aa69d7b8c813b587468228593f44d69c9b947313325e03797e4450dc`
+- distill (full)：`/home/s92137/chess_results/exp5_08_clean_pool/distill/exp5_08_distill.jsonl`（341 rows after legal/suspicious filter）
+- training input：`/home/s92137/chess_results/exp5_08_clean_pool/inputs/exp5_08_train_clean_only.jsonl`（116 rows, all `label_quality=clean`, dataset_hash16 `9accbee6b540be89`）
+- training config：epochs=4, auto-hard-negative-topk=2, multi-good-margin-cp=30.0, label-quality-weight={clean=1.0, review=0.4, questionable=0.0}, search-profile=fixed_depth_strong
+- strength cases：`/home/s92137/chess_results/exp5_08_clean_pool/inputs/exp5_08_strength_cases.jsonl`（64 eval-bucket cases, position_id-hashed split, 25 clean / 1 review / 38 quest）
+- ablation root：`/home/s92137/chess_results/exp5_08_clean_pool/ablation/cell_B_e4_t2_smokefix/`
+- promotion_gate (new tier semantics, after exp5_07 plumbing + exp5_08 smoke-default fix):
+  - candidate_can_be_staged: **True** (3/3 seeds)
+  - candidate_can_be_shadowed: False (`benchmark_report_missing_for_shadow_or_production`)
+  - candidate_can_be_production_promoted: False (same)
+  - stage_reasons: []
+- repeatability：mean Δ +0.0294, std 0.0, baseline 0.7647 → candidate 0.7941, regression 2/64 (rate 0.029), train_agreement_delta +0.095, castling_floor no regress, leakage 0/24
+- runtime production model 不變（NOT staged into runtime path）：`$HACKME_RUNTIME_DIR/games/models/chess_experiment_5_nnue.json`
+- semantics：**比 exp5_07 stage candidate (60-row training, +0.0217) 提高到 116-row clean pool 的 +0.0294**。同樣 stage tier，更大 pool 同樣 deterministic + zero stage-blocking-reasons。candidate sits at staging artifact path only; production runtime unchanged.
+
+2026-05-12 exp5_09 focused benchmark + shadow unlock（同一個 exp5_08 Cell B candidate）：
+
+- baseline / candidate model paths：同 exp5_08（candidate sha256 `c47ef752aa69d7b8c813b587468228593f44d69c9b947313325e03797e4450dc`）
+- focused benchmark cases：`/home/s92137/chess_results/exp5_08_clean_pool/inputs/exp5_09_benchmark_cases.jsonl`（68 cases, sha16 `ae0de9005d77fd0b`, 含 4 added smoke）
+- focused benchmark report：`/home/s92137/chess_results/exp5_09_focused_benchmark/focused_benchmark.json`
+- strength gate with benchmark：`/home/s92137/chess_results/exp5_09_focused_benchmark/stage_gate_with_bench.json`
+- repeatability with benchmark (3 seeds)：`/home/s92137/chess_results/exp5_09_focused_benchmark/repeat/stdout.json`
+- focused benchmark results: overall candidate 55/68 = 0.808, baseline 53/68 = 0.779, Δ +0.029, illegal=0, suspicious=0
+- per-cluster delta: **endgame +0.114** (32/35 vs 28/35, 4 imp 0 reg)、tactic / special_rule / smoke 持平 (1.00 / 1.00 / 0.75)、opening −0.059 (1 reg)、quiet_positional −0.500 (1 reg of 2)
+- benchmark_gate: pass=True, score_rate 0.808 >> 0.45 floor, 68 games >> 2 floor, 0 suspicious matches
+- promotion_gate (with benchmark):
+  - candidate_can_be_staged: True (3/3 seeds)
+  - candidate_can_be_shadowed: **True (3/3 seeds — first exp5 shadow unlock)**
+  - candidate_can_be_production_promoted: True per gate (3/3 seeds), **held per user policy**
+- user-policy production check: expanded held-out (NOT met, 24 rows), comprehensive smoke (NOT met, 4 cases), repeatability (met, 3/3 seeds std 0). 2/3 missing → production stays held.
+- runtime production model 仍不變：`$HACKME_RUNTIME_DIR/games/models/chess_experiment_5_nnue.json`
+- semantics：第一次有 exp5 candidate 同時通過 deterministic strength gate + safety + benchmark；按 user policy 進入 shadow tier，可平行運行驗證但不替換 production。
+
+2026-05-12 exp5_10 production-readiness validation（同一個 exp5_08 Cell B candidate）：
+
+- baseline model：`/home/s92137/hackme_web/services/games/models/chess_experiment_5_nnue.json`（sha256 `6fbafae703b94c173e10079aae09763a547719b410895332cbbfdf990ca487ec`）
+- candidate model：`/home/s92137/chess_results/exp5_08_stage_candidate/chess_experiment_5_nnue_stage_candidate.json`（sha256 `c47ef752aa69d7b8c813b587468228593f44d69c9b947313325e03797e4450dc`）
+- production readiness root：`/home/s92137/chess_results/exp5_10_production_readiness/`
+- cases：`/home/s92137/chess_results/exp5_10_production_readiness/exp5_10_benchmark_cases.jsonl`（135 cases, 70 true held-out）
+- expanded benchmark：`/home/s92137/chess_results/exp5_10_production_readiness/focused_benchmark_expanded.json`
+- strength gate expanded：`/home/s92137/chess_results/exp5_10_production_readiness/strength_gate_expanded.json`
+- repeatability：`/home/s92137/chess_results/exp5_10_production_readiness/repeatability_5_seed.json`
+- summary：`/home/s92137/chess_results/exp5_10_production_readiness/summary.json`
+- markdown summary：`/home/s92137/chess_results/exp5_10_production_readiness/SUMMARY.md`
+- overlap audit：`train_vs_benchmark_overlap_count=0`, `train_vs_heldout_overlap_count=0`, `position_id_overlap_count=0`, `overlap_counts_hardcoded=false`
+- expanded benchmark：candidate 102/135 = 0.755556, baseline 101/135 = 0.748148, Δ `+0.007407`
+- per-cluster：endgame `+0.075758`, tactic/special_rule/blunder/smoke hold, quiet_positional `-0.125` with 1 clean regression, opening `-0.111111` with questionable regressions
+- repeatability：`case_order_repeatability`, no model retraining, 5 seeds all Δ `+0.007407`, std `0.0`; stage 5/5, shadow/production 0/5 because suspicious_rate is non-zero
+- safety：legal_rate `1.0`, illegal_rate `0.0`, suspicious_rate `0.014815`; suspicious smoke cases are rook mate stalemate-after-move outcomes
+- runtime check：bundled baseline unchanged; production runtime path `/home/s92137/hackme_web/runtime/games/models/chess_experiment_5_nnue.json` did not exist before/after, so `production_runtime_model_checked=false`, `production_runtime_unchanged=true_by_no_write_only`
+- verdict：`shadow_candidate=True`, `production_promote_request_ready=False`, `production_promote=False`; blockers are `repeatability_not_passed`, `quiet_positional_clean_regression`, `suspicious_rate_nonzero`
+
 ## auto-retrain 與 promotion 關係
 
 auto-retrain 入口：

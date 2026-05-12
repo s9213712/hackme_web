@@ -14,6 +14,25 @@ exp5 是後續主要棋力路線之一，方向是：
 
 目前 exp5 已新增 `services/games/chess_nnue.py`。現階段是 repo 內可演進的 NNUE-like skeleton，不是 Stockfish 相容 NNUE。
 
+## 術語規範（exp5_06 修訂）
+
+在 exp5 所有文件、程式註解、報告裡：
+
+- **「teacher distill」是 label *proposal*，不是 *ground truth***。
+  exp5 目前使用的 teacher 是 `choose_teacher_move` (depth-3 static alpha-beta with `_teacher_static_eval`)。
+  它的輸出是「在這個 1-3-ply 視野下 teacher 認為最好的步」——不等同 deep Stockfish 強監督。
+- 寫 promotion 報告時，**禁止**使用：
+  - "teacher said X so X is correct"
+  - "ground truth move"
+  - "true label"
+  - "strong teacher signal"
+- 應該使用：
+  - "teacher proposal" / "teacher's depth-3 choice"
+  - "label proposal subject to label_quality audit"
+  - "static-teacher signal" / "1-ply static teacher ranking"
+- label 的「真假」由 `label_quality` audit (`baseline_policy_gap_cp` 等) 判斷，不是由 teacher 本身。
+- exp5_05b 的 `static_teacher_top_k=true` / `teacher_top_k_method=one_ply_static_eval` 兩個欄位就是這條規範的機讀版本。
+
 ## 目前狀態
 
 - 可選引擎、warm-start artifact、模型 schema、sample format、candidate inventory scaffold 已建立。
@@ -25,6 +44,31 @@ exp5 是後續主要棋力路線之一，方向是：
 - exp5_02 decision delta audit：`2026-05-11_exp5_02_candidate_decision_audit.md`
 - exp5_03 repeatability stability：`2026-05-11_exp5_03_repeatability_stability.md`
 - next learning / strength plan：`2026-05-11_exp5_next_learning_strength_plan.md`
+- exp5_04 epochs/HN ablation：`2026-05-11_exp5_04_learning_capacity_ablation.md`
+- exp5_05a/b 確定性 gate + label audit：`2026-05-11_exp5_05a_b_deterministic_gate_and_label_audit.md`
+- exp5_05c closure + 06 clean pool：`2026-05-11_exp5_05c_closure_and_06_clean_pool.md`
+- exp3 replay 例1 / 例2 lessons：`2026-05-11_exp3_replay_format_lessons_for_exp5.md` / `2026-05-11_exp3_replay_example2_5game_lessons_for_exp5.md`
+- exp5_07 promotion tier plumbing：`2026-05-12_exp5_07_stage_gate_plumbing.md`
+- exp5_08 larger clean pool + smoke-default fix：`2026-05-12_exp5_08_clean_pool_expansion.md`
+- exp5_09 focused benchmark + shadow unlock：`2026-05-12_exp5_09_focused_benchmark.md`
+- exp5_10 production-readiness validation：`2026-05-12_exp5_10_production_readiness.md`
+
+## 歷程總表
+
+| 輪次 | 日期 | 核心發現 / 動作 | tier verdict |
+|---|---|---|---|
+| exp5_01 | 2026-05-11 | real-candidate dry-run; gate failed (candidate ≤ baseline) | blocked |
+| exp5_02 | 2026-05-11 | 60-row distill candidate；decision audit；gate "passed" but learning unverifiable | blocked |
+| exp5_03 | 2026-05-11 | repeatability 0/3，repeatability fix series；exposes timed-gate noise | blocked |
+| exp5_04 | 2026-05-11 | epochs/topK ablation；revealed teacher labels are mostly questionable | blocked |
+| exp5_05a | 2026-05-11 | **fixed_depth_strong** deterministic gate；timed strong unreliable | n/a (tool) |
+| exp5_05b | 2026-05-11 | label_quality filter；exp5_02 distill 48/60 questionable | n/a (audit) |
+| exp5_05c | 2026-05-11 | 12-row clean+review ablation — insufficient | blocked |
+| exp5_06 | 2026-05-11 | 73-clean pool；first positive deterministic delta (+0.0217 Cell B) | (plumbing blocked) |
+| exp5_07 | 2026-05-12 | promotion-tier plumbing split (stage / shadow / production) | **stage_candidate=True (first)** |
+| exp5_08 | 2026-05-12 | 116-clean pool + smoke-default bugfix；mean Δ +0.0294 | **stage_candidate=True 3/3 seeds** |
+| exp5_09 | 2026-05-12 | focused benchmark (68 cases，cluster-split)；endgame +0.114 | **shadow_candidate=True 3/3 (first); production held per user policy** |
+| exp5_10 | 2026-05-12 | production-readiness validation；135 cases / 70 true held-out；overlap audit fixed and clean；overall Δ +0.0074，但 quiet clean regression + suspicious smoke | **shadow_candidate=True; production_promote=False** |
 
 ## Difficulty
 

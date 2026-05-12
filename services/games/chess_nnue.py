@@ -30,6 +30,12 @@ _SEARCH_PROFILES = {
     "fast": {"depth": 1, "quiescence_depth": 1, "time_budget_ms": 140},
     "balanced": {"depth": 2, "quiescence_depth": 2, "time_budget_ms": 320},
     "strong": {"depth": 3, "quiescence_depth": 4, "time_budget_ms": 1100},
+    # exp5_05a deterministic profiles: no time budget so PVS results are
+    # bit-for-bit reproducible across runs. Same depth/quiescence as the
+    # equivalent timed profile.
+    "fixed_depth_fast": {"depth": 1, "quiescence_depth": 1, "time_budget_ms": None},
+    "fixed_depth_balanced": {"depth": 2, "quiescence_depth": 2, "time_budget_ms": None},
+    "fixed_depth_strong": {"depth": 3, "quiescence_depth": 4, "time_budget_ms": None},
 }
 _PIECE_VALUES = {
     chess.PAWN: 100,
@@ -41,6 +47,19 @@ _PIECE_VALUES = {
 }
 _CENTER = {chess.D4, chess.E4, chess.D5, chess.E5}
 _EXTENDED_CENTER = {chess.C3, chess.D3, chess.E3, chess.F3, chess.C4, chess.F4, chess.C5, chess.F5, chess.C6, chess.D6, chess.E6, chess.F6}
+
+# exp3-example2 lesson item 10: broader "post-castle haven" set, not just g1/c1.
+# Example2 showed that exp3 never castled across 5/5 games and walked the king
+# out by ply 8-21 in every one. Reward any king that has reached a corner-side
+# squares typical of a castled-then-shuffled king; penalise a king that's
+# still on the starting square after the opening.
+_WHITE_KING_SAFE_SQUARES = {chess.G1, chess.H1, chess.G2, chess.H2, chess.F1, chess.F2,
+                            chess.C1, chess.B1, chess.A1, chess.B2, chess.C2, chess.A2}
+_BLACK_KING_SAFE_SQUARES = {chess.G8, chess.H8, chess.G7, chess.H7, chess.F8, chess.F7,
+                            chess.C8, chess.B8, chess.A8, chess.B7, chess.C7, chess.A7}
+# How late into the game an "uncastled, still on e1/e8" king starts being
+# penalised. fullmove_number reaches 13 by ply 25 — clearly past opening.
+_EARLY_KING_PENALTY_AFTER_FULLMOVE = 12
 
 
 def default_chess_nnue_model_path() -> Path:
@@ -170,12 +189,52 @@ def _mobility_score(board: chess.Board, model: dict) -> int:
 
 
 def _king_safety_score(board: chess.Board, model: dict) -> int:
+    """King-safety eval term (centipawns, white-positive).
+
+    Upgraded for exp5_06 (exp3-example2 lesson item 10):
+
+    1. Reward the king for being inside a *post-castle haven* — a set of
+       squares typical of a castled (and possibly slightly shuffled) king,
+       NOT just g1/c1. This generalises "the king is safe" beyond the
+       strict O-O/O-O-O target squares, so the model doesn't lose all
+       reward when the king moves Kg1→h1 or Kg1→f1 after castling.
+
+    2. Penalise an *uncastled* king that is still on its starting square
+       after the opening (fullmove_number > 12). exp3 example2 showed the
+       failure mode where a candidate model walks the king from e1 in the
+       early middlegame because the eval surface has no incentive to
+       castle. The penalty is `weight // 2` so it's smaller than the
+       safe-haven reward but big enough that a same-difference safe move
+       (e.g. Ke1-e2) doesn't look neutral.
+
+    3. The is-check penalty is unchanged: still `-weight` for whichever
+       side is currently in check.
+    """
     weight = int(model.get("king_safety_weight") or 0)
     score = 0
-    if board.king(chess.WHITE) in {chess.G1, chess.C1}:
+
+    wk = board.king(chess.WHITE)
+    bk = board.king(chess.BLACK)
+    if wk in _WHITE_KING_SAFE_SQUARES:
         score += weight
-    if board.king(chess.BLACK) in {chess.G8, chess.C8}:
+    if bk in _BLACK_KING_SAFE_SQUARES:
         score -= weight
+
+    # Uncastled-king penalty after the opening.
+    fm = board.fullmove_number
+    if fm > _EARLY_KING_PENALTY_AFTER_FULLMOVE and weight > 0:
+        if wk == chess.E1 and board.has_castling_rights(chess.WHITE) is False:
+            # K has moved (no rights) but is back on e1: an unusual case;
+            # still treat as exposed.
+            score -= weight // 2
+        elif wk == chess.E1:
+            # K hasn't moved at all — castling never happened; penalise.
+            score -= weight // 2
+        if bk == chess.E8 and board.has_castling_rights(chess.BLACK) is False:
+            score += weight // 2
+        elif bk == chess.E8:
+            score += weight // 2
+
     if board.is_check():
         score += -weight if board.turn == chess.WHITE else weight
     return score
@@ -208,6 +267,14 @@ def _move_order_score(board: chess.Board, move: chess.Move) -> int:
         score += 8_000
     if board.gives_check(move):
         score += 1_500
+    # exp3-example2 lesson item 10: castling itself is desirable. Without this
+    # bonus the cheap eval has no reason to pick e1g1 over a center pawn move
+    # in the opening — exp3 castled 0/5 across the dirty replay set; the exp5
+    # baseline (pre-fix) castled in 1/4 special-rule cases for the same
+    # reason. The bonus is large enough to compete with the +500 develop-
+    # minor-piece bonus + the +240 to-center bonus that often win on move 5.
+    if board.is_castling(move):
+        score += 700
     piece = board.piece_at(move.from_square)
     if piece and piece.piece_type in {chess.KNIGHT, chess.BISHOP} and chess.square_rank(move.from_square) in {0, 7}:
         score += 500
@@ -505,6 +572,7 @@ def train_experiment_nnue_from_replay_samples(
     model_path=None,
     replay_path=None,
     replace_replay: bool = False,
+    epochs: int = 1,
 ) -> dict:
     normalized_samples = []
     rejected = 0
@@ -526,30 +594,32 @@ def train_experiment_nnue_from_replay_samples(
     model = _load_model(model_path)
     positive_updates = 0
     hard_negative_updates = 0
-    for sample in replay_entries:
-        repeat = max(1, int(round(float(sample.get("weight") or 1.0))))
-        for _index in range(repeat):
-            if _train_position_move(model, sample):
-                positive_updates += 1
-        try:
-            board = chess.Board(str(sample.get("fen") or ""))
-            side = str(sample.get("side") or "white").strip().lower()
-            board.turn = chess.WHITE if side == "white" else chess.BLACK
-            expected = chess.Move.from_uci(str(sample.get("move_uci") or ""))
-        except Exception:
-            continue
-        if expected not in board.legal_moves:
-            continue
-        for negative in _legal_hard_negative_moves(board, expected, list(sample.get("hard_negatives") or [])):
-            negative_sample = dict(sample)
-            negative_sample["move_uci"] = negative.uci()
-            if _train_position_move(
-                model,
-                negative_sample,
-                target_override=-abs(float(sample.get("target") or 1.0)),
-                weight_override=max(1.0, float(sample.get("weight") or 1.0)),
-            ):
-                hard_negative_updates += 1
+    effective_epochs = max(1, int(epochs or 1))
+    for _epoch in range(effective_epochs):
+        for sample in replay_entries:
+            repeat = max(1, int(round(float(sample.get("weight") or 1.0))))
+            for _index in range(repeat):
+                if _train_position_move(model, sample):
+                    positive_updates += 1
+            try:
+                board = chess.Board(str(sample.get("fen") or ""))
+                side = str(sample.get("side") or "white").strip().lower()
+                board.turn = chess.WHITE if side == "white" else chess.BLACK
+                expected = chess.Move.from_uci(str(sample.get("move_uci") or ""))
+            except Exception:
+                continue
+            if expected not in board.legal_moves:
+                continue
+            for negative in _legal_hard_negative_moves(board, expected, list(sample.get("hard_negatives") or [])):
+                negative_sample = dict(sample)
+                negative_sample["move_uci"] = negative.uci()
+                if _train_position_move(
+                    model,
+                    negative_sample,
+                    target_override=-abs(float(sample.get("target") or 1.0)),
+                    weight_override=max(1.0, float(sample.get("weight") or 1.0)),
+                ):
+                    hard_negative_updates += 1
     if replay_entries:
         _save_model(model_path, model)
     policy_probe_after = _policy_probe_for_sample(model_path, probe_sample or {}) if probe_sample else None
@@ -583,5 +653,6 @@ def train_experiment_nnue_from_replay_samples(
         "training_objective": "position_move_evaluator_delta",
         "positive_updates": positive_updates,
         "hard_negative_updates": hard_negative_updates,
+        "epochs": effective_epochs,
         "policy_probe": policy_probe,
     }

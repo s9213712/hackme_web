@@ -27,6 +27,16 @@ from services.games.chess_nnue import (  # noqa: E402
 )
 from services.games.chess_promotion import promotion_report_consistency  # noqa: E402
 
+# exp3-example2 lesson item 11: castling cluster MUST not regress vs baseline.
+# Reuse the castling sub-set of the special-rule gate's bundled cases so the
+# strength gate and the auxiliary special-rule gate share the SAME castling
+# definitions. Importing keeps a single source of truth.
+try:
+    from scripts.games.chess_exp5_special_rule_gate import SPECIAL_RULE_CASES as _ALL_SPECIAL_RULE_CASES  # noqa: E402
+except Exception:
+    _ALL_SPECIAL_RULE_CASES = ()
+_CASTLING_FLOOR_CASES = tuple(c for c in _ALL_SPECIAL_RULE_CASES if str((c or {}).get("category") or "") == "castling")
+
 
 EXP5_STRENGTH_CASES = (
     {
@@ -104,6 +114,27 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-benchmark-score-rate", type=float, default=0.45)
     parser.add_argument("--min-benchmark-games", type=int, default=2)
     parser.add_argument("--search-profile", default="strong")
+    parser.add_argument(
+        "--castling-floor-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "exp3-example2 lesson: castling cluster MUST not regress vs baseline. "
+            "When on (default), the gate evaluates the bundled castling cases on both baseline "
+            "and candidate; if candidate_castling_score < baseline_castling_score → fail."
+        ),
+    )
+    parser.add_argument(
+        "--allow-stage-without-benchmark",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "exp5_07 plumbing: when on (default), the absence of --benchmark-report-path "
+            "blocks shadow_candidate / production_promote but DOES NOT block stage_candidate. "
+            "Pass --no-allow-stage-without-benchmark to restore the pre-07 behavior where "
+            "missing benchmark also blocks stage."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -231,6 +262,15 @@ def _score_for_move(row: dict | None) -> float:
 
 
 def _case_category(case: dict) -> str:
+    """Normalize the user-supplied `category` into a recognised bucket.
+
+    exp5_08 plumbing: the previous default was `"smoke"`, which silently
+    routed any user-supplied case with an unknown category (e.g.
+    `"exp5_08_eval"`) into the smoke audit. That made the smoke check
+    fire on every per-row regression, double-counting the explicit
+    regression-budget guard. Default is now `"unlabeled"`. Smoke audit
+    only fires on cases that explicitly carry `category="smoke"`.
+    """
     explicit = str(case.get("category") or "").strip().lower()
     if explicit in {"tactic", "endgame", "smoke", "opening", "blunder_avoid", "teacher_hard", "baseline_teacher_disagreement", "quiet_positional"}:
         return explicit
@@ -238,7 +278,7 @@ def _case_category(case: dict) -> str:
         return "tactic"
     if case.get("must_promote") or case.get("must_not_stalemate"):
         return "endgame"
-    return "smoke"
+    return "unlabeled"
 
 
 def _evaluate_model_case(model_path: Path, case: dict, *, search_profile: str) -> dict:
@@ -544,6 +584,56 @@ def _leakage_guard(train_rows: list[dict], held_out_rows: list[dict]) -> dict:
     }
 
 
+def _evaluate_castling_floor(candidate_path: Path, baseline_path: Path, *, search_profile: str) -> dict:
+    """Run the bundled castling cases on both models and return cluster scores.
+
+    The gate fails if candidate_castling_score < baseline_castling_score.
+    This is exp3-example2 lesson item 11: no exp5 candidate should ship
+    with a castling regression vs baseline (example2 showed exp3 castled
+    0/5 across the dirty replay set, and our exp5 baseline currently
+    castles only 1/4 on the special-rule cases — losing that 1/4 would
+    be the same failure mode going to production).
+    """
+    if not _CASTLING_FLOOR_CASES:
+        return {"enabled": False, "case_count": 0, "baseline_score": 0.0, "candidate_score": 0.0, "regressed": False, "rows": []}
+    rows = []
+    cand_pass = 0
+    base_pass = 0
+    for raw in _CASTLING_FLOOR_CASES:
+        case = _normalize_case_input(dict(raw))
+        baseline = _evaluate_model_case(baseline_path, case, search_profile=search_profile)
+        candidate = _evaluate_model_case(candidate_path, case, search_profile=search_profile)
+        if baseline.get("pass"):
+            base_pass += 1
+        if candidate.get("pass"):
+            cand_pass += 1
+        rows.append({
+            "id": case["id"],
+            "fen": case["fen"],
+            "side": case["side"],
+            "expected_uci_any": case.get("expected_uci_any") or [],
+            "must_not_uci_any": list(raw.get("must_not_uci_any") or []),
+            "baseline_move": baseline.get("chosen_move"),
+            "baseline_pass": bool(baseline.get("pass")),
+            "candidate_move": candidate.get("chosen_move"),
+            "candidate_pass": bool(candidate.get("pass")),
+        })
+    total = max(1, len(rows))
+    baseline_score = round(base_pass / total, 6)
+    candidate_score = round(cand_pass / total, 6)
+    return {
+        "enabled": True,
+        "case_count": len(rows),
+        "baseline_pass": base_pass,
+        "candidate_pass": cand_pass,
+        "baseline_score": baseline_score,
+        "candidate_score": candidate_score,
+        "regressed": candidate_score < baseline_score,
+        "score_delta": round(candidate_score - baseline_score, 6),
+        "rows": rows,
+    }
+
+
 def _smoke_audit(case_rows: list[dict]) -> list[dict]:
     audits: list[dict] = []
     for row in [item for item in case_rows if item.get("category") == "smoke"]:
@@ -684,44 +774,76 @@ def main() -> int:
         min_score_rate=float(args.min_benchmark_score_rate),
         min_games=int(args.min_benchmark_games),
     )
-    reasons: list[str] = []
+    # exp5_07 plumbing: split tier reasons into three buckets so a missing
+    # benchmark only blocks shadow/production, not stage. The legacy `reasons`
+    # field stays for backwards compatibility (it's the union of all three).
+    stage_reasons: list[str] = []           # blocks stage_candidate
+    shadow_reasons: list[str] = []          # additional reasons blocking shadow
+    production_reasons: list[str] = []      # additional reasons blocking production
+
     gate_skipped = not bool(args.benchmark_report_path)
     if not consistency.get("pass"):
-        reasons.extend([f"consistency:{reason}" for reason in consistency.get("reasons") or []])
-    if gate_skipped:
-        reasons.append("strength_gate_skipped_no_benchmark_report")
+        # consistency is a safety check — it always blocks stage
+        stage_reasons.extend([f"consistency:{reason}" for reason in consistency.get("reasons") or []])
     if case_pass_rate < float(args.min_case_pass_rate):
-        reasons.append("deterministic_case_pass_rate_too_low")
+        stage_reasons.append("deterministic_case_pass_rate_too_low")
     if float(candidate_metrics["score"]) <= float(baseline_metrics["score"]):
-        reasons.append("candidate_score_not_above_baseline")
+        stage_reasons.append("candidate_score_not_above_baseline")
     if float(candidate_metrics["illegal_rate"]) > 0:
-        reasons.append("candidate_illegal_rate_nonzero")
+        stage_reasons.append("candidate_illegal_rate_nonzero")
     if float(candidate_metrics["suspicious_rate"]) > float(baseline_metrics["suspicious_rate"]):
-        reasons.append("candidate_suspicious_rate_regressed")
+        stage_reasons.append("candidate_suspicious_rate_regressed")
     if float(candidate_metrics["tactic_score"]) < float(baseline_metrics["tactic_score"]):
-        reasons.append("candidate_tactic_regression")
+        stage_reasons.append("candidate_tactic_regression")
     if float(candidate_metrics["endgame_score"]) < float(baseline_metrics["endgame_score"]):
-        reasons.append("candidate_endgame_regression")
+        stage_reasons.append("candidate_endgame_regression")
+
+    # Benchmark concerns belong to shadow/production, not stage (exp5_07).
+    if gate_skipped:
+        if bool(args.allow_stage_without_benchmark):
+            shadow_reasons.append("benchmark_report_missing_for_shadow_or_production")
+            production_reasons.append("benchmark_report_missing_for_shadow_or_production")
+        else:
+            stage_reasons.append("strength_gate_skipped_no_benchmark_report")
     if benchmark_gate.get("provided") and not benchmark_gate.get("pass"):
-        reasons.extend([f"benchmark:{reason}" for reason in benchmark_gate.get("reasons") or []])
+        bench_msgs = [f"benchmark:{reason}" for reason in benchmark_gate.get("reasons") or []]
+        shadow_reasons.extend(bench_msgs)
+        production_reasons.extend(bench_msgs)
     train_learning = _train_rows_learning_summary(
         baseline_path=baseline_path,
         candidate_path=candidate_path,
         train_rows=train_rows,
         search_profile=str(args.search_profile or "strong"),
     )
+    castling_floor = (
+        _evaluate_castling_floor(candidate_path, baseline_path, search_profile=str(args.search_profile or "strong"))
+        if bool(args.castling_floor_enabled)
+        else {"enabled": False, "case_count": 0, "baseline_score": 0.0, "candidate_score": 0.0, "regressed": False, "score_delta": 0.0, "rows": []}
+    )
+    if castling_floor.get("enabled") and castling_floor.get("regressed"):
+        # castling regression is a safety floor: blocks stage.
+        stage_reasons.append("castling_cluster_regressed_vs_baseline")
     leakage = _leakage_guard(train_rows=train_rows, held_out_rows=held_out_rows)
     if leakage.get("held_out_in_training"):
-        reasons.append("held_out_leakage_detected")
+        # leakage is a safety floor: blocks stage.
+        stage_reasons.append("held_out_leakage_detected")
     smoke_audit = _smoke_audit(rows)
     smoke_too_hard = sum(1 for item in smoke_audit if item.get("failure_reason") == "smoke_case_too_hard")
     candidate_fail = sum(1 for item in smoke_audit if item.get("failure_reason") == "candidate_fail")
     if smoke_too_hard and not candidate_fail:
-        reasons.append("smoke_case_too_hard_no_candidate_signal")
-    if smoke_candidate_fail := any(item.get("failure_reason") == "candidate_fail" for item in smoke_audit):
-        reasons.append("smoke_candidate_failures")
+        # smoke-case-too-hard is *informational* — blocks production but not stage.
+        production_reasons.append("smoke_case_too_hard_no_candidate_signal")
+    smoke_candidate_fail = any(item.get("failure_reason") == "candidate_fail" for item in smoke_audit)
+    if smoke_candidate_fail:
+        # actual smoke failure blocks stage (model fails a sanity case the baseline passes).
+        stage_reasons.append("smoke_candidate_failures")
     if any(item.get("category") == "smoke" for item in rows) and baseline_metrics["smoke_score"] == 0.0 and candidate_metrics["smoke_score"] == 0.0:
-        reasons.append("smoke_score_zero")
+        # both fail smoke: production blocker, not necessarily stage if the
+        # smoke set itself is the wrong size for the candidate's strengths.
+        production_reasons.append("smoke_score_zero")
+
+    # Union view for backwards-compat consumers that read `reasons`.
+    reasons = list(stage_reasons) + [r for r in shadow_reasons if r not in stage_reasons] + [r for r in production_reasons if r not in stage_reasons and r not in shadow_reasons]
 
     if train_learning.get("train_rows"):
         train_learning["retrain_effect_not_visible"] = (
@@ -748,11 +870,21 @@ def main() -> int:
         },
         "promotion_gate_supported": True,
         "promotion_gate": {
+            # legacy fields preserved
             "passed": not reasons,
             "blocked_by_strength_gate": bool(reasons),
             "blocked_by_gate_skipped": gate_skipped,
-            "candidate_can_be_staged": not reasons and not gate_skipped,
-            "candidate_can_be_promoted": not reasons and not gate_skipped,
+            # exp5_07 plumbing: stage is independent of benchmark; shadow and
+            # production are not. `candidate_can_be_promoted` legacy alias maps
+            # to the production tier.
+            "candidate_can_be_staged": (not stage_reasons),
+            "candidate_can_be_shadowed": (not stage_reasons) and (not shadow_reasons),
+            "candidate_can_be_production_promoted": (not stage_reasons) and (not shadow_reasons) and (not production_reasons),
+            "candidate_can_be_promoted": (not stage_reasons) and (not shadow_reasons) and (not production_reasons),
+            "stage_reasons": list(stage_reasons),
+            "shadow_reasons": list(shadow_reasons),
+            "production_reasons": list(production_reasons),
+            "allow_stage_without_benchmark": bool(args.allow_stage_without_benchmark),
         },
         "baseline_score": baseline_metrics["score"],
         "candidate_score": candidate_metrics["score"],
@@ -786,6 +918,7 @@ def main() -> int:
         "cases_total": len(rows),
         "case_results": rows,
         "train_rows_learning": train_learning,
+        "castling_floor": castling_floor,
         "leakage_guard": leakage,
         "smoke_audit": smoke_audit,
         "smoke_case_too_hard_count": smoke_too_hard,

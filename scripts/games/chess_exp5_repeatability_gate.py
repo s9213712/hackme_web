@@ -47,6 +47,42 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--require-smoke", action="store_true")
     parser.add_argument("--max-regression-rate", type=float, default=0.10)
     parser.add_argument("--runtime-root", default="")
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        default=1,
+        help="Forwarded to chess_exp5_dataset_train.py: number of training passes (exp5_04 learning capacity).",
+    )
+    parser.add_argument(
+        "--auto-hard-negative-topk",
+        type=int,
+        default=0,
+        help="Forwarded to chess_exp5_dataset_train.py: inject the candidate's currently-preferred K moves as hard-negatives (exp5_04 learning capacity).",
+    )
+    parser.add_argument(
+        "--multi-good-margin-cp",
+        type=float,
+        default=30.0,
+        help="Forwarded to chess_exp5_dataset_train.py: cp window around teacher policy score within which a candidate move is treated as multi-good equivalent and excluded from hard-negatives.",
+    )
+    parser.add_argument(
+        "--label-quality-weight-clean",
+        type=float,
+        default=1.0,
+        help="Forwarded to chess_exp5_dataset_train.py: per-sample weight multiplier for label_quality=clean rows.",
+    )
+    parser.add_argument(
+        "--label-quality-weight-review",
+        type=float,
+        default=0.4,
+        help="Forwarded to chess_exp5_dataset_train.py: per-sample weight multiplier for label_quality=review rows.",
+    )
+    parser.add_argument(
+        "--label-quality-weight-questionable",
+        type=float,
+        default=0.0,
+        help="Forwarded to chess_exp5_dataset_train.py: per-sample weight multiplier for label_quality=questionable rows (0.0 = drop).",
+    )
     return parser.parse_args()
 
 
@@ -406,47 +442,86 @@ def _collect_repeatability(values: list[float]) -> dict:
 
 
 def _determine_tier(runs: list[dict], *, require_smoke: bool, max_regression_rate: float) -> dict:
-    pass_count = sum(1 for row in runs if bool(row.get("gate_pass")))
-    run_count = len(runs)
-    reasons: list[str] = []
-    if pass_count == 0:
-        reasons.append("all_runs_failed")
-    if any(not bool(row.get("gate_pass")) for row in runs):
-        reasons.append("not_all_runs_passed")
+    """Tier the candidate across N seeds.
 
-    if require_smoke and any(row.get("smoke_case_count", 0) == 0 for row in runs):
-        reasons.append("smoke_cases_missing")
-    if require_smoke and any(bool(row.get("smoke_audit_failed")) for row in runs):
-        reasons.append("smoke_case_failed")
+    exp5_07 plumbing:
+      - stage_candidate: all seeds report `candidate_can_be_staged=True` (per
+        the strength gate's stage_reasons). pass_count of seeds where the
+        deterministic stage-level evidence holds.
+      - shadow_candidate: stage_candidate + repeatability_pass + safety
+        (no benchmark needed at stage level; benchmark becomes a shadow/
+        production blocker per strength gate's shadow_reasons).
+      - production_promote: shadow_candidate + no production_reasons.
+    """
+    run_count = len(runs)
+
+    # Per-seed stage-level pass (from the inner strength gate's
+    # `candidate_can_be_staged`, not the legacy `gate_pass` which couples in
+    # benchmark missing).
+    stage_pass_count = sum(1 for row in runs if bool(row.get("candidate_can_be_staged")))
+    shadow_pass_count = sum(1 for row in runs if bool(row.get("candidate_can_be_shadowed")))
+    production_pass_count = sum(1 for row in runs if bool(row.get("candidate_can_be_production_promoted")))
+    legacy_pass_count = sum(1 for row in runs if bool(row.get("gate_pass")))
+
+    stage_reasons: list[str] = []
+    shadow_reasons: list[str] = []
+    production_reasons: list[str] = []
+
+    if stage_pass_count == 0:
+        stage_reasons.append("all_runs_failed_stage")
+    if stage_pass_count < run_count:
+        stage_reasons.append("not_all_runs_passed_stage")
 
     deltas = [float(row.get("score_delta") or 0.0) for row in runs]
     repeat_stats = _collect_repeatability(deltas)
     if run_count >= 2 and repeat_stats["std"] > 0.05:
-        reasons.append("repeatability_unstable")
+        shadow_reasons.append("repeatability_unstable")
 
     if any(float(row.get("regression", {}).get("candidate_regressed_rate") or 0.0) > float(max_regression_rate) for row in runs):
-        reasons.append("regression_budget_exceeded")
+        stage_reasons.append("regression_budget_exceeded")
 
     if any(bool((row.get("leakage") or {}).get("held_out_in_training")) for row in runs):
-        reasons.append("heldout_in_training")
+        stage_reasons.append("heldout_in_training")
 
-    stage_candidate = pass_count >= 1 and len(runs) > 0
-    shadow_candidate = pass_count == run_count and not reasons
-    production_promote = shadow_candidate and all(
-        not bool((row.get("train_learning") or {}).get("update_too_weak")) for row in runs
+    if require_smoke and any(row.get("smoke_case_count", 0) == 0 for row in runs):
+        production_reasons.append("smoke_cases_missing")
+    if require_smoke and any(bool(row.get("smoke_audit_failed")) for row in runs):
+        stage_reasons.append("smoke_case_failed")
+
+    # Aggregate shadow / production reasons reported by each inner gate.
+    for row in runs:
+        for r in row.get("shadow_reasons") or []:
+            if r not in shadow_reasons:
+                shadow_reasons.append(r)
+        for r in row.get("production_reasons") or []:
+            if r not in production_reasons:
+                production_reasons.append(r)
+
+    stage_candidate = (not stage_reasons) and stage_pass_count == run_count and run_count > 0
+    shadow_candidate = stage_candidate and not shadow_reasons and shadow_pass_count == run_count
+    production_promote = (
+        shadow_candidate
+        and not production_reasons
+        and production_pass_count == run_count
+        and all(not bool((row.get("train_learning") or {}).get("update_too_weak")) for row in runs)
     )
 
     return {
-        "blocked": bool(reasons),
+        "blocked": bool(stage_reasons),
         "stage_candidate": stage_candidate,
         "shadow_candidate": shadow_candidate,
         "production_promote": production_promote,
-        "stage_reasons": reasons,
-        "pass_count": pass_count,
+        "stage_reasons": stage_reasons,
+        "shadow_reasons": shadow_reasons,
+        "production_reasons": production_reasons,
+        "stage_pass_count": stage_pass_count,
+        "shadow_pass_count": shadow_pass_count,
+        "production_pass_count": production_pass_count,
+        "pass_count": legacy_pass_count,
         "run_count": run_count,
         "repeatability_delta": {
             **repeat_stats,
-            "pass_count": pass_count,
+            "pass_count": legacy_pass_count,
             "run_count": run_count,
         },
     }
@@ -546,6 +621,28 @@ def main() -> int:
             str(shuffled_distill),
             "--replace-replay",
         ]
+        if int(args.epochs or 1) > 1:
+            train_cmd.extend(["--epochs", str(int(args.epochs))])
+        if int(args.auto_hard_negative_topk or 0) > 0:
+            audit_path = run_dir / "hard_negative_audit.jsonl"
+            train_cmd.extend([
+                "--auto-hard-negative-topk",
+                str(int(args.auto_hard_negative_topk)),
+                "--hard-negative-source-model-path",
+                str(baseline_path),
+                "--hard-negative-audit-path",
+                str(audit_path),
+                "--multi-good-margin-cp",
+                str(float(args.multi_good_margin_cp)),
+            ])
+        train_cmd.extend([
+            "--label-quality-weight-clean",
+            str(float(args.label_quality_weight_clean)),
+            "--label-quality-weight-review",
+            str(float(args.label_quality_weight_review)),
+            "--label-quality-weight-questionable",
+            str(float(args.label_quality_weight_questionable)),
+        ])
         retrain_payload = _run_json(train_cmd, env=env, cwd=ROOT)
 
         strength_for_run = run_dir / "strength_cases_exp5_03.jsonl"
@@ -604,7 +701,12 @@ def main() -> int:
             "smoke_case_count": len(smoke_rows),
             "gate_pass": bool(gate_payload.get("pass")),
             "candidate_can_be_staged": bool((gate_payload.get("promotion_gate") or {}).get("candidate_can_be_staged") or False),
+            "candidate_can_be_shadowed": bool((gate_payload.get("promotion_gate") or {}).get("candidate_can_be_shadowed") or False),
+            "candidate_can_be_production_promoted": bool((gate_payload.get("promotion_gate") or {}).get("candidate_can_be_production_promoted") or False),
             "candidate_can_be_promoted": bool((gate_payload.get("promotion_gate") or {}).get("candidate_can_be_promoted") or False),
+            "stage_reasons": list((gate_payload.get("promotion_gate") or {}).get("stage_reasons") or []),
+            "shadow_reasons": list((gate_payload.get("promotion_gate") or {}).get("shadow_reasons") or []),
+            "production_reasons": list((gate_payload.get("promotion_gate") or {}).get("production_reasons") or []),
             "baseline_score": float(gate_payload.get("baseline_score") or 0.0),
             "candidate_score": float(gate_payload.get("candidate_score") or 0.0),
             "score_delta": float(gate_payload.get("score_delta") or 0.0),
@@ -621,6 +723,20 @@ def main() -> int:
             "smoke_audit": smoke_audit,
             "smoke_audit_failed": smoke_audit_failed,
             "train_payload": retrain_payload,
+            "training_config": {
+                "epochs": int(args.epochs or 1),
+                "auto_hard_negative_topk": int(args.auto_hard_negative_topk or 0),
+                "multi_good_margin_cp": float(args.multi_good_margin_cp or 0.0),
+                "label_quality_weight_clean": float(args.label_quality_weight_clean),
+                "label_quality_weight_review": float(args.label_quality_weight_review),
+                "label_quality_weight_questionable": float(args.label_quality_weight_questionable),
+                "positive_updates": int(retrain_payload.get("positive_updates") or 0),
+                "hard_negative_updates": int(retrain_payload.get("hard_negative_updates") or 0),
+                "epochs_actual": int(retrain_payload.get("epochs") or 1),
+                "search_profile": str(args.search_profile),
+            },
+            "label_quality_weighting": retrain_payload.get("label_quality_weighting") or {},
+            "hard_negative_audit_summary": retrain_payload.get("hard_negative_audit_summary") or {},
             "gate_payload_path": str(output_root / "run_{:d}_seed_{:d}".format(run_index, seed) / "gate_summary.jsonl"),
         }
         _progress(
