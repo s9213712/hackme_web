@@ -1,5 +1,24 @@
 # PvP / human-vs-engine replay pipeline v1 (2026-05-12)
 
+## Dry-run orchestrator (W6)
+
+For the full chain (PGN-derived PvP export → sparring → harvester →
+seed_train dry-run → aggregate report), use the W6 orchestrator:
+
+```bash
+python3 scripts/games/chess_pipeline_dryrun.py \
+  --runtime-dir <hackme runtime> \
+  --exp4-model-path <staging exp4 candidate> \
+  --exp5-model-path <stage candidate or production> \
+  --sparring-mode smoke
+```
+
+Every stage runs as a separate subprocess with safe defaults; stage 4
+is hard-coded `--dry-run`; the aggregator's invariants block lists
+`all_stages_diagnostic_only`, `any_production_runtime_mutation`,
+`any_model_mutation`. Details + safety guarantees in
+[`2026-05-12_w6_pipeline_dryrun.md`](./2026-05-12_w6_pipeline_dryrun.md).
+
 ## Operator UX (W5)
 
 For day-to-day use, prefer the operator CLI over the raw scripts:
