@@ -74,6 +74,10 @@ DEFAULT_PVP_SAMPLE_WEIGHT = 0.15
 DEFAULT_HVE_SAMPLE_WEIGHT = 0.20
 PVP_SAMPLE_WEIGHT_CAP = 0.20
 HVE_SAMPLE_WEIGHT_CAP = 0.25
+# Only human-vs-engine wins against these difficulties are collected by
+# default. Restricts the harvest to engines we actually want to learn from
+# (exp4 / exp5); avoids feeding wins-against-easy/normal back into models.
+DEFAULT_HVE_DIFFICULTIES = "experiment 4:pv,experiment 5:nnue"
 
 NON_NORMAL_RESULT_REASONS = {
     "timeout",
@@ -171,6 +175,7 @@ def _classify_match(
     move_history: list[dict],
     quality_users: set[int],
     min_plies: int,
+    hve_difficulty_whitelist: set[str] | None = None,
 ) -> tuple[str, str]:
     """Return (path_type, reason).
 
@@ -213,6 +218,10 @@ def _classify_match(
             return ("reject", "computer_won_or_not_human_winner")
         if int(white_id) not in quality_users:
             return ("reject", "no_player_quality:human")
+        if hve_difficulty_whitelist is not None:
+            difficulty = str(match["computer_difficulty"] or "").strip()
+            if difficulty not in hve_difficulty_whitelist:
+                return ("reject", f"non_target_engine:{difficulty or 'unknown'}")
         return ("human_beat_engine", "")
 
     return ("reject", f"unsupported_mode:{mode}")
@@ -345,7 +354,25 @@ def parse_args() -> argparse.Namespace:
         default=0,
         help="If >0, process at most this many candidate matches (debug).",
     )
+    p.add_argument(
+        "--hve-difficulties",
+        default=DEFAULT_HVE_DIFFICULTIES,
+        help=(
+            "Comma-separated computer_difficulty whitelist for the "
+            "human_beat_engine path. Defaults to "
+            f"'{DEFAULT_HVE_DIFFICULTIES}'. Set to empty string to disable the "
+            "filter (collect any computer win)."
+        ),
+    )
     return p.parse_args()
+
+
+def _parse_hve_whitelist(raw: str) -> set[str] | None:
+    """Comma-separated list → set; empty → None (filter disabled)."""
+    cleaned = (raw or "").strip()
+    if not cleaned:
+        return None
+    return {token.strip() for token in cleaned.split(",") if token.strip()}
 
 
 def run_export(
@@ -359,6 +386,7 @@ def run_export(
     pvp_sample_weight: float,
     hve_sample_weight: float,
     limit: int,
+    hve_difficulty_whitelist: set[str] | None = None,
 ) -> dict:
     """Core export entry. Exposed for tests so callers can override paths."""
     if pvp_sample_weight > PVP_SAMPLE_WEIGHT_CAP:
@@ -473,6 +501,7 @@ def run_export(
                 move_history=move_history,
                 quality_users=quality_users,
                 min_plies=min_plies,
+                hve_difficulty_whitelist=hve_difficulty_whitelist,
             )
             if path_type == "reject":
                 _write_reject(fh_c, fh_r, candidate_row, reason, len(move_history))
@@ -527,6 +556,9 @@ def run_export(
             "pvp_sample_weight": pvp_sample_weight,
             "hve_sample_weight": hve_sample_weight,
             "non_normal_result_reasons": sorted(NON_NORMAL_RESULT_REASONS),
+            "hve_difficulty_whitelist": (
+                sorted(hve_difficulty_whitelist) if hve_difficulty_whitelist else "disabled"
+            ),
         },
         "quality_signal": quality_debug,
         "counts": counts,
@@ -557,6 +589,10 @@ def run_export(
         f"- pvp_sample_weight: {pvp_sample_weight}",
         f"- hve_sample_weight: {hve_sample_weight}",
         f"- non_normal_result_reasons: {sorted(NON_NORMAL_RESULT_REASONS)}",
+        (
+            "- hve_difficulty_whitelist: "
+            f"{sorted(hve_difficulty_whitelist) if hve_difficulty_whitelist else 'disabled (all engines accepted)'}"
+        ),
         "",
         "## Quality signal",
         f"- weeks_considered: {quality_debug['weeks_considered']}",
@@ -611,6 +647,11 @@ def main() -> int:
     _say(f"output_root: {output_root}")
     _say(f"min_plies: {args.min_plies}, quality_weeks: {args.quality_weeks}, top_pct: {args.quality_top_pct}")
     _say(f"pvp_sample_weight: {args.pvp_sample_weight}, hve_sample_weight: {args.hve_sample_weight}")
+    hve_whitelist = _parse_hve_whitelist(args.hve_difficulties)
+    _say(
+        "hve_difficulty_whitelist: "
+        + (str(sorted(hve_whitelist)) if hve_whitelist else "disabled (all engines accepted)")
+    )
     summary = run_export(
         db_path=db_path,
         since=args.since.strip(),
@@ -621,6 +662,7 @@ def main() -> int:
         pvp_sample_weight=float(args.pvp_sample_weight),
         hve_sample_weight=float(args.hve_sample_weight),
         limit=int(args.limit),
+        hve_difficulty_whitelist=hve_whitelist,
     )
     counts = summary["counts"]
     _say(f"\ntotal: {counts['matches_total']} matches")

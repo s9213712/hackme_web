@@ -15,9 +15,11 @@ import chess
 
 from routes.games import ensure_game_schema
 from scripts.games.chess_pvp_history_to_replay import (
+    DEFAULT_HVE_DIFFICULTIES,
     HVE_SAMPLE_WEIGHT_CAP,
     PVP_SAMPLE_WEIGHT_CAP,
     _classify_match,
+    _parse_hve_whitelist,
     _quality_user_set,
     _winner_side,
     run_export,
@@ -252,6 +254,76 @@ def test_classify_match_pvp_accepts_when_both_qualify():
     assert reason == ""
 
 
+def test_parse_hve_whitelist_default_and_empty():
+    default = _parse_hve_whitelist(DEFAULT_HVE_DIFFICULTIES)
+    assert default == {"experiment 4:pv", "experiment 5:nnue"}
+    assert _parse_hve_whitelist("") is None
+    assert _parse_hve_whitelist("   ") is None
+    assert _parse_hve_whitelist("hard, experiment 4:pv,  experiment 5:nnue") == {
+        "hard",
+        "experiment 4:pv",
+        "experiment 5:nnue",
+    }
+
+
+def test_classify_match_human_beat_engine_rejects_non_target_engine():
+    class Row(dict):
+        def __getitem__(self, key):
+            return self.get(key)
+
+    whitelist = {"experiment 4:pv", "experiment 5:nnue"}
+    # Human won vs 'hard' engine → reject (not in whitelist)
+    row_hard = Row(
+        status="finished",
+        mode="computer",
+        result_reason="checkmate",
+        winner_user_id=2,
+        white_user_id=2,
+        black_user_id=None,
+        computer_difficulty="hard",
+    )
+    outcome, reason = _classify_match(
+        row_hard,
+        move_history=_make_history_legal(24),
+        quality_users={2},
+        min_plies=20,
+        hve_difficulty_whitelist=whitelist,
+    )
+    assert outcome == "reject"
+    assert reason == "non_target_engine:hard"
+
+    # Human won vs experiment 4:pv → accept
+    row_pv = Row(
+        status="finished",
+        mode="computer",
+        result_reason="checkmate",
+        winner_user_id=2,
+        white_user_id=2,
+        black_user_id=None,
+        computer_difficulty="experiment 4:pv",
+    )
+    outcome, reason = _classify_match(
+        row_pv,
+        move_history=_make_history_legal(24),
+        quality_users={2},
+        min_plies=20,
+        hve_difficulty_whitelist=whitelist,
+    )
+    assert outcome == "human_beat_engine"
+    assert reason == ""
+
+    # Without whitelist (None) → accept any engine difficulty
+    outcome, reason = _classify_match(
+        row_hard,
+        move_history=_make_history_legal(24),
+        quality_users={2},
+        min_plies=20,
+        hve_difficulty_whitelist=None,
+    )
+    assert outcome == "human_beat_engine"
+    assert reason == ""
+
+
 def test_classify_match_human_beat_engine_requires_human_win():
     class Row(dict):
         def __getitem__(self, key):
@@ -308,6 +380,7 @@ def _run(db_path: Path, output_root: Path, **overrides) -> dict:
         pvp_sample_weight=0.15,
         hve_sample_weight=0.20,
         limit=0,
+        hve_difficulty_whitelist=None,
     )
     kwargs.update(overrides)
     return run_export(**kwargs)
@@ -427,6 +500,60 @@ def test_run_export_emits_pvp_filtered_and_human_beat_engine(tmp_path):
     assert summary["policy"]["diagnostic_only"] is True
     assert summary["policy"]["auto_train_hook"] is False
     assert summary["policy"]["production_runtime_mutation"] is False
+
+
+def test_run_export_applies_hve_difficulty_whitelist(tmp_path):
+    """Default-style whitelist (CLI default) rejects 'hard' wins, accepts pv/nnue."""
+    db = tmp_path / "hve_filter.db"
+    conn = _seed_db(db)
+    try:
+        _seed_leaderboard(
+            conn,
+            week_keys=["2026-W21"],
+            ranked_user_ids=[[2, 3, 4, 5, 1]],
+        )
+        # Match 1: human beat experiment 4:pv → accept
+        _insert_match(
+            conn, match_id=1, mode="computer", white_user_id=2, black_user_id=None,
+            computer_difficulty="experiment 4:pv",
+            winner_user_id=2, result_reason="checkmate",
+            move_history=_make_history_legal(24),
+        )
+        # Match 2: human beat 'hard' engine → reject (non_target_engine)
+        _insert_match(
+            conn, match_id=2, mode="computer", white_user_id=2, black_user_id=None,
+            computer_difficulty="hard",
+            winner_user_id=2, result_reason="checkmate",
+            move_history=_make_history_legal(24),
+        )
+        # Match 3: human beat experiment 5:nnue → accept
+        _insert_match(
+            conn, match_id=3, mode="computer", white_user_id=2, black_user_id=None,
+            computer_difficulty="experiment 5:nnue",
+            winner_user_id=2, result_reason="checkmate",
+            move_history=_make_history_legal(24),
+        )
+    finally:
+        conn.close()
+
+    out_root = tmp_path / "out"
+    summary = _run(
+        db,
+        out_root,
+        hve_difficulty_whitelist={"experiment 4:pv", "experiment 5:nnue"},
+    )
+
+    assert summary["counts"]["matches_accepted_human_beat_engine"] == 2
+    assert summary["counts"]["matches_rejected"] == 1
+
+    run_dir = Path(summary["output_dir"])
+    rejected_rows = [
+        json.loads(line)
+        for line in (run_dir / "pvp_replay_rejected.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    rejected_by_id = {r["match_id"]: r for r in rejected_rows}
+    assert rejected_by_id[2]["rejection_reason"] == "non_target_engine:hard"
 
 
 def test_run_export_caps_sample_weight(tmp_path):
