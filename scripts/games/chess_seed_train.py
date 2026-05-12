@@ -43,8 +43,14 @@ from services.games.self_play_training import (  # noqa: E402
 )
 import services.games.chess_dl as chess_dl_service  # noqa: E402
 import services.games.chess_pv as chess_pv_service  # noqa: E402
-from services.games.chess_pv import train_experiment_pv_from_replay_samples  # noqa: E402
-from services.games.chess_nnue import train_experiment_nnue_from_replay_samples  # noqa: E402
+from services.games.chess_pv import (  # noqa: E402
+    normalize_experiment_pv_replay_sample,
+    train_experiment_pv_from_replay_samples,
+)
+from services.games.chess_nnue import (  # noqa: E402
+    normalize_experiment_nnue_replay_sample,
+    train_experiment_nnue_from_replay_samples,
+)
 
 
 # v1 external replay policy (see [[feedback-pvp-replay-discipline]]). Absolute
@@ -170,6 +176,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--include-exp2", action="store_true", help="Also train exp2 during seed generation.")
     parser.add_argument("--skip-exp3", action="store_true", help="Skip exp3 training.")
     parser.add_argument("--skip-exp4", action="store_true", help="Skip exp4 training.")
+    parser.add_argument(
+        "--skip-exp5",
+        action="store_true",
+        help=(
+            "Skip exp5 NNUE training during external replay step. "
+            "run_training_session has no exp5 schedule today so this only "
+            "gates the --include-replay-jsonl trainer for the NNUE side."
+        ),
+    )
     parser.add_argument("--teacher-depth", type=int, default=-1)
     parser.add_argument("--max-plies", type=int, default=-1)
     parser.add_argument("--student-exploration-rate", type=float, default=-1.0)
@@ -202,7 +217,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Skip actual training; only load + cap + report distribution.",
+        help=(
+            "Skip ALL training: run_training_session, smoke, benchmark, "
+            "write_training_report, and the external replay trainer. "
+            "Still loads and validates --include-replay-jsonl rows so "
+            "you can verify schema + normalize + caps before a real run."
+        ),
     )
     return parser.parse_args()
 
@@ -302,6 +322,53 @@ def _apply_external_caps(
         "pre_total_cap_count": pre_total,
         "total_kept": len(capped),
     }
+
+
+def _validate_normalize(samples: list[dict]) -> dict:
+    """Run each capped sample through the exp4 PV + exp5 NNUE normalizers.
+
+    A pure-validation step (no model write, no replay buffer write) that
+    proves a sample is acceptable to both trainers before the first real
+    training run. Records up to 5 failing source_ids per engine to make
+    debugging schema problems easy without dumping the entire JSONL.
+    """
+    stats: dict = {
+        "exp4_ok": 0,
+        "exp4_failed": 0,
+        "exp5_ok": 0,
+        "exp5_failed": 0,
+        "exp4_failed_samples": [],
+        "exp5_failed_samples": [],
+    }
+    for s in samples:
+        sid = str(s.get("source_id") or "")
+        try:
+            n4 = normalize_experiment_pv_replay_sample(s)
+        except Exception as exc:
+            n4 = None
+            sid_label = f"{sid}:{exc!r}" if sid else repr(exc)
+            if len(stats["exp4_failed_samples"]) < 5:
+                stats["exp4_failed_samples"].append(sid_label)
+        if n4 is not None:
+            stats["exp4_ok"] += 1
+        else:
+            stats["exp4_failed"] += 1
+            if sid and len(stats["exp4_failed_samples"]) < 5 and sid not in stats["exp4_failed_samples"]:
+                stats["exp4_failed_samples"].append(sid)
+        try:
+            n5 = normalize_experiment_nnue_replay_sample(s)
+        except Exception as exc:
+            n5 = None
+            sid_label = f"{sid}:{exc!r}" if sid else repr(exc)
+            if len(stats["exp5_failed_samples"]) < 5:
+                stats["exp5_failed_samples"].append(sid_label)
+        if n5 is not None:
+            stats["exp5_ok"] += 1
+        else:
+            stats["exp5_failed"] += 1
+            if sid and len(stats["exp5_failed_samples"]) < 5 and sid not in stats["exp5_failed_samples"]:
+                stats["exp5_failed_samples"].append(sid)
+    return stats
 
 
 def _train_with_external_replay(
@@ -437,70 +504,87 @@ def main() -> int:
     _progress(f"target exp4 model: {pv_model_path}")
     _progress(f"target exp5 model: {nnue_model_path}")
     _progress(f"report dir: {Path(args.report_dir)}")
-    _progress("phase seed training started")
-
-    with _temporary_search_depths(args):
-        summary = run_training_session(
-            exp1_teacher_games=0,
-            exp2_teacher_games=int(schedule["exp2_teacher_games"]),
-            exp3_teacher_games=int(schedule["exp3_teacher_games"]),
-            exp4_teacher_games=int(schedule["exp4_teacher_games"]),
-            hard_exp1_games=0,
-            hard_exp2_games=int(schedule["hard_exp2_games"]),
-            hard_exp3_games=int(schedule["hard_exp3_games"]),
-            hard_exp4_games=int(schedule["hard_exp4_games"]),
-            cross_games=int(schedule["cross_games"]),
-            cross_exp1_exp3_games=int(schedule["cross_exp1_exp3_games"]),
-            cross_exp2_exp3_games=int(schedule["cross_exp2_exp3_games"]),
-            cross_exp1_exp4_games=int(schedule["cross_exp1_exp4_games"]),
-            cross_exp2_exp4_games=int(schedule["cross_exp2_exp4_games"]),
-            cross_exp3_exp4_games=int(schedule["cross_exp3_exp4_games"]),
-            teacher_depth=int(schedule["teacher_depth"] or DEFAULT_TEACHER_DEPTH),
-            max_plies=int(schedule["max_plies"] or DEFAULT_MAX_PLIES),
-            student_exploration_rate=float(schedule["student_exploration_rate"] or DEFAULT_STUDENT_EXPLORATION_RATE),
-            seed=int(args.seed),
-            store=store,
-            nn_model_path=nn_model_path,
-            dl_model_path=dl_model_path,
-            pv_model_path=pv_model_path,
-            nnue_model_path=nnue_model_path,
-            progress_hook=_progress_log,
+    if args.dry_run:
+        _progress(
+            "DRY RUN: skipping run_training_session, smoke, benchmark, "
+            "write_training_report, and external-replay trainer"
         )
-        if args.with_smoke:
-            sys.stderr.write("[chess-seed-train] smoke evaluation started\n")
-            sys.stderr.flush()
-            summary["smoke_evaluation"] = run_post_training_smoke_evaluation(
+        summary: dict = {
+            "dry_run_only": True,
+            "games_played": 0,
+            "teacher_depth": int(schedule.get("teacher_depth") or DEFAULT_TEACHER_DEPTH),
+            "max_plies": int(schedule.get("max_plies") or DEFAULT_MAX_PLIES),
+            "student_exploration_rate": float(
+                schedule.get("student_exploration_rate") or DEFAULT_STUDENT_EXPLORATION_RATE
+            ),
+            "requested_games": {},
+            "updates": {},
+        }
+        reports: dict = {}
+    else:
+        _progress("phase seed training started")
+        with _temporary_search_depths(args):
+            summary = run_training_session(
+                exp1_teacher_games=0,
+                exp2_teacher_games=int(schedule["exp2_teacher_games"]),
+                exp3_teacher_games=int(schedule["exp3_teacher_games"]),
+                exp4_teacher_games=int(schedule["exp4_teacher_games"]),
+                hard_exp1_games=0,
+                hard_exp2_games=int(schedule["hard_exp2_games"]),
+                hard_exp3_games=int(schedule["hard_exp3_games"]),
+                hard_exp4_games=int(schedule["hard_exp4_games"]),
+                cross_games=int(schedule["cross_games"]),
+                cross_exp1_exp3_games=int(schedule["cross_exp1_exp3_games"]),
+                cross_exp2_exp3_games=int(schedule["cross_exp2_exp3_games"]),
+                cross_exp1_exp4_games=int(schedule["cross_exp1_exp4_games"]),
+                cross_exp2_exp4_games=int(schedule["cross_exp2_exp4_games"]),
+                cross_exp3_exp4_games=int(schedule["cross_exp3_exp4_games"]),
+                teacher_depth=int(schedule["teacher_depth"] or DEFAULT_TEACHER_DEPTH),
+                max_plies=int(schedule["max_plies"] or DEFAULT_MAX_PLIES),
+                student_exploration_rate=float(schedule["student_exploration_rate"] or DEFAULT_STUDENT_EXPLORATION_RATE),
+                seed=int(args.seed),
                 store=store,
                 nn_model_path=nn_model_path,
                 dl_model_path=dl_model_path,
                 pv_model_path=pv_model_path,
                 nnue_model_path=nnue_model_path,
-                teacher_depth=int(schedule["teacher_depth"] or DEFAULT_TEACHER_DEPTH),
-                max_plies=int(schedule["max_plies"] or DEFAULT_MAX_PLIES),
-                games_per_pair=max(0, int(args.smoke_games_per_pair or 0)),
-                seed=int(args.seed) + 101,
+                progress_hook=_progress_log,
             )
-            sys.stderr.write("[chess-seed-train] smoke evaluation finished\n")
-            sys.stderr.flush()
-        if args.with_benchmark:
-            sys.stderr.write("[chess-seed-train] benchmark started\n")
-            sys.stderr.flush()
-            summary["benchmark"] = run_round_robin_benchmark(
-                store=store,
-                nn_model_path=nn_model_path,
-                dl_model_path=dl_model_path,
-                pv_model_path=pv_model_path,
-                nnue_model_path=nnue_model_path,
-                teacher_depth=int(schedule["teacher_depth"] or DEFAULT_TEACHER_DEPTH),
-                max_plies=int(schedule["max_plies"] or DEFAULT_MAX_PLIES),
-                rounds=max(0, int(args.benchmark_rounds or 0)),
-                seed=int(args.seed) + 202,
-            )
-            sys.stderr.write("[chess-seed-train] benchmark finished\n")
-            sys.stderr.flush()
+            if args.with_smoke:
+                sys.stderr.write("[chess-seed-train] smoke evaluation started\n")
+                sys.stderr.flush()
+                summary["smoke_evaluation"] = run_post_training_smoke_evaluation(
+                    store=store,
+                    nn_model_path=nn_model_path,
+                    dl_model_path=dl_model_path,
+                    pv_model_path=pv_model_path,
+                    nnue_model_path=nnue_model_path,
+                    teacher_depth=int(schedule["teacher_depth"] or DEFAULT_TEACHER_DEPTH),
+                    max_plies=int(schedule["max_plies"] or DEFAULT_MAX_PLIES),
+                    games_per_pair=max(0, int(args.smoke_games_per_pair or 0)),
+                    seed=int(args.seed) + 101,
+                )
+                sys.stderr.write("[chess-seed-train] smoke evaluation finished\n")
+                sys.stderr.flush()
+            if args.with_benchmark:
+                sys.stderr.write("[chess-seed-train] benchmark started\n")
+                sys.stderr.flush()
+                summary["benchmark"] = run_round_robin_benchmark(
+                    store=store,
+                    nn_model_path=nn_model_path,
+                    dl_model_path=dl_model_path,
+                    pv_model_path=pv_model_path,
+                    nnue_model_path=nnue_model_path,
+                    teacher_depth=int(schedule["teacher_depth"] or DEFAULT_TEACHER_DEPTH),
+                    max_plies=int(schedule["max_plies"] or DEFAULT_MAX_PLIES),
+                    rounds=max(0, int(args.benchmark_rounds or 0)),
+                    seed=int(args.seed) + 202,
+                )
+                sys.stderr.write("[chess-seed-train] benchmark finished\n")
+                sys.stderr.flush()
 
-    reports = write_training_report(summary, report_dir=Path(args.report_dir), basename="chess_seed_train")
-    _progress(f"phase result report: json={reports.get('json_report')} md={reports.get('md_report')}")
+        reports = write_training_report(summary, report_dir=Path(args.report_dir), basename="chess_seed_train")
+        _progress(f"phase result report: json={reports.get('json_report')} md={reports.get('md_report')}")
 
     external_block: dict = {"enabled": False}
     if args.include_replay_jsonl:
@@ -512,22 +596,28 @@ def main() -> int:
         )
         external_block["load_stats"] = load_stats
         external_block["cap_stats"] = cap_stats
+        external_block["normalize_validation"] = _validate_normalize(capped_samples)
         external_block["dry_run"] = bool(args.dry_run)
         external_block["skip_exp4"] = bool(args.skip_exp4)
+        external_block["skip_exp5"] = bool(args.skip_exp5)
         train_result = _train_with_external_replay(
             capped_samples,
             pv_model_path=pv_model_path,
             nnue_model_path=nnue_model_path,
             dry_run=bool(args.dry_run),
             skip_exp4=bool(args.skip_exp4),
+            skip_exp5=bool(args.skip_exp5),
         )
         external_block["train_result"] = train_result
+        nv = external_block["normalize_validation"]
         _progress(
             "external replay: "
             f"files={load_stats['files_read']} "
             f"raw_rows={load_stats['rows_total']} "
             f"kept={load_stats['rows_kept']} "
             f"after_caps={cap_stats['total_kept']} "
+            f"normalize_exp4={nv['exp4_ok']}/{nv['exp4_ok'] + nv['exp4_failed']} "
+            f"normalize_exp5={nv['exp5_ok']}/{nv['exp5_ok'] + nv['exp5_failed']} "
             f"trained_exp4={train_result['trained_exp4']} "
             f"trained_exp5={train_result['trained_exp5']}"
         )

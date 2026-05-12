@@ -15,6 +15,7 @@ from scripts.games.chess_seed_train import (
     _apply_external_caps,
     _load_external_replay,
     _train_with_external_replay,
+    _validate_normalize,
 )
 
 
@@ -193,3 +194,103 @@ def test_trusted_source_whitelist_includes_new_sources():
     # Regression guard: future commits must not silently drop these names.
     for name in ("pvp_filtered", "human_beat_engine", "sparring_objective_hit"):
         assert name in TRUSTED_SOURCE_WHITELIST
+
+
+# ---- _validate_normalize -----------------------------------------------
+
+
+def test_validate_normalize_accepts_typical_pvp_sample():
+    samples = [
+        _row(source_id=f"id-{i}", trusted_source="pvp_filtered")
+        for i in range(5)
+    ]
+    stats = _validate_normalize(samples)
+    assert stats["exp4_ok"] == 5
+    assert stats["exp4_failed"] == 0
+    assert stats["exp5_ok"] == 5
+    assert stats["exp5_failed"] == 0
+    assert stats["exp4_failed_samples"] == []
+    assert stats["exp5_failed_samples"] == []
+
+
+def test_validate_normalize_counts_failures_and_records_ids():
+    # Empty fen / move_uci / side break both normalizers (they require those).
+    bad = [
+        _row(source_id="bad-fen", fen=""),
+        _row(source_id="bad-move", move_uci=""),
+    ]
+    good = [_row(source_id="good-1")]
+    stats = _validate_normalize(bad + good)
+    # exp4 PV falls back to build_experiment_pv_sample_from_position when
+    # board_features / move_features are absent; that path requires
+    # non-empty fen + move_uci. Both bad rows should fail; the good one
+    # succeeds.
+    assert stats["exp4_failed"] == 2
+    assert stats["exp4_ok"] == 1
+    assert stats["exp5_failed"] == 2
+    assert stats["exp5_ok"] == 1
+    assert "bad-fen" in stats["exp4_failed_samples"]
+    assert "bad-move" in stats["exp4_failed_samples"]
+
+
+# ---- _train_with_external_replay skip flags ---------------------------
+
+
+def test_train_with_external_replay_skip_exp5_blocks_nnue_training(monkeypatch, tmp_path):
+    """skip_exp5 must skip the NNUE trainer even when dry_run is False."""
+    pv_calls: list = []
+    nnue_calls: list = []
+
+    def fake_pv(samples, *, model_path):
+        pv_calls.append((len(samples), str(model_path)))
+        return {"trained_samples": len(samples)}
+
+    def fake_nnue(samples, *, model_path):
+        nnue_calls.append((len(samples), str(model_path)))
+        return {"trained_samples": len(samples)}
+
+    monkeypatch.setattr(
+        "scripts.games.chess_seed_train.train_experiment_pv_from_replay_samples", fake_pv
+    )
+    monkeypatch.setattr(
+        "scripts.games.chess_seed_train.train_experiment_nnue_from_replay_samples", fake_nnue
+    )
+
+    result = _train_with_external_replay(
+        [_row()],
+        pv_model_path=tmp_path / "pv.json",
+        nnue_model_path=tmp_path / "nnue.json",
+        dry_run=False,
+        skip_exp4=False,
+        skip_exp5=True,
+    )
+    assert result["trained_exp4"] is True
+    assert result["trained_exp5"] is False
+    assert len(pv_calls) == 1
+    assert nnue_calls == []
+
+
+def test_train_with_external_replay_skip_exp4_blocks_pv_training(monkeypatch, tmp_path):
+    pv_calls: list = []
+    nnue_calls: list = []
+    monkeypatch.setattr(
+        "scripts.games.chess_seed_train.train_experiment_pv_from_replay_samples",
+        lambda samples, *, model_path: pv_calls.append(samples) or {},
+    )
+    monkeypatch.setattr(
+        "scripts.games.chess_seed_train.train_experiment_nnue_from_replay_samples",
+        lambda samples, *, model_path: nnue_calls.append(samples) or {},
+    )
+
+    result = _train_with_external_replay(
+        [_row()],
+        pv_model_path=tmp_path / "pv.json",
+        nnue_model_path=tmp_path / "nnue.json",
+        dry_run=False,
+        skip_exp4=True,
+        skip_exp5=False,
+    )
+    assert result["trained_exp4"] is False
+    assert result["trained_exp5"] is True
+    assert pv_calls == []
+    assert len(nnue_calls) == 1
