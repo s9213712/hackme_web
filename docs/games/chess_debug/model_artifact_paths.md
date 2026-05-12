@@ -520,6 +520,31 @@ dashboard selection path：
 - stage/promote attempted：`false`
 - decision：`candidate_can_stage_for_exp5_17=true`; not production-promoted in exp5_16
 
+2026-05-12 exp5_17 opening overlay staging validation：
+
+- staging validator：`scripts/games/chess_exp5_opening_overlay_staging_validation.py`
+- output root：`/home/s92137/chess_results/exp5_17_opening_overlay_staging_validation/`
+- summary：`/home/s92137/chess_results/exp5_17_opening_overlay_staging_validation/summary.json`
+- summary md：`/home/s92137/chess_results/exp5_17_opening_overlay_staging_validation/SUMMARY.md`
+- opening evaluation：`/home/s92137/chess_results/exp5_17_opening_overlay_staging_validation/opening_evaluation.json`
+- retention evaluation：`/home/s92137/chess_results/exp5_17_opening_overlay_staging_validation/retention_evaluation.json`
+- overlay activation audit：`/home/s92137/chess_results/exp5_17_opening_overlay_staging_validation/overlay_activation_audit.json`
+- fresh non-overlay opening audit：`/home/s92137/chess_results/exp5_17_opening_overlay_staging_validation/fresh_non_overlay_opening_audit.json`
+- runtime priority safety audit：`/home/s92137/chess_results/exp5_17_opening_overlay_staging_validation/runtime_priority_safety_audit.json`
+- repeatability：`/home/s92137/chess_results/exp5_17_opening_overlay_staging_validation/repeatability_5_seed.json`
+- candidate path：`/home/s92137/chess_results/exp5_16_opening_overlay_candidate/chess_experiment_5_nnue_opening_overlay_candidate.json`
+- candidate sha：`d35c04707fd7c10e8b6efe07740e69da533dea524d31aa63308afea891d006c9`
+- current production sha actual：`c47ef752aa69d7b8c813b587468228593f44d69c9b947313325e03797e4450dc`
+- clean opening result：current `1/31 = 0.032258`, candidate `31/31 = 1.0`, delta `+0.967742`
+- fresh non-overlay opening：`12/12` fallback unchanged, overlay overlap `0`
+- retention result：current `115/137 = 0.839416`, candidate `115/137 = 0.839416`, delta `0.0`
+- runtime priority safety：`5/5` expectations satisfied, bad overlay blocked `5/5`
+- model without overlay identity：`43/43` unchanged
+- repeatability：`5/5`
+- runtime mutation：`false`
+- stage/promote attempted：`false`
+- decision：`ready_for_exp5_18_promotion_review=true`; not production-promoted in exp5_17
+
 ## auto-retrain 與 promotion 關係
 
 auto-retrain 入口：
