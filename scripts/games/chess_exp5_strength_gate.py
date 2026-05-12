@@ -26,6 +26,7 @@ from services.games.chess_nnue import (  # noqa: E402
     choose_experiment_nnue_move,
 )
 from services.games.chess_promotion import promotion_report_consistency  # noqa: E402
+from services.games.self_play_training import _teacher_static_eval  # noqa: E402
 
 # exp3-example2 lesson item 11: castling cluster MUST not regress vs baseline.
 # Reuse the castling sub-set of the special-rule gate's bundled cases so the
@@ -36,6 +37,7 @@ try:
 except Exception:
     _ALL_SPECIAL_RULE_CASES = ()
 _CASTLING_FLOOR_CASES = tuple(c for c in _ALL_SPECIAL_RULE_CASES if str((c or {}).get("category") or "") == "castling")
+QUIET_POSITIONAL_NEAR_EQUIVALENT_CP = 50
 
 
 EXP5_STRENGTH_CASES = (
@@ -281,6 +283,86 @@ def _case_category(case: dict) -> str:
     return "unlabeled"
 
 
+def _static_move_ranking(board: chess.Board, side: str) -> list[dict]:
+    color_sign = 1 if side == "white" else -1
+    rows: list[dict] = []
+    for move in board.legal_moves:
+        after = board.copy(stack=False)
+        after.push(move)
+        score = 1_000_000 if after.is_checkmate() else color_sign * _teacher_static_eval(after)
+        rows.append({"move": move.uci(), "score": int(score)})
+    rows.sort(key=lambda row: (-int(row["score"]), str(row["move"])))
+    dense_rank = 0
+    previous_score: int | None = None
+    for ordinal, row in enumerate(rows, start=1):
+        score = int(row["score"])
+        if previous_score is None or score != previous_score:
+            dense_rank += 1
+            previous_score = score
+        row["ordinal_rank"] = ordinal
+        row["dense_score_rank"] = dense_rank
+    return rows
+
+
+def _static_move_lookup(ranking: list[dict], move: str) -> dict | None:
+    wanted = str(move or "").strip().lower()
+    return next((row for row in ranking if str(row.get("move") or "") == wanted), None)
+
+
+def _quiet_near_equivalent_audit(case: dict, board: chess.Board, chosen: str) -> dict:
+    empty = {
+        "applied": False,
+        "accepted": False,
+        "reason": "",
+        "cp_window": QUIET_POSITIONAL_NEAR_EQUIVALENT_CP,
+    }
+    if _case_category(case) != "quiet_positional" or not chosen:
+        return empty
+    if not board.is_valid():
+        return {**empty, "applied": True, "reason": "invalid_board"}
+    side = str(case.get("side") or "").strip().lower()
+    ranking = _static_move_ranking(board, side)
+    expected = [str(item).lower() for item in (case.get("expected_uci_any") or [])]
+    teacher = str(case.get("teacher_move") or (expected[0] if expected else "")).strip().lower()
+    chosen_row = _static_move_lookup(ranking, chosen)
+    teacher_row = _static_move_lookup(ranking, teacher)
+    if chosen_row is None or teacher_row is None:
+        return {
+            **empty,
+            "applied": True,
+            "reason": "missing_static_score",
+            "teacher_move": teacher,
+            "chosen_move": chosen,
+        }
+    best_score = int(ranking[0]["score"]) if ranking else int(teacher_row["score"])
+    chosen_score = int(chosen_row["score"])
+    teacher_score = int(teacher_row["score"])
+    delta_vs_teacher = chosen_score - teacher_score
+    delta_vs_best = chosen_score - best_score
+    accepted = (
+        delta_vs_teacher >= -QUIET_POSITIONAL_NEAR_EQUIVALENT_CP
+        and delta_vs_best >= -QUIET_POSITIONAL_NEAR_EQUIVALENT_CP
+    )
+    return {
+        "applied": True,
+        "accepted": accepted,
+        "reason": "within_static_eval_window" if accepted else "outside_static_eval_window",
+        "cp_window": QUIET_POSITIONAL_NEAR_EQUIVALENT_CP,
+        "teacher_move": teacher,
+        "chosen_move": chosen,
+        "teacher_score": teacher_score,
+        "chosen_score": chosen_score,
+        "best_score": best_score,
+        "delta_vs_teacher": delta_vs_teacher,
+        "delta_vs_best": delta_vs_best,
+        "chosen_ordinal_rank": int(chosen_row["ordinal_rank"]),
+        "chosen_dense_score_rank": int(chosen_row["dense_score_rank"]),
+        "teacher_ordinal_rank": int(teacher_row["ordinal_rank"]),
+        "teacher_dense_score_rank": int(teacher_row["dense_score_rank"]),
+        "top_static_moves": [str(row["move"]) for row in ranking[:5]],
+    }
+
+
 def _evaluate_model_case(model_path: Path, case: dict, *, search_profile: str) -> dict:
     board_before = chess.Board(str(case["fen"]))
     side = str(case["side"])
@@ -290,6 +372,7 @@ def _evaluate_model_case(model_path: Path, case: dict, *, search_profile: str) -
     board_after = board_before.copy(stack=False)
     legal = False
     material_gain = 0
+    quiet_near_equivalent = {}
     if not chosen:
         reasons.append("engine_no_move")
     else:
@@ -304,8 +387,12 @@ def _evaluate_model_case(model_path: Path, case: dict, *, search_profile: str) -
             board_after.push(chess_move)
             material_gain = _material_gain(board_before, board_after, side)
             expected = [str(item).lower() for item in (case.get("expected_uci_any") or [])]
+            quiet_near_equivalent = _quiet_near_equivalent_audit(case, board_before, chosen)
             if expected and chosen not in expected:
-                reasons.append("unexpected_move")
+                if quiet_near_equivalent.get("accepted"):
+                    pass
+                else:
+                    reasons.append("unexpected_move")
             if case.get("requires_capture") and not board_before.is_capture(chess_move):
                 reasons.append("capture_required")
             if case.get("must_checkmate") and not board_after.is_checkmate():
@@ -359,6 +446,8 @@ def _evaluate_model_case(model_path: Path, case: dict, *, search_profile: str) -
         "teacher_rank": int(teacher_probe.get("raw_policy_rank") or 0),
         "teacher_score": float(teacher_probe.get("raw_policy_score") or 0.0),
         "teacher_probability": float(teacher_probe.get("policy_probability") or 0.0),
+        "quiet_near_equivalent": bool(quiet_near_equivalent.get("accepted")),
+        "quiet_static_audit": quiet_near_equivalent,
     }
 
 

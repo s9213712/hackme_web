@@ -20,6 +20,8 @@ This round only reads:
 
 ## Result
 
+Initial exp5_11b result before the gate-label fix:
+
 | metric | value |
 |---|---:|
 | quiet_clean_regression_count | 1 |
@@ -35,6 +37,21 @@ Classification counts:
 {
   "multi_good_scoring_issue": 1
 }
+```
+
+After exp5_11c applied the quiet-positional near-equivalence gate and reran exp5_10, the same audit script was rerun and the current artefacts now show:
+
+| metric | value |
+|---|---:|
+| quiet_clean_regression_count | 0 |
+| true_model_regression_count | 0 |
+| multi_good_scoring_issue_count | 0 |
+| fixture_issue_count | 0 |
+
+Current production implication from the audit artefact:
+
+```text
+no quiet clean regressions remain in the source exp5_10 summary
 ```
 
 ## Regression row
@@ -59,7 +76,7 @@ Classification counts:
 | teacher_static_score | `44` |
 | baseline_static_score | `32` |
 | candidate_static_score | `28` |
-| candidate_static_rank | `7` |
+| candidate_static_rank | `7` ordinal / `3` dense-score |
 | static_eval_delta_candidate_vs_teacher | `-16` |
 | static_eval_delta_candidate_vs_baseline | `-4` |
 | classification | `multi_good_scoring_issue` |
@@ -71,10 +88,11 @@ The regression is not a bad FEN and not an illegal-move fixture issue.
 
 It is also not strong evidence of a true model regression:
 
-- The candidate move is outside the recorded teacher top5, so the current gate marks it wrong.
+- The candidate move is outside the recorded teacher top5, so the pre-fix gate marked it wrong.
 - Under the same static teacher evaluator, the candidate move is only `16cp` below the teacher move.
 - It is only `4cp` below the baseline move that passed.
 - This is a quiet symmetric K+P position where several non-losing quiet moves are close.
+- The rank discrepancy noted during review is explained by tie-breaks: ordinal rank is `7`, while dense-score rank is `3` because several legal moves share the same static score.
 
 So the blocker should be treated as a gate / label-audit problem, not as a reason to immediately train a repair candidate.
 
@@ -95,7 +113,7 @@ replace quiet_positional_clean_regression
 with quiet_positional_gate_label_audit_required
 ```
 
-Production should still not be promoted until exp5_10 is rerun with the quiet positional gate accepting near-equivalent quiet moves or with the case re-labeled as multi-good.
+exp5_11c implemented the quiet positional near-equivalence gate and reran exp5_10. `production_promote_request_ready=true` now, but runtime production remains unchanged until manual promotion is explicitly requested.
 
 ## Tests
 

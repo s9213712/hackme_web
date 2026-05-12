@@ -369,12 +369,12 @@ dashboard selection path：
 - summary：`/home/s92137/chess_results/exp5_10_production_readiness/summary.json`
 - markdown summary：`/home/s92137/chess_results/exp5_10_production_readiness/SUMMARY.md`
 - overlap audit：`train_vs_benchmark_overlap_count=0`, `train_vs_heldout_overlap_count=0`, `position_id_overlap_count=0`, `overlap_counts_hardcoded=false`
-- expanded benchmark：candidate 104/135 = 0.770370, baseline 103/135 = 0.762963, Δ `+0.007407`
-- per-cluster：endgame `+0.075758`, tactic/special_rule/blunder/smoke hold, quiet_positional `-0.125` with 1 clean regression, opening `-0.111111` with questionable regressions
-- repeatability：`case_order_repeatability`, no model retraining, 5 seeds all Δ `+0.007407`, std `0.0`; stage/shadow/production-internal 5/5 after rook mate fixture fix
+- expanded benchmark：candidate 105/135 = 0.777778, baseline 103/135 = 0.762963, Δ `+0.014815`
+- per-cluster：endgame `+0.075758`, tactic/special_rule/blunder/smoke hold, quiet_positional `0.0` after near-equivalence gate, opening `-0.111111` with questionable regressions
+- repeatability：`case_order_repeatability`, no model retraining, 5 seeds all Δ `+0.014815`, std `0.0`; stage/shadow/production-internal 5/5 after rook mate fixture fix and quiet gate fix
 - safety：legal_rate `1.0`, illegal_rate `0.0`, suspicious_rate `0.0`; suspicious matches cleared after replacing invalid K+R mate smoke FENs
 - runtime check：bundled baseline unchanged; production runtime path `/home/s92137/hackme_web/runtime/games/models/chess_experiment_5_nnue.json` did not exist before/after, so `production_runtime_model_checked=false`, `production_runtime_unchanged=true_by_no_write_only`
-- verdict：`shadow_candidate=True`, `production_promote_request_ready=False`, `production_promote=False`; blocker is `quiet_positional_clean_regression`
+- verdict：`shadow_candidate=True`, `production_promote_request_ready=True`, `production_promote=False`; runtime model unchanged, manual promotion still required
 
 2026-05-12 exp5_11b quiet positional regression audit：
 
@@ -388,6 +388,18 @@ dashboard selection path：
 - static eval：teacher `44`, baseline `32`, candidate `28`; candidate is `-16cp` vs teacher and `-4cp` vs baseline
 - classification：`multi_good_scoring_issue=1`, `true_model_regression=0`, `fixture_issue=0`
 - recommendation：replace the production blocker with `quiet_positional_gate_label_audit_required`, then rerun exp5_10 after gate/label fix; do not retrain before that
+
+2026-05-12 exp5_11c quiet positional gate-label fix：
+
+- updated runner：`scripts/games/chess_exp5_production_readiness.py`
+- updated strength gate：`scripts/games/chess_exp5_strength_gate.py`
+- quiet audit script：`scripts/games/chess_exp5_quiet_regression_audit.py`
+- rule：`quiet_positional` cases accept moves within `50cp` of teacher and best static-eval move
+- rank audit：candidate `h2h4` is ordinal rank `7` but dense-score rank `3`; gate uses cp window, not ordinal rank
+- exp5_10 rerun summary：`/home/s92137/chess_results/exp5_10_production_readiness/summary.json`
+- strength gate summary：`/home/s92137/chess_results/exp5_10_production_readiness/strength_gate_expanded.json`
+- post-fix quiet audit：`/home/s92137/chess_results/exp5_11b_quiet_regression_audit/summary.json`（`quiet_clean_regression_count=0`）
+- final state：`production_promote_request_ready=True`, `production_promote=False`, `runtime_model_mutated=False`
 
 ## auto-retrain 與 promotion 關係
 

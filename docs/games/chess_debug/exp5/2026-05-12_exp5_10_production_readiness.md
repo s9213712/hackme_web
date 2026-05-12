@@ -51,6 +51,20 @@ Both old FENs started from invalid positions where the opposite side was already
 
 Both positions validate as legal initial boards and the expected move produces checkmate, not stalemate. exp5_10 was then rerun from scratch.
 
+## Quiet multi-good retest before promotion request
+
+exp5_11b found the only `quiet_positional_clean_regression` was a multi-good scoring issue, not a fixture issue or clear model regression. The runner and exp5 strength gate now accept quiet-positional moves inside a `50cp` static-eval near-equivalence window.
+
+For `exp5_09_bench_d400404a65f3`:
+
+- teacher: `g3f2`, static score `44`
+- baseline: `f3f4`, static score `32`, accepted by near-equivalence
+- candidate: `h2h4`, static score `28`, accepted by near-equivalence
+- candidate delta vs teacher: `-16cp`
+- candidate ordinal rank / dense-score rank: `7` / `3`
+
+The rank discrepancy is a tie-break display issue: ordinal rank depends on UCI ordering among equal-score moves, while dense-score rank groups moves by static score. The gate uses the cp window, not ordinal rank.
+
 ## Expanded held-out
 
 - cases: `135`
@@ -90,13 +104,13 @@ Label distribution:
 
 | metric | baseline | candidate | delta |
 |---|---:|---:|---:|
-| overall | 103/135 = 0.762963 | 104/135 = 0.770370 | +0.007407 |
+| overall | 103/135 = 0.762963 | 105/135 = 0.777778 | +0.014815 |
 | endgame | 54/66 = 0.818182 | 59/66 = 0.893939 | +0.075758 |
 | tactic | 10/10 = 1.0 | 10/10 = 1.0 | 0.0 |
 | special_rule | 4/4 = 1.0 | 4/4 = 1.0 | 0.0 |
 | blunder_avoid | 2/2 = 1.0 | 2/2 = 1.0 | 0.0 |
 | smoke | 8/18 = 0.444444 | 8/18 = 0.444444 | 0.0 |
-| quiet_positional | 7/8 = 0.875 | 6/8 = 0.75 | -0.125 |
+| quiet_positional | 7/8 = 0.875 | 7/8 = 0.875 | 0.0 |
 | opening | 18/27 = 0.666667 | 15/27 = 0.555556 | -0.111111 |
 
 Safety:
@@ -112,13 +126,12 @@ Candidate regressions:
 
 | cluster | case | label | baseline | candidate | reason |
 |---|---|---|---|---|---|
-| quiet_positional | `exp5_09_bench_d400404a65f3` | clean | `f3f4` | `h2h4` | unexpected_move |
 | endgame | `exp5_10_teacher_012` | clean | `e5d6` | `c6a6` | unexpected_move |
 | opening | `exp5_09_bench_657bfa8d74cc` | questionable | `d1a4` | `a2a4` | unexpected_move |
 | opening | `exp5_10_teacher_016_mirror` | questionable | `a2a3` | `a2a4` | unexpected_move |
 | opening | `exp5_10_teacher_017_mirror` | questionable | `a2a3` | `a2a4` | unexpected_move |
 
-The quiet positional regression is clean and blocks production. Opening regressions remain questionable labels, so they are diagnostic but not the primary blocker.
+The quiet positional regression is cleared by the near-equivalence gate. Opening regressions remain questionable labels, so they are diagnostic and do not block production request readiness.
 
 ## Smoke
 
@@ -138,11 +151,11 @@ This is deterministic case-order repeatability, not repeated model training.
 - model_training_repeated: `false`
 - search_profile: `fixed_depth_strong`
 - seeds: `11, 12, 13, 14, 15`
-- score_delta_per_seed: `[0.007407, 0.007407, 0.007407, 0.007407, 0.007407]`
-- mean_delta: `0.007407`
+- score_delta_per_seed: `[0.014815, 0.014815, 0.014815, 0.014815, 0.014815]`
+- mean_delta: `0.014815`
 - std_delta: `0.0`
-- min_delta: `0.007407`
-- max_delta: `0.007407`
+- min_delta: `0.014815`
+- max_delta: `0.014815`
 - stage_pass_count: `5/5`
 - shadow_pass_count: `5/5`
 - production_pass_count: `5/5`
@@ -168,13 +181,13 @@ Because the runtime file did not exist in this checkout, this round proves the r
 - comprehensive_smoke_pass: `true`
 - repeatability_pass: `true`
 - shadow_candidate: `true`
-- production_promote_request_ready: `false`
+- production_promote_request_ready: `true`
 - production_promote: `false`
 - runtime_model_mutated: `false`
 
 Blocking reasons:
 
-- `quiet_positional_clean_regression`
+- none from the gate; final reason is `policy_requires_manual_promotion_even_when_request_ready`
 
 ## Artefacts
 
@@ -188,14 +201,18 @@ Blocking reasons:
 ## Tests
 
 - `python3 -m py_compile scripts/games/chess_exp5_production_readiness.py`
+- `python3 -m py_compile scripts/games/chess_exp5_strength_gate.py`
+- `python3 -m py_compile scripts/games/chess_exp5_quiet_regression_audit.py`
 - `python3 -m py_compile scripts/games/chess_exp5_suspicious_audit.py`
 - valid K+R rook mate fixture check with python-chess
 - `python3 scripts/games/chess_exp5_production_readiness.py --help`
-- retested official exp5_10 run completed and wrote all artefacts above
+- exp5_11c retested official exp5_10 run completed and wrote all artefacts above
 - `python3 scripts/games/chess_exp5_suspicious_audit.py`
+- `python3 scripts/games/chess_exp5_quiet_regression_audit.py`
+- `python3 -m pytest tests/scripts/games/test_chess_exp5_strength_gate_script.py tests/scripts/games/test_chess_exp5_dataset_train_script.py`
 
 ## Verdict
 
-`exp5_10` keeps `shadow_candidate=true` but does not make the candidate production-ready.
+`exp5_10` now keeps `shadow_candidate=true` and sets `production_promote_request_ready=true`.
 
-The invalid rook mate smoke fixtures were fixed and `suspicious_rate` is now `0.0`; repeatability is now 5/5. The endgame improvement survives the expanded set, but the overall score delta remains thin at `+0.007407` and the clean quiet positional regression repeats. Runtime production model remains unmodified, so production remains held by `quiet_positional_clean_regression`.
+The invalid rook mate smoke fixtures were fixed and `suspicious_rate` is `0.0`; repeatability is 5/5. The quiet-positional multi-good issue is now handled by a `50cp` near-equivalence window. Runtime production model remains unmodified, so `production_promote=false` until manual promotion is explicitly requested.

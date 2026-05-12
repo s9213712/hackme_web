@@ -54,6 +54,7 @@ exp5 是後續主要棋力路線之一，方向是：
 - exp5_10 production-readiness validation：`2026-05-12_exp5_10_production_readiness.md`
 - exp5_11a suspicious-rate root-cause audit：`2026-05-12_exp5_11a_suspicious_rate_audit.md`
 - exp5_11b quiet positional regression audit：`2026-05-12_exp5_11b_quiet_regression_audit.md`
+- exp5_11c quiet positional gate-label fix：`2026-05-12_exp5_11c_quiet_gate_fix.md`
 
 ## 歷程總表
 
@@ -70,9 +71,10 @@ exp5 是後續主要棋力路線之一，方向是：
 | exp5_07 | 2026-05-12 | promotion-tier plumbing split (stage / shadow / production) | **stage_candidate=True (first)** |
 | exp5_08 | 2026-05-12 | 116-clean pool + smoke-default bugfix；mean Δ +0.0294 | **stage_candidate=True 3/3 seeds** |
 | exp5_09 | 2026-05-12 | focused benchmark (68 cases，cluster-split)；endgame +0.114 | **shadow_candidate=True 3/3 (first); production held per user policy** |
-| exp5_10 | 2026-05-12 | production-readiness validation；135 cases / 70 true held-out；overlap audit fixed and clean；invalid rook-mate smoke fixtures retested；overall Δ +0.0074，suspicious_rate 0，但 quiet clean regression remains | **shadow_candidate=True; production_promote=False** |
+| exp5_10 | 2026-05-12 | production-readiness validation；135 cases / 70 true held-out；overlap audit fixed and clean；invalid rook-mate smoke fixtures retested；overall Δ +0.0074，suspicious_rate 0，但 quiet clean regression remains pre-fix | **shadow_candidate=True; production_promote=False** |
 | exp5_11a | 2026-05-12 | suspicious-rate audit；pre-fix 2/2 suspicious rows were invalid rook-mate fixtures；after fixture fix + exp5_10 rerun，suspicious_row_count=0 | **shadow_candidate=True; production still held by quiet regression** |
 | exp5_11b | 2026-05-12 | quiet regression audit；唯一 clean regression 是 `k_and_p_symmetric` multi-good scoring issue，candidate 只比 teacher 低 16cp、比 baseline 低 4cp | **shadow_candidate=True; production held pending gate/label fix + exp5_10 rerun** |
+| exp5_11c | 2026-05-12 | quiet positional near-equivalence gate；ordinal rank 7 / dense rank 3 tie-break clarified；exp5_10 rerun overall Δ +0.014815，quiet regression cleared | **production_promote_request_ready=True; runtime unchanged** |
 
 ## Difficulty
 

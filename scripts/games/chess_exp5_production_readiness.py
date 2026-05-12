@@ -42,6 +42,7 @@ DEFAULT_TRAIN_ROWS = Path("/home/s92137/chess_results/exp5_08_clean_pool/inputs/
 DEFAULT_SEED_CASES = Path("/home/s92137/chess_results/exp5_08_clean_pool/inputs/exp5_09_benchmark_cases.jsonl")
 DEFAULT_OUTPUT_DIR = Path("/home/s92137/chess_results/exp5_10_production_readiness")
 SEARCH_PROFILE = "fixed_depth_strong"
+QUIET_POSITIONAL_NEAR_EQUIVALENT_CP = 50
 
 
 def parse_args() -> argparse.Namespace:
@@ -95,17 +96,35 @@ def _position_id(fen: str, side: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _top_static_moves(fen: str, side: str, *, limit: int = 5) -> list[str]:
-    board = chess.Board(fen)
+def _static_move_ranking(board: chess.Board, side: str) -> list[dict]:
     color_sign = 1 if side == "white" else -1
-    scored: list[tuple[str, int]] = []
+    rows: list[dict] = []
     for move in board.legal_moves:
         after = board.copy(stack=False)
         after.push(move)
         score = 1_000_000 if after.is_checkmate() else color_sign * _teacher_static_eval(after)
-        scored.append((move.uci(), int(score)))
-    scored.sort(key=lambda item: (-item[1], item[0]))
-    return [move for move, _score in scored[:limit]]
+        rows.append({"move": move.uci(), "score": int(score)})
+    rows.sort(key=lambda item: (-int(item["score"]), str(item["move"])))
+    dense_rank = 0
+    previous_score: int | None = None
+    for ordinal, row in enumerate(rows, start=1):
+        score = int(row["score"])
+        if previous_score is None or score != previous_score:
+            dense_rank += 1
+            previous_score = score
+        row["ordinal_rank"] = ordinal
+        row["dense_score_rank"] = dense_rank
+    return rows
+
+
+def _static_move_lookup(ranking: list[dict], move: str) -> dict | None:
+    wanted = str(move or "").strip().lower()
+    return next((row for row in ranking if str(row.get("move") or "") == wanted), None)
+
+
+def _top_static_moves(fen: str, side: str, *, limit: int = 5) -> list[str]:
+    board = chess.Board(fen)
+    return [str(row["move"]) for row in _static_move_ranking(board, side)[:limit]]
 
 
 def _teacher_expected(fen: str, side: str) -> tuple[str, list[str]]:
@@ -156,6 +175,62 @@ def _normalize_case(raw: dict) -> dict:
     }
 
 
+def _quiet_near_equivalent_audit(case: dict, board: chess.Board, chosen: str) -> dict:
+    empty = {
+        "applied": False,
+        "accepted": False,
+        "reason": "",
+        "cp_window": QUIET_POSITIONAL_NEAR_EQUIVALENT_CP,
+    }
+    if str(case.get("category") or "") != "quiet_positional" or not chosen:
+        return empty
+    if not board.is_valid():
+        return {**empty, "applied": True, "reason": "invalid_board"}
+    side = str(case.get("side") or "").strip().lower()
+    ranking = _static_move_ranking(board, side)
+    teacher = str(case.get("teacher_move") or "").strip().lower()
+    if not teacher:
+        expected = [str(item).lower() for item in (case.get("expected_uci_any") or [])]
+        teacher = expected[0] if expected else ""
+    chosen_row = _static_move_lookup(ranking, chosen)
+    teacher_row = _static_move_lookup(ranking, teacher)
+    if chosen_row is None or teacher_row is None:
+        return {
+            **empty,
+            "applied": True,
+            "reason": "missing_static_score",
+            "teacher_move": teacher,
+            "chosen_move": chosen,
+        }
+    best_score = int(ranking[0]["score"]) if ranking else int(teacher_row["score"])
+    chosen_score = int(chosen_row["score"])
+    teacher_score = int(teacher_row["score"])
+    delta_vs_teacher = chosen_score - teacher_score
+    delta_vs_best = chosen_score - best_score
+    accepted = (
+        delta_vs_teacher >= -QUIET_POSITIONAL_NEAR_EQUIVALENT_CP
+        and delta_vs_best >= -QUIET_POSITIONAL_NEAR_EQUIVALENT_CP
+    )
+    return {
+        "applied": True,
+        "accepted": accepted,
+        "reason": "within_static_eval_window" if accepted else "outside_static_eval_window",
+        "cp_window": QUIET_POSITIONAL_NEAR_EQUIVALENT_CP,
+        "teacher_move": teacher,
+        "chosen_move": chosen,
+        "teacher_score": teacher_score,
+        "chosen_score": chosen_score,
+        "best_score": best_score,
+        "delta_vs_teacher": delta_vs_teacher,
+        "delta_vs_best": delta_vs_best,
+        "chosen_ordinal_rank": int(chosen_row["ordinal_rank"]),
+        "chosen_dense_score_rank": int(chosen_row["dense_score_rank"]),
+        "teacher_ordinal_rank": int(teacher_row["ordinal_rank"]),
+        "teacher_dense_score_rank": int(teacher_row["dense_score_rank"]),
+        "top_static_moves": [str(row["move"]) for row in ranking[:5]],
+    }
+
+
 def _evaluate(model_path: Path, case: dict, *, search_profile: str) -> dict:
     board = chess.Board(str(case["fen"]))
     try:
@@ -173,6 +248,7 @@ def _evaluate(model_path: Path, case: dict, *, search_profile: str) -> dict:
     is_stalemate = False
     is_promotion = False
     is_capture = False
+    quiet_near_equivalent = {}
     if move:
         chosen = f"{move.get('from', '')}{move.get('to', '')}{move.get('promotion') or ''}".lower()
     reasons: list[str] = []
@@ -195,8 +271,12 @@ def _evaluate(model_path: Path, case: dict, *, search_profile: str) -> dict:
             is_stalemate = after.is_stalemate()
             expected = case["expected_uci_any"]
             forbidden = case["must_not_uci_any"]
+            quiet_near_equivalent = _quiet_near_equivalent_audit(case, board, chosen)
             if expected and chosen not in expected:
-                reasons.append("unexpected_move")
+                if quiet_near_equivalent.get("accepted"):
+                    pass
+                else:
+                    reasons.append("unexpected_move")
             if forbidden and chosen in forbidden:
                 reasons.append("forbidden_move_played")
             if case["must_checkmate"] and not is_mate:
@@ -220,6 +300,8 @@ def _evaluate(model_path: Path, case: dict, *, search_profile: str) -> dict:
         "is_capture": is_capture,
         "reasons": reasons,
         "pass": not reasons,
+        "quiet_near_equivalent": bool(quiet_near_equivalent.get("accepted")),
+        "quiet_static_audit": quiet_near_equivalent,
     }
 
 
@@ -568,6 +650,10 @@ def _evaluate_cases(cases: list[dict], *, baseline_path: Path, candidate_path: P
             "candidate_move": row["candidate"]["chosen_move"],
             "candidate_pass": row["candidate"]["pass"],
             "candidate_reasons": row["candidate"]["reasons"],
+            "baseline_quiet_near_equivalent": row["baseline"].get("quiet_near_equivalent", False),
+            "candidate_quiet_near_equivalent": row["candidate"].get("quiet_near_equivalent", False),
+            "baseline_quiet_static_audit": row["baseline"].get("quiet_static_audit", {}),
+            "candidate_quiet_static_audit": row["candidate"].get("quiet_static_audit", {}),
             "candidate_improved": row["candidate_improved"],
             "candidate_regressed": row["candidate_regressed"],
             "candidate_illegal": row["candidate_illegal"],

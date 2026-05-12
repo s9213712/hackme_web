@@ -85,8 +85,15 @@ def _static_ranking(board: chess.Board, side: str) -> list[dict]:
         score = _move_score(board, side, move.uci())
         rows.append({"move": move.uci(), "score": int(score if score is not None else -10_000_000)})
     rows.sort(key=lambda row: (-int(row["score"]), str(row["move"])))
+    dense_rank = 0
+    previous_score: int | None = None
     for index, row in enumerate(rows, start=1):
+        score = int(row["score"])
+        if previous_score is None or score != previous_score:
+            dense_rank += 1
+            previous_score = score
         row["rank"] = index
+        row["dense_score_rank"] = dense_rank
     return rows
 
 
@@ -94,6 +101,13 @@ def _lookup_rank(ranking: list[dict], move: str) -> int | None:
     for row in ranking:
         if row["move"] == move:
             return int(row["rank"])
+    return None
+
+
+def _lookup_dense_rank(ranking: list[dict], move: str) -> int | None:
+    for row in ranking:
+        if row["move"] == move:
+            return int(row["dense_score_rank"])
     return None
 
 
@@ -199,7 +213,9 @@ def _audit(summary: dict, cases: dict[str, dict], *, multi_good_cp_window: int) 
             "candidate_in_teacher_top5": candidate_move in teacher_top5,
             "baseline_static_rank": _lookup_rank(ranking, baseline_move),
             "candidate_static_rank": _lookup_rank(ranking, candidate_move),
+            "candidate_static_dense_score_rank": _lookup_dense_rank(ranking, candidate_move),
             "teacher_static_rank": _lookup_rank(ranking, teacher_move),
+            "teacher_static_dense_score_rank": _lookup_dense_rank(ranking, teacher_move),
             "baseline_static_score": baseline_score,
             "candidate_static_score": candidate_score,
             "teacher_static_score": teacher_score,
@@ -247,14 +263,22 @@ def _summary(rows: list[dict], *, summary_path: Path, cases_path: Path, output_d
         "fixture_issue_count": by_class.get("fixture_issue", 0),
         "needs_manual_review_count": by_class.get("needs_manual_review", 0),
         "production_implication": (
-            "quiet regression appears to be a multi-good scoring/top-k issue; fix gate or label audit and rerun exp5_10 before production"
-            if blocker_cleared and by_class.get("multi_good_scoring_issue", 0) == len(rows)
-            else "quiet regression includes unresolved model or fixture risk; do not production-promote"
+            "no quiet clean regressions remain in the source exp5_10 summary"
+            if not rows
+            else (
+                "quiet regression appears to be a multi-good scoring/top-k issue; fix gate or label audit and rerun exp5_10 before production"
+                if blocker_cleared and by_class.get("multi_good_scoring_issue", 0) == len(rows)
+                else "quiet regression includes unresolved model or fixture risk; do not production-promote"
+            )
         ),
         "production_blocker_recommendation": (
-            "replace quiet_positional_clean_regression with quiet_positional_gate_label_audit_required"
-            if blocker_cleared and by_class.get("multi_good_scoring_issue", 0) == len(rows)
-            else "keep quiet_positional_clean_regression"
+            "quiet_positional_clean_regression cleared in the current exp5_10 rerun"
+            if not rows
+            else (
+                "replace quiet_positional_clean_regression with quiet_positional_gate_label_audit_required"
+                if blocker_cleared and by_class.get("multi_good_scoring_issue", 0) == len(rows)
+                else "keep quiet_positional_clean_regression"
+            )
         ),
     }
 
@@ -278,7 +302,8 @@ def _write_md(path: Path, payload: dict, rows: list[dict]) -> None:
         topk = (
             f"baseline={row['baseline_in_teacher_top3']}/{row['baseline_in_teacher_top5']}; "
             f"candidate={row['candidate_in_teacher_top3']}/{row['candidate_in_teacher_top5']}; "
-            f"candidate_static_rank={row['candidate_static_rank']}"
+            f"candidate_static_rank={row['candidate_static_rank']}; "
+            f"candidate_dense_rank={row['candidate_static_dense_score_rank']}"
         )
         lines.append(
             "| "
