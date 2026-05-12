@@ -10,6 +10,7 @@ without mixing that design into the exp3/exp4 learning gates.
 from __future__ import annotations
 
 import json
+import hashlib
 from datetime import datetime
 from pathlib import Path
 
@@ -84,6 +85,7 @@ def experiment_nnue_model_template() -> dict:
         "architecture": "nnue-like-sparse-accumulator-v1",
         "feature_weights": {},
         "piece_square_weights": {},
+        "opening_overlay": {},
         "tempo": 12,
         "mobility_weight": 3,
         "king_safety_weight": 18,
@@ -115,12 +117,61 @@ def normalize_experiment_nnue_model_payload(model: dict) -> dict | None:
         "architecture": "nnue-like-sparse-accumulator-v1",
         "feature_weights": {str(key): float(value) for key, value in feature_weights.items()},
         "piece_square_weights": {str(key): float(value) for key, value in piece_square_weights.items()},
+        "opening_overlay": _normalize_opening_overlay(model.get("opening_overlay")),
         "tempo": tempo,
         "mobility_weight": mobility_weight,
         "king_safety_weight": king_safety_weight,
         "training_objective": str(model.get("training_objective") or "position_move_evaluator_delta"),
         "sample_count": max(0, int(model.get("sample_count") or 0)),
         "updated_at": str(model.get("updated_at") or _now()),
+    }
+
+
+def _normalize_opening_overlay(raw) -> dict:
+    if not isinstance(raw, dict):
+        return {}
+    positions_raw = raw.get("positions")
+    if not isinstance(positions_raw, dict):
+        return {}
+    positions: dict[str, dict] = {}
+    for key, payload in positions_raw.items():
+        key_text = str(key or "").strip()
+        if not key_text or not isinstance(payload, dict):
+            continue
+        moves_raw = payload.get("moves") or payload.get("expected_uci_any") or []
+        moves: list[dict] = []
+        for index, item in enumerate(moves_raw):
+            if isinstance(item, dict):
+                uci = str(item.get("uci") or item.get("move") or "").strip().lower()
+                weight = float(item.get("weight") or max(1, 100 - index))
+            else:
+                uci = str(item or "").strip().lower()
+                weight = float(max(1, 100 - index))
+            if len(uci) < 4:
+                continue
+            moves.append({"uci": uci, "weight": round(_clip(weight, 0.0, 10000.0), 6)})
+        if not moves:
+            continue
+        positions[key_text] = {
+            "id": str(payload.get("id") or key_text),
+            "fen": str(payload.get("fen") or ""),
+            "side": str(payload.get("side") or "").strip().lower(),
+            "source": str(payload.get("source") or "opening_overlay"),
+            "label_quality": str(payload.get("label_quality") or ""),
+            "moves": moves,
+        }
+    if not positions:
+        return {}
+    try:
+        max_fullmove = max(1, int(raw.get("max_fullmove") or 12))
+    except Exception:
+        max_fullmove = 12
+    return {
+        "enabled": bool(raw.get("enabled", True)),
+        "version": str(raw.get("version") or "exp5_opening_overlay_v1"),
+        "mode": str(raw.get("mode") or "exact_position_book_prior"),
+        "max_fullmove": max_fullmove,
+        "positions": positions,
     }
 
 
@@ -316,6 +367,51 @@ def _would_stalemate(board: chess.Board, move: chess.Move) -> bool:
     return _legal_after_move(board, move).is_stalemate()
 
 
+def _opening_overlay_position_id(board: chess.Board, side: str) -> str:
+    ep = chess.square_name(board.ep_square) if board.ep_square is not None else "-"
+    text = "|".join([
+        board.board_fen(),
+        "w" if board.turn == chess.WHITE else "b",
+        board.castling_xfen() or "-",
+        ep,
+        str(side or "").strip().lower(),
+    ])
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _opening_overlay_priority_move(board: chess.Board, side: str, model: dict) -> chess.Move | None:
+    overlay = model.get("opening_overlay") if isinstance(model.get("opening_overlay"), dict) else {}
+    if not overlay or not overlay.get("enabled", True):
+        return None
+    if board.is_check():
+        return None
+    try:
+        max_fullmove = int(overlay.get("max_fullmove") or 12)
+    except Exception:
+        max_fullmove = 12
+    if board.fullmove_number > max_fullmove:
+        return None
+    positions = overlay.get("positions") if isinstance(overlay.get("positions"), dict) else {}
+    position_id = _opening_overlay_position_id(board, side)
+    entry = positions.get(position_id)
+    if not isinstance(entry, dict):
+        return None
+    ranked = []
+    for index, item in enumerate(entry.get("moves") or []):
+        if not isinstance(item, dict):
+            continue
+        try:
+            move = chess.Move.from_uci(str(item.get("uci") or "").strip().lower())
+        except Exception:
+            continue
+        if move not in board.legal_moves or _would_stalemate(board, move):
+            continue
+        ranked.append((float(item.get("weight") or 0.0), -index, move.uci(), move))
+    if not ranked:
+        return None
+    return sorted(ranked, reverse=True)[0][3]
+
+
 def _avoid_stalemate_filter(board: chess.Board, move: chess.Move | None, *, score_move) -> chess.Move | None:
     if move is None or not _would_stalemate(board, move):
         return move
@@ -501,11 +597,18 @@ def choose_experiment_nnue_move(board_state, side: str, *, model_path=None, sear
             reverse=True,
         )[0]
         return _move_dict(board, best_mate)
+    model = _load_model(Path(model_path or default_chess_nnue_model_path()))
+    overlay_move = _opening_overlay_priority_move(board, side, model)
     priority_move = _special_rule_priority_move(board)
+    if overlay_move is not None:
+        # Exact curated opening overlays may override the broad "castle early"
+        # heuristic, but not forcing rule/tactic priorities such as promotion,
+        # en-passant, or high-value captures.
+        if priority_move is None or board.is_castling(priority_move):
+            return _move_dict(board, overlay_move)
     if priority_move is not None:
         return _move_dict(board, priority_move)
 
-    model = _load_model(Path(model_path or default_chess_nnue_model_path()))
     profile = _resolve_search_profile(search_profile)
     hasher = ZobristHasher(seed=20260530)
     eval_cache: dict[int, int] = {}

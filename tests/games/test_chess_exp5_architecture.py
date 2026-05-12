@@ -10,6 +10,7 @@ from services.games import self_play_training
 from services.games.chess_nnue import (
     EXPERIMENT_NNUE_DIFFICULTY,
     choose_experiment_nnue_move,
+    experiment_nnue_model_template,
     train_experiment_nnue_from_replay_samples,
 )
 
@@ -181,3 +182,70 @@ def test_exp5_training_positive_black_sample_increases_black_piece_weight(tmp_pa
     payload = json.loads(model_path.read_text(encoding="utf-8"))
     assert result["accepted_samples"] == 1
     assert payload["piece_square_weights"]["b:p:e5"] > 0
+
+
+def test_exp5_opening_overlay_uses_exact_position_book_prior(tmp_path):
+    model_path = tmp_path / "exp5_overlay.json"
+    payload = experiment_nnue_model_template()
+    payload["opening_overlay"] = {
+        "enabled": True,
+        "version": "exp5_opening_overlay_v1",
+        "mode": "exact_position_book_prior",
+        "max_fullmove": 12,
+        "positions": {
+            "ce30807049a23e2f3a9eb122e950cb3530814ac9ce92c77c89d7adbb6c8bd3c4": {
+                "id": "start",
+                "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+                "side": "white",
+                "label_quality": "clean",
+                "moves": [
+                    {"uci": "e2e4", "weight": 100},
+                    {"uci": "d2d4", "weight": 99},
+                ],
+            }
+        },
+    }
+    model_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+
+    chosen = choose_experiment_nnue_move(
+        {"__fen__": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"},
+        "white",
+        model_path=model_path,
+        search_profile="fixed_depth_strong",
+    )
+
+    assert f"{chosen['from']}{chosen['to']}{chosen.get('promotion') or ''}" == "e2e4"
+
+
+def test_exp5_opening_overlay_can_override_broad_early_castle_heuristic(tmp_path):
+    model_path = tmp_path / "exp5_overlay.json"
+    fen = "r1bqkbnr/1ppp1ppp/p1n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 0 4"
+    payload = experiment_nnue_model_template()
+    payload["opening_overlay"] = {
+        "enabled": True,
+        "version": "exp5_opening_overlay_v1",
+        "mode": "exact_position_book_prior",
+        "max_fullmove": 12,
+        "positions": {
+            "b9b6917204d4136fc655581831afd0601c9816446c1bb15e5dae0ee594417950": {
+                "id": "ruy_after_a6",
+                "fen": fen,
+                "side": "white",
+                "label_quality": "clean",
+                "moves": [
+                    {"uci": "b5a4", "weight": 100},
+                    {"uci": "b5c6", "weight": 99},
+                ],
+            }
+        },
+    }
+    model_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+
+    chosen = choose_experiment_nnue_move(
+        {"__fen__": fen},
+        "white",
+        model_path=model_path,
+        search_profile="fixed_depth_strong",
+    )
+
+    assert f"{chosen['from']}{chosen['to']}{chosen.get('promotion') or ''}" == "b5a4"

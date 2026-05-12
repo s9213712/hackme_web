@@ -397,7 +397,7 @@ Difficulty：
 演進文件：
 
 - [`exp5/`](exp5/)
-- latest learning ledger：[`exp5/2026-05-12_exp5_15_opening_candidate_search.md`](exp5/2026-05-12_exp5_15_opening_candidate_search.md)
+- latest learning ledger：[`exp5/2026-05-12_exp5_16_opening_overlay_candidate.md`](exp5/2026-05-12_exp5_16_opening_overlay_candidate.md)
 
 ## 常用操作
 

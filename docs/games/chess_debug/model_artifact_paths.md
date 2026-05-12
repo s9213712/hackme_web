@@ -495,6 +495,31 @@ dashboard selection path：
 - stage/promote attempted：`false`
 - decision：no exp5_15 candidate is stageable; current exp5 production model remains runtime
 
+2026-05-12 exp5_16 opening overlay candidate：
+
+- overlay script：`scripts/games/chess_exp5_opening_overlay_candidate.py`
+- output root：`/home/s92137/chess_results/exp5_16_opening_overlay_candidate/`
+- summary：`/home/s92137/chess_results/exp5_16_opening_overlay_candidate/summary.json`
+- summary md：`/home/s92137/chess_results/exp5_16_opening_overlay_candidate/SUMMARY.md`
+- candidate model：`/home/s92137/chess_results/exp5_16_opening_overlay_candidate/chess_experiment_5_nnue_opening_overlay_candidate.json`
+- overlay payload：`/home/s92137/chess_results/exp5_16_opening_overlay_candidate/opening_overlay.json`
+- opening evaluation：`/home/s92137/chess_results/exp5_16_opening_overlay_candidate/opening_evaluation.json`
+- retention evaluation：`/home/s92137/chess_results/exp5_16_opening_overlay_candidate/retention_evaluation.json`
+- repeatability：`/home/s92137/chess_results/exp5_16_opening_overlay_candidate/repeatability_5_seed.json`
+- current production sha actual：`c47ef752aa69d7b8c813b587468228593f44d69c9b947313325e03797e4450dc`
+- candidate sha：`d35c04707fd7c10e8b6efe07740e69da533dea524d31aa63308afea891d006c9`
+- overlay source dataset hash：`d8888d5116cb9ffd542748c2187b08c4db6535cd24ece4c1722bcf87df55dd70`
+- overlay positions：`31`
+- clean opening result：current `1/31 = 0.032258`, candidate `31/31 = 1.0`, delta `+0.967742`
+- retention result：current `115/137 = 0.839416`, candidate `115/137 = 0.839416`, delta `0.0`
+- smoke：current `18/18 = 1.0`, candidate `18/18 = 1.0`
+- endgame：current `60/66 = 0.909091`, candidate `60/66 = 0.909091`
+- safety：`illegal_rate=0.0`, `suspicious_rate=0.0`, `clean_regressed_count=0`
+- repeatability：`5/5`, all retention deltas `0.0`
+- runtime mutation：`false`
+- stage/promote attempted：`false`
+- decision：`candidate_can_stage_for_exp5_17=true`; not production-promoted in exp5_16
+
 ## auto-retrain 與 promotion 關係
 
 auto-retrain 入口：
