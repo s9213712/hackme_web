@@ -3,6 +3,15 @@
 > **2026-05-12 W7 update**: stage 00 PGN / prepared replay input is now
 > wired into the orchestrator. See the "W7 — PGN input lane" section
 > below; the rest of W6 is unchanged.
+>
+> **2026-05-12 W8 update**: stage 00b PGN teacher-audit gate is now
+> wired between stage 00 and stage 4. Raw PGN-derived rows are
+> diagnostic only; only audit-accepted rows reach
+> `seed_train --dry-run`. Full details in
+> [`2026-05-12_w8_pgn_teacher_audit_lane.md`](./2026-05-12_w8_pgn_teacher_audit_lane.md).
+> A new aggregator invariant
+> `unaudited_imported_dataset_used_for_seed_train` flips True if the
+> operator passes `--include-unaudited-pgn-in-dryrun-diagnostic`.
 
 ## What W6 ships
 

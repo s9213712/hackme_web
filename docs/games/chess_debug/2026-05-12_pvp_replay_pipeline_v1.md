@@ -1,28 +1,33 @@
 # PvP / human-vs-engine replay pipeline v1 (2026-05-12)
 
-## Dry-run orchestrator (W6 + W7)
+## Dry-run orchestrator (W6 + W7 + W8)
 
-For the full chain (PGN input → PvP export → sparring → harvester →
-seed_train dry-run → aggregate report), use the orchestrator:
+For the full chain (PGN input → audit → PvP export → sparring →
+harvester → seed_train dry-run → aggregate report), use the orchestrator:
 
 ```bash
 python3 scripts/games/chess_pipeline_dryrun.py \
-  --pgn-path <local.pgn>                      \   # W7
-  --prepared-replay-jsonl <prepared.jsonl>    \   # W7 (alternative)
-  --runtime-dir <hackme runtime>              \
-  --exp4-model-path <staging exp4 candidate>  \
-  --exp5-model-path <stage candidate or production> \
+  --pgn-path <local.pgn>                                \
+  --pgn-audit-exp4-model-path <exp4_pv.json>            \   # W8
+  --pgn-audit-exp5-model-path <exp5_nnue.json>          \   # W8
+  --pgn-audit-profile strict                            \   # W8 (default)
+  --runtime-dir <hackme runtime>                        \
+  --exp4-model-path <staging exp4 candidate>            \
+  --exp5-model-path <stage candidate or production>     \
   --sparring-mode smoke
 ```
 
 Every stage runs as a separate subprocess with safe defaults; stage 4
 is hard-coded `--dry-run`; the aggregator's invariants block lists
 `all_stages_diagnostic_only`, `any_production_runtime_mutation`,
-`any_model_mutation`. W7 added stage 00 (PGN / prepared replay input)
-without changing the safety contract — the W7 verification run
-demonstrates rows_kept=12 / exp4_failed=0 / exp5_failed=0 with no
-mutation, no production touch. Details + safety guarantees in
-[`2026-05-12_w6_pipeline_dryrun.md`](./2026-05-12_w6_pipeline_dryrun.md).
+`any_model_mutation`, and (since W8)
+`unaudited_imported_dataset_used_for_seed_train`. W7 added stage 00
+(PGN / prepared replay input). **W8 added stage 00b (teacher audit)**
+between stage 00 and stage 4: raw PGN-derived rows are diagnostic only,
+and only audit-accepted rows can reach `seed_train --dry-run`. Details +
+safety guarantees in
+[`2026-05-12_w6_pipeline_dryrun.md`](./2026-05-12_w6_pipeline_dryrun.md)
+and [`2026-05-12_w8_pgn_teacher_audit_lane.md`](./2026-05-12_w8_pgn_teacher_audit_lane.md).
 
 ## Operator UX (W5)
 
