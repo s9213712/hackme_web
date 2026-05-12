@@ -32,14 +32,13 @@ exp3 的價值已經完成：它證明了 replay validation、deterministic gate
 - exp4：推進 Policy/Value + MCTS。
 - exp5：推進 NNUE-like evaluator + alpha-beta/PVS。
 
-### exp5 最新進度（截至 2026-05-12 exp5_14b）
+### exp5 最新進度（截至 2026-05-12 final promotion）
 
-- exp5_12 已把 exp5_08 / exp5_10 validated candidate promoted 到 runtime production model（sha256 `c47ef752...`）。
-- exp5_13 補上 runtime rule-priority / stalemate hardening；model artifact unchanged，但 production runtime behavior changed by code path。
-- exp5_13 validation：137 cases、72 true held-out、overlap audit 0；runtime candidate 115/137 = 0.839416，baseline 112/137 = 0.817518，Δ +0.021898。
-- rule smoke 18/18，illegal_rate 0.0，suspicious_rate 0.0，clean_regressed_count 0，repeatability 5/5 且 std_delta 0.0。
-- exp5_14 opening audit：27/27 opening rows are questionable；0 clean true opening regressions；opening weakness is not a production blocker but cannot be used as clean training evidence yet。
-- exp5_14b clean opening expansion：31 clean multi-good rows，kept overlap 0；current production-equivalent opening score is only 1/31, so exp5_15 should target opening curriculum against current production。
+- exp5 final promotion 已把 exp5_16 opening overlay promoted 到 runtime production model（sha256 `d35c047...`）。
+- bundled warm-up seed `services/games/models/chess_experiment_5_nnue.json` 同步到同一 sha，讓新 runtime 首次 warm-start 直接取得 promoted model。
+- post-promotion validation：clean opening 31/31，retention 115/137，endgame 60/66，smoke 18/18，special_rule 6/6，tactic 10/10，runtime priority safety 5/5。
+- illegal_rate 0.0，suspicious_rate 0.0，clean_regressed_count 0，repeatability 5/5。
+- exp5_status：`promoted_and_frozen`；不要再開 exp5_19，除非有真實 production regression。
 - 詳見 [`exp5/README.md`](exp5/) 歷程總表 + 各輪 ledger。
 
 ## Experiment 1：基礎搜尋與對局學習
@@ -130,6 +129,18 @@ Difficulty：
 - runtime production hash：`333ed8e72524836d39851b74f4c209c6e08f2652720cacf36a13aa2ac8448dee`
 - 前後端 `experiment 3:dl` 串接、warm-start、trusted replay 收集、autorun candidate retrain、production/candidate 模型隔離已實測成立。
 - 已知限制：production auto-retrain 目前仍走 `chess_train_pipeline.py` full pipeline，不是 exp34 quick deterministic balanced gate；若要用 deterministic gate 作自動 promotion，需另行接入。
+
+## 2026-05-12 chess convergence summary
+
+- exp5：reviewed opening overlay promoted to runtime and bundled warm-up seed; post-promotion gates pass; status `promoted_and_frozen`; no exp5_19 unless a real production regression appears.
+- exp4：guarded overlay promotion parked after 26 unsafe broad-sanity overrides; production default remains disabled; auto-promotion defaults exclude exp4; learning/replay/dry-run/staging path remains usable.
+- W pipeline：W8 audit/download/import tooling is retained for real-game and external PGN learning; no W9 downloader expansion is needed unless a real external PGN source is requested.
+- Frontend：no new chess debug UI/pages for this convergence step.
+
+Closeout ledgers:
+
+- [`exp5/2026-05-12_exp5_final_promotion.md`](exp5/2026-05-12_exp5_final_promotion.md)
+- [`exp4/2026-05-12_exp4_convergence_learning_only.md`](exp4/2026-05-12_exp4_convergence_learning_only.md)
 
 ## Experiment 4：Policy/Value + MCTS
 

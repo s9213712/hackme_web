@@ -70,3 +70,20 @@ def test_exp4_guarded_overlay_targeted_replay_writes_artifacts(tmp_path):
     assert payload["source"] == "exp4_25_guarded_overlay_targeted_replay"
     assert payload["promotion"] is False
     assert "unsafe_rows_total" in md
+
+
+def test_exp4_guarded_overlay_parking_status_is_explicit(monkeypatch):
+    from services.games.chess_pv_guarded_overlay import exp4_guarded_overlay_parking_status
+
+    monkeypatch.delenv("HTML_LEARNING_CHESS_EXP4_GUARDED_OVERLAY", raising=False)
+
+    status = exp4_guarded_overlay_parking_status()
+
+    assert status["exp4_guarded_overlay_status"] == "parked_not_promotion_ready"
+    assert status["promotion"] is False
+    assert status["runtime_mutated"] is False
+    assert status["retrain_attempted"] is False
+    assert status["broad_sanity_unsafe_override_count"] == 26
+    assert status["unsafe_guard_reason"] == "runtime_static_and_rule_guard_passed"
+    assert status["production_default"] == "disabled"
+    assert status["enabled_now"] is False

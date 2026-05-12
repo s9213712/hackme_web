@@ -21,6 +21,7 @@ DEFAULT_RETRAIN_MIN_USABLE_REPLAYS = 25
 DEFAULT_RETRAIN_MAX_AGE_HOURS = 24 * 7
 _PIPELINE_AUTORUN_LOCK = threading.Lock()
 PIPELINE_RETRAIN_ENGINES = ("experiment 3:dl", "experiment 4:pv", "experiment 5:nnue")
+PIPELINE_DEFAULT_PROMOTE_ENGINES = ("experiment 3:dl", "experiment 5:nnue")
 
 
 def _runtime_root() -> Path:
@@ -201,7 +202,7 @@ def _pipeline_command_args(*, min_usable_replays: int, target_engines: list[str]
     else:
         cmd.extend([
             "--promote-engines",
-            "experiment 3:dl,experiment 4:pv,experiment 5:nnue",
+            ",".join(PIPELINE_DEFAULT_PROMOTE_ENGINES),
         ])
     return cmd
 

@@ -813,7 +813,24 @@ exp4_08 顯示 e_pawn 真失敗只剩 1 個 case (`gate_e_pawn_hard_001` × cp10
 - mistake_retention probe 仍保留 strict mode；mistake-retention fallback 仍獨立記錄在 `targeted_mistake_retention_success`，不可被 label audit 改成 broad opening generalization。
 - audits/*.jsonl 已包含 exp4_08 的 opening_target_margin_audit + e_pawn_clean_held_out_diagnosis；本輪 `opening_label_audit` 的 case rows 仍留在 summary（總筆數 ~6 不大）。
 
-## 最新狀態（exp4_23）
+## 最新狀態（learning-only closeout）
+
+exp4 guarded overlay promotion is now parked:
+
+- status: `parked_not_promotion_ready`
+- reason: exp4_24 found 26 unsafe ordinary override rows from `runtime_static_and_rule_guard_passed`
+- exp4_25 targeted replay after guard tightening: unsafe `0/26`
+- production default: disabled
+- auto pipeline default promotion targets exclude exp4
+- learning/replay/dry-run/staging path remains usable
+
+Do not start exp4_26 or another full diagnostic loop to chase promotion. Reopen guarded overlay only if real-game/live-learning evidence shows a repeated production weakness and W8-audited data supports it.
+
+Closeout ledger:
+
+- [`2026-05-12_exp4_convergence_learning_only.md`](2026-05-12_exp4_convergence_learning_only.md)
+
+## Previous state（exp4_23 → exp4_25）
 
 exp4 的 guarded overlay 路線目前不是 promotion-ready。
 
@@ -843,12 +860,13 @@ exp4_25 已完成 runtime guard tightening：
   - guard_reason_after 全部是 `ordinary_runtime_margin_insufficient`
 - deterministic actual runtime guarded score 從 exp4_23 的 `0.9231` 回到 baseline `0.8693`，unsafe 仍為 `0`。
 
-判讀：exp4_25 修掉 broad sanity regression，但也犧牲了原本的 +0.0538 deterministic overlay 訊號。下一步不要 retrain，應做更精細的 no-label guard feature audit，找出能保留正向 override 且不重新產生 unsafe 的 runtime evidence。
+判讀：exp4_25 修掉 broad sanity regression，但也犧牲了原本的 +0.0538 deterministic overlay 訊號。此路線先停在 learning-only；不要為了 promotion 繼續開 exp4_26/full diagnostic。
 
 ## 歷程報告
 
 - [2026-05-12 Exp4_24 guarded overlay unsafe override audit](2026-05-12_exp4_24_guarded_overlay_unsafe_override_audit.md)
 - [2026-05-12 Exp4_25 guarded overlay runtime guard tightening](2026-05-12_exp4_25_guarded_overlay_runtime_guard_tightening.md)
+- [2026-05-12 Exp4 convergence learning-only](2026-05-12_exp4_convergence_learning_only.md)
 - [2026-05-12 Exp4_23 guarded overlay broad sanity gate](2026-05-12_exp4_23_guarded_overlay_broad_sanity_gate.md)
 - [2026-05-12 Exp4_22 actual runtime guarded overlay full diagnostic](2026-05-12_exp4_22_actual_runtime_guarded_overlay_full.md)
 - [2026-05-12 Exp4_19 guarded overlay attribution](2026-05-12_exp4_19_guarded_overlay_attribution.md)

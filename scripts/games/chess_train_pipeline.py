@@ -58,8 +58,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-benchmark", action="store_true")
     parser.add_argument(
         "--promote-engines",
-        default="experiment 3:dl,experiment 4:pv,experiment 5:nnue",
-        help="Comma-separated engines to auto stage/promote if their gate passes.",
+        default="experiment 3:dl,experiment 5:nnue",
+        help="Comma-separated engines to auto stage/promote if their gate passes. exp4 is explicit opt-in while guarded overlay promotion is parked.",
     )
     return parser.parse_args()
 

@@ -225,13 +225,18 @@ full pipeline helper 已定義 exp5 candidate paths：
 - model：`$HACKME_RUNTIME_DIR/games/models/candidates/runs/<run_id>/chess_experiment_5_nnue.json`
 - replay：`$HACKME_RUNTIME_DIR/games/models/candidates/runs/<run_id>/chess_experiment_5_nnue_replay.jsonl`
 
-目前通用 auto-retrain pipeline 的 `PIPELINE_RETRAIN_ENGINES` 已包含：
+目前通用 auto-retrain pipeline 的 retrain target 已包含：
 
 - `experiment 3:dl`
 - `experiment 4:pv`
 - `experiment 5:nnue`
 
-但 exp5 尚未完成和 exp3/exp4 同等深度的 deterministic learning / mistake-retention 驗收報告；因此它可進入 auto-retrain candidate flow，但不應把 exp3/exp4 的 promotion evidence 直接套用到 exp5。
+default auto-promotion target 只包含：
+
+- `experiment 3:dl`
+- `experiment 5:nnue`
+
+exp4 guarded overlay promotion 已 parked；exp4 仍可產生 candidate / dry-run / audited replay learning，但 production promotion 需要 operator 顯式指定，不再是 autorun default。exp5 已完成 final opening overlay promotion 並 frozen；未來 exp5 強化只走 real-game replay + audit + normal retrain/promotion flow。
 
 promotion/stage：
 
@@ -566,6 +571,21 @@ dashboard selection path：
 - rollback if runtime absent：delete runtime override file to restore fallback sha `c47ef752...`
 - rollback if runtime exists：restore backup from `/home/s92137/chess_results/exp5_18_promotion_backup/`
 
+2026-05-12 exp5 final promotion：
+
+- ledger：`docs/games/chess_debug/exp5/2026-05-12_exp5_final_promotion.md`
+- runtime path：`/home/s92137/hackme_web/runtime/games/models/chess_experiment_5_nnue.json`
+- runtime sha：`d35c04707fd7c10e8b6efe07740e69da533dea524d31aa63308afea891d006c9`
+- bundled warm-up seed：`services/games/models/chess_experiment_5_nnue.json`
+- bundled warm-up seed sha：`d35c04707fd7c10e8b6efe07740e69da533dea524d31aa63308afea891d006c9`
+- post-promotion summary：`/home/s92137/chess_results/exp5_final_promotion_postverify/summary.json`
+- clean opening：`31/31`
+- retention：`115/137`
+- clean regression：`0`
+- illegal/suspicious：`0.0/0.0`
+- runtime priority safety：`5/5`
+- status：`promoted_and_frozen`
+
 ## auto-retrain 與 promotion 關係
 
 auto-retrain 入口：
@@ -574,6 +594,7 @@ auto-retrain 入口：
 - 由 replay buffer 狀態與 `HTML_LEARNING_CHESS_RETRAIN_MIN_REPLAYS` 控制是否啟動。
 - 預設門檻：`25` usable replays。
 - 預設 retrain exp3/exp4/exp5；exp1 通常透過 `--skip-exp1-refine` 排除舊式 DB refine。
+- 預設 promotion targets：exp3/exp5。exp4 不再 default promotion。
 
 啟動命令實際形式：
 
@@ -582,7 +603,7 @@ python3 scripts/games/chess_train_pipeline.py \
   --preset standard \
   --include-quarantine \
   --min-usable-replays <N> \
-  --promote-engines 'experiment 3:dl,experiment 4:pv,experiment 5:nnue' \
+  --promote-engines 'experiment 3:dl,experiment 5:nnue' \
   --skip-exp1-refine
 ```
 

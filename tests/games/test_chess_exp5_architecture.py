@@ -112,6 +112,10 @@ def test_exp5_is_benchmark_engine_and_uses_nnue_model_path(monkeypatch, tmp_path
 
 def test_exp5_is_supported_pipeline_autorun_target():
     assert EXPERIMENT_NNUE_DIFFICULTY in chess_pipeline.PIPELINE_RETRAIN_ENGINES
+    assert "experiment 4:pv" in chess_pipeline.PIPELINE_RETRAIN_ENGINES
+    assert "experiment 4:pv" not in chess_pipeline.PIPELINE_DEFAULT_PROMOTE_ENGINES
+    default_args = chess_pipeline._pipeline_command_args(min_usable_replays=3)
+    assert default_args[default_args.index("--promote-engines") + 1] == "experiment 3:dl,experiment 5:nnue"
     args = chess_pipeline._pipeline_command_args(
         min_usable_replays=3,
         target_engines=[EXPERIMENT_NNUE_DIFFICULTY],

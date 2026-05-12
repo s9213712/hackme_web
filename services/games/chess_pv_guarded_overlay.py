@@ -16,6 +16,21 @@ import chess
 
 DEFAULT_STATIC_SCORE_WINDOW_CP = 150
 DEFAULT_ORDINARY_OVERRIDE_MIN_DELTA_CP = 125
+EXP4_GUARDED_OVERLAY_STATUS = "parked_not_promotion_ready"
+
+
+def exp4_guarded_overlay_parking_status() -> dict[str, Any]:
+    return {
+        "exp4_guarded_overlay_status": EXP4_GUARDED_OVERLAY_STATUS,
+        "promotion": False,
+        "runtime_mutated": False,
+        "retrain_attempted": False,
+        "broad_sanity_unsafe_override_count": 26,
+        "unsafe_guard_reason": "runtime_static_and_rule_guard_passed",
+        "production_default": "disabled",
+        "enabled_now": guarded_overlay_enabled(),
+        "reopening_condition": "real_game_live_learning_weakness_with_w8_audited_support",
+    }
 
 
 def guarded_overlay_enabled() -> bool:
