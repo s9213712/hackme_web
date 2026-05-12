@@ -1,14 +1,16 @@
 # PvP / human-vs-engine replay pipeline v1 (2026-05-12)
 
-## Dry-run orchestrator (W6)
+## Dry-run orchestrator (W6 + W7)
 
-For the full chain (PGN-derived PvP export → sparring → harvester →
-seed_train dry-run → aggregate report), use the W6 orchestrator:
+For the full chain (PGN input → PvP export → sparring → harvester →
+seed_train dry-run → aggregate report), use the orchestrator:
 
 ```bash
 python3 scripts/games/chess_pipeline_dryrun.py \
-  --runtime-dir <hackme runtime> \
-  --exp4-model-path <staging exp4 candidate> \
+  --pgn-path <local.pgn>                      \   # W7
+  --prepared-replay-jsonl <prepared.jsonl>    \   # W7 (alternative)
+  --runtime-dir <hackme runtime>              \
+  --exp4-model-path <staging exp4 candidate>  \
   --exp5-model-path <stage candidate or production> \
   --sparring-mode smoke
 ```
@@ -16,7 +18,10 @@ python3 scripts/games/chess_pipeline_dryrun.py \
 Every stage runs as a separate subprocess with safe defaults; stage 4
 is hard-coded `--dry-run`; the aggregator's invariants block lists
 `all_stages_diagnostic_only`, `any_production_runtime_mutation`,
-`any_model_mutation`. Details + safety guarantees in
+`any_model_mutation`. W7 added stage 00 (PGN / prepared replay input)
+without changing the safety contract — the W7 verification run
+demonstrates rows_kept=12 / exp4_failed=0 / exp5_failed=0 with no
+mutation, no production touch. Details + safety guarantees in
 [`2026-05-12_w6_pipeline_dryrun.md`](./2026-05-12_w6_pipeline_dryrun.md).
 
 ## Operator UX (W5)

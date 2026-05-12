@@ -1,5 +1,9 @@
 # W6 — chess pipeline dry-run orchestrator (2026-05-12)
 
+> **2026-05-12 W7 update**: stage 00 PGN / prepared replay input is now
+> wired into the orchestrator. See the "W7 — PGN input lane" section
+> below; the rest of W6 is unchanged.
+
 ## What W6 ships
 
 Three new scripts + one doc + tests, wiring the previously stand-alone
@@ -14,18 +18,23 @@ replay-pipeline tools into one safe orchestrator:
 ## Stage map
 
 ```text
-                              ┌─── 01_pvp_export/                  ┐
-chess_pvp_history_to_replay ──┤   (needs HACKME_RUNTIME_DIR)        │
-                              └─── pvp_replay_<ts>/                 │
-                                                                    │
-                              ┌─── 02_sparring/                     │
-chess_exp4_vs_exp5_sparring ──┤   (needs --exp4/5 model paths)      │
-                              └─── exp4_vs_exp5_smoke_<ts>/         │
-                                                          │         │
-                              ┌─── 03_sparring_to_replay/ ↓         │
-chess_sparring_to_replay ─────┤   (consumes sparring run dir)       ▼
+                              ┌─── 00_pgn_input/             (W7) ┐
+chess_pgn_to_replay   ────────┤   (needs --pgn-path or             │
+                              │    --prepared-replay-jsonl)        │
+                              └─── per_ply.jsonl                   │
+                                                                   │
+                              ┌─── 01_pvp_export/                  │
+chess_pvp_history_to_replay ──┤   (needs HACKME_RUNTIME_DIR)       │
+                              └─── pvp_replay_<ts>/                │
+                                                                   │
+                              ┌─── 02_sparring/                    │
+chess_exp4_vs_exp5_sparring ──┤   (needs --exp4/5 model paths)     │
+                              └─── exp4_vs_exp5_smoke_<ts>/        │
+                                                          │        │
+                              ┌─── 03_sparring_to_replay/ ↓        │
+chess_sparring_to_replay ─────┤   (consumes sparring run dir)      ▼
                               └─── sparring_replay_<ts>/      04_seed_train_dryrun/
-                                                          │  (consumes both JSONLs)
+                                                          │  (consumes ALL JSONLs)
                                                           ▼
                               ┌─── 06_aggregate/             ◄────────┘
 chess_pipeline_report ────────┤   pipeline_summary.json
@@ -75,17 +84,81 @@ Sample row uses the canonical replay schema with
 `trusted_source='sparring_objective_hit'`, `source='sparring_objective_hit'`,
 `label_quality='review'`, default weight `0.10` (cap `0.15`).
 
-## Aggregator stage detection (W6 commit 2)
+## Aggregator stage detection (W6 commit 2, extended in W7)
 
-Heuristic by structural fingerprint:
+Detection first honours a self-stamped ``stage`` field (W7 convention),
+then falls back to structural fingerprint:
 
 | Stage | Recognised by |
 |---|---|
+| `pgn_to_replay` | `stage == "pgn_to_replay"` (self-stamped, W7) |
 | `pvp_export` | `counts.matches_accepted_pvp_filtered` |
 | `sparring_run` | `meta` + `objective_summary` + (`wdl` or `raw_outcome`) |
 | `seed_train_dry_run` | `external_replay` + `dry_run` keys |
 | `sparring_to_replay` | `counts.games_accepted` + `counts.samples_emitted` |
 | `unknown` | everything else (a note is recorded in the stage block) |
+
+## W7 — PGN input lane
+
+W7 adds stage 00 to the orchestrator with two parallel input lanes:
+
+| Flag | Behaviour |
+|---|---|
+| `--pgn-path PATH` (repeatable) | Subprocesses `chess_pgn_to_replay` on the local PGN, then **expands** each decisive game's `move_history` into canonical per-ply replay samples via python-chess. Winner-side moves only; stamps `trusted_source='imported_dataset'`, `label_quality='clean'`, `target=1.0`, default `weight=0.5`. Draws / illegal-reconstruction games are dropped. |
+| `--prepared-replay-jsonl PATH` (repeatable) | Already-canonical per-ply JSONL. Passed straight through to stage 4 (`seed_train --dry-run`); no re-conversion here, no re-stamping of `trusted_source`. The `normalize_validation` step in seed_train is the bouncer. |
+
+Sample shape emitted by the PGN-derived path:
+
+```json
+{
+  "fen": "<FEN before the move>",
+  "move_uci": "e2e4",
+  "side": "white",
+  "target": 1.0,
+  "weight": 0.5,
+  "source": "imported_dataset",
+  "trusted_source": "imported_dataset",
+  "label_quality": "clean",
+  "training_eligible": true,
+  "source_id": "pgn:<replay_id>:ply:<n>",
+  "result_backed": true,
+  "teacher_audit_status": "not_run",
+  "winner_color": "white"
+}
+```
+
+`trusted_source='imported_dataset'` is already on the W4 whitelist with a
+per-source cap of 200 inside `chess_seed_train.DEFAULT_EXTERNAL_CAPS`, so
+the PGN-derived rows survive the cap step alongside any
+`pvp_filtered` / `human_beat_engine` / `sparring_objective_hit` inputs.
+
+### W7 non-goals (carried over)
+
+- ❌ No network auto-download. `policy.raw_internet_download` is
+  hard-coded `False` in the stage's summary.
+- ❌ No `--execute-staging-train`. Stage 4 stays hard-coded `--dry-run`.
+- ❌ No loser-side moves emitted. Without a teacher audit, only
+  winner-side moves earn `target=1.0`.
+
+### W7 verification
+
+A 12-ply Ruy Lopez fixture (1-0 result, 2400 / 2300 Elo headers) drives
+end-to-end:
+
+```text
+stages_seen            : ['pgn_to_replay', 'seed_train_dry_run']
+all_diagnostic_only    : True
+any_production_runtime_mutation : False
+any_model_mutation     : False
+
+pgn_to_replay          games_imported=1 samples_emitted=12 raw_internet_download=False
+seed_train_dry_run     rows_kept=12 total_kept=12 exp4 12/0 exp5 12/0 skipped=dry_run
+```
+
+This is the W7 acceptance: a non-zero PGN sample flow lands cleanly in
+`seed_train --dry-run` with normalize failures = 0 on both engines,
+while the orchestrator never mutates a model and never touches the
+production runtime.
 
 ## Acceptance criteria
 
