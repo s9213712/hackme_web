@@ -55,6 +55,7 @@ PGN_CONVERTER = REPO_ROOT / "scripts" / "games" / "chess_pgn_to_replay.py"
 PVP_CONVERTER = REPO_ROOT / "scripts" / "games" / "chess_pvp_history_to_replay.py"
 SPARRING_RUNNER = REPO_ROOT / "scripts" / "games" / "chess_exp4_vs_exp5_sparring.py"
 SPARRING_HARVESTER = REPO_ROOT / "scripts" / "games" / "chess_sparring_to_replay.py"
+PGN_TEACHER_AUDIT = REPO_ROOT / "scripts" / "games" / "chess_imported_replay_teacher_audit.py"
 SEED_TRAIN = REPO_ROOT / "scripts" / "games" / "chess_seed_train.py"
 AGGREGATOR = REPO_ROOT / "scripts" / "games" / "chess_pipeline_report.py"
 
@@ -156,6 +157,12 @@ def _expand_game_level_to_per_ply(
                 side = "white" if board.turn == chess.WHITE else "black"
                 fen_before = board.fen()
                 if side == winner_color:
+                    # Raw PGN-derived rows are diagnostic candidates, not
+                    # training-safe. W8 commit 1's audit gate is what marks
+                    # them training_eligible after teacher agreement; until
+                    # then the row must look obviously *unaudited* so an
+                    # operator who manually peeks at this JSONL cannot
+                    # mistake it for a clean import.
                     sample = {
                         "fen": fen_before,
                         "move_uci": uci,
@@ -164,8 +171,8 @@ def _expand_game_level_to_per_ply(
                         "weight": float(weight),
                         "source": "imported_dataset",
                         "trusted_source": "imported_dataset",
-                        "label_quality": "clean",
-                        "training_eligible": True,
+                        "label_quality": "review",
+                        "training_eligible": False,
                         "source_id": f"pgn:{replay_id or 'unknown'}:ply:{ply_index}",
                         "result_backed": True,
                         "teacher_audit_status": "not_run",
@@ -281,6 +288,75 @@ def run_pgn_input_stage(
         "output_jsonls": output_jsonls,
         "games_imported": games_imported,
         "samples_emitted": samples_emitted,
+    }
+
+
+def run_pgn_teacher_audit_stage(
+    *,
+    raw_jsonls: list[str],
+    output_dir: Path,
+    log_dir: Path,
+    exp4_model_path: str,
+    exp5_model_path: str,
+    audit_profile: str,
+    top_k: int,
+) -> dict:
+    """Stage 00b (W8): teacher-audit the raw PGN per-ply JSONLs.
+
+    Wraps ``chess_imported_replay_teacher_audit.py``. Only the
+    ``accepted_replay.jsonl`` produced here is fed into stage 4
+    (``seed_train --dry-run``) by default — raw PGN-derived rows from
+    stage 00 are diagnostic only and would fail the seed_train
+    normalize_validation step if loaded directly because they are
+    stamped ``training_eligible=False`` and the validator wouldn't
+    re-stamp them.
+    """
+    if not raw_jsonls:
+        return {
+            "stage": "pgn_teacher_audit",
+            "status": "skipped",
+            "reason": "no raw pgn jsonls upstream",
+        }
+    real_jsonls = [p for p in raw_jsonls if p and Path(p).exists()]
+    if not real_jsonls:
+        return {
+            "stage": "pgn_teacher_audit",
+            "status": "skipped",
+            "reason": "upstream raw jsonls missing on disk",
+        }
+    output_dir.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        sys.executable,
+        str(PGN_TEACHER_AUDIT),
+        "--output-dir",
+        str(output_dir),
+        "--audit-profile",
+        audit_profile,
+        "--top-k",
+        str(top_k),
+    ]
+    if exp4_model_path:
+        cmd.extend(["--exp4-model-path", exp4_model_path])
+    if exp5_model_path:
+        cmd.extend(["--exp5-model-path", exp5_model_path])
+    for jsonl in real_jsonls:
+        cmd.extend(["--input-jsonl", jsonl])
+    log = log_dir / "00b_pgn_teacher_audit.log"
+    rc = _run_subprocess(cmd, label="pgn_teacher_audit", log_file=log)
+    if rc != 0:
+        return {
+            "stage": "pgn_teacher_audit",
+            "status": "failed",
+            "exit_code": rc,
+            "log": str(log),
+        }
+    accepted = output_dir / "accepted_replay.jsonl"
+    return {
+        "stage": "pgn_teacher_audit",
+        "status": "ok",
+        "summary_path": str(output_dir / "summary.json"),
+        "accepted_jsonl": str(accepted) if accepted.exists() else "",
+        "log": str(log),
     }
 
 
@@ -574,6 +650,36 @@ def run_pipeline(args: argparse.Namespace) -> dict:
     )
     stages.append(pgn_input)
 
+    # Stage 00b (W8): teacher-audit raw PGN-derived rows. Skipped by
+    # --pgn-skip-audit; otherwise runs whenever stage 00 emitted raw JSONLs.
+    raw_pgn_jsonls = list(pgn_input.get("output_jsonls") or [])
+    pgn_audit: dict = {
+        "stage": "pgn_teacher_audit",
+        "status": "skipped",
+        "reason": "no upstream pgn output",
+    }
+    if raw_pgn_jsonls and not args.pgn_skip_audit:
+        pgn_audit = run_pgn_teacher_audit_stage(
+            raw_jsonls=raw_pgn_jsonls,
+            output_dir=run_root / "00b_pgn_teacher_audit",
+            log_dir=log_dir,
+            exp4_model_path=str(
+                args.pgn_audit_exp4_model_path or args.exp4_model_path or ""
+            ),
+            exp5_model_path=str(
+                args.pgn_audit_exp5_model_path or args.exp5_model_path or ""
+            ),
+            audit_profile=str(args.pgn_audit_profile or "strict"),
+            top_k=int(args.pgn_audit_top_k or 3),
+        )
+    elif raw_pgn_jsonls and args.pgn_skip_audit:
+        pgn_audit = {
+            "stage": "pgn_teacher_audit",
+            "status": "skipped",
+            "reason": "--pgn-skip-audit opted out (raw PGN diagnostic only)",
+        }
+    stages.append(pgn_audit)
+
     # Stage 1: PvP export
     pvp = run_pvp_export_stage(
         runtime_dir=args.runtime_dir or "",
@@ -602,9 +708,21 @@ def run_pipeline(args: argparse.Namespace) -> dict:
     )
     stages.append(sparring_to_replay)
 
-    # Stage 4: seed_train dry-run with whatever replay JSONLs we have
+    # Stage 4: seed_train dry-run with whatever replay JSONLs we have.
+    # By default we feed only the audit-accepted PGN stream + the safe
+    # PvP / sparring streams. Raw PGN output is diagnostic only and is
+    # included only when the operator passes --include-unaudited-pgn-in-
+    # dryrun-diagnostic. That flag is explicit and the aggregator records
+    # the resulting "unaudited_imported_dataset_used_for_seed_train"
+    # invariant for downstream review.
+    audit_accepted = pgn_audit.get("accepted_jsonl") or ""
+    pgn_stream: list[str] = []
+    if audit_accepted:
+        pgn_stream.append(audit_accepted)
+    if args.include_unaudited_pgn_in_dryrun_diagnostic:
+        pgn_stream.extend(raw_pgn_jsonls)
     include_jsonls = (
-        list(pgn_input.get("output_jsonls") or [])
+        pgn_stream
         + [pvp.get("training_eligible_jsonl") or ""]
         + [sparring_to_replay.get("training_eligible_jsonl") or ""]
     )
@@ -670,6 +788,46 @@ def parse_args() -> argparse.Namespace:
             "Pre-prepared canonical per-ply replay JSONL. Repeatable. "
             "Passed straight through to stage 4 (seed_train --dry-run) "
             "without re-conversion."
+        ),
+    )
+    p.add_argument(
+        "--pgn-skip-audit",
+        action="store_true",
+        help=(
+            "W8 opt-out: skip the teacher-audit stage 00b. Raw PGN-derived "
+            "rows will NOT be fed into stage 4 unless you also pass "
+            "--include-unaudited-pgn-in-dryrun-diagnostic."
+        ),
+    )
+    p.add_argument(
+        "--pgn-audit-profile",
+        default="strict",
+        choices=["strict", "very_strict", "diagnostic"],
+        help=(
+            "Audit profile for stage 00b. strict (default): accept if "
+            "candidate is top-K of either exp4 or exp5; very_strict: "
+            "require both; diagnostic: classify only, never accept."
+        ),
+    )
+    p.add_argument("--pgn-audit-top-k", type=int, default=3)
+    p.add_argument(
+        "--pgn-audit-exp4-model-path",
+        default="",
+        help="Optional exp4 PV model path used only by the audit stage.",
+    )
+    p.add_argument(
+        "--pgn-audit-exp5-model-path",
+        default="",
+        help="Optional exp5 NNUE model path used only by the audit stage.",
+    )
+    p.add_argument(
+        "--include-unaudited-pgn-in-dryrun-diagnostic",
+        action="store_true",
+        help=(
+            "W8 explicit unsafe-override: also feed RAW PGN-derived JSONLs "
+            "into stage 4 dry-run. Marked in the aggregator's invariants "
+            "block as unaudited_imported_dataset_used_for_seed_train=True. "
+            "Never use this for a staging warm-up command."
         ),
     )
     p.add_argument(

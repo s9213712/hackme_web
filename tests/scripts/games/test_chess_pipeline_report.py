@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from scripts.games.chess_pipeline_report import (
+    STAGE_PGN_TEACHER_AUDIT,
     STAGE_PGN_TO_REPLAY,
     STAGE_PVP_EXPORT,
     STAGE_SEED_TRAIN_DRY_RUN,
@@ -268,6 +269,96 @@ def test_compute_invariants_detects_dirty_stage():
     inv = compute_invariants(stages)
     assert inv["all_stages_diagnostic_only"] is False
     assert inv["any_production_runtime_mutation"] is True
+
+
+def test_detect_pgn_teacher_audit_by_self_stamped_stage_field():
+    payload = {"stage": "pgn_teacher_audit", "counts": {"accepted_rows": 2}}
+    assert detect_stage(payload) == STAGE_PGN_TEACHER_AUDIT
+
+
+def test_normalize_pgn_teacher_audit_extracts_metrics():
+    payload = {
+        "stage": "pgn_teacher_audit",
+        "audit_profile": "strict",
+        "top_k": 3,
+        "weight_cap": 0.5,
+        "exp4_teacher_used": True,
+        "exp5_teacher_used": True,
+        "counts": {
+            "input_rows": 12,
+            "accepted_rows": 2,
+            "review_rows": 10,
+            "rejected_rows": 0,
+            "duplicates_dropped": 0,
+            "by_reason_review": {"teacher_no_top_k_agreement": 10},
+            "by_reason_rejected": {},
+        },
+        "accepted_jsonl": "/x/accepted_replay.jsonl",
+        "policy": {
+            "diagnostic_only": True,
+            "production_runtime_mutation": False,
+            "raw_internet_download": False,
+            "audited_trusted_source": "imported_dataset_teacher_audited",
+        },
+    }
+    out = normalize_stage(payload)
+    assert out["stage"] == STAGE_PGN_TEACHER_AUDIT
+    assert out["diagnostic_only"] is True
+    assert out["model_mutation_in_this_stage"] is False
+    m = out["key_metrics"]
+    assert m["audit_profile"] == "strict"
+    assert m["accepted_rows"] == 2
+    assert m["review_rows"] == 10
+    assert m["rejected_rows"] == 0
+    assert m["exp4_teacher_used"] is True
+    assert m["exp5_teacher_used"] is True
+    assert m["accepted_jsonl"] == "/x/accepted_replay.jsonl"
+    assert m["audited_trusted_source"] == "imported_dataset_teacher_audited"
+
+
+def test_compute_invariants_flags_unaudited_imported_dataset_in_seed_train():
+    """The W8 default flow feeds only imported_dataset_teacher_audited into
+    seed_train; the only way the raw 'imported_dataset' source shows up in
+    a seed_train stage's source_breakdown_raw is via
+    --include-unaudited-pgn-in-dryrun-diagnostic. Flag it for review."""
+    stages = [
+        {
+            "stage": STAGE_SEED_TRAIN_DRY_RUN,
+            "diagnostic_only": True,
+            "model_mutation_in_this_stage": False,
+            "production_runtime_mutation": False,
+            "key_metrics": {
+                "source_breakdown_raw": {"imported_dataset": 5, "pvp_filtered": 1},
+            },
+        }
+    ]
+    inv = compute_invariants(stages)
+    assert inv["unaudited_imported_dataset_used_for_seed_train"] is True
+
+
+def test_compute_invariants_default_safe_flow_is_clean():
+    """Audited-only stream MUST NOT trigger the unaudited invariant."""
+    stages = [
+        {
+            "stage": STAGE_SEED_TRAIN_DRY_RUN,
+            "diagnostic_only": True,
+            "model_mutation_in_this_stage": False,
+            "production_runtime_mutation": False,
+            "key_metrics": {
+                "source_breakdown_raw": {
+                    "imported_dataset_teacher_audited": 2,
+                    "pvp_filtered": 1,
+                },
+            },
+        }
+    ]
+    inv = compute_invariants(stages)
+    assert inv["unaudited_imported_dataset_used_for_seed_train"] is False
+
+
+def test_compute_invariants_no_seed_train_means_no_unaudited():
+    inv = compute_invariants([{"stage": STAGE_PGN_TO_REPLAY, "diagnostic_only": True, "model_mutation_in_this_stage": False, "production_runtime_mutation": False, "key_metrics": {}}])
+    assert inv["unaudited_imported_dataset_used_for_seed_train"] is False
 
 
 # ---- build / render ----------------------------------------------------

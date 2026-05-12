@@ -25,6 +25,7 @@ from scripts.games.chess_pipeline_dryrun import (
     build_suggested_staging_command,
     run_aggregate_stage,
     run_pgn_input_stage,
+    run_pgn_teacher_audit_stage,
     run_pvp_export_stage,
     run_seed_train_dryrun_stage,
     run_sparring_stage,
@@ -206,7 +207,11 @@ def test_expand_game_level_emits_winner_side_only(tmp_path):
     assert all(r["side"] == "white" for r in rows)
     assert all(r["target"] == 1.0 for r in rows)
     assert all(r["trusted_source"] == "imported_dataset" for r in rows)
-    assert all(r["label_quality"] == "clean" for r in rows)
+    # W8 commit 2: raw PGN-derived rows are diagnostic only; only the
+    # W8 audit stage may flip these to training-safe clean status.
+    assert all(r["label_quality"] == "review" for r in rows)
+    assert all(r["training_eligible"] is False for r in rows)
+    assert all(r["teacher_audit_status"] == "not_run" for r in rows)
     assert all(r["source_id"].startswith("pgn:pgn_test_white_win:ply:") for r in rows)
 
 
@@ -287,6 +292,34 @@ def test_pgn_input_stage_pass_through_prepared_jsonl(tmp_path):
     assert summary["counts"]["prepared_jsonls_attached"] == 1
     assert summary["counts"]["pgn_paths_processed"] == 0
     assert summary["policy"]["raw_internet_download"] is False
+
+
+def test_pgn_teacher_audit_stage_skips_without_raw_jsonls(tmp_path):
+    result = run_pgn_teacher_audit_stage(
+        raw_jsonls=[],
+        output_dir=tmp_path / "00b_pgn_teacher_audit",
+        log_dir=tmp_path / "logs",
+        exp4_model_path="",
+        exp5_model_path="",
+        audit_profile="strict",
+        top_k=3,
+    )
+    assert result["status"] == "skipped"
+    assert "no raw pgn jsonls" in result["reason"]
+
+
+def test_pgn_teacher_audit_stage_skips_when_inputs_missing_on_disk(tmp_path):
+    result = run_pgn_teacher_audit_stage(
+        raw_jsonls=[str(tmp_path / "absent.jsonl")],
+        output_dir=tmp_path / "00b_pgn_teacher_audit",
+        log_dir=tmp_path / "logs",
+        exp4_model_path="",
+        exp5_model_path="",
+        audit_profile="strict",
+        top_k=3,
+    )
+    assert result["status"] == "skipped"
+    assert "missing on disk" in result["reason"]
 
 
 def test_pgn_input_stage_ignores_missing_prepared(tmp_path):

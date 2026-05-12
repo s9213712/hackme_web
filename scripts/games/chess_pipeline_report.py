@@ -38,6 +38,7 @@ STAGE_SPARRING_RUN = "sparring_run"
 STAGE_SEED_TRAIN_DRY_RUN = "seed_train_dry_run"
 STAGE_SPARRING_TO_REPLAY = "sparring_to_replay"
 STAGE_PGN_TO_REPLAY = "pgn_to_replay"
+STAGE_PGN_TEACHER_AUDIT = "pgn_teacher_audit"
 STAGE_UNKNOWN = "unknown"
 
 _KNOWN_STAGES = {
@@ -46,7 +47,14 @@ _KNOWN_STAGES = {
     STAGE_SEED_TRAIN_DRY_RUN,
     STAGE_SPARRING_TO_REPLAY,
     STAGE_PGN_TO_REPLAY,
+    STAGE_PGN_TEACHER_AUDIT,
 }
+
+# Trusted-source name reserved for raw PGN-derived rows that have NOT
+# passed the W8 teacher audit. Seeing this name inside a seed_train
+# dry-run stage's load_stats means an unaudited row reached training,
+# which the aggregator surfaces as a dedicated invariant.
+_UNAUDITED_IMPORTED_DATASET = "imported_dataset"
 
 
 def detect_stage(payload: dict) -> str:
@@ -180,6 +188,7 @@ def normalize_stage(payload: dict, *, source_path: str = "") -> dict:
                 "not bundled / runtime defaults"
             )
         artifact = str(payload.get("dry_run_artifact") or "")
+        source_breakdown = dict(load_stats.get("source_breakdown_raw") or {})
         base["key_metrics"] = {
             "dry_run": is_dry_run,
             "skip_exp4": bool(er.get("skip_exp4")),
@@ -196,6 +205,29 @@ def normalize_stage(payload: dict, *, source_path: str = "") -> dict:
             "trained_exp4": bool(train.get("trained_exp4")),
             "trained_exp5": bool(train.get("trained_exp5")),
             "dry_run_artifact": artifact,
+            "source_breakdown_raw": source_breakdown,
+        }
+        return base
+
+    if stage == STAGE_PGN_TEACHER_AUDIT:
+        counts = dict(payload.get("counts") or {})
+        policy = dict(payload.get("policy") or {})
+        base["diagnostic_only"] = bool(policy.get("diagnostic_only", True))
+        base["key_metrics"] = {
+            "audit_profile": payload.get("audit_profile", ""),
+            "top_k": payload.get("top_k", 0),
+            "weight_cap": payload.get("weight_cap", 0),
+            "exp4_teacher_used": bool(payload.get("exp4_teacher_used")),
+            "exp5_teacher_used": bool(payload.get("exp5_teacher_used")),
+            "input_rows": counts.get("input_rows", 0),
+            "accepted_rows": counts.get("accepted_rows", 0),
+            "review_rows": counts.get("review_rows", 0),
+            "rejected_rows": counts.get("rejected_rows", 0),
+            "duplicates_dropped": counts.get("duplicates_dropped", 0),
+            "by_reason_review": dict(counts.get("by_reason_review") or {}),
+            "by_reason_rejected": dict(counts.get("by_reason_rejected") or {}),
+            "accepted_jsonl": payload.get("accepted_jsonl", ""),
+            "audited_trusted_source": policy.get("audited_trusted_source", ""),
         }
         return base
 
@@ -234,12 +266,26 @@ def normalize_stage(payload: dict, *, source_path: str = "") -> dict:
 
 def compute_invariants(stages: list[dict]) -> dict:
     """Cross-stage invariants the operator should be able to assert at-a-glance."""
+    # W8: surface whether any seed_train stage loaded the unaudited
+    # ``imported_dataset`` trusted-source name. That bucket only exists
+    # if W8 commit 2's --include-unaudited-pgn-in-dryrun-diagnostic
+    # override was used, so the invariant flips True for diagnostic
+    # runs and stays False for the safe default flow.
+    unaudited_used = False
+    for s in stages:
+        if s.get("stage") != STAGE_SEED_TRAIN_DRY_RUN:
+            continue
+        breakdown = (s.get("key_metrics") or {}).get("source_breakdown_raw") or {}
+        if isinstance(breakdown, dict) and int(breakdown.get(_UNAUDITED_IMPORTED_DATASET, 0) or 0) > 0:
+            unaudited_used = True
+            break
     return {
         "all_stages_diagnostic_only": all(s.get("diagnostic_only", True) for s in stages),
         "any_production_runtime_mutation": any(
             s.get("production_runtime_mutation") for s in stages
         ),
         "any_model_mutation": any(s.get("model_mutation_in_this_stage") for s in stages),
+        "unaudited_imported_dataset_used_for_seed_train": unaudited_used,
         "stage_count": len(stages),
         "stages_seen": sorted({s["stage"] for s in stages}),
     }
