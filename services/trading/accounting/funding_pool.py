@@ -5,6 +5,21 @@ def funding_pool_outstanding_principal(*, lent, repaid):
     return max(0, abs(int(lent or 0)) - int(repaid or 0))
 
 
+def _effective_apr_display(*, base_apr_percent, base_rate, scaled_rate, apr_from_daily):
+    """Return the APR % to display.
+
+    The base APR ↔ daily-rate round trip uses Decimal quantize at 1e-8 which
+    introduces ~1e-7 cosmetic drift on the way back. When the scaled rate is
+    bit-for-bit equal to the base rate (utilisation × pressure == 0) we just
+    surface the base APR exactly, sidestepping the drift entirely. Otherwise
+    we apply the round-trip and round the result to 6 decimals — more than
+    enough precision for an APR display, and absorbs the residual drift.
+    """
+    if scaled_rate == base_rate:
+        return round(float(base_apr_percent or 0), 6)
+    return round(apr_from_daily(scaled_rate), 6)
+
+
 def funding_pool_payload(
     *,
     balance,
@@ -31,6 +46,7 @@ def funding_pool_payload(
     effective_rate = base_rate * (1.0 + max(0.0, utilization) * pressure)
     projected_rate = base_rate * (1.0 + max(0.0, projected_utilization) * pressure)
     borrowed_asset = str(borrowed_asset or "POINTS").strip().upper() or "POINTS"
+    base_apr_display = round(float(base_apr or 0), 6)
     return {
         "name": "資金池",
         "initial_points": int(initial_points or 0),
@@ -41,9 +57,19 @@ def funding_pool_payload(
         "utilization_percent": round(utilization * 100, 4),
         "projected_utilization_percent": round(projected_utilization * 100, 4),
         "borrowed_asset_symbol": borrowed_asset,
-        "base_interest_apr_percent": round(float(base_apr or 0), 8),
-        "effective_interest_apr_percent": round(apr_from_daily(effective_rate), 8),
-        "projected_interest_apr_percent": round(apr_from_daily(projected_rate), 8),
+        "base_interest_apr_percent": base_apr_display,
+        "effective_interest_apr_percent": _effective_apr_display(
+            base_apr_percent=base_apr,
+            base_rate=base_rate,
+            scaled_rate=effective_rate,
+            apr_from_daily=apr_from_daily,
+        ),
+        "projected_interest_apr_percent": _effective_apr_display(
+            base_apr_percent=base_apr,
+            base_rate=base_rate,
+            scaled_rate=projected_rate,
+            apr_from_daily=apr_from_daily,
+        ),
         "base_interest_percent_daily": round(base_rate, 8),
         "interest_pool_pressure_multiplier": round(pressure, 8),
         "effective_interest_percent_daily": round(effective_rate, 8),
