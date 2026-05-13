@@ -53,8 +53,12 @@ These files are canonical, short-entry or cross-cutting docs and may stay at
 - `00_START_HERE.md` through `12_TROUBLESHOOTING.md`
 - `README.md`
 - `API_REFERENCE.md`
+- `BRANCHING_AND_RELEASE.md`
 - `DEPLOYMENT.md`
 - `For_developer.md`
+- `SECURITY.md`
+- `SYSTEM_DEPENDENCIES.md`
+- `UPDATE_SUMMARY.md`
 - `WEB.md`
 - `RELEASE_LAYOUT.md`
 - `REPOSITORY_STRUCTURE.md`
@@ -64,7 +68,7 @@ These files are canonical, short-entry or cross-cutting docs and may stay at
 - `docs/security/`: release gates, pentest, smoke, signoff
 - `docs/AGENTS/`: agent rules, QA runbooks, reports
 - `docs/AGENTS/research/BLOCKCHAIN/`: PointsChain and governance design set (specs only; implementation pending root authorization)
-- `docs/COMPETITION/`: backtest and strategy competition evidence
+- `docs/archive/competition_2026-05-06/`: backtest and strategy competition evidence
 - `docs/trading/`: trading, bot audit, risk-price, benchmark, and BTC_trade reference
 - `docs/video/`: deep video/media architecture docs
 - `docs/comfyui/`: ComfyUI operator docs
@@ -78,7 +82,7 @@ These are useful, but they should not all remain first-class entry docs
 forever:
 
 - `SERVER_MODE_V2_*` plan files
-- `VERSION_STORY.md`
+- `docs/archive/history/VERSION_STORY.md`
 - large slices of `UPDATE_SUMMARY.md`
 - standalone competition reports once their conclusions are folded into one
   canonical summary

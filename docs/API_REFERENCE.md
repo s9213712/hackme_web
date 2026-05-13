@@ -346,7 +346,7 @@ curl -k -sS https://127.0.0.1:5000/api/version
 
 `/api/games/<game_key>/ai-move` 目前只接受 `reversi`、`go`、`gomoku`。圍棋 `katago` 難度會使用本機 KataGo analysis engine；可先執行 `python3 scripts/games/setup_katago.py` 自動下載 binary、模型並產生 `runtime/katago/analysis.cfg`。
 完整 payload、response、前端調用地圖與 benchmark 教學見
-[games/BOARD_AI_BENCHMARK.md](games/BOARD_AI_BENCHMARK.md)。
+[games/references/BOARD_AI_BENCHMARK.md](games/references/BOARD_AI_BENCHMARK.md)。
 
 ### Economy / PointsChain
 

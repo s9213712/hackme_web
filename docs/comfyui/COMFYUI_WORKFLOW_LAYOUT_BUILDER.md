@@ -145,5 +145,5 @@ Run the focused checks after touching the builder:
 ```bash
 node --check public/js/comfyui-workflow-editor.js
 python3 scripts/testing/playwright_comfyui_workflow_builder_check.py
-PYTHONPATH=/home/s92137/hackme_web pytest -q tests/comfyui/test_paid_api_nodes.py tests/comfyui/workflows/test_paid_api_workflow_gate.py
+PYTHONPATH=<repo> pytest -q tests/comfyui/test_paid_api_nodes.py tests/comfyui/workflows/test_paid_api_workflow_gate.py
 ```

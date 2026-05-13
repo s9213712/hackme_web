@@ -48,7 +48,11 @@ def scan_text(rel: str, text: str) -> list[dict[str, object]]:
                 continue
             if rel == "tests/security/input/test_plaintext_secrets_scan.py" and name in {"PASSWORD_ASSIGNMENT", "SECRET_ASSIGNMENT", "PRIVATE_KEY"}:
                 continue
-            if rel in {"tests/test_prepush_v2.py", "tests/test_snapshots.py"} and name in {"SECRET_ASSIGNMENT", "OPENAI_STYLE_KEY"}:
+            if rel in {
+                "tests/test_prepush_v2.py",
+                "tests/scripts/prepush/test_prepush_v2.py",
+                "tests/test_snapshots.py",
+            } and name in {"SECRET_ASSIGNMENT", "OPENAI_STYLE_KEY"}:
                 continue
             match = pattern.search(line)
             if match:

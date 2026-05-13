@@ -22,8 +22,9 @@ This module is the single source of truth for:
    could accidentally point external-replay training at a
    production-adjacent location.
 
-See ``docs/games/chess_debug/2026-05-12_pvp_replay_pipeline_v1.md`` for
-the CLI mode matrix this module enforces.
+See
+``docs/games/archive/chess_debug/2026-05-12_pvp_replay_pipeline_v1.md``
+for the CLI mode matrix this module enforces.
 """
 
 from __future__ import annotations

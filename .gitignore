@@ -29,17 +29,28 @@ workflows/comfyui/imported_*/*
 !public/data/
 !public/data/*.json
 public/data/workflow_template_benchmarks_*.json
-# Competition harness moved 2026-05-06 from security/ + public/data/competition
-# to docs/COMPETITION/ for single-place archival.
-!docs/COMPETITION/
-!docs/COMPETITION/scripts/
-!docs/COMPETITION/scripts/*.py
-!docs/COMPETITION/scripts/*.json
-!docs/COMPETITION/data/
-!docs/COMPETITION/data/*.csv
-!docs/COMPETITION/data/*.json
-docs/COMPETITION/data/candles_*.json
-docs/COMPETITION/data/equity/
+# Curated documentation artifacts that intentionally use JSON/JSONL despite
+# the repo-wide generated-JSON ignore rule.
+!docs/comfyui/*.json
+!docs/archive/
+!docs/archive/**/
+!docs/archive/**/*.md
+!docs/archive/**/*.py
+!docs/archive/**/*.json
+!docs/archive/**/*.csv
+!docs/games/model_snapshots/
+!docs/games/model_snapshots/*.json
+!docs/games/evidence/
+!docs/games/evidence/**/
+!docs/games/evidence/**/*.json
+!docs/games/evidence/**/*.jsonl
+!docs/games/experiments/
+!docs/games/experiments/**/
+!docs/games/experiments/**/*.md
+!docs/games/experiments/**/*.json
+!docs/games/experiments/**/*.jsonl
+!docs/games/experiments/**/*.stderr
+!docs/games/experiments/**/*.stdout
 external/
 secure_backups/
 !requirements.txt

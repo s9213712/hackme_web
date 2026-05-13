@@ -3426,7 +3426,8 @@ function applyGridPreset() {
   if (countEl) countEl.value = cfg.grid_count;
   if (amountEl) amountEl.value = cfg.order_amount;
   // Each preset carries its own empirically-tuned spacing_mode; see
-  // docs/COMPETITION/GRID_SPACING_COMPARISON.md for the per-config table.
+  // docs/archive/competition_2026-05-06/GRID_SPACING_COMPARISON.md for the
+  // per-config table.
   if (modeEl && cfg.spacing_mode) modeEl.value = cfg.spacing_mode;
   if (typeof scheduleGridBotPreview === "function") scheduleGridBotPreview();
   tradingSetMsg(`已套用預設「${key}」（市價 ${refPrice}） — 區間 ${lower}–${upper}，間距 ${cfg.spacing_mode}`);

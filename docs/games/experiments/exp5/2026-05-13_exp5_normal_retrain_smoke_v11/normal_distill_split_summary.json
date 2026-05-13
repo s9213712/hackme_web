@@ -1,0 +1,9 @@
+{
+  "distill_rows": 45,
+  "eval_rows": 14,
+  "eval_rows_jsonl": "<repo>/docs/games/2026-05-13_exp5_normal_retrain_smoke_v11/normal_eval_rows.jsonl",
+  "strength_cases": 14,
+  "strength_cases_jsonl": "<repo>/docs/games/2026-05-13_exp5_normal_retrain_smoke_v11/normal_strength_cases.jsonl",
+  "train_rows": 31,
+  "train_rows_jsonl": "<repo>/docs/games/2026-05-13_exp5_normal_retrain_smoke_v11/normal_train_rows.jsonl"
+}

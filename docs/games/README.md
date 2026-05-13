@@ -6,10 +6,22 @@
 
 | 主題 | 先讀文件 | 適用情境 |
 |---|---|---|
-| 黑白棋 / 圍棋 / 五子棋 AI 與棋力量化 | [BOARD_AI_BENCHMARK.md](BOARD_AI_BENCHMARK.md) | 要跑三棋 AI benchmark、看 Elo、檢查 skill suite、安裝 KataGo、規劃後續強化 |
-| 西洋棋模型檔與 runtime/bundled 邊界 | [chess_model_files.md](chess_model_files.md) | 要理解 exp3/exp4/exp5 模型檔、warm-start、promotion artifact |
-| 西洋棋訓練與 replay pipeline | [chess_training_pipeline.md](chess_training_pipeline.md) | 要跑 replay prepare、seed train、self-play、promotion pipeline |
-| 西洋棋 debug / engine roadmap | [chess_debug/README.md](chess_debug/README.md) | 要追 exp3/exp4/exp5 歷史與目前治理結論 |
+| 黑白棋 / 圍棋 / 五子棋 AI 與棋力量化 | [references/BOARD_AI_BENCHMARK.md](references/BOARD_AI_BENCHMARK.md) | 要跑三棋 AI benchmark、看 Elo、檢查 skill suite、安裝 KataGo、規劃後續強化 |
+| 西洋棋模型檔與 runtime/bundled 邊界 | [references/chess_model_files.md](references/chess_model_files.md) | 要理解 exp3/exp4/exp5 模型檔、warm-start、promotion artifact |
+| 西洋棋訓練與 replay pipeline | [references/chess_training_pipeline.md](references/chess_training_pipeline.md) | 要跑 replay prepare、seed train、self-play、promotion pipeline |
+| 西洋棋 debug / engine roadmap | [archive/chess_debug/README.md](archive/chess_debug/README.md) | 要追 exp3/exp4/exp5 歷史與目前治理結論 |
+| 2026-05-13 評測與優化歸檔 | [ARCHIVE_INDEX.md](ARCHIVE_INDEX.md) | 要找報告、JSON/JSONL 證據、實驗資料夾、模型快照 |
+
+## 目錄結構
+
+| 目錄 | 用途 |
+|---|---|
+| `reports/` | 已整理的人讀報告與階段結論 |
+| `references/` | 長期維護文件、技術設計、訓練與模型檔說明 |
+| `evidence/` | 評測輸出的 JSON/JSONL 證據，依棋種或 exp5 版本分層 |
+| `experiments/` | 可追溯的完整實驗輸出資料夾 |
+| `model_snapshots/` | 模型快照，路徑保持穩定，不併入 archive |
+| `archive/` | 舊 debug、歷史脈絡與不再作為主要入口的資料 |
 
 ## 遊戲分類
 
@@ -75,6 +87,6 @@ python3 scripts/games/setup_katago.py
 - KataGo 自動下載 / config 產生：`scripts/games/setup_katago.py`
 - 三棋測試：`tests/games/test_board_ai.py`、`tests/games/test_board_arena.py`
 - 真實版俄羅斯方塊：`public/js/games/real-tetris.js`
-- 西洋棋仍使用 `services/games/chess*.py`、`scripts/games/chess_*.py`、`docs/games/chess_*.md`
+- 西洋棋仍使用 `services/games/chess*.py`、`scripts/games/chess_*.py`、`docs/games/references/chess_*.md`
 
-新增三棋 AI 強化前，先更新 [BOARD_AI_BENCHMARK.md](BOARD_AI_BENCHMARK.md) 的量化規則與 promotion gate，避免只改演算法但沒有可比較的棋力證據。
+新增三棋 AI 強化前，先更新 [references/BOARD_AI_BENCHMARK.md](references/BOARD_AI_BENCHMARK.md) 的量化規則與 promotion gate，避免只改演算法但沒有可比較的棋力證據。

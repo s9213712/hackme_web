@@ -1,6 +1,16 @@
 # Update Summary
 
-Release ID: `2026.05.13-156`
+Release ID: `2026.05.13-157`
+
+## 2026.05.13-157
+
+- Reorganized `docs/` and `docs/games/` into current guides, reports,
+  references, evidence, model snapshots, and archive indexes.
+- Added `scripts/CALL_MAP.md` and linked it from `scripts/README.md` so script
+  entrypoints, call chains, and artifact locations are discoverable.
+- Cleaned generated runtime/cache artifacts, expanded `.gitignore` exceptions
+  for intentional documentation evidence, and hardened prepush checks against
+  decorative separator false positives.
 
 ## 2026.05.13-156
 

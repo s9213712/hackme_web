@@ -1,0 +1,69 @@
+{
+  "components": [
+    {
+      "inputs": {
+        "fixed_pass_rate": 1.0,
+        "legacy_total": 40.0,
+        "sparring_score_rate": 1.0
+      },
+      "max_points": 20.0,
+      "name": "legacy_probe_stability",
+      "points": 20.0
+    },
+    {
+      "inputs": {
+        "cases": 300,
+        "pass_rate": 1.0,
+        "pgn_exact_reference_match_rate": 0.1667,
+        "pgn_exact_reference_target_for_full_credit": 0.55,
+        "pgn_pass_rate": 1.0
+      },
+      "max_points": 30.0,
+      "name": "large_tactical_suite",
+      "points": 24.4247
+    },
+    {
+      "inputs": {
+        "ai_score_rate": 0.8,
+        "ai_win_rate": 0.6,
+        "ai_wins": 18,
+        "codex_wins": 0,
+        "complete_game_rate": 0.9333,
+        "draws": 12,
+        "games": 30,
+        "loss_rate": 0.0,
+        "threefold_rate": 0.4
+      },
+      "max_points": 50.0,
+      "name": "complete_game_gauntlet",
+      "points": 38.7489
+    },
+    {
+      "inputs": {
+        "avg_elapsed_ms_per_gauntlet_game": 10259.369,
+        "full_credit_ms": 8000,
+        "zero_credit_ms": 45000
+      },
+      "max_points": 10.0,
+      "name": "runtime_efficiency",
+      "points": 9.3894
+    }
+  ],
+  "engine": "experiment 5:nnue",
+  "generated_at": "2026-05-13T12:56:11+00:00",
+  "grade": "strong_club_candidate",
+  "inputs": {
+    "gauntlet": "<repo>/docs/games/2026-05-13_exp5_gauntlet_repetition_progress_v10.json",
+    "score_probe": "<repo>/docs/games/2026-05-13_exp5_score_probe_promotion_guard_v7.json",
+    "tactical_suite": "<repo>/docs/games/2026-05-13_exp5_tactical_suite_300_promotion_guard_v7.json"
+  },
+  "interpretation": {
+    "legacy_40_point_score": "saturated; retained only as stability gate",
+    "main_current_ceiling": "complete-game gauntlet win rate, lower threefold rate, PGN exact-match signal, and runtime",
+    "not_external_elo": true
+  },
+  "max_points": 110.0,
+  "normalized_100": 84.1482,
+  "score_name": "exp5_advanced_non_saturated_score_v1",
+  "total_points": 92.563
+}

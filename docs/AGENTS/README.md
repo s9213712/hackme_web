@@ -30,5 +30,5 @@
 
 - `docs/AGENTS` 是 agent 工作規則與 QA 任務書的正式入口。
 - `docs/AGENTS/research` 是仍會影響未來動工的研究規格；不是 runtime evidence 或一次性 QA 報告。
-- 歷史 QA 報告已移出 tracked docs；需要追溯時使用 Git history 或外部工作紀錄。
+- 歷史 QA 報告已移到 [../archive/agent_qa_reports/](../archive/agent_qa_reports/)；新報告仍寫在 `docs/AGENTS/reports/`。
 - 不要再新增第二套平行目錄，例如 `docs/codex/...` 或 repo 根層 `reports/...` 的新副本。

@@ -1,0 +1,7 @@
+{
+  "candidate_positions": 433,
+  "max_positions": 180,
+  "path": "<repo>/docs/games/2026-05-13_exp5_normal_retrain_smoke_v11/normal_positions_for_teacher.jsonl",
+  "selected_positions": 180,
+  "selection": "dedupe_fen_side_then_seeded_shuffle_cap"
+}

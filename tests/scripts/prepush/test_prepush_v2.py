@@ -8,6 +8,7 @@ from scripts.prepush.checks import (
     forbidden_paths_check,
     frontend_check,
     local_path_check,
+    git_clean_check,
     markdown_links_check,
     pytest_quick_check,
     release_check,
@@ -126,6 +127,42 @@ def test_scripts_index_check_requires_registered_user_facing_game_and_trading_sc
         encoding="utf-8",
     )
     assert scripts_index_check.run(ctx).status != FAIL
+
+
+def test_git_clean_check_allows_decorative_separator_comments(monkeypatch, tmp_path):
+    target = tmp_path / "public" / "js" / "app.js"
+    target.parent.mkdir(parents=True)
+    target.write_text("// =====================================================================\n", encoding="utf-8")
+
+    ctx = PrepushContext(repo_root=tmp_path, changed_files=["public/js/app.js"], staged_files=[])
+
+    class CleanDiff:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr(utils, "run_command", lambda *args, **kwargs: CleanDiff())
+
+    assert git_clean_check.run(ctx).status != FAIL
+
+
+def test_git_clean_check_flags_real_conflict_markers(monkeypatch, tmp_path):
+    target = tmp_path / "public" / "js" / "app.js"
+    target.parent.mkdir(parents=True)
+    target.write_text("  <<<<<<< HEAD\n", encoding="utf-8")
+
+    ctx = PrepushContext(repo_root=tmp_path, changed_files=["public/js/app.js"], staged_files=[])
+
+    class CleanDiff:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr(utils, "run_command", lambda *args, **kwargs: CleanDiff())
+
+    result = git_clean_check.run(ctx)
+    assert result.status == FAIL
+    assert result.details == [{"file": "public/js/app.js", "line": 1, "problem": "conflict marker"}]
 
 
 def test_gitkeep_is_not_forbidden_runtime_artifact():

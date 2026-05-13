@@ -71,7 +71,7 @@ python3 scripts/games/board_ai_benchmark.py \
 報告會輸出到 `runtime/reports/games/board_ai_benchmark_*.json`，內容包含
 round-robin standings、head-to-head matrix、Elo estimate、非法步統計與
 deterministic skill suite。教學與欄位解讀見
-[games/BOARD_AI_BENCHMARK.md](games/BOARD_AI_BENCHMARK.md)。
+[games/references/BOARD_AI_BENCHMARK.md](games/references/BOARD_AI_BENCHMARK.md)。
 
 #### 4. 平台中心 Playwright 驗收
 

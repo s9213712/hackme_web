@@ -28,6 +28,8 @@ for one-off experiments.
 - [INDEX.md](INDEX.md)
   Mandatory registration table for maintained QA, security, pentest, stress,
   smoke, and production-gate scripts.
+- [CALL_MAP.md](CALL_MAP.md)
+  Operator-to-module call map for maintained script entrypoints.
 
 ## User-Facing Progress Contract
 
@@ -76,10 +78,13 @@ The final placement policy lives in:
 
 - [PLACEMENT_RULES.md](PLACEMENT_RULES.md)
 - [INDEX.md](INDEX.md)
+- [CALL_MAP.md](CALL_MAP.md)
 
 Use `PLACEMENT_RULES.md` as the canonical rulebook for what may or may not live
 under `scripts/`. Use `INDEX.md` to register maintained QA/security scripts and
-to define production-gate owner, purpose, artifact, and failure meaning.
+to define production-gate owner, purpose, artifact, and failure meaning. Use
+`CALL_MAP.md` when you need to know what a script calls and where its artifacts
+land.
 
 ## Games Script Call Map
 
@@ -113,7 +118,7 @@ Artifact:
 
 Deep tutorial:
 
-- [../docs/games/BOARD_AI_BENCHMARK.md](../docs/games/BOARD_AI_BENCHMARK.md)
+- [../docs/games/references/BOARD_AI_BENCHMARK.md](../docs/games/references/BOARD_AI_BENCHMARK.md)
 
 ### KataGo Setup
 
