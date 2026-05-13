@@ -9,6 +9,7 @@
     { key: "tetris", title: "俄羅斯方塊", subtitle: "高分消除挑戰", legacy: true },
     { key: "space_shooter", title: "宇宙戰機", subtitle: "高分射擊挑戰", legacy: true },
     { key: "fps_arena", title: "3D 射擊場", subtitle: "四模式 3D 射擊訓練", legacy: true },
+    { key: "real_tetris", title: "真實版俄羅斯方塊", subtitle: "剛體物理與放寬消線" },
     { key: "snake", title: "貪食蛇", subtitle: "滑動或方向鍵控制蛇吃食物" },
     { key: "game_2048", title: "2048", subtitle: "合併數字方塊，挑戰最高分" },
     { key: "brick_breaker", title: "打磚塊", subtitle: "移動擋板反彈球打掉磚塊" },

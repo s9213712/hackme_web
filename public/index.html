@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>hackme_web — 登入系統</title>
   <!-- Security headers via HTTP (set by server/Talisman) -->
-  <link rel="stylesheet" href="/styles.css?v=20260513-game-modules" />
+  <link rel="stylesheet" href="/styles.css?v=20260513-ui-polish" />
 </head>
 <body>
 <!-- ════════════════════ AUTH CARD ════════════════════ -->
@@ -1000,7 +1000,7 @@
       <div class="drive-card-heading">
         <div>
           <div class="mini-title">遊戲區</div>
-          <div class="drive-card-sub">目前開放西洋棋、數獨、踩地雷、1A2B、俄羅斯方塊、宇宙戰機、3D 射擊場、貪食蛇、2048、打磚塊、黑白棋、圍棋與五子棋。使用下拉選單在同一頁切換遊戲。</div>
+          <div class="drive-card-sub">目前開放西洋棋、數獨、踩地雷、1A2B、俄羅斯方塊、真實版俄羅斯方塊、宇宙戰機、3D 射擊場、貪食蛇、2048、打磚塊、黑白棋、圍棋與五子棋。使用下拉選單在同一頁切換遊戲。</div>
         </div>
         <button class="btn" id="game-refresh-btn" type="button">刷新</button>
       </div>
@@ -5318,7 +5318,7 @@
   </div>
 </div>
 
-<div id="toast-host" class="toast-host" aria-live="polite" aria-atomic="true"></div>
+<div id="toast-host" class="toast-host" role="status" aria-live="polite" aria-atomic="true" aria-relevant="additions text"></div>
 
 <div class="footer">
   hackme_web · 密碼使用 Argon2id 雜湊儲存
@@ -5347,6 +5347,7 @@
 <script src="/js/games/reversi.js?v=20260513-game-modules" defer></script>
 <script src="/js/games/go.js?v=20260513-game-modules" defer></script>
 <script src="/js/games/gomoku.js?v=20260513-game-modules" defer></script>
+<script src="/js/games/real-tetris.js?v=20260513-game-modules" defer></script>
 <script src="/js/games/game-view-registry.js?v=20260513-legacy-modules" defer></script>
 <script src="/js/games/chess.js?v=20260513-legacy-modules" defer></script>
 <script src="/js/games/sudoku.js?v=20260513-legacy-modules" defer></script>

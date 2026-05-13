@@ -5138,6 +5138,21 @@
     .tetris-cell.type-Z { background: #ff4f6d; }
     .tetris-cell.type-J { background: #4d7dff; }
     .tetris-cell.type-L { background: #ff9f43; }
+    .real-tetris-shell {
+      display: grid;
+      justify-content: center;
+      margin: .65rem auto 0;
+    }
+    .real-tetris-canvas {
+      width: min(100%, 360px);
+      aspect-ratio: 9 / 14;
+      display: block;
+      border: 1px solid rgba(255,255,255,.18);
+      border-radius: 8px;
+      background: #08111f;
+      box-shadow: inset 0 0 32px rgba(34,197,94,.1);
+      touch-action: none;
+    }
     .space-shooter-board {
       width: min(100%, 420px);
       aspect-ratio: 9 / 13;
@@ -5163,6 +5178,8 @@
       user-select: none;
       --fps-breathe-x: 0px;
       --fps-breathe-y: 0px;
+      --fps-breathe-rot: 0deg;
+      --fps-breathe-scale: 1;
       --fps-damage-opacity: 0;
       --fps-damage-angle: 0rad;
       --fps-shake-x: 0px;
@@ -5181,7 +5198,7 @@
       pointer-events: none;
       transform: translate(var(--fps-shake-x), var(--fps-shake-y));
       background:
-        radial-gradient(circle at calc(50% + var(--fps-breathe-x)) calc(50% + var(--fps-breathe-y)), transparent 0 26%, rgba(2,6,23,.18) 31%, rgba(2,6,23,.72) 73%),
+        radial-gradient(circle at calc(50% + var(--fps-breathe-x)) calc(50% + var(--fps-breathe-y)), transparent 0 20%, rgba(2,6,23,.16) 25%, rgba(2,6,23,.68) 68%),
         linear-gradient(rgba(230,246,255,.16), rgba(230,246,255,.16)) calc(50% + var(--fps-breathe-x)) 50% / 1px 100% no-repeat,
         linear-gradient(90deg, rgba(230,246,255,.16), rgba(230,246,255,.16)) 50% calc(50% + var(--fps-breathe-y)) / 100% 1px no-repeat;
       box-shadow: inset 0 0 0 1px rgba(255,255,255,.08);
@@ -5191,7 +5208,7 @@
       position: absolute;
       left: calc(50% + var(--fps-breathe-x));
       top: calc(50% + var(--fps-breathe-y));
-      width: min(46vw, 300px);
+      width: clamp(150px, 32vw, 220px);
       aspect-ratio: 1;
       transform: translate(-50%, -50%);
       border: 2px solid rgba(230,246,255,.68);
@@ -5205,9 +5222,9 @@
       position: absolute;
       left: calc(50% + var(--fps-breathe-x));
       top: calc(50% + var(--fps-breathe-y));
-      width: 30px;
-      height: 30px;
-      transform: translate(-50%, -50%);
+      width: 24px;
+      height: 24px;
+      transform: translate(-50%, -50%) rotate(var(--fps-breathe-rot)) scale(var(--fps-breathe-scale));
       pointer-events: none;
       z-index: 3;
     }
@@ -5220,15 +5237,15 @@
     }
     .fps-arena-reticle::before {
       left: 50%;
-      top: 4px;
+      top: 3px;
       width: 2px;
-      height: 22px;
+      height: 18px;
       transform: translateX(-50%);
     }
     .fps-arena-reticle::after {
-      left: 4px;
+      left: 3px;
       top: 50%;
-      width: 22px;
+      width: 18px;
       height: 2px;
       transform: translateY(-50%);
     }
@@ -7412,3 +7429,191 @@
       }
     }
 
+    /* Global interaction polish: additive motion, feedback, and status cues. */
+    @keyframes ui-module-enter {
+      0% { opacity: 0; transform: translateY(10px) scale(.992); filter: saturate(.9); }
+      100% { opacity: 1; transform: translateY(0) scale(1); filter: saturate(1); }
+    }
+
+    @keyframes ui-press-ripple {
+      0% { opacity: .35; transform: translate(-50%, -50%) scale(.25); }
+      100% { opacity: 0; transform: translate(-50%, -50%) scale(18); }
+    }
+
+    @keyframes ui-message-in {
+      0% { opacity: 0; transform: translateY(-4px); }
+      100% { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes ui-shimmer {
+      0% { background-position: 120% 0; }
+      100% { background-position: -120% 0; }
+    }
+
+    body.app-authenticated .module-section.ui-module-enter > .admin-tools {
+      animation: ui-module-enter .34s cubic-bezier(.2, .8, .2, 1) both;
+    }
+
+    :where(.drive-card, .community-panel, .game-panel, .game-board-panel, .drive-collapsible-panel, .chat-room-list-wrap, .chat-room-main, .video-card, .game-catalog-card) {
+      transition:
+        border-color .18s ease,
+        box-shadow .18s ease,
+        transform .18s ease,
+        background-color .18s ease;
+    }
+
+    @media (hover: hover) and (pointer: fine) {
+      :where(.drive-card, .community-panel, .game-panel, .game-board-panel, .drive-collapsible-panel, .chat-room-list-wrap, .chat-room-main, .video-card, .game-catalog-card):hover {
+        border-color: color-mix(in srgb, var(--accent2) 24%, var(--line-strong, rgba(214,226,240,.16)));
+        box-shadow: 0 12px 30px rgba(0,0,0,.24), 0 0 0 1px rgba(255,255,255,.025);
+        transform: translateY(-1px);
+      }
+
+      :where(.drive-file-row, .game-match-item, .notification-item, .community-thread-item):hover {
+        background: color-mix(in srgb, var(--accent) 8%, transparent);
+        border-color: color-mix(in srgb, var(--accent) 24%, transparent);
+      }
+    }
+
+    :where(.btn, .tab, .icon-action-btn, .game-catalog-card, .drive-file-row, .community-thread-item, .video-card) {
+      position: relative;
+      overflow: hidden;
+    }
+
+    :where(.btn, .tab, .icon-action-btn, .game-catalog-card, .drive-file-row, .community-thread-item, .video-card).ui-pressed::after {
+      content: "";
+      position: absolute;
+      left: var(--ui-press-x, 50%);
+      top: var(--ui-press-y, 50%);
+      width: 12px;
+      height: 12px;
+      border-radius: 999px;
+      background: rgba(255,255,255,.36);
+      pointer-events: none;
+      animation: ui-press-ripple .52s ease-out both;
+      z-index: 1;
+    }
+
+    .btn {
+      transition: transform .14s ease, background-color .16s ease, border-color .16s ease, box-shadow .16s ease, opacity .16s ease;
+    }
+
+    .btn:focus-visible,
+    .tab:focus-visible,
+    .icon-action-btn:focus-visible {
+      outline: none;
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 34%, transparent);
+      border-color: color-mix(in srgb, var(--accent) 70%, white 8%);
+    }
+
+    .btn.loading {
+      pointer-events: none;
+      background-image: linear-gradient(110deg, transparent 0%, rgba(255,255,255,.12) 45%, transparent 70%);
+      background-size: 220% 100%;
+      animation: ui-shimmer 1.2s linear infinite;
+    }
+
+    .field:focus-within label {
+      color: #cfe0ff;
+    }
+
+    .msg.show {
+      animation: ui-message-in .22s ease-out both;
+    }
+
+    .toast-host {
+      position: fixed;
+      right: clamp(.75rem, 2vw, 1.2rem);
+      bottom: clamp(.75rem, 2vw, 1.2rem);
+      z-index: 10000;
+      display: grid;
+      gap: .55rem;
+      width: min(360px, calc(100vw - 1.5rem));
+      pointer-events: none;
+    }
+
+    .toast {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      align-items: start;
+      gap: .62rem;
+      padding: .72rem .82rem;
+      border: 1px solid var(--line-strong, rgba(214,226,240,.16));
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--surface-raised, #1b222d) 92%, black 8%);
+      color: var(--text);
+      box-shadow: 0 16px 36px rgba(0,0,0,.32);
+      font-size: .82rem;
+      line-height: 1.42;
+      opacity: 0;
+      transform: translateY(10px) scale(.98);
+      transition: opacity .2s ease, transform .2s ease;
+    }
+
+    .toast::before {
+      content: "";
+      width: .62rem;
+      height: .62rem;
+      margin-top: .26rem;
+      border-radius: 999px;
+      background: #93a4bd;
+      box-shadow: 0 0 0 4px rgba(147,164,189,.12);
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+
+    .toast-ok {
+      border-color: rgba(34,199,154,.35);
+    }
+
+    .toast-ok::before {
+      background: var(--accent2);
+      box-shadow: 0 0 0 4px rgba(34,199,154,.16);
+    }
+
+    .toast-err {
+      border-color: rgba(255,79,109,.42);
+    }
+
+    .toast-err::before {
+      background: var(--danger);
+      box-shadow: 0 0 0 4px rgba(255,79,109,.16);
+    }
+
+    .sidebar-nav .tab.active::after {
+      content: "";
+      position: absolute;
+      inset: 7px 7px 7px auto;
+      width: 3px;
+      border-radius: 999px;
+      background: var(--accent2);
+      box-shadow: 0 0 14px rgba(34,199,154,.55);
+    }
+
+    @media (max-width: 720px) {
+      .toast-host {
+        right: .75rem;
+        bottom: .75rem;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        animation-duration: .001ms !important;
+        animation-iteration-count: 1 !important;
+        scroll-behavior: auto !important;
+        transition-duration: .001ms !important;
+      }
+
+      body.app-authenticated .module-section.ui-module-enter > .admin-tools,
+      .msg.show,
+      .btn.loading,
+      :where(.btn, .tab, .icon-action-btn, .game-catalog-card, .drive-file-row, .community-thread-item, .video-card).ui-pressed::after {
+        animation: none !important;
+      }
+    }

@@ -13,8 +13,9 @@ let fpsArenaResizeObserver = null;
 let fpsArenaPointerDragging = false;
 let fpsArenaLastPointer = null;
 let fpsArenaAudioContext = null;
-const FPS_ARENA_SCOPE_SWAY = 0.0028;
+const FPS_ARENA_SCOPE_SWAY = 0.0036;
 const FPS_ARENA_BOT_FIRE_RANGE = 18;
+const FPS_ARENA_PLAYER_RADIUS = 0.42;
 
 function fpsArenaMode() {
   const selected = $("fps-arena-mode")?.value || "aim";
@@ -105,6 +106,25 @@ function fpsArenaAddBox(scene, x, y, z, sx, sy, sz, color) {
   return mesh;
 }
 
+function fpsArenaAddCylinder(scene, x, y, z, radius, height, color) {
+  const mesh = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, height, 20), fpsArenaMaterial(color));
+  mesh.position.set(x, y, z);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  scene.add(mesh);
+  return mesh;
+}
+
+function fpsArenaPickSpawnPoint(state) {
+  const points = Array.isArray(state?.spawnPoints) ? state.spawnPoints : [];
+  if (points.length) {
+    const farPoints = points.filter((point) => !state.player || Math.hypot(point.x - state.player.x, point.z - state.player.z) > 7);
+    const pool = farPoints.length ? farPoints : points;
+    return pool[Math.floor(Math.random() * pool.length)];
+  }
+  return { x: Math.random() * 12 - 6, z: -7 - Math.random() * 16 };
+}
+
 function fpsArenaRegisterHumanPart(state, root, mesh, part, damage = 1, scoreBonus = 0) {
   mesh.castShadow = true;
   mesh.receiveShadow = true;
@@ -125,7 +145,10 @@ function fpsArenaAddTarget(state, kind, options = {}) {
   const limbColor = kind === "bot" ? 0x0f5f9e : kind === "enemy" ? 0x7f1d1d : 0x166534;
   const headColor = kind === "bot" ? 0xbfdbfe : kind === "enemy" ? 0xfecaca : 0xdcfce7;
   const root = new THREE.Group();
-  root.position.set(options.x ?? (Math.random() * 12 - 6), options.y ?? 1.05, options.z ?? (-7 - Math.random() * 16));
+  const spawn = options.x !== undefined || options.z !== undefined
+    ? { x: options.x ?? (Math.random() * 12 - 6), z: options.z ?? (-7 - Math.random() * 16) }
+    : fpsArenaPickSpawnPoint(state);
+  root.position.set(spawn.x, options.y ?? 1.05, spawn.z);
   root.userData = {
     kind,
     hp: options.hp || (kind === "target" ? 1 : 2),
@@ -434,6 +457,71 @@ function fpsArenaResizeRenderer() {
   state.camera.updateProjectionMatrix();
 }
 
+function fpsArenaBuildCombatMap(scene) {
+  const cover = [];
+  const trackCover = (mesh, options = {}) => {
+    mesh.userData = {
+      ...mesh.userData,
+      kind: "cover",
+      blocksPlayer: options.blocksPlayer !== false,
+    };
+    cover.push(mesh);
+    return mesh;
+  };
+  const addCoverBox = (...args) => trackCover(fpsArenaAddBox(scene, ...args));
+  const addCoverCylinder = (...args) => trackCover(fpsArenaAddCylinder(scene, ...args));
+  const addFloorMark = (x, z, sx, sz, color) => {
+    const mark = fpsArenaAddBox(scene, x, 0.015, z, sx, 0.03, sz, color);
+    mark.castShadow = false;
+    return mark;
+  };
+
+  trackCover(fpsArenaAddBox(scene, -11.2, 1.5, -13, 0.35, 3, 42, 0x24324a));
+  trackCover(fpsArenaAddBox(scene, 11.2, 1.5, -13, 0.35, 3, 42, 0x24324a));
+  trackCover(fpsArenaAddBox(scene, 0, 1.5, -34.2, 22, 3, 0.35, 0x24324a));
+  addFloorMark(0, -13, 0.12, 41, 0x1d4ed8);
+  addFloorMark(-4.8, -18, 2.8, 0.12, 0xfacc15);
+  addFloorMark(4.8, -22, 2.8, 0.12, 0xfacc15);
+
+  addCoverBox(-5.6, 0.68, -5.3, 4.2, 1.35, 0.55, 0x334155);
+  addCoverBox(5.6, 0.68, -5.3, 4.2, 1.35, 0.55, 0x334155);
+  addCoverBox(-7.1, 0.95, -11.4, 1.45, 1.9, 6.3, 0x1f2937);
+  addCoverBox(7.1, 0.95, -12.6, 1.45, 1.9, 6.8, 0x1f2937);
+  addCoverBox(-2.1, 0.62, -12.8, 3.2, 1.24, 0.62, 0x475569);
+  addCoverBox(2.4, 0.62, -16.2, 3.5, 1.24, 0.62, 0x475569);
+  addCoverBox(-5.2, 0.82, -21.2, 4.4, 1.64, 1.15, 0x293548);
+  addCoverBox(5.5, 0.82, -24.6, 4.7, 1.64, 1.15, 0x293548);
+  addCoverBox(0, 0.58, -27.9, 5.4, 1.16, 0.62, 0x475569);
+  addCoverBox(-8.9, 0.65, -28.6, 2.6, 1.3, 1.2, 0x334155);
+  addCoverBox(8.8, 0.65, -8.4, 2.4, 1.3, 1.2, 0x334155);
+
+  for (const x of [-8.5, 8.5]) {
+    for (const z of [-8.3, -18.5, -29.2]) {
+      addCoverCylinder(x, 1.15, z, 0.42, 2.3, 0x334155);
+    }
+  }
+  [
+    [-3.8, -8.8], [-2.7, -9.7], [3.4, -9.4], [4.5, -10.3],
+    [-1.3, -19.8], [0.1, -20.7], [1.4, -19.8], [-7.1, -24.4], [7.2, -19.6],
+  ].forEach(([x, z], index) => {
+    addCoverBox(x, 0.52, z, 1.0, 1.04, 1.0, index % 2 ? 0x3f3f46 : 0x334155);
+  });
+
+  fpsArenaAddBox(scene, 0, 2.85, -14.8, 18, 0.22, 0.24, 0x1e293b);
+  fpsArenaAddBox(scene, 0, 2.85, -25.8, 18, 0.22, 0.24, 0x1e293b);
+  fpsArenaAddBox(scene, -4.8, 0.04, -14, 2.8, 0.04, 2.8, 0x78350f);
+  fpsArenaAddBox(scene, 4.8, 0.04, -18, 2.8, 0.04, 2.8, 0x78350f);
+
+  return {
+    cover,
+    spawnPoints: [
+      { x: -7.8, z: -7.2 }, { x: -3.4, z: -8.8 }, { x: 3.2, z: -9.2 }, { x: 8.2, z: -10.8 },
+      { x: -8.1, z: -17.6 }, { x: -2.2, z: -18.6 }, { x: 3.1, z: -20.2 }, { x: 8.1, z: -22.4 },
+      { x: -6.9, z: -27.2 }, { x: 0.1, z: -30.6 }, { x: 6.7, z: -28.6 },
+    ],
+  };
+}
+
 function createFpsArenaWorld(mode) {
   const stage = $("fps-arena-stage");
   if (!stage || typeof THREE === "undefined") return null;
@@ -461,17 +549,7 @@ function createFpsArenaWorld(mode) {
   const grid = new THREE.GridHelper(22, 22, 0x38bdf8, 0x26364f);
   grid.position.z = -13;
   scene.add(grid);
-  const cover = [];
-  const trackCover = (mesh) => {
-    cover.push(mesh);
-    return mesh;
-  };
-  trackCover(fpsArenaAddBox(scene, -11.2, 1.5, -13, 0.35, 3, 42, 0x24324a));
-  trackCover(fpsArenaAddBox(scene, 11.2, 1.5, -13, 0.35, 3, 42, 0x24324a));
-  trackCover(fpsArenaAddBox(scene, 0, 1.5, -34.2, 22, 3, 0.35, 0x24324a));
-  for (let i = 0; i < 8; i += 1) {
-    trackCover(fpsArenaAddBox(scene, -8 + i * 2.3, 0.55, -7 - (i % 3) * 5.2, 1.2, 1.1, 1.2, i % 2 ? 0x334155 : 0x1f2937));
-  }
+  const map = fpsArenaBuildCombatMap(scene);
 
   const state = {
     status: "active",
@@ -481,7 +559,8 @@ function createFpsArenaWorld(mode) {
     renderer,
     hittables: [],
     targets: [],
-    cover,
+    cover: map.cover,
+    spawnPoints: map.spawnPoints,
     botTracers: [],
     botMuzzleFlashes: [],
     botProjectiles: [],
@@ -599,7 +678,42 @@ function fpsArenaUpdateBreathing(state, now) {
   if (stage) {
     stage.style.setProperty("--fps-breathe-x", `${Math.sin(t) * (moving ? 5.5 : 3.2)}px`);
     stage.style.setProperty("--fps-breathe-y", `${Math.cos(t * 0.72) * (moving ? 4.4 : 2.4)}px`);
+    stage.style.setProperty("--fps-breathe-rot", `${Math.sin(t * 0.48) * (moving ? 1.8 : 1.1)}deg`);
+    stage.style.setProperty("--fps-breathe-scale", `${1 + Math.sin(t * 1.16) * (moving ? 0.042 : 0.026)}`);
   }
+}
+
+function fpsArenaClampPlayerToMap(state, position) {
+  position.x = Math.max(-9.8, Math.min(9.8, position.x));
+  position.z = Math.max(-31.2, Math.min(2.8, position.z));
+  return position;
+}
+
+function fpsArenaPositionBlocked(state, position) {
+  const cover = state.cover || [];
+  for (const object of cover) {
+    if (object.userData?.blocksPlayer === false) continue;
+    const box = new THREE.Box3().setFromObject(object);
+    if (position.y < box.min.y - 0.2 || position.y > box.max.y + 2.2) continue;
+    const closestX = Math.max(box.min.x, Math.min(position.x, box.max.x));
+    const closestZ = Math.max(box.min.z, Math.min(position.z, box.max.z));
+    const dx = position.x - closestX;
+    const dz = position.z - closestZ;
+    if ((dx * dx) + (dz * dz) < FPS_ARENA_PLAYER_RADIUS * FPS_ARENA_PLAYER_RADIUS) return true;
+  }
+  return false;
+}
+
+function fpsArenaMoveWithCollision(state, delta) {
+  const next = fpsArenaClampPlayerToMap(state, state.player.clone().add(delta));
+  if (!fpsArenaPositionBlocked(state, next)) {
+    state.player.copy(next);
+    return;
+  }
+  const xOnly = fpsArenaClampPlayerToMap(state, state.player.clone().add(new THREE.Vector3(delta.x, 0, 0)));
+  if (!fpsArenaPositionBlocked(state, xOnly)) state.player.copy(xOnly);
+  const zOnly = fpsArenaClampPlayerToMap(state, state.player.clone().add(new THREE.Vector3(0, 0, delta.z)));
+  if (!fpsArenaPositionBlocked(state, zOnly)) state.player.copy(zOnly);
 }
 
 function fpsArenaMovePlayer(state, dt) {
@@ -612,9 +726,7 @@ function fpsArenaMovePlayer(state, dt) {
   if (state.keys.a || state.keys.ArrowLeft) move.sub(right);
   if (move.lengthSq() > 0) {
     move.normalize().multiplyScalar(6.2 * dt);
-    state.player.add(move);
-    state.player.x = Math.max(-9.2, Math.min(9.2, state.player.x));
-    state.player.z = Math.max(-31, Math.min(2.8, state.player.z));
+    fpsArenaMoveWithCollision(state, move);
   }
 }
 
@@ -767,12 +879,10 @@ function handleFpsArenaTouch(action) {
   const impulse = 0.82;
   const forward = new THREE.Vector3(Math.sin(state.yaw), 0, Math.cos(state.yaw) * -1);
   const right = new THREE.Vector3(Math.cos(state.yaw), 0, Math.sin(state.yaw));
-  if (action === "fps-forward") state.player.add(forward.multiplyScalar(impulse));
-  if (action === "fps-back") state.player.sub(forward.multiplyScalar(impulse));
-  if (action === "fps-right") state.player.add(right.multiplyScalar(impulse));
-  if (action === "fps-left") state.player.sub(right.multiplyScalar(impulse));
-  state.player.x = Math.max(-9.2, Math.min(9.2, state.player.x));
-  state.player.z = Math.max(-31, Math.min(2.8, state.player.z));
+  if (action === "fps-forward") fpsArenaMoveWithCollision(state, forward.multiplyScalar(impulse));
+  if (action === "fps-back") fpsArenaMoveWithCollision(state, forward.multiplyScalar(-impulse));
+  if (action === "fps-right") fpsArenaMoveWithCollision(state, right.multiplyScalar(impulse));
+  if (action === "fps-left") fpsArenaMoveWithCollision(state, right.multiplyScalar(-impulse));
 }
 
 function handleFpsArenaPointerMove(event) {

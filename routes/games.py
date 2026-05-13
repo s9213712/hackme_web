@@ -62,6 +62,7 @@ SOLO_GAME_KEYS = {
     "minesweeper",
     "1a2b",
     "tetris",
+    "real_tetris",
     "space_shooter",
     "fps_arena",
     "snake",
@@ -73,6 +74,7 @@ SOLO_GAME_KEYS = {
 }
 SCORE_RANKED_SOLO_GAMES = {
     "tetris",
+    "real_tetris",
     "space_shooter",
     "fps_arena",
     "snake",
@@ -82,7 +84,7 @@ SCORE_RANKED_SOLO_GAMES = {
     "go",
     "gomoku",
 }
-SOLO_GAME_CHECK_SQL = "'sudoku', 'minesweeper', '1a2b', 'tetris', 'space_shooter', 'fps_arena', 'snake', 'game_2048', 'brick_breaker', 'reversi', 'go', 'gomoku'"
+SOLO_GAME_CHECK_SQL = "'sudoku', 'minesweeper', '1a2b', 'tetris', 'real_tetris', 'space_shooter', 'fps_arena', 'snake', 'game_2048', 'brick_breaker', 'reversi', 'go', 'gomoku'"
 WEEKLY_REWARDS = (300, 200, 100)
 COMPUTER_DIFFICULTIES = {
     "normal",
@@ -313,7 +315,7 @@ def game_schema_sql():
         penalty_seconds INTEGER NOT NULL DEFAULT 0,
         elapsed_ms INTEGER NOT NULL,
         created_at TEXT NOT NULL,
-        CHECK (game_key IN ('sudoku', 'minesweeper', '1a2b', 'tetris', 'space_shooter', 'fps_arena')),
+        CHECK (game_key IN ({SOLO_GAME_CHECK_SQL})),
         CHECK (elapsed_ms > 0),
         CHECK (raw_elapsed_ms > 0),
         CHECK (penalty_seconds >= 0)
@@ -323,7 +325,7 @@ def game_schema_sql():
     CREATE INDEX IF NOT EXISTS idx_game_invites_user_status ON game_invites(game_key, opponent_user_id, status);
     CREATE INDEX IF NOT EXISTS idx_game_rewards_week ON game_leaderboard_rewards(game_key, week_key);
     CREATE INDEX IF NOT EXISTS idx_game_solo_scores_rank ON game_solo_scores(game_key, week_key, difficulty, elapsed_ms);
-    """
+    """.format(SOLO_GAME_CHECK_SQL=SOLO_GAME_CHECK_SQL)
 
 
 def rebuild_solo_score_table(conn):
@@ -348,12 +350,12 @@ def rebuild_solo_score_table(conn):
             penalty_seconds INTEGER NOT NULL DEFAULT 0,
             elapsed_ms INTEGER NOT NULL,
             created_at TEXT NOT NULL,
-            CHECK (game_key IN ('sudoku', 'minesweeper', '1a2b', 'tetris', 'space_shooter', 'fps_arena')),
+            CHECK (game_key IN ({SOLO_GAME_CHECK_SQL})),
             CHECK (elapsed_ms > 0),
             CHECK (raw_elapsed_ms > 0),
             CHECK (penalty_seconds >= 0)
         )
-        """
+        """.format(SOLO_GAME_CHECK_SQL=SOLO_GAME_CHECK_SQL)
     )
     conn.execute(
         f"""
@@ -848,6 +850,12 @@ def register_games_routes(app, deps):
             }, {
                 "key": "tetris",
                 "title": "俄羅斯方塊",
+                "status": "available",
+                "supports_invites": False,
+                "supports_computer": False,
+            }, {
+                "key": "real_tetris",
+                "title": "真實版俄羅斯方塊",
                 "status": "available",
                 "supports_invites": False,
                 "supports_computer": False,

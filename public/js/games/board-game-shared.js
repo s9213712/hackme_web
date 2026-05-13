@@ -28,6 +28,7 @@
       passCount: 0,
       mode: "human",
       aiColor: "white",
+      humanColor: "black",
       aiDifficulty: "normal",
       aiThinking: false,
     };
@@ -42,11 +43,16 @@
     const isAiTurn = () => state.mode === "computer" && state.turn === state.aiColor;
     const inputLocked = () => state.aiThinking || isAiTurn();
     const difficultyLabel = () => DIFFICULTY_LABELS[state.aiDifficulty] || "普通";
+    const playerOrderLabel = () => state.humanColor === "black" ? "玩家先手" : "玩家後手";
     const setActions = () => {
       const nextModeLabel = state.mode === "computer" ? "玩家對戰" : "對電腦";
+      const sideButton = state.mode === "computer"
+        ? `<button class="btn game-mini-btn" type="button" data-action="side">${playerOrderLabel()}</button>`
+        : "";
       api.setActions(`
         <button class="btn game-mini-btn btn-primary" type="button" data-action="new">新局</button>
         <button class="btn game-mini-btn" type="button" data-action="mode">${nextModeLabel}</button>
+        ${sideButton}
         <button class="btn game-mini-btn" type="button" data-action="difficulty">AI ${difficultyLabel()}</button>
         <button class="btn game-mini-btn" type="button" data-action="pass">停一手</button>
         <button class="btn game-mini-btn" type="button" data-action="finish">結算</button>
@@ -66,7 +72,7 @@
     const renderStatus = () => {
       if (state.finished) return;
       const side = state.turn === "black" ? "黑" : "白";
-      const mode = state.mode === "computer" ? `對電腦 ${difficultyLabel()}` : "玩家對戰";
+      const mode = state.mode === "computer" ? `對電腦 ${difficultyLabel()} · ${playerOrderLabel()}` : "玩家對戰";
       const actor = state.mode === "computer" ? (isAiTurn() ? "AI" : "玩家") : "玩家";
       status(`${state.aiThinking ? "AI 思考中" : `${side}方走`} · ${actor} · 黑 ${count("black")} / 白 ${count("white")} · ${mode}`);
     };
@@ -167,6 +173,7 @@
       state.turn = "black";
       state.finished = false;
       state.passCount = 0;
+      state.aiColor = other(state.humanColor);
       state.aiThinking = false;
       if (isReversi) {
         state.board[idx(3, 3)] = "white"; state.board[idx(4, 4)] = "white";
@@ -219,6 +226,10 @@
         aiToken += 1;
         render();
         queueAiMove();
+      }
+      if (action === "side" && state.mode === "computer") {
+        state.humanColor = other(state.humanColor);
+        reset();
       }
       if (action === "difficulty") {
         const next = (DIFFICULTIES.indexOf(state.aiDifficulty) + 1) % DIFFICULTIES.length;

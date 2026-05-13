@@ -7,7 +7,14 @@ from pathlib import Path
 import chess
 from flask import Flask, jsonify
 
-from routes.games import choose_computer_move, ensure_game_schema, game_schema_sql, register_games_routes
+from routes.games import (
+    SCORE_RANKED_SOLO_GAMES,
+    SOLO_GAME_KEYS,
+    choose_computer_move,
+    ensure_game_schema,
+    game_schema_sql,
+    register_games_routes,
+)
 from services.games import chess_pipeline as chess_pipeline_service
 from services.games import chess_pv as chess_pv_service
 from services.games.chess_dl import (
@@ -171,6 +178,7 @@ def test_game_catalog_includes_solo_games(tmp_path):
         "minesweeper",
         "1a2b",
         "tetris",
+        "real_tetris",
         "space_shooter",
         "fps_arena",
         "snake",
@@ -192,6 +200,7 @@ def test_game_catalog_includes_solo_games(tmp_path):
     assert by_key["minesweeper"]["supports_computer"] is False
     assert by_key["1a2b"]["supports_invites"] is False
     assert by_key["tetris"]["supports_invites"] is False
+    assert by_key["real_tetris"]["title"] == "真實版俄羅斯方塊"
     assert by_key["space_shooter"]["supports_computer"] is False
     assert by_key["fps_arena"]["supports_invites"] is False
     assert by_key["snake"]["supports_invites"] is False
@@ -472,6 +481,32 @@ def test_score_ranked_solo_games_use_high_score_leaderboard(tmp_path):
         json={"score": 0, "raw_elapsed_ms": 1000, "penalty_seconds": 0, "elapsed_ms": 1000, "puzzle_id": "space-shooter-standard"},
     )
     assert bad.status_code == 400
+
+
+def test_solo_score_route_accepts_all_registered_solo_game_keys(tmp_path):
+    db_path = tmp_path / "games.db"
+    _seed_db(db_path)
+    actor_box = {"actor": {"id": 2, "username": "alice", "role": "user"}}
+    app = _build_app(db_path, actor_box)
+    client = app.test_client()
+
+    for game_key in sorted(SOLO_GAME_KEYS):
+        payload = {
+            "raw_elapsed_ms": 1000,
+            "penalty_seconds": 0,
+            "elapsed_ms": 1000,
+            "puzzle_id": f"{game_key}-smoke",
+        }
+        if game_key == "minesweeper":
+            payload["difficulty"] = "easy"
+        if game_key == "1a2b":
+            payload["guess_count"] = 3
+        if game_key in SCORE_RANKED_SOLO_GAMES:
+            payload["score"] = 100
+        if game_key == "fps_arena":
+            payload["difficulty"] = "aim"
+        response = client.post(f"/api/games/{game_key}/solo-scores", json=payload)
+        assert response.status_code == 200, (game_key, response.get_data(as_text=True))
 
 
 def test_chess_legal_move_validation_blocks_illegal_moves():

@@ -20,6 +20,7 @@
 - `snake`
 - `game_2048`
 - `brick_breaker`
+- `real_tetris`
 - `reversi`
 - `go`
 - `gomoku`
@@ -66,6 +67,7 @@ runtime AI 入口是 `POST /api/games/<game_key>/ai-move`，只接受這三個 `
 - 三棋 benchmark / Elo / skill suite：`services/games/board_arena.py`
 - 三棋 operator script：`scripts/games/board_ai_benchmark.py`
 - 三棋測試：`tests/games/test_board_ai.py`、`tests/games/test_board_arena.py`
+- 真實版俄羅斯方塊：`public/js/games/real-tetris.js`
 - 西洋棋仍使用 `services/games/chess*.py`、`scripts/games/chess_*.py`、`docs/games/chess_*.md`
 
 新增三棋 AI 強化前，先更新 [BOARD_AI_BENCHMARK.md](BOARD_AI_BENCHMARK.md) 的量化規則與 promotion gate，避免只改演算法但沒有可比較的棋力證據。

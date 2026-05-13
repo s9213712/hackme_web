@@ -125,6 +125,7 @@ function gameIcon(key) {
   if (key === "minesweeper") return "!";
   if (key === "1a2b") return "A";
   if (key === "tetris") return "▦";
+  if (key === "real_tetris") return "▧";
   if (key === "space_shooter") return "▲";
   if (key === "fps_arena") return "◎";
   return "♟";
@@ -141,6 +142,7 @@ function gameSubtitle(game) {
   if (game.key === "minesweeper") return "單人推理挑戰";
   if (game.key === "1a2b") return "單人猜數字";
   if (game.key === "tetris") return "高分消除挑戰";
+  if (game.key === "real_tetris") return "剛體物理與放寬消線";
   if (game.key === "space_shooter") return "高分射擊挑戰";
   if (game.key === "fps_arena") return "四模式 3D 射擊訓練";
   return game.supports_computer ? "玩家對戰 / 電腦練習" : "玩家對戰";

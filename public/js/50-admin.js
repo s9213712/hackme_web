@@ -274,6 +274,7 @@ function switchModuleTab(tab) {
   if (mAccounts) mAccounts.classList.toggle("active", normTab === "accounts");
   if (mServer) mServer.classList.toggle("active", normTab === "server");
   if (mAppeals) mAppeals.classList.toggle("active", normTab === "appeals");
+  if (typeof animateActiveModule === "function") animateActiveModule(normTab);
 
   if (normTab === "community" && canAccessCommunity) {
     loadCommunityHome();

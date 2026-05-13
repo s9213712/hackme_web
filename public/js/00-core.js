@@ -81,6 +81,9 @@ const SITE_SIDEBAR_WIDTH_MAP = {
   standard: { expanded: 244, collapsed: 68 },
   wide: { expanded: 288, collapsed: 76 },
 };
+const APP_TOAST_LIMIT = 4;
+let lastAppToastSignature = "";
+let lastAppToastAt = 0;
 
 function clientRoleRank(role) {
   if (role === "super_admin") return 3;
@@ -958,6 +961,67 @@ function flash(el, text, ok) {
   if (!el) return;
   el.textContent = text;
   el.className = "msg show " + (ok ? "ok" : "err");
+  announceInlineMessage(text, ok);
+}
+
+function uiPrefersReducedMotion() {
+  return Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches);
+}
+
+function showAppToast(text, ok = true, options = {}) {
+  const host = $("toast-host");
+  const message = String(text || "").replace(/\s+/g, " ").trim().slice(0, 180);
+  if (!host || !message) return;
+  const kind = ok === true ? "ok" : ok === false ? "err" : "info";
+  const signature = `${kind}:${message}`;
+  const now = Date.now();
+  if (signature === lastAppToastSignature && now - lastAppToastAt < 1200) return;
+  lastAppToastSignature = signature;
+  lastAppToastAt = now;
+  while (host.children.length >= APP_TOAST_LIMIT) host.firstElementChild?.remove();
+  const toast = document.createElement("div");
+  toast.className = `toast toast-${kind}`;
+  toast.setAttribute("role", kind === "err" ? "alert" : "status");
+  toast.textContent = message;
+  host.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add("show"));
+  const duration = Number(options.duration || (kind === "err" ? 5200 : 3200));
+  window.setTimeout(() => {
+    toast.classList.remove("show");
+    toast.addEventListener("transitionend", () => toast.remove(), { once: true });
+    window.setTimeout(() => toast.remove(), 420);
+  }, duration);
+}
+
+function announceInlineMessage(text, ok) {
+  const normalized = String(text || "").replace(/\s+/g, " ").trim();
+  if (!normalized || /載入中|讀取中|同步中|處理中|準備中/.test(normalized)) return;
+  showAppToast(normalized, ok);
+}
+
+function animateActiveModule(tab) {
+  const section = $("module-" + tab);
+  if (!section || uiPrefersReducedMotion()) return;
+  section.classList.remove("ui-module-enter");
+  void section.offsetWidth;
+  section.classList.add("ui-module-enter");
+  window.setTimeout(() => section.classList.remove("ui-module-enter"), 460);
+}
+
+function installUiInteractionFeedback() {
+  if (document.documentElement.dataset.uiFeedbackBound === "1") return;
+  document.documentElement.dataset.uiFeedbackBound = "1";
+  document.addEventListener("pointerdown", (event) => {
+    const target = event.target?.closest?.(".btn, .tab, .icon-action-btn, .game-catalog-card, .drive-file-row, .community-thread-item, .video-card");
+    if (!target || target.disabled || target.getAttribute("aria-disabled") === "true") return;
+    const rect = target.getBoundingClientRect();
+    target.style.setProperty("--ui-press-x", `${event.clientX - rect.left}px`);
+    target.style.setProperty("--ui-press-y", `${event.clientY - rect.top}px`);
+    target.classList.remove("ui-pressed");
+    void target.offsetWidth;
+    target.classList.add("ui-pressed");
+    window.setTimeout(() => target.classList.remove("ui-pressed"), 520);
+  }, { passive: true });
 }
 
 function clearMsg() {
@@ -970,6 +1034,7 @@ function setUserEditMsg(text, ok) {
   if (!el) return;
   el.textContent = text;
   el.className = ok === true ? "msg show ok" : ok === false ? "msg show err" : "msg";
+  if (ok === true || ok === false) announceInlineMessage(text, ok);
 }
 
 function setChatMsg(elId, text, ok) {
@@ -977,6 +1042,7 @@ function setChatMsg(elId, text, ok) {
   if (!el) return;
   el.textContent = text;
   el.className = "msg show " + (ok ? "ok" : "err");
+  announceInlineMessage(text, ok);
 }
 
 function stopChatPoll() {
@@ -1194,6 +1260,7 @@ setupPwToggle("admin-add-pw-confirm", "admin-add-pw-confirm-toggle");
 setupPwToggle("edit-user-current-pw", "edit-user-current-pw-toggle");
 setupPwToggle("edit-user-pw", "edit-user-pw-toggle");
 setupPwToggle("edit-user-pw-confirm", "edit-user-pw-confirm-toggle");
+installUiInteractionFeedback();
 
 $("reg-pw").addEventListener("input", function () {
   const v = this.value;

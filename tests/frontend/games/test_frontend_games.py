@@ -24,6 +24,7 @@ def test_game_zone_frontend_assets_are_wired():
     local_2048_js = (ROOT / "public" / "js" / "games" / "game-2048.js").read_text(encoding="utf-8")
     local_brick_js = (ROOT / "public" / "js" / "games" / "brick-breaker.js").read_text(encoding="utf-8")
     local_board_shared_js = (ROOT / "public" / "js" / "games" / "board-game-shared.js").read_text(encoding="utf-8")
+    local_real_tetris_js = (ROOT / "public" / "js" / "games" / "real-tetris.js").read_text(encoding="utf-8")
     local_reversi_js = (ROOT / "public" / "js" / "games" / "reversi.js").read_text(encoding="utf-8")
     local_go_js = (ROOT / "public" / "js" / "games" / "go.js").read_text(encoding="utf-8")
     local_gomoku_js = (ROOT / "public" / "js" / "games" / "gomoku.js").read_text(encoding="utf-8")
@@ -89,6 +90,7 @@ def test_game_zone_frontend_assets_are_wired():
     assert "/js/games/game-2048.js?v=20260513-game-modules" in index_html
     assert "/js/games/brick-breaker.js?v=20260513-game-modules" in index_html
     assert "/js/games/board-game-shared.js?v=20260513-game-modules" in index_html
+    assert "/js/games/real-tetris.js?v=20260513-game-modules" in index_html
     assert "/js/games/reversi.js?v=20260513-game-modules" in index_html
     assert "/js/games/go.js?v=20260513-game-modules" in index_html
     assert "/js/games/gomoku.js?v=20260513-game-modules" in index_html
@@ -115,6 +117,7 @@ def test_game_zone_frontend_assets_are_wired():
     assert "貪食蛇" in index_html
     assert "2048" in index_html
     assert "打磚塊" in index_html
+    assert "真實版俄羅斯方塊" in index_html
     assert "黑白棋" in index_html
     assert "圍棋" in index_html
     assert "五子棋" in index_html
@@ -129,15 +132,28 @@ def test_game_zone_frontend_assets_are_wired():
     assert 'registerHackmeLocalGameModule("snake"' in local_snake_js
     assert 'registerHackmeLocalGameModule("game_2048"' in local_2048_js
     assert 'registerHackmeLocalGameModule("brick_breaker"' in local_brick_js
+    assert 'registerHackmeLocalGameModule("real_tetris"' in local_real_tetris_js
     assert "mountHackmeLocalDiscGame" in local_board_shared_js
     assert "/ai-move" in local_board_shared_js
     assert "AI 思考中" in local_board_shared_js
     assert 'data-action="mode"' in local_board_shared_js
+    assert 'data-action="side"' in local_board_shared_js
+    assert "玩家先手" in local_board_shared_js
+    assert "玩家後手" in local_board_shared_js
+    assert 'state.aiColor = other(state.humanColor);' in local_board_shared_js
     assert 'data-action="difficulty"' in local_board_shared_js
     assert "api.request" in local_board_shared_js
     assert 'registerHackmeLocalGameModule("reversi"' in local_reversi_js
     assert 'registerHackmeLocalGameModule("go"' in local_go_js
     assert 'registerHackmeLocalGameModule("gomoku"' in local_gomoku_js
+    assert "centerRealTetrisCells" in local_real_tetris_js
+    assert "integrateRealTetrisPhysics" in local_real_tetris_js
+    assert "resolveRealTetrisCollisions" in local_real_tetris_js
+    assert "clearRealTetrisRelaxedLines" in local_real_tetris_js
+    assert "body.omega += (rx * ny - ry * nx)" in local_real_tetris_js
+    assert "RELAXED_LINE_FILL = 0.78" in local_real_tetris_js
+    assert 'api.submitScore({' in local_real_tetris_js
+    assert 'difficulty: "physics"' in local_real_tetris_js
     assert 'typeof window.mountHackmeLocalDiscGame !== "function"' in local_reversi_js
     assert 'typeof window.mountHackmeLocalDiscGame !== "function"' in local_go_js
     assert 'typeof window.mountHackmeLocalDiscGame !== "function"' in local_gomoku_js
@@ -263,6 +279,8 @@ def test_game_zone_frontend_assets_are_wired():
     assert "startSpaceShooterGame" in shooter_module_js
     assert "tickSpaceShooterGame" in shooter_module_js
     assert "fps_arena" in games_js
+    assert "real_tetris" in games_js
+    assert "真實版俄羅斯方塊" in game_modules_js
     assert "currentFpsArenaMode" in fps_module_js
     assert "startFpsArenaGame" in fps_js
     assert "Aim Trainer" in fps_js
@@ -276,6 +294,14 @@ def test_game_zone_frontend_assets_are_wired():
     assert "breathOffset" in fps_js
     assert "FPS_ARENA_SCOPE_SWAY" in fps_js
     assert "FPS_ARENA_BOT_FIRE_RANGE" in fps_js
+    assert "FPS_ARENA_PLAYER_RADIUS" in fps_js
+    assert "fpsArenaBuildCombatMap" in fps_js
+    assert "fpsArenaAddCylinder" in fps_js
+    assert "fpsArenaMoveWithCollision" in fps_js
+    assert "spawnPoints" in fps_js
+    assert "blocksPlayer" in fps_js
+    assert "--fps-breathe-rot" in fps_js
+    assert "--fps-breathe-scale" in fps_js
     assert "fpsArenaUpdateBotFire" in fps_js
     assert "fpsArenaLineOfSightClear" in fps_js
     assert "botTracers" in fps_js
@@ -332,12 +358,16 @@ def test_game_zone_frontend_assets_are_wired():
     assert ".minesweeper-board" in styles_css
     assert ".onea2b-history" in styles_css
     assert ".tetris-board" in styles_css
+    assert ".real-tetris-canvas" in styles_css
     assert ".space-shooter-board" in styles_css
     assert ".fps-arena-stage" in styles_css
     assert ".fps-arena-scope" in styles_css
     assert ".fps-arena-reticle" in styles_css
     assert ".fps-arena-damage" in styles_css
     assert "--fps-shake-x" in styles_css
+    assert "--fps-breathe-rot" in styles_css
+    assert "--fps-breathe-scale" in styles_css
+    assert "clamp(150px, 32vw, 220px)" in styles_css
     assert "var(--panel)" in styles_css
     assert ".arcade-canvas" in styles_css
     assert ".game-2048-board" in styles_css
