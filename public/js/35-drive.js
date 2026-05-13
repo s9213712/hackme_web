@@ -657,7 +657,17 @@ function renderDriveDashboard(payload) {
   }
   if (barFill) {
     barFill.style.width = `${percent}%`;
-    barFill.dataset.warning = quota.warning_active || percent >= 80 ? "high" : percent >= 65 ? "medium" : "low";
+    const level = quota.warning_active || percent >= 80 ? "high" : percent >= 65 ? "medium" : "low";
+    barFill.dataset.warning = level;
+    // P5: also toggle the fx-capacity-bar warning/critical classes on the
+    // parent so the wave + pulse animations fire. Existing colour rules
+    // (#drive-quota-bar-fill[data-warning]) keep working in parallel.
+    const wrap = barFill.parentElement;
+    if (wrap && wrap.classList) {
+      wrap.classList.toggle("warning", level === "medium" || (level === "high" && percent < 90));
+      wrap.classList.toggle("critical", level === "high" && percent >= 90);
+      wrap.style.setProperty("--fx-capacity-percent", `${percent}%`);
+    }
   }
 
   const list = $("drive-security-list");
