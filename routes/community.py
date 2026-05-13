@@ -981,39 +981,52 @@ def register_community_routes(app, deps):
         try:
             ensure_community_schema(conn)
             if request.method == "GET":
+                # P4: thread/post counts are pre-aggregated as CTEs and
+                # joined in one pass so the page no longer fires 1 + 2N
+                # queries when the board list is long.
+                base_select = (
+                    "WITH thread_stats AS ( "
+                    "    SELECT board_id, COUNT(*) AS thread_count "
+                    "    FROM forum_threads "
+                    "    WHERE is_deleted=0 "
+                    "    GROUP BY board_id "
+                    "), post_stats AS ( "
+                    "    SELECT t.board_id, COUNT(*) AS post_count "
+                    "    FROM forum_posts p "
+                    "    JOIN forum_threads t ON t.id=p.thread_id AND t.is_deleted=0 "
+                    "    WHERE p.is_deleted=0 "
+                    "    GROUP BY t.board_id "
+                    ") "
+                    "SELECT b.*, c.name AS category_name, c.description AS category_description, "
+                    "c.sort_order AS category_sort_order, c.is_active AS category_is_active, "
+                    "(SELECT GROUP_CONCAT(username) FROM board_moderators WHERE board_id=b.id) AS moderators, "
+                    "(SELECT COUNT(*) FROM board_moderators WHERE board_id=b.id) AS moderator_count, "
+                    "COALESCE(ts.thread_count, 0) AS thread_count, "
+                    "COALESCE(ps.post_count, 0) AS post_count "
+                    "FROM forum_boards b "
+                    "LEFT JOIN forum_categories c ON c.id=b.category_id "
+                    "LEFT JOIN thread_stats ts ON ts.board_id=b.id "
+                    "LEFT JOIN post_stats ps ON ps.board_id=b.id "
+                )
                 if can_manage_community(actor):
                     rows = conn.execute(
-                        "SELECT b.*, c.name AS category_name, c.description AS category_description, "
-                        "c.sort_order AS category_sort_order, c.is_active AS category_is_active, "
-                        "(SELECT GROUP_CONCAT(username) FROM board_moderators WHERE board_id=b.id) AS moderators, "
-                        "(SELECT COUNT(*) FROM board_moderators WHERE board_id=b.id) AS moderator_count "
-                        "FROM forum_boards b LEFT JOIN forum_categories c ON c.id=b.category_id "
-                        "ORDER BY c.sort_order ASC, b.sort_order ASC, COALESCE(b.last_activity_at, b.created_at) DESC"
+                        base_select
+                        + "ORDER BY c.sort_order ASC, b.sort_order ASC, COALESCE(b.last_activity_at, b.created_at) DESC"
                     ).fetchall()
                 else:
                     rows = conn.execute(
-                        "SELECT b.*, c.name AS category_name, c.description AS category_description, "
-                        "c.sort_order AS category_sort_order, c.is_active AS category_is_active, "
-                        "(SELECT GROUP_CONCAT(username) FROM board_moderators WHERE board_id=b.id) AS moderators, "
-                        "(SELECT COUNT(*) FROM board_moderators WHERE board_id=b.id) AS moderator_count "
-                        "FROM forum_boards b LEFT JOIN forum_categories c ON c.id=b.category_id "
-                        "WHERE b.is_active=1 AND ((b.status='approved' AND b.visibility='public') OR b.owner_user_id=?) ORDER BY "
-                        "c.sort_order ASC, b.sort_order ASC, CASE b.status WHEN 'approved' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END, "
+                        base_select
+                        + "WHERE b.is_active=1 AND ((b.status='approved' AND b.visibility='public') OR b.owner_user_id=?) "
+                        "ORDER BY c.sort_order ASC, b.sort_order ASC, "
+                        "CASE b.status WHEN 'approved' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END, "
                         "COALESCE(b.last_activity_at, b.created_at) DESC",
                         (actor["id"],)
                     ).fetchall()
                 boards = []
                 for row in rows:
                     payload = board_payload(row)
-                    counts = conn.execute(
-                        "SELECT "
-                        "(SELECT COUNT(*) FROM forum_threads WHERE board_id=? AND is_deleted=0) AS thread_count, "
-                        "(SELECT COUNT(*) FROM forum_posts WHERE is_deleted=0 AND thread_id IN "
-                        "(SELECT id FROM forum_threads WHERE board_id=? AND is_deleted=0)) AS post_count",
-                        (row["id"], row["id"])
-                    ).fetchone()
-                    payload["thread_count"] = counts["thread_count"] or 0
-                    payload["post_count"] = counts["post_count"] or 0
+                    payload["thread_count"] = row["thread_count"] or 0
+                    payload["post_count"] = row["post_count"] or 0
                     boards.append(payload)
                 return json_resp({"ok": True, "boards": boards, "can_review": can_manage_community(actor)})
 
