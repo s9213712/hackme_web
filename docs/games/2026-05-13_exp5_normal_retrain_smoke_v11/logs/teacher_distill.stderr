@@ -1,0 +1,6 @@
+[chess-exp5-distill] input files: 1
+[chess-exp5-distill] output jsonl: docs/games/2026-05-13_exp5_normal_retrain_smoke_v11/normal_teacher_distill_all.jsonl
+[chess-exp5-distill] teacher_depth: 2
+[chess-exp5-distill] phase read input: docs/games/2026-05-13_exp5_normal_retrain_smoke_v11/normal_positions_for_teacher.jsonl
+[chess-exp5-distill] phase result read input: accepted=45 skipped=135
+[chess-exp5-distill] phase result distill: accepted=45 output=docs/games/2026-05-13_exp5_normal_retrain_smoke_v11/normal_teacher_distill_all.jsonl

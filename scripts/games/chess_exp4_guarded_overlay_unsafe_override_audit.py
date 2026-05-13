@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -21,9 +22,11 @@ except Exception:  # pragma: no cover - tests run with python-chess installed.
 from services.games.chess_pv_guarded_overlay import exp4_runtime_overlay_allows_final
 
 
+ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_RESULTS_ROOT = Path(os.environ.get("HACKME_CHESS_RESULTS_DIR", str(ROOT / "runtime" / "reports" / "games" / "chess_results")))
 DEFAULT_RESULT_DIR = Path(
-    "/home/s92137/hackme_web/runtime/chess_results/"
-    "exp4_23_guarded_overlay_broad_sanity_gate_full"
+    DEFAULT_RESULTS_ROOT
+    / "exp4_23_guarded_overlay_broad_sanity_gate_full"
 )
 
 

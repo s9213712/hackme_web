@@ -11,11 +11,15 @@
 - 我方對局 JSON：`docs/games/2026-05-13_game_ai_codex_play_eval.json`
 - 我方對局 JSONL replay：`docs/games/2026-05-13_game_ai_codex_play_replays.jsonl`
 - 完整執行紀錄：`docs/games/2026-05-13_game_ai_eval_run_log.md`
+- 目前技術與分數比較：`docs/games/2026-05-13_game_ai_current_technology_score_comparison.md`
+- exp5 殘局轉換補強：`docs/games/2026-05-13_exp5_conversion_fix.md`
+- exp5 模型快照與高階引擎化路線：`docs/games/2026-05-13_exp5_model_snapshot_and_high_engine_plan.md`
+- exp5 Phase 1 engine upgrade：`docs/games/2026-05-13_exp5_phase1_engine_upgrade.md`
 - 使用腳本：`scripts/games/game_ai_strength_eval.py`、`scripts/games/game_ai_live_smoke.py`、`scripts/games/game_ai_codex_play_eval.py`
 
 ## 方法摘要
 
-客觀評測包含 201 個固定局面/棋局範本測試、90 局 AI-vs-random sparring。西洋棋另使用昨天 `scripts/games/chess_pgn_to_replay.py` 產出的 `/home/s92137/chess_results/retrain_redo_20260512T224634Z/replays/carlsen_25_game_level.jsonl`，取 24 個低權重 replay 範本作固定局面補充。
+客觀評測包含 201 個固定局面/棋局範本測試、90 局 AI-vs-random sparring。西洋棋另使用昨天 `scripts/games/chess_pgn_to_replay.py` 產出的 `<chess-results>/retrain_redo_20260512T224634Z/replays/carlsen_25_game_level.jsonl`，取 24 個低權重 replay 範本作固定局面補充。
 
 Live API smoke 經獨立腳本重跑後通過：棋盤類 AI move 9/9，西洋棋 practice 建立 12/12。主觀對局共 75 局，每個 AI 難度 5 局；西洋棋完整下到將死或正式和局，沒有用 material cap 判勝。
 

@@ -26,8 +26,9 @@ from services.games.chess_nnue import EXPERIMENT_NNUE_DIFFICULTY, default_chess_
 from services.games.chess_promotion import default_chess_candidate_dir, default_chess_promotion_status_path, production_engine_inventory  # noqa: E402
 
 
-DEFAULT_SUMMARY = Path("/home/s92137/chess_results/exp5_10_production_readiness/summary.json")
-DEFAULT_OUTPUT_DIR = Path("/home/s92137/chess_results/exp5_12_production_promote")
+DEFAULT_RESULTS_ROOT = Path(os.environ.get("HACKME_CHESS_RESULTS_DIR", str(ROOT / "runtime" / "reports" / "games" / "chess_results")))
+DEFAULT_SUMMARY = DEFAULT_RESULTS_ROOT / "exp5_10_production_readiness" / "summary.json"
+DEFAULT_OUTPUT_DIR = DEFAULT_RESULTS_ROOT / "exp5_12_production_promote"
 
 
 def parse_args() -> argparse.Namespace:

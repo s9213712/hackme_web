@@ -36,11 +36,12 @@ from services.games.chess_nnue import (  # noqa: E402
 from services.games.self_play_training import _teacher_static_eval, choose_teacher_move  # noqa: E402
 
 
-DEFAULT_CANDIDATE = Path("/home/s92137/chess_results/exp5_08_stage_candidate/chess_experiment_5_nnue_stage_candidate.json")
+DEFAULT_RESULTS_ROOT = Path(os.environ.get("HACKME_CHESS_RESULTS_DIR", str(ROOT / "runtime" / "reports" / "games" / "chess_results")))
+DEFAULT_CANDIDATE = DEFAULT_RESULTS_ROOT / "exp5_08_stage_candidate" / "chess_experiment_5_nnue_stage_candidate.json"
 DEFAULT_BASELINE = ROOT / "services" / "games" / "models" / "chess_experiment_5_nnue.json"
-DEFAULT_TRAIN_ROWS = Path("/home/s92137/chess_results/exp5_08_clean_pool/inputs/exp5_08_train_clean_only.jsonl")
-DEFAULT_SEED_CASES = Path("/home/s92137/chess_results/exp5_08_clean_pool/inputs/exp5_09_benchmark_cases.jsonl")
-DEFAULT_OUTPUT_DIR = Path("/home/s92137/chess_results/exp5_10_production_readiness")
+DEFAULT_TRAIN_ROWS = DEFAULT_RESULTS_ROOT / "exp5_08_clean_pool" / "inputs" / "exp5_08_train_clean_only.jsonl"
+DEFAULT_SEED_CASES = DEFAULT_RESULTS_ROOT / "exp5_08_clean_pool" / "inputs" / "exp5_09_benchmark_cases.jsonl"
+DEFAULT_OUTPUT_DIR = DEFAULT_RESULTS_ROOT / "exp5_10_production_readiness"
 SEARCH_PROFILE = "fixed_depth_strong"
 SOFT_LABEL_NEAR_EQUIVALENT_CP = 50
 SOFT_LABEL_NEAR_EQUIVALENT_CATEGORIES = {"quiet_positional"}

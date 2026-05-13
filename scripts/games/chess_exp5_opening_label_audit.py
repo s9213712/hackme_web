@@ -12,6 +12,7 @@ import argparse
 from collections import Counter
 from datetime import datetime
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -25,8 +26,9 @@ if str(ROOT) not in sys.path:
 from scripts.games.chess_exp5_production_readiness import _static_move_ranking, _static_move_lookup  # noqa: E402
 
 
-DEFAULT_INPUT = Path("/home/s92137/chess_results/exp5_13_rule_smoke_stalemate_fix_check/summary.json")
-DEFAULT_OUTPUT_DIR = Path("/home/s92137/chess_results/exp5_14_opening_label_audit")
+DEFAULT_RESULTS_ROOT = Path(os.environ.get("HACKME_CHESS_RESULTS_DIR", str(ROOT / "runtime" / "reports" / "games" / "chess_results")))
+DEFAULT_INPUT = DEFAULT_RESULTS_ROOT / "exp5_13_rule_smoke_stalemate_fix_check" / "summary.json"
+DEFAULT_OUTPUT_DIR = DEFAULT_RESULTS_ROOT / "exp5_14_opening_label_audit"
 STATIC_EQUIVALENT_CP = 50
 
 

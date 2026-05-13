@@ -35,7 +35,7 @@ To produce all 13 reports in one run (recommended for a full production gate):
 
 ```bash
 python3 scripts/on_live_reports/on_live_reports_make.py \
-    --base-url https://127.0.0.1:5000 \
+    --base-url "https://127.0.0.1:$PORT" \
     --root-password "$ROOT_PASSWORD"
 ```
 

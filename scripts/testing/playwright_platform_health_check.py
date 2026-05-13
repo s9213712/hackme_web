@@ -408,37 +408,6 @@ def trigger_comfyui_job_attempt(page) -> dict[str, Any]:
     )
 
 
-def post_json_with_fresh_csrf(page, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-    return page.evaluate(
-        """async ({path, payload}) => {
-            const csrfResponse = await fetch('/api/csrf-token', {credentials: 'same-origin'});
-            const csrfBody = await csrfResponse.json().catch(() => ({}));
-            const cookieCsrf = document.cookie
-                .split('; ')
-                .find((part) => part.startsWith('csrf_token='))
-                ?.split('=')
-                .slice(1)
-                .join('=') || '';
-            const csrfToken = csrfBody.csrf_token || csrfBody.token || cookieCsrf;
-            const response = await fetch(path, {
-                method: 'POST',
-                credentials: 'same-origin',
-                headers: {
-                    'Accept': 'application/json',
-                    'Content-Type': 'application/json',
-                    'X-CSRF-Token': csrfToken
-                },
-                body: JSON.stringify(payload || {})
-            });
-            const text = await response.text();
-            let body = null;
-            try { body = text ? JSON.parse(text) : null; } catch (_) { body = {raw: text.slice(0, 500)}; }
-            return {status: response.status, ok: response.ok, body};
-        }""",
-        {"path": path, "payload": payload or {}},
-    )
-
-
 def check_job_center(rec: Recorder, page, base_url: str, normal_user: dict[str, Any]) -> dict[str, Any]:
     comfy_attempt = trigger_comfyui_job_attempt(page)
     jobs = fetch_json(page, "GET", "/api/jobs?limit=80")
@@ -471,7 +440,7 @@ def check_job_center(rec: Recorder, page, base_url: str, normal_user: dict[str, 
         )
         page.wait_for_timeout(1000)
     failed_job = next((row for row in job_rows if row.get("status") == "failed"), {})
-    retry_result = post_json_with_fresh_csrf(page, f"/api/jobs/{failed_job.get('job_uuid', '')}/retry") if failed_job.get("job_uuid") else {"status": 0, "body": {"ok": False, "msg": "no failed job"}}
+    retry_result = fetch_json(page, "POST", f"/api/jobs/{failed_job.get('job_uuid', '')}/retry") if failed_job.get("job_uuid") else {"status": 0, "body": {"ok": False, "msg": "no failed job"}}
     page.evaluate("() => typeof loadJobCenter === 'function' && loadJobCenter()")
     page.wait_for_timeout(1000)
     after_jobs = fetch_json(page, "GET", "/api/jobs?limit=80")

@@ -23,6 +23,76 @@ let fpsArenaAudioContext = null;
 const FPS_ARENA_SCOPE_SWAY = 0.0036;
 const FPS_ARENA_BOT_FIRE_RANGE = 18;
 const FPS_ARENA_PLAYER_RADIUS = 0.42;
+const FPS_ARENA_AI_ROLES = {
+  raider: {
+    enemyColor: 0xf43f5e,
+    botColor: 0x38bdf8,
+    hpBonus: 0,
+    speedScale: 1.22,
+    preferredRange: 1.7,
+    retreatRange: 0.65,
+    fireRange: 7.5,
+    fireDelayMin: 920,
+    fireDelayMax: 1320,
+    projectileSpread: 0.42,
+    distanceSpread: 0.026,
+    damage: 7,
+    coverBias: 0.2,
+    flankBias: 0.55,
+    canShoot: false,
+  },
+  assault: {
+    enemyColor: 0xfb7185,
+    botColor: 0x38bdf8,
+    hpBonus: 0,
+    speedScale: 1.04,
+    preferredRange: 7.5,
+    retreatRange: 2.4,
+    fireRange: 14.5,
+    fireDelayMin: 650,
+    fireDelayMax: 1080,
+    projectileSpread: 0.27,
+    distanceSpread: 0.018,
+    damage: 8,
+    coverBias: 0.42,
+    flankBias: 0.36,
+    canShoot: true,
+  },
+  flanker: {
+    enemyColor: 0xfdba74,
+    botColor: 0x67e8f9,
+    hpBonus: 0,
+    speedScale: 1.14,
+    preferredRange: 5.8,
+    retreatRange: 1.8,
+    fireRange: 13.5,
+    fireDelayMin: 720,
+    fireDelayMax: 1180,
+    projectileSpread: 0.34,
+    distanceSpread: 0.022,
+    damage: 7,
+    coverBias: 0.35,
+    flankBias: 0.9,
+    canShoot: true,
+  },
+  marksman: {
+    enemyColor: 0xbae6fd,
+    botColor: 0xbfdbfe,
+    hpBonus: -1,
+    speedScale: 0.88,
+    preferredRange: 13.5,
+    retreatRange: 6.5,
+    fireRange: FPS_ARENA_BOT_FIRE_RANGE + 3,
+    fireDelayMin: 920,
+    fireDelayMax: 1480,
+    projectileSpread: 0.12,
+    distanceSpread: 0.012,
+    damage: 12,
+    coverBias: 0.86,
+    flankBias: 0.18,
+    canShoot: true,
+  },
+};
 
 function fpsArenaMode() {
   const selected = $("fps-arena-mode")?.value || "aim";
@@ -134,6 +204,21 @@ function fpsArenaPickSpawnPoint(state) {
   return { x: Math.random() * 12 - 6, z: -7 - Math.random() * 16 };
 }
 
+function fpsArenaAiRoleMeta(role) {
+  return FPS_ARENA_AI_ROLES[role] || FPS_ARENA_AI_ROLES.assault;
+}
+
+function fpsArenaPickCombatRole(state, kind, requestedRole = null) {
+  if (kind === "target") return "target";
+  if (requestedRole && FPS_ARENA_AI_ROLES[requestedRole]) return requestedRole;
+  const sequence = kind === "bot"
+    ? ["assault", "marksman", "flanker", "assault", "marksman"]
+    : ["raider", "assault", "flanker", "assault", "raider"];
+  const index = Number(state.aiSpawnCounter || 0);
+  state.aiSpawnCounter = index + 1;
+  return sequence[index % sequence.length];
+}
+
 function fpsArenaRegisterHumanPart(state, root, mesh, part, damage = 1, scoreBonus = 0) {
   mesh.castShadow = true;
   mesh.receiveShadow = true;
@@ -150,7 +235,9 @@ function fpsArenaRegisterHumanPart(state, root, mesh, part, damage = 1, scoreBon
 }
 
 function fpsArenaAddTarget(state, kind, options = {}) {
-  const torsoColor = kind === "bot" ? 0x38bdf8 : kind === "enemy" ? 0xf43f5e : 0x22c55e;
+  const aiRole = fpsArenaPickCombatRole(state, kind, options.role);
+  const role = fpsArenaAiRoleMeta(aiRole);
+  const torsoColor = kind === "bot" ? role.botColor : kind === "enemy" ? role.enemyColor : 0x22c55e;
   const limbColor = kind === "bot" ? 0x0f5f9e : kind === "enemy" ? 0x7f1d1d : 0x166534;
   const headColor = kind === "bot" ? 0xbfdbfe : kind === "enemy" ? 0xfecaca : 0xdcfce7;
   const root = new THREE.Group();
@@ -158,16 +245,27 @@ function fpsArenaAddTarget(state, kind, options = {}) {
     ? { x: options.x ?? (Math.random() * 12 - 6), z: options.z ?? (-7 - Math.random() * 16) }
     : fpsArenaPickSpawnPoint(state);
   root.position.set(spawn.x, options.y ?? 1.05, spawn.z);
+  const baseHp = options.hp ?? (kind === "target" ? 1 : 2);
+  const hp = kind === "target" ? baseHp : Math.max(1, baseHp + role.hpBonus);
   root.userData = {
     kind,
-    hp: options.hp || (kind === "target" ? 1 : 2),
+    role: aiRole,
+    hp,
+    maxHp: hp,
     score: options.score || (kind === "target" ? 120 : 180),
-    speed: options.speed || 1,
+    speed: (options.speed ?? 1) * (kind === "target" ? 1 : role.speedScale),
+    aiState: kind === "target" ? "target" : "advance",
+    aiTarget: null,
+    lastKnownPlayer: null,
+    lastSeenAt: 0,
+    nextThinkAt: 0,
+    coverPoint: null,
+    strafeSign: Math.random() > 0.5 ? 1 : -1,
     phase: Math.random() * Math.PI * 2,
     breathPhase: Math.random() * Math.PI * 2,
     baseY: root.position.y,
     lastAttack: 0,
-    fireDelay: 760 + Math.random() * 500,
+    fireDelay: role.fireDelayMin + Math.random() * (role.fireDelayMax - role.fireDelayMin),
   };
   const torsoMaterial = fpsArenaMaterial(torsoColor, 0.7, 0.04);
   const limbMaterial = fpsArenaMaterial(limbColor, 0.82, 0.02);
@@ -299,7 +397,8 @@ function fpsArenaAddPlayerFireEffects(state, hitPoint, hitTarget = false) {
 }
 
 function fpsArenaAddBotProjectile(state, from, to, bot, dist) {
-  const spread = 0.22 + dist * 0.018;
+  const role = fpsArenaAiRoleMeta(bot.userData?.role);
+  const spread = role.projectileSpread + dist * role.distanceSpread;
   const endpoint = to.clone().add(new THREE.Vector3(
     (Math.random() - 0.5) * spread,
     (Math.random() - 0.5) * spread * 0.7,
@@ -316,7 +415,7 @@ function fpsArenaAddBotProjectile(state, from, to, bot, dist) {
     object: projectile,
     velocity,
     previous: from.clone(),
-    damage: 8 + Math.random() * 5,
+    damage: role.damage + Math.random() * 4,
     owner: bot,
     expiresAt: performance.now() + 1800,
   });
@@ -409,12 +508,15 @@ function fpsArenaSetDamageCue(state, from) {
 }
 
 function fpsArenaUpdateBotFire(state, bot, dist, now) {
-  if (dist > FPS_ARENA_BOT_FIRE_RANGE || now - bot.userData.lastAttack < bot.userData.fireDelay) return;
+  const role = fpsArenaAiRoleMeta(bot.userData?.role);
+  const fireRange = Math.max(role.fireRange || FPS_ARENA_BOT_FIRE_RANGE, bot.userData.kind === "bot" ? FPS_ARENA_BOT_FIRE_RANGE : 0);
+  if (!role.canShoot || dist > fireRange || now - bot.userData.lastAttack < bot.userData.fireDelay) return;
+  if (!["peekShoot", "suppress", "flank", "advance"].includes(bot.userData.aiState)) return;
   const muzzle = fpsArenaBotMuzzlePosition(bot);
   const aimPoint = state.player.clone().add(new THREE.Vector3(0, -0.15, 0));
   if (!fpsArenaLineOfSightClear(state, muzzle, aimPoint)) return;
   bot.userData.lastAttack = now;
-  bot.userData.fireDelay = 620 + Math.random() * 560;
+  bot.userData.fireDelay = role.fireDelayMin + Math.random() * (role.fireDelayMax - role.fireDelayMin);
   fpsArenaAddBotProjectile(state, muzzle, aimPoint, bot, dist);
   fpsArenaAddTracer(state, muzzle, aimPoint, false);
   fpsArenaAddMuzzleFlash(state, muzzle);
@@ -584,8 +686,25 @@ function fpsArenaBuildCombatMap(scene) {
   fpsArenaAddBox(scene, -4.8, 0.04, -14, 2.8, 0.04, 2.8, 0x78350f);
   fpsArenaAddBox(scene, 4.8, 0.04, -18, 2.8, 0.04, 2.8, 0x78350f);
 
+  const coverPoints = [
+    { x: -6.9, z: -4.4, peekX: -4.2, peekZ: -5.1 }, { x: 6.9, z: -4.4, peekX: 4.2, peekZ: -5.1 },
+    { x: -5.4, z: -10.2, peekX: -4.2, peekZ: -11.8 }, { x: 5.4, z: -11.2, peekX: 4.3, peekZ: -13.0 },
+    { x: -3.9, z: -13.8, peekX: -1.9, peekZ: -12.1 }, { x: 4.4, z: -17.3, peekX: 2.4, peekZ: -15.2 },
+    { x: -6.8, z: -20.0, peekX: -4.6, peekZ: -21.5 }, { x: 6.9, z: -23.2, peekX: 4.9, peekZ: -24.8 },
+    { x: -7.3, z: -29.8, peekX: -5.9, peekZ: -27.3 }, { x: 7.3, z: -27.2, peekX: 5.6, peekZ: -28.9 },
+    { x: -1.8, z: -29.0, peekX: 0.0, peekZ: -27.0 }, { x: 1.8, z: -29.0, peekX: 0.0, peekZ: -27.0 },
+  ];
+  const navPoints = [
+    { x: -8.0, z: -6.8 }, { x: 0.0, z: -7.3 }, { x: 8.0, z: -8.2 },
+    { x: -8.2, z: -14.2 }, { x: -1.2, z: -16.2 }, { x: 8.2, z: -16.4 },
+    { x: -7.8, z: -22.8 }, { x: 0.0, z: -22.2 }, { x: 7.8, z: -23.4 },
+    { x: -7.4, z: -30.2 }, { x: 0.0, z: -31.0 }, { x: 7.4, z: -29.8 },
+  ];
+
   return {
     cover,
+    coverPoints,
+    navPoints,
     spawnPoints: [
       { x: -7.8, z: -7.2 }, { x: -3.4, z: -8.8 }, { x: 3.2, z: -9.2 }, { x: 8.2, z: -10.8 },
       { x: -8.1, z: -17.6 }, { x: -2.2, z: -18.6 }, { x: 3.1, z: -20.2 }, { x: 8.1, z: -22.4 },
@@ -633,7 +752,10 @@ function createFpsArenaWorld(mode) {
     hittables: [],
     targets: [],
     cover: map.cover,
+    coverPoints: map.coverPoints,
+    navPoints: map.navPoints,
     spawnPoints: map.spawnPoints,
+    aiSpawnCounter: 0,
     botTracers: [],
     botMuzzleFlashes: [],
     botProjectiles: [],
@@ -665,6 +787,8 @@ function createFpsArenaWorld(mode) {
     lastFrame: performance.now(),
     lastSpawnAt: 0,
     lastShotAt: 0,
+    lastPlayerShotAt: 0,
+    lastPlayerShotPosition: null,
     weaponIndex: 0,
     weapon: FPS_ARENA_WEAPONS[0],
     ammo: FPS_ARENA_WEAPONS[0].mag,
@@ -872,6 +996,8 @@ function shootFpsArena() {
   }
   if (now - state.lastShotAt < weapon.delay) return;
   state.lastShotAt = now;
+  state.lastPlayerShotAt = now;
+  state.lastPlayerShotPosition = state.player.clone();
   state.ammo -= 1;
   state.shots += 1;
   fpsArenaAddShake(state, 0.85, 150);
@@ -956,6 +1082,144 @@ function attemptFpsArenaDefuse(fromShot = false) {
   if (state.defuseProgress >= 100) finishFpsArenaGame("defused");
 }
 
+function fpsArenaPlayerAimPoint(state) {
+  return state.player.clone().add(new THREE.Vector3(0, -0.15, 0));
+}
+
+function fpsArenaBotEyePosition(bot) {
+  return bot.position.clone().add(new THREE.Vector3(0, 0.45, 0));
+}
+
+function fpsArenaClampAiPosition(position) {
+  position.x = Math.max(-9.5, Math.min(9.5, position.x));
+  position.z = Math.max(-32, Math.min(1.8, position.z));
+  return position;
+}
+
+function fpsArenaMoveAiWithCollision(state, mesh, delta) {
+  if (delta.lengthSq() <= 0.000001) return;
+  const next = fpsArenaClampAiPosition(mesh.position.clone().add(delta));
+  if (!fpsArenaPositionBlocked(state, next)) {
+    mesh.position.copy(next);
+    return;
+  }
+  const xOnly = fpsArenaClampAiPosition(mesh.position.clone().add(new THREE.Vector3(delta.x, 0, 0)));
+  if (!fpsArenaPositionBlocked(state, xOnly)) {
+    mesh.position.copy(xOnly);
+    return;
+  }
+  const zOnly = fpsArenaClampAiPosition(mesh.position.clone().add(new THREE.Vector3(0, 0, delta.z)));
+  if (!fpsArenaPositionBlocked(state, zOnly)) mesh.position.copy(zOnly);
+}
+
+function fpsArenaPickCoverPoint(state, mesh, role, wantsLineOfSight = true) {
+  const points = Array.isArray(state.coverPoints) ? state.coverPoints : [];
+  const playerAim = fpsArenaPlayerAimPoint(state);
+  let best = null;
+  for (const point of points) {
+    const body = new THREE.Vector3(point.x, mesh.position.y, point.z);
+    if (fpsArenaPositionBlocked(state, body)) continue;
+    const eye = body.clone().add(new THREE.Vector3(0, 0.45, 0));
+    const peek = new THREE.Vector3(point.peekX ?? point.x, mesh.position.y + 0.45, point.peekZ ?? point.z);
+    const bodyLos = fpsArenaLineOfSightClear(state, eye, playerAim);
+    const peekLos = fpsArenaLineOfSightClear(state, peek, playerAim);
+    const botDistance = body.distanceTo(mesh.position);
+    const playerDistance = Math.hypot(body.x - state.player.x, body.z - state.player.z);
+    if (playerDistance < 1.8) continue;
+    const rangePenalty = Math.abs(playerDistance - role.preferredRange) * 0.75;
+    const safetyScore = bodyLos ? role.coverBias * 42 : role.coverBias * -68;
+    const peekScore = wantsLineOfSight ? (peekLos ? -26 : 58) : (peekLos ? 18 : -22);
+    const score = botDistance + rangePenalty + safetyScore + peekScore;
+    if (!best || score < best.score) {
+      best = {
+        score,
+        point,
+        position: body,
+        peekPosition: new THREE.Vector3(point.peekX ?? point.x, mesh.position.y, point.peekZ ?? point.z),
+        peekLos,
+        bodyLos,
+      };
+    }
+  }
+  return best;
+}
+
+function fpsArenaPickFlankPoint(state, mesh, role) {
+  const points = Array.isArray(state.navPoints) ? state.navPoints : [];
+  const side = mesh.userData.strafeSign || 1;
+  const playerAim = fpsArenaPlayerAimPoint(state);
+  let best = null;
+  for (const point of points) {
+    const position = new THREE.Vector3(point.x, mesh.position.y, point.z);
+    if (fpsArenaPositionBlocked(state, position)) continue;
+    const playerDistance = Math.hypot(position.x - state.player.x, position.z - state.player.z);
+    if (playerDistance < 2.2 || playerDistance > 16.5) continue;
+    const sideScore = side * (position.x - state.player.x) > 0 ? -28 * role.flankBias : 22 * role.flankBias;
+    const rangeScore = Math.abs(playerDistance - role.preferredRange) * 0.62;
+    const lineScore = fpsArenaLineOfSightClear(state, position.clone().add(new THREE.Vector3(0, 0.45, 0)), playerAim) ? -10 : 12;
+    const score = position.distanceTo(mesh.position) + rangeScore + sideScore + lineScore;
+    if (!best || score < best.score) best = { score, position };
+  }
+  return best;
+}
+
+function fpsArenaRetreatPoint(state, mesh, role) {
+  const cover = fpsArenaPickCoverPoint(state, mesh, role, false);
+  if (cover) return cover.position;
+  const away = mesh.position.clone().sub(state.player).setY(0);
+  if (away.lengthSq() <= 0.0001) away.set(mesh.userData.strafeSign || 1, 0, 0);
+  return fpsArenaClampAiPosition(mesh.position.clone().add(away.normalize().multiplyScalar(4.5)));
+}
+
+function fpsArenaThinkTacticalState(state, mesh, dist, hasLineOfSight, now) {
+  const data = mesh.userData;
+  const role = fpsArenaAiRoleMeta(data.role);
+  if (hasLineOfSight) {
+    data.lastKnownPlayer = state.player.clone();
+    data.lastSeenAt = now;
+  } else if (state.lastPlayerShotAt && now - state.lastPlayerShotAt < 2400 && state.lastPlayerShotPosition) {
+    data.lastKnownPlayer = state.lastPlayerShotPosition.clone();
+  }
+  if (now < (data.nextThinkAt || 0)) return;
+  data.nextThinkAt = now + 260 + Math.random() * 240;
+  const lowHealth = data.hp <= Math.max(1, (data.maxHp || 2) * 0.45);
+  const cover = fpsArenaPickCoverPoint(state, mesh, role, hasLineOfSight);
+  if (lowHealth && cover) {
+    const safeCover = fpsArenaPickCoverPoint(state, mesh, role, false) || cover;
+    data.aiState = "seekCover";
+    data.coverPoint = safeCover.point;
+    data.aiTarget = safeCover.position.clone();
+    return;
+  }
+  if (dist < role.retreatRange) {
+    data.aiState = "retreat";
+    data.aiTarget = fpsArenaRetreatPoint(state, mesh, role);
+    return;
+  }
+  if (hasLineOfSight && role.canShoot && dist <= role.fireRange) {
+    if (cover && role.coverBias > 0.55 && mesh.position.distanceTo(cover.position) > 0.8) {
+      data.aiState = "seekCover";
+      data.coverPoint = cover.point;
+      data.aiTarget = cover.position.clone();
+    } else {
+      data.aiState = role.coverBias > 0.55 ? "peekShoot" : "suppress";
+      data.aiTarget = null;
+    }
+    return;
+  }
+  const flank = fpsArenaPickFlankPoint(state, mesh, role);
+  if ((!hasLineOfSight && data.lastKnownPlayer) || (flank && role.flankBias > 0.7 && dist < 17)) {
+    data.aiState = "flank";
+    data.aiTarget = flank?.position || data.lastKnownPlayer?.clone() || null;
+    return;
+  }
+  data.aiState = "advance";
+  const target = (data.lastKnownPlayer || state.player).clone();
+  const fromPlayer = mesh.position.clone().sub(target).setY(0);
+  if (fromPlayer.lengthSq() > 0.0001) target.add(fromPlayer.normalize().multiplyScalar(role.preferredRange));
+  data.aiTarget = fpsArenaClampAiPosition(target);
+}
+
 function fpsArenaUpdateTargets(state, dt, now) {
   state.targets.forEach((mesh) => {
     const kind = mesh.userData.kind;
@@ -965,21 +1229,31 @@ function fpsArenaUpdateTargets(state, dt, now) {
       mesh.position.y = mesh.userData.baseY + Math.sin(mesh.userData.phase * 1.7) * 0.25;
       mesh.rotation.y += dt * 1.2;
     } else if (kind === "enemy" || kind === "bot") {
-      const toPlayer = new THREE.Vector3(state.player.x - mesh.position.x, 0, state.player.z - mesh.position.z);
-      const dist = Math.max(0.001, toPlayer.length());
-      toPlayer.normalize();
-      const strafe = new THREE.Vector3(-toPlayer.z, 0, toPlayer.x).multiplyScalar(Math.sin(now * 0.002 + mesh.userData.phase) * 0.75);
-      const speed = (kind === "bot" ? 1.4 : 1.05) * (mesh.userData.speed || 1);
-      const botRangeControl = kind === "bot" && dist < 6.5 ? -0.65 : 1;
-      mesh.position.add(toPlayer.multiplyScalar(speed * botRangeControl * dt));
-      mesh.position.add(strafe.multiplyScalar(dt));
-      mesh.position.x = Math.max(-9.5, Math.min(9.5, mesh.position.x));
-      mesh.position.z = Math.max(-32, Math.min(1.8, mesh.position.z));
-      mesh.lookAt(state.player.x, mesh.position.y, state.player.z);
-      if (dist < 1.1) {
+      const role = fpsArenaAiRoleMeta(mesh.userData.role);
+      const toPlayerRaw = new THREE.Vector3(state.player.x - mesh.position.x, 0, state.player.z - mesh.position.z);
+      const dist = Math.max(0.001, toPlayerRaw.length());
+      const hasLineOfSight = fpsArenaLineOfSightClear(state, fpsArenaBotEyePosition(mesh), fpsArenaPlayerAimPoint(state));
+      fpsArenaThinkTacticalState(state, mesh, dist, hasLineOfSight, now);
+      const speed = (kind === "bot" ? 1.35 : 1.08) * (mesh.userData.speed || 1);
+      const move = new THREE.Vector3();
+      const target = mesh.userData.aiTarget;
+      if (target) {
+        const toTarget = target.clone().sub(mesh.position).setY(0);
+        if (toTarget.lengthSq() > 0.08) move.add(toTarget.normalize().multiplyScalar(speed * dt));
+      }
+      const toPlayer = toPlayerRaw.clone().normalize();
+      const strafe = new THREE.Vector3(-toPlayer.z, 0, toPlayer.x)
+        .multiplyScalar((mesh.userData.strafeSign || 1) * Math.sin(now * 0.0025 + mesh.userData.phase) * 0.78 * dt);
+      if (["peekShoot", "suppress", "flank"].includes(mesh.userData.aiState)) move.add(strafe);
+      if (dist < role.retreatRange && mesh.userData.aiState !== "flank") move.add(toPlayer.clone().multiplyScalar(-speed * 0.85 * dt));
+      fpsArenaMoveAiWithCollision(state, mesh, move);
+      const lookPoint = mesh.userData.lastKnownPlayer || state.player;
+      mesh.lookAt(lookPoint.x, mesh.position.y, lookPoint.z);
+      const newDist = Math.hypot(state.player.x - mesh.position.x, state.player.z - mesh.position.z);
+      if (newDist < 1.1) {
         state.health -= kind === "bot" ? 16 * dt : 24 * dt;
       }
-      if (kind === "bot") fpsArenaUpdateBotFire(state, mesh, dist, now);
+      fpsArenaUpdateBotFire(state, mesh, newDist, now);
     }
     mesh.userData.breathPhase += dt * 2.2;
     mesh.scale.y = 1 + Math.sin(mesh.userData.breathPhase) * 0.018;

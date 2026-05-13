@@ -1043,6 +1043,8 @@ def approximate_strength(game_key: str, difficulty: str, total: float, fixed_pas
             return "初級到中級"
         return "入門到初級"
     if game_key == "chess":
+        if difficulty == "experiment 5:nnue" and total >= 39.5 and fixed_pass >= 1.0 and score_rate >= 1.0:
+            return "約 Elo 1500-1800；非高階引擎"
         if difficulty == "experiment 5:nnue" and total >= 30:
             return "約 Elo 1200-1500"
         if total >= 32:

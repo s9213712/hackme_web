@@ -482,7 +482,7 @@ def play_chess_codex_game(
             break
         if board.is_game_over(claim_draw=True):
             break
-        if max_plies is None and ply > 1 and ply % 100 == 0:
+        if ply > 1 and ply % 100 == 0:
             progress(f"chess full-game progress difficulty={difficulty} codex={codex_color_name} ply={ply}")
         actor = "codex" if board.turn == codex_color else "ai"
         before = board.fen()
@@ -515,10 +515,7 @@ def play_chess_codex_game(
             winner = "black" if codex_color_name == "white" else "white"
             result = "ai_win"
     else:
-        if max_plies is None:
-            reason = "unterminated"
-        else:
-            reason = "material_at_ply_cap"
+        reason = "deadloop_guard_ply_cap"
         material = material_score(board, codex_color)
         if material > 120:
             result = "codex_win"
@@ -526,7 +523,6 @@ def play_chess_codex_game(
         elif material < -120:
             result = "ai_win"
             winner = "black" if codex_color_name == "white" else "white"
-        reason = "material_at_ply_cap"
     return {
         "game_key": "chess",
         "game_label": GAME_LABELS["chess"],
@@ -536,7 +532,9 @@ def play_chess_codex_game(
         "result": result,
         "winner_color": winner,
         "reason": reason,
-        "complete_game": bool(outcome) or bool(invalid),
+        "terminal_complete": bool(outcome) and not bool(invalid),
+        "complete_game": bool(outcome) and not bool(invalid),
+        "deadloop_guard_plies": int(max_plies or 0),
         "plies": len(history),
         "final_fen": board.fen(),
         "codex_material_cp": material_score(board, codex_color),
@@ -596,6 +594,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gomoku-max-plies", type=int, default=24)
     parser.add_argument("--chess-max-plies", type=int, default=50)
     parser.add_argument("--chess-complete-games", action="store_true", help="For chess, ignore --chess-max-plies and play until checkmate or a chess draw condition.")
+    parser.add_argument("--chess-deadloop-guard-plies", type=int, default=2000, help="Ply guard used with --chess-complete-games; hitting it marks the game incomplete.")
+    parser.add_argument("--chess-only", action="store_true", help="Skip non-chess board games.")
+    parser.add_argument(
+        "--chess-difficulties",
+        default=",".join(CHESS_DIFFICULTIES),
+        help="Comma-separated chess difficulties to play.",
+    )
     parser.add_argument("--output", default=str(ROOT / "docs" / "games" / "2026-05-13_game_ai_codex_play_eval.json"))
     parser.add_argument("--jsonl-output", default=str(ROOT / "docs" / "games" / "2026-05-13_game_ai_codex_play_replays.jsonl"))
     return parser.parse_args()
@@ -608,7 +613,7 @@ def main() -> int:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     jsonl_path = Path(args.jsonl_output)
     jsonl_path.parent.mkdir(parents=True, exist_ok=True)
-    chess_max_plies = None if args.chess_complete_games else int(args.chess_max_plies)
+    chess_max_plies = int(args.chess_deadloop_guard_plies) if args.chess_complete_games else int(args.chess_max_plies)
     max_plies = {
         "reversi": int(args.reversi_max_plies),
         "go": int(args.go_max_plies),
@@ -628,6 +633,7 @@ def main() -> int:
                 "codex_policy": "transparent heuristic reviewer policy; no external engines; not a human rating oracle",
                 "max_plies": max_plies,
                 "chess_complete_games": bool(args.chess_complete_games),
+                "chess_difficulties": str(args.chess_difficulties),
             },
             "summary": summarize(rows),
             "games": rows,
@@ -637,20 +643,24 @@ def main() -> int:
         jsonl_path.write_text((jsonl_payload + "\n") if jsonl_payload else "", encoding="utf-8")
         progress(f"checkpoint wrote {out_path} stage={stage}")
 
-    for game_key in ("reversi", "go", "gomoku"):
-        for difficulty in BOARD_DIFFICULTIES:
-            for game_no in range(1, games_per_ai + 1):
-                codex_color = "black" if game_no % 2 == 1 else "white"
-                progress(f"{game_key} {difficulty} game={game_no}/{games_per_ai} codex={codex_color}")
-                rows.append(play_board_codex_game(
-                    game_key,
-                    difficulty,
-                    codex_color=codex_color,
-                    seed=stable_seed(args.seed, game_key, difficulty, game_no),
-                    max_plies=max_plies[game_key],
-                ))
-                write_checkpoint(f"{game_key}:{difficulty}:game-{game_no}")
-    for difficulty in CHESS_DIFFICULTIES:
+    if not args.chess_only:
+        for game_key in ("reversi", "go", "gomoku"):
+            for difficulty in BOARD_DIFFICULTIES:
+                for game_no in range(1, games_per_ai + 1):
+                    codex_color = "black" if game_no % 2 == 1 else "white"
+                    progress(f"{game_key} {difficulty} game={game_no}/{games_per_ai} codex={codex_color}")
+                    rows.append(play_board_codex_game(
+                        game_key,
+                        difficulty,
+                        codex_color=codex_color,
+                        seed=stable_seed(args.seed, game_key, difficulty, game_no),
+                        max_plies=max_plies[game_key],
+                    ))
+                    write_checkpoint(f"{game_key}:{difficulty}:game-{game_no}")
+    chess_difficulties = [item.strip() for item in str(args.chess_difficulties).split(",") if item.strip()]
+    for difficulty in chess_difficulties:
+        if difficulty not in CHESS_DIFFICULTIES:
+            raise SystemExit(f"unknown chess difficulty: {difficulty}")
         for game_no in range(1, games_per_ai + 1):
             codex_color = "white" if game_no % 2 == 1 else "black"
             progress(f"chess {difficulty} game={game_no}/{games_per_ai} codex={codex_color}")

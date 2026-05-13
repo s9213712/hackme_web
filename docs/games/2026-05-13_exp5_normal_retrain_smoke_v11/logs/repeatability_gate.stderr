@@ -1,0 +1,17 @@
+[chess-exp5-repeatability] heldout selector: source=14 pool_non_overlap=14 train=31 target=14
+[chess-exp5-repeatability] heldout rows: 14
+[chess-exp5-repeatability] smoke rows: 4
+[chess-exp5-train] target model: docs/games/2026-05-13_exp5_normal_retrain_smoke_v11/repeatability_gate/run_1_seed_31/candidate/chess_experiment_5_nnue.json
+[chess-exp5-train] target replay: docs/games/2026-05-13_exp5_normal_retrain_smoke_v11/repeatability_gate/run_1_seed_31/candidate/chess_experiment_5_nnue_replay.jsonl
+[chess-exp5-train] input files: 1
+[chess-exp5-train] phase read input: docs/games/2026-05-13_exp5_normal_retrain_smoke_v11/repeatability_gate/run_1_seed_31/distill_shuffled.jsonl
+[chess-exp5-train] phase result read input: 31 rows
+[chess-exp5-train] phase label-quality weighting applied: clean=21 review=10 questionable=0 dropped=0 after=31
+[chess-exp5-train] phase auto hard-negatives: top2 from services/games/models/chess_experiment_5_nnue.json multi_good_margin=35.0cp
+[chess-exp5-train] phase auto hard-negatives summary: injected=23 preexisting=0 excluded_top3=48 excluded_multi_good=1
+[chess-exp5-train] phase result train: ok artifact=docs/games/2026-05-13_exp5_normal_retrain_smoke_v11/repeatability_gate/run_1_seed_31/candidate/chess_experiment_5_nnue.json replay=docs/games/2026-05-13_exp5_normal_retrain_smoke_v11/repeatability_gate/run_1_seed_31/candidate/chess_experiment_5_nnue_replay.jsonl
+[chess-exp5-strength-gate] candidate model: docs/games/2026-05-13_exp5_normal_retrain_smoke_v11/repeatability_gate/run_1_seed_31/candidate/chess_experiment_5_nnue.json
+[chess-exp5-strength-gate] baseline model: services/games/models/chess_experiment_5_nnue.json
+[chess-exp5-strength-gate] benchmark report: <none>
+[chess-exp5-strength-gate] phase result report: docs/games/2026-05-13_exp5_normal_retrain_smoke_v11/repeatability_gate/runtime/chess_exp5_strength_gate_20260513_132003.106759.json
+[chess-exp5-repeatability] run 1: pass=False baseline=0.388889 candidate=0.388889 delta=0.0

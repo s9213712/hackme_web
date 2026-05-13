@@ -95,6 +95,7 @@ MoveOrderFn = Callable[[chess.Board, chess.Move, int], int]
 EvalFn = Callable[[chess.Board], int]
 QFilterFn = Callable[[chess.Board, chess.Move], bool]
 MoveScoreFn = Callable[[chess.Move], int]
+ExtensionFn = Callable[[chess.Board, chess.Move, int, int], int]
 
 
 class SearchTimeout(RuntimeError):
@@ -298,6 +299,8 @@ def _negamax(
     evaluate: EvalFn,
     move_order_fn: MoveOrderFn | None,
     qmove_filter: QFilterFn,
+    extension_fn: ExtensionFn | None,
+    extensions_remaining: int,
     stats: SearchStats,
     transposition: TranspositionTable,
     hasher: ZobristHasher,
@@ -353,11 +356,17 @@ def _negamax(
     )
     for move in ordered:
         moving_turn = board.turn
+        extension = 0
+        if extensions_remaining > 0 and extension_fn is not None:
+            try:
+                extension = max(0, min(1, int(extension_fn(board, move, ply, depth))))
+            except Exception:
+                extension = 0
         board.push(move)
         try:
             score, _child_move = _negamax(
                 board,
-                depth=depth - 1,
+                depth=depth - 1 + extension,
                 alpha=-beta,
                 beta=-alpha,
                 color_sign=-color_sign,
@@ -365,6 +374,8 @@ def _negamax(
                 evaluate=evaluate,
                 move_order_fn=move_order_fn,
                 qmove_filter=qmove_filter,
+                extension_fn=extension_fn,
+                extensions_remaining=max(0, extensions_remaining - extension),
                 stats=stats,
                 transposition=transposition,
                 hasher=hasher,
@@ -411,6 +422,8 @@ def search_best_move(
     evaluate: EvalFn,
     move_order_fn: MoveOrderFn | None = None,
     qmove_filter: QFilterFn | None = None,
+    extension_fn: ExtensionFn | None = None,
+    max_extensions: int = 0,
     aspiration_window: int = _DEFAULT_ASPIRATION_WINDOW,
     quiescence_depth: int = _DEFAULT_QUIESCENCE_DEPTH,
     use_iterative_deepening: bool = True,
@@ -474,6 +487,8 @@ def search_best_move(
                     evaluate=evaluate,
                     move_order_fn=move_order_fn,
                     qmove_filter=qmove_filter,
+                    extension_fn=extension_fn,
+                    extensions_remaining=max(0, int(max_extensions or 0)),
                     stats=stats,
                     transposition=transposition,
                     hasher=hasher,

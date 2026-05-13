@@ -11,6 +11,7 @@ import argparse
 from datetime import datetime
 import hashlib
 import json
+import os
 from pathlib import Path
 import random
 import shutil
@@ -35,12 +36,13 @@ from scripts.games.chess_exp5_production_readiness import _position_id  # noqa: 
 from services.games.chess_nnue import choose_experiment_nnue_move  # noqa: E402
 
 
-DEFAULT_CANDIDATE = Path("/home/s92137/chess_results/exp5_16_opening_overlay_candidate/chess_experiment_5_nnue_opening_overlay_candidate.json")
-DEFAULT_OPENING_CURRICULUM = Path("/home/s92137/chess_results/exp5_14b_clean_opening_heldout/clean_opening_curriculum.jsonl")
-DEFAULT_EXP5_13_SUMMARY = Path("/home/s92137/chess_results/exp5_13_rule_smoke_stalemate_fix_check/summary.json")
+DEFAULT_RESULTS_ROOT = Path(os.environ.get("HACKME_CHESS_RESULTS_DIR", str(ROOT / "runtime" / "reports" / "games" / "chess_results")))
+DEFAULT_CANDIDATE = DEFAULT_RESULTS_ROOT / "exp5_16_opening_overlay_candidate" / "chess_experiment_5_nnue_opening_overlay_candidate.json"
+DEFAULT_OPENING_CURRICULUM = DEFAULT_RESULTS_ROOT / "exp5_14b_clean_opening_heldout" / "clean_opening_curriculum.jsonl"
+DEFAULT_EXP5_13_SUMMARY = DEFAULT_RESULTS_ROOT / "exp5_13_rule_smoke_stalemate_fix_check" / "summary.json"
 DEFAULT_RUNTIME_PRODUCTION = ROOT / "runtime" / "games" / "models" / "chess_experiment_5_nnue.json"
-DEFAULT_PROMOTED_STAGE = Path("/home/s92137/chess_results/exp5_08_stage_candidate/chess_experiment_5_nnue_stage_candidate.json")
-DEFAULT_OUTPUT_DIR = Path("/home/s92137/chess_results/exp5_17_opening_overlay_staging_validation")
+DEFAULT_PROMOTED_STAGE = DEFAULT_RESULTS_ROOT / "exp5_08_stage_candidate" / "chess_experiment_5_nnue_stage_candidate.json"
+DEFAULT_OUTPUT_DIR = DEFAULT_RESULTS_ROOT / "exp5_17_opening_overlay_staging_validation"
 DEFAULT_SEARCH_PROFILE = "fixed_depth_strong"
 CURRENT_PRODUCTION_SHA = "c47ef752aa69d7b8c813b587468228593f44d69c9b947313325e03797e4450dc"
 EXP5_16_CANDIDATE_SHA = "d35c04707fd7c10e8b6efe07740e69da533dea524d31aa63308afea891d006c9"

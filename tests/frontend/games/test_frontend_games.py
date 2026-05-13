@@ -398,8 +398,14 @@ def test_game_zone_frontend_assets_are_wired():
     assert "spawnStickmanRoom" in local_stickman_js
     assert "fireStickmanShot" in local_stickman_js
     assert 'aiState: "patrol"' in local_stickman_js
+    assert "aiRole" in local_stickman_js
+    assert "STICKMAN_ENEMY_ROLES" in local_stickman_js
+    assert "stickmanFindCoverTactic" in local_stickman_js
+    assert "stickmanTrapDangerAt" in local_stickman_js
+    assert '"seekCover"' in local_stickman_js
+    assert '"flank"' in local_stickman_js
+    assert '"suppress"' in local_stickman_js
     assert "walkCycle" in local_stickman_js
-    assert 'enemy.aiState = distance < 92 ? "retreat" : distance > 235 ? "chase" : "hold";' in local_stickman_js
     assert "boss-down" in local_stickman_js
     assert "makeStickmanTraps" in local_stickman_js
     assert "即死陷阱" in local_stickman_js
@@ -437,6 +443,14 @@ def test_game_zone_frontend_assets_are_wired():
     assert "fpsArenaBuildCombatMap" in fps_js
     assert "fpsArenaAddCylinder" in fps_js
     assert "fpsArenaMoveWithCollision" in fps_js
+    assert "FPS_ARENA_AI_ROLES" in fps_js
+    assert "fpsArenaPickCoverPoint" in fps_js
+    assert "fpsArenaThinkTacticalState" in fps_js
+    assert "fpsArenaMoveAiWithCollision" in fps_js
+    assert "coverPoints" in fps_js
+    assert "navPoints" in fps_js
+    assert '"peekShoot"' in fps_js
+    assert '"flank"' in fps_js
     assert "spawnPoints" in fps_js
     assert "blocksPlayer" in fps_js
     assert "--fps-breathe-rot" in fps_js

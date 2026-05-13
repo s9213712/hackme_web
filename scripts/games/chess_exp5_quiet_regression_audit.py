@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -19,9 +20,10 @@ if str(ROOT) not in sys.path:
 from services.games.self_play_training import _teacher_static_eval  # noqa: E402
 
 
-DEFAULT_SUMMARY = Path("/home/s92137/chess_results/exp5_10_production_readiness/summary.json")
-DEFAULT_CASES = Path("/home/s92137/chess_results/exp5_10_production_readiness/exp5_10_benchmark_cases.jsonl")
-DEFAULT_OUTPUT_DIR = Path("/home/s92137/chess_results/exp5_11b_quiet_regression_audit")
+DEFAULT_RESULTS_ROOT = Path(os.environ.get("HACKME_CHESS_RESULTS_DIR", str(ROOT / "runtime" / "reports" / "games" / "chess_results")))
+DEFAULT_SUMMARY = DEFAULT_RESULTS_ROOT / "exp5_10_production_readiness" / "summary.json"
+DEFAULT_CASES = DEFAULT_RESULTS_ROOT / "exp5_10_production_readiness" / "exp5_10_benchmark_cases.jsonl"
+DEFAULT_OUTPUT_DIR = DEFAULT_RESULTS_ROOT / "exp5_11b_quiet_regression_audit"
 MULTI_GOOD_CP_WINDOW = 50
 
 

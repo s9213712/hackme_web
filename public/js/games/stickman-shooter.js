@@ -31,6 +31,94 @@
     shield: { label: "護盾", glyph: "S", color: "#93c5fd" },
   };
 
+  const STICKMAN_ENEMY_ROLES = {
+    rifle: {
+      color: "#fda4af",
+      accent: "#7f1d1d",
+      hpBonus: 0,
+      speedScale: 1,
+      maxSpeed: 1.18,
+      sightRange: 500,
+      fireRange: 540,
+      preferredRange: 240,
+      retreatRange: 92,
+      fireDelay: 92,
+      spread: 0.035,
+      burst: 1,
+      flankOffset: 92,
+      coverBias: 0.45,
+      canShoot: true,
+    },
+    rusher: {
+      color: "#fdba74",
+      accent: "#9a3412",
+      hpBonus: 0,
+      speedScale: 1.22,
+      maxSpeed: 1.42,
+      sightRange: 420,
+      fireRange: 270,
+      preferredRange: 64,
+      retreatRange: 28,
+      fireDelay: 126,
+      spread: 0.07,
+      burst: 1,
+      flankOffset: 64,
+      coverBias: 0.15,
+      canShoot: true,
+    },
+    shield: {
+      color: "#c4b5fd",
+      accent: "#4c1d95",
+      hpBonus: 2,
+      speedScale: 0.86,
+      maxSpeed: 1.02,
+      sightRange: 455,
+      fireRange: 410,
+      preferredRange: 155,
+      retreatRange: 44,
+      fireDelay: 108,
+      spread: 0.052,
+      burst: 1,
+      flankOffset: 58,
+      coverBias: 0.3,
+      canShoot: true,
+    },
+    sniper: {
+      color: "#bae6fd",
+      accent: "#075985",
+      hpBonus: -1,
+      speedScale: 0.82,
+      maxSpeed: 0.95,
+      sightRange: 650,
+      fireRange: 650,
+      preferredRange: 340,
+      retreatRange: 170,
+      fireDelay: 138,
+      spread: 0.012,
+      burst: 1,
+      flankOffset: 130,
+      coverBias: 0.82,
+      canShoot: true,
+    },
+    boss: {
+      color: "#f97316",
+      accent: "#7c2d12",
+      hpBonus: 0,
+      speedScale: 1,
+      maxSpeed: 1.45,
+      sightRange: 660,
+      fireRange: 620,
+      preferredRange: 215,
+      retreatRange: 82,
+      fireDelay: 66,
+      spread: 0.08,
+      burst: 3,
+      flankOffset: 118,
+      coverBias: 0.2,
+      canShoot: true,
+    },
+  };
+
   function stickmanRandom(state) {
     return typeof state?.rng === "function" ? state.rng() : Math.random();
   }
@@ -140,6 +228,82 @@
     const candidates = state.platforms.filter((platform) => x >= platform.x - 10 && x <= platform.x + platform.w + 10);
     const best = candidates.sort((a, b) => a.y - b.y).find((platform) => platform.y > 90);
     return best ? best.y : 318;
+  }
+
+  function stickmanEnemyRoleMeta(enemy) {
+    return STICKMAN_ENEMY_ROLES[enemy?.aiRole] || STICKMAN_ENEMY_ROLES[enemy?.kind] || STICKMAN_ENEMY_ROLES.rifle;
+  }
+
+  function stickmanRoleForRoom(room, index) {
+    const pools = [
+      ["rifle", "rusher"],
+      ["rifle", "rusher", "shield"],
+      ["sniper", "rifle", "rusher", "shield"],
+      ["sniper", "shield", "rifle", "rusher"],
+    ];
+    const pool = pools[Math.max(0, Math.min(pools.length - 1, room - 1))];
+    return pool[(index + room) % pool.length];
+  }
+
+  function pointInStickmanRect(x, y, rect, inflate = 0) {
+    return x >= rect.x - inflate && x <= rect.x + rect.w + inflate && y >= rect.y - inflate && y <= rect.y + rect.h + inflate;
+  }
+
+  function stickmanLineBlockedByCover(state, fromX, fromY, toX, toY, ignoreCover = null) {
+    const covers = state.cover || [];
+    const steps = Math.max(12, Math.ceil(Math.hypot(toX - fromX, toY - fromY) / 24));
+    for (const cover of covers) {
+      if (cover === ignoreCover) continue;
+      for (let i = 1; i < steps; i += 1) {
+        const t = i / steps;
+        if (pointInStickmanRect(fromX + (toX - fromX) * t, fromY + (toY - fromY) * t, cover, 3)) return true;
+      }
+    }
+    return false;
+  }
+
+  function stickmanTrapDangerAt(state, enemy, testX) {
+    const body = {
+      x: testX,
+      y: groundYAt(state, testX + enemy.w / 2) - enemy.h,
+      w: enemy.w,
+      h: enemy.h,
+    };
+    return (state.traps || []).some((trap) => {
+      const rect = currentStickmanTrapRect(state, trap);
+      return rect && rectsOverlap(body, { x: rect.x - 8, y: rect.y - 8, w: rect.w + 16, h: rect.h + 16 });
+    });
+  }
+
+  function stickmanFindCoverTactic(state, enemy, player) {
+    const role = stickmanEnemyRoleMeta(enemy);
+    const fromX = enemy.x + enemy.w / 2;
+    const fromY = enemy.y + enemy.h * 0.42;
+    const playerX = player.x + PLAYER_W / 2;
+    const playerY = player.y + PLAYER_H * 0.45;
+    let best = null;
+    for (const cover of state.cover || []) {
+      if (Math.abs((cover.x + cover.w / 2) - fromX) > 360) continue;
+      const candidates = [
+        { x: cover.x - enemy.w - 10, side: -1 },
+        { x: cover.x + cover.w + 10, side: 1 },
+      ];
+      candidates.forEach((candidate) => {
+        const targetX = clamp(candidate.x, enemy.roomMin || enemy.patrolMin, enemy.roomMax || enemy.patrolMax);
+        if (stickmanTrapDangerAt(state, enemy, targetX)) return;
+        const targetY = groundYAt(state, targetX + enemy.w / 2) - enemy.h;
+        const bodyX = targetX + enemy.w / 2;
+        const protectedByCover = stickmanLineBlockedByCover(state, bodyX, targetY + enemy.h * 0.42, playerX, playerY, null);
+        const peekX = targetX + candidate.side * 18;
+        const peekClear = !stickmanLineBlockedByCover(state, peekX, targetY + enemy.h * 0.42, playerX, playerY, cover);
+        const rangeScore = Math.abs(Math.abs(playerX - bodyX) - role.preferredRange) * 0.35;
+        const safetyScore = protectedByCover ? -90 * role.coverBias : 36;
+        const peekScore = peekClear ? -18 : 12;
+        const score = Math.abs(targetX - enemy.x) + rangeScore + safetyScore + peekScore;
+        if (!best || score < best.score) best = { x: targetX, y: targetY, score, cover, peekClear };
+      });
+    }
+    return best;
   }
 
   function activeStickmanPowerText(state) {
@@ -264,23 +428,33 @@
     const baseX = (room - 1) * ROOM_WIDTH;
     const enemyCount = room === WORLD_ROOMS ? 2 : 2 + Math.min(2, room);
     for (let i = 0; i < enemyCount; i += 1) {
+      const aiRole = stickmanRoleForRoom(room, i);
+      const role = STICKMAN_ENEMY_ROLES[aiRole] || STICKMAN_ENEMY_ROLES.rifle;
       const x = baseX + 245 + i * 132 + stickmanRandom(state) * 44;
       const y = groundYAt(state, x) - 42;
+      const hp = Math.max(1, 3 + Math.floor(room / 2) + mode.enemyHp + role.hpBonus);
       state.enemies.push({
         x,
         y,
         w: 22,
         h: 42,
         vx: i % 2 ? -0.78 : 0.78,
-        baseSpeed: 0.78 + room * 0.04,
+        baseSpeed: (0.78 + room * 0.04) * role.speedScale,
         facing: i % 2 ? -1 : 1,
         patrolMin: Math.max(baseX + 90, x - 82),
         patrolMax: Math.min(baseX + ROOM_WIDTH - 90, x + 96),
-        hp: 3 + Math.floor(room / 2) + mode.enemyHp,
-        maxHp: 3 + Math.floor(room / 2) + mode.enemyHp,
+        roomMin: baseX + 58,
+        roomMax: baseX + ROOM_WIDTH - 64,
+        hp,
+        maxHp: hp,
         fireAt: 42 + Math.floor(stickmanRandom(state) * 52),
         hurt: 0,
         aiState: "patrol",
+        aiRole,
+        flankSign: stickmanRandom(state) > 0.5 ? 1 : -1,
+        lastSeenX: null,
+        lastSeenY: null,
+        alertUntil: 0,
         walkCycle: stickmanRandom(state) * Math.PI * 2,
         kind: "grunt",
       });
@@ -297,11 +471,18 @@
         facing: -1,
         patrolMin: baseX + 232,
         patrolMax: baseX + 650,
+        roomMin: baseX + 180,
+        roomMax: baseX + ROOM_WIDTH - 48,
         hp: 22 + mode.enemyHp * 3,
         maxHp: 22 + mode.enemyHp * 3,
         fireAt: 24,
         hurt: 0,
         aiState: "patrol",
+        aiRole: "boss",
+        flankSign: -1,
+        lastSeenX: null,
+        lastSeenY: null,
+        alertUntil: 0,
         walkCycle: stickmanRandom(state) * Math.PI * 2,
         kind: "boss",
       });
@@ -393,14 +574,21 @@
   }
 
   function enemyFireStickmanShot(state, enemy) {
+    const role = stickmanEnemyRoleMeta(enemy);
+    if (!role.canShoot) return false;
     const p = state.player;
     const fromX = enemy.x + enemy.w / 2;
     const fromY = enemy.y + enemy.h * 0.42;
     const toX = p.x + PLAYER_W / 2;
     const toY = p.y + PLAYER_H * 0.45;
+    if (stickmanLineBlockedByCover(state, fromX, fromY, toX, toY)) return false;
     const angle = Math.atan2(toY - fromY, toX - fromX);
-    const speed = enemy.kind === "boss" ? 5.8 : 4.8;
-    const spread = enemy.kind === "boss" ? [-0.12, 0, 0.12] : [0];
+    const distance = Math.hypot(toX - fromX, toY - fromY);
+    const speed = enemy.aiRole === "sniper" ? 6.4 : enemy.kind === "boss" ? 5.8 : 4.8;
+    const miss = role.spread + Math.min(0.06, distance * 0.00005);
+    const spread = role.burst > 1
+      ? [-miss * 1.35, 0, miss * 1.35]
+      : [(stickmanRandom(state) - 0.5) * miss * 2];
     spread.forEach((offset) => {
       state.enemyShots.push({
         x: fromX,
@@ -412,6 +600,7 @@
       });
     });
     addStickmanParticles(state, fromX, fromY, "#fb7185", 3);
+    return true;
   }
 
   function updateStickmanEnemies(state) {
@@ -420,42 +609,89 @@
     state.enemies.forEach((enemy) => {
       if (enemy.hurt > 0) enemy.hurt -= 1;
       const oldX = enemy.x;
+      const role = stickmanEnemyRoleMeta(enemy);
       const dxToPlayer = (p.x + PLAYER_W / 2) - (enemy.x + enemy.w / 2);
       const distance = Math.abs(dxToPlayer);
       const sameLane = Math.abs(p.y - enemy.y) < 118;
-      const seesPlayer = sameLane && distance < (enemy.kind === "boss" ? 620 : 470);
       const moveDir = dxToPlayer === 0 ? enemy.facing : Math.sign(dxToPlayer);
-      const baseSpeed = enemy.baseSpeed || (enemy.kind === "boss" ? 0.72 : 0.78);
-      const maxSpeed = enemy.kind === "boss" ? 1.38 : 1.18;
+      const fromX = enemy.x + enemy.w / 2;
+      const fromY = enemy.y + enemy.h * 0.42;
+      const playerX = p.x + PLAYER_W / 2;
+      const playerY = p.y + PLAYER_H * 0.45;
+      const hasLine = !stickmanLineBlockedByCover(state, fromX, fromY, playerX, playerY);
+      const seesPlayer = sameLane && distance < role.sightRange && hasLine;
       if (seesPlayer) {
-        enemy.aiState = distance < 92 ? "retreat" : distance > 235 ? "chase" : "hold";
-        if (enemy.aiState === "retreat") enemy.vx -= moveDir * 0.065;
-        if (enemy.aiState === "chase") enemy.vx += moveDir * 0.055;
-        if (enemy.aiState === "hold") enemy.vx *= 0.86;
+        enemy.lastSeenX = p.x;
+        enemy.lastSeenY = p.y;
+        enemy.alertUntil = state.tick + 170;
+      }
+      const aware = seesPlayer || state.tick < (enemy.alertUntil || 0) || (sameLane && distance < 150);
+      const baseSpeed = enemy.baseSpeed || (enemy.kind === "boss" ? 0.72 : 0.78);
+      const maxSpeed = role.maxSpeed || (enemy.kind === "boss" ? 1.38 : 1.18);
+      let desiredX = null;
+      const lookAheadDir = Math.sign(enemy.vx || moveDir || 1);
+      if (stickmanTrapDangerAt(state, enemy, enemy.x + lookAheadDir * 34)) {
+        enemy.aiState = "avoidTrap";
+        enemy.flankSign *= -1;
+        desiredX = enemy.x - lookAheadDir * 92;
+      } else if (aware) {
+        const cover = stickmanFindCoverTactic(state, enemy, p);
+        const lowHp = enemy.hp <= enemy.maxHp * 0.45;
+        if ((lowHp || role.coverBias > 0.7) && cover && Math.abs(cover.x - enemy.x) > 10) {
+          enemy.aiState = "seekCover";
+          desiredX = cover.x;
+        } else if (!hasLine && enemy.lastSeenX !== null) {
+          enemy.aiState = "flank";
+          desiredX = enemy.lastSeenX + (enemy.flankSign || 1) * role.flankOffset;
+          if (stickmanTrapDangerAt(state, enemy, desiredX)) desiredX = enemy.lastSeenX - (enemy.flankSign || 1) * role.flankOffset;
+        } else if (distance < role.retreatRange) {
+          enemy.aiState = "retreat";
+          desiredX = enemy.x - moveDir * Math.max(80, role.preferredRange * 0.55);
+        } else if (distance > role.preferredRange + 68) {
+          enemy.aiState = enemy.aiRole === "rusher" ? "rush" : "chase";
+          desiredX = p.x - moveDir * role.preferredRange;
+        } else if (hasLine && role.canShoot) {
+          enemy.aiState = "suppress";
+          desiredX = enemy.x + Math.sin(state.tick * 0.045 + enemy.walkCycle) * 22;
+        } else {
+          enemy.aiState = "hold";
+          desiredX = enemy.x;
+        }
       } else {
         enemy.aiState = "patrol";
         const patrolDir = enemy.vx < 0 ? -1 : 1;
         enemy.vx += patrolDir * 0.018;
+      }
+      if (desiredX !== null) {
+        const tacticalMin = enemy.aiState === "patrol" ? enemy.patrolMin : (enemy.roomMin || enemy.patrolMin);
+        const tacticalMax = enemy.aiState === "patrol" ? enemy.patrolMax : (enemy.roomMax || enemy.patrolMax);
+        desiredX = clamp(desiredX, tacticalMin, tacticalMax);
+        const desiredDir = desiredX > enemy.x + 5 ? 1 : desiredX < enemy.x - 5 ? -1 : 0;
+        if (desiredDir === 0) enemy.vx *= enemy.aiState === "suppress" ? 0.78 : 0.62;
+        else enemy.vx += desiredDir * (enemy.aiState === "rush" ? 0.078 : 0.055);
       }
       enemy.vx = clamp(enemy.vx, -maxSpeed, maxSpeed);
       if (enemy.aiState === "patrol" && Math.abs(enemy.vx) < baseSpeed) {
         enemy.vx = (enemy.vx < 0 ? -1 : 1) * baseSpeed;
       }
       enemy.x += enemy.vx;
-      if (enemy.x < enemy.patrolMin) {
-        enemy.x = enemy.patrolMin;
+      const clampMin = enemy.aiState === "patrol" ? enemy.patrolMin : (enemy.roomMin || enemy.patrolMin);
+      const clampMax = enemy.aiState === "patrol" ? enemy.patrolMax : (enemy.roomMax || enemy.patrolMax);
+      if (enemy.x < clampMin) {
+        enemy.x = clampMin;
         enemy.vx = Math.abs(enemy.vx || baseSpeed);
       }
-      if (enemy.x > enemy.patrolMax) {
-        enemy.x = enemy.patrolMax;
+      if (enemy.x > clampMax) {
+        enemy.x = clampMax;
         enemy.vx = -Math.abs(enemy.vx || baseSpeed);
       }
       enemy.y = groundYAt(state, enemy.x + enemy.w / 2) - enemy.h;
       enemy.facing = dxToPlayer < 0 ? -1 : 1;
       enemy.walkCycle += Math.max(0.08, Math.abs(enemy.x - oldX) * 0.28 + Math.abs(enemy.vx) * 0.06);
       enemy.fireAt -= 1;
-      const fireGap = Math.max(34, (enemy.kind === "boss" ? 66 : 92) - mode.enemyShots - state.room * 2);
-      if (enemy.fireAt <= 0 && Math.abs(p.x - enemy.x) < 520 && Math.abs(p.y - enemy.y) < 145) {
+      const fireGap = Math.max(34, role.fireDelay - mode.enemyShots - state.room * 2);
+      const canFireState = enemy.aiState === "suppress" || enemy.aiState === "hold" || enemy.aiState === "retreat" || enemy.aiState === "seekCover";
+      if (enemy.fireAt <= 0 && canFireState && sameLane && distance < role.fireRange && hasLine) {
         enemyFireStickmanShot(state, enemy);
         enemy.fireAt = fireGap + Math.floor(stickmanRandom(state) * 26);
       }
@@ -891,10 +1127,11 @@
       const x = enemy.x - cam;
       if (x > WIDTH + 60 || x + enemy.w < -60) return;
       const scale = enemy.kind === "boss" ? 1.34 : 1;
-      drawStickmanFigure(ctx, x + enemy.w / 2, enemy.y - 6, enemy.facing || 1, enemy.kind === "boss" ? "#f97316" : "#fda4af", enemy.kind === "boss" ? "#7c2d12" : "#7f1d1d", enemy.hurt > 0, scale, enemy.walkCycle || 0);
+      const role = stickmanEnemyRoleMeta(enemy);
+      drawStickmanFigure(ctx, x + enemy.w / 2, enemy.y - 6, enemy.facing || 1, role.color, role.accent, enemy.hurt > 0, scale, enemy.walkCycle || 0);
       ctx.fillStyle = "rgba(15,23,42,.72)";
       ctx.fillRect(x - 4, enemy.y - 12, enemy.w + 8, 4);
-      ctx.fillStyle = enemy.kind === "boss" ? "#f97316" : "#fb7185";
+      ctx.fillStyle = role.color;
       ctx.fillRect(x - 4, enemy.y - 12, (enemy.w + 8) * Math.max(0, enemy.hp / enemy.maxHp), 4);
     });
 

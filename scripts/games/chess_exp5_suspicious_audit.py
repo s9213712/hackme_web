@@ -10,15 +10,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 
 import chess
 
 
-DEFAULT_SUMMARY = Path("/home/s92137/chess_results/exp5_10_production_readiness/summary.json")
-DEFAULT_CASES = Path("/home/s92137/chess_results/exp5_10_production_readiness/exp5_10_benchmark_cases.jsonl")
-DEFAULT_OUTPUT_DIR = Path("/home/s92137/chess_results/exp5_11a_suspicious_audit")
+ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_RESULTS_ROOT = Path(os.environ.get("HACKME_CHESS_RESULTS_DIR", str(ROOT / "runtime" / "reports" / "games" / "chess_results")))
+DEFAULT_SUMMARY = DEFAULT_RESULTS_ROOT / "exp5_10_production_readiness" / "summary.json"
+DEFAULT_CASES = DEFAULT_RESULTS_ROOT / "exp5_10_production_readiness" / "exp5_10_benchmark_cases.jsonl"
+DEFAULT_OUTPUT_DIR = DEFAULT_RESULTS_ROOT / "exp5_11a_suspicious_audit"
 
 
 def parse_args() -> argparse.Namespace:

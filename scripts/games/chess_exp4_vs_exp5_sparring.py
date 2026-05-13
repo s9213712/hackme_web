@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
 import traceback
 from datetime import datetime, timezone
@@ -31,6 +32,8 @@ import chess.pgn
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+DEFAULT_RESULTS_ROOT = Path(os.environ.get("HACKME_CHESS_RESULTS_DIR", str(ROOT / "runtime" / "reports" / "games" / "chess_results")))
 
 from services.games.chess_sparring_adapter import (  # noqa: E402
     compute_model_hash,
@@ -313,26 +316,26 @@ MODE_PRESETS = {
 EXP4_KNOWN_CANDIDATES: list[tuple[str, str]] = [
     (
         "bundled_production",
-        "/home/s92137/hackme_web/services/games/models/chess_experiment_4_pv.json",
+        str(ROOT / "services" / "games" / "models" / "chess_experiment_4_pv.json"),
     ),
     (
         "exp4_14_checkpoint_10",
-        "/home/s92137/chess_results/exp4_14_balanced_curriculum/exp4/checkpoints/10/exp4_quick_candidate_model.json",
+        str(DEFAULT_RESULTS_ROOT / "exp4_14_balanced_curriculum" / "exp4" / "checkpoints" / "10" / "exp4_quick_candidate_model.json"),
     ),
     (
         "exp4_14_final_model_checkpoint_20",
-        "/home/s92137/chess_results/exp4_14_balanced_curriculum/exp4/checkpoints/20/exp4_quick_candidate_model.json",
+        str(DEFAULT_RESULTS_ROOT / "exp4_14_balanced_curriculum" / "exp4" / "checkpoints" / "20" / "exp4_quick_candidate_model.json"),
     ),
 ]
 
 EXP5_KNOWN_CANDIDATES: list[tuple[str, str]] = [
     (
         "bundled_production",
-        "/home/s92137/hackme_web/services/games/models/chess_experiment_5_nnue.json",
+        str(ROOT / "services" / "games" / "models" / "chess_experiment_5_nnue.json"),
     ),
     (
         "exp5_08_stage_candidate",
-        "/home/s92137/chess_results/exp5_08_stage_candidate/chess_experiment_5_nnue_stage_candidate.json",
+        str(DEFAULT_RESULTS_ROOT / "exp5_08_stage_candidate" / "chess_experiment_5_nnue_stage_candidate.json"),
     ),
 ]
 
@@ -1087,7 +1090,7 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--output-root",
-        default="/home/s92137/chess_results",
+        default=str(DEFAULT_RESULTS_ROOT),
         help="Parent dir for the timestamped run folder.",
     )
     p.add_argument("--max-plies", type=int, default=120)

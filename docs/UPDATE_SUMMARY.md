@@ -1,6 +1,23 @@
 # Update Summary
 
-Release ID: `2026.05.07-155`
+Release ID: `2026.05.13-156`
+
+## 2026.05.13-156
+
+- Added tactical enemy AI for 2D Stickman Shooter and 3D FPS Arena. Enemies now
+  use role-specific ranges, movement, cover seeking, flanking, suppression, and
+  trap or collision-aware movement instead of only walking directly at the
+  player.
+- Fixed CI entrypoint portability for `scripts/prepush/pre_push_checks.py` by
+  inserting the repository root on `sys.path` before importing
+  `scripts.prepush.runner`.
+- Hardened Playwright platform acceptance by using the shared JSON request helper
+  for job retry POSTs, preserving CSRF enforcement while allowing the test to
+  refresh and retry after a legitimate `csrf_invalid` response.
+- Removed tracked generated runtime/model artifacts from version control,
+  replaced machine-local chess audit defaults with repo-relative paths, repaired
+  agent report markdown links, and registered maintained QA/chess scripts in
+  `scripts/INDEX.md`.
 
 ## 2026.05.10 — Platform Center Phase 1.5
 
