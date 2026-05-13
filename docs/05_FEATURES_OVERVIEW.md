@@ -21,6 +21,7 @@
 | Security Center / Server Mode | root | audit、integrity、snapshot/restore、health center | [06_SECURITY_MODEL.md](06_SECURITY_MODEL.md), [SERVER_MODE_V2_PROFILE_MATRIX.md](server_mode_v2/SERVER_MODE_V2_PROFILE_MATRIX.md) |
 | PointsChain | 經濟功能 | wallet、ledger、video tips、trading | [07_POINTSCHAIN.md](07_POINTSCHAIN.md) |
 | Trading / Bots / Backtest | 交易站點 | PointsChain、economy、price feeds、chart indicators、QA scripts | [08_TRADING_ENGINE.md](08_TRADING_ENGINE.md), [TRADING.md](trading/TRADING.md) |
+| Games / Board AI | 遊戲站點 | CSRF、排行榜、三棋 AI benchmark、chess engine pipeline | [games/README.md](games/README.md), [games/BOARD_AI_BENCHMARK.md](games/BOARD_AI_BENCHMARK.md) |
 | Snapshot / Restore / Reset | root / 運維 | server mode、audit、integrity、PointsChain | [09_SNAPSHOT_RESET_RESTORE.md](09_SNAPSHOT_RESET_RESTORE.md) |
 
 ## 模組詳解
@@ -133,6 +134,16 @@
 - 失敗情境與提示：safe mode、chain verify fail、恢復需要人工確認、餘額顯示與鏈不一致。
 - 測試方式：credit/debit、seal/verify、backup/recovery、影片打賞、交易資金流。
 - 相關文件連結：[07_POINTSCHAIN.md](07_POINTSCHAIN.md), [08_TRADING_ENGINE.md](08_TRADING_ENGINE.md), [RUNTIME_RESET_AND_RECOVERY.md](ops_boundaries/RUNTIME_RESET_AND_RECOVERY.md)
+
+### Games / Board AI
+
+- 一句話說明：遊戲區提供西洋棋、數獨、踩地雷、1A2B、俄羅斯方塊、宇宙戰機、3D 射擊場，以及同頁本機模組遊戲；黑白棋、圍棋、五子棋已接上基礎 AI 與獨立棋力量化 benchmark。
+- 設計目的：讓使用者能在同一遊戲頁切換遊戲，同時讓非西洋棋 AI 的強化有獨立可量化證據，不污染西洋棋 exp3/exp4/exp5 pipeline。
+- 使用方法：使用者在遊戲區下拉選遊戲；黑白棋 / 圍棋 / 五子棋可切換 `對電腦` 與 AI 難度。維護者用 `python3 scripts/games/board_ai_benchmark.py` 產生 `runtime/reports/games/board_ai_benchmark_*.json`。
+- 原理：三棋前端共用 `public/js/games/board-game-shared.js`，對電腦時呼叫 `POST /api/games/<game_key>/ai-move`，後端由 `services/games/board_ai.py` 回傳 `move/pass/finish`。棋力量化由 `services/games/board_arena.py` 執行 round-robin、skill suite、Elo estimate 與非法步統計。
+- 失敗情境與提示：若刪除某個本機遊戲模組，該遊戲會從前端 catalog 消失，不影響其他遊戲；若三棋 AI API 回 `不支援的棋類 AI`，先確認 `game_key` 是否為 `reversi/go/gomoku`；若 benchmark 出現 `illegal_moves > 0`，不可把該 candidate 視為可 promotion。
+- 測試方式：`pytest -q tests/games/test_board_ai.py tests/games/test_board_arena.py tests/frontend/games/test_frontend_games.py`，再跑 `python3 scripts/games/board_ai_benchmark.py --games gomoku --engines random,easy --rounds 1 --max-plies 6 --output-dir /tmp/hackme_board_ai_benchmark_smoke` 做 CLI smoke。
+- 相關文件連結：[games/README.md](games/README.md), [games/BOARD_AI_BENCHMARK.md](games/BOARD_AI_BENCHMARK.md), [API_REFERENCE.md](API_REFERENCE.md), [11_QA_TESTING.md](11_QA_TESTING.md)
 
 ### Trading / Bots / Backtest
 

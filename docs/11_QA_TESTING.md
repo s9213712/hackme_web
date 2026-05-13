@@ -59,6 +59,20 @@ scripts/testing/pytest_in_tmp.sh -q \
   tests/frontend/comfyui tests/frontend/games
 ```
 
+三棋 AI 的棋力量化有獨立 benchmark，不走西洋棋 self-play pipeline：
+
+```bash
+python3 scripts/games/board_ai_benchmark.py \
+  --games reversi,go,gomoku \
+  --engines random,easy,normal,hard \
+  --rounds 1
+```
+
+報告會輸出到 `runtime/reports/games/board_ai_benchmark_*.json`，內容包含
+round-robin standings、head-to-head matrix、Elo estimate、非法步統計與
+deterministic skill suite。教學與欄位解讀見
+[games/BOARD_AI_BENCHMARK.md](games/BOARD_AI_BENCHMARK.md)。
+
 #### 4. 平台中心 Playwright 驗收
 
 ```bash

@@ -57,6 +57,8 @@ The repository root keeps only [README.md](../README.md) and
 - [WEB.md](WEB.md): detailed page-by-page UI behavior
 - [DEPLOYMENT.md](DEPLOYMENT.md): script-level deployment and operations reference
 - [SECURITY.md](SECURITY.md): current security controls and known limits
+- [games/README.md](games/README.md): games docs index, including local board-game AI and chess debug docs
+- [games/BOARD_AI_BENCHMARK.md](games/BOARD_AI_BENCHMARK.md): Reversi, Go, and Gomoku AI benchmark tutorial, script function map, report fields, and call graph
 - [games/chess_model_files.md](games/chess_model_files.md): chess experiment model file formats and import compatibility
 - [games/chess_training_pipeline.md](games/chess_training_pipeline.md): chess replay collection, dataset prep, offline training, benchmark, and promotion flow
 

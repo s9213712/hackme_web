@@ -339,9 +339,14 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | POST | `/api/games/chess/matches/<match_id>/move` | logged-in | 落子 |
 | POST | `/api/games/chess/matches/<match_id>/resign` | logged-in | 認輸 |
 | GET | `/api/games/chess/leaderboard` | logged-in | 排行榜 |
+| POST | `/api/games/<game_key>/ai-move` | logged-in | 黑白棋 / 圍棋 / 五子棋 AI 著手 |
 | GET | `/api/games/<game_key>/solo-leaderboard` | logged-in | 單機排行榜 |
 | POST | `/api/games/<game_key>/solo-scores` | logged-in | 單機分數 |
 | POST | `/api/root/games/chess/weekly-rewards/award` | root | 發周獎勵 |
+
+`/api/games/<game_key>/ai-move` 目前只接受 `reversi`、`go`、`gomoku`。
+完整 payload、response、前端調用地圖與 benchmark 教學見
+[games/BOARD_AI_BENCHMARK.md](games/BOARD_AI_BENCHMARK.md)。
 
 ### Economy / PointsChain
 

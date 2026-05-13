@@ -54,7 +54,7 @@ full validation and should still show which scope they covered.
 - `scripts/comfyui/`
   ComfyUI probe tooling and ComfyUI-specific local startup template.
 - `scripts/games/`
-  Chess experiment training and other game-related operator tooling.
+  Chess experiment training plus non-chess board-game AI benchmarking.
 - `scripts/prepush/`
   Pre-push framework internals and checks.
 - `scripts/security/`
@@ -80,6 +80,40 @@ The final placement policy lives in:
 Use `PLACEMENT_RULES.md` as the canonical rulebook for what may or may not live
 under `scripts/`. Use `INDEX.md` to register maintained QA/security scripts and
 to define production-gate owner, purpose, artifact, and failure meaning.
+
+## Games Script Call Map
+
+### Board AI Benchmark
+
+Entry:
+
+```bash
+python3 scripts/games/board_ai_benchmark.py
+```
+
+Purpose:
+
+- Quantify Reversi, 9x9 Go, and Gomoku local AI strength.
+- Run `random/easy/normal/hard` round-robin with color swaps.
+- Emit standings, head-to-head matrix, Elo estimate, illegal move counts, timing, and deterministic skill probes.
+
+Call map:
+
+```text
+scripts/games/board_ai_benchmark.py
+  -> services/games/board_arena.py::run_board_ai_benchmark(...)
+    -> play_board_ai_match(...)
+      -> services/games/board_ai.py::choose_board_game_ai_move(...)
+  -> write_board_ai_benchmark_report(...)
+```
+
+Artifact:
+
+- `runtime/reports/games/board_ai_benchmark_*.json`
+
+Deep tutorial:
+
+- [../docs/games/BOARD_AI_BENCHMARK.md](../docs/games/BOARD_AI_BENCHMARK.md)
 
 ## Production Gate Live Regression Rule
 
