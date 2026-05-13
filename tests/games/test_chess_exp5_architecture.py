@@ -15,6 +15,20 @@ from services.games.chess_nnue import (
 )
 
 
+def _opponent_mate_in_one_after(fen, move_uci):
+    board = chess.Board(fen)
+    move = chess.Move.from_uci(move_uci)
+    assert move in board.legal_moves
+    board.push(move)
+    mate_replies = []
+    for reply in board.legal_moves:
+        board.push(reply)
+        if board.is_checkmate():
+            mate_replies.append(reply.uci())
+        board.pop()
+    return mate_replies
+
+
 def test_exp5_difficulty_is_schema_supported():
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
@@ -72,7 +86,16 @@ def test_exp5_computer_move_dispatches_to_nnue_engine(monkeypatch):
 
     board = {"__fen__": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR b KQkq - 0 1"}
     assert choose_computer_move(board, "black", EXPERIMENT_NNUE_DIFFICULTY) == sentinel
-    assert called == {"board": board, "side": "black", "search_profile": "fast"}
+    assert called == {"board": board, "side": "black", "search_profile": "balanced"}
+
+    history = [{"from": "g1", "to": "f3", "promotion": None}]
+    assert choose_computer_move(board, "black", EXPERIMENT_NNUE_DIFFICULTY, move_history=history) == sentinel
+    assert called["board"] is not board
+    assert called == {
+        "board": {**board, "__move_history__": history},
+        "side": "black",
+        "search_profile": "balanced",
+    }
 
 
 def test_exp5_is_benchmark_engine_and_uses_nnue_model_path(monkeypatch, tmp_path):
@@ -253,3 +276,148 @@ def test_exp5_opening_overlay_can_override_broad_early_castle_heuristic(tmp_path
     )
 
     assert f"{chosen['from']}{chosen['to']}{chosen.get('promotion') or ''}" == "b5a4"
+
+
+def test_exp5_offbook_opening_prefers_development_over_flank_pawn(tmp_path):
+    model_path = tmp_path / "exp5.json"
+    fen = "rnbqkbnr/pppppppp/8/8/8/7N/PPPPPPPP/RNBQKB1R b KQkq - 1 1"
+
+    chosen = choose_experiment_nnue_move(
+        {"__fen__": fen},
+        "black",
+        model_path=model_path,
+        search_profile="fixed_depth_fast",
+    )
+
+    chosen_uci = f"{chosen['from']}{chosen['to']}{chosen.get('promotion') or ''}"
+    assert chosen_uci not in {"a7a5", "a7a6", "h7h5", "h7h6"}
+    board = chess.Board(fen)
+    move = chess.Move.from_uci(chosen_uci)
+    assert move in board.legal_moves
+
+
+def test_exp5_replay_prior_follows_downloaded_template_line():
+    chosen = choose_experiment_nnue_move(
+        {"__fen__": chess.STARTING_FEN},
+        "white",
+        search_profile="fixed_depth_fast",
+    )
+
+    assert f"{chosen['from']}{chosen['to']}{chosen.get('promotion') or ''}" == "d2d4"
+
+
+def test_exp5_opening_guard_blocks_low_value_rook_excursion(tmp_path):
+    model_path = tmp_path / "exp5.json"
+    fen = "rnbqkbnr/3pppBp/8/1N6/2p2P2/P6N/P1PPP1PP/R2QKB1R b KQkq - 0 7"
+
+    chosen = choose_experiment_nnue_move(
+        {"__fen__": fen},
+        "black",
+        model_path=model_path,
+        search_profile="fixed_depth_fast",
+    )
+
+    assert f"{chosen['from']}{chosen['to']}{chosen.get('promotion') or ''}" != "a8a3"
+
+
+def test_exp5_tactical_safety_blocks_direct_rook_hang(tmp_path):
+    model_path = tmp_path / "exp5.json"
+    fen = "1nbqkbnB/3ppp1p/8/1N6/2p2P2/r6N/P1PPP1PP/R2QKB1R b KQk - 0 8"
+
+    chosen = choose_experiment_nnue_move(
+        {"__fen__": fen},
+        "black",
+        model_path=model_path,
+        search_profile="fixed_depth_fast",
+    )
+
+    assert f"{chosen['from']}{chosen['to']}{chosen.get('promotion') or ''}" != "a3h3"
+
+
+def test_exp5_prioritizes_safe_minor_piece_recapture(tmp_path):
+    model_path = tmp_path / "exp5.json"
+    fen = "r2k1b1r/p1p1ppp1/p6p/3p4/5P2/2N5/PP1B2PP/2Rb1RK1 w - - 0 12"
+
+    chosen = choose_experiment_nnue_move(
+        {"__fen__": fen},
+        "white",
+        model_path=model_path,
+        search_profile="fixed_depth_fast",
+    )
+
+    assert f"{chosen['from']}{chosen['to']}{chosen.get('promotion') or ''}" in {"c1d1", "c3d1", "f1d1"}
+
+
+def test_exp5_captures_dangerous_advanced_pawn(tmp_path):
+    model_path = tmp_path / "exp5.json"
+    fen = "8/8/8/8/8/8/R1p5/4K2k w - - 0 1"
+
+    chosen = choose_experiment_nnue_move(
+        {"__fen__": fen},
+        "white",
+        model_path=model_path,
+        search_profile="fixed_depth_fast",
+    )
+
+    assert f"{chosen['from']}{chosen['to']}{chosen.get('promotion') or ''}" == "a2c2"
+
+
+def test_exp5_blocks_scholar_mate_threat(tmp_path):
+    model_path = tmp_path / "exp5.json"
+    fen = "r1bqkbnr/pppp1ppp/2n5/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR b KQkq - 3 3"
+
+    chosen = choose_experiment_nnue_move(
+        {"__fen__": fen},
+        "black",
+        model_path=model_path,
+        search_profile="fixed_depth_fast",
+    )
+
+    chosen_uci = f"{chosen['from']}{chosen['to']}{chosen.get('promotion') or ''}"
+    assert "h5f7" not in _opponent_mate_in_one_after(fen, chosen_uci)
+
+
+def test_exp5_avoids_self_opened_mate_in_one(tmp_path):
+    model_path = tmp_path / "exp5.json"
+    fen = "6k1/5ppp/3b4/8/7q/8/5PPP/6K1 w - - 0 1"
+
+    chosen = choose_experiment_nnue_move(
+        {"__fen__": fen},
+        "white",
+        model_path=model_path,
+        search_profile="fixed_depth_fast",
+    )
+
+    chosen_uci = f"{chosen['from']}{chosen['to']}{chosen.get('promotion') or ''}"
+    assert chosen_uci != "f2f3"
+    assert not _opponent_mate_in_one_after(fen, chosen_uci)
+
+
+def test_exp5_history_aware_filter_keeps_claimable_draw_when_not_clearly_ahead(tmp_path):
+    model_path = tmp_path / "exp5.json"
+    history_uci = [
+        "g1h3", "g8f6", "b1c3", "b8c6", "f2f4", "d7d5", "c3d5", "c8h3",
+        "d5f6", "e7f6", "g2h3", "f8d6", "f1g2", "e8g8", "g2c6", "b7c6",
+        "e1g1", "c6c5", "f4f5", "c5c4", "e2e4", "c4c3", "d2c3", "a7a6",
+        "d1d6", "c7d6", "c1f4", "g7g5", "f5g6", "a8a7", "g6h7", "g8h7",
+        "c3c4", "a7a8", "h3h4", "a8a7", "h4h5", "a7a8", "h5h6", "a8a7",
+        "h2h4", "a7a8", "h4h5", "a8a7", "c2c3", "a7a8", "b2b4", "a8a7",
+        "a2a4", "a7a8", "f1e1", "a8a7", "e1f1", "a7a8", "f1e1",
+    ]
+    history = [{"from": uci[:2], "to": uci[2:4], "promotion": uci[4:] or None} for uci in history_uci]
+    fen = "r2q1r2/5p1k/p2p1p1P/7P/PPP1PB2/2P5/8/R3R1K1 b - - 6 28"
+
+    chosen = choose_experiment_nnue_move(
+        {"__fen__": fen, "__move_history__": history},
+        "black",
+        model_path=model_path,
+        search_profile="balanced",
+    )
+
+    chosen_uci = f"{chosen['from']}{chosen['to']}{chosen.get('promotion') or ''}"
+    board = chess.Board()
+    for move_uci in history_uci:
+        board.push(chess.Move.from_uci(move_uci))
+    assert board.fen() == fen
+    board.push(chess.Move.from_uci(chosen_uci))
+    assert board.can_claim_threefold_repetition()

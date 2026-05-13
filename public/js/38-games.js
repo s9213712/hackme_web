@@ -11,6 +11,7 @@ let localGameModuleActiveApi = null;
 let localGameModuleMountedKey = "";
 let localGameModuleTouchStart = null;
 let localGameModulePressedControl = null;
+let localGameModuleSwipeMode = "tap";
 
 function localGameCatalogKeys() {
   const catalog = Array.isArray(window.HACKME_GAME_CATALOG) ? window.HACKME_GAME_CATALOG : [];
@@ -61,6 +62,29 @@ function legacyGameRuntime() {
     formatSoloGameTime,
     soloRawElapsedMs,
     soloElapsedMs,
+    dailyChallenge(gameKey = gameSelectedKey) {
+      return window.hackmeGameDailyChallenge?.(gameKey) || null;
+    },
+    dailyMissions(gameKey = gameSelectedKey) {
+      return window.listHackmeGameDailyMissions?.(gameKey) || [];
+    },
+    achievement(gameKey, id, label, detail = "") {
+      const result = window.recordHackmeGameAchievement?.(gameKey, id, label, detail);
+      if (result?.unlocked) setGameMsg(`成就解鎖：${result.label}`, true);
+      renderGameMetaPanels();
+      return result || { unlocked: false };
+    },
+    mission(gameKey, id, progress, target, label = "") {
+      const result = window.recordHackmeGameMissionProgress?.(gameKey, id, progress, target, label);
+      renderGameMetaPanels();
+      return result || null;
+    },
+    replay(gameKey, payload) {
+      const result = window.recordHackmeGameReplay?.(gameKey, payload);
+      renderGameMetaPanels();
+      return result;
+    },
+    renderGameMetaPanels,
   };
 }
 
@@ -128,6 +152,8 @@ function gameIcon(key) {
   if (key === "real_tetris") return "▧";
   if (key === "space_shooter") return "▲";
   if (key === "fps_arena") return "◎";
+  if (key === "bullet_hell") return "✦";
+  if (key === "stickman_shooter") return "人";
   return "♟";
 }
 
@@ -145,6 +171,8 @@ function gameSubtitle(game) {
   if (game.key === "real_tetris") return "剛體物理與放寬消線";
   if (game.key === "space_shooter") return "高分射擊挑戰";
   if (game.key === "fps_arena") return "四模式 3D 射擊訓練";
+  if (game.key === "bullet_hell") return "閃避密集彈幕並反擊";
+  if (game.key === "stickman_shooter") return "2D 側捲平台射擊挑戰";
   return game.supports_computer ? "玩家對戰 / 電腦練習" : "玩家對戰";
 }
 
@@ -172,7 +200,36 @@ function switchGameView(key) {
     cleanupLocalGameModule();
   }
   if (!isLocalGameModule && selectedViewModule?.ensure) selectedViewModule.ensure(legacyGameRuntime());
+  updateGameFullscreenButtons();
   loadSelectedGameLeaderboard().catch((err) => setGameMsg(err.message || "排行榜讀取失敗", false));
+}
+
+function gameFullscreenTarget() {
+  return document.querySelector("#module-games .game-board-panel");
+}
+
+function updateGameFullscreenButtons() {
+  const target = gameFullscreenTarget();
+  const active = Boolean(target && document.fullscreenElement === target);
+  document.querySelectorAll("#game-fullscreen-btn, #fps-arena-fullscreen-btn").forEach((button) => {
+    button.textContent = active ? "離開全螢幕" : (button.id === "fps-arena-fullscreen-btn" ? "全螢幕" : "全螢幕遊戲");
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+}
+
+async function toggleGameFullscreen() {
+  const target = gameFullscreenTarget();
+  if (!target) return;
+  try {
+    if (document.fullscreenElement === target) {
+      await document.exitFullscreen?.();
+    } else {
+      await target.requestFullscreen?.();
+    }
+    updateGameFullscreenButtons();
+  } catch (err) {
+    setGameMsg("此瀏覽器無法切換全螢幕", false);
+  }
 }
 
 function gameRequestNeedsFreshCsrf(json, res) {
@@ -218,6 +275,7 @@ function cleanupLocalGameModule() {
   localGameModuleMountedKey = "";
   localGameModuleTouchStart = null;
   localGameModulePressedControl = null;
+  localGameModuleSwipeMode = "tap";
   const root = $("local-module-game-root");
   if (root) {
     root.onclick = null;
@@ -229,14 +287,81 @@ function cleanupLocalGameModule() {
   if (controls) controls.innerHTML = "";
 }
 
+function normalizeSoloScoreTiming(body = {}) {
+  const payload = { ...body };
+  const penaltySeconds = Math.max(0, Math.round(Number(payload.penalty_seconds || 0)));
+  const rawFromPayload = Number(payload.raw_elapsed_ms || 0);
+  const elapsedFromPayload = Number(payload.elapsed_ms || 0);
+  const rawElapsed = Math.max(1, Math.round(rawFromPayload > 0 ? rawFromPayload : elapsedFromPayload - penaltySeconds * 1000));
+  payload.raw_elapsed_ms = rawElapsed;
+  payload.penalty_seconds = penaltySeconds;
+  payload.elapsed_ms = rawElapsed + penaltySeconds * 1000;
+  return payload;
+}
+
 async function submitLocalGameModuleScore(key, body) {
+  const payload = normalizeSoloScoreTiming(body);
   try {
-    await gameRequest(`/games/${encodeURIComponent(key)}/solo-scores`, { method: "POST", body });
-    setGameMsg("成績已送出", true);
+    const json = await gameRequest(`/games/${encodeURIComponent(key)}/solo-scores`, { method: "POST", body: payload });
+    recordGameOutcome(key, payload, json);
+    showGameDailyRewardFeedback(json, "成績已送出");
     await loadSelectedGameLeaderboard();
+    return json;
   } catch (err) {
     setGameMsg(err.message || "成績送出失敗", false);
+    return null;
   }
+}
+
+function showGameDailyRewardFeedback(json, fallback) {
+  const reward = json?.daily_reward;
+  if (reward?.wallet && typeof renderEconomyWallet === "function") renderEconomyWallet(reward.wallet);
+  if (reward?.awarded) {
+    setGameMsg(`每日任務完成，獲得 ${Number(reward.reward_points || 0).toLocaleString()} 積分`, true);
+    return;
+  }
+  if (reward?.already_claimed) {
+    setGameMsg("成績已送出，每日任務獎勵今日已領取", true);
+    return;
+  }
+  if (reward?.error) {
+    setGameMsg(`成績已送出；每日任務積分暫時未入帳：${reward.error}`, false);
+    return;
+  }
+  setGameMsg(fallback || "成績已送出", true);
+}
+
+function currentGameDailyChallenge(key = gameSelectedKey) {
+  return window.hackmeGameDailyChallenge?.(key) || null;
+}
+
+function scoreOutcomeFromBody(body = {}, json = {}) {
+  const score = Number(body.score || 0);
+  const elapsed = Number(body.elapsed_ms || body.raw_elapsed_ms || 0);
+  const guessCount = Number(body.guess_count || 0);
+  const accuracy = Number(body.accuracy || 0);
+  return {
+    ...body,
+    score,
+    elapsed_ms: elapsed,
+    guess_count: guessCount,
+    accuracy,
+    completed: true,
+    clean: !Number(body.penalty_seconds || 0),
+    ranked: json?.ranked !== false,
+  };
+}
+
+function recordGameOutcome(gameKey, body = {}, json = {}) {
+  const outcome = scoreOutcomeFromBody(body, json);
+  window.completeHackmeGameMissionsForResult?.(gameKey, outcome);
+  const shareText = window.buildHackmeGameShareText?.(gameKey, outcome) || "";
+  window.recordHackmeGameReplay?.(gameKey, {
+    ...outcome,
+    summary: shareText,
+    title: window.hackmeGameByKey?.(gameKey)?.title || gameKey,
+  });
+  renderGameMetaPanels();
 }
 
 function createLocalGameModuleApi(key) {
@@ -255,6 +380,28 @@ function createLocalGameModuleApi(key) {
     status(text) { $("local-module-game-status").textContent = text || ""; },
     setActions(html) { actions.innerHTML = html || ""; },
     setControls(html) { controls.innerHTML = html || ""; },
+    setSwipeMode(mode) { localGameModuleSwipeMode = mode === "hold" ? "hold" : "tap"; },
+    dailyChallenge() { return window.hackmeGameDailyChallenge?.(key) || null; },
+    dailyMissions() { return window.listHackmeGameDailyMissions?.(key) || []; },
+    achievement(id, label, detail = "") {
+      const result = window.recordHackmeGameAchievement?.(key, id, label, detail);
+      if (result?.unlocked) setGameMsg(`成就解鎖：${result.label}`, true);
+      renderGameMetaPanels();
+      return result || { unlocked: false };
+    },
+    mission(id, progress, target, label = "") {
+      const result = window.recordHackmeGameMissionProgress?.(key, id, progress, target, label);
+      renderGameMetaPanels();
+      return result || null;
+    },
+    recordReplay(payload) {
+      const result = window.recordHackmeGameReplay?.(key, payload);
+      renderGameMetaPanels();
+      return result;
+    },
+    shareSummary(payload) {
+      return window.buildHackmeGameShareText?.(key, payload) || "";
+    },
     request(path, options) { return gameRequest(path, options); },
     submitScore(body) { return submitLocalGameModuleScore(key, body); },
   };
@@ -382,6 +529,106 @@ function renderGameLeaderboard(data) {
   `).join("");
 }
 
+function gameMetricText(value, target) {
+  const current = Number(value || 0);
+  const goal = Number(target || 1);
+  if (goal >= 10000) return `${formatSoloGameTime(Math.min(current, goal))} / ${formatSoloGameTime(goal)}`;
+  return `${Math.min(current, goal).toLocaleString()} / ${goal.toLocaleString()}`;
+}
+
+function renderGameDailyPanel() {
+  const wrap = $("game-daily-panel");
+  if (!wrap) return;
+  const key = gameSelectedKey || "chess";
+  const challenge = currentGameDailyChallenge(key);
+  const missions = window.listHackmeGameDailyMissions?.(key, challenge) || [];
+  wrap.innerHTML = `
+    <div class="drive-card-sub">${sanitize(challenge?.label || "每日挑戰")} · 完成可領每日積分</div>
+    <div class="game-daily-missions">
+      ${missions.map((mission) => `
+        <div class="game-mission-row ${mission.complete ? "complete" : ""}">
+          <span>${mission.complete ? "✓" : mission.dailyIndex || "·"}</span>
+          <div><strong>${sanitize(mission.label || mission.id)}</strong><small>${gameMetricText(mission.progress, mission.target)}</small></div>
+        </div>
+      `).join("") || "<p style=\"color:var(--muted);\">今日沒有任務</p>"}
+    </div>
+  `;
+}
+
+function renderGameAchievementsPanel() {
+  const wrap = $("game-achievement-list");
+  if (!wrap) return;
+  const rows = window.listHackmeGameAchievements?.(gameSelectedKey || "") || [];
+  if (!rows.length) {
+    wrap.innerHTML = "<p style=\"color:var(--muted);\">尚未解鎖成就</p>";
+    return;
+  }
+  wrap.innerHTML = rows.slice(0, 8).map((row) => `
+    <div class="game-achievement-row ${row.unlocked || row.unlockedAt ? "unlocked" : ""}">
+      <span>${row.unlocked || row.unlockedAt ? "✓" : "○"}</span>
+      <div><strong>${sanitize(row.label || row.id)}</strong><small>${sanitize(row.detail || (row.unlockedAt ? formatChatTime(row.unlockedAt) : "尚未解鎖"))}</small></div>
+    </div>
+  `).join("");
+}
+
+function renderGameReplaysPanel() {
+  const wrap = $("game-replay-list");
+  if (!wrap) return;
+  const rows = window.listHackmeGameReplays?.(gameSelectedKey || "") || [];
+  if (!rows.length) {
+    wrap.innerHTML = "<p style=\"color:var(--muted);\">完成一局後會保留最近回放摘要</p>";
+    return;
+  }
+  wrap.innerHTML = rows.slice(0, 5).map((row) => {
+    const share = window.buildHackmeGameShareText?.(row.gameKey, row) || row.summary || "";
+    return `
+      <div class="drive-file-row game-list-row">
+        <div><strong>${sanitize(row.title || row.gameKey)}</strong><small>${sanitize(row.summary || share)} · ${sanitize(formatChatTime(row.createdAt))}</small></div>
+        <button class="btn game-mini-btn" type="button" data-game-share-text="${sanitize(share)}">分享</button>
+      </div>
+    `;
+  }).join("");
+}
+
+function renderGameMetaPanels() {
+  renderGameDailyPanel();
+  renderGameAchievementsPanel();
+  renderGameReplaysPanel();
+}
+
+async function loadSelectedGameDailyLeaderboard() {
+  const wrap = $("game-daily-leaderboard-list");
+  if (!wrap) return null;
+  const key = gameSelectedKey || "chess";
+  if (key === "chess") {
+    wrap.innerHTML = "<p style=\"color:var(--muted);\">西洋棋以週排行榜與對局分析為主</p>";
+    return null;
+  }
+  const challenge = currentGameDailyChallenge(key);
+  if (!challenge?.key) {
+    wrap.innerHTML = "<p style=\"color:var(--muted);\">今日挑戰尚未產生</p>";
+    return null;
+  }
+  try {
+    const data = await gameRequest(`/games/${encodeURIComponent(key)}/solo-leaderboard?puzzle_id=${encodeURIComponent(challenge.key)}`);
+    const rows = Array.isArray(data?.leaderboard) ? data.leaderboard : [];
+    if (!rows.length) {
+      wrap.innerHTML = "<p style=\"color:var(--muted);\">今日尚無挑戰成績</p>";
+    } else {
+      wrap.innerHTML = rows.slice(0, 5).map((row) => `
+        <div class="drive-file-row game-list-row">
+          <div><strong>#${row.rank} ${sanitize(row.username || "-")}</strong><small>${row.attempts || 1} 次挑戰 · ${formatSoloGameTime(row.elapsed_ms || 0)}</small></div>
+          <strong>${data.rank_mode === "score_desc" ? Number(row.score || 0).toLocaleString() : formatSoloGameTime(row.elapsed_ms || 0)}</strong>
+        </div>
+      `).join("");
+    }
+    return data;
+  } catch (err) {
+    wrap.innerHTML = `<p style="color:var(--danger);">${sanitize(err.message || "每日排行榜讀取失敗")}</p>`;
+    return null;
+  }
+}
+
 
 async function loadSelectedGameLeaderboard() {
   const key = gameSelectedKey || "chess";
@@ -396,6 +643,8 @@ async function loadSelectedGameLeaderboard() {
   const awardBtn = $("game-award-btn");
   if (awardBtn) awardBtn.style.display = currentUser === "root" && key === "chess" ? "" : "none";
   await loadChessRootDashboard().catch(() => {});
+  renderGameMetaPanels();
+  await loadSelectedGameDailyLeaderboard();
   return data;
 }
 
@@ -405,7 +654,7 @@ async function submitSoloGameScore(gameKey, state) {
   const rawElapsed = soloRawElapsedMs(state);
   const elapsed = soloElapsedMs(state);
   try {
-    await gameRequest(`/games/${encodeURIComponent(gameKey)}/solo-scores`, {
+    const json = await gameRequest(`/games/${encodeURIComponent(gameKey)}/solo-scores`, {
       method: "POST",
       body: {
         raw_elapsed_ms: rawElapsed,
@@ -417,6 +666,29 @@ async function submitSoloGameScore(gameKey, state) {
         score: Number(state.score || 0),
       },
     });
+    recordGameOutcome(gameKey, {
+      raw_elapsed_ms: rawElapsed,
+      penalty_seconds: Number(state.penaltySeconds || 0),
+      elapsed_ms: elapsed,
+      difficulty: state.difficulty || "standard",
+      puzzle_id: state.puzzleId || "",
+      guess_count: Array.isArray(state.guesses) ? state.guesses.length : Number(state.guessCount || 0),
+      score: Number(state.score || 0),
+      lines: Number(state.lines || 0),
+      combo: Number(state.maxCombo || state.combo || 0),
+      boss: Number(state.bossDefeated || state.bossCount || 0),
+      weapon: Number(state.weaponLevel || 0),
+      graze: Number(state.graze || 0),
+      wave: Number(state.wave || 0),
+      accuracy: Number(state.shots ? Math.round((Number(state.hits || 0) / Number(state.shots || 1)) * 100) : 0),
+      survive: Number(state.health || state.lives || 0) > 0 ? 1 : 0,
+      clean: !Number(state.penaltySeconds || 0) && !Number(state.mistakes || 0),
+      maxTile: Number(state.maxTile || 0),
+      moves: Number(state.moves || 0),
+      length: Number(state.maxLength || state.snake?.length || 0),
+      powerup: Number(state.powerupsCollected || 0),
+    }, json);
+    showGameDailyRewardFeedback(json, "成績已送出");
     await loadSelectedGameLeaderboard();
   } catch (err) {
     state.scoreSubmitted = false;
@@ -461,6 +733,23 @@ async function refreshGameZoneAfterMutation(successMessage) {
 
 
 document.addEventListener("click", (event) => {
+  if (event.target?.closest?.("#game-fullscreen-btn, #fps-arena-fullscreen-btn")) {
+    toggleGameFullscreen();
+    return;
+  }
+  const shareBtn = event.target?.closest?.("[data-game-share-text]");
+  if (shareBtn) {
+    const text = shareBtn.dataset.gameShareText || "";
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(
+        () => setGameMsg("分享文字已複製", true),
+        () => setGameMsg(text, true),
+      );
+    } else {
+      setGameMsg(text, true);
+    }
+    return;
+  }
   const localGameModuleAction = event.target?.closest?.("#local-module-game-panel [data-action]");
   if (localGameModuleAction && localGameModuleActiveApi?.onAction) {
     localGameModuleActiveApi.onAction(localGameModuleAction.dataset.action || "");
@@ -583,7 +872,13 @@ document.addEventListener("touchend", (event) => {
     ? (dx > 0 ? "ArrowRight" : "ArrowLeft")
     : (dy > 0 ? "ArrowDown" : "ArrowUp");
   localGameModuleActiveApi.onKey({ key, preventDefault() {} }, true);
-}, { passive: true });
+  if (localGameModuleSwipeMode === "hold") {
+    window.setTimeout(() => {
+      if (!localGameModuleActiveApi?.onKey) return;
+      localGameModuleActiveApi.onKey({ key, preventDefault() {} }, false);
+    }, 90);
+  }
+}, { passive: false });
 
 document.addEventListener("submit", (event) => {
   const uciForm = event.target?.closest?.("#game-chess-uci-form");
@@ -636,3 +931,5 @@ document.addEventListener("change", (event) => {
 document.addEventListener("contextmenu", (event) => {
   dispatchActiveGameViewEvent("contextmenu", event);
 });
+
+document.addEventListener("fullscreenchange", updateGameFullscreenButtons);

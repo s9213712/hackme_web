@@ -17,23 +17,31 @@ const SUDOKU_PUZZLES = [
 let sudokuState = null;
 
 function startSudokuGame() {
-  const puzzleIndex = Math.floor(Math.random() * SUDOKU_PUZZLES.length);
+  const dailyChallenge = window.hackmeGameDailyChallenge?.("sudoku") || null;
+  const rng = dailyChallenge?.seed ? window.createHackmeGameSeededRandom?.(dailyChallenge.seed) : Math.random;
+  const puzzleIndex = Math.floor((rng?.() ?? Math.random()) * SUDOKU_PUZZLES.length);
   const item = SUDOKU_PUZZLES[puzzleIndex];
   sudokuState = {
-    puzzleId: `builtin-${puzzleIndex + 1}`,
+    puzzleId: dailyChallenge?.key || `builtin-${puzzleIndex + 1}`,
     puzzle: item.puzzle,
     solution: item.solution,
     values: item.puzzle.split("").map((value) => value === "0" ? "" : value),
     fixed: item.puzzle.split("").map((value) => value !== "0"),
+    notes: Array.from({ length: 81 }, () => ""),
+    noteMode: false,
+    mistakes: 0,
+    mistakeLimit: 3,
     startedAt: Date.now(),
     completedAt: null,
+    failed: false,
     penaltySeconds: 0,
     scoreSubmitted: false,
-    difficulty: "standard",
+    difficulty: dailyChallenge?.difficulty || "standard",
+    dailyChallenge,
   };
   renderSudokuBoard();
   ensureSoloGameTimer();
-  updateSudokuStatus("計時開始。填入 1-9，完成後檢查答案。");
+  updateSudokuStatus(`${dailyChallenge?.label || "計時開始"}。填入 1-9，完成後檢查答案。`);
 }
 
 function renderSudokuBoard() {
@@ -48,19 +56,43 @@ function renderSudokuBoard() {
     const row = Math.floor(index / 9);
     const col = index % 9;
     return `
-      <input class="sudoku-cell ${fixed ? "fixed" : ""}" inputmode="numeric" maxlength="1"
+      <input class="sudoku-cell ${fixed ? "fixed" : ""} ${sudokuState.notes[index] ? "has-notes" : ""}" inputmode="numeric" maxlength="1"
              aria-label="數獨第 ${row + 1} 列第 ${col + 1} 欄"
-             data-sudoku-index="${index}" value="${sanitize(value || "")}" ${fixed || sudokuState.completedAt ? "readonly" : ""} />
+             title="${sanitize(sudokuState.notes[index] ? `筆記 ${sudokuState.notes[index]}` : "")}"
+             placeholder="${sanitize(sudokuState.notes[index] || "")}"
+             data-sudoku-index="${index}" value="${sanitize(value || "")}" ${fixed || sudokuState.completedAt || sudokuState.failed ? "readonly" : ""} />
     `;
   }).join("");
+  updateSudokuNoteButton();
 }
 
 function updateSudokuCell(index, value) {
-  if (!sudokuState || sudokuState.fixed[index] || sudokuState.completedAt) return;
+  if (!sudokuState || sudokuState.fixed[index] || sudokuState.completedAt || sudokuState.failed) return;
   const normalized = /^[1-9]$/.test(value || "") ? value : "";
+  if (sudokuState.noteMode && normalized) {
+    const notes = new Set(String(sudokuState.notes[index] || "").split("").filter(Boolean));
+    if (notes.has(normalized)) notes.delete(normalized);
+    else notes.add(normalized);
+    sudokuState.notes[index] = [...notes].sort().join("");
+    const input = document.querySelector(`[data-sudoku-index="${index}"]`);
+    if (input) input.value = sudokuState.values[index] || "";
+    renderSudokuBoard();
+    updateSudokuStatus("已更新筆記。");
+    return;
+  }
   sudokuState.values[index] = normalized;
+  if (normalized) sudokuState.notes[index] = "";
   const input = document.querySelector(`[data-sudoku-index="${index}"]`);
   if (input && input.value !== normalized) input.value = normalized;
+}
+
+function updateSudokuNoteButton() {
+  const btn = $("sudoku-note-btn");
+  if (!btn) return;
+  const enabled = Boolean(sudokuState?.noteMode);
+  btn.classList.toggle("btn-primary", enabled);
+  btn.setAttribute("aria-pressed", enabled ? "true" : "false");
+  btn.textContent = enabled ? "筆記中" : "筆記";
 }
 
 function updateSudokuStatus(prefix = "") {
@@ -76,7 +108,11 @@ function updateSudokuStatus(prefix = "") {
     status.textContent = `完成時間 ${time}${penalty ? `（含加時 ${penalty} 秒）` : ""}`;
     return;
   }
-  status.textContent = `${prefix ? `${prefix} ` : ""}目前時間 ${time}${penalty ? ` · 加時 ${penalty} 秒` : ""}`;
+  if (sudokuState.failed) {
+    status.textContent = `錯誤達上限，本局結束。時間 ${time}`;
+    return;
+  }
+  status.textContent = `${prefix ? `${prefix} ` : ""}目前時間 ${time}${penalty ? ` · 加時 ${penalty} 秒` : ""} · 錯誤 ${sudokuState.mistakes}/${sudokuState.mistakeLimit}${sudokuState.noteMode ? " · 筆記模式" : ""}`;
 }
 
 function checkSudokuGame() {
@@ -91,7 +127,17 @@ function checkSudokuGame() {
     input.classList.toggle("wrong", wrong);
   });
   if (wrongCount > 0) {
+    sudokuState.mistakes += 1;
     sudokuState.penaltySeconds += 10;
+    if (sudokuState.mistakes >= sudokuState.mistakeLimit) {
+      sudokuState.failed = true;
+      sudokuState.completedAt = Date.now();
+      renderSudokuBoard();
+      updateSudokuStatus();
+      stopSoloGameTimerIfIdle();
+      setGameMsg("數獨錯誤達上限，本局不列入排行榜。", false);
+      return;
+    }
     updateSudokuStatus(`發現 ${wrongCount} 格錯誤，已加時 10 秒。`);
     return;
   }
@@ -104,11 +150,38 @@ function checkSudokuGame() {
     renderSudokuBoard();
     updateSudokuStatus();
     stopSoloGameTimerIfIdle();
+    if (sudokuState.noteMode || sudokuState.notes.some(Boolean)) {
+      window.recordHackmeGameAchievement?.("sudoku", "note-master", "筆記整理", "使用筆記模式完成一題。");
+    }
+    if (!sudokuState.mistakes) {
+      window.recordHackmeGameAchievement?.("sudoku", "no-mistake", "零錯誤完成", "不觸發錯誤檢查完成數獨。");
+    }
+    window.recordHackmeGameAchievement?.("sudoku", "first-solve", "數獨初解", "完成一題數獨。");
     submitSoloGameScore("sudoku", sudokuState);
     setGameMsg(`數獨完成，成績 ${formatSoloGameTime(soloElapsedMs(sudokuState))}`, true);
   } else if (status) {
     status.textContent = "還有錯誤，請檢查紅色格子。";
   }
+}
+
+function toggleSudokuNotes() {
+  if (!sudokuState) startSudokuGame();
+  if (!sudokuState || sudokuState.completedAt || sudokuState.failed) return;
+  sudokuState.noteMode = !sudokuState.noteMode;
+  updateSudokuNoteButton();
+  updateSudokuStatus();
+}
+
+function fillSudokuHint() {
+  if (!sudokuState || sudokuState.completedAt || sudokuState.failed) return;
+  const empty = sudokuState.values.map((value, index) => value ? null : index).filter((index) => index !== null && !sudokuState.fixed[index]);
+  if (!empty.length) return;
+  const index = empty[0];
+  sudokuState.values[index] = sudokuState.solution[index];
+  sudokuState.notes[index] = "";
+  sudokuState.penaltySeconds += 20;
+  renderSudokuBoard();
+  updateSudokuStatus("提示已填入 1 格，代價加時 20 秒。");
 }
 
 (function () {
@@ -137,6 +210,14 @@ function checkSudokuGame() {
       }
       if (type === "click" && event.target?.closest?.("#sudoku-check-btn")) {
         checkSudokuGame();
+        return true;
+      }
+      if (type === "click" && event.target?.closest?.("#sudoku-note-btn")) {
+        toggleSudokuNotes();
+        return true;
+      }
+      if (type === "click" && event.target?.closest?.("#sudoku-hint-btn")) {
+        fillSudokuHint();
         return true;
       }
       const sudokuInput = type === "input" ? event.target?.closest?.("[data-sudoku-index]") : null;

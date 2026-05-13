@@ -4,6 +4,7 @@ const CHESS_PIECES = {
   K: "♔", Q: "♕", R: "♖", B: "♗", N: "♘", P: "♙",
   k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟",
 };
+const CHESS_MATERIAL_VALUES = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
 
 const CHESS_PIPELINE_FALLBACK_COMMANDS = {
   prepare: "python3 scripts/games/chess_replay_prepare.py --replace-output --include-quarantine",
@@ -13,13 +14,120 @@ const CHESS_PIPELINE_FALLBACK_COMMANDS = {
   full_pipeline: "python3 scripts/games/chess_train_pipeline.py --preset standard --include-quarantine",
 };
 
+let chessClockMeta = { matchId: null, moveCount: 0, turn: "" };
+const chessCompetitionClock = window.createHackmeCompetitionClock?.({
+  onExpire(side) {
+    const loser = side === "white" ? "白方" : "黑方";
+    const winner = side === "white" ? "黑方" : "白方";
+    setGameMsg(`${loser}棋鐘超時，${winner}超時勝。`, false);
+    renderChessClockDisplay();
+  },
+}) || null;
+
+function chessClockSideLabel(side) {
+  return side === "white" ? "白" : "黑";
+}
+
+function selectedChessMatchForClock() {
+  return (gameState.matches || []).find((match) => match.id === gameSelectedMatchId) || null;
+}
+
+function chessClockMoveCount(match) {
+  return Array.isArray(match?.move_history) ? match.move_history.length : 0;
+}
+
+function readChessClockConfig() {
+  const presetKey = $("game-clock-preset")?.value || chessCompetitionClock?.state.presetKey || "rapid_10_0";
+  const preset = window.gameClockPreset?.(presetKey) || { mainSeconds: 600, incrementSeconds: 0 };
+  const custom = presetKey === "custom";
+  const mainMinutes = custom
+    ? Number($("game-clock-main-minutes")?.value || 10)
+    : preset.mainSeconds / 60;
+  const incrementSeconds = custom
+    ? Number($("game-clock-increment-seconds")?.value || 0)
+    : preset.incrementSeconds;
+  if (!custom) {
+    const mainInput = $("game-clock-main-minutes");
+    const incInput = $("game-clock-increment-seconds");
+    if (mainInput) mainInput.value = String(Math.round(preset.mainSeconds / 60));
+    if (incInput) incInput.value = String(preset.incrementSeconds);
+  }
+  return {
+    enabled: Boolean($("game-clock-enabled")?.checked),
+    presetKey,
+    mainSeconds: Math.max(10, Math.round(mainMinutes * 60)),
+    incrementSeconds: Math.max(0, Math.round(incrementSeconds)),
+  };
+}
+
+function renderChessClockDisplay(snapshot = chessCompetitionClock?.state) {
+  if (!snapshot) return;
+  const panel = $("game-clock-panel");
+  if (panel) {
+    panel.classList.toggle("enabled", Boolean(snapshot.enabled));
+    panel.classList.toggle("expired", Boolean(snapshot.expiredSide));
+  }
+  ["white", "black"].forEach((side) => {
+    const el = document.querySelector(`[data-chess-clock-side="${side}"]`);
+    if (!el) return;
+    const value = side === "white" ? snapshot.whiteMs : snapshot.blackMs;
+    el.textContent = `${chessClockSideLabel(side)} ${window.formatHackmeGameClock?.(value) || "--:--"}`;
+    el.classList.toggle("active", snapshot.enabled && snapshot.running && snapshot.activeSide === side && !snapshot.expiredSide);
+    el.classList.toggle("expired", snapshot.expiredSide === side);
+  });
+}
+
+function applyChessClockConfig({ reset = true } = {}) {
+  if (!chessCompetitionClock) return false;
+  const config = readChessClockConfig();
+  chessCompetitionClock.configure(config);
+  const match = selectedChessMatchForClock();
+  const activeTurn = match?.current_turn || "white";
+  if (reset) {
+    chessClockMeta = { matchId: match?.id || null, moveCount: chessClockMoveCount(match), turn: activeTurn };
+    chessCompetitionClock.reset(activeTurn);
+  } else if (!config.enabled) {
+    chessCompetitionClock.stop();
+  } else {
+    chessCompetitionClock.start(activeTurn);
+  }
+  renderChessClockDisplay();
+  return true;
+}
+
+function syncChessClockWithMatch(match) {
+  if (!chessCompetitionClock) return;
+  if (!match || match.status !== "active") {
+    chessCompetitionClock.stop();
+    chessClockMeta = { matchId: match?.id || null, moveCount: chessClockMoveCount(match), turn: match?.current_turn || "" };
+    renderChessClockDisplay();
+    return;
+  }
+  const moveCount = chessClockMoveCount(match);
+  const turn = match.current_turn || "white";
+  if (chessClockMeta.matchId !== match.id) {
+    chessClockMeta = { matchId: match.id, moveCount, turn };
+    chessCompetitionClock.reset(turn);
+  } else if (chessClockMeta.turn && chessClockMeta.turn !== turn && moveCount >= chessClockMeta.moveCount) {
+    chessClockMeta = { matchId: match.id, moveCount, turn };
+    chessCompetitionClock.switchTurn(turn);
+  } else if (chessCompetitionClock.state.enabled && !chessCompetitionClock.state.expiredSide) {
+    chessCompetitionClock.start(turn);
+  }
+  renderChessClockDisplay();
+}
+
+chessCompetitionClock?.subscribe(renderChessClockDisplay);
+
 function gameDifficultyOptionDescription(difficulty) {
-  if (difficulty === "experiment 5:nnue") return "實驗 5：NNUE + AlphaBeta/PVS";
-  if (difficulty === "experiment 4:pv") return "實驗 4：Policy/Value + MCTS";
-  if (difficulty === "experiment 3:dl") return "實驗 3：DL 語義平衡學習";
-  if (difficulty === "experiment") return "實驗：引擎搜尋 + 對局學習";
-  if (difficulty === "hard") return "困難：避免明顯送子";
-  return "普通：優先吃子與將軍";
+  const strength = window.HACKME_GAME_AI_STRENGTH?.chess?.[difficulty];
+  const suffix = strength ? `｜${strength}` : "";
+  if (difficulty === "experiment 5:nnue") return `實驗 5：NNUE + AlphaBeta/PVS${suffix}`;
+  if (difficulty === "experiment 4:pv") return `實驗 4：Policy/Value + MCTS${suffix}`;
+  if (difficulty === "experiment 3:dl") return `實驗 3：DL 語義平衡學習${suffix}`;
+  if (difficulty === "experiment") return `實驗：引擎搜尋 + 對局學習${suffix}`;
+  if (difficulty === "hard") return `困難：避免明顯送子${suffix}`;
+  return `普通：優先吃子與將軍${suffix}`;
 }
 
 function renderChessPracticeDifficultyOptions(games) {
@@ -93,7 +201,7 @@ function chessResultText(match) {
     return "你已認輸，棋局結束";
   }
   if (reason === "checkmate") {
-    return match.winner_username ? `將死，勝者：${match.winner_username}` : "將死，棋局結束";
+    return match.winner_username ? `Checkmate：王死，遊戲結束，勝者：${match.winner_username}` : "Checkmate：王死，遊戲結束";
   }
   if (reason === "agreed_draw") return "雙方同意和棋";
   if (reason === "stalemate") return "逼和，棋局結束";
@@ -103,6 +211,106 @@ function chessResultText(match) {
   if (reason === "seventyfive_moves") return "75 步規則，和棋";
   if (reason === "fivefold_repetition") return "五次重複，和棋";
   return match.winner_username ? `已結束，勝者：${match.winner_username}` : `已結束：${reason || "平手"}`;
+}
+
+function chessPieceValue(piece) {
+  return CHESS_MATERIAL_VALUES[String(piece || "").toLowerCase()] || 0;
+}
+
+function chessMaterialSummary(boardMap = {}) {
+  let white = 0;
+  let black = 0;
+  Object.values(boardMap || {}).forEach((piece) => {
+    const value = chessPieceValue(piece);
+    if (piece === String(piece).toUpperCase()) white += value;
+    else black += value;
+  });
+  return { white, black, diff: white - black };
+}
+
+function chessBestHintMove(match) {
+  const moves = Array.isArray(match?.legal_moves) ? match.legal_moves : [];
+  if (!moves.length) return null;
+  const scored = moves.map((move) => {
+    let score = 0;
+    if (move.captured) score += chessPieceValue(move.captured) * 100;
+    if (move.promotion) score += chessPieceValue(move.promotion) * 90;
+    if (move.castle) score += 45;
+    if (move.en_passant) score += 35;
+    const centerFiles = { d: 1, e: 1, c: 0.5, f: 0.5 };
+    score += (centerFiles[String(move.to || "")[0]] || 0) * 8;
+    score += ["4", "5"].includes(String(move.to || "")[1]) ? 6 : 0;
+    return { move, score };
+  }).sort((a, b) => b.score - a.score || String(a.move.from).localeCompare(String(b.move.from)));
+  return scored[0]?.move || moves[0];
+}
+
+function chessMoveSan(move) {
+  if (!move) return "";
+  return `${move.from}${move.to}${move.promotion || ""}`;
+}
+
+function renderChessAnalysis(match, prefix = "") {
+  const panel = $("game-chess-analysis-panel");
+  if (!panel) return;
+  if (!match) {
+    panel.innerHTML = "";
+    return;
+  }
+  const material = chessMaterialSummary(match.board || {});
+  const moves = Array.isArray(match.move_history) ? match.move_history : [];
+  const captures = moves.filter((move) => move.captured).length;
+  const computerMoves = moves.filter((move) => move.computer).length;
+  const hint = match.status === "active" && match.my_side === match.current_turn ? chessBestHintMove(match) : null;
+  const strength = match.mode === "computer"
+    ? window.HACKME_GAME_AI_STRENGTH?.chess?.[match.computer_difficulty || "normal"]
+    : "";
+  const result = match.status !== "active" ? chessResultText(match) : "對局進行中";
+  const materialText = material.diff === 0
+    ? "子力相等"
+    : material.diff > 0 ? `白方多 ${material.diff} 分子力` : `黑方多 ${Math.abs(material.diff)} 分子力`;
+  panel.innerHTML = `
+    <div class="game-analysis-card"><strong>${sanitize(prefix || "棋局分析")}</strong><br>${sanitize(result)} · ${sanitize(materialText)} · 吃子 ${captures} 次 · AI 回手 ${computerMoves} 次</div>
+    <div class="game-analysis-card"><strong>錯著提示</strong><br>${hint ? `候選手 ${sanitize(chessMoveSan(hint))}：${hint.captured ? `可吃 ${sanitize(CHESS_PIECES[hint.captured] || hint.captured)}` : hint.castle ? "可王車易位改善王安全" : "優先中心與出子"}` : "結束後顯示子力、吃子與節奏；輪到你時會顯示候選手。"}</div>
+    <div class="game-analysis-card"><strong>AI 難度</strong><br>${sanitize(strength || "玩家對戰沒有 AI 難度。")}</div>
+  `;
+}
+
+function showChessHint() {
+  const match = (gameState.matches || []).find((item) => item.id === gameSelectedMatchId);
+  if (!match || match.status !== "active") {
+    renderChessAnalysis(match, "賽後分析");
+    return;
+  }
+  if (match.my_side !== match.current_turn) {
+    setGameMsg("目前等待對手或 AI 走棋。", false);
+    renderChessAnalysis(match, "提示");
+    return;
+  }
+  const hint = chessBestHintMove(match);
+  if (!hint) {
+    setGameMsg("目前沒有合法走法。", false);
+    return;
+  }
+  gameSelectedSquare = hint.from;
+  renderChessBoard(match);
+  renderChessAnalysis(match, `建議候選手：${chessMoveSan(hint)}`);
+  setGameMsg(`提示：可考慮 ${chessMoveSan(hint)}`, true);
+}
+
+async function createChessEndgameChallenge() {
+  try {
+    const presets = ["rook_endgame", "queen_mate", "knight_fork"];
+    const preset = presets[(Date.now() / 1000 | 0) % presets.length];
+    const json = await gameRequest("/games/chess/challenge", { method: "POST", body: { preset } });
+    gameSelectedMatchId = json.match_id;
+    gameSelectedSquare = null;
+    const msg = `已建立${json.title || "殘局題"}：${json.hint || "請找最佳續著"}`;
+    setGameMsg(msg, true);
+    await refreshGameZoneAfterMutation(msg);
+  } catch (err) {
+    setGameMsg(err.message || "建立殘局題失敗", false);
+  }
 }
 
 function buildOptimisticChessMatch(match, move) {
@@ -219,10 +427,12 @@ function renderChessBoard(match) {
   const claimDraw = $("game-claim-draw-btn");
   if (!board) return;
   if (!match) {
+    syncChessClockWithMatch(null);
     board.innerHTML = "<div class=\"chess-empty\">尚未選擇棋局</div>";
     if (title) title.textContent = "尚未選擇棋局";
     if (status) status.textContent = "選擇棋局後即可走棋";
     if (history) history.innerHTML = "";
+    renderChessAnalysis(null);
     if (uciInput) {
       uciInput.value = "";
       uciInput.disabled = true;
@@ -237,12 +447,21 @@ function renderChessBoard(match) {
   }
   const boardMap = match.board || {};
   if (title) title.textContent = gameMatchLabel(match);
+  syncChessClockWithMatch(match);
+  const clockSnapshot = chessCompetitionClock?.snapshot?.() || {};
+  const clockExpired = Boolean(clockSnapshot.enabled && clockSnapshot.expiredSide);
   const myTurn = match.status === "active" && match.my_side === match.current_turn;
-  if (uciInput) uciInput.disabled = !myTurn || chessMoveInFlight;
-  if (uciSubmit) uciSubmit.disabled = !myTurn || chessMoveInFlight;
+  if (uciInput) uciInput.disabled = !myTurn || chessMoveInFlight || clockExpired;
+  if (uciSubmit) uciSubmit.disabled = !myTurn || chessMoveInFlight || clockExpired;
   if (status) {
-    if (match.status !== "active") {
-      status.textContent = match.winner_username ? `已結束，勝者：${match.winner_username}` : `已結束：${match.result_reason || "平手"}`;
+    if (clockExpired) {
+      const loser = clockSnapshot.expiredSide === "white" ? "白方" : "黑方";
+      const winner = clockSnapshot.expiredSide === "white" ? "黑方" : "白方";
+      status.textContent = `${loser}超時，${winner}超時勝`;
+    } else if (match.status !== "active") {
+      status.textContent = chessResultText(match);
+    } else if (match.current_check) {
+      status.textContent = `${match.current_turn === "white" ? "白方" : "黑方"}王被鎖定：Check，必須先解將`;
     } else if (match.draw_offer_pending && match.can_accept_draw_offer) {
       status.textContent = `${match.draw_offer_by_username || "對手"} 已提和，等待你接受或拒絕`;
     } else if (match.draw_offer_pending && String(match.draw_offer_by_user_id || "") === String(currentUserId || "")) {
@@ -254,7 +473,11 @@ function renderChessBoard(match) {
     }
   }
   if (resign) resign.style.display = match.status === "active" ? "" : "none";
-  if (offerDraw) offerDraw.style.display = match.status === "active" && match.can_offer_draw ? "" : "none";
+  if (offerDraw) {
+    offerDraw.textContent = "求和";
+    offerDraw.title = "向對手提出和棋";
+    offerDraw.style.display = match.status === "active" && match.can_offer_draw ? "" : "none";
+  }
   if (acceptDraw) acceptDraw.style.display = match.status === "active" && match.can_accept_draw_offer ? "" : "none";
   if (rejectDraw) rejectDraw.style.display = match.status === "active" && match.can_reject_draw_offer ? "" : "none";
   if (claimDraw) claimDraw.style.display = match.status === "active" && myTurn && match.can_claim_draw ? "" : "none";
@@ -268,6 +491,12 @@ function renderChessBoard(match) {
   const checkmatedKingSquare = match.status !== "active" && match.result_reason === "checkmate"
     ? chessKingSquare(boardMap, match.current_turn)
     : "";
+  const checkedKingSquare = match.status === "active" && match.current_check
+    ? (match.current_king_square || chessKingSquare(boardMap, match.current_turn))
+    : "";
+  const deadKingSquare = match.status !== "active" && match.result_reason === "checkmate"
+    ? checkmatedKingSquare
+    : "";
   const squares = [];
   for (let rank = 8; rank >= 1; rank -= 1) {
     for (const file of "abcdefgh") {
@@ -278,9 +507,14 @@ function renderChessBoard(match) {
       const special = specialTargets.get(square);
       const specialClass = special?.castle ? " castle-target" : (special?.en_passant ? " en-passant-target" : (special?.promotion ? " promotion-target" : ""));
       const specialLabel = special?.castle ? "王車易位" : (special?.en_passant ? "吃過路兵" : (special?.promotion ? "升變" : ""));
+      const kingStateClass = [
+        square === checkedKingSquare ? "checked-king" : "",
+        square === checkmatedKingSquare ? "checkmated-king" : "",
+        square === deadKingSquare ? "dead-king" : "",
+      ].filter(Boolean).join(" ");
       squares.push(`
-        <button class="chess-square ${isDark ? "dark" : "light"} ${square === gameSelectedSquare ? "selected" : ""} ${legalTargets.has(square) ? `target${specialClass}` : ""} ${square === checkmatedKingSquare ? "checkmated-king" : ""}"
-                type="button" data-chess-square="${square}" title="${sanitize(specialLabel || square)}" ${match.status !== "active" || chessMoveInFlight ? "disabled" : ""}>
+        <button class="chess-square ${isDark ? "dark" : "light"} ${square === gameSelectedSquare ? "selected" : ""} ${legalTargets.has(square) ? `target${specialClass}` : ""} ${kingStateClass}"
+                type="button" data-chess-square="${square}" title="${sanitize(specialLabel || square)}" ${match.status !== "active" || chessMoveInFlight || clockExpired ? "disabled" : ""}>
           <span>${sanitize(CHESS_PIECES[piece] || "")}</span>
           <small>${specialLabel ? sanitize(specialLabel) : (selectable || legalTargets.has(square) ? sanitize(square) : "")}</small>
         </button>
@@ -298,10 +532,17 @@ function renderChessBoard(match) {
       ? moves.slice(-16).map((move, index) => `<span>${moves.length - 16 + index + 1 > 0 ? moves.length - 16 + index + 1 : index + 1}. ${sanitize(move.from)}→${sanitize(move.to)}${move.computer ? " · CPU" : ""}</span>`).join("")
       : "<span style=\"color:var(--muted);\">尚未走棋</span>";
   }
+  renderChessAnalysis(match);
 }
 
 async function submitChessMove(match, chosenMove, { from, to, promotion = null, optimisticMessage = "已送出走棋，等待電腦回應..." } = {}) {
   if (!match || chessMoveInFlight) return;
+  const clockSnapshot = chessCompetitionClock?.snapshot?.() || {};
+  if (clockSnapshot.enabled && clockSnapshot.expiredSide) {
+    setGameMsg("棋鐘已超時，不能再走棋。", false);
+    renderChessBoard(match);
+    return;
+  }
   const previousMatch = match;
   const optimisticMatch = buildOptimisticChessMatch(match, chosenMove);
   gameSelectedSquare = null;
@@ -771,6 +1012,31 @@ async function promoteChessCandidate() {
     panelIds: ["chess-lobby-panel", "chess-game-panel"],
     leaderboardPath() {
       return "/games/chess/leaderboard";
+    },
+    dispatch(type, event) {
+      const target = event.target;
+      if (type === "click" && target?.closest?.("#game-chess-hint-btn")) {
+        showChessHint();
+        return true;
+      }
+      if (type === "click" && target?.closest?.("#game-chess-analysis-btn")) {
+        const match = (gameState.matches || []).find((item) => item.id === gameSelectedMatchId);
+        renderChessAnalysis(match, "賽後分析");
+        setGameMsg(match ? "已更新棋局分析。" : "請先選擇棋局。", Boolean(match));
+        return true;
+      }
+      if (type === "click" && target?.closest?.("#game-chess-challenge-btn")) {
+        createChessEndgameChallenge();
+        return true;
+      }
+      const clockControl = target?.closest?.("#game-clock-panel input, #game-clock-panel select");
+      if (clockControl && (type === "change" || type === "input")) {
+        applyChessClockConfig({ reset: true });
+        const match = selectedChessMatchForClock();
+        if (match) renderChessBoard(match);
+        return true;
+      }
+      return false;
     },
   });
 }());

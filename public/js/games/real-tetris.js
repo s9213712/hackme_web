@@ -13,6 +13,113 @@
   const GRAVITY = 1180;
   const RELAXED_LINE_FILL = 0.78;
   const LINE_TOLERANCE = CELL * 0.68;
+  const REAL_TETRIS_MODES = {
+    standard: {
+      label: "一般",
+      gravity: GRAVITY,
+      rebound: 1.18,
+      friction: 0.18,
+      velocityDamping: 0.992,
+      verticalDamping: 0.998,
+      angularDamping: 0.94,
+      freeAngularDamping: 0.992,
+      minDist: CELL * 0.92,
+      settleSpeed: 86,
+      settleFrames: 24,
+      lineFill: RELAXED_LINE_FILL,
+      lineTolerance: LINE_TOLERANCE,
+      scoreMultiplier: 1,
+      stackSupportMargin: CELL * 0.18,
+      stackWakeThreshold: CELL * 0.08,
+      stackTorque: 34,
+      stackDamping: 0.985,
+    },
+    sticky: {
+      label: "黏性",
+      gravity: 1260,
+      rebound: 0.72,
+      friction: 0.46,
+      velocityDamping: 0.986,
+      verticalDamping: 0.994,
+      angularDamping: 0.82,
+      freeAngularDamping: 0.986,
+      minDist: CELL * 0.98,
+      settleSpeed: 118,
+      settleFrames: 12,
+      lineFill: 0.72,
+      lineTolerance: CELL * 0.78,
+      scoreMultiplier: 0.9,
+      stackSupportMargin: CELL * 0.32,
+      stackWakeThreshold: CELL * 0.16,
+      stackTorque: 18,
+      stackDamping: 0.955,
+      sticky: true,
+    },
+    smooth: {
+      label: "光滑",
+      gravity: 1100,
+      rebound: 1.34,
+      friction: 0.055,
+      velocityDamping: 0.997,
+      verticalDamping: 0.999,
+      angularDamping: 0.985,
+      freeAngularDamping: 0.997,
+      minDist: CELL * 0.88,
+      settleSpeed: 58,
+      settleFrames: 36,
+      lineFill: 0.84,
+      lineTolerance: CELL * 0.56,
+      scoreMultiplier: 1.2,
+      stackSupportMargin: CELL * 0.1,
+      stackWakeThreshold: CELL * 0.04,
+      stackTorque: 52,
+      stackDamping: 0.993,
+    },
+    wind: {
+      label: "風場",
+      gravity: 1140,
+      rebound: 1.08,
+      friction: 0.16,
+      velocityDamping: 0.994,
+      verticalDamping: 0.998,
+      angularDamping: 0.92,
+      freeAngularDamping: 0.993,
+      minDist: CELL * 0.9,
+      settleSpeed: 74,
+      settleFrames: 26,
+      lineFill: 0.8,
+      lineTolerance: CELL * 0.64,
+      scoreMultiplier: 1.25,
+      stackSupportMargin: CELL * 0.12,
+      stackWakeThreshold: CELL * 0.06,
+      stackTorque: 46,
+      stackDamping: 0.988,
+      wind: true,
+    },
+    magnet: {
+      label: "磁力",
+      gravity: 1180,
+      rebound: 1.0,
+      friction: 0.22,
+      velocityDamping: 0.99,
+      verticalDamping: 0.997,
+      angularDamping: 0.88,
+      freeAngularDamping: 0.989,
+      minDist: CELL * 0.94,
+      settleSpeed: 92,
+      settleFrames: 18,
+      lineFill: 0.76,
+      lineTolerance: CELL * 0.7,
+      scoreMultiplier: 1.15,
+      stackSupportMargin: CELL * 0.2,
+      stackWakeThreshold: CELL * 0.1,
+      stackTorque: 40,
+      stackDamping: 0.976,
+      magnet: true,
+    },
+  };
+  const REAL_TETRIS_MODE_ORDER = ["standard", "sticky", "smooth", "wind", "magnet"];
+  const REAL_TETRIS_ROOT_PHYSICS_KEY = "hackme.realTetris.physicsParams.v1";
   const BLOCK_COLORS = {
     I: "#28c7fa",
     O: "#ffd166",
@@ -31,6 +138,153 @@
     J: [[-1, -1], [-1, 0], [0, 0], [1, 0]],
     L: [[1, -1], [-1, 0], [0, 0], [1, 0]],
   };
+  const STACK_CONNECT_DIST = CELL * 1.18;
+  const STACK_CHECK_INTERVAL = 7;
+
+  function realTetrisModeConfig(mode) {
+    return REAL_TETRIS_MODES[mode] || REAL_TETRIS_MODES.standard;
+  }
+
+  function realTetrisModeLabel(mode) {
+    return realTetrisModeConfig(mode).label;
+  }
+
+  function nextRealTetrisMode(mode) {
+    const index = REAL_TETRIS_MODE_ORDER.indexOf(mode);
+    return REAL_TETRIS_MODE_ORDER[(index + 1) % REAL_TETRIS_MODE_ORDER.length] || "standard";
+  }
+
+  function realTetrisRootUser() {
+    return typeof currentUser !== "undefined" && currentUser === "root";
+  }
+
+  function realTetrisDefaultPhysicsParams(mode) {
+    const config = realTetrisModeConfig(mode);
+    return {
+      gravity: config.gravity,
+      elasticity: clamp(config.rebound - 0.35, 0.05, 1.4),
+      friction: config.friction,
+      stackTorque: config.stackTorque,
+      stackDamping: config.stackDamping,
+    };
+  }
+
+  function readRealTetrisStoredParams() {
+    try {
+      const raw = window.localStorage?.getItem(REAL_TETRIS_ROOT_PHYSICS_KEY);
+      const parsed = raw ? JSON.parse(raw) : {};
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch (err) {
+      return {};
+    }
+  }
+
+  function writeRealTetrisStoredParams(mode, params) {
+    try {
+      const stored = readRealTetrisStoredParams();
+      stored[mode] = params;
+      window.localStorage?.setItem(REAL_TETRIS_ROOT_PHYSICS_KEY, JSON.stringify(stored));
+    } catch (err) {
+      // Physics tuning is runtime-only when localStorage is unavailable.
+    }
+  }
+
+  function loadRealTetrisPhysicsParams(mode) {
+    const defaults = realTetrisDefaultPhysicsParams(mode);
+    const stored = readRealTetrisStoredParams()[mode] || {};
+    const params = { ...defaults };
+    Object.keys(params).forEach((key) => {
+      const value = Number(stored[key]);
+      if (Number.isFinite(value)) params[key] = value;
+    });
+    return params;
+  }
+
+  function realTetrisRootControlsHtml(mode) {
+    if (!realTetrisRootUser()) return "";
+    const params = loadRealTetrisPhysicsParams(mode);
+    return `
+      <div class="real-tetris-root-controls" aria-label="root 物理參數">
+        <label>重力 <input type="range" min="650" max="1800" step="10" value="${params.gravity}" data-real-tetris-param="gravity" /><span data-real-tetris-value="gravity">${Math.round(params.gravity)}</span></label>
+        <label>彈性 <input type="range" min="0.05" max="1.45" step="0.01" value="${params.elasticity}" data-real-tetris-param="elasticity" /><span data-real-tetris-value="elasticity">${params.elasticity.toFixed(2)}</span></label>
+        <label>摩擦 <input type="range" min="0.01" max="0.75" step="0.01" value="${params.friction}" data-real-tetris-param="friction" /><span data-real-tetris-value="friction">${params.friction.toFixed(2)}</span></label>
+        <label>倒塌力矩 <input type="range" min="0" max="96" step="1" value="${params.stackTorque}" data-real-tetris-param="stackTorque" /><span data-real-tetris-value="stackTorque">${Math.round(params.stackTorque)}</span></label>
+        <label>阻尼 <input type="range" min="0.920" max="0.999" step="0.001" value="${params.stackDamping}" data-real-tetris-param="stackDamping" /><span data-real-tetris-value="stackDamping">${params.stackDamping.toFixed(3)}</span></label>
+        <button class="btn game-mini-btn" type="button" data-real-tetris-reset="1">重設物理</button>
+      </div>
+    `;
+  }
+
+  function renderRealTetrisRoot(api) {
+    const mode = api._realTetrisMode || "standard";
+    api.root.innerHTML = `
+      <div class="real-tetris-shell">
+        <canvas class="real-tetris-canvas" width="${WIDTH}" height="${HEIGHT}" aria-label="真實版俄羅斯方塊"></canvas>
+        ${realTetrisRootControlsHtml(mode)}
+      </div>
+    `;
+  }
+
+  function syncRealTetrisRootControls(api, state) {
+    const root = api.root;
+    if (!root || !state?.physicsParams) return;
+    Object.entries(state.physicsParams).forEach(([key, value]) => {
+      const input = root.querySelector(`[data-real-tetris-param="${key}"]`);
+      const label = root.querySelector(`[data-real-tetris-value="${key}"]`);
+      if (input) input.value = String(value);
+      if (label) label.textContent = key === "gravity" || key === "stackTorque" ? String(Math.round(value)) : key === "stackDamping" ? Number(value).toFixed(3) : Number(value).toFixed(2);
+    });
+  }
+
+  function setRealTetrisActions(api) {
+    const mode = api._realTetrisMode || "standard";
+    api.setActions(`
+      <button class="btn game-mini-btn btn-primary" type="button" data-action="new">開始</button>
+      <button class="btn game-mini-btn" type="button" data-action="pause">暫停</button>
+      <button class="btn game-mini-btn" type="button" data-action="mode">模式：${realTetrisModeLabel(mode)}</button>
+      <button class="btn game-mini-btn" type="button" data-action="finish">結算</button>
+    `);
+  }
+
+  function showRealTetrisReady(api) {
+    if (api._realTetrisState?.raf) cancelAnimationFrame(api._realTetrisState.raf);
+    const mode = api._realTetrisMode || "standard";
+    const state = {
+      canvas: api.root.querySelector("canvas"),
+      mode,
+      physicsParams: loadRealTetrisPhysicsParams(mode),
+      active: null,
+      blocks: [],
+      input: { left: false, right: false, down: false, rotate: 0 },
+      score: 0,
+      lines: 0,
+      collapseEvents: 0,
+      tick: 0,
+      status: "ready",
+      paused: false,
+      startedAt: Date.now(),
+      completedAt: null,
+      dailyChallenge: null,
+      raf: null,
+    };
+    api._realTetrisState = null;
+    syncRealTetrisRootControls(api, state);
+    if (state.canvas) {
+      drawRealTetris(state, state.canvas);
+      const ctx = state.canvas.getContext("2d");
+      ctx.fillStyle = "rgba(7,17,31,.68)";
+      ctx.fillRect(LEFT, 190, RIGHT - LEFT, 86);
+      ctx.textAlign = "center";
+      ctx.fillStyle = "#e2e8f0";
+      ctx.font = "700 22px system-ui, sans-serif";
+      ctx.fillText("真實版俄羅斯方塊", WIDTH / 2, 226);
+      ctx.font = "13px system-ui, sans-serif";
+      ctx.fillStyle = "rgba(226,232,240,.84)";
+      ctx.fillText("按開始後才會啟動物理模擬與計時", WIDTH / 2, 252);
+      ctx.textAlign = "start";
+    }
+    api.status(`待機 · ${realTetrisModeLabel(mode)} · 按開始啟動物理模擬。`);
+  }
 
   function centerRealTetrisCells(cells) {
     const centerX = cells.reduce((sum, cell) => sum + cell[0], 0) / cells.length;
@@ -71,56 +325,275 @@
     ctx.restore();
   }
 
-  function createRealTetrisBody() {
+  function createRealTetrisBody(state) {
     const names = Object.keys(PIECES);
     const type = names[Math.floor(Math.random() * names.length)];
+    const config = realTetrisModeConfig(state?.mode);
+    const spinScale = state?.mode === "smooth" ? 1.25 : state?.mode === "sticky" ? 0.72 : 1;
     return {
       type,
       cells: centerRealTetrisCells(PIECES[type]),
       x: (LEFT + RIGHT) / 2,
       y: TOP + CELL * 1.6,
       angle: (Math.random() - 0.5) * 0.18,
-      vx: (Math.random() - 0.5) * 26,
+      vx: (Math.random() - 0.5) * 26 * (state?.mode === "smooth" ? 1.35 : 1),
       vy: 0,
-      omega: (Math.random() - 0.5) * 0.55,
+      omega: (Math.random() - 0.5) * 0.55 * spinScale,
       settledFrames: 0,
       touching: false,
+      friction: config.friction,
+      mass: 4,
     };
   }
 
-  function pushRealTetrisBody(body, nx, ny, penetration, rx, ry) {
+  function realTetrisBlockSpeed(block) {
+    return Math.hypot(block.vx || 0, block.vy || 0) + Math.abs(block.omega || 0) * CELL;
+  }
+
+  function wakeRealTetrisBlock(block, impulseX = 0, impulseY = 0, torque = 0) {
+    block.vx = clamp((block.vx || 0) + impulseX, -360, 360);
+    block.vy = clamp((block.vy || 0) + impulseY, -520, 720);
+    block.omega = clamp((block.omega || 0) + torque, -7.5, 7.5);
+    block.unstable = true;
+    block.settledFrames = 0;
+  }
+
+  function blockHasVerticalSupport(block, blocks) {
+    if (block.y + HALF >= FLOOR - CELL * 0.12) return true;
+    return blocks.some((other) => (
+      other !== block
+      && other.y > block.y
+      && other.y - block.y < CELL * 1.12
+      && Math.abs(other.x - block.x) < CELL * 0.74
+    ));
+  }
+
+  function realTetrisBlocksTouch(a, b, dist = STACK_CONNECT_DIST) {
+    if (Math.abs(a.x - b.x) > dist || Math.abs(a.y - b.y) > dist) return false;
+    return Math.hypot(a.x - b.x, a.y - b.y) <= dist;
+  }
+
+  function collectRealTetrisStacks(blocks) {
+    const visited = new Set();
+    const stacks = [];
+    blocks.forEach((block, index) => {
+      if (visited.has(index)) return;
+      const stack = [];
+      const queue = [index];
+      visited.add(index);
+      while (queue.length) {
+        const currentIndex = queue.shift();
+        const current = blocks[currentIndex];
+        stack.push(current);
+        blocks.forEach((candidate, candidateIndex) => {
+          if (visited.has(candidateIndex)) return;
+          if (!realTetrisBlocksTouch(current, candidate)) return;
+          visited.add(candidateIndex);
+          queue.push(candidateIndex);
+        });
+      }
+      stacks.push(stack);
+    });
+    return stacks;
+  }
+
+  function wakeRealTetrisStack(state, stack, pivotX, direction, excess) {
+    const config = realTetrisModeConfig(state.mode);
+    const params = state.physicsParams || realTetrisDefaultPhysicsParams(state.mode);
+    const strength = clamp((Math.abs(excess) + CELL * 0.1) / CELL, 0.18, 2.6) * Number(params.stackTorque || config.stackTorque);
+    stack.forEach((block) => {
+      const heightFactor = clamp((FLOOR - block.y) / (CELL * 9), 0.18, 1.45);
+      const lever = clamp((block.x - pivotX) / CELL, -2.4, 2.4);
+      const lateral = direction * strength * (0.36 + heightFactor * 0.55);
+      const torque = direction * strength * 0.018 * (0.7 + heightFactor) + lever * strength * 0.006;
+      wakeRealTetrisBlock(block, lateral, -Math.abs(lateral) * 0.08, torque);
+    });
+    state.collapseEvents = (state.collapseEvents || 0) + 1;
+    state.lastCollapseAt = state.tick || 0;
+  }
+
+  function applyRealTetrisStackStability(state, force = false) {
+    if (!state.blocks.length) return;
+    state.stabilityFrame = (state.stabilityFrame || 0) + 1;
+    if (!force && state.stabilityFrame % STACK_CHECK_INTERVAL !== 0) return;
+    const config = realTetrisModeConfig(state.mode);
+    for (const stack of collectRealTetrisStacks(state.blocks)) {
+      const mass = stack.reduce((sum, block) => sum + (block.mass || 1), 0) || 1;
+      const comX = stack.reduce((sum, block) => sum + block.x * (block.mass || 1), 0) / mass;
+      const floorContacts = stack.filter((block) => block.y + HALF >= FLOOR - CELL * 0.18);
+      if (!floorContacts.length) {
+        stack.forEach((block) => {
+          if (!blockHasVerticalSupport(block, state.blocks)) wakeRealTetrisBlock(block, 0, 20, 0);
+        });
+        continue;
+      }
+      const supportMin = Math.min(...floorContacts.map((block) => block.x - HALF * 0.62)) - config.stackSupportMargin;
+      const supportMax = Math.max(...floorContacts.map((block) => block.x + HALF * 0.62)) + config.stackSupportMargin;
+      const supportCenter = (supportMin + supportMax) / 2;
+      const supportHalf = Math.max(CELL * 0.35, (supportMax - supportMin) / 2);
+      const outside = comX < supportMin ? comX - supportMin : comX > supportMax ? comX - supportMax : 0;
+      const edgeBias = (comX - supportCenter) / supportHalf;
+      const overload = Math.abs(outside) > config.stackWakeThreshold || Math.abs(edgeBias) > 0.82;
+      if (!overload) continue;
+      const direction = Math.sign(outside || edgeBias) || 1;
+      const pivotX = direction > 0 ? supportMax : supportMin;
+      const excess = outside || (edgeBias * config.stackWakeThreshold);
+      wakeRealTetrisStack(state, stack, pivotX, direction, excess);
+    }
+  }
+
+  function realTetrisBlockElasticImpulse(state, a, b, nx, ny, penetration) {
+    const config = realTetrisModeConfig(state.mode);
+    const restitution = clamp(Number(state.physicsParams?.elasticity ?? (config.rebound - 0.35)), 0, 1.8);
+    const tangentX = -ny;
+    const tangentY = nx;
+    const aDynamic = a.unstable || realTetrisBlockSpeed(a) > 8;
+    const bDynamic = b.unstable || realTetrisBlockSpeed(b) > 8;
+    if (!aDynamic && !bDynamic) return;
+    const totalMass = (a.mass || 1) + (b.mass || 1);
+    const aShare = bDynamic ? (b.mass || 1) / totalMass : 1;
+    const bShare = aDynamic ? (a.mass || 1) / totalMass : 1;
+    const rvx = (a.vx || 0) - (b.vx || 0);
+    const rvy = (a.vy || 0) - (b.vy || 0);
+    const normalVelocity = rvx * nx + rvy * ny;
+    const tangentVelocity = rvx * tangentX + rvy * tangentY;
+    const impulse = normalVelocity < 0 ? -(1 + restitution) * normalVelocity : penetration * 8;
+    if (aDynamic) {
+      a.x += nx * penetration * aShare;
+      a.y += ny * penetration * aShare;
+      a.vx = (a.vx || 0) + nx * impulse * aShare;
+      a.vy = (a.vy || 0) + ny * impulse * aShare;
+      a.omega = (a.omega || 0) + tangentVelocity * 0.0025 * aShare;
+    }
+    if (bDynamic) {
+      b.x -= nx * penetration * bShare;
+      b.y -= ny * penetration * bShare;
+      b.vx = (b.vx || 0) - nx * impulse * bShare;
+      b.vy = (b.vy || 0) - ny * impulse * bShare;
+      b.omega = (b.omega || 0) - tangentVelocity * 0.0025 * bShare;
+    }
+    if (Math.abs(impulse) > 42 || penetration > CELL * 0.16) {
+      a.unstable = true;
+      b.unstable = true;
+      a.settledFrames = 0;
+      b.settledFrames = 0;
+    }
+  }
+
+  function resolveRealTetrisSettledBlockCollisions(state) {
+    const config = realTetrisModeConfig(state.mode);
+    const minDist = config.minDist * 0.96;
+    for (let i = 0; i < state.blocks.length; i += 1) {
+      for (let j = i + 1; j < state.blocks.length; j += 1) {
+        const a = state.blocks[i];
+        const b = state.blocks[j];
+        if (Math.abs(a.x - b.x) > minDist || Math.abs(a.y - b.y) > minDist) continue;
+        let dx = a.x - b.x;
+        let dy = a.y - b.y;
+        let dist = Math.hypot(dx, dy);
+        if (dist < 0.001) {
+          dx = 0;
+          dy = -1;
+          dist = 1;
+        }
+        if (dist >= minDist) continue;
+        realTetrisBlockElasticImpulse(state, a, b, dx / dist, dy / dist, minDist - dist);
+      }
+    }
+  }
+
+  function integrateRealTetrisSettledBlocks(state, dt) {
+    if (!state.blocks.length) return;
+    const config = realTetrisModeConfig(state.mode);
+    const gravity = Number(state.physicsParams?.gravity || config.gravity);
+    const friction = Number(state.physicsParams?.friction ?? config.friction);
+    const damping = Number(state.physicsParams?.stackDamping ?? config.stackDamping);
+    let anyDynamic = false;
+    state.blocks.forEach((block) => {
+      if (!block.unstable && realTetrisBlockSpeed(block) < 8) return;
+      anyDynamic = true;
+      block.unstable = true;
+      block.vy = (block.vy || 0) + gravity * 0.86 * dt;
+      block.vx = clamp((block.vx || 0) * damping, -420, 420);
+      block.vy = clamp((block.vy || 0) * config.verticalDamping, -520, 940);
+      block.omega = clamp((block.omega || 0) * config.freeAngularDamping, -7.5, 7.5);
+      block.x += block.vx * dt;
+      block.y += block.vy * dt;
+      block.angle += block.omega * dt;
+      if (block.x - HALF < LEFT) {
+        block.x = LEFT + HALF;
+        block.vx = Math.abs(block.vx || 0) * 0.42;
+        block.omega *= -0.45;
+      }
+      if (block.x + HALF > RIGHT) {
+        block.x = RIGHT - HALF;
+        block.vx = -Math.abs(block.vx || 0) * 0.42;
+        block.omega *= -0.45;
+      }
+      if (block.y + HALF > FLOOR) {
+        block.y = FLOOR - HALF;
+        if ((block.vy || 0) > 0) block.vy = -Math.abs(block.vy || 0) * clamp(Number(state.physicsParams?.elasticity ?? 0.42), 0.05, 0.72);
+        block.vx *= Math.max(0.24, 1 - friction * 1.7);
+        block.omega *= Math.max(0.35, 1 - friction * 1.4);
+      }
+    });
+    if (!anyDynamic) return;
+    for (let iteration = 0; iteration < 3; iteration += 1) resolveRealTetrisSettledBlockCollisions(state);
+    state.blocks.forEach((block) => {
+      const speed = realTetrisBlockSpeed(block);
+      const supported = blockHasVerticalSupport(block, state.blocks);
+      block.settledFrames = supported && speed < config.settleSpeed * 0.42 ? (block.settledFrames || 0) + 1 : 0;
+      if (block.settledFrames > config.settleFrames) {
+        block.unstable = false;
+        block.vx = 0;
+        block.vy = 0;
+        block.omega = 0;
+      }
+    });
+  }
+
+  function pushRealTetrisBody(state, body, nx, ny, penetration, rx, ry) {
+    const config = realTetrisModeConfig(state.mode);
+    const params = state.physicsParams || realTetrisDefaultPhysicsParams(state.mode);
+    const rebound = 1 + clamp(Number(params.elasticity), 0, 1.8);
+    const friction = clamp(Number(params.friction), 0, 0.9);
     body.x += nx * penetration;
     body.y += ny * penetration;
     const vn = body.vx * nx + body.vy * ny;
     if (vn < 0) {
-      body.vx -= (1.18 * vn) * nx;
-      body.vy -= (1.18 * vn) * ny;
+      body.vx -= (rebound * vn) * nx;
+      body.vy -= (rebound * vn) * ny;
     }
     const tangentX = -ny;
     const tangentY = nx;
     const vt = body.vx * tangentX + body.vy * tangentY;
-    body.vx -= vt * tangentX * 0.18;
-    body.vy -= vt * tangentY * 0.18;
+    body.vx -= vt * tangentX * friction;
+    body.vy -= vt * tangentY * friction;
     body.omega += (rx * ny - ry * nx) * penetration * 0.0009;
-    body.omega *= 0.94;
+    body.omega *= config.angularDamping;
+    if (config.sticky) {
+      body.vx *= 0.94;
+      body.vy *= 0.92;
+    }
   }
 
   function resolveRealTetrisCollisions(state) {
     const body = state.active;
     if (!body) return;
+    const config = realTetrisModeConfig(state.mode);
     body.touching = false;
     for (let iteration = 0; iteration < 3; iteration += 1) {
       const centers = realTetrisPieceCenters(body);
       for (const point of centers) {
         if (point.x - HALF < LEFT) {
-          pushRealTetrisBody(body, 1, 0, LEFT - (point.x - HALF), point.rx, point.ry);
+          pushRealTetrisBody(state, body, 1, 0, LEFT - (point.x - HALF), point.rx, point.ry);
         }
         if (point.x + HALF > RIGHT) {
-          pushRealTetrisBody(body, -1, 0, (point.x + HALF) - RIGHT, point.rx, point.ry);
+          pushRealTetrisBody(state, body, -1, 0, (point.x + HALF) - RIGHT, point.rx, point.ry);
         }
         if (point.y + HALF > FLOOR) {
           body.touching = true;
-          pushRealTetrisBody(body, 0, -1, (point.y + HALF) - FLOOR, point.rx, point.ry);
+          pushRealTetrisBody(state, body, 0, -1, (point.y + HALF) - FLOOR, point.rx, point.ry);
         }
         for (const block of state.blocks) {
           if (Math.abs(point.x - block.x) > CELL * 1.15 || Math.abs(point.y - block.y) > CELL * 1.15) continue;
@@ -132,12 +605,15 @@
             dy = -1;
             dist = 1;
           }
-          const minDist = CELL * 0.92;
+          const minDist = config.minDist;
           if (dist >= minDist) continue;
           const nx = dx / dist;
           const ny = dy / dist;
           body.touching = true;
-          pushRealTetrisBody(body, nx, ny, minDist - dist, point.rx, point.ry);
+          pushRealTetrisBody(state, body, nx, ny, minDist - dist, point.rx, point.ry);
+          if (Math.abs(body.vx) + Math.abs(body.vy) > 90 || minDist - dist > CELL * 0.12) {
+            wakeRealTetrisBlock(block, -nx * (18 + Math.abs(body.vx) * 0.04), -ny * 18, (point.rx * ny - point.ry * nx) * 0.0018);
+          }
         }
       }
     }
@@ -146,15 +622,35 @@
   function integrateRealTetrisPhysics(state, dt) {
     const body = state.active;
     if (!body || state.status !== "active" || state.paused) return;
+    const config = realTetrisModeConfig(state.mode);
+    const params = state.physicsParams || realTetrisDefaultPhysicsParams(state.mode);
     const input = state.input;
+    state.tick = (state.tick || 0) + 1;
+    integrateRealTetrisSettledBlocks(state, dt);
+    applyRealTetrisStackStability(state);
     if (input.left) body.vx -= 860 * dt;
     if (input.right) body.vx += 860 * dt;
     if (input.down) body.vy += 760 * dt;
     if (input.rotate) body.omega += (input.rotate > 0 ? 7.2 : -7.2) * dt;
-    body.vy += GRAVITY * dt;
-    body.vx *= 0.992;
-    body.vy *= 0.998;
-    body.omega *= 0.992;
+    if (config.wind) {
+      const gust = Math.sin((state.tick || 0) * 0.028) * 520 + Math.sin((state.tick || 0) * 0.011) * 280;
+      body.vx += gust * dt;
+      body.omega += Math.sin((state.tick || 0) * 0.019) * 1.2 * dt;
+    }
+    if (config.magnet && state.blocks.length) {
+      const nearest = state.blocks.reduce((best, block) => {
+        const dist = Math.hypot(block.x - body.x, block.y - body.y);
+        return !best || dist < best.dist ? { block, dist } : best;
+      }, null);
+      if (nearest?.block && nearest.dist < CELL * 5.5) {
+        body.vx += clamp(nearest.block.x - body.x, -CELL * 2, CELL * 2) * 2.2 * dt;
+        body.omega += clamp(nearest.block.x - body.x, -CELL, CELL) * 0.015 * dt;
+      }
+    }
+    body.vy += Number(params.gravity || config.gravity) * dt;
+    body.vx *= config.velocityDamping;
+    body.vy *= config.verticalDamping;
+    body.omega *= config.freeAngularDamping;
     body.vx = clamp(body.vx, -360, 360);
     body.vy = clamp(body.vy, -280, 900);
     body.omega = clamp(body.omega, -7.5, 7.5);
@@ -163,15 +659,15 @@
     body.angle += body.omega * dt;
     resolveRealTetrisCollisions(state);
     const speed = Math.hypot(body.vx, body.vy) + Math.abs(body.omega) * 28;
-    body.settledFrames = body.touching && speed < 86 ? body.settledFrames + 1 : 0;
-    if (body.settledFrames > 24) lockRealTetrisBody(state);
+    body.settledFrames = body.touching && speed < config.settleSpeed ? body.settledFrames + 1 : 0;
+    if (body.settledFrames > config.settleFrames) lockRealTetrisBody(state);
   }
 
-  function rowCoverageForRealTetris(blocks, rowY) {
+  function rowCoverageForRealTetris(blocks, rowY, config) {
     const segments = [];
     for (const block of blocks) {
-      if (Math.abs(block.y - rowY) > LINE_TOLERANCE) continue;
-      const widthBoost = 1 + Math.max(0, 1 - Math.abs(block.y - rowY) / LINE_TOLERANCE) * 0.18;
+      if (Math.abs(block.y - rowY) > config.lineTolerance) continue;
+      const widthBoost = 1 + Math.max(0, 1 - Math.abs(block.y - rowY) / config.lineTolerance) * 0.18;
       const halfWidth = HALF * 0.94 * widthBoost;
       segments.push([clamp(block.x - halfWidth, LEFT, RIGHT), clamp(block.x + halfWidth, LEFT, RIGHT)]);
     }
@@ -187,26 +683,30 @@
   }
 
   function clearRealTetrisRelaxedLines(state) {
+    const config = realTetrisModeConfig(state.mode);
     const rows = [];
     for (let row = 0; row < 18; row += 1) {
       const y = FLOOR - HALF - row * CELL;
-      const coverage = rowCoverageForRealTetris(state.blocks, y);
-      if (coverage >= RELAXED_LINE_FILL) rows.push({ row, y, coverage });
+      const coverage = rowCoverageForRealTetris(state.blocks, y, config);
+      if (coverage >= config.lineFill) rows.push({ row, y, coverage });
     }
     if (!rows.length) return 0;
     const remove = new Set();
     rows.forEach(({ y }) => {
       state.blocks.forEach((block, index) => {
-        if (Math.abs(block.y - y) <= LINE_TOLERANCE) remove.add(index);
+        if (Math.abs(block.y - y) <= config.lineTolerance) remove.add(index);
       });
     });
     state.blocks = state.blocks.filter((_block, index) => !remove.has(index));
     for (const block of state.blocks) {
-      const clearedBelow = rows.filter(({ y }) => block.y < y - LINE_TOLERANCE * 0.28).length;
-      if (clearedBelow) block.y += clearedBelow * CELL;
+      const clearedBelow = rows.filter(({ y }) => block.y < y - config.lineTolerance * 0.28).length;
+      if (clearedBelow) {
+        block.y += clearedBelow * CELL;
+        wakeRealTetrisBlock(block, 0, 24 * clearedBelow, 0);
+      }
     }
     state.lines += rows.length;
-    state.score += rows.length * 180 + Math.round(rows.reduce((sum, row) => sum + row.coverage, 0) * 80);
+    state.score += (rows.length * 180 + Math.round(rows.reduce((sum, row) => sum + row.coverage, 0) * 80)) * config.scoreMultiplier;
     return rows.length;
   }
 
@@ -223,20 +723,28 @@
         y: clamp(point.y, TOP - CELL, FLOOR - HALF * 0.25),
         angle: body.angle,
         type: body.type,
+        vx: 0,
+        vy: 0,
+        omega: 0,
+        mass: 1,
+        unstable: false,
+        settledFrames: 0,
       });
     });
     state.score += 12;
     state.active = null;
     clearRealTetrisRelaxedLines(state);
+    applyRealTetrisStackStability(state, true);
     if (realTetrisGameOver(state)) {
       finishRealTetrisGame(state.api);
       return;
     }
-    state.active = createRealTetrisBody();
+    state.active = createRealTetrisBody(state);
   }
 
   function drawRealTetris(state, canvas) {
     const ctx = canvas.getContext("2d");
+    const config = realTetrisModeConfig(state.mode);
     ctx.clearRect(0, 0, WIDTH, HEIGHT);
     ctx.fillStyle = "#08111f";
     ctx.fillRect(0, 0, WIDTH, HEIGHT);
@@ -271,7 +779,10 @@
     }
     ctx.fillStyle = "rgba(226,232,240,.72)";
     ctx.font = "12px system-ui, sans-serif";
-    ctx.fillText(`relaxed line ${Math.round(RELAXED_LINE_FILL * 100)}%`, LEFT + 8, FLOOR + 20);
+    ctx.fillText(`${realTetrisModeLabel(state.mode)} line ${Math.round(config.lineFill * 100)}%`, LEFT + 8, FLOOR + 20);
+    if (config.wind) ctx.fillText("wind gust", LEFT + 8, FLOOR + 38);
+    if (config.magnet) ctx.fillText("magnet pull", LEFT + 8, FLOOR + 38);
+    if (state.collapseEvents) ctx.fillText(`collapse ${state.collapseEvents}`, RIGHT - 92, FLOOR + 20);
     if (state.status === "finished") {
       ctx.fillStyle = "rgba(7,17,31,.76)";
       ctx.fillRect(LEFT, 178, RIGHT - LEFT, 126);
@@ -289,7 +800,7 @@
   function updateRealTetrisStatus(api, state, prefix = "") {
     const elapsed = window.soloElapsedMs ? window.formatSoloGameTime(window.soloElapsedMs(state)) : "";
     const mode = state.paused ? "暫停中" : state.status === "finished" ? "已結束" : "物理模擬中";
-    api.status(`${prefix ? `${prefix} ` : ""}${mode} · 分數 ${Number(state.score || 0).toLocaleString()} · 放寬消線 ${state.lines} 行 · ${elapsed}`);
+    api.status(`${prefix ? `${prefix} ` : ""}${realTetrisModeLabel(state.mode)} · ${mode} · 分數 ${Number(state.score || 0).toLocaleString()} · 放寬消線 ${state.lines} 行 · 倒塌 ${state.collapseEvents || 0} · ${elapsed}`);
   }
 
   function finishRealTetrisGame(api) {
@@ -304,12 +815,15 @@
     if (Number(state.score || 0) > 0) {
       api.submitScore({
         score: Math.round(state.score),
-        difficulty: "physics",
-        puzzle_id: "real-tetris-physics",
+        // Fallback weekly ranking difficulty: `physics-${state.mode}`.
+        difficulty: state.dailyChallenge?.difficulty || `physics-${state.mode}`,
+        puzzle_id: state.dailyChallenge?.key || `real-tetris-${state.mode}`,
         raw_elapsed_ms: Math.max(1, state.completedAt - state.startedAt),
         elapsed_ms: Math.max(1, state.completedAt - state.startedAt),
         penalty_seconds: 0,
         guess_count: 0,
+        lines: Number(state.lines || 0),
+        collapse: Number(state.collapseEvents || 0),
       });
     }
   }
@@ -319,18 +833,25 @@
     const state = {
       api,
       canvas,
-      active: createRealTetrisBody(),
+      mode: api._realTetrisMode || "standard",
+      physicsParams: loadRealTetrisPhysicsParams(api._realTetrisMode || "standard"),
+      active: null,
       blocks: [],
       input: { left: false, right: false, down: false, rotate: 0 },
       score: 0,
       lines: 0,
+      collapseEvents: 0,
+      tick: 0,
       status: "active",
       paused: false,
       startedAt: Date.now(),
       completedAt: null,
+      dailyChallenge: api.dailyChallenge?.() || null,
       lastFrame: performance.now(),
       raf: null,
     };
+    syncRealTetrisRootControls(api, state);
+    state.active = createRealTetrisBody(state);
     api._realTetrisState = state;
     const loop = (now) => {
       const current = api._realTetrisState;
@@ -373,19 +894,50 @@
     if (name === "rotate-left") state.input.rotate = pressed ? -1 : 0;
   }
 
+  function handleRealTetrisRootParamInput(api, target) {
+    if (!realTetrisRootUser() || !target?.dataset?.realTetrisParam) return;
+    const state = api._realTetrisState;
+    const mode = api._realTetrisMode || state?.mode || "standard";
+    const params = state?.physicsParams || loadRealTetrisPhysicsParams(mode);
+    const key = target.dataset.realTetrisParam;
+    const value = Number(target.value);
+    if (!Number.isFinite(value) || !(key in params)) return;
+    params[key] = value;
+    if (state) state.physicsParams = params;
+    writeRealTetrisStoredParams(mode, params);
+    syncRealTetrisRootControls(api, { physicsParams: params });
+    if (state) {
+      applyRealTetrisStackStability(state, true);
+      updateRealTetrisStatus(api, state, "root 物理參數已更新。");
+    }
+  }
+
+  function resetRealTetrisRootParams(api) {
+    if (!realTetrisRootUser()) return;
+    const mode = api._realTetrisMode || api._realTetrisState?.mode || "standard";
+    const params = realTetrisDefaultPhysicsParams(mode);
+    writeRealTetrisStoredParams(mode, params);
+    if (api._realTetrisState) {
+      api._realTetrisState.physicsParams = params;
+      applyRealTetrisStackStability(api._realTetrisState, true);
+      updateRealTetrisStatus(api, api._realTetrisState, "root 物理參數已重設。");
+    }
+    syncRealTetrisRootControls(api, { physicsParams: params });
+  }
+
   window.registerHackmeLocalGameModule("real_tetris", {
     mount(api) {
       api.setTitle("真實版俄羅斯方塊");
-      api.root.innerHTML = `
-        <div class="real-tetris-shell">
-          <canvas class="real-tetris-canvas" width="${WIDTH}" height="${HEIGHT}" aria-label="真實版俄羅斯方塊"></canvas>
-        </div>
-      `;
-      api.setActions(`
-        <button class="btn game-mini-btn btn-primary" type="button" data-action="new">開始</button>
-        <button class="btn game-mini-btn" type="button" data-action="pause">暫停</button>
-        <button class="btn game-mini-btn" type="button" data-action="finish">結算</button>
-      `);
+      api.setSwipeMode?.("hold");
+      api._realTetrisMode = api._realTetrisMode || "standard";
+      renderRealTetrisRoot(api);
+      setRealTetrisActions(api);
+      const rootInputHandler = (event) => handleRealTetrisRootParamInput(api, event.target);
+      const rootClickHandler = (event) => {
+        if (event.target?.closest?.("[data-real-tetris-reset]")) resetRealTetrisRootParams(api);
+      };
+      api.root.addEventListener("input", rootInputHandler);
+      api.root.addEventListener("click", rootClickHandler);
       api.setControls(`
         <button class="btn game-mini-btn" type="button" data-hold="left">左推</button>
         <button class="btn game-mini-btn" type="button" data-hold="rotate-left">逆轉</button>
@@ -403,6 +955,13 @@
           api._realTetrisState.paused = !api._realTetrisState.paused;
           updateRealTetrisStatus(api, api._realTetrisState);
         }
+        if (action === "mode") {
+          api._realTetrisMode = nextRealTetrisMode(api._realTetrisMode || "standard");
+          setRealTetrisActions(api);
+          if (api._realTetrisState?.raf) cancelAnimationFrame(api._realTetrisState.raf);
+          renderRealTetrisRoot(api);
+          showRealTetrisReady(api);
+        }
         if (action === "finish") finishRealTetrisGame(api);
       };
       api.onControl = (target, pressed) => {
@@ -418,8 +977,10 @@
         if (event.key === "z" || event.key === "Z") setRealTetrisInput(api, "rotate-left", pressed);
         if (event.key === " " && pressed) hardDropRealTetris(api);
       };
-      startRealTetris(api);
+      showRealTetrisReady(api);
       return () => {
+        api.root.removeEventListener("input", rootInputHandler);
+        api.root.removeEventListener("click", rootClickHandler);
         if (api._realTetrisState?.raf) cancelAnimationFrame(api._realTetrisState.raf);
         api._realTetrisState = null;
       };

@@ -14,6 +14,7 @@ from services.games.chess import (
     draw_claim_status,
     game_status,
     initial_board,
+    king_square,
     legal_moves,
     opponent,
     validate_move,
@@ -65,6 +66,8 @@ SOLO_GAME_KEYS = {
     "real_tetris",
     "space_shooter",
     "fps_arena",
+    "bullet_hell",
+    "stickman_shooter",
     "snake",
     "game_2048",
     "brick_breaker",
@@ -77,6 +80,8 @@ SCORE_RANKED_SOLO_GAMES = {
     "real_tetris",
     "space_shooter",
     "fps_arena",
+    "bullet_hell",
+    "stickman_shooter",
     "snake",
     "game_2048",
     "brick_breaker",
@@ -84,8 +89,9 @@ SCORE_RANKED_SOLO_GAMES = {
     "go",
     "gomoku",
 }
-SOLO_GAME_CHECK_SQL = "'sudoku', 'minesweeper', '1a2b', 'tetris', 'real_tetris', 'space_shooter', 'fps_arena', 'snake', 'game_2048', 'brick_breaker', 'reversi', 'go', 'gomoku'"
+SOLO_GAME_CHECK_SQL = "'sudoku', 'minesweeper', '1a2b', 'tetris', 'real_tetris', 'space_shooter', 'fps_arena', 'bullet_hell', 'stickman_shooter', 'snake', 'game_2048', 'brick_breaker', 'reversi', 'go', 'gomoku'"
 WEEKLY_REWARDS = (300, 200, 100)
+DAILY_CHALLENGE_REWARD_POINTS = 25
 COMPUTER_DIFFICULTIES = {
     "normal",
     "hard",
@@ -95,7 +101,7 @@ COMPUTER_DIFFICULTIES = {
     EXPERIMENT_NNUE_DIFFICULTY,
 }
 LEGACY_COMPUTER_DIFFICULTIES = {EXPERIMENT_NN_DIFFICULTY}
-MINESWEEPER_DIFFICULTIES = {"easy", "normal", "hard"}
+MINESWEEPER_DIFFICULTIES = {"easy", "normal", "hard", "master"}
 PIECE_VALUES = {
     "p": 100,
     "n": 320,
@@ -191,8 +197,20 @@ def _choose_heuristic_move(board, side, difficulty="normal"):
     return random.choice(best_moves)
 
 
-def choose_computer_move(board, side, difficulty="normal", learning_store=None):
+def choose_computer_move(board, side, difficulty="normal", learning_store=None, move_history=None):
     difficulty = normalize_computer_difficulty(difficulty) or "normal"
+    if difficulty == EXPERIMENT_DIFFICULTY and learning_store is not None:
+        try:
+            learning_store.connect().close()
+        except Exception:
+            pass
+    if difficulty == EXPERIMENT_NNUE_DIFFICULTY:
+        board_payload = dict(board or {})
+        if isinstance(move_history, list):
+            board_payload["__move_history__"] = move_history
+        move = choose_experiment_nnue_move(board_payload, side, search_profile="balanced")
+        if move:
+            return move
     # P2: try the static opening book first so engines without a built-in
     # opening repertoire stop playing offbeat first moves like ``a5``. The
     # book covers ~60 standard positions, returns ``None`` past book, and
@@ -221,10 +239,6 @@ def choose_computer_move(board, side, difficulty="normal", learning_store=None):
             move = choose_experiment_pv_guarded_overlay_move(board, side, search_profile="fast", decision_mode="mcts")
         else:
             move = choose_experiment_pv_move(board, side, search_profile="fast", decision_mode="mcts")
-        if move:
-            return move
-    if difficulty == EXPERIMENT_NNUE_DIFFICULTY:
-        move = choose_experiment_nnue_move(board, side, search_profile="fast")
         if move:
             return move
     return _choose_heuristic_move(board, side, difficulty)
@@ -302,6 +316,17 @@ def game_schema_sql():
         created_at TEXT NOT NULL,
         UNIQUE(game_key, week_key, user_id)
     );
+    CREATE TABLE IF NOT EXISTS game_daily_challenge_rewards (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        game_key TEXT NOT NULL,
+        challenge_key TEXT NOT NULL,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        score_id INTEGER REFERENCES game_solo_scores(id) ON DELETE SET NULL,
+        reward_points INTEGER NOT NULL,
+        ledger_uuid TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE(game_key, challenge_key, user_id)
+    );
     CREATE TABLE IF NOT EXISTS game_solo_scores (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         game_key TEXT NOT NULL,
@@ -324,6 +349,7 @@ def game_schema_sql():
     CREATE INDEX IF NOT EXISTS idx_game_matches_finished ON game_matches(game_key, mode, finished_at);
     CREATE INDEX IF NOT EXISTS idx_game_invites_user_status ON game_invites(game_key, opponent_user_id, status);
     CREATE INDEX IF NOT EXISTS idx_game_rewards_week ON game_leaderboard_rewards(game_key, week_key);
+    CREATE INDEX IF NOT EXISTS idx_game_daily_rewards_user ON game_daily_challenge_rewards(user_id, challenge_key);
     CREATE INDEX IF NOT EXISTS idx_game_solo_scores_rank ON game_solo_scores(game_key, week_key, difficulty, elapsed_ms);
     """.format(SOLO_GAME_CHECK_SQL=SOLO_GAME_CHECK_SQL)
 
@@ -536,6 +562,8 @@ def active_user_where(conn, alias=""):
 def serialize_match(row, actor_id=None):
     board = load_board(row)
     history = load_history(row)
+    status_info = game_status(board, row["current_turn"])
+    current_king_square = king_square(board, row["current_turn"])
     draw_status = draw_claim_status(board, row["current_turn"], move_history=history)
     side = None
     human_side = row["human_side"] if "human_side" in row.keys() else "white"
@@ -577,6 +605,8 @@ def serialize_match(row, actor_id=None):
         "current_turn": row["current_turn"],
         "board": board,
         "board_rows": board_rows(board),
+        "current_check": row["status"] == "active" and status_info.get("reason") == "check",
+        "current_king_square": current_king_square or "",
         "move_history": history,
         "winner_user_id": row["winner_user_id"],
         "winner_username": row["winner_username"],
@@ -763,6 +793,88 @@ def register_games_routes(app, deps):
                 awarded.append({"user_id": row["user_id"], "username": row["username"], "rank": index + 1, "reward_points": reward_points})
         return awarded
 
+    def daily_challenge_reward_status(conn, game_key, challenge_key, user_id):
+        row = conn.execute(
+            """
+            SELECT reward_points, ledger_uuid, created_at
+            FROM game_daily_challenge_rewards
+            WHERE game_key=? AND challenge_key=? AND user_id=?
+            """,
+            (game_key, challenge_key, int(user_id)),
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "eligible": True,
+            "awarded": False,
+            "already_claimed": True,
+            "reward_points": int(row["reward_points"] or DAILY_CHALLENGE_REWARD_POINTS),
+            "ledger_uuid": row["ledger_uuid"],
+            "created_at": row["created_at"],
+        }
+
+    def award_daily_challenge_reward(conn, *, actor, game_key, difficulty, puzzle_id, score_id, score):
+        challenge_key = str(puzzle_id or "").strip()[:64]
+        if not challenge_key or not challenge_key.startswith(f"{game_key}-daily-"):
+            return None
+        existing = daily_challenge_reward_status(conn, game_key, challenge_key, actor["id"])
+        if existing:
+            return existing
+        reward_points = DAILY_CHALLENGE_REWARD_POINTS
+        ledger_uuid = None
+        wallet = None
+        if points_service:
+            try:
+                result = points_service.record_transaction(
+                    user_id=int(actor["id"]),
+                    currency_type=DISPLAY_CURRENCY,
+                    direction="credit",
+                    amount=reward_points,
+                    action_type="game_daily_challenge_reward",
+                    reference_type="game_daily_challenge",
+                    reference_id=f"{game_key}:{challenge_key}",
+                    idempotency_key=f"game_daily_reward:{game_key}:{challenge_key}:{actor['id']}",
+                    reason=f"{game_key} 每日任務完成獎勵",
+                    public_metadata={
+                        "game_key": game_key,
+                        "challenge_key": challenge_key,
+                        "difficulty": difficulty,
+                        "score": int(score or 0),
+                    },
+                    actor=actor,
+                )
+                ledger_uuid = result["ledger"]["ledger_uuid"]
+                wallet = result.get("wallet")
+            except Exception as exc:
+                return {
+                    "eligible": True,
+                    "awarded": False,
+                    "reward_points": reward_points,
+                    "error": str(exc)[:180],
+                }
+        now = utc_now()
+        cur = conn.execute(
+            """
+            INSERT OR IGNORE INTO game_daily_challenge_rewards (
+                game_key, challenge_key, user_id, score_id, reward_points, ledger_uuid, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (game_key, challenge_key, int(actor["id"]), int(score_id), reward_points, ledger_uuid, now),
+        )
+        if cur.rowcount <= 0:
+            existing = daily_challenge_reward_status(conn, game_key, challenge_key, actor["id"])
+            if existing:
+                return existing
+        return {
+            "eligible": True,
+            "awarded": True,
+            "already_claimed": False,
+            "reward_points": reward_points,
+            "ledger_uuid": ledger_uuid,
+            "wallet": wallet,
+            "created_at": now,
+        }
+
     def collect_computer_replay(row, *, winner_color, actor_username):
         try:
             replay = collect_match_replay(
@@ -868,6 +980,18 @@ def register_games_routes(app, deps):
             }, {
                 "key": "fps_arena",
                 "title": "3D 射擊場",
+                "status": "available",
+                "supports_invites": False,
+                "supports_computer": False,
+            }, {
+                "key": "bullet_hell",
+                "title": "彈幕遊戲",
+                "status": "available",
+                "supports_invites": False,
+                "supports_computer": False,
+            }, {
+                "key": "stickman_shooter",
+                "title": "火柴人橫向射擊",
                 "status": "available",
                 "supports_invites": False,
                 "supports_computer": False,
@@ -1164,6 +1288,63 @@ def register_games_routes(app, deps):
         finally:
             conn.close()
 
+    @app.route("/api/games/chess/challenge", methods=["POST"])
+    @require_csrf
+    def create_chess_challenge():
+        actor, err, status = actor_or_401()
+        if err:
+            return err, status
+        data, err, status = parse_json_body()
+        if err:
+            return err, status
+        preset_key = str(data.get("preset") or "rook_endgame").strip().lower()
+        presets = {
+            "rook_endgame": {
+                "title": "車王殘局",
+                "board": {"e1": "K", "a1": "R", "e8": "k"},
+                "turn": "white",
+                "hint": "用車切斷黑王，再用白王靠近逼到邊線。",
+            },
+            "queen_mate": {
+                "title": "后翼將殺網",
+                "board": {"g1": "K", "h5": "Q", "e8": "k", "f7": "p", "g7": "p", "h7": "p"},
+                "turn": "white",
+                "hint": "先找王旁弱點，避免只貪吃子。",
+            },
+            "knight_fork": {
+                "title": "馬叉戰術",
+                "board": {"e1": "K", "f3": "N", "g8": "k", "d4": "q", "h4": "r", "e7": "p"},
+                "turn": "white",
+                "hint": "尋找帶將軍或攻擊重子的馬跳點。",
+            },
+        }
+        preset = presets.get(preset_key) or presets["rook_endgame"]
+        conn = get_db()
+        try:
+            ensure_game_schema(conn)
+            now = utc_now()
+            cur = conn.execute(
+                """
+                INSERT INTO game_matches (
+                    game_key, mode, status, white_user_id, black_user_id, human_side, computer_difficulty, current_turn,
+                    board_json, move_history_json, created_at, updated_at
+                ) VALUES (?, 'computer', 'active', ?, NULL, 'white', 'hard', ?, ?, ?, ?, ?)
+                """,
+                (
+                    GAME_KEY,
+                    int(actor["id"]),
+                    preset["turn"],
+                    json.dumps(preset["board"], ensure_ascii=False, sort_keys=True),
+                    "[]",
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+            return json_resp({"ok": True, "match_id": cur.lastrowid, "preset": preset_key, "title": preset["title"], "hint": preset["hint"]})
+        finally:
+            conn.close()
+
     @app.route("/api/games/chess/matches", methods=["GET"])
     @require_csrf_safe
     def chess_matches():
@@ -1300,6 +1481,7 @@ def register_games_routes(app, deps):
                     computer_side,
                     computer_difficulty,
                     learning_store=chess_engine_store,
+                    move_history=history,
                 )
                 if computer_move:
                     computer_applied = validate_move(board, computer_side, computer_move["from"], computer_move["to"], computer_move.get("promotion"))
@@ -1573,10 +1755,14 @@ def register_games_routes(app, deps):
         if game_key not in SOLO_GAME_KEYS:
             return json_resp({"ok": False, "msg": "不支援的單人遊戲"}), 404
         week = str(request.args.get("week") or current_week_key()).strip()
-        difficulty = str(request.args.get("difficulty") or ("easy" if game_key == "minesweeper" else "standard")).strip().lower()
-        if game_key == "minesweeper" and difficulty not in MINESWEEPER_DIFFICULTIES:
+        puzzle_id = str(request.args.get("puzzle_id") or "").strip()[:64]
+        raw_difficulty = request.args.get("difficulty")
+        difficulty = str(raw_difficulty or ("easy" if game_key == "minesweeper" else "standard")).strip().lower()
+        if puzzle_id and raw_difficulty is None:
+            difficulty = ""
+        if difficulty and game_key == "minesweeper" and difficulty not in MINESWEEPER_DIFFICULTIES and not difficulty.startswith("daily-"):
             return json_resp({"ok": False, "msg": "不支援的難度"}), 400
-        if game_key in {"sudoku", "1a2b"}:
+        if difficulty and game_key in {"sudoku", "1a2b"} and not difficulty.startswith("daily-"):
             difficulty = "standard"
         conn = get_db()
         try:
@@ -1589,9 +1775,10 @@ def register_games_routes(app, deps):
                 "ok": True,
                 "game_key": game_key,
                 "week": week,
-                "difficulty": difficulty,
+                "difficulty": difficulty or "any",
+                "puzzle_id": puzzle_id,
                 "rank_mode": rank_mode,
-                "leaderboard": solo_leaderboard_rows(conn, game_key, week, difficulty),
+                "leaderboard": solo_leaderboard_rows(conn, game_key, week, difficulty or None, puzzle_id=puzzle_id or None),
             })
         finally:
             conn.close()
@@ -1621,9 +1808,9 @@ def register_games_routes(app, deps):
         if elapsed_ms > 24 * 60 * 60 * 1000 or penalty_seconds > 3600:
             return json_resp({"ok": False, "msg": "成績時間超出合理範圍"}), 400
         difficulty = str(data.get("difficulty") or ("easy" if game_key == "minesweeper" else "standard")).strip().lower()
-        if game_key == "minesweeper" and difficulty not in MINESWEEPER_DIFFICULTIES:
+        if game_key == "minesweeper" and difficulty not in MINESWEEPER_DIFFICULTIES and not difficulty.startswith("daily-"):
             return json_resp({"ok": False, "msg": "不支援的難度"}), 400
-        if game_key in {"sudoku", "1a2b"}:
+        if game_key in {"sudoku", "1a2b"} and not difficulty.startswith("daily-"):
             difficulty = "standard"
         try:
             guess_count = int(data.get("guess_count") or 0)
@@ -1662,6 +1849,17 @@ def register_games_routes(app, deps):
                 """,
                 (game_key, int(actor["id"]), week, difficulty, puzzle_id, score, guess_count, raw_elapsed_ms, penalty_seconds, elapsed_ms, now),
             )
+            score_id = cur.lastrowid
+            conn.commit()
+            daily_reward = award_daily_challenge_reward(
+                conn,
+                actor=actor,
+                game_key=game_key,
+                difficulty=difficulty,
+                puzzle_id=puzzle_id,
+                score_id=score_id,
+                score=score,
+            )
             conn.commit()
             audit(
                 "GAME_SOLO_SCORE_SUBMITTED",
@@ -1669,12 +1867,13 @@ def register_games_routes(app, deps):
                 user=actor["username"],
                 success=True,
                 ua=get_ua(),
-                detail=f"game_key={game_key},score_id={cur.lastrowid},score={score},elapsed_ms={elapsed_ms},penalty_seconds={penalty_seconds},guess_count={guess_count}",
+                detail=f"game_key={game_key},score_id={score_id},score={score},elapsed_ms={elapsed_ms},penalty_seconds={penalty_seconds},guess_count={guess_count}",
             )
             return json_resp({
                 "ok": True,
-                "score_id": cur.lastrowid,
+                "score_id": score_id,
                 "week": week,
+                "daily_reward": daily_reward,
                 "leaderboard": solo_leaderboard_rows(conn, game_key, week, difficulty),
             })
         finally:
@@ -1794,7 +1993,7 @@ def leaderboard_rows(conn, week):
     return [{**dict(row), "rank": index + 1} for index, row in enumerate(rows)]
 
 
-def solo_leaderboard_rows(conn, game_key, week, difficulty):
+def solo_leaderboard_rows(conn, game_key, week, difficulty, puzzle_id=None):
     best_order = "s2.elapsed_ms ASC, s2.created_at ASC, s2.id ASC"
     final_order = "best.elapsed_ms ASC, attempts.attempts ASC, u.username COLLATE NOCASE ASC"
     if game_key == "1a2b":
@@ -1803,6 +2002,25 @@ def solo_leaderboard_rows(conn, game_key, week, difficulty):
     elif game_key in SCORE_RANKED_SOLO_GAMES:
         best_order = "s2.score DESC, s2.elapsed_ms ASC, s2.created_at ASC, s2.id ASC"
         final_order = "best.score DESC, best.elapsed_ms ASC, u.username COLLATE NOCASE ASC"
+    puzzle_filter = " AND s2.puzzle_id=?" if puzzle_id else ""
+    attempt_puzzle_filter = " AND puzzle_id=?" if puzzle_id else ""
+    outer_puzzle_filter = " AND s.puzzle_id=?" if puzzle_id else ""
+    best_difficulty_filter = " AND s2.difficulty=s.difficulty" if difficulty else ""
+    attempt_difficulty_filter = " AND difficulty=?" if difficulty else ""
+    outer_difficulty_filter = " AND s.difficulty=?" if difficulty else ""
+    params = []
+    if puzzle_id:
+        params.append(puzzle_id)
+    params.extend([game_key, week])
+    if difficulty:
+        params.append(difficulty)
+    if puzzle_id:
+        params.append(puzzle_id)
+    params.extend([game_key, week])
+    if difficulty:
+        params.append(difficulty)
+    if puzzle_id:
+        params.append(puzzle_id)
     rows = conn.execute(
         f"""
         SELECT best.user_id,
@@ -1820,23 +2038,24 @@ def solo_leaderboard_rows(conn, game_key, week, difficulty):
             FROM game_solo_scores s2
             WHERE s2.game_key=s.game_key
               AND s2.week_key=s.week_key
-              AND s2.difficulty=s.difficulty
               AND s2.user_id=s.user_id
+              {best_difficulty_filter}
+              {puzzle_filter}
             ORDER BY {best_order}
             LIMIT 1
         )
         JOIN (
             SELECT user_id, COUNT(*) AS attempts
             FROM game_solo_scores
-            WHERE game_key=? AND week_key=? AND difficulty=?
+            WHERE game_key=? AND week_key=?{attempt_difficulty_filter}{attempt_puzzle_filter}
             GROUP BY user_id
         ) attempts ON attempts.user_id=best.user_id
         JOIN users u ON u.id=best.user_id
-        WHERE s.game_key=? AND s.week_key=? AND s.difficulty=?
+        WHERE s.game_key=? AND s.week_key=?{outer_difficulty_filter}{outer_puzzle_filter}
         GROUP BY best.id, best.user_id, u.username, best.score, best.elapsed_ms, best.raw_elapsed_ms, best.penalty_seconds, best.guess_count, attempts.attempts, best.created_at
         ORDER BY {final_order}
         LIMIT 50
         """,
-        (game_key, week, difficulty, game_key, week, difficulty),
+        tuple(params),
     ).fetchall()
     return [{**dict(row), "rank": index + 1} for index, row in enumerate(rows)]

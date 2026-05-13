@@ -99,6 +99,34 @@ def _build_chess_engine_store(tmp_path):
     return ChessExperimentStore(tmp_path / "runtime" / "games" / "models" / "chess_experiment.db")
 
 
+class FakePointsService:
+    def __init__(self):
+        self.calls = []
+        self.wallet_balance = 0
+        self.by_idempotency = {}
+
+    def record_transaction(self, **kwargs):
+        key = kwargs.get("idempotency_key") or f"call:{len(self.calls)}"
+        if key in self.by_idempotency:
+            return self.by_idempotency[key]
+        self.calls.append(kwargs)
+        self.wallet_balance += int(kwargs.get("amount") or 0)
+        result = {
+            "ok": True,
+            "created": True,
+            "ledger": {"ledger_uuid": f"ledger-{len(self.calls)}"},
+            "wallet": {
+                "points_balance": self.wallet_balance,
+                "points_frozen": 0,
+                "total_points_earned": self.wallet_balance,
+                "total_points_spent": 0,
+                "wallet_status": "active",
+            },
+        }
+        self.by_idempotency[key] = result
+        return result
+
+
 def _history_from_uci_sequence(sequence):
     board = chess.Board()
     history = []
@@ -181,6 +209,8 @@ def test_game_catalog_includes_solo_games(tmp_path):
         "real_tetris",
         "space_shooter",
         "fps_arena",
+        "bullet_hell",
+        "stickman_shooter",
         "snake",
         "game_2048",
         "brick_breaker",
@@ -203,6 +233,8 @@ def test_game_catalog_includes_solo_games(tmp_path):
     assert by_key["real_tetris"]["title"] == "真實版俄羅斯方塊"
     assert by_key["space_shooter"]["supports_computer"] is False
     assert by_key["fps_arena"]["supports_invites"] is False
+    assert by_key["bullet_hell"]["title"] == "彈幕遊戲"
+    assert by_key["stickman_shooter"]["title"] == "火柴人橫向射擊"
     assert by_key["snake"]["supports_invites"] is False
     assert by_key["game_2048"]["supports_computer"] is False
     assert by_key["brick_breaker"]["title"] == "打磚塊"
@@ -290,6 +322,7 @@ def test_game_schema_migrates_existing_solo_scores_without_guess_count(tmp_path)
         assert migrated["score"] == 0
         assert conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_game_solo_scores_guesses_rank'").fetchone()
         assert conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_game_solo_scores_score_rank'").fetchone()
+        assert conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='game_daily_challenge_rewards'").fetchone()
     finally:
         conn.close()
 
@@ -481,6 +514,46 @@ def test_score_ranked_solo_games_use_high_score_leaderboard(tmp_path):
         json={"score": 0, "raw_elapsed_ms": 1000, "penalty_seconds": 0, "elapsed_ms": 1000, "puzzle_id": "space-shooter-standard"},
     )
     assert bad.status_code == 400
+
+
+def test_daily_challenge_completion_awards_points_once_per_game_day(tmp_path):
+    db_path = tmp_path / "games.db"
+    _seed_db(db_path)
+    points = FakePointsService()
+    actor_box = {"actor": {"id": 2, "username": "alice", "role": "user"}}
+    app = _build_app(db_path, actor_box, points_service=points)
+    client = app.test_client()
+    payload = {
+        "score": 1500,
+        "raw_elapsed_ms": 90000,
+        "penalty_seconds": 0,
+        "elapsed_ms": 90000,
+        "difficulty": "daily-rush",
+        "puzzle_id": "tetris-daily-2026-05-13",
+    }
+
+    first = client.post("/api/games/tetris/solo-scores", json=payload)
+    assert first.status_code == 200
+    first_reward = first.get_json()["daily_reward"]
+    assert first_reward["awarded"] is True
+    assert first_reward["reward_points"] == 25
+    assert first_reward["wallet"]["points_balance"] == 25
+
+    second = client.post("/api/games/tetris/solo-scores", json={**payload, "score": 1800})
+    assert second.status_code == 200
+    second_reward = second.get_json()["daily_reward"]
+    assert second_reward["awarded"] is False
+    assert second_reward["already_claimed"] is True
+    assert len(points.calls) == 1
+    assert points.calls[0]["action_type"] == "game_daily_challenge_reward"
+    assert points.calls[0]["idempotency_key"] == "game_daily_reward:tetris:tetris-daily-2026-05-13:2"
+
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute("SELECT COUNT(*) FROM game_daily_challenge_rewards").fetchone()
+        assert row[0] == 1
+    finally:
+        conn.close()
 
 
 def test_solo_score_route_accepts_all_registered_solo_game_keys(tmp_path):

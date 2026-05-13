@@ -1,0 +1,4 @@
+interface:
+  display_name: "Hackme Web QA"
+  short_description: "Full-stack heuristic QA for hackme_web"
+  default_prompt: "Use $hackme-web-qa to run an isolated full-feature QA pass on hackme_web and write a report."

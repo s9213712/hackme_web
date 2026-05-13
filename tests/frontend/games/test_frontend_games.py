@@ -23,6 +23,8 @@ def test_game_zone_frontend_assets_are_wired():
     local_snake_js = (ROOT / "public" / "js" / "games" / "snake.js").read_text(encoding="utf-8")
     local_2048_js = (ROOT / "public" / "js" / "games" / "game-2048.js").read_text(encoding="utf-8")
     local_brick_js = (ROOT / "public" / "js" / "games" / "brick-breaker.js").read_text(encoding="utf-8")
+    local_bullet_js = (ROOT / "public" / "js" / "games" / "bullet-hell.js").read_text(encoding="utf-8")
+    local_stickman_js = (ROOT / "public" / "js" / "games" / "stickman-shooter.js").read_text(encoding="utf-8")
     local_board_shared_js = (ROOT / "public" / "js" / "games" / "board-game-shared.js").read_text(encoding="utf-8")
     local_real_tetris_js = (ROOT / "public" / "js" / "games" / "real-tetris.js").read_text(encoding="utf-8")
     local_reversi_js = (ROOT / "public" / "js" / "games" / "reversi.js").read_text(encoding="utf-8")
@@ -39,11 +41,16 @@ def test_game_zone_frontend_assets_are_wired():
     assert 'id="game-practice-side"' in index_html
     assert 'id="game-practice-difficulty"' in index_html
     assert 'id="game-offer-draw-btn"' in index_html
+    assert 'id="game-offer-draw-btn" type="button" style="display:none;">求和' in index_html
     assert 'id="game-accept-draw-btn"' in index_html
     assert 'id="game-reject-draw-btn"' in index_html
     assert 'id="game-claim-draw-btn"' in index_html
     assert 'id="game-chess-uci-form"' in index_html
     assert 'id="game-chess-uci-input"' in index_html
+    assert 'id="game-clock-enabled"' in index_html
+    assert 'id="game-clock-preset"' in index_html
+    assert 'id="game-clock-main-minutes"' in index_html
+    assert 'id="game-clock-increment-seconds"' in index_html
     assert 'placeholder="d1c2 / e7e8q"' in index_html
     assert 'id="game-root-chess-panel"' in index_html
     assert 'id="game-root-chess-refresh-btn"' in index_html
@@ -69,6 +76,8 @@ def test_game_zone_frontend_assets_are_wired():
     assert 'id="minesweeper-game-panel"' in index_html
     assert 'id="minesweeper-board"' in index_html
     assert 'id="minesweeper-difficulty"' in index_html
+    assert 'id="minesweeper-flag-mode-btn"' in index_html
+    assert 'aria-pressed="false">插旗模式' in index_html
     assert 'id="onea2b-game-panel"' in index_html
     assert 'id="onea2b-guess-input"' in index_html
     assert 'placeholder="例如 1234"' in index_html
@@ -84,11 +93,18 @@ def test_game_zone_frontend_assets_are_wired():
     assert 'id="fps-arena-mode"' in index_html
     assert 'class="fps-arena-scope"' in index_html
     assert 'class="fps-arena-damage"' in index_html
+    assert 'fps-arena-reticle-fixed' in index_html
+    assert 'fps-arena-reticle-float' in index_html
+    assert 'data-game-touch="fps-sprint"' in index_html
+    assert 'id="game-fullscreen-btn"' in index_html
+    assert 'id="fps-arena-fullscreen-btn"' in index_html
     assert "/js/three.min.js?v=0.160.0" in index_html
     assert "/js/41-game-modules.js?v=20260513-game-registry" in index_html
     assert "/js/games/snake.js?v=20260513-game-modules" in index_html
     assert "/js/games/game-2048.js?v=20260513-game-modules" in index_html
     assert "/js/games/brick-breaker.js?v=20260513-game-modules" in index_html
+    assert "/js/games/bullet-hell.js?v=20260513-game-modules" in index_html
+    assert "/js/games/stickman-shooter.js?v=20260513-game-modules" in index_html
     assert "/js/games/board-game-shared.js?v=20260513-game-modules" in index_html
     assert "/js/games/real-tetris.js?v=20260513-game-modules" in index_html
     assert "/js/games/reversi.js?v=20260513-game-modules" in index_html
@@ -117,6 +133,8 @@ def test_game_zone_frontend_assets_are_wired():
     assert "貪食蛇" in index_html
     assert "2048" in index_html
     assert "打磚塊" in index_html
+    assert "彈幕遊戲" in index_html
+    assert "火柴人橫向射擊" in index_html
     assert "真實版俄羅斯方塊" in index_html
     assert "黑白棋" in index_html
     assert "圍棋" in index_html
@@ -127,13 +145,22 @@ def test_game_zone_frontend_assets_are_wired():
     assert "HACKME_GAME_CATALOG" in game_modules_js
     assert "registerHackmeLocalGameModule" in game_modules_js
     assert "HACKME_LOCAL_GAME_HELPERS" in game_modules_js
+    assert "hackmeGameDailyChallenge" in game_modules_js
+    assert "createHackmeGameSeededRandom" in game_modules_js
+    assert "recordHackmeGameAchievement" in game_modules_js
+    assert "state.dailyChallenge?.key || api.key" in game_modules_js
     assert "modules.snake" not in game_modules_js
     assert "modules.game_2048" not in game_modules_js
     assert 'registerHackmeLocalGameModule("snake"' in local_snake_js
     assert 'registerHackmeLocalGameModule("game_2048"' in local_2048_js
     assert 'registerHackmeLocalGameModule("brick_breaker"' in local_brick_js
+    assert 'registerHackmeLocalGameModule("bullet_hell"' in local_bullet_js
+    assert 'registerHackmeLocalGameModule("stickman_shooter"' in local_stickman_js
     assert 'registerHackmeLocalGameModule("real_tetris"' in local_real_tetris_js
     assert "mountHackmeLocalDiscGame" in local_board_shared_js
+    assert "data-board-clock" in local_board_shared_js
+    assert 'data-action="clock"' in local_board_shared_js
+    assert 'data-action="clock-preset"' in local_board_shared_js
     assert "/ai-move" in local_board_shared_js
     assert "AI 思考中" in local_board_shared_js
     assert 'data-action="mode"' in local_board_shared_js
@@ -150,15 +177,50 @@ def test_game_zone_frontend_assets_are_wired():
     assert "integrateRealTetrisPhysics" in local_real_tetris_js
     assert "resolveRealTetrisCollisions" in local_real_tetris_js
     assert "clearRealTetrisRelaxedLines" in local_real_tetris_js
+    assert "applyRealTetrisStackStability" in local_real_tetris_js
+    assert "resolveRealTetrisSettledBlockCollisions" in local_real_tetris_js
+    assert "realTetrisBlockElasticImpulse" in local_real_tetris_js
+    assert "REAL_TETRIS_ROOT_PHYSICS_KEY" in local_real_tetris_js
+    assert 'data-real-tetris-param="elasticity"' in local_real_tetris_js
+    assert "stackTorque" in local_real_tetris_js
+    assert 'data-real-tetris-param="stackDamping"' in local_real_tetris_js
+    assert "REAL_TETRIS_MODES" in local_real_tetris_js
+    assert "sticky" in local_real_tetris_js
+    assert "smooth" in local_real_tetris_js
     assert "body.omega += (rx * ny - ry * nx)" in local_real_tetris_js
     assert "RELAXED_LINE_FILL = 0.78" in local_real_tetris_js
+    assert 'api.setSwipeMode?.("hold");' in local_real_tetris_js
+    assert 'api.setSwipeMode?.("hold");' in local_brick_js
+    assert "showRealTetrisReady(api)" in local_real_tetris_js
+    assert "showBulletHellReady(api)" in local_bullet_js
+    assert "showStickmanShooterReady(api)" in local_stickman_js
+    assert "按開始後才會計時" in local_snake_js
+    assert "按開始後才會發球" in local_brick_js
+    assert "按開始後才會產生初始方塊" in local_2048_js
+    assert "GAME OVER" in local_snake_js
+    assert "GAME OVER" in local_brick_js
+    assert "GAME OVER" in local_2048_js
+    assert "GAME OVER" in local_board_shared_js
     assert 'api.submitScore({' in local_real_tetris_js
-    assert 'difficulty: "physics"' in local_real_tetris_js
+    assert 'difficulty: `physics-${state.mode}`' in local_real_tetris_js
     assert 'typeof window.mountHackmeLocalDiscGame !== "function"' in local_reversi_js
     assert 'typeof window.mountHackmeLocalDiscGame !== "function"' in local_go_js
     assert 'typeof window.mountHackmeLocalDiscGame !== "function"' in local_gomoku_js
     assert "touchstart" in games_js
+    assert "localGameModuleSwipeMode" in games_js
+    assert "toggleGameFullscreen" in games_js
+    assert "dailyChallenge(gameKey = gameSelectedKey)" in games_js
+    assert "achievement(gameKey, id, label" in games_js
+    assert "showGameDailyRewardFeedback" in games_js
+    assert "daily_reward" in games_js
+    assert "每日任務完成，獲得" in games_js
+    assert 'setSwipeMode(mode)' in games_js
+    assert 'localGameModuleSwipeMode === "hold"' in games_js
+    assert "window.setTimeout(() =>" in games_js
+    assert "onKey({ key, preventDefault() {} }, false)" in games_js
     assert "submitLocalGameModuleScore" in games_js
+    assert "normalizeSoloScoreTiming" in games_js
+    assert "payload.elapsed_ms = rawElapsed + penaltySeconds * 1000" in games_js
     assert "HACKME_GAME_VIEW_MODULES" in game_view_registry_js
     assert "registerHackmeGameViewModule" in game_view_registry_js
     assert 'key: "chess"' in chess_module_js
@@ -166,7 +228,19 @@ def test_game_zone_frontend_assets_are_wired():
     assert 'key: "minesweeper"' in minesweeper_module_js
     assert 'key: "1a2b"' in onea2b_module_js
     assert 'key: "tetris"' in tetris_module_js
+    assert "TETRIS_SIDE_REPEAT_MS" in tetris_module_js
+    assert "tickTetrisInput" in tetris_module_js
+    assert "setTetrisHeldKey" in tetris_module_js
+    assert "holdTetrisPiece" in tetris_module_js
+    assert "nextPiece" in tetris_module_js
+    assert "heldPiece" in tetris_module_js
+    assert "combo" in tetris_module_js
+    assert "refillTetrisBag" in tetris_module_js
     assert 'key: "space_shooter"' in shooter_module_js
+    assert "spawnSpaceShooterBoss" in shooter_module_js
+    assert "weaponLevel" in shooter_module_js
+    assert "enemyBullets" in shooter_module_js
+    assert "powerups" in shooter_module_js
     assert 'key: "fps_arena"' in fps_module_js
     assert "dispatchActiveGameViewEvent" in games_js
     assert "legacyGameRuntime" in games_js
@@ -197,8 +271,10 @@ def test_game_zone_frontend_assets_are_wired():
     assert "difficulty = $(\"game-practice-difficulty\")?.value || \"normal\"" in chess_module_js
     assert "隨機走棋" not in index_html
     assert 'data-game-touch="tetris-left"' in index_html
+    assert 'data-game-touch="tetris-hold"' in index_html
     assert 'data-game-touch="shooter-fire"' in index_html
     assert 'data-game-touch="fps-fire"' in index_html
+    assert "Boss 會發射子彈" in index_html
     assert "gameDifficultyLabel" in chess_module_js
     assert "gameOpponentColor" in chess_module_js
     assert "buildOptimisticChessMatch" in chess_module_js
@@ -206,6 +282,11 @@ def test_game_zone_frontend_assets_are_wired():
     assert "submitChessUciMove" in chess_module_js
     assert "chessKingSquare" in chess_module_js
     assert "checkmated-king" in chess_module_js
+    assert "checked-king" in chess_module_js
+    assert "dead-king" in chess_module_js
+    assert "current_check" in chess_module_js
+    assert "current_king_square" in chess_module_js
+    assert "Checkmate：王死，遊戲結束" in chess_module_js
     assert "兵升變請輸入 q / r / b / n" in chess_module_js
     assert "/games/chess/matches/${encodeURIComponent(gameSelectedMatchId)}/offer-draw" in chess_module_js
     assert "/games/chess/matches/${encodeURIComponent(gameSelectedMatchId)}/respond-draw" in chess_module_js
@@ -278,8 +359,31 @@ def test_game_zone_frontend_assets_are_wired():
     assert "data-tetris-cell" in tetris_module_js
     assert "startSpaceShooterGame" in shooter_module_js
     assert "tickSpaceShooterGame" in shooter_module_js
+    assert "toggleMinesweeperFlagMode" in minesweeper_module_js
+    assert "updateMinesweeperFlagModeButton" in minesweeper_module_js
+    assert "minesweeperState?.flagMode" in minesweeper_module_js
+    assert "插旗模式：點格子會切換旗標" in minesweeper_module_js
     assert "fps_arena" in games_js
     assert "real_tetris" in games_js
+    assert "bullet_hell" in games_js
+    assert "stickman_shooter" in games_js
+    assert "彈幕遊戲" in game_modules_js
+    assert "火柴人橫向射擊" in game_modules_js
+    assert "spawnBulletHellBoss" in local_bullet_js
+    assert "spawnStickmanRoom" in local_stickman_js
+    assert "fireStickmanShot" in local_stickman_js
+    assert 'aiState: "patrol"' in local_stickman_js
+    assert "walkCycle" in local_stickman_js
+    assert 'enemy.aiState = distance < 92 ? "retreat" : distance > 235 ? "chase" : "hold";' in local_stickman_js
+    assert "boss-down" in local_stickman_js
+    assert "api.submitScore({" in local_stickman_js
+    assert "shotLevel" in local_bullet_js
+    assert "nextBossWave" in local_bullet_js
+    assert "powerups" in local_bullet_js
+    assert "boss-down" in local_bullet_js
+    assert "createHackmeCompetitionClock" in game_modules_js
+    assert "Rapid 10+0" in game_modules_js
+    assert "formatHackmeGameClock" in game_modules_js
     assert "真實版俄羅斯方塊" in game_modules_js
     assert "currentFpsArenaMode" in fps_module_js
     assert "startFpsArenaGame" in fps_js
@@ -308,12 +412,26 @@ def test_game_zone_frontend_assets_are_wired():
     assert "botProjectiles" in fps_js
     assert "fpsArenaUpdateBotProjectiles" in fps_js
     assert "fpsArenaProjectileHitsCover" in fps_js
+    assert "handleFpsArenaTouchPointerDown" in fps_js
+    assert "handleFpsArenaTouchPointerMove" in fps_js
+    assert "handleFpsArenaTouchPointerEnd" in fps_js
+    assert "fpsArenaApplyLookDelta" in fps_js
+    assert 'event.pointerType === "mouse"' in fps_js
     assert "fpsArenaAddPlayerFireEffects" in fps_js
+    assert "fpsArenaAddBloodSplatter" in fps_js
+    assert "fpsArenaKillTarget" in fps_js
+    assert "deadBodies" in fps_js
+    assert "mobileSprint" in fps_js
+    assert "stamina" in fps_js
+    assert "scream" in fps_js
     assert "fpsArenaPlaySound" in fps_js
     assert "fpsArenaAddShake" in fps_js
     assert "navigator.vibrate" in fps_js
     assert "handleGameTouchAction" not in games_js
     assert "handleFpsArenaTouch" in fps_module_js
+    assert "chessCompetitionClock" in chess_module_js
+    assert "applyChessClockConfig" in chess_module_js
+    assert "syncChessClockWithMatch" in chess_module_js
     assert "setOneA2BNotice" in onea2b_module_js
     assert "generateOneA2BSecret" in onea2b_module_js
     assert "scoreOneA2BGuess" in onea2b_module_js
@@ -350,6 +468,8 @@ def test_game_zone_frontend_assets_are_wired():
     assert ".chess-rank-labels" in styles_css
     assert ".chess-file-labels" in styles_css
     assert ".chess-square.checkmated-king" in styles_css
+    assert ".chess-square.checked-king" in styles_css
+    assert ".chess-square.dead-king::before" in styles_css
     assert ".chess-uci-form" in styles_css
     assert "padding: 0" in styles_css
     assert ".chess-square span" in styles_css
@@ -359,6 +479,7 @@ def test_game_zone_frontend_assets_are_wired():
     assert ".onea2b-history" in styles_css
     assert ".tetris-board" in styles_css
     assert ".real-tetris-canvas" in styles_css
+    assert ".real-tetris-root-controls" in styles_css
     assert ".space-shooter-board" in styles_css
     assert ".fps-arena-stage" in styles_css
     assert ".fps-arena-scope" in styles_css
@@ -367,11 +488,22 @@ def test_game_zone_frontend_assets_are_wired():
     assert "--fps-shake-x" in styles_css
     assert "--fps-breathe-rot" in styles_css
     assert "--fps-breathe-scale" in styles_css
-    assert "clamp(150px, 32vw, 220px)" in styles_css
+    assert "clamp(96px, 22vw, 150px)" in styles_css
+    assert ".game-clock-panel" in styles_css
+    assert ".board-game-clock" in styles_css
+    assert ".game-board-panel:fullscreen" in styles_css
+    assert ".fps-arena-reticle-fixed" in styles_css
+    assert ".fps-arena-reticle-float" in styles_css
     assert "var(--panel)" in styles_css
     assert ".arcade-canvas" in styles_css
     assert ".game-2048-board" in styles_css
     assert ".board-game-grid" in styles_css
+    assert "touch-action: manipulation" in styles_css
+    assert "calc(100dvw - 1.5rem)" in styles_css
+    assert "position: sticky;" in styles_css
+    assert "grid-template-columns: repeat(auto-fit, minmax(4.6rem, 1fr))" in styles_css
+    assert "#local-module-game-actions" in styles_css
+    assert ".board-game-grid.gomoku" in styles_css
     assert 'class="standalone-editor-page"' in trading_workflow_html
     assert 'class="editor-bg-grid"' in trading_workflow_html
     assert "radial-gradient(circle at 18% 8%" in trading_workflow_css

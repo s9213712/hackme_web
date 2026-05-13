@@ -1000,7 +1000,7 @@
       <div class="drive-card-heading">
         <div>
           <div class="mini-title">遊戲區</div>
-          <div class="drive-card-sub">目前開放西洋棋、數獨、踩地雷、1A2B、俄羅斯方塊、真實版俄羅斯方塊、宇宙戰機、3D 射擊場、貪食蛇、2048、打磚塊、黑白棋、圍棋與五子棋。使用下拉選單在同一頁切換遊戲。</div>
+          <div class="drive-card-sub">目前開放西洋棋、數獨、踩地雷、1A2B、俄羅斯方塊、真實版俄羅斯方塊、宇宙戰機、3D 射擊場、彈幕遊戲、火柴人橫向射擊、貪食蛇、2048、打磚塊、黑白棋、圍棋與五子棋。使用下拉選單在同一頁切換遊戲。</div>
         </div>
         <button class="btn" id="game-refresh-btn" type="button">刷新</button>
       </div>
@@ -1048,6 +1048,9 @@
           </div>
         </section>
         <section class="game-board-panel">
+          <div class="game-fullscreen-row">
+            <button class="btn game-mini-btn" id="game-fullscreen-btn" type="button">全螢幕遊戲</button>
+          </div>
           <div id="chess-game-panel">
           <details class="drive-collapsible-panel game-rules-panel">
             <summary>西洋棋玩法說明</summary>
@@ -1063,11 +1066,32 @@
               <div class="drive-card-sub" id="game-current-status">選擇棋局後即可走棋</div>
             </div>
             <div class="drive-file-actions">
-              <button class="btn" id="game-offer-draw-btn" type="button" style="display:none;">提和</button>
+              <button class="btn" id="game-offer-draw-btn" type="button" style="display:none;">求和</button>
               <button class="btn btn-primary" id="game-accept-draw-btn" type="button" style="display:none;">接受和棋</button>
               <button class="btn" id="game-reject-draw-btn" type="button" style="display:none;">拒絕和棋</button>
               <button class="btn" id="game-claim-draw-btn" type="button" style="display:none;">申請和棋</button>
               <button class="btn btn-danger" id="game-resign-btn" type="button" style="display:none;">認輸</button>
+              <button class="btn game-mini-btn" id="game-chess-hint-btn" type="button">提示</button>
+              <button class="btn game-mini-btn" id="game-chess-analysis-btn" type="button">賽後分析</button>
+              <button class="btn game-mini-btn" id="game-chess-challenge-btn" type="button">殘局題</button>
+            </div>
+          </div>
+          <div class="game-clock-panel" id="game-clock-panel" aria-label="西洋棋競賽計時">
+            <div class="game-clock-settings">
+              <label class="game-clock-toggle"><input id="game-clock-enabled" type="checkbox" />啟用競賽計時</label>
+              <select id="game-clock-preset" aria-label="計時制">
+                <option value="rapid_10_0">Rapid 10+0</option>
+                <option value="rapid_15_10">Rapid 15+10</option>
+                <option value="blitz_3_2">Blitz 3+2</option>
+                <option value="bullet_1_0">Bullet 1+0</option>
+                <option value="custom">自訂</option>
+              </select>
+              <input id="game-clock-main-minutes" type="number" min="1" max="180" step="1" value="10" aria-label="主時間分鐘" />
+              <input id="game-clock-increment-seconds" type="number" min="0" max="120" step="1" value="0" aria-label="每步加秒" />
+            </div>
+            <div class="game-clock-display" id="game-clock-display">
+              <span data-chess-clock-side="white">白 --:--</span>
+              <span data-chess-clock-side="black">黑 --:--</span>
             </div>
           </div>
           <div id="chess-board" class="chess-board" aria-label="西洋棋棋盤"></div>
@@ -1077,6 +1101,7 @@
             <button class="btn game-mini-btn btn-primary" id="game-chess-uci-submit-btn" type="submit">送出</button>
           </form>
           <div id="game-move-history" class="game-move-history"></div>
+          <div id="game-chess-analysis-panel" class="game-analysis-panel"></div>
           </div>
           <div id="sudoku-game-panel" class="single-game-panel" style="display:none;">
             <details class="drive-collapsible-panel game-rules-panel">
@@ -1094,6 +1119,8 @@
               <div class="drive-file-actions">
                 <button class="btn game-mini-btn" id="sudoku-new-btn" type="button">開始</button>
                 <button class="btn btn-primary game-mini-btn" id="sudoku-check-btn" type="button">檢查</button>
+                <button class="btn game-mini-btn" id="sudoku-note-btn" type="button" aria-pressed="false">筆記</button>
+                <button class="btn game-mini-btn" id="sudoku-hint-btn" type="button">提示</button>
               </div>
             </div>
             <div id="sudoku-board" class="sudoku-board" aria-label="數獨棋盤"></div>
@@ -1116,8 +1143,11 @@
                   <option value="easy">簡單 9x9 / 10 雷</option>
                   <option value="normal">普通 12x12 / 20 雷</option>
                   <option value="hard">困難 16x16 / 40 雷</option>
+                  <option value="master">大師 18x18 / 70 雷</option>
                 </select>
                 <button class="btn game-mini-btn" id="minesweeper-new-btn" type="button">開始</button>
+                <button class="btn game-mini-btn" id="minesweeper-flag-mode-btn" type="button" aria-pressed="false">插旗模式</button>
+                <button class="btn game-mini-btn" id="minesweeper-hint-btn" type="button">安全提示</button>
               </div>
             </div>
             <div id="minesweeper-board" class="minesweeper-board" aria-label="踩地雷棋盤"></div>
@@ -1137,6 +1167,8 @@
               </div>
               <div class="drive-file-actions">
                 <button class="btn game-mini-btn" id="onea2b-new-btn" type="button">開始</button>
+                <button class="btn game-mini-btn" id="onea2b-mode-btn" type="button">限時關</button>
+                <button class="btn game-mini-btn" id="onea2b-hint-btn" type="button">提示</button>
               </div>
             </div>
             <div class="settings-option-grid">
@@ -1155,7 +1187,7 @@
             <details class="drive-collapsible-panel game-rules-panel">
               <summary>俄羅斯方塊玩法說明</summary>
               <div class="drive-collapsible-body">
-                <p>方向鍵左右移動、向下加速、向上旋轉，空白鍵可直接落下。填滿一整行即可消除並得分。</p>
+                <p>方向鍵左右移動、向下加速、向上旋轉，C 可 Hold 保留方塊，空白鍵可直接落下。填滿一整行即可消除並得分，連續消行會增加 Combo 加分。</p>
                 <p>排行榜以本週最高分排序，分數相同時完成時間較短者在前。</p>
               </div>
             </details>
@@ -1175,6 +1207,7 @@
               <button class="btn game-mini-btn" type="button" data-game-touch="tetris-rotate">旋轉</button>
               <button class="btn game-mini-btn" type="button" data-game-touch="tetris-right">右</button>
               <button class="btn game-mini-btn" type="button" data-game-touch="tetris-down">下</button>
+              <button class="btn game-mini-btn" type="button" data-game-touch="tetris-hold">Hold</button>
               <button class="btn game-mini-btn btn-primary" type="button" data-game-touch="tetris-drop">落下</button>
             </div>
           </div>
@@ -1182,7 +1215,7 @@
             <details class="drive-collapsible-panel game-rules-panel">
               <summary>宇宙戰機玩法說明</summary>
               <div class="drive-collapsible-body">
-                <p>方向鍵或 A/D 左右移動，空白鍵發射。擊落敵機可得分，敵機穿越底線或撞到玩家會扣生命。</p>
+                <p>方向鍵或 A/D 左右移動，空白鍵發射。擊落敵機可得分並可能掉落升級，Boss 會發射子彈，敵機穿越底線或撞到玩家會扣生命。</p>
                 <p>生命歸零時結算，排行榜以本週最高分排序。</p>
               </div>
             </details>
@@ -1224,12 +1257,14 @@
                 </select>
                 <button class="btn game-mini-btn" id="fps-arena-new-btn" type="button">開始</button>
                 <button class="btn game-mini-btn" id="fps-arena-stop-btn" type="button">結束</button>
+                <button class="btn game-mini-btn" id="fps-arena-fullscreen-btn" type="button">全螢幕</button>
               </div>
             </div>
             <div id="fps-arena-stage" class="fps-arena-stage" aria-label="3D 射擊場遊戲區">
               <div class="fps-arena-scope" aria-hidden="true"></div>
               <div class="fps-arena-damage" aria-hidden="true"></div>
-              <div class="fps-arena-reticle" aria-hidden="true"></div>
+              <div class="fps-arena-reticle fps-arena-reticle-fixed" aria-hidden="true"></div>
+              <div class="fps-arena-reticle fps-arena-reticle-float" aria-hidden="true"></div>
               <div class="fps-arena-hud" id="fps-arena-hud">尚未開始</div>
             </div>
             <div class="game-touch-controls fps-arena-touch-controls" aria-label="3D 射擊場手機控制">
@@ -1237,6 +1272,9 @@
               <button class="btn game-mini-btn" type="button" data-game-touch="fps-forward">前</button>
               <button class="btn game-mini-btn" type="button" data-game-touch="fps-right">右</button>
               <button class="btn game-mini-btn" type="button" data-game-touch="fps-back">後</button>
+              <button class="btn game-mini-btn" type="button" data-game-touch="fps-sprint">衝刺</button>
+              <button class="btn game-mini-btn" type="button" data-game-touch="fps-reload">換彈</button>
+              <button class="btn game-mini-btn" type="button" data-game-touch="fps-weapon">武器</button>
               <button class="btn game-mini-btn btn-primary" type="button" data-game-touch="fps-fire">射擊</button>
             </div>
           </div>
@@ -1255,12 +1293,35 @@
         <section class="game-panel">
           <div class="drive-card-heading">
             <div>
+              <div class="drive-card-title">今日挑戰</div>
+              <div class="drive-card-sub">每日任務完成後可領積分，並使用同一題目/種子排行。</div>
+            </div>
+          </div>
+          <div id="game-daily-panel" class="game-daily-panel"></div>
+          <div class="drive-card-heading" style="margin-top:1rem;">
+            <div>
+              <div class="drive-card-title">每日排行榜</div>
+              <div class="drive-card-sub">只比較今日挑戰成績</div>
+            </div>
+          </div>
+          <div id="game-daily-leaderboard-list" class="drive-file-list compact-list"></div>
+          <div class="drive-card-heading">
+            <div>
               <div class="drive-card-title">週排行榜</div>
               <div class="drive-card-sub">週末前三名發放 300 / 200 / 100 積分</div>
             </div>
             <button class="btn" id="game-award-btn" type="button" style="display:none;">發放週獎勵</button>
           </div>
           <div id="game-leaderboard-list" class="drive-file-list compact-list"></div>
+          <details class="drive-collapsible-panel game-rules-panel">
+            <summary>成就與回放分享</summary>
+            <div class="drive-collapsible-body">
+              <div class="drive-card-sub">本機成就</div>
+              <div id="game-achievement-list" class="game-achievement-list"></div>
+              <div class="drive-card-sub" style="margin-top:.8rem;">最近回放摘要</div>
+              <div id="game-replay-list" class="drive-file-list compact-list"></div>
+            </div>
+          </details>
           <details class="drive-collapsible-panel game-rules-panel" id="game-root-chess-panel" style="display:none;margin-top:1rem;">
             <summary>Chess Engine Dashboard</summary>
             <div class="drive-collapsible-body">
@@ -5343,6 +5404,8 @@
 <script src="/js/games/snake.js?v=20260513-game-modules" defer></script>
 <script src="/js/games/game-2048.js?v=20260513-game-modules" defer></script>
 <script src="/js/games/brick-breaker.js?v=20260513-game-modules" defer></script>
+<script src="/js/games/bullet-hell.js?v=20260513-game-modules" defer></script>
+<script src="/js/games/stickman-shooter.js?v=20260513-game-modules" defer></script>
 <script src="/js/games/board-game-shared.js?v=20260513-game-modules" defer></script>
 <script src="/js/games/reversi.js?v=20260513-game-modules" defer></script>
 <script src="/js/games/go.js?v=20260513-game-modules" defer></script>

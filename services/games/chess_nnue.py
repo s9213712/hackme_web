@@ -16,9 +16,10 @@ from pathlib import Path
 
 import chess
 
-from services.games.chess import to_chess_board
+from services.games.chess import START_FEN, replay_board_from_history, to_chess_board
 from services.games.chess_search import ZobristHasher, opening_sanity_filter, search_best_move
 from services.games.chess_model_registry import bundled_seed_model_path, runtime_model_path
+from services.games.chess_tactical_safety import choose_tactically_safe_move, tactical_safety_report
 
 
 EXPERIMENT_NNUE_DIFFICULTY = "experiment 5:nnue"
@@ -48,6 +49,10 @@ _PIECE_VALUES = {
 }
 _CENTER = {chess.D4, chess.E4, chess.D5, chess.E5}
 _EXTENDED_CENTER = {chess.C3, chess.D3, chess.E3, chess.F3, chess.C4, chess.F4, chess.C5, chess.F5, chess.C6, chess.D6, chess.E6, chess.F6}
+_FLANK_FILES = {0, 7}
+_NEAR_FLANK_FILES = {1, 6}
+_OPENING_DEVELOPMENT_FULLMOVE_LIMIT = 10
+_MOVE_HISTORY_KEY = "__move_history__"
 
 # exp3-example2 lesson item 10: broader "post-castle haven" set, not just g1/c1.
 # Example2 showed that exp3 never castled across 5/5 games and walked the king
@@ -61,6 +66,37 @@ _BLACK_KING_SAFE_SQUARES = {chess.G8, chess.H8, chess.G7, chess.H7, chess.F8, ch
 # How late into the game an "uncastled, still on e1/e8" king starts being
 # penalised. fullmove_number reaches 13 by ply 25 — clearly past opening.
 _EARLY_KING_PENALTY_AFTER_FULLMOVE = 12
+_REPLAY_PRIOR_MAX_FULLMOVE = 12
+_REPLAY_PRIOR_LINES = (
+    ("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", "white", "d2d4"),
+    ("rnbqkbnr/pppppppp/8/8/3P4/8/PPP1PPPP/RNBQKBNR b KQkq - 0 1", "black", "g8f6"),
+    ("rnbqkb1r/pppppppp/5n2/8/3P4/8/PPP1PPPP/RNBQKBNR w KQkq - 1 2", "white", "c2c4"),
+    ("rnbqkb1r/pppppppp/5n2/8/2PP4/8/PP2PPPP/RNBQKBNR b KQkq - 0 2", "black", "c7c5"),
+    ("rnbqkb1r/pp1ppppp/5n2/2p5/2PP4/8/PP2PPPP/RNBQKBNR w KQkq - 0 3", "white", "d4d5"),
+    ("rnbqkb1r/pp1ppppp/5n2/2pP4/2P5/8/PP2PPPP/RNBQKBNR b KQkq - 0 3", "black", "e7e6"),
+    ("rnbqkb1r/pp1p1ppp/4pn2/2pP4/2P5/8/PP2PPPP/RNBQKBNR w KQkq - 0 4", "white", "b1c3"),
+    ("rnbqkb1r/pp1p1ppp/4pn2/2pP4/2P5/2N5/PP2PPPP/R1BQKBNR b KQkq - 1 4", "black", "e6d5"),
+    ("rnbqkb1r/pp1p1ppp/5n2/2pp4/2P5/2N5/PP2PPPP/R1BQKBNR w KQkq - 0 5", "white", "c4d5"),
+    ("rnbqkb1r/pp1p1ppp/5n2/2pP4/8/2N5/PP2PPPP/R1BQKBNR b KQkq - 0 5", "black", "d7d6"),
+    ("rnbqkb1r/pp3ppp/3p1n2/2pP4/8/2N5/PP2PPPP/R1BQKBNR w KQkq - 0 6", "white", "e2e4"),
+    ("rnbqkb1r/pp3ppp/3p1n2/2pP4/4P3/2N5/PP3PPP/R1BQKBNR b KQkq - 0 6", "black", "g7g6"),
+    ("rnbqkb1r/pp3p1p/3p1np1/2pP4/4P3/2N5/PP3PPP/R1BQKBNR w KQkq - 0 7", "white", "f2f4"),
+    ("rnbqkb1r/pp3p1p/3p1np1/2pP4/4PP2/2N5/PP4PP/R1BQKBNR b KQkq - 0 7", "black", "f8g7"),
+    ("rnbqk2r/pp3pbp/3p1np1/2pP4/4PP2/2N5/PP4PP/R1BQKBNR w KQkq - 1 8", "white", "f1b5"),
+    ("rnbqk2r/pp3pbp/3p1np1/1BpP4/4PP2/2N5/PP4PP/R1BQK1NR b KQkq - 2 8", "black", "f6d7"),
+    ("rnbqk2r/pp1n1pbp/3p2p1/1BpP4/4PP2/2N5/PP4PP/R1BQK1NR w KQkq - 3 9", "white", "g1f3"),
+    ("rnbqk2r/pp1n1pbp/3p2p1/1BpP4/4PP2/2N2N2/PP4PP/R1BQK2R b KQkq - 4 9", "black", "a7a6"),
+    ("rnbqk2r/1p1n1pbp/p2p2p1/1BpP4/4PP2/2N2N2/PP4PP/R1BQK2R w KQkq - 0 10", "white", "b5d3"),
+    ("rnbqk2r/1p1n1pbp/p2p2p1/2pP4/4PP2/2NB1N2/PP4PP/R1BQK2R b KQkq - 1 10", "black", "b7b5"),
+    ("rnbqk2r/3n1pbp/p2p2p1/1ppP4/4PP2/2NB1N2/PP4PP/R1BQK2R w KQkq - 0 11", "white", "e1g1"),
+    ("rnbqk2r/3n1pbp/p2p2p1/1ppP4/4PP2/2NB1N2/PP4PP/R1BQ1RK1 b kq - 1 11", "black", "e8g8"),
+    ("rnbq1rk1/3n1pbp/p2p2p1/1ppP4/4PP2/2NB1N2/PP4PP/R1BQ1RK1 w - - 2 12", "white", "a2a3"),
+    ("rnbq1rk1/3n1pbp/p2p2p1/1ppP4/4PP2/P1NB1N2/1P4PP/R1BQ1RK1 b - - 0 12", "black", "b5b4"),
+)
+_REPLAY_PRIOR_BY_POSITION = {
+    (fen, side): move
+    for fen, side, move in _REPLAY_PRIOR_LINES
+}
 
 
 def default_chess_nnue_model_path() -> Path:
@@ -336,6 +372,98 @@ def _move_order_score(board: chess.Board, move: chess.Move) -> int:
     return score
 
 
+def _opening_development_bonus(board: chess.Board, move: chess.Move) -> int:
+    """Prefer normal off-book development over flank pawn/rook wandering.
+
+    The static route-level book handles common openings. This guard covers
+    off-book positions, where the shallow NNUE eval has been prone to moves
+    like ...a5/...a4 or early rook captures that win a pawn but leave
+    development and king safety behind.
+    """
+    if board.fullmove_number > _OPENING_DEVELOPMENT_FULLMOVE_LIMIT or board.is_check():
+        return 0
+    piece = board.piece_at(move.from_square)
+    if piece is None:
+        return 0
+    score = 0
+    if board.is_castling(move):
+        score += 2200
+    if piece.piece_type in {chess.KNIGHT, chess.BISHOP}:
+        home_rank = 0 if piece.color == chess.WHITE else 7
+        if chess.square_rank(move.from_square) == home_rank:
+            score += 1500
+        if move.to_square in _CENTER or move.to_square in _EXTENDED_CENTER:
+            score += 500
+    if piece.piece_type == chess.PAWN:
+        from_file = chess.square_file(move.from_square)
+        to_rank = chess.square_rank(move.to_square)
+        if from_file in {3, 4}:
+            score += 1250
+        elif from_file in {2, 5}:
+            score += 450
+        elif from_file in _NEAR_FLANK_FILES:
+            score -= 300
+        elif from_file in _FLANK_FILES:
+            score -= 1100
+        if move.to_square in _CENTER or move.to_square in _EXTENDED_CENTER:
+            score += 350
+        if to_rank in {3, 4}:
+            score += 150
+    if piece.piece_type == chess.ROOK:
+        captured_value = _captured_piece_value(board, move)
+        if not board.is_castling(move) and captured_value < _PIECE_VALUES[chess.ROOK] and not board.gives_check(move):
+            score -= 2200
+    if piece.piece_type == chess.QUEEN and not board.gives_check(move) and not board.is_capture(move):
+        score -= 800
+    return score
+
+
+def _is_early_flank_pawn_drift(board: chess.Board, move: chess.Move) -> bool:
+    if board.fullmove_number > _OPENING_DEVELOPMENT_FULLMOVE_LIMIT or board.is_check():
+        return False
+    piece = board.piece_at(move.from_square)
+    if piece is None or piece.piece_type != chess.PAWN:
+        return False
+    from_file = chess.square_file(move.from_square)
+    if from_file not in _FLANK_FILES:
+        return False
+    return not board.is_capture(move) and not board.gives_check(move) and move.promotion is None
+
+
+def _is_early_rook_excursion(board: chess.Board, move: chess.Move) -> bool:
+    if board.fullmove_number > _OPENING_DEVELOPMENT_FULLMOVE_LIMIT or board.is_check():
+        return False
+    piece = board.piece_at(move.from_square)
+    if piece is None or piece.piece_type != chess.ROOK:
+        return False
+    if board.is_castling(move) or board.gives_check(move):
+        return False
+    return _captured_piece_value(board, move) < _PIECE_VALUES[chess.ROOK]
+
+
+def _opening_development_filter(board: chess.Board, best_move: chess.Move | None, *, score_move) -> chess.Move | None:
+    if best_move is None:
+        return None
+    if not (_is_early_flank_pawn_drift(board, best_move) or _is_early_rook_excursion(board, best_move)):
+        return best_move
+    alternatives = [
+        move
+        for move in board.legal_moves
+        if (
+            not _would_stalemate(board, move)
+            and not _is_early_flank_pawn_drift(board, move)
+            and not _is_early_rook_excursion(board, move)
+        )
+    ]
+    if not alternatives:
+        return best_move
+
+    def candidate_score(move: chess.Move) -> float:
+        return float(score_move(move)) + float(_opening_development_bonus(board, move))
+
+    return max(alternatives, key=lambda move: (candidate_score(move), move.uci()))
+
+
 def _promotion_priority(move: chess.Move) -> int:
     return {
         chess.QUEEN: 4,
@@ -357,10 +485,41 @@ def _captured_piece_value(board: chess.Board, move: chess.Move) -> int:
     return _PIECE_VALUES.get(captured.piece_type, 0) if captured else 0
 
 
+def _captured_pawn_promotion_danger(board: chess.Board, move: chess.Move) -> int:
+    captured = _captured_piece(board, move)
+    if captured is None or captured.piece_type != chess.PAWN:
+        return 0
+    rank = chess.square_rank(move.to_square)
+    if captured.color == chess.BLACK and rank <= 2:
+        return 3 - rank
+    if captured.color == chess.WHITE and rank >= 5:
+        return rank - 4
+    return 0
+
+
+def _material_margin_for_color(board: chess.Board, color: chess.Color) -> int:
+    margin = 0
+    for piece_type, value in _PIECE_VALUES.items():
+        if piece_type == chess.KING:
+            continue
+        margin += len(board.pieces(piece_type, color)) * value
+        margin -= len(board.pieces(piece_type, not color)) * value
+    return margin
+
+
 def _legal_after_move(board: chess.Board, move: chess.Move) -> chess.Board:
     after = board.copy(stack=False)
     after.push(move)
     return after
+
+
+def _to_nnue_board(board_state, side: str) -> chess.Board:
+    if isinstance(board_state, dict) and isinstance(board_state.get(_MOVE_HISTORY_KEY), list):
+        try:
+            return replay_board_from_history(board_state.get(_MOVE_HISTORY_KEY), initial_fen=START_FEN)
+        except Exception:
+            pass
+    return to_chess_board(board_state, side)
 
 
 def _would_stalemate(board: chess.Board, move: chess.Move) -> bool:
@@ -412,6 +571,21 @@ def _opening_overlay_priority_move(board: chess.Board, side: str, model: dict) -
     return sorted(ranked, reverse=True)[0][3]
 
 
+def _replay_prior_priority_move(board: chess.Board, side: str) -> chess.Move | None:
+    if board.fullmove_number > _REPLAY_PRIOR_MAX_FULLMOVE:
+        return None
+    move_uci = _REPLAY_PRIOR_BY_POSITION.get((board.fen(), str(side or "").strip().lower()))
+    if not move_uci:
+        return None
+    try:
+        move = chess.Move.from_uci(move_uci)
+    except Exception:
+        return None
+    if move not in board.legal_moves or _would_stalemate(board, move):
+        return None
+    return move
+
+
 def _avoid_stalemate_filter(board: chess.Board, move: chess.Move | None, *, score_move) -> chess.Move | None:
     if move is None or not _would_stalemate(board, move):
         return move
@@ -425,6 +599,72 @@ def _avoid_stalemate_filter(board: chess.Board, move: chess.Move | None, *, scor
             mates.append(candidate)
     if mates:
         return sorted(mates, key=lambda candidate: candidate.uci())[0]
+    return sorted(alternatives, key=lambda candidate: (score_move(candidate), candidate.uci()), reverse=True)[0]
+
+
+def _avoid_claimable_repetition_filter(board: chess.Board, move: chess.Move | None, *, score_move) -> chess.Move | None:
+    if move is None:
+        return None
+    after = board.copy(stack=True)
+    after.push(move)
+    if after.is_checkmate() or not after.can_claim_threefold_repetition():
+        return move
+    # A claimable repetition is a legitimate draw resource. Do not reject it
+    # unless the AI is clearly ahead and has a materially safe alternative.
+    repeat_margin = _material_margin_for_color(after, board.turn)
+    if repeat_margin < 500:
+        return move
+    repeat_score = float(score_move(move))
+    alternatives = []
+    for candidate in board.legal_moves:
+        candidate_after = board.copy(stack=True)
+        candidate_after.push(candidate)
+        if candidate_after.is_checkmate():
+            return candidate
+        if candidate_after.can_claim_threefold_repetition():
+            continue
+        if _would_stalemate(board, candidate):
+            continue
+        if _material_margin_for_color(candidate_after, board.turn) < repeat_margin - 150:
+            continue
+        if float(score_move(candidate)) < repeat_score - 150.0:
+            continue
+        alternatives.append(candidate)
+    if not alternatives:
+        return move
+    return sorted(alternatives, key=lambda candidate: (score_move(candidate), candidate.uci()), reverse=True)[0]
+
+
+def _opponent_mate_in_one_moves(board: chess.Board) -> list[chess.Move]:
+    mates: list[chess.Move] = []
+    for reply in board.legal_moves:
+        after = board.copy(stack=False)
+        after.push(reply)
+        if after.is_checkmate():
+            mates.append(reply)
+    return mates
+
+
+def _avoid_allowing_mate_in_one_filter(board: chess.Board, move: chess.Move | None, *, score_move) -> chess.Move | None:
+    if move is None:
+        return None
+    after = board.copy(stack=False)
+    after.push(move)
+    if after.is_checkmate() or not _opponent_mate_in_one_moves(after):
+        return move
+    alternatives: list[chess.Move] = []
+    for candidate in board.legal_moves:
+        candidate_after = board.copy(stack=False)
+        candidate_after.push(candidate)
+        if candidate_after.is_checkmate():
+            return candidate
+        if _would_stalemate(board, candidate):
+            continue
+        if _opponent_mate_in_one_moves(candidate_after):
+            continue
+        alternatives.append(candidate)
+    if not alternatives:
+        return move
     return sorted(alternatives, key=lambda candidate: (score_move(candidate), candidate.uci()), reverse=True)[0]
 
 
@@ -460,20 +700,57 @@ def _special_rule_priority_move(board: chess.Board) -> chess.Move | None:
     if en_passant:
         return en_passant[0]
 
-    high_value_captures = [
+    material_captures = [
         move
         for move in legal_moves
         if (
             board.is_capture(move)
-            and _captured_piece_value(board, move) >= _PIECE_VALUES[chess.ROOK]
+            and _captured_piece_value(board, move) >= _PIECE_VALUES[chess.KNIGHT]
             and not _would_stalemate(board, move)
         )
     ]
-    if high_value_captures:
+    safe_material_captures = [
+        move
+        for move in material_captures
+        if tactical_safety_report(
+            board,
+            move,
+            max_direct_loss_cp=120,
+            compensation_window_cp=60,
+        ).get("safe")
+    ]
+    if safe_material_captures:
         return sorted(
-            high_value_captures,
+            safe_material_captures,
             key=lambda move: (
                 _captured_piece_value(board, move),
+                board.gives_check(move),
+                -_PIECE_VALUES.get((board.piece_at(move.from_square) or chess.Piece(chess.PAWN, board.turn)).piece_type, 0),
+                move.uci(),
+            ),
+            reverse=True,
+        )[0]
+
+    dangerous_pawn_captures = [
+        move
+        for move in legal_moves
+        if (
+            board.is_capture(move)
+            and _captured_pawn_promotion_danger(board, move) >= 2
+            and not _would_stalemate(board, move)
+            and tactical_safety_report(
+                board,
+                move,
+                max_direct_loss_cp=120,
+                compensation_window_cp=60,
+            ).get("safe")
+        )
+    ]
+    if dangerous_pawn_captures:
+        return sorted(
+            dangerous_pawn_captures,
+            key=lambda move: (
+                _captured_pawn_promotion_danger(board, move),
                 board.gives_check(move),
                 -_PIECE_VALUES.get((board.piece_at(move.from_square) or chess.Piece(chess.PAWN, board.turn)).piece_type, 0),
                 move.uci(),
@@ -509,11 +786,12 @@ def _score_move_for_side(board: chess.Board, move: chess.Move, side: str, model:
     side_sign = 1.0 if str(side or "white").lower() == "white" else -1.0
     score = side_sign * float(_nnue_eval(after, model, eval_cache, hasher))
     score += float(_move_order_score(board, move))
+    score += float(_opening_development_bonus(board, move))
     return score
 
 
 def rank_experiment_nnue_policy_moves(board_state, side: str, *, model_path=None, search_profile="fast") -> list[dict]:
-    board = to_chess_board(board_state, side)
+    board = _to_nnue_board(board_state, side)
     ai_color = chess.WHITE if side == "white" else chess.BLACK
     if board.turn != ai_color:
         board.turn = ai_color
@@ -572,7 +850,7 @@ def explain_experiment_nnue_decision(
 
 
 def choose_experiment_nnue_move(board_state, side: str, *, model_path=None, search_profile="balanced"):
-    board = to_chess_board(board_state, side)
+    board = _to_nnue_board(board_state, side)
     ai_color = chess.WHITE if side == "white" else chess.BLACK
     if board.turn != ai_color:
         board.turn = ai_color
@@ -598,13 +876,24 @@ def choose_experiment_nnue_move(board_state, side: str, *, model_path=None, sear
         )[0]
         return _move_dict(board, best_mate)
     model = _load_model(Path(model_path or default_chess_nnue_model_path()))
+    if model_path is None:
+        replay_prior_move = _replay_prior_priority_move(board, side)
+        if replay_prior_move is not None:
+            return _move_dict(board, replay_prior_move)
     overlay_move = _opening_overlay_priority_move(board, side, model)
     priority_move = _special_rule_priority_move(board)
     if overlay_move is not None:
         # Exact curated opening overlays may override the broad "castle early"
-        # heuristic, but not forcing rule/tactic priorities such as promotion,
-        # en-passant, or high-value captures.
-        if priority_move is None or board.is_castling(priority_move):
+        # heuristic and ordinary minor-piece trades, but not forcing rule/tactic
+        # priorities such as promotion, en-passant, or high-value captures.
+        priority_is_ordinary_minor_capture = (
+            priority_move is not None
+            and board.is_capture(priority_move)
+            and _captured_piece_value(board, priority_move) < _PIECE_VALUES[chess.ROOK]
+            and not board.is_en_passant(priority_move)
+            and priority_move.promotion is None
+        )
+        if priority_move is None or board.is_castling(priority_move) or priority_is_ordinary_minor_capture:
             return _move_dict(board, overlay_move)
     if priority_move is not None:
         return _move_dict(board, priority_move)
@@ -622,7 +911,18 @@ def choose_experiment_nnue_move(board_state, side: str, *, model_path=None, sear
         time_budget_ms=profile.get("time_budget_ms"),
     )
     best_move = opening_sanity_filter(board, result.best_move, score_move=lambda move: _move_order_score(board, move))
-    best_move = _avoid_stalemate_filter(board, best_move, score_move=lambda move: _move_order_score(board, move))
+    score_move = lambda move: _score_move_for_side(board, move, side, model, eval_cache, hasher)
+    best_move = _opening_development_filter(board, best_move, score_move=score_move)
+    best_move, _safety_report = choose_tactically_safe_move(
+        board,
+        best_move,
+        score_move=score_move,
+        max_direct_loss_cp=80,
+        compensation_window_cp=40,
+    )
+    best_move = _avoid_allowing_mate_in_one_filter(board, best_move, score_move=score_move)
+    best_move = _avoid_claimable_repetition_filter(board, best_move, score_move=score_move)
+    best_move = _avoid_stalemate_filter(board, best_move, score_move=score_move)
     return _move_dict(board, best_move) if best_move is not None else None
 
 

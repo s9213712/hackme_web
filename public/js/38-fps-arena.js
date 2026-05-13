@@ -6,12 +6,19 @@ const FPS_ARENA_MODES = {
   bomb: { label: "Bomb Defuse", seconds: 75, health: 100 },
   bot: { label: "Bot Match", seconds: 90, health: 100 },
 };
+const FPS_ARENA_WEAPONS = [
+  { key: "rifle", label: "Rifle", mag: 30, reserve: 90, delay: 130, recoil: 0.012, damage: 1, spread: 0.002 },
+  { key: "smg", label: "SMG", mag: 36, reserve: 144, delay: 82, recoil: 0.008, damage: 1, spread: 0.004 },
+  { key: "marksman", label: "DMR", mag: 12, reserve: 48, delay: 260, recoil: 0.022, damage: 2, spread: 0.001 },
+];
 
 let fpsArenaState = null;
 let fpsArenaRaf = null;
 let fpsArenaResizeObserver = null;
 let fpsArenaPointerDragging = false;
 let fpsArenaLastPointer = null;
+let fpsArenaTouchPointerId = null;
+let fpsArenaTouchMoved = false;
 let fpsArenaAudioContext = null;
 const FPS_ARENA_SCOPE_SWAY = 0.0036;
 const FPS_ARENA_BOT_FIRE_RANGE = 18;
@@ -57,6 +64,8 @@ function updateFpsArenaHud() {
     `<span>分數 ${Number(state.score || 0).toLocaleString()}</span>`,
     `<span>命中率 ${accuracy}%</span>`,
     `<span>生命 ${Math.max(0, Math.ceil(state.health))}</span>`,
+    `<span>${sanitize(state.weapon?.label || "Rifle")} ${state.ammo}/${state.reserve}${state.reloadingUntil > performance.now() ? " 換彈" : ""}</span>`,
+    `<span>體力 ${Math.round(state.stamina ?? 100)}%</span>`,
     `<span>時間 ${fpsArenaFormatTime(remaining)}</span>`,
     state.mode === "bomb" ? `<span>拆彈 ${Math.min(100, Math.round(state.defuseProgress || 0))}%</span>` : "",
   ].join("");
@@ -250,6 +259,37 @@ function fpsArenaAddImpactSpark(state, position, color = 0xfef08a) {
   state.impactEffects.push({ object: spark, expiresAt: performance.now() + 120 });
 }
 
+function fpsArenaDisposeObject(object) {
+  object?.traverse?.((child) => {
+    child.geometry?.dispose?.();
+    child.material?.dispose?.();
+  });
+  object?.geometry?.dispose?.();
+  object?.material?.dispose?.();
+}
+
+function fpsArenaAddBloodSplatter(state, position, count = 16) {
+  if (!position) return;
+  for (let i = 0; i < count; i += 1) {
+    const droplet = new THREE.Mesh(
+      new THREE.SphereGeometry(0.025 + Math.random() * 0.035, 7, 5),
+      new THREE.MeshBasicMaterial({ color: 0xb91c1c, transparent: true, opacity: 0.9 })
+    );
+    droplet.position.copy(position);
+    state.scene.add(droplet);
+    state.bloodEffects.push({
+      object: droplet,
+      velocity: new THREE.Vector3(
+        (Math.random() - 0.5) * 3.2,
+        1.2 + Math.random() * 2.6,
+        (Math.random() - 0.5) * 3.2
+      ),
+      bornAt: performance.now(),
+      expiresAt: performance.now() + 640 + Math.random() * 420,
+    });
+  }
+}
+
 function fpsArenaAddPlayerFireEffects(state, hitPoint, hitTarget = false) {
   const muzzle = fpsArenaPlayerMuzzlePosition(state);
   const endpoint = hitPoint || state.camera.position.clone().add(fpsArenaCameraForward(state).multiplyScalar(34));
@@ -316,6 +356,7 @@ function fpsArenaPlaySound(type) {
     hit: { type: "triangle", start: 520, end: 260, gain: 0.04, duration: 0.09 },
     damage: { type: "sawtooth", start: 90, end: 44, gain: 0.08, duration: 0.12 },
     defuse: { type: "sine", start: 740, end: 980, gain: 0.035, duration: 0.12 },
+    scream: { type: "sawtooth", start: 720, end: 115, gain: 0.075, duration: 0.34 },
   }[type] || { type: "square", start: 160, end: 70, gain: 0.05, duration: 0.08 };
   osc.type = settings.type;
   osc.frequency.setValueAtTime(settings.start, now);
@@ -444,6 +485,37 @@ function fpsArenaUpdateCombatEffects(state, now) {
   removeExpired(state.botTracers);
   removeExpired(state.botMuzzleFlashes);
   removeExpired(state.impactEffects);
+  for (let i = state.bloodEffects.length - 1; i >= 0; i -= 1) {
+    const item = state.bloodEffects[i];
+    const dt = Math.min(0.04, Math.max(0.001, (now - (item.lastAt || now)) / 1000));
+    item.lastAt = now;
+    item.object.position.add(item.velocity.clone().multiplyScalar(dt));
+    item.velocity.y -= 6.6 * dt;
+    if (item.object.material) {
+      item.object.material.opacity = Math.max(0, (item.expiresAt - now) / 720);
+    }
+    if (item.object.position.y < 0.04) {
+      item.object.position.y = 0.04;
+      item.velocity.y *= -0.18;
+      item.velocity.x *= 0.78;
+      item.velocity.z *= 0.78;
+    }
+    if (item.expiresAt > now) continue;
+    state.scene.remove(item.object);
+    fpsArenaDisposeObject(item.object);
+    state.bloodEffects.splice(i, 1);
+  }
+  for (let i = state.deadBodies.length - 1; i >= 0; i -= 1) {
+    const body = state.deadBodies[i];
+    const progress = Math.min(1, (now - body.startedAt) / body.duration);
+    body.object.rotation.x = body.baseRotation.x + body.fallDirection * progress * 1.34;
+    body.object.rotation.z = body.baseRotation.z + body.sideRoll * progress * 0.64;
+    body.object.position.y = Math.max(0.32, body.baseY - progress * 0.66);
+    if (body.expiresAt > now) continue;
+    state.scene.remove(body.object);
+    fpsArenaDisposeObject(body.object);
+    state.deadBodies.splice(i, 1);
+  }
 }
 
 function fpsArenaResizeRenderer() {
@@ -525,6 +597,7 @@ function fpsArenaBuildCombatMap(scene) {
 function createFpsArenaWorld(mode) {
   const stage = $("fps-arena-stage");
   if (!stage || typeof THREE === "undefined") return null;
+  const dailyChallenge = window.hackmeGameDailyChallenge?.("fps_arena") || null;
   stage.querySelectorAll("canvas").forEach((canvas) => canvas.remove());
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x08111f);
@@ -565,13 +638,16 @@ function createFpsArenaWorld(mode) {
     botMuzzleFlashes: [],
     botProjectiles: [],
     impactEffects: [],
+    bloodEffects: [],
+    deadBodies: [],
     startedAt: Date.now(),
     completedAt: null,
     durationMs: FPS_ARENA_MODES[mode].seconds * 1000,
     penaltySeconds: 0,
     scoreSubmitted: false,
     difficulty: mode,
-    puzzleId: `fps-arena-${mode}`,
+    puzzleId: dailyChallenge?.key || `fps-arena-${mode}`,
+    dailyChallenge,
     score: 0,
     health: FPS_ARENA_MODES[mode].health,
     shots: 0,
@@ -583,9 +659,18 @@ function createFpsArenaWorld(mode) {
     player: new THREE.Vector3(0, 1.65, 1.5),
     velocity: new THREE.Vector3(),
     keys: {},
+    stamina: 100,
+    mobileSprint: false,
+    running: false,
     lastFrame: performance.now(),
     lastSpawnAt: 0,
     lastShotAt: 0,
+    weaponIndex: 0,
+    weapon: FPS_ARENA_WEAPONS[0],
+    ammo: FPS_ARENA_WEAPONS[0].mag,
+    reserve: FPS_ARENA_WEAPONS[0].reserve,
+    reloadingUntil: 0,
+    recoilKick: 0,
     damageFlashUntil: 0,
     damageSourceAngle: 0,
     shakeUntil: 0,
@@ -652,6 +737,9 @@ function finishFpsArenaGame(reason = "time") {
   updateFpsArenaStatus();
   updateFpsArenaHud();
   if (Number(state.score || 0) > 0 && typeof submitSoloGameScore === "function") {
+    const accuracy = state.shots > 0 ? Math.round((state.hits / state.shots) * 100) : 0;
+    if (accuracy >= 45) window.recordHackmeGameAchievement?.("fps_arena", "accuracy", "穩定射手", "命中率達 45%。");
+    if (reason === "defused") window.recordHackmeGameAchievement?.("fps_arena", "defuse", "拆彈成功", "完成 Bomb Defuse。");
     submitSoloGameScore("fps_arena", state);
   }
   if (typeof stopSoloGameTimerIfIdle === "function") stopSoloGameTimerIfIdle();
@@ -665,21 +753,22 @@ function fpsArenaApplyCamera(state) {
   state.camera.position.y += (state.shakeVector?.y || 0) * 0.018;
   state.camera.rotation.order = "YXZ";
   state.camera.rotation.y = state.yaw + (state.breathOffset?.x || 0);
-  state.camera.rotation.x = state.pitch + (state.breathOffset?.y || 0);
+  state.camera.rotation.x = state.pitch + (state.breathOffset?.y || 0) - (state.recoilKick || 0);
   state.camera.rotation.z = (state.shakeVector?.x || 0) * 0.01;
 }
 
 function fpsArenaUpdateBreathing(state, now) {
   const t = now * 0.0017 + state.breathPhase;
   const moving = state.keys.w || state.keys.a || state.keys.s || state.keys.d || state.keys.ArrowUp || state.keys.ArrowDown || state.keys.ArrowLeft || state.keys.ArrowRight;
-  const intensity = moving ? FPS_ARENA_SCOPE_SWAY * 1.8 : FPS_ARENA_SCOPE_SWAY;
+  const runScale = state.running ? 2.85 : moving ? 1.8 : 1;
+  const intensity = FPS_ARENA_SCOPE_SWAY * runScale;
   state.breathOffset.set(Math.sin(t) * intensity, Math.cos(t * 0.72) * intensity * 0.78);
   const stage = $("fps-arena-stage");
   if (stage) {
-    stage.style.setProperty("--fps-breathe-x", `${Math.sin(t) * (moving ? 5.5 : 3.2)}px`);
-    stage.style.setProperty("--fps-breathe-y", `${Math.cos(t * 0.72) * (moving ? 4.4 : 2.4)}px`);
-    stage.style.setProperty("--fps-breathe-rot", `${Math.sin(t * 0.48) * (moving ? 1.8 : 1.1)}deg`);
-    stage.style.setProperty("--fps-breathe-scale", `${1 + Math.sin(t * 1.16) * (moving ? 0.042 : 0.026)}`);
+    stage.style.setProperty("--fps-breathe-x", `${Math.sin(t) * (state.running ? 9.2 : moving ? 5.5 : 3.2)}px`);
+    stage.style.setProperty("--fps-breathe-y", `${Math.cos(t * 0.72) * (state.running ? 7.2 : moving ? 4.4 : 2.4)}px`);
+    stage.style.setProperty("--fps-breathe-rot", `${Math.sin(t * 0.48) * (state.running ? 2.8 : moving ? 1.8 : 1.1)}deg`);
+    stage.style.setProperty("--fps-breathe-scale", `${1 + Math.sin(t * 1.16) * (state.running ? 0.06 : moving ? 0.042 : 0.026)}`);
   }
 }
 
@@ -724,10 +813,21 @@ function fpsArenaMovePlayer(state, dt) {
   if (state.keys.s || state.keys.ArrowDown) move.sub(forward);
   if (state.keys.d || state.keys.ArrowRight) move.add(right);
   if (state.keys.a || state.keys.ArrowLeft) move.sub(right);
-  if (move.lengthSq() > 0) {
-    move.normalize().multiplyScalar(6.2 * dt);
+  const moving = move.lengthSq() > 0;
+  const sprintKey = state.keys.Shift || state.keys.shift || state.mobileSprint;
+  const running = moving && sprintKey && state.stamina > 4;
+  state.running = running;
+  if (moving) {
+    const speed = running ? 9.2 : 6.2;
+    move.normalize().multiplyScalar(speed * dt);
     fpsArenaMoveWithCollision(state, move);
   }
+  if (running) {
+    state.stamina = Math.max(0, state.stamina - 34 * dt);
+  } else {
+    state.stamina = Math.min(100, state.stamina + (moving ? 14 : 22) * dt);
+  }
+  if (state.stamina <= 0) state.mobileSprint = false;
 }
 
 function fpsArenaRemoveObject(state, object) {
@@ -735,25 +835,52 @@ function fpsArenaRemoveObject(state, object) {
   state.scene.remove(root);
   state.targets = state.targets.filter((item) => item !== root);
   state.hittables = state.hittables.filter((item) => item !== root && item.userData?.root !== root);
-  root.traverse?.((child) => {
-    child.geometry?.dispose?.();
-    child.material?.dispose?.();
+  fpsArenaDisposeObject(root);
+}
+
+function fpsArenaKillTarget(state, target, hitPoint) {
+  const root = target?.userData?.root || target;
+  if (!root || root.userData.dead) return;
+  const now = performance.now();
+  root.userData.dead = true;
+  state.targets = state.targets.filter((item) => item !== root);
+  state.hittables = state.hittables.filter((item) => item !== root && item.userData?.root !== root);
+  fpsArenaAddBloodSplatter(state, hitPoint || root.position.clone().add(new THREE.Vector3(0, 0.55, 0)), 24);
+  fpsArenaAddShake(state, 1.05, 190);
+  fpsArenaPlaySound("scream");
+  state.deadBodies.push({
+    object: root,
+    startedAt: now,
+    duration: 520,
+    expiresAt: now + 4200,
+    baseY: root.position.y,
+    baseRotation: root.rotation.clone(),
+    fallDirection: Math.random() > 0.5 ? 1 : -1,
+    sideRoll: Math.random() - 0.5,
   });
-  root.geometry?.dispose?.();
-  root.material?.dispose?.();
 }
 
 function shootFpsArena() {
   const state = fpsArenaState;
   if (!state || state.status !== "active") return;
   const now = performance.now();
-  if (now - state.lastShotAt < 130) return;
+  const weapon = state.weapon || FPS_ARENA_WEAPONS[0];
+  if (state.reloadingUntil && now < state.reloadingUntil) return;
+  if (state.ammo <= 0) {
+    reloadFpsArena();
+    return;
+  }
+  if (now - state.lastShotAt < weapon.delay) return;
   state.lastShotAt = now;
+  state.ammo -= 1;
   state.shots += 1;
   fpsArenaAddShake(state, 0.85, 150);
   fpsArenaPlaySound("fire");
+  state.pitch = Math.max(-1.25, state.pitch - weapon.recoil);
+  state.recoilKick = Math.min(0.08, (state.recoilKick || 0) + weapon.recoil * 0.55);
   const raycaster = new THREE.Raycaster();
-  raycaster.setFromCamera(new THREE.Vector2(0, 0), state.camera);
+  const spread = weapon.spread + (state.running ? 0.006 : 0) + Math.min(0.01, (state.recoilKick || 0) * 0.12);
+  raycaster.setFromCamera(new THREE.Vector2((Math.random() - 0.5) * spread, (Math.random() - 0.5) * spread), state.camera);
   const hit = raycaster.intersectObjects([...state.hittables, ...state.cover], false)[0];
   const hitCover = Boolean(hit && state.cover.includes(hit.object));
   fpsArenaAddPlayerFireEffects(state, hit?.point, Boolean(hit && !hitCover));
@@ -770,17 +897,49 @@ function shootFpsArena() {
     return;
   }
   state.hits += 1;
+  if (mesh.userData.part === "head") window.recordHackmeGameAchievement?.("fps_arena", "headshot", "爆頭訓練", "命中頭部。");
   fpsArenaPlaySound("hit");
-  data.hp -= mesh.userData.damage || 1;
+  fpsArenaAddBloodSplatter(state, hit.point, data.hp <= 1 ? 18 : 7);
+  data.hp -= (mesh.userData.damage || 1) * (weapon.damage || 1);
   state.score += Math.max(20, Math.round((data.score || 100) / 3)) + Number(mesh.userData.scoreBonus || 0);
   target.scale.multiplyScalar(0.94);
   if (data.hp <= 0) {
     state.score += data.score || 100;
     const kind = data.kind;
-    fpsArenaRemoveObject(state, target);
+    fpsArenaKillTarget(state, target, hit.point);
     if (kind === "target") fpsArenaAddTarget(state, "target");
   }
   updateFpsArenaStatus();
+}
+
+function reloadFpsArena() {
+  const state = fpsArenaState;
+  if (!state || state.status !== "active") return;
+  const weapon = state.weapon || FPS_ARENA_WEAPONS[0];
+  if (state.ammo >= weapon.mag || state.reserve <= 0 || (state.reloadingUntil && performance.now() < state.reloadingUntil)) return;
+  state.reloadingUntil = performance.now() + 980;
+  window.setTimeout(() => {
+    const current = fpsArenaState;
+    if (!current || current !== state || current.status !== "active") return;
+    const need = weapon.mag - current.ammo;
+    const loaded = Math.min(need, current.reserve);
+    current.ammo += loaded;
+    current.reserve -= loaded;
+    current.reloadingUntil = 0;
+    updateFpsArenaStatus("換彈完成。");
+  }, 990);
+  updateFpsArenaStatus("換彈中。");
+}
+
+function switchFpsArenaWeapon() {
+  const state = fpsArenaState;
+  if (!state || state.status !== "active") return;
+  state.weaponIndex = (Number(state.weaponIndex || 0) + 1) % FPS_ARENA_WEAPONS.length;
+  state.weapon = FPS_ARENA_WEAPONS[state.weaponIndex];
+  state.ammo = state.weapon.mag;
+  state.reserve = state.weapon.reserve;
+  state.reloadingUntil = 0;
+  updateFpsArenaStatus(`切換武器：${state.weapon.label}`);
 }
 
 function attemptFpsArenaDefuse(fromShot = false) {
@@ -848,6 +1007,7 @@ function fpsArenaLoop(now) {
     fpsArenaMovePlayer(state, dt);
     fpsArenaUpdateBreathing(state, now);
     fpsArenaUpdateFeedback(state, now);
+    state.recoilKick = Math.max(0, (state.recoilKick || 0) - dt * 0.08);
     fpsArenaApplyCamera(state);
     fpsArenaUpdateTargets(state, dt, now);
     fpsArenaUpdateBotProjectiles(state, dt, now);
@@ -866,16 +1026,25 @@ function fpsArenaLoop(now) {
 function handleFpsArenaKey(event, pressed) {
   const state = fpsArenaState;
   if (!state || state.status !== "active") return;
-  if (["w", "a", "s", "d", "W", "A", "S", "D", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " ", "Spacebar", "e", "E"].includes(event.key)) {
-    event.preventDefault();
-    state.keys[event.key.length === 1 ? event.key.toLowerCase() : event.key] = pressed;
-  }
+    if (["w", "a", "s", "d", "W", "A", "S", "D", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " ", "Spacebar", "e", "E", "r", "R", "q", "Q", "Shift"].includes(event.key)) {
+      event.preventDefault();
+      state.keys[event.key.length === 1 ? event.key.toLowerCase() : event.key] = pressed;
+    }
+  if (pressed && (event.key === "r" || event.key === "R")) reloadFpsArena();
+  if (pressed && (event.key === "q" || event.key === "Q")) switchFpsArenaWeapon();
 }
 
 function handleFpsArenaTouch(action) {
   const state = fpsArenaState;
   if (!state || state.status !== "active") return;
   if (action === "fps-fire") return shootFpsArena();
+  if (action === "fps-reload") return reloadFpsArena();
+  if (action === "fps-weapon") return switchFpsArenaWeapon();
+  if (action === "fps-sprint") {
+    state.mobileSprint = !state.mobileSprint;
+    updateFpsArenaStatus(state.mobileSprint ? "衝刺啟動。" : "衝刺關閉。");
+    return;
+  }
   const impulse = 0.82;
   const forward = new THREE.Vector3(Math.sin(state.yaw), 0, Math.cos(state.yaw) * -1);
   const right = new THREE.Vector3(Math.cos(state.yaw), 0, Math.sin(state.yaw));
@@ -883,6 +1052,12 @@ function handleFpsArenaTouch(action) {
   if (action === "fps-back") fpsArenaMoveWithCollision(state, forward.multiplyScalar(-impulse));
   if (action === "fps-right") fpsArenaMoveWithCollision(state, right.multiplyScalar(impulse));
   if (action === "fps-left") fpsArenaMoveWithCollision(state, right.multiplyScalar(-impulse));
+}
+
+function fpsArenaApplyLookDelta(state, dx, dy) {
+  if (!state || (!dx && !dy)) return;
+  state.yaw -= dx * 0.0024;
+  state.pitch = Math.max(-1.25, Math.min(1.05, state.pitch - dy * 0.0024));
 }
 
 function handleFpsArenaPointerMove(event) {
@@ -896,8 +1071,45 @@ function handleFpsArenaPointerMove(event) {
     fpsArenaLastPointer = { x: event.clientX, y: event.clientY };
   }
   if (!dx && !dy) return;
-  state.yaw -= dx * 0.0024;
-  state.pitch = Math.max(-1.25, Math.min(1.05, state.pitch - dy * 0.0024));
+  fpsArenaApplyLookDelta(state, dx, dy);
+}
+
+function handleFpsArenaTouchPointerDown(event) {
+  if (event.pointerType === "mouse") return;
+  const stage = event.target?.closest?.("#fps-arena-stage");
+  if (!stage || !fpsArenaState || fpsArenaState.status !== "active") return;
+  event.preventDefault();
+  fpsArenaTouchPointerId = event.pointerId;
+  fpsArenaTouchMoved = false;
+  fpsArenaLastPointer = { x: event.clientX, y: event.clientY };
+  try {
+    stage.setPointerCapture?.(event.pointerId);
+  } catch (err) {}
+}
+
+function handleFpsArenaTouchPointerMove(event) {
+  if (event.pointerType === "mouse" || fpsArenaTouchPointerId !== event.pointerId || !fpsArenaLastPointer) return;
+  const state = fpsArenaState;
+  if (!state || state.status !== "active") return;
+  event.preventDefault();
+  const dx = event.clientX - fpsArenaLastPointer.x;
+  const dy = event.clientY - fpsArenaLastPointer.y;
+  if (Math.hypot(dx, dy) > 3) fpsArenaTouchMoved = true;
+  fpsArenaLastPointer = { x: event.clientX, y: event.clientY };
+  fpsArenaApplyLookDelta(state, dx, dy);
+}
+
+function handleFpsArenaTouchPointerEnd(event) {
+  if (event.pointerType === "mouse" || fpsArenaTouchPointerId !== event.pointerId) return;
+  const stage = event.target?.closest?.("#fps-arena-stage");
+  event.preventDefault();
+  if (event.type === "pointerup" && !fpsArenaTouchMoved) shootFpsArena();
+  try {
+    stage?.releasePointerCapture?.(event.pointerId);
+  } catch (err) {}
+  fpsArenaTouchPointerId = null;
+  fpsArenaTouchMoved = false;
+  fpsArenaLastPointer = null;
 }
 
 document.addEventListener("mousemove", handleFpsArenaPointerMove);
@@ -914,6 +1126,10 @@ document.addEventListener("mousedown", (event) => {
   if (stage.requestPointerLock && !document.pointerLockElement) stage.requestPointerLock();
   if (event.button === 0) shootFpsArena();
 });
+document.addEventListener("pointerdown", handleFpsArenaTouchPointerDown);
+document.addEventListener("pointermove", handleFpsArenaTouchPointerMove);
+document.addEventListener("pointerup", handleFpsArenaTouchPointerEnd);
+document.addEventListener("pointercancel", handleFpsArenaTouchPointerEnd);
 
 window.addEventListener("resize", fpsArenaResizeRenderer);
 window.currentFpsArenaMode = fpsArenaMode;

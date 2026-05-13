@@ -1,6 +1,7 @@
 'use strict';
 
 let oneA2BState = null;
+let oneA2BTimedMode = false;
 
 function setOneA2BNotice(text, ms = 3500) {
   if (!oneA2BState) return;
@@ -39,15 +40,20 @@ function isValidOneA2BGuess(value) {
 }
 
 function startOneA2BGame() {
+  const dailyChallenge = window.hackmeGameDailyChallenge?.("1a2b") || null;
   oneA2BState = {
     secret: generateOneA2BSecret(),
     startedAt: Date.now(),
     completedAt: null,
     penaltySeconds: 0,
     scoreSubmitted: false,
-    difficulty: "standard",
-    puzzleId: "1a2b-4digits",
+    difficulty: dailyChallenge?.difficulty || "standard",
+    puzzleId: dailyChallenge?.key || "1a2b-4digits",
     guesses: [],
+    timedMode: oneA2BTimedMode,
+    aiDeadlineMs: 90000 + Math.floor(Math.random() * 45000),
+    hintsUsed: 0,
+    dailyChallenge,
   };
   const input = $("onea2b-guess-input");
   if (input) {
@@ -57,7 +63,8 @@ function startOneA2BGame() {
   }
   renderOneA2BBoard();
   ensureSoloGameTimer();
-  updateOneA2BStatus("計時開始。輸入 4 個不重複數字，首位不可為 0，例如 1234。");
+  updateOneA2BModeButton();
+  updateOneA2BStatus(`${dailyChallenge?.label || "計時開始"}。輸入 4 個不重複數字，首位不可為 0，例如 1234。`);
 }
 
 function renderOneA2BBoard() {
@@ -88,7 +95,8 @@ function updateOneA2BStatus(prefix = "") {
   }
   const time = formatSoloGameTime(soloElapsedMs(oneA2BState));
   if (oneA2BState.completedAt) {
-    status.textContent = `完成時間 ${time} · 共 ${oneA2BState.guesses.length} 次`;
+    const race = oneA2BState.timedMode ? (soloElapsedMs(oneA2BState) <= oneA2BState.aiDeadlineMs ? " · 贏過 AI 對手" : " · AI 對手先解出") : "";
+    status.textContent = `完成時間 ${time} · 共 ${oneA2BState.guesses.length} 次${race}`;
     return;
   }
   const activeNotice = oneA2BState.notice && Date.now() < Number(oneA2BState.noticeUntil || 0)
@@ -99,7 +107,15 @@ function updateOneA2BStatus(prefix = "") {
     oneA2BState.noticeUntil = 0;
   }
   const head = activeNotice || prefix || "";
-  status.textContent = `${head ? `${head} ` : ""}目前時間 ${time} · 已猜 ${oneA2BState.guesses.length} 次`;
+  const race = oneA2BState.timedMode ? ` · AI 對手 ${formatSoloGameTime(oneA2BState.aiDeadlineMs)}` : "";
+  status.textContent = `${head ? `${head} ` : ""}目前時間 ${time} · 已猜 ${oneA2BState.guesses.length} 次 · 提示 ${oneA2BState.hintsUsed}${race}`;
+}
+
+function updateOneA2BModeButton() {
+  const btn = $("onea2b-mode-btn");
+  if (!btn) return;
+  btn.classList.toggle("btn-primary", oneA2BTimedMode);
+  btn.textContent = oneA2BTimedMode ? "限時開" : "限時關";
 }
 
 function submitOneA2BGuess() {
@@ -129,6 +145,9 @@ function submitOneA2BGuess() {
     if (input) input.disabled = true;
     updateOneA2BStatus();
     stopSoloGameTimerIfIdle();
+    if (soloElapsedMs(oneA2BState) <= 120000) window.recordHackmeGameAchievement?.("1a2b", "quick-crack", "快速破譯", "2 分鐘內完成。");
+    if (oneA2BState.guesses.length <= 6) window.recordHackmeGameAchievement?.("1a2b", "few-guesses", "精準猜測", "6 次內完成。");
+    if (oneA2BState.hintsUsed) window.recordHackmeGameAchievement?.("1a2b", "hint-win", "提示取捨", "使用提示後仍完成。");
     if (soloElapsedMs(oneA2BState) > 5 * 60 * 1000) {
       oneA2BState.scoreSubmitted = true;
       setGameMsg("1A2B 已完成，但超過 5 分鐘，不列入排行榜。", false);
@@ -139,6 +158,22 @@ function submitOneA2BGuess() {
     return;
   }
   updateOneA2BStatus(`${result.a}A${result.b}B`);
+}
+
+function toggleOneA2BTimedMode() {
+  oneA2BTimedMode = !oneA2BTimedMode;
+  updateOneA2BModeButton();
+  updateOneA2BStatus(oneA2BTimedMode ? "限時競速開啟。" : "限時競速關閉。");
+}
+
+function useOneA2BHint() {
+  if (!oneA2BState || oneA2BState.completedAt) return;
+  const unrevealed = [0, 1, 2, 3].filter((index) => !oneA2BState.guesses.some((item) => item.guess[index] === oneA2BState.secret[index]));
+  const index = unrevealed[0] ?? Math.min(3, oneA2BState.hintsUsed);
+  oneA2BState.hintsUsed += 1;
+  oneA2BState.penaltySeconds += 15;
+  setOneA2BNotice(`提示：第 ${index + 1} 位是 ${oneA2BState.secret[index]}，代價加時 15 秒。`, 5000);
+  updateOneA2BStatus();
 }
 
 (function () {
@@ -163,6 +198,14 @@ function submitOneA2BGuess() {
     dispatch(type, event) {
       if (type === "click" && event.target?.closest?.("#onea2b-new-btn")) {
         startOneA2BGame();
+        return true;
+      }
+      if (type === "click" && event.target?.closest?.("#onea2b-mode-btn")) {
+        toggleOneA2BTimedMode();
+        return true;
+      }
+      if (type === "click" && event.target?.closest?.("#onea2b-hint-btn")) {
+        useOneA2BHint();
         return true;
       }
       if (type === "click" && event.target?.closest?.("#onea2b-guess-btn")) {
