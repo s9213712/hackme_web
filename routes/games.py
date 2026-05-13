@@ -44,6 +44,7 @@ from services.games.chess_nn import (
     EXPERIMENT_NN_DIFFICULTY,
     choose_experiment_nn_move,
 )
+from services.games.chess_opening_book import book_move as chess_book_move
 from services.games.chess_dashboard import build_chess_engine_dashboard
 from services.games.chess_pipeline import maybe_launch_chess_train_pipeline
 from services.games.chess_promotion import (
@@ -190,6 +191,17 @@ def _choose_heuristic_move(board, side, difficulty="normal"):
 
 def choose_computer_move(board, side, difficulty="normal", learning_store=None):
     difficulty = normalize_computer_difficulty(difficulty) or "normal"
+    # P2: try the static opening book first so engines without a built-in
+    # opening repertoire stop playing offbeat first moves like ``a5``. The
+    # book covers ~60 standard positions, returns ``None`` past book, and
+    # never overrides difficulty-specific engines for mid- or end-game play.
+    if difficulty != "easy":
+        try:
+            book_pick = chess_book_move(board, side)
+        except Exception:
+            book_pick = None
+        if book_pick:
+            return book_pick
     if difficulty == EXPERIMENT_DIFFICULTY:
         move = choose_experiment_move(board, side, store=learning_store, difficulty=difficulty, search_profile="fast")
         if move:
