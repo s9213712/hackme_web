@@ -239,6 +239,21 @@ _STATE = {
 }
 
 
+class DangerousChangeBlocked(Exception):
+    """Raised by save_settings when a risky change has no matching confirm.
+
+    The route layer should catch this and return a structured 400 with the
+    affected settings, their transition direction, and the warning text.
+    """
+
+    def __init__(self, risky):
+        self.risky = list(risky or [])
+        super().__init__(
+            "dangerous settings require explicit confirmation: "
+            + ", ".join(key for key, _danger, _transition in self.risky)
+        )
+
+
 def normalize_feature_key(feature_key):
     key = str(feature_key or "").strip()
     if not key:
@@ -442,6 +457,43 @@ def refresh_system_settings():
     with _SETTINGS_LOCK:
         _SYSTEM_SETTINGS = _load_settings_from_db()
         return _SYSTEM_SETTINGS
+
+
+def _confirm_keys_from_payload(payload):
+    if isinstance(payload, str):
+        return {payload}
+    if isinstance(payload, (list, tuple, set)):
+        return {str(item) for item in payload if isinstance(item, str)}
+    if isinstance(payload, dict):
+        return {str(key) for key, value in payload.items() if value}
+    return set()
+
+
+def enforce_dangerous_confirm(current_settings, data):
+    """Raise ``DangerousChangeBlocked`` if ``data`` flips a risky toggle
+    without listing it in ``dangerous_confirm``.
+
+    Internal callers (boot scripts, server-mode automation) skip this gate
+    by simply not calling this function. The HTTP admin routes always call
+    it before delegating to ``save_settings``.
+    """
+    if not isinstance(data, dict):
+        return
+    confirm_keys = _confirm_keys_from_payload(data.get("dangerous_confirm"))
+    # Import here to avoid a circular import at module load.
+    from services.platform.settings_metadata import find_dangerous_changes  # noqa: WPS433
+    coerced = {}
+    for key, value in data.items():
+        if key not in DEFAULT_SETTINGS:
+            continue
+        coerced[key] = _coerce_setting_value(key, value)
+    risky = [
+        (key, danger, transition)
+        for key, danger, transition in find_dangerous_changes(current_settings, coerced)
+        if key not in confirm_keys
+    ]
+    if risky:
+        raise DangerousChangeBlocked(risky)
 
 
 def save_settings(data):

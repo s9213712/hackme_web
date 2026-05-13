@@ -314,7 +314,19 @@ def test_root_can_configure_server_ssl_setting_with_restart_hint(tmp_path):
     assert initial["server_ssl"]["enabled"] is True
     assert initial["server_ssl"]["restart_required"] is True
 
-    res = client.put("/api/admin/settings", json={"server_ssl_enabled": False})
+    # server_ssl_enabled is a dangerous setting on the disable side; the
+    # admin route should reject the PUT until the operator opts in via
+    # ``dangerous_confirm`` (P1 settings hardening).
+    blocked = client.put("/api/admin/settings", json={"server_ssl_enabled": False})
+    assert blocked.status_code == 400
+    blocked_payload = blocked.get_json()
+    assert blocked_payload.get("error") == "dangerous_change_blocked"
+    assert state["server_ssl_enabled"] is True
+
+    res = client.put(
+        "/api/admin/settings",
+        json={"server_ssl_enabled": False, "dangerous_confirm": "server_ssl_enabled"},
+    )
     data = res.get_json()
 
     assert res.status_code == 200

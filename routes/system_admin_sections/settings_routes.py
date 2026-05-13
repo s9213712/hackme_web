@@ -2,6 +2,12 @@ import re
 
 from flask import request
 
+from services.platform.settings import DangerousChangeBlocked, enforce_dangerous_confirm
+from services.platform.settings_metadata import (
+    DANGEROUS_SETTINGS,
+    SETTING_DETAILS,
+    setting_groups_payload,
+)
 from services.security.captcha import normalize_captcha_mode
 from services.storage.global_capacity import parse_global_capacity_limit_mb
 from services.storage.paths import validate_storage_root
@@ -16,6 +22,27 @@ from services.users.member_levels import (
     serialize_member_level_rule,
     update_member_level_rule,
 )
+
+
+def _dangerous_blocked_payload(exc):
+    items = []
+    for key, danger, transition in exc.risky:
+        detail = SETTING_DETAILS.get(key, {})
+        items.append({
+            "key": key,
+            "label": detail.get("label") or key,
+            "transition": transition,
+            "warning": danger.get("warning") or "",
+        })
+    labels = "、".join(item["label"] for item in items) or "高敏感設定"
+    return {
+        "ok": False,
+        "msg": (
+            f"以下設定屬於高敏感變更，需在請求中加上 dangerous_confirm 才會生效：{labels}"
+        ),
+        "error": "dangerous_change_blocked",
+        "dangerous_changes": items,
+    }
 
 
 def register_system_admin_settings_routes(app, ctx):
@@ -260,6 +287,10 @@ def register_system_admin_settings_routes(app, ctx):
 
         before_settings = dict(current_settings)
         try:
+            enforce_dangerous_confirm(current_settings, data)
+        except DangerousChangeBlocked as exc:
+            return json_resp(_dangerous_blocked_payload(exc)), 400
+        try:
             settings = save_settings(data)
         except ValueError as exc:
             if "requires" in str(exc):
@@ -281,6 +312,28 @@ def register_system_admin_settings_routes(app, ctx):
             ),
             "server_ssl": server_ssl_payload(get_system_settings()),
             "cloud_drive_storage": cloud_drive_storage_payload(get_system_settings()),
+        })
+
+    @app.route("/api/admin/settings/metadata", methods=["GET"])
+    @require_csrf_safe
+    def admin_settings_metadata():
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok": False, "msg": "未登入"}), 401
+        if actor["username"] != "root":
+            return json_resp({"ok": False, "msg": "只有最高管理者可讀取系統參數元資料"}), 403
+        return json_resp({
+            "ok": True,
+            "groups": setting_groups_payload(),
+            "dangerous_keys": [
+                {
+                    "key": key,
+                    "side": danger["side"],
+                    "warning": danger["warning"],
+                    "label": SETTING_DETAILS.get(key, {}).get("label") or key,
+                }
+                for key, danger in DANGEROUS_SETTINGS.items()
+            ],
         })
 
     @app.route("/api/admin/cloud-drive/security-policy", methods=["GET", "PUT"])
@@ -330,6 +383,18 @@ def register_system_admin_settings_routes(app, ctx):
         violations = find_feature_dependency_violations(before_settings, data)
         if violations:
             return json_resp(feature_dependency_error_payload(violations)), 400
+        # admin_features only accepts feature_* flags; restrict the dangerous
+        # gate to those so extra keys (which save_feature_settings will strip)
+        # do not produce confusing errors here. The /api/admin/settings PUT
+        # path still guards every other key in its own enforcement call.
+        feature_only_data = {
+            key: value for key, value in data.items()
+            if key.startswith("feature_") or key == "dangerous_confirm"
+        }
+        try:
+            enforce_dangerous_confirm(before_settings, feature_only_data)
+        except DangerousChangeBlocked as exc:
+            return json_resp(_dangerous_blocked_payload(exc)), 400
         try:
             updates = save_feature_settings(data)
         except ValueError as exc:
