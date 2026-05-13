@@ -153,6 +153,15 @@ class FakeComfyUIClient:
                 {"key": "inpaint", "label": "局部重繪", "available": True},
                 {"key": "outpaint", "label": "向外延展", "available": True},
                 {"key": "upscale", "label": "放大修復", "available": True},
+                {"key": "t2v", "label": "文字生影片", "available": True, "workflow_only": True},
+                {"key": "i2v", "label": "圖片生影片", "available": True, "workflow_only": True},
+                {"key": "v2v", "label": "影片轉影片", "available": True, "workflow_only": True},
+                {"key": "t2s", "label": "文字生語音", "available": True, "workflow_only": True},
+                {"key": "t2sv", "label": "文字生語音影片", "available": True, "workflow_only": True},
+            ],
+            "model_families": [
+                {"key": "flux", "label": "FLUX", "installed": True, "matches": ["dream.safetensors"]},
+                {"key": "wan", "label": "Wan Video", "installed": False, "matches": []},
             ],
         }
 
@@ -247,6 +256,62 @@ class FakeComfyUIClient:
     def interrupt(self):
         FakeComfyUIClient.interrupted += 1
         return {"interrupted": True}
+
+
+class FakeDiffusersBackendClient(FakeComfyUIClient):
+    backend_kind = "diffusers"
+    base_url = "diffusers://local/dhead%2FwaiIllustriousSDXL_v150"
+    last_params = {}
+
+    def get_models(self):
+        return ["dhead/waiIllustriousSDXL_v150"]
+
+    def get_loras(self):
+        return []
+
+    def get_vaes(self):
+        return []
+
+    def get_embeddings(self):
+        return []
+
+    def get_sampler_options(self):
+        return {"samplers": ["diffusers-auto"], "schedulers": ["default"]}
+
+    def get_capabilities(self):
+        return {
+            "backend_kind": "diffusers",
+            "available_nodes": [],
+            "controlnet_models": [],
+            "upscale_models": [],
+            "controlnet_types": {},
+            "generation_modes": [
+                {"key": "txt2img", "label": "文字生圖", "available": True},
+                {"key": "img2img", "label": "圖生圖", "available": True},
+                {"key": "inpaint", "label": "局部重繪", "available": True},
+                {"key": "upscale", "label": "放大修復", "available": False},
+                {"key": "t2v", "label": "文字生影片", "available": False, "workflow_only": True},
+            ],
+            "model_families": [{"key": "illustrious", "label": "Illustrious", "installed": True, "matches": ["dhead/waiIllustriousSDXL_v150"]}],
+            "model_repo": "dhead/waiIllustriousSDXL_v150",
+            "token_configured": True,
+        }
+
+    def generate_image(self, params, *, timeout_seconds=180, progress_callback=None, extra_data=None):
+        FakeDiffusersBackendClient.last_params = dict(params)
+        if progress_callback:
+            progress_callback({"phase": "running", "percent": 40, "detail": "Diffusers 推論中"})
+        return {
+            "prompt_id": "diffusers-prompt-1",
+            "image_ref": {"filename": "hackme_web_diffusers.png", "subfolder": "", "type": "output"},
+            "mime_type": "image/png",
+            "data": b"fake-diffusers-png",
+            "images": [{
+                "image_ref": {"filename": "hackme_web_diffusers.png", "subfolder": "", "type": "output"},
+                "mime_type": "image/png",
+                "data": b"fake-diffusers-png",
+            }],
+        }
 
 
 class FailingComfyUIClient(FakeComfyUIClient):
@@ -679,7 +744,8 @@ def test_comfyui_models_and_generate_routes(tmp_path):
     assert models.get_json()["lora_details"]["anime-style.safetensors"]["supported"] is False
     assert models.get_json()["vaes"] == ["sdxl_vae.safetensors", "anime_vae.pt"]
     assert models.get_json()["embeddings"] == ["badhandv4.pt", "easynegative.safetensors"]
-    assert {item["key"] for item in models.get_json()["generation_modes"]} >= {"txt2img", "img2img", "inpaint", "outpaint", "upscale"}
+    assert {item["key"] for item in models.get_json()["generation_modes"]} >= {"txt2img", "img2img", "inpaint", "outpaint", "upscale", "t2v", "i2v", "v2v", "t2s", "t2sv"}
+    assert {item["key"] for item in models.get_json()["model_families"]} >= {"flux", "wan"}
     assert models.get_json()["controlnet_types"]["canny"]["available"] is True
     assert "control_v11p_sd15_canny.safetensors" in models.get_json()["controlnet_models"]
     assert "4x-UltraSharp.pth" in models.get_json()["upscale_models"]
@@ -1329,6 +1395,70 @@ def test_comfyui_image_preview_returns_uploaded_asset_preview(tmp_path):
     assert image["image_ref"]["filename"] == "source.png"
 
 
+def test_comfyui_input_image_candidates_import_history_and_drive_images(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    FakeComfyUIClient.uploaded_images = []
+    client = _build_app(db_path, storage_root).test_client()
+
+    preview = _generate_preview(client)
+    actor = _actor()
+    rel_path = "users/1/manual/drive-input.png"
+    disk_path = storage_root / rel_path
+    disk_path.parent.mkdir(parents=True, exist_ok=True)
+    disk_path.write_bytes(b"drive-png-bytes")
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        upload = create_uploaded_file_record(
+            conn,
+            owner_user_id=actor["id"],
+            storage_path=rel_path,
+            privacy_mode="standard_plain",
+            size_bytes=len(b"drive-png-bytes"),
+            original_filename="drive-input.png",
+            mime_type="image/png",
+            user=actor,
+        )
+        conn.execute("UPDATE uploaded_files SET scan_status='not_required' WHERE id=?", (upload["file_id"],))
+        file_row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (upload["file_id"],)).fetchone()
+        storage_file, msg = create_storage_file_entry(
+            conn,
+            actor=actor,
+            file_row=file_row,
+            virtual_path="/inputs/drive-input.png",
+            display_name="drive-input.png",
+            source="test",
+        )
+        assert msg is None
+        conn.commit()
+    finally:
+        conn.close()
+
+    candidates = client.get("/api/comfyui/input-image-candidates")
+    assert candidates.status_code == 200
+    body = candidates.get_json()
+    assert any(item["filename"] == preview["image_ref"]["filename"] for item in body["history"])
+    drive_candidate = next(item for item in body["cloud_drive"] if item["file_id"] == upload["file_id"])
+    assert drive_candidate["virtual_path"] == storage_file["virtual_path"]
+
+    drive_import = client.post("/api/comfyui/import-drive-image", json={"file_id": upload["file_id"]})
+    assert drive_import.status_code == 200
+    drive_body = drive_import.get_json()["image"]
+    assert drive_body["cloud_file_id"] == upload["file_id"]
+    assert drive_body["image_ref"]["type"] == "input"
+    assert drive_body["data_url"].startswith("data:image/png;base64,")
+
+    history_import = client.post("/api/comfyui/import-history-image", json={"image_ref": preview["image_ref"]})
+    assert history_import.status_code == 200
+    history_body = history_import.get_json()["image"]
+    assert history_body["cloud_file_id"]
+    assert history_body["image_ref"]["type"] == "input"
+    assert history_body["data_url"].startswith("data:image/png;base64,")
+    assert len(FakeComfyUIClient.uploaded_images) >= 2
+
 
 def test_comfyui_generate_rejects_unsupported_lora_base_model(tmp_path):
     db_path = tmp_path / "comfyui.db"
@@ -1913,6 +2043,93 @@ def test_root_can_test_unsaved_comfyui_endpoint(tmp_path):
     assert body["ok"] is True
     assert body["available"] is True
     assert body["endpoint"] == {"mode": "remote", "host": "192.168.1.20", "port": 8192}
+
+
+def test_comfyui_diffusers_mode_lists_repo_and_generates_without_comfyui_nodes(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(
+        db_path,
+        storage_root,
+        settings={
+            "comfyui_connection_mode": "diffusers",
+            "comfyui_diffusers_model_repo": "dhead/waiIllustriousSDXL_v150",
+            "comfyui_huggingface_api_token": "hf_read_token",
+        },
+        extra_deps={
+            "comfyui_client": None,
+            "comfyui_client_factory": lambda url: FakeDiffusersBackendClient(),
+        },
+    ).test_client()
+
+    listed = client.get("/api/comfyui/models")
+    assert listed.status_code == 200
+    body = listed.get_json()
+    assert body["ok"] is True
+    assert body["connection_mode"] == "diffusers"
+    assert body["models"] == ["dhead/waiIllustriousSDXL_v150"]
+    assert body["loras"] == []
+    assert body["samplers"] == ["diffusers-auto"]
+
+    generated = client.post(
+        "/api/comfyui/generate",
+        json={
+            "generation_mode": "txt2img",
+            "model": "dhead/waiIllustriousSDXL_v150",
+            "prompt": "illustration",
+            "negative_prompt": "",
+            "sampler_name": "diffusers-auto",
+            "scheduler": "default",
+            "seed": 123,
+            "confirm_billing": True,
+        },
+    )
+
+    assert generated.status_code == 200, generated.get_json()
+    payload = generated.get_json()
+    assert payload["ok"] is True
+    assert payload["backend_scope"] == "primary"
+    assert payload["image"]["image_ref"]["filename"] == "hackme_web_diffusers.png"
+    assert FakeDiffusersBackendClient.last_params["model"] == "dhead/waiIllustriousSDXL_v150"
+
+
+def test_comfyui_diffusers_mode_rejects_comfyui_controlnet_shortcut(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(
+        db_path,
+        storage_root,
+        settings={
+            "comfyui_connection_mode": "diffusers",
+            "comfyui_diffusers_model_repo": "dhead/waiIllustriousSDXL_v150",
+        },
+        extra_deps={
+            "comfyui_client": None,
+            "comfyui_client_factory": lambda url: FakeDiffusersBackendClient(),
+        },
+    ).test_client()
+
+    generated = client.post(
+        "/api/comfyui/generate",
+            json={
+                "generation_mode": "txt2img",
+                "model": "dhead/waiIllustriousSDXL_v150",
+                "prompt": "illustration",
+                "controlnet_enabled": True,
+                "controlnet_type": "canny",
+                "control_strength": 1.0,
+                "control_start": 0.0,
+                "control_end": 1.0,
+                "confirm_billing": True,
+            },
+        )
+
+    assert generated.status_code == 409
+    assert "Diffusers 後端目前不支援本站 ControlNet" in generated.get_json()["msg"]
 
 
 def test_root_can_download_local_comfyui_start_template(tmp_path):
@@ -3857,9 +4074,15 @@ def test_comfyui_frontend_is_wired():
     assert '<option value="controlnet">ControlNet</option>' in index_html
     assert '<option value="hypernetwork">Hypernetwork</option>' not in index_html
     assert 'id="s-comfyui-connection-mode"' in index_html
+    assert '<option value="diffusers">Hugging Face Diffusers' in index_html
     assert 'id="s-comfyui-remote-api-url"' in index_html
-    assert '主 ComfyUI backend 依這裡切換' in index_html
+    assert '主生圖 backend 依這裡切換' in index_html
     assert 'Civitai API Key 只用在 root 的模型下載區' in index_html
+    assert 'id="comfyui-diffusers-settings" style="display:none;"' in index_html
+    assert 'id="s-comfyui-diffusers-model-repo"' in index_html
+    assert 'id="s-comfyui-huggingface-api-token"' in index_html
+    assert 'id="s-comfyui-diffusers-device"' in index_html
+    assert 'id="s-comfyui-diffusers-dtype"' in index_html
     assert 'id="s-comfyui-base-dir"' in index_html
     assert 'id="s-comfyui-local-start-script"' in index_html
     assert 'id="comfyui-local-start-template-link"' in index_html
@@ -3882,6 +4105,7 @@ def test_comfyui_frontend_is_wired():
     assert 'normTab === "comfyui"' in admin_js
     assert '本地模式會測試本地 API；若產圖時 API 未啟動，後端會嘗試執行啟動腳本。' in admin_js
     assert '遠端模式只負責呼叫指定 API 生圖，無法透過 API 把模型下載回本站的本地 ComfyUI，所以會隱藏本地模型下載與 Civitai API Key。' in admin_js
+    assert 'Diffusers 模式會檢查 Hugging Face repo 與 Python 套件' in admin_js
     assert 'apiFetch(API + "/comfyui/generate"' in comfyui_js
     assert 'apiFetch(API + "/comfyui/billing-quote"' in comfyui_js
     assert 'apiFetch(API + "/root/comfyui/civitai/search"' in comfyui_js
@@ -3996,10 +4220,11 @@ def test_comfyui_frontend_is_wired():
     assert ".port.input.compatible" in visual_editor_css
     assert "function bindComfyuiAdvancedUi()" in comfyui_js
     assert "function updateComfyuiModeNote(modeOverride = null)" in comfyui_js
-    assert 'badge.textContent = normalizedMode === "local" ? "本地模式" : "雲端 / 遠端模式";' in comfyui_js
+    assert 'badge.textContent = normalizedMode === "local" ? "本地模式" : (normalizedMode === "diffusers" ? "Diffusers 模式" : "雲端 / 遠端模式");' in comfyui_js
     assert 'detail.textContent = comfyuiConnectionModeDetail(normalizedMode);' in comfyui_js
     assert '目前是本地模式：可由 root 啟動 / 停止本地 ComfyUI' in comfyui_js
     assert '目前是雲端 / 遠端模式：此頁會直接呼叫遠端 ComfyUI API 生圖' in comfyui_js
+    assert '目前是 Diffusers 模式：後端會直接載入 Hugging Face repo 生圖' in comfyui_js
     assert "function pollComfyuiJobUntilDone(jobId, controller, timeoutSeconds)" in comfyui_js
     assert "function pollComfyuiModelDownloadJob(jobId)" in comfyui_js
     assert "const COMFYUI_GENERATION_TIMEOUT_SECONDS = 1800;" in comfyui_js

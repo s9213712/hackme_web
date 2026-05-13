@@ -72,8 +72,8 @@ def register_comfyui_runtime_routes(app, ctx):
                 active_client.get_models()
                 status = {"ok": True}
         except ComfyUIError as exc:
-            runtime = _local_comfyui_runtime_status(_configured_comfyui_port())
-            if binding["connection_mode"] == "local" and runtime:
+            runtime = _local_comfyui_runtime_status(_configured_comfyui_port()) if binding["connection_mode"] == "local" else None
+            if runtime:
                 return json_resp({
                     "ok": True,
                     "available": False,
@@ -174,6 +174,7 @@ def register_comfyui_runtime_routes(app, ctx):
                 "upscale_models": [],
                 "controlnet_types": {},
                 "generation_modes": [],
+                "model_families": [],
                 "billing": None if not _comfyui_charge_required(actor) else (_comfyui_price_quote(1)[0] or {}),
                 "wallet": _comfyui_wallet_payload(actor),
                 "lora_extra_unit_price": COMFYUI_LORA_EXTRA_PRICE_POINTS,
@@ -188,6 +189,7 @@ def register_comfyui_runtime_routes(app, ctx):
         except ComfyUIError:
             embeddings = []
         lora_details = _build_lora_details(loras)
+        model_families = (capabilities or {}).get("model_families") or []
         return json_resp({
             "ok": True,
             "models": models,
@@ -207,6 +209,7 @@ def register_comfyui_runtime_routes(app, ctx):
             "upscale_models": (capabilities or {}).get("upscale_models") or [],
             "controlnet_types": (capabilities or {}).get("controlnet_types") or {},
             "generation_modes": (capabilities or {}).get("generation_modes") or [],
+            "model_families": model_families,
             "billing": None if not _comfyui_charge_required(actor) else (_comfyui_price_quote(1)[0] or {}),
             "wallet": _comfyui_wallet_payload(actor),
             "lora_extra_unit_price": COMFYUI_LORA_EXTRA_PRICE_POINTS,

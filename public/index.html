@@ -1439,6 +1439,7 @@
             <select id="comfyui-model-select">
               <option value="">讀取模型中...</option>
             </select>
+            <div class="comfyui-model-family-hint" id="comfyui-model-family-hint">模型族群讀取中。</div>
           </div>
           <div class="field">
             <label>VAE</label>
@@ -1456,6 +1457,11 @@
                 <option value="inpaint">局部重繪</option>
                 <option value="outpaint">向外延展</option>
                 <option value="upscale">放大修復</option>
+                <option value="t2v">文字生影片</option>
+                <option value="i2v">圖生影片</option>
+                <option value="v2v">影片生影片</option>
+                <option value="t2s">文字轉語音</option>
+                <option value="t2sv">文字生成語音影片</option>
               </select>
             </div>
             <div class="field" id="comfyui-denoise-field">
@@ -1479,6 +1485,7 @@
               <div class="comfyui-input-preview" id="comfyui-source-image-preview"><span class="drive-card-sub">尚未選擇來源圖片</span></div>
               <div class="drive-card-sub" id="comfyui-source-image-meta">可上傳 PNG、JPG、WEBP。</div>
               <div class="drive-file-actions" style="justify-content:flex-start;">
+                <button class="btn btn-sm" id="comfyui-source-image-picker-btn" type="button">選擇既有圖片</button>
                 <button class="btn btn-sm" id="comfyui-source-image-clear-btn" type="button">清除來源圖</button>
               </div>
             </div>
@@ -1489,6 +1496,8 @@
               <div class="comfyui-input-preview" id="comfyui-mask-image-preview"><span class="drive-card-sub">尚未選擇遮罩圖片</span></div>
               <div class="drive-card-sub" id="comfyui-mask-image-meta">建議與來源圖片尺寸一致。</div>
               <div class="drive-file-actions" style="justify-content:flex-start;">
+                <button class="btn btn-sm" id="comfyui-mask-image-picker-btn" type="button">選擇既有圖片</button>
+                <button class="btn btn-sm" id="comfyui-mask-editor-open-btn" type="button">編輯遮罩</button>
                 <button class="btn btn-sm" id="comfyui-mask-image-clear-btn" type="button">清除遮罩</button>
               </div>
             </div>
@@ -1499,6 +1508,7 @@
               <div class="comfyui-input-preview" id="comfyui-control-image-preview"><span class="drive-card-sub">尚未選擇控制圖</span></div>
               <div class="drive-card-sub" id="comfyui-control-image-meta">控制圖只在啟用 ControlNet 時送出。</div>
               <div class="drive-file-actions" style="justify-content:flex-start;">
+                <button class="btn btn-sm" id="comfyui-control-image-picker-btn" type="button">選擇既有圖片</button>
                 <button class="btn btn-sm" id="comfyui-control-image-clear-btn" type="button">清除控制圖</button>
               </div>
             </div>
@@ -1615,6 +1625,52 @@
             <button class="btn" id="comfyui-save-btn" type="button" disabled>存到雲端硬碟</button>
             <button class="btn" id="comfyui-share-btn" type="button" disabled>分享到 ComfyUI 專區</button>
             <button class="btn" id="comfyui-discard-btn" type="button" disabled>丟棄預覽</button>
+          </div>
+          <div class="comfyui-mask-editor-modal" id="comfyui-mask-editor-modal" role="dialog" aria-modal="true" aria-labelledby="comfyui-mask-editor-title" hidden>
+            <div class="comfyui-mask-editor-card">
+              <div class="comfyui-mask-editor-head">
+                <div>
+                  <div class="drive-card-title" id="comfyui-mask-editor-title">遮罩編輯器</div>
+                  <div class="drive-card-sub" id="comfyui-mask-editor-meta">白色區域會交給 inpaint 重繪。</div>
+                </div>
+                <button class="btn btn-sm" id="comfyui-mask-editor-close-btn" type="button">關閉</button>
+              </div>
+              <div class="comfyui-mask-editor-toolbar">
+                <button class="btn btn-sm" id="comfyui-mask-editor-paint-btn" type="button" aria-pressed="true">畫筆</button>
+                <button class="btn btn-sm" id="comfyui-mask-editor-erase-btn" type="button" aria-pressed="false">橡皮擦</button>
+                <label class="comfyui-mask-editor-size">
+                  筆刷
+                  <input type="range" id="comfyui-mask-editor-brush" min="4" max="256" step="2" value="56" />
+                  <span id="comfyui-mask-editor-brush-label">56px</span>
+                </label>
+                <button class="btn btn-sm" id="comfyui-mask-editor-clear-btn" type="button">清空</button>
+                <button class="btn btn-sm" id="comfyui-mask-editor-fill-btn" type="button">全選</button>
+                <button class="btn btn-sm" id="comfyui-mask-editor-invert-btn" type="button">反相</button>
+              </div>
+              <div class="comfyui-mask-editor-stage" id="comfyui-mask-editor-stage">
+                <canvas id="comfyui-mask-editor-source-canvas"></canvas>
+                <canvas id="comfyui-mask-editor-mask-canvas"></canvas>
+              </div>
+              <div class="drive-card-sub">在來源圖上拖曳即可畫出要重繪的位置；可用滑鼠、觸控筆或手機觸控操作。</div>
+              <div class="drive-file-actions" style="justify-content:flex-end;margin-top:.65rem;">
+                <button class="btn" id="comfyui-mask-editor-cancel-btn" type="button">取消</button>
+                <button class="btn btn-primary" id="comfyui-mask-editor-apply-btn" type="button">套用遮罩</button>
+              </div>
+            </div>
+          </div>
+          <div class="comfyui-image-picker-modal" id="comfyui-image-picker-modal" role="dialog" aria-modal="true" aria-labelledby="comfyui-image-picker-title" hidden>
+            <div class="comfyui-image-picker-card">
+              <div class="comfyui-image-picker-head">
+                <div>
+                  <div class="drive-card-title" id="comfyui-image-picker-title">選擇既有圖片</div>
+                  <div class="drive-card-sub" id="comfyui-image-picker-status">讀取歷史產圖與雲端硬碟圖片。</div>
+                </div>
+                <button class="btn btn-sm" id="comfyui-image-picker-close-btn" type="button">關閉</button>
+              </div>
+              <div class="comfyui-image-picker-list" id="comfyui-image-picker-list">
+                <div class="drive-empty">尚未讀取圖片清單</div>
+              </div>
+            </div>
           </div>
           <div id="comfyui-msg" class="msg"></div>
         </div>
@@ -1802,10 +1858,16 @@
                 <label>模型類型</label>
                 <select id="comfyui-model-download-type">
                   <option value="checkpoint">Checkpoint</option>
+                  <option value="diffusion_model">Diffusion Model / UNet</option>
+                  <option value="text_encoder">Text Encoder / CLIP / T5 / Qwen</option>
+                  <option value="clip">CLIP / Text Encoder (legacy)</option>
+                  <option value="clip_vision">CLIP Vision</option>
                   <option value="lora">LoRA</option>
                   <option value="embedding">Embedding / TI</option>
                   <option value="controlnet">ControlNet</option>
                   <option value="vae">VAE</option>
+                  <option value="audio">Audio / TTS</option>
+                  <option value="video">Video / Motion</option>
                   <option value="upscale">放大模型 / Upscaler</option>
                 </select>
               </div>
@@ -1838,6 +1900,11 @@
                     <option value="Illustrious">Illustrious</option>
                     <option value="NoobAI">NoobAI</option>
                     <option value="Flux.1 D">Flux.1 D</option>
+                    <option value="SD 3.5">SD 3.5</option>
+                    <option value="Anima">Anima</option>
+                    <option value="Lumina">Lumina / NetaYume</option>
+                    <option value="Wan Video">Wan Video</option>
+                    <option value="Animagine XL">Animagine XL</option>
                     <option value="SD 1.5">SD 1.5</option>
                   </select>
                 </div>
@@ -1849,6 +1916,12 @@
                     <option value="lora">LoRA</option>
                     <option value="embedding">Embedding / TI</option>
                     <option value="controlnet">ControlNet</option>
+                    <option value="vae">VAE</option>
+                    <option value="diffusion_model">Diffusion Model / UNet</option>
+                    <option value="text_encoder">Text Encoder</option>
+                    <option value="clip_vision">CLIP Vision</option>
+                    <option value="audio">Audio / TTS</option>
+                    <option value="video">Video / Motion</option>
                   </select>
                 </div>
                 <div class="field">
@@ -3907,8 +3980,9 @@
               <select id="s-comfyui-connection-mode">
                 <option value="remote">遠端 ComfyUI API</option>
                 <option value="local">本地 ComfyUI 資料夾與啟動腳本</option>
+                <option value="diffusers">Hugging Face Diffusers（純 Python）</option>
               </select>
-              <div class="drive-card-sub">主 ComfyUI backend 依這裡切換。Civitai API Key 只用在 root 的模型下載區，不參與上方產圖連線。</div>
+              <div class="drive-card-sub">主生圖 backend 依這裡切換。Civitai API Key 只用在 root 的模型下載區，不參與上方產圖連線。</div>
             </div>
             <div id="comfyui-remote-settings">
               <div class="field">
@@ -3916,6 +3990,39 @@
                 <input type="url" id="s-comfyui-remote-api-url" placeholder="http://127.0.0.1:8192" />
               </div>
               <div style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .75rem;">遠端模式只透過 ComfyUI API 產圖；丟棄預覽只會清掉網頁預覽，不會刪除遠端 output 原始檔，也不提供本地模型下載。</div>
+            </div>
+            <div id="comfyui-diffusers-settings" style="display:none;">
+              <div class="field">
+                <label>Hugging Face Model Repo</label>
+                <input type="text" id="s-comfyui-diffusers-model-repo" placeholder="dhead/waiIllustriousSDXL_v150" autocomplete="off" />
+                <div class="drive-card-sub">填 Hugging Face repo id。Diffusers 會用 Python 直接下載/快取並推論，不經過 ComfyUI server。</div>
+              </div>
+              <div class="field">
+                <label>Hugging Face API Token</label>
+                <input type="password" id="s-comfyui-huggingface-api-token" placeholder="私有或 gated 模型才需要；留空代表不變更" autocomplete="off" />
+                <div class="drive-card-sub" id="comfyui-huggingface-api-token-state">尚未讀取 Hugging Face token 狀態。</div>
+                <div class="drive-card-sub">建議用 read 或 fine-grained token。也可用環境變數 <code>HF_TOKEN</code> / <code>COMFYUI_HUGGINGFACE_API_TOKEN</code> 提供。</div>
+                <label style="margin-top:.35rem;"><input type="checkbox" id="s-comfyui-huggingface-api-token-clear" /> 清除已儲存的 Hugging Face API Token</label>
+              </div>
+              <div class="field">
+                <label>Diffusers Device</label>
+                <select id="s-comfyui-diffusers-device">
+                  <option value="auto">auto</option>
+                  <option value="cuda">cuda</option>
+                  <option value="mps">mps</option>
+                  <option value="cpu">cpu</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>Diffusers dtype</label>
+                <select id="s-comfyui-diffusers-dtype">
+                  <option value="auto">auto</option>
+                  <option value="float16">float16</option>
+                  <option value="bfloat16">bfloat16</option>
+                  <option value="float32">float32</option>
+                </select>
+              </div>
+              <div style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .75rem;">目前支援文字生圖、圖生圖與局部重繪；影片、語音、放大、ControlNet 與 ComfyUI workflow 仍走 ComfyUI 後端。</div>
             </div>
             <div id="comfyui-local-settings" style="display:none;">
               <div class="field">
@@ -5397,8 +5504,8 @@
 <script src="/js/35-drive.js?v=20260504-drive-media-rename" defer></script>
   <script src="/js/35-drive-preview-share.js?v=20260507-drive-preview-share-split" defer></script>
 <!-- cache marker retained for template-import regression: /js/36-comfyui.js?v=20260509-comfyui-template-embeddings -->
-<script src="/js/36-comfyui.js?v=20260510-comfyui-visual-workflow" defer></script>
-<script src="/js/36-comfyui-workflows.js?v=20260510-comfyui-visual-workflow" defer></script>
+<script src="/js/36-comfyui.js?v=20260513-comfyui-media-picker" defer></script>
+<script src="/js/36-comfyui-workflows.js?v=20260513-comfyui-media-picker" defer></script>
 <script src="/js/37-bug-report.js?v=20260502-device-feature" defer></script>
 <script src="/js/three.min.js?v=0.160.0" defer></script>
 <script src="/js/41-game-modules.js?v=20260513-game-registry" defer></script>

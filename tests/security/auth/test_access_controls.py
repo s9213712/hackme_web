@@ -525,6 +525,53 @@ def test_comfyui_account_api_key_rejects_whitespace():
     assert "comfyui_account_api_key" not in state
 
 
+def test_root_can_configure_diffusers_backend_and_hf_token_write_only():
+    app, state = _admin_app()
+    client = app.test_client()
+
+    saved = client.put(
+        "/api/admin/settings",
+        json={
+            "comfyui_connection_mode": "diffusers",
+            "comfyui_diffusers_model_repo": "dhead/waiIllustriousSDXL_v150",
+            "comfyui_huggingface_api_token": "hf_read_token",
+            "comfyui_diffusers_device": "cuda",
+            "comfyui_diffusers_dtype": "float16",
+        },
+    )
+
+    assert saved.status_code == 200
+    assert state["comfyui_connection_mode"] == "diffusers"
+    assert state["comfyui_diffusers_model_repo"] == "dhead/waiIllustriousSDXL_v150"
+    assert state["comfyui_huggingface_api_token"] == "hf_read_token"
+    assert state["comfyui_diffusers_device"] == "cuda"
+    assert state["comfyui_diffusers_dtype"] == "float16"
+    payload = saved.get_json()["settings"]
+    assert payload["comfyui_huggingface_api_token"] == ""
+    assert payload["comfyui_huggingface_api_token_configured"] is True
+
+    unchanged = client.put("/api/admin/settings", json={"comfyui_huggingface_api_token": "", "comfyui_diffusers_device": "auto"})
+    assert unchanged.status_code == 200
+    assert state["comfyui_huggingface_api_token"] == "hf_read_token"
+    assert unchanged.get_json()["settings"]["comfyui_huggingface_api_token_configured"] is True
+
+    cleared = client.put("/api/admin/settings", json={"comfyui_huggingface_api_token_clear": True})
+    assert cleared.status_code == 200
+    assert state["comfyui_huggingface_api_token"] == ""
+    assert cleared.get_json()["settings"]["comfyui_huggingface_api_token_configured"] is False
+
+
+def test_diffusers_settings_reject_invalid_repo_token_and_runtime_options():
+    app, state = _admin_app()
+    client = app.test_client()
+
+    assert client.put("/api/admin/settings", json={"comfyui_diffusers_model_repo": "../bad/model"}).status_code == 400
+    assert client.put("/api/admin/settings", json={"comfyui_huggingface_api_token": "bad token"}).status_code == 400
+    assert client.put("/api/admin/settings", json={"comfyui_diffusers_device": "tpu"}).status_code == 400
+    assert client.put("/api/admin/settings", json={"comfyui_diffusers_dtype": "int8"}).status_code == 400
+    assert "comfyui_diffusers_model_repo" not in state
+
+
 def test_root_can_configure_comfyui_default_dimensions_without_restart_hint():
     app, state = _admin_app()
     client = app.test_client()

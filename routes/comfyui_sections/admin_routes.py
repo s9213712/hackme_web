@@ -97,7 +97,11 @@ def register_comfyui_admin_routes(app, ctx):
                         })
                     except ComfyUIError as exc2:
                         exc = exc2
-            runtime = local_comfyui_runtime_status((endpoint or {}).get("port") if isinstance(endpoint, dict) else None)
+            runtime = (
+                local_comfyui_runtime_status((endpoint or {}).get("port"))
+                if isinstance(endpoint, dict) and endpoint.get("mode") == "local"
+                else None
+            )
             audit(
                 "COMFYUI_CONNECTION_TEST",
                 get_client_ip(),

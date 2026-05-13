@@ -6,6 +6,7 @@ from services.comfyui.template.allowlist import (
     CONTROLNET_PREPROCESSOR_ALLOWLIST,
     CORE_ALLOWLIST,
     EXPLICIT_DENYLIST,
+    MEDIA_WORKFLOW_ALLOWLIST,
     is_allowed_class,
     is_explicitly_denied_class,
 )
@@ -46,9 +47,8 @@ def test_core_and_controlnet_disjoint():
 
 
 def test_denylist_named_high_risk_classes():
-    """Animation, face swap, IPAdapter, FaceDetailer should all be on the explicit denylist."""
+    """Face swap, IPAdapter, and FaceDetailer remain explicit denies."""
     expected = {
-        "AnimateDiffLoader",
         "FaceDetailer",
         "ReActorFaceSwap",
         "IPAdapterApply",
@@ -60,7 +60,8 @@ def test_is_allowed_class_simple_cases():
     assert is_allowed_class("KSampler") is True
     assert is_allowed_class("CannyEdgePreprocessor") is True  # controlnet preprocessor
     assert is_allowed_class("KSamplerAdvanced") is True
-    assert is_allowed_class("AnimateDiffLoader") is False
+    assert is_allowed_class("AnimateDiffLoader") is True
+    assert is_allowed_class("VHS_VideoCombine") is True
     assert is_allowed_class("") is False
     assert is_allowed_class(None) is False  # type: ignore[arg-type]
 
@@ -68,9 +69,25 @@ def test_is_allowed_class_simple_cases():
 def test_is_explicitly_denied_class_named_set():
     assert is_explicitly_denied_class("ReActorFaceSwap") is True
     assert is_explicitly_denied_class("FaceDetailer") is True
-    assert is_explicitly_denied_class("VHS_VideoCombine") is True
+    assert is_explicitly_denied_class("VHS_VideoCombine") is False
     assert is_explicitly_denied_class("KSampler") is False  # allowed, not denied
     assert is_explicitly_denied_class("") is False
+
+
+def test_media_workflow_allowlist_supports_video_audio_nodes():
+    expected = {
+        "WanImageToVideo",
+        "WanSoundImageToVideo",
+        "SaveVideo",
+        "SaveWEBM",
+        "VHS_VideoCombine",
+        "AnimateDiffLoader",
+        "FluxGuidance",
+        "StabilityStableImageSD_3_5Node",
+        "SaveAudio",
+        "IndexTTSNode",
+    }
+    assert expected <= MEDIA_WORKFLOW_ALLOWLIST
 
 
 def test_is_explicitly_denied_class_regex_patterns():

@@ -9,6 +9,13 @@ import uuid
 
 QUEUE_TIMEOUT_EXTENSION_SECONDS = 1800
 QUEUE_MAX_TIMEOUT_SECONDS = 21600
+OUTPUT_REF_KEYS = {
+    "images": "images",
+    "videos": "videos",
+    "gifs": "videos",
+    "audio": "audio",
+    "audios": "audio",
+}
 
 
 def queue_prompt_with_client_id(client, workflow, *, client_id=None, extra_data=None, error_cls):
@@ -121,7 +128,68 @@ def apply_ws_message_to_progress(snapshot, message, prompt_id):
     return updated
 
 
+def collect_output_refs(record):
+    outputs = (record or {}).get("outputs") or {}
+    found = {"images": [], "videos": [], "audio": [], "other": []}
+    seen = set()
+    for output in outputs.values():
+        if not isinstance(output, dict):
+            continue
+        for raw_key, normalized_key in OUTPUT_REF_KEYS.items():
+            refs = output.get(raw_key)
+            if not isinstance(refs, list):
+                continue
+            for item in refs:
+                if not isinstance(item, dict):
+                    continue
+                filename = str(item.get("filename") or "").strip()
+                if not filename:
+                    continue
+                payload = {
+                    "filename": filename,
+                    "subfolder": str(item.get("subfolder") or "").strip(),
+                    "type": str(item.get("type") or "output").strip() or "output",
+                }
+                for extra_key in ("format", "frame_rate", "duration", "workflow"):
+                    if extra_key in item:
+                        payload[extra_key] = item.get(extra_key)
+                dedupe = (normalized_key, payload["filename"], payload["subfolder"], payload["type"])
+                if dedupe in seen:
+                    continue
+                seen.add(dedupe)
+                found[normalized_key].append(payload)
+    return found
+
+
 def wait_for_images(
+    client,
+    prompt_id,
+    *,
+    timeout_seconds=1800,
+    poll_interval=1.0,
+    expected_count=1,
+    websocket_conn=None,
+    progress_callback=None,
+    error_cls,
+    websocket_module=None,
+):
+    outputs = wait_for_outputs(
+        client,
+        prompt_id,
+        timeout_seconds=timeout_seconds,
+        poll_interval=poll_interval,
+        expected_count=expected_count,
+        websocket_conn=websocket_conn,
+        progress_callback=progress_callback,
+        error_cls=error_cls,
+        websocket_module=websocket_module,
+    )
+    if not outputs.get("images"):
+        raise error_cls("ComfyUI 沒有回傳圖片輸出")
+    return outputs["images"]
+
+
+def wait_for_outputs(
     client,
     prompt_id,
     *,
@@ -198,26 +266,27 @@ def wait_for_images(
                 last_status = status
                 if status.get("status_str") == "error" or status.get("completed") is False and status.get("status_str") == "error":
                     raise error_cls("ComfyUI 產圖失敗")
-                found = []
-                outputs = record.get("outputs") or {}
-                for output in outputs.values():
-                    images = output.get("images") if isinstance(output, dict) else None
-                    if images:
-                        found.extend(images)
-                if len(found) >= expected:
+                found = collect_output_refs(record)
+                image_count = len(found["images"])
+                media_count = len(found["videos"]) + len(found["audio"]) + len(found["other"])
+                if image_count >= expected:
                     snapshot["phase"] = "completed"
                     snapshot["percent"] = 100
                     snapshot["completed"] = True
-                    snapshot["detail"] = f"已完成，共 {len(found[:expected])} 張"
+                    snapshot["detail"] = f"已完成，共 {len(found['images'][:expected])} 張"
                     emit_progress(progress_callback, snapshot)
-                    return found[:expected]
-                if found and status.get("completed") is True:
+                    return {
+                        **found,
+                        "images": found["images"][:expected],
+                        "prompt_id": str(prompt_id),
+                    }
+                if (image_count or media_count) and status.get("completed") is True:
                     snapshot["phase"] = "completed"
                     snapshot["percent"] = 100
                     snapshot["completed"] = True
-                    snapshot["detail"] = f"已完成，共 {len(found)} 張"
+                    snapshot["detail"] = f"已完成，輸出 {image_count + media_count} 個檔案"
                     emit_progress(progress_callback, snapshot)
-                    return found
+                    return {**found, "prompt_id": str(prompt_id)}
             next_history_poll = now + float(poll_interval)
         time.sleep(0.15)
     detail = f"；最後狀態：{last_status}" if last_status else ""
@@ -276,7 +345,7 @@ def generate_from_workflow(
             "completed": False,
             "updated_at": time.time(),
         })
-        image_refs = wait_for_images(
+        output_refs = wait_for_outputs(
             client,
             prompt_id,
             timeout_seconds=timeout_seconds,
@@ -292,8 +361,14 @@ def generate_from_workflow(
                 websocket_conn.close()
         except Exception:
             pass
-    images = [image_fetcher(image_ref) for image_ref in image_refs]
-    image = images[0]
+    images = [image_fetcher(image_ref) for image_ref in output_refs.get("images") or []]
+    media_outputs = {}
+    for media_key in ("videos", "audio", "other"):
+        fetcher = getattr(client, "fetch_file", None) or image_fetcher
+        media_outputs[media_key] = [fetcher(file_ref) for file_ref in output_refs.get(media_key) or []]
+    if not images and not any(media_outputs.values()):
+        raise error_cls("ComfyUI 沒有回傳可用輸出檔")
+    primary = images[0] if images else next(item for values in media_outputs.values() for item in values)
     serialized_images = [{
         "image_ref": {
             "filename": item.filename,
@@ -303,16 +378,29 @@ def generate_from_workflow(
         "mime_type": item.mime_type,
         "data": item.data,
     } for item in images]
+    serialized_media = {
+        key: [{
+            "file_ref": {
+                "filename": item.filename,
+                "subfolder": item.subfolder,
+                "type": item.type,
+            },
+            "mime_type": item.mime_type,
+            "data": item.data,
+        } for item in values]
+        for key, values in media_outputs.items()
+    }
     return {
         "prompt_id": prompt_id,
         "image_ref": {
-            "filename": image.filename,
-            "subfolder": image.subfolder,
-            "type": image.type,
+            "filename": primary.filename,
+            "subfolder": primary.subfolder,
+            "type": primary.type,
         },
-        "mime_type": image.mime_type,
-        "data": image.data,
+        "mime_type": primary.mime_type,
+        "data": primary.data,
         "images": serialized_images,
+        "media": serialized_media,
     }
 
 

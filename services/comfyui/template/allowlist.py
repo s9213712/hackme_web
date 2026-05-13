@@ -71,18 +71,71 @@ CONTROLNET_PREPROCESSOR_ALLOWLIST = frozenset(
     }
 )
 
+MEDIA_WORKFLOW_ALLOWLIST = frozenset(
+    {
+        # Native / common video workflow nodes
+        "CLIPLoader",
+        "DualCLIPLoader",
+        "TripleCLIPLoader",
+        "UNETLoader",
+        "CLIPVisionLoader",
+        "CLIPVisionEncode",
+        "ModelSamplingSD3",
+        "WanImageToVideo",
+        "WanImageToVideoApi",
+        "WanSoundImageToVideo",
+        "WanHuMoImageToVideo",
+        "WanAnimateToVideo",
+        "WanVaceToVideo",
+        "CreateVideo",
+        "SaveVideo",
+        "SaveWEBM",
+        "GetVideoComponents",
+        "LoadVideo",
+        "VHS_LoadVideo",
+        "VHS_VideoCombine",
+        "VHS_LoadImages",
+        "VHS_SplitImages",
+        "VHS_DuplicateImages",
+        "VHS_SelectEveryNthImage",
+        "VHS_PruneOutputs",
+        "AnimateDiffLoader",
+        "AnimateDiffSampler",
+        "AnimateDiffCombine",
+        "ImageOnlyCheckpointLoader",
+        "LoraLoaderModelOnly",
+        "ConditioningSetTimestepRange",
+        "BasicGuider",
+        "BasicScheduler",
+        "RandomNoise",
+        "SamplerCustomAdvanced",
+        "SplitSigmas",
+        "FluxGuidance",
+        "FluxDisableGuidance",
+        "FluxKontextImageScale",
+        "FluxProFillNode",
+        "FluxProDepthNode",
+        "CLIPTextEncodeFlux",
+        "StabilityStableImageSD_3_5Node",
+        # Native / common audio workflow nodes
+        "LoadAudio",
+        "SaveAudio",
+        "PreviewAudio",
+        "IndexTTSNode",
+        "TimbreAudioLoader",
+        "AudioCleanupNode",
+        "F5TTS",
+        "F5TTSNode",
+        "CosyVoiceNode",
+    }
+)
+
 
 # §4.3 explicitly denied class types (kept short; the regex below handles families).
 # These are notable enough that we want named-deny instead of regex catch-all
 # so audit / error messages can call them out by name.
 EXPLICIT_DENYLIST = frozenset(
     {
-        # Animation / video out — disk/runtime cost we don't want for v1
-        "AnimateDiffLoader",
-        "AnimateDiffSampler",
-        "AnimateDiffCombine",
-        "VHS_VideoCombine",
-        "VHS_LoadVideo",
         # IP / face — out of scope for v1 (privacy + multi-stage pipeline complexity)
         "IPAdapterApply",
         "IPAdapterModelLoader",
@@ -117,7 +170,11 @@ def is_allowed_class(class_type: str) -> bool:
     """
     if not class_type:
         return False
-    return class_type in CORE_ALLOWLIST or class_type in CONTROLNET_PREPROCESSOR_ALLOWLIST
+    return (
+        class_type in CORE_ALLOWLIST
+        or class_type in CONTROLNET_PREPROCESSOR_ALLOWLIST
+        or class_type in MEDIA_WORKFLOW_ALLOWLIST
+    )
 
 
 def is_explicitly_denied_class(class_type: str) -> bool:
@@ -133,6 +190,7 @@ def is_explicitly_denied_class(class_type: str) -> bool:
 __all__ = [
     "CORE_ALLOWLIST",
     "CONTROLNET_PREPROCESSOR_ALLOWLIST",
+    "MEDIA_WORKFLOW_ALLOWLIST",
     "EXPLICIT_DENYLIST",
     "is_allowed_class",
     "is_explicitly_denied_class",

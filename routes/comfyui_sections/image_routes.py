@@ -1,3 +1,6 @@
+from pathlib import Path
+
+
 def register_comfyui_image_routes(app, ctx):
     base64 = ctx["base64"]
     request = ctx["request"]
@@ -8,6 +11,7 @@ def register_comfyui_image_routes(app, ctx):
     get_ua = ctx["get_ua"]
     audit = ctx["audit"]
     attach_existing_file = ctx["attach_existing_file"]
+    can_download_file = ctx["can_download_file"]
     datetime = ctx["datetime"]
     ComfyUIError = ctx["ComfyUIError"]
     _active_generation_snapshot = ctx["active_generation_snapshot"]
@@ -28,9 +32,246 @@ def register_comfyui_image_routes(app, ctx):
     _is_root = ctx["is_root"]
     _json_error_from_comfy = ctx["json_error_from_comfy"]
     _load_comfyui_image_ref_record = ctx["load_comfyui_image_ref_record"]
+    _list_generation_history = ctx["list_generation_history"]
     _normalize_comfyui_backend_url = ctx["normalize_comfyui_backend_url"]
+    _register_comfyui_image_refs = ctx["register_comfyui_image_refs"]
+    resolve_file_storage_path = ctx["resolve_file_storage_path"]
     _safe_text = ctx["safe_text"]
     _save_fetched_image = ctx["save_fetched_image"]
+    storage_root = ctx["storage_root"]
+    COMFYUI_ALLOWED_IMAGE_EXTENSIONS = ctx["COMFYUI_ALLOWED_IMAGE_EXTENSIONS"]
+    COMFYUI_ALLOWED_IMAGE_MIME_TYPES = ctx["COMFYUI_ALLOWED_IMAGE_MIME_TYPES"]
+    MAX_COMFYUI_FETCH_IMAGE_BYTES = ctx["MAX_COMFYUI_FETCH_IMAGE_BYTES"]
+
+    def _cloud_image_row_payload(row, *, storage_row=None):
+        filename = row["original_filename_plain_for_public"] or "image.png"
+        return {
+            "source": "cloud_drive",
+            "file_id": row["id"],
+            "storage_file_id": (storage_row or {}).get("id") if isinstance(storage_row, dict) else None,
+            "filename": filename,
+            "virtual_path": (storage_row or {}).get("virtual_path") if isinstance(storage_row, dict) else "",
+            "mime_type": row["mime_type_plain_for_public"] or "",
+            "size_bytes": int(row["size_bytes"] or 0),
+            "scan_status": row["scan_status"] or "",
+            "risk_level": row["risk_level"] or "",
+            "created_at": row["created_at"] or "",
+        }
+
+    def _list_cloud_drive_image_candidates(conn, actor, *, limit=80):
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM uploaded_files
+            WHERE owner_user_id=? AND deleted_at IS NULL
+                  AND privacy_mode='standard_plain'
+                  AND lower(COALESCE(mime_type_plain_for_public, '')) IN ('image/png', 'image/jpeg', 'image/webp')
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (int(_actor_value(actor, "id")), int(limit)),
+        ).fetchall()
+        candidates = []
+        for row in rows:
+            filename = row["original_filename_plain_for_public"] or ""
+            if Path(filename).suffix.lower() not in COMFYUI_ALLOWED_IMAGE_EXTENSIONS:
+                continue
+            allowed, _reason, _download_row = can_download_file(conn, actor=actor, file_id=row["id"], action="preview")
+            if not allowed:
+                continue
+            storage_row = conn.execute(
+                """
+                SELECT id, virtual_path, display_name
+                FROM storage_files
+                WHERE owner_user_id=? AND file_id=? AND deleted_at IS NULL AND COALESCE(is_trashed, 0)=0
+                ORDER BY updated_at DESC, created_at DESC
+                LIMIT 1
+                """,
+                (int(_actor_value(actor, "id")), row["id"]),
+            ).fetchone()
+            candidates.append(_cloud_image_row_payload(row, storage_row=dict(storage_row) if storage_row else None))
+        return candidates
+
+    def _list_history_image_candidates(conn, actor, *, limit=30):
+        history = _list_generation_history(conn, actor=actor, limit=limit)
+        candidates = []
+        for item in history:
+            result = item.get("result") if isinstance(item, dict) else {}
+            images = result.get("images") if isinstance(result, dict) else []
+            for index, image in enumerate(images if isinstance(images, list) else []):
+                image_ref = _image_ref_payload((image or {}).get("image_ref"))
+                if not image_ref:
+                    continue
+                candidates.append({
+                    "source": "history",
+                    "history_id": item.get("id"),
+                    "batch_index": index,
+                    "generation_mode": item.get("generation_mode") or "",
+                    "created_at": item.get("created_at") or "",
+                    "filename": image_ref["filename"],
+                    "prompt": ((item.get("payload") or {}).get("prompt") or "")[:180],
+                    "image_ref": image_ref,
+                    "mime_type": (image or {}).get("mime_type") or "image/png",
+                    "size_bytes": int((image or {}).get("size_bytes") or 0),
+                })
+        return candidates
+
+    @app.route("/api/comfyui/input-image-candidates", methods=["GET"])
+    @require_csrf
+    def comfyui_input_image_candidates():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            history = _list_history_image_candidates(conn, actor, limit=30)
+            cloud_drive = _list_cloud_drive_image_candidates(conn, actor, limit=80)
+        finally:
+            conn.close()
+        return json_resp({"ok": True, "history": history, "cloud_drive": cloud_drive})
+
+    @app.route("/api/comfyui/import-drive-image", methods=["POST"])
+    @require_csrf
+    def comfyui_import_drive_image():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
+        data = data if isinstance(data, dict) else {}
+        file_id = str(data.get("file_id") or "").strip()
+        if not file_id:
+            return json_resp({"ok": False, "msg": "缺少 file_id"}), 400
+        conn = get_db()
+        try:
+            allowed, reason, row = can_download_file(conn, actor=actor, file_id=file_id, action="preview")
+            if not row:
+                return json_resp({"ok": False, "msg": "找不到雲端硬碟圖片"}), 404
+            if not allowed:
+                return json_resp({"ok": False, "msg": "沒有預覽權限或檔案尚未通過安全檢查", "reason": reason}), 403
+            filename = row["original_filename_plain_for_public"] or "image.png"
+            mime_type = (row["mime_type_plain_for_public"] or "").lower()
+            if row["privacy_mode"] != "standard_plain":
+                return json_resp({"ok": False, "msg": "目前只能匯入 standard_plain 圖片到 ComfyUI。"}), 409
+            if mime_type not in COMFYUI_ALLOWED_IMAGE_MIME_TYPES or Path(filename).suffix.lower() not in COMFYUI_ALLOWED_IMAGE_EXTENSIONS:
+                return json_resp({"ok": False, "msg": "只支援 PNG / JPG / WEBP 圖片"}), 415
+            size_bytes = int(row["size_bytes"] or 0)
+            if size_bytes <= 0 or size_bytes > MAX_COMFYUI_FETCH_IMAGE_BYTES:
+                return json_resp({"ok": False, "msg": "圖片大小不適合匯入 ComfyUI"}), 413
+            path = resolve_file_storage_path(storage_root, row)
+            if not path.exists() or not path.is_file():
+                return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
+            raw = path.read_bytes()
+        finally:
+            conn.close()
+        binding = _comfyui_binding(actor)
+        active_client = _client_for_url(binding["url"])
+        try:
+            image_ref = active_client.upload_image_bytes(raw, filename, image_type="input", overwrite=False)
+        except ComfyUIError as exc:
+            return _json_error_from_comfy(exc, active_client)
+        conn = get_db()
+        try:
+            _register_comfyui_image_refs(conn, actor=actor, images=[{"image_ref": image_ref, "prompt_id": ""}], backend_url=binding.get("url"))
+            conn.commit()
+        finally:
+            conn.close()
+        audit("COMFYUI_IMPORT_DRIVE_IMAGE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"file_id={file_id}, image={image_ref.get('filename')}")
+        return json_resp({
+            "ok": True,
+            "image": {
+                "image_ref": image_ref,
+                "cloud_file_id": file_id,
+                "filename": filename,
+                "mime_type": mime_type,
+                "size_bytes": len(raw),
+                "data_url": f"data:{mime_type};base64,{base64.b64encode(raw).decode('ascii')}",
+            },
+        })
+
+    @app.route("/api/comfyui/import-history-image", methods=["POST"])
+    @require_csrf
+    def comfyui_import_history_image():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
+        data = data if isinstance(data, dict) else {}
+        image_ref = _image_ref_payload(data.get("image_ref"))
+        if not image_ref:
+            return json_resp({"ok": False, "msg": "圖片引用不合法"}), 400
+        conn = get_db()
+        try:
+            ref_row = _load_comfyui_image_ref_record(conn, actor=actor, image_ref=image_ref)
+        finally:
+            conn.close()
+        if not ref_row:
+            return json_resp({"ok": False, "msg": "無權讀取這張 ComfyUI 圖片"}), 403
+        binding = _comfyui_binding(actor, backend_url=(ref_row or {}).get("backend_url"))
+        active_client = _client_for_url(binding.get("url"))
+        try:
+            fetched = active_client.fetch_image(image_ref)
+            _assert_reasonable_image_size(fetched)
+        except ComfyUIError as exc:
+            return _json_error_from_comfy(exc, active_client)
+        conn = get_db()
+        try:
+            upload_result, storage_file, _album, msg = _save_fetched_image(
+                conn,
+                actor=actor,
+                data={
+                    "display_name": fetched.filename or image_ref.get("filename") or "comfyui-history.png",
+                    "virtual_path": f"/output/inputs/{fetched.filename or image_ref.get('filename') or 'comfyui-history.png'}",
+                },
+                image=fetched,
+            )
+            if msg:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": msg}), 400
+            try:
+                imported_ref = active_client.upload_image_bytes(
+                    fetched.data,
+                    fetched.filename or image_ref.get("filename") or "comfyui-history.png",
+                    image_type="input",
+                    overwrite=False,
+                )
+            except ComfyUIError as exc:
+                conn.rollback()
+                return _json_error_from_comfy(exc, active_client)
+            _register_comfyui_image_refs(
+                conn,
+                actor=actor,
+                images=[{"image_ref": imported_ref, "prompt_id": ""}],
+                backend_url=binding.get("url"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        audit(
+            "COMFYUI_IMPORT_HISTORY_IMAGE",
+            get_client_ip(),
+            user=actor["username"],
+            success=True,
+            ua=get_ua(),
+            detail=f"source={image_ref.get('filename')}, file_id={upload_result['file_id']}, image={imported_ref.get('filename')}",
+        )
+        return json_resp({
+            "ok": True,
+            "image": {
+                "image_ref": imported_ref,
+                "cloud_file_id": upload_result["file_id"],
+                "storage_file_id": (storage_file or {}).get("id"),
+                "filename": fetched.filename or image_ref.get("filename") or "comfyui-history.png",
+                "mime_type": fetched.mime_type,
+                "size_bytes": len(fetched.data),
+                "data_url": f"data:{fetched.mime_type};base64,{base64.b64encode(fetched.data).decode('ascii')}",
+            },
+        })
 
     @app.route("/api/comfyui/image-preview", methods=["POST"])
     @require_csrf

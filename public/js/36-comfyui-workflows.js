@@ -726,7 +726,7 @@ function comfyuiTemplateFieldBinding(field, detail, ctx) {
   if (field?.class_type === "ImagePadForOutpaint" && field?.input_name === "right") return { kind: "field", targetId: "comfyui-outpaint-right" };
   if (field?.class_type === "ImagePadForOutpaint" && field?.input_name === "bottom") return { kind: "field", targetId: "comfyui-outpaint-bottom" };
   if (field?.class_type === "ImagePadForOutpaint" && field?.input_name === "feathering") return { kind: "field", targetId: "comfyui-outpaint-feathering" };
-  if (field?.class_type === "LoadImageMask" && field?.input_name === "image") return { kind: "image", assetKey: "mask" };
+  if (field?.class_type === "LoadImageMask" && field?.input_name === "image") return { kind: "image", assetKey: "mask", nodeId: field.node_id };
   if (field?.class_type === "LoadImageMask" && field?.input_name === "channel") return { kind: "readonly" };
   if (field?.class_type === "LoadImage" && field?.input_name === "image") {
     const hasControlnet = !!detail?.default_params?.controlnet?.type;
@@ -736,7 +736,7 @@ function comfyuiTemplateFieldBinding(field, detail, ctx) {
     else if (hasControlnet) assetKey = "control";
     else if (!usesSource) assetKey = "control";
     ctx.loadImageIndex += 1;
-    return { kind: "image", assetKey };
+    return { kind: "image", assetKey, nodeId: field.node_id };
   }
   return { kind: "readonly" };
 }
@@ -796,6 +796,33 @@ function collectComfyuiTemplateUserInputs(detail) {
   return userInputs;
 }
 
+function collectComfyuiTemplateImageAssignments(detail) {
+  const assignments = {};
+  const missing = [];
+  const ctx = { textFieldIndex: 0, loadImageIndex: 0 };
+  const panels = Array.isArray(detail?.ui_schema?.panels) ? detail.ui_schema.panels : [];
+  panels.forEach((panel) => {
+    (panel?.fields || []).forEach((field) => {
+      if (!field || field.synthetic || field.input_type === "embedding_shortcuts" || !field.node_id || !field.input_name) return;
+      const binding = comfyuiTemplateFieldBinding(field, detail, ctx);
+      if (binding.kind !== "image") return;
+      const asset = comfyuiAssetState(binding.assetKey);
+      if (asset?.cloudFileId) {
+        assignments[String(field.node_id)] = String(asset.cloudFileId);
+      } else {
+        missing.push({
+          nodeId: String(field.node_id),
+          label: field.label || field.input_name || `Node ${field.node_id}`,
+          assetKey: binding.assetKey,
+          hasLocalFile: !!asset?.file,
+          hasImageRef: !!asset?.imageRef,
+        });
+      }
+    });
+  });
+  return { assignments, missing };
+}
+
 function comfyuiTemplateUpdateField(binding, field, rawValue) {
   if (binding.enableControlnet && $("comfyui-controlnet-enabled")) {
     $("comfyui-controlnet-enabled").checked = true;
@@ -846,6 +873,8 @@ function renderComfyuiTemplateField(field, detail, ctx) {
         <div class="comfyui-input-preview" style="margin-top:.55rem;">${previewHtml}</div>
         <div class="drive-card-sub" style="margin-top:.45rem;">${sanitize(metaText)}</div>
         <div class="drive-file-actions" style="justify-content:flex-start;margin-top:.45rem;">
+          <button class="btn btn-sm" type="button" data-comfyui-template-image-picker="${sanitize(binding.assetKey)}">選擇既有圖片</button>
+          ${binding.assetKey === "mask" ? `<button class="btn btn-sm" type="button" data-comfyui-template-mask-editor="1"${comfyuiCanOpenMaskEditor() ? "" : " disabled"}>編輯遮罩</button>` : ""}
           <button class="btn btn-sm" type="button" data-comfyui-template-image-clear="${sanitize(binding.assetKey)}">清除圖片</button>
         </div>
       </div>
@@ -966,6 +995,19 @@ function bindRenderedComfyuiTemplateFields(detail) {
       clearComfyuiInputAsset(button.getAttribute("data-comfyui-template-image-clear"));
       renderSelectedComfyuiTemplate();
     });
+  });
+  host.querySelectorAll("[data-comfyui-template-image-picker]").forEach((button) => {
+    if (button.dataset.boundComfyuiTemplate === "1") return;
+    button.dataset.boundComfyuiTemplate = "1";
+    button.addEventListener("click", () => {
+      openComfyuiImagePicker(button.getAttribute("data-comfyui-template-image-picker"))
+        .catch((err) => setComfyuiMessage(err.message || "圖片選擇器開啟失敗", false));
+    });
+  });
+  host.querySelectorAll("[data-comfyui-template-mask-editor]").forEach((button) => {
+    if (button.dataset.boundComfyuiTemplate === "1") return;
+    button.dataset.boundComfyuiTemplate = "1";
+    button.addEventListener("click", () => openComfyuiMaskEditor());
   });
   host.querySelectorAll("[data-comfyui-template-lora-node]").forEach((select) => {
     if (select.dataset.boundComfyuiTemplate === "1") return;
@@ -1365,6 +1407,12 @@ async function runComfyuiWorkflowPreset(presetId) {
   const preset = comfyuiWorkflowPresetById(presetId);
   const templateDetail = Number(comfyuiSelectedTemplateDetail?.id || 0) === Number(presetId) ? comfyuiSelectedTemplateDetail : null;
   const userInputs = templateDetail ? collectComfyuiTemplateUserInputs(templateDetail) : {};
+  const imageAssignmentState = templateDetail ? collectComfyuiTemplateImageAssignments(templateDetail) : { assignments: {}, missing: [] };
+  if (imageAssignmentState.missing.length) {
+    const labels = imageAssignmentState.missing.map((item) => item.label || `Node ${item.nodeId}`).slice(0, 4).join("、");
+    setComfyuiMessage(`這個 workflow 有圖片欄位尚未指定可安全重映射的雲端圖片：${labels}。請用「選擇既有圖片」選雲端硬碟圖片，或選歷史產圖讓系統先匯入雲端硬碟。`, false);
+    return;
+  }
   const paidApiNodes = comfyuiWorkflowPaidApiNodes(preset);
   let confirmPaidApiNodes = false;
   if (paidApiNodes.length) {
@@ -1388,7 +1436,11 @@ async function runComfyuiWorkflowPreset(presetId) {
       "Content-Type": "application/json",
       "X-CSRF-Token": getCsrfToken() || "",
     },
-    body: JSON.stringify({ confirm_paid_api_nodes: !!confirmed, user_inputs: userInputs }),
+    body: JSON.stringify({
+      confirm_paid_api_nodes: !!confirmed,
+      user_inputs: userInputs,
+      image_field_assignments: imageAssignmentState.assignments,
+    }),
   });
   try {
     let res = await runRequest(confirmPaidApiNodes);
@@ -1405,13 +1457,15 @@ async function runComfyuiWorkflowPreset(presetId) {
     if (!res.ok || !json.ok) throw new Error(json.msg || `workflow 執行失敗（HTTP ${res.status}）`);
     const result = await pollComfyuiJobUntilDone(json.job?.job_id, controller, COMFYUI_GENERATION_TIMEOUT_SECONDS);
     const images = Array.isArray(result.images) && result.images.length ? result.images : [result.image].filter(Boolean);
+    const media = Array.isArray(result.media) ? result.media : [];
     comfyuiGeneratedImages = images;
+    comfyuiGeneratedMedia = media;
     renderComfyuiGeneratedImages(comfyuiGeneratedImages);
     setComfyuiSelectedImage(0);
     stopComfyuiProgress({ complete: true });
-    updateComfyuiResultButtons(true);
+    updateComfyuiResultButtons(!!images.length);
     await loadComfyuiWorkflowPresets();
-    setComfyuiMessage(`已執行 workflow preset #${presetId}。`, true);
+    setComfyuiMessage(`已執行 workflow preset #${presetId}，輸出 ${images.length} 張圖片、${media.length} 個媒體檔。`, true);
   } catch (err) {
     stopComfyuiProgress({ error: err.message || "workflow 執行失敗" });
     setComfyuiMessage(err.message || "workflow 執行失敗", false);

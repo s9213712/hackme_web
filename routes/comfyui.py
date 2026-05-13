@@ -40,7 +40,13 @@ from services.comfyui.settings import (
 )
 from services.comfyui.api_nodes import build_comfyui_account_extra_data, detect_paid_api_nodes
 from services.comfyui.node_catalog import build_node_catalog
-from services.storage.cloud_drive import attach_existing_file, ensure_cloud_drive_attachment_schema, store_cloud_upload
+from services.storage.cloud_drive import (
+    attach_existing_file,
+    can_download_file,
+    ensure_cloud_drive_attachment_schema,
+    resolve_file_storage_path,
+    store_cloud_upload,
+)
 from services.platform.admin_validation import (
     validate_comfyui_api_host as shared_validate_comfyui_api_host,
     validate_comfyui_api_url as shared_validate_comfyui_api_url,
@@ -90,12 +96,19 @@ MAX_COMFYUI_FETCH_IMAGE_BYTES = 50 * 1024 * 1024
 MAX_COMFYUI_LORAS_PER_PROMPT = 8
 COMFYUI_LORA_EXTRA_PRICE_POINTS = 1
 COMFYUI_VAE_BUILTIN = "__checkpoint_builtin__"
-COMFYUI_MODEL_DOWNLOAD_EXTENSIONS = {".safetensors", ".ckpt", ".pt", ".pth", ".bin"}
+COMFYUI_MODEL_DOWNLOAD_EXTENSIONS = {".safetensors", ".ckpt", ".pt", ".pth", ".bin", ".gguf"}
 COMFYUI_MODEL_DOWNLOAD_TYPES = {
     "checkpoint": ("checkpoints", "Checkpoint"),
+    "diffusion_model": ("diffusion_models", "Diffusion Model / UNet"),
+    "unet": ("diffusion_models", "Diffusion Model / UNet"),
+    "text_encoder": ("text_encoders", "Text Encoder / CLIP / T5 / Qwen"),
+    "clip": ("clip", "CLIP / Text Encoder (legacy)"),
+    "clip_vision": ("clip_vision", "CLIP Vision"),
     "lora": ("loras", "LoRA"),
     "embedding": ("embeddings", "Embedding / Textual Inversion"),
     "vae": ("vae", "VAE"),
+    "audio": ("audio", "Audio / TTS"),
+    "video": ("video", "Video / Motion"),
     "controlnet": ("controlnet", "ControlNet"),
     "upscale": ("upscale_models", "放大模型"),
 }
@@ -132,10 +145,21 @@ def _configured_civitai_api_bases():
 CIVITAI_API_BASES = _configured_civitai_api_bases()
 CIVITAI_MODEL_TYPE_TO_DOWNLOAD_TYPE = {
     "checkpoint": "checkpoint",
+    "model": "checkpoint",
+    "diffusionmodel": "diffusion_model",
+    "diffusion_model": "diffusion_model",
+    "unet": "diffusion_model",
+    "textencoder": "text_encoder",
+    "text_encoder": "text_encoder",
+    "clip": "clip",
+    "clipvision": "clip_vision",
+    "clip_vision": "clip_vision",
     "lora": "lora",
     "textualinversion": "embedding",
     "embedding": "embedding",
     "vae": "vae",
+    "audio": "audio",
+    "video": "video",
     "controlnet": "controlnet",
     "upscaler": "upscale",
     "upscale": "upscale",
@@ -164,6 +188,11 @@ COMFYUI_WORKFLOW_PURPOSE_VALUES = {
     "inpaint",
     "outpaint",
     "upscale",
+    "t2v",
+    "i2v",
+    "v2v",
+    "t2s",
+    "t2sv",
     "controlnet",
     "custom",
 }
@@ -1292,6 +1321,30 @@ def register_comfyui_routes(app, deps):
         capabilities = active_client.get_capabilities() if hasattr(active_client, "get_capabilities") else {}
         available_nodes = set((capabilities or {}).get("available_nodes") or [])
         mode = str((params or {}).get("generation_mode") or "txt2img").strip().lower()
+        mode_definition = GENERATION_MODE_DEFINITIONS.get(mode) or {}
+        backend_kind = str(getattr(active_client, "backend_kind", "") or (capabilities or {}).get("backend_kind") or "").strip().lower()
+        if backend_kind == "diffusers":
+            supported_modes = {
+                str(item.get("key") or "").strip().lower()
+                for item in (capabilities or {}).get("generation_modes") or []
+                if item.get("available")
+            }
+            if mode_definition.get("workflow_only") or mode not in supported_modes:
+                return capabilities, "Diffusers 後端目前只支援文字生圖、圖生圖與局部重繪；影片、語音、放大與 workflow 模板仍請使用 ComfyUI 後端。"
+            model_repo = str((capabilities or {}).get("model_repo") or getattr(active_client, "model_repo", "") or "").strip()
+            selected_model = str((params or {}).get("model") or "").strip()
+            if model_repo and selected_model and selected_model != model_repo:
+                return capabilities, f"Diffusers 模式目前使用 root 設定的 Hugging Face repo：{model_repo}"
+            if model_repo:
+                params["model"] = model_repo
+            if params.get("loras"):
+                return capabilities, "Diffusers 後端目前不支援本站 ComfyUI LoRA 選擇；請改用本地或遠端 ComfyUI 模式。"
+            control = (params or {}).get("controlnet") if isinstance((params or {}).get("controlnet"), dict) else None
+            if control:
+                return capabilities, "Diffusers 後端目前不支援本站 ControlNet 快捷模式；請改用本地或遠端 ComfyUI 模式。"
+            return capabilities, None
+        if mode_definition.get("workflow_only"):
+            return capabilities, "這個模式需要透過支援的大模型 workflow 模板執行，請先匯入或選擇對應 workflow。"
         required_nodes = {"CheckpointLoaderSimple", "CLIPTextEncode", "KSampler", "VAEDecode", "SaveImage"}
         if mode == "img2img":
             required_nodes.update({"LoadImage", "VAEEncode"})
@@ -1761,6 +1814,29 @@ def register_comfyui_routes(app, deps):
             conn.close()
         return images
 
+    def _serialize_comfyui_media_records(result):
+        media = result.get("media") if isinstance(result.get("media"), dict) else {}
+        items = []
+        for media_kind, records in media.items():
+            if media_kind not in {"videos", "audio", "other"} or not isinstance(records, list):
+                continue
+            for index, item in enumerate(records):
+                raw_data = item.get("data") or b""
+                file_ref = item.get("file_ref") if isinstance(item.get("file_ref"), dict) else item.get("image_ref")
+                if not file_ref:
+                    continue
+                mime_type = item.get("mime_type") or "application/octet-stream"
+                items.append({
+                    "prompt_id": result.get("prompt_id") or "",
+                    "media_kind": "video" if media_kind == "videos" else ("audio" if media_kind == "audio" else "file"),
+                    "file_ref": file_ref,
+                    "mime_type": mime_type,
+                    "size_bytes": len(raw_data),
+                    "data_url": f"data:{mime_type};base64,{base64.b64encode(raw_data).decode('ascii')}" if raw_data else "",
+                    "batch_index": index,
+                })
+        return items
+
     def _run_comfyui_generation_job(job_id, actor, params, quote, timeout_seconds, request_meta=None, backend_binding=None):
         backend_binding = backend_binding if isinstance(backend_binding, dict) else _comfyui_binding(actor)
         active_client = _client_for_url(backend_binding["url"])
@@ -1826,18 +1902,18 @@ def register_comfyui_routes(app, deps):
                 ua=audit_ua,
                 detail=f"job_id={job_id}, prompt_id={result['prompt_id']}, file={result['image_ref'].get('filename')}, batch={len(images)}",
             )
-            _update_generation_job(
-                job_id,
-                status="completed",
-                result=payload,
-                error="",
-            )
             _update_generation_job_progress(job_id, {
                 "phase": "completed",
                 "percent": 100,
                 "completed": True,
                 "detail": f"已完成，共 {len(images)} 張",
             })
+            _update_generation_job(
+                job_id,
+                status="completed",
+                result=payload,
+                error="",
+            )
         except ComfyUIError as exc:
             _update_generation_job(job_id, status="error", error=str(exc), result=None)
             _update_generation_job_progress(job_id, {
@@ -1930,7 +2006,12 @@ def register_comfyui_routes(app, deps):
             if prompt_extra_data:
                 run_kwargs["extra_data"] = prompt_extra_data
             result = active_client.generate_from_workflow(workflow_json, **run_kwargs)
-            images = _finalize_generation_records(actor, default_params, result, backend_url=backend_binding.get("url"))
+            images = (
+                _finalize_generation_records(actor, default_params, result, backend_url=backend_binding.get("url"))
+                if isinstance(result.get("images"), list) and result.get("images")
+                else []
+            )
+            media = _serialize_comfyui_media_records(result)
             output_refs = {
                 "prompt_id": result.get("prompt_id") or "",
                 "images": [
@@ -1941,6 +2022,15 @@ def register_comfyui_routes(app, deps):
                     }
                     for item in images
                 ],
+                "media": [
+                    {
+                        "media_kind": item.get("media_kind"),
+                        "file_ref": item.get("file_ref"),
+                        "mime_type": item.get("mime_type"),
+                        "size_bytes": item.get("size_bytes"),
+                    }
+                    for item in media
+                ],
             }
             conn = get_db()
             try:
@@ -1949,8 +2039,9 @@ def register_comfyui_routes(app, deps):
             finally:
                 conn.close()
             payload = {
-                "image": images[0],
+                "image": images[0] if images else None,
                 "images": images,
+                "media": media,
                 "workflow_run_id": run_id,
                 "preset_id": int(row["id"]),
             }
@@ -1959,7 +2050,7 @@ def register_comfyui_routes(app, deps):
                 "phase": "completed",
                 "percent": 100,
                 "completed": True,
-                "detail": f"已完成，共 {len(images)} 張",
+                "detail": f"已完成，共 {len(images)} 張圖片、{len(media)} 個媒體輸出",
             })
             audit(
                 "COMFYUI_WORKFLOW_RUN",
@@ -2260,8 +2351,10 @@ def register_comfyui_routes(app, deps):
         mode = _normalized_generation_mode(data.get("generation_mode"))
         if not mode:
             return None, "ComfyUI 產圖模式不支援"
+        mode_definition = GENERATION_MODE_DEFINITIONS.get(mode) or {}
+        workflow_only = bool(mode_definition.get("workflow_only"))
         prompt = _normalize_comfyui_prompt_text(data.get("prompt"))
-        if mode != "upscale" and not prompt:
+        if mode != "upscale" and mode != "v2v" and not prompt:
             return None, "請輸入提示詞"
         if len(prompt) > 3000:
             return None, "提示詞最多 3000 字"
@@ -2269,7 +2362,7 @@ def register_comfyui_routes(app, deps):
         if len(negative) > 3000:
             return None, "負面提示詞最多 3000 字"
         model = str(data.get("model") or "").strip()
-        if mode != "upscale" and not model:
+        if mode != "upscale" and not workflow_only and not model:
             return None, "請選擇模型"
         vae = _normalize_comfyui_vae_name(data.get("vae"))
         if vae is None:
@@ -2328,6 +2421,8 @@ def register_comfyui_routes(app, deps):
                 return None, "放大修復需要來源圖片"
             if not params["upscale_model"]:
                 return None, "請選擇放大模型"
+        if not skip_asset_validation and mode == "i2v" and not params["source_image_ref"]:
+            return None, "圖生影片需要來源圖片"
         return params, None
 
     def _safe_text(value, limit):
@@ -2768,6 +2863,7 @@ def register_comfyui_routes(app, deps):
         "get_ua": get_ua,
         "audit": audit,
         "attach_existing_file": attach_existing_file,
+        "can_download_file": can_download_file,
         "datetime": datetime,
         "ComfyUIError": ComfyUIError,
         "active_generation_snapshot": _active_generation_snapshot,
@@ -2788,7 +2884,14 @@ def register_comfyui_routes(app, deps):
         "is_root": _is_root,
         "json_error_from_comfy": _json_error_from_comfy,
         "load_comfyui_image_ref_record": _load_comfyui_image_ref_record,
+        "list_generation_history": _list_generation_history,
         "normalize_comfyui_backend_url": _normalize_comfyui_backend_url,
+        "register_comfyui_image_refs": _register_comfyui_image_refs,
+        "resolve_file_storage_path": resolve_file_storage_path,
         "safe_text": _safe_text,
         "save_fetched_image": _save_fetched_image,
+        "storage_root": storage_root,
+        "COMFYUI_ALLOWED_IMAGE_EXTENSIONS": COMFYUI_ALLOWED_IMAGE_EXTENSIONS,
+        "COMFYUI_ALLOWED_IMAGE_MIME_TYPES": COMFYUI_ALLOWED_IMAGE_MIME_TYPES,
+        "MAX_COMFYUI_FETCH_IMAGE_BYTES": MAX_COMFYUI_FETCH_IMAGE_BYTES,
     })

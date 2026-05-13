@@ -371,4 +371,6 @@ def build_generation_workflow(params, *, error_cls):
         return build_outpaint_workflow(params, error_cls=error_cls)
     if mode == "upscale":
         return build_upscale_workflow(params, error_cls=error_cls)
+    if mode in {"t2v", "i2v", "v2v", "t2s", "t2sv"}:
+        raise error_cls("這個 ComfyUI 模式需要透過支援的大模型 workflow 模板執行，請先匯入或選擇對應 workflow。")
     raise error_cls("ComfyUI 產圖模式不支援")

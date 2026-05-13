@@ -175,7 +175,7 @@
       display: flex;
       gap: 4px;
       background: rgba(0,0,0,.35);
-      border-radius: 8px;
+      border-radius: 10px;
       padding: 4px;
       margin-bottom: 1.5rem;
     }
@@ -1023,7 +1023,7 @@
     .captcha-image {
       width: 100%;
       max-width: 220px;
-      border-radius: 10px;
+      border-radius: 8px;
       border: 1px solid rgba(255,255,255,.16);
     }
 
@@ -1602,6 +1602,210 @@
       display: block;
     }
 
+    .comfyui-model-family-hint {
+      margin-top: .38rem;
+      display: flex;
+      flex-wrap: wrap;
+      gap: .35rem;
+      color: var(--muted);
+      font-size: .78rem;
+      line-height: 1.45;
+    }
+
+    .comfyui-model-family-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: .25rem;
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 999px;
+      background: rgba(255,255,255,.05);
+      color: var(--text);
+      padding: .18rem .48rem;
+    }
+
+    .comfyui-model-family-chip.installed {
+      border-color: rgba(61,220,151,.32);
+      background: rgba(61,220,151,.12);
+      color: #a7ffd7;
+    }
+
+    .comfyui-generated-media {
+      display: grid;
+      gap: .65rem;
+      width: 100%;
+    }
+
+    .comfyui-generated-media-card {
+      display: grid;
+      gap: .45rem;
+      width: 100%;
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: 8px;
+      padding: .65rem;
+      background: rgba(0,0,0,.18);
+    }
+
+    .comfyui-generated-media-card video,
+    .comfyui-generated-media-card audio {
+      width: 100%;
+      max-height: 420px;
+    }
+
+    .comfyui-mask-editor-modal[hidden] {
+      display: none;
+    }
+
+    .comfyui-mask-editor-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 10020;
+      padding: clamp(.7rem, 2vw, 1.4rem);
+      background: rgba(7, 10, 18, .82);
+      backdrop-filter: blur(10px);
+      display: grid;
+      place-items: center;
+    }
+
+    .comfyui-mask-editor-card {
+      width: min(1120px, 96vw);
+      max-height: 92vh;
+      display: grid;
+      grid-template-rows: auto auto minmax(220px, 1fr) auto auto;
+      gap: .7rem;
+      overflow: auto;
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 10px;
+      background: #111827;
+      box-shadow: 0 24px 70px rgba(0,0,0,.42);
+      padding: .9rem;
+    }
+
+    .comfyui-mask-editor-head,
+    .comfyui-mask-editor-toolbar,
+    .comfyui-mask-editor-size {
+      display: flex;
+      align-items: center;
+      gap: .55rem;
+    }
+
+    .comfyui-mask-editor-head {
+      justify-content: space-between;
+    }
+
+    .comfyui-mask-editor-toolbar {
+      flex-wrap: wrap;
+    }
+
+    .comfyui-mask-editor-size {
+      min-width: min(100%, 260px);
+      color: var(--muted);
+      font-size: .92rem;
+    }
+
+    .comfyui-mask-editor-size input {
+      min-width: 120px;
+      flex: 1;
+    }
+
+    .comfyui-mask-editor-stage {
+      position: relative;
+      width: 100%;
+      min-height: min(62vh, 620px);
+      display: grid;
+      place-items: center;
+      overflow: auto;
+      border: 1px solid rgba(255,255,255,.14);
+      border-radius: 8px;
+      background:
+        linear-gradient(45deg, rgba(255,255,255,.05) 25%, transparent 25%),
+        linear-gradient(-45deg, rgba(255,255,255,.05) 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, rgba(255,255,255,.05) 75%),
+        linear-gradient(-45deg, transparent 75%, rgba(255,255,255,.05) 75%);
+      background-size: 28px 28px;
+      background-position: 0 0, 0 14px, 14px -14px, -14px 0;
+      touch-action: none;
+      user-select: none;
+    }
+
+    .comfyui-mask-editor-stage canvas {
+      grid-area: 1 / 1;
+      max-width: 100%;
+      max-height: 62vh;
+      width: auto;
+      height: auto;
+      display: block;
+    }
+
+    #comfyui-mask-editor-source-canvas {
+      z-index: 1;
+    }
+
+    #comfyui-mask-editor-mask-canvas {
+      z-index: 2;
+      opacity: .58;
+      cursor: crosshair;
+    }
+
+    .comfyui-image-picker-modal[hidden] {
+      display: none;
+    }
+
+    .comfyui-image-picker-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 10019;
+      padding: clamp(.7rem, 2vw, 1.4rem);
+      background: rgba(7, 10, 18, .78);
+      backdrop-filter: blur(10px);
+      display: grid;
+      place-items: center;
+    }
+
+    .comfyui-image-picker-card {
+      width: min(900px, 96vw);
+      max-height: 88vh;
+      overflow: auto;
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 8px;
+      background: #111827;
+      box-shadow: 0 24px 70px rgba(0,0,0,.42);
+      padding: .85rem;
+    }
+
+    .comfyui-image-picker-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: .7rem;
+      margin-bottom: .7rem;
+    }
+
+    .comfyui-image-picker-list {
+      display: grid;
+      gap: .55rem;
+    }
+
+    .comfyui-image-picker-section {
+      display: grid;
+      gap: .42rem;
+    }
+
+    .comfyui-image-picker-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: .7rem;
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 8px;
+      background: rgba(255,255,255,.035);
+      padding: .55rem .6rem;
+    }
+
+    .comfyui-image-picker-item strong,
+    .comfyui-image-picker-item span {
+      word-break: break-word;
+    }
+
     .inline-control-row {
       display: flex;
       gap: .45rem;
@@ -2143,6 +2347,41 @@
 
       .comfyui-civitai-search-card {
         grid-template-columns: 82px minmax(0, 1fr);
+      }
+
+      .comfyui-mask-editor-card {
+        width: 100%;
+        max-height: 96vh;
+        padding: .75rem;
+      }
+
+      .comfyui-mask-editor-head {
+        align-items: flex-start;
+      }
+
+      .comfyui-mask-editor-toolbar .btn {
+        flex: 1 1 38%;
+        min-height: 42px;
+      }
+
+      .comfyui-mask-editor-stage {
+        min-height: 360px;
+      }
+
+      .comfyui-image-picker-card {
+        width: 100%;
+        max-height: 94vh;
+      }
+
+      .comfyui-image-picker-head,
+      .comfyui-image-picker-item {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .comfyui-image-picker-item .btn {
+        width: 100%;
+        min-height: 42px;
       }
     }
 

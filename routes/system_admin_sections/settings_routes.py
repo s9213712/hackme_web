@@ -80,7 +80,11 @@ def register_system_admin_settings_routes(app, ctx):
     server_ssl_payload = ctx["server_ssl_payload"]
     validate_comfyui_api_host = ctx["validate_comfyui_api_host"]
     validate_comfyui_api_url = ctx["validate_comfyui_api_url"]
+    validate_comfyui_diffusers_device = ctx["validate_comfyui_diffusers_device"]
+    validate_comfyui_diffusers_dtype = ctx["validate_comfyui_diffusers_dtype"]
     validate_comfyui_relative_script = ctx["validate_comfyui_relative_script"]
+    validate_huggingface_api_token = ctx["validate_huggingface_api_token"]
+    validate_huggingface_repo_id = ctx["validate_huggingface_repo_id"]
     validate_listen_host = ctx["validate_listen_host"]
     validate_listen_port = ctx["validate_listen_port"]
     is_hhmm = ctx["is_hhmm"]
@@ -90,6 +94,9 @@ def register_system_admin_settings_routes(app, ctx):
         comfyui_account_key = str(payload.get("comfyui_account_api_key") or "").strip()
         payload["comfyui_account_api_key"] = ""
         payload["comfyui_account_api_key_configured"] = bool(comfyui_account_key)
+        huggingface_token = str(payload.get("comfyui_huggingface_api_token") or "").strip()
+        payload["comfyui_huggingface_api_token"] = ""
+        payload["comfyui_huggingface_api_token_configured"] = bool(huggingface_token)
         return payload
 
     @app.route("/api/admin/settings", methods=["GET","PUT"])
@@ -143,8 +150,8 @@ def register_system_admin_settings_routes(app, ctx):
             data["server_listen_port"] = port
         if "comfyui_connection_mode" in data:
             mode = str(data.get("comfyui_connection_mode") or "").strip().lower()
-            if mode not in {"local", "remote"}:
-                return json_resp({"ok":False,"msg":"comfyui_connection_mode 必須是 local 或 remote"}), 400
+            if mode not in {"local", "remote", "diffusers"}:
+                return json_resp({"ok":False,"msg":"comfyui_connection_mode 必須是 local、remote 或 diffusers"}), 400
             data["comfyui_connection_mode"] = mode
         if "comfyui_remote_api_url" in data:
             api_url = validate_comfyui_api_url(data.get("comfyui_remote_api_url"), allow_blank=True)
@@ -202,6 +209,37 @@ def register_system_admin_settings_routes(app, ctx):
                 data["comfyui_account_api_key"] = account_api_key
             elif not clear_comfyui_account_api_key:
                 data.pop("comfyui_account_api_key", None)
+        if "comfyui_diffusers_model_repo" in data:
+            repo_id = validate_huggingface_repo_id(data.get("comfyui_diffusers_model_repo"), allow_blank=True)
+            if repo_id is None:
+                return json_resp({"ok":False,"msg":"comfyui_diffusers_model_repo 必須是 Hugging Face repo id，例如 dhead/waiIllustriousSDXL_v150"}), 400
+            data["comfyui_diffusers_model_repo"] = repo_id
+        clear_huggingface_token = False
+        if "comfyui_huggingface_api_token_clear" in data:
+            clear_token = parse_strict_bool(data.pop("comfyui_huggingface_api_token_clear"))
+            if clear_token is None:
+                return json_resp({"ok":False,"msg":"comfyui_huggingface_api_token_clear 必須是布林值 true/false"}), 400
+            if clear_token:
+                clear_huggingface_token = True
+                data["comfyui_huggingface_api_token"] = ""
+        if "comfyui_huggingface_api_token" in data:
+            token = validate_huggingface_api_token(data.get("comfyui_huggingface_api_token"), allow_blank=True)
+            if token is None:
+                return json_resp({"ok":False,"msg":"comfyui_huggingface_api_token 不可包含空白，且長度不可超過 2048"}), 400
+            if token:
+                data["comfyui_huggingface_api_token"] = token
+            elif not clear_huggingface_token:
+                data.pop("comfyui_huggingface_api_token", None)
+        if "comfyui_diffusers_device" in data:
+            device = validate_comfyui_diffusers_device(data.get("comfyui_diffusers_device"))
+            if device is None:
+                return json_resp({"ok":False,"msg":"comfyui_diffusers_device 必須是 auto、cpu、cuda 或 mps"}), 400
+            data["comfyui_diffusers_device"] = device
+        if "comfyui_diffusers_dtype" in data:
+            dtype = validate_comfyui_diffusers_dtype(data.get("comfyui_diffusers_dtype"))
+            if dtype is None:
+                return json_resp({"ok":False,"msg":"comfyui_diffusers_dtype 必須是 auto、float16、bfloat16 或 float32"}), 400
+            data["comfyui_diffusers_dtype"] = dtype
         if "comfyui_max_batch_size" in data:
             try:
                 batch_size = int(data.get("comfyui_max_batch_size"))

@@ -55,8 +55,12 @@ from services.comfyui.settings import (
     validate_comfyui_api_port,
     validate_comfyui_api_url,
     validate_comfyui_batch_size,
+    validate_comfyui_diffusers_device,
+    validate_comfyui_diffusers_dtype,
     validate_comfyui_dimension,
     validate_comfyui_relative_script,
+    validate_huggingface_api_token,
+    validate_huggingface_repo_id,
 )
 from services.platform.settings import find_feature_dependency_violations
 from services.server.runtime import default_runtime_root
@@ -1331,7 +1335,11 @@ def register_system_admin_routes(app, deps):
         "start_security_test_job": _start_security_test_job,
         "validate_comfyui_api_host": validate_comfyui_api_host,
         "validate_comfyui_api_url": validate_comfyui_api_url,
+        "validate_comfyui_diffusers_device": validate_comfyui_diffusers_device,
+        "validate_comfyui_diffusers_dtype": validate_comfyui_diffusers_dtype,
         "validate_comfyui_relative_script": validate_comfyui_relative_script,
+        "validate_huggingface_api_token": validate_huggingface_api_token,
+        "validate_huggingface_repo_id": validate_huggingface_repo_id,
         "validate_git_branch_name": validate_git_branch_name,
         "validate_listen_host": validate_listen_host,
         "validate_listen_port": validate_listen_port,

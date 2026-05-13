@@ -3825,17 +3825,25 @@ function updateComfyuiConnectionModeFields() {
   const mode = $("s-comfyui-connection-mode")?.value || "remote";
   const localBox = $("comfyui-local-settings");
   const remoteBox = $("comfyui-remote-settings");
+  const diffusersBox = $("comfyui-diffusers-settings");
   const civitaiBox = $("comfyui-civitai-settings");
   const civitaiInput = $("s-comfyui-civitai-api-key");
+  const hfTokenInput = $("s-comfyui-huggingface-api-token");
+  const hfTokenClear = $("s-comfyui-huggingface-api-token-clear");
   if (localBox) localBox.style.display = mode === "local" ? "" : "none";
   if (remoteBox) remoteBox.style.display = mode === "remote" ? "" : "none";
+  if (diffusersBox) diffusersBox.style.display = mode === "diffusers" ? "" : "none";
   if (civitaiBox) civitaiBox.style.display = mode === "local" ? "" : "none";
   if (civitaiInput) civitaiInput.disabled = mode !== "local";
+  if (hfTokenInput) hfTokenInput.disabled = mode !== "diffusers";
+  if (hfTokenClear) hfTokenClear.disabled = mode !== "diffusers";
   const status = $("comfyui-test-connection-status");
   if (status && !status.dataset.userTouched) {
     status.textContent = mode === "local"
       ? "本地模式會測試本地 API；若產圖時 API 未啟動，後端會嘗試執行啟動腳本。"
-      : "遠端模式只負責呼叫指定 API 生圖，無法透過 API 把模型下載回本站的本地 ComfyUI，所以會隱藏本地模型下載與 Civitai API Key。";
+      : (mode === "diffusers"
+        ? "Diffusers 模式會檢查 Hugging Face repo 與 Python 套件，產圖時由後端直接用 diffusers 載入模型。"
+        : "遠端模式只負責呼叫指定 API 生圖，無法透過 API 把模型下載回本站的本地 ComfyUI，所以會隱藏本地模型下載與 Civitai API Key。");
     status.style.color = "var(--muted)";
   }
   if (typeof updateComfyuiRootPanelVisibility === "function") updateComfyuiRootPanelVisibility(mode);
@@ -3898,6 +3906,16 @@ async function loadSettings() {
   if ($("s-comfyui-api-host")) $("s-comfyui-api-host").value = s.comfyui_api_host || "localhost";
   if ($("s-comfyui-api-port")) $("s-comfyui-api-port").value = s.comfyui_api_port || 8192;
   if ($("s-comfyui-civitai-api-key")) $("s-comfyui-civitai-api-key").value = s.comfyui_civitai_api_key || "";
+  if ($("s-comfyui-diffusers-model-repo")) $("s-comfyui-diffusers-model-repo").value = s.comfyui_diffusers_model_repo || "";
+  if ($("s-comfyui-huggingface-api-token")) $("s-comfyui-huggingface-api-token").value = "";
+  if ($("s-comfyui-huggingface-api-token-clear")) $("s-comfyui-huggingface-api-token-clear").checked = false;
+  if ($("s-comfyui-diffusers-device")) $("s-comfyui-diffusers-device").value = s.comfyui_diffusers_device || "auto";
+  if ($("s-comfyui-diffusers-dtype")) $("s-comfyui-diffusers-dtype").value = s.comfyui_diffusers_dtype || "auto";
+  if ($("comfyui-huggingface-api-token-state")) {
+    $("comfyui-huggingface-api-token-state").textContent = s.comfyui_huggingface_api_token_configured
+      ? "目前已儲存 Hugging Face API Token；留空儲存不會變更。"
+      : "目前未儲存 Hugging Face API Token；公開模型可不填。";
+  }
   if ($("s-comfyui-paid-api-nodes-enabled")) $("s-comfyui-paid-api-nodes-enabled").checked = !!s.comfyui_paid_api_nodes_enabled;
   if ($("s-comfyui-account-api-key")) $("s-comfyui-account-api-key").value = "";
   if ($("s-comfyui-account-api-key-clear")) $("s-comfyui-account-api-key-clear").checked = false;
@@ -5618,6 +5636,11 @@ async function saveSettings() {
     comfyui_api_host: ($("s-comfyui-api-host")?.value || "localhost").trim(),
     comfyui_api_port: parseInt($("s-comfyui-api-port")?.value || "8192"),
     comfyui_civitai_api_key: ($("s-comfyui-civitai-api-key")?.value || "").trim(),
+    comfyui_diffusers_model_repo: ($("s-comfyui-diffusers-model-repo")?.value || "").trim(),
+    comfyui_huggingface_api_token: ($("s-comfyui-huggingface-api-token")?.value || "").trim(),
+    comfyui_huggingface_api_token_clear: !!$("s-comfyui-huggingface-api-token-clear")?.checked,
+    comfyui_diffusers_device: $("s-comfyui-diffusers-device")?.value || "auto",
+    comfyui_diffusers_dtype: $("s-comfyui-diffusers-dtype")?.value || "auto",
     comfyui_paid_api_nodes_enabled: !!$("s-comfyui-paid-api-nodes-enabled")?.checked,
     comfyui_account_api_key: ($("s-comfyui-account-api-key")?.value || "").trim(),
     comfyui_account_api_key_clear: !!$("s-comfyui-account-api-key-clear")?.checked,
@@ -5715,9 +5738,10 @@ async function testComfyuiConnection() {
   const apiUrl = ($("s-comfyui-remote-api-url")?.value || "").trim();
   const baseDir = ($("s-comfyui-base-dir")?.value || "").trim();
   const startScript = ($("s-comfyui-local-start-script")?.value || "").trim();
+  const diffusersRepo = ($("s-comfyui-diffusers-model-repo")?.value || "").trim();
   const targetLabel = mode === "local"
     ? `本地 http://${host || "localhost"}:${Number.isFinite(port) ? port : "-"}`
-    : (apiUrl || "遠端 API");
+    : (mode === "diffusers" ? (diffusersRepo || "Hugging Face Diffusers") : (apiUrl || "遠端 API"));
   if (status) {
     status.dataset.userTouched = "1";
     status.textContent = `正在測試 ${targetLabel} ...`;
@@ -5739,7 +5763,10 @@ async function testComfyuiConnection() {
         host,
         port,
         base_dir: baseDir,
-        local_start_script: startScript
+        local_start_script: startScript,
+        diffusers_model_repo: diffusersRepo,
+        comfyui_diffusers_device: $("s-comfyui-diffusers-device")?.value || "auto",
+        comfyui_diffusers_dtype: $("s-comfyui-diffusers-dtype")?.value || "auto"
       })
     });
     const json = await res.json().catch(() => ({}));
@@ -5758,7 +5785,8 @@ async function testComfyuiConnection() {
         ? `；${autostart.available ? "已成功自動啟動 ComfyUI" : (autostart.message || "已嘗試自動啟動 ComfyUI，仍未就緒")}${startupLogText}`
         : "";
       if (json.available) {
-        status.textContent = `連線成功：${json.comfyui_url || targetLabel}${scriptText}${autostartText}`;
+        const backendText = mode === "diffusers" ? `Diffusers 可用：${json.endpoint?.model_repo || targetLabel}` : `連線成功：${json.comfyui_url || targetLabel}`;
+        status.textContent = `${backendText}${scriptText}${autostartText}`;
         status.style.color = "#4caf50";
       } else if (json.starting) {
         status.textContent = `啟動中：${json.msg || "ComfyUI 正在初始化"}（${json.comfyui_url || targetLabel}）${scriptText}${autostartText}`;

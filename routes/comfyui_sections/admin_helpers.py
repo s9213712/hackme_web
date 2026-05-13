@@ -24,12 +24,14 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse, urlunparse
 
 from services.comfyui.client import ComfyUIClient, ComfyUIError
+from services.comfyui.diffusers_client import DiffusersClient, diffusers_backend_url, repo_id_from_diffusers_url
 from services.comfyui.settings import (
     DEFAULT_COMFYUI_PORT,
     normalize_comfyui_connection_mode,
     validate_comfyui_api_host,
     validate_comfyui_api_port,
     validate_comfyui_api_url,
+    validate_huggingface_repo_id,
 )
 from services.platform.admin_validation import (
     validate_comfyui_api_host as shared_validate_comfyui_api_host,
@@ -161,6 +163,18 @@ def _parse_comfyui_endpoint(data):
     mode = normalize_comfyui_connection_mode(
         (data or {}).get("mode") or (data or {}).get("comfyui_connection_mode") or _configured_connection_mode()
     ) or "remote"
+    if mode == "diffusers":
+        settings = get_system_settings() or {}
+        repo_id = validate_huggingface_repo_id(
+            (data or {}).get("diffusers_model_repo")
+            or (data or {}).get("comfyui_diffusers_model_repo")
+            or settings.get("comfyui_diffusers_model_repo"),
+            allow_blank=True,
+        )
+        if not repo_id:
+            return None, None, "Diffusers 模式請先填 Hugging Face model repo，例如 dhead/waiIllustriousSDXL_v150"
+        url = diffusers_backend_url(repo_id)
+        return url, {"mode": "diffusers", "model_repo": repo_id}, None
     if mode == "remote":
         raw_url = str((data or {}).get("api_url") or (data or {}).get("comfyui_remote_api_url") or "").strip()
         if raw_url:
@@ -198,6 +212,12 @@ def _normalize_comfyui_backend_url(value):
     raw = str(value or "").strip()
     if not raw:
         return ""
+    parsed = urlparse(raw)
+    if parsed.scheme == "diffusers" and parsed.netloc == "local" and not parsed.query and not parsed.fragment:
+        repo_id = repo_id_from_diffusers_url(raw)
+        if not repo_id or validate_huggingface_repo_id(repo_id, allow_blank=True):
+            return diffusers_backend_url(repo_id)
+        return ""
     url, msg = _validate_comfyui_api_url(raw)
     return "" if msg else url
 
@@ -207,7 +227,11 @@ def _configured_connection_mode():
 
 def _configured_comfyui_url():
     settings = get_system_settings() or {}
-    if _configured_connection_mode() == "remote":
+    mode = _configured_connection_mode()
+    if mode == "diffusers":
+        repo_id = validate_huggingface_repo_id(settings.get("comfyui_diffusers_model_repo"), allow_blank=True) or ""
+        return diffusers_backend_url(repo_id)
+    if mode == "remote":
         configured_url = str(settings.get("comfyui_remote_api_url") or "").strip()
         if configured_url:
             url, msg = _validate_comfyui_api_url(configured_url)
@@ -239,7 +263,7 @@ def _comfyui_binding(actor=None, *, backend_url=None):
             }
         return {
             "url": explicit_url,
-            "connection_mode": "remote",
+            "connection_mode": "diffusers" if explicit_url.startswith("diffusers://") else "remote",
             "backend_scope": "custom",
         }
     return {
@@ -1660,4 +1684,10 @@ def _client_for_url(url):
     factory = deps.get("comfyui_client_factory")
     if factory:
         return factory(url)
+    if str(url or "").startswith("diffusers://"):
+        return DiffusersClient.from_settings(
+            get_system_settings() or {},
+            storage_root=deps.get("STORAGE_DIR") or ".",
+            backend_url=url,
+        )
     return ComfyUIClient(url)

@@ -118,8 +118,8 @@ def register_comfyui_workflow_routes(app, ctx):
             output_kinds.append("image")
         if any("video" in name.lower() for name in classes):
             output_kinds.append("video")
-        if any(token in name.lower() for name in classes for token in ("audio", "music", "wave", "wav")):
-            output_kinds.append("music")
+        if any(token in name.lower() for name in classes for token in ("audio", "music", "wave", "wav", "tts")):
+            output_kinds.append("audio")
         if not output_kinds:
             output_kinds.append("image")
         return output_kinds
