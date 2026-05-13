@@ -376,6 +376,16 @@ def test_game_zone_frontend_assets_are_wired():
     assert "walkCycle" in local_stickman_js
     assert 'enemy.aiState = distance < 92 ? "retreat" : distance > 235 ? "chase" : "hold";' in local_stickman_js
     assert "boss-down" in local_stickman_js
+    assert "makeStickmanTraps" in local_stickman_js
+    assert "即死陷阱" in local_stickman_js
+    assert "makeStickmanCrates" in local_stickman_js
+    assert "問號補給" in local_stickman_js
+    assert "applyStickmanPowerup" in local_stickman_js
+    assert "fireFlower" in local_stickman_js
+    assert "stickman-star" in local_stickman_js
+    assert "stickman-mushroom" in local_stickman_js
+    assert "updateStickmanHazards" in local_stickman_js
+    assert "powerups-3" in local_stickman_js
     assert "api.submitScore({" in local_stickman_js
     assert "shotLevel" in local_bullet_js
     assert "nextBossWave" in local_bullet_js
