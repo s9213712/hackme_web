@@ -1000,7 +1000,7 @@
       <div class="drive-card-heading">
         <div>
           <div class="mini-title">遊戲區</div>
-          <div class="drive-card-sub">目前開放西洋棋、數獨、踩地雷、1A2B、俄羅斯方塊、真實版俄羅斯方塊、宇宙戰機、3D 射擊場、彈幕遊戲、火柴人橫向射擊、貪食蛇、2048、打磚塊、黑白棋、圍棋與五子棋。使用下拉選單在同一頁切換遊戲。</div>
+          <div class="drive-card-sub">目前開放西洋棋、中國象棋、數獨、踩地雷、1A2B、俄羅斯方塊、真實版俄羅斯方塊、宇宙戰機、3D 射擊場、彈幕遊戲、火柴人橫向射擊、貪食蛇、2048、打磚塊、黑白棋、圍棋與五子棋。使用下拉選單在同一頁切換遊戲。</div>
         </div>
         <button class="btn" id="game-refresh-btn" type="button">刷新</button>
       </div>
@@ -1278,13 +1278,14 @@
               <button class="btn game-mini-btn btn-primary" type="button" data-game-touch="fps-fire">射擊</button>
             </div>
           </div>
-          <div id="local-module-game-panel" class="single-game-panel" style="display:none;">
-            <div class="drive-card-heading">
+          <div id="local-module-game-panel" class="single-game-panel game-play-panel" style="display:none;">
+            <div class="drive-card-heading game-play-heading">
               <div>
+                <div class="mini-title" id="local-module-game-kicker">線上遊戲</div>
                 <div class="drive-card-title" id="local-module-game-title">遊戲</div>
                 <div class="drive-card-sub" id="local-module-game-status">準備中</div>
               </div>
-              <div class="drive-file-actions" id="local-module-game-actions"></div>
+              <div class="game-action-toolbar" id="local-module-game-actions"></div>
             </div>
             <div id="local-module-game-root" class="game-module-root"></div>
             <div id="local-module-game-controls" class="game-touch-controls game-page-controls"></div>
@@ -5410,6 +5411,7 @@
 <script src="/js/games/reversi.js?v=20260513-game-modules" defer></script>
 <script src="/js/games/go.js?v=20260513-game-modules" defer></script>
 <script src="/js/games/gomoku.js?v=20260513-game-modules" defer></script>
+<script src="/js/games/chinese-chess.js?v=20260513-game-modules" defer></script>
 <script src="/js/games/real-tetris.js?v=20260513-game-modules" defer></script>
 <script src="/js/games/game-view-registry.js?v=20260513-legacy-modules" defer></script>
 <script src="/js/games/chess.js?v=20260513-legacy-modules" defer></script>

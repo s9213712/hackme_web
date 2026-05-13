@@ -139,8 +139,8 @@
 
 - 一句話說明：遊戲區提供西洋棋、數獨、踩地雷、1A2B、俄羅斯方塊、真實版俄羅斯方塊、宇宙戰機、3D 射擊場，以及同頁本機模組遊戲；黑白棋、圍棋、五子棋已接上基礎 AI 與獨立棋力量化 benchmark。
 - 設計目的：讓使用者能在同一遊戲頁切換遊戲，同時讓非西洋棋 AI 的強化有獨立可量化證據，不污染西洋棋 exp3/exp4/exp5 pipeline。
-- 使用方法：使用者在遊戲區下拉選遊戲；黑白棋 / 圍棋 / 五子棋可切換 `對電腦` 與 AI 難度。維護者用 `python3 scripts/games/board_ai_benchmark.py` 產生 `runtime/reports/games/board_ai_benchmark_*.json`。
-- 原理：三棋前端共用 `public/js/games/board-game-shared.js`，對電腦時呼叫 `POST /api/games/<game_key>/ai-move`，後端由 `services/games/board_ai.py` 回傳 `move/pass/finish`。棋力量化由 `services/games/board_arena.py` 執行 round-robin、skill suite、Elo estimate 與非法步統計。
+- 使用方法：使用者在遊戲區下拉選遊戲；黑白棋 / 圍棋 / 五子棋可切換 `對電腦` 與 AI 難度。維護者用 `python3 scripts/games/board_ai_benchmark.py` 產生 `runtime/reports/games/board_ai_benchmark_*.json`。圍棋 `katago` 難度可先執行 `python3 scripts/games/setup_katago.py` 自動下載 KataGo、模型並產生 config。
+- 原理：三棋前端共用 `public/js/games/board-game-shared.js`，對電腦時呼叫 `POST /api/games/<game_key>/ai-move`，後端由 `services/games/board_ai.py` 回傳 `move/pass/finish`。圍棋 `katago` 先讀環境變數，沒有時自動找 `runtime/katago`。棋力量化由 `services/games/board_arena.py` 執行 round-robin、skill suite、Elo estimate 與非法步統計。
 - 失敗情境與提示：若刪除某個本機遊戲模組，該遊戲會從前端 catalog 消失，不影響其他遊戲；若三棋 AI API 回 `不支援的棋類 AI`，先確認 `game_key` 是否為 `reversi/go/gomoku`；若 benchmark 出現 `illegal_moves > 0`，不可把該 candidate 視為可 promotion。
 - 測試方式：`pytest -q tests/games/test_board_ai.py tests/games/test_board_arena.py tests/frontend/games/test_frontend_games.py`，再跑 `python3 scripts/games/board_ai_benchmark.py --games gomoku --engines random,easy --rounds 1 --max-plies 6 --output-dir /tmp/hackme_board_ai_benchmark_smoke` 做 CLI smoke。
 - 相關文件連結：[games/README.md](games/README.md), [games/BOARD_AI_BENCHMARK.md](games/BOARD_AI_BENCHMARK.md), [API_REFERENCE.md](API_REFERENCE.md), [11_QA_TESTING.md](11_QA_TESTING.md)

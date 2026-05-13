@@ -1,6 +1,6 @@
 # Board AI Benchmark Tutorial
 
-這份文件說明黑白棋、9 路圍棋、五子棋的基礎 AI、棋力量化方式、腳本功能、報告欄位與調用地圖。它是非西洋棋 board-game AI 的主要操作文件。
+這份文件說明黑白棋、19 路圍棋、五子棋的基礎 AI、棋力量化方式、腳本功能、KataGo 安裝、報告欄位與調用地圖。它是非西洋棋 board-game AI 的主要操作文件。
 
 ## 目標
 
@@ -17,9 +17,9 @@
 
 | 遊戲 | game key | runtime AI | 基礎技術 |
 |---|---|---|---|
-| 黑白棋 | `reversi` | `services/games/board_ai.py` | legal move + flip validation、alpha-beta、角落 / mobility / edge / X-square 評估 |
-| 9 路圍棋 | `go` | `services/games/board_ai.py` | legal move、提子、避免自殺手、capture heuristic、輕量 rollout |
-| 五子棋 | `gomoku` | `services/games/board_ai.py` | candidate move、立即成五、擋五、pattern search |
+| 黑白棋 | `reversi` | `services/games/board_ai.py` | legal move + flip validation、alpha-beta、transposition cache、角落 / mobility / frontier / 穩定邊角 / parity 評估、困難終盤 exact solve |
+| 19 路圍棋 | `go` | `services/games/board_ai.py` | legal move、提子、避免自殺手、死活網路、輕量 rollout；`katago` 難度可接本機 KataGo neural-network analysis engine |
+| 五子棋 | `gomoku` | `services/games/board_ai.py` | candidate move、立即成五、擋五、threat-space classifier、活四 / 雙活三 / 雙勝點封鎖、threat alpha-beta |
 
 前端三棋共用棋盤在 `public/js/games/board-game-shared.js`。使用者切換 `對電腦` 後會呼叫後端 AI API，不在瀏覽器內跑搜尋。
 
@@ -40,9 +40,9 @@ routes/games.py::board_game_ai_move(...)
         v
 services/games/board_ai.py::choose_board_game_ai_move(...)
         |
-        +--> reversi alpha-beta
-        +--> go heuristic + rollout
-        +--> gomoku pattern search
+        +--> reversi stability alpha-beta + endgame exact solve
+        +--> go life-death network / rollout / KataGo adapter
+        +--> gomoku threat alpha-beta
 ```
 
 API body:
@@ -58,7 +58,7 @@ API body:
 實際 `board` 長度依遊戲而定：
 
 - `reversi`: 64
-- `go`: 81
+- `go`: 361
 - `gomoku`: 225
 
 API response 的核心欄位：
@@ -124,11 +124,53 @@ python3 scripts/games/board_ai_benchmark.py \
 python3 scripts/games/board_ai_benchmark.py --json
 ```
 
+## KataGo 自動安裝
+
+圍棋 `katago` 難度使用本機 KataGo analysis engine。預設一鍵安裝：
+
+```bash
+python3 scripts/games/setup_katago.py
+```
+
+腳本會做：
+
+- 下載 KataGo v1.16.4 OpenCL Linux x64 release asset。
+- 下載 `kata1-zhizi-b40c768nbt-fdx6d.bin.gz` 模型。
+- 執行 `katago genconfig` 產生 `runtime/katago/analysis.cfg`。
+- 寫出 `runtime/katago/hackme_katago.env`，包含 `HACKME_KATAGO_BIN`、`HACKME_KATAGO_CONFIG`、`HACKME_KATAGO_MODEL`、visits 與 timeout。
+
+後端會自動偵測 `runtime/katago`，所以使用預設路徑時不需要 source env file。自訂路徑時可用：
+
+```bash
+python3 scripts/games/setup_katago.py --install-dir /opt/hackme-katago
+source /opt/hackme-katago/hackme_katago.env
+```
+
+也可以只設定 `HACKME_KATAGO_HOME=/opt/hackme-katago`，讓後端在該目錄內尋找 `katago`、`analysis.cfg` 與 `*.bin.gz`。
+
+只看下載計畫、不寫檔：
+
+```bash
+python3 scripts/games/setup_katago.py --dry-run
+```
+
+常用參數：
+
+```bash
+python3 scripts/games/setup_katago.py \
+  --backend opencl \
+  --max-visits 96 \
+  --timeout-seconds 10
+```
+
+`--backend` 可選 `opencl`、`eigen`、`eigenavx2`、`cuda12.1`、`cuda12.5`、`cuda12.8`。預設使用 OpenCL，因為它對 CUDA/TensorRT 版本綁定較少。若官方 release asset 名稱變動，可用 `--binary-url` 指到新的 zip。
+
 ## 腳本功能地圖
 
 | 層級 | 檔案 / 函式 | 功能 |
 |---|---|---|
 | CLI | `scripts/games/board_ai_benchmark.py` | 解析參數、顯示進度、執行 benchmark、寫 report |
+| KataGo setup | `scripts/games/setup_katago.py` | 下載 KataGo binary / 模型、解壓、產生 `analysis.cfg`、寫 env file |
 | 報告路徑 | `default_board_reports_dir()` | 決定預設輸出到 `runtime/reports/games` |
 | Benchmark | `run_board_ai_benchmark(...)` | 依 game/engine/rounds 產生 round-robin matches |
 | 單場對局 | `play_board_ai_match(...)` | 執行單局、處理 pass/finish/illegal、記錄 final board |
@@ -167,9 +209,13 @@ python3 scripts/games/board_ai_benchmark.py --json
 `skill_suite` 目前覆蓋：
 
 - 黑白棋 opening legal move。
+- 黑白棋角落優先。
+- 黑白棋困難終盤 exact solve。
 - 圍棋單子提子。
 - 五子棋 open four 直接成五。
 - 五子棋擋對方 open four。
+- 五子棋建立活四 threat-space。
+- 五子棋封鎖對手活四建構點。
 
 後續每加一個重要能力，都應先加 skill case，再讓 candidate 通過。
 
@@ -196,10 +242,7 @@ python3 scripts/games/board_ai_benchmark.py --json
 先做：
 
 - bitboard
-- transposition table
 - iterative deepening
-- move ordering
-- endgame exact search
 
 再做：
 
@@ -207,19 +250,30 @@ python3 scripts/games/board_ai_benchmark.py --json
 - ProbCut / Multi-ProbCut
 - supervised evaluator tuning
 
+已完成基礎強化：
+
+- transposition cache
+- move ordering
+- stability / frontier / parity evaluator
+- hard endgame exact search
+
 ### 五子棋
 
 先做：
 
-- threat pattern table
-- open three / open four / double threat classifier
-- alpha-beta / PVS move ordering
+- PVS move ordering
 
 再做：
 
-- threat-space search
 - proof-number search
 - self-play data distillation
+
+已完成基礎強化：
+
+- threat pattern table
+- open three / open four / double threat classifier
+- threat-space immediate selector
+- alpha-beta move ordering
 
 ### 圍棋
 

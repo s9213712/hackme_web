@@ -15,9 +15,10 @@
     { key: "snake", title: "貪食蛇", subtitle: "滑動或方向鍵控制蛇吃食物" },
     { key: "game_2048", title: "2048", subtitle: "合併數字方塊，挑戰最高分" },
     { key: "brick_breaker", title: "打磚塊", subtitle: "移動擋板反彈球打掉磚塊" },
-    { key: "reversi", title: "黑白棋", subtitle: "AI 練習 / 本機雙人" },
-    { key: "go", title: "圍棋", subtitle: "9 路簡化圍棋，AI 練習 / 本機雙人" },
-    { key: "gomoku", title: "五子棋", subtitle: "15 路 AI 練習 / 本機雙人" },
+    { key: "reversi", title: "黑白棋", subtitle: "線上棋盤 / AI 練習" },
+    { key: "go", title: "圍棋", subtitle: "19 路線上棋盤，目數/眼位結算" },
+    { key: "gomoku", title: "五子棋", subtitle: "15 路線上棋盤，AI 練習 / 雙人對局" },
+    { key: "chinese_chess", title: "中國象棋", subtitle: "9x10 線上棋盤，將帥對弈 / AI 練習" },
   ];
 
   const modules = window.HACKME_GAME_MODULES || {};
@@ -204,6 +205,11 @@
       { id: "win", label: "五子連線勝", target: 1, metric: "win" },
       { id: "score-260", label: "五子棋 260 分", target: 260, metric: "score" },
     ],
+    chinese_chess: [
+      { id: "win", label: "中國象棋勝局", target: 1, metric: "win" },
+      { id: "capture-5", label: "吃子 5 枚", target: 5, metric: "capture" },
+      { id: "score-1200", label: "象棋 1200 分", target: 1200, metric: "score" },
+    ],
   };
 
   const achievementCatalog = {
@@ -283,23 +289,34 @@
       ["threat", "威脅建構", "形成活四或直接勝手。"],
       ["renju-clean", "禁手自律", "連珠規則下避免禁手。"],
     ],
+    chinese_chess: [
+      ["xiangqi-win", "象棋勝局", "完成一局中國象棋並獲勝。"],
+      ["xiangqi-cannon", "炮打隔山", "用炮吃子。"],
+      ["mission-win", "每日任務：中國象棋勝局", "完成中國象棋勝局任務。"],
+    ],
   };
 
   const aiStrengthCatalog = {
     reversi: {
       easy: "約入門玩家；能吃子但常放角落。",
-      normal: "約初級玩家；有 2-ply 角落/行動力意識。",
-      hard: "約中級休閒玩家；4-ply alpha-beta，仍會受 C/X 格陷阱影響。",
+      normal: "約初級玩家；3-ply alpha-beta，具角落、行動力與 frontier 意識。",
+      hard: "約中級休閒玩家；4-ply 穩定邊角搜尋、transposition cache 與終盤 exact solve。",
     },
     go: {
-      easy: "9 路簡化約 20-15 kyu；重吃子與氣。",
-      normal: "9 路簡化約 15-12 kyu；含短 rollout。",
-      hard: "9 路簡化約 12-10 kyu；rollout 較深，但沒有完整死活網路。",
+      easy: "19 路入門約 25-20 kyu；重氣、眼位與基本地盤。",
+      normal: "19 路初級約 20-15 kyu；短 rollout 評估目數。",
+      hard: "19 路初中級約 12-8 kyu；完整死活網路評估叫吃、雙眼、假眼、連接、切斷與攻殺。",
+      katago: "KataGo 神經網路；使用本機 KataGo analysis engine 與模型，強度取決於設定的模型與 visits。",
     },
     gomoku: {
       easy: "約入門；會找鄰近點與立即勝。",
-      normal: "約初中級；會擋五與評估連線。",
-      hard: "約中級；2-ply 威脅搜尋，但未達連珠高段解題器。",
+      normal: "約初中級；會擋五、活四與雙勝點。",
+      hard: "約中級以上；threat-space + 2-ply alpha-beta，會處理活四、雙活三與對手威脅封鎖。",
+    },
+    chinese_chess: {
+      easy: "約入門；會吃高價子與避免明顯將死。",
+      normal: "約初級；懂將軍、將帥照面與基本子力。",
+      hard: "約初中級；會避開被白吃並優先製造將軍。",
     },
     chess: {
       normal: "約 Elo 600-800；優先吃子/將軍。",

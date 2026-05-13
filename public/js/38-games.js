@@ -145,6 +145,7 @@ function gameIcon(key) {
   if (key === "reversi") return "●";
   if (key === "go") return "○";
   if (key === "gomoku") return "五";
+  if (key === "chinese_chess") return "象";
   if (key === "sudoku") return "9";
   if (key === "minesweeper") return "!";
   if (key === "1a2b") return "A";
@@ -161,9 +162,10 @@ function gameSubtitle(game) {
   if (game.key === "snake") return "手機滑動 / 鍵盤皆可玩";
   if (game.key === "game_2048") return "手機滑動合併數字";
   if (game.key === "brick_breaker") return "手機按鍵控制擋板";
-  if (game.key === "reversi") return "AI 練習 / 本機雙人黑白棋";
-  if (game.key === "go") return "9 路 AI 練習 / 本機雙人圍棋";
-  if (game.key === "gomoku") return "15 路 AI 練習 / 本機雙人五子棋";
+  if (game.key === "reversi") return "線上棋盤黑白棋 / AI 練習";
+  if (game.key === "go") return "19 路線上棋盤圍棋 / 目數結算";
+  if (game.key === "gomoku") return "15 路線上棋盤五子棋 / AI 練習";
+  if (game.key === "chinese_chess") return "9x10 線上棋盤中國象棋 / AI 練習";
   if (game.key === "sudoku") return "單人邏輯解題";
   if (game.key === "minesweeper") return "單人推理挑戰";
   if (game.key === "1a2b") return "單人猜數字";
@@ -285,6 +287,10 @@ function cleanupLocalGameModule() {
   if (actions) actions.innerHTML = "";
   const controls = $("local-module-game-controls");
   if (controls) controls.innerHTML = "";
+  const panel = $("local-module-game-panel");
+  if (panel) delete panel.dataset.moduleKind;
+  const kicker = $("local-module-game-kicker");
+  if (kicker) kicker.textContent = "線上遊戲";
 }
 
 function normalizeSoloScoreTiming(body = {}) {
@@ -412,6 +418,11 @@ function mountLocalGameModule(key) {
   cleanupLocalGameModule();
   const game = window.hackmeGameByKey?.(key) || {};
   const module = window.HACKME_GAME_MODULES?.[key];
+  const isBoardGame = ["reversi", "go", "gomoku", "chinese_chess"].includes(key);
+  const panel = $("local-module-game-panel");
+  const kicker = $("local-module-game-kicker");
+  if (panel) panel.dataset.moduleKind = isBoardGame ? "online-board" : "arcade";
+  if (kicker) kicker.textContent = isBoardGame ? "線上棋盤" : "線上遊戲";
   $("local-module-game-title").textContent = game.title || "遊戲";
   $("local-module-game-status").textContent = game.subtitle || "準備中";
   if (!module?.mount) {

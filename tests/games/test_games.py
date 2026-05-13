@@ -217,6 +217,7 @@ def test_game_catalog_includes_solo_games(tmp_path):
         "reversi",
         "go",
         "gomoku",
+        "chinese_chess",
     } <= set(by_key)
     assert [item["key"] for item in by_key["chess"]["computer_difficulties"]] == [
         "normal",
@@ -228,6 +229,13 @@ def test_game_catalog_includes_solo_games(tmp_path):
     ]
     assert by_key["sudoku"]["supports_invites"] is False
     assert by_key["minesweeper"]["supports_computer"] is False
+    assert by_key["chinese_chess"]["title"] == "中國象棋"
+    assert by_key["chinese_chess"]["supports_invites"] is False
+    assert [item["key"] for item in by_key["chinese_chess"]["computer_difficulties"]] == [
+        "easy",
+        "normal",
+        "hard",
+    ]
     assert by_key["1a2b"]["supports_invites"] is False
     assert by_key["tetris"]["supports_invites"] is False
     assert by_key["real_tetris"]["title"] == "真實版俄羅斯方塊"
@@ -240,6 +248,12 @@ def test_game_catalog_includes_solo_games(tmp_path):
     assert by_key["brick_breaker"]["title"] == "打磚塊"
     assert by_key["reversi"]["title"] == "黑白棋"
     assert by_key["go"]["title"] == "圍棋"
+    assert [item["key"] for item in by_key["go"]["computer_difficulties"]] == [
+        "easy",
+        "normal",
+        "hard",
+        "katago",
+    ]
     assert by_key["gomoku"]["title"] == "五子棋"
 
 

@@ -30,6 +30,7 @@ def test_game_zone_frontend_assets_are_wired():
     local_reversi_js = (ROOT / "public" / "js" / "games" / "reversi.js").read_text(encoding="utf-8")
     local_go_js = (ROOT / "public" / "js" / "games" / "go.js").read_text(encoding="utf-8")
     local_gomoku_js = (ROOT / "public" / "js" / "games" / "gomoku.js").read_text(encoding="utf-8")
+    local_chinese_chess_js = (ROOT / "public" / "js" / "games" / "chinese-chess.js").read_text(encoding="utf-8")
     fps_js = (ROOT / "public" / "js" / "38-fps-arena.js").read_text(encoding="utf-8")
     core_js = (ROOT / "public" / "js" / "00-core.js").read_text(encoding="utf-8")
     bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
@@ -110,6 +111,7 @@ def test_game_zone_frontend_assets_are_wired():
     assert "/js/games/reversi.js?v=20260513-game-modules" in index_html
     assert "/js/games/go.js?v=20260513-game-modules" in index_html
     assert "/js/games/gomoku.js?v=20260513-game-modules" in index_html
+    assert "/js/games/chinese-chess.js?v=20260513-game-modules" in index_html
     assert "/js/games/game-view-registry.js?v=20260513-legacy-modules" in index_html
     assert "/js/games/chess.js?v=20260513-legacy-modules" in index_html
     assert "/js/games/sudoku.js?v=20260513-legacy-modules" in index_html
@@ -120,6 +122,8 @@ def test_game_zone_frontend_assets_are_wired():
     assert "/js/games/fps-arena.js?v=20260513-legacy-modules" in index_html
     assert "/js/38-fps-arena.js?v=20260512-fps-feedback" in index_html
     assert 'id="game-select"' in games_js
+    assert "chinese_chess" in games_js
+    assert "中國象棋" in game_modules_js
     assert 'id="game-open-page-btn"' not in games_js
     assert "openStandaloneGamePage" not in games_js
     assert "gameShouldOpenInStandalonePage" not in games_js
@@ -128,6 +132,9 @@ def test_game_zone_frontend_assets_are_wired():
     assert "isLocalGameModuleAvailable" in games_js
     assert "isLocalGameCatalogKey" in games_js
     assert 'id="local-module-game-panel"' in index_html
+    assert 'class="single-game-panel game-play-panel"' in index_html
+    assert 'id="local-module-game-kicker">線上遊戲' in index_html
+    assert 'class="game-action-toolbar" id="local-module-game-actions"' in index_html
     assert 'id="local-module-game-root"' in index_html
     assert 'id="local-module-game-controls"' in index_html
     assert "貪食蛇" in index_html
@@ -149,6 +156,10 @@ def test_game_zone_frontend_assets_are_wired():
     assert "createHackmeGameSeededRandom" in game_modules_js
     assert "recordHackmeGameAchievement" in game_modules_js
     assert "state.dailyChallenge?.key || api.key" in game_modules_js
+    assert "19 路線上棋盤，目數/眼位結算" in game_modules_js
+    assert "完整死活網路評估叫吃、雙眼、假眼、連接、切斷與攻殺" in game_modules_js
+    assert "KataGo 神經網路；使用本機 KataGo analysis engine" in game_modules_js
+    assert "19 路線上棋盤圍棋 / 目數結算" in games_js
     assert "modules.snake" not in game_modules_js
     assert "modules.game_2048" not in game_modules_js
     assert 'registerHackmeLocalGameModule("snake"' in local_snake_js
@@ -158,6 +169,12 @@ def test_game_zone_frontend_assets_are_wired():
     assert 'registerHackmeLocalGameModule("stickman_shooter"' in local_stickman_js
     assert 'registerHackmeLocalGameModule("real_tetris"' in local_real_tetris_js
     assert "mountHackmeLocalDiscGame" in local_board_shared_js
+    assert "board-game-online-shell" in local_board_shared_js
+    assert "${title}線上棋盤" in local_board_shared_js
+    assert "線上雙人對局" in local_board_shared_js
+    assert "size: 19" in local_board_shared_js
+    assert "目數/眼位估算" in local_board_shared_js
+    assert "GO_KOMI" in local_board_shared_js
     assert "data-board-clock" in local_board_shared_js
     assert 'data-action="clock"' in local_board_shared_js
     assert 'data-action="clock-preset"' in local_board_shared_js
@@ -169,10 +186,18 @@ def test_game_zone_frontend_assets_are_wired():
     assert "玩家後手" in local_board_shared_js
     assert 'state.aiColor = other(state.humanColor);' in local_board_shared_js
     assert 'data-action="difficulty"' in local_board_shared_js
+    assert 'GO_DIFFICULTIES = ["easy", "normal", "hard", "katago"]' in local_board_shared_js
+    assert 'katago: "KataGo"' in local_board_shared_js
     assert "api.request" in local_board_shared_js
     assert 'registerHackmeLocalGameModule("reversi"' in local_reversi_js
     assert 'registerHackmeLocalGameModule("go"' in local_go_js
     assert 'registerHackmeLocalGameModule("gomoku"' in local_gomoku_js
+    assert 'registerHackmeLocalGameModule("chinese_chess"' in local_chinese_chess_js
+    assert "initialChineseChessBoard" in local_chinese_chess_js
+    assert "generalsFacing" in local_chinese_chess_js
+    assert "pseudoMovesForPiece" in local_chinese_chess_js
+    assert "炮打隔山" in local_chinese_chess_js
+    assert "楚河" in local_chinese_chess_js
     assert "centerRealTetrisCells" in local_real_tetris_js
     assert "integrateRealTetrisPhysics" in local_real_tetris_js
     assert "resolveRealTetrisCollisions" in local_real_tetris_js
@@ -513,7 +538,11 @@ def test_game_zone_frontend_assets_are_wired():
     assert "position: sticky;" in styles_css
     assert "grid-template-columns: repeat(auto-fit, minmax(4.6rem, 1fr))" in styles_css
     assert "#local-module-game-actions" in styles_css
+    assert ".game-action-toolbar" in styles_css
+    assert ".board-game-online-shell" in styles_css
     assert ".board-game-grid.gomoku" in styles_css
+    assert ".xiangqi-board" in styles_css
+    assert ".xiangqi-cell" in styles_css
     assert 'class="standalone-editor-page"' in trading_workflow_html
     assert 'class="editor-bg-grid"' in trading_workflow_html
     assert "radial-gradient(circle at 18% 8%" in trading_workflow_css

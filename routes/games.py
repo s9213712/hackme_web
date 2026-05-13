@@ -5,8 +5,9 @@ from datetime import datetime, timedelta, timezone
 from flask import request
 
 from services.games.board_ai import (
-    BOARD_AI_DIFFICULTIES,
     BOARD_AI_GAME_KEYS,
+    KataGoUnavailable,
+    board_ai_difficulties_for_game,
     choose_board_game_ai_move,
 )
 from services.games.chess import (
@@ -74,6 +75,7 @@ SOLO_GAME_KEYS = {
     "reversi",
     "go",
     "gomoku",
+    "chinese_chess",
 }
 SCORE_RANKED_SOLO_GAMES = {
     "tetris",
@@ -88,8 +90,9 @@ SCORE_RANKED_SOLO_GAMES = {
     "reversi",
     "go",
     "gomoku",
+    "chinese_chess",
 }
-SOLO_GAME_CHECK_SQL = "'sudoku', 'minesweeper', '1a2b', 'tetris', 'real_tetris', 'space_shooter', 'fps_arena', 'bullet_hell', 'stickman_shooter', 'snake', 'game_2048', 'brick_breaker', 'reversi', 'go', 'gomoku'"
+SOLO_GAME_CHECK_SQL = "'sudoku', 'minesweeper', '1a2b', 'tetris', 'real_tetris', 'space_shooter', 'fps_arena', 'bullet_hell', 'stickman_shooter', 'snake', 'game_2048', 'brick_breaker', 'reversi', 'go', 'gomoku', 'chinese_chess'"
 WEEKLY_REWARDS = (300, 200, 100)
 DAILY_CHALLENGE_REWARD_POINTS = 25
 COMPUTER_DIFFICULTIES = {
@@ -1034,10 +1037,22 @@ def register_games_routes(app, deps):
                     {"key": "easy", "label": "簡單"},
                     {"key": "normal", "label": "普通"},
                     {"key": "hard", "label": "困難"},
+                    {"key": "katago", "label": "KataGo 神經網路"},
                 ],
             }, {
                 "key": "gomoku",
                 "title": "五子棋",
+                "status": "available",
+                "supports_invites": False,
+                "supports_computer": True,
+                "computer_difficulties": [
+                    {"key": "easy", "label": "簡單"},
+                    {"key": "normal", "label": "普通"},
+                    {"key": "hard", "label": "困難"},
+                ],
+            }, {
+                "key": "chinese_chess",
+                "title": "中國象棋",
                 "status": "available",
                 "supports_invites": False,
                 "supports_computer": True,
@@ -1086,7 +1101,7 @@ def register_games_routes(app, deps):
         if err:
             return err, status
         difficulty = str(data.get("difficulty") or "normal").strip().lower()
-        if difficulty not in BOARD_AI_DIFFICULTIES:
+        if difficulty not in board_ai_difficulties_for_game(game_key):
             return json_resp({"ok": False, "msg": "不支援的 AI 難度"}), 400
         try:
             decision = choose_board_game_ai_move(
@@ -1095,6 +1110,8 @@ def register_games_routes(app, deps):
                 data.get("turn"),
                 difficulty,
             )
+        except KataGoUnavailable as exc:
+            return json_resp({"ok": False, "msg": str(exc)}), 503
         except ValueError as exc:
             return json_resp({"ok": False, "msg": str(exc)}), 400
         return json_resp({"ok": True, **decision})

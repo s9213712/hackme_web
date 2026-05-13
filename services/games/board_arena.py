@@ -354,11 +354,29 @@ def _skill_cases() -> tuple[BoardSkillCase, ...]:
     gomoku_block = list(initial_board("gomoku"))
     for x in range(4):
         gomoku_block[7 * gomoku_size + x + 5] = "white"
+    reversi_corner = list(initial_board("reversi"))
+    reversi_corner[1] = "white"
+    reversi_corner[2] = "black"
+    reversi_exact = ["black"] * (BOARD_AI_SIZES["reversi"] ** 2)
+    reversi_exact[0] = ""
+    reversi_exact[1] = "white"
+    reversi_exact[2] = "black"
+    gomoku_threat = list(initial_board("gomoku"))
+    for x in (5, 6, 8):
+        gomoku_threat[7 * gomoku_size + x] = "black"
+    gomoku_threat_block = list(initial_board("gomoku"))
+    for x in (5, 6, 8):
+        gomoku_threat_block[7 * gomoku_size + x] = "white"
+    gomoku_threat_block[3 * gomoku_size + 3] = "black"
     return (
         BoardSkillCase("reversi", "opening_legal_move", tuple(reversi), "black", tuple(reversi_legal_moves(tuple(reversi), "black"))),
+        BoardSkillCase("reversi", "corner_priority", tuple(reversi_corner), "black", (0,)),
+        BoardSkillCase("reversi", "exact_endgame_single_move", tuple(reversi_exact), "black", (0,)),
         BoardSkillCase("go", "capture_single_stone", tuple(go), "black", (5 * go_size + 4,)),
         BoardSkillCase("gomoku", "win_open_four", tuple(gomoku_win), "black", (7 * gomoku_size + 4, 7 * gomoku_size + 9)),
         BoardSkillCase("gomoku", "block_open_four", tuple(gomoku_block), "black", (7 * gomoku_size + 4, 7 * gomoku_size + 9)),
+        BoardSkillCase("gomoku", "build_open_four_threat", tuple(gomoku_threat), "black", (7 * gomoku_size + 7,)),
+        BoardSkillCase("gomoku", "block_open_four_builder", tuple(gomoku_threat_block), "black", (7 * gomoku_size + 7,)),
     )
 
 

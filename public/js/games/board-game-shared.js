@@ -4,27 +4,36 @@
   const { registerScore } = window.HACKME_LOCAL_GAME_HELPERS;
   const GAME_META = {
     reversi: { title: "黑白棋", size: 8 },
-    go: { title: "圍棋", size: 9 },
+    go: { title: "圍棋", size: 19 },
     gomoku: { title: "五子棋", size: 15 },
   };
+  const GO_KOMI = 6.5;
   const DIFFICULTIES = ["easy", "normal", "hard"];
-  const DIFFICULTY_LABELS = { easy: "簡單", normal: "普通", hard: "困難" };
+  const GO_DIFFICULTIES = ["easy", "normal", "hard", "katago"];
+  const DIFFICULTY_LABELS = { easy: "簡單", normal: "普通", hard: "困難", katago: "KataGo" };
   const AI_SUPPORTED = new Set(["reversi", "go", "gomoku"]);
 
   function mountLocalDiscGame(api, type) {
     const meta = GAME_META[type] || GAME_META.reversi;
     const size = meta.size;
     const isReversi = type === "reversi";
+    const isIntersectionBoard = type === "go" || type === "gomoku";
     const title = meta.title;
     let aiToken = 0;
     api.setTitle(title);
     api.root.innerHTML = `
-      <div class="board-game-clock" data-board-clock>
-        <span data-board-clock-side="black">黑 --:--</span>
-        <span data-board-clock-side="white">白 --:--</span>
+        <div class="board-game-online-shell">
+        <div class="board-game-online-banner">
+          <strong>${title}線上棋盤</strong>
+          <span>${type === "go" ? "19 路圍棋 · 以目數/眼位估算勝負" : type === "gomoku" ? "15 路五子棋" : "黑白棋"} · 雙人輪流對局或伺服器 AI 練習</span>
+        </div>
+        <div class="board-game-clock" data-board-clock>
+          <span data-board-clock-side="black">黑 --:--</span>
+          <span data-board-clock-side="white">白 --:--</span>
+        </div>
+        <div class="board-game-coach" data-board-coach></div>
+        <div class="board-game-grid ${type}" style="--board-size:${size};--board-step:${100 / Math.max(1, size - 1)}%;--board-inset:${50 / size}%;" aria-label="${title}線上棋盤"></div>
       </div>
-      <div class="board-game-coach" data-board-coach></div>
-      <div class="board-game-grid ${type}" style="--board-size:${size}" aria-label="${title}"></div>
     `;
     const boardEl = api.root.querySelector(".board-game-grid");
     const state = {
@@ -54,6 +63,7 @@
     const count = (color) => state.board.filter((value) => value === color).length;
     const isAiTurn = () => state.mode === "computer" && state.turn === state.aiColor;
     const inputLocked = () => state.aiThinking || isAiTurn();
+    const aiDifficulties = () => type === "go" ? GO_DIFFICULTIES : DIFFICULTIES;
     const difficultyLabel = () => DIFFICULTY_LABELS[state.aiDifficulty] || "普通";
     const playerOrderLabel = () => state.humanColor === "black" ? "玩家先手" : "玩家後手";
     const clock = window.createHackmeCompetitionClock?.({
@@ -96,7 +106,7 @@
     };
     const unsubscribeClock = clock?.subscribe(renderClock) || null;
     const setActions = () => {
-      const nextModeLabel = state.mode === "computer" ? "玩家對戰" : "對電腦";
+      const nextModeLabel = state.mode === "computer" ? "線上雙人" : "對電腦";
       const sideButton = state.mode === "computer"
         ? `<button class="btn game-mini-btn" type="button" data-action="side">${playerOrderLabel()}</button>`
         : "";
@@ -163,41 +173,100 @@
       const strength = state.mode === "computer" ? aiStrengthText() : "";
       coach.textContent = [state.coachText, strength].filter(Boolean).join(" · ");
     };
+    const estimateGoTerritory = () => {
+      const visited = new Set();
+      let blackTerritory = 0;
+      let whiteTerritory = 0;
+      for (let i = 0; i < state.board.length; i += 1) {
+        if (state.board[i] || visited.has(i)) continue;
+        const queue = [i];
+        const region = new Set();
+        const borders = new Set();
+        visited.add(i);
+        while (queue.length) {
+          const current = queue.shift();
+          region.add(current);
+          for (const [nx, ny] of neighbors(...xy(current))) {
+            const ni = idx(nx, ny);
+            const value = state.board[ni];
+            if (value) {
+              borders.add(value);
+            } else if (!visited.has(ni)) {
+              visited.add(ni);
+              queue.push(ni);
+            }
+          }
+        }
+        if (borders.size === 1) {
+          const owner = [...borders][0];
+          if (owner === "black") blackTerritory += region.size;
+          if (owner === "white") whiteTerritory += region.size;
+        }
+      }
+      return {
+        black: blackTerritory,
+        white: whiteTerritory,
+        whiteWithKomi: whiteTerritory + GO_KOMI,
+      };
+    };
+    const scoreLabel = () => {
+      if (type !== "go") return `黑 ${count("black")} / 白 ${count("white")}`;
+      const territory = estimateGoTerritory();
+      return `黑目 ${territory.black.toFixed(1)} / 白目 ${territory.whiteWithKomi.toFixed(1)}（含貼目 ${GO_KOMI}）`;
+    };
     const finish = (winner = "") => {
       state.finished = true;
       state.aiThinking = false;
       aiToken += 1;
       clock?.stop();
-      const black = count("black");
-      const white = count("white");
-      const score = Math.max(1, black * 10 + (black > white ? 200 : 0));
-      if (winner && state.mode === "computer" && winner.includes(state.humanColor === "black" ? "黑" : "白")) {
+      let finalWinner = winner;
+      let score;
+      if (type === "go") {
+        const territory = estimateGoTerritory();
+        const blackWins = territory.black > territory.whiteWithKomi;
+        finalWinner = winner || (blackWins ? "黑" : "白");
+        const humanTerritory = state.humanColor === "black" ? territory.black : territory.whiteWithKomi;
+        score = Math.max(1, Math.round(humanTerritory * 10 + (finalWinner.includes(state.humanColor === "black" ? "黑" : "白") ? 200 : 0)));
+      } else {
+        const black = count("black");
+        const white = count("white");
+        score = Math.max(1, black * 10 + (black > white ? 200 : 0));
+      }
+      if (finalWinner && state.mode === "computer" && finalWinner.includes(state.humanColor === "black" ? "黑" : "白")) {
         api.achievement?.("beat-ai", `${title}勝 AI`, `以 ${difficultyLabel()} 難度獲勝。`);
         api.mission?.("win-ai", 1, 1, "擊敗 AI");
       }
       registerScore(api, score, state, state.dailyChallenge?.difficulty || "standard");
-      status(`${winner ? `${winner}勝 · ` : ""}結束 · 黑 ${black} / 白 ${white}`);
+      status(`${finalWinner ? `${finalWinner}勝 · ` : ""}結束 · ${scoreLabel()}`);
     };
     const renderStatus = () => {
       if (state.finished) return;
       const side = state.turn === "black" ? "黑" : "白";
-      const mode = state.mode === "computer" ? `對電腦 ${difficultyLabel()} · ${playerOrderLabel()}` : "玩家對戰";
+      const mode = state.mode === "computer" ? `對電腦 ${difficultyLabel()} · ${playerOrderLabel()}` : "線上雙人對局";
       const actor = state.mode === "computer" ? (isAiTurn() ? "AI" : "玩家") : "玩家";
-      status(`${state.aiThinking ? "AI 思考中" : `${side}方走`} · ${actor} · 黑 ${count("black")} / 白 ${count("white")} · ${mode}`);
+      status(`${state.aiThinking ? "AI 思考中" : `${side}方走`} · ${actor} · ${scoreLabel()} · ${mode}`);
       renderClock();
     };
     const render = () => {
       const locked = inputLocked();
-      const cells = state.board.map((value, i) => (
-        `<button class="board-game-cell ${value} ${state.hintCells.has(i) ? "hint" : ""}" type="button" data-i="${i}" aria-label="${i}" ${locked ? "disabled" : ""}>${value ? `<span></span>` : ""}</button>`
-      )).join("");
+      const cells = state.board.map((value, i) => {
+        const [x, y] = xy(i);
+        const star = isIntersectionBoard && isBoardStarPoint(x, y);
+        const label = isIntersectionBoard ? `${title} ${x + 1}-${y + 1} 交點` : `${title} ${i}`;
+        return `<button class="board-game-cell ${value} ${star ? "star-point" : ""} ${state.hintCells.has(i) ? "hint" : ""}" type="button" data-i="${i}" aria-label="${label}" ${locked ? "disabled" : ""}>${value ? `<span></span>` : ""}</button>`;
+      }).join("");
       const overlay = state.finished
-        ? `<div class="single-game-over-overlay">GAME OVER<br><small>${title} · 黑 ${count("black")} / 白 ${count("white")}</small></div>`
+        ? `<div class="single-game-over-overlay">GAME OVER<br><small>${title} · ${scoreLabel()}</small></div>`
         : "";
       boardEl.innerHTML = cells + overlay;
       renderStatus();
       renderCoach();
       setActions();
+    };
+    const isBoardStarPoint = (x, y) => {
+      if (type === "go") return [3, 9, 15].includes(x) && [3, 9, 15].includes(y);
+      if (type === "gomoku") return [3, 7, 11].includes(x) && [3, 7, 11].includes(y);
+      return false;
     };
     const reversiFlips = (x, y, color) => {
       const opponent = other(color);
@@ -253,17 +322,6 @@
       }
       return openThrees >= 2 || openFours >= 2;
     };
-    const estimateGoTerritory = () => {
-      let black = count("black") + state.captures.black;
-      let white = count("white") + state.captures.white;
-      state.board.forEach((value, i) => {
-        if (value) return;
-        const adj = [...neighbors(...xy(i))].map(([nx, ny]) => state.board[idx(nx, ny)]);
-        if (adj.includes("black") && !adj.includes("white")) black += 0.5;
-        if (adj.includes("white") && !adj.includes("black")) white += 0.5;
-      });
-      return { black, white };
-    };
     const lineThreatMove = (color) => {
       const moves = legalMovesFor(color);
       for (const move of moves) {
@@ -305,11 +363,12 @@
             return state.board[ni] === other(color) && liberties(ni, other(color)).libs.size === 1;
           });
         });
-        const pick = captureMove ?? moves.sort((a, b) => Math.abs(xy(a)[0] - 4) + Math.abs(xy(a)[1] - 4) - (Math.abs(xy(b)[0] - 4) + Math.abs(xy(b)[1] - 4)))[0];
+        const center = (size - 1) / 2;
+        const pick = captureMove ?? moves.sort((a, b) => Math.abs(xy(a)[0] - center) + Math.abs(xy(a)[1] - center) - (Math.abs(xy(b)[0] - center) + Math.abs(xy(b)[1] - center)))[0];
         if (pick !== undefined) state.hintCells.add(pick);
         const territory = estimateGoTerritory();
-        if (territory.black > territory.white && color === "black") api.mission?.("territory", 1, 1, "地盤估算領先");
-        setCoach(`地盤估算：黑 ${territory.black.toFixed(1)} / 白 ${territory.white.toFixed(1)}。提示優先救叫吃或吃子。`);
+        if (territory.black > territory.whiteWithKomi && color === "black") api.mission?.("territory", 1, 1, "地盤估算領先");
+        setCoach(`目數/眼位估算：黑 ${territory.black.toFixed(1)} / 白 ${territory.whiteWithKomi.toFixed(1)}（含貼目）。提示優先救叫吃或圍眼。`);
       } else {
         const own = lineThreatMove(color);
         const block = lineThreatMove(other(color));
@@ -470,8 +529,9 @@
         reset();
       }
       if (action === "difficulty") {
-        const next = (DIFFICULTIES.indexOf(state.aiDifficulty) + 1) % DIFFICULTIES.length;
-        state.aiDifficulty = DIFFICULTIES[next];
+        const levels = aiDifficulties();
+        const next = (levels.indexOf(state.aiDifficulty) + 1) % levels.length;
+        state.aiDifficulty = levels[next];
         setCoach(aiStrengthText());
         render();
       }

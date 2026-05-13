@@ -93,7 +93,7 @@ python3 scripts/games/board_ai_benchmark.py
 
 Purpose:
 
-- Quantify Reversi, 9x9 Go, and Gomoku local AI strength.
+- Quantify Reversi, 19x19 Go, and Gomoku local AI strength.
 - Run `random/easy/normal/hard` round-robin with color swaps.
 - Emit standings, head-to-head matrix, Elo estimate, illegal move counts, timing, and deterministic skill probes.
 
@@ -114,6 +114,27 @@ Artifact:
 Deep tutorial:
 
 - [../docs/games/BOARD_AI_BENCHMARK.md](../docs/games/BOARD_AI_BENCHMARK.md)
+
+### KataGo Setup
+
+Entry:
+
+```bash
+python3 scripts/games/setup_katago.py
+```
+
+Purpose:
+
+- Download KataGo and the default Go neural-network model.
+- Generate `runtime/katago/analysis.cfg`.
+- Write `runtime/katago/hackme_katago.env` for custom runtime exports.
+- Let `services/games/board_ai.py` auto-detect the default install path for the Go `katago` difficulty.
+
+Dry run:
+
+```bash
+python3 scripts/games/setup_katago.py --dry-run
+```
 
 ## Production Gate Live Regression Rule
 

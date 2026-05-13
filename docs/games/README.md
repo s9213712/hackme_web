@@ -6,7 +6,7 @@
 
 | 主題 | 先讀文件 | 適用情境 |
 |---|---|---|
-| 黑白棋 / 圍棋 / 五子棋 AI 與棋力量化 | [BOARD_AI_BENCHMARK.md](BOARD_AI_BENCHMARK.md) | 要跑三棋 AI benchmark、看 Elo、檢查 skill suite、規劃後續強化 |
+| 黑白棋 / 圍棋 / 五子棋 AI 與棋力量化 | [BOARD_AI_BENCHMARK.md](BOARD_AI_BENCHMARK.md) | 要跑三棋 AI benchmark、看 Elo、檢查 skill suite、安裝 KataGo、規劃後續強化 |
 | 西洋棋模型檔與 runtime/bundled 邊界 | [chess_model_files.md](chess_model_files.md) | 要理解 exp3/exp4/exp5 模型檔、warm-start、promotion artifact |
 | 西洋棋訓練與 replay pipeline | [chess_training_pipeline.md](chess_training_pipeline.md) | 要跑 replay prepare、seed train、self-play、promotion pipeline |
 | 西洋棋 debug / engine roadmap | [chess_debug/README.md](chess_debug/README.md) | 要追 exp3/exp4/exp5 歷史與目前治理結論 |
@@ -32,10 +32,16 @@
 目前三個遊戲有基礎 AI：
 
 - 黑白棋 `reversi`
-- 9 路圍棋 `go`
+- 19 路圍棋 `go`
 - 五子棋 `gomoku`
 
-runtime AI 入口是 `POST /api/games/<game_key>/ai-move`，只接受這三個 `game_key`。西洋棋不走這條 API。
+runtime AI 入口是 `POST /api/games/<game_key>/ai-move`，只接受這三個 `game_key`。圍棋多一個 `katago` 難度，會呼叫本機 KataGo analysis engine；若尚未安裝，可執行：
+
+```bash
+python3 scripts/games/setup_katago.py
+```
+
+預設會安裝到 `runtime/katago`，後端會自動偵測，不需要額外 export。若改用自訂路徑，source 該目錄下的 `hackme_katago.env`，或同格式設定 `HACKME_KATAGO_BIN`、`HACKME_KATAGO_CONFIG`、`HACKME_KATAGO_MODEL`。西洋棋不走這條 API。
 
 ### 西洋棋
 
@@ -50,7 +56,7 @@ runtime AI 入口是 `POST /api/games/<game_key>/ai-move`，只接受這三個 `
 3. 三棋共用棋盤邏輯在 `public/js/games/board-game-shared.js`。
 4. 使用者切到 `對電腦` 後，前端呼叫 `POST /api/games/<game_key>/ai-move`。
 5. `routes/games.py` 驗證登入、CSRF、game key、難度與棋盤 payload。
-6. `services/games/board_ai.py` 產生 AI 決策。
+6. `services/games/board_ai.py` 產生 AI 決策；圍棋 `katago` 難度會先找環境變數，再找 `runtime/katago`。
 7. 前端套用回傳的 `move/pass/finish`，並留在同一頁。
 
 ### 維護者量化三棋棋力
@@ -66,6 +72,7 @@ runtime AI 入口是 `POST /api/games/<game_key>/ai-move`，只接受這三個 `
 - 三棋即時 AI：`services/games/board_ai.py`
 - 三棋 benchmark / Elo / skill suite：`services/games/board_arena.py`
 - 三棋 operator script：`scripts/games/board_ai_benchmark.py`
+- KataGo 自動下載 / config 產生：`scripts/games/setup_katago.py`
 - 三棋測試：`tests/games/test_board_ai.py`、`tests/games/test_board_arena.py`
 - 真實版俄羅斯方塊：`public/js/games/real-tetris.js`
 - 西洋棋仍使用 `services/games/chess*.py`、`scripts/games/chess_*.py`、`docs/games/chess_*.md`

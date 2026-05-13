@@ -17,7 +17,7 @@ def test_initial_board_and_score_helpers_are_game_scoped():
 
     assert len(reversi) == 64
     assert score_board("reversi", reversi) == (2, 2)
-    assert len(go) == 81
+    assert len(go) == 361
     assert score_board("go", go) == (0, 0)
     assert len(gomoku) == 225
     assert score_board("gomoku", gomoku) == (0, 0)
@@ -38,12 +38,14 @@ def test_play_board_ai_match_records_result_and_no_illegal_moves():
 def test_skill_suite_quantifies_tactical_floor_by_engine():
     suite = run_board_skill_suite(["random", "normal"])
 
-    assert suite["cases"] >= 4
+    assert suite["cases"] >= 8
     assert {row["game_key"] for row in suite["by_game"]} == {"go", "gomoku", "reversi"}
     normal = next(row for row in suite["by_engine"] if row["engine"] == "normal")
     random = next(row for row in suite["by_engine"] if row["engine"] == "random")
     assert normal["pass_rate"] >= random["pass_rate"]
     assert any(row["case_id"] == "block_open_four" for row in suite["results"])
+    assert any(row["case_id"] == "build_open_four_threat" for row in suite["results"])
+    assert any(row["case_id"] == "corner_priority" for row in suite["results"])
 
 
 def test_board_ai_benchmark_reports_standings_elo_and_matrix():
@@ -61,7 +63,7 @@ def test_board_ai_benchmark_reports_standings_elo_and_matrix():
     assert len(report["standings"]) == 2
     assert len(report["elo"]) == 2
     assert report["matrix"]["random"]["easy"]["games"] == 2
-    assert report["skill_suite"]["cases"] >= 4
+    assert report["skill_suite"]["cases"] >= 8
 
 
 def test_write_board_ai_benchmark_report_writes_json(tmp_path):
