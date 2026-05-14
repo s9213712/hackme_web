@@ -4,7 +4,7 @@
     "generation_mode": "txt2img",
     "height": 512,
     "model": "v1-5-pruned.safetensors",
-    "negative_prompt": "low quality, blurry, watermark",
+    "negative_prompt": "",
     "prompt": "a serene landscape painting, soft light",
     "seed": 42,
     "steps": 20,
@@ -13,7 +13,11 @@
   "description": "txt2img + Canny preprocessor + ControlNetApplyAdvanced；強度 / start / end 可調。",
   "id": "controlnet_canny",
   "name": "ControlNet（Canny 邊緣引導）",
+  "output_kinds": [
+    "image"
+  ],
   "schema_version": 1,
+  "source": "official",
   "ui": {
     "initial_collapsed": true,
     "panels": [
@@ -104,17 +108,6 @@
         "fields": [
           {
             "category": "MODEL",
-            "class_type": "CheckpointLoaderSimple",
-            "current_value": "v1-5-pruned.safetensors",
-            "id": "node:4:ckpt_name",
-            "input_name": "ckpt_name",
-            "input_type": "select",
-            "label": "Checkpoint 模型",
-            "node_id": "4",
-            "required": true
-          },
-          {
-            "category": "MODEL",
             "class_type": "ControlNetLoader",
             "current_value": "control_canny.safetensors",
             "id": "node:12:control_net_name",
@@ -122,6 +115,17 @@
             "input_type": "select",
             "label": "ControlNet 模型",
             "node_id": "12",
+            "required": true
+          },
+          {
+            "category": "MODEL",
+            "class_type": "CheckpointLoaderSimple",
+            "current_value": "v1-5-pruned.safetensors",
+            "id": "node:4:ckpt_name",
+            "input_name": "ckpt_name",
+            "input_type": "select",
+            "label": "Checkpoint 模型",
+            "node_id": "4",
             "required": true
           }
         ],
@@ -131,6 +135,60 @@
       {
         "collapsed_default": true,
         "fields": [
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 30.0,
+              "min": 0.5,
+              "step": 0.1
+            },
+            "current_value": 7.5,
+            "id": "node:3:cfg",
+            "input_name": "cfg",
+            "input_type": "number",
+            "label": "CFG",
+            "node_id": "3",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 1.0,
+              "min": 0.0,
+              "step": 0.05
+            },
+            "current_value": 1,
+            "id": "node:3:denoise",
+            "input_name": "denoise",
+            "input_type": "number",
+            "label": "Denoise",
+            "node_id": "3",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "KSampler",
+            "current_value": "euler",
+            "id": "node:3:sampler_name",
+            "input_name": "sampler_name",
+            "input_type": "select",
+            "label": "取樣器",
+            "node_id": "3",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "KSampler",
+            "current_value": "normal",
+            "id": "node:3:scheduler",
+            "input_name": "scheduler",
+            "input_type": "select",
+            "label": "排程器",
+            "node_id": "3",
+            "required": true
+          },
           {
             "category": "NUMERIC",
             "class_type": "KSampler",
@@ -162,60 +220,6 @@
             "label": "步數",
             "node_id": "3",
             "required": true
-          },
-          {
-            "category": "NUMERIC",
-            "class_type": "KSampler",
-            "constraints": {
-              "max": 30.0,
-              "min": 0.5,
-              "step": 0.1
-            },
-            "current_value": 7.5,
-            "id": "node:3:cfg",
-            "input_name": "cfg",
-            "input_type": "number",
-            "label": "CFG",
-            "node_id": "3",
-            "required": true
-          },
-          {
-            "category": "SAMPLER",
-            "class_type": "KSampler",
-            "current_value": "euler",
-            "id": "node:3:sampler_name",
-            "input_name": "sampler_name",
-            "input_type": "select",
-            "label": "取樣器",
-            "node_id": "3",
-            "required": true
-          },
-          {
-            "category": "SAMPLER",
-            "class_type": "KSampler",
-            "current_value": "normal",
-            "id": "node:3:scheduler",
-            "input_name": "scheduler",
-            "input_type": "select",
-            "label": "排程器",
-            "node_id": "3",
-            "required": true
-          },
-          {
-            "category": "NUMERIC",
-            "class_type": "KSampler",
-            "constraints": {
-              "max": 1.0,
-              "min": 0.0,
-              "step": 0.05
-            },
-            "current_value": 1,
-            "id": "node:3:denoise",
-            "input_name": "denoise",
-            "input_type": "number",
-            "label": "Denoise",
-            "node_id": "3",
-            "required": true
           }
         ],
         "id": "sampler",
@@ -226,65 +230,17 @@
         "fields": [
           {
             "category": "NUMERIC",
-            "class_type": "EmptyLatentImage",
-            "constraints": {
-              "max": 4096,
-              "min": 64,
-              "step": 8
-            },
-            "current_value": 512,
-            "id": "node:5:width",
-            "input_name": "width",
-            "input_type": "number",
-            "label": "寬度",
-            "node_id": "5",
-            "required": true
-          },
-          {
-            "category": "NUMERIC",
-            "class_type": "EmptyLatentImage",
-            "constraints": {
-              "max": 4096,
-              "min": 64,
-              "step": 8
-            },
-            "current_value": 512,
-            "id": "node:5:height",
-            "input_name": "height",
-            "input_type": "number",
-            "label": "高度",
-            "node_id": "5",
-            "required": true
-          },
-          {
-            "category": "NUMERIC",
-            "class_type": "EmptyLatentImage",
-            "constraints": {
-              "max": 16,
-              "min": 1,
-              "step": 1
-            },
-            "current_value": 1,
-            "id": "node:5:batch_size",
-            "input_name": "batch_size",
-            "input_type": "number",
-            "label": "批次大小",
-            "node_id": "5",
-            "required": true
-          },
-          {
-            "category": "NUMERIC",
             "class_type": "ControlNetApplyAdvanced",
             "constraints": {
-              "max": 2.0,
+              "max": 1.0,
               "min": 0.0,
               "step": 0.05
             },
             "current_value": 1.0,
-            "id": "node:13:strength",
-            "input_name": "strength",
+            "id": "node:13:end_percent",
+            "input_name": "end_percent",
             "input_type": "number",
-            "label": "ControlNet 強度",
+            "label": "ControlNet 結束 %",
             "node_id": "13",
             "required": true
           },
@@ -308,16 +264,64 @@
             "category": "NUMERIC",
             "class_type": "ControlNetApplyAdvanced",
             "constraints": {
-              "max": 1.0,
+              "max": 2.0,
               "min": 0.0,
               "step": 0.05
             },
             "current_value": 1.0,
-            "id": "node:13:end_percent",
-            "input_name": "end_percent",
+            "id": "node:13:strength",
+            "input_name": "strength",
             "input_type": "number",
-            "label": "ControlNet 結束 %",
+            "label": "ControlNet 強度",
             "node_id": "13",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "EmptyLatentImage",
+            "constraints": {
+              "max": 16,
+              "min": 1,
+              "step": 1
+            },
+            "current_value": 1,
+            "id": "node:5:batch_size",
+            "input_name": "batch_size",
+            "input_type": "number",
+            "label": "批次大小",
+            "node_id": "5",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "EmptyLatentImage",
+            "constraints": {
+              "max": 4096,
+              "min": 64,
+              "step": 8
+            },
+            "current_value": 512,
+            "id": "node:5:height",
+            "input_name": "height",
+            "input_type": "number",
+            "label": "高度",
+            "node_id": "5",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "EmptyLatentImage",
+            "constraints": {
+              "max": 4096,
+              "min": 64,
+              "step": 8
+            },
+            "current_value": 512,
+            "id": "node:5:width",
+            "input_name": "width",
+            "input_type": "number",
+            "label": "寬度",
+            "node_id": "5",
             "required": true
           }
         ],

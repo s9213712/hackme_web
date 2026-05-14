@@ -2,5 +2,6 @@
 
 LoadImage + LoadImageMask + VAEEncodeForInpaint，搭配 inpainting checkpoint。
 
-- Source: `scripts/comfyui/materialize_system_workflows.py`
+- Source: current checked-in `workflows/comfyui/inpaint_basic/workflow.json`
+- Module Type: official system workflow
 - Regenerate: `python3 scripts/comfyui/materialize_system_workflows.py`

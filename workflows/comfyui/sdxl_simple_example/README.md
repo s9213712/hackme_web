@@ -1,7 +1,7 @@
 # SDXL（官方 simple example）
 
-由官方 ComfyUI SDXL simple example 模板轉換。
+目前保留的 SDXL 官方 simple example 系統模組。
 
-- Source: converted `workflow.json` checked into this bundle
-- Converted Format: ComfyUI API workflow + hackme_web manifest
+- Source: current checked-in `workflows/comfyui/sdxl_simple_example/workflow.json`
+- Module Type: official system workflow
 - Regenerate: `python3 scripts/comfyui/materialize_system_workflows.py`

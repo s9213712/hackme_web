@@ -10,15 +10,14 @@
     "steps": 20,
     "width": 2048
   },
-  "description": "由官方 ComfyUI API 節點模板轉換；需要本機 ComfyUI 具備對應 API node 與憑證設定。",
+  "description": "目前保留的 Seedream API 官方系統模組；需要本機 ComfyUI 具備對應 API node 與憑證設定。",
   "id": "bytedance_seedream_5_lite_t2i",
   "name": "ByteDance Seedream 5.0 Lite（官方 API T2I）",
   "output_kinds": [
     "image"
   ],
   "schema_version": 1,
-  "source": "official_comfyui_native_converted",
-  "source_file": "",
+  "source": "official",
   "ui": {
     "initial_collapsed": true,
     "panels": [

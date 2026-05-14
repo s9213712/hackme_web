@@ -10,15 +10,14 @@
     "steps": 4,
     "width": 720
   },
-  "description": "由官方 ComfyUI Wan 2.2 14B image-to-video subgraph 模板轉換。",
+  "description": "目前保留的 Wan 2.2 14B image-to-video 官方系統模組。",
   "id": "wan22_14b_i2v_subgraphed",
-  "name": "Wan 2.2 14B（官方原生 I2V）",
+  "name": "Wan 2.2 14B（官方 I2V）",
   "output_kinds": [
     "video"
   ],
   "schema_version": 1,
-  "source": "official_comfyui_native_converted",
-  "source_file": "",
+  "source": "official",
   "ui": {
     "initial_collapsed": true,
     "panels": [

@@ -1,7 +1,7 @@
-# Z-Image / ZIT（官方原生 T2I）
+# Z-Image / ZIT（官方 T2I）
 
-由官方 ComfyUI Z-Image 原生模板轉換，subgraph 已展開為本專案 API workflow 格式。
+目前保留的 Z-Image / ZIT 官方系統模組；workflow.json 是平台可執行格式。
 
-- Source: converted `workflow.json` checked into this bundle
-- Converted Format: ComfyUI API workflow + hackme_web manifest
+- Source: current checked-in `workflows/comfyui/family_zit_txt2img/workflow.json`
+- Module Type: official system workflow
 - Regenerate: `python3 scripts/comfyui/materialize_system_workflows.py`

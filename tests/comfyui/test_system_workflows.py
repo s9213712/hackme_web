@@ -41,12 +41,9 @@ def test_system_dir_has_expected_workflows():
         "family_zit_txt2img",
         "family_anima_txt2img",
         "family_netayume_txt2img",
-        "flux_txt2img_starter",
         "flux2_image_edit",
-        "sd35_txt2img_starter",
         "sd35_simple_example",
         "sdxl_simple_example",
-        "wan_i2v_starter",
         "wan22_14b_i2v_subgraphed",
         "ace_step_15_t2a_song",
         "bytedance_seedream_5_lite_t2i",
@@ -134,6 +131,22 @@ def test_upscale_basic_uses_upscale_model_loader():
     assert "ImageUpscaleWithModel" in classes
 
 
-def test_large_model_starters_are_seeded():
+def test_current_official_model_bundles_are_seeded():
     ids = set(_system_ids())
-    assert {"flux_txt2img_starter", "sd35_txt2img_starter", "wan_i2v_starter"} <= ids
+    assert {
+        "family_zit_txt2img",
+        "family_anima_txt2img",
+        "family_netayume_txt2img",
+        "flux2_image_edit",
+        "sd35_simple_example",
+        "sdxl_simple_example",
+        "wan22_14b_i2v_subgraphed",
+        "ace_step_15_t2a_song",
+        "bytedance_seedream_5_lite_t2i",
+        "grok_image_edit",
+    } <= ids
+
+
+def test_removed_legacy_starters_are_not_registered():
+    ids = set(_system_ids())
+    assert not {"flux_txt2img_starter", "sd35_txt2img_starter", "wan_i2v_starter"} & ids

@@ -10,15 +10,14 @@
     "steps": 8,
     "width": 1024
   },
-  "description": "由官方 ComfyUI ACE-Step 1.5 text-to-audio/song subgraph 模板轉換。",
+  "description": "目前保留的 ACE-Step 1.5 text-to-audio/song 官方系統模組。",
   "id": "ace_step_15_t2a_song",
-  "name": "ACE-Step 1.5（官方原生 T2A Song）",
+  "name": "ACE-Step 1.5（官方 T2A Song）",
   "output_kinds": [
     "music"
   ],
   "schema_version": 1,
-  "source": "official_comfyui_native_converted",
-  "source_file": "",
+  "source": "official",
   "ui": {
     "initial_collapsed": true,
     "panels": [

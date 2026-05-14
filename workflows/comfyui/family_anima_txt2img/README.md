@@ -1,7 +1,7 @@
-# Anima（官方原生 T2I）
+# Anima（官方 T2I）
 
-由官方 ComfyUI Anima preview 模板轉換，subgraph 已展開為本專案 API workflow 格式。
+目前保留的 Anima 官方系統模組；workflow.json 是平台可執行格式。
 
-- Source: converted `workflow.json` checked into this bundle
-- Converted Format: ComfyUI API workflow + hackme_web manifest
+- Source: current checked-in `workflows/comfyui/family_anima_txt2img/workflow.json`
+- Module Type: official system workflow
 - Regenerate: `python3 scripts/comfyui/materialize_system_workflows.py`

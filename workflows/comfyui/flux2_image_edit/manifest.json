@@ -10,15 +10,14 @@
     "steps": 20,
     "width": 1024
   },
-  "description": "由官方 ComfyUI Flux.2 image edit 模板轉換，保留圖片輸入、Flux.2 scheduler 與 turbo LoRA 參數。",
+  "description": "目前保留的 Flux.2 image edit 官方系統模組；workflow.json 是平台可執行格式。",
   "id": "flux2_image_edit",
-  "name": "Flux.2（官方原生 Image Edit）",
+  "name": "Flux.2（官方 Image Edit）",
   "output_kinds": [
     "image"
   ],
   "schema_version": 1,
-  "source": "official_comfyui_native_converted",
-  "source_file": "",
+  "source": "official",
   "ui": {
     "initial_collapsed": true,
     "panels": [

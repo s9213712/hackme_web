@@ -1,7 +1,7 @@
-# Flux.2（官方原生 Image Edit）
+# Flux.2（官方 Image Edit）
 
-由官方 ComfyUI Flux.2 image edit 模板轉換，保留圖片輸入、Flux.2 scheduler 與 turbo LoRA 參數。
+目前保留的 Flux.2 image edit 官方系統模組；workflow.json 是平台可執行格式。
 
-- Source: converted `workflow.json` checked into this bundle
-- Converted Format: ComfyUI API workflow + hackme_web manifest
+- Source: current checked-in `workflows/comfyui/flux2_image_edit/workflow.json`
+- Module Type: official system workflow
 - Regenerate: `python3 scripts/comfyui/materialize_system_workflows.py`

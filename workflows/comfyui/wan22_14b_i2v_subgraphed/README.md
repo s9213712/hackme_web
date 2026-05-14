@@ -1,7 +1,7 @@
-# Wan 2.2 14B（官方原生 I2V）
+# Wan 2.2 14B（官方 I2V）
 
-由官方 ComfyUI Wan 2.2 14B image-to-video subgraph 模板轉換。
+目前保留的 Wan 2.2 14B image-to-video 官方系統模組。
 
-- Source: converted `workflow.json` checked into this bundle
-- Converted Format: ComfyUI API workflow + hackme_web manifest
+- Source: current checked-in `workflows/comfyui/wan22_14b_i2v_subgraphed/workflow.json`
+- Module Type: official system workflow
 - Regenerate: `python3 scripts/comfyui/materialize_system_workflows.py`

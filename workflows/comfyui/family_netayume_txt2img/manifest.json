@@ -10,15 +10,14 @@
     "steps": 30,
     "width": 1024
   },
-  "description": "由官方 ComfyUI NetaYume Lumina 模板轉換，巢狀 subgraph 已展開為本專案 API workflow 格式。",
+  "description": "目前保留的 NetaYume Lumina 官方系統模組；workflow.json 是平台可執行格式。",
   "id": "family_netayume_txt2img",
-  "name": "NetaYume Lumina（官方原生 T2I）",
+  "name": "NetaYume Lumina（官方 T2I）",
   "output_kinds": [
     "image"
   ],
   "schema_version": 1,
-  "source": "official_comfyui_native_converted",
-  "source_file": "",
+  "source": "official",
   "ui": {
     "initial_collapsed": true,
     "panels": [

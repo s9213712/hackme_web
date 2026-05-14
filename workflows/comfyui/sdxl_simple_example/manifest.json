@@ -10,15 +10,14 @@
     "steps": 25,
     "width": 1024
   },
-  "description": "由官方 ComfyUI SDXL simple example 模板轉換。",
+  "description": "目前保留的 SDXL 官方 simple example 系統模組。",
   "id": "sdxl_simple_example",
   "name": "SDXL（官方 simple example）",
   "output_kinds": [
     "image"
   ],
   "schema_version": 1,
-  "source": "official_comfyui_native_converted",
-  "source_file": "",
+  "source": "official",
   "ui": {
     "initial_collapsed": true,
     "panels": [

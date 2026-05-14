@@ -1,19 +1,23 @@
 {
   "default_params": {
     "cfg": 7.5,
-    "generation_mode": "txt2img",
-    "height": 512,
+    "generation_mode": "outpaint",
+    "height": 1024,
     "model": "v1-5-inpainting.safetensors",
-    "negative_prompt": "low quality, blurry, watermark",
+    "negative_prompt": "",
     "prompt": "a serene landscape painting, soft light",
     "seed": 42,
     "steps": 20,
-    "width": 512
+    "width": 1024
   },
   "description": "Inpaint + ImagePadForOutpaint；預設往右外擴 256px。",
   "id": "outpaint_basic",
   "name": "Outpaint（單向外擴）",
+  "output_kinds": [
+    "image"
+  ],
   "schema_version": 1,
+  "source": "official",
   "ui": {
     "initial_collapsed": true,
     "panels": [
@@ -124,38 +128,6 @@
             "category": "NUMERIC",
             "class_type": "KSampler",
             "constraints": {
-              "max": 9007199254740992,
-              "min": 0,
-              "step": 1
-            },
-            "current_value": 42,
-            "id": "node:3:seed",
-            "input_name": "seed",
-            "input_type": "number",
-            "label": "種子",
-            "node_id": "3",
-            "required": true
-          },
-          {
-            "category": "NUMERIC",
-            "class_type": "KSampler",
-            "constraints": {
-              "max": 150,
-              "min": 1,
-              "step": 1
-            },
-            "current_value": 20,
-            "id": "node:3:steps",
-            "input_name": "steps",
-            "input_type": "number",
-            "label": "步數",
-            "node_id": "3",
-            "required": true
-          },
-          {
-            "category": "NUMERIC",
-            "class_type": "KSampler",
-            "constraints": {
               "max": 30.0,
               "min": 0.5,
               "step": 0.1
@@ -165,6 +137,22 @@
             "input_name": "cfg",
             "input_type": "number",
             "label": "CFG",
+            "node_id": "3",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 1.0,
+              "min": 0.0,
+              "step": 0.05
+            },
+            "current_value": 0.9,
+            "id": "node:3:denoise",
+            "input_name": "denoise",
+            "input_type": "number",
+            "label": "Denoise",
             "node_id": "3",
             "required": true
           },
@@ -194,15 +182,31 @@
             "category": "NUMERIC",
             "class_type": "KSampler",
             "constraints": {
-              "max": 1.0,
-              "min": 0.0,
-              "step": 0.05
+              "max": 9007199254740992,
+              "min": 0,
+              "step": 1
             },
-            "current_value": 0.9,
-            "id": "node:3:denoise",
-            "input_name": "denoise",
+            "current_value": 42,
+            "id": "node:3:seed",
+            "input_name": "seed",
             "input_type": "number",
-            "label": "Denoise",
+            "label": "種子",
+            "node_id": "3",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 150,
+              "min": 1,
+              "step": 1
+            },
+            "current_value": 20,
+            "id": "node:3:steps",
+            "input_name": "steps",
+            "input_type": "number",
+            "label": "步數",
             "node_id": "3",
             "required": true
           }
@@ -213,54 +217,6 @@
       {
         "collapsed_default": true,
         "fields": [
-          {
-            "category": "NUMERIC",
-            "class_type": "ImagePadForOutpaint",
-            "constraints": {
-              "max": 4096,
-              "min": 0,
-              "step": 8
-            },
-            "current_value": 0,
-            "id": "node:10:left",
-            "input_name": "left",
-            "input_type": "number",
-            "label": "外擴 - 左",
-            "node_id": "10",
-            "required": true
-          },
-          {
-            "category": "NUMERIC",
-            "class_type": "ImagePadForOutpaint",
-            "constraints": {
-              "max": 4096,
-              "min": 0,
-              "step": 8
-            },
-            "current_value": 0,
-            "id": "node:10:top",
-            "input_name": "top",
-            "input_type": "number",
-            "label": "外擴 - 上",
-            "node_id": "10",
-            "required": true
-          },
-          {
-            "category": "NUMERIC",
-            "class_type": "ImagePadForOutpaint",
-            "constraints": {
-              "max": 4096,
-              "min": 0,
-              "step": 8
-            },
-            "current_value": 0,
-            "id": "node:10:right",
-            "input_name": "right",
-            "input_type": "number",
-            "label": "外擴 - 右",
-            "node_id": "10",
-            "required": true
-          },
           {
             "category": "NUMERIC",
             "class_type": "ImagePadForOutpaint",
@@ -290,6 +246,54 @@
             "input_name": "feathering",
             "input_type": "number",
             "label": "羽化",
+            "node_id": "10",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "ImagePadForOutpaint",
+            "constraints": {
+              "max": 4096,
+              "min": 0,
+              "step": 8
+            },
+            "current_value": 0,
+            "id": "node:10:left",
+            "input_name": "left",
+            "input_type": "number",
+            "label": "外擴 - 左",
+            "node_id": "10",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "ImagePadForOutpaint",
+            "constraints": {
+              "max": 4096,
+              "min": 0,
+              "step": 8
+            },
+            "current_value": 0,
+            "id": "node:10:right",
+            "input_name": "right",
+            "input_type": "number",
+            "label": "外擴 - 右",
+            "node_id": "10",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "ImagePadForOutpaint",
+            "constraints": {
+              "max": 4096,
+              "min": 0,
+              "step": 8
+            },
+            "current_value": 0,
+            "id": "node:10:top",
+            "input_name": "top",
+            "input_type": "number",
+            "label": "外擴 - 上",
             "node_id": "10",
             "required": true
           },

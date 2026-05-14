@@ -1,7 +1,7 @@
 # ByteDance Seedream 5.0 Lite（官方 API T2I）
 
-由官方 ComfyUI API 節點模板轉換；需要本機 ComfyUI 具備對應 API node 與憑證設定。
+目前保留的 Seedream API 官方系統模組；需要本機 ComfyUI 具備對應 API node 與憑證設定。
 
-- Source: converted `workflow.json` checked into this bundle
-- Converted Format: ComfyUI API workflow + hackme_web manifest
+- Source: current checked-in `workflows/comfyui/bytedance_seedream_5_lite_t2i/workflow.json`
+- Module Type: official system workflow
 - Regenerate: `python3 scripts/comfyui/materialize_system_workflows.py`
