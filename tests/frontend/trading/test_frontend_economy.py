@@ -396,6 +396,8 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "root 可使用現貨與合約模擬交易" in trading_section
     assert "一般用戶可使用已啟用的積分現貨市場" in trading_section
     assert 'id="trading-root-contract-card"' in trading_section
+    assert '<details class="drive-collapsible-panel" id="trading-root-contract-card"' in trading_section
+    assert '<div class="drive-card" id="trading-root-contract-card"' not in trading_section
     assert 'id="trading-contract-open-btn"' in trading_section
     assert 'id="trading-contract-position-list"' in trading_section
     assert 'id="trading-submit-order-btn"' not in economy_section

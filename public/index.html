@@ -2773,23 +2773,25 @@
           <button class="btn btn-danger" id="trading-liquidation-scan-btn" type="button">立即掃描強平</button>
           <span class="drive-card-sub" id="trading-liquidation-status">自動清算排程：讀取中</span>
         </div>
-        <div class="drive-card" id="trading-root-contract-card" style="margin-top:.75rem;">
-          <div class="drive-card-heading compact-heading">
+        <details class="drive-collapsible-panel" id="trading-root-contract-card" style="margin-top:.75rem;">
+          <summary>
             <div>
               <div class="drive-card-title">root 合約模擬</div>
               <div class="drive-card-sub">僅 root 可用，使用 root 模擬資金，不寫入 PointsChain；root 以外用戶目前只能使用現貨。</div>
             </div>
+          </summary>
+          <div class="drive-collapsible-body">
+            <div class="settings-option-grid">
+              <div class="field"><label>市場</label><select id="trading-contract-market-select"><option value="">讀取市場中...</option></select></div>
+              <div class="field"><label>方向</label><select id="trading-contract-side"><option value="long">做多</option><option value="short">做空</option></select></div>
+              <div class="field"><label>數量</label><input type="number" id="trading-contract-quantity" min="0.00000001" step="0.00000001" value="0.01" /></div>
+              <div class="field"><label>槓桿</label><input type="number" id="trading-contract-leverage" min="1" max="20" step="1" value="1" /></div>
+              <div class="field"><label>保證金</label><input type="number" id="trading-contract-margin" min="1" step="1" value="100" /></div>
+              <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="trading-contract-open-btn" type="button">開倉</button></div>
+            </div>
+            <div class="drive-file-list" id="trading-contract-position-list" style="margin-top:.75rem;"></div>
           </div>
-          <div class="settings-option-grid">
-            <div class="field"><label>市場</label><select id="trading-contract-market-select"><option value="">讀取市場中...</option></select></div>
-            <div class="field"><label>方向</label><select id="trading-contract-side"><option value="long">做多</option><option value="short">做空</option></select></div>
-            <div class="field"><label>數量</label><input type="number" id="trading-contract-quantity" min="0.00000001" step="0.00000001" value="0.01" /></div>
-            <div class="field"><label>槓桿</label><input type="number" id="trading-contract-leverage" min="1" max="20" step="1" value="1" /></div>
-            <div class="field"><label>保證金</label><input type="number" id="trading-contract-margin" min="1" step="1" value="100" /></div>
-            <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="trading-contract-open-btn" type="button">開倉</button></div>
-          </div>
-          <div class="drive-file-list" id="trading-contract-position-list" style="margin-top:.75rem;"></div>
-        </div>
+        </details>
         <div class="settings-option-grid" style="margin-top:.75rem;">
           <div class="field"><label>市場</label><select id="trading-root-market-select"><option value="">讀取市場中...</option></select></div>
           <div class="field"><label>最後快取價格</label><input type="number" id="trading-root-price" min="1" step="1" readonly /></div>
