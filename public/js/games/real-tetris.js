@@ -149,7 +149,7 @@
     J: `${REAL_TETRIS_ASSET_BASE}blue_01.png`,
     L: `${REAL_TETRIS_ASSET_BASE}yellow_01.png`,
   });
-  const REAL_TETRIS_IMAGES = loadRealTetrisImages(REAL_TETRIS_IMAGE_ASSETS);
+  const REAL_TETRIS_IMAGES = {};
   const PIECES = {
     I: [[-1.5, 0], [-0.5, 0], [0.5, 0], [1.5, 0]],
     O: [[-0.5, -0.5], [0.5, -0.5], [-0.5, 0.5], [0.5, 0.5]],
@@ -175,15 +175,16 @@
     return REAL_TETRIS_MODE_ORDER[(index + 1) % REAL_TETRIS_MODE_ORDER.length] || "standard";
   }
 
-  function loadRealTetrisImages(assets) {
-    if (typeof Image === "undefined") return {};
-    return Object.entries(assets).reduce((images, [key, src]) => {
+  function realTetrisImageFor(type) {
+    const src = REAL_TETRIS_IMAGE_ASSETS[type];
+    if (!src || typeof Image === "undefined") return null;
+    if (!REAL_TETRIS_IMAGES[type]) {
       const image = new Image();
       image.decoding = "async";
       image.src = src;
-      images[key] = image;
-      return images;
-    }, {});
+      REAL_TETRIS_IMAGES[type] = image;
+    }
+    return REAL_TETRIS_IMAGES[type];
   }
 
   function realTetrisImageReady(image) {
@@ -420,7 +421,7 @@
     ctx.lineWidth = 1.4;
     ctx.shadowColor = "rgba(56,189,248,.18)";
     ctx.shadowBlur = 10;
-    const image = REAL_TETRIS_IMAGES[type];
+    const image = realTetrisImageFor(type);
     if (realTetrisImageReady(image)) {
       ctx.drawImage(image, -HALF + 1.5, -HALF + 1.5, CELL - 3, CELL - 3);
       ctx.fillStyle = "rgba(255,255,255,.16)";

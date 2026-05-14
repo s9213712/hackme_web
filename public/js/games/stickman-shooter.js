@@ -136,17 +136,18 @@
     rock: `${STICKMAN_ASSET_BASE}tiles/rock.png`,
     bush: `${STICKMAN_ASSET_BASE}tiles/bush.png`,
   });
-  const STICKMAN_IMAGES = loadStickmanImages(STICKMAN_IMAGE_ASSETS);
+  const STICKMAN_IMAGES = {};
 
-  function loadStickmanImages(assets) {
-    if (typeof Image === "undefined") return {};
-    return Object.entries(assets).reduce((images, [key, src]) => {
+  function stickmanImageFor(key) {
+    const src = STICKMAN_IMAGE_ASSETS[key];
+    if (!src || typeof Image === "undefined") return null;
+    if (!STICKMAN_IMAGES[key]) {
       const image = new Image();
       image.decoding = "async";
       image.src = src;
-      images[key] = image;
-      return images;
-    }, {});
+      STICKMAN_IMAGES[key] = image;
+    }
+    return STICKMAN_IMAGES[key];
   }
 
   function stickmanImageReady(image) {
@@ -154,7 +155,7 @@
   }
 
   function drawStickmanImage(ctx, key, x, y, w, h, options = {}) {
-    const image = STICKMAN_IMAGES[key];
+    const image = stickmanImageFor(key);
     if (!stickmanImageReady(image)) return false;
     ctx.save();
     ctx.globalAlpha = options.alpha ?? 1;
@@ -167,7 +168,7 @@
   }
 
   function drawStickmanTiledImage(ctx, key, x, y, w, h, tileW = 24, tileH = tileW, options = {}) {
-    const image = STICKMAN_IMAGES[key];
+    const image = stickmanImageFor(key);
     if (!stickmanImageReady(image)) return false;
     ctx.save();
     ctx.globalAlpha = options.alpha ?? 1;
