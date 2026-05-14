@@ -1,0 +1,303 @@
+{
+  "default_params": {
+    "cfg": 4,
+    "generation_mode": "txt2img",
+    "height": 1024,
+    "model": "ae.safetensors",
+    "negative_prompt": "",
+    "prompt": "A fashion photography work full of surreal romanticism, using a low-angle upward shooting composition, with a clear light blue sky as the background, and the visual focus concentrated on the fantasy blue vegetation and the model walking through it.\n\nThe vegetation in the picture is processed into varying shades of blue, from light ice blue to deep cobalt blue. The textures of the leaves and branches are delicate and realistic. The warm brown tree trunks form a sharp contrast with the cool blue leaves, resembling a dreamy forest from another world. An African-American model wearing a yellow and white vertical striped long dress walks slowly on the sand. The warm tones of the dress echo with the surrounding cool blue vegetation. The noon sun casts clear shadows on the sand, enhancing the sense of space and reality in the picture.\n\nThe entire scene, with its clean and transparent colors and fantasy settings, not only exudes the vastness of the natural wilderness but also presents a quiet and poetic high-fashion sense due to the surreal vegetation.",
+    "seed": 770044821593082,
+    "steps": 25,
+    "width": 1024
+  },
+  "description": "由官方 ComfyUI Z-Image 原生模板轉換，subgraph 已展開為本專案 API workflow 格式。",
+  "id": "family_zit_txt2img",
+  "name": "Z-Image / ZIT（官方原生 T2I）",
+  "output_kinds": [
+    "image"
+  ],
+  "schema_version": 1,
+  "source": "official_comfyui_native_converted",
+  "source_file": "",
+  "ui": {
+    "initial_collapsed": true,
+    "panels": [
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "TEXT",
+            "class_type": "CLIPTextEncode",
+            "constraints": {
+              "max_length": 2000,
+              "rows": 4
+            },
+            "current_value": "A fashion photography work full of surreal romanticism, using a low-angle upward shooting composition, with a clear light blue sky as the background, and the visual focus concentrated on the fantasy blue vegetation and the model walking through it.\n\nThe vegetation in the picture is processed into varying shades of blue, from light ice blue to deep cobalt blue. The textures of the leaves and branches are delicate and realistic. The warm brown tree trunks form a sharp contrast with the cool blue leaves, resembling a dreamy forest from another world. An African-American model wearing a yellow and white vertical striped long dress walks slowly on the sand. The warm tones of the dress echo with the surrounding cool blue vegetation. The noon sun casts clear shadows on the sand, enhancing the sense of space and reality in the picture.\n\nThe entire scene, with its clean and transparent colors and fantasy settings, not only exudes the vastness of the natural wilderness but also presents a quiet and poetic high-fashion sense due to the surreal vegetation.",
+            "id": "node:87:text",
+            "input_name": "text",
+            "input_type": "textarea",
+            "label": "提示詞",
+            "node_id": "87",
+            "required": true
+          },
+          {
+            "category": "TEXT",
+            "class_type": "CLIPTextEncode",
+            "constraints": {
+              "max_length": 2000,
+              "rows": 4
+            },
+            "current_value": "",
+            "id": "node:94:text",
+            "input_name": "text",
+            "input_type": "textarea",
+            "label": "提示詞",
+            "node_id": "94",
+            "required": true
+          },
+          {
+            "category": "TEXT",
+            "class_type": "EmbeddingShortcuts",
+            "constraints": {
+              "target_field_ids": [
+                "node:87:text",
+                "node:94:text"
+              ],
+              "token_prefix": "<embeddings:"
+            },
+            "current_value": "",
+            "id": "text:embeddings",
+            "input_name": "embeddings",
+            "input_type": "embedding_shortcuts",
+            "label": "Embedding 快速插入",
+            "node_id": "",
+            "parent_category": "text",
+            "required": false,
+            "synthetic": true
+          }
+        ],
+        "id": "text",
+        "label": "文字輸入"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "MODEL",
+            "class_type": "VAELoader",
+            "current_value": "ae.safetensors",
+            "id": "node:89:vae_name",
+            "input_name": "vae_name",
+            "input_type": "select",
+            "label": "VAE",
+            "node_id": "89",
+            "required": true
+          },
+          {
+            "category": "MODEL",
+            "class_type": "CLIPLoader",
+            "current_value": "qwen_3_4b.safetensors",
+            "id": "node:90:clip_name",
+            "input_name": "clip_name",
+            "input_type": "select",
+            "label": "CLIP / 文字編碼器模型檔名",
+            "node_id": "90",
+            "required": true
+          },
+          {
+            "category": "MODEL",
+            "class_type": "UNETLoader",
+            "current_value": "z_image_bf16.safetensors",
+            "id": "node:93:unet_name",
+            "input_name": "unet_name",
+            "input_type": "select",
+            "label": "Diffusion / UNet 模型檔名",
+            "node_id": "93",
+            "required": true
+          }
+        ],
+        "id": "model",
+        "label": "模型需求"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 30.0,
+              "min": 0.5,
+              "step": 0.1
+            },
+            "current_value": 4,
+            "id": "node:95:cfg",
+            "input_name": "cfg",
+            "input_type": "number",
+            "label": "CFG",
+            "node_id": "95",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 1.0,
+              "min": 0.0,
+              "step": 0.05
+            },
+            "current_value": 1,
+            "id": "node:95:denoise",
+            "input_name": "denoise",
+            "input_type": "number",
+            "label": "Denoise",
+            "node_id": "95",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "KSampler",
+            "current_value": "res_multistep",
+            "id": "node:95:sampler_name",
+            "input_name": "sampler_name",
+            "input_type": "select",
+            "label": "取樣器",
+            "node_id": "95",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "KSampler",
+            "current_value": "simple",
+            "id": "node:95:scheduler",
+            "input_name": "scheduler",
+            "input_type": "select",
+            "label": "排程器",
+            "node_id": "95",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 9007199254740992,
+              "min": 0,
+              "step": 1
+            },
+            "current_value": 770044821593082,
+            "id": "node:95:seed",
+            "input_name": "seed",
+            "input_type": "number",
+            "label": "種子",
+            "node_id": "95",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 150,
+              "min": 1,
+              "step": 1
+            },
+            "current_value": 25,
+            "id": "node:95:steps",
+            "input_name": "steps",
+            "input_type": "number",
+            "label": "步數",
+            "node_id": "95",
+            "required": true
+          }
+        ],
+        "id": "sampler",
+        "label": "採樣設定"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "NUMERIC",
+            "class_type": "EmptySD3LatentImage",
+            "constraints": {
+              "max": 16,
+              "min": 1,
+              "step": 1
+            },
+            "current_value": 1,
+            "id": "node:88:batch_size",
+            "input_name": "batch_size",
+            "input_type": "number",
+            "label": "批次大小",
+            "node_id": "88",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "EmptySD3LatentImage",
+            "constraints": {
+              "max": 4096,
+              "min": 64,
+              "step": 8
+            },
+            "current_value": 1024,
+            "id": "node:88:height",
+            "input_name": "height",
+            "input_type": "number",
+            "label": "高度",
+            "node_id": "88",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "EmptySD3LatentImage",
+            "constraints": {
+              "max": 4096,
+              "min": 64,
+              "step": 8
+            },
+            "current_value": 1024,
+            "id": "node:88:width",
+            "input_name": "width",
+            "input_type": "number",
+            "label": "寬度",
+            "node_id": "88",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "ModelSamplingAuraFlow",
+            "constraints": {
+              "max": 20.0,
+              "min": 0.0,
+              "step": 0.1
+            },
+            "current_value": 3,
+            "id": "node:92:shift",
+            "input_name": "shift",
+            "input_type": "number",
+            "label": "Model Shift",
+            "node_id": "92",
+            "required": true
+          }
+        ],
+        "id": "numeric",
+        "label": "進階數值參數"
+      },
+      {
+        "collapsed_default": false,
+        "fields": [],
+        "id": "compatibility",
+        "label": "相容性報告",
+        "read_only": true
+      },
+      {
+        "collapsed_default": true,
+        "fields": [],
+        "id": "raw",
+        "label": "原始 workflow",
+        "read_only": true
+      }
+    ]
+  },
+  "workflow_file": "workflow.json"
+}

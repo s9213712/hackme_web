@@ -1,0 +1,126 @@
+{
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "wan_start.png",
+      "upload": "image"
+    }
+  },
+  "10": {
+    "class_type": "SaveVideo",
+    "inputs": {
+      "filename_prefix": "hackme_web_wan",
+      "fps": 16,
+      "images": [
+        "9",
+        0
+      ]
+    }
+  },
+  "2": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "umt5_xxl_fp16.safetensors",
+      "device": "default",
+      "type": "wan"
+    }
+  },
+  "3": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "2",
+        0
+      ],
+      "text": "gentle camera movement, cinematic lighting"
+    }
+  },
+  "4": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "2",
+        0
+      ],
+      "text": "low quality, flicker, artifacts"
+    }
+  },
+  "5": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "wan_2.1_vae.safetensors"
+    }
+  },
+  "6": {
+    "class_type": "WanImageToVideo",
+    "inputs": {
+      "batch_size": 1,
+      "height": 480,
+      "length": 81,
+      "negative": [
+        "4",
+        0
+      ],
+      "positive": [
+        "3",
+        0
+      ],
+      "start_image": [
+        "1",
+        0
+      ],
+      "vae": [
+        "5",
+        0
+      ],
+      "width": 832
+    }
+  },
+  "7": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "wan2.1_i2v_480p_14B_fp16.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "8": {
+    "class_type": "KSampler",
+    "inputs": {
+      "cfg": 6.0,
+      "denoise": 1,
+      "latent_image": [
+        "6",
+        2
+      ],
+      "model": [
+        "7",
+        0
+      ],
+      "negative": [
+        "6",
+        1
+      ],
+      "positive": [
+        "6",
+        0
+      ],
+      "sampler_name": "euler",
+      "scheduler": "normal",
+      "seed": 42,
+      "steps": 20
+    }
+  },
+  "9": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "8",
+        0
+      ],
+      "vae": [
+        "5",
+        0
+      ]
+    }
+  }
+}

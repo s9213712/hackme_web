@@ -2,5 +2,5 @@
 
 Inpaint + ImagePadForOutpaint；預設往右外擴 256px。
 
-- Source: `services/comfyui/workflow/builder.py`
+- Source: `scripts/comfyui/materialize_system_workflows.py`
 - Regenerate: `python3 scripts/comfyui/materialize_system_workflows.py`

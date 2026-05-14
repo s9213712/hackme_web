@@ -1,0 +1,234 @@
+{
+  "45": {
+    "class_type": "ImageScaleToTotalPixels",
+    "inputs": {
+      "divisible_by": 1,
+      "image": [
+        "46",
+        0
+      ],
+      "megapixels": 1,
+      "upscale_method": "lanczos"
+    }
+  },
+  "46": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "image_flux2_input_image.png",
+      "upload": "image"
+    }
+  },
+  "69": {
+    "class_type": "Flux2Scheduler",
+    "inputs": {
+      "height": [
+        "86",
+        1
+      ],
+      "steps": [
+        "84",
+        0
+      ],
+      "width": [
+        "86",
+        0
+      ]
+    }
+  },
+  "70": {
+    "class_type": "BasicGuider",
+    "inputs": {
+      "conditioning": [
+        "88",
+        0
+      ],
+      "model": [
+        "81",
+        0
+      ]
+    }
+  },
+  "71": {
+    "class_type": "KSamplerSelect",
+    "inputs": {
+      "sampler_name": "euler"
+    }
+  },
+  "72": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "full_encoder_small_decoder.safetensors"
+    }
+  },
+  "73": {
+    "class_type": "SamplerCustomAdvanced",
+    "inputs": {
+      "guider": [
+        "70",
+        0
+      ],
+      "latent_image": [
+        "85",
+        0
+      ],
+      "noise": [
+        "76",
+        0
+      ],
+      "sampler": [
+        "71",
+        0
+      ],
+      "sigmas": [
+        "69",
+        0
+      ]
+    }
+  },
+  "74": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "75",
+        0
+      ],
+      "text": "The woman is wearing a small pale yellow knitted beanie, with a white fabric patch on the front right, embroidered with big gray text “FLUX.2 COMFY.” Keep the face"
+    }
+  },
+  "75": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "mistral_3_small_flux2_bf16.safetensors",
+      "device": "default",
+      "type": "flux2"
+    }
+  },
+  "76": {
+    "class_type": "RandomNoise",
+    "inputs": {
+      "noise_seed": 342971778941390
+    }
+  },
+  "77": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "73",
+        0
+      ],
+      "vae": [
+        "72",
+        0
+      ]
+    }
+  },
+  "78": {
+    "class_type": "FluxGuidance",
+    "inputs": {
+      "conditioning": [
+        "74",
+        0
+      ],
+      "guidance": 4
+    }
+  },
+  "79": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "lora_name": "Flux_2-Turbo-LoRA_comfyui.safetensors",
+      "model": [
+        "80",
+        0
+      ],
+      "strength_model": 1
+    }
+  },
+  "80": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "flux2_dev_fp8mixed.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "81": {
+    "class_type": "ComfySwitchNode",
+    "inputs": {
+      "on_false": [
+        "80",
+        0
+      ],
+      "on_true": [
+        "79",
+        0
+      ],
+      "switch": false
+    }
+  },
+  "84": {
+    "class_type": "ComfySwitchNode",
+    "inputs": {
+      "on_false": 20,
+      "on_true": 8,
+      "switch": false
+    }
+  },
+  "85": {
+    "class_type": "EmptyFlux2LatentImage",
+    "inputs": {
+      "batch_size": 1,
+      "height": [
+        "86",
+        1
+      ],
+      "width": [
+        "86",
+        0
+      ]
+    }
+  },
+  "86": {
+    "class_type": "GetImageSize",
+    "inputs": {
+      "image": [
+        "45",
+        0
+      ]
+    }
+  },
+  "87": {
+    "class_type": "VAEEncode",
+    "inputs": {
+      "pixels": [
+        "45",
+        0
+      ],
+      "vae": [
+        "72",
+        0
+      ]
+    }
+  },
+  "88": {
+    "class_type": "ReferenceLatent",
+    "inputs": {
+      "conditioning": [
+        "78",
+        0
+      ],
+      "latent": [
+        "87",
+        0
+      ]
+    }
+  },
+  "9": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "Flux2",
+      "images": [
+        "77",
+        0
+      ]
+    }
+  }
+}

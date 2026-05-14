@@ -33,6 +33,19 @@ SYSTEM_WORKFLOW_IDS = (
     "outpaint_basic",
     "upscale_basic",
     "controlnet_canny",
+    "family_zit_txt2img",
+    "family_anima_txt2img",
+    "family_netayume_txt2img",
+    "flux_txt2img_starter",
+    "flux2_image_edit",
+    "sd35_txt2img_starter",
+    "sd35_simple_example",
+    "sdxl_simple_example",
+    "wan_i2v_starter",
+    "wan22_14b_i2v_subgraphed",
+    "ace_step_15_t2a_song",
+    "bytedance_seedream_5_lite_t2i",
+    "grok_image_edit",
 )
 
 

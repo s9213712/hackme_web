@@ -1,0 +1,199 @@
+{
+  "default_params": {
+    "cfg": 7,
+    "generation_mode": "txt2img",
+    "height": 2048,
+    "model": "seedream 5.0 lite",
+    "negative_prompt": "",
+    "prompt": "A beautiful woman, wearing an elegant red long dress, a wide-brimmed black straw hat, and bright red lips. Overlapping multi-layered plant shadows create a unique visual depth and dynamism. The main visual elements may have multiple different angles and transparencies to enhance the three-dimensionality and layering. The dark green background is simple, with a sense of art and storytelling. It is a poster integrated with shadow overlapping effects. The overall design is mysterious and full of artistic sense. Photography, masterful composition,",
+    "seed": 1161169574,
+    "steps": 20,
+    "width": 2048
+  },
+  "description": "由官方 ComfyUI API 節點模板轉換；需要本機 ComfyUI 具備對應 API node 與憑證設定。",
+  "id": "bytedance_seedream_5_lite_t2i",
+  "name": "ByteDance Seedream 5.0 Lite（官方 API T2I）",
+  "output_kinds": [
+    "image"
+  ],
+  "schema_version": 1,
+  "source": "official_comfyui_native_converted",
+  "source_file": "",
+  "ui": {
+    "initial_collapsed": true,
+    "panels": [
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "TEXT",
+            "class_type": "ByteDanceSeedreamNode",
+            "constraints": {
+              "max_length": 4000,
+              "rows": 5
+            },
+            "current_value": "A beautiful woman, wearing an elegant red long dress, a wide-brimmed black straw hat, and bright red lips. Overlapping multi-layered plant shadows create a unique visual depth and dynamism. The main visual elements may have multiple different angles and transparencies to enhance the three-dimensionality and layering. The dark green background is simple, with a sense of art and storytelling. It is a poster integrated with shadow overlapping effects. The overall design is mysterious and full of artistic sense. Photography, masterful composition,",
+            "id": "node:25:prompt",
+            "input_name": "prompt",
+            "input_type": "textarea",
+            "label": "提示詞",
+            "node_id": "25",
+            "required": true
+          }
+        ],
+        "id": "text",
+        "label": "文字輸入"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "MODEL",
+            "class_type": "ByteDanceSeedreamNode",
+            "current_value": "seedream 5.0 lite",
+            "id": "node:25:model",
+            "input_name": "model",
+            "input_type": "select",
+            "label": "Seedream 模型",
+            "node_id": "25",
+            "required": true
+          }
+        ],
+        "id": "model",
+        "label": "模型需求"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "SAMPLER",
+            "class_type": "ByteDanceSeedreamNode",
+            "current_value": true,
+            "id": "node:25:fail_on_partial",
+            "input_name": "fail_on_partial",
+            "input_type": "select",
+            "label": "部分失敗時停止",
+            "node_id": "25",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "ByteDanceSeedreamNode",
+            "current_value": "disabled",
+            "id": "node:25:sequential_image_generation",
+            "input_name": "sequential_image_generation",
+            "input_type": "select",
+            "label": "ByteDanceSeedreamNode.sequential_image_generation",
+            "node_id": "25",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "ByteDanceSeedreamNode",
+            "current_value": "2048x2048 (1:1)",
+            "id": "node:25:size_preset",
+            "input_name": "size_preset",
+            "input_type": "select",
+            "label": "尺寸預設",
+            "node_id": "25",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "ByteDanceSeedreamNode",
+            "current_value": false,
+            "id": "node:25:watermark",
+            "input_name": "watermark",
+            "input_type": "select",
+            "label": "浮水印",
+            "node_id": "25",
+            "required": true
+          }
+        ],
+        "id": "sampler",
+        "label": "採樣設定"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "NUMERIC",
+            "class_type": "ByteDanceSeedreamNode",
+            "constraints": {
+              "max": 4096,
+              "min": 256,
+              "step": 64
+            },
+            "current_value": 2048,
+            "id": "node:25:height",
+            "input_name": "height",
+            "input_type": "number",
+            "label": "高度",
+            "node_id": "25",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "ByteDanceSeedreamNode",
+            "constraints": {
+              "max": 8,
+              "min": 1,
+              "step": 1
+            },
+            "current_value": 1,
+            "id": "node:25:max_images",
+            "input_name": "max_images",
+            "input_type": "number",
+            "label": "張數",
+            "node_id": "25",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "ByteDanceSeedreamNode",
+            "current_value": 1161169574,
+            "id": "node:25:seed",
+            "input_name": "seed",
+            "input_type": "number",
+            "label": "種子",
+            "node_id": "25",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "ByteDanceSeedreamNode",
+            "constraints": {
+              "max": 4096,
+              "min": 256,
+              "step": 64
+            },
+            "current_value": 2048,
+            "id": "node:25:width",
+            "input_name": "width",
+            "input_type": "number",
+            "label": "寬度",
+            "node_id": "25",
+            "required": true
+          }
+        ],
+        "id": "numeric",
+        "label": "進階數值參數"
+      },
+      {
+        "collapsed_default": false,
+        "fields": [],
+        "id": "compatibility",
+        "label": "相容性報告",
+        "read_only": true
+      },
+      {
+        "collapsed_default": true,
+        "fields": [],
+        "id": "raw",
+        "label": "原始 workflow",
+        "read_only": true
+      }
+    ]
+  },
+  "workflow_file": "workflow.json"
+}

@@ -1,4 +1,15 @@
 {
+  "default_params": {
+    "cfg": 7.5,
+    "generation_mode": "txt2img",
+    "height": 512,
+    "model": "v1-5-pruned.safetensors",
+    "negative_prompt": "low quality, blurry, watermark",
+    "prompt": "a serene landscape painting, soft light",
+    "seed": 42,
+    "steps": 20,
+    "width": 512
+  },
   "description": "在 txt2img 基礎上加入 LoadImage + VAEEncode 上行；denoise 由使用者調整。",
   "id": "img2img_basic",
   "name": "Image-to-Image（基礎）",
@@ -38,6 +49,26 @@
             "label": "提示詞",
             "node_id": "7",
             "required": true
+          },
+          {
+            "category": "TEXT",
+            "class_type": "EmbeddingShortcuts",
+            "constraints": {
+              "target_field_ids": [
+                "node:6:text",
+                "node:7:text"
+              ],
+              "token_prefix": "<embeddings:"
+            },
+            "current_value": "",
+            "id": "text:embeddings",
+            "input_name": "embeddings",
+            "input_type": "embedding_shortcuts",
+            "label": "Embedding 快速插入",
+            "node_id": "",
+            "parent_category": "text",
+            "required": false,
+            "synthetic": true
           }
         ],
         "id": "text",
