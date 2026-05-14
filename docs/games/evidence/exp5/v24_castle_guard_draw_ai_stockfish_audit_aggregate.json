@@ -1,0 +1,90 @@
+{
+  "averages": {
+    "avg_cp_loss": 413.53,
+    "avg_rejected_cp_loss": 1911.1,
+    "max_cp_loss": 99500
+  },
+  "counts": {
+    "by_category": {
+      "endgame": 203,
+      "opening": 52,
+      "quiet_positional": 41,
+      "special_rule": 3,
+      "tactical": 25
+    },
+    "by_cp_loss_bucket": {
+      "bad": 39,
+      "clean": 79,
+      "critical": 3,
+      "review": 69,
+      "severe": 33,
+      "zero": 101
+    },
+    "by_ply_bucket": {
+      "early_midgame": 60,
+      "late": 83,
+      "midgame": 78,
+      "opening": 29,
+      "very_late": 74
+    },
+    "by_status": {
+      "clean": 209,
+      "rejected": 63,
+      "review": 52
+    },
+    "category_status": {
+      "endgame": {
+        "clean": 131,
+        "rejected": 35,
+        "review": 37
+      },
+      "opening": {
+        "clean": 43,
+        "rejected": 3,
+        "review": 6
+      },
+      "quiet_positional": {
+        "clean": 18,
+        "rejected": 16,
+        "review": 7
+      },
+      "special_rule": {
+        "clean": 3
+      },
+      "tactical": {
+        "clean": 14,
+        "rejected": 9,
+        "review": 2
+      }
+    },
+    "ply_status": {
+      "early_midgame": {
+        "clean": 36,
+        "rejected": 13,
+        "review": 11
+      },
+      "late": {
+        "clean": 59,
+        "rejected": 12,
+        "review": 12
+      },
+      "midgame": {
+        "clean": 39,
+        "rejected": 24,
+        "review": 15
+      },
+      "opening": {
+        "clean": 25,
+        "rejected": 2,
+        "review": 2
+      },
+      "very_late": {
+        "clean": 50,
+        "rejected": 12,
+        "review": 12
+      }
+    }
+  },
+  "rows": 324,
+  "source": "runtime/private/games/exp5/v24_castle_guard/v24_draw_ai_stockfish_audit/stockfish_audit_detail.jsonl"
+}

@@ -1,0 +1,126 @@
+{
+  "accepted": false,
+  "anti_leakage": {
+    "no_exact_memory_or_position_lookup": true,
+    "no_fen": true,
+    "no_moves": true,
+    "no_source_game_ids": true,
+    "no_teacher_pv": true,
+    "public_outputs_are_aggregate_only": true
+  },
+  "baseline": {
+    "path": "/home/s92137/hackme_web/docs/games/evidence/exp5/v24_percent_tail_100_evaluation.json",
+    "profile": "fixed_depth_fianchetto_tail_castle_guard",
+    "summary": {
+      "clean_rate": 0.6458,
+      "positions": 4624,
+      "rejected": 853,
+      "review_or_better_rate": 0.8155,
+      "top5_rate": 0.5324
+    }
+  },
+  "candidate": {
+    "path": "/home/s92137/hackme_web/docs/games/evidence/exp5/v26b_endgame_eval_light_percent_tail_100_evaluation.json",
+    "profile": "fixed_depth_fianchetto_tail_castle_guard_v26b_endgame_eval_light",
+    "summary": {
+      "clean_rate": 0.6501,
+      "positions": 4624,
+      "rejected": 853,
+      "review_or_better_rate": 0.8155,
+      "top5_rate": 0.5216
+    }
+  },
+  "candidate_search_miss_delta": {
+    "complete_game": {
+      "baseline": 429,
+      "candidate": 423,
+      "delta": -6
+    },
+    "tail10pct": {
+      "baseline": 35,
+      "candidate": 35,
+      "delta": 0
+    },
+    "tail25pct": {
+      "baseline": 111,
+      "candidate": 106,
+      "delta": -5
+    },
+    "tail50pct": {
+      "baseline": 196,
+      "candidate": 199,
+      "delta": 3
+    }
+  },
+  "candidate_search_miss_passed": false,
+  "created_at": "2026-05-14T17:26:25+00:00",
+  "gauntlet": {
+    "losses_max": 0,
+    "status": "not_checked_by_this_script"
+  },
+  "human_trap_guardrail": {
+    "clean_min": 0.96,
+    "status": "not_in_percent_tail_validation_set"
+  },
+  "kind": "redacted_exp5_v26_gate",
+  "primary_objective": "weak_slice_rejected_reduction",
+  "script": "scripts/games/chess_exp5_v26_gate.py",
+  "section_gates": [
+    {
+      "baseline_avg_elapsed_ms": 341.685,
+      "baseline_clean_rate": 0.6321,
+      "baseline_rejected": 475,
+      "baseline_review_or_better_rate": 0.8147,
+      "baseline_top5_rate": 0.5439,
+      "candidate_avg_elapsed_ms": 399.459,
+      "candidate_clean_rate": 0.6332,
+      "candidate_rejected": 469,
+      "candidate_review_or_better_rate": 0.817,
+      "candidate_top5_rate": 0.5334,
+      "delta_rejected": -6,
+      "passed": false,
+      "required_max_rejected": 427,
+      "section": "complete_game"
+    },
+    {
+      "baseline_avg_elapsed_ms": 331.016,
+      "baseline_clean_rate": 0.6607,
+      "baseline_rejected": 209,
+      "baseline_review_or_better_rate": 0.8214,
+      "baseline_top5_rate": 0.4675,
+      "candidate_avg_elapsed_ms": 392.841,
+      "candidate_clean_rate": 0.6624,
+      "candidate_rejected": 216,
+      "candidate_review_or_better_rate": 0.8154,
+      "candidate_top5_rate": 0.4744,
+      "delta_rejected": 7,
+      "passed": false,
+      "required_max_rejected": 188,
+      "section": "tail50pct"
+    },
+    {
+      "baseline_avg_elapsed_ms": 231.895,
+      "baseline_clean_rate": 0.6524,
+      "baseline_rejected": 127,
+      "baseline_review_or_better_rate": 0.7984,
+      "baseline_top5_rate": 0.5683,
+      "candidate_avg_elapsed_ms": 293.581,
+      "candidate_clean_rate": 0.6603,
+      "candidate_rejected": 127,
+      "candidate_review_or_better_rate": 0.7984,
+      "candidate_top5_rate": 0.5238,
+      "delta_rejected": 0,
+      "passed": false,
+      "required_max_rejected": 114,
+      "section": "tail25pct"
+    }
+  ],
+  "thresholds": {
+    "complete_game_rejected_max": 427,
+    "gauntlet_losses_max": 0,
+    "human_trap_clean_min": 0.96,
+    "rejected_reduction": 0.1,
+    "tail25pct_rejected_max": 114,
+    "tail50pct_rejected_max": 188
+  }
+}

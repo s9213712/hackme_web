@@ -1,0 +1,165 @@
+{
+  "created_at": "2026-05-14T17:26:11+00:00",
+  "input": "redacted_private_detail_jsonl",
+  "script": "scripts/games/chess_exp5_failure_taxonomy.py",
+  "summary": {
+    "by_section": {
+      "complete_game": {
+        "actionability": {
+          "candidate_generation_or_search_miss": 423,
+          "top5_present_rerank_issue": 46
+        },
+        "avg_focus_cp_loss": 947.529,
+        "focus_rate": 0.183,
+        "focus_rows": 469,
+        "max_focus_cp_loss": 99997,
+        "motifs": {
+          "capture": 71,
+          "castling": 2,
+          "check": 27,
+          "early_queen_human_probe": 1,
+          "endgame": 214,
+          "opening": 37,
+          "quiet": 157,
+          "tactical_exposure": 67
+        },
+        "phase": {
+          "endgame": 69,
+          "late_middlegame": 142,
+          "middlegame": 217,
+          "opening": 41
+        },
+        "positions": 2563,
+        "taxonomy": {
+          "candidate_generation_or_search_miss": 423,
+          "endgame_conversion": 214,
+          "hanging_material_after_move": 61,
+          "king_distance_or_activity": 9,
+          "king_safety_open_file": 142,
+          "passed_pawn_or_promotion_race": 62,
+          "pawn_structure_or_pawn_push": 197,
+          "quiet_positional_ordering": 375,
+          "tactical_exposure": 87,
+          "top5_present_rerank_issue": 46,
+          "winning_conversion": 12
+        }
+      },
+      "tail10pct": {
+        "actionability": {
+          "candidate_generation_or_search_miss": 35,
+          "top5_present_rerank_issue": 6
+        },
+        "avg_focus_cp_loss": 5204.634,
+        "focus_rate": 0.1571,
+        "focus_rows": 41,
+        "max_focus_cp_loss": 99693,
+        "motifs": {
+          "capture": 6,
+          "check": 4,
+          "endgame": 31,
+          "quiet": 5,
+          "tactical_exposure": 5
+        },
+        "phase": {
+          "endgame": 18,
+          "late_middlegame": 19,
+          "middlegame": 4
+        },
+        "positions": 261,
+        "taxonomy": {
+          "candidate_generation_or_search_miss": 35,
+          "endgame_conversion": 31,
+          "hanging_material_after_move": 3,
+          "king_distance_or_activity": 2,
+          "king_safety_open_file": 25,
+          "passed_pawn_or_promotion_race": 19,
+          "pawn_structure_or_pawn_push": 9,
+          "quiet_positional_ordering": 31,
+          "tactical_exposure": 9,
+          "top5_present_rerank_issue": 6,
+          "winning_conversion": 5
+        }
+      },
+      "tail25pct": {
+        "actionability": {
+          "candidate_generation_or_search_miss": 106,
+          "top5_present_rerank_issue": 21
+        },
+        "avg_focus_cp_loss": 4223.795,
+        "focus_rate": 0.2016,
+        "focus_rows": 127,
+        "max_focus_cp_loss": 100381,
+        "motifs": {
+          "capture": 20,
+          "check": 21,
+          "endgame": 78,
+          "quiet": 25,
+          "tactical_exposure": 20
+        },
+        "phase": {
+          "endgame": 32,
+          "late_middlegame": 75,
+          "middlegame": 20
+        },
+        "positions": 630,
+        "taxonomy": {
+          "candidate_generation_or_search_miss": 106,
+          "endgame_conversion": 78,
+          "hanging_material_after_move": 13,
+          "king_distance_or_activity": 3,
+          "king_safety_open_file": 53,
+          "passed_pawn_or_promotion_race": 28,
+          "pawn_structure_or_pawn_push": 35,
+          "quiet_positional_ordering": 88,
+          "tactical_exposure": 36,
+          "top5_present_rerank_issue": 21,
+          "winning_conversion": 3
+        }
+      },
+      "tail50pct": {
+        "actionability": {
+          "candidate_generation_or_search_miss": 199,
+          "top5_present_rerank_issue": 17
+        },
+        "avg_focus_cp_loss": 2625.046,
+        "focus_rate": 0.1846,
+        "focus_rows": 216,
+        "max_focus_cp_loss": 100004,
+        "motifs": {
+          "capture": 41,
+          "castling": 1,
+          "check": 30,
+          "endgame": 128,
+          "quiet": 47,
+          "tactical_exposure": 31
+        },
+        "phase": {
+          "endgame": 14,
+          "late_middlegame": 117,
+          "middlegame": 85
+        },
+        "positions": 1170,
+        "taxonomy": {
+          "candidate_generation_or_search_miss": 199,
+          "endgame_conversion": 128,
+          "hanging_material_after_move": 22,
+          "king_distance_or_activity": 1,
+          "king_safety_open_file": 63,
+          "passed_pawn_or_promotion_race": 47,
+          "pawn_structure_or_pawn_push": 81,
+          "quiet_positional_ordering": 153,
+          "tactical_exposure": 55,
+          "top5_present_rerank_issue": 17,
+          "winning_conversion": 5
+        }
+      }
+    },
+    "focus_rate": 0.1845,
+    "focus_rows": 853,
+    "focus_statuses": [
+      "rejected"
+    ],
+    "leak_policy": "redacted: no FEN, moves, PV, source game ids, chosen/source moves, or per-position answers",
+    "positions": 4624
+  }
+}

@@ -42,6 +42,9 @@ EXP5_PRODUCTION_SEARCH_PROFILE = "fixed_depth_fianchetto_tail_castle_guard"
 _NNUE_VERSION = 1
 _LEARNING_RATE = 18.0
 _MAX_ABS_WEIGHT = 350.0
+_V26_LONG_TAIL_FULLMOVE = 14
+_V26_LONG_TAIL_MATERIAL_CP = 5200
+_V26_SELECTIVE_DEPTH_MATERIAL_CP = 1800
 _SEARCH_PROFILES = {
     "fast": {"depth": 1, "quiescence_depth": 1, "time_budget_ms": 140, "enable_pvs": False, "enable_rich_eval": False},
     "balanced": {
@@ -202,6 +205,172 @@ _SEARCH_PROFILES = {
         "time_budget_ms": None,
         "enable_pvs": False,
         "enable_futility": False,
+        "enable_rich_eval": False,
+        "enable_pawn_structure": False,
+        "enable_piece_activity": False,
+        "enable_piece_activity_midgame": True,
+        "enable_center_break": False,
+        "enable_fianchetto_development": True,
+        "enable_tail_mate_net": True,
+        "allow_queenside_castle_priority": False,
+        "enable_king_zone_pressure": False,
+        "enable_static_opening_book": False,
+        "enable_special_rule_fusion": False,
+    },
+    "fixed_depth_fianchetto_tail_castle_guard_v26a_candidate_search": {
+        "depth": 2,
+        "quiescence_depth": 2,
+        "time_budget_ms": None,
+        "enable_pvs": False,
+        "enable_futility": False,
+        "enable_rich_eval": False,
+        "enable_pawn_structure": False,
+        "enable_piece_activity": False,
+        "enable_piece_activity_midgame": True,
+        "enable_center_break": False,
+        "enable_fianchetto_development": True,
+        "enable_tail_mate_net": True,
+        "allow_queenside_castle_priority": False,
+        "enable_king_zone_pressure": False,
+        "enable_static_opening_book": False,
+        "enable_special_rule_fusion": False,
+        "enable_v26_candidate_search_ordering": True,
+        "enable_v26_selective_depth": True,
+        "v26_selective_depth": 3,
+        "v26_selective_quiescence_depth": 3,
+    },
+    "fixed_depth_fianchetto_tail_castle_guard_v26_endgame_safety": {
+        "depth": 2,
+        "quiescence_depth": 2,
+        "time_budget_ms": None,
+        "enable_pvs": False,
+        "enable_futility": False,
+        "enable_rich_eval": False,
+        "enable_pawn_structure": False,
+        "enable_piece_activity": False,
+        "enable_piece_activity_midgame": True,
+        "enable_center_break": False,
+        "enable_fianchetto_development": True,
+        "enable_tail_mate_net": True,
+        "allow_queenside_castle_priority": False,
+        "enable_king_zone_pressure": False,
+        "enable_static_opening_book": False,
+        "enable_special_rule_fusion": False,
+        "enable_v26_long_tail_eval": True,
+        "enable_v26_long_tail_ordering": True,
+        "enable_v26_selective_depth": True,
+        "v26_selective_depth": 3,
+        "v26_selective_quiescence_depth": 3,
+    },
+    "fixed_depth_fianchetto_tail_castle_guard_v26b_endgame_eval_light": {
+        "depth": 2,
+        "quiescence_depth": 2,
+        "time_budget_ms": None,
+        "enable_pvs": False,
+        "enable_futility": False,
+        "enable_rich_eval": False,
+        "enable_pawn_structure": False,
+        "enable_piece_activity": False,
+        "enable_piece_activity_midgame": True,
+        "enable_center_break": False,
+        "enable_fianchetto_development": True,
+        "enable_tail_mate_net": True,
+        "allow_queenside_castle_priority": False,
+        "enable_king_zone_pressure": False,
+        "enable_static_opening_book": False,
+        "enable_special_rule_fusion": False,
+        "enable_v26_long_tail_eval": True,
+        "enable_v26_long_tail_eval_strict": True,
+        "v26_long_tail_scale_percent": 45,
+    },
+    "fixed_depth_fianchetto_tail_castle_guard_v26c_pruned_depth3": {
+        "depth": 3,
+        "quiescence_depth": 2,
+        "time_budget_ms": None,
+        "enable_pvs": True,
+        "enable_lmr": True,
+        "enable_null_move": True,
+        "enable_futility": True,
+        "enable_rich_eval": False,
+        "enable_pawn_structure": False,
+        "enable_piece_activity": False,
+        "enable_piece_activity_midgame": True,
+        "enable_center_break": False,
+        "enable_fianchetto_development": True,
+        "enable_tail_mate_net": True,
+        "allow_queenside_castle_priority": False,
+        "enable_king_zone_pressure": False,
+        "enable_static_opening_book": False,
+        "enable_special_rule_fusion": False,
+    },
+    "fixed_depth_fianchetto_tail_castle_guard_v26d_pruned_depth3_q3": {
+        "depth": 3,
+        "quiescence_depth": 3,
+        "time_budget_ms": None,
+        "enable_pvs": True,
+        "enable_lmr": True,
+        "enable_null_move": True,
+        "enable_futility": True,
+        "enable_rich_eval": False,
+        "enable_pawn_structure": False,
+        "enable_piece_activity": False,
+        "enable_piece_activity_midgame": True,
+        "enable_center_break": False,
+        "enable_fianchetto_development": True,
+        "enable_tail_mate_net": True,
+        "allow_queenside_castle_priority": False,
+        "enable_king_zone_pressure": False,
+        "enable_static_opening_book": False,
+        "enable_special_rule_fusion": False,
+    },
+    "fixed_depth_fianchetto_tail_castle_guard_v26e_pruned_depth3_no_null": {
+        "depth": 3,
+        "quiescence_depth": 2,
+        "time_budget_ms": None,
+        "enable_pvs": True,
+        "enable_lmr": True,
+        "enable_null_move": False,
+        "enable_futility": True,
+        "enable_rich_eval": False,
+        "enable_pawn_structure": False,
+        "enable_piece_activity": False,
+        "enable_piece_activity_midgame": True,
+        "enable_center_break": False,
+        "enable_fianchetto_development": True,
+        "enable_tail_mate_net": True,
+        "allow_queenside_castle_priority": False,
+        "enable_king_zone_pressure": False,
+        "enable_static_opening_book": False,
+        "enable_special_rule_fusion": False,
+    },
+    "fixed_depth_fianchetto_tail_castle_guard_v26f_depth3_no_null_no_futility": {
+        "depth": 3,
+        "quiescence_depth": 2,
+        "time_budget_ms": None,
+        "enable_pvs": True,
+        "enable_lmr": True,
+        "enable_null_move": False,
+        "enable_futility": False,
+        "enable_rich_eval": False,
+        "enable_pawn_structure": False,
+        "enable_piece_activity": False,
+        "enable_piece_activity_midgame": True,
+        "enable_center_break": False,
+        "enable_fianchetto_development": True,
+        "enable_tail_mate_net": True,
+        "allow_queenside_castle_priority": False,
+        "enable_king_zone_pressure": False,
+        "enable_static_opening_book": False,
+        "enable_special_rule_fusion": False,
+    },
+    "fixed_depth_fianchetto_tail_castle_guard_v26g_depth3_no_null_no_lmr": {
+        "depth": 3,
+        "quiescence_depth": 2,
+        "time_budget_ms": None,
+        "enable_pvs": True,
+        "enable_lmr": False,
+        "enable_null_move": False,
+        "enable_futility": True,
         "enable_rich_eval": False,
         "enable_pawn_structure": False,
         "enable_piece_activity": False,
@@ -998,6 +1167,172 @@ def _endgame_conversion_score(board: chess.Board) -> int:
     return score
 
 
+def _v26_long_tail_phase(board: chess.Board) -> bool:
+    return (
+        board.fullmove_number >= _V26_LONG_TAIL_FULLMOVE
+        or _non_king_material_total(board) <= _V26_LONG_TAIL_MATERIAL_CP
+    )
+
+
+def _v26_strict_endgame_eval_phase(board: chess.Board) -> bool:
+    if _non_king_material_total(board) <= 2600:
+        return True
+    if board.fullmove_number >= 28:
+        return True
+    distances = [
+        distance
+        for color in (chess.WHITE, chess.BLACK)
+        for distance in [_fastest_passed_pawn_distance(board, color)]
+        if distance is not None
+    ]
+    return bool(distances and min(distances) <= 3)
+
+
+def _v26_open_file_king_pressure(board: chess.Board, color: chess.Color) -> int:
+    king = board.king(color)
+    if king is None:
+        return 0
+    king_file = chess.square_file(king)
+    penalty = 0
+    for file_index in range(max(0, king_file - 1), min(7, king_file + 1) + 1):
+        own_pawns = [
+            square
+            for square in board.pieces(chess.PAWN, color)
+            if chess.square_file(square) == file_index
+        ]
+        any_pawns = [
+            square
+            for pawn_color in (chess.WHITE, chess.BLACK)
+            for square in board.pieces(chess.PAWN, pawn_color)
+            if chess.square_file(square) == file_index
+        ]
+        if not own_pawns:
+            penalty += 18
+        if not any_pawns:
+            penalty += 45
+    enemy_major_squares = board.pieces(chess.ROOK, not color) | board.pieces(chess.QUEEN, not color)
+    for square in enemy_major_squares:
+        same_file = chess.square_file(square) == king_file
+        same_rank = chess.square_rank(square) == chess.square_rank(king)
+        if same_file and _line_is_clear(board, square, king):
+            piece = board.piece_at(square)
+            penalty += 240 if piece is not None and piece.piece_type == chess.QUEEN else 180
+        elif same_rank and _line_is_clear(board, square, king):
+            penalty += 90
+    return min(720, penalty)
+
+
+def _v26_passed_pawn_pressure(board: chess.Board, color: chess.Color) -> int:
+    score = 0
+    own_king = board.king(color)
+    enemy_king = board.king(not color)
+    for square in _passed_pawn_squares(board, color):
+        rank = chess.square_rank(square)
+        advancement = rank if color == chess.WHITE else 7 - rank
+        distance = _promotion_distance(square, color)
+        promotion_square = chess.square(chess.square_file(square), 7 if color == chess.WHITE else 0)
+        protected = any(
+            (piece := board.piece_at(attacker)) is not None
+            and piece.color == color
+            and piece.piece_type in {chess.PAWN, chess.KING, chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN}
+            for attacker in board.attackers(color, square)
+        )
+        score += 40 + max(0, advancement - 1) * 38 + max(0, 5 - distance) * 95
+        if protected:
+            score += 110
+        if distance <= 2:
+            score += 420
+        if distance <= 1:
+            score += 900
+        own_distance = _king_distance(own_king, promotion_square)
+        enemy_distance = _king_distance(enemy_king, promotion_square)
+        score += (enemy_distance - own_distance) * 70
+    return score
+
+
+def _v26_long_tail_score(board: chess.Board, *, strict: bool = False) -> int:
+    if strict:
+        active = _v26_strict_endgame_eval_phase(board)
+    else:
+        active = _v26_long_tail_phase(board)
+    if not active:
+        return 0
+    score = 0
+    for color, sign in ((chess.WHITE, 1), (chess.BLACK, -1)):
+        score += sign * _v26_passed_pawn_pressure(board, color)
+        score -= sign * _v26_open_file_king_pressure(board, color)
+        if _non_king_material_total(board) <= _V26_SELECTIVE_DEPTH_MATERIAL_CP:
+            own_king = board.king(color)
+            enemy_king = board.king(not color)
+            score += sign * (_king_center_activity(own_king) - _king_center_activity(enemy_king) // 4) * 2
+    return score
+
+
+def _v26_long_tail_move_bonus(
+    board: chess.Board,
+    move: chess.Move,
+    color: chess.Color,
+    *,
+    include_progress: bool = True,
+    include_repetition: bool = True,
+) -> int:
+    if not _v26_long_tail_phase(board):
+        return 0
+    before = _v26_long_tail_score(board)
+    after = board.copy(stack=include_repetition)
+    after.push(move)
+    if after.is_checkmate():
+        return 50_000
+    if after.is_stalemate():
+        return -30_000
+    side_sign = 1 if color == chess.WHITE else -1
+    bonus = side_sign * (_v26_long_tail_score(after) - before)
+    if include_progress and (_should_apply_endgame_progress(board, color) or _passed_pawn_squares(board, color)):
+        bonus += _endgame_move_progress_score(board, move, color) // 2
+    if include_repetition and _material_margin_for_color(after, color) >= 350 and (
+        after.can_claim_threefold_repetition() or after.is_repetition(2)
+    ):
+        bonus -= 1300
+    moved_piece = after.piece_at(move.to_square)
+    if (
+        moved_piece is not None
+        and moved_piece.color == color
+        and moved_piece.piece_type in {chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN}
+        and not board.is_capture(move)
+        and not move.promotion
+        and not board.gives_check(move)
+    ):
+        attackers = len(list(after.attackers(not color, move.to_square)))
+        defenders = len(list(after.attackers(color, move.to_square)))
+        value = _PIECE_VALUES[moved_piece.piece_type]
+        if attackers and defenders == 0:
+            bonus -= value * 2
+        elif attackers > defenders:
+            bonus -= value
+    return max(-4000, min(4000, int(bonus)))
+
+
+def _v26_should_selective_depth(board: chess.Board, color: chess.Color) -> bool:
+    if not _v26_long_tail_phase(board):
+        return False
+    total_material = _non_king_material_total(board)
+    if total_material <= _V26_SELECTIVE_DEPTH_MATERIAL_CP:
+        return True
+    own_dist = _fastest_passed_pawn_distance(board, color)
+    enemy_dist = _fastest_passed_pawn_distance(board, not color)
+    if own_dist is not None and own_dist <= 2:
+        return True
+    if enemy_dist is not None and enemy_dist <= 2:
+        return True
+    if board.fullmove_number >= 26 and board.legal_moves.count() <= 16:
+        return True
+    if _material_margin_for_color(board, color) >= 700 and (
+        board.can_claim_threefold_repetition() or board.is_repetition(2)
+    ):
+        return True
+    return False
+
+
 def _pawn_structure_score(board: chess.Board) -> int:
     score = 0
     for color, sign in ((chess.WHITE, 1), (chess.BLACK, -1)):
@@ -1391,6 +1726,10 @@ def _nnue_eval(board: chess.Board, model: dict, eval_cache: dict[int, int], hash
     if bool(model.get("_enable_rich_eval") or model.get("_enable_king_zone_pressure")):
         score += _king_zone_pressure_score(board)
     score += _endgame_conversion_score(board)
+    if bool(model.get("_enable_v26_long_tail_eval")):
+        v26_scale = max(0, min(100, int(model.get("_v26_long_tail_scale_percent") or 100)))
+        v26_score = _v26_long_tail_score(board, strict=bool(model.get("_enable_v26_long_tail_eval_strict")))
+        score += int(round(v26_score * (v26_scale / 100.0)))
     score += int(model.get("tempo") or 0) if board.turn == chess.WHITE else -int(model.get("tempo") or 0)
     eval_cache[board_hash] = score
     return score
@@ -3044,6 +3383,8 @@ def _score_move_for_side(board: chess.Board, move: chess.Move, side: str, model:
         score += float(_fianchetto_development_move_bonus(board, move))
     if _should_apply_endgame_progress(board, color):
         score += float(_endgame_move_progress_score(board, move, color))
+    if bool(model.get("_enable_v26_long_tail_ordering")):
+        score += float(_v26_long_tail_move_bonus(board, move, color))
     return score
 
 
@@ -3480,6 +3821,11 @@ def choose_experiment_nnue_move(board_state, side: str, *, model_path=None, sear
     model["_enable_center_break"] = bool(profile.get("enable_center_break"))
     model["_enable_fianchetto_development"] = bool(profile.get("enable_fianchetto_development"))
     model["_enable_king_zone_pressure"] = bool(profile.get("enable_king_zone_pressure"))
+    model["_enable_v26_long_tail_eval"] = bool(profile.get("enable_v26_long_tail_eval"))
+    model["_enable_v26_long_tail_eval_strict"] = bool(profile.get("enable_v26_long_tail_eval_strict"))
+    model["_v26_long_tail_scale_percent"] = int(profile.get("v26_long_tail_scale_percent") or 100)
+    model["_enable_v26_long_tail_ordering"] = bool(profile.get("enable_v26_long_tail_ordering"))
+    model["_enable_v26_candidate_search_ordering"] = bool(profile.get("enable_v26_candidate_search_ordering"))
     if model_path is None:
         replay_prior_move = _replay_prior_priority_move(board, side)
         if replay_prior_move is not None:
@@ -3554,16 +3900,35 @@ def choose_experiment_nnue_move(board_state, side: str, *, model_path=None, sear
 
     hasher = ZobristHasher(seed=20260530)
     eval_cache: dict[int, int] = {}
+    search_depth = int(profile["depth"])
+    quiescence_depth = int(profile["quiescence_depth"])
+    if bool(profile.get("enable_v26_selective_depth")) and _v26_should_selective_depth(board, ai_color):
+        search_depth = max(search_depth, int(profile.get("v26_selective_depth") or search_depth))
+        quiescence_depth = max(quiescence_depth, int(profile.get("v26_selective_quiescence_depth") or quiescence_depth))
+    move_order_fn = lambda current_board, move, _ply: (
+        _move_order_score(current_board, move)
+        + (
+            _v26_long_tail_move_bonus(
+                current_board,
+                move,
+                current_board.turn,
+                include_progress=False,
+                include_repetition=False,
+            )
+            if bool(model.get("_enable_v26_long_tail_ordering") or model.get("_enable_v26_candidate_search_ordering"))
+            else 0
+        )
+    )
     result = search_best_move(
         board,
-        max_depth=profile["depth"],
+        max_depth=search_depth,
         evaluate=lambda current_board: _nnue_eval(current_board, model, eval_cache, hasher),
-        move_order_fn=lambda current_board, move, _ply: _move_order_score(current_board, move),
+        move_order_fn=move_order_fn,
         qmove_filter=_exp5_qmove_filter,
         extension_fn=_exp5_search_extension,
         max_extensions=2,
         hasher=hasher,
-        quiescence_depth=profile["quiescence_depth"],
+        quiescence_depth=quiescence_depth,
         time_budget_ms=profile.get("time_budget_ms"),
         enable_pvs=bool(profile.get("enable_pvs")),
         enable_lmr=bool(profile.get("enable_lmr")),

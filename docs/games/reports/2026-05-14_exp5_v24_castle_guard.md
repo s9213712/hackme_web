@@ -40,6 +40,17 @@ v24 是目前第一個在不使用逐題硬編碼的前提下，把正式 30 局
 
 依目前證據，已把 `EXP5_PRODUCTION_SEARCH_PROFILE` 更新為 `fixed_depth_fianchetto_tail_castle_guard`。這次沒有覆蓋模型檔；變更是源碼內的預設 search profile。
 
+## Rejected Follow-Up
+
+v25 嘗試把 v24 castle-guard 與更寬的 bounded mate-net 合併：
+
+- Profile：`fixed_depth_fianchetto_tail_castle_tactical`
+- 30 局結果：22W/7D/1L
+- Normalized：88.9358
+
+結論：不採用。放寬 mate-net 會讓中盤安全退步，甚至出現敗局；v24 的窄條件目前較穩。
+因為 v25 profile 是失敗候選，未保留為可選 production profile，只保留 redacted evidence 與本報告紀錄。
+
 仍需注意：
 
 - 6 個和局仍全是三重複。
@@ -52,4 +63,5 @@ v24 是目前第一個在不使用逐題硬編碼的前提下，把正式 30 局
 - `docs/games/evidence/exp5/v24_castle_guard_advanced_score_30s_fullinputs.json`
 - `docs/games/evidence/exp5/v24_castle_guard_heldout_validation_50_stockfish.json`：redacted held-out aggregate。
 - `docs/games/evidence/exp5/v24_castle_guard_draw_summary.json`
+- `docs/games/evidence/exp5/v25_castle_tactical_advanced_score_30s_fullinputs.json`：rejected follow-up。
 - Raw replay JSON/JSONL：`runtime/private/games/exp5/v24_castle_guard/`。
