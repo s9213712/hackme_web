@@ -221,15 +221,21 @@ exp5 candidate artifacts
   -> chess_exp5_strength_gate.py
   -> chess_exp5_tactical_suite.py
   -> chess_exp5_gauntlet.py
+    -> chess_redact_gauntlet_evidence.py
+      -> raw replay JSON/JSONL copied to runtime/private
+      -> docs evidence replaced with redacted aggregate JSON/JSONL
     -> chess_gauntlet_extract_positions.py --actor ai --result draw
       -> chess_stockfish_teacher_audit.py
+      -> chess_stockfish_audit_summary.py
+      -> chess_exp5_draw_summary.py
     -> chess_gauntlet_extract_positions.py --actor ai --tail-actor-moves 12
       -> chess_stockfish_teacher_audit.py
+      -> chess_stockfish_audit_summary.py
       -> tail/endgame conversion audit for the final AI decisions in complete games
-  -> chess_exp5_validation_probe.py --questions 50
+  -> chess_exp5_validation_probe.py --question-set runtime/private/... --questions 50
     -> services/games/chess_nnue.py::choose_experiment_nnue_move(...)
     -> services/games/chess_stockfish_teacher.py::UciStockfish MultiPV
-    -> docs/games/evidence/exp5/*heldout_validation_50_stockfish.{json,jsonl}
+    -> redacted docs/games/evidence/exp5/*heldout_validation_50_stockfish.{json,jsonl}
   -> chess_exp5_production_readiness.py
   -> chess_exp5_promote_candidate.py
 ```
@@ -239,6 +245,16 @@ only run when the caller provides or the environment resolves a local Stockfish
 UCI binary. The binary is not part of the repo and is intentionally outside the
 maintained script assets. Downloaded PGN rows remain diagnostic until they pass a
 teacher/audit filter and are explicitly fed to staged model paths.
+
+Sensitive raw learning/replay JSONL policy:
+
+- Keep FEN/move/teacher-PV JSONL under `runtime/private/` or another ignored
+  local path.
+- Docs evidence should contain redacted aggregate JSON/JSONL unless a caller
+  explicitly opts into private sensitive output.
+- Distilled weights or non-exact feature deltas may be committed after review;
+  exact-memory tables, opening books, replay priors, and `FEN -> move` adapters
+  are still sensitive and should stay private unless intentionally published.
 
 主要輸出：
 
