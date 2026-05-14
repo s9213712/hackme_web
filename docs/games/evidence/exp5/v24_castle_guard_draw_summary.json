@@ -1,0 +1,37 @@
+{
+  "averages": {
+    "ai_material_cp": -745.0,
+    "tail_capture_rate": 0.0694,
+    "tail_pawn_or_capture_rate": 0.125
+  },
+  "counts": {
+    "ai_material_buckets": {
+      "ai_down_major_or_more": 3,
+      "ai_down_minor_or_exchange": 2,
+      "near_equal": 1
+    },
+    "draw_reasons": {
+      "threefold_repetition": 6
+    },
+    "draws": 6,
+    "games": 30,
+    "halfmove_clock_buckets": {
+      "fresh": 1,
+      "high": 1,
+      "moderate": 4
+    },
+    "max_repetition_buckets": {
+      "2": 6
+    },
+    "piece_count_buckets": {
+      "low_piece_count": 3,
+      "medium_piece_count": 3
+    },
+    "plies_buckets": {
+      "medium": 3,
+      "short": 1,
+      "very_long": 2
+    }
+  },
+  "source": "docs/games/evidence/exp5/v24_castle_guard_full_gauntlet_30.json"
+}
