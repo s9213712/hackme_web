@@ -1,8 +1,24 @@
 'use strict';
 
 (function () {
-  const { makeCtx, registerScore, cell } = window.HACKME_LOCAL_GAME_HELPERS;
-window.registerHackmeLocalGameModule("game_2048", {
+  const { makeCtx, registerScore } = window.HACKME_LOCAL_GAME_HELPERS;
+  const GAME_2048_ASSET_SOURCES = Object.freeze({
+    puzzlePack: {
+      name: "Kenney Puzzle Pack 2",
+      url: "https://kenney.nl/assets/puzzle-pack-2",
+      license: "Creative Commons CC0",
+      usage: "bundled PNG tile skins applied through CSS with color fallback",
+    },
+  });
+
+  function render2048Cell(value) {
+    const label = value < 0 ? "X" : (value || "");
+    const tone = value < 0 ? "tile-block" : `tile-${value || 0}`;
+    const sizeClass = value >= 1024 ? "tile-tight" : value >= 128 ? "tile-mid" : "";
+    return `<button class="${tone} tile-gloss ${sizeClass}" type="button" data-2048-value="${value || 0}">${label}</button>`;
+  }
+
+  window.registerHackmeLocalGameModule("game_2048", {
     mount(api) {
       makeCtx(api, "2048");
       const state = { startedAt: 0, board: Array.from({ length: 4 }, () => Array(4).fill(0)), score: 0, mode: "classic", moves: 0, moveLimit: 60, history: [], maxTile: 0, active: false, finished: false, dailyChallenge: null };
@@ -21,7 +37,9 @@ window.registerHackmeLocalGameModule("game_2048", {
         [[1, 1], [2, 2]].forEach(([x, y]) => { state.board[y][x] = -1; });
       };
       const render = () => {
-        const cells = state.board.flat().map((v) => cell(v < 0 ? "X" : v, v < 0 ? "tile-block" : `tile-${v || 0}`)).join("");
+        root.dataset.assetTheme = "kenney-puzzle-pack";
+        root.dataset.mode = state.mode;
+        const cells = state.board.flat().map((v) => render2048Cell(v)).join("");
         const overlay = state.finished
           ? `<div class="single-game-over-overlay">GAME OVER<br><small>分數 ${Number(state.score || 0).toLocaleString()} · 最大 ${state.maxTile || 0} · 步數 ${state.moves}</small></div>`
           : "";

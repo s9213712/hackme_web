@@ -2,6 +2,61 @@
 
 let spaceShooterState = null;
 let spaceShooterLoopTimer = null;
+const SPACE_SHOOTER_ENEMY_TYPES = ["striker", "gunner", "evader"];
+const SPACE_SHOOTER_ASSET_SOURCES = Object.freeze({
+  extension: {
+    name: "Kenney Space Shooter Extension",
+    url: "https://kenney.nl/assets/space-shooter-extension",
+    license: "Creative Commons CC0",
+    usage: "bundled PNG ships, missiles, meteor props and powerup parts with canvas fallback",
+  },
+});
+const SPACE_SHOOTER_ASSET_BASE = "/assets/games/vendor/kenney/space-shooter-extension/";
+const SPACE_SHOOTER_IMAGE_ASSETS = Object.freeze({
+  player: `${SPACE_SHOOTER_ASSET_BASE}ships/player.png`,
+  striker: `${SPACE_SHOOTER_ASSET_BASE}ships/enemy_striker.png`,
+  gunner: `${SPACE_SHOOTER_ASSET_BASE}ships/enemy_gunner.png`,
+  evader: `${SPACE_SHOOTER_ASSET_BASE}ships/enemy_evader.png`,
+  boss: `${SPACE_SHOOTER_ASSET_BASE}ships/boss.png`,
+  playerLaser: `${SPACE_SHOOTER_ASSET_BASE}missiles/player_laser.png`,
+  enemyLaser: `${SPACE_SHOOTER_ASSET_BASE}missiles/enemy_laser.png`,
+  meteor: `${SPACE_SHOOTER_ASSET_BASE}props/meteor.png`,
+  powerupWeapon: `${SPACE_SHOOTER_ASSET_BASE}parts/powerup_weapon.png`,
+  powerupShield: `${SPACE_SHOOTER_ASSET_BASE}parts/powerup_shield.png`,
+});
+const SPACE_SHOOTER_IMAGES = loadSpaceShooterImages(SPACE_SHOOTER_IMAGE_ASSETS);
+
+function loadSpaceShooterImages(assets) {
+  if (typeof Image === "undefined") return {};
+  return Object.entries(assets).reduce((images, [key, src]) => {
+    const image = new Image();
+    image.decoding = "async";
+    image.src = src;
+    images[key] = image;
+    return images;
+  }, {});
+}
+
+function spaceShooterImageReady(image) {
+  return Boolean(image?.complete && image.naturalWidth > 0);
+}
+
+function drawSpaceShooterImage(ctx, key, x, y, w, h, options = {}) {
+  const image = SPACE_SHOOTER_IMAGES[key];
+  if (!spaceShooterImageReady(image)) return false;
+  ctx.save();
+  ctx.globalAlpha = options.alpha ?? 1;
+  ctx.translate(x, y);
+  if (options.rotation) ctx.rotate(options.rotation);
+  if (options.flipX || options.flipY) ctx.scale(options.flipX ? -1 : 1, options.flipY ? -1 : 1);
+  ctx.drawImage(image, -w / 2, -h / 2, w, h);
+  ctx.restore();
+  return true;
+}
+
+function playSpaceShooterSound(name, options = {}) {
+  if (typeof playGameSound === "function") playGameSound(name, options);
+}
 
 function clearSpaceShooterLoop() {
   if (spaceShooterLoopTimer) {
@@ -23,10 +78,12 @@ function recordSpaceShooterAchievement(id, label, detail = "") {
 function damageSpaceShooterPlayer(state) {
   if (state.shield > 0) {
     state.shield -= 1;
+    playSpaceShooterSound("metalHit", { volume: 0.12, throttleMs: 140 });
     recordSpaceShooterAchievement("shield-save", "護盾救援", "用護盾擋下一次傷害。");
     return;
   }
   state.lives -= 1;
+  playSpaceShooterSound("punch", { volume: 0.16, throttleMs: 180 });
 }
 
 function fireSpaceShooterShots(state) {
@@ -55,6 +112,7 @@ function spawnSpaceShooterPowerup(state, x, y, type = "") {
 }
 
 function collectSpaceShooterPowerup(state, powerup) {
+  playSpaceShooterSound("uiDrop", { volume: 0.14, throttleMs: 160 });
   if (powerup.type === "weapon") {
     state.weaponLevel = Math.min(4, state.weaponLevel + 1);
     state.score += 75;
@@ -68,6 +126,85 @@ function collectSpaceShooterPowerup(state, powerup) {
   }
   state.lives = Math.min(5, state.lives + 1);
   state.score += 100;
+}
+
+function spawnSpaceShooterEnemy(state) {
+  const roll = spaceShooterRandom();
+  const type = SPACE_SHOOTER_ENEMY_TYPES[roll < 0.42 ? 0 : roll < 0.74 ? 1 : 2];
+  const hpBonus = state.score > 900 ? 1 : 0;
+  state.enemies.push({
+    x: 24 + spaceShooterRandom() * 312,
+    y: -18,
+    vx: (spaceShooterRandom() - 0.5) * (type === "evader" ? 2.1 : 1.1),
+    hp: (type === "gunner" ? 2 : 1) + hpBonus + Math.floor(state.bossDefeated / 3),
+    type,
+    phase: spaceShooterRandom() * Math.PI * 2,
+    fireAt: state.tick + (type === "gunner" ? 34 : 46) + Math.floor(spaceShooterRandom() * 20),
+    dodgeUntil: 0,
+    dodgeVx: 0,
+  });
+}
+
+function fireSpaceShooterEnemyAttack(state, enemy) {
+  const baseSpeed = 3.4 + Math.min(1.8, state.score / 2600);
+  const toPlayer = Math.atan2(450 - enemy.y, state.playerX - enemy.x);
+  if (enemy.type === "gunner") {
+    [-0.22, 0, 0.22].forEach((spread) => {
+      const angle = toPlayer + spread;
+      state.enemyBullets.push({
+        x: enemy.x,
+        y: enemy.y + 18,
+        vx: Math.cos(angle) * (baseSpeed * 0.9),
+        vy: Math.sin(angle) * (baseSpeed * 0.9),
+        color: "#fbbf24",
+      });
+    });
+    enemy.fireAt = state.tick + Math.max(28, 56 - Math.floor(state.score / 550));
+    return;
+  }
+  const angle = enemy.type === "evader" ? toPlayer + Math.sin(enemy.phase) * 0.18 : toPlayer;
+  state.enemyBullets.push({
+    x: enemy.x,
+    y: enemy.y + 16,
+    vx: Math.cos(angle) * baseSpeed,
+    vy: Math.sin(angle) * baseSpeed,
+    color: enemy.type === "evader" ? "#a78bfa" : "#f97316",
+  });
+  enemy.fireAt = state.tick + Math.max(32, (enemy.type === "evader" ? 72 : 62) - Math.floor(state.score / 700));
+}
+
+function updateSpaceShooterEnemyDodge(state, enemy) {
+  if (enemy.type !== "evader" && enemy.type !== "gunner") return;
+  if (state.tick < Number(enemy.dodgeUntil || 0)) return;
+  const threat = state.bullets.find((bullet) => (
+    bullet.vy < 0
+    && bullet.y < enemy.y + 42
+    && bullet.y > enemy.y - 110
+    && Math.abs(bullet.x - enemy.x) < (enemy.type === "evader" ? 32 : 18)
+  ));
+  if (!threat) return;
+  const direction = threat.x <= enemy.x ? 1 : -1;
+  enemy.dodgeVx = direction * (enemy.type === "evader" ? 4.8 : 3.2);
+  enemy.dodgeUntil = state.tick + (enemy.type === "evader" ? 16 : 10);
+}
+
+function updateSpaceShooterEnemies(state) {
+  const fallSpeed = 2.85 + Math.min(3, state.score / 700);
+  state.enemies.forEach((enemy) => {
+    enemy.phase = Number(enemy.phase || 0) + 0.09;
+    updateSpaceShooterEnemyDodge(state, enemy);
+    const weaving = Math.sin(enemy.phase) * (enemy.type === "striker" ? 0.55 : enemy.type === "gunner" ? 0.82 : 1.2);
+    const dodge = state.tick < Number(enemy.dodgeUntil || 0) ? Number(enemy.dodgeVx || 0) : 0;
+    if (!dodge) enemy.dodgeVx *= 0.86;
+    enemy.x += Number(enemy.vx || 0) + weaving + dodge;
+    enemy.y += fallSpeed * (enemy.type === "gunner" ? 0.86 : enemy.type === "evader" ? 0.95 : 1.08);
+    if (enemy.x < 24 || enemy.x > 336) {
+      enemy.x = Math.max(24, Math.min(336, enemy.x));
+      enemy.vx = -Number(enemy.vx || 0);
+      enemy.dodgeVx = -Number(enemy.dodgeVx || 0) * 0.45;
+    }
+    if (state.tick >= Number(enemy.fireAt || 0) && enemy.y > 12 && enemy.y < 390) fireSpaceShooterEnemyAttack(state, enemy);
+  });
 }
 
 function spawnSpaceShooterBoss(state) {
@@ -146,17 +283,18 @@ function tickSpaceShooterGame() {
   if (movingRight) state.playerX = Math.min(342, state.playerX + 7);
   if ((state.keys[" "] || state.keys.Spacebar) && state.tick - state.lastShotTick >= 5) {
     fireSpaceShooterShots(state);
+    playSpaceShooterSound("uiTick", { volume: 0.04, throttleMs: 120 });
     state.lastShotTick = state.tick;
   }
   if (!state.boss && state.score >= state.nextBossScore) spawnSpaceShooterBoss(state);
   if (state.tick % Math.max(12, 34 - Math.floor(state.score / 250)) === 0) {
-    state.enemies.push({ x: 24 + spaceShooterRandom() * 312, y: -18, hp: state.score > 900 ? 2 : 1 });
+    spawnSpaceShooterEnemy(state);
   }
   state.bullets.forEach((bullet) => {
     bullet.x += bullet.vx || 0;
     bullet.y += bullet.vy || -12;
   });
-  state.enemies.forEach((enemy) => { enemy.y += 3.2 + Math.min(3, state.score / 600); });
+  updateSpaceShooterEnemies(state);
   if (state.boss) {
     state.boss.x += state.boss.vx;
     if (state.boss.x < 54 || state.boss.x > 306) state.boss.vx *= -1;
@@ -193,6 +331,7 @@ function tickSpaceShooterGame() {
     if (state.boss.hp <= 0) {
       const defeated = state.boss;
       state.score += 650 + state.bossCount * 120;
+      playSpaceShooterSound("metalHit", { volume: 0.18, throttleMs: 180 });
       state.boss = null;
       state.bossDefeated += 1;
       recordSpaceShooterAchievement("boss-down", "旗艦擊破", "擊破宇宙戰機 Boss。");
@@ -212,6 +351,7 @@ function tickSpaceShooterGame() {
         if (enemy.hp <= 0) {
           destroyed = true;
           state.score += 25;
+          playSpaceShooterSound("hit", { volume: 0.09, throttleMs: 70 });
           if (spaceShooterRandom() < 0.12) spawnSpaceShooterPowerup(state, enemy.x, enemy.y);
         }
       }
@@ -266,20 +406,219 @@ function shootSpaceShooter() {
   renderSpaceShooterBoard();
 }
 
+function drawSpaceShooterBackdrop(ctx, canvas, state) {
+  const tick = Number(state?.tick || 0);
+  const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  gradient.addColorStop(0, "#06111f");
+  gradient.addColorStop(0.55, "#10183a");
+  gradient.addColorStop(1, "#07111f");
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const planetX = 52 + Math.sin(tick / 180) * 10;
+  const planetY = 84 + (tick * 0.16) % 520;
+  ctx.fillStyle = "rgba(56,189,248,.16)";
+  ctx.beginPath();
+  ctx.arc(planetX, planetY % (canvas.height + 120) - 60, 42, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(147,197,253,.16)";
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+  ctx.ellipse(planetX, planetY % (canvas.height + 120) - 60, 58, 16, -0.22, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.lineWidth = 1;
+
+  ctx.fillStyle = "rgba(255,255,255,.2)";
+  for (let i = 0; i < 72; i += 1) {
+    const x = (i * 67 + tick * (1.2 + (i % 3) * 0.35)) % canvas.width;
+    const y = (i * 41 + tick * (2.1 + (i % 4) * 0.24)) % canvas.height;
+    ctx.fillRect(x, y, i % 5 === 0 ? 3 : 2, i % 7 === 0 ? 3 : 2);
+  }
+
+  for (let i = 0; i < 10; i += 1) {
+    const x = (i * 91 + tick * 0.7) % (canvas.width + 80) - 40;
+    const y = 80 + ((i * 53 + tick * 0.9) % 250);
+    if (drawSpaceShooterImage(ctx, "meteor", x, y, 24 + (i % 3) * 6, 18 + (i % 2) * 4, {
+      alpha: 0.34,
+      rotation: i * 0.7 + tick / 130,
+    })) continue;
+    ctx.fillStyle = i % 2 ? "rgba(148,163,184,.18)" : "rgba(100,116,139,.22)";
+    ctx.beginPath();
+    ctx.ellipse(x, y, 8 + (i % 3) * 3, 5 + (i % 2) * 2, i, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawSpaceShooterPlayerShip(ctx, x, y, tick = 0) {
+  if (drawSpaceShooterImage(ctx, "player", x, y, 58, 70)) {
+    ctx.fillStyle = `rgba(34,197,94,${0.34 + Math.sin(tick / 4) * 0.12})`;
+    ctx.beginPath();
+    ctx.moveTo(x - 10, y + 27);
+    ctx.lineTo(x - 4, y + 46);
+    ctx.lineTo(x + 2, y + 27);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(x + 10, y + 27);
+    ctx.lineTo(x + 4, y + 46);
+    ctx.lineTo(x - 2, y + 27);
+    ctx.fill();
+    return;
+  }
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.fillStyle = "rgba(59,130,246,.28)";
+  ctx.beginPath();
+  ctx.moveTo(0, 46);
+  ctx.lineTo(-26, 18);
+  ctx.lineTo(0, 27);
+  ctx.lineTo(26, 18);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = "#4d7dff";
+  ctx.beginPath();
+  ctx.moveTo(0, -22);
+  ctx.lineTo(-18, 18);
+  ctx.lineTo(-9, 36);
+  ctx.lineTo(0, 27);
+  ctx.lineTo(9, 36);
+  ctx.lineTo(18, 18);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = "#93c5fd";
+  ctx.beginPath();
+  ctx.moveTo(0, -8);
+  ctx.lineTo(-7, 11);
+  ctx.lineTo(0, 17);
+  ctx.lineTo(7, 11);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = "#22c55e";
+  ctx.fillRect(-18, 17, 7, 16);
+  ctx.fillRect(11, 17, 7, 16);
+  ctx.fillStyle = `rgba(34,197,94,${0.34 + Math.sin(tick / 4) * 0.12})`;
+  ctx.beginPath();
+  ctx.moveTo(-13, 35);
+  ctx.lineTo(-7, 49);
+  ctx.lineTo(-2, 35);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(13, 35);
+  ctx.lineTo(7, 49);
+  ctx.lineTo(2, 35);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawSpaceShooterEnemyShip(ctx, enemy, tick = 0) {
+  const imageKey = enemy.type === "gunner" ? "gunner" : enemy.type === "evader" ? "evader" : "striker";
+  if (drawSpaceShooterImage(ctx, imageKey, enemy.x, enemy.y, 44, 44, {
+    rotation: Math.PI + Math.sin((enemy.phase || 0) + tick / 24) * 0.08,
+  })) {
+    if (tick < Number(enemy.dodgeUntil || 0)) {
+      ctx.strokeStyle = "rgba(125,211,252,.72)";
+      ctx.beginPath();
+      ctx.arc(enemy.x, enemy.y + 1, 22, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    return;
+  }
+  const tone = enemy.type === "gunner" ? "#f97316" : enemy.type === "evader" ? "#a78bfa" : "#ff4f6d";
+  const trim = enemy.type === "gunner" ? "#fed7aa" : enemy.type === "evader" ? "#ddd6fe" : "#fecdd3";
+  ctx.save();
+  ctx.translate(enemy.x, enemy.y);
+  ctx.rotate(Math.sin((enemy.phase || 0) + tick / 24) * 0.08);
+  ctx.fillStyle = tone;
+  ctx.beginPath();
+  ctx.moveTo(0, 20);
+  ctx.lineTo(-18, -9);
+  ctx.lineTo(-7, -17);
+  ctx.lineTo(0, -7);
+  ctx.lineTo(7, -17);
+  ctx.lineTo(18, -9);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = trim;
+  ctx.fillRect(-11, -6, 22, 6);
+  ctx.fillStyle = "rgba(15,23,42,.42)";
+  ctx.fillRect(-4, 1, 8, 16);
+  if (enemy.type === "gunner") {
+    ctx.fillStyle = "#111827";
+    ctx.fillRect(-19, 4, 6, 14);
+    ctx.fillRect(13, 4, 6, 14);
+  }
+  ctx.restore();
+  if (tick < Number(enemy.dodgeUntil || 0)) {
+    ctx.strokeStyle = "rgba(125,211,252,.72)";
+    ctx.beginPath();
+    ctx.arc(enemy.x, enemy.y + 1, 22, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+}
+
+function drawSpaceShooterBossShip(ctx, boss) {
+  if (drawSpaceShooterImage(ctx, "boss", boss.x, boss.y, 116, 86, { rotation: Math.PI })) return;
+  ctx.save();
+  ctx.translate(boss.x, boss.y);
+  ctx.fillStyle = "#db2777";
+  ctx.beginPath();
+  ctx.moveTo(0, 40);
+  ctx.lineTo(-54, -8);
+  ctx.lineTo(-30, -34);
+  ctx.lineTo(-10, -20);
+  ctx.lineTo(0, -36);
+  ctx.lineTo(10, -20);
+  ctx.lineTo(30, -34);
+  ctx.lineTo(54, -8);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = "#f472b6";
+  ctx.fillRect(-33, -8, 66, 9);
+  ctx.fillStyle = "#fef3c7";
+  ctx.fillRect(-20, 8, 40, 8);
+  ctx.fillStyle = "rgba(15,23,42,.46)";
+  ctx.fillRect(-45, 4, 16, 22);
+  ctx.fillRect(29, 4, 16, 22);
+  ctx.restore();
+}
+
+function drawSpaceShooterPowerup(ctx, powerup) {
+  ctx.save();
+  ctx.translate(powerup.x, powerup.y);
+  ctx.rotate(powerup.phase);
+  const color = powerup.type === "weapon" ? "#86efac" : powerup.type === "shield" ? "#93c5fd" : "#fef08a";
+  const imageKey = powerup.type === "shield" ? "powerupShield" : "powerupWeapon";
+  if (drawSpaceShooterImage(ctx, imageKey, 0, 0, 28, 28)) {
+    ctx.rotate(-powerup.phase);
+    ctx.strokeStyle = color;
+    ctx.beginPath();
+    ctx.arc(0, 0, 16, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
+  ctx.fillStyle = "rgba(15,23,42,.62)";
+  ctx.fillRect(-11, -11, 22, 22);
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(0, 0, 9, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,.72)";
+  ctx.strokeRect(-7, -7, 14, 14);
+  ctx.fillStyle = "#0f172a";
+  ctx.font = "700 9px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(powerup.type === "weapon" ? "W" : powerup.type === "shield" ? "S" : "L", 0, 1);
+  ctx.restore();
+}
+
 function renderSpaceShooterBoard() {
   const canvas = $("space-shooter-board");
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = "#07111f";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = "rgba(255,255,255,.18)";
-  for (let i = 0; i < 54; i += 1) {
-    const x = (i * 67 + (spaceShooterState?.tick || 0) * 2) % canvas.width;
-    const y = (i * 41 + (spaceShooterState?.tick || 0) * 3) % canvas.height;
-    ctx.fillRect(x, y, 2, 2);
-  }
+  drawSpaceShooterBackdrop(ctx, canvas, spaceShooterState);
   if (!spaceShooterState) {
     ctx.fillStyle = "rgba(214,226,240,.75)";
     ctx.font = "16px sans-serif";
@@ -296,57 +635,30 @@ function renderSpaceShooterBoard() {
     ctx.stroke();
     ctx.lineWidth = 1;
   }
-  ctx.fillStyle = "#4d7dff";
-  ctx.beginPath();
-  ctx.moveTo(state.playerX, 430);
-  ctx.lineTo(state.playerX - 18, 470);
-  ctx.lineTo(state.playerX + 18, 470);
-  ctx.closePath();
-  ctx.fill();
+  drawSpaceShooterPlayerShip(ctx, state.playerX, 452, state.tick);
   ctx.fillStyle = "#22c79a";
-  state.bullets.forEach((bullet) => ctx.fillRect(bullet.x - 2, bullet.y - 10, 4, 12));
-  ctx.fillStyle = "#facc15";
+  state.bullets.forEach((bullet) => {
+    if (!drawSpaceShooterImage(ctx, "playerLaser", bullet.x, bullet.y - 4, 10, 24)) {
+      ctx.fillRect(bullet.x - 2, bullet.y - 10, 4, 12);
+    }
+  });
   state.enemyBullets.forEach((bullet) => {
+    const angle = Math.atan2(bullet.vy || 1, bullet.vx || 0) + Math.PI / 2;
+    if (drawSpaceShooterImage(ctx, "enemyLaser", bullet.x, bullet.y, 12, 22, { rotation: angle })) return;
+    ctx.fillStyle = bullet.color || "#facc15";
     ctx.beginPath();
     ctx.arc(bullet.x, bullet.y, 4.5, 0, Math.PI * 2);
     ctx.fill();
   });
-  ctx.fillStyle = "#ff4f6d";
-  state.enemies.forEach((enemy) => {
-    ctx.beginPath();
-    ctx.moveTo(enemy.x, enemy.y + 18);
-    ctx.lineTo(enemy.x - 16, enemy.y - 12);
-    ctx.lineTo(enemy.x + 16, enemy.y - 12);
-    ctx.closePath();
-    ctx.fill();
-  });
+  state.enemies.forEach((enemy) => drawSpaceShooterEnemyShip(ctx, enemy, state.tick));
   if (state.boss) {
-    ctx.fillStyle = "#db2777";
-    ctx.beginPath();
-    ctx.moveTo(state.boss.x, state.boss.y + 34);
-    ctx.lineTo(state.boss.x - 48, state.boss.y - 8);
-    ctx.lineTo(state.boss.x - 24, state.boss.y - 30);
-    ctx.lineTo(state.boss.x + 24, state.boss.y - 30);
-    ctx.lineTo(state.boss.x + 48, state.boss.y - 8);
-    ctx.closePath();
-    ctx.fill();
+    drawSpaceShooterBossShip(ctx, state.boss);
     ctx.fillStyle = "rgba(15,23,42,.78)";
     ctx.fillRect(52, 28, canvas.width - 104, 8);
     ctx.fillStyle = "#fb7185";
     ctx.fillRect(52, 28, (canvas.width - 104) * Math.max(0, state.boss.hp / state.boss.maxHp), 8);
   }
-  state.powerups.forEach((powerup) => {
-    ctx.save();
-    ctx.translate(powerup.x, powerup.y);
-    ctx.rotate(powerup.phase);
-    ctx.fillStyle = powerup.type === "weapon" ? "#86efac" : powerup.type === "shield" ? "#93c5fd" : "#fef08a";
-    ctx.beginPath();
-    ctx.arc(0, 0, 9, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = "rgba(255,255,255,.72)";
-    ctx.strokeRect(-6, -6, 12, 12);
-    ctx.restore();
-  });
+  state.powerups.forEach((powerup) => drawSpaceShooterPowerup(ctx, powerup));
   ctx.fillStyle = "rgba(226,232,240,.84)";
   ctx.font = "12px sans-serif";
   ctx.textAlign = "start";

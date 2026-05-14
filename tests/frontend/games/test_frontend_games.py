@@ -36,6 +36,7 @@ def test_game_zone_frontend_assets_are_wired():
     core_js = (ROOT / "public" / "js" / "00-core.js").read_text(encoding="utf-8")
     bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
     styles_css = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
+    kenney_assets = ROOT / "public" / "assets" / "games" / "vendor" / "kenney"
 
     assert 'id="tab-module-games"' in index_html
     assert 'id="module-games"' in index_html
@@ -68,6 +69,7 @@ def test_game_zone_frontend_assets_are_wired():
     assert 'value="experiment 3:dl"' in index_html
     assert 'value="experiment 4:pv"' in index_html
     assert 'value="experiment 5:nnue"' in index_html
+    assert 'value="stockfish"' not in index_html
     assert 'value="experiment 2:nn"' not in index_html
     assert "實驗 2：NN 小型神經網路" not in index_html
     assert "實驗 3：DL 語義平衡學習" in index_html
@@ -109,7 +111,7 @@ def test_game_zone_frontend_assets_are_wired():
     assert 'id="game-fullscreen-btn"' in index_html
     assert 'id="fps-arena-fullscreen-btn"' in index_html
     assert "/js/three.min.js?v=0.160.0" in index_html
-    assert "/js/41-game-modules.js?v=20260514-open-world" in index_html
+    assert "/js/41-game-modules.js?v=20260514-game-user-scope" in index_html
     assert "/js/games/snake.js?v=20260513-game-modules" in index_html
     assert "/js/games/game-2048.js?v=20260513-game-modules" in index_html
     assert "/js/games/brick-breaker.js?v=20260513-game-modules" in index_html
@@ -171,9 +173,29 @@ def test_game_zone_frontend_assets_are_wired():
     assert "HACKME_GAME_CATALOG" in game_modules_js
     assert "registerHackmeLocalGameModule" in game_modules_js
     assert "HACKME_LOCAL_GAME_HELPERS" in game_modules_js
+    assert (kenney_assets / "README.md").is_file()
+    assert (kenney_assets / "new-platformer-pack" / "LICENSE.txt").is_file()
+    assert (kenney_assets / "new-platformer-pack" / "characters" / "player_idle.png").is_file()
+    assert (kenney_assets / "space-shooter-extension" / "ships" / "player.png").is_file()
+    assert (kenney_assets / "particle-pack" / "transparent" / "spark_05.png").is_file()
+    assert (kenney_assets / "puzzle-pack-2" / "tiles" / "blue_01.png").is_file()
+    assert (kenney_assets / "game-icons" / "LICENSE.txt").is_file()
+    assert (kenney_assets / "game-icons" / "icons" / "white" / "buttonStart.png").is_file()
+    assert (kenney_assets / "game-icons" / "icons" / "white" / "target.png").is_file()
+    assert (kenney_assets / "ui-pack" / "LICENSE.txt").is_file()
+    assert (kenney_assets / "ui-pack" / "widgets" / "arrow_basic_n.png").is_file()
+    assert (kenney_assets / "interface-sounds" / "LICENSE.txt").is_file()
+    assert (kenney_assets / "interface-sounds" / "audio" / "confirmation_001.ogg").is_file()
+    assert (kenney_assets / "impact-sounds" / "LICENSE.txt").is_file()
+    assert (kenney_assets / "impact-sounds" / "audio" / "impactMetal_light_000.ogg").is_file()
     assert "hackmeGameDailyChallenge" in game_modules_js
     assert "createHackmeGameSeededRandom" in game_modules_js
     assert "recordHackmeGameAchievement" in game_modules_js
+    assert "function gameUserStorageScope()" in game_modules_js
+    assert "function gameUserStorageKey(key)" in game_modules_js
+    assert 'window.localStorage?.getItem(gameUserStorageKey(key))' in game_modules_js
+    assert 'window.localStorage?.setItem(gameUserStorageKey(key), JSON.stringify(value))' in game_modules_js
+    assert "userScope: gameUserStorageScope()" in game_modules_js
     assert "state.dailyChallenge?.key || api.key" in game_modules_js
     assert "19 路線上棋盤，目數/眼位結算" in game_modules_js
     assert "完整死活網路評估叫吃、雙眼、假眼、連接、切斷與攻殺" in game_modules_js
@@ -185,11 +207,36 @@ def test_game_zone_frontend_assets_are_wired():
     assert 'registerHackmeLocalGameModule("game_2048"' in local_2048_js
     assert 'registerHackmeLocalGameModule("brick_breaker"' in local_brick_js
     assert 'registerHackmeLocalGameModule("bullet_hell"' in local_bullet_js
+    assert "updateBulletHellBulletPhysics" in local_bullet_js
+    assert "bulletHellBulletVerticalInBounds" in local_bullet_js
+    assert "BULLET_SIDE_WALL_LEFT" in local_bullet_js
+    assert "BULLET_HELL_POWERUP_META" in local_bullet_js
+    assert "nearestBulletHellShotTarget" in local_bullet_js
+    assert "updateBulletHellPlayerShot" in local_bullet_js
+    assert 'powerType = type || (roll < 0.44 ? "power" : roll < 0.62 ? "homing"' in local_bullet_js
+    assert "state.homingLevel = Math.min(3" in local_bullet_js
+    assert "state.optionLevel = Math.min(3" in local_bullet_js
+    assert "吃 P/H/O 禮物提升火力、導航彈與僚機" in local_bullet_js
+    assert 'api.sound?.("uiDrop"' in local_bullet_js
+    assert "state.bullets = state.bullets.filter((bullet) => bulletHellBulletVerticalInBounds(bullet));" in local_bullet_js
     assert 'registerHackmeLocalGameModule("stickman_shooter"' in local_stickman_js
     assert 'registerHackmeLocalGameModule("open_world"' in local_open_world_js
     assert "OPEN_WORLD_MISSIONS" in local_open_world_js
     assert "OPEN_WORLD_BLOCK_CENTERS" in local_open_world_js
+    assert "OPEN_WORLD_DIAGONAL_ROADS" in local_open_world_js
     assert "withinDistance2" in local_open_world_js
+    assert "TRAFFIC_COLLISION_DISTANCE" in local_open_world_js
+    assert "handleOpenWorldTrafficCollision" in local_open_world_js
+    assert "rectTouchesDiagonalCorridor" in local_open_world_js
+    assert "createOpenWorldRoadSegment" in local_open_world_js
+    assert "OPEN_WORLD_ASSET_SOURCES" in local_open_world_js
+    assert "Kenney Graveyard Kit" in local_open_world_js
+    assert "Kenney Blaster Kit" in local_open_world_js
+    assert "Kenney Blocky Characters" in local_open_world_js
+    assert "createOpenWorldBuildingMesh" in local_open_world_js
+    assert "createOpenWorldStreetPropMesh" in local_open_world_js
+    assert "createOpenWorldGroundMaterial" in local_open_world_js
+    assert "createOpenWorldPickupMesh" in local_open_world_js
     assert "disposeOpenWorldState" in local_open_world_js
     assert "chooseTailWaypoint" in local_open_world_js
     assert "createGadgetProjectileMesh" in local_open_world_js
@@ -202,6 +249,24 @@ def test_game_zone_frontend_assets_are_wired():
     assert 'state.status !== "active"' in local_open_world_js
     assert "都市開放世界" in local_open_world_js
     assert "makeStickmanCoopPuzzles" in local_stickman_js
+    assert "makeStickmanScenery" in local_stickman_js
+    assert "drawStickmanScenery" in local_stickman_js
+    assert "drawStickmanPlatform" in local_stickman_js
+    assert "STICKMAN_ASSET_SOURCES" in local_stickman_js
+    assert "STICKMAN_IMAGE_ASSETS" in local_stickman_js
+    assert "drawStickmanImage" in local_stickman_js
+    assert "/assets/games/vendor/kenney/new-platformer-pack/" in local_stickman_js
+    assert "Kenney New Platformer Pack" in local_stickman_js
+    assert "asset-backdrop" in local_stickman_js
+    assert "drawStickmanAssetTile" in local_stickman_js
+    assert "drawStickmanAssetBackdrop" in local_stickman_js
+    assert "asset-tile-cluster" in local_stickman_js
+    assert "container-stack" in local_stickman_js
+    assert "reactor-core" in local_stickman_js
+    assert "skybridge" in local_stickman_js
+    assert "core-chamber" in local_stickman_js
+    assert "type: \"core-node\"" in local_stickman_js
+    assert "scenery: makeStickmanScenery(level)" in local_stickman_js
     assert "STICKMAN_LEVELS" in local_stickman_js
     assert "第 4 關 核心實驗室" in local_stickman_js
     assert "穿甲軌道槍" in local_stickman_js
@@ -249,6 +314,13 @@ def test_game_zone_frontend_assets_are_wired():
     assert "applyRealTetrisStackStability" in local_real_tetris_js
     assert "resolveRealTetrisSettledBlockCollisions" in local_real_tetris_js
     assert "realTetrisBlockElasticImpulse" in local_real_tetris_js
+    assert "realTetrisActiveLockDelay" in local_real_tetris_js
+    assert "shouldLockRealTetrisBody" in local_real_tetris_js
+    assert "supportLockAge" in local_real_tetris_js
+    assert "body.supporting" in local_real_tetris_js
+    assert "realTetrisBodiesCellContact" in local_real_tetris_js
+    assert "realTetrisBodyBounds" in local_real_tetris_js
+    assert "cells: body.cells.map" in local_real_tetris_js
     assert "REAL_TETRIS_ROOT_PHYSICS_KEY" in local_real_tetris_js
     assert 'data-real-tetris-param="elasticity"' in local_real_tetris_js
     assert "stackTorque" in local_real_tetris_js
@@ -257,7 +329,7 @@ def test_game_zone_frontend_assets_are_wired():
     assert "sticky" in local_real_tetris_js
     assert "smooth" in local_real_tetris_js
     assert "body.omega += (rx * ny - ry * nx)" in local_real_tetris_js
-    assert "RELAXED_LINE_FILL = 0.78" in local_real_tetris_js
+    assert "RELAXED_LINE_FILL = 0.9" in local_real_tetris_js
     assert 'api.setSwipeMode?.("hold");' in local_real_tetris_js
     assert 'api.setSwipeMode?.("hold");' in local_brick_js
     assert "showRealTetrisReady(api)" in local_real_tetris_js
@@ -278,6 +350,12 @@ def test_game_zone_frontend_assets_are_wired():
     assert "touchstart" in games_js
     assert "localGameModuleSwipeMode" in games_js
     assert "toggleGameFullscreen" in games_js
+    assert "GAME_SOUND_ASSETS" in games_js
+    assert "playGameSound" in games_js
+    assert "interface-sounds/audio/click_001.ogg" in games_js
+    assert "impact-sounds/audio/impactMetal_light_000.ogg" in games_js
+    assert "sound(name, options = {})" in games_js
+    assert "hackme_game_sounds" in games_js
     assert "dailyChallenge(gameKey = gameSelectedKey)" in games_js
     assert "achievement(gameKey, id, label" in games_js
     assert "showGameDailyRewardFeedback" in games_js
@@ -310,9 +388,45 @@ def test_game_zone_frontend_assets_are_wired():
     assert "refillTetrisBag" in tetris_module_js
     assert 'key: "space_shooter"' in shooter_module_js
     assert "spawnSpaceShooterBoss" in shooter_module_js
+    assert "SPACE_SHOOTER_ENEMY_TYPES" in shooter_module_js
+    assert "SPACE_SHOOTER_ASSET_SOURCES" in shooter_module_js
+    assert "Kenney Space Shooter Extension" in shooter_module_js
+    assert "SPACE_SHOOTER_IMAGE_ASSETS" in shooter_module_js
+    assert "/assets/games/vendor/kenney/space-shooter-extension/" in shooter_module_js
+    assert "drawSpaceShooterBackdrop" in shooter_module_js
+    assert "drawSpaceShooterPlayerShip" in shooter_module_js
+    assert "drawSpaceShooterEnemyShip" in shooter_module_js
+    assert "drawSpaceShooterBossShip" in shooter_module_js
+    assert "drawSpaceShooterPowerup" in shooter_module_js
+    assert "playSpaceShooterSound" in shooter_module_js
+    assert "spawnSpaceShooterEnemy" in shooter_module_js
+    assert "fireSpaceShooterEnemyAttack" in shooter_module_js
+    assert "updateSpaceShooterEnemyDodge" in shooter_module_js
+    assert "updateSpaceShooterEnemies" in shooter_module_js
+    assert "enemy.dodgeUntil" in shooter_module_js
     assert "weaponLevel" in shooter_module_js
     assert "enemyBullets" in shooter_module_js
     assert "powerups" in shooter_module_js
+    assert "BULLET_HELL_IMAGE_ASSETS" in local_bullet_js
+    assert "/assets/games/vendor/kenney/particle-pack/transparent/" in local_bullet_js
+    assert "BRICK_BREAKER_IMAGE_ASSETS" in local_brick_js
+    assert "/assets/games/vendor/kenney/puzzle-pack-2/" in local_brick_js
+    assert "SNAKE_IMAGE_ASSETS" in local_snake_js
+    assert 'api.sound?.("uiTick"' in local_snake_js
+    assert 'api.sound?.(b.boss ? "metalHit" : "woodHit"' in local_brick_js
+    assert 'api.sound?.("uiDrop"' in local_stickman_js
+    assert "REAL_TETRIS_IMAGE_ASSETS" in local_real_tetris_js
+    assert "/assets/games/vendor/kenney/puzzle-pack-2/tiles/" in local_real_tetris_js
+    assert "OPEN_WORLD_TEXTURE_ASSETS" in local_open_world_js
+    assert "/assets/games/vendor/kenney/new-platformer-pack/tiles/terrain_grass_center.png" in local_open_world_js
+    assert "/assets/games/vendor/kenney/puzzle-pack-2/tiles/black_01.png" in local_open_world_js
+    assert 'url("/assets/games/vendor/kenney/puzzle-pack-2/tiles/blue_01.png")' in styles_css
+    assert 'url("/assets/games/vendor/kenney/puzzle-pack-2/tiles/grey_01.png")' in styles_css
+    assert 'url("/assets/games/vendor/kenney/game-icons/icons/white/buttonStart.png")' in styles_css
+    assert 'url("/assets/games/vendor/kenney/game-icons/icons/white/trophy.png")' in styles_css
+    assert 'url("/assets/games/vendor/kenney/ui-pack/widgets/arrow_basic_n.png")' in styles_css
+    assert 'class="game-meta-icon"' in games_js
+    assert 'data-game-meta-icon="target"' in styles_css
     assert 'key: "fps_arena"' in fps_module_js
     assert "currentFpsArenaDifficulty" in fps_module_js
     assert "#fps-arena-mode, #fps-arena-level" in fps_module_js
@@ -397,6 +511,7 @@ def test_game_zone_frontend_assets_are_wired():
     assert "renderChessPracticeDifficultyOptions" in chess_module_js
     assert 'if (difficulty === "experiment 4:pv") return "實驗 4：Policy/Value + MCTS";' in chess_module_js
     assert 'if (difficulty === "experiment 5:nnue") return "實驗 5：NNUE + AlphaBeta/PVS";' in chess_module_js
+    assert 'if (difficulty === "stockfish") return "Stockfish（本機）";' in chess_module_js
     assert 'if (difficulty === "experiment 2:nn") return "實驗 2：NN";' not in chess_module_js
     assert 'if (difficulty === "experiment 3:dl") return "實驗 3：DL 語義平衡";' in chess_module_js
     assert "/games/chess/leaderboard" in chess_module_js
@@ -438,6 +553,13 @@ def test_game_zone_frontend_assets_are_wired():
     assert "startSudokuGame" not in games_js
     assert "按「開始」後才會出現題目並開始計時" in sudoku_module_js
     assert "sudokuState.penaltySeconds += 10" in sudoku_module_js
+    assert "SUDOKU_HINT_LIMIT = 3" in sudoku_module_js
+    assert "SUDOKU_HINT_PENALTY_SECONDS = 60" in sudoku_module_js
+    assert "updateSudokuHintButton" in sudoku_module_js
+    assert "提示已用完，本局請自行完成" in sudoku_module_js
+    assert "提示剩" in sudoku_module_js
+    assert "!sudokuState.hintsUsed" in sudoku_module_js
+    assert "每局提示最多 3 次，每次提示會填入 1 格並加時 60 秒" in index_html
     assert "data-sudoku-index" in sudoku_module_js
     assert "startMinesweeperGame" in minesweeper_module_js
     assert "startOneA2BGame" in onea2b_module_js
@@ -627,3 +749,100 @@ def test_game_zone_frontend_assets_are_wired():
     assert 'class="editor-bg-grid"' in comfyui_workflow_html
     assert "radial-gradient(circle at 18% 8%" in comfyui_workflow_css
     assert "backdrop-filter: blur(12px)" in comfyui_workflow_css
+
+
+def test_all_games_declare_mobile_controls_or_touch_targets():
+    index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
+    styles_css = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
+    games_js = (ROOT / "public" / "js" / "38-games.js").read_text(encoding="utf-8")
+    catalog_js = (ROOT / "public" / "js" / "41-game-modules.js").read_text(encoding="utf-8")
+    chess_js = (ROOT / "public" / "js" / "games" / "chess.js").read_text(encoding="utf-8")
+    sudoku_js = (ROOT / "public" / "js" / "games" / "sudoku.js").read_text(encoding="utf-8")
+    minesweeper_js = (ROOT / "public" / "js" / "games" / "minesweeper.js").read_text(encoding="utf-8")
+    onea2b_js = (ROOT / "public" / "js" / "games" / "onea2b.js").read_text(encoding="utf-8")
+    tetris_js = (ROOT / "public" / "js" / "games" / "tetris.js").read_text(encoding="utf-8")
+    space_shooter_js = (ROOT / "public" / "js" / "games" / "space-shooter.js").read_text(encoding="utf-8")
+    fps_view_js = (ROOT / "public" / "js" / "games" / "fps-arena.js").read_text(encoding="utf-8")
+    fps_js = (ROOT / "public" / "js" / "38-fps-arena.js").read_text(encoding="utf-8")
+    board_shared_js = (ROOT / "public" / "js" / "games" / "board-game-shared.js").read_text(encoding="utf-8")
+    chinese_chess_js = (ROOT / "public" / "js" / "games" / "chinese-chess.js").read_text(encoding="utf-8")
+    local_modules = {
+        "open_world": (ROOT / "public" / "js" / "games" / "open-world.js").read_text(encoding="utf-8"),
+        "bullet_hell": (ROOT / "public" / "js" / "games" / "bullet-hell.js").read_text(encoding="utf-8"),
+        "stickman_shooter": (ROOT / "public" / "js" / "games" / "stickman-shooter.js").read_text(encoding="utf-8"),
+        "real_tetris": (ROOT / "public" / "js" / "games" / "real-tetris.js").read_text(encoding="utf-8"),
+        "snake": (ROOT / "public" / "js" / "games" / "snake.js").read_text(encoding="utf-8"),
+        "game_2048": (ROOT / "public" / "js" / "games" / "game-2048.js").read_text(encoding="utf-8"),
+        "brick_breaker": (ROOT / "public" / "js" / "games" / "brick-breaker.js").read_text(encoding="utf-8"),
+    }
+    expected_games = [
+        "chess", "sudoku", "minesweeper", "1a2b", "tetris", "space_shooter",
+        "fps_arena", "open_world", "bullet_hell", "stickman_shooter",
+        "real_tetris", "snake", "game_2048", "brick_breaker", "reversi",
+        "go", "gomoku", "chinese_chess",
+    ]
+
+    for key in expected_games:
+        assert f'key: "{key}"' in catalog_js
+
+    assert "document.addEventListener(\"pointerdown\"" in games_js
+    assert "document.addEventListener(\"pointerup\"" in games_js
+    assert "document.addEventListener(\"touchstart\"" in games_js
+    assert "document.addEventListener(\"touchend\"" in games_js
+    assert "#local-module-game-controls button" in games_js
+    assert "localGameModuleActiveApi.onControl(control, true)" in games_js
+    assert "onKey({ key, preventDefault() {} }, true)" in games_js
+    assert "@media (max-width: 720px), (pointer: coarse)" in styles_css
+    assert ".game-touch-controls" in styles_css
+    assert ".board-game-grid" in styles_css
+    assert ".arcade-canvas" in styles_css
+
+    for action in [
+        "tetris-left", "tetris-rotate", "tetris-right", "tetris-down", "tetris-hold", "tetris-drop",
+        "shooter-left", "shooter-fire", "shooter-right",
+        "fps-left", "fps-forward", "fps-right", "fps-back", "fps-sprint", "fps-crouch",
+        "fps-prone", "fps-reload", "fps-weapon", "fps-fire",
+    ]:
+        assert f'data-game-touch="{action}"' in index_html
+
+    assert "#tetris-game-panel [data-game-touch]" in tetris_js
+    assert "tetrisHeldTouchAction" in tetris_js
+    assert "pointerdown" in tetris_js
+    assert 'action === "shooter-fire"' in space_shooter_js
+    assert 'String(touchBtn.dataset.gameTouch || "").startsWith("fps-")' in fps_view_js
+    assert "handleFpsArenaTouch" in fps_view_js
+    assert "handleFpsArenaTouchPointerDown" in fps_js
+
+    assert "data-chess-square" in chess_js
+    assert "selectChessSquare(squareBtn.dataset.chessSquare" in games_js
+    assert 'inputmode="numeric"' in sudoku_js
+    assert "data-sudoku-index" in sudoku_js
+    assert ".sudoku-cell" in styles_css
+    assert "data-mine-index" in minesweeper_js
+    assert "minesweeper-flag-mode-btn" in index_html
+    assert "手機可按「插旗模式」切換" in minesweeper_js
+    assert 'id="onea2b-guess-input" inputmode="numeric"' in index_html
+    assert "#onea2b-guess-btn" in onea2b_js
+
+    for key, module_js in local_modules.items():
+        assert f'registerHackmeLocalGameModule("{key}"' in module_js
+        assert "api.setControls" in module_js
+        assert "api.onControl" in module_js
+
+    assert 'api.setSwipeMode?.("hold");' in local_modules["open_world"]
+    assert 'api.setSwipeMode?.("hold");' in local_modules["bullet_hell"]
+    assert 'api.setSwipeMode?.("hold");' in local_modules["stickman_shooter"]
+    assert 'api.setSwipeMode?.("hold");' in local_modules["real_tetris"]
+    assert 'data-hold="fire"' in local_modules["stickman_shooter"]
+    assert 'data-bomb="1"' in local_modules["bullet_hell"]
+    assert 'data-drop="1"' in local_modules["real_tetris"]
+    assert 'data-dir="${t}"' in local_modules["snake"]
+    assert 'data-dir="${t}"' in local_modules["game_2048"]
+    assert 'data-hold="left"' in local_modules["brick_breaker"]
+
+    assert 'button class="board-game-cell' in board_shared_js
+    assert 'data-i="${i}"' in board_shared_js
+    assert "api.root.onclick" in board_shared_js
+    assert 'button class="xiangqi-cell' in chinese_chess_js
+    assert 'data-xiangqi-i="${index}"' in chinese_chess_js
+    assert "api.root.onclick" in chinese_chess_js

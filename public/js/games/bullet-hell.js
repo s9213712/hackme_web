@@ -8,6 +8,73 @@
   const PLAYER_SPEED = 4.6;
   const FOCUS_SPEED = 2.35;
   const BULLET_LIMIT = 360;
+  const BULLET_SIDE_WALL_LEFT = 14;
+  const BULLET_SIDE_WALL_RIGHT = WIDTH - 14;
+  const BULLET_VERTICAL_EXIT_MARGIN = 32;
+  const BULLET_HELL_POWERUP_META = {
+    power: { label: "火力", glyph: "P", color: "#86efac" },
+    homing: { label: "導航", glyph: "H", color: "#c4b5fd" },
+    option: { label: "僚機", glyph: "O", color: "#67e8f9" },
+    bomb: { label: "Bomb", glyph: "B", color: "#93c5fd" },
+    life: { label: "生命", glyph: "L", color: "#fef08a" },
+  };
+  const BULLET_HELL_ASSET_SOURCES = Object.freeze({
+    particlePack: {
+      name: "Kenney Particle Pack",
+      url: "https://kenney.nl/assets/particle-pack",
+      license: "Creative Commons CC0",
+      usage: "bundled PNG sparks, traces, magic glows and bomb shockwaves with canvas fallback",
+    },
+    spaceShooterExtension: {
+      name: "Kenney Space Shooter Extension",
+      url: "https://kenney.nl/assets/space-shooter-extension",
+      license: "Creative Commons CC0",
+      usage: "bundled PNG player, enemy and boss ship silhouettes with canvas fallback",
+    },
+  });
+  const BULLET_HELL_PARTICLE_BASE = "/assets/games/vendor/kenney/particle-pack/transparent/";
+  const BULLET_HELL_SPACE_BASE = "/assets/games/vendor/kenney/space-shooter-extension/";
+  const BULLET_HELL_IMAGE_ASSETS = Object.freeze({
+    player: `${BULLET_HELL_SPACE_BASE}ships/player.png`,
+    enemyFan: `${BULLET_HELL_SPACE_BASE}ships/enemy_striker.png`,
+    enemyRing: `${BULLET_HELL_SPACE_BASE}ships/enemy_gunner.png`,
+    enemySpiral: `${BULLET_HELL_SPACE_BASE}ships/enemy_evader.png`,
+    boss: `${BULLET_HELL_SPACE_BASE}ships/boss.png`,
+    shot: `${BULLET_HELL_PARTICLE_BASE}trace_05_rotated.png`,
+    homing: `${BULLET_HELL_PARTICLE_BASE}magic_03.png`,
+    enemyBullet: `${BULLET_HELL_PARTICLE_BASE}spark_05.png`,
+    powerup: `${BULLET_HELL_PARTICLE_BASE}star_06.png`,
+    bomb: `${BULLET_HELL_PARTICLE_BASE}light_02.png`,
+  });
+  const BULLET_HELL_IMAGES = loadBulletHellImages(BULLET_HELL_IMAGE_ASSETS);
+
+  function loadBulletHellImages(assets) {
+    if (typeof Image === "undefined") return {};
+    return Object.entries(assets).reduce((images, [key, src]) => {
+      const image = new Image();
+      image.decoding = "async";
+      image.src = src;
+      images[key] = image;
+      return images;
+    }, {});
+  }
+
+  function bulletHellImageReady(image) {
+    return Boolean(image?.complete && image.naturalWidth > 0);
+  }
+
+  function drawBulletHellImage(ctx, key, x, y, w, h, options = {}) {
+    const image = BULLET_HELL_IMAGES[key];
+    if (!bulletHellImageReady(image)) return false;
+    ctx.save();
+    ctx.globalAlpha = options.alpha ?? 1;
+    ctx.translate(x, y);
+    if (options.rotation) ctx.rotate(options.rotation);
+    if (options.flipX || options.flipY) ctx.scale(options.flipX ? -1 : 1, options.flipY ? -1 : 1);
+    ctx.drawImage(image, -w / 2, -h / 2, w, h);
+    ctx.restore();
+    return true;
+  }
 
   function distSq(a, b) {
     const dx = a.x - b.x;
@@ -94,24 +161,102 @@
     }
   }
 
+  function updateBulletHellBulletPhysics(bullet) {
+    bullet.x += bullet.vx;
+    bullet.y += bullet.vy;
+    const radius = Number(bullet.r || 0);
+    const left = BULLET_SIDE_WALL_LEFT + radius;
+    const right = BULLET_SIDE_WALL_RIGHT - radius;
+    if (bullet.x < left) {
+      bullet.x = left + (left - bullet.x);
+      bullet.vx = Math.abs(bullet.vx || 0);
+      bullet.wallHits = Number(bullet.wallHits || 0) + 1;
+    } else if (bullet.x > right) {
+      bullet.x = right - (bullet.x - right);
+      bullet.vx = -Math.abs(bullet.vx || 0);
+      bullet.wallHits = Number(bullet.wallHits || 0) + 1;
+    }
+  }
+
+  function bulletHellBulletVerticalInBounds(bullet) {
+    const radius = Number(bullet.r || 0);
+    return bullet.y > -BULLET_VERTICAL_EXIT_MARGIN - radius && bullet.y < HEIGHT + BULLET_VERTICAL_EXIT_MARGIN + radius;
+  }
+
+  function nearestBulletHellShotTarget(state, shot) {
+    const targets = [
+      ...(state.boss ? [state.boss] : []),
+      ...state.enemies,
+    ].filter((target) => target && target.y > -40);
+    return targets.reduce((best, target) => {
+      const dx = target.x - shot.x;
+      const dy = target.y - shot.y;
+      if (dy > 130 || Math.abs(dx) > 180) return best;
+      const score = dx * dx + dy * dy * 0.75;
+      return !best || score < best.score ? { target, score } : best;
+    }, null)?.target || null;
+  }
+
+  function updateBulletHellPlayerShot(state, shot) {
+    if (shot.homing) {
+      const target = nearestBulletHellShotTarget(state, shot);
+      if (target) {
+        const angle = Math.atan2(target.y - shot.y, target.x - shot.x);
+        const speed = Math.hypot(shot.vx || 0, shot.vy || -8.5) || 8.5;
+        shot.vx = (shot.vx || 0) * 0.82 + Math.cos(angle) * speed * 0.18;
+        shot.vy = (shot.vy || -8.5) * 0.82 + Math.sin(angle) * speed * 0.18;
+        shot.track = true;
+      }
+    }
+    shot.x += shot.vx || 0;
+    shot.y += shot.vy;
+  }
+
   function fireBulletHellPlayerShots(state) {
     const level = Math.max(1, Math.min(4, Number(state.shotLevel || 1)));
-    state.shots.push({ x: state.player.x - 7, y: state.player.y - 14, vx: -0.1, vy: -8.8 });
-    state.shots.push({ x: state.player.x + 7, y: state.player.y - 14, vx: 0.1, vy: -8.8 });
-    if (level >= 2) state.shots.push({ x: state.player.x, y: state.player.y - 18, vx: 0, vy: -9.4 });
+    const homing = Math.max(0, Math.min(3, Number(state.homingLevel || 0)));
+    const options = Math.max(0, Math.min(3, Number(state.optionLevel || 0)));
+    state.shots.push({ x: state.player.x - 7, y: state.player.y - 14, vx: -0.1, vy: -8.8, damage: 1, color: "#86efac" });
+    state.shots.push({ x: state.player.x + 7, y: state.player.y - 14, vx: 0.1, vy: -8.8, damage: 1, color: "#86efac" });
+    if (level >= 2) state.shots.push({ x: state.player.x, y: state.player.y - 18, vx: 0, vy: -9.4, damage: 1, color: "#bbf7d0" });
     if (level >= 3) {
-      state.shots.push({ x: state.player.x - 13, y: state.player.y - 10, vx: -0.9, vy: -8.4 });
-      state.shots.push({ x: state.player.x + 13, y: state.player.y - 10, vx: 0.9, vy: -8.4 });
+      state.shots.push({ x: state.player.x - 13, y: state.player.y - 10, vx: -0.9, vy: -8.4, damage: 1, color: "#bbf7d0" });
+      state.shots.push({ x: state.player.x + 13, y: state.player.y - 10, vx: 0.9, vy: -8.4, damage: 1, color: "#bbf7d0" });
     }
     if (level >= 4) {
-      state.shots.push({ x: state.player.x - 20, y: state.player.y - 6, vx: -1.35, vy: -8.1 });
-      state.shots.push({ x: state.player.x + 20, y: state.player.y - 6, vx: 1.35, vy: -8.1 });
+      state.shots.push({ x: state.player.x - 20, y: state.player.y - 6, vx: -1.35, vy: -8.1, damage: 1, color: "#d9f99d" });
+      state.shots.push({ x: state.player.x + 20, y: state.player.y - 6, vx: 1.35, vy: -8.1, damage: 1, color: "#d9f99d" });
+    }
+    for (let i = 0; i < homing; i += 1) {
+      const side = i % 2 === 0 ? -1 : 1;
+      state.shots.push({
+        x: state.player.x + side * (18 + Math.floor(i / 2) * 9),
+        y: state.player.y - 8,
+        vx: side * 1.6,
+        vy: -7.6,
+        damage: 1,
+        homing: true,
+        color: "#c4b5fd",
+      });
+    }
+    for (let i = 0; i < options; i += 1) {
+      const side = i % 2 === 0 ? -1 : 1;
+      const tier = Math.floor(i / 2);
+      state.shots.push({
+        x: state.player.x + side * (28 + tier * 12),
+        y: state.player.y - 20 + tier * 8,
+        vx: side * 0.45,
+        vy: -8.9,
+        damage: 1,
+        option: true,
+        color: "#67e8f9",
+      });
     }
   }
 
   function spawnBulletHellPowerup(state, x, y, type = "") {
     const roll = bulletHellRandom(state);
-    const powerType = type || (roll < 0.62 ? "power" : roll < 0.86 ? "bomb" : "life");
+    const powerType = type || (roll < 0.44 ? "power" : roll < 0.62 ? "homing" : roll < 0.76 ? "option" : roll < 0.91 ? "bomb" : "life");
     state.powerups.push({
       x,
       y,
@@ -123,10 +268,23 @@
   }
 
   function collectBulletHellPowerup(api, state, powerup) {
+    api.sound?.("uiDrop", { volume: 0.13, throttleMs: 140 });
     if (powerup.type === "power") {
       state.shotLevel = Math.min(4, Number(state.shotLevel || 1) + 1);
       state.score += 80;
       if (state.shotLevel >= 4) api.achievement?.("max-power", "彈幕滿火力", "取得火力升級到最高階。");
+      return;
+    }
+    if (powerup.type === "homing") {
+      state.homingLevel = Math.min(3, Number(state.homingLevel || 0) + 1);
+      state.score += 95;
+      if (state.homingLevel >= 3) api.achievement?.("homing-master", "導航彈幕", "取得 3 級導航子彈。");
+      return;
+    }
+    if (powerup.type === "option") {
+      state.optionLevel = Math.min(3, Number(state.optionLevel || 0) + 1);
+      state.score += 110;
+      if (state.optionLevel >= 3) api.achievement?.("option-trio", "僚機展開", "取得 3 個僚機火力。");
       return;
     }
     if (powerup.type === "bomb") {
@@ -185,6 +343,7 @@
     if (!state || state.status === "finished") return;
     state.status = "finished";
     state.completedAt = Date.now();
+    api.sound?.("uiSuccess", { volume: 0.15, throttleMs: 250 });
     clearInterval(state.timer);
     state.timer = null;
     drawBulletHell(state);
@@ -193,9 +352,10 @@
     registerScore(api, Math.round(state.score || 0), state, state.dailyChallenge?.difficulty || "standard");
   }
 
-  function bombBulletHell(state) {
+  function bombBulletHell(state, api = null) {
     if (state.bombs <= 0 || state.status !== "active") return;
     state.bombs -= 1;
+    api?.sound?.("uiDrop", { volume: 0.16, throttleMs: 250 });
     state.score += Math.min(900, state.bullets.length * 5);
     state.bullets = [];
     state.invulnerableUntil = state.tick + 105;
@@ -224,14 +384,8 @@
     if (!state.boss && state.wave >= state.nextBossWave) spawnBulletHellBoss(state);
     if (!state.boss && state.tick % Math.max(28, 82 - Math.floor(state.score / 900) - state.wave * 2) === 0) spawnBulletHellEnemy(state);
 
-    state.shots.forEach((shot) => {
-      shot.x += shot.vx || 0;
-      shot.y += shot.vy;
-    });
-    state.bullets.forEach((bullet) => {
-      bullet.x += bullet.vx;
-      bullet.y += bullet.vy;
-    });
+    state.shots.forEach((shot) => updateBulletHellPlayerShot(state, shot));
+    state.bullets.forEach((bullet) => updateBulletHellBulletPhysics(bullet));
     state.enemies.forEach((enemy) => {
       enemy.phase += 0.035;
       enemy.x += enemy.vx + Math.sin(enemy.phase) * 0.7;
@@ -256,17 +410,17 @@
     for (const shot of state.shots) {
       if (state.boss && shot.y > -20 && distSq(shot, state.boss) < 44 * 44) {
         shot.y = -100;
-        state.boss.hp -= 1;
+        state.boss.hp -= Number(shot.damage || 1);
         state.score += 18;
-        addBulletHellParticles(state, shot.x, shot.y, "#bae6fd", 2);
+        addBulletHellParticles(state, shot.x, shot.y, shot.homing ? "#c4b5fd" : "#bae6fd", 2);
         continue;
       }
       for (const enemy of state.enemies) {
         if (shot.y < -20 || distSq(shot, enemy) > 26 * 26) continue;
         shot.y = -100;
-        enemy.hp -= 1;
+        enemy.hp -= Number(shot.damage || 1);
         state.score += 24;
-        addBulletHellParticles(state, enemy.x, enemy.y, "#22c55e", 3);
+        addBulletHellParticles(state, enemy.x, enemy.y, shot.homing ? "#c4b5fd" : "#22c55e", 3);
       }
     }
     if (state.boss?.hp <= 0) {
@@ -278,7 +432,7 @@
       api.achievement?.("boss-down", "Boss 擊破", "擊破彈幕 Boss。");
       addBulletHellParticles(state, defeated.x, defeated.y, "#fde047", 54);
       spawnBulletHellPowerup(state, defeated.x - 26, defeated.y + 14, "power");
-      spawnBulletHellPowerup(state, defeated.x, defeated.y + 20, "bomb");
+      spawnBulletHellPowerup(state, defeated.x, defeated.y + 20, state.homingLevel >= 2 ? "option" : "homing");
       spawnBulletHellPowerup(state, defeated.x + 26, defeated.y + 14, "power");
     }
     state.enemies = state.enemies.filter((enemy) => {
@@ -308,6 +462,7 @@
       const range = Math.sqrt(distSq(bullet, state.player));
       if (range < hitRadius + bullet.r && state.tick > state.invulnerableUntil) {
         state.lives -= 1;
+        api.sound?.("punch", { volume: 0.15, throttleMs: 180 });
         state.invulnerableUntil = state.tick + 150;
         addBulletHellParticles(state, state.player.x, state.player.y, "#ff4f6d", 28);
         if (state.lives <= 0) {
@@ -322,7 +477,7 @@
     }
 
     if (state.bullets.length > BULLET_LIMIT) state.bullets.splice(0, state.bullets.length - BULLET_LIMIT);
-    state.bullets = state.bullets.filter((bullet) => bullet.x > -24 && bullet.x < WIDTH + 24 && bullet.y > -32 && bullet.y < HEIGHT + 32);
+    state.bullets = state.bullets.filter((bullet) => bulletHellBulletVerticalInBounds(bullet));
     state.shots = state.shots.filter((shot) => shot.y > -30 && shot.x > -30 && shot.x < WIDTH + 30);
     state.particles.forEach((particle) => {
       particle.x += particle.vx;
@@ -332,82 +487,201 @@
     });
     state.particles = state.particles.filter((particle) => particle.life > 0);
     drawBulletHell(state);
-    api.status(`Wave ${state.wave} · 分數 ${Number(Math.round(state.score)).toLocaleString()} · 生命 ${state.lives} · Bomb ${state.bombs} · 火力 ${state.shotLevel} · 擦彈 ${state.graze}`);
+    api.status(`Wave ${state.wave} · 分數 ${Number(Math.round(state.score)).toLocaleString()} · 生命 ${state.lives} · Bomb ${state.bombs} · 火力 ${state.shotLevel} · 導航 ${state.homingLevel || 0} · 僚機 ${state.optionLevel || 0} · 擦彈 ${state.graze}`);
+  }
+
+  function drawBulletHellBackdrop(ctx, state) {
+    const gradient = ctx.createLinearGradient(0, 0, 0, HEIGHT);
+    gradient.addColorStop(0, "#06111f");
+    gradient.addColorStop(0.48, "#17113a");
+    gradient.addColorStop(1, "#06111f");
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, WIDTH, HEIGHT);
+    ctx.strokeStyle = "rgba(56,189,248,.18)";
+    ctx.strokeRect(14, 28, WIDTH - 28, HEIGHT - 42);
+    ctx.strokeStyle = "rgba(168,85,247,.12)";
+    for (let y = 62; y < HEIGHT; y += 44) {
+      ctx.beginPath();
+      ctx.moveTo(24, y + Math.sin((state.tick + y) / 42) * 5);
+      ctx.bezierCurveTo(112, y - 18, 248, y + 18, WIDTH - 24, y + Math.cos((state.tick + y) / 38) * 5);
+      ctx.stroke();
+    }
+    for (let i = 0; i < 86; i += 1) {
+      const x = (i * 47 + state.tick * (0.6 + (i % 4) * 0.22)) % WIDTH;
+      const y = (i * 61 + state.tick * (1.1 + (i % 3) * 0.17)) % HEIGHT;
+      ctx.fillStyle = i % 5 ? "rgba(148,163,184,.16)" : "rgba(244,114,182,.22)";
+      ctx.fillRect(x, y, i % 7 === 0 ? 3 : 2, i % 6 === 0 ? 3 : 2);
+    }
+  }
+
+  function drawBulletHellGlow(ctx, x, y, radius, color, alpha = 0.28) {
+    const gradient = ctx.createRadialGradient(x, y, 0, x, y, radius);
+    gradient.addColorStop(0, `${color}${Math.round(alpha * 255).toString(16).padStart(2, "0")}`);
+    gradient.addColorStop(0.55, `${color}33`);
+    gradient.addColorStop(1, `${color}00`);
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawBulletHellShot(ctx, shot) {
+    ctx.save();
+    ctx.fillStyle = shot.color || "#86efac";
+    if (shot.homing) {
+      drawBulletHellGlow(ctx, shot.x, shot.y - 4, shot.track ? 16 : 10, "#c4b5fd", 0.22);
+      if (drawBulletHellImage(ctx, "homing", shot.x, shot.y - 4, shot.track ? 18 : 14, shot.track ? 18 : 14, { alpha: 0.9 })) {
+        ctx.restore();
+        return;
+      }
+      ctx.beginPath();
+      ctx.arc(shot.x, shot.y - 4, 4.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(196,181,253,.62)";
+      ctx.beginPath();
+      ctx.arc(shot.x, shot.y - 4, shot.track ? 8 : 6, 0, Math.PI * 2);
+      ctx.stroke();
+    } else {
+      drawBulletHellGlow(ctx, shot.x, shot.y - 5, shot.option ? 8 : 12, shot.option ? "#67e8f9" : "#86efac", 0.15);
+      const angle = Math.atan2(shot.vy || -1, shot.vx || 0) + Math.PI / 2;
+      if (drawBulletHellImage(ctx, "shot", shot.x, shot.y - 6, shot.option ? 8 : 11, shot.option ? 22 : 30, { rotation: angle, alpha: 0.86 })) {
+        ctx.restore();
+        return;
+      }
+      ctx.fillRect(shot.x - 2, shot.y - 12, shot.option ? 3 : 4, shot.option ? 11 : 15);
+      ctx.fillStyle = "rgba(255,255,255,.72)";
+      ctx.fillRect(shot.x - 0.8, shot.y - 10, 1.6, shot.option ? 7 : 10);
+    }
+    ctx.restore();
+  }
+
+  function drawBulletHellEnemy(ctx, enemy) {
+    const imageKey = enemy.pattern === "ring" ? "enemyRing" : enemy.pattern === "spiral" ? "enemySpiral" : "enemyFan";
+    if (drawBulletHellImage(ctx, imageKey, enemy.x, enemy.y, 42, 42, {
+      rotation: Math.PI + Math.sin(enemy.phase) * 0.16,
+    })) {
+      ctx.strokeStyle = "rgba(255,255,255,.24)";
+      ctx.beginPath();
+      ctx.arc(enemy.x, enemy.y, enemy.pattern === "ring" ? 22 : 18, 0, Math.PI * 2);
+      ctx.stroke();
+      return;
+    }
+    ctx.save();
+    ctx.translate(enemy.x, enemy.y);
+    ctx.rotate(Math.sin(enemy.phase) * 0.16);
+    const color = enemy.pattern === "ring" ? "#f97316" : enemy.pattern === "spiral" ? "#a78bfa" : "#fb7185";
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(0, 20);
+    ctx.lineTo(-18, -10);
+    ctx.lineTo(-8, -18);
+    ctx.lineTo(0, -8);
+    ctx.lineTo(8, -18);
+    ctx.lineTo(18, -10);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,.62)";
+    ctx.fillRect(-9, -4, 18, 5);
+    ctx.strokeStyle = "rgba(255,255,255,.24)";
+    ctx.beginPath();
+    ctx.arc(0, 0, enemy.pattern === "ring" ? 22 : 18, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawBulletHellBoss(ctx, boss) {
+    drawBulletHellGlow(ctx, boss.x, boss.y, 76 + Math.sin(boss.phase * 2) * 6, "#db2777", 0.2);
+    if (drawBulletHellImage(ctx, "boss", boss.x, boss.y, 108, 80, {
+      rotation: Math.PI + Math.sin(boss.phase) * 0.08,
+    })) return;
+    ctx.save();
+    ctx.translate(boss.x, boss.y);
+    ctx.rotate(Math.sin(boss.phase) * 0.08);
+    ctx.fillStyle = "#db2777";
+    ctx.beginPath();
+    ctx.moveTo(0, 34);
+    ctx.lineTo(-48, 2);
+    ctx.lineTo(-32, -26);
+    ctx.lineTo(-11, -17);
+    ctx.lineTo(0, -34);
+    ctx.lineTo(11, -17);
+    ctx.lineTo(32, -26);
+    ctx.lineTo(48, 2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "#fef3c7";
+    ctx.fillRect(-18, -5, 36, 9);
+    ctx.fillStyle = "rgba(15,23,42,.46)";
+    ctx.fillRect(-37, 0, 14, 20);
+    ctx.fillRect(23, 0, 14, 20);
+    ctx.restore();
+  }
+
+  function drawBulletHellPowerup(ctx, powerup) {
+    const meta = BULLET_HELL_POWERUP_META[powerup.type] || BULLET_HELL_POWERUP_META.power;
+    drawBulletHellGlow(ctx, powerup.x, powerup.y, 22, meta.color, 0.24);
+    const imageKey = powerup.type === "bomb" ? "bomb" : "powerup";
+    if (drawBulletHellImage(ctx, imageKey, powerup.x, powerup.y, powerup.type === "bomb" ? 30 : 24, powerup.type === "bomb" ? 30 : 24, {
+      rotation: powerup.phase,
+      alpha: 0.9,
+    })) {
+      ctx.fillStyle = powerup.type === "life" || powerup.type === "power" ? "#0f172a" : "#f8fafc";
+      ctx.font = "700 10px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(meta.glyph, powerup.x, powerup.y + 4);
+      ctx.textAlign = "start";
+      return;
+    }
+    ctx.save();
+    ctx.translate(powerup.x, powerup.y);
+    ctx.rotate(powerup.phase);
+    ctx.fillStyle = "rgba(15,23,42,.68)";
+    ctx.fillRect(-12, -12, 24, 24);
+    ctx.fillStyle = meta.color;
+    ctx.beginPath();
+    ctx.arc(0, 0, 9, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,.72)";
+    ctx.strokeRect(-7, -7, 14, 14);
+    ctx.fillStyle = powerup.type === "life" || powerup.type === "power" ? "#0f172a" : "#f8fafc";
+    ctx.font = "700 10px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(meta.glyph, 0, 4);
+    ctx.textAlign = "start";
+    ctx.restore();
+  }
+
+  function drawBulletHellEnemyBullet(ctx, bullet) {
+    drawBulletHellGlow(ctx, bullet.x, bullet.y, bullet.r * 3.2, bullet.color || "#fb7185", 0.16);
+    if (drawBulletHellImage(ctx, "enemyBullet", bullet.x, bullet.y, bullet.r * 4.1, bullet.r * 4.1, {
+      rotation: Math.atan2(bullet.vy || 1, bullet.vx || 0),
+      alpha: bullet.wallHits ? 0.95 : 0.82,
+    })) return;
+    ctx.beginPath();
+    ctx.arc(bullet.x, bullet.y, bullet.r, 0, Math.PI * 2);
+    ctx.fillStyle = bullet.color;
+    ctx.fill();
+    ctx.strokeStyle = bullet.wallHits ? "rgba(255,255,255,.72)" : "rgba(255,255,255,.44)";
+    ctx.stroke();
   }
 
   function drawBulletHell(state) {
     const ctx = state.ctx;
     ctx.clearRect(0, 0, WIDTH, HEIGHT);
-    ctx.fillStyle = "#06111f";
-    ctx.fillRect(0, 0, WIDTH, HEIGHT);
-    ctx.fillStyle = "rgba(148,163,184,.16)";
-    for (let i = 0; i < 70; i += 1) {
-      const x = (i * 47 + state.tick * 0.8) % WIDTH;
-      const y = (i * 61 + state.tick * 1.35) % HEIGHT;
-      ctx.fillRect(x, y, 2, 2);
-    }
-    ctx.strokeStyle = "rgba(56,189,248,.2)";
-    ctx.strokeRect(14, 28, WIDTH - 28, HEIGHT - 42);
+    drawBulletHellBackdrop(ctx, state);
 
-    state.shots.forEach((shot) => {
-      ctx.fillStyle = "#86efac";
-      ctx.fillRect(shot.x - 2, shot.y - 12, 4, 15);
-    });
-    state.enemies.forEach((enemy) => {
-      ctx.save();
-      ctx.translate(enemy.x, enemy.y);
-      ctx.rotate(Math.sin(enemy.phase) * 0.16);
-      ctx.fillStyle = enemy.pattern === "ring" ? "#f97316" : enemy.pattern === "spiral" ? "#a78bfa" : "#fb7185";
-      ctx.beginPath();
-      ctx.moveTo(0, 18);
-      ctx.lineTo(-18, -12);
-      ctx.lineTo(18, -12);
-      ctx.closePath();
-      ctx.fill();
-      ctx.restore();
-    });
+    state.shots.forEach((shot) => drawBulletHellShot(ctx, shot));
+    state.enemies.forEach((enemy) => drawBulletHellEnemy(ctx, enemy));
     if (state.boss) {
       const boss = state.boss;
-      ctx.save();
-      ctx.translate(boss.x, boss.y);
-      ctx.rotate(Math.sin(boss.phase) * 0.08);
-      ctx.fillStyle = "#db2777";
-      ctx.beginPath();
-      ctx.moveTo(0, 30);
-      ctx.lineTo(-44, 0);
-      ctx.lineTo(-24, -26);
-      ctx.lineTo(24, -26);
-      ctx.lineTo(44, 0);
-      ctx.closePath();
-      ctx.fill();
-      ctx.fillStyle = "#fef3c7";
-      ctx.fillRect(-16, -4, 32, 8);
-      ctx.restore();
+      drawBulletHellBoss(ctx, boss);
       ctx.fillStyle = "rgba(15,23,42,.74)";
       ctx.fillRect(50, 34, WIDTH - 100, 8);
       ctx.fillStyle = "#f472b6";
       ctx.fillRect(50, 34, (WIDTH - 100) * Math.max(0, boss.hp / boss.maxHp), 8);
     }
-    state.powerups.forEach((powerup) => {
-      ctx.save();
-      ctx.translate(powerup.x, powerup.y);
-      ctx.rotate(powerup.phase);
-      ctx.fillStyle = powerup.type === "power" ? "#86efac" : powerup.type === "bomb" ? "#93c5fd" : "#fef08a";
-      ctx.beginPath();
-      ctx.arc(0, 0, 9, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = "rgba(255,255,255,.7)";
-      ctx.strokeRect(-6, -6, 12, 12);
-      ctx.restore();
-    });
-    state.bullets.forEach((bullet) => {
-      ctx.beginPath();
-      ctx.arc(bullet.x, bullet.y, bullet.r, 0, Math.PI * 2);
-      ctx.fillStyle = bullet.color;
-      ctx.fill();
-      ctx.strokeStyle = "rgba(255,255,255,.44)";
-      ctx.stroke();
-    });
+    state.powerups.forEach((powerup) => drawBulletHellPowerup(ctx, powerup));
+    state.bullets.forEach((bullet) => drawBulletHellEnemyBullet(ctx, bullet));
     state.particles.forEach((particle) => {
       ctx.globalAlpha = Math.max(0, Math.min(1, particle.life / 24));
       ctx.fillStyle = particle.color;
@@ -417,27 +691,33 @@
 
     const flicker = state.tick < state.invulnerableUntil && state.tick % 10 < 5;
     if (!flicker) {
-      ctx.save();
-      ctx.translate(state.player.x, state.player.y);
-      ctx.fillStyle = "#38bdf8";
-      ctx.beginPath();
-      ctx.moveTo(0, -18);
-      ctx.lineTo(-13, 16);
-      ctx.lineTo(0, 9);
-      ctx.lineTo(13, 16);
-      ctx.closePath();
-      ctx.fill();
+      if (!drawBulletHellImage(ctx, "player", state.player.x, state.player.y, 42, 52)) {
+        ctx.save();
+        ctx.translate(state.player.x, state.player.y);
+        ctx.fillStyle = "#38bdf8";
+        ctx.beginPath();
+        ctx.moveTo(0, -18);
+        ctx.lineTo(-13, 16);
+        ctx.lineTo(0, 9);
+        ctx.lineTo(13, 16);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = "#f8fafc";
+        ctx.beginPath();
+        ctx.arc(0, 0, state.keys.focus ? 4.2 : 6.2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
       ctx.fillStyle = "#f8fafc";
       ctx.beginPath();
-      ctx.arc(0, 0, state.keys.focus ? 4.2 : 6.2, 0, Math.PI * 2);
+      ctx.arc(state.player.x, state.player.y, state.keys.focus ? 4.2 : 6.2, 0, Math.PI * 2);
       ctx.fill();
-      ctx.restore();
     }
 
     ctx.fillStyle = "rgba(226,232,240,.86)";
     ctx.font = "12px system-ui, sans-serif";
     ctx.fillText(`wave ${state.wave} score ${Number(Math.round(state.score)).toLocaleString()}`, 18, 20);
-    ctx.fillText(`life ${state.lives} bomb ${state.bombs} power ${state.shotLevel}`, 184, 20);
+    ctx.fillText(`life ${state.lives} bomb ${state.bombs} P${state.shotLevel} H${state.homingLevel || 0} O${state.optionLevel || 0}`, 164, 20);
     if (state.status === "finished") {
       ctx.fillStyle = "rgba(7,17,31,.76)";
       ctx.fillRect(34, 196, WIDTH - 68, 112);
@@ -470,6 +750,8 @@
       wave: 1,
       nextBossWave: 3,
       shotLevel: 1,
+      homingLevel: 0,
+      optionLevel: 0,
       tick: 0,
       invulnerableUntil: 120,
       player: { x: WIDTH / 2, y: PLAYER_Y },
@@ -487,7 +769,7 @@
     };
     api._bulletHellState = state;
     drawBulletHell(state);
-    api.status(`${dailyChallenge?.label || "彈幕開始"}。方向鍵/WASD 移動，Shift 精密移動，X 使用 Bomb。`);
+    api.status(`${dailyChallenge?.label || "彈幕開始"}。方向鍵/WASD 移動，Shift 精密移動，X 使用 Bomb；吃 P/H/O 禮物提升火力、導航彈與僚機。`);
     state.timer = setInterval(() => updateBulletHell(api), 16);
   }
 
@@ -539,7 +821,7 @@
     if (key === "ArrowUp" || key === "w" || key === "W") setBulletHellInput(state, "up", pressed);
     if (key === "ArrowDown" || key === "s" || key === "S") setBulletHellInput(state, "down", pressed);
     if (key === "Shift") setBulletHellInput(state, "focus", pressed);
-    if ((key === "x" || key === "X") && pressed) bombBulletHell(state);
+    if ((key === "x" || key === "X") && pressed) bombBulletHell(state, api);
   }
 
   window.registerHackmeLocalGameModule("bullet_hell", {
@@ -570,7 +852,7 @@
       };
       api.onControl = (target, pressed) => {
         const state = api._bulletHellState;
-        if (target.dataset.bomb && pressed) bombBulletHell(state);
+        if (target.dataset.bomb && pressed) bombBulletHell(state, api);
         setBulletHellInput(state, target.dataset.hold || "", pressed);
       };
       api.onKey = (event, pressed) => handleBulletHellKey(api, event, pressed);

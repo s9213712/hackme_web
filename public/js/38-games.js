@@ -27,6 +27,26 @@ const GAME_MULTIPLAYER_MODES = {
   ],
 };
 let gameMultiplayerSelectedRoomByKey = {};
+const GAME_KENNEY_ASSET_BASE = "/assets/games/vendor/kenney";
+const GAME_SOUND_ASSETS = Object.freeze({
+  uiClick: `${GAME_KENNEY_ASSET_BASE}/interface-sounds/audio/click_001.ogg`,
+  uiSelect: `${GAME_KENNEY_ASSET_BASE}/interface-sounds/audio/select_001.ogg`,
+  uiSuccess: `${GAME_KENNEY_ASSET_BASE}/interface-sounds/audio/confirmation_001.ogg`,
+  uiError: `${GAME_KENNEY_ASSET_BASE}/interface-sounds/audio/error_001.ogg`,
+  uiSwitch: `${GAME_KENNEY_ASSET_BASE}/interface-sounds/audio/switch_001.ogg`,
+  uiTick: `${GAME_KENNEY_ASSET_BASE}/interface-sounds/audio/tick_001.ogg`,
+  uiDrop: `${GAME_KENNEY_ASSET_BASE}/interface-sounds/audio/drop_001.ogg`,
+  uiOpen: `${GAME_KENNEY_ASSET_BASE}/interface-sounds/audio/open_001.ogg`,
+  uiClose: `${GAME_KENNEY_ASSET_BASE}/interface-sounds/audio/close_001.ogg`,
+  hit: `${GAME_KENNEY_ASSET_BASE}/impact-sounds/audio/impactGeneric_light_000.ogg`,
+  metalHit: `${GAME_KENNEY_ASSET_BASE}/impact-sounds/audio/impactMetal_light_000.ogg`,
+  punch: `${GAME_KENNEY_ASSET_BASE}/impact-sounds/audio/impactPunch_medium_000.ogg`,
+  woodHit: `${GAME_KENNEY_ASSET_BASE}/impact-sounds/audio/impactWood_light_000.ogg`,
+  glassHit: `${GAME_KENNEY_ASSET_BASE}/impact-sounds/audio/impactGlass_light_000.ogg`,
+  footstep: `${GAME_KENNEY_ASSET_BASE}/impact-sounds/audio/footstep_concrete_000.ogg`,
+});
+const gameAudioCache = new Map();
+const gameAudioLastPlayedAt = new Map();
 
 function localGameCatalogKeys() {
   const catalog = Array.isArray(window.HACKME_GAME_CATALOG) ? window.HACKME_GAME_CATALOG : [];
@@ -69,6 +89,7 @@ function activeGameViewModule() {
 function legacyGameRuntime() {
   return {
     setGameMsg,
+    sound(name, options = {}) { playGameSound(name, options); },
     gameRequest,
     loadSelectedGameLeaderboard,
     submitSoloGameScore,
@@ -151,6 +172,39 @@ function setGameMsg(text, ok) {
   if (!el) return;
   el.textContent = text || "";
   el.className = text ? "msg show " + (ok ? "ok" : "err") : "msg";
+  if (text) playGameSound(ok ? "uiSuccess" : "uiError", { volume: ok ? 0.16 : 0.2, throttleMs: 350 });
+}
+
+function gameSoundsEnabled() {
+  try {
+    return window.localStorage?.getItem("hackme_game_sounds") !== "off";
+  } catch (err) {
+    return true;
+  }
+}
+
+function playGameSound(name, options = {}) {
+  const src = GAME_SOUND_ASSETS[name] || GAME_SOUND_ASSETS.uiClick;
+  if (!src || typeof Audio === "undefined" || !gameSoundsEnabled()) return;
+  const now = Date.now();
+  const throttleMs = Number(options.throttleMs ?? 80);
+  if (now - Number(gameAudioLastPlayedAt.get(src) || 0) < throttleMs) return;
+  gameAudioLastPlayedAt.set(src, now);
+  try {
+    const pool = gameAudioCache.get(src) || [];
+    let audio = pool.find((item) => item.paused || item.ended);
+    if (!audio) {
+      audio = new Audio(src);
+      audio.preload = "auto";
+      pool.push(audio);
+      gameAudioCache.set(src, pool.slice(-4));
+    }
+    audio.volume = Math.max(0, Math.min(1, Number(options.volume ?? 0.18)));
+    audio.currentTime = 0;
+    audio.play?.().catch(() => {});
+  } catch (err) {
+    // Browsers may block audio until a user gesture; keep gameplay silent instead of failing.
+  }
 }
 
 function gameIcon(key) {
@@ -186,7 +240,7 @@ function gameSubtitle(game) {
   if (game.key === "minesweeper") return "單人推理挑戰";
   if (game.key === "1a2b") return "單人猜數字";
   if (game.key === "tetris") return "高分消除挑戰";
-  if (game.key === "real_tetris") return "剛體物理與放寬消線";
+  if (game.key === "real_tetris") return "剛體物理與 90% 消線";
   if (game.key === "space_shooter") return "高分射擊挑戰";
   if (game.key === "fps_arena") return "3D 射擊訓練 / 合作 / PvP";
   if (game.key === "open_world") return "3D 城市探索 / 駕車任務 / 警戒追逐";
@@ -438,6 +492,7 @@ function createLocalGameModuleApi(key) {
     onAction: null,
     onControl: null,
     onKey: null,
+    sound(name, options = {}) { playGameSound(name, options); },
     setTitle(text) { $("local-module-game-title").textContent = text || ""; },
     status(text) { $("local-module-game-status").textContent = text || ""; },
     setActions(html) { actions.innerHTML = html || ""; },
@@ -870,7 +925,7 @@ function renderGameDailyPanel() {
     <div class="game-daily-missions">
       ${missions.map((mission) => `
         <div class="game-mission-row ${mission.complete ? "complete" : ""}">
-          <span>${mission.complete ? "✓" : mission.dailyIndex || "·"}</span>
+          <span class="game-meta-icon" data-game-meta-icon="${mission.complete ? "check" : "target"}">${mission.complete ? "✓" : mission.dailyIndex || "·"}</span>
           <div><strong>${sanitize(mission.label || mission.id)}</strong><small>${gameMetricText(mission.progress, mission.target)}</small></div>
         </div>
       `).join("") || "<p style=\"color:var(--muted);\">今日沒有任務</p>"}
@@ -888,7 +943,7 @@ function renderGameAchievementsPanel() {
   }
   wrap.innerHTML = rows.slice(0, 8).map((row) => `
     <div class="game-achievement-row ${row.unlocked || row.unlockedAt ? "unlocked" : ""}">
-      <span>${row.unlocked || row.unlockedAt ? "✓" : "○"}</span>
+      <span class="game-meta-icon" data-game-meta-icon="${row.unlocked || row.unlockedAt ? "trophy" : "star"}">${row.unlocked || row.unlockedAt ? "✓" : "○"}</span>
       <div><strong>${sanitize(row.label || row.id)}</strong><small>${sanitize(row.detail || (row.unlockedAt ? formatChatTime(row.unlockedAt) : "尚未解鎖"))}</small></div>
     </div>
   `).join("");
@@ -1115,6 +1170,7 @@ document.addEventListener("click", (event) => {
   }
   const shareBtn = event.target?.closest?.("[data-game-share-text]");
   if (shareBtn) {
+    playGameSound("uiClick", { volume: 0.12 });
     const text = shareBtn.dataset.gameShareText || "";
     if (navigator.clipboard?.writeText) {
       navigator.clipboard.writeText(text).then(
@@ -1128,21 +1184,25 @@ document.addEventListener("click", (event) => {
   }
   const localGameModuleAction = event.target?.closest?.("#local-module-game-panel [data-action]");
   if (localGameModuleAction && localGameModuleActiveApi?.onAction) {
+    playGameSound(localGameModuleAction.dataset.action === "pause" ? "uiSwitch" : "uiClick", { volume: 0.12 });
     localGameModuleActiveApi.onAction(localGameModuleAction.dataset.action || "");
     return;
   }
   const multiplayerInviteBtn = event.target?.closest?.("#game-multiplayer-invite-btn");
   if (multiplayerInviteBtn) {
+    playGameSound("uiOpen", { volume: 0.12 });
     createGameMultiplayerInvite();
     return;
   }
   const multiplayerInviteAction = event.target?.closest?.("[data-game-mp-invite]");
   if (multiplayerInviteAction) {
+    playGameSound(multiplayerInviteAction.dataset.gameMpAction === "reject" ? "uiClose" : "uiClick", { volume: 0.12 });
     reviewGameMultiplayerInvite(multiplayerInviteAction.dataset.gameMpInvite, multiplayerInviteAction.dataset.gameMpAction || "accept");
     return;
   }
   const multiplayerRoomBtn = event.target?.closest?.("[data-game-mp-room]");
   if (multiplayerRoomBtn) {
+    playGameSound("uiSelect", { volume: 0.12 });
     gameMultiplayerSelectedRoomByKey[gameSelectedKey] = Number(multiplayerRoomBtn.dataset.gameMpRoom || 0);
     renderGameMultiplayerPanel();
     window.dispatchEvent(new CustomEvent("hackme:game-multiplayer-updated", { detail: { gameKey: gameSelectedKey } }));
@@ -1151,11 +1211,13 @@ document.addEventListener("click", (event) => {
   }
   const multiplayerStartBtn = event.target?.closest?.("[data-game-mp-start]");
   if (multiplayerStartBtn) {
+    playGameSound("uiClick", { volume: 0.12 });
     startGameMultiplayerRoom(multiplayerStartBtn.dataset.gameMpStart);
     return;
   }
   const catalogBtn = event.target?.closest?.("[data-game-key]");
   if (catalogBtn) {
+    playGameSound("uiSelect", { volume: 0.12 });
     switchGameView(catalogBtn.dataset.gameKey || "chess");
     return;
   }
@@ -1229,6 +1291,7 @@ document.addEventListener("pointerdown", (event) => {
   const control = event.target?.closest?.("#local-module-game-controls button");
   if (!control || !localGameModuleActiveApi?.onControl) return;
   event.preventDefault();
+  playGameSound(control.dataset.hold ? "uiSwitch" : "uiClick", { volume: 0.1, throttleMs: 40 });
   localGameModulePressedControl = control;
   localGameModuleActiveApi.onControl(control, true);
 });
@@ -1321,10 +1384,12 @@ document.addEventListener("change", (event) => {
   const gameSelect = event.target?.closest?.("#game-select");
   if (gameSelect) {
     const key = gameSelect.value || "chess";
+    playGameSound("uiSelect", { volume: 0.12 });
     switchGameView(key);
     return;
   }
   if (event.target?.closest?.("#game-multiplayer-mode")) {
+    playGameSound("uiSwitch", { volume: 0.12 });
     renderGameMultiplayerPanel();
     return;
   }

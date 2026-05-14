@@ -9,6 +9,14 @@ const TETRIS_COLS = 10;
 const TETRIS_ROWS = 20;
 const TETRIS_SIDE_REPEAT_MS = 82;
 const TETRIS_SOFT_DROP_MS = 46;
+const TETRIS_ASSET_SOURCES = Object.freeze({
+  puzzlePack: {
+    name: "Kenney Puzzle Pack 2",
+    url: "https://kenney.nl/assets/puzzle-pack-2",
+    license: "Creative Commons CC0",
+    usage: "bundled PNG tile skins applied through CSS with color fallback",
+  },
+});
 const TETRIS_PIECES = {
   I: [[1, 1, 1, 1]],
   O: [[1, 1], [1, 1]],
@@ -343,6 +351,7 @@ function tetrisPieceLabel(piece) {
 function renderTetrisBoard() {
   const board = $("tetris-board");
   if (!board) return;
+  board.dataset.assetTheme = "kenney-puzzle-pack";
   if (!tetrisState) {
     board.innerHTML = '<div class="single-game-placeholder">按「開始」後開始落方塊。</div>';
     return;

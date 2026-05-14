@@ -2,25 +2,189 @@
 
 (function () {
   const { makeCtx, registerScore } = window.HACKME_LOCAL_GAME_HELPERS;
-window.registerHackmeLocalGameModule("snake", {
+  const SNAKE_ASSET_SOURCES = Object.freeze({
+    platformer: {
+      name: "Kenney New Platformer Pack",
+      url: "https://kenney.nl/assets/new-platformer-pack",
+      license: "Creative Commons CC0",
+      usage: "bundled PNG terrain, rock, mushroom, coin and star-like pickup tiles with canvas fallback",
+    },
+  });
+  const SNAKE_ASSET_BASE = "/assets/games/vendor/kenney/new-platformer-pack/";
+  const SNAKE_IMAGE_ASSETS = Object.freeze({
+    grass: `${SNAKE_ASSET_BASE}tiles/terrain_grass_center.png`,
+    grassTop: `${SNAKE_ASSET_BASE}tiles/terrain_grass_top.png`,
+    water: `${SNAKE_ASSET_BASE}tiles/water.png`,
+    rock: `${SNAKE_ASSET_BASE}tiles/rock.png`,
+    food: `${SNAKE_ASSET_BASE}tiles/mushroom_red.png`,
+    powerup: `${SNAKE_ASSET_BASE}tiles/coin_gold.png`,
+    head: `${SNAKE_ASSET_BASE}tiles/gem_blue.png`,
+    body: `${SNAKE_ASSET_BASE}tiles/gem_red.png`,
+  });
+  const SNAKE_IMAGES = loadSnakeImages(SNAKE_IMAGE_ASSETS);
+
+  function loadSnakeImages(assets) {
+    if (typeof Image === "undefined") return {};
+    return Object.entries(assets).reduce((images, [key, src]) => {
+      const image = new Image();
+      image.decoding = "async";
+      image.src = src;
+      images[key] = image;
+      return images;
+    }, {});
+  }
+
+  function snakeImageReady(image) {
+    return Boolean(image?.complete && image.naturalWidth > 0);
+  }
+
+  function drawSnakeImage(ctx, key, x, y, w, h, options = {}) {
+    const image = SNAKE_IMAGES[key];
+    if (!snakeImageReady(image)) return false;
+    ctx.save();
+    ctx.globalAlpha = options.alpha ?? 1;
+    ctx.translate(x + w / 2, y + h / 2);
+    if (options.rotation) ctx.rotate(options.rotation);
+    ctx.drawImage(image, -w / 2, -h / 2, w, h);
+    ctx.restore();
+    return true;
+  }
+
+  function drawSnakeTiledImage(ctx, key, x, y, w, h, tileSize = 20, options = {}) {
+    const image = SNAKE_IMAGES[key];
+    if (!snakeImageReady(image)) return false;
+    ctx.save();
+    ctx.globalAlpha = options.alpha ?? 1;
+    for (let py = y; py < y + h; py += tileSize) {
+      for (let px = x; px < x + w; px += tileSize) {
+        ctx.drawImage(image, px, py, Math.min(tileSize, x + w - px), Math.min(tileSize, y + h - py));
+      }
+    }
+    ctx.restore();
+    return true;
+  }
+
+  function drawSnakeBackground(ctx) {
+    const gradient = ctx.createLinearGradient(0, 0, 0, 360);
+    gradient.addColorStop(0, "#07111f");
+    gradient.addColorStop(1, "#10291e");
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, 360, 360);
+    drawSnakeTiledImage(ctx, "grass", 0, 0, 360, 360, 20, { alpha: 0.28 });
+    for (let y = 0; y < 18; y += 1) {
+      for (let x = 0; x < 18; x += 1) {
+        ctx.fillStyle = (x + y) % 2 ? "rgba(34,197,94,.055)" : "rgba(34,197,94,.095)";
+        ctx.fillRect(x * 20, y * 20, 20, 20);
+      }
+    }
+  }
+
+  function drawSnakeTile(ctx, x, y, fill, top = "rgba(255,255,255,.22)") {
+    const px = x * 20 + 2;
+    const py = y * 20 + 2;
+    ctx.fillStyle = fill;
+    ctx.fillRect(px, py, 16, 16);
+    ctx.fillStyle = top;
+    ctx.fillRect(px + 2, py + 2, 12, 3);
+    ctx.fillStyle = "rgba(15,23,42,.22)";
+    ctx.fillRect(px + 2, py + 13, 12, 2);
+  }
+
+  function drawSnakeRock(ctx, x, y) {
+    if (drawSnakeImage(ctx, "rock", x * 20 + 1, y * 20 + 1, 18, 18)) return;
+    const px = x * 20 + 10;
+    const py = y * 20 + 10;
+    ctx.fillStyle = "#64748b";
+    ctx.beginPath();
+    ctx.ellipse(px, py + 2, 8, 6, -0.25, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "rgba(226,232,240,.22)";
+    ctx.beginPath();
+    ctx.ellipse(px - 3, py, 3, 2, -0.4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawSnakeFood(ctx, food) {
+    if (drawSnakeImage(ctx, "food", food[0] * 20 + 1, food[1] * 20 + 1, 18, 18)) return;
+    const x = food[0] * 20 + 10;
+    const y = food[1] * 20 + 10;
+    ctx.fillStyle = "#f97316";
+    ctx.beginPath();
+    ctx.arc(x, y + 1, 7, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#86efac";
+    ctx.beginPath();
+    ctx.ellipse(x + 4, y - 6, 4, 2.5, -0.55, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawSnakePowerup(ctx, powerup, tick = 0) {
+    const x = powerup[0] * 20 + 10;
+    const y = powerup[1] * 20 + 10;
+    ctx.fillStyle = `rgba(250,204,21,${0.16 + Math.sin(tick / 8) * 0.05})`;
+    ctx.beginPath();
+    ctx.arc(x, y, 13, 0, Math.PI * 2);
+    ctx.fill();
+    if (drawSnakeImage(ctx, "powerup", x - 9, y - 9, 18, 18, { rotation: tick / 18 })) return;
+    ctx.fillStyle = "#facc15";
+    ctx.beginPath();
+    ctx.moveTo(x, y - 8);
+    ctx.lineTo(x + 3, y - 2);
+    ctx.lineTo(x + 9, y - 2);
+    ctx.lineTo(x + 4, y + 2);
+    ctx.lineTo(x + 6, y + 9);
+    ctx.lineTo(x, y + 5);
+    ctx.lineTo(x - 6, y + 9);
+    ctx.lineTo(x - 4, y + 2);
+    ctx.lineTo(x - 9, y - 2);
+    ctx.lineTo(x - 3, y - 2);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function drawSnakeSegment(ctx, segment, index, dir) {
+    const [x, y] = segment;
+    if (drawSnakeImage(ctx, index ? "body" : "head", x * 20 + 2, y * 20 + 2, 16, 16, {
+      rotation: index ? 0 : Math.atan2(dir[1], dir[0]),
+      alpha: index ? 0.82 : 0.95,
+    })) return;
+    drawSnakeTile(ctx, x, y, index ? "#16a34a" : "#86efac", index ? "rgba(187,247,208,.28)" : "rgba(15,23,42,.18)");
+    if (index === 0) {
+      const cx = x * 20 + 10;
+      const cy = y * 20 + 10;
+      ctx.fillStyle = "#0f172a";
+      const eyeOffsetX = dir[0] ? dir[0] * 4 : 3;
+      const eyeOffsetY = dir[1] ? dir[1] * 4 : -3;
+      ctx.beginPath();
+      ctx.arc(cx + eyeOffsetX, cy + eyeOffsetY, 1.8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(cx - (dir[0] ? 0 : 3), cy + (dir[1] ? 0 : -3), 1.8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  window.registerHackmeLocalGameModule("snake", {
     mount(api) {
       makeCtx(api, "貪食蛇");
       const size = 18;
-      const state = { startedAt: 0, dir: [1, 0], next: [1, 0], snake: [], food: [8, 8], powerup: [12, 6], obstacles: [], score: 0, timer: null, over: true, maxLength: 0, powerupsCollected: 0, speedZoneTouched: false, dailyChallenge: null };
+      const state = { startedAt: 0, dir: [1, 0], next: [1, 0], snake: [], food: [8, 8], powerup: [12, 6], obstacles: [], score: 0, timer: null, over: true, maxLength: 0, powerupsCollected: 0, speedZoneTouched: false, tick: 0, dailyChallenge: null };
       api.root.innerHTML = `<canvas class="arcade-canvas" width="360" height="360" aria-label="貪食蛇"></canvas>`;
       api.setControls(["左", "上", "下", "右"].map((t) => `<button class="btn game-mini-btn" data-dir="${t}">${t}</button>`).join(""));
       const canvas = api.root.querySelector("canvas");
       const ctx = canvas.getContext("2d");
       const draw = () => {
-        ctx.fillStyle = "#07111f"; ctx.fillRect(0, 0, 360, 360);
-        ctx.fillStyle = "#22c55e";
-        ctx.fillStyle = "rgba(56,189,248,.18)"; ctx.fillRect(2 * 20, 2 * 20, 5 * 20, 3 * 20);
-        ctx.fillStyle = "#64748b";
-        state.obstacles.forEach(([x, y]) => { ctx.fillRect(x * 20 + 2, y * 20 + 2, 16, 16); });
-        ctx.fillStyle = "#22c55e";
-        state.snake.forEach(([x, y], i) => { ctx.fillStyle = i ? "#16a34a" : "#86efac"; ctx.fillRect(x * 20 + 2, y * 20 + 2, 16, 16); });
-        ctx.fillStyle = "#f97316"; ctx.fillRect(state.food[0] * 20 + 3, state.food[1] * 20 + 3, 14, 14);
-        ctx.fillStyle = "#facc15"; ctx.beginPath(); ctx.arc(state.powerup[0] * 20 + 10, state.powerup[1] * 20 + 10, 7, 0, Math.PI * 2); ctx.fill();
+        drawSnakeBackground(ctx);
+        if (!drawSnakeTiledImage(ctx, "water", 2 * 20, 2 * 20, 5 * 20, 3 * 20, 20, { alpha: 0.42 })) {
+          ctx.fillStyle = "rgba(56,189,248,.18)";
+          ctx.fillRect(2 * 20, 2 * 20, 5 * 20, 3 * 20);
+        }
+        ctx.strokeStyle = "rgba(103,232,249,.34)";
+        ctx.strokeRect(2 * 20 + 2, 2 * 20 + 2, 5 * 20 - 4, 3 * 20 - 4);
+        state.obstacles.forEach(([x, y]) => drawSnakeRock(ctx, x, y));
+        state.snake.forEach((segment, i) => drawSnakeSegment(ctx, segment, i, state.dir));
+        drawSnakeFood(ctx, state.food);
+        drawSnakePowerup(ctx, state.powerup, state.tick);
       };
       const drawGameOver = () => {
         ctx.fillStyle = "rgba(7,17,31,.78)";
@@ -44,6 +208,7 @@ window.registerHackmeLocalGameModule("snake", {
         while (blocked(state.powerup) || (state.food[0] === state.powerup[0] && state.food[1] === state.powerup[1]));
       };
       const tick = () => {
+        state.tick += 1;
         state.dir = state.next;
         const head = state.snake[0];
         const next = [head[0] + state.dir[0], head[1] + state.dir[1]];
@@ -51,6 +216,7 @@ window.registerHackmeLocalGameModule("snake", {
           state.over = true;
           clearInterval(state.timer);
           state.timer = null;
+          api.sound?.("uiError", { volume: 0.16, throttleMs: 250 });
           draw();
           drawGameOver();
           registerScore(api, state.score, state, state.dailyChallenge?.difficulty || "standard");
@@ -58,9 +224,10 @@ window.registerHackmeLocalGameModule("snake", {
           return;
         }
         state.snake.unshift(next);
-        if (next[0] === state.food[0] && next[1] === state.food[1]) { state.score += 10; placeFood(); }
+        if (next[0] === state.food[0] && next[1] === state.food[1]) { state.score += 10; api.sound?.("uiTick", { volume: 0.1, throttleMs: 80 }); placeFood(); }
         else if (next[0] === state.powerup[0] && next[1] === state.powerup[1]) {
           state.score += 50;
+          api.sound?.("uiDrop", { volume: 0.14, throttleMs: 140 });
           state.powerupsCollected += 1;
           api.achievement?.("powerup", "道具吞食", "吃到任務道具。");
           api.mission?.("powerup", state.powerupsCollected, 1, "吃到道具");
@@ -81,7 +248,7 @@ window.registerHackmeLocalGameModule("snake", {
       };
       const start = () => {
         clearInterval(state.timer);
-        Object.assign(state, { startedAt: Date.now(), dir: [1, 0], next: [1, 0], snake: [[5, 9], [4, 9], [3, 9]], score: 0, over: false, maxLength: 3, powerupsCollected: 0, speedZoneTouched: false, dailyChallenge: api.dailyChallenge?.() || null });
+        Object.assign(state, { startedAt: Date.now(), dir: [1, 0], next: [1, 0], snake: [[5, 9], [4, 9], [3, 9]], score: 0, over: false, maxLength: 3, powerupsCollected: 0, speedZoneTouched: false, tick: 0, dailyChallenge: api.dailyChallenge?.() || null });
         state.obstacles = [[9, 7], [10, 7], [11, 7], [7, 12], [7, 13], [13, 4], [14, 4]];
         placeFood(); placePowerup(); draw(); state.timer = setInterval(tick, 120);
       };

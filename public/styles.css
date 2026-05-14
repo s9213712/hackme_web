@@ -1456,6 +1456,7 @@
       box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
     }
 
+    .comfyui-subtab[hidden],
     .comfyui-subview[hidden] {
       display: none !important;
     }
@@ -2477,9 +2478,125 @@
       overflow-wrap: anywhere;
     }
 
+    .drive-share-result {
+      margin-top: .7rem;
+      padding: .75rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--panel) 88%, var(--accent) 12%);
+      overflow-wrap: anywhere;
+    }
+
     .share-center-countdown {
       color: #7ee787;
       font-weight: 700;
+    }
+
+    .share-center-tabs {
+      display: inline-flex;
+      align-items: center;
+      gap: .35rem;
+      padding: .25rem;
+      margin: .15rem 0 .75rem;
+      border: 1px solid rgba(255,255,255,.10);
+      border-radius: 8px;
+      background: rgba(0,0,0,.16);
+    }
+
+    .share-center-panel {
+      display: grid;
+      gap: .75rem;
+    }
+
+    .video-manage-row {
+      align-items: stretch;
+    }
+
+    .video-manage-main {
+      min-width: 0;
+      display: grid;
+      gap: .55rem;
+      flex: 1;
+    }
+
+    .video-manage-head,
+    .video-manage-metrics {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: .35rem .5rem;
+    }
+
+    .video-manage-fields {
+      display: grid;
+      grid-template-columns: minmax(180px, 1fr) minmax(130px, .45fr) minmax(220px, 1.25fr);
+      gap: .55rem;
+      align-items: start;
+    }
+
+    .video-manage-fields .field {
+      margin: 0;
+    }
+
+    .video-manage-fields .field > span {
+      display: block;
+      margin-bottom: .25rem;
+      color: var(--muted);
+      font-size: .72rem;
+    }
+
+    .video-manage-fields input,
+    .video-manage-fields select,
+    .video-manage-fields textarea,
+    .video-manage-boost-control input {
+      width: 100%;
+      min-width: 0;
+    }
+
+    .video-manage-fields textarea {
+      resize: vertical;
+      min-height: 2.35rem;
+    }
+
+    .video-manage-metrics span {
+      display: inline-flex;
+      align-items: center;
+      min-height: 1.55rem;
+      padding: .16rem .42rem;
+      border: 1px solid rgba(255,255,255,.10);
+      border-radius: 999px;
+      color: var(--muted);
+      background: rgba(255,255,255,.04);
+      font-size: .74rem;
+      white-space: nowrap;
+    }
+
+    .video-manage-actions {
+      align-content: flex-start;
+      max-width: 240px;
+    }
+
+    .video-manage-boost-control {
+      display: grid;
+      grid-template-columns: minmax(76px, 1fr) auto;
+      gap: .35rem;
+      align-items: center;
+      width: 100%;
+    }
+
+    @media (max-width: 760px) {
+      .video-manage-row {
+        display: grid;
+      }
+
+      .video-manage-fields {
+        grid-template-columns: 1fr;
+      }
+
+      .video-manage-actions {
+        max-width: none;
+        width: 100%;
+      }
     }
 
     .share-center-event-list {
@@ -3505,6 +3622,72 @@
       overflow: hidden;
     }
 
+    .module-section {
+      position: relative;
+    }
+
+    .root-module-settings-btn {
+      position: absolute;
+      top: .55rem;
+      right: .6rem;
+      z-index: 35;
+      width: 2.05rem;
+      height: 2.05rem;
+      display: none;
+      place-items: center;
+      border: 1px solid rgba(148, 163, 184, .34);
+      clip-path: polygon(24% 5%, 76% 5%, 100% 50%, 76% 95%, 24% 95%, 0 50%);
+      background: color-mix(in srgb, var(--panel) 86%, var(--accent) 14%);
+      color: var(--text);
+      box-shadow: 0 8px 22px rgba(0, 0, 0, .24);
+      cursor: pointer;
+      font-size: .95rem;
+      line-height: 1;
+      transition: transform .12s ease, border-color .12s ease, background .12s ease;
+    }
+
+    .root-module-settings-btn.show {
+      display: grid;
+    }
+
+    .module-section > .root-module-settings-btn.show + .admin-tools > .drive-card-heading:first-child {
+      padding-right: 2.85rem;
+    }
+
+    .root-module-settings-btn:hover,
+    .root-module-settings-btn:focus {
+      border-color: color-mix(in srgb, var(--accent) 70%, white 10%);
+      background: color-mix(in srgb, var(--panel) 72%, var(--accent) 28%);
+      transform: translateY(-1px);
+      outline: none;
+    }
+
+    .root-module-settings-overlay {
+      z-index: 1220;
+    }
+
+    .root-module-settings-modal {
+      width: min(640px, calc(100vw - 2.4rem));
+    }
+
+    .root-module-settings-note {
+      margin: .6rem 0 .75rem;
+      color: var(--muted);
+      font-size: .8rem;
+      line-height: 1.45;
+    }
+
+    .root-module-settings-grid {
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      max-height: min(58vh, 520px);
+      overflow: auto;
+      padding-right: .15rem;
+    }
+
+    .root-module-setting-field {
+      min-width: 0;
+    }
+
     .album-full-preview-topbar {
       display: flex;
       align-items: center;
@@ -3816,6 +3999,16 @@
     .msg.show { display: block; }
     .msg.ok   { background: rgba(0,212,170,.18); color: var(--accent2); border: 1px solid rgba(0,212,170,.35); }
     .msg.err  { background: rgba(255,79,109,.18); color: var(--danger); border: 1px solid rgba(255,79,109,.35); }
+    .msg.info { background: rgba(110,168,254,.16); color: #cfe0ff; border: 1px solid rgba(110,168,254,.32); }
+    .action-feedback {
+      flex: 1 0 100%;
+      width: 100%;
+      margin-top: .35rem;
+      padding: .45rem .6rem;
+      text-align: left;
+      font-size: .78rem;
+      line-height: 1.35;
+    }
     .trading-inline-msg {
       margin-top: .55rem;
       margin-bottom: .65rem;
@@ -4518,6 +4711,10 @@
       position: relative;
     }
 
+    .user-edit-modal .msg {
+      margin: .65rem 0 .85rem;
+    }
+
     .user-edit-modal input,
     .user-edit-modal select,
     .user-edit-modal textarea {
@@ -5085,6 +5282,107 @@
       padding: .28rem .48rem;
       font-size: .75rem;
       min-height: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: .32rem;
+      white-space: nowrap;
+    }
+    .game-mini-btn::before {
+      content: "";
+      display: none;
+      width: .95em;
+      height: .95em;
+      flex: 0 0 auto;
+      background: currentColor;
+      -webkit-mask: var(--game-btn-icon) center / contain no-repeat;
+      mask: var(--game-btn-icon) center / contain no-repeat;
+      opacity: .92;
+    }
+    .game-mini-btn[data-action],
+    .game-mini-btn[data-hold],
+    .game-mini-btn[data-dir],
+    .game-mini-btn[data-drop],
+    .game-mini-btn[data-bomb],
+    .game-mini-btn[data-jump],
+    .game-mini-btn[data-reload],
+    .game-mini-btn[data-open-world-control],
+    .game-mini-btn[data-real-tetris-reset],
+    .game-mini-btn[data-game-share-text],
+    .game-mini-btn[data-game-mp-action],
+    .game-mini-btn[data-game-invite-action],
+    .game-mini-btn[data-game-mp-room],
+    .game-mini-btn[data-game-mp-start] {
+      --game-btn-icon: url("/assets/games/vendor/kenney/game-icons/icons/white/gamepad.png");
+    }
+    .game-mini-btn:is(
+      [data-action],
+      [data-hold],
+      [data-dir],
+      [data-drop],
+      [data-bomb],
+      [data-jump],
+      [data-reload],
+      [data-open-world-control],
+      [data-real-tetris-reset],
+      [data-game-share-text],
+      [data-game-mp-action],
+      [data-game-invite-action],
+      [data-game-mp-room],
+      [data-game-mp-start]
+    )::before {
+      display: inline-block;
+    }
+    .game-mini-btn:is([data-action="new"], [data-game-mp-start]) {
+      --game-btn-icon: url("/assets/games/vendor/kenney/game-icons/icons/white/buttonStart.png");
+    }
+    .game-mini-btn[data-action="pause"] {
+      --game-btn-icon: url("/assets/games/vendor/kenney/game-icons/icons/white/pause.png");
+    }
+    .game-mini-btn:is([data-action="finish"], [data-action="resign"]) {
+      --game-btn-icon: url("/assets/games/vendor/kenney/game-icons/icons/white/trophy.png");
+    }
+    .game-mini-btn:is([data-action="hint"], [data-action="mission"], [data-open-world-control="mission"], [data-open-world-control="gadget"], [data-hold="fire"], [data-bomb]) {
+      --game-btn-icon: url("/assets/games/vendor/kenney/game-icons/icons/white/target.png");
+    }
+    .game-mini-btn:is([data-action="mode"], [data-action="side"], [data-action="coop"], [data-game-mp-room]) {
+      --game-btn-icon: url("/assets/games/vendor/kenney/game-icons/icons/white/multiplayer.png");
+    }
+    .game-mini-btn:is([data-action="difficulty"], [data-action="level"]) {
+      --game-btn-icon: url("/assets/games/vendor/kenney/game-icons/icons/white/star.png");
+    }
+    .game-mini-btn:is([data-action="clock"], [data-action="clock-preset"], [data-action="vehicle"], [data-open-world-control="vehicle"], [data-real-tetris-reset]) {
+      --game-btn-icon: url("/assets/games/vendor/kenney/game-icons/icons/white/gear.png");
+    }
+    .game-mini-btn:is([data-action="forbidden"], [data-action="pass"]) {
+      --game-btn-icon: url("/assets/games/vendor/kenney/game-icons/icons/white/warning.png");
+    }
+    .game-mini-btn[data-action="undo"] {
+      --game-btn-icon: url("/assets/games/vendor/kenney/ui-pack/icons/icon_repeat_light.png");
+    }
+    .game-mini-btn:is([data-game-share-text]) {
+      --game-btn-icon: url("/assets/games/vendor/kenney/game-icons/icons/white/share1.png");
+    }
+    .game-mini-btn:is([data-game-mp-action="accept"], [data-game-invite-action="accept"]) {
+      --game-btn-icon: url("/assets/games/vendor/kenney/game-icons/icons/white/checkmark.png");
+    }
+    .game-mini-btn:is([data-game-mp-action="reject"], [data-game-mp-action="cancel"], [data-game-invite-action="reject"], [data-game-invite-action="cancel"]) {
+      --game-btn-icon: url("/assets/games/vendor/kenney/game-icons/icons/white/cross.png");
+    }
+    .game-mini-btn:is([data-hold="up"], [data-dir="上"], [data-jump], [data-hold="sprint"]) {
+      --game-btn-icon: url("/assets/games/vendor/kenney/ui-pack/widgets/arrow_basic_n.png");
+    }
+    .game-mini-btn:is([data-hold="down"], [data-dir="下"], [data-drop]) {
+      --game-btn-icon: url("/assets/games/vendor/kenney/ui-pack/widgets/arrow_basic_s.png");
+    }
+    .game-mini-btn:is([data-hold="left"], [data-dir="左"], [data-hold="rotate-left"]) {
+      --game-btn-icon: url("/assets/games/vendor/kenney/ui-pack/widgets/arrow_basic_w.png");
+    }
+    .game-mini-btn:is([data-hold="right"], [data-dir="右"], [data-hold="rotate"]) {
+      --game-btn-icon: url("/assets/games/vendor/kenney/ui-pack/widgets/arrow_basic_e.png");
+    }
+    .game-mini-btn:is([data-hold="focus"], [data-reload]) {
+      --game-btn-icon: url("/assets/games/vendor/kenney/game-icons/icons/white/plus.png");
     }
     .game-list-row {
       align-items: center;
@@ -5404,6 +5702,20 @@
       background: rgba(255,79,109,.32);
       color: #fff;
     }
+    .minesweeper-board[data-asset-theme="kenney-ui-puzzle"] .mine-cell {
+      background-image: linear-gradient(135deg, rgba(255,255,255,.18), rgba(15,23,42,.18)), url("/assets/games/vendor/kenney/puzzle-pack-2/tiles/grey_01.png");
+      background-size: cover;
+      background-blend-mode: soft-light, normal;
+    }
+    .minesweeper-board[data-asset-theme="kenney-ui-puzzle"] .mine-cell.revealed {
+      background-image: linear-gradient(135deg, rgba(255,255,255,.2), rgba(15,23,42,.08)), url("/assets/games/vendor/kenney/puzzle-pack-2/tiles/blue_01.png");
+    }
+    .minesweeper-board[data-asset-theme="kenney-ui-puzzle"] .mine-cell.flagged {
+      background-image: linear-gradient(135deg, rgba(250,204,21,.22), rgba(15,23,42,.16)), url("/assets/games/vendor/kenney/puzzle-pack-2/tiles/yellow_01.png");
+    }
+    .minesweeper-board[data-asset-theme="kenney-ui-puzzle"] .mine-cell.mine {
+      background-image: linear-gradient(135deg, rgba(255,79,109,.3), rgba(15,23,42,.2)), url("/assets/games/vendor/kenney/puzzle-pack-2/tiles/red_01.png");
+    }
     .onea2b-history {
       display: grid;
       gap: .45rem;
@@ -5550,6 +5862,21 @@
     .tetris-cell.filled {
       box-shadow: inset 0 -2px 0 rgba(0,0,0,.24), inset 0 0 0 1px rgba(255,255,255,.18);
     }
+    .tetris-board[data-asset-theme="kenney-puzzle-pack"] .tetris-cell.filled {
+      background-image: linear-gradient(135deg, rgba(255,255,255,.22), rgba(15,23,42,.16)), url("/assets/games/vendor/kenney/puzzle-pack-2/tiles/blue_01.png");
+      background-size: cover;
+      background-blend-mode: soft-light, normal;
+    }
+    .tetris-board[data-asset-theme="kenney-puzzle-pack"] .tetris-cell.type-O,
+    .tetris-board[data-asset-theme="kenney-puzzle-pack"] .tetris-cell.type-L {
+      background-image: linear-gradient(135deg, rgba(255,255,255,.24), rgba(15,23,42,.12)), url("/assets/games/vendor/kenney/puzzle-pack-2/tiles/yellow_01.png");
+    }
+    .tetris-board[data-asset-theme="kenney-puzzle-pack"] .tetris-cell.type-Z {
+      background-image: linear-gradient(135deg, rgba(255,255,255,.22), rgba(15,23,42,.16)), url("/assets/games/vendor/kenney/puzzle-pack-2/tiles/red_01.png");
+    }
+    .tetris-board[data-asset-theme="kenney-puzzle-pack"] .tetris-cell.type-S {
+      background-image: linear-gradient(135deg, rgba(255,255,255,.22), rgba(15,23,42,.16)), url("/assets/games/vendor/kenney/puzzle-pack-2/tiles/green_01.png");
+    }
     .tetris-cell.ghost {
       background: rgba(226,232,240,.11);
       box-shadow: inset 0 0 0 1px rgba(226,232,240,.24);
@@ -5653,6 +5980,30 @@
       font-weight: 700;
       font-size: .8rem;
     }
+    .game-mission-row > .game-meta-icon,
+    .game-achievement-row > .game-meta-icon {
+      font-size: 0;
+    }
+    .game-meta-icon::before {
+      content: "";
+      width: .88rem;
+      height: .88rem;
+      background: #cbd5e1;
+      -webkit-mask: var(--game-meta-icon) center / contain no-repeat;
+      mask: var(--game-meta-icon) center / contain no-repeat;
+    }
+    .game-meta-icon[data-game-meta-icon="target"] {
+      --game-meta-icon: url("/assets/games/vendor/kenney/game-icons/icons/white/target.png");
+    }
+    .game-meta-icon[data-game-meta-icon="check"] {
+      --game-meta-icon: url("/assets/games/vendor/kenney/game-icons/icons/white/checkmark.png");
+    }
+    .game-meta-icon[data-game-meta-icon="trophy"] {
+      --game-meta-icon: url("/assets/games/vendor/kenney/game-icons/icons/white/trophy.png");
+    }
+    .game-meta-icon[data-game-meta-icon="star"] {
+      --game-meta-icon: url("/assets/games/vendor/kenney/game-icons/icons/white/star.png");
+    }
     .game-mission-row.complete,
     .game-achievement-row.unlocked {
       border-color: rgba(34,197,94,.42);
@@ -5662,6 +6013,10 @@
     .game-achievement-row.unlocked > span {
       background: rgba(34,197,94,.24);
       color: #86efac;
+    }
+    .game-mission-row.complete > .game-meta-icon::before,
+    .game-achievement-row.unlocked > .game-meta-icon::before {
+      background: #86efac;
     }
     .game-mission-row strong,
     .game-achievement-row strong {
@@ -6338,6 +6693,26 @@
     .game-2048-board .tile-64 { background: #be123c; }
     .game-2048-board .tile-block { background: #111827; color: #facc15; }
     .game-2048-board button:not(.tile-0) { box-shadow: inset 0 0 20px rgba(255,255,255,.08); }
+    .game-2048-board[data-asset-theme="kenney-puzzle-pack"] button:not(.tile-0) {
+      background-image: linear-gradient(135deg, rgba(255,255,255,.22), rgba(15,23,42,.16)), url("/assets/games/vendor/kenney/puzzle-pack-2/tiles/blue_01.png");
+      background-size: cover;
+      background-blend-mode: soft-light, normal;
+    }
+    .game-2048-board[data-asset-theme="kenney-puzzle-pack"] .tile-16,
+    .game-2048-board[data-asset-theme="kenney-puzzle-pack"] .tile-32,
+    .game-2048-board[data-asset-theme="kenney-puzzle-pack"] .tile-64 {
+      background-image: linear-gradient(135deg, rgba(255,255,255,.22), rgba(15,23,42,.16)), url("/assets/games/vendor/kenney/puzzle-pack-2/tiles/green_01.png");
+    }
+    .game-2048-board[data-asset-theme="kenney-puzzle-pack"] .tile-128,
+    .game-2048-board[data-asset-theme="kenney-puzzle-pack"] .tile-256,
+    .game-2048-board[data-asset-theme="kenney-puzzle-pack"] .tile-512,
+    .game-2048-board[data-asset-theme="kenney-puzzle-pack"] .tile-1024,
+    .game-2048-board[data-asset-theme="kenney-puzzle-pack"] .tile-2048 {
+      background-image: linear-gradient(135deg, rgba(255,255,255,.24), rgba(15,23,42,.12)), url("/assets/games/vendor/kenney/puzzle-pack-2/tiles/yellow_01.png");
+    }
+    .game-2048-board[data-asset-theme="kenney-puzzle-pack"] .tile-block {
+      background-image: linear-gradient(135deg, rgba(250,204,21,.24), rgba(15,23,42,.2)), url("/assets/games/vendor/kenney/puzzle-pack-2/tiles/red_01.png");
+    }
     .board-game-grid {
       grid-template-columns: repeat(var(--board-size), minmax(0, 1fr));
       gap: 2px;
@@ -7053,14 +7428,18 @@
       accent-color: #38bdf8;
     }
 
-    .trading-reference-chart {
-      display: block;
-      width: 100%;
-      height: clamp(240px, 34vh, 340px);
-      border: 1px solid rgba(148, 163, 184, .18);
-      border-radius: 8px;
-      background: #0f172a;
-    }
+	    .trading-reference-chart {
+	      display: block;
+	      width: 100%;
+	      height: clamp(240px, 34vh, 340px);
+	      border: 1px solid rgba(148, 163, 184, .18);
+	      border-radius: 8px;
+	      background: #0f172a;
+	    }
+
+	    .trading-reference-panel-primary .trading-reference-chart {
+	      height: clamp(280px, 42vh, 420px);
+	    }
 
     .trading-reference-tooltip {
       position: absolute;
@@ -7182,6 +7561,54 @@
       color: var(--muted);
     }
 
+    #trading-current-purpose,
+    #trading-current-health,
+    #trading-current-market {
+      max-width: 100%;
+    }
+
+    .trading-price-tooltip {
+      position: relative;
+      width: max-content;
+      max-width: 100%;
+      cursor: help;
+      overflow: visible;
+      white-space: nowrap;
+      text-decoration: underline dotted rgba(148, 163, 184, .7);
+      text-underline-offset: .18rem;
+    }
+
+    .trading-price-tooltip::after {
+      content: attr(data-tooltip);
+      position: absolute;
+      left: 0;
+      top: calc(100% + .35rem);
+      z-index: 80;
+      width: max-content;
+      max-width: min(360px, 82vw);
+      padding: .5rem .6rem;
+      border: 1px solid rgba(148, 163, 184, .28);
+      border-radius: 6px;
+      background: rgba(15, 23, 42, .96);
+      color: #e5e7eb;
+      box-shadow: 0 14px 32px rgba(0, 0, 0, .28);
+      font-size: .78rem;
+      line-height: 1.45;
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(-3px);
+      transition: opacity .12s ease, transform .12s ease;
+      visibility: hidden;
+      white-space: normal;
+    }
+
+    .trading-price-tooltip:hover::after,
+    .trading-price-tooltip:focus::after {
+      opacity: 1;
+      transform: translateY(0);
+      visibility: visible;
+    }
+
     #trading-current-price.trading-price-up,
     #trading-current-delta.positive {
       color: #22c55e;
@@ -7205,11 +7632,92 @@
       color: #ffb74d;
     }
 
-    .trading-risk-dashboard {
-      margin-top: .75rem;
-      padding-top: .75rem;
-      border-top: 1px solid rgba(148, 163, 184, .18);
-    }
+	    .trading-risk-dashboard {
+	      position: relative;
+	      margin-top: .65rem;
+	      padding: .6rem .7rem;
+	      border: 1px solid rgba(148, 163, 184, .18);
+	      border-radius: 8px;
+	      background: rgba(15, 23, 42, .32);
+	    }
+
+	    .trading-risk-dashboard:focus {
+	      outline: 2px solid rgba(56, 189, 248, .72);
+	      outline-offset: 2px;
+	    }
+
+	    .trading-signal-panel .drive-card-heading {
+	      align-items: center;
+	      margin-bottom: 0;
+	    }
+
+	    .trading-signal-summary {
+	      display: inline-flex;
+	      align-items: center;
+	      justify-content: flex-end;
+	      gap: .45rem;
+	      min-width: 0;
+	    }
+
+	    .trading-signal-lights {
+	      display: inline-flex;
+	      align-items: center;
+	      gap: .32rem;
+	      padding: .18rem;
+	      border: 1px solid rgba(148, 163, 184, .18);
+	      border-radius: 999px;
+	      background: rgba(2, 6, 23, .46);
+	    }
+
+	    .trading-signal-light {
+	      display: inline-grid;
+	      place-items: center;
+	      min-width: 1.75rem;
+	      height: 1.75rem;
+	      padding: 0 .22rem;
+	      border-radius: 999px;
+	      background: #475569;
+	      color: #e2e8f0;
+	      font-size: .68rem;
+	      font-weight: 800;
+	      line-height: 1;
+	      box-shadow: inset 0 -1px 0 rgba(0, 0, 0, .22), 0 0 0 1px rgba(255,255,255,.08);
+	    }
+
+	    .trading-signal-light[data-state="ok"] {
+	      background: #22c55e;
+	      color: #052e16;
+	      box-shadow: 0 0 14px rgba(34, 197, 94, .42);
+	    }
+
+	    .trading-signal-light[data-state="warn"] {
+	      background: #fbbf24;
+	      color: #422006;
+	      box-shadow: 0 0 14px rgba(251, 191, 36, .4);
+	    }
+
+	    .trading-signal-light[data-state="bad"] {
+	      background: #ef4444;
+	      color: #fff;
+	      box-shadow: 0 0 14px rgba(239, 68, 68, .42);
+	    }
+
+	    .trading-signal-panel .trading-readiness-grid {
+	      max-height: 0;
+	      margin-top: 0;
+	      opacity: 0;
+	      overflow: hidden;
+	      pointer-events: none;
+	      transition: max-height .18s ease, margin-top .18s ease, opacity .14s ease;
+	    }
+
+	    .trading-signal-panel:hover .trading-readiness-grid,
+	    .trading-signal-panel:focus-within .trading-readiness-grid {
+	      max-height: 420px;
+	      margin-top: .65rem;
+	      opacity: 1;
+	      pointer-events: auto;
+	    }
 
     .trading-readiness-grid {
       display: grid;
@@ -7294,12 +7802,21 @@
       }
     }
 
-    @media (max-width: 720px) {
-      .trading-spot-row,
-      .trading-spot-actions {
-        grid-template-columns: 1fr;
-      }
-    }
+	    @media (max-width: 720px) {
+	      .trading-spot-row,
+	      .trading-spot-actions {
+	        grid-template-columns: 1fr;
+	      }
+
+	      .trading-bot-competition-row {
+	        grid-template-columns: 36px minmax(0, 1fr);
+	      }
+
+	      .trading-bot-competition-score {
+	        grid-column: 2;
+	        justify-items: start;
+	      }
+	    }
 
     .msg {
       text-align: left;
@@ -7349,11 +7866,95 @@
       display: none;
     }
 
-    .trading-bot-tab-panel.active {
-      display: block;
-    }
+	    .trading-bot-tab-panel.active {
+	      display: block;
+	    }
 
-    .trading-workflow-json-panel textarea {
+	    .trading-share-badge {
+	      display: inline-flex;
+	      align-items: center;
+	      min-height: 20px;
+	      padding: .08rem .42rem;
+	      border-radius: 999px;
+	      border: 1px solid rgba(34,197,94,.38);
+	      background: rgba(34,197,94,.12);
+	      color: #86efac;
+	      font-size: .75rem;
+	      font-weight: 650;
+	      line-height: 1.25;
+	    }
+
+	    .trading-share-badge.muted {
+	      border-color: rgba(148,163,184,.28);
+	      background: rgba(148,163,184,.1);
+	      color: var(--muted);
+	    }
+
+	    .trading-bot-competition-grid {
+	      display: grid;
+	      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+	      gap: .75rem;
+	    }
+
+	    .trading-bot-competition-card {
+	      min-width: 0;
+	      border: 1px solid var(--line);
+	      border-radius: 8px;
+	      padding: .75rem;
+	      background: rgba(15,23,42,.22);
+	    }
+
+	    .trading-bot-competition-row {
+	      display: grid;
+	      grid-template-columns: 42px minmax(0, 1fr) minmax(92px, auto);
+	      gap: .55rem;
+	      align-items: start;
+	      padding: .55rem 0;
+	      border-top: 1px solid rgba(148,163,184,.14);
+	    }
+
+	    .trading-bot-competition-rank {
+	      width: 36px;
+	      min-height: 30px;
+	      display: grid;
+	      place-items: center;
+	      border-radius: 8px;
+	      background: rgba(56,189,248,.14);
+	      color: #7dd3fc;
+	      font-weight: 800;
+	    }
+
+	    .trading-bot-competition-score {
+	      display: grid;
+	      gap: .12rem;
+	      justify-items: end;
+	      font-weight: 750;
+	      white-space: nowrap;
+	    }
+
+	    .trading-bot-competition-score small {
+	      color: var(--muted);
+	      font-weight: 600;
+	    }
+
+	    .trading-shared-params {
+	      display: flex;
+	      flex-wrap: wrap;
+	      gap: .35rem;
+	      margin-top: .35rem;
+	    }
+
+	    .trading-shared-params span {
+	      max-width: 100%;
+	      padding: .22rem .42rem;
+	      border-radius: 6px;
+	      background: rgba(148,163,184,.12);
+	      color: var(--text);
+	      font-size: .78rem;
+	      overflow-wrap: anywhere;
+	    }
+
+	    .trading-workflow-json-panel textarea {
       width: 100%;
       min-height: 220px;
       resize: vertical;

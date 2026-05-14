@@ -1,6 +1,20 @@
 'use strict';
 
 let minesweeperState = null;
+const MINESWEEPER_ASSET_SOURCES = Object.freeze({
+  uiPack: {
+    name: "Kenney UI Pack",
+    url: "https://kenney.nl/assets/ui-pack",
+    license: "Creative Commons CC0",
+    usage: "beveled button tiles, flag markers and result overlays rebuilt with CSS",
+  },
+  puzzlePack: {
+    name: "Kenney Puzzle Pack 2",
+    url: "https://kenney.nl/assets/puzzle-pack-2",
+    license: "Creative Commons CC0",
+    usage: "bundled PNG tile skins applied through CSS with color fallback",
+  },
+});
 
 function minesweeperConfig() {
   const difficulty = $("minesweeper-difficulty")?.value || "easy";
@@ -148,9 +162,11 @@ function renderMinesweeperBoard() {
     return;
   }
   board.style.setProperty("--mine-cols", String(state.cols));
+  board.dataset.assetTheme = "kenney-ui-puzzle";
+  board.dataset.status = state.status || "active";
   board.innerHTML = state.cells.map((cell, index) => {
-    const label = cell.revealed ? (cell.mine ? "*" : (cell.count || "")) : (cell.flagged ? "⚑" : "");
-    const tone = cell.revealed && cell.mine ? "mine" : cell.revealed ? "revealed" : cell.flagged ? "flagged" : (state.safeHint === index ? "hint" : "");
+    const label = cell.revealed ? (cell.mine ? "✹" : (cell.count || "")) : (cell.flagged ? "⚑" : "");
+    const tone = cell.revealed && cell.mine ? "mine" : cell.revealed ? `revealed count-${cell.count || 0}` : cell.flagged ? "flagged" : (state.safeHint === index ? "hint" : "");
     return `<button class="mine-cell ${tone}" type="button" data-mine-index="${index}">${sanitize(String(label))}</button>`;
   }).join("");
   updateMinesweeperFlagModeButton();

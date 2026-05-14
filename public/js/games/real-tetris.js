@@ -11,8 +11,10 @@
   const FLOOR = 528;
   const TOP = 24;
   const GRAVITY = 1180;
-  const RELAXED_LINE_FILL = 0.78;
+  const RELAXED_LINE_FILL = 0.9;
   const LINE_TOLERANCE = CELL * 0.68;
+  const ACTIVE_LOCK_MIN_SECONDS = 0.82;
+  const ACTIVE_LOCK_MAX_SECONDS = 1.55;
   const REAL_TETRIS_MODES = {
     standard: {
       label: "一般",
@@ -46,7 +48,7 @@
       minDist: CELL * 0.98,
       settleSpeed: 118,
       settleFrames: 12,
-      lineFill: 0.72,
+      lineFill: RELAXED_LINE_FILL,
       lineTolerance: CELL * 0.78,
       scoreMultiplier: 0.9,
       stackSupportMargin: CELL * 0.32,
@@ -67,7 +69,7 @@
       minDist: CELL * 0.88,
       settleSpeed: 58,
       settleFrames: 36,
-      lineFill: 0.84,
+      lineFill: RELAXED_LINE_FILL,
       lineTolerance: CELL * 0.56,
       scoreMultiplier: 1.2,
       stackSupportMargin: CELL * 0.1,
@@ -87,7 +89,7 @@
       minDist: CELL * 0.9,
       settleSpeed: 74,
       settleFrames: 26,
-      lineFill: 0.8,
+      lineFill: RELAXED_LINE_FILL,
       lineTolerance: CELL * 0.64,
       scoreMultiplier: 1.25,
       stackSupportMargin: CELL * 0.12,
@@ -108,7 +110,7 @@
       minDist: CELL * 0.94,
       settleSpeed: 92,
       settleFrames: 18,
-      lineFill: 0.76,
+      lineFill: RELAXED_LINE_FILL,
       lineTolerance: CELL * 0.7,
       scoreMultiplier: 1.15,
       stackSupportMargin: CELL * 0.2,
@@ -129,6 +131,25 @@
     J: "#4d7dff",
     L: "#ff9f43",
   };
+  const REAL_TETRIS_ASSET_SOURCES = Object.freeze({
+    puzzlePack: {
+      name: "Kenney Puzzle Pack 2",
+      url: "https://kenney.nl/assets/puzzle-pack-2",
+      license: "Creative Commons CC0",
+      usage: "bundled PNG rigid block bevels with canvas fallback",
+    },
+  });
+  const REAL_TETRIS_ASSET_BASE = "/assets/games/vendor/kenney/puzzle-pack-2/tiles/";
+  const REAL_TETRIS_IMAGE_ASSETS = Object.freeze({
+    I: `${REAL_TETRIS_ASSET_BASE}blue_01.png`,
+    O: `${REAL_TETRIS_ASSET_BASE}yellow_01.png`,
+    T: `${REAL_TETRIS_ASSET_BASE}grey_01.png`,
+    S: `${REAL_TETRIS_ASSET_BASE}green_01.png`,
+    Z: `${REAL_TETRIS_ASSET_BASE}red_01.png`,
+    J: `${REAL_TETRIS_ASSET_BASE}blue_01.png`,
+    L: `${REAL_TETRIS_ASSET_BASE}yellow_01.png`,
+  });
+  const REAL_TETRIS_IMAGES = loadRealTetrisImages(REAL_TETRIS_IMAGE_ASSETS);
   const PIECES = {
     I: [[-1.5, 0], [-0.5, 0], [0.5, 0], [1.5, 0]],
     O: [[-0.5, -0.5], [0.5, -0.5], [-0.5, 0.5], [0.5, 0.5]],
@@ -152,6 +173,21 @@
   function nextRealTetrisMode(mode) {
     const index = REAL_TETRIS_MODE_ORDER.indexOf(mode);
     return REAL_TETRIS_MODE_ORDER[(index + 1) % REAL_TETRIS_MODE_ORDER.length] || "standard";
+  }
+
+  function loadRealTetrisImages(assets) {
+    if (typeof Image === "undefined") return {};
+    return Object.entries(assets).reduce((images, [key, src]) => {
+      const image = new Image();
+      image.decoding = "async";
+      image.src = src;
+      images[key] = image;
+      return images;
+    }, {});
+  }
+
+  function realTetrisImageReady(image) {
+    return Boolean(image?.complete && image.naturalWidth > 0);
   }
 
   function realTetrisRootUser() {
@@ -307,21 +343,97 @@
     });
   }
 
+  function realTetrisBodyBounds(body) {
+    const centers = realTetrisPieceCenters(body);
+    return {
+      minX: Math.min(...centers.map((point) => point.x - HALF)),
+      maxX: Math.max(...centers.map((point) => point.x + HALF)),
+      minY: Math.min(...centers.map((point) => point.y - HALF)),
+      maxY: Math.max(...centers.map((point) => point.y + HALF)),
+      centers,
+    };
+  }
+
+  function realTetrisBodiesCellContact(a, b, minDist) {
+    const aCenters = realTetrisPieceCenters(a);
+    const bCenters = realTetrisPieceCenters(b);
+    let best = null;
+    for (const aPoint of aCenters) {
+      for (const bPoint of bCenters) {
+        if (Math.abs(aPoint.x - bPoint.x) > minDist || Math.abs(aPoint.y - bPoint.y) > minDist) continue;
+        let dx = aPoint.x - bPoint.x;
+        let dy = aPoint.y - bPoint.y;
+        let dist = Math.hypot(dx, dy);
+        if (dist < 0.001) {
+          dx = 0;
+          dy = -1;
+          dist = 1;
+        }
+        if (dist >= minDist) continue;
+        const penetration = minDist - dist;
+        if (!best || penetration > best.penetration) {
+          best = {
+            nx: dx / dist,
+            ny: dy / dist,
+            penetration,
+            aPoint,
+            bPoint,
+          };
+        }
+      }
+    }
+    return best;
+  }
+
+  function realTetrisActiveLockDelay(config) {
+    return clamp((config.settleFrames / 60) * 2.4, ACTIVE_LOCK_MIN_SECONDS, ACTIVE_LOCK_MAX_SECONDS);
+  }
+
+  function updateRealTetrisActiveLock(body, dt) {
+    if (body.supporting) {
+      body.supportFrames = (body.supportFrames || 0) + 1;
+      body.supportEver = true;
+    } else {
+      body.supportFrames = Math.max(0, (body.supportFrames || 0) - 1);
+    }
+    if (body.supportEver) body.supportLockAge = (body.supportLockAge || 0) + dt;
+  }
+
+  function shouldLockRealTetrisBody(body, speed, config) {
+    if (!body.supporting) return false;
+    if (speed < config.settleSpeed && body.settledFrames > config.settleFrames) return true;
+    return Number(body.supportLockAge || 0) >= realTetrisActiveLockDelay(config);
+  }
+
   function drawRealTetrisBlock(ctx, x, y, angle, type, alpha = 1) {
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(angle);
     ctx.globalAlpha = alpha;
-    ctx.fillStyle = BLOCK_COLORS[type] || "#e5e7eb";
+    const color = BLOCK_COLORS[type] || "#e5e7eb";
+    const gradient = ctx.createLinearGradient(-HALF, -HALF, HALF, HALF);
+    gradient.addColorStop(0, "rgba(255,255,255,.34)");
+    gradient.addColorStop(0.18, color);
+    gradient.addColorStop(1, "rgba(15,23,42,.42)");
+    ctx.fillStyle = gradient;
     ctx.strokeStyle = "rgba(255,255,255,.34)";
     ctx.lineWidth = 1.4;
     ctx.shadowColor = "rgba(56,189,248,.18)";
     ctx.shadowBlur = 10;
-    ctx.fillRect(-HALF + 1.5, -HALF + 1.5, CELL - 3, CELL - 3);
+    const image = REAL_TETRIS_IMAGES[type];
+    if (realTetrisImageReady(image)) {
+      ctx.drawImage(image, -HALF + 1.5, -HALF + 1.5, CELL - 3, CELL - 3);
+      ctx.fillStyle = "rgba(255,255,255,.16)";
+      ctx.fillRect(-HALF + 3, -HALF + 3, CELL - 6, 4);
+    } else {
+      ctx.fillRect(-HALF + 1.5, -HALF + 1.5, CELL - 3, CELL - 3);
+    }
     ctx.shadowBlur = 0;
     ctx.strokeRect(-HALF + 1.5, -HALF + 1.5, CELL - 3, CELL - 3);
     ctx.fillStyle = "rgba(255,255,255,.16)";
     ctx.fillRect(-HALF + 4, -HALF + 4, CELL - 8, 4);
+    ctx.fillStyle = "rgba(15,23,42,.18)";
+    ctx.fillRect(-HALF + 5, HALF - 8, CELL - 10, 3);
     ctx.restore();
   }
 
@@ -340,7 +452,11 @@
       vy: 0,
       omega: (Math.random() - 0.5) * 0.55 * spinScale,
       settledFrames: 0,
+      supportFrames: 0,
+      supportLockAge: 0,
+      supportEver: false,
       touching: false,
+      supporting: false,
       friction: config.friction,
       mass: 4,
     };
@@ -359,18 +475,22 @@
   }
 
   function blockHasVerticalSupport(block, blocks) {
-    if (block.y + HALF >= FLOOR - CELL * 0.12) return true;
-    return blocks.some((other) => (
-      other !== block
-      && other.y > block.y
-      && other.y - block.y < CELL * 1.12
-      && Math.abs(other.x - block.x) < CELL * 0.74
-    ));
+    const centers = realTetrisPieceCenters(block);
+    if (centers.some((point) => point.y + HALF >= FLOOR - CELL * 0.12)) return true;
+    return blocks.some((other) => {
+      if (other === block) return false;
+      const otherCenters = realTetrisPieceCenters(other);
+      return centers.some((point) => otherCenters.some((otherPoint) => (
+        otherPoint.y > point.y
+        && otherPoint.y - point.y < CELL * 1.12
+        && Math.abs(otherPoint.x - point.x) < CELL * 0.74
+      )));
+    });
   }
 
   function realTetrisBlocksTouch(a, b, dist = STACK_CONNECT_DIST) {
-    if (Math.abs(a.x - b.x) > dist || Math.abs(a.y - b.y) > dist) return false;
-    return Math.hypot(a.x - b.x, a.y - b.y) <= dist;
+    if (Math.abs(a.x - b.x) > dist * 4 || Math.abs(a.y - b.y) > dist * 4) return false;
+    return Boolean(realTetrisBodiesCellContact(a, b, dist));
   }
 
   function collectRealTetrisStacks(blocks) {
@@ -420,15 +540,17 @@
     for (const stack of collectRealTetrisStacks(state.blocks)) {
       const mass = stack.reduce((sum, block) => sum + (block.mass || 1), 0) || 1;
       const comX = stack.reduce((sum, block) => sum + block.x * (block.mass || 1), 0) / mass;
-      const floorContacts = stack.filter((block) => block.y + HALF >= FLOOR - CELL * 0.18);
+      const floorContacts = stack.flatMap((block) => (
+        realTetrisPieceCenters(block).filter((point) => point.y + HALF >= FLOOR - CELL * 0.18)
+      ));
       if (!floorContacts.length) {
         stack.forEach((block) => {
           if (!blockHasVerticalSupport(block, state.blocks)) wakeRealTetrisBlock(block, 0, 20, 0);
         });
         continue;
       }
-      const supportMin = Math.min(...floorContacts.map((block) => block.x - HALF * 0.62)) - config.stackSupportMargin;
-      const supportMax = Math.max(...floorContacts.map((block) => block.x + HALF * 0.62)) + config.stackSupportMargin;
+      const supportMin = Math.min(...floorContacts.map((point) => point.x - HALF * 0.62)) - config.stackSupportMargin;
+      const supportMax = Math.max(...floorContacts.map((point) => point.x + HALF * 0.62)) + config.stackSupportMargin;
       const supportCenter = (supportMin + supportMax) / 2;
       const supportHalf = Math.max(CELL * 0.35, (supportMax - supportMin) / 2);
       const outside = comX < supportMin ? comX - supportMin : comX > supportMax ? comX - supportMax : 0;
@@ -487,17 +609,10 @@
       for (let j = i + 1; j < state.blocks.length; j += 1) {
         const a = state.blocks[i];
         const b = state.blocks[j];
-        if (Math.abs(a.x - b.x) > minDist || Math.abs(a.y - b.y) > minDist) continue;
-        let dx = a.x - b.x;
-        let dy = a.y - b.y;
-        let dist = Math.hypot(dx, dy);
-        if (dist < 0.001) {
-          dx = 0;
-          dy = -1;
-          dist = 1;
-        }
-        if (dist >= minDist) continue;
-        realTetrisBlockElasticImpulse(state, a, b, dx / dist, dy / dist, minDist - dist);
+        if (Math.abs(a.x - b.x) > CELL * 5 || Math.abs(a.y - b.y) > CELL * 5) continue;
+        const contact = realTetrisBodiesCellContact(a, b, minDist);
+        if (!contact) continue;
+        realTetrisBlockElasticImpulse(state, a, b, contact.nx, contact.ny, contact.penetration);
       }
     }
   }
@@ -520,18 +635,21 @@
       block.x += block.vx * dt;
       block.y += block.vy * dt;
       block.angle += block.omega * dt;
-      if (block.x - HALF < LEFT) {
-        block.x = LEFT + HALF;
+      let bounds = realTetrisBodyBounds(block);
+      if (bounds.minX < LEFT) {
+        block.x += LEFT - bounds.minX;
         block.vx = Math.abs(block.vx || 0) * 0.42;
         block.omega *= -0.45;
       }
-      if (block.x + HALF > RIGHT) {
-        block.x = RIGHT - HALF;
+      bounds = realTetrisBodyBounds(block);
+      if (bounds.maxX > RIGHT) {
+        block.x -= bounds.maxX - RIGHT;
         block.vx = -Math.abs(block.vx || 0) * 0.42;
         block.omega *= -0.45;
       }
-      if (block.y + HALF > FLOOR) {
-        block.y = FLOOR - HALF;
+      bounds = realTetrisBodyBounds(block);
+      if (bounds.maxY > FLOOR) {
+        block.y -= bounds.maxY - FLOOR;
         if ((block.vy || 0) > 0) block.vy = -Math.abs(block.vy || 0) * clamp(Number(state.physicsParams?.elasticity ?? 0.42), 0.05, 0.72);
         block.vx *= Math.max(0.24, 1 - friction * 1.7);
         block.omega *= Math.max(0.35, 1 - friction * 1.4);
@@ -582,6 +700,7 @@
     if (!body) return;
     const config = realTetrisModeConfig(state.mode);
     body.touching = false;
+    body.supporting = false;
     for (let iteration = 0; iteration < 3; iteration += 1) {
       const centers = realTetrisPieceCenters(body);
       for (const point of centers) {
@@ -593,26 +712,31 @@
         }
         if (point.y + HALF > FLOOR) {
           body.touching = true;
+          body.supporting = true;
           pushRealTetrisBody(state, body, 0, -1, (point.y + HALF) - FLOOR, point.rx, point.ry);
         }
         for (const block of state.blocks) {
-          if (Math.abs(point.x - block.x) > CELL * 1.15 || Math.abs(point.y - block.y) > CELL * 1.15) continue;
-          let dx = point.x - block.x;
-          let dy = point.y - block.y;
-          let dist = Math.hypot(dx, dy);
-          if (dist < 0.001) {
-            dx = 0;
-            dy = -1;
-            dist = 1;
-          }
-          const minDist = config.minDist;
-          if (dist >= minDist) continue;
-          const nx = dx / dist;
-          const ny = dy / dist;
-          body.touching = true;
-          pushRealTetrisBody(state, body, nx, ny, minDist - dist, point.rx, point.ry);
-          if (Math.abs(body.vx) + Math.abs(body.vy) > 90 || minDist - dist > CELL * 0.12) {
-            wakeRealTetrisBlock(block, -nx * (18 + Math.abs(body.vx) * 0.04), -ny * 18, (point.rx * ny - point.ry * nx) * 0.0018);
+          if (Math.abs(point.x - block.x) > CELL * 5 || Math.abs(point.y - block.y) > CELL * 5) continue;
+          for (const settledPoint of realTetrisPieceCenters(block)) {
+            if (Math.abs(point.x - settledPoint.x) > CELL * 1.15 || Math.abs(point.y - settledPoint.y) > CELL * 1.15) continue;
+            let dx = point.x - settledPoint.x;
+            let dy = point.y - settledPoint.y;
+            let dist = Math.hypot(dx, dy);
+            if (dist < 0.001) {
+              dx = 0;
+              dy = -1;
+              dist = 1;
+            }
+            const minDist = config.minDist;
+            if (dist >= minDist) continue;
+            const nx = dx / dist;
+            const ny = dy / dist;
+            body.touching = true;
+            if (ny < -0.35) body.supporting = true;
+            pushRealTetrisBody(state, body, nx, ny, minDist - dist, point.rx, point.ry);
+            if (Math.abs(body.vx) + Math.abs(body.vy) > 90 || minDist - dist > CELL * 0.12) {
+              wakeRealTetrisBlock(block, -nx * (18 + Math.abs(body.vx) * 0.04), -ny * 18, (point.rx * ny - point.ry * nx) * 0.0018);
+            }
           }
         }
       }
@@ -659,17 +783,20 @@
     body.angle += body.omega * dt;
     resolveRealTetrisCollisions(state);
     const speed = Math.hypot(body.vx, body.vy) + Math.abs(body.omega) * 28;
+    updateRealTetrisActiveLock(body, dt);
     body.settledFrames = body.touching && speed < config.settleSpeed ? body.settledFrames + 1 : 0;
-    if (body.settledFrames > config.settleFrames) lockRealTetrisBody(state);
+    if (shouldLockRealTetrisBody(body, speed, config)) lockRealTetrisBody(state);
   }
 
   function rowCoverageForRealTetris(blocks, rowY, config) {
     const segments = [];
-    for (const block of blocks) {
-      if (Math.abs(block.y - rowY) > config.lineTolerance) continue;
-      const widthBoost = 1 + Math.max(0, 1 - Math.abs(block.y - rowY) / config.lineTolerance) * 0.18;
-      const halfWidth = HALF * 0.94 * widthBoost;
-      segments.push([clamp(block.x - halfWidth, LEFT, RIGHT), clamp(block.x + halfWidth, LEFT, RIGHT)]);
+    for (const body of blocks) {
+      for (const block of realTetrisPieceCenters(body)) {
+        if (Math.abs(block.y - rowY) > config.lineTolerance) continue;
+        const widthBoost = 1 + Math.max(0, 1 - Math.abs(block.y - rowY) / config.lineTolerance) * 0.18;
+        const halfWidth = HALF * 0.94 * widthBoost;
+        segments.push([clamp(block.x - halfWidth, LEFT, RIGHT), clamp(block.x + halfWidth, LEFT, RIGHT)]);
+      }
     }
     segments.sort((a, b) => a[0] - b[0]);
     let covered = 0;
@@ -693,8 +820,8 @@
     if (!rows.length) return 0;
     const remove = new Set();
     rows.forEach(({ y }) => {
-      state.blocks.forEach((block, index) => {
-        if (Math.abs(block.y - y) <= config.lineTolerance) remove.add(index);
+      state.blocks.forEach((body, index) => {
+        if (realTetrisPieceCenters(body).some((block) => Math.abs(block.y - y) <= config.lineTolerance)) remove.add(index);
       });
     });
     state.blocks = state.blocks.filter((_block, index) => !remove.has(index));
@@ -711,25 +838,30 @@
   }
 
   function realTetrisGameOver(state) {
-    return state.blocks.some((block) => block.y < TOP + CELL * 1.4);
+    return state.blocks.some((block) => realTetrisPieceCenters(block).some((point) => point.y < TOP + CELL * 1.4));
   }
 
   function lockRealTetrisBody(state) {
     const body = state.active;
     if (!body) return;
-    realTetrisPieceCenters(body).forEach((point) => {
-      state.blocks.push({
-        x: clamp(point.x, LEFT + HALF * 0.35, RIGHT - HALF * 0.35),
-        y: clamp(point.y, TOP - CELL, FLOOR - HALF * 0.25),
-        angle: body.angle,
-        type: body.type,
-        vx: 0,
-        vy: 0,
-        omega: 0,
-        mass: 1,
-        unstable: false,
-        settledFrames: 0,
-      });
+    let bounds = realTetrisBodyBounds(body);
+    if (bounds.minX < LEFT) body.x += LEFT - bounds.minX;
+    bounds = realTetrisBodyBounds(body);
+    if (bounds.maxX > RIGHT) body.x -= bounds.maxX - RIGHT;
+    bounds = realTetrisBodyBounds(body);
+    if (bounds.maxY > FLOOR) body.y -= bounds.maxY - FLOOR;
+    state.blocks.push({
+      x: clamp(body.x, LEFT + HALF * 0.35, RIGHT - HALF * 0.35),
+      y: clamp(body.y, TOP - CELL, FLOOR - HALF * 0.25),
+      angle: body.angle,
+      cells: body.cells.map((cell) => [...cell]),
+      type: body.type,
+      vx: 0,
+      vy: 0,
+      omega: 0,
+      mass: body.cells.length || 4,
+      unstable: false,
+      settledFrames: 0,
     });
     state.score += 12;
     state.active = null;
@@ -745,11 +877,18 @@
   function drawRealTetris(state, canvas) {
     const ctx = canvas.getContext("2d");
     const config = realTetrisModeConfig(state.mode);
+    canvas.dataset.assetTheme = "kenney-puzzle-pack";
     ctx.clearRect(0, 0, WIDTH, HEIGHT);
-    ctx.fillStyle = "#08111f";
+    const backdrop = ctx.createLinearGradient(0, 0, 0, HEIGHT);
+    backdrop.addColorStop(0, "#08111f");
+    backdrop.addColorStop(0.6, "#111827");
+    backdrop.addColorStop(1, "#07111f");
+    ctx.fillStyle = backdrop;
     ctx.fillRect(0, 0, WIDTH, HEIGHT);
-    ctx.fillStyle = "rgba(15,23,42,.92)";
+    ctx.fillStyle = "rgba(15,23,42,.9)";
     ctx.fillRect(LEFT, TOP, RIGHT - LEFT, FLOOR - TOP);
+    ctx.fillStyle = "rgba(255,255,255,.035)";
+    for (let y = TOP + CELL; y < FLOOR; y += CELL * 2) ctx.fillRect(LEFT, y, RIGHT - LEFT, CELL);
     ctx.strokeStyle = "rgba(148,163,184,.16)";
     ctx.lineWidth = 1;
     for (let x = LEFT; x <= RIGHT; x += CELL) {
@@ -771,7 +910,11 @@
     ctx.lineTo(RIGHT, TOP + CELL * 1.35);
     ctx.stroke();
     ctx.setLineDash([]);
-    state.blocks.forEach((block) => drawRealTetrisBlock(ctx, block.x, block.y, block.angle, block.type));
+    state.blocks.forEach((block) => {
+      realTetrisPieceCenters(block).forEach((point) => {
+        drawRealTetrisBlock(ctx, point.x, point.y, block.angle, block.type);
+      });
+    });
     if (state.active) {
       realTetrisPieceCenters(state.active).forEach((point) => {
         drawRealTetrisBlock(ctx, point.x, point.y, state.active.angle, state.active.type, 0.98);
@@ -800,7 +943,7 @@
   function updateRealTetrisStatus(api, state, prefix = "") {
     const elapsed = window.soloElapsedMs ? window.formatSoloGameTime(window.soloElapsedMs(state)) : "";
     const mode = state.paused ? "暫停中" : state.status === "finished" ? "已結束" : "物理模擬中";
-    api.status(`${prefix ? `${prefix} ` : ""}${realTetrisModeLabel(state.mode)} · ${mode} · 分數 ${Number(state.score || 0).toLocaleString()} · 放寬消線 ${state.lines} 行 · 倒塌 ${state.collapseEvents || 0} · ${elapsed}`);
+    api.status(`${prefix ? `${prefix} ` : ""}${realTetrisModeLabel(state.mode)} · ${mode} · 分數 ${Number(state.score || 0).toLocaleString()} · 90% 消線 ${state.lines} 行 · 倒塌 ${state.collapseEvents || 0} · ${elapsed}`);
   }
 
   function finishRealTetrisGame(api) {

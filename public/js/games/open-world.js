@@ -9,8 +9,16 @@
   const VEHICLE_RADIUS = 2.1;
   const OPEN_WORLD_ROADS = [-72, -48, -24, 0, 24, 48, 72];
   const OPEN_WORLD_BLOCK_CENTERS = [-60, -36, -12, 12, 36, 60];
+  const OPEN_WORLD_DIAGONAL_ROADS = [
+    { x1: -82, z1: -34, x2: -16, z2: -82, width: 10.5, color: "#3b4250" },
+    { x1: -84, z1: 18, x2: 30, z2: 78, width: 10, color: "#343a46" },
+    { x1: 18, z1: -82, x2: 82, z2: -16, width: 10.5, color: "#2f3542" },
+  ];
   const ENTER_VEHICLE_DISTANCE = 6.5;
-  const TRAFFIC_HIT_DISTANCE = 9.5;
+  const TRAFFIC_HIT_DISTANCE = 6.2;
+  const TRAFFIC_COLLISION_DISTANCE = 4.2;
+  const PEDESTRIAN_TRAFFIC_COLLISION_DISTANCE = 2.7;
+  const TRAFFIC_COLLISION_COOLDOWN_MS = 650;
   const PATROL_DAMAGE_DISTANCE = 14;
   const PICKUP_DISTANCE = 3;
   const TAIL_GADGET_HIT_DISTANCE = 3;
@@ -76,6 +84,44 @@
     },
   ];
 
+  const OPEN_WORLD_ASSET_SOURCES = Object.freeze({
+    graveyard: {
+      name: "Kenney Graveyard Kit",
+      url: "https://kenney.nl/assets/graveyard-kit",
+      license: "Creative Commons CC0",
+      usage: "low-poly street props, fences, lamps and landmark silhouettes rebuilt with local Three.js primitives",
+    },
+    blaster: {
+      name: "Kenney Blaster Kit",
+      url: "https://kenney.nl/assets/blaster-kit",
+      license: "Creative Commons CC0",
+      usage: "pickup crates, ammo packs and gadget silhouettes rebuilt with local Three.js primitives",
+    },
+    blockyCharacters: {
+      name: "Kenney Blocky Characters",
+      url: "https://kenney.nl/assets/blocky-characters",
+      license: "Creative Commons CC0",
+      usage: "blocky player and pedestrian proportions rebuilt with local Three.js primitives",
+    },
+    platformerTextures: {
+      name: "Kenney New Platformer Pack",
+      url: "https://kenney.nl/assets/new-platformer-pack",
+      license: "Creative Commons CC0",
+      usage: "bundled PNG terrain textures for city ground and street props",
+    },
+    puzzleTextures: {
+      name: "Kenney Puzzle Pack 2",
+      url: "https://kenney.nl/assets/puzzle-pack-2",
+      license: "Creative Commons CC0",
+      usage: "bundled PNG tile textures for asphalt-like roads and supply crates",
+    },
+  });
+  const OPEN_WORLD_TEXTURE_ASSETS = Object.freeze({
+    grass: "/assets/games/vendor/kenney/new-platformer-pack/tiles/terrain_grass_center.png",
+    road: "/assets/games/vendor/kenney/puzzle-pack-2/tiles/black_01.png",
+    supply: "/assets/games/vendor/kenney/puzzle-pack-2/tiles/blue_01.png",
+  });
+
   function openWorldRandom(state) {
     return typeof state?.rng === "function" ? state.rng() : Math.random();
   }
@@ -117,6 +163,25 @@
     });
   }
 
+  function createOpenWorldImageTexture(THREE, src, repeatX = 1, repeatY = 1) {
+    if (!THREE.TextureLoader || !THREE.RepeatWrapping) return null;
+    const texture = new THREE.TextureLoader().load(src);
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.repeat.set(repeatX, repeatY);
+    texture.anisotropy = 4;
+    if (THREE.SRGBColorSpace) texture.colorSpace = THREE.SRGBColorSpace;
+    return texture;
+  }
+
+  function applyOpenWorldMaterialTexture(THREE, material, src, repeatX = 1, repeatY = 1) {
+    const texture = createOpenWorldImageTexture(THREE, src, repeatX, repeatY);
+    if (!texture || !material) return false;
+    material.map = texture;
+    material.needsUpdate = true;
+    return true;
+  }
+
   function createBox(THREE, width, height, depth, color) {
     const mesh = new THREE.Mesh(
       new THREE.BoxGeometry(width, height, depth),
@@ -137,29 +202,266 @@
     return mesh;
   }
 
+  function createOpenWorldCanvasTexture(THREE, width, height, painter) {
+    if (typeof document === "undefined" || !THREE.CanvasTexture) return null;
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    painter?.(ctx, width, height);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.anisotropy = 4;
+    texture.needsUpdate = true;
+    if (THREE.SRGBColorSpace) texture.colorSpace = THREE.SRGBColorSpace;
+    return texture;
+  }
+
+  function createOpenWorldGroundMaterial(THREE) {
+    const texture = createOpenWorldCanvasTexture(THREE, 256, 256, (ctx, w, h) => {
+      ctx.fillStyle = "#6aa37a";
+      ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = "rgba(22,101,52,.18)";
+      for (let y = 0; y < h; y += 24) ctx.fillRect(0, y, w, 3);
+      ctx.fillStyle = "rgba(226,232,240,.12)";
+      for (let i = 0; i < 48; i += 1) {
+        const x = (i * 47) % w;
+        const y = (i * 31) % h;
+        ctx.fillRect(x, y, 2 + (i % 3), 2);
+      }
+      ctx.fillStyle = "rgba(15,23,42,.08)";
+      for (let i = 0; i < 10; i += 1) {
+        ctx.beginPath();
+        ctx.arc((i * 67) % w, (i * 41) % h, 8 + (i % 4), 0, Math.PI * 2);
+        ctx.fill();
+      }
+    });
+    const material = makeMaterial(THREE, "#6aa37a", 0.9, 0);
+    if (applyOpenWorldMaterialTexture(THREE, material, OPEN_WORLD_TEXTURE_ASSETS.grass, 34, 34)) return material;
+    if (texture) {
+      texture.repeat.set(14, 14);
+      material.map = texture;
+      material.needsUpdate = true;
+    }
+    return material;
+  }
+
+  function createOpenWorldRoadMaterial(THREE, color = "#2f3542") {
+    const texture = createOpenWorldCanvasTexture(THREE, 192, 192, (ctx, w, h) => {
+      ctx.fillStyle = color;
+      ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = "rgba(255,255,255,.05)";
+      for (let y = 8; y < h; y += 18) ctx.fillRect(0, y, w, 1);
+      ctx.fillStyle = "rgba(15,23,42,.22)";
+      for (let i = 0; i < 70; i += 1) ctx.fillRect((i * 37) % w, (i * 53) % h, 2, 2);
+    });
+    const material = makeMaterial(THREE, color, 0.94, 0);
+    if (applyOpenWorldMaterialTexture(THREE, material, OPEN_WORLD_TEXTURE_ASSETS.road, 24, 24)) return material;
+    if (texture) {
+      texture.repeat.set(9, 9);
+      material.map = texture;
+      material.needsUpdate = true;
+    }
+    return material;
+  }
+
+  function createOpenWorldBuildingMesh(THREE, width, height, depth, color, options = {}) {
+    const group = new THREE.Group();
+    const body = createBox(THREE, width, height, depth, color);
+    body.position.y = height / 2;
+    group.add(body);
+
+    const trimColor = options.trim || "#e2e8f0";
+    const glassColor = options.glass || "#bae6fd";
+    const windowMat = new THREE.MeshStandardMaterial({
+      color: colorFromHex(THREE, glassColor),
+      emissive: colorFromHex(THREE, options.lit ? "#60a5fa" : "#0f172a"),
+      emissiveIntensity: options.lit ? 0.32 : 0.08,
+      roughness: 0.38,
+      metalness: 0.02,
+    });
+    const floors = clamp(Math.floor(height / 1.75), 2, 9);
+    const frontCols = clamp(Math.floor(width / 1.7), 2, 5);
+    const sideCols = clamp(Math.floor(depth / 1.9), 2, 4);
+    for (let floor = 0; floor < floors; floor += 1) {
+      const y = 1.2 + floor * ((height - 1.6) / floors);
+      for (let col = 0; col < frontCols; col += 1) {
+        const offset = ((col + 0.5) / frontCols - 0.5) * width * 0.72;
+        [-1, 1].forEach((side) => {
+          const win = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.42, 0.06), windowMat);
+          win.position.set(offset, y, side * (depth / 2 + 0.035));
+          win.castShadow = false;
+          group.add(win);
+        });
+      }
+      for (let col = 0; col < sideCols; col += 1) {
+        const offset = ((col + 0.5) / sideCols - 0.5) * depth * 0.68;
+        [-1, 1].forEach((side) => {
+          const win = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.4, 0.58), windowMat);
+          win.position.set(side * (width / 2 + 0.035), y, offset);
+          win.castShadow = false;
+          group.add(win);
+        });
+      }
+    }
+
+    const roof = createBox(THREE, width * 0.78, 0.28, depth * 0.78, "#111827");
+    roof.position.y = height + 0.18;
+    group.add(roof);
+    if (options.sign) {
+      const sign = createBox(THREE, Math.min(width * 0.82, 5.8), 0.68, 0.12, options.signColor || "#f59e0b");
+      sign.position.set(0, Math.min(height - 0.9, 3.8), depth / 2 + 0.1);
+      group.add(sign);
+    }
+    if (options.waterTower) {
+      const tank = createCylinder(THREE, 0.7, 1.25, trimColor, 16);
+      tank.position.set(width * 0.22, height + 0.92, depth * -0.16);
+      const stand = createBox(THREE, 0.18, 1.1, 0.18, "#334155");
+      stand.position.set(width * 0.22, height + 0.42, depth * -0.16);
+      group.add(stand, tank);
+    }
+    return group;
+  }
+
+  function createOpenWorldStreetPropMesh(THREE, type, options = {}) {
+    const group = new THREE.Group();
+    if (type === "streetlight") {
+      const pole = createCylinder(THREE, 0.08, 3.2, "#475569", 10);
+      pole.position.y = 1.6;
+      const arm = createBox(THREE, 1.05, 0.08, 0.08, "#475569");
+      arm.position.set(0.42, 3.12, 0);
+      const lamp = createBox(THREE, 0.38, 0.18, 0.28, "#fde68a");
+      lamp.position.set(0.92, 3.04, 0);
+      const glow = new THREE.Mesh(
+        new THREE.SphereGeometry(0.42, 12, 8),
+        new THREE.MeshStandardMaterial({
+          color: 0xfef3c7,
+          emissive: 0xf59e0b,
+          emissiveIntensity: 0.35,
+          transparent: true,
+          opacity: 0.34,
+        }),
+      );
+      glow.position.set(0.92, 2.84, 0);
+      group.add(pole, arm, lamp, glow);
+    } else if (type === "tree") {
+      const trunk = createCylinder(THREE, 0.18, 1.25, "#854d0e", 10);
+      trunk.position.y = 0.62;
+      const crown = new THREE.Mesh(new THREE.ConeGeometry(0.95, 2.1, 8), makeMaterial(THREE, options.color || "#166534", 0.88, 0));
+      crown.position.y = 2.05;
+      crown.castShadow = true;
+      group.add(trunk, crown);
+    } else if (type === "barrier") {
+      const base = createBox(THREE, 2.2, 0.42, 0.42, "#f97316");
+      base.position.y = 0.34;
+      const stripeA = createBox(THREE, 0.18, 0.48, 0.48, "#f8fafc");
+      stripeA.position.set(-0.46, 0.38, 0);
+      const stripeB = createBox(THREE, 0.18, 0.48, 0.48, "#f8fafc");
+      stripeB.position.set(0.46, 0.38, 0);
+      group.add(base, stripeA, stripeB);
+    } else if (type === "bus-stop") {
+      const back = createBox(THREE, 2.6, 1.5, 0.14, "#0f172a");
+      back.position.y = 0.9;
+      const roof = createBox(THREE, 2.9, 0.16, 1.05, "#38bdf8");
+      roof.position.set(0, 1.76, 0.36);
+      const bench = createBox(THREE, 1.8, 0.24, 0.42, "#f59e0b");
+      bench.position.set(0, 0.42, 0.32);
+      group.add(back, roof, bench);
+    } else if (type === "supply-crate") {
+      const crate = createBox(THREE, 1.25, 0.92, 1.25, options.color || "#7c3aed");
+      applyOpenWorldMaterialTexture(THREE, crate.material, OPEN_WORLD_TEXTURE_ASSETS.supply, 1, 1);
+      crate.position.y = 0.46;
+      const lid = createBox(THREE, 1.38, 0.14, 1.38, "#e2e8f0");
+      lid.position.y = 0.98;
+      group.add(crate, lid);
+    } else {
+      const plinth = createBox(THREE, 1.1, 0.22, 1.1, "#64748b");
+      plinth.position.y = 0.12;
+      const stone = createBox(THREE, 0.78, 1.1, 0.22, "#94a3b8");
+      stone.position.y = 0.76;
+      group.add(plinth, stone);
+    }
+    group.userData.assetKit = "Kenney CC0 procedural proxy";
+    return group;
+  }
+
+  function createOpenWorldStreetProps() {
+    const props = [];
+    OPEN_WORLD_ROADS.forEach((road, index) => {
+      OPEN_WORLD_BLOCK_CENTERS.forEach((cell, cellIndex) => {
+        if ((index + cellIndex) % 2 === 0) props.push({ type: "streetlight", x: road + 6.4, z: cell, angle: Math.PI / 2 });
+        if ((index + cellIndex) % 3 === 0) props.push({ type: "tree", x: cell, z: road - 6.6, angle: 0, color: cellIndex % 2 ? "#14532d" : "#166534" });
+      });
+    });
+    [
+      { type: "bus-stop", x: -30, z: 7, angle: Math.PI / 2 },
+      { type: "bus-stop", x: 30, z: -31, angle: -Math.PI / 2 },
+      { type: "barrier", x: -70, z: 36, angle: 0 },
+      { type: "barrier", x: 58, z: -70, angle: Math.PI / 2 },
+      { type: "supply-crate", x: -52, z: 54, angle: 0, color: "#7c3aed" },
+      { type: "supply-crate", x: 48, z: -52, angle: 0, color: "#059669" },
+      { type: "grave-marker", x: -58, z: -54, angle: 0 },
+      { type: "grave-marker", x: -64, z: -60, angle: 0.2 },
+    ].forEach((prop) => props.push(prop));
+    return props.filter((prop) => !pointOnDiagonalRoad(prop.x, prop.z, 1.5));
+  }
+
+  function createOpenWorldPickupMesh(THREE, pickup) {
+    const type = pickup.type || "ammo";
+    const group = new THREE.Group();
+    const color = pickup.color || "#a78bfa";
+    const crate = createOpenWorldStreetPropMesh(THREE, "supply-crate", { color });
+    crate.scale.set(0.78, 0.78, 0.78);
+    group.add(crate);
+    const badge = createBox(THREE, 0.72, 0.08, 0.72, type === "health" ? "#fecaca" : type === "armor" ? "#bae6fd" : "#fef3c7");
+    badge.position.set(0, 0.98, 0);
+    group.add(badge);
+    if (type === "health") {
+      const crossA = createBox(THREE, 0.52, 0.1, 0.12, "#ef4444");
+      const crossB = createBox(THREE, 0.12, 0.1, 0.52, "#ef4444");
+      crossA.position.y = 1.06;
+      crossB.position.y = 1.07;
+      group.add(crossA, crossB);
+    }
+    return group;
+  }
+
   function createCityCarMesh(THREE, color = "#ef4444", options = {}) {
     const group = new THREE.Group();
-    const body = createBox(THREE, options.length || 4.2, 0.9, options.width || 2.25, color);
+    const length = options.length || 4.2;
+    const width = options.width || 2.25;
+    const body = createBox(THREE, width, 0.9, length, color);
     body.position.y = 0.72;
-    const cabin = createBox(THREE, 1.72, 0.76, 1.72, options.cabin || "#dbeafe");
-    cabin.position.set(-0.1, 1.34, -0.08);
+    const cabin = createBox(THREE, width * 0.74, 0.76, length * 0.42, options.cabin || "#dbeafe");
+    cabin.position.set(0, 1.34, -0.08);
     cabin.material.transparent = true;
     cabin.material.opacity = 0.72;
-    const front = createBox(THREE, 0.16, 0.28, 1.25, "#fef3c7");
-    front.position.set(2.14, 0.83, 0);
-    const rear = createBox(THREE, 0.14, 0.24, 1.14, "#fb7185");
-    rear.position.set(-2.12, 0.82, 0);
+    const front = createBox(THREE, width * 0.58, 0.28, 0.16, "#fef3c7");
+    front.position.set(0, 0.83, length / 2 + 0.05);
+    const rear = createBox(THREE, width * 0.54, 0.24, 0.14, "#fb7185");
+    rear.position.set(0, 0.82, -length / 2 - 0.04);
+    const hood = createBox(THREE, width * 0.78, 0.08, length * 0.32, "#111827");
+    hood.position.set(0, 1.19, length * 0.2);
+    hood.material.transparent = true;
+    hood.material.opacity = 0.22;
+    const bumper = createBox(THREE, width * 0.78, 0.18, 0.22, "#111827");
+    bumper.position.set(0, 0.54, length / 2 + 0.14);
+    const sideStripe = createBox(THREE, 0.08, 0.2, length * 0.7, options.stripe || "#f8fafc");
+    sideStripe.position.set(width / 2 + 0.04, 0.92, -0.08);
+    const sideStripeB = createBox(THREE, 0.08, 0.2, length * 0.7, options.stripe || "#f8fafc");
+    sideStripeB.position.set(-width / 2 - 0.04, 0.92, -0.08);
     const wheelMat = makeMaterial(THREE, "#111827", 0.92, 0.16);
-    [-1.45, 1.45].forEach((x) => {
-      [-1.18, 1.18].forEach((z) => {
+    [-width * 0.58, width * 0.58].forEach((x) => {
+      [-length * 0.35, length * 0.35].forEach((z) => {
         const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.34, 0.3, 14), wheelMat);
-        wheel.rotation.x = Math.PI / 2;
+        wheel.rotation.z = Math.PI / 2;
         wheel.position.set(x, 0.32, z);
         wheel.castShadow = true;
         group.add(wheel);
       });
     });
-    group.add(body, cabin, front, rear);
+    group.add(body, cabin, front, rear, hood, bumper, sideStripe, sideStripeB);
     if (options.lightbar) {
       const bar = createBox(THREE, 0.95, 0.16, 0.28, "#e0f2fe");
       bar.position.set(0, 1.82, 0);
@@ -174,18 +476,34 @@
 
   function createPlayerMesh(THREE) {
     const group = new THREE.Group();
-    const legs = createCylinder(THREE, 0.36, 0.95, "#1f2937", 14);
-    legs.position.y = 0.48;
-    const torso = createCylinder(THREE, 0.48, 0.98, "#2563eb", 16);
-    torso.position.y = 1.32;
+    const leftLeg = createBox(THREE, 0.28, 0.84, 0.28, "#1f2937");
+    leftLeg.position.set(-0.18, 0.42, 0);
+    const rightLeg = createBox(THREE, 0.28, 0.84, 0.28, "#1f2937");
+    rightLeg.position.set(0.18, 0.42, 0);
+    const torso = createBox(THREE, 0.86, 0.98, 0.42, "#2563eb");
+    torso.position.y = 1.28;
+    const vest = createBox(THREE, 0.92, 0.58, 0.12, "#0f172a");
+    vest.position.set(0, 1.3, 0.28);
+    vest.material.transparent = true;
+    vest.material.opacity = 0.62;
+    const armL = createBox(THREE, 0.22, 0.82, 0.22, "#f8d0a8");
+    armL.position.set(-0.62, 1.25, 0.08);
+    armL.rotation.z = -0.18;
+    const armR = createBox(THREE, 0.22, 0.82, 0.22, "#f8d0a8");
+    armR.position.set(0.62, 1.25, 0.08);
+    armR.rotation.z = 0.18;
     const head = new THREE.Mesh(
       new THREE.SphereGeometry(0.36, 18, 12),
       makeMaterial(THREE, "#f8d0a8"),
     );
     head.position.y = 2.05;
+    const helmet = createBox(THREE, 0.76, 0.22, 0.52, "#111827");
+    helmet.position.set(0, 2.28, 0);
     const visor = createBox(THREE, 0.36, 0.08, 0.09, "#0f172a");
     visor.position.set(0, 2.08, 0.33);
-    group.add(legs, torso, head, visor);
+    const backpack = createBox(THREE, 0.48, 0.72, 0.22, "#0f766e");
+    backpack.position.set(0, 1.34, -0.32);
+    group.add(leftLeg, rightLeg, torso, vest, armL, armR, head, helmet, visor, backpack);
     return group;
   }
 
@@ -249,6 +567,63 @@
     object.rotation.y = angle;
   }
 
+  function roadSegmentLength(road) {
+    return Math.hypot(road.x2 - road.x1, road.z2 - road.z1);
+  }
+
+  function roadSegmentAngle(road, dir = 1) {
+    const fromX = dir >= 0 ? road.x1 : road.x2;
+    const fromZ = dir >= 0 ? road.z1 : road.z2;
+    const toX = dir >= 0 ? road.x2 : road.x1;
+    const toZ = dir >= 0 ? road.z2 : road.z1;
+    return angleTo(fromX, fromZ, toX, toZ);
+  }
+
+  function pointOnRoadSegment(road, t, laneOffset = 0) {
+    const clampedT = ((t % 1) + 1) % 1;
+    const dx = road.x2 - road.x1;
+    const dz = road.z2 - road.z1;
+    const length = Math.max(1, Math.hypot(dx, dz));
+    const nx = -dz / length;
+    const nz = dx / length;
+    return {
+      x: road.x1 + dx * clampedT + nx * laneOffset,
+      z: road.z1 + dz * clampedT + nz * laneOffset,
+    };
+  }
+
+  function distancePointToRoadSegment(x, z, road) {
+    const dx = road.x2 - road.x1;
+    const dz = road.z2 - road.z1;
+    const length2 = dx * dx + dz * dz;
+    if (length2 <= 0.001) return distance(x, z, road.x1, road.z1);
+    const t = clamp(((x - road.x1) * dx + (z - road.z1) * dz) / length2, 0, 1);
+    return distance(x, z, road.x1 + dx * t, road.z1 + dz * t);
+  }
+
+  function pointOnDiagonalRoad(x, z, padding = 0) {
+    return OPEN_WORLD_DIAGONAL_ROADS.some((road) => (
+      distancePointToRoadSegment(x, z, road) <= (road.width || ROAD_WIDTH) * 0.5 + padding
+    ));
+  }
+
+  function rectTouchesDiagonalCorridor(x, z, w, d, padding = 0) {
+    const halfW = w / 2;
+    const halfD = d / 2;
+    const probes = [
+      { x, z },
+      { x: x - halfW, z: z - halfD },
+      { x: x + halfW, z: z - halfD },
+      { x: x - halfW, z: z + halfD },
+      { x: x + halfW, z: z + halfD },
+      { x: x - halfW, z },
+      { x: x + halfW, z },
+      { x, z: z - halfD },
+      { x, z: z + halfD },
+    ];
+    return probes.some((point) => pointOnDiagonalRoad(point.x, point.z, padding));
+  }
+
   function isOnRoad(value) {
     return OPEN_WORLD_ROADS.some((road) => Math.abs(value - road) <= ROAD_WIDTH * 0.56);
   }
@@ -278,6 +653,24 @@
     return openWorldReservedPoints().some((point) => (
       circleHitsRect(point.x, point.z, point.radius, { x, z, w, d })
     ));
+  }
+
+  function createOpenWorldRoadSegment(THREE, road, roadMaterial, lineMaterial) {
+    const group = new THREE.Group();
+    const length = roadSegmentLength(road);
+    const angle = Math.atan2(road.z2 - road.z1, road.x2 - road.x1);
+    const roadMesh = new THREE.Mesh(new THREE.PlaneGeometry(length, road.width || ROAD_WIDTH), roadMaterial);
+    roadMesh.rotation.x = -Math.PI / 2;
+    roadMesh.rotation.z = angle;
+    roadMesh.position.y = 0.035;
+    roadMesh.receiveShadow = true;
+    const line = new THREE.Mesh(new THREE.PlaneGeometry(length, 0.32), lineMaterial);
+    line.rotation.x = -Math.PI / 2;
+    line.rotation.z = angle;
+    line.position.y = 0.055;
+    group.add(roadMesh, line);
+    group.position.set((road.x1 + road.x2) / 2, 0, (road.z1 + road.z2) / 2);
+    return group;
   }
 
   function openWorldBlocked(state, x, z, radius) {
@@ -440,13 +833,13 @@
 
     const ground = new THREE.Mesh(
       new THREE.PlaneGeometry(WORLD_SIZE + 18, WORLD_SIZE + 18),
-      makeMaterial(THREE, "#6aa37a", 0.88, 0),
+      createOpenWorldGroundMaterial(THREE),
     );
     ground.rotation.x = -Math.PI / 2;
     ground.receiveShadow = true;
     scene.add(ground);
 
-    const roadMaterial = makeMaterial(THREE, "#2f3542", 0.92, 0);
+    const roadMaterial = createOpenWorldRoadMaterial(THREE, "#2f3542");
     const lineMaterial = makeMaterial(THREE, "#f8fafc", 0.55, 0);
     OPEN_WORLD_ROADS.forEach((x) => {
       const road = new THREE.Mesh(new THREE.PlaneGeometry(ROAD_WIDTH, WORLD_SIZE + 8), roadMaterial);
@@ -470,11 +863,23 @@
       line.position.set(0, 0.045, z);
       scene.add(line);
     });
+    OPEN_WORLD_DIAGONAL_ROADS.forEach((road) => {
+      const segment = createOpenWorldRoadSegment(
+        THREE,
+        road,
+        makeMaterial(THREE, road.color || "#343a46", 0.92, 0),
+        lineMaterial,
+      );
+      scene.add(segment);
+    });
 
     const plazas = [
       { x: 0, z: 0, w: 18, d: 18, color: "#94a3b8" },
       { x: 54, z: 54, w: 24, d: 18, color: "#4ade80" },
       { x: -58, z: -62, w: 24, d: 18, color: "#7dd3fc" },
+      { x: -30, z: 42, w: 20, d: 14, color: "#65a30d" },
+      { x: 36, z: -56, w: 18, d: 22, color: "#38bdf8" },
+      { x: 66, z: 0, w: 12, d: 26, color: "#f59e0b" },
     ];
     plazas.forEach((plaza) => {
       const mesh = new THREE.Mesh(new THREE.PlaneGeometry(plaza.w, plaza.d), makeMaterial(THREE, plaza.color, 0.8, 0));
@@ -493,23 +898,44 @@
         const h = 4.5 + ((Math.abs(x * 13 + z * 7) % 10) * 1.15);
         const w = 7 + (Math.abs(x + z) % 3);
         const d = 7 + (Math.abs(x - z) % 4);
+        if (rectTouchesDiagonalCorridor(x, z, w + 2.4, d + 2.4, 3.2)) return;
+        if ((Math.abs(x * 17 - z * 11) % 13) === 0) return;
         const collider = { x, z, w: w + 1.2, d: d + 1.2 };
         if (blocksReservedPoint(collider.x, collider.z, collider.w, collider.d)) return;
-        const color = buildingColors[Math.abs(Math.floor((x + 91) * 3 + z)) % buildingColors.length];
-        const building = createBox(THREE, w, h, d, color);
-        building.position.set(x, h / 2, z);
+        const colorIndex = Math.abs(Math.floor((x + 91) * 3 + z)) % buildingColors.length;
+        const color = buildingColors[colorIndex];
+        const building = createOpenWorldBuildingMesh(THREE, w, h, d, color, {
+          glass: colorIndex % 2 ? "#bfdbfe" : "#fde68a",
+          lit: (Math.abs(x * 5 + z * 9) % 3) === 0,
+          sign: (Math.abs(x + z) % 5) === 0,
+          signColor: colorIndex % 2 ? "#38bdf8" : "#f97316",
+          waterTower: (Math.abs(x * 11 - z * 7) % 6) === 0,
+        });
+        building.position.set(x, 0, z);
         scene.add(building);
         state.colliders.push(collider);
-        if ((Math.abs(x + z) % 4) === 0) {
-          const roof = createBox(THREE, w * 0.7, 0.35, d * 0.7, "#111827");
-          roof.position.set(x, h + 0.22, z);
-          scene.add(roof);
-        }
       });
     });
 
-    const landmarkTower = createBox(THREE, 7, 24, 7, "#0f766e");
-    landmarkTower.position.set(-18, 12, 18);
+    createOpenWorldStreetProps().forEach((prop) => {
+      if (blocksReservedPoint(prop.x, prop.z, 2.4, 2.4)) return;
+      const mesh = createOpenWorldStreetPropMesh(THREE, prop.type, prop);
+      mesh.position.set(prop.x, 0, prop.z);
+      mesh.rotation.y = prop.angle || 0;
+      scene.add(mesh);
+      if (prop.type === "barrier" || prop.type === "bus-stop" || prop.type === "supply-crate") {
+        state.colliders.push({ x: prop.x, z: prop.z, w: prop.type === "bus-stop" ? 3 : 2.4, d: prop.type === "bus-stop" ? 1.4 : 1.4 });
+      }
+    });
+
+    const landmarkTower = createOpenWorldBuildingMesh(THREE, 8, 24, 8, "#0f766e", {
+      glass: "#99f6e4",
+      lit: true,
+      sign: true,
+      signColor: "#14b8a6",
+      waterTower: true,
+    });
+    landmarkTower.position.set(-18, 0, 18);
     scene.add(landmarkTower);
     state.colliders.push({ x: -18, z: 18, w: 9, d: 9 });
 
@@ -540,10 +966,33 @@
         z: axis === "z" ? -76 + ((i * 23) % 152) : road + lane,
         mesh,
       };
-      setObjectPose(mesh, row.x, row.z, axis === "x" ? Math.PI / 2 * row.dir : row.dir > 0 ? 0 : Math.PI);
+      row.angle = axis === "x" ? Math.PI / 2 * row.dir : row.dir > 0 ? 0 : Math.PI;
+      setObjectPose(mesh, row.x, row.z, row.angle);
       scene.add(mesh);
       state.traffic.push(row);
     }
+    OPEN_WORLD_DIAGONAL_ROADS.forEach((route, routeIndex) => {
+      [-1, 1].forEach((laneSign, laneIndex) => {
+        const mesh = createCityCarMesh(THREE, laneIndex ? "#14b8a6" : "#f97316", { cabin: "#e0f2fe" });
+        const dir = laneIndex ? 1 : -1;
+        const t = (routeIndex * 0.31 + laneIndex * 0.47 + 0.18) % 1;
+        const row = {
+          route,
+          t,
+          dir,
+          lane: laneSign * 1.75,
+          speed: 9.4 + routeIndex * 1.1,
+          mesh,
+        };
+        const point = pointOnRoadSegment(route, row.t, row.lane);
+        row.x = point.x;
+        row.z = point.z;
+        row.angle = roadSegmentAngle(route, row.dir);
+        setObjectPose(mesh, row.x, row.z, row.angle);
+        scene.add(mesh);
+        state.traffic.push(row);
+      });
+    });
 
     state.patrols = [];
     for (let i = 0; i < 4; i += 1) {
@@ -562,8 +1011,8 @@
     }
 
     state.pickups = OPEN_WORLD_PICKUP_SPAWNS.map((pickup) => {
-      const mesh = createCylinder(THREE, 0.9, 0.35, pickup.color, 16);
-      mesh.position.set(pickup.x, 0.35, pickup.z);
+      const mesh = createOpenWorldPickupMesh(THREE, pickup);
+      mesh.position.set(pickup.x, 0, pickup.z);
       scene.add(mesh);
       return { ...pickup, mesh, active: true, spin: openWorldRandom(state) * Math.PI * 2 };
     });
@@ -734,19 +1183,108 @@
     setObjectPose(player.mesh, player.x, player.z, player.angle);
   }
 
+  function syncOpenWorldPlayerPose(state) {
+    const player = state.player;
+    if (player.inVehicle) {
+      const vehicle = player.inVehicle;
+      vehicle.x = player.x;
+      vehicle.z = player.z;
+      vehicle.angle = player.angle;
+      vehicle.speed = player.speed;
+      setObjectPose(vehicle.mesh, vehicle.x, vehicle.z, vehicle.angle);
+    } else {
+      setObjectPose(player.mesh, player.x, player.z, player.angle);
+    }
+  }
+
+  function pushOpenWorldPlayerAway(state, fromX, fromZ, radius, impulse) {
+    const player = state.player;
+    const dx = player.x - fromX;
+    const dz = player.z - fromZ;
+    const length = Math.max(0.001, Math.hypot(dx, dz));
+    let nx = dx / length;
+    let nz = dz / length;
+    if (length < 0.08) {
+      nx = Math.sin(player.angle);
+      nz = Math.cos(player.angle);
+    }
+    const overlap = Math.max(0, radius - length);
+    const push = Math.min(player.inVehicle ? 2.4 : 1.65, overlap + impulse);
+    const attempts = [
+      { x: player.x + nx * push, z: player.z + nz * push },
+      { x: player.x + nz * push * 0.75, z: player.z - nx * push * 0.75 },
+      { x: player.x - nz * push * 0.75, z: player.z + nx * push * 0.75 },
+    ];
+    const bodyRadius = player.inVehicle ? VEHICLE_RADIUS : PLAYER_RADIUS;
+    const edge = WORLD_SIZE / 2 - bodyRadius - 1.6;
+    const target = attempts.find((point) => (
+      !openWorldBlocked(state, clamp(point.x, -edge, edge), clamp(point.z, -edge, edge), bodyRadius)
+    ));
+    if (!target) return false;
+    player.x = clamp(target.x, -edge, edge);
+    player.z = clamp(target.z, -edge, edge);
+    syncOpenWorldPlayerPose(state);
+    return true;
+  }
+
+  function absorbOpenWorldDamage(state, damage) {
+    let remaining = Number(damage || 0);
+    if (state.armor > 0) {
+      const absorbed = Math.min(state.armor, remaining * 0.55);
+      state.armor = clamp(state.armor - absorbed, 0, 100);
+      remaining -= absorbed * 0.7;
+    }
+    state.health = clamp(state.health - Math.max(0, remaining), 0, 100);
+  }
+
+  function handleOpenWorldTrafficCollision(state, car, dt) {
+    const player = state.player;
+    const inVehicle = Boolean(player.inVehicle);
+    const collisionRadius = inVehicle ? TRAFFIC_COLLISION_DISTANCE : PEDESTRIAN_TRAFFIC_COLLISION_DISTANCE;
+    if (!withinDistance2(car.x, car.z, player.x, player.z, collisionRadius)) return;
+    pushOpenWorldPlayerAway(state, car.x, car.z, collisionRadius, inVehicle ? 0.42 : 0.72);
+    const now = performance.now();
+    if (now <= Number(state.nextTrafficHitAt || 0)) return;
+    const relativeSpeed = Math.abs(Number(player.speed || 0)) + Math.abs(Number(car.speed || 0));
+    const damage = inVehicle
+      ? 6 + Math.min(16, relativeSpeed * 0.26)
+      : 15 + Math.min(20, Number(car.speed || 0) * 0.7);
+    absorbOpenWorldDamage(state, damage);
+    if (inVehicle) {
+      player.speed *= -0.3;
+      player.inVehicle.speed = player.speed;
+    } else {
+      player.speed = 0;
+    }
+    state.score = Math.max(0, state.score - (inVehicle ? 55 : 85));
+    addOpenWorldHeat(state, inVehicle ? 8 : 5, inVehicle ? "交通撞擊" : "行人事故");
+    state.nextTrafficHitAt = now + TRAFFIC_COLLISION_COOLDOWN_MS;
+  }
+
   function updateOpenWorldTraffic(state, dt) {
     state.traffic.forEach((car) => {
-      const delta = car.speed * car.dir * dt;
-      if (car.axis === "x") {
-        car.x += delta;
-        if (car.x > 83) car.x = -83;
-        if (car.x < -83) car.x = 83;
+      if (car.route) {
+        car.t += (car.speed * car.dir * dt) / Math.max(1, roadSegmentLength(car.route));
+        car.t = ((car.t % 1) + 1) % 1;
+        const point = pointOnRoadSegment(car.route, car.t, car.lane);
+        car.x = point.x;
+        car.z = point.z;
+        car.angle = roadSegmentAngle(car.route, car.dir);
       } else {
-        car.z += delta;
-        if (car.z > 83) car.z = -83;
-        if (car.z < -83) car.z = 83;
+        const delta = car.speed * car.dir * dt;
+        if (car.axis === "x") {
+          car.x += delta;
+          if (car.x > 83) car.x = -83;
+          if (car.x < -83) car.x = 83;
+        } else {
+          car.z += delta;
+          if (car.z > 83) car.z = -83;
+          if (car.z < -83) car.z = 83;
+        }
+        car.angle = car.axis === "x" ? Math.PI / 2 * car.dir : car.dir > 0 ? 0 : Math.PI;
       }
-      setObjectPose(car.mesh, car.x, car.z, car.axis === "x" ? Math.PI / 2 * car.dir : car.dir > 0 ? 0 : Math.PI);
+      setObjectPose(car.mesh, car.x, car.z, car.angle);
+      handleOpenWorldTrafficCollision(state, car, dt);
       if (withinDistance2(car.x, car.z, state.player.x, state.player.z, TRAFFIC_HIT_DISTANCE)) {
         if (state.player.inVehicle && Math.abs(state.player.speed) > 9) {
           state.health = clamp(state.health - dt * 12, 0, 100);
@@ -909,7 +1447,8 @@
 
   function updateOpenWorldHeat(state, dt) {
     const player = state.player;
-    if (player.inVehicle && Math.abs(player.speed) > 37 && !isOnRoad(player.x) && !isOnRoad(player.z)) {
+    const onStreet = isOnRoad(player.x) || isOnRoad(player.z) || pointOnDiagonalRoad(player.x, player.z, VEHICLE_RADIUS);
+    if (player.inVehicle && Math.abs(player.speed) > 37 && !onStreet) {
       addOpenWorldHeat(state, dt * 7.5, "危險駕駛");
     }
     const nearPatrol = state.patrols.some((patrol) => withinDistance2(patrol.x, patrol.z, player.x, player.z, 24));
@@ -979,6 +1518,14 @@
       ctx.beginPath();
       ctx.moveTo(0, toY(road));
       ctx.lineTo(size, toY(road));
+      ctx.stroke();
+    });
+    OPEN_WORLD_DIAGONAL_ROADS.forEach((road) => {
+      ctx.strokeStyle = road.color || "#64748b";
+      ctx.lineWidth = Math.max(2, (road.width || ROAD_WIDTH) * scale);
+      ctx.beginPath();
+      ctx.moveTo(toX(road.x1), toY(road.z1));
+      ctx.lineTo(toX(road.x2), toY(road.z2));
       ctx.stroke();
     });
     ctx.fillStyle = "rgba(15,23,42,.6)";
@@ -1164,6 +1711,7 @@
       lastFrameAt: 0,
       lastStatusText: "",
       nextStatusAt: 0,
+      nextTrafficHitAt: 0,
       cameraReady: false,
       resizeHandler: null,
     };
@@ -1230,6 +1778,7 @@
     state.powerupsCollected = 0;
     state.lastStatusText = "";
     state.nextStatusAt = 0;
+    state.nextTrafficHitAt = 0;
     state.projectiles.forEach((shot) => disposeOpenWorldObject(shot.mesh));
     state.projectiles = [];
     state.player.x = 0;
