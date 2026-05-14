@@ -202,7 +202,9 @@ def wait_for_outputs(
     websocket_module=None,
 ):
     start_time = time.time()
-    deadline = start_time + int(timeout_seconds)
+    timeout_value = max(0, int(timeout_seconds or 0))
+    unlimited_timeout = timeout_value <= 0
+    deadline = float("inf") if unlimited_timeout else start_time + timeout_value
     last_status = None
     expected = max(1, int(expected_count or 1))
     running_started = False
@@ -216,7 +218,8 @@ def wait_for_outputs(
         "queue_remaining": None,
         "detail": "已送出至 ComfyUI 佇列",
         "completed": False,
-        "timeout_seconds": int(timeout_seconds),
+        "timeout_seconds": 0 if unlimited_timeout else timeout_value,
+        "timeout_unlimited": unlimited_timeout,
         "timeout_extended": False,
         "updated_at": time.time(),
     }
@@ -225,17 +228,18 @@ def wait_for_outputs(
         now = time.time()
         if snapshot.get("phase") == "running" and not running_started:
             running_started = True
-            deadline = max(deadline, now + int(timeout_seconds))
-            snapshot["timeout_seconds"] = max(int(snapshot.get("timeout_seconds") or 0), int(deadline - start_time))
+            if not unlimited_timeout:
+                deadline = max(deadline, now + timeout_value)
+                snapshot["timeout_seconds"] = max(int(snapshot.get("timeout_seconds") or 0), int(deadline - start_time))
             emit_progress(progress_callback, snapshot)
-        if not running_started and snapshot.get("phase") == "queued":
+        if not unlimited_timeout and not running_started and snapshot.get("phase") == "queued":
             deadline, extended = _queued_deadline(now, start_time=start_time, deadline=deadline)
             if extended:
                 snapshot["timeout_extended"] = True
                 snapshot["timeout_seconds"] = max(int(snapshot.get("timeout_seconds") or 0), int(deadline - start_time))
                 snapshot["detail"] = "仍在 ComfyUI 佇列中，已自動延長等待時間"
                 emit_progress(progress_callback, snapshot)
-        if now >= deadline:
+        if not unlimited_timeout and now >= deadline:
             break
         if websocket_conn is not None and websocket_module is not None:
             for _ in range(20):

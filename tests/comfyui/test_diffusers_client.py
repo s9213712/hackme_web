@@ -121,6 +121,9 @@ def test_diffusers_huggingface_progress_tqdm_reports_download_bytes(tmp_path):
     assert events[-1]["bytes_written"] == 40
     assert events[-1]["total_bytes"] == 100
     assert events[-1]["percent"] == 22
+    assert events[-1]["current_file"] == "model.safetensors"
+    assert "speed_bytes_per_sec" in events[-1]
+    assert events[-1]["step"] == "Hugging Face 檔案下載"
     assert "model.safetensors" in events[-1]["detail"]
 
 

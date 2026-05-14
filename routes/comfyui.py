@@ -91,8 +91,8 @@ DEFAULT_COMFYUI_URL = os.environ.get("COMFYUI_API_URL", "http://localhost:8192")
 COMFYUI_LOCAL_START_TEMPLATE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "comfyui" / "comfyui_run_in_linux.template.sh"
 SAFE_SAMPLER_FALLBACK = "euler"
 SAFE_SCHEDULER_FALLBACK = "normal"
-DEFAULT_GENERATION_TIMEOUT_SECONDS = 1800
-MAX_GENERATION_TIMEOUT_SECONDS = 1800
+DEFAULT_GENERATION_TIMEOUT_SECONDS = 0
+MAX_GENERATION_TIMEOUT_SECONDS = 7 * 24 * 3600
 COMFYUI_BASIC_PRICE_ITEM_KEY = "comfyui_txt2img_basic"
 MAX_COMFYUI_FETCH_IMAGE_BYTES = 50 * 1024 * 1024
 MAX_COMFYUI_LORAS_PER_PROMPT = 8
@@ -2210,6 +2210,15 @@ def register_comfyui_routes(app, deps):
             number = max(minimum, (number // multiple_of) * multiple_of)
         return number
 
+    def _normalize_generation_timeout(value):
+        try:
+            number = int(value)
+        except Exception:
+            number = DEFAULT_GENERATION_TIMEOUT_SECONDS
+        if number <= 0:
+            return 0
+        return _int_range(number, DEFAULT_GENERATION_TIMEOUT_SECONDS or 1800, 30, MAX_GENERATION_TIMEOUT_SECONDS)
+
     def _float_range(value, default, minimum, maximum):
         try:
             number = float(value)
@@ -2827,6 +2836,7 @@ def register_comfyui_routes(app, deps):
         "comfyui_paid_api_status_payload": _comfyui_paid_api_status_payload,
         "build_node_catalog": build_node_catalog,
         "normalize_generation_payload": _normalize_generation_payload,
+        "normalize_generation_timeout": _normalize_generation_timeout,
         "parse_generation_request": _parse_generation_request,
         "record_generation_history": _record_generation_history,
         "register_active_generation": _register_active_generation,

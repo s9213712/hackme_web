@@ -48,6 +48,7 @@ def register_comfyui_runtime_routes(app, ctx):
     _load_generation_history = ctx["load_generation_history"]
     _local_comfyui_runtime_status = ctx["local_comfyui_runtime_status"]
     _normalize_generation_payload = ctx["normalize_generation_payload"]
+    _normalize_generation_timeout = ctx["normalize_generation_timeout"]
     _parse_generation_request = ctx["parse_generation_request"]
     _record_generation_history = ctx["record_generation_history"]
     _register_active_generation = ctx["register_active_generation"]
@@ -324,12 +325,7 @@ def register_comfyui_runtime_routes(app, ctx):
         except ComfyUIError as exc:
             return _json_error_from_comfy(exc, active_client)
         quote = None
-        timeout_seconds = _int_range(
-            data.get("timeout_seconds"),
-            DEFAULT_GENERATION_TIMEOUT_SECONDS,
-            30,
-            MAX_GENERATION_TIMEOUT_SECONDS,
-        )
+        timeout_seconds = _normalize_generation_timeout(data.get("timeout_seconds"))
         if _comfyui_charge_required(actor):
             quote, msg = _comfyui_price_quote(params["batch_size"], lora_count=_comfyui_lora_count(params))
             if msg:

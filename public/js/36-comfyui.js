@@ -57,7 +57,7 @@ let comfyuiImagePickerState = {
   history: [],
   cloudDrive: [],
 };
-const COMFYUI_GENERATION_TIMEOUT_SECONDS = 1800;
+const COMFYUI_GENERATION_TIMEOUT_SECONDS = 0;
 const COMFYUI_QUEUE_TIMEOUT_EXTENSION_SECONDS = 1800;
 const COMFYUI_QUEUE_MAX_TIMEOUT_SECONDS = 21600;
 const COMFYUI_MAX_LORAS = 8;
@@ -1408,12 +1408,13 @@ function resetComfyuiIdleUi() {
 
 function startComfyuiProgress(timeoutSeconds = COMFYUI_GENERATION_TIMEOUT_SECONDS) {
   comfyuiProgressStartedAt = Date.now();
+  const hasLimit = Number(timeoutSeconds) > 0;
   setComfyuiProgress({
     visible: true,
     running: true,
     percent: 0,
     label: "已送出產圖請求",
-    detail: `已等待 00:00 / 上限 ${formatComfyuiDuration(timeoutSeconds)}`
+    detail: hasLimit ? `已等待 00:00 / 上限 ${formatComfyuiDuration(timeoutSeconds)}` : "已等待 00:00（不設等待上限）"
   });
 }
 
@@ -1437,10 +1438,18 @@ function applyComfyuiJobProgress(progress = {}, timeoutSeconds = COMFYUI_GENERAT
   const baseDetail = progress.detail || "等待進度資料";
   const writtenByteText = writtenBytes > 0 && typeof formatDriveBytes === "function" ? formatDriveBytes(writtenBytes) : "";
   const totalByteText = totalBytes > 0 && typeof formatDriveBytes === "function" ? formatDriveBytes(totalBytes) : "";
+  const speedBytes = Number(progress.speed_bytes_per_sec || progress.download_speed_bytes_per_sec || 0);
+  const speedText = speedBytes > 0 && typeof formatDriveBytes === "function" ? `，速度 ${formatDriveBytes(speedBytes)}/s` : "";
+  const fileText = progress.current_file ? `，檔案 ${progress.current_file}` : "";
+  const stepText = progress.step ? `，步驟 ${progress.step}` : "";
   const byteText = writtenByteText && !baseDetail.includes(writtenByteText)
     ? `，下載 ${writtenByteText}${totalByteText ? ` / ${totalByteText}` : ""}`
     : "";
-  const detail = `${baseDetail}${queueText}${nodeText}${byteText}；已等待 ${formatComfyuiDuration(elapsed)} / 上限 ${formatComfyuiDuration(timeoutSeconds)}`;
+  const hasLimit = Number(timeoutSeconds) > 0;
+  const waitText = hasLimit
+    ? `；已等待 ${formatComfyuiDuration(elapsed)} / 上限 ${formatComfyuiDuration(timeoutSeconds)}`
+    : `；已等待 ${formatComfyuiDuration(elapsed)}（不設等待上限）`;
+  const detail = `${baseDetail}${queueText}${nodeText}${stepText}${fileText}${byteText}${speedText}${waitText}`;
   setComfyuiProgress({
     visible: true,
     running: phase !== "completed" && phase !== "error",
@@ -1467,9 +1476,10 @@ function extendComfyuiDeadlineForQueue(deadline, startedAt) {
 async function pollComfyuiJobUntilDone(jobId, controller, timeoutSeconds) {
   comfyuiActiveJobId = jobId;
   const startedAt = Date.now();
-  let deadline = startedAt + timeoutSeconds * 1000 + 15000;
-  let displayTimeoutSeconds = timeoutSeconds;
-  while (Date.now() < deadline) {
+  const unlimited = Number(timeoutSeconds) <= 0;
+  let deadline = unlimited ? Number.POSITIVE_INFINITY : startedAt + timeoutSeconds * 1000 + 15000;
+  let displayTimeoutSeconds = unlimited ? 0 : timeoutSeconds;
+  while (unlimited || Date.now() < deadline) {
     if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
     const res = await apiFetch(API + `/comfyui/jobs/${encodeURIComponent(jobId)}`, {
       credentials: "same-origin",
@@ -1479,14 +1489,16 @@ async function pollComfyuiJobUntilDone(jobId, controller, timeoutSeconds) {
     const json = await res.json().catch(() => ({}));
     if (!res.ok || !json.ok) throw new Error(json.msg || `ComfyUI 工作狀態讀取失敗（HTTP ${res.status}）`);
     const job = json.job || {};
-    if (isComfyuiJobQueued(job)) {
+    if (!unlimited && isComfyuiJobQueued(job)) {
       deadline = extendComfyuiDeadlineForQueue(deadline, startedAt);
     }
-    displayTimeoutSeconds = Math.max(
-      displayTimeoutSeconds,
-      Number(job.progress?.timeout_seconds) || 0,
-      Math.max(timeoutSeconds, Math.floor((deadline - startedAt - 15000) / 1000))
-    );
+    if (!unlimited) {
+      displayTimeoutSeconds = Math.max(
+        displayTimeoutSeconds,
+        Number(job.progress?.timeout_seconds) || 0,
+        Math.max(timeoutSeconds, Math.floor((deadline - startedAt - 15000) / 1000))
+      );
+    }
     applyComfyuiJobProgress(job.progress || {}, displayTimeoutSeconds);
     if (job.status === "completed" && job.result) return job.result;
     if (job.status === "error") throw new Error(job.error || job.progress?.detail || "ComfyUI 產圖失敗");

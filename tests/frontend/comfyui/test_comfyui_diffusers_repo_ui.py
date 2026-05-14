@@ -42,4 +42,8 @@ def test_diffusers_generation_progress_surfaces_huggingface_download_bytes():
     assert "下載 Hugging Face 模型" in js
     assert "progress.bytes_written" in js
     assert "progress.total_bytes" in js
+    assert "progress.current_file" in js
+    assert "progress.speed_bytes_per_sec" in js
+    assert "progress.step" in js
     assert "formatDriveBytes(writtenBytes)" in js
+    assert "不設等待上限" in js
