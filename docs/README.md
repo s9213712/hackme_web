@@ -14,6 +14,10 @@ operator guidance.
 | Root/admin operation | [03_ADMIN_GUIDE.md](03_ADMIN_GUIDE.md) |
 | End-user handbook | [04_USER_GUIDE.md](04_USER_GUIDE.md) |
 | Feature map | [05_FEATURES_OVERVIEW.md](05_FEATURES_OVERVIEW.md) |
+| Security model | [06_SECURITY_MODEL.md](06_SECURITY_MODEL.md) |
+| PointsChain | [07_POINTSCHAIN.md](07_POINTSCHAIN.md) |
+| Trading engine | [08_TRADING_ENGINE.md](08_TRADING_ENGINE.md) |
+| Snapshot / reset / restore | [09_SNAPSHOT_RESET_RESTORE.md](09_SNAPSHOT_RESET_RESTORE.md) |
 | QA and validation | [11_QA_TESTING.md](11_QA_TESTING.md) |
 | Troubleshooting | [12_TROUBLESHOOTING.md](12_TROUBLESHOOTING.md) |
 
@@ -50,7 +54,14 @@ operator guidance.
 - Video streaming architecture: [video/VIDEO_STREAMING_ARCHITECTURE.md](video/VIDEO_STREAMING_ARCHITECTURE.md)
 - Encryption runtime boundary: [ops_boundaries/ENCRYPTION_RUNTIME_BOUNDARY.md](ops_boundaries/ENCRYPTION_RUNTIME_BOUNDARY.md)
 - Runtime reset and recovery: [ops_boundaries/RUNTIME_RESET_AND_RECOVERY.md](ops_boundaries/RUNTIME_RESET_AND_RECOVERY.md)
+- Server mode profile matrix: [server_mode_v2/SERVER_MODE_V2_PROFILE_MATRIX.md](server_mode_v2/SERVER_MODE_V2_PROFILE_MATRIX.md)
 - PointsChain v2 research: [AGENTS/research/BLOCKCHAIN/README.md](AGENTS/research/BLOCKCHAIN/README.md)
+- Branching and release: [BRANCHING_AND_RELEASE.md](BRANCHING_AND_RELEASE.md)
+- Update summary: [UPDATE_SUMMARY.md](UPDATE_SUMMARY.md)
+- Pre-release checklist: [security/PRE_RELEASE_CHECKLIST.md](security/PRE_RELEASE_CHECKLIST.md)
+- Functional smoke checklist: [security/FUNCTIONAL_SMOKE.md](security/FUNCTIONAL_SMOKE.md)
+- Functional permission pentest: [security/FUNCTIONAL_PERMISSION_PENTEST.md](security/FUNCTIONAL_PERMISSION_PENTEST.md)
+- Pentest guide: [security/PENTEST.md](security/PENTEST.md)
 
 ## Placement Rules
 

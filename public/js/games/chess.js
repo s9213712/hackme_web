@@ -122,6 +122,7 @@ chessCompetitionClock?.subscribe(renderChessClockDisplay);
 function gameDifficultyOptionDescription(difficulty) {
   const strength = window.HACKME_GAME_AI_STRENGTH?.chess?.[difficulty];
   const suffix = strength ? `｜${strength}` : "";
+  if (difficulty === "stockfish") return `Stockfish（本機外部引擎）${suffix}`;
   if (difficulty === "experiment 5:nnue") return `實驗 5：NNUE + AlphaBeta/PVS${suffix}`;
   if (difficulty === "experiment 4:pv") return `實驗 4：Policy/Value + MCTS${suffix}`;
   if (difficulty === "experiment 3:dl") return `實驗 3：DL 語義平衡學習${suffix}`;
@@ -162,6 +163,7 @@ function gameMatchLabel(match) {
 }
 
 function gameDifficultyLabel(difficulty) {
+  if (difficulty === "stockfish") return "Stockfish（本機）";
   if (difficulty === "experiment 5:nnue") return "實驗 5：NNUE + AlphaBeta/PVS";
   if (difficulty === "experiment 4:pv") return "實驗 4：Policy/Value + MCTS";
   if (difficulty === "experiment 3:dl") return "實驗 3：DL 語義平衡";

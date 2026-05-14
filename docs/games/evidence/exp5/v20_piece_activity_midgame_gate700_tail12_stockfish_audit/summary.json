@@ -1,0 +1,57 @@
+{
+  "accept_topk": 3,
+  "audit_detail_jsonl": "/home/s92137/hackme_web/docs/games/evidence/exp5/v20_piece_activity_midgame_gate700_tail12_stockfish_audit/stockfish_audit_detail.jsonl",
+  "clean_cp_loss": 60,
+  "counts": {
+    "analyzed_positions": 50,
+    "by_category": {
+      "endgame": 20,
+      "opening": 2,
+      "quiet_positional": 13,
+      "tactical": 15
+    },
+    "by_played_status": {
+      "clean": 28,
+      "rejected": 11,
+      "review": 11
+    },
+    "extracted_positions": 360,
+    "hard_negative_source_moves": 9,
+    "input_paths": 1,
+    "invalid_rows": 0,
+    "played_clean_rows": 28,
+    "rejected_rows": 11,
+    "review_rows": 11,
+    "selected_positions": 50,
+    "teacher_eval_rows": 6,
+    "teacher_rows": 50,
+    "teacher_train_rows": 44
+  },
+  "depth": 8,
+  "eval_mod": 10,
+  "generated_at": "2026-05-14T11:31:21+00:00",
+  "hard_negative_cp_loss": 220,
+  "input_jsonls": [
+    "/home/s92137/hackme_web/docs/games/evidence/exp5/v20_piece_activity_midgame_gate700_tail12_ai_positions.jsonl"
+  ],
+  "movetime_ms": 0,
+  "multipv": 5,
+  "output_dir": "/home/s92137/hackme_web/docs/games/evidence/exp5/v20_piece_activity_midgame_gate700_tail12_stockfish_audit",
+  "played_clean_jsonl": "/home/s92137/hackme_web/docs/games/evidence/exp5/v20_piece_activity_midgame_gate700_tail12_stockfish_audit/stockfish_played_clean_rows.jsonl",
+  "rejected_jsonl": "/home/s92137/hackme_web/docs/games/evidence/exp5/v20_piece_activity_midgame_gate700_tail12_stockfish_audit/stockfish_rejected_rows.jsonl",
+  "report_md": "/home/s92137/hackme_web/docs/games/reports/2026-05-14_exp5_v20_tail12_stockfish_audit.md",
+  "review_cp_loss": 160,
+  "review_jsonl": "/home/s92137/hackme_web/docs/games/evidence/exp5/v20_piece_activity_midgame_gate700_tail12_stockfish_audit/stockfish_review_rows.jsonl",
+  "stage": "stockfish_teacher_audit",
+  "stockfish_license_policy": {
+    "binary_bundled_in_repo": false,
+    "distribution_note": "If Stockfish binary/NNUE is bundled or redistributed, preserve GPLv3 copyright/license/source obligations.",
+    "expected_use": "external_local_teacher"
+  },
+  "stockfish_path": "/home/s92137/reference_repos/Stockfish/src/stockfish",
+  "stockfish_reference": "dd321af5dfc0789de07c4e5c64915073995eb818",
+  "summary_json": "/home/s92137/hackme_web/docs/games/evidence/exp5/v20_piece_activity_midgame_gate700_tail12_stockfish_audit/summary.json",
+  "teacher_all_jsonl": "/home/s92137/hackme_web/docs/games/evidence/exp5/v20_piece_activity_midgame_gate700_tail12_stockfish_audit/stockfish_teacher_rows.jsonl",
+  "teacher_eval_jsonl": "/home/s92137/hackme_web/docs/games/evidence/exp5/v20_piece_activity_midgame_gate700_tail12_stockfish_audit/stockfish_teacher_eval_rows.jsonl",
+  "teacher_train_jsonl": "/home/s92137/hackme_web/docs/games/evidence/exp5/v20_piece_activity_midgame_gate700_tail12_stockfish_audit/stockfish_teacher_train_rows.jsonl"
+}

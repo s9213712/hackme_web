@@ -773,6 +773,8 @@ function hideGameMultiplayerInviteModal() {
 async function loadGlobalGameMultiplayerInvites({ force = false } = {}) {
   syncGameMultiplayerInviteSeenUser();
   if (!currentUserId) return { ok: true, invites: [] };
+  if (typeof canAccessModule === "function" && !canAccessModule("games")) return { ok: true, invites: [] };
+  if (typeof isFeatureEnabledForUi === "function" && !isFeatureEnabledForUi("feature_games_enabled", false)) return { ok: true, invites: [] };
   const data = await gameRequest("/games/multiplayer/invites/pending");
   const invites = Array.isArray(data.invites) ? data.invites : [];
   if (gameMultiplayerInviteModalInvite && !invites.some((invite) => Number(invite.id) === Number(gameMultiplayerInviteModalInvite.id))) {

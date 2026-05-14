@@ -1,0 +1,325 @@
+{
+  "category": "invalid_meaningless_loop",
+  "expected_tier": "quarantine",
+  "flow": [
+    {
+      "by": "white",
+      "fen_after": "",
+      "fen_before": "",
+      "move_uci": "g1h3",
+      "note": "intentionally synthetic low-signal loop for classifier probe",
+      "ply": 1,
+      "role": "synthetic_loop_probe"
+    },
+    {
+      "by": "black",
+      "fen_after": "",
+      "fen_before": "",
+      "move_uci": "h3g1",
+      "note": "intentionally synthetic low-signal loop for classifier probe",
+      "ply": 2,
+      "role": "synthetic_loop_probe"
+    },
+    {
+      "by": "white",
+      "fen_after": "",
+      "fen_before": "",
+      "move_uci": "g1h3",
+      "note": "intentionally synthetic low-signal loop for classifier probe",
+      "ply": 3,
+      "role": "synthetic_loop_probe"
+    },
+    {
+      "by": "black",
+      "fen_after": "",
+      "fen_before": "",
+      "move_uci": "h3g1",
+      "note": "intentionally synthetic low-signal loop for classifier probe",
+      "ply": 4,
+      "role": "synthetic_loop_probe"
+    },
+    {
+      "by": "white",
+      "fen_after": "",
+      "fen_before": "",
+      "move_uci": "g1h3",
+      "note": "intentionally synthetic low-signal loop for classifier probe",
+      "ply": 5,
+      "role": "synthetic_loop_probe"
+    },
+    {
+      "by": "black",
+      "fen_after": "",
+      "fen_before": "",
+      "move_uci": "h3g1",
+      "note": "intentionally synthetic low-signal loop for classifier probe",
+      "ply": 6,
+      "role": "synthetic_loop_probe"
+    },
+    {
+      "by": "white",
+      "fen_after": "",
+      "fen_before": "",
+      "move_uci": "g1h3",
+      "note": "intentionally synthetic low-signal loop for classifier probe",
+      "ply": 7,
+      "role": "synthetic_loop_probe"
+    },
+    {
+      "by": "black",
+      "fen_after": "",
+      "fen_before": "",
+      "move_uci": "h3g1",
+      "note": "intentionally synthetic low-signal loop for classifier probe",
+      "ply": 8,
+      "role": "synthetic_loop_probe"
+    }
+  ],
+  "index": 7,
+  "label": "meaningless_loop_1",
+  "notes": [
+    "synthetic_suspicious_pattern_probe"
+  ],
+  "preview_record": {
+    "actor_username": "exp3_validation_user",
+    "adjudicated_or_natural": "adjudicated",
+    "black_engine": "experiment 3:dl",
+    "collection_tier": "quarantine",
+    "computer_difficulty": "experiment 3:dl",
+    "confidence_score": 0.17,
+    "duplicate_flag": false,
+    "duplicate_signature": "c049956d9ec2a0fda23b1a2b3198df84bc5dba2141b470f7d7aec2031851ad18",
+    "engine_name": "experiment 3:dl",
+    "engine_version": "experiment 3:dl",
+    "game_key": "chess",
+    "human_side": "white",
+    "match_id": 2002,
+    "mode": "computer",
+    "move_count": 8,
+    "move_history": [
+      {
+        "at": "2026-05-14T03:05:11+00:00",
+        "by": "white",
+        "captured": null,
+        "computer": false,
+        "from": "g1",
+        "piece": "N",
+        "promotion": null,
+        "to": "h3"
+      },
+      {
+        "at": "2026-05-14T03:05:11+00:00",
+        "by": "black",
+        "captured": null,
+        "computer": true,
+        "from": "h3",
+        "piece": "n",
+        "promotion": null,
+        "to": "g1"
+      },
+      {
+        "at": "2026-05-14T03:05:11+00:00",
+        "by": "white",
+        "captured": null,
+        "computer": false,
+        "from": "g1",
+        "piece": "N",
+        "promotion": null,
+        "to": "h3"
+      },
+      {
+        "at": "2026-05-14T03:05:11+00:00",
+        "by": "black",
+        "captured": null,
+        "computer": true,
+        "from": "h3",
+        "piece": "n",
+        "promotion": null,
+        "to": "g1"
+      },
+      {
+        "at": "2026-05-14T03:05:11+00:00",
+        "by": "white",
+        "captured": null,
+        "computer": false,
+        "from": "g1",
+        "piece": "N",
+        "promotion": null,
+        "to": "h3"
+      },
+      {
+        "at": "2026-05-14T03:05:11+00:00",
+        "by": "black",
+        "captured": null,
+        "computer": true,
+        "from": "h3",
+        "piece": "n",
+        "promotion": null,
+        "to": "g1"
+      },
+      {
+        "at": "2026-05-14T03:05:11+00:00",
+        "by": "white",
+        "captured": null,
+        "computer": false,
+        "from": "g1",
+        "piece": "N",
+        "promotion": null,
+        "to": "h3"
+      },
+      {
+        "at": "2026-05-14T03:05:11+00:00",
+        "by": "black",
+        "captured": null,
+        "computer": true,
+        "from": "h3",
+        "piece": "n",
+        "promotion": null,
+        "to": "g1"
+      }
+    ],
+    "opening_seed": "standard_start",
+    "quarantine_reasons": [
+      "suspicious_pattern"
+    ],
+    "rating_estimate": null,
+    "replay_id": "80359347996308abda01f264627c849bb9b5d800316d57c59d8c72a1d4721fd3",
+    "resign_abuse_flag": false,
+    "result": "draw",
+    "result_reason": "adjudicated_meaningless_loop_1",
+    "source": "user_games",
+    "suspicious_flag": true,
+    "timestamp": "2026-05-14T03:05:11.500629Z",
+    "updated_at": "2026-05-14T03:05:11+00:00",
+    "white_engine": "user",
+    "winner_color": null
+  },
+  "row": {
+    "computer_difficulty": "experiment 3:dl",
+    "game_key": "chess",
+    "human_side": "white",
+    "id": 2002,
+    "initial_fen": "",
+    "mode": "computer",
+    "move_history_json": "[{\"by\": \"white\", \"from\": \"g1\", \"to\": \"h3\", \"piece\": \"N\", \"captured\": null, \"promotion\": null, \"computer\": false, \"at\": \"2026-05-14T03:05:11+00:00\"}, {\"by\": \"black\", \"from\": \"h3\", \"to\": \"g1\", \"piece\": \"n\", \"captured\": null, \"promotion\": null, \"computer\": true, \"at\": \"2026-05-14T03:05:11+00:00\"}, {\"by\": \"white\", \"from\": \"g1\", \"to\": \"h3\", \"piece\": \"N\", \"captured\": null, \"promotion\": null, \"computer\": false, \"at\": \"2026-05-14T03:05:11+00:00\"}, {\"by\": \"black\", \"from\": \"h3\", \"to\": \"g1\", \"piece\": \"n\", \"captured\": null, \"promotion\": null, \"computer\": true, \"at\": \"2026-05-14T03:05:11+00:00\"}, {\"by\": \"white\", \"from\": \"g1\", \"to\": \"h3\", \"piece\": \"N\", \"captured\": null, \"promotion\": null, \"computer\": false, \"at\": \"2026-05-14T03:05:11+00:00\"}, {\"by\": \"black\", \"from\": \"h3\", \"to\": \"g1\", \"piece\": \"n\", \"captured\": null, \"promotion\": null, \"computer\": true, \"at\": \"2026-05-14T03:05:11+00:00\"}, {\"by\": \"white\", \"from\": \"g1\", \"to\": \"h3\", \"piece\": \"N\", \"captured\": null, \"promotion\": null, \"computer\": false, \"at\": \"2026-05-14T03:05:11+00:00\"}, {\"by\": \"black\", \"from\": \"h3\", \"to\": \"g1\", \"piece\": \"n\", \"captured\": null, \"promotion\": null, \"computer\": true, \"at\": \"2026-05-14T03:05:11+00:00\"}]",
+    "result_reason": "adjudicated_meaningless_loop_1",
+    "updated_at": "2026-05-14T03:05:11+00:00"
+  },
+  "stored_replay": {
+    "actor_username": "exp3_validation_user",
+    "adjudicated_or_natural": "adjudicated",
+    "black_engine": "experiment 3:dl",
+    "collection_tier": "quarantine",
+    "computer_difficulty": "experiment 3:dl",
+    "confidence_score": 0.17,
+    "duplicate_flag": false,
+    "duplicate_signature": "c049956d9ec2a0fda23b1a2b3198df84bc5dba2141b470f7d7aec2031851ad18",
+    "engine_name": "experiment 3:dl",
+    "engine_version": "experiment 3:dl",
+    "game_key": "chess",
+    "human_side": "white",
+    "match_id": 2002,
+    "mode": "computer",
+    "move_count": 8,
+    "move_history": [
+      {
+        "at": "2026-05-14T03:05:11+00:00",
+        "by": "white",
+        "captured": null,
+        "computer": false,
+        "from": "g1",
+        "piece": "N",
+        "promotion": null,
+        "to": "h3"
+      },
+      {
+        "at": "2026-05-14T03:05:11+00:00",
+        "by": "black",
+        "captured": null,
+        "computer": true,
+        "from": "h3",
+        "piece": "n",
+        "promotion": null,
+        "to": "g1"
+      },
+      {
+        "at": "2026-05-14T03:05:11+00:00",
+        "by": "white",
+        "captured": null,
+        "computer": false,
+        "from": "g1",
+        "piece": "N",
+        "promotion": null,
+        "to": "h3"
+      },
+      {
+        "at": "2026-05-14T03:05:11+00:00",
+        "by": "black",
+        "captured": null,
+        "computer": true,
+        "from": "h3",
+        "piece": "n",
+        "promotion": null,
+        "to": "g1"
+      },
+      {
+        "at": "2026-05-14T03:05:11+00:00",
+        "by": "white",
+        "captured": null,
+        "computer": false,
+        "from": "g1",
+        "piece": "N",
+        "promotion": null,
+        "to": "h3"
+      },
+      {
+        "at": "2026-05-14T03:05:11+00:00",
+        "by": "black",
+        "captured": null,
+        "computer": true,
+        "from": "h3",
+        "piece": "n",
+        "promotion": null,
+        "to": "g1"
+      },
+      {
+        "at": "2026-05-14T03:05:11+00:00",
+        "by": "white",
+        "captured": null,
+        "computer": false,
+        "from": "g1",
+        "piece": "N",
+        "promotion": null,
+        "to": "h3"
+      },
+      {
+        "at": "2026-05-14T03:05:11+00:00",
+        "by": "black",
+        "captured": null,
+        "computer": true,
+        "from": "h3",
+        "piece": "n",
+        "promotion": null,
+        "to": "g1"
+      }
+    ],
+    "opening_seed": "standard_start",
+    "quarantine_reasons": [
+      "suspicious_pattern"
+    ],
+    "rating_estimate": null,
+    "replay_id": "80359347996308abda01f264627c849bb9b5d800316d57c59d8c72a1d4721fd3",
+    "resign_abuse_flag": false,
+    "result": "draw",
+    "result_reason": "adjudicated_meaningless_loop_1",
+    "source": "user_games",
+    "storage_path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/reports/games/chess_replays_quarantine.jsonl",
+    "stored": true,
+    "suspicious_flag": true,
+    "timestamp": "2026-05-14T03:09:57.049772Z",
+    "updated_at": "2026-05-14T03:05:11+00:00",
+    "white_engine": "user",
+    "winner_color": null
+  },
+  "winner_color": null
+}

@@ -25,7 +25,7 @@ if str(ROOT) not in sys.path:
 
 from services.games.chess_arena import default_chess_reports_dir  # noqa: E402
 from services.games.chess_pipeline import candidate_paths_for_run  # noqa: E402
-from services.games.chess_nnue import default_chess_nnue_model_path  # noqa: E402
+from services.games.chess_nnue import EXP5_STATIC_BASE_MODEL_SHA256, default_chess_nnue_model_path  # noqa: E402
 
 
 def _progress(message: str) -> None:
@@ -129,7 +129,7 @@ def main() -> int:
     if baseline_model_path.exists() and not candidate_model_path.exists():
         candidate_model_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(baseline_model_path, candidate_model_path)
-    baseline_hash = _sha256_file(baseline_model_path)
+    baseline_hash = _sha256_file(baseline_model_path) or EXP5_STATIC_BASE_MODEL_SHA256
     dataset_hash = _sha256_inputs(input_paths)
     distill_config_hash = hashlib.sha256(
         json.dumps(
@@ -167,6 +167,7 @@ def main() -> int:
         "finished_at": finished_at,
         "engine": "experiment 5:nnue",
         "baseline_model_path": str(baseline_model_path),
+        "baseline_source": "file" if baseline_model_path.exists() else "source_embedded_static_base",
         "candidate_model_path": str(candidate_model_path),
         "candidate_replay_path": str(candidate_replay_path),
         "baseline_hash": baseline_hash,

@@ -22,6 +22,8 @@ import json
 from pathlib import Path
 import sys
 
+import chess
+
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -33,6 +35,7 @@ from services.games.chess_dl import (  # noqa: E402
     default_chess_dl_replay_path,
     train_experiment_dl_from_replay_samples,
 )
+from services.games import chess_stockfish_teacher as stockfish_teacher  # noqa: E402
 from services.games.self_play_training import DEFAULT_TEACHER_DEPTH, choose_teacher_move  # noqa: E402
 
 
@@ -41,6 +44,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input-jsonl", action="append", default=[], help="JSONL rows already containing features or fen+move samples.")
     parser.add_argument("--teacher-distill-jsonl", action="append", default=[], help="JSONL rows containing fen (+ optional side) for teacher distillation.")
     parser.add_argument("--teacher-depth", type=int, default=DEFAULT_TEACHER_DEPTH)
+    parser.add_argument(
+        "--teacher-backend",
+        default="static_depth3",
+        choices=["static_depth3", "stockfish"],
+        help="Teacher backend for --teacher-distill-jsonl rows. Stockfish requires a local external UCI binary.",
+    )
+    parser.add_argument("--stockfish-path", default="", help="Local Stockfish-compatible UCI binary for --teacher-backend stockfish.")
+    parser.add_argument("--stockfish-movetime-ms", type=int, default=0)
+    parser.add_argument("--teacher-top-k", type=int, default=5)
     parser.add_argument("--model-path", default="")
     parser.add_argument("--replay-path", default="")
     parser.add_argument("--replace-replay", action="store_true")
@@ -91,6 +103,84 @@ def _teacher_distilled_samples(path: Path, *, teacher_depth: int) -> list[dict]:
     return samples
 
 
+def _row_side(row: dict, fen: str) -> str:
+    side = str(row.get("side") or "").strip().lower()
+    if side in {"white", "black"}:
+        return side
+    return "white" if " w " in fen else "black"
+
+
+def _source_move_hard_negative(row: dict, board: chess.Board, best_move: str, top_moves: list[str]) -> list[str]:
+    hard_negatives = [str(item).strip().lower() for item in (row.get("hard_negatives") or []) if str(item).strip()]
+    source_move = str(row.get("move_uci") or row.get("uci") or row.get("move") or "").strip().lower()
+    if not source_move or source_move == best_move or source_move in top_moves:
+        return hard_negatives
+    try:
+        move = chess.Move.from_uci(source_move)
+    except Exception:
+        return hard_negatives
+    if move in board.legal_moves and move.uci() not in hard_negatives:
+        hard_negatives.append(move.uci())
+    return hard_negatives
+
+
+def _stockfish_distilled_samples(
+    path: Path,
+    *,
+    teacher_depth: int,
+    stockfish_path: str,
+    stockfish_movetime_ms: int,
+    teacher_top_k: int,
+) -> list[dict]:
+    engine_path = stockfish_teacher.resolve_stockfish_path(stockfish_path)
+    if not engine_path:
+        raise RuntimeError("Stockfish binary not found; pass --stockfish-path or set STOCKFISH_PATH")
+    samples: list[dict] = []
+    limit = stockfish_teacher.analysis_limit(depth=int(teacher_depth or 0), movetime_ms=int(stockfish_movetime_ms or 0))
+    with stockfish_teacher.UciStockfish(engine_path) as engine:
+        for row in _iter_jsonl(path):
+            fen = str(row.get("fen") or row.get("board_fen") or "").strip()
+            if not fen:
+                continue
+            side = _row_side(row, fen)
+            try:
+                board = chess.Board(fen)
+                board.turn = chess.WHITE if side == "white" else chess.BLACK
+            except Exception:
+                continue
+            ranking = engine.analyse(board, limit=limit, multipv=max(1, int(teacher_top_k or 1)))
+            if not ranking:
+                continue
+            best_move = str(ranking[0].get("move") or "").strip().lower()
+            top_moves = [str(item.get("move") or "").strip().lower() for item in ranking if item.get("move")]
+            sample = build_experiment_dl_sample_from_position(
+                fen=board.fen(),
+                move_uci=best_move,
+                side=side,
+                target=float(row.get("target") or 1.0),
+                weight=float(row.get("weight") or 1.4),
+                source=str(row.get("source") or "stockfish_teacher_distill_exp3"),
+                hard_negatives=_source_move_hard_negative(row, board, best_move, top_moves),
+                invariance_group_id=str(row.get("invariance_group_id") or row.get("position_id") or ""),
+                expected_semantic=str(row.get("expected_semantic") or row.get("semantic_class") or ""),
+            )
+            if sample is None:
+                continue
+            sample.update(
+                {
+                    "trusted_source": str(row.get("trusted_source") or "stockfish_teacher_audited"),
+                    "teacher_backend": "stockfish",
+                    "teacher_top3": top_moves[:3],
+                    "teacher_top5": top_moves[:5],
+                    "teacher_eval_cp": int(ranking[0].get("teacher_eval_cp") or 0),
+                    "teacher_depth": int(teacher_depth or 0),
+                    "teacher_movetime_ms": int(stockfish_movetime_ms or 0),
+                }
+            )
+            samples.append(sample)
+    return samples
+
+
 def _plain_samples(path: Path) -> list[dict]:
     return list(_iter_jsonl(path))
 
@@ -113,7 +203,18 @@ def main() -> int:
     for input_path in teacher_paths:
         _progress(f"phase teacher distill input: {input_path}")
         before = len(samples)
-        samples.extend(_teacher_distilled_samples(input_path, teacher_depth=int(args.teacher_depth)))
+        if str(args.teacher_backend) == "stockfish":
+            samples.extend(
+                _stockfish_distilled_samples(
+                    input_path,
+                    teacher_depth=int(args.teacher_depth),
+                    stockfish_path=str(args.stockfish_path or ""),
+                    stockfish_movetime_ms=int(args.stockfish_movetime_ms or 0),
+                    teacher_top_k=int(args.teacher_top_k or 5),
+                )
+            )
+        else:
+            samples.extend(_teacher_distilled_samples(input_path, teacher_depth=int(args.teacher_depth)))
         _progress(f"phase result teacher distill: {len(samples) - before} rows")
     if args.max_samples and int(args.max_samples) > 0:
         samples = samples[: int(args.max_samples)]
@@ -126,6 +227,7 @@ def main() -> int:
         replace_replay=bool(args.replace_replay),
     )
     result["teacher_depth"] = int(args.teacher_depth)
+    result["teacher_backend"] = str(args.teacher_backend)
     result["input_rows"] = len(samples)
     _progress(f"phase result train: ok artifact={model_path} replay={replay_path}")
     print(json.dumps(result, ensure_ascii=False, indent=2))

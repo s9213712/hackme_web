@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS game_matches (
     CHECK (status IN ('active', 'finished', 'cancelled')),
     CHECK (current_turn IN ('white', 'black')),
     CHECK (human_side IN ('white', 'black')),
-    CHECK (computer_difficulty IN ('easy', 'normal', 'hard', 'experiment', 'experiment 2:nn', 'experiment 3:dl', 'experiment 4:pv', 'experiment 5:nnue'))
+    CHECK (computer_difficulty IN ('easy', 'normal', 'hard', 'experiment', 'experiment 2:nn', 'experiment 3:dl', 'experiment 4:pv', 'experiment 5:nnue', 'stockfish'))
 );
 
 CREATE TABLE IF NOT EXISTS game_invites (
@@ -671,9 +671,14 @@ CREATE TABLE IF NOT EXISTS storage_share_links (
     storage_file_id TEXT NOT NULL REFERENCES storage_files(id) ON DELETE CASCADE,
     file_id TEXT NOT NULL REFERENCES uploaded_files(id) ON DELETE CASCADE,
     owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token TEXT,
     token_hash TEXT NOT NULL UNIQUE,
     can_download INTEGER NOT NULL DEFAULT 1,
     can_preview INTEGER NOT NULL DEFAULT 0,
+    access_scope TEXT NOT NULL DEFAULT 'link',
+    required_user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    max_views INTEGER NOT NULL DEFAULT 0,
+    wrapped_file_key_envelope TEXT,
     expires_at TEXT,
     revoked_at TEXT,
     access_count INTEGER NOT NULL DEFAULT 0,
@@ -693,6 +698,7 @@ CREATE INDEX IF NOT EXISTS idx_albums_owner ON albums(owner_user_id, created_at)
 CREATE INDEX IF NOT EXISTS idx_album_files_album ON album_files(album_id, sort_order, created_at);
 CREATE INDEX IF NOT EXISTS idx_storage_share_links_owner ON storage_share_links(owner_user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_storage_share_links_file ON storage_share_links(storage_file_id, revoked_at);
+CREATE INDEX IF NOT EXISTS idx_storage_share_links_required_user ON storage_share_links(required_user_id, revoked_at);
 
 CREATE TABLE IF NOT EXISTS cloud_file_refs (
     id TEXT PRIMARY KEY,

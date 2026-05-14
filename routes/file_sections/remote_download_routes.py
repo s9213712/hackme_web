@@ -230,7 +230,7 @@ def register_file_remote_download_routes(app, ctx):
         task = get_remote_download_task(str(task_id))
         if not task:
             return json_resp({"ok": False, "msg": "找不到下載任務"}), 404
-        if int(task.get("owner_user_id") or 0) != int(actor_value(actor, "id")) and not is_manager(actor):
+        if int(task.get("owner_user_id") or 0) != int(actor_value(actor, "id")):
             return json_resp({"ok": False, "msg": "沒有下載任務權限"}), 403
         return json_resp({"ok": True, "task": task_snapshot(task)})
 
@@ -246,7 +246,7 @@ def register_file_remote_download_routes(app, ctx):
             task = remote_download_tasks.get(task_id)
             if not task:
                 return json_resp({"ok": True, "removed": False})
-            if int(task.get("owner_user_id") or 0) != int(actor_value(actor, "id")) and not is_manager(actor):
+            if int(task.get("owner_user_id") or 0) != int(actor_value(actor, "id")):
                 return json_resp({"ok": False, "msg": "沒有下載任務權限"}), 403
             if task.get("status") in {"queued", "running"}:
                 return json_resp({"ok": False, "msg": "下載任務仍在進行，不能移除紀錄"}), 409

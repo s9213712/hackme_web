@@ -12,6 +12,7 @@ import io
 import mimetypes
 import re
 import threading
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,6 +32,20 @@ from services.comfyui.settings import normalize_huggingface_repo_id
 DIFFUSERS_BACKEND_SCHEME = "diffusers"
 DIFFUSERS_BACKEND_NETLOC = "local"
 _SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _format_bytes(value):
+    size = max(0, int(value or 0))
+    units = ("B", "KB", "MB", "GB", "TB")
+    amount = float(size)
+    unit = units[0]
+    for unit in units:
+        if amount < 1024 or unit == units[-1]:
+            break
+        amount /= 1024
+    if unit == "B":
+        return f"{int(amount)} {unit}"
+    return f"{amount:.1f} {unit}"
 
 
 def diffusers_backend_url(repo_id=""):
@@ -364,6 +379,158 @@ class DiffusersClient:
             return torch.float32
         return torch.float16 if device == "cuda" else torch.float32
 
+    def _huggingface_progress_tqdm_class(self, progress_callback, *, label="", base_percent=5, span_percent=20):
+        if not progress_callback:
+            return None
+        try:
+            from huggingface_hub.utils import tqdm as hf_tqdm
+        except Exception:
+            return None
+
+        lock = threading.Lock()
+        state = {"last_emit": 0.0}
+        outer_label = str(label or "Hugging Face 模型")
+
+        def emit(bar, *, force=False):
+            now = time.monotonic()
+            if not force and now - state["last_emit"] < 0.35:
+                return
+            with lock:
+                state["last_emit"] = now
+            current = max(0, int(getattr(bar, "_hackme_progress_n", 0) or 0))
+            total = max(0, int(getattr(bar, "_hackme_progress_total", 0) or 0))
+            ratio = (current / total) if total > 0 else 0
+            percent = min(99, round(float(base_percent) + float(span_percent) * ratio, 1))
+            unit = str(getattr(bar, "_hackme_progress_unit", "") or "")
+            desc = str(getattr(bar, "_hackme_progress_desc", "") or "").strip() or outer_label
+            if unit.upper() == "B" or total > 1024 * 1024:
+                size_text = f"{_format_bytes(current)} / {_format_bytes(total)}" if total else _format_bytes(current)
+                detail = f"下載 {desc}：{size_text}"
+                payload = {
+                    "phase": "downloading",
+                    "percent": percent,
+                    "detail": detail,
+                    "bytes_written": current,
+                    "total_bytes": total,
+                }
+            else:
+                total_text = f"/{total}" if total else ""
+                detail = f"下載 {desc}：{current}{total_text} {unit or 'items'}"
+                payload = {
+                    "phase": "downloading",
+                    "percent": percent,
+                    "detail": detail,
+                    "current": current,
+                    "max": total,
+                }
+            progress_callback(payload)
+
+        class HuggingFaceProgressTqdm(hf_tqdm):
+            def __init__(self, *args, **kwargs):
+                initial = int(kwargs.get("initial") or 0)
+                total = int(kwargs.get("total") or 0)
+                desc = str(kwargs.get("desc") or outer_label)
+                unit = str(kwargs.get("unit") or "")
+                kwargs["disable"] = True
+                super().__init__(*args, **kwargs)
+                self._hackme_progress_n = initial
+                self._hackme_progress_total = total
+                self._hackme_progress_desc = desc
+                self._hackme_progress_unit = unit
+                emit(self, force=True)
+
+            def update(self, n=1):
+                try:
+                    self._hackme_progress_n = max(0, int(getattr(self, "_hackme_progress_n", 0) or 0) + int(n or 0))
+                except Exception:
+                    pass
+                result = super().update(n)
+                emit(self)
+                return result
+
+            def __iter__(self):
+                iterable = getattr(self, "iterable", None)
+                if iterable is None:
+                    return
+                for item in iterable:
+                    yield item
+                    self.update(1)
+
+            def close(self):
+                emit(self, force=True)
+                return super().close()
+
+        return HuggingFaceProgressTqdm
+
+    def _diffusers_snapshot_patterns(self, variant=""):
+        base_patterns = [
+            "*.json",
+            "**/*.json",
+            "*.txt",
+            "**/*.txt",
+            "*.model",
+            "**/*.model",
+            "*.spm",
+            "**/*.spm",
+            "*.py",
+            "**/*.py",
+        ]
+        weight_extensions = ("safetensors", "bin")
+        if variant:
+            weights = []
+            for ext in weight_extensions:
+                weights.extend([f"*.{variant}.{ext}", f"**/*.{variant}.{ext}"])
+            return base_patterns + weights, None
+        weights = []
+        for ext in weight_extensions:
+            weights.extend([f"*.{ext}", f"**/*.{ext}"])
+        ignore = []
+        for precision in ("fp16", "float16", "half", "bf16", "bfloat16", "fp32", "float32"):
+            ignore.extend([f"*.{precision}.*", f"**/*.{precision}.*"])
+        return base_patterns + weights, ignore
+
+    def _prefetch_diffusers_snapshot(self, model_repo, *, variant="", progress_callback=None, base_percent=5, span_percent=20):
+        if not progress_callback:
+            return ""
+        try:
+            from huggingface_hub import snapshot_download
+        except Exception:
+            return ""
+        allow_patterns, ignore_patterns = self._diffusers_snapshot_patterns(variant)
+        variant_text = f"（{variant}）" if variant else ""
+        progress_callback({
+            "phase": "downloading",
+            "percent": base_percent,
+            "detail": f"準備下載 Hugging Face 模型 {model_repo}{variant_text}",
+        })
+        tqdm_class = self._huggingface_progress_tqdm_class(
+            progress_callback,
+            label=f"{model_repo}{variant_text}",
+            base_percent=base_percent,
+            span_percent=span_percent,
+        )
+        kwargs = {
+            "repo_id": model_repo,
+            "token": (self.token or None),
+            "allow_patterns": allow_patterns,
+            "tqdm_class": tqdm_class,
+        }
+        if ignore_patterns:
+            kwargs["ignore_patterns"] = ignore_patterns
+        try:
+            snapshot_path = snapshot_download(**kwargs)
+        except TypeError:
+            kwargs.pop("tqdm_class", None)
+            snapshot_path = snapshot_download(**kwargs)
+        except Exception as exc:
+            raise ComfyUIError(f"Hugging Face 模型下載失敗：{exc}") from exc
+        progress_callback({
+            "phase": "loading",
+            "percent": min(99, base_percent + span_percent),
+            "detail": f"Hugging Face 模型已下載到本機快取，正在載入 {model_repo}{variant_text}",
+        })
+        return str(snapshot_path or "")
+
     def _pipeline_class(self, mode):
         if mode == "txt2img":
             from diffusers import AutoPipelineForText2Image
@@ -435,19 +602,51 @@ class DiffusersClient:
                 kwargs["variant"] = variant
             if self.token:
                 kwargs["token"] = self.token
+            snapshot_path = self._prefetch_diffusers_snapshot(
+                model_repo,
+                variant=variant,
+                progress_callback=progress_callback,
+                base_percent=6,
+                span_percent=18,
+            )
+            load_target = snapshot_path or model_repo
+            if snapshot_path:
+                kwargs["local_files_only"] = True
             try:
-                pipe = pipeline_cls.from_pretrained(model_repo, **kwargs)
+                pipe = pipeline_cls.from_pretrained(load_target, **kwargs)
             except TypeError:
                 if self.token:
                     kwargs["use_auth_token"] = kwargs.pop("token")
-                pipe = pipeline_cls.from_pretrained(model_repo, **kwargs)
+                pipe = pipeline_cls.from_pretrained(load_target, **kwargs)
             except Exception:
                 fallback_kwargs = dict(kwargs)
                 fallback_kwargs.pop("use_safetensors", None)
                 try:
-                    pipe = pipeline_cls.from_pretrained(model_repo, **fallback_kwargs)
+                    pipe = pipeline_cls.from_pretrained(load_target, **fallback_kwargs)
                 except Exception as exc:
-                    raise ComfyUIError(f"Diffusers 模型載入失敗：{exc}") from exc
+                    if not snapshot_path:
+                        raise ComfyUIError(f"Diffusers 模型載入失敗：{exc}") from exc
+                    if progress_callback:
+                        progress_callback({
+                            "phase": "downloading",
+                            "percent": 24,
+                            "detail": "本機快取缺少部分檔案，改由 Diffusers 補齊 Hugging Face 檔案。",
+                        })
+                    remote_kwargs = dict(kwargs)
+                    remote_kwargs.pop("local_files_only", None)
+                    try:
+                        pipe = pipeline_cls.from_pretrained(model_repo, **remote_kwargs)
+                    except TypeError:
+                        if self.token and "token" in remote_kwargs:
+                            remote_kwargs["use_auth_token"] = remote_kwargs.pop("token")
+                        pipe = pipeline_cls.from_pretrained(model_repo, **remote_kwargs)
+                    except Exception:
+                        remote_fallback_kwargs = dict(remote_kwargs)
+                        remote_fallback_kwargs.pop("use_safetensors", None)
+                        try:
+                            pipe = pipeline_cls.from_pretrained(model_repo, **remote_fallback_kwargs)
+                        except Exception as remote_exc:
+                            raise ComfyUIError(f"Diffusers 模型載入失敗：{remote_exc}") from remote_exc
             try:
                 pipe.to(device)
             except Exception as exc:
@@ -476,7 +675,20 @@ class DiffusersClient:
         except Exception as exc:
             raise ComfyUIError(f"GGUF 依賴載入失敗：{exc}") from exc
         try:
-            gguf_path = hf_hub_download(repo_id=model_repo, filename=gguf_file, token=(self.token or None))
+            tqdm_class = self._huggingface_progress_tqdm_class(
+                progress_callback,
+                label=gguf_file,
+                base_percent=6,
+                span_percent=16,
+            )
+            kwargs = {"repo_id": model_repo, "filename": gguf_file, "token": (self.token or None)}
+            if tqdm_class:
+                kwargs["tqdm_class"] = tqdm_class
+            try:
+                gguf_path = hf_hub_download(**kwargs)
+            except TypeError:
+                kwargs.pop("tqdm_class", None)
+                gguf_path = hf_hub_download(**kwargs)
         except Exception as exc:
             raise ComfyUIError(f"GGUF 檔案下載失敗，尚未載入模型：{exc}") from exc
 

@@ -36,6 +36,7 @@ from services.games.chess_dl import (  # noqa: E402
     train_experiment_dl_from_replay_samples,
 )
 from services.games.chess_engine import ChessExperimentStore, EXPERIMENT_DIFFICULTY, record_experiment_learning  # noqa: E402
+from services.games.chess_nn import default_chess_nn_model_path  # noqa: E402
 from services.games.chess_pipeline import latest_pipeline_autorun_status, maybe_launch_chess_train_pipeline  # noqa: E402
 from services.games.chess_promotion import ensure_warm_start_chess_environment, production_engine_inventory  # noqa: E402
 from services.games.chess_pv import (  # noqa: E402
@@ -2165,6 +2166,7 @@ def _engine_model_slot(engine_alias: str) -> str:
 
 def _inventory_model_overrides(inventory_map: dict[str, dict]) -> dict[str, Path]:
     return {
+        "nn": Path(str(inventory_map.get("experiment 2:nn", {}).get("path") or default_chess_nn_model_path())),
         "dl": Path(str(inventory_map.get("experiment 3:dl", {}).get("path") or "")),
         "pv": Path(str(inventory_map.get("experiment 4:pv", {}).get("path") or "")),
         "nnue": Path(str(inventory_map.get("experiment 5:nnue", {}).get("path") or "")),
@@ -18516,6 +18518,7 @@ def _run_engine_validation(
                 contamination_move_count = len(json.loads(game_map[game_id].row.get("move_history_json") or "[]"))
                 break
 
+    summary_checkpoints = [_compact_checkpoint_for_summary(checkpoint) for checkpoint in checkpoints]
     before_after_eval = {
         "retrain_supported": engine_alias in RETRAIN_ENGINE_ALIASES,
         "move_agreement_before": evaluation_before,

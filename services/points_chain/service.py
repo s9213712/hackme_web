@@ -1559,7 +1559,15 @@ class PointsLedgerService:
                 LEFT JOIN users actor ON actor.id=l.created_by
                 WHERE l.action_type LIKE 'admin_adjust_%'
                    OR l.action_type LIKE 'rollback:%'
-                   OR l.action_type IN ('admin_initial_grant', 'user_initial_grant', 'admin_weekly_salary', 'new_user_signup_bonus')
+                   OR l.action_type IN (
+                       'admin_initial_grant',
+                       'admin_weekly_salary',
+	                       'game_daily_challenge_reward',
+	                       'game_weekly_leaderboard_reward',
+	                       'trading_bot_weekly_competition_reward',
+	                       'new_user_signup_bonus',
+                       'user_initial_grant'
+                   )
                 ORDER BY l.id DESC LIMIT ?
                 """,
                 (min(200, max(1, int(limit or 100))),),

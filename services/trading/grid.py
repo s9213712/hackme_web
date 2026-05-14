@@ -24,6 +24,13 @@ def _json_loads(value, default=None):
         return default if default is not None else {}
 
 
+def _normalize_optional_risk_percent(value, *, name):
+    if value in (None, ""):
+        return None
+    number = float(_to_decimal(value, name=name, minimum=0.00000001, maximum=1000))
+    return number if number > 0 else None
+
+
 def grid_fee_rate_percent(base_fee_rate_percent, settings):
     discount = float(settings.get("grid_fee_discount_percent") or DEFAULT_GRID_FEE_DISCOUNT_PERCENT)
     discount = max(0.0, min(discount, 100.0))
@@ -206,6 +213,7 @@ def grid_preview_summary(*, lower_price_points, upper_price_points, grid_count, 
 def grid_bot_payload(row, *, json_loads, orders=None):
     item = dict(row)
     item["enabled"] = bool(item["enabled"])
+    item["share_parameters"] = bool(item.get("share_parameters", 0))
     item["grid_levels"] = json_loads(item.get("grid_levels_json"), [])
     item["orders"] = orders or []
     return item
@@ -301,6 +309,9 @@ def create_grid_bot(service, *, actor, payload):
         raise ValueError("upper_price_points must be greater than lower_price_points")
     grid_count = _to_int(payload.get("grid_count", 10), name="grid_count", minimum=2, maximum=200)
     order_amount = _to_int(payload.get("order_amount_points"), name="order_amount_points", minimum=1)
+    stop_loss_percent = _normalize_optional_risk_percent(payload.get("stop_loss_percent"), name="stop_loss_percent")
+    take_profit_percent = _normalize_optional_risk_percent(payload.get("take_profit_percent"), name="take_profit_percent")
+    share_parameters = bool(payload.get("share_parameters", False))
     spacing_mode = str(payload.get("spacing_mode") or "arithmetic").strip()
     if spacing_mode not in ("arithmetic", "geometric"):
         spacing_mode = "arithmetic"
@@ -356,13 +367,17 @@ def create_grid_bot(service, *, actor, payload):
             """
             INSERT INTO trading_grid_bots
               (bot_uuid, user_id, name, market_symbol, upper_price_points, lower_price_points,
-               grid_count, order_amount_points, enabled, initial_price_points, grid_levels_json,
-               enabled_at, created_at, updated_at)
-            VALUES (?,?,?,?,?,?,?,?,1,?,?,?,?,?)
+	               grid_count, order_amount_points, enabled, initial_price_points, grid_levels_json,
+	               stop_loss_percent, take_profit_percent, share_parameters, enabled_at, created_at, updated_at)
+	            VALUES (?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?)
             """,
             (bot_uuid, user_id, name, market_symbol, upper_price, lower_price,
-             grid_count, order_amount, current_price,
-             json.dumps(grid_level_values), now, now, now),
+	             grid_count, order_amount, current_price,
+	             json.dumps(grid_level_values),
+                 stop_loss_percent,
+                 take_profit_percent,
+	             1 if share_parameters else 0,
+	             now, now, now),
         )
         grid_bot_id = conn.execute(
             "SELECT id FROM trading_grid_bots WHERE bot_uuid=?", (bot_uuid,)
@@ -487,6 +502,45 @@ def toggle_grid_bot(service, *, actor, bot_uuid, enabled):
         conn.close()
 
 
+def set_grid_bot_share_parameters(service, *, actor, bot_uuid, share_parameters):
+    user_id = service._actor_id(actor)
+    if not user_id:
+        raise ValueError("login required")
+    conn = service.get_db()
+    try:
+        service.ensure_schema(conn)
+        conn.commit()
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT * FROM trading_grid_bots WHERE bot_uuid=? AND user_id=?",
+            (str(bot_uuid or ""), int(user_id)),
+        ).fetchone()
+        if not row:
+            raise ValueError("grid bot not found")
+        now = _now_text()
+        conn.execute(
+            "UPDATE trading_grid_bots SET share_parameters=?, updated_at=? WHERE id=?",
+            (1 if share_parameters else 0, now, row["id"]),
+        )
+        updated = conn.execute("SELECT * FROM trading_grid_bots WHERE id=?", (row["id"],)).fetchone()
+        service._audit_event(
+            conn,
+            "GRID_BOT_PARAMETER_SHARE_UPDATED",
+            "grid bot parameter sharing updated",
+            actor=actor,
+            target_user_id=user_id,
+            market_symbol=updated["market_symbol"],
+            metadata={"bot_uuid": updated["bot_uuid"], "share_parameters": bool(share_parameters)},
+        )
+        conn.commit()
+        return {"ok": True, "bot": service._grid_bot_payload(updated, [])}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def delete_grid_bot(service, *, actor, bot_uuid):
     user_id = service._actor_id(actor)
     if not user_id:
@@ -557,6 +611,131 @@ def scan_grid_bots(service, *, actor):
     return {"ok": True, "scanned": len(bots), "results": results}
 
 
+def grid_bot_risk_target(bot, *, current_price, window_low, window_high):
+    initial_price = float(_to_decimal(bot["initial_price_points"] or 0, name="initial_price_points", minimum=0))
+    if initial_price <= 0:
+        return None
+    stop_loss_percent = _normalize_optional_risk_percent(
+        bot["stop_loss_percent"] if "stop_loss_percent" in bot.keys() else None,
+        name="stop_loss_percent",
+    )
+    take_profit_percent = _normalize_optional_risk_percent(
+        bot["take_profit_percent"] if "take_profit_percent" in bot.keys() else None,
+        name="take_profit_percent",
+    )
+    low = float(window_low or current_price or 0)
+    high = float(window_high or current_price or 0)
+    current = float(current_price or 0)
+    if stop_loss_percent:
+        stop_price = initial_price * max(0.0, 1.0 - (abs(stop_loss_percent) / 100.0))
+        if low > 0 and low <= stop_price:
+            return {
+                "reason": "stop_loss",
+                "label": "止損",
+                "target_percent": stop_loss_percent,
+                "trigger_price_points": stop_price,
+                "move_percent": round(((min(low, current) - initial_price) * 100.0) / initial_price, 4),
+            }
+    if take_profit_percent:
+        take_price = initial_price * (1.0 + (abs(take_profit_percent) / 100.0))
+        if high > 0 and high >= take_price:
+            return {
+                "reason": "take_profit",
+                "label": "止盈",
+                "target_percent": take_profit_percent,
+                "trigger_price_points": take_price,
+                "move_percent": round(((max(high, current) - initial_price) * 100.0) / initial_price, 4),
+            }
+    return None
+
+
+def stop_grid_bot_for_risk_target(service, *, bot, actor, risk_target, current_price, window_low, window_high):
+    user_id = int(bot["user_id"])
+    bot_id = int(bot["id"])
+    bot_actor = {"id": user_id, "username": service._actor_username(actor), "role": service._actor_role(actor)}
+    conn = service.get_db()
+    try:
+        service.ensure_schema(conn)
+        open_rows = conn.execute(
+            "SELECT id, trading_order_uuid FROM trading_grid_orders WHERE grid_bot_id=? AND status='open'",
+            (bot_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    cancelled_grid_ids = []
+    cancel_errors = []
+    for row in open_rows:
+        order_uuid = row["trading_order_uuid"]
+        if not order_uuid:
+            cancelled_grid_ids.append(int(row["id"]))
+            continue
+        try:
+            service.cancel_order(actor=bot_actor, order_uuid=order_uuid)
+            cancelled_grid_ids.append(int(row["id"]))
+        except Exception as exc:
+            cancel_errors.append({"order_uuid": order_uuid, "error": str(exc)[:160]})
+    now = _now_text()
+    message = (
+        f"{risk_target['label']}已觸發：相對建立價 {risk_target['move_percent']:+.4f}%，"
+        "已暫停網格並撤掉可撤的未成交掛單"
+    )
+    conn = service.get_db()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        for grid_order_id in cancelled_grid_ids:
+            conn.execute(
+                "UPDATE trading_grid_orders SET status='cancelled', updated_at=? WHERE id=? AND status='open'",
+                (now, grid_order_id),
+            )
+        conn.execute(
+            """
+            UPDATE trading_grid_bots
+            SET enabled=0, enabled_at=NULL, last_scan_at=?, last_error=?, updated_at=?
+            WHERE id=?
+            """,
+            (now, message, now, bot_id),
+        )
+        service._audit_event(
+            conn,
+            "GRID_BOT_RISK_TARGET_TRIGGERED",
+            "grid bot stop-loss/take-profit target triggered",
+            actor=actor,
+            target_user_id=user_id,
+            market_symbol=bot["market_symbol"],
+            severity="warning",
+            metadata={
+                "bot_uuid": bot["bot_uuid"],
+                "reason": risk_target["reason"],
+                "target_percent": risk_target["target_percent"],
+                "trigger_price_points": risk_target["trigger_price_points"],
+                "current_price_points": current_price,
+                "window_low_points": window_low,
+                "window_high_points": window_high,
+                "cancelled_orders": len(cancelled_grid_ids),
+                "cancel_errors": cancel_errors,
+            },
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return {
+        "bot_uuid": bot["bot_uuid"],
+        "current_price_points": current_price,
+        "scan_window_low_points": window_low,
+        "scan_window_high_points": window_high,
+        "risk_target_triggered": True,
+        "risk_target": risk_target,
+        "cancelled_orders": len(cancelled_grid_ids),
+        "cancel_errors": cancel_errors,
+        "fills_processed": [],
+        "counter_orders_placed": [],
+        "profit_delta": 0,
+    }
+
+
 def scan_one_grid_bot(service, bot, *, actor):
     user_id = int(bot["user_id"])
     bot_id = int(bot["id"])
@@ -618,6 +797,24 @@ def scan_one_grid_bot(service, bot, *, actor):
         )
         window_low = float((price_window or {}).get("low_points") or current_price)
         window_high = float((price_window or {}).get("high_points") or current_price)
+        risk_target = grid_bot_risk_target(
+            bot,
+            current_price=current_price,
+            window_low=window_low,
+            window_high=window_high,
+        )
+        if risk_target:
+            conn.close()
+            conn = None
+            return stop_grid_bot_for_risk_target(
+                service,
+                bot=bot,
+                actor=actor,
+                risk_target=risk_target,
+                current_price=current_price,
+                window_low=window_low,
+                window_high=window_high,
+            )
         grid_level_values = _json_loads(bot["grid_levels_json"], [])
         if not grid_level_values:
             grid_level_values = service._grid_levels(bot["lower_price_points"], bot["upper_price_points"], bot["grid_count"])
@@ -768,4 +965,5 @@ def scan_one_grid_bot(service, bot, *, actor):
             "profit_delta": profit_delta,
         }
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()

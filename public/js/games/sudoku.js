@@ -14,6 +14,8 @@ const SUDOKU_PUZZLES = [
     solution: "435269781682571493197834562826195347374682915951743628519326874248957136763418259",
   },
 ];
+const SUDOKU_HINT_LIMIT = 3;
+const SUDOKU_HINT_PENALTY_SECONDS = 60;
 let sudokuState = null;
 
 function startSudokuGame() {
@@ -31,6 +33,9 @@ function startSudokuGame() {
     noteMode: false,
     mistakes: 0,
     mistakeLimit: 3,
+    hintsUsed: 0,
+    hintLimit: SUDOKU_HINT_LIMIT,
+    hintPenaltySeconds: SUDOKU_HINT_PENALTY_SECONDS,
     startedAt: Date.now(),
     completedAt: null,
     failed: false,
@@ -49,6 +54,8 @@ function renderSudokuBoard() {
   if (!board) return;
   if (!sudokuState) {
     board.innerHTML = '<div class="single-game-placeholder">按「開始」後才會出現題目並開始計時。</div>';
+    updateSudokuNoteButton();
+    updateSudokuHintButton();
     return;
   }
   board.innerHTML = sudokuState.values.map((value, index) => {
@@ -64,6 +71,7 @@ function renderSudokuBoard() {
     `;
   }).join("");
   updateSudokuNoteButton();
+  updateSudokuHintButton();
 }
 
 function updateSudokuCell(index, value) {
@@ -95,6 +103,18 @@ function updateSudokuNoteButton() {
   btn.textContent = enabled ? "筆記中" : "筆記";
 }
 
+function updateSudokuHintButton() {
+  const btn = $("sudoku-hint-btn");
+  if (!btn) return;
+  const remaining = Math.max(0, Number(sudokuState?.hintLimit ?? SUDOKU_HINT_LIMIT) - Number(sudokuState?.hintsUsed || 0));
+  const active = Boolean(sudokuState && !sudokuState.completedAt && !sudokuState.failed);
+  btn.disabled = !active || remaining <= 0;
+  btn.textContent = `提示 ${remaining}`;
+  btn.title = active
+    ? `每次提示會填入 1 格，並加時 ${SUDOKU_HINT_PENALTY_SECONDS} 秒。`
+    : "開始新局後可使用提示。";
+}
+
 function updateSudokuStatus(prefix = "") {
   const status = $("sudoku-status");
   if (!status) return;
@@ -104,15 +124,16 @@ function updateSudokuStatus(prefix = "") {
   }
   const time = formatSoloGameTime(soloElapsedMs(sudokuState));
   const penalty = Number(sudokuState.penaltySeconds || 0);
+  const hintsRemaining = Math.max(0, Number(sudokuState.hintLimit || 0) - Number(sudokuState.hintsUsed || 0));
   if (sudokuState.completedAt) {
-    status.textContent = `完成時間 ${time}${penalty ? `（含加時 ${penalty} 秒）` : ""}`;
+    status.textContent = `完成時間 ${time}${penalty ? `（含加時 ${penalty} 秒）` : ""} · 提示 ${sudokuState.hintsUsed}/${sudokuState.hintLimit}`;
     return;
   }
   if (sudokuState.failed) {
     status.textContent = `錯誤達上限，本局結束。時間 ${time}`;
     return;
   }
-  status.textContent = `${prefix ? `${prefix} ` : ""}目前時間 ${time}${penalty ? ` · 加時 ${penalty} 秒` : ""} · 錯誤 ${sudokuState.mistakes}/${sudokuState.mistakeLimit}${sudokuState.noteMode ? " · 筆記模式" : ""}`;
+  status.textContent = `${prefix ? `${prefix} ` : ""}目前時間 ${time}${penalty ? ` · 加時 ${penalty} 秒` : ""} · 錯誤 ${sudokuState.mistakes}/${sudokuState.mistakeLimit} · 提示剩 ${hintsRemaining}${sudokuState.noteMode ? " · 筆記模式" : ""}`;
 }
 
 function checkSudokuGame() {
@@ -133,6 +154,7 @@ function checkSudokuGame() {
       sudokuState.failed = true;
       sudokuState.completedAt = Date.now();
       renderSudokuBoard();
+      updateSudokuHintButton();
       updateSudokuStatus();
       stopSoloGameTimerIfIdle();
       setGameMsg("數獨錯誤達上限，本局不列入排行榜。", false);
@@ -148,13 +170,14 @@ function checkSudokuGame() {
   if (current === sudokuState.solution) {
     sudokuState.completedAt = Date.now();
     renderSudokuBoard();
+    updateSudokuHintButton();
     updateSudokuStatus();
     stopSoloGameTimerIfIdle();
     if (sudokuState.noteMode || sudokuState.notes.some(Boolean)) {
       window.recordHackmeGameAchievement?.("sudoku", "note-master", "筆記整理", "使用筆記模式完成一題。");
     }
-    if (!sudokuState.mistakes) {
-      window.recordHackmeGameAchievement?.("sudoku", "no-mistake", "零錯誤完成", "不觸發錯誤檢查完成數獨。");
+    if (!sudokuState.mistakes && !sudokuState.hintsUsed) {
+      window.recordHackmeGameAchievement?.("sudoku", "no-mistake", "零錯誤完成", "不使用提示且不觸發錯誤檢查完成數獨。");
     }
     window.recordHackmeGameAchievement?.("sudoku", "first-solve", "數獨初解", "完成一題數獨。");
     submitSoloGameScore("sudoku", sudokuState);
@@ -174,14 +197,21 @@ function toggleSudokuNotes() {
 
 function fillSudokuHint() {
   if (!sudokuState || sudokuState.completedAt || sudokuState.failed) return;
+  const limit = Number(sudokuState.hintLimit || SUDOKU_HINT_LIMIT);
+  if (Number(sudokuState.hintsUsed || 0) >= limit) {
+    updateSudokuHintButton();
+    updateSudokuStatus("提示已用完，本局請自行完成。");
+    return;
+  }
   const empty = sudokuState.values.map((value, index) => value ? null : index).filter((index) => index !== null && !sudokuState.fixed[index]);
   if (!empty.length) return;
   const index = empty[0];
   sudokuState.values[index] = sudokuState.solution[index];
   sudokuState.notes[index] = "";
-  sudokuState.penaltySeconds += 20;
+  sudokuState.hintsUsed += 1;
+  sudokuState.penaltySeconds += Number(sudokuState.hintPenaltySeconds || SUDOKU_HINT_PENALTY_SECONDS);
   renderSudokuBoard();
-  updateSudokuStatus("提示已填入 1 格，代價加時 20 秒。");
+  updateSudokuStatus(`提示已填入 1 格，代價加時 ${SUDOKU_HINT_PENALTY_SECONDS} 秒。`);
 }
 
 (function () {

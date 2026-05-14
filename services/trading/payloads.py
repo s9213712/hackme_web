@@ -25,6 +25,7 @@ def bot_payload(
 ):
     item = dict(row)
     item["enabled"] = bool(item["enabled"])
+    item["share_parameters"] = bool(item.get("share_parameters", 0))
     item["max_runs"] = bot_max_runs_from_storage(item.get("max_runs"))
     item["can_run"] = bool(item["enabled"]) and bot_max_runs_has_remaining(item.get("run_count"), row["max_runs"])
     item["next_run_at"] = None

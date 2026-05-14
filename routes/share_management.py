@@ -14,7 +14,6 @@ def register_share_management_routes(app, deps):
     require_csrf = deps["require_csrf"]
     require_csrf_safe = deps["require_csrf_safe"]
     parse_positive_int = deps["parse_positive_int"]
-    role_rank = deps.get("role_rank", lambda role: {"user": 0, "manager": 1, "super_admin": 2}.get(role or "user", 0))
     audit = deps.get("audit", lambda *args, **kwargs: None)
     get_client_ip = deps.get("get_client_ip", lambda: "")
     get_ua = deps.get("get_ua", lambda: "")
@@ -32,10 +31,6 @@ def register_share_management_routes(app, deps):
         if not actor:
             return None, json_resp({"ok": False, "msg": "未登入"}), 401
         return actor, None, None
-
-    def is_manager(actor):
-        role = "super_admin" if actor_value(actor, "username") == "root" else actor_value(actor, "role", "user")
-        return role_rank(role) >= role_rank("manager")
 
     def now_text():
         return datetime.utcnow().replace(microsecond=0).isoformat()
@@ -61,8 +56,18 @@ def register_share_management_routes(app, deps):
             except Exception:
                 return default
 
+    def table_exists(conn, table):
+        try:
+            return bool(conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                (str(table),),
+            ).fetchone())
+        except Exception:
+            return False
+
     def storage_share_payload(row):
         data = dict(row)
+        token = data.get("token") or ""
         item = {
             "id": data.get("id"),
             "share_type": "file",
@@ -72,14 +77,17 @@ def register_share_management_routes(app, deps):
             "password_required": False,
             "can_preview": bool(row_int(data, "can_preview")),
             "can_download": bool(row_int(data, "can_download", 1)),
+            "access_scope": data.get("access_scope") or "link",
+            "required_user_id": row_int(data, "required_user_id"),
+            "required_username": data.get("required_username") or "",
             "expires_at": data.get("expires_at"),
-            "max_views": 0,
+            "max_views": row_int(data, "max_views"),
             "access_count": row_int(data, "access_count"),
             "last_accessed_at": data.get("last_accessed_at"),
             "created_at": data.get("created_at"),
             "revoked_at": data.get("revoked_at"),
             "status": share_status(data),
-            "share_url": "",
+            "share_url": f"/shared/files/{token}" if token else "",
         }
         return item
 
@@ -150,7 +158,7 @@ def register_share_management_routes(app, deps):
     def require_share_access(actor, row):
         if not row:
             return json_resp({"ok": False, "msg": "找不到分享連結"}), 404
-        if int(row["owner_user_id"]) != int(actor["id"]) and not is_manager(actor):
+        if int(row["owner_user_id"]) != int(actor["id"]):
             return json_resp({"ok": False, "msg": "不可管理他人的分享連結"}), 403
         return None, None
 
@@ -203,7 +211,7 @@ def register_share_management_routes(app, deps):
                 "event_type": "revoked",
                 "label": "分享已撤銷",
                 "created_at": data.get("revoked_at"),
-                "detail": "分享連結已由擁有者或管理員撤銷。",
+                "detail": "分享連結已由擁有者撤銷。",
             })
         return sorted(events, key=lambda item: str(item.get("created_at") or ""), reverse=True)
 
@@ -213,7 +221,7 @@ def register_share_management_routes(app, deps):
         actor, err, status_code = actor_or_401()
         if err:
             return err, status_code
-        include_all = request_arg_true("all") and is_manager(actor)
+        include_all = False
         limit = parse_positive_int(request.args.get("limit"), default=100, min_value=1, max_value=200)
         conn = get_db()
         try:
@@ -221,13 +229,26 @@ def register_share_management_routes(app, deps):
             ensure_video_schema(conn)
             owner_clause = "" if include_all else "WHERE sl.owner_user_id=?"
             owner_params = [] if include_all else [int(actor["id"])]
+            if table_exists(conn, "uploaded_files"):
+                upload_name_select = "uf.original_filename_plain_for_public"
+                upload_join = "LEFT JOIN uploaded_files uf ON uf.id=sl.file_id"
+            else:
+                upload_name_select = "NULL AS original_filename_plain_for_public"
+                upload_join = ""
+            if table_exists(conn, "users"):
+                required_user_select = "u.username AS required_username"
+                required_user_join = "LEFT JOIN users u ON u.id=sl.required_user_id"
+            else:
+                required_user_select = "NULL AS required_username"
+                required_user_join = ""
             shares = []
             for row in conn.execute(
                 f"""
-                SELECT sl.*, sf.display_name, uf.original_filename_plain_for_public
+                SELECT sl.*, sf.display_name, {upload_name_select}, {required_user_select}
                 FROM storage_share_links sl
                 LEFT JOIN storage_files sf ON sf.id=sl.storage_file_id
-                LEFT JOIN uploaded_files uf ON uf.id=sl.file_id
+                {required_user_join}
+                {upload_join}
                 {owner_clause}
                 ORDER BY sl.created_at DESC
                 LIMIT ?
@@ -265,9 +286,6 @@ def register_share_management_routes(app, deps):
             return json_resp({"ok": True, "shares": shares[:limit]})
         finally:
             conn.close()
-
-    def request_arg_true(name):
-        return str(request.args.get(name) or "").lower() in {"1", "true", "yes", "on"}
 
     @app.route("/api/shares/<share_type>/<share_id>/revoke", methods=["POST"])
     @require_csrf

@@ -728,7 +728,7 @@ def register_file_routes(app, deps):
                 owner_id = int(task.get("owner_user_id") or 0)
             except Exception:
                 owner_id = 0
-            if owner_id != actor_id and not _is_manager(actor):
+            if owner_id != actor_id:
                 continue
             visible.append(_task_snapshot(task))
         visible.sort(key=lambda item: item.get("created_at") or "", reverse=True)
@@ -803,8 +803,6 @@ def register_file_routes(app, deps):
         return row is not None
 
     def _context_refs_visible_to_actor(conn, actor, context_type, context_id):
-        if _is_manager(actor):
-            return True
         actor_id = int(_actor_value(actor, "id") or 0)
         context_type = str(context_type or "").strip()
         context_id = str(context_id or "").strip()
@@ -1062,6 +1060,7 @@ def register_file_routes(app, deps):
         "actor_value": _actor_value,
         "audit": audit,
         "get_client_ip": get_client_ip,
+        "get_current_user_ctx": get_current_user_ctx,
         "get_db": get_db,
         "get_member_level_rule": get_member_level_rule,
         "get_system_settings": get_system_settings,
@@ -1926,6 +1925,7 @@ def register_file_routes(app, deps):
         "audit": audit,
         "decryption_unavailable_preview": _decryption_unavailable_preview,
         "get_client_ip": get_client_ip,
+        "get_current_user_ctx": get_current_user_ctx,
         "get_db": get_db,
         "get_ua": get_ua,
         "json_resp": json_resp,
@@ -2205,7 +2205,7 @@ def register_file_routes(app, deps):
             refs = []
             for row in rows:
                 allowed, reason, _ = can_download_file(conn, actor=actor, file_id=row["file_id"])
-                if allowed or row["attached_by"] == actor["id"] or row["owner_user_id"] == actor["id"] or _is_manager(actor):
+                if allowed or row["attached_by"] == actor["id"] or row["owner_user_id"] == actor["id"]:
                     refs.append({**dict(row), "can_download": allowed, "download_reason": reason})
             return json_resp({"ok": True, "refs": refs})
         finally:
@@ -2239,7 +2239,6 @@ def register_file_routes(app, deps):
             allowed = (
                 int(row["attached_by"]) == int(_actor_value(actor, "id"))
                 or int(row["owner_user_id"]) == int(_actor_value(actor, "id"))
-                or _is_manager(actor)
             )
             if not allowed:
                 return json_resp({"ok": False, "msg": "沒有移除此附件的權限"}), 403

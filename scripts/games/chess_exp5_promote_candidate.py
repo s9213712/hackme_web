@@ -140,7 +140,7 @@ def main() -> int:
     rollback_dir = output_dir / "rollback"
     previous_exists = runtime_path.exists()
     previous_hash = _sha256_file(runtime_path) if previous_exists else ""
-    previous_snapshot = rollback_dir / "previous_chess_experiment_5_nnue.json"
+    previous_snapshot = rollback_dir / "previous_chess_experiment_5_nnue_experience.json"
     previous_snapshot_created = _copy_optional(runtime_path, previous_snapshot)
     absence_marker = rollback_dir / "previous_runtime_absent.json"
     if not previous_exists:

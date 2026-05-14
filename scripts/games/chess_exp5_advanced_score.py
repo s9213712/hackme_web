@@ -109,24 +109,32 @@ def _gauntlet_component(gauntlet: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _runtime_component(gauntlet: dict[str, Any]) -> dict[str, Any]:
+def _runtime_component(
+    gauntlet: dict[str, Any],
+    *,
+    full_credit_ms: float = 30000.0,
+    zero_credit_ms: float = 120000.0,
+) -> dict[str, Any]:
     games = gauntlet.get("games") or []
     avg_elapsed = 0.0
     if games:
         avg_elapsed = sum(float(row.get("elapsed_ms") or 0.0) for row in games) / max(1, len(games))
     else:
         avg_elapsed = float(((gauntlet.get("summary") or {}).get("avg_elapsed_ms")) or 0.0)
-    # Full credit below 8s/game in this Python reviewer gauntlet, decays to 0
-    # at 45s/game.
-    efficiency = 1.0 - _clamp((avg_elapsed - 8000.0) / 37000.0)
+    # User-facing chess play may reasonably spend more time than the original
+    # smoke-reviewer budget. The current target gives full runtime credit up to
+    # 30s/game, then decays linearly to 0 at 120s/game by default.
+    full_credit_ms = max(0.0, float(full_credit_ms or 0.0))
+    zero_credit_ms = max(full_credit_ms + 1.0, float(zero_credit_ms or 0.0))
+    efficiency = 1.0 - _clamp((avg_elapsed - full_credit_ms) / (zero_credit_ms - full_credit_ms))
     return {
         "name": "runtime_efficiency",
         "max_points": 10.0,
         "points": round(10.0 * efficiency, 4),
         "inputs": {
             "avg_elapsed_ms_per_gauntlet_game": round(avg_elapsed, 3),
-            "full_credit_ms": 8000,
-            "zero_credit_ms": 45000,
+            "full_credit_ms": round(full_credit_ms, 3),
+            "zero_credit_ms": round(zero_credit_ms, 3),
         },
     }
 
@@ -143,12 +151,23 @@ def _grade(total: float) -> str:
     return "needs_core_engine_work"
 
 
-def build_score(score_probe: dict[str, Any], tactical: dict[str, Any], gauntlet: dict[str, Any]) -> dict[str, Any]:
+def build_score(
+    score_probe: dict[str, Any],
+    tactical: dict[str, Any],
+    gauntlet: dict[str, Any],
+    *,
+    runtime_full_credit_ms: float = 30000.0,
+    runtime_zero_credit_ms: float = 120000.0,
+) -> dict[str, Any]:
     components = [
         _score_probe_component(score_probe),
         _tactical_component(tactical),
         _gauntlet_component(gauntlet),
-        _runtime_component(gauntlet),
+        _runtime_component(
+            gauntlet,
+            full_credit_ms=runtime_full_credit_ms,
+            zero_credit_ms=runtime_zero_credit_ms,
+        ),
     ]
     total = sum(float(component["points"]) for component in components)
     max_points = sum(float(component["max_points"]) for component in components)
@@ -156,7 +175,7 @@ def build_score(score_probe: dict[str, Any], tactical: dict[str, Any], gauntlet:
     return {
         "engine": EXP5,
         "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
-        "score_name": "exp5_advanced_non_saturated_score_v1",
+        "score_name": "exp5_advanced_non_saturated_score_v2_30s_runtime",
         "total_points": round(total, 4),
         "max_points": round(max_points, 4),
         "normalized_100": round(normalized, 4),
@@ -166,6 +185,7 @@ def build_score(score_probe: dict[str, Any], tactical: dict[str, Any], gauntlet:
             "legacy_40_point_score": "saturated; retained only as stability gate",
             "main_current_ceiling": "complete-game gauntlet win rate, lower threefold rate, PGN exact-match signal, and runtime",
             "not_external_elo": True,
+            "runtime_policy": "full credit up to runtime_full_credit_ms, then linear decay to runtime_zero_credit_ms",
         },
     }
 
@@ -176,6 +196,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tactical-suite", default=str(ROOT / "docs/games/2026-05-13_exp5_tactical_suite_300_see_extension.json"))
     parser.add_argument("--gauntlet", default=str(ROOT / "docs/games/2026-05-13_exp5_gauntlet_see_extension.json"))
     parser.add_argument("--output", default=str(ROOT / "docs/games/2026-05-13_exp5_advanced_score.json"))
+    parser.add_argument("--runtime-full-credit-ms", type=float, default=30000.0)
+    parser.add_argument("--runtime-zero-credit-ms", type=float, default=120000.0)
     return parser.parse_args()
 
 
@@ -185,11 +207,15 @@ def main() -> int:
         _load_json(args.score_probe),
         _load_json(args.tactical_suite),
         _load_json(args.gauntlet),
+        runtime_full_credit_ms=float(args.runtime_full_credit_ms),
+        runtime_zero_credit_ms=float(args.runtime_zero_credit_ms),
     )
     artifact["inputs"] = {
         "score_probe": str(Path(args.score_probe)),
         "tactical_suite": str(Path(args.tactical_suite)),
         "gauntlet": str(Path(args.gauntlet)),
+        "runtime_full_credit_ms": float(args.runtime_full_credit_ms),
+        "runtime_zero_credit_ms": float(args.runtime_zero_credit_ms),
     }
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)

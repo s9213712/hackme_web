@@ -276,6 +276,11 @@ def test_detect_pgn_teacher_audit_by_self_stamped_stage_field():
     assert detect_stage(payload) == STAGE_PGN_TEACHER_AUDIT
 
 
+def test_detect_stockfish_teacher_audit_as_pgn_teacher_audit():
+    payload = {"stage": "stockfish_teacher_audit", "counts": {"teacher_train_rows": 2}}
+    assert detect_stage(payload) == STAGE_PGN_TEACHER_AUDIT
+
+
 def test_normalize_pgn_teacher_audit_extracts_metrics():
     payload = {
         "stage": "pgn_teacher_audit",
@@ -314,6 +319,46 @@ def test_normalize_pgn_teacher_audit_extracts_metrics():
     assert m["exp5_teacher_used"] is True
     assert m["accepted_jsonl"] == "/x/accepted_replay.jsonl"
     assert m["audited_trusted_source"] == "imported_dataset_teacher_audited"
+
+
+def test_normalize_stockfish_teacher_audit_extracts_metrics():
+    payload = {
+        "stage": "stockfish_teacher_audit",
+        "depth": 8,
+        "movetime_ms": 0,
+        "multipv": 5,
+        "teacher_train_jsonl": "/x/stockfish_teacher_train_rows.jsonl",
+        "stockfish_reference": "abc123",
+        "counts": {
+            "selected_positions": 20,
+            "teacher_rows": 20,
+            "teacher_train_rows": 12,
+            "teacher_eval_rows": 3,
+            "played_clean_rows": 7,
+            "review_rows": 5,
+            "rejected_rows": 3,
+            "hard_negative_source_moves": 2,
+            "by_category": {"opening": 8, "tactic": 4},
+            "by_played_status": {"clean": 7, "review": 5},
+        },
+    }
+
+    out = normalize_stage(payload)
+
+    assert out["stage"] == STAGE_PGN_TEACHER_AUDIT
+    assert out["diagnostic_only"] is True
+    m = out["key_metrics"]
+    assert m["audit_backend"] == "stockfish"
+    assert m["depth"] == 8
+    assert m["top_k"] == 5
+    assert m["input_rows"] == 20
+    assert m["accepted_rows"] == 12
+    assert m["eval_rows"] == 3
+    assert m["played_clean_rows"] == 7
+    assert m["hard_negative_source_moves"] == 2
+    assert m["accepted_jsonl"] == "/x/stockfish_teacher_train_rows.jsonl"
+    assert m["audited_trusted_source"] == "stockfish_teacher_audited"
+    assert m["stockfish_reference"] == "abc123"
 
 
 def test_compute_invariants_flags_unaudited_imported_dataset_in_seed_train():

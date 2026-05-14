@@ -1,0 +1,2045 @@
+{
+  "autorun": {
+    "launched": true,
+    "ok": true,
+    "reason": "started",
+    "recommendation": {
+      "blocked_reasons": [],
+      "last_train_at": "",
+      "ready": true,
+      "ready_reasons": [
+        "no prior pipeline run"
+      ],
+      "recommended_command": "python3 scripts/games/chess_train_pipeline.py --preset standard --include-quarantine --min-usable-replays 10 --promote-engines 'experiment 3:dl' --skip-exp1-refine --skip-exp4 --skip-exp5",
+      "thresholds": {
+        "max_age_hours": 168,
+        "min_usable_replays": 10
+      },
+      "usable_replays": 10
+    },
+    "status": {
+      "actor_username": "exp3_validation_user",
+      "command": [
+        "/home/s92137/.pyenv/versions/3.10.14/bin/python3",
+        "/home/s92137/hackme_web/scripts/games/chess_train_pipeline.py",
+        "--preset",
+        "standard",
+        "--include-quarantine",
+        "--min-usable-replays",
+        "10",
+        "--promote-engines",
+        "experiment 3:dl",
+        "--skip-exp1-refine",
+        "--skip-exp4",
+        "--skip-exp5"
+      ],
+      "exists": true,
+      "finished_at": "",
+      "is_running": true,
+      "log_path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/reports/games/chess_train_pipeline_autorun_autorun_20260514T033436Z.log",
+      "path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/reports/games/chess_pipeline_autorun_status.json",
+      "pid": 61,
+      "recommendation": {
+        "blocked_reasons": [],
+        "last_train_at": "",
+        "ready": true,
+        "ready_reasons": [
+          "no prior pipeline run"
+        ],
+        "recommended_command": "python3 scripts/games/chess_train_pipeline.py --preset standard --include-quarantine --min-usable-replays 10 --promote-engines 'experiment 3:dl' --skip-exp1-refine --skip-exp4 --skip-exp5",
+        "thresholds": {
+          "max_age_hours": 168,
+          "min_usable_replays": 10
+        },
+        "usable_replays": 10
+      },
+      "replay_snapshot": {
+        "by_source": {
+          "user_games": 12
+        },
+        "duplicate_count": 0,
+        "eval_split_size": 2,
+        "exists": true,
+        "last_timestamp": "2026-05-14T03:09:57.065470Z",
+        "path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/reports/games/chess_replays.jsonl",
+        "quarantine_path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/reports/games/chess_replays_quarantine.jsonl",
+        "quarantine_reasons": {
+          "early_resign": 1,
+          "suspicious_pattern": 2
+        },
+        "quarantine_replays": 2,
+        "recent_user_games": 12,
+        "rejected_path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/reports/games/chess_replays_rejected.jsonl",
+        "rejected_replays": 0,
+        "resign_abuse_count": 1,
+        "suspicious_count": 2,
+        "total_replays": 12,
+        "train_split_size": 8,
+        "trusted_replays": 10,
+        "usable_replays": 10
+      },
+      "returncode": null,
+      "run_id": "autorun_20260514T033436Z",
+      "started_at": "2026-05-14T03:34:36.174081Z",
+      "status": "running",
+      "trigger": "trusted_checkpoint_10"
+    }
+  },
+  "autorun_skip_benchmark": false,
+  "autorun_skip_promote": false,
+  "autorun_status": {
+    "actor_username": "exp3_validation_user",
+    "command": [
+      "/home/s92137/.pyenv/versions/3.10.14/bin/python3",
+      "/home/s92137/hackme_web/scripts/games/chess_train_pipeline.py",
+      "--preset",
+      "standard",
+      "--include-quarantine",
+      "--min-usable-replays",
+      "10",
+      "--promote-engines",
+      "experiment 3:dl",
+      "--skip-exp1-refine",
+      "--skip-exp4",
+      "--skip-exp5"
+    ],
+    "exists": true,
+    "finished_at": "",
+    "is_running": true,
+    "log_path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/reports/games/chess_train_pipeline_autorun_autorun_20260514T033436Z.log",
+    "path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/reports/games/chess_pipeline_autorun_status.json",
+    "pid": 61,
+    "recommendation": {
+      "blocked_reasons": [],
+      "last_train_at": "",
+      "ready": true,
+      "ready_reasons": [
+        "no prior pipeline run"
+      ],
+      "recommended_command": "python3 scripts/games/chess_train_pipeline.py --preset standard --include-quarantine --min-usable-replays 10 --promote-engines 'experiment 3:dl' --skip-exp1-refine --skip-exp4 --skip-exp5",
+      "thresholds": {
+        "max_age_hours": 168,
+        "min_usable_replays": 10
+      },
+      "usable_replays": 10
+    },
+    "replay_snapshot": {
+      "by_source": {
+        "user_games": 12
+      },
+      "duplicate_count": 0,
+      "eval_split_size": 2,
+      "exists": true,
+      "last_timestamp": "2026-05-14T03:09:57.065470Z",
+      "path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/reports/games/chess_replays.jsonl",
+      "quarantine_path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/reports/games/chess_replays_quarantine.jsonl",
+      "quarantine_reasons": {
+        "early_resign": 1,
+        "suspicious_pattern": 2
+      },
+      "quarantine_replays": 2,
+      "recent_user_games": 12,
+      "rejected_path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/reports/games/chess_replays_rejected.jsonl",
+      "rejected_replays": 0,
+      "resign_abuse_count": 1,
+      "suspicious_count": 2,
+      "total_replays": 12,
+      "train_split_size": 8,
+      "trusted_replays": 10,
+      "usable_replays": 10
+    },
+    "returncode": null,
+    "run_id": "autorun_20260514T033436Z",
+    "started_at": "2026-05-14T03:34:36.174081Z",
+    "status": "running",
+    "trigger": "trusted_checkpoint_10"
+  },
+  "benchmark_after": {
+    "draws": 3,
+    "engine": "experiment 3:dl",
+    "games": 12,
+    "legal_rate": 1.0,
+    "losses": 3,
+    "low_quality_rate": 0.0,
+    "score_rate": 0.625,
+    "suspicious_matches": 0,
+    "win_rate": 0.5,
+    "wins": 6
+  },
+  "benchmark_before": {
+    "draws": 4,
+    "engine": "experiment 3:dl",
+    "games": 12,
+    "legal_rate": 1.0,
+    "losses": 2,
+    "low_quality_rate": 0.0,
+    "score_rate": 0.6667,
+    "suspicious_matches": 0,
+    "win_rate": 0.5,
+    "wins": 6
+  },
+  "benchmark_delta": {
+    "legal_rate_delta": 0.0,
+    "low_quality_rate_delta": 0.0,
+    "win_rate_delta": 0.0
+  },
+  "benchmark_skip_reason": "",
+  "benchmark_skipped": false,
+  "candidate_model_path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/games/models/chess_experiment_3_dl.json",
+  "checkpoint_duration_seconds": 5042.731,
+  "checkpoint_started_at": "2026-05-14T03:09:57+00:00",
+  "dataset_hash": "sha256:e482454a66d709ac461a18a414fb80b7f7c53e315d11075b21f7406d3082433e",
+  "dataset_result": {
+    "accepted_eval_samples": 84,
+    "accepted_rows": 272,
+    "accepted_train_samples": 272,
+    "blocked_contaminated_rows": 0,
+    "command": [
+      "/home/s92137/.pyenv/versions/3.10.14/bin/python3",
+      "/home/s92137/hackme_web/scripts/games/chess_replay_prepare.py",
+      "--replace-output",
+      "--output-dir",
+      "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/exp3/checkpoints/10/_prepared_dataset",
+      "--source-stage-label",
+      "checkpoint_10"
+    ],
+    "contaminated_rows": 0,
+    "dataset_sha256": "e482454a66d709ac461a18a414fb80b7f7c53e315d11075b21f7406d3082433e",
+    "eval_path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/exp3/checkpoints/10/_prepared_dataset/eval.jsonl",
+    "generated_at": "2026-05-14T03:09:57.394880Z",
+    "include_losing_moves": false,
+    "include_quarantine": false,
+    "min_move_count": 8,
+    "ok": true,
+    "quarantine_replay_path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/reports/games/chess_replays_quarantine.jsonl",
+    "quarantine_replays_seen": 0,
+    "rejected_dataset_path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/exp3/checkpoints/10/rejected_dataset.jsonl",
+    "rejected_rows": 2,
+    "replace_output": true,
+    "reports": {
+      "json_report": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/reports/games/chess_replay_prepare_20260514_030957.394880.json",
+      "md_report": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/reports/games/chess_replay_prepare_20260514_030957.394880.md"
+    },
+    "returncode": 0,
+    "skip_reasons": {},
+    "skipped_replays": 0,
+    "source_stage_label": "checkpoint_10",
+    "stderr": "[chess-replay-prepare] trusted replay: /home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/reports/games/chess_replays.jsonl\n[chess-replay-prepare] quarantine replay: /home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/reports/games/chess_replays_quarantine.jsonl\n[chess-replay-prepare] output dir: /home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/exp3/checkpoints/10/_prepared_dataset\n[chess-replay-prepare] train artifact: /home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/exp3/checkpoints/10/_prepared_dataset/train.jsonl\n[chess-replay-prepare] eval artifact: /home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/exp3/checkpoints/10/_prepared_dataset/eval.jsonl\n[chess-replay-prepare] mode: replace-output include_quarantine=False\n[chess-replay-prepare] phase read trusted replay started\n[chess-replay-prepare] phase result read trusted replay: seen=10 train=272 eval=84\n[chess-replay-prepare] phase read quarantine replay skipped\n[chess-replay-prepare] phase write datasets started\n[chess-replay-prepare] phase result write datasets: train=272 eval=84\n[chess-replay-prepare] phase result report: json=/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/reports/games/chess_replay_prepare_20260514_030957.394880.json md=/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/reports/games/chess_replay_prepare_20260514_030957.394880.md\n",
+    "stdout": "{\n  \"ok\": true,\n  \"generated_at\": \"2026-05-14T03:09:57.394880Z\",\n  \"trusted_replay_path\": \"/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/reports/games/chess_replays.jsonl\",\n  \"quarantine_replay_path\": \"/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/reports/games/chess_replays_quarantine.jsonl\",\n  \"include_quarantine\": false,\n  \"source_stage_label\": \"checkpoint_10\",\n  \"trusted_replays_seen\": 10,\n  \"quarantine_replays_seen\": 0,\n  \"accepted_train_samples\": 272,\n  \"accepted_eval_samples\": 84,\n  \"skipped_replays\": 0,\n  \"skip_reasons\": {},\n  \"train_path\": \"/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/exp3/checkpoints/10/_prepared_dataset/train.jsonl\",\n  \"eval_path\": \"/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/exp3/checkpoints/10/_prepared_dataset/eval.jsonl\",\n  \"min_move_count\": 8,\n  \"include_losing_moves\": false,\n  \"replace_output\": true,\n  \"reports\": {\n    \"json_report\": \"/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/reports/games/chess_replay_prepare_20260514_030957.394880.json\",\n    \"md_report\": \"/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/reports/games/chess_replay_prepare_20260514_030957.394880.md\"\n  }\n}\n",
+    "train_dataset_path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/exp3/checkpoints/10/train_dataset.jsonl",
+    "train_path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/exp3/checkpoints/10/_prepared_dataset/train.jsonl",
+    "trusted_replay_path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/reports/games/chess_replays.jsonl",
+    "trusted_replays_seen": 10
+  },
+  "dataset_sha256": "e482454a66d709ac461a18a414fb80b7f7c53e315d11075b21f7406d3082433e",
+  "duration_seconds": 1801.695,
+  "finished_at": "2026-05-14T04:04:37+00:00",
+  "fixed_probe_positions_after": {
+    "positions": [
+      {
+        "chosen_move": "f7e8",
+        "fen": "6k1/5Q2/6K1/8/8/8/8/8 w - - 0 1",
+        "legal": true,
+        "position_id": "mate_in_one_white",
+        "score": 100000,
+        "side": "white",
+        "think_ms": 0.501
+      },
+      {
+        "chosen_move": "e8e7",
+        "fen": "4k3/4Q3/8/8/8/8/8/4K3 b - - 0 1",
+        "legal": true,
+        "position_id": "forced_capture_black",
+        "score": 0,
+        "side": "black",
+        "think_ms": 8.798
+      },
+      {
+        "chosen_move": "d3f2",
+        "fen": "4k3/8/8/8/4K3/3n4/8/7R b - - 0 1",
+        "legal": true,
+        "position_id": "fork_threat_black",
+        "score": 2,
+        "side": "black",
+        "think_ms": 173.472
+      },
+      {
+        "chosen_move": "f1e2",
+        "fen": "4k3/8/8/8/8/8/4r3/4KQ2 w - - 0 1",
+        "legal": true,
+        "position_id": "queen_hanging_white",
+        "score": -9,
+        "side": "white",
+        "think_ms": 118.88
+      },
+      {
+        "chosen_move": "f2e1",
+        "fen": "8/8/8/8/8/6k1/5q2/6K1 b - - 0 1",
+        "legal": true,
+        "position_id": "mate_in_one_black",
+        "score": 100000,
+        "side": "black",
+        "think_ms": 0.456
+      },
+      {
+        "chosen_move": "e7e8q",
+        "fen": "k7/4P3/2K5/8/8/8/8/8 w - - 0 1",
+        "legal": true,
+        "position_id": "promotion_white",
+        "score": -9,
+        "side": "white",
+        "think_ms": 167.69
+      },
+      {
+        "chosen_move": "d7b7",
+        "fen": "k7/3Q4/2K5/8/8/8/8/8 w - - 0 1",
+        "legal": true,
+        "position_id": "avoid_stalemate_white",
+        "score": 100000,
+        "side": "white",
+        "think_ms": 0.332
+      },
+      {
+        "chosen_move": "f1e2",
+        "fen": "4k3/8/8/8/8/8/4q3/4KQ2 w - - 0 1",
+        "legal": true,
+        "position_id": "free_queen_white",
+        "score": -9,
+        "side": "white",
+        "think_ms": 74.212
+      }
+    ],
+    "supported": true
+  },
+  "fixed_probe_positions_before": {
+    "positions": [
+      {
+        "chosen_move": "f7e8",
+        "fen": "6k1/5Q2/6K1/8/8/8/8/8 w - - 0 1",
+        "legal": true,
+        "position_id": "mate_in_one_white",
+        "score": 100000,
+        "side": "white",
+        "think_ms": 0.41
+      },
+      {
+        "chosen_move": "e8e7",
+        "fen": "4k3/4Q3/8/8/8/8/8/4K3 b - - 0 1",
+        "legal": true,
+        "position_id": "forced_capture_black",
+        "score": 0,
+        "side": "black",
+        "think_ms": 7.382
+      },
+      {
+        "chosen_move": "d3f2",
+        "fen": "4k3/8/8/8/4K3/3n4/8/7R b - - 0 1",
+        "legal": true,
+        "position_id": "fork_threat_black",
+        "score": 2,
+        "side": "black",
+        "think_ms": 166.385
+      },
+      {
+        "chosen_move": "f1e2",
+        "fen": "4k3/8/8/8/8/8/4r3/4KQ2 w - - 0 1",
+        "legal": true,
+        "position_id": "queen_hanging_white",
+        "score": -9,
+        "side": "white",
+        "think_ms": 111.827
+      },
+      {
+        "chosen_move": "f2e1",
+        "fen": "8/8/8/8/8/6k1/5q2/6K1 b - - 0 1",
+        "legal": true,
+        "position_id": "mate_in_one_black",
+        "score": 100000,
+        "side": "black",
+        "think_ms": 0.449
+      },
+      {
+        "chosen_move": "e7e8q",
+        "fen": "k7/4P3/2K5/8/8/8/8/8 w - - 0 1",
+        "legal": true,
+        "position_id": "promotion_white",
+        "score": -9,
+        "side": "white",
+        "think_ms": 155.017
+      },
+      {
+        "chosen_move": "d7b7",
+        "fen": "k7/3Q4/2K5/8/8/8/8/8 w - - 0 1",
+        "legal": true,
+        "position_id": "avoid_stalemate_white",
+        "score": 100000,
+        "side": "white",
+        "think_ms": 0.324
+      },
+      {
+        "chosen_move": "f1e2",
+        "fen": "4k3/8/8/8/8/8/4q3/4KQ2 w - - 0 1",
+        "legal": true,
+        "position_id": "free_queen_white",
+        "score": -9,
+        "side": "white",
+        "think_ms": 72.672
+      }
+    ],
+    "supported": true
+  },
+  "gate_decision": {
+    "passed": false,
+    "reasons": [
+      "mistake retention probe failed: no old trusted mistake-retention sample was available for a probe",
+      "mistake retention probe did not match expected move"
+    ]
+  },
+  "hash_change_explanation": "hash_changed only proves model bytes changed; it is not accepted as learning success without probe or benchmark evidence",
+  "hash_changed": false,
+  "ineffective_training": false,
+  "mistake_retention_probe": {
+    "after_move": "",
+    "avoided_old_mistake": false,
+    "avoided_same_error": false,
+    "before_move": "",
+    "counted_as_game": false,
+    "expected_move": "",
+    "human_explanation": "目前沒有足夠證據證明 retrain 改善了該錯誤，因為沒有可重測的舊題目。",
+    "learning_signal": false,
+    "learning_signal_reason": "no old trusted mistake-retention sample was available for a probe",
+    "matched_expected": false,
+    "reason": "no_mistake_retention_samples",
+    "result_kind": "fail",
+    "supported": false
+  },
+  "model_after": {
+    "exists": true,
+    "path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/games/models/chess_experiment_3_dl.json",
+    "replay_size": 10,
+    "sample_count": 80097,
+    "sha256": "36434739ccf9a9bb932df8582b682f824bc9d7ffce793ec7bf409b4e8dd9ba91",
+    "updated_at": "2026-05-14T09:42:45.921191"
+  },
+  "model_before": {
+    "exists": true,
+    "path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/games/models/chess_experiment_3_dl.json",
+    "replay_size": 10,
+    "sample_count": 80097,
+    "sha256": "36434739ccf9a9bb932df8582b682f824bc9d7ffce793ec7bf409b4e8dd9ba91",
+    "updated_at": "2026-05-14T09:42:45.921191"
+  },
+  "model_hash_changed": false,
+  "move_agreement_after": {
+    "agreement": 0.9606,
+    "avg_think_ms": 206.255,
+    "matches": 341,
+    "model_path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/games/models/chess_experiment_3_dl.json",
+    "supported": true,
+    "total": 355,
+    "total_think_ms": 73220.559
+  },
+  "move_agreement_before": {
+    "agreement": 0.9606,
+    "avg_think_ms": 198.462,
+    "matches": 341,
+    "model_path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/games/models/chess_experiment_3_dl.json",
+    "supported": true,
+    "total": 355,
+    "total_think_ms": 70454.029
+  },
+  "new_model_hash": "36434739ccf9a9bb932df8582b682f824bc9d7ffce793ec7bf409b4e8dd9ba91",
+  "pipeline_ok": false,
+  "pipeline_report_path": "",
+  "post_checkpoint_model_sha256": "36434739ccf9a9bb932df8582b682f824bc9d7ffce793ec7bf409b4e8dd9ba91",
+  "pre_checkpoint_model_sha256": "36434739ccf9a9bb932df8582b682f824bc9d7ffce793ec7bf409b4e8dd9ba91",
+  "previous_model_hash": "36434739ccf9a9bb932df8582b682f824bc9d7ffce793ec7bf409b4e8dd9ba91",
+  "probe_position_move_change_count": 0,
+  "retention_probe": {
+    "after_matches_expected": false,
+    "after_move": "e2e3",
+    "before_matches_expected": false,
+    "before_move": "e2e3",
+    "counted_as_game": false,
+    "expected_move": "e2e4",
+    "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+    "game_id": 1026,
+    "game_index": 1,
+    "game_label": "valid_06",
+    "learning_signal": false,
+    "model_response_changed": false,
+    "ply": 1,
+    "side": "white",
+    "source": "old_trusted_engine_move",
+    "supported": true
+  },
+  "retrain_benchmark_snapshots_skipped": false,
+  "retrain_duration_seconds": 1801.695,
+  "started_at": "2026-05-14T03:34:36+00:00",
+  "trainer_probe": {
+    "ablation_config": {
+      "hard_negative_weight": 0.85,
+      "mode": "default",
+      "negative_target": -0.45,
+      "ordinary_negative_weight": 0.55,
+      "semantic_separation_weight": 1.15,
+      "use_hard_negatives": true,
+      "use_invariance_memory": true
+    },
+    "ablation_mode": "default",
+    "accepted_expected_min": 272,
+    "accepted_samples": 272,
+    "adjusted_loss_weight": {
+      "d_pawn_central_break": 0.55,
+      "development_move": 0.55,
+      "e_pawn_central_break": 0.55,
+      "flank_pawn_push": 0.55,
+      "other": 0.55
+    },
+    "anchor_check_after_each_semantic": [
+      {
+        "after_semantic_update": "e_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "d_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "flank_pawn_push",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "development_move",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "flank_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "e_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "d_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "flank_pawn_push",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "development_move",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "flank_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "e_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "d_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "flank_pawn_push",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "development_move",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "flank_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "e_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "d_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "flank_pawn_push",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "development_move",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "flank_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "e_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "d_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "flank_pawn_push",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "development_move",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "flank_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "e_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "d_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "flank_pawn_push",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "development_move",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "flank_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "e_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "d_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "flank_pawn_push",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "development_move",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "flank_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "e_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "d_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "flank_pawn_push",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "development_move",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "flank_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "e_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "d_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "flank_pawn_push",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "development_move",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "flank_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "e_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "d_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "flank_pawn_push",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "development_move",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "flank_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "e_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "d_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "flank_pawn_push",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "development_move",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "flank_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "e_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "d_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "flank_pawn_push",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "development_move",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "flank_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "e_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "d_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "flank_pawn_push",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "development_move",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "flank_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "e_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "d_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "flank_pawn_push",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "development_move",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "flank_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "e_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "d_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "flank_pawn_push",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "development_move",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "flank_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "e_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "d_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "flank_pawn_push",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "development_move",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "flank_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "e_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "d_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "flank_pawn_push",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "development_move",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "flank_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "e_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "d_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "flank_pawn_push",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "development_move",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "flank_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "e_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "d_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "flank_pawn_push",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "development_move",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "flank_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "e_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "e_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "d_pawn_central_break",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "flank_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      },
+      {
+        "after_semantic_update": "flank_pawn_push",
+        "anchors_checked": [
+          "mistake_retention_anchor",
+          "e_pawn_anchor",
+          "d_pawn_anchor",
+          "development_anchor"
+        ],
+        "result": "scheduled_for_checkpoint_evaluator"
+      }
+    ],
+    "auxiliary_objectives": {
+      "bad_random_flank_push_positive_allowed": false,
+      "flank_context_classification_loss": true,
+      "flank_reason_tag_loss": true,
+      "flank_vs_nonflank_margin_loss": true,
+      "gradient_conflict_diagnostics": true,
+      "retention_aware_update_scheduler": true,
+      "semantic_loss_budget_guard": true,
+      "semantic_rehearsal_anchors": true,
+      "semantic_specific_adapter_loss": true
+    },
+    "bad_random_flank_rejection_updates": 0,
+    "command": [
+      "/home/s92137/.pyenv/versions/3.10.14/bin/python3",
+      "/home/s92137/hackme_web/scripts/games/chess_exp3_dataset_train.py",
+      "--input-jsonl",
+      "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/exp3/checkpoints/10/_trainer_probe_dataset.jsonl",
+      "--model-path",
+      "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/exp3/checkpoints/10/exp3_trainer_probe_model.json",
+      "--replay-path",
+      "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/exp3/checkpoints/10/exp3_trainer_probe_replay.jsonl"
+    ],
+    "conflict_pair_examples": [],
+    "consumed_budget_by_semantic": {
+      "d_pawn_central_break": 410.4,
+      "development_move": 410.4,
+      "e_pawn_central_break": 432.0,
+      "flank_pawn_push": 410.4,
+      "other": 410.4
+    },
+    "contrastive_max_negatives": 12,
+    "contrastive_negative_target": -0.45,
+    "contrastive_negative_updates": 4369,
+    "dampened_semantic": "e_pawn_central_break",
+    "effective_gradient_norm_by_semantic": {
+      "d_pawn_central_break": 269.46,
+      "development_move": 269.46,
+      "e_pawn_central_break": 281.34,
+      "flank_pawn_push": 269.46,
+      "other": 269.46
+    },
+    "expected_reinforcement_updates": 3072,
+    "flank_context_classification_updates": 76,
+    "flank_context_feature_vector_used": true,
+    "flank_reason_tag_updates": 76,
+    "flank_vs_nonflank_margin_updates": 379,
+    "gradient_conflict_matrix": {
+      "d_pawn_central_break": {
+        "d_pawn_central_break": 1.0,
+        "development_move": 1.0,
+        "e_pawn_central_break": 0.9833,
+        "flank_pawn_push": 1.0
+      },
+      "development_move": {
+        "d_pawn_central_break": 1.0,
+        "development_move": 1.0,
+        "e_pawn_central_break": 0.9833,
+        "flank_pawn_push": 1.0
+      },
+      "e_pawn_central_break": {
+        "d_pawn_central_break": 0.9833,
+        "development_move": 0.9833,
+        "e_pawn_central_break": 1.0,
+        "flank_pawn_push": 0.9833
+      },
+      "flank_pawn_push": {
+        "d_pawn_central_break": 1.0,
+        "development_move": 1.0,
+        "e_pawn_central_break": 0.9833,
+        "flank_pawn_push": 1.0
+      }
+    },
+    "hard_negative_updates": 0,
+    "input_rows": 274,
+    "invariance_negative_updates": 0,
+    "invariance_positive_updates": 0,
+    "loss_budget_by_semantic": {
+      "d_pawn_central_break": 96.0,
+      "development_move": 96.0,
+      "e_pawn_central_break": 96.0,
+      "flank_pawn_push": 96.0,
+      "other": 96.0
+    },
+    "margin_delta_by_semantic": {
+      "d_pawn_central_break": 5.1265,
+      "development_move": 16.316,
+      "e_pawn_central_break": 0.5153,
+      "flank_pawn_push": 6.3139,
+      "other": 26.1889
+    },
+    "model_after": {
+      "exists": true,
+      "path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/exp3/checkpoints/10/exp3_trainer_probe_model.json",
+      "replay_size": 272,
+      "sample_count": 87922,
+      "sha256": "17de9f904f3cfc407e615ac0b89b050ebe00fd737369983580a037c04d616b14",
+      "updated_at": "2026-05-14T12:05:01.159315"
+    },
+    "model_before": {
+      "exists": true,
+      "path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/exp3/checkpoints/10/exp3_trainer_probe_model.json",
+      "replay_size": 10,
+      "sample_count": 80097,
+      "sha256": "36434739ccf9a9bb932df8582b682f824bc9d7ffce793ec7bf409b4e8dd9ba91",
+      "updated_at": "2026-05-14T09:42:45.921191"
+    },
+    "model_path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/exp3/checkpoints/10/exp3_trainer_probe_model.json",
+    "negative_cosine_like_conflict_count": 0,
+    "ok": true,
+    "policy_probe": {
+      "after": {
+        "expected_move": "c2c4",
+        "expected_move_logit": 0.81890332,
+        "expected_move_probability": 0.11342712,
+        "expected_move_rank": 4,
+        "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+        "margin_vs_old_move": -0.08984668,
+        "old_move": "e2e3",
+        "old_move_rank": 1,
+        "raw_policy_top1": "e2e3",
+        "side": "white"
+      },
+      "before": {
+        "expected_move": "c2c4",
+        "expected_move_logit": -0.72231473,
+        "expected_move_probability": 0.02344881,
+        "expected_move_rank": 12,
+        "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+        "margin_vs_old_move": -1.63106473,
+        "old_move": "e2e3",
+        "old_move_rank": 1,
+        "raw_policy_top1": "e2e3",
+        "side": "white"
+      },
+      "expected_margin_delta": 1.54121805,
+      "expected_rank_delta": -8,
+      "raw_policy_top1_changed_to_expected": false,
+      "supported": true
+    },
+    "positive_updates": 384,
+    "probe_dataset_path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/exp3/checkpoints/10/_trainer_probe_dataset.jsonl",
+    "rejected_expected": 2,
+    "rejected_samples": 2,
+    "replay_path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/exp3/checkpoints/10/exp3_trainer_probe_replay.jsonl",
+    "replay_size": 272,
+    "retention_delta_after_update": [
+      {
+        "anchor_status": "deferred_to_checkpoint_gate",
+        "margin_delta_proxy": 0.5153,
+        "semantic": "e_pawn_central_break"
+      },
+      {
+        "anchor_status": "deferred_to_checkpoint_gate",
+        "margin_delta_proxy": 5.1265,
+        "semantic": "d_pawn_central_break"
+      },
+      {
+        "anchor_status": "deferred_to_checkpoint_gate",
+        "margin_delta_proxy": 6.3139,
+        "semantic": "flank_pawn_push"
+      },
+      {
+        "anchor_status": "deferred_to_checkpoint_gate",
+        "margin_delta_proxy": 16.316,
+        "semantic": "development_move"
+      }
+    ],
+    "returncode": 0,
+    "rollback_applied": false,
+    "rollback_reason": "",
+    "sample_count": 87922,
+    "semantic_head_update_count": {
+      "central_head": 1878,
+      "development_head": 684,
+      "flank_head": 1002,
+      "other_head": 840
+    },
+    "semantic_loss_budget": {
+      "central_head": 1316.4,
+      "development_head": 410.4,
+      "flank_head": 553.5,
+      "other_head": 480.6
+    },
+    "semantic_loss_budget_scheduler": true,
+    "semantic_loss_budget_skew": false,
+    "semantic_loss_budget_skew_ratio": 1.0526,
+    "semantic_negative_updates": 0,
+    "semantic_positive_updates": 384,
+    "semantic_separation_updates": 474,
+    "semantic_specific_adapters": true,
+    "shared_trunk_protection": {
+      "reason": "keeps existing policy-learning path while semantic adapters and budget scheduler constrain cross-semantic drift",
+      "selected_mode": "low_lr_shared_trunk_adapter_updates",
+      "shared_trunk_update_multiplier": 0.55,
+      "tested_modes": [
+        "adapters_only_update",
+        "low_lr_shared_trunk_adapter_updates"
+      ]
+    },
+    "stderr": "[chess-exp3-train] target model: /home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/exp3/checkpoints/10/exp3_trainer_probe_model.json\n[chess-exp3-train] target replay: /home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/exp3/checkpoints/10/exp3_trainer_probe_replay.jsonl\n[chess-exp3-train] input files: 1 teacher files: 0 teacher_depth=3\n[chess-exp3-train] phase read input: /home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/exp3/checkpoints/10/_trainer_probe_dataset.jsonl\n[chess-exp3-train] phase result read input: 274 rows\n[chess-exp3-train] phase train started: 274 rows replace_replay=False\n[chess-exp3-train] phase result train: ok artifact=/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/exp3/checkpoints/10/exp3_trainer_probe_model.json replay=/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/exp3/checkpoints/10/exp3_trainer_probe_replay.jsonl\n",
+    "stdout": "{\n  \"ok\": true,\n  \"accepted_samples\": 272,\n  \"rejected_samples\": 2,\n  \"replay_size\": 272,\n  \"model_path\": \"/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/exp3/checkpoints/10/exp3_trainer_probe_model.json\",\n  \"replay_path\": \"/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/exp3/checkpoints/10/exp3_trainer_probe_replay.jsonl\",\n  \"sample_count\": 87922,\n  \"training_objective\": \"contrastive_policy_ranking_with_flank_context_auxiliary_semantic_adapters_budget_scheduler\",\n  \"auxiliary_objectives\": {\n    \"flank_context_classification_loss\": true,\n    \"flank_reason_tag_loss\": true,\n    \"flank_vs_nonflank_margin_loss\": true,\n    \"semantic_specific_adapter_loss\": true,\n    \"semantic_loss_budget_guard\": true,\n    \"retention_aware_update_scheduler\": true,\n    \"semantic_rehearsal_anchors\": true,\n    \"gradient_conflict_diagnostics\": true,\n    \"bad_random_flank_push_positive_allowed\": false\n  },\n  \"ablation_mode\": \"default\",\n  \"ablation_config\": {\n    \"mode\": \"default\",\n    \"use_invariance_memory\": true,\n    \"use_hard_negatives\": true,\n    \"hard_negative_weight\": 0.85,\n    \"semantic_separation_weight\": 1.15,\n    \"ordinary_negative_weight\": 0.55,\n    \"negative_target\": -0.45\n  },\n  \"contrastive_negative_target\": -0.45,\n  \"contrastive_max_negatives\": 12,\n  \"positive_updates\": 384,\n  \"contrastive_negative_updates\": 4369,\n  \"expected_reinforcement_updates\": 3072,\n  \"hard_negative_updates\": 0,\n  \"semantic_positive_updates\": 384,\n  \"semantic_negative_updates\": 0,\n  \"semantic_separation_updates\": 474,\n  \"invariance_positive_updates\": 0,\n  \"invariance_negative_updates\": 0,\n  \"flank_context_classification_updates\": 76,\n  \"flank_reason_tag_updates\": 76,\n  \"flank_vs_nonflank_margin_updates\": 379,\n  \"flank_context_feature_vector_used\": true,\n  \"bad_random_flank_rejection_updates\": 0,\n  \"semantic_specific_adapters\": true,\n  \"semantic_head_update_count\": {\n    \"central_head\": 1878,\n    \"flank_head\": 1002,\n    \"development_head\": 684,\n    \"other_head\": 840\n  },\n  \"semantic_loss_budget\": {\n    \"central_head\": 1316.4,\n    \"flank_head\": 553.5,\n    \"development_head\": 410.4,\n    \"other_head\": 480.6\n  },\n  \"semantic_loss_budget_scheduler\": true,\n  \"loss_budget_by_semantic\": {\n    \"e_pawn_central_break\": 96.0,\n    \"d_pawn_central_break\": 96.0,\n    \"flank_pawn_push\": 96.0,\n    \"development_move\": 96.0,\n    \"other\": 96.0\n  },\n  \"consumed_budget_by_semantic\": {\n    \"e_pawn_central_break\": 432.0,\n    \"d_pawn_central_break\": 410.4,\n    \"flank_pawn_push\": 410.4,\n    \"development_move\": 410.4,\n    \"other\": 410.4\n  },\n  \"effective_gradient_norm_by_semantic\": {\n    \"e_pawn_central_break\": 281.34,\n    \"d_pawn_central_break\": 269.46,\n    \"flank_pawn_push\": 269.46,\n    \"development_move\": 269.46,\n    \"other\": 269.46\n  },\n  \"update_count_by_semantic\": {\n    \"e_pawn_central_break\": 720,\n    \"d_pawn_central_break\": 684,\n    \"flank_pawn_push\": 684,\n    \"development_move\": 684,\n    \"other\": 684\n  },\n  \"margin_delta_by_semantic\": {\n    \"e_pawn_central_break\": 0.5153,\n    \"d_pawn_central_break\": 5.1265,\n    \"flank_pawn_push\": 6.3139,\n    \"development_move\": 16.316,\n    \"other\": 26.1889\n  },\n  \"update_schedule_trace\": [\n    {\n      \"step\": 1,\n      \"semantic\": \"e_pawn_central_break\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"e7e5\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 2,\n      \"semantic\": \"d_pawn_central_break\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"d7d5\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 3,\n      \"semantic\": \"flank_pawn_push\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"b7b5\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 4,\n      \"semantic\": \"development_move\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"c8g4\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 5,\n      \"semantic\": \"other\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"e2d2\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 6,\n      \"semantic\": \"e_pawn_central_break\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"e5e4\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 7,\n      \"semantic\": \"d_pawn_central_break\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"d6c5\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 8,\n      \"semantic\": \"flank_pawn_push\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"c7c5\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 9,\n      \"semantic\": \"development_move\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"g8e7\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 10,\n      \"semantic\": \"other\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"e3f4\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 11,\n      \"semantic\": \"e_pawn_central_break\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"e7e5\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 12,\n      \"semantic\": \"d_pawn_central_break\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"d7d6\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 13,\n      \"semantic\": \"flank_pawn_push\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"b2b1q\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 14,\n      \"semantic\": \"development_move\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"c1d2\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 15,\n      \"semantic\": \"other\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"g5f4\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 16,\n      \"semantic\": \"e_pawn_central_break\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"e4e3\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 17,\n      \"semantic\": \"d_pawn_central_break\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"d7d6\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 18,\n      \"semantic\": \"flank_pawn_push\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"b5c4\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 19,\n      \"semantic\": \"development_move\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"c8d7\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 20,\n      \"semantic\": \"other\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"c6e7\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 21,\n      \"semantic\": \"e_pawn_central_break\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"e2e4\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 22,\n      \"semantic\": \"d_pawn_central_break\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"d7d6\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 23,\n      \"semantic\": \"flank_pawn_push\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"c4b3\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 24,\n      \"semantic\": \"development_move\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"g8h6\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 25,\n      \"semantic\": \"other\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"b1b7\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 26,\n      \"semantic\": \"e_pawn_central_break\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"e2e4\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 27,\n      \"semantic\": \"d_pawn_central_break\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"d2d4\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 28,\n      \"semantic\": \"flank_pawn_push\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"b7b5\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 29,\n      \"semantic\": \"development_move\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"f1b5\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 30,\n      \"semantic\": \"other\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"b7c7\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 31,\n      \"semantic\": \"e_pawn_central_break\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"e4f5\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 32,\n      \"semantic\": \"d_pawn_central_break\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"d4c5\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 33,\n      \"semantic\": \"flank_pawn_push\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"b5c4\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 34,\n      \"semantic\": \"development_move\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"b8c6\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 35,\n      \"semantic\": \"other\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"f7f8q\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 36,\n      \"semantic\": \"e_pawn_central_break\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"e5e4\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 37,\n      \"semantic\": \"d_pawn_central_break\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"d2d4\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 38,\n      \"semantic\": \"flank_pawn_push\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"c2c4\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 39,\n      \"semantic\": \"development_move\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"g8e7\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 40,\n      \"semantic\": \"other\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"h5g3\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 41,\n      \"semantic\": \"e_pawn_central_break\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"e7e5\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 42,\n      \"semantic\": \"d_pawn_central_break\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"d7d5\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 43,\n      \"semantic\": \"flank_pawn_push\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"c5d4\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 44,\n      \"semantic\": \"development_move\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"b8d7\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 45,\n      \"semantic\": \"other\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"f2f3\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 46,\n      \"semantic\": \"e_pawn_central_break\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"e5e4\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 47,\n      \"semantic\": \"d_pawn_central_break\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"d6c5\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 48,\n      \"semantic\": \"flank_pawn_push\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"c7c5\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 49,\n      \"semantic\": \"development_move\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"f8h6\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 50,\n      \"semantic\": \"other\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"d8d5\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 51,\n      \"semantic\": \"e_pawn_central_break\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"e7e5\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 52,\n      \"semantic\": \"d_pawn_central_break\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"d7d6\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 53,\n      \"semantic\": \"flank_pawn_push\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"b3b2\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 54,\n      \"semantic\": \"development_move\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"f1a6\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 55,\n      \"semantic\": \"other\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"e3f4\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 56,\n      \"semantic\": \"e_pawn_central_break\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"e4e3\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 57,\n      \"semantic\": \"d_pawn_central_break\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"d7d6\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 58,\n      \"semantic\": \"flank_pawn_push\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"a7a6\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 59,\n      \"semantic\": \"development_move\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"b8c6\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 60,\n      \"semantic\": \"other\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"g5f5\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 61,\n      \"semantic\": \"e_pawn_central_break\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"e2e4\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 62,\n      \"semantic\": \"d_pawn_central_break\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"d7d6\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 63,\n      \"semantic\": \"flank_pawn_push\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"c3c4\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 64,\n      \"semantic\": \"development_move\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"b1c3\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 65,\n      \"semantic\": \"other\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"a8g8\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 66,\n      \"semantic\": \"e_pawn_central_break\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"e2e4\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 67,\n      \"semantic\": \"d_pawn_central_break\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"d2d4\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 68,\n      \"semantic\": \"flank_pawn_push\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"a2a3\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 69,\n      \"semantic\": \"development_move\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"c8h3\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 70,\n      \"semantic\": \"other\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"f7f5\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 71,\n      \"semantic\": \"e_pawn_central_break\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"e4f5\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 72,\n      \"semantic\": \"d_pawn_central_break\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"d4c5\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 73,\n      \"semantic\": \"flank_pawn_push\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"b3c2\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 74,\n      \"semantic\": \"development_move\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"c1d2\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 75,\n      \"semantic\": \"other\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"f4e3\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 76,\n      \"semantic\": \"e_pawn_central_break\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"e5e4\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 77,\n      \"semantic\": \"d_pawn_central_break\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"d2d4\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 78,\n      \"semantic\": \"flank_pawn_push\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"a5a4\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 79,\n      \"semantic\": \"development_move\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"b1c3\",\n      \"invariance_group_id\": \"\"\n    },\n    {\n      \"step\": 80,\n      \"semantic\": \"other\",\n      \"source\": \"user_games_trusted\",\n      \"move_uci\": \"e4h7\",\n      \"invariance_group_id\": \"\"\n    }\n  ],\n  \"anchor_check_after_each_semantic\": [\n    {\n      \"after_semantic_update\": \"e_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"d_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"flank_pawn_push\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"development_move\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"flank_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"e_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"d_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"flank_pawn_push\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"development_move\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"flank_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"e_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"d_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"flank_pawn_push\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"development_move\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"flank_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"e_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"d_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"flank_pawn_push\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"development_move\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"flank_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"e_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"d_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"flank_pawn_push\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"development_move\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"flank_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"e_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"d_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"flank_pawn_push\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"development_move\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"flank_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"e_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"d_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"flank_pawn_push\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"development_move\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"flank_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"e_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"d_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"flank_pawn_push\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"development_move\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"flank_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"e_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"d_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"flank_pawn_push\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"development_move\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"flank_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"e_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"d_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"flank_pawn_push\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"development_move\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"flank_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"e_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"d_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"flank_pawn_push\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"development_move\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"flank_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"e_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"d_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"flank_pawn_push\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"development_move\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"flank_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"e_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"d_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"flank_pawn_push\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"development_move\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"flank_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"e_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"d_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"flank_pawn_push\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"development_move\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"flank_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"e_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"d_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"flank_pawn_push\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"development_move\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"flank_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"e_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"d_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"flank_pawn_push\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"development_move\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"flank_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"e_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"d_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"flank_pawn_push\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"development_move\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"flank_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"e_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"d_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"flank_pawn_push\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"development_move\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"flank_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"e_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"d_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"flank_pawn_push\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"development_move\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"flank_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"e_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"e_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"d_pawn_central_break\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"flank_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    },\n    {\n      \"after_semantic_update\": \"flank_pawn_push\",\n      \"anchors_checked\": [\n        \"mistake_retention_anchor\",\n        \"e_pawn_anchor\",\n        \"d_pawn_anchor\",\n        \"development_anchor\"\n      ],\n      \"result\": \"scheduled_for_checkpoint_evaluator\"\n    }\n  ],\n  \"retention_delta_after_update\": [\n    {\n      \"semantic\": \"e_pawn_central_break\",\n      \"margin_delta_proxy\": 0.5153,\n      \"anchor_status\": \"deferred_to_checkpoint_gate\"\n    },\n    {\n      \"semantic\": \"d_pawn_central_break\",\n      \"margin_delta_proxy\": 5.1265,\n      \"anchor_status\": \"deferred_to_checkpoint_gate\"\n    },\n    {\n      \"semantic\": \"flank_pawn_push\",\n      \"margin_delta_proxy\": 6.3139,\n      \"anchor_status\": \"deferred_to_checkpoint_gate\"\n    },\n    {\n      \"semantic\": \"development_move\",\n      \"margin_delta_proxy\": 16.316,\n      \"anchor_status\": \"deferred_to_checkpoint_gate\"\n    }\n  ],\n  \"rollback_applied\": false,\n  \"rollback_reason\": \"\",\n  \"dampened_semantic\": \"e_pawn_central_break\",\n  \"adjusted_loss_weight\": {\n    \"e_pawn_central_break\": 0.55,\n    \"d_pawn_central_break\": 0.55,\n    \"flank_pawn_push\": 0.55,\n    \"development_move\": 0.55,\n    \"other\": 0.55\n  },\n  \"shared_trunk_protection\": {\n    \"tested_modes\": [\n      \"adapters_only_update\",\n      \"low_lr_shared_trunk_adapter_updates\"\n    ],\n    \"selected_mode\": \"low_lr_shared_trunk_adapter_updates\",\n    \"reason\": \"keeps existing policy-learning path while semantic adapters and budget scheduler constrain cross-semantic drift\",\n    \"shared_trunk_update_multiplier\": 0.55\n  },\n  \"gradient_conflict_matrix\": {\n    \"e_pawn_central_break\": {\n      \"e_pawn_central_break\": 1.0,\n      \"d_pawn_central_break\": 0.9833,\n      \"flank_pawn_push\": 0.9833,\n      \"development_move\": 0.9833\n    },\n    \"d_pawn_central_break\": {\n      \"e_pawn_central_break\": 0.9833,\n      \"d_pawn_central_break\": 1.0,\n      \"flank_pawn_push\": 1.0,\n      \"development_move\": 1.0\n    },\n    \"flank_pawn_push\": {\n      \"e_pawn_central_break\": 0.9833,\n      \"d_pawn_central_break\": 1.0,\n      \"flank_pawn_push\": 1.0,\n      \"development_move\": 1.0\n    },\n    \"development_move\": {\n      \"e_pawn_central_break\": 0.9833,\n      \"d_pawn_central_break\": 1.0,\n      \"flank_pawn_push\": 1.0,\n      \"development_move\": 1.0\n    }\n  },\n  \"negative_cosine_like_conflict_count\": 0,\n  \"conflict_pair_examples\": [],\n  \"semantic_loss_budget_skew\": false,\n  \"semantic_loss_budget_skew_ratio\": 1.0526,\n  \"policy_probe\": {\n    \"supported\": true,\n    \"before\": {\n      \"fen\": \"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1\",\n      \"side\": \"white\",\n      \"expected_move\": \"c2c4\",\n      \"raw_policy_top1\": \"e2e3\",\n      \"expected_move_rank\": 12,\n      \"expected_move_probability\": 0.02344881,\n      \"expected_move_logit\": -0.72231473,\n      \"old_move\": \"e2e3\",\n      \"old_move_rank\": 1,\n      \"margin_vs_old_move\": -1.63106473\n    },\n    \"after\": {\n      \"fen\": \"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1\",\n      \"side\": \"white\",\n      \"expected_move\": \"c2c4\",\n      \"raw_policy_top1\": \"e2e3\",\n      \"expected_move_rank\": 4,\n      \"expected_move_probability\": 0.11342712,\n      \"expected_move_logit\": 0.81890332,\n      \"old_move\": \"e2e3\",\n      \"old_move_rank\": 1,\n      \"margin_vs_old_move\": -0.08984668\n    },\n    \"expected_rank_delta\": -8,\n    \"expected_margin_delta\": 1.54121805,\n    \"raw_policy_top1_changed_to_expected\": false\n  },\n  \"teacher_depth\": 3,\n  \"teacher_backend\": \"static_depth3\",\n  \"input_rows\": 274\n}\n",
+    "teacher_backend": "static_depth3",
+    "teacher_depth": 3,
+    "training_objective": "contrastive_policy_ranking_with_flank_context_auxiliary_semantic_adapters_budget_scheduler",
+    "update_count_by_semantic": {
+      "d_pawn_central_break": 684,
+      "development_move": 684,
+      "e_pawn_central_break": 720,
+      "flank_pawn_push": 684,
+      "other": 684
+    },
+    "update_schedule_trace": [
+      {
+        "invariance_group_id": "",
+        "move_uci": "e7e5",
+        "semantic": "e_pawn_central_break",
+        "source": "user_games_trusted",
+        "step": 1
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "d7d5",
+        "semantic": "d_pawn_central_break",
+        "source": "user_games_trusted",
+        "step": 2
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "b7b5",
+        "semantic": "flank_pawn_push",
+        "source": "user_games_trusted",
+        "step": 3
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "c8g4",
+        "semantic": "development_move",
+        "source": "user_games_trusted",
+        "step": 4
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "e2d2",
+        "semantic": "other",
+        "source": "user_games_trusted",
+        "step": 5
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "e5e4",
+        "semantic": "e_pawn_central_break",
+        "source": "user_games_trusted",
+        "step": 6
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "d6c5",
+        "semantic": "d_pawn_central_break",
+        "source": "user_games_trusted",
+        "step": 7
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "c7c5",
+        "semantic": "flank_pawn_push",
+        "source": "user_games_trusted",
+        "step": 8
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "g8e7",
+        "semantic": "development_move",
+        "source": "user_games_trusted",
+        "step": 9
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "e3f4",
+        "semantic": "other",
+        "source": "user_games_trusted",
+        "step": 10
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "e7e5",
+        "semantic": "e_pawn_central_break",
+        "source": "user_games_trusted",
+        "step": 11
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "d7d6",
+        "semantic": "d_pawn_central_break",
+        "source": "user_games_trusted",
+        "step": 12
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "b2b1q",
+        "semantic": "flank_pawn_push",
+        "source": "user_games_trusted",
+        "step": 13
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "c1d2",
+        "semantic": "development_move",
+        "source": "user_games_trusted",
+        "step": 14
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "g5f4",
+        "semantic": "other",
+        "source": "user_games_trusted",
+        "step": 15
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "e4e3",
+        "semantic": "e_pawn_central_break",
+        "source": "user_games_trusted",
+        "step": 16
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "d7d6",
+        "semantic": "d_pawn_central_break",
+        "source": "user_games_trusted",
+        "step": 17
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "b5c4",
+        "semantic": "flank_pawn_push",
+        "source": "user_games_trusted",
+        "step": 18
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "c8d7",
+        "semantic": "development_move",
+        "source": "user_games_trusted",
+        "step": 19
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "c6e7",
+        "semantic": "other",
+        "source": "user_games_trusted",
+        "step": 20
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "e2e4",
+        "semantic": "e_pawn_central_break",
+        "source": "user_games_trusted",
+        "step": 21
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "d7d6",
+        "semantic": "d_pawn_central_break",
+        "source": "user_games_trusted",
+        "step": 22
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "c4b3",
+        "semantic": "flank_pawn_push",
+        "source": "user_games_trusted",
+        "step": 23
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "g8h6",
+        "semantic": "development_move",
+        "source": "user_games_trusted",
+        "step": 24
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "b1b7",
+        "semantic": "other",
+        "source": "user_games_trusted",
+        "step": 25
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "e2e4",
+        "semantic": "e_pawn_central_break",
+        "source": "user_games_trusted",
+        "step": 26
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "d2d4",
+        "semantic": "d_pawn_central_break",
+        "source": "user_games_trusted",
+        "step": 27
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "b7b5",
+        "semantic": "flank_pawn_push",
+        "source": "user_games_trusted",
+        "step": 28
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "f1b5",
+        "semantic": "development_move",
+        "source": "user_games_trusted",
+        "step": 29
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "b7c7",
+        "semantic": "other",
+        "source": "user_games_trusted",
+        "step": 30
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "e4f5",
+        "semantic": "e_pawn_central_break",
+        "source": "user_games_trusted",
+        "step": 31
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "d4c5",
+        "semantic": "d_pawn_central_break",
+        "source": "user_games_trusted",
+        "step": 32
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "b5c4",
+        "semantic": "flank_pawn_push",
+        "source": "user_games_trusted",
+        "step": 33
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "b8c6",
+        "semantic": "development_move",
+        "source": "user_games_trusted",
+        "step": 34
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "f7f8q",
+        "semantic": "other",
+        "source": "user_games_trusted",
+        "step": 35
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "e5e4",
+        "semantic": "e_pawn_central_break",
+        "source": "user_games_trusted",
+        "step": 36
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "d2d4",
+        "semantic": "d_pawn_central_break",
+        "source": "user_games_trusted",
+        "step": 37
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "c2c4",
+        "semantic": "flank_pawn_push",
+        "source": "user_games_trusted",
+        "step": 38
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "g8e7",
+        "semantic": "development_move",
+        "source": "user_games_trusted",
+        "step": 39
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "h5g3",
+        "semantic": "other",
+        "source": "user_games_trusted",
+        "step": 40
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "e7e5",
+        "semantic": "e_pawn_central_break",
+        "source": "user_games_trusted",
+        "step": 41
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "d7d5",
+        "semantic": "d_pawn_central_break",
+        "source": "user_games_trusted",
+        "step": 42
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "c5d4",
+        "semantic": "flank_pawn_push",
+        "source": "user_games_trusted",
+        "step": 43
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "b8d7",
+        "semantic": "development_move",
+        "source": "user_games_trusted",
+        "step": 44
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "f2f3",
+        "semantic": "other",
+        "source": "user_games_trusted",
+        "step": 45
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "e5e4",
+        "semantic": "e_pawn_central_break",
+        "source": "user_games_trusted",
+        "step": 46
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "d6c5",
+        "semantic": "d_pawn_central_break",
+        "source": "user_games_trusted",
+        "step": 47
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "c7c5",
+        "semantic": "flank_pawn_push",
+        "source": "user_games_trusted",
+        "step": 48
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "f8h6",
+        "semantic": "development_move",
+        "source": "user_games_trusted",
+        "step": 49
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "d8d5",
+        "semantic": "other",
+        "source": "user_games_trusted",
+        "step": 50
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "e7e5",
+        "semantic": "e_pawn_central_break",
+        "source": "user_games_trusted",
+        "step": 51
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "d7d6",
+        "semantic": "d_pawn_central_break",
+        "source": "user_games_trusted",
+        "step": 52
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "b3b2",
+        "semantic": "flank_pawn_push",
+        "source": "user_games_trusted",
+        "step": 53
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "f1a6",
+        "semantic": "development_move",
+        "source": "user_games_trusted",
+        "step": 54
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "e3f4",
+        "semantic": "other",
+        "source": "user_games_trusted",
+        "step": 55
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "e4e3",
+        "semantic": "e_pawn_central_break",
+        "source": "user_games_trusted",
+        "step": 56
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "d7d6",
+        "semantic": "d_pawn_central_break",
+        "source": "user_games_trusted",
+        "step": 57
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "a7a6",
+        "semantic": "flank_pawn_push",
+        "source": "user_games_trusted",
+        "step": 58
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "b8c6",
+        "semantic": "development_move",
+        "source": "user_games_trusted",
+        "step": 59
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "g5f5",
+        "semantic": "other",
+        "source": "user_games_trusted",
+        "step": 60
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "e2e4",
+        "semantic": "e_pawn_central_break",
+        "source": "user_games_trusted",
+        "step": 61
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "d7d6",
+        "semantic": "d_pawn_central_break",
+        "source": "user_games_trusted",
+        "step": 62
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "c3c4",
+        "semantic": "flank_pawn_push",
+        "source": "user_games_trusted",
+        "step": 63
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "b1c3",
+        "semantic": "development_move",
+        "source": "user_games_trusted",
+        "step": 64
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "a8g8",
+        "semantic": "other",
+        "source": "user_games_trusted",
+        "step": 65
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "e2e4",
+        "semantic": "e_pawn_central_break",
+        "source": "user_games_trusted",
+        "step": 66
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "d2d4",
+        "semantic": "d_pawn_central_break",
+        "source": "user_games_trusted",
+        "step": 67
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "a2a3",
+        "semantic": "flank_pawn_push",
+        "source": "user_games_trusted",
+        "step": 68
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "c8h3",
+        "semantic": "development_move",
+        "source": "user_games_trusted",
+        "step": 69
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "f7f5",
+        "semantic": "other",
+        "source": "user_games_trusted",
+        "step": 70
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "e4f5",
+        "semantic": "e_pawn_central_break",
+        "source": "user_games_trusted",
+        "step": 71
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "d4c5",
+        "semantic": "d_pawn_central_break",
+        "source": "user_games_trusted",
+        "step": 72
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "b3c2",
+        "semantic": "flank_pawn_push",
+        "source": "user_games_trusted",
+        "step": 73
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "c1d2",
+        "semantic": "development_move",
+        "source": "user_games_trusted",
+        "step": 74
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "f4e3",
+        "semantic": "other",
+        "source": "user_games_trusted",
+        "step": 75
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "e5e4",
+        "semantic": "e_pawn_central_break",
+        "source": "user_games_trusted",
+        "step": 76
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "d2d4",
+        "semantic": "d_pawn_central_break",
+        "source": "user_games_trusted",
+        "step": 77
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "a5a4",
+        "semantic": "flank_pawn_push",
+        "source": "user_games_trusted",
+        "step": 78
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "b1c3",
+        "semantic": "development_move",
+        "source": "user_games_trusted",
+        "step": 79
+      },
+      {
+        "invariance_group_id": "",
+        "move_uci": "e4h7",
+        "semantic": "other",
+        "source": "user_games_trusted",
+        "step": 80
+      }
+    ],
+    "validation": {
+      "accepted_samples_gt_zero": true,
+      "model_changed": true,
+      "rejected_samples_match": true,
+      "sample_count_changed": true,
+      "updated_at_changed": true
+    }
+  },
+  "trainer_result": {},
+  "trusted_count": 10,
+  "trusted_replays": 10,
+  "verdict": "PASS"
+}

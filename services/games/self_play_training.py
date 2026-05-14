@@ -6,7 +6,8 @@ This module trains the runtime-backed chess learning artifacts:
 - ``experiment 2:nn`` model: ``runtime/games/models/chess_experiment_2_nn.json``
 - ``experiment 3:dl`` model: ``runtime/games/models/chess_experiment_3_dl.json``
 - ``experiment 4:pv`` model: ``runtime/games/models/chess_experiment_4_pv.json``
-- ``experiment 5:nnue`` model: ``runtime/games/models/chess_experiment_5_nnue.json``
+- ``experiment 5:nnue`` base model is source-embedded; runtime stores optional
+  experience deltas at ``runtime/games/models/chess_experiment_5_nnue_experience.json``
 
 The training loop intentionally includes a stronger search-based teacher.
 Pure student-vs-student self-play tends to collapse into repetitive openings

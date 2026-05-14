@@ -1,0 +1,248 @@
+{
+  "category": "invalid_premature_resign",
+  "expected_tier": "quarantine",
+  "flow": [
+    {
+      "by": "white",
+      "captured": null,
+      "fen_after": "rnbqkbnr/pppppppp/8/8/3P4/8/PPP1PPPP/RNBQKBNR b KQkq - 0 1",
+      "fen_before": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "move_uci": "d2d4",
+      "note": "premature resign trap before tactical resolution",
+      "ply": 1,
+      "role": "human"
+    },
+    {
+      "by": "black",
+      "captured": null,
+      "fen_after": "rnbqkbnr/ppp1pppp/8/3p4/3P4/8/PPP1PPPP/RNBQKBNR w KQkq - 0 2",
+      "fen_before": "rnbqkbnr/pppppppp/8/8/3P4/8/PPP1PPPP/RNBQKBNR b KQkq - 0 1",
+      "move_uci": "d7d5",
+      "note": "premature resign trap before tactical resolution",
+      "ply": 2,
+      "role": "computer"
+    },
+    {
+      "by": "white",
+      "captured": null,
+      "fen_after": "rnbqkbnr/ppp1pppp/8/3p4/2PP4/8/PP2PPPP/RNBQKBNR b KQkq - 0 2",
+      "fen_before": "rnbqkbnr/ppp1pppp/8/3p4/3P4/8/PPP1PPPP/RNBQKBNR w KQkq - 0 2",
+      "move_uci": "c2c4",
+      "note": "premature resign trap before tactical resolution",
+      "ply": 3,
+      "role": "human"
+    },
+    {
+      "by": "black",
+      "captured": null,
+      "fen_after": "rnbqkbnr/ppp2ppp/4p3/3p4/2PP4/8/PP2PPPP/RNBQKBNR w KQkq - 0 3",
+      "fen_before": "rnbqkbnr/ppp1pppp/8/3p4/2PP4/8/PP2PPPP/RNBQKBNR b KQkq - 0 2",
+      "move_uci": "e7e6",
+      "note": "premature resign trap before tactical resolution",
+      "ply": 4,
+      "role": "computer"
+    },
+    {
+      "by": "white",
+      "captured": null,
+      "fen_after": "rnbqkbnr/ppp2ppp/4p3/3p4/2PP4/2N5/PP2PPPP/R1BQKBNR b KQkq - 1 3",
+      "fen_before": "rnbqkbnr/ppp2ppp/4p3/3p4/2PP4/8/PP2PPPP/RNBQKBNR w KQkq - 0 3",
+      "move_uci": "b1c3",
+      "note": "premature resign trap before tactical resolution",
+      "ply": 5,
+      "role": "human"
+    }
+  ],
+  "index": 19,
+  "label": "premature_resign",
+  "notes": [
+    "premature_resign_trap",
+    "expected_early_resign_quarantine"
+  ],
+  "preview_record": {
+    "actor_username": "exp3_validation_user",
+    "adjudicated_or_natural": "natural",
+    "black_engine": "experiment 3:dl",
+    "collection_tier": "quarantine",
+    "computer_difficulty": "experiment 3:dl",
+    "confidence_score": 0.0,
+    "duplicate_flag": false,
+    "duplicate_signature": "fd82a2d624a20bb60adce5834b9abe401042b09076756488f4b6ef996d9200ae",
+    "engine_name": "experiment 3:dl",
+    "engine_version": "experiment 3:dl",
+    "game_key": "chess",
+    "human_side": "white",
+    "match_id": 2005,
+    "mode": "computer",
+    "move_count": 5,
+    "move_history": [
+      {
+        "at": "2026-05-14T03:05:11+00:00",
+        "by": "white",
+        "captured": null,
+        "computer": false,
+        "from": "d2",
+        "piece": "P",
+        "promotion": null,
+        "to": "d4"
+      },
+      {
+        "at": "2026-05-14T03:05:11+00:00",
+        "by": "black",
+        "captured": null,
+        "computer": true,
+        "from": "d7",
+        "piece": "p",
+        "promotion": null,
+        "to": "d5"
+      },
+      {
+        "at": "2026-05-14T03:05:11+00:00",
+        "by": "white",
+        "captured": null,
+        "computer": false,
+        "from": "c2",
+        "piece": "P",
+        "promotion": null,
+        "to": "c4"
+      },
+      {
+        "at": "2026-05-14T03:05:11+00:00",
+        "by": "black",
+        "captured": null,
+        "computer": true,
+        "from": "e7",
+        "piece": "p",
+        "promotion": null,
+        "to": "e6"
+      },
+      {
+        "at": "2026-05-14T03:05:11+00:00",
+        "by": "white",
+        "captured": null,
+        "computer": false,
+        "from": "b1",
+        "piece": "N",
+        "promotion": null,
+        "to": "c3"
+      }
+    ],
+    "opening_seed": "standard_start",
+    "quarantine_reasons": [
+      "early_resign",
+      "low_move_count",
+      "suspicious_pattern"
+    ],
+    "rating_estimate": null,
+    "replay_id": "db7e98789addcafb4633b25158e7ba34afacc8f06cd54e1ec2333f4519e88a73",
+    "resign_abuse_flag": true,
+    "result": "black",
+    "result_reason": "resign",
+    "source": "user_games",
+    "suspicious_flag": true,
+    "timestamp": "2026-05-14T03:05:11.506805Z",
+    "updated_at": "2026-05-14T03:05:11+00:00",
+    "white_engine": "user",
+    "winner_color": "black"
+  },
+  "row": {
+    "computer_difficulty": "experiment 3:dl",
+    "game_key": "chess",
+    "human_side": "white",
+    "id": 2005,
+    "initial_fen": "",
+    "mode": "computer",
+    "move_history_json": "[{\"by\": \"white\", \"from\": \"d2\", \"to\": \"d4\", \"piece\": \"P\", \"captured\": null, \"promotion\": null, \"computer\": false, \"at\": \"2026-05-14T03:05:11+00:00\"}, {\"by\": \"black\", \"from\": \"d7\", \"to\": \"d5\", \"piece\": \"p\", \"captured\": null, \"promotion\": null, \"computer\": true, \"at\": \"2026-05-14T03:05:11+00:00\"}, {\"by\": \"white\", \"from\": \"c2\", \"to\": \"c4\", \"piece\": \"P\", \"captured\": null, \"promotion\": null, \"computer\": false, \"at\": \"2026-05-14T03:05:11+00:00\"}, {\"by\": \"black\", \"from\": \"e7\", \"to\": \"e6\", \"piece\": \"p\", \"captured\": null, \"promotion\": null, \"computer\": true, \"at\": \"2026-05-14T03:05:11+00:00\"}, {\"by\": \"white\", \"from\": \"b1\", \"to\": \"c3\", \"piece\": \"N\", \"captured\": null, \"promotion\": null, \"computer\": false, \"at\": \"2026-05-14T03:05:11+00:00\"}]",
+    "result_reason": "resign",
+    "updated_at": "2026-05-14T03:05:11+00:00"
+  },
+  "stored_replay": {
+    "actor_username": "exp3_validation_user",
+    "adjudicated_or_natural": "natural",
+    "black_engine": "experiment 3:dl",
+    "collection_tier": "quarantine",
+    "computer_difficulty": "experiment 3:dl",
+    "confidence_score": 0.0,
+    "duplicate_flag": false,
+    "duplicate_signature": "fd82a2d624a20bb60adce5834b9abe401042b09076756488f4b6ef996d9200ae",
+    "engine_name": "experiment 3:dl",
+    "engine_version": "experiment 3:dl",
+    "game_key": "chess",
+    "human_side": "white",
+    "match_id": 2005,
+    "mode": "computer",
+    "move_count": 5,
+    "move_history": [
+      {
+        "at": "2026-05-14T03:05:11+00:00",
+        "by": "white",
+        "captured": null,
+        "computer": false,
+        "from": "d2",
+        "piece": "P",
+        "promotion": null,
+        "to": "d4"
+      },
+      {
+        "at": "2026-05-14T03:05:11+00:00",
+        "by": "black",
+        "captured": null,
+        "computer": true,
+        "from": "d7",
+        "piece": "p",
+        "promotion": null,
+        "to": "d5"
+      },
+      {
+        "at": "2026-05-14T03:05:11+00:00",
+        "by": "white",
+        "captured": null,
+        "computer": false,
+        "from": "c2",
+        "piece": "P",
+        "promotion": null,
+        "to": "c4"
+      },
+      {
+        "at": "2026-05-14T03:05:11+00:00",
+        "by": "black",
+        "captured": null,
+        "computer": true,
+        "from": "e7",
+        "piece": "p",
+        "promotion": null,
+        "to": "e6"
+      },
+      {
+        "at": "2026-05-14T03:05:11+00:00",
+        "by": "white",
+        "captured": null,
+        "computer": false,
+        "from": "b1",
+        "piece": "N",
+        "promotion": null,
+        "to": "c3"
+      }
+    ],
+    "opening_seed": "standard_start",
+    "quarantine_reasons": [
+      "early_resign",
+      "low_move_count",
+      "suspicious_pattern"
+    ],
+    "rating_estimate": null,
+    "replay_id": "db7e98789addcafb4633b25158e7ba34afacc8f06cd54e1ec2333f4519e88a73",
+    "resign_abuse_flag": true,
+    "result": "black",
+    "result_reason": "resign",
+    "source": "user_games",
+    "storage_path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/reports/games/chess_replays_quarantine.jsonl",
+    "stored": true,
+    "suspicious_flag": true,
+    "timestamp": "2026-05-14T04:33:59.933236Z",
+    "updated_at": "2026-05-14T03:05:11+00:00",
+    "white_engine": "user",
+    "winner_color": "black"
+  },
+  "winner_color": "black"
+}

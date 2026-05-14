@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 
 from scripts.trading.competition.workflow_template_backtest_benchmark import REPO_ROOT, default_output_path
@@ -11,15 +10,15 @@ ROOT = Path(__file__).resolve().parents[3]
 def test_default_output_path_uses_canonical_file_for_default_1h_asset():
     path = default_output_path("1h", use_relative_thresholds=False)
 
-    assert path == REPO_ROOT / "public" / "data" / "workflow_template_benchmarks.json"
+    assert path == REPO_ROOT / "workflows" / "trading_bot" / "benchmarks" / "workflow_template_benchmarks.json"
 
 
 def test_default_output_path_keeps_variant_suffix_for_noncanonical_outputs():
     assert default_output_path("4h", use_relative_thresholds=False) == (
-        REPO_ROOT / "public" / "data" / "workflow_template_benchmarks_4h.json"
+        REPO_ROOT / "workflows" / "trading_bot" / "benchmarks" / "workflow_template_benchmarks_4h.json"
     )
     assert default_output_path("1h", use_relative_thresholds=True) == (
-        REPO_ROOT / "public" / "data" / "workflow_template_benchmarks_1h_relative.json"
+        REPO_ROOT / "workflows" / "trading_bot" / "benchmarks" / "workflow_template_benchmarks_1h_relative.json"
     )
 
 
@@ -51,11 +50,10 @@ def test_measure_backtest_capacity_projects_slowest_and_fastest_throughput(monke
     assert result["measured_capacity_max"] == 24000
 
 
-def test_canonical_workflow_template_benchmark_asset_matches_frontend_contract():
-    asset = ROOT / "public" / "data" / "workflow_template_benchmarks.json"
-    data = json.loads(asset.read_text())
+def test_canonical_workflow_template_benchmark_contract_uses_server_route():
+    frontend = (ROOT / "public" / "js" / "56-trading.js").read_text(encoding="utf-8")
+    routes = (ROOT / "routes" / "trading.py").read_text(encoding="utf-8")
 
-    assert data["interval"] == "1h"
-    assert data["use_relative_thresholds"] is False
-    assert [window["label"] for window in data["windows"]] == ["6mo", "1yr", "3yr", "5yr"]
-    assert all(len(window["rankings"]) == 3 for window in data["windows"])
+    assert "/trading/workflow-template-benchmarks" in frontend
+    assert "/api/trading/workflow-template-benchmarks" in routes
+    assert "/data/workflow_template_benchmarks.json" not in frontend

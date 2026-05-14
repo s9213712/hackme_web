@@ -157,7 +157,7 @@ CREATE TABLE points_onramp_config (
     daily_limit_per_user_token TEXT,                     -- "1000"
     monthly_limit_per_user_token TEXT,                   -- "5000"
     exchange_rate TEXT NOT NULL,                         -- "100"
-    fee_bps INTEGER NOT NULL DEFAULT 0,                  -- 抽成 basis points (0 = 不抽)
+    fee_rate_percent REAL NOT NULL DEFAULT 0,            -- 抽成百分比 (0 = 不抽)
     kyc_threshold_token TEXT,                            -- 觸發強化 KYC 的累計門檻
     sanctions_provider TEXT NOT NULL DEFAULT 'chainalysis_free',
     cold_wallet_address TEXT NOT NULL,                   -- sweep 目的地
@@ -454,7 +454,7 @@ Phase 4   ← multisig（vault refill / sweep 都需要）
 | **熱錢包資安 - HD seed 外洩** | 全平台用戶充值資產 = 0 | master seed 用 KMS / HSM；正式部署前做 pentest |
 | **Reorg / 鏈分叉** | 已 credit 的 points 對應的 USDT 不見了 | confirmations ≥ 15；watchdog 監控；reorg > 15 → incident_lockdown |
 | **RPC 提供者故障** | watcher 漏掃 = user 充值無感 | 多 RPC fallback；backlog_blocks > N 自動降級 + 通知 |
-| **匯率風險 - USDT 脫鉤** | ONRAMP_VAULT 用 points 計但 USDT < $1 | 暫不接受（fee_bps = 0 但保留正抽成空間） |
+| **匯率風險 - USDT 脫鉤** | ONRAMP_VAULT 用 points 計但 USDT < $1 | 暫不接受（fee_rate_percent = 0 但保留正抽成空間） |
 | **詐騙資金洗入** | 平台被當洗錢通道 | Chainalysis 篩查 + KYC + 上限 |
 | **「我自己玩玩」漂移成「對外營運」** | 從規模上失控 → 真的觸 VASP 義務 | 全站日總量上限 + monthly DAU 監測 |
 
@@ -489,7 +489,7 @@ Phase 4   ← multisig（vault refill / sweep 都需要）
 1. **是否同意在台灣現行法源不確定下推進此提案**（最高層級；其他都次要）
 2. **是否同意新增第 11 個官方地址 `OFFICIAL_ONRAMP_VAULT`**（修改 [POINTS_WALLET_ADDRESSING.md §5](BLOCKCHAIN/POINTS_WALLET_ADDRESSING.md) 的「10 地址固定」規則）
 3. **是否同意從 genesis allocation 的 5% 未分配中撥 X% 給 ONRAMP_VAULT**（具體 X 多少 = root 決定）
-4. **匯率政策**：固定 100 points / USDT？是否抽手續費（fee_bps）？是否允許 root 透過 multisig 隨時改？
+4. **匯率政策**：固定 100 points / USDT？是否抽手續費（fee_rate_percent）？是否允許 root 透過 multisig 隨時改？
 5. **限額政策**：採用 §4.2 建議值，或 root 另定？
 6. **KYC 等級**：採用 §4.2 兩級（L0 / L1）或更嚴？
 7. **是否同意 Phase 3B 與 Phase 3 並行**（vs 嚴格依 phase 順序等到 Phase 3 完成）

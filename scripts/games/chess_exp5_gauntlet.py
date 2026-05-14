@@ -25,6 +25,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import scripts.games.game_ai_codex_play_eval as codex_eval  # noqa: E402
+from services.games.chess_nnue import choose_experiment_nnue_move  # noqa: E402
 
 
 EXP5 = "experiment 5:nnue"
@@ -45,6 +46,35 @@ OPENING_LINES: dict[str, list[str]] = {
     "flank_probe": ["a2a4", "g8f6"],
     "early_queen_probe": ["e2e4", "e7e5", "d1h5", "b8c6"],
 }
+VALIDATION_OPENING_LINES: dict[str, list[str]] = {
+    # Human-probe and trap-heavy holdout set. These lines are intentionally
+    # separate from the fixed training/regression gauntlet above.
+    "val_italian_c3": ["e2e4", "e7e5", "g1f3", "b8c6", "f1c4", "f8c5", "c2c3", "g8f6"],
+    "val_fried_liver": ["e2e4", "e7e5", "g1f3", "b8c6", "f1c4", "g8f6", "f3g5", "d7d5", "e4d5"],
+    "val_scotch": ["e2e4", "e7e5", "g1f3", "b8c6", "d2d4", "e5d4", "f3d4"],
+    "val_vienna_gambit": ["e2e4", "e7e5", "b1c3", "g8f6", "f2f4"],
+    "val_center_game": ["e2e4", "e7e5", "d2d4", "e5d4", "d1d4", "b8c6"],
+    "val_danish_gambit": ["e2e4", "e7e5", "d2d4", "e5d4", "c2c3"],
+    "val_englund": ["d2d4", "e7e5", "d4e5", "b8c6", "g1f3", "d8e7"],
+    "val_london": ["d2d4", "d7d5", "c1f4", "g8f6", "e2e3", "c7c5"],
+    "val_trompowsky": ["d2d4", "g8f6", "c1g5"],
+    "val_albin_counter": ["d2d4", "d7d5", "c2c4", "e7e5", "d4e5", "d5d4"],
+    "val_budapest": ["d2d4", "g8f6", "c2c4", "e7e5", "d4e5", "f6g4"],
+    "val_benko": ["d2d4", "g8f6", "c2c4", "c7c5", "d4d5", "b7b5"],
+    "val_sicilian_wing": ["e2e4", "c7c5", "b2b4", "c5b4"],
+    "val_smith_morra": ["e2e4", "c7c5", "d2d4", "c5d4", "c2c3"],
+    "val_pirc_four_pawns": ["e2e4", "d7d6", "d2d4", "g8f6", "b1c3", "g7g6", "f2f4"],
+    "val_scholar_blunder": ["e2e4", "e7e5", "d1h5", "b8c6", "f1c4", "g8f6"],
+}
+
+
+def _opening_suite(name: str) -> dict[str, list[str]]:
+    normalized = str(name or "train").strip().lower()
+    if normalized == "validation":
+        return VALIDATION_OPENING_LINES
+    if normalized == "all":
+        return {**OPENING_LINES, **VALIDATION_OPENING_LINES}
+    return OPENING_LINES
 
 
 def _push_opening(board: chess.Board, opening_id: str, line: list[str]) -> list[dict[str, Any]]:
@@ -105,6 +135,7 @@ def play_game(
     codex_color_name: str,
     seed: int,
     max_plies: int,
+    exp5_search_profile: str,
 ) -> dict[str, Any]:
     board = chess.Board()
     codex_color = chess.WHITE if codex_color_name == "white" else chess.BLACK
@@ -124,7 +155,7 @@ def play_game(
             move, reason = codex_eval.codex_chess_move(board)
             info = {"uci": move.uci() if move else "", "reason": reason}
         else:
-            move, info = codex_eval.choose_ai_chess_move(board, EXP5, history)
+            move, info = _choose_exp5_move(board, history, search_profile=exp5_search_profile)
         if move is None:
             invalid.append({"ply": ply, "actor": actor, "fen": before, "decision": info})
             break
@@ -165,6 +196,39 @@ def play_game(
         "elapsed_ms": round((time.perf_counter() - started) * 1000.0, 3),
         "moves": history,
     }
+
+
+def _choose_exp5_move(
+    board: chess.Board,
+    move_history: list[dict[str, Any]],
+    *,
+    search_profile: str,
+) -> tuple[chess.Move | None, dict[str, Any]]:
+    side = "white" if board.turn == chess.WHITE else "black"
+    state = codex_eval.state_from_chess_board(board)
+    state["__move_history__"] = [
+        {
+            "from": str(item.get("uci") or "")[:2],
+            "to": str(item.get("uci") or "")[2:4],
+            "promotion": str(item.get("uci") or "")[4:] or None,
+        }
+        for item in move_history
+        if len(str(item.get("uci") or "")) >= 4
+    ]
+    raw = choose_experiment_nnue_move(state, side, search_profile=str(search_profile or "balanced"))
+    uci = codex_eval.chess_move_uci(raw)
+    info = dict(raw or {})
+    info["uci"] = uci
+    info["search_profile"] = str(search_profile or "balanced")
+    try:
+        move = chess.Move.from_uci(uci)
+    except Exception as exc:
+        info["invalid"] = f"bad-uci:{type(exc).__name__}: {exc}"
+        return None, info
+    if move not in board.legal_moves:
+        info["invalid"] = "not-legal"
+        return None, info
+    return move, info
 
 
 def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -208,7 +272,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--games-per-opening", type=int, default=2)
     parser.add_argument("--max-plies", type=int, default=220)
     parser.add_argument("--seed", type=int, default=20260513)
-    parser.add_argument("--openings", default=",".join(OPENING_LINES))
+    parser.add_argument("--suite", choices=("train", "validation", "all"), default="train")
+    parser.add_argument("--openings", default="")
+    parser.add_argument("--exp5-search-profile", default="balanced")
     parser.add_argument("--output", default=str(ROOT / "docs" / "games" / "2026-05-13_exp5_gauntlet.json"))
     parser.add_argument("--jsonl-output", default=str(ROOT / "docs" / "games" / "2026-05-13_exp5_gauntlet_replays.jsonl"))
     return parser.parse_args()
@@ -216,10 +282,13 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    suite = _opening_suite(str(args.suite or "train"))
     openings = [item.strip() for item in str(args.openings or "").split(",") if item.strip()]
+    if not openings:
+        openings = list(suite)
     rows: list[dict[str, Any]] = []
     for opening_id in openings:
-        line = OPENING_LINES.get(opening_id)
+        line = suite.get(opening_id)
         if line is None:
             raise SystemExit(f"unknown opening id: {opening_id}")
         for game_no in range(1, max(1, int(args.games_per_opening)) + 1):
@@ -231,6 +300,7 @@ def main() -> int:
                     codex_color_name=codex_color,
                     seed=codex_eval.stable_seed(args.seed, EXP5, opening_id, game_no),
                     max_plies=max(1, int(args.max_plies)),
+                    exp5_search_profile=str(args.exp5_search_profile or "balanced"),
                 )
             )
     artifact = {
@@ -240,6 +310,8 @@ def main() -> int:
             "games_per_opening": max(1, int(args.games_per_opening)),
             "max_plies": max(1, int(args.max_plies)),
             "openings": openings,
+            "suite": str(args.suite or "train"),
+            "exp5_search_profile": str(args.exp5_search_profile or "balanced"),
         },
         "summary": summarize(rows),
         "games": rows,

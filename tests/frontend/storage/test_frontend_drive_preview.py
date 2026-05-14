@@ -67,6 +67,7 @@ def test_cloud_drive_preview_ui_is_wired():
 def test_filemanager_and_albummanager_ui_are_wired():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     drive_js = ((ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8") + "\n" + (ROOT / "public" / "js" / "35-drive-preview-share.js").read_text(encoding="utf-8"))
+    shared_file_js = (ROOT / "public" / "js" / "shared-file.js").read_text(encoding="utf-8")
     admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
     bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
 
@@ -75,6 +76,9 @@ def test_filemanager_and_albummanager_ui_are_wired():
     assert 'id="drive-remote-download-btn"' in index_html
     assert 'id="drive-remote-torrent-inline-btn"' in index_html
     assert 'id="storage-upload-folder"' in index_html
+    assert 'id="drive-upload-client-scan-report"' not in index_html
+    assert 'id="drive-upload-mode-client-scan-report"' not in index_html
+    assert "附上本機掃描回報" not in index_html
     assert "webkitdirectory" in index_html
     assert 'id="storage-folder-path"' in index_html
     assert 'id="storage-browser-list"' in index_html
@@ -95,6 +99,13 @@ def test_filemanager_and_albummanager_ui_are_wired():
     assert "不列出，持連結可看" in index_html
     assert "async function uploadStorageFile()" in drive_js
     assert "async function uploadStorageFolder()" in drive_js
+    assert "let driveLatestQuota = null;" in drive_js
+    assert "async function ensureDriveUploadQuota()" in drive_js
+    assert "function driveUploadQuotaError" in drive_js
+    assert "async function preflightDriveUploadSize" in drive_js
+    assert "超過雲端硬碟容量上限" in drive_js
+    assert "await preflightDriveUploadSize(file.size" in drive_js
+    assert "await preflightDriveUploadSize(totalBytes" in drive_js
     assert "async function smartOrganizeAlbums()" in drive_js
     assert 'storageAction("/storage/albums/smart-organize", "POST"' in drive_js
     assert 'action === "smart-organize-albums"' in drive_js
@@ -108,6 +119,22 @@ def test_filemanager_and_albummanager_ui_are_wired():
     assert "async function moveStorageFileFromRow(id, currentPath)" in drive_js
     assert "async function renameStorageFolder(path, currentName = \"\")" in drive_js
     assert "async function moveCloudFileToStorage(fileId, name)" in drive_js
+    assert "function driveFileIsMedia(file)" in drive_js
+    assert 'data-drive-action="publish-to-video"' in drive_js
+    assert "分享到影音" in drive_js
+    assert "openDriveFileInVideoPublish(fileId, name)" in drive_js
+    assert 'id="drive-share-overlay"' in index_html
+    assert 'id="drive-share-storage-file-id"' in index_html
+    assert 'id="drive-share-scope"' in index_html
+    assert 'data-drive-action="share-cloud-file"' in drive_js
+    assert 'data-drive-action="create-share-link"' in index_html
+    assert "async function createDriveShareLink()" in drive_js
+    assert "wrapped_file_key_envelope" in drive_js
+    assert "payload.storage_file_id = storageFileId" in drive_js
+    assert 'switchModuleTab("shares")' in drive_js
+    assert "sharedFileDownload" in shared_file_js
+    assert "/api/storage/shared/" in shared_file_js
+    assert "sharedFileDecryptBlob" in shared_file_js
     assert "async function moveStorageFolder()" in drive_js
     assert "async function createAlbum()" in drive_js
     assert "async function openAlbum(id" in drive_js
@@ -373,7 +400,7 @@ def test_cloud_drive_privacy_modes_use_human_labels():
     assert 'value="e2ee">端到端加密（站方無法讀取）' in index_html
     assert "三種模式怎麼選" in index_html
     assert "非 E2EE 會讓伺服器取得明文" in index_html
-    assert "E2EE 上傳時附本機掃描回報" in index_html
+    assert "E2EE 上傳時附本機掃描回報" not in index_html
     assert "新增文檔" in index_html
     assert 'data-drive-action="create-text-document"' in index_html
     assert "virtual_path: joinStoragePath(currentStoragePath, filename)" in drive_js
@@ -436,7 +463,9 @@ def test_core_api_fetch_refreshes_csrf_once():
 def test_cloud_drive_e2ee_upload_prepares_required_crypto_fields():
     drive_js = ((ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8") + "\n" + (ROOT / "public" / "js" / "35-drive-preview-share.js").read_text(encoding="utf-8"))
 
-    assert "async function prepareDriveE2eeUpload(file, passphrase, includeClientScanReport = false)" in drive_js
+    assert "async function prepareDriveE2eeUpload(file, passphrase)" in drive_js
+    assert "includeClientScanReport" not in drive_js
+    assert 'form.append("client_scan_report"' not in drive_js
     assert "window.crypto.subtle.generateKey" in drive_js
     assert "deriveDriveE2eePassphraseKey" in drive_js
     assert "PBKDF2" in drive_js

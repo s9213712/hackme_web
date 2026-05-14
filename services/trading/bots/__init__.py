@@ -15,6 +15,7 @@ from .service import (
     run_trading_bot_once,
     run_trading_bots,
     save_trading_bot,
+    set_trading_bot_share_parameters,
 )
 
 __all__ = [
@@ -28,4 +29,5 @@ __all__ = [
     "run_trading_bot_once",
     "run_trading_bots",
     "save_trading_bot",
+    "set_trading_bot_share_parameters",
 ]

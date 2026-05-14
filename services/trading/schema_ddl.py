@@ -1,7 +1,7 @@
 """Trading schema CREATE TABLE statements.
 
 Slice 4b extraction: pure DDL strings used by
-`services.trading.engine.ensure_trading_schema` to create the 27 trading
+`services.trading.engine.ensure_trading_schema` to create the 28 trading
 tables on a fresh DB. Lifting these into a constants module shrinks
 `ensure_trading_schema` from 740 lines to ~280 lines and makes new
 table definitions reviewable in isolation.
@@ -458,6 +458,7 @@ TRADING_BOTS_DDL = """
             budget_points INTEGER NOT NULL DEFAULT 0,
             stop_loss_percent REAL,
             take_profit_percent REAL,
+            share_parameters INTEGER NOT NULL DEFAULT 0,
             workflow_json TEXT,
             execution_state_json TEXT,
             last_run_at TEXT,
@@ -513,6 +514,9 @@ TRADING_GRID_BOTS_DDL = """
             total_trades INTEGER NOT NULL DEFAULT 0,
             initial_price_points INTEGER NOT NULL DEFAULT 0,
             grid_levels_json TEXT,
+            stop_loss_percent REAL,
+            take_profit_percent REAL,
+            share_parameters INTEGER NOT NULL DEFAULT 0,
             last_scan_at TEXT,
             last_error TEXT,
             enabled_at TEXT,
@@ -537,6 +541,31 @@ TRADING_GRID_ORDERS_DDL = """
             status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'filled', 'cancelled')),
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
+        )
+        """
+
+
+TRADING_BOT_COMPETITION_REWARDS_DDL = """
+        CREATE TABLE IF NOT EXISTS trading_bot_competition_rewards (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            week_key TEXT NOT NULL,
+            category TEXT NOT NULL,
+            bot_kind TEXT NOT NULL,
+            bot_uuid TEXT NOT NULL,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            rank INTEGER NOT NULL,
+            performance_percent REAL NOT NULL DEFAULT 0,
+            pnl_points INTEGER NOT NULL DEFAULT 0,
+            principal_points INTEGER NOT NULL DEFAULT 0,
+            reward_points INTEGER NOT NULL DEFAULT 0,
+            ledger_uuid TEXT,
+            awarded_by INTEGER,
+            created_at TEXT NOT NULL,
+            UNIQUE (week_key, category),
+            CHECK (category IN ('dca', 'workflow', 'grid')),
+            CHECK (bot_kind IN ('trading_bot', 'grid_bot')),
+            CHECK (rank >= 1),
+            CHECK (reward_points >= 0)
         )
         """
 
@@ -604,6 +633,7 @@ ALL_TABLE_DDL = (
     TRADING_BOT_RUNS_DDL,
     TRADING_GRID_BOTS_DDL,
     TRADING_GRID_ORDERS_DDL,
+    TRADING_BOT_COMPETITION_REWARDS_DDL,
     TRADING_BOT_AUDIT_RUNS_DDL,
     TRADING_BOT_AUDIT_FINDINGS_DDL,
 )

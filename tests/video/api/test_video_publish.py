@@ -52,13 +52,15 @@ def test_publish_media_requires_owner_and_video_or_audio_mime():
         publish_video(conn, actor=actor(1, "owner"), cloud_file_id="text-1", title="not video")
 
 
-def test_publish_requires_share_envelope_for_e2ee_unlisted_and_rejects_public():
+def test_publish_requires_share_envelope_for_e2ee_unlisted_and_allows_public():
     conn = video_test_db()
     seed_cloud_file(conn, file_id="e2ee-video", owner_user_id=1, mime="video/mp4", privacy_mode="e2ee")
     with pytest.raises(ValueError, match="瀏覽器端分享授權"):
         publish_video(conn, actor=actor(1, "owner"), cloud_file_id="e2ee-video", title="secret", visibility="unlisted")
-    with pytest.raises(ValueError, match="不可設為公開"):
-        publish_video(conn, actor=actor(1, "owner"), cloud_file_id="e2ee-video", title="secret", visibility="public")
+
+    public_video = publish_video(conn, actor=actor(1, "owner"), cloud_file_id="e2ee-video", title="secret", visibility="public")
+    assert public_video["visibility"] == "public"
+    assert public_video["cloud_privacy_mode"] == "e2ee"
 
     video = publish_video(
         conn,

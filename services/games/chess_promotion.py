@@ -12,7 +12,7 @@ from services.games.chess_dl import bundled_chess_dl_model_path, default_chess_d
 from services.games.chess_engine import ChessExperimentStore, bundled_chess_engine_db_path, default_chess_engine_db_path
 from services.games.chess_model_registry import ensure_runtime_model_from_bundle, runtime_chess_models_dir
 from services.games.chess_nn import bundled_chess_nn_model_path, default_chess_nn_model_path, experiment_nn_model_template
-from services.games.chess_nnue import bundled_chess_nnue_model_path, default_chess_nnue_model_path, experiment_nnue_model_template
+from services.games.chess_nnue import default_chess_nnue_model_path, exp5_model_artifact_policy, experiment_nnue_model_template
 from services.games.chess_pv import bundled_chess_pv_model_path, default_chess_pv_model_path, experiment_pv_model_template
 from services.server.runtime import default_runtime_root_path
 
@@ -104,7 +104,18 @@ def ensure_warm_start_chess_environment() -> dict:
     created.append({"engine": "experiment 3:dl", **dl_result, "path": str(default_chess_dl_model_path())})
     pv_result = _ensure_runtime_model(default_chess_pv_model_path(), bundled_chess_pv_model_path(), experiment_pv_model_template)
     created.append({"engine": "experiment 4:pv", **pv_result, "path": str(default_chess_pv_model_path())})
-    nnue_result = _ensure_runtime_model(default_chess_nnue_model_path(), bundled_chess_nnue_model_path(), experiment_nnue_model_template)
+    nnue_policy = exp5_model_artifact_policy()
+    nnue_result = {
+        "ok": True,
+        "created": False,
+        "copied": False,
+        "runtime_path": str(default_chess_nnue_model_path()),
+        "bundle_path": "",
+        "source": "source_embedded_static_base",
+        "source_base_module": nnue_policy["source_base_module"],
+        "static_base_model_sha256": nnue_policy["static_base_model_sha256"],
+        "experience_delta_path": str(default_chess_nnue_model_path()),
+    }
     created.append({"engine": "experiment 5:nnue", **nnue_result, "path": str(default_chess_nnue_model_path())})
     return {"ok": True, "timestamp": _now(), "artifacts": created}
 
@@ -129,6 +140,16 @@ def production_engine_inventory() -> list[dict]:
             "size_bytes": path.stat().st_size if path.exists() else 0,
             "mtime": datetime.utcfromtimestamp(path.stat().st_mtime).isoformat() + "Z" if path.exists() else "",
         }
+        if engine == "experiment 5:nnue":
+            base = experiment_nnue_model_template()
+            policy = exp5_model_artifact_policy()
+            info["source_embedded_base"] = True
+            info["source_base_module"] = policy["source_base_module"]
+            info["static_base_model_sha256"] = policy["static_base_model_sha256"]
+            info["artifact_role"] = policy["generated_artifact_role"]
+            info["base_architecture"] = str(base.get("architecture") or "")
+            info["base_version"] = int(base.get("version") or 0)
+            info["base_sample_count"] = int(base.get("sample_count") or 0)
         if path.exists() and path.suffix == ".json":
             payload = _load_json(path)
             info["architecture"] = str(payload.get("architecture") or "")

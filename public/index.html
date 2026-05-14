@@ -224,12 +224,11 @@
         <button class="tab" id="tab-module-albums" style="display:none;">相簿</button>
         <button class="tab" id="tab-module-videos" style="display:none;">影音</button>
         <button class="tab" id="tab-module-games" style="display:none;">遊戲區</button>
-        <button class="tab" id="tab-module-jobs" style="display:none;">任務中心</button>
-        <button class="tab" id="tab-module-shares" style="display:none;">分享管理</button>
         <button class="tab" id="tab-module-comfyui" style="display:none;">AI 產圖</button>
         <button class="tab" id="tab-module-economy" style="display:none;">積分系統</button>
         <button class="tab" id="tab-module-trading" style="display:none;">積分交易所</button>
         <button class="tab" id="tab-module-appeals">申覆</button>
+        <button class="tab" id="tab-module-jobs" style="display:none;">任務中心</button>
         <button class="tab" id="tab-module-accounts" style="display:none;">帳號管理</button>
         <button class="tab" id="tab-module-server" style="display:none;">安全中心</button>
       </nav>
@@ -363,18 +362,36 @@
       <div class="section-head">
         <div>
           <h2>分享管理</h2>
-          <p>查看、複製與撤銷自己的檔案、相簿與影音分享連結。</p>
+          <p>管理檔案分享連結與自己上傳的影音。</p>
         </div>
         <button class="btn" id="share-center-refresh-btn" type="button">重新整理</button>
       </div>
-      <div class="settings-option-grid economy-wallet-grid">
-        <div><span class="drive-card-sub">啟用中</span><strong id="share-center-active-count">0</strong><small>仍可存取</small></div>
-        <div><span class="drive-card-sub">已結束</span><strong id="share-center-ended-count">0</strong><small>到期 / 次數用完 / 撤銷</small></div>
-        <div><span class="drive-card-sub">總存取</span><strong id="share-center-access-count">0</strong><small>所有分享累計</small></div>
+      <div class="share-center-tabs" role="tablist" aria-label="分享管理">
+        <button class="btn btn-primary" type="button" data-share-center-tab="links" role="tab" aria-selected="true">分享連結</button>
+        <button class="btn" type="button" data-share-center-tab="videos" role="tab" aria-selected="false">我的影音</button>
       </div>
       <div id="share-center-msg" class="msg"></div>
-      <div id="share-center-events" class="msg" style="display:none;"></div>
-      <div id="share-center-list" class="drive-file-list" style="margin-top:.75rem;"></div>
+      <div id="share-center-links-panel" class="share-center-panel">
+        <div class="settings-option-grid economy-wallet-grid">
+          <div><span class="drive-card-sub">啟用中</span><strong id="share-center-active-count">0</strong><small>仍可存取</small></div>
+          <div><span class="drive-card-sub">已結束</span><strong id="share-center-ended-count">0</strong><small>到期 / 次數用完 / 撤銷</small></div>
+          <div><span class="drive-card-sub">總存取</span><strong id="share-center-access-count">0</strong><small>所有分享累計</small></div>
+        </div>
+        <div id="share-center-events" class="msg" style="display:none;"></div>
+        <div id="share-center-list" class="drive-file-list" style="margin-top:.75rem;"></div>
+      </div>
+      <div id="share-center-videos-panel" class="share-center-panel" style="display:none;">
+        <div class="settings-option-grid economy-wallet-grid">
+          <div><span class="drive-card-sub">影片</span><strong id="video-manage-count">0</strong><small>自己的上傳</small></div>
+          <div><span class="drive-card-sub">觀看</span><strong id="video-manage-views">0</strong><small>累計觀看</small></div>
+          <div><span class="drive-card-sub">按讚</span><strong id="video-manage-likes">0</strong><small>累計按讚</small></div>
+          <div><span class="drive-card-sub">收益</span><strong id="video-manage-revenue">0</strong><small>創作者實收</small></div>
+          <div><span class="drive-card-sub">平台分潤</span><strong id="video-manage-platform-fee">0</strong><small>投幣手續費</small></div>
+          <div><span class="drive-card-sub">曝光</span><strong id="video-manage-boost">0</strong><small>已投入積分</small></div>
+        </div>
+        <div id="video-manage-msg" class="msg"></div>
+        <div id="video-manage-list" class="drive-file-list" style="margin-top:.75rem;"></div>
+      </div>
     </div>
   </div>
 
@@ -702,7 +719,6 @@
       <input type="text" id="drive-remote-virtual-path" hidden />
       <input type="password" id="drive-e2ee-passphrase" hidden autocomplete="new-password" />
       <input type="password" id="drive-e2ee-passphrase-confirm" hidden autocomplete="new-password" />
-      <input type="checkbox" id="drive-upload-client-scan-report" hidden />
       <div class="field-help" hidden>非 E2EE 會讓伺服器取得明文以便掃毒與預覽；E2EE 需要自己保管檔案加密密碼，忘記後站方無法救回。</div>
       <div class="drive-file-preview-layout">
         <div class="drive-card">
@@ -945,7 +961,7 @@
               <div class="field">
                 <label>分享密碼（選填）</label>
                 <input type="password" id="video-share-password" maxlength="128" autocomplete="new-password" placeholder="持連結可看時可再加一層密碼" />
-                <div class="field-help">未設定時，只要拿到完整分享連結即可觀看；若是 E2EE 影音，完整連結仍會包含只留在瀏覽器端的片段金鑰。</div>
+                <div class="field-help">持連結可看且未設定時，只要拿到完整分享連結即可觀看；若是 E2EE 分享影音，完整連結仍會包含只留在瀏覽器端的片段金鑰。</div>
               </div>
               <div class="field">
                 <label>分享有效到（選填）</label>
@@ -960,7 +976,7 @@
               <div class="field" style="grid-column:1/-1;">
                 <label>描述</label>
                 <textarea id="video-publish-description" rows="3" maxlength="2000" placeholder="影音說明、章節或注意事項"></textarea>
-                <div class="field-help">E2EE 影音在發布時只會要求擁有者輸入一次原始加密密碼，之後會在瀏覽器端重新包裝成分享授權；若遺失完整連結中的片段金鑰，伺服器無法復原，只能重新產生分享。</div>
+                <div class="field-help">E2EE 影音可設公開；公開播放時需輸入原始 E2EE 密碼並在瀏覽器端解密。持連結分享會改用片段金鑰授權；若遺失完整分享連結中的片段金鑰，伺服器無法復原，只能重新產生分享。</div>
               </div>
               <div class="field">
                 <label>&nbsp;</label>
@@ -1133,7 +1149,7 @@
               <summary>數獨玩法說明</summary>
               <div class="drive-collapsible-body">
                 <p>按「開始」後才會出現題目並開始計時。每列、每欄、每個 3x3 宮格都必須填入 1 到 9，且不可重複。</p>
-                <p>按「檢查」若仍有錯誤會加時 10 秒；正確完成後依完成時間排行。</p>
+                <p>按「檢查」若仍有錯誤會加時 10 秒；每局提示最多 3 次，每次提示會填入 1 格並加時 60 秒；正確完成後依完成時間排行。</p>
               </div>
             </details>
             <div class="drive-card-heading">
@@ -1441,7 +1457,7 @@
         <button class="btn comfyui-subtab active" type="button" role="tab" aria-selected="true" data-comfyui-view="generate">生成</button>
         <button class="btn comfyui-subtab" type="button" role="tab" aria-selected="false" data-comfyui-view="history">歷史重跑</button>
         <button class="btn comfyui-subtab" type="button" role="tab" aria-selected="false" data-comfyui-view="workflow">Workflow</button>
-        <button class="btn comfyui-subtab" type="button" role="tab" aria-selected="false" data-comfyui-view="models">模型管理</button>
+        <button class="btn comfyui-subtab" type="button" role="tab" aria-selected="false" data-comfyui-view="models" hidden>模型管理</button>
       </div>
       <div class="comfyui-subview active" id="comfyui-view-generate" data-comfyui-view-panel="generate" role="tabpanel">
       <div class="comfyui-layout">
@@ -2059,6 +2075,7 @@
         <div class="mini-title" id="economy-page-title">PointsChain 積分錢包</div>
       <div class="tabs economy-subtabs" id="economy-subtabs" aria-label="積分系統分頁">
         <button class="tab active" id="tab-economy-balance" type="button" data-economy-page="balance">積分餘額</button>
+        <button class="tab" id="tab-economy-positions" type="button" data-economy-page="positions">倉位管理</button>
         <button class="tab" id="tab-economy-chain" type="button" data-economy-page="chain">積分私有鏈</button>
       </div>
       <div class="economy-subpage active" id="economy-balance-page">
@@ -2078,6 +2095,23 @@
           </div>
         </div>
       </div>
+      <div class="drive-card" id="economy-user-ledger-card" style="margin-top:.75rem;">
+        <div class="drive-card-heading">
+          <div>
+            <div class="drive-card-title">我的帳本</div>
+            <div class="drive-card-sub">最近 50 筆收入 / 支出明細；封塊後可產生 Merkle proof</div>
+          </div>
+          <div class="drive-file-actions">
+            <button class="btn btn-sm" type="button" id="economy-ledger-export-btn" style="font-size:.8rem;padding:.2rem .5rem;">匯出 CSV</button>
+            <button class="btn btn-sm" type="button" onclick="toggleWalletCard('economy-ledger-body',this)" style="font-size:.8rem;padding:.2rem .5rem;" aria-expanded="true">▾</button>
+          </div>
+        </div>
+        <div id="economy-ledger-body">
+          <div id="economy-ledger-list" class="drive-file-list"></div>
+        </div>
+      </div>
+      </div>
+      <div class="economy-subpage" id="economy-positions-page">
       <div class="drive-card" id="economy-root-virtual-card" style="display:none;margin-top:.75rem;">
         <div class="drive-card-heading">
           <div>
@@ -2163,21 +2197,6 @@
           <div><span class="drive-card-sub">借貸權益</span><strong id="economy-asset-margin">-</strong><small id="economy-asset-interest">利息 -</small></div>
         </div>
         <div id="economy-asset-admin-risk" class="drive-card-sub" style="display:none;margin-top:.5rem;"></div>
-      </div>
-      <div class="drive-card" id="economy-user-ledger-card" style="margin-top:.75rem;">
-        <div class="drive-card-heading">
-          <div>
-            <div class="drive-card-title">我的帳本</div>
-            <div class="drive-card-sub">append-only ledger；封塊後可產生 Merkle proof</div>
-          </div>
-          <div class="drive-file-actions">
-            <button class="btn btn-sm" type="button" id="economy-ledger-export-btn" style="font-size:.8rem;padding:.2rem .5rem;">匯出 CSV</button>
-            <button class="btn btn-sm" type="button" onclick="toggleWalletCard('economy-ledger-body',this)" style="font-size:.8rem;padding:.2rem .5rem;" data-collapsed="1">▸</button>
-          </div>
-        </div>
-        <div id="economy-ledger-body" style="display:none;">
-          <div id="economy-ledger-list" class="drive-file-list"></div>
-        </div>
       </div>
       </div>
       <div class="economy-subpage" id="economy-chain-page">
@@ -2265,6 +2284,11 @@
               <div><span class="drive-card-sub">累計收支</span><strong id="economy-query-points-earned">收入 -</strong><small id="economy-query-points-spent">支出 -</small></div>
               <div><span class="drive-card-sub">錢包狀態</span><strong id="economy-query-wallet-status">-</strong><small id="economy-query-public-account">-</small></div>
             </div>
+            <div class="drive-card-title" style="margin-top:.85rem;">最近帳本明細</div>
+            <div class="drive-card-sub">收入、支出、凍結與系統獎勵都會列在這裡，可點 Proof 查帳本證明。</div>
+            <div id="economy-query-ledger-list" class="drive-file-list" style="margin-top:.75rem;">
+              <div class="drive-empty">請先選擇帳戶並查詢</div>
+            </div>
             <div class="drive-card" id="economy-wallet-sanction-card" style="margin-top:.75rem;">
               <div class="drive-card-title">錢包處分</div>
               <div class="drive-card-sub">root 可凍結、限制或禁用指定會員錢包；點數凍結/解凍會寫入 ledger。</div>
@@ -2293,9 +2317,6 @@
                 <div class="field"><label>&nbsp;</label><button class="btn btn-danger" id="economy-wallet-sanction-btn" type="button">套用處分</button></div>
               </div>
             </div>
-            <div id="economy-query-ledger-list" class="drive-file-list" style="margin-top:.75rem;">
-              <div class="drive-empty">請先選擇帳戶並查詢</div>
-            </div>
           </div>
           <div class="settings-option-grid economy-rollback-grid" style="margin-top:.75rem;">
             <div class="field"><label>Rollback ledger UUID</label><input type="text" id="economy-rollback-ledger-uuid" placeholder="ledger_uuid" /></div>
@@ -2320,8 +2341,8 @@
             <div id="economy-risk-ledger-list" class="drive-file-list"></div>
           </div>
           <div class="drive-card" style="margin-top:.75rem;">
-            <div class="drive-card-title">加減分明細</div>
-            <div class="drive-card-sub">包含執行者、目標帳戶、加減分、原因與 ledger UUID</div>
+            <div class="drive-card-title">收入 / 加減分明細</div>
+            <div class="drive-card-sub">包含系統獎勵、管理員加減分、執行者、目標帳戶、原因與 ledger UUID</div>
             <div id="economy-adjustment-list" class="drive-file-list"></div>
           </div>
         </details>
@@ -2339,12 +2360,62 @@
         <div class="drive-card-heading">
           <div>
             <div class="drive-card-title">現貨交易所</div>
-            <div class="drive-card-sub" id="trading-availability-note">root 可使用現貨與合約模擬交易；一般用戶可使用已啟用的積分現貨市場。</div>
+            <div class="drive-card-sub" id="trading-availability-note">root 可使用現貨；合約模擬與交易引擎操作已移至伺服器設定的交易所設定。一般用戶可使用已啟用的積分現貨市場。</div>
           </div>
           <button class="btn" id="trading-refresh-btn" type="button">重新整理</button>
-        </div>
-        <div id="trading-safe-mode" class="drive-card-sub">交易狀態讀取中</div>
-        <div id="trading-inline-msg" class="msg trading-inline-msg"></div>
+	        </div>
+	        <div class="trading-reference-panel trading-reference-panel-primary" style="margin-top:.75rem;">
+	          <div class="drive-card-heading compact-heading">
+	            <div>
+	              <div class="drive-card-title">Binance 參考價格</div>
+	              <div class="drive-card-sub" id="trading-reference-price-meta">公開 API 蠟燭圖會作為 reference price 參考；API 故障時使用最後健康快取，不能直接當風控價格。</div>
+	            </div>
+	            <select id="trading-reference-interval" class="compact-select">
+	              <option value="5m">5 分</option>
+	              <option value="15m" selected>15 分</option>
+	              <option value="1h">1 小時</option>
+	              <option value="4h">4 小時</option>
+	              <option value="1d">日線</option>
+	            </select>
+	          </div>
+	          <div class="trading-indicator-controls" aria-label="技術指標">
+	            <label><input type="checkbox" id="trading-indicator-ma5"> MA5</label>
+	            <label><input type="checkbox" id="trading-indicator-ma10"> MA10</label>
+	            <label><input type="checkbox" id="trading-indicator-ma20" checked> MA20</label>
+	            <label><input type="checkbox" id="trading-indicator-ma30"> MA30</label>
+	            <label><input type="checkbox" id="trading-indicator-ma60"> MA60</label>
+	            <label><input type="checkbox" id="trading-indicator-ema12"> EMA12</label>
+	            <label><input type="checkbox" id="trading-indicator-ema26"> EMA26</label>
+	            <label><input type="checkbox" id="trading-indicator-ema50"> EMA50</label>
+	            <label><input type="checkbox" id="trading-indicator-bollinger"> 布林線</label>
+	            <label><input type="checkbox" id="trading-indicator-rsi14"> RSI14</label>
+	            <label><input type="checkbox" id="trading-indicator-kd"> KD(9,3,3)</label>
+	            <button class="btn btn-sm" id="trading-chart-clear-overlay-btn" type="button" style="display:none;font-size:.75rem;padding:.15rem .45rem;">清除標記</button>
+	          </div>
+	          <div class="trading-reference-chart-wrap">
+	            <canvas id="trading-reference-chart" class="trading-reference-chart" width="920" height="320" aria-label="Binance 參考價格蠟燭圖"></canvas>
+	            <div id="trading-reference-tooltip" class="trading-reference-tooltip" hidden></div>
+	          </div>
+	        </div>
+	        <section class="trading-risk-dashboard trading-signal-panel" id="trading-risk-dashboard" aria-label="交易訊號" tabindex="0">
+	          <div class="drive-card-heading compact-heading">
+	            <div>
+	              <div class="drive-card-title">交易訊號</div>
+	              <div class="drive-card-sub" id="trading-risk-dashboard-sub">滑鼠移過或聚焦查看詳細狀態</div>
+	            </div>
+	            <div class="trading-signal-summary">
+	              <div class="trading-signal-lights" aria-label="交易訊號燈">
+	                <span id="trading-signal-light-price" class="trading-signal-light" data-state="unknown" title="價格訊號">價</span>
+	                <span id="trading-signal-light-bot" class="trading-signal-light" data-state="unknown" title="Bot 訊號">Bot</span>
+	                <span id="trading-signal-light-risk" class="trading-signal-light" data-state="unknown" title="風控訊號">險</span>
+	              </div>
+	              <span id="trading-risk-dashboard-badge" class="pill">-</span>
+	            </div>
+	          </div>
+	          <div id="trading-risk-dashboard-grid" class="trading-readiness-grid"></div>
+	        </section>
+	        <div id="trading-safe-mode" class="drive-card-sub">交易狀態讀取中</div>
+	        <div id="trading-inline-msg" class="msg trading-inline-msg"></div>
         <div class="settings-option-grid" id="trading-order-form" style="margin-top:.65rem;">
           <div class="field">
             <label>市場</label>
@@ -2392,17 +2463,7 @@
           <div><span class="drive-card-sub">我的部位</span><strong id="trading-position-quantity">-</strong><small id="trading-position-locked">鎖定 -</small></div>
           <div><span class="drive-card-sub">手續費</span><strong id="trading-fee-rate-percent">-</strong><small>%</small></div>
         </div>
-        <section class="trading-risk-dashboard" id="trading-risk-dashboard" aria-label="交易風控控制台">
-          <div class="drive-card-heading compact-heading">
-            <div>
-              <div class="drive-card-title">交易控制台</div>
-              <div class="drive-card-sub" id="trading-risk-dashboard-sub">價格、Bot、資金池與保證金狀態讀取中</div>
-            </div>
-            <span id="trading-risk-dashboard-badge" class="pill">-</span>
-          </div>
-          <div id="trading-risk-dashboard-grid" class="trading-readiness-grid"></div>
-        </section>
-        <div class="drive-card trading-btc-signal-card" id="trading-btc-signal-card" style="display:none;margin-top:.75rem;">
+	        <div class="drive-card trading-btc-signal-card" id="trading-btc-signal-card" style="display:none;margin-top:.75rem;">
           <div class="drive-card-heading compact-heading">
             <div>
               <div class="drive-card-title">比特幣信號</div>
@@ -2422,8 +2483,9 @@
           </summary>
           <div class="drive-collapsible-body">
             <div class="segmented-control compact-segments trading-bot-tabs" aria-label="交易機器人分頁">
-              <button class="active" type="button" data-trading-bot-tab="mybots">我的機器人</button>
-              <button type="button" data-trading-bot-tab="dca">定投機器人</button>
+	              <button class="active" type="button" data-trading-bot-tab="mybots">我的機器人</button>
+	              <button type="button" data-trading-bot-tab="competition">競賽排行</button>
+	              <button type="button" data-trading-bot-tab="dca">定投機器人</button>
               <button type="button" data-trading-bot-tab="grid">網格交易</button>
               <button type="button" data-trading-bot-tab="strategy">自動化 Workflow</button>
               <button type="button" data-trading-bot-tab="records">紀錄</button>
@@ -2431,15 +2493,29 @@
             <div class="trading-bot-panel trading-bot-tab-panel active" id="trading-bot-tab-mybots">
                 <div class="drive-card-title">我的機器人</div>
                 <div class="drive-card-sub">所有交易機器人一覽，點選任一機器人可在上方圖表顯示標記。</div>
-                <div id="trading-my-bots-list" class="drive-file-list" style="margin-top:.65rem;"></div>
-            </div>
-            <div class="trading-bot-panel trading-bot-tab-panel" id="trading-bot-tab-dca">
+	                <div id="trading-my-bots-list" class="drive-file-list" style="margin-top:.65rem;"></div>
+	            </div>
+	            <div class="trading-bot-panel trading-bot-tab-panel" id="trading-bot-tab-competition">
+	              <div class="drive-card-heading compact-heading">
+	                <div>
+	                  <div class="drive-card-title">機器人交易競賽</div>
+	                  <div class="drive-card-sub" id="trading-bot-competition-meta">按定投、Workflow、網格分組，以週績效百分比排名。</div>
+	                </div>
+	                <div class="drive-file-actions">
+	                  <input type="text" id="trading-bot-competition-week" placeholder="YYYY-Www" style="max-width:9rem;" />
+	                  <button class="btn btn-sm" type="button" id="trading-bot-competition-refresh-btn">查詢</button>
+	                  <button class="btn btn-sm" type="button" id="trading-bot-competition-award-btn" style="display:none;">發放上週獎勵</button>
+	                </div>
+	              </div>
+	              <div class="drive-card-sub" id="trading-bot-competition-rewards" style="margin-top:.45rem;"></div>
+	              <div id="trading-bot-competition-list" class="trading-bot-competition-grid" style="margin-top:.65rem;"></div>
+	            </div>
+	            <div class="trading-bot-panel trading-bot-tab-panel" id="trading-bot-tab-dca">
                 <div class="drive-card-title">定投機器人</div>
                 <div class="drive-card-sub">固定時間、固定金額、長期買入；不混入條件策略。</div>
                 <div class="settings-option-grid" style="margin-top:.65rem;">
                   <div class="field"><label>名稱</label><input type="text" id="trading-dca-bot-name" maxlength="80" placeholder="例如 每日 BTC 定投" /></div>
                   <div class="field"><label>市場</label><select id="trading-dca-bot-market"><option value="">讀取市場中...</option></select></div>
-                  <div class="field"><label>定投方向</label><select id="trading-dca-bot-side" disabled><option value="buy">買入</option></select></div>
                   <div class="field"><label>每次投入點數</label><input type="number" id="trading-dca-bot-budget-points" min="1" step="1" value="100" /></div>
                   <div class="field">
                     <label>定投週期</label>
@@ -2450,12 +2526,13 @@
                       <option value="custom">自訂間隔</option>
                     </select>
                   </div>
-                  <div class="field"><label>自訂間隔小時</label><input type="number" id="trading-dca-bot-interval-hours" min="1" max="8760" step="1" value="24" /></div>
+                  <div class="field" id="trading-dca-custom-interval-field" style="display:none;"><label>自訂間隔小時</label><input type="number" id="trading-dca-bot-interval-hours" min="1" max="8760" step="1" value="24" /></div>
                   <div class="field"><label>價格上限（可選）</label><input type="number" id="trading-dca-price-upper" min="1" step="1" placeholder="高於此價暫停" /></div>
                   <div class="field"><label>價格下限（可選）</label><input type="number" id="trading-dca-price-lower" min="1" step="1" placeholder="低於此價暫停" /></div>
                   <div class="field"><label>停損 %（可選）</label><input type="number" id="trading-dca-stop-loss-percent" min="0" max="1000" step="0.01" placeholder="持倉跌幅達此值時賣出" /></div>
-                  <div class="field"><label>停利 %（可選）</label><input type="number" id="trading-dca-take-profit-percent" min="0" max="1000" step="0.01" placeholder="持倉漲幅達此值時賣出" /></div>
-                  <div class="field">
+	                  <div class="field"><label>停利 %（可選）</label><input type="number" id="trading-dca-take-profit-percent" min="0" max="1000" step="0.01" placeholder="持倉漲幅達此值時賣出" /></div>
+	                  <div class="field"><label><input type="checkbox" id="trading-dca-share-parameters" /> 競賽中分享參數</label><div class="field-hint">勾選後排行榜會公開此 Bot 的主要設定，不包含帳戶餘額或私密資料。</div></div>
+	                  <div class="field">
                     <label>最多執行次數</label>
                     <input type="number" id="trading-dca-bot-max-runs" min="-1" max="1000" step="1" value="7" />
                     <div class="field-hint">輸入 -1 代表不限制執行次數；其餘請填 1 到 1000。</div>
@@ -2519,8 +2596,11 @@
                 <div class="field"><label>下限價格（點）</label><input type="number" id="trading-grid-lower-price" min="1" step="1" placeholder="例如 45000" /></div>
                 <div class="field"><label>網格數量</label><input type="number" id="trading-grid-count" min="2" max="200" step="1" value="10" /></div>
                 <div class="field"><label>每格金額（點）</label><input type="number" id="trading-grid-order-amount" min="1" step="1" value="100" /></div>
-                <div class="field"><label>間距模式</label><select id="trading-grid-spacing-mode"><option value="arithmetic">等差（固定點數間距）</option><option value="geometric">等比（固定百分比間距）</option></select></div>
-                <div class="field"><label>操作</label><button class="btn btn-primary" id="trading-grid-bot-create-btn" type="button">建立網格</button></div>
+                <div class="field"><label>止損 %（可選）</label><input type="number" id="trading-grid-stop-loss-percent" min="0" max="1000" step="0.01" placeholder="跌破建立價後暫停並撤單" /></div>
+                <div class="field"><label>止盈 %（可選）</label><input type="number" id="trading-grid-take-profit-percent" min="0" max="1000" step="0.01" placeholder="高於建立價後暫停並撤單" /></div>
+	                <div class="field"><label>間距模式</label><select id="trading-grid-spacing-mode"><option value="arithmetic">等差（固定點數間距）</option><option value="geometric">等比（固定百分比間距）</option></select></div>
+	                <div class="field"><label><input type="checkbox" id="trading-grid-share-parameters" /> 競賽中分享參數</label><div class="field-hint">公開網格區間、格數與每格金額，方便其他用戶研究策略。</div></div>
+	                <div class="field"><label>操作</label><button class="btn btn-primary" id="trading-grid-bot-create-btn" type="button">建立網格</button></div>
               </div>
               <div id="trading-grid-preview" class="drive-card-sub" style="margin-top:.5rem;"></div>
               <div class="drive-card-sub" style="margin-top:.35rem;color:var(--muted);font-size:.82em;">建立前會先試算每格毛利、手續費、扣費後淨利、損益兩平間距；紅燈不允許啟動，黃燈需二次確認。</div>
@@ -2548,6 +2628,8 @@
                   <div class="field"><label>上限價格（點）</label><input type="number" id="trading-grid-backtest-grid-upper" min="1" step="1" placeholder="例如 120000" /></div>
                   <div class="field"><label>網格數量</label><input type="number" id="trading-grid-backtest-grid-count" min="2" max="500" step="1" value="10" /></div>
                   <div class="field"><label>每格金額（點）</label><input type="number" id="trading-grid-backtest-grid-amount" min="1" step="1" value="100" /></div>
+                  <div class="field"><label>止損 %（可選）</label><input type="number" id="trading-grid-backtest-stop-loss-percent" min="0" max="1000" step="0.01" placeholder="跌破起始價後停止回測網格" /></div>
+                  <div class="field"><label>止盈 %（可選）</label><input type="number" id="trading-grid-backtest-take-profit-percent" min="0" max="1000" step="0.01" placeholder="高於起始價後停止回測網格" /></div>
                   <div class="field"><label>間距模式</label><select id="trading-grid-backtest-grid-spacing"><option value="arithmetic">等差（固定點數間距）</option><option value="geometric">等比（固定百分比間距）</option></select></div>
                   <div class="field"><label>操作</label><button class="btn btn-primary" id="trading-grid-backtest-run-btn" type="button">執行網格回測</button></div>
                 </div>
@@ -2587,9 +2669,8 @@
                   <div class="field"><label>每日最大觸發</label><input type="number" id="trading-auto-daily-runs" min="1" max="100" step="1" value="5" /></div>
                   <div class="field"><label>最多總觸發</label><input type="number" id="trading-auto-bot-max-runs" min="1" max="1000" step="1" value="5" /></div>
                   <div class="field"><label>預設冷卻秒數</label><input type="number" id="trading-auto-bot-cooldown" min="0" max="86400" step="1" value="300" /></div>
-                  <div class="field"><label>停損 %（可選）</label><input type="number" id="trading-auto-stop-loss-percent" min="0" max="1000" step="0.01" placeholder="持倉跌幅達此值時賣出" /></div>
-                  <div class="field"><label>停利 %（可選）</label><input type="number" id="trading-auto-take-profit-percent" min="0" max="1000" step="0.01" placeholder="持倉漲幅達此值時賣出" /></div>
-                  <div class="field"><label><input type="checkbox" id="trading-auto-bot-enabled" checked /> 啟用</label></div>
+	                  <div class="field"><label><input type="checkbox" id="trading-auto-share-parameters" /> 競賽中分享參數</label><div class="field-hint">公開觸發條件、風控與 Workflow 摘要，不公開帳戶資料。</div></div>
+	                  <div class="field"><label><input type="checkbox" id="trading-auto-bot-enabled" checked /> 啟用</label></div>
                 </div>
                 <div class="trading-workflow-json-panel" style="margin-top:.75rem;">
                   <div class="drive-card-heading compact-heading">
@@ -2647,8 +2728,6 @@
                     <div class="field"><label>初始資金</label><input type="number" id="trading-workflow-backtest-initial-cash" min="1" step="1" value="10000" /></div>
                     <div class="field"><label>滑價百分比</label><input type="number" id="trading-workflow-backtest-slippage-percent" min="0" max="20" step="0.01" value="0" /></div>
                     <div class="field"><label>每次投入金額（點）</label><input type="number" id="trading-workflow-backtest-order-points" min="1" step="1" value="100" /></div>
-                    <div class="field"><label>停損 %（可選）</label><input type="number" id="trading-workflow-backtest-stop-loss-percent" min="0" max="1000" step="0.01" placeholder="例如 5" /></div>
-                    <div class="field"><label>停利 %（可選）</label><input type="number" id="trading-workflow-backtest-take-profit-percent" min="0" max="1000" step="0.01" placeholder="例如 12" /></div>
                     <div class="field"><label>操作</label><button class="btn btn-primary" id="trading-workflow-backtest-run-btn" type="button">執行 Workflow 回測</button></div>
                   </div>
                   <div class="drive-card-sub" id="trading-workflow-backtest-date-hint" style="margin-top:.35rem;line-height:1.6;">
@@ -2691,7 +2770,7 @@
               <div><span class="drive-card-sub">可用保證金</span><strong id="trading-margin-free-margin">-</strong><small id="trading-margin-available-margin">-</small></div>
               <div><span class="drive-card-sub">總借出本金</span><strong id="trading-margin-total-borrowed">-</strong><small id="trading-margin-maintenance-total">-</small></div>
             </div>
-            <div class="settings-option-grid">
+            <div class="settings-option-grid" id="trading-margin-open-form">
               <div class="field"><label>市場</label><select id="trading-margin-market-select"><option value="">讀取市場中...</option></select></div>
               <div class="field">
                 <label>類型</label>
@@ -2710,40 +2789,7 @@
             <div class="drive-file-list" id="trading-margin-position-list" style="margin-top:.75rem;"></div>
           </div>
         </details>
-        <div class="trading-reference-panel" style="margin-top:.75rem;">
-          <div class="drive-card-heading compact-heading">
-            <div>
-              <div class="drive-card-title">Binance 參考價格</div>
-              <div class="drive-card-sub" id="trading-reference-price-meta">公開 API 蠟燭圖會作為 reference price 參考；API 故障時使用最後健康快取，不能直接當風控價格。</div>
-            </div>
-            <select id="trading-reference-interval" class="compact-select">
-              <option value="5m">5 分</option>
-              <option value="15m" selected>15 分</option>
-              <option value="1h">1 小時</option>
-              <option value="4h">4 小時</option>
-              <option value="1d">日線</option>
-            </select>
-          </div>
-          <div class="trading-indicator-controls" aria-label="技術指標">
-            <label><input type="checkbox" id="trading-indicator-ma5"> MA5</label>
-            <label><input type="checkbox" id="trading-indicator-ma10"> MA10</label>
-            <label><input type="checkbox" id="trading-indicator-ma20" checked> MA20</label>
-            <label><input type="checkbox" id="trading-indicator-ma30"> MA30</label>
-            <label><input type="checkbox" id="trading-indicator-ma60"> MA60</label>
-            <label><input type="checkbox" id="trading-indicator-ema12"> EMA12</label>
-            <label><input type="checkbox" id="trading-indicator-ema26"> EMA26</label>
-            <label><input type="checkbox" id="trading-indicator-ema50"> EMA50</label>
-            <label><input type="checkbox" id="trading-indicator-bollinger"> 布林線</label>
-            <label><input type="checkbox" id="trading-indicator-rsi14"> RSI14</label>
-            <label><input type="checkbox" id="trading-indicator-kd"> KD(9,3,3)</label>
-            <button class="btn btn-sm" id="trading-chart-clear-overlay-btn" type="button" style="display:none;font-size:.75rem;padding:.15rem .45rem;">清除標記</button>
-          </div>
-          <div class="trading-reference-chart-wrap">
-            <canvas id="trading-reference-chart" class="trading-reference-chart" width="920" height="320" aria-label="Binance 參考價格蠟燭圖"></canvas>
-            <div id="trading-reference-tooltip" class="trading-reference-tooltip" hidden></div>
-          </div>
-        </div>
-        <div class="settings-option-grid" style="margin-top:.75rem;">
+	        <div class="settings-option-grid" style="margin-top:.75rem;">
           <div>
             <div class="drive-card-title">訂單</div>
             <div id="trading-order-list" class="drive-file-list"></div>
@@ -2751,71 +2797,6 @@
           <div>
             <div class="drive-card-title">成交</div>
             <div id="trading-fill-list" class="drive-file-list"></div>
-          </div>
-        </div>
-      </div>
-      <div class="drive-card" id="trading-root-card" style="display:none;margin-top:.75rem;">
-        <div class="drive-card-heading">
-          <div>
-            <div class="drive-card-title">交易引擎設定</div>
-            <div class="drive-card-sub">價格由 root 手動設定；超過最大跳動比例需勾選確認。資金池初始為 10000 點，借貸交易會檢查資金池餘額。</div>
-          </div>
-          <button class="btn" id="trading-root-refresh-btn" type="button">更新交易報告</button>
-        </div>
-        <div class="settings-option-grid economy-wallet-grid">
-          <div><span class="drive-card-sub">資金池</span><strong id="trading-reserve-balance">0</strong><small>POINTS</small></div>
-          <div><span class="drive-card-sub">交易驗證</span><strong id="trading-verification-status">-</strong><small id="trading-verification-detail">-</small></div>
-          <div><span class="drive-card-sub">高風險功能</span><strong id="trading-risk-flags">關閉</strong><small>futures / pvp</small></div>
-          <div><span class="drive-card-sub">root 模擬資金</span><strong id="trading-root-sim-balance">10000</strong><small><button class="btn btn-small" id="trading-root-reset-sim-btn" type="button">重設回 10000</button></small></div>
-        </div>
-        <div class="admin-toolbar" style="margin-top:.75rem;">
-          <button class="btn" id="trading-limit-match-btn" type="button">立即撮合限價單</button>
-          <button class="btn btn-danger" id="trading-liquidation-scan-btn" type="button">立即掃描強平</button>
-          <span class="drive-card-sub" id="trading-liquidation-status">自動清算排程：讀取中</span>
-        </div>
-        <details class="drive-collapsible-panel" id="trading-root-contract-card" style="margin-top:.75rem;">
-          <summary>
-            <div>
-              <div class="drive-card-title">root 合約模擬</div>
-              <div class="drive-card-sub">僅 root 可用，使用 root 模擬資金，不寫入 PointsChain；root 以外用戶目前只能使用現貨。</div>
-            </div>
-          </summary>
-          <div class="drive-collapsible-body">
-            <div class="settings-option-grid">
-              <div class="field"><label>市場</label><select id="trading-contract-market-select"><option value="">讀取市場中...</option></select></div>
-              <div class="field"><label>方向</label><select id="trading-contract-side"><option value="long">做多</option><option value="short">做空</option></select></div>
-              <div class="field"><label>數量</label><input type="number" id="trading-contract-quantity" min="0.00000001" step="0.00000001" value="0.01" /></div>
-              <div class="field"><label>槓桿</label><input type="number" id="trading-contract-leverage" min="1" max="20" step="1" value="1" /></div>
-              <div class="field"><label>保證金</label><input type="number" id="trading-contract-margin" min="1" step="1" value="100" /></div>
-              <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="trading-contract-open-btn" type="button">開倉</button></div>
-            </div>
-            <div class="drive-file-list" id="trading-contract-position-list" style="margin-top:.75rem;"></div>
-          </div>
-        </details>
-        <div class="settings-option-grid" style="margin-top:.75rem;">
-          <div class="field"><label>市場</label><select id="trading-root-market-select"><option value="">讀取市場中...</option></select></div>
-          <div class="field"><label>最後快取價格</label><input type="number" id="trading-root-price" min="1" step="1" readonly /></div>
-          <div class="field"><label>最大跳動百分比</label><input type="number" id="trading-root-jump-percent" min="0" step="0.01" /></div>
-          <div class="field"><label>手續費百分比</label><input type="number" id="trading-root-fee-percent" min="0" max="50" step="0.01" /></div>
-          <div class="field"><label>單筆最小點數</label><input type="number" id="trading-root-min-order" min="1" step="1" /></div>
-          <div class="field"><label>單筆最大點數</label><input type="number" id="trading-root-max-order" min="1" step="1" /></div>
-          <div class="field"><label><input type="checkbox" id="trading-root-enabled" /> 啟用市場</label></div>
-          <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="trading-root-save-market-btn" type="button">儲存市場</button></div>
-        </div>
-        <div class="settings-option-grid" style="margin-top:.75rem;">
-          <div class="field"><label>撥入來源帳戶</label><select id="trading-reserve-source-user-id"><option value="">讀取會員中...</option></select></div>
-          <div class="field"><label>撥入點數</label><input type="number" id="trading-reserve-amount" min="1" step="1" /></div>
-          <div class="field"><label>原因</label><input type="text" id="trading-reserve-reason" value="ROOT_RESERVE_ALLOCATION" readonly /></div>
-          <div class="field"><label>&nbsp;</label><button class="btn btn-danger" id="trading-reserve-allocate-btn" type="button">撥入資金池</button></div>
-        </div>
-        <div class="settings-option-grid" style="margin-top:.75rem;">
-          <div>
-            <div class="drive-card-title">交易審計</div>
-            <div id="trading-audit-list" class="drive-file-list"></div>
-          </div>
-          <div>
-            <div class="drive-card-title">資金池事件</div>
-            <div id="trading-reserve-event-list" class="drive-file-list"></div>
           </div>
         </div>
       </div>
@@ -4347,6 +4328,74 @@
               <button class="btn btn-primary" type="button" id="root-trading-settings-save-btn">儲存交易所參數</button>
             </div>
             <div id="root-trading-settings-msg" style="margin-bottom:.75rem;font-size:.8rem;"></div>
+            <details class="drive-collapsible-panel settings-collapse" id="trading-root-card" style="display:none;margin-bottom:.85rem;" open>
+              <summary>
+                <div>
+                  <div class="drive-card-title">root 交易引擎操作</div>
+                  <div class="drive-card-sub">交易頁只保留下單、行情與倉位；root 專用的撮合、清算、資金池、合約模擬與市場參數集中放在這裡。</div>
+                </div>
+              </summary>
+              <div class="drive-collapsible-body">
+                <div class="admin-toolbar" style="gap:.5rem;flex-wrap:wrap;">
+                  <button class="btn" id="trading-root-refresh-btn" type="button">更新交易報告</button>
+                  <button class="btn" id="trading-limit-match-btn" type="button">立即撮合限價單</button>
+                  <button class="btn btn-danger" id="trading-liquidation-scan-btn" type="button">立即掃描強平</button>
+                  <span class="drive-card-sub" id="trading-liquidation-status">自動清算排程：讀取中</span>
+                </div>
+                <div id="trading-root-inline-msg" class="msg trading-inline-msg"></div>
+                <div class="settings-option-grid economy-wallet-grid">
+                  <div><span class="drive-card-sub">資金池</span><strong id="trading-reserve-balance">0</strong><small>POINTS</small></div>
+                  <div><span class="drive-card-sub">交易驗證</span><strong id="trading-verification-status">-</strong><small id="trading-verification-detail">-</small></div>
+                  <div><span class="drive-card-sub">高風險功能</span><strong id="trading-risk-flags">關閉</strong><small>futures / pvp</small></div>
+                  <div><span class="drive-card-sub">root 模擬資金</span><strong id="trading-root-sim-balance">10000</strong><small><button class="btn btn-small" id="trading-root-reset-sim-btn" type="button">重設回 10000</button></small></div>
+                </div>
+                <details class="drive-collapsible-panel settings-collapse" id="trading-root-contract-card" style="margin-top:.75rem;">
+                  <summary>
+                    <div>
+                      <div class="drive-card-title">root 合約模擬</div>
+                      <div class="drive-card-sub">僅 root 可用，使用 root 模擬資金，不寫入 PointsChain；root 以外用戶目前只能使用現貨。</div>
+                    </div>
+                  </summary>
+                  <div class="drive-collapsible-body">
+                    <div class="settings-option-grid">
+                      <div class="field"><label>市場</label><select id="trading-contract-market-select"><option value="">讀取市場中...</option></select></div>
+                      <div class="field"><label>方向</label><select id="trading-contract-side"><option value="long">做多</option><option value="short">做空</option></select></div>
+                      <div class="field"><label>數量</label><input type="number" id="trading-contract-quantity" min="0.00000001" step="0.00000001" value="0.01" /></div>
+                      <div class="field"><label>槓桿</label><input type="number" id="trading-contract-leverage" min="1" max="20" step="1" value="1" /></div>
+                      <div class="field"><label>保證金</label><input type="number" id="trading-contract-margin" min="1" step="1" value="100" /></div>
+                      <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="trading-contract-open-btn" type="button">開倉</button></div>
+                    </div>
+                    <div class="drive-file-list" id="trading-contract-position-list" style="margin-top:.75rem;"></div>
+                  </div>
+                </details>
+                <div class="settings-option-grid" style="margin-top:.75rem;">
+                  <div class="field"><label>市場</label><select id="trading-root-market-select"><option value="">讀取市場中...</option></select></div>
+                  <div class="field"><label>最後快取價格</label><input type="number" id="trading-root-price" min="1" step="1" readonly /></div>
+                  <div class="field"><label>最大跳動百分比</label><input type="number" id="trading-root-jump-percent" min="0" step="0.01" /></div>
+                  <div class="field"><label>手續費百分比</label><input type="number" id="trading-root-fee-percent" min="0" max="50" step="0.01" /></div>
+                  <div class="field"><label>單筆最小點數</label><input type="number" id="trading-root-min-order" min="1" step="1" /></div>
+                  <div class="field"><label>單筆最大點數</label><input type="number" id="trading-root-max-order" min="1" step="1" /></div>
+                  <div class="field"><label><input type="checkbox" id="trading-root-enabled" /> 啟用市場</label></div>
+                  <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="trading-root-save-market-btn" type="button">儲存市場</button></div>
+                </div>
+                <div class="settings-option-grid" style="margin-top:.75rem;">
+                  <div class="field"><label>撥入來源帳戶</label><select id="trading-reserve-source-user-id"><option value="">讀取會員中...</option></select></div>
+                  <div class="field"><label>撥入點數</label><input type="number" id="trading-reserve-amount" min="1" step="1" /></div>
+                  <div class="field"><label>原因</label><input type="text" id="trading-reserve-reason" value="ROOT_RESERVE_ALLOCATION" readonly /></div>
+                  <div class="field"><label>&nbsp;</label><button class="btn btn-danger" id="trading-reserve-allocate-btn" type="button">撥入資金池</button></div>
+                </div>
+                <div class="settings-option-grid" style="margin-top:.75rem;">
+                  <div>
+                    <div class="drive-card-title">交易審計</div>
+                    <div id="trading-audit-list" class="drive-file-list"></div>
+                  </div>
+                  <div>
+                    <div class="drive-card-title">資金池事件</div>
+                    <div id="trading-reserve-event-list" class="drive-file-list"></div>
+                  </div>
+                </div>
+              </div>
+            </details>
             <details class="drive-collapsible-panel settings-collapse" open>
               <summary>
                 <div>
@@ -4422,7 +4471,7 @@
                     <div class="field-hint">借貸交易的本金來源；手續費、借貸利息與 root 明確撥入會增加資金池。</div>
                   </div>
                 </div>
-                <details class="drive-collapsible-panel settings-collapse" style="margin-top:.75rem;">
+                <details class="drive-collapsible-panel settings-collapse" id="root-trading-reserved-panel" style="display:none;margin-top:.75rem;">
                   <summary>
                     <div>
                       <div class="drive-card-title">合約 / PVP 預留功能</div>
@@ -4602,12 +4651,21 @@
                     <input type="number" id="root-trading-bot-auto-interval" min="10" max="3600" step="1" value="30" />
                     <div class="field-hint">預設 30 秒，最短 10 秒。策略本身的冷卻時間仍會優先生效。</div>
                   </div>
-                  <div class="field">
-                    <label>每輪最多掃描機器人數</label>
-                    <input type="number" id="root-trading-bot-auto-limit" min="1" max="200" step="1" value="50" />
-                  </div>
-                  <div class="field">
-                    <label>回測最大 K 棒數 <span id="root-trading-backtest-measured-hint" class="field-hint" style="display:inline-block;margin-left:.4rem;"></span></label>
+	                  <div class="field">
+	                    <label>每輪最多掃描機器人數</label>
+	                    <input type="number" id="root-trading-bot-auto-limit" min="1" max="200" step="1" value="50" />
+	                  </div>
+	                  <div class="field">
+	                    <label><input type="checkbox" id="root-trading-bot-competition-enabled" checked /> 啟用機器人交易週賽</label>
+	                    <div class="field-hint">排行榜以各類型機器人的週績效百分比排名，避免本金大小影響名次。</div>
+	                  </div>
+	                  <div class="field">
+	                    <label>週賽第一名獎勵點數</label>
+	                    <input type="number" id="root-trading-bot-competition-reward" min="0" max="1000000" step="1" value="100" />
+	                    <div class="field-hint">定投、Workflow、網格各自排名，各類型第一名各領一次。</div>
+	                  </div>
+	                  <div class="field">
+	                    <label>回測最大 K 棒數 <span id="root-trading-backtest-measured-hint" class="field-hint" style="display:inline-block;margin-left:.4rem;"></span></label>
                     <input type="number" id="root-trading-backtest-max-candles" min="1000" max="10000000" step="1000" value="20000" />
                     <div class="field-hint">控制單次回測可餵入的 K 棒上限。預設 20,000；首次啟動伺服器時會量測本機性能極限，並顯示在欄位旁供 root 參考。</div>
                   </div>
@@ -5378,11 +5436,6 @@
         <label>再次輸入密碼</label>
         <input type="password" id="drive-upload-mode-passphrase-confirm" autocomplete="new-password" />
       </div>
-      <label class="inline-check">
-        <input type="checkbox" id="drive-upload-mode-client-scan-report" />
-        附上本機掃描回報
-      </label>
-      <div class="drive-card-sub">E2EE 上傳時附本機掃描回報只會記錄瀏覽器端聲明；伺服器仍無法讀取明文。</div>
     </div>
     <div id="drive-upload-mode-msg" class="msg"></div>
     <div style="display:flex;gap:.5rem;justify-content:flex-end;flex-wrap:wrap;margin-top:1rem;">
@@ -5427,6 +5480,49 @@
   </div>
 </div>
 
+<div id="drive-share-overlay" class="user-edit-overlay" aria-hidden="true">
+  <div class="user-edit-modal drive-share-modal">
+    <div class="drive-card-heading">
+      <div>
+        <h2>分享檔案下載</h2>
+        <div class="drive-card-sub" id="drive-share-file-label">選擇分享方式</div>
+      </div>
+      <button class="btn" type="button" data-drive-action="close-share-dialog">關閉</button>
+    </div>
+    <input type="hidden" id="drive-share-file-id" />
+    <input type="hidden" id="drive-share-storage-file-id" />
+    <input type="hidden" id="drive-share-file-name" />
+    <div class="settings-option-grid">
+      <div class="field">
+        <label>分享範圍</label>
+        <select id="drive-share-scope">
+          <option value="link">知道連結的都可以下載</option>
+          <option value="account">指定帳戶登入後下載</option>
+        </select>
+      </div>
+      <div class="field" id="drive-share-account-field" style="display:none;">
+        <label>指定帳戶</label>
+        <input type="text" id="drive-share-account" placeholder="username 或 user id" />
+      </div>
+      <div class="field">
+        <label>到期時間（選填）</label>
+        <input type="datetime-local" id="drive-share-expires-at" />
+      </div>
+      <div class="field">
+        <label>最大下載次數</label>
+        <input type="number" id="drive-share-max-views" min="0" step="1" value="0" />
+      </div>
+    </div>
+    <div id="drive-share-e2ee-note" class="drive-card-sub" style="display:none;">E2EE 檔案會在瀏覽器端建立分享授權；完整連結含片段金鑰，遺失後只能重新產生。</div>
+    <div id="drive-share-result" class="drive-share-result" style="display:none;"></div>
+    <div id="drive-share-msg" class="msg"></div>
+    <div style="display:flex;gap:.5rem;justify-content:flex-end;flex-wrap:wrap;margin-top:1rem;">
+      <button class="btn btn-primary" type="button" data-drive-action="create-share-link">產生分享連結</button>
+      <button class="btn" type="button" data-drive-action="close-share-dialog">取消</button>
+    </div>
+  </div>
+</div>
+
 <div id="album-full-preview-overlay" class="album-full-preview-overlay" aria-hidden="true">
   <div class="album-full-preview-topbar">
     <div>
@@ -5447,24 +5543,25 @@
 <div id="admin-add-overlay" class="user-edit-overlay">
   <div class="user-edit-modal">
     <div class="mini-title">新增帳號</div>
+    <div class="msg" id="admin-add-msg" role="alert" aria-live="assertive"></div>
     <form id="admin-add-form">
-      <div class="field"><label>帳號</label><input type="text" id="admin-add-user" placeholder="a-z 0-9 _ -" /></div>
+      <div class="field"><label>帳號</label><input type="text" id="admin-add-user" placeholder="a-z 0-9 _ -" required aria-describedby="admin-add-msg" /></div>
       <div class="field">
         <label>密碼</label>
         <div class="pw-wrap">
-          <input type="password" id="admin-add-pw" placeholder="至少 8 字元" />
+          <input type="password" id="admin-add-pw" placeholder="至少 8 字元" required aria-describedby="admin-add-msg" />
           <button class="pw-toggle" id="admin-add-pw-toggle" type="button" aria-label="顯示密碼">👁</button>
         </div>
       </div>
       <div class="field">
         <label>確認密碼</label>
         <div class="pw-wrap">
-          <input type="password" id="admin-add-pw-confirm" placeholder="請再次輸入密碼" />
+          <input type="password" id="admin-add-pw-confirm" placeholder="請再次輸入密碼" required aria-describedby="admin-add-msg admin-add-pw-confirm-hint" />
           <button class="pw-toggle" id="admin-add-pw-confirm-toggle" type="button" aria-label="顯示密碼">👁</button>
         </div>
         <p style="margin-top:.4rem; color:#ff4f6d" id="admin-add-pw-confirm-hint"></p>
       </div>
-      <div class="field"><label>暱稱</label><input type="text" id="admin-add-nickname" placeholder="暱稱" /></div>
+      <div class="field"><label>暱稱</label><input type="text" id="admin-add-nickname" placeholder="暱稱" required aria-describedby="admin-add-msg" /></div>
       <div class="field"><label>真實姓名（選填）</label><input type="text" id="admin-add-realname" placeholder="可留空" /></div>
       <div class="field"><label>身分證（選填）</label><input type="text" id="admin-add-idno" placeholder="可留空" /></div>
       <div class="field"><label>生日（選填）</label><input type="date" id="admin-add-birthdate" /></div>
@@ -5580,6 +5677,7 @@
 </div>
 
 <script src="/js/00-core.js?v=20260503-appearance-v2" defer></script>
+<script src="/js/01-root-quick-settings.js?v=20260514-root-quick-settings" defer></script>
 <script src="/js/10-users.js?v=20260503-account-delete-feedback" defer></script>
 <script src="/js/20-chat.js?v=20260429-official-chat-protect" defer></script>
 <script src="/js/25-community.js?v=20260504-announcement-edit" defer></script>
@@ -5593,7 +5691,7 @@
 <script src="/js/36-comfyui-workflows.js?v=20260514-comfyui-subtabs" defer></script>
 <script src="/js/37-bug-report.js?v=20260502-device-feature" defer></script>
 <script src="/js/three.min.js?v=0.160.0" defer></script>
-<script src="/js/41-game-modules.js?v=20260514-open-world" defer></script>
+<script src="/js/41-game-modules.js?v=20260514-game-user-scope" defer></script>
 <script src="/js/games/snake.js?v=20260513-game-modules" defer></script>
 <script src="/js/games/game-2048.js?v=20260513-game-modules" defer></script>
 <script src="/js/games/brick-breaker.js?v=20260513-game-modules" defer></script>

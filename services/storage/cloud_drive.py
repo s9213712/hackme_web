@@ -147,6 +147,13 @@ def is_manager_or_root(actor):
     return _role_rank_value(_actor_role(actor)) >= _role_rank_value("manager")
 
 
+def _actor_owns(actor, owner_user_id):
+    try:
+        return int(_actor_value(actor, "id")) == int(owner_user_id)
+    except Exception:
+        return False
+
+
 def validate_context_type(context_type):
     value = str(context_type or "").strip()
     if value not in CONTEXT_TYPES:
@@ -233,12 +240,12 @@ def _check_quota(conn, actor, member_rule, size_bytes, storage_root=None):
     usage = get_user_cloud_drive_usage(conn, actor, member_rule=member_rule, storage_root=storage_root)
     if not usage["can_upload"]:
         return False, "目前會員等級或處分狀態不可上傳"
+    remaining = usage.get("remaining_bytes")
+    if remaining is not None and int(size_bytes) > int(remaining):
+        return False, "超過雲端硬碟容量上限"
     max_file = usage.get("max_file_size_bytes")
     if max_file is not None and int(size_bytes) > int(max_file):
         return False, "檔案超過單檔大小限制"
-    remaining = usage.get("remaining_bytes")
-    if remaining is not None and int(size_bytes) > int(remaining):
-        return False, "雲端硬碟容量不足"
     disk_ok, _disk = storage_root_can_accept_bytes(storage_root, size_bytes)
     if not disk_ok:
         return False, "Host 磁碟可用空間不足，請先清理檔案或擴充儲存空間"
@@ -379,7 +386,7 @@ def get_file_status(conn, *, actor, file_id):
     row = _file_row(conn, file_id)
     if not row or row["deleted_at"]:
         return None, "找不到檔案或檔案已刪除"
-    if int(row["owner_user_id"]) != int(actor["id"]) and not is_manager_or_root(actor):
+    if not _actor_owns(actor, row["owner_user_id"]):
         allowed, _, _ = can_download_file(conn, actor=actor, file_id=file_id)
         if not allowed:
             return None, "沒有檔案權限"
@@ -405,9 +412,7 @@ def get_file_status(conn, *, actor, file_id):
         (file_id,),
     ).fetchall()
     keys = []
-    if is_e2ee_file(row) and (
-        int(row["owner_user_id"]) == int(actor["id"]) or is_manager_or_root(actor)
-    ):
+    if is_e2ee_file(row) and _actor_owns(actor, row["owner_user_id"]):
         keys = conn.execute(
             """
             SELECT id, recipient_user_id, wrapped_by, key_version, created_at, revoked_at
@@ -492,7 +497,7 @@ def revoke_e2ee_file_share(conn, *, actor, file_id, recipient_user_id):
     row = _file_row(conn, file_id)
     if not row or row["deleted_at"]:
         return None, "找不到檔案或檔案已刪除"
-    if int(row["owner_user_id"]) != int(actor["id"]) and not is_manager_or_root(actor):
+    if not _actor_owns(actor, row["owner_user_id"]):
         return None, "只能撤銷自己的檔案分享"
     try:
         recipient_user_id = int(recipient_user_id)
@@ -537,7 +542,7 @@ def attach_existing_file(conn, *, actor, file_id, context_type, context_id, gran
     row = _file_row(conn, file_id)
     if not row or row["deleted_at"]:
         return None, "找不到檔案或檔案已刪除"
-    if int(row["owner_user_id"]) != int(actor["id"]) and not is_manager_or_root(actor):
+    if not _actor_owns(actor, row["owner_user_id"]):
         return None, "只能附加自己的雲端硬碟檔案"
     if context_type == "announcement" and not allow_announcement:
         return None, "公告附件必須走 root 審核流程"
@@ -600,7 +605,7 @@ def can_download_file(conn, *, actor, file_id, action="download"):
     ).fetchone()
     if trashed:
         return False, "deleted", row
-    if int(row["owner_user_id"]) == int(actor["id"]) or is_manager_or_root(actor):
+    if _actor_owns(actor, row["owner_user_id"]):
         return _scan_allows_download(conn, row), "owner_or_admin", row
     where, params = _active_grant_where(actor, action)
     grant = conn.execute(
@@ -626,7 +631,7 @@ def soft_delete_cloud_file(conn, *, actor, file_id):
     row = _file_row(conn, file_id)
     if not row or row["deleted_at"]:
         return False, "找不到檔案或檔案已刪除"
-    if int(row["owner_user_id"]) != int(actor["id"]) and not is_manager_or_root(actor):
+    if not _actor_owns(actor, row["owner_user_id"]):
         return False, "只能刪除自己的檔案"
     conn.execute("UPDATE uploaded_files SET deleted_at=?, updated_at=? WHERE id=?", (_now(), _now(), file_id))
     return True, ""
@@ -639,6 +644,8 @@ def create_announcement_attachment_request(conn, *, actor, file_id, announcement
     row = _file_row(conn, file_id)
     if not row or row["deleted_at"]:
         return None, "找不到檔案或檔案已刪除"
+    if not _actor_owns(actor, row["owner_user_id"]):
+        return None, "只能提交自己的檔案作為公告附件"
     if is_e2ee_file(row):
         return None, "E2EE 檔案不可作為公告附件"
     req_id = uuid.uuid4().hex

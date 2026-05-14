@@ -39,7 +39,7 @@ DEFAULT_RESULTS_ROOT = Path(os.environ.get("HACKME_CHESS_RESULTS_DIR", str(ROOT 
 DEFAULT_OPENING_CURRICULUM = DEFAULT_RESULTS_ROOT / "exp5_14b_clean_opening_heldout" / "clean_opening_curriculum.jsonl"
 DEFAULT_RETENTION_TRAIN = DEFAULT_RESULTS_ROOT / "exp5_08_clean_pool" / "inputs" / "exp5_08_train_clean_only.jsonl"
 DEFAULT_EXP5_13_SUMMARY = DEFAULT_RESULTS_ROOT / "exp5_13_rule_smoke_stalemate_fix_check" / "summary.json"
-DEFAULT_RUNTIME_PRODUCTION = ROOT / "runtime" / "games" / "models" / "chess_experiment_5_nnue.json"
+DEFAULT_RUNTIME_PRODUCTION = ROOT / "runtime" / "games" / "models" / "chess_experiment_5_nnue_experience.json"
 DEFAULT_PROMOTED_STAGE = DEFAULT_RESULTS_ROOT / "exp5_08_stage_candidate" / "chess_experiment_5_nnue_stage_candidate.json"
 DEFAULT_OUTPUT_DIR = DEFAULT_RESULTS_ROOT / "exp5_15_opening_candidate_search"
 DEFAULT_SEARCH_PROFILE = "fixed_depth_strong"
@@ -77,6 +77,11 @@ def _sha256_file(path: Path) -> str:
 def _hash_rows(rows: list[dict]) -> str:
     text = "".join(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n" for row in rows)
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _write_base_candidate_if_needed(base_model: Path, candidate_model: Path) -> None:
+    if base_model.exists():
+        shutil.copyfile(base_model, candidate_model)
 
 
 def _iter_jsonl(path: Path) -> list[dict]:
@@ -346,7 +351,7 @@ def train_candidate(
     candidate_dir.mkdir(parents=True, exist_ok=True)
     candidate_model = candidate_dir / "chess_experiment_5_nnue_candidate.json"
     candidate_replay = candidate_dir / "chess_experiment_5_nnue_candidate_replay.jsonl"
-    shutil.copyfile(base_model, candidate_model)
+    _write_base_candidate_if_needed(base_model, candidate_model)
     samples = list(opening_samples)
     if config.get("include_retention"):
         samples.extend(retention_samples)

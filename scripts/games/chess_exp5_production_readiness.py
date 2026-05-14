@@ -38,7 +38,7 @@ from services.games.self_play_training import _teacher_static_eval, choose_teach
 
 DEFAULT_RESULTS_ROOT = Path(os.environ.get("HACKME_CHESS_RESULTS_DIR", str(ROOT / "runtime" / "reports" / "games" / "chess_results")))
 DEFAULT_CANDIDATE = DEFAULT_RESULTS_ROOT / "exp5_08_stage_candidate" / "chess_experiment_5_nnue_stage_candidate.json"
-DEFAULT_BASELINE = ROOT / "services" / "games" / "models" / "chess_experiment_5_nnue.json"
+DEFAULT_BASELINE = ROOT / "runtime" / "games" / "models" / "chess_experiment_5_nnue_experience.json"
 DEFAULT_TRAIN_ROWS = DEFAULT_RESULTS_ROOT / "exp5_08_clean_pool" / "inputs" / "exp5_08_train_clean_only.jsonl"
 DEFAULT_SEED_CASES = DEFAULT_RESULTS_ROOT / "exp5_08_clean_pool" / "inputs" / "exp5_09_benchmark_cases.jsonl"
 DEFAULT_OUTPUT_DIR = DEFAULT_RESULTS_ROOT / "exp5_10_production_readiness"
@@ -926,12 +926,12 @@ def main() -> int:
     seed_paths = [Path(item).expanduser().resolve() for item in args.seed_cases_jsonl]
     train_rows = _iter_jsonl(train_paths)
     seed_cases = _iter_jsonl(seed_paths)
-    bundled_baseline_hash_before = _sha256_file(DEFAULT_BASELINE)
+    bundled_baseline_hash_before = _hash_optional_file(DEFAULT_BASELINE)
     production_runtime_path = (
         Path(os.environ["HACKME_RUNTIME_DIR"]).expanduser().resolve()
         if os.environ.get("HACKME_RUNTIME_DIR")
         else ROOT / "runtime"
-    ) / "games" / "models" / "chess_experiment_5_nnue.json"
+    ) / "games" / "models" / "chess_experiment_5_nnue_experience.json"
     production_runtime_exists_before = production_runtime_path.exists()
     production_runtime_hash_before = _hash_optional_file(production_runtime_path)
 
@@ -995,7 +995,7 @@ def main() -> int:
     if float(benchmark["overall"]["suspicious_rate"]) > 0:
         production_reasons.append("suspicious_rate_nonzero")
 
-    bundled_baseline_hash_after = _sha256_file(DEFAULT_BASELINE)
+    bundled_baseline_hash_after = _hash_optional_file(DEFAULT_BASELINE)
     production_runtime_exists_after = production_runtime_path.exists()
     production_runtime_hash_after = _hash_optional_file(production_runtime_path)
     production_runtime_checked = production_runtime_exists_before and production_runtime_exists_after

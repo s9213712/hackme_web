@@ -222,6 +222,32 @@ def test_manager_can_update_board_visibility_and_inactive_blocks_users(tmp_path)
     assert blocked.status_code == 403
 
 
+def test_normal_user_can_open_board_threads_when_users_table_has_status(tmp_path):
+    db_path = tmp_path / "community.db"
+    ids = _seed_community_db(db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'active'")
+        board_id = conn.execute(
+            "SELECT board_id FROM forum_threads WHERE id=?",
+            (ids["thread"],),
+        ).fetchone()[0]
+        conn.commit()
+    finally:
+        conn.close()
+
+    actor_box = {"actor": {"id": 4, "username": "bob", "role": "user", "member_level": "normal"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    listed = client.get(f"/api/community/boards/{board_id}/threads")
+
+    assert listed.status_code == 200
+    payload = listed.get_json()
+    assert payload["ok"] is True
+    assert payload["board"]["id"] == board_id
+    assert isinstance(payload["threads"], list)
+
+
 def test_non_manager_cannot_update_board(tmp_path):
     db_path = tmp_path / "community.db"
     ids = _seed_community_db(db_path)

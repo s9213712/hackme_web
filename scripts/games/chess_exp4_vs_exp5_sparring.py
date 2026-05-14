@@ -330,8 +330,8 @@ EXP4_KNOWN_CANDIDATES: list[tuple[str, str]] = [
 
 EXP5_KNOWN_CANDIDATES: list[tuple[str, str]] = [
     (
-        "bundled_production",
-        str(ROOT / "services" / "games" / "models" / "chess_experiment_5_nnue.json"),
+        "source_base_with_runtime_experience_delta",
+        str(ROOT / "runtime" / "games" / "models" / "chess_experiment_5_nnue_experience.json"),
     ),
     (
         "exp5_08_stage_candidate",

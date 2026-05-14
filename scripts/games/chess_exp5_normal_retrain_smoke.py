@@ -637,7 +637,7 @@ def _write_markdown_report(output_dir: Path, summary: dict[str, Any]) -> Path:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run candidate-only exp5 retrain smoke after normal games.")
-    parser.add_argument("--baseline-model-path", default=str(ROOT / "services" / "games" / "models" / "chess_experiment_5_nnue.json"))
+    parser.add_argument("--baseline-model-path", default=str(ROOT / "runtime" / "games" / "models" / "chess_experiment_5_nnue_experience.json"))
     parser.add_argument("--output-dir", default=str(ROOT / "docs" / "games" / f"2026-05-13_exp5_normal_retrain_smoke_{_utc_stamp()}"))
     parser.add_argument("--games", type=int, default=10)
     parser.add_argument("--openings", default="start,open_game,sicilian,french,caro_kann")

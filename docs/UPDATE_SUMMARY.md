@@ -198,10 +198,12 @@ Release ID: `2026.05.13-157`
 ## 2026.05.06-145
 
 - Trading workflow benchmark generation now preserves a stable frontend
-  contract: the default `1h` benchmark run writes to the canonical
-  `public/data/workflow_template_benchmarks.json`, while non-canonical
-  interval or relative-threshold variants write to suffixed auxiliary files
-  instead of silently diverging from the asset the frontend actually loads.
+  contract: the default `1h` benchmark run writes to
+  `workflows/trading_bot/benchmarks/workflow_template_benchmarks.json`, while
+  non-canonical interval or relative-threshold variants write to suffixed
+  auxiliary files. The frontend reads the canonical report through
+  `/api/trading/workflow-template-benchmarks` instead of a static `public/data`
+  asset.
 - The shipped workflow benchmark asset now carries explicit `interval` and
   `use_relative_thresholds` metadata so the trading UI can label benchmark
   data correctly and tests can validate the asset contract directly.

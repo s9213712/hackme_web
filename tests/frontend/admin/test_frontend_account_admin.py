@@ -22,10 +22,15 @@ def test_admin_user_delete_shows_visible_account_page_feedback():
     assert 'flash(msgEl, json.msg || "帳號已刪除", true);' in auth_js
     assert 'flash(msgEl, json.msg || `刪除失敗（HTTP ${res.status}）`, false);' in auth_js
     assert 'flash(msgEl, err.message || "刪除失敗，請稍後再試", false);' in auth_js
+    assert 'id="admin-add-msg" role="alert" aria-live="assertive"' in index_html
+    assert 'required aria-describedby="admin-add-msg"' in index_html
+    assert "function adminAddMsgEl()" in auth_js
+    assert 'const dialogMsgEl = adminAddMsgEl();' in auth_js
     assert 'u.status === "deleted"' in users_js
     assert 'statusSpan.textContent = "已刪除"' in users_js
     assert '請至少填寫帳號、密碼、確認密碼與暱稱' in auth_js
-    assert 'flash(msgEl, json.msg || "帳號已建立", true);' in auth_js
+    assert 'flash(dialogMsgEl || pageMsgEl, "請至少填寫帳號、密碼、確認密碼與暱稱", false);' in auth_js
+    assert 'flash(pageMsgEl, json.msg || "帳號已建立", true);' in auth_js
     assert "真實姓名（選填）" in index_html
     assert "身分證（選填）" in index_html
 

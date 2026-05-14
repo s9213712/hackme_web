@@ -1,5 +1,6 @@
 import gzip
 import io
+import json
 import os
 import sqlite3
 import threading
@@ -211,6 +212,15 @@ def test_dm_upload_enters_owner_drive_and_grants_counterparty_download(tmp_path)
     denied = client.get(f"/api/cloud-drive/files/{file_id}/download")
     assert denied.status_code == 403
 
+    actor_box["actor"] = _actor(4, "admin", "manager")
+    manager_download = client.get(f"/api/cloud-drive/files/{file_id}/download")
+    assert manager_download.status_code == 403
+    manager_status = client.get(f"/api/files/{file_id}/status")
+    assert manager_status.status_code == 403
+    manager_refs = client.get("/api/cloud-drive/refs?context_type=dm&context_id=room-1")
+    assert manager_refs.status_code == 200
+    assert manager_refs.get_json()["refs"] == []
+
 
 def test_cloud_drive_upload_failure_returns_specific_reason(tmp_path):
     db_path = tmp_path / "drive.db"
@@ -252,6 +262,29 @@ def test_storage_file_e2ee_upload_failure_returns_client_error(tmp_path):
     assert body["ok"] is False
     assert "encrypted_file_key is required" in body["msg"]
     assert body["error_code"] == "ValueError"
+
+
+def test_capacity_error_takes_priority_when_upload_exceeds_quota_and_single_file_limit(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+    payload = b"x" * (1024 * 1024 + 1)
+
+    for endpoint in ("/api/cloud-drive/upload", "/api/storage/files"):
+        res = client.post(
+            endpoint,
+            data={"file": (io.BytesIO(payload), "too-large.bin")},
+            content_type="multipart/form-data",
+        )
+        body = res.get_json()
+
+        assert res.status_code == 400
+        assert body["ok"] is False
+        assert "超過雲端硬碟容量上限" in body["msg"]
+        assert "單檔" not in body["msg"]
 
 
 def test_server_encrypted_upload_stores_ciphertext_but_downloads_plaintext(tmp_path):
@@ -1102,10 +1135,23 @@ def test_storage_share_link_download_and_revoke(tmp_path):
     assert created.status_code == 200
     share_link = created.get_json()["share_link"]
     assert share_link["token"]
+    assert share_link["share_url"] == f"/shared/files/{share_link['token']}"
+    assert share_link["download_url"] == f"/api/storage/shared/{share_link['token']}/download"
 
     listed = client.get("/api/storage/share-links").get_json()["share_links"]
     assert listed[0]["id"] == share_link["id"]
     assert "token" not in listed[0]
+    assert listed[0]["share_url"] == share_link["share_url"]
+
+    page = client.get(share_link["share_url"])
+    assert page.status_code == 200
+    assert b"/js/shared-file.js" in page.data
+
+    meta = client.get(f"/api/storage/shared/{share_link['token']}")
+    assert meta.status_code == 200
+    file_meta = meta.get_json()["file"]
+    assert file_meta["display_name"] == "shared.txt"
+    assert file_meta["download_url"] == share_link["download_url"]
 
     actor_box["actor"] = _actor(3, "mallory")
     downloaded = client.get(f"/api/storage/shared/{share_link['token']}/download")
@@ -1118,6 +1164,103 @@ def test_storage_share_link_download_and_revoke(tmp_path):
     assert revoked.get_json()["share_link"]["revoked_at"]
     denied = client.get(f"/api/storage/shared/{share_link['token']}/download")
     assert denied.status_code == 404
+
+
+def test_storage_share_link_account_scope_and_view_limit(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    uploaded = client.post(
+        "/api/storage/files",
+        data={
+            "file": (io.BytesIO(b"bob only"), "bob.txt"),
+            "virtual_path": "bob.txt",
+        },
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 200
+    storage_file_id = uploaded.get_json()["storage_file"]["id"]
+
+    created = client.post(
+        "/api/storage/share-links",
+        json={"storage_file_id": storage_file_id, "access_scope": "account", "required_username": "bob", "max_views": 1},
+    )
+    assert created.status_code == 200
+    share_link = created.get_json()["share_link"]
+    assert share_link["access_scope"] == "account"
+    assert share_link["required_user_id"] == 2
+    assert share_link["max_views"] == 1
+
+    actor_box["actor"] = None
+    assert client.get(f"/api/storage/shared/{share_link['token']}").status_code == 401
+    assert client.get(f"/api/storage/shared/{share_link['token']}/download").status_code == 401
+
+    actor_box["actor"] = _actor(3, "mallory")
+    assert client.get(f"/api/storage/shared/{share_link['token']}").status_code == 403
+
+    actor_box["actor"] = _actor(2, "bob")
+    downloaded = client.get(f"/api/storage/shared/{share_link['token']}/download")
+    assert downloaded.status_code == 200
+    assert downloaded.data == b"bob only"
+
+    exhausted = client.get(f"/api/storage/shared/{share_link['token']}/download")
+    assert exhausted.status_code == 410
+
+
+def test_storage_share_link_e2ee_requires_browser_envelope(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    uploaded = client.post(
+        "/api/cloud-drive/upload",
+        data={
+            "file": (io.BytesIO(b"ciphertext"), "vault.bin"),
+            "privacy_mode": "e2ee",
+            "encrypted_metadata": "sealed:metadata",
+            "encrypted_file_key": "sealed:owner-key",
+            "ciphertext_sha256": "a" * 64,
+            "encryption_algorithm": "XChaCha20-Poly1305",
+            "encryption_version": "1",
+            "nonce": "nonce",
+        },
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 200
+    file_id = uploaded.get_json()["file"]["file_id"]
+
+    missing = client.post("/api/storage/share-links", json={"file_id": file_id})
+    assert missing.status_code == 400
+    assert "E2EE" in missing.get_json()["msg"]
+
+    envelope = {"alg": "AES-GCM", "v": 1, "nonce": "nonce", "ciphertext": "wrapped"}
+    leaky = client.post(
+        "/api/storage/share-links",
+        json={"file_id": file_id, "wrapped_file_key_envelope": envelope, "fragment_key": "must-stay-client-side"},
+    )
+    assert leaky.status_code == 400
+    assert "不得送到伺服器" in leaky.get_json()["msg"]
+
+    created = client.post(
+        "/api/storage/share-links",
+        json={"file_id": file_id, "wrapped_file_key_envelope": envelope},
+    )
+    assert created.status_code == 200
+    share_link = created.get_json()["share_link"]
+    assert share_link["share_url"] == f"/shared/files/{share_link['token']}"
+
+    meta = client.get(f"/api/storage/shared/{share_link['token']}")
+    assert meta.status_code == 200
+    e2ee = meta.get_json()["file"]["e2ee"]
+    assert e2ee["requires_fragment_key"] is True
+    assert json.loads(e2ee["wrapped_file_key_envelope"]) == envelope
 
 
 def test_cloud_drive_text_and_archive_preview(tmp_path):
@@ -1839,6 +1982,13 @@ def test_e2ee_share_and_revoke_controls_download_grant(tmp_path):
     assert download.status_code == 200
     assert download.data == b"ciphertext"
 
+    actor_box["actor"] = _actor(4, "admin", "manager")
+    manager_revoke = client.post(f"/api/files/{file_id}/share/revoke", json={"recipient_user_id": 2})
+    assert manager_revoke.status_code == 400
+    actor_box["actor"] = _actor(2, "bob")
+    still_allowed = client.get(f"/api/files/{file_id}/download?confirm_high_risk=1")
+    assert still_allowed.status_code == 200
+
     actor_box["actor"] = _actor(1, "alice")
     revoked = client.post(f"/api/files/{file_id}/share/revoke", json={"recipient_user_id": 2})
     assert revoked.status_code == 200
@@ -2362,6 +2512,50 @@ def test_remote_download_stale_running_task_does_not_block_new_task(tmp_path, mo
         if status.get_json()["task"]["status"] != "running":
             break
         time.sleep(0.02)
+
+
+def test_remote_download_tasks_are_owner_scoped_for_manager(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(4, "admin", "manager")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    with files_routes._REMOTE_DOWNLOAD_TASKS_LOCK:
+        files_routes._REMOTE_DOWNLOAD_TASKS["alice-task"] = {
+            "id": "alice-task",
+            "kind": "remote_download",
+            "source_type": "url",
+            "status": "finished",
+            "phase": "done",
+            "filename": "alice.txt",
+            "url": "https://93.184.216.34/alice.txt",
+            "owner_user_id": 1,
+            "actor": _actor(1, "alice"),
+            "privacy_mode": "standard_plain",
+            "virtual_path": "",
+            "timeout_seconds": 1,
+            "loaded_bytes": 5,
+            "total_bytes": 5,
+            "progress_percent": 100,
+            "msg": "完成",
+            "error": "",
+            "file": None,
+            "storage_file": None,
+            "created_at": "2026-05-14T01:00:00",
+            "updated_at": "2026-05-14T01:00:01",
+        }
+
+    listed = client.get("/api/cloud-drive/remote-download/tasks")
+    assert listed.status_code == 200
+    assert listed.get_json()["tasks"] == []
+
+    status = client.get("/api/cloud-drive/remote-download/tasks/alice-task")
+    assert status.status_code == 403
+
+    removed = client.delete("/api/cloud-drive/remote-download/tasks/alice-task")
+    assert removed.status_code == 403
 
 
 def test_remote_download_task_accepts_uploaded_torrent_file(tmp_path, monkeypatch):

@@ -24,7 +24,8 @@ All generated artifacts stay under ``runtime/``:
 - exp2 model: ``runtime/games/models/chess_experiment_2_nn.json``
 - exp3 model: ``runtime/games/models/chess_experiment_3_dl.json``
 - exp4 model: ``runtime/games/models/chess_experiment_4_pv.json``
-- exp5 model: ``runtime/games/models/chess_experiment_5_nnue.json``
+- exp5 base model is source-embedded; optional experience deltas live at
+  ``runtime/games/models/chess_experiment_5_nnue_experience.json``
 - training reports: ``runtime/reports/games/``
 """
 

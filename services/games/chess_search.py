@@ -46,6 +46,9 @@ class SearchStats:
     history_updates: int = 0
     aspiration_retries: int = 0
     completed_depth: int = 0
+    null_move_cutoffs: int = 0
+    lmr_researches: int = 0
+    futility_prunes: int = 0
 
 
 @dataclass
@@ -239,6 +242,19 @@ def _record_history(
     history_heuristic[key] = min(updated, _HISTORY_MAX_BONUS)
 
 
+def _has_non_pawn_material(board: chess.Board, color: chess.Color) -> bool:
+    return bool(
+        board.pieces(chess.KNIGHT, color)
+        or board.pieces(chess.BISHOP, color)
+        or board.pieces(chess.ROOK, color)
+        or board.pieces(chess.QUEEN, color)
+    )
+
+
+def _is_quiet_move(board: chess.Board, move: chess.Move) -> bool:
+    return not (board.is_capture(move) or move.promotion or board.gives_check(move))
+
+
 def _quiescence(
     board: chess.Board,
     *,
@@ -308,6 +324,11 @@ def _negamax(
     history_heuristic: dict[tuple[bool, str], int],
     quiescence_depth: int,
     deadline: float | None,
+    enable_pvs: bool,
+    enable_lmr: bool,
+    enable_null_move: bool,
+    enable_futility: bool,
+    allow_null_move: bool,
 ) -> tuple[int, chess.Move | None]:
     _check_deadline(deadline)
     stats.nodes += 1
@@ -343,6 +364,49 @@ def _negamax(
             deadline=deadline,
         ), None
 
+    in_check = board.is_check()
+    if (
+        enable_null_move
+        and allow_null_move
+        and depth >= 3
+        and not in_check
+        and _has_non_pawn_material(board, board.turn)
+    ):
+        reduction = 2 if depth >= 5 else 1
+        board.push(chess.Move.null())
+        try:
+            null_score, _null_move = _negamax(
+                board,
+                depth=max(0, depth - reduction - 1),
+                alpha=-beta,
+                beta=-beta + 1,
+                color_sign=-color_sign,
+                ply=ply + 1,
+                evaluate=evaluate,
+                move_order_fn=move_order_fn,
+                qmove_filter=qmove_filter,
+                extension_fn=extension_fn,
+                extensions_remaining=extensions_remaining,
+                stats=stats,
+                transposition=transposition,
+                hasher=hasher,
+                killer_moves=killer_moves,
+                history_heuristic=history_heuristic,
+                quiescence_depth=quiescence_depth,
+                deadline=deadline,
+                enable_pvs=enable_pvs,
+                enable_lmr=enable_lmr,
+                enable_null_move=enable_null_move,
+                enable_futility=enable_futility,
+                allow_null_move=False,
+            )
+            null_score = -null_score
+        finally:
+            board.pop()
+        if null_score >= beta:
+            stats.null_move_cutoffs += 1
+            return beta, None
+
     best_score = -_INFINITY
     best_move = None
     ordered = _ordered_moves(
@@ -354,7 +418,19 @@ def _negamax(
         history_heuristic=history_heuristic,
         move_order_fn=move_order_fn,
     )
-    for move in ordered:
+    static_eval = color_sign * int(evaluate(board)) if enable_futility and depth <= 1 and not in_check else None
+    searched_moves = 0
+    for move_index, move in enumerate(ordered):
+        if (
+            enable_futility
+            and depth <= 1
+            and static_eval is not None
+            and best_move is not None
+            and _is_quiet_move(board, move)
+            and static_eval + 180 <= alpha
+        ):
+            stats.futility_prunes += 1
+            continue
         moving_turn = board.turn
         extension = 0
         if extensions_remaining > 0 and extension_fn is not None:
@@ -362,31 +438,104 @@ def _negamax(
                 extension = max(0, min(1, int(extension_fn(board, move, ply, depth))))
             except Exception:
                 extension = 0
+        reduced_depth = depth - 1 + extension
+        use_lmr = (
+            enable_lmr
+            and depth >= 3
+            and extension == 0
+            and move_index >= 4
+            and _is_quiet_move(board, move)
+            and not in_check
+        )
+        if use_lmr:
+            reduced_depth = max(0, reduced_depth - (2 if depth >= 5 and move_index >= 8 else 1))
         board.push(move)
         try:
-            score, _child_move = _negamax(
-                board,
-                depth=depth - 1 + extension,
-                alpha=-beta,
-                beta=-alpha,
-                color_sign=-color_sign,
-                ply=ply + 1,
-                evaluate=evaluate,
-                move_order_fn=move_order_fn,
-                qmove_filter=qmove_filter,
-                extension_fn=extension_fn,
-                extensions_remaining=max(0, extensions_remaining - extension),
-                stats=stats,
-                transposition=transposition,
-                hasher=hasher,
-                killer_moves=killer_moves,
-                history_heuristic=history_heuristic,
-                quiescence_depth=quiescence_depth,
-                deadline=deadline,
-            )
-            score = -score
+            if enable_pvs and searched_moves > 0 and depth >= 2:
+                score, _child_move = _negamax(
+                    board,
+                    depth=reduced_depth,
+                    alpha=-alpha - 1,
+                    beta=-alpha,
+                    color_sign=-color_sign,
+                    ply=ply + 1,
+                    evaluate=evaluate,
+                    move_order_fn=move_order_fn,
+                    qmove_filter=qmove_filter,
+                    extension_fn=extension_fn,
+                    extensions_remaining=max(0, extensions_remaining - extension),
+                    stats=stats,
+                    transposition=transposition,
+                    hasher=hasher,
+                    killer_moves=killer_moves,
+                    history_heuristic=history_heuristic,
+                    quiescence_depth=quiescence_depth,
+                    deadline=deadline,
+                    enable_pvs=enable_pvs,
+                    enable_lmr=enable_lmr,
+                    enable_null_move=enable_null_move,
+                    enable_futility=enable_futility,
+                    allow_null_move=True,
+                )
+                score = -score
+                if score > alpha and score < beta:
+                    stats.lmr_researches += 1 if use_lmr else 0
+                    score, _child_move = _negamax(
+                        board,
+                        depth=depth - 1 + extension,
+                        alpha=-beta,
+                        beta=-alpha,
+                        color_sign=-color_sign,
+                        ply=ply + 1,
+                        evaluate=evaluate,
+                        move_order_fn=move_order_fn,
+                        qmove_filter=qmove_filter,
+                        extension_fn=extension_fn,
+                        extensions_remaining=max(0, extensions_remaining - extension),
+                        stats=stats,
+                        transposition=transposition,
+                        hasher=hasher,
+                        killer_moves=killer_moves,
+                        history_heuristic=history_heuristic,
+                        quiescence_depth=quiescence_depth,
+                        deadline=deadline,
+                        enable_pvs=enable_pvs,
+                        enable_lmr=enable_lmr,
+                        enable_null_move=enable_null_move,
+                        enable_futility=enable_futility,
+                        allow_null_move=True,
+                    )
+                    score = -score
+            else:
+                score, _child_move = _negamax(
+                    board,
+                    depth=reduced_depth,
+                    alpha=-beta,
+                    beta=-alpha,
+                    color_sign=-color_sign,
+                    ply=ply + 1,
+                    evaluate=evaluate,
+                    move_order_fn=move_order_fn,
+                    qmove_filter=qmove_filter,
+                    extension_fn=extension_fn,
+                    extensions_remaining=max(0, extensions_remaining - extension),
+                    stats=stats,
+                    transposition=transposition,
+                    hasher=hasher,
+                    killer_moves=killer_moves,
+                    history_heuristic=history_heuristic,
+                    quiescence_depth=quiescence_depth,
+                    deadline=deadline,
+                    enable_pvs=enable_pvs,
+                    enable_lmr=enable_lmr,
+                    enable_null_move=enable_null_move,
+                    enable_futility=enable_futility,
+                    allow_null_move=True,
+                )
+                score = -score
         finally:
             board.pop()
+        searched_moves += 1
         if score > best_score or (score == best_score and best_move is not None and move.uci() < best_move.uci()):
             best_score = score
             best_move = move
@@ -431,6 +580,10 @@ def search_best_move(
     hasher: ZobristHasher | None = None,
     tt_max_entries: int = _DEFAULT_TT_MAX_ENTRIES,
     time_budget_ms: int | None = None,
+    enable_pvs: bool = False,
+    enable_lmr: bool = False,
+    enable_null_move: bool = False,
+    enable_futility: bool = False,
 ) -> SearchResult:
     if board.is_game_over():
         return SearchResult(best_move=None, score=0, depth=0, stats=SearchStats())
@@ -496,6 +649,11 @@ def search_best_move(
                     history_heuristic=history_heuristic,
                     quiescence_depth=max(0, int(quiescence_depth)),
                     deadline=deadline,
+                    enable_pvs=bool(enable_pvs),
+                    enable_lmr=bool(enable_lmr),
+                    enable_null_move=bool(enable_null_move),
+                    enable_futility=bool(enable_futility),
+                    allow_null_move=True,
                 )
             except SearchTimeout:
                 return SearchResult(

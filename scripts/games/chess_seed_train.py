@@ -26,7 +26,13 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from services.games.chess_dl import bundled_chess_dl_model_path  # noqa: E402
+from services.games.chess_dl import (  # noqa: E402
+    bundled_chess_dl_model_path,
+    default_chess_dl_model_path,
+    default_chess_dl_replay_path,
+    normalize_experiment_dl_replay_sample,
+    train_experiment_dl_from_replay_samples,
+)
 from services.games.chess_engine import bundled_chess_engine_db_path  # noqa: E402
 from services.games.chess_nn import bundled_chess_nn_model_path  # noqa: E402
 from services.games.chess_nnue import (  # noqa: E402
@@ -82,6 +88,8 @@ TRUSTED_SOURCE_WHITELIST = frozenset(
         "pvp_filtered",
         "human_beat_engine",
         "sparring_objective_hit",
+        "stockfish_teacher_audited",
+        "stockfish_played_move_clean",
     }
 )
 
@@ -94,6 +102,8 @@ DEFAULT_EXTERNAL_CAPS = {
     "pvp_filtered": 100,
     "human_beat_engine": 100,
     "sparring_objective_hit": 50,
+    "stockfish_teacher_audited": 300,
+    "stockfish_played_move_clean": 150,
 }
 DEFAULT_EXTERNAL_TOTAL_CAP = 300
 
@@ -218,6 +228,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--experiment-db-path", default="")
     parser.add_argument("--experiment-2-model-path", default="")
     parser.add_argument("--experiment-3-model-path", default="")
+    parser.add_argument(
+        "--experiment-3-replay-path",
+        default="",
+        help=(
+            "Replay buffer path for external replay rows trained into exp3. "
+            "If omitted with --experiment-3-model-path, an adjacent *_replay.jsonl file is used."
+        ),
+    )
+    parser.add_argument(
+        "--train-exp3-external-replay",
+        action="store_true",
+        help=(
+            "Also apply --include-replay-jsonl rows to exp3. Default is off for "
+            "backwards-compatible dry-runs; Stockfish-audited staging should enable it."
+        ),
+    )
     parser.add_argument("--experiment-4-model-path", default="")
     parser.add_argument("--experiment-5-model-path", default="")
     parser.add_argument(
@@ -246,11 +272,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help=(
             "Opt-in: allow non-dry-run --include-replay-jsonl to write to "
-            "the default exp4 / exp5 model paths. Without this flag the "
-            "script refuses to train external replay into the bundled / "
-            "runtime defaults — you must pass --experiment-4-model-path "
-            "(or --skip-exp4) and --experiment-5-model-path (or "
-            "--skip-exp5) so external replay only lands in explicit "
+            "the default exp3 / exp4 / exp5 model paths. Without this flag "
+            "the script refuses to train external replay into bundled / "
+            "runtime defaults — you must pass --experiment-3-model-path "
+            "(or --skip-exp3), --experiment-4-model-path (or --skip-exp4), "
+            "and --experiment-5-model-path (or --skip-exp5) so external replay only lands in explicit "
             "staging / candidate artifacts."
         ),
     )
@@ -259,17 +285,27 @@ def parse_args() -> argparse.Namespace:
 
 def _build_mutation_policy(args: argparse.Namespace) -> MutationPolicy:
     """Translate argparse.Namespace into the shared MutationPolicy contract."""
+    train_exp3_external_replay = bool(getattr(args, "train_exp3_external_replay", False))
     return MutationPolicy(
-        dry_run=bool(args.dry_run),
-        allow_default_model_paths=bool(args.allow_default_model_paths),
-        include_external_replay=bool(args.include_replay_jsonl),
+        dry_run=bool(getattr(args, "dry_run", False)),
+        allow_default_model_paths=bool(getattr(args, "allow_default_model_paths", False)),
+        include_external_replay=bool(getattr(args, "include_replay_jsonl", [])),
         engines=(
+            EngineMutationSpec(
+                engine_id="exp3 DL",
+                cli_path_flag="--experiment-3-model-path",
+                cli_skip_flag="--skip-exp3",
+                explicit_path=str(getattr(args, "experiment_3_model_path", "") or ""),
+                skip=bool(getattr(args, "skip_exp3", False) or not train_exp3_external_replay),
+                bundled_resolver=bundled_chess_dl_model_path,
+                default_resolver=default_chess_dl_model_path,
+            ),
             EngineMutationSpec(
                 engine_id="exp4 PV",
                 cli_path_flag="--experiment-4-model-path",
                 cli_skip_flag="--skip-exp4",
-                explicit_path=str(args.experiment_4_model_path or ""),
-                skip=bool(args.skip_exp4),
+                explicit_path=str(getattr(args, "experiment_4_model_path", "") or ""),
+                skip=bool(getattr(args, "skip_exp4", False)),
                 bundled_resolver=bundled_chess_pv_model_path,
                 default_resolver=default_chess_pv_model_path,
             ),
@@ -277,8 +313,8 @@ def _build_mutation_policy(args: argparse.Namespace) -> MutationPolicy:
                 engine_id="exp5 NNUE",
                 cli_path_flag="--experiment-5-model-path",
                 cli_skip_flag="--skip-exp5",
-                explicit_path=str(args.experiment_5_model_path or ""),
-                skip=bool(args.skip_exp5),
+                explicit_path=str(getattr(args, "experiment_5_model_path", "") or ""),
+                skip=bool(getattr(args, "skip_exp5", False)),
                 bundled_resolver=bundled_chess_nnue_model_path,
                 default_resolver=default_chess_nnue_model_path,
             ),
@@ -433,7 +469,7 @@ def _write_dryrun_payload_artifact(payload: dict, artifact_path: Path) -> Path:
 
 
 def _validate_normalize(samples: list[dict]) -> dict:
-    """Run each capped sample through the exp4 PV + exp5 NNUE normalizers.
+    """Run each capped sample through the exp3 DL + exp4 PV + exp5 NNUE normalizers.
 
     A pure-validation step (no model write, no replay buffer write) that
     proves a sample is acceptable to both trainers before the first real
@@ -445,11 +481,27 @@ def _validate_normalize(samples: list[dict]) -> dict:
         "exp4_failed": 0,
         "exp5_ok": 0,
         "exp5_failed": 0,
+        "exp3_ok": 0,
+        "exp3_failed": 0,
+        "exp3_failed_samples": [],
         "exp4_failed_samples": [],
         "exp5_failed_samples": [],
     }
     for s in samples:
         sid = str(s.get("source_id") or "")
+        try:
+            n3 = normalize_experiment_dl_replay_sample(s)
+        except Exception as exc:
+            n3 = None
+            sid_label = f"{sid}:{exc!r}" if sid else repr(exc)
+            if len(stats["exp3_failed_samples"]) < 5:
+                stats["exp3_failed_samples"].append(sid_label)
+        if n3 is not None:
+            stats["exp3_ok"] += 1
+        else:
+            stats["exp3_failed"] += 1
+            if sid and len(stats["exp3_failed_samples"]) < 5 and sid not in stats["exp3_failed_samples"]:
+                stats["exp3_failed_samples"].append(sid)
         try:
             n4 = normalize_experiment_pv_replay_sample(s)
         except Exception as exc:
@@ -482,31 +534,46 @@ def _validate_normalize(samples: list[dict]) -> dict:
 def _train_with_external_replay(
     samples: list[dict],
     *,
-    pv_model_path: Path,
-    nnue_model_path: Path,
-    dry_run: bool,
-    skip_exp4: bool,
+    dl_model_path: Path | None = None,
+    dl_replay_path: Path | None = None,
+    pv_model_path: Path | None = None,
+    nnue_model_path: Path | None = None,
+    dry_run: bool = False,
+    skip_exp3: bool = True,
+    skip_exp4: bool = False,
     skip_exp5: bool = False,
 ) -> dict:
-    """Train exp4 PV and exp5 NNUE with external replay samples.
+    """Train exp3 DL, exp4 PV, and exp5 NNUE with external replay samples.
 
     No-ops on empty sample list or dry_run.
     """
-    result: dict = {"trained_exp4": False, "trained_exp5": False, "sample_count": len(samples)}
+    result: dict = {"trained_exp3": False, "trained_exp4": False, "trained_exp5": False, "sample_count": len(samples)}
     if not samples:
         result["skipped_reason"] = "no_samples"
         return result
     if dry_run:
         result["skipped_reason"] = "dry_run"
         return result
+    resolved_dl_model_path = Path(dl_model_path or default_chess_dl_model_path())
+    resolved_dl_replay_path = Path(dl_replay_path or default_chess_dl_replay_path())
+    resolved_pv_model_path = Path(pv_model_path or default_chess_pv_model_path())
+    resolved_nnue_model_path = Path(nnue_model_path or default_chess_nnue_model_path())
+    if not skip_exp3:
+        result["exp3_train_report"] = train_experiment_dl_from_replay_samples(
+            samples,
+            model_path=resolved_dl_model_path,
+            replay_path=resolved_dl_replay_path,
+            replace_replay=False,
+        )
+        result["trained_exp3"] = True
     if not skip_exp4:
         result["exp4_train_report"] = train_experiment_pv_from_replay_samples(
-            samples, model_path=pv_model_path
+            samples, model_path=resolved_pv_model_path
         )
         result["trained_exp4"] = True
     if not skip_exp5:
         result["exp5_train_report"] = train_experiment_nnue_from_replay_samples(
-            samples, model_path=nnue_model_path
+            samples, model_path=resolved_nnue_model_path
         )
         result["trained_exp5"] = True
     return result
@@ -523,6 +590,14 @@ def _model_stats(path: Path) -> dict:
         "architecture": str(payload.get("architecture") or ""),
         "version": int(payload.get("version") or 0),
     }
+
+
+def _resolved_exp3_replay_path(args: argparse.Namespace, dl_model_path: Path) -> Path:
+    if args.experiment_3_replay_path:
+        return Path(args.experiment_3_replay_path).expanduser().resolve()
+    if args.experiment_3_model_path:
+        return dl_model_path.with_name(f"{dl_model_path.stem}_replay.jsonl")
+    return default_chess_dl_replay_path()
 
 
 @contextmanager
@@ -604,12 +679,14 @@ def main() -> int:
     store = ChessExperimentStore(args.experiment_db_path or bundled_chess_engine_db_path())
     nn_model_path = Path(args.experiment_2_model_path or bundled_chess_nn_model_path())
     dl_model_path = Path(args.experiment_3_model_path or bundled_chess_dl_model_path())
+    dl_replay_path = _resolved_exp3_replay_path(args, dl_model_path)
     pv_model_path = Path(args.experiment_4_model_path or bundled_chess_pv_model_path())
-    nnue_model_path = Path(args.experiment_5_model_path or bundled_chess_nnue_model_path())
+    nnue_model_path = Path(args.experiment_5_model_path or default_chess_nnue_model_path())
     _progress(f"preset: {args.preset} seed={int(args.seed)}")
     _progress(f"target exp1 db: {Path(args.experiment_db_path or bundled_chess_engine_db_path())}")
     _progress(f"target exp2 model: {nn_model_path}")
     _progress(f"target exp3 model: {dl_model_path}")
+    _progress(f"target exp3 replay: {dl_replay_path}")
     _progress(f"target exp4 model: {pv_model_path}")
     _progress(f"target exp5 model: {nnue_model_path}")
     _progress(f"report dir: {Path(args.report_dir)}")
@@ -707,13 +784,18 @@ def main() -> int:
         external_block["cap_stats"] = cap_stats
         external_block["normalize_validation"] = _validate_normalize(capped_samples)
         external_block["dry_run"] = bool(args.dry_run)
+        external_block["train_exp3_external_replay"] = bool(args.train_exp3_external_replay)
+        external_block["skip_exp3"] = bool(args.skip_exp3)
         external_block["skip_exp4"] = bool(args.skip_exp4)
         external_block["skip_exp5"] = bool(args.skip_exp5)
         train_result = _train_with_external_replay(
             capped_samples,
+            dl_model_path=dl_model_path,
+            dl_replay_path=dl_replay_path,
             pv_model_path=pv_model_path,
             nnue_model_path=nnue_model_path,
             dry_run=bool(args.dry_run),
+            skip_exp3=bool(args.skip_exp3 or not args.train_exp3_external_replay),
             skip_exp4=bool(args.skip_exp4),
             skip_exp5=bool(args.skip_exp5),
         )
@@ -725,8 +807,10 @@ def main() -> int:
             f"raw_rows={load_stats['rows_total']} "
             f"kept={load_stats['rows_kept']} "
             f"after_caps={cap_stats['total_kept']} "
+            f"normalize_exp3={nv['exp3_ok']}/{nv['exp3_ok'] + nv['exp3_failed']} "
             f"normalize_exp4={nv['exp4_ok']}/{nv['exp4_ok'] + nv['exp4_failed']} "
             f"normalize_exp5={nv['exp5_ok']}/{nv['exp5_ok'] + nv['exp5_failed']} "
+            f"trained_exp3={train_result['trained_exp3']} "
             f"trained_exp4={train_result['trained_exp4']} "
             f"trained_exp5={train_result['trained_exp5']}"
         )
@@ -745,6 +829,7 @@ def main() -> int:
         "models": {
             "exp2": _model_stats(nn_model_path),
             "exp3": _model_stats(dl_model_path),
+            "exp3_replay": {"path": str(dl_replay_path), "exists": dl_replay_path.exists()},
             "exp4": _model_stats(pv_model_path),
             "exp5": _model_stats(nnue_model_path),
         },

@@ -89,6 +89,21 @@ scripts/security/pentest/run_pentest.sh
 
 用途：安全測試總入口。
 
+## Admin / Recovery
+
+### `admin/decrypt_server_files.py`
+
+```text
+scripts/admin/decrypt_server_files.py
+  -> uploaded_files rows where privacy_mode=server_encrypted
+  -> services/storage/paths.py::resolve_storage_path(...)
+  -> SERVER_FILE_ENCRYPTION_KEY or runtime .filekey
+  -> cryptography.fernet.Fernet.decrypt(...)
+  -> plaintext output directory + manifest JSON
+```
+
+用途：在伺服器端檔案金鑰仍可用時，離線解密 server-side encrypted 檔案；不解 E2EE 檔案。腳本 help、stderr 與 manifest 會明確警告：解密可能破壞與網頁使用者間的信任或觸犯隱私相關法律，操作後果請自行負責。
+
 ## Frontend / Playwright
 
 ### `testing/playwright_platform_health_check.py`
@@ -166,21 +181,64 @@ scripts/games/setup_katago.py
 
 用途：安裝 Go 的 KataGo 難度依賴。
 
-### Chess Exp5 評測與訓練鏈
+### Chess PGN / Stockfish Teacher / Exp3-5 訓練鏈
 
 ```text
-chess_pgn_to_replay.py / chess_pvp_history_to_replay.py / chess_sparring_to_replay.py
+chess_pgn_to_replay.py
+  -> local PGN or --source-url download cache
   -> replay JSONL
+  -> --stockfish-filter (optional)
+    -> chess_stockfish_teacher_audit.py
+      -> stockfish_teacher_train_rows.jsonl
+      -> stockfish_teacher_eval_rows.jsonl
+      -> stockfish_played_clean_rows.jsonl
+  -> chess_pipeline_dryrun.py --pgn-audit-backend stockfish (optional orchestrated path)
+
+chess_pvp_history_to_replay.py / chess_sparring_to_replay.py
+  -> replay JSONL
+  -> chess_stockfish_teacher_audit.py (optional local external Stockfish teacher/filter)
+    -> stockfish_teacher_rows.jsonl
+    -> stockfish_teacher_train_rows.jsonl / stockfish_teacher_eval_rows.jsonl
+
+stockfish_teacher_train_rows.jsonl / stockfish_played_clean_rows.jsonl
+  -> chess_seed_train.py --include-replay-jsonl ... --train-exp3-external-replay
+    -> exp3 DL candidate model + adjacent replay ledger
+    -> exp4 PV candidate model
+    -> exp5 experience/candidate artifact
+  -> chess_teacher_eval_probe.py
+    -> baseline-vs-candidate teacher holdout rank report
+
+FEN or replay rows
   -> chess_exp5_teacher_distill.py
     -> teacher-selected FEN/move rows
+  -> chess_exp3_dataset_train.py --teacher-backend stockfish (optional)
+  -> chess_exp4_dataset_train.py --teacher-backend stockfish (optional)
+  -> chess_exp5_dataset_train.py
+
+exp5 candidate artifacts
   -> chess_exp5_dataset_train.py / chess_exp5_retrain_pipeline.py
     -> candidate model
   -> chess_exp5_strength_gate.py
   -> chess_exp5_tactical_suite.py
   -> chess_exp5_gauntlet.py
+    -> chess_gauntlet_extract_positions.py --actor ai --result draw
+      -> chess_stockfish_teacher_audit.py
+    -> chess_gauntlet_extract_positions.py --actor ai --tail-actor-moves 12
+      -> chess_stockfish_teacher_audit.py
+      -> tail/endgame conversion audit for the final AI decisions in complete games
+  -> chess_exp5_validation_probe.py --questions 50
+    -> services/games/chess_nnue.py::choose_experiment_nnue_move(...)
+    -> services/games/chess_stockfish_teacher.py::UciStockfish MultiPV
+    -> docs/games/evidence/exp5/*heldout_validation_50_stockfish.{json,jsonl}
   -> chess_exp5_production_readiness.py
   -> chess_exp5_promote_candidate.py
 ```
+
+`chess_stockfish_teacher_audit.py` and `chess_pgn_to_replay.py --stockfish-filter`
+only run when the caller provides or the environment resolves a local Stockfish
+UCI binary. The binary is not part of the repo and is intentionally outside the
+maintained script assets. Downloaded PGN rows remain diagnostic until they pass a
+teacher/audit filter and are explicitly fed to staged model paths.
 
 主要輸出：
 

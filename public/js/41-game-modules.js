@@ -12,7 +12,7 @@
     { key: "open_world", title: "都市開放世界", subtitle: "3D 城市探索 / 駕車任務 / 警戒追逐" },
     { key: "bullet_hell", title: "彈幕遊戲", subtitle: "閃避密集彈幕並反擊" },
     { key: "stickman_shooter", title: "火柴人橫向射擊", subtitle: "2D 側捲平台射擊 / 合作解謎" },
-    { key: "real_tetris", title: "真實版俄羅斯方塊", subtitle: "剛體物理與放寬消線" },
+    { key: "real_tetris", title: "真實版俄羅斯方塊", subtitle: "剛體物理與 90% 消線" },
     { key: "snake", title: "貪食蛇", subtitle: "滑動或方向鍵控制蛇吃食物" },
     { key: "game_2048", title: "2048", subtitle: "合併數字方塊，挑戰最高分" },
     { key: "brick_breaker", title: "打磚塊", subtitle: "移動擋板反彈球打掉磚塊" },
@@ -69,7 +69,7 @@
 
   function storageGetJson(key, fallback) {
     try {
-      const raw = window.localStorage?.getItem(key);
+      const raw = window.localStorage?.getItem(gameUserStorageKey(key));
       return raw ? JSON.parse(raw) : fallback;
     } catch (err) {
       return fallback;
@@ -78,10 +78,22 @@
 
   function storageSetJson(key, value) {
     try {
-      window.localStorage?.setItem(key, JSON.stringify(value));
+      window.localStorage?.setItem(gameUserStorageKey(key), JSON.stringify(value));
     } catch (err) {
       // Local storage is optional; games continue without persistent badges.
     }
+  }
+
+  function gameUserStorageScope() {
+    const id = typeof currentUserId !== "undefined" && currentUserId !== null ? String(currentUserId).trim() : "";
+    if (id) return `user:${id}`;
+    const username = typeof currentUser !== "undefined" && currentUser ? String(currentUser).trim() : "";
+    if (username) return `name:${username.replace(/[^a-zA-Z0-9_.:-]/g, "_").slice(0, 64)}`;
+    return "anonymous";
+  }
+
+  function gameUserStorageKey(key) {
+    return `${key}:${gameUserStorageScope()}`;
   }
 
   function hashGameString(value) {
@@ -154,7 +166,7 @@
     real_tetris: [
       { id: "physics-600", label: "物理版 600 分", target: 600, metric: "score" },
       { id: "collapse-2", label: "觸發 2 次倒塌", target: 2, metric: "collapse" },
-      { id: "line-2", label: "放寬消線 2 行", target: 2, metric: "lines" },
+      { id: "line-2", label: "90% 消線 2 行", target: 2, metric: "lines" },
     ],
     space_shooter: [
       { id: "score-1500", label: "出擊 1500 分", target: 1500, metric: "score" },
@@ -336,6 +348,7 @@
       "experiment 3:dl": "DL 語義平衡實驗；偏研究模型。",
       "experiment 4:pv": "Policy/Value + MCTS 實驗；有候選策略。",
       "experiment 5:nnue": "NNUE + AlphaBeta/PVS；目前最有潛力但仍需實戰 gate。",
+      stockfish: "Stockfish 本機外部引擎；只在 server 偵測到本機 binary 時顯示。",
     },
   };
 
@@ -399,6 +412,7 @@
     const complete = Boolean(old.complete) || nextProgress >= Number(target || 1);
     day[id] = {
       id,
+      userScope: gameUserStorageScope(),
       label: label || old.label || id,
       progress: nextProgress,
       target: Number(target || old.target || 1),
@@ -428,6 +442,7 @@
     if (store[key]) return { unlocked: false, ...store[key] };
     const row = {
       key,
+      userScope: gameUserStorageScope(),
       gameKey,
       id,
       label: label || id,
@@ -463,6 +478,7 @@
     const rows = Array.isArray(store[gameKey]) ? store[gameKey] : [];
     const row = {
       id: `${gameKey}-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+      userScope: gameUserStorageScope(),
       gameKey,
       title: payload.title || (byKey(gameKey)?.title || gameKey),
       score: Number(payload.score || 0),

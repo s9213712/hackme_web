@@ -1,0 +1,3481 @@
+{
+  "engine": "experiment 5:nnue",
+  "games": [
+    {
+      "codex_color": "white",
+      "codex_material_cp": 340,
+      "complete_game": true,
+      "difficulty": "experiment 5:nnue",
+      "elapsed_ms": 4680.742,
+      "final_fen": "5rk1/r4p1p/p7/2P4N/P7/8/1PP3PN/R5K1 w - - 7 27",
+      "game_key": "chess",
+      "invalid": [],
+      "moves": [
+        {
+          "actor": "book",
+          "decision": {
+            "opening_id": "french"
+          },
+          "fen_after": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
+          "fen_before": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+          "ply": 1,
+          "san": "e4",
+          "uci": "e2e4"
+        },
+        {
+          "actor": "book",
+          "decision": {
+            "opening_id": "french"
+          },
+          "fen_after": "rnbqkbnr/pppp1ppp/4p3/8/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2",
+          "fen_before": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
+          "ply": 2,
+          "san": "e6",
+          "uci": "e7e6"
+        },
+        {
+          "actor": "book",
+          "decision": {
+            "opening_id": "french"
+          },
+          "fen_after": "rnbqkbnr/pppp1ppp/4p3/8/3PP3/8/PPP2PPP/RNBQKBNR b KQkq - 0 2",
+          "fen_before": "rnbqkbnr/pppp1ppp/4p3/8/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2",
+          "ply": 3,
+          "san": "d4",
+          "uci": "d2d4"
+        },
+        {
+          "actor": "book",
+          "decision": {
+            "opening_id": "french"
+          },
+          "fen_after": "rnbqkbnr/ppp2ppp/4p3/3p4/3PP3/8/PPP2PPP/RNBQKBNR w KQkq - 0 3",
+          "fen_before": "rnbqkbnr/pppp1ppp/4p3/8/3PP3/8/PPP2PPP/RNBQKBNR b KQkq - 0 2",
+          "ply": 4,
+          "san": "d5",
+          "uci": "d7d5"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "e4d5"
+          },
+          "fen_after": "rnbqkbnr/ppp2ppp/4p3/3P4/3P4/8/PPP2PPP/RNBQKBNR b KQkq - 0 3",
+          "fen_before": "rnbqkbnr/ppp2ppp/4p3/3p4/3PP3/8/PPP2PPP/RNBQKBNR w KQkq - 0 3",
+          "ply": 5,
+          "san": "exd5",
+          "uci": "e4d5"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "f8",
+            "piece": "b",
+            "promotion": null,
+            "to": "d6",
+            "uci": "f8d6"
+          },
+          "fen_after": "rnbqk1nr/ppp2ppp/3bp3/3P4/3P4/8/PPP2PPP/RNBQKBNR w KQkq - 1 4",
+          "fen_before": "rnbqkbnr/ppp2ppp/4p3/3P4/3P4/8/PPP2PPP/RNBQKBNR b KQkq - 0 3",
+          "ply": 6,
+          "san": "Bd6",
+          "uci": "f8d6"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "d5e6"
+          },
+          "fen_after": "rnbqk1nr/ppp2ppp/3bP3/8/3P4/8/PPP2PPP/RNBQKBNR b KQkq - 0 4",
+          "fen_before": "rnbqk1nr/ppp2ppp/3bp3/3P4/3P4/8/PPP2PPP/RNBQKBNR w KQkq - 1 4",
+          "ply": 7,
+          "san": "dxe6",
+          "uci": "d5e6"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": "P",
+            "castle": false,
+            "en_passant": false,
+            "from": "c8",
+            "piece": "b",
+            "promotion": null,
+            "to": "e6",
+            "uci": "c8e6"
+          },
+          "fen_after": "rn1qk1nr/ppp2ppp/3bb3/8/3P4/8/PPP2PPP/RNBQKBNR w KQkq - 0 5",
+          "fen_before": "rnbqk1nr/ppp2ppp/3bP3/8/3P4/8/PPP2PPP/RNBQKBNR b KQkq - 0 4",
+          "ply": 8,
+          "san": "Bxe6",
+          "uci": "c8e6"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "f1b5"
+          },
+          "fen_after": "rn1qk1nr/ppp2ppp/3bb3/1B6/3P4/8/PPP2PPP/RNBQK1NR b KQkq - 1 5",
+          "fen_before": "rn1qk1nr/ppp2ppp/3bb3/8/3P4/8/PPP2PPP/RNBQKBNR w KQkq - 0 5",
+          "ply": 9,
+          "san": "Bb5+",
+          "uci": "f1b5"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "b8",
+            "piece": "n",
+            "promotion": null,
+            "to": "c6",
+            "uci": "b8c6"
+          },
+          "fen_after": "r2qk1nr/ppp2ppp/2nbb3/1B6/3P4/8/PPP2PPP/RNBQK1NR w KQkq - 2 6",
+          "fen_before": "rn1qk1nr/ppp2ppp/3bb3/1B6/3P4/8/PPP2PPP/RNBQK1NR b KQkq - 1 5",
+          "ply": 10,
+          "san": "Nc6",
+          "uci": "b8c6"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "b5c6"
+          },
+          "fen_after": "r2qk1nr/ppp2ppp/2Bbb3/8/3P4/8/PPP2PPP/RNBQK1NR b KQkq - 0 6",
+          "fen_before": "r2qk1nr/ppp2ppp/2nbb3/1B6/3P4/8/PPP2PPP/RNBQK1NR w KQkq - 2 6",
+          "ply": 11,
+          "san": "Bxc6+",
+          "uci": "b5c6"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": "B",
+            "castle": false,
+            "en_passant": false,
+            "from": "b7",
+            "piece": "p",
+            "promotion": null,
+            "to": "c6",
+            "uci": "b7c6"
+          },
+          "fen_after": "r2qk1nr/p1p2ppp/2pbb3/8/3P4/8/PPP2PPP/RNBQK1NR w KQkq - 0 7",
+          "fen_before": "r2qk1nr/ppp2ppp/2Bbb3/8/3P4/8/PPP2PPP/RNBQK1NR b KQkq - 0 6",
+          "ply": 12,
+          "san": "bxc6",
+          "uci": "b7c6"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "g1f3"
+          },
+          "fen_after": "r2qk1nr/p1p2ppp/2pbb3/8/3P4/5N2/PPP2PPP/RNBQK2R b KQkq - 1 7",
+          "fen_before": "r2qk1nr/p1p2ppp/2pbb3/8/3P4/8/PPP2PPP/RNBQK1NR w KQkq - 0 7",
+          "ply": 13,
+          "san": "Nf3",
+          "uci": "g1f3"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "g8",
+            "piece": "n",
+            "promotion": null,
+            "to": "f6",
+            "uci": "g8f6"
+          },
+          "fen_after": "r2qk2r/p1p2ppp/2pbbn2/8/3P4/5N2/PPP2PPP/RNBQK2R w KQkq - 2 8",
+          "fen_before": "r2qk1nr/p1p2ppp/2pbb3/8/3P4/5N2/PPP2PPP/RNBQK2R b KQkq - 1 7",
+          "ply": 14,
+          "san": "Nf6",
+          "uci": "g8f6"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "e1g1"
+          },
+          "fen_after": "r2qk2r/p1p2ppp/2pbbn2/8/3P4/5N2/PPP2PPP/RNBQ1RK1 b kq - 3 8",
+          "fen_before": "r2qk2r/p1p2ppp/2pbbn2/8/3P4/5N2/PPP2PPP/RNBQK2R w KQkq - 2 8",
+          "ply": 15,
+          "san": "O-O",
+          "uci": "e1g1"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": true,
+            "en_passant": false,
+            "from": "e8",
+            "piece": "k",
+            "promotion": null,
+            "to": "g8",
+            "uci": "e8g8"
+          },
+          "fen_after": "r2q1rk1/p1p2ppp/2pbbn2/8/3P4/5N2/PPP2PPP/RNBQ1RK1 w - - 4 9",
+          "fen_before": "r2qk2r/p1p2ppp/2pbbn2/8/3P4/5N2/PPP2PPP/RNBQ1RK1 b kq - 3 8",
+          "ply": 16,
+          "san": "O-O",
+          "uci": "e8g8"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "b1c3"
+          },
+          "fen_after": "r2q1rk1/p1p2ppp/2pbbn2/8/3P4/2N2N2/PPP2PPP/R1BQ1RK1 b - - 5 9",
+          "fen_before": "r2q1rk1/p1p2ppp/2pbbn2/8/3P4/5N2/PPP2PPP/RNBQ1RK1 w - - 4 9",
+          "ply": 17,
+          "san": "Nc3",
+          "uci": "b1c3"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "c6",
+            "piece": "p",
+            "promotion": null,
+            "to": "c5",
+            "uci": "c6c5"
+          },
+          "fen_after": "r2q1rk1/p1p2ppp/3bbn2/2p5/3P4/2N2N2/PPP2PPP/R1BQ1RK1 w - - 0 10",
+          "fen_before": "r2q1rk1/p1p2ppp/2pbbn2/8/3P4/2N2N2/PPP2PPP/R1BQ1RK1 b - - 5 9",
+          "ply": 18,
+          "san": "c5",
+          "uci": "c6c5"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "d4c5"
+          },
+          "fen_after": "r2q1rk1/p1p2ppp/3bbn2/2P5/8/2N2N2/PPP2PPP/R1BQ1RK1 b - - 0 10",
+          "fen_before": "r2q1rk1/p1p2ppp/3bbn2/2p5/3P4/2N2N2/PPP2PPP/R1BQ1RK1 w - - 0 10",
+          "ply": 19,
+          "san": "dxc5",
+          "uci": "d4c5"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": "P",
+            "castle": false,
+            "en_passant": false,
+            "from": "d6",
+            "piece": "b",
+            "promotion": null,
+            "to": "h2",
+            "uci": "d6h2"
+          },
+          "fen_after": "r2q1rk1/p1p2ppp/4bn2/2P5/8/2N2N2/PPP2PPb/R1BQ1RK1 w - - 0 11",
+          "fen_before": "r2q1rk1/p1p2ppp/3bbn2/2P5/8/2N2N2/PPP2PPP/R1BQ1RK1 b - - 0 10",
+          "ply": 20,
+          "san": "Bxh2+",
+          "uci": "d6h2"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "f3h2"
+          },
+          "fen_after": "r2q1rk1/p1p2ppp/4bn2/2P5/8/2N5/PPP2PPN/R1BQ1RK1 b - - 0 11",
+          "fen_before": "r2q1rk1/p1p2ppp/4bn2/2P5/8/2N2N2/PPP2PPb/R1BQ1RK1 w - - 0 11",
+          "ply": 21,
+          "san": "Nxh2",
+          "uci": "f3h2"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": "Q",
+            "castle": false,
+            "en_passant": false,
+            "from": "d8",
+            "piece": "q",
+            "promotion": null,
+            "to": "d1",
+            "uci": "d8d1"
+          },
+          "fen_after": "r4rk1/p1p2ppp/4bn2/2P5/8/2N5/PPP2PPN/R1Bq1RK1 w - - 0 12",
+          "fen_before": "r2q1rk1/p1p2ppp/4bn2/2P5/8/2N5/PPP2PPN/R1BQ1RK1 b - - 0 11",
+          "ply": 22,
+          "san": "Qxd1",
+          "uci": "d8d1"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "f1d1"
+          },
+          "fen_after": "r4rk1/p1p2ppp/4bn2/2P5/8/2N5/PPP2PPN/R1BR2K1 b - - 0 12",
+          "fen_before": "r4rk1/p1p2ppp/4bn2/2P5/8/2N5/PPP2PPN/R1Bq1RK1 w - - 0 12",
+          "ply": 23,
+          "san": "Rxd1",
+          "uci": "f1d1"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "a7",
+            "piece": "p",
+            "promotion": null,
+            "to": "a6",
+            "uci": "a7a6"
+          },
+          "fen_after": "r4rk1/2p2ppp/p3bn2/2P5/8/2N5/PPP2PPN/R1BR2K1 w - - 0 13",
+          "fen_before": "r4rk1/p1p2ppp/4bn2/2P5/8/2N5/PPP2PPN/R1BR2K1 b - - 0 12",
+          "ply": 24,
+          "san": "a6",
+          "uci": "a7a6"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "a2a4"
+          },
+          "fen_after": "r4rk1/2p2ppp/p3bn2/2P5/P7/2N5/1PP2PPN/R1BR2K1 b - - 0 13",
+          "fen_before": "r4rk1/2p2ppp/p3bn2/2P5/8/2N5/PPP2PPN/R1BR2K1 w - - 0 13",
+          "ply": 25,
+          "san": "a4",
+          "uci": "a2a4"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "a8",
+            "piece": "r",
+            "promotion": null,
+            "to": "a7",
+            "uci": "a8a7"
+          },
+          "fen_after": "5rk1/r1p2ppp/p3bn2/2P5/P7/2N5/1PP2PPN/R1BR2K1 w - - 1 14",
+          "fen_before": "r4rk1/2p2ppp/p3bn2/2P5/P7/2N5/1PP2PPN/R1BR2K1 b - - 0 13",
+          "ply": 26,
+          "san": "Ra7",
+          "uci": "a8a7"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "c1f4"
+          },
+          "fen_after": "5rk1/r1p2ppp/p3bn2/2P5/P4B2/2N5/1PP2PPN/R2R2K1 b - - 2 14",
+          "fen_before": "5rk1/r1p2ppp/p3bn2/2P5/P7/2N5/1PP2PPN/R1BR2K1 w - - 1 14",
+          "ply": 27,
+          "san": "Bf4",
+          "uci": "c1f4"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "a7",
+            "piece": "r",
+            "promotion": null,
+            "to": "b7",
+            "uci": "a7b7"
+          },
+          "fen_after": "5rk1/1rp2ppp/p3bn2/2P5/P4B2/2N5/1PP2PPN/R2R2K1 w - - 3 15",
+          "fen_before": "5rk1/r1p2ppp/p3bn2/2P5/P4B2/2N5/1PP2PPN/R2R2K1 b - - 2 14",
+          "ply": 28,
+          "san": "Rb7",
+          "uci": "a7b7"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "f4c7"
+          },
+          "fen_after": "5rk1/1rB2ppp/p3bn2/2P5/P7/2N5/1PP2PPN/R2R2K1 b - - 0 15",
+          "fen_before": "5rk1/1rp2ppp/p3bn2/2P5/P4B2/2N5/1PP2PPN/R2R2K1 w - - 3 15",
+          "ply": 29,
+          "san": "Bxc7",
+          "uci": "f4c7"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": "B",
+            "castle": false,
+            "en_passant": false,
+            "from": "b7",
+            "piece": "r",
+            "promotion": null,
+            "to": "c7",
+            "uci": "b7c7"
+          },
+          "fen_after": "5rk1/2r2ppp/p3bn2/2P5/P7/2N5/1PP2PPN/R2R2K1 w - - 0 16",
+          "fen_before": "5rk1/1rB2ppp/p3bn2/2P5/P7/2N5/1PP2PPN/R2R2K1 b - - 0 15",
+          "ply": 30,
+          "san": "Rxc7",
+          "uci": "b7c7"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "f2f4"
+          },
+          "fen_after": "5rk1/2r2ppp/p3bn2/2P5/P4P2/2N5/1PP3PN/R2R2K1 b - - 0 16",
+          "fen_before": "5rk1/2r2ppp/p3bn2/2P5/P7/2N5/1PP2PPN/R2R2K1 w - - 0 16",
+          "ply": 31,
+          "san": "f4",
+          "uci": "f2f4"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "c7",
+            "piece": "r",
+            "promotion": null,
+            "to": "a7",
+            "uci": "c7a7"
+          },
+          "fen_after": "5rk1/r4ppp/p3bn2/2P5/P4P2/2N5/1PP3PN/R2R2K1 w - - 1 17",
+          "fen_before": "5rk1/2r2ppp/p3bn2/2P5/P4P2/2N5/1PP3PN/R2R2K1 b - - 0 16",
+          "ply": 32,
+          "san": "Ra7",
+          "uci": "c7a7"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "d1d4"
+          },
+          "fen_after": "5rk1/r4ppp/p3bn2/2P5/P2R1P2/2N5/1PP3PN/R5K1 b - - 2 17",
+          "fen_before": "5rk1/r4ppp/p3bn2/2P5/P4P2/2N5/1PP3PN/R2R2K1 w - - 1 17",
+          "ply": 33,
+          "san": "Rd4",
+          "uci": "d1d4"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "a7",
+            "piece": "r",
+            "promotion": null,
+            "to": "b7",
+            "uci": "a7b7"
+          },
+          "fen_after": "5rk1/1r3ppp/p3bn2/2P5/P2R1P2/2N5/1PP3PN/R5K1 w - - 3 18",
+          "fen_before": "5rk1/r4ppp/p3bn2/2P5/P2R1P2/2N5/1PP3PN/R5K1 b - - 2 17",
+          "ply": 34,
+          "san": "Rb7",
+          "uci": "a7b7"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "f4f5"
+          },
+          "fen_after": "5rk1/1r3ppp/p3bn2/2P2P2/P2R4/2N5/1PP3PN/R5K1 b - - 0 18",
+          "fen_before": "5rk1/1r3ppp/p3bn2/2P5/P2R1P2/2N5/1PP3PN/R5K1 w - - 3 18",
+          "ply": 35,
+          "san": "f5",
+          "uci": "f4f5"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": "P",
+            "castle": false,
+            "en_passant": false,
+            "from": "e6",
+            "piece": "b",
+            "promotion": null,
+            "to": "f5",
+            "uci": "e6f5"
+          },
+          "fen_after": "5rk1/1r3ppp/p4n2/2P2b2/P2R4/2N5/1PP3PN/R5K1 w - - 0 19",
+          "fen_before": "5rk1/1r3ppp/p3bn2/2P2P2/P2R4/2N5/1PP3PN/R5K1 b - - 0 18",
+          "ply": 36,
+          "san": "Bxf5",
+          "uci": "e6f5"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "d4f4"
+          },
+          "fen_after": "5rk1/1r3ppp/p4n2/2P2b2/P4R2/2N5/1PP3PN/R5K1 b - - 1 19",
+          "fen_before": "5rk1/1r3ppp/p4n2/2P2b2/P2R4/2N5/1PP3PN/R5K1 w - - 0 19",
+          "ply": 37,
+          "san": "Rf4",
+          "uci": "d4f4"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "b7",
+            "piece": "r",
+            "promotion": null,
+            "to": "a7",
+            "uci": "b7a7"
+          },
+          "fen_after": "5rk1/r4ppp/p4n2/2P2b2/P4R2/2N5/1PP3PN/R5K1 w - - 2 20",
+          "fen_before": "5rk1/1r3ppp/p4n2/2P2b2/P4R2/2N5/1PP3PN/R5K1 b - - 1 19",
+          "ply": 38,
+          "san": "Ra7",
+          "uci": "b7a7"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "f4f5"
+          },
+          "fen_after": "5rk1/r4ppp/p4n2/2P2R2/P7/2N5/1PP3PN/R5K1 b - - 0 20",
+          "fen_before": "5rk1/r4ppp/p4n2/2P2b2/P4R2/2N5/1PP3PN/R5K1 w - - 2 20",
+          "ply": 39,
+          "san": "Rxf5",
+          "uci": "f4f5"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "a7",
+            "piece": "r",
+            "promotion": null,
+            "to": "a8",
+            "uci": "a7a8"
+          },
+          "fen_after": "r4rk1/5ppp/p4n2/2P2R2/P7/2N5/1PP3PN/R5K1 w - - 1 21",
+          "fen_before": "5rk1/r4ppp/p4n2/2P2R2/P7/2N5/1PP3PN/R5K1 b - - 0 20",
+          "ply": 40,
+          "san": "Raa8",
+          "uci": "a7a8"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "f5f6"
+          },
+          "fen_after": "r4rk1/5ppp/p4R2/2P5/P7/2N5/1PP3PN/R5K1 b - - 0 21",
+          "fen_before": "r4rk1/5ppp/p4n2/2P2R2/P7/2N5/1PP3PN/R5K1 w - - 1 21",
+          "ply": 41,
+          "san": "Rxf6",
+          "uci": "f5f6"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": "R",
+            "castle": false,
+            "en_passant": false,
+            "from": "g7",
+            "piece": "p",
+            "promotion": null,
+            "to": "f6",
+            "uci": "g7f6"
+          },
+          "fen_after": "r4rk1/5p1p/p4p2/2P5/P7/2N5/1PP3PN/R5K1 w - - 0 22",
+          "fen_before": "r4rk1/5ppp/p4R2/2P5/P7/2N5/1PP3PN/R5K1 b - - 0 21",
+          "ply": 42,
+          "san": "gxf6",
+          "uci": "g7f6"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "c3e4"
+          },
+          "fen_after": "r4rk1/5p1p/p4p2/2P5/P3N3/8/1PP3PN/R5K1 b - - 1 22",
+          "fen_before": "r4rk1/5p1p/p4p2/2P5/P7/2N5/1PP3PN/R5K1 w - - 0 22",
+          "ply": 43,
+          "san": "Ne4",
+          "uci": "c3e4"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "a8",
+            "piece": "r",
+            "promotion": null,
+            "to": "a7",
+            "uci": "a8a7"
+          },
+          "fen_after": "5rk1/r4p1p/p4p2/2P5/P3N3/8/1PP3PN/R5K1 w - - 2 23",
+          "fen_before": "r4rk1/5p1p/p4p2/2P5/P3N3/8/1PP3PN/R5K1 b - - 1 22",
+          "ply": 44,
+          "san": "Ra7",
+          "uci": "a8a7"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "e4f6"
+          },
+          "fen_after": "5rk1/r4p1p/p4N2/2P5/P7/8/1PP3PN/R5K1 b - - 0 23",
+          "fen_before": "5rk1/r4p1p/p4p2/2P5/P3N3/8/1PP3PN/R5K1 w - - 2 23",
+          "ply": 45,
+          "san": "Nxf6+",
+          "uci": "e4f6"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "g8",
+            "piece": "k",
+            "promotion": null,
+            "to": "g7",
+            "uci": "g8g7"
+          },
+          "fen_after": "5r2/r4pkp/p4N2/2P5/P7/8/1PP3PN/R5K1 w - - 1 24",
+          "fen_before": "5rk1/r4p1p/p4N2/2P5/P7/8/1PP3PN/R5K1 b - - 0 23",
+          "ply": 46,
+          "san": "Kg7",
+          "uci": "g8g7"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "f6h5"
+          },
+          "fen_after": "5r2/r4pkp/p7/2P4N/P7/8/1PP3PN/R5K1 b - - 2 24",
+          "fen_before": "5r2/r4pkp/p4N2/2P5/P7/8/1PP3PN/R5K1 w - - 1 24",
+          "ply": 47,
+          "san": "Nh5+",
+          "uci": "f6h5"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "g7",
+            "piece": "k",
+            "promotion": null,
+            "to": "g8",
+            "uci": "g7g8"
+          },
+          "fen_after": "5rk1/r4p1p/p7/2P4N/P7/8/1PP3PN/R5K1 w - - 3 25",
+          "fen_before": "5r2/r4pkp/p7/2P4N/P7/8/1PP3PN/R5K1 b - - 2 24",
+          "ply": 48,
+          "san": "Kg8",
+          "uci": "g7g8"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "h5f6"
+          },
+          "fen_after": "5rk1/r4p1p/p4N2/2P5/P7/8/1PP3PN/R5K1 b - - 4 25",
+          "fen_before": "5rk1/r4p1p/p7/2P4N/P7/8/1PP3PN/R5K1 w - - 3 25",
+          "ply": 49,
+          "san": "Nf6+",
+          "uci": "h5f6"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "g8",
+            "piece": "k",
+            "promotion": null,
+            "to": "g7",
+            "uci": "g8g7"
+          },
+          "fen_after": "5r2/r4pkp/p4N2/2P5/P7/8/1PP3PN/R5K1 w - - 5 26",
+          "fen_before": "5rk1/r4p1p/p4N2/2P5/P7/8/1PP3PN/R5K1 b - - 4 25",
+          "ply": 50,
+          "san": "Kg7",
+          "uci": "g8g7"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "f6h5"
+          },
+          "fen_after": "5r2/r4pkp/p7/2P4N/P7/8/1PP3PN/R5K1 b - - 6 26",
+          "fen_before": "5r2/r4pkp/p4N2/2P5/P7/8/1PP3PN/R5K1 w - - 5 26",
+          "ply": 51,
+          "san": "Nh5+",
+          "uci": "f6h5"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "g7",
+            "piece": "k",
+            "promotion": null,
+            "to": "g8",
+            "uci": "g7g8"
+          },
+          "fen_after": "5rk1/r4p1p/p7/2P4N/P7/8/1PP3PN/R5K1 w - - 7 27",
+          "fen_before": "5r2/r4pkp/p7/2P4N/P7/8/1PP3PN/R5K1 b - - 6 26",
+          "ply": 52,
+          "san": "Kg8",
+          "uci": "g7g8"
+        }
+      ],
+      "opening_id": "french",
+      "opening_line": [
+        "e2e4",
+        "e7e6",
+        "d2d4",
+        "d7d5"
+      ],
+      "plies": 52,
+      "reason": "threefold_repetition",
+      "result": "draw",
+      "seed": 60971,
+      "winner_color": ""
+    },
+    {
+      "codex_color": "black",
+      "codex_material_cp": 410,
+      "complete_game": true,
+      "difficulty": "experiment 5:nnue",
+      "elapsed_ms": 6735.401,
+      "final_fen": "1r1q1rk1/pp1b3p/3N3n/4Q3/p4pp1/2p2N2/5PPP/R4RK1 w - - 8 25",
+      "game_key": "chess",
+      "invalid": [],
+      "moves": [
+        {
+          "actor": "book",
+          "decision": {
+            "opening_id": "french"
+          },
+          "fen_after": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
+          "fen_before": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+          "ply": 1,
+          "san": "e4",
+          "uci": "e2e4"
+        },
+        {
+          "actor": "book",
+          "decision": {
+            "opening_id": "french"
+          },
+          "fen_after": "rnbqkbnr/pppp1ppp/4p3/8/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2",
+          "fen_before": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
+          "ply": 2,
+          "san": "e6",
+          "uci": "e7e6"
+        },
+        {
+          "actor": "book",
+          "decision": {
+            "opening_id": "french"
+          },
+          "fen_after": "rnbqkbnr/pppp1ppp/4p3/8/3PP3/8/PPP2PPP/RNBQKBNR b KQkq - 0 2",
+          "fen_before": "rnbqkbnr/pppp1ppp/4p3/8/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2",
+          "ply": 3,
+          "san": "d4",
+          "uci": "d2d4"
+        },
+        {
+          "actor": "book",
+          "decision": {
+            "opening_id": "french"
+          },
+          "fen_after": "rnbqkbnr/ppp2ppp/4p3/3p4/3PP3/8/PPP2PPP/RNBQKBNR w KQkq - 0 3",
+          "fen_before": "rnbqkbnr/pppp1ppp/4p3/8/3PP3/8/PPP2PPP/RNBQKBNR b KQkq - 0 2",
+          "ply": 4,
+          "san": "d5",
+          "uci": "d7d5"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "f1",
+            "piece": "B",
+            "promotion": null,
+            "to": "b5",
+            "uci": "f1b5"
+          },
+          "fen_after": "rnbqkbnr/ppp2ppp/4p3/1B1p4/3PP3/8/PPP2PPP/RNBQK1NR b KQkq - 1 3",
+          "fen_before": "rnbqkbnr/ppp2ppp/4p3/3p4/3PP3/8/PPP2PPP/RNBQKBNR w KQkq - 0 3",
+          "ply": 5,
+          "san": "Bb5+",
+          "uci": "f1b5"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "c7c6"
+          },
+          "fen_after": "rnbqkbnr/pp3ppp/2p1p3/1B1p4/3PP3/8/PPP2PPP/RNBQK1NR w KQkq - 0 4",
+          "fen_before": "rnbqkbnr/ppp2ppp/4p3/1B1p4/3PP3/8/PPP2PPP/RNBQK1NR b KQkq - 1 3",
+          "ply": 6,
+          "san": "c6",
+          "uci": "c7c6"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "c1",
+            "piece": "B",
+            "promotion": null,
+            "to": "f4",
+            "uci": "c1f4"
+          },
+          "fen_after": "rnbqkbnr/pp3ppp/2p1p3/1B1p4/3PPB2/8/PPP2PPP/RN1QK1NR b KQkq - 1 4",
+          "fen_before": "rnbqkbnr/pp3ppp/2p1p3/1B1p4/3PP3/8/PPP2PPP/RNBQK1NR w KQkq - 0 4",
+          "ply": 7,
+          "san": "Bf4",
+          "uci": "c1f4"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "c6b5"
+          },
+          "fen_after": "rnbqkbnr/pp3ppp/4p3/1p1p4/3PPB2/8/PPP2PPP/RN1QK1NR w KQkq - 0 5",
+          "fen_before": "rnbqkbnr/pp3ppp/2p1p3/1B1p4/3PPB2/8/PPP2PPP/RN1QK1NR b KQkq - 1 4",
+          "ply": 8,
+          "san": "cxb5",
+          "uci": "c6b5"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": "n",
+            "castle": false,
+            "en_passant": false,
+            "from": "f4",
+            "piece": "B",
+            "promotion": null,
+            "to": "b8",
+            "uci": "f4b8"
+          },
+          "fen_after": "rBbqkbnr/pp3ppp/4p3/1p1p4/3PP3/8/PPP2PPP/RN1QK1NR b KQkq - 0 5",
+          "fen_before": "rnbqkbnr/pp3ppp/4p3/1p1p4/3PPB2/8/PPP2PPP/RN1QK1NR w KQkq - 0 5",
+          "ply": 9,
+          "san": "Bxb8",
+          "uci": "f4b8"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "a8b8"
+          },
+          "fen_after": "1rbqkbnr/pp3ppp/4p3/1p1p4/3PP3/8/PPP2PPP/RN1QK1NR w KQk - 0 6",
+          "fen_before": "rBbqkbnr/pp3ppp/4p3/1p1p4/3PP3/8/PPP2PPP/RN1QK1NR b KQkq - 0 5",
+          "ply": 10,
+          "san": "Rxb8",
+          "uci": "a8b8"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "b1",
+            "piece": "N",
+            "promotion": null,
+            "to": "c3",
+            "uci": "b1c3"
+          },
+          "fen_after": "1rbqkbnr/pp3ppp/4p3/1p1p4/3PP3/2N5/PPP2PPP/R2QK1NR b KQk - 1 6",
+          "fen_before": "1rbqkbnr/pp3ppp/4p3/1p1p4/3PP3/8/PPP2PPP/RN1QK1NR w KQk - 0 6",
+          "ply": 11,
+          "san": "Nc3",
+          "uci": "b1c3"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "d5e4"
+          },
+          "fen_after": "1rbqkbnr/pp3ppp/4p3/1p6/3Pp3/2N5/PPP2PPP/R2QK1NR w KQk - 0 7",
+          "fen_before": "1rbqkbnr/pp3ppp/4p3/1p1p4/3PP3/2N5/PPP2PPP/R2QK1NR b KQk - 1 6",
+          "ply": 12,
+          "san": "dxe4",
+          "uci": "d5e4"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": "p",
+            "castle": false,
+            "en_passant": false,
+            "from": "c3",
+            "piece": "N",
+            "promotion": null,
+            "to": "e4",
+            "uci": "c3e4"
+          },
+          "fen_after": "1rbqkbnr/pp3ppp/4p3/1p6/3PN3/8/PPP2PPP/R2QK1NR b KQk - 0 7",
+          "fen_before": "1rbqkbnr/pp3ppp/4p3/1p6/3Pp3/2N5/PPP2PPP/R2QK1NR w KQk - 0 7",
+          "ply": 13,
+          "san": "Nxe4",
+          "uci": "c3e4"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "f8b4"
+          },
+          "fen_after": "1rbqk1nr/pp3ppp/4p3/1p6/1b1PN3/8/PPP2PPP/R2QK1NR w KQk - 1 8",
+          "fen_before": "1rbqkbnr/pp3ppp/4p3/1p6/3PN3/8/PPP2PPP/R2QK1NR b KQk - 0 7",
+          "ply": 14,
+          "san": "Bb4+",
+          "uci": "f8b4"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "c2",
+            "piece": "P",
+            "promotion": null,
+            "to": "c3",
+            "uci": "c2c3"
+          },
+          "fen_after": "1rbqk1nr/pp3ppp/4p3/1p6/1b1PN3/2P5/PP3PPP/R2QK1NR b KQk - 0 8",
+          "fen_before": "1rbqk1nr/pp3ppp/4p3/1p6/1b1PN3/8/PPP2PPP/R2QK1NR w KQk - 1 8",
+          "ply": 15,
+          "san": "c3",
+          "uci": "c2c3"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "b4c3"
+          },
+          "fen_after": "1rbqk1nr/pp3ppp/4p3/1p6/3PN3/2b5/PP3PPP/R2QK1NR w KQk - 0 9",
+          "fen_before": "1rbqk1nr/pp3ppp/4p3/1p6/1b1PN3/2P5/PP3PPP/R2QK1NR b KQk - 0 8",
+          "ply": 16,
+          "san": "Bxc3+",
+          "uci": "b4c3"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": "b",
+            "castle": false,
+            "en_passant": false,
+            "from": "b2",
+            "piece": "P",
+            "promotion": null,
+            "to": "c3",
+            "uci": "b2c3"
+          },
+          "fen_after": "1rbqk1nr/pp3ppp/4p3/1p6/3PN3/2P5/P4PPP/R2QK1NR b KQk - 0 9",
+          "fen_before": "1rbqk1nr/pp3ppp/4p3/1p6/3PN3/2b5/PP3PPP/R2QK1NR w KQk - 0 9",
+          "ply": 17,
+          "san": "bxc3",
+          "uci": "b2c3"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "g8h6"
+          },
+          "fen_after": "1rbqk2r/pp3ppp/4p2n/1p6/3PN3/2P5/P4PPP/R2QK1NR w KQk - 1 10",
+          "fen_before": "1rbqk1nr/pp3ppp/4p3/1p6/3PN3/2P5/P4PPP/R2QK1NR b KQk - 0 9",
+          "ply": 18,
+          "san": "Nh6",
+          "uci": "g8h6"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "g1",
+            "piece": "N",
+            "promotion": null,
+            "to": "f3",
+            "uci": "g1f3"
+          },
+          "fen_after": "1rbqk2r/pp3ppp/4p2n/1p6/3PN3/2P2N2/P4PPP/R2QK2R b KQk - 2 10",
+          "fen_before": "1rbqk2r/pp3ppp/4p2n/1p6/3PN3/2P5/P4PPP/R2QK1NR w KQk - 1 10",
+          "ply": 19,
+          "san": "Nf3",
+          "uci": "g1f3"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "e8g8"
+          },
+          "fen_after": "1rbq1rk1/pp3ppp/4p2n/1p6/3PN3/2P2N2/P4PPP/R2QK2R w KQ - 3 11",
+          "fen_before": "1rbqk2r/pp3ppp/4p2n/1p6/3PN3/2P2N2/P4PPP/R2QK2R b KQk - 2 10",
+          "ply": 20,
+          "san": "O-O",
+          "uci": "e8g8"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": true,
+            "en_passant": false,
+            "from": "e1",
+            "piece": "K",
+            "promotion": null,
+            "to": "g1",
+            "uci": "e1g1"
+          },
+          "fen_after": "1rbq1rk1/pp3ppp/4p2n/1p6/3PN3/2P2N2/P4PPP/R2Q1RK1 b - - 4 11",
+          "fen_before": "1rbq1rk1/pp3ppp/4p2n/1p6/3PN3/2P2N2/P4PPP/R2QK2R w KQ - 3 11",
+          "ply": 21,
+          "san": "O-O",
+          "uci": "e1g1"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "c8d7"
+          },
+          "fen_after": "1r1q1rk1/pp1b1ppp/4p2n/1p6/3PN3/2P2N2/P4PPP/R2Q1RK1 w - - 5 12",
+          "fen_before": "1rbq1rk1/pp3ppp/4p2n/1p6/3PN3/2P2N2/P4PPP/R2Q1RK1 b - - 4 11",
+          "ply": 22,
+          "san": "Bd7",
+          "uci": "c8d7"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "a1",
+            "piece": "R",
+            "promotion": null,
+            "to": "c1",
+            "uci": "a1c1"
+          },
+          "fen_after": "1r1q1rk1/pp1b1ppp/4p2n/1p6/3PN3/2P2N2/P4PPP/2RQ1RK1 b - - 6 12",
+          "fen_before": "1r1q1rk1/pp1b1ppp/4p2n/1p6/3PN3/2P2N2/P4PPP/R2Q1RK1 w - - 5 12",
+          "ply": 23,
+          "san": "Rc1",
+          "uci": "a1c1"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "f7f5"
+          },
+          "fen_after": "1r1q1rk1/pp1b2pp/4p2n/1p3p2/3PN3/2P2N2/P4PPP/2RQ1RK1 w - - 0 13",
+          "fen_before": "1r1q1rk1/pp1b1ppp/4p2n/1p6/3PN3/2P2N2/P4PPP/2RQ1RK1 b - - 6 12",
+          "ply": 24,
+          "san": "f5",
+          "uci": "f7f5"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "e4",
+            "piece": "N",
+            "promotion": null,
+            "to": "d6",
+            "uci": "e4d6"
+          },
+          "fen_after": "1r1q1rk1/pp1b2pp/3Np2n/1p3p2/3P4/2P2N2/P4PPP/2RQ1RK1 b - - 1 13",
+          "fen_before": "1r1q1rk1/pp1b2pp/4p2n/1p3p2/3PN3/2P2N2/P4PPP/2RQ1RK1 w - - 0 13",
+          "ply": 25,
+          "san": "Nd6",
+          "uci": "e4d6"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "f5f4"
+          },
+          "fen_after": "1r1q1rk1/pp1b2pp/3Np2n/1p6/3P1p2/2P2N2/P4PPP/2RQ1RK1 w - - 0 14",
+          "fen_before": "1r1q1rk1/pp1b2pp/3Np2n/1p3p2/3P4/2P2N2/P4PPP/2RQ1RK1 b - - 1 13",
+          "ply": 26,
+          "san": "f4",
+          "uci": "f5f4"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "a2",
+            "piece": "P",
+            "promotion": null,
+            "to": "a4",
+            "uci": "a2a4"
+          },
+          "fen_after": "1r1q1rk1/pp1b2pp/3Np2n/1p6/P2P1p2/2P2N2/5PPP/2RQ1RK1 b - - 0 14",
+          "fen_before": "1r1q1rk1/pp1b2pp/3Np2n/1p6/3P1p2/2P2N2/P4PPP/2RQ1RK1 w - - 0 14",
+          "ply": 27,
+          "san": "a4",
+          "uci": "a2a4"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "b5a4"
+          },
+          "fen_after": "1r1q1rk1/pp1b2pp/3Np2n/8/p2P1p2/2P2N2/5PPP/2RQ1RK1 w - - 0 15",
+          "fen_before": "1r1q1rk1/pp1b2pp/3Np2n/1p6/P2P1p2/2P2N2/5PPP/2RQ1RK1 b - - 0 14",
+          "ply": 28,
+          "san": "bxa4",
+          "uci": "b5a4"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "c1",
+            "piece": "R",
+            "promotion": null,
+            "to": "b1",
+            "uci": "c1b1"
+          },
+          "fen_after": "1r1q1rk1/pp1b2pp/3Np2n/8/p2P1p2/2P2N2/5PPP/1R1Q1RK1 b - - 1 15",
+          "fen_before": "1r1q1rk1/pp1b2pp/3Np2n/8/p2P1p2/2P2N2/5PPP/2RQ1RK1 w - - 0 15",
+          "ply": 29,
+          "san": "Rb1",
+          "uci": "c1b1"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "e6e5"
+          },
+          "fen_after": "1r1q1rk1/pp1b2pp/3N3n/4p3/p2P1p2/2P2N2/5PPP/1R1Q1RK1 w - - 0 16",
+          "fen_before": "1r1q1rk1/pp1b2pp/3Np2n/8/p2P1p2/2P2N2/5PPP/1R1Q1RK1 b - - 1 15",
+          "ply": 30,
+          "san": "e5",
+          "uci": "e6e5"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "b1",
+            "piece": "R",
+            "promotion": null,
+            "to": "a1",
+            "uci": "b1a1"
+          },
+          "fen_after": "1r1q1rk1/pp1b2pp/3N3n/4p3/p2P1p2/2P2N2/5PPP/R2Q1RK1 b - - 1 16",
+          "fen_before": "1r1q1rk1/pp1b2pp/3N3n/4p3/p2P1p2/2P2N2/5PPP/1R1Q1RK1 w - - 0 16",
+          "ply": 31,
+          "san": "Ra1",
+          "uci": "b1a1"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "e5d4"
+          },
+          "fen_after": "1r1q1rk1/pp1b2pp/3N3n/8/p2p1p2/2P2N2/5PPP/R2Q1RK1 w - - 0 17",
+          "fen_before": "1r1q1rk1/pp1b2pp/3N3n/4p3/p2P1p2/2P2N2/5PPP/R2Q1RK1 b - - 1 16",
+          "ply": 32,
+          "san": "exd4",
+          "uci": "e5d4"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "a1",
+            "piece": "R",
+            "promotion": null,
+            "to": "a2",
+            "uci": "a1a2"
+          },
+          "fen_after": "1r1q1rk1/pp1b2pp/3N3n/8/p2p1p2/2P2N2/R4PPP/3Q1RK1 b - - 1 17",
+          "fen_before": "1r1q1rk1/pp1b2pp/3N3n/8/p2p1p2/2P2N2/5PPP/R2Q1RK1 w - - 0 17",
+          "ply": 33,
+          "san": "Ra2",
+          "uci": "a1a2"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "d4c3"
+          },
+          "fen_after": "1r1q1rk1/pp1b2pp/3N3n/8/p4p2/2p2N2/R4PPP/3Q1RK1 w - - 0 18",
+          "fen_before": "1r1q1rk1/pp1b2pp/3N3n/8/p2p1p2/2P2N2/R4PPP/3Q1RK1 b - - 1 17",
+          "ply": 34,
+          "san": "dxc3",
+          "uci": "d4c3"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "a2",
+            "piece": "R",
+            "promotion": null,
+            "to": "a1",
+            "uci": "a2a1"
+          },
+          "fen_after": "1r1q1rk1/pp1b2pp/3N3n/8/p4p2/2p2N2/5PPP/R2Q1RK1 b - - 1 18",
+          "fen_before": "1r1q1rk1/pp1b2pp/3N3n/8/p4p2/2p2N2/R4PPP/3Q1RK1 w - - 0 18",
+          "ply": 35,
+          "san": "Ra1",
+          "uci": "a2a1"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "g7g6"
+          },
+          "fen_after": "1r1q1rk1/pp1b3p/3N2pn/8/p4p2/2p2N2/5PPP/R2Q1RK1 w - - 0 19",
+          "fen_before": "1r1q1rk1/pp1b2pp/3N3n/8/p4p2/2p2N2/5PPP/R2Q1RK1 b - - 1 18",
+          "ply": 36,
+          "san": "g6",
+          "uci": "g7g6"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "a1",
+            "piece": "R",
+            "promotion": null,
+            "to": "a2",
+            "uci": "a1a2"
+          },
+          "fen_after": "1r1q1rk1/pp1b3p/3N2pn/8/p4p2/2p2N2/R4PPP/3Q1RK1 b - - 1 19",
+          "fen_before": "1r1q1rk1/pp1b3p/3N2pn/8/p4p2/2p2N2/5PPP/R2Q1RK1 w - - 0 19",
+          "ply": 37,
+          "san": "Ra2",
+          "uci": "a1a2"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "g6g5"
+          },
+          "fen_after": "1r1q1rk1/pp1b3p/3N3n/6p1/p4p2/2p2N2/R4PPP/3Q1RK1 w - - 0 20",
+          "fen_before": "1r1q1rk1/pp1b3p/3N2pn/8/p4p2/2p2N2/R4PPP/3Q1RK1 b - - 1 19",
+          "ply": 38,
+          "san": "g5",
+          "uci": "g6g5"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "a2",
+            "piece": "R",
+            "promotion": null,
+            "to": "a1",
+            "uci": "a2a1"
+          },
+          "fen_after": "1r1q1rk1/pp1b3p/3N3n/6p1/p4p2/2p2N2/5PPP/R2Q1RK1 b - - 1 20",
+          "fen_before": "1r1q1rk1/pp1b3p/3N3n/6p1/p4p2/2p2N2/R4PPP/3Q1RK1 w - - 0 20",
+          "ply": 39,
+          "san": "Ra1",
+          "uci": "a2a1"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "g5g4"
+          },
+          "fen_after": "1r1q1rk1/pp1b3p/3N3n/8/p4pp1/2p2N2/5PPP/R2Q1RK1 w - - 0 21",
+          "fen_before": "1r1q1rk1/pp1b3p/3N3n/6p1/p4p2/2p2N2/5PPP/R2Q1RK1 b - - 1 20",
+          "ply": 40,
+          "san": "g4",
+          "uci": "g5g4"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "d1",
+            "piece": "Q",
+            "promotion": null,
+            "to": "d5",
+            "uci": "d1d5"
+          },
+          "fen_after": "1r1q1rk1/pp1b3p/3N3n/3Q4/p4pp1/2p2N2/5PPP/R4RK1 b - - 1 21",
+          "fen_before": "1r1q1rk1/pp1b3p/3N3n/8/p4pp1/2p2N2/5PPP/R2Q1RK1 w - - 0 21",
+          "ply": 41,
+          "san": "Qd5+",
+          "uci": "d1d5"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "g8h8"
+          },
+          "fen_after": "1r1q1r1k/pp1b3p/3N3n/3Q4/p4pp1/2p2N2/5PPP/R4RK1 w - - 2 22",
+          "fen_before": "1r1q1rk1/pp1b3p/3N3n/3Q4/p4pp1/2p2N2/5PPP/R4RK1 b - - 1 21",
+          "ply": 42,
+          "san": "Kh8",
+          "uci": "g8h8"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "d5",
+            "piece": "Q",
+            "promotion": null,
+            "to": "e5",
+            "uci": "d5e5"
+          },
+          "fen_after": "1r1q1r1k/pp1b3p/3N3n/4Q3/p4pp1/2p2N2/5PPP/R4RK1 b - - 3 22",
+          "fen_before": "1r1q1r1k/pp1b3p/3N3n/3Q4/p4pp1/2p2N2/5PPP/R4RK1 w - - 2 22",
+          "ply": 43,
+          "san": "Qe5+",
+          "uci": "d5e5"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "h8g8"
+          },
+          "fen_after": "1r1q1rk1/pp1b3p/3N3n/4Q3/p4pp1/2p2N2/5PPP/R4RK1 w - - 4 23",
+          "fen_before": "1r1q1r1k/pp1b3p/3N3n/4Q3/p4pp1/2p2N2/5PPP/R4RK1 b - - 3 22",
+          "ply": 44,
+          "san": "Kg8",
+          "uci": "h8g8"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "e5",
+            "piece": "Q",
+            "promotion": null,
+            "to": "d5",
+            "uci": "e5d5"
+          },
+          "fen_after": "1r1q1rk1/pp1b3p/3N3n/3Q4/p4pp1/2p2N2/5PPP/R4RK1 b - - 5 23",
+          "fen_before": "1r1q1rk1/pp1b3p/3N3n/4Q3/p4pp1/2p2N2/5PPP/R4RK1 w - - 4 23",
+          "ply": 45,
+          "san": "Qd5+",
+          "uci": "e5d5"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "g8h8"
+          },
+          "fen_after": "1r1q1r1k/pp1b3p/3N3n/3Q4/p4pp1/2p2N2/5PPP/R4RK1 w - - 6 24",
+          "fen_before": "1r1q1rk1/pp1b3p/3N3n/3Q4/p4pp1/2p2N2/5PPP/R4RK1 b - - 5 23",
+          "ply": 46,
+          "san": "Kh8",
+          "uci": "g8h8"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "d5",
+            "piece": "Q",
+            "promotion": null,
+            "to": "e5",
+            "uci": "d5e5"
+          },
+          "fen_after": "1r1q1r1k/pp1b3p/3N3n/4Q3/p4pp1/2p2N2/5PPP/R4RK1 b - - 7 24",
+          "fen_before": "1r1q1r1k/pp1b3p/3N3n/3Q4/p4pp1/2p2N2/5PPP/R4RK1 w - - 6 24",
+          "ply": 47,
+          "san": "Qe5+",
+          "uci": "d5e5"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "h8g8"
+          },
+          "fen_after": "1r1q1rk1/pp1b3p/3N3n/4Q3/p4pp1/2p2N2/5PPP/R4RK1 w - - 8 25",
+          "fen_before": "1r1q1r1k/pp1b3p/3N3n/4Q3/p4pp1/2p2N2/5PPP/R4RK1 b - - 7 24",
+          "ply": 48,
+          "san": "Kg8",
+          "uci": "h8g8"
+        }
+      ],
+      "opening_id": "french",
+      "opening_line": [
+        "e2e4",
+        "e7e6",
+        "d2d4",
+        "d7d5"
+      ],
+      "plies": 48,
+      "reason": "threefold_repetition",
+      "result": "draw",
+      "seed": 61006,
+      "winner_color": ""
+    },
+    {
+      "codex_color": "white",
+      "codex_material_cp": -2120,
+      "complete_game": true,
+      "difficulty": "experiment 5:nnue",
+      "elapsed_ms": 7747.988,
+      "final_fen": "8/3n1p2/3k4/8/P7/6q1/6K1/4q3 w - - 2 35",
+      "game_key": "chess",
+      "invalid": [],
+      "moves": [
+        {
+          "actor": "book",
+          "decision": {
+            "opening_id": "reti"
+          },
+          "fen_after": "rnbqkbnr/pppppppp/8/8/8/5N2/PPPPPPPP/RNBQKB1R b KQkq - 1 1",
+          "fen_before": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+          "ply": 1,
+          "san": "Nf3",
+          "uci": "g1f3"
+        },
+        {
+          "actor": "book",
+          "decision": {
+            "opening_id": "reti"
+          },
+          "fen_after": "rnbqkbnr/ppp1pppp/8/3p4/8/5N2/PPPPPPPP/RNBQKB1R w KQkq - 0 2",
+          "fen_before": "rnbqkbnr/pppppppp/8/8/8/5N2/PPPPPPPP/RNBQKB1R b KQkq - 1 1",
+          "ply": 2,
+          "san": "d5",
+          "uci": "d7d5"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "b1c3"
+          },
+          "fen_after": "rnbqkbnr/ppp1pppp/8/3p4/8/2N2N2/PPPPPPPP/R1BQKB1R b KQkq - 1 2",
+          "fen_before": "rnbqkbnr/ppp1pppp/8/3p4/8/5N2/PPPPPPPP/RNBQKB1R w KQkq - 0 2",
+          "ply": 3,
+          "san": "Nc3",
+          "uci": "b1c3"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "c8",
+            "piece": "b",
+            "promotion": null,
+            "to": "f5",
+            "uci": "c8f5"
+          },
+          "fen_after": "rn1qkbnr/ppp1pppp/8/3p1b2/8/2N2N2/PPPPPPPP/R1BQKB1R w KQkq - 2 3",
+          "fen_before": "rnbqkbnr/ppp1pppp/8/3p4/8/2N2N2/PPPPPPPP/R1BQKB1R b KQkq - 1 2",
+          "ply": 4,
+          "san": "Bf5",
+          "uci": "c8f5"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "c3d5"
+          },
+          "fen_after": "rn1qkbnr/ppp1pppp/8/3N1b2/8/5N2/PPPPPPPP/R1BQKB1R b KQkq - 0 3",
+          "fen_before": "rn1qkbnr/ppp1pppp/8/3p1b2/8/2N2N2/PPPPPPPP/R1BQKB1R w KQkq - 2 3",
+          "ply": 5,
+          "san": "Nxd5",
+          "uci": "c3d5"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": "N",
+            "castle": false,
+            "en_passant": false,
+            "from": "d8",
+            "piece": "q",
+            "promotion": null,
+            "to": "d5",
+            "uci": "d8d5"
+          },
+          "fen_after": "rn2kbnr/ppp1pppp/8/3q1b2/8/5N2/PPPPPPPP/R1BQKB1R w KQkq - 0 4",
+          "fen_before": "rn1qkbnr/ppp1pppp/8/3N1b2/8/5N2/PPPPPPPP/R1BQKB1R b KQkq - 0 3",
+          "ply": 6,
+          "san": "Qxd5",
+          "uci": "d8d5"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "e2e4"
+          },
+          "fen_after": "rn2kbnr/ppp1pppp/8/3q1b2/4P3/5N2/PPPP1PPP/R1BQKB1R b KQkq - 0 4",
+          "fen_before": "rn2kbnr/ppp1pppp/8/3q1b2/8/5N2/PPPPPPPP/R1BQKB1R w KQkq - 0 4",
+          "ply": 7,
+          "san": "e4",
+          "uci": "e2e4"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": "P",
+            "castle": false,
+            "en_passant": false,
+            "from": "d5",
+            "piece": "q",
+            "promotion": null,
+            "to": "e4",
+            "uci": "d5e4"
+          },
+          "fen_after": "rn2kbnr/ppp1pppp/8/5b2/4q3/5N2/PPPP1PPP/R1BQKB1R w KQkq - 0 5",
+          "fen_before": "rn2kbnr/ppp1pppp/8/3q1b2/4P3/5N2/PPPP1PPP/R1BQKB1R b KQkq - 0 4",
+          "ply": 8,
+          "san": "Qxe4+",
+          "uci": "d5e4"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "f1e2"
+          },
+          "fen_after": "rn2kbnr/ppp1pppp/8/5b2/4q3/5N2/PPPPBPPP/R1BQK2R b KQkq - 1 5",
+          "fen_before": "rn2kbnr/ppp1pppp/8/5b2/4q3/5N2/PPPP1PPP/R1BQKB1R w KQkq - 0 5",
+          "ply": 9,
+          "san": "Be2",
+          "uci": "f1e2"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "b8",
+            "piece": "n",
+            "promotion": null,
+            "to": "c6",
+            "uci": "b8c6"
+          },
+          "fen_after": "r3kbnr/ppp1pppp/2n5/5b2/4q3/5N2/PPPPBPPP/R1BQK2R w KQkq - 2 6",
+          "fen_before": "rn2kbnr/ppp1pppp/8/5b2/4q3/5N2/PPPPBPPP/R1BQK2R b KQkq - 1 5",
+          "ply": 10,
+          "san": "Nc6",
+          "uci": "b8c6"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "e1g1"
+          },
+          "fen_after": "r3kbnr/ppp1pppp/2n5/5b2/4q3/5N2/PPPPBPPP/R1BQ1RK1 b kq - 3 6",
+          "fen_before": "r3kbnr/ppp1pppp/2n5/5b2/4q3/5N2/PPPPBPPP/R1BQK2R w KQkq - 2 6",
+          "ply": 11,
+          "san": "O-O",
+          "uci": "e1g1"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": true,
+            "en_passant": false,
+            "from": "e8",
+            "piece": "k",
+            "promotion": null,
+            "to": "c8",
+            "uci": "e8c8"
+          },
+          "fen_after": "2kr1bnr/ppp1pppp/2n5/5b2/4q3/5N2/PPPPBPPP/R1BQ1RK1 w - - 4 7",
+          "fen_before": "r3kbnr/ppp1pppp/2n5/5b2/4q3/5N2/PPPPBPPP/R1BQ1RK1 b kq - 3 6",
+          "ply": 12,
+          "san": "O-O-O",
+          "uci": "e8c8"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "d2d4"
+          },
+          "fen_after": "2kr1bnr/ppp1pppp/2n5/5b2/3Pq3/5N2/PPP1BPPP/R1BQ1RK1 b - - 0 7",
+          "fen_before": "2kr1bnr/ppp1pppp/2n5/5b2/4q3/5N2/PPPPBPPP/R1BQ1RK1 w - - 4 7",
+          "ply": 13,
+          "san": "d4",
+          "uci": "d2d4"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "g8",
+            "piece": "n",
+            "promotion": null,
+            "to": "f6",
+            "uci": "g8f6"
+          },
+          "fen_after": "2kr1b1r/ppp1pppp/2n2n2/5b2/3Pq3/5N2/PPP1BPPP/R1BQ1RK1 w - - 1 8",
+          "fen_before": "2kr1bnr/ppp1pppp/2n5/5b2/3Pq3/5N2/PPP1BPPP/R1BQ1RK1 b - - 0 7",
+          "ply": 14,
+          "san": "Nf6",
+          "uci": "g8f6"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "c1f4"
+          },
+          "fen_after": "2kr1b1r/ppp1pppp/2n2n2/5b2/3PqB2/5N2/PPP1BPPP/R2Q1RK1 b - - 2 8",
+          "fen_before": "2kr1b1r/ppp1pppp/2n2n2/5b2/3Pq3/5N2/PPP1BPPP/R1BQ1RK1 w - - 1 8",
+          "ply": 15,
+          "san": "Bf4",
+          "uci": "c1f4"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": "B",
+            "castle": false,
+            "en_passant": false,
+            "from": "e4",
+            "piece": "q",
+            "promotion": null,
+            "to": "f4",
+            "uci": "e4f4"
+          },
+          "fen_after": "2kr1b1r/ppp1pppp/2n2n2/5b2/3P1q2/5N2/PPP1BPPP/R2Q1RK1 w - - 0 9",
+          "fen_before": "2kr1b1r/ppp1pppp/2n2n2/5b2/3PqB2/5N2/PPP1BPPP/R2Q1RK1 b - - 2 8",
+          "ply": 16,
+          "san": "Qxf4",
+          "uci": "e4f4"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "f3e1"
+          },
+          "fen_after": "2kr1b1r/ppp1pppp/2n2n2/5b2/3P1q2/8/PPP1BPPP/R2QNRK1 b - - 1 9",
+          "fen_before": "2kr1b1r/ppp1pppp/2n2n2/5b2/3P1q2/5N2/PPP1BPPP/R2Q1RK1 w - - 0 9",
+          "ply": 17,
+          "san": "Ne1",
+          "uci": "f3e1"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "e7",
+            "piece": "p",
+            "promotion": null,
+            "to": "e5",
+            "uci": "e7e5"
+          },
+          "fen_after": "2kr1b1r/ppp2ppp/2n2n2/4pb2/3P1q2/8/PPP1BPPP/R2QNRK1 w - - 0 10",
+          "fen_before": "2kr1b1r/ppp1pppp/2n2n2/5b2/3P1q2/8/PPP1BPPP/R2QNRK1 b - - 1 9",
+          "ply": 18,
+          "san": "e5",
+          "uci": "e7e5"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "d4d5"
+          },
+          "fen_after": "2kr1b1r/ppp2ppp/2n2n2/3Ppb2/5q2/8/PPP1BPPP/R2QNRK1 b - - 0 10",
+          "fen_before": "2kr1b1r/ppp2ppp/2n2n2/4pb2/3P1q2/8/PPP1BPPP/R2QNRK1 w - - 0 10",
+          "ply": 19,
+          "san": "d5",
+          "uci": "d4d5"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "c6",
+            "piece": "n",
+            "promotion": null,
+            "to": "b4",
+            "uci": "c6b4"
+          },
+          "fen_after": "2kr1b1r/ppp2ppp/5n2/3Ppb2/1n3q2/8/PPP1BPPP/R2QNRK1 w - - 1 11",
+          "fen_before": "2kr1b1r/ppp2ppp/2n2n2/3Ppb2/5q2/8/PPP1BPPP/R2QNRK1 b - - 0 10",
+          "ply": 20,
+          "san": "Nb4",
+          "uci": "c6b4"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "c2c4"
+          },
+          "fen_after": "2kr1b1r/ppp2ppp/5n2/3Ppb2/1nP2q2/8/PP2BPPP/R2QNRK1 b - - 0 11",
+          "fen_before": "2kr1b1r/ppp2ppp/5n2/3Ppb2/1n3q2/8/PPP1BPPP/R2QNRK1 w - - 1 11",
+          "ply": 21,
+          "san": "c4",
+          "uci": "c2c4"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "a7",
+            "piece": "p",
+            "promotion": null,
+            "to": "a5",
+            "uci": "a7a5"
+          },
+          "fen_after": "2kr1b1r/1pp2ppp/5n2/p2Ppb2/1nP2q2/8/PP2BPPP/R2QNRK1 w - - 0 12",
+          "fen_before": "2kr1b1r/ppp2ppp/5n2/3Ppb2/1nP2q2/8/PP2BPPP/R2QNRK1 b - - 0 11",
+          "ply": 22,
+          "san": "a5",
+          "uci": "a7a5"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "c4c5"
+          },
+          "fen_after": "2kr1b1r/1pp2ppp/5n2/p1PPpb2/1n3q2/8/PP2BPPP/R2QNRK1 b - - 0 12",
+          "fen_before": "2kr1b1r/1pp2ppp/5n2/p2Ppb2/1nP2q2/8/PP2BPPP/R2QNRK1 w - - 0 12",
+          "ply": 23,
+          "san": "c5",
+          "uci": "c4c5"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "a5",
+            "piece": "p",
+            "promotion": null,
+            "to": "a4",
+            "uci": "a5a4"
+          },
+          "fen_after": "2kr1b1r/1pp2ppp/5n2/2PPpb2/pn3q2/8/PP2BPPP/R2QNRK1 w - - 0 13",
+          "fen_before": "2kr1b1r/1pp2ppp/5n2/p1PPpb2/1n3q2/8/PP2BPPP/R2QNRK1 b - - 0 12",
+          "ply": 24,
+          "san": "a4",
+          "uci": "a5a4"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "d1a4"
+          },
+          "fen_after": "2kr1b1r/1pp2ppp/5n2/2PPpb2/Qn3q2/8/PP2BPPP/R3NRK1 b - - 0 13",
+          "fen_before": "2kr1b1r/1pp2ppp/5n2/2PPpb2/pn3q2/8/PP2BPPP/R2QNRK1 w - - 0 13",
+          "ply": 25,
+          "san": "Qxa4",
+          "uci": "d1a4"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": "P",
+            "castle": false,
+            "en_passant": false,
+            "from": "f8",
+            "piece": "b",
+            "promotion": null,
+            "to": "c5",
+            "uci": "f8c5"
+          },
+          "fen_after": "2kr3r/1pp2ppp/5n2/2bPpb2/Qn3q2/8/PP2BPPP/R3NRK1 w - - 0 14",
+          "fen_before": "2kr1b1r/1pp2ppp/5n2/2PPpb2/Qn3q2/8/PP2BPPP/R3NRK1 b - - 0 13",
+          "ply": 26,
+          "san": "Bxc5",
+          "uci": "f8c5"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "a4a8"
+          },
+          "fen_after": "Q1kr3r/1pp2ppp/5n2/2bPpb2/1n3q2/8/PP2BPPP/R3NRK1 b - - 1 14",
+          "fen_before": "2kr3r/1pp2ppp/5n2/2bPpb2/Qn3q2/8/PP2BPPP/R3NRK1 w - - 0 14",
+          "ply": 27,
+          "san": "Qa8+",
+          "uci": "a4a8"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "c8",
+            "piece": "k",
+            "promotion": null,
+            "to": "d7",
+            "uci": "c8d7"
+          },
+          "fen_after": "Q2r3r/1ppk1ppp/5n2/2bPpb2/1n3q2/8/PP2BPPP/R3NRK1 w - - 2 15",
+          "fen_before": "Q1kr3r/1pp2ppp/5n2/2bPpb2/1n3q2/8/PP2BPPP/R3NRK1 b - - 1 14",
+          "ply": 28,
+          "san": "Kd7",
+          "uci": "c8d7"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "a8d8"
+          },
+          "fen_after": "3Q3r/1ppk1ppp/5n2/2bPpb2/1n3q2/8/PP2BPPP/R3NRK1 b - - 0 15",
+          "fen_before": "Q2r3r/1ppk1ppp/5n2/2bPpb2/1n3q2/8/PP2BPPP/R3NRK1 w - - 2 15",
+          "ply": 29,
+          "san": "Qxd8+",
+          "uci": "a8d8"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": "Q",
+            "castle": false,
+            "en_passant": false,
+            "from": "h8",
+            "piece": "r",
+            "promotion": null,
+            "to": "d8",
+            "uci": "h8d8"
+          },
+          "fen_after": "3r4/1ppk1ppp/5n2/2bPpb2/1n3q2/8/PP2BPPP/R3NRK1 w - - 0 16",
+          "fen_before": "3Q3r/1ppk1ppp/5n2/2bPpb2/1n3q2/8/PP2BPPP/R3NRK1 b - - 0 15",
+          "ply": 30,
+          "san": "Rxd8",
+          "uci": "h8d8"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "e2b5"
+          },
+          "fen_after": "3r4/1ppk1ppp/5n2/1BbPpb2/1n3q2/8/PP3PPP/R3NRK1 b - - 1 16",
+          "fen_before": "3r4/1ppk1ppp/5n2/2bPpb2/1n3q2/8/PP2BPPP/R3NRK1 w - - 0 16",
+          "ply": 31,
+          "san": "Bb5+",
+          "uci": "e2b5"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "c7",
+            "piece": "p",
+            "promotion": null,
+            "to": "c6",
+            "uci": "c7c6"
+          },
+          "fen_after": "3r4/1p1k1ppp/2p2n2/1BbPpb2/1n3q2/8/PP3PPP/R3NRK1 w - - 0 17",
+          "fen_before": "3r4/1ppk1ppp/5n2/1BbPpb2/1n3q2/8/PP3PPP/R3NRK1 b - - 1 16",
+          "ply": 32,
+          "san": "c6",
+          "uci": "c7c6"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "d5c6"
+          },
+          "fen_after": "3r4/1p1k1ppp/2P2n2/1Bb1pb2/1n3q2/8/PP3PPP/R3NRK1 b - - 0 17",
+          "fen_before": "3r4/1p1k1ppp/2p2n2/1BbPpb2/1n3q2/8/PP3PPP/R3NRK1 w - - 0 17",
+          "ply": 33,
+          "san": "dxc6+",
+          "uci": "d5c6"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": "P",
+            "castle": false,
+            "en_passant": false,
+            "from": "b4",
+            "piece": "n",
+            "promotion": null,
+            "to": "c6",
+            "uci": "b4c6"
+          },
+          "fen_after": "3r4/1p1k1ppp/2n2n2/1Bb1pb2/5q2/8/PP3PPP/R3NRK1 w - - 0 18",
+          "fen_before": "3r4/1p1k1ppp/2P2n2/1Bb1pb2/1n3q2/8/PP3PPP/R3NRK1 b - - 0 17",
+          "ply": 34,
+          "san": "Nxc6",
+          "uci": "b4c6"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "b5c6"
+          },
+          "fen_after": "3r4/1p1k1ppp/2B2n2/2b1pb2/5q2/8/PP3PPP/R3NRK1 b - - 0 18",
+          "fen_before": "3r4/1p1k1ppp/2n2n2/1Bb1pb2/5q2/8/PP3PPP/R3NRK1 w - - 0 18",
+          "ply": 35,
+          "san": "Bxc6+",
+          "uci": "b5c6"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": "B",
+            "castle": false,
+            "en_passant": false,
+            "from": "b7",
+            "piece": "p",
+            "promotion": null,
+            "to": "c6",
+            "uci": "b7c6"
+          },
+          "fen_after": "3r4/3k1ppp/2p2n2/2b1pb2/5q2/8/PP3PPP/R3NRK1 w - - 0 19",
+          "fen_before": "3r4/1p1k1ppp/2B2n2/2b1pb2/5q2/8/PP3PPP/R3NRK1 b - - 0 18",
+          "ply": 36,
+          "san": "bxc6",
+          "uci": "b7c6"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "a1d1"
+          },
+          "fen_after": "3r4/3k1ppp/2p2n2/2b1pb2/5q2/8/PP3PPP/3RNRK1 b - - 1 19",
+          "fen_before": "3r4/3k1ppp/2p2n2/2b1pb2/5q2/8/PP3PPP/R3NRK1 w - - 0 19",
+          "ply": 37,
+          "san": "Rd1+",
+          "uci": "a1d1"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "c5",
+            "piece": "b",
+            "promotion": null,
+            "to": "d6",
+            "uci": "c5d6"
+          },
+          "fen_after": "3r4/3k1ppp/2pb1n2/4pb2/5q2/8/PP3PPP/3RNRK1 w - - 2 20",
+          "fen_before": "3r4/3k1ppp/2p2n2/2b1pb2/5q2/8/PP3PPP/3RNRK1 b - - 1 19",
+          "ply": 38,
+          "san": "Bd6",
+          "uci": "c5d6"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "d1d6"
+          },
+          "fen_after": "3r4/3k1ppp/2pR1n2/4pb2/5q2/8/PP3PPP/4NRK1 b - - 0 20",
+          "fen_before": "3r4/3k1ppp/2pb1n2/4pb2/5q2/8/PP3PPP/3RNRK1 w - - 2 20",
+          "ply": 39,
+          "san": "Rxd6+",
+          "uci": "d1d6"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": "R",
+            "castle": false,
+            "en_passant": false,
+            "from": "d7",
+            "piece": "k",
+            "promotion": null,
+            "to": "d6",
+            "uci": "d7d6"
+          },
+          "fen_after": "3r4/5ppp/2pk1n2/4pb2/5q2/8/PP3PPP/4NRK1 w - - 0 21",
+          "fen_before": "3r4/3k1ppp/2pR1n2/4pb2/5q2/8/PP3PPP/4NRK1 b - - 0 20",
+          "ply": 40,
+          "san": "Kxd6",
+          "uci": "d7d6"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "h2h4"
+          },
+          "fen_after": "3r4/5ppp/2pk1n2/4pb2/5q1P/8/PP3PP1/4NRK1 b - - 0 21",
+          "fen_before": "3r4/5ppp/2pk1n2/4pb2/5q2/8/PP3PPP/4NRK1 w - - 0 21",
+          "ply": 41,
+          "san": "h4",
+          "uci": "h2h4"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "c6",
+            "piece": "p",
+            "promotion": null,
+            "to": "c5",
+            "uci": "c6c5"
+          },
+          "fen_after": "3r4/5ppp/3k1n2/2p1pb2/5q1P/8/PP3PP1/4NRK1 w - - 0 22",
+          "fen_before": "3r4/5ppp/2pk1n2/4pb2/5q1P/8/PP3PP1/4NRK1 b - - 0 21",
+          "ply": 42,
+          "san": "c5",
+          "uci": "c6c5"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "h4h5"
+          },
+          "fen_after": "3r4/5ppp/3k1n2/2p1pb1P/5q2/8/PP3PP1/4NRK1 b - - 0 22",
+          "fen_before": "3r4/5ppp/3k1n2/2p1pb2/5q1P/8/PP3PP1/4NRK1 w - - 0 22",
+          "ply": 43,
+          "san": "h5",
+          "uci": "h4h5"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "c5",
+            "piece": "p",
+            "promotion": null,
+            "to": "c4",
+            "uci": "c5c4"
+          },
+          "fen_after": "3r4/5ppp/3k1n2/4pb1P/2p2q2/8/PP3PP1/4NRK1 w - - 0 23",
+          "fen_before": "3r4/5ppp/3k1n2/2p1pb1P/5q2/8/PP3PP1/4NRK1 b - - 0 22",
+          "ply": 44,
+          "san": "c4",
+          "uci": "c5c4"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "h5h6"
+          },
+          "fen_after": "3r4/5ppp/3k1n1P/4pb2/2p2q2/8/PP3PP1/4NRK1 b - - 0 23",
+          "fen_before": "3r4/5ppp/3k1n2/4pb1P/2p2q2/8/PP3PP1/4NRK1 w - - 0 23",
+          "ply": 45,
+          "san": "h6",
+          "uci": "h5h6"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "c4",
+            "piece": "p",
+            "promotion": null,
+            "to": "c3",
+            "uci": "c4c3"
+          },
+          "fen_after": "3r4/5ppp/3k1n1P/4pb2/5q2/2p5/PP3PP1/4NRK1 w - - 0 24",
+          "fen_before": "3r4/5ppp/3k1n1P/4pb2/2p2q2/8/PP3PP1/4NRK1 b - - 0 23",
+          "ply": 46,
+          "san": "c3",
+          "uci": "c4c3"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "h6g7"
+          },
+          "fen_after": "3r4/5pPp/3k1n2/4pb2/5q2/2p5/PP3PP1/4NRK1 b - - 0 24",
+          "fen_before": "3r4/5ppp/3k1n1P/4pb2/5q2/2p5/PP3PP1/4NRK1 w - - 0 24",
+          "ply": 47,
+          "san": "hxg7",
+          "uci": "h6g7"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": "P",
+            "castle": false,
+            "en_passant": false,
+            "from": "c3",
+            "piece": "p",
+            "promotion": null,
+            "to": "b2",
+            "uci": "c3b2"
+          },
+          "fen_after": "3r4/5pPp/3k1n2/4pb2/5q2/8/Pp3PP1/4NRK1 w - - 0 25",
+          "fen_before": "3r4/5pPp/3k1n2/4pb2/5q2/2p5/PP3PP1/4NRK1 b - - 0 24",
+          "ply": 48,
+          "san": "cxb2",
+          "uci": "c3b2"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "g7g8q"
+          },
+          "fen_after": "3r2Q1/5p1p/3k1n2/4pb2/5q2/8/Pp3PP1/4NRK1 b - - 0 25",
+          "fen_before": "3r4/5pPp/3k1n2/4pb2/5q2/8/Pp3PP1/4NRK1 w - - 0 25",
+          "ply": 49,
+          "san": "g8=Q",
+          "uci": "g7g8q"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "b2",
+            "piece": "p",
+            "promotion": "q",
+            "to": "b1",
+            "uci": "b2b1q"
+          },
+          "fen_after": "3r2Q1/5p1p/3k1n2/4pb2/5q2/8/P4PP1/1q2NRK1 w - - 0 26",
+          "fen_before": "3r2Q1/5p1p/3k1n2/4pb2/5q2/8/Pp3PP1/4NRK1 b - - 0 25",
+          "ply": 50,
+          "san": "b1=Q",
+          "uci": "b2b1q"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "g8d8"
+          },
+          "fen_after": "3Q4/5p1p/3k1n2/4pb2/5q2/8/P4PP1/1q2NRK1 b - - 0 26",
+          "fen_before": "3r2Q1/5p1p/3k1n2/4pb2/5q2/8/P4PP1/1q2NRK1 w - - 0 26",
+          "ply": 51,
+          "san": "Qxd8+",
+          "uci": "g8d8"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "f5",
+            "piece": "b",
+            "promotion": null,
+            "to": "d7",
+            "uci": "f5d7"
+          },
+          "fen_after": "3Q4/3b1p1p/3k1n2/4p3/5q2/8/P4PP1/1q2NRK1 w - - 1 27",
+          "fen_before": "3Q4/5p1p/3k1n2/4pb2/5q2/8/P4PP1/1q2NRK1 b - - 0 26",
+          "ply": 52,
+          "san": "Bd7",
+          "uci": "f5d7"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "d8d7"
+          },
+          "fen_after": "8/3Q1p1p/3k1n2/4p3/5q2/8/P4PP1/1q2NRK1 b - - 0 27",
+          "fen_before": "3Q4/3b1p1p/3k1n2/4p3/5q2/8/P4PP1/1q2NRK1 w - - 1 27",
+          "ply": 53,
+          "san": "Qxd7+",
+          "uci": "d8d7"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": "Q",
+            "castle": false,
+            "en_passant": false,
+            "from": "f6",
+            "piece": "n",
+            "promotion": null,
+            "to": "d7",
+            "uci": "f6d7"
+          },
+          "fen_after": "8/3n1p1p/3k4/4p3/5q2/8/P4PP1/1q2NRK1 w - - 0 28",
+          "fen_before": "8/3Q1p1p/3k1n2/4p3/5q2/8/P4PP1/1q2NRK1 b - - 0 27",
+          "ply": 54,
+          "san": "Nxd7",
+          "uci": "f6d7"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "g2g4"
+          },
+          "fen_after": "8/3n1p1p/3k4/4p3/5qP1/8/P4P2/1q2NRK1 b - - 0 28",
+          "fen_before": "8/3n1p1p/3k4/4p3/5q2/8/P4PP1/1q2NRK1 w - - 0 28",
+          "ply": 55,
+          "san": "g4",
+          "uci": "g2g4"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "b1",
+            "piece": "q",
+            "promotion": null,
+            "to": "a1",
+            "uci": "b1a1"
+          },
+          "fen_after": "8/3n1p1p/3k4/4p3/5qP1/8/P4P2/q3NRK1 w - - 1 29",
+          "fen_before": "8/3n1p1p/3k4/4p3/5qP1/8/P4P2/1q2NRK1 b - - 0 28",
+          "ply": 56,
+          "san": "Qa1",
+          "uci": "b1a1"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "g4g5"
+          },
+          "fen_after": "8/3n1p1p/3k4/4p1P1/5q2/8/P4P2/q3NRK1 b - - 0 29",
+          "fen_before": "8/3n1p1p/3k4/4p3/5qP1/8/P4P2/q3NRK1 w - - 1 29",
+          "ply": 57,
+          "san": "g5",
+          "uci": "g4g5"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "h7",
+            "piece": "p",
+            "promotion": null,
+            "to": "h5",
+            "uci": "h7h5"
+          },
+          "fen_after": "8/3n1p2/3k4/4p1Pp/5q2/8/P4P2/q3NRK1 w - h6 0 30",
+          "fen_before": "8/3n1p1p/3k4/4p1P1/5q2/8/P4P2/q3NRK1 b - - 0 29",
+          "ply": 58,
+          "san": "h5",
+          "uci": "h7h5"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "g5h6"
+          },
+          "fen_after": "8/3n1p2/3k3P/4p3/5q2/8/P4P2/q3NRK1 b - - 0 30",
+          "fen_before": "8/3n1p2/3k4/4p1Pp/5q2/8/P4P2/q3NRK1 w - h6 0 30",
+          "ply": 59,
+          "san": "gxh6",
+          "uci": "g5h6"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": "P",
+            "castle": false,
+            "en_passant": false,
+            "from": "f4",
+            "piece": "q",
+            "promotion": null,
+            "to": "h6",
+            "uci": "f4h6"
+          },
+          "fen_after": "8/3n1p2/3k3q/4p3/8/8/P4P2/q3NRK1 w - - 0 31",
+          "fen_before": "8/3n1p2/3k3P/4p3/5q2/8/P4P2/q3NRK1 b - - 0 30",
+          "ply": 60,
+          "san": "Qxh6",
+          "uci": "f4h6"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "f2f4"
+          },
+          "fen_after": "8/3n1p2/3k3q/4p3/5P2/8/P7/q3NRK1 b - - 0 31",
+          "fen_before": "8/3n1p2/3k3q/4p3/8/8/P4P2/q3NRK1 w - - 0 31",
+          "ply": 61,
+          "san": "f4",
+          "uci": "f2f4"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": "P",
+            "castle": false,
+            "en_passant": false,
+            "from": "e5",
+            "piece": "p",
+            "promotion": null,
+            "to": "f4",
+            "uci": "e5f4"
+          },
+          "fen_after": "8/3n1p2/3k3q/8/5p2/8/P7/q3NRK1 w - - 0 32",
+          "fen_before": "8/3n1p2/3k3q/4p3/5P2/8/P7/q3NRK1 b - - 0 31",
+          "ply": 62,
+          "san": "exf4",
+          "uci": "e5f4"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "f1f4"
+          },
+          "fen_after": "8/3n1p2/3k3q/8/5R2/8/P7/q3N1K1 b - - 0 32",
+          "fen_before": "8/3n1p2/3k3q/8/5p2/8/P7/q3NRK1 w - - 0 32",
+          "ply": 63,
+          "san": "Rxf4",
+          "uci": "f1f4"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": "R",
+            "castle": false,
+            "en_passant": false,
+            "from": "h6",
+            "piece": "q",
+            "promotion": null,
+            "to": "f4",
+            "uci": "h6f4"
+          },
+          "fen_after": "8/3n1p2/3k4/8/5q2/8/P7/q3N1K1 w - - 0 33",
+          "fen_before": "8/3n1p2/3k3q/8/5R2/8/P7/q3N1K1 b - - 0 32",
+          "ply": 64,
+          "san": "Qxf4",
+          "uci": "h6f4"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "a2a4"
+          },
+          "fen_after": "8/3n1p2/3k4/8/P4q2/8/8/q3N1K1 b - - 0 33",
+          "fen_before": "8/3n1p2/3k4/8/5q2/8/P7/q3N1K1 w - - 0 33",
+          "ply": 65,
+          "san": "a4",
+          "uci": "a2a4"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": "N",
+            "castle": false,
+            "en_passant": false,
+            "from": "a1",
+            "piece": "q",
+            "promotion": null,
+            "to": "e1",
+            "uci": "a1e1"
+          },
+          "fen_after": "8/3n1p2/3k4/8/P4q2/8/8/4q1K1 w - - 0 34",
+          "fen_before": "8/3n1p2/3k4/8/P4q2/8/8/q3N1K1 b - - 0 33",
+          "ply": 66,
+          "san": "Qxe1+",
+          "uci": "a1e1"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "g1g2"
+          },
+          "fen_after": "8/3n1p2/3k4/8/P4q2/8/6K1/4q3 b - - 1 34",
+          "fen_before": "8/3n1p2/3k4/8/P4q2/8/8/4q1K1 w - - 0 34",
+          "ply": 67,
+          "san": "Kg2",
+          "uci": "g1g2"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "f4",
+            "piece": "q",
+            "promotion": null,
+            "to": "g3",
+            "uci": "f4g3"
+          },
+          "fen_after": "8/3n1p2/3k4/8/P7/6q1/6K1/4q3 w - - 2 35",
+          "fen_before": "8/3n1p2/3k4/8/P4q2/8/6K1/4q3 b - - 1 34",
+          "ply": 68,
+          "san": "Qfg3#",
+          "uci": "f4g3"
+        }
+      ],
+      "opening_id": "reti",
+      "opening_line": [
+        "g1f3",
+        "d7d5"
+      ],
+      "plies": 68,
+      "reason": "checkmate",
+      "result": "ai_win",
+      "seed": 54279,
+      "winner_color": "black"
+    },
+    {
+      "codex_color": "black",
+      "codex_material_cp": 1830,
+      "complete_game": true,
+      "difficulty": "experiment 5:nnue",
+      "elapsed_ms": 6739.142,
+      "final_fen": "1r4kr/pp4pp/7n/8/2b1Np2/Qp3P2/4q3/4K3 w - - 4 30",
+      "game_key": "chess",
+      "invalid": [],
+      "moves": [
+        {
+          "actor": "book",
+          "decision": {
+            "opening_id": "reti"
+          },
+          "fen_after": "rnbqkbnr/pppppppp/8/8/8/5N2/PPPPPPPP/RNBQKB1R b KQkq - 1 1",
+          "fen_before": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+          "ply": 1,
+          "san": "Nf3",
+          "uci": "g1f3"
+        },
+        {
+          "actor": "book",
+          "decision": {
+            "opening_id": "reti"
+          },
+          "fen_after": "rnbqkbnr/ppp1pppp/8/3p4/8/5N2/PPPPPPPP/RNBQKB1R w KQkq - 0 2",
+          "fen_before": "rnbqkbnr/pppppppp/8/8/8/5N2/PPPPPPPP/RNBQKB1R b KQkq - 1 1",
+          "ply": 2,
+          "san": "d5",
+          "uci": "d7d5"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "b1",
+            "piece": "N",
+            "promotion": null,
+            "to": "c3",
+            "uci": "b1c3"
+          },
+          "fen_after": "rnbqkbnr/ppp1pppp/8/3p4/8/2N2N2/PPPPPPPP/R1BQKB1R b KQkq - 1 2",
+          "fen_before": "rnbqkbnr/ppp1pppp/8/3p4/8/5N2/PPPPPPPP/RNBQKB1R w KQkq - 0 2",
+          "ply": 3,
+          "san": "Nc3",
+          "uci": "b1c3"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "c8f5"
+          },
+          "fen_after": "rn1qkbnr/ppp1pppp/8/3p1b2/8/2N2N2/PPPPPPPP/R1BQKB1R w KQkq - 2 3",
+          "fen_before": "rnbqkbnr/ppp1pppp/8/3p4/8/2N2N2/PPPPPPPP/R1BQKB1R b KQkq - 1 2",
+          "ply": 4,
+          "san": "Bf5",
+          "uci": "c8f5"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "e2",
+            "piece": "P",
+            "promotion": null,
+            "to": "e4",
+            "uci": "e2e4"
+          },
+          "fen_after": "rn1qkbnr/ppp1pppp/8/3p1b2/4P3/2N2N2/PPPP1PPP/R1BQKB1R b KQkq - 0 3",
+          "fen_before": "rn1qkbnr/ppp1pppp/8/3p1b2/8/2N2N2/PPPPPPPP/R1BQKB1R w KQkq - 2 3",
+          "ply": 5,
+          "san": "e4",
+          "uci": "e2e4"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "d5e4"
+          },
+          "fen_after": "rn1qkbnr/ppp1pppp/8/5b2/4p3/2N2N2/PPPP1PPP/R1BQKB1R w KQkq - 0 4",
+          "fen_before": "rn1qkbnr/ppp1pppp/8/3p1b2/4P3/2N2N2/PPPP1PPP/R1BQKB1R b KQkq - 0 3",
+          "ply": 6,
+          "san": "dxe4",
+          "uci": "d5e4"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "f1",
+            "piece": "B",
+            "promotion": null,
+            "to": "b5",
+            "uci": "f1b5"
+          },
+          "fen_after": "rn1qkbnr/ppp1pppp/8/1B3b2/4p3/2N2N2/PPPP1PPP/R1BQK2R b KQkq - 1 4",
+          "fen_before": "rn1qkbnr/ppp1pppp/8/5b2/4p3/2N2N2/PPPP1PPP/R1BQKB1R w KQkq - 0 4",
+          "ply": 7,
+          "san": "Bb5+",
+          "uci": "f1b5"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "c7c6"
+          },
+          "fen_after": "rn1qkbnr/pp2pppp/2p5/1B3b2/4p3/2N2N2/PPPP1PPP/R1BQK2R w KQkq - 0 5",
+          "fen_before": "rn1qkbnr/ppp1pppp/8/1B3b2/4p3/2N2N2/PPPP1PPP/R1BQK2R b KQkq - 1 4",
+          "ply": 8,
+          "san": "c6",
+          "uci": "c7c6"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": true,
+            "en_passant": false,
+            "from": "e1",
+            "piece": "K",
+            "promotion": null,
+            "to": "g1",
+            "uci": "e1g1"
+          },
+          "fen_after": "rn1qkbnr/pp2pppp/2p5/1B3b2/4p3/2N2N2/PPPP1PPP/R1BQ1RK1 b kq - 1 5",
+          "fen_before": "rn1qkbnr/pp2pppp/2p5/1B3b2/4p3/2N2N2/PPPP1PPP/R1BQK2R w KQkq - 0 5",
+          "ply": 9,
+          "san": "O-O",
+          "uci": "e1g1"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "c6b5"
+          },
+          "fen_after": "rn1qkbnr/pp2pppp/8/1p3b2/4p3/2N2N2/PPPP1PPP/R1BQ1RK1 w kq - 0 6",
+          "fen_before": "rn1qkbnr/pp2pppp/2p5/1B3b2/4p3/2N2N2/PPPP1PPP/R1BQ1RK1 b kq - 1 5",
+          "ply": 10,
+          "san": "cxb5",
+          "uci": "c6b5"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "d2",
+            "piece": "P",
+            "promotion": null,
+            "to": "d4",
+            "uci": "d2d4"
+          },
+          "fen_after": "rn1qkbnr/pp2pppp/8/1p3b2/3Pp3/2N2N2/PPP2PPP/R1BQ1RK1 b kq d3 0 6",
+          "fen_before": "rn1qkbnr/pp2pppp/8/1p3b2/4p3/2N2N2/PPPP1PPP/R1BQ1RK1 w kq - 0 6",
+          "ply": 11,
+          "san": "d4",
+          "uci": "d2d4"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "e4f3"
+          },
+          "fen_after": "rn1qkbnr/pp2pppp/8/1p3b2/3P4/2N2p2/PPP2PPP/R1BQ1RK1 w kq - 0 7",
+          "fen_before": "rn1qkbnr/pp2pppp/8/1p3b2/3Pp3/2N2N2/PPP2PPP/R1BQ1RK1 b kq d3 0 6",
+          "ply": 12,
+          "san": "exf3",
+          "uci": "e4f3"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "c1",
+            "piece": "B",
+            "promotion": null,
+            "to": "f4",
+            "uci": "c1f4"
+          },
+          "fen_after": "rn1qkbnr/pp2pppp/8/1p3b2/3P1B2/2N2p2/PPP2PPP/R2Q1RK1 b kq - 1 7",
+          "fen_before": "rn1qkbnr/pp2pppp/8/1p3b2/3P4/2N2p2/PPP2PPP/R1BQ1RK1 w kq - 0 7",
+          "ply": 13,
+          "san": "Bf4",
+          "uci": "c1f4"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "f3g2"
+          },
+          "fen_after": "rn1qkbnr/pp2pppp/8/1p3b2/3P1B2/2N5/PPP2PpP/R2Q1RK1 w kq - 0 8",
+          "fen_before": "rn1qkbnr/pp2pppp/8/1p3b2/3P1B2/2N2p2/PPP2PPP/R2Q1RK1 b kq - 1 7",
+          "ply": 14,
+          "san": "fxg2",
+          "uci": "f3g2"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": "n",
+            "castle": false,
+            "en_passant": false,
+            "from": "f4",
+            "piece": "B",
+            "promotion": null,
+            "to": "b8",
+            "uci": "f4b8"
+          },
+          "fen_after": "rB1qkbnr/pp2pppp/8/1p3b2/3P4/2N5/PPP2PpP/R2Q1RK1 b kq - 0 8",
+          "fen_before": "rn1qkbnr/pp2pppp/8/1p3b2/3P1B2/2N5/PPP2PpP/R2Q1RK1 w kq - 0 8",
+          "ply": 15,
+          "san": "Bxb8",
+          "uci": "f4b8"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "g2f1q"
+          },
+          "fen_after": "rB1qkbnr/pp2pppp/8/1p3b2/3P4/2N5/PPP2P1P/R2Q1qK1 w kq - 0 9",
+          "fen_before": "rB1qkbnr/pp2pppp/8/1p3b2/3P4/2N5/PPP2PpP/R2Q1RK1 b kq - 0 8",
+          "ply": 16,
+          "san": "gxf1=Q+",
+          "uci": "g2f1q"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": "q",
+            "castle": false,
+            "en_passant": false,
+            "from": "d1",
+            "piece": "Q",
+            "promotion": null,
+            "to": "f1",
+            "uci": "d1f1"
+          },
+          "fen_after": "rB1qkbnr/pp2pppp/8/1p3b2/3P4/2N5/PPP2P1P/R4QK1 b kq - 0 9",
+          "fen_before": "rB1qkbnr/pp2pppp/8/1p3b2/3P4/2N5/PPP2P1P/R2Q1qK1 w kq - 0 9",
+          "ply": 17,
+          "san": "Qxf1",
+          "uci": "d1f1"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "a8b8"
+          },
+          "fen_after": "1r1qkbnr/pp2pppp/8/1p3b2/3P4/2N5/PPP2P1P/R4QK1 w k - 0 10",
+          "fen_before": "rB1qkbnr/pp2pppp/8/1p3b2/3P4/2N5/PPP2P1P/R4QK1 b kq - 0 9",
+          "ply": 18,
+          "san": "Rxb8",
+          "uci": "a8b8"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "d4",
+            "piece": "P",
+            "promotion": null,
+            "to": "d5",
+            "uci": "d4d5"
+          },
+          "fen_after": "1r1qkbnr/pp2pppp/8/1p1P1b2/8/2N5/PPP2P1P/R4QK1 b k - 0 10",
+          "fen_before": "1r1qkbnr/pp2pppp/8/1p3b2/3P4/2N5/PPP2P1P/R4QK1 w k - 0 10",
+          "ply": 19,
+          "san": "d5",
+          "uci": "d4d5"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "f5c2"
+          },
+          "fen_after": "1r1qkbnr/pp2pppp/8/1p1P4/8/2N5/PPb2P1P/R4QK1 w k - 0 11",
+          "fen_before": "1r1qkbnr/pp2pppp/8/1p1P1b2/8/2N5/PPP2P1P/R4QK1 b k - 0 10",
+          "ply": 20,
+          "san": "Bxc2",
+          "uci": "f5c2"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "a1",
+            "piece": "R",
+            "promotion": null,
+            "to": "c1",
+            "uci": "a1c1"
+          },
+          "fen_after": "1r1qkbnr/pp2pppp/8/1p1P4/8/2N5/PPb2P1P/2R2QK1 b k - 1 11",
+          "fen_before": "1r1qkbnr/pp2pppp/8/1p1P4/8/2N5/PPb2P1P/R4QK1 w k - 0 11",
+          "ply": 21,
+          "san": "Rc1",
+          "uci": "a1c1"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "c2f5"
+          },
+          "fen_after": "1r1qkbnr/pp2pppp/8/1p1P1b2/8/2N5/PP3P1P/2R2QK1 w k - 2 12",
+          "fen_before": "1r1qkbnr/pp2pppp/8/1p1P4/8/2N5/PPb2P1P/2R2QK1 b k - 1 11",
+          "ply": 22,
+          "san": "Bf5",
+          "uci": "c2f5"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "a2",
+            "piece": "P",
+            "promotion": null,
+            "to": "a4",
+            "uci": "a2a4"
+          },
+          "fen_after": "1r1qkbnr/pp2pppp/8/1p1P1b2/P7/2N5/1P3P1P/2R2QK1 b k - 0 12",
+          "fen_before": "1r1qkbnr/pp2pppp/8/1p1P1b2/8/2N5/PP3P1P/2R2QK1 w k - 2 12",
+          "ply": 23,
+          "san": "a4",
+          "uci": "a2a4"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "b5a4"
+          },
+          "fen_after": "1r1qkbnr/pp2pppp/8/3P1b2/p7/2N5/1P3P1P/2R2QK1 w k - 0 13",
+          "fen_before": "1r1qkbnr/pp2pppp/8/1p1P1b2/P7/2N5/1P3P1P/2R2QK1 b k - 0 12",
+          "ply": 24,
+          "san": "bxa4",
+          "uci": "b5a4"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "f1",
+            "piece": "Q",
+            "promotion": null,
+            "to": "b5",
+            "uci": "f1b5"
+          },
+          "fen_after": "1r1qkbnr/pp2pppp/8/1Q1P1b2/p7/2N5/1P3P1P/2R3K1 b k - 1 13",
+          "fen_before": "1r1qkbnr/pp2pppp/8/3P1b2/p7/2N5/1P3P1P/2R2QK1 w k - 0 13",
+          "ply": 25,
+          "san": "Qb5+",
+          "uci": "f1b5"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "f5d7"
+          },
+          "fen_after": "1r1qkbnr/pp1bpppp/8/1Q1P4/p7/2N5/1P3P1P/2R3K1 w k - 2 14",
+          "fen_before": "1r1qkbnr/pp2pppp/8/1Q1P1b2/p7/2N5/1P3P1P/2R3K1 b k - 1 13",
+          "ply": 26,
+          "san": "Bd7",
+          "uci": "f5d7"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "b5",
+            "piece": "Q",
+            "promotion": null,
+            "to": "d3",
+            "uci": "b5d3"
+          },
+          "fen_after": "1r1qkbnr/pp1bpppp/8/3P4/p7/2NQ4/1P3P1P/2R3K1 b k - 3 14",
+          "fen_before": "1r1qkbnr/pp1bpppp/8/1Q1P4/p7/2N5/1P3P1P/2R3K1 w k - 2 14",
+          "ply": 27,
+          "san": "Qd3",
+          "uci": "b5d3"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "g8h6"
+          },
+          "fen_after": "1r1qkb1r/pp1bpppp/7n/3P4/p7/2NQ4/1P3P1P/2R3K1 w k - 4 15",
+          "fen_before": "1r1qkbnr/pp1bpppp/8/3P4/p7/2NQ4/1P3P1P/2R3K1 b k - 3 14",
+          "ply": 28,
+          "san": "Nh6",
+          "uci": "g8h6"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "b2",
+            "piece": "P",
+            "promotion": null,
+            "to": "b4",
+            "uci": "b2b4"
+          },
+          "fen_after": "1r1qkb1r/pp1bpppp/7n/3P4/pP6/2NQ4/5P1P/2R3K1 b k b3 0 15",
+          "fen_before": "1r1qkb1r/pp1bpppp/7n/3P4/p7/2NQ4/1P3P1P/2R3K1 w k - 4 15",
+          "ply": 29,
+          "san": "b4",
+          "uci": "b2b4"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "a4b3"
+          },
+          "fen_after": "1r1qkb1r/pp1bpppp/7n/3P4/8/1pNQ4/5P1P/2R3K1 w k - 0 16",
+          "fen_before": "1r1qkb1r/pp1bpppp/7n/3P4/pP6/2NQ4/5P1P/2R3K1 b k b3 0 15",
+          "ply": 30,
+          "san": "axb3",
+          "uci": "a4b3"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "c1",
+            "piece": "R",
+            "promotion": null,
+            "to": "b1",
+            "uci": "c1b1"
+          },
+          "fen_after": "1r1qkb1r/pp1bpppp/7n/3P4/8/1pNQ4/5P1P/1R4K1 b k - 1 16",
+          "fen_before": "1r1qkb1r/pp1bpppp/7n/3P4/8/1pNQ4/5P1P/2R3K1 w k - 0 16",
+          "ply": 31,
+          "san": "Rb1",
+          "uci": "c1b1"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "f7f5"
+          },
+          "fen_after": "1r1qkb1r/pp1bp1pp/7n/3P1p2/8/1pNQ4/5P1P/1R4K1 w k - 0 17",
+          "fen_before": "1r1qkb1r/pp1bpppp/7n/3P4/8/1pNQ4/5P1P/1R4K1 b k - 1 16",
+          "ply": 32,
+          "san": "f5",
+          "uci": "f7f5"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "b1",
+            "piece": "R",
+            "promotion": null,
+            "to": "b2",
+            "uci": "b1b2"
+          },
+          "fen_after": "1r1qkb1r/pp1bp1pp/7n/3P1p2/8/1pNQ4/1R3P1P/6K1 b k - 1 17",
+          "fen_before": "1r1qkb1r/pp1bp1pp/7n/3P1p2/8/1pNQ4/5P1P/1R4K1 w k - 0 17",
+          "ply": 33,
+          "san": "Rb2",
+          "uci": "b1b2"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "f5f4"
+          },
+          "fen_after": "1r1qkb1r/pp1bp1pp/7n/3P4/5p2/1pNQ4/1R3P1P/6K1 w k - 0 18",
+          "fen_before": "1r1qkb1r/pp1bp1pp/7n/3P1p2/8/1pNQ4/1R3P1P/6K1 b k - 1 17",
+          "ply": 34,
+          "san": "f4",
+          "uci": "f5f4"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "b2",
+            "piece": "R",
+            "promotion": null,
+            "to": "b1",
+            "uci": "b2b1"
+          },
+          "fen_after": "1r1qkb1r/pp1bp1pp/7n/3P4/5p2/1pNQ4/5P1P/1R4K1 b k - 1 18",
+          "fen_before": "1r1qkb1r/pp1bp1pp/7n/3P4/5p2/1pNQ4/1R3P1P/6K1 w k - 0 18",
+          "ply": 35,
+          "san": "Rb1",
+          "uci": "b2b1"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "e7e5"
+          },
+          "fen_after": "1r1qkb1r/pp1b2pp/7n/3Pp3/5p2/1pNQ4/5P1P/1R4K1 w k e6 0 19",
+          "fen_before": "1r1qkb1r/pp1bp1pp/7n/3P4/5p2/1pNQ4/5P1P/1R4K1 b k - 1 18",
+          "ply": 36,
+          "san": "e5",
+          "uci": "e7e5"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": "p",
+            "castle": false,
+            "en_passant": true,
+            "from": "d5",
+            "piece": "P",
+            "promotion": null,
+            "to": "e6",
+            "uci": "d5e6"
+          },
+          "fen_after": "1r1qkb1r/pp1b2pp/4P2n/8/5p2/1pNQ4/5P1P/1R4K1 b k - 0 19",
+          "fen_before": "1r1qkb1r/pp1b2pp/7n/3Pp3/5p2/1pNQ4/5P1P/1R4K1 w k e6 0 19",
+          "ply": 37,
+          "san": "dxe6",
+          "uci": "d5e6"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "d8g5"
+          },
+          "fen_after": "1r2kb1r/pp1b2pp/4P2n/6q1/5p2/1pNQ4/5P1P/1R4K1 w k - 1 20",
+          "fen_before": "1r1qkb1r/pp1b2pp/4P2n/8/5p2/1pNQ4/5P1P/1R4K1 b k - 0 19",
+          "ply": 38,
+          "san": "Qg5+",
+          "uci": "d8g5"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "g1",
+            "piece": "K",
+            "promotion": null,
+            "to": "f1",
+            "uci": "g1f1"
+          },
+          "fen_after": "1r2kb1r/pp1b2pp/4P2n/6q1/5p2/1pNQ4/5P1P/1R3K2 b k - 2 20",
+          "fen_before": "1r2kb1r/pp1b2pp/4P2n/6q1/5p2/1pNQ4/5P1P/1R4K1 w k - 1 20",
+          "ply": 39,
+          "san": "Kf1",
+          "uci": "g1f1"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "d7e6"
+          },
+          "fen_after": "1r2kb1r/pp4pp/4b2n/6q1/5p2/1pNQ4/5P1P/1R3K2 w k - 0 21",
+          "fen_before": "1r2kb1r/pp1b2pp/4P2n/6q1/5p2/1pNQ4/5P1P/1R3K2 b k - 2 20",
+          "ply": 40,
+          "san": "Bxe6",
+          "uci": "d7e6"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "b1",
+            "piece": "R",
+            "promotion": null,
+            "to": "a1",
+            "uci": "b1a1"
+          },
+          "fen_after": "1r2kb1r/pp4pp/4b2n/6q1/5p2/1pNQ4/5P1P/R4K2 b k - 1 21",
+          "fen_before": "1r2kb1r/pp4pp/4b2n/6q1/5p2/1pNQ4/5P1P/1R3K2 w k - 0 21",
+          "ply": 41,
+          "san": "Ra1",
+          "uci": "b1a1"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "f8c5"
+          },
+          "fen_after": "1r2k2r/pp4pp/4b2n/2b3q1/5p2/1pNQ4/5P1P/R4K2 w k - 2 22",
+          "fen_before": "1r2kb1r/pp4pp/4b2n/6q1/5p2/1pNQ4/5P1P/R4K2 b k - 1 21",
+          "ply": 42,
+          "san": "Bc5",
+          "uci": "f8c5"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "d3",
+            "piece": "Q",
+            "promotion": null,
+            "to": "b5",
+            "uci": "d3b5"
+          },
+          "fen_after": "1r2k2r/pp4pp/4b2n/1Qb3q1/5p2/1pN5/5P1P/R4K2 b k - 3 22",
+          "fen_before": "1r2k2r/pp4pp/4b2n/2b3q1/5p2/1pNQ4/5P1P/R4K2 w k - 2 22",
+          "ply": 43,
+          "san": "Qb5+",
+          "uci": "d3b5"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "e8f8"
+          },
+          "fen_after": "1r3k1r/pp4pp/4b2n/1Qb3q1/5p2/1pN5/5P1P/R4K2 w - - 4 23",
+          "fen_before": "1r2k2r/pp4pp/4b2n/1Qb3q1/5p2/1pN5/5P1P/R4K2 b k - 3 22",
+          "ply": 44,
+          "san": "Kf8",
+          "uci": "e8f8"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "f2",
+            "piece": "P",
+            "promotion": null,
+            "to": "f3",
+            "uci": "f2f3"
+          },
+          "fen_after": "1r3k1r/pp4pp/4b2n/1Qb3q1/5p2/1pN2P2/7P/R4K2 b - - 0 23",
+          "fen_before": "1r3k1r/pp4pp/4b2n/1Qb3q1/5p2/1pN5/5P1P/R4K2 w - - 4 23",
+          "ply": 45,
+          "san": "f3",
+          "uci": "f2f3"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "g5g1"
+          },
+          "fen_after": "1r3k1r/pp4pp/4b2n/1Qb5/5p2/1pN2P2/7P/R4Kq1 w - - 1 24",
+          "fen_before": "1r3k1r/pp4pp/4b2n/1Qb3q1/5p2/1pN2P2/7P/R4K2 b - - 0 23",
+          "ply": 46,
+          "san": "Qg1+",
+          "uci": "g5g1"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "f1",
+            "piece": "K",
+            "promotion": null,
+            "to": "e2",
+            "uci": "f1e2"
+          },
+          "fen_after": "1r3k1r/pp4pp/4b2n/1Qb5/5p2/1pN2P2/4K2P/R5q1 b - - 2 24",
+          "fen_before": "1r3k1r/pp4pp/4b2n/1Qb5/5p2/1pN2P2/7P/R4Kq1 w - - 1 24",
+          "ply": 47,
+          "san": "Ke2",
+          "uci": "f1e2"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "g1a1"
+          },
+          "fen_after": "1r3k1r/pp4pp/4b2n/1Qb5/5p2/1pN2P2/4K2P/q7 w - - 0 25",
+          "fen_before": "1r3k1r/pp4pp/4b2n/1Qb5/5p2/1pN2P2/4K2P/R5q1 b - - 2 24",
+          "ply": 48,
+          "san": "Qxa1",
+          "uci": "g1a1"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": "b",
+            "castle": false,
+            "en_passant": false,
+            "from": "b5",
+            "piece": "Q",
+            "promotion": null,
+            "to": "c5",
+            "uci": "b5c5"
+          },
+          "fen_after": "1r3k1r/pp4pp/4b2n/2Q5/5p2/1pN2P2/4K2P/q7 b - - 0 25",
+          "fen_before": "1r3k1r/pp4pp/4b2n/1Qb5/5p2/1pN2P2/4K2P/q7 w - - 0 25",
+          "ply": 49,
+          "san": "Qxc5+",
+          "uci": "b5c5"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "f8g8"
+          },
+          "fen_after": "1r4kr/pp4pp/4b2n/2Q5/5p2/1pN2P2/4K2P/q7 w - - 1 26",
+          "fen_before": "1r3k1r/pp4pp/4b2n/2Q5/5p2/1pN2P2/4K2P/q7 b - - 0 25",
+          "ply": 50,
+          "san": "Kg8",
+          "uci": "f8g8"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "c3",
+            "piece": "N",
+            "promotion": null,
+            "to": "e4",
+            "uci": "c3e4"
+          },
+          "fen_after": "1r4kr/pp4pp/4b2n/2Q5/4Np2/1p3P2/4K2P/q7 b - - 2 26",
+          "fen_before": "1r4kr/pp4pp/4b2n/2Q5/5p2/1pN2P2/4K2P/q7 w - - 1 26",
+          "ply": 51,
+          "san": "Ne4",
+          "uci": "c3e4"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "a1b2"
+          },
+          "fen_after": "1r4kr/pp4pp/4b2n/2Q5/4Np2/1p3P2/1q2K2P/8 w - - 3 27",
+          "fen_before": "1r4kr/pp4pp/4b2n/2Q5/4Np2/1p3P2/4K2P/q7 b - - 2 26",
+          "ply": 52,
+          "san": "Qb2+",
+          "uci": "a1b2"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "e2",
+            "piece": "K",
+            "promotion": null,
+            "to": "f1",
+            "uci": "e2f1"
+          },
+          "fen_after": "1r4kr/pp4pp/4b2n/2Q5/4Np2/1p3P2/1q5P/5K2 b - - 4 27",
+          "fen_before": "1r4kr/pp4pp/4b2n/2Q5/4Np2/1p3P2/1q2K2P/8 w - - 3 27",
+          "ply": 53,
+          "san": "Kf1",
+          "uci": "e2f1"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "b2h2"
+          },
+          "fen_after": "1r4kr/pp4pp/4b2n/2Q5/4Np2/1p3P2/7q/5K2 w - - 0 28",
+          "fen_before": "1r4kr/pp4pp/4b2n/2Q5/4Np2/1p3P2/1q5P/5K2 b - - 4 27",
+          "ply": 54,
+          "san": "Qxh2",
+          "uci": "b2h2"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "c5",
+            "piece": "Q",
+            "promotion": null,
+            "to": "a3",
+            "uci": "c5a3"
+          },
+          "fen_after": "1r4kr/pp4pp/4b2n/8/4Np2/Qp3P2/7q/5K2 b - - 1 28",
+          "fen_before": "1r4kr/pp4pp/4b2n/2Q5/4Np2/1p3P2/7q/5K2 w - - 0 28",
+          "ply": 55,
+          "san": "Qa3",
+          "uci": "c5a3"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "e6c4"
+          },
+          "fen_after": "1r4kr/pp4pp/7n/8/2b1Np2/Qp3P2/7q/5K2 w - - 2 29",
+          "fen_before": "1r4kr/pp4pp/4b2n/8/4Np2/Qp3P2/7q/5K2 b - - 1 28",
+          "ply": 56,
+          "san": "Bc4+",
+          "uci": "e6c4"
+        },
+        {
+          "actor": "ai",
+          "decision": {
+            "captured": null,
+            "castle": false,
+            "en_passant": false,
+            "from": "f1",
+            "piece": "K",
+            "promotion": null,
+            "to": "e1",
+            "uci": "f1e1"
+          },
+          "fen_after": "1r4kr/pp4pp/7n/8/2b1Np2/Qp3P2/7q/4K3 b - - 3 29",
+          "fen_before": "1r4kr/pp4pp/7n/8/2b1Np2/Qp3P2/7q/5K2 w - - 2 29",
+          "ply": 57,
+          "san": "Ke1",
+          "uci": "f1e1"
+        },
+        {
+          "actor": "codex",
+          "decision": {
+            "reason": "material/development/tactical-safety",
+            "uci": "h2e2"
+          },
+          "fen_after": "1r4kr/pp4pp/7n/8/2b1Np2/Qp3P2/4q3/4K3 w - - 4 30",
+          "fen_before": "1r4kr/pp4pp/7n/8/2b1Np2/Qp3P2/7q/4K3 b - - 3 29",
+          "ply": 58,
+          "san": "Qe2#",
+          "uci": "h2e2"
+        }
+      ],
+      "opening_id": "reti",
+      "opening_line": [
+        "g1f3",
+        "d7d5"
+      ],
+      "plies": 58,
+      "reason": "checkmate",
+      "result": "codex_win",
+      "seed": 54312,
+      "winner_color": "black"
+    }
+  ],
+  "generated_at": "2026-05-13T15:38:50+00:00",
+  "method": {
+    "games_per_opening": 2,
+    "max_plies": 220,
+    "openings": [
+      "french",
+      "reti"
+    ]
+  },
+  "summary": {
+    "ai_score_rate": 0.5,
+    "ai_win_rate": 0.25,
+    "ai_wins": 1,
+    "avg_elapsed_ms": 6475.818,
+    "avg_plies": 56.5,
+    "by_opening": {
+      "french": {
+        "ai_wins": 0,
+        "codex_wins": 0,
+        "draws": 2,
+        "games": 2
+      },
+      "reti": {
+        "ai_wins": 1,
+        "codex_wins": 1,
+        "draws": 0,
+        "games": 2
+      }
+    },
+    "checkmate_rate": 0.5,
+    "codex_wins": 1,
+    "complete_game_rate": 1.0,
+    "draw_rate": 0.5,
+    "draws": 2,
+    "games": 4,
+    "loss_rate": 0.25,
+    "reasons": [
+      "checkmate",
+      "threefold_repetition"
+    ],
+    "threefold_rate": 0.5
+  }
+}

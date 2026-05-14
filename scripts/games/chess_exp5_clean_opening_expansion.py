@@ -34,9 +34,9 @@ DEFAULT_RESULTS_ROOT = Path(os.environ.get("HACKME_CHESS_RESULTS_DIR", str(ROOT 
 DEFAULT_TRAIN_ROWS = DEFAULT_RESULTS_ROOT / "exp5_08_clean_pool" / "inputs" / "exp5_08_train_clean_only.jsonl"
 DEFAULT_BENCHMARK_SUMMARY = DEFAULT_RESULTS_ROOT / "exp5_13_rule_smoke_stalemate_fix_check" / "summary.json"
 DEFAULT_OUTPUT_DIR = DEFAULT_RESULTS_ROOT / "exp5_14b_clean_opening_heldout"
-DEFAULT_PRODUCTION_MODEL = ROOT / "runtime" / "games" / "models" / "chess_experiment_5_nnue.json"
+DEFAULT_PRODUCTION_MODEL = ROOT / "runtime" / "games" / "models" / "chess_experiment_5_nnue_experience.json"
 DEFAULT_PROMOTED_STAGE_CANDIDATE = DEFAULT_RESULTS_ROOT / "exp5_08_stage_candidate" / "chess_experiment_5_nnue_stage_candidate.json"
-DEFAULT_BASELINE_MODEL = ROOT / "services" / "games" / "models" / "chess_experiment_5_nnue.json"
+DEFAULT_BASELINE_MODEL = DEFAULT_PRODUCTION_MODEL
 DEFAULT_SEARCH_PROFILE = "fixed_depth_strong"
 MIN_CLEAN_ROWS = 30
 

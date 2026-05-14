@@ -933,7 +933,8 @@ async function loadCommunityBoardReviews() {
   renderCommunityBoardReviews();
 }
 
-async function loadCommunityThreadReviews() {
+async function loadCommunityThreadReviews(options = {}) {
+  const quiet = !!options.quiet;
   await fetchCsrfToken({ force: true });
   const res = await apiFetch(API + "/community/threads/reviews", {
     credentials: "same-origin",
@@ -944,7 +945,7 @@ async function loadCommunityThreadReviews() {
     canReviewCommunityThreads = false;
     communityThreadReviews = [];
     renderCommunityThreadReviews();
-    flash($("community-msg"), json.msg || "待審核主題讀取失敗", false);
+    if (!quiet) flash($("community-msg"), json.msg || "待審核主題讀取失敗", false);
     return;
   }
   canReviewCommunityThreads = true;
@@ -1255,7 +1256,7 @@ async function loadCommunityHome() {
     loadCommunityCategories(),
     loadCommunityBoards(),
     (currentRole === "manager" || currentRole === "super_admin") ? loadCommunityBoardReviews() : Promise.resolve(),
-    loadCommunityThreadReviews(),
+    loadCommunityThreadReviews({ quiet: true }),
   ]);
 }
 

@@ -10,7 +10,6 @@ function bindUiEvents() {
   const tabModuleVideos = $("tab-module-videos");
   const tabModuleGames = $("tab-module-games");
   const tabModuleJobs = $("tab-module-jobs");
-  const tabModuleShares = $("tab-module-shares");
   const tabModuleComfyui = $("tab-module-comfyui");
   const tabModuleEconomy = $("tab-module-economy");
   const tabModuleTrading = $("tab-module-trading");
@@ -231,7 +230,6 @@ function bindUiEvents() {
   if (tabModuleVideos) tabModuleVideos.addEventListener("click", () => switchModuleTab("videos"));
   if (tabModuleGames) tabModuleGames.addEventListener("click", () => switchModuleTab("games"));
   if (tabModuleJobs) tabModuleJobs.addEventListener("click", () => switchModuleTab("jobs"));
-  if (tabModuleShares) tabModuleShares.addEventListener("click", () => switchModuleTab("shares"));
   if (tabModuleComfyui) tabModuleComfyui.addEventListener("click", () => switchModuleTab("comfyui"));
   if (tabModuleEconomy) tabModuleEconomy.addEventListener("click", () => switchModuleTab("economy"));
   if (tabModuleTrading) tabModuleTrading.addEventListener("click", () => switchModuleTab("trading"));

@@ -5,10 +5,11 @@ Accepted JSONL row format:
 
     {"fen":"...", "move_uci":"e2e4", "side":"white", "target":1.0, "weight":1.0}
 
-This is the exp5-specific minimal trainer. It mutates only the NNUE-like exp5
-JSON model and replay file. Strength validation and promotion gates remain
-separate pending design because exp5 is not compatible with exp3/exp4 semantic
-replay assumptions.
+This is the exp5-specific minimal trainer. The immutable base model is embedded
+in source code; this script writes only an NNUE-like experience delta JSON and
+replay file. Strength validation and promotion gates remain separate pending
+design because exp5 is not compatible with exp3/exp4 semantic replay
+assumptions.
 """
 
 from __future__ import annotations
@@ -93,6 +94,36 @@ def parse_args() -> argparse.Namespace:
         default=True,
         help="Also exclude teacher_top5 (in addition to teacher_top3) when auto-injecting hard-negatives. On by default; pass --no-exclude-teacher-top5-from-hn to disable.",
     )
+    parser.add_argument(
+        "--soft-teacher-topk",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Train teacher_top3/top5 alternatives as fractional positive targets instead of treating every non-top1 move as wrong.",
+    )
+    parser.add_argument(
+        "--soft-teacher-top3-weight",
+        type=float,
+        default=0.45,
+        help="Fractional target strength for teacher_top3 alternatives. Default 0.45.",
+    )
+    parser.add_argument(
+        "--soft-teacher-top5-weight",
+        type=float,
+        default=0.22,
+        help="Fractional target strength for teacher_top5 alternatives outside top3. Default 0.22.",
+    )
+    parser.add_argument(
+        "--pairwise-hard-negative",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Apply a pairwise margin update when current model scores a hard-negative too close to the teacher move.",
+    )
+    parser.add_argument(
+        "--pairwise-margin-cp",
+        type=float,
+        default=180.0,
+        help="Target raw-score margin between teacher move and hard-negative before pairwise updates stop firing.",
+    )
     return parser.parse_args()
 
 
@@ -118,7 +149,7 @@ def main() -> int:
     input_paths = [Path(item).expanduser().resolve() for item in args.input_jsonl]
     model_path = Path(args.model_path).expanduser().resolve() if args.model_path else default_chess_nnue_model_path()
     replay_path = Path(args.replay_path).expanduser().resolve() if args.replay_path else default_chess_nnue_replay_path()
-    _progress(f"target model: {model_path}")
+    _progress(f"target experience model: {model_path}")
     _progress(f"target replay: {replay_path}")
     _progress(f"input files: {len(input_paths)}")
     samples: list[dict] = []
@@ -366,6 +397,11 @@ def main() -> int:
         replay_path=replay_path,
         replace_replay=bool(args.replace_replay),
         epochs=max(1, int(args.epochs or 1)),
+        soft_teacher_topk=bool(args.soft_teacher_topk),
+        soft_teacher_top3_weight=float(args.soft_teacher_top3_weight),
+        soft_teacher_top5_weight=float(args.soft_teacher_top5_weight),
+        pairwise_hard_negative=bool(args.pairwise_hard_negative),
+        pairwise_margin_cp=float(args.pairwise_margin_cp),
     )
     result["input_rows"] = len(samples)
     result["auto_hard_negative_topk"] = auto_hn_topk

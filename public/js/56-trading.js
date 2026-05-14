@@ -14,6 +14,7 @@ let tradingState = {
   referencePrices: null,
   btcSignal: null,
   workflowTemplates: [],
+  botCompetition: null,
 };
 let tradingEventsBound = false;
 let tradingReferencePriceAbort = null;
@@ -33,9 +34,195 @@ let tradingBtcSignalCountdownTimer = null;
 let tradingBotCountdownTimer = null;
 let tradingCurrentBotTab = "mybots";
 let tradingBotChartOverlay = null;
+let tradingActiveActionButton = null;
 const tradingGridExpandedBots = new Set();
 const TRADING_WORKFLOW_STORAGE_KEY = "hackme_trading_workflow_json";
+const TRADING_PERSONAL_FORM_STORAGE_KEY = "hackme_trading_personal_form_v1";
 const TRADING_LIVE_PRICE_REFRESH_MS = 2000;
+let tradingAccountScope = "";
+
+const TRADING_PERSONAL_FORM_FIELDS = [
+  { id: "trading-market-select", value: "" },
+  { id: "trading-side", value: "buy" },
+  { id: "trading-order-type", value: "market" },
+  { id: "trading-input-mode", value: "quantity" },
+  { id: "trading-quantity", value: "0.01" },
+  { id: "trading-limit-price", value: "" },
+  { id: "trading-stop-loss-percent", value: "" },
+  { id: "trading-take-profit-percent", value: "" },
+  { id: "trading-margin-type", value: "margin_long" },
+  { id: "trading-margin-market-select", value: "" },
+  { id: "trading-margin-quantity", value: "0.01" },
+  { id: "trading-margin-collateral", value: "100" },
+  { id: "trading-margin-stop-loss-percent", value: "" },
+  { id: "trading-margin-take-profit-percent", value: "" },
+  { id: "trading-dca-bot-name", value: "" },
+  { id: "trading-dca-bot-market", value: "" },
+  { id: "trading-dca-bot-budget-points", value: "100" },
+  { id: "trading-dca-bot-interval-preset", value: "24" },
+  { id: "trading-dca-bot-interval-hours", value: "24" },
+  { id: "trading-dca-price-upper", value: "" },
+  { id: "trading-dca-price-lower", value: "" },
+  { id: "trading-dca-stop-loss-percent", value: "" },
+  { id: "trading-dca-take-profit-percent", value: "" },
+  { id: "trading-dca-share-parameters", checked: false },
+  { id: "trading-dca-bot-max-runs", value: "7" },
+  { id: "trading-dca-bot-enabled", checked: true },
+  { id: "trading-grid-bot-name", value: "" },
+  { id: "trading-grid-bot-market", value: "" },
+  { id: "trading-grid-preset", value: "" },
+  { id: "trading-grid-upper-price", value: "" },
+  { id: "trading-grid-lower-price", value: "" },
+  { id: "trading-grid-count", value: "10" },
+  { id: "trading-grid-order-amount", value: "100" },
+  { id: "trading-grid-stop-loss-percent", value: "" },
+  { id: "trading-grid-take-profit-percent", value: "" },
+  { id: "trading-grid-spacing-mode", value: "arithmetic" },
+  { id: "trading-grid-share-parameters", checked: false },
+  { id: "trading-auto-bot-name", value: "" },
+  { id: "trading-auto-bot-market", value: "" },
+  { id: "trading-auto-strategy-mode", value: "single" },
+  { id: "trading-auto-daily-runs", value: "5" },
+  { id: "trading-auto-bot-max-runs", value: "5" },
+  { id: "trading-auto-bot-cooldown", value: "300" },
+  { id: "trading-auto-share-parameters", checked: false },
+  { id: "trading-auto-bot-enabled", checked: true },
+  { id: "trading-workflow-custom-name", value: "" },
+  { id: "trading-dca-backtest-timeframe", value: "15m" },
+  { id: "trading-dca-backtest-market", value: "" },
+  { id: "trading-dca-backtest-start", value: "" },
+  { id: "trading-dca-backtest-end", value: "" },
+  { id: "trading-dca-backtest-initial-cash", value: "10000" },
+  { id: "trading-dca-backtest-slippage-percent", value: "0" },
+  { id: "trading-dca-backtest-order-points", value: "100" },
+  { id: "trading-dca-backtest-interval-candles", value: "1" },
+  { id: "trading-dca-backtest-stop-loss-percent", value: "" },
+  { id: "trading-dca-backtest-take-profit-percent", value: "" },
+  { id: "trading-grid-backtest-timeframe", value: "15m" },
+  { id: "trading-grid-backtest-market", value: "" },
+  { id: "trading-grid-backtest-start", value: "" },
+  { id: "trading-grid-backtest-end", value: "" },
+  { id: "trading-grid-backtest-initial-cash", value: "10000" },
+  { id: "trading-grid-backtest-slippage-percent", value: "0" },
+  { id: "trading-grid-backtest-grid-lower", value: "" },
+  { id: "trading-grid-backtest-grid-upper", value: "" },
+  { id: "trading-grid-backtest-grid-count", value: "10" },
+  { id: "trading-grid-backtest-grid-amount", value: "100" },
+  { id: "trading-grid-backtest-stop-loss-percent", value: "" },
+  { id: "trading-grid-backtest-take-profit-percent", value: "" },
+  { id: "trading-grid-backtest-grid-spacing", value: "arithmetic" },
+  { id: "trading-workflow-backtest-timeframe", value: "15m" },
+  { id: "trading-workflow-backtest-market", value: "" },
+  { id: "trading-workflow-backtest-start", value: "" },
+  { id: "trading-workflow-backtest-end", value: "" },
+  { id: "trading-workflow-backtest-initial-cash", value: "10000" },
+  { id: "trading-workflow-backtest-slippage-percent", value: "0" },
+  { id: "trading-workflow-backtest-order-points", value: "100" },
+];
+
+function tradingUserStorageScope() {
+  if (typeof getCurrentAccountStorageScope === "function") return getCurrentAccountStorageScope();
+  const id = Number(currentUserId || 0);
+  if (Number.isFinite(id) && id > 0) return `user:${id}`;
+  const name = String(currentUser || "").trim().toLowerCase();
+  return name ? `name:${name}` : "anonymous";
+}
+
+function tradingUserStorageKey(key) {
+  if (typeof accountScopedStorageKey === "function") return accountScopedStorageKey(key, tradingUserStorageScope());
+  return `hackme_web:${tradingUserStorageScope()}:${String(key || "state")}`;
+}
+
+function tradingSetPersonalField(field, value) {
+  const el = $(field.id);
+  if (!el) return;
+  if ("checked" in field) {
+    el.checked = value === undefined ? !!field.checked : !!value;
+    return;
+  }
+  const nextValue = value === undefined || value === null ? field.value : String(value);
+  if (el.tagName === "SELECT" && nextValue) {
+    const exists = Array.from(el.options || []).some((option) => option.value === nextValue);
+    if (!exists) return;
+  }
+  if (el.tagName === "SELECT" && !nextValue && el.options?.length) {
+    const emptyOption = Array.from(el.options || []).some((option) => option.value === "");
+    if (!emptyOption) {
+      el.selectedIndex = 0;
+      return;
+    }
+  }
+  el.value = nextValue;
+}
+
+function captureTradingPersonalFormState() {
+  const state = {};
+  TRADING_PERSONAL_FORM_FIELDS.forEach((field) => {
+    const el = $(field.id);
+    if (!el) return;
+    state[field.id] = "checked" in field ? !!el.checked : el.value;
+  });
+  return state;
+}
+
+function saveTradingPersonalFormState() {
+  try {
+    localStorage.setItem(tradingUserStorageKey(TRADING_PERSONAL_FORM_STORAGE_KEY), JSON.stringify(captureTradingPersonalFormState()));
+  } catch (err) {}
+}
+
+function applyTradingPersonalFormState(saved = {}) {
+  TRADING_PERSONAL_FORM_FIELDS.forEach((field) => {
+    const hasSavedValue = Object.prototype.hasOwnProperty.call(saved, field.id);
+    tradingSetPersonalField(field, hasSavedValue ? saved[field.id] : undefined);
+  });
+  syncTradingDcaIntervalMode();
+  syncTradingOrderSideTheme();
+  syncTradingOrderInputMode();
+  updateTradingOrderEstimate();
+  updateTradingMarginEstimate();
+  scheduleGridBotPreview();
+}
+
+function loadTradingPersonalFormState() {
+  let saved = {};
+  try {
+    saved = JSON.parse(localStorage.getItem(tradingUserStorageKey(TRADING_PERSONAL_FORM_STORAGE_KEY)) || "{}") || {};
+  } catch (err) {
+    saved = {};
+  }
+  applyTradingPersonalFormState(saved);
+}
+
+function ensureTradingAccountScope(options = {}) {
+  const nextScope = tradingUserStorageScope();
+  if (!options.force && tradingAccountScope === nextScope) return false;
+  tradingAccountScope = nextScope;
+  loadTradingPersonalFormState();
+  return true;
+}
+
+function bindTradingPersonalFormPersistence() {
+  TRADING_PERSONAL_FORM_FIELDS.forEach((field) => {
+    const el = $(field.id);
+    if (!el || el.dataset.tradingPersonalBound === "1") return;
+    el.dataset.tradingPersonalBound = "1";
+    el.addEventListener("input", saveTradingPersonalFormState);
+    el.addEventListener("change", saveTradingPersonalFormState);
+  });
+}
+
+function syncTradingDcaIntervalMode() {
+  const dcaPreset = $("trading-dca-bot-interval-preset");
+  const target = $("trading-dca-bot-interval-hours");
+  const field = $("trading-dca-custom-interval-field");
+  if (!dcaPreset || !target) return false;
+  const custom = dcaPreset.value === "custom";
+  target.disabled = !custom;
+  if (field) field.style.display = custom ? "" : "none";
+  if (!custom) target.value = dcaPreset.value;
+  return custom;
+}
 
 function tradingWarningLanguage() {
   const raw = String(tradingState.settings?.warning_language || "zh-TW").trim().toLowerCase();
@@ -58,6 +245,13 @@ function tradingWarningText(key, vars = {}) {
       reference_healthy_risk_usable: "Reference price healthy; risk-grade price still usable",
       reference_healthy_confidence: `Reference price healthy; risk-grade confidence ${vars.confidence || "-"}`,
       auto_selected_market: `No market selected; automatically using ${vars.market || "-"}`,
+      current_price_purpose_short: "Display / valuation",
+      current_price_degraded_short: "Price degraded",
+      current_price_paused_short: "Price degraded · paused",
+      current_price_warning_short: "Price OK · notice",
+      current_price_healthy_short: "Price OK",
+      current_price_unavailable_short: "Price unavailable",
+      current_price_defaulted_short: "Market auto-selected",
       pause_message: `${vars.kindLabel || "Trading"} paused because price health degraded: ${vars.reason || "-"}; healthy providers ${vars.providerCount || 0}, need at least ${vars.tradeMinProviders || 0}`,
       risk_usable_yes: "risk usable yes",
       risk_usable_no: "risk usable no",
@@ -78,6 +272,13 @@ function tradingWarningText(key, vars = {}) {
     reference_healthy_risk_usable: "reference 價格正常 · 風控級價格仍可用",
     reference_healthy_confidence: `reference 價格正常 · 風控級來源信心 ${vars.confidence || "-"}`,
     auto_selected_market: `未指定市場，已自動選用 ${vars.market || "-"}`,
+    current_price_purpose_short: "展示 / 估值",
+    current_price_degraded_short: "價格降級",
+    current_price_paused_short: "價格降級 · 已暫停",
+    current_price_warning_short: "價格正常 · 有提示",
+    current_price_healthy_short: "價格正常",
+    current_price_unavailable_short: "價格不可用",
+    current_price_defaulted_short: "已自動選市場",
     pause_message: `${vars.kindLabel || "交易"}已因價格降級暫停：${vars.reason || "-"} · 目前健康來源 ${vars.providerCount || 0} 家，至少需要 ${vars.tradeMinProviders || 0} 家`,
     risk_usable_yes: "風控可用 yes",
     risk_usable_no: "風控可用 no",
@@ -150,19 +351,25 @@ function tradingRequestId(prefix = "trading") {
 }
 
 function tradingSetMsg(text, ok = true) {
+  const kind = ok === false ? "err" : ok === null ? "info" : "ok";
   const apply = (msg) => {
     if (!msg) return;
     msg.textContent = text || "";
-    msg.className = text ? `msg show ${ok ? "ok" : "err"}` : "msg";
+    msg.className = text ? `msg show ${kind}` : "msg";
+    scheduleInlineMessageClear(msg, text, ok);
   };
-  const bottomMsg = $("trading-msg");
-  const inlineMsg = $("trading-inline-msg");
-  if ((bottomMsg || inlineMsg) && currentModuleTab === "trading") {
-    apply(inlineMsg);
-    apply(bottomMsg);
-  } else if (typeof economySetMsg === "function") {
+  const targets = [
+    $("trading-inline-msg"),
+    $("trading-root-inline-msg"),
+    $("trading-msg"),
+  ].filter(Boolean);
+  targets.forEach(apply);
+  if (!targets.length && typeof economySetMsg === "function") {
     economySetMsg(text, ok);
+    return;
   }
+  showActionFeedback(tradingActiveActionButton || document.activeElement, text, ok, { skipToast: true });
+  announceInlineMessage(text, ok);
 }
 
 function tradingErrorText(json, fallback = "操作失敗") {
@@ -245,12 +452,14 @@ function bindTradingActionButton(el, handler, pendingText, fallbackText) {
     const previousText = el.textContent;
     el.disabled = true;
     el.setAttribute("aria-busy", "true");
-    if (pendingText) tradingSetMsg(pendingText);
+    tradingActiveActionButton = el;
+    if (pendingText) tradingSetMsg(pendingText, null);
     try {
       await handler(event);
     } catch (err) {
       tradingSetMsg(`${fallbackText || "操作失敗"}：${err?.message || "未提供錯誤原因"}`, false);
     } finally {
+      tradingActiveActionButton = null;
       el.disabled = false;
       el.removeAttribute("aria-busy");
       if (previousText) el.textContent = previousText;
@@ -263,12 +472,59 @@ function selectedTradingMarket() {
   return tradingState.markets.find((market) => market.symbol === symbol) || tradingState.markets[0] || null;
 }
 
+function tradingUsablePricePoints(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0;
+}
+
+function tradingPriceContextHasUsablePrice(context) {
+  return !!(context && typeof context === "object" && tradingUsablePricePoints(context.price_points));
+}
+
+function tradingMergeLivePriceContext(previousContext, nextContext) {
+  const previous = previousContext && typeof previousContext === "object" ? previousContext : null;
+  const next = nextContext && typeof nextContext === "object" ? nextContext : null;
+  if (!next) return previous;
+  if (tradingPriceContextHasUsablePrice(next)) return next;
+  if (!tradingPriceContextHasUsablePrice(previous)) return next;
+  const warning = String(next.warning_message || "").trim();
+  return {
+    ...next,
+    price_points: previous.price_points,
+    source: next.source || previous.source,
+    source_label: next.source_label || previous.source_label,
+    stale_price_for_display: true,
+    warning_message: warning
+      ? `${warning} · 沿用上一筆可用風控價顯示盈虧`
+      : "沿用上一筆可用風控價顯示盈虧",
+  };
+}
+
+function tradingMergeLiveMarket(previousMarket, nextMarket) {
+  const previous = previousMarket && typeof previousMarket === "object" ? previousMarket : {};
+  const next = nextMarket && typeof nextMarket === "object" ? nextMarket : {};
+  const merged = { ...previous, ...next };
+  [
+    ["reference_price_context", "reference_price_points"],
+    ["risk_grade_price_context", "risk_grade_price_points"],
+  ].forEach(([contextKey, priceKey]) => {
+    const context = tradingMergeLivePriceContext(previous[contextKey], next[contextKey]);
+    if (context) merged[contextKey] = context;
+    if (tradingPriceContextHasUsablePrice(context)) {
+      merged[priceKey] = context.price_points;
+    } else if (!tradingUsablePricePoints(merged[priceKey]) && tradingUsablePricePoints(previous[priceKey])) {
+      merged[priceKey] = previous[priceKey];
+    }
+  });
+  return merged;
+}
+
 function tradingMarketPriceContext(market, priceType = "reference") {
   const type = priceType === "risk_grade" ? "risk_grade" : "reference";
   const contextKey = type === "risk_grade" ? "risk_grade_price_context" : "reference_price_context";
   const symbol = String(market?.symbol || "");
   const liveMeta = tradingState.livePriceMeta || {};
-  const liveContext = liveMeta[symbol]?.[contextKey];
+  const liveContext = tradingMergeLivePriceContext(market?.[contextKey], liveMeta[symbol]?.[contextKey]);
   if (liveContext && typeof liveContext === "object") {
     return {
       ...liveContext,
@@ -309,7 +565,10 @@ function tradingMarketPriceContext(market, priceType = "reference") {
 
 function tradingMarketPricePoints(market, priceType = "reference") {
   const context = tradingMarketPriceContext(market, priceType);
-  return tradingNumber(context?.price_points ?? (priceType === "risk_grade" ? market?.risk_grade_price_points : market?.reference_price_points), 0);
+  const fallback = priceType === "risk_grade"
+    ? (market?.risk_grade_price_points ?? market?.reference_price_points ?? market?.manual_price_points)
+    : (market?.reference_price_points ?? market?.manual_price_points);
+  return tradingNumber(context?.price_points ?? fallback, 0);
 }
 
 function tradingPriceConfidenceLabel(value) {
@@ -353,6 +612,24 @@ function tradingTransportStateSummary(state, { compact = false } = {}) {
   return reason ? `provider input：${base} · ${reason}` : `provider input：${base}`;
 }
 
+function setTradingPriceTooltip(el, text, detail = "") {
+  if (!el) return;
+  const cleanText = String(text || "").trim();
+  const cleanDetail = String(detail || "").trim();
+  el.textContent = cleanText;
+  if (cleanDetail && cleanDetail !== cleanText) {
+    el.dataset.tooltip = cleanDetail;
+    el.title = cleanDetail;
+    el.tabIndex = 0;
+    el.classList.add("trading-price-tooltip");
+  } else {
+    delete el.dataset.tooltip;
+    el.removeAttribute("title");
+    el.removeAttribute("tabindex");
+    el.classList.remove("trading-price-tooltip");
+  }
+}
+
 function renderTradingCurrentPrice(market, options = {}) {
   const priceEl = $("trading-current-price");
   const labelEl = $("trading-current-label");
@@ -378,7 +655,11 @@ function renderTradingCurrentPrice(market, options = {}) {
   const botPausePolicy = tradingPriceDegradePolicy(riskContext, "bot");
   const borrowingPausePolicy = tradingPriceDegradePolicy(riskContext, "borrowing");
   if (labelEl) labelEl.textContent = "目前價格（reference）";
-  if (purposeEl) purposeEl.textContent = `用途：展示 / 一般估值 · ${tradingPriceContextSummary(referenceContext, { compact: true })} · ${tradingTransportStateSummary(transportState, { compact: true })}`;
+  setTradingPriceTooltip(
+    purposeEl,
+    `用途：${tradingWarningText("current_price_purpose_short")}`,
+    `用途：展示 / 一般估值 · ${tradingPriceContextSummary(referenceContext, { compact: true })} · ${tradingTransportStateSummary(transportState, { compact: true })}`,
+  );
   const previousPrice = symbol && Number.isFinite(priceHistory[symbol]) ? Number(priceHistory[symbol]) : null;
   if (priceEl) {
     priceEl.textContent = market ? formatTradingPointsValue(nextPrice) : "-";
@@ -395,7 +676,7 @@ function renderTradingCurrentPrice(market, options = {}) {
       deltaEl.classList.remove("positive", "negative");
     }
     if (healthEl) {
-      healthEl.textContent = "🟡 價格來源不可用";
+      setTradingPriceTooltip(healthEl, `🟡 ${tradingWarningText("current_price_unavailable_short")}`, "即時 reference 價格暫不可用；請稍後重試或改用限價。");
       healthEl.classList.add("warning");
     }
     return;
@@ -447,7 +728,11 @@ function renderTradingCurrentPrice(market, options = {}) {
           tradeMinProviders: marketPausePolicy.tradeMinProviders,
         }));
       }
-      healthEl.textContent = `🟡 ${tradingWarningText("degrade_light")}${notes.length ? ` · ${notes.join(" · ")}` : ""}`;
+      setTradingPriceTooltip(
+        healthEl,
+        `🟡 ${tradingWarningText(pauseKinds.length ? "current_price_paused_short" : "current_price_degraded_short")}`,
+        `${tradingWarningText("degrade_light")}${notes.length ? ` · ${notes.join(" · ")}` : ""}`,
+      );
       healthEl.classList.add("warning");
     } else if (
       health === "fallback"
@@ -472,19 +757,35 @@ function renderTradingCurrentPrice(market, options = {}) {
       if (pauseKinds.length) notes.unshift(tradingWarningText("root_auto_pause", { kinds: pauseKinds.join(" / ") }));
       else notes.unshift(tradingWarningText("root_warn_only_short"));
       if (defaultedMarket) notes.push(tradingWarningText("auto_selected_market", { market: tradingDisplaySymbol(symbol) }));
-      healthEl.textContent = `🟡 ${tradingWarningText("reference_degraded")}${notes.length ? ` · ${notes.join(" · ")}` : ""}`;
+      setTradingPriceTooltip(
+        healthEl,
+        `🟡 ${tradingWarningText(pauseKinds.length ? "current_price_paused_short" : "current_price_degraded_short")}`,
+        `${tradingWarningText("reference_degraded")}${notes.length ? ` · ${notes.join(" · ")}` : ""}`,
+      );
       healthEl.classList.add("warning");
     } else if (excludedSources.length || warnings.length || referenceContext?.warning_only || riskContext?.warning_only) {
       const notes = [];
       if (excludedSources.length) notes.push(`已自動排除 ${excludedSources.join(", ")}`);
       if (warnings.length) notes.push(String(warnings[0]?.message || warnings[0]?.code || ""));
-      healthEl.textContent = `🟢 ${tradingWarningText("reference_healthy_risk_usable")}${notes.length ? ` · ${notes.join(" · ")}` : ""}`;
+      setTradingPriceTooltip(
+        healthEl,
+        `🟢 ${tradingWarningText("current_price_warning_short")}`,
+        `${tradingWarningText("reference_healthy_risk_usable")}${notes.length ? ` · ${notes.join(" · ")}` : ""}`,
+      );
       healthEl.classList.remove("warning");
     } else if (defaultedMarket) {
-      healthEl.textContent = `🟢 ${tradingWarningText("auto_selected_market", { market: tradingDisplaySymbol(symbol) })}`;
+      setTradingPriceTooltip(
+        healthEl,
+        `🟢 ${tradingWarningText("current_price_defaulted_short")}`,
+        tradingWarningText("auto_selected_market", { market: tradingDisplaySymbol(symbol) }),
+      );
       healthEl.classList.remove("warning");
     } else {
-      healthEl.textContent = `🟢 ${tradingWarningText("reference_healthy_confidence", { confidence: tradingPriceConfidenceLabel(riskContext?.confidence) })}`;
+      setTradingPriceTooltip(
+        healthEl,
+        `🟢 ${tradingWarningText("current_price_healthy_short")}`,
+        tradingWarningText("reference_healthy_confidence", { confidence: tradingPriceConfidenceLabel(riskContext?.confidence) }),
+      );
       healthEl.classList.remove("warning");
     }
   }
@@ -931,14 +1232,22 @@ function spotPositionTotalQuantity(position) {
   return spotPositionNumber(position, "quantity") + spotPositionNumber(position, "locked_quantity");
 }
 
+function tradingSpotBackendPnl(position) {
+  return tradingNumber(position?.risk_grade_unrealized_pnl_points ?? position?.unrealized_pnl_points, 0);
+}
+
+function tradingSpotHasBackendPnl(position) {
+  return !!position && (position.risk_grade_unrealized_pnl_points !== undefined || position.unrealized_pnl_points !== undefined);
+}
+
 function tradingSpotPnl(position, market) {
-  if (position && position.risk_grade_unrealized_pnl_points !== undefined && !market) {
-    return tradingNumber(position.risk_grade_unrealized_pnl_points, tradingNumber(position.unrealized_pnl_points, 0));
-  }
+  if (tradingSpotHasBackendPnl(position) && !market) return tradingSpotBackendPnl(position);
   const quantity = spotPositionTotalQuantity(position);
-  const costBasis = tradingSpotCostBasis(position, market);
+  const costBasis = tradingSpotCostBasis(position, market, "risk_grade");
   const currentValue = tradingSpotRiskGradeValue(position, market);
-  if (!quantity || !costBasis || !currentValue) return 0;
+  if (!quantity || !costBasis || !currentValue) {
+    return tradingSpotHasBackendPnl(position) ? tradingSpotBackendPnl(position) : 0;
+  }
   return currentValue - costBasis;
 }
 
@@ -977,16 +1286,22 @@ function tradingSpotCurrentValue(position, market) {
   }
   const quantity = spotPositionTotalQuantity(position);
   const currentPrice = tradingMarketPricePoints(market, "reference");
-  return quantity > 0 && currentPrice > 0 ? quantity * currentPrice : 0;
+  if (quantity > 0 && currentPrice > 0) return quantity * currentPrice;
+  return tradingNumber(position?.reference_current_value_points ?? position?.current_value_points, 0);
 }
 
-function tradingSpotCostBasis(position, market) {
+function tradingSpotCostBasis(position, market, priceType = "reference") {
   if (position && position.cost_basis_points !== undefined && !market) {
     return tradingNumber(position.cost_basis_points, 0);
   }
   const holdingCost = tradingSpotHoldingCost(position, market);
-  const currentValue = tradingSpotCurrentValue(position, market);
-  if (!holdingCost) return 0;
+  const currentValue = priceType === "risk_grade"
+    ? tradingSpotRiskGradeValue(position, market)
+    : tradingSpotCurrentValue(position, market);
+  const fallbackCostBasis = priceType === "risk_grade"
+    ? position?.cost_basis_points
+    : (position?.reference_cost_basis_points ?? position?.cost_basis_points);
+  if (!holdingCost || !currentValue) return tradingNumber(fallbackCostBasis, 0);
   const sellFeeEstimate = tradingSpotFee(currentValue, market);
   return holdingCost + sellFeeEstimate;
 }
@@ -997,10 +1312,17 @@ function tradingSpotRiskGradeValue(position, market) {
   }
   const quantity = spotPositionTotalQuantity(position);
   const currentPrice = tradingMarketPricePoints(market, "risk_grade");
-  return quantity > 0 && currentPrice > 0 ? quantity * currentPrice : 0;
+  if (quantity > 0 && currentPrice > 0) return quantity * currentPrice;
+  return tradingNumber(position?.risk_grade_current_value_points ?? position?.current_value_points, 0);
 }
 
 const TRADING_POINT_MICRO_SCALE = 1000000;
+
+function tradingMarginBillableInterestPoints(totalMicropoints) {
+  const micro = Math.max(0, Math.round(tradingNumber(totalMicropoints, 0)));
+  if (micro <= 0) return 0;
+  return Math.max(1, Math.floor(micro / TRADING_POINT_MICRO_SCALE));
+}
 
 function tradingMarginPositionIsShort(row) {
   const type = String(row?.position_type || "").toLowerCase();
@@ -1046,8 +1368,9 @@ function tradingMarginLiveInterest(row, nowMs = Date.now()) {
   const hourlyRate = (ratePercentDaily / 100) / 24;
   const dueMicropoints = Math.round(principal * hourlyRate * dueHours * TRADING_POINT_MICRO_SCALE);
   const totalMicropoints = carryMicropoints + dueMicropoints;
-  const points = capitalized + Math.floor(totalMicropoints / TRADING_POINT_MICRO_SCALE);
-  const exactPoints = capitalized + (totalMicropoints / TRADING_POINT_MICRO_SCALE);
+  const duePoints = tradingMarginBillableInterestPoints(totalMicropoints);
+  const points = capitalized + duePoints;
+  const exactPoints = capitalized + Math.max(duePoints, totalMicropoints / TRADING_POINT_MICRO_SCALE);
   return { points, exactPoints, totalHours, dueHours, totalMicropoints };
 }
 
@@ -1162,18 +1485,33 @@ function tradingLiveMarginRisk(row, market = null) {
   };
 }
 
+function tradingLiveMarginFreeMarginPoints() {
+  const fundingAvailable = Number(tradingState.funding?.available_points);
+  if (Number.isFinite(fundingAvailable)) return Math.max(0, fundingAvailable);
+  const summaryFreeMargin = Number(tradingState.marginSummary?.free_margin_points);
+  if (Number.isFinite(summaryFreeMargin)) return Math.max(0, summaryFreeMargin);
+  const walletAvailable = Number(tradingState.funding?.wallet_available_points);
+  const trialAvailable = Number(tradingState.funding?.trial_credit?.available_points);
+  const combined = (Number.isFinite(walletAvailable) ? walletAvailable : 0)
+    + (Number.isFinite(trialAvailable) ? trialAvailable : 0);
+  return Math.max(0, combined);
+}
+
 function tradingLiveMarginSummary(rows = []) {
   const openRows = rows.filter((row) => row.status === "open");
   if (!openRows.length) return { open_count: 0 };
-  let accountEquity = 0;
+  let totalPositionEquity = 0;
   let totalBorrowed = 0;
   let totalMaintenance = 0;
   openRows.forEach((row) => {
     const risk = tradingLiveMarginRisk(row);
-    accountEquity += tradingNumber(risk.equity_after_points, 0);
+    totalPositionEquity += tradingNumber(risk.equity_after_points, 0);
     totalBorrowed += tradingNumber(row.principal_points, 0);
     totalMaintenance += tradingNumber(risk.maintenance_margin_points ?? risk.maintenance_points, 0);
   });
+  const freeMargin = tradingLiveMarginFreeMarginPoints();
+  const accountEquity = totalPositionEquity + freeMargin;
+  const availableMargin = accountEquity - totalMaintenance;
   const ratio = totalMaintenance > 0 ? Math.round((accountEquity * 10000) / totalMaintenance) / 100 : null;
   let reason = "整戶維持率正常";
   if (ratio !== null && ratio <= 100) reason = "整戶維持率已低於強平門檻";
@@ -1183,8 +1521,9 @@ function tradingLiveMarginSummary(rows = []) {
     cross_margin_ratio_percent: ratio,
     maintenance_ratio_percent: ratio,
     account_equity_points: accountEquity,
-    free_margin_points: Math.max(0, accountEquity - totalMaintenance),
-    available_margin_points: Math.max(0, accountEquity - totalMaintenance),
+    total_position_equity_points: totalPositionEquity,
+    free_margin_points: freeMargin,
+    available_margin_points: availableMargin,
     total_borrowed_points: totalBorrowed,
     total_maintenance_requirement_points: totalMaintenance,
     total_maintenance_points: totalMaintenance,
@@ -1192,11 +1531,21 @@ function tradingLiveMarginSummary(rows = []) {
   };
 }
 
+function tradingDisplayedMarginSummary(summary = null, rows = null) {
+  const marginRows = Array.isArray(rows) ? rows : (tradingState.marginPositions || []);
+  const hasOpenMargin = marginRows.some((row) => row.status === "open");
+  if (!hasOpenMargin) {
+    return summary && typeof summary === "object" && Object.keys(summary).length ? summary : { open_count: 0 };
+  }
+  return tradingLiveMarginSummary(marginRows);
+}
+
 function refreshTradingWalletLiveMetrics() {
+  const liveMarginSummary = tradingLiveMarginSummary(tradingState.marginPositions || []);
   renderEconomySpotPositionDetails(tradingState.positions || [], tradingState.markets || []);
   renderEconomyMarginPositionDetails(tradingState.marginPositions || []);
   renderTradingMarginPositions(tradingState.marginPositions || []);
-  renderTradingMarginAccountSummary(tradingLiveMarginSummary(tradingState.marginPositions || []));
+  renderTradingMarginAccountSummary(liveMarginSummary);
   renderTradingWalletSummary({
     positions: tradingState.positions || [],
     futures_positions: [],
@@ -1206,7 +1555,7 @@ function refreshTradingWalletLiveMetrics() {
     markets: tradingState.markets || [],
     funding: tradingState.funding || {},
     state: tradingState.state || {},
-    margin_summary: tradingLiveMarginSummary(tradingState.marginPositions || []),
+    margin_summary: liveMarginSummary,
   });
 }
 
@@ -1323,6 +1672,9 @@ function renderEconomyMarginPositionDetails(rows = []) {
   list.querySelectorAll("[data-economy-margin-add-collateral]").forEach((btn) => {
     bindTradingActionButton(btn, () => addTradingMarginCollateral(btn.dataset.economyMarginAddCollateral || "", "economy"), "正在補入保證金...", "補保證金失敗");
   });
+  list.querySelectorAll("[data-economy-margin-withdraw-collateral]").forEach((btn) => {
+    bindTradingActionButton(btn, () => withdrawTradingMarginCollateral(btn.dataset.economyMarginWithdrawCollateral || "", "economy"), "正在抽出保證金...", "抽出保證金失敗");
+  });
 }
 
 function tradingMarginRiskText(row) {
@@ -1400,6 +1752,11 @@ function tradingMarginPositionRow(row, scope = "trading") {
           <input type="number" min="1" step="1" placeholder="點數" data-${prefix}margin-collateral-amount="${sanitize(row.position_uuid || "")}" />
         </div>
         <button class="btn" type="button" data-${prefix}margin-add-collateral="${sanitize(row.position_uuid || "")}">補保證金</button>
+        <div class="field">
+          <label>抽出保證金</label>
+          <input type="number" min="1" step="1" placeholder="盈利可抽出" data-${prefix}margin-withdraw-collateral-amount="${sanitize(row.position_uuid || "")}" />
+        </div>
+        <button class="btn" type="button" data-${prefix}margin-withdraw-collateral="${sanitize(row.position_uuid || "")}">抽出保證金</button>
         <button class="btn btn-danger" type="button" data-${prefix}margin-close="${sanitize(row.position_uuid || "")}">平倉</button>
       </div>
     </div>
@@ -1438,6 +1795,29 @@ function tradingReadinessClass(state) {
   if (state === "bad") return "trading-readiness-bad";
   if (state === "warn") return "trading-readiness-warn";
   return "trading-readiness-ok";
+}
+
+function tradingWorstReadinessState(states = []) {
+  if (states.includes("bad")) return "bad";
+  if (states.includes("warn")) return "warn";
+  if (states.includes("ok")) return "ok";
+  return "unknown";
+}
+
+function tradingSignalStateLabel(state) {
+  if (state === "bad") return "阻擋";
+  if (state === "warn") return "觀察";
+  if (state === "ok") return "正常";
+  return "未讀取";
+}
+
+function updateTradingSignalLight(id, state, label, detail) {
+  const el = $(id);
+  if (!el) return;
+  const normalized = state === "bad" || state === "warn" || state === "ok" ? state : "unknown";
+  el.dataset.state = normalized;
+  el.title = `${label}：${tradingSignalStateLabel(normalized)}${detail ? ` · ${detail}` : ""}`;
+  el.setAttribute("aria-label", el.title);
 }
 
 function tradingMarketBootSummary() {
@@ -1506,7 +1886,7 @@ function renderTradingRiskDashboard() {
   const enabledBots = bots.filter((bot) => bot.enabled);
   const runnableBots = enabledBots.filter((bot) => bot.can_run !== false);
   const botMarkets = (tradingState.markets || []).filter((row) => row.allow_bots !== false);
-  const marginSummary = tradingState.marginSummary || tradingLiveMarginSummary(tradingState.marginPositions || []);
+  const marginSummary = tradingDisplayedMarginSummary(tradingState.marginSummary);
   const openMargins = (tradingState.marginPositions || []).filter((row) => row.status === "open");
   const reserve = tradingState.rootReport?.reserve_pool || null;
   const reserveBalance = reserve ? Number(reserve.balance_points || 0) : Number(fundingPool.available_points || 0);
@@ -1514,50 +1894,54 @@ function renderTradingRiskDashboard() {
   const trialState = trial?.pending_reclaim ? "warn" : (trial && trial.status !== "active" ? "warn" : "ok");
   const marginRatio = marginSummary.cross_margin_ratio_percent ?? marginSummary.maintenance_ratio_percent;
   const marginState = !settings.borrowing_enabled ? "warn" : (marginRatio != null && Number(marginRatio) < Number(settings.margin_maintenance_percent || 0) ? "bad" : "ok");
-  const items = [
-    {
-      label: "價格健康",
-      value: selectedPrice.value,
-      detail: selectedPrice.detail,
-      state: selectedPrice.state,
-    },
-    {
-      label: "Live price gate",
-      value: `${boot.ready}/${boot.total || 0} ready`,
-      detail: `boot pending ${boot.pending} · warming ${boot.warming} · degraded ${boot.degraded}`,
-      state: boot.state,
-    },
-    {
-      label: "Bot / backtest",
-      value: `${runnableBots.length}/${enabledBots.length} runnable`,
-      detail: `可用 bot 市場 ${botMarkets.length} · 回測上限 ${Number(settings.backtest_max_candles || 0).toLocaleString()} candles`,
-      state: botState,
-    },
-    {
-      label: currentUser === "root" ? "Reserve / pool" : "Funding pool",
-      value: `${formatTradingPointsValue(reserveBalance)} POINTS`,
-      detail: reserve
-        ? `root reserve · events ${(tradingState.rootReport?.reserve_events || []).length}`
-        : `借出 ${formatTradingPointsValue(fundingPool.outstanding_principal_points || 0)} · 使用率 ${formatTradingPercent(fundingPool.utilization_percent || 0)}%`,
-      state: reserveBalance > 0 ? "ok" : "warn",
-    },
-    {
-      label: "Trial credit",
-      value: trial ? String(trial.status || "unknown") : "root / none",
-      detail: trial
-        ? `可用 ${formatTradingPointsValue(trial.available_points || 0)} · 鎖定 ${formatTradingPointsValue(trial.locked_points || 0)}${trial.reclaim_blocked_reason ? ` · ${trial.reclaim_blocked_reason}` : ""}`
-        : "root 不使用體驗金",
-      state: trialState,
-    },
-    {
-      label: "Margin / lending",
-      value: settings.borrowing_enabled ? `${openMargins.length} open` : "disabled",
-      detail: settings.borrowing_enabled
-        ? `強平 ${settings.margin_liquidation_enabled ? "on" : "off"} · 維持率 ${marginRatio == null ? "-" : `${formatTradingPointsValue(marginRatio)}%`} · pool ${formatTradingPercent(fundingPool.utilization_percent || 0)}%`
-        : "root 尚未開啟借貸交易",
-      state: marginState,
-    },
-  ];
+  const priceItem = {
+    label: "價格健康",
+    value: selectedPrice.value,
+    detail: selectedPrice.detail,
+    state: selectedPrice.state,
+  };
+  const liveGateItem = {
+    label: "Live price gate",
+    value: `${boot.ready}/${boot.total || 0} ready`,
+    detail: `boot pending ${boot.pending} · warming ${boot.warming} · degraded ${boot.degraded}`,
+    state: boot.state,
+  };
+  const botItem = {
+    label: "Bot / backtest",
+    value: `${runnableBots.length}/${enabledBots.length} runnable`,
+    detail: `可用 bot 市場 ${botMarkets.length} · 回測上限 ${Number(settings.backtest_max_candles || 0).toLocaleString()} candles`,
+    state: botState,
+  };
+  const reserveItem = {
+    label: currentUser === "root" ? "Reserve / pool" : "Funding pool",
+    value: `${formatTradingPointsValue(reserveBalance)} POINTS`,
+    detail: reserve
+      ? `root reserve · events ${(tradingState.rootReport?.reserve_events || []).length}`
+      : `借出 ${formatTradingPointsValue(fundingPool.outstanding_principal_points || 0)} · 使用率 ${formatTradingPercent(fundingPool.utilization_percent || 0)}%`,
+    state: reserveBalance > 0 ? "ok" : "warn",
+  };
+  const trialItem = {
+    label: "Trial credit",
+    value: trial ? String(trial.status || "unknown") : "root / none",
+    detail: trial
+      ? `可用 ${formatTradingPointsValue(trial.available_points || 0)} · 鎖定 ${formatTradingPointsValue(trial.locked_points || 0)}${trial.reclaim_blocked_reason ? ` · ${trial.reclaim_blocked_reason}` : ""}`
+      : "root 不使用體驗金",
+    state: trialState,
+  };
+  const marginItem = {
+    label: "Margin / lending",
+    value: settings.borrowing_enabled ? `${openMargins.length} open` : "disabled",
+    detail: settings.borrowing_enabled
+      ? `強平 ${settings.margin_liquidation_enabled ? "on" : "off"} · 維持率 ${marginRatio == null ? "-" : `${formatTradingPointsValue(marginRatio)}%`} · pool ${formatTradingPercent(fundingPool.utilization_percent || 0)}%`
+      : "root 尚未開啟借貸交易",
+    state: marginState,
+  };
+  const items = [priceItem, liveGateItem, botItem, reserveItem, trialItem, marginItem];
+  const priceState = tradingWorstReadinessState([priceItem.state, liveGateItem.state]);
+  const riskState = tradingWorstReadinessState([reserveItem.state, trialItem.state, marginItem.state]);
+  updateTradingSignalLight("trading-signal-light-price", priceState, "價格訊號", `${priceItem.value} · ${liveGateItem.value}`);
+  updateTradingSignalLight("trading-signal-light-bot", botItem.state, "Bot 訊號", `${botItem.value} · ${botItem.detail}`);
+  updateTradingSignalLight("trading-signal-light-risk", riskState, "風控訊號", `${reserveItem.value} · ${marginItem.value}`);
   grid.innerHTML = items.map((item) => `
     <div class="trading-readiness-item ${tradingReadinessClass(item.state)}">
       <span>${sanitize(item.label)}</span>
@@ -1569,8 +1953,10 @@ function renderTradingRiskDashboard() {
   const sub = $("trading-risk-dashboard-sub");
   const badCount = items.filter((item) => item.state === "bad").length;
   const warnCount = items.filter((item) => item.state === "warn").length;
-  if (badge) badge.textContent = badCount ? `${badCount} blocked` : (warnCount ? `${warnCount} watch` : "ready");
-  if (sub) sub.textContent = `價格健康、boot pending、reserve、trial credit、margin/lending 與 bot/backtest readiness`;
+  const dashboard = $("trading-risk-dashboard");
+  if (dashboard) dashboard.dataset.state = tradingWorstReadinessState(items.map((item) => item.state));
+  if (badge) badge.textContent = badCount ? `${badCount} 阻擋` : (warnCount ? `${warnCount} 觀察` : "正常");
+  if (sub) sub.textContent = `價格 ${tradingSignalStateLabel(priceState)} · Bot ${tradingSignalStateLabel(botItem.state)} · 風控 ${tradingSignalStateLabel(riskState)}；滑鼠移過查看細節`;
 }
 
 function renderTradingSummary() {
@@ -1581,12 +1967,18 @@ function renderTradingSummary() {
   const availabilityNote = $("trading-availability-note");
   const contractCard = $("trading-root-contract-card");
   const marginCard = $("trading-margin-card");
+  const marginOpenForm = $("trading-margin-open-form");
+  const marginEstimate = $("trading-margin-estimate");
   const fundingPoolCard = $("trading-funding-pool-public");
   if (orderForm) orderForm.style.display = "";
   if (submitBtn) submitBtn.disabled = false;
   if (contractCard) contractCard.style.display = currentUser === "root" ? "" : "none";
   const borrowingEnabled = !!tradingState.settings?.borrowing_enabled;
-  if (marginCard) marginCard.style.display = "";
+  const openMarginCount = (tradingState.marginPositions || []).filter((row) => row.status === "open").length;
+  const showMarginCard = borrowingEnabled || openMarginCount > 0;
+  if (marginCard) marginCard.style.display = showMarginCard ? "" : "none";
+  if (marginOpenForm) marginOpenForm.style.display = borrowingEnabled ? "" : "none";
+  if (marginEstimate) marginEstimate.style.display = borrowingEnabled ? "" : "none";
   if (fundingPoolCard) fundingPoolCard.style.display = borrowingEnabled ? "" : "none";
   const marginControlsDisabled = !borrowingEnabled;
   ["trading-margin-market-select", "trading-margin-type", "trading-margin-quantity", "trading-margin-collateral", "trading-margin-stop-loss-percent", "trading-margin-take-profit-percent", "trading-margin-open-btn"].forEach((id) => {
@@ -2536,6 +2928,9 @@ function renderTradingMarginPositions(rows = []) {
   list.querySelectorAll("[data-margin-add-collateral]").forEach((btn) => {
     bindTradingActionButton(btn, () => addTradingMarginCollateral(btn.dataset.marginAddCollateral || ""), "正在補入保證金...", "補保證金失敗");
   });
+  list.querySelectorAll("[data-margin-withdraw-collateral]").forEach((btn) => {
+    bindTradingActionButton(btn, () => withdrawTradingMarginCollateral(btn.dataset.marginWithdrawCollateral || ""), "正在抽出保證金...", "抽出保證金失敗");
+  });
 }
 
 function renderTradingMarginAccountSummary(summary = null) {
@@ -2583,6 +2978,8 @@ function switchTradingBotTab(tab) {
   });
   if (tradingCurrentBotTab === "grid") {
     renderGridBotPreview({ quiet: true }).catch(() => {});
+  } else if (tradingCurrentBotTab === "competition") {
+    loadTradingBotCompetition().catch(() => {});
   }
 }
 
@@ -2724,12 +3121,7 @@ async function loadTradingWorkflowBenchmarksAsync() {
   if (tradingWorkflowBenchmarkCache || tradingWorkflowBenchmarkLoading) return;
   tradingWorkflowBenchmarkLoading = true;
   try {
-    const res = await fetch("/data/workflow_template_benchmarks.json", { credentials: "same-origin" });
-    if (!res.ok) {
-      tradingWorkflowBenchmarkCache = { windows: [], load_error: "尚未提供 Workflow 歷史回測報告。" };
-      return;
-    }
-    tradingWorkflowBenchmarkCache = await res.json();
+    tradingWorkflowBenchmarkCache = await fetchTradingJson("/trading/workflow-template-benchmarks", { forceCsrf: false });
   } catch (_err) {
     tradingWorkflowBenchmarkCache = { windows: [], load_error: "Workflow 歷史回測報告讀取失敗。" };
   } finally {
@@ -2827,7 +3219,7 @@ function applyTradingWorkflowTemplate() {
     return;
   }
   textarea.value = JSON.stringify(item.workflow, null, 2);
-  localStorage.setItem(TRADING_WORKFLOW_STORAGE_KEY, textarea.value);
+  localStorage.setItem(tradingUserStorageKey(TRADING_WORKFLOW_STORAGE_KEY), textarea.value);
   renderTradingWorkflowTemplateExplanation();
   tradingSetMsg(`已套用基礎模板：${item.label}。請依市場價格調整門檻後再儲存機器人。`);
 }
@@ -2835,12 +3227,12 @@ function applyTradingWorkflowTemplate() {
 function tradingWorkflowText() {
   const raw = $("trading-auto-workflow-json")?.value || "";
   if (raw.trim()) return raw.trim();
-  const saved = localStorage.getItem(TRADING_WORKFLOW_STORAGE_KEY);
+  const saved = localStorage.getItem(tradingUserStorageKey(TRADING_WORKFLOW_STORAGE_KEY));
   return saved || JSON.stringify(tradingWorkflowTemplate(), null, 2);
 }
 
 function loadTradingWorkflowFromEditor() {
-  const saved = localStorage.getItem(TRADING_WORKFLOW_STORAGE_KEY);
+  const saved = localStorage.getItem(tradingUserStorageKey(TRADING_WORKFLOW_STORAGE_KEY));
   const textarea = $("trading-auto-workflow-json");
   if (!textarea) return;
   textarea.value = saved || JSON.stringify(tradingWorkflowTemplate(), null, 2);
@@ -2953,9 +3345,10 @@ function renderTradingBots(rows = [], runs = []) {
           <div>
             <strong>${sanitize(row.name || "未命名機器人")} · ${sanitize(tradingDisplaySymbol(row.market_symbol || ""))}</strong>
             <div class="drive-card-sub">
-              ${sanitize(row.bot_type_label || (row.bot_type === "dca" ? "定投機器人" : "Workflow 機器人"))} · ${sanitize(tradingBotTriggerLabel(row))} 時 ${row.side === "sell" ? "賣出" : "買入"} ${row.bot_type === "dca" ? "系統換算數量" : sanitize(row.quantity_text || "workflow 決定")}，
-              ${row.order_type === "limit" ? `限價 ${formatTradingPointsValue(row.limit_price_points)}` : "市價單"}
-            </div>
+	              ${sanitize(row.bot_type_label || (row.bot_type === "dca" ? "定投機器人" : "Workflow 機器人"))} · ${sanitize(tradingBotTriggerLabel(row))} 時 ${row.side === "sell" ? "賣出" : "買入"} ${row.bot_type === "dca" ? "系統換算數量" : sanitize(row.quantity_text || "workflow 決定")}，
+	              ${row.order_type === "limit" ? `限價 ${formatTradingPointsValue(row.limit_price_points)}` : "市價單"}
+	              ${tradingParameterShareBadge(row)}
+	            </div>
             <div class="drive-card-sub">
               狀態 ${row.enabled ? "啟用" : "停用"} · 已觸發 ${Number(row.run_count || 0)} / ${tradingBotMaxRunsLabel(row)} · 冷卻 ${Number(row.cooldown_seconds || 0)} 秒
             </div>
@@ -2967,8 +3360,9 @@ function renderTradingBots(rows = [], runs = []) {
           </div>
           <div class="drive-file-actions">
             ${tradingBotRunLimitReached(row) ? `<button class="btn" type="button" data-trading-bot-increase-runs="${sanitize(row.bot_uuid || "")}">增加次數</button>` : ""}
-            <button class="btn" type="button" data-trading-bot-toggle="${sanitize(row.bot_uuid || "")}" data-trading-bot-enabled="${row.enabled ? "0" : "1"}">${row.enabled ? "暫停" : "啟用"}</button>
-            <button class="btn" type="button" data-trading-bot-backtest="${sanitize(row.bot_uuid || "")}">回測</button>
+	            <button class="btn" type="button" data-trading-bot-toggle="${sanitize(row.bot_uuid || "")}" data-trading-bot-enabled="${row.enabled ? "0" : "1"}">${row.enabled ? "暫停" : "啟用"}</button>
+	            <button class="btn" type="button" data-trading-bot-share="${sanitize(row.bot_uuid || "")}" data-trading-bot-share-enabled="${row.share_parameters ? "0" : "1"}">${row.share_parameters ? "停止分享參數" : "分享參數"}</button>
+	            <button class="btn" type="button" data-trading-bot-backtest="${sanitize(row.bot_uuid || "")}">回測</button>
             <button class="btn btn-danger" type="button" data-trading-bot-delete="${sanitize(row.bot_uuid || "")}">刪除</button>
           </div>
         </div>
@@ -2989,9 +3383,17 @@ function renderTradingBots(rows = [], runs = []) {
         "交易機器人狀態更新失敗"
       );
     });
-    list.querySelectorAll("[data-trading-bot-backtest]").forEach((btn) => {
-      bindTradingActionButton(btn, () => prepareTradingBacktestFromBot(btn.dataset.tradingBotBacktest || ""), "正在帶入回測設定...", "回測設定帶入失敗");
-    });
+	    list.querySelectorAll("[data-trading-bot-backtest]").forEach((btn) => {
+	      bindTradingActionButton(btn, () => prepareTradingBacktestFromBot(btn.dataset.tradingBotBacktest || ""), "正在帶入回測設定...", "回測設定帶入失敗");
+	    });
+	    list.querySelectorAll("[data-trading-bot-share]").forEach((btn) => {
+	      bindTradingActionButton(
+	        btn,
+	        () => setTradingBotParameterShare(btn.dataset.tradingBotShare || "", btn.dataset.tradingBotShareEnabled === "1"),
+	        btn.dataset.tradingBotShareEnabled === "1" ? "正在開啟參數分享..." : "正在停止參數分享...",
+	        "參數分享狀態更新失敗"
+	      );
+	    });
     list.querySelectorAll("[data-trading-bot-increase-runs]").forEach((btn) => {
       bindTradingActionButton(btn, () => increaseTradingBotMaxRuns(btn.dataset.tradingBotIncreaseRuns || ""), "正在增加可執行次數...", "增加機器人次數失敗");
     });
@@ -3015,6 +3417,95 @@ function renderTradingBots(rows = [], runs = []) {
   }
   restartTradingBotCountdown();
   renderMyBotsList();
+}
+
+function tradingParameterShareBadge(bot) {
+  return bot?.share_parameters
+    ? ` · <span class="trading-share-badge">參數已分享</span>`
+    : ` · <span class="trading-share-badge muted">參數未分享</span>`;
+}
+
+function tradingSharedParametersHtml(params) {
+  if (!params || typeof params !== "object") return `<div class="drive-card-sub">此用戶未分享參數</div>`;
+  const rows = Object.entries(params)
+    .filter(([, value]) => value !== undefined && value !== null && value !== "")
+    .map(([key, value]) => {
+      const text = typeof value === "object" ? JSON.stringify(value) : String(value);
+      return `<span><b>${sanitize(key)}</b> ${sanitize(text)}</span>`;
+    });
+  return rows.length
+    ? `<div class="trading-shared-params">${rows.join("")}</div>`
+    : `<div class="drive-card-sub">此用戶未分享參數</div>`;
+}
+
+function renderTradingBotCompetition(competition = null) {
+  const container = $("trading-bot-competition-list");
+  const meta = $("trading-bot-competition-meta");
+  const rewardEl = $("trading-bot-competition-rewards");
+  const weekInput = $("trading-bot-competition-week");
+  const awardBtn = $("trading-bot-competition-award-btn");
+  if (!container) return;
+  const data = competition || tradingState.botCompetition || {};
+  const week = data.week || "";
+  if (weekInput && !weekInput.value) weekInput.value = week;
+  const settings = data.settings || {};
+  const enabled = settings.enabled !== false;
+  const rewardPoints = Number(settings.weekly_reward_points || 0);
+  if (meta) {
+    meta.textContent = `${week || "-"} · ${enabled ? "週賽啟用" : "週賽停用"} · 各類第一名 ${rewardPoints.toLocaleString()} 點`;
+  }
+  const rewards = Array.isArray(data.rewards) ? data.rewards : [];
+  const autoAwarded = Array.isArray(data.auto_awarded) ? data.auto_awarded : [];
+  if (rewardEl) {
+    const rewardText = rewards.length
+      ? rewards.map((row) => `${row.category}：${row.username} +${Number(row.reward_points || 0).toLocaleString()} 點`).join(" · ")
+      : "本週尚未發放競賽獎勵";
+    const autoText = autoAwarded.length ? ` · 已自動補發 ${autoAwarded.length} 筆上週獎勵` : "";
+    rewardEl.textContent = `${rewardText}${autoText}`;
+  }
+  if (awardBtn) {
+    awardBtn.style.display = currentUser === "root" ? "" : "none";
+    awardBtn.dataset.awardWeek = data.previous_week || "";
+  }
+  const categories = Array.isArray(data.categories) ? data.categories : [];
+  if (!categories.length) {
+    container.innerHTML = `<div class="drive-empty">尚無競賽資料</div>`;
+    return;
+  }
+  container.innerHTML = categories.map((category) => {
+    const rows = Array.isArray(category.leaderboard) ? category.leaderboard : [];
+    const body = rows.length ? rows.slice(0, 10).map((row) => {
+      const rank = row.rank ? `#${row.rank}` : "-";
+      const perf = Number(row.performance_percent || 0);
+      const pnl = Number(row.pnl_points || 0);
+      const perfClass = perf >= 0 ? "positive" : "negative";
+      const pnlClass = pnl >= 0 ? "positive" : "negative";
+      return `<div class="trading-bot-competition-row">
+        <div class="trading-bot-competition-rank">${sanitize(rank)}</div>
+        <div>
+          <strong>${sanitize(row.bot_name || "未命名")} · ${sanitize(row.username || "-")}</strong>
+          <div class="drive-card-sub">${sanitize(row.display_symbol || row.market_symbol || "-")} · 成交 ${Number(row.fill_count || 0)} 筆 · 本金基準 ${formatTradingPointsValue(row.principal_points || 0)} 點${tradingParameterShareBadge(row)}</div>
+          <details class="economy-collapse" style="margin-top:.25rem;">
+            <summary>分享參數</summary>
+            ${tradingSharedParametersHtml(row.shared_parameters)}
+          </details>
+        </div>
+        <div class="trading-bot-competition-score">
+          <span class="${perfClass}">${perf >= 0 ? "+" : ""}${perf.toFixed(4)}%</span>
+          <small class="${pnlClass}">${pnl >= 0 ? "+" : ""}${formatTradingPointsValue(pnl)} 點</small>
+        </div>
+      </div>`;
+    }).join("") : `<div class="drive-empty">本週此類型尚無有效成交</div>`;
+    return `<section class="trading-bot-competition-card">
+      <div class="drive-card-heading compact-heading">
+        <div>
+          <div class="drive-card-title">${sanitize(category.label || category.category || "-")}</div>
+          <div class="drive-card-sub">第一名獎勵 ${Number(category.reward_points || rewardPoints || 0).toLocaleString()} 點</div>
+        </div>
+      </div>
+      ${body}
+    </section>`;
+  }).join("");
 }
 
 function tradingWorkflowBotDetail(bot) {
@@ -3113,8 +3604,8 @@ function renderMyBotsList() {
           <strong>${sanitize(bot.name || "定投機器人")} · ${symbol}</strong>
           <span class="grid-status-badge ${bot.enabled ? "grid-status-running" : "grid-status-stopped"}">${bot.enabled ? "運行中" : "已暫停"}</span>
         </div>
-        <div class="drive-card-sub">已觸發 ${Number(bot.run_count || 0)} / ${tradingBotMaxRunsLabel(bot)} · 冷卻 ${Number(bot.cooldown_seconds || 0)} 秒${bot.last_error ? ` · <span class="negative">上次錯誤：${sanitize(bot.last_error)}</span>` : ""}</div>
-        <div class="drive-card-sub">${sanitize(tradingRiskTargetText(bot.stop_loss_percent, bot.take_profit_percent))}</div>
+	        <div class="drive-card-sub">已觸發 ${Number(bot.run_count || 0)} / ${tradingBotMaxRunsLabel(bot)} · 冷卻 ${Number(bot.cooldown_seconds || 0)} 秒${bot.last_error ? ` · <span class="negative">上次錯誤：${sanitize(bot.last_error)}</span>` : ""}</div>
+	        <div class="drive-card-sub">${sanitize(tradingRiskTargetText(bot.stop_loss_percent, bot.take_profit_percent))}${tradingParameterShareBadge(bot)}</div>
         ${condHtml ? `<div class="drive-card-sub trading-bot-conditions">${condHtml}</div>` : ""}
         <details class="economy-collapse" style="margin-top:.35rem;">
           <summary>設定摘要</summary>
@@ -3127,8 +3618,9 @@ function renderMyBotsList() {
       </div>
       <div class="drive-file-actions" style="flex-shrink:0;">
         <button class="btn btn-sm" type="button" data-chart-type="dca" data-chart-bot-uuid="${sanitize(bot.bot_uuid || "")}" data-chart-symbol="${sanitize(bot.market_symbol || "")}">圖表</button>
-        <button class="btn btn-sm" type="button" data-trading-bot-backtest="${sanitize(bot.bot_uuid || "")}">回測</button>
-        ${tradingBotRunLimitReached(bot) ? `<button class="btn btn-sm" type="button" data-trading-bot-increase-runs="${sanitize(bot.bot_uuid || "")}">增加次數</button>` : ""}
+	        <button class="btn btn-sm" type="button" data-trading-bot-backtest="${sanitize(bot.bot_uuid || "")}">回測</button>
+	        <button class="btn btn-sm" type="button" data-trading-bot-share="${sanitize(bot.bot_uuid || "")}" data-trading-bot-share-enabled="${bot.share_parameters ? "0" : "1"}">${bot.share_parameters ? "停止分享" : "分享參數"}</button>
+	        ${tradingBotRunLimitReached(bot) ? `<button class="btn btn-sm" type="button" data-trading-bot-increase-runs="${sanitize(bot.bot_uuid || "")}">增加次數</button>` : ""}
         <button class="btn btn-sm" type="button" data-trading-bot-toggle="${sanitize(bot.bot_uuid || "")}" data-trading-bot-enabled="${bot.enabled ? "0" : "1"}">${bot.enabled ? "暫停" : "啟用"}</button>
         <button class="btn btn-sm btn-danger" type="button" data-trading-bot-delete="${sanitize(bot.bot_uuid || "")}">刪除</button>
       </div>
@@ -3148,8 +3640,7 @@ function renderMyBotsList() {
           <strong>${sanitize(bot.name || "Workflow 機器人")} · ${symbol}</strong>
           <span class="grid-status-badge ${bot.enabled ? "grid-status-running" : "grid-status-stopped"}">${bot.enabled ? "運行中" : "已暫停"}</span>
         </div>
-        <div class="drive-card-sub">已觸發 ${Number(bot.run_count || 0)} / ${tradingBotMaxRunsLabel(bot)} · ${sanitize(bot.side === "sell" ? "賣出" : "買入")} · ${sanitize(bot.order_type === "limit" ? `限價 ${bot.limit_price_points}` : "市價單")}${bot.last_error ? ` · <span class="negative">上次錯誤：${sanitize(bot.last_error)}</span>` : ""}</div>
-        <div class="drive-card-sub">${sanitize(tradingRiskTargetText(bot.stop_loss_percent, bot.take_profit_percent))}</div>
+	        <div class="drive-card-sub">已觸發 ${Number(bot.run_count || 0)} / ${tradingBotMaxRunsLabel(bot)} · ${sanitize(bot.side === "sell" ? "賣出" : "買入")} · ${sanitize(bot.order_type === "limit" ? `限價 ${bot.limit_price_points}` : "市價單")}${tradingParameterShareBadge(bot)}${bot.last_error ? ` · <span class="negative">上次錯誤：${sanitize(bot.last_error)}</span>` : ""}</div>
         ${condHtml ? `<div class="drive-card-sub trading-bot-conditions">${condHtml}</div>` : ""}
         <details class="economy-collapse" style="margin-top:.35rem;">
           <summary>設定摘要</summary>
@@ -3161,9 +3652,10 @@ function renderMyBotsList() {
         </details>
       </div>
       <div class="drive-file-actions" style="flex-shrink:0;">
-        <button class="btn btn-sm" type="button" data-chart-type="workflow" data-chart-bot-uuid="${sanitize(bot.bot_uuid || "")}" data-chart-symbol="${sanitize(bot.market_symbol || "")}">圖表</button>
-        <button class="btn btn-sm" type="button" data-trading-bot-backtest="${sanitize(bot.bot_uuid || "")}">回測</button>
-        ${tradingBotRunLimitReached(bot) ? `<button class="btn btn-sm" type="button" data-trading-bot-increase-runs="${sanitize(bot.bot_uuid || "")}">增加次數</button>` : ""}
+	        <button class="btn btn-sm" type="button" data-chart-type="workflow" data-chart-bot-uuid="${sanitize(bot.bot_uuid || "")}" data-chart-symbol="${sanitize(bot.market_symbol || "")}">圖表</button>
+	        <button class="btn btn-sm" type="button" data-trading-bot-backtest="${sanitize(bot.bot_uuid || "")}">回測</button>
+	        <button class="btn btn-sm" type="button" data-trading-bot-share="${sanitize(bot.bot_uuid || "")}" data-trading-bot-share-enabled="${bot.share_parameters ? "0" : "1"}">${bot.share_parameters ? "停止分享" : "分享參數"}</button>
+	        ${tradingBotRunLimitReached(bot) ? `<button class="btn btn-sm" type="button" data-trading-bot-increase-runs="${sanitize(bot.bot_uuid || "")}">增加次數</button>` : ""}
         <button class="btn btn-sm" type="button" data-trading-bot-toggle="${sanitize(bot.bot_uuid || "")}" data-trading-bot-enabled="${bot.enabled ? "0" : "1"}">${bot.enabled ? "暫停" : "啟用"}</button>
         <button class="btn btn-sm btn-danger" type="button" data-trading-bot-delete="${sanitize(bot.bot_uuid || "")}">刪除</button>
       </div>
@@ -3187,8 +3679,10 @@ function renderMyBotsList() {
           區間 ${formatTradingPointsValue(bot.lower_price_points)} ～ ${formatTradingPointsValue(bot.upper_price_points)} · ${Number(bot.grid_count)} 格 · 現價 ${formatTradingPointsValue(cp)}
         </div>
         <div class="drive-card-sub">
-          成交 ${Number(bot.total_trades || 0)} 次 · 盈虧 <span class="${profitClass}">${profit >= 0 ? "+" : ""}${formatTradingPointsValue(profit)}</span> 點
-        </div>
+	          成交 ${Number(bot.total_trades || 0)} 次 · 盈虧 <span class="${profitClass}">${profit >= 0 ? "+" : ""}${formatTradingPointsValue(profit)}</span> 點
+	          ${tradingParameterShareBadge(bot)}
+	        </div>
+        <div class="drive-card-sub">${sanitize(tradingRiskTargetText(bot.stop_loss_percent, bot.take_profit_percent))}</div>
         ${bot.last_error ? `<div class="drive-card-sub negative">錯誤：${sanitize(bot.last_error)}</div>` : ""}
         <details class="economy-collapse" style="margin-top:.35rem;">
           <summary>設定摘要</summary>
@@ -3204,9 +3698,10 @@ function renderMyBotsList() {
         </details>
       </div>
       <div class="drive-file-actions" style="flex-shrink:0;">
-        <button class="btn btn-sm" type="button" data-chart-type="grid" data-chart-bot-uuid="${sanitize(bot.bot_uuid || "")}" data-chart-symbol="${sanitize(bot.market_symbol || "")}">圖表</button>
-        <button class="btn btn-sm" type="button" data-grid-backtest="${sanitize(bot.bot_uuid || "")}">回測</button>
-        <button class="btn btn-sm" type="button" data-grid-toggle="${sanitize(bot.bot_uuid || "")}" data-grid-enabled="${bot.enabled ? "0" : "1"}">${bot.enabled ? "暫停" : "啟用"}</button>
+	        <button class="btn btn-sm" type="button" data-chart-type="grid" data-chart-bot-uuid="${sanitize(bot.bot_uuid || "")}" data-chart-symbol="${sanitize(bot.market_symbol || "")}">圖表</button>
+	        <button class="btn btn-sm" type="button" data-grid-backtest="${sanitize(bot.bot_uuid || "")}">回測</button>
+	        <button class="btn btn-sm" type="button" data-grid-share="${sanitize(bot.bot_uuid || "")}" data-grid-share-enabled="${bot.share_parameters ? "0" : "1"}">${bot.share_parameters ? "停止分享" : "分享參數"}</button>
+	        <button class="btn btn-sm" type="button" data-grid-toggle="${sanitize(bot.bot_uuid || "")}" data-grid-enabled="${bot.enabled ? "0" : "1"}">${bot.enabled ? "暫停" : "啟用"}</button>
         <button class="btn btn-sm btn-danger" type="button" data-grid-delete="${sanitize(bot.bot_uuid || "")}">立即平倉刪除</button>
       </div>
     </div>`);
@@ -3233,9 +3728,17 @@ function renderMyBotsList() {
   container.querySelectorAll("[data-trading-bot-increase-runs]").forEach((btn) => {
     bindTradingActionButton(btn, () => increaseTradingBotMaxRuns(btn.dataset.tradingBotIncreaseRuns || ""), "正在增加可執行次數...", "增加機器人次數失敗");
   });
-  container.querySelectorAll("[data-trading-bot-backtest]").forEach((btn) => {
-    bindTradingActionButton(btn, () => prepareTradingBacktestFromBot(btn.dataset.tradingBotBacktest || ""), "正在帶入回測設定...", "回測設定帶入失敗");
-  });
+	  container.querySelectorAll("[data-trading-bot-backtest]").forEach((btn) => {
+	    bindTradingActionButton(btn, () => prepareTradingBacktestFromBot(btn.dataset.tradingBotBacktest || ""), "正在帶入回測設定...", "回測設定帶入失敗");
+	  });
+	  container.querySelectorAll("[data-trading-bot-share]").forEach((btn) => {
+	    bindTradingActionButton(
+	      btn,
+	      () => setTradingBotParameterShare(btn.dataset.tradingBotShare || "", btn.dataset.tradingBotShareEnabled === "1"),
+	      btn.dataset.tradingBotShareEnabled === "1" ? "正在開啟參數分享..." : "正在停止參數分享...",
+	      "參數分享狀態更新失敗"
+	    );
+	  });
   container.querySelectorAll("[data-grid-toggle]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const uuid = btn.dataset.gridToggle;
@@ -3256,9 +3759,17 @@ function renderMyBotsList() {
       finally { btn.disabled = false; }
     });
   });
-  container.querySelectorAll("[data-grid-delete]").forEach((btn) => {
-    bindTradingActionButton(btn, () => deleteGridBot(btn.dataset.gridDelete || ""), "正在刪除網格機器人...", "網格機器人刪除失敗");
-  });
+	  container.querySelectorAll("[data-grid-delete]").forEach((btn) => {
+	    bindTradingActionButton(btn, () => deleteGridBot(btn.dataset.gridDelete || ""), "正在刪除網格機器人...", "網格機器人刪除失敗");
+	  });
+	  container.querySelectorAll("[data-grid-share]").forEach((btn) => {
+	    bindTradingActionButton(
+	      btn,
+	      () => setGridBotParameterShare(btn.dataset.gridShare || "", btn.dataset.gridShareEnabled === "1"),
+	      btn.dataset.gridShareEnabled === "1" ? "正在開啟網格參數分享..." : "正在停止網格參數分享...",
+	      "網格參數分享狀態更新失敗"
+	    );
+	  });
   container.querySelectorAll("[data-grid-backtest]").forEach((btn) => {
     bindTradingActionButton(btn, () => prepareTradingBacktestFromBot(btn.dataset.gridBacktest || ""), "正在帶入回測設定...", "回測設定帶入失敗");
   });
@@ -3687,13 +4198,15 @@ function renderGridBotList(bots, currentPriceMap) {
         <div class="drive-card-sub">
           現價 ${formatTradingPointsValue(cp)} · 底倉 ${netInventoryDisplay} ${assetSymbol} · 掛單：<span class="grid-buy-count">買 ${buyOrders.length} 格（${formatTradingPointsValue(buyLockedPoints)} 點）</span> / <span class="grid-sell-count">賣 ${sellOrders.length} 格（約 ${sellLockedUnits.toFixed(6)} ${assetSymbol}）</span>
         </div>
-        <div class="drive-card-sub">
-          已成交 ${totalTrades} 次 · 估計手續費支出 ${formatTradingPointsValue(Math.round(estimatedFee))} 點 · 累計盈虧 <span class="${profitClass}">${profit >= 0 ? "+" : ""}${formatTradingPointsValue(profit)}</span> 點
-        </div>
+	        <div class="drive-card-sub">
+	          已成交 ${totalTrades} 次 · 估計手續費支出 ${formatTradingPointsValue(Math.round(estimatedFee))} 點 · 累計盈虧 <span class="${profitClass}">${profit >= 0 ? "+" : ""}${formatTradingPointsValue(profit)}</span> 點
+	          ${tradingParameterShareBadge(bot)}
+	        </div>
+        <div class="drive-card-sub">${sanitize(tradingRiskTargetText(bot.stop_loss_percent, bot.take_profit_percent))}</div>
         ${bot.last_error ? `<div class="drive-card-sub negative">錯誤：${sanitize(bot.last_error)}</div>` : ""}
         <details class="economy-collapse" style="margin-top:.35rem;">
           <summary>設定摘要</summary>
-          <div class="drive-card-sub">${sanitize(symbol)} · 區間 ${formatTradingPointsValue(bot.lower_price_points)} ～ ${formatTradingPointsValue(bot.upper_price_points)} · ${Number(bot.grid_count)} 格 · 每格 ${formatTradingPointsValue(bot.order_amount_points)} 點</div>
+          <div class="drive-card-sub">${sanitize(symbol)} · 區間 ${formatTradingPointsValue(bot.lower_price_points)} ～ ${formatTradingPointsValue(bot.upper_price_points)} · ${Number(bot.grid_count)} 格 · 每格 ${formatTradingPointsValue(bot.order_amount_points)} 點 · ${sanitize(tradingRiskTargetText(bot.stop_loss_percent, bot.take_profit_percent))}</div>
         </details>
         <details class="economy-collapse" style="margin-top:.35rem;">
           <summary>掛單明細（${openOrders.length} 筆掛單）</summary>
@@ -3712,9 +4225,10 @@ function renderGridBotList(bots, currentPriceMap) {
           ${renderTradingBotFillDetails(fills)}
         </details>
       </div>
-      <div class="drive-file-actions" style="flex-shrink:0;">
-        <button class="btn btn-sm" type="button" data-grid-backtest="${sanitize(bot.bot_uuid || "")}">回測</button>
-        <button class="btn btn-sm" type="button" data-grid-toggle="${sanitize(bot.bot_uuid || "")}" data-grid-enabled="${bot.enabled ? "0" : "1"}">${bot.enabled ? "暫停" : "啟用"}</button>
+	      <div class="drive-file-actions" style="flex-shrink:0;">
+	        <button class="btn btn-sm" type="button" data-grid-backtest="${sanitize(bot.bot_uuid || "")}">回測</button>
+	        <button class="btn btn-sm" type="button" data-grid-share="${sanitize(bot.bot_uuid || "")}" data-grid-share-enabled="${bot.share_parameters ? "0" : "1"}">${bot.share_parameters ? "停止分享" : "分享參數"}</button>
+	        <button class="btn btn-sm" type="button" data-grid-toggle="${sanitize(bot.bot_uuid || "")}" data-grid-enabled="${bot.enabled ? "0" : "1"}">${bot.enabled ? "暫停" : "啟用"}</button>
         <button class="btn btn-sm btn-danger" type="button" data-grid-delete="${sanitize(bot.bot_uuid || "")}">刪除</button>
       </div>
     </div>`;
@@ -3738,9 +4252,17 @@ function renderGridBotList(bots, currentPriceMap) {
       finally { btn.disabled = false; }
     });
   });
-  container.querySelectorAll("[data-grid-delete]").forEach((btn) => {
-    bindTradingActionButton(btn, () => deleteGridBot(btn.dataset.gridDelete || ""), "正在刪除網格機器人...", "網格機器人刪除失敗");
-  });
+	  container.querySelectorAll("[data-grid-delete]").forEach((btn) => {
+	    bindTradingActionButton(btn, () => deleteGridBot(btn.dataset.gridDelete || ""), "正在刪除網格機器人...", "網格機器人刪除失敗");
+	  });
+	  container.querySelectorAll("[data-grid-share]").forEach((btn) => {
+	    bindTradingActionButton(
+	      btn,
+	      () => setGridBotParameterShare(btn.dataset.gridShare || "", btn.dataset.gridShareEnabled === "1"),
+	      btn.dataset.gridShareEnabled === "1" ? "正在開啟網格參數分享..." : "正在停止網格參數分享...",
+	      "網格參數分享狀態更新失敗"
+	    );
+	  });
   container.querySelectorAll("[data-grid-backtest]").forEach((btn) => {
     bindTradingActionButton(btn, () => prepareTradingBacktestFromBot(btn.dataset.gridBacktest || ""), "正在帶入回測設定...", "回測設定帶入失敗");
   });
@@ -3778,6 +4300,31 @@ async function loadGridBots() {
   } catch (e) {
     // silent
   }
+}
+
+async function loadTradingBotCompetition() {
+  if (!currentUser || !canAccessModule("economy")) return;
+  const week = $("trading-bot-competition-week")?.value?.trim() || "";
+  const path = `/trading/bot-competition${week ? `?week=${encodeURIComponent(week)}` : ""}`;
+  const json = await fetchTradingJson(path, { forceCsrf: false });
+  tradingState.botCompetition = json.competition || json;
+  renderTradingBotCompetition(tradingState.botCompetition);
+}
+
+async function awardTradingBotCompetition() {
+  if (currentUser !== "root") {
+    tradingSetMsg("只有 root 可以發放競賽獎勵", false);
+    return;
+  }
+  const week = $("trading-bot-competition-award-btn")?.dataset?.awardWeek || tradingState.botCompetition?.previous_week || "";
+  const json = await fetchTradingJson("/root/trading/bot-competition/award", {
+    method: "POST",
+    body: JSON.stringify({ week }),
+  });
+  const awarded = Array.isArray(json.awarded) ? json.awarded : [];
+  tradingSetMsg(awarded.length ? `已發放 ${awarded.length} 筆機器人週賽獎勵` : "沒有新的週賽獎勵需要發放");
+  await loadTradingBotCompetition();
+  if (typeof loadEconomyDashboard === "function") loadEconomyDashboard().catch(() => {});
 }
 
 function computeGridSpotSituation(marketSymbol, lower, upper, count, amount, mode) {
@@ -3922,6 +4469,8 @@ async function createGridBot() {
   const count = Number($("trading-grid-count")?.value || 10);
   const amount = Number($("trading-grid-order-amount")?.value || 0);
   const spacingMode = $("trading-grid-spacing-mode")?.value || "arithmetic";
+  const stopLossPercent = tradingOptionalPercentValue("trading-grid-stop-loss-percent");
+  const takeProfitPercent = tradingOptionalPercentValue("trading-grid-take-profit-percent");
   if (!name) { tradingSetMsg("請填寫機器人名稱", false); return; }
   if (!marketSymbol) { tradingSetMsg("請選擇交易市場", false); return; }
   if (market && market.allow_bots === false) {
@@ -3954,11 +4503,14 @@ async function createGridBot() {
     market_symbol: marketSymbol,
     upper_price_points: upper,
     lower_price_points: lower,
-    grid_count: count,
-    order_amount_points: amount,
-    spacing_mode: spacingMode,
-    confirm_thin_profit: confirmThinProfit,
-  };
+	    grid_count: count,
+	    order_amount_points: amount,
+	    stop_loss_percent: stopLossPercent,
+	    take_profit_percent: takeProfitPercent,
+	    spacing_mode: spacingMode,
+	    share_parameters: !!$("trading-grid-share-parameters")?.checked,
+	    confirm_thin_profit: confirmThinProfit,
+	  };
   const situation = computeGridSpotSituation(marketSymbol, lower, upper, count, amount, spacingMode);
   if (situation) {
     showGridSpotConfirm(situation, formData);
@@ -4000,7 +4552,7 @@ function renderTradingWalletSummary(payload = {}) {
   const markets = Array.isArray(payload.markets) ? payload.markets : tradingState.markets;
   const funding = payload.funding || tradingState.funding || {};
   const state = payload.state || tradingState.state || {};
-  const marginSummary = payload.margin_summary || tradingLiveMarginSummary(marginPositions);
+  const marginSummary = tradingDisplayedMarginSummary(payload.margin_summary, marginPositions);
   const status = $("economy-trading-safe-mode");
   if (status) {
     status.textContent = state.safe_mode ? `交易 safe mode：${state.reason || "已啟用"}` : "交易引擎正常";
@@ -4132,6 +4684,7 @@ function populateTradingRootMarketForm() {
 
 async function loadTradingDashboard() {
   if (!currentUser || !canAccessModule("economy")) return;
+  ensureTradingAccountScope();
   const tradingEnabled = !siteConfig || siteConfig.feature_trading_enabled !== false;
   const card = $("trading-card");
   const summaryCard = $("economy-trading-summary-card");
@@ -4168,16 +4721,19 @@ async function loadTradingDashboard() {
       status.style.color = state.safe_mode ? "#ffb74d" : "var(--muted)";
     }
     renderTradingMarketOptions();
+    loadTradingPersonalFormState();
     renderTradingSummary();
     loadTradingLivePrice().catch(() => {});
     renderTradingOrders(tradingState.orders);
-    renderTradingFills(tradingState.fills);
-    renderTradingBots(tradingState.bots, tradingState.botRuns);
-    loadGridBots().catch(() => {});
-    renderTradingContracts(payload.futures_positions || []);
+	    renderTradingFills(tradingState.fills);
+	    renderTradingBots(tradingState.bots, tradingState.botRuns);
+	    loadGridBots().catch(() => {});
+	    loadTradingBotCompetition().catch(() => {});
+	    renderTradingContracts(payload.futures_positions || []);
     renderTradingMarginPositions(tradingState.marginPositions);
-    renderTradingMarginAccountSummary(tradingState.marginSummary);
-    renderTradingWalletSummary(payload);
+    const displayedMarginSummary = tradingDisplayedMarginSummary(tradingState.marginSummary);
+    renderTradingMarginAccountSummary(displayedMarginSummary);
+    renderTradingWalletSummary({ ...payload, margin_summary: displayedMarginSummary });
     if (typeof loadTradingAssetOverview === "function") loadTradingAssetOverview().catch(() => {});
     if (currentUser === "root") {
       await loadTradingRootReport();
@@ -4206,11 +4762,22 @@ async function loadTradingLivePrice() {
         const nextMarket = json.market || null;
         if (!nextMarket?.symbol) continue;
         const index = tradingState.markets.findIndex((row) => row.symbol === nextMarket.symbol);
+        const previousMarket = index >= 0 ? tradingState.markets[index] : null;
+        const mergedMarket = tradingMergeLiveMarket(previousMarket, nextMarket);
         if (index >= 0) {
-          tradingState.markets[index] = { ...tradingState.markets[index], ...nextMarket };
+          tradingState.markets[index] = mergedMarket;
         } else {
-          tradingState.markets.unshift(nextMarket);
+          tradingState.markets.unshift(mergedMarket);
         }
+        const previousMeta = liveMeta[nextMarket.symbol] || {};
+        const referencePriceContext = tradingMergeLivePriceContext(
+          previousMeta.reference_price_context || previousMarket?.reference_price_context,
+          json.reference_price_context,
+        );
+        const riskGradePriceContext = tradingMergeLivePriceContext(
+          previousMeta.risk_grade_price_context || previousMarket?.risk_grade_price_context,
+          json.risk_grade_price_context,
+        );
         liveMeta[nextMarket.symbol] = {
           price_type: json.price_type || "reference",
           source: json.source || nextMarket.price_source || "",
@@ -4231,8 +4798,8 @@ async function loadTradingLivePrice() {
           high_risk_blocked: !!json.high_risk_blocked,
           high_risk_block_reason: json.high_risk_block_reason || "",
           defaulted_market: !!json.defaulted_market,
-          reference_price_context: json.reference_price_context && typeof json.reference_price_context === "object" ? json.reference_price_context : null,
-          risk_grade_price_context: json.risk_grade_price_context && typeof json.risk_grade_price_context === "object" ? json.risk_grade_price_context : null,
+          reference_price_context: referencePriceContext,
+          risk_grade_price_context: riskGradePriceContext,
           transport_state: json.transport_state && typeof json.transport_state === "object" ? json.transport_state : null,
         };
         if (nextMarket.symbol === selectedSymbol) selectedMeta = liveMeta[nextMarket.symbol];
@@ -4282,6 +4849,8 @@ async function loadTradingRootReport() {
 }
 
 async function submitTradingOrder() {
+  ensureTradingAccountScope();
+  saveTradingPersonalFormState();
   const market = selectedTradingMarket();
   if (!market) {
     tradingSetMsg("沒有可用交易市場", false);
@@ -4347,10 +4916,9 @@ async function saveTradingBot() {
     max_daily_runs: Number($("trading-auto-daily-runs")?.value || 5),
     max_runs: Number($("trading-auto-bot-max-runs")?.value || 1),
     cooldown_seconds: Number($("trading-auto-bot-cooldown")?.value || 300),
-    stop_loss_percent: tradingOptionalPercentValue("trading-auto-stop-loss-percent"),
-    take_profit_percent: tradingOptionalPercentValue("trading-auto-take-profit-percent"),
-    enabled: !!$("trading-auto-bot-enabled")?.checked,
-  };
+	    share_parameters: !!$("trading-auto-share-parameters")?.checked,
+	    enabled: !!$("trading-auto-bot-enabled")?.checked,
+	  };
   try {
     tradingSetMsg("正在新增自動化機器人...");
     await fetchTradingJson("/trading/bots", {
@@ -4387,10 +4955,11 @@ async function saveTradingDcaBot() {
     price_upper_limit: Number($("trading-dca-price-upper")?.value || 0) || null,
     price_lower_limit: Number($("trading-dca-price-lower")?.value || 0) || null,
     max_runs: Number($("trading-dca-bot-max-runs")?.value || 1),
-    stop_loss_percent: tradingOptionalPercentValue("trading-dca-stop-loss-percent"),
-    take_profit_percent: tradingOptionalPercentValue("trading-dca-take-profit-percent"),
-    enabled: !!$("trading-dca-bot-enabled")?.checked,
-  };
+	    stop_loss_percent: tradingOptionalPercentValue("trading-dca-stop-loss-percent"),
+	    take_profit_percent: tradingOptionalPercentValue("trading-dca-take-profit-percent"),
+	    share_parameters: !!$("trading-dca-share-parameters")?.checked,
+	    enabled: !!$("trading-dca-bot-enabled")?.checked,
+	  };
   try {
     tradingSetMsg("正在新增定投機器人...");
     const json = await fetchTradingJson("/trading/bots", {
@@ -4514,6 +5083,10 @@ async function backtestTradingBot(contextKey = "dca") {
   const intervalCandles = botType === "dca"
     ? Math.max(1, Number(tradingBacktestEl(contextKey, "interval-candles")?.value || 1))
     : 1;
+  const riskTargetPayload = botType === "workflow" ? {} : {
+    stop_loss_percent: tradingOptionalPercentValue(tradingBacktestEl(contextKey, "stop-loss-percent")),
+    take_profit_percent: tradingOptionalPercentValue(tradingBacktestEl(contextKey, "take-profit-percent")),
+  };
   const basePayload = {
     market_symbol: marketSymbol,
     strategy: botType,
@@ -4525,8 +5098,7 @@ async function backtestTradingBot(contextKey = "dca") {
     start_time: tradingBacktestEl(contextKey, "start")?.value || "",
     end_time: tradingBacktestEl(contextKey, "end")?.value || "",
     slippage_percent: Number(tradingBacktestEl(contextKey, "slippage-percent")?.value || 0),
-    stop_loss_percent: tradingOptionalPercentValue(tradingBacktestEl(contextKey, "stop-loss-percent")),
-    take_profit_percent: tradingOptionalPercentValue(tradingBacktestEl(contextKey, "take-profit-percent")),
+    ...riskTargetPayload,
     ...gridParams,
   };
   const hasCandleData = Array.isArray(allCandles) && allCandles.length >= 2;
@@ -4647,6 +5219,8 @@ function prepareTradingBacktestFromBot(botUuid) {
     if (tradingBacktestEl("grid", "grid-count")) tradingBacktestEl("grid", "grid-count").value = gridBot.grid_count || 10;
     if (tradingBacktestEl("grid", "grid-amount")) tradingBacktestEl("grid", "grid-amount").value = gridBot.order_amount_points || 100;
     if (tradingBacktestEl("grid", "grid-spacing")) tradingBacktestEl("grid", "grid-spacing").value = gridBot.spacing_mode || "arithmetic";
+    if (tradingBacktestEl("grid", "stop-loss-percent")) tradingBacktestEl("grid", "stop-loss-percent").value = gridBot.stop_loss_percent || "";
+    if (tradingBacktestEl("grid", "take-profit-percent")) tradingBacktestEl("grid", "take-profit-percent").value = gridBot.take_profit_percent || "";
     updateBacktestDateRangeGuidance("grid");
     tradingSetMsg("已帶入網格機器人回測設定，請確認時間範圍後執行回測");
     return;
@@ -4674,8 +5248,6 @@ function prepareTradingBacktestFromBot(botUuid) {
     if (Number(bot.budget_points || 0) > 0 && tradingBacktestEl("workflow", "order-points")) {
       tradingBacktestEl("workflow", "order-points").value = bot.budget_points || 100;
     }
-    if (tradingBacktestEl("workflow", "stop-loss-percent")) tradingBacktestEl("workflow", "stop-loss-percent").value = bot.stop_loss_percent || "";
-    if (tradingBacktestEl("workflow", "take-profit-percent")) tradingBacktestEl("workflow", "take-profit-percent").value = bot.take_profit_percent || "";
     updateBacktestDateRangeGuidance("workflow");
   }
   tradingSetMsg("已帶入機器人回測設定，請確認時間範圍後執行回測");
@@ -4703,6 +5275,34 @@ async function deleteTradingBot(botUuid) {
   }
 }
 
+async function setTradingBotParameterShare(botUuid, shareParameters) {
+  if (!botUuid) {
+    tradingSetMsg("找不到要更新的交易機器人", false);
+    return;
+  }
+  await fetchTradingJson(`/trading/bots/${encodeURIComponent(botUuid)}/share`, {
+    method: "POST",
+    body: JSON.stringify({ share_parameters: !!shareParameters }),
+  });
+  tradingSetMsg(shareParameters ? "已在競賽中分享參數" : "已停止分享參數");
+  await loadTradingDashboard();
+  await loadTradingBotCompetition();
+}
+
+async function setGridBotParameterShare(botUuid, shareParameters) {
+  if (!botUuid) {
+    tradingSetMsg("找不到要更新的網格機器人", false);
+    return;
+  }
+  await fetchTradingJson(`/trading/grid-bots/${encodeURIComponent(botUuid)}/share`, {
+    method: "POST",
+    body: JSON.stringify({ share_parameters: !!shareParameters }),
+  });
+  tradingSetMsg(shareParameters ? "已在競賽中分享網格參數" : "已停止分享網格參數");
+  await loadGridBots();
+  await loadTradingBotCompetition();
+}
+
 async function toggleTradingBot(botUuid, enabled) {
   const bot = tradingState.bots.find((row) => row.bot_uuid === botUuid);
   if (!bot) {
@@ -4720,12 +5320,15 @@ async function toggleTradingBot(botUuid, enabled) {
     trigger_type: bot.trigger_type || "always",
     trigger_price_points: bot.trigger_price_points || null,
     budget_points: Number(bot.budget_points || 0),
-    interval_hours: Number(bot.interval_hours || 24),
-    max_runs: Number(bot.max_runs ?? 1),
-    cooldown_seconds: Number(bot.cooldown_seconds || 0),
-    workflow_json: bot.workflow || null,
-    enabled,
-  };
+	    interval_hours: Number(bot.interval_hours || 24),
+	    max_runs: Number(bot.max_runs ?? 1),
+	    cooldown_seconds: Number(bot.cooldown_seconds || 0),
+	    stop_loss_percent: bot.stop_loss_percent ?? null,
+	    take_profit_percent: bot.take_profit_percent ?? null,
+	    share_parameters: !!bot.share_parameters,
+	    workflow_json: bot.workflow || null,
+	    enabled,
+	  };
   try {
     tradingSetMsg(enabled ? "正在啟用機器人..." : "正在暫停機器人...");
     const json = await fetchTradingJson(`/trading/bots/${encodeURIComponent(botUuid)}`, {
@@ -4898,6 +5501,8 @@ async function closeRootTradingContract(positionUuid) {
 }
 
 async function openTradingMarginPosition() {
+  ensureTradingAccountScope();
+  saveTradingPersonalFormState();
   const symbol = $("trading-margin-market-select")?.value || selectedTradingMarket()?.symbol || "";
   if (!symbol) {
     tradingSetMsg("請先選擇進階交易市場", false);
@@ -4978,6 +5583,44 @@ async function addTradingMarginCollateral(positionUuid, scope = "trading") {
     if (typeof loadEconomyDashboard === "function") await loadEconomyDashboard();
   } catch (err) {
     tradingSetMsg(`補保證金失敗：${err.message || "後端未提供錯誤原因"}`, false);
+  }
+}
+
+async function withdrawTradingMarginCollateral(positionUuid, scope = "trading") {
+  if (!positionUuid) {
+    tradingSetMsg("找不到要抽出保證金的進階交易倉位", false);
+    return;
+  }
+  const selector = scope === "economy"
+    ? `[data-economy-margin-withdraw-collateral-amount="${CSS.escape(positionUuid)}"]`
+    : `[data-margin-withdraw-collateral-amount="${CSS.escape(positionUuid)}"]`;
+  const input = document.querySelector(selector);
+  const amount = Number(input?.value || 0);
+  if (!amount || amount <= 0) {
+    tradingSetMsg("請輸入要抽出的保證金點數", false);
+    return;
+  }
+  if (!confirm("抽出保證金會降低維持率，價格反向波動時更容易接近強平線。確定要抽出？")) {
+    tradingSetMsg("已取消抽出保證金");
+    return;
+  }
+  try {
+    const idempotencyKey = `margin-collateral-withdraw:${positionUuid}:${amount}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+    const json = await fetchTradingJson(`/trading/margin/${encodeURIComponent(positionUuid)}/collateral/withdraw`, {
+      method: "POST",
+      body: JSON.stringify({ amount_points: amount, idempotency_key: idempotencyKey }),
+    });
+    if (json.funding) tradingState.funding = json.funding;
+    const beforeRatio = json.risk_before?.maintenance_ratio_percent;
+    const afterRatio = json.risk_after?.maintenance_ratio_percent;
+    const ratioText = beforeRatio != null && afterRatio != null
+      ? `，維持率 ${formatTradingPointsValue(beforeRatio)}% → ${formatTradingPointsValue(afterRatio)}%`
+      : "";
+    tradingSetMsg(`已抽出 ${formatTradingPointsValue(amount)} 點保證金${ratioText}。請留意強平風險。`);
+    await loadTradingDashboard();
+    if (typeof loadEconomyDashboard === "function") await loadEconomyDashboard();
+  } catch (err) {
+    tradingSetMsg(`抽出保證金失敗：${err.message || "後端未提供錯誤原因"}`, false);
   }
 }
 
@@ -5124,6 +5767,11 @@ function syncTradingReserveUserOptions() {
 function bindTradingEvents() {
   if (tradingEventsBound) return;
   tradingEventsBound = true;
+  ensureTradingAccountScope({ force: true });
+  bindTradingPersonalFormPersistence();
+  document.addEventListener("hackme:account-context-changed", () => {
+    ensureTradingAccountScope({ force: true });
+  });
   const bindings = [
     ["trading-refresh-btn", loadTradingDashboard, "正在重新整理交易資料...", "交易資料重新整理失敗"],
     ["trading-submit-order-btn", submitTradingOrder, "正在送出訂單...", "下單失敗"],
@@ -5134,9 +5782,11 @@ function bindTradingEvents() {
     ["trading-grid-backtest-run-btn", () => backtestTradingBot("grid"), "正在執行網格回測...", "網格回測失敗"],
     ["trading-workflow-backtest-run-btn", () => backtestTradingBot("workflow"), "正在執行 Workflow 回測...", "Workflow 回測失敗"],
     ["trading-workflow-load-btn", loadTradingWorkflowFromEditor, "正在載入 Workflow 編輯器結果...", "Workflow 載入失敗"],
-    ["trading-workflow-template-apply-btn", applyTradingWorkflowTemplate, "正在套用 Workflow 基礎模板...", "Workflow 模板套用失敗"],
-    ["trading-workflow-custom-save-btn", saveTradingWorkflowCustomTemplate, "正在儲存 Workflow 自訂模板...", "Workflow 自訂模板儲存失敗"],
-    ["trading-root-refresh-btn", loadTradingRootReport, "正在讀取 root 交易報告...", "交易報告讀取失敗"],
+	    ["trading-workflow-template-apply-btn", applyTradingWorkflowTemplate, "正在套用 Workflow 基礎模板...", "Workflow 模板套用失敗"],
+	    ["trading-workflow-custom-save-btn", saveTradingWorkflowCustomTemplate, "正在儲存 Workflow 自訂模板...", "Workflow 自訂模板儲存失敗"],
+	    ["trading-bot-competition-refresh-btn", loadTradingBotCompetition, "正在讀取機器人競賽排行...", "競賽排行讀取失敗"],
+	    ["trading-bot-competition-award-btn", awardTradingBotCompetition, "正在發放機器人週賽獎勵...", "週賽獎勵發放失敗"],
+	    ["trading-root-refresh-btn", loadTradingRootReport, "正在讀取 root 交易報告...", "交易報告讀取失敗"],
     ["trading-root-save-market-btn", saveTradingRootMarket, "正在儲存交易市場設定...", "市場設定儲存失敗"],
     ["trading-reserve-allocate-btn", allocateTradingReserve, "正在撥入交易資金池...", "資金池撥入失敗"],
     ["trading-root-reset-sim-btn", resetRootTradingSimulatedBalance, "準備重置 root 模擬交易...", "root 模擬資金重設失敗"],
@@ -5195,12 +5845,11 @@ function bindTradingEvents() {
   });
   const dcaPreset = $("trading-dca-bot-interval-preset");
   if (dcaPreset) {
+    syncTradingDcaIntervalMode();
     dcaPreset.addEventListener("change", () => {
-      const target = $("trading-dca-bot-interval-hours");
-      if (!target) return;
-      target.disabled = dcaPreset.value !== "custom";
-      if (dcaPreset.value !== "custom") target.value = dcaPreset.value;
-      tradingSetMsg(dcaPreset.value === "custom" ? "已切換為自訂定投間隔" : `已選擇每 ${dcaPreset.value} 小時定投`);
+      const custom = syncTradingDcaIntervalMode();
+      saveTradingPersonalFormState();
+      tradingSetMsg(custom ? "已切換為自訂定投間隔" : `已選擇每 ${dcaPreset.value} 小時定投`);
     });
   }
   const marketSelect = $("trading-market-select");

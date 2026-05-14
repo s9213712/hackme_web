@@ -6,25 +6,211 @@ single-process backtest orchestration used by
 """
 
 import math
+from datetime import datetime, timezone
 from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
 
-from services.trading.accounting.core import fee_points, notional_points, units_to_quantity
+from services.trading.accounting.core import (
+    _decimal_units,
+    _quantity_step_units_from_precision,
+    fee_points,
+    notional_points,
+    units_to_quantity,
+)
 from services.trading.constants import ASSET_SCALE
 from services.trading.validators import _to_decimal, _to_int, _to_price_float
+
+
+def _backtest_row_value(row, key, default=None):
+    if row is None:
+        return default
+    try:
+        if hasattr(row, "keys") and key not in row.keys():
+            return default
+    except Exception:
+        pass
+    try:
+        value = row[key]
+    except Exception:
+        if isinstance(row, dict):
+            value = row.get(key, default)
+        else:
+            value = getattr(row, key, default)
+    return default if value in (None, "") else value
+
+
+def _backtest_time_ms(value):
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)):
+        numeric = float(value)
+        if not math.isfinite(numeric):
+            return None
+        return int(numeric if abs(numeric) > 10**11 else numeric * 1000)
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        numeric = float(text)
+        if math.isfinite(numeric):
+            return int(numeric if abs(numeric) > 10**11 else numeric * 1000)
+    except ValueError:
+        pass
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return int(dt.astimezone(timezone.utc).timestamp() * 1000)
+
+
+def _backtest_candle_time_ms(candle):
+    if not isinstance(candle, dict):
+        return None
+    for key in ("time_iso", "time", "time_ms", "open_time_ms"):
+        value = candle.get(key)
+        parsed = _backtest_time_ms(value)
+        if parsed is not None:
+            return parsed
+    return None
 
 
 def filter_backtest_candles_by_range(candles, *, start_time="", end_time=""):
     if not start_time and not end_time:
         return list(candles or [])
+    start_ms = _backtest_time_ms(start_time)
+    end_ms = _backtest_time_ms(end_time)
     filtered = []
     for candle in candles or []:
-        stamp = str(candle.get("time_iso") or candle.get("time") or "")
-        if start_time and stamp < start_time:
+        candle_ms = _backtest_candle_time_ms(candle)
+        if start_ms is not None and candle_ms is not None and candle_ms < start_ms:
             continue
-        if end_time and stamp > end_time:
+        if end_ms is not None and candle_ms is not None and candle_ms > end_ms:
+            continue
+        stamp = str(candle.get("time_iso") or candle.get("time") or candle.get("time_ms") or "")
+        if start_time and (start_ms is None or candle_ms is None) and stamp < start_time:
+            continue
+        if end_time and (end_ms is None or candle_ms is None) and stamp > end_time:
             continue
         filtered.append(candle)
     return filtered
+
+
+def backtest_execution_price(price, side, slippage_percent=0):
+    base_price = _to_decimal(price, name="price_points", minimum=0)
+    slip_rate = Decimal(str(slippage_percent or 0)) / Decimal("100")
+    if slip_rate < 0:
+        slip_rate = Decimal("0")
+    if side == "buy":
+        base_price *= Decimal("1") + slip_rate
+    elif side == "sell":
+        base_price *= max(Decimal("0"), Decimal("1") - slip_rate)
+    return float(base_price.quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP))
+
+
+def build_backtest_market_constraints(market):
+    precision = int(_backtest_row_value(market, "quantity_precision", 8) or 8)
+    precision_step = int(_quantity_step_units_from_precision(precision))
+    lot_units = max(1, int(_decimal_units(_backtest_row_value(market, "lot_size", "0.00000001"))))
+    step_units = max(1, math.lcm(precision_step, lot_units))
+    min_order_size_units = max(1, int(_decimal_units(_backtest_row_value(market, "min_order_size", "0.00000001"))))
+    max_order_size_units = int(_decimal_units(_backtest_row_value(market, "max_order_size", "1000000000")))
+    if max_order_size_units <= 0:
+        max_order_size_units = 10**30
+    return {
+        "quantity_step_units": step_units,
+        "min_order_size_units": min_order_size_units,
+        "max_order_size_units": max_order_size_units,
+        "min_order_points": max(0, int(_backtest_row_value(market, "min_order_points", 0) or 0)),
+        "max_order_points": max(1, int(_backtest_row_value(market, "max_order_points", 10**12) or 10**12)),
+    }
+
+
+def _align_backtest_units(units, constraints):
+    step = max(1, int((constraints or {}).get("quantity_step_units") or 1))
+    return (max(0, int(units or 0)) // step) * step
+
+
+def _backtest_units_from_notional(notional_budget, price, constraints):
+    if int(notional_budget or 0) <= 0 or float(price or 0) <= 0:
+        return 0
+    units = int(
+        (
+            Decimal(str(int(notional_budget or 0))) * Decimal(ASSET_SCALE) / Decimal(str(price))
+        ).quantize(Decimal("1"), rounding=ROUND_DOWN)
+    )
+    return _align_backtest_units(units, constraints)
+
+
+def build_backtest_buy_execution(*, budget_points, price, fee_rate_percent, constraints):
+    budget = int(budget_points or 0)
+    if budget <= 0 or float(price or 0) <= 0:
+        return None
+    fee_rate = max(Decimal("0"), Decimal(str(fee_rate_percent or 0))) / Decimal("100")
+    notional_cap = budget
+    if fee_points(budget, fee_rate_percent) > 0:
+        notional_cap = int(
+            (Decimal(budget) / (Decimal("1") + fee_rate)).quantize(Decimal("1"), rounding=ROUND_DOWN)
+        )
+    notional_cap = min(notional_cap, int(constraints["max_order_points"]))
+    if notional_cap < int(constraints["min_order_points"]):
+        return None
+    units = _backtest_units_from_notional(notional_cap, price, constraints)
+    units = min(units, _align_backtest_units(constraints["max_order_size_units"], constraints))
+    step = max(1, int(constraints["quantity_step_units"]))
+    min_units = int(constraints["min_order_size_units"])
+    attempts = 0
+    while units >= min_units and attempts < 10_000:
+        notional = notional_points(units, price)
+        fee = fee_points(notional, fee_rate_percent)
+        total = notional + fee
+        if (
+            total <= budget
+            and int(constraints["min_order_points"]) <= notional <= int(constraints["max_order_points"])
+        ):
+            return {
+                "units": units,
+                "notional_points": notional,
+                "fee_points": fee,
+                "total_points": total,
+            }
+        if notional < int(constraints["min_order_points"]):
+            break
+        units -= step
+        attempts += 1
+    return None
+
+
+def build_backtest_sell_execution(*, units, price, fee_rate_percent, constraints):
+    if int(units or 0) <= 0 or float(price or 0) <= 0:
+        return None
+    sell_units = min(int(units), int(constraints["max_order_size_units"]))
+    sell_units = _align_backtest_units(sell_units, constraints)
+    if sell_units < int(constraints["min_order_size_units"]):
+        return None
+    gross = notional_points(sell_units, price)
+    if not (int(constraints["min_order_points"]) <= gross <= int(constraints["max_order_points"])):
+        return None
+    fee = fee_points(gross, fee_rate_percent)
+    return {
+        "units": sell_units,
+        "gross_points": gross,
+        "fee_points": fee,
+        "net_points": max(0, gross - fee),
+    }
+
+
+def record_backtest_workflow_execution(state, decision):
+    if not decision:
+        return
+    action_id = decision.get("action_id") or (decision.get("branch") or {}).get("id")
+    if action_id:
+        state["workflow_state"]["executed_action_ids"].add(action_id)
+    branch_id = (decision.get("branch") or {}).get("id")
+    if branch_id:
+        state["workflow_state"]["branch_step_counts"][branch_id] = int(
+            state["workflow_state"]["branch_step_counts"].get(branch_id, 0)
+        ) + 1
 
 
 def build_backtest_initial_state(
@@ -62,6 +248,8 @@ def build_backtest_initial_state(
         "grid_levels": [],
         "grid_order_amount": 0,
         "grid_fee_rate": float(grid_fee_rate or 0),
+        "grid_start_price": 0.0,
+        "grid_stopped": False,
         "last_valid_price": None,
         "recent_valid_prices": [],
         "outlier_skipped_count": 0,
@@ -142,11 +330,21 @@ def build_backtest_range_warnings(
     raw_candles = all_candles_raw or []
     if start_time and raw_candles:
         first_raw = str(raw_candles[0].get("time_iso") or raw_candles[0].get("time") or "")
-        if first_raw and start_time < first_raw:
+        start_ms = _backtest_time_ms(start_time)
+        first_ms = _backtest_candle_time_ms(raw_candles[0])
+        is_before_first = start_ms is not None and first_ms is not None and start_ms < first_ms
+        if first_ms is None or start_ms is None:
+            is_before_first = bool(first_raw and start_time < first_raw)
+        if is_before_first:
             warnings.append(f"請求起始時間 {start_time} 早於資料最早 K 線 {first_raw}，實際回測從 {first_raw} 開始")
     if end_time and raw_candles:
         last_raw = str(raw_candles[-1].get("time_iso") or raw_candles[-1].get("time") or "")
-        if last_raw and end_time > last_raw:
+        end_ms = _backtest_time_ms(end_time)
+        last_ms = _backtest_candle_time_ms(raw_candles[-1])
+        is_after_last = end_ms is not None and last_ms is not None and end_ms > last_ms
+        if last_ms is None or end_ms is None:
+            is_after_last = bool(last_raw and end_time > last_raw)
+        if is_after_last:
             warnings.append(f"請求結束時間 {end_time} 晚於資料最新 K 線 {last_raw}，實際回測至 {last_raw}")
     if len(raw_candles) >= max_backtest_candles:
         warnings.append(f"K 線數量達到上限 {max_backtest_candles} 根，更早的歷史資料可能未被包含")
@@ -178,6 +376,7 @@ def build_backtest_result_payload(
     provider_symbol="",
     max_price_jump_percent=0.0,
     segment_count=1,
+    slippage_percent=0.0,
 ):
     last_price = float(state.get("last_valid_price") or 0)
     position_value = notional_points(state.get("units"), last_price) if last_price else 0
@@ -203,6 +402,7 @@ def build_backtest_result_payload(
         "pnl_points": final_value - initial_cash,
         "return_percent": round(((final_value - initial_cash) * 100) / initial_cash, 4),
         "max_drawdown_percent": state.get("max_drawdown_percent"),
+        "slippage_percent": float(slippage_percent or 0),
         "win_rate_percent": round((state.get("wins", 0) * 100 / state.get("sells", 0)), 4) if state.get("sells") else 0.0,
         "trade_count": len(state.get("trades") or []),
         "trades": state.get("trades") or [],
@@ -247,6 +447,7 @@ def backtest_trading_bot(service, *, actor, payload):
     try:
         service.ensure_schema(conn)
         market = service._market(conn, payload.get("market_symbol"))
+        market_constraints = build_backtest_market_constraints(market)
         settings = service._settings_payload(conn)
         fee_rate_percent = float(market["fee_rate_percent"] or 0)
         grid_fee_rate_percent = service._grid_fee_rate_percent(fee_rate_percent, settings)
@@ -269,8 +470,13 @@ def backtest_trading_bot(service, *, actor, payload):
     trigger_type = str(payload.get("trigger_type") or "price_below").strip().lower()
     trigger_price = float(_to_decimal(payload.get("trigger_price_points") or 0, name="trigger_price_points", minimum=0))
     interval_candles = _to_int(payload.get("interval_candles", 1), name="interval_candles", minimum=1, maximum=10_000)
-    stop_loss_percent = float(_to_decimal(payload.get("stop_loss_percent") or 0, name="stop_loss_percent", minimum=0))
-    take_profit_percent = float(_to_decimal(payload.get("take_profit_percent") or 0, name="take_profit_percent", minimum=0))
+    if strategy == "workflow":
+        stop_loss_percent = 0.0
+        take_profit_percent = 0.0
+    else:
+        stop_loss_percent = float(_to_decimal(payload.get("stop_loss_percent") or 0, name="stop_loss_percent", minimum=0))
+        take_profit_percent = float(_to_decimal(payload.get("take_profit_percent") or 0, name="take_profit_percent", minimum=0))
+    slippage_percent = float(_to_decimal(payload.get("slippage_percent") or 0, name="slippage_percent", minimum=0, maximum=95))
     initial_cash = cash
     initial_workflow_state = payload.get("initial_workflow_state") if isinstance(payload.get("initial_workflow_state"), dict) else {}
     range_warnings = []
@@ -350,10 +556,16 @@ def backtest_trading_bot(service, *, actor, payload):
                 pass
         if g_start <= 0:
             raise ValueError("no valid starting price in candles for grid backtest")
+        state["grid_start_price"] = g_start
         sell_levels = [price_level for price_level in state["grid_levels"] if price_level > g_start]
         buy_levels = [price_level for price_level in state["grid_levels"] if price_level < g_start]
-        spot_units_needed = sum(int((state["grid_order_amount"] * ASSET_SCALE) // price_level) for price_level in sell_levels if price_level > 0)
-        spot_cost = notional_points(spot_units_needed, g_start)
+        spot_units_needed = sum(
+            _backtest_units_from_notional(state["grid_order_amount"], price_level, market_constraints)
+            for price_level in sell_levels
+            if price_level > 0
+        )
+        spot_price = backtest_execution_price(g_start, "buy", slippage_percent)
+        spot_cost = notional_points(spot_units_needed, spot_price)
         spot_fee_cost = fee_points(spot_cost, fee_rate_percent)
         spot_total = spot_cost + spot_fee_cost
         buy_fee_per = fee_points(state["grid_order_amount"], state["grid_fee_rate"])
@@ -363,11 +575,15 @@ def backtest_trading_bot(service, *, actor, payload):
             state["units"] = spot_units_needed
         else:
             affordable_spot = max(0, state["cash"] - buy_total)
-            if affordable_spot > 0 and g_start > 0:
-                state["units"] = int(affordable_spot * ASSET_SCALE // g_start)
-                state["cash"] -= notional_points(state["units"], g_start) + fee_points(notional_points(state["units"], g_start), fee_rate_percent)
-                if state["cash"] < 0:
-                    state["cash"] = 0
+            spot_execution = build_backtest_buy_execution(
+                budget_points=affordable_spot,
+                price=spot_price,
+                fee_rate_percent=fee_rate_percent,
+                constraints=market_constraints,
+            )
+            if spot_execution:
+                state["units"] = spot_execution["units"]
+                state["cash"] -= spot_execution["total_points"]
         state["grid_state"] = {}
         for price_level in state["grid_levels"]:
             if price_level < g_start:
@@ -420,23 +636,103 @@ def backtest_trading_bot(service, *, actor, payload):
                     high_price = float(candle.get("high_points") or candle.get("high_usdt") or price)
                 except Exception:
                     low_price = high_price = price
+                if state.get("grid_stopped"):
+                    _record_equity(global_index, candle, price)
+                    continue
+                grid_start_price = float(state.get("grid_start_price") or 0)
+                grid_risk_reason = None
+                grid_risk_price = price
+                if grid_start_price > 0 and stop_loss_percent > 0:
+                    stop_price = grid_start_price * max(0.0, 1.0 - (abs(stop_loss_percent) / 100.0))
+                    if low_price <= stop_price:
+                        grid_risk_reason = "stop_loss"
+                        grid_risk_price = backtest_execution_price(stop_price, "sell", slippage_percent)
+                if grid_start_price > 0 and grid_risk_reason is None and take_profit_percent > 0:
+                    take_price = grid_start_price * (1.0 + (abs(take_profit_percent) / 100.0))
+                    if high_price >= take_price:
+                        grid_risk_reason = "take_profit"
+                        grid_risk_price = backtest_execution_price(take_price, "sell", slippage_percent)
+                if grid_risk_reason:
+                    remaining_units = int(state["units"] or 0)
+                    sold_any = False
+                    attempts = 0
+                    while remaining_units > 0 and attempts < 10_000:
+                        sell_execution = build_backtest_sell_execution(
+                            units=remaining_units,
+                            price=grid_risk_price,
+                            fee_rate_percent=fee_rate_percent,
+                            constraints=market_constraints,
+                        )
+                        if not sell_execution:
+                            break
+                        sell_units = int(sell_execution["units"] or 0)
+                        if sell_units <= 0:
+                            break
+                        net = sell_execution["net_points"]
+                        cost_basis = notional_points(sell_units, state["avg_cost_bt"]) if state["avg_cost_bt"] > 0 else 0
+                        realized_pnl = net - cost_basis
+                        state["cash"] += net
+                        state["units"] -= sell_units
+                        remaining_units = int(state["units"] or 0)
+                        state["trades"].append({
+                            "index": global_index,
+                            "time": candle.get("time") or candle.get("time_iso") or global_index,
+                            "side": "sell",
+                            "price_points": grid_risk_price,
+                            "spend_points": 0,
+                            "fee_points": sell_execution["fee_points"],
+                            "pnl_points": realized_pnl,
+                            "quantity": units_to_quantity(sell_units),
+                            "reason": grid_risk_reason,
+                        })
+                        state["trade_count"] += 1
+                        state["sells"] += 1
+                        if realized_pnl >= 0:
+                            state["wins"] += 1
+                        sold_any = True
+                        attempts += 1
+                    state["grid_state"] = {}
+                    state["grid_stopped"] = True
+                    if not sold_any:
+                        state["trades"].append({
+                            "index": global_index,
+                            "time": candle.get("time") or candle.get("time_iso") or global_index,
+                            "side": "risk_exit",
+                            "price_points": grid_risk_price,
+                            "spend_points": 0,
+                            "fee_points": 0,
+                            "pnl_points": 0,
+                            "quantity": "0",
+                            "reason": grid_risk_reason,
+                        })
+                    _record_equity(global_index, candle, price)
+                    continue
                 state_at_open = dict(state["grid_state"])
                 for level in sorted(state_at_open):
                     if state_at_open[level] == "sell" and high_price >= level:
-                        sell_units = int((state["grid_order_amount"] * ASSET_SCALE) // level)
-                        if state["units"] >= sell_units > 0:
-                            gross = notional_points(sell_units, level)
-                            fee = fee_points(gross, state["grid_fee_rate"])
-                            net = max(0, gross - fee)
+                        sell_units = _backtest_units_from_notional(state["grid_order_amount"], level, market_constraints)
+                        sell_price = backtest_execution_price(level, "sell", slippage_percent)
+                        sell_execution = build_backtest_sell_execution(
+                            units=sell_units,
+                            price=sell_price,
+                            fee_rate_percent=state["grid_fee_rate"],
+                            constraints=market_constraints,
+                        )
+                        if sell_execution and state["units"] >= sell_execution["units"] > 0:
+                            sell_units = sell_execution["units"]
+                            gross = sell_execution["gross_points"]
+                            fee = sell_execution["fee_points"]
+                            net = sell_execution["net_points"]
                             state["cash"] += net
                             state["units"] -= sell_units
                             state["trades"].append({
                                 "index": global_index,
                                 "time": candle.get("time") or candle.get("time_iso") or global_index,
                                 "side": "sell",
-                                "price_points": level,
+                                "price_points": sell_price,
                                 "spend_points": 0,
                                 "fee_points": fee,
+                                "pnl_points": net,
                                 "quantity": units_to_quantity(sell_units),
                             })
                             state["trade_count"] += 1
@@ -453,23 +749,35 @@ def backtest_trading_bot(service, *, actor, payload):
                             state["wins"] += 1
                 for level in sorted(state_at_open, reverse=True):
                     if state_at_open[level] == "buy" and low_price <= level:
-                        fee = fee_points(state["grid_order_amount"], state["grid_fee_rate"])
-                        spend = state["grid_order_amount"] + fee
-                        if state["cash"] >= spend:
-                            buy_units = int((state["grid_order_amount"] * ASSET_SCALE) // level)
+                        buy_price = backtest_execution_price(level, "buy", slippage_percent)
+                        buy_budget = state["grid_order_amount"] + fee_points(state["grid_order_amount"], state["grid_fee_rate"])
+                        buy_execution = build_backtest_buy_execution(
+                            budget_points=buy_budget,
+                            price=buy_price,
+                            fee_rate_percent=state["grid_fee_rate"],
+                            constraints=market_constraints,
+                        )
+                        if buy_execution and state["cash"] >= buy_execution["total_points"]:
+                            buy_units = buy_execution["units"]
                             if buy_units > 0:
-                                state["cash"] -= spend
+                                state["cash"] -= buy_execution["total_points"]
                                 prev_units = state["units"]
                                 state["units"] += buy_units
                                 if state["units"] > 0:
-                                    state["avg_cost_bt"] = int((prev_units * state["avg_cost_bt"] + buy_units * level) // state["units"])
+                                    state["avg_cost_bt"] = float(
+                                        (
+                                            Decimal(str(prev_units)) * Decimal(str(state["avg_cost_bt"]))
+                                            + Decimal(str(buy_units)) * Decimal(str(buy_price))
+                                        )
+                                        / Decimal(str(state["units"]))
+                                    )
                                 state["trades"].append({
                                     "index": global_index,
                                     "time": candle.get("time") or candle.get("time_iso") or global_index,
                                     "side": "buy",
-                                    "price_points": level,
-                                    "spend_points": spend,
-                                    "fee_points": fee,
+                                    "price_points": buy_price,
+                                    "spend_points": buy_execution["total_points"],
+                                    "fee_points": buy_execution["fee_points"],
                                     "quantity": units_to_quantity(buy_units),
                                 })
                                 state["trade_count"] += 1
@@ -533,10 +841,21 @@ def backtest_trading_bot(service, *, actor, payload):
                 should_buy = not should_sell
             if should_sell and state["units"] > 0:
                 sell_units = int(state["units"] * workflow_sell_percent / 100)
-                if sell_units > 0:
-                    gross = notional_points(sell_units, price)
-                    fee = fee_points(gross, fee_rate_percent)
-                    state["cash"] += max(0, gross - fee)
+                sell_price = backtest_execution_price(price, "sell", slippage_percent)
+                sell_execution = build_backtest_sell_execution(
+                    units=sell_units,
+                    price=sell_price,
+                    fee_rate_percent=fee_rate_percent,
+                    constraints=market_constraints,
+                )
+                if sell_execution:
+                    sell_units = sell_execution["units"]
+                    gross = sell_execution["gross_points"]
+                    fee = sell_execution["fee_points"]
+                    net = sell_execution["net_points"]
+                    cost_basis = notional_points(sell_units, state["avg_cost_bt"]) if state["avg_cost_bt"] > 0 else 0
+                    realized_pnl = net - cost_basis
+                    state["cash"] += net
                     state["units"] -= sell_units
                     if state["units"] <= 0:
                         state["avg_cost_bt"] = 0
@@ -544,23 +863,18 @@ def backtest_trading_bot(service, *, actor, payload):
                         "index": global_index,
                         "time": candle.get("time") or candle.get("time_iso") or global_index,
                         "side": "sell",
-                        "price_points": price,
+                        "price_points": sell_price,
                         "spend_points": 0,
                         "fee_points": fee,
-                        "pnl_points": max(0, gross - fee),
+                        "pnl_points": realized_pnl,
                         "quantity": units_to_quantity(sell_units),
                     })
                     state["trade_count"] += 1
                     state["sells"] += 1
-                    if gross - fee > 0:
+                    if realized_pnl > 0:
                         state["wins"] += 1
-                    if strategy == "workflow" and decision:
-                        action_id = decision.get("action_id") or (decision.get("branch") or {}).get("id")
-                        if action_id:
-                            state["workflow_state"]["executed_action_ids"].add(action_id)
-                        branch_id = (decision.get("branch") or {}).get("id")
-                        if branch_id:
-                            state["workflow_state"]["branch_step_counts"][branch_id] = int(state["workflow_state"]["branch_step_counts"].get(branch_id, 0)) + 1
+                    if strategy == "workflow":
+                        record_backtest_workflow_execution(state, decision)
                     _record_equity(global_index, candle, price)
                 else:
                     _record_equity(global_index, candle, price)
@@ -569,34 +883,40 @@ def backtest_trading_bot(service, *, actor, payload):
                 _record_equity(global_index, candle, price)
                 continue
             spend = min(workflow_spend, state["cash"])
-            fee = fee_points(spend, fee_rate_percent)
-            net_spend = max(0, spend - fee)
-            buy_units = int((Decimal(str(net_spend)) * Decimal(ASSET_SCALE) / Decimal(str(price))).quantize(Decimal("1"), rounding=ROUND_DOWN))
-            if buy_units <= 0:
+            buy_price = backtest_execution_price(price, "buy", slippage_percent)
+            buy_execution = build_backtest_buy_execution(
+                budget_points=spend,
+                price=buy_price,
+                fee_rate_percent=fee_rate_percent,
+                constraints=market_constraints,
+            )
+            if not buy_execution:
                 _record_equity(global_index, candle, price)
                 continue
-            state["cash"] -= spend
+            buy_units = buy_execution["units"]
+            state["cash"] -= buy_execution["total_points"]
             prev_units = state["units"]
             state["units"] += buy_units
             if state["units"] > 0:
-                state["avg_cost_bt"] = float(((Decimal(str(prev_units)) * Decimal(str(state["avg_cost_bt"]))) + (Decimal(str(buy_units)) * Decimal(str(price)))) / Decimal(str(state["units"])))
+                state["avg_cost_bt"] = float(
+                    (
+                        (Decimal(str(prev_units)) * Decimal(str(state["avg_cost_bt"])))
+                        + (Decimal(str(buy_units)) * Decimal(str(buy_price)))
+                    )
+                    / Decimal(str(state["units"]))
+                )
             state["trades"].append({
                 "index": global_index,
                 "time": candle.get("time") or candle.get("time_iso") or global_index,
                 "side": "buy",
-                "price_points": price,
-                "spend_points": spend,
-                "fee_points": fee,
+                "price_points": buy_price,
+                "spend_points": buy_execution["total_points"],
+                "fee_points": buy_execution["fee_points"],
                 "quantity": units_to_quantity(buy_units),
             })
             state["trade_count"] += 1
-            if strategy == "workflow" and decision:
-                action_id = decision.get("action_id") or (decision.get("branch") or {}).get("id")
-                if action_id:
-                    state["workflow_state"]["executed_action_ids"].add(action_id)
-                branch_id = (decision.get("branch") or {}).get("id")
-                if branch_id:
-                    state["workflow_state"]["branch_step_counts"][branch_id] = int(state["workflow_state"]["branch_step_counts"].get(branch_id, 0)) + 1
+            if strategy == "workflow":
+                record_backtest_workflow_execution(state, decision)
             _record_equity(global_index, candle, price)
         state["processed_candles"] += len(chunk_candles)
 
@@ -632,4 +952,5 @@ def backtest_trading_bot(service, *, actor, payload):
         provider_symbol=str(payload.get("provider_symbol") or ""),
         max_price_jump_percent=max_price_jump_percent,
         segment_count=segment_count,
+        slippage_percent=slippage_percent,
     )

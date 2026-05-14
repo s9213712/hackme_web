@@ -12,6 +12,7 @@ const videoState = {
   playbackSessionId: 0,
 };
 let videoPublishDriveFiles = [];
+let videoPendingPublishSelection = null;
 const VIDEO_SHARE_FRAGMENT_STORAGE_KEY = "hackme_web.video_share_fragments";
 const VIDEO_HLS_JS_URL = "/js/hls.light.min.js?v=20260505-hlsjs";
 const VIDEO_E2EE_STREAM_V2_WORKER_URL = "/js/e2ee-stream-v2-worker.js?v=20260505-e2eev2";
@@ -344,6 +345,27 @@ function videoDisplayName(file) {
   return file.original_filename_plain_for_public || file.display_name || file.id || "影音檔";
 }
 
+function videoTitleFromFilename(name = "") {
+  return String(name || "影音檔").replace(/\.[^.]+$/, "").trim() || "影音檔";
+}
+
+function applyVideoPublishDriveSelection(fileId, title = "") {
+  const select = $("video-publish-file");
+  const target = String(fileId || "").trim();
+  if (!select || !target) return false;
+  const options = Array.from(select.options || []);
+  const matched = options.find((option) => String(option.value || "") === target);
+  if (!matched) return false;
+  select.value = target;
+  const uploadInput = $("video-upload-file");
+  if (uploadInput) uploadInput.value = "";
+  const titleInput = $("video-publish-title");
+  if (titleInput && !titleInput.value.trim()) {
+    titleInput.value = videoTitleFromFilename(title || matched.textContent || "");
+  }
+  return true;
+}
+
 function videoMime(file) {
   return String(file.mime_type_plain_for_public || file.mime_type || "").toLowerCase();
 }
@@ -444,11 +466,51 @@ async function loadVideoPublishFiles() {
     select.innerHTML = files.length
       ? files.map((file) => `<option value="${sanitize(file.id)}">${sanitize(videoDisplayName(file))}</option>`).join("")
       : `<option value="">雲端硬碟目前沒有可發布的影音檔</option>`;
+    if (videoPendingPublishSelection?.fileId) {
+      const applied = applyVideoPublishDriveSelection(videoPendingPublishSelection.fileId, videoPendingPublishSelection.title);
+      const panel = $("video-publish-panel");
+      if (applied && panel) panel.open = true;
+    }
   } catch (err) {
     videoPublishDriveFiles = [];
     select.innerHTML = `<option value="">影音檔讀取失敗</option>`;
     videoMsg(err.message || "影音檔讀取失敗", false);
   }
+}
+
+async function openVideoPublishFromDrive(fileId, options = {}) {
+  const target = String(fileId || "").trim();
+  if (!target) return false;
+  videoPendingPublishSelection = {
+    fileId: target,
+    title: options.title || "",
+    createdAt: Date.now(),
+  };
+  if (typeof switchModuleTab === "function") {
+    switchModuleTab("videos");
+  }
+  if (location.hash !== "#videos") {
+    history.pushState(null, "", `${location.pathname}${location.search}#videos`);
+  }
+  showVideoBrowseView();
+  const panel = $("video-publish-panel");
+  if (panel) panel.open = true;
+  videoMsg("已帶入雲端硬碟影音，正在載入發布設定...", true);
+  await loadVideoPublishFiles();
+  const applied = applyVideoPublishDriveSelection(target, options.title || "");
+  if (!applied) {
+    videoMsg("這個檔案不是可發布的影音檔，或目前帳號沒有檔案權限。", false);
+    return false;
+  }
+  if (panel) panel.scrollIntoView({ behavior: "smooth", block: "start" });
+  const titleInput = $("video-publish-title");
+  const visibilityInput = $("video-publish-visibility");
+  setTimeout(() => (titleInput || visibilityInput)?.focus?.(), 150);
+  setTimeout(() => {
+    if (videoPendingPublishSelection?.fileId === target) videoPendingPublishSelection = null;
+  }, 8000);
+  videoMsg("已選擇雲端硬碟影音，請完成標題、可見性、分享與封面設定後發布。", true);
+  return true;
 }
 
 async function publishVideoFromDrive() {
@@ -563,6 +625,7 @@ async function publishVideoFromDrive() {
     if (shareMaxViews) shareMaxViews.value = "";
     const shareExpiresAt = $("video-share-expires-at");
     if (shareExpiresAt) shareExpiresAt.value = "";
+    videoPendingPublishSelection = null;
     if (e2eeShare && json.video?.share_url) {
       rememberVideoShareFragment(json.video.share_url, e2eeShare.share_fragment_key);
     }
@@ -853,7 +916,7 @@ async function hydrateVideoE2eePlayer(video, playback, sessionId) {
     await fetchCsrfToken();
   }
   const csrf = getCsrfToken() || "";
-  const decrypted = await buildDriveE2eePreview(video.cloud_file_id, csrf);
+  const decrypted = await decryptVideoE2eePlaybackBlob(video, playback, csrf);
   if (!decrypted?.blob) {
     throw new Error("E2EE 影音解密播放失敗");
   }
@@ -970,26 +1033,90 @@ async function fetchVideoE2eeChunkWithRetry(url, retries = VIDEO_E2EE_STREAM_V2_
   throw lastError || new Error("E2EE Streaming v2 分段下載失敗");
 }
 
+async function fetchVideoPlaybackE2eeKey(video, playback, csrf) {
+  const url = playback?.e2ee_key_url || "";
+  if (url) {
+    const res = await apiFetch(url, {
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" }
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok || !json.e2ee) throw new Error(json.msg || "E2EE 解密資訊讀取失敗");
+    return json.e2ee;
+  }
+  return fetchDriveE2eeKey(video.cloud_file_id, csrf);
+}
+
+async function fetchVideoPlaybackE2eeCiphertext(video, playback, csrf) {
+  const url = playback?.ciphertext_url || playback?.fallback_url || "";
+  if (url) {
+    const res = await apiFetch(url, {
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" }
+    });
+    if (!res.ok) {
+      const json = await res.json().catch(() => ({}));
+      throw new Error(json.msg || "E2EE 密文讀取失敗");
+    }
+    return res.blob();
+  }
+  return fetchDriveE2eeCiphertext(video.cloud_file_id, csrf);
+}
+
+async function decryptVideoE2eePlaybackBlob(video, playback, csrf) {
+  const e2ee = await fetchVideoPlaybackE2eeKey(video, playback, csrf);
+  const ciphertext = await fetchVideoPlaybackE2eeCiphertext(video, playback, csrf);
+  const fileId = e2ee.file_id || video.cloud_file_id;
+  const promptText = "請輸入此 E2EE 影音的原始加密密碼。公開影音仍只會在瀏覽器端解密，伺服器無法看到明文。";
+  for (const passphrase of getDriveE2eeSessionPassphraseCandidates(fileId)) {
+    try {
+      const decrypted = await decryptDriveE2eeBlob(ciphertext, e2ee, passphrase);
+      rememberDriveE2eeSessionPassphrase(fileId, passphrase);
+      return decrypted;
+    } catch (_) {
+      forgetDriveE2eeSessionPassphrase(fileId);
+    }
+  }
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const passphrase = await getDriveE2eeSessionPassphrase(fileId, promptText, { force: true });
+    if (!passphrase) return null;
+    try {
+      const decrypted = await decryptDriveE2eeBlob(ciphertext, e2ee, passphrase);
+      rememberDriveE2eeSessionPassphrase(fileId, passphrase);
+      return decrypted;
+    } catch (err) {
+      forgetDriveE2eeSessionPassphrase(fileId);
+      if (attempt > 0) throw err;
+      alert("E2EE 密碼不正確或檔案已損壞，請重新輸入。");
+    }
+  }
+  return null;
+}
+
 async function resolveVideoE2eePlaybackKey(video, playback) {
+  if (!getCsrfToken()) {
+    await fetchCsrfToken();
+  }
   const csrf = getCsrfToken() || "";
-  const e2ee = await fetchDriveE2eeKey(video.cloud_file_id, csrf);
-  for (const passphrase of getDriveE2eeSessionPassphraseCandidates(video.cloud_file_id)) {
+  const e2ee = await fetchVideoPlaybackE2eeKey(video, playback, csrf);
+  const fileId = e2ee.file_id || video.cloud_file_id;
+  for (const passphrase of getDriveE2eeSessionPassphraseCandidates(fileId)) {
     try {
       const fileKey = await unwrapDriveFileKey(e2ee.encrypted_file_key, passphrase);
-      rememberDriveE2eeSessionPassphrase(video.cloud_file_id, passphrase);
+      rememberDriveE2eeSessionPassphrase(fileId, passphrase);
       return new Uint8Array(await window.crypto.subtle.exportKey("raw", fileKey));
     } catch (_) {
-      forgetDriveE2eeSessionPassphrase(video.cloud_file_id);
+      forgetDriveE2eeSessionPassphrase(fileId);
     }
   }
   const passphrase = await getDriveE2eeSessionPassphrase(
-    video.cloud_file_id,
-    "請輸入此 E2EE 影音的原始加密密碼。strict E2EE Streaming v2 只在瀏覽器端解密，伺服器無法看到明文。",
+    fileId,
+    "請輸入此 E2EE 影音的原始加密密碼。公開影音與 strict E2EE Streaming v2 都只在瀏覽器端解密，伺服器無法看到明文。",
     { force: true }
   );
   if (!passphrase) throw new Error("E2EE 影音播放需要原始加密密碼。");
   const fileKey = await unwrapDriveFileKey(e2ee.encrypted_file_key, passphrase);
-  rememberDriveE2eeSessionPassphrase(video.cloud_file_id, passphrase);
+  rememberDriveE2eeSessionPassphrase(fileId, passphrase);
   return new Uint8Array(await window.crypto.subtle.exportKey("raw", fileKey));
 }
 

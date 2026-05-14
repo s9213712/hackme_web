@@ -6,20 +6,30 @@ let economyInlineEventsBound = false;
 let economyAutoRefreshTimer = null;
 let economyAutoRefreshBusy = false;
 const ECONOMY_PAGE_STORAGE_KEY = "hackme_web:economy:active_page";
-let economyActivePage = (() => {
+
+function economyPageStorageKey() {
+  return typeof accountScopedStorageKey === "function" ? accountScopedStorageKey(ECONOMY_PAGE_STORAGE_KEY) : ECONOMY_PAGE_STORAGE_KEY;
+}
+
+function readEconomyActivePage() {
   try {
-    return localStorage.getItem(ECONOMY_PAGE_STORAGE_KEY) || "balance";
+    return localStorage.getItem(economyPageStorageKey()) || "balance";
   } catch (_) {
     return "balance";
   }
-})();
+}
+
+let economyActivePage = readEconomyActivePage();
 
 function toggleWalletCard(bodyId, btn) {
   const body = $(bodyId);
   if (!body) return;
   const hidden = body.style.display === "none";
   body.style.display = hidden ? "" : "none";
-  if (btn) btn.textContent = hidden ? "▾" : "▸";
+  if (btn) {
+    btn.textContent = hidden ? "▾" : "▸";
+    btn.setAttribute("aria-expanded", hidden ? "true" : "false");
+  }
 }
 
 function economySetMsg(text, ok = true) {
@@ -27,6 +37,9 @@ function economySetMsg(text, ok = true) {
   if (!el) return;
   el.textContent = text || "";
   el.style.color = ok ? "#4caf50" : "#ff4f6d";
+  scheduleInlineMessageClear(el, text, ok);
+  showActionFeedback(document.activeElement, text, ok, { skipToast: true });
+  announceInlineMessage(text, ok);
 }
 
 function auditChainActionMsg(text, ok = true) {
@@ -34,6 +47,9 @@ function auditChainActionMsg(text, ok = true) {
   if (!el) return;
   el.textContent = text || "";
   el.style.color = ok ? "#4caf50" : "#ff4f6d";
+  scheduleInlineMessageClear(el, text, ok);
+  showActionFeedback(document.activeElement, text, ok, { skipToast: true });
+  announceInlineMessage(text, ok);
 }
 
 function economyRecoveryActionMsg(text, ok = true) {
@@ -41,6 +57,9 @@ function economyRecoveryActionMsg(text, ok = true) {
   if (!el) return;
   el.textContent = text || "";
   el.style.color = ok ? "#4caf50" : "#ff4f6d";
+  scheduleInlineMessageClear(el, text, ok);
+  showActionFeedback(document.activeElement, text, ok, { skipToast: true });
+  announceInlineMessage(text, ok);
 }
 
 function economyRequestId(prefix = "economy") {
@@ -52,6 +71,46 @@ function economyRequestId(prefix = "economy") {
 
 function formatPointsCurrency(currency) {
   return "點";
+}
+
+function formatEconomyLedgerAction(actionType) {
+  const action = String(actionType || "");
+  const labels = {
+    admin_adjust_credit: "管理員加點",
+    admin_adjust_debit: "管理員扣點",
+    admin_initial_grant: "管理員初始配點",
+    admin_weekly_salary: "管理員週薪",
+    game_daily_challenge_reward: "遊戲每日任務獎勵",
+    game_weekly_leaderboard_reward: "遊戲週排行榜獎勵",
+    trading_bot_weekly_competition_reward: "交易機器人週賽獎勵",
+    new_user_signup_bonus: "註冊獎勵",
+    user_initial_grant: "會員初始配點",
+  };
+  if (labels[action]) return labels[action];
+  if (action.startsWith("rollback:")) return `Rollback：${formatEconomyLedgerAction(action.slice("rollback:".length))}`;
+  return action || "-";
+}
+
+function formatEconomyLedgerAmount(row) {
+  const direction = String(row?.direction || "");
+  const amount = Number(row?.amount || 0);
+  const currency = formatPointsCurrency(row?.currency_type);
+  if (direction === "credit" || direction === "transfer_in") return `收入 +${amount} ${currency}`;
+  if (direction === "debit" || direction === "transfer_out" || direction === "reverse") return `支出 -${amount} ${currency}`;
+  if (direction === "freeze") return `凍結 ${amount} ${currency}`;
+  if (direction === "unfreeze") return `解凍 ${amount} ${currency}`;
+  return `${direction || "異動"} ${amount} ${currency}`;
+}
+
+function formatEconomyLedgerSource(row) {
+  const meta = row?.public_metadata && typeof row.public_metadata === "object" ? row.public_metadata : {};
+  const parts = [];
+  if (row?.reason) parts.push(row.reason);
+  if (meta.game_key) parts.push(`遊戲：${meta.game_key}`);
+  if (meta.difficulty) parts.push(`難度：${meta.difficulty}`);
+  if (meta.score !== undefined && meta.score !== null && meta.score !== "") parts.push(`分數：${meta.score}`);
+  if (row?.reference_id) parts.push(`來源：${row.reference_id}`);
+  return parts.join(" · ");
 }
 
 function formatEconomyCountdown(seconds) {
@@ -72,25 +131,44 @@ function canManageEconomyPoints() {
   return currentUser === "root" || currentRole === "manager" || currentRole === "super_admin";
 }
 
+function economyPositionsAvailable() {
+  return !siteConfig || siteConfig.feature_trading_enabled !== false;
+}
+
 function setEconomyActivePage(page, options = {}) {
   const rootMode = currentUser === "root";
   const chainAllowed = canManageEconomyPoints();
-  const nextPage = page === "chain" && chainAllowed ? "chain" : "balance";
+  const positionsAvailable = economyPositionsAvailable();
+  const requestedPage = page === "chain" || page === "positions" ? page : "balance";
+  const nextPage =
+    requestedPage === "chain" && chainAllowed
+      ? "chain"
+      : requestedPage === "positions" && positionsAvailable
+        ? "positions"
+        : "balance";
   economyActivePage = nextPage;
   if (options.persist !== false) {
     try {
-      localStorage.setItem(ECONOMY_PAGE_STORAGE_KEY, nextPage);
+      localStorage.setItem(economyPageStorageKey(), nextPage);
     } catch (_) {}
   }
   const balancePage = $("economy-balance-page");
+  const positionsPage = $("economy-positions-page");
   const chainPage = $("economy-chain-page");
   if (balancePage) balancePage.classList.toggle("active", nextPage === "balance");
+  if (positionsPage) positionsPage.classList.toggle("active", positionsAvailable && nextPage === "positions");
   if (chainPage) chainPage.classList.toggle("active", chainAllowed && nextPage === "chain");
   const balanceTab = $("tab-economy-balance");
+  const positionsTab = $("tab-economy-positions");
   const chainTab = $("tab-economy-chain");
   if (balanceTab) {
     balanceTab.classList.toggle("active", nextPage === "balance");
     balanceTab.setAttribute("aria-selected", nextPage === "balance" ? "true" : "false");
+  }
+  if (positionsTab) {
+    positionsTab.style.display = positionsAvailable ? "" : "none";
+    positionsTab.classList.toggle("active", positionsAvailable && nextPage === "positions");
+    positionsTab.setAttribute("aria-selected", positionsAvailable && nextPage === "positions" ? "true" : "false");
   }
   if (chainTab) {
     chainTab.style.display = chainAllowed ? "" : "none";
@@ -100,13 +178,15 @@ function setEconomyActivePage(page, options = {}) {
   }
   const title = $("economy-page-title");
   if (title) {
-    if (!rootMode) title.textContent = nextPage === "chain" ? "積分審核" : "積分錢包";
+    if (nextPage === "positions") title.textContent = "倉位管理";
+    else if (!rootMode) title.textContent = nextPage === "chain" ? "積分審核" : "積分錢包";
     else title.textContent = nextPage === "chain" ? "積分私有鏈" : "積分餘額";
   }
 }
 
 function syncEconomySubpages(rootMode) {
   if (!canManageEconomyPoints() && economyActivePage === "chain") economyActivePage = "balance";
+  if (!economyPositionsAvailable() && economyActivePage === "positions") economyActivePage = "balance";
   setEconomyActivePage(economyActivePage, { persist: false });
 }
 
@@ -288,16 +368,20 @@ function renderEconomyLedger(rows, targetId = "economy-ledger-list") {
     list.innerHTML = `<div class="drive-empty">尚無帳本紀錄</div>`;
     return;
   }
-  list.innerHTML = rows.map((row) => `
-    <div class="drive-file-row">
-      <div>
-        <strong>${sanitize(row.direction)} ${Number(row.amount || 0)} ${formatPointsCurrency(row.currency_type)}</strong>
-        <div class="drive-card-sub">${sanitize(row.action_type || "-")} · ${sanitize(row.created_at || "")}</div>
-        <div class="economy-ledger-hash">${sanitize(row.ledger_hash || "")}</div>
+  list.innerHTML = rows.map((row) => {
+    const source = formatEconomyLedgerSource(row);
+    return `
+      <div class="drive-file-row">
+        <div>
+          <strong>${sanitize(formatEconomyLedgerAmount(row))}</strong>
+          <div class="drive-card-sub">${sanitize(formatEconomyLedgerAction(row.action_type))} · ${sanitize(row.created_at || "")}</div>
+          ${source ? `<div class="drive-card-sub">${sanitize(source)}</div>` : ""}
+          <div class="economy-ledger-hash">${sanitize(row.ledger_uuid || row.ledger_hash || "")}</div>
+        </div>
+        <button class="btn" type="button" data-economy-proof="${sanitize(row.ledger_uuid || "")}">Proof</button>
       </div>
-      <button class="btn" type="button" data-economy-proof="${sanitize(row.ledger_uuid || "")}">Proof</button>
-    </div>
-  `).join("");
+    `;
+  }).join("");
   list.querySelectorAll("[data-economy-proof]").forEach((btn) => {
     btn.addEventListener("click", () => loadEconomyProof(btn.dataset.economyProof || ""));
   });
@@ -378,8 +462,8 @@ function renderEconomyRootReport(report) {
   renderEconomyRootList(safeReport.high_risk_ledger, "economy-risk-ledger-list", "尚無異常帳本", (row) => `
     <div class="drive-file-row">
       <div>
-        <strong>${sanitize(row.verification_status || row.status || "-")} · ${sanitize(row.direction)} ${Number(row.amount || 0)} ${formatPointsCurrency(row.currency_type)}</strong>
-        <div class="drive-card-sub">ledger #${Number(row.id || 0)} · user ${Number(row.user_id || 0)} · ${sanitize(row.action_type || "-")} · risk=${sanitize(row.risk_flag || "none")}</div>
+        <strong>${sanitize(row.verification_status || row.status || "-")} · ${sanitize(formatEconomyLedgerAmount(row))}</strong>
+        <div class="drive-card-sub">ledger #${Number(row.id || 0)} · user ${Number(row.user_id || 0)} · ${sanitize(formatEconomyLedgerAction(row.action_type))} · risk=${sanitize(row.risk_flag || "none")}</div>
         ${(Array.isArray(row.verification_errors) ? row.verification_errors : []).map((issue) => `
           <div class="drive-card-sub">
             驗證異常：${sanitize(issue.type || "-")} · ${sanitize(issue.message || "")}
@@ -398,7 +482,7 @@ function renderEconomyRootReport(report) {
       btn.addEventListener("click", () => loadEconomyProof(btn.dataset.economyProof || ""));
     });
   }
-  renderEconomyRootList(safeReport.adjustments, "economy-adjustment-list", "尚無加減分明細", (row) => {
+  renderEconomyRootList(safeReport.adjustments, "economy-adjustment-list", "尚無收入 / 加減分明細", (row) => {
     const signed = Number(row.signed_amount || 0);
     const directionText = signed >= 0 ? `+${signed}` : String(signed);
     return `
@@ -406,7 +490,7 @@ function renderEconomyRootReport(report) {
         <div>
           <strong>${sanitize(row.actor_username || "system")} → ${sanitize(row.target_username || `user:${row.user_id || "-"}`)} · ${directionText} ${formatPointsCurrency(row.currency_type)}</strong>
           <div class="drive-card-sub">原因：${sanitize(row.reason || "-")} · ${sanitize(row.created_at || "")}</div>
-          <div class="drive-card-sub">動作：${sanitize(row.action_type || "-")} · 狀態：${sanitize(row.status || "-")}</div>
+          <div class="drive-card-sub">動作：${sanitize(formatEconomyLedgerAction(row.action_type))} · 狀態：${sanitize(row.status || "-")}</div>
           <div class="economy-ledger-hash">${sanitize(row.ledger_uuid || "")}</div>
         </div>
         <button class="btn" type="button" data-economy-proof="${sanitize(row.ledger_uuid || "")}">Proof</button>
@@ -961,6 +1045,10 @@ function bindEconomyInlineEvents() {
     if (tab.dataset.economyPageBound === "1") return;
     tab.dataset.economyPageBound = "1";
     tab.addEventListener("click", () => setEconomyActivePage(tab.dataset.economyPage || "balance"));
+  });
+  document.addEventListener("hackme:account-context-changed", () => {
+    economyActivePage = readEconomyActivePage();
+    syncEconomySubpages(currentUser === "root");
   });
   syncEconomySubpages(currentUser === "root");
   if (!economyAutoRefreshTimer) {

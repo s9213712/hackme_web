@@ -141,7 +141,10 @@ function switchSettingsSection(tab) {
   if (tab === "billing") {
     loadRootEconomyCatalog();
   }
-  if (tab === "trading") loadRootTradingSettings();
+  if (tab === "trading") {
+    loadRootTradingSettings();
+    if (typeof loadTradingDashboard === "function") loadTradingDashboard();
+  }
   if (tab === "member-levels") loadEditableMemberLevelRules();
   if (typeof clearSettingsStatus === "function") {
     if (suppressNextSettingsStatusClear) suppressNextSettingsStatusClear = false;
@@ -187,14 +190,14 @@ function switchModuleTab(tab) {
   const canAccessVideos = !!currentUser && canAccessModule("videos");
   const canAccessGames = !!currentUser && canAccessModule("games");
   const canAccessJobs = !!currentUser && canAccessModule("jobs");
-  const canAccessShares = !!currentUser && canAccessModule("shares");
+  const canAccessShareCenter = canAccessVideos && canAccessModule("shares");
   const canUseComfyuiTab = typeof isComfyuiAvailableForNavigation !== "function" || isComfyuiAvailableForNavigation();
   const canAccessComfyui = !!currentUser && canAccessModule("comfyui") && canUseComfyuiTab;
   const canAccessEconomy = !!currentUser && canAccessModule("economy");
   const canAccessTrading = canAccessEconomy && canAccessModule("trading");
 
   let normTab = tab;
-  const fallbackModule = () => canAccessChat ? "chat" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : (canAccessVideos ? "videos" : (canAccessGames ? "games" : (canAccessJobs ? "jobs" : (canAccessShares ? "shares" : (canAccessComfyui ? "comfyui" : (canAccessEconomy ? "economy" : (canAccessAppeals ? "appeals" : (canAccessAccounts ? "accounts" : "chat"))))))))));
+  const fallbackModule = () => canAccessChat ? "chat" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : (canAccessVideos ? "videos" : (canAccessGames ? "games" : (canAccessJobs ? "jobs" : (canAccessComfyui ? "comfyui" : (canAccessEconomy ? "economy" : (canAccessAppeals ? "appeals" : (canAccessAccounts ? "accounts" : "chat")))))))));
   if (tab === "chat" && !canAccessChat) normTab = fallbackModule();
   if (tab === "dm") normTab = fallbackModule();
   if (tab === "announcements" && !canAccessAnnouncements) normTab = fallbackModule();
@@ -204,7 +207,7 @@ function switchModuleTab(tab) {
   if (tab === "videos" && !canAccessVideos) normTab = fallbackModule();
   if (tab === "games" && !canAccessGames) normTab = fallbackModule();
   if (tab === "jobs" && !canAccessJobs) normTab = fallbackModule();
-  if (tab === "shares" && !canAccessShares) normTab = fallbackModule();
+  if (tab === "shares" && !canAccessShareCenter) normTab = fallbackModule();
   if (tab === "comfyui" && !canAccessComfyui) normTab = fallbackModule();
   if (tab === "economy" && !canAccessEconomy) normTab = fallbackModule();
   if (tab === "trading" && !canAccessTrading) normTab = fallbackModule();
@@ -236,7 +239,6 @@ function switchModuleTab(tab) {
   const mVideos = $("tab-module-videos");
   const mGames = $("tab-module-games");
   const mJobs = $("tab-module-jobs");
-  const mShares = $("tab-module-shares");
   const mComfyui = $("tab-module-comfyui");
   const mEconomy = $("tab-module-economy");
   const mTrading = $("tab-module-trading");
@@ -264,10 +266,9 @@ function switchModuleTab(tab) {
   if (mCommunity) mCommunity.classList.toggle("active", normTab === "community");
   if (mDrive) mDrive.classList.toggle("active", normTab === "drive");
   if (mAlbums) mAlbums.classList.toggle("active", normTab === "albums");
-  if (mVideos) mVideos.classList.toggle("active", normTab === "videos");
+  if (mVideos) mVideos.classList.toggle("active", normTab === "videos" || normTab === "shares");
   if (mGames) mGames.classList.toggle("active", normTab === "games");
   if (mJobs) mJobs.classList.toggle("active", normTab === "jobs");
-  if (mShares) mShares.classList.toggle("active", normTab === "shares");
   if (mComfyui) mComfyui.classList.toggle("active", normTab === "comfyui");
   if (mEconomy) mEconomy.classList.toggle("active", normTab === "economy");
   if (mTrading) mTrading.classList.toggle("active", normTab === "trading");
@@ -275,6 +276,7 @@ function switchModuleTab(tab) {
   if (mServer) mServer.classList.toggle("active", normTab === "server");
   if (mAppeals) mAppeals.classList.toggle("active", normTab === "appeals");
   if (typeof animateActiveModule === "function") animateActiveModule(normTab);
+  if (typeof syncRootModuleSettingsButtons === "function") syncRootModuleSettingsButtons();
 
   if (normTab === "community" && canAccessCommunity) {
     loadCommunityHome();
@@ -301,7 +303,7 @@ function switchModuleTab(tab) {
   if (normTab === "jobs" && canAccessJobs && typeof loadJobCenter === "function") {
     loadJobCenter();
   }
-  if (normTab === "shares" && canAccessShares && typeof loadShareCenter === "function") {
+  if (normTab === "shares" && canAccessShareCenter && typeof loadShareCenter === "function") {
     loadShareCenter();
   }
   if (normTab === "comfyui" && canAccessComfyui && typeof loadComfyuiModels === "function") {
@@ -1383,6 +1385,9 @@ function rootTradingSettingsMsg(text, ok = true) {
   if (!msg) return;
   msg.textContent = text || "";
   msg.style.color = ok ? "#4caf50" : "#ff4f6d";
+  scheduleInlineMessageClear(msg, text, ok);
+  showActionFeedback(document.activeElement, text, ok, { skipToast: true });
+  announceInlineMessage(text, ok);
 }
 
 function rootTradingPriceFusionMsg(text, ok = true) {
@@ -1390,6 +1395,9 @@ function rootTradingPriceFusionMsg(text, ok = true) {
   if (!msg) return;
   msg.textContent = text || "";
   msg.style.color = ok ? "#4caf50" : "#ff4f6d";
+  scheduleInlineMessageClear(msg, text, ok);
+  showActionFeedback(document.activeElement, text, ok, { skipToast: true });
+  announceInlineMessage(text, ok);
 }
 
 function rootTradingBotAuditMsg(text, ok = true) {
@@ -1397,6 +1405,9 @@ function rootTradingBotAuditMsg(text, ok = true) {
   if (!msg) return;
   msg.textContent = text || "";
   msg.style.color = ok ? "#4caf50" : "#ff4f6d";
+  scheduleInlineMessageClear(msg, text, ok);
+  showActionFeedback(document.activeElement, text, ok, { skipToast: true });
+  announceInlineMessage(text, ok);
 }
 
 function rootTradingMarketRegistryMsg(text, ok = true) {
@@ -1404,6 +1415,9 @@ function rootTradingMarketRegistryMsg(text, ok = true) {
   if (!msg) return;
   msg.textContent = text || "";
   msg.style.color = ok ? "#4caf50" : "#ff4f6d";
+  scheduleInlineMessageClear(msg, text, ok);
+  showActionFeedback(document.activeElement, text, ok, { skipToast: true });
+  announceInlineMessage(text, ok);
 }
 
 function rootTradingMarketRegistryEditorStatus(text, ok = true) {
@@ -1411,6 +1425,9 @@ function rootTradingMarketRegistryEditorStatus(text, ok = true) {
   if (!msg) return;
   msg.textContent = text || "";
   msg.style.color = ok ? "#4caf50" : "#ff4f6d";
+  scheduleInlineMessageClear(msg, text, ok);
+  showActionFeedback(document.activeElement, text, ok, { skipToast: true });
+  announceInlineMessage(text, ok);
 }
 
 function rootTradingMarketProviderStatus(text, ok = true) {
@@ -1418,6 +1435,9 @@ function rootTradingMarketProviderStatus(text, ok = true) {
   if (!msg) return;
   msg.textContent = text || "";
   msg.style.color = ok ? "#4caf50" : "#ff4f6d";
+  scheduleInlineMessageClear(msg, text, ok);
+  showActionFeedback(document.activeElement, text, ok, { skipToast: true });
+  announceInlineMessage(text, ok);
 }
 
 function tradingMarketRegistryCheckbox(id, value, fallback = false) {
@@ -2423,6 +2443,8 @@ function renderRootTradingSettings(payload) {
   if ($("root-trading-bot-auto-enabled")) $("root-trading-bot-auto-enabled").checked = settings.bot_auto_scan_enabled !== false;
   if ($("root-trading-bot-auto-interval")) $("root-trading-bot-auto-interval").value = settings.bot_auto_scan_interval_seconds ?? 30;
   if ($("root-trading-bot-auto-limit")) $("root-trading-bot-auto-limit").value = settings.bot_auto_scan_limit ?? 50;
+  if ($("root-trading-bot-competition-enabled")) $("root-trading-bot-competition-enabled").checked = settings.bot_competition_enabled !== false;
+  if ($("root-trading-bot-competition-reward")) $("root-trading-bot-competition-reward").value = settings.bot_competition_weekly_reward_points ?? 100;
   if ($("root-trading-backtest-max-candles")) $("root-trading-backtest-max-candles").value = settings.backtest_max_candles ?? 20000;
   if ($("root-trading-backtest-capacity-budget")) $("root-trading-backtest-capacity-budget").value = settings.backtest_capacity_time_budget_seconds ?? 60;
   const measuredHintEl = $("root-trading-backtest-measured-hint");
@@ -2561,6 +2583,8 @@ async function saveRootTradingSettings() {
       bot_auto_scan_enabled: !!$("root-trading-bot-auto-enabled")?.checked,
       bot_auto_scan_interval_seconds: Number($("root-trading-bot-auto-interval")?.value || 30),
       bot_auto_scan_limit: Number($("root-trading-bot-auto-limit")?.value || 50),
+      bot_competition_enabled: $("root-trading-bot-competition-enabled")?.checked !== false,
+      bot_competition_weekly_reward_points: Number($("root-trading-bot-competition-reward")?.value || 100),
       backtest_max_candles: Number($("root-trading-backtest-max-candles")?.value || 20000),
       backtest_capacity_time_budget_seconds: Number($("root-trading-backtest-capacity-budget")?.value || 60),
       bot_audit_enabled: !!$("root-trading-bot-audit-enabled")?.checked,
@@ -4251,6 +4275,9 @@ function setSettingsStatus(text = "", ok = null, options = {}) {
   el.textContent = text;
   el.style.color = ok === true ? "#4caf50" : ok === false ? "#ff4f6d" : "#ffb74d";
   const autoClearMs = Number(options.autoClearMs || 0);
+  scheduleInlineMessageClear(el, text, ok, autoClearMs > 0 ? { duration: autoClearMs } : { persistent: ok === null });
+  showActionFeedback(document.activeElement, text, ok, { skipToast: true });
+  announceInlineMessage(text, ok);
   if (autoClearMs > 0) {
     const expectedText = text;
     settingsStatusAutoClearTimer = setTimeout(() => {

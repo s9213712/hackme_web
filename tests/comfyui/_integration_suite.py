@@ -4125,7 +4125,10 @@ def test_comfyui_frontend_is_wired():
     assert 'href="/api/root/comfyui/local-start-template"' in index_html
     assert 'id="comfyui-civitai-settings" style="display:none;"' in index_html
     assert 'id="s-comfyui-civitai-api-key"' in index_html
-    assert 'const show = currentUser === "root";' in comfyui_js
+    assert "function canManageComfyuiLocalModels" in comfyui_js
+    assert 'return currentUser === "root" && mode === "local";' in comfyui_js
+    assert 'if (panel) panel.style.display = showLocalModels ? "" : "none";' in comfyui_js
+    assert "if (modelsTab) modelsTab.hidden = !showLocalModels;" in comfyui_js
     assert '目前是雲端 / 遠端模式，所以這個區塊只保留說明。若要管理本站的本地 ComfyUI 模型，請先把 backend 切回本地模式。' in comfyui_js
     assert "/js/36-comfyui.js?v=20260509-comfyui-template-embeddings" in index_html
     assert "/styles.css?v=20260514-open-world" in index_html
@@ -4359,7 +4362,7 @@ def test_comfyui_frontend_is_wired():
     assert 'savePath.value = `/output/${comfyuiCurrentImage.image_ref.filename}`;' in comfyui_js
     assert 'placeholder="/output/圖片.png"' in index_html
     assert "COMFYUI_DRAFT_FIELD_IDS" in comfyui_js
-    assert "hackme_web:comfyui:draft" in comfyui_js
+    assert 'comfyuiUserStorageKey("comfyui:draft")' in comfyui_js
     assert "bindComfyuiDraftPersistence" in comfyui_js
     assert "restoreComfyuiDraft()" in comfyui_js
     assert 'album_id: selectedComfyuiAlbumId()' in comfyui_js

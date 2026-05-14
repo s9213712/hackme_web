@@ -27,6 +27,7 @@ from services.security.upload_security import log_file_access
 
 def register_file_share_preview_routes(app, ctx):
     get_db = ctx["get_db"]
+    get_current_user_ctx = ctx.get("get_current_user_ctx", lambda: None)
     get_client_ip = ctx["get_client_ip"]
     get_ua = ctx["get_ua"]
     audit = ctx["audit"]
@@ -70,12 +71,26 @@ def register_file_share_preview_routes(app, ctx):
                 data = request.get_json(force=True)
             except Exception:
                 return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
+            forbidden_e2ee_secret_fields = {"fragment_key", "share_key", "raw_file_key", "decryption_key"}
+            leaked_fields = sorted(forbidden_e2ee_secret_fields.intersection(set(data.keys())))
+            if leaked_fields:
+                return json_resp({
+                    "ok": False,
+                    "msg": "E2EE 分享金鑰不得送到伺服器；請只提交瀏覽器端包裝後的分享授權。",
+                    "fields": leaked_fields,
+                }), 400
             link, msg = create_share_link(
                 conn,
                 actor=actor,
                 storage_file_id=data.get("storage_file_id"),
+                file_id=data.get("file_id"),
                 expires_at=data.get("expires_at") or None,
                 can_preview=bool(data.get("can_preview", False)),
+                access_scope=data.get("access_scope") or "link",
+                required_user_id=data.get("required_user_id") or None,
+                required_username=data.get("required_username") or data.get("required_account") or None,
+                max_views=data.get("max_views") or 0,
+                wrapped_file_key_envelope=data.get("wrapped_file_key_envelope") or None,
             )
             if msg:
                 conn.rollback()
@@ -104,13 +119,106 @@ def register_file_share_preview_routes(app, ctx):
         finally:
             conn.close()
 
-    @app.route("/api/storage/shared/<token>/download", methods=["GET"])
-    def storage_share_link_download(token):
+    def _storage_share_error_response(reason):
+        if reason == "login_required":
+            return json_resp({"ok": False, "msg": "此分享連結限定指定帳戶下載，請先登入。", "reason": reason}), 401
+        if reason == "forbidden":
+            return json_resp({"ok": False, "msg": "此分享連結不開放目前帳戶下載。", "reason": reason}), 403
+        if reason == "view_limit_reached":
+            return json_resp({"ok": False, "msg": "分享下載次數已用完。", "reason": reason}), 410
+        if reason == "e2ee_share_authorization_missing":
+            return json_resp({"ok": False, "msg": "E2EE 分享授權不完整，請重新產生分享連結。", "reason": reason}), 409
+        return json_resp({"ok": False, "msg": "分享連結不存在或已失效", "reason": reason}), 404
+
+    def _storage_shared_file_payload(row, token):
+        e2ee = {}
+        if is_e2ee_file(row):
+            e2ee = {
+                "wrapped_file_key_envelope": row["wrapped_file_key_envelope"] or "",
+                "nonce": row["nonce"] or "",
+                "encrypted_metadata": row["encrypted_metadata"] or "",
+                "requires_fragment_key": bool(row["wrapped_file_key_envelope"]),
+            }
+        return {
+            "id": row["id"],
+            "file_id": row["file_id"],
+            "display_name": row["display_name"] or row["original_filename_plain_for_public"] or "download.bin",
+            "size_bytes": int(row["size_bytes"] or 0),
+            "privacy_mode": row["privacy_mode"],
+            "access_scope": row["access_scope"] or "link",
+            "required_user_id": int(row["required_user_id"] or 0),
+            "required_username": row["required_username"] or "",
+            "expires_at": row["expires_at"] or "",
+            "max_views": int(row["max_views"] or 0),
+            "access_count": int(row["access_count"] or 0),
+            "download_url": f"/api/storage/shared/{token}/download",
+            "e2ee": e2ee,
+        }
+
+    def _html_safe_json(value):
+        return (
+            json.dumps(str(value or ""))
+            .replace("&", "\\u0026")
+            .replace("<", "\\u003c")
+            .replace(">", "\\u003e")
+            .replace("\u2028", "\\u2028")
+            .replace("\u2029", "\\u2029")
+        )
+
+    @app.route("/shared/files/<token>", methods=["GET"])
+    def storage_share_file_page(token):
+        safe_token = _html_safe_json(token)
+        return f"""<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>檔案下載</title>
+  <style>
+    body {{ margin: 0; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f6f7f9; color: #172033; }}
+    main {{ max-width: 720px; margin: 0 auto; padding: 40px 20px; }}
+    .panel {{ background: #fff; border: 1px solid #dde3ea; border-radius: 8px; padding: 22px; }}
+    .meta {{ color: #667085; margin: 8px 0 18px; overflow-wrap: anywhere; }}
+    button {{ padding: 10px 14px; border: 0; border-radius: 6px; background: #2357d9; color: #fff; cursor: pointer; }}
+    button[disabled] {{ opacity: .55; cursor: not-allowed; }}
+    .msg {{ margin-top: 14px; color: #667085; }}
+    .err {{ color: #b42318; }}
+  </style>
+</head>
+<body>
+  <main>
+    <section class="panel">
+      <h1 id="shared-file-title">檔案下載</h1>
+      <div class="meta" id="shared-file-meta">讀取中...</div>
+      <button id="shared-file-download-btn" type="button" disabled>下載檔案</button>
+      <div class="msg" id="shared-file-msg"></div>
+    </section>
+  </main>
+  <script id="shared-file-token" type="application/json">{safe_token}</script>
+  <script src="/js/shared-file.js"></script>
+</body>
+</html>"""
+
+    @app.route("/api/storage/shared/<token>", methods=["GET"])
+    def storage_share_file_api(token):
+        actor = get_current_user_ctx()
         conn = get_db()
         try:
-            row, reason = resolve_share_token(conn, token)
+            row, reason = resolve_share_token(conn, token, actor=actor)
             if not row:
-                return json_resp({"ok": False, "msg": "分享連結不存在或已失效", "reason": reason}), 404
+                return _storage_share_error_response(reason)
+            return json_resp({"ok": True, "file": _storage_shared_file_payload(row, token)})
+        finally:
+            conn.close()
+
+    @app.route("/api/storage/shared/<token>/download", methods=["GET"])
+    def storage_share_link_download(token):
+        actor = get_current_user_ctx()
+        conn = get_db()
+        try:
+            row, reason = resolve_share_token(conn, token, actor=actor)
+            if not row:
+                return _storage_share_error_response(reason)
             policy = get_cloud_drive_security_policy(conn)
             if policy.get("block_unclean_downloads") and not is_e2ee_file(row) and row["scan_status"] not in {"clean", "not_required"}:
                 return json_resp({"ok": False, "msg": "檔案尚未通過安全檢查"}), 403
@@ -132,7 +240,7 @@ def register_file_share_preview_routes(app, ctx):
                 return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
             mark_share_link_accessed(conn, row["id"])
             log_share_access_event(conn, share_type="file", share_id=row["id"], ip=get_client_ip(), user_agent=get_ua())
-            log_file_access(conn, file_id=row["file_id"], actor_user_id=None, action="storage_share_download", result="allowed", reason="share_link", ip=get_client_ip(), user_agent=get_ua())
+            log_file_access(conn, file_id=row["file_id"], actor_user_id=(actor["id"] if actor else None), action="storage_share_download", result="allowed", reason="share_link", ip=get_client_ip(), user_agent=get_ua())
             conn.commit()
             response = _send_readable_file(row, as_attachment=True, download_name=row["display_name"] or row["original_filename_plain_for_public"] or "download.bin")
             if response is None:

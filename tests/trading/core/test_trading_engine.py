@@ -1261,6 +1261,67 @@ def test_bot_audit_runs_green_after_first_successful_trade(tmp_path):
     assert item["eligible_reason"] == "has_trade"
 
 
+def test_bot_competition_ranks_by_percent_and_awards_weekly_winner(tmp_path):
+    points, trading = _services(tmp_path)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=10_000, action_type="seed")
+    points.record_transaction(user_id=2, currency_type="points", direction="credit", amount=10_000, action_type="seed")
+
+    _set_live_price(trading, symbol="ETH/POINTS", price_points=5000)
+    alice = trading.save_trading_bot(
+        actor=_actor(),
+        payload={
+            "market_symbol": "ETH/POINTS",
+            "bot_type": "dca",
+            "name": "alice dca",
+            "budget_points": 1000,
+            "interval_hours": 24,
+            "enabled": True,
+            "max_runs": -1,
+            "share_parameters": True,
+        },
+    )
+    trading.run_trading_bot_once(actor=_actor(), bot_uuid=alice["bot"]["bot_uuid"])
+
+    _set_live_price(trading, symbol="ETH/POINTS", price_points=6000)
+    bob = trading.save_trading_bot(
+        actor=_actor(2, "bob", "manager"),
+        payload={
+            "market_symbol": "ETH/POINTS",
+            "bot_type": "dca",
+            "name": "bob dca",
+            "budget_points": 1000,
+            "interval_hours": 24,
+            "enabled": True,
+            "max_runs": -1,
+            "share_parameters": False,
+        },
+    )
+    trading.run_trading_bot_once(actor=_actor(2, "bob", "manager"), bot_uuid=bob["bot"]["bot_uuid"])
+
+    competition = trading.get_bot_competition(actor=_actor())
+    dca = next(category for category in competition["categories"] if category["category"] == "dca")
+
+    assert dca["leaderboard"][0]["username"] == "alice"
+    assert dca["leaderboard"][0]["rank"] == 1
+    assert dca["leaderboard"][0]["performance_percent"] > dca["leaderboard"][1]["performance_percent"]
+    assert dca["leaderboard"][0]["shared_parameters"]["budget_points"] == 1000
+    assert dca["leaderboard"][1]["shared_parameters"] is None
+
+    award = trading.award_bot_competition_week(actor=_actor(3, "root", "super_admin"), week=competition["week"])
+    assert award["awarded"][0]["username"] == "alice"
+    assert award["awarded"][0]["reward_points"] == 100
+
+    conn = trading.get_db()
+    try:
+        ledger = conn.execute(
+            "SELECT user_id, amount, action_type FROM points_ledger WHERE action_type='trading_bot_weekly_competition_reward'"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert ledger["user_id"] == 1
+    assert ledger["amount"] == 100
+
+
 def test_bot_audit_warns_after_24_hours_without_any_trade(tmp_path):
     _, trading = _services(tmp_path)
     created = trading.save_trading_bot(
@@ -1326,6 +1387,34 @@ def test_grid_bot_audit_marks_orphan_open_orders_as_red(tmp_path):
 
     assert item["audit_status"] == "red"
     assert item["blocker_count"] >= 1
+
+
+def test_grid_bot_stop_loss_disables_bot_and_cancels_open_orders(tmp_path):
+    points, trading = _services(tmp_path)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    created = trading.create_grid_bot(
+        actor=_actor(),
+        payload={
+            "name": "grid stop loss",
+            "market_symbol": "ETH/POINTS",
+            "upper_price_points": 5100,
+            "lower_price_points": 4900,
+            "grid_count": 3,
+            "order_amount_points": 100,
+            "stop_loss_percent": 5,
+        },
+    )
+
+    _set_live_price(trading, symbol="ETH/POINTS", price_points=4700)
+    scanned = trading.scan_grid_bots(actor=_actor())
+    listed = trading.list_grid_bots(actor=_actor())["bots"][0]
+
+    assert created["bot"]["stop_loss_percent"] == 5.0
+    assert scanned["results"][0]["risk_target_triggered"] is True
+    assert scanned["results"][0]["risk_target"]["reason"] == "stop_loss"
+    assert listed["enabled"] is False
+    assert "止損已觸發" in listed["last_error"]
+    assert all(order["status"] != "open" for order in listed["orders"])
 
 
 def test_dca_backtest_matches_exact_math_at_full_20000_candle_limit(tmp_path):
@@ -2481,6 +2570,155 @@ def test_dca_backtest_reports_metrics_and_equity_curve(tmp_path):
     assert result["last_candle_time"] == "2026-01-01T00:45:00+00:00"
 
 
+def test_backtest_range_filter_uses_timezone_aware_instants(tmp_path):
+    _, trading = _services(tmp_path)
+    candles = [
+        {"time_iso": "2026-05-13T15:45:00+00:00", "close_points": 100},
+        {"time_iso": "2026-05-13T16:00:00+00:00", "close_points": 101},
+        {"time_iso": "2026-05-13T16:15:00+00:00", "close_points": 102},
+        {"time_iso": "2026-05-13T16:30:00+00:00", "close_points": 103},
+    ]
+
+    result = trading.backtest_trading_bot(
+        actor=_actor(),
+        payload={
+            "market_symbol": "ETH/POINTS",
+            "strategy": "conditional",
+            "trigger_type": "price_below",
+            "trigger_price_points": 0,
+            "initial_cash_points": 1000,
+            "candles": candles,
+            "start_time": "2026-05-14T00:00:00+08:00",
+            "end_time": "2026-05-14T00:15:00+08:00",
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["candle_count"] == 2
+    assert result["first_candle_time"] == "2026-05-13T16:00:00+00:00"
+    assert result["last_candle_time"] == "2026-05-13T16:15:00+00:00"
+
+
+def test_workflow_backtest_applies_slippage_fee_realized_pnl_and_drawdown(tmp_path):
+    _, trading = _services(tmp_path)
+    workflow = {
+        "version": 1,
+        "branches": [
+            {
+                "id": "exit",
+                "priority": 20,
+                "logic": "AND",
+                "conditions": [{"type": "has_position", "value": True}, {"type": "price_above", "value": 119}],
+                "actions": [{"type": "close_all", "step": 1}],
+            },
+            {
+                "id": "entry",
+                "priority": 10,
+                "logic": "AND",
+                "conditions": [{"type": "has_position", "value": False}, {"type": "price_below", "value": 101}],
+                "actions": [{"type": "buy_amount", "amount_points": 1000, "step": 1}],
+            },
+        ],
+    }
+
+    result = trading.backtest_trading_bot(
+        actor=_actor(),
+        payload={
+            "market_symbol": "ETH/POINTS",
+            "strategy": "workflow",
+            "workflow_json": workflow,
+            "initial_cash_points": 1000,
+            "slippage_percent": 10,
+            "candles": [
+                {"time": 1, "high_points": 100, "low_points": 100, "close_points": 100},
+                {"time": 2, "high_points": 120, "low_points": 120, "close_points": 120},
+            ],
+        },
+    )
+
+    buy_price = Decimal("110")
+    sell_price = Decimal("108")
+    notional_cap = int((Decimal("1000") / Decimal("1.001")).quantize(Decimal("1"), rounding=ROUND_DOWN))
+    units = int((Decimal(notional_cap) * Decimal(trading_engine_module.ASSET_SCALE) / buy_price).quantize(Decimal("1"), rounding=ROUND_DOWN))
+    buy_notional = notional_points(units, float(buy_price))
+    buy_fee = fee_points(buy_notional, 0.1)
+    sell_gross = notional_points(units, float(sell_price))
+    sell_fee = fee_points(sell_gross, 0.1)
+    sell_net = sell_gross - sell_fee
+    expected_drawdown = round((1000 - notional_points(units, 100)) * 100 / 1000, 4)
+
+    assert result["ok"] is True
+    assert result["slippage_percent"] == 10
+    assert [row["side"] for row in result["trades"]] == ["buy", "sell"]
+    assert result["trades"][0]["price_points"] == pytest.approx(110.0)
+    assert result["trades"][0]["spend_points"] == buy_notional + buy_fee == 1000
+    assert result["trades"][0]["fee_points"] == buy_fee
+    assert result["trades"][1]["price_points"] == pytest.approx(108.0)
+    assert result["trades"][1]["fee_points"] == sell_fee
+    assert result["trades"][1]["pnl_points"] == sell_net - buy_notional
+    assert result["cash_points"] == sell_net
+    assert result["final_value_points"] == sell_net
+    assert result["pnl_points"] == sell_net - 1000
+    assert result["max_drawdown_percent"] == expected_drawdown
+    assert result["win_rate_percent"] == 0.0
+
+
+def test_backtest_respects_market_min_order_and_quantity_precision(tmp_path):
+    _, trading = _services(tmp_path)
+    conn = trading.get_db()
+    try:
+        conn.execute(
+            """
+            UPDATE trading_markets
+            SET fee_rate_percent=0,
+                min_order_points=50,
+                quantity_precision=2,
+                min_order_size=0.25,
+                max_order_size=1000,
+                lot_size=0.25
+            WHERE symbol='ETH/POINTS'
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    candles = [
+        {"time": 1, "close_points": 100},
+        {"time": 2, "close_points": 100},
+    ]
+
+    below_min = trading.backtest_trading_bot(
+        actor=_actor(),
+        payload={
+            "market_symbol": "ETH/POINTS",
+            "strategy": "dca",
+            "order_points": 49,
+            "interval_candles": 99,
+            "initial_cash_points": 100,
+            "candles": candles,
+        },
+    )
+    aligned = trading.backtest_trading_bot(
+        actor=_actor(),
+        payload={
+            "market_symbol": "ETH/POINTS",
+            "strategy": "dca",
+            "order_points": 99,
+            "interval_candles": 99,
+            "initial_cash_points": 99,
+            "candles": candles,
+        },
+    )
+
+    assert below_min["trade_count"] == 0
+    assert below_min["final_value_points"] == 100
+    assert aligned["trade_count"] == 1
+    assert aligned["trades"][0]["quantity"] == "0.75"
+    assert aligned["trades"][0]["spend_points"] == 75
+    assert aligned["cash_points"] == 24
+    assert aligned["final_value_points"] == 99
+
+
 def test_grid_backtest_matches_live_grid_order_lifecycle(tmp_path):
     _, trading = _services(tmp_path)
     result = trading.backtest_trading_bot(
@@ -2710,6 +2948,60 @@ def test_increase_trading_bot_max_runs_is_noop_for_unlimited_dca(tmp_path):
     assert updated["delta"] == 0
     assert updated["unlimited"] is True
     assert updated["bot"]["max_runs"] == -1
+
+
+def test_dca_keeps_outer_risk_targets_but_workflow_does_not(tmp_path):
+    _, trading = _services(tmp_path)
+
+    dca = trading.save_trading_bot(
+        actor=_actor(),
+        payload={
+            "bot_type": "dca",
+            "name": "risk dca",
+            "market_symbol": "ETH/POINTS",
+            "budget_points": 100,
+            "interval_hours": 24,
+            "max_runs": 3,
+            "stop_loss_percent": 5,
+            "take_profit_percent": 12,
+            "enabled": False,
+        },
+    )["bot"]
+    workflow = {
+        "version": 1,
+        "strategy_kind": "workflow",
+        "branches": [
+            {
+                "id": "entry",
+                "logic": "AND",
+                "conditions": [{"type": "price_below", "value": 1000}],
+                "actions": [{"type": "buy_amount", "amount_points": 100, "step": 1}],
+            }
+        ],
+    }
+    workflow_bot = trading.save_trading_bot(
+        actor=_actor(),
+        payload={
+            "bot_type": "conditional",
+            "name": "workflow-owned-risk",
+            "market_symbol": "ETH/POINTS",
+            "side": "buy",
+            "order_type": "market",
+            "quantity": "0.00000001",
+            "trigger_type": "always",
+            "workflow_json": workflow,
+            "max_runs": 3,
+            "cooldown_seconds": 0,
+            "stop_loss_percent": 5,
+            "take_profit_percent": 12,
+            "enabled": False,
+        },
+    )["bot"]
+
+    assert dca["stop_loss_percent"] == 5.0
+    assert dca["take_profit_percent"] == 12.0
+    assert workflow_bot["stop_loss_percent"] is None
+    assert workflow_bot["take_profit_percent"] is None
 
 
 def test_workflow_backtest_supports_take_profit_and_stop_loss_percent(tmp_path):
@@ -4430,6 +4722,39 @@ def test_trading_volume_stats_accumulate_spot_and_margin_activity_for_future_vip
     assert root_summary["top_users"][0]["username"] == "alice"
 
 
+def test_margin_profit_allows_collateral_withdrawal_with_lower_maintenance_ratio(tmp_path):
+    _, trading = _services(tmp_path)
+    root = _actor(3, "root", "super_admin")
+    trading.update_root_settings(
+        actor=root,
+        settings={"borrowing_enabled": True, "margin_maintenance_percent": 15},
+        markets=[],
+    )
+    opened = trading.open_margin_position(
+        actor=root,
+        market_symbol="ETH/POINTS",
+        position_type="margin_long",
+        quantity="0.1",
+        collateral_points=200,
+    )
+    _set_live_price(trading, symbol="ETH/POINTS", price_points=7000)
+    before = trading.user_dashboard(user_id=3)["margin_positions"][0]["risk"]
+
+    result = trading.withdraw_margin_collateral(
+        actor=root,
+        position_uuid=opened["position"]["position_uuid"],
+        amount_points=50,
+        idempotency_key="test-margin-withdraw-profit",
+    )
+
+    assert result["ok"] is True
+    assert "降低維持率" in result["warning"]
+    assert before["unrealized_pnl_points"] > 0
+    assert result["risk_after"]["maintenance_ratio_percent"] < before["maintenance_ratio_percent"]
+    assert result["position"]["collateral_points"] == opened["position"]["collateral_points"] - 50
+    assert result["position"]["principal_points"] == opened["position"]["principal_points"] + 50
+
+
 def test_margin_long_requires_root_enabled_borrowing_and_closes_with_fee_stats(tmp_path):
     points, trading = _services(tmp_path)
     points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
@@ -4558,7 +4883,7 @@ def test_margin_interest_charges_by_started_hour_not_whole_day(tmp_path):
         conn.close()
 
 
-def test_margin_interest_accumulates_fractional_carry_for_small_principal(tmp_path):
+def test_margin_interest_charges_minimum_point_for_fractional_due(tmp_path):
     _, trading = _services(tmp_path)
     trading.update_root_settings(
         actor=_actor(3, "root", "super_admin"),
@@ -4594,9 +4919,9 @@ def test_margin_interest_accumulates_fractional_carry_for_small_principal(tmp_pa
     finally:
         conn.close()
 
-    assert accrued["interest_points"] == 0
+    assert accrued["interest_points"] == 1
     assert accrued["interest_paid_points"] == 0
-    assert accrued["interest_carry_micropoints"] == 500000
+    assert accrued["interest_carry_micropoints"] == 0
 
     conn = trading.get_db()
     try:
@@ -4610,7 +4935,7 @@ def test_margin_interest_accumulates_fractional_carry_for_small_principal(tmp_pa
     finally:
         conn.close()
 
-    assert accrued_again["interest_points"] == 1
+    assert accrued_again["interest_points"] == 2
     assert accrued_again["interest_carry_micropoints"] == 0
     assert trading.verify_state()["ok"] is True
 
@@ -4778,8 +5103,8 @@ def test_margin_open_is_idempotent_for_client_key(tmp_path):
     assert second["position"]["position_uuid"] == first["position"]["position_uuid"]
     dashboard = trading.user_dashboard(user_id=1)
     assert len([row for row in dashboard["margin_positions"] if row["status"] == "open"]) == 1
-    assert dashboard["margin_positions"][0]["interest_paid_points"] == 0
-    assert trading.root_report()["reserve_pool"]["balance_points"] == 9701
+    assert dashboard["margin_positions"][0]["interest_paid_points"] == 1
+    assert trading.root_report()["reserve_pool"]["balance_points"] == 9702
     assert trading.verify_state()["ok"] is True
 
 
@@ -4982,6 +5307,7 @@ def test_margin_liquidation_scan_closes_underwater_position(tmp_path):
         quantity="0.1",
         collateral_points=200,
     )
+    assert opened["position"]["interest_percent_daily"] == 0
 
     _set_live_price(trading, symbol="ETH/POINTS", price_points=3300)
     result = trading.scan_margin_liquidations(actor={"username": "system", "role": "system"}, limit=10)
