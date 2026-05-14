@@ -38,6 +38,8 @@ Held-out Stockfish validation aggregate versus v22 is effectively flat:
 
 v24 是目前第一個在不使用逐題硬編碼的前提下，把正式 30 局 gauntlet 從 23W/7D 推到 24W/6D 的候選。改善來源不是 held-out 題對齊率，而是完整對局中的早期王安全/材料流失風險下降。
 
+依目前證據，已把 `EXP5_PRODUCTION_SEARCH_PROFILE` 更新為 `fixed_depth_fianchetto_tail_castle_guard`。這次沒有覆蓋模型檔；變更是源碼內的預設 search profile。
+
 仍需注意：
 
 - 6 個和局仍全是三重複。
