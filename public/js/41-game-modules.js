@@ -8,9 +8,10 @@
     { key: "1a2b", title: "1A2B", subtitle: "單人猜數字", legacy: true },
     { key: "tetris", title: "俄羅斯方塊", subtitle: "高分消除挑戰", legacy: true },
     { key: "space_shooter", title: "宇宙戰機", subtitle: "高分射擊挑戰", legacy: true },
-    { key: "fps_arena", title: "3D 射擊場", subtitle: "四模式 3D 射擊訓練", legacy: true },
+    { key: "fps_arena", title: "3D 射擊場", subtitle: "3D 射擊訓練 / 合作 / PvP", legacy: true },
+    { key: "open_world", title: "都市開放世界", subtitle: "3D 城市探索 / 駕車任務 / 警戒追逐" },
     { key: "bullet_hell", title: "彈幕遊戲", subtitle: "閃避密集彈幕並反擊" },
-    { key: "stickman_shooter", title: "火柴人橫向射擊", subtitle: "2D 側捲平台射擊挑戰" },
+    { key: "stickman_shooter", title: "火柴人橫向射擊", subtitle: "2D 側捲平台射擊 / 合作解謎" },
     { key: "real_tetris", title: "真實版俄羅斯方塊", subtitle: "剛體物理與放寬消線" },
     { key: "snake", title: "貪食蛇", subtitle: "滑動或方向鍵控制蛇吃食物" },
     { key: "game_2048", title: "2048", subtitle: "合併數字方塊，挑戰最高分" },
@@ -165,6 +166,11 @@
       { id: "accuracy-45", label: "命中率 45%", target: 45, metric: "accuracy" },
       { id: "survive", label: "任務結束仍存活", target: 1, metric: "survive" },
     ],
+    open_world: [
+      { id: "score-2500", label: "城市分數 2500", target: 2500, metric: "score" },
+      { id: "missions-2", label: "完成 2 個城市任務", target: 2, metric: "missions" },
+      { id: "evade", label: "甩開一次追逐", target: 1, metric: "evasion" },
+    ],
     bullet_hell: [
       { id: "score-1800", label: "彈幕 1800 分", target: 1800, metric: "score" },
       { id: "graze-40", label: "擦彈 40 次", target: 40, metric: "graze" },
@@ -250,6 +256,11 @@
       ["headshot", "爆頭訓練", "命中頭部。"],
       ["defuse", "拆彈成功", "完成 Bomb Defuse。"],
       ["accuracy", "穩定射手", "命中率達 45%。"],
+    ],
+    open_world: [
+      ["first-drive", "城市駕駛", "第一次進入車輛。"],
+      ["city-runner", "城市跑者", "同一局完成三個城市任務。"],
+      ["clean-escape", "甩開追逐", "成功降低警戒並脫離追逐。"],
     ],
     bullet_hell: [
       ["score-posted", "彈幕出擊", "完成一局彈幕挑戰。"],

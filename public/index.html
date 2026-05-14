@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>hackme_web — 登入系統</title>
   <!-- Security headers via HTTP (set by server/Talisman) -->
-  <link rel="stylesheet" href="/styles.css?v=20260513-ui-polish" />
+  <link rel="stylesheet" href="/styles.css?v=20260514-open-world" />
 </head>
 <body>
 <!-- ════════════════════ AUTH CARD ════════════════════ -->
@@ -1000,7 +1000,7 @@
       <div class="drive-card-heading">
         <div>
           <div class="mini-title">遊戲區</div>
-          <div class="drive-card-sub">目前開放西洋棋、中國象棋、數獨、踩地雷、1A2B、俄羅斯方塊、真實版俄羅斯方塊、宇宙戰機、3D 射擊場、彈幕遊戲、火柴人橫向射擊、貪食蛇、2048、打磚塊、黑白棋、圍棋與五子棋。使用下拉選單在同一頁切換遊戲。</div>
+          <div class="drive-card-sub">目前開放西洋棋、中國象棋、數獨、踩地雷、1A2B、俄羅斯方塊、真實版俄羅斯方塊、宇宙戰機、3D 射擊場、彈幕遊戲、火柴人橫向射擊、貪食蛇、2048、打磚塊、黑白棋、圍棋與五子棋。3D 與火柴人支援多人邀請；使用下拉選單切換遊戲。</div>
         </div>
         <button class="btn" id="game-refresh-btn" type="button">刷新</button>
       </div>
@@ -1008,6 +1008,31 @@
         <section class="game-panel">
           <div class="drive-card-title">遊戲大廳</div>
           <div id="game-catalog-list" class="game-catalog-list"></div>
+          <div id="game-multiplayer-panel" class="drive-collapsible-panel game-multiplayer-panel" style="display:none;">
+            <div class="drive-card-heading">
+              <div>
+                <div class="drive-card-title">多人房間</div>
+                <div class="drive-card-sub" id="game-multiplayer-hint">邀請另一位玩家加入合作或對戰。</div>
+              </div>
+            </div>
+            <div class="settings-option-grid game-action-grid">
+              <div class="field">
+                <label>邀請玩家</label>
+                <select id="game-multiplayer-user"><option value="">載入玩家中...</option></select>
+              </div>
+              <div class="field">
+                <label>模式</label>
+                <select id="game-multiplayer-mode">
+                  <option value="coop">合作破關</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>&nbsp;</label>
+                <button class="btn btn-primary" id="game-multiplayer-invite-btn" type="button">邀請加入</button>
+              </div>
+            </div>
+            <div id="game-multiplayer-list" class="drive-file-list compact-list"></div>
+          </div>
           <div id="chess-lobby-panel">
           <div class="settings-option-grid game-action-grid">
             <div class="field">
@@ -1240,7 +1265,7 @@
               <summary>3D 射擊場玩法說明</summary>
               <div class="drive-collapsible-body">
                 <p>選擇模式後按「開始」。滑鼠拖曳或滑鼠鎖定後移動視角，WASD 移動，左鍵或空白鍵射擊，E 可嘗試拆彈。瞄準鏡會有輕微呼吸晃動。</p>
-                <p>四個模式分別是靶場、PvE、拆彈與 Bot Match。排行榜以本週最高分排序，並依模式分開計算。</p>
+                <p>模式包含靶場、PvE、拆彈、Bot Match、Co-op PvE、PvP Duel 與 Battle Royale。關卡會逐步開出新地圖、Boss 橋段、敵人 AI、武器與地面物資。</p>
               </div>
             </details>
             <div class="drive-card-heading">
@@ -1254,6 +1279,15 @@
                   <option value="pve">PvE Arena</option>
                   <option value="bomb">Bomb Defuse</option>
                   <option value="bot">Bot Match</option>
+                  <option value="coop">Co-op PvE</option>
+                  <option value="pvp">PvP Duel</option>
+                  <option value="br">Battle Royale</option>
+                </select>
+                <select id="fps-arena-level" aria-label="3D 射擊場關卡">
+                  <option value="warehouse">第 1 關 貨櫃倉庫</option>
+                  <option value="reactor">第 2 關 反應爐中庭</option>
+                  <option value="subway">第 3 關 地鐵月台</option>
+                  <option value="citadel">第 4 關 核心堡壘</option>
                 </select>
                 <button class="btn game-mini-btn" id="fps-arena-new-btn" type="button">開始</button>
                 <button class="btn game-mini-btn" id="fps-arena-stop-btn" type="button">結束</button>
@@ -1265,6 +1299,12 @@
               <div class="fps-arena-damage" aria-hidden="true"></div>
               <div class="fps-arena-reticle fps-arena-reticle-fixed" aria-hidden="true"></div>
               <div class="fps-arena-reticle fps-arena-reticle-float" aria-hidden="true"></div>
+              <div class="fps-arena-weapon-view" aria-hidden="true">
+                <div class="fps-arena-weapon-barrel"></div>
+                <div class="fps-arena-weapon-body"></div>
+                <div class="fps-arena-weapon-hand fps-arena-weapon-hand-left"></div>
+                <div class="fps-arena-weapon-hand fps-arena-weapon-hand-right"></div>
+              </div>
               <div class="fps-arena-hud" id="fps-arena-hud">尚未開始</div>
             </div>
             <div class="game-touch-controls fps-arena-touch-controls" aria-label="3D 射擊場手機控制">
@@ -1273,6 +1313,8 @@
               <button class="btn game-mini-btn" type="button" data-game-touch="fps-right">右</button>
               <button class="btn game-mini-btn" type="button" data-game-touch="fps-back">後</button>
               <button class="btn game-mini-btn" type="button" data-game-touch="fps-sprint">衝刺</button>
+              <button class="btn game-mini-btn" type="button" data-game-touch="fps-crouch">蹲下</button>
+              <button class="btn game-mini-btn" type="button" data-game-touch="fps-prone">匍匐</button>
               <button class="btn game-mini-btn" type="button" data-game-touch="fps-reload">換彈</button>
               <button class="btn game-mini-btn" type="button" data-game-touch="fps-weapon">武器</button>
               <button class="btn game-mini-btn btn-primary" type="button" data-game-touch="fps-fire">射擊</button>
@@ -1395,6 +1437,13 @@
   <div class="module-section" id="module-comfyui">
     <div class="admin-tools" style="margin-top:.95rem;text-align:left;">
       <div class="mini-title">AI 產圖</div>
+      <div class="comfyui-subnav" role="tablist" aria-label="AI 產圖功能分頁">
+        <button class="btn comfyui-subtab active" type="button" role="tab" aria-selected="true" data-comfyui-view="generate">生成</button>
+        <button class="btn comfyui-subtab" type="button" role="tab" aria-selected="false" data-comfyui-view="history">歷史重跑</button>
+        <button class="btn comfyui-subtab" type="button" role="tab" aria-selected="false" data-comfyui-view="workflow">Workflow</button>
+        <button class="btn comfyui-subtab" type="button" role="tab" aria-selected="false" data-comfyui-view="models">模型管理</button>
+      </div>
+      <div class="comfyui-subview active" id="comfyui-view-generate" data-comfyui-view-panel="generate" role="tabpanel">
       <div class="comfyui-layout">
         <div class="drive-card comfyui-panel">
           <div class="drive-card-heading">
@@ -1421,10 +1470,8 @@
               </select>
               <div class="drive-card-sub" id="comfyui-template-select-hint">可從官方模板、自己的 preset、其他公開 preset，或先匯入模板檔後再建立簡化卡片頁面。</div>
             </div>
-            <div id="comfyui-template-summary" class="comfyui-template-summary">
-              <div class="drive-empty">選好模板後，這裡會顯示需要的輸入與輸出卡片。</div>
-            </div>
-            <div id="comfyui-template-panels" class="comfyui-template-panels"></div>
+            <div id="comfyui-template-summary" class="comfyui-template-summary" hidden></div>
+            <div id="comfyui-template-panels" class="comfyui-template-panels" hidden></div>
           </div>
           <details class="drive-collapsible-panel settings-collapse" id="comfyui-legacy-form-panel" style="display:none;margin-top:.85rem;">
             <summary>
@@ -1434,6 +1481,23 @@
               </div>
             </summary>
             <div class="drive-collapsible-body">
+          <div class="field" id="comfyui-diffusers-repo-field" style="display:none;">
+            <label>Hugging Face Repo</label>
+            <div class="inline-control-row">
+              <input type="text" id="comfyui-diffusers-model-repo" placeholder="dhead/waiIllustriousSDXL_v150 或 https://huggingface.co/dhead/waiIllustriousSDXL_v150" autocomplete="off" />
+              <button class="btn btn-sm" id="comfyui-diffusers-inspect-btn" type="button">檢查模型</button>
+            </div>
+            <select id="comfyui-diffusers-model-variant" disabled>
+              <option value="">檢查後選擇精度版本</option>
+            </select>
+            <div class="field" id="comfyui-diffusers-gguf-options" style="display:none;margin-top:.5rem;">
+              <label>GGUF Base Diffusers Repo</label>
+              <input type="text" id="comfyui-diffusers-gguf-base-repo" placeholder="stabilityai/stable-diffusion-xl-base-1.0" autocomplete="off" />
+              <div class="drive-card-sub">GGUF 是單一量化 component，Diffusers 需搭配 base repo 的 tokenizer、scheduler、VAE 等組件。</div>
+            </div>
+            <div class="drive-card-sub" id="comfyui-diffusers-repo-status">貼上 repo 後會先檢查支援模式與可下載精度版本。</div>
+            <div class="drive-card-sub">Diffusers 模式可在這裡輸入 namespace/model 簡寫或 Hugging Face 模型頁網址；此欄會覆蓋 root 的預設 repo。</div>
+          </div>
           <div class="field">
             <label>模型</label>
             <select id="comfyui-model-select">
@@ -1569,7 +1633,7 @@
             </div>
             <div class="drive-card-sub">向外延展會先在原圖外圍補邊，再交給模型接續生成。</div>
           </div>
-          <div class="drive-card-sub" style="margin-top:-.25rem;margin-bottom:.5rem;">LoRA 每增加 1 個，成功產圖每張額外 +1 點。</div>
+          <div class="drive-card-sub" id="comfyui-lora-price-note" style="margin-top:-.25rem;margin-bottom:.5rem;">LoRA 每增加 1 個，成功產圖每張額外 +1 點。</div>
           <div class="comfyui-lora-panel">
             <div class="settings-option-grid">
               <div class="field">
@@ -1692,7 +1756,9 @@
           <div id="comfyui-result-meta" class="drive-card-sub"></div>
         </div>
       </div>
-      <div class="drive-card comfyui-history-card" style="margin-top:1rem;">
+      </div>
+      <div class="comfyui-subview" id="comfyui-view-history" data-comfyui-view-panel="history" role="tabpanel" hidden>
+      <div class="drive-card comfyui-history-card">
         <div class="drive-card-heading">
           <div>
             <div class="drive-card-title">ComfyUI 歷史重跑</div>
@@ -1705,7 +1771,9 @@
           <div class="drive-empty">尚無 ComfyUI 歷史紀錄</div>
         </div>
       </div>
-      <div class="drive-card comfyui-workflow-card" style="margin-top:1rem;">
+      </div>
+      <div class="comfyui-subview" id="comfyui-view-workflow" data-comfyui-view-panel="workflow" role="tabpanel" hidden>
+      <div class="drive-card comfyui-workflow-card">
         <div class="drive-card-heading">
           <div>
             <div class="drive-card-title">ComfyUI Workflow Layout Builder</div>
@@ -1840,7 +1908,9 @@
           </div>
         </div>
       </div>
-      <div class="drive-card comfyui-root-panel" id="comfyui-root-model-panel" style="display:none;margin-top:1rem;">
+      </div>
+      <div class="comfyui-subview" id="comfyui-view-models" data-comfyui-view-panel="models" role="tabpanel" hidden>
+      <div class="drive-card comfyui-root-panel" id="comfyui-root-model-panel" style="display:none;">
         <details class="comfyui-root-details" id="comfyui-root-model-details">
           <summary class="comfyui-root-summary">
             <span class="comfyui-root-summary-title">root 模型匯入（Civitai / 檔案上傳）</span>
@@ -1979,6 +2049,7 @@
             </div>
           </div>
         </details>
+      </div>
       </div>
     </div>
   </div>
@@ -5487,6 +5558,18 @@
   </div>
 </div>
 
+<div id="game-multiplayer-invite-modal" class="user-edit-overlay game-multiplayer-invite-overlay" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="game-multiplayer-invite-modal-title" hidden>
+  <div class="user-edit-modal game-multiplayer-invite-modal">
+    <div class="mini-title" id="game-multiplayer-invite-modal-title">多人遊戲邀請</div>
+    <p class="game-multiplayer-invite-body" id="game-multiplayer-invite-modal-body">有玩家邀請你加入多人遊戲。</p>
+    <div class="drive-card-sub" id="game-multiplayer-invite-modal-detail">等待回覆</div>
+    <div class="edit-user-actions">
+      <button class="btn btn-primary" type="button" id="game-multiplayer-invite-accept-btn">接受</button>
+      <button class="btn" type="button" id="game-multiplayer-invite-reject-btn">拒絕</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast-host" class="toast-host" role="status" aria-live="polite" aria-atomic="true" aria-relevant="additions text"></div>
 
 <div class="footer">
@@ -5504,16 +5587,17 @@
 <script src="/js/35-drive.js?v=20260504-drive-media-rename" defer></script>
   <script src="/js/35-drive-preview-share.js?v=20260507-drive-preview-share-split" defer></script>
 <!-- cache marker retained for template-import regression: /js/36-comfyui.js?v=20260509-comfyui-template-embeddings -->
-<script src="/js/36-comfyui.js?v=20260513-comfyui-media-picker" defer></script>
-<script src="/js/36-comfyui-workflows.js?v=20260513-comfyui-media-picker" defer></script>
+<script src="/js/36-comfyui.js?v=20260514-comfyui-subtabs" defer></script>
+<script src="/js/36-comfyui-workflows.js?v=20260514-comfyui-subtabs" defer></script>
 <script src="/js/37-bug-report.js?v=20260502-device-feature" defer></script>
 <script src="/js/three.min.js?v=0.160.0" defer></script>
-<script src="/js/41-game-modules.js?v=20260513-game-registry" defer></script>
+<script src="/js/41-game-modules.js?v=20260514-open-world" defer></script>
 <script src="/js/games/snake.js?v=20260513-game-modules" defer></script>
 <script src="/js/games/game-2048.js?v=20260513-game-modules" defer></script>
 <script src="/js/games/brick-breaker.js?v=20260513-game-modules" defer></script>
 <script src="/js/games/bullet-hell.js?v=20260513-game-modules" defer></script>
-<script src="/js/games/stickman-shooter.js?v=20260513-game-modules" defer></script>
+<script src="/js/games/stickman-shooter.js?v=20260514-game-levels" defer></script>
+<script src="/js/games/open-world.js?v=20260514-open-world" defer></script>
 <script src="/js/games/board-game-shared.js?v=20260513-game-modules" defer></script>
 <script src="/js/games/reversi.js?v=20260513-game-modules" defer></script>
 <script src="/js/games/go.js?v=20260513-game-modules" defer></script>
@@ -5527,9 +5611,9 @@
 <script src="/js/games/onea2b.js?v=20260513-legacy-modules" defer></script>
 <script src="/js/games/tetris.js?v=20260513-legacy-modules" defer></script>
 <script src="/js/games/space-shooter.js?v=20260513-legacy-modules" defer></script>
-<script src="/js/games/fps-arena.js?v=20260513-legacy-modules" defer></script>
-<script src="/js/38-games.js?v=20260513-game-shell" defer></script>
-<script src="/js/38-fps-arena.js?v=20260512-fps-feedback" defer></script>
+<script src="/js/games/fps-arena.js?v=20260514-fps-stance-br" defer></script>
+<script src="/js/38-games.js?v=20260514-open-world" defer></script>
+<script src="/js/38-fps-arena.js?v=20260514-fps-stance-br" defer></script>
 <script src="/js/39-videos.js?v=20260505-hlsjs-player" defer></script>
 <script src="/js/40-auth-users.js?v=20260503-appearance-reset" defer></script>
 <script src="/js/50-admin.js?v=20260504-fusion-coverage-v1" defer></script>

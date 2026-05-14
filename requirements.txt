@@ -14,3 +14,4 @@ transformers>=4.44
 accelerate>=0.33
 safetensors>=0.4
 huggingface-hub>=0.24
+gguf>=0.10

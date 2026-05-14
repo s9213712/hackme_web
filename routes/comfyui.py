@@ -34,6 +34,7 @@ from flask import request, send_file
 from services.comfyui.settings import (
     DEFAULT_COMFYUI_PORT,
     normalize_comfyui_connection_mode,
+    normalize_huggingface_repo_id,
     validate_comfyui_api_host,
     validate_comfyui_api_port,
     validate_comfyui_api_url,
@@ -57,6 +58,7 @@ from services.comfyui.client import (
     ComfyUIClient,
     ComfyUIError,
 )
+from services.comfyui.huggingface import normalize_diffusers_variant, normalize_huggingface_repo_file
 from services.comfyui.workflows import (
     WorkflowValidationError,
     extract_workflow_summary,
@@ -1331,12 +1333,66 @@ def register_comfyui_routes(app, deps):
             }
             if mode_definition.get("workflow_only") or mode not in supported_modes:
                 return capabilities, "Diffusers 後端目前只支援文字生圖、圖生圖與局部重繪；影片、語音、放大與 workflow 模板仍請使用 ComfyUI 後端。"
-            model_repo = str((capabilities or {}).get("model_repo") or getattr(active_client, "model_repo", "") or "").strip()
-            selected_model = str((params or {}).get("model") or "").strip()
-            if model_repo and selected_model and selected_model != model_repo:
-                return capabilities, f"Diffusers 模式目前使用 root 設定的 Hugging Face repo：{model_repo}"
-            if model_repo:
-                params["model"] = model_repo
+            requested_repo = normalize_huggingface_repo_id(
+                (params or {}).get("diffusers_model_repo") or (params or {}).get("model"),
+                allow_blank=True,
+            )
+            if requested_repo is None:
+                return capabilities, "Hugging Face repo 格式不合法，請填 namespace/model 或 huggingface.co 的模型頁網址。"
+            model_repo = requested_repo or str((capabilities or {}).get("model_repo") or getattr(active_client, "model_repo", "") or "").strip()
+            model_repo = normalize_huggingface_repo_id(model_repo, allow_blank=True)
+            if model_repo is None:
+                return capabilities, "root 預設 Hugging Face repo 格式不合法，請改填 namespace/model。"
+            if not model_repo:
+                return capabilities, "請在生圖頁面輸入 Hugging Face repo，例如 dhead/waiIllustriousSDXL_v150。"
+            params["diffusers_model_repo"] = model_repo
+            params["model"] = model_repo
+            inspection = None
+            if hasattr(active_client, "inspect_model_repo"):
+                inspection = active_client.inspect_model_repo(model_repo, mode=mode)
+                if not inspection.get("ok"):
+                    return {**(capabilities or {}), "diffusers_inspection": inspection}, inspection.get("msg") or "Hugging Face repo 檢查失敗，尚未開始下載。"
+                if not inspection.get("supported_for_mode"):
+                    supported = ", ".join(inspection.get("supported_modes") or []) or "無"
+                    return (
+                        {**(capabilities or {}), "diffusers_inspection": inspection},
+                        f"這個 Hugging Face repo 不支援「{mode}」，偵測到的支援模式：{supported}；尚未開始下載。",
+                    )
+                variant_options = inspection.get("variant_options") or []
+                valid_variants = {str(item.get("variant") or "") for item in variant_options}
+                valid_gguf_files = {str(item.get("gguf_file") or "") for item in variant_options if item.get("kind") == "gguf"}
+                selected_variant = normalize_diffusers_variant(params.get("diffusers_model_variant"), allow_blank=True)
+                if selected_variant is None:
+                    return {**(capabilities or {}), "diffusers_inspection": inspection}, "Diffusers 模型精度版本名稱不合法。"
+                selected_gguf_file = normalize_huggingface_repo_file(params.get("diffusers_gguf_file"), allow_blank=True)
+                if selected_gguf_file is None:
+                    return {**(capabilities or {}), "diffusers_inspection": inspection}, "GGUF 檔案路徑不合法。"
+                if not selected_gguf_file and not selected_variant and len(variant_options) == 1 and variant_options[0].get("kind") == "gguf":
+                    selected_gguf_file = str(variant_options[0].get("gguf_file") or "")
+                if len(variant_options) > 1 and not params.get("diffusers_model_variant_selected") and not selected_gguf_file:
+                    return (
+                        {**(capabilities or {}), "diffusers_inspection": inspection},
+                        "這個 Hugging Face repo 有多個精度版本，請先在生圖頁面選擇要下載/載入的版本，避免重複下載。",
+                    )
+                if selected_gguf_file and selected_gguf_file not in valid_gguf_files:
+                    return {**(capabilities or {}), "diffusers_inspection": inspection}, "選擇的 GGUF 檔案不在 Hugging Face repo metadata 中。"
+                if not selected_gguf_file and variant_options and selected_variant not in valid_variants:
+                    return {**(capabilities or {}), "diffusers_inspection": inspection}, "選擇的模型精度版本不在 Hugging Face repo metadata 中。"
+                params["diffusers_model_variant"] = selected_variant
+                params["diffusers_gguf_file"] = selected_gguf_file
+                if selected_gguf_file:
+                    base_repo = normalize_huggingface_repo_id(
+                        params.get("diffusers_gguf_base_repo") or inspection.get("suggested_base_repo"),
+                        allow_blank=True,
+                    )
+                    if base_repo is None:
+                        return {**(capabilities or {}), "diffusers_inspection": inspection}, "GGUF base Diffusers repo 格式不合法。"
+                    if not base_repo:
+                        return (
+                            {**(capabilities or {}), "diffusers_inspection": inspection},
+                            "GGUF 需要填 base Diffusers repo，例如 stabilityai/stable-diffusion-xl-base-1.0。",
+                        )
+                    params["diffusers_gguf_base_repo"] = base_repo
             if params.get("loras"):
                 return capabilities, "Diffusers 後端目前不支援本站 ComfyUI LoRA 選擇；請改用本地或遠端 ComfyUI 模式。"
             control = (params or {}).get("controlnet") if isinstance((params or {}).get("controlnet"), dict) else None
@@ -2361,9 +2417,32 @@ def register_comfyui_routes(app, deps):
         negative = _normalize_comfyui_prompt_text(data.get("negative_prompt"))
         if len(negative) > 3000:
             return None, "負面提示詞最多 3000 字"
-        model = str(data.get("model") or "").strip()
+        diffusers_model_repo = normalize_huggingface_repo_id(
+            data.get("diffusers_model_repo")
+            or data.get("huggingface_model_repo")
+            or data.get("hf_model_repo"),
+            allow_blank=True,
+        )
+        if diffusers_model_repo is None:
+            return None, "Hugging Face repo 格式不合法，請填 namespace/model 或 huggingface.co 的模型頁網址"
+        model = str(data.get("model") or diffusers_model_repo or "").strip()
         if mode != "upscale" and not workflow_only and not model:
             return None, "請選擇模型"
+        raw_diffusers_variant = str(data.get("diffusers_model_variant") or "").strip()
+        raw_gguf_file = str(data.get("diffusers_gguf_file") or "").strip()
+        if raw_diffusers_variant.startswith("gguf::"):
+            raw_gguf_file = raw_diffusers_variant.split("::", 1)[1]
+            diffusers_model_variant = ""
+        else:
+            diffusers_model_variant = normalize_diffusers_variant(raw_diffusers_variant, allow_blank=True)
+            if diffusers_model_variant is None:
+                return None, "Diffusers 模型精度版本名稱不合法"
+        diffusers_gguf_file = normalize_huggingface_repo_file(raw_gguf_file, allow_blank=True)
+        if diffusers_gguf_file is None or (diffusers_gguf_file and not diffusers_gguf_file.lower().endswith(".gguf")):
+            return None, "GGUF 檔案路徑不合法"
+        diffusers_gguf_base_repo = normalize_huggingface_repo_id(data.get("diffusers_gguf_base_repo"), allow_blank=True)
+        if diffusers_gguf_base_repo is None:
+            return None, "GGUF base Diffusers repo 格式不合法"
         vae = _normalize_comfyui_vae_name(data.get("vae"))
         if vae is None:
             return None, "VAE 名稱不合法"
@@ -2386,6 +2465,11 @@ def register_comfyui_routes(app, deps):
         params = {
             "generation_mode": mode,
             "model": model,
+            "diffusers_model_repo": diffusers_model_repo,
+            "diffusers_model_variant": diffusers_model_variant,
+            "diffusers_model_variant_selected": bool(raw_diffusers_variant),
+            "diffusers_gguf_file": diffusers_gguf_file,
+            "diffusers_gguf_base_repo": diffusers_gguf_base_repo,
             "prompt": prompt,
             "negative_prompt": negative,
             "width": _int_range(data.get("width"), default_dimensions["width"], 64, 2048, multiple_of=8),

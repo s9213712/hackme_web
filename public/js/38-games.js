@@ -4,7 +4,7 @@ let gameSelectedMatchId = null;
 let gameSelectedSquare = null;
 let gameSelectedKey = gameInitialSelectedKey();
 let chessMoveInFlight = false;
-let gameState = { matches: [], invites: [], leaderboard: [] };
+let gameState = { matches: [], invites: [], leaderboard: [], users: [], multiplayer: { rooms: [], invites: [], modes: [] } };
 let soloGameTimer = null;
 let localGameModuleCleanup = null;
 let localGameModuleActiveApi = null;
@@ -12,6 +12,21 @@ let localGameModuleMountedKey = "";
 let localGameModuleTouchStart = null;
 let localGameModulePressedControl = null;
 let localGameModuleSwipeMode = "tap";
+let gameMultiplayerInvitePollTimer = null;
+let gameMultiplayerInviteModalInvite = null;
+let gameMultiplayerInviteActionBusy = false;
+let gameMultiplayerInviteSeenUserId = null;
+const gameMultiplayerInviteSeenIds = new Set();
+const GAME_MULTIPLAYER_MODES = {
+  fps_arena: [
+    { key: "coop", label: "合作破關" },
+    { key: "pvp", label: "PvP 對戰" },
+  ],
+  stickman_shooter: [
+    { key: "coop", label: "合作破關" },
+  ],
+};
+let gameMultiplayerSelectedRoomByKey = {};
 
 function localGameCatalogKeys() {
   const catalog = Array.isArray(window.HACKME_GAME_CATALOG) ? window.HACKME_GAME_CATALOG : [];
@@ -153,6 +168,7 @@ function gameIcon(key) {
   if (key === "real_tetris") return "▧";
   if (key === "space_shooter") return "▲";
   if (key === "fps_arena") return "◎";
+  if (key === "open_world") return "市";
   if (key === "bullet_hell") return "✦";
   if (key === "stickman_shooter") return "人";
   return "♟";
@@ -172,10 +188,46 @@ function gameSubtitle(game) {
   if (game.key === "tetris") return "高分消除挑戰";
   if (game.key === "real_tetris") return "剛體物理與放寬消線";
   if (game.key === "space_shooter") return "高分射擊挑戰";
-  if (game.key === "fps_arena") return "四模式 3D 射擊訓練";
+  if (game.key === "fps_arena") return "3D 射擊訓練 / 合作 / PvP";
+  if (game.key === "open_world") return "3D 城市探索 / 駕車任務 / 警戒追逐";
   if (game.key === "bullet_hell") return "閃避密集彈幕並反擊";
-  if (game.key === "stickman_shooter") return "2D 側捲平台射擊挑戰";
+  if (game.key === "stickman_shooter") return "2D 側捲平台射擊 / 合作解謎";
   return game.supports_computer ? "玩家對戰 / 電腦練習" : "玩家對戰";
+}
+
+function gameSupportsMultiplayer(key = gameSelectedKey) {
+  return Array.isArray(GAME_MULTIPLAYER_MODES[key]) && GAME_MULTIPLAYER_MODES[key].length > 0;
+}
+
+function gameMultiplayerModeLabel(mode) {
+  if (mode === "pvp") return "PvP 對戰";
+  return "合作破關";
+}
+
+function gameMultiplayerActiveRoom(key = gameSelectedKey, mode = "") {
+  if (!gameSupportsMultiplayer(key)) return null;
+  const rooms = Array.isArray(gameState.multiplayer?.rooms) ? gameState.multiplayer.rooms : [];
+  const selectedId = Number(gameMultiplayerSelectedRoomByKey[key] || 0);
+  const selected = selectedId ? rooms.find((room) => Number(room.id) === selectedId) : null;
+  const room = selected || rooms.find((item) => item.status === "active") || rooms.find((item) => item.status === "lobby") || null;
+  if (!room) return null;
+  if (mode && room.mode !== mode) return null;
+  if (!room.guest_user_id) return null;
+  return room;
+}
+
+function gameMultiplayerPeerId(room) {
+  if (!room) return null;
+  const me = Number(currentUserId || 0);
+  if (Number(room.host_user_id) === me) return Number(room.guest_user_id || 0) || null;
+  if (Number(room.guest_user_id) === me) return Number(room.host_user_id || 0) || null;
+  return null;
+}
+
+function gameMultiplayerPeerState(snapshot, room) {
+  const peerId = gameMultiplayerPeerId(room || snapshot?.room);
+  const players = Array.isArray(snapshot?.players) ? snapshot.players : [];
+  return players.find((player) => Number(player.user_id) === Number(peerId)) || null;
 }
 
 function switchGameView(key) {
@@ -203,6 +255,10 @@ function switchGameView(key) {
   }
   if (!isLocalGameModule && selectedViewModule?.ensure) selectedViewModule.ensure(legacyGameRuntime());
   updateGameFullscreenButtons();
+  renderGameMultiplayerPanel();
+  loadSelectedGameMultiplayer().catch((err) => {
+    if (gameSupportsMultiplayer(gameSelectedKey)) setGameMsg(err.message || "多人房間讀取失敗", false);
+  });
   loadSelectedGameLeaderboard().catch((err) => setGameMsg(err.message || "排行榜讀取失敗", false));
 }
 
@@ -389,6 +445,8 @@ function createLocalGameModuleApi(key) {
     setSwipeMode(mode) { localGameModuleSwipeMode = mode === "hold" ? "hold" : "tap"; },
     dailyChallenge() { return window.hackmeGameDailyChallenge?.(key) || null; },
     dailyMissions() { return window.listHackmeGameDailyMissions?.(key) || []; },
+    users() { return gameState.users || []; },
+    multiplayer() { return window.hackmeGameMultiplayer || null; },
     achievement(id, label, detail = "") {
       const result = window.recordHackmeGameAchievement?.(key, id, label, detail);
       if (result?.unlocked) setGameMsg(`成就解鎖：${result.label}`, true);
@@ -463,6 +521,260 @@ function renderGameUsers(users) {
   select.innerHTML = '<option value="">選擇玩家</option>' + rows.map((user) => (
     `<option value="${sanitize(user.username || "")}">${sanitize(user.username || "")} · ${sanitize(user.role || "user")}</option>`
   )).join("");
+}
+
+function renderGameMultiplayerUsers(users = gameState.users || []) {
+  const select = $("game-multiplayer-user");
+  if (!select) return;
+  const current = select.value || "";
+  const rows = Array.isArray(users) ? users : [];
+  if (!rows.length) {
+    select.innerHTML = '<option value="">目前沒有可邀請玩家</option>';
+    return;
+  }
+  select.innerHTML = '<option value="">選擇玩家</option>' + rows.map((user) => (
+    `<option value="${sanitize(user.username || "")}">${sanitize(user.username || "")} · ${sanitize(user.role || "user")}</option>`
+  )).join("");
+  if (current && rows.some((user) => user.username === current)) select.value = current;
+}
+
+function renderGameMultiplayerPanel() {
+  const panel = $("game-multiplayer-panel");
+  if (!panel) return;
+  const supported = gameSupportsMultiplayer(gameSelectedKey);
+  panel.style.display = supported ? "" : "none";
+  if (!supported) return;
+  const modes = GAME_MULTIPLAYER_MODES[gameSelectedKey] || [];
+  const modeSelect = $("game-multiplayer-mode");
+  if (modeSelect) {
+    const previous = modeSelect.value || modes[0]?.key || "coop";
+    modeSelect.innerHTML = modes.map((mode) => `<option value="${sanitize(mode.key)}">${sanitize(mode.label)}</option>`).join("");
+    modeSelect.value = modes.some((mode) => mode.key === previous) ? previous : (modes[0]?.key || "coop");
+  }
+  renderGameMultiplayerUsers();
+  const hint = $("game-multiplayer-hint");
+  if (hint) {
+    hint.textContent = gameSelectedKey === "fps_arena"
+      ? "3D 支援合作打殭屍與 PvP；合作也會誤傷，槍聲會提示大致方向。"
+      : "火柴人合作需要雙人壓板、開門與同步抵達終點；合作也會誤傷。";
+  }
+  const list = $("game-multiplayer-list");
+  if (!list) return;
+  const rooms = Array.isArray(gameState.multiplayer?.rooms) ? gameState.multiplayer.rooms : [];
+  const invites = Array.isArray(gameState.multiplayer?.invites) ? gameState.multiplayer.invites : [];
+  const selectedId = Number(gameMultiplayerSelectedRoomByKey[gameSelectedKey] || 0);
+  const inviteRows = invites.map((invite) => {
+    const incoming = Number(invite.invitee_user_id) === Number(currentUserId || 0);
+    const title = incoming
+      ? `${invite.inviter_username} 邀請你加入 ${gameMultiplayerModeLabel(invite.mode)}`
+      : `邀請 ${invite.invitee_username} 加入 ${gameMultiplayerModeLabel(invite.mode)}`;
+    const actions = invite.status === "pending" && incoming
+      ? `<button class="btn game-mini-btn btn-primary" type="button" data-game-mp-invite="${invite.id}" data-game-mp-action="accept">接受</button>
+         <button class="btn game-mini-btn" type="button" data-game-mp-invite="${invite.id}" data-game-mp-action="reject">拒絕</button>`
+      : invite.status === "pending"
+        ? `<button class="btn game-mini-btn" type="button" data-game-mp-invite="${invite.id}" data-game-mp-action="cancel">取消</button>`
+        : "";
+    return `
+      <div class="drive-file-row game-list-row">
+        <div><strong>${sanitize(title)}</strong><small>${sanitize(invite.status)} · ${sanitize(formatChatTime(invite.created_at))}</small></div>
+        <div class="drive-file-actions">${actions}</div>
+      </div>
+    `;
+  });
+  const roomRows = rooms.map((room) => {
+    const active = Number(room.id) === selectedId || (!selectedId && room.status === "active");
+    const peer = Number(room.host_user_id) === Number(currentUserId || 0) ? room.guest_username : room.host_username;
+    const canStart = room.can_start && room.guest_user_id;
+    return `
+      <div class="drive-file-row game-list-row game-multiplayer-room ${active ? "active" : ""}">
+        <div>
+          <strong>${sanitize(gameMultiplayerModeLabel(room.mode))} · ${sanitize(room.room_code || `#${room.id}`)}</strong>
+          <small>${sanitize(room.status)} · 隊友 ${sanitize(peer || "等待加入")} · ${sanitize(formatChatTime(room.updated_at))}</small>
+        </div>
+        <div class="drive-file-actions">
+          <span class="game-multiplayer-badge">${sanitize(room.my_role === "host" ? "房主" : "成員")}</span>
+          <button class="btn game-mini-btn ${active ? "btn-primary" : ""}" type="button" data-game-mp-room="${room.id}">使用</button>
+          ${canStart ? `<button class="btn game-mini-btn" type="button" data-game-mp-start="${room.id}">同步開始</button>` : ""}
+        </div>
+      </div>
+    `;
+  });
+  list.innerHTML = [...inviteRows, ...roomRows].join("") || "<p style=\"color:var(--muted);\">尚無多人邀請或房間</p>";
+}
+
+async function loadSelectedGameMultiplayer() {
+  if (!gameSupportsMultiplayer(gameSelectedKey)) {
+    gameState.multiplayer = { rooms: [], invites: [], modes: [] };
+    renderGameMultiplayerPanel();
+    return null;
+  }
+  const data = await gameRequest(`/games/${encodeURIComponent(gameSelectedKey)}/multiplayer`);
+  gameState.multiplayer = {
+    rooms: data.rooms || [],
+    invites: data.invites || [],
+    modes: data.modes || [],
+  };
+  const selected = gameMultiplayerSelectedRoomByKey[gameSelectedKey];
+  if (selected && !(gameState.multiplayer.rooms || []).some((room) => Number(room.id) === Number(selected))) {
+    delete gameMultiplayerSelectedRoomByKey[gameSelectedKey];
+  }
+  renderGameMultiplayerPanel();
+  window.dispatchEvent(new CustomEvent("hackme:game-multiplayer-updated", { detail: { gameKey: gameSelectedKey } }));
+  return data;
+}
+
+async function createGameMultiplayerInvite() {
+  if (!gameSupportsMultiplayer(gameSelectedKey)) return;
+  const username = $("game-multiplayer-user")?.value || "";
+  const mode = $("game-multiplayer-mode")?.value || "coop";
+  if (!username) {
+    setGameMsg("請先選擇要邀請的玩家。", false);
+    return;
+  }
+  try {
+    const json = await gameRequest(`/games/${encodeURIComponent(gameSelectedKey)}/multiplayer/invites`, {
+      method: "POST",
+      body: { opponent_username: username, mode },
+    });
+    if (json.room?.id) gameMultiplayerSelectedRoomByKey[gameSelectedKey] = Number(json.room.id);
+    await loadSelectedGameMultiplayer();
+    setGameMsg("已送出多人邀請", true);
+  } catch (err) {
+    setGameMsg(err.message || "多人邀請失敗", false);
+  }
+}
+
+async function reviewGameMultiplayerInvite(inviteId, action) {
+  try {
+    const json = await gameRequest(`/games/multiplayer/invites/${encodeURIComponent(inviteId)}/${encodeURIComponent(action)}`, {
+      method: "POST",
+      body: {},
+    });
+    if (json.room?.game_key) {
+      gameMultiplayerSelectedRoomByKey[json.room.game_key] = Number(json.room.id);
+    }
+    await loadSelectedGameMultiplayer();
+    setGameMsg(action === "accept" ? "已加入多人房間" : "多人邀請已更新", true);
+  } catch (err) {
+    setGameMsg(err.message || "多人邀請處理失敗", false);
+  }
+}
+
+function gameMultiplayerInviteGameTitle(gameKey) {
+  const game = window.hackmeGameByKey?.(gameKey) || {};
+  return game.title || (gameKey === "fps_arena" ? "3D 對戰" : gameKey === "stickman_shooter" ? "火柴人橫向射擊" : "多人遊戲");
+}
+
+function syncGameMultiplayerInviteSeenUser() {
+  const userId = String(currentUserId || "");
+  if (gameMultiplayerInviteSeenUserId === userId) return;
+  gameMultiplayerInviteSeenUserId = userId;
+  gameMultiplayerInviteSeenIds.clear();
+  hideGameMultiplayerInviteModal();
+}
+
+function setGameMultiplayerInviteModalBusy(busy) {
+  gameMultiplayerInviteActionBusy = !!busy;
+  ["game-multiplayer-invite-accept-btn", "game-multiplayer-invite-reject-btn"].forEach((id) => {
+    const button = $(id);
+    if (button) button.disabled = gameMultiplayerInviteActionBusy;
+  });
+}
+
+function showGameMultiplayerInviteModal(invite) {
+  const overlay = $("game-multiplayer-invite-modal");
+  const title = $("game-multiplayer-invite-modal-title");
+  const body = $("game-multiplayer-invite-modal-body");
+  const detail = $("game-multiplayer-invite-modal-detail");
+  if (!overlay || !invite) return;
+  const gameTitle = gameMultiplayerInviteGameTitle(invite.game_key);
+  const modeLabel = gameMultiplayerModeLabel(invite.mode);
+  gameMultiplayerInviteModalInvite = invite;
+  gameMultiplayerInviteSeenIds.add(String(invite.id));
+  if (title) title.textContent = "多人遊戲邀請";
+  if (body) {
+    body.innerHTML = `<strong>${sanitize(invite.inviter_username || "玩家")}</strong> 邀請你加入 <strong>${sanitize(gameTitle)}</strong>`;
+  }
+  if (detail) {
+    const roomCode = invite.room?.room_code || "";
+    detail.textContent = `${modeLabel}${roomCode ? ` · 房間 ${roomCode}` : ""}`;
+  }
+  setGameMultiplayerInviteModalBusy(false);
+  overlay.hidden = false;
+  overlay.classList.add("show");
+  overlay.setAttribute("aria-hidden", "false");
+}
+
+function hideGameMultiplayerInviteModal() {
+  const overlay = $("game-multiplayer-invite-modal");
+  if (!overlay) return;
+  overlay.classList.remove("show");
+  overlay.hidden = true;
+  overlay.setAttribute("aria-hidden", "true");
+  gameMultiplayerInviteModalInvite = null;
+  setGameMultiplayerInviteModalBusy(false);
+}
+
+async function loadGlobalGameMultiplayerInvites({ force = false } = {}) {
+  syncGameMultiplayerInviteSeenUser();
+  if (!currentUserId) return { ok: true, invites: [] };
+  const data = await gameRequest("/games/multiplayer/invites/pending");
+  const invites = Array.isArray(data.invites) ? data.invites : [];
+  if (gameMultiplayerInviteModalInvite && !invites.some((invite) => Number(invite.id) === Number(gameMultiplayerInviteModalInvite.id))) {
+    hideGameMultiplayerInviteModal();
+  }
+  if (!$("game-multiplayer-invite-modal")) return data;
+  if (gameMultiplayerInviteModalInvite) return data;
+  const nextInvite = invites.find((invite) => force || !gameMultiplayerInviteSeenIds.has(String(invite.id)));
+  if (nextInvite) showGameMultiplayerInviteModal(nextInvite);
+  return data;
+}
+
+async function respondGlobalGameMultiplayerInvite(action) {
+  const invite = gameMultiplayerInviteModalInvite;
+  if (!invite || gameMultiplayerInviteActionBusy) return;
+  setGameMultiplayerInviteModalBusy(true);
+  try {
+    const json = await gameRequest(`/games/multiplayer/invites/${encodeURIComponent(invite.id)}/${encodeURIComponent(action)}`, {
+      method: "POST",
+      body: {},
+    });
+    hideGameMultiplayerInviteModal();
+    if (action === "accept" && json.room?.game_key) {
+      gameMultiplayerSelectedRoomByKey[json.room.game_key] = Number(json.room.id);
+      if (typeof switchModuleTab === "function") switchModuleTab("games");
+      switchGameView(json.room.game_key);
+      setGameMsg("已接受邀請並切換到多人房間。", true);
+    } else {
+      setGameMsg("已拒絕多人邀請。", true);
+      if (gameSupportsMultiplayer(gameSelectedKey)) await loadSelectedGameMultiplayer();
+    }
+    await loadGlobalGameMultiplayerInvites({ force: true }).catch(() => null);
+  } catch (err) {
+    const detail = $("game-multiplayer-invite-modal-detail");
+    if (detail) detail.textContent = err.message || "多人邀請處理失敗";
+    setGameMultiplayerInviteModalBusy(false);
+  }
+}
+
+function ensureGameMultiplayerInvitePolling() {
+  if (gameMultiplayerInvitePollTimer) return;
+  const tick = () => loadGlobalGameMultiplayerInvites().catch(() => null);
+  gameMultiplayerInvitePollTimer = window.setInterval(tick, 5000);
+  window.setTimeout(tick, 1200);
+}
+
+async function startGameMultiplayerRoom(roomId) {
+  try {
+    const json = await gameRequest(`/games/multiplayer/rooms/${encodeURIComponent(roomId)}/start`, { method: "POST", body: {} });
+    if (json.room?.game_key) gameMultiplayerSelectedRoomByKey[json.room.game_key] = Number(json.room.id);
+    await loadSelectedGameMultiplayer();
+    setGameMsg("多人房間已同步開始", true);
+    return json;
+  } catch (err) {
+    setGameMsg(err.message || "多人房間開始失敗", false);
+    return null;
+  }
 }
 
 function renderGameInvites(invites) {
@@ -721,11 +1033,15 @@ async function loadGameZone() {
       matches: matchesJson.matches || [],
       invites: invitesJson.invites || [],
       leaderboard: [],
+      users: usersJson.users || [],
+      multiplayer: gameState.multiplayer || { rooms: [], invites: [], modes: [] },
     };
     renderGameCatalog(catalog.games || []);
     renderGameUsers(usersJson.users || []);
+    renderGameMultiplayerUsers(usersJson.users || []);
     renderGameInvites(invitesJson.invites || []);
     renderGameMatches(matchesJson.matches || []);
+    await loadSelectedGameMultiplayer();
     await loadSelectedGameLeaderboard();
     setGameMsg("", true);
   } catch (err) {
@@ -742,8 +1058,57 @@ async function refreshGameZoneAfterMutation(successMessage) {
   }
 }
 
+window.hackmeGameMultiplayer = {
+  activeRoom: gameMultiplayerActiveRoom,
+  peerId: gameMultiplayerPeerId,
+  peerState: gameMultiplayerPeerState,
+  selectedRoomId(gameKey = gameSelectedKey) {
+    return Number(gameMultiplayerSelectedRoomByKey[gameKey] || 0);
+  },
+  selectRoom(gameKey, roomId) {
+    if (gameKey && roomId) gameMultiplayerSelectedRoomByKey[gameKey] = Number(roomId);
+    renderGameMultiplayerPanel();
+  },
+  async refresh(gameKey = gameSelectedKey) {
+    const previous = gameSelectedKey;
+    if (gameKey !== gameSelectedKey) gameSelectedKey = gameKey;
+    try {
+      return await loadSelectedGameMultiplayer();
+    } finally {
+      gameSelectedKey = previous;
+    }
+  },
+  async start(roomId) {
+    return startGameMultiplayerRoom(roomId);
+  },
+  async pollRoom(roomId, afterEventId = 0) {
+    return gameRequest(`/games/multiplayer/rooms/${encodeURIComponent(roomId)}?after_event_id=${encodeURIComponent(afterEventId || 0)}`);
+  },
+  async syncRoom(roomId, state, events = [], afterEventId = 0) {
+    return gameRequest(`/games/multiplayer/rooms/${encodeURIComponent(roomId)}/state`, {
+      method: "POST",
+      body: {
+        state: state || {},
+        events: Array.isArray(events) ? events : [],
+        after_event_id: afterEventId || 0,
+      },
+    });
+  },
+  async checkInvitesNow() {
+    return loadGlobalGameMultiplayerInvites({ force: true });
+  },
+};
+
 
 document.addEventListener("click", (event) => {
+  if (event.target?.closest?.("#game-multiplayer-invite-accept-btn")) {
+    respondGlobalGameMultiplayerInvite("accept");
+    return;
+  }
+  if (event.target?.closest?.("#game-multiplayer-invite-reject-btn")) {
+    respondGlobalGameMultiplayerInvite("reject");
+    return;
+  }
   if (event.target?.closest?.("#game-fullscreen-btn, #fps-arena-fullscreen-btn")) {
     toggleGameFullscreen();
     return;
@@ -764,6 +1129,29 @@ document.addEventListener("click", (event) => {
   const localGameModuleAction = event.target?.closest?.("#local-module-game-panel [data-action]");
   if (localGameModuleAction && localGameModuleActiveApi?.onAction) {
     localGameModuleActiveApi.onAction(localGameModuleAction.dataset.action || "");
+    return;
+  }
+  const multiplayerInviteBtn = event.target?.closest?.("#game-multiplayer-invite-btn");
+  if (multiplayerInviteBtn) {
+    createGameMultiplayerInvite();
+    return;
+  }
+  const multiplayerInviteAction = event.target?.closest?.("[data-game-mp-invite]");
+  if (multiplayerInviteAction) {
+    reviewGameMultiplayerInvite(multiplayerInviteAction.dataset.gameMpInvite, multiplayerInviteAction.dataset.gameMpAction || "accept");
+    return;
+  }
+  const multiplayerRoomBtn = event.target?.closest?.("[data-game-mp-room]");
+  if (multiplayerRoomBtn) {
+    gameMultiplayerSelectedRoomByKey[gameSelectedKey] = Number(multiplayerRoomBtn.dataset.gameMpRoom || 0);
+    renderGameMultiplayerPanel();
+    window.dispatchEvent(new CustomEvent("hackme:game-multiplayer-updated", { detail: { gameKey: gameSelectedKey } }));
+    setGameMsg("已選擇多人房間，可在遊戲面板開始多人模式。", true);
+    return;
+  }
+  const multiplayerStartBtn = event.target?.closest?.("[data-game-mp-start]");
+  if (multiplayerStartBtn) {
+    startGameMultiplayerRoom(multiplayerStartBtn.dataset.gameMpStart);
     return;
   }
   const catalogBtn = event.target?.closest?.("[data-game-key]");
@@ -936,6 +1324,10 @@ document.addEventListener("change", (event) => {
     switchGameView(key);
     return;
   }
+  if (event.target?.closest?.("#game-multiplayer-mode")) {
+    renderGameMultiplayerPanel();
+    return;
+  }
   dispatchActiveGameViewEvent("change", event);
 });
 
@@ -944,3 +1336,9 @@ document.addEventListener("contextmenu", (event) => {
 });
 
 document.addEventListener("fullscreenchange", updateGameFullscreenButtons);
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", ensureGameMultiplayerInvitePolling, { once: true });
+} else {
+  ensureGameMultiplayerInvitePolling();
+}

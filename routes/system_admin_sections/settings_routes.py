@@ -84,7 +84,7 @@ def register_system_admin_settings_routes(app, ctx):
     validate_comfyui_diffusers_dtype = ctx["validate_comfyui_diffusers_dtype"]
     validate_comfyui_relative_script = ctx["validate_comfyui_relative_script"]
     validate_huggingface_api_token = ctx["validate_huggingface_api_token"]
-    validate_huggingface_repo_id = ctx["validate_huggingface_repo_id"]
+    normalize_huggingface_repo_id = ctx["normalize_huggingface_repo_id"]
     validate_listen_host = ctx["validate_listen_host"]
     validate_listen_port = ctx["validate_listen_port"]
     is_hhmm = ctx["is_hhmm"]
@@ -210,9 +210,9 @@ def register_system_admin_settings_routes(app, ctx):
             elif not clear_comfyui_account_api_key:
                 data.pop("comfyui_account_api_key", None)
         if "comfyui_diffusers_model_repo" in data:
-            repo_id = validate_huggingface_repo_id(data.get("comfyui_diffusers_model_repo"), allow_blank=True)
+            repo_id = normalize_huggingface_repo_id(data.get("comfyui_diffusers_model_repo"), allow_blank=True)
             if repo_id is None:
-                return json_resp({"ok":False,"msg":"comfyui_diffusers_model_repo 必須是 Hugging Face repo id，例如 dhead/waiIllustriousSDXL_v150"}), 400
+                return json_resp({"ok":False,"msg":"comfyui_diffusers_model_repo 必須是 Hugging Face repo id 或模型頁網址，例如 dhead/waiIllustriousSDXL_v150"}), 400
             data["comfyui_diffusers_model_repo"] = repo_id
         clear_huggingface_token = False
         if "comfyui_huggingface_api_token_clear" in data:

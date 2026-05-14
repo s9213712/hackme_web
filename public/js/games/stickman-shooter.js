@@ -10,9 +10,9 @@
   const WORLD_ROOMS = 4;
   const ROOM_WIDTH = WIDTH;
   const WORLD_WIDTH = ROOM_WIDTH * WORLD_ROOMS;
-  const MAG_SIZE = 9;
   const RELOAD_TICKS = 54;
   const POWERUP_SIZE = 20;
+  const MULTIPLAYER_SYNC_TICKS = 12;
 
   const MODES = [
     { key: "standard", label: "標準", enemyHp: 0, enemyShots: 0, reserve: 45 },
@@ -20,6 +20,64 @@
     { key: "survival", label: "生存", enemyHp: 2, enemyShots: 18, reserve: 30 },
     { key: "hazard", label: "陷阱工廠", enemyHp: 1, enemyShots: 14, reserve: 34 },
     { key: "kaizo", label: "即死實驗", enemyHp: 2, enemyShots: 22, reserve: 30 },
+  ];
+
+  const STICKMAN_WEAPONS = {
+    rifle: { key: "rifle", label: "突擊步槍", mag: 9, reserve: 0, delay: 8, speed: 12.5, damage: 1, spread: [0], pierce: 0, color: "#fef08a" },
+    scatter: { key: "scatter", label: "霰彈槍", mag: 6, reserve: -6, delay: 15, speed: 11.8, damage: 1, spread: [-0.14, -0.05, 0.05, 0.14], pierce: 0, color: "#fbbf24" },
+    pulse: { key: "pulse", label: "脈衝槍", mag: 12, reserve: 8, delay: 6, speed: 13.8, damage: 1, spread: [-0.035, 0.035], pierce: 1, color: "#67e8f9" },
+    rail: { key: "rail", label: "穿甲軌道槍", mag: 5, reserve: -12, delay: 20, speed: 15.5, damage: 3, spread: [0], pierce: 3, color: "#c4b5fd" },
+  };
+
+  const STICKMAN_LEVELS = [
+    {
+      key: "dock",
+      label: "第 1 關 貨櫃碼頭",
+      weapon: "rifle",
+      mechanic: "壓板門",
+      bg: ["#07111f", "#12324f"],
+      roles: [["rifle", "rusher"], ["rifle", "rusher", "shield"], ["sniper", "rifle", "rusher"], ["shield", "boss", "rifle"]],
+      boss: { label: "貨櫃鎮暴者", hp: 22, role: "boss" },
+      enemyHp: 0,
+      enemyCountBonus: 0,
+      trapSpeed: 1,
+    },
+    {
+      key: "reactor",
+      label: "第 2 關 反應爐",
+      weapon: "scatter",
+      mechanic: "電流地板",
+      bg: ["#0f172a", "#164e63"],
+      roles: [["shield", "rusher"], ["grenadier", "rifle", "shield"], ["sniper", "grenadier", "shield"], ["grenadier", "boss", "sniper"]],
+      boss: { label: "反應爐爆破手", hp: 30, role: "grenadier" },
+      enemyHp: 1,
+      enemyCountBonus: 1,
+      trapSpeed: 1.18,
+    },
+    {
+      key: "skyline",
+      label: "第 3 關 高架工廠",
+      weapon: "pulse",
+      mechanic: "巡邏無人機",
+      bg: ["#111827", "#312e81"],
+      roles: [["ambusher", "rusher"], ["ambusher", "sniper", "shield"], ["grenadier", "sniper", "ambusher"], ["boss", "ambusher", "grenadier"]],
+      boss: { label: "高架獵手", hp: 36, role: "ambusher" },
+      enemyHp: 2,
+      enemyCountBonus: 1,
+      trapSpeed: 1.35,
+    },
+    {
+      key: "core",
+      label: "第 4 關 核心實驗室",
+      weapon: "rail",
+      mechanic: "連續雷射與雙 Boss",
+      bg: ["#170f1f", "#4c1d95"],
+      roles: [["sniper", "ambusher"], ["grenadier", "shield", "sniper"], ["boss", "ambusher", "grenadier"], ["boss", "grenadier", "sniper"]],
+      boss: { label: "核心雙子", hp: 42, role: "boss", twins: true },
+      enemyHp: 3,
+      enemyCountBonus: 2,
+      trapSpeed: 1.55,
+    },
   ];
 
   const POWERUP_META = {
@@ -100,6 +158,40 @@
       coverBias: 0.82,
       canShoot: true,
     },
+    ambusher: {
+      color: "#86efac",
+      accent: "#14532d",
+      hpBonus: 0,
+      speedScale: 1.18,
+      maxSpeed: 1.34,
+      sightRange: 560,
+      fireRange: 450,
+      preferredRange: 118,
+      retreatRange: 52,
+      fireDelay: 82,
+      spread: 0.042,
+      burst: 2,
+      flankOffset: 150,
+      coverBias: 0.62,
+      canShoot: true,
+    },
+    grenadier: {
+      color: "#fde68a",
+      accent: "#713f12",
+      hpBonus: 1,
+      speedScale: 0.9,
+      maxSpeed: 1.04,
+      sightRange: 610,
+      fireRange: 560,
+      preferredRange: 280,
+      retreatRange: 118,
+      fireDelay: 118,
+      spread: 0.095,
+      burst: 1,
+      flankOffset: 112,
+      coverBias: 0.78,
+      canShoot: true,
+    },
     boss: {
       color: "#f97316",
       accent: "#7c2d12",
@@ -123,6 +215,18 @@
     return typeof state?.rng === "function" ? state.rng() : Math.random();
   }
 
+  function currentStickmanLevel(api) {
+    return STICKMAN_LEVELS[api?._stickmanLevelIndex || 0] || STICKMAN_LEVELS[0];
+  }
+
+  function stickmanLevelFromState(state) {
+    return state?.level || STICKMAN_LEVELS[state?.levelIndex || 0] || STICKMAN_LEVELS[0];
+  }
+
+  function stickmanWeapon(state) {
+    return STICKMAN_WEAPONS[state?.weaponKey] || STICKMAN_WEAPONS.rifle;
+  }
+
   function rectsOverlap(a, b) {
     return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
   }
@@ -142,8 +246,8 @@
     }
   }
 
-  function makeStickmanWorld() {
-    return [
+  function makeStickmanWorld(level = STICKMAN_LEVELS[0]) {
+    const platforms = [
       { x: 0, y: 318, w: WORLD_WIDTH, h: 42, type: "ground" },
       { x: 130, y: 265, w: 126, h: 12 },
       { x: 344, y: 236, w: 112, h: 12 },
@@ -158,33 +262,102 @@
       { x: 2474, y: 230, w: 136, h: 12 },
       { x: 2660, y: 286, w: 150, h: 12 },
     ];
+    if (level.key === "reactor") {
+      platforms.push(
+        { x: 706, y: 214, w: 96, h: 12 },
+        { x: 1332, y: 206, w: 112, h: 12 },
+        { x: 2108, y: 218, w: 126, h: 12 },
+      );
+    } else if (level.key === "skyline") {
+      platforms.push(
+        { x: 470, y: 202, w: 118, h: 12 },
+        { x: 1180, y: 188, w: 138, h: 12 },
+        { x: 1970, y: 176, w: 148, h: 12 },
+        { x: 2398, y: 198, w: 118, h: 12 },
+      );
+    } else if (level.key === "core") {
+      platforms.push(
+        { x: 610, y: 198, w: 122, h: 12 },
+        { x: 1020, y: 178, w: 112, h: 12 },
+        { x: 1510, y: 202, w: 118, h: 12 },
+        { x: 2024, y: 184, w: 126, h: 12 },
+        { x: 2508, y: 192, w: 132, h: 12 },
+      );
+    }
+    return platforms;
   }
 
-  function makeStickmanCover() {
-    return [
+  function makeStickmanCover(level = STICKMAN_LEVELS[0]) {
+    const cover = [
       { x: 412, y: 282, w: 24, h: 36 },
       { x: 910, y: 238, w: 28, h: 36 },
       { x: 1260, y: 240, w: 30, h: 36 },
       { x: 1836, y: 184, w: 26, h: 36 },
       { x: 2354, y: 230, w: 32, h: 36 },
     ];
+    if (level.key === "reactor") cover.push({ x: 1548, y: 166, w: 30, h: 40 }, { x: 2180, y: 182, w: 28, h: 36 });
+    if (level.key === "skyline") cover.push({ x: 520, y: 166, w: 28, h: 36 }, { x: 2068, y: 140, w: 30, h: 36 });
+    if (level.key === "core") cover.push({ x: 1058, y: 142, w: 30, h: 36 }, { x: 2068, y: 148, w: 30, h: 36 }, { x: 2586, y: 156, w: 30, h: 36 });
+    return cover;
   }
 
-  function makeStickmanTraps() {
-    return [
+  function makeStickmanTraps(level = STICKMAN_LEVELS[0]) {
+    const speed = Number(level.trapSpeed || 1);
+    const traps = [
       { type: "spikes", x: 284, y: 310, w: 72, h: 8, lethal: true },
-      { type: "laser", x: 704, y: 168, w: 12, h: 150, period: 150, active: 76, phase: 28, lethal: true },
+      { type: "laser", x: 704, y: 168, w: 12, h: 150, period: Math.round(150 / speed), active: 76, phase: 28, lethal: true },
       { type: "saw", x: 1084, y: 302, r: 16, range: 44, phase: 12, lethal: true },
       { type: "spikes", x: 1362, y: 310, w: 88, h: 8, lethal: true },
-      { type: "crusher", x: 1634, y: 108, w: 58, h: 72, drop: 128, period: 156, phase: 18, lethal: true },
-      { type: "laser", x: 2026, y: 158, w: 12, h: 160, period: 132, active: 64, phase: 80, lethal: true },
+      { type: "crusher", x: 1634, y: 108, w: 58, h: 72, drop: 128, period: Math.round(156 / speed), phase: 18, lethal: true },
+      { type: "laser", x: 2026, y: 158, w: 12, h: 160, period: Math.round(132 / speed), active: 64, phase: 80, lethal: true },
       { type: "saw", x: 2324, y: 258, r: 15, range: 52, phase: 42, lethal: true },
       { type: "spikes", x: 2558, y: 310, w: 92, h: 8, lethal: true },
     ];
+    if (level.key === "reactor" || level.key === "core") {
+      traps.push(
+        { type: "electric", x: 942, y: 304, w: 124, h: 12, period: Math.round(118 / speed), active: 58, phase: 12, lethal: true },
+        { type: "electric", x: 1814, y: 304, w: 112, h: 12, period: Math.round(104 / speed), active: 52, phase: 50, lethal: true },
+      );
+    }
+    if (level.key === "skyline" || level.key === "core") {
+      traps.push(
+        { type: "drone", x: 1238, y: 154, w: 96, h: 12, range: 88, period: Math.round(132 / speed), active: 82, phase: 32, lethal: true },
+        { type: "drone", x: 2268, y: 150, w: 112, h: 12, range: 104, period: Math.round(126 / speed), active: 76, phase: 72, lethal: true },
+      );
+    }
+    if (level.key === "core") {
+      traps.push(
+        { type: "laser", x: 2768, y: 110, w: 12, h: 208, period: 72, active: 44, phase: 20, lethal: true },
+        { type: "crusher", x: 2462, y: 82, w: 70, h: 82, drop: 150, period: 92, phase: 18, lethal: true },
+      );
+    }
+    return traps;
   }
 
-  function makeStickmanCrates() {
-    return [
+  function makeStickmanCoopPuzzles(level = STICKMAN_LEVELS[0]) {
+    const extraPlate = level.key === "core"
+      ? [{ id: "gate-c", x: 2306, y: 306, w: 58, h: 12, label: "C" }]
+      : [];
+    const extraGate = level.key === "core"
+      ? [{ id: "gate-c", x: 2408, y: 150, w: 28, h: 168, type: "hold", label: "CORE" }]
+      : [];
+    return {
+      plates: [
+        { id: "gate-a", x: 520, y: 306, w: 58, h: 12, label: "A" },
+        { id: "gate-b-left", x: 1518, y: 306, w: 54, h: 12, label: "B1" },
+        { id: "gate-b-right", x: 1644, y: 306, w: 54, h: 12, label: "B2" },
+        ...extraPlate,
+      ],
+      gates: [
+        { id: "gate-a", x: 762, y: 188, w: 24, h: 130, type: "hold", label: "HOLD" },
+        { id: "gate-b", x: 1786, y: 180, w: 28, h: 138, type: "dual", label: "DUAL" },
+        ...extraGate,
+      ],
+    };
+  }
+
+  function makeStickmanCrates(level = STICKMAN_LEVELS[0]) {
+    const crates = [
       { x: 205, y: 239, w: 24, h: 24, hp: 1, power: "mushroom" },
       { x: 384, y: 210, w: 24, h: 24, hp: 1, power: "fireFlower" },
       { x: 836, y: 248, w: 24, h: 24, hp: 1, power: "ammo" },
@@ -194,14 +367,21 @@
       { x: 2250, y: 240, w: 24, h: 24, hp: 1, power: "fireFlower" },
       { x: 2688, y: 260, w: 24, h: 24, hp: 1, power: "ammo" },
     ];
+    if (level.key !== "dock") crates.push({ x: 1472, y: 180, w: 24, h: 24, hp: 1, power: "star" });
+    if (level.key === "core") crates.push({ x: 2522, y: 164, w: 24, h: 24, hp: 1, power: "shield" });
+    return crates;
   }
 
-  function makeStickmanPowerups() {
-    return [
+  function makeStickmanPowerups(level = STICKMAN_LEVELS[0]) {
+    const powerups = [
       { kind: "ammo", x: 620, y: 250, w: POWERUP_SIZE, h: POWERUP_SIZE, life: 99999 },
       { kind: "spring", x: 1282, y: 248, w: POWERUP_SIZE, h: POWERUP_SIZE, life: 99999 },
       { kind: "shield", x: 2384, y: 204, w: POWERUP_SIZE, h: POWERUP_SIZE, life: 99999 },
     ];
+    if (level.key === "reactor") powerups.push({ kind: "ammo", x: 1014, y: 186, w: POWERUP_SIZE, h: POWERUP_SIZE, life: 99999 });
+    if (level.key === "skyline") powerups.push({ kind: "spring", x: 2050, y: 148, w: POWERUP_SIZE, h: POWERUP_SIZE, life: 99999 });
+    if (level.key === "core") powerups.push({ kind: "star", x: 1038, y: 150, w: POWERUP_SIZE, h: POWERUP_SIZE, life: 99999 });
+    return powerups;
   }
 
   function currentStickmanTrapRect(state, trap) {
@@ -210,6 +390,17 @@
       const step = (state.tick + trap.phase) % trap.period;
       if (step >= trap.active) return null;
       return { x: trap.x, y: trap.y, w: trap.w, h: trap.h };
+    }
+    if (trap.type === "electric") {
+      const step = (state.tick + trap.phase) % trap.period;
+      if (step >= trap.active) return null;
+      return { x: trap.x, y: trap.y, w: trap.w, h: trap.h };
+    }
+    if (trap.type === "drone") {
+      const step = (state.tick + trap.phase) % trap.period;
+      if (step >= trap.active) return null;
+      const x = trap.x + Math.sin((state.tick + trap.phase) / 34) * trap.range;
+      return { x, y: trap.y, w: trap.w, h: trap.h };
     }
     if (trap.type === "saw") {
       const x = trap.x + Math.sin((state.tick + trap.phase) / 42) * trap.range;
@@ -234,8 +425,9 @@
     return STICKMAN_ENEMY_ROLES[enemy?.aiRole] || STICKMAN_ENEMY_ROLES[enemy?.kind] || STICKMAN_ENEMY_ROLES.rifle;
   }
 
-  function stickmanRoleForRoom(room, index) {
-    const pools = [
+  function stickmanRoleForRoom(state, room, index) {
+    const level = stickmanLevelFromState(state);
+    const pools = level.roles || [
       ["rifle", "rusher"],
       ["rifle", "rusher", "shield"],
       ["sniper", "rifle", "rusher", "shield"],
@@ -358,8 +550,9 @@
       state.shield = Math.min(3, state.shield + 1);
       state.score += 90;
     } else {
+      const weapon = stickmanWeapon(state);
       state.reserve += 18;
-      state.ammo = Math.min(MAG_SIZE, state.ammo + 3);
+      state.ammo = Math.min(weapon.mag, state.ammo + 3);
       state.score += 60;
     }
     addStickmanParticles(state, powerup.x + powerup.w / 2, powerup.y + powerup.h / 2, meta.color, 20);
@@ -414,8 +607,11 @@
     enemy.defeated = true;
     state.score += enemy.kind === "boss" ? 950 : 150;
     if (enemy.kind === "boss") {
-      state.bossDefeated = 1;
-      api.achievement?.("boss-down", "側捲 Boss 擊破", "擊破關卡 Boss。");
+      const remainingBosses = state.enemies.filter((item) => item !== enemy && item.kind === "boss" && item.hp > 0 && !item.defeated).length;
+      if (remainingBosses <= 0) {
+        state.bossDefeated = 1;
+        api.achievement?.(`boss-down-${state.level.key}`, `${state.level.label} Boss 擊破`, `擊破 ${state.bossName || "關卡 Boss"}。`);
+      }
     }
     maybeDropStickmanPowerup(state, enemy);
     addStickmanParticles(state, x || enemy.x + enemy.w / 2, y || enemy.y + enemy.h / 2, "#38bdf8", enemy.kind === "boss" ? 48 : 22);
@@ -425,14 +621,15 @@
     if (state.spawnedRooms.has(room)) return;
     state.spawnedRooms.add(room);
     const mode = MODES[state.modeIndex] || MODES[0];
+    const level = stickmanLevelFromState(state);
     const baseX = (room - 1) * ROOM_WIDTH;
-    const enemyCount = room === WORLD_ROOMS ? 2 : 2 + Math.min(2, room);
+    const enemyCount = room === WORLD_ROOMS ? 2 + Math.min(1, level.enemyCountBonus || 0) : 2 + Math.min(2, room) + Number(level.enemyCountBonus || 0);
     for (let i = 0; i < enemyCount; i += 1) {
-      const aiRole = stickmanRoleForRoom(room, i);
+      const aiRole = stickmanRoleForRoom(state, room, i);
       const role = STICKMAN_ENEMY_ROLES[aiRole] || STICKMAN_ENEMY_ROLES.rifle;
       const x = baseX + 245 + i * 132 + stickmanRandom(state) * 44;
       const y = groundYAt(state, x) - 42;
-      const hp = Math.max(1, 3 + Math.floor(room / 2) + mode.enemyHp + role.hpBonus);
+      const hp = Math.max(1, 3 + Math.floor(room / 2) + mode.enemyHp + Number(level.enemyHp || 0) + role.hpBonus);
       state.enemies.push({
         x,
         y,
@@ -461,31 +658,39 @@
     }
     if (room === WORLD_ROOMS && !state.bossSpawned) {
       state.bossSpawned = true;
-      state.enemies.push({
-        x: baseX + 445,
-        y: 318 - 64,
-        w: 38,
-        h: 64,
-        vx: -0.72,
-        baseSpeed: 0.72,
-        facing: -1,
-        patrolMin: baseX + 232,
-        patrolMax: baseX + 650,
-        roomMin: baseX + 180,
-        roomMax: baseX + ROOM_WIDTH - 48,
-        hp: 22 + mode.enemyHp * 3,
-        maxHp: 22 + mode.enemyHp * 3,
-        fireAt: 24,
-        hurt: 0,
-        aiState: "patrol",
-        aiRole: "boss",
-        flankSign: -1,
-        lastSeenX: null,
-        lastSeenY: null,
-        alertUntil: 0,
-        walkCycle: stickmanRandom(state) * Math.PI * 2,
-        kind: "boss",
-      });
+      state.bossIntroUntil = state.tick + 180;
+      state.bossName = level.boss?.label || "關卡 Boss";
+      const bossCount = level.boss?.twins ? 2 : 1;
+      for (let i = 0; i < bossCount; i += 1) {
+        const bossRole = level.boss?.role || "boss";
+        const bossHp = Number(level.boss?.hp || 22) + mode.enemyHp * 3;
+        state.enemies.push({
+          x: baseX + 405 + i * 92,
+          y: 318 - 64,
+          w: 38,
+          h: 64,
+          vx: i % 2 ? 0.68 : -0.72,
+          baseSpeed: 0.72 + Number(level.enemyHp || 0) * 0.05,
+          facing: -1,
+          patrolMin: baseX + 232,
+          patrolMax: baseX + 650,
+          roomMin: baseX + 180,
+          roomMax: baseX + ROOM_WIDTH - 48,
+          hp: bossHp,
+          maxHp: bossHp,
+          fireAt: 24,
+          hurt: 0,
+          aiState: "patrol",
+          aiRole: bossRole,
+          flankSign: i % 2 ? 1 : -1,
+          lastSeenX: null,
+          lastSeenY: null,
+          alertUntil: 0,
+          walkCycle: stickmanRandom(state) * Math.PI * 2,
+          kind: "boss",
+          bossLabel: level.boss?.twins ? `${state.bossName} ${i + 1}` : state.bossName,
+        });
+      }
     }
   }
 
@@ -494,7 +699,81 @@
     const reload = state.reloadTicks > 0 ? " · 換彈中" : "";
     const power = activeStickmanPowerText(state);
     const pickup = state.tick < state.lastPickupUntil ? ` · 取得 ${state.lastPickup}` : "";
-    api.status(`${state.dailyChallenge?.label || MODES[state.modeIndex].label} · Room ${state.room}/${WORLD_ROOMS} · 分數 ${Math.round(state.score).toLocaleString()} · HP ${state.player.hp}/${state.player.maxHp || 5} · 彈藥 ${state.ammo}/${state.reserve} · 命中 ${accuracy}%${power ? ` · ${power}` : ""}${pickup}${reload}`);
+    const coop = stickmanIsCoop(state) ? ` · Co-op ${state.multiplayer?.peer?.username ? `with ${state.multiplayer.peer.username}` : "等待隊友同步"}` : "";
+    const weapon = stickmanWeapon(state);
+    const boss = state.tick < (state.bossIntroUntil || 0) ? ` · Boss ${state.bossName || ""}` : "";
+    api.status(`${state.level.label}${coop} · ${MODES[state.modeIndex].label} · ${weapon.label} · Room ${state.room}/${WORLD_ROOMS}${boss} · 分數 ${Math.round(state.score).toLocaleString()} · HP ${state.player.hp}/${state.player.maxHp || 5} · 彈藥 ${state.ammo}/${state.reserve} · 命中 ${accuracy}%${power ? ` · ${power}` : ""}${pickup}${reload}`);
+  }
+
+  function stickmanMultiplayerStatePayload(state) {
+    return {
+      x: Math.round(state.player.x * 10) / 10,
+      y: Math.round(state.player.y * 10) / 10,
+      w: PLAYER_W,
+      h: PLAYER_H,
+      hp: state.player.hp,
+      maxHp: state.player.maxHp || 5,
+      facing: state.player.facing || 1,
+      walkCycle: state.player.walkCycle || 0,
+      room: state.room,
+      score: Math.round(state.score),
+      bossDefeated: state.bossDefeated,
+      status: state.status,
+      at: Date.now(),
+    };
+  }
+
+  function applyStickmanMultiplayerSnapshot(api, state, snapshot) {
+    if (!stickmanIsCoop(state) || !snapshot?.room) return;
+    state.multiplayer.room = snapshot.room;
+    const mp = api.multiplayer?.();
+    const peer = mp?.peerState(snapshot, snapshot.room);
+    if (peer) state.multiplayer.peer = peer;
+    const events = Array.isArray(snapshot.events) ? snapshot.events : [];
+    events.forEach((event) => {
+      const eventId = Number(event.id || 0);
+      if (!eventId || state.multiplayer.processedEvents.has(eventId)) return;
+      state.multiplayer.processedEvents.add(eventId);
+      state.multiplayer.afterEventId = Math.max(state.multiplayer.afterEventId || 0, eventId);
+      if (Number(event.sender_user_id) === Number(currentUserId || 0)) return;
+      const targetId = Number(event.target_user_id || 0);
+      if (targetId && targetId !== Number(currentUserId || 0)) return;
+      if (event.event_type === "friendly_fire" || event.event_type === "player_hit") {
+        const damage = Math.max(1, Math.min(3, Number(event.payload?.damage || 1)));
+        if (damageStickmanPlayer(api, state, damage, "shot", { sourceX: Number(event.payload?.x || state.player.x) })) {
+          state.score = Math.max(0, state.score - 40);
+          api.status(`${event.sender_username || "隊友"} 誤傷了你。`);
+        }
+      }
+      if (event.event_type === "objective") {
+        state.lastPickup = event.payload?.label || "隊友完成目標";
+        state.lastPickupUntil = state.tick + 120;
+      }
+    });
+    if (state.multiplayer.processedEvents.size > 160) {
+      state.multiplayer.processedEvents = new Set(Array.from(state.multiplayer.processedEvents).slice(-80));
+    }
+  }
+
+  function syncStickmanMultiplayer(api, state, { force = false } = {}) {
+    if (!stickmanIsCoop(state) || state.multiplayer.syncing) return;
+    if (!force && state.tick - (state.multiplayer.lastSyncTick || 0) < MULTIPLAYER_SYNC_TICKS) return;
+    const roomId = state.multiplayer.roomId;
+    if (!roomId) return;
+    const mp = api.multiplayer?.();
+    if (!mp?.syncRoom) return;
+    state.multiplayer.lastSyncTick = state.tick;
+    const events = state.multiplayer.pendingEvents.splice(0, 12);
+    state.multiplayer.syncing = true;
+    mp.syncRoom(roomId, stickmanMultiplayerStatePayload(state), events, state.multiplayer.afterEventId || 0)
+      .then((snapshot) => applyStickmanMultiplayerSnapshot(api, state, snapshot))
+      .catch((err) => {
+        state.multiplayer.pendingEvents.unshift(...events);
+        state.multiplayer.lastError = err.message || "同步失敗";
+      })
+      .finally(() => {
+        state.multiplayer.syncing = false;
+      });
   }
 
   function playerRect(state) {
@@ -502,8 +781,67 @@
     return { x: p.x, y: p.y, w: PLAYER_W, h: PLAYER_H };
   }
 
+  function stickmanPeerRect(state) {
+    const peer = state?.multiplayer?.peer?.state;
+    if (!peer || !Number.isFinite(Number(peer.x)) || !Number.isFinite(Number(peer.y))) return null;
+    return {
+      x: Number(peer.x),
+      y: Number(peer.y),
+      w: Number(peer.w || PLAYER_W),
+      h: Number(peer.h || PLAYER_H),
+      hp: Number(peer.hp || 0),
+      username: state.multiplayer.peer.username || "隊友",
+      facing: Number(peer.facing || 1),
+      walkCycle: Number(peer.walkCycle || 0),
+    };
+  }
+
+  function stickmanIsCoop(state) {
+    return state?.multiplayer?.mode === "coop";
+  }
+
+  function queueStickmanMultiplayerEvent(state, event) {
+    if (!stickmanIsCoop(state)) return;
+    state.multiplayer.pendingEvents.push(event);
+  }
+
+  function updateStickmanCoopPuzzles(state) {
+    if (!stickmanIsCoop(state) || !state.coopPuzzles) return;
+    const local = playerRect(state);
+    const peer = stickmanPeerRect(state);
+    state.coopPuzzles.plates.forEach((plate) => {
+      const localPressed = rectsOverlap(local, plate);
+      const peerPressed = peer ? rectsOverlap(peer, plate) : false;
+      plate.pressed = localPressed || peerPressed;
+      plate.pressedBy = [localPressed ? "you" : "", peerPressed ? "peer" : ""].filter(Boolean).join("+");
+    });
+    const platePressed = (id) => state.coopPuzzles.plates.some((plate) => plate.id === id && plate.pressed);
+    state.coopPuzzles.gates.forEach((gate) => {
+      gate.open = gate.type === "dual"
+        ? platePressed("gate-b-left") && platePressed("gate-b-right")
+        : platePressed(gate.id);
+    });
+  }
+
+  function resolveStickmanCoopGates(state, previousX) {
+    if (!stickmanIsCoop(state) || !state.coopPuzzles) return;
+    const p = state.player;
+    const body = playerRect(state);
+    state.coopPuzzles.gates.forEach((gate) => {
+      if (gate.open || !rectsOverlap(body, gate)) return;
+      if (previousX + PLAYER_W <= gate.x + 4) {
+        p.x = gate.x - PLAYER_W - 0.5;
+      } else {
+        p.x = gate.x + gate.w + 0.5;
+      }
+      p.vx = 0;
+      body.x = p.x;
+    });
+  }
+
   function applyStickmanPhysics(state) {
     const p = state.player;
+    const prevX = p.x;
     const prevY = p.y;
     p.vy += GRAVITY;
     p.x = clamp(p.x + p.vx, 8, WORLD_WIDTH - PLAYER_W - 8);
@@ -524,15 +862,18 @@
     if (p.y > HEIGHT + 80) {
       p.hp = 0;
     }
+    resolveStickmanCoopGates(state, prevX);
   }
 
   function startStickmanReload(state) {
-    if (state.reloadTicks > 0 || state.ammo >= MAG_SIZE || state.reserve <= 0) return;
+    const weapon = stickmanWeapon(state);
+    if (state.reloadTicks > 0 || state.ammo >= weapon.mag || state.reserve <= 0) return;
     state.reloadTicks = RELOAD_TICKS;
   }
 
   function finishStickmanReload(state) {
-    const needed = MAG_SIZE - state.ammo;
+    const weapon = stickmanWeapon(state);
+    const needed = weapon.mag - state.ammo;
     const taken = Math.min(needed, state.reserve);
     state.ammo += taken;
     state.reserve -= taken;
@@ -549,9 +890,10 @@
       return;
     }
     if (state.tick < state.nextShotAt) return;
+    const weapon = stickmanWeapon(state);
     const empowered = state.tick < state.fireUntil || state.tick < state.starUntil;
-    const shotSpread = empowered ? [-0.08, 0, 0.08] : [0];
-    state.nextShotAt = state.tick + (empowered ? 5 : 8);
+    const shotSpread = empowered ? [-0.08, 0, 0.08] : weapon.spread;
+    state.nextShotAt = state.tick + Math.max(4, weapon.delay - (empowered ? 3 : 0));
     state.ammo -= 1;
     state.shots += 1;
     const p = state.player;
@@ -560,14 +902,14 @@
       state.playerShots.push({
         x: p.x + (dir > 0 ? PLAYER_W + 3 : -3),
         y: p.y + 19,
-        vx: dir * (empowered ? 13.6 : 12.5),
+        vx: dir * (empowered ? Math.max(13.6, weapon.speed) : weapon.speed),
         vy: spread * 13 + (stickmanRandom(state) - 0.5) * 0.18,
-        w: empowered ? 11 : 8,
-        h: empowered ? 4 : 3,
-        life: empowered ? 82 : 70,
-        damage: empowered ? 2 : 1,
-        pierce: empowered ? 1 : 0,
-        color: empowered ? "#fb923c" : "#fef08a",
+        w: empowered || weapon.key === "rail" ? 11 : 8,
+        h: empowered || weapon.key === "rail" ? 4 : 3,
+        life: weapon.key === "rail" ? 92 : (empowered ? 82 : 70),
+        damage: empowered ? Math.max(2, weapon.damage) : weapon.damage,
+        pierce: empowered ? Math.max(1, weapon.pierce) : weapon.pierce,
+        color: empowered ? "#fb923c" : weapon.color,
       });
     });
     addStickmanParticles(state, p.x + (dir > 0 ? PLAYER_W + 5 : -5), p.y + 19, empowered ? "#fb923c" : "#fef08a", empowered ? 8 : 4);
@@ -584,7 +926,7 @@
     if (stickmanLineBlockedByCover(state, fromX, fromY, toX, toY)) return false;
     const angle = Math.atan2(toY - fromY, toX - fromX);
     const distance = Math.hypot(toX - fromX, toY - fromY);
-    const speed = enemy.aiRole === "sniper" ? 6.4 : enemy.kind === "boss" ? 5.8 : 4.8;
+    const speed = enemy.aiRole === "sniper" ? 6.4 : enemy.aiRole === "grenadier" ? 4.2 : enemy.kind === "boss" ? 5.8 : 4.8;
     const miss = role.spread + Math.min(0.06, distance * 0.00005);
     const spread = role.burst > 1
       ? [-miss * 1.35, 0, miss * 1.35]
@@ -595,11 +937,12 @@
         y: fromY,
         vx: Math.cos(angle + offset) * speed,
         vy: Math.sin(angle + offset) * speed,
-        r: enemy.kind === "boss" ? 4 : 3,
-        life: 118,
+        r: enemy.aiRole === "grenadier" ? 5 : enemy.kind === "boss" ? 4 : 3,
+        life: enemy.aiRole === "grenadier" ? 140 : 118,
+        color: enemy.aiRole === "grenadier" ? "#facc15" : "#fb7185",
       });
     });
-    addStickmanParticles(state, fromX, fromY, "#fb7185", 3);
+    addStickmanParticles(state, fromX, fromY, enemy.aiRole === "grenadier" ? "#facc15" : "#fb7185", 3);
     return true;
   }
 
@@ -689,7 +1032,7 @@
       enemy.facing = dxToPlayer < 0 ? -1 : 1;
       enemy.walkCycle += Math.max(0.08, Math.abs(enemy.x - oldX) * 0.28 + Math.abs(enemy.vx) * 0.06);
       enemy.fireAt -= 1;
-      const fireGap = Math.max(34, role.fireDelay - mode.enemyShots - state.room * 2);
+      const fireGap = Math.max(30, role.fireDelay - mode.enemyShots - state.room * 2 - Number(stickmanLevelFromState(state).enemyHp || 0) * 4);
       const canFireState = enemy.aiState === "suppress" || enemy.aiState === "hold" || enemy.aiState === "retreat" || enemy.aiState === "seekCover";
       if (enemy.fireAt <= 0 && canFireState && sameLane && distance < role.fireRange && hasLine) {
         enemyFireStickmanShot(state, enemy);
@@ -732,6 +1075,23 @@
           addStickmanParticles(state, crate.x + crate.w / 2, crate.y + crate.h / 2, "#fde68a", 20);
           api.achievement?.("stickman-question-block", "問號補給", "打破問號補給箱取得道具。");
         }
+      }
+      if (shot.life <= 0) continue;
+      const peer = stickmanPeerRect(state);
+      if (peer && peer.hp > 0 && rectsOverlap({ x: shot.x, y: shot.y, w: shot.w, h: shot.h }, peer)) {
+        shot.life = 0;
+        state.score = Math.max(0, state.score - 35);
+        addStickmanParticles(state, shot.x, shot.y, "#f43f5e", 12);
+        queueStickmanMultiplayerEvent(state, {
+          type: "friendly_fire",
+          target_user_id: state.multiplayer?.peer?.user_id,
+          payload: {
+            damage: Math.max(1, Number(shot.damage || 1)),
+            x: shot.x,
+            y: shot.y,
+            label: "friendly fire",
+          },
+        });
       }
       if (shot.life <= 0) continue;
       for (const enemy of state.enemies) {
@@ -874,6 +1234,10 @@
     const failReason = state.deathReason === "trap" ? "即死陷阱" : "任務失敗";
     api.status(`結束 · 分數 ${Math.round(state.score).toLocaleString()} · 命中 ${accuracy}% · ${reason === "complete" ? "通關" : failReason}`);
     if (state.score > 0) api.achievement?.("first-clear", "火柴人出擊", "完成一局側捲射擊。");
+    if (reason === "complete") {
+      api.achievement?.(`stickman-clear-${state.level.key}`, `${state.level.label} 通關`, `使用 ${stickmanWeapon(state).label} 通過 ${state.level.mechanic}。`);
+      if (state.level.key === "core") api.achievement?.("stickman-campaign-clear", "火柴人全關卡制霸", "完成核心實驗室。");
+    }
     if (reason === "complete" && state.trapHits === 0) api.achievement?.("stickman-no-trap-hit", "陷阱零失誤", "通關且沒有被陷阱擊中。");
     api.mission?.("score-1600", state.score, 1600, "火柴人 1600 分");
     api.mission?.("boss", state.bossDefeated, 1, "擊破側捲 Boss");
@@ -882,10 +1246,17 @@
     api.mission?.("traps-4", state.trapsPassed, 4, "通過 4 個即死陷阱");
     const penaltySeconds = survived ? 0 : 5;
     const rawElapsedMs = Math.max(1, Date.now() - state.startedAt);
+    if (stickmanIsCoop(state)) {
+      queueStickmanMultiplayerEvent(state, {
+        type: survived ? "finish" : "down",
+        payload: { reason, score: Math.round(state.score), hp: state.player.hp },
+      });
+      syncStickmanMultiplayer(api, state, { force: true });
+    }
     api.submitScore({
       score: Math.max(1, Math.round(state.score)),
-      difficulty: state.dailyChallenge?.difficulty || MODES[state.modeIndex].key,
-      puzzle_id: state.dailyChallenge?.key || api.key,
+      difficulty: state.dailyChallenge?.difficulty || `${state.level.key}-${MODES[state.modeIndex].key}`,
+      puzzle_id: state.dailyChallenge?.key || `${api.key}-${state.level.key}`,
       raw_elapsed_ms: rawElapsedMs,
       elapsed_ms: rawElapsedMs + penaltySeconds * 1000,
       penalty_seconds: penaltySeconds,
@@ -903,6 +1274,7 @@
     state.tick += 1;
     state.score += 0.08;
     updateStickmanPlayer(state);
+    updateStickmanCoopPuzzles(state);
     if (state.keys.fire) fireStickmanShot(state);
     if (state.reloadTicks > 0) {
       state.reloadTicks -= 1;
@@ -912,12 +1284,14 @@
       }
     }
     applyStickmanPhysics(state);
+    updateStickmanCoopPuzzles(state);
     advanceStickmanRoom(state);
     updateStickmanEnemies(state);
     updateStickmanBullets(api, state);
     updateStickmanPowerups(api, state);
     updateStickmanHazards(api, state);
     updateStickmanContacts(api, state);
+    syncStickmanMultiplayer(api, state);
     state.cameraX = clamp(state.player.x - WIDTH * 0.38, 0, WORLD_WIDTH - WIDTH);
     state.particles.forEach((particle) => {
       particle.x += particle.vx;
@@ -931,7 +1305,16 @@
       return;
     }
     if (state.bossDefeated && state.player.x > WORLD_WIDTH - 100) {
+      const peer = stickmanPeerRect(state);
+      if (stickmanIsCoop(state) && (!peer || peer.x < WORLD_WIDTH - 150)) {
+        state.score += 0.5;
+        drawStickmanShooter(state);
+        setStickmanStatus(api, state);
+        return;
+      }
       state.score += 500 + state.player.hp * 120 + state.reserve * 3;
+      queueStickmanMultiplayerEvent(state, { type: "objective", payload: { label: "雙人抵達終點" } });
+      syncStickmanMultiplayer(api, state, { force: true });
       finishStickmanShooter(api, "complete");
       return;
     }
@@ -1029,6 +1412,27 @@
         ctx.moveTo(rect.x - cam + rect.w / 2, 40);
         ctx.lineTo(rect.x - cam + rect.w / 2, rect.y);
         ctx.stroke();
+      } else if (trap.type === "electric") {
+        const active = Boolean(rect);
+        ctx.fillStyle = active ? "rgba(34,211,238,.46)" : "rgba(34,211,238,.12)";
+        ctx.fillRect(baseX, trap.y, trap.w, trap.h);
+        ctx.strokeStyle = active ? "#67e8f9" : "#155e75";
+        ctx.beginPath();
+        for (let x = 0; x < trap.w; x += 12) {
+          ctx.moveTo(baseX + x, trap.y + trap.h);
+          ctx.lineTo(baseX + x + 6, trap.y - 10);
+        }
+        ctx.stroke();
+      } else if (trap.type === "drone" && rect) {
+        const x = rect.x - cam;
+        ctx.fillStyle = "rgba(248,113,113,.2)";
+        ctx.fillRect(x, trap.y, rect.w, rect.h);
+        ctx.fillStyle = "#f43f5e";
+        ctx.fillRect(x, trap.y, rect.w, rect.h);
+        ctx.fillStyle = "#94a3b8";
+        ctx.fillRect(x + rect.w / 2 - 12, trap.y - 26, 24, 12);
+        ctx.fillStyle = "#e2e8f0";
+        ctx.fillRect(x + rect.w / 2 - 20, trap.y - 21, 40, 3);
       }
     });
   }
@@ -1067,18 +1471,50 @@
     });
   }
 
+  function drawStickmanCoopPuzzles(ctx, state, cam) {
+    if (!stickmanIsCoop(state) || !state.coopPuzzles) return;
+    state.coopPuzzles.plates.forEach((plate) => {
+      const x = plate.x - cam;
+      if (x > WIDTH + 60 || x + plate.w < -60) return;
+      ctx.fillStyle = plate.pressed ? "#22c55e" : "#64748b";
+      ctx.fillRect(x, plate.y, plate.w, plate.h);
+      ctx.fillStyle = plate.pressed ? "rgba(34,197,94,.22)" : "rgba(148,163,184,.18)";
+      ctx.fillRect(x - 4, plate.y - 6, plate.w + 8, plate.h + 12);
+      ctx.fillStyle = "#e2e8f0";
+      ctx.font = "700 10px system-ui, sans-serif";
+      ctx.fillText(plate.label, x + 8, plate.y + 10);
+    });
+    state.coopPuzzles.gates.forEach((gate) => {
+      const x = gate.x - cam;
+      if (x > WIDTH + 70 || x + gate.w < -70) return;
+      ctx.fillStyle = gate.open ? "rgba(34,197,94,.24)" : "rgba(248,113,113,.78)";
+      ctx.fillRect(x, gate.y, gate.w, gate.h);
+      ctx.strokeStyle = gate.open ? "#86efac" : "#fecaca";
+      ctx.strokeRect(x, gate.y, gate.w, gate.h);
+      ctx.save();
+      ctx.translate(x + gate.w / 2, gate.y + gate.h / 2);
+      ctx.rotate(-Math.PI / 2);
+      ctx.fillStyle = "#e2e8f0";
+      ctx.font = "700 10px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(gate.open ? "OPEN" : gate.label, 0, 4);
+      ctx.restore();
+    });
+  }
+
   function drawStickmanShooter(state) {
     const ctx = state.ctx;
     ctx.clearRect(0, 0, WIDTH, HEIGHT);
     const cam = state.cameraX;
+    const level = stickmanLevelFromState(state);
     const gradient = ctx.createLinearGradient(0, 0, 0, HEIGHT);
-    gradient.addColorStop(0, "#07111f");
-    gradient.addColorStop(0.56, "#132134");
+    gradient.addColorStop(0, level.bg?.[0] || "#07111f");
+    gradient.addColorStop(0.56, level.bg?.[1] || "#132134");
     gradient.addColorStop(1, "#111827");
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, WIDTH, HEIGHT);
 
-    ctx.fillStyle = "rgba(56,189,248,.12)";
+    ctx.fillStyle = level.key === "core" ? "rgba(196,181,253,.13)" : level.key === "reactor" ? "rgba(34,211,238,.13)" : "rgba(56,189,248,.12)";
     for (let i = 0; i < 34; i += 1) {
       const x = ((i * 93 - cam * 0.25) % (WIDTH + 80)) - 40;
       const h = 52 + (i % 6) * 14;
@@ -1104,6 +1540,7 @@
     drawStickmanTraps(ctx, state, cam);
     drawStickmanCrates(ctx, state, cam);
     drawStickmanPowerups(ctx, state, cam);
+    drawStickmanCoopPuzzles(ctx, state, cam);
     state.cover.forEach((cover) => {
       const x = cover.x - cam;
       if (x > WIDTH + 50 || x + cover.w < -50) return;
@@ -1120,7 +1557,7 @@
     state.enemyShots.forEach((shot) => {
       ctx.beginPath();
       ctx.arc(shot.x - cam, shot.y, shot.r, 0, Math.PI * 2);
-      ctx.fillStyle = "#fb7185";
+      ctx.fillStyle = shot.color || "#fb7185";
       ctx.fill();
     });
     state.enemies.forEach((enemy) => {
@@ -1133,6 +1570,11 @@
       ctx.fillRect(x - 4, enemy.y - 12, enemy.w + 8, 4);
       ctx.fillStyle = role.color;
       ctx.fillRect(x - 4, enemy.y - 12, (enemy.w + 8) * Math.max(0, enemy.hp / enemy.maxHp), 4);
+      if (enemy.kind === "boss") {
+        ctx.fillStyle = "#fecaca";
+        ctx.font = "700 10px system-ui, sans-serif";
+        ctx.fillText(enemy.bossLabel || state.bossName || "Boss", x - 12, enemy.y - 18);
+      }
     });
 
     state.particles.forEach((particle) => {
@@ -1146,19 +1588,40 @@
     if (!flicker) {
       drawStickmanFigure(ctx, state.player.x - cam + PLAYER_W / 2, state.player.y - 6, state.player.facing || 1, "#e2e8f0", "#38bdf8", false, 1, state.player.walkCycle || 0);
     }
+    const peer = stickmanPeerRect(state);
+    if (peer && peer.hp > 0) {
+      drawStickmanFigure(ctx, peer.x - cam + PLAYER_W / 2, peer.y - 6, peer.facing || 1, "#bbf7d0", "#16a34a", false, 1, peer.walkCycle || 0);
+      ctx.fillStyle = "rgba(15,23,42,.72)";
+      ctx.fillRect(peer.x - cam - 4, peer.y - 16, PLAYER_W + 8, 4);
+      ctx.fillStyle = "#22c55e";
+      ctx.fillRect(peer.x - cam - 4, peer.y - 16, (PLAYER_W + 8) * clamp(peer.hp / 5, 0, 1), 4);
+      ctx.fillStyle = "rgba(226,232,240,.82)";
+      ctx.font = "10px system-ui, sans-serif";
+      ctx.fillText(peer.username || "隊友", peer.x - cam - 2, peer.y - 22);
+    }
     ctx.fillStyle = "rgba(15,23,42,.72)";
-    ctx.fillRect(14, 14, 344, 52);
+    ctx.fillRect(14, 14, 398, 52);
     ctx.fillStyle = "#e2e8f0";
     ctx.font = "12px system-ui, sans-serif";
     const accuracy = state.shots ? Math.round((state.hits / state.shots) * 100) : 0;
     const powerText = activeStickmanPowerText(state) || "無";
-    ctx.fillText(`score ${Math.round(state.score).toLocaleString()}  hp ${state.player.hp}/${state.player.maxHp || 5}  ammo ${state.ammo}/${state.reserve}`, 24, 29);
-    ctx.fillText(`room ${state.room}/${WORLD_ROOMS}  accuracy ${accuracy}%  stamina ${Math.round(state.stamina)}  power ${powerText}`, 24, 44);
-    ctx.fillText(`traps ${state.trapsPassed}/${state.traps.length}  items ${state.powerupsCollected}`, 24, 59);
+    ctx.fillText(`${level.label}  weapon ${stickmanWeapon(state).label}`, 24, 29);
+    ctx.fillText(`score ${Math.round(state.score).toLocaleString()}  hp ${state.player.hp}/${state.player.maxHp || 5}  ammo ${state.ammo}/${state.reserve}`, 24, 44);
+    ctx.fillText(`room ${state.room}/${WORLD_ROOMS}  acc ${accuracy}%  stamina ${Math.round(state.stamina)}  traps ${state.trapsPassed}/${state.traps.length}  power ${powerText}`, 24, 59);
     ctx.fillStyle = "rgba(148,163,184,.26)";
     ctx.fillRect(384, 24, 146, 8);
     ctx.fillStyle = "#38bdf8";
     ctx.fillRect(384, 24, 146 * (state.stamina / 100), 8);
+
+    if (state.tick < (state.bossIntroUntil || 0)) {
+      ctx.fillStyle = "rgba(127,29,29,.76)";
+      ctx.fillRect(158, 82, WIDTH - 316, 58);
+      ctx.textAlign = "center";
+      ctx.fillStyle = "#fecaca";
+      ctx.font = "800 22px system-ui, sans-serif";
+      ctx.fillText(`BOSS · ${state.bossName || "警戒目標"}`, WIDTH / 2, 116);
+      ctx.textAlign = "start";
+    }
 
     if (state.status === "finished") {
       ctx.fillStyle = "rgba(7,17,31,.78)";
@@ -1174,11 +1637,19 @@
     }
   }
 
-  function startStickmanShooter(api) {
+  function startStickmanShooter(api, options = {}) {
     if (api._stickmanShooterState?.timer) clearInterval(api._stickmanShooterState.timer);
+    const wantsCoop = options.multiplayerMode === "coop";
+    const multiplayerRoom = wantsCoop ? api.multiplayer?.()?.activeRoom?.("stickman_shooter", "coop") : null;
+    if (wantsCoop && !multiplayerRoom) {
+      api.status("請先在多人房間邀請並選擇一位隊友。");
+      return;
+    }
     const canvas = api.root.querySelector("canvas");
     const dailyChallenge = api.dailyChallenge?.() || null;
     const mode = MODES[api._stickmanModeIndex || 0] || MODES[0];
+    const level = currentStickmanLevel(api);
+    const weapon = STICKMAN_WEAPONS[level.weapon] || STICKMAN_WEAPONS.rifle;
     const state = {
       canvas,
       ctx: canvas.getContext("2d"),
@@ -1193,10 +1664,13 @@
       wave: 1,
       room: 1,
       modeIndex: api._stickmanModeIndex || 0,
+      levelIndex: api._stickmanLevelIndex || 0,
+      level,
+      weaponKey: weapon.key,
       cameraX: 0,
       stamina: 100,
-      ammo: MAG_SIZE,
-      reserve: mode.reserve,
+      ammo: weapon.mag,
+      reserve: Math.max(12, mode.reserve + Number(weapon.reserve || 0)),
       reloadTicks: 0,
       emptyReload: false,
       nextShotAt: 0,
@@ -1215,18 +1689,33 @@
       deathReason: "",
       bossSpawned: false,
       bossDefeated: 0,
+      bossIntroUntil: 0,
+      bossName: level.boss?.label || "",
       player: { x: 38, y: 318 - PLAYER_H, vx: 0, vy: 0, hp: 5, maxHp: 5, grounded: true, facing: 1, walkCycle: 0, doubleJumpUsed: false },
       keys: { left: false, right: false, fire: false, sprint: false },
-      platforms: makeStickmanWorld(),
-      cover: makeStickmanCover(),
-      traps: makeStickmanTraps(),
-      crates: makeStickmanCrates(),
-      powerups: makeStickmanPowerups(),
+      platforms: makeStickmanWorld(level),
+      cover: makeStickmanCover(level),
+      traps: makeStickmanTraps(level),
+      coopPuzzles: wantsCoop ? makeStickmanCoopPuzzles(level) : null,
+      crates: makeStickmanCrates(level),
+      powerups: makeStickmanPowerups(level),
       spawnedRooms: new Set(),
       enemies: [],
       playerShots: [],
       enemyShots: [],
       particles: [],
+      multiplayer: wantsCoop ? {
+        room: multiplayerRoom,
+        roomId: multiplayerRoom.id,
+        mode: "coop",
+        peer: null,
+        afterEventId: 0,
+        pendingEvents: [],
+        processedEvents: new Set(),
+        syncing: false,
+        lastSyncTick: -999,
+        lastError: "",
+      } : null,
       dailyChallenge,
       rng: dailyChallenge?.seed ? window.createHackmeGameSeededRandom?.(dailyChallenge.seed) : null,
       timer: null,
@@ -1235,6 +1724,10 @@
     spawnStickmanRoom(state, 1);
     drawStickmanShooter(state);
     setStickmanStatus(api, state);
+    if (wantsCoop) {
+      api.multiplayer?.()?.start?.(multiplayerRoom.id).catch(() => {});
+      syncStickmanMultiplayer(api, state, { force: true });
+    }
     state.timer = setInterval(() => updateStickmanShooter(api), 16);
   }
 
@@ -1286,7 +1779,9 @@
     ctx.fillText("按開始後才會計時；即死陷阱、問號補給與短效道具會一起進場", WIDTH / 2, 160);
     ctx.textAlign = "start";
     const mode = MODES[api._stickmanModeIndex || 0] || MODES[0];
-    api.status(`待機 · 模式：${mode.label} · 按開始進入任務。`);
+    const level = currentStickmanLevel(api);
+    const weapon = STICKMAN_WEAPONS[level.weapon] || STICKMAN_WEAPONS.rifle;
+    api.status(`待機 · ${level.label} · 機關：${level.mechanic} · 初始武器：${weapon.label} · 模式：${mode.label}`);
   }
 
   function setStickmanInput(state, name, pressed) {
@@ -1313,9 +1808,12 @@
 
   function updateStickmanActions(api) {
     const mode = MODES[api._stickmanModeIndex || 0] || MODES[0];
+    const level = currentStickmanLevel(api);
     api.setActions(`
       <button class="btn game-mini-btn btn-primary" type="button" data-action="new">開始</button>
+      <button class="btn game-mini-btn" type="button" data-action="coop">合作開始</button>
       <button class="btn game-mini-btn" type="button" data-action="pause">暫停</button>
+      <button class="btn game-mini-btn" type="button" data-action="level">關卡：${level.label}</button>
       <button class="btn game-mini-btn" type="button" data-action="mode">模式：${mode.label}</button>
       <button class="btn game-mini-btn" type="button" data-action="finish">結算</button>
     `);
@@ -1324,6 +1822,7 @@
   window.registerHackmeLocalGameModule("stickman_shooter", {
     mount(api) {
       api._stickmanModeIndex = api._stickmanModeIndex || 0;
+      api._stickmanLevelIndex = api._stickmanLevelIndex || 0;
       api.setTitle("火柴人橫向射擊");
       api.setSwipeMode?.("hold");
       api.root.innerHTML = `<div class="stickman-shooter-shell"><canvas class="stickman-shooter-canvas" width="${WIDTH}" height="${HEIGHT}" aria-label="火柴人橫向射擊"></canvas></div>`;
@@ -1338,6 +1837,7 @@
       `);
       api.onAction = (action) => {
         if (action === "new") startStickmanShooter(api);
+        if (action === "coop") startStickmanShooter(api, { multiplayerMode: "coop" });
         if (action === "pause" && api._stickmanShooterState?.status === "active") {
           api._stickmanShooterState.paused = !api._stickmanShooterState.paused;
           api.status(api._stickmanShooterState.paused ? "暫停中。" : "繼續。");
@@ -1345,6 +1845,12 @@
         if (action === "mode") {
           if (api._stickmanShooterState?.timer) clearInterval(api._stickmanShooterState.timer);
           api._stickmanModeIndex = ((api._stickmanModeIndex || 0) + 1) % MODES.length;
+          updateStickmanActions(api);
+          showStickmanShooterReady(api);
+        }
+        if (action === "level") {
+          if (api._stickmanShooterState?.timer) clearInterval(api._stickmanShooterState.timer);
+          api._stickmanLevelIndex = ((api._stickmanLevelIndex || 0) + 1) % STICKMAN_LEVELS.length;
           updateStickmanActions(api);
           showStickmanShooterReady(api);
         }

@@ -51,6 +51,7 @@ from services.security.upload_security import (
 )
 from services.comfyui.settings import (
     normalize_comfyui_connection_mode,
+    normalize_huggingface_repo_id,
     validate_comfyui_api_host,
     validate_comfyui_api_port,
     validate_comfyui_api_url,
@@ -1340,6 +1341,7 @@ def register_system_admin_routes(app, deps):
         "validate_comfyui_relative_script": validate_comfyui_relative_script,
         "validate_huggingface_api_token": validate_huggingface_api_token,
         "validate_huggingface_repo_id": validate_huggingface_repo_id,
+        "normalize_huggingface_repo_id": normalize_huggingface_repo_id,
         "validate_git_branch_name": validate_git_branch_name,
         "validate_listen_host": validate_listen_host,
         "validate_listen_port": validate_listen_port,

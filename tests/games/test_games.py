@@ -209,6 +209,7 @@ def test_game_catalog_includes_solo_games(tmp_path):
         "real_tetris",
         "space_shooter",
         "fps_arena",
+        "open_world",
         "bullet_hell",
         "stickman_shooter",
         "snake",
@@ -240,9 +241,14 @@ def test_game_catalog_includes_solo_games(tmp_path):
     assert by_key["tetris"]["supports_invites"] is False
     assert by_key["real_tetris"]["title"] == "真實版俄羅斯方塊"
     assert by_key["space_shooter"]["supports_computer"] is False
-    assert by_key["fps_arena"]["supports_invites"] is False
+    assert by_key["fps_arena"]["supports_invites"] is True
+    assert [item["key"] for item in by_key["fps_arena"]["multiplayer_modes"]] == ["coop", "pvp"]
+    assert by_key["open_world"]["title"] == "都市開放世界"
+    assert by_key["open_world"]["supports_computer"] is False
     assert by_key["bullet_hell"]["title"] == "彈幕遊戲"
     assert by_key["stickman_shooter"]["title"] == "火柴人橫向射擊"
+    assert by_key["stickman_shooter"]["supports_invites"] is True
+    assert [item["key"] for item in by_key["stickman_shooter"]["multiplayer_modes"]] == ["coop"]
     assert by_key["snake"]["supports_invites"] is False
     assert by_key["game_2048"]["supports_computer"] is False
     assert by_key["brick_breaker"]["title"] == "打磚塊"
@@ -273,6 +279,68 @@ def test_games_users_and_invites_work_with_legacy_users_table_without_deleted_at
     invite = client.post("/api/games/chess/invites", json={"opponent_username": "bob"})
     assert invite.status_code == 200
     assert invite.get_json()["ok"] is True
+
+
+def test_multiplayer_rooms_invite_accept_and_sync_events(tmp_path):
+    db_path = tmp_path / "games.db"
+    _seed_db(db_path)
+    actor_box = {"actor": {"id": 2, "username": "alice", "role": "user"}}
+    app = _build_app(db_path, actor_box)
+    client = app.test_client()
+
+    created = client.post(
+        "/api/games/stickman_shooter/multiplayer/invites",
+        json={"opponent_username": "bob", "mode": "coop"},
+    )
+    assert created.status_code == 200
+    created_payload = created.get_json()
+    assert created_payload["ok"] is True
+    invite_id = created_payload["invite_id"]
+    room_id = created_payload["room"]["id"]
+    assert created_payload["room"]["mode"] == "coop"
+
+    lobby = client.get("/api/games/stickman_shooter/multiplayer")
+    assert lobby.status_code == 200
+    assert lobby.get_json()["rooms"][0]["id"] == room_id
+
+    actor_box["actor"] = {"id": 3, "username": "bob", "role": "user"}
+    pending = client.get("/api/games/multiplayer/invites/pending")
+    assert pending.status_code == 200
+    pending_payload = pending.get_json()
+    assert pending_payload["invites"][0]["id"] == invite_id
+    assert pending_payload["invites"][0]["room"]["id"] == room_id
+    assert pending_payload["invites"][0]["room"]["room_code"]
+
+    accepted = client.post(f"/api/games/multiplayer/invites/{invite_id}/accept", json={})
+    assert accepted.status_code == 200
+    accepted_payload = accepted.get_json()
+    assert accepted_payload["room"]["guest_user_id"] == 3
+
+    bob_sync = client.post(
+        f"/api/games/multiplayer/rooms/{room_id}/state",
+        json={
+            "state": {"x": 120, "y": 272, "hp": 5, "status": "active"},
+            "events": [
+                {
+                    "type": "friendly_fire",
+                    "target_user_id": 2,
+                    "payload": {"damage": 1, "x": 120, "y": 272},
+                }
+            ],
+        },
+    )
+    assert bob_sync.status_code == 200
+
+    actor_box["actor"] = {"id": 2, "username": "alice", "role": "user"}
+    alice_sync = client.post(
+        f"/api/games/multiplayer/rooms/{room_id}/state",
+        json={"state": {"x": 80, "y": 272, "hp": 5, "status": "active"}, "after_event_id": 0},
+    )
+    assert alice_sync.status_code == 200
+    payload = alice_sync.get_json()
+    assert {row["user_id"] for row in payload["players"]} == {2, 3}
+    assert payload["events"][0]["event_type"] == "friendly_fire"
+    assert payload["events"][0]["target_user_id"] == 2
 
 
 def test_game_schema_migrates_existing_solo_scores_without_guess_count(tmp_path):

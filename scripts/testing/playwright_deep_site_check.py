@@ -1144,6 +1144,9 @@ def check_comfyui_workflow_builder_flow(rec: Recorder, page) -> None:
         "9": {"class_type": "SaveImage", "inputs": {"filename_prefix": "ComfyUI", "images": ["8", 0]}},
     }
     switch_module(page, "comfyui")
+    if page.locator('[data-comfyui-view="workflow"]').count():
+        page.click('[data-comfyui-view="workflow"]')
+        page.wait_for_selector('[data-comfyui-view-panel="workflow"]:not([hidden])', timeout=10000)
     page.fill("#comfyui-workflow-title", f"QA Workflow {utc_stamp()}")
     page.fill("#comfyui-workflow-description", "Playwright 建立的 workflow layout builder 測試。")
     page.select_option("#comfyui-workflow-purpose", "txt2img")
@@ -1270,6 +1273,9 @@ def check_comfyui_editor(rec: Recorder, page, base_url: str) -> None:
     )
     page.evaluate("() => { if (typeof switchModuleTab === 'function') switchModuleTab('comfyui'); }")
     page.wait_for_timeout(500)
+    if page.locator('[data-comfyui-view="workflow"]').count():
+        page.click('[data-comfyui-view="workflow"]')
+        page.wait_for_selector('[data-comfyui-view-panel="workflow"]:not([hidden])', timeout=10000)
     load_btn = page.locator("#comfyui-workflow-load-visual-btn")
     rec.add("comfyui_main_page_visual_button", load_btn.count() == 1 and load_btn.is_visible(), "visual workflow button present")
 

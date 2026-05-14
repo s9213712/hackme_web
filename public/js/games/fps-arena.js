@@ -21,7 +21,9 @@
       return typeof window.isFpsArenaActive === "function" && window.isFpsArenaActive();
     },
     leaderboardPath() {
-      const mode = typeof window.currentFpsArenaMode === "function" ? window.currentFpsArenaMode() : "aim";
+      const mode = typeof window.currentFpsArenaDifficulty === "function"
+        ? window.currentFpsArenaDifficulty()
+        : (typeof window.currentFpsArenaMode === "function" ? window.currentFpsArenaMode() : "aim");
       return `/games/fps_arena/solo-leaderboard?difficulty=${encodeURIComponent(mode)}`;
     },
     dispatch(type, event, runtime) {
@@ -38,8 +40,9 @@
         if (typeof window.handleFpsArenaTouch === "function") window.handleFpsArenaTouch(touchBtn.dataset.gameTouch || "");
         return true;
       }
-      if (type === "change" && event.target?.closest?.("#fps-arena-mode")) {
+      if (type === "change" && event.target?.closest?.("#fps-arena-mode, #fps-arena-level")) {
         if (typeof window.renderFpsArenaBoard === "function") window.renderFpsArenaBoard();
+        if (typeof window.updateFpsArenaStatus === "function") window.updateFpsArenaStatus();
         runtime.loadSelectedGameLeaderboard().catch((err) => runtime.setGameMsg(err.message || "排行榜讀取失敗", false));
         return true;
       }

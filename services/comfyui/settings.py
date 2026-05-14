@@ -74,6 +74,22 @@ def validate_huggingface_repo_id(value, *, allow_blank=False):
     return repo_id
 
 
+def normalize_huggingface_repo_id(value, *, allow_blank=False):
+    raw = str(value or "").strip()
+    if not raw:
+        return "" if allow_blank else None
+    if raw.startswith(("http://", "https://")) or raw.lower().startswith("huggingface.co/"):
+        parsed = urlparse(raw if raw.startswith(("http://", "https://")) else f"https://{raw}")
+        host = (parsed.hostname or "").lower()
+        if host not in {"huggingface.co", "www.huggingface.co"}:
+            return None
+        parts = [part for part in parsed.path.strip("/").split("/") if part]
+        if len(parts) < 2:
+            return None
+        raw = f"{parts[0]}/{parts[1]}"
+    return validate_huggingface_repo_id(raw, allow_blank=allow_blank)
+
+
 def validate_huggingface_api_token(value, *, allow_blank=False):
     token = str(value or "").strip()
     if not token:

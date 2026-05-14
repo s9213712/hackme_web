@@ -538,7 +538,7 @@ function comfyuiTemplateInputKinds(detail) {
 
 function comfyuiTemplateSummaryMarkup(detail) {
   if (!detail) {
-    return '<div class="drive-empty">選好模板後，這裡會顯示需要的輸入與輸出卡片。</div>';
+    return "";
   }
   const mode = comfyuiReadableModeLabel(detail?.default_params?.generation_mode || "txt2img");
   const outputs = Array.isArray(detail?.output_kinds) && detail.output_kinds.length ? detail.output_kinds : ["image"];
@@ -551,10 +551,12 @@ function comfyuiTemplateSummaryMarkup(detail) {
     .concat((detail?.required_loras || []).map((item) => `lora:${item.name || item}`))
     .filter(Boolean);
   return `
+    <details class="comfyui-template-detail-panel">
+      <summary>
     <div class="comfyui-template-summary-head">
       <div class="comfyui-template-summary-title">
         <strong>${sanitize(detail?.title || `Workflow #${detail?.id || ""}`)}</strong>
-        <div class="drive-card-sub">${sanitize(detail?.description || "未填寫模板說明")}</div>
+        <div class="drive-card-sub">${sanitize(mode)} · ${sanitize(outputs.join(", "))}</div>
       </div>
       <div class="comfyui-template-summary-flags">
         <span class="comfyui-workflow-chip">${sanitize(mode)}</span>
@@ -562,6 +564,8 @@ function comfyuiTemplateSummaryMarkup(detail) {
         <span class="comfyui-workflow-chip">${sanitize(detail?.visibility || "private")}</span>
       </div>
     </div>
+      </summary>
+    <div class="drive-card-sub">${sanitize(detail?.description || "未填寫模板說明")}</div>
     <div class="drive-card-sub">這個模板會根據 workflow manifest 只顯示需要的欄位；其餘手動欄位收進下方進階區。</div>
     ${requirementBits.length ? `<div class="drive-card-sub" style="margin-top:.35rem;">依賴：${sanitize(requirementBits.join("、"))}</div>` : ""}
     ${comfyuiWorkflowPaidApiWarningHtml(detail)}
@@ -571,6 +575,7 @@ function comfyuiTemplateSummaryMarkup(detail) {
       ${dependency?.available === false ? '<span class="comfyui-workflow-chip bad">目前依賴不完整</span>' : ""}
     </div>
     ${blockerItems.length ? `<div class="drive-card-sub" style="margin-top:.45rem;color:#ffd2dc;">${sanitize(blockerItems.join("；"))}</div>` : ""}
+    </details>
   `;
 }
 
@@ -738,6 +743,7 @@ function comfyuiTemplateFieldBinding(field, detail, ctx) {
     ctx.loadImageIndex += 1;
     return { kind: "image", assetKey, nodeId: field.node_id };
   }
+  if (field?.category && field.category !== "UNKNOWN") return { kind: "direct", fieldId: field.id };
   return { kind: "readonly" };
 }
 
@@ -748,6 +754,10 @@ function comfyuiTemplateFieldValue(binding, field = {}) {
   }
   if (binding.kind === "image") {
     return comfyuiAssetState(binding.assetKey);
+  }
+  if (binding.kind === "direct") {
+    const el = $(`tmpl-${field.id || ""}`);
+    return el ? String(el.value || "") : String(field?.current_value ?? "");
   }
   return field?.current_value;
 }
@@ -768,7 +778,26 @@ function comfyuiTemplateRuntimeValue(binding, field = {}) {
     const selected = comfyuiSelectedLoraForTemplateNode(binding.nodeId);
     return selected?.[binding.strengthField] ?? field?.current_value ?? 1;
   }
+  if (binding.kind === "direct") {
+    const el = $(`tmpl-${field.id || ""}`);
+    return el ? el.value : field?.current_value;
+  }
   return field?.current_value;
+}
+
+function comfyuiTemplateDirectHint(field = {}) {
+  const category = String(field?.category || "").toUpperCase();
+  const classType = String(field?.class_type || "");
+  const inputName = String(field?.input_name || "");
+  if (category === "MODEL") {
+    if (/clip/i.test(inputName)) return "填 ComfyUI models/clip 或 text_encoders 內實際檔名；缺檔時相容性檢查會提示。";
+    if (/unet/i.test(inputName)) return "填 ComfyUI models/diffusion_models 或 unet 內實際檔名；請對應 Flux、SD3.5、Wan 等模型。";
+    return "填已安裝模型檔名；若本地或遠端 ComfyUI 找不到，送出前會提示缺少依賴。";
+  }
+  if (category === "SAMPLER") return "使用 ComfyUI 節點支援的取樣器或排程器名稱。";
+  if (classType === "WanImageToVideo" && ["width", "height", "length"].includes(inputName)) return "Wan 影片尺寸與幀數會直接影響 VRAM、速度與輸出長度。";
+  if (category === "NUMERIC") return "這是該模型節點的進階數值；不了解時可先保留預設。";
+  return "";
 }
 
 function normalizeComfyuiTemplateRuntimeValue(field, value) {
@@ -885,6 +914,21 @@ function renderComfyuiTemplateField(field, detail, ctx) {
       <div class="${cardClass}">
         <label>${sanitize(field.label || field.input_name || "欄位")}</label>
         <div class="comfyui-template-readonly">這個欄位目前沿用模板預設值：${sanitize(String(field?.current_value ?? ""))}</div>
+      </div>
+    `;
+  }
+  if (binding.kind === "direct") {
+    const value = comfyuiTemplateFieldValue(binding, field);
+    const inputType = field?.input_type === "number" ? "number" : "text";
+    const minAttr = field?.constraints?.min !== undefined ? ` min="${sanitize(String(field.constraints.min))}"` : "";
+    const maxAttr = field?.constraints?.max !== undefined ? ` max="${sanitize(String(field.constraints.max))}"` : "";
+    const stepAttr = field?.constraints?.step !== undefined ? ` step="${sanitize(String(field.constraints.step))}"` : "";
+    const hint = comfyuiTemplateDirectHint(field);
+    return `
+      <div class="${cardClass}">
+        <label for="tmpl-${sanitize(field.id || "")}">${sanitize(field.label || field.input_name || "欄位")}</label>
+        <input id="tmpl-${sanitize(field.id || "")}" type="${sanitize(inputType)}" value="${sanitize(String(value ?? ""))}"${minAttr}${maxAttr}${stepAttr} />
+        ${hint ? `<div class="comfyui-template-direct-hint">${sanitize(hint)}</div>` : ""}
       </div>
     `;
   }
@@ -1048,10 +1092,15 @@ function renderSelectedComfyuiTemplate({ preserveOpenPanels = false } = {}) {
   if (summary) summary.innerHTML = comfyuiTemplateSummaryMarkup(comfyuiSelectedTemplateDetail);
   if (!host) return;
   if (!comfyuiSelectedTemplateDetail?.ui_schema?.panels) {
+    if (summary) summary.hidden = true;
+    host.hidden = true;
     host.innerHTML = "";
     if (legacy) legacy.style.display = "none";
+    if (typeof updateComfyuiDiffusersUi === "function") updateComfyuiDiffusersUi();
     return;
   }
+  if (summary) summary.hidden = false;
+  host.hidden = false;
   const detail = comfyuiSelectedTemplateDetail;
   const ctx = { textFieldIndex: 0, loadImageIndex: 0 };
   const panels = (detail.ui_schema.panels || []).filter((panel) => !["compatibility", "raw"].includes(String(panel?.id || "")));
@@ -1081,6 +1130,7 @@ function renderSelectedComfyuiTemplate({ preserveOpenPanels = false } = {}) {
   }).join("");
   bindRenderedComfyuiTemplateFields(detail);
   if (legacy) legacy.style.display = "";
+  if (typeof updateComfyuiDiffusersUi === "function") updateComfyuiDiffusersUi();
 }
 
 function renderComfyuiWorkflowPresetList(targetId, items, emptyText) {

@@ -5,12 +5,75 @@ const FPS_ARENA_MODES = {
   pve: { label: "PvE Arena", seconds: 90, health: 100 },
   bomb: { label: "Bomb Defuse", seconds: 75, health: 100 },
   bot: { label: "Bot Match", seconds: 90, health: 100 },
+  coop: { label: "Co-op PvE", seconds: 120, health: 100 },
+  pvp: { label: "PvP Duel", seconds: 120, health: 100 },
+  br: { label: "Battle Royale", seconds: 180, health: 100 },
 };
 const FPS_ARENA_WEAPONS = [
+  { key: "pistol", label: "Pistol", mag: 12, reserve: 24, delay: 190, recoil: 0.01, damage: 1, spread: 0.0035 },
   { key: "rifle", label: "Rifle", mag: 30, reserve: 90, delay: 130, recoil: 0.012, damage: 1, spread: 0.002 },
   { key: "smg", label: "SMG", mag: 36, reserve: 144, delay: 82, recoil: 0.008, damage: 1, spread: 0.004 },
   { key: "marksman", label: "DMR", mag: 12, reserve: 48, delay: 260, recoil: 0.022, damage: 2, spread: 0.001 },
+  { key: "shotgun", label: "Shotgun", mag: 8, reserve: 40, delay: 520, recoil: 0.038, damage: 3, spread: 0.018 },
+  { key: "rail", label: "Rail Rifle", mag: 6, reserve: 30, delay: 620, recoil: 0.045, damage: 4, spread: 0.0005 },
 ];
+
+const FPS_ARENA_LEVELS = [
+  {
+    key: "warehouse",
+    label: "第 1 關 貨櫃倉庫",
+    theme: { background: 0x08111f, floor: 0x162033, grid: 0x38bdf8, fog: 0x08111f },
+    weapons: ["rifle", "smg"],
+    roles: ["raider", "assault", "flanker"],
+    spawnInterval: 2700,
+    maxEnemies: 7,
+    enemyHp: 0,
+    enemySpeed: 1,
+    boss: { label: "鎮暴隊長", role: "juggernaut", hp: 9, score: 900, atMs: 36000 },
+  },
+  {
+    key: "reactor",
+    label: "第 2 關 反應爐中庭",
+    theme: { background: 0x071b22, floor: 0x12313a, grid: 0x22d3ee, fog: 0x071b22 },
+    weapons: ["rifle", "smg", "shotgun"],
+    roles: ["assault", "flanker", "marksman", "engineer"],
+    spawnInterval: 2250,
+    maxEnemies: 8,
+    enemyHp: 1,
+    enemySpeed: 1.08,
+    boss: { label: "反應爐工程兵", role: "engineer", hp: 12, score: 1150, atMs: 33000 },
+  },
+  {
+    key: "subway",
+    label: "第 3 關 地鐵月台",
+    theme: { background: 0x111827, floor: 0x1f2937, grid: 0xfacc15, fog: 0x111827 },
+    weapons: ["rifle", "smg", "marksman", "shotgun"],
+    roles: ["flanker", "marksman", "engineer", "raider"],
+    spawnInterval: 2050,
+    maxEnemies: 9,
+    enemyHp: 1,
+    enemySpeed: 1.14,
+    boss: { label: "月台狙擊手", role: "marksman", hp: 14, score: 1300, atMs: 30000 },
+  },
+  {
+    key: "citadel",
+    label: "第 4 關 核心堡壘",
+    theme: { background: 0x170f1f, floor: 0x25173a, grid: 0xc4b5fd, fog: 0x170f1f },
+    weapons: ["rifle", "smg", "marksman", "shotgun", "rail"],
+    roles: ["juggernaut", "engineer", "marksman", "flanker"],
+    spawnInterval: 1750,
+    maxEnemies: 10,
+    enemyHp: 2,
+    enemySpeed: 1.2,
+    boss: { label: "核心指揮官", role: "juggernaut", hp: 18, score: 1800, atMs: 27000 },
+  },
+];
+
+const FPS_ARENA_STANCES = {
+  stand: { label: "站立", eye: 1.65, speed: 6.2, radius: 0.42, breathe: 1 },
+  crouch: { label: "蹲下", eye: 1.18, speed: 3.8, radius: 0.34, breathe: 0.72 },
+  prone: { label: "匍匐", eye: 0.72, speed: 1.65, radius: 0.27, breathe: 0.48 },
+};
 
 let fpsArenaState = null;
 let fpsArenaRaf = null;
@@ -23,6 +86,7 @@ let fpsArenaAudioContext = null;
 const FPS_ARENA_SCOPE_SWAY = 0.0036;
 const FPS_ARENA_BOT_FIRE_RANGE = 18;
 const FPS_ARENA_PLAYER_RADIUS = 0.42;
+const FPS_ARENA_MULTIPLAYER_SYNC_MS = 180;
 const FPS_ARENA_AI_ROLES = {
   raider: {
     enemyColor: 0xf43f5e,
@@ -92,6 +156,40 @@ const FPS_ARENA_AI_ROLES = {
     flankBias: 0.18,
     canShoot: true,
   },
+  engineer: {
+    enemyColor: 0xfde68a,
+    botColor: 0xfacc15,
+    hpBonus: 1,
+    speedScale: 0.92,
+    preferredRange: 10.5,
+    retreatRange: 4.2,
+    fireRange: 16.5,
+    fireDelayMin: 760,
+    fireDelayMax: 1200,
+    projectileSpread: 0.3,
+    distanceSpread: 0.02,
+    damage: 9,
+    coverBias: 0.72,
+    flankBias: 0.28,
+    canShoot: true,
+  },
+  juggernaut: {
+    enemyColor: 0xc4b5fd,
+    botColor: 0xa78bfa,
+    hpBonus: 4,
+    speedScale: 0.78,
+    preferredRange: 5.6,
+    retreatRange: 1.2,
+    fireRange: 13.2,
+    fireDelayMin: 520,
+    fireDelayMax: 880,
+    projectileSpread: 0.38,
+    distanceSpread: 0.018,
+    damage: 11,
+    coverBias: 0.26,
+    flankBias: 0.12,
+    canShoot: true,
+  },
 };
 
 function fpsArenaMode() {
@@ -101,6 +199,33 @@ function fpsArenaMode() {
 
 function fpsArenaModeLabel(mode) {
   return FPS_ARENA_MODES[mode]?.label || "Aim Trainer";
+}
+
+function fpsArenaDifficultyKey() {
+  return `${fpsArenaLevel().key}-${fpsArenaMode()}`;
+}
+
+function fpsArenaLevel() {
+  const selected = $("fps-arena-level")?.value || "warehouse";
+  return FPS_ARENA_LEVELS.find((level) => level.key === selected) || FPS_ARENA_LEVELS[0];
+}
+
+function fpsArenaWeaponByKey(key) {
+  return FPS_ARENA_WEAPONS.find((weapon) => weapon.key === key) || FPS_ARENA_WEAPONS[0];
+}
+
+function fpsArenaStanceMeta(state) {
+  return FPS_ARENA_STANCES[state?.stance] || FPS_ARENA_STANCES.stand;
+}
+
+function fpsArenaDesiredStance(state) {
+  if (state.keys.x || state.keys.X || state.keys.z || state.keys.Z || state.mobileProne) return "prone";
+  if (state.keys.c || state.keys.C || state.keys.Control || state.keys.ctrl || state.mobileCrouch) return "crouch";
+  return "stand";
+}
+
+function fpsArenaPlayerHitRadius(state) {
+  return fpsArenaStanceMeta(state).radius;
 }
 
 function isFpsArenaActive() {
@@ -115,7 +240,9 @@ function fpsArenaScoreLine(state) {
   if (!state) return "選擇模式後開始，最高分列入排行榜。";
   const elapsed = Math.max(0, Date.now() - state.startedAt);
   const remaining = Math.max(0, state.durationMs - elapsed);
-  return `${fpsArenaModeLabel(state.mode)} · 分數 ${Number(state.score || 0).toLocaleString()} · 命中 ${state.hits}/${state.shots} · 生命 ${Math.max(0, Math.ceil(state.health))} · ${fpsArenaFormatTime(remaining)}`;
+  const peer = state.multiplayer?.peer?.username ? ` · 對手/隊友 ${state.multiplayer.peer.username}` : "";
+  const boss = state.bossActive && !state.bossDefeated ? ` · Boss ${state.bossLabel || ""}` : "";
+  return `${state.level?.label || "第 1 關"} · ${fpsArenaModeLabel(state.mode)}${peer}${boss} · 分數 ${Number(state.score || 0).toLocaleString()} · 命中 ${state.hits}/${state.shots} · 生命 ${Math.max(0, Math.ceil(state.health))} · ${fpsArenaFormatTime(remaining)}`;
 }
 
 function updateFpsArenaHud() {
@@ -130,14 +257,20 @@ function updateFpsArenaHud() {
   const remaining = Math.max(0, state.durationMs - elapsed);
   const accuracy = state.shots > 0 ? Math.round((state.hits / state.shots) * 100) : 0;
   hud.innerHTML = [
+    `<span>${sanitize(state.level?.label || "第 1 關")}</span>`,
     `<span>${sanitize(fpsArenaModeLabel(state.mode))}</span>`,
     `<span>分數 ${Number(state.score || 0).toLocaleString()}</span>`,
     `<span>命中率 ${accuracy}%</span>`,
     `<span>生命 ${Math.max(0, Math.ceil(state.health))}</span>`,
+    `<span>防具 ${Math.max(0, Math.round(state.armor || 0))}</span>`,
     `<span>${sanitize(state.weapon?.label || "Rifle")} ${state.ammo}/${state.reserve}${state.reloadingUntil > performance.now() ? " 換彈" : ""}</span>`,
     `<span>體力 ${Math.round(state.stamina ?? 100)}%</span>`,
+    `<span>${sanitize(fpsArenaStanceMeta(state).label)}${state.coverState?.active ? " · 掩體" : ""}</span>`,
     `<span>時間 ${fpsArenaFormatTime(remaining)}</span>`,
+    state.mode === "br" && state.zone ? `<span>安全區 ${state.zone.radius.toFixed(1)}m</span>` : "",
+    state.bossActive && !state.bossDefeated ? `<span>Boss ${sanitize(state.bossLabel || "")}</span>` : "",
     state.mode === "bomb" ? `<span>拆彈 ${Math.min(100, Math.round(state.defuseProgress || 0))}%</span>` : "",
+    state.multiplayer ? `<span>${state.mode === "pvp" ? "PvP" : "Co-op"} ${sanitize(state.multiplayer.peer?.username || "同步中")}</span>` : "",
   ].join("");
 }
 
@@ -145,7 +278,9 @@ function updateFpsArenaStatus(prefix = "") {
   const status = $("fps-arena-status");
   if (!status) return;
   if (!fpsArenaState) {
-    status.textContent = "選擇模式後開始，最高分列入排行榜。";
+    const level = fpsArenaLevel();
+    const weapons = level.weapons.map((key) => fpsArenaWeaponByKey(key).label).join(" / ");
+    status.textContent = `${level.label} · 解鎖武器 ${weapons} · 選擇模式後開始。`;
     return;
   }
   const state = fpsArenaState;
@@ -211,9 +346,10 @@ function fpsArenaAiRoleMeta(role) {
 function fpsArenaPickCombatRole(state, kind, requestedRole = null) {
   if (kind === "target") return "target";
   if (requestedRole && FPS_ARENA_AI_ROLES[requestedRole]) return requestedRole;
+  const levelRoles = Array.isArray(state?.level?.roles) && state.level.roles.length ? state.level.roles : null;
   const sequence = kind === "bot"
     ? ["assault", "marksman", "flanker", "assault", "marksman"]
-    : ["raider", "assault", "flanker", "assault", "raider"];
+    : (levelRoles || ["raider", "assault", "flanker", "assault", "raider"]);
   const index = Number(state.aiSpawnCounter || 0);
   state.aiSpawnCounter = index + 1;
   return sequence[index % sequence.length];
@@ -234,6 +370,13 @@ function fpsArenaRegisterHumanPart(state, root, mesh, part, damage = 1, scoreBon
   return mesh;
 }
 
+function fpsArenaAttachModelPart(root, mesh) {
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  root.add(mesh);
+  return mesh;
+}
+
 function fpsArenaAddTarget(state, kind, options = {}) {
   const aiRole = fpsArenaPickCombatRole(state, kind, options.role);
   const role = fpsArenaAiRoleMeta(aiRole);
@@ -246,14 +389,16 @@ function fpsArenaAddTarget(state, kind, options = {}) {
     : fpsArenaPickSpawnPoint(state);
   root.position.set(spawn.x, options.y ?? 1.05, spawn.z);
   const baseHp = options.hp ?? (kind === "target" ? 1 : 2);
-  const hp = kind === "target" ? baseHp : Math.max(1, baseHp + role.hpBonus);
+  const hp = kind === "target" ? baseHp : Math.max(1, baseHp + role.hpBonus + Number(state.level?.enemyHp || 0));
   root.userData = {
     kind,
     role: aiRole,
+    boss: Boolean(options.boss),
+    bossLabel: options.bossLabel || "",
     hp,
     maxHp: hp,
     score: options.score || (kind === "target" ? 120 : 180),
-    speed: (options.speed ?? 1) * (kind === "target" ? 1 : role.speedScale),
+    speed: (options.speed ?? 1) * (kind === "target" ? 1 : role.speedScale) * Number(state.level?.enemySpeed || 1),
     aiState: kind === "target" ? "target" : "advance",
     aiTarget: null,
     lastKnownPlayer: null,
@@ -270,6 +415,9 @@ function fpsArenaAddTarget(state, kind, options = {}) {
   const torsoMaterial = fpsArenaMaterial(torsoColor, 0.7, 0.04);
   const limbMaterial = fpsArenaMaterial(limbColor, 0.82, 0.02);
   const headMaterial = fpsArenaMaterial(headColor, 0.66, 0.02);
+  const armorMaterial = fpsArenaMaterial(kind === "bot" ? 0x0f172a : kind === "enemy" ? 0x1f2937 : 0x14532d, 0.58, 0.16);
+  const visorMaterial = fpsArenaMaterial(kind === "bot" ? 0x7dd3fc : kind === "enemy" ? 0xfca5a5 : 0xbbf7d0, 0.42, 0.2);
+  const darkMaterial = fpsArenaMaterial(0x020617, 0.74, 0.08);
   fpsArenaRegisterHumanPart(state, root, new THREE.Mesh(new THREE.SphereGeometry(0.24, 20, 14), headMaterial), "head", 2, 80).position.set(0, 0.92, 0);
   fpsArenaRegisterHumanPart(state, root, new THREE.Mesh(new THREE.CapsuleGeometry(0.24, 0.65, 4, 12), torsoMaterial), "torso", 1, 0).position.set(0, 0.24, 0);
   const leftArm = fpsArenaRegisterHumanPart(state, root, new THREE.Mesh(new THREE.CapsuleGeometry(0.075, 0.62, 3, 8), limbMaterial), "arm");
@@ -286,9 +434,216 @@ function fpsArenaAddTarget(state, kind, options = {}) {
   rightLeg.rotation.z = 0.08;
   const shoulder = fpsArenaRegisterHumanPart(state, root, new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.12, 0.18), torsoMaterial), "torso");
   shoulder.position.set(0, 0.55, 0);
+  fpsArenaAttachModelPart(root, new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.2, 0.34), armorMaterial)).position.set(0, 0.43, -0.03);
+  fpsArenaAttachModelPart(root, new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.18, 0.32), armorMaterial)).position.set(0, 0.14, -0.04);
+  fpsArenaAttachModelPart(root, new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.1, 0.2), darkMaterial)).position.set(0, 1.05, -0.02);
+  fpsArenaAttachModelPart(root, new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.07, 0.08), visorMaterial)).position.set(0, 0.96, -0.2);
+  const leftPad = fpsArenaAttachModelPart(root, new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.12, 0.25), armorMaterial));
+  leftPad.position.set(-0.46, 0.56, 0);
+  leftPad.rotation.z = 0.22;
+  const rightPad = fpsArenaAttachModelPart(root, new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.12, 0.25), armorMaterial));
+  rightPad.position.set(0.46, 0.56, 0);
+  rightPad.rotation.z = -0.22;
+  fpsArenaAttachModelPart(root, new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.18, 0.18), armorMaterial)).position.set(-0.33, 0.03, -0.02);
+  fpsArenaAttachModelPart(root, new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.18, 0.18), armorMaterial)).position.set(0.33, 0.03, -0.02);
+  const weaponMesh = fpsArenaAttachModelPart(root, new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.12, 0.72), darkMaterial));
+  weaponMesh.position.set(0.34, 0.23, -0.42);
+  weaponMesh.rotation.x = -0.1;
+  const weaponBarrel = fpsArenaAttachModelPart(root, new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.42), darkMaterial));
+  weaponBarrel.position.set(0.34, 0.25, -0.96);
+  if (options.boss) {
+    fpsArenaAttachModelPart(root, new THREE.Mesh(new THREE.BoxGeometry(0.68, 0.28, 0.38), armorMaterial)).position.set(0, 0.58, -0.05);
+    fpsArenaAttachModelPart(root, new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.36, 0.22), darkMaterial)).position.set(0, 0.22, 0.28);
+  }
+  if (options.scale) root.scale.setScalar(options.scale);
+  if (options.bossLabel) sceneLabelBillboard(state, root, options.bossLabel);
   state.scene.add(root);
   state.targets.push(root);
   return root;
+}
+
+function fpsArenaCreateRemotePlayer(state, peer) {
+  const root = new THREE.Group();
+  root.position.set(Number(peer?.state?.x || 0), 1.05, Number(peer?.state?.z || -2));
+  root.userData = {
+    kind: "remote_player",
+    userId: Number(peer?.user_id || 0),
+    username: peer?.username || "玩家",
+    hp: Number(peer?.state?.health || 100),
+    maxHp: 100,
+    dead: false,
+  };
+  const bodyMaterial = fpsArenaMaterial(0x22c55e, 0.68, 0.04);
+  const limbMaterial = fpsArenaMaterial(0x166534, 0.82, 0.02);
+  const headMaterial = fpsArenaMaterial(0xbbf7d0, 0.62, 0.02);
+  fpsArenaRegisterHumanPart(state, root, new THREE.Mesh(new THREE.SphereGeometry(0.24, 20, 14), headMaterial), "head", 2, 80).position.set(0, 0.92, 0);
+  fpsArenaRegisterHumanPart(state, root, new THREE.Mesh(new THREE.CapsuleGeometry(0.24, 0.65, 4, 12), bodyMaterial), "torso", 1, 0).position.set(0, 0.24, 0);
+  const leftArm = fpsArenaRegisterHumanPart(state, root, new THREE.Mesh(new THREE.CapsuleGeometry(0.075, 0.62, 3, 8), limbMaterial), "arm");
+  leftArm.position.set(-0.35, 0.25, 0);
+  leftArm.rotation.z = 0.22;
+  const rightArm = fpsArenaRegisterHumanPart(state, root, new THREE.Mesh(new THREE.CapsuleGeometry(0.075, 0.62, 3, 8), limbMaterial), "arm");
+  rightArm.position.set(0.35, 0.25, 0);
+  rightArm.rotation.z = -0.22;
+  const leftLeg = fpsArenaRegisterHumanPart(state, root, new THREE.Mesh(new THREE.CapsuleGeometry(0.09, 0.72, 3, 8), limbMaterial), "leg");
+  leftLeg.position.set(-0.14, -0.55, 0);
+  leftLeg.rotation.z = -0.08;
+  const rightLeg = fpsArenaRegisterHumanPart(state, root, new THREE.Mesh(new THREE.CapsuleGeometry(0.09, 0.72, 3, 8), limbMaterial), "leg");
+  rightLeg.position.set(0.14, -0.55, 0);
+  sceneLabelBillboard(state, root, root.userData.username);
+  state.scene.add(root);
+  state.remotePlayer = root;
+  return root;
+}
+
+function sceneLabelBillboard(state, root, label) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 64;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "rgba(15,23,42,.72)";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#bbf7d0";
+  ctx.font = "700 28px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText(String(label || "玩家").slice(0, 12), canvas.width / 2, 42);
+  const texture = new THREE.CanvasTexture(canvas);
+  const material = new THREE.SpriteMaterial({ map: texture, transparent: true });
+  const sprite = new THREE.Sprite(material);
+  sprite.position.set(0, 1.38, 0);
+  sprite.scale.set(1.5, 0.38, 1);
+  root.add(sprite);
+}
+
+function fpsArenaPickupLabel(pickup) {
+  if (pickup.type === "medkit") return "醫藥箱";
+  if (pickup.type === "ammo") return "子彈";
+  if (pickup.type === "armor") return "防具";
+  if (pickup.type === "weapon") return fpsArenaWeaponByKey(pickup.weaponKey).label;
+  return "物資";
+}
+
+function fpsArenaCreatePickup(state, type, x, z, options = {}) {
+  const root = new THREE.Group();
+  root.position.set(x, 0.18, z);
+  root.userData = { kind: "pickup", type, weaponKey: options.weaponKey || "", ammoKey: options.ammoKey || "" };
+  const color = type === "medkit" ? 0xf8fafc : type === "ammo" ? 0xfacc15 : type === "armor" ? 0x60a5fa : 0x94a3b8;
+  const accent = type === "medkit" ? 0xdc2626 : type === "ammo" ? 0x713f12 : type === "armor" ? 0x1e3a8a : 0x111827;
+  const body = fpsArenaAttachModelPart(root, new THREE.Mesh(new THREE.BoxGeometry(type === "weapon" ? 0.88 : 0.46, 0.16, type === "weapon" ? 0.18 : 0.38), fpsArenaMaterial(color, 0.64, 0.08)));
+  body.position.set(0, 0, 0);
+  if (type === "medkit") {
+    fpsArenaAttachModelPart(root, new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.03, 0.08), fpsArenaMaterial(accent, 0.55, 0.04))).position.set(0, 0.1, 0);
+    fpsArenaAttachModelPart(root, new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.03, 0.28), fpsArenaMaterial(accent, 0.55, 0.04))).position.set(0, 0.105, 0);
+  } else if (type === "armor") {
+    fpsArenaAttachModelPart(root, new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.26, 0.08), fpsArenaMaterial(accent, 0.58, 0.16))).position.set(0, 0.12, 0);
+  } else if (type === "weapon") {
+    fpsArenaAttachModelPart(root, new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.07, 0.1), fpsArenaMaterial(accent, 0.72, 0.12))).position.set(0.36, 0.08, 0);
+  }
+  sceneLabelBillboard(state, root, fpsArenaPickupLabel(root.userData));
+  root.children.forEach((child) => {
+    if (child.isSprite) child.position.y = 0.72;
+  });
+  state.scene.add(root);
+  state.pickups.push(root);
+  return root;
+}
+
+function fpsArenaSpawnLoot(state) {
+  const points = [
+    { x: -5.2, z: -6.4 }, { x: 4.8, z: -7.2 }, { x: -7.4, z: -13.8 }, { x: 7.2, z: -15.8 },
+    { x: -4.6, z: -22.4 }, { x: 4.9, z: -24.6 }, { x: -1.2, z: -29.2 }, { x: 7.6, z: -29.5 },
+  ];
+  const guns = (state.level?.weapons || ["rifle", "smg"]).filter((key) => key !== "pistol");
+  points.forEach((point, index) => {
+    if (index % 4 === 0) fpsArenaCreatePickup(state, "medkit", point.x, point.z);
+    else if (index % 4 === 1) fpsArenaCreatePickup(state, "ammo", point.x, point.z, { ammoKey: guns[index % Math.max(1, guns.length)] || "rifle" });
+    else if (index % 4 === 2) fpsArenaCreatePickup(state, "armor", point.x, point.z);
+    else fpsArenaCreatePickup(state, "weapon", point.x, point.z, { weaponKey: guns[index % Math.max(1, guns.length)] || "rifle" });
+  });
+}
+
+function fpsArenaCollectPickup(state, pickup) {
+  const data = pickup.userData || {};
+  const label = fpsArenaPickupLabel(data);
+  if (data.type === "medkit") {
+    state.health = Math.min(100, state.health + 38);
+  } else if (data.type === "armor") {
+    state.armor = Math.min(100, Number(state.armor || 0) + 45);
+  } else if (data.type === "ammo") {
+    const weapon = state.weapon || FPS_ARENA_WEAPONS[0];
+    state.reserve += Math.max(18, Math.round(weapon.mag * 1.5));
+  } else if (data.type === "weapon") {
+    const weapon = fpsArenaWeaponByKey(data.weaponKey || "rifle");
+    if (!state.weaponPool.some((item) => item.key === weapon.key)) state.weaponPool.push(weapon);
+    state.weaponIndex = state.weaponPool.findIndex((item) => item.key === weapon.key);
+    state.weapon = weapon;
+    state.ammo = weapon.mag;
+    state.reserve = Math.max(state.reserve, weapon.reserve);
+  }
+  state.score += 45;
+  window.recordHackmeGameAchievement?.("fps_arena", "loot-first", "戰場搜刮", "拾取地面物資。");
+  updateFpsArenaStatus(`拾取 ${label}。`);
+}
+
+function fpsArenaUpdatePickups(state, now) {
+  for (let i = state.pickups.length - 1; i >= 0; i -= 1) {
+    const pickup = state.pickups[i];
+    pickup.rotation.y += 0.85 * (1 / 60);
+    pickup.position.y = 0.18 + Math.sin(now * 0.003 + i) * 0.035;
+    if (Math.hypot(state.player.x - pickup.position.x, state.player.z - pickup.position.z) > 1.05) continue;
+    fpsArenaCollectPickup(state, pickup);
+    state.scene.remove(pickup);
+    fpsArenaDisposeObject(pickup);
+    state.pickups.splice(i, 1);
+  }
+}
+
+function fpsArenaCreateBattleRoyaleZone(state) {
+  const geometry = new THREE.RingGeometry(0.96, 1, 96);
+  const material = new THREE.MeshBasicMaterial({ color: 0x60a5fa, transparent: true, opacity: 0.36, side: THREE.DoubleSide });
+  const ring = new THREE.Mesh(geometry, material);
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.set(0, 0.045, -15.5);
+  state.scene.add(ring);
+  state.zone = {
+    center: new THREE.Vector3(0, 0, -15.5),
+    radius: 18,
+    startRadius: 18,
+    endRadius: 4.2,
+    shrinkStart: 18000,
+    shrinkEnd: Math.max(60000, state.durationMs - 18000),
+    mesh: ring,
+    lastWarningAt: 0,
+  };
+}
+
+function fpsArenaUpdateBattleRoyaleZone(state, dt) {
+  if (state.mode !== "br" || !state.zone) return;
+  const elapsed = Date.now() - state.startedAt;
+  const progress = Math.max(0, Math.min(1, (elapsed - state.zone.shrinkStart) / Math.max(1, state.zone.shrinkEnd - state.zone.shrinkStart)));
+  const eased = progress * progress * (3 - 2 * progress);
+  state.zone.radius = state.zone.startRadius + (state.zone.endRadius - state.zone.startRadius) * eased;
+  if (state.zone.mesh) state.zone.mesh.scale.setScalar(state.zone.radius);
+  const distance = Math.hypot(state.player.x - state.zone.center.x, state.player.z - state.zone.center.z);
+  if (distance > state.zone.radius) {
+    const damage = (4 + progress * 10) * dt;
+    state.health -= damage;
+    if (elapsed - state.zone.lastWarningAt > 1600) {
+      state.zone.lastWarningAt = elapsed;
+      updateFpsArenaStatus(`毒圈外，正在扣血。安全區半徑 ${state.zone.radius.toFixed(1)}m。`);
+    }
+  }
+}
+
+function fpsArenaUpdateRemotePlayer(state, peer) {
+  if (!state?.multiplayer || !peer?.state) return;
+  const remote = state.remotePlayer || fpsArenaCreateRemotePlayer(state, peer);
+  const p = peer.state || {};
+  remote.userData.userId = Number(peer.user_id || remote.userData.userId || 0);
+  remote.userData.username = peer.username || remote.userData.username || "玩家";
+  remote.userData.hp = Number(p.health ?? remote.userData.hp ?? 100);
+  remote.position.set(Number(p.x || 0), 1.05, Number(p.z || -2));
+  remote.rotation.y = Number(p.yaw || 0);
+  remote.visible = p.status !== "finished" && remote.userData.hp > 0;
 }
 
 function fpsArenaCreateBomb(state) {
@@ -469,11 +824,144 @@ function fpsArenaPlaySound(type) {
   osc.stop(now + settings.duration + 0.02);
 }
 
+function fpsArenaIsMultiplayer(state) {
+  return state?.multiplayer && (state.mode === "coop" || state.mode === "pvp");
+}
+
+function fpsArenaQueueMultiplayerEvent(state, event) {
+  if (!fpsArenaIsMultiplayer(state)) return;
+  state.multiplayer.pendingEvents.push(event);
+}
+
+function fpsArenaMultiplayerStatePayload(state) {
+  return {
+    x: Math.round(state.player.x * 100) / 100,
+    y: Math.round(state.player.y * 100) / 100,
+    z: Math.round(state.player.z * 100) / 100,
+    yaw: Math.round(state.yaw * 1000) / 1000,
+    pitch: Math.round(state.pitch * 1000) / 1000,
+    stance: state.stance || "stand",
+    health: Math.max(0, Math.round(state.health)),
+    score: Math.round(state.score || 0),
+    shots: state.shots,
+    hits: state.hits,
+    mode: state.mode,
+    status: state.status,
+    at: Date.now(),
+  };
+}
+
+function fpsArenaPlayRemoteGunshot(state, payload = {}, senderName = "對手") {
+  const audio = fpsArenaEnsureAudio();
+  const dx = Number(payload.x || 0) - state.player.x;
+  const dz = Number(payload.z || 0) - state.player.z;
+  const distance = Math.max(1, Math.hypot(dx, dz));
+  const pan = Math.max(-1, Math.min(1, dx / 12));
+  if (audio) {
+    const now = audio.currentTime;
+    const gain = audio.createGain();
+    const osc = audio.createOscillator();
+    const panner = audio.createStereoPanner ? audio.createStereoPanner() : null;
+    osc.type = "square";
+    osc.frequency.setValueAtTime(150, now);
+    osc.frequency.exponentialRampToValueAtTime(48, now + 0.09);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(Math.max(0.012, 0.09 / distance), now + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.16);
+    osc.connect(gain);
+    if (panner) {
+      panner.pan.setValueAtTime(pan, now);
+      gain.connect(panner);
+      panner.connect(audio.destination);
+    } else {
+      gain.connect(audio.destination);
+    }
+    osc.start(now);
+    osc.stop(now + 0.18);
+  }
+  const side = Math.abs(dx) < 2 ? "正前/正後" : (dx > 0 ? "右側" : "左側");
+  updateFpsArenaStatus(`聽到 ${senderName} 槍聲：${side}，約 ${Math.round(distance)}m。`);
+}
+
+function applyFpsArenaMultiplayerSnapshot(state, snapshot) {
+  if (!fpsArenaIsMultiplayer(state) || !snapshot?.room) return;
+  const mp = window.hackmeGameMultiplayer;
+  state.multiplayer.room = snapshot.room;
+  const peer = mp?.peerState?.(snapshot, snapshot.room);
+  if (peer) {
+    state.multiplayer.peer = peer;
+    fpsArenaUpdateRemotePlayer(state, peer);
+  }
+  const events = Array.isArray(snapshot.events) ? snapshot.events : [];
+  events.forEach((event) => {
+    const eventId = Number(event.id || 0);
+    if (!eventId || state.multiplayer.processedEvents.has(eventId)) return;
+    state.multiplayer.processedEvents.add(eventId);
+    state.multiplayer.afterEventId = Math.max(state.multiplayer.afterEventId || 0, eventId);
+    if (Number(event.sender_user_id) === Number(currentUserId || 0)) return;
+    if (event.event_type === "gunshot") {
+      fpsArenaPlayRemoteGunshot(state, event.payload || {}, event.sender_username || "對手");
+      return;
+    }
+    const targetId = Number(event.target_user_id || 0);
+    if (targetId && targetId !== Number(currentUserId || 0)) return;
+    if (event.event_type === "player_hit" || event.event_type === "friendly_fire") {
+      const damage = Math.max(1, Math.min(40, Number(event.payload?.damage || 10)));
+      fpsArenaApplyIncomingDamage(
+        state,
+        damage,
+        new THREE.Vector3(Number(event.payload?.x || 0), 1.1, Number(event.payload?.z || -4)),
+        `${event.sender_username || "對手"} 命中你`
+      );
+      if (state.health <= 0) finishFpsArenaGame(state.mode === "pvp" ? "pvp_down" : "health");
+    }
+  });
+  if (state.multiplayer.processedEvents.size > 180) {
+    state.multiplayer.processedEvents = new Set(Array.from(state.multiplayer.processedEvents).slice(-90));
+  }
+}
+
+function syncFpsArenaMultiplayer(state, now, { force = false } = {}) {
+  if (!fpsArenaIsMultiplayer(state) || state.multiplayer.syncing) return;
+  if (!force && now - (state.multiplayer.lastSyncAt || 0) < FPS_ARENA_MULTIPLAYER_SYNC_MS) return;
+  const roomId = state.multiplayer.roomId;
+  if (!roomId || !window.hackmeGameMultiplayer?.syncRoom) return;
+  state.multiplayer.lastSyncAt = now;
+  const events = state.multiplayer.pendingEvents.splice(0, 12);
+  state.multiplayer.syncing = true;
+  window.hackmeGameMultiplayer.syncRoom(roomId, fpsArenaMultiplayerStatePayload(state), events, state.multiplayer.afterEventId || 0)
+    .then((snapshot) => applyFpsArenaMultiplayerSnapshot(state, snapshot))
+    .catch((err) => {
+      state.multiplayer.pendingEvents.unshift(...events);
+      state.multiplayer.lastError = err.message || "同步失敗";
+    })
+    .finally(() => {
+      state.multiplayer.syncing = false;
+    });
+}
+
 function fpsArenaAddShake(state, strength = 1, duration = 130) {
   state.shakeUntil = Math.max(state.shakeUntil || 0, performance.now() + duration);
   state.shakeDuration = Math.max(state.shakeDuration || 0, duration);
   state.shakeStrength = Math.max(state.shakeStrength || 0, strength);
   if (navigator.vibrate && strength >= 1.1) navigator.vibrate(Math.min(45, Math.round(duration / 4)));
+}
+
+function fpsArenaUpdateWeaponView(state, now, stage) {
+  if (!stage) return;
+  const moving = state.keys.w || state.keys.a || state.keys.s || state.keys.d || state.keys.ArrowUp || state.keys.ArrowDown || state.keys.ArrowLeft || state.keys.ArrowRight;
+  const stance = state.stance || "stand";
+  const bobScale = state.running ? 1.6 : moving ? 1 : 0.28;
+  const stanceLift = stance === "prone" ? -18 : stance === "crouch" ? -8 : 0;
+  const recoilLift = Math.min(34, (state.recoilKick || 0) * 430);
+  const t = now * 0.006;
+  stage.dataset.weapon = state.weapon?.key || "rifle";
+  stage.dataset.stance = stance;
+  stage.classList.toggle("is-covered", Boolean(state.coverState?.active));
+  stage.style.setProperty("--fps-weapon-x", `${Math.sin(t) * 4.5 * bobScale}px`);
+  stage.style.setProperty("--fps-weapon-y", `${stanceLift + Math.abs(Math.cos(t * 0.72)) * 5.5 * bobScale - recoilLift}px`);
+  stage.style.setProperty("--fps-weapon-rot", `${Math.sin(t * 0.82) * 1.6 * bobScale - recoilLift * 0.03}deg`);
+  stage.style.setProperty("--fps-weapon-scale", stance === "prone" ? "1.08" : stance === "crouch" ? "1.03" : "1");
 }
 
 function fpsArenaUpdateFeedback(state, now) {
@@ -491,6 +979,8 @@ function fpsArenaUpdateFeedback(state, now) {
     state.shakeStrength = 0;
   }
   if (stage) {
+    state.coverState = fpsArenaCoverProtection(state);
+    fpsArenaUpdateWeaponView(state, now, stage);
     stage.style.setProperty("--fps-shake-x", `${state.shakeVector.x * 4.8}px`);
     stage.style.setProperty("--fps-shake-y", `${state.shakeVector.y * 3.2}px`);
     const remainingDamage = Math.max(0, state.damageFlashUntil - now);
@@ -540,8 +1030,49 @@ function fpsArenaProjectileHitsCover(state, start, end) {
   return raycaster.intersectObjects(state.cover, false).length > 0;
 }
 
+function fpsArenaCoverProtection(state, incoming = null) {
+  if (!state?.player || !state.cover?.length) return { active: false, near: false, hard: false, damageScale: 1 };
+  const stance = state.stance || "stand";
+  let near = false;
+  for (const object of state.cover) {
+    const box = new THREE.Box3().setFromObject(object);
+    const closestX = Math.max(box.min.x, Math.min(state.player.x, box.max.x));
+    const closestZ = Math.max(box.min.z, Math.min(state.player.z, box.max.z));
+    const distance = Math.hypot(state.player.x - closestX, state.player.z - closestZ);
+    if (distance < (stance === "prone" ? 1.45 : 1.05) && box.max.y > 0.48) {
+      near = true;
+      break;
+    }
+  }
+  const hard = incoming ? fpsArenaProjectileHitsCover(state, incoming, fpsArenaPlayerAimPoint(state)) : false;
+  const active = hard || (near && stance !== "stand");
+  let damageScale = 1;
+  if (hard) damageScale = stance === "prone" ? 0.2 : stance === "crouch" ? 0.32 : 0.48;
+  else if (near && stance === "prone") damageScale = 0.45;
+  else if (near && stance === "crouch") damageScale = 0.62;
+  return { active, near, hard, damageScale };
+}
+
+function fpsArenaApplyIncomingDamage(state, amount, source, label = "受到攻擊") {
+  const protection = fpsArenaCoverProtection(state, source);
+  let finalDamage = Math.max(1, Math.round(Number(amount || 0) * protection.damageScale));
+  let armorText = "";
+  if (Number(state.armor || 0) > 0) {
+    const absorbed = Math.min(Number(state.armor || 0), Math.ceil(finalDamage * 0.45));
+    state.armor = Math.max(0, Number(state.armor || 0) - absorbed);
+    finalDamage = Math.max(1, finalDamage - Math.round(absorbed * 0.8));
+    armorText = absorbed > 0 ? "（防具吸收）" : "";
+  }
+  state.health -= finalDamage;
+  if (source) fpsArenaSetDamageCue(state, source);
+  const coverText = protection.active && finalDamage < amount ? "（掩體減傷）" : "";
+  updateFpsArenaStatus(`${label}${coverText}${armorText}，-${Math.round(finalDamage)} HP。`);
+  return finalDamage;
+}
+
 function fpsArenaUpdateBotProjectiles(state, dt, now) {
-  const playerCenter = state.player.clone().add(new THREE.Vector3(0, -0.38, 0));
+  const playerCenter = fpsArenaPlayerAimPoint(state);
+  const hitRadius = fpsArenaPlayerHitRadius(state);
   for (let i = state.botProjectiles.length - 1; i >= 0; i -= 1) {
     const projectile = state.botProjectiles[i];
     const object = projectile.object;
@@ -555,9 +1086,8 @@ function fpsArenaUpdateBotProjectiles(state, dt, now) {
       state.botProjectiles.splice(i, 1);
       continue;
     }
-    if (fpsArenaPointSegmentDistance(playerCenter, projectile.previous, object.position) < 0.42) {
-      state.health -= projectile.damage;
-      fpsArenaSetDamageCue(state, projectile.previous);
+    if (fpsArenaPointSegmentDistance(playerCenter, projectile.previous, object.position) < hitRadius) {
+      fpsArenaApplyIncomingDamage(state, projectile.damage, projectile.previous, "敵人命中你");
       state.scene.remove(object);
       object.geometry?.dispose?.();
       object.material?.dispose?.();
@@ -631,7 +1161,7 @@ function fpsArenaResizeRenderer() {
   state.camera.updateProjectionMatrix();
 }
 
-function fpsArenaBuildCombatMap(scene) {
+function fpsArenaBuildCombatMap(scene, level = FPS_ARENA_LEVELS[0]) {
   const cover = [];
   const trackCover = (mesh, options = {}) => {
     mesh.userData = {
@@ -686,6 +1216,28 @@ function fpsArenaBuildCombatMap(scene) {
   fpsArenaAddBox(scene, -4.8, 0.04, -14, 2.8, 0.04, 2.8, 0x78350f);
   fpsArenaAddBox(scene, 4.8, 0.04, -18, 2.8, 0.04, 2.8, 0x78350f);
 
+  if (level.key === "reactor") {
+    addFloorMark(0, -20, 16, 0.16, 0x22d3ee);
+    addCoverCylinder(-2.8, 1.25, -18.8, 0.7, 2.5, 0x155e75);
+    addCoverCylinder(2.8, 1.25, -18.8, 0.7, 2.5, 0x155e75);
+    addCoverBox(0, 0.5, -23.1, 7.2, 1.0, 0.44, 0x0f766e);
+    addCoverBox(-8.5, 0.7, -15.5, 1.2, 1.4, 4.2, 0x164e63);
+  } else if (level.key === "subway") {
+    addFloorMark(-6.2, -18.5, 0.2, 26, 0xfacc15);
+    addFloorMark(6.2, -18.5, 0.2, 26, 0xfacc15);
+    addCoverBox(0, 0.56, -9.8, 8.2, 1.12, 0.52, 0x374151);
+    addCoverBox(0, 0.56, -20.5, 8.2, 1.12, 0.52, 0x374151);
+    addCoverBox(-8.3, 0.82, -25.2, 2.0, 1.64, 3.8, 0x4b5563);
+    addCoverBox(8.3, 0.82, -12.5, 2.0, 1.64, 3.8, 0x4b5563);
+  } else if (level.key === "citadel") {
+    addFloorMark(0, -18.4, 18, 0.18, 0xc4b5fd);
+    addCoverBox(0, 0.88, -18.4, 2.2, 1.76, 7.2, 0x4c1d95);
+    addCoverBox(-7.8, 1.08, -15.2, 1.5, 2.16, 5.8, 0x312e81);
+    addCoverBox(7.8, 1.08, -22.2, 1.5, 2.16, 5.8, 0x312e81);
+    addCoverCylinder(-3.8, 1.36, -28.8, 0.58, 2.72, 0x6d28d9);
+    addCoverCylinder(3.8, 1.36, -28.8, 0.58, 2.72, 0x6d28d9);
+  }
+
   const coverPoints = [
     { x: -6.9, z: -4.4, peekX: -4.2, peekZ: -5.1 }, { x: 6.9, z: -4.4, peekX: 4.2, peekZ: -5.1 },
     { x: -5.4, z: -10.2, peekX: -4.2, peekZ: -11.8 }, { x: 5.4, z: -11.2, peekX: 4.3, peekZ: -13.0 },
@@ -700,6 +1252,17 @@ function fpsArenaBuildCombatMap(scene) {
     { x: -7.8, z: -22.8 }, { x: 0.0, z: -22.2 }, { x: 7.8, z: -23.4 },
     { x: -7.4, z: -30.2 }, { x: 0.0, z: -31.0 }, { x: 7.4, z: -29.8 },
   ];
+
+  if (level.key === "reactor") {
+    coverPoints.push({ x: 0, z: -23.4, peekX: 0, peekZ: -21.4 }, { x: -8.4, z: -15.2, peekX: -6.7, peekZ: -15.2 });
+    navPoints.push({ x: 0, z: -18.4 }, { x: -6.2, z: -18.0 }, { x: 6.2, z: -18.0 });
+  } else if (level.key === "subway") {
+    coverPoints.push({ x: 0, z: -9.4, peekX: -2.4, peekZ: -10.8 }, { x: 0, z: -20.2, peekX: 2.4, peekZ: -21.6 });
+    navPoints.push({ x: -6.2, z: -12.0 }, { x: 6.2, z: -25.0 });
+  } else if (level.key === "citadel") {
+    coverPoints.push({ x: -7.8, z: -15.2, peekX: -5.8, peekZ: -15.2 }, { x: 7.8, z: -22.2, peekX: 5.8, peekZ: -22.2 }, { x: 0, z: -18.4, peekX: 2.1, peekZ: -17.0 });
+    navPoints.push({ x: -4.2, z: -27.6 }, { x: 4.2, z: -27.6 }, { x: 0, z: -18.4 });
+  }
 
   return {
     cover,
@@ -717,10 +1280,13 @@ function createFpsArenaWorld(mode) {
   const stage = $("fps-arena-stage");
   if (!stage || typeof THREE === "undefined") return null;
   const dailyChallenge = window.hackmeGameDailyChallenge?.("fps_arena") || null;
+  const level = fpsArenaLevel();
+  const weaponPool = (mode === "br" ? ["pistol", ...level.weapons] : level.weapons).map((key) => fpsArenaWeaponByKey(key)).filter(Boolean);
+  const startWeapon = mode === "br" ? fpsArenaWeaponByKey("pistol") : (weaponPool[0] || FPS_ARENA_WEAPONS[0]);
   stage.querySelectorAll("canvas").forEach((canvas) => canvas.remove());
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x08111f);
-  scene.fog = new THREE.Fog(0x08111f, 12, 42);
+  scene.background = new THREE.Color(level.theme?.background || 0x08111f);
+  scene.fog = new THREE.Fog(level.theme?.fog || 0x08111f, 12, 42);
   const camera = new THREE.PerspectiveCamera(72, 16 / 9, 0.1, 100);
   const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance", preserveDrawingBuffer: true });
   renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
@@ -733,19 +1299,20 @@ function createFpsArenaWorld(mode) {
   key.castShadow = true;
   scene.add(key);
 
-  const floor = new THREE.Mesh(new THREE.PlaneGeometry(22, 42), fpsArenaMaterial(0x162033, 0.9, 0.02));
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(22, 42), fpsArenaMaterial(level.theme?.floor || 0x162033, 0.9, 0.02));
   floor.rotation.x = -Math.PI / 2;
   floor.position.z = -13;
   floor.receiveShadow = true;
   scene.add(floor);
-  const grid = new THREE.GridHelper(22, 22, 0x38bdf8, 0x26364f);
+  const grid = new THREE.GridHelper(22, 22, level.theme?.grid || 0x38bdf8, 0x26364f);
   grid.position.z = -13;
   scene.add(grid);
-  const map = fpsArenaBuildCombatMap(scene);
+  const map = fpsArenaBuildCombatMap(scene, level);
 
   const state = {
     status: "active",
     mode,
+    level,
     scene,
     camera,
     renderer,
@@ -756,22 +1323,31 @@ function createFpsArenaWorld(mode) {
     navPoints: map.navPoints,
     spawnPoints: map.spawnPoints,
     aiSpawnCounter: 0,
+    kills: 0,
+    bossActive: false,
+    bossDefeated: false,
+    bossLabel: level.boss?.label || "",
+    bossIntroUntil: 0,
     botTracers: [],
     botMuzzleFlashes: [],
     botProjectiles: [],
     impactEffects: [],
     bloodEffects: [],
     deadBodies: [],
+    pickups: [],
+    remotePlayer: null,
+    multiplayer: null,
     startedAt: Date.now(),
     completedAt: null,
-    durationMs: FPS_ARENA_MODES[mode].seconds * 1000,
+    durationMs: (FPS_ARENA_MODES[mode].seconds + Math.min(30, FPS_ARENA_LEVELS.indexOf(level) * 8)) * 1000,
     penaltySeconds: 0,
     scoreSubmitted: false,
-    difficulty: mode,
-    puzzleId: dailyChallenge?.key || `fps-arena-${mode}`,
+    difficulty: `${level.key}-${mode}`,
+    puzzleId: dailyChallenge?.key || `fps-arena-${level.key}-${mode}`,
     dailyChallenge,
     score: 0,
     health: FPS_ARENA_MODES[mode].health,
+    armor: mode === "br" ? 0 : 25,
     shots: 0,
     hits: 0,
     yaw: 0,
@@ -782,7 +1358,12 @@ function createFpsArenaWorld(mode) {
     velocity: new THREE.Vector3(),
     keys: {},
     stamina: 100,
+    stance: "stand",
+    eyeHeight: 1.65,
+    coverState: { active: false, near: false, hard: false, damageScale: 1 },
     mobileSprint: false,
+    mobileCrouch: false,
+    mobileProne: false,
     running: false,
     lastFrame: performance.now(),
     lastSpawnAt: 0,
@@ -790,9 +1371,10 @@ function createFpsArenaWorld(mode) {
     lastPlayerShotAt: 0,
     lastPlayerShotPosition: null,
     weaponIndex: 0,
-    weapon: FPS_ARENA_WEAPONS[0],
-    ammo: FPS_ARENA_WEAPONS[0].mag,
-    reserve: FPS_ARENA_WEAPONS[0].reserve,
+    weaponPool,
+    weapon: startWeapon,
+    ammo: startWeapon.mag,
+    reserve: startWeapon.reserve,
     reloadingUntil: 0,
     recoilKick: 0,
     damageFlashUntil: 0,
@@ -804,6 +1386,7 @@ function createFpsArenaWorld(mode) {
     shakeVector: new THREE.Vector2(0, 0),
     defuseProgress: 0,
     bomb: null,
+    zone: null,
   };
   fpsArenaState = state;
   fpsArenaResizeRenderer();
@@ -811,13 +1394,19 @@ function createFpsArenaWorld(mode) {
   fpsArenaResizeObserver.observe(stage);
   if (mode === "aim") {
     for (let i = 0; i < 7; i += 1) fpsArenaAddTarget(state, "target");
-  } else if (mode === "pve") {
+  } else if (mode === "pve" || mode === "coop") {
     for (let i = 0; i < 4; i += 1) fpsArenaAddTarget(state, "enemy", { hp: 2, speed: 0.9 + i * 0.08 });
   } else if (mode === "bomb") {
     fpsArenaCreateBomb(state);
     for (let i = 0; i < 3; i += 1) fpsArenaAddTarget(state, "enemy", { hp: 2, speed: 0.85 });
   } else if (mode === "bot") {
     for (let i = 0; i < 5; i += 1) fpsArenaAddTarget(state, "bot", { hp: 2, speed: 1.1, score: 220 });
+  } else if (mode === "pvp") {
+    for (let i = 0; i < 3; i += 1) fpsArenaAddTarget(state, "enemy", { hp: 2, speed: 0.86 + i * 0.08 });
+  } else if (mode === "br") {
+    fpsArenaSpawnLoot(state);
+    fpsArenaCreateBattleRoyaleZone(state);
+    for (let i = 0; i < 7; i += 1) fpsArenaAddTarget(state, "enemy", { hp: 2, speed: 0.9 + i * 0.04, score: 260 });
   }
   return state;
 }
@@ -841,10 +1430,33 @@ function renderFpsArenaBoard() {
 function startFpsArenaGame() {
   disposeFpsArenaScene();
   const mode = fpsArenaMode();
+  const multiplayerMode = mode === "coop" || mode === "pvp";
+  const multiplayerRoom = multiplayerMode ? window.hackmeGameMultiplayer?.activeRoom?.("fps_arena", mode) : null;
+  if (multiplayerMode && !multiplayerRoom) {
+    setGameMsg("請先在多人房間邀請並選擇玩家，再開始 3D 多人模式。", false);
+    updateFpsArenaStatus("多人模式等待房間。");
+    return;
+  }
   const state = createFpsArenaWorld(mode);
   if (!state) {
     setGameMsg("3D 射擊場初始化失敗", false);
     return;
+  }
+  if (multiplayerRoom) {
+    state.multiplayer = {
+      room: multiplayerRoom,
+      roomId: multiplayerRoom.id,
+      mode,
+      peer: null,
+      afterEventId: 0,
+      pendingEvents: [],
+      processedEvents: new Set(),
+      syncing: false,
+      lastSyncAt: 0,
+      lastError: "",
+    };
+    window.hackmeGameMultiplayer?.start?.(multiplayerRoom.id).catch(() => {});
+    syncFpsArenaMultiplayer(state, performance.now(), { force: true });
   }
   updateFpsArenaStatus("任務開始。");
   if (typeof ensureSoloGameTimer === "function") ensureSoloGameTimer();
@@ -858,16 +1470,25 @@ function finishFpsArenaGame(reason = "time") {
   state.completedAt = Date.now();
   if (reason === "defused") state.score += 900 + Math.ceil(state.health * 3);
   if (reason === "time" && state.health > 0) state.score += Math.ceil(state.health);
+  if (fpsArenaIsMultiplayer(state)) {
+    fpsArenaQueueMultiplayerEvent(state, {
+      type: state.health > 0 ? "finish" : "down",
+      payload: { reason, score: Math.round(state.score || 0), health: Math.max(0, Math.round(state.health || 0)) },
+    });
+    syncFpsArenaMultiplayer(state, performance.now(), { force: true });
+  }
   updateFpsArenaStatus();
   updateFpsArenaHud();
-  if (Number(state.score || 0) > 0 && typeof submitSoloGameScore === "function") {
+  if (!fpsArenaIsMultiplayer(state) && Number(state.score || 0) > 0 && typeof submitSoloGameScore === "function") {
     const accuracy = state.shots > 0 ? Math.round((state.hits / state.shots) * 100) : 0;
     if (accuracy >= 45) window.recordHackmeGameAchievement?.("fps_arena", "accuracy", "穩定射手", "命中率達 45%。");
     if (reason === "defused") window.recordHackmeGameAchievement?.("fps_arena", "defuse", "拆彈成功", "完成 Bomb Defuse。");
+    if (state.bossDefeated) window.recordHackmeGameAchievement?.("fps_arena", `clear-${state.level.key}`, `${state.level.label} 完成`, "在關卡中擊敗 Boss 並存活到結束。");
+    if (state.mode === "br" && state.health > 0) window.recordHackmeGameAchievement?.("fps_arena", "br-survivor", "大逃殺倖存者", "在 Battle Royale 模式存活到結束。");
     submitSoloGameScore("fps_arena", state);
   }
   if (typeof stopSoloGameTimerIfIdle === "function") stopSoloGameTimerIfIdle();
-  const label = reason === "defused" ? "拆彈成功" : reason === "health" ? "任務失敗" : "任務結束";
+  const label = reason === "defused" ? "拆彈成功" : reason === "health" ? "任務失敗" : reason === "pvp_down" ? "PvP 戰敗" : "任務結束";
   setGameMsg(`${label}，分數 ${Number(state.score || 0).toLocaleString()}`, reason !== "health");
 }
 
@@ -884,15 +1505,16 @@ function fpsArenaApplyCamera(state) {
 function fpsArenaUpdateBreathing(state, now) {
   const t = now * 0.0017 + state.breathPhase;
   const moving = state.keys.w || state.keys.a || state.keys.s || state.keys.d || state.keys.ArrowUp || state.keys.ArrowDown || state.keys.ArrowLeft || state.keys.ArrowRight;
-  const runScale = state.running ? 2.85 : moving ? 1.8 : 1;
+  const stanceScale = fpsArenaStanceMeta(state).breathe;
+  const runScale = (state.running ? 2.85 : moving ? 1.8 : 1) * stanceScale;
   const intensity = FPS_ARENA_SCOPE_SWAY * runScale;
   state.breathOffset.set(Math.sin(t) * intensity, Math.cos(t * 0.72) * intensity * 0.78);
   const stage = $("fps-arena-stage");
   if (stage) {
-    stage.style.setProperty("--fps-breathe-x", `${Math.sin(t) * (state.running ? 9.2 : moving ? 5.5 : 3.2)}px`);
-    stage.style.setProperty("--fps-breathe-y", `${Math.cos(t * 0.72) * (state.running ? 7.2 : moving ? 4.4 : 2.4)}px`);
-    stage.style.setProperty("--fps-breathe-rot", `${Math.sin(t * 0.48) * (state.running ? 2.8 : moving ? 1.8 : 1.1)}deg`);
-    stage.style.setProperty("--fps-breathe-scale", `${1 + Math.sin(t * 1.16) * (state.running ? 0.06 : moving ? 0.042 : 0.026)}`);
+    stage.style.setProperty("--fps-breathe-x", `${Math.sin(t) * (state.running ? 9.2 : moving ? 5.5 : 3.2) * stanceScale}px`);
+    stage.style.setProperty("--fps-breathe-y", `${Math.cos(t * 0.72) * (state.running ? 7.2 : moving ? 4.4 : 2.4) * stanceScale}px`);
+    stage.style.setProperty("--fps-breathe-rot", `${Math.sin(t * 0.48) * (state.running ? 2.8 : moving ? 1.8 : 1.1) * stanceScale}deg`);
+    stage.style.setProperty("--fps-breathe-scale", `${1 + Math.sin(t * 1.16) * (state.running ? 0.06 : moving ? 0.042 : 0.026) * stanceScale}`);
   }
 }
 
@@ -930,6 +1552,11 @@ function fpsArenaMoveWithCollision(state, delta) {
 }
 
 function fpsArenaMovePlayer(state, dt) {
+  state.stance = fpsArenaDesiredStance(state);
+  const stance = fpsArenaStanceMeta(state);
+  state.eyeHeight = Number(state.eyeHeight || state.player.y || stance.eye);
+  state.eyeHeight += (stance.eye - state.eyeHeight) * Math.min(1, dt * 10);
+  state.player.y = state.eyeHeight;
   const forward = new THREE.Vector3(Math.sin(state.yaw), 0, Math.cos(state.yaw) * -1);
   const right = new THREE.Vector3(Math.cos(state.yaw), 0, Math.sin(state.yaw));
   const move = new THREE.Vector3();
@@ -939,10 +1566,10 @@ function fpsArenaMovePlayer(state, dt) {
   if (state.keys.a || state.keys.ArrowLeft) move.sub(right);
   const moving = move.lengthSq() > 0;
   const sprintKey = state.keys.Shift || state.keys.shift || state.mobileSprint;
-  const running = moving && sprintKey && state.stamina > 4;
+  const running = moving && sprintKey && state.stance === "stand" && state.stamina > 4;
   state.running = running;
   if (moving) {
-    const speed = running ? 9.2 : 6.2;
+    const speed = running ? 9.2 : stance.speed;
     move.normalize().multiplyScalar(speed * dt);
     fpsArenaMoveWithCollision(state, move);
   }
@@ -998,6 +1625,15 @@ function shootFpsArena() {
   state.lastShotAt = now;
   state.lastPlayerShotAt = now;
   state.lastPlayerShotPosition = state.player.clone();
+  fpsArenaQueueMultiplayerEvent(state, {
+    type: "gunshot",
+    payload: {
+      x: state.player.x,
+      y: state.player.y,
+      z: state.player.z,
+      yaw: state.yaw,
+    },
+  });
   state.ammo -= 1;
   state.shots += 1;
   fpsArenaAddShake(state, 0.85, 150);
@@ -1005,7 +1641,8 @@ function shootFpsArena() {
   state.pitch = Math.max(-1.25, state.pitch - weapon.recoil);
   state.recoilKick = Math.min(0.08, (state.recoilKick || 0) + weapon.recoil * 0.55);
   const raycaster = new THREE.Raycaster();
-  const spread = weapon.spread + (state.running ? 0.006 : 0) + Math.min(0.01, (state.recoilKick || 0) * 0.12);
+  const stanceSpread = state.stance === "prone" ? -0.0007 : state.stance === "crouch" ? -0.00035 : 0;
+  const spread = Math.max(0.0002, weapon.spread + stanceSpread + (state.running ? 0.006 : 0) + Math.min(0.01, (state.recoilKick || 0) * 0.12));
   raycaster.setFromCamera(new THREE.Vector2((Math.random() - 0.5) * spread, (Math.random() - 0.5) * spread), state.camera);
   const hit = raycaster.intersectObjects([...state.hittables, ...state.cover], false)[0];
   const hitCover = Boolean(hit && state.cover.includes(hit.object));
@@ -1017,6 +1654,27 @@ function shootFpsArena() {
   const mesh = hit.object;
   const target = mesh.userData.root || mesh;
   const data = target.userData || mesh.userData;
+  if (data.kind === "remote_player" || mesh.userData.kind === "remote_player") {
+    const peerId = state.multiplayer?.peer?.user_id || data.userId || mesh.userData.userId;
+    const damage = (mesh.userData.damage || 1) * (weapon.damage || 1) * (mesh.userData.part === "head" ? 18 : 11);
+    state.hits += 1;
+    state.score += state.mode === "pvp" ? 160 + Number(mesh.userData.scoreBonus || 0) : 20;
+    fpsArenaPlaySound("hit");
+    fpsArenaAddBloodSplatter(state, hit.point, 10);
+    fpsArenaQueueMultiplayerEvent(state, {
+      type: state.mode === "coop" ? "friendly_fire" : "player_hit",
+      target_user_id: peerId,
+      payload: {
+        damage,
+        x: state.player.x,
+        y: state.player.y,
+        z: state.player.z,
+        part: mesh.userData.part || "",
+      },
+    });
+    updateFpsArenaStatus(state.mode === "coop" ? "誤傷隊友。" : "命中對手。");
+    return;
+  }
   if (data.kind === "bomb" || mesh.userData.kind === "bomb") {
     fpsArenaPlaySound("defuse");
     attemptFpsArenaDefuse(true);
@@ -1032,6 +1690,13 @@ function shootFpsArena() {
   if (data.hp <= 0) {
     state.score += data.score || 100;
     const kind = data.kind;
+    state.kills = Number(state.kills || 0) + 1;
+    if (data.boss) {
+      state.bossDefeated = true;
+      state.bossActive = false;
+      window.recordHackmeGameAchievement?.("fps_arena", `boss-${state.level.key}`, `${state.level.label} Boss 擊破`, `擊倒 ${data.bossLabel || state.bossLabel || "Boss"}。`);
+      if (state.level.key === "citadel") window.recordHackmeGameAchievement?.("fps_arena", "fps-campaign-clear", "3D 關卡制霸", "擊倒核心堡壘 Boss。");
+    }
     fpsArenaKillTarget(state, target, hit.point);
     if (kind === "target") fpsArenaAddTarget(state, "target");
   }
@@ -1060,8 +1725,9 @@ function reloadFpsArena() {
 function switchFpsArenaWeapon() {
   const state = fpsArenaState;
   if (!state || state.status !== "active") return;
-  state.weaponIndex = (Number(state.weaponIndex || 0) + 1) % FPS_ARENA_WEAPONS.length;
-  state.weapon = FPS_ARENA_WEAPONS[state.weaponIndex];
+  const pool = Array.isArray(state.weaponPool) && state.weaponPool.length ? state.weaponPool : FPS_ARENA_WEAPONS;
+  state.weaponIndex = (Number(state.weaponIndex || 0) + 1) % pool.length;
+  state.weapon = pool[state.weaponIndex];
   state.ammo = state.weapon.mag;
   state.reserve = state.weapon.reserve;
   state.reloadingUntil = 0;
@@ -1263,11 +1929,31 @@ function fpsArenaUpdateTargets(state, dt, now) {
 
 function fpsArenaMaybeSpawn(state, now) {
   if (state.mode === "aim") return;
-  const interval = state.mode === "bot" ? 4200 : state.mode === "bomb" ? 5200 : 2600;
+  const level = state.level || FPS_ARENA_LEVELS[0];
+  const bossAt = Number(level.boss?.atMs || 36000);
+  if (state.mode !== "pvp" && !state.bossActive && !state.bossDefeated && Date.now() - state.startedAt > bossAt) {
+    const boss = level.boss || FPS_ARENA_LEVELS[0].boss;
+    state.bossActive = true;
+    state.bossIntroUntil = now + 2600;
+    state.bossLabel = boss.label;
+    fpsArenaAddTarget(state, "enemy", {
+      role: boss.role,
+      hp: boss.hp,
+      score: boss.score,
+      speed: 0.82,
+      boss: true,
+      bossLabel: boss.label,
+      scale: 1.38,
+    });
+    updateFpsArenaStatus(`Boss 出現：${boss.label}`);
+    window.recordHackmeGameAchievement?.("fps_arena", `boss-encounter-${level.key}`, `${level.label} Boss 橋段`, `遭遇 ${boss.label}。`);
+    return;
+  }
+  const interval = state.mode === "bot" ? 4200 : state.mode === "bomb" ? 5200 : Number(level.spawnInterval || 2600);
   if (now - state.lastSpawnAt < interval) return;
   state.lastSpawnAt = now;
   const count = state.targets.filter((mesh) => mesh.userData.kind === "enemy" || mesh.userData.kind === "bot").length;
-  const maxCount = state.mode === "bot" ? 6 : state.mode === "bomb" ? 5 : 8;
+  const maxCount = state.mode === "bot" ? 6 : state.mode === "bomb" ? 5 : Number(level.maxEnemies || 8);
   if (count >= maxCount) return;
   fpsArenaAddTarget(state, state.mode === "bot" ? "bot" : "enemy", { hp: state.mode === "bot" ? 2 : 1 + Math.floor(Math.random() * 2) });
 }
@@ -1286,7 +1972,10 @@ function fpsArenaLoop(now) {
     fpsArenaUpdateTargets(state, dt, now);
     fpsArenaUpdateBotProjectiles(state, dt, now);
     fpsArenaUpdateCombatEffects(state, now);
+    fpsArenaUpdatePickups(state, now);
+    fpsArenaUpdateBattleRoyaleZone(state, dt);
     fpsArenaMaybeSpawn(state, now);
+    syncFpsArenaMultiplayer(state, now);
     if (state.keys[" "] || state.keys.Spacebar) shootFpsArena();
     if (state.keys.e || state.keys.E) attemptFpsArenaDefuse();
     if (Date.now() - state.startedAt >= state.durationMs) finishFpsArenaGame("time");
@@ -1300,7 +1989,7 @@ function fpsArenaLoop(now) {
 function handleFpsArenaKey(event, pressed) {
   const state = fpsArenaState;
   if (!state || state.status !== "active") return;
-    if (["w", "a", "s", "d", "W", "A", "S", "D", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " ", "Spacebar", "e", "E", "r", "R", "q", "Q", "Shift"].includes(event.key)) {
+    if (["w", "a", "s", "d", "W", "A", "S", "D", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " ", "Spacebar", "e", "E", "r", "R", "q", "Q", "c", "C", "x", "X", "z", "Z", "Control", "Shift"].includes(event.key)) {
       event.preventDefault();
       state.keys[event.key.length === 1 ? event.key.toLowerCase() : event.key] = pressed;
     }
@@ -1316,10 +2005,33 @@ function handleFpsArenaTouch(action) {
   if (action === "fps-weapon") return switchFpsArenaWeapon();
   if (action === "fps-sprint") {
     state.mobileSprint = !state.mobileSprint;
+    if (state.mobileSprint) {
+      state.mobileCrouch = false;
+      state.mobileProne = false;
+    }
     updateFpsArenaStatus(state.mobileSprint ? "衝刺啟動。" : "衝刺關閉。");
     return;
   }
-  const impulse = 0.82;
+  if (action === "fps-crouch") {
+    state.mobileCrouch = !state.mobileCrouch;
+    if (state.mobileCrouch) {
+      state.mobileProne = false;
+      state.mobileSprint = false;
+    }
+    updateFpsArenaStatus(state.mobileCrouch ? "蹲下，適合利用低掩體。" : "恢復站立。");
+    return;
+  }
+  if (action === "fps-prone") {
+    state.mobileProne = !state.mobileProne;
+    if (state.mobileProne) {
+      state.mobileCrouch = false;
+      state.mobileSprint = false;
+    }
+    updateFpsArenaStatus(state.mobileProne ? "匍匐前進，受彈面積最低。" : "恢復站立。");
+    return;
+  }
+  state.stance = fpsArenaDesiredStance(state);
+  const impulse = state.stance === "prone" ? 0.28 : state.stance === "crouch" ? 0.52 : 0.82;
   const forward = new THREE.Vector3(Math.sin(state.yaw), 0, Math.cos(state.yaw) * -1);
   const right = new THREE.Vector3(Math.cos(state.yaw), 0, Math.sin(state.yaw));
   if (action === "fps-forward") fpsArenaMoveWithCollision(state, forward.multiplyScalar(impulse));
@@ -1407,6 +2119,7 @@ document.addEventListener("pointercancel", handleFpsArenaTouchPointerEnd);
 
 window.addEventListener("resize", fpsArenaResizeRenderer);
 window.currentFpsArenaMode = fpsArenaMode;
+window.currentFpsArenaDifficulty = fpsArenaDifficultyKey;
 window.isFpsArenaActive = isFpsArenaActive;
 window.renderFpsArenaBoard = renderFpsArenaBoard;
 window.updateFpsArenaStatus = updateFpsArenaStatus;

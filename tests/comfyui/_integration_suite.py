@@ -2095,6 +2095,42 @@ def test_comfyui_diffusers_mode_lists_repo_and_generates_without_comfyui_nodes(t
     assert FakeDiffusersBackendClient.last_params["model"] == "dhead/waiIllustriousSDXL_v150"
 
 
+def test_comfyui_diffusers_mode_allows_generation_page_repo_override(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(
+        db_path,
+        storage_root,
+        settings={
+            "comfyui_connection_mode": "diffusers",
+            "comfyui_diffusers_model_repo": "dhead/waiIllustriousSDXL_v150",
+        },
+        extra_deps={
+            "comfyui_client": None,
+            "comfyui_client_factory": lambda url: FakeDiffusersBackendClient(),
+        },
+    ).test_client()
+
+    generated = client.post(
+        "/api/comfyui/generate",
+        json={
+            "generation_mode": "txt2img",
+            "diffusers_model_repo": "https://huggingface.co/hf-internal-testing/tiny-sdxl-pipe/tree/main",
+            "prompt": "illustration",
+            "sampler_name": "diffusers-auto",
+            "scheduler": "default",
+            "confirm_billing": True,
+        },
+    )
+
+    assert generated.status_code == 200, generated.get_json()
+    assert generated.get_json()["ok"] is True
+    assert FakeDiffusersBackendClient.last_params["model"] == "hf-internal-testing/tiny-sdxl-pipe"
+    assert FakeDiffusersBackendClient.last_params["diffusers_model_repo"] == "hf-internal-testing/tiny-sdxl-pipe"
+
+
 def test_comfyui_diffusers_mode_rejects_comfyui_controlnet_shortcut(tmp_path):
     db_path = tmp_path / "comfyui.db"
     storage_root = tmp_path / "storage"
@@ -4092,7 +4128,7 @@ def test_comfyui_frontend_is_wired():
     assert 'const show = currentUser === "root";' in comfyui_js
     assert '目前是雲端 / 遠端模式，所以這個區塊只保留說明。若要管理本站的本地 ComfyUI 模型，請先把 backend 切回本地模式。' in comfyui_js
     assert "/js/36-comfyui.js?v=20260509-comfyui-template-embeddings" in index_html
-    assert "/styles.css?v=20260513-ui-polish" in index_html
+    assert "/styles.css?v=20260514-open-world" in index_html
     assert "width: min(420px, 100%);" in css
     assert "max-height: 320px;" in css
     assert ".comfyui-root-details" in css

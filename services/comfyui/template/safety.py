@@ -16,6 +16,7 @@ from typing import Any
 from services.comfyui.template.allowlist import (
     CONTROLNET_PREPROCESSOR_ALLOWLIST,
     CORE_ALLOWLIST,
+    MEDIA_WORKFLOW_ALLOWLIST,
 )
 from services.comfyui.template.analyzer import WorkflowAnalysis
 
@@ -31,11 +32,16 @@ class SafetyError(ValueError):
 
 def enforce_allowlist(analysis: WorkflowAnalysis) -> None:
     """Reject the workflow if any class is outside the v1 allowlist."""
-    not_allowed = analysis.class_types - CORE_ALLOWLIST - CONTROLNET_PREPROCESSOR_ALLOWLIST
+    not_allowed = (
+        analysis.class_types
+        - CORE_ALLOWLIST
+        - CONTROLNET_PREPROCESSOR_ALLOWLIST
+        - MEDIA_WORKFLOW_ALLOWLIST
+    )
     if not_allowed:
         raise SafetyError(
             f"workflow 含未授權的節點類型：{sorted(not_allowed)}。"
-            f"第一版只支援 17 種核心節點 + ControlNet 標準 preprocessor。"
+            f"目前只支援核心節點、ControlNet 標準 preprocessor、以及已審核的影音/大型模型工作流節點。"
             f"完整清單見 docs/comfyui/COMFYUI_TEMPLATE_IMPORTER_PLAN.md §4。"
         )
 
@@ -66,17 +72,20 @@ def next_safe_node_id(workflow: dict[str, Any]) -> int:
 # ----------------------------------------------------------------------------
 
 
+_SAVE_OUTPUT_CLASS_TYPES = {"SaveImage", "SaveVideo"}
+
+
 def rewrite_save_image_prefix(
     workflow: dict[str, Any],
     *,
     user_id: int,
     run_id: str,
 ) -> dict[str, Any]:
-    """Force every SaveImage.filename_prefix to a per-(user, run) safe value.
+    """Force output filename prefixes to a per-(user, run) safe value.
 
     Author-supplied prefixes are not trusted — they could include path
     traversal, leak sibling users' filenames, or collide across runs. We
-    rewrite every SaveImage node's filename_prefix to
+    rewrite every SaveImage / SaveVideo node's filename_prefix to
     ``hackme/<user_id>/<run_id>``, which keeps outputs isolated per user
     and per run on the ComfyUI side.
 
@@ -89,7 +98,7 @@ def rewrite_save_image_prefix(
     for node_id, node in new_wf.items():
         if not isinstance(node, dict):
             continue
-        if str(node.get("class_type") or "") != "SaveImage":
+        if str(node.get("class_type") or "") not in _SAVE_OUTPUT_CLASS_TYPES:
             continue
         inputs = node.get("inputs")
         if not isinstance(inputs, dict):

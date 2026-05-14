@@ -121,6 +121,16 @@ def test_ui_schema_drops_save_image_filename_prefix():
     assert "node:9:filename_prefix" not in all_field_ids
 
 
+def test_ui_schema_drops_save_video_filename_prefix():
+    workflow = {
+        **TXT2IMG,
+        "10": {"class_type": "SaveVideo", "inputs": {"filename_prefix": "movie", "images": ["8", 0]}},
+    }
+    schema = build_ui_schema(analysis=analyze_workflow_json(workflow))
+    all_field_ids = {f["id"] for p in schema.panels for f in p.get("fields", [])}
+    assert "node:10:filename_prefix" not in all_field_ids
+
+
 def test_ui_schema_carries_capability_payload_when_provided():
     cap = CapabilityCheck(
         supported=["KSampler"],
@@ -159,6 +169,15 @@ def test_required_user_inputs_excludes_save_image_prefix():
     # All others remain
     assert "node:6:text" in ids
     assert "node:3:seed" in ids
+
+
+def test_required_user_inputs_excludes_save_video_prefix():
+    workflow = {
+        **TXT2IMG,
+        "10": {"class_type": "SaveVideo", "inputs": {"filename_prefix": "movie", "images": ["8", 0]}},
+    }
+    ids = required_user_inputs(analyze_workflow_json(workflow))
+    assert "node:10:filename_prefix" not in ids
 
 
 def test_required_user_inputs_skips_unknown_category_fields():

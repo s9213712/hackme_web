@@ -30,6 +30,7 @@ let comfyuiControlnetTypes = {};
 let comfyuiUpscaleModels = [];
 let comfyuiGenerationModes = [];
 let comfyuiModelFamilies = [];
+let comfyuiDiffusersInspection = null;
 let comfyuiHistoryItems = [];
 let comfyuiWorkflowPresets = [];
 let comfyuiWorkflowCurrentPresetId = null;
@@ -62,6 +63,7 @@ const COMFYUI_QUEUE_MAX_TIMEOUT_SECONDS = 21600;
 const COMFYUI_MAX_LORAS = 8;
 const COMFYUI_LORA_EXTRA_PRICE = 1;
 const COMFYUI_VAE_BUILTIN = "__checkpoint_builtin__";
+const COMFYUI_VIEW_STORAGE_KEY = "hackme_web.comfyui.active_view";
 const COMFYUI_IMAGE_ASSET_KEYS = ["source", "mask", "control"];
 const COMFYUI_CONTROLNET_TIPS = {
   canny: "適合保留邊緣與輪廓，常用於重畫原圖構圖。",
@@ -76,6 +78,9 @@ const COMFYUI_DRAFT_FIELD_IDS = [
   "comfyui-model-download-type",
   "comfyui-model-relative-path",
   "comfyui-generation-mode",
+  "comfyui-diffusers-model-repo",
+  "comfyui-diffusers-model-variant",
+  "comfyui-diffusers-gguf-base-repo",
   "comfyui-model-select",
   "comfyui-vae-select",
   "comfyui-prompt",
@@ -344,6 +349,148 @@ function comfyuiGenerationMode() {
   return String($("comfyui-generation-mode")?.value || "txt2img").trim().toLowerCase() || "txt2img";
 }
 
+function isComfyuiDiffusersMode(mode = comfyuiConnectionMode) {
+  return String(mode || "").trim().toLowerCase() === "diffusers";
+}
+
+function normalizeComfyuiHuggingFaceRepoInput(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const withScheme = raw.startsWith("http://") || raw.startsWith("https://") ? raw : (/^huggingface\.co\//i.test(raw) ? `https://${raw}` : "");
+  if (withScheme) {
+    try {
+      const parsed = new URL(withScheme);
+      const host = String(parsed.hostname || "").toLowerCase();
+      if (host === "huggingface.co" || host === "www.huggingface.co") {
+        const parts = parsed.pathname.split("/").filter(Boolean);
+        if (parts.length >= 2) return `${parts[0]}/${parts[1]}`;
+      }
+    } catch (_err) {}
+  }
+  return raw.replace(/^\/+|\/+$/g, "");
+}
+
+function comfyuiDiffusersVariantLabel(option) {
+  const label = option?.label || option?.precision || "精度版本";
+  const size = Number(option?.size_bytes || 0);
+  const sizeText = size > 0 && typeof formatDriveBytes === "function" ? ` · ${formatDriveBytes(size)}` : "";
+  const fileText = Number(option?.file_count || 0) > 0 ? ` · ${Number(option.file_count)} files` : "";
+  return `${label}${sizeText}${fileText}`;
+}
+
+function comfyuiSelectedDiffusersVariantOption() {
+  const selected = $("comfyui-diffusers-model-variant")?.value || "";
+  const options = Array.isArray(comfyuiDiffusersInspection?.data?.variant_options)
+    ? comfyuiDiffusersInspection.data.variant_options
+    : [];
+  return options.find((option) => String(option?.value || option?.variant || "") === selected) || null;
+}
+
+function updateComfyuiDiffusersGgufOptions() {
+  const panel = $("comfyui-diffusers-gguf-options");
+  const input = $("comfyui-diffusers-gguf-base-repo");
+  const selected = comfyuiSelectedDiffusersVariantOption();
+  const isGguf = selected?.kind === "gguf";
+  if (panel) panel.style.display = isGguf ? "" : "none";
+  if (isGguf && input && !input.value) {
+    input.value = comfyuiDiffusersInspection?.data?.suggested_base_repo || "";
+  }
+}
+
+function renderComfyuiDiffusersInspection() {
+  const status = $("comfyui-diffusers-repo-status");
+  const variantSelect = $("comfyui-diffusers-model-variant");
+  const inspection = comfyuiDiffusersInspection;
+  if (!variantSelect) return;
+  variantSelect.innerHTML = '<option value="">檢查後選擇精度版本</option>';
+  variantSelect.disabled = true;
+  if (!inspection) {
+    updateComfyuiDiffusersGgufOptions();
+    if (status) status.textContent = "貼上 repo 後會先檢查支援模式與可下載精度版本。";
+    return;
+  }
+  if (inspection.loading) {
+    updateComfyuiDiffusersGgufOptions();
+    if (status) status.textContent = "正在檢查 Hugging Face repo metadata...";
+    return;
+  }
+  if (inspection.error) {
+    updateComfyuiDiffusersGgufOptions();
+    if (status) status.textContent = inspection.error;
+    return;
+  }
+  const data = inspection.data || {};
+  const options = Array.isArray(data.variant_options) ? data.variant_options : [];
+  const hasGguf = options.some((option) => option?.kind === "gguf");
+  const warnings = Array.isArray(data.warnings) ? data.warnings.filter(Boolean) : [];
+  const modeText = data.supported_for_mode ? `支援 ${data.requested_mode || comfyuiGenerationMode()}` : `不支援 ${data.requested_mode || comfyuiGenerationMode()}`;
+  if (options.length > 1) {
+    variantSelect.disabled = false;
+    variantSelect.innerHTML = ['<option value="">請選擇精度版本（避免重複下載）</option>']
+      .concat(options.map((option) => `<option value="${sanitize(option.value || option.variant || "")}">${sanitize(comfyuiDiffusersVariantLabel(option))}</option>`))
+      .join("");
+  } else if (options.length === 1) {
+    variantSelect.disabled = false;
+    variantSelect.innerHTML = `<option value="${sanitize(options[0].value || options[0].variant || "__default__")}">${sanitize(comfyuiDiffusersVariantLabel(options[0]))}</option>`;
+    variantSelect.selectedIndex = 0;
+  }
+  updateComfyuiDiffusersGgufOptions();
+  if (status) {
+    const pipeline = data.pipeline_tag ? ` · pipeline=${data.pipeline_tag}` : "";
+    const variantNote = options.length > 1 ? " · 請選擇精度/GGUF 檔案" : "";
+    const ggufNote = hasGguf ? " · GGUF 會只下載所選檔案" : "";
+    status.textContent = `${data.repo_id || inspection.repo || ""}：${modeText}${pipeline}${variantNote}${ggufNote}${warnings.length ? `。${warnings.join(" ")}` : ""}`;
+  }
+}
+
+function clearComfyuiDiffusersInspection() {
+  comfyuiDiffusersInspection = null;
+  renderComfyuiDiffusersInspection();
+}
+
+function comfyuiDiffusersInspectionMatches(repo, mode) {
+  const inspection = comfyuiDiffusersInspection;
+  if (!inspection || inspection.loading || inspection.error || !inspection.data) return false;
+  return inspection.repo === repo && inspection.mode === mode;
+}
+
+async function inspectComfyuiDiffusersRepo({ quiet = false } = {}) {
+  const repo = normalizeComfyuiHuggingFaceRepoInput($("comfyui-diffusers-model-repo")?.value || "");
+  const mode = comfyuiGenerationMode();
+  if (!repo) {
+    clearComfyuiDiffusersInspection();
+    if (!quiet) setComfyuiMessage("請先輸入 Hugging Face repo。", false);
+    return null;
+  }
+  comfyuiDiffusersInspection = { repo, mode, loading: true };
+  renderComfyuiDiffusersInspection();
+  try {
+    await fetchCsrfToken({ force: true });
+    const res = await apiFetch(API + "/comfyui/diffusers/inspect" + comfyuiRequestQuery(), {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRF-Token": getCsrfToken() || ""
+      },
+      body: JSON.stringify({ diffusers_model_repo: repo, generation_mode: mode })
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) throw new Error(json.msg || `Hugging Face repo 檢查失敗（HTTP ${res.status}）`);
+    comfyuiDiffusersInspection = { repo: json.repo_id || repo, mode, data: json };
+    renderComfyuiDiffusersInspection();
+    if (!json.supported_for_mode && !quiet) {
+      setComfyuiMessage(`這個 Hugging Face repo 不支援「${comfyuiReadableModeLabel(mode)}」，尚未開始下載。`, false);
+    }
+    return json;
+  } catch (err) {
+    comfyuiDiffusersInspection = { repo, mode, error: err.message || "Hugging Face repo 檢查失敗，尚未開始下載。" };
+    renderComfyuiDiffusersInspection();
+    if (!quiet) setComfyuiMessage(comfyuiDiffusersInspection.error, false);
+    return null;
+  }
+}
+
 function comfyuiModeUsesSourceImage(mode = comfyuiGenerationMode()) {
   return ["img2img", "inpaint", "outpaint", "upscale", "i2v"].includes(String(mode || "").trim().toLowerCase());
 }
@@ -361,6 +508,7 @@ function comfyuiModeUsesUpscale(mode = comfyuiGenerationMode()) {
 }
 
 function comfyuiModeRequiresWorkflowTemplate(mode = comfyuiGenerationMode()) {
+  if (isComfyuiDiffusersMode()) return false;
   return ["t2v", "i2v", "v2v", "t2s", "t2sv"].includes(String(mode || "").trim().toLowerCase());
 }
 
@@ -412,6 +560,7 @@ function comfyuiReadableModeLabel(mode = comfyuiGenerationMode()) {
 }
 
 function fillComfyuiGenerationModes(values = []) {
+  const previous = $("comfyui-generation-mode")?.value || "";
   comfyuiGenerationModes = Array.isArray(values) && values.length
     ? values
       .filter((item) => item && typeof item === "object" && item.key)
@@ -440,12 +589,23 @@ function fillComfyuiGenerationModes(values = []) {
   select.innerHTML = comfyuiGenerationModes.map((item) => (
     `<option value="${sanitize(item.key)}"${item.available ? "" : ' disabled="disabled"'}>${sanitize(item.label)}${item.workflow_only ? "（workflow）" : ""}</option>`
   )).join("");
+  if (previous) select.value = previous;
+  const selectedOption = select.selectedOptions && select.selectedOptions[0] ? select.selectedOptions[0] : null;
+  if (!select.value || selectedOption?.disabled) {
+    const preferred = comfyuiGenerationModes.find((item) => item.available && item.key === "txt2img")
+      || comfyuiGenerationModes.find((item) => item.available);
+    if (preferred) select.value = preferred.key;
+  }
 }
 
 function renderComfyuiModelFamilyHints(values = []) {
   comfyuiModelFamilies = Array.isArray(values) ? values : [];
   const host = $("comfyui-model-family-hint");
   if (!host) return;
+  if (isComfyuiDiffusersMode()) {
+    host.textContent = "Diffusers 模式使用上方 Hugging Face repo 欄位；可輸入 namespace/model 或模型頁網址。";
+    return;
+  }
   if (!comfyuiModelFamilies.length) {
     host.textContent = "支援一般 Checkpoint；Flux、SD3.5、Wan、Anima、NetaYume 等大模型請用對應 workflow 模板與模型目錄。";
     return;
@@ -456,6 +616,83 @@ function renderComfyuiModelFamilyHints(values = []) {
     const title = matches.length ? ` title="${sanitize(matches.join(", "))}"` : "";
     return `<span class="comfyui-model-family-chip${installed ? " installed" : ""}"${title}>${sanitize(item?.label || item?.key || "model")}${installed ? " · 已偵測" : ""}</span>`;
   }).join("");
+}
+
+function normalizeComfyuiView(view) {
+  const value = String(view || "").trim().toLowerCase();
+  return ["generate", "history", "workflow", "models"].includes(value) ? value : "generate";
+}
+
+function setComfyuiView(view, { persist = true } = {}) {
+  const selected = normalizeComfyuiView(view);
+  const modelTab = document.querySelector('[data-comfyui-view="models"]');
+  const modelsUnavailable = modelTab && modelTab.hidden;
+  const activeView = selected === "models" && modelsUnavailable ? "generate" : selected;
+  document.querySelectorAll("[data-comfyui-view]").forEach((button) => {
+    const isActive = button.dataset.comfyuiView === activeView;
+    button.classList.toggle("active", isActive);
+    button.setAttribute("aria-selected", isActive ? "true" : "false");
+  });
+  document.querySelectorAll("[data-comfyui-view-panel]").forEach((panel) => {
+    const isActive = panel.dataset.comfyuiViewPanel === activeView;
+    panel.hidden = !isActive;
+    panel.classList.toggle("active", isActive);
+  });
+  if (persist) {
+    try { localStorage.setItem(COMFYUI_VIEW_STORAGE_KEY, activeView); } catch (_) {}
+  }
+  if (activeView === "history") loadComfyuiHistory().catch(() => {});
+  if (activeView === "workflow") loadComfyuiWorkflowPresets().catch(() => {});
+}
+
+function bindComfyuiSubnav() {
+  document.querySelectorAll("[data-comfyui-view]").forEach((button) => {
+    if (button.dataset.comfyuiViewBound === "1") return;
+    button.dataset.comfyuiViewBound = "1";
+    button.addEventListener("click", () => setComfyuiView(button.dataset.comfyuiView));
+  });
+  let stored = "";
+  try { stored = localStorage.getItem(COMFYUI_VIEW_STORAGE_KEY) || ""; } catch (_) {}
+  setComfyuiView(stored || "generate", { persist: false });
+}
+
+function updateComfyuiDiffusersUi() {
+  const diffusers = isComfyuiDiffusersMode();
+  const templateSelector = document.querySelector("#module-comfyui .comfyui-template-selector");
+  const importBtn = $("comfyui-template-import-btn");
+  const legacy = $("comfyui-legacy-form-panel");
+  const repoField = $("comfyui-diffusers-repo-field");
+  const repoInput = $("comfyui-diffusers-model-repo");
+  const modelSelect = $("comfyui-model-select");
+  const modelField = modelSelect?.closest(".field");
+  const vaeField = $("comfyui-vae-select")?.closest(".field");
+  const controlPanel = document.querySelector("#module-comfyui .comfyui-controlnet-panel");
+  const loraPanel = document.querySelector("#module-comfyui .comfyui-lora-panel");
+  const loraNote = $("comfyui-lora-price-note");
+  if (templateSelector) templateSelector.style.display = diffusers ? "none" : "";
+  if (importBtn) importBtn.style.display = diffusers ? "none" : "";
+  if (legacy && diffusers) {
+    legacy.style.display = "";
+    legacy.open = true;
+  }
+  if (repoField) repoField.style.display = diffusers ? "" : "none";
+  if (repoInput && diffusers && !repoInput.value && modelSelect?.value) {
+    repoInput.value = modelSelect.value;
+  }
+  if (modelField) modelField.style.display = diffusers ? "none" : "";
+  if (vaeField) vaeField.style.display = diffusers ? "none" : "";
+  if (controlPanel) controlPanel.style.display = diffusers ? "none" : "";
+  if (loraPanel) loraPanel.style.display = diffusers ? "none" : "";
+  if (loraNote) loraNote.style.display = diffusers ? "none" : "";
+  if (diffusers) {
+    const selectedMode = comfyuiGenerationModes.find((item) => item.key === comfyuiGenerationMode());
+    if (selectedMode && selectedMode.available === false) {
+      const firstAvailable = comfyuiGenerationModes.find((item) => item.available);
+      if (firstAvailable && $("comfyui-generation-mode")) $("comfyui-generation-mode").value = firstAvailable.key;
+    }
+    const controlCheckbox = $("comfyui-controlnet-enabled");
+    if (controlCheckbox?.checked) controlCheckbox.checked = false;
+  }
 }
 
 function fillComfyuiControlnetTypes(types = {}) {
@@ -547,6 +784,7 @@ function updateComfyuiModeVisibility() {
   if (controlFields) controlFields.style.display = isComfyuiControlnetEnabled() ? "" : "none";
   if (controlCard) controlCard.style.display = isComfyuiControlnetEnabled() ? "" : "none";
   updateComfyuiControlnetTip();
+  updateComfyuiDiffusersUi();
 }
 
 function comfyuiAssetState(key) {
@@ -1299,11 +1537,16 @@ function updateComfyuiRootPanelVisibility(modeOverride = null) {
   const panel = $("comfyui-root-model-panel");
   const details = $("comfyui-root-model-details");
   const hint = $("comfyui-root-model-mode-hint");
+  const modelsTab = document.querySelector('[data-comfyui-view="models"]');
   const mode = String(modeOverride || comfyuiConnectionMode || "remote").trim().toLowerCase();
   const show = currentUser === "root";
   const localReady = mode === "local";
   updateComfyuiModeNote(mode);
   if (panel) panel.style.display = show ? "" : "none";
+  if (modelsTab) modelsTab.hidden = !show;
+  if (!show && document.querySelector('[data-comfyui-view-panel="models"]')?.classList.contains("active")) {
+    setComfyuiView("generate");
+  }
   if (details && !show) details.open = false;
   if (!panel) return;
   panel.querySelectorAll("input, select, button").forEach((el) => {
@@ -1617,7 +1860,28 @@ function bindComfyuiAdvancedUi() {
   if (modeSelect && modeSelect.dataset.comfyuiBound !== "1") {
     modeSelect.dataset.comfyuiBound = "1";
     modeSelect.addEventListener("change", () => {
+      clearComfyuiDiffusersInspection();
       updateComfyuiModeVisibility();
+      writeComfyuiDraft();
+    });
+  }
+  const diffusersRepoInput = $("comfyui-diffusers-model-repo");
+  if (diffusersRepoInput && diffusersRepoInput.dataset.comfyuiBound !== "1") {
+    diffusersRepoInput.dataset.comfyuiBound = "1";
+    diffusersRepoInput.addEventListener("input", () => clearComfyuiDiffusersInspection());
+    diffusersRepoInput.addEventListener("change", () => inspectComfyuiDiffusersRepo({ quiet: true }));
+    diffusersRepoInput.addEventListener("blur", () => inspectComfyuiDiffusersRepo({ quiet: true }));
+  }
+  const diffusersInspectBtn = $("comfyui-diffusers-inspect-btn");
+  if (diffusersInspectBtn && diffusersInspectBtn.dataset.comfyuiBound !== "1") {
+    diffusersInspectBtn.dataset.comfyuiBound = "1";
+    diffusersInspectBtn.addEventListener("click", () => inspectComfyuiDiffusersRepo({ quiet: false }));
+  }
+  const diffusersVariantSelect = $("comfyui-diffusers-model-variant");
+  if (diffusersVariantSelect && diffusersVariantSelect.dataset.comfyuiBound !== "1") {
+    diffusersVariantSelect.dataset.comfyuiBound = "1";
+    diffusersVariantSelect.addEventListener("change", () => {
+      updateComfyuiDiffusersGgufOptions();
       writeComfyuiDraft();
     });
   }
@@ -1883,6 +2147,7 @@ function bindComfyuiAdvancedUi() {
       });
     }
   });
+  bindComfyuiSubnav();
   updateComfyuiModeVisibility();
   updateComfyuiModelSourceMode();
   Object.keys(COMFYUI_INPUT_ASSET_META).forEach((key) => renderComfyuiInputAsset(key));
@@ -2242,6 +2507,7 @@ async function loadComfyuiModels() {
     restoreComfyuiDraft();
     pruneUnsupportedComfyuiSelectedLoras({ notify: true });
     updateComfyuiModeVisibility();
+    updateComfyuiDiffusersUi();
     applyComfyuiRuntimeLimits(json);
     comfyuiModelsLoaded = true;
     loadComfyuiAlbums({ force: true }).catch(() => {});
@@ -2412,9 +2678,18 @@ function comfyuiNumberValue(id, fallback) {
 function comfyuiPayload() {
   const vae = $("comfyui-vae-select")?.value || COMFYUI_VAE_BUILTIN;
   const mode = comfyuiGenerationMode();
+  const diffusersRepo = normalizeComfyuiHuggingFaceRepoInput($("comfyui-diffusers-model-repo")?.value || "");
+  const diffusersVariant = $("comfyui-diffusers-model-variant")?.value || "";
+  const diffusersGgufFile = diffusersVariant.startsWith("gguf::") ? diffusersVariant.slice("gguf::".length) : "";
+  const diffusersGgufBaseRepo = normalizeComfyuiHuggingFaceRepoInput($("comfyui-diffusers-gguf-base-repo")?.value || "");
+  const diffusersMode = isComfyuiDiffusersMode();
   const payload = {
     generation_mode: mode,
-    model: $("comfyui-model-select")?.value || "",
+    model: diffusersMode && diffusersRepo ? diffusersRepo : ($("comfyui-model-select")?.value || ""),
+    diffusers_model_repo: diffusersMode ? diffusersRepo : "",
+    diffusers_model_variant: diffusersMode && !diffusersGgufFile ? diffusersVariant : "",
+    diffusers_gguf_file: diffusersMode ? diffusersGgufFile : "",
+    diffusers_gguf_base_repo: diffusersMode && diffusersGgufFile ? diffusersGgufBaseRepo : "",
     prompt: $("comfyui-prompt")?.value || "",
     negative_prompt: $("comfyui-negative-prompt")?.value || "",
     width: comfyuiNumberValue("comfyui-width", comfyuiDefaultWidth),
@@ -2426,13 +2701,13 @@ function comfyuiPayload() {
     sampler_name: $("comfyui-sampler")?.value || "euler",
     scheduler: $("comfyui-scheduler")?.value || "normal",
     vae: vae === COMFYUI_VAE_BUILTIN ? "" : vae,
-    loras: comfyuiSelectedLoras.slice(0, COMFYUI_MAX_LORAS),
+    loras: diffusersMode ? [] : comfyuiSelectedLoras.slice(0, COMFYUI_MAX_LORAS),
     denoise_strength: comfyuiNumberValue("comfyui-denoise-strength", 0.65),
     filename_prefix: "hackme_web",
   };
   if (comfyuiInputAssets.source?.imageRef) payload.source_image_ref = comfyuiInputAssets.source.imageRef;
   if (comfyuiInputAssets.mask?.imageRef) payload.mask_image_ref = comfyuiInputAssets.mask.imageRef;
-  if (isComfyuiControlnetEnabled()) {
+  if (!diffusersMode && isComfyuiControlnetEnabled()) {
     payload.controlnet = {
       type: comfyuiSelectedControlnetType(),
       model_name: $("comfyui-controlnet-model")?.value || "",
@@ -2460,6 +2735,29 @@ function comfyuiPayload() {
 
 function comfyuiValidatePayloadForUi(payload) {
   const mode = String(payload?.generation_mode || "").trim().toLowerCase();
+  if (isComfyuiDiffusersMode()) {
+    if (!["txt2img", "img2img", "inpaint"].includes(mode)) {
+      return "Hugging Face Diffusers 模式目前支援文字生圖、圖生圖與局部重繪；影片、語音、放大與 workflow 模板請切回 ComfyUI 後端。";
+    }
+    if (!String(payload?.diffusers_model_repo || payload?.model || "").trim()) {
+      return "請輸入 Hugging Face repo，例如 dhead/waiIllustriousSDXL_v150 或模型頁網址。";
+    }
+    const repo = normalizeComfyuiHuggingFaceRepoInput(payload.diffusers_model_repo || payload.model || "");
+    if (comfyuiDiffusersInspectionMatches(repo, mode)) {
+      const inspection = comfyuiDiffusersInspection?.data || {};
+      if (!inspection.supported_for_mode) {
+        return `這個 Hugging Face repo 不支援「${comfyuiReadableModeLabel(mode)}」，尚未開始下載。`;
+      }
+      const variants = Array.isArray(inspection.variant_options) ? inspection.variant_options : [];
+      if (variants.length > 1 && !String(payload.diffusers_model_variant || payload.diffusers_gguf_file || "").trim()) {
+        return "這個 Hugging Face repo 有多個精度/GGUF 版本，請先選擇要下載/載入的版本。";
+      }
+      const selected = comfyuiSelectedDiffusersVariantOption();
+      if (selected?.kind === "gguf" && !String(payload.diffusers_gguf_base_repo || "").trim()) {
+        return "GGUF 需要 base Diffusers repo，例如 stabilityai/stable-diffusion-xl-base-1.0。";
+      }
+    }
+  }
   if (comfyuiModeRequiresWorkflowTemplate(mode)) {
     return `「${comfyuiReadableModeLabel(mode)}」需要使用 ComfyUI workflow 模板執行；請在 workflow 模板區匯入或選擇支援的大模型工作流。`;
   }
@@ -2495,6 +2793,10 @@ function comfyuiBuildGenerateRequest(payload) {
   };
   appendScalar("generation_mode", payload.generation_mode);
   appendScalar("model", payload.model);
+  appendScalar("diffusers_model_repo", payload.diffusers_model_repo);
+  appendScalar("diffusers_model_variant", payload.diffusers_model_variant);
+  appendScalar("diffusers_gguf_file", payload.diffusers_gguf_file);
+  appendScalar("diffusers_gguf_base_repo", payload.diffusers_gguf_base_repo);
   appendScalar("prompt", payload.prompt);
   appendScalar("negative_prompt", payload.negative_prompt);
   appendScalar("width", payload.width);
@@ -2615,7 +2917,15 @@ async function generateComfyuiImage() {
     resetComfyuiIdleUi();
     return;
   }
-  const payload = comfyuiPayload();
+  let payload = comfyuiPayload();
+  if (isComfyuiDiffusersMode()) {
+    const repo = normalizeComfyuiHuggingFaceRepoInput(payload.diffusers_model_repo || payload.model || "");
+    if (repo && !comfyuiDiffusersInspectionMatches(repo, payload.generation_mode)) {
+      const inspection = await inspectComfyuiDiffusersRepo({ quiet: false });
+      if (!inspection) return;
+      payload = comfyuiPayload();
+    }
+  }
   const validationMessage = comfyuiValidatePayloadForUi(payload);
   if (validationMessage) {
     setComfyuiMessage(validationMessage, false);

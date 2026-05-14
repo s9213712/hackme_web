@@ -19,6 +19,13 @@ from urllib.parse import quote, unquote, urlparse
 
 from services.comfyui.client import ComfyUIError, ComfyUIImage
 from services.comfyui.constants import GENERATION_MODE_DEFINITIONS, detect_model_families
+from services.comfyui.huggingface import (
+    infer_gguf_base_repo,
+    inspect_huggingface_diffusers_repo,
+    normalize_diffusers_variant,
+    normalize_huggingface_repo_file,
+)
+from services.comfyui.settings import normalize_huggingface_repo_id
 
 
 DIFFUSERS_BACKEND_SCHEME = "diffusers"
@@ -42,6 +49,9 @@ def repo_id_from_diffusers_url(value):
 @dataclass(frozen=True)
 class _PipelineCacheKey:
     model_repo: str
+    variant: str
+    gguf_file: str
+    gguf_base_repo: str
     mode: str
     device: str
     dtype: str
@@ -76,7 +86,10 @@ class DiffusersClient:
     def from_settings(cls, settings=None, *, storage_root=".", backend_url=""):
         settings = settings or {}
         repo_from_url = repo_id_from_diffusers_url(backend_url)
-        model_repo = repo_from_url or str(settings.get("comfyui_diffusers_model_repo") or "").strip()
+        model_repo = normalize_huggingface_repo_id(
+            repo_from_url or settings.get("comfyui_diffusers_model_repo"),
+            allow_blank=True,
+        ) or ""
         return cls(
             model_repo=model_repo,
             token=settings.get("comfyui_huggingface_api_token") or "",
@@ -86,9 +99,58 @@ class DiffusersClient:
             base_url=backend_url or diffusers_backend_url(model_repo),
         )
 
-    def _ensure_configured(self):
-        if not self.model_repo:
+    def _effective_model_repo(self, params=None):
+        params = params or {}
+        return normalize_huggingface_repo_id(
+            params.get("diffusers_model_repo")
+            or params.get("huggingface_model_repo")
+            or params.get("hf_model_repo")
+            or params.get("model")
+            or self.model_repo,
+            allow_blank=True,
+        ) or ""
+
+    def _ensure_configured(self, model_repo=None):
+        if not str(model_repo or self.model_repo or "").strip():
             raise ComfyUIError("Diffusers 模式尚未設定 Hugging Face model repo，例如 dhead/waiIllustriousSDXL_v150")
+
+    def _effective_model_variant(self, params=None):
+        params = params or {}
+        raw = str(params.get("diffusers_model_variant") or "").strip()
+        if raw.startswith("gguf::"):
+            return ""
+        variant = normalize_diffusers_variant(raw, allow_blank=True)
+        if variant is None:
+            raise ComfyUIError("Diffusers 模型精度版本名稱不合法")
+        return variant
+
+    def _effective_gguf_file(self, params=None):
+        params = params or {}
+        selected = str(params.get("diffusers_model_variant") or "").strip()
+        raw = params.get("diffusers_gguf_file") or ""
+        if selected.startswith("gguf::"):
+            raw = selected.split("::", 1)[1]
+        gguf_file = normalize_huggingface_repo_file(raw, allow_blank=True)
+        if gguf_file is None or (gguf_file and not gguf_file.lower().endswith(".gguf")):
+            raise ComfyUIError("GGUF 檔案路徑不合法")
+        return gguf_file
+
+    def _effective_gguf_base_repo(self, params=None, *, model_repo=""):
+        params = params or {}
+        base_repo = normalize_huggingface_repo_id(params.get("diffusers_gguf_base_repo"), allow_blank=True)
+        if base_repo is None:
+            raise ComfyUIError("GGUF base Diffusers repo 格式不合法")
+        if base_repo:
+            return base_repo
+        if not model_repo:
+            model_repo = self._effective_model_repo(params)
+        inspection = inspect_huggingface_diffusers_repo(model_repo, token=self.token, mode=params.get("generation_mode") or "txt2img")
+        if inspection.get("suggested_base_repo"):
+            return inspection["suggested_base_repo"]
+        inferred = infer_gguf_base_repo(model_repo)
+        if inferred:
+            return inferred
+        raise ComfyUIError("GGUF 需要設定 base Diffusers repo，例如 stabilityai/stable-diffusion-xl-base-1.0")
 
     def _missing_dependency_names(self):
         required = {
@@ -111,8 +173,16 @@ class DiffusersClient:
                 + "。建議同時安裝 transformers、accelerate、safetensors。"
             )
 
+    def _ensure_gguf_dependencies(self):
+        self._ensure_dependencies()
+        missing = []
+        for module_name, package_name in {"huggingface_hub": "huggingface-hub", "gguf": "gguf"}.items():
+            if importlib.util.find_spec(module_name) is None:
+                missing.append(package_name)
+        if missing:
+            raise ComfyUIError("GGUF 模式需要先安裝 Python 套件：" + ", ".join(missing))
+
     def health_check(self, *, timeout=3):
-        self._ensure_configured()
         self._ensure_dependencies()
         return {
             "ok": True,
@@ -176,6 +246,9 @@ class DiffusersClient:
             "model_repo": self.model_repo,
             "token_configured": bool(self.token),
         }
+
+    def inspect_model_repo(self, repo_value, *, mode="txt2img"):
+        return inspect_huggingface_diffusers_repo(repo_value, token=self.token, mode=mode)
 
     def _dir_for_type(self, file_type):
         normalized = str(file_type or "output").strip().lower()
@@ -306,15 +379,29 @@ class DiffusersClient:
             return AutoPipelineForInpainting
         raise ComfyUIError("Diffusers 後端目前只支援文字生圖、圖生圖與局部重繪")
 
-    def _load_pipeline(self, mode, progress_callback=None):
-        self._ensure_configured()
-        self._ensure_dependencies()
+    def _load_pipeline(self, mode, progress_callback=None, model_repo=None, variant="", gguf_file="", gguf_base_repo=""):
+        model_repo = self._effective_model_repo({"model": model_repo})
+        variant = self._effective_model_variant({"diffusers_model_variant": variant})
+        gguf_file = self._effective_gguf_file({"diffusers_gguf_file": gguf_file})
+        if gguf_file:
+            gguf_base_repo = self._effective_gguf_base_repo(
+                {"diffusers_gguf_base_repo": gguf_base_repo, "generation_mode": mode},
+                model_repo=model_repo,
+            )
+        self._ensure_configured(model_repo)
+        if gguf_file:
+            self._ensure_gguf_dependencies()
+        else:
+            self._ensure_dependencies()
         import torch
 
         device = self._resolve_device(torch)
         dtype = self._resolve_dtype(torch, device)
         cache_key = _PipelineCacheKey(
-            model_repo=self.model_repo,
+            model_repo=model_repo,
+            variant=variant,
+            gguf_file=gguf_file,
+            gguf_base_repo=gguf_base_repo,
             mode=mode,
             device=device,
             dtype=str(dtype),
@@ -324,26 +411,41 @@ class DiffusersClient:
             cached = self._pipeline_cache.get(cache_key)
             if cached is not None:
                 return cached, torch, device
+            if gguf_file:
+                pipe = self._load_gguf_pipeline(
+                    mode,
+                    model_repo=model_repo,
+                    gguf_file=gguf_file,
+                    gguf_base_repo=gguf_base_repo,
+                    dtype=dtype,
+                    device=device,
+                    progress_callback=progress_callback,
+                )
+                self._pipeline_cache[cache_key] = pipe
+                return pipe, torch, device
             if progress_callback:
-                progress_callback({"phase": "loading", "percent": 5, "detail": f"正在載入 Hugging Face 模型 {self.model_repo}"})
+                variant_text = f"（{variant}）" if variant else ""
+                progress_callback({"phase": "loading", "percent": 5, "detail": f"正在載入 Hugging Face 模型 {model_repo}{variant_text}"})
             pipeline_cls = self._pipeline_class(mode)
             kwargs = {
                 "torch_dtype": dtype,
                 "use_safetensors": True,
             }
+            if variant:
+                kwargs["variant"] = variant
             if self.token:
                 kwargs["token"] = self.token
             try:
-                pipe = pipeline_cls.from_pretrained(self.model_repo, **kwargs)
+                pipe = pipeline_cls.from_pretrained(model_repo, **kwargs)
             except TypeError:
                 if self.token:
                     kwargs["use_auth_token"] = kwargs.pop("token")
-                pipe = pipeline_cls.from_pretrained(self.model_repo, **kwargs)
+                pipe = pipeline_cls.from_pretrained(model_repo, **kwargs)
             except Exception:
                 fallback_kwargs = dict(kwargs)
                 fallback_kwargs.pop("use_safetensors", None)
                 try:
-                    pipe = pipeline_cls.from_pretrained(self.model_repo, **fallback_kwargs)
+                    pipe = pipeline_cls.from_pretrained(model_repo, **fallback_kwargs)
                 except Exception as exc:
                     raise ComfyUIError(f"Diffusers 模型載入失敗：{exc}") from exc
             try:
@@ -362,6 +464,65 @@ class DiffusersClient:
                     pass
             self._pipeline_cache[cache_key] = pipe
             return pipe, torch, device
+
+    def _load_gguf_pipeline(self, mode, *, model_repo, gguf_file, gguf_base_repo, dtype, device, progress_callback=None):
+        if mode != "txt2img":
+            raise ComfyUIError("GGUF Diffusers 模式目前只支援文字生圖；圖生圖與局部重繪請改用一般 Diffusers repo 或 ComfyUI workflow。")
+        if progress_callback:
+            progress_callback({"phase": "loading", "percent": 5, "detail": f"正在下載/載入 GGUF 檔案 {gguf_file}"})
+        try:
+            from huggingface_hub import hf_hub_download
+            from diffusers import GGUFQuantizationConfig
+        except Exception as exc:
+            raise ComfyUIError(f"GGUF 依賴載入失敗：{exc}") from exc
+        try:
+            gguf_path = hf_hub_download(repo_id=model_repo, filename=gguf_file, token=(self.token or None))
+        except Exception as exc:
+            raise ComfyUIError(f"GGUF 檔案下載失敗，尚未載入模型：{exc}") from exc
+
+        text = f"{model_repo}/{gguf_file}/{gguf_base_repo}".lower()
+        quantization_config = GGUFQuantizationConfig(compute_dtype=dtype)
+        common_kwargs = {"torch_dtype": dtype}
+        if self.token:
+            common_kwargs["token"] = self.token
+        try:
+            if "flux" in text:
+                from diffusers import FluxPipeline, FluxTransformer2DModel
+
+                transformer = FluxTransformer2DModel.from_single_file(
+                    gguf_path,
+                    quantization_config=quantization_config,
+                    config=gguf_base_repo,
+                    subfolder="transformer",
+                    torch_dtype=dtype,
+                )
+                pipe = FluxPipeline.from_pretrained(gguf_base_repo, transformer=transformer, **common_kwargs)
+            else:
+                from diffusers import StableDiffusionXLPipeline, UNet2DConditionModel
+
+                unet = UNet2DConditionModel.from_single_file(
+                    gguf_path,
+                    quantization_config=quantization_config,
+                    config=gguf_base_repo,
+                    subfolder="unet",
+                    torch_dtype=dtype,
+                )
+                pipe = StableDiffusionXLPipeline.from_pretrained(gguf_base_repo, unet=unet, **common_kwargs)
+        except Exception as exc:
+            raise ComfyUIError(
+                "GGUF 模型載入失敗：Diffusers GGUF 需要可用的 base Diffusers repo 與相容的 GGUF component。"
+                f"目前 base={gguf_base_repo}，檔案={gguf_file}。原始錯誤：{exc}"
+            ) from exc
+        try:
+            pipe.to(device)
+        except Exception as exc:
+            raise ComfyUIError(f"GGUF pipeline 移至裝置 {device} 失敗：{exc}") from exc
+        if hasattr(pipe, "set_progress_bar_config"):
+            try:
+                pipe.set_progress_bar_config(disable=True)
+            except Exception:
+                pass
+        return pipe
 
     def _load_ref_image(self, image_ref, *, mode="RGB", size=None):
         from PIL import Image, ImageOps
@@ -399,7 +560,26 @@ class DiffusersClient:
             raise ComfyUIError("Diffusers 後端目前不支援本站 ComfyUI LoRA 選擇，請改用 ComfyUI 本地/遠端模式")
         if params.get("controlnet"):
             raise ComfyUIError("Diffusers 後端目前不支援本站 ControlNet 快捷模式，請改用 ComfyUI 本地/遠端模式")
-        pipe, torch, device = self._load_pipeline(mode, progress_callback=progress_callback)
+        model_repo = self._effective_model_repo(params)
+        variant = self._effective_model_variant(params)
+        gguf_file = self._effective_gguf_file(params)
+        gguf_base_repo = ""
+        if gguf_file:
+            gguf_base_repo = self._effective_gguf_base_repo(params, model_repo=model_repo)
+            variant = ""
+        params["diffusers_model_repo"] = model_repo
+        params["model"] = model_repo
+        params["diffusers_model_variant"] = variant
+        params["diffusers_gguf_file"] = gguf_file
+        params["diffusers_gguf_base_repo"] = gguf_base_repo
+        pipe, torch, device = self._load_pipeline(
+            mode,
+            progress_callback=progress_callback,
+            model_repo=model_repo,
+            variant=variant,
+            gguf_file=gguf_file,
+            gguf_base_repo=gguf_base_repo,
+        )
         width = max(64, int(params.get("width") or 1024))
         height = max(64, int(params.get("height") or 1024))
         size = (width, height)

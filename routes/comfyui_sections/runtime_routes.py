@@ -216,6 +216,36 @@ def register_comfyui_runtime_routes(app, ctx):
             "paid_api_nodes": _comfyui_paid_api_status_payload(),
         })
 
+    @app.route("/api/comfyui/diffusers/inspect", methods=["POST"])
+    @require_csrf
+    def comfyui_diffusers_inspect():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
+        data = data if isinstance(data, dict) else {}
+        binding = _comfyui_binding(actor)
+        active_client = _client_for_url(binding["url"])
+        if not hasattr(active_client, "inspect_model_repo"):
+            return json_resp({
+                "ok": False,
+                "msg": "目前後端不是 Hugging Face Diffusers 模式，無法檢查 repo。",
+                "connection_mode": binding["connection_mode"],
+            }), 400
+        inspection = active_client.inspect_model_repo(
+            data.get("diffusers_model_repo") or data.get("model") or data.get("repo"),
+            mode=data.get("generation_mode") or "txt2img",
+        )
+        status = 200 if inspection.get("ok") else 400
+        return json_resp({
+            **inspection,
+            "connection_mode": binding["connection_mode"],
+            "backend_scope": binding["backend_scope"],
+        }, status)
+
     @app.route("/api/comfyui/node-catalog", methods=["GET"])
     @require_csrf_safe
     def comfyui_node_catalog():

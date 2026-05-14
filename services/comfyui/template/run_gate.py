@@ -89,7 +89,10 @@ class RunGateResult:
 
 def _is_user_editable(field_obj: InputField) -> bool:
     """Mirror of services/comfyui/template/ui_schema.required_user_inputs filtering."""
-    if (field_obj.class_type, field_obj.input_name) == ("SaveImage", "filename_prefix"):
+    if (field_obj.class_type, field_obj.input_name) in {
+        ("SaveImage", "filename_prefix"),
+        ("SaveVideo", "filename_prefix"),
+    }:
         return False
     if (field_obj.class_type, field_obj.input_name) in PROTECTED_IMAGE_INPUTS:
         # protected image inputs go through remap, not user_inputs

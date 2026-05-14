@@ -104,6 +104,16 @@ def test_rewrite_save_image_prefix_handles_multiple_save_image_nodes():
     assert out["10"]["inputs"]["filename_prefix"] == "hackme/42/run9"
 
 
+def test_rewrite_save_image_prefix_handles_save_video_nodes():
+    workflow = {
+        **TXT2IMG,
+        "10": {"class_type": "SaveVideo", "inputs": {"filename_prefix": "movie", "images": ["8", 0]}},
+    }
+    out = rewrite_save_image_prefix(workflow, user_id=42, run_id="video9")
+    assert out["9"]["inputs"]["filename_prefix"] == "hackme/42/video9"
+    assert out["10"]["inputs"]["filename_prefix"] == "hackme/42/video9"
+
+
 def test_rewrite_save_image_prefix_rejects_empty_run_id():
     with pytest.raises(SafetyError, match="run_id"):
         rewrite_save_image_prefix(TXT2IMG, user_id=1, run_id="")

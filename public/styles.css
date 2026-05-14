@@ -1435,14 +1435,39 @@
       align-items: start;
     }
 
+    .comfyui-subnav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .45rem;
+      margin: .45rem 0 .85rem;
+      align-items: center;
+    }
+
+    .comfyui-subtab {
+      border-color: rgba(255,255,255,.12);
+      background: rgba(255,255,255,.045);
+    }
+
+    .comfyui-subtab.active,
+    .comfyui-subtab[aria-selected="true"] {
+      border-color: color-mix(in srgb, var(--accent) 70%, transparent);
+      background: color-mix(in srgb, var(--accent) 18%, rgba(255,255,255,.055));
+      color: var(--text);
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
+    }
+
+    .comfyui-subview[hidden] {
+      display: none !important;
+    }
+
     .comfyui-panel textarea {
       min-height: 96px;
     }
 
     .comfyui-template-selector {
       display: grid;
-      gap: .85rem;
-      margin: .75rem 0 .9rem;
+      gap: .5rem;
+      margin: .5rem 0 .65rem;
     }
 
     .comfyui-template-summary,
@@ -1452,6 +1477,28 @@
       border-radius: 10px;
       background: rgba(255,255,255,.035);
       padding: .75rem;
+    }
+
+    .comfyui-template-summary[hidden],
+    .comfyui-template-panels[hidden] {
+      display: none !important;
+    }
+
+    .comfyui-template-detail-panel > summary {
+      cursor: pointer;
+      list-style: none;
+    }
+
+    .comfyui-template-detail-panel > summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .comfyui-template-direct-hint {
+      margin-top: .35rem;
+      font-size: .78rem;
+      color: var(--muted);
+      white-space: pre-wrap;
+      word-break: break-word;
     }
 
     .comfyui-template-panels {
@@ -4478,6 +4525,20 @@
       min-width: 0;
     }
 
+    .game-multiplayer-invite-overlay {
+      z-index: 1250;
+    }
+
+    .game-multiplayer-invite-modal {
+      width: min(420px, calc(100vw - 2rem));
+    }
+
+    .game-multiplayer-invite-body {
+      margin: .55rem 0 .35rem;
+      color: var(--text);
+      line-height: 1.55;
+    }
+
     .drive-new-doc-modal {
       width: min(760px, calc(100vw - 2.4rem));
     }
@@ -5633,6 +5694,24 @@
       max-height: none;
       aspect-ratio: auto;
     }
+    .game-multiplayer-panel {
+      margin-top: .85rem;
+      padding: .8rem;
+    }
+    .game-multiplayer-room.active {
+      border-color: color-mix(in srgb, var(--accent) 58%, transparent);
+      background: color-mix(in srgb, var(--accent) 12%, rgba(255,255,255,.04));
+    }
+    .game-multiplayer-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: .25rem;
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 999px;
+      padding: .12rem .45rem;
+      color: var(--muted);
+      font-size: .74rem;
+    }
     .fps-arena-stage {
       position: relative;
       width: min(100%, 760px);
@@ -5654,6 +5733,10 @@
       --fps-damage-angle: 0rad;
       --fps-shake-x: 0px;
       --fps-shake-y: 0px;
+      --fps-weapon-x: 0px;
+      --fps-weapon-y: 0px;
+      --fps-weapon-rot: 0deg;
+      --fps-weapon-scale: 1;
     }
     .fps-arena-stage canvas {
       width: 100% !important;
@@ -5742,6 +5825,109 @@
       mix-blend-mode: screen;
       transition: opacity 80ms linear;
     }
+    .fps-arena-weapon-view {
+      position: absolute;
+      left: 50%;
+      bottom: -4%;
+      z-index: 4;
+      width: clamp(220px, 42vw, 390px);
+      height: clamp(128px, 24vw, 218px);
+      pointer-events: none;
+      transform-origin: 50% 100%;
+      transform:
+        translate(calc(-50% + var(--fps-weapon-x) + var(--fps-shake-x)), calc(var(--fps-weapon-y) + var(--fps-shake-y)))
+        rotate(var(--fps-weapon-rot))
+        scale(var(--fps-weapon-scale));
+      filter: drop-shadow(0 -8px 18px rgba(0,0,0,.5));
+    }
+    .fps-arena-weapon-barrel {
+      position: absolute;
+      left: 50%;
+      bottom: 42%;
+      width: 18%;
+      height: 58%;
+      transform: translateX(-50%) skewX(-4deg);
+      border-radius: 10px 10px 3px 3px;
+      background:
+        linear-gradient(90deg, rgba(255,255,255,.16), transparent 22% 76%, rgba(0,0,0,.28)),
+        linear-gradient(180deg, #475569, #111827 72%);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.12);
+    }
+    .fps-arena-weapon-barrel::before {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: -7%;
+      width: 72%;
+      height: 18%;
+      transform: translateX(-50%);
+      border-radius: 999px;
+      background: radial-gradient(circle, #020617 0 38%, #64748b 42% 100%);
+    }
+    .fps-arena-weapon-body {
+      position: absolute;
+      left: 50%;
+      bottom: 11%;
+      width: 46%;
+      height: 46%;
+      transform: translateX(-50%) skewX(-8deg);
+      border-radius: 8px 8px 24px 18px;
+      background:
+        linear-gradient(90deg, rgba(255,255,255,.13), transparent 34% 70%, rgba(0,0,0,.38)),
+        linear-gradient(180deg, #334155, #111827 78%);
+      box-shadow:
+        inset 0 0 0 1px rgba(255,255,255,.13),
+        inset 0 -18px 30px rgba(0,0,0,.38);
+    }
+    .fps-arena-weapon-body::before {
+      content: "";
+      position: absolute;
+      left: 56%;
+      top: 28%;
+      width: 30%;
+      height: 16%;
+      border-radius: 4px;
+      background: rgba(125, 211, 252, .34);
+      box-shadow: 0 0 12px rgba(56,189,248,.28);
+    }
+    .fps-arena-weapon-hand {
+      position: absolute;
+      bottom: 0;
+      width: 28%;
+      height: 33%;
+      border-radius: 999px 999px 12px 12px;
+      background: linear-gradient(180deg, #334155, #0f172a);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.08);
+    }
+    .fps-arena-weapon-hand-left {
+      left: 17%;
+      transform: rotate(17deg);
+    }
+    .fps-arena-weapon-hand-right {
+      right: 16%;
+      transform: rotate(-13deg);
+    }
+    .fps-arena-stage[data-weapon="shotgun"] .fps-arena-weapon-barrel {
+      width: 25%;
+      background: linear-gradient(180deg, #57534e, #1c1917 78%);
+    }
+    .fps-arena-stage[data-weapon="rail"] .fps-arena-weapon-body::before,
+    .fps-arena-stage[data-weapon="marksman"] .fps-arena-weapon-body::before {
+      background: rgba(196, 181, 253, .42);
+      box-shadow: 0 0 16px rgba(167,139,250,.34);
+    }
+    .fps-arena-stage[data-stance="crouch"] .fps-arena-weapon-view {
+      bottom: -1%;
+    }
+    .fps-arena-stage[data-stance="prone"] .fps-arena-weapon-view {
+      bottom: 3%;
+      width: clamp(250px, 48vw, 430px);
+    }
+    .fps-arena-stage.is-covered {
+      box-shadow:
+        inset 0 0 42px rgba(34,197,94,.16),
+        inset 0 0 0 2px rgba(34,197,94,.18);
+    }
     .fps-arena-hud {
       position: absolute;
       left: .75rem;
@@ -5818,6 +6004,118 @@
       border-radius: 8px;
       background: #07111f;
       box-shadow: inset 0 0 32px rgba(77,125,255,.12);
+    }
+    .open-world-shell {
+      width: 100%;
+      display: grid;
+      place-items: center;
+    }
+    .open-world-stage {
+      position: relative;
+      overflow: hidden;
+      width: min(100%, 880px);
+      aspect-ratio: 16 / 9;
+      min-height: 26rem;
+      border: 1px solid rgba(255,255,255,.14);
+      border-radius: 8px;
+      background: #7db9c8;
+      box-shadow: inset 0 0 36px rgba(15,23,42,.16), 0 18px 38px rgba(0,0,0,.22);
+      touch-action: none;
+    }
+    .open-world-canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+    .open-world-title-card {
+      position: absolute;
+      left: .8rem;
+      top: .8rem;
+      z-index: 3;
+      display: grid;
+      gap: .15rem;
+      max-width: min(22rem, calc(100% - 2rem));
+      padding: .58rem .68rem;
+      border: 1px solid rgba(255,255,255,.18);
+      border-radius: 8px;
+      background: rgba(15,23,42,.72);
+      color: #f8fafc;
+      backdrop-filter: blur(10px);
+      pointer-events: none;
+    }
+    .open-world-title-card strong {
+      font-size: 1rem;
+      line-height: 1.2;
+    }
+    .open-world-title-card span {
+      color: rgba(248,250,252,.78);
+      font-size: .76rem;
+      line-height: 1.35;
+    }
+    .open-world-hud {
+      position: absolute;
+      left: .75rem;
+      right: .75rem;
+      bottom: .75rem;
+      z-index: 3;
+      display: grid;
+      gap: .42rem;
+      max-width: 44rem;
+      padding: .58rem .65rem;
+      border: 1px solid rgba(255,255,255,.18);
+      border-radius: 8px;
+      background: rgba(15,23,42,.76);
+      color: #f8fafc;
+      box-shadow: 0 14px 28px rgba(0,0,0,.24);
+      backdrop-filter: blur(10px);
+      pointer-events: none;
+    }
+    .open-world-hud-row {
+      display: flex;
+      justify-content: space-between;
+      gap: .6rem;
+      align-items: center;
+      min-width: 0;
+      line-height: 1.25;
+    }
+    .open-world-hud-row strong,
+    .open-world-hud-row span {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+    .open-world-hud-sub {
+      color: rgba(248,250,252,.78);
+      font-size: .76rem;
+    }
+    .open-world-hud-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: .35rem;
+    }
+    .open-world-hud-grid span {
+      min-height: 1.45rem;
+      display: grid;
+      place-items: center;
+      padding: .12rem .22rem;
+      border: 1px solid rgba(148,163,184,.24);
+      border-radius: 6px;
+      background: rgba(30,41,59,.58);
+      font-size: .72rem;
+      line-height: 1.15;
+      text-align: center;
+      overflow-wrap: anywhere;
+    }
+    .open-world-minimap {
+      position: absolute;
+      right: .75rem;
+      top: .75rem;
+      z-index: 3;
+      width: 8.4rem;
+      height: 8.4rem;
+      border: 1px solid rgba(255,255,255,.2);
+      border-radius: 8px;
+      background: #102a1d;
+      box-shadow: 0 14px 26px rgba(0,0,0,.24);
     }
     .stickman-shooter-shell {
       display: grid;
@@ -7969,6 +8267,7 @@
       .game-2048-board,
       .board-game-grid,
       .arcade-canvas,
+      .open-world-stage,
       .real-tetris-canvas,
       .stickman-shooter-canvas,
       .xiangqi-board,
@@ -8040,6 +8339,37 @@
         aspect-ratio: 4 / 3;
         min-height: clamp(230px, 54dvh, 420px);
         max-height: 56dvh;
+      }
+
+      .open-world-stage {
+        aspect-ratio: 4 / 3;
+        min-height: clamp(260px, 58dvh, 470px);
+        max-height: 62dvh;
+      }
+
+      .open-world-title-card {
+        max-width: calc(100% - 7.8rem);
+        padding: .48rem .55rem;
+      }
+
+      .open-world-title-card span {
+        display: none;
+      }
+
+      .open-world-minimap {
+        width: 6.6rem;
+        height: 6.6rem;
+      }
+
+      .open-world-hud {
+        left: .45rem;
+        right: .45rem;
+        bottom: .45rem;
+        padding: .46rem;
+      }
+
+      .open-world-hud-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
       }
 
       .game-board-panel:fullscreen .fps-arena-stage {

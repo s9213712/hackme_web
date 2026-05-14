@@ -28,10 +28,10 @@ from services.comfyui.diffusers_client import DiffusersClient, diffusers_backend
 from services.comfyui.settings import (
     DEFAULT_COMFYUI_PORT,
     normalize_comfyui_connection_mode,
+    normalize_huggingface_repo_id,
     validate_comfyui_api_host,
     validate_comfyui_api_port,
     validate_comfyui_api_url,
-    validate_huggingface_repo_id,
 )
 from services.platform.admin_validation import (
     validate_comfyui_api_host as shared_validate_comfyui_api_host,
@@ -165,7 +165,7 @@ def _parse_comfyui_endpoint(data):
     ) or "remote"
     if mode == "diffusers":
         settings = get_system_settings() or {}
-        repo_id = validate_huggingface_repo_id(
+        repo_id = normalize_huggingface_repo_id(
             (data or {}).get("diffusers_model_repo")
             or (data or {}).get("comfyui_diffusers_model_repo")
             or settings.get("comfyui_diffusers_model_repo"),
@@ -215,7 +215,10 @@ def _normalize_comfyui_backend_url(value):
     parsed = urlparse(raw)
     if parsed.scheme == "diffusers" and parsed.netloc == "local" and not parsed.query and not parsed.fragment:
         repo_id = repo_id_from_diffusers_url(raw)
-        if not repo_id or validate_huggingface_repo_id(repo_id, allow_blank=True):
+        normalized_repo_id = normalize_huggingface_repo_id(repo_id, allow_blank=True)
+        if normalized_repo_id is not None:
+            return diffusers_backend_url(normalized_repo_id)
+        if not repo_id:
             return diffusers_backend_url(repo_id)
         return ""
     url, msg = _validate_comfyui_api_url(raw)
@@ -229,7 +232,7 @@ def _configured_comfyui_url():
     settings = get_system_settings() or {}
     mode = _configured_connection_mode()
     if mode == "diffusers":
-        repo_id = validate_huggingface_repo_id(settings.get("comfyui_diffusers_model_repo"), allow_blank=True) or ""
+        repo_id = normalize_huggingface_repo_id(settings.get("comfyui_diffusers_model_repo"), allow_blank=True) or ""
         return diffusers_backend_url(repo_id)
     if mode == "remote":
         configured_url = str(settings.get("comfyui_remote_api_url") or "").strip()

@@ -25,6 +25,7 @@ def test_game_zone_frontend_assets_are_wired():
     local_brick_js = (ROOT / "public" / "js" / "games" / "brick-breaker.js").read_text(encoding="utf-8")
     local_bullet_js = (ROOT / "public" / "js" / "games" / "bullet-hell.js").read_text(encoding="utf-8")
     local_stickman_js = (ROOT / "public" / "js" / "games" / "stickman-shooter.js").read_text(encoding="utf-8")
+    local_open_world_js = (ROOT / "public" / "js" / "games" / "open-world.js").read_text(encoding="utf-8")
     local_board_shared_js = (ROOT / "public" / "js" / "games" / "board-game-shared.js").read_text(encoding="utf-8")
     local_real_tetris_js = (ROOT / "public" / "js" / "games" / "real-tetris.js").read_text(encoding="utf-8")
     local_reversi_js = (ROOT / "public" / "js" / "games" / "reversi.js").read_text(encoding="utf-8")
@@ -38,7 +39,7 @@ def test_game_zone_frontend_assets_are_wired():
 
     assert 'id="tab-module-games"' in index_html
     assert 'id="module-games"' in index_html
-    assert "/js/38-games.js?v=20260513-game-shell" in index_html
+    assert "/js/38-games.js?v=20260514-open-world" in index_html
     assert 'id="game-practice-side"' in index_html
     assert 'id="game-practice-difficulty"' in index_html
     assert 'id="game-offer-draw-btn"' in index_html
@@ -92,20 +93,29 @@ def test_game_zone_frontend_assets_are_wired():
     assert 'id="fps-arena-game-panel"' in index_html
     assert 'id="fps-arena-stage"' in index_html
     assert 'id="fps-arena-mode"' in index_html
+    assert 'id="fps-arena-level"' in index_html
+    assert "第 4 關 核心堡壘" in index_html
+    assert 'value="coop">Co-op PvE' in index_html
+    assert 'value="pvp">PvP Duel' in index_html
+    assert 'value="br">Battle Royale' in index_html
+    assert 'class="fps-arena-weapon-view"' in index_html
     assert 'class="fps-arena-scope"' in index_html
     assert 'class="fps-arena-damage"' in index_html
     assert 'fps-arena-reticle-fixed' in index_html
     assert 'fps-arena-reticle-float' in index_html
     assert 'data-game-touch="fps-sprint"' in index_html
+    assert 'data-game-touch="fps-crouch"' in index_html
+    assert 'data-game-touch="fps-prone"' in index_html
     assert 'id="game-fullscreen-btn"' in index_html
     assert 'id="fps-arena-fullscreen-btn"' in index_html
     assert "/js/three.min.js?v=0.160.0" in index_html
-    assert "/js/41-game-modules.js?v=20260513-game-registry" in index_html
+    assert "/js/41-game-modules.js?v=20260514-open-world" in index_html
     assert "/js/games/snake.js?v=20260513-game-modules" in index_html
     assert "/js/games/game-2048.js?v=20260513-game-modules" in index_html
     assert "/js/games/brick-breaker.js?v=20260513-game-modules" in index_html
     assert "/js/games/bullet-hell.js?v=20260513-game-modules" in index_html
-    assert "/js/games/stickman-shooter.js?v=20260513-game-modules" in index_html
+    assert "/js/games/stickman-shooter.js?v=20260514-game-levels" in index_html
+    assert "/js/games/open-world.js?v=20260514-open-world" in index_html
     assert "/js/games/board-game-shared.js?v=20260513-game-modules" in index_html
     assert "/js/games/real-tetris.js?v=20260513-game-modules" in index_html
     assert "/js/games/reversi.js?v=20260513-game-modules" in index_html
@@ -119,11 +129,13 @@ def test_game_zone_frontend_assets_are_wired():
     assert "/js/games/onea2b.js?v=20260513-legacy-modules" in index_html
     assert "/js/games/tetris.js?v=20260513-legacy-modules" in index_html
     assert "/js/games/space-shooter.js?v=20260513-legacy-modules" in index_html
-    assert "/js/games/fps-arena.js?v=20260513-legacy-modules" in index_html
-    assert "/js/38-fps-arena.js?v=20260512-fps-feedback" in index_html
+    assert "/js/games/fps-arena.js?v=20260514-fps-stance-br" in index_html
+    assert "/js/38-fps-arena.js?v=20260514-fps-stance-br" in index_html
     assert 'id="game-select"' in games_js
     assert "chinese_chess" in games_js
     assert "中國象棋" in game_modules_js
+    assert "都市開放世界" in game_modules_js
+    assert "open_world" in games_js
     assert 'id="game-open-page-btn"' not in games_js
     assert "openStandaloneGamePage" not in games_js
     assert "gameShouldOpenInStandalonePage" not in games_js
@@ -142,11 +154,18 @@ def test_game_zone_frontend_assets_are_wired():
     assert "打磚塊" in index_html
     assert "彈幕遊戲" in index_html
     assert "火柴人橫向射擊" in index_html
+    assert "都市開放世界" in game_modules_js
     assert "真實版俄羅斯方塊" in index_html
     assert "黑白棋" in index_html
     assert "圍棋" in index_html
     assert "五子棋" in index_html
-    assert "使用下拉選單在同一頁切換遊戲" in index_html
+    assert 'id="game-multiplayer-panel"' in index_html
+    assert 'id="game-multiplayer-invite-btn"' in index_html
+    assert 'id="game-multiplayer-invite-modal"' in index_html
+    assert 'id="game-multiplayer-invite-accept-btn"' in index_html
+    assert 'id="game-multiplayer-invite-reject-btn"' in index_html
+    assert "3D 與火柴人支援多人邀請" in index_html
+    assert "使用下拉選單" in index_html
     assert "/game.html" not in index_html
     assert "/js/42-game-page.js" not in index_html
     assert "HACKME_GAME_CATALOG" in game_modules_js
@@ -167,6 +186,31 @@ def test_game_zone_frontend_assets_are_wired():
     assert 'registerHackmeLocalGameModule("brick_breaker"' in local_brick_js
     assert 'registerHackmeLocalGameModule("bullet_hell"' in local_bullet_js
     assert 'registerHackmeLocalGameModule("stickman_shooter"' in local_stickman_js
+    assert 'registerHackmeLocalGameModule("open_world"' in local_open_world_js
+    assert "OPEN_WORLD_MISSIONS" in local_open_world_js
+    assert "OPEN_WORLD_BLOCK_CENTERS" in local_open_world_js
+    assert "withinDistance2" in local_open_world_js
+    assert "disposeOpenWorldState" in local_open_world_js
+    assert "chooseTailWaypoint" in local_open_world_js
+    assert "createGadgetProjectileMesh" in local_open_world_js
+    assert "blocksReservedPoint" in local_open_world_js
+    assert "buildOpenWorldCity" in local_open_world_js
+    assert "toggleOpenWorldVehicle" in local_open_world_js
+    assert "updateOpenWorldPatrols" in local_open_world_js
+    assert "open-world-minimap" in local_open_world_js
+    assert "按開始後才會計時" in local_open_world_js
+    assert 'state.status !== "active"' in local_open_world_js
+    assert "都市開放世界" in local_open_world_js
+    assert "makeStickmanCoopPuzzles" in local_stickman_js
+    assert "STICKMAN_LEVELS" in local_stickman_js
+    assert "第 4 關 核心實驗室" in local_stickman_js
+    assert "穿甲軌道槍" in local_stickman_js
+    assert "boss-down-" in local_stickman_js
+    assert "friendly_fire" in local_stickman_js
+    assert 'data-action="coop"' in local_stickman_js
+    assert "/games/multiplayer/invites/pending" in games_js
+    assert "showGameMultiplayerInviteModal" in games_js
+    assert "checkInvitesNow" in games_js
     assert 'registerHackmeLocalGameModule("real_tetris"' in local_real_tetris_js
     assert "mountHackmeLocalDiscGame" in local_board_shared_js
     assert "board-game-online-shell" in local_board_shared_js
@@ -246,6 +290,9 @@ def test_game_zone_frontend_assets_are_wired():
     assert "submitLocalGameModuleScore" in games_js
     assert "normalizeSoloScoreTiming" in games_js
     assert "payload.elapsed_ms = rawElapsed + penaltySeconds * 1000" in games_js
+    assert "window.hackmeGameMultiplayer" in games_js
+    assert "createGameMultiplayerInvite" in games_js
+    assert "/games/multiplayer/rooms/" in games_js
     assert "HACKME_GAME_VIEW_MODULES" in game_view_registry_js
     assert "registerHackmeGameViewModule" in game_view_registry_js
     assert 'key: "chess"' in chess_module_js
@@ -267,6 +314,21 @@ def test_game_zone_frontend_assets_are_wired():
     assert "enemyBullets" in shooter_module_js
     assert "powerups" in shooter_module_js
     assert 'key: "fps_arena"' in fps_module_js
+    assert "currentFpsArenaDifficulty" in fps_module_js
+    assert "#fps-arena-mode, #fps-arena-level" in fps_module_js
+    assert "FPS_ARENA_LEVELS" in fps_js
+    assert "Rail Rifle" in fps_js
+    assert "boss-encounter-" in fps_js
+    assert "FPS_ARENA_STANCES" in fps_js
+    assert "fpsArenaCoverProtection" in fps_js
+    assert "fpsArenaSpawnLoot" in fps_js
+    assert "fpsArenaCreateBattleRoyaleZone" in fps_js
+    assert "fpsArenaCreatePickup" in fps_js
+    assert "juggernaut" in fps_js
+    assert "engineer" in fps_js
+    assert "fpsArenaPlayRemoteGunshot" in fps_js
+    assert "remote_player" in fps_js
+    assert "player_hit" in fps_js
     assert "dispatchActiveGameViewEvent" in games_js
     assert "legacyGameRuntime" in games_js
     assert "/games/sudoku/solo-leaderboard" in sudoku_module_js

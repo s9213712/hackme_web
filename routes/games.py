@@ -1,5 +1,6 @@
 import json
 import random
+import secrets
 from datetime import datetime, timedelta, timezone
 
 from flask import request
@@ -67,6 +68,7 @@ SOLO_GAME_KEYS = {
     "real_tetris",
     "space_shooter",
     "fps_arena",
+    "open_world",
     "bullet_hell",
     "stickman_shooter",
     "snake",
@@ -82,6 +84,7 @@ SCORE_RANKED_SOLO_GAMES = {
     "real_tetris",
     "space_shooter",
     "fps_arena",
+    "open_world",
     "bullet_hell",
     "stickman_shooter",
     "snake",
@@ -92,7 +95,12 @@ SCORE_RANKED_SOLO_GAMES = {
     "gomoku",
     "chinese_chess",
 }
-SOLO_GAME_CHECK_SQL = "'sudoku', 'minesweeper', '1a2b', 'tetris', 'real_tetris', 'space_shooter', 'fps_arena', 'bullet_hell', 'stickman_shooter', 'snake', 'game_2048', 'brick_breaker', 'reversi', 'go', 'gomoku', 'chinese_chess'"
+MULTIPLAYER_GAME_KEYS = {"fps_arena", "stickman_shooter"}
+MULTIPLAYER_MODES_BY_GAME = {
+    "fps_arena": {"coop", "pvp"},
+    "stickman_shooter": {"coop"},
+}
+SOLO_GAME_CHECK_SQL = "'sudoku', 'minesweeper', '1a2b', 'tetris', 'real_tetris', 'space_shooter', 'fps_arena', 'open_world', 'bullet_hell', 'stickman_shooter', 'snake', 'game_2048', 'brick_breaker', 'reversi', 'go', 'gomoku', 'chinese_chess'"
 WEEKLY_REWARDS = (300, 200, 100)
 DAILY_CHALLENGE_REWARD_POINTS = 25
 COMPUTER_DIFFICULTIES = {
@@ -348,12 +356,66 @@ def game_schema_sql():
         CHECK (raw_elapsed_ms > 0),
         CHECK (penalty_seconds >= 0)
     );
+    CREATE TABLE IF NOT EXISTS game_multiplayer_rooms (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        room_code TEXT NOT NULL UNIQUE,
+        game_key TEXT NOT NULL,
+        mode TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'lobby',
+        host_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        guest_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT,
+        expires_at TEXT,
+        CHECK (game_key IN ('fps_arena', 'stickman_shooter')),
+        CHECK (mode IN ('coop', 'pvp')),
+        CHECK (status IN ('lobby', 'active', 'finished', 'cancelled'))
+    );
+    CREATE TABLE IF NOT EXISTS game_multiplayer_invites (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        room_id INTEGER NOT NULL REFERENCES game_multiplayer_rooms(id) ON DELETE CASCADE,
+        game_key TEXT NOT NULL,
+        mode TEXT NOT NULL,
+        inviter_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        invitee_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        status TEXT NOT NULL DEFAULT 'pending',
+        message TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        expires_at TEXT,
+        CHECK (game_key IN ('fps_arena', 'stickman_shooter')),
+        CHECK (mode IN ('coop', 'pvp')),
+        CHECK (status IN ('pending', 'accepted', 'rejected', 'cancelled', 'expired'))
+    );
+    CREATE TABLE IF NOT EXISTS game_multiplayer_player_states (
+        room_id INTEGER NOT NULL REFERENCES game_multiplayer_rooms(id) ON DELETE CASCADE,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        state_json TEXT NOT NULL DEFAULT '{{}}',
+        sequence INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (room_id, user_id)
+    );
+    CREATE TABLE IF NOT EXISTS game_multiplayer_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        room_id INTEGER NOT NULL REFERENCES game_multiplayer_rooms(id) ON DELETE CASCADE,
+        sender_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        target_user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        event_type TEXT NOT NULL,
+        payload_json TEXT NOT NULL DEFAULT '{{}}',
+        created_at TEXT NOT NULL,
+        CHECK (event_type IN ('gunshot', 'player_hit', 'friendly_fire', 'objective', 'down', 'finish'))
+    );
     CREATE INDEX IF NOT EXISTS idx_game_matches_players ON game_matches(game_key, status, white_user_id, black_user_id);
     CREATE INDEX IF NOT EXISTS idx_game_matches_finished ON game_matches(game_key, mode, finished_at);
     CREATE INDEX IF NOT EXISTS idx_game_invites_user_status ON game_invites(game_key, opponent_user_id, status);
     CREATE INDEX IF NOT EXISTS idx_game_rewards_week ON game_leaderboard_rewards(game_key, week_key);
     CREATE INDEX IF NOT EXISTS idx_game_daily_rewards_user ON game_daily_challenge_rewards(user_id, challenge_key);
     CREATE INDEX IF NOT EXISTS idx_game_solo_scores_rank ON game_solo_scores(game_key, week_key, difficulty, elapsed_ms);
+    CREATE INDEX IF NOT EXISTS idx_game_multiplayer_rooms_players ON game_multiplayer_rooms(game_key, status, host_user_id, guest_user_id);
+    CREATE INDEX IF NOT EXISTS idx_game_multiplayer_invites_user ON game_multiplayer_invites(game_key, invitee_user_id, status);
+    CREATE INDEX IF NOT EXISTS idx_game_multiplayer_events_room ON game_multiplayer_events(room_id, id);
     """.format(SOLO_GAME_CHECK_SQL=SOLO_GAME_CHECK_SQL)
 
 
@@ -665,6 +727,105 @@ def serialize_invite(row):
     }
 
 
+def normalize_multiplayer_game_key(game_key):
+    normalized = str(game_key or "").strip().lower()
+    return normalized if normalized in MULTIPLAYER_GAME_KEYS else None
+
+
+def normalize_multiplayer_mode(game_key, mode):
+    normalized = str(mode or "coop").strip().lower()
+    allowed = MULTIPLAYER_MODES_BY_GAME.get(game_key) or set()
+    return normalized if normalized in allowed else None
+
+
+def multiplayer_room_select_sql(where):
+    return f"""
+        SELECT r.*,
+               host.username AS host_username,
+               guest.username AS guest_username
+        FROM game_multiplayer_rooms r
+        JOIN users host ON host.id=r.host_user_id
+        LEFT JOIN users guest ON guest.id=r.guest_user_id
+        WHERE {where}
+    """
+
+
+def serialize_multiplayer_room(row, actor_id=None):
+    my_role = ""
+    if actor_id:
+        if int(row["host_user_id"]) == int(actor_id):
+            my_role = "host"
+        elif row["guest_user_id"] and int(row["guest_user_id"]) == int(actor_id):
+            my_role = "guest"
+    return {
+        "id": row["id"],
+        "room_code": row["room_code"],
+        "game_key": row["game_key"],
+        "mode": row["mode"],
+        "status": row["status"],
+        "host_user_id": row["host_user_id"],
+        "host_username": row["host_username"],
+        "guest_user_id": row["guest_user_id"],
+        "guest_username": row["guest_username"],
+        "my_role": my_role,
+        "can_start": bool(my_role and row["guest_user_id"] and row["status"] in {"lobby", "active"}),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "started_at": row["started_at"],
+        "finished_at": row["finished_at"],
+        "expires_at": row["expires_at"],
+    }
+
+
+def serialize_multiplayer_invite(row):
+    return {
+        "id": row["id"],
+        "room_id": row["room_id"],
+        "game_key": row["game_key"],
+        "mode": row["mode"],
+        "status": row["status"],
+        "inviter_user_id": row["inviter_user_id"],
+        "inviter_username": row["inviter_username"],
+        "invitee_user_id": row["invitee_user_id"],
+        "invitee_username": row["invitee_username"],
+        "message": row["message"] or "",
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "expires_at": row["expires_at"],
+    }
+
+
+def multiplayer_json_obj(value, fallback=None):
+    try:
+        data = json.loads(value or "{}")
+    except Exception:
+        data = fallback if fallback is not None else {}
+    return data if isinstance(data, dict) else (fallback if fallback is not None else {})
+
+
+def serialize_multiplayer_player_state(row):
+    return {
+        "user_id": row["user_id"],
+        "username": row["username"],
+        "sequence": row["sequence"],
+        "updated_at": row["updated_at"],
+        "state": multiplayer_json_obj(row["state_json"]),
+    }
+
+
+def serialize_multiplayer_event(row):
+    return {
+        "id": row["id"],
+        "room_id": row["room_id"],
+        "sender_user_id": row["sender_user_id"],
+        "sender_username": row["sender_username"],
+        "target_user_id": row["target_user_id"],
+        "event_type": row["event_type"],
+        "payload": multiplayer_json_obj(row["payload_json"]),
+        "created_at": row["created_at"],
+    }
+
+
 def finish_match(conn, row, status_info, now):
     winner_color = status_info.get("winner_color")
     winner_user_id = None
@@ -739,6 +900,71 @@ def register_games_routes(app, deps):
         if row["black_user_id"] and int(row["black_user_id"]) == int(actor["id"]):
             return "black_deleted_at"
         return None
+
+    def multiplayer_room_row(conn, room_id):
+        return conn.execute(multiplayer_room_select_sql("r.id=?"), (int(room_id),)).fetchone()
+
+    def actor_can_access_multiplayer_room(actor, row):
+        return bool(
+            row
+            and (
+                int(row["host_user_id"]) == int(actor["id"])
+                or (row["guest_user_id"] and int(row["guest_user_id"]) == int(actor["id"]))
+            )
+        )
+
+    def multiplayer_room_states(conn, room_id):
+        rows = conn.execute(
+            """
+            SELECT s.*, u.username
+            FROM game_multiplayer_player_states s
+            JOIN users u ON u.id=s.user_id
+            WHERE s.room_id=?
+            ORDER BY s.updated_at DESC
+            """,
+            (int(room_id),),
+        ).fetchall()
+        return [serialize_multiplayer_player_state(row) for row in rows]
+
+    def multiplayer_room_events(conn, room_id, actor_id, after_event_id=0, limit=80):
+        rows = conn.execute(
+            """
+            SELECT e.*, sender.username AS sender_username
+            FROM game_multiplayer_events e
+            JOIN users sender ON sender.id=e.sender_user_id
+            WHERE e.room_id=?
+              AND e.id>?
+              AND (e.target_user_id IS NULL OR e.target_user_id=? OR e.sender_user_id=?)
+            ORDER BY e.id ASC
+            LIMIT ?
+            """,
+            (int(room_id), int(after_event_id or 0), int(actor_id), int(actor_id), int(limit)),
+        ).fetchall()
+        return [serialize_multiplayer_event(row) for row in rows]
+
+    def multiplayer_room_payload(conn, row, actor_id, after_event_id=0):
+        return {
+            "room": serialize_multiplayer_room(row, actor_id),
+            "players": multiplayer_room_states(conn, row["id"]),
+            "events": multiplayer_room_events(conn, row["id"], actor_id, after_event_id=after_event_id),
+        }
+
+    def make_multiplayer_room_code(conn):
+        for _attempt in range(12):
+            code = secrets.token_urlsafe(6).replace("-", "").replace("_", "")[:8].upper()
+            exists = conn.execute("SELECT id FROM game_multiplayer_rooms WHERE room_code=?", (code,)).fetchone()
+            if not exists:
+                return code
+        return secrets.token_hex(5).upper()
+
+    def clamp_multiplayer_payload_json(value, label, max_bytes=12000):
+        try:
+            payload = json.dumps(value if isinstance(value, dict) else {}, ensure_ascii=False, sort_keys=True)
+        except Exception:
+            raise ValueError(f"{label} 格式錯誤")
+        if len(payload.encode("utf-8")) > max_bytes:
+            raise ValueError(f"{label} 太大")
+        return payload
 
     def award_weekly_rewards(week, actor=None):
         conn = get_db()
@@ -984,6 +1210,16 @@ def register_games_routes(app, deps):
                 "key": "fps_arena",
                 "title": "3D 射擊場",
                 "status": "available",
+                "supports_invites": True,
+                "supports_computer": False,
+                "multiplayer_modes": [
+                    {"key": "coop", "label": "合作破關"},
+                    {"key": "pvp", "label": "PvP 對戰"},
+                ],
+            }, {
+                "key": "open_world",
+                "title": "都市開放世界",
+                "status": "available",
                 "supports_invites": False,
                 "supports_computer": False,
             }, {
@@ -996,8 +1232,11 @@ def register_games_routes(app, deps):
                 "key": "stickman_shooter",
                 "title": "火柴人橫向射擊",
                 "status": "available",
-                "supports_invites": False,
+                "supports_invites": True,
                 "supports_computer": False,
+                "multiplayer_modes": [
+                    {"key": "coop", "label": "合作破關"},
+                ],
             }, {
                 "key": "snake",
                 "title": "貪食蛇",
@@ -1085,6 +1324,407 @@ def register_games_routes(app, deps):
                 (int(actor["id"]),),
             ).fetchall()
             return json_resp({"ok": True, "users": [dict(row) for row in rows]})
+        finally:
+            conn.close()
+
+    @app.route("/api/games/<game_key>/multiplayer", methods=["GET"])
+    @require_csrf_safe
+    def game_multiplayer_lobby(game_key):
+        actor, err, status = actor_or_401()
+        if err:
+            return err, status
+        game_key = normalize_multiplayer_game_key(game_key)
+        if not game_key:
+            return json_resp({"ok": False, "msg": "這個遊戲不支援多人房間"}), 404
+        conn = get_db()
+        try:
+            ensure_game_schema(conn)
+            rooms = conn.execute(
+                multiplayer_room_select_sql(
+                    """
+                    r.game_key=?
+                    AND r.status IN ('lobby', 'active')
+                    AND (r.host_user_id=? OR r.guest_user_id=?)
+                    ORDER BY CASE WHEN r.status='active' THEN 0 ELSE 1 END, r.id DESC
+                    LIMIT 40
+                    """
+                ),
+                (game_key, int(actor["id"]), int(actor["id"])),
+            ).fetchall()
+            invites = conn.execute(
+                """
+                SELECT i.*, inviter.username AS inviter_username, invitee.username AS invitee_username
+                FROM game_multiplayer_invites i
+                JOIN users inviter ON inviter.id=i.inviter_user_id
+                JOIN users invitee ON invitee.id=i.invitee_user_id
+                WHERE i.game_key=?
+                  AND (i.inviter_user_id=? OR i.invitee_user_id=?)
+                  AND i.status IN ('pending', 'accepted')
+                ORDER BY i.id DESC
+                LIMIT 60
+                """,
+                (game_key, int(actor["id"]), int(actor["id"])),
+            ).fetchall()
+            return json_resp({
+                "ok": True,
+                "game_key": game_key,
+                "modes": [
+                    {"key": mode, "label": "合作破關" if mode == "coop" else "PvP 對戰"}
+                    for mode in sorted(MULTIPLAYER_MODES_BY_GAME.get(game_key) or set())
+                ],
+                "rooms": [serialize_multiplayer_room(row, actor["id"]) for row in rooms],
+                "invites": [serialize_multiplayer_invite(row) for row in invites],
+            })
+        finally:
+            conn.close()
+
+    @app.route("/api/games/multiplayer/invites/pending", methods=["GET"])
+    @require_csrf_safe
+    def pending_game_multiplayer_invites():
+        actor, err, status = actor_or_401()
+        if err:
+            return err, status
+        conn = get_db()
+        try:
+            ensure_game_schema(conn)
+            rows = conn.execute(
+                """
+                SELECT
+                    i.*,
+                    inviter.username AS inviter_username,
+                    invitee.username AS invitee_username,
+                    r.room_code AS room_code,
+                    r.status AS room_status,
+                    r.host_user_id AS host_user_id,
+                    r.guest_user_id AS guest_user_id
+                FROM game_multiplayer_invites i
+                JOIN game_multiplayer_rooms r ON r.id=i.room_id
+                JOIN users inviter ON inviter.id=i.inviter_user_id
+                JOIN users invitee ON invitee.id=i.invitee_user_id
+                WHERE i.invitee_user_id=?
+                  AND i.status='pending'
+                  AND r.status IN ('lobby', 'active')
+                ORDER BY i.id DESC
+                LIMIT 20
+                """,
+                (int(actor["id"]),),
+            ).fetchall()
+            invites = []
+            for row in rows:
+                invite = serialize_multiplayer_invite(row)
+                invite["room"] = {
+                    "id": row["room_id"],
+                    "room_code": row["room_code"],
+                    "status": row["room_status"],
+                    "host_user_id": row["host_user_id"],
+                    "guest_user_id": row["guest_user_id"],
+                }
+                invites.append(invite)
+            return json_resp({"ok": True, "invites": invites})
+        finally:
+            conn.close()
+
+    @app.route("/api/games/<game_key>/multiplayer/invites", methods=["POST"])
+    @require_csrf
+    def create_game_multiplayer_invite(game_key):
+        actor, err, status = actor_or_401()
+        if err:
+            return err, status
+        game_key = normalize_multiplayer_game_key(game_key)
+        if not game_key:
+            return json_resp({"ok": False, "msg": "這個遊戲不支援多人房間"}), 404
+        data, err, status = parse_json_body()
+        if err:
+            return err, status
+        mode = normalize_multiplayer_mode(game_key, data.get("mode"))
+        if not mode:
+            return json_resp({"ok": False, "msg": "這個遊戲不支援所選多人模式"}), 400
+        username = str(data.get("opponent_username") or data.get("username") or "").strip()
+        if not username:
+            return json_resp({"ok": False, "msg": "請選擇要邀請的玩家"}), 400
+        conn = get_db()
+        try:
+            ensure_game_schema(conn)
+            active_filter = active_user_where(conn)
+            opponent_row = conn.execute(
+                f"SELECT id, username FROM users WHERE username=? AND {active_filter}",
+                (username,),
+            ).fetchone()
+            if not opponent_row:
+                return json_resp({"ok": False, "msg": "找不到可邀請的玩家"}), 404
+            if int(opponent_row["id"]) == int(actor["id"]):
+                return json_resp({"ok": False, "msg": "不能邀請自己"}), 400
+            pending = conn.execute(
+                """
+                SELECT i.id
+                FROM game_multiplayer_invites i
+                JOIN game_multiplayer_rooms r ON r.id=i.room_id
+                WHERE i.game_key=? AND i.mode=? AND i.status='pending'
+                  AND r.status IN ('lobby', 'active')
+                  AND i.inviter_user_id=? AND i.invitee_user_id=?
+                """,
+                (game_key, mode, int(actor["id"]), int(opponent_row["id"])),
+            ).fetchone()
+            if pending:
+                return json_resp({"ok": False, "msg": "已經有等待中的多人邀請"}), 409
+            conn.execute("BEGIN IMMEDIATE")
+            now = utc_now()
+            expires = (datetime.now(timezone.utc) + timedelta(hours=8)).replace(microsecond=0).isoformat()
+            room_cur = conn.execute(
+                """
+                INSERT INTO game_multiplayer_rooms (
+                    room_code, game_key, mode, status, host_user_id, guest_user_id,
+                    created_at, updated_at, expires_at
+                ) VALUES (?, ?, ?, 'lobby', ?, NULL, ?, ?, ?)
+                """,
+                (make_multiplayer_room_code(conn), game_key, mode, int(actor["id"]), now, now, expires),
+            )
+            room_id = room_cur.lastrowid
+            invite_cur = conn.execute(
+                """
+                INSERT INTO game_multiplayer_invites (
+                    room_id, game_key, mode, inviter_user_id, invitee_user_id, status,
+                    message, created_at, updated_at, expires_at
+                ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
+                """,
+                (
+                    room_id,
+                    game_key,
+                    mode,
+                    int(actor["id"]),
+                    int(opponent_row["id"]),
+                    str(data.get("message") or "")[:160],
+                    now,
+                    now,
+                    expires,
+                ),
+            )
+            conn.commit()
+            room = multiplayer_room_row(conn, room_id)
+            audit(
+                "GAME_MULTIPLAYER_INVITE_CREATED",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"game={game_key}, mode={mode}, room_id={room_id}, invite_id={invite_cur.lastrowid}",
+            )
+            return json_resp({
+                "ok": True,
+                "invite_id": invite_cur.lastrowid,
+                "room": serialize_multiplayer_room(room, actor["id"]) if room else None,
+            })
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    @app.route("/api/games/multiplayer/invites/<int:invite_id>/<action>", methods=["POST"])
+    @require_csrf
+    def review_game_multiplayer_invite(invite_id, action):
+        actor, err, status = actor_or_401()
+        if err:
+            return err, status
+        if action not in {"accept", "reject", "cancel"}:
+            return json_resp({"ok": False, "msg": "不支援的邀請操作"}), 400
+        conn = get_db()
+        try:
+            ensure_game_schema(conn)
+            conn.execute("BEGIN IMMEDIATE")
+            invite = conn.execute("SELECT * FROM game_multiplayer_invites WHERE id=?", (int(invite_id),)).fetchone()
+            if not invite:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": "找不到多人邀請"}), 404
+            if invite["status"] != "pending":
+                conn.rollback()
+                return json_resp({"ok": False, "msg": "邀請已處理"}), 409
+            actor_id = int(actor["id"])
+            if action == "cancel" and actor_id != int(invite["inviter_user_id"]):
+                conn.rollback()
+                return json_resp({"ok": False, "msg": "只有邀請者能取消邀請"}), 403
+            if action in {"accept", "reject"} and actor_id != int(invite["invitee_user_id"]):
+                conn.rollback()
+                return json_resp({"ok": False, "msg": "只有受邀者能回覆邀請"}), 403
+            room = conn.execute("SELECT * FROM game_multiplayer_rooms WHERE id=?", (int(invite["room_id"]),)).fetchone()
+            if not room or room["status"] not in {"lobby", "active"}:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": "多人房間已失效"}), 409
+            now = utc_now()
+            new_status = {"accept": "accepted", "reject": "rejected", "cancel": "cancelled"}[action]
+            if action == "accept":
+                if room["guest_user_id"] and int(room["guest_user_id"]) != actor_id:
+                    conn.rollback()
+                    return json_resp({"ok": False, "msg": "房間已被其他玩家加入"}), 409
+                conn.execute(
+                    "UPDATE game_multiplayer_rooms SET guest_user_id=?, updated_at=? WHERE id=?",
+                    (actor_id, now, int(invite["room_id"])),
+                )
+            elif action in {"reject", "cancel"}:
+                conn.execute(
+                    "UPDATE game_multiplayer_rooms SET status='cancelled', updated_at=?, finished_at=? WHERE id=?",
+                    (now, now, int(invite["room_id"])),
+                )
+            conn.execute(
+                "UPDATE game_multiplayer_invites SET status=?, updated_at=? WHERE id=?",
+                (new_status, now, int(invite_id)),
+            )
+            conn.commit()
+            refreshed = multiplayer_room_row(conn, invite["room_id"])
+            return json_resp({
+                "ok": True,
+                "room": serialize_multiplayer_room(refreshed, actor["id"]) if refreshed else None,
+            })
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    @app.route("/api/games/multiplayer/rooms/<int:room_id>", methods=["GET"])
+    @require_csrf_safe
+    def game_multiplayer_room_detail(room_id):
+        actor, err, status = actor_or_401()
+        if err:
+            return err, status
+        after_event_id = int(request.args.get("after_event_id") or 0)
+        conn = get_db()
+        try:
+            ensure_game_schema(conn)
+            room = multiplayer_room_row(conn, room_id)
+            if not room:
+                return json_resp({"ok": False, "msg": "找不到多人房間"}), 404
+            if not actor_can_access_multiplayer_room(actor, room):
+                return json_resp({"ok": False, "msg": "不是這個房間的玩家"}), 403
+            return json_resp({"ok": True, **multiplayer_room_payload(conn, room, actor["id"], after_event_id)})
+        finally:
+            conn.close()
+
+    @app.route("/api/games/multiplayer/rooms/<int:room_id>/start", methods=["POST"])
+    @require_csrf
+    def start_game_multiplayer_room(room_id):
+        actor, err, status = actor_or_401()
+        if err:
+            return err, status
+        conn = get_db()
+        try:
+            ensure_game_schema(conn)
+            conn.execute("BEGIN IMMEDIATE")
+            room = multiplayer_room_row(conn, room_id)
+            if not room:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": "找不到多人房間"}), 404
+            if not actor_can_access_multiplayer_room(actor, room):
+                conn.rollback()
+                return json_resp({"ok": False, "msg": "不是這個房間的玩家"}), 403
+            if not room["guest_user_id"]:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": "等待另一位玩家加入"}), 409
+            now = utc_now()
+            conn.execute(
+                """
+                UPDATE game_multiplayer_rooms
+                SET status='active', started_at=COALESCE(started_at, ?), updated_at=?
+                WHERE id=? AND status IN ('lobby', 'active')
+                """,
+                (now, now, int(room_id)),
+            )
+            conn.commit()
+            refreshed = multiplayer_room_row(conn, room_id)
+            return json_resp({"ok": True, **multiplayer_room_payload(conn, refreshed, actor["id"], 0)})
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    @app.route("/api/games/multiplayer/rooms/<int:room_id>/state", methods=["POST"])
+    @require_csrf
+    def update_game_multiplayer_room_state(room_id):
+        actor, err, status = actor_or_401()
+        if err:
+            return err, status
+        data, err, status = parse_json_body()
+        if err:
+            return err, status
+        state_body = data.get("state") if isinstance(data.get("state"), dict) else {}
+        after_event_id = int(data.get("after_event_id") or 0)
+        raw_events = data.get("events") if isinstance(data.get("events"), list) else []
+        allowed_events = {"gunshot", "player_hit", "friendly_fire", "objective", "down", "finish"}
+        conn = get_db()
+        try:
+            ensure_game_schema(conn)
+            conn.execute("BEGIN IMMEDIATE")
+            room = multiplayer_room_row(conn, room_id)
+            if not room:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": "找不到多人房間"}), 404
+            if not actor_can_access_multiplayer_room(actor, room):
+                conn.rollback()
+                return json_resp({"ok": False, "msg": "不是這個房間的玩家"}), 403
+            if room["status"] == "finished" or room["status"] == "cancelled":
+                conn.rollback()
+                return json_resp({"ok": False, "msg": "多人房間已結束"}), 409
+            state_json = clamp_multiplayer_payload_json(state_body, "玩家狀態")
+            now = utc_now()
+            existing_state = conn.execute(
+                "SELECT sequence FROM game_multiplayer_player_states WHERE room_id=? AND user_id=?",
+                (int(room_id), int(actor["id"])),
+            ).fetchone()
+            sequence = int(existing_state["sequence"] or 0) + 1 if existing_state else 1
+            conn.execute(
+                """
+                INSERT INTO game_multiplayer_player_states (room_id, user_id, state_json, sequence, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(room_id, user_id) DO UPDATE SET
+                    state_json=excluded.state_json,
+                    sequence=excluded.sequence,
+                    updated_at=excluded.updated_at
+                """,
+                (int(room_id), int(actor["id"]), state_json, sequence, now),
+            )
+            if room["guest_user_id"] and room["status"] == "lobby":
+                conn.execute(
+                    "UPDATE game_multiplayer_rooms SET status='active', started_at=COALESCE(started_at, ?), updated_at=? WHERE id=?",
+                    (now, now, int(room_id)),
+                )
+            else:
+                conn.execute("UPDATE game_multiplayer_rooms SET updated_at=? WHERE id=?", (now, int(room_id)))
+            participant_ids = {int(room["host_user_id"])}
+            if room["guest_user_id"]:
+                participant_ids.add(int(room["guest_user_id"]))
+            for event in raw_events[:12]:
+                if not isinstance(event, dict):
+                    continue
+                event_type = str(event.get("type") or event.get("event_type") or "").strip().lower()
+                if event_type not in allowed_events:
+                    continue
+                target_user_id = event.get("target_user_id")
+                if target_user_id is not None:
+                    try:
+                        target_user_id = int(target_user_id)
+                    except Exception:
+                        continue
+                    if target_user_id not in participant_ids:
+                        continue
+                payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+                payload_json = clamp_multiplayer_payload_json(payload, "事件資料", max_bytes=2400)
+                conn.execute(
+                    """
+                    INSERT INTO game_multiplayer_events (room_id, sender_user_id, target_user_id, event_type, payload_json, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (int(room_id), int(actor["id"]), target_user_id, event_type, payload_json, now),
+                )
+            conn.commit()
+            refreshed = multiplayer_room_row(conn, room_id)
+            return json_resp({"ok": True, **multiplayer_room_payload(conn, refreshed, actor["id"], after_event_id)})
+        except ValueError as exc:
+            conn.rollback()
+            return json_resp({"ok": False, "msg": str(exc)}), 400
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 
