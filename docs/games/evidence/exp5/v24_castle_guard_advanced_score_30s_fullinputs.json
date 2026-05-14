@@ -50,7 +50,7 @@
     }
   ],
   "engine": "experiment 5:nnue",
-  "generated_at": "2026-05-14T12:21:52+00:00",
+  "generated_at": "2026-05-14T12:24:29+00:00",
   "grade": "advanced_engine_candidate",
   "inputs": {
     "gauntlet": "docs/games/evidence/exp5/v24_castle_guard_full_gauntlet_30.json",
