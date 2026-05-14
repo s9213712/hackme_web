@@ -5,6 +5,7 @@ from __future__ import annotations
 import chess
 from datetime import datetime
 from pathlib import Path
+import json
 import os
 import sqlite3
 
@@ -366,8 +367,6 @@ def _record_experiment_learning_with_conn(conn, row, *, winner_color):
     history = row["move_history_json"]
     if not history:
         return 0
-    import json
-
     try:
         moves = json.loads(history)
     except Exception:
@@ -446,3 +445,113 @@ def record_experiment_learning(row, *, winner_color, conn=None, store=None):
     if store is not None:
         return store.record_learning(row, winner_color=winner_color)
     return 0
+
+
+def _bucket_from_target(target: float) -> tuple[str, int]:
+    if target >= 0.5:
+        return "win", 6
+    if target <= -0.05:
+        return "loss", -5
+    return "draw", 1
+
+
+def _upsert_experiment_memory(conn, *, board: chess.Board, side: str, move_uci: str, target: float, weight: float) -> bool:
+    move = chess.Move.from_uci(str(move_uci or ""))
+    if move not in board.legal_moves:
+        return False
+    bucket, base_delta = _bucket_from_target(float(target or 0.0))
+    score_delta = int(round(base_delta * max(0.1, min(float(weight or 1.0), 3.0))))
+    now = datetime.now().isoformat()
+    existing = conn.execute(
+        "SELECT id, sample_count, win_count, draw_count, loss_count, score_total FROM game_chess_engine_memory "
+        "WHERE position_key=? AND side=? AND move_uci=?",
+        (position_key(board), side, move.uci()),
+    ).fetchone()
+    if existing:
+        conn.execute(
+            """
+            UPDATE game_chess_engine_memory
+            SET sample_count=?, win_count=?, draw_count=?, loss_count=?, score_total=?, updated_at=?
+            WHERE id=?
+            """,
+            (
+                int(existing["sample_count"] or 0) + 1,
+                int(existing["win_count"] or 0) + (1 if bucket == "win" else 0),
+                int(existing["draw_count"] or 0) + (1 if bucket == "draw" else 0),
+                int(existing["loss_count"] or 0) + (1 if bucket == "loss" else 0),
+                int(existing["score_total"] or 0) + score_delta,
+                now,
+                existing["id"],
+            ),
+        )
+    else:
+        conn.execute(
+            """
+            INSERT INTO game_chess_engine_memory (
+                position_key, side, move_uci, sample_count, win_count, draw_count,
+                loss_count, score_total, updated_at
+            ) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)
+            """,
+            (
+                position_key(board),
+                side,
+                move.uci(),
+                1 if bucket == "win" else 0,
+                1 if bucket == "draw" else 0,
+                1 if bucket == "loss" else 0,
+                score_delta,
+                now,
+            ),
+        )
+    return True
+
+
+def train_experiment_from_replay_samples(samples: list[dict], *, db_path=None) -> dict:
+    store = ChessExperimentStore(db_path or default_chess_engine_db_path())
+    conn = store.connect()
+    accepted = 0
+    rejected = 0
+    try:
+        for sample in samples:
+            if not isinstance(sample, dict):
+                rejected += 1
+                continue
+            side = str(sample.get("side") or "").strip().lower()
+            fen = str(sample.get("fen") or "").strip()
+            move_uci = str(sample.get("move_uci") or "").strip().lower()
+            if side not in {"white", "black"} or not fen or not move_uci:
+                rejected += 1
+                continue
+            try:
+                board = to_chess_board({"__fen__": fen}, side)
+                ok = _upsert_experiment_memory(
+                    conn,
+                    board=board,
+                    side=side,
+                    move_uci=move_uci,
+                    target=float(sample.get("target", 1.0) or 0.0),
+                    weight=float(sample.get("weight", 1.0) or 1.0),
+                )
+            except Exception:
+                ok = False
+            if ok:
+                accepted += 1
+            else:
+                rejected += 1
+        conn.commit()
+        row = conn.execute(
+            "SELECT COUNT(*) AS memory_rows, COALESCE(SUM(sample_count), 0) AS sample_count "
+            "FROM game_chess_engine_memory"
+        ).fetchone()
+        return {
+            "ok": True,
+            "engine": EXPERIMENT_DIFFICULTY,
+            "db_path": str(store.db_path),
+            "input_rows": len(samples),
+            "accepted_samples": accepted,
+            "rejected_samples": rejected,
+            "memory_rows": int(row["memory_rows"] or 0),
+            "sample_count": int(row["sample_count"] or 0),
+        }
+    finally:
+        conn.close()

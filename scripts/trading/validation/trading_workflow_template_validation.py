@@ -2,7 +2,7 @@
 """Validate official trading workflow templates with trigger and backtest checks.
 
 This script is intentionally read-only for production data. It builds a temporary
-SQLite database, loads templates from workflows/system, downloads public BTC
+SQLite database, loads templates from workflows/trading_bot, downloads public BTC
 K-lines, runs the backend backtest engine, then compares the result with a
 small independent accounting replay over the same candles.
 """
@@ -38,7 +38,7 @@ from services.trading.trading_engine import (  # noqa: E402
 
 
 REPORT_DIR = ROOT / "security" / "reports"
-WORKFLOW_DIR = ROOT / "workflows" / "system"
+WORKFLOW_DIR = ROOT / "workflows" / "trading_bot"
 TRIGGER_CASES = {
     "dip_buy": ({"price": 85000, "window_low_price": 85000, "has_position": False}, "buy_percent"),
     "breakout_buy": ({"price": 110000, "window_high_price": 110000, "ma50": 100000, "has_position": False}, "buy_percent"),
@@ -54,7 +54,7 @@ TRIGGER_CASES = {
     "staged_profit_taking": ({"price": 120000, "window_high_price": 120000, "has_position": True, "pnl_percent": 12, "pnl_high_percent": 12}, "sell_percent"),
 }
 # Plan B: rsi_scale / full_entry_exit / swing_bb_ma50 removed from
-# workflows/system/.  swing_bb_ma50 used to share this guard with
+# workflows/trading_bot/.  swing_bb_ma50 used to share this guard with
 # bollinger_reversion; the guard now applies to bollinger_reversion alone.
 FLAT_SEQUENCE_GUARD_TEMPLATE_IDS = {"bollinger_reversion"}
 

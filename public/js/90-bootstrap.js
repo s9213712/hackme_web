@@ -9,6 +9,8 @@ function bindUiEvents() {
   const tabModuleAlbums = $("tab-module-albums");
   const tabModuleVideos = $("tab-module-videos");
   const tabModuleGames = $("tab-module-games");
+  const tabModuleJobs = $("tab-module-jobs");
+  const tabModuleShares = $("tab-module-shares");
   const tabModuleComfyui = $("tab-module-comfyui");
   const tabModuleEconomy = $("tab-module-economy");
   const tabModuleTrading = $("tab-module-trading");
@@ -99,6 +101,8 @@ function bindUiEvents() {
   const testerTokenList = $("tester-token-list-btn");
   const healthRefresh = $("health-refresh-btn");
   const launchCheckRefresh = $("launch-check-refresh-btn");
+  const launchCheckBundle = $("launch-check-bundle-btn");
+  const launchCheckArtifacts = $("launch-check-artifacts-btn");
   const launchCheckUploadFile = $("launch-check-upload-file");
   const launchCheckUploadSubmit = $("launch-check-upload-submit-btn");
   const launchCheckUploadClear = $("launch-check-upload-clear-btn");
@@ -190,6 +194,8 @@ function bindUiEvents() {
   const gamePracticeBtn = $("game-practice-btn");
   const gameResignBtn = $("game-resign-btn");
   const gameAwardBtn = $("game-award-btn");
+  const jobCenterRefreshBtn = $("job-center-refresh-btn");
+  const shareCenterRefreshBtn = $("share-center-refresh-btn");
   const comfyuiRefreshBtn = $("comfyui-refresh-btn");
   const comfyuiLoadDraftBtn = $("comfyui-load-draft-btn");
   const comfyuiStartBtn = $("comfyui-start-btn");
@@ -224,6 +230,8 @@ function bindUiEvents() {
   if (tabModuleAlbums) tabModuleAlbums.addEventListener("click", () => switchModuleTab("albums"));
   if (tabModuleVideos) tabModuleVideos.addEventListener("click", () => switchModuleTab("videos"));
   if (tabModuleGames) tabModuleGames.addEventListener("click", () => switchModuleTab("games"));
+  if (tabModuleJobs) tabModuleJobs.addEventListener("click", () => switchModuleTab("jobs"));
+  if (tabModuleShares) tabModuleShares.addEventListener("click", () => switchModuleTab("shares"));
   if (tabModuleComfyui) tabModuleComfyui.addEventListener("click", () => switchModuleTab("comfyui"));
   if (tabModuleEconomy) tabModuleEconomy.addEventListener("click", () => switchModuleTab("economy"));
   if (tabModuleTrading) tabModuleTrading.addEventListener("click", () => switchModuleTab("trading"));
@@ -252,6 +260,8 @@ function bindUiEvents() {
   if (tabNotices) tabNotices.addEventListener("click", () => switchAdminTab("notices"));
   if (tabAppeals)  tabAppeals.addEventListener("click",   () => switchAdminTab("appeals"));
   if (tabReports)  tabReports.addEventListener("click",   () => switchAdminTab("reports"));
+  if (jobCenterRefreshBtn) jobCenterRefreshBtn.addEventListener("click", () => loadJobCenter());
+  if (shareCenterRefreshBtn) shareCenterRefreshBtn.addEventListener("click", () => loadShareCenter());
   if (liBtn)       liBtn.addEventListener("click",        doLogin);
   if (regBtn)      regBtn.addEventListener("click",       doRegister);
   if (typeof bindRegisterFieldHelpers === "function") bindRegisterFieldHelpers();
@@ -385,6 +395,7 @@ function bindUiEvents() {
   if (rootTradingBtcTradeSetup) rootTradingBtcTradeSetup.addEventListener("click", setupRootBtcTrade);
   if (typeof bindComfyuiDraftPersistence === "function") bindComfyuiDraftPersistence();
   if (typeof bindComfyuiAdvancedUi === "function") bindComfyuiAdvancedUi();
+  if (typeof resetComfyuiIdleUi === "function") resetComfyuiIdleUi();
   if (typeof bindEconomyInlineEvents === "function") bindEconomyInlineEvents();
   if (sidebarToggle) sidebarToggle.addEventListener("click", () => {
     setSidebarCollapsed(!document.body.classList.contains("sidebar-collapsed"));
@@ -513,6 +524,8 @@ function bindUiEvents() {
   if (healthRefresh) healthRefresh.addEventListener("click", loadServerHealth);
   if (integrityRefresh) integrityRefresh.addEventListener("click", loadIntegrityGuard);
   if (launchCheckRefresh) launchCheckRefresh.addEventListener("click", () => loadLaunchCheck());
+  if (launchCheckBundle) launchCheckBundle.addEventListener("click", () => createLaunchCheckReleaseBundle());
+  if (launchCheckArtifacts) launchCheckArtifacts.addEventListener("click", () => refreshLaunchCheckQaArtifacts());
   if (launchCheckUploadFile) launchCheckUploadFile.addEventListener("change", async () => {
     const file = launchCheckUploadFile.files && launchCheckUploadFile.files[0];
     if (!file) return;
@@ -596,8 +609,14 @@ if (typeof bindAuthRecoveryControls === "function") bindAuthRecoveryControls();
       if (typeof forceIdleTimeoutLogout === "function") await forceIdleTimeoutLogout();
       return;
     }
-    const res = await safeFetch(API + "/me", { credentials: "same-origin" });
+    const res = await safeFetch(API + "/me?optional=1", { credentials: "same-origin" });
     const json = await res.json().catch(() => ({}));
-    if (json.ok) setAuthState(json);
+    if (json.ok) {
+      setAuthState(json);
+    } else {
+      try {
+        localStorage.removeItem(AUTH_SESSION_HINT_STORAGE_KEY);
+      } catch (_) {}
+    }
   } catch (_) { /* 網路問題或 timeout，不影響操作 */ }
 })();

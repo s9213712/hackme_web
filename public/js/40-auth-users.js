@@ -526,6 +526,27 @@ function bindRegisterFieldHelpers() {
     el.addEventListener("change", clearHandler);
     el.dataset.registerFieldBound = "1";
   });
+  bindRegisterAutofillGuards();
+}
+
+function bindRegisterAutofillGuards() {
+  ["reg-user", "reg-pw", "reg-pw-confirm"].forEach((id) => {
+    const input = $(id);
+    if (!input) return;
+    input.autocomplete = "off";
+    input.setAttribute("data-lpignore", "true");
+    input.setAttribute("data-1p-ignore", "true");
+    input.dataset.formType = "other";
+    if (input.dataset.registerAutofillGuardBound === "1") return;
+    const unlock = () => {
+      input.readOnly = false;
+    };
+    input.readOnly = true;
+    input.addEventListener("focus", unlock);
+    input.addEventListener("pointerdown", unlock);
+    input.addEventListener("keydown", unlock);
+    input.dataset.registerAutofillGuardBound = "1";
+  });
 }
 
 function setRecoveryMsg(text, ok) {

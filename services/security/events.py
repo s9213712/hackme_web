@@ -19,6 +19,7 @@ _CLEANUP_LOCK = threading.Lock()
 _LAST_EVENT_CLEANUP_AT = 0.0
 _EVENT_RETENTION_DAYS = 7
 _EVENT_CLEANUP_INTERVAL_SECONDS = 300
+_ROOT_NOTIFICATION_BURST_WINDOW_SECONDS = 300
 SECURITY_EVENT_TYPES = {
     "login_fail",
     "ip_block",
@@ -102,8 +103,10 @@ def format_root_security_notification(event_type, ip, target_user=None, detail="
     lines.extend([
         f"事件細節：{_humanize_security_detail(normalized_type, detail)}",
         "處理狀態：系統已記錄此事件，並依目前安全設定放行或阻擋。",
-        f"建議處理：{SECURITY_EVENT_ADVICE.get(normalized_type, '請到安全中心查看近期事件與伺服器日誌。')}",
     ])
+    if normalized_type == "csrf_fail":
+        lines.append("通知彙總：同來源短時間重複事件只顯示一則通知，完整紀錄請到安全中心查看。")
+    lines.append(f"建議處理：{SECURITY_EVENT_ADVICE.get(normalized_type, '請到安全中心查看近期事件與伺服器日誌。')}")
     return f"安全警訊：{label}", "\n".join(lines)
 
 
@@ -113,6 +116,30 @@ def _should_create_root_notification(event_type, detail=""):
         return normalized_type in ROOT_NOTIFICATION_EVENT_TYPES
     detail_text = str(detail or "").strip()
     return detail_text not in {"idle_timeout", "single_session_logout", "user_sessions_revoked"}
+
+
+def _root_notification_recently_sent(conn, event_type, ip, created_at):
+    normalized_type = normalize_security_event_type(event_type)
+    if normalized_type != "csrf_fail":
+        return False
+    try:
+        event_dt = datetime.fromisoformat(str(created_at))
+    except Exception:
+        event_dt = datetime.now()
+    cutoff = (event_dt - timedelta(seconds=_ROOT_NOTIFICATION_BURST_WINDOW_SECONDS)).isoformat()
+    try:
+        row = conn.execute(
+            """
+            SELECT id FROM security_events
+            WHERE event_type=? AND ip_address=? AND created_at>=?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (normalized_type, ip or "-", cutoff),
+        ).fetchone()
+        return row is not None
+    except sqlite3.OperationalError:
+        return False
 
 
 def configure_security_events_service(*, get_db, get_system_settings, audit, is_ip_blocking_enabled):
@@ -190,8 +217,15 @@ def record_security_event(event_type, ip, target_user=None, detail="", created_a
         return
     _maybe_cleanup_old_events()
     normalized_type = normalize_security_event_type(event_type)
+    event_created_at = created_at or datetime.now().isoformat()
     conn = _STATE["get_db"]()
     try:
+        suppress_root_notification = _root_notification_recently_sent(
+            conn,
+            normalized_type,
+            ip,
+            event_created_at,
+        )
         conn.execute(
             "INSERT INTO security_events (event_type, ip_address, target_user, detail, created_at) VALUES (?, ?, ?, ?, ?)",
             (
@@ -199,10 +233,10 @@ def record_security_event(event_type, ip, target_user=None, detail="", created_a
                 ip or "-",
                 target_user,
                 detail or "",
-                created_at or datetime.now().isoformat(),
+                event_created_at,
             ),
         )
-        if _should_create_root_notification(normalized_type, detail):
+        if (not suppress_root_notification) and _should_create_root_notification(normalized_type, detail):
             title, body = format_root_security_notification(normalized_type, ip, target_user=target_user, detail=detail)
             create_root_notification_if_enabled(
                 conn,

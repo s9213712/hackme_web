@@ -1,3 +1,5 @@
+import subprocess
+import sys
 from pathlib import Path
 
 
@@ -28,6 +30,21 @@ def test_server_mode_v2_full_smoke_references_extended_bundle_and_isolation_chec
     assert "all_scripts_passed" in script
     assert "prod_clean" in script
     assert "time.sleep(5)" in script
+
+
+def test_server_mode_v2_full_smoke_help_exits_without_booting_runtime():
+    script_path = REPO_ROOT / "scripts" / "security" / "server_mode" / "server_mode_v2_full_smoke.py"
+    result = subprocess.run(
+        [sys.executable, str(script_path), "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "full set of SMv2" in result.stdout
+    assert "hackme_full_smoke_" not in result.stdout
+    assert result.stderr == ""
 
 
 def test_full_feature_script_rotates_internal_test_token_with_target_username():

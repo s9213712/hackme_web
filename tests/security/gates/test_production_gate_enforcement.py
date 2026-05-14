@@ -95,7 +95,7 @@ def _build_runtime(tmp_path):
     return mode, get_db, db_path
 
 
-def _insert_report(db_path, report_type, *, _pass=True, critical=0, high=0, report_hash=None, target_commit="test-commit"):
+def _insert_report(db_path, report_type, *, _pass=True, critical=0, high=0, report_hash=None, target_commit="test-commit", server_mode="dev_ready"):
     """Insert a single production_entry_reports row with controllable
     failure dimensions, so each test can inject exactly the kind of
     failure it wants to see blocked.
@@ -119,7 +119,7 @@ def _insert_report(db_path, report_type, *, _pass=True, critical=0, high=0, repo
         "report_hash": rh,
         "target_commit": target_commit,
         "target_branch": "test-branch",
-        "server_mode": "test",
+        "server_mode": server_mode,
         "test_result": "pass" if _pass else "fail",
         "pass": 1 if _pass else 0,
         "critical_findings_count": int(critical),
@@ -138,13 +138,14 @@ def _insert_report(db_path, report_type, *, _pass=True, critical=0, high=0, repo
          test_result, pass, critical_findings_count, high_findings_count,
          unresolved_findings_json, tester, signature, raw_report_json, report_source,
          trust_level, key_version, verified_at, created_at)
-        VALUES (?, ?, ?, ?, 'test-branch', 'test', ?, ?, ?, ?, '[]', 'pytest', ?, ?, 'pytest_fixture', 'verified', ?, ?, ?)
+        VALUES (?, ?, ?, ?, 'test-branch', ?, ?, ?, ?, ?, '[]', 'pytest', ?, ?, 'pytest_fixture', 'verified', ?, ?, ?)
         """,
         (
             f"rep_{report_type}",
             report_type,
             rh,
             target_commit,
+            server_mode,
             "pass" if _pass else "fail",
             1 if _pass else 0,
             int(critical),

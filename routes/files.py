@@ -43,6 +43,7 @@ from services.storage.remote_downloads import (
     download_torrent_file_with_aria2,
     download_torrent_url_with_aria2,
     remote_download_capabilities,
+    validate_torrent_file_trackers,
     validate_remote_url,
 )
 from services.storage.storage_albums import (
@@ -464,9 +465,9 @@ def register_file_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return None, json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return None, json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return None, json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return None, json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         return data, None, None
 
     def _points_error(exc):
@@ -1110,6 +1111,7 @@ def register_file_routes(app, deps):
         "storage_root": storage_root,
         "task_snapshot": _task_snapshot,
         "validate_remote_url": lambda url: validate_remote_url(url),
+        "validate_torrent_file_trackers": lambda path: validate_torrent_file_trackers(path),
     }
     register_file_remote_download_routes(app, file_remote_download_ctx)
 
@@ -1415,24 +1417,28 @@ def register_file_routes(app, deps):
             if upload_policy_error:
                 return upload_policy_error
             rule = get_member_level_rule(conn, _actor_value(actor, "effective_level") or _actor_value(actor, "member_level"))
-            upload_result, msg = store_cloud_upload(
-                conn,
-                actor=actor,
-                member_rule=rule,
-                storage_root=storage_root,
-                file_storage=request.files["file"],
-                privacy_mode=(request.form.get("privacy_mode") or "standard_plain").strip(),
-                encrypted_metadata=(request.form.get("encrypted_metadata") or "").strip() or None,
-                encrypted_file_key=(request.form.get("encrypted_file_key") or "").strip() or None,
-                wrapped_by=(request.form.get("wrapped_by") or "user_public_key").strip() or "user_public_key",
-                ciphertext_sha256=(request.form.get("ciphertext_sha256") or "").strip() or None,
-                encryption_algorithm=(request.form.get("encryption_algorithm") or "").strip() or None,
-                encryption_version=(request.form.get("encryption_version") or "").strip() or None,
-                nonce=(request.form.get("nonce") or "").strip() or None,
-                client_scan_report=_form_json_value("client_scan_report"),
-                scan_now=True,
-                server_file_fernet=server_file_fernet,
-            )
+            try:
+                upload_result, msg = store_cloud_upload(
+                    conn,
+                    actor=actor,
+                    member_rule=rule,
+                    storage_root=storage_root,
+                    file_storage=request.files["file"],
+                    privacy_mode=(request.form.get("privacy_mode") or "standard_plain").strip(),
+                    encrypted_metadata=(request.form.get("encrypted_metadata") or "").strip() or None,
+                    encrypted_file_key=(request.form.get("encrypted_file_key") or "").strip() or None,
+                    wrapped_by=(request.form.get("wrapped_by") or "user_public_key").strip() or "user_public_key",
+                    ciphertext_sha256=(request.form.get("ciphertext_sha256") or "").strip() or None,
+                    encryption_algorithm=(request.form.get("encryption_algorithm") or "").strip() or None,
+                    encryption_version=(request.form.get("encryption_version") or "").strip() or None,
+                    nonce=(request.form.get("nonce") or "").strip() or None,
+                    client_scan_report=_form_json_value("client_scan_report"),
+                    scan_now=True,
+                    server_file_fernet=server_file_fernet,
+                )
+            except ValueError as exc:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": f"雲端硬碟上傳失敗：{str(exc) or exc.__class__.__name__}", "error_code": exc.__class__.__name__}), 400
             if msg:
                 conn.rollback()
                 return json_resp({"ok": False, "msg": msg}), 400
@@ -1463,7 +1469,7 @@ def register_file_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         conn = get_db()
         try:
             ensure_storage_album_schema(conn)
@@ -1504,7 +1510,7 @@ def register_file_routes(app, deps):
             try:
                 data = request.get_json(force=True)
             except Exception:
-                return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+                return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
             data = data if isinstance(data, dict) else {}
             if request.method == "DELETE" or request.path.endswith("/trash"):
                 result, msg = trash_storage_folder(conn, actor=actor, path=data.get("path") or "")
@@ -1533,7 +1539,7 @@ def register_file_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         conn = get_db()
         try:
             result, msg = move_storage_folder(conn, actor=actor, old_path=data.get("old_path") or "", new_path=data.get("new_path") or "")
@@ -1555,7 +1561,7 @@ def register_file_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         data = data if isinstance(data, dict) else {}
         conn = get_db()
         try:
@@ -1592,7 +1598,7 @@ def register_file_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         conn = get_db()
         try:
             storage_file, msg = move_storage_file(conn, actor=actor, storage_file_id=storage_file_id, new_virtual_path=data.get("virtual_path") or "")
@@ -1764,7 +1770,7 @@ def register_file_routes(app, deps):
             try:
                 data = request.get_json(force=True)
             except Exception:
-                return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+                return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
             album, msg = create_album(
                 conn,
                 actor=actor,
@@ -1791,7 +1797,7 @@ def register_file_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         conn = get_db()
         try:
             result, msg = smart_organize_albums(
@@ -1846,7 +1852,7 @@ def register_file_routes(app, deps):
             try:
                 data = request.get_json(force=True)
             except Exception:
-                return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+                return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
             album, msg = update_album(
                 conn,
                 actor=actor,
@@ -1876,7 +1882,7 @@ def register_file_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         conn = get_db()
         try:
             album, msg = add_album_file(
@@ -2028,9 +2034,9 @@ def register_file_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         raw_name = str(data.get("filename") or "untitled.txt").strip() or "untitled.txt"
         filename = safe_public_filename(raw_name)
         lower_name = filename.lower()
@@ -2131,7 +2137,7 @@ def register_file_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         conn = get_db()
         try:
             ensure_cloud_drive_attachment_schema(conn)
@@ -2223,7 +2229,7 @@ def register_file_routes(app, deps):
                 data = {}
             ref_id = (data.get("ref_id") or request.args.get("ref_id") or "").strip()
         if not ref_id:
-            return json_resp({"ok": False, "msg": "attachment ref required"}), 400
+            return json_resp({"ok": False, "msg": "需要 attachment 參考"}), 400
         conn = get_db()
         try:
             ensure_cloud_drive_attachment_schema(conn)
@@ -2366,7 +2372,7 @@ def register_file_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         content = data.get("content") if isinstance(data, dict) else None
         if not isinstance(content, str):
             return json_resp({"ok": False, "msg": "content 必須是文字"}), 400
@@ -2542,7 +2548,7 @@ def register_file_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         conn = get_db()
         try:
             ensure_cloud_drive_attachment_schema(conn)
@@ -2574,7 +2580,7 @@ def register_file_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         conn = get_db()
         try:
             ensure_cloud_drive_attachment_schema(conn)
@@ -2631,7 +2637,7 @@ def register_file_routes(app, deps):
             try:
                 data = request.get_json(force=True)
             except Exception:
-                return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+                return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
             result, msg = create_announcement_attachment_request(
                 conn,
                 actor=actor,
@@ -2659,7 +2665,7 @@ def register_file_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         conn = get_db()
         try:
             ensure_cloud_drive_attachment_schema(conn)

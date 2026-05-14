@@ -32,20 +32,71 @@ python3 scripts/prepush/pre_push_checks.py
 #### 2. 全量 pytest
 
 ```bash
-PYTHONPATH=. python3 -m pytest -q tests
+scripts/testing/pytest_in_tmp.sh -q tests
 ```
 
 #### 3. 功能 smoke
 
 ```bash
-scripts/security/pentest/run_functional_smoke.sh --port 50741
+scripts/security/pentest/run_functional_smoke.sh --qa-full --port 50741
 ```
 
 `tests/security/smoke/smoke_suite.py`、`scripts/security/pentest/run_functional_smoke.sh`、`scripts/security/pentest/run_pentest.sh`
 的 smoke 預設帳密現在已對齊為
 `RootSmoke123! / ManagerSmoke123! / TestSmoke123!`。
 
-#### 4. 權限與安全掃描
+`--qa-full` 是既有 QA 腳本的完整產品回歸模式，包含 community/chat/storage/video/
+ComfyUI/reports/moderation 等較廣的功能 bug 類檢查。上線前 production gate
+呼叫同一支腳本時只用 `--core-only`，不把 ComfyUI、chess/game、video 等產品 QA
+混進解鎖條件。
+
+產品 QA pytest 也走既有 QA pytest wrapper，例如：
+
+```bash
+scripts/testing/pytest_in_tmp.sh -q \
+  tests/community tests/storage tests/video tests/comfyui tests/games \
+  tests/frontend/community tests/frontend/storage tests/frontend/video \
+  tests/frontend/comfyui tests/frontend/games
+```
+
+三棋 AI 的棋力量化有獨立 benchmark，不走西洋棋 self-play pipeline：
+
+```bash
+python3 scripts/games/board_ai_benchmark.py \
+  --games reversi,go,gomoku \
+  --engines random,easy,normal,hard \
+  --rounds 1
+```
+
+報告會輸出到 `runtime/reports/games/board_ai_benchmark_*.json`，內容包含
+round-robin standings、head-to-head matrix、Elo estimate、非法步統計與
+deterministic skill suite。教學與欄位解讀見
+[games/references/BOARD_AI_BENCHMARK.md](games/references/BOARD_AI_BENCHMARK.md)。
+
+#### 4. 平台中心 Playwright 驗收
+
+```bash
+python3 scripts/testing/playwright_platform_health_check.py
+```
+
+這支腳本會自建 `/tmp/hackme_web_platform_phase15_*` 隔離 runtime、挑選隨機非
+`5000` port、啟動 QA server，並用 Playwright Chromium 進行真實頁面互動。它會
+驗證：
+
+- Job Center 的 queued/running/succeeded/failed 顯示、取消確認、retry、一般使用者
+  不可讀 `/api/admin/jobs`
+- Notification Center 的 info / warning / error、unread count、dismissed_at 與
+  audience 隔離
+- Share Link Management 的 file / album / video 顯示、撤銷、max views、expires、
+  password_required 與外部 URL 防誤用
+- Trading Asset Overview 的可用點數、鎖定點數、現貨市值、借貸 / 融資權益、利息與
+  API 失敗前端錯誤提示
+- `390x844`、`768x1024`、`1366x768` viewport 不爆版、不水平捲動
+
+報告會輸出到該次隔離 runtime 的 `reports/qa/playwright_platform_health_check_*.json`
+與 `.md`。這是前後端實測，不能用單純 pytest passed 取代。
+
+#### 5. 權限與安全掃描
 
 ```bash
 scripts/security/pentest/run_pentest.sh --target https://127.0.0.1:5000
@@ -54,22 +105,22 @@ scripts/security/pentest/run_pentest.sh --target https://127.0.0.1:5000
 若只跑 `whole-site-production-gate`，wrapper 會自動把 timeout floor 拉高到
 `900s`，避免舊版預設 `180s` 永遠先把 gate timeout 掉。
 
-#### 5. 角色 / 權限專測
+#### 6. 角色 / 權限專測
 
 ```bash
 scripts/security/pentest/run_pentest.sh --target https://127.0.0.1:5000 --only functional-permissions
 ```
 
-#### 6. 交易壓力 / 正確性
+#### 7. 交易壓力 / 正確性
 
 ```bash
-PYTHONPATH=. python3 scripts/security/pentest/trading_stress_pentest.py --target https://127.0.0.1:5000
+python3 scripts/security/pentest/trading_stress_pentest.py --target https://127.0.0.1:5000
 ```
 
 若這次改到交易價格融合或定投上限，另外補跑：
 
 ```bash
-PYTHONPATH=. python3 -m pytest -q tests/trading/core/test_trading_engine.py tests/trading/pricing/test_trading_reference_prices.py
+scripts/testing/pytest_in_tmp.sh -q tests/trading/core/test_trading_engine.py tests/trading/pricing/test_trading_reference_prices.py
 python3 scripts/trading/validation/trading_exchange_validation.py --out /tmp/trading_exchange_validation_followup
 ```
 
@@ -84,8 +135,11 @@ PYTHONPATH=. python3 scripts/trading/probes/backtest_20000_probe.py --include-ro
 
 - `scripts/prepush/pre_push_checks.py`
   是本機快速 gate，不預設啟 server。
-- `scripts/security/pentest/run_functional_smoke.sh`
-  是隔離 runtime 的主要功能回歸；它會保留自己的 `/tmp` runtime 邊界。
+- `scripts/security/pentest/run_functional_smoke.sh --qa-full`
+  是隔離 runtime 的主要功能 QA 回歸；它會保留自己的 `/tmp` runtime 邊界。
+- `scripts/security/pentest/run_functional_smoke.sh --core-only`
+  是 production gate 用的核心模式，只保留 auth、admin、security-center、用戶、
+  PointsChain、trading、越權與必要 runtime hardening 檢查。
 - `scripts/security/pentest/run_pentest.sh`
   是外層 orchestrator，會呼叫多種檢查，包含 `functional-permissions`、
   server-mode-v2、whole-site-production-gate 等子檢查；whole-site gate 會套
@@ -126,6 +180,19 @@ PYTHONPATH=. python3 scripts/trading/probes/backtest_20000_probe.py --include-ro
   - `固定 N` 代表目前 repo 內對應 pytest 檔的 collected case 數。
 - `預設放置位置`：指生成腳本的預設輸出落點；若是站內手動匯出 / 上傳型報告，則列 canonical staging 路徑。
 
+另外要注意：
+
+- `runtime/reports/security/production_gate/*.json` 的 filesystem auto-detect 只輔助顯示最新候選報告。
+- 這些檔案預設是 `unverified`，只有驗簽成功且 target 與當前 runtime 一致時才會被視為 `verified`。
+- unsigned、invalid JSON、`report_type` mismatch、replay 舊 commit 等檔案只能在後台顯示 warning，
+  不可讓 production gate 亮綠。
+- production gate 的 live 驗收至少要再補一條：
+  **13 份 verified 但 old/fake `target_commit` 的 reports 不得解鎖 production。**
+  這條不可只靠 `tests/snapshots/test_snapshots.py`；必須對隔離 `/tmp` server 實際呼叫：
+  - `GET /api/root/server-mode/requirements`
+  - `POST /api/root/production/enter`
+  並確認回應 reason 含 `target_commit_mismatch`。
+
 若要一次生成這 13 份報告，使用：
 
 ```bash
@@ -153,21 +220,85 @@ python3 scripts/on_live_reports/snapshot_restore.py
 
 - `runtime/reports/security/production_gate/<report_type>_report.json`
 
+若要做 live target-commit regression，建議另外保留一份驗收證據目錄，例如：
+
+- `runtime/reports/server_mode_gate_live_<RUN_ID>/`
+
+其中至少保存：
+
+- current target context
+- old-commit verified 13 份 scenario JSON
+- current-commit verified 13 份 scenario JSON
+- production enter response
+- final mode response
+
+若要把整條 happy-path 補齊，而不只驗 `target_commit mismatch`，至少再多做這 6 步：
+
+1. 先寫入 13 份 **signed + target 一致** 的
+   `runtime/reports/security/production_gate/<report_type>_report.json`，
+   再呼叫 `GET /api/root/server-mode/requirements`，確認 **只靠 filesystem
+   auto-detect 就能 `ok=true`**。
+2. 把同一批 13 份 payload 上傳到 `/api/root/production-report/upload`，再確認
+   `requirements ok=true`。
+3. 故意把其中一份 canonical filesystem report 改成 invalid JSON，再呼叫
+   `GET /api/root/server-mode/requirements`，確認 **仍是 `ok=true`**，
+   而且該 report 來源回退到 DB 的 verified `prodrep_*` record。
+4. `POST /api/root/production/enter`、`confirm=GO_LIVE`，確認切換成功。
+5. production 後用真正瀏覽器或 browser-like UA 重新登入 root，確認：
+   - `browser_only_mode` 會擋掉 script-style client
+   - root 預設帳號首次登入會被要求改密
+   - 改密後可重新登入並讀 `/api/root/server-mode`、`/api/admin/security-center`
+6. 對下面兩條 API 做並發 hammer，並掃描 server log：
+   - `GET /api/root/server-mode/requirements`
+   - `GET /api/admin/security-center`
+   期待：
+   - 沒有 500
+   - 沒有 `database is locked`
+   - `security-center.readiness.status = ok`
+   - `security-center.anomaly.signals = []`
+
+2026-05-09 的 live full-generator 驗收已在隔離副本實跑完一次：
+
+- 副本：`/tmp/hackme_web_dev_20260509_171716_15908/hackme_web`
+- 證據：`runtime/reports/server_mode_gate_full_generators_20260509T115237Z/`
+- focused happy-path 證據：`runtime/reports/server_mode_gate_live_20260509T092856Z/`
+
+這輪最後證明：
+
+- focused live gate：通過
+- full generator gate：通過
+- `database is locked`：`0`
+
+但有一個實務細節不能省略：
+
+- 若你在隔離副本上先修改了 protected files，再跑 `integrity_guard`，
+  integrity report 會先因 pending findings 失敗。
+- 正確流程不是跳過，而是：
+  1. `GET /api/root/integrity/findings?status=pending`
+  2. review/approve 預期變更
+  3. `POST /api/root/integrity/rescan`
+  4. `GET /api/root/integrity/report`
+  5. 重新上傳 `integrity_guard` report
+  6. 再做 final requirements / `GO_LIVE`
+
+換句話說，full-generator 驗收不是只看 13 份 raw reports，有改過隔離副本本身時，
+`integrity_guard` 的 finding review 也是正式流程的一部分。
+
 | report_type | 使用腳本 / 驗證面 | 測試筆數 | 預設放置位置 |
 |---|---|---:|---|
 | `clean_smoke` | `python3 scripts/security/server_mode/server_mode_v2_clean_smoke.py` | 動態 | `runtime/reports/security/server_mode_v2_clean_smoke_<timestamp>.json|.md` |
 | `adversarial` | `python3 scripts/security/server_mode/server_mode_v2_adversarial.py` | 動態 | `runtime/reports/security/server_mode_v2_adversarial_<timestamp>.json|.md` |
 | `redteam_l2` | `python3 scripts/security/server_mode/server_mode_v2_redteam_l2.py` | 動態 | `runtime/reports/security/server_mode_v2_redteam_l2_<timestamp>.json|.md` |
-| `pytest` | `PYTHONPATH=. python3 -m pytest -q tests` | 動態 | `runtime/reports/security/production_gate/pytest_production_report.json` |
+| `pytest` | `scripts/testing/pytest_in_tmp.sh -q tests` | 動態 | `runtime/reports/security/production_gate/pytest_production_report.json` |
 | `log_chain_verify` | `GET /api/root/server-mode/logs/verify` | 動態 | `runtime/reports/security/production_gate/log_chain_verify_report.json` |
 | `integrity_guard` | `POST /api/root/integrity/rescan` + `GET /api/root/integrity/report` + `tests/security/integrity/test_integrity_guard.py` | 固定 15 | `runtime/reports/security/production_gate/integrity_guard_report.json` |
 | `stress` | `python3 scripts/security/pentest/stress_test.py` + `python3 scripts/security/pentest/trading_stress_pentest.py` | 動態 | `runtime/reports/security/stress_<timestamp>.json|.md`；`runtime/reports/security/trading_stress_report_<timestamp>.json|.md` |
 | `permission` | `python3 scripts/security/pentest/functional_permission_pentest.py` | 動態 | `runtime/reports/security/functional_permission_pentest_<timestamp>.json|.md` |
-| `functional` | `scripts/security/pentest/run_functional_smoke.sh` + `tests/security/smoke/smoke_suite.py` | 動態 | `runtime/reports/security/functional_<run_id>/00_FUNCTIONAL_SMOKE.md`、`results.tsv`、`server.out`、`raw/` |
+| `functional` | `scripts/security/pentest/run_functional_smoke.sh --core-only` + `tests/security/smoke/smoke_suite.py` | 動態 | `runtime/reports/security/functional_<run_id>/00_FUNCTIONAL_SMOKE.md`、`results.tsv`、`server.out`、`raw/` |
 | `pentest` | `scripts/security/pentest/run_pentest.sh` + `python3 scripts/security/pentest/session_security_pentest.py` | 動態 | `runtime/reports/security/<run_id>/00_SUMMARY.md` + `raw/*.json|*.md|*.txt` |
-| `snapshot_restore` | `PYTHONPATH=. python3 -m pytest -q tests/snapshots/test_snapshots.py` + 手動 `create → restore → verify` | 固定 40 | `runtime/reports/security/production_gate/snapshot_restore_report.json` |
-| `points_chain_consistency` | `PYTHONPATH=. python3 -m pytest -q tests/points/test_points_chain.py` + `services/points_chain.verify_chain()` | 固定 27 | `runtime/reports/security/production_gate/points_chain_consistency_report.json` |
-| `cloud_drive_quota_permission` | `PYTHONPATH=. python3 -m pytest -q tests/storage/test_cloud_drive_attachments.py tests/storage/test_storage_albums_schema.py` | 固定 55 | `runtime/reports/security/production_gate/cloud_drive_quota_permission_report.json` |
+| `snapshot_restore` | `scripts/testing/pytest_in_tmp.sh -q tests/snapshots/test_snapshots.py` + 手動 `create → restore → verify` | 固定 40 | `runtime/reports/security/production_gate/snapshot_restore_report.json` |
+| `points_chain_consistency` | `scripts/testing/pytest_in_tmp.sh -q tests/points/test_points_chain.py` + `services/points_chain.verify_chain()` | 固定 27 | `runtime/reports/security/production_gate/points_chain_consistency_report.json` |
+| `cloud_drive_quota_permission` | `scripts/testing/pytest_in_tmp.sh -q tests/storage/test_cloud_drive_attachments.py tests/storage/test_storage_albums_schema.py` | 固定 55 | `runtime/reports/security/production_gate/cloud_drive_quota_permission_report.json` |
 
 補充：
 
@@ -176,10 +307,14 @@ python3 scripts/on_live_reports/snapshot_restore.py
   `runtime/reports/security/production_gate/`，不要散落在 repo root。
 - `functional` 與 `pentest` 都是目錄型報告，不是單一 `.json`；前者偏功能流程，後者偏安全/攻擊面。
 - `stress` 一次通常會有兩份報告：一般 HTTP 壓測與 trading stress，各自獨立保存。
-- `on_live_reports_make.sh` 會額外生成：
+- `on_live_reports_make.py` 會額外生成：
   - `runtime/reports/security/production_gate/on_live_reports_make_<RUN_ID>.json`
   - `runtime/reports/security/production_gate/on_live_reports_make_<RUN_ID>.md`
   這兩份是本次整批產製的總結，不是 13 份 required report 之一。
+- 若 production profile 內的某些鍵（例如 `allow_register`、`captcha_mode`、
+  `production_single_*`）沒有出現在 `security-center` payload，請直接查
+  runtime DB 的 `system_settings` 補核對，不要把「payload 沒帶出來」誤判成
+  「production hardening 沒套用」。
 
 ## 原理
 
@@ -232,6 +367,8 @@ python3 scripts/on_live_reports/snapshot_restore.py
   - LoRA metadata / `trained_words` 是否會在重新整理後仍存在，不是只在下載當下有
   - 使用者加入 LoRA 時，是否只會補上缺少的 trigger words，而不會每次重複疊加
   - prompt helper 是否能把 Embedding token 正確送進後端
+  - workflow template preview 若有正/負 `CLIPTextEncode.text`，`ui_schema.panels[text]` 是否包含 synthetic `text:embeddings` / `embedding_shortcuts` 子項，且不被列為必填欄位
+  - 前端從 template 文字面板插入 Embedding 後，已展開的 text panel 是否保持展開，不可被重新折疊
   - custom VAE 是否真的改到 workflow，而不是只有 UI 多一個欄位
   - Civitai inspect / download 是否顯示 trigger words，且 remote mode 不會誤顯示本地下載工具
   - Civitai 搜尋是否支援關鍵字、base model、Checkpoint / LoRA / Embedding / ControlNet、Safe/NSFW 篩選，且搜尋結果會顯示版本、檔案大小、hash、相容模型摘要

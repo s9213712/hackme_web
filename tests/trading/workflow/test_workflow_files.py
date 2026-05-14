@@ -43,7 +43,7 @@ def test_trading_workflow_templates_live_under_workflows_directory():
 
 def test_workflow_custom_files_are_runtime_data_not_committed_templates():
     gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
-    assert "!workflows/system/*.json" in gitignore
+    assert "!workflows/trading_bot/*.json" in gitignore
     assert "/runtime/" in gitignore
 
     routes = (ROOT / "routes" / "trading.py").read_text(encoding="utf-8")

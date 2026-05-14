@@ -1,6 +1,6 @@
 """Slice 4a — schema snapshot test for services.trading.engine.ensure_trading_schema.
 
-Companion to docs/AGENTS/reports/claude/readability_refactor_2026-05-07/
+Companion coverage for the trading schema split.
 REFACTOR_PLAN.md slice 4.
 
 The function is 740 lines / 77 SQL statements. Splitting it into a
@@ -108,6 +108,11 @@ EXPECTED_SETTINGS_KEYS = [
     "trading.btc_trade_enabled",
     "trading.btc_trade_repo_url",
     "trading.enabled",
+    "trading.allow_unready_markets",
+    "trading.dev_allow_conservative_market_orders",
+    "trading.dev_allow_unready_markets",
+    "trading.dev_disable_price_confidence_gates",
+    "trading.disable_price_confidence_gates",
     "trading.futures_enabled",
     "trading.grid_fee_discount_percent",
     "trading.margin_liquidation_enabled",

@@ -2,58 +2,132 @@
 
 let gameSelectedMatchId = null;
 let gameSelectedSquare = null;
-let gameSelectedKey = "chess";
+let gameSelectedKey = gameInitialSelectedKey();
 let chessMoveInFlight = false;
-let gameState = { matches: [], invites: [], leaderboard: [] };
+let gameState = { matches: [], invites: [], leaderboard: [], users: [], multiplayer: { rooms: [], invites: [], modes: [] } };
 let soloGameTimer = null;
-const CHESS_PIECES = {
-  K: "♔", Q: "♕", R: "♖", B: "♗", N: "♘", P: "♙",
-  k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟",
+let localGameModuleCleanup = null;
+let localGameModuleActiveApi = null;
+let localGameModuleMountedKey = "";
+let localGameModuleTouchStart = null;
+let localGameModulePressedControl = null;
+let localGameModuleSwipeMode = "tap";
+let gameMultiplayerInvitePollTimer = null;
+let gameMultiplayerInviteModalInvite = null;
+let gameMultiplayerInviteActionBusy = false;
+let gameMultiplayerInviteSeenUserId = null;
+const gameMultiplayerInviteSeenIds = new Set();
+const GAME_MULTIPLAYER_MODES = {
+  fps_arena: [
+    { key: "coop", label: "合作破關" },
+    { key: "pvp", label: "PvP 對戰" },
+  ],
+  stickman_shooter: [
+    { key: "coop", label: "合作破關" },
+  ],
 };
-const SUDOKU_PUZZLES = [
-  {
-    puzzle: "530070000600195000098000060800060003400803001700020006060000280000419005000080079",
-    solution: "534678912672195348198342567859761423426853791713924856961537284287419635345286179",
-  },
-  {
-    puzzle: "003020600900305001001806400008102900700000008006708200002609500800203009005010300",
-    solution: "483921657967345821251876493548132976729564138136798245372689514814253769695417382",
-  },
-  {
-    puzzle: "000260701680070090190004500820100040004602900050003028009300074040050036703018000",
-    solution: "435269781682571493197834562826195347374682915951743628519326874248957136763418259",
-  },
-];
-let sudokuState = null;
-let minesweeperState = null;
-let oneA2BState = null;
-let tetrisState = null;
-let tetrisLoopTimer = null;
-let spaceShooterState = null;
-let spaceShooterLoopTimer = null;
-const TETRIS_COLS = 10;
-const TETRIS_ROWS = 20;
-const TETRIS_PIECES = {
-  I: [[1, 1, 1, 1]],
-  O: [[1, 1], [1, 1]],
-  T: [[0, 1, 0], [1, 1, 1]],
-  S: [[0, 1, 1], [1, 1, 0]],
-  Z: [[1, 1, 0], [0, 1, 1]],
-  J: [[1, 0, 0], [1, 1, 1]],
-  L: [[0, 0, 1], [1, 1, 1]],
-};
-const CHESS_PIPELINE_FALLBACK_COMMANDS = {
-  prepare: "python3 scripts/games/chess_replay_prepare.py --replace-output --include-quarantine",
-  seed_train: "python3 scripts/games/chess_seed_train.py --preset standard",
-  exp3_refine: "python3 scripts/games/chess_exp3_dataset_train.py --input-jsonl runtime/reports/games/chess_datasets/train.jsonl",
-  benchmark: "python3 scripts/games/chess_self_play_train.py --exp1-games 0 --exp2-games 0 --exp3-games 0 --exp4-games 0 --hard-exp1-games 0 --hard-exp2-games 0 --hard-exp3-games 0 --hard-exp4-games 0 --cross-games 0 --cross-exp1-exp3-games 0 --cross-exp2-exp3-games 0 --cross-exp1-exp4-games 0 --cross-exp2-exp4-games 0 --cross-exp3-exp4-games 0 --benchmark-rounds 1 --smoke-games-per-pair 1",
-  full_pipeline: "python3 scripts/games/chess_train_pipeline.py --preset standard --include-quarantine",
-};
+let gameMultiplayerSelectedRoomByKey = {};
+const GAME_KENNEY_ASSET_BASE = "/assets/games/vendor/kenney";
+const GAME_SOUND_ASSETS = Object.freeze({
+  uiClick: `${GAME_KENNEY_ASSET_BASE}/interface-sounds/audio/click_001.ogg`,
+  uiSelect: `${GAME_KENNEY_ASSET_BASE}/interface-sounds/audio/select_001.ogg`,
+  uiSuccess: `${GAME_KENNEY_ASSET_BASE}/interface-sounds/audio/confirmation_001.ogg`,
+  uiError: `${GAME_KENNEY_ASSET_BASE}/interface-sounds/audio/error_001.ogg`,
+  uiSwitch: `${GAME_KENNEY_ASSET_BASE}/interface-sounds/audio/switch_001.ogg`,
+  uiTick: `${GAME_KENNEY_ASSET_BASE}/interface-sounds/audio/tick_001.ogg`,
+  uiDrop: `${GAME_KENNEY_ASSET_BASE}/interface-sounds/audio/drop_001.ogg`,
+  uiOpen: `${GAME_KENNEY_ASSET_BASE}/interface-sounds/audio/open_001.ogg`,
+  uiClose: `${GAME_KENNEY_ASSET_BASE}/interface-sounds/audio/close_001.ogg`,
+  hit: `${GAME_KENNEY_ASSET_BASE}/impact-sounds/audio/impactGeneric_light_000.ogg`,
+  metalHit: `${GAME_KENNEY_ASSET_BASE}/impact-sounds/audio/impactMetal_light_000.ogg`,
+  punch: `${GAME_KENNEY_ASSET_BASE}/impact-sounds/audio/impactPunch_medium_000.ogg`,
+  woodHit: `${GAME_KENNEY_ASSET_BASE}/impact-sounds/audio/impactWood_light_000.ogg`,
+  glassHit: `${GAME_KENNEY_ASSET_BASE}/impact-sounds/audio/impactGlass_light_000.ogg`,
+  footstep: `${GAME_KENNEY_ASSET_BASE}/impact-sounds/audio/footstep_concrete_000.ogg`,
+});
+const gameAudioCache = new Map();
+const gameAudioLastPlayedAt = new Map();
 
-function setOneA2BNotice(text, ms = 3500) {
-  if (!oneA2BState) return;
-  oneA2BState.notice = text || "";
-  oneA2BState.noticeUntil = text ? Date.now() + ms : 0;
+function localGameCatalogKeys() {
+  const catalog = Array.isArray(window.HACKME_GAME_CATALOG) ? window.HACKME_GAME_CATALOG : [];
+  return new Set(catalog.filter((game) => !game.legacy).map((game) => game.key));
+}
+
+function isLocalGameCatalogKey(key) {
+  return localGameCatalogKeys().has(key);
+}
+
+function isLocalGameModuleAvailable(key) {
+  return Boolean(window.HACKME_GAME_MODULES?.[key]?.mount);
+}
+
+function filterAvailableGameCatalog(games) {
+  const rows = Array.isArray(games) ? games : [];
+  return rows.filter((game) => !isLocalGameCatalogKey(game.key) || isLocalGameModuleAvailable(game.key));
+}
+
+function gameUrlParams() {
+  try {
+    return new URLSearchParams(window.location.search || "");
+  } catch (err) {
+    return new URLSearchParams("");
+  }
+}
+
+function gameInitialSelectedKey() {
+  return String(gameUrlParams().get("game") || "chess").trim() || "chess";
+}
+
+function gameViewModules() {
+  return window.HACKME_GAME_VIEW_MODULES || {};
+}
+
+function activeGameViewModule() {
+  return gameViewModules()[gameSelectedKey] || null;
+}
+
+function legacyGameRuntime() {
+  return {
+    setGameMsg,
+    sound(name, options = {}) { playGameSound(name, options); },
+    gameRequest,
+    loadSelectedGameLeaderboard,
+    submitSoloGameScore,
+    ensureSoloGameTimer,
+    stopSoloGameTimerIfIdle,
+    formatSoloGameTime,
+    soloRawElapsedMs,
+    soloElapsedMs,
+    dailyChallenge(gameKey = gameSelectedKey) {
+      return window.hackmeGameDailyChallenge?.(gameKey) || null;
+    },
+    dailyMissions(gameKey = gameSelectedKey) {
+      return window.listHackmeGameDailyMissions?.(gameKey) || [];
+    },
+    achievement(gameKey, id, label, detail = "") {
+      const result = window.recordHackmeGameAchievement?.(gameKey, id, label, detail);
+      if (result?.unlocked) setGameMsg(`成就解鎖：${result.label}`, true);
+      renderGameMetaPanels();
+      return result || { unlocked: false };
+    },
+    mission(gameKey, id, progress, target, label = "") {
+      const result = window.recordHackmeGameMissionProgress?.(gameKey, id, progress, target, label);
+      renderGameMetaPanels();
+      return result || null;
+    },
+    replay(gameKey, payload) {
+      const result = window.recordHackmeGameReplay?.(gameKey, payload);
+      renderGameMetaPanels();
+      return result;
+    },
+    renderGameMetaPanels,
+  };
+}
+
+function dispatchActiveGameViewEvent(type, event) {
+  const module = activeGameViewModule();
+  if (!module?.dispatch) return false;
+  return Boolean(module.dispatch(type, event, legacyGameRuntime()));
 }
 
 function formatSoloGameTime(ms) {
@@ -78,21 +152,16 @@ function soloElapsedMs(state) {
 function ensureSoloGameTimer() {
   if (soloGameTimer) return;
   soloGameTimer = setInterval(() => {
-    if (gameSelectedKey === "sudoku") updateSudokuStatus();
-    if (gameSelectedKey === "minesweeper") updateMinesweeperStatus();
-    if (gameSelectedKey === "1a2b") updateOneA2BStatus();
-    if (gameSelectedKey === "tetris") updateTetrisStatus();
-    if (gameSelectedKey === "space_shooter") updateSpaceShooterStatus();
+    const module = activeGameViewModule();
+    if (module?.updateStatus) module.updateStatus(legacyGameRuntime());
   }, 250);
 }
 
 function stopSoloGameTimerIfIdle() {
-  const sudokuActive = sudokuState && !sudokuState.completedAt;
-  const minesActive = minesweeperState && minesweeperState.status === "active";
-  const oneA2BActive = oneA2BState && !oneA2BState.completedAt;
-  const tetrisActive = tetrisState && tetrisState.status === "active";
-  const shooterActive = spaceShooterState && spaceShooterState.status === "active";
-  if (!sudokuActive && !minesActive && !oneA2BActive && !tetrisActive && !shooterActive && soloGameTimer) {
+  const anyActive = Object.values(gameViewModules()).some((module) => (
+    typeof module?.isActive === "function" && module.isActive()
+  ));
+  if (!anyActive && soloGameTimer) {
     clearInterval(soloGameTimer);
     soloGameTimer = null;
   }
@@ -103,101 +172,176 @@ function setGameMsg(text, ok) {
   if (!el) return;
   el.textContent = text || "";
   el.className = text ? "msg show " + (ok ? "ok" : "err") : "msg";
+  if (text) playGameSound(ok ? "uiSuccess" : "uiError", { volume: ok ? 0.16 : 0.2, throttleMs: 350 });
+}
+
+function gameSoundsEnabled() {
+  try {
+    return window.localStorage?.getItem("hackme_game_sounds") !== "off";
+  } catch (err) {
+    return true;
+  }
+}
+
+function playGameSound(name, options = {}) {
+  const src = GAME_SOUND_ASSETS[name] || GAME_SOUND_ASSETS.uiClick;
+  if (!src || typeof Audio === "undefined" || !gameSoundsEnabled()) return;
+  const now = Date.now();
+  const throttleMs = Number(options.throttleMs ?? 80);
+  if (now - Number(gameAudioLastPlayedAt.get(src) || 0) < throttleMs) return;
+  gameAudioLastPlayedAt.set(src, now);
+  try {
+    const pool = gameAudioCache.get(src) || [];
+    let audio = pool.find((item) => item.paused || item.ended);
+    if (!audio) {
+      audio = new Audio(src);
+      audio.preload = "auto";
+      pool.push(audio);
+      gameAudioCache.set(src, pool.slice(-4));
+    }
+    audio.volume = Math.max(0, Math.min(1, Number(options.volume ?? 0.18)));
+    audio.currentTime = 0;
+    audio.play?.().catch(() => {});
+  } catch (err) {
+    // Browsers may block audio until a user gesture; keep gameplay silent instead of failing.
+  }
 }
 
 function gameIcon(key) {
+  if (key === "snake") return "S";
+  if (key === "game_2048") return "2";
+  if (key === "brick_breaker") return "▤";
+  if (key === "reversi") return "●";
+  if (key === "go") return "○";
+  if (key === "gomoku") return "五";
+  if (key === "chinese_chess") return "象";
   if (key === "sudoku") return "9";
   if (key === "minesweeper") return "!";
   if (key === "1a2b") return "A";
   if (key === "tetris") return "▦";
+  if (key === "real_tetris") return "▧";
   if (key === "space_shooter") return "▲";
+  if (key === "fps_arena") return "◎";
+  if (key === "open_world") return "市";
+  if (key === "bullet_hell") return "✦";
+  if (key === "stickman_shooter") return "人";
   return "♟";
 }
 
 function gameSubtitle(game) {
+  if (game.key === "snake") return "手機滑動 / 鍵盤皆可玩";
+  if (game.key === "game_2048") return "手機滑動合併數字";
+  if (game.key === "brick_breaker") return "手機按鍵控制擋板";
+  if (game.key === "reversi") return "線上棋盤黑白棋 / AI 練習";
+  if (game.key === "go") return "19 路線上棋盤圍棋 / 目數結算";
+  if (game.key === "gomoku") return "15 路線上棋盤五子棋 / AI 練習";
+  if (game.key === "chinese_chess") return "9x10 線上棋盤中國象棋 / AI 練習";
   if (game.key === "sudoku") return "單人邏輯解題";
   if (game.key === "minesweeper") return "單人推理挑戰";
   if (game.key === "1a2b") return "單人猜數字";
   if (game.key === "tetris") return "高分消除挑戰";
+  if (game.key === "real_tetris") return "剛體物理與 90% 消線";
   if (game.key === "space_shooter") return "高分射擊挑戰";
+  if (game.key === "fps_arena") return "3D 射擊訓練 / 合作 / PvP";
+  if (game.key === "open_world") return "3D 城市探索 / 駕車任務 / 警戒追逐";
+  if (game.key === "bullet_hell") return "閃避密集彈幕並反擊";
+  if (game.key === "stickman_shooter") return "2D 側捲平台射擊 / 合作解謎";
   return game.supports_computer ? "玩家對戰 / 電腦練習" : "玩家對戰";
 }
 
-function gameDifficultyOptionDescription(difficulty) {
-  if (difficulty === "experiment 4:pv") return "實驗 4：PV 策略價值網路";
-  if (difficulty === "experiment 3:dl") return "實驗 3：DL 深度學習";
-  if (difficulty === "experiment 2:nn") return "實驗 2：NN 小型神經網路";
-  if (difficulty === "experiment") return "實驗：引擎搜尋 + 對局學習";
-  if (difficulty === "hard") return "困難：避免明顯送子";
-  return "普通：優先吃子與將軍";
+function gameSupportsMultiplayer(key = gameSelectedKey) {
+  return Array.isArray(GAME_MULTIPLAYER_MODES[key]) && GAME_MULTIPLAYER_MODES[key].length > 0;
 }
 
-function renderChessPracticeDifficultyOptions(games) {
-  const select = $("game-practice-difficulty");
-  if (!select) return;
-  const chessGame = (Array.isArray(games) ? games : []).find((game) => game?.key === "chess");
-  const rows = Array.isArray(chessGame?.computer_difficulties) && chessGame.computer_difficulties.length
-    ? chessGame.computer_difficulties
-    : [
-        { key: "normal", label: "普通" },
-        { key: "hard", label: "困難" },
-        { key: "experiment", label: "實驗" },
-        { key: "experiment 2:nn", label: "實驗 2：NN" },
-        { key: "experiment 3:dl", label: "實驗 3：DL" },
-        { key: "experiment 4:pv", label: "實驗 4：PV" },
-      ];
-  const current = select.value || "normal";
-  select.innerHTML = rows.map((row) => {
-    const key = String(row?.key || "normal");
-    const label = String(row?.label || gameDifficultyLabel(key));
-    return `<option value="${sanitize(key)}">${sanitize(gameDifficultyOptionDescription(key) || label)}</option>`;
-  }).join("");
-  const allowed = new Set(rows.map((row) => String(row?.key || "")));
-  select.value = allowed.has(current) ? current : (allowed.has("normal") ? "normal" : String(rows[0]?.key || "normal"));
+function gameMultiplayerModeLabel(mode) {
+  if (mode === "pvp") return "PvP 對戰";
+  return "合作破關";
+}
+
+function gameMultiplayerActiveRoom(key = gameSelectedKey, mode = "") {
+  if (!gameSupportsMultiplayer(key)) return null;
+  const rooms = Array.isArray(gameState.multiplayer?.rooms) ? gameState.multiplayer.rooms : [];
+  const selectedId = Number(gameMultiplayerSelectedRoomByKey[key] || 0);
+  const selected = selectedId ? rooms.find((room) => Number(room.id) === selectedId) : null;
+  const room = selected || rooms.find((item) => item.status === "active") || rooms.find((item) => item.status === "lobby") || null;
+  if (!room) return null;
+  if (mode && room.mode !== mode) return null;
+  if (!room.guest_user_id) return null;
+  return room;
+}
+
+function gameMultiplayerPeerId(room) {
+  if (!room) return null;
+  const me = Number(currentUserId || 0);
+  if (Number(room.host_user_id) === me) return Number(room.guest_user_id || 0) || null;
+  if (Number(room.guest_user_id) === me) return Number(room.host_user_id || 0) || null;
+  return null;
+}
+
+function gameMultiplayerPeerState(snapshot, room) {
+  const peerId = gameMultiplayerPeerId(room || snapshot?.room);
+  const players = Array.isArray(snapshot?.players) ? snapshot.players : [];
+  return players.find((player) => Number(player.user_id) === Number(peerId)) || null;
 }
 
 function switchGameView(key) {
   setGameMsg("", true);
   gameSelectedKey = key || "chess";
-  const isChess = gameSelectedKey === "chess";
-  const chessLobby = $("chess-lobby-panel");
-  const chessPanel = $("chess-game-panel");
-  const sudokuPanel = $("sudoku-game-panel");
-  const minesPanel = $("minesweeper-game-panel");
-  const oneA2BPanel = $("onea2b-game-panel");
-  const tetrisPanel = $("tetris-game-panel");
-  const shooterPanel = $("space-shooter-game-panel");
-  if (chessLobby) chessLobby.style.display = isChess ? "" : "none";
-  if (chessPanel) chessPanel.style.display = isChess ? "" : "none";
-  if (sudokuPanel) sudokuPanel.style.display = gameSelectedKey === "sudoku" ? "" : "none";
-  if (minesPanel) minesPanel.style.display = gameSelectedKey === "minesweeper" ? "" : "none";
-  if (oneA2BPanel) oneA2BPanel.style.display = gameSelectedKey === "1a2b" ? "" : "none";
-  if (tetrisPanel) tetrisPanel.style.display = gameSelectedKey === "tetris" ? "" : "none";
-  if (shooterPanel) shooterPanel.style.display = gameSelectedKey === "space_shooter" ? "" : "none";
+  const select = $("game-select");
+  if (select && select.value !== gameSelectedKey) select.value = gameSelectedKey;
+  const isLocalGameModule = isLocalGameModuleAvailable(gameSelectedKey);
+  const selectedViewModule = activeGameViewModule();
+  Object.values(gameViewModules()).forEach((module) => {
+    (module.panelIds || []).forEach((id) => {
+      const panel = $(id);
+      if (panel) panel.style.display = module.key === gameSelectedKey ? "" : "none";
+    });
+  });
+  const localGameModulePanel = $("local-module-game-panel");
+  if (localGameModulePanel) localGameModulePanel.style.display = isLocalGameModule ? "" : "none";
   document.querySelectorAll("[data-game-key]").forEach((btn) => {
     btn.classList.toggle("active", btn.getAttribute("data-game-key") === gameSelectedKey);
   });
-  if (gameSelectedKey === "sudoku" && !sudokuState) {
-    renderSudokuBoard();
-    updateSudokuStatus();
+  if (isLocalGameModule) {
+    mountLocalGameModule(gameSelectedKey);
+  } else {
+    cleanupLocalGameModule();
   }
-  if (gameSelectedKey === "minesweeper" && !minesweeperState) {
-    renderMinesweeperBoard();
-    updateMinesweeperStatus();
-  }
-  if (gameSelectedKey === "1a2b" && !oneA2BState) {
-    renderOneA2BBoard();
-    updateOneA2BStatus();
-  }
-  if (gameSelectedKey === "tetris" && !tetrisState) {
-    renderTetrisBoard();
-    updateTetrisStatus();
-  }
-  if (gameSelectedKey === "space_shooter" && !spaceShooterState) {
-    renderSpaceShooterBoard();
-    updateSpaceShooterStatus();
-  }
+  if (!isLocalGameModule && selectedViewModule?.ensure) selectedViewModule.ensure(legacyGameRuntime());
+  updateGameFullscreenButtons();
+  renderGameMultiplayerPanel();
+  loadSelectedGameMultiplayer().catch((err) => {
+    if (gameSupportsMultiplayer(gameSelectedKey)) setGameMsg(err.message || "多人房間讀取失敗", false);
+  });
   loadSelectedGameLeaderboard().catch((err) => setGameMsg(err.message || "排行榜讀取失敗", false));
+}
+
+function gameFullscreenTarget() {
+  return document.querySelector("#module-games .game-board-panel");
+}
+
+function updateGameFullscreenButtons() {
+  const target = gameFullscreenTarget();
+  const active = Boolean(target && document.fullscreenElement === target);
+  document.querySelectorAll("#game-fullscreen-btn, #fps-arena-fullscreen-btn").forEach((button) => {
+    button.textContent = active ? "離開全螢幕" : (button.id === "fps-arena-fullscreen-btn" ? "全螢幕" : "全螢幕遊戲");
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+}
+
+async function toggleGameFullscreen() {
+  const target = gameFullscreenTarget();
+  if (!target) return;
+  try {
+    if (document.fullscreenElement === target) {
+      await document.exitFullscreen?.();
+    } else {
+      await target.requestFullscreen?.();
+    }
+    updateGameFullscreenButtons();
+  } catch (err) {
+    setGameMsg("此瀏覽器無法切換全螢幕", false);
+  }
 }
 
 function gameRequestNeedsFreshCsrf(json, res) {
@@ -236,17 +380,187 @@ async function gameRequest(path, { method = "GET", body = null } = {}) {
   return json;
 }
 
+function cleanupLocalGameModule() {
+  if (localGameModuleCleanup) localGameModuleCleanup();
+  localGameModuleCleanup = null;
+  localGameModuleActiveApi = null;
+  localGameModuleMountedKey = "";
+  localGameModuleTouchStart = null;
+  localGameModulePressedControl = null;
+  localGameModuleSwipeMode = "tap";
+  const root = $("local-module-game-root");
+  if (root) {
+    root.onclick = null;
+    root.innerHTML = "";
+  }
+  const actions = $("local-module-game-actions");
+  if (actions) actions.innerHTML = "";
+  const controls = $("local-module-game-controls");
+  if (controls) controls.innerHTML = "";
+  const panel = $("local-module-game-panel");
+  if (panel) delete panel.dataset.moduleKind;
+  const kicker = $("local-module-game-kicker");
+  if (kicker) kicker.textContent = "線上遊戲";
+}
+
+function normalizeSoloScoreTiming(body = {}) {
+  const payload = { ...body };
+  const penaltySeconds = Math.max(0, Math.round(Number(payload.penalty_seconds || 0)));
+  const rawFromPayload = Number(payload.raw_elapsed_ms || 0);
+  const elapsedFromPayload = Number(payload.elapsed_ms || 0);
+  const rawElapsed = Math.max(1, Math.round(rawFromPayload > 0 ? rawFromPayload : elapsedFromPayload - penaltySeconds * 1000));
+  payload.raw_elapsed_ms = rawElapsed;
+  payload.penalty_seconds = penaltySeconds;
+  payload.elapsed_ms = rawElapsed + penaltySeconds * 1000;
+  return payload;
+}
+
+async function submitLocalGameModuleScore(key, body) {
+  const payload = normalizeSoloScoreTiming(body);
+  try {
+    const json = await gameRequest(`/games/${encodeURIComponent(key)}/solo-scores`, { method: "POST", body: payload });
+    recordGameOutcome(key, payload, json);
+    showGameDailyRewardFeedback(json, "成績已送出");
+    await loadSelectedGameLeaderboard();
+    return json;
+  } catch (err) {
+    setGameMsg(err.message || "成績送出失敗", false);
+    return null;
+  }
+}
+
+function showGameDailyRewardFeedback(json, fallback) {
+  const reward = json?.daily_reward;
+  if (reward?.wallet && typeof renderEconomyWallet === "function") renderEconomyWallet(reward.wallet);
+  if (reward?.awarded) {
+    setGameMsg(`每日任務完成，獲得 ${Number(reward.reward_points || 0).toLocaleString()} 積分`, true);
+    return;
+  }
+  if (reward?.already_claimed) {
+    setGameMsg("成績已送出，每日任務獎勵今日已領取", true);
+    return;
+  }
+  if (reward?.error) {
+    setGameMsg(`成績已送出；每日任務積分暫時未入帳：${reward.error}`, false);
+    return;
+  }
+  setGameMsg(fallback || "成績已送出", true);
+}
+
+function currentGameDailyChallenge(key = gameSelectedKey) {
+  return window.hackmeGameDailyChallenge?.(key) || null;
+}
+
+function scoreOutcomeFromBody(body = {}, json = {}) {
+  const score = Number(body.score || 0);
+  const elapsed = Number(body.elapsed_ms || body.raw_elapsed_ms || 0);
+  const guessCount = Number(body.guess_count || 0);
+  const accuracy = Number(body.accuracy || 0);
+  return {
+    ...body,
+    score,
+    elapsed_ms: elapsed,
+    guess_count: guessCount,
+    accuracy,
+    completed: true,
+    clean: !Number(body.penalty_seconds || 0),
+    ranked: json?.ranked !== false,
+  };
+}
+
+function recordGameOutcome(gameKey, body = {}, json = {}) {
+  const outcome = scoreOutcomeFromBody(body, json);
+  window.completeHackmeGameMissionsForResult?.(gameKey, outcome);
+  const shareText = window.buildHackmeGameShareText?.(gameKey, outcome) || "";
+  window.recordHackmeGameReplay?.(gameKey, {
+    ...outcome,
+    summary: shareText,
+    title: window.hackmeGameByKey?.(gameKey)?.title || gameKey,
+  });
+  renderGameMetaPanels();
+}
+
+function createLocalGameModuleApi(key) {
+  const root = $("local-module-game-root");
+  const actions = $("local-module-game-actions");
+  const controls = $("local-module-game-controls");
+  return {
+    key,
+    root,
+    actions,
+    controls,
+    onAction: null,
+    onControl: null,
+    onKey: null,
+    sound(name, options = {}) { playGameSound(name, options); },
+    setTitle(text) { $("local-module-game-title").textContent = text || ""; },
+    status(text) { $("local-module-game-status").textContent = text || ""; },
+    setActions(html) { actions.innerHTML = html || ""; },
+    setControls(html) { controls.innerHTML = html || ""; },
+    setSwipeMode(mode) { localGameModuleSwipeMode = mode === "hold" ? "hold" : "tap"; },
+    dailyChallenge() { return window.hackmeGameDailyChallenge?.(key) || null; },
+    dailyMissions() { return window.listHackmeGameDailyMissions?.(key) || []; },
+    users() { return gameState.users || []; },
+    multiplayer() { return window.hackmeGameMultiplayer || null; },
+    achievement(id, label, detail = "") {
+      const result = window.recordHackmeGameAchievement?.(key, id, label, detail);
+      if (result?.unlocked) setGameMsg(`成就解鎖：${result.label}`, true);
+      renderGameMetaPanels();
+      return result || { unlocked: false };
+    },
+    mission(id, progress, target, label = "") {
+      const result = window.recordHackmeGameMissionProgress?.(key, id, progress, target, label);
+      renderGameMetaPanels();
+      return result || null;
+    },
+    recordReplay(payload) {
+      const result = window.recordHackmeGameReplay?.(key, payload);
+      renderGameMetaPanels();
+      return result;
+    },
+    shareSummary(payload) {
+      return window.buildHackmeGameShareText?.(key, payload) || "";
+    },
+    request(path, options) { return gameRequest(path, options); },
+    submitScore(body) { return submitLocalGameModuleScore(key, body); },
+  };
+}
+
+function mountLocalGameModule(key) {
+  if (localGameModuleMountedKey === key && localGameModuleActiveApi) return;
+  cleanupLocalGameModule();
+  const game = window.hackmeGameByKey?.(key) || {};
+  const module = window.HACKME_GAME_MODULES?.[key];
+  const isBoardGame = ["reversi", "go", "gomoku", "chinese_chess"].includes(key);
+  const panel = $("local-module-game-panel");
+  const kicker = $("local-module-game-kicker");
+  if (panel) panel.dataset.moduleKind = isBoardGame ? "online-board" : "arcade";
+  if (kicker) kicker.textContent = isBoardGame ? "線上棋盤" : "線上遊戲";
+  $("local-module-game-title").textContent = game.title || "遊戲";
+  $("local-module-game-status").textContent = game.subtitle || "準備中";
+  if (!module?.mount) {
+    $("local-module-game-root").innerHTML = "<div class=\"game-page-empty\"><strong>遊戲模組尚未載入</strong></div>";
+    return;
+  }
+  const api = createLocalGameModuleApi(key);
+  localGameModuleActiveApi = api;
+  localGameModuleMountedKey = key;
+  localGameModuleCleanup = module.mount(api) || null;
+}
+
 function renderGameCatalog(games) {
   const wrap = $("game-catalog-list");
   if (!wrap) return;
-  const rows = Array.isArray(games) ? games : [];
-  renderChessPracticeDifficultyOptions(rows);
-  wrap.innerHTML = rows.map((game) => `
-    <button class="game-catalog-item ${game.key === gameSelectedKey ? "active" : ""}" type="button" data-game-key="${sanitize(game.key || "chess")}">
-      <span class="game-catalog-icon">${sanitize(gameIcon(game.key))}</span>
-      <span><strong>${sanitize(game.title || "西洋棋")}</strong><small>${sanitize(gameSubtitle(game))}</small></span>
-    </button>
-  `).join("") || "<p style=\"color:var(--muted);\">尚未開放遊戲</p>";
+  const rows = filterAvailableGameCatalog(games);
+  if (typeof renderChessPracticeDifficultyOptions === "function") renderChessPracticeDifficultyOptions(rows);
+  wrap.innerHTML = rows.length ? `
+    <div class="game-select-panel">
+      <label for="game-select">選擇遊戲</label>
+      <select id="game-select" aria-label="選擇遊戲">
+        ${rows.map((game) => `<option value="${sanitize(game.key || "chess")}" ${game.key === gameSelectedKey ? "selected" : ""}>${sanitize(game.title || "西洋棋")} · ${sanitize(gameSubtitle(game))}</option>`).join("")}
+      </select>
+    </div>
+  ` : "<p style=\"color:var(--muted);\">尚未開放遊戲</p>";
   if (!rows.some((game) => game.key === gameSelectedKey)) gameSelectedKey = "chess";
   switchGameView(gameSelectedKey);
 }
@@ -262,6 +576,260 @@ function renderGameUsers(users) {
   select.innerHTML = '<option value="">選擇玩家</option>' + rows.map((user) => (
     `<option value="${sanitize(user.username || "")}">${sanitize(user.username || "")} · ${sanitize(user.role || "user")}</option>`
   )).join("");
+}
+
+function renderGameMultiplayerUsers(users = gameState.users || []) {
+  const select = $("game-multiplayer-user");
+  if (!select) return;
+  const current = select.value || "";
+  const rows = Array.isArray(users) ? users : [];
+  if (!rows.length) {
+    select.innerHTML = '<option value="">目前沒有可邀請玩家</option>';
+    return;
+  }
+  select.innerHTML = '<option value="">選擇玩家</option>' + rows.map((user) => (
+    `<option value="${sanitize(user.username || "")}">${sanitize(user.username || "")} · ${sanitize(user.role || "user")}</option>`
+  )).join("");
+  if (current && rows.some((user) => user.username === current)) select.value = current;
+}
+
+function renderGameMultiplayerPanel() {
+  const panel = $("game-multiplayer-panel");
+  if (!panel) return;
+  const supported = gameSupportsMultiplayer(gameSelectedKey);
+  panel.style.display = supported ? "" : "none";
+  if (!supported) return;
+  const modes = GAME_MULTIPLAYER_MODES[gameSelectedKey] || [];
+  const modeSelect = $("game-multiplayer-mode");
+  if (modeSelect) {
+    const previous = modeSelect.value || modes[0]?.key || "coop";
+    modeSelect.innerHTML = modes.map((mode) => `<option value="${sanitize(mode.key)}">${sanitize(mode.label)}</option>`).join("");
+    modeSelect.value = modes.some((mode) => mode.key === previous) ? previous : (modes[0]?.key || "coop");
+  }
+  renderGameMultiplayerUsers();
+  const hint = $("game-multiplayer-hint");
+  if (hint) {
+    hint.textContent = gameSelectedKey === "fps_arena"
+      ? "3D 支援合作打殭屍與 PvP；合作也會誤傷，槍聲會提示大致方向。"
+      : "火柴人合作需要雙人壓板、開門與同步抵達終點；合作也會誤傷。";
+  }
+  const list = $("game-multiplayer-list");
+  if (!list) return;
+  const rooms = Array.isArray(gameState.multiplayer?.rooms) ? gameState.multiplayer.rooms : [];
+  const invites = Array.isArray(gameState.multiplayer?.invites) ? gameState.multiplayer.invites : [];
+  const selectedId = Number(gameMultiplayerSelectedRoomByKey[gameSelectedKey] || 0);
+  const inviteRows = invites.map((invite) => {
+    const incoming = Number(invite.invitee_user_id) === Number(currentUserId || 0);
+    const title = incoming
+      ? `${invite.inviter_username} 邀請你加入 ${gameMultiplayerModeLabel(invite.mode)}`
+      : `邀請 ${invite.invitee_username} 加入 ${gameMultiplayerModeLabel(invite.mode)}`;
+    const actions = invite.status === "pending" && incoming
+      ? `<button class="btn game-mini-btn btn-primary" type="button" data-game-mp-invite="${invite.id}" data-game-mp-action="accept">接受</button>
+         <button class="btn game-mini-btn" type="button" data-game-mp-invite="${invite.id}" data-game-mp-action="reject">拒絕</button>`
+      : invite.status === "pending"
+        ? `<button class="btn game-mini-btn" type="button" data-game-mp-invite="${invite.id}" data-game-mp-action="cancel">取消</button>`
+        : "";
+    return `
+      <div class="drive-file-row game-list-row">
+        <div><strong>${sanitize(title)}</strong><small>${sanitize(invite.status)} · ${sanitize(formatChatTime(invite.created_at))}</small></div>
+        <div class="drive-file-actions">${actions}</div>
+      </div>
+    `;
+  });
+  const roomRows = rooms.map((room) => {
+    const active = Number(room.id) === selectedId || (!selectedId && room.status === "active");
+    const peer = Number(room.host_user_id) === Number(currentUserId || 0) ? room.guest_username : room.host_username;
+    const canStart = room.can_start && room.guest_user_id;
+    return `
+      <div class="drive-file-row game-list-row game-multiplayer-room ${active ? "active" : ""}">
+        <div>
+          <strong>${sanitize(gameMultiplayerModeLabel(room.mode))} · ${sanitize(room.room_code || `#${room.id}`)}</strong>
+          <small>${sanitize(room.status)} · 隊友 ${sanitize(peer || "等待加入")} · ${sanitize(formatChatTime(room.updated_at))}</small>
+        </div>
+        <div class="drive-file-actions">
+          <span class="game-multiplayer-badge">${sanitize(room.my_role === "host" ? "房主" : "成員")}</span>
+          <button class="btn game-mini-btn ${active ? "btn-primary" : ""}" type="button" data-game-mp-room="${room.id}">使用</button>
+          ${canStart ? `<button class="btn game-mini-btn" type="button" data-game-mp-start="${room.id}">同步開始</button>` : ""}
+        </div>
+      </div>
+    `;
+  });
+  list.innerHTML = [...inviteRows, ...roomRows].join("") || "<p style=\"color:var(--muted);\">尚無多人邀請或房間</p>";
+}
+
+async function loadSelectedGameMultiplayer() {
+  if (!gameSupportsMultiplayer(gameSelectedKey)) {
+    gameState.multiplayer = { rooms: [], invites: [], modes: [] };
+    renderGameMultiplayerPanel();
+    return null;
+  }
+  const data = await gameRequest(`/games/${encodeURIComponent(gameSelectedKey)}/multiplayer`);
+  gameState.multiplayer = {
+    rooms: data.rooms || [],
+    invites: data.invites || [],
+    modes: data.modes || [],
+  };
+  const selected = gameMultiplayerSelectedRoomByKey[gameSelectedKey];
+  if (selected && !(gameState.multiplayer.rooms || []).some((room) => Number(room.id) === Number(selected))) {
+    delete gameMultiplayerSelectedRoomByKey[gameSelectedKey];
+  }
+  renderGameMultiplayerPanel();
+  window.dispatchEvent(new CustomEvent("hackme:game-multiplayer-updated", { detail: { gameKey: gameSelectedKey } }));
+  return data;
+}
+
+async function createGameMultiplayerInvite() {
+  if (!gameSupportsMultiplayer(gameSelectedKey)) return;
+  const username = $("game-multiplayer-user")?.value || "";
+  const mode = $("game-multiplayer-mode")?.value || "coop";
+  if (!username) {
+    setGameMsg("請先選擇要邀請的玩家。", false);
+    return;
+  }
+  try {
+    const json = await gameRequest(`/games/${encodeURIComponent(gameSelectedKey)}/multiplayer/invites`, {
+      method: "POST",
+      body: { opponent_username: username, mode },
+    });
+    if (json.room?.id) gameMultiplayerSelectedRoomByKey[gameSelectedKey] = Number(json.room.id);
+    await loadSelectedGameMultiplayer();
+    setGameMsg("已送出多人邀請", true);
+  } catch (err) {
+    setGameMsg(err.message || "多人邀請失敗", false);
+  }
+}
+
+async function reviewGameMultiplayerInvite(inviteId, action) {
+  try {
+    const json = await gameRequest(`/games/multiplayer/invites/${encodeURIComponent(inviteId)}/${encodeURIComponent(action)}`, {
+      method: "POST",
+      body: {},
+    });
+    if (json.room?.game_key) {
+      gameMultiplayerSelectedRoomByKey[json.room.game_key] = Number(json.room.id);
+    }
+    await loadSelectedGameMultiplayer();
+    setGameMsg(action === "accept" ? "已加入多人房間" : "多人邀請已更新", true);
+  } catch (err) {
+    setGameMsg(err.message || "多人邀請處理失敗", false);
+  }
+}
+
+function gameMultiplayerInviteGameTitle(gameKey) {
+  const game = window.hackmeGameByKey?.(gameKey) || {};
+  return game.title || (gameKey === "fps_arena" ? "3D 對戰" : gameKey === "stickman_shooter" ? "火柴人橫向射擊" : "多人遊戲");
+}
+
+function syncGameMultiplayerInviteSeenUser() {
+  const userId = String(currentUserId || "");
+  if (gameMultiplayerInviteSeenUserId === userId) return;
+  gameMultiplayerInviteSeenUserId = userId;
+  gameMultiplayerInviteSeenIds.clear();
+  hideGameMultiplayerInviteModal();
+}
+
+function setGameMultiplayerInviteModalBusy(busy) {
+  gameMultiplayerInviteActionBusy = !!busy;
+  ["game-multiplayer-invite-accept-btn", "game-multiplayer-invite-reject-btn"].forEach((id) => {
+    const button = $(id);
+    if (button) button.disabled = gameMultiplayerInviteActionBusy;
+  });
+}
+
+function showGameMultiplayerInviteModal(invite) {
+  const overlay = $("game-multiplayer-invite-modal");
+  const title = $("game-multiplayer-invite-modal-title");
+  const body = $("game-multiplayer-invite-modal-body");
+  const detail = $("game-multiplayer-invite-modal-detail");
+  if (!overlay || !invite) return;
+  const gameTitle = gameMultiplayerInviteGameTitle(invite.game_key);
+  const modeLabel = gameMultiplayerModeLabel(invite.mode);
+  gameMultiplayerInviteModalInvite = invite;
+  gameMultiplayerInviteSeenIds.add(String(invite.id));
+  if (title) title.textContent = "多人遊戲邀請";
+  if (body) {
+    body.innerHTML = `<strong>${sanitize(invite.inviter_username || "玩家")}</strong> 邀請你加入 <strong>${sanitize(gameTitle)}</strong>`;
+  }
+  if (detail) {
+    const roomCode = invite.room?.room_code || "";
+    detail.textContent = `${modeLabel}${roomCode ? ` · 房間 ${roomCode}` : ""}`;
+  }
+  setGameMultiplayerInviteModalBusy(false);
+  overlay.hidden = false;
+  overlay.classList.add("show");
+  overlay.setAttribute("aria-hidden", "false");
+}
+
+function hideGameMultiplayerInviteModal() {
+  const overlay = $("game-multiplayer-invite-modal");
+  if (!overlay) return;
+  overlay.classList.remove("show");
+  overlay.hidden = true;
+  overlay.setAttribute("aria-hidden", "true");
+  gameMultiplayerInviteModalInvite = null;
+  setGameMultiplayerInviteModalBusy(false);
+}
+
+async function loadGlobalGameMultiplayerInvites({ force = false } = {}) {
+  syncGameMultiplayerInviteSeenUser();
+  if (!currentUserId) return { ok: true, invites: [] };
+  const data = await gameRequest("/games/multiplayer/invites/pending");
+  const invites = Array.isArray(data.invites) ? data.invites : [];
+  if (gameMultiplayerInviteModalInvite && !invites.some((invite) => Number(invite.id) === Number(gameMultiplayerInviteModalInvite.id))) {
+    hideGameMultiplayerInviteModal();
+  }
+  if (!$("game-multiplayer-invite-modal")) return data;
+  if (gameMultiplayerInviteModalInvite) return data;
+  const nextInvite = invites.find((invite) => force || !gameMultiplayerInviteSeenIds.has(String(invite.id)));
+  if (nextInvite) showGameMultiplayerInviteModal(nextInvite);
+  return data;
+}
+
+async function respondGlobalGameMultiplayerInvite(action) {
+  const invite = gameMultiplayerInviteModalInvite;
+  if (!invite || gameMultiplayerInviteActionBusy) return;
+  setGameMultiplayerInviteModalBusy(true);
+  try {
+    const json = await gameRequest(`/games/multiplayer/invites/${encodeURIComponent(invite.id)}/${encodeURIComponent(action)}`, {
+      method: "POST",
+      body: {},
+    });
+    hideGameMultiplayerInviteModal();
+    if (action === "accept" && json.room?.game_key) {
+      gameMultiplayerSelectedRoomByKey[json.room.game_key] = Number(json.room.id);
+      if (typeof switchModuleTab === "function") switchModuleTab("games");
+      switchGameView(json.room.game_key);
+      setGameMsg("已接受邀請並切換到多人房間。", true);
+    } else {
+      setGameMsg("已拒絕多人邀請。", true);
+      if (gameSupportsMultiplayer(gameSelectedKey)) await loadSelectedGameMultiplayer();
+    }
+    await loadGlobalGameMultiplayerInvites({ force: true }).catch(() => null);
+  } catch (err) {
+    const detail = $("game-multiplayer-invite-modal-detail");
+    if (detail) detail.textContent = err.message || "多人邀請處理失敗";
+    setGameMultiplayerInviteModalBusy(false);
+  }
+}
+
+function ensureGameMultiplayerInvitePolling() {
+  if (gameMultiplayerInvitePollTimer) return;
+  const tick = () => loadGlobalGameMultiplayerInvites().catch(() => null);
+  gameMultiplayerInvitePollTimer = window.setInterval(tick, 5000);
+  window.setTimeout(tick, 1200);
+}
+
+async function startGameMultiplayerRoom(roomId) {
+  try {
+    const json = await gameRequest(`/games/multiplayer/rooms/${encodeURIComponent(roomId)}/start`, { method: "POST", body: {} });
+    if (json.room?.game_key) gameMultiplayerSelectedRoomByKey[json.room.game_key] = Number(json.room.id);
+    await loadSelectedGameMultiplayer();
+    setGameMsg("多人房間已同步開始", true);
+    return json;
+  } catch (err) {
+    setGameMsg(err.message || "多人房間開始失敗", false);
+    return null;
+  }
 }
 
 function renderGameInvites(invites) {
@@ -290,178 +858,6 @@ function renderGameInvites(invites) {
   }).join("");
 }
 
-function gameMatchLabel(match) {
-  const side = match.my_side === "black" ? "黑方" : "白方";
-  const opponentName = match.my_side === "black" ? match.white_username : match.black_username;
-  const difficulty = match.mode === "computer" ? ` · ${gameDifficultyLabel(match.computer_difficulty)}` : "";
-  return `${side} vs ${opponentName || "電腦"}${difficulty}`;
-}
-
-function gameDifficultyLabel(difficulty) {
-  if (difficulty === "experiment 4:pv") return "實驗 4：PV";
-  if (difficulty === "experiment 3:dl") return "實驗 3：DL";
-  if (difficulty === "experiment 2:nn") return "實驗 2：NN";
-  if (difficulty === "experiment") return "實驗";
-  if (difficulty === "hard") return "困難";
-  return "普通";
-}
-
-function gameOpponentColor(color) {
-  return color === "white" ? "black" : "white";
-}
-
-function buildOptimisticChessMatch(match, move) {
-  if (!match || !move) return match;
-  const board = { ...(match.board || {}) };
-  const piece = move.piece || board[move.from] || "";
-  delete board[move.from];
-  if (move.en_passant) {
-    const captureRank = (match.current_turn === "white" ? Number(move.to[1]) - 1 : Number(move.to[1]) + 1);
-    delete board[`${move.to[0]}${captureRank}`];
-  }
-  board[move.to] = move.promotion
-    ? (match.current_turn === "white" ? String(move.promotion || "q").toUpperCase() : String(move.promotion || "q").toLowerCase())
-    : piece;
-  if (move.castle) {
-    if (move.to === "g1") {
-      delete board.h1;
-      board.f1 = "R";
-    } else if (move.to === "c1") {
-      delete board.a1;
-      board.d1 = "R";
-    } else if (move.to === "g8") {
-      delete board.h8;
-      board.f8 = "r";
-    } else if (move.to === "c8") {
-      delete board.a8;
-      board.d8 = "r";
-    }
-  }
-  const moveHistory = Array.isArray(match.move_history) ? [...match.move_history] : [];
-  moveHistory.push({
-    by: match.current_turn,
-    from: move.from,
-    to: move.to,
-    piece,
-    captured: move.captured || null,
-    promotion: move.promotion || null,
-    castle: Boolean(move.castle),
-    en_passant: Boolean(move.en_passant),
-  });
-  return {
-    ...match,
-    board,
-    move_history: moveHistory,
-    current_turn: gameOpponentColor(match.current_turn),
-    legal_moves: [],
-    pending_computer_response: true,
-    pending_status_message: "你已走棋，電腦思考中...",
-  };
-}
-
-function renderGameMatches(matches) {
-  const wrap = $("game-match-list");
-  if (!wrap) return;
-  const rows = Array.isArray(matches) ? matches : [];
-  if (!gameSelectedMatchId && rows.length) {
-    gameSelectedMatchId = rows[0].id;
-  }
-  if (!rows.length) {
-    wrap.innerHTML = "<p style=\"color:var(--muted);\">還沒有棋局</p>";
-    renderChessBoard(null);
-    return;
-  }
-  wrap.innerHTML = rows.map((match) => {
-    const canDelete = match.status !== "active";
-    return `
-      <div class="game-match-item ${match.id === gameSelectedMatchId ? "active" : ""}">
-        <button class="game-match-row ${match.id === gameSelectedMatchId ? "active" : ""}" type="button" data-game-match-id="${match.id}">
-          <span><strong>${sanitize(gameMatchLabel(match))}</strong><small>${sanitize(match.status)} · ${sanitize(match.current_turn === "white" ? "白方走" : "黑方走")}</small></span>
-          <span>${match.mode === "computer" ? "練習" : "對戰"}</span>
-        </button>
-        ${canDelete ? `<button class="btn btn-danger game-mini-btn" type="button" data-game-delete-match="${match.id}" title="刪除已結束棋局">刪除</button>` : ""}
-      </div>
-    `;
-  }).join("");
-  const selected = rows.find((match) => match.id === gameSelectedMatchId) || rows[0];
-  if (selected) {
-    gameSelectedMatchId = selected.id;
-    renderChessBoard(selected);
-  }
-}
-
-function renderChessBoard(match) {
-  const board = $("chess-board");
-  const title = $("game-current-title");
-  const status = $("game-current-status");
-  const history = $("game-move-history");
-  const resign = $("game-resign-btn");
-  const offerDraw = $("game-offer-draw-btn");
-  const acceptDraw = $("game-accept-draw-btn");
-  const rejectDraw = $("game-reject-draw-btn");
-  const claimDraw = $("game-claim-draw-btn");
-  if (!board) return;
-  if (!match) {
-    board.innerHTML = "<div class=\"chess-empty\">尚未選擇棋局</div>";
-    if (title) title.textContent = "尚未選擇棋局";
-    if (status) status.textContent = "選擇棋局後即可走棋";
-    if (history) history.innerHTML = "";
-    if (resign) resign.style.display = "none";
-    if (offerDraw) offerDraw.style.display = "none";
-    if (acceptDraw) acceptDraw.style.display = "none";
-    if (rejectDraw) rejectDraw.style.display = "none";
-    if (claimDraw) claimDraw.style.display = "none";
-    return;
-  }
-  const boardMap = match.board || {};
-  if (title) title.textContent = gameMatchLabel(match);
-  const myTurn = match.status === "active" && match.my_side === match.current_turn;
-  if (status) {
-    if (match.status !== "active") {
-      status.textContent = match.winner_username ? `已結束，勝者：${match.winner_username}` : `已結束：${match.result_reason || "平手"}`;
-    } else if (match.draw_offer_pending && match.can_accept_draw_offer) {
-      status.textContent = `${match.draw_offer_by_username || "對手"} 已提和，等待你接受或拒絕`;
-    } else if (match.draw_offer_pending && String(match.draw_offer_by_user_id || "") === String(currentUserId || "")) {
-      status.textContent = `已向 ${match.my_side === "white" ? match.black_username : match.white_username} 提和，等待對方回覆`;
-    } else if (match.pending_computer_response) {
-      status.textContent = match.pending_status_message || "你已走棋，電腦思考中...";
-    } else {
-      status.textContent = myTurn ? "輪到你走棋" : `等待${match.current_turn === "white" ? "白方" : "黑方"}走棋`;
-    }
-  }
-  if (resign) resign.style.display = match.status === "active" ? "" : "none";
-  if (offerDraw) offerDraw.style.display = match.status === "active" && match.can_offer_draw ? "" : "none";
-  if (acceptDraw) acceptDraw.style.display = match.status === "active" && match.can_accept_draw_offer ? "" : "none";
-  if (rejectDraw) rejectDraw.style.display = match.status === "active" && match.can_reject_draw_offer ? "" : "none";
-  if (claimDraw) claimDraw.style.display = match.status === "active" && myTurn && match.can_claim_draw ? "" : "none";
-  if (gameSelectedSquare && !boardMap[gameSelectedSquare]) gameSelectedSquare = null;
-  const legalTargets = new Set((match.legal_moves || [])
-    .filter((move) => move.from === gameSelectedSquare)
-    .map((move) => move.to));
-  const squares = [];
-  for (let rank = 8; rank >= 1; rank -= 1) {
-    for (const file of "abcdefgh") {
-      const square = file + rank;
-      const piece = boardMap[square] || "";
-      const isDark = (file.charCodeAt(0) + rank) % 2 === 0;
-      const selectable = myTurn && piece && ((match.my_side === "white" && piece === piece.toUpperCase()) || (match.my_side === "black" && piece === piece.toLowerCase()));
-      squares.push(`
-        <button class="chess-square ${isDark ? "dark" : "light"} ${square === gameSelectedSquare ? "selected" : ""} ${legalTargets.has(square) ? "target" : ""}"
-                type="button" data-chess-square="${square}" ${match.status !== "active" || chessMoveInFlight ? "disabled" : ""}>
-          <span>${sanitize(CHESS_PIECES[piece] || "")}</span>
-          <small>${selectable || legalTargets.has(square) ? sanitize(square) : ""}</small>
-        </button>
-      `);
-    }
-  }
-  board.innerHTML = squares.join("");
-  if (history) {
-    const moves = Array.isArray(match.move_history) ? match.move_history : [];
-    history.innerHTML = moves.length
-      ? moves.slice(-16).map((move, index) => `<span>${moves.length - 16 + index + 1 > 0 ? moves.length - 16 + index + 1 : index + 1}. ${sanitize(move.from)}→${sanitize(move.to)}${move.computer ? " · CPU" : ""}</span>`).join("")
-      : "<span style=\"color:var(--muted);\">尚未走棋</span>";
-  }
-}
 
 function renderGameLeaderboard(data) {
   const wrap = $("game-leaderboard-list");
@@ -511,104 +907,113 @@ function renderGameLeaderboard(data) {
   `).join("");
 }
 
-function gameRootChessPanelVisible() {
-  return currentUser === "root" && gameSelectedKey === "chess";
+function gameMetricText(value, target) {
+  const current = Number(value || 0);
+  const goal = Number(target || 1);
+  if (goal >= 10000) return `${formatSoloGameTime(Math.min(current, goal))} / ${formatSoloGameTime(goal)}`;
+  return `${Math.min(current, goal).toLocaleString()} / ${goal.toLocaleString()}`;
 }
 
-function renderChessRootDashboard(data) {
-  const panel = $("game-root-chess-panel");
-  const status = $("game-root-chess-status");
-  const production = $("game-root-chess-production");
-  const replay = $("game-root-chess-replay");
-  const pipeline = $("game-root-chess-pipeline");
-  const benchmark = $("game-root-chess-benchmark");
-  const promotion = $("game-root-chess-promotion");
-  const prepareCommand = $("game-root-chess-prepare-command");
-  const seedCommand = $("game-root-chess-seed-command");
-  const exp3Command = $("game-root-chess-exp3-command");
-  const benchmarkCommand = $("game-root-chess-benchmark-command");
-  const fullPipelineCommand = $("game-root-chess-pipeline-command");
-  if (!panel || !status || !production || !replay || !pipeline || !benchmark || !promotion) return;
-  panel.style.display = gameRootChessPanelVisible() ? "" : "none";
-  if (!gameRootChessPanelVisible()) return;
-  if (!data?.ok) {
-    status.textContent = "chess engine dashboard 讀取失敗。";
+function renderGameDailyPanel() {
+  const wrap = $("game-daily-panel");
+  if (!wrap) return;
+  const key = gameSelectedKey || "chess";
+  const challenge = currentGameDailyChallenge(key);
+  const missions = window.listHackmeGameDailyMissions?.(key, challenge) || [];
+  wrap.innerHTML = `
+    <div class="drive-card-sub">${sanitize(challenge?.label || "每日挑戰")} · 完成可領每日積分</div>
+    <div class="game-daily-missions">
+      ${missions.map((mission) => `
+        <div class="game-mission-row ${mission.complete ? "complete" : ""}">
+          <span class="game-meta-icon" data-game-meta-icon="${mission.complete ? "check" : "target"}">${mission.complete ? "✓" : mission.dailyIndex || "·"}</span>
+          <div><strong>${sanitize(mission.label || mission.id)}</strong><small>${gameMetricText(mission.progress, mission.target)}</small></div>
+        </div>
+      `).join("") || "<p style=\"color:var(--muted);\">今日沒有任務</p>"}
+    </div>
+  `;
+}
+
+function renderGameAchievementsPanel() {
+  const wrap = $("game-achievement-list");
+  if (!wrap) return;
+  const rows = window.listHackmeGameAchievements?.(gameSelectedKey || "") || [];
+  if (!rows.length) {
+    wrap.innerHTML = "<p style=\"color:var(--muted);\">尚未解鎖成就</p>";
     return;
   }
-  const models = Array.isArray(data.production_models) ? data.production_models : [];
-  const replayInfo = data.replay_buffer || {};
-  const pipelineInfo = data.pipeline || {};
-  const pipelineCommands = pipelineInfo.commands || CHESS_PIPELINE_FALLBACK_COMMANDS;
-  const latestPrepare = data.latest_replay_prepare?.summary || {};
-  const latestSeed = data.latest_seed_training_report?.summary || {};
-  const latestPipeline = data.latest_pipeline_report?.summary || {};
-  const bench = data.latest_benchmark?.benchmark || {};
-  const smoke = data.latest_benchmark?.smoke_evaluation || {};
-  const promo = data.promotion?.status || {};
-  const recommendation = data.pipeline_recommendation || {};
-  const readyLabel = recommendation.ready ? "可重訓" : "暫不建議重訓";
-  status.textContent = `Warm Start ${data.warm_start?.ok ? "已就緒" : "失敗"} · usable replay ${Number(replayInfo.usable_replays || 0)} 筆 · ${readyLabel} · 最近 benchmark ${bench.games_played || 0} 場`;
-  production.innerHTML = models.length
-    ? models.map((row) => `<div class="drive-file-row game-list-row"><div><strong>${sanitize(row.engine || "-")}</strong><small>${sanitize(row.architecture || row.path || "-")}</small></div><strong>${sanitize(String(row.sample_count ?? row.size_bytes ?? 0))}</strong></div>`).join("")
-    : "<p style=\"color:var(--muted);\">尚無 production model</p>";
-  replay.innerHTML = `
-    <div class="drive-file-row game-list-row"><div><strong>Replay Buffer</strong><small>${sanitize(replayInfo.path || "-")}</small></div><strong>${Number(replayInfo.total_replays || 0)}</strong></div>
-    <div class="drive-file-row game-list-row"><div><strong>Usable Replays</strong><small>trusted / trainable</small></div><strong>${Number(replayInfo.usable_replays || 0)}</strong></div>
-    <div class="drive-file-row game-list-row"><div><strong>Quarantine</strong><small>${sanitize(replayInfo.quarantine_path || "-")}</small></div><strong>${Number(replayInfo.quarantine_replays || 0)}</strong></div>
-    <div class="drive-file-row game-list-row"><div><strong>Rejected</strong><small>${sanitize(replayInfo.rejected_path || "-")}</small></div><strong>${Number(replayInfo.rejected_replays || 0)}</strong></div>
-    <div class="drive-file-row game-list-row"><div><strong>Recent User Games</strong><small>最近 7 天</small></div><strong>${Number(replayInfo.recent_user_games || 0)}</strong></div>
-    <div class="drive-file-row game-list-row"><div><strong>Suspicious Replays</strong><small>待降權 / 隔離</small></div><strong>${Number(replayInfo.suspicious_count || 0)}</strong></div>
-    <div class="drive-file-row game-list-row"><div><strong>Duplicate / Resign Abuse</strong><small>資料污染風險</small></div><strong>${Number(replayInfo.duplicate_count || 0)} / ${Number(replayInfo.resign_abuse_count || 0)}</strong></div>
-  `;
-  pipeline.innerHTML = `
-    <div class="drive-file-row game-list-row"><div><strong>Retrain Recommendation</strong><small>${sanitize((recommendation.ready_reasons || recommendation.blocked_reasons || []).join(", ") || "no signal")}</small></div><strong>${recommendation.ready ? "READY" : "HOLD"}</strong></div>
-    <div class="drive-file-row game-list-row"><div><strong>Latest Prepare</strong><small>${sanitize(data.latest_replay_prepare?.path || "-")}</small></div><strong>${Number(latestPrepare.accepted_train_samples || 0)} / ${Number(latestPrepare.accepted_eval_samples || 0)}</strong></div>
-    <div class="drive-file-row game-list-row"><div><strong>Dataset Paths</strong><small>train / eval</small></div><strong>${sanitize(pipelineInfo.train_path || "-")} | ${sanitize(pipelineInfo.eval_path || "-")}</strong></div>
-    <div class="drive-file-row game-list-row"><div><strong>Latest Seed Train</strong><small>${sanitize(data.latest_seed_training_report?.path || "-")}</small></div><strong>${Number(latestSeed.games_played || 0)}</strong></div>
-    <div class="drive-file-row game-list-row"><div><strong>Latest Updates</strong><small>exp3 / exp4</small></div><strong>${Number((latestSeed.updates || {})["experiment 3:dl"] || 0)} / ${Number((latestSeed.updates || {})["experiment 4:pv"] || 0)}</strong></div>
-    <div class="drive-file-row game-list-row"><div><strong>Latest Full Pipeline</strong><small>${sanitize(data.latest_pipeline_report?.path || "-")}</small></div><strong>${sanitize(latestPipeline.run_id || "-")}</strong></div>
-  `;
-  const standings = Array.isArray(bench.standings) ? bench.standings.slice(0, 6) : [];
-  benchmark.innerHTML = standings.length
-    ? standings.map((row) => `<div class="drive-file-row game-list-row"><div><strong>${sanitize(row.engine || "-")}</strong><small>score_rate ${sanitize(String(row.score_rate ?? "-"))} · win_rate ${sanitize(String(row.win_rate ?? "-"))}</small></div><strong>${Number(row.games || 0)}</strong></div>`).join("")
-    : "<p style=\"color:var(--muted);\">尚無 benchmark report</p>";
-  const candidate = promo.candidate || null;
-  const last = promo.last_promotion_result || null;
-  promotion.innerHTML = `
-    <div class="drive-file-row game-list-row"><div><strong>Current Candidate</strong><small>${sanitize(candidate?.engine || "none")}</small></div><strong>${candidate?.promotion_gate?.pass ? "PASS" : (candidate ? "HOLD" : "-")}</strong></div>
-    <div class="drive-file-row game-list-row"><div><strong>Smoke</strong><small>post-training smoke</small></div><strong>${smoke.pass ? "PASS" : (smoke.games_played ? "FAIL" : "-")}</strong></div>
-    <div class="drive-file-row game-list-row"><div><strong>Promotion Gate</strong><small>${sanitize((candidate?.promotion_gate?.reasons || []).join(", ") || "ready")}</small></div><strong>${candidate?.promotion_gate?.pass ? "PASS" : (candidate ? "HOLD" : "-")}</strong></div>
-    <div class="drive-file-row game-list-row"><div><strong>Last Promotion</strong><small>${sanitize(last?.engine || "none")}</small></div><strong>${sanitize(last?.result || "-")}</strong></div>
-  `;
-  if (prepareCommand) prepareCommand.value = pipelineCommands.prepare || "";
-  if (seedCommand) seedCommand.value = pipelineCommands.seed_train || "";
-  if (exp3Command) exp3Command.value = pipelineCommands.exp3_refine || "";
-  if (benchmarkCommand) benchmarkCommand.value = pipelineCommands.benchmark || "";
-  if (fullPipelineCommand) fullPipelineCommand.value = pipelineCommands.full_pipeline || "";
+  wrap.innerHTML = rows.slice(0, 8).map((row) => `
+    <div class="game-achievement-row ${row.unlocked || row.unlockedAt ? "unlocked" : ""}">
+      <span class="game-meta-icon" data-game-meta-icon="${row.unlocked || row.unlockedAt ? "trophy" : "star"}">${row.unlocked || row.unlockedAt ? "✓" : "○"}</span>
+      <div><strong>${sanitize(row.label || row.id)}</strong><small>${sanitize(row.detail || (row.unlockedAt ? formatChatTime(row.unlockedAt) : "尚未解鎖"))}</small></div>
+    </div>
+  `).join("");
 }
 
-async function loadChessRootDashboard() {
-  const panel = $("game-root-chess-panel");
-  if (panel) panel.style.display = gameRootChessPanelVisible() ? "" : "none";
-  if (!gameRootChessPanelVisible()) return;
-  const data = await gameRequest("/root/games/chess/engines/dashboard");
-  renderChessRootDashboard(data);
+function renderGameReplaysPanel() {
+  const wrap = $("game-replay-list");
+  if (!wrap) return;
+  const rows = window.listHackmeGameReplays?.(gameSelectedKey || "") || [];
+  if (!rows.length) {
+    wrap.innerHTML = "<p style=\"color:var(--muted);\">完成一局後會保留最近回放摘要</p>";
+    return;
+  }
+  wrap.innerHTML = rows.slice(0, 5).map((row) => {
+    const share = window.buildHackmeGameShareText?.(row.gameKey, row) || row.summary || "";
+    return `
+      <div class="drive-file-row game-list-row">
+        <div><strong>${sanitize(row.title || row.gameKey)}</strong><small>${sanitize(row.summary || share)} · ${sanitize(formatChatTime(row.createdAt))}</small></div>
+        <button class="btn game-mini-btn" type="button" data-game-share-text="${sanitize(share)}">分享</button>
+      </div>
+    `;
+  }).join("");
 }
+
+function renderGameMetaPanels() {
+  renderGameDailyPanel();
+  renderGameAchievementsPanel();
+  renderGameReplaysPanel();
+}
+
+async function loadSelectedGameDailyLeaderboard() {
+  const wrap = $("game-daily-leaderboard-list");
+  if (!wrap) return null;
+  const key = gameSelectedKey || "chess";
+  if (key === "chess") {
+    wrap.innerHTML = "<p style=\"color:var(--muted);\">西洋棋以週排行榜與對局分析為主</p>";
+    return null;
+  }
+  const challenge = currentGameDailyChallenge(key);
+  if (!challenge?.key) {
+    wrap.innerHTML = "<p style=\"color:var(--muted);\">今日挑戰尚未產生</p>";
+    return null;
+  }
+  try {
+    const data = await gameRequest(`/games/${encodeURIComponent(key)}/solo-leaderboard?puzzle_id=${encodeURIComponent(challenge.key)}`);
+    const rows = Array.isArray(data?.leaderboard) ? data.leaderboard : [];
+    if (!rows.length) {
+      wrap.innerHTML = "<p style=\"color:var(--muted);\">今日尚無挑戰成績</p>";
+    } else {
+      wrap.innerHTML = rows.slice(0, 5).map((row) => `
+        <div class="drive-file-row game-list-row">
+          <div><strong>#${row.rank} ${sanitize(row.username || "-")}</strong><small>${row.attempts || 1} 次挑戰 · ${formatSoloGameTime(row.elapsed_ms || 0)}</small></div>
+          <strong>${data.rank_mode === "score_desc" ? Number(row.score || 0).toLocaleString() : formatSoloGameTime(row.elapsed_ms || 0)}</strong>
+        </div>
+      `).join("");
+    }
+    return data;
+  } catch (err) {
+    wrap.innerHTML = `<p style="color:var(--danger);">${sanitize(err.message || "每日排行榜讀取失敗")}</p>`;
+    return null;
+  }
+}
+
 
 async function loadSelectedGameLeaderboard() {
   const key = gameSelectedKey || "chess";
-  let path = "/games/chess/leaderboard";
-  if (key === "sudoku") {
-    path = "/games/sudoku/solo-leaderboard";
-  } else if (key === "minesweeper") {
-    const difficulty = minesweeperConfig().difficulty;
-    path = `/games/minesweeper/solo-leaderboard?difficulty=${encodeURIComponent(difficulty)}`;
-  } else if (key === "1a2b") {
-    path = "/games/1a2b/solo-leaderboard";
-  } else if (key === "tetris") {
-    path = "/games/tetris/solo-leaderboard";
-  } else if (key === "space_shooter") {
-    path = "/games/space_shooter/solo-leaderboard";
+  const viewModule = activeGameViewModule();
+  let path = viewModule?.leaderboardPath ? viewModule.leaderboardPath(legacyGameRuntime()) : "/games/chess/leaderboard";
+  if (isLocalGameModuleAvailable(key)) {
+    path = `/games/${encodeURIComponent(key)}/solo-leaderboard`;
   }
   const data = await gameRequest(path);
   gameState.leaderboard = data.leaderboard || [];
@@ -616,6 +1021,8 @@ async function loadSelectedGameLeaderboard() {
   const awardBtn = $("game-award-btn");
   if (awardBtn) awardBtn.style.display = currentUser === "root" && key === "chess" ? "" : "none";
   await loadChessRootDashboard().catch(() => {});
+  renderGameMetaPanels();
+  await loadSelectedGameDailyLeaderboard();
   return data;
 }
 
@@ -625,7 +1032,7 @@ async function submitSoloGameScore(gameKey, state) {
   const rawElapsed = soloRawElapsedMs(state);
   const elapsed = soloElapsedMs(state);
   try {
-    await gameRequest(`/games/${encodeURIComponent(gameKey)}/solo-scores`, {
+    const json = await gameRequest(`/games/${encodeURIComponent(gameKey)}/solo-scores`, {
       method: "POST",
       body: {
         raw_elapsed_ms: rawElapsed,
@@ -637,6 +1044,29 @@ async function submitSoloGameScore(gameKey, state) {
         score: Number(state.score || 0),
       },
     });
+    recordGameOutcome(gameKey, {
+      raw_elapsed_ms: rawElapsed,
+      penalty_seconds: Number(state.penaltySeconds || 0),
+      elapsed_ms: elapsed,
+      difficulty: state.difficulty || "standard",
+      puzzle_id: state.puzzleId || "",
+      guess_count: Array.isArray(state.guesses) ? state.guesses.length : Number(state.guessCount || 0),
+      score: Number(state.score || 0),
+      lines: Number(state.lines || 0),
+      combo: Number(state.maxCombo || state.combo || 0),
+      boss: Number(state.bossDefeated || state.bossCount || 0),
+      weapon: Number(state.weaponLevel || 0),
+      graze: Number(state.graze || 0),
+      wave: Number(state.wave || 0),
+      accuracy: Number(state.shots ? Math.round((Number(state.hits || 0) / Number(state.shots || 1)) * 100) : 0),
+      survive: Number(state.health || state.lives || 0) > 0 ? 1 : 0,
+      clean: !Number(state.penaltySeconds || 0) && !Number(state.mistakes || 0),
+      maxTile: Number(state.maxTile || 0),
+      moves: Number(state.moves || 0),
+      length: Number(state.maxLength || state.snake?.length || 0),
+      powerup: Number(state.powerupsCollected || 0),
+    }, json);
+    showGameDailyRewardFeedback(json, "成績已送出");
     await loadSelectedGameLeaderboard();
   } catch (err) {
     state.scoreSubmitted = false;
@@ -644,774 +1074,6 @@ async function submitSoloGameScore(gameKey, state) {
   }
 }
 
-function startSudokuGame() {
-  const puzzleIndex = Math.floor(Math.random() * SUDOKU_PUZZLES.length);
-  const item = SUDOKU_PUZZLES[puzzleIndex];
-  sudokuState = {
-    puzzleId: `builtin-${puzzleIndex + 1}`,
-    puzzle: item.puzzle,
-    solution: item.solution,
-    values: item.puzzle.split("").map((value) => value === "0" ? "" : value),
-    fixed: item.puzzle.split("").map((value) => value !== "0"),
-    startedAt: Date.now(),
-    completedAt: null,
-    penaltySeconds: 0,
-    scoreSubmitted: false,
-    difficulty: "standard",
-  };
-  renderSudokuBoard();
-  ensureSoloGameTimer();
-  updateSudokuStatus("計時開始。填入 1-9，完成後檢查答案。");
-}
-
-function renderSudokuBoard() {
-  const board = $("sudoku-board");
-  if (!board) return;
-  if (!sudokuState) {
-    board.innerHTML = '<div class="single-game-placeholder">按「開始」後才會出現題目並開始計時。</div>';
-    return;
-  }
-  board.innerHTML = sudokuState.values.map((value, index) => {
-    const fixed = sudokuState.fixed[index];
-    const row = Math.floor(index / 9);
-    const col = index % 9;
-    return `
-      <input class="sudoku-cell ${fixed ? "fixed" : ""}" inputmode="numeric" maxlength="1"
-             aria-label="數獨第 ${row + 1} 列第 ${col + 1} 欄"
-             data-sudoku-index="${index}" value="${sanitize(value || "")}" ${fixed || sudokuState.completedAt ? "readonly" : ""} />
-    `;
-  }).join("");
-}
-
-function updateSudokuCell(index, value) {
-  if (!sudokuState || sudokuState.fixed[index] || sudokuState.completedAt) return;
-  const normalized = /^[1-9]$/.test(value || "") ? value : "";
-  sudokuState.values[index] = normalized;
-  const input = document.querySelector(`[data-sudoku-index="${index}"]`);
-  if (input && input.value !== normalized) input.value = normalized;
-}
-
-function updateSudokuStatus(prefix = "") {
-  const status = $("sudoku-status");
-  if (!status) return;
-  if (!sudokuState) {
-    status.textContent = "按開始後才會出現題目並開始計時。";
-    return;
-  }
-  const time = formatSoloGameTime(soloElapsedMs(sudokuState));
-  const penalty = Number(sudokuState.penaltySeconds || 0);
-  if (sudokuState.completedAt) {
-    status.textContent = `完成時間 ${time}${penalty ? `（含加時 ${penalty} 秒）` : ""}`;
-    return;
-  }
-  status.textContent = `${prefix ? `${prefix} ` : ""}目前時間 ${time}${penalty ? ` · 加時 ${penalty} 秒` : ""}`;
-}
-
-function checkSudokuGame() {
-  const status = $("sudoku-status");
-  if (!sudokuState) return;
-  const current = sudokuState.values.join("");
-  let wrongCount = 0;
-  document.querySelectorAll("[data-sudoku-index]").forEach((input) => {
-    const index = Number(input.getAttribute("data-sudoku-index") || 0);
-    const wrong = !!sudokuState.values[index] && sudokuState.values[index] !== sudokuState.solution[index];
-    if (wrong) wrongCount += 1;
-    input.classList.toggle("wrong", wrong);
-  });
-  if (wrongCount > 0) {
-    sudokuState.penaltySeconds += 10;
-    updateSudokuStatus(`發現 ${wrongCount} 格錯誤，已加時 10 秒。`);
-    return;
-  }
-  if (sudokuState.values.some((value) => !value)) {
-    updateSudokuStatus("尚未填完，目前填入的格子沒有錯。");
-    return;
-  }
-  if (current === sudokuState.solution) {
-    sudokuState.completedAt = Date.now();
-    renderSudokuBoard();
-    updateSudokuStatus();
-    stopSoloGameTimerIfIdle();
-    submitSoloGameScore("sudoku", sudokuState);
-    setGameMsg(`數獨完成，成績 ${formatSoloGameTime(soloElapsedMs(sudokuState))}`, true);
-  } else if (status) {
-    status.textContent = "還有錯誤，請檢查紅色格子。";
-  }
-}
-
-function minesweeperConfig() {
-  const difficulty = $("minesweeper-difficulty")?.value || "easy";
-  if (difficulty === "hard") return { rows: 16, cols: 16, mines: 40, difficulty };
-  if (difficulty === "normal") return { rows: 12, cols: 12, mines: 20, difficulty };
-  return { rows: 9, cols: 9, mines: 10, difficulty: "easy" };
-}
-
-function startMinesweeperGame() {
-  const config = minesweeperConfig();
-  const total = config.rows * config.cols;
-  minesweeperState = {
-    ...config,
-    status: "active",
-    firstMove: true,
-    startedAt: Date.now(),
-    completedAt: null,
-    penaltySeconds: 0,
-    scoreSubmitted: false,
-    puzzleId: `${config.difficulty}-${config.rows}x${config.cols}-${config.mines}`,
-    cells: Array.from({ length: total }, () => ({ mine: false, revealed: false, flagged: false, count: 0 })),
-  };
-  renderMinesweeperBoard();
-  ensureSoloGameTimer();
-  updateMinesweeperStatus();
-}
-
-function placeMinesweeperMines(safeIndex) {
-  const state = minesweeperState;
-  if (!state) return;
-  const blocked = new Set([safeIndex, ...minesweeperNeighbors(safeIndex)]);
-  const choices = state.cells.map((_cell, index) => index).filter((index) => !blocked.has(index));
-  for (let placed = 0; placed < state.mines && choices.length; placed += 1) {
-    const pick = Math.floor(Math.random() * choices.length);
-    const index = choices.splice(pick, 1)[0];
-    state.cells[index].mine = true;
-  }
-  state.cells.forEach((cell, index) => {
-    cell.count = cell.mine ? 0 : minesweeperNeighbors(index).filter((neighbor) => state.cells[neighbor].mine).length;
-  });
-  state.firstMove = false;
-}
-
-function minesweeperNeighbors(index) {
-  const state = minesweeperState;
-  if (!state) return [];
-  const row = Math.floor(index / state.cols);
-  const col = index % state.cols;
-  const neighbors = [];
-  for (let dr = -1; dr <= 1; dr += 1) {
-    for (let dc = -1; dc <= 1; dc += 1) {
-      if (dr === 0 && dc === 0) continue;
-      const nr = row + dr;
-      const nc = col + dc;
-      if (nr >= 0 && nr < state.rows && nc >= 0 && nc < state.cols) {
-        neighbors.push(nr * state.cols + nc);
-      }
-    }
-  }
-  return neighbors;
-}
-
-function revealMinesweeperCell(index) {
-  const state = minesweeperState;
-  index = Number(index);
-  if (!state || state.status === "lost" || state.status === "won") return;
-  if (state.firstMove) placeMinesweeperMines(index);
-  const cell = state.cells[index];
-  if (!cell || cell.flagged || cell.revealed) return;
-  cell.revealed = true;
-  if (cell.mine) {
-    state.status = "lost";
-    state.completedAt = Date.now();
-    state.cells.forEach((item) => { if (item.mine) item.revealed = true; });
-    renderMinesweeperBoard();
-    updateMinesweeperStatus();
-    stopSoloGameTimerIfIdle();
-    return;
-  }
-  if (cell.count === 0) {
-    minesweeperNeighbors(index).forEach((neighbor) => {
-      if (!state.cells[neighbor].revealed) revealMinesweeperCell(neighbor);
-    });
-  }
-  if (state.cells.every((item) => item.mine || item.revealed)) {
-    state.status = "won";
-    state.completedAt = Date.now();
-    state.cells.forEach((item) => { if (item.mine) item.flagged = true; });
-    submitSoloGameScore("minesweeper", state);
-    setGameMsg(`踩地雷完成，成績 ${formatSoloGameTime(soloElapsedMs(state))}`, true);
-    stopSoloGameTimerIfIdle();
-  }
-  renderMinesweeperBoard();
-  updateMinesweeperStatus();
-}
-
-function toggleMinesweeperFlag(index) {
-  const state = minesweeperState;
-  index = Number(index);
-  if (!state || state.status === "lost" || state.status === "won") return;
-  const cell = state.cells[index];
-  if (!cell || cell.revealed) return;
-  cell.flagged = !cell.flagged;
-  renderMinesweeperBoard();
-  updateMinesweeperStatus();
-}
-
-function renderMinesweeperBoard() {
-  const board = $("minesweeper-board");
-  const state = minesweeperState;
-  if (!board) return;
-  if (!state) {
-    board.innerHTML = '<div class="single-game-placeholder">按「開始」後才會出現盤面並開始計時。</div>';
-    return;
-  }
-  board.style.setProperty("--mine-cols", String(state.cols));
-  board.innerHTML = state.cells.map((cell, index) => {
-    const label = cell.revealed ? (cell.mine ? "*" : (cell.count || "")) : (cell.flagged ? "⚑" : "");
-    const tone = cell.revealed && cell.mine ? "mine" : cell.revealed ? "revealed" : cell.flagged ? "flagged" : "";
-    return `<button class="mine-cell ${tone}" type="button" data-mine-index="${index}">${sanitize(String(label))}</button>`;
-  }).join("");
-}
-
-function updateMinesweeperStatus() {
-  const status = $("minesweeper-status");
-  if (!status) return;
-  if (!minesweeperState) {
-    status.textContent = "按開始後才會出現盤面並開始計時。";
-    return;
-  }
-  const flagged = minesweeperState.cells.filter((cell) => cell.flagged).length;
-  const elapsed = formatSoloGameTime(soloElapsedMs(minesweeperState));
-  if (minesweeperState.status === "won") {
-    status.textContent = `完成，所有安全格都已翻開。成績 ${elapsed}`;
-  } else if (minesweeperState.status === "lost") {
-    status.textContent = `踩到地雷，請重開一局。本局時間 ${elapsed}`;
-  } else {
-    status.textContent = `時間 ${elapsed} · 地雷 ${minesweeperState.mines} · 已插旗 ${flagged} · 左鍵翻格，右鍵插旗。`;
-  }
-}
-
-function generateOneA2BSecret() {
-  const digits = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
-  const secret = [];
-  while (secret.length < 4) {
-    const index = Math.floor(Math.random() * digits.length);
-    const digit = digits[index];
-    if (!secret.length && digit === "0") continue;
-    secret.push(digits.splice(index, 1)[0]);
-  }
-  return secret.join("");
-}
-
-function scoreOneA2BGuess(secret, guess) {
-  let a = 0;
-  let b = 0;
-  for (let i = 0; i < 4; i += 1) {
-    if (guess[i] === secret[i]) a += 1;
-    else if (secret.includes(guess[i])) b += 1;
-  }
-  return { a, b };
-}
-
-function normalizeOneA2BGuess(value) {
-  return String(value || "").replace(/\D/g, "").slice(0, 4);
-}
-
-function isValidOneA2BGuess(value) {
-  return /^[1-9][0-9]{3}$/.test(value) && new Set(value.split("")).size === 4;
-}
-
-function startOneA2BGame() {
-  oneA2BState = {
-    secret: generateOneA2BSecret(),
-    startedAt: Date.now(),
-    completedAt: null,
-    penaltySeconds: 0,
-    scoreSubmitted: false,
-    difficulty: "standard",
-    puzzleId: "1a2b-4digits",
-    guesses: [],
-  };
-  const input = $("onea2b-guess-input");
-  if (input) {
-    input.value = "";
-    input.disabled = false;
-    input.focus();
-  }
-  renderOneA2BBoard();
-  ensureSoloGameTimer();
-  updateOneA2BStatus("計時開始。輸入 4 個不重複數字，首位不可為 0，例如 1234。");
-}
-
-function renderOneA2BBoard() {
-  const board = $("onea2b-history");
-  if (!board) return;
-  if (!oneA2BState) {
-    board.innerHTML = '<div class="single-game-placeholder">按「開始」後才會產生題目並開始計時。</div>';
-    return;
-  }
-  if (!oneA2BState.guesses.length) {
-    board.innerHTML = '<div class="single-game-placeholder">尚未猜測。A 是位置正確，B 是數字正確但位置不同。</div>';
-    return;
-  }
-  board.innerHTML = oneA2BState.guesses.map((item, index) => `
-    <div class="onea2b-row ${item.a === 4 ? "solved" : ""}">
-      <strong>#${index + 1} ${sanitize(item.guess)}</strong>
-      <span>${Number(item.a)}A${Number(item.b)}B</span>
-    </div>
-  `).join("");
-}
-
-function updateOneA2BStatus(prefix = "") {
-  const status = $("onea2b-status");
-  if (!status) return;
-  if (!oneA2BState) {
-    status.textContent = "按開始後才會產生答案並開始計時。";
-    return;
-  }
-  const time = formatSoloGameTime(soloElapsedMs(oneA2BState));
-  if (oneA2BState.completedAt) {
-    status.textContent = `完成時間 ${time} · 共 ${oneA2BState.guesses.length} 次`;
-    return;
-  }
-  const activeNotice = oneA2BState.notice && Date.now() < Number(oneA2BState.noticeUntil || 0)
-    ? oneA2BState.notice
-    : "";
-  if (!activeNotice) {
-    oneA2BState.notice = "";
-    oneA2BState.noticeUntil = 0;
-  }
-  const head = activeNotice || prefix || "";
-  status.textContent = `${head ? `${head} ` : ""}目前時間 ${time} · 已猜 ${oneA2BState.guesses.length} 次`;
-}
-
-function submitOneA2BGuess() {
-  if (!oneA2BState || oneA2BState.completedAt) return;
-  const input = $("onea2b-guess-input");
-  const guess = normalizeOneA2BGuess(input?.value || "");
-  if (input && input.value !== guess) input.value = guess;
-  if (!isValidOneA2BGuess(guess)) {
-    setOneA2BNotice("請輸入 4 個不重複數字，首位不可為 0。");
-    updateOneA2BStatus();
-    return;
-  }
-  if (oneA2BState.guesses.some((item) => item.guess === guess)) {
-    setOneA2BNotice("這組數字已猜過。");
-    updateOneA2BStatus();
-    return;
-  }
-  const result = scoreOneA2BGuess(oneA2BState.secret, guess);
-  oneA2BState.guesses.push({ guess, ...result });
-  if (input) {
-    input.value = "";
-    input.focus();
-  }
-  renderOneA2BBoard();
-  if (result.a === 4) {
-    oneA2BState.completedAt = Date.now();
-    if (input) input.disabled = true;
-    updateOneA2BStatus();
-    stopSoloGameTimerIfIdle();
-    if (soloElapsedMs(oneA2BState) > 5 * 60 * 1000) {
-      oneA2BState.scoreSubmitted = true;
-      setGameMsg("1A2B 已完成，但超過 5 分鐘，不列入排行榜。", false);
-      return;
-    }
-    submitSoloGameScore("1a2b", oneA2BState);
-    setGameMsg(`1A2B 完成，成績 ${formatSoloGameTime(soloElapsedMs(oneA2BState))}`, true);
-    return;
-  }
-  updateOneA2BStatus(`${result.a}A${result.b}B`);
-}
-
-function emptyTetrisGrid() {
-  return Array.from({ length: TETRIS_ROWS }, () => Array(TETRIS_COLS).fill(""));
-}
-
-function randomTetrisPiece() {
-  const names = Object.keys(TETRIS_PIECES);
-  const type = names[Math.floor(Math.random() * names.length)];
-  return { type, shape: TETRIS_PIECES[type].map((row) => row.slice()), x: 3, y: 0 };
-}
-
-function rotateTetrisShape(shape) {
-  return shape[0].map((_cell, col) => shape.map((row) => row[col]).reverse());
-}
-
-function tetrisCollides(piece, offsetX = 0, offsetY = 0, shape = null) {
-  if (!tetrisState || !piece) return true;
-  const matrix = shape || piece.shape;
-  for (let row = 0; row < matrix.length; row += 1) {
-    for (let col = 0; col < matrix[row].length; col += 1) {
-      if (!matrix[row][col]) continue;
-      const x = piece.x + col + offsetX;
-      const y = piece.y + row + offsetY;
-      if (x < 0 || x >= TETRIS_COLS || y >= TETRIS_ROWS) return true;
-      if (y >= 0 && tetrisState.grid[y][x]) return true;
-    }
-  }
-  return false;
-}
-
-function mergeTetrisPiece() {
-  const piece = tetrisState?.piece;
-  if (!tetrisState || !piece) return;
-  piece.shape.forEach((row, rowIndex) => {
-    row.forEach((cell, colIndex) => {
-      if (!cell) return;
-      const y = piece.y + rowIndex;
-      const x = piece.x + colIndex;
-      if (y >= 0 && y < TETRIS_ROWS && x >= 0 && x < TETRIS_COLS) {
-        tetrisState.grid[y][x] = piece.type;
-      }
-    });
-  });
-}
-
-function clearTetrisLines() {
-  if (!tetrisState) return 0;
-  const kept = tetrisState.grid.filter((row) => row.some((cell) => !cell));
-  const cleared = TETRIS_ROWS - kept.length;
-  while (kept.length < TETRIS_ROWS) kept.unshift(Array(TETRIS_COLS).fill(""));
-  tetrisState.grid = kept;
-  if (cleared) {
-    const scoreTable = [0, 100, 300, 500, 800];
-    tetrisState.lines += cleared;
-    tetrisState.score += scoreTable[cleared] || cleared * 200;
-  }
-  return cleared;
-}
-
-function spawnTetrisPiece() {
-  if (!tetrisState) return;
-  tetrisState.piece = randomTetrisPiece();
-  if (tetrisCollides(tetrisState.piece)) {
-    finishTetrisGame();
-  }
-}
-
-function clearTetrisLoop() {
-  if (tetrisLoopTimer) {
-    clearInterval(tetrisLoopTimer);
-    tetrisLoopTimer = null;
-  }
-}
-
-function startTetrisGame() {
-  clearTetrisLoop();
-  tetrisState = {
-    grid: emptyTetrisGrid(),
-    piece: null,
-    score: 0,
-    lines: 0,
-    status: "active",
-    paused: false,
-    startedAt: Date.now(),
-    completedAt: null,
-    penaltySeconds: 0,
-    scoreSubmitted: false,
-    difficulty: "standard",
-    puzzleId: "tetris-standard",
-  };
-  spawnTetrisPiece();
-  renderTetrisBoard();
-  ensureSoloGameTimer();
-  tetrisLoopTimer = setInterval(tickTetrisGame, 650);
-  updateTetrisStatus("遊戲開始。方向鍵控制，空白鍵直接落下。");
-}
-
-function tickTetrisGame() {
-  if (!tetrisState || tetrisState.status !== "active" || tetrisState.paused) return;
-  if (!tetrisCollides(tetrisState.piece, 0, 1)) {
-    tetrisState.piece.y += 1;
-  } else {
-    mergeTetrisPiece();
-    clearTetrisLines();
-    spawnTetrisPiece();
-  }
-  renderTetrisBoard();
-  updateTetrisStatus();
-}
-
-function finishTetrisGame() {
-  if (!tetrisState || tetrisState.status === "finished") return;
-  tetrisState.status = "finished";
-  tetrisState.completedAt = Date.now();
-  clearTetrisLoop();
-  renderTetrisBoard();
-  updateTetrisStatus();
-  stopSoloGameTimerIfIdle();
-  if (Number(tetrisState.score || 0) > 0) {
-    submitSoloGameScore("tetris", tetrisState);
-  }
-  setGameMsg(`俄羅斯方塊結束，分數 ${Number(tetrisState.score || 0).toLocaleString()}`, true);
-}
-
-function moveTetrisPiece(dx, dy) {
-  if (!tetrisState || tetrisState.status !== "active" || tetrisState.paused) return;
-  if (!tetrisCollides(tetrisState.piece, dx, dy)) {
-    tetrisState.piece.x += dx;
-    tetrisState.piece.y += dy;
-    tetrisState.score += dy > 0 ? 1 : 0;
-    renderTetrisBoard();
-    updateTetrisStatus();
-  }
-}
-
-function rotateTetrisPiece() {
-  if (!tetrisState || tetrisState.status !== "active" || tetrisState.paused) return;
-  const rotated = rotateTetrisShape(tetrisState.piece.shape);
-  if (!tetrisCollides(tetrisState.piece, 0, 0, rotated)) {
-    tetrisState.piece.shape = rotated;
-  } else if (!tetrisCollides(tetrisState.piece, -1, 0, rotated)) {
-    tetrisState.piece.x -= 1;
-    tetrisState.piece.shape = rotated;
-  } else if (!tetrisCollides(tetrisState.piece, 1, 0, rotated)) {
-    tetrisState.piece.x += 1;
-    tetrisState.piece.shape = rotated;
-  }
-  renderTetrisBoard();
-}
-
-function hardDropTetrisPiece() {
-  if (!tetrisState || tetrisState.status !== "active" || tetrisState.paused) return;
-  let moved = 0;
-  while (!tetrisCollides(tetrisState.piece, 0, 1)) {
-    tetrisState.piece.y += 1;
-    moved += 1;
-  }
-  tetrisState.score += moved * 2;
-  tickTetrisGame();
-}
-
-function toggleTetrisPause() {
-  if (!tetrisState || tetrisState.status !== "active") return;
-  tetrisState.paused = !tetrisState.paused;
-  updateTetrisStatus(tetrisState.paused ? "已暫停。" : "繼續遊戲。");
-}
-
-function renderTetrisBoard() {
-  const board = $("tetris-board");
-  if (!board) return;
-  if (!tetrisState) {
-    board.innerHTML = '<div class="single-game-placeholder">按「開始」後開始落方塊。</div>';
-    return;
-  }
-  const view = tetrisState.grid.map((row) => row.slice());
-  const piece = tetrisState.piece;
-  if (piece && tetrisState.status === "active") {
-    piece.shape.forEach((row, rowIndex) => {
-      row.forEach((cell, colIndex) => {
-        if (!cell) return;
-        const y = piece.y + rowIndex;
-        const x = piece.x + colIndex;
-        if (y >= 0 && y < TETRIS_ROWS && x >= 0 && x < TETRIS_COLS) view[y][x] = piece.type;
-      });
-    });
-  }
-  const cells = view.flatMap((row, rowIndex) => row.map((cell, colIndex) => (
-    `<div class="tetris-cell ${cell ? `filled type-${sanitize(cell)}` : ""}" data-tetris-cell="${rowIndex}-${colIndex}"></div>`
-  ))).join("");
-  const overlay = tetrisState.status === "finished"
-    ? `<div class="single-game-over-overlay">GAME OVER<br><small>分數 ${Number(tetrisState.score || 0).toLocaleString()} · 消除 ${tetrisState.lines || 0} 行</small></div>`
-    : "";
-  board.innerHTML = cells + overlay;
-}
-
-function updateTetrisStatus(prefix = "") {
-  const status = $("tetris-status");
-  if (!status) return;
-  if (!tetrisState) {
-    status.textContent = "按開始後開始落方塊，最高分列入排行榜。";
-    return;
-  }
-  const score = Number(tetrisState.score || 0).toLocaleString();
-  const time = formatSoloGameTime(soloElapsedMs(tetrisState));
-  if (tetrisState.status === "finished") {
-    status.textContent = `遊戲結束 · 分數 ${score} · 消除 ${tetrisState.lines || 0} 行 · 時間 ${time}`;
-  } else {
-    status.textContent = `${prefix ? `${prefix} ` : ""}${tetrisState.paused ? "暫停中 · " : ""}分數 ${score} · 消除 ${tetrisState.lines || 0} 行 · 時間 ${time}`;
-  }
-}
-
-function clearSpaceShooterLoop() {
-  if (spaceShooterLoopTimer) {
-    clearInterval(spaceShooterLoopTimer);
-    spaceShooterLoopTimer = null;
-  }
-}
-
-function startSpaceShooterGame() {
-  clearSpaceShooterLoop();
-  spaceShooterState = {
-    status: "active",
-    startedAt: Date.now(),
-    completedAt: null,
-    penaltySeconds: 0,
-    scoreSubmitted: false,
-    difficulty: "standard",
-    puzzleId: "space-shooter-standard",
-    score: 0,
-    lives: 3,
-    tick: 0,
-    playerX: 180,
-    bullets: [],
-    enemies: [],
-    keys: {},
-    lastShotTick: -20,
-  };
-  renderSpaceShooterBoard();
-  ensureSoloGameTimer();
-  spaceShooterLoopTimer = setInterval(tickSpaceShooterGame, 50);
-  updateSpaceShooterStatus("出擊。方向鍵或 A/D 移動，空白鍵射擊。");
-}
-
-function finishSpaceShooterGame() {
-  if (!spaceShooterState || spaceShooterState.status === "finished") return;
-  spaceShooterState.status = "finished";
-  spaceShooterState.completedAt = Date.now();
-  clearSpaceShooterLoop();
-  renderSpaceShooterBoard();
-  updateSpaceShooterStatus();
-  stopSoloGameTimerIfIdle();
-  if (Number(spaceShooterState.score || 0) > 0) {
-    submitSoloGameScore("space_shooter", spaceShooterState);
-  }
-  setGameMsg(`宇宙戰機結束，分數 ${Number(spaceShooterState.score || 0).toLocaleString()}`, true);
-}
-
-function tickSpaceShooterGame() {
-  const state = spaceShooterState;
-  if (!state || state.status !== "active") return;
-  state.tick += 1;
-  const movingLeft = state.keys.ArrowLeft || state.keys.a || state.keys.A;
-  const movingRight = state.keys.ArrowRight || state.keys.d || state.keys.D;
-  if (movingLeft) state.playerX = Math.max(18, state.playerX - 7);
-  if (movingRight) state.playerX = Math.min(342, state.playerX + 7);
-  if ((state.keys[" "] || state.keys.Spacebar) && state.tick - state.lastShotTick >= 5) {
-    state.bullets.push({ x: state.playerX, y: 448 });
-    state.lastShotTick = state.tick;
-  }
-  if (state.tick % Math.max(14, 34 - Math.floor(state.score / 250)) === 0) {
-    state.enemies.push({ x: 24 + Math.random() * 312, y: -18, hp: 1 });
-  }
-  state.bullets.forEach((bullet) => { bullet.y -= 12; });
-  state.enemies.forEach((enemy) => { enemy.y += 3.2 + Math.min(3, state.score / 600); });
-  state.bullets = state.bullets.filter((bullet) => bullet.y > -12);
-  const remainingEnemies = [];
-  state.enemies.forEach((enemy) => {
-    let hit = false;
-    state.bullets.forEach((bullet) => {
-      if (hit) return;
-      if (Math.abs(bullet.x - enemy.x) < 18 && Math.abs(bullet.y - enemy.y) < 18) {
-        bullet.y = -100;
-        hit = true;
-        state.score += 25;
-      }
-    });
-    if (hit) return;
-    if (Math.abs(state.playerX - enemy.x) < 24 && enemy.y > 420) {
-      state.lives -= 1;
-      return;
-    }
-    if (enemy.y > 540) {
-      state.lives -= 1;
-      return;
-    }
-    remainingEnemies.push(enemy);
-  });
-  state.enemies = remainingEnemies;
-  if (state.lives <= 0) {
-    finishSpaceShooterGame();
-    return;
-  }
-  renderSpaceShooterBoard();
-  updateSpaceShooterStatus();
-}
-
-function nudgeSpaceShooter(dx) {
-  const state = spaceShooterState;
-  if (!state || state.status !== "active") return;
-  state.playerX = Math.max(18, Math.min(342, state.playerX + dx));
-  renderSpaceShooterBoard();
-}
-
-function shootSpaceShooter() {
-  const state = spaceShooterState;
-  if (!state || state.status !== "active") return;
-  if (state.tick - state.lastShotTick < 2) return;
-  state.bullets.push({ x: state.playerX, y: 448 });
-  state.lastShotTick = state.tick;
-  renderSpaceShooterBoard();
-}
-
-function handleGameTouchAction(action) {
-  if (action === "tetris-left") return moveTetrisPiece(-1, 0);
-  if (action === "tetris-right") return moveTetrisPiece(1, 0);
-  if (action === "tetris-down") return moveTetrisPiece(0, 1);
-  if (action === "tetris-rotate") return rotateTetrisPiece();
-  if (action === "tetris-drop") return hardDropTetrisPiece();
-  if (action === "shooter-left") return nudgeSpaceShooter(-34);
-  if (action === "shooter-right") return nudgeSpaceShooter(34);
-  if (action === "shooter-fire") return shootSpaceShooter();
-}
-
-function renderSpaceShooterBoard() {
-  const canvas = $("space-shooter-board");
-  if (!canvas) return;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = "#07111f";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = "rgba(255,255,255,.18)";
-  for (let i = 0; i < 54; i += 1) {
-    const x = (i * 67 + (spaceShooterState?.tick || 0) * 2) % canvas.width;
-    const y = (i * 41 + (spaceShooterState?.tick || 0) * 3) % canvas.height;
-    ctx.fillRect(x, y, 2, 2);
-  }
-  if (!spaceShooterState) {
-    ctx.fillStyle = "rgba(214,226,240,.75)";
-    ctx.font = "16px sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText("按「開始」後出擊", canvas.width / 2, canvas.height / 2);
-    return;
-  }
-  const state = spaceShooterState;
-  ctx.fillStyle = "#4d7dff";
-  ctx.beginPath();
-  ctx.moveTo(state.playerX, 430);
-  ctx.lineTo(state.playerX - 18, 470);
-  ctx.lineTo(state.playerX + 18, 470);
-  ctx.closePath();
-  ctx.fill();
-  ctx.fillStyle = "#22c79a";
-  state.bullets.forEach((bullet) => ctx.fillRect(bullet.x - 2, bullet.y - 10, 4, 12));
-  ctx.fillStyle = "#ff4f6d";
-  state.enemies.forEach((enemy) => {
-    ctx.beginPath();
-    ctx.moveTo(enemy.x, enemy.y + 18);
-    ctx.lineTo(enemy.x - 16, enemy.y - 12);
-    ctx.lineTo(enemy.x + 16, enemy.y - 12);
-    ctx.closePath();
-    ctx.fill();
-  });
-  if (state.status === "finished") {
-    ctx.fillStyle = "rgba(7,17,31,.72)";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = "#ff4f6d";
-    ctx.font = "bold 36px sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText("GAME OVER", canvas.width / 2, canvas.height / 2 - 18);
-    ctx.fillStyle = "rgba(214,226,240,.85)";
-    ctx.font = "15px sans-serif";
-    ctx.fillText(`分數 ${Number(state.score || 0).toLocaleString()}`, canvas.width / 2, canvas.height / 2 + 18);
-  }
-}
-
-function updateSpaceShooterStatus(prefix = "") {
-  const status = $("space-shooter-status");
-  if (!status) return;
-  if (!spaceShooterState) {
-    status.textContent = "按開始後出擊，最高分列入排行榜。";
-    return;
-  }
-  const score = Number(spaceShooterState.score || 0).toLocaleString();
-  const time = formatSoloGameTime(soloElapsedMs(spaceShooterState));
-  if (spaceShooterState.status === "finished") {
-    status.textContent = `任務結束 · 分數 ${score} · 時間 ${time}`;
-  } else {
-    status.textContent = `${prefix ? `${prefix} ` : ""}分數 ${score} · 生命 ${spaceShooterState.lives} · 時間 ${time}`;
-  }
-}
 
 async function loadGameZone() {
   try {
@@ -1426,11 +1088,15 @@ async function loadGameZone() {
       matches: matchesJson.matches || [],
       invites: invitesJson.invites || [],
       leaderboard: [],
+      users: usersJson.users || [],
+      multiplayer: gameState.multiplayer || { rooms: [], invites: [], modes: [] },
     };
     renderGameCatalog(catalog.games || []);
     renderGameUsers(usersJson.users || []);
+    renderGameMultiplayerUsers(usersJson.users || []);
     renderGameInvites(invitesJson.invites || []);
     renderGameMatches(matchesJson.matches || []);
+    await loadSelectedGameMultiplayer();
     await loadSelectedGameLeaderboard();
     setGameMsg("", true);
   } catch (err) {
@@ -1447,363 +1113,115 @@ async function refreshGameZoneAfterMutation(successMessage) {
   }
 }
 
-async function createGameInvite() {
-  const select = $("game-invite-user");
-  const username = select ? select.value : "";
-  if (!username) {
-    setGameMsg("請先選擇要邀請的玩家；沒有其他玩家時可使用電腦練習。", false);
-    return;
-  }
-  try {
-    await gameRequest("/games/chess/invites", { method: "POST", body: { opponent_username: username } });
-    setGameMsg("已送出對戰邀請", true);
-    await refreshGameZoneAfterMutation("已送出對戰邀請");
-  } catch (err) {
-    setGameMsg(err.message || "送出邀請失敗", false);
-  }
-}
-
-async function reviewGameInvite(inviteId, action) {
-  try {
-    const json = await gameRequest(`/games/chess/invites/${encodeURIComponent(inviteId)}/${encodeURIComponent(action)}`, { method: "POST", body: {} });
-    if (json.match_id) gameSelectedMatchId = json.match_id;
-    setGameMsg("邀請已更新", true);
-    await refreshGameZoneAfterMutation("邀請已更新");
-  } catch (err) {
-    setGameMsg(err.message || "邀請處理失敗", false);
-  }
-}
-
-async function createPracticeGame() {
-  try {
-    const side = $("game-practice-side")?.value || "white";
-    const difficulty = $("game-practice-difficulty")?.value || "normal";
-    const json = await gameRequest("/games/chess/practice", { method: "POST", body: { side, difficulty } });
-    gameSelectedMatchId = json.match_id;
-    gameSelectedSquare = null;
-    const msg = `${side === "black" ? "已建立電腦練習局，你執黑方" : "已建立電腦練習局，你執白方"}，難度：${gameDifficultyLabel(difficulty)}`;
-    setGameMsg(msg, true);
-    await refreshGameZoneAfterMutation(msg);
-  } catch (err) {
-    setGameMsg(err.message || "建立練習局失敗", false);
-  }
-}
-
-async function selectChessSquare(square) {
-  if (chessMoveInFlight) return;
-  const match = (gameState.matches || []).find((item) => item.id === gameSelectedMatchId);
-  if (!match || match.status !== "active") return;
-  const piece = match.board?.[square] || "";
-  const selectedPiece = gameSelectedSquare ? (match.board?.[gameSelectedSquare] || "") : "";
-  const myTurn = match.my_side === match.current_turn;
-  const isOwnPiece = piece && ((match.my_side === "white" && piece === piece.toUpperCase()) || (match.my_side === "black" && piece === piece.toLowerCase()));
-  const legal = (match.legal_moves || []).some((move) => move.from === gameSelectedSquare && move.to === square);
-  if (gameSelectedSquare && !selectedPiece) {
-    gameSelectedSquare = null;
-    renderChessBoard(match);
-    return;
-  }
-  if (gameSelectedSquare && legal && selectedPiece) {
-    const from = gameSelectedSquare;
-    const candidateMoves = (match.legal_moves || []).filter((move) => move.from === from && move.to === square);
-    let chosenMove = candidateMoves[0] || {
-      from,
-      to: square,
-      piece: selectedPiece,
-    };
-    let promotion = chosenMove.promotion || null;
-    if (candidateMoves.length > 1 && candidateMoves.some((move) => move.promotion)) {
-      const raw = window.prompt("兵升變請輸入 q / r / b / n", "q");
-      if (raw === null) {
-        setGameMsg("已取消升變走棋。", false);
-        return;
-      }
-      const normalized = String(raw || "q").trim().toLowerCase();
-      const resolved = ["q", "r", "b", "n"].includes(normalized) ? normalized : "q";
-      chosenMove = candidateMoves.find((move) => String(move.promotion || "").toLowerCase() === resolved) || candidateMoves[0];
-      promotion = chosenMove.promotion || resolved;
-    }
-    const previousMatch = match;
-    const optimisticMatch = buildOptimisticChessMatch(match, chosenMove);
-    gameSelectedSquare = null;
-    chessMoveInFlight = true;
-    gameState.matches = gameState.matches.map((item) => item.id === previousMatch.id ? optimisticMatch : item);
-    renderGameMatches(gameState.matches);
-    setGameMsg("已送出走棋，等待電腦回應...", true);
+window.hackmeGameMultiplayer = {
+  activeRoom: gameMultiplayerActiveRoom,
+  peerId: gameMultiplayerPeerId,
+  peerState: gameMultiplayerPeerState,
+  selectedRoomId(gameKey = gameSelectedKey) {
+    return Number(gameMultiplayerSelectedRoomByKey[gameKey] || 0);
+  },
+  selectRoom(gameKey, roomId) {
+    if (gameKey && roomId) gameMultiplayerSelectedRoomByKey[gameKey] = Number(roomId);
+    renderGameMultiplayerPanel();
+  },
+  async refresh(gameKey = gameSelectedKey) {
+    const previous = gameSelectedKey;
+    if (gameKey !== gameSelectedKey) gameSelectedKey = gameKey;
     try {
-      const json = await gameRequest(`/games/chess/matches/${encodeURIComponent(gameSelectedMatchId)}/move`, {
-        method: "POST",
-        body: { from, to: square, promotion },
-      });
-      const updated = json.match;
-      gameState.matches = gameState.matches.map((item) => item.id === updated.id ? updated : item);
-      renderGameMatches(gameState.matches);
-      await loadGameZone();
-    } catch (err) {
-      gameState.matches = gameState.matches.map((item) => item.id === previousMatch.id ? previousMatch : item);
-      setGameMsg(err.message || "走棋失敗", false);
+      return await loadSelectedGameMultiplayer();
     } finally {
-      chessMoveInFlight = false;
-      const latest = (gameState.matches || []).find((item) => item.id === gameSelectedMatchId);
-      if (latest) renderChessBoard(latest);
+      gameSelectedKey = previous;
     }
-    return;
-  }
-  if (isOwnPiece && myTurn) {
-    gameSelectedSquare = square;
-    renderChessBoard(match);
-  } else if (piece && !myTurn) {
-    setGameMsg("還沒輪到你", false);
-  }
-}
-
-async function claimChessDraw() {
-  if (!gameSelectedMatchId) {
-    setGameMsg("請先選擇要申請和棋的棋局。", false);
-    return;
-  }
-  const match = (gameState.matches || []).find((item) => item.id === gameSelectedMatchId);
-  if (!match) {
-    setGameMsg("找不到目前棋局，請先刷新遊戲區。", false);
-    return;
-  }
-  if (match.status !== "active") {
-    setGameMsg("這局已經結束，不需要再申請和棋。", false);
-    return;
-  }
-  if (!match.can_claim_draw) {
-    setGameMsg("目前沒有三次重複或 50 步和棋可申請。", false);
-    return;
-  }
-  try {
-    const json = await gameRequest(`/games/chess/matches/${encodeURIComponent(gameSelectedMatchId)}/claim-draw`, { method: "POST", body: {} });
-    gameSelectedSquare = null;
-    if (json?.match?.id) {
-      gameState.matches = (gameState.matches || []).map((item) => item.id === json.match.id ? json.match : item);
-      renderGameMatches(gameState.matches);
-    }
-    setGameMsg("已申請和棋並結束棋局。", true);
-    await loadGameZone();
-  } catch (err) {
-    setGameMsg(err.message || "申請和棋失敗", false);
-  }
-}
-
-async function offerChessDraw() {
-  if (!gameSelectedMatchId) {
-    setGameMsg("請先選擇要提和的棋局。", false);
-    return;
-  }
-  const match = (gameState.matches || []).find((item) => item.id === gameSelectedMatchId);
-  if (!match) {
-    setGameMsg("找不到目前棋局，請先刷新遊戲區。", false);
-    return;
-  }
-  if (match.status !== "active") {
-    setGameMsg("這局已經結束，不能再提和。", false);
-    return;
-  }
-  if (!match.can_offer_draw) {
-    setGameMsg("目前不能提和，可能已有待回覆的和棋。", false);
-    return;
-  }
-  try {
-    const json = await gameRequest(`/games/chess/matches/${encodeURIComponent(gameSelectedMatchId)}/offer-draw`, { method: "POST", body: {} });
-    gameSelectedSquare = null;
-    if (json?.match?.id) {
-      gameState.matches = (gameState.matches || []).map((item) => item.id === json.match.id ? json.match : item);
-      renderGameMatches(gameState.matches);
-    }
-    setGameMsg("已提出和棋，等待對方回覆。", true);
-    await loadGameZone();
-  } catch (err) {
-    setGameMsg(err.message || "提和失敗", false);
-  }
-}
-
-async function respondChessDraw(action) {
-  if (!gameSelectedMatchId) {
-    setGameMsg(`請先選擇要${action === "accept" ? "接受" : "拒絕"}和棋的棋局。`, false);
-    return;
-  }
-  const match = (gameState.matches || []).find((item) => item.id === gameSelectedMatchId);
-  if (!match) {
-    setGameMsg("找不到目前棋局，請先刷新遊戲區。", false);
-    return;
-  }
-  if (match.status !== "active") {
-    setGameMsg("這局已經結束，不需要再回覆和棋。", false);
-    return;
-  }
-  const canRespond = action === "accept" ? match.can_accept_draw_offer : match.can_reject_draw_offer;
-  if (!canRespond) {
-    setGameMsg("目前沒有待回覆的和棋。", false);
-    return;
-  }
-  try {
-    const json = await gameRequest(`/games/chess/matches/${encodeURIComponent(gameSelectedMatchId)}/respond-draw`, {
+  },
+  async start(roomId) {
+    return startGameMultiplayerRoom(roomId);
+  },
+  async pollRoom(roomId, afterEventId = 0) {
+    return gameRequest(`/games/multiplayer/rooms/${encodeURIComponent(roomId)}?after_event_id=${encodeURIComponent(afterEventId || 0)}`);
+  },
+  async syncRoom(roomId, state, events = [], afterEventId = 0) {
+    return gameRequest(`/games/multiplayer/rooms/${encodeURIComponent(roomId)}/state`, {
       method: "POST",
-      body: { action },
+      body: {
+        state: state || {},
+        events: Array.isArray(events) ? events : [],
+        after_event_id: afterEventId || 0,
+      },
     });
-    gameSelectedSquare = null;
-    if (json?.match?.id) {
-      gameState.matches = (gameState.matches || []).map((item) => item.id === json.match.id ? json.match : item);
-      renderGameMatches(gameState.matches);
-    }
-    setGameMsg(action === "accept" ? "已接受和棋，棋局結束。": "已拒絕和棋。", true);
-    await loadGameZone();
-  } catch (err) {
-    setGameMsg(err.message || `${action === "accept" ? "接受" : "拒絕"}和棋失敗`, false);
-  }
-}
+  },
+  async checkInvitesNow() {
+    return loadGlobalGameMultiplayerInvites({ force: true });
+  },
+};
 
-async function resignGame() {
-  if (!gameSelectedMatchId) {
-    setGameMsg("請先選擇要認輸的棋局。", false);
-    return;
-  }
-  const match = (gameState.matches || []).find((item) => item.id === gameSelectedMatchId);
-  if (!match) {
-    setGameMsg("找不到目前棋局，請先刷新遊戲區。", false);
-    return;
-  }
-  if (match.status !== "active") {
-    setGameMsg("這局已經結束，不需要再認輸。", false);
-    return;
-  }
-  if (!confirm("確認認輸並結束這局？")) return;
-  try {
-    const json = await gameRequest(`/games/chess/matches/${encodeURIComponent(gameSelectedMatchId)}/resign`, { method: "POST", body: {} });
-    gameSelectedSquare = null;
-    if (json?.match?.id) {
-      gameState.matches = (gameState.matches || []).map((item) => item.id === json.match.id ? json.match : item);
-      renderGameMatches(gameState.matches);
-    }
-    setGameMsg("已認輸並結束棋局。", true);
-    await loadGameZone();
-  } catch (err) {
-    setGameMsg(err.message || "認輸失敗", false);
-  }
-}
-
-async function deleteFinishedGame(matchId) {
-  const match = (gameState.matches || []).find((item) => String(item.id) === String(matchId));
-  if (!match) {
-    setGameMsg("找不到要刪除的棋局，請先刷新遊戲區。", false);
-    return;
-  }
-  if (match.status === "active") {
-    setGameMsg("進行中的棋局不能刪除，請先完成棋局或認輸。", false);
-    return;
-  }
-  if (!confirm("確定要從列表刪除這局已結束賽局？排行榜紀錄不會被移除。")) return;
-  try {
-    await gameRequest(`/games/chess/matches/${encodeURIComponent(matchId)}`, { method: "DELETE", body: {} });
-    if (String(gameSelectedMatchId) === String(matchId)) {
-      gameSelectedMatchId = null;
-      gameSelectedSquare = null;
-    }
-    await refreshGameZoneAfterMutation("已刪除已結束棋局");
-  } catch (err) {
-    setGameMsg(err.message || "刪除棋局失敗", false);
-  }
-}
-
-async function awardGameRewards() {
-  try {
-    const json = await gameRequest("/root/games/chess/weekly-rewards/award", { method: "POST", body: {} });
-    setGameMsg(`已發放 ${json.awarded?.length || 0} 筆週獎勵`, true);
-    await loadGameZone();
-  } catch (err) {
-    setGameMsg(err.message || "週獎勵發放失敗", false);
-  }
-}
-
-async function warmStartChessModels() {
-  try {
-    const json = await gameRequest("/root/games/chess/warm-start", { method: "POST", body: {} });
-    setGameMsg(`warm start 完成，共檢查 ${json.artifacts?.length || 0} 個 artifact`, true);
-    await loadChessRootDashboard();
-  } catch (err) {
-    setGameMsg(err.message || "warm start 失敗", false);
-  }
-}
-
-async function stageChessCandidate() {
-  try {
-    const engine = $("game-root-chess-engine")?.value || "experiment 4:pv";
-    const sourcePath = $("game-root-chess-candidate-path")?.value || "";
-    const benchmarkPath = $("game-root-chess-benchmark-path")?.value || "";
-    const json = await gameRequest("/root/games/chess/promotion/stage", {
-      method: "POST",
-      body: { engine, source_path: sourcePath, benchmark_report_path: benchmarkPath },
-    });
-    setGameMsg(`candidate staged: ${json.engine}`, true);
-    await loadChessRootDashboard();
-  } catch (err) {
-    setGameMsg(err.message || "stage candidate 失敗", false);
-  }
-}
-
-async function promoteChessCandidate() {
-  try {
-    const engine = $("game-root-chess-engine")?.value || "experiment 4:pv";
-    const benchmarkPath = $("game-root-chess-benchmark-path")?.value || "";
-    const json = await gameRequest("/root/games/chess/promotion/promote", {
-      method: "POST",
-      body: { engine, benchmark_report_path: benchmarkPath },
-    });
-    setGameMsg(`promotion 完成: ${json.engine}`, true);
-    await loadChessRootDashboard();
-  } catch (err) {
-    setGameMsg(err.message || "promotion 失敗", false);
-  }
-}
 
 document.addEventListener("click", (event) => {
+  if (event.target?.closest?.("#game-multiplayer-invite-accept-btn")) {
+    respondGlobalGameMultiplayerInvite("accept");
+    return;
+  }
+  if (event.target?.closest?.("#game-multiplayer-invite-reject-btn")) {
+    respondGlobalGameMultiplayerInvite("reject");
+    return;
+  }
+  if (event.target?.closest?.("#game-fullscreen-btn, #fps-arena-fullscreen-btn")) {
+    toggleGameFullscreen();
+    return;
+  }
+  const shareBtn = event.target?.closest?.("[data-game-share-text]");
+  if (shareBtn) {
+    playGameSound("uiClick", { volume: 0.12 });
+    const text = shareBtn.dataset.gameShareText || "";
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(
+        () => setGameMsg("分享文字已複製", true),
+        () => setGameMsg(text, true),
+      );
+    } else {
+      setGameMsg(text, true);
+    }
+    return;
+  }
+  const localGameModuleAction = event.target?.closest?.("#local-module-game-panel [data-action]");
+  if (localGameModuleAction && localGameModuleActiveApi?.onAction) {
+    playGameSound(localGameModuleAction.dataset.action === "pause" ? "uiSwitch" : "uiClick", { volume: 0.12 });
+    localGameModuleActiveApi.onAction(localGameModuleAction.dataset.action || "");
+    return;
+  }
+  const multiplayerInviteBtn = event.target?.closest?.("#game-multiplayer-invite-btn");
+  if (multiplayerInviteBtn) {
+    playGameSound("uiOpen", { volume: 0.12 });
+    createGameMultiplayerInvite();
+    return;
+  }
+  const multiplayerInviteAction = event.target?.closest?.("[data-game-mp-invite]");
+  if (multiplayerInviteAction) {
+    playGameSound(multiplayerInviteAction.dataset.gameMpAction === "reject" ? "uiClose" : "uiClick", { volume: 0.12 });
+    reviewGameMultiplayerInvite(multiplayerInviteAction.dataset.gameMpInvite, multiplayerInviteAction.dataset.gameMpAction || "accept");
+    return;
+  }
+  const multiplayerRoomBtn = event.target?.closest?.("[data-game-mp-room]");
+  if (multiplayerRoomBtn) {
+    playGameSound("uiSelect", { volume: 0.12 });
+    gameMultiplayerSelectedRoomByKey[gameSelectedKey] = Number(multiplayerRoomBtn.dataset.gameMpRoom || 0);
+    renderGameMultiplayerPanel();
+    window.dispatchEvent(new CustomEvent("hackme:game-multiplayer-updated", { detail: { gameKey: gameSelectedKey } }));
+    setGameMsg("已選擇多人房間，可在遊戲面板開始多人模式。", true);
+    return;
+  }
+  const multiplayerStartBtn = event.target?.closest?.("[data-game-mp-start]");
+  if (multiplayerStartBtn) {
+    playGameSound("uiClick", { volume: 0.12 });
+    startGameMultiplayerRoom(multiplayerStartBtn.dataset.gameMpStart);
+    return;
+  }
   const catalogBtn = event.target?.closest?.("[data-game-key]");
   if (catalogBtn) {
+    playGameSound("uiSelect", { volume: 0.12 });
     switchGameView(catalogBtn.dataset.gameKey || "chess");
     return;
   }
-  const sudokuNewBtn = event.target?.closest?.("#sudoku-new-btn");
-  if (sudokuNewBtn) {
-    startSudokuGame();
-    return;
-  }
-  const sudokuCheckBtn = event.target?.closest?.("#sudoku-check-btn");
-  if (sudokuCheckBtn) {
-    checkSudokuGame();
-    return;
-  }
-  const minesNewBtn = event.target?.closest?.("#minesweeper-new-btn");
-  if (minesNewBtn) {
-    startMinesweeperGame();
-    return;
-  }
-  const oneA2BNewBtn = event.target?.closest?.("#onea2b-new-btn");
-  if (oneA2BNewBtn) {
-    startOneA2BGame();
-    return;
-  }
-  const oneA2BGuessBtn = event.target?.closest?.("#onea2b-guess-btn");
-  if (oneA2BGuessBtn) {
-    submitOneA2BGuess();
-    return;
-  }
-  const tetrisNewBtn = event.target?.closest?.("#tetris-new-btn");
-  if (tetrisNewBtn) {
-    startTetrisGame();
-    return;
-  }
-  const tetrisPauseBtn = event.target?.closest?.("#tetris-pause-btn");
-  if (tetrisPauseBtn) {
-    toggleTetrisPause();
-    return;
-  }
-  const shooterNewBtn = event.target?.closest?.("#space-shooter-new-btn");
-  if (shooterNewBtn) {
-    startSpaceShooterGame();
+  if (dispatchActiveGameViewEvent("click", event)) {
     return;
   }
   const rootRefreshBtn = event.target?.closest?.("#game-root-chess-refresh-btn");
@@ -1824,16 +1242,6 @@ document.addEventListener("click", (event) => {
   const rootPromoteBtn = event.target?.closest?.("#game-root-chess-promote-btn");
   if (rootPromoteBtn) {
     promoteChessCandidate();
-    return;
-  }
-  const gameTouchBtn = event.target?.closest?.("[data-game-touch]");
-  if (gameTouchBtn) {
-    handleGameTouchAction(gameTouchBtn.dataset.gameTouch || "");
-    return;
-  }
-  const mineBtn = event.target?.closest?.("[data-mine-index]");
-  if (mineBtn) {
-    revealMinesweeperCell(mineBtn.dataset.mineIndex);
     return;
   }
   const deleteMatchBtn = event.target?.closest?.("[data-game-delete-match]");
@@ -1879,61 +1287,123 @@ document.addEventListener("click", (event) => {
   }
 });
 
-document.addEventListener("input", (event) => {
-  const sudokuInput = event.target?.closest?.("[data-sudoku-index]");
-  if (sudokuInput) {
-    updateSudokuCell(Number(sudokuInput.dataset.sudokuIndex || 0), sudokuInput.value || "");
+document.addEventListener("pointerdown", (event) => {
+  const control = event.target?.closest?.("#local-module-game-controls button");
+  if (!control || !localGameModuleActiveApi?.onControl) return;
+  event.preventDefault();
+  playGameSound(control.dataset.hold ? "uiSwitch" : "uiClick", { volume: 0.1, throttleMs: 40 });
+  localGameModulePressedControl = control;
+  localGameModuleActiveApi.onControl(control, true);
+});
+
+document.addEventListener("pointerup", () => {
+  if (!localGameModulePressedControl || !localGameModuleActiveApi?.onControl) {
+    localGameModulePressedControl = null;
     return;
   }
-  const oneA2BInput = event.target?.closest?.("#onea2b-guess-input");
-  if (oneA2BInput) {
-    oneA2BInput.value = normalizeOneA2BGuess(oneA2BInput.value || "");
+  if (localGameModulePressedControl.dataset.hold) {
+    localGameModuleActiveApi.onControl(localGameModulePressedControl, false);
+  }
+  localGameModulePressedControl = null;
+});
+
+document.addEventListener("pointercancel", () => {
+  if (localGameModulePressedControl?.dataset.hold && localGameModuleActiveApi?.onControl) {
+    localGameModuleActiveApi.onControl(localGameModulePressedControl, false);
+  }
+  localGameModulePressedControl = null;
+});
+
+document.addEventListener("touchstart", (event) => {
+  const root = event.target?.closest?.("#local-module-game-root");
+  if (!root) return;
+  const touch = event.changedTouches[0];
+  localGameModuleTouchStart = touch ? { x: touch.clientX, y: touch.clientY } : null;
+}, { passive: true });
+
+document.addEventListener("touchend", (event) => {
+  const root = event.target?.closest?.("#local-module-game-root");
+  if (!root || !localGameModuleTouchStart || !localGameModuleActiveApi?.onKey) return;
+  const touch = event.changedTouches[0];
+  if (!touch) return;
+  const dx = touch.clientX - localGameModuleTouchStart.x;
+  const dy = touch.clientY - localGameModuleTouchStart.y;
+  localGameModuleTouchStart = null;
+  if (Math.max(Math.abs(dx), Math.abs(dy)) < 24) return;
+  const key = Math.abs(dx) > Math.abs(dy)
+    ? (dx > 0 ? "ArrowRight" : "ArrowLeft")
+    : (dy > 0 ? "ArrowDown" : "ArrowUp");
+  localGameModuleActiveApi.onKey({ key, preventDefault() {} }, true);
+  if (localGameModuleSwipeMode === "hold") {
+    window.setTimeout(() => {
+      if (!localGameModuleActiveApi?.onKey) return;
+      localGameModuleActiveApi.onKey({ key, preventDefault() {} }, false);
+    }, 90);
+  }
+}, { passive: false });
+
+document.addEventListener("submit", (event) => {
+  const uciForm = event.target?.closest?.("#game-chess-uci-form");
+  if (!uciForm) return;
+  event.preventDefault();
+  submitChessUciMove();
+});
+
+document.addEventListener("input", (event) => {
+  if (dispatchActiveGameViewEvent("input", event)) {
+    return;
+  }
+  const chessUciInput = event.target?.closest?.("#game-chess-uci-input");
+  if (chessUciInput) {
+    chessUciInput.value = normalizeChessUciInput(chessUciInput.value || "");
   }
 });
 
 document.addEventListener("keydown", (event) => {
-  const oneA2BInput = event.target?.closest?.("#onea2b-guess-input");
-  if (oneA2BInput && event.key === "Enter") {
-    event.preventDefault();
-    submitOneA2BGuess();
-  }
   const tag = String(event.target?.tagName || "").toLowerCase();
   const editing = ["input", "textarea", "select"].includes(tag);
-  if (!editing && gameSelectedKey === "tetris" && tetrisState?.status === "active") {
-    if (["ArrowLeft", "ArrowRight", "ArrowDown", "ArrowUp", " "].includes(event.key)) {
-      event.preventDefault();
-    }
-    if (event.key === "ArrowLeft") moveTetrisPiece(-1, 0);
-    if (event.key === "ArrowRight") moveTetrisPiece(1, 0);
-    if (event.key === "ArrowDown") moveTetrisPiece(0, 1);
-    if (event.key === "ArrowUp") rotateTetrisPiece();
-    if (event.key === " ") hardDropTetrisPiece();
+  if ((!editing || gameSelectedKey === "1a2b") && dispatchActiveGameViewEvent("keydown", event)) {
+    return;
   }
-  if (!editing && gameSelectedKey === "space_shooter" && spaceShooterState?.status === "active") {
-    if (["ArrowLeft", "ArrowRight", " ", "a", "A", "d", "D"].includes(event.key)) {
-      event.preventDefault();
-      spaceShooterState.keys[event.key] = true;
-    }
+  if (!editing && isLocalGameModuleAvailable(gameSelectedKey) && localGameModuleActiveApi?.onKey) {
+    if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", " "].includes(event.key)) event.preventDefault();
+    localGameModuleActiveApi.onKey(event, true);
   }
 });
 
 document.addEventListener("keyup", (event) => {
-  if (spaceShooterState?.keys) {
-    spaceShooterState.keys[event.key] = false;
+  if (dispatchActiveGameViewEvent("keyup", event)) {
+    return;
+  }
+  if (isLocalGameModuleAvailable(gameSelectedKey) && localGameModuleActiveApi?.onKey) {
+    localGameModuleActiveApi.onKey(event, false);
   }
 });
 
 document.addEventListener("change", (event) => {
-  const difficulty = event.target?.closest?.("#minesweeper-difficulty");
-  if (!difficulty) return;
-  if (gameSelectedKey === "minesweeper") {
-    loadSelectedGameLeaderboard().catch((err) => setGameMsg(err.message || "排行榜讀取失敗", false));
+  const gameSelect = event.target?.closest?.("#game-select");
+  if (gameSelect) {
+    const key = gameSelect.value || "chess";
+    playGameSound("uiSelect", { volume: 0.12 });
+    switchGameView(key);
+    return;
   }
+  if (event.target?.closest?.("#game-multiplayer-mode")) {
+    playGameSound("uiSwitch", { volume: 0.12 });
+    renderGameMultiplayerPanel();
+    return;
+  }
+  dispatchActiveGameViewEvent("change", event);
 });
 
 document.addEventListener("contextmenu", (event) => {
-  const mineBtn = event.target?.closest?.("[data-mine-index]");
-  if (!mineBtn) return;
-  event.preventDefault();
-  toggleMinesweeperFlag(mineBtn.dataset.mineIndex);
+  dispatchActiveGameViewEvent("contextmenu", event);
 });
+
+document.addEventListener("fullscreenchange", updateGameFullscreenButtons);
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", ensureGameMultiplayerInvitePolling, { once: true });
+} else {
+  ensureGameMultiplayerInvitePolling();
+}

@@ -1,5 +1,7 @@
-# Codex Reports
+# Codex QA Reports
 
-這裡收納 Codex 產出的報告、驗收筆記與研究歸檔。
+This directory is reserved for Codex-generated QA evidence referenced by
+`docs/AGENTS/TRADING_QA_REGRESSION_MATRIX.md`.
 
-- 回上一層：[../README.md](../README.md)
+Store dated report files here when Codex runs trading, platform, or regression
+checks that need to be linked from the agent QA matrix.

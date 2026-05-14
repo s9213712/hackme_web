@@ -1,0 +1,181 @@
+"""Capability check regression for the ComfyUI template importer (§6)."""
+
+import pytest
+
+from services.comfyui.template.analyzer import (
+    NodeAnalysis,
+    WorkflowAnalysis,
+)
+from services.comfyui.template.capability import (
+    check_workflow_capability,
+    iter_required_models,
+    reset_object_info_cache,
+)
+
+
+class _StubClient:
+    """Minimal /object_info double; counts call sites for cache assertions."""
+
+    def __init__(self, payload, *, base_url="http://stub"):
+        self._payload = payload
+        self.base_url = base_url
+        self.calls = 0
+
+    def get_object_info(self):
+        self.calls += 1
+        return self._payload
+
+
+def _local_payload(*, classes, models=None, samplers=None, schedulers=None):
+    """Build the shape ComfyUI returns from /object_info for the classes we care about."""
+    info = {cls: {"input": {"required": {}}} for cls in classes}
+    if "CheckpointLoaderSimple" in info and models is not None:
+        info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"] = [list(models)]
+    if "VAELoader" in info and models is not None:
+        info["VAELoader"]["input"]["required"]["vae_name"] = [["bundled.vae.safetensors"]]
+    if "LoraLoader" in info and models is not None:
+        info["LoraLoader"]["input"]["required"]["lora_name"] = [["lcm.safetensors"]]
+    for class_type in ("KSampler", "KSamplerAdvanced"):
+        if class_type in info:
+            info[class_type]["input"]["required"]["sampler_name"] = [list(samplers or ["euler", "dpmpp_2m"])]
+            info[class_type]["input"]["required"]["scheduler"] = [list(schedulers or ["normal", "karras"])]
+    return info
+
+
+def _analysis(*, class_types, denied=None, models=None):
+    a = WorkflowAnalysis()
+    for cls in class_types:
+        node = NodeAnalysis(node_id=str(len(a.nodes) + 1), class_type=cls)
+        node.is_allowed = cls not in (denied or set())
+        node.is_explicitly_denied = cls in (denied or set())
+        node.is_unknown = not (node.is_allowed or node.is_explicitly_denied)
+        a.nodes.append(node)
+    a.class_types = set(class_types)
+    a.allowed_classes = set(class_types) - set(denied or set())
+    a.denied_classes = set(denied or set())
+    a.unknown_classes = set()
+    a.required_models = dict(models or {})
+    return a
+
+
+@pytest.fixture(autouse=True)
+def _reset_cache():
+    reset_object_info_cache()
+    yield
+    reset_object_info_cache()
+
+
+def test_capability_supported_when_local_has_everything():
+    info = _local_payload(
+        classes={"CheckpointLoaderSimple", "CLIPTextEncode", "KSampler", "KSamplerAdvanced", "VAEDecode", "SaveImage"},
+        models=["v1-5.safetensors", "another.safetensors"],
+    )
+    client = _StubClient(info)
+    analysis = _analysis(
+        class_types={"CheckpointLoaderSimple", "CLIPTextEncode", "KSampler", "KSamplerAdvanced", "VAEDecode", "SaveImage"},
+        models={"ckpt": ["v1-5.safetensors"]},
+    )
+    cap = check_workflow_capability(analysis, client=client)
+    assert cap.overall == "SUPPORTED"
+    assert cap.unsupported == []
+    assert cap.missing_models == {}
+    assert "euler" in cap.sampler_options["KSampler.sampler_name"]
+    assert "euler" in cap.sampler_options["KSamplerAdvanced.sampler_name"]
+
+
+def test_capability_unsupported_when_local_missing_class():
+    info = _local_payload(classes={"CheckpointLoaderSimple", "KSampler"})
+    client = _StubClient(info)
+    analysis = _analysis(
+        class_types={"CheckpointLoaderSimple", "KSampler", "FancyCommunityNode"},
+    )
+    cap = check_workflow_capability(analysis, client=client)
+    assert cap.overall == "UNSUPPORTED"
+    assert "FancyCommunityNode" in cap.unsupported
+    assert "CheckpointLoaderSimple" in cap.supported
+
+
+def test_capability_partially_supported_when_only_models_missing():
+    info = _local_payload(
+        classes={"CheckpointLoaderSimple", "KSampler"},
+        models=["other.safetensors"],
+    )
+    client = _StubClient(info)
+    analysis = _analysis(
+        class_types={"CheckpointLoaderSimple", "KSampler"},
+        models={"ckpt": ["v1-5.safetensors"]},
+    )
+    cap = check_workflow_capability(analysis, client=client)
+    assert cap.overall == "PARTIALLY_SUPPORTED"
+    assert cap.missing_models == {"ckpt": ["v1-5.safetensors"]}
+    assert cap.unsupported == []
+
+
+def test_capability_explicit_denied_class_treated_as_unsupported():
+    """Per §4: denied classes never reach Run; capability surfaces them as UNSUPPORTED."""
+    info = _local_payload(
+        classes={"CheckpointLoaderSimple", "KSampler", "ReActorFaceSwap"},
+    )
+    client = _StubClient(info)
+    analysis = _analysis(
+        class_types={"CheckpointLoaderSimple", "KSampler", "ReActorFaceSwap"},
+        denied={"ReActorFaceSwap"},
+    )
+    cap = check_workflow_capability(analysis, client=client)
+    assert cap.overall == "UNSUPPORTED"
+    assert "ReActorFaceSwap" in cap.unsupported
+    assert any("ReActorFaceSwap" in b for b in cap.blockers)
+
+
+def test_capability_client_none_yields_unsupported_with_blocker():
+    analysis = _analysis(class_types={"KSampler"})
+    cap = check_workflow_capability(analysis, client=None)
+    assert cap.overall == "UNSUPPORTED"
+    assert cap.unsupported == ["KSampler"]
+    assert cap.blockers and "ComfyUI" in cap.blockers[0]
+
+
+def test_capability_client_raise_yields_unsupported_with_blocker():
+    class _Failing:
+        base_url = "http://stub-failing"
+        def get_object_info(self):
+            raise RuntimeError("connection refused")
+    analysis = _analysis(class_types={"KSampler"})
+    cap = check_workflow_capability(analysis, client=_Failing())
+    assert cap.overall == "UNSUPPORTED"
+    assert any("無法取得" in b for b in cap.blockers)
+
+
+def test_capability_caches_object_info_within_ttl():
+    info = _local_payload(classes={"KSampler"})
+    client = _StubClient(info)
+    analysis = _analysis(class_types={"KSampler"})
+    check_workflow_capability(analysis, client=client)
+    check_workflow_capability(analysis, client=client)
+    check_workflow_capability(analysis, client=client)
+    assert client.calls == 1, "object_info should be hit once per (client base_url, ttl) window"
+
+
+def test_capability_to_dict_shape_is_json_friendly():
+    info = _local_payload(classes={"KSampler"})
+    client = _StubClient(info)
+    analysis = _analysis(class_types={"KSampler"})
+    cap = check_workflow_capability(analysis, client=client)
+    payload = cap.to_dict()
+    assert payload["overall"] in {"SUPPORTED", "PARTIALLY_SUPPORTED", "UNSUPPORTED"}
+    # `partial` becomes [{"class_type":..,"reason":..}, ...]
+    assert isinstance(payload["partial"], list)
+    assert isinstance(payload["sampler_options"], dict)
+
+
+def test_iter_required_models_yields_pairs():
+    a = _analysis(
+        class_types={"CheckpointLoaderSimple", "LoraLoader"},
+        models={"ckpt": ["a.safetensors"], "lora": ["b.safetensors", "c.safetensors"]},
+    )
+    pairs = sorted(iter_required_models(a))
+    assert pairs == [
+        ("ckpt", "a.safetensors"),
+        ("lora", "b.safetensors"),
+        ("lora", "c.safetensors"),
+    ]

@@ -1,5 +1,5 @@
-"""Boot-ready gate (2026-05-06): trading / liquidation / bots refuse to act
-on a market until at least one live price has been confirmed.
+"""Boot-ready gate (2026-05-06): trading / liquidation / bots can refuse to
+act on a market until at least one live price has been confirmed.
 
 These tests verify the high-risk guards added with the 2026-05-06 fix:
   - place_order
@@ -10,10 +10,9 @@ These tests verify the high-risk guards added with the 2026-05-06 fix:
   - grid bot create / scan
   - trial credit forced sell
 
-The gate only relaxes after ``trading_markets.live_price_confirmed_at`` is
-populated by two stable live-price observations. The first successful fetch
-only starts warmup; it must not immediately release bots or other high-risk
-paths.
+These tests explicitly turn the root overrides off so the legacy safety gate
+remains covered. The product default treats these signals as warning-only for
+points trading.
 """
 
 import sqlite3
@@ -74,6 +73,8 @@ def _services(tmp_path, *, prices=None):
     # on the production fused-weighted minimum-provider-count rule. The boot
     # gate behavior we're testing is orthogonal to fused-price health.
     _set_setting(trading, "trading.price_source", "binance_public_api")
+    _set_setting(trading, "trading.allow_unready_markets", "false")
+    _set_setting(trading, "trading.disable_price_confidence_gates", "false")
     return points, trading
 
 

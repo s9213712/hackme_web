@@ -1,0 +1,60 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from scripts.prepush.context import PrepushContext
+from scripts.prepush.result import CheckResult
+
+
+WATCHED_ROOTS = (
+    Path("scripts/admin"),
+    Path("scripts/comfyui"),
+    Path("scripts/games"),
+    Path("scripts/on_live_reports"),
+    Path("scripts/security"),
+    Path("scripts/testing"),
+    Path("scripts/trading"),
+)
+SCRIPT_SUFFIXES = {".py", ".sh"}
+HELPER_NAMES = {"__init__.py", "common_paths.py", "comfyui_run_in_linux.template.sh"}
+
+
+def iter_index_required_scripts(repo_root: Path):
+    for watched in WATCHED_ROOTS:
+        root = repo_root / watched
+        if not root.exists():
+            continue
+        for path in sorted(root.rglob("*")):
+            if not path.is_file() and not path.is_symlink():
+                continue
+            if path.name in HELPER_NAMES or path.suffix not in SCRIPT_SUFFIXES:
+                continue
+            yield path
+
+
+def run(ctx: PrepushContext) -> CheckResult:
+    index_path = ctx.repo_root / "scripts" / "INDEX.md"
+    if not index_path.exists():
+        return CheckResult.fail(
+            "scripts index",
+            "scripts/INDEX.md is missing",
+            severity="high",
+            remediation="Create scripts/INDEX.md before adding QA/security scripts.",
+        )
+    index_text = index_path.read_text(encoding="utf-8")
+    missing = []
+    checked = 0
+    for path in iter_index_required_scripts(ctx.repo_root):
+        checked += 1
+        rel = ctx.relpath(path)
+        if rel not in index_text:
+            missing.append({"script": rel})
+    if missing:
+        return CheckResult.fail(
+            "scripts index",
+            f"{len(missing)} QA/security script(s) are not registered in scripts/INDEX.md",
+            severity="high",
+            details=missing[:60],
+            remediation="Register each script with owner, purpose, artifact, and failure meaning.",
+        )
+    return CheckResult.pass_("scripts index", f"registered {checked} QA/security script(s)")

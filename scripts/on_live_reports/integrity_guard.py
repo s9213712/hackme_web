@@ -13,6 +13,11 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DRIVER = REPO_ROOT / "scripts/testing/pytest_in_tmp.sh"
+REPORT_HINT = "runtime/reports/security/production_gate/integrity_guard_*"
+
+
+def progress(message: str) -> None:
+    print(f"[on-live:integrity-guard] {message}", file=sys.stderr, flush=True)
 
 cmd = [
     "bash",
@@ -21,4 +26,11 @@ cmd = [
     "tests/security/integrity/test_integrity_guard.py",
     *sys.argv[1:],
 ]
-sys.exit(subprocess.run(cmd, cwd=REPO_ROOT, env={**os.environ}).returncode)
+progress(f"target repo: {REPO_ROOT}")
+progress(f"artifact hint: {REPORT_HINT}")
+progress("phase pytest-in-tmp started: integrity guard regressions")
+rc = subprocess.run(cmd, cwd=REPO_ROOT, env={**os.environ}).returncode
+progress(f"phase result pytest-in-tmp: exit={rc}")
+if rc != 0:
+    progress("failure hint: inspect integrity guard pytest output and root integrity rescan evidence")
+sys.exit(rc)

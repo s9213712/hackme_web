@@ -23,6 +23,7 @@ from scripts.prepush.checks import (
     points_chain_check,
     pytest_quick_check,
     release_check,
+    scripts_index_check,
     secrets_check,
     server_mode_check,
     smoke_server_check,
@@ -43,6 +44,7 @@ QUICK_CHECKS: list[Check] = [
     forbidden_paths_check.run,
     local_path_check.run,
     markdown_links_check.run,
+    scripts_index_check.run,
     secrets_check.run,
     pii_check.run,
     config_safety_check.run,
@@ -160,8 +162,12 @@ def main(argv: list[str] | None = None) -> int:
             return 1 if payload["status"] == "FAIL" else 0
 
     for check in collect_checks(ctx):
+        if not args.json:
+            print(f"[RUN] {check.__module__.rsplit('.', 1)[-1]}")
         result = run_check(check, ctx)
         results.append(result)
+        if not args.json:
+            print(f"[{result.status}] {result.name}: {result.message}")
 
     payload = to_payload(results)
     if args.json:

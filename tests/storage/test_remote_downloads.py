@@ -259,47 +259,24 @@ def test_torrent_file_trackers_reject_private_hosts(tmp_path, monkeypatch):
         validate_torrent_file_trackers(torrent)
 
 
-def test_torrent_download_excludes_private_trackers_instead_of_failing(tmp_path, monkeypatch):
+def test_torrent_download_rejects_private_trackers(tmp_path, monkeypatch):
     tracker = b"http://tracker.example/announce"
     torrent = tmp_path / "bad-tracker.torrent"
     torrent.write_bytes(
         b"d8:announce" + str(len(tracker)).encode("ascii") + b":" + tracker +
         b"4:infod4:name4:test12:piece lengthi16384e6:pieces0:ee"
     )
-    captured = {}
-
     def fake_getaddrinfo(host, port, **kwargs):
         if host == "tracker.example":
             return [(2, 1, 6, "", ("10.255.255.254", int(port or 80)))]
         return [(2, 1, 6, "", ("8.8.8.8", int(port or 80)))]
 
-    class DonePopen:
-        def __init__(self, cmd, **kwargs):
-            captured["cmd"] = cmd
-            self.returncode = 0
-            self.stdout = ""
-            self.stderr = ""
-            out_dir = cmd[cmd.index("--dir") + 1]
-            (tmp_path / "aria-output-dir.txt").write_text(out_dir, encoding="utf-8")
-            (Path(out_dir) / "payload.txt").write_text("payload", encoding="utf-8")
-
-        def poll(self):
-            return 0
-
-        def communicate(self, timeout=None):
-            return self.stdout, self.stderr
-
     monkeypatch.setattr("services.storage.remote_downloads.socket.getaddrinfo", fake_getaddrinfo)
-    monkeypatch.setattr("services.storage.remote_downloads.shutil.which", lambda name: "/usr/bin/aria2c")
-    monkeypatch.setattr("services.storage.remote_downloads.subprocess.Popen", DonePopen)
 
     report = inspect_torrent_file_trackers(torrent)
     assert report["blocked"][0]["url"] == tracker.decode("ascii")
-    downloaded = download_torrent_file_with_aria2(torrent)
-
-    assert downloaded.filename == "payload.txt"
-    assert "--bt-exclude-tracker" in captured["cmd"]
-    assert tracker.decode("ascii") in captured["cmd"][captured["cmd"].index("--bt-exclude-tracker") + 1]
+    with pytest.raises(RemoteDownloadError, match="不安全 tracker"):
+        download_torrent_file_with_aria2(torrent)
 
 
 def test_torrent_file_bdecode_depth_is_limited(tmp_path):

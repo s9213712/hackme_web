@@ -30,7 +30,6 @@ TEXT_SUFFIXES = {
 
 
 LOCAL_PATH_PATTERNS = {
-    "/home/s92137": "LOCAL_HOME_PATH",
     "/mnt/d": "WSL_DRIVE_PATH",
     "/mnt/c/Users": "WINDOWS_WSL_USER_PATH",
     "C:\\Users\\": "WINDOWS_USER_PATH",
@@ -40,6 +39,9 @@ LOCAL_PATH_PATTERNS = {
     "html_learning_storage": "LEGACY_STORAGE_DIR",
     "hackme_web_economy_fix": "OLD_WORKTREE_NAME",
 }
+_HOME_MARKER = str(Path.home()).replace("\\", "/").rstrip("/")
+if _HOME_MARKER and _HOME_MARKER not in {"/", "."}:
+    LOCAL_PATH_PATTERNS[_HOME_MARKER] = "LOCAL_HOME_PATH"
 
 SECRET_REDACTION = re.compile(r"([A-Za-z0-9_./+=:@-]{4})[A-Za-z0-9_./+=:@-]{8,}([A-Za-z0-9_./+=:@-]{4})")
 

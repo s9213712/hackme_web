@@ -58,9 +58,9 @@ def register_economy_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return None, json_resp({"ok": False, "msg": "Invalid JSON"}, 400)
+            return None, json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}, 400)
         if not isinstance(data, dict):
-            return None, json_resp({"ok": False, "msg": "Invalid request"}, 400)
+            return None, json_resp({"ok": False, "msg": "請求內容格式錯誤"}, 400)
         return data, None
 
     def parse_positive_int(value, *, default=1, maximum=1_000_000_000):
@@ -467,7 +467,7 @@ def register_economy_routes(app, deps):
             return err
         amount = parse_positive_int(data.get("amount"), maximum=1_000_000_000)
         if amount is None:
-            return json_resp({"ok": False, "msg": "amount must be positive"}), 400
+            return json_resp({"ok": False, "msg": "金額必須為正數"}), 400
         currency_type = DISPLAY_CURRENCY
         direction = str(data.get("direction") or "").strip()
         reason = str(data.get("reason") or "").strip()
@@ -513,7 +513,7 @@ def register_economy_routes(app, deps):
             return err
         amount = parse_positive_int(data.get("amount"), maximum=1_000_000_000)
         if amount is None:
-            return json_resp({"ok": False, "msg": "amount must be positive"}), 400
+            return json_resp({"ok": False, "msg": "金額必須為正數"}), 400
         currency_type = DISPLAY_CURRENCY
         action_type = str(data.get("action_type") or "manual_pending_reward").strip()[:80]
         reference_id = str(data.get("reference_id") or "").strip()[:120]
@@ -627,7 +627,7 @@ def register_economy_routes(app, deps):
         if err:
             return err
         if str(data.get("confirm") or "") != "AUTO HANDLE POINTSCHAIN":
-            return json_resp({"ok": False, "msg": "confirm must be AUTO HANDLE POINTSCHAIN"}, 400)
+            return json_resp({"ok": False, "msg": "confirm 欄位必須為 AUTO HANDLE POINTSCHAIN"}, 400)
         try:
             audit(
                 "POINTS_CHAIN_AUTO_HANDLE_START",

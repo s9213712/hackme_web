@@ -12,7 +12,15 @@ def test_public_registration_only_requires_account_password_and_nickname():
     assert 'id="reg-user"' in register_section
     assert 'id="reg-pw"' in register_section
     assert 'id="reg-pw-confirm"' in register_section
+    assert 'id="reg-autofill-decoys"' in register_section
+    assert 'id="reg-pw" placeholder="請設定密碼" autocomplete="off"' in register_section
+    assert 'id="reg-pw-confirm" placeholder="請再次輸入密碼" autocomplete="off"' in register_section
+    assert 'data-lpignore="true"' in register_section
     assert 'id="reg-nickname"' in register_section
+    assert "bindRegisterAutofillGuards" in auth_js
+    assert "registerAutofillGuardBound" in auth_js
+    assert 'input.setAttribute("data-1p-ignore", "true");' in auth_js
+    assert "input.readOnly = true;" in auth_js
     assert 'id="reg-idno"' not in register_section
     assert "身分證不可為空" not in auth_js
     assert "真實姓名不可為空" not in auth_js
@@ -57,6 +65,8 @@ def test_root_points_page_is_chain_operations_console():
     assert "<pre id=\"economy-chain-status\"" not in index_html
     assert 'id="economy-root-virtual-card"' in index_html
     assert 'id="economy-root-virtual-total"' in index_html
+    assert 'id="economy-root-virtual-margin-value"' in index_html
+    assert "剩餘積分 + 現貨估值 + 借貸權益" in index_html
     assert "剩餘積分 + 現貨估值" in index_html
     assert 'id="economy-manual-adjust-details"' in index_html
     assert 'id="economy-chain-backup-details"' in index_html
@@ -282,7 +292,8 @@ def test_root_points_page_is_chain_operations_console():
     assert "pollRootBtcTradeStartJob" in admin_js
     assert "一鍵啟動預測" in index_html
     assert "資料是否過期" in index_html
-    assert "重訓模型，再執行預測腳本並等待新的預測資料" in index_html
+    assert "自動下載/更新、安裝依賴" in index_html
+    assert 'body: JSON.stringify({ project_dir: projectDir, repo_url: repoUrl, branch, timeframe: "4h" })' in admin_js
     assert "function checkRootBtcTradeStatus" in admin_js
     assert 'apiFetch(API + "/root/trading/btc-trade/check"' in admin_js
     assert "function setupRootBtcTrade" in admin_js
@@ -328,7 +339,7 @@ def test_trading_exchange_is_separate_from_wallet_page():
     bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
     trading_js = (ROOT / "public" / "js" / "56-trading.js").read_text(encoding="utf-8")
     workflow_templates = "\n".join(
-        path.read_text(encoding="utf-8") for path in sorted((ROOT / "workflows" / "system").glob("*.json"))
+        path.read_text(encoding="utf-8") for path in sorted((ROOT / "workflows" / "trading_bot").glob("*.json"))
     )
     styles = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
     economy_section = index_html.split('id="module-economy"', 1)[1].split('id="module-trading"', 1)[0]
@@ -385,6 +396,8 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "root 可使用現貨與合約模擬交易" in trading_section
     assert "一般用戶可使用已啟用的積分現貨市場" in trading_section
     assert 'id="trading-root-contract-card"' in trading_section
+    assert '<details class="drive-collapsible-panel" id="trading-root-contract-card"' in trading_section
+    assert '<div class="drive-card" id="trading-root-contract-card"' not in trading_section
     assert 'id="trading-contract-open-btn"' in trading_section
     assert 'id="trading-contract-position-list"' in trading_section
     assert 'id="trading-submit-order-btn"' not in economy_section
@@ -638,7 +651,9 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert '"trading-limit-match-btn", matchTradingLimitOrders' in trading_js
     assert '"trading-liquidation-scan-btn", scanTradingLiquidations' in trading_js
     assert "economy-root-virtual-total" in trading_js
-    assert "available + spotValue" in trading_js
+    assert "rootVirtualMarginPositionEquity" in trading_js
+    assert "available + spotValue + marginValue" in trading_js
+    assert "economy-root-virtual-margin-value" in trading_js
     assert "trial_credit" in trading_js
     assert "function tradingTrialCountdownText" in trading_js
     assert "setInterval(updateTradingTrialCountdown, 1000)" in trading_js
@@ -718,9 +733,20 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert '"economy-root-virtual-open-btn", openTradingModuleFromWallet' in trading_js
     assert 'id="trading-current-delta"' in trading_section
     assert 'id="trading-current-health"' in trading_section
+    assert 'id="trading-risk-dashboard"' in trading_section
+    assert 'id="trading-risk-dashboard-grid"' in trading_section
+    assert "交易控制台" in trading_section
     assert "TRADING_LIVE_PRICE_REFRESH_MS = 2000" in trading_js
     assert "function loadTradingLivePrice()" in trading_js
     assert "function renderTradingCurrentPrice" in trading_js
+    assert "function renderTradingRiskDashboard" in trading_js
+    assert "function tradingMarketBootSummary" in trading_js
+    assert "function tradingSelectedPriceReadiness" in trading_js
+    assert "Bot / backtest" in trading_js
+    assert "Reserve / pool" in trading_js
+    assert "Trial credit" in trading_js
+    assert "Margin / lending" in trading_js
+    assert "boot pending" in trading_js
     assert "/trading/live-price?market=" in trading_js
     assert "updateTradingOrderEstimate();" in trading_js
     assert "price_health" in trading_js
@@ -789,6 +815,9 @@ def test_trading_live_price_polling_uses_two_second_timer_and_health_badges():
     assert "#trading-current-price.trading-price-up" in styles
     assert "#trading-current-price.trading-price-down" in styles
     assert "#trading-current-health.warning" in styles
+    assert ".trading-readiness-grid" in styles
+    assert ".trading-readiness-item" in styles
+    assert ".trading-readiness-warn" in styles
 
 
 def test_spot_position_details_show_holding_cost_and_break_even_price():

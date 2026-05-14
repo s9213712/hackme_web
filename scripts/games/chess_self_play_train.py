@@ -20,10 +20,11 @@ The script uses these match sources:
 
 All generated artifacts stay under ``runtime/``:
 
-- exp1 memory DB: ``runtime/database/chess_experiment.db``
+- exp1 memory DB: ``runtime/games/models/chess_experiment.db``
 - exp2 model: ``runtime/games/models/chess_experiment_2_nn.json``
 - exp3 model: ``runtime/games/models/chess_experiment_3_dl.json``
 - exp4 model: ``runtime/games/models/chess_experiment_4_pv.json``
+- exp5 model: ``runtime/games/models/chess_experiment_5_nnue.json``
 - training reports: ``runtime/reports/games/``
 """
 
@@ -48,6 +49,7 @@ from services.games.self_play_training import (  # noqa: E402
     ChessExperimentStore,
     default_chess_dl_model_path,
     default_chess_nn_model_path,
+    default_chess_nnue_model_path,
     default_chess_pv_model_path,
     default_training_report_dir,
     run_post_training_smoke_evaluation,
@@ -76,6 +78,11 @@ def _progress_log(event: dict) -> None:
             f"[chess-self-play] training finished {event.get('completed', 0)}/{event.get('total', 0)} "
             f"games={event.get('games_played', 0)}\n"
         )
+    sys.stderr.flush()
+
+
+def _progress(message: str) -> None:
+    sys.stderr.write(f"[chess-self-play] {message}\n")
     sys.stderr.flush()
 
 
@@ -117,6 +124,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--experiment-2-model-path", default="")
     parser.add_argument("--experiment-3-model-path", default="")
     parser.add_argument("--experiment-4-model-path", default="")
+    parser.add_argument("--experiment-5-model-path", default="")
     return parser.parse_args()
 
 
@@ -153,6 +161,15 @@ def main() -> int:
     nn_model_path = Path(args.experiment_2_model_path or default_chess_nn_model_path())
     dl_model_path = Path(args.experiment_3_model_path or default_chess_dl_model_path())
     pv_model_path = Path(args.experiment_4_model_path or default_chess_pv_model_path())
+    nnue_model_path = Path(args.experiment_5_model_path or default_chess_nnue_model_path())
+    _progress(f"runtime dir: {runtime_dir or '<default runtime>'}")
+    _progress(f"target exp1 db: {Path(args.experiment_db_path) if args.experiment_db_path else '<default>'}")
+    _progress(f"target exp2 model: {nn_model_path}")
+    _progress(f"target exp3 model: {dl_model_path}")
+    _progress(f"target exp4 model: {pv_model_path}")
+    _progress(f"target exp5 model: {nnue_model_path}")
+    _progress(f"report dir: {Path(args.report_dir)}")
+    _progress("phase self-play training started")
     with _temporary_search_depths(args):
         summary = run_training_session(
             exp1_teacher_games=args.exp1_games,
@@ -177,6 +194,7 @@ def main() -> int:
             nn_model_path=nn_model_path,
             dl_model_path=dl_model_path,
             pv_model_path=pv_model_path,
+            nnue_model_path=nnue_model_path,
             progress_hook=_progress_log,
         )
         sys.stderr.write("[chess-self-play] smoke evaluation started\n")
@@ -186,6 +204,7 @@ def main() -> int:
             nn_model_path=nn_model_path,
             dl_model_path=dl_model_path,
             pv_model_path=pv_model_path,
+            nnue_model_path=nnue_model_path,
             teacher_depth=args.teacher_depth,
             max_plies=args.max_plies,
             games_per_pair=args.smoke_games_per_pair,
@@ -200,6 +219,7 @@ def main() -> int:
             nn_model_path=nn_model_path,
             dl_model_path=dl_model_path,
             pv_model_path=pv_model_path,
+            nnue_model_path=nnue_model_path,
             teacher_depth=args.teacher_depth,
             max_plies=args.max_plies,
             rounds=args.benchmark_rounds,
@@ -209,9 +229,16 @@ def main() -> int:
         sys.stderr.flush()
     reports = write_training_report(summary, report_dir=Path(args.report_dir))
     summary["reports"] = reports
+    _progress(f"phase result report: json={reports.get('json_report')} md={reports.get('md_report')}")
     print(json.dumps(summary, ensure_ascii=False, indent=2))
+    _progress("phase result self-play training: PASS")
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except Exception as exc:
+        _progress(f"FAIL: {exc}")
+        _progress("failure hint: check runtime/model/report paths and reduce game counts for a focused repro")
+        raise

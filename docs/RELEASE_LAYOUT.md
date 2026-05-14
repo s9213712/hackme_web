@@ -28,7 +28,7 @@ weekly salary jobs are not run at startup unless the operator explicitly sets
 | Path | Runtime Data |
 |---|---|
 | `runtime/database/database.db` | SQLite runtime database. |
-| `runtime/database/chess_experiment.db` | 西洋棋 `experiment` 難度的獨立學習資料庫。 |
+| `runtime/games/models/chess_experiment.db` | 西洋棋 `experiment` 難度的獨立學習資料庫。 |
 | `runtime/models/chess_experiment_2_nn.json` | 西洋棋 `experiment 2:nn` 難度的獨立模型檔。 |
 | `runtime/storage/` | Cloud Drive user files. |
 | `runtime/reports/bugs/` | User bug reports. |
@@ -59,8 +59,9 @@ directory needs to exist in a fresh checkout.
 - Placement and cleanup policy lives in `docs/REPOSITORY_STRUCTURE.md`.
 - Security test usage guides live under `docs/security/`.
 - Historical abandoned work lives under `docs/archive/`.
-- Internal research belongs under `research/` or `docs/research/`; both are
-  ignored and should not be part of release commits.
+- Internal scratchpad research belongs under `research/` (gitignored) and
+  must not be part of release commits. Long-form research that should ship
+  with the repo lives under `docs/AGENTS/research/`.
 
 ## Security Script Policy
 

@@ -1,6 +1,6 @@
 import json
 
-from flask import Flask, jsonify, make_response
+from flask import Flask, jsonify, make_response, request
 
 from routes.system_admin import register_system_admin_routes
 from services.security.access_controls import (
@@ -21,6 +21,7 @@ from services.server.bind import (
     validate_listen_host,
     validate_listen_port,
 )
+from services.server.request_guards import protect_sensitive_static_page
 
 
 def _json_resp(payload, status=200):
@@ -127,6 +128,49 @@ def test_maintenance_bypass_required_payload_names_token_header_not_hash():
     assert payload["requires"] == "maintenance_bypass_token"
     assert payload["header"] == "X-Maintenance-Bypass-Token"
     assert "hash" not in str(payload).lower()
+
+
+def test_comfyui_workflow_editor_static_page_requires_login():
+    app = Flask(__name__)
+    audit_log = []
+    with app.test_request_context("/comfyui-workflow-editor.html"):
+        resp = protect_sensitive_static_page(
+            request,
+            get_current_user_ctx=lambda: None,
+            audit=lambda *args, **kwargs: audit_log.append((args, kwargs)),
+            get_client_ip=lambda: "127.0.0.1",
+            get_ua=lambda: "pytest",
+            is_feature_enabled=lambda key: True,
+            record_security_event=lambda *args, **kwargs: None,
+            make_response=make_response,
+        )
+
+    assert resp.status_code == 302
+    assert resp.headers["Location"] == "/"
+    assert audit_log
+    assert audit_log[-1][0][0] == "STATIC_PAGE_UNAUTH_DENIED"
+    assert "path=/comfyui-workflow-editor.html" in audit_log[-1][1]["detail"]
+
+
+def test_comfyui_workflow_editor_static_page_respects_feature_flag():
+    app = Flask(__name__)
+    security_events = []
+    with app.test_request_context("/comfyui-workflow-editor.html"):
+        resp = protect_sensitive_static_page(
+            request,
+            get_current_user_ctx=lambda: {"id": 1, "username": "root"},
+            audit=lambda *args, **kwargs: None,
+            get_client_ip=lambda: "127.0.0.1",
+            get_ua=lambda: "pytest",
+            is_feature_enabled=lambda key: False,
+            record_security_event=lambda *args, **kwargs: security_events.append((args, kwargs)),
+            make_response=make_response,
+        )
+
+    assert resp.status_code == 503
+    assert b"ComfyUI workflow editor is disabled" in resp.data
+    assert security_events
+    assert "feature_comfyui_enabled" in security_events[-1][1]["detail"]
 
 
 def test_admin_access_controls_endpoint_updates_safe_payload():
@@ -270,7 +314,19 @@ def test_root_can_configure_server_ssl_setting_with_restart_hint(tmp_path):
     assert initial["server_ssl"]["enabled"] is True
     assert initial["server_ssl"]["restart_required"] is True
 
-    res = client.put("/api/admin/settings", json={"server_ssl_enabled": False})
+    # server_ssl_enabled is a dangerous setting on the disable side; the
+    # admin route should reject the PUT until the operator opts in via
+    # ``dangerous_confirm`` (P1 settings hardening).
+    blocked = client.put("/api/admin/settings", json={"server_ssl_enabled": False})
+    assert blocked.status_code == 400
+    blocked_payload = blocked.get_json()
+    assert blocked_payload.get("error") == "dangerous_change_blocked"
+    assert state["server_ssl_enabled"] is True
+
+    res = client.put(
+        "/api/admin/settings",
+        json={"server_ssl_enabled": False, "dangerous_confirm": "server_ssl_enabled"},
+    )
     data = res.get_json()
 
     assert res.status_code == 200
@@ -420,6 +476,100 @@ def test_root_can_configure_comfyui_batch_limit_without_restart_hint():
     assert res.status_code == 200
     assert state["comfyui_max_batch_size"] == 4
     assert res.get_json()["settings"]["comfyui_max_batch_size"] == 4
+
+
+def test_comfyui_account_api_key_is_write_only_and_clearable():
+    audit_log = []
+    app, state = _admin_app(audit_log=audit_log)
+    client = app.test_client()
+
+    saved = client.put(
+        "/api/admin/settings",
+        json={
+            "comfyui_paid_api_nodes_enabled": True,
+            "comfyui_account_api_key": "comfyui-secret-key",
+        },
+    )
+
+    assert saved.status_code == 200, saved.get_json()
+    assert state["comfyui_paid_api_nodes_enabled"] is True
+    assert state["comfyui_account_api_key"] == "comfyui-secret-key"
+    payload = saved.get_json()["settings"]
+    assert payload["comfyui_account_api_key"] == ""
+    assert payload["comfyui_account_api_key_configured"] is True
+    assert "comfyui-secret-key" not in json.dumps(saved.get_json(), ensure_ascii=False)
+    assert "comfyui-secret-key" not in json.dumps(audit_log, ensure_ascii=False)
+
+    readback = client.get("/api/admin/settings").get_json()["settings"]
+    assert readback["comfyui_account_api_key"] == ""
+    assert readback["comfyui_account_api_key_configured"] is True
+
+    unchanged = client.put("/api/admin/settings", json={"comfyui_account_api_key": "", "comfyui_max_batch_size": 2})
+    assert unchanged.status_code == 200, unchanged.get_json()
+    assert state["comfyui_account_api_key"] == "comfyui-secret-key"
+    assert unchanged.get_json()["settings"]["comfyui_account_api_key_configured"] is True
+
+    cleared = client.put("/api/admin/settings", json={"comfyui_account_api_key_clear": True})
+    assert cleared.status_code == 200, cleared.get_json()
+    assert state["comfyui_account_api_key"] == ""
+    assert cleared.get_json()["settings"]["comfyui_account_api_key_configured"] is False
+
+
+def test_comfyui_account_api_key_rejects_whitespace():
+    app, state = _admin_app()
+    client = app.test_client()
+
+    res = client.put("/api/admin/settings", json={"comfyui_account_api_key": "bad key with spaces"})
+
+    assert res.status_code == 400
+    assert "comfyui_account_api_key" not in state
+
+
+def test_root_can_configure_diffusers_backend_and_hf_token_write_only():
+    app, state = _admin_app()
+    client = app.test_client()
+
+    saved = client.put(
+        "/api/admin/settings",
+        json={
+            "comfyui_connection_mode": "diffusers",
+            "comfyui_diffusers_model_repo": "dhead/waiIllustriousSDXL_v150",
+            "comfyui_huggingface_api_token": "hf_read_token",
+            "comfyui_diffusers_device": "cuda",
+            "comfyui_diffusers_dtype": "float16",
+        },
+    )
+
+    assert saved.status_code == 200
+    assert state["comfyui_connection_mode"] == "diffusers"
+    assert state["comfyui_diffusers_model_repo"] == "dhead/waiIllustriousSDXL_v150"
+    assert state["comfyui_huggingface_api_token"] == "hf_read_token"
+    assert state["comfyui_diffusers_device"] == "cuda"
+    assert state["comfyui_diffusers_dtype"] == "float16"
+    payload = saved.get_json()["settings"]
+    assert payload["comfyui_huggingface_api_token"] == ""
+    assert payload["comfyui_huggingface_api_token_configured"] is True
+
+    unchanged = client.put("/api/admin/settings", json={"comfyui_huggingface_api_token": "", "comfyui_diffusers_device": "auto"})
+    assert unchanged.status_code == 200
+    assert state["comfyui_huggingface_api_token"] == "hf_read_token"
+    assert unchanged.get_json()["settings"]["comfyui_huggingface_api_token_configured"] is True
+
+    cleared = client.put("/api/admin/settings", json={"comfyui_huggingface_api_token_clear": True})
+    assert cleared.status_code == 200
+    assert state["comfyui_huggingface_api_token"] == ""
+    assert cleared.get_json()["settings"]["comfyui_huggingface_api_token_configured"] is False
+
+
+def test_diffusers_settings_reject_invalid_repo_token_and_runtime_options():
+    app, state = _admin_app()
+    client = app.test_client()
+
+    assert client.put("/api/admin/settings", json={"comfyui_diffusers_model_repo": "../bad/model"}).status_code == 400
+    assert client.put("/api/admin/settings", json={"comfyui_huggingface_api_token": "bad token"}).status_code == 400
+    assert client.put("/api/admin/settings", json={"comfyui_diffusers_device": "tpu"}).status_code == 400
+    assert client.put("/api/admin/settings", json={"comfyui_diffusers_dtype": "int8"}).status_code == 400
+    assert "comfyui_diffusers_model_repo" not in state
 
 
 def test_root_can_configure_comfyui_default_dimensions_without_restart_hint():

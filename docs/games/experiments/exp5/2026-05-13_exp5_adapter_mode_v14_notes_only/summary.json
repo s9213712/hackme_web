@@ -1,0 +1,468 @@
+{
+  "adapter_allow_exact_adoption": false,
+  "adapter_allow_general_adapter": false,
+  "adapter_counts": {
+    "adapter_adoption_rate": 0.0,
+    "adapter_adoptions": 0,
+    "adapter_decisions": 1492,
+    "reason_counts": {
+      "exact_memory_shadow_only": 31,
+      "no_exact_memory": 1461
+    },
+    "source_counts": {
+      "exact_memory": 31,
+      "none": 1461
+    }
+  },
+  "adapter_mode": "guarded",
+  "adapter_model_path": "<repo>/docs/games/2026-05-13_exp5_normal_retrain_smoke_v11/repeatability_gate/run_1_seed_31/candidate/chess_experiment_5_nnue.json",
+  "adapter_model_sha256": "a16bed7c1f25da26189efe85c8dc6986b18642bbb4b54226023eff4027d1b5a6",
+  "adapter_rows_path": "<repo>/docs/games/2026-05-13_exp5_normal_retrain_smoke_v11/normal_train_rows.jsonl",
+  "adapter_rows_sha256": "bbca2c2ec5ad32467a27bbaa6bf2f5cf1bcc45ea87af67d114c86e7acd56cac1",
+  "advanced_score": {
+    "components": [
+      {
+        "inputs": {
+          "fixed_pass_rate": 1.0,
+          "legacy_total": 40.0,
+          "sparring_score_rate": 1.0
+        },
+        "max_points": 20.0,
+        "name": "legacy_probe_stability",
+        "points": 20.0
+      },
+      {
+        "inputs": {
+          "cases": 300,
+          "pass_rate": 1.0,
+          "pgn_exact_reference_match_rate": 0.1708,
+          "pgn_exact_reference_target_for_full_credit": 0.55,
+          "pgn_pass_rate": 1.0
+        },
+        "max_points": 30.0,
+        "name": "large_tactical_suite",
+        "points": 24.4844
+      },
+      {
+        "inputs": {
+          "ai_score_rate": 0.7,
+          "ai_win_rate": 0.5,
+          "ai_wins": 15,
+          "codex_wins": 3,
+          "complete_game_rate": 0.9667,
+          "draws": 12,
+          "games": 30,
+          "loss_rate": 0.1,
+          "threefold_rate": 0.4
+        },
+        "max_points": 50.0,
+        "name": "complete_game_gauntlet",
+        "points": 34.9688
+      },
+      {
+        "inputs": {
+          "avg_elapsed_ms_per_gauntlet_game": 9167.302,
+          "full_credit_ms": 8000,
+          "zero_credit_ms": 45000
+        },
+        "max_points": 10.0,
+        "name": "runtime_efficiency",
+        "points": 9.6845
+      }
+    ],
+    "engine": "experiment 5:nnue",
+    "generated_at": "2026-05-13T14:05:30+00:00",
+    "grade": "strong_club_candidate",
+    "inputs": {
+      "gauntlet": "<repo>/docs/games/2026-05-13_exp5_adapter_mode_v14_notes_only/adapter_gauntlet_30.json",
+      "score_probe": "<repo>/docs/games/2026-05-13_exp5_adapter_mode_v14_notes_only/adapter_score_probe.json",
+      "tactical_suite": "<repo>/docs/games/2026-05-13_exp5_adapter_mode_v14_notes_only/adapter_tactical_suite_300.json"
+    },
+    "interpretation": {
+      "legacy_40_point_score": "saturated; retained only as stability gate",
+      "main_current_ceiling": "complete-game gauntlet win rate, lower threefold rate, PGN exact-match signal, and runtime",
+      "not_external_elo": true
+    },
+    "max_points": 110.0,
+    "normalized_100": 81.0343,
+    "score_name": "exp5_advanced_non_saturated_score_v1",
+    "total_points": 89.1377
+  },
+  "artifacts": {
+    "advanced_score": "<repo>/docs/games/2026-05-13_exp5_adapter_mode_v14_notes_only/adapter_advanced_score.json",
+    "commands_jsonl": "<repo>/docs/games/2026-05-13_exp5_adapter_mode_v14_notes_only/commands.jsonl",
+    "gauntlet": "<repo>/docs/games/2026-05-13_exp5_adapter_mode_v14_notes_only/adapter_gauntlet_30.json",
+    "gauntlet_jsonl": "<repo>/docs/games/2026-05-13_exp5_adapter_mode_v14_notes_only/adapter_gauntlet_30.jsonl",
+    "score_probe": "<repo>/docs/games/2026-05-13_exp5_adapter_mode_v14_notes_only/adapter_score_probe.json",
+    "summary_json": "<repo>/docs/games/2026-05-13_exp5_adapter_mode_v14_notes_only/summary.json",
+    "summary_md": "<repo>/docs/games/2026-05-13_exp5_adapter_mode_v14_notes_only/SUMMARY.md",
+    "tactical_suite": "<repo>/docs/games/2026-05-13_exp5_adapter_mode_v14_notes_only/adapter_tactical_suite_300.json"
+  },
+  "gauntlet_summary": {
+    "ai_score_rate": 0.7,
+    "ai_win_rate": 0.5,
+    "ai_wins": 15,
+    "avg_elapsed_ms": 9167.302,
+    "avg_plies": 85.9,
+    "by_opening": {
+      "caro_kann": {
+        "ai_wins": 0,
+        "codex_wins": 0,
+        "draws": 2,
+        "games": 2
+      },
+      "early_queen_probe": {
+        "ai_wins": 1,
+        "codex_wins": 1,
+        "draws": 0,
+        "games": 2
+      },
+      "english": {
+        "ai_wins": 1,
+        "codex_wins": 0,
+        "draws": 1,
+        "games": 2
+      },
+      "fianchetto": {
+        "ai_wins": 0,
+        "codex_wins": 0,
+        "draws": 2,
+        "games": 2
+      },
+      "flank_probe": {
+        "ai_wins": 1,
+        "codex_wins": 0,
+        "draws": 1,
+        "games": 2
+      },
+      "french": {
+        "ai_wins": 0,
+        "codex_wins": 0,
+        "draws": 2,
+        "games": 2
+      },
+      "kings_gambit": {
+        "ai_wins": 1,
+        "codex_wins": 0,
+        "draws": 1,
+        "games": 2
+      },
+      "kings_indian": {
+        "ai_wins": 1,
+        "codex_wins": 0,
+        "draws": 1,
+        "games": 2
+      },
+      "open_game": {
+        "ai_wins": 2,
+        "codex_wins": 0,
+        "draws": 0,
+        "games": 2
+      },
+      "queen_pawn": {
+        "ai_wins": 1,
+        "codex_wins": 1,
+        "draws": 0,
+        "games": 2
+      },
+      "queens_gambit": {
+        "ai_wins": 2,
+        "codex_wins": 0,
+        "draws": 0,
+        "games": 2
+      },
+      "reti": {
+        "ai_wins": 0,
+        "codex_wins": 1,
+        "draws": 1,
+        "games": 2
+      },
+      "scandinavian": {
+        "ai_wins": 1,
+        "codex_wins": 0,
+        "draws": 1,
+        "games": 2
+      },
+      "sicilian": {
+        "ai_wins": 2,
+        "codex_wins": 0,
+        "draws": 0,
+        "games": 2
+      },
+      "start": {
+        "ai_wins": 2,
+        "codex_wins": 0,
+        "draws": 0,
+        "games": 2
+      }
+    },
+    "checkmate_rate": 0.5667,
+    "codex_wins": 3,
+    "complete_game_rate": 0.9667,
+    "draw_rate": 0.4,
+    "draws": 12,
+    "games": 30,
+    "loss_rate": 0.1,
+    "reasons": [
+      "checkmate",
+      "material_at_ply_cap",
+      "threefold_repetition"
+    ],
+    "threefold_rate": 0.4
+  },
+  "generated_at": "2026-05-13T14:05:30+00:00",
+  "main_model_path": "<repo>/services/games/models/chess_experiment_5_nnue.json",
+  "main_model_sha256": "88464dba7e3497e7be7474e0aae4272801fb2e98838985740e530f592f2ff992",
+  "ok": true,
+  "score_probe_summary": {
+    "failed_fixed": [],
+    "fixed_summary": {
+      "by_metric": {
+        "avoid_blunder": {
+          "cases": 3.0,
+          "pass_rate": 1.0,
+          "passed": 3.0
+        },
+        "endgame": {
+          "cases": 2.0,
+          "pass_rate": 1.0,
+          "passed": 2.0
+        },
+        "long_strategy": {
+          "cases": 9.399999999999995,
+          "pass_rate": 1.0,
+          "passed": 9.399999999999995
+        },
+        "normal_move": {
+          "cases": 9.399999999999995,
+          "pass_rate": 1.0,
+          "passed": 9.399999999999995
+        },
+        "opening": {
+          "cases": 6.199999999999998,
+          "pass_rate": 1.0,
+          "passed": 6.199999999999998
+        },
+        "short_tactics": {
+          "cases": 6.049999999999999,
+          "pass_rate": 1.0,
+          "passed": 6.049999999999999
+        },
+        "trap_response": {
+          "cases": 2.0,
+          "pass_rate": 1.0,
+          "passed": 2.0
+        },
+        "trap_setting": {
+          "cases": 1.0,
+          "pass_rate": 1.0,
+          "passed": 1.0
+        }
+      },
+      "cases": 14.399999999999991,
+      "difficulty": "experiment 5:nnue",
+      "difficulty_label": "實驗 5：NNUE + AlphaBeta/PVS",
+      "game_key": "chess",
+      "game_label": "西洋棋",
+      "pass_rate": 1.0,
+      "passed": 14.399999999999991,
+      "valid_failures": 0
+    },
+    "score_row": {
+      "approx_strength": "約 Elo 1500-1800；非高階引擎",
+      "confidence": "中",
+      "difficulty": "experiment 5:nnue",
+      "difficulty_label": "實驗 5：NNUE + AlphaBeta/PVS",
+      "fixed_cases": 14.399999999999991,
+      "fixed_pass_rate": 1.0,
+      "fixed_passed": 14.399999999999991,
+      "game_key": "chess",
+      "game_label": "西洋棋",
+      "illegal_or_invalid": 0,
+      "main_strengths": [
+        "避免送子 5.0/5",
+        "終局 5.0/5",
+        "長期策略 5.0/5"
+      ],
+      "main_weaknesses": [
+        "未見重大固定題失誤，但樣本仍有限"
+      ],
+      "scores": {
+        "avoid_blunder": 5.0,
+        "endgame": 5.0,
+        "long_strategy": 5.0,
+        "normal_move": 5.0,
+        "opening": 5.0,
+        "short_tactics": 5.0,
+        "trap_response": 5.0,
+        "trap_setting": 5.0
+      },
+      "sparring_games": 6,
+      "sparring_record": {
+        "draws": 0,
+        "losses": 0,
+        "wins": 6
+      },
+      "sparring_score_rate": 1.0,
+      "total_score": 40.0,
+      "training_use": "適合初中級實戰與基本複盤；不適合作為高階引擎替代"
+    },
+    "sparring_summary": {
+      "avg_plies": 70.5,
+      "difficulty": "experiment 5:nnue",
+      "difficulty_label": "實驗 5：NNUE + AlphaBeta/PVS",
+      "draws": 0,
+      "game_key": "chess",
+      "game_label": "西洋棋",
+      "games": 6,
+      "illegal_or_invalid": 0,
+      "losses": 0,
+      "score": 6.0,
+      "score_rate": 1.0,
+      "wins": 6
+    }
+  },
+  "tactical_summary": {
+    "by_difficulty": {
+      "basic": {
+        "cases": 28,
+        "pass_rate": 1.0,
+        "passed": 28
+      },
+      "human_probe": {
+        "cases": 240,
+        "pass_rate": 1.0,
+        "passed": 240
+      },
+      "mate_in_two": {
+        "cases": 6,
+        "pass_rate": 1.0,
+        "passed": 6
+      },
+      "opening": {
+        "cases": 8,
+        "pass_rate": 1.0,
+        "passed": 8
+      },
+      "opening_blunder": {
+        "cases": 2,
+        "pass_rate": 1.0,
+        "passed": 2
+      },
+      "opening_trap": {
+        "cases": 4,
+        "pass_rate": 1.0,
+        "passed": 4
+      },
+      "rule": {
+        "cases": 4,
+        "pass_rate": 1.0,
+        "passed": 4
+      },
+      "trap": {
+        "cases": 8,
+        "pass_rate": 1.0,
+        "passed": 8
+      }
+    },
+    "by_kind": {
+      "avoid_creating_mate_in_one": {
+        "cases": 2,
+        "pass_rate": 1.0,
+        "passed": 2
+      },
+      "capture_dangerous_pawn": {
+        "cases": 6,
+        "pass_rate": 1.0,
+        "passed": 6
+      },
+      "capture_material": {
+        "cases": 14,
+        "pass_rate": 1.0,
+        "passed": 14
+      },
+      "castle_when_clean": {
+        "cases": 2,
+        "pass_rate": 1.0,
+        "passed": 2
+      },
+      "en_passant": {
+        "cases": 2,
+        "pass_rate": 1.0,
+        "passed": 2
+      },
+      "find_forced_mate_in_two": {
+        "cases": 6,
+        "pass_rate": 1.0,
+        "passed": 6
+      },
+      "find_mate_in_one": {
+        "cases": 10,
+        "pass_rate": 1.0,
+        "passed": 10
+      },
+      "opening_development": {
+        "cases": 8,
+        "pass_rate": 1.0,
+        "passed": 8
+      },
+      "pgn_human_probe": {
+        "cases": 240,
+        "pass_rate": 1.0,
+        "passed": 240
+      },
+      "prevent_mate_in_one": {
+        "cases": 10,
+        "pass_rate": 1.0,
+        "passed": 10
+      }
+    },
+    "by_source": {
+      "downloaded_pgn_replay": {
+        "cases": 240,
+        "pass_rate": 1.0,
+        "passed": 240
+      },
+      "synthetic_deep_tactic": {
+        "cases": 6,
+        "pass_rate": 1.0,
+        "passed": 6
+      },
+      "synthetic_endgame": {
+        "cases": 6,
+        "pass_rate": 1.0,
+        "passed": 6
+      },
+      "synthetic_human_probe": {
+        "cases": 14,
+        "pass_rate": 1.0,
+        "passed": 14
+      },
+      "synthetic_rule": {
+        "cases": 4,
+        "pass_rate": 1.0,
+        "passed": 4
+      },
+      "synthetic_tactic": {
+        "cases": 18,
+        "pass_rate": 1.0,
+        "passed": 18
+      },
+      "synthetic_trap": {
+        "cases": 12,
+        "pass_rate": 1.0,
+        "passed": 12
+      }
+    },
+    "cases": 300,
+    "failed": [],
+    "pass_rate": 1.0,
+    "passed": 300,
+    "pgn_human_probe": {
+      "cases": 240,
+      "exact_reference_match_rate": 0.1708,
+      "exact_reference_matches": 41,
+      "passed": 240
+    }
+  }
+}

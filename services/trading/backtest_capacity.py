@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 PROBE_CANDLES = 20_000
 PROBE_TIME_BUDGET_SECONDS = 60.0
-WORKFLOWS_DIR = Path(__file__).resolve().parents[2] / "workflows" / "system"
+WORKFLOWS_DIR = Path(__file__).resolve().parents[2] / "workflows" / "trading_bot"
 
 
 def _make_probe_candles(n: int) -> list:

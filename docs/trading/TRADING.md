@@ -464,8 +464,8 @@ Runtime behavior:
   level even when no external matching engine event is received.
 - Existing grid bots can be loaded into the backtest panel for what-if replay.
 
-The earlier design report is still useful background material:
-[Grid Trading Bot Design Report](../research/finished/GRID_TRADING_BOT_DESIGN_REPORT.md).
+Live grid implementation reference: `services/trading/grid.py`,
+`services/trading/schema_ddl.py` (`trading_grid_bots` table).
 
 ### Workflow Strategy Bot
 
@@ -517,7 +517,7 @@ thresholds and backtest them before enabling live scans.
 
 Workflow files are stored under the project-level `workflows/` directory:
 
-- `workflows/system/` contains built-in templates tracked by Git.
+- `workflows/trading_bot/` contains built-in templates tracked by Git.
 - `runtime/workflows/custom/<username>/` contains user-created templates generated at
   runtime and ignored by Git.
 - Official templates must include structured explanations: purpose, trigger

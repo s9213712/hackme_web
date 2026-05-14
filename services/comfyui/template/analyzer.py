@@ -16,6 +16,9 @@ from enum import Enum
 from typing import Any
 
 from services.comfyui.template.allowlist import (
+    CORE_ALLOWLIST,
+    CONTROLNET_PREPROCESSOR_ALLOWLIST,
+    EXPLICIT_DENYLIST,
     is_allowed_class,
     is_explicitly_denied_class,
 )
@@ -35,6 +38,7 @@ class FieldCategory(str, Enum):
 _FIELD_CATEGORY_TABLE: dict[tuple[str, str], FieldCategory] = {
     # Text
     ("CLIPTextEncode", "text"): FieldCategory.TEXT,
+    ("CLIPTextEncodeFlux", "text"): FieldCategory.TEXT,
     # Image / Mask
     ("LoadImage", "image"): FieldCategory.IMAGE,
     ("LoadImageMask", "image"): FieldCategory.IMAGE,
@@ -42,20 +46,69 @@ _FIELD_CATEGORY_TABLE: dict[tuple[str, str], FieldCategory] = {
     # Models
     ("CheckpointLoaderSimple", "ckpt_name"): FieldCategory.MODEL,
     ("VAELoader", "vae_name"): FieldCategory.MODEL,
+    ("CLIPLoader", "clip_name"): FieldCategory.MODEL,
+    ("DualCLIPLoader", "clip_name1"): FieldCategory.MODEL,
+    ("DualCLIPLoader", "clip_name2"): FieldCategory.MODEL,
+    ("TripleCLIPLoader", "clip_name1"): FieldCategory.MODEL,
+    ("TripleCLIPLoader", "clip_name2"): FieldCategory.MODEL,
+    ("TripleCLIPLoader", "clip_name3"): FieldCategory.MODEL,
+    ("UNETLoader", "unet_name"): FieldCategory.MODEL,
     ("LoraLoader", "lora_name"): FieldCategory.MODEL,
+    ("LoraLoaderModelOnly", "lora_name"): FieldCategory.MODEL,
     ("ControlNetLoader", "control_net_name"): FieldCategory.MODEL,
     ("UpscaleModelLoader", "model_name"): FieldCategory.MODEL,
+    ("ByteDanceSeedreamNode", "model"): FieldCategory.MODEL,
+    ("GrokImageEditNode", "model"): FieldCategory.MODEL,
     # Numeric — KSampler
     ("KSampler", "seed"): FieldCategory.NUMERIC,
     ("KSampler", "steps"): FieldCategory.NUMERIC,
     ("KSampler", "cfg"): FieldCategory.NUMERIC,
     ("KSampler", "denoise"): FieldCategory.NUMERIC,
+    ("KSampler", "control_after_generate"): FieldCategory.SAMPLER,
     # Sampler enum
     ("KSampler", "sampler_name"): FieldCategory.SAMPLER,
     ("KSampler", "scheduler"): FieldCategory.SAMPLER,
+    ("KSamplerSelect", "sampler_name"): FieldCategory.SAMPLER,
+    ("BasicScheduler", "scheduler"): FieldCategory.SAMPLER,
+    ("BasicScheduler", "steps"): FieldCategory.NUMERIC,
+    ("BasicScheduler", "denoise"): FieldCategory.NUMERIC,
+    ("RandomNoise", "noise_seed"): FieldCategory.NUMERIC,
+    ("FluxGuidance", "guidance"): FieldCategory.NUMERIC,
+    ("Flux2Scheduler", "steps"): FieldCategory.NUMERIC,
+    ("Flux2Scheduler", "width"): FieldCategory.NUMERIC,
+    ("Flux2Scheduler", "height"): FieldCategory.NUMERIC,
+    ("WanImageToVideo", "width"): FieldCategory.NUMERIC,
+    ("WanImageToVideo", "height"): FieldCategory.NUMERIC,
+    ("WanImageToVideo", "length"): FieldCategory.NUMERIC,
+    ("WanImageToVideo", "batch_size"): FieldCategory.NUMERIC,
+    ("CreateVideo", "fps"): FieldCategory.NUMERIC,
+    ("ImageScaleToTotalPixels", "megapixels"): FieldCategory.NUMERIC,
+    ("ImageScaleToTotalPixels", "divisible_by"): FieldCategory.NUMERIC,
+    ("EmptyAceStep1.5LatentAudio", "seconds"): FieldCategory.NUMERIC,
+    ("TextEncodeAceStepAudio1.5", "seed"): FieldCategory.NUMERIC,
+    ("TextEncodeAceStepAudio1.5", "duration"): FieldCategory.NUMERIC,
+    ("TextEncodeAceStepAudio1.5", "cfg_scale"): FieldCategory.NUMERIC,
+    ("ByteDanceSeedreamNode", "width"): FieldCategory.NUMERIC,
+    ("ByteDanceSeedreamNode", "height"): FieldCategory.NUMERIC,
+    ("ByteDanceSeedreamNode", "max_images"): FieldCategory.NUMERIC,
+    ("ByteDanceSeedreamNode", "seed"): FieldCategory.NUMERIC,
+    ("GrokImageEditNode", "number_of_images"): FieldCategory.NUMERIC,
+    ("GrokImageEditNode", "seed"): FieldCategory.NUMERIC,
+    # Numeric / enum — KSamplerAdvanced
+    ("KSamplerAdvanced", "noise_seed"): FieldCategory.NUMERIC,
+    ("KSamplerAdvanced", "steps"): FieldCategory.NUMERIC,
+    ("KSamplerAdvanced", "cfg"): FieldCategory.NUMERIC,
+    ("KSamplerAdvanced", "start_at_step"): FieldCategory.NUMERIC,
+    ("KSamplerAdvanced", "end_at_step"): FieldCategory.NUMERIC,
+    ("KSamplerAdvanced", "add_noise"): FieldCategory.SAMPLER,
+    ("KSamplerAdvanced", "sampler_name"): FieldCategory.SAMPLER,
+    ("KSamplerAdvanced", "scheduler"): FieldCategory.SAMPLER,
+    ("KSamplerAdvanced", "return_with_leftover_noise"): FieldCategory.SAMPLER,
+    ("KSamplerAdvanced", "control_after_generate"): FieldCategory.SAMPLER,
     # Numeric — LoraLoader strengths
     ("LoraLoader", "strength_model"): FieldCategory.NUMERIC,
     ("LoraLoader", "strength_clip"): FieldCategory.NUMERIC,
+    ("LoraLoaderModelOnly", "strength_model"): FieldCategory.NUMERIC,
     # Numeric — ControlNet apply
     ("ControlNetApplyAdvanced", "strength"): FieldCategory.NUMERIC,
     ("ControlNetApplyAdvanced", "start_percent"): FieldCategory.NUMERIC,
@@ -64,6 +117,14 @@ _FIELD_CATEGORY_TABLE: dict[tuple[str, str], FieldCategory] = {
     ("EmptyLatentImage", "width"): FieldCategory.NUMERIC,
     ("EmptyLatentImage", "height"): FieldCategory.NUMERIC,
     ("EmptyLatentImage", "batch_size"): FieldCategory.NUMERIC,
+    ("EmptySD3LatentImage", "width"): FieldCategory.NUMERIC,
+    ("EmptySD3LatentImage", "height"): FieldCategory.NUMERIC,
+    ("EmptySD3LatentImage", "batch_size"): FieldCategory.NUMERIC,
+    ("EmptyFlux2LatentImage", "width"): FieldCategory.NUMERIC,
+    ("EmptyFlux2LatentImage", "height"): FieldCategory.NUMERIC,
+    ("EmptyFlux2LatentImage", "batch_size"): FieldCategory.NUMERIC,
+    ("ModelSamplingSD3", "shift"): FieldCategory.NUMERIC,
+    ("ModelSamplingAuraFlow", "shift"): FieldCategory.NUMERIC,
     ("ImagePadForOutpaint", "left"): FieldCategory.NUMERIC,
     ("ImagePadForOutpaint", "top"): FieldCategory.NUMERIC,
     ("ImagePadForOutpaint", "right"): FieldCategory.NUMERIC,
@@ -71,6 +132,27 @@ _FIELD_CATEGORY_TABLE: dict[tuple[str, str], FieldCategory] = {
     ("ImagePadForOutpaint", "feathering"): FieldCategory.NUMERIC,
     # Save filename — text but not user-editable in UI (overwritten by §7.2)
     ("SaveImage", "filename_prefix"): FieldCategory.TEXT,
+    ("SaveVideo", "filename_prefix"): FieldCategory.TEXT,
+    ("SaveAudioMP3", "filename_prefix"): FieldCategory.TEXT,
+    ("ByteDanceSeedreamNode", "prompt"): FieldCategory.TEXT,
+    ("GrokImageEditNode", "prompt"): FieldCategory.TEXT,
+    ("StringConcatenate", "string_a"): FieldCategory.TEXT,
+    ("StringConcatenate", "string_b"): FieldCategory.TEXT,
+    ("TextEncodeAceStepAudio1.5", "tags"): FieldCategory.TEXT,
+    ("TextEncodeAceStepAudio1.5", "lyrics"): FieldCategory.TEXT,
+    # Sampler / enum-ish official nodes
+    ("ImageScaleToTotalPixels", "upscale_method"): FieldCategory.SAMPLER,
+    ("TextEncodeAceStepAudio1.5", "timesignature"): FieldCategory.SAMPLER,
+    ("TextEncodeAceStepAudio1.5", "language"): FieldCategory.SAMPLER,
+    ("TextEncodeAceStepAudio1.5", "keyscale"): FieldCategory.SAMPLER,
+    ("TextEncodeAceStepAudio1.5", "generate_audio_codes"): FieldCategory.SAMPLER,
+    ("ByteDanceSeedreamNode", "size_preset"): FieldCategory.SAMPLER,
+    ("ByteDanceSeedreamNode", "sequential_image_generation"): FieldCategory.SAMPLER,
+    ("ByteDanceSeedreamNode", "watermark"): FieldCategory.SAMPLER,
+    ("ByteDanceSeedreamNode", "fail_on_partial"): FieldCategory.SAMPLER,
+    ("GrokImageEditNode", "resolution"): FieldCategory.SAMPLER,
+    ("GrokImageEditNode", "aspect_ratio"): FieldCategory.SAMPLER,
+    ("ComfySwitchNode", "switch"): FieldCategory.SAMPLER,
     # VAEEncodeForInpaint mask grow (numeric)
     ("VAEEncodeForInpaint", "grow_mask_by"): FieldCategory.NUMERIC,
 }
@@ -130,8 +212,14 @@ _MODEL_CATEGORY_BUCKETS = {
     "ckpt_name": "ckpt",
     "vae_name": "vae",
     "lora_name": "lora",
+    "unet_name": "diffusion_model",
     "control_net_name": "controlnet",
     "model_name": "upscale_model",
+    "clip_name": "clip",
+    "clip_name1": "clip",
+    "clip_name2": "clip",
+    "clip_name3": "clip",
+    "model": "api_model",
 }
 
 
@@ -150,9 +238,9 @@ def analyze_workflow_json(workflow: dict[str, Any]) -> WorkflowAnalysis:
     required_models: dict[str, list[str]] = {}
 
     for node_id, node in workflow.items():
-        if not isinstance(node_id, str) or not node_id.isdigit():
+        if not isinstance(node_id, str) or not node_id.strip():
             raise WorkflowValidationError(
-                f"workflow node id 必須為純數字字串：'{node_id}' 不合法"
+                f"workflow node id 必須是非空字串：'{node_id}' 不合法"
             )
         if not isinstance(node, dict):
             raise WorkflowValidationError(
@@ -164,18 +252,14 @@ def analyze_workflow_json(workflow: dict[str, Any]) -> WorkflowAnalysis:
                 f"workflow node {node_id} 缺少 class_type 欄位"
             )
 
-        inputs_raw = node.get("inputs", {}) if node.get("inputs") is not None else {}
-        # Reject explicit non-dict (e.g., list) — `or {}` would silently coerce.
-        if "inputs" in node and not isinstance(node["inputs"], dict) and node["inputs"] is not None:
+        # Reject explicit non-dict (e.g., list) before the `or {}` coerce path,
+        # otherwise an `inputs=[]` body would be silently treated as no-inputs.
+        if "inputs" in node and node["inputs"] is not None and not isinstance(node["inputs"], dict):
             raise WorkflowValidationError(
                 f"workflow node {node_id}.inputs 必須是物件，目前型別為 "
                 f"{type(node['inputs']).__name__}"
             )
-        if not isinstance(inputs_raw, dict):
-            raise WorkflowValidationError(
-                f"workflow node {node_id}.inputs 必須是物件，目前型別為 "
-                f"{type(inputs_raw).__name__}"
-            )
+        inputs_raw = node.get("inputs") or {}
 
         node_analysis = NodeAnalysis(node_id=node_id, class_type=class_type)
         node_analysis.is_allowed = is_allowed_class(class_type)
@@ -185,10 +269,8 @@ def analyze_workflow_json(workflow: dict[str, Any]) -> WorkflowAnalysis:
         )
 
         for input_name, raw_value in inputs_raw.items():
-            is_link = (
-                isinstance(raw_value, list)
-                and len(raw_value) == 2
-                and isinstance(raw_value[0], (str, int))
+            is_link = isinstance(raw_value, list) and len(raw_value) == 2 and isinstance(
+                raw_value[0], (str, int)
             )
             field_obj = InputField(
                 node_id=node_id,
@@ -219,7 +301,7 @@ def analyze_workflow_json(workflow: dict[str, Any]) -> WorkflowAnalysis:
         else:
             analysis.unknown_classes.add(class_type)
 
-    # Dedup per bucket while preserving sorted order
+    # Dedup per bucket while preserving first-seen order
     analysis.required_models = {
         bucket: sorted(set(names)) for bucket, names in required_models.items()
     }

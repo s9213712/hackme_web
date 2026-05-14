@@ -346,7 +346,7 @@ def test_admin_settings_validates_cloud_drive_storage_root(tmp_path):
     app = Flask(__name__)
     app.testing = True
     actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
-    state = {"server_listen_host": "", "server_listen_port": 0, "cloud_drive_storage_root": ""}
+    state = {"server_listen_host": "", "server_listen_port": 0, "cloud_drive_storage_root": "", "cloud_drive_global_capacity_limit_mb": -1}
     audit_log = []
     storage_dir = tmp_path / "current-storage"
     storage_dir.mkdir()
@@ -388,18 +388,26 @@ def test_admin_settings_validates_cloud_drive_storage_root(tmp_path):
     assert res.status_code == 400
     assert "cloud_drive_storage_root" in res.get_json()["msg"]
 
+    res = client.put("/api/admin/settings", json={"cloud_drive_global_capacity_limit_mb": -2})
+    assert res.status_code == 400
+    assert "cloud_drive_global_capacity_limit_mb" in res.get_json()["msg"]
+
     next_root = tmp_path / "next-storage"
-    res = client.put("/api/admin/settings", json={"cloud_drive_storage_root": str(next_root)})
+    res = client.put("/api/admin/settings", json={"cloud_drive_storage_root": str(next_root), "cloud_drive_global_capacity_limit_mb": 2048})
     data = res.get_json()
     assert res.status_code == 200
     assert data["settings"]["cloud_drive_storage_root"] == str(next_root)
+    assert data["settings"]["cloud_drive_global_capacity_limit_mb"] == 2048
+    assert data["cloud_drive_storage"]["global_capacity"]["configured_limit_mb"] == 2048
     assert data["cloud_drive_storage"]["restart_required"] is True
     settings_audit = next(call for call in audit_log if call[0][0] == "SETTINGS_CHANGED")
     detail = json.loads(settings_audit[1]["detail"])
     assert detail["scope"] == "system_settings"
-    assert detail["changes"][0]["key"] == "cloud_drive_storage_root"
-    assert detail["changes"][0]["old"] == ""
-    assert detail["changes"][0]["new"] == str(next_root)
+    changes = {item["key"]: item for item in detail["changes"]}
+    assert changes["cloud_drive_storage_root"]["old"] == ""
+    assert changes["cloud_drive_storage_root"]["new"] == str(next_root)
+    assert changes["cloud_drive_global_capacity_limit_mb"]["old"] == -1
+    assert changes["cloud_drive_global_capacity_limit_mb"]["new"] == 2048
 
 
 def test_admin_cloud_drive_security_policy_endpoint_is_root_only(tmp_path):

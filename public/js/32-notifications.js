@@ -29,23 +29,28 @@ function renderNotifications(items, unreadCount) {
     const readAction = item.is_read
       ? ""
       : `<button class="btn" type="button" data-notification-read="${item.id}" style="width:auto;padding:.35rem .55rem;font-size:.72rem;">已讀</button>`;
+    const dismissAction = `<button class="btn" type="button" data-notification-dismiss="${item.id}" style="width:auto;padding:.35rem .55rem;font-size:.72rem;">隱藏</button>`;
     const link = item.link
       ? `<div class="notification-meta">連結：${sanitize(item.link)}</div>`
       : "";
+    const severity = item.severity && item.severity !== "info" ? ` · ${sanitize(item.severity)}` : "";
     return `
       <div class="${cls}">
         <div class="notification-title">
           <span>${sanitize(item.title || "通知")}</span>
-          ${readAction}
+          <span class="notification-actions">${readAction}${dismissAction}</span>
         </div>
         <div class="notification-body">${sanitize(item.body || "")}</div>
-        <div class="notification-meta">${sanitize(formatChatTime(item.created_at || ""))} · ${sanitize(item.type || "system")}</div>
+        <div class="notification-meta">${sanitize(formatChatTime(item.created_at || ""))} · ${sanitize(item.type || "system")}${severity}</div>
         ${link}
       </div>
     `;
   }).join("");
   list.querySelectorAll("button[data-notification-read]").forEach((btn) => {
     btn.addEventListener("click", () => markNotificationRead(parseInt(btn.getAttribute("data-notification-read"), 10)));
+  });
+  list.querySelectorAll("button[data-notification-dismiss]").forEach((btn) => {
+    btn.addEventListener("click", () => dismissNotification(parseInt(btn.getAttribute("data-notification-dismiss"), 10)));
   });
 }
 
@@ -105,6 +110,23 @@ async function markAllNotificationsRead() {
   const json = await res.json().catch(() => ({}));
   if (!json.ok) {
     alert(json.msg || "全部已讀失敗");
+    return;
+  }
+  await loadNotifications();
+}
+
+async function dismissNotification(notificationId) {
+  if (!currentUser || !notificationId) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await apiFetch(API + `/notifications/${notificationId}/dismiss`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) {
+    alert(json.msg || "通知隱藏失敗");
     return;
   }
   await loadNotifications();

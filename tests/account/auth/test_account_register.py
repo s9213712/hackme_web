@@ -1,5 +1,6 @@
 import sqlite3
 
+import pytest
 from flask import Flask, jsonify, make_response
 
 from routes.public import register_public_routes
@@ -104,3 +105,19 @@ def test_register_validation_returns_field_for_password_confirmation(tmp_path):
     payload = response.get_json()
     assert payload["ok"] is False
     assert payload["field"] == "password_confirm"
+
+
+@pytest.mark.parametrize("username", ["ROOT", "Root", "ADMIN", "Admin", "TEST", "Test", "r0ot", "te5t"])
+def test_register_blocks_reserved_username_case_and_simple_confusables(tmp_path, username):
+    client = _build_app(tmp_path / "register.db").test_client()
+
+    response = client.post(
+        "/api/register",
+        json={"username": username, "password": "GoodPass1!", "password_confirm": "GoodPass1!", "nickname": "Nick"},
+    )
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload["ok"] is False
+    assert payload["field"] == "username"
+    assert "保留" in payload["msg"]

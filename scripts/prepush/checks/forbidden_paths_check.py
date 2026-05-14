@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import PurePosixPath
 
+from scripts.prepush import utils
 from scripts.prepush.context import PrepushContext
 from scripts.prepush.result import CheckResult
 
@@ -37,8 +38,11 @@ def is_forbidden(rel: str) -> bool:
 
 def run(ctx: PrepushContext) -> CheckResult:
     violations = []
+    staged_deletions = set(utils.git_lines(ctx.repo_root, "diff", "--cached", "--name-only", "--diff-filter=D"))
     for source, files in (("tracked", ctx.tracked_files), ("staged", ctx.staged_files)):
         for rel in files:
+            if source == "staged" and rel in staged_deletions:
+                continue
             if is_forbidden(rel):
                 violations.append({"source": source, "file": rel})
     if violations:

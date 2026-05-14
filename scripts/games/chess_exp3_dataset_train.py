@@ -48,6 +48,10 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _progress(message: str) -> None:
+    print(f"[chess-exp3-train] {message}", file=sys.stderr, flush=True)
+
+
 def _iter_jsonl(path: Path):
     for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         if not line.strip():
@@ -93,24 +97,45 @@ def _plain_samples(path: Path) -> list[dict]:
 
 def main() -> int:
     args = parse_args()
+    input_paths = [Path(item).expanduser().resolve() for item in args.input_jsonl]
+    teacher_paths = [Path(item).expanduser().resolve() for item in args.teacher_distill_jsonl]
+    model_path = Path(args.model_path).expanduser().resolve() if args.model_path else default_chess_dl_model_path()
+    replay_path = Path(args.replay_path).expanduser().resolve() if args.replay_path else default_chess_dl_replay_path()
+    _progress(f"target model: {model_path}")
+    _progress(f"target replay: {replay_path}")
+    _progress(f"input files: {len(input_paths)} teacher files: {len(teacher_paths)} teacher_depth={int(args.teacher_depth)}")
     samples: list[dict] = []
-    for input_path in args.input_jsonl:
-        samples.extend(_plain_samples(Path(input_path).expanduser().resolve()))
-    for input_path in args.teacher_distill_jsonl:
-        samples.extend(_teacher_distilled_samples(Path(input_path).expanduser().resolve(), teacher_depth=int(args.teacher_depth)))
+    for input_path in input_paths:
+        _progress(f"phase read input: {input_path}")
+        before = len(samples)
+        samples.extend(_plain_samples(input_path))
+        _progress(f"phase result read input: {len(samples) - before} rows")
+    for input_path in teacher_paths:
+        _progress(f"phase teacher distill input: {input_path}")
+        before = len(samples)
+        samples.extend(_teacher_distilled_samples(input_path, teacher_depth=int(args.teacher_depth)))
+        _progress(f"phase result teacher distill: {len(samples) - before} rows")
     if args.max_samples and int(args.max_samples) > 0:
         samples = samples[: int(args.max_samples)]
+        _progress(f"phase cap samples: {len(samples)} rows")
+    _progress(f"phase train started: {len(samples)} rows replace_replay={bool(args.replace_replay)}")
     result = train_experiment_dl_from_replay_samples(
         samples,
-        model_path=Path(args.model_path).expanduser().resolve() if args.model_path else default_chess_dl_model_path(),
-        replay_path=Path(args.replay_path).expanduser().resolve() if args.replay_path else default_chess_dl_replay_path(),
+        model_path=model_path,
+        replay_path=replay_path,
         replace_replay=bool(args.replace_replay),
     )
     result["teacher_depth"] = int(args.teacher_depth)
     result["input_rows"] = len(samples)
+    _progress(f"phase result train: ok artifact={model_path} replay={replay_path}")
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except Exception as exc:
+        _progress(f"FAIL: {exc}")
+        _progress("failure hint: check input JSONL schema, teacher FEN rows, and target model/replay path permissions")
+        raise

@@ -8,9 +8,11 @@ from scripts.prepush.checks import (
     forbidden_paths_check,
     frontend_check,
     local_path_check,
+    git_clean_check,
     markdown_links_check,
     pytest_quick_check,
     release_check,
+    scripts_index_check,
     secrets_check,
 )
 from scripts.prepush.context import PrepushContext
@@ -25,8 +27,9 @@ def make_ctx(tmp_path, **kwargs):
 
 
 def test_path_sanitizer_does_not_output_local_home():
-    sanitized = utils.sanitize_path("/home/s92137/hackme_web/runtime/database.db")
-    assert "/home/s92137" not in sanitized
+    home = str(Path.home()).replace("\\", "/").rstrip("/")
+    sanitized = utils.sanitize_path(f"{home}/hackme_web/runtime/database.db")
+    assert home not in sanitized
     assert "<LOCAL_HOME_PATH>" in sanitized
 
 
@@ -77,6 +80,89 @@ def test_markdown_link_check_accepts_correct_relative_links_and_ignores_code(tmp
     result = markdown_links_check.run(ctx)
 
     assert result.status != FAIL
+
+
+def test_scripts_index_check_requires_registered_security_scripts(tmp_path):
+    script_dir = tmp_path / "scripts" / "security" / "pentest"
+    script_dir.mkdir(parents=True)
+    script = script_dir / "new_probe.py"
+    script.write_text("print('probe')\n", encoding="utf-8")
+    index = tmp_path / "scripts" / "INDEX.md"
+    index.write_text("# Scripts Index\n", encoding="utf-8")
+
+    ctx = make_ctx(tmp_path)
+    result = scripts_index_check.run(ctx)
+
+    assert result.status == FAIL
+    assert result.name == "scripts index"
+    assert result.details == [{"script": "scripts/security/pentest/new_probe.py"}]
+
+    index.write_text("`scripts/security/pentest/new_probe.py` | QA | Probe | stdout | Probe failed |\n", encoding="utf-8")
+    assert scripts_index_check.run(ctx).status != FAIL
+
+
+def test_scripts_index_check_requires_registered_user_facing_game_and_trading_scripts(tmp_path):
+    game_dir = tmp_path / "scripts" / "games"
+    trading_dir = tmp_path / "scripts" / "trading" / "probes"
+    game_dir.mkdir(parents=True)
+    trading_dir.mkdir(parents=True)
+    (game_dir / "new_trainer.py").write_text("print('train')\n", encoding="utf-8")
+    (trading_dir / "new_probe.py").write_text("print('probe')\n", encoding="utf-8")
+    index = tmp_path / "scripts" / "INDEX.md"
+    index.write_text("# Scripts Index\n", encoding="utf-8")
+
+    ctx = make_ctx(tmp_path)
+    result = scripts_index_check.run(ctx)
+
+    assert result.status == FAIL
+    assert result.name == "scripts index"
+    assert result.details == [
+        {"script": "scripts/games/new_trainer.py"},
+        {"script": "scripts/trading/probes/new_probe.py"},
+    ]
+
+    index.write_text(
+        "`scripts/games/new_trainer.py` | Games | Train | runtime/reports/games | Training failed |\n"
+        "`scripts/trading/probes/new_probe.py` | Trading | Probe | stdout | Probe failed |\n",
+        encoding="utf-8",
+    )
+    assert scripts_index_check.run(ctx).status != FAIL
+
+
+def test_git_clean_check_allows_decorative_separator_comments(monkeypatch, tmp_path):
+    target = tmp_path / "public" / "js" / "app.js"
+    target.parent.mkdir(parents=True)
+    target.write_text("// =====================================================================\n", encoding="utf-8")
+
+    ctx = PrepushContext(repo_root=tmp_path, changed_files=["public/js/app.js"], staged_files=[])
+
+    class CleanDiff:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr(utils, "run_command", lambda *args, **kwargs: CleanDiff())
+
+    assert git_clean_check.run(ctx).status != FAIL
+
+
+def test_git_clean_check_flags_real_conflict_markers(monkeypatch, tmp_path):
+    target = tmp_path / "public" / "js" / "app.js"
+    target.parent.mkdir(parents=True)
+    target.write_text("  <<<<<<< HEAD\n", encoding="utf-8")
+
+    ctx = PrepushContext(repo_root=tmp_path, changed_files=["public/js/app.js"], staged_files=[])
+
+    class CleanDiff:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr(utils, "run_command", lambda *args, **kwargs: CleanDiff())
+
+    result = git_clean_check.run(ctx)
+    assert result.status == FAIL
+    assert result.details == [{"file": "public/js/app.js", "line": 1, "problem": "conflict marker"}]
 
 
 def test_gitkeep_is_not_forbidden_runtime_artifact():

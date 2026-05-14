@@ -129,9 +129,14 @@ def test_analyze_rejects_non_dict_workflow():
         analyze_workflow_json([])  # type: ignore[arg-type]
 
 
-def test_analyze_rejects_node_id_not_digit():
-    with pytest.raises(WorkflowValidationError, match="純數字字串"):
-        analyze_workflow_json({"a": {"class_type": "X", "inputs": {}}})
+def test_analyze_accepts_non_digit_string_node_id():
+    analysis = analyze_workflow_json({"node_a": {"class_type": "X", "inputs": {}}})
+    assert analysis.nodes[0].node_id == "node_a"
+
+
+def test_analyze_rejects_blank_node_id():
+    with pytest.raises(WorkflowValidationError, match="非空字串"):
+        analyze_workflow_json({"": {"class_type": "X", "inputs": {}}})
 
 
 def test_analyze_rejects_missing_class_type():

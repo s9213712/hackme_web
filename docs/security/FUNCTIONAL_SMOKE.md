@@ -2,11 +2,17 @@
 
 For the higher-level validation map, read [../11_QA_TESTING.md](../11_QA_TESTING.md)
 first. This file documents the exact `run_functional_smoke.sh` behavior and options.
+For the governance rules, validation naming contract, and phase input/output
+catalog, read [QA_ARCHITECTURE.md](QA_ARCHITECTURE.md).
 
 `scripts/security/pentest/run_functional_smoke.sh` 是本專案的功能回歸測試腳本。它和
 `scripts/security/pentest/run_pentest.sh` 不同：pentest 腳本偏向外部安全掃描，functional
 smoke 腳本會啟動一個隔離 runtime server，登入 root，實際操作主要功能，最後產生
 Markdown 報告與原始回應紀錄。
+
+It is broad functional smoke, not full production validation. 任何只針對最近
+修補或單一風險的 pytest / script run 都只能稱為 focused regression 或 selected
+tests，不能在文件、報告或 PR 文字中稱為 full validation。
 
 這個腳本預設只打本機臨時 server，會把 database、log、chat、anchor、storage、
 reports 全部導向 `/tmp` 底下的隔離資料夾，避免污染 repo 內的 runtime 資料。
@@ -16,8 +22,13 @@ reports 全部導向 `/tmp` 底下的隔離資料夾，避免污染 repo 內的 
 從 repo 根目錄執行：
 
 ```bash
-scripts/security/pentest/run_functional_smoke.sh
+scripts/security/pentest/run_functional_smoke.sh --qa-full
 ```
+
+`--qa-full` 是預設行為，保留在命令中是為了讓意圖清楚：這條路線跑 broad
+product QA，例如 community/chat/storage/video/ComfyUI/reports/moderation
+工作流。上線前 production gate 只應使用 `--core-only`，聚焦 auth、admin、
+security-center、用戶、PointsChain、trading、越權與必要 runtime 安全邊界。
 
 指定 port：
 
@@ -50,6 +61,8 @@ scripts/security/pentest/run_functional_smoke.sh --keep-runtime
 | `--runtime DIR` | 隔離 runtime 根目錄。預設 `/tmp/hackme_web_functional_<RUN_ID>`。 |
 | `--out DIR` | 報告根目錄。預設 `runtime/reports/security`。 |
 | `--keep-runtime` | 測試後保留 runtime，但會還原到 pre-start snapshot。 |
+| `--qa-full` | 跑完整 QA functional smoke；包含 community/chat/storage/video/ComfyUI/reports/moderation 等產品回歸。這是預設模式。 |
+| `--core-only` | 只跑上線前必要核心功能與安全邊界；跳過 QA 類產品工作流。production gate 使用這個模式。 |
 | `-h`, `--help` | 顯示腳本內建說明。 |
 
 ## Environment Overrides
@@ -68,6 +81,7 @@ scripts/security/pentest/run_functional_smoke.sh --keep-runtime
 | `START_TIMEOUT` | `45` | 等待 server ready 的秒數。 |
 | `RESET_OFFLINE_TIMEOUT` | `20` | reset server 後等待服務短暫離線的秒數；若 process 很快完成重啟且 `started_at` 已變更，也視為通過。 |
 | `RESET_RECONNECT_TIMEOUT` | `180` | reset server 後等待服務重新連線且 `started_at` 變更的秒數。 |
+| `GO_LIVE_CORE_ONLY` | `0` | 設為 `1` 等同 `--core-only`；保留給 production-gate wrapper 相容使用。 |
 
 ## Runtime Isolation
 
@@ -99,6 +113,13 @@ root 那個故意存在的 `runtime` fail-closed 哨兵檔。
 
 目前腳本會覆蓋：
 
+`--core-only` 只跑上線前核心區：public/auth/admin/security-center、用戶建立、
+account sessions、PointsChain、trading、maintenance bypass / tester token 與必要
+runtime hardening guidance。QA 類產品工作流保留在
+`--qa-full`：community/chat/DM、storage 檔案整理、ComfyUI、video/E2EE share、
+bug report、moderation、appeals、reputation，以及 snapshot restore/reset 的
+廣泛殘留資料檢查。
+
 | Area | Checked Behaviors |
 |---|---|
 | runtime safety | 啟動前 filesystem snapshot、隔離 runtime、結束清理或還原 runtime。 |
@@ -115,7 +136,7 @@ root 那個故意存在的 `runtime` fail-closed 哨兵檔。
 | video platform | upload/publish、shared page load、anonymous shared playback、revoke flow、missing file / non-media upload error guidance。 |
 | PointsChain | wallet、catalog/rules、admin adjustment、ledger、seal/verify、manual backup、recovery status、一鍵異常鏈處理、economy stats，並驗 custom profile / 非 production 模式下的 production-only chain seal rejection guidance。 |
 | trading extras | 先驗證 custom profile 下交易寫入會 fail closed，再切到 `test` 模式驗證 read-only diagnostics，之後旋轉 maintenance bypass token、切到 `internal_test` 驗證 tester token 寫路徑在 live warm-up 未確認前會被明確阻擋；同時覆蓋 `live-price` metadata / transport state、fee-aware `grid/preview`、root `price-fusion-status` transport state、root `bot-audit` dashboard / manual run。 |
-| ComfyUI integration | model/status wiring、optional backend availability、workflow preset list/import guards、share/discard error paths、root Civitai search API key guard。 |
+| ComfyUI integration | model/status wiring、optional backend availability、workflow preset list/import guards、template preview text panel `text:embeddings` / `embedding_shortcuts` child、share/discard error paths、root Civitai search API key guard。 |
 | reports/moderation | bug reports、reports、notifications、appeals、moderation actions/proposals、violations、message reports、mod notes、reputation endpoints。 |
 | hardening | unknown path `OPTIONS` 不應宣告 PUT/DELETE/PATCH 等危險方法；remote downloader rejections expose a user-facing message；known regressions: copy-share fallback and shared page loading timeout guard；custom profile trading block plus test-mode diagnostics and internal_test warm-up gate guidance；browser-only mode 需帶 maintenance bypass token 才能讓 operator script 繼續驗證。 |
 

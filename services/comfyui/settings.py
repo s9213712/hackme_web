@@ -29,19 +29,87 @@ COMFYUI_DEFAULT_SETTINGS = {
     "comfyui_api_host": os.environ.get("COMFYUI_API_HOST", "localhost"),
     "comfyui_api_port": DEFAULT_COMFYUI_PORT,
     "comfyui_civitai_api_key": os.environ.get("CIVITAI_API_KEY", ""),
+    "comfyui_paid_api_nodes_enabled": False,
+    "comfyui_account_api_key": os.environ.get("COMFYUI_ACCOUNT_API_KEY", ""),
     "comfyui_max_batch_size": DEFAULT_COMFYUI_MAX_BATCH_SIZE,
     "comfyui_default_width": DEFAULT_COMFYUI_WIDTH,
     "comfyui_default_height": DEFAULT_COMFYUI_HEIGHT,
+    "comfyui_diffusers_model_repo": (
+        os.environ.get("COMFYUI_DIFFUSERS_MODEL_REPO")
+        or os.environ.get("HF_DIFFUSERS_MODEL_REPO")
+        or ""
+    ),
+    "comfyui_huggingface_api_token": (
+        os.environ.get("COMFYUI_HUGGINGFACE_API_TOKEN")
+        or os.environ.get("HF_TOKEN")
+        or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+        or ""
+    ),
+    "comfyui_diffusers_device": os.environ.get("COMFYUI_DIFFUSERS_DEVICE", "auto"),
+    "comfyui_diffusers_dtype": os.environ.get("COMFYUI_DIFFUSERS_DTYPE", "auto"),
 }
 
 COMFYUI_SETTING_KEYS = tuple(COMFYUI_DEFAULT_SETTINGS)
 COMFYUI_HOST_RE = re.compile(r"^[A-Za-z0-9_.:-]+$")
+HUGGINGFACE_REPO_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}/[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
 
 
 def normalize_comfyui_connection_mode(value):
     mode = str(value or "").strip().lower()
-    if mode in {"local", "remote"}:
+    if mode in {"local", "remote", "diffusers"}:
         return mode
+    return None
+
+
+def validate_huggingface_repo_id(value, *, allow_blank=False):
+    repo_id = str(value or "").strip()
+    if not repo_id:
+        return "" if allow_blank else None
+    if len(repo_id) > 200:
+        return None
+    if "\\" in repo_id or repo_id.startswith(("/", ".")) or ".." in repo_id.split("/"):
+        return None
+    if not HUGGINGFACE_REPO_ID_RE.match(repo_id):
+        return None
+    return repo_id
+
+
+def normalize_huggingface_repo_id(value, *, allow_blank=False):
+    raw = str(value or "").strip()
+    if not raw:
+        return "" if allow_blank else None
+    if raw.startswith(("http://", "https://")) or raw.lower().startswith("huggingface.co/"):
+        parsed = urlparse(raw if raw.startswith(("http://", "https://")) else f"https://{raw}")
+        host = (parsed.hostname or "").lower()
+        if host not in {"huggingface.co", "www.huggingface.co"}:
+            return None
+        parts = [part for part in parsed.path.strip("/").split("/") if part]
+        if len(parts) < 2:
+            return None
+        raw = f"{parts[0]}/{parts[1]}"
+    return validate_huggingface_repo_id(raw, allow_blank=allow_blank)
+
+
+def validate_huggingface_api_token(value, *, allow_blank=False):
+    token = str(value or "").strip()
+    if not token:
+        return "" if allow_blank else None
+    if len(token) > 2048 or any(ch.isspace() for ch in token):
+        return None
+    return token
+
+
+def validate_comfyui_diffusers_device(value):
+    device = str(value or "auto").strip().lower()
+    if device in {"auto", "cpu", "cuda", "mps"}:
+        return device
+    return None
+
+
+def validate_comfyui_diffusers_dtype(value):
+    dtype = str(value or "auto").strip().lower()
+    if dtype in {"auto", "float16", "bfloat16", "float32"}:
+        return dtype
     return None
 
 

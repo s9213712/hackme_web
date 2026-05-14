@@ -53,8 +53,12 @@ These files are canonical, short-entry or cross-cutting docs and may stay at
 - `00_START_HERE.md` through `12_TROUBLESHOOTING.md`
 - `README.md`
 - `API_REFERENCE.md`
+- `BRANCHING_AND_RELEASE.md`
 - `DEPLOYMENT.md`
 - `For_developer.md`
+- `SECURITY.md`
+- `SYSTEM_DEPENDENCIES.md`
+- `UPDATE_SUMMARY.md`
 - `WEB.md`
 - `RELEASE_LAYOUT.md`
 - `REPOSITORY_STRUCTURE.md`
@@ -63,15 +67,14 @@ These files are canonical, short-entry or cross-cutting docs and may stay at
 
 - `docs/security/`: release gates, pentest, smoke, signoff
 - `docs/AGENTS/`: agent rules, QA runbooks, reports
-- `docs/BLOCKCHAIN/`: PointsChain and governance design set
-- `docs/COMPETITION/`: backtest and strategy competition evidence
+- `docs/AGENTS/research/BLOCKCHAIN/`: PointsChain and governance design set (specs only; implementation pending root authorization)
+- `docs/archive/competition_2026-05-06/`: backtest and strategy competition evidence
 - `docs/trading/`: trading, bot audit, risk-price, benchmark, and BTC_trade reference
 - `docs/video/`: deep video/media architecture docs
 - `docs/comfyui/`: ComfyUI operator docs
 - `docs/ops_boundaries/`: runtime-boundary and recovery docs
 - `docs/server_mode_v2/`: Server Mode v2 spec bundle
 - `docs/archive/`: retired attempts, historical notes, abandoned designs
-- `docs/research/`: research drafts and completed research artifacts
 
 ### Merge / Archive Candidates
 
@@ -79,7 +82,7 @@ These are useful, but they should not all remain first-class entry docs
 forever:
 
 - `SERVER_MODE_V2_*` plan files
-- `VERSION_STORY.md`
+- `docs/archive/history/VERSION_STORY.md`
 - large slices of `UPDATE_SUMMARY.md`
 - standalone competition reports once their conclusions are folded into one
   canonical summary
@@ -91,7 +94,8 @@ Before adding a new top-level doc, prefer one of these homes:
 - user/admin/operator guide: extend an existing numbered guide
 - low-level feature reference: extend `docs/trading/*`, `docs/video/*`,
   `docs/ops_boundaries/*`, `WEB.md`, `For_developer.md`, or `API_REFERENCE.md`
-- historical or exploratory content: `docs/archive/` or `docs/research/`
+- retired historical content: `docs/archive/`
+- long-form agent research that remains relevant to future work: `docs/AGENTS/research/`
 - agent-only process notes: `docs/AGENTS/`
 
 ## Scripts Placement Logic

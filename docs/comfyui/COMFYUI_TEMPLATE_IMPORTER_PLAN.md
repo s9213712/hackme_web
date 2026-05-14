@@ -1,16 +1,30 @@
 # ComfyUI Template Importer — 規格
 
-> **狀態**：Plan / Spec — 尚未動工
+> **狀態**：Implemented MVP — preview/import/run gate 已落地；本文件保留原始規格與後續 phase 記錄
 >
 > **作者**：claude (Opus 4.7) · 2026-05-07
 >
-> **預期分支**：`feature/comfyui-template-importer`（從 `03.Points` 切）
+> **主要落地範圍**：`services/comfyui/template/`、`routes/comfyui_sections/template_routes.py`、`routes/comfyui_sections/workflow_routes.py`
 >
 > **目的**：讓使用者上傳 ComfyUI workflow JSON，經**解析 → 能力比對 → 安全審查 → 輸入欄位映射 → 預覽確認 → 才能執行**，避免任意 JSON 直接 queue 進 ComfyUI 造成 RCE / 路徑穿越 / 模型 misuse。
 
 ---
 
 ## 0. TL;DR
+
+目前已完成：
+
+- `POST /api/comfyui/templates/preview`：接受 JSON body、`workflow_text`、multipart JSON 檔，並產生 single-use `preview_token`。
+- Preview 階段會執行 normalize → sanitize → analyze → explicit denylist → capability → UI schema。
+- `POST /api/comfyui/templates/import`：消耗 `preview_token`，重新 sanitize/analyze/capability 後寫入 workflow preset 與 runtime template bundle。
+- `POST /api/comfyui/workflows/<id>/run`：在 strict flag 啟用時走 5-gate enforcement，失敗會回 stage-tagged error 並寫 audit。
+- ComfyUI UI graph export (`nodes` / `links`) 已支援在 preview 階段轉換成 API prompt format；run gate 仍只接受已正規化後的 API-format workflow。
+
+仍列為後續 phase：
+
+- IPAdapter / FaceDetailer / ReActor / video workflows 仍拒絕。
+- 任意 custom node 仍必須經 allowlist / capability gate，不直接放行。
+- 多輸出分支雖可被安全改寫 `SaveImage.filename_prefix`，但產品 UI/UX 與輸出管理仍需單獨驗收後才視為正式支援。
 
 | 階段 | 動作 | 安全角色 |
 |---|---|---|
@@ -65,9 +79,9 @@
 | **FaceDetailer / Detailer Pipe** | 多階段內部 pipeline，failure mode 不可預測 |
 | **ReActor / face swap** | 隱私 / 法律邊界模糊 |
 | **Video workflow**（任何輸出 video 的）| 大量 disk 空間 + 編碼複雜度 |
-| **多輸出分支**（>1 個 `SaveImage`）| 路徑命名衝突風險 |
+| **多輸出分支**（>1 個 `SaveImage`）| 後端會安全改寫所有 `SaveImage.filename_prefix`，但輸出管理 UX 尚未列為正式支援 |
 | **任意 custom node** | 沒在 allowlist → 拒絕（即使 analyze 看得出意圖也不放行）|
-| **ComfyUI UI graph format**（`nodes:[...]` + `links:[...]`）| 只接受 **API format**（`{node_id: {class_type, inputs}}`） |
+| **ComfyUI UI graph format**（`nodes:[...]` + `links:[...]`）| Preview/import 已支援正規化；run gate 仍只收正規化後的 API format |
 | **巢狀 group node** | 第一版攤平；若無法攤平則拒絕 |
 
 ### 2.3 第二版以後再開（記錄即可）
@@ -75,7 +89,7 @@
 - ControlNet 多組 stacking
 - IPAdapter
 - FaceDetailer
-- 多輸出分支（拆獨立 `SaveImage` 管線）
+- 多輸出分支 UI/輸出管理驗收
 
 ---
 
@@ -83,10 +97,10 @@
 
 ### 3.1 只接受 ComfyUI API prompt format
 
-> **第一版範圍宣告**：本 importer 只支援 *ComfyUI API prompt format*，目標是
-> 「能被 ComfyUI API queue 安全執行」。**不**保證匯出後可直接在 ComfyUI 前端 UI
-> 完整還原節點位置 / 連線 / layout — 那是 UI graph format 的職責，跟 API 是兩種不同
-> serialization。雙向 UI graph 回匯支援不在 MVP 範圍，需要時另開 Phase。
+> **目前範圍宣告**：run gate 與 DB 內部只保存 *ComfyUI API prompt format*，目標是
+> 「能被 ComfyUI API queue 安全執行」。Preview/import 入口可接受常見 ComfyUI UI graph
+> export，會先轉成 API prompt format 再進 sanitize/analyze/capability pipeline。
+> 不保證匯出後可直接在 ComfyUI 前端 UI 完整還原原始節點位置 / 群組 / widget metadata。
 
 合法形狀（API format）：
 
@@ -108,15 +122,15 @@
 
 | 形狀 | 拒收原因 |
 |---|---|
-| `{"nodes": [...], "links": [...]}`（含 `pos`、`size`、`widgets_values` 等 UI 欄位）| ComfyUI **UI graph format**（前端 editor 直接 export 的格式，例：`docs/comfyui/Unsaved Workflow.json`）— 不是 API format。MVP 不自動轉換，要求使用者改用 ComfyUI 的 **Save (API Format)** 或 *Send to API* 匯出流程。|
-| `{"prompt": {...}, "extra_data": {...}}` | ComfyUI **export-with-metadata** 包裹格式；要求使用者**先 unwrap 出內層 prompt** |
+| `{"nodes": [...], "links": [...]}`（含 `pos`、`size`、`widgets_values` 等 UI 欄位）| ComfyUI **UI graph format**；preview/import 會嘗試轉成 API format。若缺少可轉換節點或 links 形狀錯誤，回 `normalize` stage 錯誤。|
+| `{"prompt": {...}, "extra_data": {...}}` | ComfyUI **export-with-metadata** 包裹格式；preview/import 會 unwrap 內層 `prompt`。|
 | Top-level array | 不是 dict |
 | 包含 `client_id` / `prompt_id` / `extra_pnginfo` 等執行時 metadata | 拒收（暗示是執行記錄）|
 
 > **參考範例**：`docs/comfyui/Unsaved Workflow.json` 是 ComfyUI 前端 editor 直接 Save
 > 出來的範例（UI graph format，非 API format）— 包含 `nodes:[...]`、`links:[...]`、
-> `pos`、`widgets_values` 等 UI 欄位。importer 必須拒收這種格式並提示使用者改用
-> *Save (API Format)*。範例的命名 / 內容僅供格式辨識用，不代表內容認可。
+> `pos`、`widgets_values` 等 UI 欄位。preview/import 可以轉換這種格式；run gate
+> 仍拒絕未正規化的 UI graph，避免任何執行路徑繞過 sanitize。
 
 ### 3.3 大小限制（直接沿用 [`validation/rules.py`](../../services/comfyui/validation/rules.py)）
 
@@ -731,9 +745,9 @@ def comfyui_workflow_run(preset_id):
 
 | 條件 | 訊息 |
 |---|---|
-| JSON parse 失敗 | `workflow JSON 格式錯誤：第 N 行附近無法解析。請確認上傳的是 ComfyUI API format（不是 UI graph）。` |
-| 不是 dict | `workflow 必須是 JSON 物件，目前形狀為陣列；請使用 ComfyUI 的「Save (API Format)」匯出。` |
-| 含 `nodes:[...]` 或 `links:[...]` | `這是 ComfyUI UI graph format，本系統只接受 API format。請用 ComfyUI 的「Save (API Format)」按鈕重新匯出。` |
+| JSON parse 失敗 | `workflow JSON 格式錯誤：第 N 行附近無法解析。請確認上傳的是合法 JSON。` |
+| 不是 dict | `workflow 必須是 JSON 物件，目前形狀為陣列。` |
+| UI graph normalize 失敗 | `workflow UI graph 缺少 nodes / links 格式不正確 / 沒有可轉換的可執行節點。請改用 ComfyUI API format 或修正 UI graph。` |
 | 大小超過 256KB | `workflow 大小超過 256KB（目前 NNN KB），第一版不支援大型 workflow。` |
 | 節點數超過 50 | `workflow 節點數 N > 50，第一版限制 50 以內。` |
 | 含絕對路徑 | `欄位 workflow.<node_id>.inputs.<field> 不可包含絕對路徑：'/...'。請改用 hackme_web 雲端硬碟內的檔案。` |
@@ -746,7 +760,7 @@ def comfyui_workflow_run(preset_id):
 | 條件 | 訊息 |
 |---|---|
 | Unknown class | `workflow 含未授權的節點類型：['<class>', ...]。第一版只支援 17 種核心節點 + ControlNet 標準 preprocessor，完整清單見 docs/comfyui/COMFYUI_TEMPLATE_IMPORTER_PLAN.md §4。` |
-| 多個 SaveImage | `workflow 含多個輸出節點（SaveImage × N）。第一版只允許單一輸出，請拆成多個 workflow 或合併。` |
+| 多個 SaveImage | 後端會全部改寫到 `hackme/<user>/<run_id>` prefix；若產品 UI 尚未完成多輸出管理，前端應提示使用者檢查輸出清單。 |
 | LoRA 超過 4 個 | `workflow 含 N 個 LoraLoader 超過上限 4 個，請減少。` |
 
 ### 11.3 Capability stage
@@ -901,8 +915,8 @@ def comfyui_workflow_run(preset_id):
 - ❌ 改變 ComfyUI 的 prompt queue 機制（不動 `execution.py`）
 - ❌ 替 user 「智慧化」改 sampler / steps（user 自己決定）
 - ❌ AnimateDiff / IPAdapter / FaceDetailer / ReActor 任何一個（第一版）
-- ❌ 多輸出分支（第一版）
-- ❌ UI graph format 自動轉 API format（user 自己用 ComfyUI export 切換）
+- ⚠️ 多輸出分支：後端 safe prefix rewrite 已支援，產品 UI/輸出管理仍需單獨驗收
+- ✅ UI graph format 自動轉 API format 已在 preview/import normalize 實作；run gate 不直接收 UI graph
 - ❌ Group node / nested workflow（第一版）
 
 ---
@@ -950,14 +964,14 @@ registry 來源分兩半，**system 走 repo filesystem，user / shared 走 DB**
 
 | visibility | 儲存位置 | 觸發載入 |
 |---|---|---|
-| `system` | `workflows/comfyui/system/<workflow_id>/`（repo 內檔案）| 啟動時掃；root 手動 refresh |
+| `system` | `workflows/comfyui/<workflow_id>/`（repo 內檔案）| 啟動時掃；root 手動 refresh |
 | `user`（私有）| DB `comfyui_workflows` row + `comfyui_workflow_manifests` row | 走 Phase 1 import 流程寫入 |
 | `shared` | DB（同上 + `shared_with_*` metadata）| 同 user，registry 過濾後曝露 |
 
 新增 repo 內目錄：
 
 ```
-workflows/comfyui/system/
+workflows/comfyui/
   txt2img_basic/
     workflow.json     # ComfyUI API format，無 hackme_web 私有欄位
     manifest.json     # UI panel + binding 描述
@@ -974,7 +988,7 @@ workflows/comfyui/system/
 
 **命名注意**：
 
-- 跟既有 `workflows/system/`（**交易 bot workflow**，用途完全不同；那是 trading 模組的 system templates）區隔；ComfyUI workflow 一律放 `workflows/comfyui/system/...`，不要把兩者放在同一層或互相 symlink。
+- 跟既有 `workflows/trading_bot/`（**交易 bot workflow**，用途完全不同；那是 trading 模組的 system templates）區隔；ComfyUI workflow 一律放 `workflows/comfyui/...`，不要把兩者放在同一層或互相 symlink。
 - `<workflow_id>` 必須符合 `^[a-z][a-z0-9_]{0,63}$`，registry 載入時驗。
 - user-imported workflow **不放 repo 目錄**，永遠走 DB（避免 user 上傳節奏跟 git commit 節奏混在一起）。
 
@@ -984,10 +998,10 @@ workflows/comfyui/system/
 
 承接 §3 的所有要求。額外重申：
 
-- **必須** ComfyUI API format（`{node_id: {class_type, inputs}}`），不是 UI graph format。
+- runtime/DB 內部 **必須** 是 ComfyUI API format（`{node_id: {class_type, inputs}}`）；preview/import 可接受並轉換 UI graph format。
 - **不得**塞 hackme_web 私有欄位（如 `__hackme_meta__`、`_ui_layout`、`_panel_id` 等）。所有 UI metadata 一律放 manifest.json。
 - **必須能被 ComfyUI API queue 執行**（送進 `/prompt` endpoint 後流程正常完成）。
-- **不承諾**可由 ComfyUI 前端 editor 完整還原 layout（節點位置 / 連線視覺 / 群組 / `pos` / `widgets_values` 等 UI graph 專屬欄位）— 那是 UI graph format 的職責，跟 API prompt format 是兩種不同 serialization。雙向 UI graph 回匯需求列為 Phase 3。
+- **不承諾**可由 ComfyUI 前端 editor 完整還原 layout（節點位置 / 連線視覺 / 群組 / `pos` / `widgets_values` 等 UI graph 專屬欄位）— preview/import 只做能執行的 API prompt 正規化。
 - 從 ComfyUI 重新匯出（API format）後，與 repo 內的版本經 §3.4 normalize 後 `diff` 應為空（除 `class_type` 順序之類無語意差異）。
 
 > 一句話：**workflow.json 是 ComfyUI 的；manifest.json 是 hackme_web 的**。
@@ -1168,7 +1182,7 @@ def patch_workflow_inputs(
 
 #### 18.7.3 Cache / hot reload
 
-- registry 啟動時掃描 `workflows/comfyui/system/`，建記憶體 index。
+- registry 啟動時掃描 `workflows/comfyui/`，建記憶體 index。
 - root API `POST /api/admin/comfyui/registry/refresh` 可手動 invalidate；不做 file watcher（避免 inotify 在容器環境的 edge case）。
 - user upload 走 Phase 1 import 流程後，registry 把 DB row mount 進同一個 index（visibility 過濾在 `list_workflows` 裡做）。
 
@@ -1279,7 +1293,7 @@ public/js/
 
 #### Phase 2.B — 既有 4 種 workflow 遷移
 
-- 把現有的 txt2img / img2img / inpaint / controlnet 各做成一份 `workflows/comfyui/system/<workflow_id>/{workflow.json, manifest.json, README.md}`
+- 把現有的 txt2img / img2img / inpaint / controlnet 各做成一份 `workflows/comfyui/<workflow_id>/{workflow.json, manifest.json, README.md}`
 - 對比測試：feature flag 兩端輸出 byte-identical（§3.4 normalize 後）
 
 #### Phase 2.C — 移除老表單
@@ -1310,7 +1324,7 @@ public/js/
 
 | 不做 | 理由 |
 |---|---|
-| ComfyUI UI graph format 自動轉 API format | 沿用 §16 的決議 |
+| ComfyUI UI graph format 完整 round-trip 還原 | preview/import 只轉 API prompt；不保存 UI editor 的完整 layout metadata |
 | 動態 clone 節點來支援 unbounded repeatable | §18.5.1 選定 placeholder 策略；unbounded clone 留 Phase 3 |
 | Mobile mask 編輯（畫遮罩）| 第一版 mobile 只能上傳已畫好的 mask 圖；in-browser brush 留下一階段 |
 | manifest 內含 JS / 表達式 | 純宣告式；任何條件邏輯放後端 §6 capability check |
@@ -1321,7 +1335,7 @@ public/js/
 ### 18.15 Open Questions（Phase 2）
 
 1. **Phase 2.A 的 feature flag 預設要 ON 還是 OFF？** 我傾向 **OFF（先 opt-in）**，再依使用回饋切到 ON。
-2. **`workflows/comfyui/system/` 內建幾個 workflow？** 我傾向最少 4 個（txt2img / img2img / inpaint / upscale），對應現有硬寫表單的 1:1 replacement。
+2. **`workflows/comfyui/` 內建幾個 workflow？** 我傾向最少 4 個（txt2img / img2img / inpaint / upscale），對應現有硬寫表單的 1:1 replacement。
 3. **manifest panel `title` 是否要支援 i18n？** 第一版只繁中；schema 預留 `title_i18n: {zh-TW, en}` 但 frontend 第一版只讀 `title`。
 4. **registry hot-reload 是 root 手動 refresh，還是 server start 時掃一次就固定？** 我傾向**啟動時 + root 手動 refresh** 雙軌；不做 watcher。
 5. **export zip 是否要簽章？** 第一版**不簽**；export 視為純使用者方便功能，不是 audit chain 的一環。
@@ -1339,7 +1353,7 @@ public/js/
   - §7.3 `remap_load_image_to_cloud_file` signature 加 `run_id`；補 MIME / size / 解碼三項驗證
   - §8.2 preview token 補 multi-worker 共享儲存說明（process-local LRU 只適用單 process）
   - §10 run gate 從 4 個拆成 5 個：analyze（不擋）/ capability / allowlist / safety rewrite / inputs，避免把 unknown_class 當最終判斷
-  - §18.1 / §18.5.1 registry 目錄統一為 `workflows/comfyui/system/<id>/`（system 走 filesystem，user / shared 走 DB）
+  - §18.1 / §18.5.1 registry 目錄統一為 `workflows/comfyui/<id>/`（system 走 filesystem，user / shared 走 DB）
   - §18.5.1 repeatable 補 bounded placeholder 規範 + `unused_instance_strategy` 必填欄位
 - 2026-05-08 · claude · spec polish 5 處（pre-implementation review）：
   - §10 Gate 1 從「analyze」擴成「sanitize + normalize + analyze」，避免 DB 內舊 workflow / 手動匯入資料繞過 sanitize（重新跑等於再驗一次 §3.x 限制）

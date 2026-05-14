@@ -67,6 +67,7 @@ def test_cloud_drive_preview_ui_is_wired():
 def test_filemanager_and_albummanager_ui_are_wired():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     drive_js = ((ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8") + "\n" + (ROOT / "public" / "js" / "35-drive-preview-share.js").read_text(encoding="utf-8"))
+    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
     bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
 
     assert 'id="storage-upload-file"' in index_html
@@ -155,6 +156,9 @@ def test_filemanager_and_albummanager_ui_are_wired():
     assert 'storageFolderCreateBtn.addEventListener("click", createStorageFolder)' in bootstrap_js
     assert 'storageFolderMoveBtn.addEventListener("click", moveStorageFolder)' in bootstrap_js
     assert 'albumCreateBtn.addEventListener("click", createAlbum)' in bootstrap_js
+    assert 'id="s-cloud-drive-global-capacity-limit-mb"' in index_html
+    assert "cloud_drive_global_capacity_limit_mb" in admin_js
+    assert "全用戶容量上限" in admin_js
 
 
 def test_album_viewer_has_dedicated_module():
@@ -181,7 +185,7 @@ def test_album_viewer_has_dedicated_module():
     assert 'data-drive-action="album-preview-prev"' in index_html
     assert 'data-drive-action="album-preview-next"' in index_html
     assert '/js/35-drive.js?v=20260504-drive-media-rename' in index_html
-    assert '/styles.css?v=20260505-workflow-preset' in index_html
+    assert '/styles.css?v=20260514-open-world' in index_html
     assert '/js/00-core.js?v=20260503-appearance-v2' in index_html
     assert '/js/40-auth-users.js?v=20260503-appearance-reset' in index_html
     assert 'src="/js/50-admin.js' in index_html
@@ -302,11 +306,15 @@ def test_album_viewer_has_dedicated_module():
     assert "FEATURE_SERVICE_BUNDLES" in admin_js
     assert '"all-enabled"' in admin_js
     assert '"minimum-ops"' in admin_js
+    assert '"raspberry-lite"' in admin_js
     assert "全開" in admin_js
     assert "最低維運" in admin_js
+    assert "Raspberry 套餐" in admin_js
+    assert "輕量主機預設" in admin_js
     assert "bundle.replace === true" in admin_js
     assert "feature-bundle-toolbar" in index_html
     assert "feature-advisory-list" in index_html
+    assert "全開 / 最低維運 / Raspberry 套餐" in index_html
     assert 'id="sc-feature-audit-log-enabled"' in index_html
     assert 'id="sc-feature-economy-enabled"' in index_html
     assert 'previewSecurityProfileSelection("security-mode-select", "security-mode-profile-preview", "sc")' in bootstrap_js
@@ -323,7 +331,8 @@ def test_album_viewer_has_dedicated_module():
     assert "server-connection-light" not in index_html
     assert "startClock" not in core_js
     assert "SIDEBAR_COLLAPSED_STORAGE_KEY" in core_js
-    assert "localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY" in core_js
+    assert "function sidebarCollapsedStorageKey()" in core_js
+    assert "localStorage.setItem(sidebarCollapsedStorageKey()" in core_js
     assert "data-sidebar-action" in core_js
     assert 'switchModuleTab("albums")' in bootstrap_js
     assert "sidebarToggle.addEventListener" in bootstrap_js
@@ -378,7 +387,8 @@ def test_cloud_drive_privacy_modes_use_human_labels():
     assert "解密預覽" in drive_js
     assert "isDriveE2eeServerPreviewError" in drive_js
     assert "return previewDriveE2eeFile(fileId);" in drive_js
-    assert "root 上限：儲存磁碟可用空間 90%" in drive_js
+    assert "root 上限：全用戶容量設定（磁碟總容量 95%）" in drive_js
+    assert "root_global_capacity_limit_mb" in drive_js
     assert "manager 上限：1 GB" in drive_js
     assert "warning_active" in drive_js
 
@@ -417,7 +427,8 @@ def test_core_api_fetch_refreshes_csrf_once():
     assert "async function apiFetch" in core_js
     assert 'payload.error !== "csrf_invalid"' in core_js
     assert "fetchCsrfToken({ force: true })" in core_js
-    assert "return apiFetch(url, { ...options, credentials: opts.credentials, headers: retryHeaders }, false);" in core_js
+    assert "const retried = await apiFetch(url, { ...options, credentials: opts.credentials, headers: retryHeaders }, false);" in core_js
+    assert "return retried;" in core_js
     assert 'headers.set("X-CSRF-Token", await fetchCsrfToken());' in core_js
     assert "BroadcastChannel" in core_js
 

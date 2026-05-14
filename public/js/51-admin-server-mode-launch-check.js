@@ -97,7 +97,7 @@ function renderServerModeRequirements(requirements) {
 // shortcut.kind:
 //   "ui"      -> jump to the in-app panel that triggers this report
 //   "doc"     -> link to the playbook / spec file (CLI-only generators)
-const LAUNCH_CHECK_REPORT_META = {
+const LAUNCH_CHECK_REPORT_META_V2 = {
   clean_smoke: {
     label: "Mode v2 乾淨 smoke",
     purpose: "boot path / state-machine / 基線 endpoints 在乾淨狀態下都過。",
@@ -301,7 +301,7 @@ function populateLaunchCheckUploadTypes(selected = "") {
   const select = $("launch-check-upload-report-type");
   if (!select) return;
   const current = selected || select.value || "";
-  const options = Object.entries(LAUNCH_CHECK_REPORT_META).map(([key, meta]) => {
+  const options = Object.entries(LAUNCH_CHECK_REPORT_META_V2).map(([key, meta]) => {
     const chosen = key === current ? " selected" : "";
     return `<option value="${key}"${chosen}>${meta.label} (${key})</option>`;
   });
@@ -317,7 +317,7 @@ function openLaunchCheckUpload(reportType = "") {
   const file = $("launch-check-upload-file");
   if (sub) sub.textContent = reportType ? `準備上傳 ${reportType} 的 production report JSON。` : "選擇 report 類型後，可貼上 JSON 或上傳 `.json` 檔。";
   if (hint) {
-    const meta = LAUNCH_CHECK_REPORT_META[reportType];
+    const meta = LAUNCH_CHECK_REPORT_META_V2[reportType];
     hint.textContent = meta
       ? `用途：${meta.purpose}｜建議產生方式：${meta.generator}｜注意：必須提供 raw_report + sha256 report_hash + 可驗證 signature，伺服器會重算 hash 並驗簽。`
       : "上傳的 JSON 必須包含 raw_report、sha256 report_hash 與可驗證 signature；未通過驗簽不會計入 production gate。";
@@ -380,16 +380,24 @@ function launchCheckShortcutHandler(shortcut) {
 function launchCheckConditionMarkup(condition, idx) {
   const escape = (text) => String(text == null ? "" : text)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const defaultOpen = condition.color === "#ff4f6d" || condition.color === "#ffb74d";
   const shortcutBtn = condition.shortcut
     ? `<button class="btn btn-sm" type="button" data-launch-shortcut="cond-${idx}" style="margin-top:.35rem;font-size:.7rem;padding:.18rem .5rem;">${escape(condition.shortcut.label || "前往")}</button>`
     : "";
   return `
-    <div class="health-metric-card" style="border-left:4px solid ${condition.color};">
-      <div class="health-metric-label">${escape(condition.label)}</div>
-      <div class="health-metric-value" style="color:${condition.color};">${escape(condition.value)}</div>
-      ${condition.hint ? `<div style="margin-top:.3rem;font-size:.7rem;color:var(--muted);">${escape(condition.hint)}</div>` : ""}
-      ${shortcutBtn}
-    </div>
+    <details class="drive-collapsible-panel settings-collapse" style="border-left:4px solid ${condition.color};"${defaultOpen ? " open" : ""}>
+      <summary>
+        <div>
+          <div class="drive-card-title">${escape(condition.label)}</div>
+          <div class="drive-card-sub">${escape(condition.value)}</div>
+        </div>
+        <span style="margin-left:auto;font-size:.78rem;color:${condition.color};font-weight:600;">${escape(condition.value)}</span>
+      </summary>
+      <div class="drive-collapsible-body">
+        ${condition.hint ? `<div style="font-size:.78rem;color:var(--muted);">${escape(condition.hint)}</div>` : ""}
+        ${shortcutBtn ? `<div style="margin-top:.45rem;">${shortcutBtn}</div>` : ""}
+      </div>
+    </details>
   `;
 }
 
@@ -400,8 +408,114 @@ function launchCheckMsg(text, ok = false) {
   msg.style.color = ok ? "#4caf50" : "#ff4f6d";
 }
 
+function launchCheckReleasePanelStatus(text, ok = false) {
+  const panel = $("launch-check-release-panel");
+  const sub = $("launch-check-release-sub");
+  if (panel) panel.open = true;
+  if (sub) {
+    sub.textContent = text || "";
+    sub.style.color = ok ? "#4caf50" : (text ? "#ff4f6d" : "var(--muted)");
+  }
+}
+
+function renderLaunchCheckReleaseDetails(payload, mode = "bundle") {
+  const summary = $("launch-check-release-summary");
+  const details = $("launch-check-release-details");
+  if (!summary || !details) return;
+  const escape = (text) => String(text == null ? "" : text)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  if (mode === "artifacts") {
+    const artifactSummary = payload.summary || {};
+    summary.innerHTML = `
+      <div class="health-card"><strong>Artifacts</strong><span>${Number(artifactSummary.artifact_count || 0)}</span></div>
+      <div class="health-card"><strong>QA runs</strong><span>${Number(artifactSummary.qa_run_count || 0)}</span></div>
+      <div class="health-card"><strong>Sources</strong><span>${escape(Object.keys(artifactSummary.by_source || {}).join(", ") || "-")}</span></div>
+      <div class="health-card"><strong>Index</strong><span>${escape(payload.index_path || "-")}</span></div>
+    `;
+    details.textContent = JSON.stringify({
+      generated_at: payload.generated_at,
+      summary: payload.summary,
+      index_path: payload.index_path,
+      qa_runs: payload.qa_runs || [],
+      latest: (payload.artifacts || []).slice(0, 20),
+    }, null, 2);
+    return;
+  }
+  const req = payload.production_requirements || {};
+  const qa = payload.qa_artifacts || {};
+  const git = payload.git || {};
+  summary.innerHTML = `
+    <div class="health-card"><strong>Release</strong><span>${payload.ready ? "ready" : "blocked"}</span></div>
+    <div class="health-card"><strong>Gate</strong><span>${req.ok ? "pass" : "blocked"}</span></div>
+    <div class="health-card"><strong>Reports</strong><span>${(req.required || []).length - (req.missing || []).length - (req.failed || []).length}/${(req.required || []).length}</span></div>
+    <div class="health-card"><strong>QA artifacts</strong><span>${Number((qa.summary || {}).artifact_count || 0)}</span></div>
+  `;
+  details.textContent = JSON.stringify({
+    status: payload.status,
+    ready: payload.ready,
+    branch: git.branch,
+    commit: git.commit,
+    bundle_path: payload.bundle_path,
+    markdown_path: payload.markdown_path,
+    ready_marker: payload.ready_marker || null,
+    missing: req.missing || [],
+    failed: req.failed || [],
+    qa_artifacts: qa,
+  }, null, 2);
+}
+
+async function refreshLaunchCheckQaArtifacts() {
+  launchCheckReleasePanelStatus("QA artifact index 產生中...", true);
+  try {
+    await fetchCsrfToken({ force: true });
+    const csrf = getCsrfToken();
+    const res = await apiFetch(API + "/root/qa-artifacts/index", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" },
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) throw new Error(json.msg || `HTTP ${res.status}`);
+    renderLaunchCheckReleaseDetails(json, "artifacts");
+    launchCheckReleasePanelStatus(`QA artifact index 已更新：${Number((json.summary || {}).artifact_count || 0)} 個檔案`, true);
+    launchCheckMsg("QA artifact index 已更新", true);
+  } catch (err) {
+    const message = err && err.message ? err.message : "QA artifact index 產生失敗";
+    launchCheckReleasePanelStatus(message, false);
+    launchCheckMsg(message, false);
+  }
+}
+
+async function createLaunchCheckReleaseBundle() {
+  launchCheckReleasePanelStatus("Release bundle 產生中...", true);
+  try {
+    await fetchCsrfToken({ force: true });
+    const csrf = getCsrfToken();
+    const res = await apiFetch(API + "/root/production-release/bundle", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+      body: JSON.stringify({ mark_ready: true }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!json.ok) throw new Error(json.msg || `HTTP ${res.status}`);
+    renderLaunchCheckReleaseDetails(json, "bundle");
+    const ready = !!json.ready;
+    launchCheckReleasePanelStatus(
+      ready ? `Release bundle 已產生並標記可上線：${json.bundle_path || "-"}` : `Release bundle 已產生但 gate 未全綠：${json.bundle_path || "-"}`,
+      ready,
+    );
+    launchCheckMsg(ready ? "Release bundle 已標記 ready" : "Release bundle 已建立，但仍有 gate blocker", ready);
+    await loadLaunchCheck();
+  } catch (err) {
+    const message = err && err.message ? err.message : "Release bundle 產生失敗";
+    launchCheckReleasePanelStatus(message, false);
+    launchCheckMsg(message, false);
+  }
+}
+
 function launchCheckCardMarkup(reportType, reportRow, missing, failed, idx) {
-  const meta = LAUNCH_CHECK_REPORT_META[reportType] || {
+  const meta = LAUNCH_CHECK_REPORT_META_V2[reportType] || {
     label: reportType,
     purpose: "（未登錄的 report 類型）",
     generator: "（請查 docs/examples/server_mode_v2/03_production_gate_playbook.md）",
@@ -435,26 +549,31 @@ function launchCheckCardMarkup(reportType, reportRow, missing, failed, idx) {
   const escape = (text) => String(text == null ? "" : text)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const shortcut = meta.shortcut;
+  const defaultOpen = !!missing || !!failed;
   const shortcutBtn = shortcut
     ? `<button class="btn btn-sm" type="button" data-launch-shortcut="report-${idx}" style="margin-top:.5rem;font-size:.72rem;padding:.22rem .55rem;">${escape(shortcut.label || (shortcut.kind === "ui" ? "前往 UI" : "開啟 playbook"))}</button>`
     : "";
   const uploadBtn = `<button class="btn btn-sm" type="button" data-launch-upload="${escape(reportType)}" style="margin-top:.5rem;font-size:.72rem;padding:.22rem .55rem;">上傳報告</button>`;
   return `
-    <div class="security-profile-preview show" style="border-left:4px solid ${statusColor};padding-left:.7rem;">
-      <div style="display:flex;align-items:baseline;gap:.45rem;flex-wrap:wrap;">
-        <strong style="color:${statusColor};font-size:.95rem;">${statusIcon} ${escape(meta.label)}</strong>
-        <span style="font-size:.7rem;color:var(--muted);">${escape(reportType)}</span>
+    <details class="drive-collapsible-panel settings-collapse" style="border-left:4px solid ${statusColor};"${defaultOpen ? " open" : ""}>
+      <summary>
+        <div>
+          <div class="drive-card-title" style="color:${statusColor};">${statusIcon} ${escape(meta.label)}</div>
+          <div class="drive-card-sub">${escape(reportType)}${stateNote ? `｜${escape(stateNote)}` : ""}</div>
+        </div>
         <span style="margin-left:auto;font-size:.78rem;color:${statusColor};font-weight:600;">${escape(statusLabel)}</span>
+      </summary>
+      <div class="drive-collapsible-body">
+        <div style="color:var(--text);"><strong>用途</strong>：${escape(meta.purpose)}</div>
+        <div style="margin-top:.25rem;"><strong>產生方式</strong>：<code style="font-size:.7rem;">${escape(meta.generator)}</code></div>
+        <div style="margin-top:.25rem;"><strong>失敗對策</strong>：${escape(meta.tip)}</div>
+        ${stateNote ? `<div style="margin-top:.4rem;color:${statusColor};">⤷ ${escape(stateNote)}</div>` : ""}
+        <div style="display:flex;gap:.45rem;flex-wrap:wrap;align-items:center;">
+          ${shortcutBtn}
+          ${uploadBtn}
+        </div>
       </div>
-      <div style="margin-top:.35rem;color:var(--text);"><strong>用途</strong>：${escape(meta.purpose)}</div>
-      <div style="margin-top:.25rem;"><strong>產生方式</strong>：<code style="font-size:.7rem;">${escape(meta.generator)}</code></div>
-      <div style="margin-top:.25rem;"><strong>失敗對策</strong>：${escape(meta.tip)}</div>
-      ${stateNote ? `<div style="margin-top:.4rem;color:${statusColor};">⤷ ${escape(stateNote)}</div>` : ""}
-      <div style="display:flex;gap:.45rem;flex-wrap:wrap;align-items:center;">
-        ${shortcutBtn}
-        ${uploadBtn}
-      </div>
-    </div>
+    </details>
   `;
 }
 
@@ -602,7 +721,7 @@ async function loadLaunchCheck() {
       .map((reportType, idx) => launchCheckCardMarkup(reportType, reports[reportType] || null, missing.has(reportType), failed.has(reportType), idx))
       .join("");
     required.forEach((reportType, idx) => {
-      const meta = LAUNCH_CHECK_REPORT_META[reportType];
+      const meta = LAUNCH_CHECK_REPORT_META_V2[reportType];
       if (!meta || !meta.shortcut) return;
       const btn = list.querySelector(`[data-launch-shortcut="report-${idx}"]`);
       const handler = launchCheckShortcutHandler(meta.shortcut);

@@ -3,9 +3,10 @@ from pathlib import Path
 
 from services.users.member_levels import get_member_level_rule
 from services.security.upload_security import get_user_cloud_drive_usage
+from services.storage.global_capacity import resolve_global_capacity_limit
 
 
-STORAGE_CAPACITY_SAFETY_RATIO = 0.9
+STORAGE_CAPACITY_SAFETY_RATIO = 0.95
 STORAGE_CAPACITY_WARNING_RATIO = 0.8
 
 
@@ -47,11 +48,18 @@ def _cloud_used_bytes(conn):
     return int(row["bytes"] if row and row["bytes"] is not None else 0)
 
 
-def audit_storage_capacity(conn, storage_root):
+def audit_storage_capacity(conn, storage_root, settings=None):
     disk = storage_disk_usage(storage_root)
     cloud_used = _cloud_used_bytes(conn)
-    allocatable = int(cloud_used + disk["safe_free_bytes"])
-    available_capacity = int(disk["safe_free_bytes"])
+    global_limit = resolve_global_capacity_limit(disk, settings=settings)
+    limit_bytes = global_limit.get("limit_bytes")
+    if limit_bytes is None:
+        allocatable = int(cloud_used + disk["safe_free_bytes"])
+        available_capacity = int(disk["safe_free_bytes"])
+    else:
+        allocatable = int(min(int(limit_bytes), cloud_used + disk["safe_free_bytes"]))
+        available_capacity = int(limit_bytes)
+    global_remaining = None if limit_bytes is None else max(0, int(limit_bytes) - cloud_used)
 
     users = []
     committed_total = 0
@@ -113,9 +121,11 @@ def audit_storage_capacity(conn, storage_root):
         "status": status,
         "reasons": reasons,
         "disk": disk,
+        "global_capacity": global_limit,
         "cloud_used_bytes": cloud_used,
         "allocatable_cloud_capacity_bytes": allocatable,
         "available_cloud_capacity_bytes": available_capacity,
+        "global_capacity_remaining_bytes": global_remaining,
         "committed_total_bytes": int(committed_total),
         "committed_remaining_bytes": int(committed_remaining),
         "total_overcommitted_by_bytes": int(total_over_by),

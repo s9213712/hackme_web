@@ -1,0 +1,118 @@
+{
+  "128": {
+    "class_type": "DualCLIPLoader",
+    "inputs": {
+      "clip_name1": "qwen_0.6b_ace15.safetensors",
+      "clip_name2": "qwen_4b_ace15.safetensors",
+      "device": "default",
+      "type": "ace"
+    }
+  },
+  "129": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "ace_1.5_vae.safetensors"
+    }
+  },
+  "130": {
+    "class_type": "EmptyAceStep1.5LatentAudio",
+    "inputs": {
+      "seconds": 120
+    }
+  },
+  "131": {
+    "class_type": "ConditioningZeroOut",
+    "inputs": {
+      "conditioning": [
+        "134",
+        0
+      ]
+    }
+  },
+  "132": {
+    "class_type": "KSampler",
+    "inputs": {
+      "cfg": 1,
+      "denoise": 1,
+      "latent_image": [
+        "130",
+        0
+      ],
+      "model": [
+        "133",
+        0
+      ],
+      "negative": [
+        "131",
+        0
+      ],
+      "positive": [
+        "135",
+        0
+      ],
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "seed": 561594583201063,
+      "steps": 8
+    }
+  },
+  "133": {
+    "class_type": "ModelSamplingAuraFlow",
+    "inputs": {
+      "model": [
+        "136",
+        0
+      ],
+      "shift": 3
+    }
+  },
+  "134": {
+    "class_type": "VAEDecodeAudio",
+    "inputs": {
+      "samples": [
+        "132",
+        0
+      ],
+      "vae": [
+        "129",
+        0
+      ]
+    }
+  },
+  "135": {
+    "class_type": "TextEncodeAceStepAudio1.5",
+    "inputs": {
+      "cfg_scale": "E minor",
+      "clip": [
+        "128",
+        0
+      ],
+      "duration": 120,
+      "generate_audio_codes": "en",
+      "keyscale": "4",
+      "language": 120,
+      "lyrics": "Verse\nNeon rain on my screen,\nDreams compile in silver sheen.\nNo weight, just motion,\nI’m plugged into emotion.\n\nChorus\nComfy Cloud — breathing light,\nCode and color, spark and wire.\nDrift through data, feel alive,\nIn your circuits, I arrive.",
+      "seed": 561594583201063,
+      "tags": "synthwave, techno, synthpop, futuristic, electro, with liquid drum & bass drive.\nRestless, confident, dreamy mood at 128 BPM.\nAnalog bass, pulsating arps, percussive synth stabs, gated drums.\nQuick build,  then explosive drum burst, then clean fade.\nBreathy, rhythmic female vocals, minimal emotion, metallic echo.",
+      "timesignature": 190
+    }
+  },
+  "136": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "acestep_v1.5_turbo.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "59": {
+    "class_type": "SaveAudioMP3",
+    "inputs": {
+      "audio": [
+        "134",
+        0
+      ],
+      "filename_prefix": "audio/ComfyUI",
+      "quality": "V0"
+    }
+  }
+}

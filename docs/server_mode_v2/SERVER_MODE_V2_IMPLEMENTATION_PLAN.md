@@ -643,7 +643,7 @@ plan_done_when:
     - tests/test_smv2_acceptance.py: 9/9 green (no xfail)
   docs:
     - SERVER_MODE_V2_PROFILE_MATRIX.md §QA Checklist: marked done
-    - per-phase report under docs/AGENTS/reports/claude/server_mode_v2_phase_<N>_<date>/
+    - per-phase notes in external working log or Git commit message
   cross_agent:
     - ~/agent_communication.txt: phase completion broadcast for each phase
 ```
@@ -654,7 +654,7 @@ plan_done_when:
 
 ```
 1. `scripts/testing/pytest_in_tmp.sh tests/` 全綠
-2. 新增 docs/AGENTS/reports/claude/server_mode_v2_phase_<N>_<YYYY-MM-DD>/PHASE_REPORT.md
+2. 在 Git commit message 或外部工作紀錄寫明 phase report 摘要
 3. ~/agent_communication.txt append "Claude side update — phase <N> done"
 4. 等用戶 review，明確 go ahead 才進下一 phase
 ```
@@ -703,8 +703,7 @@ plan_done_when:
 | [`SERVER_MODE_V2_TRADING_AND_POINTSCHAIN.md`](SERVER_MODE_V2_TRADING_AND_POINTSCHAIN.md) | trading + chain 子規範 |
 | [`SERVER_MODE_V2_MIGRATION_PLAN.md`](SERVER_MODE_V2_MIGRATION_PLAN.md) | Codex 寫的 migration 步驟 |
 | [`SERVER_MODE_V2_TEST_PLAN.md`](SERVER_MODE_V2_TEST_PLAN.md) | Codex 寫的 test plan |
-| [`examples/server_mode_v2/`](examples/server_mode_v2/) | token 教學 + 13 報告 playbook |
-| [`AGENTS/reports/claude/server_mode_acceptance_2026-05-05/`](../AGENTS/reports/claude/server_mode_acceptance_2026-05-05/) | 13 節驗收報告 |
+| [`README.md`](README.md) | token 教學 + 13 報告 playbook |
 
 ---
 

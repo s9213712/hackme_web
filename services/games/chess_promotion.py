@@ -12,6 +12,7 @@ from services.games.chess_dl import bundled_chess_dl_model_path, default_chess_d
 from services.games.chess_engine import ChessExperimentStore, bundled_chess_engine_db_path, default_chess_engine_db_path
 from services.games.chess_model_registry import ensure_runtime_model_from_bundle, runtime_chess_models_dir
 from services.games.chess_nn import bundled_chess_nn_model_path, default_chess_nn_model_path, experiment_nn_model_template
+from services.games.chess_nnue import bundled_chess_nnue_model_path, default_chess_nnue_model_path, experiment_nnue_model_template
 from services.games.chess_pv import bundled_chess_pv_model_path, default_chess_pv_model_path, experiment_pv_model_template
 from services.server.runtime import default_runtime_root_path
 
@@ -103,6 +104,8 @@ def ensure_warm_start_chess_environment() -> dict:
     created.append({"engine": "experiment 3:dl", **dl_result, "path": str(default_chess_dl_model_path())})
     pv_result = _ensure_runtime_model(default_chess_pv_model_path(), bundled_chess_pv_model_path(), experiment_pv_model_template)
     created.append({"engine": "experiment 4:pv", **pv_result, "path": str(default_chess_pv_model_path())})
+    nnue_result = _ensure_runtime_model(default_chess_nnue_model_path(), bundled_chess_nnue_model_path(), experiment_nnue_model_template)
+    created.append({"engine": "experiment 5:nnue", **nnue_result, "path": str(default_chess_nnue_model_path())})
     return {"ok": True, "timestamp": _now(), "artifacts": created}
 
 
@@ -112,6 +115,7 @@ def _current_engine_paths() -> dict[str, Path]:
         "experiment 2:nn": default_chess_nn_model_path(),
         "experiment 3:dl": default_chess_dl_model_path(),
         "experiment 4:pv": default_chess_pv_model_path(),
+        "experiment 5:nnue": default_chess_nnue_model_path(),
     }
 
 
@@ -185,6 +189,11 @@ def evaluate_promotion_gate(*, engine: str, benchmark_report_path: Path) -> dict
     return {
         "pass": len(reasons) == 0,
         "engine": engine,
+        "engine_architecture": {
+            "experiment 3:dl": "mlp-49x64x32x1",
+            "experiment 4:pv": "board-planes-policy-value-781x96",
+            "experiment 5:nnue": "nnue-like-sparse-accumulator-v1",
+        }.get(engine, ""),
         "benchmark_report_path": str(path),
         "score_rate": round(score_rate, 4),
         "win_rate": round(win_rate, 4),
@@ -192,6 +201,44 @@ def evaluate_promotion_gate(*, engine: str, benchmark_report_path: Path) -> dict
         "games": games,
         "suspicious_matches": suspicious_matches,
         "smoke_pass": smoke_pass,
+        "reasons": reasons,
+    }
+
+
+def promotion_report_consistency(*, engine: str, candidate_path: Path, benchmark_report_path: Path | None = None) -> dict:
+    reasons: list[str] = []
+    candidate = Path(candidate_path)
+    payload = _load_json(candidate) if candidate.exists() and candidate.suffix == ".json" else {}
+    expected_architecture = {
+        "experiment 3:dl": "mlp-49x64x32x1",
+        "experiment 4:pv": "board-planes-policy-value-781x96",
+        "experiment 5:nnue": "nnue-like-sparse-accumulator-v1",
+    }.get(engine, "")
+    if not candidate.exists():
+        reasons.append("candidate model file is missing")
+    if expected_architecture and candidate.suffix == ".json":
+        architecture = str(payload.get("architecture") or "")
+        if architecture != expected_architecture:
+            reasons.append(f"candidate architecture mismatch: expected {expected_architecture}, got {architecture or '-'}")
+        if int(payload.get("version") or 0) <= 0:
+            reasons.append("candidate version missing")
+        if "sample_count" not in payload:
+            reasons.append("candidate sample_count missing")
+    if engine == "experiment 5:nnue":
+        if str(payload.get("training_objective") or "") != "position_move_evaluator_delta":
+            reasons.append("exp5 training_objective mismatch")
+        if "feature_weights" not in payload or "piece_square_weights" not in payload:
+            reasons.append("exp5 NNUE-like weight sections missing")
+    benchmark_path = Path(benchmark_report_path) if benchmark_report_path else None
+    return {
+        "pass": not reasons,
+        "engine": engine,
+        "candidate_path": str(candidate),
+        "benchmark_report_path": str(benchmark_path) if benchmark_path else "",
+        "expected_architecture": expected_architecture,
+        "candidate_architecture": str(payload.get("architecture") or "") if payload else "",
+        "candidate_version": int(payload.get("version") or 0) if payload else 0,
+        "candidate_sample_count": int(payload.get("sample_count") or 0) if payload else 0,
         "reasons": reasons,
     }
 
@@ -204,7 +251,7 @@ def _candidate_dest(engine: str) -> Path:
 def stage_candidate_model(*, engine: str, source_path: Path, benchmark_report_path: Path | None = None) -> dict:
     current_paths = _current_engine_paths()
     if engine not in current_paths or engine == "experiment":
-        raise ValueError("only experiment 2:nn / experiment 3:dl / experiment 4:pv support file-based candidates")
+        raise ValueError("only experiment 2:nn / experiment 3:dl / experiment 4:pv / experiment 5:nnue support file-based candidates")
     source = Path(source_path)
     if not source.exists():
         raise ValueError("candidate model file not found")
@@ -213,16 +260,22 @@ def stage_candidate_model(*, engine: str, source_path: Path, benchmark_report_pa
     shutil.copyfile(source, candidate_path)
     status = promotion_status_summary()["status"]
     promotion_gate = evaluate_promotion_gate(engine=engine, benchmark_report_path=Path(benchmark_report_path)) if benchmark_report_path else None
+    consistency = promotion_report_consistency(
+        engine=engine,
+        candidate_path=candidate_path,
+        benchmark_report_path=benchmark_report_path,
+    )
     status["candidate"] = {
         "engine": engine,
         "candidate_path": str(candidate_path),
         "benchmark_report_path": str(benchmark_report_path) if benchmark_report_path else "",
         "promotion_gate": promotion_gate,
+        "promotion_report_consistency": consistency,
         "staged_at": _now(),
     }
     status["updated_at"] = _now()
     _save_json(default_chess_promotion_status_path(), status)
-    return {"ok": True, "engine": engine, "candidate_path": str(candidate_path), "promotion_gate": promotion_gate}
+    return {"ok": True, "engine": engine, "candidate_path": str(candidate_path), "promotion_gate": promotion_gate, "promotion_report_consistency": consistency}
 
 
 def promote_candidate_model(*, engine: str, benchmark_report_path: Path) -> dict:
@@ -239,6 +292,9 @@ def promote_candidate_model(*, engine: str, benchmark_report_path: Path) -> dict
     gate = evaluate_promotion_gate(engine=engine, benchmark_report_path=benchmark_path)
     if not gate["pass"]:
         raise ValueError("promotion gate failed: " + "; ".join(gate["reasons"]))
+    consistency = promotion_report_consistency(engine=engine, candidate_path=candidate_path, benchmark_report_path=benchmark_path)
+    if not consistency["pass"]:
+        raise ValueError("promotion report consistency failed: " + "; ".join(consistency["reasons"]))
     destination = _current_engine_paths().get(engine)
     if destination is None:
         raise ValueError("unsupported engine")
@@ -250,6 +306,7 @@ def promote_candidate_model(*, engine: str, benchmark_report_path: Path) -> dict
         "production_path": str(destination),
         "benchmark_report_path": str(benchmark_path),
         "promotion_gate": gate,
+        "promotion_report_consistency": consistency,
         "promoted_at": _now(),
         "result": "promoted",
     }

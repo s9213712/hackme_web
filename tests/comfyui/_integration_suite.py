@@ -4,13 +4,16 @@ import sqlite3
 import time
 import urllib.parse
 from pathlib import Path
+from unittest.mock import patch
 
+import pytest
 from flask import Flask, jsonify, make_response, request
 
 from routes import comfyui as comfyui_routes
 from routes.comfyui import register_comfyui_routes
+from services.comfyui import execution as comfy_execution
 from services.storage.cloud_drive import ensure_cloud_drive_attachment_schema
-from services.comfyui.client import ComfyUIClient, ComfyUIImage
+from services.comfyui.client import ComfyUIClient, ComfyUIError, ComfyUIImage
 from services.users.member_levels import ensure_member_level_rules_schema
 from services.storage.storage_albums import (
     create_album,
@@ -150,6 +153,15 @@ class FakeComfyUIClient:
                 {"key": "inpaint", "label": "局部重繪", "available": True},
                 {"key": "outpaint", "label": "向外延展", "available": True},
                 {"key": "upscale", "label": "放大修復", "available": True},
+                {"key": "t2v", "label": "文字生影片", "available": True, "workflow_only": True},
+                {"key": "i2v", "label": "圖片生影片", "available": True, "workflow_only": True},
+                {"key": "v2v", "label": "影片轉影片", "available": True, "workflow_only": True},
+                {"key": "t2s", "label": "文字生語音", "available": True, "workflow_only": True},
+                {"key": "t2sv", "label": "文字生語音影片", "available": True, "workflow_only": True},
+            ],
+            "model_families": [
+                {"key": "flux", "label": "FLUX", "installed": True, "matches": ["dream.safetensors"]},
+                {"key": "wan", "label": "Wan Video", "installed": False, "matches": []},
             ],
         }
 
@@ -244,6 +256,62 @@ class FakeComfyUIClient:
     def interrupt(self):
         FakeComfyUIClient.interrupted += 1
         return {"interrupted": True}
+
+
+class FakeDiffusersBackendClient(FakeComfyUIClient):
+    backend_kind = "diffusers"
+    base_url = "diffusers://local/dhead%2FwaiIllustriousSDXL_v150"
+    last_params = {}
+
+    def get_models(self):
+        return ["dhead/waiIllustriousSDXL_v150"]
+
+    def get_loras(self):
+        return []
+
+    def get_vaes(self):
+        return []
+
+    def get_embeddings(self):
+        return []
+
+    def get_sampler_options(self):
+        return {"samplers": ["diffusers-auto"], "schedulers": ["default"]}
+
+    def get_capabilities(self):
+        return {
+            "backend_kind": "diffusers",
+            "available_nodes": [],
+            "controlnet_models": [],
+            "upscale_models": [],
+            "controlnet_types": {},
+            "generation_modes": [
+                {"key": "txt2img", "label": "文字生圖", "available": True},
+                {"key": "img2img", "label": "圖生圖", "available": True},
+                {"key": "inpaint", "label": "局部重繪", "available": True},
+                {"key": "upscale", "label": "放大修復", "available": False},
+                {"key": "t2v", "label": "文字生影片", "available": False, "workflow_only": True},
+            ],
+            "model_families": [{"key": "illustrious", "label": "Illustrious", "installed": True, "matches": ["dhead/waiIllustriousSDXL_v150"]}],
+            "model_repo": "dhead/waiIllustriousSDXL_v150",
+            "token_configured": True,
+        }
+
+    def generate_image(self, params, *, timeout_seconds=180, progress_callback=None, extra_data=None):
+        FakeDiffusersBackendClient.last_params = dict(params)
+        if progress_callback:
+            progress_callback({"phase": "running", "percent": 40, "detail": "Diffusers 推論中"})
+        return {
+            "prompt_id": "diffusers-prompt-1",
+            "image_ref": {"filename": "hackme_web_diffusers.png", "subfolder": "", "type": "output"},
+            "mime_type": "image/png",
+            "data": b"fake-diffusers-png",
+            "images": [{
+                "image_ref": {"filename": "hackme_web_diffusers.png", "subfolder": "", "type": "output"},
+                "mime_type": "image/png",
+                "data": b"fake-diffusers-png",
+            }],
+        }
 
 
 class FailingComfyUIClient(FakeComfyUIClient):
@@ -567,6 +635,90 @@ def _import_workflow_preset(client, workflow, *, title="Workflow Preset", descri
     return response.get_json()["preset"]
 
 
+def _write_runtime_workflow_bundle(runtime_dir, bundle_id, *, name=None, description=""):
+    workflow = FakeComfyUIClient().build_generation_workflow({
+        "generation_mode": "txt2img",
+        "model": "dream.safetensors",
+        "prompt": f"prompt:{bundle_id}",
+        "negative_prompt": "bad",
+        "width": 512,
+        "height": 512,
+        "steps": 20,
+        "cfg": 7.5,
+        "sampler_name": "euler",
+        "scheduler": "normal",
+        "seed": 42,
+        "batch_size": 1,
+    })
+    bundle_dir = Path(runtime_dir) / bundle_id
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+    (bundle_dir / "workflow.json").write_text(
+        json.dumps(workflow, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (bundle_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "id": bundle_id,
+                "name": name or bundle_id,
+                "description": description,
+                "schema_version": 1,
+                "workflow_file": "workflow.json",
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return bundle_dir
+
+
+def test_comfyui_workflow_list_syncs_only_builtin_runtime_bundles_as_official_presets(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    runtime_dir = tmp_path / "runtime" / "comfyui"
+    runtime_dir.mkdir(parents=True)
+    _write_runtime_workflow_bundle(
+        runtime_dir,
+        "txt2img_basic",
+        name="Text-to-Image（基礎）",
+        description="builtin bundle",
+    )
+    _write_runtime_workflow_bundle(
+        runtime_dir,
+        "imported_custom_demo",
+        name="Imported Demo",
+        description="should stay non-official",
+    )
+
+    with patch("routes.comfyui.runtime_comfyui_dir", lambda *args, **kwargs: runtime_dir):
+        client = _build_app(db_path, storage_root).test_client()
+        first = client.get("/api/comfyui/workflows")
+        assert first.status_code == 200
+        first_body = first.get_json()
+        assert [item["system_bundle_id"] for item in first_body["official_presets"]] == ["txt2img_basic"]
+        assert first_body["official_presets"][0]["title"] == "Text-to-Image（基礎）"
+        assert first_body["official_presets"][0]["manifest_summary"]["available"] is True
+        assert first_body["official_presets"][0]["manifest_summary"]["id"] == "txt2img_basic"
+
+        second = client.get("/api/comfyui/workflows")
+        assert second.status_code == 200
+        second_body = second.get_json()
+        assert [item["system_bundle_id"] for item in second_body["official_presets"]] == ["txt2img_basic"]
+        detail = client.get(f"/api/comfyui/workflows/{second_body['official_presets'][0]['id']}")
+        assert detail.status_code == 200
+        assert detail.get_json()["preset"]["manifest_json"]["id"] == "txt2img_basic"
+
+    conn = sqlite3.connect(db_path)
+    rows = conn.execute(
+        "SELECT system_bundle_id, is_official FROM comfyui_workflow_presets ORDER BY id ASC"
+    ).fetchall()
+    conn.close()
+    assert rows == [("txt2img_basic", 1)]
+
+
 def test_comfyui_models_and_generate_routes(tmp_path):
     db_path = tmp_path / "comfyui.db"
     storage_root = tmp_path / "storage"
@@ -592,7 +744,8 @@ def test_comfyui_models_and_generate_routes(tmp_path):
     assert models.get_json()["lora_details"]["anime-style.safetensors"]["supported"] is False
     assert models.get_json()["vaes"] == ["sdxl_vae.safetensors", "anime_vae.pt"]
     assert models.get_json()["embeddings"] == ["badhandv4.pt", "easynegative.safetensors"]
-    assert {item["key"] for item in models.get_json()["generation_modes"]} >= {"txt2img", "img2img", "inpaint", "outpaint", "upscale"}
+    assert {item["key"] for item in models.get_json()["generation_modes"]} >= {"txt2img", "img2img", "inpaint", "outpaint", "upscale", "t2v", "i2v", "v2v", "t2s", "t2sv"}
+    assert {item["key"] for item in models.get_json()["model_families"]} >= {"flux", "wan"}
     assert models.get_json()["controlnet_types"]["canny"]["available"] is True
     assert "control_v11p_sd15_canny.safetensors" in models.get_json()["controlnet_models"]
     assert "4x-UltraSharp.pth" in models.get_json()["upscale_models"]
@@ -840,6 +993,7 @@ def test_comfyui_workflow_import_rejects_bad_json_and_unsafe_paths(tmp_path):
     )
     assert bad_json.status_code == 400
     assert "workflow JSON 格式不正確" in bad_json.get_json()["msg"]
+    assert bad_json.get_json()["stage"] == "schema_validation"
 
     unsafe_path = client.post(
         "/api/comfyui/workflows/import",
@@ -855,6 +1009,7 @@ def test_comfyui_workflow_import_rejects_bad_json_and_unsafe_paths(tmp_path):
     )
     assert unsafe_path.status_code == 400
     assert "絕對路徑" in unsafe_path.get_json()["msg"]
+    assert unsafe_path.get_json()["stage"] == "sanitize"
 
     unsafe_url = client.post(
         "/api/comfyui/workflows/import",
@@ -870,6 +1025,7 @@ def test_comfyui_workflow_import_rejects_bad_json_and_unsafe_paths(tmp_path):
     )
     assert unsafe_url.status_code == 400
     assert "外部 URL" in unsafe_url.get_json()["msg"]
+    assert unsafe_url.get_json()["stage"] == "sanitize"
 
 
 def test_comfyui_workflow_import_rejects_too_many_nodes_and_deep_nesting(tmp_path):
@@ -947,6 +1103,88 @@ def test_comfyui_private_workflow_preset_cannot_be_read_by_other_user(tmp_path):
     forbidden = viewer_client.get(f"/api/comfyui/workflows/{preset['id']}")
     assert forbidden.status_code == 403
     assert "沒有權限" in forbidden.get_json()["msg"]
+
+
+def test_comfyui_workflow_layout_metadata_versions_export_and_reimport(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(db_path, storage_root).test_client()
+
+    workflow = FakeComfyUIClient().build_generation_workflow({
+        "generation_mode": "txt2img",
+        "model": "dream.safetensors",
+        "prompt": "layout builder",
+        "negative_prompt": "",
+        "width": 512,
+        "height": 512,
+        "steps": 14,
+        "cfg": 6,
+        "seed": 321,
+        "batch_size": 1,
+        "sampler_name": "euler",
+        "scheduler": "normal",
+        "filename_prefix": "layout",
+    })
+    imported = client.post(
+        "/api/comfyui/workflow-layouts",
+        json={
+            "title": "Layout Builder Flow",
+            "description": "custom layout",
+            "purpose": "txt2img",
+            "project_version": "pytest-project",
+            "comfyui_version": "pytest-comfy",
+            "workflow_schema_version": "1",
+            "layout_json": {
+                "layout_schema_version": "1",
+                "node_order": ["1", "2", "3"],
+                "node_positions": {"3": {"x": 120, "y": 240}},
+                "field_overrides": {"steps": {"label": "Steps"}},
+            },
+            "workflow_json": workflow,
+            "is_default": True,
+        },
+    )
+    assert imported.status_code == 200, imported.get_json()
+    preset = imported.get_json()["preset"]
+    assert preset["purpose"] == "txt2img"
+    assert preset["project_version"] == "pytest-project"
+    assert preset["comfyui_version"] == "pytest-comfy"
+    assert preset["workflow_schema_version"] == "1"
+    assert preset["layout_json"]["node_positions"]["3"]["x"] == 120
+    assert preset["is_default"] is True
+
+    updated = client.put(
+        f"/api/comfyui/workflow-layouts/{preset['id']}",
+        json={
+            "title": "Layout Builder Flow v2",
+            "workflow_json": workflow,
+            "layout_json": {"layout_schema_version": "1", "node_order": ["3", "2", "1"]},
+        },
+    )
+    assert updated.status_code == 200, updated.get_json()
+
+    detail = client.get(f"/api/comfyui/workflow-layouts/{preset['id']}")
+    assert detail.status_code == 200, detail.get_json()
+    detail_json = detail.get_json()["preset"]
+    assert detail_json["layout_json"]["node_order"] == ["3", "2", "1"]
+    assert len(detail_json["layout_versions"]) >= 2
+
+    exported = client.post(f"/api/comfyui/workflow-layouts/{preset['id']}/export", json={})
+    assert exported.status_code == 200, exported.get_json()
+    exported_json = exported.get_json()
+    assert exported_json["raw_workflow_json"]
+    assert exported_json["workflow_preset_json"]["project_version"] == "pytest-project"
+    assert exported_json["workflow_preset_json"]["layout_json"]["node_order"] == ["3", "2", "1"]
+    assert "workflow_preset_text" in exported_json
+
+    reimported = client.post(
+        "/api/comfyui/workflow-layouts/import",
+        json={"workflow_json": exported_json["workflow_preset_json"], "title": "Reimported Layout"},
+    )
+    assert reimported.status_code == 200, reimported.get_json()
+    assert reimported.get_json()["preset"]["title"] == "Reimported Layout"
 
 
 def test_comfyui_export_current_and_run_workflow_preset_preserve_parameters(tmp_path):
@@ -1052,6 +1290,7 @@ def test_comfyui_workflow_run_rejects_missing_dependencies(tmp_path):
     missing_model = missing_model_client.post(f"/api/comfyui/workflows/{preset['id']}/run", json={})
     assert missing_model.status_code == 409
     assert "缺少模型" in missing_model.get_json()["msg"]
+    assert missing_model.get_json()["stage"] == "missing_model"
 
     inpaint_workflow = FakeComfyUIClient().build_inpaint_workflow({
         "generation_mode": "inpaint",
@@ -1155,6 +1394,70 @@ def test_comfyui_image_preview_returns_uploaded_asset_preview(tmp_path):
     assert image["data_url"].startswith("data:image/png;base64,")
     assert image["image_ref"]["filename"] == "source.png"
 
+
+def test_comfyui_input_image_candidates_import_history_and_drive_images(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    FakeComfyUIClient.uploaded_images = []
+    client = _build_app(db_path, storage_root).test_client()
+
+    preview = _generate_preview(client)
+    actor = _actor()
+    rel_path = "users/1/manual/drive-input.png"
+    disk_path = storage_root / rel_path
+    disk_path.parent.mkdir(parents=True, exist_ok=True)
+    disk_path.write_bytes(b"drive-png-bytes")
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        upload = create_uploaded_file_record(
+            conn,
+            owner_user_id=actor["id"],
+            storage_path=rel_path,
+            privacy_mode="standard_plain",
+            size_bytes=len(b"drive-png-bytes"),
+            original_filename="drive-input.png",
+            mime_type="image/png",
+            user=actor,
+        )
+        conn.execute("UPDATE uploaded_files SET scan_status='not_required' WHERE id=?", (upload["file_id"],))
+        file_row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (upload["file_id"],)).fetchone()
+        storage_file, msg = create_storage_file_entry(
+            conn,
+            actor=actor,
+            file_row=file_row,
+            virtual_path="/inputs/drive-input.png",
+            display_name="drive-input.png",
+            source="test",
+        )
+        assert msg is None
+        conn.commit()
+    finally:
+        conn.close()
+
+    candidates = client.get("/api/comfyui/input-image-candidates")
+    assert candidates.status_code == 200
+    body = candidates.get_json()
+    assert any(item["filename"] == preview["image_ref"]["filename"] for item in body["history"])
+    drive_candidate = next(item for item in body["cloud_drive"] if item["file_id"] == upload["file_id"])
+    assert drive_candidate["virtual_path"] == storage_file["virtual_path"]
+
+    drive_import = client.post("/api/comfyui/import-drive-image", json={"file_id": upload["file_id"]})
+    assert drive_import.status_code == 200
+    drive_body = drive_import.get_json()["image"]
+    assert drive_body["cloud_file_id"] == upload["file_id"]
+    assert drive_body["image_ref"]["type"] == "input"
+    assert drive_body["data_url"].startswith("data:image/png;base64,")
+
+    history_import = client.post("/api/comfyui/import-history-image", json={"image_ref": preview["image_ref"]})
+    assert history_import.status_code == 200
+    history_body = history_import.get_json()["image"]
+    assert history_body["cloud_file_id"]
+    assert history_body["image_ref"]["type"] == "input"
+    assert history_body["data_url"].startswith("data:image/png;base64,")
+    assert len(FakeComfyUIClient.uploaded_images) >= 2
 
 
 def test_comfyui_generate_rejects_unsupported_lora_base_model(tmp_path):
@@ -1742,6 +2045,129 @@ def test_root_can_test_unsaved_comfyui_endpoint(tmp_path):
     assert body["endpoint"] == {"mode": "remote", "host": "192.168.1.20", "port": 8192}
 
 
+def test_comfyui_diffusers_mode_lists_repo_and_generates_without_comfyui_nodes(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(
+        db_path,
+        storage_root,
+        settings={
+            "comfyui_connection_mode": "diffusers",
+            "comfyui_diffusers_model_repo": "dhead/waiIllustriousSDXL_v150",
+            "comfyui_huggingface_api_token": "hf_read_token",
+        },
+        extra_deps={
+            "comfyui_client": None,
+            "comfyui_client_factory": lambda url: FakeDiffusersBackendClient(),
+        },
+    ).test_client()
+
+    listed = client.get("/api/comfyui/models")
+    assert listed.status_code == 200
+    body = listed.get_json()
+    assert body["ok"] is True
+    assert body["connection_mode"] == "diffusers"
+    assert body["models"] == ["dhead/waiIllustriousSDXL_v150"]
+    assert body["loras"] == []
+    assert body["samplers"] == ["diffusers-auto"]
+
+    generated = client.post(
+        "/api/comfyui/generate",
+        json={
+            "generation_mode": "txt2img",
+            "model": "dhead/waiIllustriousSDXL_v150",
+            "prompt": "illustration",
+            "negative_prompt": "",
+            "sampler_name": "diffusers-auto",
+            "scheduler": "default",
+            "seed": 123,
+            "confirm_billing": True,
+        },
+    )
+
+    assert generated.status_code == 200, generated.get_json()
+    payload = generated.get_json()
+    assert payload["ok"] is True
+    assert payload["backend_scope"] == "primary"
+    assert payload["image"]["image_ref"]["filename"] == "hackme_web_diffusers.png"
+    assert FakeDiffusersBackendClient.last_params["model"] == "dhead/waiIllustriousSDXL_v150"
+
+
+def test_comfyui_diffusers_mode_allows_generation_page_repo_override(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(
+        db_path,
+        storage_root,
+        settings={
+            "comfyui_connection_mode": "diffusers",
+            "comfyui_diffusers_model_repo": "dhead/waiIllustriousSDXL_v150",
+        },
+        extra_deps={
+            "comfyui_client": None,
+            "comfyui_client_factory": lambda url: FakeDiffusersBackendClient(),
+        },
+    ).test_client()
+
+    generated = client.post(
+        "/api/comfyui/generate",
+        json={
+            "generation_mode": "txt2img",
+            "diffusers_model_repo": "https://huggingface.co/hf-internal-testing/tiny-sdxl-pipe/tree/main",
+            "prompt": "illustration",
+            "sampler_name": "diffusers-auto",
+            "scheduler": "default",
+            "confirm_billing": True,
+        },
+    )
+
+    assert generated.status_code == 200, generated.get_json()
+    assert generated.get_json()["ok"] is True
+    assert FakeDiffusersBackendClient.last_params["model"] == "hf-internal-testing/tiny-sdxl-pipe"
+    assert FakeDiffusersBackendClient.last_params["diffusers_model_repo"] == "hf-internal-testing/tiny-sdxl-pipe"
+
+
+def test_comfyui_diffusers_mode_rejects_comfyui_controlnet_shortcut(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(
+        db_path,
+        storage_root,
+        settings={
+            "comfyui_connection_mode": "diffusers",
+            "comfyui_diffusers_model_repo": "dhead/waiIllustriousSDXL_v150",
+        },
+        extra_deps={
+            "comfyui_client": None,
+            "comfyui_client_factory": lambda url: FakeDiffusersBackendClient(),
+        },
+    ).test_client()
+
+    generated = client.post(
+        "/api/comfyui/generate",
+            json={
+                "generation_mode": "txt2img",
+                "model": "dhead/waiIllustriousSDXL_v150",
+                "prompt": "illustration",
+                "controlnet_enabled": True,
+                "controlnet_type": "canny",
+                "control_strength": 1.0,
+                "control_start": 0.0,
+                "control_end": 1.0,
+                "confirm_billing": True,
+            },
+        )
+
+    assert generated.status_code == 409
+    assert "Diffusers 後端目前不支援本站 ControlNet" in generated.get_json()["msg"]
+
+
 def test_root_can_download_local_comfyui_start_template(tmp_path):
     db_path = tmp_path / "comfyui.db"
     storage_root = tmp_path / "storage"
@@ -2162,6 +2588,9 @@ def test_comfyui_civitai_search_returns_filtered_results_and_audit(tmp_path, mon
         url = request_obj.full_url
         headers = dict(request_obj.header_items())
         parsed = urllib.parse.urlsplit(url)
+        if parsed.netloc == "image.civitai.com":
+            assert parsed.path == "/xG1nkqKTMzGDvpLrqFT7WA/knight.jpeg"
+            return _FakeResponse(url=url, body=b"\xff\xd8\xff\xe0fakejpeg", headers={"Content-Type": "image/jpeg"})
         query = urllib.parse.parse_qs(parsed.query)
         assert parsed.scheme == "https"
         assert parsed.netloc == "civitai.com"
@@ -2186,6 +2615,20 @@ def test_comfyui_civitai_search_returns_filtered_results_and_audit(tmp_path, mon
                             "baseModel": "SDXL",
                             "createdAt": "2026-05-01T12:00:00Z",
                             "trainedWords": ["knight armor"],
+                            "images": [
+                                {
+                                    "url": "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/knight.jpeg",
+                                    "nsfw": "None",
+                                    "width": 768,
+                                    "height": 1024,
+                                    "hash": "thumbhash",
+                                },
+                                {
+                                    "url": "javascript:alert(1)",
+                                    "width": 512,
+                                    "height": 512,
+                                },
+                            ],
                             "files": [
                                 {
                                     "id": 9101,
@@ -2198,9 +2641,34 @@ def test_comfyui_civitai_search_returns_filtered_results_and_audit(tmp_path, mon
                             ],
                         }
                     ],
+                },
+                {
+                    "id": 654322,
+                    "name": "Wrong LoRA",
+                    "type": "LORA",
+                    "creator": {"username": "artist"},
+                    "nsfw": False,
+                    "modelVersions": [
+                        {
+                            "id": 9002,
+                            "name": "v1",
+                            "baseModel": "SDXL",
+                            "createdAt": "2026-05-02T12:00:00Z",
+                            "files": [
+                                {
+                                    "id": 9102,
+                                    "name": "wrong_lora.safetensors",
+                                    "sizeKB": 1024,
+                                    "hashes": {"SHA256": "badcafe"},
+                                    "type": "Model",
+                                    "downloadUrl": "https://civitai.com/api/download/models/9102",
+                                }
+                            ],
+                        }
+                    ],
                 }
             ],
-            "metadata": {"totalItems": 1, "currentPage": 1, "pageSize": 12},
+            "metadata": {"totalItems": 2, "currentPage": 1, "pageSize": 12},
         }
         return _FakeResponse(url=url, body=json.dumps(payload), headers={"Content-Type": "application/json; charset=utf-8"})
 
@@ -2214,13 +2682,35 @@ def test_comfyui_civitai_search_returns_filtered_results_and_audit(tmp_path, mon
     body = searched.get_json()
     assert body["ok"] is True
     assert body["total_items"] == 1
+    assert len(body["results"]) == 1
     assert body["results"][0]["model_id"] == 654321
     assert body["results"][0]["selected_page_url"].endswith("654321?modelVersionId=9001")
     assert body["results"][0]["compatible_models"] == ["SDXL"]
+    assert body["results"][0]["thumbnail_url"] == "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/knight.jpeg"
+    assert body["results"][0]["thumbnail_proxy_url"].startswith("/api/root/comfyui/civitai/media?url=")
+    assert body["results"][0]["latest_version"]["thumbnail_url"] == body["results"][0]["thumbnail_url"]
+    assert body["results"][0]["latest_version"]["thumbnail_proxy_url"] == body["results"][0]["thumbnail_proxy_url"]
+    assert body["results"][0]["latest_version"]["images"] == [
+        {
+            "url": "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/knight.jpeg",
+            "proxy_url": body["results"][0]["thumbnail_proxy_url"],
+            "nsfw": "None",
+            "width": 768,
+            "height": 1024,
+            "hash": "thumbhash",
+        }
+    ]
     assert body["results"][0]["latest_version"]["primary_file"]["hashes"]["sha256"] == "deadbeef"
     assert body["results"][0]["suggested_model_type"] == "checkpoint"
     assert audit_events
     assert audit_events[-1][0][0] == "COMFYUI_CIVITAI_SEARCH"
+
+    proxied = client.get(
+        "/api/root/comfyui/civitai/media",
+        query_string={"url": "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/knight.jpeg"},
+    )
+    assert proxied.status_code == 200
+    assert proxied.headers["Content-Type"].startswith("image/jpeg")
 
 
 def test_comfyui_civitai_red_url_is_accepted(tmp_path, monkeypatch):
@@ -2238,7 +2728,7 @@ def test_comfyui_civitai_red_url_is_accepted(tmp_path, monkeypatch):
 
     def fake_urlopen(request_obj, timeout=0):
         url = request_obj.full_url
-        if url == "https://civitai.com/api/v1/models/376130":
+        if url == "https://civitai.red/api/v1/models/376130":
             payload = {
                 "id": 376130,
                 "name": "novaAnimeIL_V18",
@@ -2273,8 +2763,111 @@ def test_comfyui_civitai_red_url_is_accepted(tmp_path, monkeypatch):
     assert inspected.status_code == 200
     body = inspected.get_json()
     assert body["model"]["model_id"] == 376130
+    assert body["model"]["source_site"] == "civitai.red"
     assert body["model"]["selected_version_id"] == 2837020
     assert body["model"]["versions"][0]["trained_words"] == ["masterpiece", "1girl"]
+
+
+def test_comfyui_civitai_search_queries_com_and_red_sources(tmp_path, monkeypatch):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    root_actor = {"id": 1, "username": "root", "role": "super_admin"}
+    client = _build_app(
+        db_path,
+        storage_root,
+        actor=lambda: root_actor,
+        settings={"comfyui_civitai_api_key": "secret-token"},
+    ).test_client()
+    seen_hosts = []
+
+    def fake_urlopen(request_obj, timeout=0):
+        url = request_obj.full_url
+        headers = dict(request_obj.header_items())
+        parsed = urllib.parse.urlsplit(url)
+        seen_hosts.append(parsed.netloc)
+        assert parsed.scheme == "https"
+        assert parsed.path == "/api/v1/models"
+        assert headers.get("Authorization") == "Bearer secret-token"
+        query = urllib.parse.parse_qs(parsed.query)
+        assert query.get("query") == ["anime"]
+        assert query.get("types") == ["Checkpoint"]
+        if parsed.netloc == "civitai.com":
+            payload = {
+                "items": [
+                    {
+                        "id": 111,
+                        "name": "Com Checkpoint",
+                        "type": "Checkpoint",
+                        "creator": {"username": "com-user"},
+                        "modelVersions": [
+                            {
+                                "id": 1001,
+                                "name": "com-v1",
+                                "baseModel": "SDXL",
+                                "files": [{"id": 2001, "name": "com.safetensors", "downloadUrl": "https://civitai.com/api/download/models/1001"}],
+                            }
+                        ],
+                    }
+                ],
+                "metadata": {"totalItems": 1, "currentPage": 1, "pageSize": 12},
+            }
+            return _FakeResponse(url=url, body=json.dumps(payload), headers={"Content-Type": "application/json; charset=utf-8"})
+        if parsed.netloc == "civitai.red":
+            payload = {
+                "items": [
+                    {
+                        "id": 222,
+                        "name": "Red Checkpoint",
+                        "type": "Checkpoint",
+                        "creator": {"username": "red-user"},
+                        "modelVersions": [
+                            {
+                                "id": 1002,
+                                "name": "red-v1",
+                                "baseModel": "Pony",
+                                "files": [{"id": 2002, "name": "red.safetensors", "downloadUrl": "https://civitai.red/api/download/models/1002"}],
+                            }
+                        ],
+                    },
+                    {
+                        "id": 333,
+                        "name": "Wrong Red LoRA",
+                        "type": "LORA",
+                        "creator": {"username": "red-user"},
+                        "modelVersions": [
+                            {
+                                "id": 1003,
+                                "name": "red-lora",
+                                "baseModel": "SDXL",
+                                "files": [{"id": 2003, "name": "red_lora.safetensors", "downloadUrl": "https://civitai.red/api/download/models/1003"}],
+                            }
+                        ],
+                    },
+                ],
+                "metadata": {"totalItems": 2, "currentPage": 1, "pageSize": 12},
+            }
+            return _FakeResponse(url=url, body=json.dumps(payload), headers={"Content-Type": "application/json; charset=utf-8"})
+        raise AssertionError(f"unexpected urlopen target: {url}")
+
+    monkeypatch.setattr(comfyui_routes.urllib.request, "urlopen", fake_urlopen)
+    searched = client.post(
+        "/api/root/comfyui/civitai/search",
+        json={"query": "anime", "model_type": "checkpoint", "nsfw_mode": "all"},
+    )
+    assert searched.status_code == 200
+    body = searched.get_json()
+    assert body["ok"] is True
+    assert seen_hosts.count("civitai.com") == 1
+    assert seen_hosts.count("civitai.red") == 1
+    assert body["source_errors"] == []
+    assert [item["source_site"] for item in body["search_sources"]] == ["civitai.com", "civitai.red"]
+    assert [item["source_site"] for item in body["results"]] == ["civitai.com", "civitai.red"]
+    assert [item["suggested_model_type"] for item in body["results"]] == ["checkpoint", "checkpoint"]
+    assert body["results"][0]["select_key"] == "civitai.com:111"
+    assert body["results"][1]["select_key"] == "civitai.red:222"
+    assert body["results"][1]["selected_page_url"] == "https://civitai.red/models/222?modelVersionId=1002"
 
 
 def test_comfyui_civitai_inspect_and_download_flow(tmp_path, monkeypatch):
@@ -3267,6 +3860,60 @@ def test_comfyui_interrupt_tolerates_plain_text_response(monkeypatch):
     assert calls == ["http://fake-comfyui/interrupt"]
 
 
+def test_comfyui_health_check_timeout_is_reported_as_comfyui_error(monkeypatch):
+    def fake_urlopen(req, timeout=None):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr("services.comfyui.client.urllib.request.urlopen", fake_urlopen)
+
+    with pytest.raises(ComfyUIError, match="ComfyUI 連線逾時"):
+        ComfyUIClient("http://fake-comfyui").health_check(timeout=1)
+
+
+def test_comfyui_wait_extends_timeout_while_prompt_is_queued(monkeypatch):
+    clock = {"now": 0.0}
+    progress_events = []
+
+    class QueuedThenDoneClient:
+        timeout = 1
+
+        def _json_request(self, path, *, timeout=None):
+            assert path == "/history/queued-prompt"
+            if clock["now"] < 12:
+                return {}
+            return {
+                "queued-prompt": {
+                    "status": {"completed": True, "status_str": "success"},
+                    "outputs": {"9": {"images": [{"filename": "done.png", "subfolder": "", "type": "output"}]}},
+                }
+            }
+
+    def fake_time():
+        return clock["now"]
+
+    def fake_sleep(seconds):
+        clock["now"] += max(float(seconds), 0.15)
+
+    monkeypatch.setattr(comfy_execution.time, "time", fake_time)
+    monkeypatch.setattr(comfy_execution.time, "sleep", fake_sleep)
+    monkeypatch.setattr(comfy_execution, "QUEUE_TIMEOUT_EXTENSION_SECONDS", 5)
+    monkeypatch.setattr(comfy_execution, "QUEUE_MAX_TIMEOUT_SECONDS", 20)
+
+    images = comfy_execution.wait_for_images(
+        QueuedThenDoneClient(),
+        "queued-prompt",
+        timeout_seconds=3,
+        poll_interval=1,
+        expected_count=1,
+        error_cls=ComfyUIError,
+        progress_callback=progress_events.append,
+    )
+
+    assert images == [{"filename": "done.png", "subfolder": "", "type": "output"}]
+    assert any(event.get("timeout_extended") is True for event in progress_events)
+    assert any(int(event.get("timeout_seconds") or 0) > 3 for event in progress_events)
+
+
 def test_comfyui_save_can_add_generated_image_to_album(tmp_path):
     db_path = tmp_path / "comfyui.db"
     storage_root = tmp_path / "storage"
@@ -3463,9 +4110,15 @@ def test_comfyui_frontend_is_wired():
     assert '<option value="controlnet">ControlNet</option>' in index_html
     assert '<option value="hypernetwork">Hypernetwork</option>' not in index_html
     assert 'id="s-comfyui-connection-mode"' in index_html
+    assert '<option value="diffusers">Hugging Face Diffusers' in index_html
     assert 'id="s-comfyui-remote-api-url"' in index_html
-    assert '主 ComfyUI backend 依這裡切換' in index_html
+    assert '主生圖 backend 依這裡切換' in index_html
     assert 'Civitai API Key 只用在 root 的模型下載區' in index_html
+    assert 'id="comfyui-diffusers-settings" style="display:none;"' in index_html
+    assert 'id="s-comfyui-diffusers-model-repo"' in index_html
+    assert 'id="s-comfyui-huggingface-api-token"' in index_html
+    assert 'id="s-comfyui-diffusers-device"' in index_html
+    assert 'id="s-comfyui-diffusers-dtype"' in index_html
     assert 'id="s-comfyui-base-dir"' in index_html
     assert 'id="s-comfyui-local-start-script"' in index_html
     assert 'id="comfyui-local-start-template-link"' in index_html
@@ -3474,8 +4127,8 @@ def test_comfyui_frontend_is_wired():
     assert 'id="s-comfyui-civitai-api-key"' in index_html
     assert 'const show = currentUser === "root";' in comfyui_js
     assert '目前是雲端 / 遠端模式，所以這個區塊只保留說明。若要管理本站的本地 ComfyUI 模型，請先把 backend 切回本地模式。' in comfyui_js
-    assert "/js/36-comfyui.js?v=20260505-workflow-preset" in index_html
-    assert "/styles.css?v=20260505-workflow-preset" in index_html
+    assert "/js/36-comfyui.js?v=20260509-comfyui-template-embeddings" in index_html
+    assert "/styles.css?v=20260514-open-world" in index_html
     assert "width: min(420px, 100%);" in css
     assert "max-height: 320px;" in css
     assert ".comfyui-root-details" in css
@@ -3488,6 +4141,7 @@ def test_comfyui_frontend_is_wired():
     assert 'normTab === "comfyui"' in admin_js
     assert '本地模式會測試本地 API；若產圖時 API 未啟動，後端會嘗試執行啟動腳本。' in admin_js
     assert '遠端模式只負責呼叫指定 API 生圖，無法透過 API 把模型下載回本站的本地 ComfyUI，所以會隱藏本地模型下載與 Civitai API Key。' in admin_js
+    assert 'Diffusers 模式會檢查 Hugging Face repo 與 Python 套件' in admin_js
     assert 'apiFetch(API + "/comfyui/generate"' in comfyui_js
     assert 'apiFetch(API + "/comfyui/billing-quote"' in comfyui_js
     assert 'apiFetch(API + "/root/comfyui/civitai/search"' in comfyui_js
@@ -3519,9 +4173,21 @@ def test_comfyui_frontend_is_wired():
     assert "function loadComfyuiHistory()" in comfyui_js
     assert "function applyComfyuiHistoryToForm(historyId)" in comfyui_js
     assert "function rerunComfyuiHistory(historyId)" in comfyui_js
-    assert "ComfyUI Workflow 工作台" in index_html
+    assert "ComfyUI Workflow Layout Builder" in index_html
     assert 'id="comfyui-workflow-title"' in index_html
+    assert 'id="comfyui-workflow-purpose"' in index_html
+    assert 'id="comfyui-workflow-comfyui-version"' in index_html
+    assert 'id="comfyui-workflow-project-version"' in index_html
+    assert 'id="comfyui-workflow-schema-version"' in index_html
+    assert 'id="comfyui-workflow-is-default"' in index_html
+    assert 'id="comfyui-workflow-new-btn"' in index_html
+    assert 'id="comfyui-workflow-starter-txt2img-btn"' in index_html
+    assert 'id="comfyui-workflow-node-template"' in index_html
+    assert 'id="comfyui-workflow-add-node-btn"' in index_html
+    assert 'id="comfyui-workflow-open-visual-btn"' in index_html
+    assert "開啟節點連線編輯器" in index_html
     assert 'id="comfyui-workflow-json"' in index_html
+    assert 'id="comfyui-workflow-layout-json"' in index_html
     assert 'id="comfyui-workflow-my-list"' in index_html
     assert 'id="comfyui-workflow-official-list"' in index_html
     assert 'id="comfyui-workflow-shared-list"' in index_html
@@ -3530,25 +4196,76 @@ def test_comfyui_frontend_is_wired():
     assert "function importComfyuiWorkflowPreset()" in comfyui_js
     assert "function updateComfyuiWorkflowPreset()" in comfyui_js
     assert "function runComfyuiWorkflowPreset(presetId)" in comfyui_js
+    assert "function duplicateComfyuiWorkflowPreset(presetId)" in comfyui_js
+    assert "function setDefaultComfyuiWorkflowPreset(presetId)" in comfyui_js
     assert "function publishComfyuiWorkflowPresetOfficial(presetId)" in comfyui_js
+    assert "LoadImageMask" in comfyui_js
+    assert "VAEEncodeForInpaint" in comfyui_js
+    assert "ImagePadForOutpaint" in comfyui_js
+    assert "ControlNetApplyAdvanced" in comfyui_js
+    assert "ImageUpscaleWithModel" in comfyui_js
+    assert "function prepareComfyuiVisualWorkflowEditorInput()" in comfyui_js
+    assert "hackme_comfyui_workflow_editor_input" in comfyui_js
+    assert 'apiFetch(API + "/comfyui/workflow-layouts"' in comfyui_js
     assert 'apiFetch(API + "/comfyui/workflows/export-current"' in comfyui_js
     assert 'apiFetch(API + "/comfyui/workflows/import"' in comfyui_js
     assert 'apiFetch(API + `/comfyui/workflows/${encodeURIComponent(presetId)}/run`' in comfyui_js
     assert 'apiFetch(API + `/admin/comfyui/workflows/${encodeURIComponent(presetId)}/publish-official`' in comfyui_js
     assert ".comfyui-workflow-grid" in css
     assert ".comfyui-workflow-item" in css
+    assert ".comfyui-workflow-layout-details" in css
     assert ".comfyui-workflow-chip.warn" in css
     assert ".comfyui-workflow-chip.bad" in css
     assert "@media (max-width: 860px)" in css
+    visual_editor_html = (ROOT / "public" / "comfyui-workflow-editor.html").read_text(encoding="utf-8")
+    visual_editor_js = (ROOT / "public" / "js" / "comfyui-workflow-editor.js").read_text(encoding="utf-8")
+    visual_editor_css = (ROOT / "public" / "comfyui-workflow-editor.css").read_text(encoding="utf-8")
+    assert 'data-add-node="VAEEncodeForInpaint"' in visual_editor_html
+    assert 'data-add-node="ImagePadForOutpaint"' in visual_editor_html
+    assert 'data-add-node="ControlNetApplyAdvanced"' in visual_editor_html
+    assert 'id="importJsonFile"' in visual_editor_html
+    assert 'id="validationPanel"' in visual_editor_html
+    assert 'id="validationBadge"' in visual_editor_html
+    assert 'id="nodeSearchInput"' in visual_editor_html
+    assert 'data-port-node="' in visual_editor_js
+    assert "const INPUT_KEY = \"hackme_comfyui_workflow_editor_input\";" in visual_editor_js
+    assert "function stateFromPackage(payload)" in visual_editor_js
+    assert "function importJsonFile(event)" in visual_editor_js
+    assert "function workflowValidationIssues()" in visual_editor_js
+    assert "function renderValidationPanel()" in visual_editor_js
+    assert "function filterNodePalette()" in visual_editor_js
+    assert "Custom node 需要 ComfyUI object_info 驗證" in visual_editor_js
+    assert "const UNKNOWN_NODE_TYPE = \"__UnknownCustomNode__\";" in visual_editor_js
+    assert "function isUnknownNode(node)" in visual_editor_js
+    assert "function unknownInputSpecs(rawInputs = {})" in visual_editor_js
+    assert "UnknownCustomNode" in visual_editor_js
+    assert "function startConnection(event)" in visual_editor_js
+    assert "function completeConnection(event)" in visual_editor_js
+    assert "function portPoint(nodeId, kind, name)" in visual_editor_js
+    assert "function addEdge({ from, output, to, input })" in visual_editor_js
+    assert "data-delete-edge" in visual_editor_js
+    assert ".edge-path.temp" in visual_editor_css
+    assert ".edge-path.warn" in visual_editor_css
+    assert ".edge-list-row" in visual_editor_css
+    assert ".wf-node.unknown" in visual_editor_css
+    assert ".dependency-list" in visual_editor_css
+    assert ".validation-issue-list" in visual_editor_css
+    assert ".palette-search" in visual_editor_css
+    assert ".tool-grid button.is-hidden" in visual_editor_css
+    assert ".port.output.connecting" in visual_editor_css
+    assert ".port.input.compatible" in visual_editor_css
     assert "function bindComfyuiAdvancedUi()" in comfyui_js
     assert "function updateComfyuiModeNote(modeOverride = null)" in comfyui_js
-    assert 'badge.textContent = normalizedMode === "local" ? "本地模式" : "雲端 / 遠端模式";' in comfyui_js
+    assert 'badge.textContent = normalizedMode === "local" ? "本地模式" : (normalizedMode === "diffusers" ? "Diffusers 模式" : "雲端 / 遠端模式");' in comfyui_js
     assert 'detail.textContent = comfyuiConnectionModeDetail(normalizedMode);' in comfyui_js
     assert '目前是本地模式：可由 root 啟動 / 停止本地 ComfyUI' in comfyui_js
     assert '目前是雲端 / 遠端模式：此頁會直接呼叫遠端 ComfyUI API 生圖' in comfyui_js
+    assert '目前是 Diffusers 模式：後端會直接載入 Hugging Face repo 生圖' in comfyui_js
     assert "function pollComfyuiJobUntilDone(jobId, controller, timeoutSeconds)" in comfyui_js
     assert "function pollComfyuiModelDownloadJob(jobId)" in comfyui_js
     assert "const COMFYUI_GENERATION_TIMEOUT_SECONDS = 1800;" in comfyui_js
+    assert "const COMFYUI_QUEUE_TIMEOUT_EXTENSION_SECONDS = 1800;" in comfyui_js
+    assert "function extendComfyuiDeadlineForQueue(deadline, startedAt)" in comfyui_js
     assert "function setComfyuiModelDownloadProgress" in comfyui_js
     assert "function comfyuiRequestPayloadExtras()" in comfyui_js
     assert '"async_progress": True' not in comfyui_js
@@ -3571,6 +4288,10 @@ def test_comfyui_frontend_is_wired():
     assert "function renderComfyuiCivitaiSearchResults(results)" in comfyui_js
     assert "function searchComfyuiCivitaiModels()" in comfyui_js
     assert "function useComfyuiCivitaiSearchResult(modelId)" in comfyui_js
+    assert "comfyui-civitai-search-thumb" in comfyui_js
+    assert "開啟 Civitai 頁面" in comfyui_js
+    assert ".comfyui-civitai-search-thumb img" in css
+    assert ".comfyui-civitai-search-link a" in css
     assert 'const COMFYUI_VAE_BUILTIN = "__checkpoint_builtin__";' in comfyui_js
     assert 'vae: vae === COMFYUI_VAE_BUILTIN ? "" : vae,' in comfyui_js
     assert 'fillComfyuiVaeSelect(json.vaes || []);' in comfyui_js

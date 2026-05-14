@@ -186,13 +186,15 @@ function switchModuleTab(tab) {
   const canAccessAlbums = canAccessDrive && (!isFeatureEnabledForUi || isFeatureEnabledForUi("feature_storage_albums_enabled", false));
   const canAccessVideos = !!currentUser && canAccessModule("videos");
   const canAccessGames = !!currentUser && canAccessModule("games");
+  const canAccessJobs = !!currentUser && canAccessModule("jobs");
+  const canAccessShares = !!currentUser && canAccessModule("shares");
   const canUseComfyuiTab = typeof isComfyuiAvailableForNavigation !== "function" || isComfyuiAvailableForNavigation();
   const canAccessComfyui = !!currentUser && canAccessModule("comfyui") && canUseComfyuiTab;
   const canAccessEconomy = !!currentUser && canAccessModule("economy");
   const canAccessTrading = canAccessEconomy && canAccessModule("trading");
 
   let normTab = tab;
-  const fallbackModule = () => canAccessChat ? "chat" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : (canAccessVideos ? "videos" : (canAccessGames ? "games" : (canAccessComfyui ? "comfyui" : (canAccessEconomy ? "economy" : (canAccessAppeals ? "appeals" : (canAccessAccounts ? "accounts" : "chat"))))))));
+  const fallbackModule = () => canAccessChat ? "chat" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : (canAccessVideos ? "videos" : (canAccessGames ? "games" : (canAccessJobs ? "jobs" : (canAccessShares ? "shares" : (canAccessComfyui ? "comfyui" : (canAccessEconomy ? "economy" : (canAccessAppeals ? "appeals" : (canAccessAccounts ? "accounts" : "chat"))))))))));
   if (tab === "chat" && !canAccessChat) normTab = fallbackModule();
   if (tab === "dm") normTab = fallbackModule();
   if (tab === "announcements" && !canAccessAnnouncements) normTab = fallbackModule();
@@ -201,6 +203,8 @@ function switchModuleTab(tab) {
   if (tab === "albums" && !canAccessAlbums) normTab = fallbackModule();
   if (tab === "videos" && !canAccessVideos) normTab = fallbackModule();
   if (tab === "games" && !canAccessGames) normTab = fallbackModule();
+  if (tab === "jobs" && !canAccessJobs) normTab = fallbackModule();
+  if (tab === "shares" && !canAccessShares) normTab = fallbackModule();
   if (tab === "comfyui" && !canAccessComfyui) normTab = fallbackModule();
   if (tab === "economy" && !canAccessEconomy) normTab = fallbackModule();
   if (tab === "trading" && !canAccessTrading) normTab = fallbackModule();
@@ -216,6 +220,8 @@ function switchModuleTab(tab) {
   const modAlbums = $("module-albums");
   const modVideos = $("module-videos");
   const modGames = $("module-games");
+  const modJobs = $("module-jobs");
+  const modShares = $("module-shares");
   const modComfyui = $("module-comfyui");
   const modEconomy = $("module-economy");
   const modTrading = $("module-trading");
@@ -229,6 +235,8 @@ function switchModuleTab(tab) {
   const mAlbums = $("tab-module-albums");
   const mVideos = $("tab-module-videos");
   const mGames = $("tab-module-games");
+  const mJobs = $("tab-module-jobs");
+  const mShares = $("tab-module-shares");
   const mComfyui = $("tab-module-comfyui");
   const mEconomy = $("tab-module-economy");
   const mTrading = $("tab-module-trading");
@@ -243,6 +251,8 @@ function switchModuleTab(tab) {
   if (modAlbums) modAlbums.classList.toggle("active", normTab === "albums");
   if (modVideos) modVideos.classList.toggle("active", normTab === "videos");
   if (modGames) modGames.classList.toggle("active", normTab === "games");
+  if (modJobs) modJobs.classList.toggle("active", normTab === "jobs");
+  if (modShares) modShares.classList.toggle("active", normTab === "shares");
   if (modComfyui) modComfyui.classList.toggle("active", normTab === "comfyui");
   if (modEconomy) modEconomy.classList.toggle("active", normTab === "economy");
   if (modTrading) modTrading.classList.toggle("active", normTab === "trading");
@@ -256,12 +266,15 @@ function switchModuleTab(tab) {
   if (mAlbums) mAlbums.classList.toggle("active", normTab === "albums");
   if (mVideos) mVideos.classList.toggle("active", normTab === "videos");
   if (mGames) mGames.classList.toggle("active", normTab === "games");
+  if (mJobs) mJobs.classList.toggle("active", normTab === "jobs");
+  if (mShares) mShares.classList.toggle("active", normTab === "shares");
   if (mComfyui) mComfyui.classList.toggle("active", normTab === "comfyui");
   if (mEconomy) mEconomy.classList.toggle("active", normTab === "economy");
   if (mTrading) mTrading.classList.toggle("active", normTab === "trading");
   if (mAccounts) mAccounts.classList.toggle("active", normTab === "accounts");
   if (mServer) mServer.classList.toggle("active", normTab === "server");
   if (mAppeals) mAppeals.classList.toggle("active", normTab === "appeals");
+  if (typeof animateActiveModule === "function") animateActiveModule(normTab);
 
   if (normTab === "community" && canAccessCommunity) {
     loadCommunityHome();
@@ -284,6 +297,12 @@ function switchModuleTab(tab) {
   }
   if (normTab === "games" && canAccessGames && typeof loadGameZone === "function") {
     loadGameZone();
+  }
+  if (normTab === "jobs" && canAccessJobs && typeof loadJobCenter === "function") {
+    loadJobCenter();
+  }
+  if (normTab === "shares" && canAccessShares && typeof loadShareCenter === "function") {
+    loadShareCenter();
   }
   if (normTab === "comfyui" && canAccessComfyui && typeof loadComfyuiModels === "function") {
     loadComfyuiModels();
@@ -2343,6 +2362,8 @@ function renderRootTradingSettings(payload) {
   if ($("root-trading-price-degrade-pause-market-orders")) $("root-trading-price-degrade-pause-market-orders").checked = !!settings.price_degrade_pause_market_orders;
   if ($("root-trading-price-degrade-pause-bots")) $("root-trading-price-degrade-pause-bots").checked = !!settings.price_degrade_pause_bots;
   if ($("root-trading-price-degrade-pause-borrowing")) $("root-trading-price-degrade-pause-borrowing").checked = !!settings.price_degrade_pause_borrowing;
+  if ($("root-trading-allow-unready-markets")) $("root-trading-allow-unready-markets").checked = settings.allow_unready_markets !== false;
+  if ($("root-trading-disable-price-confidence-gates")) $("root-trading-disable-price-confidence-gates").checked = settings.disable_price_confidence_gates !== false;
   if ($("root-trading-simulated-slippage-enabled")) $("root-trading-simulated-slippage-enabled").checked = !!settings.simulated_slippage_enabled;
   if ($("root-trading-simulated-slippage-base-basis-points")) $("root-trading-simulated-slippage-base-basis-points").value = Number(settings.simulated_slippage_base_basis_points ?? 0);
   if ($("root-trading-simulated-slippage-size-basis-points-per-10k-notional")) $("root-trading-simulated-slippage-size-basis-points-per-10k-notional").value = Number(settings.simulated_slippage_size_basis_points_per_10k_notional ?? 0);
@@ -2527,6 +2548,8 @@ async function saveRootTradingSettings() {
       price_degrade_pause_market_orders: !!$("root-trading-price-degrade-pause-market-orders")?.checked,
       price_degrade_pause_bots: !!$("root-trading-price-degrade-pause-bots")?.checked,
       price_degrade_pause_borrowing: !!$("root-trading-price-degrade-pause-borrowing")?.checked,
+      allow_unready_markets: $("root-trading-allow-unready-markets")?.checked !== false,
+      disable_price_confidence_gates: $("root-trading-disable-price-confidence-gates")?.checked !== false,
       simulated_slippage_enabled: !!$("root-trading-simulated-slippage-enabled")?.checked,
       simulated_slippage_base_basis_points: Number($("root-trading-simulated-slippage-base-basis-points")?.value || 0),
       simulated_slippage_size_basis_points_per_10k_notional: Number($("root-trading-simulated-slippage-size-basis-points-per-10k-notional")?.value || 0),
@@ -2703,9 +2726,11 @@ async function startRootBtcTradePrediction() {
   const status = $("root-trading-btc-trade-status");
   const button = $("root-trading-btc-trade-start-btn");
   const projectDir = ($("root-trading-btc-trade-path")?.value || "").trim();
+  const repoUrl = ($("root-trading-btc-trade-repo")?.value || "").trim();
+  const branch = ($("root-trading-btc-trade-branch")?.value || "").trim();
   if (button) button.disabled = true;
   if (status) {
-    status.textContent = "BTC_trade 一鍵啟動中：檢查資料 / 模型，必要時補更新與重訓，再執行預測腳本...";
+    status.textContent = "BTC_trade 一鍵啟動中：必要時自動下載/更新、安裝依賴，再更新資料、重訓並執行預測腳本...";
     status.style.color = "var(--muted)";
   }
   try {
@@ -2714,7 +2739,7 @@ async function startRootBtcTradePrediction() {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
-      body: JSON.stringify({ project_dir: projectDir, timeframe: "4h" }),
+      body: JSON.stringify({ project_dir: projectDir, repo_url: repoUrl, branch, timeframe: "4h" }),
     });
     const json = await parseRootTradingSettingsResponse(res);
     const job = json.job || {};
@@ -2722,15 +2747,18 @@ async function startRootBtcTradePrediction() {
       $("root-trading-btc-trade-path").value = json.project_dir;
     }
     if (status) {
-      status.textContent = res.ok && json.ok
-        ? `${json.message || "BTC_trade 一鍵啟動已開始"}${job.job_id ? `；工作編號 ${job.job_id}` : ""}`
+      const steps = Array.isArray(job.steps) && job.steps.length
+        ? `；步驟：${job.steps.map(formatBtcTradeStepResult).join(" / ")}`
+        : "";
+      status.textContent = res.ok
+        ? `${json.message || json.msg || "BTC_trade 一鍵啟動已開始"}${job.job_id ? `；工作編號 ${job.job_id}` : ""}${steps}`
         : (json.msg || `HTTP ${res.status}`);
       status.style.color = res.ok && json.ok && json.start_ok ? "#4caf50" : "#ffb74d";
     }
-    if (res.ok && json.ok && job.job_id) {
+    if (res.ok && json.start_ok && job.job_id && job.status !== "completed" && job.status !== "error") {
       await pollRootBtcTradeStartJob(job.job_id);
     }
-    if (res.ok && json.ok && typeof loadTradingDashboard === "function") {
+    if (res.ok && json.ok && json.start_ok && typeof loadTradingDashboard === "function") {
       loadTradingDashboard();
     }
   } catch (err) {
@@ -2762,12 +2790,12 @@ async function pollRootBtcTradeStartJob(jobId) {
       const actionSummary = result.actions
         ? `；資料${result.actions.data_updated ? "已更新" : "沿用"} / 模型${result.actions.model_retrained ? "已重訓" : "沿用"} / 預測${result.actions.prediction_refreshed ? "已刷新" : "沿用有效結果"}`
         : "";
-      status.textContent = json.ok
-        ? `${job.status === "completed" ? "一鍵啟動完成" : (job.status === "error" ? "一鍵啟動失敗" : "一鍵啟動執行中")}：${job.message || "-"}${actionSummary}${steps}`
+      status.textContent = res.ok
+        ? `${job.status === "completed" ? "一鍵啟動完成" : (job.status === "error" ? "一鍵啟動失敗" : "一鍵啟動執行中")}：${job.message || json.msg || "-"}${actionSummary}${steps}`
         : (json.msg || `HTTP ${res.status}`);
       status.style.color = job.status === "completed" ? "#4caf50" : (job.status === "error" ? "#ff4f6d" : "#ffb74d");
     }
-    if (!json.ok || job.status === "completed" || job.status === "error") return;
+    if (!res.ok || job.status === "completed" || job.status === "error") return;
     await new Promise((resolve) => setTimeout(resolve, 1500));
   }
 }
@@ -3267,16 +3295,24 @@ function launchCheckShortcutHandler(shortcut) {
 function launchCheckConditionMarkup(condition, idx) {
   const escape = (text) => String(text == null ? "" : text)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const defaultOpen = condition.color === "#ff4f6d" || condition.color === "#ffb74d";
   const shortcutBtn = condition.shortcut
     ? `<button class="btn btn-sm" type="button" data-launch-shortcut="cond-${idx}" style="margin-top:.35rem;font-size:.7rem;padding:.18rem .5rem;">${escape(condition.shortcut.label || "前往")}</button>`
     : "";
   return `
-    <div class="health-metric-card" style="border-left:4px solid ${condition.color};">
-      <div class="health-metric-label">${escape(condition.label)}</div>
-      <div class="health-metric-value" style="color:${condition.color};">${escape(condition.value)}</div>
-      ${condition.hint ? `<div style="margin-top:.3rem;font-size:.7rem;color:var(--muted);">${escape(condition.hint)}</div>` : ""}
-      ${shortcutBtn}
-    </div>
+    <details class="drive-collapsible-panel settings-collapse" style="border-left:4px solid ${condition.color};"${defaultOpen ? " open" : ""}>
+      <summary>
+        <div>
+          <div class="drive-card-title">${escape(condition.label)}</div>
+          <div class="drive-card-sub">${escape(condition.value)}</div>
+        </div>
+        <span style="margin-left:auto;font-size:.78rem;color:${condition.color};font-weight:600;">${escape(condition.value)}</span>
+      </summary>
+      <div class="drive-collapsible-body">
+        ${condition.hint ? `<div style="font-size:.78rem;color:var(--muted);">${escape(condition.hint)}</div>` : ""}
+        ${shortcutBtn ? `<div style="margin-top:.45rem;">${shortcutBtn}</div>` : ""}
+      </div>
+    </details>
   `;
 }
 
@@ -3288,6 +3324,34 @@ function launchCheckMsg(text, ok = false) {
 }
 
 function launchCheckCardMarkup(reportType, reportRow, missing, failed, idx) {
+  const verificationReasonLabel = (reason) => {
+    switch (String(reason || "").trim()) {
+      case "missing_signature":
+        return "unsigned_report";
+      case "signature_mismatch":
+        return "signature_mismatch";
+      case "report_hash_mismatch":
+        return "report_hash_mismatch";
+      case "invalid_report_json":
+        return "invalid_report_json";
+      case "invalid_raw_report_json":
+        return "invalid_raw_report_json";
+      case "report_type_mismatch":
+        return "report_type_mismatch";
+      case "target_commit_mismatch":
+        return "target_commit_mismatch";
+      case "target_branch_mismatch":
+        return "target_branch_mismatch";
+      case "server_mode_mismatch":
+        return "server_mode_mismatch";
+      case "key_version_mismatch":
+        return "key_version_mismatch";
+      case "missing_raw_report_json":
+        return "missing_raw_report_json";
+      default:
+        return String(reason || "").trim() || "unknown_verification_error";
+    }
+  };
   const meta = LAUNCH_CHECK_REPORT_META[reportType] || {
     label: reportType,
     purpose: "（未登錄的 report 類型）",
@@ -3312,8 +3376,9 @@ function launchCheckCardMarkup(reportType, reportRow, missing, failed, idx) {
     if (reportRow && Number(reportRow.critical_findings_count || 0) > 0) reasons.push(`critical=${reportRow.critical_findings_count}`);
     if (reportRow && Number(reportRow.high_findings_count || 0) > 0) reasons.push(`high=${reportRow.high_findings_count}`);
     if (reportRow && !reportRow.report_hash) reasons.push("缺 report_hash");
-    if (reportRow && reportRow.signature_valid === false) reasons.push(`驗簽失敗${reportRow.verification_reason ? `(${reportRow.verification_reason})` : ""}`);
-    if (reportRow && String(reportRow.trust_level || "").trim() && String(reportRow.trust_level || "").trim() !== "verified") reasons.push(`trust=${reportRow.trust_level}`);
+    if (reportRow && reportRow.signature_valid === false) reasons.push(`驗簽失敗(${verificationReasonLabel(reportRow.verification_reason)})`);
+    if (reportRow && String(reportRow.trust_level || "").trim() && String(reportRow.trust_level || "").trim() !== "verified") reasons.push(`未驗證報告(${String(reportRow.trust_level || "").trim()})`);
+    if (reportRow && reportRow.target_match === false) reasons.push(`目標不符(${verificationReasonLabel(reportRow.target_verification_reason)})`);
     if (reasons.length) stateNote = `失敗原因：${reasons.join("、")}。修完後重跑並上傳新一份。`;
     else stateNote = "請看上傳的 report payload 內容，找出不通過的欄位。";
   } else if (reportRow) {
@@ -3322,27 +3387,32 @@ function launchCheckCardMarkup(reportType, reportRow, missing, failed, idx) {
   const escape = (text) => String(text == null ? "" : text)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const shortcut = meta.shortcut;
+  const defaultOpen = !!missing || !!failed;
   const shortcutBtn = shortcut
     ? `<button class="btn btn-sm" type="button" data-launch-shortcut="report-${idx}" style="margin-top:.5rem;font-size:.72rem;padding:.22rem .55rem;">${escape(shortcut.label || (shortcut.kind === "ui" ? "前往 UI" : "開啟 playbook"))}</button>`
     : "";
   const uploadBtn = `<button class="btn btn-sm" type="button" data-launch-upload="${escape(reportType)}" style="margin-top:.5rem;font-size:.72rem;padding:.22rem .55rem;">上傳報告</button>`;
   return `
-    <div class="security-profile-preview show" style="border-left:4px solid ${statusColor};padding-left:.7rem;">
-      <div style="display:flex;align-items:baseline;gap:.45rem;flex-wrap:wrap;">
-        <strong style="color:${statusColor};font-size:.95rem;">${statusIcon} ${escape(meta.label)}</strong>
-        <span style="font-size:.7rem;color:var(--muted);">${escape(reportType)}</span>
+    <details class="drive-collapsible-panel settings-collapse" style="border-left:4px solid ${statusColor};"${defaultOpen ? " open" : ""}>
+      <summary>
+        <div>
+          <div class="drive-card-title" style="color:${statusColor};">${statusIcon} ${escape(meta.label)}</div>
+          <div class="drive-card-sub">${escape(reportType)}${stateNote ? `｜${escape(stateNote)}` : ""}</div>
+        </div>
         <span style="margin-left:auto;font-size:.78rem;color:${statusColor};font-weight:600;">${escape(statusLabel)}</span>
+      </summary>
+      <div class="drive-collapsible-body">
+        <div style="color:var(--text);"><strong>用途</strong>：${escape(meta.purpose)}</div>
+        <div style="margin-top:.25rem;"><strong>產生方式</strong>：<code style="font-size:.7rem;">${escape(meta.generator)}</code></div>
+        ${meta.defaultOutput ? `<div style="margin-top:.25rem;"><strong>預設放置</strong>：<code style="font-size:.7rem;">${escape(meta.defaultOutput)}</code></div>` : ""}
+        <div style="margin-top:.25rem;"><strong>失敗對策</strong>：${escape(meta.tip)}</div>
+        ${stateNote ? `<div style="margin-top:.4rem;color:${statusColor};">⤷ ${escape(stateNote)}</div>` : ""}
+        <div style="display:flex;gap:.45rem;flex-wrap:wrap;align-items:center;">
+          ${shortcutBtn}
+          ${uploadBtn}
+        </div>
       </div>
-      <div style="margin-top:.35rem;color:var(--text);"><strong>用途</strong>：${escape(meta.purpose)}</div>
-      <div style="margin-top:.25rem;"><strong>產生方式</strong>：<code style="font-size:.7rem;">${escape(meta.generator)}</code></div>
-      ${meta.defaultOutput ? `<div style="margin-top:.25rem;"><strong>預設放置</strong>：<code style="font-size:.7rem;">${escape(meta.defaultOutput)}</code></div>` : ""}
-      <div style="margin-top:.25rem;"><strong>失敗對策</strong>：${escape(meta.tip)}</div>
-      ${stateNote ? `<div style="margin-top:.4rem;color:${statusColor};">⤷ ${escape(stateNote)}</div>` : ""}
-      <div style="display:flex;gap:.45rem;flex-wrap:wrap;align-items:center;">
-        ${shortcutBtn}
-        ${uploadBtn}
-      </div>
-    </div>
+    </details>
   `;
 }
 
@@ -3755,17 +3825,25 @@ function updateComfyuiConnectionModeFields() {
   const mode = $("s-comfyui-connection-mode")?.value || "remote";
   const localBox = $("comfyui-local-settings");
   const remoteBox = $("comfyui-remote-settings");
+  const diffusersBox = $("comfyui-diffusers-settings");
   const civitaiBox = $("comfyui-civitai-settings");
   const civitaiInput = $("s-comfyui-civitai-api-key");
+  const hfTokenInput = $("s-comfyui-huggingface-api-token");
+  const hfTokenClear = $("s-comfyui-huggingface-api-token-clear");
   if (localBox) localBox.style.display = mode === "local" ? "" : "none";
   if (remoteBox) remoteBox.style.display = mode === "remote" ? "" : "none";
+  if (diffusersBox) diffusersBox.style.display = mode === "diffusers" ? "" : "none";
   if (civitaiBox) civitaiBox.style.display = mode === "local" ? "" : "none";
   if (civitaiInput) civitaiInput.disabled = mode !== "local";
+  if (hfTokenInput) hfTokenInput.disabled = mode !== "diffusers";
+  if (hfTokenClear) hfTokenClear.disabled = mode !== "diffusers";
   const status = $("comfyui-test-connection-status");
   if (status && !status.dataset.userTouched) {
     status.textContent = mode === "local"
       ? "本地模式會測試本地 API；若產圖時 API 未啟動，後端會嘗試執行啟動腳本。"
-      : "遠端模式只負責呼叫指定 API 生圖，無法透過 API 把模型下載回本站的本地 ComfyUI，所以會隱藏本地模型下載與 Civitai API Key。";
+      : (mode === "diffusers"
+        ? "Diffusers 模式會檢查 Hugging Face repo 與 Python 套件，產圖時由後端直接用 diffusers 載入模型。"
+        : "遠端模式只負責呼叫指定 API 生圖，無法透過 API 把模型下載回本站的本地 ComfyUI，所以會隱藏本地模型下載與 Civitai API Key。");
     status.style.color = "var(--muted)";
   }
   if (typeof updateComfyuiRootPanelVisibility === "function") updateComfyuiRootPanelVisibility(mode);
@@ -3828,11 +3906,30 @@ async function loadSettings() {
   if ($("s-comfyui-api-host")) $("s-comfyui-api-host").value = s.comfyui_api_host || "localhost";
   if ($("s-comfyui-api-port")) $("s-comfyui-api-port").value = s.comfyui_api_port || 8192;
   if ($("s-comfyui-civitai-api-key")) $("s-comfyui-civitai-api-key").value = s.comfyui_civitai_api_key || "";
+  if ($("s-comfyui-diffusers-model-repo")) $("s-comfyui-diffusers-model-repo").value = s.comfyui_diffusers_model_repo || "";
+  if ($("s-comfyui-huggingface-api-token")) $("s-comfyui-huggingface-api-token").value = "";
+  if ($("s-comfyui-huggingface-api-token-clear")) $("s-comfyui-huggingface-api-token-clear").checked = false;
+  if ($("s-comfyui-diffusers-device")) $("s-comfyui-diffusers-device").value = s.comfyui_diffusers_device || "auto";
+  if ($("s-comfyui-diffusers-dtype")) $("s-comfyui-diffusers-dtype").value = s.comfyui_diffusers_dtype || "auto";
+  if ($("comfyui-huggingface-api-token-state")) {
+    $("comfyui-huggingface-api-token-state").textContent = s.comfyui_huggingface_api_token_configured
+      ? "目前已儲存 Hugging Face API Token；留空儲存不會變更。"
+      : "目前未儲存 Hugging Face API Token；公開模型可不填。";
+  }
+  if ($("s-comfyui-paid-api-nodes-enabled")) $("s-comfyui-paid-api-nodes-enabled").checked = !!s.comfyui_paid_api_nodes_enabled;
+  if ($("s-comfyui-account-api-key")) $("s-comfyui-account-api-key").value = "";
+  if ($("s-comfyui-account-api-key-clear")) $("s-comfyui-account-api-key-clear").checked = false;
+  if ($("comfyui-account-api-key-state")) {
+    $("comfyui-account-api-key-state").textContent = s.comfyui_account_api_key_configured
+      ? "目前已儲存 ComfyUI Account API Key；留空儲存不會變更。"
+      : "目前未儲存 ComfyUI Account API Key。";
+  }
   updateComfyuiConnectionModeFields();
   if ($("s-comfyui-max-batch-size")) $("s-comfyui-max-batch-size").value = s.comfyui_max_batch_size || 1;
   if ($("s-comfyui-default-width")) $("s-comfyui-default-width").value = s.comfyui_default_width || 1024;
   if ($("s-comfyui-default-height")) $("s-comfyui-default-height").value = s.comfyui_default_height || 1024;
   if ($("s-cloud-drive-storage-root")) $("s-cloud-drive-storage-root").value = s.cloud_drive_storage_root || "";
+  if ($("s-cloud-drive-global-capacity-limit-mb")) $("s-cloud-drive-global-capacity-limit-mb").value = s.cloud_drive_global_capacity_limit_mb ?? -1;
   if ($("s-cloud-drive-transfer-limits-enabled")) $("s-cloud-drive-transfer-limits-enabled").checked = !!s.cloud_drive_transfer_limits_enabled;
   renderCloudDriveTransferLimits(s.cloud_drive_transfer_limits_json);
   if ($("s-storage-maintenance-auto-enabled")) $("s-storage-maintenance-auto-enabled").checked = !!s.storage_maintenance_auto_enabled;
@@ -3860,7 +3957,11 @@ async function loadSettings() {
   const driveStorageStatus = $("cloud-drive-storage-status");
   if (driveStorageStatus) {
     const restartText = driveStorage.restart_required ? "需重啟服務器才會切到新儲存根目錄" : "目前執行中的儲存根目錄已一致";
-    driveStorageStatus.textContent = `目前 ${driveStorage.current_root || "-"}，下次啟動 ${driveStorage.effective_next_root || "-"}。${restartText}`;
+    const globalCapacity = driveStorage.global_capacity || {};
+    const capacityText = globalCapacity.configured_limit_mb === -1
+      ? `全用戶容量上限：磁碟總容量 95%（${formatBytes(globalCapacity.limit_bytes)}）`
+      : `全用戶容量上限：${formatBytes(globalCapacity.limit_bytes)}`;
+    driveStorageStatus.textContent = `目前 ${driveStorage.current_root || "-"}，下次啟動 ${driveStorage.effective_next_root || "-"}。${restartText}。${capacityText}`;
     driveStorageStatus.style.color = driveStorage.restart_required ? "#ffb74d" : "var(--muted)";
   }
   if ($("s-module-chat-min-role")) $("s-module-chat-min-role").value = s.module_chat_min_role || "user";
@@ -4035,6 +4136,29 @@ const FEATURE_SERVICE_BUNDLES = [
     label: "最低維運",
     description: "只保留帳號、Audit、健康燈、Server Mode 與 Snapshot 等最小維運骨架。",
     features: FEATURE_MINIMUM_BUNDLE_FEATURES,
+    replace: true,
+  },
+  {
+    key: "raspberry-lite",
+    label: "Raspberry 套餐",
+    description: "輕量主機預設：保留帳號、社群、附件、雲端硬碟與遊戲；關閉 ComfyUI、影音、PointsChain 與交易等較吃 CPU / I/O / 長連線的模組。",
+    features: [
+      ...FEATURE_MINIMUM_BUNDLE_FEATURES,
+      "feature_accounts_enabled",
+      "feature_chat_enabled",
+      "feature_community_enabled",
+      "feature_appeals_enabled",
+      "feature_violation_center_enabled",
+      "feature_reports_enabled",
+      "feature_reports_notifications_enabled",
+      "feature_attachments_enabled",
+      "feature_privacy_uploads_enabled",
+      "feature_storage_albums_enabled",
+      "feature_games_enabled",
+      "feature_social_search_enabled",
+      "feature_account_security_enabled",
+      "feature_advanced_security_enabled",
+    ],
     replace: true,
   },
   {
@@ -5066,6 +5190,59 @@ function renderHealthRows(rows) {
   `).join("");
 }
 
+async function loadPlaywrightCiHealth() {
+  const host = $("server-health-playwright-ci");
+  if (!host || !currentUser || currentRole !== "super_admin") return;
+  host.innerHTML = `<p class="health-empty">讀取 Playwright CI 中...</p>`;
+  try {
+    await fetchCsrfToken({ force: true });
+    const csrf = getCsrfToken();
+    const res = await apiFetch(API + "/admin/health/playwright-ci", {
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" },
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) throw new Error(json.msg || `HTTP ${res.status}`);
+    const ci = json.playwright_ci || {};
+    const latest = ci.latest || {};
+    const color = ci.status === "success" ? "#4caf50" : ci.status === "unreachable" ? "#ffb74d" : "#ff4f6d";
+    const rows = [
+      {
+        label: "Workflow",
+        value: ci.status || "unknown",
+        detail: `${ci.repo || "-"} · ${ci.branch || "-"} · ${ci.workflow_file || "-"}`,
+        color,
+      },
+      {
+        label: "Latest run",
+        value: latest.conclusion || latest.status || "-",
+        detail: `${latest.display_title || latest.name || "-"} · ${latest.event || "-"} · ${latest.updated_at || latest.created_at || "-"}`,
+        color: latest.conclusion === "success" ? "#4caf50" : latest.status && latest.status !== "completed" ? "#ffb74d" : color,
+      },
+      {
+        label: "Auth",
+        value: ci.auth_configured ? "token" : "public API",
+        detail: ci.workflow_present ? "workflow file exists locally" : "workflow file missing locally",
+        color: ci.workflow_present ? "#82b1ff" : "#ff4f6d",
+      },
+    ];
+    host.innerHTML = renderHealthRows(rows);
+    if (latest.html_url) {
+      host.insertAdjacentHTML("beforeend", `<div class="health-row"><div class="health-row-main"><strong>GitHub Actions</strong><small>${sanitize(latest.html_url)}</small></div><a class="btn btn-sm" href="${sanitize(latest.html_url)}" target="_blank" rel="noopener">開啟</a></div>`);
+    }
+    if (ci.msg && ci.status !== "success") {
+      host.insertAdjacentHTML("beforeend", `<div class="drive-card-sub" style="color:${color};margin-top:.35rem;">${sanitize(ci.msg)}</div>`);
+    }
+  } catch (err) {
+    host.innerHTML = renderHealthRows([{
+      label: "Playwright CI",
+      value: "unavailable",
+      detail: err && err.message ? err.message : "CI 狀態讀取失敗",
+      color: "#ffb74d",
+    }]);
+  }
+}
+
 async function loadServerHealth() {
   if (!currentUser || currentRole !== "super_admin") return;
   await fetchCsrfToken({ force: true });
@@ -5142,7 +5319,7 @@ async function loadServerHealth() {
     {
       label: "會員雲端容量審計",
       value: capacity.status === "critical" ? "超額" : capacity.status === "warning" ? "接近上限" : "正常",
-      detail: `會員總配額 ${formatBytes(capacity.committed_total_bytes)} / Host 安全可用 ${formatBytes(capacity.available_cloud_capacity_bytes ?? capacity.disk?.safe_free_bytes)}，剩餘承諾 ${formatBytes(capacity.committed_remaining_bytes)} / 安全剩餘 ${formatBytes(capacity.disk?.safe_free_bytes)}`,
+      detail: `會員總配額 ${formatBytes(capacity.committed_total_bytes)} / 全用戶上限 ${formatBytes(capacity.available_cloud_capacity_bytes ?? capacity.disk?.safe_free_bytes)}，剩餘承諾 ${formatBytes(capacity.committed_remaining_bytes)} / 實際安全剩餘 ${formatBytes(capacity.disk?.safe_free_bytes)}`,
       color: capacity.status === "critical" ? "#ff4f6d" : capacity.status === "warning" ? "#ffb74d" : "#4caf50",
     },
     {
@@ -5183,6 +5360,7 @@ async function loadServerHealth() {
   if (repairBtn) {
     repairBtn.disabled = currentUser !== "root" || !auditEnabled || auditOk !== false;
   }
+  loadPlaywrightCiHealth().catch(() => {});
 }
 
 async function repairIntegrityChains() {
@@ -5458,10 +5636,19 @@ async function saveSettings() {
     comfyui_api_host: ($("s-comfyui-api-host")?.value || "localhost").trim(),
     comfyui_api_port: parseInt($("s-comfyui-api-port")?.value || "8192"),
     comfyui_civitai_api_key: ($("s-comfyui-civitai-api-key")?.value || "").trim(),
+    comfyui_diffusers_model_repo: ($("s-comfyui-diffusers-model-repo")?.value || "").trim(),
+    comfyui_huggingface_api_token: ($("s-comfyui-huggingface-api-token")?.value || "").trim(),
+    comfyui_huggingface_api_token_clear: !!$("s-comfyui-huggingface-api-token-clear")?.checked,
+    comfyui_diffusers_device: $("s-comfyui-diffusers-device")?.value || "auto",
+    comfyui_diffusers_dtype: $("s-comfyui-diffusers-dtype")?.value || "auto",
+    comfyui_paid_api_nodes_enabled: !!$("s-comfyui-paid-api-nodes-enabled")?.checked,
+    comfyui_account_api_key: ($("s-comfyui-account-api-key")?.value || "").trim(),
+    comfyui_account_api_key_clear: !!$("s-comfyui-account-api-key-clear")?.checked,
     comfyui_max_batch_size: parseInt($("s-comfyui-max-batch-size")?.value || "1"),
     comfyui_default_width: parseInt($("s-comfyui-default-width")?.value || "1024"),
     comfyui_default_height: parseInt($("s-comfyui-default-height")?.value || "1024"),
     cloud_drive_storage_root: ($("s-cloud-drive-storage-root")?.value || "").trim(),
+    cloud_drive_global_capacity_limit_mb: parseInt($("s-cloud-drive-global-capacity-limit-mb")?.value || "-1"),
     cloud_drive_transfer_limits_enabled: !!$("s-cloud-drive-transfer-limits-enabled")?.checked,
     cloud_drive_transfer_limits_json: JSON.stringify(collectCloudDriveTransferLimits()),
     storage_maintenance_auto_enabled: !!$("s-storage-maintenance-auto-enabled")?.checked,
@@ -5551,9 +5738,10 @@ async function testComfyuiConnection() {
   const apiUrl = ($("s-comfyui-remote-api-url")?.value || "").trim();
   const baseDir = ($("s-comfyui-base-dir")?.value || "").trim();
   const startScript = ($("s-comfyui-local-start-script")?.value || "").trim();
+  const diffusersRepo = ($("s-comfyui-diffusers-model-repo")?.value || "").trim();
   const targetLabel = mode === "local"
     ? `本地 http://${host || "localhost"}:${Number.isFinite(port) ? port : "-"}`
-    : (apiUrl || "遠端 API");
+    : (mode === "diffusers" ? (diffusersRepo || "Hugging Face Diffusers") : (apiUrl || "遠端 API"));
   if (status) {
     status.dataset.userTouched = "1";
     status.textContent = `正在測試 ${targetLabel} ...`;
@@ -5575,7 +5763,10 @@ async function testComfyuiConnection() {
         host,
         port,
         base_dir: baseDir,
-        local_start_script: startScript
+        local_start_script: startScript,
+        diffusers_model_repo: diffusersRepo,
+        comfyui_diffusers_device: $("s-comfyui-diffusers-device")?.value || "auto",
+        comfyui_diffusers_dtype: $("s-comfyui-diffusers-dtype")?.value || "auto"
       })
     });
     const json = await res.json().catch(() => ({}));
@@ -5594,7 +5785,8 @@ async function testComfyuiConnection() {
         ? `；${autostart.available ? "已成功自動啟動 ComfyUI" : (autostart.message || "已嘗試自動啟動 ComfyUI，仍未就緒")}${startupLogText}`
         : "";
       if (json.available) {
-        status.textContent = `連線成功：${json.comfyui_url || targetLabel}${scriptText}${autostartText}`;
+        const backendText = mode === "diffusers" ? `Diffusers 可用：${json.endpoint?.model_repo || targetLabel}` : `連線成功：${json.comfyui_url || targetLabel}`;
+        status.textContent = `${backendText}${scriptText}${autostartText}`;
         status.style.color = "#4caf50";
       } else if (json.starting) {
         status.textContent = `啟動中：${json.msg || "ComfyUI 正在初始化"}（${json.comfyui_url || targetLabel}）${scriptText}${autostartText}`;

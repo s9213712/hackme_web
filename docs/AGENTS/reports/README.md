@@ -1,8 +1,7 @@
-# Agent Reports
+# AGENTS Reports
 
-這裡收納各 agent 的 QA、重構、驗收與 cross-agent 協作報告。
+新的 QA / re-QA 報告仍可依 agent skill 規則寫在這個目錄。
 
-## 子目錄
+舊報告已歸檔到：
 
-- [claude/README.md](claude/README.md)
-- [codex/README.md](codex/README.md)
+- [../../archive/agent_qa_reports/](../../archive/agent_qa_reports/)

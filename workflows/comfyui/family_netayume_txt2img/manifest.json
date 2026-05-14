@@ -1,0 +1,290 @@
+{
+  "default_params": {
+    "cfg": 4,
+    "generation_mode": "txt2img",
+    "height": 1024,
+    "model": "NetaYumev35_pretrained_all_in_one.safetensors",
+    "negative_prompt": "You are an assistant designed to generate high quality anime images based on textual prompts. <Prompt Start> ",
+    "prompt": "@comfyanonymous, \"Warm and cheerful digital illustration of a girl standing in the middle of an orange grove, surrounded by lush green leaves and ripe, vibrant oranges hanging from the trees. She has chestnut-brown hair tied in a single loose braid draped over her shoulder, with soft bangs framing her bright, smiling face.\n Her expression is full of joy and sunshine—eyes squinting slightly, mouth open in a wide, carefree smile, radiating pure happiness. She wears a crisp white blouse underneath a black jacket, slightly unbuttoned for a relaxed look. The sunlight filters through the leaves above, casting dappled golden light on her hair and shoulders, creating a warm, inviting atmosphere.\n  A few oranges hang close to her head, and one or two lie on the ground around her feet. The background features soft-focus trees stretching into the distance, with sunlight breaking through the foliage. The art style is painterly and soft, emphasizing the natural setting and the girl's radiant, wholesome charm.\"",
+    "seed": 42,
+    "steps": 30,
+    "width": 1024
+  },
+  "description": "目前保留的 NetaYume Lumina 官方系統模組；workflow.json 是平台可執行格式。",
+  "id": "family_netayume_txt2img",
+  "name": "NetaYume Lumina（官方 T2I）",
+  "output_kinds": [
+    "image"
+  ],
+  "schema_version": 1,
+  "source": "official",
+  "ui": {
+    "initial_collapsed": true,
+    "panels": [
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "TEXT",
+            "class_type": "StringConcatenate",
+            "constraints": {
+              "max_length": 3000,
+              "rows": 3
+            },
+            "current_value": "You are an assistant designed to generate high quality anime images based on textual prompts. <Prompt Start> ",
+            "id": "node:56:string_a",
+            "input_name": "string_a",
+            "input_type": "textarea",
+            "label": "固定提示前綴",
+            "node_id": "56",
+            "required": true
+          },
+          {
+            "category": "TEXT",
+            "class_type": "StringConcatenate",
+            "constraints": {
+              "max_length": 3000,
+              "rows": 5
+            },
+            "current_value": "@comfyanonymous, \"Warm and cheerful digital illustration of a girl standing in the middle of an orange grove, surrounded by lush green leaves and ripe, vibrant oranges hanging from the trees. She has chestnut-brown hair tied in a single loose braid draped over her shoulder, with soft bangs framing her bright, smiling face.\n Her expression is full of joy and sunshine—eyes squinting slightly, mouth open in a wide, carefree smile, radiating pure happiness. She wears a crisp white blouse underneath a black jacket, slightly unbuttoned for a relaxed look. The sunlight filters through the leaves above, casting dappled golden light on her hair and shoulders, creating a warm, inviting atmosphere.\n  A few oranges hang close to her head, and one or two lie on the ground around her feet. The background features soft-focus trees stretching into the distance, with sunlight breaking through the foliage. The art style is painterly and soft, emphasizing the natural setting and the girl's radiant, wholesome charm.\"",
+            "id": "node:56:string_b",
+            "input_name": "string_b",
+            "input_type": "textarea",
+            "label": "提示詞",
+            "node_id": "56",
+            "required": true
+          },
+          {
+            "category": "TEXT",
+            "class_type": "StringConcatenate",
+            "constraints": {
+              "max_length": 3000,
+              "rows": 3
+            },
+            "current_value": "You are an assistant designed to generate low-quality images based on textual prompts <Prompt Start> ",
+            "id": "node:60:string_a",
+            "input_name": "string_a",
+            "input_type": "textarea",
+            "label": "固定提示前綴",
+            "node_id": "60",
+            "required": true
+          },
+          {
+            "category": "TEXT",
+            "class_type": "StringConcatenate",
+            "constraints": {
+              "max_length": 3000,
+              "rows": 5
+            },
+            "current_value": "blurry, worst quality, low quality, jpeg artifacts, signature, watermark, username, error, deformed hands, bad anatomy, extra limbs, poorly drawn hands, poorly drawn face, mutation, deformed, extra eyes, extra arms, extra legs, malformed limbs, fused fingers, too many fingers, long neck, cross-eyed, bad proportions, missing arms, missing legs, extra digit, fewer digits, cropped",
+            "id": "node:60:string_b",
+            "input_name": "string_b",
+            "input_type": "textarea",
+            "label": "提示詞",
+            "node_id": "60",
+            "required": true
+          }
+        ],
+        "id": "text",
+        "label": "文字輸入"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "MODEL",
+            "class_type": "CheckpointLoaderSimple",
+            "current_value": "NetaYumev35_pretrained_all_in_one.safetensors",
+            "id": "node:52:ckpt_name",
+            "input_name": "ckpt_name",
+            "input_type": "select",
+            "label": "Checkpoint 模型",
+            "node_id": "52",
+            "required": true
+          }
+        ],
+        "id": "model",
+        "label": "模型需求"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 30.0,
+              "min": 0.5,
+              "step": 0.1
+            },
+            "current_value": 4,
+            "id": "node:51:cfg",
+            "input_name": "cfg",
+            "input_type": "number",
+            "label": "CFG",
+            "node_id": "51",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 1.0,
+              "min": 0.0,
+              "step": 0.05
+            },
+            "current_value": 1,
+            "id": "node:51:denoise",
+            "input_name": "denoise",
+            "input_type": "number",
+            "label": "Denoise",
+            "node_id": "51",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "KSampler",
+            "current_value": "res_multistep",
+            "id": "node:51:sampler_name",
+            "input_name": "sampler_name",
+            "input_type": "select",
+            "label": "取樣器",
+            "node_id": "51",
+            "required": true
+          },
+          {
+            "category": "SAMPLER",
+            "class_type": "KSampler",
+            "current_value": "simple",
+            "id": "node:51:scheduler",
+            "input_name": "scheduler",
+            "input_type": "select",
+            "label": "排程器",
+            "node_id": "51",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 9007199254740992,
+              "min": 0,
+              "step": 1
+            },
+            "current_value": 0,
+            "id": "node:51:seed",
+            "input_name": "seed",
+            "input_type": "number",
+            "label": "種子",
+            "node_id": "51",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "KSampler",
+            "constraints": {
+              "max": 150,
+              "min": 1,
+              "step": 1
+            },
+            "current_value": 30,
+            "id": "node:51:steps",
+            "input_name": "steps",
+            "input_type": "number",
+            "label": "步數",
+            "node_id": "51",
+            "required": true
+          }
+        ],
+        "id": "sampler",
+        "label": "採樣設定"
+      },
+      {
+        "collapsed_default": true,
+        "fields": [
+          {
+            "category": "NUMERIC",
+            "class_type": "EmptySD3LatentImage",
+            "constraints": {
+              "max": 16,
+              "min": 1,
+              "step": 1
+            },
+            "current_value": 1,
+            "id": "node:49:batch_size",
+            "input_name": "batch_size",
+            "input_type": "number",
+            "label": "批次大小",
+            "node_id": "49",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "EmptySD3LatentImage",
+            "constraints": {
+              "max": 4096,
+              "min": 64,
+              "step": 8
+            },
+            "current_value": 1024,
+            "id": "node:49:height",
+            "input_name": "height",
+            "input_type": "number",
+            "label": "高度",
+            "node_id": "49",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "EmptySD3LatentImage",
+            "constraints": {
+              "max": 4096,
+              "min": 64,
+              "step": 8
+            },
+            "current_value": 1024,
+            "id": "node:49:width",
+            "input_name": "width",
+            "input_type": "number",
+            "label": "寬度",
+            "node_id": "49",
+            "required": true
+          },
+          {
+            "category": "NUMERIC",
+            "class_type": "ModelSamplingAuraFlow",
+            "constraints": {
+              "max": 20.0,
+              "min": 0.0,
+              "step": 0.1
+            },
+            "current_value": 4,
+            "id": "node:50:shift",
+            "input_name": "shift",
+            "input_type": "number",
+            "label": "Model Shift",
+            "node_id": "50",
+            "required": true
+          }
+        ],
+        "id": "numeric",
+        "label": "進階數值參數"
+      },
+      {
+        "collapsed_default": false,
+        "fields": [],
+        "id": "compatibility",
+        "label": "相容性報告",
+        "read_only": true
+      },
+      {
+        "collapsed_default": true,
+        "fields": [],
+        "id": "raw",
+        "label": "原始 workflow",
+        "read_only": true
+      }
+    ]
+  },
+  "workflow_file": "workflow.json"
+}

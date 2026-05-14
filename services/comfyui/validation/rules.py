@@ -13,7 +13,10 @@ WORKFLOW_BLOCKED_COMMAND_RE = re.compile(
 )
 WORKFLOW_ABSOLUTE_PATH_RE = re.compile(r"^(?:[A-Za-z]:[\\/]|/|~(?:/|\\\\))")
 WORKFLOW_URL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
-WORKFLOW_SENSITIVE_KEY_RE = re.compile(r"(path|directory|folder|cwd|script|command|shell|exec|url|uri)", re.IGNORECASE)
+WORKFLOW_SENSITIVE_KEY_RE = re.compile(
+    r"(path|directory|folder|cwd|script|command|shell|exec|url|uri|api[_-]?key|token|secret|password|authorization|cookie)",
+    re.IGNORECASE,
+)
 WORKFLOW_SAFE_SENSITIVE_KEYS = {
     "ckpt_name",
     "vae_name",

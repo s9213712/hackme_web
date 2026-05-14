@@ -16,8 +16,7 @@
 
 不在這份文件內的內容：
 
-- `docs/research/*` 的設計稿 API
-- `docs/BLOCKCHAIN/POINTS_TRANSFER_API.md` 這種「已拍板但尚未實作」規格
+- `docs/AGENTS/research/BLOCKCHAIN/POINTS_TRANSFER_API.md` 這種「已拍板但尚未實作」規格
 - 細到每個 JSON 欄位的完整 schema
 
 如果某支 API 已有專屬深層文件，這份文件會優先連過去，而不是重複抄第二份規格。
@@ -168,6 +167,7 @@ curl -k -sS https://127.0.0.1:5000/api/version
 |---|---|---|---|
 | GET | `/api/notifications` | logged-in | 通知列表 |
 | POST | `/api/notifications/<notification_id>/read` | logged-in | 單筆已讀 |
+| POST | `/api/notifications/<notification_id>/dismiss` | logged-in | 隱藏通知並寫入 `dismissed_at` |
 | POST | `/api/notifications/read-all` | logged-in | 全部已讀 |
 | POST | `/api/admin/notifications/send` | manager | 發送通知 |
 | POST | `/api/reports` | logged-in | 一般檢舉 |
@@ -177,6 +177,24 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | GET/POST | `/api/appeals` | logged-in | 申覆列表 / 建立申覆 |
 | GET | `/api/admin/appeals` | manager | 申覆列表 |
 | POST | `/api/admin/appeals/<appeal_id>/review` | manager | 審核申覆 |
+
+### Platform Centers
+
+來源：`routes/jobs.py`, `routes/share_management.py`, `routes/trading.py`
+
+| Method | Path | 角色 | 用途 |
+|---|---|---|---|
+| GET | `/api/jobs` | logged-in | 目前使用者任務列表，支援 `status` / `limit` |
+| GET | `/api/admin/jobs` | manager | 全站任務列表 |
+| GET | `/api/jobs/<job_uuid>` | owner / manager | 單一任務 |
+| GET | `/api/jobs/<job_uuid>/events` | owner / manager | 任務事件 |
+| POST | `/api/jobs/<job_uuid>/cancel` | owner / manager | 要求取消任務 |
+| POST | `/api/jobs/<job_uuid>/retry` | owner / manager | 重試 failed / cancelled / retry_wait 任務 |
+| GET | `/api/shares` | logged-in | 分享連結列表，manager 可用 `all=1` |
+| POST | `/api/shares/<type>/<id>/revoke` | owner / manager | 撤銷 file / album / video 分享 |
+| GET | `/api/shares/<type>/<id>/access-events` | owner / manager | 分享建立、存取、到期、撤銷事件 |
+| GET | `/api/trading/asset-overview` | logged-in | 交易資產總覽 |
+| GET | `/api/admin/trading/asset-overview` | manager | 全站交易資產 / 低信心價格摘要 |
 
 ### Cloud Drive / Files / Remote Download
 
@@ -321,9 +339,14 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | POST | `/api/games/chess/matches/<match_id>/move` | logged-in | 落子 |
 | POST | `/api/games/chess/matches/<match_id>/resign` | logged-in | 認輸 |
 | GET | `/api/games/chess/leaderboard` | logged-in | 排行榜 |
+| POST | `/api/games/<game_key>/ai-move` | logged-in | 黑白棋 / 圍棋 / 五子棋 AI 著手；圍棋可選 `katago` 難度 |
 | GET | `/api/games/<game_key>/solo-leaderboard` | logged-in | 單機排行榜 |
 | POST | `/api/games/<game_key>/solo-scores` | logged-in | 單機分數 |
 | POST | `/api/root/games/chess/weekly-rewards/award` | root | 發周獎勵 |
+
+`/api/games/<game_key>/ai-move` 目前只接受 `reversi`、`go`、`gomoku`。圍棋 `katago` 難度會使用本機 KataGo analysis engine；可先執行 `python3 scripts/games/setup_katago.py` 自動下載 binary、模型並產生 `runtime/katago/analysis.cfg`。
+完整 payload、response、前端調用地圖與 benchmark 教學見
+[games/references/BOARD_AI_BENCHMARK.md](games/references/BOARD_AI_BENCHMARK.md)。
 
 ### Economy / PointsChain
 
@@ -356,7 +379,7 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | POST | `/api/root/points/ledger/<ledger_uuid>/rollback` | root | rollback |
 | GET | `/api/admin/points/economy/stats` | manager | economy stats |
 
-> 注意：`docs/BLOCKCHAIN/POINTS_TRANSFER_API.md` 是 Phase 3 規格，不代表現在已可呼叫。
+> 注意：`docs/AGENTS/research/BLOCKCHAIN/POINTS_TRANSFER_API.md` 是 Phase 3 規格，不代表現在已可呼叫。
 
 ### Trading / Bots / Margin
 
@@ -507,13 +530,13 @@ Workflow preset 補充：
 | GET/PUT | `/api/admin/access-controls` | manager | ACL / whitelist / lockdown |
 | POST | `/api/admin/access-controls/maintenance-bypass-token` | manager | 維護繞過 token |
 | POST | `/api/admin/access-controls/internal-test-token` | manager | 產生綁定單一帳號的 internal-test login token |
-| GET/POST | `/api/admin/snapshots` | manager | 列快照 / 建快照 |
-| GET/POST | `/api/admin/snapshots/daily` | manager | 日常快照設定 |
+| GET/POST | `/api/admin/snapshots` | root | 列快照 / 建快照 |
+| GET/POST | `/api/admin/snapshots/daily` | root | 日常快照設定 |
 | POST | `/api/admin/system-reset` | manager | 系統重置 |
-| GET/DELETE | `/api/admin/snapshots/<snapshot_id>` | manager | 單一快照 |
-| GET | `/api/admin/snapshots/<snapshot_id>/download` | manager | 下載快照 |
-| POST | `/api/admin/snapshots/upload-restore` | manager | 上傳快照恢復 |
-| POST | `/api/admin/snapshots/<snapshot_id>/restore` | manager | 恢復快照 |
+| GET/DELETE | `/api/admin/snapshots/<snapshot_id>` | root | 單一快照 |
+| GET | `/api/admin/snapshots/<snapshot_id>/download` | root | 下載快照 |
+| POST | `/api/admin/snapshots/upload-restore` | root | 上傳快照恢復 |
+| POST | `/api/admin/snapshots/<snapshot_id>/restore` | root | 恢復快照 |
 | GET/POST | `/api/admin/server-mode` | manager/root | 讀 mode / 切相容入口 |
 | POST | `/api/admin/server-mode/exit-superweak` | manager | 離開 superweak |
 | GET | `/api/root/server-mode` | root | root mode 狀態 |
@@ -584,7 +607,7 @@ Workflow preset 補充：
 ## 失敗情境與提示
 
 - `200 OK` 不代表輸入一定原樣存入。若你在驗證設定、ACL、交易或風控，請同步查回讀 API 或 DB evidence。
-- `docs/BLOCKCHAIN/*` 有些是已拍板但未實作規格，不可直接當成現行 API。
+- `docs/AGENTS/research/BLOCKCHAIN/*` 有些是已拍板但未實作規格，不可直接當成現行 API。
 - `live-price` 不是純 read-only，它會同步刷新後端快取價格狀態，請不要把它當成完全無副作用的 health probe。
 - `live-price` 目前回傳 canonical `price_type`、`source`、`confidence`、`stale`、`degraded`、`provider_count`，並附 `reference_price_context` / `risk_grade_price_context`；UI 展示價與風控價不可再混用。
 - `live-price` 與 root `price-fusion-status` 現在也回傳 canonical `connected`、`fallback`、`last_update_at`、`exclusion_reason` 與完整 `transport_state`。Binance / OKX / Coinbase / Kraken 的 websocket 只是 provider input，不可直接把單一 WS provider 當成風控價格。

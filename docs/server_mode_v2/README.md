@@ -2,7 +2,7 @@
 
 This folder contains runnable **教學範例** for the two distinct token classes used by Server Mode v2.
 
-> **The two tokens are not interchangeable.** Read [`docs/server_mode_v2/SERVER_MODE_V2_PROFILE_MATRIX.md` §Token Types](../../server_mode_v2/SERVER_MODE_V2_PROFILE_MATRIX.md#token-types) once before running anything.
+> **The two tokens are not interchangeable.** Read [`SERVER_MODE_V2_PROFILE_MATRIX.md` §Token Types](SERVER_MODE_V2_PROFILE_MATRIX.md#token-types) once before running anything.
 
 ## Quick mental model
 
@@ -42,12 +42,28 @@ A user might need either or both:
 | [`01_internal_test_login_token.sh`](01_internal_test_login_token.sh) | How to rotate, distribute, and consume the **internal_test login token**. |
 | [`02_tester_token_shadow_api.sh`](02_tester_token_shadow_api.sh) | How root creates a **tester token**, scopes it, and how a tester consumes it against `/api/tester/*`. |
 | [`03_production_gate_playbook.md`](03_production_gate_playbook.md) | Pre-production gate report walkthrough (root-side; testers should read but not run in prod). |
+| [`04_production_gate_validation_report.md`](04_production_gate_validation_report.md) | 2026-05-09 的實際 production gate 驗收紀錄，包含 warning / unverified / old-commit / all-green 四個情境與踩坑說明，並記錄 live `50909` target-commit mismatch 收斂結果。 |
 | [`04_pentest_smv2.sh`](04_pentest_smv2.sh) | Focused SMv2 pentest probes: tester-token boundary checks, confirm-phrase negatives, revoke/replay denial, and root/admin path blocking. |
 | [`05_stress_smv2.sh`](05_stress_smv2.sh) | SMv2-specific burst/rate-limit checks for shadow APIs, chain-side credit flow, and mode-log reads. |
 | [`06_full_feature_smv2.sh`](06_full_feature_smv2.sh) | End-to-end walkthrough of the main Server Mode v2 admin surfaces, including mode switch, checkpoint, tester-token issue/use/revoke, and isolation checks. |
 | [`07_privilege_escalation_smv2.sh`](07_privilege_escalation_smv2.sh) | Negative privilege-escalation probes to prove tester tokens and shadow-role writes cannot become root/admin back doors. |
 
 Each script is self-contained bash + curl + `jq`. Read the `# usage` block at the top.
+
+另外，production gate 的 filesystem auto-detect 規則已收斂：`runtime/reports/security/production_gate/*.json`
+只負責輔助顯示最新候選報告。未驗簽、JSON 損壞、`report_type` 不符或 target 不一致的檔案都只會顯示 warning，
+不能單獨讓 production gate 轉綠；真正規則以
+[`03_production_gate_playbook.md`](03_production_gate_playbook.md) 為準。
+
+針對 live `target_commit` 規則，現在有一條明確驗收要求：
+
+- **verified old-commit reports 不能解鎖 production**
+- **verified current-commit reports 才能解鎖 production**
+
+這條規則不可以只靠 unit test 驗證；至少要在隔離 `/tmp` runtime 對
+`/api/root/server-mode/requirements` 與 `/api/root/production/enter` 做一次 live
+驗收，證據與流程請見
+[`04_production_gate_validation_report.md`](04_production_gate_validation_report.md)。
 
 > **First time receiving a token?** Read [`TESTER_HANDBOOK.md`](TESTER_HANDBOOK.md) §0–§2 before
 > running any script. It tells you which token you got, what you can and cannot do with it, and
@@ -86,7 +102,7 @@ or the production ledger namespace.
 
 ## Verified end-to-end (2026-05-05)
 
-Pre-Phase 0 of [`SERVER_MODE_V2_IMPLEMENTATION_PLAN.md`](../../server_mode/SERVER_MODE_V2_IMPLEMENTATION_PLAN.md) ran both scripts on an isolated runtime via `scripts/security/server_mode/server_mode_v2_token_smoke.py`. Result:
+Pre-Phase 0 of [`SERVER_MODE_V2_IMPLEMENTATION_PLAN.md`](SERVER_MODE_V2_IMPLEMENTATION_PLAN.md) ran both scripts on an isolated runtime via `scripts/security/server_mode/server_mode_v2_token_smoke.py`. Result:
 
 - `01_internal_test_login_token.sh` → **PASS** (rc=0). Demo flow: root login → forced password change → switch to `internal_test` → rotate login token → tester rejected without token → tester accepted with token → logout.
 - `02_tester_token_shadow_api.sh` → **PASS** (rc=0). Demo flow: scoped tester-token created → GET shadow-state → POST shadow-role (manager) → POST shadow-wallet (+100) → re-read state → negative tests on admin/root endpoints (all 401/403) → revoke → revoked-token denial.

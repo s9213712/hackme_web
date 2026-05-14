@@ -46,11 +46,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", default="")
     parser.add_argument("--train-path", default="")
     parser.add_argument("--eval-path", default="")
+    parser.add_argument("--source-stage-label", default="final")
     parser.add_argument("--min-move-count", type=int, default=8)
     parser.add_argument("--eval-mod", type=int, default=5, help="Deterministic split: replay hash %% eval_mod == 0 goes to eval.")
     parser.add_argument("--include-losing-moves", action="store_true")
     parser.add_argument("--replace-output", action="store_true")
     return parser.parse_args()
+
+
+def _progress(message: str) -> None:
+    print(f"[chess-replay-prepare] {message}", file=sys.stderr, flush=True)
 
 
 def _default_dataset_dir() -> Path:
@@ -105,6 +110,7 @@ def _prepared_samples_from_record(
     include_losing_moves: bool,
     from_quarantine: bool,
     eval_mod: int,
+    source_stage_label: str,
 ) -> list[PreparedSample]:
     if int(record.get("move_count") or 0) <= 0:
         return []
@@ -116,7 +122,7 @@ def _prepared_samples_from_record(
     bucket = _split_bucket(str(record.get("replay_id") or ""), int(eval_mod or 1))
     source_label = "user_games_quarantine" if from_quarantine else "user_games_trusted"
     samples: list[PreparedSample] = []
-    for entry in history:
+    for move_index, entry in enumerate(history, start=1):
         if not isinstance(entry, dict):
             continue
         move_side = str(entry.get("by") or "").strip().lower()
@@ -136,8 +142,13 @@ def _prepared_samples_from_record(
                 "side": move_side,
                 "target": target,
                 "weight": _source_weight(record, from_quarantine=from_quarantine),
+                "quality_weight": _source_weight(record, from_quarantine=from_quarantine),
                 "source": source_label,
                 "replay_id": str(record.get("replay_id") or ""),
+                "source_game_id": int(record.get("match_id") or 0),
+                "source_move_index": int(move_index),
+                "source_stage": str(source_stage_label or "final"),
+                "accepted_reason": "trusted_replay" if not from_quarantine else "quarantine_override",
             }
             samples.append(PreparedSample(sample=sample, bucket=bucket))
         board = validated["board"]
@@ -178,16 +189,19 @@ def _write_report(summary: dict, report_dir: Path) -> dict:
     md_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
     return {"json_report": str(json_path), "md_report": str(md_path)}
 
-
-args = parse_args()
-
-
 def main() -> int:
+    args = parse_args()
     trusted_path = Path(args.trusted_replay_path).expanduser().resolve() if args.trusted_replay_path else default_chess_replay_buffer_path()
     quarantine_path = Path(args.quarantine_replay_path).expanduser().resolve() if args.quarantine_replay_path else default_chess_replay_quarantine_path()
     output_dir = Path(args.output_dir).expanduser().resolve() if args.output_dir else _default_dataset_dir()
     train_path = Path(args.train_path).expanduser().resolve() if args.train_path else output_dir / "train.jsonl"
     eval_path = Path(args.eval_path).expanduser().resolve() if args.eval_path else output_dir / "eval.jsonl"
+    _progress(f"trusted replay: {trusted_path}")
+    _progress(f"quarantine replay: {quarantine_path}")
+    _progress(f"output dir: {output_dir}")
+    _progress(f"train artifact: {train_path}")
+    _progress(f"eval artifact: {eval_path}")
+    _progress(f"mode: {'replace-output' if args.replace_output else 'append-output'} include_quarantine={bool(args.include_quarantine)}")
 
     train_rows: list[dict] = []
     eval_rows: list[dict] = []
@@ -198,6 +212,7 @@ def main() -> int:
     def mark_skip(reason: str) -> None:
         skip_reasons[reason] = int(skip_reasons.get(reason) or 0) + 1
 
+    _progress("phase read trusted replay started")
     for record in _iter_jsonl(trusted_path):
         trusted_seen += 1
         if int(record.get("move_count") or 0) < int(args.min_move_count or 0):
@@ -208,6 +223,7 @@ def main() -> int:
             include_losing_moves=bool(args.include_losing_moves),
             from_quarantine=False,
             eval_mod=int(args.eval_mod or 1),
+            source_stage_label=str(args.source_stage_label or "final"),
         )
         if not prepared:
             mark_skip("trusted_no_samples")
@@ -217,8 +233,10 @@ def main() -> int:
                 eval_rows.append(row.sample)
             else:
                 train_rows.append(row.sample)
+    _progress(f"phase result read trusted replay: seen={trusted_seen} train={len(train_rows)} eval={len(eval_rows)}")
 
     if args.include_quarantine:
+        _progress("phase read quarantine replay started")
         for record in _iter_jsonl(quarantine_path):
             quarantine_seen += 1
             if int(record.get("move_count") or 0) < int(args.min_move_count or 0):
@@ -229,6 +247,7 @@ def main() -> int:
                 include_losing_moves=bool(args.include_losing_moves),
                 from_quarantine=True,
                 eval_mod=int(args.eval_mod or 1),
+                source_stage_label=str(args.source_stage_label or "final"),
             )
             if not prepared:
                 mark_skip("quarantine_no_samples")
@@ -238,12 +257,17 @@ def main() -> int:
                     eval_rows.append(row.sample)
                 else:
                     train_rows.append(row.sample)
+        _progress(f"phase result read quarantine replay: seen={quarantine_seen} train={len(train_rows)} eval={len(eval_rows)}")
+    else:
+        _progress("phase read quarantine replay skipped")
 
     if not eval_rows and len(train_rows) > 1:
         eval_rows.append(train_rows.pop())
 
+    _progress("phase write datasets started")
     _write_jsonl(train_path, train_rows, append=not bool(args.replace_output))
     _write_jsonl(eval_path, eval_rows, append=not bool(args.replace_output))
+    _progress(f"phase result write datasets: train={len(train_rows)} eval={len(eval_rows)}")
 
     summary = {
         "ok": True,
@@ -251,6 +275,7 @@ def main() -> int:
         "trusted_replay_path": str(trusted_path),
         "quarantine_replay_path": str(quarantine_path),
         "include_quarantine": bool(args.include_quarantine),
+        "source_stage_label": str(args.source_stage_label or "final"),
         "trusted_replays_seen": trusted_seen,
         "quarantine_replays_seen": quarantine_seen,
         "accepted_train_samples": len(train_rows),
@@ -264,9 +289,15 @@ def main() -> int:
         "replace_output": bool(args.replace_output),
     }
     summary["reports"] = _write_report(summary, default_chess_reports_dir())
+    _progress(f"phase result report: json={summary['reports']['json_report']} md={summary['reports']['md_report']}")
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except Exception as exc:
+        _progress(f"FAIL: {exc}")
+        _progress("failure hint: check replay ledger paths, --replace-output behavior, and output directory permissions")
+        raise

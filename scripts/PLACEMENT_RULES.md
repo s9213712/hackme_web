@@ -130,5 +130,11 @@ Before adding or moving a script, check:
 - will it generate artifacts outside `runtime/`?
 - is the filename descriptive?
 - is this a real maintained tool rather than a one-off experiment?
+- if this is QA/security/pentest/stress/smoke/gate tooling, is it registered
+  in [INDEX.md](INDEX.md) with owner, purpose, artifact, and failure meaning?
+- if this can be called by the production gate, is it listed in the production
+  gate table in [INDEX.md](INDEX.md)?
+- if this is only a focused regression, do docs and reports avoid calling it
+  full validation?
 
 If the answer is unclear, do not add it to `scripts/` root.

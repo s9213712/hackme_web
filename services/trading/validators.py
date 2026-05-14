@@ -6,7 +6,7 @@ from services.trading.constants import APR_DAYS_PER_YEAR
 
 # Public bool literal table.  Centralizes the `{"1","true","yes","on"}` set
 # duplicated across 22 sites (see
-# docs/AGENTS/reports/claude/readability_refactor_2026-05-07/INVENTORY.md
+# Kept small so trading validators do not grow back into the old monolithic engine.
 # §4.1).  Slice 2 publishes the table + parser; slice 3 migrates callers.
 _TRUE_LITERALS = frozenset({"1", "true", "yes", "on"})
 _TRUE_LITERALS_LOOSE = frozenset({"1", "true", "yes", "on", "y", "t"})

@@ -1,5 +1,7 @@
 """Workflow builder helpers for ComfyUI generation modes."""
 
+from services.comfyui.template.safety import next_safe_node_id
+
 
 def build_text_to_image_base(params):
     workflow = {
@@ -18,7 +20,12 @@ def build_text_to_image_base(params):
     }
     final_model = ["4", 0]
     final_clip = ["4", 1]
-    next_node_id = 10
+    # Allocator (§7.4) returns max(used)+1 (which is 8 for the 4/6/7 base above).
+    # Keep the historical floor of 10 so existing baseline / regression tests that
+    # assert specific id placement (LoraLoader → "10", VAELoader → "11", etc.)
+    # stay stable; the allocator still bumps above 10 if any caller pre-spliced
+    # nodes at id ≥ 10 before invoking the builder helper.
+    next_node_id = max(next_safe_node_id(workflow), 10)
     for item in params.get("loras") or []:
         if not isinstance(item, dict):
             continue
@@ -364,4 +371,6 @@ def build_generation_workflow(params, *, error_cls):
         return build_outpaint_workflow(params, error_cls=error_cls)
     if mode == "upscale":
         return build_upscale_workflow(params, error_cls=error_cls)
+    if mode in {"t2v", "i2v", "v2v", "t2s", "t2sv"}:
+        raise error_cls("這個 ComfyUI 模式需要透過支援的大模型 workflow 模板執行，請先匯入或選擇對應 workflow。")
     raise error_cls("ComfyUI 產圖模式不支援")

@@ -213,6 +213,25 @@ def test_launch_check_treats_production_profile_settings_as_auto_applied_not_man
     assert "請先切到 dev_ready 再開上線檢查" not in launch_body
 
 
+def test_launch_check_release_bundle_and_artifact_controls_are_available():
+    index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
+    admin_js = (
+        (ROOT / "public" / "js" / "51-admin-server-mode-launch-check.js").read_text(encoding="utf-8")
+        + "\n"
+        + (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
+    )
+
+    assert 'id="launch-check-bundle-btn"' in index_html
+    assert 'id="launch-check-artifacts-btn"' in index_html
+    assert 'id="launch-check-release-panel"' in index_html
+    assert "/root/production-release/bundle" in admin_js
+    assert "/root/qa-artifacts/index" in admin_js
+    assert "QA runs" in admin_js
+    assert "qa_runs" in admin_js
+    assert "createLaunchCheckReleaseBundle" in admin_js
+    assert "refreshLaunchCheckQaArtifacts" in admin_js
+
+
 def test_launch_check_surfaces_failing_backend_endpoint_names():
     admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
     launch_body = admin_js.split("async function loadLaunchCheck()", 1)[1].split("async function loadServerModeLogs()", 1)[0]

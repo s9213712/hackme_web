@@ -374,7 +374,7 @@ def reclaim_trial_credit(service, conn, user_id, *, actor=None, reason="TRIAL_CR
             continue
         market = service._market(conn, trial_pos["market_symbol"])
         try:
-            service._assert_market_boot_ready(market, usage="trial credit forced sell")
+            service._assert_market_boot_ready(market, usage="trial credit forced sell", conn=conn)
             current_price, price_source, price_meta = service._current_market_price_points(
                 conn,
                 market,

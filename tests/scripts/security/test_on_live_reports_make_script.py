@@ -1,9 +1,11 @@
 import argparse
 import json
 import os
+import sys
 import urllib.error
 from pathlib import Path
 
+from scripts.security.gate import full_generator_live_validate as full_gate
 from scripts.security.gate import on_live_reports_make as helper
 
 
@@ -33,6 +35,8 @@ def test_live_report_helper_covers_all_required_report_types_and_runtime_outputs
     assert "trading_stress_pentest.py" in helper
     assert "args.target_root_password" not in helper
     assert '"ROOT_PASSWORD": args.root_password' in helper
+    assert '"USER_A_USERNAME": "test"' in helper
+    assert '"USER_B_USERNAME": "admin"' in helper
     assert "rotate_to=args.root_new_password" in helper
     assert "rerun with --root-new-password" in helper
     assert "--server-mode-timeout" in helper
@@ -44,6 +48,129 @@ def test_live_report_helper_covers_all_required_report_types_and_runtime_outputs
     assert "client.fetch_csrf()" in helper
     assert "MODE_CONFIRM_PHRASES" in helper
     assert "functional_port" in helper
+    assert '{"production", "internal_test", "test", "dev_ready"}' in helper
+    assert '_switch_live_mode(client, "dev_ready", notes="go_live trading stress precheck")' in helper
+
+
+def test_full_generator_parallel_long_defaults_keep_live_pentest_foreground():
+    args = argparse.Namespace(no_parallel_long_generators=False, parallel_live_pentest=False)
+
+    selected = full_gate._background_report_types(args)
+
+    assert selected == ("pytest", "functional", "cloud_drive_quota_permission")
+    assert "pentest" not in selected
+
+
+def test_full_generator_parallel_long_can_include_live_pentest_or_disable_parallelism():
+    args = argparse.Namespace(no_parallel_long_generators=False, parallel_live_pentest=True)
+    assert "pentest" in full_gate._background_report_types(args)
+
+    args.no_parallel_long_generators = True
+    assert full_gate._background_report_types(args) == ()
+
+
+def test_go_live_scope_excludes_optional_product_suites_from_core_gate():
+    helper_source = (ROOT / "scripts" / "security" / "gate" / "on_live_reports_make.py").read_text(encoding="utf-8")
+    full_source = (ROOT / "scripts" / "security" / "gate" / "full_generator_live_validate.py").read_text(encoding="utf-8")
+    functional_wrapper_source = (ROOT / "scripts" / "on_live_reports" / "functional.py").read_text(encoding="utf-8")
+    pentest_source = (ROOT / "scripts" / "security" / "pentest" / "run_pentest.sh").read_text(encoding="utf-8")
+    functional_source = (ROOT / "scripts" / "security" / "pentest" / "run_functional_smoke.sh").read_text(encoding="utf-8")
+    permission_source = (ROOT / "scripts" / "security" / "pentest" / "functional_permission_pentest.py").read_text(encoding="utf-8")
+    joined_targets = "\n".join(helper.GO_LIVE_CORE_PYTEST_TARGETS)
+
+    assert "GO_LIVE_CORE_PYTEST_TARGETS" in helper_source
+    assert "GO_LIVE_CORE_PYTEST_ARGS" in helper_source
+    assert helper.GO_LIVE_CORE_PYTEST_TARGETS
+    assert all("tests/" in target for target in helper.GO_LIVE_CORE_PYTEST_TARGETS)
+    assert helper.GO_LIVE_CORE_PYTEST_ARGS[: len(helper.GO_LIVE_CORE_PYTEST_TARGETS)] == helper.GO_LIVE_CORE_PYTEST_TARGETS
+    assert "-k" in helper.GO_LIVE_CORE_PYTEST_ARGS
+    assert "tests/games/" not in joined_targets
+    assert "tests/comfyui/" not in joined_targets
+    assert "tests/frontend/comfyui/" not in joined_targets
+    assert "tests/trading/" in joined_targets
+    assert 'payloads["pytest"] = _pytest_report(out_root, raw_dir, "pytest", ["tests"]' not in helper_source
+    assert '["tests"],' not in full_source
+    assert "tests/games" not in helper_source
+    assert "tests/comfyui" not in helper_source
+    assert "functional-permissions" in helper.GO_LIVE_CORE_PENTEST_CHECKS
+    assert "session-security" in helper.GO_LIVE_CORE_PENTEST_CHECKS
+    assert "server-mode-v2-redteam-l2" in helper.GO_LIVE_CORE_PENTEST_CHECKS
+    assert '"whole-site-production-gate"' not in helper.GO_LIVE_CORE_PENTEST_CHECKS
+    assert '"video-module"' not in helper.GO_LIVE_CORE_PENTEST_CHECKS
+    assert "--only" in helper_source and "GO_LIVE_CORE_PENTEST_CHECKS" in helper_source
+    assert '"GO_LIVE_CORE_ONLY": "1"' in helper_source
+    assert '"--core-only"' in helper_source
+    assert 'smoke_args.append("--core-only")' in functional_wrapper_source
+    assert 'env["GO_LIVE_CORE_ONLY"] = "1"' in functional_wrapper_source
+    assert '"--qa-full" not in smoke_args and "--core-only" not in smoke_args' in functional_wrapper_source
+    assert 'GO_LIVE_CORE_ONLY:-0}" == "1"' in pentest_source
+    assert "--core-only" in permission_source
+    assert 'GO_LIVE_CORE_ONLY:-0}" != "1"' in functional_source
+    assert "--qa-full" in functional_source
+    assert "--core-only" in functional_source
+    assert "Scope: go-live core only; broad QA product workflows are skipped" in functional_source
+    assert "Scope: QA full functional smoke" in functional_source
+    assert "scope: \\`$FUNCTIONAL_SCOPE\\`" in functional_source
+    assert 'if [[ "${GO_LIVE_CORE_ONLY:-0}" == "1" ]]; then\n    return 0\n  fi' in functional_source
+    assert 'if [[ "${GO_LIVE_CORE_ONLY:-0}" != "1" ]]; then\n    create_forum_post_flow' in functional_source
+    assert 'if [[ "${GO_LIVE_CORE_ONLY:-0}" != "1" ]]; then\n    login_smoke_user || return 1' in functional_source
+
+
+def test_full_generator_root_password_defaults_to_environment(monkeypatch):
+    monkeypatch.setenv("ROOT_PASSWORD", "RootFromEnv123!")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "full_generator_live_validate.py",
+            "--runtime-dir",
+            "/tmp/runtime",
+            "--git-repo-dir",
+            str(ROOT),
+        ],
+    )
+
+    args = full_gate.parse_args()
+
+    assert args.root_password == "RootFromEnv123!"
+
+
+def test_full_generator_login_failure_records_attempt_without_noninteractive_prompt(monkeypatch):
+    class _FailingBrowser:
+        def __init__(self):
+            self.cookies = {}
+            self.csrf = ""
+
+        def login_with_rotation(self, username, password, *, rotate_to):
+            return 401, {"ok": False, "msg": "bad password"}, password, [{"step": "login", "http_status": 401}]
+
+    monkeypatch.setattr(full_gate.sys, "stdin", argparse.Namespace(isatty=lambda: False))
+    args = argparse.Namespace(root_username="root", root_password="bad", root_new_password="next")
+
+    status, payload, _, _, attempts = full_gate._browser_login_with_prompt(
+        _FailingBrowser(),
+        args,
+        auto_root_new_password=False,
+    )
+
+    assert status == 401
+    assert payload["msg"] == "bad password"
+    assert attempts == [
+        {
+            "attempt": 1,
+            "http_status": 401,
+            "ok": False,
+            "message": "bad password",
+            "prompted_after_failure": False,
+        }
+    ]
+
+
+def test_integrity_report_refreshes_csrf_before_mutating_calls():
+    helper_source = (ROOT / "scripts" / "security" / "gate" / "on_live_reports_make.py").read_text(encoding="utf-8")
+
+    assert "client.fetch_csrf()\n    review_status, review_payload, _ = client._request(\n        \"/api/root/integrity/findings/bulk-review\"" in helper_source
+    assert "client.fetch_csrf()\n    rescan_status, rescan_payload, _ = client._request(\"/api/root/integrity/rescan\", method=\"POST\", body={})" in helper_source
 
 
 def test_docs_and_frontend_expose_the_same_canonical_production_gate_paths():
@@ -133,3 +260,47 @@ def test_pick_available_port_falls_back_when_preferred_is_busy(monkeypatch):
     chosen = helper._pick_available_port(50741)
 
     assert chosen == 54321
+
+
+def test_make_payload_uses_meta_server_mode_by_default(tmp_path):
+    captured = {}
+
+    class _Signer:
+        def build(self, **kwargs):
+            captured.update(kwargs)
+            return {
+                "report_type": kwargs["report_type"],
+                "test_result": kwargs["test_result"],
+                "pass": kwargs["passed"],
+                "report_hash": "sha256:" + ("a" * 64),
+                "key_version": "local-dev-v1",
+                "target_branch": kwargs["target_branch"],
+                "target_commit": kwargs["target_commit"],
+                "server_mode": kwargs["server_mode"],
+                "report_source": kwargs["report_source"],
+                "raw_report": kwargs["raw_report"],
+            }
+
+    payload = helper._make_payload(
+        "clean_smoke",
+        {
+            "report_type": "clean_smoke",
+            "status": "pass",
+            "summary": "ok",
+            "artifacts": {},
+        },
+        passed=True,
+        tester="tests/scripts/security/test_on_live_reports_make_script.py",
+        report_source="tests/scripts/security/test_on_live_reports_make_script.py",
+        meta={
+            "target_commit": "deadbeef",
+            "target_branch": "main",
+            "server_mode": "dev_ready",
+        },
+        canonical_json=tmp_path / "clean_smoke_report.json",
+        canonical_md=tmp_path / "clean_smoke_report.md",
+        signer=_Signer(),
+    )
+
+    assert captured["server_mode"] == "dev_ready"
+    assert payload["server_mode"] == "dev_ready"

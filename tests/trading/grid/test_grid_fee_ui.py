@@ -16,5 +16,7 @@ def test_grid_fee_ui_shows_net_profit_break_even_and_confirmation_wiring():
     assert "最不利一格手續費" in trading_js
     assert "最不利一格扣費後淨利" in trading_js
     assert "預估一輪全格總手續費" in trading_js
+    assert "feePerTrade" not in trading_js
+    assert "feePerBuyOrder" in trading_js
     assert "confirm_thin_profit" in trading_js
     assert "利潤過薄" in trading_js

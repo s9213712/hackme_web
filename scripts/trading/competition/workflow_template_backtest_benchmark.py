@@ -36,7 +36,7 @@ from urllib.request import Request, urlopen
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
 
-WORKFLOWS_DIR = REPO_ROOT / "workflows" / "system"
+WORKFLOWS_DIR = REPO_ROOT / "workflows" / "trading_bot"
 # Plan B (N=11 keep set) — covers head-to-head finalists + 4 trend
 # followers + 2 mean-reversion + 3 exit-only tools.  Order matters only
 # for report aesthetics: finalists first, then by composite score.

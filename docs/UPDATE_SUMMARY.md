@@ -1,6 +1,57 @@
 # Update Summary
 
-Release ID: `2026.05.07-155`
+Release ID: `2026.05.13-157`
+
+## 2026.05.13-157
+
+- Reorganized `docs/` and `docs/games/` into current guides, reports,
+  references, evidence, model snapshots, and archive indexes.
+- Added `scripts/CALL_MAP.md` and linked it from `scripts/README.md` so script
+  entrypoints, call chains, and artifact locations are discoverable.
+- Cleaned generated runtime/cache artifacts, expanded `.gitignore` exceptions
+  for intentional documentation evidence, and hardened prepush checks against
+  decorative separator false positives.
+
+## 2026.05.13-156
+
+- Added tactical enemy AI for 2D Stickman Shooter and 3D FPS Arena. Enemies now
+  use role-specific ranges, movement, cover seeking, flanking, suppression, and
+  trap or collision-aware movement instead of only walking directly at the
+  player.
+- Fixed CI entrypoint portability for `scripts/prepush/pre_push_checks.py` by
+  inserting the repository root on `sys.path` before importing
+  `scripts.prepush.runner`.
+- Hardened Playwright platform acceptance by using the shared JSON request helper
+  for job retry POSTs, preserving CSRF enforcement while allowing the test to
+  refresh and retry after a legitimate `csrf_invalid` response.
+- Removed tracked generated runtime/model artifacts from version control,
+  replaced machine-local chess audit defaults with repo-relative paths, repaired
+  agent report markdown links, and registered maintained QA/chess scripts in
+  `scripts/INDEX.md`.
+
+## 2026.05.10 — Platform Center Phase 1.5
+
+- Added a platform-center surface for background jobs, notifications, share
+  links, and trading asset overview. Job Center reads `/api/jobs` for normal
+  users and `/api/admin/jobs` for manager/root, displays progress/stage/error
+  details, asks for confirmation before cancel, and can retry failed/cancelled
+  jobs.
+- Notification Center now tracks `dismissed_at`; dismissed notifications are
+  hidden from the default list and unread count, while admin/root audience
+  boundaries remain enforced.
+- Share Link Management lists file / album / video shares, shows expires/max
+  views/password status, records access events, and revokes through
+  `/api/shares/<type>/<id>/revoke`. External share URLs are not copied blindly
+  by the frontend.
+- Trading Asset Overview now includes available points, locked points, spot
+  market value, margin / lending position equity, accrued interest, and low
+  confidence price count. Price confidence is advisory for points trading and
+  API failures are surfaced in-page instead of being silently ignored.
+- Added `scripts/testing/playwright_platform_health_check.py`, which starts an
+  isolated `/tmp` QA server on a random non-5000 port and uses Playwright to
+  exercise Job Center, notifications, share management, trading overview, and
+  mobile viewport layout. The script writes JSON and Markdown evidence under
+  the isolated runtime's `reports/qa/` directory.
 
 ## 2026.05.08 — Audit-cycle bugfixes (issues #183/#184/#185/#186/#187)
 
@@ -411,7 +462,7 @@ Release ID: `2026.05.07-155`
 ## 2026.05.05-122
 
 - `deploy.sh` now supports `--with-civitai-key '<CIVITAI_API_KEY>'`, so first-time deployments can seed root-only Civitai search/download access without manually editing `.env`.
-- `scripts/run_prod.sh --check` now reports optional capability status for `ffmpeg` / `ffprobe` (video HLS derivative pipeline), `CIVITAI_API_KEY` (root-only Civitai search/download), and the canonical offline root recovery entrypoint `python3 scripts/root_recovery.py`.
+- `python3 server.py --doctor` now reports deployment environment readiness, and the canonical offline root recovery entrypoint is `python3 scripts/admin/root_recovery.py`.
 - Deployment docs and quickstart guides now explain that these checks are advisory capability hints rather than hard blockers for normal deployment.
 
 ## 2026.05.05-121
@@ -430,12 +481,12 @@ Release ID: `2026.05.07-155`
 
 - Expanded the security validation script suite instead of only relying on product tests: `functional_permission_pentest.py` now covers root-only ComfyUI / Civitai search, inspect, model upload, and download-job endpoints across anonymous, user, manager, and root roles.
 - `trading_stress_pentest.py` now forces a conservative fused-price state and verifies that degraded `risk-grade price` input blocks high-risk market orders and financing opens rather than silently leaking degraded data into trading.
-- `video_module_pentest.py` now covers manager-side unlisted share-link regeneration, strict E2EE shared-video envelope boundaries, and revoked share-link blocking; `run_functional_smoke.sh` also confirms that the offline `scripts/root_recovery.py` CLI remains available.
+- `video_module_pentest.py` now covers manager-side unlisted share-link regeneration, strict E2EE shared-video envelope boundaries, and revoked share-link blocking; `run_functional_smoke.sh` also confirms that the offline `scripts/admin/root_recovery.py` CLI remains available.
 
 ## 2026.05.05-118
 
 - `root` 已正式脫離一般 Web 忘記密碼流程：`/api/password-reset/request` 與 `/api/password-reset/confirm` 對 root 帳號都會拒絕，避免把最高權限帳號降級成一般 email token / review reset 模式。
-- 新增離線 `scripts/root_recovery.py`，可在實體 runtime 上直接重設 root 臨時密碼、撤銷既有 session、清掉 CSRF token，並要求下次登入立刻修改密碼。
+- 新增離線 `scripts/admin/root_recovery.py`，可在實體 runtime 上直接重設 root 臨時密碼、撤銷既有 session、清掉 CSRF token，並要求下次登入立刻修改密碼。
 - README、Admin Guide、CLI Playbook、Troubleshooting、API Reference 與 QA 文件已同步改成以 offline root recovery CLI 為正式補救路徑。
 
 ## 2026.05.05-117
@@ -593,7 +644,7 @@ Release ID: `2026.05.07-155`
 
 - `PYTHONPATH=. python3 -m pytest -q tests/test_trading_reference_prices.py tests/test_frontend_economy.py tests/test_release_policy.py`
 - `PYTHONPATH=. python3 -m pytest -q tests`
-- isolated live API validation script under `docs/AGENTS/reports/codex/final_open_issues_review_*/scripts/live_api_validation.sh`
+- isolated live API validation script from the final open-issues review artifacts
 - `python3 scripts/pre_push_checks.py --ci`
 - `git diff --check`
 

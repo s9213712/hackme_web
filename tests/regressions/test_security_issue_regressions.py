@@ -9,7 +9,11 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_admin_mutation_routes_use_session_scoped_csrf_guards():
-    system_admin = (ROOT / "routes" / "system_admin.py").read_text(encoding="utf-8")
+    system_admin = (
+        (ROOT / "routes" / "system_admin.py").read_text(encoding="utf-8")
+        + "\n"
+        + (ROOT / "routes" / "system_admin_sections" / "security_routes.py").read_text(encoding="utf-8")
+    )
     auth = (ROOT / "services" / "users" / "auth.py").read_text(encoding="utf-8")
 
     assert '@app.route("/api/admin/security-center/thresholds", methods=["PUT"])\n    @require_csrf' in system_admin
@@ -135,6 +139,17 @@ def test_admin_users_post_uses_method_aware_csrf_guard():
     assert '@app.route("/api/admin/users", methods=["GET","POST"])\n    @require_csrf_by_method' in users
 
 
+def test_admin_password_reset_review_hashes_reviewed_credential():
+    users = (ROOT / "routes" / "users.py").read_text(encoding="utf-8")
+    recovery = (ROOT / "services" / "users" / "recovery.py").read_text(encoding="utf-8")
+    reset_helper = users.split("def _apply_reviewed_password_reset", 1)[1].split("def admin_users", 1)[0]
+
+    assert "hash_password(new_credential)" in reset_helper
+    assert "hash_password(password)" not in reset_helper
+    assert "u.username AS username" in recovery
+    assert 'delete_csrf_tokens_for_username(request_row["username"])' in reset_helper
+
+
 def test_user_demote_accepts_optional_json_body_and_frontend_sends_json():
     users = (ROOT / "routes" / "users.py").read_text(encoding="utf-8")
     auth_users_js = (ROOT / "public" / "js" / "40-auth-users.js").read_text(encoding="utf-8")
@@ -217,7 +232,11 @@ def test_pending_reward_review_enforces_maker_checker():
 
 
 def test_comfyui_image_refs_are_owner_bound():
-    comfyui = (ROOT / "routes" / "comfyui.py").read_text(encoding="utf-8")
+    comfyui = (
+        (ROOT / "routes" / "comfyui.py").read_text(encoding="utf-8")
+        + "\n"
+        + (ROOT / "routes" / "comfyui_sections" / "image_routes.py").read_text(encoding="utf-8")
+    )
 
     assert "CREATE TABLE IF NOT EXISTS comfyui_image_refs" in comfyui
     assert "_register_comfyui_image_refs" in comfyui
@@ -234,7 +253,11 @@ def test_pending_reward_review_enforces_maker_checker():
 
 
 def test_comfyui_image_refs_are_owner_bound():
-    comfyui = (ROOT / "routes" / "comfyui.py").read_text(encoding="utf-8")
+    comfyui = (
+        (ROOT / "routes" / "comfyui.py").read_text(encoding="utf-8")
+        + "\n"
+        + (ROOT / "routes" / "comfyui_sections" / "image_routes.py").read_text(encoding="utf-8")
+    )
 
     assert "CREATE TABLE IF NOT EXISTS comfyui_image_refs" in comfyui
     assert "_register_comfyui_image_refs" in comfyui

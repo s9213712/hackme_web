@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ComfyUI Workflow Visual Builder</title>
+  <link rel="stylesheet" href="/comfyui-workflow-editor.css?v=20260511-schema-editor" />
+</head>
+<body class="standalone-editor-page">
+  <div class="editor-bg-grid" aria-hidden="true"></div>
+  <header class="topbar">
+    <div>
+      <h1>ComfyUI Workflow Visual Builder</h1>
+      <div class="subtitle">用節點與線建立 ComfyUI workflow；從綠色 output 拉到紫色 input，完成後回主頁保存。</div>
+    </div>
+    <div class="top-actions">
+      <button id="starterTxt2ImgBtn" type="button">txt2img 起始版</button>
+      <button id="autoLayoutBtn" type="button">重新排列節點</button>
+      <label class="file-action">匯入 JSON <input id="importJsonFile" type="file" accept="application/json,.json" /></label>
+      <button id="clearBtn" type="button">清空</button>
+      <button class="primary" id="sendBackBtn" type="button">送回主頁</button>
+      <button id="downloadJsonBtn" type="button">下載 ComfyUI Workflow</button>
+      <button id="downloadApiJsonBtn" type="button">下載 API Prompt</button>
+      <button id="downloadPresetJsonBtn" type="button">下載本站 Preset</button>
+      <button class="good" id="copyJsonBtn" type="button">複製 ComfyUI Workflow</button>
+    </div>
+  </header>
+
+  <main class="editor-shell">
+    <aside class="palette">
+      <div class="panel">
+        <div class="panel-head">
+          <div class="panel-title">節點工具箱</div>
+        </div>
+        <div class="panel-body">
+          <label class="field palette-search">搜尋節點
+            <input id="nodeSearchInput" type="search" placeholder="例如 checkpoint、inpaint、upscale、control">
+          </label>
+          <div class="tool-group catalog-loader">
+            <div class="tool-title">目前 ComfyUI 節點</div>
+            <button id="loadNodeCatalogBtn" type="button"><b>載入節點目錄</b><span>從 /object_info 取得已安裝 custom nodes</span></button>
+            <div class="palette-status" id="nodeCatalogStatus">尚未載入；固定節點可先使用。</div>
+          </div>
+          <div class="tool-group" id="dynamicNodeCatalogGroup" hidden>
+            <div class="tool-title">已安裝節點目錄</div>
+            <div class="tool-grid" id="dynamicNodeCatalogList"></div>
+          </div>
+          <div class="tool-group">
+            <div class="tool-title">模型 / 文字</div>
+            <div class="tool-grid">
+              <button data-add-node="CheckpointLoaderSimple" type="button"><b>Checkpoint Loader</b><span>輸出 MODEL / CLIP / VAE</span></button>
+              <button data-add-node="CLIPTextEncode" type="button"><b>Prompt Encoder</b><span>正向或負向提示詞</span></button>
+              <button data-add-node="LoraLoader" type="button"><b>LoRA Loader</b><span>接在 MODEL / CLIP 後</span></button>
+              <button data-add-node="VAELoader" type="button"><b>VAE Loader</b><span>指定外部 VAE</span></button>
+            </div>
+          </div>
+          <div class="tool-group">
+            <div class="tool-title">影像 / Latent / Inpaint</div>
+            <div class="tool-grid">
+              <button data-add-node="EmptyLatentImage" type="button"><b>Empty Latent</b><span>txt2img 畫布尺寸</span></button>
+              <button data-add-node="LoadImage" type="button"><b>Load Image</b><span>img2img / inpaint 輸入圖</span></button>
+              <button data-add-node="LoadImageMask" type="button"><b>Load Mask</b><span>inpaint 遮罩輸入</span></button>
+              <button data-add-node="VAEEncode" type="button"><b>VAE Encode</b><span>圖片轉 latent</span></button>
+              <button data-add-node="VAEEncodeForInpaint" type="button"><b>VAE Inpaint Encode</b><span>圖片 + mask 轉 latent</span></button>
+              <button data-add-node="ImagePadForOutpaint" type="button"><b>Outpaint Pad</b><span>擴圖邊界設定</span></button>
+              <button data-add-node="KSampler" type="button"><b>KSampler</b><span>steps / cfg / seed</span></button>
+              <button data-add-node="KSamplerAdvanced" type="button"><b>KSampler Advanced</b><span>起訖 step / leftover noise</span></button>
+              <button data-add-node="VAEDecode" type="button"><b>VAE Decode</b><span>latent 轉圖片</span></button>
+              <button data-add-node="SaveImage" type="button"><b>Save Image</b><span>輸出圖片</span></button>
+            </div>
+          </div>
+          <div class="tool-group">
+            <div class="tool-title">Control / Upscale</div>
+            <div class="tool-grid">
+              <button data-add-node="ControlNetLoader" type="button"><b>ControlNet Loader</b><span>讀取 ControlNet 模型</span></button>
+              <button data-add-node="ControlNetApplyAdvanced" type="button"><b>ControlNet Apply Advanced</b><span>套用控制圖</span></button>
+              <button data-add-node="UpscaleModelLoader" type="button"><b>Upscale Loader</b><span>讀取放大模型</span></button>
+              <button data-add-node="ImageUpscaleWithModel" type="button"><b>Image Upscale</b><span>圖片放大節點</span></button>
+            </div>
+          </div>
+          <div class="tool-group">
+            <div class="tool-title">Custom / API</div>
+            <div class="tool-grid">
+              <button data-add-node="__UnknownCustomNode__" type="button"><b>Custom / API Node</b><span>手動填 class_type 與 inputs；API Key 由後端注入</span></button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <section class="workspace">
+      <div class="workflow-bar panel">
+        <div class="panel-body">
+          <label class="field">版面名稱
+            <input id="workflowName" maxlength="120" placeholder="例如：SDXL 商品圖 ControlNet 版面">
+          </label>
+        </div>
+        <div class="panel-body">
+          <label class="field">說明
+            <input id="workflowDescription" maxlength="240" placeholder="描述用途、模型依賴與輸入需求">
+          </label>
+        </div>
+        <div class="panel-body badges" id="summaryBadges"></div>
+      </div>
+      <div id="canvas">
+        <svg id="edgeLayer" aria-hidden="true"></svg>
+        <div id="nodeLayer"></div>
+      </div>
+    </section>
+
+    <aside class="inspector">
+      <div class="panel">
+        <div class="panel-head">
+          <div class="panel-title">節點屬性</div>
+          <span class="badge" id="selectedBadge">未選取</span>
+        </div>
+        <div class="panel-body" id="inspector"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head">
+          <div class="panel-title">連線</div>
+          <span class="badge" id="connectionBadge">-</span>
+        </div>
+        <div class="panel-body" id="connectionPanel"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head">
+          <div class="panel-title">依賴 / 驗證</div>
+          <span class="badge" id="validationBadge">-</span>
+        </div>
+        <div class="panel-body" id="validationPanel"></div>
+      </div>
+      <div class="panel json-panel">
+        <div class="panel-body">
+          <details>
+            <summary>本站 preset/layout JSON</summary>
+            <textarea id="jsonOut" spellcheck="false"></textarea>
+          </details>
+          <div class="status" id="status"></div>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <script src="/js/comfyui-workflow-editor.js?v=20260511-schema-editor"></script>
+</body>
+</html>

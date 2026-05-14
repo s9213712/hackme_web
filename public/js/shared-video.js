@@ -72,6 +72,39 @@
   }
   let sharedHls = null;
   let sharedHlsLoadPromise = null;
+  let shareSessionId = "";
+  const SHARED_E2EE_STREAM_V2_MAX_RETRIES = 2;
+  const SHARED_E2EE_STREAM_V2_CACHE_LIMIT = 16;
+  function withShareSession(url) {
+    const raw = String(url || "");
+    if (!raw || !shareSessionId) return raw;
+    try {
+      const parsed = new URL(raw, window.location.origin);
+      parsed.searchParams.set("share_session", shareSessionId);
+      return parsed.pathname + parsed.search + parsed.hash;
+    } catch (_err) {
+      const separator = raw.includes("?") ? "&" : "?";
+      return `${raw}${separator}share_session=${encodeURIComponent(shareSessionId)}`;
+    }
+  }
+  function rememberShareSession(value) {
+    shareSessionId = String(value || "").trim();
+  }
+  function applyShareSessionToPlayback(playback) {
+    if (!playback || typeof playback !== "object") return playback || {};
+    [
+      "fallback_url",
+      "stream_url",
+      "ciphertext_url",
+      "e2ee_key_url",
+      "manifest_url",
+      "chunk_url_template",
+      "master_url",
+    ].forEach((key) => {
+      if (playback[key]) playback[key] = withShareSession(playback[key]);
+    });
+    return playback;
+  }
   function destroySharedPlaybackArtifacts() {
     if (sharedHls && typeof sharedHls.destroy === "function") {
       try { sharedHls.destroy(); } catch (_) {}
@@ -153,8 +186,43 @@
   function browserSupportsE2eeStreamV2() {
     return Boolean(window.MediaSource && window.Worker && window.crypto?.subtle);
   }
+  function sharedE2eeChunkIndexForTime(manifest, timeSeconds) {
+    const chunkCount = Number(manifest?.chunk_count || 0);
+    const duration = Number(manifest?.duration_hint || 0);
+    const target = Number(timeSeconds || 0);
+    if (!Number.isFinite(chunkCount) || chunkCount <= 0 || !Number.isFinite(duration) || duration <= 0) return null;
+    if (!Number.isFinite(target) || target <= 0) return 0;
+    return Math.max(0, Math.min(chunkCount - 1, Math.floor((target / duration) * chunkCount)));
+  }
+  function pruneSharedE2eeChunkCache(cache, keepAroundIndex) {
+    if (!cache || cache.size <= SHARED_E2EE_STREAM_V2_CACHE_LIMIT) return;
+    const keep = Number(keepAroundIndex || 0);
+    const keys = Array.from(cache.keys()).sort((a, b) => Math.abs(a - keep) - Math.abs(b - keep));
+    const keepSet = new Set(keys.slice(0, SHARED_E2EE_STREAM_V2_CACHE_LIMIT));
+    for (const key of cache.keys()) {
+      if (!keepSet.has(key)) cache.delete(key);
+    }
+  }
+  async function fetchSharedE2eeChunkWithRetry(url, retries = SHARED_E2EE_STREAM_V2_MAX_RETRIES) {
+    let lastError = null;
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
+      try {
+        const chunkRes = await fetch(withShareSession(url), { credentials: "same-origin" });
+        if (!chunkRes.ok) {
+          const payload = await chunkRes.json().catch(() => ({}));
+          throw new Error(payload.msg || `HTTP ${chunkRes.status}`);
+        }
+        return chunkRes.arrayBuffer();
+      } catch (err) {
+        lastError = err;
+        if (attempt >= retries) break;
+        await new Promise((resolve) => setTimeout(resolve, 200 * (attempt + 1)));
+      }
+    }
+    throw lastError || new Error("E2EE Streaming v2 分段下載失敗");
+  }
   function createSharedE2eeWorker() {
-    return new Worker("/js/workers/e2ee-stream-v2-worker.js?v=20260505-e2eev2");
+    return new Worker("/js/e2ee-stream-v2-worker.js?v=20260505-e2eev2");
   }
   function decryptSharedChunkWithWorker(worker, keyBytes, nonce, ciphertext) {
     return new Promise((resolve, reject) => {
@@ -245,10 +313,10 @@
   async function fallbackSharedE2eeToFullDecrypt(player, playback, fragmentKey, message, seekTarget = null) {
     setMsg(message || "已退回舊版完整解密播放。", false);
     setMsg("正在讀取 E2EE 分享授權：伺服器只會提供密文與分享封裝，不會接收原始密碼、raw file key 或 #vk。");
-    const keyRes = await fetch(playback.e2ee_key_url, { credentials: "same-origin" });
+    const keyRes = await fetch(withShareSession(playback.e2ee_key_url), { credentials: "same-origin" });
     const keyJson = await keyRes.json().catch(() => ({}));
     if (!keyRes.ok || !keyJson.ok || !keyJson.e2ee_share) throw new Error(keyJson.msg || "E2EE 分享解密資訊讀取失敗");
-    const cipherRes = await fetch(playback.ciphertext_url, { credentials: "same-origin" });
+    const cipherRes = await fetch(withShareSession(playback.ciphertext_url), { credentials: "same-origin" });
     if (!cipherRes.ok) throw new Error("E2EE 密文讀取失敗");
     const cipherBlob = await readBlobWithProgress(cipherRes, (loaded, total) => {
       const summary = total > 0
@@ -271,13 +339,13 @@
       return;
     }
     setMsg("正在讀取 E2EE 分享授權：strict E2EE 仍由瀏覽器端持有 fragment 與解密能力。");
-    const manifestRes = await fetch(playback.manifest_url, { credentials: "same-origin" });
+    const manifestRes = await fetch(withShareSession(playback.manifest_url), { credentials: "same-origin" });
     const manifestJson = await manifestRes.json().catch(() => ({}));
     if (!manifestRes.ok || manifestJson.available === false) {
       await fallbackSharedE2eeToFullDecrypt(player, playback, fragmentKey, manifestJson.msg || "此 strict E2EE 影音尚未建立 Streaming v2 manifest，已退回舊版完整解密播放。");
       return;
     }
-    const rawKey = new Uint8Array(await unwrapSharedFileKeyBytes((await (await fetch(playback.e2ee_key_url, { credentials: "same-origin" })).json()).e2ee_share.wrapped_file_key_envelope, fragmentKey));
+    const rawKey = new Uint8Array(await unwrapSharedFileKeyBytes((await (await fetch(withShareSession(playback.e2ee_key_url), { credentials: "same-origin" })).json()).e2ee_share.wrapped_file_key_envelope, fragmentKey));
     const mediaSource = new MediaSource();
     const objectUrl = URL.createObjectURL(mediaSource);
     player.src = objectUrl;
@@ -286,6 +354,8 @@
     let nextChunk = 0;
     let sourceBuffer = null;
     let closed = false;
+    let pendingSeekChunk = null;
+    const chunkCache = new Map();
     const cleanup = () => {
       if (closed) return;
       closed = true;
@@ -297,6 +367,12 @@
     };
     player.addEventListener("seeking", () => {
       const target = Number(player.currentTime || 0);
+      const targetChunk = sharedE2eeChunkIndexForTime(manifestJson, target);
+      if (!playerTimeBuffered(player, target) && targetChunk !== null && targetChunk >= nextChunk) {
+        pendingSeekChunk = targetChunk;
+        setMsg(`快轉目標尚未緩衝，正在以 Streaming v2 追上分段 ${targetChunk + 1}。`);
+        return;
+      }
       if (!playerTimeBuffered(player, target) && nextChunk < Number(manifestJson.chunk_count || 0)) {
         fallback("偵測到尚未緩衝區段的快轉，已退回舊版完整解密播放以確保可用性。", target).catch((err) => setMsg(err.message || "E2EE fallback 失敗", true));
       }
@@ -319,16 +395,22 @@
           return;
         }
         const meta = manifestJson.chunks?.[nextChunk];
-        const chunkRes = await fetch(playback.chunk_url_template.replace("__INDEX__", String(meta.chunk_index)), { credentials: "same-origin" });
-        if (!chunkRes.ok) {
-          const payload = await chunkRes.json().catch(() => ({}));
-          throw new Error(payload.msg || `HTTP ${chunkRes.status}`);
+        if (!meta) {
+          await fallback("E2EE Streaming v2 chunk metadata 缺失，已退回舊版完整解密播放。");
+          return;
         }
-        const cipher = await chunkRes.arrayBuffer();
-        const plain = await decryptSharedChunkWithWorker(worker, new Uint8Array(rawKey), meta.nonce, cipher);
+        let plain = chunkCache.get(Number(meta.chunk_index));
+        if (!plain) {
+          const cipher = await fetchSharedE2eeChunkWithRetry(playback.chunk_url_template.replace("__INDEX__", String(meta.chunk_index)));
+          plain = await decryptSharedChunkWithWorker(worker, new Uint8Array(rawKey), meta.nonce, cipher);
+          chunkCache.set(Number(meta.chunk_index), plain);
+          pruneSharedE2eeChunkCache(chunkCache, Number(meta.chunk_index));
+        }
         await appendSharedSourceBufferAsync(sourceBuffer, new Uint8Array(plain));
         nextChunk += 1;
-        setMsg(`正在使用 E2EE Streaming v2：已解密分段 ${nextChunk} / ${manifestJson.chunk_count}。`);
+        if (pendingSeekChunk !== null && nextChunk > pendingSeekChunk) pendingSeekChunk = null;
+        const seekNote = pendingSeekChunk !== null ? "，正在追上快轉目標" : "";
+        setMsg(`正在使用 E2EE Streaming v2：已解密分段 ${nextChunk} / ${manifestJson.chunk_count}${seekNote}。`);
         queueMicrotask(() => {
           pump().catch((err) => fallback(`E2EE Streaming v2 分段播放失敗，已退回舊版完整解密播放。 (${err.message || "unknown"})`));
         });
@@ -336,22 +418,37 @@
       pump().catch((err) => fallback(err.message || "E2EE Streaming v2 初始化失敗"));
     }, { once: true });
   }
+  async function fetchCsrfToken() {
+    // The shared-video page is standalone (no global core helpers loaded), so
+    // we fetch the CSRF token on demand rather than relying on getCsrfToken().
+    try {
+      const res = await fetch("/api/csrf-token", { credentials: "same-origin" });
+      const json = await res.json().catch(() => ({}));
+      return String(json?.csrf_token || "");
+    } catch (_) {
+      return "";
+    }
+  }
   async function unlockShare(password) {
+    const csrf = await fetchCsrfToken();
+    const headers = { "Content-Type": "application/json" };
+    if (csrf) headers["X-CSRF-Token"] = csrf;
     const res = await fetch(`/api/videos/shared/${encodeURIComponent(TOKEN)}/unlock`, {
       method: "POST",
       credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify({ password }),
     });
     const json = await res.json().catch(() => ({}));
     if (!res.ok || !json.ok) throw new Error(json.msg || `HTTP ${res.status}`);
+    rememberShareSession(json.share_session_id);
     return json;
   }
   async function fetchJson(url) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 10000);
     try {
-      const res = await fetch(url, {
+      const res = await fetch(withShareSession(url), {
         credentials: "same-origin",
         signal: controller.signal,
       });
@@ -370,6 +467,7 @@
       return;
     }
     if (!meta.res.ok || !meta.json.ok) throw new Error(meta.json.msg || `HTTP ${meta.res.status}`);
+    rememberShareSession(meta.json.share_session_id);
     const video = meta.json.video || {};
     $("title").textContent = video.title || "分享影音";
     $("meta").textContent = `${video.owner_nickname || video.owner_username || "使用者"} · ${video.visibility || "unlisted"}`;
@@ -387,7 +485,8 @@
       return;
     }
     if (!playback.res.ok || !playback.json.ok) throw new Error(playback.json.msg || `HTTP ${playback.res.status}`);
-    await renderPlayback(video, playback.json);
+    rememberShareSession(playback.json.share_session_id);
+    await renderPlayback(video, applyShareSessionToPlayback(playback.json));
   }
   async function renderPlayback(video, playback) {
     const host = $("player-host");
@@ -431,7 +530,7 @@
     }
     if (playback.mode === "hls" && playback.master_url) {
       try {
-        const Hls = await loadSharedHlsLibrary(playback.hls_js_url || "/js/vendor/hls.light.min.js?v=20260505-hlsjs");
+        const Hls = await loadSharedHlsLibrary(playback.hls_js_url || "/js/hls.light.min.js?v=20260505-hlsjs");
         if (!Hls || typeof Hls.isSupported !== "function" || !Hls.isSupported()) {
           throw new Error("目前瀏覽器不支援 HLS.js 所需的 MediaSource");
         }

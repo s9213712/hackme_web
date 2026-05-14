@@ -16,22 +16,47 @@ for one-off experiments.
   starts the copied `server.py` there with development-friendly defaults.
 - [testing/pytest_in_tmp.sh](testing/pytest_in_tmp.sh)
   Canonical pytest entrypoint. Tests must run against a `/tmp` repo copy.
+- [security/gate/on_live_reports_make.py](security/gate/on_live_reports_make.py)
+  Canonical 13-report production-gate orchestrator.
 - [prepush/pre_push_checks.py](prepush/pre_push_checks.py)
   Canonical local validation entrypoint.
 - [admin/root_recovery.py](admin/root_recovery.py)
   Offline root recovery CLI.
+- [on_live_reports/](on_live_reports/)
+  Stable operator-facing compatibility wrappers for the production-gate,
+  permission, pentest, server-mode, and stress tooling.
+- [INDEX.md](INDEX.md)
+  Mandatory registration table for maintained QA, security, pentest, stress,
+  smoke, and production-gate scripts.
+- [CALL_MAP.md](CALL_MAP.md)
+  Operator-to-module call map for maintained script entrypoints.
+
+## User-Facing Progress Contract
+
+Scripts that are expected to be run directly by an operator, deployer, tester,
+or learner must print visible progress by default unless `--json` or another
+machine-readable mode is explicitly selected.
+
+Minimum console contract:
+
+1. Print the selected target/runtime before doing work.
+2. Print each major phase before it starts.
+3. Print pass/fail/skip status for each check or phase.
+4. Print artifact paths and temp-runtime paths.
+5. On failure, print the next useful log/report path instead of only a stack
+   trace or non-zero exit code.
+
+Focused regression scripts may stay concise, but they must not call themselves
+full validation and should still show which scope they covered.
 
 ## Current Subtrees
 
 - `scripts/admin/`
   Operator repair and recovery tooling.
-- `scripts/dev/`
-  Development docs only. The old tmp launch wrappers were removed; use
-  repo-root `test_for_develop.sh` instead.
 - `scripts/comfyui/`
   ComfyUI probe tooling and ComfyUI-specific local startup template.
 - `scripts/games/`
-  Chess experiment training and other game-related operator tooling.
+  Chess experiment training plus non-chess board-game AI benchmarking.
 - `scripts/prepush/`
   Pre-push framework internals and checks.
 - `scripts/security/`
@@ -52,6 +77,82 @@ top level.
 The final placement policy lives in:
 
 - [PLACEMENT_RULES.md](PLACEMENT_RULES.md)
+- [INDEX.md](INDEX.md)
+- [CALL_MAP.md](CALL_MAP.md)
 
-Use that file as the canonical rulebook for what may or may not live under
-`scripts/`.
+Use `PLACEMENT_RULES.md` as the canonical rulebook for what may or may not live
+under `scripts/`. Use `INDEX.md` to register maintained QA/security scripts and
+to define production-gate owner, purpose, artifact, and failure meaning. Use
+`CALL_MAP.md` when you need to know what a script calls and where its artifacts
+land.
+
+## Games Script Call Map
+
+### Board AI Benchmark
+
+Entry:
+
+```bash
+python3 scripts/games/board_ai_benchmark.py
+```
+
+Purpose:
+
+- Quantify Reversi, 19x19 Go, and Gomoku local AI strength.
+- Run `random/easy/normal/hard` round-robin with color swaps.
+- Emit standings, head-to-head matrix, Elo estimate, illegal move counts, timing, and deterministic skill probes.
+
+Call map:
+
+```text
+scripts/games/board_ai_benchmark.py
+  -> services/games/board_arena.py::run_board_ai_benchmark(...)
+    -> play_board_ai_match(...)
+      -> services/games/board_ai.py::choose_board_game_ai_move(...)
+  -> write_board_ai_benchmark_report(...)
+```
+
+Artifact:
+
+- `runtime/reports/games/board_ai_benchmark_*.json`
+
+Deep tutorial:
+
+- [../docs/games/references/BOARD_AI_BENCHMARK.md](../docs/games/references/BOARD_AI_BENCHMARK.md)
+
+### KataGo Setup
+
+Entry:
+
+```bash
+python3 scripts/games/setup_katago.py
+```
+
+Purpose:
+
+- Download KataGo and the default Go neural-network model.
+- Generate `runtime/katago/analysis.cfg`.
+- Write `runtime/katago/hackme_katago.env` for custom runtime exports.
+- Let `services/games/board_ai.py` auto-detect the default install path for the Go `katago` difficulty.
+
+Dry run:
+
+```bash
+python3 scripts/games/setup_katago.py --dry-run
+```
+
+## Production Gate Live Regression Rule
+
+When changing production-gate logic, do not stop at unit tests.
+
+At minimum, QA must run:
+
+1. `scripts/security/gate/on_live_reports_make.py` or the equivalent 13-report
+   generation flow against an isolated `/tmp` server.
+2. A live regression proving:
+   - 13 verified `old/fake target_commit` reports **cannot** unlock production
+   - 13 verified `current target_commit` reports **can** unlock production
+
+If you launch the isolated server with [test_for_develop.sh](../test_for_develop.sh),
+`HTML_LEARNING_GIT_REPO_DIR` must still point at a real git repo with `.git`;
+do not point it at the `/tmp` copied workspace when validating `target_commit`.

@@ -7,6 +7,8 @@ import uuid
 
 from flask import request
 
+from services.system.ci_status import playwright_ci_status
+
 
 def register_system_admin_security_routes(app, ctx):
     BASE_DIR = ctx["BASE_DIR"]
@@ -208,6 +210,16 @@ def register_system_admin_security_routes(app, ctx):
             return error
         return json_resp({"ok": True, "database": db_integrity_summary()})
 
+    @app.route("/api/admin/health/playwright-ci", methods=["GET"])
+    @require_csrf_safe
+    def admin_health_playwright_ci():
+        _, error = require_super_admin_actor()
+        if error:
+            return error
+        workflow = str(request.args.get("workflow") or "playwright-qa.yml").strip() or "playwright-qa.yml"
+        result = playwright_ci_status(repo_dir=GIT_REPO_DIR, workflow_file=workflow)
+        return json_resp({"ok": True, "playwright_ci": result})
+
     @app.route("/api/admin/security-center", methods=["GET"])
     @require_csrf_safe
     def admin_security_center():
@@ -223,7 +235,41 @@ def register_system_admin_security_routes(app, ctx):
         if error:
             return error
         limit = request.args.get("limit", 200)
-        return json_resp({"ok": True, "server_output": get_server_output(limit=limit)})
+        try:
+            limit_int = max(1, int(limit))
+        except (TypeError, ValueError):
+            limit_int = 200
+        result = get_server_output(limit=limit_int) or {"lines": [], "max_lines": 0}
+        # When the in-process runtime buffer is empty (e.g. immediately after
+        # gunicorn boot, or after a runtime reset) fall back to tailing the
+        # gunicorn_error.log on disk so the operator can still see what
+        # happened during boot.
+        lines = result.get("lines") or []
+        if not lines:
+            log_path = os.path.join(LOG_DIR, "gunicorn_error.log")
+            if os.path.isfile(log_path):
+                try:
+                    with open(log_path, "r", encoding="utf-8", errors="replace") as fh:
+                        tail = fh.readlines()[-limit_int:]
+                    parsed_lines = []
+                    for raw in tail:
+                        text = raw.rstrip("\n")
+                        # gunicorn format: "[ts] [pid] [LEVEL] message"
+                        stream = "info"
+                        m = re.search(r"\[(DEBUG|INFO|WARNING|ERROR|CRITICAL)\]", text)
+                        if m:
+                            stream = m.group(1).lower()
+                        elif " ERROR " in text or " Traceback" in text:
+                            stream = "error"
+                        parsed_lines.append({"stream": stream, "line": text})
+                    result = {
+                        "lines": parsed_lines,
+                        "max_lines": result.get("max_lines") or 0,
+                        "source": "gunicorn_error.log",
+                    }
+                except OSError:
+                    pass
+        return json_resp({"ok": True, "server_output": result})
 
     @app.route("/api/root/security-tests", methods=["GET"])
     @require_csrf_safe
@@ -258,9 +304,9 @@ def register_system_admin_security_routes(app, ctx):
         try:
             data = request.get_json(force=True) if request.is_json else {}
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         target = str(data.get("target") or request.host_url or "").strip().rstrip("/")
         if not re.fullmatch(r"https?://[A-Za-z0-9.\-_\[\]:]+(?::\d+)?(?:/.*)?", target):
             return json_resp({"ok": False, "msg": "target 必須是 http(s) URL"}), 400
@@ -269,15 +315,19 @@ def register_system_admin_security_routes(app, ctx):
             return json_resp({"ok": False, "msg": "tool_timeout_seconds 必須介於 1-3600"}), 400
         report_root = security_test_report_root()
         command = [
-            os.path.join(BASE_DIR, "security", "run_pentest.sh"),
+            os.path.join(BASE_DIR, "scripts", "security", "pentest", "run_pentest.sh"),
             "--target", target,
             "--out", report_root,
             "--tool-timeout", str(tool_timeout),
         ]
         only = str(data.get("only") or "").strip()
         skip = str(data.get("skip") or "").strip()
-        if only:
-            command.extend(["--only", only])
+        # Default to a quick-scan set so the root operator can fire the
+        # endpoint with just `{target}` and still get a useful smoke run
+        # instead of accidentally launching the full pentest matrix.
+        if not only:
+            only = "curl-baseline,functional-permissions,session-security,header-security"
+        command.extend(["--only", only])
         if skip:
             command.extend(["--skip", skip])
         if bool(data.get("i_own_this_target")):
@@ -285,8 +335,18 @@ def register_system_admin_security_routes(app, ctx):
         env = {}
         for key in ("ROOT_PASSWORD", "MANAGER_PASSWORD", "TEST_PASSWORD"):
             value = str(data.get(key.lower()) or "").strip()
+            if not value:
+                value = str(os.environ.get(f"HTML_LEARNING_{key}") or "").strip()
             if value:
                 env[key] = value
+        # Defaults match the seed users created by test_for_develop.sh /
+        # the bootstrap routine so a fresh dev site can run the privilege
+        # scan without forcing every operator to pass usernames in JSON.
+        username_defaults = {
+            "root_username": "root",
+            "manager_username": "admin",
+            "user_username": "test",
+        }
         username_env_keys = {
             "root_username": "PENTEST_ROOT_USERNAME",
             "manager_username": "PENTEST_MANAGER_USERNAME",
@@ -294,12 +354,13 @@ def register_system_admin_security_routes(app, ctx):
         }
         for payload_key, env_key in username_env_keys.items():
             value = str(data.get(payload_key) or "").strip()
-            if value:
-                env[env_key] = value
+            if not value:
+                value = username_defaults[payload_key]
+            env[env_key] = value
         job = start_security_test_job(
             "pentest",
             command,
-            command_label=["security/run_pentest.sh", "--target", target],
+            command_label=["scripts/security/pentest/run_pentest.sh", "--target", target],
             report_root=report_root,
             report_prefix="20",
             actor=actor,
@@ -316,15 +377,15 @@ def register_system_admin_security_routes(app, ctx):
         try:
             data = request.get_json(force=True) if request.is_json else {}
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         port = safe_security_test_int(data.get("port"), 50741, 1, 65535)
         if port is None:
             return json_resp({"ok": False, "msg": "port 必須介於 1-65535"}), 400
         report_root = security_test_report_root()
         command = [
-            os.path.join(BASE_DIR, "security", "run_functional_smoke.sh"),
+            os.path.join(BASE_DIR, "scripts", "security", "pentest", "run_functional_smoke.sh"),
             "--port", str(port),
             "--out", report_root,
         ]
@@ -333,12 +394,14 @@ def register_system_admin_security_routes(app, ctx):
         env = {}
         for key in ("ROOT_PASSWORD", "ROOT_CHANGED_PASSWORD", "MANAGER_PASSWORD", "TEST_PASSWORD"):
             value = str(data.get(key.lower()) or "").strip()
+            if not value:
+                value = str(os.environ.get(f"HTML_LEARNING_{key}") or "").strip()
             if value:
                 env[key] = value
         job = start_security_test_job(
             "functional",
             command,
-            command_label=["security/run_functional_smoke.sh", "--port", str(port)],
+            command_label=["scripts/security/pentest/run_functional_smoke.sh", "--port", str(port)],
             report_root=report_root,
             report_prefix="functional_",
             actor=actor,
@@ -355,9 +418,9 @@ def register_system_admin_security_routes(app, ctx):
         try:
             data = request.get_json(force=True) if request.is_json else {}
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         target = str(data.get("target") or request.host_url or "").strip().rstrip("/")
         if not re.fullmatch(r"https?://[A-Za-z0-9.\-_\[\]:]+(?::\d+)?(?:/.*)?", target):
             return json_resp({"ok": False, "msg": "target 必須是 http(s) URL"}), 400
@@ -367,7 +430,7 @@ def register_system_admin_security_routes(app, ctx):
         out_md = os.path.join(report_root, f"{artifact_prefix}.md")
         command = [
             sys.executable,
-            os.path.join(BASE_DIR, "security", "functional_permission_pentest.py"),
+            os.path.join(BASE_DIR, "scripts", "security", "pentest", "functional_permission_pentest.py"),
             "--base-url", target,
             "--out-json", out_json,
             "--out-md", out_md,
@@ -377,8 +440,18 @@ def register_system_admin_security_routes(app, ctx):
         env = {}
         for key in ("ROOT_PASSWORD", "MANAGER_PASSWORD", "TEST_PASSWORD"):
             value = str(data.get(key.lower()) or "").strip()
+            if not value:
+                value = str(os.environ.get(f"HTML_LEARNING_{key}") or "").strip()
             if value:
                 env[key] = value
+        # Defaults match the seed users created by test_for_develop.sh /
+        # the bootstrap routine so a fresh dev site can run the privilege
+        # scan without forcing every operator to pass usernames in JSON.
+        username_defaults = {
+            "root_username": "root",
+            "manager_username": "admin",
+            "user_username": "test",
+        }
         username_env_keys = {
             "root_username": "PENTEST_ROOT_USERNAME",
             "manager_username": "PENTEST_MANAGER_USERNAME",
@@ -386,14 +459,15 @@ def register_system_admin_security_routes(app, ctx):
         }
         for payload_key, env_key in username_env_keys.items():
             value = str(data.get(payload_key) or "").strip()
-            if value:
-                env[env_key] = value
+            if not value:
+                value = username_defaults[payload_key]
+            env[env_key] = value
         job = start_security_test_job(
             "privilege",
             command,
             command_label=[
                 "python3",
-                "security/functional_permission_pentest.py",
+                "scripts/security/pentest/functional_permission_pentest.py",
                 "--base-url",
                 target,
             ] + (["--destructive"] if bool(data.get("destructive")) else []),
@@ -413,9 +487,9 @@ def register_system_admin_security_routes(app, ctx):
         try:
             data = request.get_json(force=True) if request.is_json else {}
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         target = str(data.get("target") or request.host_url or "").strip().rstrip("/")
         if not re.fullmatch(r"https?://[A-Za-z0-9.\-_\[\]:]+(?::\d+)?(?:/.*)?", target):
             return json_resp({"ok": False, "msg": "target 必須是 http(s) URL"}), 400
@@ -447,7 +521,7 @@ def register_system_admin_security_routes(app, ctx):
         report_root = security_test_report_root()
         command = [
             sys.executable,
-            os.path.join(BASE_DIR, "security", "stress_test.py"),
+            os.path.join(BASE_DIR, "scripts", "security", "pentest", "stress_test.py"),
             "--target", target,
             "--mode", mode,
             "--concurrency", str(concurrency),
@@ -467,7 +541,7 @@ def register_system_admin_security_routes(app, ctx):
             command,
             command_label=[
                 "python3",
-                "security/stress_test.py",
+                "scripts/security/pentest/stress_test.py",
                 "--target",
                 target,
                 "--mode",
@@ -490,9 +564,9 @@ def register_system_admin_security_routes(app, ctx):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         updates = {}
         for key in SECURITY_THRESHOLD_KEYS:
             if key not in data:
@@ -520,9 +594,9 @@ def register_system_admin_security_routes(app, ctx):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         updates = {key: data[key] for key in SECURITY_SETTING_KEYS if key in data}
         if not updates:
             return json_resp({"ok": False, "msg": "沒有可寫入的安全機制開關"}), 400
@@ -550,7 +624,7 @@ def register_system_admin_security_routes(app, ctx):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         branch = validate_git_branch_name((data or {}).get("branch"))
         if not branch:
             return json_resp({"ok": False, "msg": "請選擇合法的更新分支"}), 400
@@ -574,7 +648,7 @@ def register_system_admin_security_routes(app, ctx):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         branch = validate_git_branch_name((data or {}).get("branch"))
         confirm = str((data or {}).get("confirm") or "").strip()
         if not branch:
@@ -687,7 +761,7 @@ def register_system_admin_security_routes(app, ctx):
     @require_csrf_safe
     def admin_security_profiles():
         if not server_mode_service:
-            return json_resp({"ok": False, "msg": "server mode service unavailable"}), 503
+            return json_resp({"ok": False, "msg": "Server Mode 服務目前無法使用"}), 503
         if request.method == "GET":
             _, error = require_super_admin_actor()
             if error:
@@ -699,9 +773,9 @@ def register_system_admin_security_routes(app, ctx):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         profile_payload, err = security_profile_payload(data)
         if err:
             return json_resp({"ok": False, "msg": err}), 400
@@ -724,7 +798,7 @@ def register_system_admin_security_routes(app, ctx):
         if error:
             return error
         if not integrity_guard:
-            return json_resp({"ok":False,"msg":"integrity guard unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Integrity Guard 服務目前無法使用"}), 503
         return json_resp({"ok":True,"integrity":integrity_guard.status()})
 
     @app.route("/api/root/integrity/rescan", methods=["POST"])
@@ -734,7 +808,7 @@ def register_system_admin_security_routes(app, ctx):
         if error:
             return error
         if not integrity_guard:
-            return json_resp({"ok":False,"msg":"integrity guard unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Integrity Guard 服務目前無法使用"}), 503
         result = integrity_guard.scan(actor=actor["username"], create_initial_manifest=True)
         audit("INTEGRITY_RESCAN", get_client_ip(), user=actor["username"], success=bool(result.get("ok")), detail=f"status={result.get('status') or result.get('last_scan', {}).get('status')}")
         return json_resp({"ok":bool(result.get("ok", True)),"integrity":result}), (200 if result.get("ok", True) else 500)
@@ -746,7 +820,7 @@ def register_system_admin_security_routes(app, ctx):
         if error:
             return error
         if not integrity_guard:
-            return json_resp({"ok":False,"msg":"integrity guard unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Integrity Guard 服務目前無法使用"}), 503
         status = request.args.get("status") or None
         return json_resp({"ok":True,"findings":integrity_guard.list_findings(status=status)})
 
@@ -757,7 +831,7 @@ def register_system_admin_security_routes(app, ctx):
         if error:
             return error
         if not integrity_guard:
-            return json_resp({"ok":False,"msg":"integrity guard unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Integrity Guard 服務目前無法使用"}), 503
         finding = integrity_guard.get_finding(finding_id)
         if not finding:
             return json_resp({"ok":False,"msg":"找不到 integrity finding"}), 404
@@ -768,13 +842,13 @@ def register_system_admin_security_routes(app, ctx):
         if error:
             return error
         if not integrity_guard:
-            return json_resp({"ok":False,"msg":"integrity guard unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Integrity Guard 服務目前無法使用"}), 503
         try:
             data = request.get_json(force=True) if request.is_json else {}
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         result = integrity_guard.review_finding(
             finding_id,
             action=action,
@@ -791,16 +865,16 @@ def register_system_admin_security_routes(app, ctx):
         if error:
             return error
         if not integrity_guard:
-            return json_resp({"ok":False,"msg":"integrity guard unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Integrity Guard 服務目前無法使用"}), 503
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         action = str(data.get("action") or "").strip().lower()
         if action not in {"approve", "reject", "ignore"}:
-            return json_resp({"ok":False,"msg":"unsupported integrity action"}), 400
+            return json_resp({"ok":False,"msg": "不支援的 integrity 操作"}), 400
         raw_ids = data.get("finding_ids") or data.get("ids") or []
         if not isinstance(raw_ids, list) or not raw_ids:
             return json_resp({"ok":False,"msg":"finding_ids 不可為空"}), 400
@@ -810,7 +884,7 @@ def register_system_admin_security_routes(app, ctx):
             return json_resp({"ok":False,"msg":"finding_ids 格式錯誤"}), 400
         confirm = str(data.get("confirm") or "")
         if action == "approve" and confirm != CONFIRM_APPROVE:
-            return json_resp({"ok":False,"msg":"approve confirmation mismatch"}), 400
+            return json_resp({"ok":False,"msg": "確認字串不正確"}), 400
         note = str(data.get("note") or "")[:1000]
         results = []
         ok_count = 0
@@ -858,7 +932,7 @@ def register_system_admin_security_routes(app, ctx):
         if error:
             return error
         if not integrity_guard:
-            return json_resp({"ok":False,"msg":"integrity guard unavailable"}), 503
+            return json_resp({"ok":False,"msg": "Integrity Guard 服務目前無法使用"}), 503
         return json_resp({"ok":True,"report":integrity_guard.export_report(),"approve_confirm":CONFIRM_APPROVE})
 
     @app.route("/api/admin/integrity/repair", methods=["POST"])

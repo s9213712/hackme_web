@@ -53,6 +53,10 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _progress(message: str) -> None:
+    print(f"[chess-model-import] {message}", file=sys.stderr, flush=True)
+
+
 def _normalized_engine(value: str) -> str:
     normalized = str(value or "").strip().lower()
     if normalized == "exp2":
@@ -232,14 +236,32 @@ def main() -> int:
     args = parse_args()
     engine = _normalized_engine(args.engine)
     input_path = Path(args.input).expanduser().resolve()
-    raw = _load_input(input_path)
-    payload = _validate_for_engine(engine, raw)
     output_path = None if args.validate_only else Path(args.output).expanduser().resolve() if args.output else _default_output_for_engine(engine)
+    _progress(f"engine: {engine}")
+    _progress(f"input: {input_path}")
+    _progress(f"mode: {'validate-only' if args.validate_only else 'install'}")
     if output_path is not None:
+        _progress(f"target output: {output_path}")
+    _progress("phase load input started")
+    raw = _load_input(input_path)
+    _progress(f"phase result load input: {len(raw)} tensors/fields")
+    _progress("phase validate started")
+    payload = _validate_for_engine(engine, raw)
+    _progress("phase result validate: ok")
+    if output_path is not None:
+        _progress("phase write model started")
         _save_json(output_path, payload)
+        _progress(f"phase result write model: ok artifact={output_path}")
+    else:
+        _progress("phase result write model: skipped validate-only")
     print(json.dumps(_summary(engine, output_path, payload, validate_only=args.validate_only), ensure_ascii=False, indent=2))
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except Exception as exc:
+        _progress(f"FAIL: {exc}")
+        _progress("failure hint: verify --engine matches the input model schema and the output path is writable")
+        raise

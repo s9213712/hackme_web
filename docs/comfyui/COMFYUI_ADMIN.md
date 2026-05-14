@@ -24,10 +24,81 @@
 
 - `remote` 模式只負責生圖，不負責把模型下載回本站主機
 - `Civitai API Key` 與 root-only 下載工具只在 `local` 模式有意義
+- `ComfyUI Account API Key` 只用於官方付費 / API nodes。Key 由 root 在伺服器設定中輸入，前端 workflow JSON、匯出檔與 audit 不可保存明文 key
 - workflow preset / workflow JSON 匯入仍要通過 sanitize，不能接受本機絕對路徑、外部 URL、shell / exec 類節點
+
+## 本地 / 遠端功能矩陣
+
+| 功能 | local 本地 ComfyUI | remote 遠端 ComfyUI API | 備註 |
+|---|---:|---:|---|
+| 一般生圖 / workflow 執行 | 可用 | 可用 | 只要目標 ComfyUI API 可連線且模型 / custom nodes 齊全即可。 |
+| `/status`、模型清單、history、dependency check | 可用 | 可用 | 由目前設定的 ComfyUI API backend 回應。 |
+| workflow preset、template importer、UI graph normalize、manifest 顯示 | 可用 | 可用 | 這些主要是本站後端功能，不依賴本地檔案下載能力。 |
+| Visual Builder / node catalog | 可用 | 可用 | node catalog 會呼叫目前 backend 的 `/object_info`。 |
+| ComfyUI 官方付費 / API nodes（Partner Nodes） | 可用 | 條件式可用 | 需要 ComfyUI Account API Key 與官方 credits；遠端 backend 也必須支援 API Key integration 與安全網路條件。 |
+| 啟動 / 停止 ComfyUI process | 可用 | 不可用 | 只管理本站主機上 `comfyui_base_dir` 內的本地程序。 |
+| 下載 Linux 啟動腳本 template | 可用 | 不可用 | 只給本地模式配置使用。 |
+| Civitai 搜尋 / inspect / 下載模型到 ComfyUI 目錄 | 可用 | 不可用 | 遠端模式不能把模型下載回本站主機的本地 ComfyUI 目錄。 |
+| 本地模型檔案匯入 / 掃描本地 base dir | 可用 | 不可用 | 需要本站主機能讀寫 ComfyUI base dir。 |
+| 刪除 ComfyUI output 原始檔 | 可用 | 不可用 | 遠端模式只會清本站網頁預覽，不會刪遠端 output。 |
+
+`remote` 不是「雲端託管本站」；它只是本站後端把 ComfyUI API request 送到指定 `http(s)://host:port`。
+
+## API 與 Key 填寫位置
+
+入口：root 登入後打開「伺服器設定」→「ComfyUI 連線與模型」。
+
+### 連線模式
+
+- `連線模式 = local`：
+  - `本地 ComfyUI 目錄`：填本站主機可讀寫的 ComfyUI base dir。
+  - `本地啟動腳本`：填 base dir 內的啟動腳本，例如 `run_in_linux.sh`。
+  - `API Host` / `API Port`：填本站後端要呼叫的 ComfyUI API host/port，預設通常是 `localhost:8192`。
+- `連線模式 = remote`：
+  - `遠端 ComfyUI API`：填完整 `http(s)://host:port`。
+  - 不要包含帳密、path、query string。例如填 `https://comfy.example.com:8192`，不要填 `/prompt`。
+
+### Civitai API Key
+
+`Civitai API Key` 只用於 root 的模型搜尋 / inspect / 下載區，主要服務本地模型管理。它不是生圖 backend 的 ComfyUI API 位址，也不是 ComfyUI Account API Key。
+
+### ComfyUI Account API Key
+
+`ComfyUI Account API Key` 只用於 ComfyUI 官方付費 / API nodes（官方文件稱 Partner Nodes / API Nodes）：
+
+1. root 先勾選「允許 ComfyUI 付費 / API nodes」。
+2. 在「ComfyUI Account API Key」欄位貼上 key 後儲存。
+3. 留空儲存代表不變更；勾選「清除已儲存的 ComfyUI Account API Key」才會刪除。
+4. `/api/admin/settings` 只回傳 `comfyui_account_api_key_configured`，不回傳明文 key。
+5. 執行 workflow 時，後端只把 key 注入送往 ComfyUI `/prompt` 的 `extra_data.api_key_comfy_org`。
+
+## 付費 / API nodes
+
+ComfyUI 官方 API nodes 需要 ComfyUI Account API Key。本站的安全邊界是：
+
+- root 必須先在「伺服器設定 / ComfyUI 連線與模型」啟用「允許 ComfyUI 付費 / API nodes」
+- `ComfyUI Account API Key` 留空儲存代表不變更；勾選清除才會刪除已保存 key
+- `/api/admin/settings` 只回傳 `comfyui_account_api_key_configured`，不回傳明文 key
+- 後續執行 workflow 時，後端只在送往目前設定的 ComfyUI `/prompt` payload 補入 `extra_data.api_key_comfy_org`
+- 若 workflow JSON、layout JSON 或匯出檔包含明文 key，視為缺陷，必須修正
+
+## ComfyUI Credits 與本站積分完全不同
+
+ComfyUI credits 是 ComfyUI 官方帳號系統的付費額度，用於官方 Partner Nodes / API Nodes。本站的積分、錢包、交易所體驗金、任務獎勵都不是 ComfyUI credits，不能用來支付 ComfyUI 官方 API nodes。
+
+請務必用這個規則判斷成本：
+
+- 使用本站一般功能可能消耗本站積分 / quota。
+- 使用 ComfyUI 官方 Partner Nodes / API Nodes 會消耗 ComfyUI 官方 credits。
+- 兩者帳本不互通，也不會互相折抵。
+- 本站目前不販售、不充值、不退款 ComfyUI credits。
+
+ComfyUI 官方文件說明 credits 需先登入 ComfyUI account，然後在 ComfyUI UI 的 `Settings` → `Credits` 購買、查看餘額與 credit history。ComfyUI Account API Key integration 也要求帳號有足夠 credits 才能呼叫 paid API nodes。本站目前沒有依賴的穩定官方 REST endpoint 可查 credit balance，所以只顯示「key 是否已設定」與「這次 workflow 可能消耗 credits」的風險提示；實際餘額與消耗紀錄請到 ComfyUI UI 查看。
 
 ## 深層參考
 
 - [WEB.md](../WEB.md)
 - [For_developer.md](../For_developer.md)
 - [12_TROUBLESHOOTING.md](../12_TROUBLESHOOTING.md)
+- ComfyUI 官方 credits 說明：<https://docs.comfy.org/interface/credits>
+- ComfyUI 官方 API Key integration：<https://docs.comfy.org/development/comfyui-server/api-key-integration>

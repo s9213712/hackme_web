@@ -1,0 +1,218 @@
+{
+  "108": {
+    "class_type": "SaveVideo",
+    "inputs": {
+      "filename_prefix": "video/Wan2.2_image_to_video",
+      "fps": "auto",
+      "video": [
+        "148",
+        0
+      ]
+    }
+  },
+  "131": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+      "device": "default",
+      "type": "wan"
+    }
+  },
+  "132": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "wan_2.1_vae.safetensors"
+    }
+  },
+  "133": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "134": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "135": {
+    "class_type": "ModelSamplingSD3",
+    "inputs": {
+      "model": [
+        "139",
+        0
+      ],
+      "shift": 5.000000000000001
+    }
+  },
+  "136": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "131",
+        0
+      ],
+      "text": "A felt-style little eagle cashier greeting, waving, and smiling at the camera."
+    }
+  },
+  "137": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "131",
+        0
+      ],
+      "text": "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
+    }
+  },
+  "138": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "lora_name": "wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors",
+      "model": [
+        "133",
+        0
+      ],
+      "strength_model": 1.0000000000000002
+    }
+  },
+  "139": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "lora_name": "wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors",
+      "model": [
+        "134",
+        0
+      ],
+      "strength_model": 1.0000000000000002
+    }
+  },
+  "140": {
+    "class_type": "ModelSamplingSD3",
+    "inputs": {
+      "model": [
+        "138",
+        0
+      ],
+      "shift": 5.000000000000001
+    }
+  },
+  "141": {
+    "class_type": "WanImageToVideo",
+    "inputs": {
+      "batch_size": 1,
+      "height": 720,
+      "length": 81,
+      "negative": [
+        "137",
+        0
+      ],
+      "positive": [
+        "136",
+        0
+      ],
+      "start_image": [
+        "97",
+        0
+      ],
+      "vae": [
+        "132",
+        0
+      ],
+      "width": 720
+    }
+  },
+  "142": {
+    "class_type": "KSamplerAdvanced",
+    "inputs": {
+      "add_noise": "enable",
+      "cfg": 1,
+      "end_at_step": 2,
+      "latent_image": [
+        "148",
+        0
+      ],
+      "model": [
+        "140",
+        0
+      ],
+      "negative": [
+        "141",
+        1
+      ],
+      "noise_seed": 0,
+      "positive": [
+        "141",
+        0
+      ],
+      "return_with_leftover_noise": "enable",
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "start_at_step": 0,
+      "steps": 4
+    }
+  },
+  "143": {
+    "class_type": "KSamplerAdvanced",
+    "inputs": {
+      "add_noise": "disable",
+      "cfg": 1,
+      "end_at_step": 4,
+      "latent_image": [
+        "142",
+        0
+      ],
+      "model": [
+        "135",
+        0
+      ],
+      "negative": [
+        "141",
+        1
+      ],
+      "noise_seed": 0,
+      "positive": [
+        "141",
+        0
+      ],
+      "return_with_leftover_noise": "disable",
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "start_at_step": 2,
+      "steps": 4
+    }
+  },
+  "148": {
+    "class_type": "CreateVideo",
+    "inputs": {
+      "fps": 16,
+      "images": [
+        "149",
+        0
+      ]
+    }
+  },
+  "149": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "143",
+        0
+      ],
+      "vae": [
+        "132",
+        0
+      ]
+    }
+  },
+  "97": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "03_video_wan2_2_14B_i2v_subgraphed_input_image.png",
+      "upload": "image"
+    }
+  }
+}

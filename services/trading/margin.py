@@ -3,6 +3,7 @@
 import hashlib
 import json
 import math
+import os
 import uuid
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
@@ -112,7 +113,18 @@ def margin_risk_payload(
             "degraded": False,
             "override_price": True,
         }
-    if strict_high_risk and bool(price_meta.get("high_risk_blocked")):
+    price_confidence_override = str(os.environ.get("HACKME_DEV_TRADING_DISABLE_PRICE_CONFIDENCE_GATES") or "").strip().lower() in {"1", "true", "yes", "on"}
+    if not price_confidence_override:
+        row = conn.execute(
+            "SELECT value FROM trading_settings WHERE key IN (?, ?) ORDER BY CASE key WHEN ? THEN 0 ELSE 1 END LIMIT 1",
+            (
+                "trading.disable_price_confidence_gates",
+                "trading.dev_disable_price_confidence_gates",
+                "trading.disable_price_confidence_gates",
+            ),
+        ).fetchone()
+        price_confidence_override = str(row["value"] if row else "").strip().lower() in {"1", "true", "yes", "on"}
+    if strict_high_risk and bool(price_meta.get("high_risk_blocked")) and not price_confidence_override:
         raise ValueError(
             str(price_meta.get("high_risk_block_reason") or "risk-grade price unavailable")
         )
@@ -701,7 +713,7 @@ def open_margin_position(
                 raise ValueError("duplicate margin open request is still processing")
         borrow_settings = service._assert_borrowing_enabled(conn)
         market = service._market(conn, market_symbol)
-        service._assert_market_boot_ready(market, usage="margin position open")
+        service._assert_market_boot_ready(market, usage="margin position open", conn=conn)
         if not int(market.get("allow_margin") or 0):
             raise ValueError("margin trading is disabled for this market")
         service._validate_market_quantity_constraints(market, quantity_units)
@@ -1556,7 +1568,7 @@ def scan_margin_liquidations(service, *, actor=None, limit=100, ctx=None):
             try:
                 position = service._accrue_margin_interest(conn, position, actor=actor, ctx=route_ctx)
                 market = service._market(conn, position["market_symbol"])
-                if not service._is_market_boot_ready(market):
+                if not service._is_market_boot_ready(market, conn=conn):
                     errors.append(
                         {
                             "position_uuid": position["position_uuid"],
@@ -1647,6 +1659,49 @@ def scan_margin_liquidations(service, *, actor=None, limit=100, ctx=None):
     finally:
         conn.close()
 
+    liquidated = []
+    for candidate in candidates:
+        try:
+            result = close_margin_position(
+                service,
+                actor=actor,
+                position_uuid=candidate["position_uuid"],
+                force_liquidation=True,
+                price_override_points=(candidate.get("risk") or {}).get("price_points"),
+                price_source_override=(candidate.get("risk") or {}).get("price_source"),
+                allow_internal_price_override=True,
+                ctx=ctx,
+            )
+            liquidated.append(
+                {
+                    "position_uuid": candidate["position_uuid"],
+                    "user_id": candidate["user_id"],
+                    "market_symbol": candidate["market_symbol"],
+                    "delta_points": int(result.get("delta_points") or 0),
+                    "interest_points": int(result.get("interest_points") or 0),
+                    "close_fee_points": int(result.get("close_fee_points") or 0),
+                    "risk": candidate["risk"],
+                    "account_risk": candidate.get("account_risk"),
+                    "liquidation_order": candidate.get("liquidation_order") or [],
+                }
+            )
+        except Exception as exc:
+            errors.append(
+                {
+                    "position_uuid": candidate["position_uuid"],
+                    "user_id": candidate["user_id"],
+                    "error": str(exc),
+                }
+            )
+    return {
+        "ok": not errors,
+        "enabled": True,
+        "scanned": scanned,
+        "candidates": candidates,
+        "liquidated": liquidated,
+        "errors": errors,
+    }
+
 
 def _margin_target_hit(position, *, observed_price, observed_low, observed_high):
     entry_price = float(_to_decimal(position["entry_price_points"] or 0, name="entry_price_points", minimum=0.00000001))
@@ -1714,7 +1769,7 @@ def scan_margin_risk_targets(service, *, actor=None, limit=100, ctx=None):
         for row in rows:
             try:
                 market = service._market(conn, row["market_symbol"])
-                if not service._is_market_boot_ready(market):
+                if not service._is_market_boot_ready(market, conn=conn):
                     skipped.append({"position_uuid": row["position_uuid"], "reason": "market_boot_pending"})
                     continue
                 observed_price, _price_source, price_meta = service._current_market_price_points(
@@ -1778,46 +1833,3 @@ def scan_margin_risk_targets(service, *, actor=None, limit=100, ctx=None):
     finally:
         if conn is not None:
             conn.close()
-
-    liquidated = []
-    for candidate in candidates:
-        try:
-            result = close_margin_position(
-                service,
-                actor=actor,
-                position_uuid=candidate["position_uuid"],
-                force_liquidation=True,
-                price_override_points=(candidate.get("risk") or {}).get("price_points"),
-                price_source_override=(candidate.get("risk") or {}).get("price_source"),
-                allow_internal_price_override=True,
-                ctx=ctx,
-            )
-            liquidated.append(
-                {
-                    "position_uuid": candidate["position_uuid"],
-                    "user_id": candidate["user_id"],
-                    "market_symbol": candidate["market_symbol"],
-                    "delta_points": int(result.get("delta_points") or 0),
-                    "interest_points": int(result.get("interest_points") or 0),
-                    "close_fee_points": int(result.get("close_fee_points") or 0),
-                    "risk": candidate["risk"],
-                    "account_risk": candidate.get("account_risk"),
-                    "liquidation_order": candidate.get("liquidation_order") or [],
-                }
-            )
-        except Exception as exc:
-            errors.append(
-                {
-                    "position_uuid": candidate["position_uuid"],
-                    "user_id": candidate["user_id"],
-                    "error": str(exc),
-                }
-            )
-    return {
-        "ok": not errors,
-        "enabled": True,
-        "scanned": scanned,
-        "candidates": candidates,
-        "liquidated": liquidated,
-        "errors": errors,
-    }

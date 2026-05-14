@@ -61,8 +61,10 @@ def test_trading_workflow_editor_static_page_requires_login():
     server = (ROOT / "server.py").read_text(encoding="utf-8")
 
     assert "def protect_sensitive_static_pages()" in server
-    assert 'request.path != "/trading-workflow-editor.html"' in server
+    assert '"/trading-workflow-editor.html"' in server
+    assert '"/comfyui-workflow-editor.html"' in server
     assert "get_current_user_ctx()" in server
     assert "STATIC_PAGE_UNAUTH_DENIED" in server
     assert 'resp.headers["Location"] = "/"' in server
     assert 'is_feature_enabled("feature_trading_enabled")' in server
+    assert 'is_feature_enabled("feature_comfyui_enabled")' in server

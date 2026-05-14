@@ -193,6 +193,15 @@ class IsolatedServer:
         if self.process and self.process.poll() is None:
             return
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
+        for subdir in (
+            self.db_dir,
+            self.runtime_dir / "logs",
+            self.runtime_dir / "chats",
+            self.runtime_dir / "anchors",
+            self.runtime_dir / "storage",
+            self.runtime_dir / "reports",
+        ):
+            subdir.mkdir(parents=True, exist_ok=True)
         log = self.log_path.open("ab")
         self.process = subprocess.Popen(
             [sys.executable, str(REPO_ROOT / "server.py")],
@@ -285,6 +294,11 @@ class LiveHttpRunner:
         self.server.start()
         self.server.wait_ready()
         self.check_real_http_login()
+        mode, _mode_resp = self.current_mode()
+        if mode != "internal_test":
+            switched = self.switch_mode("internal_test", "SWITCH_TO_INTERNAL_TEST", expected={200})
+            if not switched["json"].get("ok"):
+                raise AssertionError(f"enter internal_test failed: {switched}")
         token = self.check_tester_token_traversal()
         self.check_log_chain_verify("before_crash")
         self.check_superweak_kill9_recovery()

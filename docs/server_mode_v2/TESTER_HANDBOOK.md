@@ -19,7 +19,7 @@
 > 看不出哪個？問核發給你 token 的 root，**不要猜**。猜錯送錯通道 → 401，但你會以為是
 > 自己帳號錯。
 
-完整對照表：[`docs/server_mode_v2/SERVER_MODE_V2_PROFILE_MATRIX.md` §Token Types](../../server_mode_v2/SERVER_MODE_V2_PROFILE_MATRIX.md#token-types)
+完整對照表：[`SERVER_MODE_V2_PROFILE_MATRIX.md` §Token Types](SERVER_MODE_V2_PROFILE_MATRIX.md#token-types)
 
 ---
 
@@ -373,9 +373,9 @@ curl -sk -H "User-Agent: ..." -b "$ROOT_COOKIE" \
 | 檔 | 為什麼要看 |
 |---|---|
 | [`README.md`](README.md) | 兩 token 的對照圖 + 6 個腳本索引 |
-| [`docs/server_mode_v2/SERVER_MODE_V2_PROFILE_MATRIX.md`](../../server_mode_v2/SERVER_MODE_V2_PROFILE_MATRIX.md) | 唯一權威的「哪個 mode 開哪個 feature」表 |
-| [`docs/AGENTS/QA_MISSION_FOR_AGENTS.md`](../../AGENTS/QA_MISSION_FOR_AGENTS.md) | QA 心態與底線 |
-| [`docs/AGENTS/RULES_FOR_AGENTS.md`](../../AGENTS/RULES_FOR_AGENTS.md) | 跨 agent 規則 |
+| [`SERVER_MODE_V2_PROFILE_MATRIX.md`](SERVER_MODE_V2_PROFILE_MATRIX.md) | 唯一權威的「哪個 mode 開哪個 feature」表 |
+| [`docs/AGENTS/QA_MISSION_FOR_AGENTS.md`](../AGENTS/QA_MISSION_FOR_AGENTS.md) | QA 心態與底線 |
+| [`docs/AGENTS/RULES_FOR_AGENTS.md`](../AGENTS/RULES_FOR_AGENTS.md) | 跨 agent 規則 |
 | [`01_internal_test_login_token.sh`](01_internal_test_login_token.sh) | login token 完整生命週期 |
 | [`02_tester_token_shadow_api.sh`](02_tester_token_shadow_api.sh) | tester token 完整生命週期 |
 | [`03_production_gate_playbook.md`](03_production_gate_playbook.md) | production 入口的 gate 報告（你不會直接動，但要懂） |
@@ -440,4 +440,4 @@ curl -sk -H "User-Agent: ..." -b "$ROOT_COOKIE" \
 > 你的工作不是「讓系統 PASS」。是「**證明邊界守得住**」。
 > 一個 PASS 的 tester session 是「我打了所有應該打的探針，**全部都正確被擋**」。
 
-Tester 腳本完整索引在 [`README.md`](README.md)。深度問題去看 [`docs/AGENTS/`](../../AGENTS/)。
+Tester 腳本完整索引在 [`README.md`](README.md)。深度問題去看 [`docs/AGENTS/`](../AGENTS/)。

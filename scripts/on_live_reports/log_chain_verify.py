@@ -7,7 +7,7 @@ is intact (`ok=true`), 1 otherwise.
 
 Usage:
     python3 scripts/on_live_reports/log_chain_verify.py \
-        --base-url https://127.0.0.1:5000 \
+        --base-url "https://127.0.0.1:$PORT" \
         --root-password "$ROOT_PASSWORD"
 """
 import argparse

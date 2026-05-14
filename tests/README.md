@@ -90,6 +90,27 @@ These should remain dedicated because they guard large invariants:
 - `test_security_issue_regressions.py`
 - `test_prepush_v2.py`
 
+## Production Gate Regression Coverage
+
+Production gate changes are not done when only unit tests pass.
+
+Minimum coverage now is:
+
+- `tests/snapshots/test_snapshots.py`
+  - filesystem auto-detect trust boundary
+  - unsigned / invalid JSON / `report_type` mismatch rejection
+  - verified old-commit report must not override current target
+- a live `/tmp` runtime regression
+  - 13 verified old/fake `target_commit` reports must fail
+  - 13 verified current `target_commit` reports must pass
+  - `POST /api/root/production/enter` must stay blocked until the current-commit set is complete
+
+The live evidence path should be written under:
+
+- `runtime/reports/server_mode_gate_live_<RUN_ID>/`
+
+Do not declare production-gate work complete if you only have `pytest 5 passed`.
+
 ## New Test Rule
 
 Before creating a new top-level `test_*.py` file:

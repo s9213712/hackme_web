@@ -1,14 +1,22 @@
 import json
 import random
+import secrets
 from datetime import datetime, timedelta, timezone
 
 from flask import request
 
+from services.games.board_ai import (
+    BOARD_AI_GAME_KEYS,
+    KataGoUnavailable,
+    board_ai_difficulties_for_game,
+    choose_board_game_ai_move,
+)
 from services.games.chess import (
     board_rows,
     draw_claim_status,
     game_status,
     initial_board,
+    king_square,
     legal_moves,
     opponent,
     validate_move,
@@ -27,11 +35,21 @@ from services.games.chess_pv import (
     EXPERIMENT_PV_DIFFICULTY,
     choose_experiment_pv_move,
 )
+from services.games.chess_pv_guarded_overlay import (
+    choose_experiment_pv_guarded_overlay_move,
+    guarded_overlay_enabled,
+)
+from services.games.chess_nnue import (
+    EXPERIMENT_NNUE_DIFFICULTY,
+    choose_experiment_nnue_move,
+)
 from services.games.chess_nn import (
     EXPERIMENT_NN_DIFFICULTY,
     choose_experiment_nn_move,
 )
+from services.games.chess_opening_book import book_move as chess_book_move
 from services.games.chess_dashboard import build_chess_engine_dashboard
+from services.games.chess_pipeline import maybe_launch_chess_train_pipeline
 from services.games.chess_promotion import (
     ensure_warm_start_chess_environment,
     promote_candidate_model,
@@ -42,12 +60,59 @@ from services.games.chess_replay_buffer import collect_match_replay
 from services.points_chain import DISPLAY_CURRENCY
 
 GAME_KEY = "chess"
-SOLO_GAME_KEYS = {"sudoku", "minesweeper", "1a2b", "tetris", "space_shooter"}
-SCORE_RANKED_SOLO_GAMES = {"tetris", "space_shooter"}
-SOLO_GAME_CHECK_SQL = "'sudoku', 'minesweeper', '1a2b', 'tetris', 'space_shooter'"
+SOLO_GAME_KEYS = {
+    "sudoku",
+    "minesweeper",
+    "1a2b",
+    "tetris",
+    "real_tetris",
+    "space_shooter",
+    "fps_arena",
+    "open_world",
+    "bullet_hell",
+    "stickman_shooter",
+    "snake",
+    "game_2048",
+    "brick_breaker",
+    "reversi",
+    "go",
+    "gomoku",
+    "chinese_chess",
+}
+SCORE_RANKED_SOLO_GAMES = {
+    "tetris",
+    "real_tetris",
+    "space_shooter",
+    "fps_arena",
+    "open_world",
+    "bullet_hell",
+    "stickman_shooter",
+    "snake",
+    "game_2048",
+    "brick_breaker",
+    "reversi",
+    "go",
+    "gomoku",
+    "chinese_chess",
+}
+MULTIPLAYER_GAME_KEYS = {"fps_arena", "stickman_shooter"}
+MULTIPLAYER_MODES_BY_GAME = {
+    "fps_arena": {"coop", "pvp"},
+    "stickman_shooter": {"coop"},
+}
+SOLO_GAME_CHECK_SQL = "'sudoku', 'minesweeper', '1a2b', 'tetris', 'real_tetris', 'space_shooter', 'fps_arena', 'open_world', 'bullet_hell', 'stickman_shooter', 'snake', 'game_2048', 'brick_breaker', 'reversi', 'go', 'gomoku', 'chinese_chess'"
 WEEKLY_REWARDS = (300, 200, 100)
-COMPUTER_DIFFICULTIES = {"normal", "hard", EXPERIMENT_DIFFICULTY, EXPERIMENT_NN_DIFFICULTY, EXPERIMENT_DL_DIFFICULTY, EXPERIMENT_PV_DIFFICULTY}
-MINESWEEPER_DIFFICULTIES = {"easy", "normal", "hard"}
+DAILY_CHALLENGE_REWARD_POINTS = 25
+COMPUTER_DIFFICULTIES = {
+    "normal",
+    "hard",
+    EXPERIMENT_DIFFICULTY,
+    EXPERIMENT_DL_DIFFICULTY,
+    EXPERIMENT_PV_DIFFICULTY,
+    EXPERIMENT_NNUE_DIFFICULTY,
+}
+LEGACY_COMPUTER_DIFFICULTIES = {EXPERIMENT_NN_DIFFICULTY}
+MINESWEEPER_DIFFICULTIES = {"easy", "normal", "hard", "master"}
 PIECE_VALUES = {
     "p": 100,
     "n": 320,
@@ -82,6 +147,13 @@ def normalize_computer_difficulty(value):
     if difficulty == "easy":
         difficulty = "normal"
     return difficulty if difficulty in COMPUTER_DIFFICULTIES else None
+
+
+def normalize_stored_computer_difficulty(value):
+    difficulty = str(value or "normal").strip().lower()
+    if difficulty == "easy":
+        difficulty = "normal"
+    return difficulty if difficulty in COMPUTER_DIFFICULTIES or difficulty in LEGACY_COMPUTER_DIFFICULTIES else "normal"
 
 
 def move_material_value(move):
@@ -136,8 +208,31 @@ def _choose_heuristic_move(board, side, difficulty="normal"):
     return random.choice(best_moves)
 
 
-def choose_computer_move(board, side, difficulty="normal", learning_store=None):
+def choose_computer_move(board, side, difficulty="normal", learning_store=None, move_history=None):
     difficulty = normalize_computer_difficulty(difficulty) or "normal"
+    if difficulty == EXPERIMENT_DIFFICULTY and learning_store is not None:
+        try:
+            learning_store.connect().close()
+        except Exception:
+            pass
+    if difficulty == EXPERIMENT_NNUE_DIFFICULTY:
+        board_payload = dict(board or {})
+        if isinstance(move_history, list):
+            board_payload["__move_history__"] = move_history
+        move = choose_experiment_nnue_move(board_payload, side, search_profile="balanced")
+        if move:
+            return move
+    # P2: try the static opening book first so engines without a built-in
+    # opening repertoire stop playing offbeat first moves like ``a5``. The
+    # book covers ~60 standard positions, returns ``None`` past book, and
+    # never overrides difficulty-specific engines for mid- or end-game play.
+    if difficulty != "easy":
+        try:
+            book_pick = chess_book_move(board, side)
+        except Exception:
+            book_pick = None
+        if book_pick:
+            return book_pick
     if difficulty == EXPERIMENT_DIFFICULTY:
         move = choose_experiment_move(board, side, store=learning_store, difficulty=difficulty, search_profile="fast")
         if move:
@@ -151,7 +246,10 @@ def choose_computer_move(board, side, difficulty="normal", learning_store=None):
         if move:
             return move
     if difficulty == EXPERIMENT_PV_DIFFICULTY:
-        move = choose_experiment_pv_move(board, side, search_profile="fast")
+        if guarded_overlay_enabled():
+            move = choose_experiment_pv_guarded_overlay_move(board, side, search_profile="fast", decision_mode="mcts")
+        else:
+            move = choose_experiment_pv_move(board, side, search_profile="fast", decision_mode="mcts")
         if move:
             return move
     return _choose_heuristic_move(board, side, difficulty)
@@ -200,7 +298,7 @@ def game_schema_sql():
         CHECK (status IN ('active', 'finished', 'cancelled')),
         CHECK (current_turn IN ('white', 'black')),
         CHECK (human_side IN ('white', 'black')),
-        CHECK (computer_difficulty IN ('easy', 'normal', 'hard', 'experiment', 'experiment 2:nn', 'experiment 3:dl', 'experiment 4:pv'))
+        CHECK (computer_difficulty IN ('easy', 'normal', 'hard', 'experiment', 'experiment 2:nn', 'experiment 3:dl', 'experiment 4:pv', 'experiment 5:nnue'))
     );
     CREATE TABLE IF NOT EXISTS game_invites (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -229,6 +327,17 @@ def game_schema_sql():
         created_at TEXT NOT NULL,
         UNIQUE(game_key, week_key, user_id)
     );
+    CREATE TABLE IF NOT EXISTS game_daily_challenge_rewards (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        game_key TEXT NOT NULL,
+        challenge_key TEXT NOT NULL,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        score_id INTEGER REFERENCES game_solo_scores(id) ON DELETE SET NULL,
+        reward_points INTEGER NOT NULL,
+        ledger_uuid TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE(game_key, challenge_key, user_id)
+    );
     CREATE TABLE IF NOT EXISTS game_solo_scores (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         game_key TEXT NOT NULL,
@@ -242,17 +351,72 @@ def game_schema_sql():
         penalty_seconds INTEGER NOT NULL DEFAULT 0,
         elapsed_ms INTEGER NOT NULL,
         created_at TEXT NOT NULL,
-        CHECK (game_key IN ('sudoku', 'minesweeper', '1a2b', 'tetris', 'space_shooter')),
+        CHECK (game_key IN ({SOLO_GAME_CHECK_SQL})),
         CHECK (elapsed_ms > 0),
         CHECK (raw_elapsed_ms > 0),
         CHECK (penalty_seconds >= 0)
+    );
+    CREATE TABLE IF NOT EXISTS game_multiplayer_rooms (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        room_code TEXT NOT NULL UNIQUE,
+        game_key TEXT NOT NULL,
+        mode TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'lobby',
+        host_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        guest_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT,
+        expires_at TEXT,
+        CHECK (game_key IN ('fps_arena', 'stickman_shooter')),
+        CHECK (mode IN ('coop', 'pvp')),
+        CHECK (status IN ('lobby', 'active', 'finished', 'cancelled'))
+    );
+    CREATE TABLE IF NOT EXISTS game_multiplayer_invites (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        room_id INTEGER NOT NULL REFERENCES game_multiplayer_rooms(id) ON DELETE CASCADE,
+        game_key TEXT NOT NULL,
+        mode TEXT NOT NULL,
+        inviter_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        invitee_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        status TEXT NOT NULL DEFAULT 'pending',
+        message TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        expires_at TEXT,
+        CHECK (game_key IN ('fps_arena', 'stickman_shooter')),
+        CHECK (mode IN ('coop', 'pvp')),
+        CHECK (status IN ('pending', 'accepted', 'rejected', 'cancelled', 'expired'))
+    );
+    CREATE TABLE IF NOT EXISTS game_multiplayer_player_states (
+        room_id INTEGER NOT NULL REFERENCES game_multiplayer_rooms(id) ON DELETE CASCADE,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        state_json TEXT NOT NULL DEFAULT '{{}}',
+        sequence INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (room_id, user_id)
+    );
+    CREATE TABLE IF NOT EXISTS game_multiplayer_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        room_id INTEGER NOT NULL REFERENCES game_multiplayer_rooms(id) ON DELETE CASCADE,
+        sender_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        target_user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        event_type TEXT NOT NULL,
+        payload_json TEXT NOT NULL DEFAULT '{{}}',
+        created_at TEXT NOT NULL,
+        CHECK (event_type IN ('gunshot', 'player_hit', 'friendly_fire', 'objective', 'down', 'finish'))
     );
     CREATE INDEX IF NOT EXISTS idx_game_matches_players ON game_matches(game_key, status, white_user_id, black_user_id);
     CREATE INDEX IF NOT EXISTS idx_game_matches_finished ON game_matches(game_key, mode, finished_at);
     CREATE INDEX IF NOT EXISTS idx_game_invites_user_status ON game_invites(game_key, opponent_user_id, status);
     CREATE INDEX IF NOT EXISTS idx_game_rewards_week ON game_leaderboard_rewards(game_key, week_key);
+    CREATE INDEX IF NOT EXISTS idx_game_daily_rewards_user ON game_daily_challenge_rewards(user_id, challenge_key);
     CREATE INDEX IF NOT EXISTS idx_game_solo_scores_rank ON game_solo_scores(game_key, week_key, difficulty, elapsed_ms);
-    """
+    CREATE INDEX IF NOT EXISTS idx_game_multiplayer_rooms_players ON game_multiplayer_rooms(game_key, status, host_user_id, guest_user_id);
+    CREATE INDEX IF NOT EXISTS idx_game_multiplayer_invites_user ON game_multiplayer_invites(game_key, invitee_user_id, status);
+    CREATE INDEX IF NOT EXISTS idx_game_multiplayer_events_room ON game_multiplayer_events(room_id, id);
+    """.format(SOLO_GAME_CHECK_SQL=SOLO_GAME_CHECK_SQL)
 
 
 def rebuild_solo_score_table(conn):
@@ -277,12 +441,12 @@ def rebuild_solo_score_table(conn):
             penalty_seconds INTEGER NOT NULL DEFAULT 0,
             elapsed_ms INTEGER NOT NULL,
             created_at TEXT NOT NULL,
-            CHECK (game_key IN ('sudoku', 'minesweeper', '1a2b', 'tetris', 'space_shooter')),
+            CHECK (game_key IN ({SOLO_GAME_CHECK_SQL})),
             CHECK (elapsed_ms > 0),
             CHECK (raw_elapsed_ms > 0),
             CHECK (penalty_seconds >= 0)
         )
-        """
+        """.format(SOLO_GAME_CHECK_SQL=SOLO_GAME_CHECK_SQL)
     )
     conn.execute(
         f"""
@@ -336,7 +500,7 @@ def rebuild_game_matches_table(conn):
                 CHECK (status IN ('active', 'finished', 'cancelled')),
                 CHECK (current_turn IN ('white', 'black')),
                 CHECK (human_side IN ('white', 'black')),
-                CHECK (computer_difficulty IN ('easy', 'normal', 'hard', 'experiment', 'experiment 2:nn', 'experiment 3:dl', 'experiment 4:pv'))
+                CHECK (computer_difficulty IN ('easy', 'normal', 'hard', 'experiment', 'experiment 2:nn', 'experiment 3:dl', 'experiment 4:pv', 'experiment 5:nnue'))
             )
             """
         )
@@ -412,7 +576,13 @@ def ensure_game_schema(conn):
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='game_matches'"
     ).fetchone()
     match_sql = str(match_schema["sql"] or "") if match_schema else ""
-    if match_schema and ("experiment" not in match_sql or "experiment 2:nn" not in match_sql or "experiment 3:dl" not in match_sql or "experiment 4:pv" not in match_sql):
+    if match_schema and (
+        "experiment" not in match_sql
+        or "experiment 2:nn" not in match_sql
+        or "experiment 3:dl" not in match_sql
+        or "experiment 4:pv" not in match_sql
+        or "experiment 5:nnue" not in match_sql
+    ):
         rebuild_game_matches_table(conn)
     cols = {row["name"] for row in conn.execute("PRAGMA table_info(game_matches)").fetchall()}
     if "white_deleted_at" not in cols:
@@ -457,11 +627,13 @@ def active_user_where(conn, alias=""):
 def serialize_match(row, actor_id=None):
     board = load_board(row)
     history = load_history(row)
+    status_info = game_status(board, row["current_turn"])
+    current_king_square = king_square(board, row["current_turn"])
     draw_status = draw_claim_status(board, row["current_turn"], move_history=history)
     side = None
     human_side = row["human_side"] if "human_side" in row.keys() else "white"
     computer_difficulty = row["computer_difficulty"] if "computer_difficulty" in row.keys() else "normal"
-    computer_difficulty = normalize_computer_difficulty(computer_difficulty) or "normal"
+    computer_difficulty = normalize_stored_computer_difficulty(computer_difficulty)
     if actor_id:
         if row["mode"] == "computer" and int(row["white_user_id"]) == int(actor_id):
             side = human_side
@@ -498,6 +670,8 @@ def serialize_match(row, actor_id=None):
         "current_turn": row["current_turn"],
         "board": board,
         "board_rows": board_rows(board),
+        "current_check": row["status"] == "active" and status_info.get("reason") == "check",
+        "current_king_square": current_king_square or "",
         "move_history": history,
         "winner_user_id": row["winner_user_id"],
         "winner_username": row["winner_username"],
@@ -553,6 +727,105 @@ def serialize_invite(row):
     }
 
 
+def normalize_multiplayer_game_key(game_key):
+    normalized = str(game_key or "").strip().lower()
+    return normalized if normalized in MULTIPLAYER_GAME_KEYS else None
+
+
+def normalize_multiplayer_mode(game_key, mode):
+    normalized = str(mode or "coop").strip().lower()
+    allowed = MULTIPLAYER_MODES_BY_GAME.get(game_key) or set()
+    return normalized if normalized in allowed else None
+
+
+def multiplayer_room_select_sql(where):
+    return f"""
+        SELECT r.*,
+               host.username AS host_username,
+               guest.username AS guest_username
+        FROM game_multiplayer_rooms r
+        JOIN users host ON host.id=r.host_user_id
+        LEFT JOIN users guest ON guest.id=r.guest_user_id
+        WHERE {where}
+    """
+
+
+def serialize_multiplayer_room(row, actor_id=None):
+    my_role = ""
+    if actor_id:
+        if int(row["host_user_id"]) == int(actor_id):
+            my_role = "host"
+        elif row["guest_user_id"] and int(row["guest_user_id"]) == int(actor_id):
+            my_role = "guest"
+    return {
+        "id": row["id"],
+        "room_code": row["room_code"],
+        "game_key": row["game_key"],
+        "mode": row["mode"],
+        "status": row["status"],
+        "host_user_id": row["host_user_id"],
+        "host_username": row["host_username"],
+        "guest_user_id": row["guest_user_id"],
+        "guest_username": row["guest_username"],
+        "my_role": my_role,
+        "can_start": bool(my_role and row["guest_user_id"] and row["status"] in {"lobby", "active"}),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "started_at": row["started_at"],
+        "finished_at": row["finished_at"],
+        "expires_at": row["expires_at"],
+    }
+
+
+def serialize_multiplayer_invite(row):
+    return {
+        "id": row["id"],
+        "room_id": row["room_id"],
+        "game_key": row["game_key"],
+        "mode": row["mode"],
+        "status": row["status"],
+        "inviter_user_id": row["inviter_user_id"],
+        "inviter_username": row["inviter_username"],
+        "invitee_user_id": row["invitee_user_id"],
+        "invitee_username": row["invitee_username"],
+        "message": row["message"] or "",
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "expires_at": row["expires_at"],
+    }
+
+
+def multiplayer_json_obj(value, fallback=None):
+    try:
+        data = json.loads(value or "{}")
+    except Exception:
+        data = fallback if fallback is not None else {}
+    return data if isinstance(data, dict) else (fallback if fallback is not None else {})
+
+
+def serialize_multiplayer_player_state(row):
+    return {
+        "user_id": row["user_id"],
+        "username": row["username"],
+        "sequence": row["sequence"],
+        "updated_at": row["updated_at"],
+        "state": multiplayer_json_obj(row["state_json"]),
+    }
+
+
+def serialize_multiplayer_event(row):
+    return {
+        "id": row["id"],
+        "room_id": row["room_id"],
+        "sender_user_id": row["sender_user_id"],
+        "sender_username": row["sender_username"],
+        "target_user_id": row["target_user_id"],
+        "event_type": row["event_type"],
+        "payload": multiplayer_json_obj(row["payload_json"]),
+        "created_at": row["created_at"],
+    }
+
+
 def finish_match(conn, row, status_info, now):
     winner_color = status_info.get("winner_color")
     winner_user_id = None
@@ -598,9 +871,9 @@ def register_games_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return None, json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return None, json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return None, json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return None, json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         return data, None, None
 
     def user_row(conn, user_id):
@@ -627,6 +900,71 @@ def register_games_routes(app, deps):
         if row["black_user_id"] and int(row["black_user_id"]) == int(actor["id"]):
             return "black_deleted_at"
         return None
+
+    def multiplayer_room_row(conn, room_id):
+        return conn.execute(multiplayer_room_select_sql("r.id=?"), (int(room_id),)).fetchone()
+
+    def actor_can_access_multiplayer_room(actor, row):
+        return bool(
+            row
+            and (
+                int(row["host_user_id"]) == int(actor["id"])
+                or (row["guest_user_id"] and int(row["guest_user_id"]) == int(actor["id"]))
+            )
+        )
+
+    def multiplayer_room_states(conn, room_id):
+        rows = conn.execute(
+            """
+            SELECT s.*, u.username
+            FROM game_multiplayer_player_states s
+            JOIN users u ON u.id=s.user_id
+            WHERE s.room_id=?
+            ORDER BY s.updated_at DESC
+            """,
+            (int(room_id),),
+        ).fetchall()
+        return [serialize_multiplayer_player_state(row) for row in rows]
+
+    def multiplayer_room_events(conn, room_id, actor_id, after_event_id=0, limit=80):
+        rows = conn.execute(
+            """
+            SELECT e.*, sender.username AS sender_username
+            FROM game_multiplayer_events e
+            JOIN users sender ON sender.id=e.sender_user_id
+            WHERE e.room_id=?
+              AND e.id>?
+              AND (e.target_user_id IS NULL OR e.target_user_id=? OR e.sender_user_id=?)
+            ORDER BY e.id ASC
+            LIMIT ?
+            """,
+            (int(room_id), int(after_event_id or 0), int(actor_id), int(actor_id), int(limit)),
+        ).fetchall()
+        return [serialize_multiplayer_event(row) for row in rows]
+
+    def multiplayer_room_payload(conn, row, actor_id, after_event_id=0):
+        return {
+            "room": serialize_multiplayer_room(row, actor_id),
+            "players": multiplayer_room_states(conn, row["id"]),
+            "events": multiplayer_room_events(conn, row["id"], actor_id, after_event_id=after_event_id),
+        }
+
+    def make_multiplayer_room_code(conn):
+        for _attempt in range(12):
+            code = secrets.token_urlsafe(6).replace("-", "").replace("_", "")[:8].upper()
+            exists = conn.execute("SELECT id FROM game_multiplayer_rooms WHERE room_code=?", (code,)).fetchone()
+            if not exists:
+                return code
+        return secrets.token_hex(5).upper()
+
+    def clamp_multiplayer_payload_json(value, label, max_bytes=12000):
+        try:
+            payload = json.dumps(value if isinstance(value, dict) else {}, ensure_ascii=False, sort_keys=True)
+        except Exception:
+            raise ValueError(f"{label} 格式錯誤")
+        if len(payload.encode("utf-8")) > max_bytes:
+            raise ValueError(f"{label} 太大")
+        return payload
 
     def award_weekly_rewards(week, actor=None):
         conn = get_db()
@@ -672,7 +1010,7 @@ def register_games_routes(app, deps):
                         row["score"],
                         reward_points,
                         ledger_uuid,
-                        int(actor["id"]) if actor and actor.get("id") else None,
+                        int(actor["id"]) if actor and "id" in actor.keys() else None,
                         now,
                     ),
                 )
@@ -683,6 +1021,88 @@ def register_games_routes(app, deps):
             if inserted:
                 awarded.append({"user_id": row["user_id"], "username": row["username"], "rank": index + 1, "reward_points": reward_points})
         return awarded
+
+    def daily_challenge_reward_status(conn, game_key, challenge_key, user_id):
+        row = conn.execute(
+            """
+            SELECT reward_points, ledger_uuid, created_at
+            FROM game_daily_challenge_rewards
+            WHERE game_key=? AND challenge_key=? AND user_id=?
+            """,
+            (game_key, challenge_key, int(user_id)),
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "eligible": True,
+            "awarded": False,
+            "already_claimed": True,
+            "reward_points": int(row["reward_points"] or DAILY_CHALLENGE_REWARD_POINTS),
+            "ledger_uuid": row["ledger_uuid"],
+            "created_at": row["created_at"],
+        }
+
+    def award_daily_challenge_reward(conn, *, actor, game_key, difficulty, puzzle_id, score_id, score):
+        challenge_key = str(puzzle_id or "").strip()[:64]
+        if not challenge_key or not challenge_key.startswith(f"{game_key}-daily-"):
+            return None
+        existing = daily_challenge_reward_status(conn, game_key, challenge_key, actor["id"])
+        if existing:
+            return existing
+        reward_points = DAILY_CHALLENGE_REWARD_POINTS
+        ledger_uuid = None
+        wallet = None
+        if points_service:
+            try:
+                result = points_service.record_transaction(
+                    user_id=int(actor["id"]),
+                    currency_type=DISPLAY_CURRENCY,
+                    direction="credit",
+                    amount=reward_points,
+                    action_type="game_daily_challenge_reward",
+                    reference_type="game_daily_challenge",
+                    reference_id=f"{game_key}:{challenge_key}",
+                    idempotency_key=f"game_daily_reward:{game_key}:{challenge_key}:{actor['id']}",
+                    reason=f"{game_key} 每日任務完成獎勵",
+                    public_metadata={
+                        "game_key": game_key,
+                        "challenge_key": challenge_key,
+                        "difficulty": difficulty,
+                        "score": int(score or 0),
+                    },
+                    actor=actor,
+                )
+                ledger_uuid = result["ledger"]["ledger_uuid"]
+                wallet = result.get("wallet")
+            except Exception as exc:
+                return {
+                    "eligible": True,
+                    "awarded": False,
+                    "reward_points": reward_points,
+                    "error": str(exc)[:180],
+                }
+        now = utc_now()
+        cur = conn.execute(
+            """
+            INSERT OR IGNORE INTO game_daily_challenge_rewards (
+                game_key, challenge_key, user_id, score_id, reward_points, ledger_uuid, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (game_key, challenge_key, int(actor["id"]), int(score_id), reward_points, ledger_uuid, now),
+        )
+        if cur.rowcount <= 0:
+            existing = daily_challenge_reward_status(conn, game_key, challenge_key, actor["id"])
+            if existing:
+                return existing
+        return {
+            "eligible": True,
+            "awarded": True,
+            "already_claimed": False,
+            "reward_points": reward_points,
+            "ledger_uuid": ledger_uuid,
+            "wallet": wallet,
+            "created_at": now,
+        }
 
     def collect_computer_replay(row, *, winner_color, actor_username):
         try:
@@ -704,6 +1124,18 @@ def register_games_routes(app, deps):
                     f"confidence={replay.get('confidence_score')}"
                 ),
             )
+            if replay.get("stored"):
+                try:
+                    maybe_launch_chess_train_pipeline(trigger="live_replay", actor_username=actor_username)
+                except Exception as exc:
+                    audit(
+                        "GAME_CHESS_PIPELINE_AUTORUN_FAILED",
+                        get_client_ip(),
+                        user=actor_username,
+                        success=False,
+                        ua=get_ua(),
+                        detail=f"match_id={row['id']}, error={type(exc).__name__}: {exc}",
+                    )
             return replay
         except Exception as exc:
             audit(
@@ -734,9 +1166,9 @@ def register_games_routes(app, deps):
                     {"key": "normal", "label": "普通"},
                     {"key": "hard", "label": "困難"},
                     {"key": EXPERIMENT_DIFFICULTY, "label": "實驗"},
-                    {"key": EXPERIMENT_NN_DIFFICULTY, "label": "實驗 2：NN"},
-                    {"key": EXPERIMENT_DL_DIFFICULTY, "label": "實驗 3：DL"},
-                    {"key": EXPERIMENT_PV_DIFFICULTY, "label": "實驗 4：PV"},
+                    {"key": EXPERIMENT_DL_DIFFICULTY, "label": "實驗 3：DL 語義平衡"},
+                    {"key": EXPERIMENT_PV_DIFFICULTY, "label": "實驗 4：Policy/Value + MCTS"},
+                    {"key": EXPERIMENT_NNUE_DIFFICULTY, "label": "實驗 5：NNUE + AlphaBeta/PVS"},
                 ],
             }, {
                 "key": "sudoku",
@@ -763,11 +1195,111 @@ def register_games_routes(app, deps):
                 "supports_invites": False,
                 "supports_computer": False,
             }, {
+                "key": "real_tetris",
+                "title": "真實版俄羅斯方塊",
+                "status": "available",
+                "supports_invites": False,
+                "supports_computer": False,
+            }, {
                 "key": "space_shooter",
                 "title": "宇宙戰機",
                 "status": "available",
                 "supports_invites": False,
                 "supports_computer": False,
+            }, {
+                "key": "fps_arena",
+                "title": "3D 射擊場",
+                "status": "available",
+                "supports_invites": True,
+                "supports_computer": False,
+                "multiplayer_modes": [
+                    {"key": "coop", "label": "合作破關"},
+                    {"key": "pvp", "label": "PvP 對戰"},
+                ],
+            }, {
+                "key": "open_world",
+                "title": "都市開放世界",
+                "status": "available",
+                "supports_invites": False,
+                "supports_computer": False,
+            }, {
+                "key": "bullet_hell",
+                "title": "彈幕遊戲",
+                "status": "available",
+                "supports_invites": False,
+                "supports_computer": False,
+            }, {
+                "key": "stickman_shooter",
+                "title": "火柴人橫向射擊",
+                "status": "available",
+                "supports_invites": True,
+                "supports_computer": False,
+                "multiplayer_modes": [
+                    {"key": "coop", "label": "合作破關"},
+                ],
+            }, {
+                "key": "snake",
+                "title": "貪食蛇",
+                "status": "available",
+                "supports_invites": False,
+                "supports_computer": False,
+            }, {
+                "key": "game_2048",
+                "title": "2048",
+                "status": "available",
+                "supports_invites": False,
+                "supports_computer": False,
+            }, {
+                "key": "brick_breaker",
+                "title": "打磚塊",
+                "status": "available",
+                "supports_invites": False,
+                "supports_computer": False,
+            }, {
+                "key": "reversi",
+                "title": "黑白棋",
+                "status": "available",
+                "supports_invites": False,
+                "supports_computer": True,
+                "computer_difficulties": [
+                    {"key": "easy", "label": "簡單"},
+                    {"key": "normal", "label": "普通"},
+                    {"key": "hard", "label": "困難"},
+                ],
+            }, {
+                "key": "go",
+                "title": "圍棋",
+                "status": "available",
+                "supports_invites": False,
+                "supports_computer": True,
+                "computer_difficulties": [
+                    {"key": "easy", "label": "簡單"},
+                    {"key": "normal", "label": "普通"},
+                    {"key": "hard", "label": "困難"},
+                    {"key": "katago", "label": "KataGo 神經網路"},
+                ],
+            }, {
+                "key": "gomoku",
+                "title": "五子棋",
+                "status": "available",
+                "supports_invites": False,
+                "supports_computer": True,
+                "computer_difficulties": [
+                    {"key": "easy", "label": "簡單"},
+                    {"key": "normal", "label": "普通"},
+                    {"key": "hard", "label": "困難"},
+                ],
+            }, {
+                "key": "chinese_chess",
+                "title": "中國象棋",
+                "status": "available",
+                "supports_invites": False,
+                "supports_computer": True,
+                "computer_difficulties": [
+                    {"key": "easy", "label": "簡單"},
+                    {"key": "normal", "label": "普通"},
+                    {"key": "hard", "label": "困難"},
+                ],
             }],
         })
 
@@ -794,6 +1326,435 @@ def register_games_routes(app, deps):
             return json_resp({"ok": True, "users": [dict(row) for row in rows]})
         finally:
             conn.close()
+
+    @app.route("/api/games/<game_key>/multiplayer", methods=["GET"])
+    @require_csrf_safe
+    def game_multiplayer_lobby(game_key):
+        actor, err, status = actor_or_401()
+        if err:
+            return err, status
+        game_key = normalize_multiplayer_game_key(game_key)
+        if not game_key:
+            return json_resp({"ok": False, "msg": "這個遊戲不支援多人房間"}), 404
+        conn = get_db()
+        try:
+            ensure_game_schema(conn)
+            rooms = conn.execute(
+                multiplayer_room_select_sql(
+                    """
+                    r.game_key=?
+                    AND r.status IN ('lobby', 'active')
+                    AND (r.host_user_id=? OR r.guest_user_id=?)
+                    ORDER BY CASE WHEN r.status='active' THEN 0 ELSE 1 END, r.id DESC
+                    LIMIT 40
+                    """
+                ),
+                (game_key, int(actor["id"]), int(actor["id"])),
+            ).fetchall()
+            invites = conn.execute(
+                """
+                SELECT i.*, inviter.username AS inviter_username, invitee.username AS invitee_username
+                FROM game_multiplayer_invites i
+                JOIN users inviter ON inviter.id=i.inviter_user_id
+                JOIN users invitee ON invitee.id=i.invitee_user_id
+                WHERE i.game_key=?
+                  AND (i.inviter_user_id=? OR i.invitee_user_id=?)
+                  AND i.status IN ('pending', 'accepted')
+                ORDER BY i.id DESC
+                LIMIT 60
+                """,
+                (game_key, int(actor["id"]), int(actor["id"])),
+            ).fetchall()
+            return json_resp({
+                "ok": True,
+                "game_key": game_key,
+                "modes": [
+                    {"key": mode, "label": "合作破關" if mode == "coop" else "PvP 對戰"}
+                    for mode in sorted(MULTIPLAYER_MODES_BY_GAME.get(game_key) or set())
+                ],
+                "rooms": [serialize_multiplayer_room(row, actor["id"]) for row in rooms],
+                "invites": [serialize_multiplayer_invite(row) for row in invites],
+            })
+        finally:
+            conn.close()
+
+    @app.route("/api/games/multiplayer/invites/pending", methods=["GET"])
+    @require_csrf_safe
+    def pending_game_multiplayer_invites():
+        actor, err, status = actor_or_401()
+        if err:
+            return err, status
+        conn = get_db()
+        try:
+            ensure_game_schema(conn)
+            rows = conn.execute(
+                """
+                SELECT
+                    i.*,
+                    inviter.username AS inviter_username,
+                    invitee.username AS invitee_username,
+                    r.room_code AS room_code,
+                    r.status AS room_status,
+                    r.host_user_id AS host_user_id,
+                    r.guest_user_id AS guest_user_id
+                FROM game_multiplayer_invites i
+                JOIN game_multiplayer_rooms r ON r.id=i.room_id
+                JOIN users inviter ON inviter.id=i.inviter_user_id
+                JOIN users invitee ON invitee.id=i.invitee_user_id
+                WHERE i.invitee_user_id=?
+                  AND i.status='pending'
+                  AND r.status IN ('lobby', 'active')
+                ORDER BY i.id DESC
+                LIMIT 20
+                """,
+                (int(actor["id"]),),
+            ).fetchall()
+            invites = []
+            for row in rows:
+                invite = serialize_multiplayer_invite(row)
+                invite["room"] = {
+                    "id": row["room_id"],
+                    "room_code": row["room_code"],
+                    "status": row["room_status"],
+                    "host_user_id": row["host_user_id"],
+                    "guest_user_id": row["guest_user_id"],
+                }
+                invites.append(invite)
+            return json_resp({"ok": True, "invites": invites})
+        finally:
+            conn.close()
+
+    @app.route("/api/games/<game_key>/multiplayer/invites", methods=["POST"])
+    @require_csrf
+    def create_game_multiplayer_invite(game_key):
+        actor, err, status = actor_or_401()
+        if err:
+            return err, status
+        game_key = normalize_multiplayer_game_key(game_key)
+        if not game_key:
+            return json_resp({"ok": False, "msg": "這個遊戲不支援多人房間"}), 404
+        data, err, status = parse_json_body()
+        if err:
+            return err, status
+        mode = normalize_multiplayer_mode(game_key, data.get("mode"))
+        if not mode:
+            return json_resp({"ok": False, "msg": "這個遊戲不支援所選多人模式"}), 400
+        username = str(data.get("opponent_username") or data.get("username") or "").strip()
+        if not username:
+            return json_resp({"ok": False, "msg": "請選擇要邀請的玩家"}), 400
+        conn = get_db()
+        try:
+            ensure_game_schema(conn)
+            active_filter = active_user_where(conn)
+            opponent_row = conn.execute(
+                f"SELECT id, username FROM users WHERE username=? AND {active_filter}",
+                (username,),
+            ).fetchone()
+            if not opponent_row:
+                return json_resp({"ok": False, "msg": "找不到可邀請的玩家"}), 404
+            if int(opponent_row["id"]) == int(actor["id"]):
+                return json_resp({"ok": False, "msg": "不能邀請自己"}), 400
+            pending = conn.execute(
+                """
+                SELECT i.id
+                FROM game_multiplayer_invites i
+                JOIN game_multiplayer_rooms r ON r.id=i.room_id
+                WHERE i.game_key=? AND i.mode=? AND i.status='pending'
+                  AND r.status IN ('lobby', 'active')
+                  AND i.inviter_user_id=? AND i.invitee_user_id=?
+                """,
+                (game_key, mode, int(actor["id"]), int(opponent_row["id"])),
+            ).fetchone()
+            if pending:
+                return json_resp({"ok": False, "msg": "已經有等待中的多人邀請"}), 409
+            conn.execute("BEGIN IMMEDIATE")
+            now = utc_now()
+            expires = (datetime.now(timezone.utc) + timedelta(hours=8)).replace(microsecond=0).isoformat()
+            room_cur = conn.execute(
+                """
+                INSERT INTO game_multiplayer_rooms (
+                    room_code, game_key, mode, status, host_user_id, guest_user_id,
+                    created_at, updated_at, expires_at
+                ) VALUES (?, ?, ?, 'lobby', ?, NULL, ?, ?, ?)
+                """,
+                (make_multiplayer_room_code(conn), game_key, mode, int(actor["id"]), now, now, expires),
+            )
+            room_id = room_cur.lastrowid
+            invite_cur = conn.execute(
+                """
+                INSERT INTO game_multiplayer_invites (
+                    room_id, game_key, mode, inviter_user_id, invitee_user_id, status,
+                    message, created_at, updated_at, expires_at
+                ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
+                """,
+                (
+                    room_id,
+                    game_key,
+                    mode,
+                    int(actor["id"]),
+                    int(opponent_row["id"]),
+                    str(data.get("message") or "")[:160],
+                    now,
+                    now,
+                    expires,
+                ),
+            )
+            conn.commit()
+            room = multiplayer_room_row(conn, room_id)
+            audit(
+                "GAME_MULTIPLAYER_INVITE_CREATED",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"game={game_key}, mode={mode}, room_id={room_id}, invite_id={invite_cur.lastrowid}",
+            )
+            return json_resp({
+                "ok": True,
+                "invite_id": invite_cur.lastrowid,
+                "room": serialize_multiplayer_room(room, actor["id"]) if room else None,
+            })
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    @app.route("/api/games/multiplayer/invites/<int:invite_id>/<action>", methods=["POST"])
+    @require_csrf
+    def review_game_multiplayer_invite(invite_id, action):
+        actor, err, status = actor_or_401()
+        if err:
+            return err, status
+        if action not in {"accept", "reject", "cancel"}:
+            return json_resp({"ok": False, "msg": "不支援的邀請操作"}), 400
+        conn = get_db()
+        try:
+            ensure_game_schema(conn)
+            conn.execute("BEGIN IMMEDIATE")
+            invite = conn.execute("SELECT * FROM game_multiplayer_invites WHERE id=?", (int(invite_id),)).fetchone()
+            if not invite:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": "找不到多人邀請"}), 404
+            if invite["status"] != "pending":
+                conn.rollback()
+                return json_resp({"ok": False, "msg": "邀請已處理"}), 409
+            actor_id = int(actor["id"])
+            if action == "cancel" and actor_id != int(invite["inviter_user_id"]):
+                conn.rollback()
+                return json_resp({"ok": False, "msg": "只有邀請者能取消邀請"}), 403
+            if action in {"accept", "reject"} and actor_id != int(invite["invitee_user_id"]):
+                conn.rollback()
+                return json_resp({"ok": False, "msg": "只有受邀者能回覆邀請"}), 403
+            room = conn.execute("SELECT * FROM game_multiplayer_rooms WHERE id=?", (int(invite["room_id"]),)).fetchone()
+            if not room or room["status"] not in {"lobby", "active"}:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": "多人房間已失效"}), 409
+            now = utc_now()
+            new_status = {"accept": "accepted", "reject": "rejected", "cancel": "cancelled"}[action]
+            if action == "accept":
+                if room["guest_user_id"] and int(room["guest_user_id"]) != actor_id:
+                    conn.rollback()
+                    return json_resp({"ok": False, "msg": "房間已被其他玩家加入"}), 409
+                conn.execute(
+                    "UPDATE game_multiplayer_rooms SET guest_user_id=?, updated_at=? WHERE id=?",
+                    (actor_id, now, int(invite["room_id"])),
+                )
+            elif action in {"reject", "cancel"}:
+                conn.execute(
+                    "UPDATE game_multiplayer_rooms SET status='cancelled', updated_at=?, finished_at=? WHERE id=?",
+                    (now, now, int(invite["room_id"])),
+                )
+            conn.execute(
+                "UPDATE game_multiplayer_invites SET status=?, updated_at=? WHERE id=?",
+                (new_status, now, int(invite_id)),
+            )
+            conn.commit()
+            refreshed = multiplayer_room_row(conn, invite["room_id"])
+            return json_resp({
+                "ok": True,
+                "room": serialize_multiplayer_room(refreshed, actor["id"]) if refreshed else None,
+            })
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    @app.route("/api/games/multiplayer/rooms/<int:room_id>", methods=["GET"])
+    @require_csrf_safe
+    def game_multiplayer_room_detail(room_id):
+        actor, err, status = actor_or_401()
+        if err:
+            return err, status
+        after_event_id = int(request.args.get("after_event_id") or 0)
+        conn = get_db()
+        try:
+            ensure_game_schema(conn)
+            room = multiplayer_room_row(conn, room_id)
+            if not room:
+                return json_resp({"ok": False, "msg": "找不到多人房間"}), 404
+            if not actor_can_access_multiplayer_room(actor, room):
+                return json_resp({"ok": False, "msg": "不是這個房間的玩家"}), 403
+            return json_resp({"ok": True, **multiplayer_room_payload(conn, room, actor["id"], after_event_id)})
+        finally:
+            conn.close()
+
+    @app.route("/api/games/multiplayer/rooms/<int:room_id>/start", methods=["POST"])
+    @require_csrf
+    def start_game_multiplayer_room(room_id):
+        actor, err, status = actor_or_401()
+        if err:
+            return err, status
+        conn = get_db()
+        try:
+            ensure_game_schema(conn)
+            conn.execute("BEGIN IMMEDIATE")
+            room = multiplayer_room_row(conn, room_id)
+            if not room:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": "找不到多人房間"}), 404
+            if not actor_can_access_multiplayer_room(actor, room):
+                conn.rollback()
+                return json_resp({"ok": False, "msg": "不是這個房間的玩家"}), 403
+            if not room["guest_user_id"]:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": "等待另一位玩家加入"}), 409
+            now = utc_now()
+            conn.execute(
+                """
+                UPDATE game_multiplayer_rooms
+                SET status='active', started_at=COALESCE(started_at, ?), updated_at=?
+                WHERE id=? AND status IN ('lobby', 'active')
+                """,
+                (now, now, int(room_id)),
+            )
+            conn.commit()
+            refreshed = multiplayer_room_row(conn, room_id)
+            return json_resp({"ok": True, **multiplayer_room_payload(conn, refreshed, actor["id"], 0)})
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    @app.route("/api/games/multiplayer/rooms/<int:room_id>/state", methods=["POST"])
+    @require_csrf
+    def update_game_multiplayer_room_state(room_id):
+        actor, err, status = actor_or_401()
+        if err:
+            return err, status
+        data, err, status = parse_json_body()
+        if err:
+            return err, status
+        state_body = data.get("state") if isinstance(data.get("state"), dict) else {}
+        after_event_id = int(data.get("after_event_id") or 0)
+        raw_events = data.get("events") if isinstance(data.get("events"), list) else []
+        allowed_events = {"gunshot", "player_hit", "friendly_fire", "objective", "down", "finish"}
+        conn = get_db()
+        try:
+            ensure_game_schema(conn)
+            conn.execute("BEGIN IMMEDIATE")
+            room = multiplayer_room_row(conn, room_id)
+            if not room:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": "找不到多人房間"}), 404
+            if not actor_can_access_multiplayer_room(actor, room):
+                conn.rollback()
+                return json_resp({"ok": False, "msg": "不是這個房間的玩家"}), 403
+            if room["status"] == "finished" or room["status"] == "cancelled":
+                conn.rollback()
+                return json_resp({"ok": False, "msg": "多人房間已結束"}), 409
+            state_json = clamp_multiplayer_payload_json(state_body, "玩家狀態")
+            now = utc_now()
+            existing_state = conn.execute(
+                "SELECT sequence FROM game_multiplayer_player_states WHERE room_id=? AND user_id=?",
+                (int(room_id), int(actor["id"])),
+            ).fetchone()
+            sequence = int(existing_state["sequence"] or 0) + 1 if existing_state else 1
+            conn.execute(
+                """
+                INSERT INTO game_multiplayer_player_states (room_id, user_id, state_json, sequence, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(room_id, user_id) DO UPDATE SET
+                    state_json=excluded.state_json,
+                    sequence=excluded.sequence,
+                    updated_at=excluded.updated_at
+                """,
+                (int(room_id), int(actor["id"]), state_json, sequence, now),
+            )
+            if room["guest_user_id"] and room["status"] == "lobby":
+                conn.execute(
+                    "UPDATE game_multiplayer_rooms SET status='active', started_at=COALESCE(started_at, ?), updated_at=? WHERE id=?",
+                    (now, now, int(room_id)),
+                )
+            else:
+                conn.execute("UPDATE game_multiplayer_rooms SET updated_at=? WHERE id=?", (now, int(room_id)))
+            participant_ids = {int(room["host_user_id"])}
+            if room["guest_user_id"]:
+                participant_ids.add(int(room["guest_user_id"]))
+            for event in raw_events[:12]:
+                if not isinstance(event, dict):
+                    continue
+                event_type = str(event.get("type") or event.get("event_type") or "").strip().lower()
+                if event_type not in allowed_events:
+                    continue
+                target_user_id = event.get("target_user_id")
+                if target_user_id is not None:
+                    try:
+                        target_user_id = int(target_user_id)
+                    except Exception:
+                        continue
+                    if target_user_id not in participant_ids:
+                        continue
+                payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+                payload_json = clamp_multiplayer_payload_json(payload, "事件資料", max_bytes=2400)
+                conn.execute(
+                    """
+                    INSERT INTO game_multiplayer_events (room_id, sender_user_id, target_user_id, event_type, payload_json, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (int(room_id), int(actor["id"]), target_user_id, event_type, payload_json, now),
+                )
+            conn.commit()
+            refreshed = multiplayer_room_row(conn, room_id)
+            return json_resp({"ok": True, **multiplayer_room_payload(conn, refreshed, actor["id"], after_event_id)})
+        except ValueError as exc:
+            conn.rollback()
+            return json_resp({"ok": False, "msg": str(exc)}), 400
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    @app.route("/api/games/<game_key>/ai-move", methods=["POST"])
+    @require_csrf
+    def board_game_ai_move(game_key):
+        actor, err, status = actor_or_401()
+        if err:
+            return err, status
+        game_key = str(game_key or "").strip().lower()
+        if game_key not in BOARD_AI_GAME_KEYS:
+            return json_resp({"ok": False, "msg": "不支援的棋類 AI"}), 404
+        data, err, status = parse_json_body()
+        if err:
+            return err, status
+        difficulty = str(data.get("difficulty") or "normal").strip().lower()
+        if difficulty not in board_ai_difficulties_for_game(game_key):
+            return json_resp({"ok": False, "msg": "不支援的 AI 難度"}), 400
+        try:
+            decision = choose_board_game_ai_move(
+                game_key,
+                data.get("board"),
+                data.get("turn"),
+                difficulty,
+            )
+        except KataGoUnavailable as exc:
+            return json_resp({"ok": False, "msg": str(exc)}), 503
+        except ValueError as exc:
+            return json_resp({"ok": False, "msg": str(exc)}), 400
+        return json_resp({"ok": True, **decision})
 
     @app.route("/api/games/chess/invites", methods=["GET"])
     @require_csrf_safe
@@ -984,6 +1945,63 @@ def register_games_routes(app, deps):
         finally:
             conn.close()
 
+    @app.route("/api/games/chess/challenge", methods=["POST"])
+    @require_csrf
+    def create_chess_challenge():
+        actor, err, status = actor_or_401()
+        if err:
+            return err, status
+        data, err, status = parse_json_body()
+        if err:
+            return err, status
+        preset_key = str(data.get("preset") or "rook_endgame").strip().lower()
+        presets = {
+            "rook_endgame": {
+                "title": "車王殘局",
+                "board": {"e1": "K", "a1": "R", "e8": "k"},
+                "turn": "white",
+                "hint": "用車切斷黑王，再用白王靠近逼到邊線。",
+            },
+            "queen_mate": {
+                "title": "后翼將殺網",
+                "board": {"g1": "K", "h5": "Q", "e8": "k", "f7": "p", "g7": "p", "h7": "p"},
+                "turn": "white",
+                "hint": "先找王旁弱點，避免只貪吃子。",
+            },
+            "knight_fork": {
+                "title": "馬叉戰術",
+                "board": {"e1": "K", "f3": "N", "g8": "k", "d4": "q", "h4": "r", "e7": "p"},
+                "turn": "white",
+                "hint": "尋找帶將軍或攻擊重子的馬跳點。",
+            },
+        }
+        preset = presets.get(preset_key) or presets["rook_endgame"]
+        conn = get_db()
+        try:
+            ensure_game_schema(conn)
+            now = utc_now()
+            cur = conn.execute(
+                """
+                INSERT INTO game_matches (
+                    game_key, mode, status, white_user_id, black_user_id, human_side, computer_difficulty, current_turn,
+                    board_json, move_history_json, created_at, updated_at
+                ) VALUES (?, 'computer', 'active', ?, NULL, 'white', 'hard', ?, ?, ?, ?, ?)
+                """,
+                (
+                    GAME_KEY,
+                    int(actor["id"]),
+                    preset["turn"],
+                    json.dumps(preset["board"], ensure_ascii=False, sort_keys=True),
+                    "[]",
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+            return json_resp({"ok": True, "match_id": cur.lastrowid, "preset": preset_key, "title": preset["title"], "hint": preset["hint"]})
+        finally:
+            conn.close()
+
     @app.route("/api/games/chess/matches", methods=["GET"])
     @require_csrf_safe
     def chess_matches():
@@ -1120,6 +2138,7 @@ def register_games_routes(app, deps):
                     computer_side,
                     computer_difficulty,
                     learning_store=chess_engine_store,
+                    move_history=history,
                 )
                 if computer_move:
                     computer_applied = validate_move(board, computer_side, computer_move["from"], computer_move["to"], computer_move.get("promotion"))
@@ -1393,10 +2412,14 @@ def register_games_routes(app, deps):
         if game_key not in SOLO_GAME_KEYS:
             return json_resp({"ok": False, "msg": "不支援的單人遊戲"}), 404
         week = str(request.args.get("week") or current_week_key()).strip()
-        difficulty = str(request.args.get("difficulty") or ("easy" if game_key == "minesweeper" else "standard")).strip().lower()
-        if game_key == "minesweeper" and difficulty not in MINESWEEPER_DIFFICULTIES:
+        puzzle_id = str(request.args.get("puzzle_id") or "").strip()[:64]
+        raw_difficulty = request.args.get("difficulty")
+        difficulty = str(raw_difficulty or ("easy" if game_key == "minesweeper" else "standard")).strip().lower()
+        if puzzle_id and raw_difficulty is None:
+            difficulty = ""
+        if difficulty and game_key == "minesweeper" and difficulty not in MINESWEEPER_DIFFICULTIES and not difficulty.startswith("daily-"):
             return json_resp({"ok": False, "msg": "不支援的難度"}), 400
-        if game_key in {"sudoku", "1a2b"}:
+        if difficulty and game_key in {"sudoku", "1a2b"} and not difficulty.startswith("daily-"):
             difficulty = "standard"
         conn = get_db()
         try:
@@ -1409,9 +2432,10 @@ def register_games_routes(app, deps):
                 "ok": True,
                 "game_key": game_key,
                 "week": week,
-                "difficulty": difficulty,
+                "difficulty": difficulty or "any",
+                "puzzle_id": puzzle_id,
                 "rank_mode": rank_mode,
-                "leaderboard": solo_leaderboard_rows(conn, game_key, week, difficulty),
+                "leaderboard": solo_leaderboard_rows(conn, game_key, week, difficulty or None, puzzle_id=puzzle_id or None),
             })
         finally:
             conn.close()
@@ -1441,9 +2465,9 @@ def register_games_routes(app, deps):
         if elapsed_ms > 24 * 60 * 60 * 1000 or penalty_seconds > 3600:
             return json_resp({"ok": False, "msg": "成績時間超出合理範圍"}), 400
         difficulty = str(data.get("difficulty") or ("easy" if game_key == "minesweeper" else "standard")).strip().lower()
-        if game_key == "minesweeper" and difficulty not in MINESWEEPER_DIFFICULTIES:
+        if game_key == "minesweeper" and difficulty not in MINESWEEPER_DIFFICULTIES and not difficulty.startswith("daily-"):
             return json_resp({"ok": False, "msg": "不支援的難度"}), 400
-        if game_key in {"sudoku", "1a2b"}:
+        if game_key in {"sudoku", "1a2b"} and not difficulty.startswith("daily-"):
             difficulty = "standard"
         try:
             guess_count = int(data.get("guess_count") or 0)
@@ -1482,6 +2506,17 @@ def register_games_routes(app, deps):
                 """,
                 (game_key, int(actor["id"]), week, difficulty, puzzle_id, score, guess_count, raw_elapsed_ms, penalty_seconds, elapsed_ms, now),
             )
+            score_id = cur.lastrowid
+            conn.commit()
+            daily_reward = award_daily_challenge_reward(
+                conn,
+                actor=actor,
+                game_key=game_key,
+                difficulty=difficulty,
+                puzzle_id=puzzle_id,
+                score_id=score_id,
+                score=score,
+            )
             conn.commit()
             audit(
                 "GAME_SOLO_SCORE_SUBMITTED",
@@ -1489,12 +2524,13 @@ def register_games_routes(app, deps):
                 user=actor["username"],
                 success=True,
                 ua=get_ua(),
-                detail=f"game_key={game_key},score_id={cur.lastrowid},score={score},elapsed_ms={elapsed_ms},penalty_seconds={penalty_seconds},guess_count={guess_count}",
+                detail=f"game_key={game_key},score_id={score_id},score={score},elapsed_ms={elapsed_ms},penalty_seconds={penalty_seconds},guess_count={guess_count}",
             )
             return json_resp({
                 "ok": True,
-                "score_id": cur.lastrowid,
+                "score_id": score_id,
                 "week": week,
+                "daily_reward": daily_reward,
                 "leaderboard": solo_leaderboard_rows(conn, game_key, week, difficulty),
             })
         finally:
@@ -1506,7 +2542,7 @@ def register_games_routes(app, deps):
         actor, err, status = actor_or_401()
         if err:
             return err, status
-        if actor.get("username") != "root":
+        if actor["username"] != "root":
             return json_resp({"ok": False, "msg": "只有 root 可執行此操作"}), 403
         data, err, status = parse_json_body()
         if err:
@@ -1522,7 +2558,7 @@ def register_games_routes(app, deps):
         actor, err, status = actor_or_401()
         if err:
             return err, status
-        if actor.get("username") != "root":
+        if actor["username"] != "root":
             return json_resp({"ok": False, "msg": "只有 root 可執行此操作"}), 403
         return json_resp(ensure_warm_start_chess_environment())
 
@@ -1532,7 +2568,7 @@ def register_games_routes(app, deps):
         actor, err, status = actor_or_401()
         if err:
             return err, status
-        if actor.get("username") != "root":
+        if actor["username"] != "root":
             return json_resp({"ok": False, "msg": "只有 root 可查看此資訊"}), 403
         return json_resp(build_chess_engine_dashboard())
 
@@ -1542,7 +2578,7 @@ def register_games_routes(app, deps):
         actor, err, status = actor_or_401()
         if err:
             return err, status
-        if actor.get("username") != "root":
+        if actor["username"] != "root":
             return json_resp({"ok": False, "msg": "只有 root 可查看此資訊"}), 403
         return json_resp({"ok": True, "promotion": promotion_status_summary()})
 
@@ -1552,7 +2588,7 @@ def register_games_routes(app, deps):
         actor, err, status = actor_or_401()
         if err:
             return err, status
-        if actor.get("username") != "root":
+        if actor["username"] != "root":
             return json_resp({"ok": False, "msg": "只有 root 可執行此操作"}), 403
         data, err, status = parse_json_body()
         if err:
@@ -1573,7 +2609,7 @@ def register_games_routes(app, deps):
         actor, err, status = actor_or_401()
         if err:
             return err, status
-        if actor.get("username") != "root":
+        if actor["username"] != "root":
             return json_resp({"ok": False, "msg": "只有 root 可執行此操作"}), 403
         data, err, status = parse_json_body()
         if err:
@@ -1614,7 +2650,7 @@ def leaderboard_rows(conn, week):
     return [{**dict(row), "rank": index + 1} for index, row in enumerate(rows)]
 
 
-def solo_leaderboard_rows(conn, game_key, week, difficulty):
+def solo_leaderboard_rows(conn, game_key, week, difficulty, puzzle_id=None):
     best_order = "s2.elapsed_ms ASC, s2.created_at ASC, s2.id ASC"
     final_order = "best.elapsed_ms ASC, attempts.attempts ASC, u.username COLLATE NOCASE ASC"
     if game_key == "1a2b":
@@ -1623,6 +2659,25 @@ def solo_leaderboard_rows(conn, game_key, week, difficulty):
     elif game_key in SCORE_RANKED_SOLO_GAMES:
         best_order = "s2.score DESC, s2.elapsed_ms ASC, s2.created_at ASC, s2.id ASC"
         final_order = "best.score DESC, best.elapsed_ms ASC, u.username COLLATE NOCASE ASC"
+    puzzle_filter = " AND s2.puzzle_id=?" if puzzle_id else ""
+    attempt_puzzle_filter = " AND puzzle_id=?" if puzzle_id else ""
+    outer_puzzle_filter = " AND s.puzzle_id=?" if puzzle_id else ""
+    best_difficulty_filter = " AND s2.difficulty=s.difficulty" if difficulty else ""
+    attempt_difficulty_filter = " AND difficulty=?" if difficulty else ""
+    outer_difficulty_filter = " AND s.difficulty=?" if difficulty else ""
+    params = []
+    if puzzle_id:
+        params.append(puzzle_id)
+    params.extend([game_key, week])
+    if difficulty:
+        params.append(difficulty)
+    if puzzle_id:
+        params.append(puzzle_id)
+    params.extend([game_key, week])
+    if difficulty:
+        params.append(difficulty)
+    if puzzle_id:
+        params.append(puzzle_id)
     rows = conn.execute(
         f"""
         SELECT best.user_id,
@@ -1640,23 +2695,24 @@ def solo_leaderboard_rows(conn, game_key, week, difficulty):
             FROM game_solo_scores s2
             WHERE s2.game_key=s.game_key
               AND s2.week_key=s.week_key
-              AND s2.difficulty=s.difficulty
               AND s2.user_id=s.user_id
+              {best_difficulty_filter}
+              {puzzle_filter}
             ORDER BY {best_order}
             LIMIT 1
         )
         JOIN (
             SELECT user_id, COUNT(*) AS attempts
             FROM game_solo_scores
-            WHERE game_key=? AND week_key=? AND difficulty=?
+            WHERE game_key=? AND week_key=?{attempt_difficulty_filter}{attempt_puzzle_filter}
             GROUP BY user_id
         ) attempts ON attempts.user_id=best.user_id
         JOIN users u ON u.id=best.user_id
-        WHERE s.game_key=? AND s.week_key=? AND s.difficulty=?
+        WHERE s.game_key=? AND s.week_key=?{outer_difficulty_filter}{outer_puzzle_filter}
         GROUP BY best.id, best.user_id, u.username, best.score, best.elapsed_ms, best.raw_elapsed_ms, best.penalty_seconds, best.guess_count, attempts.attempts, best.created_at
         ORDER BY {final_order}
         LIMIT 50
         """,
-        (game_key, week, difficulty, game_key, week, difficulty),
+        tuple(params),
     ).fetchall()
     return [{**dict(row), "rank": index + 1} for index, row in enumerate(rows)]

@@ -8,9 +8,9 @@ from tests.comfyui._integration_suite import (
     test_comfyui_workflow_chains_loras_between_checkpoint_and_sampler,
     test_comfyui_workflow_import_rejects_bad_json_and_unsafe_paths,
     test_comfyui_workflow_import_rejects_too_many_nodes_and_deep_nesting,
+    test_comfyui_workflow_layout_metadata_versions_export_and_reimport,
     test_comfyui_workflow_run_rejects_missing_dependencies,
     test_comfyui_workflow_uses_custom_vae_when_selected,
     test_comfyui_workflow_uses_requested_batch_size,
     test_root_can_publish_official_workflow_preset_with_audit,
 )
-

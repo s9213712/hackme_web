@@ -21,8 +21,8 @@
 | Security Center / Server Mode | root | audit、integrity、snapshot/restore、health center | [06_SECURITY_MODEL.md](06_SECURITY_MODEL.md), [SERVER_MODE_V2_PROFILE_MATRIX.md](server_mode_v2/SERVER_MODE_V2_PROFILE_MATRIX.md) |
 | PointsChain | 經濟功能 | wallet、ledger、video tips、trading | [07_POINTSCHAIN.md](07_POINTSCHAIN.md) |
 | Trading / Bots / Backtest | 交易站點 | PointsChain、economy、price feeds、chart indicators、QA scripts | [08_TRADING_ENGINE.md](08_TRADING_ENGINE.md), [TRADING.md](trading/TRADING.md) |
+| Games / Board AI | 遊戲站點 | CSRF、排行榜、三棋 AI benchmark、chess engine pipeline | [games/README.md](games/README.md), [games/references/BOARD_AI_BENCHMARK.md](games/references/BOARD_AI_BENCHMARK.md) |
 | Snapshot / Restore / Reset | root / 運維 | server mode、audit、integrity、PointsChain | [09_SNAPSHOT_RESET_RESTORE.md](09_SNAPSHOT_RESET_RESTORE.md) |
-| WebTerminal | 已封存 | 不在 active main line | [10_WEB_TERMINAL.md](10_WEB_TERMINAL.md) |
 
 ## 模組詳解
 
@@ -91,10 +91,29 @@
 - 一句話說明：提供違規通知、治理通知、申訴與審核流。
 - 設計目的：讓權限、處分與可回溯治理流程可被記錄與追蹤。
 - 使用方法：使用者查看通知、提申訴；管理者審核、批准、拒絕。
-- 原理：通知、申訴、治理動作會連動權限與審計記錄。
-- 失敗情境與提示：功能關閉、身分不足、通知不存在或已處理。
+- 原理：通知、申訴、治理動作會連動權限與審計記錄；通知列含 `severity`、
+  `audience`、來源模組與 `dismissed_at`，使用者隱藏通知後會從預設清單與未讀數排除。
+- 失敗情境與提示：功能關閉、身分不足、通知不存在、通知已處理或已隱藏；跨使用者 /
+  跨 audience 讀取會被拒絕。
 - 測試方式：多角色逐步測申訴、通知、審核、審計記錄。
 - 相關文件連結：[WEB.md](WEB.md), [11_QA_TESTING.md](11_QA_TESTING.md)
+
+### Platform Center
+
+- 一句話說明：集中顯示背景任務、分享連結、通知入口與交易資產總覽。
+- 設計目的：讓使用者與管理者看得到長任務進度、stage、錯誤、分享狀態與經濟總覽，
+  避免按了沒反應或 API 失敗靜默消失。
+- 使用方法：Job Center 可取消 / 重試任務；Share Link Management 可查看 file /
+  album / video 分享、到期、次數、密碼狀態、存取紀錄與撤銷；Trading Asset Overview
+  會顯示可用點數、鎖定點數、現貨市值、借貸 / 融資倉位權益、累積利息與低信心價格數。
+- 原理：一般使用者只看自己的 `/api/jobs` 與 `/api/shares`；manager / root 可讀
+  `/api/admin/jobs` 與 `all=1` 分享列表。交易總覽只做顯示，不取代交易結算；價格信心
+  是風險提示，不再阻擋積分交易。
+- 失敗情境與提示：ComfyUI 或外部工作失敗會顯示 `stage`、`stage_detail` 與錯誤訊息；
+  Trading Asset Overview API 失敗會在經濟頁顯示錯誤；分享撤銷或到期後，分享頁應顯示
+  結束訊息，底層 API 則拒絕繼續取資料。
+- 測試方式：`python3 scripts/testing/playwright_platform_health_check.py`，再檢查
+  產出的 JSON/Markdown 報告。
 
 ### Security Center / Server Mode
 
@@ -115,6 +134,16 @@
 - 失敗情境與提示：safe mode、chain verify fail、恢復需要人工確認、餘額顯示與鏈不一致。
 - 測試方式：credit/debit、seal/verify、backup/recovery、影片打賞、交易資金流。
 - 相關文件連結：[07_POINTSCHAIN.md](07_POINTSCHAIN.md), [08_TRADING_ENGINE.md](08_TRADING_ENGINE.md), [RUNTIME_RESET_AND_RECOVERY.md](ops_boundaries/RUNTIME_RESET_AND_RECOVERY.md)
+
+### Games / Board AI
+
+- 一句話說明：遊戲區提供西洋棋、數獨、踩地雷、1A2B、俄羅斯方塊、真實版俄羅斯方塊、宇宙戰機、3D 射擊場，以及同頁本機模組遊戲；黑白棋、圍棋、五子棋已接上基礎 AI 與獨立棋力量化 benchmark。
+- 設計目的：讓使用者能在同一遊戲頁切換遊戲，同時讓非西洋棋 AI 的強化有獨立可量化證據，不污染西洋棋 exp3/exp4/exp5 pipeline。
+- 使用方法：使用者在遊戲區下拉選遊戲；黑白棋 / 圍棋 / 五子棋可切換 `對電腦` 與 AI 難度。維護者用 `python3 scripts/games/board_ai_benchmark.py` 產生 `runtime/reports/games/board_ai_benchmark_*.json`。圍棋 `katago` 難度可先執行 `python3 scripts/games/setup_katago.py` 自動下載 KataGo、模型並產生 config。
+- 原理：三棋前端共用 `public/js/games/board-game-shared.js`，對電腦時呼叫 `POST /api/games/<game_key>/ai-move`，後端由 `services/games/board_ai.py` 回傳 `move/pass/finish`。圍棋 `katago` 先讀環境變數，沒有時自動找 `runtime/katago`。棋力量化由 `services/games/board_arena.py` 執行 round-robin、skill suite、Elo estimate 與非法步統計。
+- 失敗情境與提示：若刪除某個本機遊戲模組，該遊戲會從前端 catalog 消失，不影響其他遊戲；若三棋 AI API 回 `不支援的棋類 AI`，先確認 `game_key` 是否為 `reversi/go/gomoku`；若 benchmark 出現 `illegal_moves > 0`，不可把該 candidate 視為可 promotion。
+- 測試方式：`pytest -q tests/games/test_board_ai.py tests/games/test_board_arena.py tests/frontend/games/test_frontend_games.py`，再跑 `python3 scripts/games/board_ai_benchmark.py --games gomoku --engines random,easy --rounds 1 --max-plies 6 --output-dir /tmp/hackme_board_ai_benchmark_smoke` 做 CLI smoke。
+- 相關文件連結：[games/README.md](games/README.md), [games/references/BOARD_AI_BENCHMARK.md](games/references/BOARD_AI_BENCHMARK.md), [API_REFERENCE.md](API_REFERENCE.md), [11_QA_TESTING.md](11_QA_TESTING.md)
 
 ### Trading / Bots / Backtest
 
@@ -143,16 +172,6 @@
 - 失敗情境與提示：snapshot restore 會回放 runtime secret files，若 restore event 出現 `runtime secret validation failed` 要先修這批檔案；reset 仍會清掉 runtime secrets 並要求重啟；PointsChain recovery 不能拿來代替全站 restore。
 - 測試方式：create/list/download/restore/upload-restore/reset、post-restore consistency、offline/reconnect reset smoke。
 - 相關文件連結：[09_SNAPSHOT_RESET_RESTORE.md](09_SNAPSHOT_RESET_RESTORE.md), [RUNTIME_RESET_AND_RECOVERY.md](ops_boundaries/RUNTIME_RESET_AND_RECOVERY.md), [11_QA_TESTING.md](11_QA_TESTING.md)
-
-### WebTerminal
-
-- 一句話說明：WebTerminal 是歷史封存主題，不是 active main line 的現行功能。
-- 設計目的：保留曾嘗試過的 Docker / QEMU 設計，供未來重新設計時參考。
-- 使用方法：只讀 archive，不要把它當現行部署功能。
-- 原理：封存保留歷史脈絡，但避免誤導部署者以為目前站點有 terminal 模組。
-- 失敗情境與提示：找不到前端入口、找不到設定、找不到服務，都是正常狀態。
-- 測試方式：確認 active main line 沒有 routes / UI / settings 對外暴露 WebTerminal。
-- 相關文件連結：[10_WEB_TERMINAL.md](10_WEB_TERMINAL.md), [docs/archive/webterminal/README.md](archive/webterminal/README.md)
 
 ## 相關文件連結
 

@@ -35,6 +35,7 @@ let chatPollTimer = null;
 const CHAT_POLL_MS = 2500;
 const DEFAULT_INACTIVITY_LOGOUT_MS = 10 * 60 * 1000;
 const IDLE_TIMEOUT_LOGOUT_STORAGE_KEY = "hackme_web.idle_timeout_logout_pending";
+const AUTH_SESSION_HINT_STORAGE_KEY = "hackme_web.auth.session_hint";
 let inactivityLogoutMs = DEFAULT_INACTIVITY_LOGOUT_MS;
 let inactivityTimer = null;
 let inactivityCountdownTimer = null;
@@ -80,6 +81,9 @@ const SITE_SIDEBAR_WIDTH_MAP = {
   standard: { expanded: 244, collapsed: 68 },
   wide: { expanded: 288, collapsed: 76 },
 };
+const APP_TOAST_LIMIT = 4;
+let lastAppToastSignature = "";
+let lastAppToastAt = 0;
 
 function clientRoleRank(role) {
   if (role === "super_admin") return 3;
@@ -164,6 +168,8 @@ const SIDEBAR_MENU_CONFIG = [
   },
   { tabId: "tab-module-videos", module: "videos", tab: "videos", icon: "video", label: "影音", group: "工具" },
   { tabId: "tab-module-games", module: "games", tab: "games", icon: "game", label: "遊戲區", group: "工具" },
+  { tabId: "tab-module-jobs", module: "jobs", tab: "jobs", icon: "bell", label: "任務中心", group: "工具" },
+  { tabId: "tab-module-shares", module: "shares", tab: "shares", icon: "drive", label: "分享管理", group: "工具" },
   { tabId: "tab-module-comfyui", module: "comfyui", tab: "comfyui", icon: "spark", label: "AI 產圖", group: "工具" },
   { tabId: "tab-module-economy", module: "economy", tab: "economy", icon: "wallet", label: "積分錢包", group: "工具" },
   { tabId: "tab-module-trading", module: "trading", tab: "trading", icon: "wallet", label: "積分交易所", group: "工具" },
@@ -270,15 +276,20 @@ function setSidebarCollapsed(collapsed) {
     toggle.textContent = isMobile ? (collapsed ? "☰" : "×") : "‹";
   }
   try {
-    localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, collapsed ? "1" : "0");
+    localStorage.setItem(sidebarCollapsedStorageKey(), collapsed ? "1" : "0");
   } catch (err) {}
   updateSidebarActiveState();
+}
+
+function sidebarCollapsedStorageKey() {
+  const roleKey = currentRole || "guest";
+  return `${SIDEBAR_COLLAPSED_STORAGE_KEY}.${roleKey}`;
 }
 
 function restoreSidebarState() {
   let collapsed = typeof window !== "undefined" && window.matchMedia && window.matchMedia("(max-width: 860px)").matches;
   try {
-    const stored = localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY);
+    const stored = localStorage.getItem(sidebarCollapsedStorageKey());
     if (stored !== null) collapsed = stored === "1";
   } catch (err) {}
   setSidebarCollapsed(collapsed);
@@ -950,6 +961,67 @@ function flash(el, text, ok) {
   if (!el) return;
   el.textContent = text;
   el.className = "msg show " + (ok ? "ok" : "err");
+  announceInlineMessage(text, ok);
+}
+
+function uiPrefersReducedMotion() {
+  return Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches);
+}
+
+function showAppToast(text, ok = true, options = {}) {
+  const host = $("toast-host");
+  const message = String(text || "").replace(/\s+/g, " ").trim().slice(0, 180);
+  if (!host || !message) return;
+  const kind = ok === true ? "ok" : ok === false ? "err" : "info";
+  const signature = `${kind}:${message}`;
+  const now = Date.now();
+  if (signature === lastAppToastSignature && now - lastAppToastAt < 1200) return;
+  lastAppToastSignature = signature;
+  lastAppToastAt = now;
+  while (host.children.length >= APP_TOAST_LIMIT) host.firstElementChild?.remove();
+  const toast = document.createElement("div");
+  toast.className = `toast toast-${kind}`;
+  toast.setAttribute("role", kind === "err" ? "alert" : "status");
+  toast.textContent = message;
+  host.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add("show"));
+  const duration = Number(options.duration || (kind === "err" ? 5200 : 3200));
+  window.setTimeout(() => {
+    toast.classList.remove("show");
+    toast.addEventListener("transitionend", () => toast.remove(), { once: true });
+    window.setTimeout(() => toast.remove(), 420);
+  }, duration);
+}
+
+function announceInlineMessage(text, ok) {
+  const normalized = String(text || "").replace(/\s+/g, " ").trim();
+  if (!normalized || /載入中|讀取中|同步中|處理中|準備中/.test(normalized)) return;
+  showAppToast(normalized, ok);
+}
+
+function animateActiveModule(tab) {
+  const section = $("module-" + tab);
+  if (!section || uiPrefersReducedMotion()) return;
+  section.classList.remove("ui-module-enter");
+  void section.offsetWidth;
+  section.classList.add("ui-module-enter");
+  window.setTimeout(() => section.classList.remove("ui-module-enter"), 460);
+}
+
+function installUiInteractionFeedback() {
+  if (document.documentElement.dataset.uiFeedbackBound === "1") return;
+  document.documentElement.dataset.uiFeedbackBound = "1";
+  document.addEventListener("pointerdown", (event) => {
+    const target = event.target?.closest?.(".btn, .tab, .icon-action-btn, .game-catalog-card, .drive-file-row, .community-thread-item, .video-card");
+    if (!target || target.disabled || target.getAttribute("aria-disabled") === "true") return;
+    const rect = target.getBoundingClientRect();
+    target.style.setProperty("--ui-press-x", `${event.clientX - rect.left}px`);
+    target.style.setProperty("--ui-press-y", `${event.clientY - rect.top}px`);
+    target.classList.remove("ui-pressed");
+    void target.offsetWidth;
+    target.classList.add("ui-pressed");
+    window.setTimeout(() => target.classList.remove("ui-pressed"), 520);
+  }, { passive: true });
 }
 
 function clearMsg() {
@@ -962,6 +1034,7 @@ function setUserEditMsg(text, ok) {
   if (!el) return;
   el.textContent = text;
   el.className = ok === true ? "msg show ok" : ok === false ? "msg show err" : "msg";
+  if (ok === true || ok === false) announceInlineMessage(text, ok);
 }
 
 function setChatMsg(elId, text, ok) {
@@ -969,6 +1042,7 @@ function setChatMsg(elId, text, ok) {
   if (!el) return;
   el.textContent = text;
   el.className = "msg show " + (ok ? "ok" : "err");
+  announceInlineMessage(text, ok);
 }
 
 function stopChatPoll() {
@@ -1186,6 +1260,7 @@ setupPwToggle("admin-add-pw-confirm", "admin-add-pw-confirm-toggle");
 setupPwToggle("edit-user-current-pw", "edit-user-current-pw-toggle");
 setupPwToggle("edit-user-pw", "edit-user-pw-toggle");
 setupPwToggle("edit-user-pw-confirm", "edit-user-pw-confirm-toggle");
+installUiInteractionFeedback();
 
 $("reg-pw").addEventListener("input", function () {
   const v = this.value;
@@ -1237,6 +1312,9 @@ function setAuthState(json, showLoginHero = false) {
   currentRole = json.role || "user";
   currentRoleLabel = json.role_label || currentRole || "user";
   currentMustChangePassword = !!json.must_change_password;
+  try {
+    localStorage.setItem(AUTH_SESSION_HINT_STORAGE_KEY, "1");
+  } catch (err) {}
   const idleMinutes = Number(json.session_idle_timeout_minutes ?? 10);
   inactivityLogoutMs = idleMinutes > 0 ? Math.max(1, idleMinutes) * 60 * 1000 : 0;
   if (inactivityLogoutMs > 0) resetInactivityTimer();
@@ -1324,6 +1402,8 @@ function setAuthState(json, showLoginHero = false) {
   const tabModuleAlbums = $("tab-module-albums");
   const tabModuleVideos = $("tab-module-videos");
   const tabModuleGames = $("tab-module-games");
+  const tabModuleJobs = $("tab-module-jobs");
+  const tabModuleShares = $("tab-module-shares");
   const tabModuleComfyui = $("tab-module-comfyui");
   const tabModuleEconomy = $("tab-module-economy");
   const tabModuleTrading = $("tab-module-trading");
@@ -1341,6 +1421,8 @@ function setAuthState(json, showLoginHero = false) {
   if (tabModuleAlbums) tabModuleAlbums.style.display = (canAccessModule("privacy_uploads") && isFeatureEnabledForUi("feature_storage_albums_enabled", false)) ? "" : "none";
   if (tabModuleVideos) tabModuleVideos.style.display = canAccessModule("videos") ? "" : "none";
   if (tabModuleGames) tabModuleGames.style.display = canAccessModule("games") ? "" : "none";
+  if (tabModuleJobs) tabModuleJobs.style.display = canAccessModule("jobs") ? "" : "none";
+  if (tabModuleShares) tabModuleShares.style.display = canAccessModule("shares") ? "" : "none";
   if (tabModuleComfyui) tabModuleComfyui.style.display = canAccessModule("comfyui") ? "" : "none";
   if (tabModuleEconomy) tabModuleEconomy.style.display = canAccessModule("economy") ? "" : "none";
   if (tabModuleTrading) tabModuleTrading.style.display = (canAccessModule("economy") && canAccessModule("trading")) ? "" : "none";
@@ -1375,9 +1457,15 @@ function setAuthState(json, showLoginHero = false) {
   if (currentRole !== "super_admin" && canAccessModule("appeals")) {
     loadUserAppeals();
   }
+  let requestedModuleParam = "";
+  try {
+    requestedModuleParam = new URLSearchParams(location.search || "").get("module") || "";
+  } catch (err) {}
   const requestedInitialModule = ((location.pathname === "/videos" || (location.hash || "").startsWith("#videos/")) && canAccessModule("videos"))
     ? "videos"
-    : "";
+    : (requestedModuleParam === "games" && canAccessModule("games"))
+      ? "games"
+      : "";
   const initialModule = requestedInitialModule || (canAccessModule("accounts")
     ? "accounts"
     : canAccessModule("chat")
@@ -1405,6 +1493,9 @@ function setAuthState(json, showLoginHero = false) {
 
 function resetAuthState() {
   showLoginScreen();
+  try {
+    localStorage.removeItem(AUTH_SESSION_HINT_STORAGE_KEY);
+  } catch (err) {}
   clearUserAppearanceConfig();
   currentUser = null;
   currentUserId = null;
@@ -1437,6 +1528,8 @@ function resetAuthState() {
   const moduleAlbums = $("module-albums");
   const moduleVideos = $("module-videos");
   const moduleGames = $("module-games");
+  const moduleJobs = $("module-jobs");
+  const moduleShares = $("module-shares");
   const moduleComfyui = $("module-comfyui");
   const moduleEconomy = $("module-economy");
   const moduleTrading = $("module-trading");
@@ -1450,6 +1543,8 @@ function resetAuthState() {
   if (moduleAlbums) moduleAlbums.classList.remove("active");
   if (moduleVideos) moduleVideos.classList.remove("active");
   if (moduleGames) moduleGames.classList.remove("active");
+  if (moduleJobs) moduleJobs.classList.remove("active");
+  if (moduleShares) moduleShares.classList.remove("active");
   if (moduleComfyui) moduleComfyui.classList.remove("active");
   if (moduleEconomy) moduleEconomy.classList.remove("active");
   if (moduleTrading) moduleTrading.classList.remove("active");

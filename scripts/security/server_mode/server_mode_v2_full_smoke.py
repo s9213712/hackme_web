@@ -41,6 +41,15 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 EXAMPLES = REPO_ROOT / "docs" / "server_mode_v2"
 
 
+def parse_args(argv: list[str]) -> list[str]:
+    if any(arg in {"-h", "--help"} for arg in argv[1:]):
+        print(__doc__.strip())
+        raise SystemExit(0)
+    if len(argv) > 1:
+        raise SystemExit(f"unknown arguments: {' '.join(argv[1:])}")
+    return argv
+
+
 def free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
@@ -75,7 +84,8 @@ def lookup_test_user_id(db_path: Path) -> int:
         conn.close()
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    argv = parse_args(list(argv or sys.argv))
     runtime = Path(tempfile.mkdtemp(prefix="hackme_full_smoke_"))
     db_dir = runtime / "database"
     log_path = runtime / "server.log"

@@ -1,3 +1,4 @@
+from flask import Response
 from urllib.parse import urlparse
 
 
@@ -21,6 +22,7 @@ def register_comfyui_admin_routes(app, ctx):
     normalize_civitai_search_type = ctx["normalize_civitai_search_type"]
     inspect_civitai_model = ctx["inspect_civitai_model"]
     search_civitai_models = ctx["search_civitai_models"]
+    fetch_civitai_media = ctx["fetch_civitai_media"]
     parse_civitai_download_request = ctx["parse_civitai_download_request"]
     coerce_bool = ctx["coerce_bool"]
     create_model_download_job = ctx["create_model_download_job"]
@@ -29,6 +31,8 @@ def register_comfyui_admin_routes(app, ctx):
     download_civitai_model_selection = ctx["download_civitai_model_selection"]
     upload_comfyui_model_file = ctx["upload_comfyui_model_file"]
     assert_model_download_job_owner = ctx["assert_model_download_job_owner"]
+    local_start_template_path = ctx["local_start_template_path"]
+    send_file = ctx["send_file"]
     threading = ctx["threading"]
 
     @app.route("/api/root/comfyui/test-connection", methods=["POST"])
@@ -40,9 +44,9 @@ def register_comfyui_admin_routes(app, ctx):
         try:
             data = ctx["request"].get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         url, endpoint, msg = parse_comfyui_endpoint(data)
         if msg:
             return json_resp({"ok": False, "msg": msg}), 400
@@ -93,7 +97,11 @@ def register_comfyui_admin_routes(app, ctx):
                         })
                     except ComfyUIError as exc2:
                         exc = exc2
-            runtime = local_comfyui_runtime_status((endpoint or {}).get("port") if isinstance(endpoint, dict) else None)
+            runtime = (
+                local_comfyui_runtime_status((endpoint or {}).get("port"))
+                if isinstance(endpoint, dict) and endpoint.get("mode") == "local"
+                else None
+            )
             audit(
                 "COMFYUI_CONNECTION_TEST",
                 get_client_ip(),
@@ -115,6 +123,29 @@ def register_comfyui_admin_routes(app, ctx):
                 "local_runtime": runtime,
             })
 
+    @app.route("/api/root/comfyui/local-start-template", methods=["GET"])
+    @require_csrf_safe
+    def root_comfyui_local_start_template():
+        actor, err = root_or_403()
+        if err:
+            return err
+        if not local_start_template_path.is_file():
+            return json_resp({"ok": False, "msg": "ComfyUI 啟動腳本範本不存在"}), 503
+        audit(
+            "COMFYUI_LOCAL_TEMPLATE_DOWNLOADED",
+            get_client_ip(),
+            user=actor_value(actor, "username"),
+            success=True,
+            ua=get_ua(),
+            detail=f"filename={local_start_template_path.name}",
+        )
+        return send_file(
+            local_start_template_path,
+            as_attachment=True,
+            download_name=local_start_template_path.name,
+            mimetype="text/x-shellscript",
+        )
+
     @app.route("/api/root/comfyui/civitai/inspect", methods=["POST"])
     @require_csrf
     def root_comfyui_civitai_inspect():
@@ -124,9 +155,9 @@ def register_comfyui_admin_routes(app, ctx):
         try:
             data = ctx["request"].get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         page_url = str(data.get("page_url") or data.get("url") or "").strip()
         result, msg = inspect_civitai_model(page_url)
         audit(
@@ -150,9 +181,9 @@ def register_comfyui_admin_routes(app, ctx):
         try:
             data = ctx["request"].get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         query = str(data.get("query") or "").strip()
         base_model = str(data.get("base_model") or "").strip()
         model_type = str(data.get("model_type") or data.get("type") or "").strip()
@@ -185,6 +216,10 @@ def register_comfyui_admin_routes(app, ctx):
         total = int(result.get("total_items") or 0)
         count = len(result.get("results") or [])
         message = "沒有符合條件的 Civitai 模型，請調整關鍵字或篩選器。" if count == 0 else f"已找到 {count} 個 Civitai 模型（總數約 {total}）。"
+        if result.get("source_errors"):
+            failed_sources = ", ".join(str(item.get("source_site") or "").strip() for item in result.get("source_errors") or [] if item.get("source_site"))
+            if failed_sources:
+                message = f"{message} 但部分來源暫時失敗：{failed_sources}。"
         return json_resp({
             "ok": True,
             "results": result.get("results") or [],
@@ -192,8 +227,33 @@ def register_comfyui_admin_routes(app, ctx):
             "total_items": total,
             "current_page": result.get("current_page") or 1,
             "page_size": result.get("page_size") or count,
+            "search_sources": result.get("search_sources") or [],
+            "source_errors": result.get("source_errors") or [],
             "msg": message,
         })
+
+    @app.route("/api/root/comfyui/civitai/media", methods=["GET"])
+    @require_csrf_safe
+    def root_comfyui_civitai_media():
+        actor, err = root_or_403()
+        if err:
+            return err
+        media_url = str(ctx["request"].args.get("url") or "").strip()
+        data, content_type, msg = fetch_civitai_media(media_url)
+        if msg:
+            audit(
+                "COMFYUI_CIVITAI_MEDIA_PROXY",
+                get_client_ip(),
+                user=actor_value(actor, "username"),
+                success=False,
+                ua=get_ua(),
+                detail=f"url_host={urlparse(media_url).hostname if media_url else ''}, error={msg}"[:300],
+            )
+            return json_resp({"ok": False, "msg": msg}), 400
+        response = Response(data, mimetype=content_type)
+        response.headers["Cache-Control"] = "private, max-age=3600"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
 
     @app.route("/api/root/comfyui/civitai/download", methods=["POST"])
     @require_csrf
@@ -204,9 +264,9 @@ def register_comfyui_admin_routes(app, ctx):
         try:
             data = ctx["request"].get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         request_data, msg = parse_civitai_download_request(data)
         if msg:
             return json_resp({"ok": False, "msg": msg}), 400
@@ -301,4 +361,3 @@ def register_comfyui_admin_routes(app, ctx):
                 "result": job.get("result"),
             },
         })
-

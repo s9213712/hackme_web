@@ -745,7 +745,7 @@ def run_trading_bot_rows(service, rows):
             price_conn = service.get_db()
             service.ensure_schema(price_conn)
             market = service._market(price_conn, row["market_symbol"])
-            if not service._is_market_boot_ready(market):
+            if not service._is_market_boot_ready(market, conn=price_conn):
                 skipped.append({
                     "bot_uuid": row["bot_uuid"],
                     "reason": "market_boot_pending",

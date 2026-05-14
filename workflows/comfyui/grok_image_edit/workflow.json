@@ -1,0 +1,42 @@
+{
+  "3": {
+    "_meta": {
+      "title": "保存图像"
+    },
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "Grok",
+      "images": [
+        "8",
+        0
+      ]
+    }
+  },
+  "6": {
+    "_meta": {
+      "title": "加载图像"
+    },
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "cyberpunk_robot.png"
+    }
+  },
+  "8": {
+    "_meta": {
+      "title": "Grok 图像编辑"
+    },
+    "class_type": "GrokImageEditNode",
+    "inputs": {
+      "aspect_ratio": "auto",
+      "image": [
+        "6",
+        0
+      ],
+      "model": "grok-imagine-image-beta",
+      "number_of_images": 1,
+      "prompt": "Keep the original robot design and framing.\nTransform the scene into a cyberpunk night environment.\nReplace the lighting with high-contrast neon lighting, including blue and orange accent lights.\nAdd glowing light strips and illuminated panels on the robot’s body and fingers.\nDarken the background significantly, with subtle smoke and light bloom effects.\nEnhance metallic reflections and sharp edges to give a high-tech, futuristic feel.\n",
+      "resolution": "1K",
+      "seed": 0
+    }
+  }
+}

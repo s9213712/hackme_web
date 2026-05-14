@@ -172,7 +172,12 @@ def get_password_reset_review_request(conn, request_id):
     ensure_account_recovery_schema(conn)
     return conn.execute(
         """
-        SELECT r.*, u.username AS target_username, u.role AS target_role, u.status AS target_status
+        SELECT
+            r.*,
+            u.username AS username,
+            u.username AS target_username,
+            u.role AS target_role,
+            u.status AS target_status
         FROM password_reset_review_requests r
         JOIN users u ON u.id=r.user_id
         WHERE r.id=?

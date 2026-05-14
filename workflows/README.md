@@ -2,14 +2,14 @@
 
 All trading workflow files live under this directory.
 
-- `workflows/system/`: built-in templates tracked by Git.
+- `workflows/trading_bot/`: built-in templates tracked by Git.
 - `runtime/workflows/custom/`: user-created templates generated at runtime and ignored by Git.
 
 Custom templates are stored per user under `runtime/workflows/custom/<username>/`.
 
 ---
 
-## System Templates (`workflows/system/`)
+## System Templates (`workflows/trading_bot/`)
 
 目前保留 **11 個** system templates，目的是讓使用者拿到「**完整風格光譜**」而不是只有
 正式對戰冠軍。對抗加賽落敗、偏弱、或重複的候選都已退場。
@@ -24,7 +24,7 @@ Custom templates are stored per user under `runtime/workflows/custom/<username>/
 ### 排名與保留依據
 
 排名公式：時段 1y(30%) + 3y(40%) + 5y(30%) × interval 15m(30%) + 1h(40%) + 4h(30%)，
-基於 `docs/COMPETITION/data/workflow_template_benchmarks_*.json` BTC 單一資產資料；
+基於歸檔競賽資料 `docs/archive/competition_2026-05-06/` 的 BTC 單一資產資料；
 頭兩個冠亞軍另外採用 `head_to_head_rev3.json` 5 資產 5y 參數調優資料。
 
 | # | 檔案 | 角色 | 平均報酬 | 最大回撤 | 風格 |
@@ -45,7 +45,7 @@ Custom templates are stored per user under `runtime/workflows/custom/<username>/
 > 它們設計為**搭配進場 workflow 一起使用**的範例。
 >
 > 最終排名與對戰結論見：
-> [`docs/COMPETITION/FINAL_HEAD_TO_HEAD_REPORT.md`](../docs/COMPETITION/FINAL_HEAD_TO_HEAD_REPORT.md)
+> [`docs/archive/competition_2026-05-06/FINAL_HEAD_TO_HEAD_REPORT.md`](../docs/archive/competition_2026-05-06/FINAL_HEAD_TO_HEAD_REPORT.md)
 
 ### 已退場的候選
 
@@ -63,9 +63,9 @@ Custom templates are stored per user under `runtime/workflows/custom/<username>/
 
 這些結果仍保留在競賽報告與 commit history 中，需要回顧時可見：
 
-- [`docs/COMPETITION/report.md`](../docs/COMPETITION/report.md)
-- [`docs/COMPETITION/FINAL_HEAD_TO_HEAD_REPORT.md`](../docs/COMPETITION/FINAL_HEAD_TO_HEAD_REPORT.md)
-- [`docs/COMPETITION/REV2_STANDALONE_REPORT.md`](../docs/COMPETITION/REV2_STANDALONE_REPORT.md)
+- [`docs/archive/competition_2026-05-06/report.md`](../docs/archive/competition_2026-05-06/report.md)
+- [`docs/archive/competition_2026-05-06/FINAL_HEAD_TO_HEAD_REPORT.md`](../docs/archive/competition_2026-05-06/FINAL_HEAD_TO_HEAD_REPORT.md)
+- [`docs/archive/competition_2026-05-06/REV2_STANDALONE_REPORT.md`](../docs/archive/competition_2026-05-06/REV2_STANDALONE_REPORT.md)
 
 ### 欄位說明
 

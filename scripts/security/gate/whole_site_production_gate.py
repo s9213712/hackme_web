@@ -12,12 +12,17 @@ import argparse
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[3]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from scripts.security.common_paths import REPO_ROOT as ROOT, security_reports_root
 DEFAULT_TIMEOUT = 240
@@ -130,6 +135,20 @@ def shell_script_check(script: str, args: list[str], *, timeout: int) -> Subchec
     return result
 
 
+def pick_available_port(preferred: int) -> int:
+    preferred = int(preferred or 0)
+    if preferred > 0:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            try:
+                sock.bind(("127.0.0.1", preferred))
+                return preferred
+            except OSError:
+                pass
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
 def py_compile_all() -> Subcheck:
     started = time.perf_counter()
     excluded_parts = {".git", ".venv", "venv", "__pycache__", "storage", "database", "logs", "runtime"}
@@ -194,6 +213,26 @@ def grid_ui_check() -> Subcheck:
     )
 
 
+def workflow_bot_ui_check() -> Subcheck:
+    js = (ROOT / "public" / "js" / "56-trading.js").read_text(encoding="utf-8")
+    required = {
+        "save_workflow_bot_action": "saveTradingBot" in js,
+        "workflow_bot_save_button": "trading-auto-bot-save-btn" in js,
+        "workflow_backtest_button": "trading-workflow-backtest-run-btn" in js,
+        "workflow_bot_create_api": 'fetchTradingJson("/trading/bots"' in js,
+        "workflow_bot_scan_api": 'fetchTradingJson("/trading/bots/scan"' in js,
+        "workflow_template_loader": "loadTradingWorkflowTemplates" in js,
+        "workflow_bot_detail_card": "Workflow 機器人" in js,
+    }
+    return static_check(
+        "workflow bot UI keeps create / backtest / scan wiring intact",
+        all(required.values()),
+        severity="MEDIUM",
+        evidence=required,
+        followup="Keep the workflow bot editor wired to /api/trading/bots, /api/trading/bots/scan, and the workflow backtest action.",
+    )
+
+
 def build_modules(args) -> list[ModuleResult]:
     out_dir = Path(args.out)
     modules: list[ModuleResult] = []
@@ -218,9 +257,10 @@ def build_modules(args) -> list[ModuleResult]:
     modules.append(auth)
 
     functional = ModuleResult("C. Functional Live Smoke")
+    functional_port = pick_available_port(args.functional_smoke_port)
     functional.add(shell_script_check(
         "scripts/security/pentest/run_functional_smoke.sh",
-        ["--port", str(args.functional_smoke_port), "--out", str(out_dir)],
+        ["--port", str(functional_port), "--out", str(out_dir)],
         timeout=max(args.timeout, 420),
     ))
     functional.unresolved_risks.append("Functional smoke validates major user/admin flows, but it is not a substitute for focused pentest or browser UX review.")
@@ -293,6 +333,7 @@ def build_modules(args) -> list[ModuleResult]:
         timeout=args.timeout,
     ))
     trading.add(grid_ui_check())
+    trading.add(workflow_bot_ui_check())
     if args.base_url:
         trading.add(run_command([
             sys.executable, str(ROOT / "scripts" / "security" / "pentest" / "trading_stress_pentest.py"),
@@ -306,7 +347,40 @@ def build_modules(args) -> list[ModuleResult]:
         ], timeout=max(args.timeout, 360)))
     modules.append(trading)
 
-    forum = ModuleResult("J. Forum / Community / Report")
+    comfyui = ModuleResult("J. ComfyUI Local Connection")
+    comfyui_args_present = bool(args.comfyui_local_base_dir and args.comfyui_local_script)
+    if args.base_url and comfyui_args_present:
+        command = [
+            sys.executable, str(ROOT / "scripts" / "comfyui" / "local_connection_smoke.py"),
+            "--base-url", args.base_url,
+            "--username", args.root_username,
+            "--password", args.root_password,
+            "--comfyui-base-dir", args.comfyui_local_base_dir,
+            "--comfyui-local-script", args.comfyui_local_script,
+            "--comfyui-api-host", args.comfyui_api_host,
+            "--comfyui-api-port", str(args.comfyui_api_port),
+            "--out-json", str(out_dir / "whole_site_comfyui_local_connection_smoke.json"),
+            "--out-md", str(out_dir / "whole_site_comfyui_local_connection_smoke.md"),
+        ]
+        if str(args.base_url).startswith("https://"):
+            command.append("--insecure")
+        comfyui.add(run_command(command, timeout=max(args.timeout, 240)))
+    else:
+        comfyui.add(static_check(
+            "optional ComfyUI local connection smoke not configured",
+            True,
+            severity="LOW",
+            evidence={
+                "configured": False,
+                "base_url_present": bool(args.base_url),
+                "comfyui_local_base_dir": bool(args.comfyui_local_base_dir),
+                "comfyui_local_script": bool(args.comfyui_local_script),
+            },
+            followup="Pass --comfyui-local-base-dir and --comfyui-local-script when the target should verify a local ComfyUI startup path.",
+        ))
+    modules.append(comfyui)
+
+    forum = ModuleResult("K. Forum / Community / Report")
     forum.add(pytest_check([
         "tests/community/test_community_permissions.py",
         "tests/community/test_reports_notifications.py",
@@ -316,7 +390,7 @@ def build_modules(args) -> list[ModuleResult]:
     ], timeout=args.timeout))
     modules.append(forum)
 
-    integrity = ModuleResult("K. Integrity Guard")
+    integrity = ModuleResult("L. Integrity Guard")
     integrity.add(pytest_check([
         "tests/security/integrity/test_integrity_guard.py",
         "tests/security/integrity/test_integrity_repair.py",
@@ -324,7 +398,7 @@ def build_modules(args) -> list[ModuleResult]:
     ], timeout=args.timeout))
     modules.append(integrity)
 
-    audit = ModuleResult("L. Audit / Logs")
+    audit = ModuleResult("M. Audit / Logs")
     audit.add(pytest_check([
         "tests/security/gates/test_security_events.py",
         "tests/platform/test_settings_audit_reseal.py",
@@ -332,7 +406,7 @@ def build_modules(args) -> list[ModuleResult]:
     audit.add(script_check("scripts/security/server_mode/server_mode_v2_adversarial.py", ["--out", str(out_dir)], timeout=args.timeout))
     modules.append(audit)
 
-    stress = ModuleResult("M. Stress / Reliability")
+    stress = ModuleResult("N. Stress / Reliability")
     if args.base_url:
         stress.add(run_command([
             sys.executable, str(ROOT / "scripts" / "security" / "pentest" / "stress_test.py"),
@@ -350,7 +424,7 @@ def build_modules(args) -> list[ModuleResult]:
         ))
     modules.append(stress)
 
-    full_suite = ModuleResult("N. Full Test Suite")
+    full_suite = ModuleResult("O. Full Test Suite")
     full_suite.add(py_compile_all())
     full_suite.add(git_diff_check())
     full_suite.add(reports_output_policy_check())
@@ -487,9 +561,15 @@ def parse_args():
     parser.add_argument("--base-url", default=os.environ.get("WHOLE_SITE_GATE_BASE_URL", "http://127.0.0.1:5000"))
     parser.add_argument("--out", default=str(security_reports_root()))
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
+    parser.add_argument("--root-username", default=os.environ.get("WHOLE_SITE_ROOT_USERNAME", "root"))
+    parser.add_argument("--root-password", default=os.environ.get("WHOLE_SITE_ROOT_PASSWORD") or os.environ.get("ROOT_PASSWORD", "root"))
     parser.add_argument("--functional-smoke-port", type=int, default=50741)
     parser.add_argument("--stress-requests", type=int, default=60)
     parser.add_argument("--stress-concurrency", type=int, default=10)
+    parser.add_argument("--comfyui-local-base-dir", default=os.environ.get("WHOLE_SITE_COMFYUI_LOCAL_BASE_DIR", ""))
+    parser.add_argument("--comfyui-local-script", default=os.environ.get("WHOLE_SITE_COMFYUI_LOCAL_SCRIPT", ""))
+    parser.add_argument("--comfyui-api-host", default=os.environ.get("WHOLE_SITE_COMFYUI_API_HOST", "127.0.0.1"))
+    parser.add_argument("--comfyui-api-port", type=int, default=int(os.environ.get("WHOLE_SITE_COMFYUI_API_PORT", "8192")))
     parser.add_argument("--skip-full-pytest", action="store_true")
     return parser.parse_args()
 

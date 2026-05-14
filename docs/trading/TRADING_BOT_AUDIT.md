@@ -16,8 +16,8 @@
 | `trading_audit_events` 交易專用稽核表 | ✅ 已實作 | `services/trading/engine.py`；存 actor / target_user_id / market_symbol / metadata_json |
 | `trading_bot_runs` 每次 bot 巡檢紀錄 | ✅ 已實作 | `services/trading/engine.py`；status (`triggered`/`skipped`/`failed`)、observed_price、error |
 | Bot 觸發 / cooldown / max_runs 守護 | ✅ 已實作 | `services/trading/engine.py:_bot_trigger_hit` 與 `run_trading_bot_rows` |
-| Wallet/Ledger replay 對帳 | ✅ 可離線跑 | 範例 evidence：[`replay_check.json`](../AGENTS/reports/claude/prechain_qa_2026-05-04/evidence/ledger/replay_check.json) |
-| 手算 spot/DCA 訂單金額/手續費/PnL | ✅ 可離線跑 | 範例 evidence：[`phase56_handcalc.json`](../AGENTS/reports/claude/prechain_qa_2026-05-04/evidence/trading/phase56_handcalc.json)、[`dca_minimal.log`](../AGENTS/reports/claude/prechain_qa_2026-05-04/evidence/trading/dca_minimal.log) |
+| Wallet/Ledger replay 對帳 | ✅ 可離線跑 | 使用目前 tests / validation scripts 重產 evidence |
+| 手算 spot/DCA 訂單金額/手續費/PnL | ✅ 可離線跑 | 使用目前 tests / validation scripts 重產 evidence |
 | 用戶送 bug 報告 | ✅ 已實作 | `POST /api/bug-reports` 與 admin 端 `/api/admin/bug-reports/<id>/review`；`routes/bug_reports.py` |
 | 定期 bot 稽核 | ✅ 已實作 | `run_due_bot_audits()`；預設每 `300s` 掃一次，可由 root 調整 |
 | 納入稽核條件守門 | ✅ 已實作 | bot 至少成交 1 筆，或啟用已滿 `24h` 才從 `未稽核` 進入綠 / 黃 / 紅燈 |
@@ -75,26 +75,19 @@
 
 ```bash
 # 1. 隔離環境啟動 (見 docs/AGENTS/QA_MISSION_FOR_AGENTS.md)
-PYTHONPATH=. python3 server.py
+./test_for_develop.sh --port 50785
 
-# 2. wallet vs ledger replay
-python3 docs/AGENTS/reports/claude/prechain_qa_2026-05-04/scripts/01_ledger_replay.py
-
-# 3. spot 手算對帳 + 對抗輸入 + DCA timing
-python3 docs/AGENTS/reports/claude/prechain_qa_2026-05-04/scripts/02_trading_handcalc.py
-python3 docs/AGENTS/reports/claude/prechain_qa_2026-05-04/scripts/03_dca_timing.py
-
-# 4. root bot audit dashboard / 手動稽核
+# 2. root bot audit dashboard / 手動稽核
 curl -ksS https://127.0.0.1:5000/api/root/trading/bot-audit/dashboard
 curl -ksS -X POST https://127.0.0.1:5000/api/root/trading/bot-audit/run
 
-# 5. 引擎內建 deterministic 驗證
+# 3. 引擎內建 deterministic 驗證
 python3 scripts/trading/validation/trading_exchange_validation.py --out /tmp/trading_audit_check
 python3 scripts/trading/validation/trading_workflow_template_validation.py --no-download --limit 200 --out /tmp/trading_audit_check
 python3 scripts/trading/probes/backtest_20000_probe.py --include-route --json-out /tmp/trading_audit_check/backtest_20000.json
 
 # 6. 既有 pytest 回歸
-scripts/testing/pytest_in_tmp.sh -q tests/test_trading_engine.py tests/test_points_chain.py
+scripts/testing/pytest_in_tmp.sh -q tests/trading/core/test_trading_engine.py tests/points/test_points_chain.py
 ```
 
 目前這三支交易驗證腳本的分工是：

@@ -11,9 +11,7 @@ from scripts.prepush.result import CheckResult
 LINK_RE = re.compile(r'!?\[[^\]]*\]\(([^)]+)\)')
 IGNORE_PREFIXES = ("http://", "https://", "mailto:", "app://", "tel:")
 EXCLUDED_PREFIXES = (
-    "docs/AGENTS/reports/",
     "docs/archive/",
-    "docs/BLOCKCHAIN/",
     "docs/research/",
 )
 

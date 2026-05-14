@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 SOURCE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEFAULT_GIT_REPO_DIR="$SOURCE_ROOT"
 RUN_ID="$(date +%Y%m%d_%H%M%S)"
 RUN_ROOT=""
 HOST="${HOST:-127.0.0.1}"
@@ -22,6 +23,11 @@ Purpose:
   Copy the repo to /tmp, initialize a development-friendly runtime, and launch
   server.py from the copied workspace so the repo never accumulates runtime or
   cache pollution.
+
+Important:
+  For server-mode / production-gate validation, HTML_LEARNING_GIT_REPO_DIR must
+  point at a real git repo with a readable .git directory. Do not point it at
+  the /tmp copied workspace unless that copy still preserves git metadata.
 
 Options:
   --host HOST              Default: 127.0.0.1
@@ -194,7 +200,16 @@ export HTML_LEARNING_ROOT_PASSWORD="$ROOT_PASSWORD"
 export HTML_LEARNING_MANAGER_PASSWORD="$MANAGER_PASSWORD"
 export HTML_LEARNING_TEST_PASSWORD="$TEST_PASSWORD"
 export HTML_LEARNING_DISABLE_DEFAULT_PASSWORD_POLICY=1
-export HTML_LEARNING_GIT_REPO_DIR="$COPY_ROOT"
+export HACKME_DEV_TRADING_ALLOW_CONSERVATIVE_MARKET_ORDERS=1
+export HACKME_DEV_TRADING_ALLOW_UNREADY_MARKETS=1
+export HACKME_DEV_TRADING_DISABLE_PRICE_CONFIDENCE_GATES=1
+if [[ -z "${HTML_LEARNING_GIT_REPO_DIR:-}" ]]; then
+  if git -C "$DEFAULT_GIT_REPO_DIR" rev-parse HEAD >/dev/null 2>&1; then
+    export HTML_LEARNING_GIT_REPO_DIR="$DEFAULT_GIT_REPO_DIR"
+  else
+    export HTML_LEARNING_GIT_REPO_DIR="$COPY_ROOT"
+  fi
+fi
 export PYTHONPATH="$COPY_ROOT"
 export PYTHONPYCACHEPREFIX="$RUNTIME_ROOT/pycache"
 
@@ -241,6 +256,13 @@ feature_updates.update({
     "server_ssl_enabled": True,
     "session_idle_timeout_minutes": 1440,
     "session_ttl_hours": 168,
+    # Dev default: assume root has the Windows-portable ComfyUI bundle
+    # mounted under WSL at /mnt/d/share/ComfyUI_windows_portable and uses
+    # run_in_linux.sh as the entrypoint. Switch to local mode so the dev
+    # runtime calls the locally-launched ComfyUI on 127.0.0.1 by default.
+    "comfyui_connection_mode": "local",
+    "comfyui_base_dir": "/mnt/d/share/ComfyUI_windows_portable",
+    "comfyui_local_start_script": "run_in_linux.sh",
 })
 server.save_settings(feature_updates)
 
@@ -272,7 +294,7 @@ try:
             allow_spot=1,
             allow_margin=1,
             allow_bots=1,
-            allow_risk_grade_usage=0,
+            allow_risk_grade_usage=1,
             live_price_enabled=1,
             reference_price_enabled=1,
             updated_at=?
@@ -285,7 +307,7 @@ try:
         SET enabled=1,
             allow_margin=1,
             allow_bots=1,
-            allow_risk_grade_usage=0,
+            allow_risk_grade_usage=1,
             live_price_enabled=1,
             reference_price_enabled=1,
             updated_at=?
@@ -301,12 +323,39 @@ try:
         ("trading.price_degrade_pause_market_orders", "false"),
         ("trading.price_degrade_pause_bots", "false"),
         ("trading.price_degrade_pause_borrowing", "false"),
+        ("trading.allow_unready_markets", "true"),
+        ("trading.disable_price_confidence_gates", "true"),
+        ("trading.dev_allow_conservative_market_orders", "true"),
+        ("trading.dev_allow_unready_markets", "true"),
+        ("trading.dev_disable_price_confidence_gates", "true"),
         ("trading.warning_language", "zh-TW"),
         ("trading.simulated_slippage_enabled", "false"),
         ("trading.simulated_slippage_base_basis_points", "0"),
         ("trading.simulated_slippage_size_basis_points_per_10k_notional", "0"),
         ("trading.simulated_slippage_max_basis_points", "0"),
-        ("trading.price_fusion_trade_min_provider_count", "2"),
+        # Dev default: pin price fusion to Binance public API only so the
+        # /tmp dev runtime does not require OKX/Coinbase/Kraken/Gemini/Bitstamp
+        # reachability for spot trading, live-price, or risk-grade gating.
+        ("trading.price_fusion_mode", "manual_weights"),
+        (
+            "trading.price_fusion_manual_weights_json",
+            '{"binance_public_api": 100.0, "okx_public_api": 0.0, '
+            '"coinbase_exchange": 0.0, "kraken_public_api": 0.0, '
+            '"gemini_public_api": 0.0, "bitstamp_public_api": 0.0}',
+        ),
+        ("trading.price_fusion_min_provider_count", "1"),
+        ("trading.price_fusion_trade_min_provider_count", "1"),
+        # Lift the single-provider cap to 100% so dev runtime can run on
+        # Binance alone without the provider_weight_cap_unenforceable warning.
+        ("trading.price_fusion_max_single_provider_weight_percent", "100"),
+        # Dev default: pin BTC_trade prediction engine on, parked at the
+        # shared /tmp/BTC_trade workspace so multiple dev runs reuse the same
+        # cloned repo, downloaded data and trained models. The signal pipeline
+        # itself (clone → install → predict → retrain) is kicked off in the
+        # background after the server URL becomes available; see the autostart
+        # block further down.
+        ("trading.btc_trade_enabled", "true"),
+        ("trading.btc_trade_project_dir", "/tmp/BTC_trade"),
     ):
         conn.execute(
             "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
@@ -340,3 +389,34 @@ else
 fi
 say "[dev-tmp] accounts:   root/${ROOT_PASSWORD} admin/${MANAGER_PASSWORD} test/${TEST_PASSWORD}"
 say "[dev-tmp] log:       $LOG_CAPTURE"
+
+# BTC_trade autostart: kick the prediction pipeline off in the background
+# so the trading dashboard already has live BTC_trade signal data on first
+# page load. The server-side job uses setup_if_needed=True, so:
+#   - first run: clones BTC_trade into /tmp/BTC_trade, installs deps,
+#     trains the model, then predicts.
+#   - re-run when /tmp/BTC_trade already has the required scripts: skips
+#     clone/install and goes straight to update_data → retrain → predict.
+# This is intentionally fire-and-forget so test_for_develop.sh exits fast.
+if [[ -n "$SERVER_URL" ]]; then
+  BTC_LOG="$RUNTIME_ROOT/logs/btc_trade_autostart.log"
+  (
+    set +e
+    sleep 2
+    JAR="$(mktemp)"
+    LOGIN_BODY="$("$PYTHON_BIN" -c 'import json,os; print(json.dumps({"username":"root","password":os.environ["HTML_LEARNING_ROOT_PASSWORD"]}))')"
+    csrf="$(curl -ksS -c "$JAR" "$SERVER_URL/api/csrf-token" | "$PYTHON_BIN" -c 'import json,sys;print(json.load(sys.stdin).get("csrf_token",""))')"
+    curl -ksS -c "$JAR" -b "$JAR" \
+      -H "Content-Type: application/json" -H "X-CSRF-Token: $csrf" \
+      -X POST "$SERVER_URL/api/login" -d "$LOGIN_BODY" >/dev/null
+    csrf="$(curl -ksS -c "$JAR" -b "$JAR" "$SERVER_URL/api/csrf-token" | "$PYTHON_BIN" -c 'import json,sys;print(json.load(sys.stdin).get("csrf_token",""))')"
+    echo "[btc_trade_autostart] POST /api/root/trading/btc-trade/start"
+    curl -ksS -b "$JAR" \
+      -H "Content-Type: application/json" -H "X-CSRF-Token: $csrf" \
+      -X POST "$SERVER_URL/api/root/trading/btc-trade/start" \
+      -d '{"timeframe":"4h"}'
+    echo
+    rm -f "$JAR"
+  ) > "$BTC_LOG" 2>&1 &
+  say "[dev-tmp] btc_trade: autostart kicked off in background (log: $BTC_LOG)"
+fi

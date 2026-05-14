@@ -1,4 +1,5 @@
 import json
+import socket
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -10,7 +11,11 @@ try:
 except Exception:  # pragma: no cover - optional import fallback
     websocket = None
 
-from services.comfyui.constants import CONTROLNET_TYPE_DEFINITIONS, GENERATION_MODE_DEFINITIONS
+from services.comfyui.constants import (
+    CONTROLNET_TYPE_DEFINITIONS,
+    GENERATION_MODE_DEFINITIONS,
+    detect_model_families,
+)
 from services.comfyui import execution as comfy_execution
 from services.comfyui import files as comfy_files
 from services.comfyui.workflow import builder as workflow_builder
@@ -62,6 +67,8 @@ class ComfyUIClient:
                     if allow_non_json:
                         return {"raw": raw}
                     raise ComfyUIError("ComfyUI 回應不是 JSON") from exc
+        except (TimeoutError, socket.timeout) as exc:
+            raise ComfyUIError("ComfyUI 連線逾時") from exc
         except urllib.error.URLError as exc:
             raise ComfyUIError(f"ComfyUI 連線失敗：{getattr(exc, 'reason', exc)}") from exc
 
@@ -102,6 +109,8 @@ class ComfyUIClient:
                     return json.loads(raw)
                 except json.JSONDecodeError as exc:
                     raise ComfyUIError("ComfyUI 回應不是 JSON") from exc
+        except (TimeoutError, socket.timeout) as exc:
+            raise ComfyUIError("ComfyUI 連線逾時") from exc
         except urllib.error.URLError as exc:
             raise ComfyUIError(f"ComfyUI 連線失敗：{getattr(exc, 'reason', exc)}") from exc
 
@@ -197,6 +206,9 @@ class ComfyUIClient:
     def get_capabilities(self):
         object_info = self.get_object_info()
         available_nodes = set(object_info.keys())
+        models = self.get_models()
+        loras = self.get_loras() if "LoraLoader" in available_nodes else []
+        vaes = self.get_vaes() if "VAELoader" in available_nodes else []
         controlnet_models = self.get_controlnet_models() if "ControlNetLoader" in available_nodes else []
         upscale_models = self.get_upscale_models() if "UpscaleModelLoader" in available_nodes else []
         controlnet_types = {}
@@ -237,9 +249,14 @@ class ComfyUIClient:
                     "key": key,
                     "label": value.get("label") or key,
                     "available": True,
+                    "workflow_only": bool(value.get("workflow_only")),
+                    "output_kind": value.get("output_kind") or "image",
+                    "source_kind": value.get("source_kind") or "",
+                    "recommended_model_families": list(value.get("recommended_model_families") or []),
                 }
                 for key, value in GENERATION_MODE_DEFINITIONS.items()
             ],
+            "model_families": detect_model_families([*models, *loras, *vaes, *controlnet_models, *upscale_models]),
         }
 
     def upload_image_bytes(self, data, filename, *, image_type="input", overwrite=False, subfolder=""):
@@ -284,16 +301,17 @@ class ComfyUIClient:
     def build_generation_workflow(self, params):
         return workflow_builder.build_generation_workflow(params, error_cls=ComfyUIError)
 
-    def queue_prompt_with_client_id(self, workflow, *, client_id=None):
+    def queue_prompt_with_client_id(self, workflow, *, client_id=None, extra_data=None):
         return comfy_execution.queue_prompt_with_client_id(
             self,
             workflow,
             client_id=client_id,
+            extra_data=extra_data,
             error_cls=ComfyUIError,
         )
 
-    def queue_prompt(self, workflow):
-        return comfy_execution.queue_prompt(self, workflow, error_cls=ComfyUIError)
+    def queue_prompt(self, workflow, *, extra_data=None):
+        return comfy_execution.queue_prompt(self, workflow, extra_data=extra_data, error_cls=ComfyUIError)
 
     def interrupt(self):
         return comfy_execution.interrupt(self)
@@ -339,6 +357,9 @@ class ComfyUIClient:
     def fetch_image(self, image_ref):
         return comfy_files.fetch_image(self, image_ref, error_cls=ComfyUIError, image_cls=ComfyUIImage)
 
+    def fetch_file(self, file_ref):
+        return comfy_files.fetch_file(self, file_ref, error_cls=ComfyUIError, file_cls=ComfyUIImage)
+
     def _local_dir_for_type(self, image_type, *, local_base_dir=None):
         return comfy_files.local_dir_for_type(
             image_type,
@@ -363,24 +384,26 @@ class ComfyUIClient:
             error_cls=ComfyUIError,
         )
 
-    def generate_from_workflow(self, workflow, *, timeout_seconds=1800, expected_count=1, progress_callback=None):
+    def generate_from_workflow(self, workflow, *, timeout_seconds=1800, expected_count=1, progress_callback=None, extra_data=None):
         return comfy_execution.generate_from_workflow(
             self,
             workflow,
             timeout_seconds=timeout_seconds,
             expected_count=expected_count,
             progress_callback=progress_callback,
+            extra_data=extra_data,
             error_cls=ComfyUIError,
             websocket_module=websocket,
             image_fetcher=self.fetch_image,
         )
 
-    def generate_image(self, params, *, timeout_seconds=1800, progress_callback=None):
+    def generate_image(self, params, *, timeout_seconds=1800, progress_callback=None, extra_data=None):
         return comfy_execution.generate_image(
             self,
             params,
             timeout_seconds=timeout_seconds,
             progress_callback=progress_callback,
+            extra_data=extra_data,
             error_cls=ComfyUIError,
             build_generation_workflow_func=self.build_generation_workflow,
             generate_from_workflow_func=self.generate_from_workflow,

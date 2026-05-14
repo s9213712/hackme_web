@@ -184,7 +184,7 @@ def register_file_admin_storage_routes(app, ctx):
         try:
             data = request.get_json(force=True) or {}
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}, 400)
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}, 400)
         try:
             quota_bytes = optional_mb_to_bytes(data.get("quota_mb"), "quota_mb")
             max_file_size_bytes = optional_mb_to_bytes(data.get("max_file_size_mb"), "max_file_size_mb")
@@ -325,7 +325,7 @@ def register_file_admin_storage_routes(app, ctx):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}, 400)
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}, 400)
         if data.get("confirm") != "PURGE STORAGE TRASH":
             return json_resp({"ok": False, "msg": "confirm 必須等於 PURGE STORAGE TRASH"}), 400
         conn = get_db()

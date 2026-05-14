@@ -17,7 +17,7 @@ def test_trading_backtest_20000_probe_includes_latest_regressions():
 def test_workflow_template_validation_includes_flat_sequence_guard():
     script = (ROOT / "scripts" / "trading" / "validation" / "trading_workflow_template_validation.py").read_text(encoding="utf-8")
 
-    # Plan B: swing_bb_ma50 removed from workflows/system/, guard now applies
+    # Plan B: swing_bb_ma50 removed from workflows/trading_bot/, guard now applies
     # to bollinger_reversion alone.
     assert 'FLAT_SEQUENCE_GUARD_TEMPLATE_IDS = {"bollinger_reversion"}' in script
     assert "def validate_flat_sequence_guard" in script

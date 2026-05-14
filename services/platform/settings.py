@@ -29,6 +29,7 @@ DEFAULT_SETTINGS = {
     "server_listen_port": 0,
     "server_ssl_enabled": True,
     "cloud_drive_storage_root": "",
+    "cloud_drive_global_capacity_limit_mb": -1,
     "cloud_drive_transfer_limits_enabled": False,
     "cloud_drive_transfer_limits_json": '{"newbie":{"upload_kb_per_sec":256,"download_kb_per_sec":512,"priority":20},"normal":{"upload_kb_per_sec":512,"download_kb_per_sec":1024,"priority":40},"trusted":{"upload_kb_per_sec":2048,"download_kb_per_sec":4096,"priority":70},"vip":{"upload_kb_per_sec":8192,"download_kb_per_sec":16384,"priority":90},"restricted":{"upload_kb_per_sec":128,"download_kb_per_sec":256,"priority":10},"suspended":{"upload_kb_per_sec":0,"download_kb_per_sec":0,"priority":0}}',
     "allow_register": True,
@@ -98,6 +99,14 @@ DEFAULT_SETTINGS = {
     "feature_advanced_security_enabled": False,
     "feature_privacy_uploads_enabled": False,
     "feature_comfyui_enabled": False,
+    # ComfyUI Template Importer rollout flags (§15)
+    # - legacy_import_enabled: keep the old sanitize-only POST /api/comfyui/workflows/import
+    #   path alive during migration. When false, that endpoint must require a preview_token
+    #   minted by /api/comfyui/templates/preview.
+    # - template_importer_strict: when true, /api/comfyui/workflows/<id>/run runs the §10
+    #   5-gate. When false, the run handler stays on its legacy code path.
+    "feature_comfyui_legacy_import_enabled": True,
+    "feature_comfyui_template_importer_strict": False,
     "feature_economy_enabled": False,
     "feature_trading_enabled": False,
     "feature_games_enabled": False,
@@ -228,6 +237,21 @@ _STATE = {
     "load_json": None,
     "settings_files": (),
 }
+
+
+class DangerousChangeBlocked(Exception):
+    """Raised by save_settings when a risky change has no matching confirm.
+
+    The route layer should catch this and return a structured 400 with the
+    affected settings, their transition direction, and the warning text.
+    """
+
+    def __init__(self, risky):
+        self.risky = list(risky or [])
+        super().__init__(
+            "dangerous settings require explicit confirmation: "
+            + ", ".join(key for key, _danger, _transition in self.risky)
+        )
 
 
 def normalize_feature_key(feature_key):
@@ -433,6 +457,43 @@ def refresh_system_settings():
     with _SETTINGS_LOCK:
         _SYSTEM_SETTINGS = _load_settings_from_db()
         return _SYSTEM_SETTINGS
+
+
+def _confirm_keys_from_payload(payload):
+    if isinstance(payload, str):
+        return {payload}
+    if isinstance(payload, (list, tuple, set)):
+        return {str(item) for item in payload if isinstance(item, str)}
+    if isinstance(payload, dict):
+        return {str(key) for key, value in payload.items() if value}
+    return set()
+
+
+def enforce_dangerous_confirm(current_settings, data):
+    """Raise ``DangerousChangeBlocked`` if ``data`` flips a risky toggle
+    without listing it in ``dangerous_confirm``.
+
+    Internal callers (boot scripts, server-mode automation) skip this gate
+    by simply not calling this function. The HTTP admin routes always call
+    it before delegating to ``save_settings``.
+    """
+    if not isinstance(data, dict):
+        return
+    confirm_keys = _confirm_keys_from_payload(data.get("dangerous_confirm"))
+    # Import here to avoid a circular import at module load.
+    from services.platform.settings_metadata import find_dangerous_changes  # noqa: WPS433
+    coerced = {}
+    for key, value in data.items():
+        if key not in DEFAULT_SETTINGS:
+            continue
+        coerced[key] = _coerce_setting_value(key, value)
+    risky = [
+        (key, danger, transition)
+        for key, danger, transition in find_dangerous_changes(current_settings, coerced)
+        if key not in confirm_keys
+    ]
+    if risky:
+        raise DangerousChangeBlocked(risky)
 
 
 def save_settings(data):

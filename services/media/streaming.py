@@ -17,6 +17,7 @@ from services.storage.paths import resolve_storage_path
 
 MEDIA_STREAM_ASSET_STATUSES = {"pending", "processing", "ready", "failed", "unavailable"}
 MEDIA_STREAM_STORAGE_MODE = "acl_protected_plain"
+HLS_JS_URL = "/js/hls.light.min.js?v=20260505-hlsjs"
 DEFAULT_HLS_SEGMENT_SECONDS = 4
 DEFAULT_STREAM_AUTO_PREPARE_AUDIO_MIN_BYTES = 25 * 1024 * 1024
 
@@ -359,8 +360,37 @@ def _parse_probe_metadata(payload):
     }
 
 
+def hls_codec_string(*, width=0, height=0, codec=""):
+    raw = str(codec or "").strip().lower()
+    if "avc1" in raw or "avc3" in raw or "mp4a" in raw:
+        return str(codec).strip()
+    if not width and not height:
+        return "mp4a.40.2"
+    return "avc1.64001f,mp4a.40.2"
+
+
+def repair_hls_master_manifest_text(text):
+    repaired = []
+    for raw_line in str(text or "").splitlines():
+        line = raw_line
+        if line.startswith("#EXT-X-STREAM-INF:"):
+            if 'CODECS="' in line:
+                start = line.find('CODECS="') + len('CODECS="')
+                end = line.find('"', start)
+                codec_value = line[start:end] if end > start else ""
+                normalized = hls_codec_string(width=1, height=1, codec=codec_value)
+                if normalized != codec_value and end > start:
+                    line = line[:start] + normalized + line[end:]
+            elif "RESOLUTION=" in line:
+                line = f'{line},CODECS="{hls_codec_string(width=1, height=1)}"'
+            else:
+                line = f'{line},CODECS="{hls_codec_string(width=0, height=0)}"'
+        repaired.append(line)
+    return "\n".join(repaired) + ("\n" if repaired else "")
+
+
 def _write_master_manifest(target, *, variant_name, playlist_name="playlist.m3u8", bitrate=0, width=0, height=0, codec=""):
-    codecs = codec or ("mp4a.40.2" if not width and not height else "avc1.64001f,mp4a.40.2")
+    codecs = hls_codec_string(width=width, height=height, codec=codec)
     bandwidth = max(int(bitrate or 0), 128000)
     lines = [
         "#EXTM3U",
@@ -591,7 +621,7 @@ def stream_playback_payload(conn, *, file_row, video_id):
         "fallback_url": direct_url,
         "stream_url": direct_url,
         "master_url": "",
-        "hls_js_url": "/js/vendor/hls.light.min.js?v=20260505-hlsjs",
+        "hls_js_url": HLS_JS_URL,
         "player_strategy": "direct_only",
         "stream_warning": "目前使用直接串流。",
         "status": status,

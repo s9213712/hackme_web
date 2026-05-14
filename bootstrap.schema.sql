@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS game_matches (
     CHECK (status IN ('active', 'finished', 'cancelled')),
     CHECK (current_turn IN ('white', 'black')),
     CHECK (human_side IN ('white', 'black')),
-    CHECK (computer_difficulty IN ('easy', 'normal', 'hard', 'experiment', 'experiment 2:nn', 'experiment 3:dl', 'experiment 4:pv'))
+    CHECK (computer_difficulty IN ('easy', 'normal', 'hard', 'experiment', 'experiment 2:nn', 'experiment 3:dl', 'experiment 4:pv', 'experiment 5:nnue'))
 );
 
 CREATE TABLE IF NOT EXISTS game_invites (

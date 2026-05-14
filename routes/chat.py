@@ -299,6 +299,7 @@ def register_chat_routes(app, deps):
     ensure_user_official_room_membership = deps["ensure_user_official_room_membership"]
     get_client_ip = deps["get_client_ip"]
     get_current_user_ctx = deps["get_current_user_ctx"]
+    get_auth_db = deps.get("get_auth_db", deps["get_db"])
     get_db = deps["get_db"]
     json_resp = deps["json_resp"]
     normalize_text = deps["normalize_text"]
@@ -364,9 +365,9 @@ def register_chat_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         name = normalize_text(data.get("name"))
         target_user = normalize_text(data.get("target_user"))
         invite_usernames = normalize_username_list(data.get("invite_usernames"))
@@ -635,9 +636,9 @@ def register_chat_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         usernames = normalize_username_list(data.get("usernames") or data.get("username"))
         usernames = [item for item in usernames if item != actor["username"]]
         if not usernames:
@@ -840,9 +841,9 @@ def register_chat_routes(app, deps):
             try:
                 data = request.get_json(force=True)
             except Exception:
-                return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+                return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
             if not isinstance(data, dict):
-                return json_resp({"ok":False,"msg":"Invalid request"}), 400
+                return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
             message_type = str(data.get("message_type") or "text").strip().lower()
             sticker_key = str(data.get("sticker_key") or "").strip().lower()
             attachment_file_ids = normalize_attachment_file_ids(data.get("attachment_file_ids"))
@@ -971,9 +972,9 @@ def register_chat_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         reason = normalize_text(data.get("reason")) or "使用者檢舉"
         if len(reason) > 200:
             return json_resp({"ok":False,"msg":"檢舉原因請控制在 200 字以內"}), 400
@@ -1138,9 +1139,9 @@ def register_chat_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         username = normalize_text(data.get("username"))
         if not username:
             return json_resp({"ok":False,"msg":"請輸入好友帳號"}), 400
@@ -1237,20 +1238,30 @@ def register_chat_routes(app, deps):
             audit("AUDIT_FORBIDDEN", get_client_ip(), user, detail="non-root attempted audit access")
             return json_resp({"ok":False,"msg":"只有 root 可檢視審計紀錄"}), 403
 
-        conn = get_db()
+        auth_conn = get_auth_db()
+        main_conn = get_db()
         try:
-            rows = conn.execute(
-                "SELECT u.username, la.ip_address, la.user_agent, la.success, la.attempted_at "
-                "FROM login_attempts la LEFT JOIN users u ON u.id=la.user_id "
-                "ORDER BY la.attempted_at DESC LIMIT 200"
+            rows = auth_conn.execute(
+                "SELECT user_id, ip_address, user_agent, success, attempted_at "
+                "FROM login_attempts ORDER BY attempted_at DESC LIMIT 200"
             ).fetchall()
+            user_ids = sorted({int(r["user_id"]) for r in rows if r["user_id"] is not None})
+            usernames = {}
+            if user_ids:
+                placeholders = ",".join("?" for _ in user_ids)
+                for row in main_conn.execute(
+                    f"SELECT id, username FROM users WHERE id IN ({placeholders})",
+                    tuple(user_ids),
+                ).fetchall():
+                    usernames[int(row["id"])] = row["username"]
         finally:
-            conn.close()
+            auth_conn.close()
+            main_conn.close()
 
         entries = []
         for r in rows:
             entries.append({
-                "user":      r["username"] or "(未知)",
+                "user":      (usernames.get(int(r["user_id"])) if r["user_id"] is not None else None) or "(未知)",
                 "ip":        r["ip_address"],
                 "ua":        r["user_agent"],
                 "success":   bool(r["success"]),

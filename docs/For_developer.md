@@ -18,7 +18,7 @@ Related technical references:
 
 ## Release and Schema
 
-- Release ID: `2026.05.07-155`
+- Release ID: `2026.05.13-157`
 - Schema version: `30`
 - Release ID source: `services/platform/release_info.py`
 - Runtime version endpoint: `GET /api/version`
@@ -119,23 +119,46 @@ Server Mode v2 note:
 ## Fast Local Setup
 
 ```bash
-python3 -m venv .venv
-. .venv/bin/activate
 python3 -m pip install -r requirements.txt
-python3 server.py
+python3 server.py --doctor
+./test_for_develop.sh --port 50785
 ```
 
-Default local URL:
+Canonical local workflow:
 
 ```text
-https://127.0.0.1:5000/
+repo root:
+  python3 server.py --doctor
+  python3 server.py
+
+daily development:
+  ./test_for_develop.sh --port <free_port>
+
+pytest:
+  scripts/testing/pytest_in_tmp.sh -q tests
+
+platform center Playwright acceptance:
+  python3 scripts/testing/playwright_platform_health_check.py
 ```
+
+`server.py` 不再接 `--host` / `--port` CLI 參數。若要改 bind，請使用
+`HTML_LEARNING_HOST` / `HTML_LEARNING_PORT` 或 `test_for_develop.sh --port ...`。
+
+`test_for_develop.sh` 目前除了放寬登入 / session / audit / integrity 保護，
+也會把 trading market registry 切成開發可測狀態：
+
+- `allow_spot=1`
+- `allow_margin=1`
+- `allow_bots=1`
+- `allow_risk_grade_usage=1`
+
+這樣 `/tmp` 開發站上的現貨、市價單、Grid Bot 與借貸交易才不會一開站就被
+風控級價格用途開關整體封死。
 
 If `runtime/cert.pem` and `runtime/key.pem` are missing, startup generates a
 local self-signed certificate/key pair for local development. Runtime DB, logs,
-storage, secrets, and integrity files also default to `runtime/` so they stay
-out of the repo root. These deployment-local runtime files must not be
-committed.
+storage, secrets, and integrity files default to `runtime/` under the current
+runtime root. These deployment-local runtime files must not be committed.
 
 ## Runtime State
 
@@ -276,12 +299,42 @@ that asset needs custom handling.
 
 - `GET /api/notifications`
 - `POST /api/notifications/{id}/read`
+- `POST /api/notifications/{id}/dismiss`
 - `POST /api/notifications/read-all`
 - `POST /api/admin/notifications/send`
 - `POST /api/reports`
 - `GET /api/admin/reports`
 - `POST /api/admin/reports/{id}/claim`
 - `POST /api/admin/reports/{id}/resolve`
+
+Notifications include `severity`, `audience`, `source_module`, `source_ref`,
+`read_at`, and `dismissed_at`. Default notification reads hide dismissed rows
+and exclude them from unread counts; pass `include_dismissed=1` only for
+explicit diagnostics. User-scoped notification APIs must reject cross-user
+reads.
+
+### Platform Centers
+
+- `GET /api/jobs?limit=80`
+- `GET /api/admin/jobs?limit=80`
+- `GET /api/jobs/{job_uuid}`
+- `GET /api/jobs/{job_uuid}/events`
+- `POST /api/jobs/{job_uuid}/cancel`
+- `POST /api/jobs/{job_uuid}/retry`
+- `GET /api/shares?limit=120`
+- `GET /api/shares?limit=120&all=1`
+- `POST /api/shares/{type}/{id}/revoke`
+- `GET /api/shares/{type}/{id}/access-events`
+- `GET /api/trading/asset-overview`
+- `GET /api/admin/trading/asset-overview`
+
+Job Center rows expose `status`, `stage`, `stage_detail`, `progress_percent`,
+`source_module`, `job_type`, `error_stage`, and `error_message`; frontend cancel
+actions must show a confirmation prompt. Share management supports `file`,
+`album`, and `video` share types and must not render external `share_url` values
+as trusted copy targets. Trading Asset Overview is display-only and includes
+spot plus margin / lending equity and accrued interest; frontend failures must
+write a visible error to the economy panel instead of failing silently.
 
 ### Appeals and Violations
 
@@ -880,7 +933,7 @@ scripts/testing/pytest_in_tmp.sh -q tests
 Functional smoke runner:
 
 ```bash
-security/run_functional_smoke.sh --port 50741
+scripts/security/pentest/run_functional_smoke.sh --port 50741
 ```
 
 Security and pentest runner documentation:
@@ -891,40 +944,23 @@ Security and pentest runner documentation:
 
 ## Production Start
 
-For first deployment, run the guided setup:
+Production bootstrap is now explicit:
 
 ```bash
-./one_click_setup.sh
+python3 server.py --doctor
+python3 server.py
 ```
 
-If `.env` does not exist and the script is attached to a terminal, it opens an
-interactive setup wizard. The wizard asks for bootstrap account passwords,
-runtime directories, bind address, HTTPS/cookie policy, proxy trust, and
-Gunicorn settings, then writes `.env` with mode `600`.
+`--doctor` validates that the runtime tree already exists and is writable. It
+does not silently scaffold missing directories. Optional feature capability
+checks still come from deployment-specific tooling and docs:
 
-Automation-friendly modes:
-
-```bash
-./one_click_setup.sh --check
-./one_click_setup.sh --init-db-only
-./one_click_setup.sh --no-wizard
-```
-
-`one_click_setup.sh --check` 現在還會額外提示目前部署是否已具備：
 - `ffmpeg` / `ffprobe`
-  - 影響影音平台 HLS 衍生檔與 metadata probe
+  - HLS derivatives and media metadata probes
 - `CIVITAI_API_KEY`
-  - 影響 root-only Civitai 搜尋 / 下載
+  - root-only Civitai search / download
 - `python3 scripts/admin/root_recovery.py`
-  - root 的正式 offline recovery 入口
-
-這些提示屬於可選能力檢查，不是一般部署的硬阻擋條件。
-
-To regenerate `.env` intentionally:
-
-```bash
-./one_click_setup.sh --wizard
-```
+  - root offline recovery entrypoint
 
 Recommended production defaults:
 

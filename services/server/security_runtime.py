@@ -120,10 +120,11 @@ def has_valid_maintenance_bypass(
     )
 
 
-def get_runtime_server_mode(*, get_db):
+def get_runtime_server_mode(*, get_db, get_control_db=None):
     conn = None
     try:
-        conn = get_db()
+        db_factory = get_control_db or get_db
+        conn = db_factory()
         row = conn.execute("SELECT current_mode FROM server_modes WHERE id=1").fetchone()
         mode = str(row["current_mode"] or "test").strip().lower() if row else "test"
         return "dev_ready" if mode == "preprod" else mode
@@ -138,6 +139,7 @@ def tester_token_identity_from_request(
     req,
     *,
     get_db,
+    get_control_db=None,
     ensure_snapshot_schema,
     get_runtime_server_mode_func,
     record_security_event,

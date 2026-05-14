@@ -21,6 +21,7 @@ from services.storage.storage_albums import (
     resolve_share_token,
     revoke_share_link,
 )
+from services.share_access_events import log_share_access_event
 from services.security.upload_security import log_file_access
 
 
@@ -68,7 +69,7 @@ def register_file_share_preview_routes(app, ctx):
             try:
                 data = request.get_json(force=True)
             except Exception:
-                return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+                return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
             link, msg = create_share_link(
                 conn,
                 actor=actor,
@@ -130,6 +131,7 @@ def register_file_share_preview_routes(app, ctx):
             if not path.exists():
                 return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
             mark_share_link_accessed(conn, row["id"])
+            log_share_access_event(conn, share_type="file", share_id=row["id"], ip=get_client_ip(), user_agent=get_ua())
             log_file_access(conn, file_id=row["file_id"], actor_user_id=None, action="storage_share_download", result="allowed", reason="share_link", ip=get_client_ip(), user_agent=get_ua())
             conn.commit()
             response = _send_readable_file(row, as_attachment=True, download_name=row["display_name"] or row["original_filename_plain_for_public"] or "download.bin")
@@ -295,6 +297,7 @@ def register_file_share_preview_routes(app, ctx):
                 return _album_share_error_response(reason)
             album = public_album_payload(conn, row)
             mark_album_share_link_accessed(conn, row["id"])
+            log_share_access_event(conn, share_type="album", share_id=row["id"], ip=get_client_ip(), user_agent=get_ua())
             conn.commit()
             return json_resp({"ok": True, "album": album})
         finally:
@@ -331,6 +334,7 @@ def register_file_share_preview_routes(app, ctx):
             if not path.exists():
                 return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
             mark_album_share_link_accessed(conn, share["id"])
+            log_share_access_event(conn, share_type="album", share_id=share["id"], ip=get_client_ip(), user_agent=get_ua())
             log_file_access(conn, file_id=row["id"], actor_user_id=None, action="album_share_download", result="allowed", reason="album_share_link", ip=get_client_ip(), user_agent=get_ua())
             conn.commit()
             inline = request.args.get("inline") == "1"
@@ -340,4 +344,3 @@ def register_file_share_preview_routes(app, ctx):
             return response
         finally:
             conn.close()
-

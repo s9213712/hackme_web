@@ -973,6 +973,8 @@ def ensure_snapshot_schema(conn):
         ("execution_mode", "ALTER TABLE test_shadow_orders ADD COLUMN execution_mode TEXT NOT NULL DEFAULT 'house_counterparty'"),
         ("trial_frozen_points", "ALTER TABLE test_shadow_orders ADD COLUMN trial_frozen_points INTEGER NOT NULL DEFAULT 0"),
         ("chain_frozen_points", "ALTER TABLE test_shadow_orders ADD COLUMN chain_frozen_points INTEGER NOT NULL DEFAULT 0"),
+        ("stop_loss_percent", "ALTER TABLE test_shadow_orders ADD COLUMN stop_loss_percent REAL"),
+        ("take_profit_percent", "ALTER TABLE test_shadow_orders ADD COLUMN take_profit_percent REAL"),
     ):
         if col not in shadow_order_cols:
             conn.execute(ddl)
@@ -1040,6 +1042,10 @@ def ensure_snapshot_schema(conn):
     shadow_margin_cols = {row["name"] for row in conn.execute("PRAGMA table_info(test_shadow_margin_positions)").fetchall()}
     if "user_id" not in shadow_margin_cols:
         conn.execute("ALTER TABLE test_shadow_margin_positions ADD COLUMN user_id INTEGER")
+    if "stop_loss_percent" not in shadow_margin_cols:
+        conn.execute("ALTER TABLE test_shadow_margin_positions ADD COLUMN stop_loss_percent REAL")
+    if "take_profit_percent" not in shadow_margin_cols:
+        conn.execute("ALTER TABLE test_shadow_margin_positions ADD COLUMN take_profit_percent REAL")
     conn.execute("UPDATE test_shadow_margin_positions SET user_id=tester_user_id WHERE user_id IS NULL")
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_shadow_margin_positions_tester_status ON test_shadow_margin_positions(tester_user_id, status, market_symbol)"
@@ -1218,6 +1224,265 @@ def ensure_snapshot_schema(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_server_checkpoints_target ON server_checkpoints(target_mode, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_production_reports_type ON production_entry_reports(report_type, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tester_token_request_log_token_time ON tester_token_request_log(token_id, created_at)")
+
+
+def ensure_control_db_schema(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS server_modes (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            current_mode TEXT NOT NULL,
+            previous_mode TEXT,
+            active_snapshot_id TEXT,
+            checkpoint_id TEXT,
+            mode_changed_by INTEGER,
+            mode_changed_at TEXT,
+            notes TEXT,
+            reason TEXT,
+            config_json TEXT NOT NULL DEFAULT '{}'
+        )
+        """
+    )
+    server_mode_cols = {row["name"] for row in conn.execute("PRAGMA table_info(server_modes)").fetchall()}
+    for col, ddl in (
+        ("previous_mode", "ALTER TABLE server_modes ADD COLUMN previous_mode TEXT"),
+        ("active_snapshot_id", "ALTER TABLE server_modes ADD COLUMN active_snapshot_id TEXT"),
+        ("checkpoint_id", "ALTER TABLE server_modes ADD COLUMN checkpoint_id TEXT"),
+        ("mode_changed_by", "ALTER TABLE server_modes ADD COLUMN mode_changed_by INTEGER"),
+        ("mode_changed_at", "ALTER TABLE server_modes ADD COLUMN mode_changed_at TEXT"),
+        ("notes", "ALTER TABLE server_modes ADD COLUMN notes TEXT"),
+        ("reason", "ALTER TABLE server_modes ADD COLUMN reason TEXT"),
+        ("config_json", "ALTER TABLE server_modes ADD COLUMN config_json TEXT NOT NULL DEFAULT '{}'"),
+    ):
+        if col not in server_mode_cols:
+            conn.execute(ddl)
+    conn.execute(
+        "INSERT OR IGNORE INTO server_modes "
+        "(id, current_mode, previous_mode, active_snapshot_id, checkpoint_id, mode_changed_by, mode_changed_at, notes, reason, config_json) "
+        "VALUES (1, 'dev_ready', NULL, NULL, NULL, NULL, ?, '', '', '{}')",
+        (datetime.now().isoformat(),),
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS server_checkpoints (
+            id                         TEXT PRIMARY KEY,
+            snapshot_id                TEXT NOT NULL,
+            checkpoint_type            TEXT NOT NULL,
+            from_mode                  TEXT,
+            target_mode                TEXT NOT NULL,
+            created_by                 INTEGER NOT NULL,
+            created_at                 TEXT NOT NULL,
+            status                     TEXT NOT NULL,
+            db_snapshot_hash           TEXT,
+            config_hash                TEXT,
+            security_settings_hash     TEXT,
+            points_chain_hash          TEXT,
+            cloud_drive_metadata_hash  TEXT,
+            integrity_manifest_hash    TEXT,
+            components_json            TEXT NOT NULL DEFAULT '{}',
+            error_message              TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mode_switch_logs (
+            id                  TEXT PRIMARY KEY,
+            event_uuid          TEXT,
+            from_mode           TEXT,
+            to_mode             TEXT NOT NULL,
+            actor_user_id       INTEGER,
+            actor_id            INTEGER,
+            actor_role          TEXT,
+            source_ip           TEXT,
+            user_agent          TEXT,
+            request_id          TEXT,
+            reason              TEXT,
+            checkpoint_id       TEXT,
+            snapshot_id         TEXT,
+            success             INTEGER NOT NULL DEFAULT 0,
+            error_message       TEXT,
+            config_diff_json    TEXT NOT NULL DEFAULT '{}',
+            restore_result_json TEXT NOT NULL DEFAULT '{}',
+            created_at          TEXT NOT NULL,
+            prev_hash           TEXT NOT NULL DEFAULT '',
+            row_hash            TEXT NOT NULL DEFAULT '',
+            server_boot_id      TEXT,
+            hmac_signature      TEXT,
+            key_version         TEXT
+        )
+        """
+    )
+    mode_log_cols = {row["name"] for row in conn.execute("PRAGMA table_info(mode_switch_logs)").fetchall()}
+    for col, ddl in (
+        ("event_uuid", "ALTER TABLE mode_switch_logs ADD COLUMN event_uuid TEXT"),
+        ("actor_id", "ALTER TABLE mode_switch_logs ADD COLUMN actor_id INTEGER"),
+        ("actor_role", "ALTER TABLE mode_switch_logs ADD COLUMN actor_role TEXT"),
+        ("source_ip", "ALTER TABLE mode_switch_logs ADD COLUMN source_ip TEXT"),
+        ("user_agent", "ALTER TABLE mode_switch_logs ADD COLUMN user_agent TEXT"),
+        ("request_id", "ALTER TABLE mode_switch_logs ADD COLUMN request_id TEXT"),
+        ("prev_hash", "ALTER TABLE mode_switch_logs ADD COLUMN prev_hash TEXT NOT NULL DEFAULT ''"),
+        ("row_hash", "ALTER TABLE mode_switch_logs ADD COLUMN row_hash TEXT NOT NULL DEFAULT ''"),
+        ("server_boot_id", "ALTER TABLE mode_switch_logs ADD COLUMN server_boot_id TEXT"),
+        ("hmac_signature", "ALTER TABLE mode_switch_logs ADD COLUMN hmac_signature TEXT"),
+        ("key_version", "ALTER TABLE mode_switch_logs ADD COLUMN key_version TEXT"),
+    ):
+        if col not in mode_log_cols:
+            conn.execute(ddl)
+    conn.execute("UPDATE mode_switch_logs SET event_uuid=id WHERE event_uuid IS NULL OR event_uuid=''")
+    conn.execute("UPDATE mode_switch_logs SET actor_id=actor_user_id WHERE actor_id IS NULL")
+    conn.execute("UPDATE mode_switch_logs SET actor_role='' WHERE actor_role IS NULL")
+    conn.execute("UPDATE mode_switch_logs SET source_ip='' WHERE source_ip IS NULL")
+    conn.execute("UPDATE mode_switch_logs SET user_agent='' WHERE user_agent IS NULL")
+    conn.execute("UPDATE mode_switch_logs SET request_id='' WHERE request_id IS NULL")
+    conn.execute("UPDATE mode_switch_logs SET server_boot_id='' WHERE server_boot_id IS NULL")
+    conn.execute("UPDATE mode_switch_logs SET key_version='' WHERE key_version IS NULL")
+    _backfill_mode_switch_log_hashes(conn)
+    conn.execute("DROP TRIGGER IF EXISTS trg_mode_switch_logs_no_update")
+    conn.execute("DROP TRIGGER IF EXISTS trg_mode_switch_logs_no_delete")
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_mode_switch_logs_no_update
+        BEFORE UPDATE ON mode_switch_logs
+        BEGIN
+            SELECT RAISE(ABORT, 'mode_switch_logs append-only');
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_mode_switch_logs_no_delete
+        BEFORE DELETE ON mode_switch_logs
+        BEGIN
+            SELECT RAISE(ABORT, 'mode_switch_logs append-only');
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS security_keys (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            purpose TEXT NOT NULL,
+            key_version TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            rotated_at TEXT,
+            disabled_at TEXT,
+            status TEXT NOT NULL,
+            UNIQUE(purpose, key_version)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS production_entry_reports (
+            id                       TEXT PRIMARY KEY,
+            report_type              TEXT NOT NULL,
+            report_hash              TEXT NOT NULL,
+            target_commit            TEXT,
+            target_branch            TEXT,
+            server_mode              TEXT,
+            test_result              TEXT,
+            pass                     INTEGER NOT NULL DEFAULT 0,
+            critical_findings_count  INTEGER NOT NULL DEFAULT 0,
+            high_findings_count      INTEGER NOT NULL DEFAULT 0,
+            unresolved_findings_json TEXT NOT NULL DEFAULT '[]',
+            tester                   TEXT,
+            signature                TEXT,
+            raw_report_json          TEXT NOT NULL DEFAULT '{}',
+            report_source            TEXT NOT NULL DEFAULT 'manual_upload',
+            trust_level              TEXT NOT NULL DEFAULT 'unverified',
+            key_version              TEXT NOT NULL DEFAULT '',
+            verified_at              TEXT NOT NULL DEFAULT '',
+            created_at               TEXT NOT NULL
+        )
+        """
+    )
+    production_report_cols = {row["name"] for row in conn.execute("PRAGMA table_info(production_entry_reports)").fetchall()}
+    for col, ddl in (
+        ("raw_report_json", "ALTER TABLE production_entry_reports ADD COLUMN raw_report_json TEXT NOT NULL DEFAULT '{}'"),
+        ("report_source", "ALTER TABLE production_entry_reports ADD COLUMN report_source TEXT NOT NULL DEFAULT 'manual_upload'"),
+        ("trust_level", "ALTER TABLE production_entry_reports ADD COLUMN trust_level TEXT NOT NULL DEFAULT 'unverified'"),
+        ("key_version", "ALTER TABLE production_entry_reports ADD COLUMN key_version TEXT NOT NULL DEFAULT ''"),
+        ("verified_at", "ALTER TABLE production_entry_reports ADD COLUMN verified_at TEXT NOT NULL DEFAULT ''"),
+    ):
+        if col not in production_report_cols:
+            conn.execute(ddl)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS incident_reports (
+            id                TEXT PRIMARY KEY,
+            status            TEXT NOT NULL,
+            trigger_type      TEXT NOT NULL,
+            reason            TEXT,
+            entered_by        INTEGER,
+            entered_at        TEXT NOT NULL,
+            resolved_by       INTEGER,
+            resolved_at       TEXT,
+            resolution_notes  TEXT,
+            verification_json TEXT NOT NULL DEFAULT '{}'
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS security_profiles (
+            name            TEXT PRIMARY KEY,
+            label           TEXT NOT NULL,
+            description     TEXT NOT NULL DEFAULT '',
+            settings_json   TEXT NOT NULL DEFAULT '{}',
+            thresholds_json TEXT NOT NULL DEFAULT '{}',
+            is_builtin      INTEGER NOT NULL DEFAULT 0,
+            created_by      INTEGER,
+            updated_by      INTEGER,
+            created_at      TEXT NOT NULL,
+            updated_at      TEXT NOT NULL
+        )
+        """
+    )
+    now = datetime.now().isoformat()
+    for name, profile in BUILTIN_SECURITY_PROFILES.items():
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO security_profiles
+            (name, label, description, settings_json, thresholds_json, is_builtin, created_by, updated_by, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 1, NULL, NULL, ?, ?)
+            """,
+            (
+                name,
+                profile["label"],
+                profile["description"],
+                json.dumps(profile["settings"], ensure_ascii=False, sort_keys=True),
+                json.dumps(profile["thresholds"], ensure_ascii=False, sort_keys=True),
+                now,
+                now,
+            ),
+        )
+        conn.execute(
+            """
+            UPDATE security_profiles
+            SET label=?,
+                description=?,
+                settings_json=?,
+                thresholds_json=?,
+                is_builtin=1,
+                updated_at=?
+            WHERE name=? AND is_builtin=1
+            """,
+            (
+                profile["label"],
+                profile["description"],
+                json.dumps(profile["settings"], ensure_ascii=False, sort_keys=True),
+                json.dumps(profile["thresholds"], ensure_ascii=False, sort_keys=True),
+                now,
+                name,
+            ),
+        )
+    conn.execute("DELETE FROM security_profiles WHERE name='preprod' AND is_builtin=1")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_mode_switch_logs_created ON mode_switch_logs(created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_mode_switch_logs_hash ON mode_switch_logs(row_hash)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_security_keys_purpose_status ON security_keys(purpose, status)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_server_checkpoints_target ON server_checkpoints(target_mode, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_production_reports_type ON production_entry_reports(report_type, created_at)")
 
 
 def _sha256_file(path):

@@ -1,6 +1,8 @@
 from pathlib import Path
+import html
 import mimetypes
 import json
+import secrets
 from datetime import datetime, timedelta
 
 from flask import Response, request, send_file, session
@@ -18,6 +20,7 @@ from services.media.streaming import (
     ensure_media_stream_schema,
     get_stream_status,
     prepare_stream_asset,
+    repair_hls_master_manifest_text,
     should_auto_prepare_stream,
     stream_playback_payload,
 )
@@ -30,6 +33,7 @@ from services.media.e2ee_streaming import (
 )
 from services.storage.storage_albums import create_storage_file_entry, ensure_storage_album_schema
 from services.security.upload_security import safe_public_filename
+from services.share_access_events import log_share_access_event
 from services.media.videos import (
     add_video_comment,
     ensure_video_schema,
@@ -135,6 +139,25 @@ def register_video_routes(app, deps):
         if int(row["owner_user_id"]) == int(actor["id"]) or _is_manager_or_root(actor):
             return
         raise PermissionError("只有檔案擁有者或管理者可以準備串流衍生檔")
+
+    def _append_share_session_to_hls_manifest(text, share_session_id=""):
+        share_session_id = str(share_session_id or "").strip()
+        if not share_session_id:
+            return text
+        lines = []
+        for line in str(text or "").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                lines.append(line)
+                continue
+            separator = "&" if "?" in stripped else "?"
+            lines.append(f"{line}{separator}share_session={share_session_id}")
+        return "\n".join(lines) + ("\n" if str(text or "").endswith("\n") else "")
+
+    def _send_hls_master_manifest(path, *, share_session_id=""):
+        text = repair_hls_master_manifest_text(Path(path).read_text(encoding="utf-8"))
+        text = _append_share_session_to_hls_manifest(text, share_session_id)
+        return Response(text, status=200, mimetype="application/vnd.apple.mpegurl")
 
     def _maybe_prepare_stream_asset(conn, *, file_row, visibility):
         if not _settings_bool("video_stream_auto_prepare_enabled", True):
@@ -286,50 +309,102 @@ def register_video_routes(app, deps):
     def _shared_video_password_from_request():
         return request.headers.get("X-Video-Share-Password") or request.args.get("password") or ""
 
-    def _shared_video_access_state():
-        raw = session.get("video_share_access")
+    def _shared_video_session_state():
+        raw = session.get("video_share_sessions")
         return raw if isinstance(raw, dict) else {}
 
-    def _shared_video_has_session_access(token):
-        state = _shared_video_access_state()
-        key = str(token or "")
-        expires_at = str(state.get(key) or "").strip()
-        if not expires_at:
-            return False
-        return expires_at > datetime.utcnow().replace(microsecond=0).isoformat()
+    def _store_shared_video_session_state(state):
+        now = datetime.utcnow().replace(microsecond=0).isoformat()
+        cleaned = {}
+        for key, value in (state or {}).items():
+            if not isinstance(value, dict):
+                continue
+            expires_at = str(value.get("expires_at") or "").strip()
+            if expires_at and expires_at <= now:
+                continue
+            cleaned[str(key)] = value
+        session["video_share_sessions"] = cleaned
+        session.modified = True
+        return cleaned
 
-    def _grant_shared_video_session_access(token, *, hours=8):
-        state = _shared_video_access_state()
-        state[str(token or "")] = (datetime.utcnow() + timedelta(hours=max(1, int(hours)))).replace(microsecond=0).isoformat()
-        session["video_share_access"] = state
+    def _shared_video_request_session_id():
+        return str(request.headers.get("X-Video-Share-Session") or request.args.get("share_session") or "").strip()
+
+    def _shared_video_session_for_request(token):
+        share_session_id = _shared_video_request_session_id()
+        if not share_session_id:
+            return "", None
+        state = _store_shared_video_session_state(_shared_video_session_state())
+        item = state.get(share_session_id)
+        if not isinstance(item, dict):
+            return "", None
+        if str(item.get("token") or "") != str(token or ""):
+            return "", None
+        return share_session_id, item
+
+    def _create_shared_video_session(token, *, password_verified=False, hours=8):
+        state = _store_shared_video_session_state(_shared_video_session_state())
+        share_session_id = secrets.token_urlsafe(24)
+        state[share_session_id] = {
+            "token": str(token or ""),
+            "password_verified": bool(password_verified),
+            "counted": False,
+            "expires_at": (datetime.utcnow() + timedelta(hours=max(1, int(hours)))).replace(microsecond=0).isoformat(),
+        }
+        session["video_share_sessions"] = state
+        session.modified = True
+        return share_session_id
+
+    def _mark_shared_video_session_counted(share_session_id):
+        if not share_session_id:
+            return
+        state = _store_shared_video_session_state(_shared_video_session_state())
+        item = state.get(share_session_id)
+        if not isinstance(item, dict):
+            return
+        item["counted"] = True
+        state[share_session_id] = item
+        session["video_share_sessions"] = state
         session.modified = True
 
-    def _revoke_shared_video_session_access(token):
-        state = _shared_video_access_state()
-        if str(token or "") in state:
-            state.pop(str(token or ""), None)
-            session["video_share_access"] = state
-            session.modified = True
-
-    def _shared_video_seen_state():
-        raw = session.get("video_share_seen")
-        return raw if isinstance(raw, dict) else {}
-
-    def _shared_video_seen(token):
-        return bool(_shared_video_seen_state().get(str(token or "")))
-
-    def _mark_shared_video_seen(token):
-        state = _shared_video_seen_state()
-        state[str(token or "")] = True
-        session["video_share_seen"] = state
-        session.modified = True
-
-    def _count_shared_video_access(conn, row, token, counted_in_session):
+    def _count_shared_video_access(conn, row, share_session_id, counted_in_session):
         if counted_in_session:
             return True
-        mark_video_share_link_accessed(conn, row["share_id"] if "share_id" in row.keys() else row["id"])
-        _mark_shared_video_seen(token)
+        share_id = row["share_id"] if "share_id" in row.keys() else row["id"]
+        mark_video_share_link_accessed(conn, share_id)
+        log_share_access_event(conn, share_type="video", share_id=share_id, ip=get_client_ip(), user_agent=get_ua())
+        _mark_shared_video_session_counted(share_session_id)
         return True
+
+    def _ensure_shared_video_session_counted(conn, row, token, *, password_verified, share_session_id, counted_in_session):
+        if not share_session_id:
+            share_session_id = _create_shared_video_session(token, password_verified=password_verified)
+        _count_shared_video_access(conn, row, share_session_id, counted_in_session)
+        return share_session_id
+
+    def _url_with_share_session(url, share_session_id):
+        url = str(url or "")
+        share_session_id = str(share_session_id or "").strip()
+        if not url or not share_session_id:
+            return url
+        separator = "&" if "?" in url else "?"
+        return f"{url}{separator}share_session={share_session_id}"
+
+    def _attach_share_session_to_playback_payload(payload, share_session_id):
+        if not isinstance(payload, dict) or not share_session_id:
+            return payload
+        for key in (
+            "fallback_url",
+            "stream_url",
+            "ciphertext_url",
+            "e2ee_key_url",
+            "manifest_url",
+            "chunk_url_template",
+            "master_url",
+        ):
+            if payload.get(key):
+                payload[key] = _url_with_share_session(payload[key], share_session_id)
+        return payload
 
     def _shared_video_error_response(reason):
         if reason == "password_required":
@@ -356,19 +431,55 @@ def register_video_routes(app, deps):
             return json_resp({"ok": False, "msg": "分享金鑰必須保留在 URL fragment，不可送到伺服器", "reason": reason}), 400
         return json_resp({"ok": False, "msg": "分享影音不存在或已失效", "reason": reason}), 404
 
-    def _resolve_shared_video(conn, token):
+    def _shared_video_ended_html(reason):
+        reason = str(reason or "").strip()
+        detail_by_reason = {
+            "expired": "此分享連結已到期，請向分享者索取新的連結。",
+            "view_limit_reached": "此分享連結已達最大觀看次數，無法再開啟。",
+            "forbidden_fragment_transport": "分享金鑰格式不正確，請確認使用完整的分享網址。",
+        }
+        detail = detail_by_reason.get(reason, "此分享連結不存在、已撤銷，或分享者已結束分享。")
+        safe_detail = html.escape(detail, quote=True)
+        return f"""<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>分享已結束</title>
+  <style>
+    html {{ min-height:100%; }}
+    body {{ min-height:100dvh; margin:0; display:grid; place-items:center; background:radial-gradient(circle at 18% 8%, rgba(61,120,255,.16), transparent 28rem), radial-gradient(circle at 82% 2%, rgba(54,211,153,.08), transparent 26rem), #111521; color:#eef2ff; font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }}
+    body::before {{ content:""; position:fixed; inset:0; pointer-events:none; background-image:linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px); background-size:42px 42px; mask-image:linear-gradient(to bottom, rgba(0,0,0,.72), transparent 72%); }}
+    .card {{ position:relative; width:min(92vw, 520px); box-sizing:border-box; padding:1.35rem; border-radius:8px; background:rgba(23,28,43,.88); border:1px solid #2a3150; box-shadow:0 18px 48px rgba(0,0,0,.22); backdrop-filter:blur(12px); }}
+    h1 {{ margin:0 0 .55rem; font-size:clamp(1.35rem, 4vw, 1.9rem); line-height:1.2; }}
+    p {{ margin:0; color:#b9c2f0; line-height:1.6; }}
+    a {{ display:inline-flex; margin-top:1rem; color:#fff; background:#3d78ff; text-decoration:none; border-radius:12px; padding:.7rem 1rem; }}
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>分享已結束</h1>
+    <p>{safe_detail}</p>
+    <a href="/">回到首頁</a>
+  </main>
+</body>
+</html>"""
+
+    def _resolve_shared_video(conn, token, *, allow_counted_session_limit=False):
         if request.args.get("vk"):
-            return None, "forbidden_fragment_transport", False, _shared_video_seen(token)
-        password_verified = _shared_video_has_session_access(token)
-        counted_in_session = _shared_video_seen(token)
+            share_session_id, session_state = _shared_video_session_for_request(token)
+            return None, "forbidden_fragment_transport", False, bool(session_state and session_state.get("counted")), share_session_id
+        share_session_id, session_state = _shared_video_session_for_request(token)
+        password_verified = bool(session_state and session_state.get("password_verified"))
+        counted_in_session = bool(session_state and session_state.get("counted"))
         row, reason = resolve_video_share_token(
             conn,
             token,
             password=_shared_video_password_from_request(),
             password_verified=password_verified,
-            counted_in_session=counted_in_session,
+            counted_in_session=bool(allow_counted_session_limit and counted_in_session),
         )
-        return row, reason, password_verified, counted_in_session
+        return row, reason, password_verified, counted_in_session, share_session_id
 
     def _e2ee_direct_status(row):
         return {
@@ -444,26 +555,37 @@ def register_video_routes(app, deps):
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>分享影音</title>
   <style>
-    body {{ margin:0; background:#111521; color:#eef2ff; font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }}
-    .wrap {{ width:min(100%, 960px); margin:0 auto; padding:1rem; box-sizing:border-box; }}
-    .card {{ background:#171c2b; border:1px solid #2a3150; border-radius:18px; padding:1rem; box-shadow:0 14px 40px rgba(0,0,0,.22); overflow:hidden; }}
+    html {{ min-height:100%; }}
+    body {{ min-height:100dvh; margin:0; overflow-x:hidden; background:radial-gradient(circle at 18% 8%, rgba(61,120,255,.16), transparent 28rem), radial-gradient(circle at 82% 2%, rgba(54,211,153,.08), transparent 26rem), #111521; color:#eef2ff; font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }}
+    body::before {{ content:""; position:fixed; inset:0; pointer-events:none; background-image:linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px); background-size:42px 42px; mask-image:linear-gradient(to bottom, rgba(0,0,0,.72), transparent 72%); }}
+    .wrap {{ width:min(100%, 1120px); min-height:100dvh; margin:0 auto; padding:clamp(.75rem, 2vw, 1.25rem); box-sizing:border-box; display:flex; align-items:center; }}
+    .card {{ position:relative; width:100%; max-height:calc(100dvh - 2rem); background:rgba(23,28,43,.88); border:1px solid #2a3150; border-radius:8px; padding:clamp(.85rem, 2vw, 1.1rem); box-shadow:0 18px 48px rgba(0,0,0,.22); overflow:auto; box-sizing:border-box; backdrop-filter:blur(12px); }}
+    h1 {{ margin:.1rem 0 .35rem; font-size:clamp(1.25rem, 3vw, 1.85rem); line-height:1.2; overflow-wrap:anywhere; }}
     .msg {{ min-height:1.4rem; color:#b9c2f0; margin:.75rem 0; white-space:pre-wrap; }}
     .field {{ display:grid; gap:.35rem; margin:.75rem 0; }}
     input, button, textarea {{ font:inherit; }}
     input[type=password] {{ width:100%; box-sizing:border-box; padding:.7rem .9rem; border-radius:12px; border:1px solid #39405c; background:#0f1422; color:#eef2ff; }}
     button {{ padding:.7rem 1rem; border-radius:12px; border:0; background:#3d78ff; color:#fff; cursor:pointer; }}
     button.secondary {{ background:#2b3148; }}
-    #player-host {{ width:100%; margin-top:.8rem; }}
-    video, audio {{ display:block; width:100%; max-width:100%; border-radius:14px; background:#070b15; }}
-    video {{ height:auto; max-height:min(70vh, 560px); aspect-ratio:16 / 9; object-fit:contain; }}
+    #player-host {{ width:100%; min-height:0; margin-top:.8rem; display:grid; place-items:center; }}
+    #player-host video, #player-host audio {{ display:block; width:100%; max-width:100%; border-radius:14px; background:#070b15; }}
+    #player-host video {{ inline-size:min(100%, calc((100dvh - 240px) * 16 / 9)); height:auto; max-height:min(64dvh, 560px); aspect-ratio:16 / 9; object-fit:contain; }}
+    #player-host audio {{ min-height:44px; }}
     .meta {{ color:#b8bfd8; font-size:.95rem; }}
     .hidden {{ display:none !important; }}
     @media (max-width: 640px) {{
-      .wrap {{ padding:.75rem; }}
-      .card {{ padding:.85rem; border-radius:14px; }}
-      video, audio {{ border-radius:10px; }}
-      video {{ max-height:52vh; }}
+      .wrap {{ width:100%; min-height:100dvh; padding:0; align-items:stretch; }}
+      .card {{ min-height:100dvh; max-height:none; border:0; border-radius:0; padding:.85rem; box-shadow:none; background:rgba(23,28,43,.92); }}
+      h1 {{ font-size:1.35rem; }}
+      #player-host {{ margin-top:.55rem; }}
+      #player-host video, #player-host audio {{ border-radius:10px; }}
+      #player-host video {{ inline-size:100%; max-height:min(48dvh, calc(100dvh - 210px)); }}
       button {{ width:100%; }}
+    }}
+    @media (max-height: 520px) and (orientation: landscape) {{
+      .wrap {{ align-items:flex-start; }}
+      .card {{ max-height:none; }}
+      #player-host video {{ inline-size:min(100%, calc(72dvh * 16 / 9)); max-height:72dvh; }}
     }}
   </style>
 </head>
@@ -486,7 +608,7 @@ def register_video_routes(app, deps):
     </div>
   </div>
   <script id="share-token" type="application/json">{share_token_json}</script>
-  <script src="/js/shared-video.js?v=20260507-share"></script>
+  <script src="/js/shared-video.js?v=20260509-responsive-share"></script>
 </body>
 </html>"""
 
@@ -666,9 +788,18 @@ def register_video_routes(app, deps):
 
     @app.route("/shared/videos/<token>", methods=["GET"])
     def shared_video_page(token):
-        return Response(_shared_video_html(token), status=200, mimetype="text/html; charset=utf-8")
+        conn = get_db()
+        try:
+            row, reason = resolve_video_share_token(conn, token, password="", password_verified=False, counted_in_session=False)
+            if not row and reason != "password_required":
+                status = 400 if reason == "forbidden_fragment_transport" else 410
+                return Response(_shared_video_ended_html(reason), status=status, mimetype="text/html")
+        finally:
+            conn.close()
+        return Response(_shared_video_html(token), status=200, mimetype="text/html")
 
     @app.route("/api/videos/shared/<token>/unlock", methods=["POST"])
+    @require_csrf
     def shared_video_unlock(token):
         conn = get_db()
         try:
@@ -682,9 +813,15 @@ def register_video_routes(app, deps):
                 if reason in {"password_invalid", "password_locked"}:
                     conn.commit()
                 return _shared_video_error_response(reason)
-            _grant_shared_video_session_access(token)
+            share_session_id = _create_shared_video_session(token, password_verified=True)
+            _count_shared_video_access(conn, row, share_session_id, False)
             conn.commit()
-            return json_resp({"ok": True, "share_url": f"/shared/videos/{token}", "password_required": bool((row["share_password_required"] if "share_password_required" in row.keys() else row["password_required"]) or 0)})
+            return json_resp({
+                "ok": True,
+                "share_url": f"/shared/videos/{token}",
+                "share_session_id": share_session_id,
+                "password_required": bool((row["share_password_required"] if "share_password_required" in row.keys() else row["password_required"]) or 0),
+            })
         finally:
             conn.close()
 
@@ -692,15 +829,22 @@ def register_video_routes(app, deps):
     def shared_video_detail(token):
         conn = get_db()
         try:
-            row, reason, password_verified, counted_in_session = _resolve_shared_video(conn, token)
+            row, reason, password_verified, counted_in_session, share_session_id = _resolve_shared_video(conn, token, allow_counted_session_limit=True)
             if not row:
                 if reason in {"password_invalid", "password_locked"}:
                     conn.commit()
                 return _shared_video_error_response(reason)
-            video, _ = shared_video_payload(conn, token, password_verified=password_verified, counted_in_session=counted_in_session)
-            _count_shared_video_access(conn, row, token, counted_in_session)
+            share_session_id = _ensure_shared_video_session_counted(
+                conn,
+                row,
+                token,
+                password_verified=password_verified,
+                share_session_id=share_session_id,
+                counted_in_session=counted_in_session,
+            )
+            video, _ = shared_video_payload(conn, token, password_verified=password_verified, counted_in_session=True)
             conn.commit()
-            return json_resp({"ok": True, "video": video})
+            return json_resp({"ok": True, "video": video, "share_session_id": share_session_id})
         finally:
             conn.close()
 
@@ -708,15 +852,17 @@ def register_video_routes(app, deps):
     def shared_video_playback(token):
         conn = get_db()
         try:
-            row, reason, _password_verified, _counted_in_session = _resolve_shared_video(conn, token)
+            row, reason, password_verified, counted_in_session, share_session_id = _resolve_shared_video(conn, token, allow_counted_session_limit=True)
             if not row:
                 if reason in {"password_invalid", "password_locked"}:
                     conn.commit()
                 return _shared_video_error_response(reason)
-            _count_shared_video_access(conn, row, token, _counted_in_session)
+            share_session_id = _ensure_shared_video_session_counted(conn, row, token, password_verified=password_verified, share_session_id=share_session_id, counted_in_session=counted_in_session)
             file_row = _load_stream_file(conn, file_id=row["cloud_file_id"])
             payload = _playback_payload_for_file(conn, row=file_row, video_id=row["id"], shared_token=token)
+            payload = _attach_share_session_to_playback_payload(payload, share_session_id)
             payload["video_id"] = int(row["id"])
+            payload["share_session_id"] = share_session_id
             payload["can_prepare_stream"] = False
             payload["prepare_stream_url"] = ""
             conn.commit()
@@ -728,12 +874,12 @@ def register_video_routes(app, deps):
     def shared_video_stream(token):
         conn = get_db()
         try:
-            row, reason, _password_verified, _counted_in_session = _resolve_shared_video(conn, token)
+            row, reason, password_verified, counted_in_session, share_session_id = _resolve_shared_video(conn, token, allow_counted_session_limit=True)
             if not row:
                 if reason in {"password_invalid", "password_locked"}:
                     conn.commit()
                 return _shared_video_error_response(reason)
-            _count_shared_video_access(conn, row, token, _counted_in_session)
+            _ensure_shared_video_session_counted(conn, row, token, password_verified=password_verified, share_session_id=share_session_id, counted_in_session=counted_in_session)
             file_row = _load_stream_file(conn, file_id=row["cloud_file_id"])
             path = resolve_file_storage_path(storage_root, file_row)
             if not path.exists():
@@ -756,12 +902,12 @@ def register_video_routes(app, deps):
     def shared_video_cover(token):
         conn = get_db()
         try:
-            row, reason, _password_verified, _counted_in_session = _resolve_shared_video(conn, token)
+            row, reason, password_verified, counted_in_session, share_session_id = _resolve_shared_video(conn, token, allow_counted_session_limit=True)
             if not row:
                 if reason in {"password_invalid", "password_locked"}:
                     conn.commit()
                 return _shared_video_error_response(reason)
-            _count_shared_video_access(conn, row, token, _counted_in_session)
+            _ensure_shared_video_session_counted(conn, row, token, password_verified=password_verified, share_session_id=share_session_id, counted_in_session=counted_in_session)
             cover_file_id = row["cover_file_id"]
             if not cover_file_id:
                 return json_resp({"ok": False, "msg": "此影音沒有封面", "error": "cover_not_found"}), 404
@@ -789,12 +935,12 @@ def register_video_routes(app, deps):
     def shared_video_e2ee_key(token):
         conn = get_db()
         try:
-            row, reason, _password_verified, _counted_in_session = _resolve_shared_video(conn, token)
+            row, reason, password_verified, counted_in_session, share_session_id = _resolve_shared_video(conn, token, allow_counted_session_limit=True)
             if not row:
                 if reason in {"password_invalid", "password_locked"}:
                     conn.commit()
                 return _shared_video_error_response(reason)
-            _count_shared_video_access(conn, row, token, _counted_in_session)
+            _ensure_shared_video_session_counted(conn, row, token, password_verified=password_verified, share_session_id=share_session_id, counted_in_session=counted_in_session)
             file_row = _load_stream_file(conn, file_id=row["cloud_file_id"])
             if not is_e2ee_file(file_row):
                 return json_resp({"ok": False, "msg": "此影音不是端到端加密檔案"}), 400
@@ -821,12 +967,12 @@ def register_video_routes(app, deps):
     def shared_video_e2ee_stream_v2_manifest(token):
         conn = get_db()
         try:
-            row, reason, _password_verified, _counted_in_session = _resolve_shared_video(conn, token)
+            row, reason, password_verified, counted_in_session, share_session_id = _resolve_shared_video(conn, token, allow_counted_session_limit=True)
             if not row:
                 if reason in {"password_invalid", "password_locked"}:
                     conn.commit()
                 return _shared_video_error_response(reason)
-            _count_shared_video_access(conn, row, token, _counted_in_session)
+            _ensure_shared_video_session_counted(conn, row, token, password_verified=password_verified, share_session_id=share_session_id, counted_in_session=counted_in_session)
             file_row = _load_stream_file(conn, file_id=row["cloud_file_id"])
             if not is_e2ee_file(file_row):
                 return json_resp({"ok": False, "msg": "此影音不是端到端加密檔案", "error": "not_e2ee"}), 400
@@ -840,12 +986,12 @@ def register_video_routes(app, deps):
     def shared_video_e2ee_stream_v2_chunk(token, chunk_index):
         conn = get_db()
         try:
-            row, reason, _password_verified, _counted_in_session = _resolve_shared_video(conn, token)
+            row, reason, password_verified, counted_in_session, share_session_id = _resolve_shared_video(conn, token, allow_counted_session_limit=True)
             if not row:
                 if reason in {"password_invalid", "password_locked"}:
                     conn.commit()
                 return _shared_video_error_response(reason)
-            _count_shared_video_access(conn, row, token, _counted_in_session)
+            _ensure_shared_video_session_counted(conn, row, token, password_verified=password_verified, share_session_id=share_session_id, counted_in_session=counted_in_session)
             file_row = _load_stream_file(conn, file_id=row["cloud_file_id"])
             if not is_e2ee_file(file_row):
                 return json_resp({"ok": False, "msg": "此影音不是端到端加密檔案", "error": "not_e2ee"}), 400
@@ -865,12 +1011,12 @@ def register_video_routes(app, deps):
     def shared_video_ciphertext(token):
         conn = get_db()
         try:
-            row, reason, _password_verified, _counted_in_session = _resolve_shared_video(conn, token)
+            row, reason, password_verified, counted_in_session, share_session_id = _resolve_shared_video(conn, token, allow_counted_session_limit=True)
             if not row:
                 if reason in {"password_invalid", "password_locked"}:
                     conn.commit()
                 return _shared_video_error_response(reason)
-            _count_shared_video_access(conn, row, token, _counted_in_session)
+            _ensure_shared_video_session_counted(conn, row, token, password_verified=password_verified, share_session_id=share_session_id, counted_in_session=counted_in_session)
             file_row = _load_stream_file(conn, file_id=row["cloud_file_id"])
             if not is_e2ee_file(file_row):
                 return json_resp({"ok": False, "msg": "此影音不是端到端加密檔案"}), 400
@@ -892,19 +1038,19 @@ def register_video_routes(app, deps):
     def shared_video_hls_master(token):
         conn = get_db()
         try:
-            row, reason, _password_verified, _counted_in_session = _resolve_shared_video(conn, token)
+            row, reason, password_verified, counted_in_session, share_session_id = _resolve_shared_video(conn, token, allow_counted_session_limit=True)
             if not row:
                 if reason in {"password_invalid", "password_locked"}:
                     conn.commit()
                 return _shared_video_error_response(reason)
-            _count_shared_video_access(conn, row, token, _counted_in_session)
+            share_session_id = _ensure_shared_video_session_counted(conn, row, token, password_verified=password_verified, share_session_id=share_session_id, counted_in_session=counted_in_session)
             file_row = _load_stream_file(conn, file_id=row["cloud_file_id"])
             asset = get_stream_status(conn, file_row=file_row)
             if not asset or asset.get("status") != "ready" or not asset.get("master_manifest_path"):
                 return json_resp({"ok": False, "msg": "影音串流尚未準備完成", "error": "stream_not_ready"}), 409
             path = resolve_file_storage_path(storage_root, {"storage_path": asset["master_manifest_path"]})
             conn.commit()
-            return send_file(path, as_attachment=False, download_name="master.m3u8", mimetype="application/vnd.apple.mpegurl", conditional=True)
+            return _send_hls_master_manifest(path, share_session_id=share_session_id)
         finally:
             conn.close()
 
@@ -912,12 +1058,12 @@ def register_video_routes(app, deps):
     def shared_video_hls_variant_playlist(token, variant):
         conn = get_db()
         try:
-            row, reason, _password_verified, _counted_in_session = _resolve_shared_video(conn, token)
+            row, reason, password_verified, counted_in_session, share_session_id = _resolve_shared_video(conn, token, allow_counted_session_limit=True)
             if not row:
                 if reason in {"password_invalid", "password_locked"}:
                     conn.commit()
                 return _shared_video_error_response(reason)
-            _count_shared_video_access(conn, row, token, _counted_in_session)
+            share_session_id = _ensure_shared_video_session_counted(conn, row, token, password_verified=password_verified, share_session_id=share_session_id, counted_in_session=counted_in_session)
             file_row = _load_stream_file(conn, file_id=row["cloud_file_id"])
             asset = get_stream_status(conn, file_row=file_row)
             if not asset or asset.get("status") != "ready":
@@ -927,7 +1073,8 @@ def register_video_routes(app, deps):
                 return json_resp({"ok": False, "msg": "找不到串流變體", "error": "variant_not_found"}), 404
             path = resolve_file_storage_path(storage_root, {"storage_path": match["playlist_path"]})
             conn.commit()
-            return send_file(path, as_attachment=False, download_name="playlist.m3u8", mimetype="application/vnd.apple.mpegurl", conditional=True)
+            text = _append_share_session_to_hls_manifest(Path(path).read_text(encoding="utf-8"), share_session_id)
+            return Response(text, status=200, mimetype="application/vnd.apple.mpegurl")
         finally:
             conn.close()
 
@@ -935,12 +1082,12 @@ def register_video_routes(app, deps):
     def shared_video_hls_segment(token, variant, segment):
         conn = get_db()
         try:
-            row, reason, _password_verified, _counted_in_session = _resolve_shared_video(conn, token)
+            row, reason, password_verified, counted_in_session, share_session_id = _resolve_shared_video(conn, token, allow_counted_session_limit=True)
             if not row:
                 if reason in {"password_invalid", "password_locked"}:
                     conn.commit()
                 return _shared_video_error_response(reason)
-            _count_shared_video_access(conn, row, token, _counted_in_session)
+            _ensure_shared_video_session_counted(conn, row, token, password_verified=password_verified, share_session_id=share_session_id, counted_in_session=counted_in_session)
             file_row = _load_stream_file(conn, file_id=row["cloud_file_id"])
             asset = get_stream_status(conn, file_row=file_row)
             if not asset or asset.get("status") != "ready":
@@ -1294,7 +1441,7 @@ def register_video_routes(app, deps):
             if not asset or asset.get("status") != "ready" or not asset.get("master_manifest_path"):
                 return json_resp({"ok": False, "msg": "影音串流尚未準備完成", "error": "stream_not_ready"}), 409
             path = resolve_file_storage_path(storage_root, {"storage_path": asset["master_manifest_path"]})
-            return send_file(path, as_attachment=False, download_name="master.m3u8", mimetype="application/vnd.apple.mpegurl", conditional=True)
+            return _send_hls_master_manifest(path)
         except PermissionError as exc:
             return _error_response(exc)
         except ValueError as exc:

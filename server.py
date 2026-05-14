@@ -52,6 +52,7 @@ from services.users.auth import (
     json_resp,
     make_csrf_token,
     make_token,
+    record_login_attempt,
     revoke_user_sessions,
     require_csrf,
     require_csrf_safe,
@@ -174,13 +175,18 @@ from services.server.validation import (
 )
 from services.server.database import (
     activate_emergency_lockdown as activate_emergency_lockdown_helper,
+    ensure_auth_db_schema as ensure_auth_db_schema_helper,
     count_role as count_role_helper,
     db_get_user_role as db_get_user_role_helper,
+    ensure_audit_db_schema as ensure_audit_db_schema_helper,
     ensure_appeal_columns as ensure_appeal_columns_helper,
     ensure_secure_audit_columns as ensure_secure_audit_columns_helper,
     ensure_security_support_schema as ensure_security_support_schema_helper,
     ensure_session_columns as ensure_session_columns_helper,
     ensure_user_columns as ensure_user_columns_helper,
+    get_audit_db as get_audit_db_helper,
+    get_auth_db as get_auth_db_helper,
+    get_control_db as get_control_db_helper,
     get_db as get_db_helper,
     get_user_by_username as get_user_by_username_helper,
 )
@@ -215,6 +221,7 @@ from services.server.bind import effective_server_bind, effective_server_ssl
 from services.server_mode.context import attach_to_g as smv2_attach_ctx, current_ctx as smv2_current_ctx
 from services.platform.db_mode_triggers import register_app_mode_function as smv2_register_app_mode
 from services.snapshots import SnapshotService, ServerModeService, ensure_snapshot_schema
+from services.snapshots.schema import ensure_control_db_schema
 from services.storage.maintenance import run_storage_maintenance_if_due
 from services.storage.paths import validate_storage_root
 from services.security.upload_security import ensure_upload_security_schema
@@ -250,7 +257,10 @@ def _runtime_path(env_name, relative_path):
 
 DB_DIR = _env_path("HTML_LEARNING_DB_DIR", os.path.join(RUNTIME_DIR, "database"))
 DB_PATH = os.path.join(DB_DIR, "database.db")
-CHESS_ENGINE_DB_PATH = _env_path("HTML_LEARNING_CHESS_ENGINE_DB_PATH", os.path.join(DB_DIR, "chess_experiment.db"))
+AUTH_DB_PATH = _env_path("HTML_LEARNING_AUTH_DB_PATH", os.path.join(DB_DIR, "auth.db"))
+AUDIT_DB_PATH = _env_path("HTML_LEARNING_AUDIT_DB_PATH", os.path.join(DB_DIR, "audit.db"))
+CONTROL_DB_PATH = _env_path("HTML_LEARNING_CONTROL_DB_PATH", os.path.join(DB_DIR, "control.db"))
+CHESS_ENGINE_DB_PATH = _env_path("HTML_LEARNING_CHESS_ENGINE_DB_PATH", os.path.join(RUNTIME_DIR, "games", "models", "chess_experiment.db"))
 LOG_DIR = _env_path("HTML_LEARNING_LOG_DIR", os.path.join(RUNTIME_DIR, "logs"))
 CHAT_DIR = _env_path("HTML_LEARNING_CHAT_DIR", os.path.join(RUNTIME_DIR, "chats"))
 ANCHOR_DIR = _env_path("HTML_LEARNING_ANCHOR_DIR", os.path.join(RUNTIME_DIR, "anchors"))
@@ -504,7 +514,7 @@ def has_valid_maintenance_bypass(settings=None):
 
 
 def get_runtime_server_mode():
-    return get_runtime_server_mode_helper(get_db=get_db)
+    return get_runtime_server_mode_helper(get_db=get_db, get_control_db=get_control_db)
 
 
 def tester_token_username_from_request(req):
@@ -609,6 +619,259 @@ def get_db():
     )
 
 
+def get_audit_db():
+    return get_audit_db_helper(AUDIT_DB_PATH)
+
+
+def get_auth_db():
+    return get_auth_db_helper(AUTH_DB_PATH)
+
+
+def get_control_db():
+    return get_control_db_helper(CONTROL_DB_PATH)
+
+
+def _ensure_split_db_schemas():
+    auth_conn = get_auth_db()
+    try:
+        ensure_auth_db_schema(auth_conn)
+        auth_conn.commit()
+    finally:
+        auth_conn.close()
+    audit_conn = get_audit_db()
+    try:
+        ensure_audit_db_schema(audit_conn)
+        audit_conn.commit()
+    finally:
+        audit_conn.close()
+    control_conn = get_control_db()
+    try:
+        ensure_control_db_schema(control_conn)
+        control_conn.commit()
+    finally:
+        control_conn.close()
+
+
+def _migrate_secure_audit_if_needed():
+    if os.path.abspath(AUDIT_DB_PATH) == os.path.abspath(DB_PATH):
+        return
+    try:
+        audit_conn = get_audit_db()
+    except Exception:
+        return
+    try:
+        audit_count = audit_conn.execute("SELECT COUNT(*) AS c FROM secure_audit").fetchone()["c"]
+        if int(audit_count or 0) > 0:
+            return
+    except Exception:
+        return
+    finally:
+        audit_conn.close()
+
+
+def _migrate_auth_tables_if_needed():
+    if os.path.abspath(AUTH_DB_PATH) == os.path.abspath(DB_PATH):
+        return
+    tables = ("csrf_tokens", "captcha_challenges", "login_attempts", "sessions")
+    try:
+        auth_conn = get_auth_db()
+    except Exception:
+        return
+    try:
+        auth_tables = {
+            row["name"]: int(
+                auth_conn.execute(f"SELECT COUNT(*) AS c FROM {row['name']}").fetchone()["c"]
+            )
+            for row in auth_conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('csrf_tokens','captcha_challenges','login_attempts','sessions')"
+            ).fetchall()
+        }
+        if all(auth_tables.get(name, 0) > 0 for name in tables):
+            return
+    except Exception:
+        return
+    finally:
+        auth_conn.close()
+
+
+def _migrate_control_tables_if_needed():
+    if os.path.abspath(CONTROL_DB_PATH) == os.path.abspath(DB_PATH):
+        return
+    tables = (
+        "server_modes",
+        "server_checkpoints",
+        "mode_switch_logs",
+        "security_keys",
+        "production_entry_reports",
+        "incident_reports",
+        "security_profiles",
+    )
+    try:
+        control_conn = get_control_db()
+    except Exception:
+        return
+    try:
+        existing = {
+            row["name"]: int(control_conn.execute(f"SELECT COUNT(*) AS c FROM {row['name']}").fetchone()["c"])
+            for row in control_conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name IN "
+                "('server_modes','server_checkpoints','mode_switch_logs','security_keys','production_entry_reports','incident_reports','security_profiles')"
+            ).fetchall()
+        }
+        if all(existing.get(name, 0) > 0 for name in ("server_modes", "security_profiles")):
+            return
+    except Exception:
+        return
+    finally:
+        control_conn.close()
+    try:
+        main_conn = sqlite3.connect(DB_PATH, timeout=15)
+        main_conn.row_factory = sqlite3.Row
+    except Exception:
+        return
+    try:
+        existing_tables = {
+            row["name"]
+            for row in main_conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        }
+        table_columns = {
+            name: [row["name"] for row in main_conn.execute(f"PRAGMA table_info({name})").fetchall()]
+            for name in tables
+            if name in existing_tables
+        }
+        table_rows = {}
+        for name in tables:
+            columns = table_columns.get(name)
+            if not columns:
+                continue
+            rows = main_conn.execute(f"SELECT {', '.join(columns)} FROM {name}").fetchall()
+            if rows:
+                table_rows[name] = (columns, rows)
+    except Exception:
+        table_rows = {}
+    finally:
+        try:
+            main_conn.close()
+        except Exception:
+            pass
+    if not table_rows:
+        return
+    control_conn = get_control_db()
+    try:
+        for name, (columns, rows) in table_rows.items():
+            placeholders = ", ".join("?" for _ in columns)
+            control_conn.executemany(
+                f"INSERT OR IGNORE INTO {name} ({', '.join(columns)}) VALUES ({placeholders})",
+                [tuple(row[column] for column in columns) for row in rows],
+            )
+        control_conn.commit()
+    finally:
+        control_conn.close()
+    try:
+        main_conn = sqlite3.connect(DB_PATH, timeout=15)
+        main_conn.row_factory = sqlite3.Row
+    except Exception:
+        return
+    try:
+        existing_tables = {
+            row["name"]
+            for row in main_conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        }
+        table_columns = {
+            name: [row["name"] for row in main_conn.execute(f"PRAGMA table_info({name})").fetchall()]
+            for name in tables
+            if name in existing_tables
+        }
+        table_rows = {}
+        for name in tables:
+            columns = table_columns.get(name)
+            if not columns:
+                continue
+            sql = f"SELECT {', '.join(columns)} FROM {name}"
+            rows = main_conn.execute(sql).fetchall()
+            if rows:
+                table_rows[name] = (columns, rows)
+    except Exception:
+        table_rows = {}
+    finally:
+        try:
+            main_conn.close()
+        except Exception:
+            pass
+    if not table_rows:
+        return
+    auth_conn = get_auth_db()
+    try:
+        for name, (columns, rows) in table_rows.items():
+            placeholders = ", ".join("?" for _ in columns)
+            auth_conn.executemany(
+                f"INSERT OR IGNORE INTO {name} ({', '.join(columns)}) VALUES ({placeholders})",
+                [tuple(row[column] for column in columns) for row in rows],
+            )
+        auth_conn.commit()
+    except Exception:
+        try:
+            auth_conn.rollback()
+        except Exception:
+            pass
+    finally:
+        auth_conn.close()
+    try:
+        main_conn = sqlite3.connect(DB_PATH, timeout=15)
+        main_conn.row_factory = sqlite3.Row
+        table_exists = main_conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='secure_audit' LIMIT 1"
+        ).fetchone()
+        if not table_exists:
+            return
+        rows = main_conn.execute(
+            "SELECT id, ts, action, ip, user, success, ua, detail, prev_hash, entry_hash, chain_hash "
+            "FROM secure_audit ORDER BY id ASC"
+        ).fetchall()
+        if not rows:
+            return
+    except Exception:
+        return
+    finally:
+        try:
+            main_conn.close()
+        except Exception:
+            pass
+    audit_conn = get_audit_db()
+    try:
+        audit_conn.executemany(
+            """
+            INSERT OR IGNORE INTO secure_audit
+            (id, ts, action, ip, user, success, ua, detail, prev_hash, entry_hash, chain_hash)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    row["id"],
+                    row["ts"],
+                    row["action"],
+                    row["ip"],
+                    row["user"],
+                    row["success"],
+                    row["ua"],
+                    row["detail"],
+                    row["prev_hash"] if "prev_hash" in row.keys() else "",
+                    row["entry_hash"] if "entry_hash" in row.keys() else "",
+                    row["chain_hash"] if "chain_hash" in row.keys() else "",
+                )
+                for row in rows
+            ],
+        )
+        audit_conn.commit()
+    except Exception:
+        try:
+            audit_conn.rollback()
+        except Exception:
+            pass
+    finally:
+        audit_conn.close()
+
+
 def count_role(role):
     return count_role_helper(role, get_db=get_db)
 
@@ -632,6 +895,14 @@ def ensure_user_columns(conn):
 
 def ensure_secure_audit_columns(conn):
     return ensure_secure_audit_columns_helper(conn)
+
+
+def ensure_auth_db_schema(conn):
+    return ensure_auth_db_schema_helper(conn)
+
+
+def ensure_audit_db_schema(conn):
+    return ensure_audit_db_schema_helper(conn)
 
 
 def ensure_appeal_columns(conn):
@@ -671,11 +942,18 @@ def activate_emergency_lockdown(reason):
 
 
 ROOT_INTEGRITY_SIGNING_KEY = os.environ.get("ROOT_INTEGRITY_SIGNING_KEY", "").encode("utf-8") or _INTEGRITY_KEY
+_ensure_split_db_schemas()
+_migrate_secure_audit_if_needed()
+_migrate_auth_tables_if_needed()
+_migrate_control_tables_if_needed()
 _runtime_services = build_runtime_services(
     config={
         "base_dir": BASE_DIR,
         "db_dir": DB_DIR,
         "db_path": DB_PATH,
+        "auth_db_path": AUTH_DB_PATH,
+        "audit_db_path": AUDIT_DB_PATH,
+        "control_db_path": CONTROL_DB_PATH,
         "chess_engine_db_path": CHESS_ENGINE_DB_PATH,
         "runtime_secrets_dir": RUNTIME_SECRETS_DIR,
         "storage_root": STORAGE_DIR,
@@ -718,6 +996,9 @@ _runtime_services = build_runtime_services(
     },
     deps={
         "get_db": get_db,
+        "get_auth_db": get_auth_db,
+        "get_audit_db": get_audit_db,
+        "get_control_db": get_control_db,
         "get_user_by_username": get_user_by_username,
         "fernet": fernet,
         "get_client_ip": get_client_ip,
@@ -741,6 +1022,7 @@ _runtime_services = build_runtime_services(
         "is_ip_blocking_enabled": is_ip_blocking_enabled,
         "encrypt_field": encrypt_field,
         "record_security_event": record_security_event,
+        "record_login_attempt": record_login_attempt,
     },
 )
 snapshot_service = _runtime_services["snapshot_service"]
@@ -762,12 +1044,13 @@ app.config["SESSION_COOKIE_SAMESITE"] = SESSION_COOKIE_SAMESITE
 app.config["PREFERRED_URL_SCHEME"] = "https" if FORCE_HTTPS else "http"
 
 # ── Security Headers (via Flask-Talisman) ─────────────────────────────────────
-# CSP: strict mode (no inline scripts/styles)
+# CSP: keep scripts strict. The existing UI uses inline style attributes and
+# runtime element positioning, including the ComfyUI visual workflow editor.
 talisman = Talisman(app,
     content_security_policy={
         "default-src": "'self'",
         "script-src":  "'self'",
-        "style-src":   "'self'",
+        "style-src":   "'self' 'unsafe-inline'",
         "img-src":     "'self' data: blob:",
         "media-src":   "'self' blob:",
         "frame-src":   "'self' blob:",
@@ -867,7 +1150,7 @@ def attach_smv2_ctx():
 
 @app.before_request
 def protect_sensitive_static_pages():
-    if request.method == "OPTIONS" or request.path != "/trading-workflow-editor.html":
+    if request.method == "OPTIONS" or request.path not in {"/trading-workflow-editor.html", "/comfyui-workflow-editor.html"}:
         return None
     # Keep these protection markers visible in server.py while the heavy logic
     # lives in services.server_request_guards:
@@ -875,6 +1158,7 @@ def protect_sensitive_static_pages():
     # STATIC_PAGE_UNAUTH_DENIED
     # resp.headers["Location"] = "/"
     # is_feature_enabled("feature_trading_enabled")
+    # is_feature_enabled("feature_comfyui_enabled")
     return protect_sensitive_static_page_helper(
         request,
         get_current_user_ctx=get_current_user_ctx,

@@ -301,7 +301,7 @@ def open_root_contract_position(
         settings = service._settings_payload(conn)
         if not settings.get("futures_enabled") or not int(market["futures_enabled"] or 0):
             raise ValueError("contract trading is disabled")
-        service._assert_market_boot_ready(market, usage="contract position open")
+        service._assert_market_boot_ready(market, usage="contract position open", conn=conn)
         price, price_source, price_meta = service._current_market_price_points(
             conn,
             market,
@@ -431,7 +431,7 @@ def close_root_contract_position(
         if position["status"] != "open":
             raise ValueError("contract position is not open")
         market = service._market(conn, position["market_symbol"])
-        service._assert_market_boot_ready(market, usage="contract position close")
+        service._assert_market_boot_ready(market, usage="contract position close", conn=conn)
         current_price, price_source, price_meta = service._current_market_price_points(
             conn,
             market,

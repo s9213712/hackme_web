@@ -23,6 +23,7 @@ CSRF_PROTECTED_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
 _STATE = {
     "get_db": None,
+    "get_auth_db": None,
     "get_user_by_username": None,
     "fernet": None,
     "get_client_ip": None,
@@ -37,9 +38,14 @@ _hasher = argon2.PasswordHasher(time_cost=3, memory_cost=65536,
                                 parallelism=4, hash_len=32, salt_len=16)
 
 
+def _is_sqlite_locked_error(exc):
+    return isinstance(exc, sqlite3.OperationalError) and "locked" in str(exc).lower()
+
+
 def configure_auth_service(
     *,
     get_db,
+    get_auth_db=None,
     get_user_by_username,
     fernet,
     get_client_ip=None,
@@ -51,6 +57,7 @@ def configure_auth_service(
 ):
     _STATE.update({
         "get_db": get_db,
+        "get_auth_db": get_auth_db or get_db,
         "get_user_by_username": get_user_by_username,
         "fernet": fernet,
         "get_client_ip": get_client_ip,
@@ -128,6 +135,49 @@ def _read_bool_setting(conn, key, default=False):
     return default
 
 
+def _main_db():
+    return _STATE["get_db"]()
+
+
+def _auth_db():
+    getter = _STATE.get("get_auth_db") or _STATE.get("get_db")
+    return getter()
+
+
+def _auth_write(operation, *, attempts=5, delay_seconds=0.1):
+    last_exc = None
+    for attempt in range(max(1, int(attempts))):
+        conn = _auth_db()
+        try:
+            result = operation(conn)
+            conn.commit()
+            return result
+        except Exception as exc:
+            last_exc = exc
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            if _is_sqlite_locked_error(exc) and attempt + 1 < max(1, int(attempts)):
+                time.sleep(delay_seconds * (attempt + 1))
+                continue
+            raise
+        finally:
+            conn.close()
+    if last_exc is not None:
+        raise last_exc
+    return None
+
+
+def record_login_attempt(*, user_id, ip_address, user_agent, success, attempted_at):
+    def _write(conn):
+        conn.execute(
+            "INSERT INTO login_attempts (user_id, ip_address, user_agent, success, attempted_at) VALUES (?, ?, ?, ?, ?)",
+            (user_id, ip_address, user_agent, 1 if success else 0, attempted_at),
+        )
+    _auth_write(_write)
+
+
 def _record_csrf_failure(reason, username="-"):
     record_security_event(
         "csrf_fail",
@@ -164,7 +214,7 @@ def verify_csrf_double_submit(body_token):
     if not hmac.compare_digest(cookie_tok, body_token):
         return False
     tok_hash = hashlib.sha256(cookie_tok.encode()).hexdigest()
-    conn = _STATE["get_db"]()
+    conn = _auth_db()
     try:
         now = datetime.now().isoformat()
         conn.execute("BEGIN IMMEDIATE")
@@ -264,18 +314,16 @@ def make_csrf_token():
 
 
 def store_csrf_token(token, username):
-    conn = _STATE["get_db"]()
     expires = (datetime.now() + timedelta(seconds=_STATE["csrf_token_ttl"])).isoformat()
     now = datetime.now().isoformat()
-    try:
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    def _write(conn):
         conn.execute("DELETE FROM csrf_tokens WHERE expires_at<=?", (now,))
         conn.execute(
             "INSERT OR REPLACE INTO csrf_tokens (token_hash, username, expires_at) VALUES (?, ?, ?)",
-            (hashlib.sha256(token.encode()).hexdigest(), username, expires)
+            (token_hash, username, expires)
         )
-        conn.commit()
-    finally:
-        conn.close()
+    _auth_write(_write)
 
 
 def verify_csrf_token(token, username):
@@ -283,7 +331,7 @@ def verify_csrf_token(token, username):
         return False
     if not isinstance(username, str) or not username:
         return False
-    conn = _STATE["get_db"]()
+    conn = _auth_db()
     try:
         row = conn.execute(
             "SELECT 1 FROM csrf_tokens WHERE token_hash=? AND username=? AND expires_at>?",
@@ -299,7 +347,7 @@ def consume_csrf_token(token, username):
         return False
     if not isinstance(username, str) or not username:
         return False
-    conn = _STATE["get_db"]()
+    conn = _auth_db()
     try:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
@@ -329,7 +377,7 @@ def delete_csrf_token(token):
     if not token:
         return
     h = hashlib.sha256(token.encode()).hexdigest()
-    conn = _STATE["get_db"]()
+    conn = _auth_db()
     conn.execute("DELETE FROM csrf_tokens WHERE token_hash=?", (h,))
     conn.commit()
     conn.close()
@@ -338,7 +386,7 @@ def delete_csrf_token(token):
 def delete_csrf_tokens_for_username(username):
     if not username:
         return
-    conn = _STATE["get_db"]()
+    conn = _auth_db()
     try:
         conn.execute("DELETE FROM csrf_tokens WHERE username=?", (username,))
         conn.commit()
@@ -468,33 +516,32 @@ def get_request_csrf_token():
 
 
 def db_save_session(user_id, token, ip, ua):
-    conn = _STATE["get_db"]()
     now = datetime.now().isoformat()
     expires = (datetime.now() + timedelta(seconds=_STATE["session_ttl"])).isoformat()
-    cols = {row["name"] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()}
-    session_epoch = _current_security_epoch(conn)
-    if "device_info" in cols:
-        if "session_epoch" in cols:
-            conn.execute(
-                "INSERT INTO sessions (user_id, token_hash, ip_address, user_agent, device_info, expires_at, last_seen, session_epoch) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (user_id, _hash_token(token), ip, ua, _device_info_from_user_agent(ua), expires, now, session_epoch)
-            )
+    def _write(conn):
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+        session_epoch = _current_security_epoch(conn)
+        if "device_info" in cols:
+            if "session_epoch" in cols:
+                conn.execute(
+                    "INSERT INTO sessions (user_id, token_hash, ip_address, user_agent, device_info, expires_at, last_seen, session_epoch) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (user_id, _hash_token(token), ip, ua, _device_info_from_user_agent(ua), expires, now, session_epoch)
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO sessions (user_id, token_hash, ip_address, user_agent, device_info, expires_at, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (user_id, _hash_token(token), ip, ua, _device_info_from_user_agent(ua), expires, now)
+                )
         else:
             conn.execute(
-                "INSERT INTO sessions (user_id, token_hash, ip_address, user_agent, device_info, expires_at, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (user_id, _hash_token(token), ip, ua, _device_info_from_user_agent(ua), expires, now)
+                "INSERT INTO sessions (user_id, token_hash, ip_address, user_agent, expires_at, last_seen) VALUES (?, ?, ?, ?, ?, ?)",
+                (user_id, _hash_token(token), ip, ua, expires, now)
             )
-    else:
-        conn.execute(
-            "INSERT INTO sessions (user_id, token_hash, ip_address, user_agent, expires_at, last_seen) VALUES (?, ?, ?, ?, ?, ?)",
-            (user_id, _hash_token(token), ip, ua, expires, now)
-        )
-    conn.commit()
-    conn.close()
+    _auth_write(_write)
 
 
 def db_delete_session(token, *, notify_security_event=False, detail="single_session_logout"):
-    conn = _STATE["get_db"]()
+    conn = _auth_db()
     try:
         conn.execute(
             "UPDATE sessions SET is_revoked=1, revoked_at=? WHERE token_hash=?",
@@ -508,7 +555,7 @@ def db_delete_session(token, *, notify_security_event=False, detail="single_sess
 
 
 def revoke_user_sessions(user_id, *, notify_security_event=True, detail="user_sessions_revoked"):
-    conn = _STATE["get_db"]()
+    conn = _auth_db()
     try:
         conn.execute(
             "UPDATE sessions SET is_revoked=1, revoked_at=? WHERE user_id=? AND is_revoked=0",
@@ -522,7 +569,7 @@ def revoke_user_sessions(user_id, *, notify_security_event=True, detail="user_se
 
 
 def db_clean_expired_sessions():
-    conn = _STATE["get_db"]()
+    conn = _auth_db()
     try:
         conn.execute(
             "DELETE FROM sessions WHERE expires_at < ? OR is_revoked=1",
@@ -534,35 +581,46 @@ def db_clean_expired_sessions():
 
 
 def db_get_user_from_token(token):
-    conn = _STATE["get_db"]()
+    auth_conn = _auth_db()
     try:
         now = datetime.now()
         now_iso = now.isoformat()
         try:
-            session_cols = {item["name"] for item in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+            session_cols = {item["name"] for item in auth_conn.execute("PRAGMA table_info(sessions)").fetchall()}
         except Exception:
             session_cols = set()
         session_epoch_expr = "s.session_epoch" if "session_epoch" in session_cols else "0"
-        row = conn.execute(
-            f"SELECT s.id, s.last_seen, s.ip_address, s.user_agent, COALESCE({session_epoch_expr}, 0) AS session_epoch, u.username FROM sessions s "
-            "JOIN users u ON u.id=s.user_id "
-            "WHERE s.token_hash=? AND s.expires_at>? AND COALESCE(s.is_revoked, 0)=0 "
-            "AND u.status='active'",
+        row = auth_conn.execute(
+            f"SELECT s.id, s.user_id, s.last_seen, s.ip_address, s.user_agent, COALESCE({session_epoch_expr}, 0) AS session_epoch "
+            "FROM sessions s "
+            "WHERE s.token_hash=? AND s.expires_at>? AND COALESCE(s.is_revoked, 0)=0",
             (_hash_token(token), now_iso)
         ).fetchone()
         if not row:
             return None
-        current_epoch = _current_security_epoch(conn)
+        main_conn = _main_db()
+        try:
+            user_row = main_conn.execute(
+                "SELECT username, status FROM users WHERE id=?",
+                (row["user_id"],),
+            ).fetchone()
+            if not user_row or str(user_row["status"] or "") != "active":
+                return None
+            username = user_row["username"]
+            current_epoch = _current_security_epoch(main_conn)
+            strict_ip_binding = _read_bool_setting(main_conn, "session_strict_ip_binding", default=False)
+        finally:
+            main_conn.close()
         if int(row["session_epoch"] or 0) < current_epoch:
             try:
-                conn.execute(
+                auth_conn.execute(
                     "UPDATE sessions SET is_revoked=1, revoked_at=? WHERE id=?",
                     (now_iso, row["id"])
                 )
-                conn.commit()
+                auth_conn.commit()
             except sqlite3.OperationalError:
-                conn.rollback()
-            record_security_event("session_revoked", "-", target_user=row["username"], detail="security_epoch_rotated")
+                auth_conn.rollback()
+            record_security_event("session_revoked", "-", target_user=username, detail="security_epoch_rotated")
             return None
 
         stored_ip = str(row["ip_address"] or "").strip()
@@ -571,19 +629,19 @@ def db_get_user_from_token(token):
             record_security_event(
                 "session_ip_mismatch",
                 current_ip,
-                target_user=row["username"],
+                target_user=username,
                 detail=f"stored={stored_ip}",
             )
-            if _read_bool_setting(conn, "session_strict_ip_binding", default=False):
+            if strict_ip_binding:
                 try:
-                    conn.execute(
+                    auth_conn.execute(
                         "UPDATE sessions SET is_revoked=1, revoked_at=? WHERE id=?",
                         (now_iso, row["id"])
                     )
-                    conn.commit()
+                    auth_conn.commit()
                 except sqlite3.OperationalError:
-                    conn.rollback()
-                record_security_event("session_revoked", current_ip, target_user=row["username"], detail=f"strict_ip_binding stored={stored_ip}")
+                    auth_conn.rollback()
+                record_security_event("session_revoked", current_ip, target_user=username, detail=f"strict_ip_binding stored={stored_ip}")
                 return None
 
         stored_ua = str(row["user_agent"] or "").strip()
@@ -592,7 +650,7 @@ def db_get_user_from_token(token):
             record_security_event(
                 "session_user_agent_mismatch",
                 current_ip or "-",
-                target_user=row["username"],
+                target_user=username,
                 detail=f"stored={stored_ua[:120]},current={current_ua[:120]}",
             )
 
@@ -605,25 +663,25 @@ def db_get_user_from_token(token):
                 idle_seconds = 0
             if idle_seconds > int(_STATE["session_idle_timeout"]):
                 try:
-                    conn.execute(
+                    auth_conn.execute(
                         "UPDATE sessions SET is_revoked=1, revoked_at=? WHERE id=?",
                         (now_iso, row["id"])
                     )
-                    conn.commit()
+                    auth_conn.commit()
                 except sqlite3.OperationalError:
-                    conn.rollback()
-                record_security_event("session_revoked", "-", target_user=row["username"], detail="idle_timeout")
+                    auth_conn.rollback()
+                record_security_event("session_revoked", "-", target_user=username, detail="idle_timeout")
                 return None
 
         if idle_seconds >= SESSION_LAST_SEEN_REFRESH_INTERVAL:
             try:
-                conn.execute("UPDATE sessions SET last_seen=? WHERE id=?", (now_iso, row["id"]))
-                conn.commit()
+                auth_conn.execute("UPDATE sessions SET last_seen=? WHERE id=?", (now_iso, row["id"]))
+                auth_conn.commit()
             except sqlite3.OperationalError:
-                conn.rollback()
-        return row["username"]
+                auth_conn.rollback()
+        return username
     finally:
-        conn.close()
+        auth_conn.close()
 
 
 def get_current_user_ctx():

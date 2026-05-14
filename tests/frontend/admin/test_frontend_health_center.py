@@ -16,6 +16,7 @@ def test_health_center_is_grouped_into_readable_sections():
     assert 'id="server-health-counts"' in index_html
     assert 'id="server-health-storage"' in index_html
     assert 'id="server-health-audit"' in index_html
+    assert 'id="server-health-playwright-ci"' in index_html
     assert 'class="health-dashboard"' in index_html
     assert 'class="health-summary-grid"' in index_html
     assert 'class="health-section-grid"' in index_html
@@ -30,6 +31,9 @@ def test_health_center_is_grouped_into_readable_sections():
     assert "quarantined_files" in admin_js
     assert "Readiness:" in admin_js
     assert "Anomaly:" in admin_js
+    assert "function loadPlaywrightCiHealth" in admin_js
+    assert "/admin/health/playwright-ci" in admin_js
+    assert "GitHub Actions" in admin_js
 
 
 def test_platform_stats_render_as_charts_instead_of_metric_cards():

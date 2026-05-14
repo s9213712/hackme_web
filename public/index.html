@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>hackme_web — 登入系統</title>
   <!-- Security headers via HTTP (set by server/Talisman) -->
-  <link rel="stylesheet" href="/styles.css?v=20260505-workflow-preset" />
+  <link rel="stylesheet" href="/styles.css?v=20260514-open-world" />
 </head>
 <body>
 <!-- ════════════════════ AUTH CARD ════════════════════ -->
@@ -86,14 +86,18 @@
 
   <!-- ── Register form ───────────────────────────────── -->
   <div class="form-section" id="sec-register">
+    <div id="reg-autofill-decoys" aria-hidden="true" style="display:none">
+      <input type="text" autocomplete="username" tabindex="-1" />
+      <input type="password" autocomplete="new-password" tabindex="-1" />
+    </div>
     <div class="field">
       <label>帳號</label>
-      <input type="text" id="reg-user" placeholder="選擇一個帳號（3 字以上）" autocomplete="username" />
+      <input type="text" id="reg-user" placeholder="選擇一個帳號（3 字以上）" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-form-type="other" />
     </div>
     <div class="field">
       <label>密碼</label>
       <div class="pw-wrap">
-        <input type="password" id="reg-pw" placeholder="請設定密碼" autocomplete="new-password" />
+        <input type="password" id="reg-pw" placeholder="請設定密碼" autocomplete="off" data-lpignore="true" data-1p-ignore="true" data-form-type="other" />
         <button class="pw-toggle" id="reg-pw-toggle" type="button" aria-label="顯示密碼">👁</button>
       </div>
       <div class="pw-rules">
@@ -107,7 +111,7 @@
     <div class="field">
       <label>確認密碼</label>
       <div class="pw-wrap">
-        <input type="password" id="reg-pw-confirm" placeholder="請再次輸入密碼" autocomplete="new-password" />
+        <input type="password" id="reg-pw-confirm" placeholder="請再次輸入密碼" autocomplete="off" data-lpignore="true" data-1p-ignore="true" data-form-type="other" />
         <button class="pw-toggle" id="reg-pw-confirm-toggle" type="button" aria-label="顯示密碼">👁</button>
       </div>
       <p style="margin-top:.4rem; color:#ff4f6d" id="reg-pw-confirm-hint"></p>
@@ -220,6 +224,8 @@
         <button class="tab" id="tab-module-albums" style="display:none;">相簿</button>
         <button class="tab" id="tab-module-videos" style="display:none;">影音</button>
         <button class="tab" id="tab-module-games" style="display:none;">遊戲區</button>
+        <button class="tab" id="tab-module-jobs" style="display:none;">任務中心</button>
+        <button class="tab" id="tab-module-shares" style="display:none;">分享管理</button>
         <button class="tab" id="tab-module-comfyui" style="display:none;">AI 產圖</button>
         <button class="tab" id="tab-module-economy" style="display:none;">積分系統</button>
         <button class="tab" id="tab-module-trading" style="display:none;">積分交易所</button>
@@ -330,6 +336,45 @@
           </details>
         </div>
       </div>
+    </div>
+  </div>
+
+  <div class="module-section" id="module-jobs">
+    <div class="admin-tools" style="margin-top:.95rem;text-align:left;">
+      <div class="section-head">
+        <div>
+          <h2>任務中心</h2>
+          <p>集中查看 ComfyUI、影音轉碼、報告、檢查與其他長時間任務。</p>
+        </div>
+        <button class="btn" id="job-center-refresh-btn" type="button">重新整理</button>
+      </div>
+      <div class="settings-option-grid economy-wallet-grid">
+        <div><span class="drive-card-sub">進行中</span><strong id="job-center-running-count">0</strong><small>running / waiting</small></div>
+        <div><span class="drive-card-sub">失敗</span><strong id="job-center-failed-count">0</strong><small>可檢查錯誤階段</small></div>
+        <div><span class="drive-card-sub">完成</span><strong id="job-center-done-count">0</strong><small>最近任務</small></div>
+      </div>
+      <div id="job-center-msg" class="msg"></div>
+      <div id="job-center-list" class="drive-file-list" style="margin-top:.75rem;"></div>
+    </div>
+  </div>
+
+  <div class="module-section" id="module-shares">
+    <div class="admin-tools" style="margin-top:.95rem;text-align:left;">
+      <div class="section-head">
+        <div>
+          <h2>分享管理</h2>
+          <p>查看、複製與撤銷自己的檔案、相簿與影音分享連結。</p>
+        </div>
+        <button class="btn" id="share-center-refresh-btn" type="button">重新整理</button>
+      </div>
+      <div class="settings-option-grid economy-wallet-grid">
+        <div><span class="drive-card-sub">啟用中</span><strong id="share-center-active-count">0</strong><small>仍可存取</small></div>
+        <div><span class="drive-card-sub">已結束</span><strong id="share-center-ended-count">0</strong><small>到期 / 次數用完 / 撤銷</small></div>
+        <div><span class="drive-card-sub">總存取</span><strong id="share-center-access-count">0</strong><small>所有分享累計</small></div>
+      </div>
+      <div id="share-center-msg" class="msg"></div>
+      <div id="share-center-events" class="msg" style="display:none;"></div>
+      <div id="share-center-list" class="drive-file-list" style="margin-top:.75rem;"></div>
     </div>
   </div>
 
@@ -607,8 +652,8 @@
             <span id="drive-used-label">-</span>
             <span id="drive-total-label">/ -</span>
           </div>
-          <div class="drive-quota-bar" aria-label="雲端硬碟用量">
-            <div id="drive-quota-bar-fill"></div>
+          <div class="drive-quota-bar fx-capacity-bar" aria-label="雲端硬碟用量">
+            <div id="drive-quota-bar-fill" class="fx-capacity-fill"></div>
           </div>
           <div class="drive-remaining-row">
             <div class="drive-card-sub" id="drive-remaining-label">剩餘容量：-</div>
@@ -922,6 +967,16 @@
                 <button class="btn btn-primary" id="video-publish-btn" type="button">發布</button>
               </div>
             </div>
+            <div id="video-upload-progress" class="video-upload-progress" hidden aria-live="polite">
+              <div class="drive-card-sub" id="video-upload-progress-status">準備上傳</div>
+              <div class="drive-progress" aria-label="影音上傳進度">
+                <div class="drive-progress-fill" id="video-upload-progress-fill" style="width:0%;"></div>
+              </div>
+              <div class="video-upload-progress-meta">
+                <span id="video-upload-progress-bytes">0 B / 0 B</span>
+                <span id="video-upload-progress-percent">0%</span>
+              </div>
+            </div>
           </div>
         </details>
         <div class="drive-card-heading video-sort-bar" style="margin-top:1rem;">
@@ -945,7 +1000,7 @@
       <div class="drive-card-heading">
         <div>
           <div class="mini-title">遊戲區</div>
-          <div class="drive-card-sub">目前開放西洋棋、數獨、踩地雷、1A2B、俄羅斯方塊與宇宙戰機。西洋棋支援玩家對戰；單人遊戲可直接在本頁遊玩。</div>
+          <div class="drive-card-sub">目前開放西洋棋、中國象棋、數獨、踩地雷、1A2B、俄羅斯方塊、真實版俄羅斯方塊、宇宙戰機、3D 射擊場、彈幕遊戲、火柴人橫向射擊、貪食蛇、2048、打磚塊、黑白棋、圍棋與五子棋。3D 與火柴人支援多人邀請；使用下拉選單切換遊戲。</div>
         </div>
         <button class="btn" id="game-refresh-btn" type="button">刷新</button>
       </div>
@@ -953,6 +1008,31 @@
         <section class="game-panel">
           <div class="drive-card-title">遊戲大廳</div>
           <div id="game-catalog-list" class="game-catalog-list"></div>
+          <div id="game-multiplayer-panel" class="drive-collapsible-panel game-multiplayer-panel" style="display:none;">
+            <div class="drive-card-heading">
+              <div>
+                <div class="drive-card-title">多人房間</div>
+                <div class="drive-card-sub" id="game-multiplayer-hint">邀請另一位玩家加入合作或對戰。</div>
+              </div>
+            </div>
+            <div class="settings-option-grid game-action-grid">
+              <div class="field">
+                <label>邀請玩家</label>
+                <select id="game-multiplayer-user"><option value="">載入玩家中...</option></select>
+              </div>
+              <div class="field">
+                <label>模式</label>
+                <select id="game-multiplayer-mode">
+                  <option value="coop">合作破關</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>&nbsp;</label>
+                <button class="btn btn-primary" id="game-multiplayer-invite-btn" type="button">邀請加入</button>
+              </div>
+            </div>
+            <div id="game-multiplayer-list" class="drive-file-list compact-list"></div>
+          </div>
           <div id="chess-lobby-panel">
           <div class="settings-option-grid game-action-grid">
             <div class="field">
@@ -976,9 +1056,9 @@
                 <option value="normal">普通：優先吃子與將軍</option>
                 <option value="hard">困難：避免明顯送子</option>
                 <option value="experiment">實驗：引擎搜尋 + 對局學習</option>
-                <option value="experiment 2:nn">實驗 2：NN 小型神經網路</option>
-                <option value="experiment 3:dl">實驗 3：DL 深度學習</option>
-                <option value="experiment 4:pv">實驗 4：PV 策略價值網路</option>
+                <option value="experiment 3:dl">實驗 3：DL 語義平衡學習</option>
+                <option value="experiment 4:pv">實驗 4：Policy/Value + MCTS</option>
+                <option value="experiment 5:nnue">實驗 5：NNUE + AlphaBeta/PVS</option>
               </select>
             </div>
             <div class="field">
@@ -993,11 +1073,15 @@
           </div>
         </section>
         <section class="game-board-panel">
+          <div class="game-fullscreen-row">
+            <button class="btn game-mini-btn" id="game-fullscreen-btn" type="button">全螢幕遊戲</button>
+          </div>
           <div id="chess-game-panel">
           <details class="drive-collapsible-panel game-rules-panel">
             <summary>西洋棋玩法說明</summary>
             <div class="drive-collapsible-body">
               <p>白方先走，雙方輪流移動一枚棋子。所有移動必須符合西洋棋規則，不能讓自己的王處於被將軍狀態。</p>
+              <p>特殊走法：王車易位先點王，再點亮起的 g/c 目標格；也可點王後直接點同側車。兵走到底會升變，預設升后，可選 q/r/b/n。吃過路兵合法時目標格會亮起。</p>
               <p>目標是將死對方的王。可和玩家對戰，也可選擇白方/黑方與電腦難度練習。</p>
             </div>
           </details>
@@ -1007,22 +1091,49 @@
               <div class="drive-card-sub" id="game-current-status">選擇棋局後即可走棋</div>
             </div>
             <div class="drive-file-actions">
-              <button class="btn" id="game-offer-draw-btn" type="button" style="display:none;">提和</button>
+              <button class="btn" id="game-offer-draw-btn" type="button" style="display:none;">求和</button>
               <button class="btn btn-primary" id="game-accept-draw-btn" type="button" style="display:none;">接受和棋</button>
               <button class="btn" id="game-reject-draw-btn" type="button" style="display:none;">拒絕和棋</button>
               <button class="btn" id="game-claim-draw-btn" type="button" style="display:none;">申請和棋</button>
               <button class="btn btn-danger" id="game-resign-btn" type="button" style="display:none;">認輸</button>
+              <button class="btn game-mini-btn" id="game-chess-hint-btn" type="button">提示</button>
+              <button class="btn game-mini-btn" id="game-chess-analysis-btn" type="button">賽後分析</button>
+              <button class="btn game-mini-btn" id="game-chess-challenge-btn" type="button">殘局題</button>
+            </div>
+          </div>
+          <div class="game-clock-panel" id="game-clock-panel" aria-label="西洋棋競賽計時">
+            <div class="game-clock-settings">
+              <label class="game-clock-toggle"><input id="game-clock-enabled" type="checkbox" />啟用競賽計時</label>
+              <select id="game-clock-preset" aria-label="計時制">
+                <option value="rapid_10_0">Rapid 10+0</option>
+                <option value="rapid_15_10">Rapid 15+10</option>
+                <option value="blitz_3_2">Blitz 3+2</option>
+                <option value="bullet_1_0">Bullet 1+0</option>
+                <option value="custom">自訂</option>
+              </select>
+              <input id="game-clock-main-minutes" type="number" min="1" max="180" step="1" value="10" aria-label="主時間分鐘" />
+              <input id="game-clock-increment-seconds" type="number" min="0" max="120" step="1" value="0" aria-label="每步加秒" />
+            </div>
+            <div class="game-clock-display" id="game-clock-display">
+              <span data-chess-clock-side="white">白 --:--</span>
+              <span data-chess-clock-side="black">黑 --:--</span>
             </div>
           </div>
           <div id="chess-board" class="chess-board" aria-label="西洋棋棋盤"></div>
+          <form class="chess-uci-form" id="game-chess-uci-form" autocomplete="off">
+            <label for="game-chess-uci-input">UCI</label>
+            <input id="game-chess-uci-input" type="text" inputmode="latin" spellcheck="false" maxlength="5" placeholder="d1c2 / e7e8q" />
+            <button class="btn game-mini-btn btn-primary" id="game-chess-uci-submit-btn" type="submit">送出</button>
+          </form>
           <div id="game-move-history" class="game-move-history"></div>
+          <div id="game-chess-analysis-panel" class="game-analysis-panel"></div>
           </div>
           <div id="sudoku-game-panel" class="single-game-panel" style="display:none;">
             <details class="drive-collapsible-panel game-rules-panel">
               <summary>數獨玩法說明</summary>
               <div class="drive-collapsible-body">
                 <p>按「開始」後才會出現題目並開始計時。每列、每欄、每個 3x3 宮格都必須填入 1 到 9，且不可重複。</p>
-                <p>按「檢查」若仍有錯誤會加時 10 秒；正確完成後依完成時間排行。</p>
+                <p>按「檢查」若仍有錯誤會加時 10 秒；每局提示最多 3 次，每次提示會填入 1 格並加時 60 秒；正確完成後依完成時間排行。</p>
               </div>
             </details>
             <div class="drive-card-heading">
@@ -1033,6 +1144,8 @@
               <div class="drive-file-actions">
                 <button class="btn game-mini-btn" id="sudoku-new-btn" type="button">開始</button>
                 <button class="btn btn-primary game-mini-btn" id="sudoku-check-btn" type="button">檢查</button>
+                <button class="btn game-mini-btn" id="sudoku-note-btn" type="button" aria-pressed="false">筆記</button>
+                <button class="btn game-mini-btn" id="sudoku-hint-btn" type="button">提示</button>
               </div>
             </div>
             <div id="sudoku-board" class="sudoku-board" aria-label="數獨棋盤"></div>
@@ -1055,8 +1168,11 @@
                   <option value="easy">簡單 9x9 / 10 雷</option>
                   <option value="normal">普通 12x12 / 20 雷</option>
                   <option value="hard">困難 16x16 / 40 雷</option>
+                  <option value="master">大師 18x18 / 70 雷</option>
                 </select>
                 <button class="btn game-mini-btn" id="minesweeper-new-btn" type="button">開始</button>
+                <button class="btn game-mini-btn" id="minesweeper-flag-mode-btn" type="button" aria-pressed="false">插旗模式</button>
+                <button class="btn game-mini-btn" id="minesweeper-hint-btn" type="button">安全提示</button>
               </div>
             </div>
             <div id="minesweeper-board" class="minesweeper-board" aria-label="踩地雷棋盤"></div>
@@ -1076,6 +1192,8 @@
               </div>
               <div class="drive-file-actions">
                 <button class="btn game-mini-btn" id="onea2b-new-btn" type="button">開始</button>
+                <button class="btn game-mini-btn" id="onea2b-mode-btn" type="button">限時關</button>
+                <button class="btn game-mini-btn" id="onea2b-hint-btn" type="button">提示</button>
               </div>
             </div>
             <div class="settings-option-grid">
@@ -1094,7 +1212,7 @@
             <details class="drive-collapsible-panel game-rules-panel">
               <summary>俄羅斯方塊玩法說明</summary>
               <div class="drive-collapsible-body">
-                <p>方向鍵左右移動、向下加速、向上旋轉，空白鍵可直接落下。填滿一整行即可消除並得分。</p>
+                <p>方向鍵左右移動、向下加速、向上旋轉，C 可 Hold 保留方塊，空白鍵可直接落下。填滿一整行即可消除並得分，連續消行會增加 Combo 加分。</p>
                 <p>排行榜以本週最高分排序，分數相同時完成時間較短者在前。</p>
               </div>
             </details>
@@ -1114,6 +1232,7 @@
               <button class="btn game-mini-btn" type="button" data-game-touch="tetris-rotate">旋轉</button>
               <button class="btn game-mini-btn" type="button" data-game-touch="tetris-right">右</button>
               <button class="btn game-mini-btn" type="button" data-game-touch="tetris-down">下</button>
+              <button class="btn game-mini-btn" type="button" data-game-touch="tetris-hold">Hold</button>
               <button class="btn game-mini-btn btn-primary" type="button" data-game-touch="tetris-drop">落下</button>
             </div>
           </div>
@@ -1121,7 +1240,7 @@
             <details class="drive-collapsible-panel game-rules-panel">
               <summary>宇宙戰機玩法說明</summary>
               <div class="drive-collapsible-body">
-                <p>方向鍵或 A/D 左右移動，空白鍵發射。擊落敵機可得分，敵機穿越底線或撞到玩家會扣生命。</p>
+                <p>方向鍵或 A/D 左右移動，空白鍵發射。擊落敵機可得分並可能掉落升級，Boss 會發射子彈，敵機穿越底線或撞到玩家會扣生命。</p>
                 <p>生命歸零時結算，排行榜以本週最高分排序。</p>
               </div>
             </details>
@@ -1141,8 +1260,94 @@
               <button class="btn game-mini-btn" type="button" data-game-touch="shooter-right">右</button>
             </div>
           </div>
+          <div id="fps-arena-game-panel" class="single-game-panel" style="display:none;">
+            <details class="drive-collapsible-panel game-rules-panel">
+              <summary>3D 射擊場玩法說明</summary>
+              <div class="drive-collapsible-body">
+                <p>選擇模式後按「開始」。滑鼠拖曳或滑鼠鎖定後移動視角，WASD 移動，左鍵或空白鍵射擊，E 可嘗試拆彈。瞄準鏡會有輕微呼吸晃動。</p>
+                <p>模式包含靶場、PvE、拆彈、Bot Match、Co-op PvE、PvP Duel 與 Battle Royale。關卡會逐步開出新地圖、Boss 橋段、敵人 AI、武器與地面物資。</p>
+              </div>
+            </details>
+            <div class="drive-card-heading">
+              <div>
+                <div class="drive-card-title">3D 射擊場</div>
+                <div class="drive-card-sub" id="fps-arena-status">選擇模式後開始，最高分列入排行榜。</div>
+              </div>
+              <div class="drive-file-actions">
+                <select id="fps-arena-mode" aria-label="3D 射擊場模式">
+                  <option value="aim">Aim Trainer</option>
+                  <option value="pve">PvE Arena</option>
+                  <option value="bomb">Bomb Defuse</option>
+                  <option value="bot">Bot Match</option>
+                  <option value="coop">Co-op PvE</option>
+                  <option value="pvp">PvP Duel</option>
+                  <option value="br">Battle Royale</option>
+                </select>
+                <select id="fps-arena-level" aria-label="3D 射擊場關卡">
+                  <option value="warehouse">第 1 關 貨櫃倉庫</option>
+                  <option value="reactor">第 2 關 反應爐中庭</option>
+                  <option value="subway">第 3 關 地鐵月台</option>
+                  <option value="citadel">第 4 關 核心堡壘</option>
+                </select>
+                <button class="btn game-mini-btn" id="fps-arena-new-btn" type="button">開始</button>
+                <button class="btn game-mini-btn" id="fps-arena-stop-btn" type="button">結束</button>
+                <button class="btn game-mini-btn" id="fps-arena-fullscreen-btn" type="button">全螢幕</button>
+              </div>
+            </div>
+            <div id="fps-arena-stage" class="fps-arena-stage" aria-label="3D 射擊場遊戲區">
+              <div class="fps-arena-scope" aria-hidden="true"></div>
+              <div class="fps-arena-damage" aria-hidden="true"></div>
+              <div class="fps-arena-reticle fps-arena-reticle-fixed" aria-hidden="true"></div>
+              <div class="fps-arena-reticle fps-arena-reticle-float" aria-hidden="true"></div>
+              <div class="fps-arena-weapon-view" aria-hidden="true">
+                <div class="fps-arena-weapon-barrel"></div>
+                <div class="fps-arena-weapon-body"></div>
+                <div class="fps-arena-weapon-hand fps-arena-weapon-hand-left"></div>
+                <div class="fps-arena-weapon-hand fps-arena-weapon-hand-right"></div>
+              </div>
+              <div class="fps-arena-hud" id="fps-arena-hud">尚未開始</div>
+            </div>
+            <div class="game-touch-controls fps-arena-touch-controls" aria-label="3D 射擊場手機控制">
+              <button class="btn game-mini-btn" type="button" data-game-touch="fps-left">左</button>
+              <button class="btn game-mini-btn" type="button" data-game-touch="fps-forward">前</button>
+              <button class="btn game-mini-btn" type="button" data-game-touch="fps-right">右</button>
+              <button class="btn game-mini-btn" type="button" data-game-touch="fps-back">後</button>
+              <button class="btn game-mini-btn" type="button" data-game-touch="fps-sprint">衝刺</button>
+              <button class="btn game-mini-btn" type="button" data-game-touch="fps-crouch">蹲下</button>
+              <button class="btn game-mini-btn" type="button" data-game-touch="fps-prone">匍匐</button>
+              <button class="btn game-mini-btn" type="button" data-game-touch="fps-reload">換彈</button>
+              <button class="btn game-mini-btn" type="button" data-game-touch="fps-weapon">武器</button>
+              <button class="btn game-mini-btn btn-primary" type="button" data-game-touch="fps-fire">射擊</button>
+            </div>
+          </div>
+          <div id="local-module-game-panel" class="single-game-panel game-play-panel" style="display:none;">
+            <div class="drive-card-heading game-play-heading">
+              <div>
+                <div class="mini-title" id="local-module-game-kicker">線上遊戲</div>
+                <div class="drive-card-title" id="local-module-game-title">遊戲</div>
+                <div class="drive-card-sub" id="local-module-game-status">準備中</div>
+              </div>
+              <div class="game-action-toolbar" id="local-module-game-actions"></div>
+            </div>
+            <div id="local-module-game-root" class="game-module-root"></div>
+            <div id="local-module-game-controls" class="game-touch-controls game-page-controls"></div>
+          </div>
         </section>
         <section class="game-panel">
+          <div class="drive-card-heading">
+            <div>
+              <div class="drive-card-title">今日挑戰</div>
+              <div class="drive-card-sub">每日任務完成後可領積分，並使用同一題目/種子排行。</div>
+            </div>
+          </div>
+          <div id="game-daily-panel" class="game-daily-panel"></div>
+          <div class="drive-card-heading" style="margin-top:1rem;">
+            <div>
+              <div class="drive-card-title">每日排行榜</div>
+              <div class="drive-card-sub">只比較今日挑戰成績</div>
+            </div>
+          </div>
+          <div id="game-daily-leaderboard-list" class="drive-file-list compact-list"></div>
           <div class="drive-card-heading">
             <div>
               <div class="drive-card-title">週排行榜</div>
@@ -1151,6 +1356,15 @@
             <button class="btn" id="game-award-btn" type="button" style="display:none;">發放週獎勵</button>
           </div>
           <div id="game-leaderboard-list" class="drive-file-list compact-list"></div>
+          <details class="drive-collapsible-panel game-rules-panel">
+            <summary>成就與回放分享</summary>
+            <div class="drive-collapsible-body">
+              <div class="drive-card-sub">本機成就</div>
+              <div id="game-achievement-list" class="game-achievement-list"></div>
+              <div class="drive-card-sub" style="margin-top:.8rem;">最近回放摘要</div>
+              <div id="game-replay-list" class="drive-file-list compact-list"></div>
+            </div>
+          </details>
           <details class="drive-collapsible-panel game-rules-panel" id="game-root-chess-panel" style="display:none;margin-top:1rem;">
             <summary>Chess Engine Dashboard</summary>
             <div class="drive-collapsible-body">
@@ -1191,9 +1405,9 @@
                 <div class="field">
                   <label>Candidate Engine</label>
                   <select id="game-root-chess-engine">
-                    <option value="experiment 2:nn">實驗 2：NN</option>
-                    <option value="experiment 3:dl">實驗 3：DL</option>
-                    <option value="experiment 4:pv">實驗 4：PV</option>
+                    <option value="experiment 3:dl">實驗 3：DL 語義平衡</option>
+                    <option value="experiment 4:pv">實驗 4：Policy/Value + MCTS</option>
+                    <option value="experiment 5:nnue">實驗 5：NNUE + AlphaBeta/PVS</option>
                   </select>
                 </div>
                 <div class="field">
@@ -1223,6 +1437,13 @@
   <div class="module-section" id="module-comfyui">
     <div class="admin-tools" style="margin-top:.95rem;text-align:left;">
       <div class="mini-title">AI 產圖</div>
+      <div class="comfyui-subnav" role="tablist" aria-label="AI 產圖功能分頁">
+        <button class="btn comfyui-subtab active" type="button" role="tab" aria-selected="true" data-comfyui-view="generate">生成</button>
+        <button class="btn comfyui-subtab" type="button" role="tab" aria-selected="false" data-comfyui-view="history">歷史重跑</button>
+        <button class="btn comfyui-subtab" type="button" role="tab" aria-selected="false" data-comfyui-view="workflow">Workflow</button>
+        <button class="btn comfyui-subtab" type="button" role="tab" aria-selected="false" data-comfyui-view="models">模型管理</button>
+      </div>
+      <div class="comfyui-subview active" id="comfyui-view-generate" data-comfyui-view-panel="generate" role="tabpanel">
       <div class="comfyui-layout">
         <div class="drive-card comfyui-panel">
           <div class="drive-card-heading">
@@ -1237,14 +1458,52 @@
             </div>
             <button class="btn" id="comfyui-refresh-btn" type="button">重新整理模型</button>
             <button class="btn" id="comfyui-load-draft-btn" type="button">載入上次設定</button>
+            <button class="btn" id="comfyui-template-import-btn" type="button">匯入 workflow 模板檔（JSON）</button>
             <button class="btn btn-primary" id="comfyui-start-btn" type="button" style="display:none;">啟動 ComfyUI</button>
             <button class="btn" id="comfyui-stop-btn" type="button" style="display:none;">停止 ComfyUI</button>
+          </div>
+          <div class="comfyui-template-selector">
+            <div class="field">
+              <label>Workflow 模板</label>
+              <select id="comfyui-template-select">
+                <option value="">先選擇模板</option>
+              </select>
+              <div class="drive-card-sub" id="comfyui-template-select-hint">可從官方模板、自己的 preset、其他公開 preset，或先匯入模板檔後再建立簡化卡片頁面。</div>
+            </div>
+            <div id="comfyui-template-summary" class="comfyui-template-summary" hidden></div>
+            <div id="comfyui-template-panels" class="comfyui-template-panels" hidden></div>
+          </div>
+          <details class="drive-collapsible-panel settings-collapse" id="comfyui-legacy-form-panel" style="display:none;margin-top:.85rem;">
+            <summary>
+              <div>
+                <div class="drive-card-title">手動欄位</div>
+                <div class="drive-card-sub">模板卡片以外的原始欄位。只有在需要直接手動調整時才展開。</div>
+              </div>
+            </summary>
+            <div class="drive-collapsible-body">
+          <div class="field" id="comfyui-diffusers-repo-field" style="display:none;">
+            <label>Hugging Face Repo</label>
+            <div class="inline-control-row">
+              <input type="text" id="comfyui-diffusers-model-repo" placeholder="dhead/waiIllustriousSDXL_v150 或 https://huggingface.co/dhead/waiIllustriousSDXL_v150" autocomplete="off" />
+              <button class="btn btn-sm" id="comfyui-diffusers-inspect-btn" type="button">檢查模型</button>
+            </div>
+            <select id="comfyui-diffusers-model-variant" disabled>
+              <option value="">檢查後選擇精度版本</option>
+            </select>
+            <div class="field" id="comfyui-diffusers-gguf-options" style="display:none;margin-top:.5rem;">
+              <label>GGUF Base Diffusers Repo</label>
+              <input type="text" id="comfyui-diffusers-gguf-base-repo" placeholder="stabilityai/stable-diffusion-xl-base-1.0" autocomplete="off" />
+              <div class="drive-card-sub">GGUF 是單一量化 component，Diffusers 需搭配 base repo 的 tokenizer、scheduler、VAE 等組件。</div>
+            </div>
+            <div class="drive-card-sub" id="comfyui-diffusers-repo-status">貼上 repo 後會先檢查支援模式與可下載精度版本。</div>
+            <div class="drive-card-sub">Diffusers 模式可在這裡輸入 namespace/model 簡寫或 Hugging Face 模型頁網址；此欄會覆蓋 root 的預設 repo。</div>
           </div>
           <div class="field">
             <label>模型</label>
             <select id="comfyui-model-select">
               <option value="">讀取模型中...</option>
             </select>
+            <div class="comfyui-model-family-hint" id="comfyui-model-family-hint">模型族群讀取中。</div>
           </div>
           <div class="field">
             <label>VAE</label>
@@ -1262,6 +1521,11 @@
                 <option value="inpaint">局部重繪</option>
                 <option value="outpaint">向外延展</option>
                 <option value="upscale">放大修復</option>
+                <option value="t2v">文字生影片</option>
+                <option value="i2v">圖生影片</option>
+                <option value="v2v">影片生影片</option>
+                <option value="t2s">文字轉語音</option>
+                <option value="t2sv">文字生成語音影片</option>
               </select>
             </div>
             <div class="field" id="comfyui-denoise-field">
@@ -1285,6 +1549,7 @@
               <div class="comfyui-input-preview" id="comfyui-source-image-preview"><span class="drive-card-sub">尚未選擇來源圖片</span></div>
               <div class="drive-card-sub" id="comfyui-source-image-meta">可上傳 PNG、JPG、WEBP。</div>
               <div class="drive-file-actions" style="justify-content:flex-start;">
+                <button class="btn btn-sm" id="comfyui-source-image-picker-btn" type="button">選擇既有圖片</button>
                 <button class="btn btn-sm" id="comfyui-source-image-clear-btn" type="button">清除來源圖</button>
               </div>
             </div>
@@ -1295,6 +1560,8 @@
               <div class="comfyui-input-preview" id="comfyui-mask-image-preview"><span class="drive-card-sub">尚未選擇遮罩圖片</span></div>
               <div class="drive-card-sub" id="comfyui-mask-image-meta">建議與來源圖片尺寸一致。</div>
               <div class="drive-file-actions" style="justify-content:flex-start;">
+                <button class="btn btn-sm" id="comfyui-mask-image-picker-btn" type="button">選擇既有圖片</button>
+                <button class="btn btn-sm" id="comfyui-mask-editor-open-btn" type="button">編輯遮罩</button>
                 <button class="btn btn-sm" id="comfyui-mask-image-clear-btn" type="button">清除遮罩</button>
               </div>
             </div>
@@ -1305,6 +1572,7 @@
               <div class="comfyui-input-preview" id="comfyui-control-image-preview"><span class="drive-card-sub">尚未選擇控制圖</span></div>
               <div class="drive-card-sub" id="comfyui-control-image-meta">控制圖只在啟用 ControlNet 時送出。</div>
               <div class="drive-file-actions" style="justify-content:flex-start;">
+                <button class="btn btn-sm" id="comfyui-control-image-picker-btn" type="button">選擇既有圖片</button>
                 <button class="btn btn-sm" id="comfyui-control-image-clear-btn" type="button">清除控制圖</button>
               </div>
             </div>
@@ -1365,7 +1633,7 @@
             </div>
             <div class="drive-card-sub">向外延展會先在原圖外圍補邊，再交給模型接續生成。</div>
           </div>
-          <div class="drive-card-sub" style="margin-top:-.25rem;margin-bottom:.5rem;">LoRA 每增加 1 個，成功產圖每張額外 +1 點。</div>
+          <div class="drive-card-sub" id="comfyui-lora-price-note" style="margin-top:-.25rem;margin-bottom:.5rem;">LoRA 每增加 1 個，成功產圖每張額外 +1 點。</div>
           <div class="comfyui-lora-panel">
             <div class="settings-option-grid">
               <div class="field">
@@ -1413,12 +1681,60 @@
             <div class="field"><label>分享標題</label><input type="text" id="comfyui-share-title" maxlength="120" placeholder="ComfyUI 產圖分享" /></div>
             <div class="field"><label>心得留言</label><textarea id="comfyui-share-note" rows="3" maxlength="900" placeholder="這次想分享的心得、用途或調參想法"></textarea></div>
           </div>
+            </div>
+          </details>
           <div class="drive-file-actions" style="justify-content:flex-start;margin-top:.75rem;">
             <button class="btn btn-primary" id="comfyui-generate-btn" type="button">產生圖片</button>
             <button class="btn btn-danger" id="comfyui-interrupt-btn" type="button" disabled>中斷產圖</button>
             <button class="btn" id="comfyui-save-btn" type="button" disabled>存到雲端硬碟</button>
             <button class="btn" id="comfyui-share-btn" type="button" disabled>分享到 ComfyUI 專區</button>
             <button class="btn" id="comfyui-discard-btn" type="button" disabled>丟棄預覽</button>
+          </div>
+          <div class="comfyui-mask-editor-modal" id="comfyui-mask-editor-modal" role="dialog" aria-modal="true" aria-labelledby="comfyui-mask-editor-title" hidden>
+            <div class="comfyui-mask-editor-card">
+              <div class="comfyui-mask-editor-head">
+                <div>
+                  <div class="drive-card-title" id="comfyui-mask-editor-title">遮罩編輯器</div>
+                  <div class="drive-card-sub" id="comfyui-mask-editor-meta">白色區域會交給 inpaint 重繪。</div>
+                </div>
+                <button class="btn btn-sm" id="comfyui-mask-editor-close-btn" type="button">關閉</button>
+              </div>
+              <div class="comfyui-mask-editor-toolbar">
+                <button class="btn btn-sm" id="comfyui-mask-editor-paint-btn" type="button" aria-pressed="true">畫筆</button>
+                <button class="btn btn-sm" id="comfyui-mask-editor-erase-btn" type="button" aria-pressed="false">橡皮擦</button>
+                <label class="comfyui-mask-editor-size">
+                  筆刷
+                  <input type="range" id="comfyui-mask-editor-brush" min="4" max="256" step="2" value="56" />
+                  <span id="comfyui-mask-editor-brush-label">56px</span>
+                </label>
+                <button class="btn btn-sm" id="comfyui-mask-editor-clear-btn" type="button">清空</button>
+                <button class="btn btn-sm" id="comfyui-mask-editor-fill-btn" type="button">全選</button>
+                <button class="btn btn-sm" id="comfyui-mask-editor-invert-btn" type="button">反相</button>
+              </div>
+              <div class="comfyui-mask-editor-stage" id="comfyui-mask-editor-stage">
+                <canvas id="comfyui-mask-editor-source-canvas"></canvas>
+                <canvas id="comfyui-mask-editor-mask-canvas"></canvas>
+              </div>
+              <div class="drive-card-sub">在來源圖上拖曳即可畫出要重繪的位置；可用滑鼠、觸控筆或手機觸控操作。</div>
+              <div class="drive-file-actions" style="justify-content:flex-end;margin-top:.65rem;">
+                <button class="btn" id="comfyui-mask-editor-cancel-btn" type="button">取消</button>
+                <button class="btn btn-primary" id="comfyui-mask-editor-apply-btn" type="button">套用遮罩</button>
+              </div>
+            </div>
+          </div>
+          <div class="comfyui-image-picker-modal" id="comfyui-image-picker-modal" role="dialog" aria-modal="true" aria-labelledby="comfyui-image-picker-title" hidden>
+            <div class="comfyui-image-picker-card">
+              <div class="comfyui-image-picker-head">
+                <div>
+                  <div class="drive-card-title" id="comfyui-image-picker-title">選擇既有圖片</div>
+                  <div class="drive-card-sub" id="comfyui-image-picker-status">讀取歷史產圖與雲端硬碟圖片。</div>
+                </div>
+                <button class="btn btn-sm" id="comfyui-image-picker-close-btn" type="button">關閉</button>
+              </div>
+              <div class="comfyui-image-picker-list" id="comfyui-image-picker-list">
+                <div class="drive-empty">尚未讀取圖片清單</div>
+              </div>
+            </div>
           </div>
           <div id="comfyui-msg" class="msg"></div>
         </div>
@@ -1440,7 +1756,9 @@
           <div id="comfyui-result-meta" class="drive-card-sub"></div>
         </div>
       </div>
-      <div class="drive-card comfyui-history-card" style="margin-top:1rem;">
+      </div>
+      <div class="comfyui-subview" id="comfyui-view-history" data-comfyui-view-panel="history" role="tabpanel" hidden>
+      <div class="drive-card comfyui-history-card">
         <div class="drive-card-heading">
           <div>
             <div class="drive-card-title">ComfyUI 歷史重跑</div>
@@ -1453,18 +1771,20 @@
           <div class="drive-empty">尚無 ComfyUI 歷史紀錄</div>
         </div>
       </div>
-      <div class="drive-card comfyui-workflow-card" style="margin-top:1rem;">
+      </div>
+      <div class="comfyui-subview" id="comfyui-view-workflow" data-comfyui-view-panel="workflow" role="tabpanel" hidden>
+      <div class="drive-card comfyui-workflow-card">
         <div class="drive-card-heading">
           <div>
-            <div class="drive-card-title">ComfyUI Workflow 工作台</div>
-            <div class="drive-card-sub">可匯入 / 匯出 workflow JSON、保存個人 preset、發布 root 官方 preset，並保留最近執行結果。</div>
+            <div class="drive-card-title">ComfyUI Workflow Layout Builder</div>
+            <div class="drive-card-sub">可新增、編輯、儲存、匯入、匯出自訂工作流版面；官方版面與個人版面分開管理。</div>
           </div>
           <button class="btn" id="comfyui-workflows-refresh-btn" type="button">重新整理 Workflow</button>
         </div>
         <div id="comfyui-workflow-status" class="drive-card-sub">尚未讀取 workflow preset</div>
         <div class="comfyui-workflow-grid">
           <div class="comfyui-workflow-editor">
-            <div class="field"><label>Preset 標題</label><input type="text" id="comfyui-workflow-title" maxlength="120" placeholder="例如：SDXL 商品圖 ControlNet 範本" /></div>
+            <div class="field"><label>版面名稱</label><input type="text" id="comfyui-workflow-title" maxlength="120" placeholder="例如：SDXL 商品圖 ControlNet 範本" /></div>
             <div class="field"><label>說明</label><textarea id="comfyui-workflow-description" rows="3" maxlength="1200" placeholder="描述用途、模型依賴與使用情境"></textarea></div>
             <div class="settings-option-grid">
               <div class="field">
@@ -1475,37 +1795,122 @@
                 </select>
               </div>
               <div class="field">
+                <label>適用用途</label>
+                <select id="comfyui-workflow-purpose">
+                  <option value="txt2img">txt2img</option>
+                  <option value="img2img">img2img</option>
+                  <option value="inpaint">inpaint</option>
+                  <option value="outpaint">outpaint</option>
+                  <option value="upscale">upscale</option>
+                  <option value="controlnet">ControlNet</option>
+                  <option value="custom">自訂</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>ComfyUI 版本</label>
+                <input type="text" id="comfyui-workflow-comfyui-version" maxlength="80" placeholder="例如：0.3.x 或留空" />
+              </div>
+              <div class="field">
+                <label>本專案版本</label>
+                <input type="text" id="comfyui-workflow-project-version" maxlength="80" placeholder="保存時自動帶入" />
+              </div>
+              <div class="field">
+                <label>Workflow Schema</label>
+                <input type="text" id="comfyui-workflow-schema-version" maxlength="40" value="1" />
+              </div>
+              <div class="field">
                 <label>匯入 JSON 檔</label>
                 <input type="file" id="comfyui-workflow-file" accept="application/json,.json" />
               </div>
             </div>
+            <label class="settings-toggle" style="margin:.45rem 0 .55rem;">
+              <input type="checkbox" id="comfyui-workflow-is-default" />
+              <span>設為我的預設版面</span>
+            </label>
             <div class="drive-card-sub">匯入的 workflow 會檢查節點結構、絕對路徑、外部 URL、惡意 shell/exec 片段；缺模型不會靜默 fallback。</div>
             <div class="drive-file-actions" style="justify-content:flex-start;">
+              <button class="btn" id="comfyui-workflow-new-btn" type="button">新增空白版面</button>
+              <button class="btn" id="comfyui-workflow-starter-txt2img-btn" type="button">建立 txt2img 起始版</button>
+              <a class="btn btn-primary" id="comfyui-workflow-open-visual-btn" href="/comfyui-workflow-editor.html" target="_blank" rel="noopener">開啟節點連線編輯器</a>
+              <button class="btn" id="comfyui-workflow-load-visual-btn" type="button">載入視覺編輯器結果</button>
               <button class="btn" id="comfyui-workflow-export-current-btn" type="button">匯出目前 Workflow</button>
-              <button class="btn btn-primary" id="comfyui-workflow-import-btn" type="button">匯入為新 Preset</button>
+              <button class="btn btn-primary" id="comfyui-workflow-import-btn" type="button">新增版面</button>
               <button class="btn" id="comfyui-workflow-update-btn" type="button" disabled>更新目前選擇</button>
               <button class="btn" id="comfyui-workflow-reset-btn" type="button">清空編輯器</button>
             </div>
-            <textarea id="comfyui-workflow-json" rows="16" spellcheck="false" placeholder='貼上 ComfyUI workflow JSON，或先按「匯出目前 Workflow」'></textarea>
-            <div class="drive-card-sub" id="comfyui-workflow-editor-note">可先從目前表單匯出 workflow，再保存成 preset；若 workflow 需要來源圖 / 遮罩 / 控制圖，請先確保目前表單已經有可用 image_ref。</div>
+            <div class="settings-option-grid" style="margin-top:.6rem;">
+              <div class="field">
+                <label>快速追加節點</label>
+                <select id="comfyui-workflow-node-template">
+                  <option value="">選擇節點</option>
+                  <option value="checkpoint_loader">Checkpoint Loader</option>
+                  <option value="positive_prompt">Positive Prompt</option>
+                  <option value="negative_prompt">Negative Prompt</option>
+                  <option value="lora_loader">LoRA Loader</option>
+                  <option value="load_image">Load Image</option>
+                  <option value="load_image_mask">Load Mask</option>
+                  <option value="vae_encode">VAE Encode</option>
+                  <option value="vae_encode_for_inpaint">VAE Encode Inpaint</option>
+                  <option value="image_pad_for_outpaint">Outpaint Pad</option>
+                  <option value="ksampler">KSampler</option>
+                  <option value="ksampler_advanced">KSampler Advanced</option>
+                  <option value="vae_decode">VAE Decode</option>
+                  <option value="save_image">Save Image</option>
+                  <option value="controlnet_loader">ControlNet Loader</option>
+                  <option value="controlnet_apply_advanced">ControlNet Apply Advanced</option>
+                  <option value="upscale_model_loader">Upscale Model Loader</option>
+                  <option value="image_upscale">Image Upscale</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>節點顯示名稱</label>
+                <input id="comfyui-workflow-node-label" type="text" maxlength="80" placeholder="可留空使用預設名稱" />
+              </div>
+              <div class="field" style="align-self:end;">
+                <label>&nbsp;</label>
+                <button class="btn" id="comfyui-workflow-add-node-btn" type="button">追加節點</button>
+              </div>
+            </div>
+            <div id="comfyui-workflow-builder-preview" class="drive-card-sub">視覺編輯器結果載入後會在這裡顯示節點摘要。</div>
+            <details class="drive-collapsible-panel settings-collapse comfyui-workflow-layout-details" open>
+              <summary>
+                <div>
+                  <div class="drive-card-title">進階 JSON 匯入 / 除錯</div>
+                  <div class="drive-card-sub">一般使用者請用視覺編輯器；這裡只保留匯入外部 workflow 或除錯。</div>
+                </div>
+              </summary>
+              <div class="drive-collapsible-body">
+                <div class="field">
+                  <label>Workflow JSON</label>
+                  <textarea id="comfyui-workflow-json" rows="16" spellcheck="false" placeholder='可貼上 ComfyUI workflow JSON，或從視覺編輯器載入'></textarea>
+                </div>
+                <div class="field">
+                  <label>UI Layout JSON</label>
+                <textarea id="comfyui-workflow-layout-json" rows="8" spellcheck="false" placeholder='{"layout_schema_version":"1","node_order":[],"node_positions":{},"field_overrides":{}}'></textarea>
+                </div>
+              </div>
+            </details>
+            <div class="drive-card-sub" id="comfyui-workflow-editor-note">可先從目前表單匯出 workflow，再保存成版面；編輯後需按「新增版面」或「更新目前選擇」才會保存。</div>
           </div>
           <div class="comfyui-workflow-library">
             <div class="comfyui-workflow-section">
-              <div class="drive-card-title">我的 Preset</div>
-              <div id="comfyui-workflow-my-list" class="comfyui-workflow-list"><div class="drive-empty">尚無個人 preset</div></div>
+              <div class="drive-card-title">我的工作流版面</div>
+              <div id="comfyui-workflow-my-list" class="comfyui-workflow-list"><div class="drive-empty">尚無個人版面</div></div>
             </div>
             <div class="comfyui-workflow-section" style="margin-top:.85rem;">
-              <div class="drive-card-title">官方 Preset</div>
-              <div id="comfyui-workflow-official-list" class="comfyui-workflow-list"><div class="drive-empty">尚無官方 preset</div></div>
+              <div class="drive-card-title">官方工作流版面</div>
+              <div id="comfyui-workflow-official-list" class="comfyui-workflow-list"><div class="drive-empty">尚無官方版面</div></div>
             </div>
             <div class="comfyui-workflow-section" style="margin-top:.85rem;">
-              <div class="drive-card-title">其他可讀 Preset</div>
-              <div id="comfyui-workflow-shared-list" class="comfyui-workflow-list"><div class="drive-empty">尚無其他可讀 preset</div></div>
+              <div class="drive-card-title">其他可讀版面</div>
+              <div id="comfyui-workflow-shared-list" class="comfyui-workflow-list"><div class="drive-empty">尚無其他可讀版面</div></div>
             </div>
           </div>
         </div>
       </div>
-      <div class="drive-card comfyui-root-panel" id="comfyui-root-model-panel" style="display:none;margin-top:1rem;">
+      </div>
+      <div class="comfyui-subview" id="comfyui-view-models" data-comfyui-view-panel="models" role="tabpanel" hidden>
+      <div class="drive-card comfyui-root-panel" id="comfyui-root-model-panel" style="display:none;">
         <details class="comfyui-root-details" id="comfyui-root-model-details">
           <summary class="comfyui-root-summary">
             <span class="comfyui-root-summary-title">root 模型匯入（Civitai / 檔案上傳）</span>
@@ -1523,10 +1928,16 @@
                 <label>模型類型</label>
                 <select id="comfyui-model-download-type">
                   <option value="checkpoint">Checkpoint</option>
+                  <option value="diffusion_model">Diffusion Model / UNet</option>
+                  <option value="text_encoder">Text Encoder / CLIP / T5 / Qwen</option>
+                  <option value="clip">CLIP / Text Encoder (legacy)</option>
+                  <option value="clip_vision">CLIP Vision</option>
                   <option value="lora">LoRA</option>
                   <option value="embedding">Embedding / TI</option>
                   <option value="controlnet">ControlNet</option>
                   <option value="vae">VAE</option>
+                  <option value="audio">Audio / TTS</option>
+                  <option value="video">Video / Motion</option>
                   <option value="upscale">放大模型 / Upscaler</option>
                 </select>
               </div>
@@ -1559,6 +1970,11 @@
                     <option value="Illustrious">Illustrious</option>
                     <option value="NoobAI">NoobAI</option>
                     <option value="Flux.1 D">Flux.1 D</option>
+                    <option value="SD 3.5">SD 3.5</option>
+                    <option value="Anima">Anima</option>
+                    <option value="Lumina">Lumina / NetaYume</option>
+                    <option value="Wan Video">Wan Video</option>
+                    <option value="Animagine XL">Animagine XL</option>
                     <option value="SD 1.5">SD 1.5</option>
                   </select>
                 </div>
@@ -1570,6 +1986,12 @@
                     <option value="lora">LoRA</option>
                     <option value="embedding">Embedding / TI</option>
                     <option value="controlnet">ControlNet</option>
+                    <option value="vae">VAE</option>
+                    <option value="diffusion_model">Diffusion Model / UNet</option>
+                    <option value="text_encoder">Text Encoder</option>
+                    <option value="clip_vision">CLIP Vision</option>
+                    <option value="audio">Audio / TTS</option>
+                    <option value="video">Video / Motion</option>
                   </select>
                 </div>
                 <div class="field">
@@ -1628,6 +2050,7 @@
           </div>
         </details>
       </div>
+      </div>
     </div>
   </div>
 
@@ -1668,9 +2091,10 @@
         </div>
         <div id="economy-root-virtual-body">
           <div class="settings-option-grid economy-wallet-grid">
-            <div><span class="drive-card-sub">目前總價值</span><strong id="economy-root-virtual-total">-</strong><small>剩餘積分 + 現貨估值</small></div>
+            <div><span class="drive-card-sub">目前總價值</span><strong id="economy-root-virtual-total">-</strong><small>剩餘積分 + 現貨估值 + 借貸權益</small></div>
             <div><span class="drive-card-sub">剩餘積分</span><strong id="economy-root-virtual-available">-</strong><small id="economy-root-virtual-locked">鎖定 -</small></div>
             <div><span class="drive-card-sub">現貨估值</span><strong id="economy-root-virtual-spot-value">-</strong><small id="economy-root-virtual-spot-summary">尚無現貨</small></div>
+            <div><span class="drive-card-sub">借貸權益</span><strong id="economy-root-virtual-margin-value">-</strong><small id="economy-root-virtual-margin-summary">尚無借貸倉位</small></div>
           </div>
         </div>
       </div>
@@ -1723,6 +2147,22 @@
             </div>
           </div>
         </div>
+      </div>
+      <div class="drive-card" id="economy-asset-overview-card" style="margin-top:.75rem;">
+        <div class="drive-card-heading">
+          <div>
+            <div class="drive-card-title">交易資產總覽</div>
+            <div class="drive-card-sub" id="economy-asset-confidence">價格可信度只作風險提示，不阻擋積分交易。</div>
+          </div>
+          <button class="btn btn-sm" type="button" onclick="loadTradingAssetOverview()" style="font-size:.8rem;padding:.2rem .5rem;">更新</button>
+        </div>
+        <div class="settings-option-grid economy-wallet-grid">
+          <div><span class="drive-card-sub">總權益</span><strong id="economy-asset-total-equity">-</strong><small>可用 + 鎖定 + 現貨 + 借貸</small></div>
+          <div><span class="drive-card-sub">可用積分</span><strong id="economy-asset-available">-</strong><small id="economy-asset-locked">鎖定 -</small></div>
+          <div><span class="drive-card-sub">現貨估值</span><strong id="economy-asset-spot">-</strong><small>依目前市場價估算</small></div>
+          <div><span class="drive-card-sub">借貸權益</span><strong id="economy-asset-margin">-</strong><small id="economy-asset-interest">利息 -</small></div>
+        </div>
+        <div id="economy-asset-admin-risk" class="drive-card-sub" style="display:none;margin-top:.5rem;"></div>
       </div>
       <div class="drive-card" id="economy-user-ledger-card" style="margin-top:.75rem;">
         <div class="drive-card-heading">
@@ -1904,6 +2344,7 @@
           <button class="btn" id="trading-refresh-btn" type="button">重新整理</button>
         </div>
         <div id="trading-safe-mode" class="drive-card-sub">交易狀態讀取中</div>
+        <div id="trading-inline-msg" class="msg trading-inline-msg"></div>
         <div class="settings-option-grid" id="trading-order-form" style="margin-top:.65rem;">
           <div class="field">
             <label>市場</label>
@@ -1951,6 +2392,16 @@
           <div><span class="drive-card-sub">我的部位</span><strong id="trading-position-quantity">-</strong><small id="trading-position-locked">鎖定 -</small></div>
           <div><span class="drive-card-sub">手續費</span><strong id="trading-fee-rate-percent">-</strong><small>%</small></div>
         </div>
+        <section class="trading-risk-dashboard" id="trading-risk-dashboard" aria-label="交易風控控制台">
+          <div class="drive-card-heading compact-heading">
+            <div>
+              <div class="drive-card-title">交易控制台</div>
+              <div class="drive-card-sub" id="trading-risk-dashboard-sub">價格、Bot、資金池與保證金狀態讀取中</div>
+            </div>
+            <span id="trading-risk-dashboard-badge" class="pill">-</span>
+          </div>
+          <div id="trading-risk-dashboard-grid" class="trading-readiness-grid"></div>
+        </section>
         <div class="drive-card trading-btc-signal-card" id="trading-btc-signal-card" style="display:none;margin-top:.75rem;">
           <div class="drive-card-heading compact-heading">
             <div>
@@ -2322,23 +2773,25 @@
           <button class="btn btn-danger" id="trading-liquidation-scan-btn" type="button">立即掃描強平</button>
           <span class="drive-card-sub" id="trading-liquidation-status">自動清算排程：讀取中</span>
         </div>
-        <div class="drive-card" id="trading-root-contract-card" style="margin-top:.75rem;">
-          <div class="drive-card-heading compact-heading">
+        <details class="drive-collapsible-panel" id="trading-root-contract-card" style="margin-top:.75rem;">
+          <summary>
             <div>
               <div class="drive-card-title">root 合約模擬</div>
               <div class="drive-card-sub">僅 root 可用，使用 root 模擬資金，不寫入 PointsChain；root 以外用戶目前只能使用現貨。</div>
             </div>
+          </summary>
+          <div class="drive-collapsible-body">
+            <div class="settings-option-grid">
+              <div class="field"><label>市場</label><select id="trading-contract-market-select"><option value="">讀取市場中...</option></select></div>
+              <div class="field"><label>方向</label><select id="trading-contract-side"><option value="long">做多</option><option value="short">做空</option></select></div>
+              <div class="field"><label>數量</label><input type="number" id="trading-contract-quantity" min="0.00000001" step="0.00000001" value="0.01" /></div>
+              <div class="field"><label>槓桿</label><input type="number" id="trading-contract-leverage" min="1" max="20" step="1" value="1" /></div>
+              <div class="field"><label>保證金</label><input type="number" id="trading-contract-margin" min="1" step="1" value="100" /></div>
+              <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="trading-contract-open-btn" type="button">開倉</button></div>
+            </div>
+            <div class="drive-file-list" id="trading-contract-position-list" style="margin-top:.75rem;"></div>
           </div>
-          <div class="settings-option-grid">
-            <div class="field"><label>市場</label><select id="trading-contract-market-select"><option value="">讀取市場中...</option></select></div>
-            <div class="field"><label>方向</label><select id="trading-contract-side"><option value="long">做多</option><option value="short">做空</option></select></div>
-            <div class="field"><label>數量</label><input type="number" id="trading-contract-quantity" min="0.00000001" step="0.00000001" value="0.01" /></div>
-            <div class="field"><label>槓桿</label><input type="number" id="trading-contract-leverage" min="1" max="20" step="1" value="1" /></div>
-            <div class="field"><label>保證金</label><input type="number" id="trading-contract-margin" min="1" step="1" value="100" /></div>
-            <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="trading-contract-open-btn" type="button">開倉</button></div>
-          </div>
-          <div class="drive-file-list" id="trading-contract-position-list" style="margin-top:.75rem;"></div>
-        </div>
+        </details>
         <div class="settings-option-grid" style="margin-top:.75rem;">
           <div class="field"><label>市場</label><select id="trading-root-market-select"><option value="">讀取市場中...</option></select></div>
           <div class="field"><label>最後快取價格</label><input type="number" id="trading-root-price" min="1" step="1" readonly /></div>
@@ -2944,6 +3397,10 @@
             <div class="health-section-title">審計與檢查</div>
             <div id="server-health-audit" class="health-list"></div>
           </section>
+          <section class="health-section health-section-wide">
+            <div class="health-section-title">Playwright CI</div>
+            <div id="server-health-playwright-ci" class="health-list"><p class="health-empty">尚未讀取 CI 狀態</p></div>
+          </section>
         </div>
         <div class="drive-card">
           <div class="drive-card-heading">
@@ -2981,6 +3438,8 @@
       <div class="form-section" id="sec-server-launch-check">
         <div class="admin-toolbar" style="margin-bottom:.5rem;display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;">
           <button class="btn btn-primary" type="button" id="launch-check-refresh-btn">🔄 重新檢查</button>
+          <button class="btn btn-secondary" type="button" id="launch-check-bundle-btn">產生 Release Bundle</button>
+          <button class="btn btn-secondary" type="button" id="launch-check-artifacts-btn">刷新 QA Artifacts</button>
           <span id="launch-check-overall" style="font-weight:600;font-size:.95rem;">尚未檢查</span>
           <span id="launch-check-summary" style="font-size:.78rem;color:var(--muted);"></span>
         </div>
@@ -2997,6 +3456,18 @@
         <div class="health-section-title">B. 13 份必過 Production Gate Reports</div>
         <div id="launch-check-list" class="security-log-grid"></div>
         <div id="launch-check-msg" class="msg" style="margin-top:.6rem;"></div>
+        <details class="drive-collapsible-panel settings-collapse" id="launch-check-release-panel" style="margin-top:.75rem;">
+          <summary>
+            <div>
+              <div class="drive-card-title">Release Bundle / QA Artifacts</div>
+              <div class="drive-card-sub" id="launch-check-release-sub">尚未產生 release bundle。</div>
+            </div>
+          </summary>
+          <div class="drive-collapsible-body">
+            <div id="launch-check-release-summary" class="health-summary-grid" style="margin-bottom:.55rem;"></div>
+            <pre id="launch-check-release-details" class="security-log-box security-log-pre" style="max-height:320px;overflow:auto;">按「產生 Release Bundle」後會整理 production gate 狀態與 QA artifact index。</pre>
+          </div>
+        </details>
         <details class="drive-collapsible-panel settings-collapse" id="launch-check-upload-panel" style="margin-top:.75rem;">
           <summary>
             <div>
@@ -3353,7 +3824,7 @@
               </summary>
               <div class="drive-collapsible-body">
             <div class="settings-feature-bundle-panel">
-              <div class="drive-card-sub">功能互相依賴屬正常。可先用下列整套開關快速勾選；`全開 / 最低維運` 會直接改整組勾選狀態，其餘套餐則是加開相關模組。套用後再按下方「儲存設定」才會真正寫入。</div>
+              <div class="drive-card-sub">功能互相依賴屬正常。可先用下列整套開關快速勾選；`全開 / 最低維運 / Raspberry 套餐` 會直接改整組勾選狀態，其餘套餐則是加開相關模組。套用後再按下方「儲存設定」才會真正寫入。</div>
               <div id="feature-bundle-toolbar" class="admin-toolbar settings-feature-bundle-toolbar"></div>
               <div id="feature-advisory-list" class="settings-feature-advisory-list"></div>
             </div>
@@ -3582,8 +4053,9 @@
               <select id="s-comfyui-connection-mode">
                 <option value="remote">遠端 ComfyUI API</option>
                 <option value="local">本地 ComfyUI 資料夾與啟動腳本</option>
+                <option value="diffusers">Hugging Face Diffusers（純 Python）</option>
               </select>
-              <div class="drive-card-sub">主 ComfyUI backend 依這裡切換。Civitai API Key 只用在 root 的模型下載區，不參與上方產圖連線。</div>
+              <div class="drive-card-sub">主生圖 backend 依這裡切換。Civitai API Key 只用在 root 的模型下載區，不參與上方產圖連線。</div>
             </div>
             <div id="comfyui-remote-settings">
               <div class="field">
@@ -3591,6 +4063,39 @@
                 <input type="url" id="s-comfyui-remote-api-url" placeholder="http://127.0.0.1:8192" />
               </div>
               <div style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .75rem;">遠端模式只透過 ComfyUI API 產圖；丟棄預覽只會清掉網頁預覽，不會刪除遠端 output 原始檔，也不提供本地模型下載。</div>
+            </div>
+            <div id="comfyui-diffusers-settings" style="display:none;">
+              <div class="field">
+                <label>Hugging Face Model Repo</label>
+                <input type="text" id="s-comfyui-diffusers-model-repo" placeholder="dhead/waiIllustriousSDXL_v150" autocomplete="off" />
+                <div class="drive-card-sub">填 Hugging Face repo id。Diffusers 會用 Python 直接下載/快取並推論，不經過 ComfyUI server。</div>
+              </div>
+              <div class="field">
+                <label>Hugging Face API Token</label>
+                <input type="password" id="s-comfyui-huggingface-api-token" placeholder="私有或 gated 模型才需要；留空代表不變更" autocomplete="off" />
+                <div class="drive-card-sub" id="comfyui-huggingface-api-token-state">尚未讀取 Hugging Face token 狀態。</div>
+                <div class="drive-card-sub">建議用 read 或 fine-grained token。也可用環境變數 <code>HF_TOKEN</code> / <code>COMFYUI_HUGGINGFACE_API_TOKEN</code> 提供。</div>
+                <label style="margin-top:.35rem;"><input type="checkbox" id="s-comfyui-huggingface-api-token-clear" /> 清除已儲存的 Hugging Face API Token</label>
+              </div>
+              <div class="field">
+                <label>Diffusers Device</label>
+                <select id="s-comfyui-diffusers-device">
+                  <option value="auto">auto</option>
+                  <option value="cuda">cuda</option>
+                  <option value="mps">mps</option>
+                  <option value="cpu">cpu</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>Diffusers dtype</label>
+                <select id="s-comfyui-diffusers-dtype">
+                  <option value="auto">auto</option>
+                  <option value="float16">float16</option>
+                  <option value="bfloat16">bfloat16</option>
+                  <option value="float32">float32</option>
+                </select>
+              </div>
+              <div style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .75rem;">目前支援文字生圖、圖生圖與局部重繪；影片、語音、放大、ControlNet 與 ComfyUI workflow 仍走 ComfyUI 後端。</div>
             </div>
             <div id="comfyui-local-settings" style="display:none;">
               <div class="field">
@@ -3617,6 +4122,18 @@
               <label>Civitai API Key</label>
               <input type="password" id="s-comfyui-civitai-api-key" placeholder="用於 root 模型下載面板讀取版本與下載" autocomplete="off" />
               <div class="drive-card-sub">只在本地模式顯示，供 root 使用頁面最下方的 Civitai 模型下載折疊區；不會改變上方 ComfyUI 產圖 backend。</div>
+            </div>
+            <div class="field">
+              <label><input type="checkbox" id="s-comfyui-paid-api-nodes-enabled" /> 允許 ComfyUI 付費 / API nodes</label>
+              <div class="drive-card-sub">僅允許後端在執行 workflow 時注入 ComfyUI Account API Key；前端 workflow JSON、匯出檔與 audit 不會包含明文 key。</div>
+              <div class="drive-card-sub">ComfyUI 官方 credits 不是本站積分；本站錢包、交易所體驗金與任務獎勵不能支付 ComfyUI 官方 Partner/API nodes。</div>
+            </div>
+            <div class="field">
+              <label>ComfyUI Account API Key</label>
+              <input type="password" id="s-comfyui-account-api-key" placeholder="留空代表不變更；只供付費/API nodes 執行時使用" autocomplete="off" />
+              <div class="drive-card-sub" id="comfyui-account-api-key-state">尚未讀取 key 狀態。</div>
+              <div class="drive-card-sub">餘額與購買請到 ComfyUI UI 的 Settings / Credits；本站目前只顯示 key 是否已設定與執行風險提示。</div>
+              <label style="margin-top:.35rem;"><input type="checkbox" id="s-comfyui-account-api-key-clear" /> 清除已儲存的 ComfyUI Account API Key</label>
             </div>
             <div class="field">
               <label>單次產圖張數上限</label>
@@ -4012,6 +4529,14 @@
                     <div class="field-hint">預設關閉。僅影響新開的融資 / 借券，不影響既有倉位查詢或必要的風控計算。</div>
                   </div>
                   <div class="field">
+                    <label><input type="checkbox" id="root-trading-allow-unready-markets" checked /> 允許未完成價格暖機的市場交易</label>
+                    <div class="field-hint">開啟後，市場尚未取得即時價格也不會阻擋下單；價格狀態仍會顯示為警告。</div>
+                  </div>
+                  <div class="field">
+                    <label><input type="checkbox" id="root-trading-disable-price-confidence-gates" checked /> 價格可信度只警告，不阻擋交易</label>
+                    <div class="field-hint">開啟後，risk-grade / conservative / provider count 不足只顯示提示，不再鎖住現貨、進階交易、機器人或合約流程。</div>
+                  </div>
+                  <div class="field">
                     <label><input type="checkbox" id="root-trading-price-stream-ws-enabled" checked /> 啟用 WebSocket provider input</label>
                     <div class="field-hint">支援 Binance / OKX / Coinbase / Kraken ticker 與 depth WebSocket。斷線時會自動切回 HTTP polling，但不會改變 reference / risk-grade 價格語義。</div>
                   </div>
@@ -4150,7 +4675,7 @@
                     <button class="btn" type="button" id="root-trading-btc-trade-check-btn">檢查 BTC_trade</button>
                     <button class="btn" type="button" id="root-trading-btc-trade-setup-btn">下載/更新並建置</button>
                     <button class="btn btn-primary" type="button" id="root-trading-btc-trade-start-btn">一鍵啟動預測</button>
-                    <div class="field-hint">會先檢查資料是否過期、模型是否晚於資料；必要時先更新資料與重訓模型，再執行預測腳本並等待新的預測資料。</div>
+                    <div class="field-hint">會先檢查 BTC_trade 是否存在；必要時自動下載/更新、安裝依賴，再檢查資料是否過期、重訓模型、執行預測腳本並等待新的預測資料。</div>
                     <div id="root-trading-btc-trade-status" class="field-hint">尚未檢查</div>
                   </div>
                 </div>
@@ -4319,6 +4844,10 @@
             <div class="field">
               <label>儲存根目錄（空白代表沿用 HTML_LEARNING_STORAGE_DIR / 目前啟動設定）</label>
               <input type="text" id="s-cloud-drive-storage-root" placeholder="/srv/hackme_web/storage" />
+            </div>
+            <div class="field">
+              <label>全用戶雲端硬碟容量上限 MB（-1 代表儲存磁碟總容量 95%）</label>
+              <input type="number" id="s-cloud-drive-global-capacity-limit-mb" min="-1" step="1" placeholder="-1" />
             </div>
             <div id="cloud-drive-storage-status" style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .9rem;"></div>
               </div>
@@ -4813,10 +5342,10 @@
   </div>
 </div>
 
-<div id="drive-upload-mode-overlay" class="user-edit-overlay" aria-hidden="true">
+<div id="drive-upload-mode-overlay" class="user-edit-overlay" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="drive-upload-mode-title">
   <div class="user-edit-modal">
     <h2 id="drive-upload-mode-title">選擇隱私模式</h2>
-    <div class="drive-card-sub">這個選擇會套用到本次上傳或遠端下載。</div>
+    <div class="drive-card-sub">這個選擇會套用到本次上傳或遠端下載；請先確認或取消，才會回到頁面操作。按 Esc 可取消。</div>
     <div class="drive-mode-choice-list">
       <label class="drive-mode-choice">
         <input type="radio" name="drive-upload-mode-choice" value="standard_plain" checked />
@@ -5031,7 +5560,19 @@
   </div>
 </div>
 
-<div id="toast-host" class="toast-host" aria-live="polite" aria-atomic="true"></div>
+<div id="game-multiplayer-invite-modal" class="user-edit-overlay game-multiplayer-invite-overlay" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="game-multiplayer-invite-modal-title" hidden>
+  <div class="user-edit-modal game-multiplayer-invite-modal">
+    <div class="mini-title" id="game-multiplayer-invite-modal-title">多人遊戲邀請</div>
+    <p class="game-multiplayer-invite-body" id="game-multiplayer-invite-modal-body">有玩家邀請你加入多人遊戲。</p>
+    <div class="drive-card-sub" id="game-multiplayer-invite-modal-detail">等待回覆</div>
+    <div class="edit-user-actions">
+      <button class="btn btn-primary" type="button" id="game-multiplayer-invite-accept-btn">接受</button>
+      <button class="btn" type="button" id="game-multiplayer-invite-reject-btn">拒絕</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast-host" class="toast-host" role="status" aria-live="polite" aria-atomic="true" aria-relevant="additions text"></div>
 
 <div class="footer">
   hackme_web · 密碼使用 Argon2id 雜湊儲存
@@ -5047,16 +5588,41 @@
 <script src="/js/34-markdown-editor.js?v=20260428-forum-pages" defer></script>
 <script src="/js/35-drive.js?v=20260504-drive-media-rename" defer></script>
   <script src="/js/35-drive-preview-share.js?v=20260507-drive-preview-share-split" defer></script>
-<script src="/js/36-comfyui.js?v=20260505-workflow-preset" defer></script>
-<script src="/js/36-comfyui-workflows.js?v=20260507-comfyui-workflow-split" defer></script>
+<!-- cache marker retained for template-import regression: /js/36-comfyui.js?v=20260509-comfyui-template-embeddings -->
+<script src="/js/36-comfyui.js?v=20260514-comfyui-subtabs" defer></script>
+<script src="/js/36-comfyui-workflows.js?v=20260514-comfyui-subtabs" defer></script>
 <script src="/js/37-bug-report.js?v=20260502-device-feature" defer></script>
-<script src="/js/38-games.js?v=20260502-mobile-controls" defer></script>
+<script src="/js/three.min.js?v=0.160.0" defer></script>
+<script src="/js/41-game-modules.js?v=20260514-game-user-scope" defer></script>
+<script src="/js/games/snake.js?v=20260513-game-modules" defer></script>
+<script src="/js/games/game-2048.js?v=20260513-game-modules" defer></script>
+<script src="/js/games/brick-breaker.js?v=20260513-game-modules" defer></script>
+<script src="/js/games/bullet-hell.js?v=20260513-game-modules" defer></script>
+<script src="/js/games/stickman-shooter.js?v=20260514-game-levels" defer></script>
+<script src="/js/games/open-world.js?v=20260514-open-world" defer></script>
+<script src="/js/games/board-game-shared.js?v=20260513-game-modules" defer></script>
+<script src="/js/games/reversi.js?v=20260513-game-modules" defer></script>
+<script src="/js/games/go.js?v=20260513-game-modules" defer></script>
+<script src="/js/games/gomoku.js?v=20260513-game-modules" defer></script>
+<script src="/js/games/chinese-chess.js?v=20260513-game-modules" defer></script>
+<script src="/js/games/real-tetris.js?v=20260513-game-modules" defer></script>
+<script src="/js/games/game-view-registry.js?v=20260513-legacy-modules" defer></script>
+<script src="/js/games/chess.js?v=20260513-legacy-modules" defer></script>
+<script src="/js/games/sudoku.js?v=20260513-legacy-modules" defer></script>
+<script src="/js/games/minesweeper.js?v=20260513-legacy-modules" defer></script>
+<script src="/js/games/onea2b.js?v=20260513-legacy-modules" defer></script>
+<script src="/js/games/tetris.js?v=20260513-legacy-modules" defer></script>
+<script src="/js/games/space-shooter.js?v=20260513-legacy-modules" defer></script>
+<script src="/js/games/fps-arena.js?v=20260514-fps-stance-br" defer></script>
+<script src="/js/38-games.js?v=20260514-open-world" defer></script>
+<script src="/js/38-fps-arena.js?v=20260514-fps-stance-br" defer></script>
 <script src="/js/39-videos.js?v=20260505-hlsjs-player" defer></script>
 <script src="/js/40-auth-users.js?v=20260503-appearance-reset" defer></script>
 <script src="/js/50-admin.js?v=20260504-fusion-coverage-v1" defer></script>
 <script src="/js/51-admin-server-mode-launch-check.js?v=20260507-admin-launch-check-split" defer></script>
 <script src="/js/55-economy.js?v=20260501-wallet-auto-refresh" defer></script>
 <script src="/js/56-trading.js?v=20260502-grid-spot" defer></script>
+<script src="/js/57-platform-centers.js?v=20260510-job-share-centers" defer></script>
 <script src="/js/90-bootstrap.js?v=20260505-civitai-search" defer></script>
 </body>
 </html>

@@ -463,6 +463,12 @@ def workflow_decision(
             continue
         fallback_count = int(run_count or 0) if workflow.get("source") == "legacy_condition" else 0
         branch_count = int(branch_counts.get(branch.get("id"), fallback_count))
-        action = actions[branch_count % len(actions)]
+        # Each step in a branch fires at most once. When all steps have run,
+        # don't wrap around with modulo — the operator's intent is "do these
+        # N actions in order, then stop"; cycling would double-fill the grid
+        # without the user having a chance to react.
+        if branch_count >= len(actions):
+            continue
+        action = actions[branch_count]
         return {"branch": branch, "action": action, "reason": branch.get("name") or branch.get("id") or "workflow"}
     return None

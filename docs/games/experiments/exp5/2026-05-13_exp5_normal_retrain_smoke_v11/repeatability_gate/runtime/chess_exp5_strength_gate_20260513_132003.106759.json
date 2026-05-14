@@ -1,0 +1,4512 @@
+{
+  "baseline_metrics": {
+    "endgame_score": 0.0,
+    "illegal_rate": 0.0,
+    "legal_rate": 1.0,
+    "pvs_selected_move_rate": 1.0,
+    "score": 0.388889,
+    "smoke_score": 0.25,
+    "suspicious_rate": 0.0,
+    "tactic_score": 0.0,
+    "teacher_agreement_rate": 0.388889
+  },
+  "baseline_model_path": "<repo>/services/games/models/chess_experiment_5_nnue.json",
+  "baseline_score": 0.388889,
+  "benchmark_gate": {
+    "pass": false,
+    "provided": false,
+    "reasons": [
+      "benchmark_report_not_provided"
+    ]
+  },
+  "candidate_metrics": {
+    "endgame_score": 0.0,
+    "illegal_rate": 0.0,
+    "legal_rate": 1.0,
+    "pvs_selected_move_rate": 1.0,
+    "score": 0.388889,
+    "smoke_score": 0.25,
+    "suspicious_rate": 0.0,
+    "tactic_score": 0.0,
+    "teacher_agreement_rate": 0.388889
+  },
+  "candidate_model_path": "<repo>/docs/games/2026-05-13_exp5_normal_retrain_smoke_v11/repeatability_gate/run_1_seed_31/candidate/chess_experiment_5_nnue.json",
+  "candidate_score": 0.388889,
+  "case_pass_rate": 0.3889,
+  "case_results": [
+    {
+      "baseline": {
+        "chosen_move": "a4a3",
+        "final_fen": "r4rk1/7p/2p5/2P1Bbp1/2PR4/p3p3/PP2P2P/R5K1 w - - 0 23",
+        "legal": true,
+        "margin_vs_top": -303.0,
+        "material_gain": 0,
+        "pass": false,
+        "policy_probability_for_chosen": 0.02465848,
+        "pvs_selected_move": true,
+        "quiet_near_equivalent": false,
+        "quiet_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "rank_for_chosen": 21,
+        "reasons": [
+          "unexpected_move"
+        ],
+        "score_for_chosen": -240.0,
+        "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+        "soft_label_near_equivalent": false,
+        "soft_label_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "suspicious": false,
+        "teacher_agreement": false,
+        "teacher_move": "a8a5",
+        "teacher_probability": 0.03543219,
+        "teacher_rank": 16,
+        "teacher_score": -95.0,
+        "top_move": "h7h5",
+        "top_moves": [
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "h7h5",
+            "move_order_rank": 1,
+            "move_order_score": 63,
+            "policy_probability": 0.05259499,
+            "raw_policy_rank": 1,
+            "raw_policy_score": 63.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "f5e4",
+            "move_order_rank": 2,
+            "move_order_score": 57,
+            "policy_probability": 0.05181195,
+            "raw_policy_rank": 2,
+            "raw_policy_score": 57.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "f8d8",
+            "move_order_rank": 3,
+            "move_order_score": 37,
+            "policy_probability": 0.04928505,
+            "raw_policy_rank": 3,
+            "raw_policy_score": 37.0
+          }
+        ],
+        "top_score": 63.0
+      },
+      "baseline_eval": -240.0,
+      "baseline_pvs_move": true,
+      "baseline_score": 0.0,
+      "baseline_teacher_agreement": false,
+      "baseline_teacher_rank": 16,
+      "baseline_top_score": -240.0,
+      "candidate": {
+        "chosen_move": "a4a3",
+        "final_fen": "r4rk1/7p/2p5/2P1Bbp1/2PR4/p3p3/PP2P2P/R5K1 w - - 0 23",
+        "legal": true,
+        "margin_vs_top": -312.0,
+        "material_gain": 0,
+        "pass": false,
+        "policy_probability_for_chosen": 0.02444455,
+        "pvs_selected_move": true,
+        "quiet_near_equivalent": false,
+        "quiet_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "rank_for_chosen": 22,
+        "reasons": [
+          "unexpected_move"
+        ],
+        "score_for_chosen": -291.0,
+        "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+        "soft_label_near_equivalent": false,
+        "soft_label_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "suspicious": false,
+        "teacher_agreement": false,
+        "teacher_move": "a8a5",
+        "teacher_probability": 0.03512479,
+        "teacher_rank": 17,
+        "teacher_score": -146.0,
+        "top_move": "f5e4",
+        "top_moves": [
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "f5e4",
+            "move_order_rank": 1,
+            "move_order_score": 21,
+            "policy_probability": 0.0533251,
+            "raw_policy_rank": 1,
+            "raw_policy_score": 21.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "h7h5",
+            "move_order_rank": 2,
+            "move_order_score": 13,
+            "policy_probability": 0.05226919,
+            "raw_policy_rank": 2,
+            "raw_policy_score": 13.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "f8d8",
+            "move_order_rank": 3,
+            "move_order_score": -14,
+            "policy_probability": 0.04885746,
+            "raw_policy_rank": 3,
+            "raw_policy_score": -14.0
+          }
+        ],
+        "top_score": 21.0
+      },
+      "candidate_eval": -291.0,
+      "candidate_pvs_move": true,
+      "candidate_rank_for_candidate_move": 22,
+      "candidate_score": 0.0,
+      "candidate_teacher_agreement": false,
+      "candidate_teacher_rank": 17,
+      "candidate_top_moves": [
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "f5e4",
+          "move_order_rank": 1,
+          "move_order_score": 21,
+          "policy_probability": 0.0533251,
+          "raw_policy_rank": 1,
+          "raw_policy_score": 21.0
+        },
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "h7h5",
+          "move_order_rank": 2,
+          "move_order_score": 13,
+          "policy_probability": 0.05226919,
+          "raw_policy_rank": 2,
+          "raw_policy_score": 13.0
+        },
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "f8d8",
+          "move_order_rank": 3,
+          "move_order_score": -14,
+          "policy_probability": 0.04885746,
+          "raw_policy_rank": 3,
+          "raw_policy_score": -14.0
+        }
+      ],
+      "candidate_top_score": -291.0,
+      "case_category": "unlabeled",
+      "category": "unlabeled",
+      "chosen_move": "a4a3",
+      "decision_category": "unchanged_wrong",
+      "fen": "r4rk1/7p/2p5/2P1Bbp1/p1PR4/4p3/PP2P2P/R5K1 b - - 1 22",
+      "final_fen": "r4rk1/7p/2p5/2P1Bbp1/2PR4/p3p3/PP2P2P/R5K1 w - - 0 23",
+      "id": "559ff6b9dc92dd9d057f63ac91de2bf24d3517c0d9369ad425ed7c33c80e5131",
+      "label_quality": "review",
+      "legal": true,
+      "material_gain": 0,
+      "pass": false,
+      "pvs_selected_move": true,
+      "reasons": [
+        "unexpected_move"
+      ],
+      "score_delta": 0.0,
+      "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+      "side": "black",
+      "suspicious": false,
+      "teacher_agreement": false,
+      "teacher_move": "a8a5",
+      "teacher_moves": [
+        "a8a5",
+        "f5e4",
+        "f5b1"
+      ]
+    },
+    {
+      "baseline": {
+        "chosen_move": "a4a3",
+        "final_fen": "5rk1/7p/r1p5/2P1BbP1/2PR4/p3p3/PP2P3/R5K1 w - - 0 25",
+        "legal": true,
+        "margin_vs_top": -300.0,
+        "material_gain": 0,
+        "pass": false,
+        "policy_probability_for_chosen": 0.02725408,
+        "pvs_selected_move": true,
+        "quiet_near_equivalent": false,
+        "quiet_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "rank_for_chosen": 18,
+        "reasons": [
+          "unexpected_move"
+        ],
+        "score_for_chosen": -538.0,
+        "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+        "soft_label_near_equivalent": false,
+        "soft_label_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "suspicious": false,
+        "teacher_agreement": false,
+        "teacher_move": "a6a5",
+        "teacher_probability": 0.04504686,
+        "teacher_rank": 12,
+        "teacher_score": -337.0,
+        "top_move": "h7h5",
+        "top_moves": [
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "h7h5",
+            "move_order_rank": 1,
+            "move_order_score": -238,
+            "policy_probability": 0.05769689,
+            "raw_policy_rank": 1,
+            "raw_policy_score": -238.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "f5e4",
+            "move_order_rank": 2,
+            "move_order_score": -241,
+            "policy_probability": 0.05726578,
+            "raw_policy_rank": 2,
+            "raw_policy_score": -241.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "f8d8",
+            "move_order_rank": 3,
+            "move_order_score": -256,
+            "policy_probability": 0.05515808,
+            "raw_policy_rank": 3,
+            "raw_policy_score": -256.0
+          }
+        ],
+        "top_score": -238.0
+      },
+      "baseline_eval": -538.0,
+      "baseline_pvs_move": true,
+      "baseline_score": 0.0,
+      "baseline_teacher_agreement": false,
+      "baseline_teacher_rank": 12,
+      "baseline_top_score": -538.0,
+      "candidate": {
+        "chosen_move": "a4a3",
+        "final_fen": "5rk1/7p/r1p5/2P1BbP1/2PR4/p3p3/PP2P3/R5K1 w - - 0 25",
+        "legal": true,
+        "margin_vs_top": -312.0,
+        "material_gain": 0,
+        "pass": false,
+        "policy_probability_for_chosen": 0.02698675,
+        "pvs_selected_move": true,
+        "quiet_near_equivalent": false,
+        "quiet_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "rank_for_chosen": 19,
+        "reasons": [
+          "unexpected_move"
+        ],
+        "score_for_chosen": -589.0,
+        "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+        "soft_label_near_equivalent": false,
+        "soft_label_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "suspicious": false,
+        "teacher_agreement": false,
+        "teacher_move": "a6a5",
+        "teacher_probability": 0.04471666,
+        "teacher_rank": 12,
+        "teacher_score": -387.0,
+        "top_move": "f5e4",
+        "top_moves": [
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "f5e4",
+            "move_order_rank": 1,
+            "move_order_score": -277,
+            "policy_probability": 0.05887085,
+            "raw_policy_rank": 1,
+            "raw_policy_score": -277.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "h7h5",
+            "move_order_rank": 2,
+            "move_order_score": -289,
+            "policy_probability": 0.05713095,
+            "raw_policy_rank": 2,
+            "raw_policy_score": -289.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "f8d8",
+            "move_order_rank": 3,
+            "move_order_score": -306,
+            "policy_probability": 0.05475376,
+            "raw_policy_rank": 3,
+            "raw_policy_score": -306.0
+          }
+        ],
+        "top_score": -277.0
+      },
+      "candidate_eval": -589.0,
+      "candidate_pvs_move": true,
+      "candidate_rank_for_candidate_move": 19,
+      "candidate_score": 0.0,
+      "candidate_teacher_agreement": false,
+      "candidate_teacher_rank": 12,
+      "candidate_top_moves": [
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "f5e4",
+          "move_order_rank": 1,
+          "move_order_score": -277,
+          "policy_probability": 0.05887085,
+          "raw_policy_rank": 1,
+          "raw_policy_score": -277.0
+        },
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "h7h5",
+          "move_order_rank": 2,
+          "move_order_score": -289,
+          "policy_probability": 0.05713095,
+          "raw_policy_rank": 2,
+          "raw_policy_score": -289.0
+        },
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "f8d8",
+          "move_order_rank": 3,
+          "move_order_score": -306,
+          "policy_probability": 0.05475376,
+          "raw_policy_rank": 3,
+          "raw_policy_score": -306.0
+        }
+      ],
+      "candidate_top_score": -589.0,
+      "case_category": "unlabeled",
+      "category": "unlabeled",
+      "chosen_move": "a4a3",
+      "decision_category": "unchanged_wrong",
+      "fen": "5rk1/7p/r1p5/2P1BbP1/p1PR4/4p3/PP2P3/R5K1 b - - 0 24",
+      "final_fen": "5rk1/7p/r1p5/2P1BbP1/2PR4/p3p3/PP2P3/R5K1 w - - 0 25",
+      "id": "1e9fe804a51079c6889a02b1e08af706e3664a9cdc92e186c9ca169fd97b7737",
+      "label_quality": "review",
+      "legal": true,
+      "material_gain": 0,
+      "pass": false,
+      "pvs_selected_move": true,
+      "reasons": [
+        "unexpected_move"
+      ],
+      "score_delta": 0.0,
+      "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+      "side": "black",
+      "suspicious": false,
+      "teacher_agreement": false,
+      "teacher_move": "a6a5",
+      "teacher_moves": [
+        "a6a5",
+        "f5e4",
+        "f5b1"
+      ]
+    },
+    {
+      "baseline": {
+        "chosen_move": "a1a2",
+        "final_fen": "r1r4k/pp1p1ppp/2n4n/2p1p3/P1P1P3/3B1P2/RP1PK2P/2BQ3R b - - 2 13",
+        "legal": true,
+        "margin_vs_top": -233.0,
+        "material_gain": 0,
+        "pass": false,
+        "policy_probability_for_chosen": 0.03865633,
+        "pvs_selected_move": true,
+        "quiet_near_equivalent": false,
+        "quiet_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "rank_for_chosen": 18,
+        "reasons": [
+          "unexpected_move"
+        ],
+        "score_for_chosen": 1745.0,
+        "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+        "soft_label_near_equivalent": false,
+        "soft_label_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "suspicious": false,
+        "teacher_agreement": false,
+        "teacher_move": "e2e1",
+        "teacher_probability": 0.04304347,
+        "teacher_rank": 12,
+        "teacher_score": 1788.0,
+        "top_move": "b2b4",
+        "top_moves": [
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "b2b4",
+            "move_order_rank": 1,
+            "move_order_score": 1978,
+            "policy_probability": 0.06921451,
+            "raw_policy_rank": 1,
+            "raw_policy_score": 1978.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "b2b3",
+            "move_order_rank": 2,
+            "move_order_score": 1917,
+            "policy_probability": 0.05942473,
+            "raw_policy_rank": 2,
+            "raw_policy_score": 1917.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "f3f4",
+            "move_order_rank": 3,
+            "move_order_score": 1887,
+            "policy_probability": 0.05513091,
+            "raw_policy_rank": 3,
+            "raw_policy_score": 1887.0
+          }
+        ],
+        "top_score": 1978.0
+      },
+      "baseline_eval": 1745.0,
+      "baseline_pvs_move": true,
+      "baseline_score": 0.0,
+      "baseline_teacher_agreement": false,
+      "baseline_teacher_rank": 12,
+      "baseline_top_score": 1745.0,
+      "candidate": {
+        "chosen_move": "a1a2",
+        "final_fen": "r1r4k/pp1p1ppp/2n4n/2p1p3/P1P1P3/3B1P2/RP1PK2P/2BQ3R b - - 2 13",
+        "legal": true,
+        "margin_vs_top": -233.0,
+        "material_gain": 0,
+        "pass": false,
+        "policy_probability_for_chosen": 0.03847828,
+        "pvs_selected_move": true,
+        "quiet_near_equivalent": false,
+        "quiet_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "rank_for_chosen": 18,
+        "reasons": [
+          "unexpected_move"
+        ],
+        "score_for_chosen": 1781.0,
+        "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+        "soft_label_near_equivalent": false,
+        "soft_label_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "suspicious": false,
+        "teacher_agreement": false,
+        "teacher_move": "e2e1",
+        "teacher_probability": 0.04371075,
+        "teacher_rank": 11,
+        "teacher_score": 1832.0,
+        "top_move": "b2b4",
+        "top_moves": [
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "b2b4",
+            "move_order_rank": 1,
+            "move_order_score": 2014,
+            "policy_probability": 0.06889572,
+            "raw_policy_rank": 1,
+            "raw_policy_score": 2014.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "b2b3",
+            "move_order_rank": 2,
+            "move_order_score": 1953,
+            "policy_probability": 0.05915103,
+            "raw_policy_rank": 2,
+            "raw_policy_score": 1953.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "f3f4",
+            "move_order_rank": 3,
+            "move_order_score": 1923,
+            "policy_probability": 0.05487698,
+            "raw_policy_rank": 3,
+            "raw_policy_score": 1923.0
+          }
+        ],
+        "top_score": 2014.0
+      },
+      "candidate_eval": 1781.0,
+      "candidate_pvs_move": true,
+      "candidate_rank_for_candidate_move": 18,
+      "candidate_score": 0.0,
+      "candidate_teacher_agreement": false,
+      "candidate_teacher_rank": 11,
+      "candidate_top_moves": [
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "b2b4",
+          "move_order_rank": 1,
+          "move_order_score": 2014,
+          "policy_probability": 0.06889572,
+          "raw_policy_rank": 1,
+          "raw_policy_score": 2014.0
+        },
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "b2b3",
+          "move_order_rank": 2,
+          "move_order_score": 1953,
+          "policy_probability": 0.05915103,
+          "raw_policy_rank": 2,
+          "raw_policy_score": 1953.0
+        },
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "f3f4",
+          "move_order_rank": 3,
+          "move_order_score": 1923,
+          "policy_probability": 0.05487698,
+          "raw_policy_rank": 3,
+          "raw_policy_score": 1923.0
+        }
+      ],
+      "candidate_top_score": 1781.0,
+      "case_category": "unlabeled",
+      "category": "unlabeled",
+      "chosen_move": "a1a2",
+      "decision_category": "unchanged_wrong",
+      "fen": "r1r4k/pp1p1ppp/2n4n/2p1p3/P1P1P3/3B1P2/1P1PK2P/R1BQ3R w - - 1 13",
+      "final_fen": "r1r4k/pp1p1ppp/2n4n/2p1p3/P1P1P3/3B1P2/RP1PK2P/2BQ3R b - - 2 13",
+      "id": "cdd62e2dc564b971cdcb6638383846db50fdacb2756923409f92cfed087324b5",
+      "label_quality": "review",
+      "legal": true,
+      "material_gain": 0,
+      "pass": false,
+      "pvs_selected_move": true,
+      "reasons": [
+        "unexpected_move"
+      ],
+      "score_delta": 0.0,
+      "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+      "side": "white",
+      "suspicious": false,
+      "teacher_agreement": false,
+      "teacher_move": "e2e1",
+      "teacher_moves": [
+        "e2e1",
+        "d1g1",
+        "e2f2"
+      ]
+    },
+    {
+      "baseline": {
+        "chosen_move": "d3c3",
+        "final_fen": "4r1k1/8/8/4n3/8/2K5/r7/8 b - - 9 58",
+        "legal": true,
+        "margin_vs_top": -291.0,
+        "material_gain": 0,
+        "pass": true,
+        "policy_probability_for_chosen": 0.17834474,
+        "pvs_selected_move": true,
+        "quiet_near_equivalent": false,
+        "quiet_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "rank_for_chosen": 4,
+        "reasons": [],
+        "score_for_chosen": -1934.0,
+        "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+        "soft_label_near_equivalent": false,
+        "soft_label_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "suspicious": false,
+        "teacher_agreement": true,
+        "teacher_move": "d3d4",
+        "teacher_probability": 0.26407111,
+        "teacher_rank": 2,
+        "teacher_score": -1777.0,
+        "top_move": "d3e4",
+        "top_moves": [
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "d3e4",
+            "move_order_rank": 1,
+            "move_order_score": -1643,
+            "policy_probability": 0.36915568,
+            "raw_policy_rank": 1,
+            "raw_policy_score": -1643.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "d3d4",
+            "move_order_rank": 2,
+            "move_order_score": -1777,
+            "policy_probability": 0.26407111,
+            "raw_policy_rank": 2,
+            "raw_policy_score": -1777.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "d3e3",
+            "move_order_rank": 3,
+            "move_order_score": -1912,
+            "policy_probability": 0.18842847,
+            "raw_policy_rank": 3,
+            "raw_policy_score": -1912.0
+          }
+        ],
+        "top_score": -1643.0
+      },
+      "baseline_eval": -1934.0,
+      "baseline_pvs_move": true,
+      "baseline_score": 1.0,
+      "baseline_teacher_agreement": true,
+      "baseline_teacher_rank": 2,
+      "baseline_top_score": -1934.0,
+      "candidate": {
+        "chosen_move": "d3c3",
+        "final_fen": "4r1k1/8/8/4n3/8/2K5/r7/8 b - - 9 58",
+        "legal": true,
+        "margin_vs_top": -291.0,
+        "material_gain": 0,
+        "pass": true,
+        "policy_probability_for_chosen": 0.17817822,
+        "pvs_selected_move": true,
+        "quiet_near_equivalent": false,
+        "quiet_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "rank_for_chosen": 4,
+        "reasons": [],
+        "score_for_chosen": -1934.0,
+        "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+        "soft_label_near_equivalent": false,
+        "soft_label_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "suspicious": false,
+        "teacher_agreement": true,
+        "teacher_move": "d3d4",
+        "teacher_probability": 0.25411434,
+        "teacher_rank": 2,
+        "teacher_score": -1792.0,
+        "top_move": "d3e4",
+        "top_moves": [
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "d3e4",
+            "move_order_rank": 1,
+            "move_order_score": -1643,
+            "policy_probability": 0.368811,
+            "raw_policy_rank": 1,
+            "raw_policy_score": -1643.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "d3d4",
+            "move_order_rank": 2,
+            "move_order_score": -1792,
+            "policy_probability": 0.25411434,
+            "raw_policy_rank": 2,
+            "raw_policy_score": -1792.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "d3e3",
+            "move_order_rank": 3,
+            "move_order_score": -1890,
+            "policy_probability": 0.19889644,
+            "raw_policy_rank": 3,
+            "raw_policy_score": -1890.0
+          }
+        ],
+        "top_score": -1643.0
+      },
+      "candidate_eval": -1934.0,
+      "candidate_pvs_move": true,
+      "candidate_rank_for_candidate_move": 4,
+      "candidate_score": 1.0,
+      "candidate_teacher_agreement": true,
+      "candidate_teacher_rank": 2,
+      "candidate_top_moves": [
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "d3e4",
+          "move_order_rank": 1,
+          "move_order_score": -1643,
+          "policy_probability": 0.368811,
+          "raw_policy_rank": 1,
+          "raw_policy_score": -1643.0
+        },
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "d3d4",
+          "move_order_rank": 2,
+          "move_order_score": -1792,
+          "policy_probability": 0.25411434,
+          "raw_policy_rank": 2,
+          "raw_policy_score": -1792.0
+        },
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "d3e3",
+          "move_order_rank": 3,
+          "move_order_score": -1890,
+          "policy_probability": 0.19889644,
+          "raw_policy_rank": 3,
+          "raw_policy_score": -1890.0
+        }
+      ],
+      "candidate_top_score": -1934.0,
+      "case_category": "unlabeled",
+      "category": "unlabeled",
+      "chosen_move": "d3c3",
+      "decision_category": "unchanged_correct",
+      "fen": "4r1k1/8/8/4n3/8/3K4/r7/8 w - - 8 58",
+      "final_fen": "4r1k1/8/8/4n3/8/2K5/r7/8 b - - 9 58",
+      "id": "d84deca19657d936dbc2c6ee0906321a94990c81de5014e0a9b87949a560c27f",
+      "label_quality": "review",
+      "legal": true,
+      "material_gain": 0,
+      "pass": true,
+      "pvs_selected_move": true,
+      "reasons": [],
+      "score_delta": 0.0,
+      "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+      "side": "white",
+      "suspicious": false,
+      "teacher_agreement": true,
+      "teacher_move": "d3d4",
+      "teacher_moves": [
+        "d3d4",
+        "d3e4",
+        "d3c3"
+      ]
+    },
+    {
+      "baseline": {
+        "chosen_move": "g2f1",
+        "final_fen": "r4rk1/5pn1/pp3b2/2p5/2P1P3/3Q4/K4P1B/1NN2B1R b - - 1 34",
+        "legal": true,
+        "margin_vs_top": -1052.0,
+        "material_gain": 0,
+        "pass": false,
+        "policy_probability_for_chosen": 0.00948732,
+        "pvs_selected_move": true,
+        "quiet_near_equivalent": false,
+        "quiet_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "rank_for_chosen": 38,
+        "reasons": [
+          "unexpected_move"
+        ],
+        "score_for_chosen": 1097.0,
+        "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+        "soft_label_near_equivalent": false,
+        "soft_label_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "suspicious": false,
+        "teacher_agreement": false,
+        "teacher_move": "a2b3",
+        "teacher_probability": 0.13162494,
+        "teacher_rank": 1,
+        "teacher_score": 2149.0,
+        "top_move": "a2b3",
+        "top_moves": [
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "a2b3",
+            "move_order_rank": 1,
+            "move_order_score": 2149,
+            "policy_probability": 0.13162494,
+            "raw_policy_rank": 1,
+            "raw_policy_score": 2149.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "b1c3",
+            "move_order_rank": 2,
+            "move_order_score": 2083,
+            "policy_probability": 0.11160396,
+            "raw_policy_rank": 2,
+            "raw_policy_score": 2083.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "b1d2",
+            "move_order_rank": 3,
+            "move_order_score": 1815,
+            "policy_probability": 0.0571087,
+            "raw_policy_rank": 3,
+            "raw_policy_score": 1815.0
+          }
+        ],
+        "top_score": 2149.0
+      },
+      "baseline_eval": 1097.0,
+      "baseline_pvs_move": true,
+      "baseline_score": 0.0,
+      "baseline_teacher_agreement": false,
+      "baseline_teacher_rank": 1,
+      "baseline_top_score": 1097.0,
+      "candidate": {
+        "chosen_move": "f2f4",
+        "final_fen": "r4rk1/5pn1/pp3b2/2p5/2P1PP2/3Q4/K5BB/1NN4R b - - 0 34",
+        "legal": true,
+        "margin_vs_top": -628.0,
+        "material_gain": 0,
+        "pass": false,
+        "policy_probability_for_chosen": 0.03014538,
+        "pvs_selected_move": true,
+        "quiet_near_equivalent": false,
+        "quiet_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "rank_for_chosen": 10,
+        "reasons": [
+          "unexpected_move"
+        ],
+        "score_for_chosen": 1650.0,
+        "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+        "soft_label_near_equivalent": false,
+        "soft_label_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "suspicious": false,
+        "teacher_agreement": false,
+        "teacher_move": "a2b3",
+        "teacher_probability": 0.14489822,
+        "teacher_rank": 1,
+        "teacher_score": 2278.0,
+        "top_move": "a2b3",
+        "top_moves": [
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "a2b3",
+            "move_order_rank": 1,
+            "move_order_score": 2278,
+            "policy_probability": 0.14489822,
+            "raw_policy_rank": 1,
+            "raw_policy_score": 2278.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "b1c3",
+            "move_order_rank": 2,
+            "move_order_score": 2055,
+            "policy_probability": 0.08297436,
+            "raw_policy_rank": 2,
+            "raw_policy_score": 2055.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "c1b3",
+            "move_order_rank": 3,
+            "move_order_score": 1909,
+            "policy_probability": 0.05760052,
+            "raw_policy_rank": 3,
+            "raw_policy_score": 1909.0
+          }
+        ],
+        "top_score": 2278.0
+      },
+      "candidate_eval": 1650.0,
+      "candidate_pvs_move": true,
+      "candidate_rank_for_candidate_move": 10,
+      "candidate_score": 0.0,
+      "candidate_teacher_agreement": false,
+      "candidate_teacher_rank": 1,
+      "candidate_top_moves": [
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "a2b3",
+          "move_order_rank": 1,
+          "move_order_score": 2278,
+          "policy_probability": 0.14489822,
+          "raw_policy_rank": 1,
+          "raw_policy_score": 2278.0
+        },
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "b1c3",
+          "move_order_rank": 2,
+          "move_order_score": 2055,
+          "policy_probability": 0.08297436,
+          "raw_policy_rank": 2,
+          "raw_policy_score": 2055.0
+        },
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "c1b3",
+          "move_order_rank": 3,
+          "move_order_score": 1909,
+          "policy_probability": 0.05760052,
+          "raw_policy_rank": 3,
+          "raw_policy_score": 1909.0
+        }
+      ],
+      "candidate_top_score": 1650.0,
+      "case_category": "unlabeled",
+      "category": "unlabeled",
+      "chosen_move": "f2f4",
+      "decision_category": "teacher_label_questionable",
+      "fen": "r4rk1/5pn1/pp3b2/2p5/2P1P3/3Q4/K4PBB/1NN4R w - - 0 34",
+      "final_fen": "r4rk1/5pn1/pp3b2/2p5/2P1PP2/3Q4/K5BB/1NN4R b - - 0 34",
+      "id": "224005c535bc9c1dc02c3a9c246b11a62e4847da57cf861032a4294f7b3e7e12",
+      "label_quality": "clean",
+      "legal": true,
+      "material_gain": 0,
+      "pass": false,
+      "pvs_selected_move": true,
+      "reasons": [
+        "unexpected_move"
+      ],
+      "score_delta": 0.0,
+      "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+      "side": "white",
+      "suspicious": false,
+      "teacher_agreement": false,
+      "teacher_move": "a2b3",
+      "teacher_moves": [
+        "a2b3",
+        "h2e5",
+        "h2f4"
+      ]
+    },
+    {
+      "baseline": {
+        "chosen_move": "h6g7",
+        "final_fen": "r1b4k/pp1p1QBp/6p1/2q5/PpP1P3/8/R1B3KP/5R2 b - - 4 21",
+        "legal": true,
+        "margin_vs_top": -8.0,
+        "material_gain": 0,
+        "pass": true,
+        "policy_probability_for_chosen": 0.16250658,
+        "pvs_selected_move": true,
+        "quiet_near_equivalent": false,
+        "quiet_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "rank_for_chosen": 2,
+        "reasons": [],
+        "score_for_chosen": 3300.0,
+        "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+        "soft_label_near_equivalent": false,
+        "soft_label_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "suspicious": false,
+        "teacher_agreement": true,
+        "teacher_move": "f7g7",
+        "teacher_probability": 0.13074103,
+        "teacher_rank": 5,
+        "teacher_score": 3213.0,
+        "top_move": "f7e8",
+        "top_moves": [
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "f7e8",
+            "move_order_rank": 1,
+            "move_order_score": 3308,
+            "policy_probability": 0.16578943,
+            "raw_policy_rank": 1,
+            "raw_policy_score": 3308.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "h6g7",
+            "move_order_rank": 2,
+            "move_order_score": 3300,
+            "policy_probability": 0.16250658,
+            "raw_policy_rank": 2,
+            "raw_policy_score": 3300.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "f7f6",
+            "move_order_rank": 3,
+            "move_order_score": 3268,
+            "policy_probability": 0.15001248,
+            "raw_policy_rank": 3,
+            "raw_policy_score": 3268.0
+          }
+        ],
+        "top_score": 3308.0
+      },
+      "baseline_eval": 3300.0,
+      "baseline_pvs_move": true,
+      "baseline_score": 1.0,
+      "baseline_teacher_agreement": true,
+      "baseline_teacher_rank": 5,
+      "baseline_top_score": 3300.0,
+      "candidate": {
+        "chosen_move": "h6g7",
+        "final_fen": "r1b4k/pp1p1QBp/6p1/2q5/PpP1P3/8/R1B3KP/5R2 b - - 4 21",
+        "legal": true,
+        "margin_vs_top": -8.0,
+        "material_gain": 0,
+        "pass": true,
+        "policy_probability_for_chosen": 0.16476426,
+        "pvs_selected_move": true,
+        "quiet_near_equivalent": false,
+        "quiet_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "rank_for_chosen": 2,
+        "reasons": [],
+        "score_for_chosen": 3321.0,
+        "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+        "soft_label_near_equivalent": false,
+        "soft_label_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "suspicious": false,
+        "teacher_agreement": true,
+        "teacher_move": "f7g7",
+        "teacher_probability": 0.1325574,
+        "teacher_rank": 5,
+        "teacher_score": 3234.0,
+        "top_move": "f7e8",
+        "top_moves": [
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "f7e8",
+            "move_order_rank": 1,
+            "move_order_score": 3329,
+            "policy_probability": 0.16809272,
+            "raw_policy_rank": 1,
+            "raw_policy_score": 3329.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "h6g7",
+            "move_order_rank": 2,
+            "move_order_score": 3321,
+            "policy_probability": 0.16476426,
+            "raw_policy_rank": 2,
+            "raw_policy_score": 3321.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "f7f6",
+            "move_order_rank": 3,
+            "move_order_score": 3289,
+            "policy_probability": 0.15209658,
+            "raw_policy_rank": 3,
+            "raw_policy_score": 3289.0
+          }
+        ],
+        "top_score": 3329.0
+      },
+      "candidate_eval": 3321.0,
+      "candidate_pvs_move": true,
+      "candidate_rank_for_candidate_move": 2,
+      "candidate_score": 1.0,
+      "candidate_teacher_agreement": true,
+      "candidate_teacher_rank": 5,
+      "candidate_top_moves": [
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "f7e8",
+          "move_order_rank": 1,
+          "move_order_score": 3329,
+          "policy_probability": 0.16809272,
+          "raw_policy_rank": 1,
+          "raw_policy_score": 3329.0
+        },
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "h6g7",
+          "move_order_rank": 2,
+          "move_order_score": 3321,
+          "policy_probability": 0.16476426,
+          "raw_policy_rank": 2,
+          "raw_policy_score": 3321.0
+        },
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "f7f6",
+          "move_order_rank": 3,
+          "move_order_score": 3289,
+          "policy_probability": 0.15209658,
+          "raw_policy_rank": 3,
+          "raw_policy_score": 3289.0
+        }
+      ],
+      "candidate_top_score": 3321.0,
+      "case_category": "unlabeled",
+      "category": "unlabeled",
+      "chosen_move": "h6g7",
+      "decision_category": "unchanged_correct",
+      "fen": "r1b4k/pp1p1Q1p/6pB/2q5/PpP1P3/8/R1B3KP/5R2 w - - 3 21",
+      "final_fen": "r1b4k/pp1p1QBp/6p1/2q5/PpP1P3/8/R1B3KP/5R2 b - - 4 21",
+      "id": "9dcd855a16af21b0f637c4c1babb8477afe3c644f3750795623f82ea0f183847",
+      "label_quality": "review",
+      "legal": true,
+      "material_gain": 0,
+      "pass": true,
+      "pvs_selected_move": true,
+      "reasons": [],
+      "score_delta": 0.0,
+      "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+      "side": "white",
+      "suspicious": false,
+      "teacher_agreement": true,
+      "teacher_move": "f7g7",
+      "teacher_moves": [
+        "f7g7",
+        "h6g7",
+        "f7d7"
+      ]
+    },
+    {
+      "baseline": {
+        "chosen_move": "a3a2",
+        "final_fen": "8/pp5k/8/8/4p3/2r5/K7/8 b - - 1 68",
+        "legal": true,
+        "margin_vs_top": -23.0,
+        "material_gain": 0,
+        "pass": false,
+        "policy_probability_for_chosen": 0.25932624,
+        "pvs_selected_move": true,
+        "quiet_near_equivalent": false,
+        "quiet_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "rank_for_chosen": 2,
+        "reasons": [
+          "unexpected_move"
+        ],
+        "score_for_chosen": -1110.0,
+        "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+        "soft_label_near_equivalent": false,
+        "soft_label_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "suspicious": false,
+        "teacher_agreement": false,
+        "teacher_move": "a3a4",
+        "teacher_probability": 0.22601172,
+        "teacher_rank": 4,
+        "teacher_score": -1165.0,
+        "top_move": "a3b2",
+        "top_moves": [
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "a3b2",
+            "move_order_rank": 1,
+            "move_order_score": -1087,
+            "policy_probability": 0.27467453,
+            "raw_policy_rank": 1,
+            "raw_policy_score": -1087.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "a3a2",
+            "move_order_rank": 2,
+            "move_order_score": -1110,
+            "policy_probability": 0.25932624,
+            "raw_policy_rank": 2,
+            "raw_policy_score": -1110.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "a3b4",
+            "move_order_rank": 3,
+            "move_order_score": -1141,
+            "policy_probability": 0.23998751,
+            "raw_policy_rank": 3,
+            "raw_policy_score": -1141.0
+          }
+        ],
+        "top_score": -1087.0
+      },
+      "baseline_eval": -1110.0,
+      "baseline_pvs_move": true,
+      "baseline_score": 0.0,
+      "baseline_teacher_agreement": false,
+      "baseline_teacher_rank": 4,
+      "baseline_top_score": -1110.0,
+      "candidate": {
+        "chosen_move": "a3a2",
+        "final_fen": "8/pp5k/8/8/4p3/2r5/K7/8 b - - 1 68",
+        "legal": true,
+        "margin_vs_top": -1.0,
+        "material_gain": 0,
+        "pass": false,
+        "policy_probability_for_chosen": 0.27002941,
+        "pvs_selected_move": true,
+        "quiet_near_equivalent": false,
+        "quiet_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "rank_for_chosen": 2,
+        "reasons": [
+          "unexpected_move"
+        ],
+        "score_for_chosen": -1088.0,
+        "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+        "soft_label_near_equivalent": false,
+        "soft_label_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "suspicious": false,
+        "teacher_agreement": false,
+        "teacher_move": "a3a4",
+        "teacher_probability": 0.22274572,
+        "teacher_rank": 4,
+        "teacher_score": -1165.0,
+        "top_move": "a3b2",
+        "top_moves": [
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "a3b2",
+            "move_order_rank": 1,
+            "move_order_score": -1087,
+            "policy_probability": 0.27070532,
+            "raw_policy_rank": 1,
+            "raw_policy_score": -1087.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "a3a2",
+            "move_order_rank": 2,
+            "move_order_score": -1088,
+            "policy_probability": 0.27002941,
+            "raw_policy_rank": 2,
+            "raw_policy_score": -1088.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "a3b4",
+            "move_order_rank": 3,
+            "move_order_score": -1141,
+            "policy_probability": 0.23651955,
+            "raw_policy_rank": 3,
+            "raw_policy_score": -1141.0
+          }
+        ],
+        "top_score": -1087.0
+      },
+      "candidate_eval": -1088.0,
+      "candidate_pvs_move": true,
+      "candidate_rank_for_candidate_move": 2,
+      "candidate_score": 0.0,
+      "candidate_teacher_agreement": false,
+      "candidate_teacher_rank": 4,
+      "candidate_top_moves": [
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "a3b2",
+          "move_order_rank": 1,
+          "move_order_score": -1087,
+          "policy_probability": 0.27070532,
+          "raw_policy_rank": 1,
+          "raw_policy_score": -1087.0
+        },
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "a3a2",
+          "move_order_rank": 2,
+          "move_order_score": -1088,
+          "policy_probability": 0.27002941,
+          "raw_policy_rank": 2,
+          "raw_policy_score": -1088.0
+        },
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "a3b4",
+          "move_order_rank": 3,
+          "move_order_score": -1141,
+          "policy_probability": 0.23651955,
+          "raw_policy_rank": 3,
+          "raw_policy_score": -1141.0
+        }
+      ],
+      "candidate_top_score": -1088.0,
+      "case_category": "unlabeled",
+      "category": "unlabeled",
+      "chosen_move": "a3a2",
+      "decision_category": "unchanged_wrong",
+      "fen": "8/pp5k/8/8/4p3/K1r5/8/8 w - - 0 68",
+      "final_fen": "8/pp5k/8/8/4p3/2r5/K7/8 b - - 1 68",
+      "id": "f1dc7afcdcf577c3f7f2b7dd95d3de87f76128bcacf14f22708b4b453cab90c3",
+      "label_quality": "clean",
+      "legal": true,
+      "material_gain": 0,
+      "pass": false,
+      "pvs_selected_move": true,
+      "reasons": [
+        "unexpected_move"
+      ],
+      "score_delta": 0.0,
+      "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+      "side": "white",
+      "suspicious": false,
+      "teacher_agreement": false,
+      "teacher_move": "a3a4",
+      "teacher_moves": [
+        "a3a4",
+        "a3b2",
+        "a3b4"
+      ]
+    },
+    {
+      "baseline": {
+        "chosen_move": "a5b5",
+        "final_fen": "R7/8/8/1k1p4/8/7K/5r2/8 w - - 4 51",
+        "legal": true,
+        "margin_vs_top": 0.0,
+        "material_gain": 0,
+        "pass": true,
+        "policy_probability_for_chosen": 0.33333333,
+        "pvs_selected_move": true,
+        "quiet_near_equivalent": false,
+        "quiet_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "rank_for_chosen": 2,
+        "reasons": [],
+        "score_for_chosen": 212.0,
+        "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+        "soft_label_near_equivalent": false,
+        "soft_label_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "suspicious": false,
+        "teacher_agreement": true,
+        "teacher_move": "a5b5",
+        "teacher_probability": 0.33333333,
+        "teacher_rank": 1,
+        "teacher_score": 212.0,
+        "top_move": "a5b4",
+        "top_moves": [
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "a5b4",
+            "move_order_rank": 1,
+            "move_order_score": 212,
+            "policy_probability": 0.33333333,
+            "raw_policy_rank": 1,
+            "raw_policy_score": 212.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "a5b5",
+            "move_order_rank": 2,
+            "move_order_score": 212,
+            "policy_probability": 0.33333333,
+            "raw_policy_rank": 2,
+            "raw_policy_score": 212.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "a5b6",
+            "move_order_rank": 3,
+            "move_order_score": 212,
+            "policy_probability": 0.33333333,
+            "raw_policy_rank": 3,
+            "raw_policy_score": 212.0
+          }
+        ],
+        "top_score": 212.0
+      },
+      "baseline_eval": 212.0,
+      "baseline_pvs_move": true,
+      "baseline_score": 1.0,
+      "baseline_teacher_agreement": true,
+      "baseline_teacher_rank": 1,
+      "baseline_top_score": 212.0,
+      "candidate": {
+        "chosen_move": "a5b5",
+        "final_fen": "R7/8/8/1k1p4/8/7K/5r2/8 w - - 4 51",
+        "legal": true,
+        "margin_vs_top": 0.0,
+        "material_gain": 0,
+        "pass": true,
+        "policy_probability_for_chosen": 0.33333333,
+        "pvs_selected_move": true,
+        "quiet_near_equivalent": false,
+        "quiet_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "rank_for_chosen": 2,
+        "reasons": [],
+        "score_for_chosen": 212.0,
+        "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+        "soft_label_near_equivalent": false,
+        "soft_label_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "suspicious": false,
+        "teacher_agreement": true,
+        "teacher_move": "a5b5",
+        "teacher_probability": 0.33333333,
+        "teacher_rank": 1,
+        "teacher_score": 212.0,
+        "top_move": "a5b4",
+        "top_moves": [
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "a5b4",
+            "move_order_rank": 1,
+            "move_order_score": 212,
+            "policy_probability": 0.33333333,
+            "raw_policy_rank": 1,
+            "raw_policy_score": 212.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "a5b5",
+            "move_order_rank": 2,
+            "move_order_score": 212,
+            "policy_probability": 0.33333333,
+            "raw_policy_rank": 2,
+            "raw_policy_score": 212.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "a5b6",
+            "move_order_rank": 3,
+            "move_order_score": 212,
+            "policy_probability": 0.33333333,
+            "raw_policy_rank": 3,
+            "raw_policy_score": 212.0
+          }
+        ],
+        "top_score": 212.0
+      },
+      "candidate_eval": 212.0,
+      "candidate_pvs_move": true,
+      "candidate_rank_for_candidate_move": 2,
+      "candidate_score": 1.0,
+      "candidate_teacher_agreement": true,
+      "candidate_teacher_rank": 1,
+      "candidate_top_moves": [
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "a5b4",
+          "move_order_rank": 1,
+          "move_order_score": 212,
+          "policy_probability": 0.33333333,
+          "raw_policy_rank": 1,
+          "raw_policy_score": 212.0
+        },
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "a5b5",
+          "move_order_rank": 2,
+          "move_order_score": 212,
+          "policy_probability": 0.33333333,
+          "raw_policy_rank": 2,
+          "raw_policy_score": 212.0
+        },
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "a5b6",
+          "move_order_rank": 3,
+          "move_order_score": 212,
+          "policy_probability": 0.33333333,
+          "raw_policy_rank": 3,
+          "raw_policy_score": 212.0
+        }
+      ],
+      "candidate_top_score": 212.0,
+      "case_category": "unlabeled",
+      "category": "unlabeled",
+      "chosen_move": "a5b5",
+      "decision_category": "unchanged_correct",
+      "fen": "R7/8/8/k2p4/8/7K/5r2/8 b - - 3 50",
+      "final_fen": "R7/8/8/1k1p4/8/7K/5r2/8 w - - 4 51",
+      "id": "ec3f0618d15595ec639b7b2fc630816ac6fff0b1745b9bd9a2b6536555780b83",
+      "label_quality": "clean",
+      "legal": true,
+      "material_gain": 0,
+      "pass": true,
+      "pvs_selected_move": true,
+      "reasons": [],
+      "score_delta": 0.0,
+      "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+      "side": "black",
+      "suspicious": false,
+      "teacher_agreement": true,
+      "teacher_move": "a5b5",
+      "teacher_moves": [
+        "a5b4",
+        "a5b5",
+        "a5b6"
+      ]
+    },
+    {
+      "baseline": {
+        "chosen_move": "a6a5",
+        "final_fen": "r2q1rk1/6pp/2p1pn2/p2p4/1P1P4/7N/PP1N1PPP/R4RK1 w - - 0 15",
+        "legal": true,
+        "margin_vs_top": -268.0,
+        "material_gain": 0,
+        "pass": false,
+        "policy_probability_for_chosen": 0.03104899,
+        "pvs_selected_move": true,
+        "quiet_near_equivalent": false,
+        "quiet_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "rank_for_chosen": 21,
+        "reasons": [
+          "unexpected_move"
+        ],
+        "score_for_chosen": 1620.0,
+        "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+        "soft_label_near_equivalent": false,
+        "soft_label_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "suspicious": false,
+        "teacher_agreement": false,
+        "teacher_move": "d8b6",
+        "teacher_probability": 0.04540246,
+        "teacher_rank": 5,
+        "teacher_score": 1772.0,
+        "top_move": "d8c7",
+        "top_moves": [
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "d8c7",
+            "move_order_rank": 1,
+            "move_order_score": 1888,
+            "policy_probability": 0.06067709,
+            "raw_policy_rank": 1,
+            "raw_policy_score": 1888.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "g7g6",
+            "move_order_rank": 2,
+            "move_order_score": 1805,
+            "policy_probability": 0.04930701,
+            "raw_policy_rank": 2,
+            "raw_policy_score": 1805.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "h7h5",
+            "move_order_rank": 3,
+            "move_order_score": 1805,
+            "policy_probability": 0.04930701,
+            "raw_policy_rank": 3,
+            "raw_policy_score": 1805.0
+          }
+        ],
+        "top_score": 1888.0
+      },
+      "baseline_eval": 1620.0,
+      "baseline_pvs_move": true,
+      "baseline_score": 0.0,
+      "baseline_teacher_agreement": false,
+      "baseline_teacher_rank": 5,
+      "baseline_top_score": 1620.0,
+      "candidate": {
+        "chosen_move": "a6a5",
+        "final_fen": "r2q1rk1/6pp/2p1pn2/p2p4/1P1P4/7N/PP1N1PPP/R4RK1 w - - 0 15",
+        "legal": true,
+        "margin_vs_top": -232.0,
+        "material_gain": 0,
+        "pass": false,
+        "policy_probability_for_chosen": 0.03137602,
+        "pvs_selected_move": true,
+        "quiet_near_equivalent": false,
+        "quiet_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "rank_for_chosen": 21,
+        "reasons": [
+          "unexpected_move"
+        ],
+        "score_for_chosen": 1613.0,
+        "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+        "soft_label_near_equivalent": false,
+        "soft_label_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "suspicious": false,
+        "teacher_agreement": false,
+        "teacher_move": "d8b6",
+        "teacher_probability": 0.04599552,
+        "teacher_rank": 4,
+        "teacher_score": 1766.0,
+        "top_move": "d8c7",
+        "top_moves": [
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "d8c7",
+            "move_order_rank": 1,
+            "move_order_score": 1845,
+            "policy_probability": 0.05603878,
+            "raw_policy_rank": 1,
+            "raw_policy_score": 1845.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "h7h5",
+            "move_order_rank": 2,
+            "move_order_score": 1798,
+            "policy_probability": 0.04982635,
+            "raw_policy_rank": 2,
+            "raw_policy_score": 1798.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "g7g5",
+            "move_order_rank": 3,
+            "move_order_score": 1781,
+            "policy_probability": 0.0477531,
+            "raw_policy_rank": 3,
+            "raw_policy_score": 1781.0
+          }
+        ],
+        "top_score": 1845.0
+      },
+      "candidate_eval": 1613.0,
+      "candidate_pvs_move": true,
+      "candidate_rank_for_candidate_move": 21,
+      "candidate_score": 0.0,
+      "candidate_teacher_agreement": false,
+      "candidate_teacher_rank": 4,
+      "candidate_top_moves": [
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "d8c7",
+          "move_order_rank": 1,
+          "move_order_score": 1845,
+          "policy_probability": 0.05603878,
+          "raw_policy_rank": 1,
+          "raw_policy_score": 1845.0
+        },
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "h7h5",
+          "move_order_rank": 2,
+          "move_order_score": 1798,
+          "policy_probability": 0.04982635,
+          "raw_policy_rank": 2,
+          "raw_policy_score": 1798.0
+        },
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "g7g5",
+          "move_order_rank": 3,
+          "move_order_score": 1781,
+          "policy_probability": 0.0477531,
+          "raw_policy_rank": 3,
+          "raw_policy_score": 1781.0
+        }
+      ],
+      "candidate_top_score": 1613.0,
+      "case_category": "unlabeled",
+      "category": "unlabeled",
+      "chosen_move": "a6a5",
+      "decision_category": "unchanged_wrong",
+      "fen": "r2q1rk1/6pp/p1p1pn2/3p4/1P1P4/7N/PP1N1PPP/R4RK1 b - - 3 14",
+      "final_fen": "r2q1rk1/6pp/2p1pn2/p2p4/1P1P4/7N/PP1N1PPP/R4RK1 w - - 0 15",
+      "id": "edfbade66fc0d909394cdd71f25af7cf1666b3b7c74d3f238c5800822bbf5f6d",
+      "label_quality": "review",
+      "legal": true,
+      "material_gain": 0,
+      "pass": false,
+      "pvs_selected_move": true,
+      "reasons": [
+        "unexpected_move"
+      ],
+      "score_delta": 0.0,
+      "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+      "side": "black",
+      "suspicious": false,
+      "teacher_agreement": false,
+      "teacher_move": "d8b6",
+      "teacher_moves": [
+        "d8b6",
+        "f6e4",
+        "d8c7"
+      ]
+    },
+    {
+      "baseline": {
+        "chosen_move": "d2d1",
+        "final_fen": "r3nrk1/pp2bpp1/8/2p2Q1p/2PpPB2/5N2/4NPPP/3K1B1R b - - 0 19",
+        "legal": true,
+        "margin_vs_top": 0.0,
+        "material_gain": 900,
+        "pass": true,
+        "policy_probability_for_chosen": 1.0,
+        "pvs_selected_move": true,
+        "quiet_near_equivalent": false,
+        "quiet_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "rank_for_chosen": 1,
+        "reasons": [],
+        "score_for_chosen": -5192.0,
+        "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+        "soft_label_near_equivalent": false,
+        "soft_label_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "suspicious": false,
+        "teacher_agreement": true,
+        "teacher_move": "d2d1",
+        "teacher_probability": 1.0,
+        "teacher_rank": 1,
+        "teacher_score": -5192.0,
+        "top_move": "d2d1",
+        "top_moves": [
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "d2d1",
+            "move_order_rank": 1,
+            "move_order_score": -5192,
+            "policy_probability": 1.0,
+            "raw_policy_rank": 1,
+            "raw_policy_score": -5192.0
+          }
+        ],
+        "top_score": -5192.0
+      },
+      "baseline_eval": -5192.0,
+      "baseline_pvs_move": true,
+      "baseline_score": 1.0,
+      "baseline_teacher_agreement": true,
+      "baseline_teacher_rank": 1,
+      "baseline_top_score": -5192.0,
+      "candidate": {
+        "chosen_move": "d2d1",
+        "final_fen": "r3nrk1/pp2bpp1/8/2p2Q1p/2PpPB2/5N2/4NPPP/3K1B1R b - - 0 19",
+        "legal": true,
+        "margin_vs_top": 0.0,
+        "material_gain": 900,
+        "pass": true,
+        "policy_probability_for_chosen": 1.0,
+        "pvs_selected_move": true,
+        "quiet_near_equivalent": false,
+        "quiet_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "rank_for_chosen": 1,
+        "reasons": [],
+        "score_for_chosen": -5148.0,
+        "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+        "soft_label_near_equivalent": false,
+        "soft_label_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "suspicious": false,
+        "teacher_agreement": true,
+        "teacher_move": "d2d1",
+        "teacher_probability": 1.0,
+        "teacher_rank": 1,
+        "teacher_score": -5148.0,
+        "top_move": "d2d1",
+        "top_moves": [
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "d2d1",
+            "move_order_rank": 1,
+            "move_order_score": -5148,
+            "policy_probability": 1.0,
+            "raw_policy_rank": 1,
+            "raw_policy_score": -5148.0
+          }
+        ],
+        "top_score": -5148.0
+      },
+      "candidate_eval": -5148.0,
+      "candidate_pvs_move": true,
+      "candidate_rank_for_candidate_move": 1,
+      "candidate_score": 1.0,
+      "candidate_teacher_agreement": true,
+      "candidate_teacher_rank": 1,
+      "candidate_top_moves": [
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "d2d1",
+          "move_order_rank": 1,
+          "move_order_score": -5148,
+          "policy_probability": 1.0,
+          "raw_policy_rank": 1,
+          "raw_policy_score": -5148.0
+        }
+      ],
+      "candidate_top_score": -5148.0,
+      "case_category": "unlabeled",
+      "category": "unlabeled",
+      "chosen_move": "d2d1",
+      "decision_category": "unchanged_correct",
+      "fen": "r3nrk1/pp2bpp1/8/2p2Q1p/2PpPB2/5N2/3KNPPP/3q1B1R w - - 0 19",
+      "final_fen": "r3nrk1/pp2bpp1/8/2p2Q1p/2PpPB2/5N2/4NPPP/3K1B1R b - - 0 19",
+      "id": "ee231f5a40eeb1d7f95f9e57628937872627b37c571208cfc56c13c0728d17b8",
+      "label_quality": "clean",
+      "legal": true,
+      "material_gain": 900,
+      "pass": true,
+      "pvs_selected_move": true,
+      "reasons": [],
+      "score_delta": 0.0,
+      "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+      "side": "white",
+      "suspicious": false,
+      "teacher_agreement": true,
+      "teacher_move": "d2d1",
+      "teacher_moves": [
+        "d2d1"
+      ]
+    },
+    {
+      "baseline": {
+        "chosen_move": "f1f2",
+        "final_fen": "1r2k2r/pp4pp/5p1n/3Bpb2/4p3/2P5/R1P1NRPP/3Q2K1 b k - 0 16",
+        "legal": true,
+        "margin_vs_top": 0.0,
+        "material_gain": 335,
+        "pass": true,
+        "policy_probability_for_chosen": 0.9999799,
+        "pvs_selected_move": true,
+        "quiet_near_equivalent": false,
+        "quiet_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "rank_for_chosen": 1,
+        "reasons": [],
+        "score_for_chosen": 4334.0,
+        "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+        "soft_label_near_equivalent": false,
+        "soft_label_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "suspicious": false,
+        "teacher_agreement": true,
+        "teacher_move": "f1f2",
+        "teacher_probability": 0.0,
+        "teacher_rank": 3,
+        "teacher_score": -15015.0,
+        "top_move": "f1f2",
+        "top_moves": [
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "f1f2",
+            "move_order_rank": 1,
+            "move_order_score": 4334,
+            "policy_probability": 0.9999799,
+            "raw_policy_rank": 1,
+            "raw_policy_score": 4334.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "g1h1",
+            "move_order_rank": 2,
+            "move_order_score": 8,
+            "policy_probability": 2.01e-05,
+            "raw_policy_rank": 2,
+            "raw_policy_score": 8.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "g1f2",
+            "move_order_rank": 3,
+            "move_order_score": -15015,
+            "policy_probability": 0.0,
+            "raw_policy_rank": 3,
+            "raw_policy_score": -15015.0
+          }
+        ],
+        "top_score": 4334.0
+      },
+      "baseline_eval": 4334.0,
+      "baseline_pvs_move": true,
+      "baseline_score": 1.0,
+      "baseline_teacher_agreement": true,
+      "baseline_teacher_rank": 3,
+      "baseline_top_score": 4334.0,
+      "candidate": {
+        "chosen_move": "f1f2",
+        "final_fen": "1r2k2r/pp4pp/5p1n/3Bpb2/4p3/2P5/R1P1NRPP/3Q2K1 b k - 0 16",
+        "legal": true,
+        "margin_vs_top": 0.0,
+        "material_gain": 335,
+        "pass": true,
+        "policy_probability_for_chosen": 0.9999799,
+        "pvs_selected_move": true,
+        "quiet_near_equivalent": false,
+        "quiet_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "rank_for_chosen": 1,
+        "reasons": [],
+        "score_for_chosen": 4348.0,
+        "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+        "soft_label_near_equivalent": false,
+        "soft_label_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "suspicious": false,
+        "teacher_agreement": true,
+        "teacher_move": "f1f2",
+        "teacher_probability": 0.0,
+        "teacher_rank": 3,
+        "teacher_score": -15001.0,
+        "top_move": "f1f2",
+        "top_moves": [
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "f1f2",
+            "move_order_rank": 1,
+            "move_order_score": 4348,
+            "policy_probability": 0.9999799,
+            "raw_policy_rank": 1,
+            "raw_policy_score": 4348.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "g1h1",
+            "move_order_rank": 2,
+            "move_order_score": 22,
+            "policy_probability": 2.01e-05,
+            "raw_policy_rank": 2,
+            "raw_policy_score": 22.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "g1f2",
+            "move_order_rank": 3,
+            "move_order_score": -15001,
+            "policy_probability": 0.0,
+            "raw_policy_rank": 3,
+            "raw_policy_score": -15001.0
+          }
+        ],
+        "top_score": 4348.0
+      },
+      "candidate_eval": 4348.0,
+      "candidate_pvs_move": true,
+      "candidate_rank_for_candidate_move": 1,
+      "candidate_score": 1.0,
+      "candidate_teacher_agreement": true,
+      "candidate_teacher_rank": 3,
+      "candidate_top_moves": [
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "f1f2",
+          "move_order_rank": 1,
+          "move_order_score": 4348,
+          "policy_probability": 0.9999799,
+          "raw_policy_rank": 1,
+          "raw_policy_score": 4348.0
+        },
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "g1h1",
+          "move_order_rank": 2,
+          "move_order_score": 22,
+          "policy_probability": 2.01e-05,
+          "raw_policy_rank": 2,
+          "raw_policy_score": 22.0
+        },
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "g1f2",
+          "move_order_rank": 3,
+          "move_order_score": -15001,
+          "policy_probability": 0.0,
+          "raw_policy_rank": 3,
+          "raw_policy_score": -15001.0
+        }
+      ],
+      "candidate_top_score": 4348.0,
+      "case_category": "unlabeled",
+      "category": "unlabeled",
+      "chosen_move": "f1f2",
+      "decision_category": "unchanged_correct",
+      "fen": "1r2k2r/pp4pp/5p1n/3Bpb2/4p3/2P5/R1P1NbPP/3Q1RK1 w k - 0 16",
+      "final_fen": "1r2k2r/pp4pp/5p1n/3Bpb2/4p3/2P5/R1P1NRPP/3Q2K1 b k - 0 16",
+      "id": "efb77e65ad5994fc2152f761761f12c5c88bb892fb9d9cfef1271c0018470b07",
+      "label_quality": "clean",
+      "legal": true,
+      "material_gain": 335,
+      "pass": true,
+      "pvs_selected_move": true,
+      "reasons": [],
+      "score_delta": 0.0,
+      "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+      "side": "white",
+      "suspicious": false,
+      "teacher_agreement": true,
+      "teacher_move": "f1f2",
+      "teacher_moves": [
+        "g1f2",
+        "f1f2",
+        "g1h1"
+      ]
+    },
+    {
+      "baseline": {
+        "chosen_move": "b8a7",
+        "final_fen": "2r5/k7/8/2N4P/1R3K2/8/PP5P/8 w - - 5 47",
+        "legal": true,
+        "margin_vs_top": -4.0,
+        "material_gain": 0,
+        "pass": true,
+        "policy_probability_for_chosen": 0.33387175,
+        "pvs_selected_move": true,
+        "quiet_near_equivalent": false,
+        "quiet_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "rank_for_chosen": 2,
+        "reasons": [],
+        "score_for_chosen": -1183.0,
+        "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+        "soft_label_near_equivalent": false,
+        "soft_label_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "suspicious": false,
+        "teacher_agreement": true,
+        "teacher_move": "b8a8",
+        "teacher_probability": 0.33387175,
+        "teacher_rank": 2,
+        "teacher_score": -1183.0,
+        "top_move": "b8c7",
+        "top_moves": [
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "b8c7",
+            "move_order_rank": 1,
+            "move_order_score": -1179,
+            "policy_probability": 0.33722721,
+            "raw_policy_rank": 1,
+            "raw_policy_score": -1179.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "b8a7",
+            "move_order_rank": 2,
+            "move_order_score": -1183,
+            "policy_probability": 0.33387175,
+            "raw_policy_rank": 2,
+            "raw_policy_score": -1183.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "b8a8",
+            "move_order_rank": 3,
+            "move_order_score": -1189,
+            "policy_probability": 0.32890104,
+            "raw_policy_rank": 3,
+            "raw_policy_score": -1189.0
+          }
+        ],
+        "top_score": -1179.0
+      },
+      "baseline_eval": -1183.0,
+      "baseline_pvs_move": true,
+      "baseline_score": 1.0,
+      "baseline_teacher_agreement": true,
+      "baseline_teacher_rank": 2,
+      "baseline_top_score": -1183.0,
+      "candidate": {
+        "chosen_move": "b8a7",
+        "final_fen": "2r5/k7/8/2N4P/1R3K2/8/PP5P/8 w - - 5 47",
+        "legal": true,
+        "margin_vs_top": -52.0,
+        "material_gain": 0,
+        "pass": true,
+        "policy_probability_for_chosen": 0.30826147,
+        "pvs_selected_move": true,
+        "quiet_near_equivalent": false,
+        "quiet_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "rank_for_chosen": 3,
+        "reasons": [],
+        "score_for_chosen": -1227.0,
+        "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+        "soft_label_near_equivalent": false,
+        "soft_label_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "suspicious": false,
+        "teacher_agreement": true,
+        "teacher_move": "b8a8",
+        "teacher_probability": 0.30826147,
+        "teacher_rank": 3,
+        "teacher_score": -1227.0,
+        "top_move": "b8a8",
+        "top_moves": [
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "b8a8",
+            "move_order_rank": 1,
+            "move_order_score": -1175,
+            "policy_probability": 0.35105691,
+            "raw_policy_rank": 1,
+            "raw_policy_score": -1175.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "b8c7",
+            "move_order_rank": 2,
+            "move_order_score": -1187,
+            "policy_probability": 0.34068161,
+            "raw_policy_rank": 2,
+            "raw_policy_score": -1187.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "b8a7",
+            "move_order_rank": 3,
+            "move_order_score": -1227,
+            "policy_probability": 0.30826147,
+            "raw_policy_rank": 3,
+            "raw_policy_score": -1227.0
+          }
+        ],
+        "top_score": -1175.0
+      },
+      "candidate_eval": -1227.0,
+      "candidate_pvs_move": true,
+      "candidate_rank_for_candidate_move": 3,
+      "candidate_score": 1.0,
+      "candidate_teacher_agreement": true,
+      "candidate_teacher_rank": 3,
+      "candidate_top_moves": [
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "b8a8",
+          "move_order_rank": 1,
+          "move_order_score": -1175,
+          "policy_probability": 0.35105691,
+          "raw_policy_rank": 1,
+          "raw_policy_score": -1175.0
+        },
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "b8c7",
+          "move_order_rank": 2,
+          "move_order_score": -1187,
+          "policy_probability": 0.34068161,
+          "raw_policy_rank": 2,
+          "raw_policy_score": -1187.0
+        },
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "b8a7",
+          "move_order_rank": 3,
+          "move_order_score": -1227,
+          "policy_probability": 0.30826147,
+          "raw_policy_rank": 3,
+          "raw_policy_score": -1227.0
+        }
+      ],
+      "candidate_top_score": -1227.0,
+      "case_category": "unlabeled",
+      "category": "unlabeled",
+      "chosen_move": "b8a7",
+      "decision_category": "unchanged_correct",
+      "fen": "1kr5/8/8/2N4P/1R3K2/8/PP5P/8 b - - 4 46",
+      "final_fen": "2r5/k7/8/2N4P/1R3K2/8/PP5P/8 w - - 5 47",
+      "id": "f4e0afd1eba875fa8f9cf2372816d3288d8273aea16fa5f5411afe3bcb9f4b24",
+      "label_quality": "clean",
+      "legal": true,
+      "material_gain": 0,
+      "pass": true,
+      "pvs_selected_move": true,
+      "reasons": [],
+      "score_delta": 0.0,
+      "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+      "side": "black",
+      "suspicious": false,
+      "teacher_agreement": true,
+      "teacher_move": "b8a8",
+      "teacher_moves": [
+        "b8a7",
+        "b8a8",
+        "b8c7"
+      ]
+    },
+    {
+      "baseline": {
+        "chosen_move": "e2d1",
+        "final_fen": "1r6/pp5k/8/8/4p3/1QP5/N7/3K2n1 b - - 2 61",
+        "legal": true,
+        "margin_vs_top": 0.0,
+        "material_gain": 0,
+        "pass": false,
+        "policy_probability_for_chosen": 0.32920013,
+        "pvs_selected_move": true,
+        "quiet_near_equivalent": false,
+        "quiet_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "rank_for_chosen": 1,
+        "reasons": [
+          "unexpected_move"
+        ],
+        "score_for_chosen": 660.0,
+        "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+        "soft_label_near_equivalent": false,
+        "soft_label_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "suspicious": false,
+        "teacher_agreement": false,
+        "teacher_move": "e2d2",
+        "teacher_probability": 0.13284272,
+        "teacher_rank": 4,
+        "teacher_score": 297.0,
+        "top_move": "e2d1",
+        "top_moves": [
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "e2d1",
+            "move_order_rank": 1,
+            "move_order_score": 660,
+            "policy_probability": 0.32920013,
+            "raw_policy_rank": 1,
+            "raw_policy_score": 660.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "e2d2",
+            "move_order_rank": 2,
+            "move_order_score": 434,
+            "policy_probability": 0.18710424,
+            "raw_policy_rank": 2,
+            "raw_policy_score": 434.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "e2e3",
+            "move_order_rank": 3,
+            "move_order_score": 336,
+            "policy_probability": 0.14644733,
+            "raw_policy_rank": 3,
+            "raw_policy_score": 336.0
+          }
+        ],
+        "top_score": 660.0
+      },
+      "baseline_eval": 660.0,
+      "baseline_pvs_move": true,
+      "baseline_score": 0.0,
+      "baseline_teacher_agreement": false,
+      "baseline_teacher_rank": 4,
+      "baseline_top_score": 660.0,
+      "candidate": {
+        "chosen_move": "e2d1",
+        "final_fen": "1r6/pp5k/8/8/4p3/1QP5/N7/3K2n1 b - - 2 61",
+        "legal": true,
+        "margin_vs_top": 0.0,
+        "material_gain": 0,
+        "pass": false,
+        "policy_probability_for_chosen": 0.32543936,
+        "pvs_selected_move": true,
+        "quiet_near_equivalent": false,
+        "quiet_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "rank_for_chosen": 1,
+        "reasons": [
+          "unexpected_move"
+        ],
+        "score_for_chosen": 646.0,
+        "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+        "soft_label_near_equivalent": false,
+        "soft_label_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "suspicious": false,
+        "teacher_agreement": false,
+        "teacher_move": "e2d2",
+        "teacher_probability": 0.13132513,
+        "teacher_rank": 4,
+        "teacher_score": 283.0,
+        "top_move": "e2d1",
+        "top_moves": [
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "e2d1",
+            "move_order_rank": 1,
+            "move_order_score": 646,
+            "policy_probability": 0.32543936,
+            "raw_policy_rank": 1,
+            "raw_policy_score": 646.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "e2d2",
+            "move_order_rank": 2,
+            "move_order_score": 419,
+            "policy_probability": 0.18450492,
+            "raw_policy_rank": 2,
+            "raw_policy_score": 419.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "e2e3",
+            "move_order_rank": 3,
+            "move_order_score": 343,
+            "policy_probability": 0.15257803,
+            "raw_policy_rank": 3,
+            "raw_policy_score": 343.0
+          }
+        ],
+        "top_score": 646.0
+      },
+      "candidate_eval": 646.0,
+      "candidate_pvs_move": true,
+      "candidate_rank_for_candidate_move": 1,
+      "candidate_score": 0.0,
+      "candidate_teacher_agreement": false,
+      "candidate_teacher_rank": 4,
+      "candidate_top_moves": [
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "e2d1",
+          "move_order_rank": 1,
+          "move_order_score": 646,
+          "policy_probability": 0.32543936,
+          "raw_policy_rank": 1,
+          "raw_policy_score": 646.0
+        },
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "e2d2",
+          "move_order_rank": 2,
+          "move_order_score": 419,
+          "policy_probability": 0.18450492,
+          "raw_policy_rank": 2,
+          "raw_policy_score": 419.0
+        },
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "e2e3",
+          "move_order_rank": 3,
+          "move_order_score": 343,
+          "policy_probability": 0.15257803,
+          "raw_policy_rank": 3,
+          "raw_policy_score": 343.0
+        }
+      ],
+      "candidate_top_score": 646.0,
+      "case_category": "unlabeled",
+      "category": "unlabeled",
+      "chosen_move": "e2d1",
+      "decision_category": "unchanged_wrong",
+      "fen": "1r6/pp5k/8/8/4p3/1QP5/N3K3/6n1 w - - 1 61",
+      "final_fen": "1r6/pp5k/8/8/4p3/1QP5/N7/3K2n1 b - - 2 61",
+      "id": "fab598600cb02af4441454c5cc6a2153c31ff5e269ef33a8ee9a6febc882d497",
+      "label_quality": "review",
+      "legal": true,
+      "material_gain": 0,
+      "pass": false,
+      "pvs_selected_move": true,
+      "reasons": [
+        "unexpected_move"
+      ],
+      "score_delta": 0.0,
+      "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+      "side": "white",
+      "suspicious": false,
+      "teacher_agreement": false,
+      "teacher_move": "e2d2",
+      "teacher_moves": [
+        "e2f2",
+        "e2d2",
+        "e2e3"
+      ]
+    },
+    {
+      "baseline": {
+        "chosen_move": "c2b2",
+        "final_fen": "2r3k1/5n2/p7/3Q4/8/7p/RK6/6r1 b - - 4 49",
+        "legal": true,
+        "margin_vs_top": -41.0,
+        "material_gain": 0,
+        "pass": false,
+        "policy_probability_for_chosen": 0.16276085,
+        "pvs_selected_move": true,
+        "quiet_near_equivalent": false,
+        "quiet_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "rank_for_chosen": 2,
+        "reasons": [
+          "unexpected_move"
+        ],
+        "score_for_chosen": -517.0,
+        "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+        "soft_label_near_equivalent": false,
+        "soft_label_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "suspicious": false,
+        "teacher_agreement": false,
+        "teacher_move": "c2b3",
+        "teacher_probability": 0.14185167,
+        "teacher_rank": 3,
+        "teacher_score": -572.0,
+        "top_move": "c2d2",
+        "top_moves": [
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "c2d2",
+            "move_order_rank": 1,
+            "move_order_score": -476,
+            "policy_probability": 0.18032881,
+            "raw_policy_rank": 1,
+            "raw_policy_score": -476.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "c2b2",
+            "move_order_rank": 2,
+            "move_order_score": -517,
+            "policy_probability": 0.16276085,
+            "raw_policy_rank": 2,
+            "raw_policy_score": -517.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "c2b3",
+            "move_order_rank": 3,
+            "move_order_score": -572,
+            "policy_probability": 0.14185167,
+            "raw_policy_rank": 3,
+            "raw_policy_score": -572.0
+          }
+        ],
+        "top_score": -476.0
+      },
+      "baseline_eval": -517.0,
+      "baseline_pvs_move": true,
+      "baseline_score": 0.0,
+      "baseline_teacher_agreement": false,
+      "baseline_teacher_rank": 3,
+      "baseline_top_score": -517.0,
+      "candidate": {
+        "chosen_move": "c2b2",
+        "final_fen": "2r3k1/5n2/p7/3Q4/8/7p/RK6/6r1 b - - 4 49",
+        "legal": true,
+        "margin_vs_top": -41.0,
+        "material_gain": 0,
+        "pass": false,
+        "policy_probability_for_chosen": 0.15895722,
+        "pvs_selected_move": true,
+        "quiet_near_equivalent": false,
+        "quiet_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "rank_for_chosen": 2,
+        "reasons": [
+          "unexpected_move"
+        ],
+        "score_for_chosen": -517.0,
+        "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+        "soft_label_near_equivalent": false,
+        "soft_label_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "suspicious": false,
+        "teacher_agreement": false,
+        "teacher_move": "c2b3",
+        "teacher_probability": 0.15425933,
+        "teacher_rank": 3,
+        "teacher_score": -529.0,
+        "top_move": "c2d2",
+        "top_moves": [
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "c2d2",
+            "move_order_rank": 1,
+            "move_order_score": -476,
+            "policy_probability": 0.17611464,
+            "raw_policy_rank": 1,
+            "raw_policy_score": -476.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "c2b2",
+            "move_order_rank": 2,
+            "move_order_score": -517,
+            "policy_probability": 0.15895722,
+            "raw_policy_rank": 2,
+            "raw_policy_score": -517.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "c2b3",
+            "move_order_rank": 3,
+            "move_order_score": -529,
+            "policy_probability": 0.15425933,
+            "raw_policy_rank": 3,
+            "raw_policy_score": -529.0
+          }
+        ],
+        "top_score": -476.0
+      },
+      "candidate_eval": -517.0,
+      "candidate_pvs_move": true,
+      "candidate_rank_for_candidate_move": 2,
+      "candidate_score": 0.0,
+      "candidate_teacher_agreement": false,
+      "candidate_teacher_rank": 3,
+      "candidate_top_moves": [
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "c2d2",
+          "move_order_rank": 1,
+          "move_order_score": -476,
+          "policy_probability": 0.17611464,
+          "raw_policy_rank": 1,
+          "raw_policy_score": -476.0
+        },
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "c2b2",
+          "move_order_rank": 2,
+          "move_order_score": -517,
+          "policy_probability": 0.15895722,
+          "raw_policy_rank": 2,
+          "raw_policy_score": -517.0
+        },
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "c2b3",
+          "move_order_rank": 3,
+          "move_order_score": -529,
+          "policy_probability": 0.15425933,
+          "raw_policy_rank": 3,
+          "raw_policy_score": -529.0
+        }
+      ],
+      "candidate_top_score": -517.0,
+      "case_category": "unlabeled",
+      "category": "unlabeled",
+      "chosen_move": "c2b2",
+      "decision_category": "unchanged_wrong",
+      "fen": "2r3k1/5n2/p7/3Q4/8/7p/R1K5/6r1 w - - 3 49",
+      "final_fen": "2r3k1/5n2/p7/3Q4/8/7p/RK6/6r1 b - - 4 49",
+      "id": "fb8d9ee7528115fab94013b841b23ebbaf37eee7ba879c2d1daf5e41d6180c0d",
+      "label_quality": "review",
+      "legal": true,
+      "material_gain": 0,
+      "pass": false,
+      "pvs_selected_move": true,
+      "reasons": [
+        "unexpected_move"
+      ],
+      "score_delta": 0.0,
+      "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+      "side": "white",
+      "suspicious": false,
+      "teacher_agreement": false,
+      "teacher_move": "c2b3",
+      "teacher_moves": [
+        "c2b3",
+        "c2d3",
+        "c2d2"
+      ]
+    },
+    {
+      "baseline": {
+        "chosen_move": "a4a3",
+        "final_fen": "r4rk1/7p/2p5/2P1Bbp1/2PR4/p3p3/PP2P2P/R5K1 w - - 0 23",
+        "legal": true,
+        "margin_vs_top": -303.0,
+        "material_gain": 0,
+        "pass": false,
+        "policy_probability_for_chosen": 0.02465848,
+        "pvs_selected_move": true,
+        "quiet_near_equivalent": false,
+        "quiet_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "rank_for_chosen": 21,
+        "reasons": [
+          "unexpected_move"
+        ],
+        "score_for_chosen": -240.0,
+        "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+        "soft_label_near_equivalent": false,
+        "soft_label_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "suspicious": false,
+        "teacher_agreement": false,
+        "teacher_move": "a8a5",
+        "teacher_probability": 0.03543219,
+        "teacher_rank": 16,
+        "teacher_score": -95.0,
+        "top_move": "h7h5",
+        "top_moves": [
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "h7h5",
+            "move_order_rank": 1,
+            "move_order_score": 63,
+            "policy_probability": 0.05259499,
+            "raw_policy_rank": 1,
+            "raw_policy_score": 63.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "f5e4",
+            "move_order_rank": 2,
+            "move_order_score": 57,
+            "policy_probability": 0.05181195,
+            "raw_policy_rank": 2,
+            "raw_policy_score": 57.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "f8d8",
+            "move_order_rank": 3,
+            "move_order_score": 37,
+            "policy_probability": 0.04928505,
+            "raw_policy_rank": 3,
+            "raw_policy_score": 37.0
+          }
+        ],
+        "top_score": 63.0
+      },
+      "baseline_eval": -240.0,
+      "baseline_pvs_move": true,
+      "baseline_score": 0.0,
+      "baseline_teacher_agreement": false,
+      "baseline_teacher_rank": 16,
+      "baseline_top_score": -240.0,
+      "candidate": {
+        "chosen_move": "a4a3",
+        "final_fen": "r4rk1/7p/2p5/2P1Bbp1/2PR4/p3p3/PP2P2P/R5K1 w - - 0 23",
+        "legal": true,
+        "margin_vs_top": -312.0,
+        "material_gain": 0,
+        "pass": false,
+        "policy_probability_for_chosen": 0.02444455,
+        "pvs_selected_move": true,
+        "quiet_near_equivalent": false,
+        "quiet_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "rank_for_chosen": 22,
+        "reasons": [
+          "unexpected_move"
+        ],
+        "score_for_chosen": -291.0,
+        "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+        "soft_label_near_equivalent": false,
+        "soft_label_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "suspicious": false,
+        "teacher_agreement": false,
+        "teacher_move": "a8a5",
+        "teacher_probability": 0.03512479,
+        "teacher_rank": 17,
+        "teacher_score": -146.0,
+        "top_move": "f5e4",
+        "top_moves": [
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "f5e4",
+            "move_order_rank": 1,
+            "move_order_score": 21,
+            "policy_probability": 0.0533251,
+            "raw_policy_rank": 1,
+            "raw_policy_score": 21.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "h7h5",
+            "move_order_rank": 2,
+            "move_order_score": 13,
+            "policy_probability": 0.05226919,
+            "raw_policy_rank": 2,
+            "raw_policy_score": 13.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "f8d8",
+            "move_order_rank": 3,
+            "move_order_score": -14,
+            "policy_probability": 0.04885746,
+            "raw_policy_rank": 3,
+            "raw_policy_score": -14.0
+          }
+        ],
+        "top_score": 21.0
+      },
+      "candidate_eval": -291.0,
+      "candidate_pvs_move": true,
+      "candidate_rank_for_candidate_move": 22,
+      "candidate_score": 0.0,
+      "candidate_teacher_agreement": false,
+      "candidate_teacher_rank": 17,
+      "candidate_top_moves": [
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "f5e4",
+          "move_order_rank": 1,
+          "move_order_score": 21,
+          "policy_probability": 0.0533251,
+          "raw_policy_rank": 1,
+          "raw_policy_score": 21.0
+        },
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "h7h5",
+          "move_order_rank": 2,
+          "move_order_score": 13,
+          "policy_probability": 0.05226919,
+          "raw_policy_rank": 2,
+          "raw_policy_score": 13.0
+        },
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "f8d8",
+          "move_order_rank": 3,
+          "move_order_score": -14,
+          "policy_probability": 0.04885746,
+          "raw_policy_rank": 3,
+          "raw_policy_score": -14.0
+        }
+      ],
+      "candidate_top_score": -291.0,
+      "case_category": "smoke",
+      "category": "smoke",
+      "chosen_move": "a4a3",
+      "decision_category": "unchanged_wrong",
+      "fen": "r4rk1/7p/2p5/2P1Bbp1/p1PR4/4p3/PP2P2P/R5K1 b - - 1 22",
+      "final_fen": "r4rk1/7p/2p5/2P1Bbp1/2PR4/p3p3/PP2P2P/R5K1 w - - 0 23",
+      "id": "559ff6b9dc92dd9d057f63ac91de2bf24d3517c0d9369ad425ed7c33c80e5131_smoke",
+      "label_quality": "review",
+      "legal": true,
+      "material_gain": 0,
+      "pass": false,
+      "pvs_selected_move": true,
+      "reasons": [
+        "unexpected_move"
+      ],
+      "score_delta": 0.0,
+      "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+      "side": "black",
+      "suspicious": false,
+      "teacher_agreement": false,
+      "teacher_move": "a8a5",
+      "teacher_moves": [
+        "a8a5",
+        "f5e4",
+        "f5b1"
+      ]
+    },
+    {
+      "baseline": {
+        "chosen_move": "a4a3",
+        "final_fen": "5rk1/7p/r1p5/2P1BbP1/2PR4/p3p3/PP2P3/R5K1 w - - 0 25",
+        "legal": true,
+        "margin_vs_top": -300.0,
+        "material_gain": 0,
+        "pass": false,
+        "policy_probability_for_chosen": 0.02725408,
+        "pvs_selected_move": true,
+        "quiet_near_equivalent": false,
+        "quiet_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "rank_for_chosen": 18,
+        "reasons": [
+          "unexpected_move"
+        ],
+        "score_for_chosen": -538.0,
+        "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+        "soft_label_near_equivalent": false,
+        "soft_label_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "suspicious": false,
+        "teacher_agreement": false,
+        "teacher_move": "a6a5",
+        "teacher_probability": 0.04504686,
+        "teacher_rank": 12,
+        "teacher_score": -337.0,
+        "top_move": "h7h5",
+        "top_moves": [
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "h7h5",
+            "move_order_rank": 1,
+            "move_order_score": -238,
+            "policy_probability": 0.05769689,
+            "raw_policy_rank": 1,
+            "raw_policy_score": -238.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "f5e4",
+            "move_order_rank": 2,
+            "move_order_score": -241,
+            "policy_probability": 0.05726578,
+            "raw_policy_rank": 2,
+            "raw_policy_score": -241.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "f8d8",
+            "move_order_rank": 3,
+            "move_order_score": -256,
+            "policy_probability": 0.05515808,
+            "raw_policy_rank": 3,
+            "raw_policy_score": -256.0
+          }
+        ],
+        "top_score": -238.0
+      },
+      "baseline_eval": -538.0,
+      "baseline_pvs_move": true,
+      "baseline_score": 0.0,
+      "baseline_teacher_agreement": false,
+      "baseline_teacher_rank": 12,
+      "baseline_top_score": -538.0,
+      "candidate": {
+        "chosen_move": "a4a3",
+        "final_fen": "5rk1/7p/r1p5/2P1BbP1/2PR4/p3p3/PP2P3/R5K1 w - - 0 25",
+        "legal": true,
+        "margin_vs_top": -312.0,
+        "material_gain": 0,
+        "pass": false,
+        "policy_probability_for_chosen": 0.02698675,
+        "pvs_selected_move": true,
+        "quiet_near_equivalent": false,
+        "quiet_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "rank_for_chosen": 19,
+        "reasons": [
+          "unexpected_move"
+        ],
+        "score_for_chosen": -589.0,
+        "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+        "soft_label_near_equivalent": false,
+        "soft_label_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "suspicious": false,
+        "teacher_agreement": false,
+        "teacher_move": "a6a5",
+        "teacher_probability": 0.04471666,
+        "teacher_rank": 12,
+        "teacher_score": -387.0,
+        "top_move": "f5e4",
+        "top_moves": [
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "f5e4",
+            "move_order_rank": 1,
+            "move_order_score": -277,
+            "policy_probability": 0.05887085,
+            "raw_policy_rank": 1,
+            "raw_policy_score": -277.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "h7h5",
+            "move_order_rank": 2,
+            "move_order_score": -289,
+            "policy_probability": 0.05713095,
+            "raw_policy_rank": 2,
+            "raw_policy_score": -289.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "f8d8",
+            "move_order_rank": 3,
+            "move_order_score": -306,
+            "policy_probability": 0.05475376,
+            "raw_policy_rank": 3,
+            "raw_policy_score": -306.0
+          }
+        ],
+        "top_score": -277.0
+      },
+      "candidate_eval": -589.0,
+      "candidate_pvs_move": true,
+      "candidate_rank_for_candidate_move": 19,
+      "candidate_score": 0.0,
+      "candidate_teacher_agreement": false,
+      "candidate_teacher_rank": 12,
+      "candidate_top_moves": [
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "f5e4",
+          "move_order_rank": 1,
+          "move_order_score": -277,
+          "policy_probability": 0.05887085,
+          "raw_policy_rank": 1,
+          "raw_policy_score": -277.0
+        },
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "h7h5",
+          "move_order_rank": 2,
+          "move_order_score": -289,
+          "policy_probability": 0.05713095,
+          "raw_policy_rank": 2,
+          "raw_policy_score": -289.0
+        },
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "f8d8",
+          "move_order_rank": 3,
+          "move_order_score": -306,
+          "policy_probability": 0.05475376,
+          "raw_policy_rank": 3,
+          "raw_policy_score": -306.0
+        }
+      ],
+      "candidate_top_score": -589.0,
+      "case_category": "smoke",
+      "category": "smoke",
+      "chosen_move": "a4a3",
+      "decision_category": "unchanged_wrong",
+      "fen": "5rk1/7p/r1p5/2P1BbP1/p1PR4/4p3/PP2P3/R5K1 b - - 0 24",
+      "final_fen": "5rk1/7p/r1p5/2P1BbP1/2PR4/p3p3/PP2P3/R5K1 w - - 0 25",
+      "id": "1e9fe804a51079c6889a02b1e08af706e3664a9cdc92e186c9ca169fd97b7737_smoke",
+      "label_quality": "review",
+      "legal": true,
+      "material_gain": 0,
+      "pass": false,
+      "pvs_selected_move": true,
+      "reasons": [
+        "unexpected_move"
+      ],
+      "score_delta": 0.0,
+      "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+      "side": "black",
+      "suspicious": false,
+      "teacher_agreement": false,
+      "teacher_move": "a6a5",
+      "teacher_moves": [
+        "a6a5",
+        "f5e4",
+        "f5b1"
+      ]
+    },
+    {
+      "baseline": {
+        "chosen_move": "a1a2",
+        "final_fen": "r1r4k/pp1p1ppp/2n4n/2p1p3/P1P1P3/3B1P2/RP1PK2P/2BQ3R b - - 2 13",
+        "legal": true,
+        "margin_vs_top": -233.0,
+        "material_gain": 0,
+        "pass": false,
+        "policy_probability_for_chosen": 0.03865633,
+        "pvs_selected_move": true,
+        "quiet_near_equivalent": false,
+        "quiet_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "rank_for_chosen": 18,
+        "reasons": [
+          "unexpected_move"
+        ],
+        "score_for_chosen": 1745.0,
+        "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+        "soft_label_near_equivalent": false,
+        "soft_label_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "suspicious": false,
+        "teacher_agreement": false,
+        "teacher_move": "e2e1",
+        "teacher_probability": 0.04304347,
+        "teacher_rank": 12,
+        "teacher_score": 1788.0,
+        "top_move": "b2b4",
+        "top_moves": [
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "b2b4",
+            "move_order_rank": 1,
+            "move_order_score": 1978,
+            "policy_probability": 0.06921451,
+            "raw_policy_rank": 1,
+            "raw_policy_score": 1978.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "b2b3",
+            "move_order_rank": 2,
+            "move_order_score": 1917,
+            "policy_probability": 0.05942473,
+            "raw_policy_rank": 2,
+            "raw_policy_score": 1917.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "f3f4",
+            "move_order_rank": 3,
+            "move_order_score": 1887,
+            "policy_probability": 0.05513091,
+            "raw_policy_rank": 3,
+            "raw_policy_score": 1887.0
+          }
+        ],
+        "top_score": 1978.0
+      },
+      "baseline_eval": 1745.0,
+      "baseline_pvs_move": true,
+      "baseline_score": 0.0,
+      "baseline_teacher_agreement": false,
+      "baseline_teacher_rank": 12,
+      "baseline_top_score": 1745.0,
+      "candidate": {
+        "chosen_move": "a1a2",
+        "final_fen": "r1r4k/pp1p1ppp/2n4n/2p1p3/P1P1P3/3B1P2/RP1PK2P/2BQ3R b - - 2 13",
+        "legal": true,
+        "margin_vs_top": -233.0,
+        "material_gain": 0,
+        "pass": false,
+        "policy_probability_for_chosen": 0.03847828,
+        "pvs_selected_move": true,
+        "quiet_near_equivalent": false,
+        "quiet_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "rank_for_chosen": 18,
+        "reasons": [
+          "unexpected_move"
+        ],
+        "score_for_chosen": 1781.0,
+        "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+        "soft_label_near_equivalent": false,
+        "soft_label_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "suspicious": false,
+        "teacher_agreement": false,
+        "teacher_move": "e2e1",
+        "teacher_probability": 0.04371075,
+        "teacher_rank": 11,
+        "teacher_score": 1832.0,
+        "top_move": "b2b4",
+        "top_moves": [
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "b2b4",
+            "move_order_rank": 1,
+            "move_order_score": 2014,
+            "policy_probability": 0.06889572,
+            "raw_policy_rank": 1,
+            "raw_policy_score": 2014.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "b2b3",
+            "move_order_rank": 2,
+            "move_order_score": 1953,
+            "policy_probability": 0.05915103,
+            "raw_policy_rank": 2,
+            "raw_policy_score": 1953.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "f3f4",
+            "move_order_rank": 3,
+            "move_order_score": 1923,
+            "policy_probability": 0.05487698,
+            "raw_policy_rank": 3,
+            "raw_policy_score": 1923.0
+          }
+        ],
+        "top_score": 2014.0
+      },
+      "candidate_eval": 1781.0,
+      "candidate_pvs_move": true,
+      "candidate_rank_for_candidate_move": 18,
+      "candidate_score": 0.0,
+      "candidate_teacher_agreement": false,
+      "candidate_teacher_rank": 11,
+      "candidate_top_moves": [
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "b2b4",
+          "move_order_rank": 1,
+          "move_order_score": 2014,
+          "policy_probability": 0.06889572,
+          "raw_policy_rank": 1,
+          "raw_policy_score": 2014.0
+        },
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "b2b3",
+          "move_order_rank": 2,
+          "move_order_score": 1953,
+          "policy_probability": 0.05915103,
+          "raw_policy_rank": 2,
+          "raw_policy_score": 1953.0
+        },
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "f3f4",
+          "move_order_rank": 3,
+          "move_order_score": 1923,
+          "policy_probability": 0.05487698,
+          "raw_policy_rank": 3,
+          "raw_policy_score": 1923.0
+        }
+      ],
+      "candidate_top_score": 1781.0,
+      "case_category": "smoke",
+      "category": "smoke",
+      "chosen_move": "a1a2",
+      "decision_category": "unchanged_wrong",
+      "fen": "r1r4k/pp1p1ppp/2n4n/2p1p3/P1P1P3/3B1P2/1P1PK2P/R1BQ3R w - - 1 13",
+      "final_fen": "r1r4k/pp1p1ppp/2n4n/2p1p3/P1P1P3/3B1P2/RP1PK2P/2BQ3R b - - 2 13",
+      "id": "cdd62e2dc564b971cdcb6638383846db50fdacb2756923409f92cfed087324b5_smoke",
+      "label_quality": "review",
+      "legal": true,
+      "material_gain": 0,
+      "pass": false,
+      "pvs_selected_move": true,
+      "reasons": [
+        "unexpected_move"
+      ],
+      "score_delta": 0.0,
+      "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+      "side": "white",
+      "suspicious": false,
+      "teacher_agreement": false,
+      "teacher_move": "e2e1",
+      "teacher_moves": [
+        "e2e1",
+        "d1g1",
+        "e2f2"
+      ]
+    },
+    {
+      "baseline": {
+        "chosen_move": "d3c3",
+        "final_fen": "4r1k1/8/8/4n3/8/2K5/r7/8 b - - 9 58",
+        "legal": true,
+        "margin_vs_top": -291.0,
+        "material_gain": 0,
+        "pass": true,
+        "policy_probability_for_chosen": 0.17834474,
+        "pvs_selected_move": true,
+        "quiet_near_equivalent": false,
+        "quiet_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "rank_for_chosen": 4,
+        "reasons": [],
+        "score_for_chosen": -1934.0,
+        "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+        "soft_label_near_equivalent": false,
+        "soft_label_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "suspicious": false,
+        "teacher_agreement": true,
+        "teacher_move": "d3d4",
+        "teacher_probability": 0.26407111,
+        "teacher_rank": 2,
+        "teacher_score": -1777.0,
+        "top_move": "d3e4",
+        "top_moves": [
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "d3e4",
+            "move_order_rank": 1,
+            "move_order_score": -1643,
+            "policy_probability": 0.36915568,
+            "raw_policy_rank": 1,
+            "raw_policy_score": -1643.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "d3d4",
+            "move_order_rank": 2,
+            "move_order_score": -1777,
+            "policy_probability": 0.26407111,
+            "raw_policy_rank": 2,
+            "raw_policy_score": -1777.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "d3e3",
+            "move_order_rank": 3,
+            "move_order_score": -1912,
+            "policy_probability": 0.18842847,
+            "raw_policy_rank": 3,
+            "raw_policy_score": -1912.0
+          }
+        ],
+        "top_score": -1643.0
+      },
+      "baseline_eval": -1934.0,
+      "baseline_pvs_move": true,
+      "baseline_score": 1.0,
+      "baseline_teacher_agreement": true,
+      "baseline_teacher_rank": 2,
+      "baseline_top_score": -1934.0,
+      "candidate": {
+        "chosen_move": "d3c3",
+        "final_fen": "4r1k1/8/8/4n3/8/2K5/r7/8 b - - 9 58",
+        "legal": true,
+        "margin_vs_top": -291.0,
+        "material_gain": 0,
+        "pass": true,
+        "policy_probability_for_chosen": 0.17817822,
+        "pvs_selected_move": true,
+        "quiet_near_equivalent": false,
+        "quiet_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "rank_for_chosen": 4,
+        "reasons": [],
+        "score_for_chosen": -1934.0,
+        "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+        "soft_label_near_equivalent": false,
+        "soft_label_static_audit": {
+          "accepted": false,
+          "applied": false,
+          "cp_window": 50,
+          "reason": ""
+        },
+        "suspicious": false,
+        "teacher_agreement": true,
+        "teacher_move": "d3d4",
+        "teacher_probability": 0.25411434,
+        "teacher_rank": 2,
+        "teacher_score": -1792.0,
+        "top_move": "d3e4",
+        "top_moves": [
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "d3e4",
+            "move_order_rank": 1,
+            "move_order_score": -1643,
+            "policy_probability": 0.368811,
+            "raw_policy_rank": 1,
+            "raw_policy_score": -1643.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "d3d4",
+            "move_order_rank": 2,
+            "move_order_score": -1792,
+            "policy_probability": 0.25411434,
+            "raw_policy_rank": 2,
+            "raw_policy_score": -1792.0
+          },
+          {
+            "legal_move_bonus_penalty": 0,
+            "move": "d3e3",
+            "move_order_rank": 3,
+            "move_order_score": -1890,
+            "policy_probability": 0.19889644,
+            "raw_policy_rank": 3,
+            "raw_policy_score": -1890.0
+          }
+        ],
+        "top_score": -1643.0
+      },
+      "candidate_eval": -1934.0,
+      "candidate_pvs_move": true,
+      "candidate_rank_for_candidate_move": 4,
+      "candidate_score": 1.0,
+      "candidate_teacher_agreement": true,
+      "candidate_teacher_rank": 2,
+      "candidate_top_moves": [
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "d3e4",
+          "move_order_rank": 1,
+          "move_order_score": -1643,
+          "policy_probability": 0.368811,
+          "raw_policy_rank": 1,
+          "raw_policy_score": -1643.0
+        },
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "d3d4",
+          "move_order_rank": 2,
+          "move_order_score": -1792,
+          "policy_probability": 0.25411434,
+          "raw_policy_rank": 2,
+          "raw_policy_score": -1792.0
+        },
+        {
+          "legal_move_bonus_penalty": 0,
+          "move": "d3e3",
+          "move_order_rank": 3,
+          "move_order_score": -1890,
+          "policy_probability": 0.19889644,
+          "raw_policy_rank": 3,
+          "raw_policy_score": -1890.0
+        }
+      ],
+      "candidate_top_score": -1934.0,
+      "case_category": "smoke",
+      "category": "smoke",
+      "chosen_move": "d3c3",
+      "decision_category": "unchanged_correct",
+      "fen": "4r1k1/8/8/4n3/8/3K4/r7/8 w - - 8 58",
+      "final_fen": "4r1k1/8/8/4n3/8/2K5/r7/8 b - - 9 58",
+      "id": "d84deca19657d936dbc2c6ee0906321a94990c81de5014e0a9b87949a560c27f_smoke",
+      "label_quality": "review",
+      "legal": true,
+      "material_gain": 0,
+      "pass": true,
+      "pvs_selected_move": true,
+      "reasons": [],
+      "score_delta": 0.0,
+      "selected_reason": "alpha_beta_with_nnue_like_sparse_eval",
+      "side": "white",
+      "suspicious": false,
+      "teacher_agreement": true,
+      "teacher_move": "d3d4",
+      "teacher_moves": [
+        "d3d4",
+        "d3e4",
+        "d3c3"
+      ]
+    }
+  ],
+  "cases_passed": 7,
+  "cases_total": 18,
+  "castling_floor": {
+    "baseline_pass": 2,
+    "baseline_score": 0.5,
+    "candidate_pass": 2,
+    "candidate_score": 0.5,
+    "case_count": 4,
+    "enabled": true,
+    "regressed": false,
+    "rows": [
+      {
+        "baseline_move": "d4c5",
+        "baseline_pass": false,
+        "candidate_move": "d4c5",
+        "candidate_pass": false,
+        "expected_uci_any": [
+          "e1g1"
+        ],
+        "fen": "r3k2r/pppq1ppp/2n2n2/2bpp3/2BPP3/2N2N2/PPPQ1PPP/R3K2R w KQkq - 0 1",
+        "id": "castle_kingside_white",
+        "must_not_uci_any": [],
+        "side": "white"
+      },
+      {
+        "baseline_move": "e1g1",
+        "baseline_pass": true,
+        "candidate_move": "e1g1",
+        "candidate_pass": true,
+        "expected_uci_any": [
+          "e1c1",
+          "e1g1"
+        ],
+        "fen": "r3k2r/pppq1ppp/2n2n2/3pp3/3PP3/2N2N2/PPPQBPPP/R3K2R w KQkq - 0 1",
+        "id": "castle_queenside_white",
+        "must_not_uci_any": [],
+        "side": "white"
+      },
+      {
+        "baseline_move": "d5c4",
+        "baseline_pass": false,
+        "candidate_move": "d5c4",
+        "candidate_pass": false,
+        "expected_uci_any": [
+          "e8g8"
+        ],
+        "fen": "r3k2r/pppq1ppp/2n2n2/2bpp3/2BPP3/2N2N2/PPPQ1PPP/R3K2R b KQkq - 1 1",
+        "id": "castle_kingside_black",
+        "must_not_uci_any": [],
+        "side": "black"
+      },
+      {
+        "baseline_move": "e1g1",
+        "baseline_pass": true,
+        "candidate_move": "e1g1",
+        "candidate_pass": true,
+        "expected_uci_any": [],
+        "fen": "r3kbnr/ppp1pppp/8/3q4/8/8/PPPP1PPP/RNB1K2R w KQkq - 0 1",
+        "id": "castle_forbidden_under_attack",
+        "must_not_uci_any": [
+          "e1g1"
+        ],
+        "side": "white"
+      }
+    ],
+    "score_delta": 0.0
+  },
+  "endgame_score": 0.0,
+  "engine": "experiment 5:nnue",
+  "finished_at": "2026-05-13T13:20:03.106759Z",
+  "illegal_rate": 0.0,
+  "leakage_guard": {
+    "held_out_in_training": false,
+    "held_out_rows": 14,
+    "overlap_count": 0,
+    "overlap_examples": [],
+    "train_rows": 31,
+    "validation_rows": 0
+  },
+  "legal_rate": 1.0,
+  "min_case_pass_rate": 0.7,
+  "ok": true,
+  "pass": false,
+  "promotion_gate": {
+    "allow_stage_without_benchmark": true,
+    "blocked_by_gate_skipped": true,
+    "blocked_by_strength_gate": true,
+    "candidate_can_be_production_promoted": false,
+    "candidate_can_be_promoted": false,
+    "candidate_can_be_shadowed": false,
+    "candidate_can_be_staged": false,
+    "passed": false,
+    "production_reasons": [
+      "benchmark_report_missing_for_shadow_or_production"
+    ],
+    "shadow_reasons": [
+      "benchmark_report_missing_for_shadow_or_production"
+    ],
+    "stage_reasons": [
+      "deterministic_case_pass_rate_too_low",
+      "candidate_score_not_above_baseline"
+    ]
+  },
+  "promotion_gate_supported": true,
+  "promotion_report_consistency": {
+    "benchmark_report_path": "",
+    "candidate_architecture": "nnue-like-sparse-accumulator-v1",
+    "candidate_path": "<repo>/docs/games/2026-05-13_exp5_normal_retrain_smoke_v11/repeatability_gate/run_1_seed_31/candidate/chess_experiment_5_nnue.json",
+    "candidate_sample_count": 1945,
+    "candidate_version": 1,
+    "engine": "experiment 5:nnue",
+    "expected_architecture": "nnue-like-sparse-accumulator-v1",
+    "pass": true,
+    "reasons": []
+  },
+  "pvs_selected_move_rate": 1.0,
+  "reasons": [
+    "deterministic_case_pass_rate_too_low",
+    "candidate_score_not_above_baseline",
+    "benchmark_report_missing_for_shadow_or_production"
+  ],
+  "safety_guard": {
+    "endgame_not_regressed": true,
+    "illegal_rate_zero": true,
+    "pass": true,
+    "score_rate_not_below_baseline": true,
+    "suspicious_rate_not_worse": true,
+    "tactic_not_regressed": true
+  },
+  "score_delta": 0.0,
+  "search_profile": "fixed_depth_strong",
+  "smoke_audit": [
+    {
+      "baseline_move": "a4a3",
+      "candidate_move": "a4a3",
+      "expected_or_teacher_move": "a8a5",
+      "failure_reason": "baseline_also_fail",
+      "fen": "r4rk1/7p/2p5/2P1Bbp1/p1PR4/4p3/PP2P2P/R5K1 b - - 1 22",
+      "smoke_case_id": "559ff6b9dc92dd9d057f63ac91de2bf24d3517c0d9369ad425ed7c33c80e5131_smoke"
+    },
+    {
+      "baseline_move": "a4a3",
+      "candidate_move": "a4a3",
+      "expected_or_teacher_move": "a6a5",
+      "failure_reason": "baseline_also_fail",
+      "fen": "5rk1/7p/r1p5/2P1BbP1/p1PR4/4p3/PP2P3/R5K1 b - - 0 24",
+      "smoke_case_id": "1e9fe804a51079c6889a02b1e08af706e3664a9cdc92e186c9ca169fd97b7737_smoke"
+    },
+    {
+      "baseline_move": "a1a2",
+      "candidate_move": "a1a2",
+      "expected_or_teacher_move": "e2e1",
+      "failure_reason": "baseline_also_fail",
+      "fen": "r1r4k/pp1p1ppp/2n4n/2p1p3/P1P1P3/3B1P2/1P1PK2P/R1BQ3R w - - 1 13",
+      "smoke_case_id": "cdd62e2dc564b971cdcb6638383846db50fdacb2756923409f92cfed087324b5_smoke"
+    },
+    {
+      "baseline_move": "d3c3",
+      "candidate_move": "d3c3",
+      "expected_or_teacher_move": "d3d4",
+      "failure_reason": "multi_good_tie",
+      "fen": "4r1k1/8/8/4n3/8/3K4/r7/8 w - - 8 58",
+      "smoke_case_id": "d84deca19657d936dbc2c6ee0906321a94990c81de5014e0a9b87949a560c27f_smoke"
+    }
+  ],
+  "smoke_candidate_fail_count": 0,
+  "smoke_candidates": [
+    {
+      "baseline_move": "a4a3",
+      "candidate_move": "a4a3",
+      "case_id": "559ff6b9dc92dd9d057f63ac91de2bf24d3517c0d9369ad425ed7c33c80e5131_smoke",
+      "expected_or_teacher_move": "a8a5",
+      "failure_reason": "baseline_also_fail",
+      "fen": "r4rk1/7p/2p5/2P1Bbp1/p1PR4/4p3/PP2P2P/R5K1 b - - 1 22"
+    },
+    {
+      "baseline_move": "a4a3",
+      "candidate_move": "a4a3",
+      "case_id": "1e9fe804a51079c6889a02b1e08af706e3664a9cdc92e186c9ca169fd97b7737_smoke",
+      "expected_or_teacher_move": "a6a5",
+      "failure_reason": "baseline_also_fail",
+      "fen": "5rk1/7p/r1p5/2P1BbP1/p1PR4/4p3/PP2P3/R5K1 b - - 0 24"
+    },
+    {
+      "baseline_move": "a1a2",
+      "candidate_move": "a1a2",
+      "case_id": "cdd62e2dc564b971cdcb6638383846db50fdacb2756923409f92cfed087324b5_smoke",
+      "expected_or_teacher_move": "e2e1",
+      "failure_reason": "baseline_also_fail",
+      "fen": "r1r4k/pp1p1ppp/2n4n/2p1p3/P1P1P3/3B1P2/1P1PK2P/R1BQ3R w - - 1 13"
+    }
+  ],
+  "smoke_case_too_hard_count": 0,
+  "smoke_score": 0.25,
+  "standard_policy": {
+    "common_safety_floor_shared": true,
+    "exp5_specific_deterministic_gate_required": true,
+    "reason": "Exp5 can share legal/suspicious/score safety floors, but not exp3 semantic replay evidence or exp4 policy/value feature assumptions.",
+    "same_as_exp3_exp4": false
+  },
+  "suspicious_rate": 0.0,
+  "tactic_score": 0.0,
+  "teacher_agreement_rate": 0.388889,
+  "train_rows_learning": {
+    "baseline_teacher_agreement_on_train": 0.451613,
+    "baseline_teacher_margin": -57.516129,
+    "candidate_teacher_agreement_on_train": 0.548387,
+    "candidate_teacher_margin": -44.903226,
+    "enabled": true,
+    "learned_train_not_generalized": true,
+    "margin_delta": 12.612903,
+    "retrain_effect_not_visible": false,
+    "rows": [
+      {
+        "baseline_teacher_agreement": false,
+        "baseline_teacher_margin": -99.0,
+        "baseline_teacher_rank": 3,
+        "baseline_top_move": "g1f2",
+        "candidate_matches_teacher": false,
+        "candidate_teacher_agreement": false,
+        "candidate_teacher_margin": -91.0,
+        "candidate_teacher_rank": 3,
+        "candidate_top_move": "g1f2",
+        "fen": "5rk1/5n2/p7/3Q4/R7/7p/2R3pP/1r4K1 w - - 1 44",
+        "margin_delta": 8.0,
+        "side": "white",
+        "signatures": {
+          "fen_hash": "daa9ab390c2317ffeaae5c9dc1891f2b55593361d4b9887c58f57937f0804374",
+          "normalized_fen_hash": "9ac6d69c97e098814c2ec9ceb0f7a170dd607a9ac25a54ad008bfcda142fec9a",
+          "side_to_move": "white"
+        },
+        "teacher_margin_after": -91.0,
+        "teacher_margin_before": -99.0,
+        "teacher_move": "c2c1"
+      },
+      {
+        "baseline_teacher_agreement": true,
+        "baseline_teacher_margin": 0.0,
+        "baseline_teacher_rank": 1,
+        "baseline_top_move": "b1c3",
+        "candidate_matches_teacher": true,
+        "candidate_teacher_agreement": true,
+        "candidate_teacher_margin": 0.0,
+        "candidate_teacher_rank": 1,
+        "candidate_top_move": "b1c3",
+        "fen": "r4rk1/pp3pn1/5b2/2p5/2P1P3/3Q4/4NPBB/KN5R w - - 1 32",
+        "margin_delta": 0.0,
+        "side": "white",
+        "signatures": {
+          "fen_hash": "17d4b339e2d596e578fa4d91ee850c79264aee09cdc3e0bd019a0a4dc0593e8a",
+          "normalized_fen_hash": "4dddafbb4f4195ffc1d0ceeb9a30fce8ca2fe4bce624b23c0bd70af83ff1c2cc",
+          "side_to_move": "white"
+        },
+        "teacher_margin_after": 0.0,
+        "teacher_margin_before": 0.0,
+        "teacher_move": "b1c3"
+      },
+      {
+        "baseline_teacher_agreement": false,
+        "baseline_teacher_margin": -47.0,
+        "baseline_teacher_rank": 3,
+        "baseline_top_move": "f3g3",
+        "candidate_matches_teacher": false,
+        "candidate_teacher_agreement": false,
+        "candidate_teacher_margin": -25.0,
+        "candidate_teacher_rank": 2,
+        "candidate_top_move": "f3g3",
+        "fen": "4q2r/8/5k2/1pb2b1p/5PP1/5r2/P1P3K1/R6R b - - 2 25",
+        "margin_delta": 22.0,
+        "side": "black",
+        "signatures": {
+          "fen_hash": "4256e59c82ec5140b2e495b5fc9560a0f088ff55f85f846fad9432fc6183fe03",
+          "normalized_fen_hash": "1f1ba84ba45ec0a4f823ed793b737b682bf0d461ef689e4ebe722e112a205002",
+          "side_to_move": "black"
+        },
+        "teacher_margin_after": -25.0,
+        "teacher_margin_before": -47.0,
+        "teacher_move": "e8e2"
+      },
+      {
+        "baseline_teacher_agreement": true,
+        "baseline_teacher_margin": 0.0,
+        "baseline_teacher_rank": 1,
+        "baseline_top_move": "e8f7",
+        "candidate_matches_teacher": true,
+        "candidate_teacher_agreement": true,
+        "candidate_teacher_margin": 0.0,
+        "candidate_teacher_rank": 1,
+        "candidate_top_move": "e8f7",
+        "fen": "rnbqkb1r/pp1ppBpp/5n2/2p5/4P3/8/PPPP1PPP/RNBQK1NR b KQkq - 0 3",
+        "margin_delta": 0.0,
+        "side": "black",
+        "signatures": {
+          "fen_hash": "68588d5d9ea074f28e3eb65afc3e604897361c5ea21e5f92058f09cf9686140d",
+          "normalized_fen_hash": "e247253d54a0e7dbceaa04f9aae0be87535d5825c47ed392cb757aca93d4ae73",
+          "side_to_move": "black"
+        },
+        "teacher_margin_after": 0.0,
+        "teacher_margin_before": 0.0,
+        "teacher_move": "e8f7"
+      },
+      {
+        "baseline_teacher_agreement": false,
+        "baseline_teacher_margin": -87.0,
+        "baseline_teacher_rank": 2,
+        "baseline_top_move": "f7e7",
+        "candidate_matches_teacher": false,
+        "candidate_teacher_agreement": false,
+        "candidate_teacher_margin": -86.0,
+        "candidate_teacher_rank": 2,
+        "candidate_top_move": "f7e7",
+        "fen": "rnbq1b1r/pp1p1k1p/5pp1/2pQ4/8/8/PPPP1PPP/RNB1K1NR b KQ - 1 8",
+        "margin_delta": 1.0,
+        "side": "black",
+        "signatures": {
+          "fen_hash": "d0589b246bd1e544bf0b08d0250e06ad7a2d094b5bc7b0ddaefc1028258496a2",
+          "normalized_fen_hash": "f52a5237a9ffb8e10cd8917ba810a230248a68536785585424f749ff229bc47a",
+          "side_to_move": "black"
+        },
+        "teacher_margin_after": -86.0,
+        "teacher_margin_before": -87.0,
+        "teacher_move": "f7g7"
+      },
+      {
+        "baseline_teacher_agreement": true,
+        "baseline_teacher_margin": 0.0,
+        "baseline_teacher_rank": 1,
+        "baseline_top_move": "e5e4",
+        "candidate_matches_teacher": true,
+        "candidate_teacher_agreement": true,
+        "candidate_teacher_margin": 0.0,
+        "candidate_teacher_rank": 1,
+        "candidate_top_move": "e5e4",
+        "fen": "7r/8/7p/1p1nk1p1/b5P1/5NK1/PP5P/R4R2 b - - 1 29",
+        "margin_delta": 0.0,
+        "side": "black",
+        "signatures": {
+          "fen_hash": "c722029527d75f6888beae4269c8806f6adc8342b79d29abab83b0d609960450",
+          "normalized_fen_hash": "3ce5e82b44cd034fe0f440a2a487ae95eb87ddcbd2ffc99d9b73e2a2ced9f058",
+          "side_to_move": "black"
+        },
+        "teacher_margin_after": 0.0,
+        "teacher_margin_before": 0.0,
+        "teacher_move": "e5e4"
+      },
+      {
+        "baseline_teacher_agreement": true,
+        "baseline_teacher_margin": 0.0,
+        "baseline_teacher_rank": 1,
+        "baseline_top_move": "a2b3",
+        "candidate_matches_teacher": true,
+        "candidate_teacher_agreement": true,
+        "candidate_teacher_margin": 0.0,
+        "candidate_teacher_rank": 1,
+        "candidate_top_move": "a2b3",
+        "fen": "r4rk1/p4pn1/1p3b2/2p5/2P1P3/3Q4/K3NPBB/1N5R w - - 0 33",
+        "margin_delta": 0.0,
+        "side": "white",
+        "signatures": {
+          "fen_hash": "93a8079e85b18ca44af62b4a2c62714e486ef3b7934136f94130751eae12658e",
+          "normalized_fen_hash": "7adb32cc2a5ad5dceddcc1a2ec34f274ec452a57006abaace36cc1747539834b",
+          "side_to_move": "white"
+        },
+        "teacher_margin_after": 0.0,
+        "teacher_margin_before": 0.0,
+        "teacher_move": "a2b3"
+      },
+      {
+        "baseline_teacher_agreement": false,
+        "baseline_teacher_margin": -39.0,
+        "baseline_teacher_rank": 2,
+        "baseline_top_move": "e3f3",
+        "candidate_matches_teacher": true,
+        "candidate_teacher_agreement": true,
+        "candidate_teacher_margin": 0.0,
+        "candidate_teacher_rank": 1,
+        "candidate_top_move": "e3f4",
+        "fen": "4r1k1/8/8/8/2n5/4K3/3r4/8 w - - 12 60",
+        "margin_delta": 39.0,
+        "side": "white",
+        "signatures": {
+          "fen_hash": "0a5872d7707ebe63b3e5f8101452f20390456a20fa21485ab8ffa9bff42ae3f8",
+          "normalized_fen_hash": "ac6112db428bbb669e839e75f48038784eb2e0cb6e8da0eae6fd95c81511f187",
+          "side_to_move": "white"
+        },
+        "teacher_margin_after": 0.0,
+        "teacher_margin_before": -39.0,
+        "teacher_move": "e3f4"
+      },
+      {
+        "baseline_teacher_agreement": false,
+        "baseline_teacher_margin": -142.0,
+        "baseline_teacher_rank": 3,
+        "baseline_top_move": "d1d2",
+        "candidate_matches_teacher": false,
+        "candidate_teacher_agreement": false,
+        "candidate_teacher_margin": -134.0,
+        "candidate_teacher_rank": 3,
+        "candidate_top_move": "d1d2",
+        "fen": "1r6/pp5k/8/8/4p3/1QP5/N3p3/3K2n1 w - - 0 59",
+        "margin_delta": 8.0,
+        "side": "white",
+        "signatures": {
+          "fen_hash": "88218e598bbbfd458dde2f8c814d71dea40e8373d979d059045496d6aa9d456e",
+          "normalized_fen_hash": "d4e40f0f6be0a1e3766c0f35dde57fefa7507541d224b5032544a1fc9c8d9e90",
+          "side_to_move": "white"
+        },
+        "teacher_margin_after": -134.0,
+        "teacher_margin_before": -142.0,
+        "teacher_move": "d1e1"
+      },
+      {
+        "baseline_teacher_agreement": true,
+        "baseline_teacher_margin": 0.0,
+        "baseline_teacher_rank": 1,
+        "baseline_top_move": "a7f7",
+        "candidate_matches_teacher": true,
+        "candidate_teacher_agreement": true,
+        "candidate_teacher_margin": 0.0,
+        "candidate_teacher_rank": 1,
+        "candidate_top_move": "a7f7",
+        "fen": "3Q4/R4n1k/6pp/3pB3/1R6/3pK3/3P4/8 w - - 1 31",
+        "margin_delta": 0.0,
+        "side": "white",
+        "signatures": {
+          "fen_hash": "fa383e16d42b0a9f7bae6c9a6aa25b5a5933d1d8ce55d0ff0f9e9f34231338b1",
+          "normalized_fen_hash": "56be3fa1b598b6b91abba153fc5b22b43cddcb2cf9f163113e7510d2560120d6",
+          "side_to_move": "white"
+        },
+        "teacher_margin_after": 0.0,
+        "teacher_margin_before": 0.0,
+        "teacher_move": "a7f7"
+      },
+      {
+        "baseline_teacher_agreement": false,
+        "baseline_teacher_margin": -161.0,
+        "baseline_teacher_rank": 8,
+        "baseline_top_move": "e2c3",
+        "candidate_matches_teacher": false,
+        "candidate_teacher_agreement": false,
+        "candidate_teacher_margin": -63.0,
+        "candidate_teacher_rank": 8,
+        "candidate_top_move": "f3e5",
+        "fen": "r2qnrk1/pp2bppp/8/2p2Q2/2PpPB2/5N2/PP2NPPP/2KR1B1R w - - 0 12",
+        "margin_delta": 98.0,
+        "side": "white",
+        "signatures": {
+          "fen_hash": "23975d4863bab7a96f7e09b659e56adb823ae037e7cb4cb53a4946c3253afe74",
+          "normalized_fen_hash": "5d67442853a4638031cadfda97022180e4f075200917e33f8c0272ae6fce8c1a",
+          "side_to_move": "white"
+        },
+        "teacher_margin_after": -63.0,
+        "teacher_margin_before": -161.0,
+        "teacher_move": "a2a4"
+      },
+      {
+        "baseline_teacher_agreement": true,
+        "baseline_teacher_margin": 0.0,
+        "baseline_teacher_rank": 1,
+        "baseline_top_move": "d4f3",
+        "candidate_matches_teacher": true,
+        "candidate_teacher_agreement": true,
+        "candidate_teacher_margin": 0.0,
+        "candidate_teacher_rank": 1,
+        "candidate_top_move": "d4f3",
+        "fen": "r1bq3r/pppp1k1p/3b1p2/4p3/2PnP3/7N/PP1P1PPP/RNB2RK1 b - - 0 8",
+        "margin_delta": 0.0,
+        "side": "black",
+        "signatures": {
+          "fen_hash": "144445becfeaa61fbe41b698c9fc8439bd5484254f9324388ddeec0b29670c29",
+          "normalized_fen_hash": "c2029cc0b850107d64c6118313cc373562cefd823ba8b7de8aa1f3298e87ad87",
+          "side_to_move": "black"
+        },
+        "teacher_margin_after": 0.0,
+        "teacher_margin_before": 0.0,
+        "teacher_move": "d4f3"
+      },
+      {
+        "baseline_teacher_agreement": false,
+        "baseline_teacher_margin": -223.0,
+        "baseline_teacher_rank": 2,
+        "baseline_top_move": "g6f5",
+        "candidate_matches_teacher": false,
+        "candidate_teacher_agreement": false,
+        "candidate_teacher_margin": -222.0,
+        "candidate_teacher_rank": 2,
+        "candidate_top_move": "g6f5",
+        "fen": "3R4/5k1p/2p3b1/2P5/r1P5/P3r3/P3P3/5RK1 b - - 1 30",
+        "margin_delta": 1.0,
+        "side": "black",
+        "signatures": {
+          "fen_hash": "a80dee35b410423e69f84ae568407a17e73182786e4cf5bab335375f2dce7842",
+          "normalized_fen_hash": "bb66726586b7eef6a2dbcfcabbe5c0eb4df07126cc294d996a8d04c8b582b880",
+          "side_to_move": "black"
+        },
+        "teacher_margin_after": -222.0,
+        "teacher_margin_before": -223.0,
+        "teacher_move": "f7e7"
+      },
+      {
+        "baseline_teacher_agreement": true,
+        "baseline_teacher_margin": 0.0,
+        "baseline_teacher_rank": 1,
+        "baseline_top_move": "c2c1",
+        "candidate_matches_teacher": true,
+        "candidate_teacher_agreement": true,
+        "candidate_teacher_margin": 0.0,
+        "candidate_teacher_rank": 1,
+        "candidate_top_move": "c2c1",
+        "fen": "r3nrk1/pp2bpp1/8/2p2Q1p/2PpPB2/1P3N2/q1K1NPPP/3R1B1R w - - 3 17",
+        "margin_delta": 0.0,
+        "side": "white",
+        "signatures": {
+          "fen_hash": "0a4bca1a480f4fe82b9173baab7d49362f89421e120ac312972ee8e74a1cdae6",
+          "normalized_fen_hash": "3c2fdee9720646b5cf5043d850169bed0082abd91d6b4f7325f16bc3b4a3ebdf",
+          "side_to_move": "white"
+        },
+        "teacher_margin_after": 0.0,
+        "teacher_margin_before": 0.0,
+        "teacher_move": "c2c1"
+      },
+      {
+        "baseline_teacher_agreement": true,
+        "baseline_teacher_margin": 0.0,
+        "baseline_teacher_rank": 1,
+        "baseline_top_move": "b8b7",
+        "candidate_matches_teacher": true,
+        "candidate_teacher_agreement": true,
+        "candidate_teacher_margin": 0.0,
+        "candidate_teacher_rank": 1,
+        "candidate_top_move": "b8b7",
+        "fen": "1k1R4/8/2p3p1/2P5/2P1P3/6rr/P4K2/8 b - - 6 43",
+        "margin_delta": 0.0,
+        "side": "black",
+        "signatures": {
+          "fen_hash": "707a202104e37c6fb1d6515a8d9f20013445cdd115895cad50a49dd8c5b8c5f3",
+          "normalized_fen_hash": "93e96d31bc0512100ca0b560377a3a54ca8dccfd30f35fd29d8b3b87eb341441",
+          "side_to_move": "black"
+        },
+        "teacher_margin_after": 0.0,
+        "teacher_margin_before": 0.0,
+        "teacher_move": "b8b7"
+      },
+      {
+        "baseline_teacher_agreement": false,
+        "baseline_teacher_margin": -164.0,
+        "baseline_teacher_rank": 18,
+        "baseline_top_move": "d8c7",
+        "candidate_matches_teacher": false,
+        "candidate_teacher_agreement": false,
+        "candidate_teacher_margin": -120.0,
+        "candidate_teacher_rank": 14,
+        "candidate_top_move": "d8c7",
+        "fen": "3q1rk1/r5pp/p1p1pn2/3p4/1P1P1P2/7N/PP1N2PP/R4RK1 b - - 0 15",
+        "margin_delta": 44.0,
+        "side": "black",
+        "signatures": {
+          "fen_hash": "6ceda34cde4f733e725e77bbf3658f33a2acc4cb2d1c7f82dd23832c48d1bb9b",
+          "normalized_fen_hash": "ebfea26a59a0bf5cefd817ac8cd4ca343d8dd6a5925082296ef1fe9ae4c4c5bf",
+          "side_to_move": "black"
+        },
+        "teacher_margin_after": -120.0,
+        "teacher_margin_before": -164.0,
+        "teacher_move": "d8a5"
+      },
+      {
+        "baseline_teacher_agreement": false,
+        "baseline_teacher_margin": -236.0,
+        "baseline_teacher_rank": 3,
+        "baseline_top_move": "c7c5",
+        "candidate_matches_teacher": false,
+        "candidate_teacher_agreement": false,
+        "candidate_teacher_margin": -142.0,
+        "candidate_teacher_rank": 3,
+        "candidate_top_move": "c7c5",
+        "fen": "r1bq3r/pppp1k1p/3b1p2/4p3/2P1P3/7N/PP1P1PPP/RNR4K b - - 0 10",
+        "margin_delta": 94.0,
+        "side": "black",
+        "signatures": {
+          "fen_hash": "554113b1b5f29b12e440833ffa3990f4c1b92f8857fbddb30f2fe5b522dc69da",
+          "normalized_fen_hash": "3f018899f27db2b132d1e475f9b33cc452ea3eb04cde8473054f2789e7c061e7",
+          "side_to_move": "black"
+        },
+        "teacher_margin_after": -142.0,
+        "teacher_margin_before": -236.0,
+        "teacher_move": "f6f5"
+      },
+      {
+        "baseline_teacher_agreement": true,
+        "baseline_teacher_margin": 0.0,
+        "baseline_teacher_rank": 1,
+        "baseline_top_move": "b1a2",
+        "candidate_matches_teacher": true,
+        "candidate_teacher_agreement": true,
+        "candidate_teacher_margin": 0.0,
+        "candidate_teacher_rank": 1,
+        "candidate_top_move": "b1a2",
+        "fen": "8/pp5k/8/1r6/4p3/8/8/1K6 w - - 4 70",
+        "margin_delta": 0.0,
+        "side": "white",
+        "signatures": {
+          "fen_hash": "682658fbeb936130e0bf7d284e035c386c3522fa1919ee994a209aae35725c5f",
+          "normalized_fen_hash": "283f4c230d452df0af98dbc120e066472d50b5f0a23c0220cf2cb6d90d5ba79d",
+          "side_to_move": "white"
+        },
+        "teacher_margin_after": 0.0,
+        "teacher_margin_before": 0.0,
+        "teacher_move": "b1a2"
+      },
+      {
+        "baseline_teacher_agreement": false,
+        "baseline_teacher_margin": -122.0,
+        "baseline_teacher_rank": 3,
+        "baseline_top_move": "c1d2",
+        "candidate_matches_teacher": false,
+        "candidate_teacher_agreement": false,
+        "candidate_teacher_margin": -113.0,
+        "candidate_teacher_rank": 3,
+        "candidate_top_move": "c1d2",
+        "fen": "r3nrk1/pp2bpp1/8/2p2Q1p/2PpPB2/qP3N2/4NPPP/2KR1B1R w - - 1 16",
+        "margin_delta": 9.0,
+        "side": "white",
+        "signatures": {
+          "fen_hash": "d3f87e8733b3c7d50b2a91f5fb2e480f5b71bc4c791f9885d1080c1fc53b5d30",
+          "normalized_fen_hash": "cfdbef571ea23c07eff58b0ae59cff89273e8be373d0c84fab5c98d1a5109162",
+          "side_to_move": "white"
+        },
+        "teacher_margin_after": -113.0,
+        "teacher_margin_before": -122.0,
+        "teacher_move": "c1c2"
+      },
+      {
+        "baseline_teacher_agreement": false,
+        "baseline_teacher_margin": -65.0,
+        "baseline_teacher_rank": 3,
+        "baseline_top_move": "a7b8",
+        "candidate_matches_teacher": false,
+        "candidate_teacher_agreement": false,
+        "candidate_teacher_margin": -65.0,
+        "candidate_teacher_rank": 3,
+        "candidate_top_move": "a7b8",
+        "fen": "8/k2R4/2p3p1/2P5/2P1P3/6rr/P4K2/8 b - - 12 46",
+        "margin_delta": 0.0,
+        "side": "black",
+        "signatures": {
+          "fen_hash": "cf0d03fab08b56811f0e2bbb7655047d263ead955b57001c8bc598bfb2048ed5",
+          "normalized_fen_hash": "4b99fd6581ce10bdcfcb99d0587ac51aa39aaba809cca1e84148d727ec2fcf7a",
+          "side_to_move": "black"
+        },
+        "teacher_margin_after": -65.0,
+        "teacher_margin_before": -65.0,
+        "teacher_move": "a7a6"
+      },
+      {
+        "baseline_teacher_agreement": false,
+        "baseline_teacher_margin": -60.0,
+        "baseline_teacher_rank": 3,
+        "baseline_top_move": "g2g3",
+        "candidate_matches_teacher": false,
+        "candidate_teacher_agreement": false,
+        "candidate_teacher_margin": -40.0,
+        "candidate_teacher_rank": 2,
+        "candidate_top_move": "g2g3",
+        "fen": "rnb1k1nr/pppp1ppp/8/4p3/4P2q/2NB4/PPPP1KPP/R1BQ2NR w kq - 1 5",
+        "margin_delta": 20.0,
+        "side": "white",
+        "signatures": {
+          "fen_hash": "1f475ce191d3e7b6f18d575dcad9997dfd011634fdf370ebd3827c3dd524e7b7",
+          "normalized_fen_hash": "71a1aebc95189714d303e7572c59a9f84344241df6d101f2426f96c935fd466c",
+          "side_to_move": "white"
+        },
+        "teacher_margin_after": -40.0,
+        "teacher_margin_before": -60.0,
+        "teacher_move": "f2e3"
+      },
+      {
+        "baseline_teacher_agreement": true,
+        "baseline_teacher_margin": 0.0,
+        "baseline_teacher_rank": 1,
+        "baseline_top_move": "e4d4",
+        "candidate_matches_teacher": true,
+        "candidate_teacher_agreement": true,
+        "candidate_teacher_margin": 0.0,
+        "candidate_teacher_rank": 1,
+        "candidate_top_move": "e4d4",
+        "fen": "4r1k1/8/8/8/2n1K3/8/r7/8 w - - 6 57",
+        "margin_delta": 0.0,
+        "side": "white",
+        "signatures": {
+          "fen_hash": "ee21640c24460194d2d4cd75347caa3bbce3e2a03a5a6b58022c908f072530b9",
+          "normalized_fen_hash": "b40f386a2e0c20d201f25c1e8a945ff7c40b6cee22de222e5dce2984bcbd89ae",
+          "side_to_move": "white"
+        },
+        "teacher_margin_after": 0.0,
+        "teacher_margin_before": 0.0,
+        "teacher_move": "e4d4"
+      },
+      {
+        "baseline_teacher_agreement": false,
+        "baseline_teacher_margin": -31.0,
+        "baseline_teacher_rank": 3,
+        "baseline_top_move": "a2b1",
+        "candidate_matches_teacher": false,
+        "candidate_teacher_agreement": false,
+        "candidate_teacher_margin": -10.0,
+        "candidate_teacher_rank": 3,
+        "candidate_top_move": "a2b1",
+        "fen": "8/pp5k/8/8/4p3/1QN5/K2r4/8 w - - 3 66",
+        "margin_delta": 21.0,
+        "side": "white",
+        "signatures": {
+          "fen_hash": "50753647aeb5305c5e4f16953fc63ee5d54109eb7229051227f8b4841b46b8de",
+          "normalized_fen_hash": "b3656a4331d06e38ddaff801f378fbddd0a0330abcf4b7a6412c0848b6ebe427",
+          "side_to_move": "white"
+        },
+        "teacher_margin_after": -10.0,
+        "teacher_margin_before": -31.0,
+        "teacher_move": "a2a1"
+      },
+      {
+        "baseline_teacher_agreement": true,
+        "baseline_teacher_margin": 0.0,
+        "baseline_teacher_rank": 1,
+        "baseline_top_move": "a2b3",
+        "candidate_matches_teacher": true,
+        "candidate_teacher_agreement": true,
+        "candidate_teacher_margin": 0.0,
+        "candidate_teacher_rank": 1,
+        "candidate_top_move": "a2b3",
+        "fen": "r4rk1/5pn1/1p3b2/p1p5/2P1P3/3Q1P2/K5BB/1NN4R w - - 0 35",
+        "margin_delta": 0.0,
+        "side": "white",
+        "signatures": {
+          "fen_hash": "cd6197310720c4c6657ccdfb1398d22882b387108cd614b5c7d5298e246ab7b0",
+          "normalized_fen_hash": "3a3de35a89baae8cfb321cb82667fab4cd99316f85811ed583245734112899fd",
+          "side_to_move": "white"
+        },
+        "teacher_margin_after": 0.0,
+        "teacher_margin_before": 0.0,
+        "teacher_move": "a2b3"
+      },
+      {
+        "baseline_teacher_agreement": false,
+        "baseline_teacher_margin": -3.0,
+        "baseline_teacher_rank": 2,
+        "baseline_top_move": "b8c7",
+        "candidate_matches_teacher": true,
+        "candidate_teacher_agreement": true,
+        "candidate_teacher_margin": 0.0,
+        "candidate_teacher_rank": 1,
+        "candidate_top_move": "b8b7",
+        "fen": "1k4R1/8/8/rP1p4/8/8/P4N1K/8 b - - 3 43",
+        "margin_delta": 3.0,
+        "side": "black",
+        "signatures": {
+          "fen_hash": "98e9de08acbe699f9bff63f645c443df3d48f8beff3e65d6a3ec0b2df0dd50e9",
+          "normalized_fen_hash": "1d46d73959a6285848026416826632335fe4bdb0436b783276765b6791e10be3",
+          "side_to_move": "black"
+        },
+        "teacher_margin_after": 0.0,
+        "teacher_margin_before": -3.0,
+        "teacher_move": "b8b7"
+      },
+      {
+        "baseline_teacher_agreement": true,
+        "baseline_teacher_margin": 0.0,
+        "baseline_teacher_rank": 1,
+        "baseline_top_move": "a4a1",
+        "candidate_matches_teacher": true,
+        "candidate_teacher_agreement": true,
+        "candidate_teacher_margin": 0.0,
+        "candidate_teacher_rank": 1,
+        "candidate_top_move": "a4a1",
+        "fen": "8/8/k1p3p1/2P1P3/r1P2R2/7r/8/6K1 b - - 3 50",
+        "margin_delta": 0.0,
+        "side": "black",
+        "signatures": {
+          "fen_hash": "bef3c80969695882f9245acb19abd7b87ce6e521be02f5b5f1784f4fd8282375",
+          "normalized_fen_hash": "48971805db03b0d490d18bc55108b34f9418dbbc3543dd9890d4d60b61e4a3cd",
+          "side_to_move": "black"
+        },
+        "teacher_margin_after": 0.0,
+        "teacher_margin_before": 0.0,
+        "teacher_move": "a4a1"
+      },
+      {
+        "baseline_teacher_agreement": true,
+        "baseline_teacher_margin": 0.0,
+        "baseline_teacher_rank": 1,
+        "baseline_top_move": "b8c6",
+        "candidate_matches_teacher": true,
+        "candidate_teacher_agreement": true,
+        "candidate_teacher_margin": 0.0,
+        "candidate_teacher_rank": 1,
+        "candidate_top_move": "b8c6",
+        "fen": "rnbqk2r/ppp2ppp/5n2/1B1p4/1P1P4/8/PP3PPP/RNBQK1NR b KQkq - 2 6",
+        "margin_delta": 0.0,
+        "side": "black",
+        "signatures": {
+          "fen_hash": "e4a350c67939d88d714abedc3694d854e15ac0396a648403418537a1763f170d",
+          "normalized_fen_hash": "2c1c673f90bd1a156b4e4657ed4d0234f28a55505f8ab5cd2c780d2dcd61e4ab",
+          "side_to_move": "black"
+        },
+        "teacher_margin_after": 0.0,
+        "teacher_margin_before": 0.0,
+        "teacher_move": "b8c6"
+      },
+      {
+        "baseline_teacher_agreement": false,
+        "baseline_teacher_margin": -119.0,
+        "baseline_teacher_rank": 2,
+        "baseline_top_move": "f8f7",
+        "candidate_matches_teacher": false,
+        "candidate_teacher_agreement": false,
+        "candidate_teacher_margin": -110.0,
+        "candidate_teacher_rank": 2,
+        "candidate_top_move": "f8f7",
+        "fen": "r2q1rk1/1pp3pp/2n5/2PBpp2/p5b1/6N1/PPP1P2P/R1BQ1RK1 b - - 0 14",
+        "margin_delta": 9.0,
+        "side": "black",
+        "signatures": {
+          "fen_hash": "84fc632992deb54071cdf7014c830a929122b394063db55d99f484caf28634bd",
+          "normalized_fen_hash": "a30192c67fb870de72445b3855649c3d19a66764d3732fbcc4c589942e432031",
+          "side_to_move": "black"
+        },
+        "teacher_margin_after": -110.0,
+        "teacher_margin_before": -119.0,
+        "teacher_move": "g8h8"
+      },
+      {
+        "baseline_teacher_agreement": true,
+        "baseline_teacher_margin": 0.0,
+        "baseline_teacher_rank": 1,
+        "baseline_top_move": "a8b8",
+        "candidate_matches_teacher": true,
+        "candidate_teacher_agreement": true,
+        "candidate_teacher_margin": 0.0,
+        "candidate_teacher_rank": 1,
+        "candidate_top_move": "a8b8",
+        "fen": "k1r5/8/8/2N4P/R4K2/8/PP5P/8 b - - 2 45",
+        "margin_delta": 0.0,
+        "side": "black",
+        "signatures": {
+          "fen_hash": "b45b991b6a53ad12f4e97149cd0732a56da630a1aeeb490c1952ac8cac7d4e8f",
+          "normalized_fen_hash": "217ba9d4a366d8aab3d5081a033617f435a1fcd3678cc8984d83eb1824f1ed5b",
+          "side_to_move": "black"
+        },
+        "teacher_margin_after": 0.0,
+        "teacher_margin_before": 0.0,
+        "teacher_move": "a8b8"
+      },
+      {
+        "baseline_teacher_agreement": false,
+        "baseline_teacher_margin": -6.0,
+        "baseline_teacher_rank": 3,
+        "baseline_top_move": "b8a7",
+        "candidate_matches_teacher": true,
+        "candidate_teacher_agreement": true,
+        "candidate_teacher_margin": 0.0,
+        "candidate_teacher_rank": 1,
+        "candidate_top_move": "b8a8",
+        "fen": "1k5r/3N1R2/7p/1p1n2p1/b5P1/6K1/PP5P/2R5 b - - 13 35",
+        "margin_delta": 6.0,
+        "side": "black",
+        "signatures": {
+          "fen_hash": "e9e4affe90ab617141673d364efca38b8d01da06e178b233223c396e60b452f2",
+          "normalized_fen_hash": "97305269b8ff584191822c832d2e5a22306536f89fda6834655bed143f279c5c",
+          "side_to_move": "black"
+        },
+        "teacher_margin_after": 0.0,
+        "teacher_margin_before": -6.0,
+        "teacher_move": "b8a8"
+      },
+      {
+        "baseline_teacher_agreement": false,
+        "baseline_teacher_margin": -179.0,
+        "baseline_teacher_rank": 2,
+        "baseline_top_move": "e1e2",
+        "candidate_matches_teacher": false,
+        "candidate_teacher_agreement": false,
+        "candidate_teacher_margin": -171.0,
+        "candidate_teacher_rank": 2,
+        "candidate_top_move": "e1e2",
+        "fen": "rnbqk1nr/pppp1ppp/8/4p3/4P3/2NB4/PPPP1bPP/R1BQK1NR w KQkq - 0 4",
+        "margin_delta": 8.0,
+        "side": "white",
+        "signatures": {
+          "fen_hash": "a2c6facd3cd1ddcd3ade975927d03b1a8bfd2e5268dfd09ab84eb45347533137",
+          "normalized_fen_hash": "02de17e2f4c2f0f9767f1a6fdae771564b186a2f46f149ab838a5f904ea7e410",
+          "side_to_move": "white"
+        },
+        "teacher_margin_after": -171.0,
+        "teacher_margin_before": -179.0,
+        "teacher_move": "e1f1"
+      }
+    ],
+    "train_agreement_delta": 0.096774,
+    "train_rows": 31,
+    "validation_rows": 0
+  }
+}

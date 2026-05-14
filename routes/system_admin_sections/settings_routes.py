@@ -2,7 +2,14 @@ import re
 
 from flask import request
 
+from services.platform.settings import DangerousChangeBlocked, enforce_dangerous_confirm
+from services.platform.settings_metadata import (
+    DANGEROUS_SETTINGS,
+    SETTING_DETAILS,
+    setting_groups_payload,
+)
 from services.security.captcha import normalize_captcha_mode
+from services.storage.global_capacity import parse_global_capacity_limit_mb
 from services.storage.paths import validate_storage_root
 from services.security.upload_security import (
     ensure_upload_security_schema,
@@ -15,6 +22,27 @@ from services.users.member_levels import (
     serialize_member_level_rule,
     update_member_level_rule,
 )
+
+
+def _dangerous_blocked_payload(exc):
+    items = []
+    for key, danger, transition in exc.risky:
+        detail = SETTING_DETAILS.get(key, {})
+        items.append({
+            "key": key,
+            "label": detail.get("label") or key,
+            "transition": transition,
+            "warning": danger.get("warning") or "",
+        })
+    labels = "、".join(item["label"] for item in items) or "高敏感設定"
+    return {
+        "ok": False,
+        "msg": (
+            f"以下設定屬於高敏感變更，需在請求中加上 dangerous_confirm 才會生效：{labels}"
+        ),
+        "error": "dangerous_change_blocked",
+        "dangerous_changes": items,
+    }
 
 
 def register_system_admin_settings_routes(app, ctx):
@@ -52,10 +80,24 @@ def register_system_admin_settings_routes(app, ctx):
     server_ssl_payload = ctx["server_ssl_payload"]
     validate_comfyui_api_host = ctx["validate_comfyui_api_host"]
     validate_comfyui_api_url = ctx["validate_comfyui_api_url"]
+    validate_comfyui_diffusers_device = ctx["validate_comfyui_diffusers_device"]
+    validate_comfyui_diffusers_dtype = ctx["validate_comfyui_diffusers_dtype"]
     validate_comfyui_relative_script = ctx["validate_comfyui_relative_script"]
+    validate_huggingface_api_token = ctx["validate_huggingface_api_token"]
+    normalize_huggingface_repo_id = ctx["normalize_huggingface_repo_id"]
     validate_listen_host = ctx["validate_listen_host"]
     validate_listen_port = ctx["validate_listen_port"]
     is_hhmm = ctx["is_hhmm"]
+
+    def public_settings_payload(settings):
+        payload = dict(settings or {})
+        comfyui_account_key = str(payload.get("comfyui_account_api_key") or "").strip()
+        payload["comfyui_account_api_key"] = ""
+        payload["comfyui_account_api_key_configured"] = bool(comfyui_account_key)
+        huggingface_token = str(payload.get("comfyui_huggingface_api_token") or "").strip()
+        payload["comfyui_huggingface_api_token"] = ""
+        payload["comfyui_huggingface_api_token_configured"] = bool(huggingface_token)
+        return payload
 
     @app.route("/api/admin/settings", methods=["GET","PUT"])
     @require_csrf_safe
@@ -70,7 +112,7 @@ def register_system_admin_settings_routes(app, ctx):
             settings = get_system_settings()
             return json_resp({
                 "ok": True,
-                "settings": settings,
+                "settings": public_settings_payload(settings),
                 "server_bind": server_bind_settings_payload(
                     settings,
                     current_host=CURRENT_SERVER_BIND_STATE.get("host"),
@@ -83,9 +125,9 @@ def register_system_admin_settings_routes(app, ctx):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         current_settings = get_system_settings()
         bool_keys = {
             key for key, value in (current_settings or {}).items()
@@ -108,11 +150,11 @@ def register_system_admin_settings_routes(app, ctx):
             data["server_listen_port"] = port
         if "comfyui_connection_mode" in data:
             mode = str(data.get("comfyui_connection_mode") or "").strip().lower()
-            if mode not in {"local", "remote"}:
-                return json_resp({"ok":False,"msg":"comfyui_connection_mode 必須是 local 或 remote"}), 400
+            if mode not in {"local", "remote", "diffusers"}:
+                return json_resp({"ok":False,"msg":"comfyui_connection_mode 必須是 local、remote 或 diffusers"}), 400
             data["comfyui_connection_mode"] = mode
         if "comfyui_remote_api_url" in data:
-            api_url = validate_comfyui_api_url(data.get("comfyui_remote_api_url"))
+            api_url = validate_comfyui_api_url(data.get("comfyui_remote_api_url"), allow_blank=True)
             if api_url is None:
                 return json_resp({"ok":False,"msg":"comfyui_remote_api_url 必須是 http(s)://host:port，不可包含帳密、路徑或參數"}), 400
             data["comfyui_remote_api_url"] = api_url
@@ -151,6 +193,53 @@ def register_system_admin_settings_routes(app, ctx):
             data["comfyui_api_port"] = port
         if "comfyui_civitai_api_key" in data:
             data["comfyui_civitai_api_key"] = str(data.get("comfyui_civitai_api_key") or "").strip()
+        clear_comfyui_account_api_key = False
+        if "comfyui_account_api_key_clear" in data:
+            clear_key = parse_strict_bool(data.pop("comfyui_account_api_key_clear"))
+            if clear_key is None:
+                return json_resp({"ok":False,"msg":"comfyui_account_api_key_clear 必須是布林值 true/false"}), 400
+            if clear_key:
+                clear_comfyui_account_api_key = True
+                data["comfyui_account_api_key"] = ""
+        if "comfyui_account_api_key" in data:
+            account_api_key = str(data.get("comfyui_account_api_key") or "").strip()
+            if account_api_key:
+                if len(account_api_key) > 512 or any(ch.isspace() for ch in account_api_key):
+                    return json_resp({"ok":False,"msg":"comfyui_account_api_key 不可包含空白，且長度不可超過 512"}), 400
+                data["comfyui_account_api_key"] = account_api_key
+            elif not clear_comfyui_account_api_key:
+                data.pop("comfyui_account_api_key", None)
+        if "comfyui_diffusers_model_repo" in data:
+            repo_id = normalize_huggingface_repo_id(data.get("comfyui_diffusers_model_repo"), allow_blank=True)
+            if repo_id is None:
+                return json_resp({"ok":False,"msg":"comfyui_diffusers_model_repo 必須是 Hugging Face repo id 或模型頁網址，例如 dhead/waiIllustriousSDXL_v150"}), 400
+            data["comfyui_diffusers_model_repo"] = repo_id
+        clear_huggingface_token = False
+        if "comfyui_huggingface_api_token_clear" in data:
+            clear_token = parse_strict_bool(data.pop("comfyui_huggingface_api_token_clear"))
+            if clear_token is None:
+                return json_resp({"ok":False,"msg":"comfyui_huggingface_api_token_clear 必須是布林值 true/false"}), 400
+            if clear_token:
+                clear_huggingface_token = True
+                data["comfyui_huggingface_api_token"] = ""
+        if "comfyui_huggingface_api_token" in data:
+            token = validate_huggingface_api_token(data.get("comfyui_huggingface_api_token"), allow_blank=True)
+            if token is None:
+                return json_resp({"ok":False,"msg":"comfyui_huggingface_api_token 不可包含空白，且長度不可超過 2048"}), 400
+            if token:
+                data["comfyui_huggingface_api_token"] = token
+            elif not clear_huggingface_token:
+                data.pop("comfyui_huggingface_api_token", None)
+        if "comfyui_diffusers_device" in data:
+            device = validate_comfyui_diffusers_device(data.get("comfyui_diffusers_device"))
+            if device is None:
+                return json_resp({"ok":False,"msg":"comfyui_diffusers_device 必須是 auto、cpu、cuda 或 mps"}), 400
+            data["comfyui_diffusers_device"] = device
+        if "comfyui_diffusers_dtype" in data:
+            dtype = validate_comfyui_diffusers_dtype(data.get("comfyui_diffusers_dtype"))
+            if dtype is None:
+                return json_resp({"ok":False,"msg":"comfyui_diffusers_dtype 必須是 auto、float16、bfloat16 或 float32"}), 400
+            data["comfyui_diffusers_dtype"] = dtype
         if "comfyui_max_batch_size" in data:
             try:
                 batch_size = int(data.get("comfyui_max_batch_size"))
@@ -177,6 +266,11 @@ def register_system_admin_settings_routes(app, ctx):
                     return json_resp({"ok":False,"msg":f"cloud_drive_storage_root 不安全或格式錯誤：{exc}"}), 400
             else:
                 data["cloud_drive_storage_root"] = ""
+        if "cloud_drive_global_capacity_limit_mb" in data:
+            try:
+                data["cloud_drive_global_capacity_limit_mb"] = parse_global_capacity_limit_mb(data.get("cloud_drive_global_capacity_limit_mb"))
+            except ValueError as exc:
+                return json_resp({"ok":False,"msg":str(exc)}), 400
         if "captcha_mode" in data:
             raw_mode = str(data.get("captcha_mode") or "").strip().lower()
             if raw_mode and normalize_captcha_mode(raw_mode) != raw_mode:
@@ -231,6 +325,10 @@ def register_system_admin_settings_routes(app, ctx):
 
         before_settings = dict(current_settings)
         try:
+            enforce_dangerous_confirm(current_settings, data)
+        except DangerousChangeBlocked as exc:
+            return json_resp(_dangerous_blocked_payload(exc)), 400
+        try:
             settings = save_settings(data)
         except ValueError as exc:
             if "requires" in str(exc):
@@ -244,7 +342,7 @@ def register_system_admin_settings_routes(app, ctx):
         return json_resp({
             "ok": True,
             "msg": "系統參數已更新",
-            "settings": settings,
+            "settings": public_settings_payload(get_system_settings()),
             "server_bind": server_bind_settings_payload(
                 get_system_settings(),
                 current_host=CURRENT_SERVER_BIND_STATE.get("host"),
@@ -252,6 +350,28 @@ def register_system_admin_settings_routes(app, ctx):
             ),
             "server_ssl": server_ssl_payload(get_system_settings()),
             "cloud_drive_storage": cloud_drive_storage_payload(get_system_settings()),
+        })
+
+    @app.route("/api/admin/settings/metadata", methods=["GET"])
+    @require_csrf_safe
+    def admin_settings_metadata():
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok": False, "msg": "未登入"}), 401
+        if actor["username"] != "root":
+            return json_resp({"ok": False, "msg": "只有最高管理者可讀取系統參數元資料"}), 403
+        return json_resp({
+            "ok": True,
+            "groups": setting_groups_payload(),
+            "dangerous_keys": [
+                {
+                    "key": key,
+                    "side": danger["side"],
+                    "warning": danger["warning"],
+                    "label": SETTING_DETAILS.get(key, {}).get("label") or key,
+                }
+                for key, danger in DANGEROUS_SETTINGS.items()
+            ],
         })
 
     @app.route("/api/admin/cloud-drive/security-policy", methods=["GET", "PUT"])
@@ -268,7 +388,7 @@ def register_system_admin_settings_routes(app, ctx):
             try:
                 data = request.get_json(force=True)
             except Exception:
-                return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+                return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
             policy, err = update_cloud_drive_security_policy(conn, data)
             if err:
                 return json_resp({"ok":False,"msg":err}), 400
@@ -293,14 +413,26 @@ def register_system_admin_settings_routes(app, ctx):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
 
         before_settings = get_system_settings()
         violations = find_feature_dependency_violations(before_settings, data)
         if violations:
             return json_resp(feature_dependency_error_payload(violations)), 400
+        # admin_features only accepts feature_* flags; restrict the dangerous
+        # gate to those so extra keys (which save_feature_settings will strip)
+        # do not produce confusing errors here. The /api/admin/settings PUT
+        # path still guards every other key in its own enforcement call.
+        feature_only_data = {
+            key: value for key, value in data.items()
+            if key.startswith("feature_") or key == "dangerous_confirm"
+        }
+        try:
+            enforce_dangerous_confirm(before_settings, feature_only_data)
+        except DangerousChangeBlocked as exc:
+            return json_resp(_dangerous_blocked_payload(exc)), 400
         try:
             updates = save_feature_settings(data)
         except ValueError as exc:
@@ -324,9 +456,9 @@ def register_system_admin_settings_routes(app, ctx):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         before_settings = get_system_settings()
         updates = {}
         for key in ("root_ip_whitelist_enabled", "root_ip_whitelist", "browser_only_mode_enabled"):
@@ -362,9 +494,9 @@ def register_system_admin_settings_routes(app, ctx):
         try:
             data = request.get_json(force=True) if request.is_json else {}
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         if data.get("confirm") != "ROTATE":
             return json_resp({"ok":False,"msg":"confirm 必須等於 ROTATE"}), 400
         ttl_minutes = data.get("ttl_minutes", 30)
@@ -405,9 +537,9 @@ def register_system_admin_settings_routes(app, ctx):
         try:
             data = request.get_json(force=True) if request.is_json else {}
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         if data.get("confirm") != "ROTATE_INTERNAL_TEST_TOKEN":
             return json_resp({"ok":False,"msg":"confirm 必須等於 ROTATE_INTERNAL_TEST_TOKEN"}), 400
         ttl_minutes = data.get("ttl_minutes", 24 * 60)
@@ -502,7 +634,7 @@ def register_system_admin_settings_routes(app, ctx):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
 
         conn = get_db()
         try:

@@ -60,17 +60,54 @@ def ensure_notifications_schema(conn):
         )
         """
     )
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(notifications)").fetchall()}
+    additions = {
+        "severity": "TEXT NOT NULL DEFAULT 'info'",
+        "audience": "TEXT NOT NULL DEFAULT 'user'",
+        "source_module": "TEXT",
+        "source_ref": "TEXT",
+        "dismissed_at": "TEXT",
+        "expires_at": "TEXT",
+        "metadata_json": "TEXT",
+    }
+    for name, ddl in additions.items():
+        if name not in cols:
+            conn.execute(f"ALTER TABLE notifications ADD COLUMN {name} {ddl}")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_notifications_user_read ON notifications(user_id, is_read, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_notifications_user_dismissed ON notifications(user_id, dismissed_at, created_at)")
 
 
-def create_notification(conn, *, user_id, type, title, body, link=None):
+def create_notification(
+    conn,
+    *,
+    user_id,
+    type,
+    title,
+    body,
+    link=None,
+    severity="info",
+    audience="user",
+    source_module=None,
+    source_ref=None,
+    metadata_json=None,
+    expires_at=None,
+):
     ensure_notifications_schema(conn)
     if notification_type_is_muted(type):
         return False
+    severity = str(severity or "info").strip().lower()
+    if severity not in {"info", "success", "warning", "error", "critical"}:
+        severity = "info"
+    audience = str(audience or "user").strip().lower()
+    if audience not in {"user", "admin", "root", "system"}:
+        audience = "user"
     conn.execute(
         """
-        INSERT INTO notifications (user_id, type, title, body, link, is_read, created_at)
-        VALUES (?, ?, ?, ?, ?, 0, ?)
+        INSERT INTO notifications (
+            user_id, type, title, body, link, is_read, created_at,
+            severity, audience, source_module, source_ref, metadata_json, expires_at
+        )
+        VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             int(user_id),
@@ -79,6 +116,12 @@ def create_notification(conn, *, user_id, type, title, body, link=None):
             str(body or "")[:1000],
             str(link or "")[:300] if link else None,
             datetime.now().isoformat(),
+            severity,
+            audience,
+            str(source_module or "")[:80] or None,
+            str(source_ref or "")[:160] or None,
+            str(metadata_json or "")[:2000] if metadata_json else None,
+            str(expires_at or "")[:80] or None,
         ),
     )
     return True
@@ -131,10 +174,15 @@ def serialize_notification(row):
         "id": row["id"],
         "user_id": row["user_id"],
         "type": row["type"],
+        "severity": row["severity"] if "severity" in row.keys() else "info",
+        "audience": row["audience"] if "audience" in row.keys() else "user",
         "title": row["title"],
         "body": row["body"],
         "link": row["link"],
         "is_read": bool(row["is_read"]),
+        "dismissed_at": row["dismissed_at"] if "dismissed_at" in row.keys() else None,
+        "source_module": row["source_module"] if "source_module" in row.keys() else None,
+        "source_ref": row["source_ref"] if "source_ref" in row.keys() else None,
         "created_at": row["created_at"],
         "read_at": row["read_at"],
     }

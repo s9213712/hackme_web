@@ -95,6 +95,7 @@ MoveOrderFn = Callable[[chess.Board, chess.Move, int], int]
 EvalFn = Callable[[chess.Board], int]
 QFilterFn = Callable[[chess.Board, chess.Move], bool]
 MoveScoreFn = Callable[[chess.Move], int]
+ExtensionFn = Callable[[chess.Board, chess.Move, int, int], int]
 
 
 class SearchTimeout(RuntimeError):
@@ -265,19 +266,21 @@ def _quiescence(
     qmoves = [move for move in board.legal_moves if qmove_filter(board, move)]
     for move in qmoves:
         board.push(move)
-        score = -_quiescence(
-            board,
-            alpha=-beta,
-            beta=-alpha,
-            color_sign=-color_sign,
-            ply=ply + 1,
-            remaining_depth=remaining_depth - 1,
-            evaluate=evaluate,
-            qmove_filter=qmove_filter,
-            stats=stats,
-            deadline=deadline,
-        )
-        board.pop()
+        try:
+            score = -_quiescence(
+                board,
+                alpha=-beta,
+                beta=-alpha,
+                color_sign=-color_sign,
+                ply=ply + 1,
+                remaining_depth=remaining_depth - 1,
+                evaluate=evaluate,
+                qmove_filter=qmove_filter,
+                stats=stats,
+                deadline=deadline,
+            )
+        finally:
+            board.pop()
         if score >= beta:
             return beta
         if score > alpha:
@@ -296,6 +299,8 @@ def _negamax(
     evaluate: EvalFn,
     move_order_fn: MoveOrderFn | None,
     qmove_filter: QFilterFn,
+    extension_fn: ExtensionFn | None,
+    extensions_remaining: int,
     stats: SearchStats,
     transposition: TranspositionTable,
     hasher: ZobristHasher,
@@ -351,27 +356,37 @@ def _negamax(
     )
     for move in ordered:
         moving_turn = board.turn
+        extension = 0
+        if extensions_remaining > 0 and extension_fn is not None:
+            try:
+                extension = max(0, min(1, int(extension_fn(board, move, ply, depth))))
+            except Exception:
+                extension = 0
         board.push(move)
-        score, _child_move = _negamax(
-            board,
-            depth=depth - 1,
-            alpha=-beta,
-            beta=-alpha,
-            color_sign=-color_sign,
-            ply=ply + 1,
-            evaluate=evaluate,
-            move_order_fn=move_order_fn,
-            qmove_filter=qmove_filter,
-            stats=stats,
-            transposition=transposition,
-            hasher=hasher,
-            killer_moves=killer_moves,
-            history_heuristic=history_heuristic,
-            quiescence_depth=quiescence_depth,
-            deadline=deadline,
-        )
-        score = -score
-        board.pop()
+        try:
+            score, _child_move = _negamax(
+                board,
+                depth=depth - 1 + extension,
+                alpha=-beta,
+                beta=-alpha,
+                color_sign=-color_sign,
+                ply=ply + 1,
+                evaluate=evaluate,
+                move_order_fn=move_order_fn,
+                qmove_filter=qmove_filter,
+                extension_fn=extension_fn,
+                extensions_remaining=max(0, extensions_remaining - extension),
+                stats=stats,
+                transposition=transposition,
+                hasher=hasher,
+                killer_moves=killer_moves,
+                history_heuristic=history_heuristic,
+                quiescence_depth=quiescence_depth,
+                deadline=deadline,
+            )
+            score = -score
+        finally:
+            board.pop()
         if score > best_score or (score == best_score and best_move is not None and move.uci() < best_move.uci()):
             best_score = score
             best_move = move
@@ -407,6 +422,8 @@ def search_best_move(
     evaluate: EvalFn,
     move_order_fn: MoveOrderFn | None = None,
     qmove_filter: QFilterFn | None = None,
+    extension_fn: ExtensionFn | None = None,
+    max_extensions: int = 0,
     aspiration_window: int = _DEFAULT_ASPIRATION_WINDOW,
     quiescence_depth: int = _DEFAULT_QUIESCENCE_DEPTH,
     use_iterative_deepening: bool = True,
@@ -470,6 +487,8 @@ def search_best_move(
                     evaluate=evaluate,
                     move_order_fn=move_order_fn,
                     qmove_filter=qmove_filter,
+                    extension_fn=extension_fn,
+                    extensions_remaining=max(0, int(max_extensions or 0)),
                     stats=stats,
                     transposition=transposition,
                     hasher=hasher,

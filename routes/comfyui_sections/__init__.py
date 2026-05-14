@@ -1,3 +1,5 @@
 from .admin_routes import register_comfyui_admin_routes
+from .image_routes import register_comfyui_image_routes
+from .runtime_routes import register_comfyui_runtime_routes
+from .template_routes import register_comfyui_template_routes
 from .workflow_routes import register_comfyui_workflow_routes
-

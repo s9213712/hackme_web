@@ -139,7 +139,10 @@ sc=$(curl "${CURL_OPTS[@]}" -b "$ROOT_JAR" "$BASE_URL/api/admin/security-center"
 for k in settings audit_integrity readiness anomaly mode; do
   [ "$(printf '%s' "$sc" | jq -r ".security_center.$k // empty")" != "" ] || fail "security-center.$k missing"
 done
-ok "security-center exposes all 5 fields"
+for k in allow_register captcha_mode production_single_account_ip_lock_enabled production_single_ip_account_lock_enabled; do
+  printf '%s' "$sc" | jq -e --arg k "$k" '.security_center.settings | has($k)' >/dev/null || fail "security-center.settings.$k missing"
+done
+ok "security-center exposes summary fields and required settings keys"
 
 say "12) GET /api/admin/health (data for 健康度)"
 hc=$(curl "${CURL_OPTS[@]}" -b "$ROOT_JAR" "$BASE_URL/api/admin/health")

@@ -233,6 +233,27 @@ def test_cloud_drive_upload_failure_returns_specific_reason(tmp_path):
     assert body["error_code"] == "ValueError"
 
 
+def test_storage_file_e2ee_upload_failure_returns_client_error(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    res = client.post(
+        "/api/storage/files",
+        data={"file": (io.BytesIO(b"cipher"), "vault.bin"), "privacy_mode": "e2ee"},
+        content_type="multipart/form-data",
+    )
+
+    assert res.status_code == 400
+    body = res.get_json()
+    assert body["ok"] is False
+    assert "encrypted_file_key is required" in body["msg"]
+    assert body["error_code"] == "ValueError"
+
+
 def test_server_encrypted_upload_stores_ciphertext_but_downloads_plaintext(tmp_path):
     db_path = tmp_path / "drive.db"
     storage_root = tmp_path / "storage"
@@ -2415,3 +2436,32 @@ def test_remote_download_torrent_upload_rejects_non_torrent(tmp_path):
 
     assert res.status_code == 400
     assert ".torrent" in res.get_json()["msg"]
+
+
+def test_remote_download_torrent_upload_rejects_private_tracker(tmp_path, monkeypatch):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    def fake_getaddrinfo(host, port, **kwargs):
+        if host == "tracker.example":
+            return [(2, 1, 6, "", ("127.0.0.1", int(port or 80)))]
+        return [(2, 1, 6, "", ("8.8.8.8", int(port or 80)))]
+
+    tracker = b"http://tracker.example/announce"
+    payload = (
+        b"d8:announce" + str(len(tracker)).encode("ascii") + b":" + tracker +
+        b"4:infod4:name4:test12:piece lengthi16384e6:pieces0:ee"
+    )
+    monkeypatch.setattr("services.storage.remote_downloads.socket.getaddrinfo", fake_getaddrinfo)
+
+    res = client.post(
+        "/api/cloud-drive/remote-download/torrent-tasks",
+        data={"torrent_file": (io.BytesIO(payload), "bad.torrent")},
+    )
+
+    assert res.status_code == 400
+    assert "不安全 tracker" in res.get_json()["msg"]

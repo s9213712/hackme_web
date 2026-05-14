@@ -33,7 +33,7 @@ def scan_line(rel: str, line: str, line_no: int) -> list[dict[str, object]]:
             continue
         if rel.startswith("scripts/prepush/"):
             continue
-        if rel == "tests/test_prepush_v2.py":
+        if rel in {"tests/test_prepush_v2.py", "tests/scripts/prepush/test_prepush_v2.py"}:
             continue
         if rel == "hooks/pre-push" and "Release ID:\\s" in line:
             continue

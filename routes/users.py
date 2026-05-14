@@ -35,6 +35,7 @@ def register_user_routes(app, deps):
     ensure_user_official_room_membership = deps["ensure_user_official_room_membership"]
     get_client_ip = deps["get_client_ip"]
     get_current_user_ctx = deps["get_current_user_ctx"]
+    get_auth_db = deps.get("get_auth_db", deps["get_db"])
     get_db = deps["get_db"]
     get_ua = deps["get_ua"]
     hash_password = deps["hash_password"]
@@ -411,9 +412,9 @@ def register_user_routes(app, deps):
         except Exception:
             return {}
 
-    def active_session_map(conn):
+    def active_session_map(auth_conn):
         try:
-            session_cols = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+            session_cols = {r["name"] for r in auth_conn.execute("PRAGMA table_info(sessions)").fetchall()}
         except Exception:
             return {}
         if not {"user_id", "expires_at"}.issubset(session_cols):
@@ -423,7 +424,7 @@ def register_user_routes(app, deps):
         now_iso = datetime.now().isoformat()
         online_cutoff = (datetime.now() - timedelta(minutes=5)).isoformat()
         try:
-            rows = conn.execute(
+            rows = auth_conn.execute(
                 f"""
                 SELECT user_id, MAX({last_seen_expr}) AS last_seen, COUNT(*) AS session_count
                 FROM sessions
@@ -542,7 +543,7 @@ def register_user_routes(app, deps):
         now = datetime.now().isoformat()
         conn.execute(
             "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (?, ?, ?)",
-            (request_row["user_id"], hash_password(password), now),
+            (request_row["user_id"], hash_password(new_credential), now),
         )
         conn.execute(
             """
@@ -587,7 +588,7 @@ def register_user_routes(app, deps):
 
         token_hash = current_session_hash()
         now = datetime.now().isoformat()
-        conn = get_db()
+        conn = get_auth_db()
         try:
             rows = conn.execute(
                 "SELECT id, token_hash, ip_address, user_agent, device_info, ip_country, expires_at, is_revoked, revoked_at, last_seen, created_at "
@@ -625,7 +626,7 @@ def register_user_routes(app, deps):
             return json_resp({"ok":False,"msg":"帳號安全功能目前已關閉"}), 503
 
         token_hash = current_session_hash()
-        conn = get_db()
+        conn = get_auth_db()
         try:
             row = conn.execute(
                 "SELECT id, token_hash, is_revoked FROM sessions WHERE id=? AND user_id=?",
@@ -665,7 +666,7 @@ def register_user_routes(app, deps):
         if keep_current and token_hash:
             sql += " AND token_hash<>?"
             params.append(token_hash)
-        conn = get_db()
+        conn = get_auth_db()
         try:
             cur = conn.execute(sql, tuple(params))
             conn.commit()
@@ -712,7 +713,11 @@ def register_user_routes(app, deps):
                     f"FROM users{where} ORDER BY id ASC",
                     params,
                 ).fetchall()
-                sessions_by_user = active_session_map(conn)
+                auth_conn = get_auth_db()
+                try:
+                    sessions_by_user = active_session_map(auth_conn)
+                finally:
+                    auth_conn.close()
                 data = []
                 for r in rows:
                     item = user_public_payload(r, include_sensitive=False)
@@ -738,9 +743,9 @@ def register_user_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
 
         username = normalize_text(data.get("username"))
         credential_text = data.get("password", "") if isinstance(data.get("password"), str) else ""
@@ -1062,9 +1067,9 @@ def register_user_routes(app, deps):
             try:
                 data = request.get_json(force=True)
             except Exception:
-                return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+                return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
             if not isinstance(data, dict):
-                return json_resp({"ok":False,"msg":"Invalid request"}), 400
+                return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
             if request.method == "PUT" and not is_self and role_rank(actor_role) < role_rank("super_admin"):
                 allowed_manager_keys = {"member_level", "base_level", "level_update_reason", "reason"}
                 if set(data.keys()) - allowed_manager_keys:
@@ -1265,9 +1270,9 @@ def register_user_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
 
         action = normalize_text(data.get("action"))
         if action not in ("approve", "reject"):
@@ -1378,9 +1383,9 @@ def register_user_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
         temporary_credential = data.get("temporary_password", "") if isinstance(data.get("temporary_password"), str) else ""
         temporary_credential_confirm = data.get("temporary_password_confirm", "") if isinstance(data.get("temporary_password_confirm"), str) else ""
         note = normalize_text(data.get("note") or "password reset review approved")
@@ -1475,9 +1480,9 @@ def register_user_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
 
         action = (normalize_text(data.get("action")) or "").lower() or "block"
         minutes = data.get("minutes", 30)
@@ -1617,7 +1622,7 @@ def register_user_routes(app, deps):
 
         data = request.get_json(silent=True) or {}
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         target_status = str(data.get("target_status", "inactive")).strip()
         valid_statuses = {"restricted", "suspended", "inactive"}
         if target_status not in valid_statuses:
@@ -1725,10 +1730,10 @@ def register_user_routes(app, deps):
         try:
             data = request.get_json(force=True) or {}
         except:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            return json_resp({"ok":False,"msg": "請求 JSON 格式錯誤"}), 400
 
         if not isinstance(data, dict):
-            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            return json_resp({"ok":False,"msg": "請求內容格式錯誤"}), 400
         points = parse_positive_int(data.get("points", 1))
         if points is None:
             return json_resp({"ok":False,"msg":"違規點數格式錯誤"}), 400

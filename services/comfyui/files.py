@@ -33,23 +33,37 @@ def upload_image_bytes(client, data, filename, *, image_type="input", overwrite=
     }
 
 
-def fetch_image(client, image_ref, *, error_cls, image_cls):
-    filename = str((image_ref or {}).get("filename") or "").strip()
-    subfolder = str((image_ref or {}).get("subfolder") or "").strip()
-    image_type = str((image_ref or {}).get("type") or "output").strip() or "output"
+def fetch_file(client, file_ref, *, error_cls, file_cls, accept="*/*", empty_label="ComfyUI 檔案"):
+    filename = str((file_ref or {}).get("filename") or "").strip()
+    subfolder = str((file_ref or {}).get("subfolder") or "").strip()
+    image_type = str((file_ref or {}).get("type") or "output").strip() or "output"
     if not filename:
-        raise error_cls("缺少 ComfyUI 圖片檔名")
+        raise error_cls(f"缺少 {empty_label}檔名")
     query = urllib.parse.urlencode({"filename": filename, "subfolder": subfolder, "type": image_type})
-    req = urllib.request.Request(client._url(f"/view?{query}"), headers={"Accept": "image/*"})
+    req = urllib.request.Request(client._url(f"/view?{query}"), headers={"Accept": accept})
     try:
         with urllib.request.urlopen(req, timeout=client.timeout) as resp:
-            content_type = resp.headers.get("Content-Type") or "image/png"
+            content_type = resp.headers.get("Content-Type") or "application/octet-stream"
             data = resp.read()
     except urllib.error.URLError as exc:
-        raise error_cls(f"ComfyUI 圖片讀取失敗：{getattr(exc, 'reason', exc)}") from exc
+        raise error_cls(f"{empty_label}讀取失敗：{getattr(exc, 'reason', exc)}") from exc
     if not data:
-        raise error_cls("ComfyUI 圖片內容為空")
-    return image_cls(filename=filename, subfolder=subfolder, type=image_type, mime_type=content_type, data=data)
+        raise error_cls(f"{empty_label}內容為空")
+    return file_cls(filename=filename, subfolder=subfolder, type=image_type, mime_type=content_type, data=data)
+
+
+def fetch_image(client, image_ref, *, error_cls, image_cls):
+    image = fetch_file(
+        client,
+        image_ref,
+        error_cls=error_cls,
+        file_cls=image_cls,
+        accept="image/*",
+        empty_label="ComfyUI 圖片",
+    )
+    if not image.mime_type:
+        image.mime_type = "image/png"
+    return image
 
 
 def local_dir_for_type(image_type, *, error_cls, local_base_dir=None):

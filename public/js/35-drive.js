@@ -237,6 +237,7 @@ function askDriveUploadPrivacyOptions({ allowE2ee = true, title = "選擇隱私�
       confirmBtn.removeEventListener("click", onConfirm);
       cancelBtn.removeEventListener("click", onCancel);
       overlay.removeEventListener("click", onOverlayClick);
+      document.removeEventListener("keydown", onKeyDown);
       radios.forEach((radio) => radio.removeEventListener("change", sync));
       overlay.classList.remove("show");
       overlay.setAttribute("aria-hidden", "true");
@@ -246,6 +247,9 @@ function askDriveUploadPrivacyOptions({ allowE2ee = true, title = "選擇隱私�
     const onCancel = () => cleanup(null);
     const onOverlayClick = (event) => {
       if (event.target === overlay) cleanup(null);
+    };
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") cleanup(null);
     };
     const onConfirm = () => {
       const privacyMode = selectedMode();
@@ -281,9 +285,14 @@ function askDriveUploadPrivacyOptions({ allowE2ee = true, title = "選擇隱私�
     confirmBtn.addEventListener("click", onConfirm);
     cancelBtn.addEventListener("click", onCancel);
     overlay.addEventListener("click", onOverlayClick);
+    document.addEventListener("keydown", onKeyDown);
     overlay.classList.add("show");
     overlay.setAttribute("aria-hidden", "false");
     document.body.classList.add("modal-open");
+    setTimeout(() => {
+      const checked = radios.find((radio) => radio.checked && !radio.disabled);
+      (checked || confirmBtn).focus?.();
+    }, 0);
   });
 }
 
@@ -635,8 +644,10 @@ function renderDriveDashboard(payload) {
   if (limitLabel) {
     const maxFile = formatDriveBytes(quota.max_file_size_bytes);
     const daily = quota.upload_rate_limit_per_day === null || quota.upload_rate_limit_per_day === undefined ? "無上限" : `${quota.upload_rate_limit_per_day} 次`;
-    const diskNote = quota.quota_source === "root_disk_available_90_percent"
-      ? ` · root 上限：儲存磁碟可用空間 90%，${quota.warning_threshold_percent || 80}% 起警示`
+    const diskNote = quota.quota_source === "root_disk_total_95_percent"
+      ? ` · root 上限：全用戶容量設定（磁碟總容量 95%），${quota.warning_threshold_percent || 80}% 起警示`
+      : quota.quota_source === "root_global_capacity_limit_mb"
+        ? ` · root 上限：全用戶容量設定，${quota.warning_threshold_percent || 80}% 起警示`
       : String(quota.quota_source || "").startsWith("manager_role_fixed_1gb")
         ? " · manager 上限：1 GB"
       : "";
@@ -646,7 +657,17 @@ function renderDriveDashboard(payload) {
   }
   if (barFill) {
     barFill.style.width = `${percent}%`;
-    barFill.dataset.warning = quota.warning_active || percent >= 80 ? "high" : percent >= 65 ? "medium" : "low";
+    const level = quota.warning_active || percent >= 80 ? "high" : percent >= 65 ? "medium" : "low";
+    barFill.dataset.warning = level;
+    // P5: also toggle the fx-capacity-bar warning/critical classes on the
+    // parent so the wave + pulse animations fire. Existing colour rules
+    // (#drive-quota-bar-fill[data-warning]) keep working in parallel.
+    const wrap = barFill.parentElement;
+    if (wrap && wrap.classList) {
+      wrap.classList.toggle("warning", level === "medium" || (level === "high" && percent < 90));
+      wrap.classList.toggle("critical", level === "high" && percent >= 90);
+      wrap.style.setProperty("--fx-capacity-percent", `${percent}%`);
+    }
   }
 
   const list = $("drive-security-list");

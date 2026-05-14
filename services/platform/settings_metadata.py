@@ -1,0 +1,474 @@
+"""Group / danger metadata for system settings.
+
+This module sits next to ``services.platform.settings`` and provides:
+
+- ``SETTING_GROUPS``: ordered groups so the admin frontend can render
+  domain-by-domain instead of one giant flat list of 120 keys.
+- ``SETTING_DETAILS``: per-key label + one-line description.
+- ``DANGEROUS_SETTINGS``: keys whose change requires an explicit
+  ``dangerous_confirm`` field in the PUT payload. Each entry includes the
+  expected confirm phrase, the side it guards (``disable``/``enable``/
+  ``either``), and the operator-facing warning.
+
+The dependency rules already live in ``settings.py`` as
+``FEATURE_DEPENDENCY_RULES``; this module deliberately does not duplicate
+them so there is one canonical source for feature graphs.
+"""
+
+from __future__ import annotations
+
+from services.platform.settings import (
+    DEFAULT_SETTINGS,
+    FEATURE_DEPENDENCY_RULES,
+    FEATURE_FLAG_KEYS,
+    FEATURE_SETTING_LABELS,
+    MANAGEMENT_ONLY_FEATURE_FLAGS,
+)
+
+
+SETTING_GROUPS = (
+    {
+        "key": "security",
+        "title": "安全與稽核",
+        "description": "Audit chain、IP 封鎖、登入暴力防護、Integrity Guard。錯改可能讓站台無法偵測攻擊。",
+        "settings": (
+            "audit_chain_enabled",
+            "audit_chain_reseal_required",
+            "integrity_guard_enabled",
+            "integrity_guard_strict_mode",
+            "ip_blocking_enabled",
+            "login_violation_enabled",
+            "rate_limit_violation_enabled",
+            "max_login_failures",
+            "max_login_fails_for_violation",
+            "block_duration_minutes",
+            "login_autofill_block_enabled",
+            "production_single_ip_account_lock_enabled",
+            "production_single_account_ip_lock_enabled",
+            "root_ip_whitelist_enabled",
+            "root_ip_whitelist",
+            "browser_only_mode_enabled",
+        ),
+    },
+    {
+        "key": "sessions_and_recovery",
+        "title": "會話與帳號復原",
+        "description": "Session TTL、idle timeout、密碼重設模式、CAPTCHA。",
+        "settings": (
+            "session_ttl_hours",
+            "session_idle_timeout_minutes",
+            "password_reset_mode",
+            "allow_register",
+            "require_email_verification",
+            "captcha_mode",
+            "captcha_ttl_seconds",
+            "captcha_turnstile_site_key",
+        ),
+    },
+    {
+        "key": "maintenance",
+        "title": "維護模式 / Bypass Token",
+        "description": "維護模式會擋住所有人，bypass token 給內部回測用。",
+        "settings": (
+            "maintenance_mode",
+            "maintenance_bypass_token_hash",
+            "maintenance_bypass_token_expires_at",
+            "internal_test_login_token_hash",
+            "internal_test_login_token_expires_at",
+            "internal_test_login_token_user_id",
+            "internal_test_login_token_username",
+        ),
+    },
+    {
+        "key": "server_bind",
+        "title": "Server 綁定 / SSL",
+        "description": "Listen host/port 與 SSL 開關。改動後需要重啟 server。",
+        "settings": (
+            "server_listen_host",
+            "server_listen_port",
+            "server_ssl_enabled",
+        ),
+    },
+    {
+        "key": "cloud_drive",
+        "title": "雲端硬碟",
+        "description": "Storage root、容量上限、傳輸速率分級。",
+        "settings": (
+            "cloud_drive_storage_root",
+            "cloud_drive_global_capacity_limit_mb",
+            "cloud_drive_transfer_limits_enabled",
+            "cloud_drive_transfer_limits_json",
+            "storage_trash_retention_days",
+            "storage_maintenance_auto_enabled",
+            "storage_maintenance_daily_time",
+            "storage_maintenance_last_date",
+        ),
+    },
+    {
+        "key": "snapshot",
+        "title": "Snapshot / 備援",
+        "description": "每日自動 snapshot 設定。",
+        "settings": (
+            "snapshot_daily_auto_enabled",
+            "snapshot_daily_time",
+            "snapshot_daily_last_date",
+        ),
+    },
+    {
+        "key": "appearance",
+        "title": "外觀 / 佈景",
+        "description": "站台主色、字型、版面密度。改動只影響顯示。",
+        "settings": tuple(key for key in DEFAULT_SETTINGS if key.startswith("site_")),
+    },
+    {
+        "key": "module_access",
+        "title": "模組存取最低角色",
+        "description": "每個模組可以指定最低身份才能進入。",
+        "settings": tuple(key for key in DEFAULT_SETTINGS if key.startswith("module_") and key.endswith("_min_role")),
+    },
+    {
+        "key": "features_user_facing",
+        "title": "功能總開關 — 使用者端",
+        "description": "對使用者可見的模組總開關。受 FEATURE_DEPENDENCY_RULES 約束。",
+        "settings": tuple(
+            key for key in FEATURE_FLAG_KEYS
+            if key not in MANAGEMENT_ONLY_FEATURE_FLAGS
+        ),
+    },
+    {
+        "key": "features_management",
+        "title": "功能總開關 — 管理端",
+        "description": "管理者操作面板總開關。關掉會讓對應管理頁面消失。",
+        "settings": tuple(sorted(MANAGEMENT_ONLY_FEATURE_FLAGS)),
+    },
+    {
+        "key": "comfyui",
+        "title": "ComfyUI 連線",
+        "description": "ComfyUI host、port、本地 / 遠端模式、API key。",
+        "settings": tuple(key for key in DEFAULT_SETTINGS if key.startswith("comfyui_")),
+    },
+    {
+        "key": "video",
+        "title": "影音 / 打賞",
+        "description": "影音打賞抽成比例與最低門檻。",
+        "settings": (
+            "video_tip_fee_percent",
+            "video_tip_min_points",
+        ),
+    },
+    {
+        "key": "security_thresholds",
+        "title": "安全告警門檻",
+        "description": "聊天檢舉、申覆、隔離檔案、未知加密檔案的警示門檻。",
+        "settings": tuple(key for key in DEFAULT_SETTINGS if key.startswith("security_")),
+    },
+    {
+        "key": "chat",
+        "title": "聊天規則",
+        "description": "聊天過濾規則與通知靜音類型。",
+        "settings": (
+            "chat_filter_rules_json",
+            "notification_muted_types",
+        ),
+    },
+)
+
+
+SETTING_DETAILS = {
+    "audit_chain_enabled": {
+        "label": "Audit Chain 簽章鏈",
+        "description": "啟用後 audit log 會用前一筆 hash 串成 Merkle 鏈，竄改會被偵測。",
+    },
+    "audit_chain_reseal_required": {
+        "label": "Audit Chain Reseal 必須",
+        "description": "重新啟用 audit chain 時是否必須先 reseal 舊資料。",
+    },
+    "integrity_guard_enabled": {
+        "label": "Integrity Guard 檔案校驗",
+        "description": "對 runtime 重要檔案做 SHA256 校驗，發現竄改會發告警。",
+    },
+    "integrity_guard_strict_mode": {
+        "label": "Integrity Guard 嚴格模式",
+        "description": "嚴格模式下偵測到不符會直接拒絕服務，非嚴格模式僅紀錄。",
+    },
+    "ip_blocking_enabled": {
+        "label": "IP 自動封鎖",
+        "description": "暴力嘗試達門檻後自動封 IP。",
+    },
+    "login_violation_enabled": {
+        "label": "登入失敗違規累積",
+        "description": "登入失敗會累積到 user 的違規分數。",
+    },
+    "rate_limit_violation_enabled": {
+        "label": "Rate limit 違規累積",
+        "description": "超 rate limit 的請求會累積到違規分數。",
+    },
+    "max_login_failures": {
+        "label": "登入失敗鎖定門檻",
+        "description": "連續登入失敗幾次後鎖定該帳號。",
+    },
+    "max_login_fails_for_violation": {
+        "label": "登入失敗違規門檻",
+        "description": "失敗幾次後該登入嘗試會被當作違規。",
+    },
+    "block_duration_minutes": {
+        "label": "封鎖時長 (分鐘)",
+        "description": "IP 或帳號被自動封鎖的分鐘數。",
+    },
+    "login_autofill_block_enabled": {
+        "label": "禁止瀏覽器自動填入密碼",
+        "description": "登入表單會避免被密碼管理員自動帶入。",
+    },
+    "production_single_ip_account_lock_enabled": {
+        "label": "生產：單 IP 同時只允許單一帳號",
+        "description": "防止同一 IP 同時登入多個帳號。",
+    },
+    "production_single_account_ip_lock_enabled": {
+        "label": "生產：單帳號鎖定首登入 IP",
+        "description": "帳號首次登入後綁定該 IP，其他 IP 需重新驗證。",
+    },
+    "root_ip_whitelist_enabled": {
+        "label": "Root IP 白名單啟用",
+        "description": "限制 root 帳號只能從白名單 IP 登入。",
+    },
+    "root_ip_whitelist": {
+        "label": "Root IP 白名單清單",
+        "description": "以逗號分隔的 IP 或 CIDR。",
+    },
+    "browser_only_mode_enabled": {
+        "label": "僅允許瀏覽器 UA",
+        "description": "拒絕非瀏覽器 User-Agent (curl / wget 等)。",
+    },
+    "session_ttl_hours": {
+        "label": "Session 最長存活 (小時)",
+        "description": "session 從建立起算的絕對 TTL。",
+    },
+    "session_idle_timeout_minutes": {
+        "label": "Session idle timeout (分鐘)",
+        "description": "session 連續閒置這麼久後自動失效。",
+    },
+    "password_reset_mode": {
+        "label": "密碼重設模式",
+        "description": "admin_review = 管理者批准；email_token = 收信驗證。",
+    },
+    "allow_register": {
+        "label": "開放公開註冊",
+        "description": "關閉後僅 admin 可建立新帳號。",
+    },
+    "require_email_verification": {
+        "label": "註冊需 Email 驗證",
+        "description": "註冊後需點信件連結才能登入。",
+    },
+    "captcha_mode": {
+        "label": "CAPTCHA 模式",
+        "description": "none / math / image / turnstile。",
+    },
+    "captcha_ttl_seconds": {
+        "label": "CAPTCHA TTL (秒)",
+        "description": "CAPTCHA token 的有效秒數，60-3600。",
+    },
+    "captcha_turnstile_site_key": {
+        "label": "Turnstile site key",
+        "description": "Cloudflare Turnstile 公開 site key。",
+    },
+    "maintenance_mode": {
+        "label": "維護模式 (擋全站)",
+        "description": "啟用後所有使用者都被引導到維護頁。",
+    },
+    "server_ssl_enabled": {
+        "label": "Server 啟用 SSL/HTTPS",
+        "description": "關閉會降為 HTTP plain。",
+    },
+    "cloud_drive_global_capacity_limit_mb": {
+        "label": "全站雲端硬碟容量上限 (MB)",
+        "description": "-1 = 不限制，0 = 全禁，其他正整數為硬性 MB 上限。",
+    },
+    "cloud_drive_transfer_limits_enabled": {
+        "label": "雲端硬碟分級限速",
+        "description": "依會員等級套用上傳 / 下載速率上限。",
+    },
+    "storage_trash_retention_days": {
+        "label": "回收桶保留天數",
+        "description": "Trash 內檔案多少天後自動清。",
+    },
+    "snapshot_daily_auto_enabled": {
+        "label": "每日自動 Snapshot",
+        "description": "每天指定時間自動建立站台 snapshot。",
+    },
+    "snapshot_daily_time": {
+        "label": "每日 Snapshot 時間",
+        "description": "HH:MM 格式。",
+    },
+    "video_tip_fee_percent": {
+        "label": "影音打賞抽成 %",
+        "description": "0-100。對發佈者收的平台費。",
+    },
+    "video_tip_min_points": {
+        "label": "影音打賞最低金額 (points)",
+        "description": "1-1000000。",
+    },
+    "storage_maintenance_auto_enabled": {
+        "label": "雲端硬碟自動維護",
+        "description": "每日定時掃描 orphan/quota。",
+    },
+}
+
+# Auto-fill labels for feature_* keys from FEATURE_SETTING_LABELS
+for _key, _label in FEATURE_SETTING_LABELS.items():
+    if _key not in SETTING_DETAILS:
+        SETTING_DETAILS[_key] = {"label": _label, "description": ""}
+
+
+# --- DANGEROUS SETTINGS ---
+# These need an explicit ``dangerous_confirm`` field in the PUT payload that
+# matches the setting key, otherwise the save is rejected with an explanatory
+# error. The aim is "fast for safe edits, friction for risky edits".
+#
+# ``side``: "disable" => trip only when transitioning from True -> False
+#           "enable"  => trip only when transitioning from False -> True
+#           "either"  => any change to this key needs confirm
+#           "value"   => any change at all (including value writes) needs confirm
+
+DANGEROUS_SETTINGS = {
+    "audit_chain_enabled": {
+        "side": "disable",
+        "warning": "關閉 audit chain 會讓 audit log 不再可被竄改偵測，這是最高敏感操作。",
+    },
+    "integrity_guard_enabled": {
+        "side": "disable",
+        "warning": "關閉 Integrity Guard 後檔案竄改將不會被自動偵測。",
+    },
+    "ip_blocking_enabled": {
+        "side": "disable",
+        "warning": "關閉 IP 封鎖後，暴力破解嘗試不會被自動擋下。",
+    },
+    "login_violation_enabled": {
+        "side": "disable",
+        "warning": "關閉登入違規累積後，重複失敗不會累積到帳號違規分數。",
+    },
+    "production_single_account_ip_lock_enabled": {
+        "side": "disable",
+        "warning": "關閉單帳號 IP 綁定，帳號可被異地直接登入。",
+    },
+    "production_single_ip_account_lock_enabled": {
+        "side": "disable",
+        "warning": "關閉單 IP 單帳號限制，分享同一 IP 的帳號可同時上線。",
+    },
+    "server_ssl_enabled": {
+        "side": "disable",
+        "warning": "關閉 SSL/HTTPS 後流量改走 HTTP 明文，登入密碼會在網路上明傳。",
+    },
+    "allow_register": {
+        "side": "enable",
+        "warning": "開放公開註冊後，任何訪客都能建立帳號。生產環境通常應該關。",
+    },
+    "maintenance_mode": {
+        "side": "enable",
+        "warning": "啟用維護模式會立即擋下所有非 bypass 的使用者請求。",
+    },
+    "root_ip_whitelist_enabled": {
+        "side": "enable",
+        "warning": "啟用後若白名單清單不包含你目前的 IP，root 帳號會被鎖在外面。",
+    },
+    "browser_only_mode_enabled": {
+        "side": "enable",
+        "warning": "啟用後 curl / wget / 監控腳本都會被擋；只剩瀏覽器能存取。",
+    },
+}
+
+
+def setting_detail(key):
+    return SETTING_DETAILS.get(key, {"label": key, "description": ""})
+
+
+def setting_groups_payload():
+    """Return a serialisable copy of the group definitions for the API."""
+    groups = []
+    for group in SETTING_GROUPS:
+        items = []
+        for key in group["settings"]:
+            detail = setting_detail(key)
+            danger = DANGEROUS_SETTINGS.get(key)
+            entry = {
+                "key": key,
+                "label": detail.get("label") or key,
+                "description": detail.get("description") or "",
+                "default": DEFAULT_SETTINGS.get(key),
+            }
+            if key in FEATURE_FLAG_KEYS:
+                entry["is_feature_flag"] = True
+                rule = FEATURE_DEPENDENCY_RULES.get(key, {})
+                if rule:
+                    entry["dependency_rule"] = {
+                        "required": list(rule.get("required", ()) or ()),
+                        "recommended": list(rule.get("recommended", ()) or ()),
+                        "description": rule.get("description", ""),
+                    }
+            if danger:
+                entry["dangerous"] = {
+                    "side": danger["side"],
+                    "warning": danger["warning"],
+                }
+            items.append(entry)
+        groups.append({
+            "key": group["key"],
+            "title": group["title"],
+            "description": group["description"],
+            "settings": items,
+        })
+    # Also surface any DEFAULT_SETTINGS keys not yet placed into a group, so
+    # the admin frontend can render them under a fallback bucket instead of
+    # silently hiding them.
+    placed = {key for group in SETTING_GROUPS for key in group["settings"]}
+    misc = []
+    for key in DEFAULT_SETTINGS:
+        if key in placed:
+            continue
+        detail = setting_detail(key)
+        misc.append({
+            "key": key,
+            "label": detail.get("label") or key,
+            "description": detail.get("description") or "",
+            "default": DEFAULT_SETTINGS.get(key),
+        })
+    if misc:
+        groups.append({
+            "key": "other",
+            "title": "其他",
+            "description": "尚未分群的設定。",
+            "settings": misc,
+        })
+    return groups
+
+
+def find_dangerous_changes(current_settings, updates):
+    """Return ``[(key, danger_dict, transition)]`` for risky changes.
+
+    ``transition`` is one of ``"enable"`` (False -> True),
+    ``"disable"`` (True -> False), or ``"change"`` (non-bool value change).
+    """
+    if not isinstance(updates, dict):
+        return []
+    if not isinstance(current_settings, dict):
+        current_settings = {}
+    risky = []
+    for key, danger in DANGEROUS_SETTINGS.items():
+        if key not in updates:
+            continue
+        old = current_settings.get(key, DEFAULT_SETTINGS.get(key))
+        new = updates[key]
+        if isinstance(old, bool) or isinstance(new, bool):
+            old_b = bool(old)
+            new_b = bool(new)
+            if old_b == new_b:
+                continue
+            transition = "enable" if (not old_b and new_b) else "disable"
+            side = danger["side"]
+            if side == "either" or side == transition or side == "value":
+                risky.append((key, danger, transition))
+        else:
+            if old == new:
+                continue
+            if danger["side"] in ("either", "value"):
+                risky.append((key, danger, "change"))
+    return risky

@@ -1,0 +1,532 @@
+"""Tests for W4 external-replay helpers in scripts/games/chess_seed_train.py.
+
+Covers _load_external_replay (validation + whitelist), _apply_external_caps
+(per-source + total cap, deterministic via seed), and _train_with_external_replay
+(dry_run / empty short-circuits).
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import argparse
+import json
+
+from services.games.chess_nnue import bundled_chess_nnue_model_path
+from services.games.chess_pv import bundled_chess_pv_model_path
+
+from scripts.games.chess_seed_train import (
+    DEFAULT_EXTERNAL_TOTAL_CAP,
+    TRUSTED_SOURCE_WHITELIST,
+    _apply_external_caps,
+    _assert_external_replay_safety,
+    _dryrun_artifact_path,
+    _is_default_model_path,
+    _load_external_replay,
+    _train_with_external_replay,
+    _validate_normalize,
+    _write_dryrun_payload_artifact,
+)
+
+
+def _write_jsonl(path: Path, rows: list[dict]) -> Path:
+    path.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+    return path
+
+
+# ---- _load_external_replay --------------------------------------------
+
+
+def _row(**kwargs) -> dict:
+    base = {
+        "fen": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1",
+        "move_uci": "e7e5",
+        "side": "black",
+        "target": 1.0,
+        "weight": 0.15,
+        "source": "pvp",
+        "trusted_source": "pvp_filtered",
+        "label_quality": "review",
+    }
+    base.update(kwargs)
+    return base
+
+
+def test_load_external_replay_keeps_whitelisted_rows(tmp_path):
+    path = _write_jsonl(
+        tmp_path / "a.jsonl",
+        [
+            _row(trusted_source="pvp_filtered"),
+            _row(trusted_source="human_beat_engine", weight=0.20, label_quality="clean"),
+            _row(trusted_source="imported_dataset"),
+        ],
+    )
+    samples, stats = _load_external_replay([str(path)])
+    assert stats["files_read"] == 1
+    assert stats["rows_total"] == 3
+    assert stats["rows_kept"] == 3
+    assert stats["rejected_invalid_trusted_source"] == 0
+    assert stats["source_breakdown_raw"]["pvp_filtered"] == 1
+    assert stats["source_breakdown_raw"]["human_beat_engine"] == 1
+    assert stats["source_breakdown_raw"]["imported_dataset"] == 1
+    assert len(samples) == 3
+
+
+def test_load_external_replay_rejects_non_whitelisted_source(tmp_path):
+    path = _write_jsonl(
+        tmp_path / "b.jsonl",
+        [
+            _row(trusted_source="random_internet"),
+            _row(trusted_source=""),
+            _row(trusted_source="pvp_filtered"),
+        ],
+    )
+    samples, stats = _load_external_replay([str(path)])
+    assert stats["rows_total"] == 3
+    assert stats["rejected_invalid_trusted_source"] == 2
+    assert stats["rows_kept"] == 1
+    assert samples[0]["trusted_source"] == "pvp_filtered"
+
+
+def test_load_external_replay_rejects_missing_required_fields(tmp_path):
+    path = _write_jsonl(
+        tmp_path / "c.jsonl",
+        [
+            _row(fen=""),
+            _row(move_uci=""),
+            _row(side=""),
+            _row(),
+        ],
+    )
+    samples, stats = _load_external_replay([str(path)])
+    assert stats["rejected_missing_fields"] == 3
+    assert stats["rows_kept"] == 1
+    assert len(samples) == 1
+
+
+def test_load_external_replay_skips_blank_and_invalid_json(tmp_path):
+    path = tmp_path / "d.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                json.dumps(_row()),
+                "",
+                "not-json-at-all",
+                json.dumps(_row(trusted_source="human_beat_engine")),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    samples, stats = _load_external_replay([str(path)])
+    # Blank line skipped before counting, invalid_json counted but rejected.
+    assert stats["rows_total"] == 3
+    assert stats["rejected_invalid_json"] == 1
+    assert stats["rows_kept"] == 2
+
+
+def test_load_external_replay_handles_missing_file(tmp_path):
+    samples, stats = _load_external_replay([str(tmp_path / "does_not_exist.jsonl")])
+    assert stats["files_read"] == 0
+    assert stats["files_missing"] != []
+    assert samples == []
+
+
+# ---- _apply_external_caps ---------------------------------------------
+
+
+def test_apply_caps_downsamples_per_source(tmp_path):
+    samples = (
+        [_row(trusted_source="pvp_filtered") for _ in range(150)]
+        + [_row(trusted_source="human_beat_engine") for _ in range(150)]
+        + [_row(trusted_source="sparring_objective_hit") for _ in range(80)]
+    )
+    capped, stats = _apply_external_caps(samples, seed=42)
+    # pvp_filtered cap = 100, hve cap = 100, sparring cap = 50
+    assert stats["per_source"]["pvp_filtered"]["kept_after_per_source_cap"] == 100
+    assert stats["per_source"]["human_beat_engine"]["kept_after_per_source_cap"] == 100
+    assert stats["per_source"]["sparring_objective_hit"]["kept_after_per_source_cap"] == 50
+    # pre-total = 250; total cap default 300 → all kept after total cap
+    assert stats["pre_total_cap_count"] == 250
+    assert stats["total_kept"] == 250
+
+
+def test_apply_caps_enforces_total_cap(tmp_path):
+    samples = (
+        [_row(trusted_source="pvp_filtered") for _ in range(100)]
+        + [_row(trusted_source="human_beat_engine") for _ in range(100)]
+        + [_row(trusted_source="imported_dataset") for _ in range(200)]
+    )
+    capped, stats = _apply_external_caps(samples, seed=42)
+    # pvp+hve = 100+100, imported_dataset cap=200 → pre_total=400, total_cap=300
+    assert stats["pre_total_cap_count"] == 400
+    assert stats["total_kept"] == DEFAULT_EXTERNAL_TOTAL_CAP == 300
+
+
+def test_apply_caps_deterministic_with_same_seed(tmp_path):
+    samples = [_row(trusted_source="pvp_filtered", source_id=f"id-{i}") for i in range(150)]
+    a, _ = _apply_external_caps(samples, seed=99)
+    b, _ = _apply_external_caps(samples, seed=99)
+    assert [s.get("source_id") for s in a] == [s.get("source_id") for s in b]
+
+
+# ---- _train_with_external_replay --------------------------------------
+
+
+def test_train_with_external_replay_short_circuits_when_dry_run(tmp_path):
+    samples = [_row()]
+    result = _train_with_external_replay(
+        samples,
+        pv_model_path=tmp_path / "pv.json",
+        nnue_model_path=tmp_path / "nnue.json",
+        dry_run=True,
+        skip_exp4=False,
+    )
+    assert result["trained_exp4"] is False
+    assert result["trained_exp5"] is False
+    assert result["skipped_reason"] == "dry_run"
+    assert result["sample_count"] == 1
+
+
+def test_train_with_external_replay_short_circuits_when_empty(tmp_path):
+    result = _train_with_external_replay(
+        [],
+        pv_model_path=tmp_path / "pv.json",
+        nnue_model_path=tmp_path / "nnue.json",
+        dry_run=False,
+        skip_exp4=False,
+    )
+    assert result["skipped_reason"] == "no_samples"
+    assert result["trained_exp4"] is False
+    assert result["trained_exp5"] is False
+
+
+def test_trusted_source_whitelist_includes_new_sources():
+    # Regression guard: future commits must not silently drop these names.
+    for name in ("pvp_filtered", "human_beat_engine", "sparring_objective_hit"):
+        assert name in TRUSTED_SOURCE_WHITELIST
+
+
+# ---- _validate_normalize -----------------------------------------------
+
+
+def test_validate_normalize_accepts_typical_pvp_sample():
+    samples = [
+        _row(source_id=f"id-{i}", trusted_source="pvp_filtered")
+        for i in range(5)
+    ]
+    stats = _validate_normalize(samples)
+    assert stats["exp4_ok"] == 5
+    assert stats["exp4_failed"] == 0
+    assert stats["exp5_ok"] == 5
+    assert stats["exp5_failed"] == 0
+    assert stats["exp4_failed_samples"] == []
+    assert stats["exp5_failed_samples"] == []
+
+
+def test_validate_normalize_counts_failures_and_records_ids():
+    # Empty fen / move_uci / side break both normalizers (they require those).
+    bad = [
+        _row(source_id="bad-fen", fen=""),
+        _row(source_id="bad-move", move_uci=""),
+    ]
+    good = [_row(source_id="good-1")]
+    stats = _validate_normalize(bad + good)
+    # exp4 PV falls back to build_experiment_pv_sample_from_position when
+    # board_features / move_features are absent; that path requires
+    # non-empty fen + move_uci. Both bad rows should fail; the good one
+    # succeeds.
+    assert stats["exp4_failed"] == 2
+    assert stats["exp4_ok"] == 1
+    assert stats["exp5_failed"] == 2
+    assert stats["exp5_ok"] == 1
+    assert "bad-fen" in stats["exp4_failed_samples"]
+    assert "bad-move" in stats["exp4_failed_samples"]
+
+
+# ---- _train_with_external_replay skip flags ---------------------------
+
+
+def test_train_with_external_replay_skip_exp5_blocks_nnue_training(monkeypatch, tmp_path):
+    """skip_exp5 must skip the NNUE trainer even when dry_run is False."""
+    pv_calls: list = []
+    nnue_calls: list = []
+
+    def fake_pv(samples, *, model_path):
+        pv_calls.append((len(samples), str(model_path)))
+        return {"trained_samples": len(samples)}
+
+    def fake_nnue(samples, *, model_path):
+        nnue_calls.append((len(samples), str(model_path)))
+        return {"trained_samples": len(samples)}
+
+    monkeypatch.setattr(
+        "scripts.games.chess_seed_train.train_experiment_pv_from_replay_samples", fake_pv
+    )
+    monkeypatch.setattr(
+        "scripts.games.chess_seed_train.train_experiment_nnue_from_replay_samples", fake_nnue
+    )
+
+    result = _train_with_external_replay(
+        [_row()],
+        pv_model_path=tmp_path / "pv.json",
+        nnue_model_path=tmp_path / "nnue.json",
+        dry_run=False,
+        skip_exp4=False,
+        skip_exp5=True,
+    )
+    assert result["trained_exp4"] is True
+    assert result["trained_exp5"] is False
+    assert len(pv_calls) == 1
+    assert nnue_calls == []
+
+
+# ---- _assert_external_replay_safety -----------------------------------
+
+
+def _safety_args(**overrides) -> argparse.Namespace:
+    defaults = dict(
+        include_replay_jsonl=["/tmp/x.jsonl"],
+        dry_run=False,
+        allow_default_model_paths=False,
+        skip_exp4=False,
+        skip_exp5=False,
+        experiment_4_model_path="",
+        experiment_5_model_path="",
+    )
+    defaults.update(overrides)
+    return argparse.Namespace(**defaults)
+
+
+def test_safety_guard_passes_when_no_external_replay():
+    # Pure self-play warm-up keeps its old behaviour (no guard).
+    _assert_external_replay_safety(_safety_args(include_replay_jsonl=[]))
+
+
+def test_safety_guard_passes_on_dry_run():
+    _assert_external_replay_safety(_safety_args(dry_run=True))
+
+
+def test_safety_guard_blocks_when_real_run_without_paths():
+    try:
+        _assert_external_replay_safety(_safety_args())
+    except SystemExit as exc:
+        message = str(exc)
+        assert "refusing to train" in message
+        assert "exp4 PV" in message
+        assert "exp5 NNUE" in message
+        assert "--allow-default-model-paths" in message
+    else:
+        raise AssertionError("expected SystemExit when paths are implicit defaults")
+
+
+def test_safety_guard_allows_explicit_paths(tmp_path):
+    _assert_external_replay_safety(
+        _safety_args(
+            experiment_4_model_path=str(tmp_path / "pv_candidate.json"),
+            experiment_5_model_path=str(tmp_path / "nnue_candidate.json"),
+        )
+    )
+
+
+def test_safety_guard_allows_skip_flags_in_place_of_paths():
+    _assert_external_replay_safety(
+        _safety_args(skip_exp4=True, skip_exp5=True)
+    )
+
+
+def test_safety_guard_allows_mixed_path_and_skip(tmp_path):
+    _assert_external_replay_safety(
+        _safety_args(
+            experiment_4_model_path=str(tmp_path / "pv_candidate.json"),
+            skip_exp5=True,
+        )
+    )
+
+
+def test_safety_guard_opt_out_with_allow_default_flag():
+    # Explicit opt-in for the unsafe case still works.
+    _assert_external_replay_safety(_safety_args(allow_default_model_paths=True))
+
+
+# ---- _is_default_model_path -------------------------------------------
+
+
+def test_is_default_model_path_matches_bundled_exact_path():
+    bundled = str(bundled_chess_pv_model_path())
+    is_default, reason = _is_default_model_path(
+        bundled,
+        bundled_resolver=bundled_chess_pv_model_path,
+        default_resolver=lambda: bundled_chess_pv_model_path(),  # runtime irrelevant here
+    )
+    assert is_default is True
+    assert "bundled" in reason
+
+
+def test_is_default_model_path_flags_paths_under_bundled_models_dir(tmp_path):
+    bundled = bundled_chess_pv_model_path()
+    sibling = bundled.parent / "chess_experiment_4_pv_my_local_copy.json"
+    is_default, reason = _is_default_model_path(
+        str(sibling),
+        bundled_resolver=bundled_chess_pv_model_path,
+        default_resolver=bundled_chess_pv_model_path,
+    )
+    assert is_default is True
+    assert "bundled-models dir" in reason
+
+
+def test_is_default_model_path_allows_unrelated_path(tmp_path):
+    candidate = tmp_path / "candidate" / "chess_experiment_4_pv_candidate.json"
+    is_default, reason = _is_default_model_path(
+        str(candidate),
+        bundled_resolver=bundled_chess_pv_model_path,
+        default_resolver=bundled_chess_pv_model_path,
+    )
+    assert is_default is False
+    assert reason == ""
+
+
+def test_is_default_model_path_handles_empty_input():
+    is_default, reason = _is_default_model_path(
+        "",
+        bundled_resolver=bundled_chess_pv_model_path,
+        default_resolver=bundled_chess_pv_model_path,
+    )
+    assert is_default is False
+    assert reason == ""
+
+
+# ---- safety guard rejects explicit-but-default paths ------------------
+
+
+def test_safety_guard_rejects_bundled_path_as_explicit_exp4():
+    """User typing the bundled path explicitly must not bypass the guard."""
+    bundled = str(bundled_chess_pv_model_path())
+    try:
+        _assert_external_replay_safety(
+            _safety_args(experiment_4_model_path=bundled, skip_exp5=True)
+        )
+    except SystemExit as exc:
+        assert "exp4 PV" in str(exc)
+        assert "bundled" in str(exc).lower()
+    else:
+        raise AssertionError(
+            "expected SystemExit when explicit exp4 path equals bundled artifact"
+        )
+
+
+def test_safety_guard_rejects_paths_under_models_dir_for_exp5():
+    """File next to the bundled NNUE artifact must trip the guard."""
+    sibling = str(
+        bundled_chess_nnue_model_path().parent / "chess_experiment_5_nnue_local.json"
+    )
+    try:
+        _assert_external_replay_safety(
+            _safety_args(experiment_5_model_path=sibling, skip_exp4=True)
+        )
+    except SystemExit as exc:
+        assert "exp5 NNUE" in str(exc)
+        assert "models" in str(exc)
+    else:
+        raise AssertionError(
+            "expected SystemExit when explicit exp5 path sits under services/games/models/"
+        )
+
+
+def test_safety_guard_accepts_distinct_candidate_paths(tmp_path):
+    """Path far away from services/games/models/ must pass the guard."""
+    pv_candidate = tmp_path / "candidate" / "chess_experiment_4_pv_candidate.json"
+    nnue_candidate = tmp_path / "candidate" / "chess_experiment_5_nnue_candidate.json"
+    _assert_external_replay_safety(
+        _safety_args(
+            experiment_4_model_path=str(pv_candidate),
+            experiment_5_model_path=str(nnue_candidate),
+        )
+    )
+
+
+def test_safety_guard_allow_flag_overrides_bundled_detection():
+    bundled = str(bundled_chess_pv_model_path())
+    # --allow-default-model-paths bypasses both the missing-path check AND
+    # the resolved-to-default check, for one-off recovery runs.
+    _assert_external_replay_safety(
+        _safety_args(
+            experiment_4_model_path=bundled,
+            skip_exp5=True,
+            allow_default_model_paths=True,
+        )
+    )
+
+
+# ---- _write_dryrun_payload_artifact -----------------------------------
+
+
+def test_dryrun_artifact_path_is_timestamped_under_report_dir(tmp_path):
+    report_dir = tmp_path / "reports"
+    path = _dryrun_artifact_path(report_dir)
+    assert path.parent == report_dir
+    assert path.name.startswith("chess_seed_train_dryrun_")
+    assert path.name.endswith(".json")
+
+
+def test_dryrun_artifact_path_avoids_same_second_collisions(tmp_path):
+    """Microsecond precision: two consecutive calls must not collide on the
+    same filename even when invoked within the same wall-clock second."""
+    report_dir = tmp_path / "reports"
+    a = _dryrun_artifact_path(report_dir)
+    b = _dryrun_artifact_path(report_dir)
+    assert a != b, (
+        "_dryrun_artifact_path produced the same filename twice in a row "
+        "— timestamp precision regressed below microseconds"
+    )
+
+
+def test_write_dryrun_payload_artifact_writes_json_to_explicit_path(tmp_path):
+    payload = {"ok": True, "dry_run": True, "external_replay": {"enabled": False}}
+    artifact_path = tmp_path / "reports" / "chess_seed_train_dryrun_test.json"
+    written = _write_dryrun_payload_artifact(payload, artifact_path)
+    assert written == artifact_path
+    loaded = json.loads(artifact_path.read_text(encoding="utf-8"))
+    assert loaded == payload
+
+
+def test_dryrun_artifact_matches_stdout_when_self_referenced(tmp_path):
+    """Regression for W4.1f: disk artifact must contain the same
+    `dry_run_artifact` field as the stdout JSON, not the pre-injection
+    payload. Caller wires this by computing the path first, injecting it
+    into payload, then writing — which is exactly what main() now does.
+    """
+    payload = {"ok": True, "dry_run": True, "external_replay": {"enabled": True}}
+    artifact_path = _dryrun_artifact_path(tmp_path / "reports")
+    payload["dry_run_artifact"] = str(artifact_path)
+    _write_dryrun_payload_artifact(payload, artifact_path)
+
+    on_disk = json.loads(artifact_path.read_text(encoding="utf-8"))
+    on_stdout = payload  # main() prints `payload` after the same mutation
+    assert on_disk == on_stdout
+    assert on_disk["dry_run_artifact"] == str(artifact_path)
+
+
+def test_train_with_external_replay_skip_exp4_blocks_pv_training(monkeypatch, tmp_path):
+    pv_calls: list = []
+    nnue_calls: list = []
+    monkeypatch.setattr(
+        "scripts.games.chess_seed_train.train_experiment_pv_from_replay_samples",
+        lambda samples, *, model_path: pv_calls.append(samples) or {},
+    )
+    monkeypatch.setattr(
+        "scripts.games.chess_seed_train.train_experiment_nnue_from_replay_samples",
+        lambda samples, *, model_path: nnue_calls.append(samples) or {},
+    )
+
+    result = _train_with_external_replay(
+        [_row()],
+        pv_model_path=tmp_path / "pv.json",
+        nnue_model_path=tmp_path / "nnue.json",
+        dry_run=False,
+        skip_exp4=True,
+        skip_exp5=False,
+    )
+    assert result["trained_exp4"] is False
+    assert result["trained_exp5"] is True
+    assert pv_calls == []
+    assert len(nnue_calls) == 1

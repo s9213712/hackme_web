@@ -9,14 +9,17 @@ from tests.comfyui._integration_suite import (
     test_comfyui_generate_rejects_unsupported_lora_base_model,
     test_comfyui_generate_rejects_when_controlnet_model_missing,
     test_comfyui_generate_rejects_when_workflow_node_missing,
+    test_comfyui_diffusers_mode_lists_repo_and_generates_without_comfyui_nodes,
+    test_comfyui_diffusers_mode_rejects_comfyui_controlnet_shortcut,
     test_comfyui_generation_does_not_charge_root,
     test_comfyui_generation_failure_does_not_charge_points,
     test_comfyui_generation_rejects_when_points_are_insufficient_before_work,
     test_comfyui_generation_requires_billing_confirmation_for_non_root,
     test_comfyui_history_rerun_reuses_saved_assets,
+    test_comfyui_input_image_candidates_import_history_and_drive_images,
     test_comfyui_image_preview_returns_uploaded_asset_preview,
     test_comfyui_img2img_controlnet_generate_uploads_assets_and_records_history,
     test_comfyui_lora_billing_quote_adds_one_point_per_lora_per_image,
     test_comfyui_models_and_generate_routes,
+    test_comfyui_wait_extends_timeout_while_prompt_is_queued,
 )
-

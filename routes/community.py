@@ -790,7 +790,7 @@ def register_community_routes(app, deps):
             try:
                 data = request.get_json(force=True)
             except Exception:
-                return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+                return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
             title = normalize_text(data.get("title"))[:80]
             content = normalize_text(data.get("content"))[:3000]
             is_pinned = 1 if bool(data.get("is_pinned")) else 0
@@ -831,7 +831,7 @@ def register_community_routes(app, deps):
                 try:
                     data = request.get_json(force=True)
                 except Exception:
-                    return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+                    return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
                 title = normalize_text(data.get("title"))[:80]
                 content = normalize_text(data.get("content"))[:3000]
                 is_pinned = 1 if bool(data.get("is_pinned")) else 0
@@ -904,7 +904,7 @@ def register_community_routes(app, deps):
             try:
                 data = request.get_json(force=True)
             except Exception:
-                return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+                return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
             name = normalize_text(data.get("name"))[:80]
             description = normalize_text(data.get("description"))[:500]
             sort_order = parse_positive_int(data.get("sort_order", 100), default=100, min_value=0, max_value=9999)
@@ -938,7 +938,7 @@ def register_community_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
 
         conn = get_db()
         try:
@@ -981,46 +981,59 @@ def register_community_routes(app, deps):
         try:
             ensure_community_schema(conn)
             if request.method == "GET":
+                # P4: thread/post counts are pre-aggregated as CTEs and
+                # joined in one pass so the page no longer fires 1 + 2N
+                # queries when the board list is long.
+                base_select = (
+                    "WITH thread_stats AS ( "
+                    "    SELECT board_id, COUNT(*) AS thread_count "
+                    "    FROM forum_threads "
+                    "    WHERE is_deleted=0 "
+                    "    GROUP BY board_id "
+                    "), post_stats AS ( "
+                    "    SELECT t.board_id, COUNT(*) AS post_count "
+                    "    FROM forum_posts p "
+                    "    JOIN forum_threads t ON t.id=p.thread_id AND t.is_deleted=0 "
+                    "    WHERE p.is_deleted=0 "
+                    "    GROUP BY t.board_id "
+                    ") "
+                    "SELECT b.*, c.name AS category_name, c.description AS category_description, "
+                    "c.sort_order AS category_sort_order, c.is_active AS category_is_active, "
+                    "(SELECT GROUP_CONCAT(username) FROM board_moderators WHERE board_id=b.id) AS moderators, "
+                    "(SELECT COUNT(*) FROM board_moderators WHERE board_id=b.id) AS moderator_count, "
+                    "COALESCE(ts.thread_count, 0) AS thread_count, "
+                    "COALESCE(ps.post_count, 0) AS post_count "
+                    "FROM forum_boards b "
+                    "LEFT JOIN forum_categories c ON c.id=b.category_id "
+                    "LEFT JOIN thread_stats ts ON ts.board_id=b.id "
+                    "LEFT JOIN post_stats ps ON ps.board_id=b.id "
+                )
                 if can_manage_community(actor):
                     rows = conn.execute(
-                        "SELECT b.*, c.name AS category_name, c.description AS category_description, "
-                        "c.sort_order AS category_sort_order, c.is_active AS category_is_active, "
-                        "(SELECT GROUP_CONCAT(username) FROM board_moderators WHERE board_id=b.id) AS moderators, "
-                        "(SELECT COUNT(*) FROM board_moderators WHERE board_id=b.id) AS moderator_count "
-                        "FROM forum_boards b LEFT JOIN forum_categories c ON c.id=b.category_id "
-                        "ORDER BY c.sort_order ASC, b.sort_order ASC, COALESCE(b.last_activity_at, b.created_at) DESC"
+                        base_select
+                        + "ORDER BY c.sort_order ASC, b.sort_order ASC, COALESCE(b.last_activity_at, b.created_at) DESC"
                     ).fetchall()
                 else:
                     rows = conn.execute(
-                        "SELECT b.*, c.name AS category_name, c.description AS category_description, "
-                        "c.sort_order AS category_sort_order, c.is_active AS category_is_active, "
-                        "(SELECT GROUP_CONCAT(username) FROM board_moderators WHERE board_id=b.id) AS moderators, "
-                        "(SELECT COUNT(*) FROM board_moderators WHERE board_id=b.id) AS moderator_count "
-                        "FROM forum_boards b LEFT JOIN forum_categories c ON c.id=b.category_id "
-                        "WHERE b.is_active=1 AND ((b.status='approved' AND b.visibility='public') OR b.owner_user_id=?) ORDER BY "
-                        "c.sort_order ASC, b.sort_order ASC, CASE b.status WHEN 'approved' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END, "
+                        base_select
+                        + "WHERE b.is_active=1 AND ((b.status='approved' AND b.visibility='public') OR b.owner_user_id=?) "
+                        "ORDER BY c.sort_order ASC, b.sort_order ASC, "
+                        "CASE b.status WHEN 'approved' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END, "
                         "COALESCE(b.last_activity_at, b.created_at) DESC",
                         (actor["id"],)
                     ).fetchall()
                 boards = []
                 for row in rows:
                     payload = board_payload(row)
-                    counts = conn.execute(
-                        "SELECT "
-                        "(SELECT COUNT(*) FROM forum_threads WHERE board_id=? AND is_deleted=0) AS thread_count, "
-                        "(SELECT COUNT(*) FROM forum_posts WHERE is_deleted=0 AND thread_id IN "
-                        "(SELECT id FROM forum_threads WHERE board_id=? AND is_deleted=0)) AS post_count",
-                        (row["id"], row["id"])
-                    ).fetchone()
-                    payload["thread_count"] = counts["thread_count"] or 0
-                    payload["post_count"] = counts["post_count"] or 0
+                    payload["thread_count"] = row["thread_count"] or 0
+                    payload["post_count"] = row["post_count"] or 0
                     boards.append(payload)
                 return json_resp({"ok": True, "boards": boards, "can_review": can_manage_community(actor)})
 
             try:
                 data = request.get_json(force=True)
             except Exception:
-                return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+                return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
             if not can_manage_community(actor):
                 return json_resp({"ok": False, "msg": "目前只有管理員以上可建立討論版面"}), 403
             title = normalize_text(data.get("title"))[:80]
@@ -1095,7 +1108,7 @@ def register_community_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         action = normalize_text(data.get("action"))
         note = normalize_text(data.get("note"))[:200]
         if action not in ("approve", "reject"):
@@ -1136,9 +1149,9 @@ def register_community_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+            return json_resp({"ok": False, "msg": "請求內容格式錯誤"}), 400
 
         conn = get_db()
         try:
@@ -1212,7 +1225,7 @@ def register_community_routes(app, deps):
             try:
                 data = request.get_json(force=True)
             except Exception:
-                return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+                return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
             user_id = parse_positive_int(data.get("user_id"), default=None, min_value=1)
             if not user_id:
                 return json_resp({"ok": False, "msg": "user_id 格式錯誤"}), 400
@@ -1398,7 +1411,7 @@ def register_community_routes(app, deps):
             try:
                 data = request.get_json(force=True)
             except Exception:
-                return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+                return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
             title = normalize_text(data.get("title"))[:120]
             content = normalize_text(data.get("content"))[:4000]
             post_type = normalize_thread_post_type(data.get("post_type"))
@@ -1507,7 +1520,7 @@ def register_community_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         action = normalize_text(data.get("action"))
         note = normalize_text(data.get("note"))[:200]
         if action not in ("approve", "reject"):
@@ -1597,7 +1610,7 @@ def register_community_routes(app, deps):
                 try:
                     data = request.get_json(force=True)
                 except Exception:
-                    return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+                    return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
                 title = normalize_text(data.get("title"))[:120]
                 content = normalize_text(data.get("content"))[:4000]
                 if not title or not content:
@@ -1749,7 +1762,7 @@ def register_community_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         value = data.get("value") if isinstance(data, dict) else None
         if value not in (-1, 0, 1):
             return json_resp({"ok": False, "msg": "反應值錯誤"}), 400
@@ -1818,7 +1831,7 @@ def register_community_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         points = parse_positive_int(data.get("points", 1), default=1, min_value=1, max_value=50)
         if points is None:
             return json_resp({"ok": False, "msg": "獎勵點數必須介於 1 到 50"}), 400
@@ -1868,7 +1881,7 @@ def register_community_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         content = normalize_text(data.get("content"))[:3000]
         if not content:
             return json_resp({"ok": False, "msg": "留言內容不可為空"}), 400
@@ -1946,7 +1959,7 @@ def register_community_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         value = data.get("value") if isinstance(data, dict) else None
         if value not in (-1, 0, 1):
             return json_resp({"ok": False, "msg": "反應值錯誤"}), 400
@@ -2053,7 +2066,7 @@ def register_community_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         pinned = 1 if isinstance(data, dict) and bool(data.get("pinned")) else 0
 
         conn = get_db()
@@ -2090,7 +2103,7 @@ def register_community_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         points = parse_positive_int(data.get("points", 1), default=1, min_value=1, max_value=10)
         if points is None:
             return json_resp({"ok": False, "msg": "違規點數必須介於 1 到 10"}), 400
@@ -2187,7 +2200,7 @@ def register_community_routes(app, deps):
                 try:
                     data = request.get_json(force=True)
                 except Exception:
-                    return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+                    return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
                 content = normalize_text(data.get("content"))[:3000]
                 if not content:
                     return json_resp({"ok": False, "msg": "留言內容不可為空"}), 400
@@ -2251,7 +2264,7 @@ def register_community_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         locked = 1 if bool(data.get("locked")) else 0
         conn = get_db()
         try:
@@ -2283,7 +2296,7 @@ def register_community_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         sticky = 1 if bool(data.get("sticky")) else 0
         conn = get_db()
         try:
@@ -2315,7 +2328,7 @@ def register_community_routes(app, deps):
         try:
             data = request.get_json(force=True)
         except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            return json_resp({"ok": False, "msg": "請求 JSON 格式錯誤"}), 400
         curated = 1 if bool(data.get("curated")) else 0
         conn = get_db()
         try:

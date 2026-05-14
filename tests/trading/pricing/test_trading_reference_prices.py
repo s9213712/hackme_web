@@ -595,6 +595,26 @@ def test_trading_order_invalid_decimal_is_sanitized_for_user():
     assert payload["msg"] == "交易數量格式錯誤，請輸入有效的數字"
 
 
+def test_trading_order_conservative_mode_message_is_not_misclassified_as_insufficient_funds():
+    client = _order_error_app(
+        {"id": 1, "username": "alice", "role": "user"},
+        ValueError("市價交易已因價格降級暫停：目前可用來源數不足，只能提供 degraded reference price（healthy providers=0，需要至少 2 家才視為可交易）"),
+    ).test_client()
+
+    response = client.post("/api/trading/orders", json={
+        "market_symbol": "ETH/POINTS",
+        "side": "buy",
+        "order_type": "market",
+        "quantity": "0.01",
+    })
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload["ok"] is False
+    assert "價格降級暫停" in payload["msg"]
+    assert "交易資金不足" not in payload["msg"]
+
+
 def test_btc_trade_signal_hidden_when_project_missing(tmp_path):
     client = _btc_signal_app({"id": 1, "username": "alice", "role": "user"}, tmp_path / "missing").test_client()
 
@@ -743,7 +763,24 @@ def test_root_btc_trade_setup_rejects_bad_repo_without_500(tmp_path):
 
 
 def test_root_btc_trade_start_returns_background_job(monkeypatch, tmp_path):
-    def fake_start(project_dir, *, timeframe="4h", wait_seconds=0):
+    captured = {}
+
+    def fake_start(
+        project_dir,
+        *,
+        timeframe="4h",
+        wait_seconds=0,
+        repo_url=None,
+        branch=None,
+        base_dir=None,
+        setup_if_needed=False,
+    ):
+        captured.update({
+            "repo_url": repo_url,
+            "branch": branch,
+            "base_dir": base_dir,
+            "setup_if_needed": setup_if_needed,
+        })
         return {
             "ok": True,
             "started": True,
@@ -761,7 +798,12 @@ def test_root_btc_trade_start_returns_background_job(monkeypatch, tmp_path):
     monkeypatch.setattr(trading_routes, "btc_trade_start_prediction_job", fake_start)
     client = _btc_signal_app({"id": 1, "username": "root", "role": "super_admin"}, tmp_path / "BTC_trade").test_client()
 
-    response = client.post("/api/root/trading/btc-trade/start", json={"project_dir": str(tmp_path / "BTC_trade"), "timeframe": "4h"})
+    response = client.post("/api/root/trading/btc-trade/start", json={
+        "project_dir": str(tmp_path / "BTC_trade"),
+        "repo_url": "https://github.com/s9213712/BTC_trade.git",
+        "branch": "strategy/v15b-plus",
+        "timeframe": "4h",
+    })
     payload = response.get_json()
 
     assert response.status_code == 200
@@ -769,6 +811,121 @@ def test_root_btc_trade_start_returns_background_job(monkeypatch, tmp_path):
     assert payload["start_ok"] is True
     assert payload["started"] is True
     assert payload["job"]["job_id"] == "job-123"
+    assert captured["repo_url"] == "https://github.com/s9213712/BTC_trade.git"
+    assert captured["branch"] == "strategy/v15b-plus"
+    assert captured["setup_if_needed"] is True
+    assert captured["base_dir"].name == "hackme_web"
+
+
+def test_root_btc_trade_start_surfaces_immediate_job_failure(monkeypatch, tmp_path):
+    def fake_start(
+        project_dir,
+        *,
+        timeframe="4h",
+        wait_seconds=0,
+        repo_url=None,
+        branch=None,
+        base_dir=None,
+        setup_if_needed=False,
+    ):
+        return {
+            "ok": False,
+            "job_ok": False,
+            "started": True,
+            "job": {
+                "job_id": "job-error",
+                "project_dir": str(project_dir),
+                "timeframe": timeframe,
+                "status": "error",
+                "message": "BTC_trade 建置失敗：ValueError",
+                "steps": [{"label": "自動下載/安裝 BTC_trade", "ok": False, "message": "repo rejected"}],
+                "result": {"ok": False},
+            },
+        }
+
+    monkeypatch.setattr(trading_routes, "btc_trade_start_prediction_job", fake_start)
+    client = _btc_signal_app({"id": 1, "username": "root", "role": "super_admin"}, tmp_path / "BTC_trade").test_client()
+
+    response = client.post("/api/root/trading/btc-trade/start", json={
+        "project_dir": str(tmp_path / "BTC_trade"),
+        "repo_url": "https://127.0.0.1:1/nope.git",
+        "branch": "main",
+        "timeframe": "4h",
+        "wait_seconds": 1,
+    })
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is False
+    assert payload["start_ok"] is False
+    assert payload["job"]["status"] == "error"
+    assert "建置失敗" in payload["msg"]
+
+
+def test_btc_trade_start_pipeline_auto_sets_up_missing_project(monkeypatch, tmp_path):
+    project = tmp_path / "BTC_trade"
+    calls = {"setup": 0, "commands": []}
+
+    def fake_setup(project_dir, **kwargs):
+        calls["setup"] += 1
+        root = btc_bridge.expand_server_path(project_dir)
+        root.mkdir(parents=True, exist_ok=True)
+        for name in ("update_data.py", "retrain_models.py", "hourly_check.py", "backtest_report.py"):
+            (root / name).write_text("# test\n", encoding="utf-8")
+        return {
+            "ok": True,
+            "project_dir": str(root),
+            "repo_url": kwargs.get("repo_url"),
+            "branch": kwargs.get("branch"),
+            "steps": [{"label": "下載 BTC_trade", "ok": True, "message": "ok"}],
+            "status": btc_bridge.btc_trade_status(root),
+            "message": "BTC_trade 建置完成",
+        }
+
+    def fake_run_step(command, *, cwd, timeout):
+        calls["commands"].append(command)
+        root = btc_bridge.expand_server_path(cwd)
+        script = command[1] if len(command) > 1 else command[0]
+        now_iso = time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())
+        if script == "update_data.py":
+            data_dir = root / "data"
+            data_dir.mkdir(parents=True, exist_ok=True)
+            (data_dir / "btc_4h.csv").write_text(f"timestamp,close\n{now_iso},96000\n", encoding="utf-8")
+        elif script == "retrain_models.py":
+            models = root / "models"
+            models.mkdir(parents=True, exist_ok=True)
+            (models / "btc_model.pkl").write_text("model", encoding="utf-8")
+        elif script == "hourly_check.py":
+            runtime = root / "runtime"
+            runtime.mkdir(parents=True, exist_ok=True)
+            (runtime / "report_log_4h.jsonl").write_text(json.dumps({
+                "generated_at": now_iso,
+                "bar_ts": now_iso,
+                "strategy_version": "test",
+                "signal_ok": True,
+                "timeframe": "4h",
+            }) + "\n", encoding="utf-8")
+        return {"command": " ".join(command), "ok": True, "returncode": 0, "seconds": 0}
+
+    monkeypatch.setattr(btc_bridge, "btc_trade_setup", fake_setup)
+    monkeypatch.setattr(btc_bridge, "_run_step", fake_run_step)
+
+    result = btc_bridge.btc_trade_start_prediction_pipeline(
+        project,
+        timeframe="4h",
+        wait_seconds=1,
+        setup_if_needed=True,
+        repo_url="https://github.com/s9213712/BTC_trade.git",
+        branch="strategy/v15b-plus",
+    )
+
+    assert result["ok"] is True
+    assert calls["setup"] == 1
+    assert any(step["label"] == "自動下載/安裝 BTC_trade" for step in result["steps"])
+    assert ["update_data.py", "retrain_models.py", "hourly_check.py"] == [cmd[1] for cmd in calls["commands"]]
+    assert result["actions"]["data_updated"] is True
+    assert result["actions"]["model_retrained"] is True
+    assert result["actions"]["prediction_refreshed"] is True
 
 
 def test_root_btc_trade_start_status_returns_job(monkeypatch, tmp_path):
@@ -790,6 +947,28 @@ def test_root_btc_trade_start_status_returns_job(monkeypatch, tmp_path):
     assert payload["ok"] is True
     assert payload["job"]["status"] == "running"
     assert payload["job"]["job_id"] == "job-456"
+
+
+def test_root_btc_trade_start_status_marks_error_job_not_ok(monkeypatch, tmp_path):
+    monkeypatch.setattr(trading_routes, "btc_trade_start_prediction_job_status", lambda job_id: {
+        "job_id": job_id,
+        "project_dir": str(tmp_path / "BTC_trade"),
+        "timeframe": "4h",
+        "status": "error",
+        "message": "BTC_trade 建置失敗：ValueError",
+        "steps": [{"label": "自動下載/安裝 BTC_trade", "ok": False, "message": "repo rejected"}],
+        "result": {"ok": False},
+    })
+    client = _btc_signal_app({"id": 1, "username": "root", "role": "super_admin"}, tmp_path / "BTC_trade").test_client()
+
+    response = client.get("/api/root/trading/btc-trade/start-status?job_id=job-error")
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is False
+    assert payload["job_ok"] is False
+    assert payload["job"]["status"] == "error"
+    assert "建置失敗" in payload["msg"]
 
 
 def test_btc_trade_status_reports_artifact_freshness(tmp_path):
