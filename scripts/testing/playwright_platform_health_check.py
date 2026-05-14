@@ -663,8 +663,15 @@ def check_trading_asset_overview(rec: Recorder, page, trading_seed: dict[str, An
     calc = hand_calc_asset_overview(trading)
 
     switch_module(page, "economy")
-    page.wait_for_selector("#economy-asset-overview-card", timeout=8000)
-    page.wait_for_timeout(1000)
+    page.wait_for_selector("#tab-economy-positions", state="visible", timeout=8000)
+    page.click("#tab-economy-positions")
+    page.wait_for_selector("#economy-positions-page.active #economy-asset-overview-card", timeout=8000)
+    page.evaluate(
+        """() => {
+            if (typeof loadTradingAssetOverview === 'function') return loadTradingAssetOverview();
+            return Promise.resolve();
+        }"""
+    )
     check_ui_quality(rec, page, "trading_asset_overview_desktop")
     ui_values = {
         "total": page.locator("#economy-asset-total-equity").inner_text(timeout=3000),
