@@ -328,6 +328,8 @@ def _negamax(
     enable_lmr: bool,
     enable_null_move: bool,
     enable_futility: bool,
+    futility_margin_cp: int,
+    lmr_min_move_index: int,
     allow_null_move: bool,
 ) -> tuple[int, chess.Move | None]:
     _check_deadline(deadline)
@@ -398,6 +400,8 @@ def _negamax(
                 enable_lmr=enable_lmr,
                 enable_null_move=enable_null_move,
                 enable_futility=enable_futility,
+                futility_margin_cp=futility_margin_cp,
+                lmr_min_move_index=lmr_min_move_index,
                 allow_null_move=False,
             )
             null_score = -null_score
@@ -427,7 +431,7 @@ def _negamax(
             and static_eval is not None
             and best_move is not None
             and _is_quiet_move(board, move)
-            and static_eval + 180 <= alpha
+            and static_eval + futility_margin_cp <= alpha
         ):
             stats.futility_prunes += 1
             continue
@@ -443,7 +447,7 @@ def _negamax(
             enable_lmr
             and depth >= 3
             and extension == 0
-            and move_index >= 4
+            and move_index >= lmr_min_move_index
             and _is_quiet_move(board, move)
             and not in_check
         )
@@ -475,6 +479,8 @@ def _negamax(
                     enable_lmr=enable_lmr,
                     enable_null_move=enable_null_move,
                     enable_futility=enable_futility,
+                    futility_margin_cp=futility_margin_cp,
+                    lmr_min_move_index=lmr_min_move_index,
                     allow_null_move=True,
                 )
                 score = -score
@@ -503,6 +509,8 @@ def _negamax(
                         enable_lmr=enable_lmr,
                         enable_null_move=enable_null_move,
                         enable_futility=enable_futility,
+                        futility_margin_cp=futility_margin_cp,
+                        lmr_min_move_index=lmr_min_move_index,
                         allow_null_move=True,
                     )
                     score = -score
@@ -530,6 +538,8 @@ def _negamax(
                     enable_lmr=enable_lmr,
                     enable_null_move=enable_null_move,
                     enable_futility=enable_futility,
+                    futility_margin_cp=futility_margin_cp,
+                    lmr_min_move_index=lmr_min_move_index,
                     allow_null_move=True,
                 )
                 score = -score
@@ -584,6 +594,8 @@ def search_best_move(
     enable_lmr: bool = False,
     enable_null_move: bool = False,
     enable_futility: bool = False,
+    futility_margin_cp: int = 180,
+    lmr_min_move_index: int = 4,
 ) -> SearchResult:
     if board.is_game_over():
         return SearchResult(best_move=None, score=0, depth=0, stats=SearchStats())
@@ -598,6 +610,8 @@ def search_best_move(
     root_sign = 1 if board.turn == chess.WHITE else -1
     best_move = None
     best_score = -_INFINITY
+    futility_margin_cp = max(0, int(futility_margin_cp or 0))
+    lmr_min_move_index = max(1, int(lmr_min_move_index or 1))
     deadline = None
     if time_budget_ms is not None:
         try:
@@ -653,6 +667,8 @@ def search_best_move(
                     enable_lmr=bool(enable_lmr),
                     enable_null_move=bool(enable_null_move),
                     enable_futility=bool(enable_futility),
+                    futility_margin_cp=futility_margin_cp,
+                    lmr_min_move_index=lmr_min_move_index,
                     allow_null_move=True,
                 )
             except SearchTimeout:

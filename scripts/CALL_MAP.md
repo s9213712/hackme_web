@@ -241,9 +241,9 @@ exp5 candidate artifacts
     -> services/games/chess_stockfish_teacher.py::UciStockfish MultiPV as Blockfish teacher
     -> runtime/private/games/exp5/.../v24_expanded_100_questions.json
     -> redacted docs/games/evidence/exp5/v24_expanded_100_question_set_summary.json
-  -> chess_exp5_expanded_validation.py evaluate --question-set runtime/private/...
+  -> chess_exp5_expanded_validation.py evaluate --question-set runtime/private/... [--section tail50pct]
     -> services/games/chess_nnue.py::choose_experiment_nnue_move(...)
-    -> services/games/chess_stockfish_teacher.py::UciStockfish MultiPV
+    -> services/games/chess_stockfish_teacher.py::UciStockfish MultiPV with deterministic Threads/Hash/Clear Hash
     -> runtime/private/games/exp5/.../*_eval_detail.jsonl
     -> redacted docs/games/evidence/exp5/v24_expanded_100_evaluation.{json,jsonl}
   -> chess_exp5_failure_taxonomy.py --input-jsonl runtime/private/.../*_eval_detail.jsonl
@@ -254,9 +254,9 @@ exp5 candidate artifacts
     -> compares weak-slice rejected counts against V24 percent-tail baseline
     -> optional taxonomy comparison for candidate/search-miss deltas
     -> redacted docs/games/evidence/exp5/v26_*_gate.json and docs/games/reports/*_v26_gate.md
-  -> chess_exp5_blockfish_match.py --profile <accepted-or-candidate-profile> --games 5
+  -> chess_exp5_blockfish_match.py --profile <accepted-or-candidate-profile> --games 5 --stockfish-depth-schedule 2,3,4,5,6
     -> services/games/chess_nnue.py::choose_experiment_nnue_move(...)
-    -> services/games/chess_stockfish_teacher.py::UciStockfish as Blockfish opponent
+    -> services/games/chess_stockfish_teacher.py::UciStockfish as staged Blockfish opponent
     -> private complete replay JSONL under runtime/private/games/exp5/...
     -> redacted win-rate summary under docs/games/evidence/exp5/...
   -> chess_exp5_production_readiness.py

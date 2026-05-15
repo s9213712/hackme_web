@@ -885,6 +885,11 @@ def evaluate_question_set(args: argparse.Namespace) -> int:
     questions = [question for question in (payload.get("questions") or []) if isinstance(question, dict)]
     if not questions:
         raise SystemExit("question set contains no questions")
+    requested_sections = {str(item or "").strip() for item in (args.section or []) if str(item or "").strip()}
+    if requested_sections:
+        questions = [question for question in questions if str(question.get("section") or "") in requested_sections]
+        if not questions:
+            raise SystemExit(f"question set contains no questions for sections: {sorted(requested_sections)}")
     if int(args.questions or 0) > 0:
         questions = questions[: int(args.questions)]
     stockfish_path = stockfish_teacher.resolve_stockfish_path(str(args.stockfish_path or ""))
@@ -1001,6 +1006,7 @@ def parse_args() -> argparse.Namespace:
     evaluate = sub.add_parser("evaluate", help="Evaluate exp5 against a private question set.")
     evaluate.add_argument("--question-set", default=str(DEFAULT_PRIVATE_ROOT / "v24_expanded_100_questions.json"))
     evaluate.add_argument("--profile", default=PROFILE_V24)
+    evaluate.add_argument("--section", action="append", default=[], help="Evaluate only matching question sections. May be repeated.")
     evaluate.add_argument("--questions", type=int, default=0)
     evaluate.add_argument("--output-json", default=str(ROOT / "docs/games/evidence/exp5/v24_expanded_100_evaluation.json"))
     evaluate.add_argument("--output-jsonl", default=str(ROOT / "docs/games/evidence/exp5/v24_expanded_100_evaluation.jsonl"))

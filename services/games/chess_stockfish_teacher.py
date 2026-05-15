@@ -182,7 +182,10 @@ class UciStockfish:
         )
         _send(self.proc, "uci")
         _read_until(self.proc, lambda line: line.strip() == "uciok")
+        self.setoption("Threads", "1")
+        self.setoption("Hash", "32")
         self.setoption("UCI_ShowWDL", "true")
+        self.setoption("UCI_AnalyseMode", "true")
         self.isready()
 
     def __enter__(self) -> "UciStockfish":
@@ -193,6 +196,9 @@ class UciStockfish:
 
     def setoption(self, name: str, value: str) -> None:
         _send(self.proc, f"setoption name {name} value {value}")
+
+    def button_option(self, name: str) -> None:
+        _send(self.proc, f"setoption name {name}")
 
     def isready(self) -> None:
         _send(self.proc, "isready")
@@ -218,6 +224,8 @@ class UciStockfish:
     ) -> list[dict]:
         multipv = max(1, int(multipv or 1))
         self.setoption("MultiPV", str(multipv))
+        self.button_option("Clear Hash")
+        self.isready()
         _send(self.proc, f"position fen {board.fen()}")
         parts = ["go"]
         if int(limit.get("depth") or 0) > 0:

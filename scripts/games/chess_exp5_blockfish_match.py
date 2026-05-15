@@ -201,7 +201,15 @@ def play_game(
     }
 
 
-def _summary(games: list[dict[str, Any]], *, profile: str, stockfish_path: str, stockfish_depth: int, stockfish_movetime_ms: int) -> dict[str, Any]:
+def _summary(
+    games: list[dict[str, Any]],
+    *,
+    profile: str,
+    stockfish_path: str,
+    stockfish_depth: int,
+    stockfish_movetime_ms: int,
+    stockfish_depth_schedule: list[int] | None = None,
+) -> dict[str, Any]:
     total = len(games)
     exp5_wins = sum(1 for game in games if game.get("result") == "exp5_win")
     stockfish_wins = sum(1 for game in games if game.get("result") == "blockfish_win")
@@ -214,6 +222,7 @@ def _summary(games: list[dict[str, Any]], *, profile: str, stockfish_path: str, 
         "profile": profile,
         "blockfish_reference": stockfish_reference(stockfish_path),
         "stockfish_depth": int(stockfish_depth),
+        "stockfish_depth_schedule": list(stockfish_depth_schedule or []),
         "stockfish_movetime_ms": int(stockfish_movetime_ms),
         "games": total,
         "exp5_wins": exp5_wins,
@@ -231,6 +240,7 @@ def _summary(games: list[dict[str, Any]], *, profile: str, stockfish_path: str, 
                 "game_index": int(game.get("game_index") or 0),
                 "opening_id": str(game.get("opening_id") or ""),
                 "exp5_color": str(game.get("exp5_color") or ""),
+                "stockfish_depth": int(game.get("stockfish_depth") or stockfish_depth),
                 "result": str(game.get("result") or ""),
                 "winner": str(game.get("winner") or ""),
                 "reason": str(game.get("reason") or ""),
@@ -247,6 +257,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--profile", default="fixed_depth_fianchetto_tail_castle_guard")
     parser.add_argument("--stockfish-path", default="")
     parser.add_argument("--stockfish-depth", type=int, default=6)
+    parser.add_argument("--stockfish-depth-schedule", default="", help="Comma-separated per-game depths, for staged Blockfish matches.")
     parser.add_argument("--stockfish-movetime-ms", type=int, default=0)
     parser.add_argument("--games", type=int, default=5)
     parser.add_argument("--max-plies", type=int, default=600)
@@ -255,17 +266,37 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _depth_schedule(text: str) -> list[int]:
+    depths: list[int] = []
+    for item in str(text or "").split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            depth = int(item)
+        except ValueError:
+            continue
+        if depth > 0:
+            depths.append(depth)
+    return depths
+
+
 def main() -> int:
     args = parse_args()
     stockfish_path = resolve_stockfish_path(str(args.stockfish_path or ""))
     if not stockfish_path:
         raise SystemExit("Stockfish/Blockfish binary not found")
+    depth_schedule = _depth_schedule(str(args.stockfish_depth_schedule or ""))
     games: list[dict[str, Any]] = []
     with UciStockfish(stockfish_path) as engine:
         for index in range(1, max(1, int(args.games)) + 1):
             opening_id, opening_moves = DEFAULT_OPENINGS[(index - 1) % len(DEFAULT_OPENINGS)]
             exp5_color = "white" if index % 2 == 1 else "black"
-            print(f"[exp5-blockfish] game {index}/{int(args.games)} opening={opening_id} exp5={exp5_color}", flush=True)
+            stockfish_depth = depth_schedule[index - 1] if index - 1 < len(depth_schedule) else int(args.stockfish_depth)
+            print(
+                f"[exp5-blockfish] game {index}/{int(args.games)} opening={opening_id} exp5={exp5_color} depth={stockfish_depth}",
+                flush=True,
+            )
             games.append(
                 play_game(
                     game_index=index,
@@ -274,7 +305,7 @@ def main() -> int:
                     exp5_color_name=exp5_color,
                     profile=str(args.profile),
                     engine=engine,
-                    stockfish_depth=int(args.stockfish_depth),
+                    stockfish_depth=int(stockfish_depth),
                     stockfish_movetime_ms=int(args.stockfish_movetime_ms),
                     max_plies=max(1, int(args.max_plies)),
                 )
@@ -288,6 +319,7 @@ def main() -> int:
         stockfish_path=stockfish_path,
         stockfish_depth=int(args.stockfish_depth),
         stockfish_movetime_ms=int(args.stockfish_movetime_ms),
+        stockfish_depth_schedule=depth_schedule,
     )
     summary_path = Path(args.summary_json)
     summary_path.parent.mkdir(parents=True, exist_ok=True)
