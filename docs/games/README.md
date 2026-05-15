@@ -9,6 +9,7 @@
 | 黑白棋 / 圍棋 / 五子棋 AI 與棋力量化 | [references/BOARD_AI_BENCHMARK.md](references/BOARD_AI_BENCHMARK.md) | 要跑三棋 AI benchmark、看 Elo、檢查 skill suite、安裝 KataGo、規劃後續強化 |
 | 西洋棋模型檔與 runtime/bundled 邊界 | [references/chess_model_files.md](references/chess_model_files.md) | 要理解 exp3/exp4/exp5 模型檔、warm-start、promotion artifact |
 | 西洋棋訓練與 replay pipeline | [references/chess_training_pipeline.md](references/chess_training_pipeline.md) | 要跑 replay prepare、seed train、self-play、promotion pipeline |
+| Exp5 暫停交接與重啟 | [reports/2026-05-15_exp5_v28_pause_and_restart_handoff.md](reports/2026-05-15_exp5_v28_pause_and_restart_handoff.md), [references/exp5_restart_playbook.md](references/exp5_restart_playbook.md) | 要從目前最強 V28e baseline 安全重啟實驗、跑快篩、避免洩題 |
 | Exp5 最新補充參考 | [references/2026-05-13_exp5_nnue_fix.md](references/2026-05-13_exp5_nnue_fix.md), [references/2026-05-13_exp5_conversion_fix.md](references/2026-05-13_exp5_conversion_fix.md), [references/2026-05-13_exp5_phase1_engine_upgrade.md](references/2026-05-13_exp5_phase1_engine_upgrade.md), [references/2026-05-13_exp5_model_snapshot_and_high_engine_plan.md](references/2026-05-13_exp5_model_snapshot_and_high_engine_plan.md) | 要追 Exp5 模型修補、轉換、phase 1 engine upgrade 與 high-engine plan |
 | 西洋棋 debug / engine roadmap | [archive/chess_debug/README.md](archive/chess_debug/README.md) | 要追 exp3/exp4/exp5 歷史與目前治理結論 |
 | 2026-05-13 評測與優化歸檔 | [ARCHIVE_INDEX.md](ARCHIVE_INDEX.md) | 要找報告、JSON/JSONL 證據、實驗資料夾、模型快照 |
@@ -59,6 +60,12 @@ python3 scripts/games/setup_katago.py
 ### 西洋棋
 
 西洋棋仍保留獨立的 match/practice/replay/training/promotion pipeline。不要把三棋 benchmark 或後續三棋神經網路訓練直接塞進西洋棋 `self_play_training.py`；兩邊的模型、報告、promotion gate 要分開。
+
+目前 Exp5 棋力實驗已暫停在 V28e。重啟時請先讀
+[reports/2026-05-15_exp5_v28_pause_and_restart_handoff.md](reports/2026-05-15_exp5_v28_pause_and_restart_handoff.md)
+與 [references/exp5_restart_playbook.md](references/exp5_restart_playbook.md)，先跑 Blockfish
+快篩，再決定是否跑完整 percent-tail / expanded validation。公開文件不得包含 FEN、走法、teacher
+PV、source game id、chosen/source move 或逐題答案。
 
 ## 調用地圖
 

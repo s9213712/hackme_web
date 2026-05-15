@@ -14,6 +14,25 @@
 4. 跑 benchmark / smoke
 5. 通過後才 stage / promote
 
+## 目前暫停狀態
+
+截至 2026-05-15，Exp5 棋力實驗暫停在 V28e：
+
+- accepted profile:
+  `fixed_depth_fianchetto_tail_castle_guard_v28e_depth3_no_null_mate_net30_fast_king_mobility4`
+- accepted commit: `5414b21`
+- handoff report:
+  `docs/games/reports/2026-05-15_exp5_v28_pause_and_restart_handoff.md`
+- restart playbook:
+  `docs/games/references/exp5_restart_playbook.md`
+
+在重新啟動實驗前，先依 playbook 做快篩。不要把 private validation 題目、FEN、走法、
+teacher PV、source game id、chosen/source move 或逐題答案寫入公開 docs/evidence。
+
+Auto-retrain 目前仍視為斷開：線上可以繼續記錄 replay 與篩選優質棋局，但不得直接改
+production model。任何 replay learning 都必須先經過離線 candidate、teacher audit、
+Blockfish staged match、percent-tail/expanded validation 與 promotion gate。
+
 ## 1. 線上收集 replay
 
 線上對局結束時不直接改 production model，而是把 replay 寫到：

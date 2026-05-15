@@ -259,6 +259,13 @@ exp5 candidate artifacts
     -> services/games/chess_stockfish_teacher.py::UciStockfish as staged Blockfish opponent
     -> private complete replay JSONL under runtime/private/games/exp5/...
     -> redacted win-rate summary under docs/games/evidence/exp5/...
+  -> V28 restart fast-screen rule
+    -> accepted baseline is fixed_depth_fianchetto_tail_castle_guard_v28e_depth3_no_null_mate_net30_fast_king_mobility4
+    -> optional wrapper: chess_exp5_restart_smoke.py [--run-staged]
+    -> run targeted Blockfish screen before full validation
+    -> run staged five-game Blockfish comparison before expanded-100
+    -> keep private replay/detail/question files outside repo, preferably /home/s92137/hackme_web_private/runtime/private/games/exp5/
+    -> publish only aggregate redacted docs/evidence
   -> chess_exp5_production_readiness.py
   -> chess_exp5_promote_candidate.py
 ```

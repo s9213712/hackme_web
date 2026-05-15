@@ -56,7 +56,8 @@ full validation and should still show which scope they covered.
 - `scripts/comfyui/`
   ComfyUI probe tooling and ComfyUI-specific local startup template.
 - `scripts/games/`
-  Chess experiment training plus non-chess board-game AI benchmarking.
+  Chess experiment training plus non-chess board-game AI benchmarking. See
+  [games/README.md](games/README.md) for the current Exp5 restart workflow.
 - `scripts/prepush/`
   Pre-push framework internals and checks.
 - `scripts/security/`
@@ -87,6 +88,12 @@ to define production-gate owner, purpose, artifact, and failure meaning. Use
 land.
 
 ## Games Script Call Map
+
+For the paused Exp5 chess experiment restart procedure, read
+[games/README.md](games/README.md) and
+[../docs/games/references/exp5_restart_playbook.md](../docs/games/references/exp5_restart_playbook.md)
+before running long validation. Start with quick Blockfish screening; do not run
+full held-out validation first unless explicitly requested.
 
 ### Board AI Benchmark
 
