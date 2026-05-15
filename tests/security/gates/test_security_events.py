@@ -124,6 +124,69 @@ def test_root_security_event_creates_root_notification(tmp_path):
         conn.close()
 
 
+def test_chain_mode_violation_is_recorded_without_root_alert(tmp_path):
+    from services.system.notifications import ensure_notifications_schema
+
+    db_path = tmp_path / "events.db"
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE
+        );
+        CREATE TABLE security_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type TEXT NOT NULL,
+            ip_address TEXT NOT NULL,
+            target_user TEXT,
+            detail TEXT,
+            created_at TEXT NOT NULL
+        );
+        """
+    )
+    conn.execute("INSERT INTO users (id, username) VALUES (1, 'root')")
+    ensure_notifications_schema(conn)
+    conn.commit()
+    conn.close()
+
+    original_state = dict(security_events._STATE)
+    original_cleanup_at = security_events._LAST_EVENT_CLEANUP_AT
+    try:
+        security_events._LAST_EVENT_CLEANUP_AT = 10**12
+        security_events.configure_security_events_service(
+            get_db=_get_db_factory(str(db_path)),
+            get_system_settings=lambda: {},
+            audit=lambda *args, **kwargs: None,
+            is_ip_blocking_enabled=lambda: False,
+        )
+
+        security_events.record_security_event(
+            "chain_mode_violation",
+            "127.0.0.1",
+            target_user="-",
+            detail="action=force_seal_block,mode='dev_ready'",
+        )
+    finally:
+        security_events._STATE.clear()
+        security_events._STATE.update(original_state)
+        security_events._LAST_EVENT_CLEANUP_AT = original_cleanup_at
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        event = conn.execute("SELECT * FROM security_events ORDER BY id DESC LIMIT 1").fetchone()
+        alert_count = conn.execute(
+            "SELECT COUNT(*) AS c FROM notifications WHERE user_id=1 AND type='root_security_alert'"
+        ).fetchone()["c"]
+        assert event["event_type"] == "chain_mode_violation"
+        assert event["detail"] == "action=force_seal_block,mode='dev_ready'"
+        assert alert_count == 0
+    finally:
+        conn.close()
+
+
 def test_csrf_root_notifications_are_burst_throttled_but_events_are_kept(tmp_path):
     db_path = tmp_path / "events.db"
     conn = sqlite3.connect(db_path)

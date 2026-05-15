@@ -28,6 +28,7 @@ SECURITY_EVENT_TYPES = {
     "feature_disabled",
     "csrf_fail",
     "permission_denied",
+    "chain_mode_violation",
     "session_revoked",
     "login_location_suspicious",
 }
@@ -50,6 +51,7 @@ SECURITY_EVENT_LABELS = {
     "feature_disabled": "存取已關閉的功能",
     "csrf_fail": "CSRF 安全驗證失敗",
     "permission_denied": "權限不足的操作",
+    "chain_mode_violation": "PointsChain 模式保護",
     "session_revoked": "登入 session 已被撤銷",
     "login_location_suspicious": "疑似異常登入位置",
 }
@@ -62,6 +64,7 @@ SECURITY_EVENT_ADVICE = {
     "feature_disabled": "使用者嘗試使用目前已關閉的功能；若是正常需求，請到安全中心開啟。",
     "csrf_fail": "若大量出現，可能是舊頁面、多分頁、腳本請求或跨站請求造成，請檢查來源。",
     "permission_denied": "請確認帳號權限、伺服器模式與相關功能開關是否符合預期。",
+    "chain_mode_violation": "非 production 模式下拒絕寫入 PointsChain 是預期保護；若 production 出現此事件，請檢查 Server Mode 設定。",
     "session_revoked": "這通常代表登出、逾時、單一登入限制或帳號安全策略生效。",
     "login_location_suspicious": "請確認是否為帳號本人登入；必要時要求重設密碼。",
 }
@@ -85,6 +88,10 @@ def _humanize_security_detail(event_type, detail):
         return f"觸發速率限制：{limit} 次 / {window} 秒"
     if event_type == "feature_disabled" and text.startswith("feature_"):
         return f"被存取的功能開關：{text}"
+    if event_type == "chain_mode_violation" and text.startswith("action=") and ",mode=" in text:
+        action = text.split("action=", 1)[1].split(",", 1)[0].strip()
+        mode = text.split(",mode=", 1)[1].strip().strip("'\"")
+        return f"PointsChain 寫入被 Server Mode 保護阻擋：{action}，目前模式：{mode or '-'}"
     if " " in text and text.split(" ", 1)[0].upper() in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}:
         method, path = text.split(" ", 1)
         return f"請求：{method.upper()} {path}"

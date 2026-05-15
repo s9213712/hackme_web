@@ -19,6 +19,7 @@ from services.security.upload_security import safe_public_filename
 
 
 MAX_BDECODE_DEPTH = 64
+BT_DEFAULT_MAX_RUNTIME_SECONDS = 24 * 3600
 
 
 class RemoteDownloadError(RuntimeError):
@@ -72,6 +73,20 @@ def _host_is_public(hostname):
     return True
 
 
+def _tracker_hostname_is_definitely_private(hostname):
+    host = str(hostname or "").strip().rstrip(".").lower()
+    if not host:
+        return True
+    if host in {"localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback"}:
+        return True
+    if host.endswith(".localhost") or host.endswith(".local"):
+        return True
+    try:
+        return not _ip_is_public(str(ipaddress.ip_address(host)))
+    except ValueError:
+        return False
+
+
 def _resolve_public_endpoint(hostname, port):
     if not hostname:
         raise RemoteDownloadError("下載網址缺少主機名稱")
@@ -112,8 +127,22 @@ def _validate_tracker_url(tracker_url):
     parsed = urllib.parse.urlparse(str(tracker_url or "").strip())
     if parsed.scheme not in {"http", "https", "udp"} or not parsed.hostname:
         raise RemoteDownloadError("BT tracker URL 格式不支援")
-    port = parsed.port or (443 if parsed.scheme == "https" else 80)
-    _resolve_public_endpoint(parsed.hostname, port)
+    if _tracker_hostname_is_definitely_private(parsed.hostname):
+        raise RemoteDownloadError(f"BT tracker 不可指向 localhost、內網或保留位址（{parsed.hostname}）")
+    try:
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError as exc:
+        raise RemoteDownloadError("BT tracker URL 格式不支援") from exc
+    try:
+        _resolve_public_endpoint(parsed.hostname, port)
+    except RemoteDownloadError as exc:
+        if str(exc) == "下載網址無法解析":
+            # Tracker DNS can be flaky and aria2 can still use DHT,
+            # peer exchange, and supplemental public trackers. Treat
+            # unresolvable public-looking tracker domains as
+            # unavailable, not unsafe.
+            return
+        raise
 
 
 def validate_magnet_trackers(url):
@@ -244,6 +273,84 @@ def _emit_progress(progress_callback, **payload):
         pass
 
 
+def _progress_speed_bytes_per_sec(current_bytes, previous_bytes, current_ts, previous_ts):
+    try:
+        current = int(current_bytes or 0)
+        previous = int(previous_bytes or 0)
+        delta_t = float(current_ts or 0) - float(previous_ts or 0)
+    except Exception:
+        return 0
+    if current < previous or delta_t <= 0:
+        return 0
+    return int((current - previous) / delta_t)
+
+
+def _positive_int(value, default):
+    try:
+        parsed = int(value)
+    except Exception:
+        return int(default)
+    return parsed if parsed > 0 else int(default)
+
+
+def _positive_float(value, default):
+    try:
+        parsed = float(value)
+    except Exception:
+        return float(default)
+    return parsed if parsed > 0 else float(default)
+
+
+def _env_positive_int(name, default):
+    return _positive_int(os.environ.get(name), default)
+
+
+def _env_positive_float(name, default):
+    return _positive_float(os.environ.get(name), default)
+
+
+def _bt_idle_timeout_seconds(timeout_seconds):
+    default_timeout = _positive_int(timeout_seconds, 1800)
+    return _env_positive_int("HACKME_BT_IDLE_TIMEOUT_SECONDS", default_timeout)
+
+
+def _bt_absolute_timeout_seconds():
+    raw = os.environ.get("HACKME_BT_MAX_RUNTIME_SECONDS")
+    if raw is None:
+        return BT_DEFAULT_MAX_RUNTIME_SECONDS
+    try:
+        parsed = int(raw)
+    except Exception:
+        return BT_DEFAULT_MAX_RUNTIME_SECONDS
+    return max(0, parsed)
+
+
+def _bt_stop_timeout_seconds(idle_timeout_seconds):
+    raw = os.environ.get("HACKME_ARIA2_BT_STOP_TIMEOUT_SECONDS")
+    if raw is not None:
+        try:
+            return max(0, int(raw))
+        except Exception:
+            pass
+    return max(600, min(int(idle_timeout_seconds or 1800), 3600))
+
+
+def _bt_progress_interval_seconds():
+    return max(0.5, min(10.0, _env_positive_float("HACKME_BT_PROGRESS_INTERVAL_SECONDS", 2.0)))
+
+
+def _directory_downloaded_bytes(path):
+    total = 0
+    for item in Path(path).rglob("*"):
+        if not item.is_file() or item.name == "aria2.log":
+            continue
+        try:
+            total += item.stat().st_size
+        except OSError:
+            pass
+    return total
+
+
 def _http_response_once(url, *, timeout_seconds=60):
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme not in {"http", "https"}:
@@ -316,7 +423,9 @@ def download_direct_link(url, *, timeout_seconds=60, max_bytes=None, progress_ca
             raise RemoteDownloadError("遠端檔案超過容量限制")
         target = os.path.join(tmpdir, filename)
         total = 0
-        _emit_progress(progress_callback, phase="downloading", filename=filename, loaded_bytes=0, total_bytes=total_bytes)
+        last_progress_bytes = 0
+        last_progress_ts = time.monotonic()
+        _emit_progress(progress_callback, phase="downloading", filename=filename, loaded_bytes=0, total_bytes=total_bytes, speed_bytes_per_sec=0)
         started = time.monotonic()
         with open(target, "wb") as out:
             while True:
@@ -327,13 +436,17 @@ def download_direct_link(url, *, timeout_seconds=60, max_bytes=None, progress_ca
                 if max_bytes is not None and total > int(max_bytes):
                     raise RemoteDownloadError("遠端檔案超過容量限制")
                 out.write(chunk)
-                _emit_progress(progress_callback, phase="downloading", filename=filename, loaded_bytes=total, total_bytes=total_bytes)
+                now_ts = time.monotonic()
+                speed = _progress_speed_bytes_per_sec(total, last_progress_bytes, now_ts, last_progress_ts)
+                _emit_progress(progress_callback, phase="downloading", filename=filename, loaded_bytes=total, total_bytes=total_bytes, speed_bytes_per_sec=speed)
+                last_progress_bytes = total
+                last_progress_ts = now_ts
                 if rate_limit_kb_per_sec:
                     expected_elapsed = total / max(1, int(rate_limit_kb_per_sec) * 1024)
                     elapsed = time.monotonic() - started
                     if expected_elapsed > elapsed:
                         time.sleep(min(1.0, expected_elapsed - elapsed))
-        _emit_progress(progress_callback, phase="downloaded", filename=filename, loaded_bytes=total, total_bytes=total_bytes)
+        _emit_progress(progress_callback, phase="downloaded", filename=filename, loaded_bytes=total, total_bytes=total_bytes, speed_bytes_per_sec=0)
         return DownloadedFile(path=target, filename=filename, mimetype=mimetype, cleanup_dir=tmpdir)
     except (OSError, ssl.SSLError, http.client.HTTPException) as exc:
         shutil.rmtree(tmpdir, ignore_errors=True)
@@ -404,6 +517,9 @@ def _download_bt_with_aria2(source, *, source_label="BT/magnet", timeout_seconds
         raise RemoteDownloadError("BT 下載需要先安裝 aria2c")
     tmpdir = tempfile.mkdtemp(prefix="hackme_bt_")
     log_path = os.path.join(tmpdir, "aria2.log")
+    idle_timeout_seconds = _bt_idle_timeout_seconds(timeout_seconds)
+    absolute_timeout_seconds = _bt_absolute_timeout_seconds()
+    progress_interval_seconds = _bt_progress_interval_seconds()
     # Public trackers to supplement DHT for better magnet-link peer discovery
     _PUBLIC_TRACKERS = ",".join([
         "udp://tracker.opentrackr.org:1337/announce",
@@ -418,7 +534,7 @@ def _download_bt_with_aria2(source, *, source_label="BT/magnet", timeout_seconds
         "--log", log_path,
         "--log-level=notice",
         "--seed-time=0",
-        "--bt-stop-timeout=600",
+        f"--bt-stop-timeout={_bt_stop_timeout_seconds(idle_timeout_seconds)}",
         "--bt-enable-lpd=false",
         "--enable-dht=true",
         "--enable-peer-exchange=true",
@@ -439,22 +555,37 @@ def _download_bt_with_aria2(source, *, source_label="BT/magnet", timeout_seconds
     if safe_excludes:
         cmd[1:1] = ["--bt-exclude-tracker", ",".join(safe_excludes)]
     try:
-        _emit_progress(progress_callback, phase="downloading", filename=source_label, loaded_bytes=None, total_bytes=None)
+        _emit_progress(progress_callback, phase="downloading", filename=source_label, loaded_bytes=0, total_bytes=max_bytes, speed_bytes_per_sec=0)
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         started = time.monotonic()
+        last_progress_bytes = 0
+        last_progress_ts = started
+        last_activity_bytes = 0
+        last_activity_ts = started
         while proc.poll() is None:
-            if time.monotonic() - started > timeout_seconds:
+            now_ts = time.monotonic()
+            total_downloaded = _directory_downloaded_bytes(tmpdir)
+            if total_downloaded > last_activity_bytes:
+                last_activity_bytes = total_downloaded
+                last_activity_ts = now_ts
+            if absolute_timeout_seconds and now_ts - started > absolute_timeout_seconds:
                 proc.kill()
                 proc.communicate(timeout=5)
-                raise RemoteDownloadError("BT 下載逾時")
+                raise RemoteDownloadError(f"BT 下載超過最長執行時間（{absolute_timeout_seconds} 秒），已停止。")
+            if idle_timeout_seconds and now_ts - last_activity_ts > idle_timeout_seconds:
+                proc.kill()
+                proc.communicate(timeout=5)
+                raise RemoteDownloadError(f"BT 下載停滯逾時：已 {idle_timeout_seconds} 秒沒有下載進度。請確認做種/節點、tracker、DHT 與防火牆狀態。")
             if max_bytes is not None:
-                total_downloaded = sum(os.path.getsize(path) for path in Path(tmpdir).rglob("*") if path.is_file())
                 if total_downloaded > int(max_bytes):
                     proc.kill()
                     proc.communicate(timeout=5)
                     raise RemoteDownloadError("BT 下載內容超過容量限制")
-                _emit_progress(progress_callback, phase="downloading", filename=source_label, loaded_bytes=total_downloaded, total_bytes=int(max_bytes))
-            time.sleep(0.5)
+            speed = _progress_speed_bytes_per_sec(total_downloaded, last_progress_bytes, now_ts, last_progress_ts)
+            _emit_progress(progress_callback, phase="downloading", filename=source_label, loaded_bytes=total_downloaded, total_bytes=int(max_bytes) if max_bytes is not None else None, speed_bytes_per_sec=speed)
+            last_progress_bytes = total_downloaded
+            last_progress_ts = now_ts
+            time.sleep(progress_interval_seconds)
         stdout, stderr = proc.communicate()
         proc = subprocess.CompletedProcess(cmd, proc.returncode, stdout=stdout, stderr=stderr)
         if proc.returncode != 0:
@@ -482,7 +613,7 @@ def _download_bt_with_aria2(source, *, source_label="BT/magnet", timeout_seconds
             total = os.path.getsize(target)
         except OSError:
             total = None
-        _emit_progress(progress_callback, phase="downloaded", filename=filename, loaded_bytes=total, total_bytes=total)
+        _emit_progress(progress_callback, phase="downloaded", filename=filename, loaded_bytes=total, total_bytes=total, speed_bytes_per_sec=0)
         return DownloadedFile(path=target, filename=filename, mimetype=mimetype, cleanup_dir=tmpdir)
     except subprocess.TimeoutExpired as exc:
         shutil.rmtree(tmpdir, ignore_errors=True)

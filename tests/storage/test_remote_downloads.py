@@ -1,4 +1,6 @@
 import pytest
+import shutil
+import socket
 from pathlib import Path
 
 from services.storage.remote_downloads import (
@@ -150,6 +152,92 @@ def test_bt_download_kills_when_temp_size_exceeds_limit(monkeypatch):
     assert "超過容量限制" in str(exc.value)
 
 
+def test_bt_active_progress_survives_idle_timeout(monkeypatch):
+    class ActivePopen:
+        def __init__(self, cmd, **kwargs):
+            self.cmd = cmd
+            self.returncode = None
+            self.stdout = ""
+            self.stderr = ""
+            self.calls = 0
+            self.payload = Path(cmd[cmd.index("--dir") + 1]) / "progress.bin"
+            log_path = cmd[cmd.index("--log") + 1]
+            with open(log_path, "w", encoding="utf-8") as fh:
+                fh.write("downloading\n")
+
+        def poll(self):
+            self.calls += 1
+            if self.calls <= 4:
+                self.payload.write_bytes(b"x" * self.calls)
+                return None
+            self.returncode = 0
+            return self.returncode
+
+        def communicate(self, timeout=None):
+            return "", ""
+
+        def kill(self):
+            self.returncode = -9
+
+    now = {"value": 0}
+
+    def fake_monotonic():
+        now["value"] += 1
+        return now["value"]
+
+    monkeypatch.setattr("services.storage.remote_downloads.shutil.which", lambda name: "/usr/bin/aria2c")
+    monkeypatch.setattr("services.storage.remote_downloads.subprocess.Popen", ActivePopen)
+    monkeypatch.setattr("services.storage.remote_downloads.time.monotonic", fake_monotonic)
+    monkeypatch.setattr("services.storage.remote_downloads.time.sleep", lambda seconds: None)
+
+    downloaded = download_magnet_with_aria2("magnet:?xt=urn:btih:good", timeout_seconds=1)
+    try:
+        assert downloaded.filename == "progress.bin"
+        assert Path(downloaded.path).read_bytes() == b"xxxx"
+    finally:
+        shutil.rmtree(downloaded.cleanup_dir, ignore_errors=True)
+
+
+def test_bt_stalled_download_uses_idle_timeout_message(monkeypatch):
+    killed = {"value": False}
+
+    class StalledPopen:
+        def __init__(self, cmd, **kwargs):
+            self.returncode = None
+            self.stdout = ""
+            self.stderr = ""
+            log_path = cmd[cmd.index("--log") + 1]
+            with open(log_path, "w", encoding="utf-8") as fh:
+                fh.write("waiting for peers\n")
+
+        def poll(self):
+            return None
+
+        def communicate(self, timeout=None):
+            return "", ""
+
+        def kill(self):
+            killed["value"] = True
+            self.returncode = -9
+
+    now = {"value": 0}
+
+    def fake_monotonic():
+        now["value"] += 1
+        return now["value"]
+
+    monkeypatch.setattr("services.storage.remote_downloads.shutil.which", lambda name: "/usr/bin/aria2c")
+    monkeypatch.setattr("services.storage.remote_downloads.subprocess.Popen", StalledPopen)
+    monkeypatch.setattr("services.storage.remote_downloads.time.monotonic", fake_monotonic)
+    monkeypatch.setattr("services.storage.remote_downloads.time.sleep", lambda seconds: None)
+
+    with pytest.raises(RemoteDownloadError) as exc:
+        download_magnet_with_aria2("magnet:?xt=urn:btih:stalled", timeout_seconds=1)
+
+    assert killed["value"] is True
+    assert "停滯逾時" in str(exc.value)
+
+
 def test_magnet_trackers_reject_private_hosts(monkeypatch):
     def fake_getaddrinfo(host, port, **kwargs):
         return [(2, 1, 6, "", ("127.0.0.1", int(port or 80)))]
@@ -158,6 +246,18 @@ def test_magnet_trackers_reject_private_hosts(monkeypatch):
 
     with pytest.raises(RemoteDownloadError, match="localhost"):
         validate_remote_url("magnet:?xt=urn:btih:abc&tr=http%3A%2F%2Flocalhost%3A8080%2Fannounce")
+
+
+def test_magnet_tracker_dns_failure_does_not_block_bt(monkeypatch):
+    def fake_getaddrinfo(host, port, **kwargs):
+        raise socket.gaierror(socket.EAI_NONAME, "name or service not known")
+
+    monkeypatch.setattr("services.storage.remote_downloads.socket.getaddrinfo", fake_getaddrinfo)
+
+    parsed = validate_remote_url(
+        "magnet:?xt=urn:btih:abc&tr=udp%3A%2F%2Ftracker.openbittorrent.com%3A80%2Fannounce"
+    )
+    assert parsed["kind"] == "magnet"
 
 
 def test_torrent_url_is_classified_as_bt(monkeypatch):
@@ -257,6 +357,24 @@ def test_torrent_file_trackers_reject_private_hosts(tmp_path, monkeypatch):
 
     with pytest.raises(RemoteDownloadError, match="localhost"):
         validate_torrent_file_trackers(torrent)
+
+
+def test_torrent_file_allows_udp_tracker_when_dns_is_unavailable(tmp_path, monkeypatch):
+    tracker = b"udp://tracker.openbittorrent.com:80/announce"
+    torrent = tmp_path / "udp-tracker.torrent"
+    torrent.write_bytes(
+        b"d8:announce" + str(len(tracker)).encode("ascii") + b":" + tracker +
+        b"4:infod4:name4:test12:piece lengthi16384e6:pieces0:ee"
+    )
+
+    def fake_getaddrinfo(host, port, **kwargs):
+        raise socket.gaierror(socket.EAI_NONAME, "name or service not known")
+
+    monkeypatch.setattr("services.storage.remote_downloads.socket.getaddrinfo", fake_getaddrinfo)
+
+    report = validate_torrent_file_trackers(torrent)
+    assert report["blocked"] == []
+    assert report["trackers"] == [tracker.decode("ascii")]
 
 
 def test_torrent_download_rejects_private_trackers(tmp_path, monkeypatch):
