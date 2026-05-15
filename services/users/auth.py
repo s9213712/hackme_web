@@ -442,6 +442,21 @@ def require_csrf(f):
         tok = request.cookies.get("session_token")
         user = db_get_user_from_token(tok) if tok else None
 
+        if request.path == "/api/login":
+            csrf_owner = ""
+            if user and verify_csrf_token(csrf_tok, user):
+                csrf_owner = user
+            elif verify_csrf_token(csrf_tok, "__public__"):
+                csrf_owner = "__public__"
+            elif body_username and verify_csrf_token(csrf_tok, body_username):
+                csrf_owner = body_username
+            if not csrf_owner:
+                return csrf_invalid_response("invalid_login", body_username or user or "-")
+            response = f(*args, **kwargs)
+            if csrf_tok:
+                consume_csrf_token(csrf_tok, csrf_owner)
+            return response
+
         if user:
             # Authenticated: token stored under username
             if not verify_csrf_token(csrf_tok, user):

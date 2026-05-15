@@ -20,6 +20,8 @@ if str(REPO_ROOT) not in sys.path:
 
 from services.storage.remote_downloads import (  # noqa: E402
     RemoteDownloadError,
+    RemoteDownloadCancelled,
+    RemoteDownloadPaused,
     download_remote_url,
     download_torrent_file_with_aria2,
     download_torrent_url_with_aria2,
@@ -42,6 +44,24 @@ def _positive_int_or_none(value):
     return parsed if parsed > 0 else None
 
 
+def _control_check_from_file(path):
+    control_path = Path(str(path or ""))
+    if not str(path or "").strip():
+        return None
+
+    def _check():
+        try:
+            action = control_path.read_text(encoding="utf-8").strip().lower()
+        except OSError:
+            action = ""
+        if action == "pause":
+            raise RemoteDownloadPaused("下載任務已暫停")
+        if action == "cancel":
+            raise RemoteDownloadCancelled("下載任務已取消")
+
+    return _check
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Run one cloud-drive remote download")
     parser.add_argument("--source-type", required=True, choices=["direct", "magnet", "torrent_url", "torrent_file"])
@@ -51,10 +71,12 @@ def main(argv=None):
     parser.add_argument("--timeout-seconds", type=int, default=300)
     parser.add_argument("--max-bytes", type=int, default=0)
     parser.add_argument("--rate-limit-kb-per-sec", type=int, default=0)
+    parser.add_argument("--control-file", default="")
     args = parser.parse_args(argv)
 
     max_bytes = _positive_int_or_none(args.max_bytes)
     rate_limit = _positive_int_or_none(args.rate_limit_kb_per_sec)
+    cancel_check = _control_check_from_file(args.control_file)
 
     try:
         if args.source_type == "torrent_file":
@@ -65,6 +87,7 @@ def main(argv=None):
                 max_bytes=max_bytes,
                 progress_callback=_progress,
                 rate_limit_kb_per_sec=rate_limit,
+                cancel_check=cancel_check,
             )
         elif args.source_type == "torrent_url":
             downloaded = download_torrent_url_with_aria2(
@@ -73,6 +96,7 @@ def main(argv=None):
                 max_bytes=max_bytes,
                 progress_callback=_progress,
                 rate_limit_kb_per_sec=rate_limit,
+                cancel_check=cancel_check,
             )
         else:
             downloaded = download_remote_url(
@@ -82,6 +106,7 @@ def main(argv=None):
                 progress_callback=_progress,
                 rate_limit_kb_per_sec=rate_limit,
                 treat_torrent_as_bt=args.source_type != "direct",
+                cancel_check=cancel_check,
             )
         _emit({
             "type": "result",
@@ -91,6 +116,12 @@ def main(argv=None):
             "cleanup_dir": downloaded.cleanup_dir,
         })
         return 0
+    except RemoteDownloadPaused as exc:
+        _emit({"type": "paused", "message": str(exc)})
+        return 3
+    except RemoteDownloadCancelled as exc:
+        _emit({"type": "cancelled", "message": str(exc)})
+        return 4
     except RemoteDownloadError as exc:
         _emit({"type": "error", "message": str(exc)})
         return 2

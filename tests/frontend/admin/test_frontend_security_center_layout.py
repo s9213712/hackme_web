@@ -276,6 +276,25 @@ def test_settings_area_uses_collapsible_groups_to_reduce_clutter():
     assert ".settings-collapse.danger-collapse" in css
 
 
+def test_system_environment_has_resource_dashboard():
+    index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
+    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
+    css = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
+
+    env_section = index_html.split('id="sec-server-env"', 1)[1].split('</main>', 1)[0]
+    assert 'class="system-resource-board"' in env_section
+    assert 'id="system-resource-gauges"' in env_section
+    assert 'id="system-resource-sampled-at"' in env_section
+    assert "function renderSystemResourceBoard" in admin_js
+    assert "systemResourceGaugeMarkup" in admin_js
+    assert "json.resource_usage" in admin_js
+    assert 'envRefresh.addEventListener("click", loadServerEnv)' in bootstrap_js
+    assert ".system-resource-arc" in css
+    assert "conic-gradient(from 270deg at 50% 100%" in css
+    assert "@keyframes system-resource-arc-pulse" in css
+
+
 def test_admin_settings_and_server_output_failures_are_not_silent():
     admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
     notifications_js = (ROOT / "public" / "js" / "32-notifications.js").read_text(encoding="utf-8")

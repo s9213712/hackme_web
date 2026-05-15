@@ -35,6 +35,7 @@ def register_file_remote_download_routes(app, ctx):
     get_remote_download_task = ctx["get_remote_download_task"]
     list_remote_download_tasks_for_actor = ctx["list_remote_download_tasks_for_actor"]
     cleanup_stale_remote_download_tasks_locked = ctx["cleanup_stale_remote_download_tasks_locked"]
+    control_remote_download_task = ctx["control_remote_download_task"]
     run_remote_download_task = ctx["run_remote_download_task"]
     remote_download_storage_path = ctx["remote_download_storage_path"]
 
@@ -111,6 +112,9 @@ def register_file_remote_download_routes(app, ctx):
             "source_type": source_type,
             "status": "queued",
             "phase": "queued",
+            "pause_requested": False,
+            "cancel_requested": False,
+            "control_action": "",
             "filename": "",
             "url": url,
             "torrent_filename": "",
@@ -191,6 +195,9 @@ def register_file_remote_download_routes(app, ctx):
                 "source_type": "torrent_file",
                 "status": "queued",
                 "phase": "queued",
+                "pause_requested": False,
+                "cancel_requested": False,
+                "control_action": "",
                 "filename": filename,
                 "url": f"BT 檔案：{filename}",
                 "torrent_filename": filename,
@@ -235,6 +242,33 @@ def register_file_remote_download_routes(app, ctx):
         if int(task.get("owner_user_id") or 0) != int(actor_value(actor, "id")):
             return json_resp({"ok": False, "msg": "沒有下載任務權限"}), 403
         return json_resp({"ok": True, "task": task_snapshot(task)})
+
+    @app.route("/api/cloud-drive/remote-download/tasks/<task_id>/pause", methods=["POST"])
+    @require_csrf
+    def cloud_drive_remote_download_task_pause(task_id):
+        actor, err = actor_or_401()
+        if err:
+            return err
+        payload, status_code = control_remote_download_task(task_id, actor, "pause")
+        return json_resp(payload), status_code
+
+    @app.route("/api/cloud-drive/remote-download/tasks/<task_id>/resume", methods=["POST"])
+    @require_csrf
+    def cloud_drive_remote_download_task_resume(task_id):
+        actor, err = actor_or_401()
+        if err:
+            return err
+        payload, status_code = control_remote_download_task(task_id, actor, "resume")
+        return json_resp(payload), status_code
+
+    @app.route("/api/cloud-drive/remote-download/tasks/<task_id>/cancel", methods=["POST"])
+    @require_csrf
+    def cloud_drive_remote_download_task_cancel(task_id):
+        actor, err = actor_or_401()
+        if err:
+            return err
+        payload, status_code = control_remote_download_task(task_id, actor, "cancel")
+        return json_resp(payload), status_code
 
     @app.route("/api/cloud-drive/remote-download/tasks/<task_id>", methods=["DELETE"])
     @require_csrf

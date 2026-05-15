@@ -2,7 +2,9 @@ import json
 import hashlib
 import mimetypes
 import os
+import select
 import shutil
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -43,6 +45,8 @@ from services.system.notifications import create_notification_if_enabled
 from services.storage.remote_downloads import (
     DownloadedFile,
     RemoteDownloadError,
+    RemoteDownloadCancelled,
+    RemoteDownloadPaused,
     download_remote_url,
     download_torrent_file_with_aria2,
     download_torrent_url_with_aria2,
@@ -349,6 +353,8 @@ def register_file_routes(app, deps):
         return {
             "queued": "queued",
             "running": "running",
+            "paused": "paused",
+            "cancelled": "cancelled",
             "completed": "succeeded",
             "failed": "failed",
         }.get(status, "queued")
@@ -394,7 +400,7 @@ def register_file_routes(app, deps):
             source_module = "cloud_drive_remote_download"
             source_ref = f"remote_download:{task_id}"
             status = _remote_download_job_status(task)
-            percent = _safe_job_percent(task.get("progress_percent"), 100 if status in {"succeeded", "failed"} else 0)
+            percent = _safe_job_percent(task.get("progress_percent"), 100 if status in {"succeeded", "failed", "cancelled"} else 0)
             stage = str(task.get("phase") or task.get("status") or status)[:80]
             stage_detail = str(task.get("msg") or task.get("error") or "")[:1000]
             metadata = _remote_download_job_metadata(task)
@@ -414,7 +420,7 @@ def register_file_routes(app, deps):
                     progress_percent=percent,
                     stage=stage,
                     stage_detail=stage_detail,
-                    cancellable=False,
+                    cancellable=status in {"queued", "running", "paused"},
                     metadata=metadata,
                 )
             else:
@@ -429,14 +435,21 @@ def register_file_routes(app, deps):
                     error_stage=stage if status == "failed" else None,
                     result_json=metadata if status == "succeeded" else None,
                     metadata_json=metadata,
+                    cancellable=status in {"queued", "running", "paused"},
                     started_at=existing.get("started_at") or (now if status == "running" else None),
-                    finished_at=now if status in {"succeeded", "failed"} else None,
+                    finished_at=now if status in {"succeeded", "failed", "cancelled"} else None,
                 )
-            if force_event or status in {"succeeded", "failed"}:
+            if force_event or status in {"succeeded", "failed", "cancelled"}:
+                event_type = {
+                    "succeeded": "completed",
+                    "failed": "failed",
+                    "cancelled": "cancelled",
+                    "paused": "paused",
+                }.get(status, "updated")
                 add_platform_job_event(
                     conn,
                     job["job_uuid"],
-                    event_type="completed" if status == "succeeded" else ("failed" if status == "failed" else "updated"),
+                    event_type=event_type,
                     stage=stage,
                     message=stage_detail or task.get("error") or "遠端下載任務狀態更新",
                     progress_percent=percent,
@@ -966,6 +979,24 @@ def register_file_routes(app, deps):
             return None, "沒有 upload session 權限"
         return row, ""
 
+    def _list_active_resumable_sessions(conn, actor, limit=20):
+        _ensure_resumable_upload_schema(conn)
+        try:
+            limit_value = max(1, min(50, int(limit or 20)))
+        except Exception:
+            limit_value = 20
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM cloud_resumable_upload_sessions
+            WHERE owner_user_id=? AND status IN ('uploading', 'completing')
+            ORDER BY updated_at DESC, created_at DESC
+            LIMIT ?
+            """,
+            (int(_actor_value(actor, "id") or 0), limit_value),
+        ).fetchall()
+        return [_serialize_resumable_session(row) for row in rows]
+
     def _resumable_job_source_ref(session_id):
         return f"upload_session:{session_id}"
 
@@ -1069,10 +1100,17 @@ def register_file_routes(app, deps):
             # Release the user slot atomically with the terminal status write so
             # _user_has_active_remote_download never sees a completed/failed task
             # while the user is still marked active.
-            if changes.get("status") in {"completed", "failed"}:
+            if changes.get("status") in {"completed", "failed", "paused", "cancelled"}:
                 owner = task.get("owner_user_id")
                 if owner is not None:
                     _REMOTE_DOWNLOAD_ACTIVE_USERS.discard(int(owner))
+
+    def _task_touch(task_id):
+        with _REMOTE_DOWNLOAD_TASKS_LOCK:
+            task = _REMOTE_DOWNLOAD_TASKS.get(task_id)
+            if not task or task.get("status") not in {"queued", "running"}:
+                return
+            task["updated_at"] = datetime.now().isoformat()
 
     def _task_snapshot(task):
         public = {
@@ -1150,6 +1188,128 @@ def register_file_routes(app, deps):
         task["updated_at"] = datetime.now().isoformat()
         _sync_remote_download_job(task, force_event=True)
         _task_update(task_id, **changes)
+
+    def _remote_download_control_action(task_id):
+        with _REMOTE_DOWNLOAD_TASKS_LOCK:
+            task = _REMOTE_DOWNLOAD_TASKS.get(str(task_id))
+            if not task:
+                return ""
+            if task.get("cancel_requested") or task.get("status") == "cancelled" or task.get("control_action") == "cancel":
+                return "cancel"
+            if task.get("pause_requested") or task.get("control_action") == "pause":
+                return "pause"
+            return ""
+
+    def _remote_download_cancel_check(task_id):
+        action = _remote_download_control_action(task_id)
+        if action == "cancel":
+            raise RemoteDownloadCancelled("下載任務已取消")
+        if action == "pause":
+            raise RemoteDownloadPaused("下載任務已暫停")
+
+    def _control_remote_download_task(task_id, actor, action):
+        task_id = str(task_id or "")
+        action = str(action or "").strip().lower()
+        if action not in {"pause", "resume", "cancel"}:
+            return {"ok": False, "msg": "下載任務操作不支援"}, 400
+        actor_id = int(_actor_value(actor, "id") or 0)
+        now = datetime.now().isoformat()
+        start_worker = False
+        sync_task = None
+        with _REMOTE_DOWNLOAD_TASKS_LOCK:
+            _cleanup_stale_remote_download_tasks_locked()
+            task = _REMOTE_DOWNLOAD_TASKS.get(task_id)
+            if not task:
+                return {"ok": False, "msg": "找不到下載任務"}, 404
+            if int(task.get("owner_user_id") or 0) != actor_id:
+                return {"ok": False, "msg": "沒有下載任務權限"}, 403
+            status = str(task.get("status") or "")
+            phase = str(task.get("phase") or "")
+            owner_user_id = int(task.get("owner_user_id") or 0)
+
+            if action == "pause":
+                if status == "paused":
+                    sync_task = dict(task)
+                    return {"ok": True, "task": _task_snapshot(task), "msg": "下載任務已暫停"}, 200
+                if status == "queued":
+                    task.update(
+                        status="paused",
+                        phase="paused",
+                        pause_requested=True,
+                        cancel_requested=False,
+                        control_action="pause",
+                        speed_bytes_per_sec=0,
+                        msg="下載任務已暫停，可稍後繼續",
+                        updated_at=now,
+                    )
+                    _REMOTE_DOWNLOAD_ACTIVE_USERS.discard(owner_user_id)
+                elif status == "running":
+                    if phase == "saving":
+                        return {"ok": False, "msg": "下載內容正在保存到雲端硬碟，不能暫停"}, 409
+                    task.update(
+                        pause_requested=True,
+                        cancel_requested=False,
+                        control_action="pause",
+                        phase="pause_requested",
+                        speed_bytes_per_sec=0,
+                        msg="已要求暫停下載任務，正在停止目前 worker",
+                        updated_at=now,
+                    )
+                else:
+                    return {"ok": False, "msg": "這個下載任務目前不能暫停"}, 409
+                sync_task = dict(task)
+                msg = "下載任務已暫停" if task.get("status") == "paused" else "已要求暫停下載任務"
+            elif action == "resume":
+                if status != "paused":
+                    return {"ok": False, "msg": "只有已暫停的下載任務可以繼續"}, 409
+                if task.get("source_type") == "torrent_file" and not os.path.isfile(str(task.get("torrent_path") or "")):
+                    return {"ok": False, "msg": "暫停的 BT 種子檔已被清理，請重新建立下載任務"}, 409
+                task.update(
+                    status="queued",
+                    phase="queued",
+                    pause_requested=False,
+                    cancel_requested=False,
+                    control_action="",
+                    speed_bytes_per_sec=0,
+                    msg="已重新加入下載佇列",
+                    updated_at=now,
+                )
+                start_worker = True
+                sync_task = dict(task)
+                msg = "已重新加入下載佇列"
+            else:
+                if status == "cancelled":
+                    sync_task = dict(task)
+                    return {"ok": True, "task": _task_snapshot(task), "msg": "下載任務已取消"}, 200
+                if status in {"completed", "failed"}:
+                    return {"ok": False, "msg": "已結束的下載任務不能取消"}, 409
+                if status == "running" and phase == "saving":
+                    return {"ok": False, "msg": "下載內容正在保存到雲端硬碟，不能取消"}, 409
+                task.update(
+                    status="cancelled" if status in {"queued", "paused"} else "running",
+                    phase="cancelled" if status in {"queued", "paused"} else "cancel_requested",
+                    cancel_requested=True,
+                    pause_requested=False,
+                    control_action="cancel",
+                    speed_bytes_per_sec=0,
+                    progress_percent=100 if status in {"queued", "paused"} else task.get("progress_percent"),
+                    msg="下載任務已取消" if status in {"queued", "paused"} else "已要求取消下載任務，正在停止目前 worker",
+                    updated_at=now,
+                )
+                if status in {"queued", "paused"}:
+                    _REMOTE_DOWNLOAD_ACTIVE_USERS.discard(owner_user_id)
+                sync_task = dict(task)
+                msg = "下載任務已取消" if task.get("status") == "cancelled" else "已要求取消下載任務"
+
+        if sync_task:
+            _sync_remote_download_job(sync_task, force_event=True)
+        if start_worker:
+            threading.Thread(target=_run_remote_download_task, args=(task_id,), daemon=True).start()
+        try:
+            audit("CLOUD_DRIVE_REMOTE_DOWNLOAD_CONTROL", "", user=_actor_value(actor, "username"), success=True, detail=f"task_id={task_id},action={action}")
+        except Exception:
+            pass
+        return {"ok": True, "task": _task_snapshot(sync_task), "msg": msg}, 200
 
     def _list_remote_download_tasks_for_actor(actor):
         actor_id = int(_actor_value(actor, "id") or 0)
@@ -1350,6 +1510,10 @@ def register_file_routes(app, deps):
         state = {"loaded": 0, "ts": time.monotonic(), "speed": 0}
 
         def _callback(event):
+            with _REMOTE_DOWNLOAD_TASKS_LOCK:
+                current = _REMOTE_DOWNLOAD_TASKS.get(task_id) or {}
+                if current.get("status") in {"paused", "cancelled"} or current.get("pause_requested") or current.get("cancel_requested"):
+                    return
             loaded = event.get("loaded_bytes")
             total = event.get("total_bytes")
             percent = None
@@ -1405,11 +1569,48 @@ def register_file_routes(app, deps):
             and download_torrent_url_with_aria2 is _ORIGINAL_DOWNLOAD_TORRENT_URL_WITH_ARIA2
         )
 
-    def _download_remote_task_in_external_worker(task, *, max_bytes=None, rate_limit_kb_per_sec=None, progress_callback=None):
+    def _write_remote_worker_control(path, action):
+        try:
+            Path(path).write_text(str(action or ""), encoding="utf-8")
+        except Exception:
+            pass
+
+    def _stop_remote_worker_process(proc):
+        if not proc:
+            return
+        try:
+            if proc.poll() is None:
+                os.killpg(proc.pid, signal.SIGTERM)
+        except Exception:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+        try:
+            proc.communicate(timeout=5)
+            return
+        except Exception:
+            pass
+        try:
+            if proc.poll() is None:
+                os.killpg(proc.pid, signal.SIGKILL)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        try:
+            proc.communicate(timeout=5)
+        except Exception:
+            pass
+
+    def _download_remote_task_in_external_worker(task, *, max_bytes=None, rate_limit_kb_per_sec=None, progress_callback=None, cancel_check=None, heartbeat_callback=None):
         worker_path = Path(__file__).resolve().parents[1] / "scripts" / "storage" / "remote_download_worker.py"
         if not worker_path.is_file():
             raise RemoteDownloadError("遠端下載 worker 不存在")
         source_type = str(task.get("source_type") or "direct")
+        control_file = tempfile.NamedTemporaryFile(prefix="hackme_remote_control_", delete=False)
+        control_file.close()
         cmd = [
             sys.executable,
             str(worker_path),
@@ -1421,6 +1622,8 @@ def register_file_routes(app, deps):
             str(int(max_bytes or 0)),
             "--rate-limit-kb-per-sec",
             str(int(rate_limit_kb_per_sec or 0)),
+            "--control-file",
+            control_file.name,
         ]
         if source_type == "torrent_file":
             cmd.extend([
@@ -1438,34 +1641,78 @@ def register_file_routes(app, deps):
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
+            start_new_session=True,
         )
         result = None
         error_message = ""
+        control_exc = None
+        control_requested_at = 0.0
+        last_heartbeat_at = 0.0
+
+        def _handle_worker_line(line):
+            nonlocal result, error_message
+            line = str(line or "").strip()
+            if not line:
+                return
+            try:
+                payload = json.loads(line)
+            except Exception:
+                return
+            if payload.get("type") == "progress":
+                _emit_event = payload.get("event") or {}
+                if progress_callback:
+                    progress_callback(_emit_event)
+            elif payload.get("type") == "result":
+                result = payload
+            elif payload.get("type") == "paused":
+                raise RemoteDownloadPaused(str(payload.get("message") or "下載任務已暫停"))
+            elif payload.get("type") == "cancelled":
+                raise RemoteDownloadCancelled(str(payload.get("message") or "下載任務已取消"))
+            elif payload.get("type") == "error":
+                error_message = str(payload.get("message") or "")
+
         try:
             assert proc.stdout is not None
+            while proc.poll() is None:
+                now_mono = time.monotonic()
+                if heartbeat_callback and now_mono - last_heartbeat_at >= 5:
+                    heartbeat_callback()
+                    last_heartbeat_at = now_mono
+                if cancel_check and control_exc is None:
+                    try:
+                        cancel_check()
+                    except (RemoteDownloadCancelled, RemoteDownloadPaused) as exc:
+                        control_exc = exc
+                        control_requested_at = time.monotonic()
+                        _write_remote_worker_control(
+                            control_file.name,
+                            "cancel" if isinstance(exc, RemoteDownloadCancelled) else "pause",
+                        )
+                elif control_exc is not None and time.monotonic() - control_requested_at > 10:
+                    _stop_remote_worker_process(proc)
+                    raise control_exc
+                ready, _, _ = select.select([proc.stdout], [], [], 0.25)
+                if ready:
+                    _handle_worker_line(proc.stdout.readline())
             for line in proc.stdout:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    payload = json.loads(line)
-                except Exception:
-                    continue
-                if payload.get("type") == "progress":
-                    _emit_event = payload.get("event") or {}
-                    if progress_callback:
-                        progress_callback(_emit_event)
-                elif payload.get("type") == "result":
-                    result = payload
-                elif payload.get("type") == "error":
-                    error_message = str(payload.get("message") or "")
+                _handle_worker_line(line)
             stderr = proc.stderr.read() if proc.stderr is not None else ""
             return_code = proc.wait(timeout=5)
         except Exception:
-            proc.kill()
-            proc.communicate(timeout=5)
+            _stop_remote_worker_process(proc)
             raise
+        finally:
+            try:
+                os.unlink(control_file.name)
+            except Exception:
+                pass
         if return_code != 0:
+            if return_code == 3:
+                raise RemoteDownloadPaused(error_message or "下載任務已暫停")
+            if return_code == 4:
+                raise RemoteDownloadCancelled(error_message or "下載任務已取消")
+            if control_exc is not None:
+                raise control_exc
             detail = error_message or (stderr or "").strip() or "遠端下載 worker 失敗"
             raise RemoteDownloadError(detail[:1000])
         if not result or not result.get("path"):
@@ -1488,9 +1735,11 @@ def register_file_routes(app, deps):
         conn = None
         acquired_active = False
         try:
+            _remote_download_cancel_check(task_id)
             if not _wait_for_remote_download_slot(task_id, owner_user_id):
                 return
             acquired_active = True
+            _remote_download_cancel_check(task_id)
             conn = get_db()
             ensure_cloud_drive_attachment_schema(conn)
             ensure_storage_album_schema(conn)
@@ -1509,6 +1758,7 @@ def register_file_routes(app, deps):
             remote_rate_kb_per_sec = int(_actor_transfer_policy(actor).get("download_kb_per_sec") or 0)
             source_type = task.get("source_type") or "url"
             progress_callback = _remote_progress_updater(task_id)
+            cancel_check = lambda: _remote_download_cancel_check(task_id)
             if _remote_download_external_worker_enabled():
                 _task_update(task_id, status="running", phase="starting", msg="外部下載 worker 啟動中")
                 downloaded = _download_remote_task_in_external_worker(
@@ -1516,6 +1766,8 @@ def register_file_routes(app, deps):
                     max_bytes=max_bytes,
                     progress_callback=progress_callback,
                     rate_limit_kb_per_sec=remote_rate_kb_per_sec or None,
+                    cancel_check=cancel_check,
+                    heartbeat_callback=lambda: _task_touch(task_id),
                 )
             elif source_type == "torrent_file":
                 _task_update(task_id, status="running", phase="starting", msg="連線到遠端來源")
@@ -1526,6 +1778,7 @@ def register_file_routes(app, deps):
                     max_bytes=max_bytes,
                     progress_callback=progress_callback,
                     rate_limit_kb_per_sec=remote_rate_kb_per_sec or None,
+                    cancel_check=cancel_check,
                 )
             elif source_type == "torrent_url":
                 _task_update(task_id, status="running", phase="starting", msg="連線到遠端來源")
@@ -1535,6 +1788,7 @@ def register_file_routes(app, deps):
                     max_bytes=max_bytes,
                     progress_callback=progress_callback,
                     rate_limit_kb_per_sec=remote_rate_kb_per_sec or None,
+                    cancel_check=cancel_check,
                 )
             elif source_type == "magnet":
                 _task_update(task_id, status="running", phase="starting", msg="連線到遠端來源")
@@ -1544,6 +1798,7 @@ def register_file_routes(app, deps):
                     max_bytes=max_bytes,
                     progress_callback=progress_callback,
                     rate_limit_kb_per_sec=remote_rate_kb_per_sec or None,
+                    cancel_check=cancel_check,
                 )
             else:
                 _task_update(task_id, status="running", phase="starting", msg="連線到遠端來源")
@@ -1554,7 +1809,9 @@ def register_file_routes(app, deps):
                     progress_callback=progress_callback,
                     rate_limit_kb_per_sec=remote_rate_kb_per_sec or None,
                     treat_torrent_as_bt=False,
+                    cancel_check=cancel_check,
                 )
+            _remote_download_cancel_check(task_id)
             _task_update(task_id, status="running", phase="saving", filename=downloaded.filename, msg="保存到雲端硬碟")
             file_storage = _DownloadedFileStorage(downloaded)
             conn = get_db()
@@ -1619,6 +1876,33 @@ def register_file_routes(app, deps):
                 file={**upload_result, "filename": downloaded.filename},
                 storage_file=storage_file,
             )
+        except RemoteDownloadPaused as exc:
+            if conn:
+                conn.rollback()
+                conn.close()
+                conn = None
+            _finalize_remote_download_task(
+                task_id,
+                status="paused",
+                phase="paused",
+                msg=str(exc) or "下載任務已暫停",
+                error="",
+                speed_bytes_per_sec=0,
+            )
+        except RemoteDownloadCancelled as exc:
+            if conn:
+                conn.rollback()
+                conn.close()
+                conn = None
+            _finalize_remote_download_task(
+                task_id,
+                status="cancelled",
+                phase="cancelled",
+                msg=str(exc) or "下載任務已取消",
+                error="",
+                progress_percent=100,
+                speed_bytes_per_sec=0,
+            )
         except RemoteDownloadError as exc:
             if conn:
                 conn.rollback()
@@ -1637,7 +1921,8 @@ def register_file_routes(app, deps):
                 file_storage.close()
             if downloaded and downloaded.cleanup_dir:
                 shutil.rmtree(downloaded.cleanup_dir, ignore_errors=True)
-            if task.get("torrent_cleanup_dir"):
+            latest_task = _get_remote_download_task(task_id) or {}
+            if task.get("torrent_cleanup_dir") and latest_task.get("status") != "paused":
                 shutil.rmtree(task["torrent_cleanup_dir"], ignore_errors=True)
             with _REMOTE_DOWNLOAD_TASKS_LOCK:
                 if acquired_active:
@@ -1678,6 +1963,7 @@ def register_file_routes(app, deps):
         "actor_value": _actor_value,
         "audit": audit,
         "cleanup_stale_remote_download_tasks_locked": _cleanup_stale_remote_download_tasks_locked,
+        "control_remote_download_task": _control_remote_download_task,
         "download_remote_url": lambda *args, **kwargs: download_remote_url(*args, **kwargs),
         "download_torrent_file_with_aria2": lambda *args, **kwargs: download_torrent_file_with_aria2(*args, **kwargs),
         "download_torrent_url_with_aria2": lambda *args, **kwargs: download_torrent_url_with_aria2(*args, **kwargs),
@@ -2018,6 +2304,21 @@ def register_file_routes(app, deps):
             _sync_resumable_upload_job(conn, actor, row, status="running", progress_percent=0, stage="created", detail="分段上傳 session 已建立")
             conn.commit()
             return json_resp({"ok": True, "session": _serialize_resumable_session(row)})
+        finally:
+            conn.close()
+
+    @app.route("/api/cloud-drive/resumable-upload/sessions", methods=["GET"])
+    @require_csrf_safe
+    def cloud_drive_resumable_upload_sessions():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            return json_resp({
+                "ok": True,
+                "sessions": _list_active_resumable_sessions(conn, actor, request.args.get("limit") or 20),
+            })
         finally:
             conn.close()
 

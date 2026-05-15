@@ -2,12 +2,167 @@ import json
 import os
 import platform
 import re
+import shutil
+import subprocess
 import sys
+import time
 import uuid
+from datetime import datetime
 
 from flask import request
 
 from services.system.ci_status import playwright_ci_status
+
+
+_LAST_CPU_SAMPLE = None
+
+
+def _safe_percent(value):
+    try:
+        parsed = float(value)
+    except Exception:
+        return None
+    if parsed < 0:
+        return None
+    return round(max(0.0, min(100.0, parsed)), 1)
+
+
+def _read_proc_cpu_times():
+    try:
+        with open("/proc/stat", "r", encoding="utf-8") as fh:
+            parts = fh.readline().strip().split()
+    except OSError:
+        return None
+    if not parts or parts[0] != "cpu":
+        return None
+    try:
+        values = [int(part) for part in parts[1:]]
+    except ValueError:
+        return None
+    total = sum(values)
+    idle = values[3] + (values[4] if len(values) > 4 else 0)
+    return total, idle
+
+
+def _cpu_usage_snapshot():
+    global _LAST_CPU_SAMPLE
+    cores = os.cpu_count() or 1
+    load_avg = None
+    try:
+        load_avg = list(os.getloadavg())
+    except OSError:
+        load_avg = None
+    sample = _read_proc_cpu_times()
+    percent = None
+    now = time.monotonic()
+    if sample:
+        if _LAST_CPU_SAMPLE:
+            prev_total, prev_idle, _ = _LAST_CPU_SAMPLE
+            total_delta = max(0, sample[0] - prev_total)
+            idle_delta = max(0, sample[1] - prev_idle)
+            if total_delta > 0:
+                percent = ((total_delta - idle_delta) / total_delta) * 100
+        _LAST_CPU_SAMPLE = (sample[0], sample[1], now)
+    if percent is None and load_avg:
+        percent = (float(load_avg[0]) / max(1, cores)) * 100
+    return {
+        "label": "CPU",
+        "percent": _safe_percent(percent),
+        "cores": cores,
+        "load_avg": load_avg,
+    }
+
+
+def _ram_usage_snapshot():
+    meminfo = {}
+    try:
+        with open("/proc/meminfo", "r", encoding="utf-8") as fh:
+            for line in fh:
+                if ":" not in line:
+                    continue
+                key, value = line.split(":", 1)
+                parts = value.strip().split()
+                if not parts:
+                    continue
+                meminfo[key] = int(parts[0]) * 1024
+    except (OSError, ValueError):
+        meminfo = {}
+    total = int(meminfo.get("MemTotal") or 0)
+    available = int(meminfo.get("MemAvailable") or 0)
+    used = max(0, total - available) if total else 0
+    percent = (used / total) * 100 if total else None
+    return {
+        "label": "RAM",
+        "percent": _safe_percent(percent),
+        "used_bytes": used,
+        "available_bytes": available or None,
+        "total_bytes": total or None,
+    }
+
+
+def _gpu_usage_snapshot():
+    nvidia_smi = shutil.which("nvidia-smi")
+    empty = {
+        "gpu": {"label": "GPU", "available": False, "percent": None, "gpus": [], "error": ""},
+        "vram": {"label": "VRAM", "available": False, "percent": None, "used_bytes": None, "total_bytes": None},
+    }
+    if not nvidia_smi:
+        empty["gpu"]["error"] = "nvidia-smi unavailable"
+        return empty
+    cmd = [
+        nvidia_smi,
+        "--query-gpu=index,name,utilization.gpu,memory.used,memory.total",
+        "--format=csv,noheader,nounits",
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1.5, check=False)
+    except Exception as exc:
+        empty["gpu"]["error"] = exc.__class__.__name__
+        return empty
+    if proc.returncode != 0:
+        empty["gpu"]["error"] = (proc.stderr or proc.stdout or "nvidia-smi failed").strip()[:200]
+        return empty
+    gpus = []
+    total_used = 0
+    total_vram = 0
+    util_values = []
+    for line in (proc.stdout or "").splitlines():
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) < 5:
+            continue
+        try:
+            util = float(parts[2])
+            used = int(float(parts[3])) * 1024 * 1024
+            total = int(float(parts[4])) * 1024 * 1024
+        except ValueError:
+            continue
+        util_values.append(util)
+        total_used += max(0, used)
+        total_vram += max(0, total)
+        gpus.append({
+            "index": parts[0],
+            "name": parts[1],
+            "percent": _safe_percent(util),
+            "vram_used_bytes": used,
+            "vram_total_bytes": total,
+        })
+    gpu_percent = sum(util_values) / len(util_values) if util_values else None
+    vram_percent = (total_used / total_vram) * 100 if total_vram else None
+    return {
+        "gpu": {"label": "GPU", "available": bool(gpus), "percent": _safe_percent(gpu_percent), "gpus": gpus, "error": ""},
+        "vram": {"label": "VRAM", "available": bool(gpus), "percent": _safe_percent(vram_percent), "used_bytes": total_used or None, "total_bytes": total_vram or None},
+    }
+
+
+def system_resource_usage_snapshot():
+    gpu = _gpu_usage_snapshot()
+    return {
+        "sampled_at": datetime.now().replace(microsecond=0).isoformat(),
+        "cpu": _cpu_usage_snapshot(),
+        "ram": _ram_usage_snapshot(),
+        "gpu": gpu["gpu"],
+        "vram": gpu["vram"],
+    }
 
 
 def register_system_admin_security_routes(app, ctx):
@@ -174,7 +329,8 @@ def register_system_admin_security_routes(app, ctx):
                 "log_files": len(log_files),
                 "chat_files": len(chat_files),
                 "anchor_files": len(anchor_files),
-            }
+            },
+            "resource_usage": system_resource_usage_snapshot(),
         })
 
     @app.route("/api/admin/health/readiness", methods=["GET"])

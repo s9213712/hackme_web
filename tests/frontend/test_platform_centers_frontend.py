@@ -12,7 +12,7 @@ def test_platform_center_frontend_surfaces_are_wired():
 
     assert 'id="tab-module-jobs"' in index_html
     assert 'id="module-jobs"' in index_html
-    assert 'id="tab-module-shares"' not in index_html
+    assert 'id="tab-module-shares"' in index_html
     assert 'id="module-shares"' in index_html
     assert 'id="share-center-events"' in index_html
     assert 'data-share-center-tab="links"' in index_html
@@ -22,10 +22,13 @@ def test_platform_center_frontend_surfaces_are_wired():
     assert 'id="economy-asset-admin-risk"' in index_html
     assert "/js/57-platform-centers.js" in index_html
     assert 'module: "jobs"' in core_js
-    assert 'label: "分享管理", action: "module:shares", moduleKey: "shares"' in core_js
+    assert 'tabId: "tab-module-shares", module: "shares", tab: "shares", icon: "share", label: "分享管理", group: "管理"' in core_js
+    assert 'label: "分享管理", action: "module:shares", moduleKey: "shares"' not in core_js
     assert 'label: "任務中心", group: "管理"' in core_js
+    assert 'tabModuleShares.addEventListener("click", () => switchModuleTab("shares"))' in (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
     assert 'switchModuleTab("jobs")' in admin_js or 'normTab === "jobs"' in admin_js
-    assert 'normTab === "videos" || normTab === "shares"' in admin_js
+    assert 'modShares.classList.toggle("active", normTab === "shares")' in admin_js
+    assert 'mShares.classList.toggle("active", normTab === "shares")' in admin_js
     assert 'loadJobCenter()' in platform_js
     assert 'loadDriveTaskCenterJobs({ csrf })' in platform_js
     assert 'mergePlatformJobCenterJobs([...jobs, ...driveJobs])' in platform_js
@@ -39,9 +42,19 @@ def test_platform_center_frontend_surfaces_are_wired():
     assert 'data-video-manage-boost' in platform_js
     assert 'loadTradingAssetOverview()' in platform_js
     assert 'confirm("確定要取消這個任務？")' in platform_js
+    assert 'confirm("確定要取消這個下載任務？")' in platform_js
+    assert 'data-job-remote-action="pause"' in platform_js
+    assert 'data-job-remote-action="resume"' in platform_js
+    assert 'updateJobCenterRemoteDownloadTask' in platform_js
+    assert '/cloud-drive/remote-download/tasks/${encodeURIComponent(taskId)}/${action}' in platform_js
+    assert 'paused: "已暫停"' in platform_js
     assert 'parsed.origin === location.origin' in platform_js
     assert 'loadShareCenterEvents' in platform_js
     assert '/access-events' in platform_js
+    assert 'function closeShareCenterEvents()' in platform_js
+    assert 'function renderShareCenterEventsPanel' in platform_js
+    assert 'data-share-events-close' in platform_js
+    assert 'closeShareCenterEvents();' in platform_js
     assert 'function formatShareCenterCountdown(ms)' in platform_js
     assert '倒數計時：${formatShareCenterCountdown' in platform_js
     assert 'data-share-countdown-until' in platform_js
@@ -55,6 +68,7 @@ def test_platform_center_frontend_surfaces_are_wired():
     assert 'const timeLabel = isOpenEvent ? "開啟時間" : "時間"' in platform_js
     assert 'IP 來源：${sanitize(ip)}' in platform_js
     assert 'event.source_ip || event.ip' in platform_js
+    assert '.share-center-events-header' in (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
     assert '.share-center-event-row' in (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
     assert '.video-manage-row' in (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
     assert '/admin/trading/asset-overview' in platform_js

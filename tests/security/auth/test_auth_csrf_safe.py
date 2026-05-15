@@ -192,6 +192,67 @@ def test_require_csrf_consumes_public_token_but_keeps_session_tokens(tmp_path, m
     assert auth.verify_csrf_token("public-token", "__public__") is False
 
 
+def test_login_accepts_public_csrf_even_when_old_session_cookie_exists(monkeypatch):
+    events = []
+    consumed = []
+    app = Flask(__name__)
+    app.testing = True
+
+    monkeypatch.setattr(auth, "db_get_user_from_token", lambda token: "root" if token == "root-session" else None)
+    monkeypatch.setattr(auth, "verify_csrf_token", lambda token, owner: token == "public-login-token" and owner == "__public__")
+    monkeypatch.setattr(auth, "consume_csrf_token", lambda token, owner: consumed.append((token, owner)) or True)
+    monkeypatch.setattr(auth, "record_security_event", lambda event_type, ip, **kwargs: events.append((event_type, ip, kwargs)))
+
+    @app.route("/api/login", methods=["POST"])
+    @auth.require_csrf
+    def login_probe():
+        return auth.json_resp({"ok": True})
+
+    client = app.test_client()
+    client.set_cookie("session_token", "root-session")
+    response = client.post(
+        "/api/login",
+        json={"username": "root", "password": "pw"},
+        headers={"X-CSRF-Token": "public-login-token"},
+    )
+
+    assert response.status_code == 200
+    assert response.get_json() == {"ok": True}
+    assert consumed == [("public-login-token", "__public__")]
+    assert events == []
+
+
+def test_login_does_not_rotate_old_session_csrf_over_login_response(monkeypatch):
+    app = Flask(__name__)
+    app.testing = True
+    app.config["SESSION_COOKIE_SAMESITE"] = "Strict"
+    app.config["SESSION_COOKIE_SECURE"] = False
+
+    monkeypatch.setattr(auth, "db_get_user_from_token", lambda token: "root" if token == "root-session" else None)
+    monkeypatch.setattr(auth, "verify_csrf_token", lambda token, owner: token == "root-login-token" and owner == "root")
+    monkeypatch.setattr(auth, "consume_csrf_token", lambda token, owner: True)
+
+    @app.route("/api/login", methods=["POST"])
+    @auth.require_csrf
+    def login_probe():
+        resp = auth.json_resp({"ok": True})
+        resp.set_cookie("csrf_token", "login-issued-token", path="/")
+        return resp
+
+    client = app.test_client()
+    client.set_cookie("session_token", "root-session")
+    response = client.post(
+        "/api/login",
+        json={"username": "root", "password": "pw"},
+        headers={"X-CSRF-Token": "root-login-token"},
+    )
+
+    set_cookie = "\n".join(response.headers.getlist("Set-Cookie"))
+    assert response.status_code == 200
+    assert "csrf_token=login-issued-token;" in set_cookie
+    assert set_cookie.count("csrf_token=") == 1
+
+
 def test_csrf_failure_ip_uses_configured_client_ip_not_spoofed_xff(monkeypatch):
     seen = {}
 

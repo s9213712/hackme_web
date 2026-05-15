@@ -1022,6 +1022,7 @@ def _storage_share_payload(row, *, token=None):
         data.pop("token", None)
     data["share_url"] = f"/shared/files/{share_token}" if share_token else ""
     data["download_url"] = f"/api/storage/shared/{share_token}/download" if share_token else ""
+    data["requires_fragment_key"] = bool(str(data.get("wrapped_file_key_envelope") or "").strip())
     return data
 
 

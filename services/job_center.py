@@ -9,6 +9,7 @@ JOB_STATUSES = {
     "queued",
     "running",
     "waiting_external",
+    "paused",
     "succeeded",
     "failed",
     "cancelled",
@@ -327,6 +328,7 @@ def update_job(conn, job_uuid, **updates):
         "finished_at",
         "expires_at",
         "cancel_requested_at",
+        "cancellable",
     }
     fields = []
     values = []

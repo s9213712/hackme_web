@@ -350,6 +350,58 @@ def test_cloud_drive_resumable_upload_can_resume_chunks_and_complete(tmp_path):
         conn.close()
 
 
+def test_cloud_drive_resumable_upload_sessions_restore_active_uploads(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    chunk_size = 256 * 1024
+    payload = (b"A" * chunk_size) + b"tail"
+    started = client.post(
+        "/api/cloud-drive/resumable-upload/start",
+        json={
+            "filename": "restore-active.txt",
+            "mime_type": "text/plain",
+            "total_bytes": len(payload),
+            "chunk_size": chunk_size,
+            "privacy_mode": "standard_plain",
+        },
+    )
+    assert started.status_code == 200
+    session_id = started.get_json()["session"]["session_id"]
+
+    uploaded = client.post(
+        f"/api/cloud-drive/resumable-upload/{session_id}/chunks/0",
+        data={"chunk": (io.BytesIO(b"A" * chunk_size), "part0")},
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 200
+
+    listing = client.get("/api/cloud-drive/resumable-upload/sessions")
+    assert listing.status_code == 200
+    sessions = listing.get_json()["sessions"]
+    restored = next((session for session in sessions if session["session_id"] == session_id), None)
+    assert restored is not None
+    assert restored["status"] == "uploading"
+    assert restored["received_chunks"] == [0]
+    assert restored["received_bytes"] == chunk_size
+
+    completed_tail = client.post(
+        f"/api/cloud-drive/resumable-upload/{session_id}/chunks/1",
+        data={"chunk": (io.BytesIO(b"tail"), "part1")},
+        content_type="multipart/form-data",
+    )
+    assert completed_tail.status_code == 200
+    completed = client.post(f"/api/cloud-drive/resumable-upload/{session_id}/complete")
+    assert completed.status_code == 200
+
+    after_complete = client.get("/api/cloud-drive/resumable-upload/sessions")
+    assert all(session["session_id"] != session_id for session in after_complete.get_json()["sessions"])
+
+
 def test_storage_resumable_upload_creates_storage_file_entry(tmp_path):
     db_path = tmp_path / "drive.db"
     storage_root = tmp_path / "storage"
@@ -1536,6 +1588,7 @@ def test_storage_share_link_e2ee_requires_browser_envelope(tmp_path):
     assert created.status_code == 200
     share_link = created.get_json()["share_link"]
     assert share_link["share_url"] == f"/shared/files/{share_link['token']}"
+    assert share_link["requires_fragment_key"] is True
 
     meta = client.get(f"/api/storage/shared/{share_link['token']}")
     assert meta.status_code == 200
@@ -2453,6 +2506,131 @@ def test_remote_download_task_reports_progress_and_completion(tmp_path, monkeypa
         assert job["job_type"] == "cloud_drive.remote_download.direct"
         assert job["status"] == "succeeded"
         assert job["progress_percent"] == 100
+    finally:
+        conn.close()
+
+
+def test_remote_download_task_can_pause_and_resume(tmp_path, monkeypatch):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    source = tmp_path / "resume-after-pause.txt"
+    source.write_text("resumed content", encoding="utf-8")
+    started = threading.Event()
+    calls = {"count": 0}
+
+    class FakeDownloaded:
+        path = str(source)
+        filename = "resume-after-pause.txt"
+        mimetype = "text/plain"
+        cleanup_dir = None
+
+    def fake_download(url, **kwargs):
+        calls["count"] += 1
+        cancel_check = kwargs.get("cancel_check")
+        assert callable(cancel_check)
+        progress = kwargs.get("progress_callback")
+        if progress:
+            progress({"phase": "downloading", "filename": "resume-after-pause.txt", "loaded_bytes": 3, "total_bytes": 15})
+        if calls["count"] == 1:
+            started.set()
+            while True:
+                cancel_check()
+                time.sleep(0.01)
+        return FakeDownloaded()
+
+    monkeypatch.setattr("routes.files.download_remote_url", fake_download)
+    created = client.post(
+        "/api/cloud-drive/remote-download/tasks",
+        json={
+            "url": "https://93.184.216.34/resume-after-pause.txt",
+            "privacy_mode": "standard_plain",
+            "virtual_path": "/Downloads/resume-after-pause.txt",
+        },
+    )
+    assert created.status_code == 202
+    task_id = created.get_json()["task"]["id"]
+    assert started.wait(timeout=10)
+
+    paused_request = client.post(f"/api/cloud-drive/remote-download/tasks/{task_id}/pause")
+    assert paused_request.status_code == 200
+
+    paused = {}
+    for _ in range(200):
+        paused = client.get(f"/api/cloud-drive/remote-download/tasks/{task_id}").get_json()["task"]
+        if paused["status"] == "paused":
+            break
+        time.sleep(0.03)
+    assert paused["status"] == "paused"
+    assert "暫停" in paused["msg"]
+
+    resumed = client.post(f"/api/cloud-drive/remote-download/tasks/{task_id}/resume")
+    assert resumed.status_code == 200
+    assert resumed.get_json()["task"]["status"] == "queued"
+
+    final = {}
+    for _ in range(300):
+        final = client.get(f"/api/cloud-drive/remote-download/tasks/{task_id}").get_json()["task"]
+        if final["status"] == "completed":
+            break
+        time.sleep(0.03)
+    assert final["status"] == "completed"
+    assert calls["count"] >= 2
+    assert final["storage_file"]["virtual_path"] == "/Downloads/resume-after-pause.txt"
+
+
+def test_remote_download_task_can_be_cancelled_without_saving_file(tmp_path, monkeypatch):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    started = threading.Event()
+
+    def fake_download(url, **kwargs):
+        cancel_check = kwargs.get("cancel_check")
+        assert callable(cancel_check)
+        started.set()
+        while True:
+            cancel_check()
+            time.sleep(0.01)
+
+    monkeypatch.setattr("routes.files.download_remote_url", fake_download)
+    created = client.post(
+        "/api/cloud-drive/remote-download/tasks",
+        json={
+            "url": "https://93.184.216.34/cancel-me.txt",
+            "privacy_mode": "standard_plain",
+            "virtual_path": "/Downloads/cancel-me.txt",
+        },
+    )
+    assert created.status_code == 202
+    task_id = created.get_json()["task"]["id"]
+    assert started.wait(timeout=10)
+
+    cancelled_request = client.post(f"/api/cloud-drive/remote-download/tasks/{task_id}/cancel")
+    assert cancelled_request.status_code == 200
+
+    final = {}
+    for _ in range(200):
+        final = client.get(f"/api/cloud-drive/remote-download/tasks/{task_id}").get_json()["task"]
+        if final["status"] == "cancelled":
+            break
+        time.sleep(0.03)
+    assert final["status"] == "cancelled"
+    assert final["file"] is None
+    assert final["storage_file"] is None
+
+    conn = sqlite3.connect(db_path)
+    try:
+        saved = conn.execute("SELECT COUNT(*) FROM uploaded_files WHERE original_filename_plain_for_public LIKE '%cancel-me%'").fetchone()[0]
+        assert saved == 0
     finally:
         conn.close()
 

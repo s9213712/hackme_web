@@ -88,6 +88,7 @@ def register_share_management_routes(app, deps):
             "revoked_at": data.get("revoked_at"),
             "status": share_status(data),
             "share_url": f"/shared/files/{token}" if token else "",
+            "requires_fragment_key": bool(str(data.get("wrapped_file_key_envelope") or "").strip()),
         }
         return item
 

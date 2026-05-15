@@ -182,21 +182,20 @@ function renderAlbumPreviewTile(file) {
   const category = driveFileCategory(file);
   const thumbKey = file.id || file.file_id;
   const canTryPreview = category === "image" || category === "metadata";
-  const thumb = canTryPreview
-    ? `<button class="drive-gallery-thumb drive-gallery-thumb-button" type="button" data-drive-action="album-full-preview" data-file-id="${sanitize(file.file_id)}" data-name="${sanitize(name)}" data-album-sequence="viewer" data-album-thumb-key="${sanitize(thumbKey)}"><span>讀取預覽</span></button>`
-    : `<div class="drive-gallery-thumb drive-gallery-thumb-placeholder"><span>${sanitize(category)}</span></div>`;
+  const actionAttrs = canTryPreview
+    ? `data-drive-action="album-full-preview" data-file-id="${sanitize(file.file_id)}" data-name="${sanitize(name)}" data-album-sequence="viewer"`
+    : "disabled";
+  const ariaLabel = canTryPreview ? `全頁檢視 ${name}` : `${name} 無法預覽`;
   return `
-    <div class="drive-gallery-tile">
-      ${thumb}
-      <div class="drive-gallery-file-info">
+    <button class="drive-gallery-tile drive-gallery-photo-tile${canTryPreview ? "" : " is-disabled"}" type="button" ${actionAttrs} aria-label="${sanitize(ariaLabel)}" title="${sanitize(name)}">
+      <span class="drive-gallery-thumb ${canTryPreview ? "" : "drive-gallery-thumb-placeholder"}" data-album-thumb-key="${sanitize(thumbKey)}">
+        <span>${canTryPreview ? "讀取預覽" : sanitize(category)}</span>
+      </span>
+      <span class="drive-gallery-file-info" aria-hidden="true">
         <strong>${sanitize(name)}</strong>
-        <div class="drive-card-sub">${formatDriveBytes(file.size_bytes || 0)} · <span data-album-category-key="${sanitize(thumbKey)}">${sanitize(category)}</span> · scan=${sanitize(file.scan_status || "-")}</div>
-      </div>
-      <div class="drive-file-actions" style="justify-content:flex-start;">
-        <button class="btn" type="button" data-drive-action="album-full-preview" data-file-id="${sanitize(file.file_id)}" data-name="${sanitize(name)}" data-album-sequence="viewer">預覽</button>
-        ${file.storage_file_id ? `<button class="btn" type="button" data-drive-action="download-storage" data-storage-file-id="${sanitize(file.storage_file_id)}">下載</button>` : `<button class="btn" type="button" data-drive-action="download" data-file-id="${sanitize(file.file_id)}" data-warn="0">下載</button>`}
-      </div>
-    </div>
+        <span class="drive-card-sub">${formatDriveBytes(file.size_bytes || 0)} · <span data-album-category-key="${sanitize(thumbKey)}">${sanitize(category)}</span></span>
+      </span>
+    </button>
   `;
 }
 
@@ -220,8 +219,7 @@ async function hydrateAlbumViewerThumbnails(files) {
       if (categoryLabel) categoryLabel.textContent = "image";
     } catch (err) {
       try {
-        const remembered = getRememberedDriveE2eeSessionPassphrase(file.file_id);
-        if (!remembered) throw err;
+        if (!getDriveE2eeSessionPassphraseCandidates(file.file_id).length) throw err;
         const decrypted = await buildDriveE2eePreview(file.file_id, csrf);
         if (!decrypted || decrypted.preview.category !== "image") throw err;
         const url = URL.createObjectURL(decrypted.blob);
@@ -245,7 +243,7 @@ async function openAlbumViewer(id, options = {}) {
   const filesEl = $("album-viewer-files");
   if (card) {
     card.style.display = "block";
-    card.open = Boolean(options.openContent);
+    card.open = options.openContent !== false;
   }
   if (filesEl) filesEl.innerHTML = `<div class="drive-empty">讀取相簿中...</div>`;
   try {
@@ -260,6 +258,7 @@ async function openAlbumViewer(id, options = {}) {
     }
     if (!filesEl) return;
     setAlbumThumbSize(getAlbumThumbSize());
+    filesEl.classList.add("album-photo-grid");
     filesEl.innerHTML = files.length ? files.map(renderAlbumPreviewTile).join("") : `<div class="drive-empty">這本相簿還沒有檔案</div>`;
     hydrateAlbumViewerThumbnails(files).catch(() => {});
   } catch (err) {
@@ -286,7 +285,11 @@ async function loadDriveDashboard() {
     renderDriveDashboard(json);
     await loadStorageUpgradeOptions();
     await loadRemoteDownloadCapabilities();
-    await restoreRemoteDownloadTasks();
+    if (typeof restoreDriveBackgroundTransfers === "function") {
+      await restoreDriveBackgroundTransfers();
+    } else {
+      await restoreRemoteDownloadTasks();
+    }
     await loadDriveFiles(csrf);
     await loadStorageFiles(csrf);
     if (msg) msg.className = "msg";

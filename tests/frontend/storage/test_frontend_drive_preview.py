@@ -89,6 +89,11 @@ def test_filemanager_and_albummanager_ui_are_wired():
     assert 'id="storage-organize-path"' in index_html
     assert 'id="storage-file-list"' not in index_html
     assert 'id="storage-trash-list"' in index_html
+    assert 'id="drive-section-tabs"' in index_html
+    assert 'data-drive-page-tab="files"' in index_html
+    assert 'data-drive-page-tab="capacity"' in index_html
+    assert 'id="drive-files-page"' in index_html
+    assert 'id="drive-capacity-page"' in index_html
     assert 'id="album-create-title"' in index_html
     assert 'id="album-create-description"' in index_html
     assert 'id="album-create-share-password"' in index_html
@@ -105,6 +110,9 @@ def test_filemanager_and_albummanager_ui_are_wired():
     assert "async function uploadStorageFolder()" in drive_js
     assert "let driveLatestQuota = null;" in drive_js
     assert "function renderDriveCapacityGauge" in drive_js
+    assert "function setDriveActivePage(page = \"files\")" in drive_js
+    assert "function bindDriveSectionTabs()" in drive_js
+    assert "data-drive-page-panel" in drive_js
     assert '"--drive-capacity-level"' in drive_js
     assert "zeroQuota" in drive_js
     assert "function formatDriveSpeed" in drive_js
@@ -117,8 +125,13 @@ def test_filemanager_and_albummanager_ui_are_wired():
     assert "DRIVE_RESUMABLE_UPLOAD_THRESHOLD_BYTES" in drive_js
     assert "async function uploadDriveBlobResumable" in drive_js
     assert '"/cloud-drive/resumable-upload/start"' in drive_js
+    assert '"/cloud-drive/resumable-upload/sessions?limit=20"' in drive_js
     assert "completeDriveResumableUpload" in drive_js
     assert '"resumable_uploading"' in drive_js
+    assert '"waiting_resume"' in drive_js
+    assert "function restoreDriveBackgroundTransfers()" in drive_js
+    assert "function applyResumableUploadSessionToTransfer" in drive_js
+    assert 'data-drive-action="cancel-resumable-upload"' in drive_js
     assert "function syncDriveCsrfFromCookie()" in drive_js
     assert "async function currentDriveCsrfToken" in drive_js
     assert 'readCookie("csrf_token")' in drive_js
@@ -159,6 +172,15 @@ def test_filemanager_and_albummanager_ui_are_wired():
     assert 'data-drive-action="create-share-link"' in index_html
     assert "async function createDriveShareLink()" in drive_js
     assert "wrapped_file_key_envelope" in drive_js
+    assert "DRIVE_SHARE_FRAGMENT_STORAGE_KEY" in drive_js
+    assert "function rememberDriveShareFragment" in drive_js
+    assert "function getRememberedDriveShareFragment" in drive_js
+    assert "function driveShareUrlHasFragmentKey" in drive_js
+    assert "function driveShareUrlWithRememberedFragment" in drive_js
+    assert "data-drive-share-copy-status" in drive_js
+    assert "copyBtn.dataset.shareUrl = shareUrl" in drive_js
+    assert 'copyBtn.dataset.shareRequiresFragment = requiresFragment ? "1" : "0";' in drive_js
+    assert 'setDriveShareCopyStatus("連結已複製"' in drive_js
     assert "payload.storage_file_id = storageFileId" in drive_js
     assert 'switchModuleTab("shares")' in drive_js
     assert "sharedFileDownload" in shared_file_js
@@ -189,7 +211,14 @@ def test_filemanager_and_albummanager_ui_are_wired():
     assert 'item.status === "failed"' in drive_js
     assert "下載失敗" in drive_js
     assert 'data-drive-action="dismiss-transfer"' in drive_js
+    assert 'data-drive-action="pause-remote-download"' in drive_js
+    assert 'data-drive-action="resume-remote-download"' in drive_js
+    assert 'data-drive-action="cancel-remote-download"' in drive_js
     assert "dismissRemoteDownloadTask" in drive_js
+    assert "pauseRemoteDownloadTask" in drive_js
+    assert "resumeRemoteDownloadTask" in drive_js
+    assert "cancelRemoteDownloadTask" in drive_js
+    assert "/cloud-drive/remote-download/tasks/${encodeURIComponent(taskId)}/${action}" in drive_js
     assert "DRIVE_TRANSFER_FAILED_VISIBLE_MS" in drive_js
     assert "DRIVE_REMOTE_STATUS_RETRY_LIMIT" in drive_js
     assert "consecutiveStatusErrors" in drive_js
@@ -313,10 +342,16 @@ def test_album_viewer_has_dedicated_module():
     assert "async function previewAlbumFileFullscreen(fileId" in drive_js
     assert 'data-drive-action="album-full-preview"' in drive_js
     assert 'data-album-sequence="viewer"' in drive_js
+    assert "drive-gallery-photo-tile" in drive_js
+    assert "filesEl.classList.add(\"album-photo-grid\")" in drive_js
+    assert "card.open = options.openContent !== false;" in drive_js
+    assert "const ariaLabel = canTryPreview ? `全頁檢視 ${name}` : `${name} 無法預覽`;" in drive_js
+    assert 'data-album-sequence="viewer">預覽</button>' not in drive_js
+    assert 'data-storage-file-id="${sanitize(file.storage_file_id)}">下載</button>' not in drive_js
     assert "closeAlbumFullPreview" in drive_js
     assert "hydrateAlbumViewerThumbnails" in drive_js
     assert "let blob = await fetchDrivePreviewBlob(file.file_id, csrf);" in drive_js
-    assert "const remembered = getRememberedDriveE2eeSessionPassphrase(file.file_id);" in drive_js
+    assert "if (!getDriveE2eeSessionPassphraseCandidates(file.file_id).length) throw err;" in drive_js
     assert "buildDriveE2eePreview(file.file_id, csrf)" in drive_js
     assert "const blob = await fetchDrivePreviewContent(file.file_id, csrf);" not in drive_js
     assert 'data-drive-action="add-cloud-to-album"' in drive_js
@@ -399,6 +434,8 @@ def test_album_viewer_has_dedicated_module():
     assert ".drive-capacity-liquid::before" in styles_css
     assert "@keyframes drive-capacity-wave" in styles_css
     assert ".drive-capacity-charge" not in styles_css
+    assert ".drive-section-tabs" in styles_css
+    assert ".drive-subpage.active" in styles_css
     assert ".settings-feature-advisory" in (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
     assert ".album-preview-nav" in (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
 
@@ -418,6 +455,11 @@ def test_album_gallery_layout_wraps_long_filenames():
 
     assert 'class="drive-gallery-file-info"' in drive_js
     assert ".drive-gallery-tile {" in css
+    assert ".drive-gallery-grid.album-photo-grid {" in css
+    assert ".drive-gallery-photo-tile {" in css
+    assert ".drive-gallery-photo-tile:hover .drive-gallery-thumb" in css
+    assert "transform: scale(1.055);" in css
+    assert ".album-thumb-small .drive-gallery-photo-tile," in css
     assert "overflow: hidden;" in css
     assert ".drive-gallery-tile strong" in css
     assert "overflow-wrap: anywhere;" in css
@@ -427,6 +469,7 @@ def test_album_gallery_layout_wraps_long_filenames():
 def test_cloud_drive_privacy_modes_use_human_labels():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     drive_js = ((ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8") + "\n" + (ROOT / "public" / "js" / "35-drive-preview-share.js").read_text(encoding="utf-8"))
+    platform_js = (ROOT / "public" / "js" / "57-platform-centers.js").read_text(encoding="utf-8")
 
     assert 'value="standard_plain">一般檔案（可掃毒、可預覽、可分享）' in index_html
     assert 'value="server_encrypted">伺服器端加密（磁碟密文、下載明文）' in index_html
@@ -451,6 +494,11 @@ def test_cloud_drive_privacy_modes_use_human_labels():
     assert "root_global_capacity_limit_mb" in drive_js
     assert "manager 上限：1 GB" in drive_js
     assert "warning_active" in drive_js
+    assert "function shareCenterLinkUrl" in platform_js
+    assert "requires_fragment_key" in platform_js
+    assert "driveShareUrlWithRememberedFragment" in platform_js
+    assert "data-share-missing-fragment" in platform_js
+    assert "分享連結缺少 E2EE 片段金鑰" in platform_js
 
 
 def test_cloud_drive_storage_upgrade_ui_is_wired():
@@ -534,11 +582,18 @@ def test_cloud_drive_e2ee_download_decrypts_in_browser():
     assert "function rememberDriveE2eeRecentSessionPassphrase(passphrase)" in drive_js
     assert "function getDriveE2eeSessionPassphraseCandidates(fileId)" in drive_js
     assert "driveE2eeRecentSessionPassphrases.forEach(addCandidate);" in drive_js
-    assert "for (const passphrase of getDriveE2eeSessionPassphraseCandidates(fileId))" in drive_js
+    assert "rememberDriveE2eeRecentSessionPassphrase(passphrase);" in drive_js
+    assert "const candidates = getDriveE2eeSessionPassphraseCandidates(fileId);" in drive_js
+    assert "for (const passphrase of candidates)" in drive_js
+    assert "{ promptOnMiss: false }" in drive_js
+    assert "DRIVE_E2EE_PREVIEW_NO_RECENT_PASSWORD" in drive_js
+    assert "DRIVE_E2EE_PREVIEW_DECRYPT_FAILED" in drive_js
+    assert "正在使用最近輸入過的 E2EE 密碼嘗試預覽" in drive_js
+    assert "等待 E2EE 密碼並在瀏覽器解密中" not in drive_js
     assert "const passphrase = await getDriveE2eeSessionPassphrase(fileId, promptText, { force: true });" in drive_js
     assert "const decrypted = await decryptDriveE2eeBlob(blob, keyJson.e2ee, passphrase);" in drive_js
     assert "rememberDriveE2eeSessionPassphrase(fileId, passphrase);" in drive_js
-    assert "const remembered = getRememberedDriveE2eeSessionPassphrase(file.file_id);" in drive_js
+    assert "if (!getDriveE2eeSessionPassphraseCandidates(file.file_id).length) throw err;" in drive_js
     assert "buildDriveE2eePreview(file.file_id, csrf)" in drive_js
     assert "image · E2EE" in drive_js
     assert "outputBlob = decrypted.blob" in drive_js
@@ -558,7 +613,10 @@ def test_share_link_copy_buttons_have_clipboard_fallback():
 
     # Drive: prompt-based fallback is OK (user can select+copy).
     assert "async function copyAlbumShareUrl(url)" in drive_js
+    assert "async function copyDriveShareUrl(url, options = {})" in drive_js
     assert "navigator.clipboard.writeText(shareUrl)" in drive_js
+    assert 'setDriveShareCopyStatus("連結已複製"' in drive_js
+    assert "分享連結缺少 E2EE 片段金鑰" in drive_js
     assert 'window.prompt("分享連結"' in drive_js, (
         "drive copyAlbumShareUrl must offer a window.prompt fallback so the "
         "URL is selectable when navigator.clipboard is unavailable"

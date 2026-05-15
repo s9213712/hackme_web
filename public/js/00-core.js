@@ -165,6 +165,7 @@ const SIDEBAR_ICON_PATHS = {
   drive: '<path d="M4 8h16l-2 10H6z"/><path d="m7 8 2-3h6l2 3"/>',
   image: '<path d="M5 5h14v14H5z"/><path d="m7 16 4-4 3 3 2-2 2 3"/><path d="M8.5 8.5h.01"/>',
   video: '<path d="M5 5h11v14H5z"/><path d="m16 9 5-3v12l-5-3z"/><path d="M8 9h5M8 13h3"/>',
+  share: '<path d="M18 8a3 3 0 1 0-2.83-4H15a3 3 0 0 0 .17 1L8.9 8.13a3 3 0 1 0 0 3.74L15.17 15A3 3 0 1 0 14 17.4L7.73 14.27a3 3 0 0 0 0-4.54L14 6.6A3 3 0 0 0 18 8z"/>',
   game: '<path d="M8 4h8v4h-3v3h3v3h-3v6h-2v-6H8v-3h3V8H8z"/><path d="M5 20h14"/>',
   spark: '<path d="M12 3 9.5 9.5 3 12l6.5 2.5L12 21l2.5-6.5L21 12l-6.5-2.5z"/>',
   wallet: '<path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H19v14H6.5A2.5 2.5 0 0 1 4 16.5z"/><path d="M16 11h4v4h-4z"/><path d="M7 5V3.8L17 5"/>',
@@ -216,7 +217,6 @@ const SIDEBAR_MENU_CONFIG = [
     group: "工具",
     submenu: [
       { label: "影音列表", action: "module:videos" },
-      { label: "分享管理", action: "module:shares", moduleKey: "shares" },
     ],
   },
   { tabId: "tab-module-games", module: "games", tab: "games", icon: "game", label: "遊戲區", group: "工具" },
@@ -225,6 +225,7 @@ const SIDEBAR_MENU_CONFIG = [
   { tabId: "tab-module-trading", module: "trading", tab: "trading", icon: "wallet", label: "積分交易所", group: "工具" },
   { tabId: "tab-module-appeals", module: "appeals", tab: "appeals", icon: "appeal", label: "申覆", group: "支援", hideForSuperAdmin: true },
   { tabId: "tab-module-jobs", module: "jobs", tab: "jobs", icon: "bell", label: "任務中心", group: "管理" },
+  { tabId: "tab-module-shares", module: "shares", tab: "shares", icon: "share", label: "分享管理", group: "管理" },
   {
     tabId: "tab-module-accounts",
     module: "accounts",
@@ -1557,6 +1558,7 @@ function setAuthState(json, showLoginHero = false) {
   const tabModuleVideos = $("tab-module-videos");
   const tabModuleGames = $("tab-module-games");
   const tabModuleJobs = $("tab-module-jobs");
+  const tabModuleShares = $("tab-module-shares");
   const tabModuleComfyui = $("tab-module-comfyui");
   const tabModuleEconomy = $("tab-module-economy");
   const tabModuleTrading = $("tab-module-trading");
@@ -1575,6 +1577,7 @@ function setAuthState(json, showLoginHero = false) {
   if (tabModuleVideos) tabModuleVideos.style.display = canAccessModule("videos") ? "" : "none";
   if (tabModuleGames) tabModuleGames.style.display = canAccessModule("games") ? "" : "none";
   if (tabModuleJobs) tabModuleJobs.style.display = canAccessModule("jobs") ? "" : "none";
+  if (tabModuleShares) tabModuleShares.style.display = canAccessModule("shares") ? "" : "none";
   if (tabModuleComfyui) tabModuleComfyui.style.display = canAccessModule("comfyui") ? "" : "none";
   if (tabModuleEconomy) tabModuleEconomy.style.display = canAccessModule("economy") ? "" : "none";
   if (tabModuleTrading) tabModuleTrading.style.display = (canAccessModule("economy") && canAccessModule("trading")) ? "" : "none";

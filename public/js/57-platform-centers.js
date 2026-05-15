@@ -12,6 +12,7 @@ function platformStatusLabel(status) {
     queued: "排隊中",
     running: "執行中",
     waiting_external: "等待外部服務",
+    paused: "已暫停",
     succeeded: "已完成",
     failed: "失敗",
     cancelled: "已取消",
@@ -141,8 +142,21 @@ function renderJobCenterJobs(jobs = []) {
     const err = job.error_message
       ? `<div class="drive-card-sub" style="color:#ffb74d;">${sanitize(job.error_stage || job.stage || "error")}：${sanitize(job.error_message)}</div>`
       : "";
+    const remoteTaskId = job.source_module === "cloud_drive_remote_download"
+      ? (job.metadata?.task_id || (String(job.source_ref || "").startsWith("remote_download:") ? String(job.source_ref || "").slice("remote_download:".length) : ""))
+      : "";
+    const remoteControlLocked = ["saving", "pause_requested", "cancel_requested"].includes(job.stage);
+    const remoteCanPause = remoteTaskId && ["queued", "running", "waiting_external"].includes(job.status) && !remoteControlLocked;
+    const remoteCanResume = remoteTaskId && job.status === "paused";
     const cancel = job.cancellable && !["succeeded", "failed", "cancelled", "expired"].includes(job.status)
-      ? `<button class="btn btn-danger" type="button" data-job-cancel="${sanitize(job.job_uuid)}">取消</button>`
+      && !(remoteTaskId && ["saving", "cancel_requested"].includes(job.stage))
+      ? `<button class="btn btn-danger" type="button" data-job-cancel="${sanitize(job.job_uuid)}" data-job-remote-download-task="${sanitize(remoteTaskId)}">取消</button>`
+      : "";
+    const pause = remoteCanPause
+      ? `<button class="btn" type="button" data-job-remote-action="pause" data-job-remote-download-task="${sanitize(remoteTaskId)}">暫停</button>`
+      : "";
+    const resume = remoteCanResume
+      ? `<button class="btn btn-primary" type="button" data-job-remote-action="resume" data-job-remote-download-task="${sanitize(remoteTaskId)}">繼續</button>`
       : "";
     const retry = ["failed", "retry_wait", "expired", "cancelled"].includes(job.status)
       ? `<button class="btn" type="button" data-job-retry="${sanitize(job.job_uuid)}">重試</button>`
@@ -158,6 +172,8 @@ function renderJobCenterJobs(jobs = []) {
         </div>
         <div class="drive-file-actions">
           <span class="badge ${cls}">${sanitize(platformStatusLabel(job.status))} · ${percent}%</span>
+          ${pause}
+          ${resume}
           ${cancel}
           ${retry}
         </div>
@@ -165,7 +181,14 @@ function renderJobCenterJobs(jobs = []) {
     `;
   }).join("");
   list.querySelectorAll("[data-job-cancel]").forEach((btn) => {
-    btn.addEventListener("click", () => updateJobCenterJob(btn.dataset.jobCancel, "cancel"));
+    btn.addEventListener("click", () => {
+      const remoteTaskId = btn.dataset.jobRemoteDownloadTask || "";
+      if (remoteTaskId) return updateJobCenterRemoteDownloadTask(remoteTaskId, "cancel");
+      return updateJobCenterJob(btn.dataset.jobCancel, "cancel");
+    });
+  });
+  list.querySelectorAll("[data-job-remote-action]").forEach((btn) => {
+    btn.addEventListener("click", () => updateJobCenterRemoteDownloadTask(btn.dataset.jobRemoteDownloadTask || "", btn.dataset.jobRemoteAction || ""));
   });
   list.querySelectorAll("[data-job-retry]").forEach((btn) => {
     btn.addEventListener("click", () => updateJobCenterJob(btn.dataset.jobRetry, "retry"));
@@ -222,6 +245,28 @@ async function updateJobCenterJob(jobUuid, action) {
   await loadJobCenter();
 }
 
+async function updateJobCenterRemoteDownloadTask(taskId, action) {
+  if (!taskId || !["pause", "resume", "cancel"].includes(action)) return;
+  if (action === "cancel" && !confirm("確定要取消這個下載任務？")) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await apiFetch(API + `/cloud-drive/remote-download/tasks/${encodeURIComponent(taskId)}/${action}`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) {
+    platformCenterSetMsg("job-center-msg", json.msg || "下載任務更新失敗", false);
+    return;
+  }
+  if (action === "resume" && typeof resumeRemoteDownloadTaskPolling === "function") {
+    resumeRemoteDownloadTaskPolling(json.task || {});
+  }
+  platformCenterSetMsg("job-center-msg", json.msg || "下載任務已更新", true);
+  await loadJobCenter();
+}
+
 function setShareCenterTab(tab, { load = true } = {}) {
   shareCenterActiveTab = tab === "videos" ? "videos" : "links";
   document.querySelectorAll("[data-share-center-tab]").forEach((btn) => {
@@ -243,6 +288,58 @@ function setShareCenterTab(tab, { load = true } = {}) {
   }
 }
 
+function shareCenterUrlHasFragmentKey(url) {
+  if (typeof driveShareUrlHasFragmentKey === "function") return driveShareUrlHasFragmentKey(url);
+  try {
+    const parsed = new URL(String(url || ""), location.origin);
+    return Boolean(String(parsed.hash || "").replace(/^#/, ""));
+  } catch (_) {
+    return false;
+  }
+}
+
+function shareCenterLinkUrl(share) {
+  if (!share?.share_url) return { url: "", missingFragment: false };
+  try {
+    const parsed = new URL(share.share_url, location.origin);
+    if (parsed.origin !== location.origin) return { url: "", missingFragment: false };
+    let url = parsed.href;
+    const requiresFragment = share.share_type === "file" && Boolean(share.requires_fragment_key);
+    if (requiresFragment && typeof driveShareUrlWithRememberedFragment === "function") {
+      url = driveShareUrlWithRememberedFragment(url);
+    }
+    return {
+      url,
+      missingFragment: requiresFragment && !shareCenterUrlHasFragmentKey(url),
+    };
+  } catch (_) {
+    return { url: "", missingFragment: false };
+  }
+}
+
+function closeShareCenterEvents() {
+  const panel = $("share-center-events");
+  if (!panel) return;
+  panel.style.display = "none";
+  panel.className = "msg";
+  panel.textContent = "";
+}
+
+function renderShareCenterEventsPanel(bodyHtml = "", { bad = false } = {}) {
+  const panel = $("share-center-events");
+  if (!panel) return null;
+  panel.style.display = "block";
+  panel.className = `msg ${bad ? "err" : "ok"} share-center-events-panel`;
+  panel.innerHTML = `
+    <div class="share-center-events-header">
+      <strong>分享紀錄</strong>
+      <button class="btn btn-small" type="button" data-share-events-close>關閉</button>
+    </div>
+    ${bodyHtml}
+  `;
+  return panel;
+}
+
 function renderShareCenter(shares = []) {
   const list = $("share-center-list");
   if (!list) return;
@@ -254,21 +351,16 @@ function renderShareCenter(shares = []) {
   if ($("share-center-access-count")) $("share-center-access-count").textContent = String(accesses);
   if (!shares.length) {
     list.innerHTML = '<p style="color:var(--muted);">目前沒有分享連結。</p>';
+    closeShareCenterEvents();
     scheduleShareCenterCountdowns();
     return;
   }
   list.innerHTML = shares.map((share) => {
     const status = share.status === "expired" ? "expired_share" : share.status;
-    let url = "";
-    if (share.share_url) {
-      try {
-        const parsed = new URL(share.share_url, location.origin);
-        if (parsed.origin === location.origin) url = parsed.href;
-      } catch (_) {
-        url = "";
-      }
-    }
-    const copy = url ? `<button class="btn" type="button" data-share-copy="${sanitize(url)}">複製</button>` : "";
+    const link = shareCenterLinkUrl(share);
+    const url = link.url;
+    const missingFragment = link.missingFragment;
+    const copy = url ? `<button class="btn" type="button" data-share-copy="${sanitize(url)}" data-share-missing-fragment="${missingFragment ? "1" : "0"}">複製</button>` : "";
     const events = `<button class="btn" type="button" data-share-events-type="${sanitize(share.share_type)}" data-share-events-id="${sanitize(share.id)}">紀錄</button>`;
     const revoke = share.status === "active"
       ? `<button class="btn btn-danger" type="button" data-share-revoke-type="${sanitize(share.share_type)}" data-share-revoke-id="${sanitize(share.id)}">撤銷</button>`
@@ -287,6 +379,7 @@ function renderShareCenter(shares = []) {
           <div class="drive-card-sub">${sanitize(scopeText)} · 到期 ${sanitize(share.expires_at || "無")} · 次數 ${sanitize(String(share.access_count || 0))}${share.max_views ? " / " + sanitize(String(share.max_views)) : ""} · 密碼 ${share.password_required ? "是" : "否"}</div>
           ${countdown}
           ${url ? `<div class="drive-card-sub drive-share-link">${sanitize(url)}</div>` : ""}
+          ${missingFragment ? '<div class="drive-card-sub">E2EE 分享連結缺少瀏覽器片段金鑰，請重新產生分享連結後再複製。</div>' : ""}
         </div>
         <div class="drive-file-actions">
           <span class="badge ${platformSeverityClass(status)}">${sanitize(platformStatusLabel(status))}</span>
@@ -300,9 +393,13 @@ function renderShareCenter(shares = []) {
   list.querySelectorAll("[data-share-copy]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const url = btn.dataset.shareCopy || "";
+      if (btn.dataset.shareMissingFragment === "1") {
+        platformCenterSetMsg("share-center-msg", "分享連結缺少 E2EE 片段金鑰，請重新產生分享連結後再複製。", false);
+        return;
+      }
       try {
         await navigator.clipboard.writeText(url);
-        platformCenterSetMsg("share-center-msg", "分享連結已複製", true);
+        platformCenterSetMsg("share-center-msg", "連結已複製", true);
       } catch (_) {
         window.prompt("分享連結", url);
       }
@@ -371,12 +468,7 @@ async function loadShareCenterEvents(type, id) {
   if (!type || !id) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const panel = $("share-center-events");
-  if (panel) {
-    panel.style.display = "block";
-    panel.className = "msg ok";
-    panel.textContent = "正在讀取分享紀錄...";
-  }
+  renderShareCenterEventsPanel("<div>正在讀取分享紀錄...</div>");
   try {
     const res = await apiFetch(API + `/shares/${encodeURIComponent(type)}/${encodeURIComponent(id)}/access-events`, {
       credentials: "same-origin",
@@ -384,19 +476,15 @@ async function loadShareCenterEvents(type, id) {
     });
     const json = await res.json().catch(() => ({}));
     if (!json.ok) {
-      if (panel) {
-        panel.className = "msg err";
-        panel.textContent = json.msg || "分享紀錄讀取失敗";
-      }
+      renderShareCenterEventsPanel(`<div>${sanitize(json.msg || "分享紀錄讀取失敗")}</div>`, { bad: true });
       return;
     }
     const events = json.events || [];
-    if (!panel) return;
     if (!events.length) {
-      panel.textContent = "目前沒有分享紀錄。";
+      renderShareCenterEventsPanel("<div>目前沒有分享紀錄。</div>");
       return;
     }
-    panel.innerHTML = `<strong>分享紀錄</strong><div class="share-center-event-list">${events.map((event) => {
+    renderShareCenterEventsPanel(`<div class="share-center-event-list">${events.map((event) => {
       const when = formatChatTime(event.opened_at || event.created_at || "");
       const ip = event.source_ip || event.ip || "";
       const detail = event.detail || "";
@@ -411,12 +499,9 @@ async function loadShareCenterEvents(type, id) {
         ${detail ? `<div class="share-center-event-detail">${sanitize(detail)}</div>` : ""}
         ${userAgent ? `<div class="share-center-event-detail">${sanitize(userAgent)}</div>` : ""}
       </div>`;
-    }).join("")}</div>`;
+    }).join("")}</div>`);
   } catch (_) {
-    if (panel) {
-      panel.className = "msg err";
-      panel.textContent = "分享紀錄讀取失敗，請稍後再試。";
-    }
+    renderShareCenterEventsPanel("<div>分享紀錄讀取失敗，請稍後再試。</div>", { bad: true });
   }
 }
 
@@ -824,6 +909,12 @@ async function openManagedVideo(videoId) {
 }
 
 document.addEventListener("click", (event) => {
+  const closeEvents = event.target?.closest?.("[data-share-events-close]");
+  if (closeEvents) {
+    event.preventDefault();
+    closeShareCenterEvents();
+    return;
+  }
   const tab = event.target?.closest?.("[data-share-center-tab]");
   if (!tab) return;
   event.preventDefault();

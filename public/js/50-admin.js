@@ -190,7 +190,7 @@ function switchModuleTab(tab) {
   const canAccessVideos = !!currentUser && canAccessModule("videos");
   const canAccessGames = !!currentUser && canAccessModule("games");
   const canAccessJobs = !!currentUser && canAccessModule("jobs");
-  const canAccessShareCenter = canAccessVideos && canAccessModule("shares");
+  const canAccessShareCenter = !!currentUser && canAccessModule("shares");
   const canUseComfyuiTab = typeof isComfyuiAvailableForNavigation !== "function" || isComfyuiAvailableForNavigation();
   const canAccessComfyui = !!currentUser && canAccessModule("comfyui") && canUseComfyuiTab;
   const canAccessEconomy = !!currentUser && canAccessModule("economy");
@@ -240,6 +240,7 @@ function switchModuleTab(tab) {
   const mVideos = $("tab-module-videos");
   const mGames = $("tab-module-games");
   const mJobs = $("tab-module-jobs");
+  const mShares = $("tab-module-shares");
   const mComfyui = $("tab-module-comfyui");
   const mEconomy = $("tab-module-economy");
   const mTrading = $("tab-module-trading");
@@ -267,9 +268,10 @@ function switchModuleTab(tab) {
   if (mCommunity) mCommunity.classList.toggle("active", normTab === "community");
   if (mDrive) mDrive.classList.toggle("active", normTab === "drive");
   if (mAlbums) mAlbums.classList.toggle("active", normTab === "albums");
-  if (mVideos) mVideos.classList.toggle("active", normTab === "videos" || normTab === "shares");
+  if (mVideos) mVideos.classList.toggle("active", normTab === "videos");
   if (mGames) mGames.classList.toggle("active", normTab === "games");
   if (mJobs) mJobs.classList.toggle("active", normTab === "jobs");
+  if (mShares) mShares.classList.toggle("active", normTab === "shares");
   if (mComfyui) mComfyui.classList.toggle("active", normTab === "comfyui");
   if (mEconomy) mEconomy.classList.toggle("active", normTab === "economy");
   if (mTrading) mTrading.classList.toggle("active", normTab === "trading");
@@ -6185,6 +6187,79 @@ async function applyServerUpdate() {
   }
 }
 
+function systemResourcePercent(value) {
+  const percent = Number(value);
+  return Number.isFinite(percent) ? Math.max(0, Math.min(100, percent)) : null;
+}
+
+function systemResourceStatusClass(percent, available = true) {
+  if (!available || percent === null) return "muted";
+  if (percent >= 90) return "danger";
+  if (percent >= 75) return "warn";
+  return "ok";
+}
+
+function systemResourceGaugeMarkup(item) {
+  const percent = systemResourcePercent(item.percent);
+  const available = item.available !== false && percent !== null;
+  const displayPercent = available ? Math.round(percent) : 0;
+  const statusClass = systemResourceStatusClass(percent, item.available !== false);
+  const detail = item.detail || (available ? "使用中" : "未偵測到資料");
+  return `
+    <div class="system-resource-gauge-card ${statusClass}" style="--resource-percent:${displayPercent};--resource-color:${sanitize(item.color || "#82b1ff")};">
+      <div class="system-resource-gauge-label">${sanitize(item.label || "-")}</div>
+      <div class="system-resource-arc" aria-label="${sanitize(item.label || "resource")} ${displayPercent}%">
+        <div class="system-resource-value">${available ? `${displayPercent}%` : "--"}</div>
+      </div>
+      <div class="system-resource-detail">${sanitize(detail)}</div>
+    </div>
+  `;
+}
+
+function renderSystemResourceBoard(resource = {}) {
+  const host = $("system-resource-gauges");
+  const sampled = $("system-resource-sampled-at");
+  if (!host) return;
+  const cpu = resource.cpu || {};
+  const ram = resource.ram || {};
+  const gpu = resource.gpu || {};
+  const vram = resource.vram || {};
+  const gpuNames = Array.isArray(gpu.gpus) && gpu.gpus.length
+    ? gpu.gpus.map((item) => item.name || `GPU ${item.index || ""}`).join(" / ")
+    : "";
+  const loadAvg = Array.isArray(cpu.load_avg) && cpu.load_avg.length ? ` · load ${Number(cpu.load_avg[0] || 0).toFixed(2)}` : "";
+  const cards = [
+    {
+      label: "CPU",
+      percent: cpu.percent,
+      color: "#82b1ff",
+      detail: `${Number(cpu.cores || 0) || "-"} cores${loadAvg}`,
+    },
+    {
+      label: "RAM",
+      percent: ram.percent,
+      color: "#66e3c4",
+      detail: ram.total_bytes ? `${formatBytes(ram.used_bytes || 0)} / ${formatBytes(ram.total_bytes)}` : "未偵測到記憶體資料",
+    },
+    {
+      label: "GPU",
+      percent: gpu.percent,
+      color: "#ffca6b",
+      available: gpu.available,
+      detail: gpu.available ? (gpuNames || "GPU 使用率") : "未偵測到 NVIDIA GPU",
+    },
+    {
+      label: "VRAM",
+      percent: vram.percent,
+      color: "#c792ea",
+      available: vram.available,
+      detail: vram.available && vram.total_bytes ? `${formatBytes(vram.used_bytes || 0)} / ${formatBytes(vram.total_bytes)}` : "未偵測到 VRAM",
+    },
+  ];
+  host.innerHTML = cards.map(systemResourceGaugeMarkup).join("");
+  if (sampled) sampled.textContent = resource.sampled_at ? `最後採樣：${formatChatTime(resource.sampled_at)}` : "等待資料";
+}
+
 async function loadServerEnv() {
   if (!currentUser || currentRole !== "super_admin") return;
   await fetchCsrfToken({ force: true });
@@ -6200,9 +6275,11 @@ async function loadServerEnv() {
   if (!json.ok) {
     summary.innerHTML = `<div style="color:#ff4f6d;">${sanitize(json.msg || "系統環境讀取失敗")}</div>`;
     details.textContent = "";
+    renderSystemResourceBoard({});
     return;
   }
   const env = json.environment || {};
+  renderSystemResourceBoard(json.resource_usage || {});
   const cards = [
     ["作業平台", env.platform || "-", "#82b1ff"],
     ["Python", env.python_version || "-", "#82b1ff"],

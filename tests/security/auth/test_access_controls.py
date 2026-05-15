@@ -620,6 +620,10 @@ def test_admin_environment_exposes_relative_paths_and_pid():
     assert env["database_path"] == "missing.db"
     assert env["log_dir"] == "."
     assert env["chat_dir"] == "."
+    resources = res.get_json()["resource_usage"]
+    assert {"cpu", "gpu", "vram", "ram", "sampled_at"} <= set(resources)
+    assert resources["cpu"]["label"] == "CPU"
+    assert resources["ram"]["label"] == "RAM"
     assert env["anchor_dir"] == "."
     for key in ("base_dir", "database_path", "log_dir", "chat_dir", "anchor_dir"):
         assert not str(env[key]).startswith("/")

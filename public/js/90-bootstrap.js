@@ -10,6 +10,7 @@ function bindUiEvents() {
   const tabModuleVideos = $("tab-module-videos");
   const tabModuleGames = $("tab-module-games");
   const tabModuleJobs = $("tab-module-jobs");
+  const tabModuleShares = $("tab-module-shares");
   const tabModuleComfyui = $("tab-module-comfyui");
   const tabModuleEconomy = $("tab-module-economy");
   const tabModuleTrading = $("tab-module-trading");
@@ -23,6 +24,7 @@ function bindUiEvents() {
   const tabServerLaunchCheck = $("tab-server-launch-check");
   const tabServerSettings = $("tab-server-settings");
   const tabServerEnv = $("tab-server-env");
+  const envRefresh = $("env-refresh-btn");
   const tabSettingsSecurity = $("tab-settings-security");
   const tabSettingsFeatures = $("tab-settings-features");
   const tabSettingsAppearance = $("tab-settings-appearance");
@@ -230,6 +232,7 @@ function bindUiEvents() {
   if (tabModuleVideos) tabModuleVideos.addEventListener("click", () => switchModuleTab("videos"));
   if (tabModuleGames) tabModuleGames.addEventListener("click", () => switchModuleTab("games"));
   if (tabModuleJobs) tabModuleJobs.addEventListener("click", () => switchModuleTab("jobs"));
+  if (tabModuleShares) tabModuleShares.addEventListener("click", () => switchModuleTab("shares"));
   if (tabModuleComfyui) tabModuleComfyui.addEventListener("click", () => switchModuleTab("comfyui"));
   if (tabModuleEconomy) tabModuleEconomy.addEventListener("click", () => switchModuleTab("economy"));
   if (tabModuleTrading) tabModuleTrading.addEventListener("click", () => switchModuleTab("trading"));
@@ -243,6 +246,7 @@ function bindUiEvents() {
   if (tabServerLaunchCheck) tabServerLaunchCheck.addEventListener("click", () => switchServerTab("launch-check"));
   if (tabServerSettings) tabServerSettings.addEventListener("click", () => switchServerTab("settings"));
   if (tabServerEnv) tabServerEnv.addEventListener("click", () => switchServerTab("env"));
+  if (envRefresh) envRefresh.addEventListener("click", loadServerEnv);
   if (tabSettingsSecurity) tabSettingsSecurity.addEventListener("click", () => switchSettingsSection("security"));
   if (tabSettingsFeatures) tabSettingsFeatures.addEventListener("click", () => switchSettingsSection("features"));
   if (tabSettingsAppearance) tabSettingsAppearance.addEventListener("click", () => switchSettingsSection("appearance"));

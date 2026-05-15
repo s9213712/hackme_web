@@ -229,6 +229,7 @@
         <button class="tab" id="tab-module-trading" style="display:none;">積分交易所</button>
         <button class="tab" id="tab-module-appeals">申覆</button>
         <button class="tab" id="tab-module-jobs" style="display:none;">任務中心</button>
+        <button class="tab" id="tab-module-shares" style="display:none;">分享管理</button>
         <button class="tab" id="tab-module-accounts" style="display:none;">帳號管理</button>
         <button class="tab" id="tab-module-server" style="display:none;">安全中心</button>
       </nav>
@@ -661,7 +662,12 @@
 
   <div class="module-section" id="module-drive">
     <div class="admin-tools" style="margin-top:.95rem;text-align:left;">
-      <div class="mini-title">☁️ 雲端硬碟安全中心</div>
+      <div class="mini-title">☁️ 雲端硬碟</div>
+      <div class="tabs drive-section-tabs" id="drive-section-tabs" role="tablist" aria-label="雲端硬碟分頁">
+        <button class="tab active" id="drive-files-tab" type="button" role="tab" aria-selected="true" aria-controls="drive-files-page" data-drive-page-tab="files">檔案管理</button>
+        <button class="tab" id="drive-capacity-tab" type="button" role="tab" aria-selected="false" aria-controls="drive-capacity-page" data-drive-page-tab="capacity">容量管理</button>
+      </div>
+      <div class="drive-subpage" id="drive-capacity-page" data-drive-page-panel="capacity" role="tabpanel" aria-labelledby="drive-capacity-tab" hidden>
       <div class="drive-dashboard-grid">
         <div class="drive-card drive-usage-card">
           <div class="drive-card-title">容量使用狀態</div>
@@ -714,6 +720,7 @@
       <div class="admin-toolbar" style="margin-top:.75rem;">
         <button class="btn btn-primary" id="drive-refresh-btn" type="button">重新整理雲端硬碟狀態</button>
       </div>
+      </div>
       <input type="file" id="storage-upload-file" hidden />
       <input type="file" id="storage-upload-folder" hidden webkitdirectory directory multiple />
       <input type="url" id="drive-remote-url" hidden />
@@ -732,6 +739,7 @@
       <input type="password" id="drive-e2ee-passphrase" hidden autocomplete="new-password" />
       <input type="password" id="drive-e2ee-passphrase-confirm" hidden autocomplete="new-password" />
       <div class="field-help" hidden>非 E2EE 會讓伺服器取得明文以便掃毒與預覽；E2EE 需要自己保管檔案加密密碼，忘記後站方無法救回。</div>
+      <div class="drive-subpage active" id="drive-files-page" data-drive-page-panel="files" role="tabpanel" aria-labelledby="drive-files-tab">
       <div class="drive-file-preview-layout">
         <div class="drive-card">
           <div class="drive-card-heading">
@@ -786,6 +794,7 @@
             <div class="drive-empty">請從左側檔案清單選擇要預覽的檔案</div>
           </div>
         </div>
+      </div>
       </div>
       <div id="drive-msg" class="msg"></div>
     </div>
@@ -5231,6 +5240,15 @@
         <div class="admin-toolbar" style="margin-bottom:.65rem;">
           <button class="btn btn-primary" type="button" id="env-refresh-btn">重新整理系統環境</button>
         </div>
+        <section class="system-resource-board" aria-label="系統資源看板">
+          <div class="system-resource-board-header">
+            <div>
+              <div class="drive-card-title">系統資源看板</div>
+              <div class="drive-card-sub" id="system-resource-sampled-at">等待資料</div>
+            </div>
+          </div>
+          <div id="system-resource-gauges" class="system-resource-gauges"></div>
+        </section>
         <div id="server-env-summary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.55rem;margin-bottom:.8rem;"></div>
         <div id="server-env-details" style="font-size:.74rem;color:var(--muted);word-break:break-all;"></div>
       </div>
