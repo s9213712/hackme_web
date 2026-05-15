@@ -281,6 +281,37 @@ def _depth_schedule(text: str) -> list[int]:
     return depths
 
 
+def _running_score(games: list[dict[str, Any]]) -> dict[str, Any]:
+    total = len(games)
+    exp5_wins = sum(1 for game in games if game.get("result") == "exp5_win")
+    blockfish_wins = sum(1 for game in games if game.get("result") == "blockfish_win")
+    draws = sum(1 for game in games if game.get("result") == "draw")
+    incomplete = sum(1 for game in games if game.get("result") == "incomplete")
+    return {
+        "games": total,
+        "exp5_wins": exp5_wins,
+        "draws": draws,
+        "blockfish_wins": blockfish_wins,
+        "incomplete": incomplete,
+        "exp5_score_rate": round((exp5_wins + 0.5 * draws) / max(1, total), 4),
+    }
+
+
+def _print_game_done(game: dict[str, Any], *, total_games: int, games: list[dict[str, Any]]) -> None:
+    running = _running_score(games)
+    print(
+        "[exp5-blockfish] done "
+        f"game={int(game.get('game_index') or 0)}/{int(total_games)} "
+        f"result={str(game.get('result') or '')} "
+        f"reason={str(game.get('reason') or '')} "
+        f"plies={int(game.get('plies') or 0)} "
+        f"elapsed_ms={float(game.get('elapsed_ms') or 0.0):.1f} "
+        f"running={running['exp5_wins']}W/{running['draws']}D/{running['blockfish_wins']}L "
+        f"score_rate={running['exp5_score_rate']:.4f}",
+        flush=True,
+    )
+
+
 def main() -> int:
     args = parse_args()
     stockfish_path = resolve_stockfish_path(str(args.stockfish_path or ""))
@@ -288,28 +319,29 @@ def main() -> int:
         raise SystemExit("Stockfish/Blockfish binary not found")
     depth_schedule = _depth_schedule(str(args.stockfish_depth_schedule or ""))
     games: list[dict[str, Any]] = []
+    total_games = max(1, int(args.games))
     with UciStockfish(stockfish_path) as engine:
-        for index in range(1, max(1, int(args.games)) + 1):
+        for index in range(1, total_games + 1):
             opening_id, opening_moves = DEFAULT_OPENINGS[(index - 1) % len(DEFAULT_OPENINGS)]
             exp5_color = "white" if index % 2 == 1 else "black"
             stockfish_depth = depth_schedule[index - 1] if index - 1 < len(depth_schedule) else int(args.stockfish_depth)
             print(
-                f"[exp5-blockfish] game {index}/{int(args.games)} opening={opening_id} exp5={exp5_color} depth={stockfish_depth}",
+                f"[exp5-blockfish] start game={index}/{total_games} opening={opening_id} exp5={exp5_color} depth={stockfish_depth}",
                 flush=True,
             )
-            games.append(
-                play_game(
-                    game_index=index,
-                    opening_id=opening_id,
-                    opening_moves=list(opening_moves),
-                    exp5_color_name=exp5_color,
-                    profile=str(args.profile),
-                    engine=engine,
-                    stockfish_depth=int(stockfish_depth),
-                    stockfish_movetime_ms=int(args.stockfish_movetime_ms),
-                    max_plies=max(1, int(args.max_plies)),
-                )
+            game = play_game(
+                game_index=index,
+                opening_id=opening_id,
+                opening_moves=list(opening_moves),
+                exp5_color_name=exp5_color,
+                profile=str(args.profile),
+                engine=engine,
+                stockfish_depth=int(stockfish_depth),
+                stockfish_movetime_ms=int(args.stockfish_movetime_ms),
+                max_plies=max(1, int(args.max_plies)),
             )
+            games.append(game)
+            _print_game_done(game, total_games=total_games, games=games)
     private_path = Path(args.private_jsonl)
     private_path.parent.mkdir(parents=True, exist_ok=True)
     private_path.write_text("\n".join(json.dumps(game, ensure_ascii=False, sort_keys=True) for game in games) + "\n", encoding="utf-8")
