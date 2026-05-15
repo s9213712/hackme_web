@@ -23,6 +23,11 @@ def test_notification_ui_assets_are_wired():
     assert "data-notification-read-all" not in notifications_js
     assert "一鍵全部已讀" not in notifications_js
     assert "readAll.disabled = n <= 0" in notifications_js
+    assert "const NOTIFICATION_POLL_MS = 60000" in notifications_js
+    assert "const NOTIFICATION_INITIAL_DELAY_MS = 10000" in notifications_js
+    assert "notificationPollBusy" in notifications_js
+    assert "document.hidden" in notifications_js
+    assert "loadNotifications({ force: true })" in notifications_js
     assert 'apiFetch(API + "/notifications?limit=20"' in notifications_js
     assert 'apiFetch(API + `/notifications/${notificationId}/read`' in notifications_js
     assert 'apiFetch(API + "/notifications/read-all"' in notifications_js

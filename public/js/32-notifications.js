@@ -1,6 +1,10 @@
 'use strict';
 
-const NOTIFICATION_POLL_MS = 30000;
+const NOTIFICATION_POLL_MS = 60000;
+const NOTIFICATION_INITIAL_DELAY_MS = 10000;
+
+let notificationInitialPollTimer = null;
+let notificationPollBusy = false;
 
 function setNotificationBadge(count) {
   const badge = $("notification-badge");
@@ -54,10 +58,33 @@ function renderNotifications(items, unreadCount) {
   });
 }
 
-async function loadNotifications() {
-  if (!currentUser) return;
-  const csrf = await fetchCsrfToken();
+function shouldRunNotificationPoll({ force = false } = {}) {
+  if (!currentUser) return false;
+  if (force) return true;
+  return !document.hidden;
+}
+
+function clearNotificationInitialPoll() {
+  if (!notificationInitialPollTimer) return;
+  clearTimeout(notificationInitialPollTimer);
+  notificationInitialPollTimer = null;
+}
+
+function scheduleNotificationInitialPoll(delayMs = NOTIFICATION_INITIAL_DELAY_MS) {
+  clearNotificationInitialPoll();
+  notificationInitialPollTimer = setTimeout(() => {
+    notificationInitialPollTimer = null;
+    loadNotifications().catch(() => {});
+  }, Math.max(0, delayMs));
+}
+
+async function loadNotifications(options = {}) {
+  const force = Boolean(options.force);
+  if (!shouldRunNotificationPoll({ force })) return;
+  if (notificationPollBusy) return;
+  notificationPollBusy = true;
   try {
+    const csrf = await fetchCsrfToken();
     const res = await apiFetch(API + "/notifications?limit=20", {
       credentials: "same-origin",
       headers: { "X-CSRF-Token": csrf || "" }
@@ -77,6 +104,8 @@ async function loadNotifications() {
     if (notificationsOpen && list) {
       list.innerHTML = "<p style='color:#ffb74d;'>通知讀取失敗，請稍後重試。</p>";
     }
+  } finally {
+    notificationPollBusy = false;
   }
 }
 
@@ -94,7 +123,7 @@ async function markNotificationRead(notificationId) {
     alert(json.msg || "通知已讀更新失敗");
     return;
   }
-  await loadNotifications();
+  await loadNotifications({ force: true });
 }
 
 async function markAllNotificationsRead() {
@@ -111,7 +140,7 @@ async function markAllNotificationsRead() {
     alert(json.msg || "全部已讀失敗");
     return;
   }
-  await loadNotifications();
+  await loadNotifications({ force: true });
 }
 
 async function dismissNotification(notificationId) {
@@ -128,7 +157,7 @@ async function dismissNotification(notificationId) {
     alert(json.msg || "通知隱藏失敗");
     return;
   }
-  await loadNotifications();
+  await loadNotifications({ force: true });
 }
 
 function toggleNotificationPanel() {
@@ -136,7 +165,7 @@ function toggleNotificationPanel() {
   if (!panel) return;
   notificationsOpen = !notificationsOpen;
   panel.classList.toggle("show", notificationsOpen);
-  if (notificationsOpen) loadNotifications();
+  if (notificationsOpen) loadNotifications({ force: true });
 }
 
 function closeNotificationPanel() {
@@ -147,11 +176,15 @@ function closeNotificationPanel() {
 
 function startNotificationPoll() {
   stopNotificationPoll();
-  loadNotifications();
-  notificationPollTimer = setInterval(loadNotifications, NOTIFICATION_POLL_MS);
+  if (!currentUser) return;
+  scheduleNotificationInitialPoll();
+  notificationPollTimer = setInterval(() => {
+    loadNotifications().catch(() => {});
+  }, NOTIFICATION_POLL_MS);
 }
 
 function stopNotificationPoll() {
+  clearNotificationInitialPoll();
   if (notificationPollTimer) {
     clearInterval(notificationPollTimer);
     notificationPollTimer = null;
@@ -159,3 +192,8 @@ function stopNotificationPoll() {
   closeNotificationPanel();
   setNotificationBadge(0);
 }
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden || !currentUser || !notificationPollTimer) return;
+  scheduleNotificationInitialPoll(1500);
+});
