@@ -1,0 +1,94 @@
+{
+  "acceptance_reason": "V27k improves full percent-tail rejected count slightly and improves staged Blockfish score from 10% to 30% without section regressions in tail/core metrics.",
+  "accepted_as_current_strongest": true,
+  "baseline_profile": "fixed_depth_fianchetto_tail_castle_guard_v27i_depth3_no_null_mate_net30_defense",
+  "candidate_profile": "fixed_depth_fianchetto_tail_castle_guard_v27k_depth3_no_null_mate_net30_defense_book",
+  "created_at": "2026-05-15T07:37:37+00:00",
+  "guardrails": {
+    "private_replay_outside_repo": "/home/s92137/hackme_web_private/runtime/private/games/exp5/",
+    "production_profile_not_using_validation_memory": true,
+    "static_opening_book_generic": true,
+    "stockfish_binary_not_bundled": true
+  },
+  "kind": "redacted_exp5_current_strongest_comparison",
+  "leak_policy": "redacted: no FEN, moves, PV, source game ids, chosen/source moves, or per-position answers",
+  "overall": {
+    "baseline_clean_rate": 0.694,
+    "baseline_rejected": 714,
+    "baseline_review_or_better_rate": 0.8456,
+    "baseline_top5_rate": 0.5586,
+    "candidate_clean_rate": 0.6946,
+    "candidate_rejected": 712,
+    "candidate_review_or_better_rate": 0.846,
+    "candidate_top5_rate": 0.5634,
+    "delta_rejected": -2
+  },
+  "sections": {
+    "complete_game": {
+      "baseline_clean_rate": 0.675,
+      "baseline_rejected": 399,
+      "baseline_review_or_better_rate": 0.8443,
+      "baseline_top5_rate": 0.5638,
+      "candidate_clean_rate": 0.6762,
+      "candidate_rejected": 397,
+      "candidate_review_or_better_rate": 0.8451,
+      "candidate_top5_rate": 0.5724,
+      "delta_rejected": -2
+    },
+    "tail10pct": {
+      "baseline_clean_rate": 0.7548,
+      "baseline_rejected": 33,
+      "baseline_review_or_better_rate": 0.8736,
+      "baseline_top5_rate": 0.6743,
+      "candidate_clean_rate": 0.7548,
+      "candidate_rejected": 33,
+      "candidate_review_or_better_rate": 0.8736,
+      "candidate_top5_rate": 0.6743,
+      "delta_rejected": 0
+    },
+    "tail25pct": {
+      "baseline_clean_rate": 0.719,
+      "baseline_rejected": 100,
+      "baseline_review_or_better_rate": 0.8413,
+      "baseline_top5_rate": 0.5857,
+      "candidate_clean_rate": 0.719,
+      "candidate_rejected": 100,
+      "candidate_review_or_better_rate": 0.8413,
+      "candidate_top5_rate": 0.5857,
+      "delta_rejected": 0
+    },
+    "tail50pct": {
+      "baseline_clean_rate": 0.7085,
+      "baseline_rejected": 182,
+      "baseline_review_or_better_rate": 0.8444,
+      "baseline_top5_rate": 0.5068,
+      "candidate_clean_rate": 0.7085,
+      "candidate_rejected": 182,
+      "candidate_review_or_better_rate": 0.8444,
+      "candidate_top5_rate": 0.5068,
+      "delta_rejected": 0
+    }
+  },
+  "staged_blockfish": {
+    "baseline_exp5_score_rate": 0.1,
+    "baseline_reasons": [
+      "checkmate",
+      "threefold_repetition"
+    ],
+    "baseline_wdl": {
+      "draws": 1,
+      "losses": 4,
+      "wins": 0
+    },
+    "candidate_exp5_score_rate": 0.3,
+    "candidate_reasons": [
+      "checkmate",
+      "threefold_repetition"
+    ],
+    "candidate_wdl": {
+      "draws": 3,
+      "losses": 2,
+      "wins": 0
+    }
+  }
+}

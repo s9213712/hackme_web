@@ -14,6 +14,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import sys
 import time
@@ -39,7 +40,8 @@ class ValidationQuestion:
     note: str = ""
 
 
-DEFAULT_QUESTION_SET_PATH = Path("runtime/private/exp5_heldout_validation_50_questions.json")
+DEFAULT_PRIVATE_ROOT = Path(os.environ.get("HACKME_WEB_PRIVATE_ROOT", str(ROOT.parent / "hackme_web_private/runtime/private"))).expanduser()
+DEFAULT_QUESTION_SET_PATH = DEFAULT_PRIVATE_ROOT / "exp5_heldout_validation_50_questions.json"
 
 
 def parse_args() -> argparse.Namespace:

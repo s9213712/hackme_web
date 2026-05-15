@@ -63,4 +63,5 @@ candidate to survive the staged depth-2 game without losing.
 - `docs/games/evidence/exp5/v27i_depth3_no_null_mate_net30_defense_deterministic_gate.json`
 - `docs/games/evidence/exp5/v27i_depth3_no_null_mate_net30_defense_blockfish_staged_5_summary.json`
 
-Private replay/detail files remain under `runtime/private/games/exp5/`.
+Private replay/detail files were moved outside the repo to
+`$HACKME_WEB_PRIVATE_ROOT/games/exp5/`.

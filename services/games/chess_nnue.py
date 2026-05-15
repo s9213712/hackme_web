@@ -38,7 +38,7 @@ EXP5_MAIN_MODEL_ROLE = "static_base_eval_parameters"
 EXP5_GENERATED_ARTIFACT_ROLE = "adapter_or_experience_table"
 EXP5_SOURCE_BASE_MODULE = "services.games.chess_exp5_base_model"
 EXP5_EXPERIENCE_DELTA_FORMAT = "exp5_source_base_delta_v1"
-EXP5_PRODUCTION_SEARCH_PROFILE = "fixed_depth_fianchetto_tail_castle_guard_v27i_depth3_no_null_mate_net30_defense"
+EXP5_PRODUCTION_SEARCH_PROFILE = "fixed_depth_fianchetto_tail_castle_guard_v27k_depth3_no_null_mate_net30_defense_book"
 _NNUE_VERSION = 1
 _LEARNING_RATE = 18.0
 _MAX_ABS_WEIGHT = 350.0
@@ -590,6 +590,36 @@ _SEARCH_PROFILES = {
         "allow_queenside_castle_priority": False,
         "enable_king_zone_pressure": False,
         "enable_static_opening_book": False,
+        "enable_special_rule_fusion": False,
+    },
+    "fixed_depth_fianchetto_tail_castle_guard_v27k_depth3_no_null_mate_net30_defense_book": {
+        "depth": 3,
+        "quiescence_depth": 2,
+        "time_budget_ms": None,
+        "enable_pvs": True,
+        "enable_lmr": True,
+        "enable_null_move": False,
+        "enable_futility": True,
+        "enable_rich_eval": False,
+        "enable_pawn_structure": False,
+        "enable_piece_activity": False,
+        "enable_piece_activity_midgame": True,
+        "enable_center_break": False,
+        "enable_fianchetto_development": True,
+        "enable_tail_mate_net": True,
+        "tail_mate_min_margin_cp": -3000,
+        "tail_mate_max_pieces": 30,
+        "tail_mate_max_nodes": 12_000,
+        "tail_mate_max_root_checks": 6,
+        "mate_two_min_margin_cp": -3000,
+        "mate_two_max_pieces": 30,
+        "enable_v27_forced_mate_defense": True,
+        "v27_forced_mate_defense_max_pieces": 30,
+        "v27_forced_mate_defense_max_depth": 7,
+        "v27_forced_mate_defense_max_nodes": 12_000,
+        "allow_queenside_castle_priority": False,
+        "enable_king_zone_pressure": False,
+        "enable_static_opening_book": True,
         "enable_special_rule_fusion": False,
     },
     "fixed_depth_center_fianchetto": {
@@ -3282,6 +3312,7 @@ def _avoid_opponent_forced_mate_net_filter(
     max_depth_plies: int = 7,
     max_pieces: int = 30,
     max_nodes: int = 12_000,
+    scan_limit: int = 16,
 ) -> chess.Move | None:
     """Avoid candidate moves that allow a bounded checking forced mate.
 
@@ -3312,7 +3343,7 @@ def _avoid_opponent_forced_mate_net_filter(
         [candidate for candidate in board.legal_moves if candidate != move],
         key=lambda candidate: (float(score_move(candidate)), candidate.uci()),
         reverse=True,
-    )[:16]
+    )[: max(1, int(scan_limit or 16))]
     for candidate in ordered:
         if _would_stalemate(board, candidate):
             continue
@@ -4255,6 +4286,7 @@ def choose_experiment_nnue_move(board_state, side: str, *, model_path=None, sear
             max_depth_plies=int(profile.get("v27_forced_mate_defense_max_depth", 7)),
             max_pieces=int(profile.get("v27_forced_mate_defense_max_pieces", 30)),
             max_nodes=int(profile.get("v27_forced_mate_defense_max_nodes", 12_000)),
+            scan_limit=int(profile.get("v27_forced_mate_defense_scan_limit", 16)),
         )
     compensation_fn = None
     if bool(model.get("_enable_center_break") or model.get("_enable_fianchetto_development")):

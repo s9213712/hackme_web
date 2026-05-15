@@ -50,6 +50,7 @@ using exact-memory lookup or writing validation-set priors.
 
 ## Evidence Rules
 
-All full validation details stay under `runtime/private/`. Public evidence in
+All full validation details stay under repo-external private runtime
+(`$HACKME_WEB_PRIVATE_ROOT`). Public evidence in
 `docs/games/evidence/exp5/` must remain aggregate-only. The V26 gate is produced
 by `scripts/games/chess_exp5_v26_gate.py`.

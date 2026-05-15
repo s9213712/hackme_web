@@ -2,9 +2,10 @@
 """Private 100-scenario expanded validation for chess exp5.
 
 The question set is intentionally sensitive: it contains FENs, source moves,
-and downloaded-game segments.  Keep it under ``runtime/private``.  Public docs
-outputs from this script are aggregate/redacted by default and must not expose
-FENs, moves, Stockfish PVs, or source game identifiers.
+and downloaded-game segments.  Keep it outside the repo, under
+``~/hackme_web_private/runtime/private`` by default.  Public docs outputs from
+this script are aggregate/redacted by default and must not expose FENs, moves,
+Stockfish PVs, or source game identifiers.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 import random
 import sys
@@ -34,7 +36,8 @@ from services.games import chess_stockfish_teacher as stockfish_teacher  # noqa:
 
 
 PROFILE_V24 = "fixed_depth_fianchetto_tail_castle_guard"
-DEFAULT_PRIVATE_ROOT = ROOT / "runtime/private/games/exp5/v24_expanded_100"
+PRIVATE_ROOT = Path(os.environ.get("HACKME_WEB_PRIVATE_ROOT", str(ROOT.parent / "hackme_web_private/runtime/private"))).expanduser()
+DEFAULT_PRIVATE_ROOT = PRIVATE_ROOT / "games/exp5/v24_expanded_100"
 LEGACY_SECTIONS = ("tail10", "tail20", "human_probe_trap", "complete_game")
 PERCENT_TAIL_SECTIONS = ("tail10pct", "tail25pct", "tail50pct", "complete_game")
 
