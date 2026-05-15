@@ -261,6 +261,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stockfish-movetime-ms", type=int, default=0)
     parser.add_argument("--games", type=int, default=5)
     parser.add_argument("--max-plies", type=int, default=600)
+    parser.add_argument("--opening-ids", default="", help="Comma-separated opening ids to cycle, e.g. open_game,english.")
+    parser.add_argument("--exp5-colors", default="", help="Comma-separated Exp5 colors to cycle, e.g. black,white.")
     parser.add_argument("--private-jsonl", required=True)
     parser.add_argument("--summary-json", required=True)
     return parser.parse_args()
@@ -279,6 +281,32 @@ def _depth_schedule(text: str) -> list[int]:
         if depth > 0:
             depths.append(depth)
     return depths
+
+
+def _opening_schedule(text: str) -> list[tuple[str, list[str]]]:
+    requested = [item.strip() for item in str(text or "").split(",") if item.strip()]
+    if not requested:
+        return list(DEFAULT_OPENINGS)
+    by_id = {opening_id: moves for opening_id, moves in DEFAULT_OPENINGS}
+    openings: list[tuple[str, list[str]]] = []
+    for opening_id in requested:
+        moves = by_id.get(opening_id)
+        if moves is None:
+            raise SystemExit(f"unknown opening id {opening_id!r}; known={','.join(by_id)}")
+        openings.append((opening_id, list(moves)))
+    return openings
+
+
+def _color_schedule(text: str) -> list[str]:
+    colors: list[str] = []
+    for item in str(text or "").split(","):
+        color = item.strip().lower()
+        if not color:
+            continue
+        if color not in {"white", "black"}:
+            raise SystemExit(f"unknown Exp5 color {color!r}; expected white or black")
+        colors.append(color)
+    return colors
 
 
 def _running_score(games: list[dict[str, Any]]) -> dict[str, Any]:
@@ -318,12 +346,14 @@ def main() -> int:
     if not stockfish_path:
         raise SystemExit("Stockfish/Blockfish binary not found")
     depth_schedule = _depth_schedule(str(args.stockfish_depth_schedule or ""))
+    opening_schedule = _opening_schedule(str(args.opening_ids or ""))
+    color_schedule = _color_schedule(str(args.exp5_colors or ""))
     games: list[dict[str, Any]] = []
     total_games = max(1, int(args.games))
     with UciStockfish(stockfish_path) as engine:
         for index in range(1, total_games + 1):
-            opening_id, opening_moves = DEFAULT_OPENINGS[(index - 1) % len(DEFAULT_OPENINGS)]
-            exp5_color = "white" if index % 2 == 1 else "black"
+            opening_id, opening_moves = opening_schedule[(index - 1) % len(opening_schedule)]
+            exp5_color = color_schedule[(index - 1) % len(color_schedule)] if color_schedule else ("white" if index % 2 == 1 else "black")
             stockfish_depth = depth_schedule[index - 1] if index - 1 < len(depth_schedule) else int(args.stockfish_depth)
             print(
                 f"[exp5-blockfish] start game={index}/{total_games} opening={opening_id} exp5={exp5_color} depth={stockfish_depth}",

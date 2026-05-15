@@ -1,0 +1,72 @@
+{
+  "baseline_commit": "4a6ed90d9e95914338ec9347a5a4916c85c79f77",
+  "baseline_profile": "fixed_depth_fianchetto_tail_castle_guard_v27k_depth3_no_null_mate_net30_defense_book",
+  "candidate_profile": "fixed_depth_fianchetto_tail_castle_guard_v28e_depth3_no_null_mate_net30_fast_king_mobility4",
+  "created_at": "2026-05-15",
+  "kind": "redacted_exp5_v28e_quick_gate_summary",
+  "leak_policy": "redacted: no FEN, moves, PV, source game ids, or per-position answers",
+  "promotion_decision": "promote_current_strongest_profile",
+  "staged_blockfish_5": {
+    "baseline": {
+      "draws": 3,
+      "exp5_score_rate": 0.3,
+      "exp5_wins": 0,
+      "games": 5,
+      "losses": 2
+    },
+    "candidate": {
+      "avg_plies": 87.8,
+      "blockfish_reference": "dd321af5dfc0789de07c4e5c64915073995eb818",
+      "draws": 4,
+      "exp5_score_rate": 0.4,
+      "exp5_wins": 0,
+      "games": 5,
+      "losses": 1,
+      "stockfish_depth_schedule": [
+        2,
+        3,
+        4,
+        5,
+        6
+      ]
+    },
+    "delta_score_rate": 0.1
+  },
+  "validation_scope": {
+    "full_percent_tail_100": "not_run_for_this_fast_screen",
+    "quick4_positions": 123,
+    "quick4_questions": 4,
+    "quick4_sections": [
+      "tail10pct",
+      "tail25pct",
+      "tail50pct",
+      "complete_game"
+    ]
+  },
+  "quick4_percent_tail": {
+    "baseline": {
+      "clean_rate": 0.6504,
+      "rejected": 24,
+      "review_or_better_rate": 0.8049,
+      "top1_rate": 0.1789,
+      "top3_rate": 0.4715,
+      "top5_rate": 0.6098
+    },
+    "candidate": {
+      "clean_rate": 0.6504,
+      "rejected": 24,
+      "review_or_better_rate": 0.8049,
+      "top1_rate": 0.187,
+      "top3_rate": 0.4715,
+      "top5_rate": 0.6098
+    },
+    "delta": {
+      "clean_rate": 0.0,
+      "rejected": 0,
+      "review_or_better_rate": 0.0,
+      "top1_rate": 0.0081,
+      "top3_rate": 0.0,
+      "top5_rate": 0.0
+    }
+  }
+}

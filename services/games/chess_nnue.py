@@ -38,7 +38,7 @@ EXP5_MAIN_MODEL_ROLE = "static_base_eval_parameters"
 EXP5_GENERATED_ARTIFACT_ROLE = "adapter_or_experience_table"
 EXP5_SOURCE_BASE_MODULE = "services.games.chess_exp5_base_model"
 EXP5_EXPERIENCE_DELTA_FORMAT = "exp5_source_base_delta_v1"
-EXP5_PRODUCTION_SEARCH_PROFILE = "fixed_depth_fianchetto_tail_castle_guard_v27k_depth3_no_null_mate_net30_defense_book"
+EXP5_PRODUCTION_SEARCH_PROFILE = "fixed_depth_fianchetto_tail_castle_guard_v28e_depth3_no_null_mate_net30_fast_king_mobility4"
 _NNUE_VERSION = 1
 _LEARNING_RATE = 18.0
 _MAX_ABS_WEIGHT = 350.0
@@ -621,6 +621,42 @@ _SEARCH_PROFILES = {
         "enable_king_zone_pressure": False,
         "enable_static_opening_book": True,
         "enable_special_rule_fusion": False,
+    },
+    "fixed_depth_fianchetto_tail_castle_guard_v28e_depth3_no_null_mate_net30_fast_king_mobility4": {
+        "depth": 3,
+        "quiescence_depth": 2,
+        "time_budget_ms": None,
+        "enable_pvs": True,
+        "enable_lmr": True,
+        "enable_null_move": False,
+        "enable_futility": True,
+        "enable_rich_eval": False,
+        "enable_pawn_structure": False,
+        "enable_piece_activity": False,
+        "enable_piece_activity_midgame": True,
+        "enable_center_break": False,
+        "enable_fianchetto_development": True,
+        "enable_tail_mate_net": True,
+        "tail_mate_min_margin_cp": -3000,
+        "tail_mate_max_pieces": 30,
+        "tail_mate_max_nodes": 12_000,
+        "tail_mate_max_root_checks": 6,
+        "mate_two_min_margin_cp": -3000,
+        "mate_two_max_pieces": 30,
+        "enable_v27_forced_mate_defense": True,
+        "v27_forced_mate_defense_max_pieces": 30,
+        "v27_forced_mate_defense_max_depth": 7,
+        "v27_forced_mate_defense_max_nodes": 12_000,
+        "allow_queenside_castle_priority": False,
+        "enable_king_zone_pressure": False,
+        "enable_static_opening_book": True,
+        "enable_special_rule_fusion": False,
+        "enable_final_low_legal_check_escape": True,
+        "final_low_legal_check_escape_max_legal": 4,
+        "final_low_legal_check_escape_max_pieces": 30,
+        "final_low_legal_check_escape_max_depth": 0,
+        "final_low_legal_check_escape_max_nodes": 0,
+        "final_low_legal_check_escape_enable_king_mobility4": True,
     },
     "fixed_depth_center_fianchetto": {
         "depth": 2,
@@ -3370,6 +3406,137 @@ def _avoid_opponent_forced_mate_net_filter(
     return sorted(candidates, reverse=True)[0][3]
 
 
+def _low_legal_check_escape_filter(
+    board: chess.Board,
+    move: chess.Move | None,
+    *,
+    side: str,
+    score_move,
+    max_legal: int = 4,
+    max_pieces: int = 30,
+    max_depth_plies: int = 7,
+    max_nodes: int = 12_000,
+    enable_king_mobility4: bool = False,
+) -> chess.Move | None:
+    """Final narrow guard for low-legal check evasions.
+
+    Earlier post-search filters may replace a safe search result. This guard
+    only runs in check with very few legal moves, where scanning every evasion
+    is cheap and avoids obvious forced-mate funnels.
+    """
+    if move is None or not board.is_check():
+        return move
+    legal_moves = list(board.legal_moves)
+    if len(legal_moves) <= 1 or len(legal_moves) > int(max_legal or 4):
+        return move
+    if len(board.piece_map()) > int(max_pieces or 30):
+        return move
+    color = chess.WHITE if str(side or "white").lower() == "white" else chess.BLACK
+
+    def king_edge_distance(after: chess.Board) -> int:
+        square = after.king(color)
+        if square is None:
+            return 0
+        file_index = chess.square_file(square)
+        rank_index = chess.square_rank(square)
+        return min(file_index, 7 - file_index, rank_index, 7 - rank_index)
+
+    risk_cache: dict[str, tuple[bool, bool]] = {}
+    depth_limit = max(0, int(max_depth_plies if max_depth_plies is not None else 7))
+    node_limit = max(0, int(max_nodes if max_nodes is not None else 12_000))
+
+    def candidate_risk(candidate: chess.Move) -> tuple[bool, bool]:
+        uci = candidate.uci()
+        cached = risk_cache.get(uci)
+        if cached is not None:
+            return cached
+        after = board.copy(stack=False)
+        after.push(candidate)
+        mate_in_one = not after.is_checkmate() and bool(_opponent_mate_in_one_moves(after))
+        forced_mate = False
+        if not mate_in_one and depth_limit > 0 and node_limit > 0:
+            forced_mate = _has_bounded_opponent_forced_mate(
+                after,
+                max_depth_plies=depth_limit,
+                max_pieces=int(max_pieces or 30),
+                max_nodes=node_limit,
+            )
+        risk_cache[uci] = (mate_in_one, forced_mate)
+        return risk_cache[uci]
+
+    def candidate_tuple(candidate: chess.Move) -> tuple[int, float, str, chess.Move]:
+        after = board.copy(stack=False)
+        after.push(candidate)
+        if after.is_checkmate():
+            return (10_000_000, float(score_move(candidate)), candidate.uci(), candidate)
+        mate_in_one, forced_mate = candidate_risk(candidate)
+        moving_piece = board.piece_at(candidate.from_square)
+        is_king_move = bool(moving_piece and moving_piece.piece_type == chess.KING)
+        opponent_check_count = sum(1 for reply in after.legal_moves if after.gives_check(reply))
+        score = 0
+        if mate_in_one:
+            score -= 1_000_000
+        if forced_mate:
+            score -= 250_000
+        score += king_edge_distance(after) * 900
+        score -= opponent_check_count * 35
+        if is_king_move and king_edge_distance(after) == 0:
+            score -= 700
+        if not is_king_move:
+            score += 450
+        if board.is_capture(candidate):
+            score += min(900, _captured_piece_value(board, candidate))
+        if candidate.promotion:
+            score += 1200
+        score += int(max(-5000.0, min(5000.0, float(score_move(candidate)))))
+        return (score, float(score_move(candidate)), candidate.uci(), candidate)
+
+    chosen_mate_in_one, chosen_forced_mate = candidate_risk(move)
+    if not chosen_mate_in_one and not chosen_forced_mate:
+        if not bool(enable_king_mobility4) or len(legal_moves) != 4:
+            return move
+        chosen_piece = board.piece_at(move.from_square)
+        if not chosen_piece or chosen_piece.piece_type != chess.KING:
+            return move
+        chosen_after = board.copy(stack=False)
+        chosen_after.push(move)
+        if king_edge_distance(chosen_after) != 0:
+            return move
+        chosen_score = candidate_tuple(move)[0]
+        king_candidates: list[tuple[int, float, str, chess.Move]] = []
+        for candidate in legal_moves:
+            if candidate == move:
+                continue
+            moving_piece = board.piece_at(candidate.from_square)
+            if not moving_piece or moving_piece.piece_type != chess.KING:
+                continue
+            after = board.copy(stack=False)
+            after.push(candidate)
+            if king_edge_distance(after) <= 0:
+                continue
+            mate_in_one, forced_mate = candidate_risk(candidate)
+            if mate_in_one or forced_mate:
+                continue
+            score = candidate_tuple(candidate)[0]
+            king_candidates.append((score, float(score_move(candidate)), candidate.uci(), candidate))
+        if not king_candidates:
+            return move
+        best_king = sorted(king_candidates, reverse=True)[0]
+        if best_king[0] <= chosen_score + 250:
+            return move
+        return best_king[3]
+
+    chosen = candidate_tuple(move)
+    chosen_score = chosen[0]
+    candidates = [candidate_tuple(candidate) for candidate in legal_moves]
+    best = sorted(candidates, reverse=True)[0]
+    if best[3] == move:
+        return move
+    if best[0] <= chosen_score + 650:
+        return move
+    return best[3]
+
+
 def _avoid_allowing_mate_in_one_filter(board: chess.Board, move: chess.Move | None, *, score_move) -> chess.Move | None:
     if move is None:
         return None
@@ -4233,24 +4400,26 @@ def choose_experiment_nnue_move(board_state, side: str, *, model_path=None, sear
     if bool(profile.get("enable_v26_selective_depth")) and _v26_should_selective_depth(board, ai_color):
         search_depth = max(search_depth, int(profile.get("v26_selective_depth") or search_depth))
         quiescence_depth = max(quiescence_depth, int(profile.get("v26_selective_quiescence_depth") or quiescence_depth))
-    move_order_fn = lambda current_board, move, _ply: (
-        _move_order_score(current_board, move)
-        + (
-            _v26_long_tail_move_bonus(
-                current_board,
-                move,
-                current_board.turn,
-                include_progress=False,
-                include_repetition=False,
+    def move_order_fn(current_board, move, _ply):
+        return (
+            _move_order_score(current_board, move)
+            + (
+                _v26_long_tail_move_bonus(
+                    current_board,
+                    move,
+                    current_board.turn,
+                    include_progress=False,
+                    include_repetition=False,
+                )
+                if bool(
+                    model.get("_enable_v26_long_tail_ordering")
+                    or model.get("_enable_v26_candidate_search_ordering")
+                    or (model.get("_enable_v27_root_long_tail_ordering") and int(_ply or 0) == 0)
+                )
+                else 0
             )
-            if bool(
-                model.get("_enable_v26_long_tail_ordering")
-                or model.get("_enable_v26_candidate_search_ordering")
-                or (model.get("_enable_v27_root_long_tail_ordering") and int(_ply or 0) == 0)
-            )
-            else 0
         )
-    )
+
     result = search_best_move(
         board,
         max_depth=search_depth,
@@ -4321,6 +4490,18 @@ def choose_experiment_nnue_move(board_state, side: str, *, model_path=None, sear
     best_move = _bare_king_conversion_filter(board, best_move, side=side, score_move=score_move)
     best_move = _opening_minor_revisit_filter(board, best_move, score_move=score_move)
     best_move = _opening_king_walk_filter(board, best_move, score_move=score_move)
+    if bool(profile.get("enable_final_low_legal_check_escape")):
+        best_move = _low_legal_check_escape_filter(
+            board,
+            best_move,
+            side=side,
+            score_move=score_move,
+            max_legal=int(profile.get("final_low_legal_check_escape_max_legal", 4)),
+            max_pieces=int(profile.get("final_low_legal_check_escape_max_pieces", 30)),
+            max_depth_plies=int(profile.get("final_low_legal_check_escape_max_depth", 7)),
+            max_nodes=int(profile.get("final_low_legal_check_escape_max_nodes", 12_000)),
+            enable_king_mobility4=bool(profile.get("final_low_legal_check_escape_enable_king_mobility4")),
+        )
     best_move = _avoid_stalemate_filter(board, best_move, score_move=score_move)
     return _move_dict(board, best_move) if best_move is not None else None
 

@@ -26,6 +26,7 @@ from services.games.chess_nnue import (
     _opening_trap_priority_move,
     _pawn_structure_score,
     _piece_activity_score,
+    _resolve_search_profile,
     _special_rule_fusion_filter,
     _avoid_reversible_cycle_when_ahead_filter,
     _static_exchange_eval,
@@ -255,6 +256,25 @@ def test_exp5_eval_rewards_bishop_pair_and_penalizes_doubled_isolated_pawns():
 
     assert _piece_activity_score(active) > 0
     assert _pawn_structure_score(passive) < 0
+
+
+def test_exp5_v28e_low_legal_check_escape_is_current_profile():
+    v27k = _resolve_search_profile("fixed_depth_fianchetto_tail_castle_guard_v27k_depth3_no_null_mate_net30_defense_book")
+    v28e = _resolve_search_profile(
+        "fixed_depth_fianchetto_tail_castle_guard_v28e_depth3_no_null_mate_net30_fast_king_mobility4"
+    )
+
+    assert EXP5_PRODUCTION_SEARCH_PROFILE == (
+        "fixed_depth_fianchetto_tail_castle_guard_v28e_depth3_no_null_mate_net30_fast_king_mobility4"
+    )
+    assert not v27k.get("enable_final_low_legal_check_escape")
+    assert v28e["enable_final_low_legal_check_escape"] is True
+    assert v28e["final_low_legal_check_escape_enable_king_mobility4"] is True
+    assert v28e["final_low_legal_check_escape_max_legal"] == 4
+    assert v28e["final_low_legal_check_escape_max_depth"] == 0
+    assert v28e["enable_king_zone_pressure"] is False
+    assert v28e["enable_pawn_structure"] is False
+    assert v28e["quiescence_depth"] == v27k["quiescence_depth"] == 2
 
 
 def test_exp5_adapter_exact_memory_is_guarded_and_opt_in(monkeypatch, tmp_path):
