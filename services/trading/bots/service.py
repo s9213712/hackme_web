@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_DOWN
 
 from services.system.notifications import create_notification_if_enabled, create_root_notification_if_enabled
-from services.trading.accounting.core import quantity_to_units, units_to_quantity
+from services.trading.accounting.core import fee_points, notional_points, quantity_to_units, units_to_quantity
 from services.trading.bots.audit import (
     bot_audit_enabled_at,
     bot_audit_is_eligible,
@@ -106,6 +106,38 @@ def _workflow_state(value):
     state.setdefault("executed_action_ids", [])
     state.setdefault("branch_step_counts", {})
     return state
+
+
+def _bot_open_order_frozen_points(conn, bot_id):
+    row = conn.execute(
+        """
+        SELECT COALESCE(SUM(o.frozen_points), 0) AS total
+        FROM trading_bot_runs r
+        JOIN trading_orders o ON o.order_uuid = r.order_uuid
+        WHERE r.bot_id=?
+          AND o.status IN ('open', 'partially_filled')
+        """,
+        (int(bot_id),),
+    ).fetchone()
+    return int((row or {})["total"] or 0)
+
+
+def _bot_budget_floor(row, open_order_frozen_points):
+    frozen = max(0, int(open_order_frozen_points or 0))
+    if str(row["bot_type"] or "conditional") == "dca":
+        return max(1, frozen)
+    return frozen
+
+
+def _bot_payload_with_budget_meta(service, conn, row):
+    item = service._bot_payload(row)
+    open_frozen = _bot_open_order_frozen_points(conn, row["id"])
+    budget = int(row["budget_points"] or 0)
+    item["open_order_frozen_points"] = open_frozen
+    item["minimum_budget_points"] = _bot_budget_floor(row, open_frozen)
+    item["budget_cap_enabled"] = str(row["bot_type"] or "conditional") == "dca" or budget > 0
+    item["budget_remaining_points"] = max(0, budget - open_frozen) if budget > 0 else None
+    return item
 
 
 def _utc_now():
@@ -259,14 +291,35 @@ def bot_trigger_hit(bot, observed_price, *, observed_low=None, observed_high=Non
     return False
 
 
-def quantity_text_from_budget(*, budget_points, price_points):
+def _units_for_point_budget(*, budget_points, price_points, fee_rate_percent=0.0, label="budget"):
     budget = int(budget_points or 0)
     price = _to_decimal(price_points, name="price_points", minimum=0)
     if budget <= 0 or price <= 0:
-        raise ValueError("dca budget or price is invalid")
+        raise ValueError(f"{label} or price is invalid")
     units = int((Decimal(budget) * Decimal(ASSET_SCALE) / price).quantize(Decimal("1"), rounding=ROUND_DOWN))
+    low = 0
+    high = max(0, units)
+    while low < high:
+        mid = (low + high + 1) // 2
+        gross = notional_points(mid, price)
+        total = gross + fee_points(gross, fee_rate_percent)
+        if total <= budget:
+            low = mid
+        else:
+            high = mid - 1
+    units = low
     if units <= 0:
-        raise ValueError("dca budget is too small for current price")
+        raise ValueError(f"{label} is too small for current price")
+    return units
+
+
+def quantity_text_from_budget(*, budget_points, price_points, fee_rate_percent=0.0):
+    units = _units_for_point_budget(
+        budget_points=budget_points,
+        price_points=price_points,
+        fee_rate_percent=fee_rate_percent,
+        label="dca budget",
+    )
     return units_to_quantity(units)
 
 
@@ -356,8 +409,7 @@ def bot_condition_checks(service, bot, current_price):
 def workflow_live_context(service, conn, *, market, user_id, observed_price, observed_low=None, observed_high=None):
     position = service._position(conn, int(user_id), market["symbol"])
     qty = int(position["quantity_units"] or 0)
-    locked = int(position["locked_quantity_units"] or 0)
-    sellable_units = max(0, qty - locked)
+    sellable_units = max(0, qty)
     avg_cost = float(_to_decimal(position["avg_cost_points"] or 0, name="avg_cost_points", minimum=0))
     has_pos = sellable_units > 0
     low_price = float(observed_low or observed_price or 0)
@@ -392,7 +444,7 @@ def workflow_live_context(service, conn, *, market, user_id, observed_price, obs
             context["price"] = observed_price
             context["window_low_price"] = low_price or observed_price
             context["window_high_price"] = high_price or observed_price
-            context["has_position"] = int(position["quantity_units"] or 0) > int(position["locked_quantity_units"] or 0)
+            context["has_position"] = int(position["quantity_units"] or 0) > 0
             context["pnl_percent"] = pnl_percent
             context["pnl_low_percent"] = pnl_low_percent
             context["pnl_high_percent"] = pnl_high_percent
@@ -409,7 +461,7 @@ def workflow_live_context(service, conn, *, market, user_id, observed_price, obs
     return context
 
 
-def workflow_order_from_decision(service, conn, *, user_id, actor, market, decision, price_points):
+def workflow_order_from_decision(service, conn, *, user_id, actor, market, decision, price_points, budget_points=None, bot_id=None):
     action = decision.get("action") or {}
     atype = str(action.get("type") or "hold")
     if atype == "hold":
@@ -419,22 +471,28 @@ def workflow_order_from_decision(service, conn, *, user_id, actor, market, decis
     order_type = str(action.get("order_type") or "market").lower()
     limit_price = float(_to_decimal(action.get("limit_price_points") or 0, name="limit_price_points", minimum=0)) or None
     if atype in {"buy_percent", "buy_amount"}:
-        available = int(funding.get("available_points") or 0)
+        wallet_available = int(funding.get("available_points") or 0)
+        budget_limit = int(budget_points or 0)
+        if budget_limit > 0:
+            committed = _bot_open_order_frozen_points(conn, bot_id) if bot_id is not None else 0
+            available = min(wallet_available, max(0, budget_limit - committed))
+        else:
+            available = wallet_available
         amount = int(float(action.get("amount_points") or 0))
         if atype == "buy_percent":
             amount = int(available * max(0.0, min(float(action.get("percent") or 0), 100.0)) / 100)
-        fee_rate = float(market["fee_rate_percent"] or 0) / 100.0
         spend = max(0, min(amount, available))
         if spend <= 0:
-            raise ValueError("workflow buy action has no available funds")
-        price_decimal = _to_decimal(price_points or 0, name="price_points", minimum=0.00000001)
-        spend_decimal = Decimal(str(spend)) / Decimal(str(1 + fee_rate))
-        units = int((spend_decimal * Decimal(ASSET_SCALE) / price_decimal).quantize(Decimal("1"), rounding=ROUND_DOWN))
-        if units <= 0:
-            raise ValueError("workflow buy action is too small")
+            raise ValueError("workflow buy action has no available budget or funds")
+        units = _units_for_point_budget(
+            budget_points=spend,
+            price_points=price_points or 0,
+            fee_rate_percent=float(market["fee_rate_percent"] or 0),
+            label="workflow buy action",
+        )
         return {"side": "buy", "order_type": order_type, "quantity": units_to_quantity(units), "limit_price_points": limit_price}
     if atype in {"sell_percent", "close_all"}:
-        sellable_units = max(0, int(position["quantity_units"] or 0) - int(position["locked_quantity_units"] or 0))
+        sellable_units = max(0, int(position["quantity_units"] or 0))
         percent = 100.0 if atype == "close_all" else max(0.0, min(float(action.get("percent") or 0), 100.0))
         units = int(sellable_units * percent / 100)
         if units <= 0:
@@ -489,7 +547,7 @@ def list_trading_bots(service, *, actor):
         }
         bots = []
         for row in conn.execute("SELECT * FROM trading_bots WHERE user_id=? ORDER BY id DESC LIMIT 100", (user_id,)).fetchall():
-            bot = service._bot_payload(row)
+            bot = _bot_payload_with_budget_meta(service, conn, row)
             current_price = market_prices.get(str(bot.get("market_symbol") or ""), 0)
             try:
                 bot["condition_checks"] = bot_condition_checks(service, bot, current_price)
@@ -569,7 +627,7 @@ def save_trading_bot(service, *, actor, payload, bot_uuid=None):
         row = conn.execute("SELECT * FROM trading_bots WHERE id=?", (bot_id,)).fetchone()
         service._audit_event(conn, event_type, "trading bot workflow saved", actor=actor, target_user_id=user_id, market_symbol=row["market_symbol"], metadata={"bot_uuid": row["bot_uuid"], "bot_type": row["bot_type"], "trigger_type": row["trigger_type"], "side": row["side"], "order_type": row["order_type"]})
         conn.commit()
-        return {"ok": True, "bot": service._bot_payload(row)}
+        return {"ok": True, "bot": _bot_payload_with_budget_meta(service, conn, row)}
     except Exception:
         conn.rollback()
         raise
@@ -608,7 +666,7 @@ def set_trading_bot_share_parameters(service, *, actor, bot_uuid, share_paramete
             metadata={"bot_uuid": updated["bot_uuid"], "share_parameters": bool(share_parameters)},
         )
         conn.commit()
-        return {"ok": True, "bot": service._bot_payload(updated)}
+        return {"ok": True, "bot": _bot_payload_with_budget_meta(service, conn, updated)}
     except Exception:
         conn.rollback()
         raise
@@ -659,7 +717,7 @@ def increase_trading_bot_max_runs(service, *, actor, bot_uuid, delta):
             raise ValueError("cannot update another user's trading bot")
         if int(row["max_runs"] or 0) >= UNLIMITED_BOT_MAX_RUNS:
             conn.commit()
-            return {"ok": True, "bot": service._bot_payload(row), "delta": 0, "unlimited": True}
+            return {"ok": True, "bot": _bot_payload_with_budget_meta(service, conn, row), "delta": 0, "unlimited": True}
         next_max_runs = _to_int(int(row["max_runs"] or 0) + increment, name="max_runs", minimum=1, maximum=10000)
         now = _now_text()
         conn.execute(
@@ -682,7 +740,81 @@ def increase_trading_bot_max_runs(service, *, actor, bot_uuid, delta):
             },
         )
         conn.commit()
-        return {"ok": True, "bot": service._bot_payload(updated), "delta": increment}
+        return {"ok": True, "bot": _bot_payload_with_budget_meta(service, conn, updated), "delta": increment}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def adjust_trading_bot_budget(service, *, actor, bot_uuid, budget_points=None, delta_points=None):
+    user_id = service._actor_id(actor)
+    if not user_id:
+        raise ValueError("login required")
+    if budget_points is None and delta_points is None:
+        raise ValueError("budget_points or delta_points is required")
+    if budget_points is not None and delta_points is not None:
+        raise ValueError("set budget_points or delta_points, not both")
+    conn = service.get_db()
+    try:
+        service.ensure_schema(conn)
+        conn.commit()
+        conn.execute("BEGIN IMMEDIATE")
+        service._assert_writable(conn)
+        row = conn.execute("SELECT * FROM trading_bots WHERE bot_uuid=?", (str(bot_uuid or ""),)).fetchone()
+        if not row:
+            raise ValueError("trading bot not found")
+        if int(row["user_id"]) != int(user_id):
+            raise ValueError("cannot update another user's trading bot")
+        current_budget = int(row["budget_points"] or 0)
+        if budget_points is not None:
+            next_budget = _to_int(budget_points, name="budget_points", minimum=0, maximum=10**12)
+            delta = next_budget - current_budget
+        else:
+            delta = _to_int(delta_points, name="delta_points", minimum=-(10**12), maximum=10**12)
+            next_budget = _to_int(current_budget + delta, name="budget_points", minimum=0, maximum=10**12)
+        open_frozen = _bot_open_order_frozen_points(conn, row["id"])
+        floor = _bot_budget_floor(row, open_frozen)
+        bot_type = str(row["bot_type"] or "conditional")
+        if bot_type == "dca" and next_budget < floor:
+            raise ValueError(f"budget_points cannot be lower than {floor} points")
+        if bot_type != "dca" and next_budget != 0 and next_budget < floor:
+            raise ValueError(f"workflow budget cannot be lower than {floor} points while bot orders are open")
+        now = _now_text()
+        conn.execute(
+            "UPDATE trading_bots SET budget_points=?, updated_at=? WHERE id=?",
+            (next_budget, now, row["id"]),
+        )
+        updated = conn.execute("SELECT * FROM trading_bots WHERE id=?", (row["id"],)).fetchone()
+        service._audit_event(
+            conn,
+            "TRADING_BOT_BUDGET_UPDATED",
+            "trading bot budget updated",
+            actor=actor,
+            target_user_id=user_id,
+            market_symbol=row["market_symbol"],
+            metadata={
+                "bot_uuid": row["bot_uuid"],
+                "bot_type": bot_type,
+                "previous_budget_points": current_budget,
+                "budget_points": next_budget,
+                "delta_points": delta,
+                "open_order_frozen_points": open_frozen,
+                "minimum_budget_points": floor,
+            },
+        )
+        conn.commit()
+        payload = _bot_payload_with_budget_meta(service, conn, updated)
+        return {
+            "ok": True,
+            "bot": payload,
+            "delta_points": delta,
+            "previous_budget_points": current_budget,
+            "budget_points": next_budget,
+            "open_order_frozen_points": open_frozen,
+            "minimum_budget_points": floor,
+        }
     except Exception:
         conn.rollback()
         raise
@@ -853,6 +985,8 @@ def run_trading_bot_rows(service, rows):
                     market=market,
                     decision=decision,
                     price_points=observed_price,
+                    budget_points=int(row["budget_points"] or 0),
+                    bot_id=int(row["id"]),
                 )
                 if not order_payload:
                     price_conn.close()
@@ -873,6 +1007,7 @@ def run_trading_bot_rows(service, rows):
                 quantity_text = quantity_text_from_budget(
                     budget_points=int(row["budget_points"] or 0),
                     price_points=observed_price,
+                    fee_rate_percent=float(market["fee_rate_percent"] or 0),
                 )
             if order_payload:
                 quantity_text = order_payload["quantity"]

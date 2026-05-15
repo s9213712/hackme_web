@@ -11,14 +11,11 @@ from decimal import Decimal, ROUND_HALF_UP
 from services.system.notifications import create_notification_if_enabled
 from services.server_mode.routing import resolve_table
 from services.trading.accounting.core import (
-    fee_points,
+    fee_micropoints,
     notional_points,
+    points_from_micropoints_ceil,
     quantity_to_units,
     units_to_quantity,
-)
-from services.trading.accounting.interest import (
-    margin_interest_billable_carry_micropoints,
-    margin_interest_billable_points,
 )
 from services.trading.constants import ASSET_SCALE, POINT_MICRO_SCALE
 from services.trading.notifications import (
@@ -70,6 +67,39 @@ def _normalize_optional_risk_percent(value, *, name):
 
 def _is_short_position(position_type):
     return str(position_type or "") in {POSITION_MARGIN_SHORT, POSITION_MARGIN_SHORT_LEGACY}
+
+
+def margin_withdrawable_collateral_payload(*, collateral, unrealized_pnl, equity_after, maintenance_points):
+    collateral = int(collateral or 0)
+    unrealized_pnl = int(unrealized_pnl or 0)
+    equity_after = int(equity_after or 0)
+    maintenance_points = int(maintenance_points or 0)
+    profitable_surplus = max(0, unrealized_pnl)
+    collateral_cap = max(0, collateral - 1)
+    maintenance_cap = max(0, equity_after - maintenance_points - 1)
+    max_withdrawable = max(0, min(collateral_cap, profitable_surplus, maintenance_cap))
+    if collateral_cap <= 0:
+        reason = "collateral_floor"
+    elif profitable_surplus <= 0:
+        reason = "no_unrealized_profit"
+    elif maintenance_cap <= 0:
+        reason = "maintenance_buffer"
+    else:
+        reason = "estimated"
+    after_ratio = (
+        round(((equity_after - max_withdrawable) / maintenance_points) * 100, 2)
+        if max_withdrawable > 0 and maintenance_points > 0
+        else None
+    )
+    return {
+        "max_withdrawable_collateral_points": max_withdrawable,
+        "withdrawable_collateral_points": max_withdrawable,
+        "withdrawable_collateral_reason": reason,
+        "withdrawable_collateral_profit_cap_points": profitable_surplus,
+        "withdrawable_collateral_collateral_cap_points": collateral_cap,
+        "withdrawable_collateral_maintenance_cap_points": maintenance_cap,
+        "withdrawable_collateral_after_ratio_percent": after_ratio,
+    }
 
 
 def margin_risk_payload(
@@ -134,7 +164,11 @@ def margin_risk_payload(
         )
     quantity_units = int(position["quantity_units"])
     exit_notional = notional_points(quantity_units, price)
-    close_fee = fee_points(exit_notional, float(market["fee_rate_percent"] or 0))
+    fee_rate_percent = float(market["fee_rate_percent"] or 0)
+    open_fee_micro = int(position["open_fee_micropoints"] or 0) if "open_fee_micropoints" in position.keys() else 0
+    close_fee_micro = fee_micropoints(exit_notional, fee_rate_percent)
+    settlement_fee_micro = open_fee_micro + close_fee_micro
+    close_fee = points_from_micropoints_ceil(settlement_fee_micro)
     interest = service._margin_interest_points(position, now_text=now_text)
     collateral = int(position["collateral_points"] or 0)
     principal = int(position["principal_points"] or 0)
@@ -158,14 +192,15 @@ def margin_risk_payload(
     settings = service._settings_payload(conn)
     maintenance_percent = float(settings.get("margin_maintenance_percent") or 0)
     maintenance_points = int(math.ceil(exit_notional * maintenance_percent / 100.0))
-    fee_rate_percent = float(market["fee_rate_percent"] or 0)
     fee_rate_decimal = Decimal(str(fee_rate_percent)) / Decimal("100")
+    open_fee_exact = Decimal(open_fee_micro) / Decimal(POINT_MICRO_SCALE)
     break_even_price_points = None
     quantity_decimal = Decimal(quantity_units)
     if quantity_units > 0:
         if position["position_type"] == POSITION_MARGIN_LONG:
             required_exit_value = (
                 Decimal(collateral + principal + int(position["open_fee_points"] or 0))
+                + open_fee_exact
                 + Decimal(str(interest))
             )
             denominator = Decimal("1") - fee_rate_decimal
@@ -178,8 +213,10 @@ def margin_risk_payload(
                     ).quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP)
                 )
         else:
-            recoverable_value = Decimal(principal - int(position["open_fee_points"] or 0)) - Decimal(
-                str(interest)
+            recoverable_value = (
+                Decimal(principal - int(position["open_fee_points"] or 0))
+                - open_fee_exact
+                - Decimal(str(interest))
             )
             denominator = Decimal("1") + fee_rate_decimal
             if recoverable_value > 0 and denominator > 0:
@@ -231,6 +268,12 @@ def margin_risk_payload(
     else:
         risk_status = "normal"
         risk_reason = "融資做多在價格下跌時會虧損，價格越低維持率越低"
+    withdrawable = margin_withdrawable_collateral_payload(
+        collateral=collateral,
+        unrealized_pnl=delta,
+        equity_after=equity_after,
+        maintenance_points=maintenance_points,
+    )
     return {
         "price_points": price,
         "price_source": price_source,
@@ -243,6 +286,9 @@ def margin_risk_payload(
         ),
         "exit_notional_points": exit_notional,
         "close_fee_points": close_fee,
+        "open_fee_micropoints": open_fee_micro,
+        "close_fee_micropoints": close_fee_micro,
+        "settlement_fee_micropoints": settlement_fee_micro,
         "interest_points": interest,
         "collateral_points": collateral,
         "initial_margin_points": collateral,
@@ -264,6 +310,7 @@ def margin_risk_payload(
         "risk_status": risk_status,
         "risk_reason": risk_reason,
         "liquidation_required": equity_after <= maintenance_points,
+        **withdrawable,
     }
 
 
@@ -309,6 +356,9 @@ def margin_position_payload_with_risk(
     item["entry_notional_points"] = risk.get("entry_notional_points")
     item["current_price_points"] = risk.get("price_points")
     item["unrealized_pnl_points"] = risk.get("unrealized_pnl_points")
+    item["max_withdrawable_collateral_points"] = risk.get("max_withdrawable_collateral_points")
+    item["withdrawable_collateral_reason"] = risk.get("withdrawable_collateral_reason")
+    item["withdrawable_collateral_after_ratio_percent"] = risk.get("withdrawable_collateral_after_ratio_percent")
     item["breakeven_price_points"] = risk.get("breakeven_price_points")
     item["liquidation_price_points"] = risk.get("liquidation_price_points")
     return item
@@ -332,85 +382,34 @@ def accrue_margin_interest(service, conn, position, *, actor=None, now_text=None
         hours=due_hours,
     )
     total_micro = carry + due_micro
-    due_points = margin_interest_billable_points(total_micro, point_micro_scale=POINT_MICRO_SCALE)
-    next_carry = margin_interest_billable_carry_micropoints(total_micro, point_micro_scale=POINT_MICRO_SCALE)
-    if due_points <= 0:
-        conn.execute(
-            f"UPDATE {margin_positions_table} SET interest_accrued_hours=?, interest_carry_micropoints=?, updated_at=? WHERE id=?",
-            (total_hours, next_carry, _now_text(), position["id"]),
-        )
-        return conn.execute(f"SELECT * FROM {margin_positions_table} WHERE id=?", (position["id"],)).fetchone()
-
     user_id = int(position["user_id"])
-    wallet_payload = service._wallet_payload(conn, user_id, ctx=route_ctx)
-    available = int(wallet_payload.get("points_balance") or 0)
-    paid = min(due_points, available)
-    capitalized = due_points - paid
-    ledger_uuid = None
-    if paid:
-        ledger_uuid = service._ledger(
-            conn,
-            ctx=route_ctx,
-            user_id=user_id,
-            currency_type="points",
-            direction="debit",
-            amount=paid,
-            action_type="trading_margin_interest_hourly",
-            reference_type="trading_margin_position",
-            reference_id=position["position_uuid"],
-            idempotency_key=f"trading:margin:interest:{position['position_uuid']}:{total_hours}",
-            reason="TRADING_MARGIN_HOURLY_INTEREST",
-            public_metadata={
-                "market": position["market_symbol"],
-                "position_type": position["position_type"],
-                "charged_hours": due_hours,
-                "total_accrued_hours": total_hours,
-                "capitalized_interest_points": capitalized,
-                "carry_micropoints": next_carry,
-            },
-            actor=actor,
-        )["ledger_uuid"]
-        service._reserve_delta(
-            conn,
-            delta=paid,
-            event_type="margin_interest_retained",
-            reason="TRADING_MARGIN_HOURLY_INTEREST",
-            actor=actor,
-            order_id=None,
-            fill_id=None,
-            points_ledger_uuid=ledger_uuid,
-        )
-
     now = _now_text()
     conn.execute(
         f"""
         UPDATE {margin_positions_table}
-        SET interest_points=interest_points+?,
-            interest_paid_points=interest_paid_points+?,
-            interest_accrued_hours=?,
+        SET interest_accrued_hours=?,
             interest_carry_micropoints=?,
             updated_at=?
         WHERE id=?
         """,
-        (capitalized, paid, total_hours, next_carry, now, position["id"]),
+        (total_hours, total_micro, now, position["id"]),
     )
     service._audit_event(
         conn,
         "TRADING_MARGIN_INTEREST_ACCRUED",
-        "margin borrow interest accrued hourly",
+        "margin borrow interest accrued as exact micropoints",
         actor=actor,
         target_user_id=user_id,
         market_symbol=position["market_symbol"],
-        severity="info" if not capitalized else "warning",
+        severity="info",
         metadata={
             "position_uuid": position["position_uuid"],
-            "due_points": due_points,
-            "paid_points": paid,
-            "capitalized_points": capitalized,
+            "due_micropoints": due_micro,
+            "total_unsettled_micropoints": total_micro,
+            "estimated_settlement_points": points_from_micropoints_ceil(total_micro),
             "charged_hours": due_hours,
             "total_accrued_hours": total_hours,
-            "carry_micropoints": next_carry,
-            "ledger_uuid": ledger_uuid,
+            "settlement_policy": "ceil only on margin close or liquidation",
         },
     )
     return conn.execute(f"SELECT * FROM {margin_positions_table} WHERE id=?", (position["id"],)).fetchone()
@@ -740,7 +739,9 @@ def open_margin_position(
         )
         if collateral < min_collateral:
             raise ValueError(f"collateral below minimum {min_collateral}")
-        fee = fee_points(notional, float(market["fee_rate_percent"] or 0))
+        fee_micro = fee_micropoints(notional, float(market["fee_rate_percent"] or 0))
+        estimated_fee = points_from_micropoints_ceil(fee_micro)
+        fee = 0
         if position_type == POSITION_MARGIN_LONG and collateral >= notional:
             raise ValueError(f"collateral must be lower than notional {notional} for margin long")
         principal = max(0, notional - collateral) if position_type == POSITION_MARGIN_LONG else notional
@@ -751,13 +752,13 @@ def open_margin_position(
             available = int(wallet_payload.get("points_balance") or 0)
             if trial:
                 available += int(trial["available_points"] or 0)
-            upfront_required = collateral + fee
+            upfront_required = collateral
             if upfront_required > available:
-                max_collateral = max(0, available - fee)
+                max_collateral = max(0, available)
                 raise ValueError(
                     "margin open funds insufficient "
                     f"required={upfront_required} available={available} "
-                    f"collateral={collateral} fee={fee} max_collateral={max_collateral}"
+                    f"collateral={collateral} estimated_fee_on_close={estimated_fee} max_collateral={max_collateral}"
                 )
         borrowed_asset_symbol = service._margin_borrowed_asset_symbol(market, position_type)
         interest_interval_hours = int(borrow_settings["interest_interval_hours"] or 0)
@@ -775,14 +776,14 @@ def open_margin_position(
         position_uuid = str(uuid.uuid4())
         ledger_uuids = []
         if is_root_simulated:
-            service._sim_delta(conn, user_id, balance_delta=-(collateral + fee), locked_delta=collateral)
+            service._sim_delta(conn, user_id, balance_delta=-collateral, locked_delta=collateral)
             trial_fee = 0
             chain_fee = 0
             trial_collateral = 0
             chain_collateral = 0
         else:
-            trial_fee = service._trial_spend(conn, user_id, fee)
-            chain_fee = fee - trial_fee
+            trial_fee = 0
+            chain_fee = 0
             trial_collateral = service._trial_deploy(conn, user_id, collateral)
             chain_collateral = collateral - trial_collateral
         if chain_collateral:
@@ -810,38 +811,6 @@ def open_margin_position(
                     ctx=route_ctx,
                 )["ledger_uuid"]
             )
-        if chain_fee:
-            ledger_uuids.append(
-                service._ledger(
-                    conn,
-                    user_id=user_id,
-                    currency_type="points",
-                    direction="debit",
-                    amount=chain_fee,
-                    action_type="trading_margin_open_fee",
-                    reference_type="trading_margin_position",
-                    reference_id=position_uuid,
-                    idempotency_key=f"trading:margin:open_fee:{position_uuid}",
-                    reason="TRADING_MARGIN_OPEN_FEE",
-                    public_metadata={
-                        "position_type": position_type,
-                        "market": market["symbol"],
-                        "fee_rate_percent": float(market["fee_rate_percent"] or 0),
-                        "trial_fee_points": trial_fee,
-                        "chain_fee_points": chain_fee,
-                    },
-                    actor=actor,
-                    ctx=route_ctx,
-                )["ledger_uuid"]
-            )
-        if fee and not is_root_simulated:
-            service._reserve_delta(
-                conn,
-                delta=fee,
-                event_type="margin_fee_retained",
-                reason="TRADING_MARGIN_OPEN_FEE",
-                actor=actor,
-            )
         if principal and not is_root_simulated:
             service._reserve_delta(
                 conn,
@@ -857,11 +826,12 @@ def open_margin_position(
                 INSERT INTO {margin_positions_table} (
                     position_uuid, tester_user_id, user_id, market_symbol, position_type, quantity_units,
                     entry_price_points, principal_points, collateral_points, open_fee_points,
+                    open_fee_micropoints,
                     stop_loss_percent, take_profit_percent,
                     interest_percent_daily, interest_paid_points, interest_accrued_hours, interest_interval_hours,
                     interest_minimum_hours, borrowed_asset_symbol, status, opened_at, updated_at,
                     collateral_trial_points, collateral_chain_points, open_fee_trial_points, open_fee_chain_points
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     position_uuid,
@@ -874,6 +844,7 @@ def open_margin_position(
                     principal,
                     collateral,
                     fee,
+                    fee_micro,
                     stop_loss_percent,
                     take_profit_percent,
                     effective_interest_percent_daily,
@@ -894,11 +865,12 @@ def open_margin_position(
                 INSERT INTO {margin_positions_table} (
                     position_uuid, user_id, market_symbol, position_type, quantity_units,
                     entry_price_points, principal_points, collateral_points, open_fee_points,
+                    open_fee_micropoints,
                     stop_loss_percent, take_profit_percent,
                     interest_percent_daily, interest_paid_points, interest_accrued_hours, interest_interval_hours,
                     interest_minimum_hours, borrowed_asset_symbol, status, opened_at, updated_at,
                     collateral_trial_points, collateral_chain_points, open_fee_trial_points, open_fee_chain_points
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     position_uuid,
@@ -910,6 +882,7 @@ def open_margin_position(
                     principal,
                     collateral,
                     fee,
+                    fee_micro,
                     stop_loss_percent,
                     take_profit_percent,
                     effective_interest_percent_daily,
@@ -952,6 +925,9 @@ def open_margin_position(
                 "interest_minimum_hours": interest_minimum_hours,
                 "collateral_points": collateral,
                 "open_fee_points": fee,
+                "open_fee_micropoints": fee_micro,
+                "estimated_open_fee_points": estimated_fee,
+                "fee_settlement_policy": "ceil on margin close or liquidation",
                 "stop_loss_percent": stop_loss_percent,
                 "take_profit_percent": take_profit_percent,
                 "trial_collateral_points": trial_collateral,
@@ -1229,8 +1205,18 @@ def withdraw_margin_collateral(
             raise ValueError("抽出後保證金不可為 0")
         market = service._market(conn, position["market_symbol"])
         risk_before = service._margin_risk_payload(conn, position, market=market)
-        profitable_surplus = max(0, int(risk_before.get("unrealized_pnl_points") or 0))
-        max_withdrawable = min(collateral - 1, profitable_surplus)
+        withdrawable = margin_withdrawable_collateral_payload(
+            collateral=collateral,
+            unrealized_pnl=int(risk_before.get("unrealized_pnl_points") or 0),
+            equity_after=int(risk_before.get("equity_after_points") or 0),
+            maintenance_points=int(
+                risk_before.get("maintenance_margin_points")
+                or risk_before.get("maintenance_points")
+                or 0
+            ),
+        )
+        profitable_surplus = int(withdrawable["withdrawable_collateral_profit_cap_points"])
+        max_withdrawable = int(withdrawable["max_withdrawable_collateral_points"])
         if profitable_surplus <= 0:
             raise ValueError("目前沒有可抽出的未實現盈利")
         if amount > max_withdrawable:
@@ -1643,10 +1629,28 @@ def close_margin_position(
         conn.execute(
             f"""
             UPDATE {margin_positions_table}
-            SET close_fee_points=?, interest_points=?, exit_price_points=?, realized_pnl_points=?, status=?, closed_at=?, updated_at=?
+            SET close_fee_points=?,
+                close_fee_micropoints=?,
+                interest_points=?,
+                interest_carry_micropoints=0,
+                exit_price_points=?,
+                realized_pnl_points=?,
+                status=?,
+                closed_at=?,
+                updated_at=?
             WHERE id=?
             """,
-            (close_fee, interest, price, delta, next_status, now, now, position["id"]),
+            (
+                close_fee,
+                int(risk.get("settlement_fee_micropoints") or risk.get("close_fee_micropoints") or 0),
+                interest,
+                price,
+                delta,
+                next_status,
+                now,
+                now,
+                position["id"],
+            ),
         )
         event_type = (
             "TRADING_MARGIN_POSITION_LIQUIDATED"

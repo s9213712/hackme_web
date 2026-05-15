@@ -32,7 +32,7 @@ Core conclusion:
 | [DISCORD_CONTENT_FORMATTING.md](DISCORD_CONTENT_FORMATTING.md) | Web-to-Discord and Discord-to-web formatting and sanitization |
 | [DISCORD_PERMISSION_MAPPING.md](DISCORD_PERMISSION_MAPPING.md) | Inbound identity, role, board, chat, block, and mode checks |
 | [DISCORD_ATTACHMENT_POLICY.md](DISCORD_ATTACHMENT_POLICY.md) | V1 link-only and V2 quarantine/import attachment rules |
-| [DISCORD_AUDIT_EVENT_CONTRACT.md](DISCORD_AUDIT_EVENT_CONTRACT.md) | Discord audit event names and required fields |
+| [DISCORD_AUDIT_EVENT_SPEC.md](DISCORD_AUDIT_EVENT_SPEC.md) | Discord audit event names and required fields |
 | [DISCORD_SYNC_STATE_MACHINE.md](DISCORD_SYNC_STATE_MACHINE.md) | Binding, event, job, mapping, and DM consent lifecycles |
 | [DISCORD_SYNC_PRIVACY_BOUNDARY.md](DISCORD_SYNC_PRIVACY_BOUNDARY.md) | Data classes, DM privacy, E2EE/attachment boundaries, retention |
 | [DISCORD_SYNC_RATE_LIMITS.md](DISCORD_SYNC_RATE_LIMITS.md) | Retry, bucket, global pause, and worker queue behavior |

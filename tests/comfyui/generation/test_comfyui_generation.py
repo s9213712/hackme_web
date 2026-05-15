@@ -4,6 +4,7 @@ from tests.comfyui._integration_suite import (
     test_comfyui_default_dimensions_are_root_configurable,
     test_comfyui_generate_async_job_captures_request_meta_before_thread_handoff,
     test_comfyui_generate_async_job_reports_progress_and_result,
+    test_comfyui_async_generation_worker_survives_logout_or_session_change,
     test_comfyui_generate_rejects_controlnet_strength_out_of_range,
     test_comfyui_generate_rejects_invalid_control_image_format,
     test_comfyui_generate_rejects_unsupported_lora_base_model,

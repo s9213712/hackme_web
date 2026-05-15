@@ -218,3 +218,40 @@ def test_video_boost_spends_owner_points_and_promotes_active_video():
     assert [video["id"] for video in list_videos(conn, actor=None, sort="new")][:2] == [old_video["id"], new_video["id"]]
     wallet = conn.execute("SELECT soft_balance FROM points_wallets WHERE user_id=1").fetchone()
     assert int(wallet["soft_balance"]) == 180
+
+
+def test_video_search_matches_metadata_and_respects_visibility():
+    conn = video_test_db()
+    seed_cloud_file(conn, file_id="lofi-public", owner_user_id=1, mime="video/mp4")
+    seed_cloud_file(conn, file_id="cooking-public", owner_user_id=1, mime="video/mp4")
+    seed_cloud_file(conn, file_id="lofi-private", owner_user_id=1, mime="video/mp4")
+    public = publish_video(
+        conn,
+        actor=actor(1, "owner"),
+        cloud_file_id="lofi-public",
+        title="LoFi Study Mix",
+        description="piano focus session",
+    )
+    publish_video(
+        conn,
+        actor=actor(1, "owner"),
+        cloud_file_id="cooking-public",
+        title="Cooking Notes",
+        description="kitchen playlist",
+    )
+    private = publish_video(
+        conn,
+        actor=actor(1, "owner"),
+        cloud_file_id="lofi-private",
+        title="Private LoFi Draft",
+        visibility="private",
+    )
+
+    anonymous_ids = {video["id"] for video in list_videos(conn, actor=None, query="lofi")}
+    owner_ids = {video["id"] for video in list_videos(conn, actor=actor(1, "owner"), query="lofi")}
+    description_ids = {video["id"] for video in list_videos(conn, actor=None, query="piano")}
+
+    assert public["id"] in anonymous_ids
+    assert private["id"] not in anonymous_ids
+    assert private["id"] in owner_ids
+    assert description_ids == {public["id"]}

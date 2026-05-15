@@ -311,6 +311,16 @@ def _mark_asset_unavailable(conn, *, file_row, reason):
     return serialize_stream_asset(conn, asset["uploaded_file_id"])
 
 
+def mark_stream_asset_processing(conn, *, file_row, error_message=""):
+    ensure_media_stream_schema(conn)
+    if not file_row or _row_value(file_row, "deleted_at"):
+        raise ValueError("file not found")
+    if is_e2ee_file(file_row):
+        return _mark_asset_unavailable(conn, file_row=file_row, reason="strict E2EE files cannot generate server-side HLS")
+    asset = _upsert_asset_row(conn, file_row=file_row, status="processing", error_message=error_message)
+    return serialize_stream_asset(conn, asset["uploaded_file_id"])
+
+
 def _set_asset_ready(conn, *, file_row, master_manifest_path, duration_seconds):
     now = _now()
     conn.execute(
@@ -666,18 +676,20 @@ def stream_playback_payload(conn, *, file_row, video_id):
     status = get_stream_status(conn, file_row=file_row)
     media_type = _file_media_type(file_row)
     direct_url = f"/api/videos/{int(video_id)}/stream"
+    direct_fallback_allowed = not is_server_encrypted_file(file_row)
     payload = {
         "mode": "direct",
         "media_type": media_type,
         "source_mode": str(file_row["privacy_mode"] or "standard_plain"),
-        "fallback_url": direct_url,
-        "stream_url": direct_url,
+        "fallback_url": direct_url if direct_fallback_allowed else "",
+        "stream_url": direct_url if direct_fallback_allowed else "",
         "master_url": "",
         "hls_js_url": HLS_JS_URL,
         "player_strategy": "direct_only",
-        "stream_warning": "目前使用直接串流。",
+        "stream_warning": "目前使用直接串流。" if direct_fallback_allowed else "伺服端加密影音不提供主程序直接解密串流，請等待 HLS 處理完成。",
         "status": status,
         "streaming_ready": False,
+        "direct_fallback_allowed": direct_fallback_allowed,
     }
     if status and status.get("status") == "ready" and status.get("master_manifest_path"):
         payload["mode"] = "hls"

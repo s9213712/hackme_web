@@ -7,9 +7,11 @@ from decimal import Decimal, ROUND_HALF_UP
 from services.server_mode.routing import resolve_table
 from services.trading._clock import now_text as _now_text
 from services.trading.accounting.core import (
-    fee_points,
+    fee_micropoints,
     notional_points,
+    points_from_micropoints_ceil,
     quantity_to_units,
+    split_micropoints_for_units,
     units_to_quantity,
 )
 from services.trading.validators import _to_decimal, _to_int
@@ -93,6 +95,7 @@ def place_order(
     take_profit_percent=None,
     emergency_close=False,
     is_grid_order=False,
+    use_locked_inventory=False,
     ctx=None,
 ):
     ctx = service._resolve_trading_ctx(ctx, action="place_order")
@@ -109,8 +112,11 @@ def place_order(
     take_profit_percent = _normalize_optional_risk_percent(take_profit_percent, name="take_profit_percent")
     emergency_close = bool(emergency_close)
     is_grid_order = bool(is_grid_order)
+    use_locked_inventory = bool(use_locked_inventory)
     if emergency_close and (side != "sell" or order_type != "market"):
         raise ValueError("emergency close only supports market sell")
+    if use_locked_inventory and (side != "sell" or not is_grid_order):
+        raise ValueError("locked inventory can only be used by grid sell orders")
     quantity_units = quantity_to_units(quantity)
     conn = service.get_db()
     try:
@@ -164,8 +170,10 @@ def place_order(
             effective_fee_rate_percent = service._grid_fee_rate_percent(base_fee_rate, settings)
         else:
             effective_fee_rate_percent = base_fee_rate
-        fee = fee_points(estimated_notional, effective_fee_rate_percent)
+        fee_micro = fee_micropoints(estimated_notional, effective_fee_rate_percent)
+        fee = 0 if side == "buy" else points_from_micropoints_ceil(fee_micro)
         total_points = estimated_notional + fee
+        fee_reserve_points = fee if (is_grid_order and side == "sell" and not executable) else 0
         if estimated_notional < int(market["min_order_points"]):
             raise ValueError("order notional is below market minimum")
         if estimated_notional > int(market["max_order_points"]):
@@ -210,11 +218,27 @@ def place_order(
             trial_frozen = service._trial_lock_for_buy(conn, user_id, total_points)
             chain_frozen = total_points - trial_frozen
             funding_mode = "trial_mixed" if trial_frozen else "points_chain"
-        elif side == "sell" and funding_mode != "root_simulated":
-            trial_position = service._trial_position(conn, user_id, market["symbol"])
-            if int(trial_position["quantity_units"] or 0) > 0:
-                funding_mode = "trial_mixed"
-        frozen_points = total_points if side == "buy" else 0
+        elif side == "sell":
+            if funding_mode != "root_simulated":
+                trial_position = service._trial_position(conn, user_id, market["symbol"])
+                if int(trial_position["quantity_units"] or 0) > 0:
+                    funding_mode = "trial_mixed"
+            if fee_reserve_points > 0 and funding_mode == "root_simulated":
+                account = service._root_sim_account(conn, user_id)
+                root_available = int(account["balance_points"] or 0)
+                if fee_reserve_points > root_available:
+                    raise ValueError(
+                        f"root 網格賣單手續費預留不足：需要 {fee_reserve_points} 點，目前可用 {root_available} 點"
+                    )
+            elif fee_reserve_points > 0:
+                wallet_payload = service._wallet_payload(conn, user_id, ctx=ctx)
+                wallet_available = int(wallet_payload.get("points_balance") or 0)
+                if fee_reserve_points > wallet_available:
+                    raise ValueError(
+                        f"網格賣單手續費預留不足：需要 {fee_reserve_points} 點，目前可用 {wallet_available} 點"
+                    )
+                chain_frozen = fee_reserve_points
+        frozen_points = total_points if side == "buy" else fee_reserve_points
         if emergency_close:
             order_reason = "EMERGENCY_MARKET_CLOSE"
         elif is_grid_order:
@@ -229,9 +253,9 @@ def place_order(
                 INSERT INTO {orders_table} (
                     order_uuid, tester_user_id, user_id, market_symbol, side, order_type, funding_mode, execution_mode,
                     quantity_units, limit_price_points, execution_price_points, status,
-                    frozen_points, trial_frozen_points, chain_frozen_points, fee_points,
+                    frozen_points, trial_frozen_points, chain_frozen_points, fee_points, fee_micropoints,
                     filled_quantity_units, stop_loss_percent, take_profit_percent, reason, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'house_counterparty', ?, ?, ?, 'open', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'house_counterparty', ?, ?, ?, 'open', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
                 """,
                 (
                     order_uuid,
@@ -248,6 +272,7 @@ def place_order(
                     trial_frozen,
                     chain_frozen,
                     fee,
+                    fee_micro,
                     stop_loss_percent,
                     take_profit_percent,
                     order_reason,
@@ -261,9 +286,9 @@ def place_order(
                 INSERT INTO {orders_table} (
                     order_uuid, user_id, market_symbol, side, order_type, funding_mode, execution_mode,
                     quantity_units, limit_price_points, execution_price_points, status,
-                    frozen_points, trial_frozen_points, chain_frozen_points, fee_points,
+                    frozen_points, trial_frozen_points, chain_frozen_points, fee_points, fee_micropoints,
                     filled_quantity_units, stop_loss_percent, take_profit_percent, reason, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 'house_counterparty', ?, ?, ?, 'open', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, 'house_counterparty', ?, ?, ?, 'open', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
                 """,
                 (
                     order_uuid,
@@ -279,6 +304,7 @@ def place_order(
                     trial_frozen,
                     chain_frozen,
                     fee,
+                    fee_micro,
                     stop_loss_percent,
                     take_profit_percent,
                     order_reason,
@@ -315,18 +341,49 @@ def place_order(
                     actor=actor,
                     ctx=ctx,
                 )
-        else:
+        elif fee_reserve_points > 0:
+            if funding_mode == "root_simulated":
+                service._sim_delta(conn, user_id, balance_delta=-fee_reserve_points, locked_delta=fee_reserve_points)
+            elif chain_frozen > 0:
+                service._ledger(
+                    conn,
+                    user_id=user_id,
+                    currency_type="points",
+                    direction="freeze",
+                    amount=chain_frozen,
+                    action_type="trading_freeze",
+                    reference_type="trading_order",
+                    reference_id=order_uuid,
+                    idempotency_key=f"trading:fee_reserve:{order_uuid}",
+                    reason="TRADING_GRID_SELL_FEE_RESERVE",
+                    public_metadata={
+                        "order_id": order_id,
+                        "market": market["symbol"],
+                        "side": side,
+                        "order_type": order_type,
+                        "price_source": price_source,
+                        "fee_rate_percent": effective_fee_rate_percent,
+                        "fee_reserve_points": fee_reserve_points,
+                    },
+                    actor=actor,
+                    ctx=ctx,
+                )
+        if side == "sell":
             position = service._position(conn, user_id, market["symbol"], ctx=ctx)
-            if int(position["quantity_units"]) < quantity_units:
-                raise ValueError("insufficient spot position")
-            conn.execute(
-                f"""
-                UPDATE {positions_table}
-                SET quantity_units=quantity_units-?, locked_quantity_units=locked_quantity_units+?, updated_at=?
-                WHERE user_id=? AND market_symbol=?
-                """,
-                (quantity_units, quantity_units, now, user_id, market["symbol"]),
-            )
+            if use_locked_inventory:
+                if int(position["locked_quantity_units"]) < quantity_units:
+                    raise ValueError("insufficient locked grid spot position")
+            else:
+                if int(position["quantity_units"]) < quantity_units:
+                    raise ValueError("insufficient spot position")
+                conn.execute(
+                    f"""
+                    UPDATE {positions_table}
+                    SET quantity_units=quantity_units-?, locked_quantity_units=locked_quantity_units+?, updated_at=?
+                    WHERE user_id=? AND market_symbol=?
+                    """,
+                    (quantity_units, quantity_units, now, user_id, market["symbol"]),
+                )
 
         if executable:
             order = conn.execute(f"SELECT * FROM {orders_table} WHERE id=?", (order_id,)).fetchone()
@@ -531,7 +588,8 @@ def execute_order(service, conn, order, market, *, actor, ctx=None):
         effective_fee_rate_percent = service._grid_fee_rate_percent(base_fee_rate, settings)
     else:
         effective_fee_rate_percent = base_fee_rate
-    fee = fee_points(notional, effective_fee_rate_percent)
+    fee_micro = fee_micropoints(notional, effective_fee_rate_percent)
+    fee = 0 if side == "buy" else points_from_micropoints_ceil(fee_micro)
     total = notional + fee
     ledger_uuids = []
     funding_mode = order["funding_mode"] if "funding_mode" in order.keys() else "points_chain"
@@ -621,19 +679,21 @@ def execute_order(service, conn, order, market, *, actor, ctx=None):
                 )
         position = service._position(conn, user_id, market["symbol"], ctx=route_ctx)
         prev_qty = int(position["quantity_units"])
+        prev_locked_qty = int(position["locked_quantity_units"] or 0)
+        prev_total_qty = prev_qty + prev_locked_qty
         prev_cost = _to_decimal(position["avg_cost_points"] or 0, name="avg_cost_points", minimum=0)
-        next_qty = prev_qty + quantity_units
+        next_total_qty = prev_total_qty + quantity_units
         next_avg = (
             float(
                 (
                     (
-                        (Decimal(prev_qty) * prev_cost)
+                        (Decimal(prev_total_qty) * prev_cost)
                         + (Decimal(quantity_units) * Decimal(str(price)))
                     )
-                    / Decimal(next_qty)
+                    / Decimal(next_total_qty)
                 ).quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP)
             )
-            if next_qty
+            if next_total_qty
             else 0
         )
         next_stop_loss_percent = position["stop_loss_percent"] if "stop_loss_percent" in position.keys() else None
@@ -641,14 +701,34 @@ def execute_order(service, conn, order, market, *, actor, ctx=None):
         if "stop_loss_percent" in order.keys() and (order["stop_loss_percent"] is not None or order["take_profit_percent"] is not None):
             next_stop_loss_percent = order["stop_loss_percent"]
             next_take_profit_percent = order["take_profit_percent"]
-        conn.execute(
-            f"""
-            UPDATE {positions_table}
-            SET quantity_units=?, avg_cost_points=?, stop_loss_percent=?, take_profit_percent=?, updated_at=?
-            WHERE user_id=? AND market_symbol=?
-            """,
-            (next_qty, next_avg, next_stop_loss_percent, next_take_profit_percent, _now_text(), user_id, market["symbol"]),
-        )
+        if is_grid_order:
+            conn.execute(
+                f"""
+                UPDATE {positions_table}
+                SET locked_quantity_units=locked_quantity_units+?,
+                    avg_cost_points=?,
+                    fee_carry_micropoints=fee_carry_micropoints+?,
+                    stop_loss_percent=?,
+                    take_profit_percent=?,
+                    updated_at=?
+                WHERE user_id=? AND market_symbol=?
+                """,
+                (quantity_units, next_avg, fee_micro, next_stop_loss_percent, next_take_profit_percent, _now_text(), user_id, market["symbol"]),
+            )
+        else:
+            conn.execute(
+                f"""
+                UPDATE {positions_table}
+                SET quantity_units=quantity_units+?,
+                    avg_cost_points=?,
+                    fee_carry_micropoints=fee_carry_micropoints+?,
+                    stop_loss_percent=?,
+                    take_profit_percent=?,
+                    updated_at=?
+                WHERE user_id=? AND market_symbol=?
+                """,
+                (quantity_units, next_avg, fee_micro, next_stop_loss_percent, next_take_profit_percent, _now_text(), user_id, market["symbol"]),
+            )
         reserve_delta = (
             0
             if funding_mode == "root_simulated"
@@ -666,12 +746,52 @@ def execute_order(service, conn, order, market, *, actor, ctx=None):
     else:
         if notional <= 0:
             raise ValueError("sell notional is too small")
+        frozen_amount = int(order["frozen_points"] or 0)
+        chain_frozen = (
+            int(order["chain_frozen_points"] or 0)
+            if "chain_frozen_points" in order.keys()
+            else (0 if funding_mode == "root_simulated" else frozen_amount)
+        )
+        position = service._position(conn, user_id, market["symbol"], ctx=route_ctx)
+        if int(position["locked_quantity_units"]) < quantity_units:
+            raise ValueError("insufficient locked spot position")
+        total_position_units = int(position["quantity_units"] or 0) + int(position["locked_quantity_units"] or 0)
+        pending_fee_micro = int(position["fee_carry_micropoints"] or 0) if "fee_carry_micropoints" in position.keys() else 0
+        buy_fee_micro = split_micropoints_for_units(pending_fee_micro, quantity_units, total_position_units)
+        settled_fee_micro = buy_fee_micro + fee_micro
+        fee = points_from_micropoints_ceil(settled_fee_micro)
+        total = notional + fee
         net_credit = notional - fee
         if net_credit <= 0:
             raise ValueError("sell notional is too small after fee")
         if funding_mode == "root_simulated":
+            if frozen_amount > 0:
+                service._sim_delta(conn, user_id, balance_delta=frozen_amount, locked_delta=-frozen_amount)
             service._sim_delta(conn, user_id, balance_delta=net_credit)
         else:
+            if chain_frozen > 0:
+                ledger_uuids.append(
+                    service._ledger(
+                        conn,
+                        user_id=user_id,
+                        currency_type="points",
+                        direction="unfreeze",
+                        amount=chain_frozen,
+                        action_type="trading_unfreeze",
+                        reference_type="trading_order",
+                        reference_id=order["order_uuid"],
+                        idempotency_key=f"trading:fee_reserve_release:{order['order_uuid']}",
+                        reason="TRADING_GRID_SELL_FEE_RESERVE_RELEASE",
+                        public_metadata={
+                            "order_id": order["id"],
+                            "market": market["symbol"],
+                            "side": side,
+                            "fee_reserve_points": chain_frozen,
+                        },
+                        actor=actor,
+                        ctx=route_ctx,
+                    )["ledger_uuid"]
+                )
             trial_allocation = service._trial_allocate_sell(
                 conn,
                 user_id=user_id,
@@ -718,19 +838,21 @@ def execute_order(service, conn, order, market, *, actor, ctx=None):
                     actor=actor,
                     order_id=order["id"],
                 )
-        position = service._position(conn, user_id, market["symbol"], ctx=route_ctx)
-        if int(position["locked_quantity_units"]) < quantity_units:
-            raise ValueError("insufficient locked spot position")
         avg_cost = float(
             _to_decimal(position["avg_cost_points"] or 0, name="avg_cost_points", minimum=0)
         )
         gross_cost = notional_points(quantity_units, avg_cost) if avg_cost else 0
-        buy_fee_estimate = fee_points(gross_cost, float(market["fee_rate_percent"] or 0)) if gross_cost else 0
-        net_pnl = net_credit - gross_cost - buy_fee_estimate
+        buy_fee_estimate = points_from_micropoints_ceil(buy_fee_micro)
+        sell_fee_estimate = points_from_micropoints_ceil(fee_micro)
+        net_pnl = net_credit - gross_cost
         sell_pnl_data = {
             "avg_cost_points": avg_cost,
             "gross_cost_points": gross_cost,
             "buy_fee_estimate_points": buy_fee_estimate,
+            "buy_fee_micropoints": buy_fee_micro,
+            "sell_fee_micropoints": fee_micro,
+            "settled_fee_micropoints": settled_fee_micro,
+            "sell_fee_points": sell_fee_estimate,
             "net_pnl_points": net_pnl,
         }
         next_total_units = (
@@ -747,10 +869,15 @@ def execute_order(service, conn, order, market, *, actor, ctx=None):
         conn.execute(
             f"""
             UPDATE {positions_table}
-            SET locked_quantity_units=locked_quantity_units-?, avg_cost_points=?, stop_loss_percent=?, take_profit_percent=?, updated_at=?
+            SET locked_quantity_units=locked_quantity_units-?,
+                avg_cost_points=?,
+                fee_carry_micropoints=MAX(0, fee_carry_micropoints-?),
+                stop_loss_percent=?,
+                take_profit_percent=?,
+                updated_at=?
             WHERE user_id=? AND market_symbol=?
             """,
-            (quantity_units, next_avg_cost, next_stop_loss_percent, next_take_profit_percent, _now_text(), user_id, market["symbol"]),
+            (quantity_units, next_avg_cost, buy_fee_micro, next_stop_loss_percent, next_take_profit_percent, _now_text(), user_id, market["symbol"]),
         )
         reserve_delta = 0 if funding_mode == "root_simulated" else fee
     fill_uuid = str(uuid.uuid4())
@@ -758,9 +885,9 @@ def execute_order(service, conn, order, market, *, actor, ctx=None):
         """
         INSERT INTO trading_fills (
             fill_uuid, order_id, user_id, market_symbol, side, funding_mode, quantity_units,
-            price_points, notional_points, fee_points, reserve_delta_points,
+            price_points, notional_points, fee_points, fee_micropoints, reserve_delta_points,
             trial_repaid_points, trial_profit_points, points_ledger_uuids_json, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             fill_uuid,
@@ -773,6 +900,7 @@ def execute_order(service, conn, order, market, *, actor, ctx=None):
             price,
             notional,
             fee,
+            fee_micro if side == "buy" else settled_fee_micro,
             reserve_delta,
             trial_repaid,
             trial_profit,
@@ -797,8 +925,9 @@ def execute_order(service, conn, order, market, *, actor, ctx=None):
                 pnl_uuid, user_id, market_symbol, order_id, fill_id, funding_mode,
                 quantity_units, avg_cost_points, sell_price_points, gross_cost_points,
                 gross_proceeds_points, buy_fee_estimate_points, sell_fee_points,
+                buy_fee_micropoints, sell_fee_micropoints, settled_fee_micropoints,
                 net_pnl_points, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(uuid.uuid4()),
@@ -814,6 +943,9 @@ def execute_order(service, conn, order, market, *, actor, ctx=None):
                 notional,
                 sell_pnl_data["buy_fee_estimate_points"],
                 fee,
+                sell_pnl_data["buy_fee_micropoints"],
+                sell_pnl_data["sell_fee_micropoints"],
+                sell_pnl_data["settled_fee_micropoints"],
                 sell_pnl_data["net_pnl_points"],
                 _now_text(),
             ),
@@ -821,10 +953,10 @@ def execute_order(service, conn, order, market, *, actor, ctx=None):
     conn.execute(
         f"""
         UPDATE {orders_table}
-        SET status='filled', execution_price_points=?, fee_points=?, filled_quantity_units=?, frozen_points=0, updated_at=?
+        SET status='filled', execution_price_points=?, fee_points=?, fee_micropoints=?, filled_quantity_units=?, frozen_points=0, updated_at=?
         WHERE id=?
         """,
-        (price, fee, quantity_units, _now_text(), order["id"]),
+        (price, fee, fee_micro if side == "buy" else settled_fee_micro, quantity_units, _now_text(), order["id"]),
     )
     updated_order = conn.execute(f"SELECT * FROM {orders_table} WHERE id=?", (order["id"],)).fetchone()
     service._matching_orderbook_apply_order(updated_order, ctx=route_ctx)
@@ -853,7 +985,7 @@ def cancel_order(service, *, actor, order_uuid, ctx=None):
         if order["status"] not in OPEN_ORDER_STATUSES:
             raise ValueError("order is not open")
         funding_mode = order["funding_mode"] if "funding_mode" in order.keys() else "points_chain"
-        if order["side"] == "buy" and int(order["frozen_points"] or 0) > 0:
+        if int(order["frozen_points"] or 0) > 0:
             trial_frozen = (
                 int(order["trial_frozen_points"] or 0)
                 if "trial_frozen_points" in order.keys()
@@ -932,8 +1064,7 @@ def cancel_order(service, *, actor, order_uuid, ctx=None):
 
 def _spot_target_hit(position, *, observed_price, observed_low, observed_high):
     quantity_units = int(position["quantity_units"] or 0)
-    locked_units = int(position["locked_quantity_units"] or 0)
-    sellable_units = max(0, quantity_units - locked_units)
+    sellable_units = max(0, quantity_units)
     if sellable_units <= 0:
         return None
     avg_cost = float(_to_decimal(position["avg_cost_points"] or 0, name="avg_cost_points", minimum=0))
@@ -986,7 +1117,7 @@ def scan_spot_risk_targets(service, *, actor=None, limit=200, ctx=None):
             FROM {positions_table} p
             JOIN users u ON u.id = p.user_id
             WHERE (p.stop_loss_percent IS NOT NULL OR p.take_profit_percent IS NOT NULL)
-              AND (p.quantity_units - p.locked_quantity_units) > 0
+              AND p.quantity_units > 0
             ORDER BY p.user_id ASC, p.market_symbol ASC
             LIMIT ?
             """,

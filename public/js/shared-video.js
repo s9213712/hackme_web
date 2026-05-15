@@ -523,8 +523,9 @@
       return;
     }
     clearSharedPlaybackAction();
+    const directFallbackAllowed = playback.direct_fallback_allowed !== false;
     if (playback.mode === "hls" && browserSupportsNativeHls(video.media_type)) {
-      player.src = playback.master_url || playback.fallback_url || "";
+      player.src = playback.master_url || (directFallbackAllowed ? (playback.fallback_url || "") : "");
       setMsg("Safari / 原生 HLS 已啟用。");
       return;
     }
@@ -538,20 +539,30 @@
         sharedHls.on(Hls.Events.ERROR, (_event, data) => {
           if (!data?.fatal) return;
           destroySharedPlaybackArtifacts();
-          player.src = playback.fallback_url || playback.stream_url || "";
-          setMsg(`HLS.js 播放失敗，已改用直接串流。${data?.details ? ` (${data.details})` : ""}`, true);
+          if (directFallbackAllowed) {
+            player.src = playback.fallback_url || playback.stream_url || "";
+            setMsg(`HLS.js 播放失敗，已改用直接串流。${data?.details ? ` (${data.details})` : ""}`, true);
+            return;
+          }
+          player.removeAttribute("src");
+          setMsg(`HLS.js 播放失敗，且此影音不允許主程序直接解密串流。${data?.details ? ` (${data.details})` : ""}`, true);
         });
         sharedHls.loadSource(playback.master_url);
         sharedHls.attachMedia(player);
         setMsg("已使用 HLS.js 播放；桌機 Chrome / Firefox / Edge 可穩定播放 HLS。");
         return;
       } catch (err) {
-        player.src = playback.fallback_url || playback.stream_url || "";
-        setMsg(`HLS.js 初始化失敗，已改用直接串流。${err?.message ? ` (${err.message})` : ""}`, true);
+        if (directFallbackAllowed) {
+          player.src = playback.fallback_url || playback.stream_url || "";
+          setMsg(`HLS.js 初始化失敗，已改用直接串流。${err?.message ? ` (${err.message})` : ""}`, true);
+          return;
+        }
+        player.removeAttribute("src");
+        setMsg(`HLS.js 初始化失敗，且此影音不允許主程序直接解密串流。${err?.message ? ` (${err.message})` : ""}`, true);
         return;
       }
     }
-    player.src = playback.fallback_url || playback.stream_url || "";
+    player.src = directFallbackAllowed ? (playback.fallback_url || playback.stream_url || "") : "";
     setMsg(playback.stream_warning || (playback.high_performance_streaming ? "目前使用高效串流。" : "目前使用直接串流。"));
   }
   $("share-password-form").addEventListener("submit", async (event) => {

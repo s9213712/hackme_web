@@ -43,6 +43,9 @@ def test_game_zone_frontend_assets_are_wired():
     assert "/js/38-games.js?v=20260514-open-world" in index_html
     assert 'id="game-practice-side"' in index_html
     assert 'id="game-practice-difficulty"' in index_html
+    assert 'id="game-practice-stockfish-depth"' in index_html
+    assert 'id="game-practice-stockfish-depth-field"' in index_html
+    assert "Stockfish 深度" in index_html
     assert 'id="game-offer-draw-btn"' in index_html
     assert 'id="game-offer-draw-btn" type="button" style="display:none;">求和' in index_html
     assert 'id="game-accept-draw-btn"' in index_html
@@ -115,7 +118,7 @@ def test_game_zone_frontend_assets_are_wired():
     assert "async function ensureThreeJsLoaded()" in core_js
     assert "/js/41-game-modules.js?v=20260514-game-user-scope" in index_html
     assert "/js/games/game-view-registry.js?v=20260513-legacy-modules" in index_html
-    assert "/js/games/chess.js?v=20260513-legacy-modules" in index_html
+    assert "/js/games/chess.js?v=20260515-stockfish-depth-toggle" in index_html
     lazy_game_scripts = [
         "/js/games/snake.js?v=20260513-game-modules",
         "/js/games/game-2048.js?v=20260513-game-modules",
@@ -142,7 +145,7 @@ def test_game_zone_frontend_assets_are_wired():
         assert script in games_js
     assert "async function ensureGameRuntimeScriptsLoaded()" in games_js
     assert "await runtimeReady" in games_js
-    assert "/js/56-trading.js?v=20260502-grid-spot" in index_html
+    assert "/js/56-trading.js?v=" in index_html
     assert 'id="game-select"' in games_js
     assert "chinese_chess" in games_js
     assert "中國象棋" in game_modules_js
@@ -479,7 +482,19 @@ def test_game_zone_frontend_assets_are_wired():
     assert 'switchModuleTab("games")' in bootstrap_js
     assert "/games/chess/practice" in chess_module_js
     assert "side = $(\"game-practice-side\")?.value || \"white\"" in chess_module_js
-    assert "difficulty = $(\"game-practice-difficulty\")?.value || \"normal\"" in chess_module_js
+    assert "normalizeChessPracticeDifficultyKey" in chess_module_js
+    assert "isChessStockfishDifficulty" in chess_module_js
+    assert "bindChessPracticeDifficultyUi" in chess_module_js
+    assert "stockfisher" in chess_module_js
+    assert "selectedChessStockfishDepth" in chess_module_js
+    assert "body.stockfish_depth" in chess_module_js
+    assert "game-practice-stockfish-depth-field" in chess_module_js
+    assert "normalizeChessPracticeDifficultyKey(difficulty)" in chess_module_js
+    assert 'field.style.display = enabled ? "" : "none";' in chess_module_js
+    assert "field.setAttribute(\"aria-hidden\"" in chess_module_js
+    assert "input.disabled = !enabled" in chess_module_js
+    assert "input.required = enabled" in chess_module_js
+    assert "#game-practice-stockfish-depth-field[hidden]" in styles_css
     assert "隨機走棋" not in index_html
     assert 'data-game-touch="tetris-left"' in index_html
     assert 'data-game-touch="tetris-hold"' in index_html

@@ -255,7 +255,7 @@ curl -k -sS https://127.0.0.1:5000/api/version
 |---|---|---|---|
 | POST | `/api/videos/publish` | logged-in | 發布影音 |
 | POST | `/api/videos/upload` | logged-in | 上傳影音 |
-| GET | `/api/videos` | anonymous | 影音列表 |
+| GET | `/api/videos?sort=new\|hot\|trending&q=keyword&page=1` | anonymous | 影音列表與搜尋 |
 | GET | `/api/videos/<video_id>` | logged-in / manager | 單一影音 |
 | PUT | `/api/videos/<video_id>/share-link` | logged-in / manager | 更新或重建分享連結 |
 | DELETE | `/api/videos/<video_id>/share-link` | logged-in / manager | 撤銷分享連結 |
@@ -374,7 +374,7 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | POST | `/api/root/points/chain/recovery/auto-handle` | root | auto recovery |
 | GET | `/api/root/points/chain/backups` | root | backups |
 | POST | `/api/root/points/chain/recovery/approve` | root | approve recovery |
-| GET | `/api/root/points/report` | root | points 報表 |
+| GET | `/api/root/points/report` | root | points 報表，含目前在外積分與 ledger 淨額 |
 | GET | `/api/root/points/audit` | root | points audit |
 | POST | `/api/root/points/ledger/<ledger_uuid>/rollback` | root | rollback |
 | GET | `/api/admin/points/economy/stats` | manager | economy stats |
@@ -420,7 +420,9 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | POST | `/api/trading/margin/open` | logged-in | 開借貸單 |
 | POST | `/api/trading/margin/<position_uuid>/close` | logged-in | 平倉 |
 | POST | `/api/trading/margin/<position_uuid>/collateral` | logged-in | 補保證金 |
-| GET | `/api/admin/trading/report` | manager | 交易報表 |
+| GET | `/api/admin/trading/report` | root | 交易報表 |
+| GET | `/api/root/trading/sitewide/pools` | root | root 積分錢包資金池唯讀摘要 |
+| GET | `/api/root/trading/sitewide/user-positions` | root | root 積分錢包全用戶倉位唯讀摘要 |
 | GET/PUT | `/api/root/trading/settings` | root | root 交易設定 |
 | GET | `/api/admin/trading/markets` | root | 交易市場 registry 列表 |
 | POST | `/api/admin/trading/markets` | root | 新增交易市場 |

@@ -171,13 +171,19 @@ def test_background_interest_accrual_runs_without_logged_in_actor(tmp_path):
     conn = trading.get_db()
     try:
         row = conn.execute(
-            "SELECT interest_accrued_hours, interest_points, interest_paid_points FROM trading_margin_positions WHERE position_uuid=?",
+            """
+            SELECT interest_accrued_hours, interest_points, interest_paid_points, interest_carry_micropoints
+            FROM trading_margin_positions
+            WHERE position_uuid=?
+            """,
             (opened["position"]["position_uuid"],),
         ).fetchone()
     finally:
         conn.close()
     assert int(row["interest_accrued_hours"]) >= 2
-    assert int(row["interest_points"] or 0) + int(row["interest_paid_points"] or 0) > 0
+    assert int(row["interest_points"] or 0) == 0
+    assert int(row["interest_paid_points"] or 0) == 0
+    assert int(row["interest_carry_micropoints"] or 0) > 0
 
 
 def test_background_lease_prevents_second_owner_from_running_same_job(tmp_path):

@@ -4,7 +4,9 @@
 
 - No active broken Markdown links remain.
 - No active orphan Markdown files remain when starting from `README.md`, `docs/README.md`, and `docs/00_START_HERE.md`.
-- No active non-archive docs still use `contract` / `契約` wording. Archived historical reports may still preserve original wording.
+- Active operator docs no longer use legal-sounding obligation wording.
+  The only remaining active English keyword hits are literal compatibility route or
+  test-directory names: `/api/root/trading/contracts` and `tests/contracts/`.
 - No exact duplicate Markdown file groups remain.
 
 ## Changes Made
@@ -12,7 +14,14 @@
 - Added deployment reading rules to `docs/README.md`, `docs/README.zh-TW.md`, and `docs/02_DEPLOY_PRODUCTION.md`.
 - Linked `docs/AGENTS/research/README.md` from the main documentation map and converted research priority items into real Markdown links.
 - Fixed broken relative links in PointsChain v2 research docs and `archive/history/VERSION_STORY.md`.
-- Reworded active docs from legal-sounding `contract` language to behavior/spec/shape/rule/requirements wording.
+- Reworded active docs from legal-sounding obligation language to behavior/spec/shape/rule/requirements wording.
+- Renamed research specs from `*_CONTRACT.md` to `*_SPEC.md` and updated their
+  indexes.
+- Normalized new private chess validation paths to
+  `$HACKME_WEB_PRIVATE_ROOT/...` instead of workstation-specific paths.
+- Linked complete Exp5 experiment summaries from `docs/games/ARCHIVE_INDEX.md`
+  and marked them as reproduction evidence, not deployment instructions.
+- Reworded the on-ramp schema draft to use `token_address`.
 - Clarified trading background engine status:
   - base worker, job/lease/run tables, and root status/pause/resume/run-once APIs are implemented
   - sitewide snapshot reports and full lending-pool drilldowns are still staged
@@ -22,9 +31,10 @@
 
 ## Verification
 
-- Markdown relative link scan: `broken_count 0`.
-- Reachability scan: `active_unreachable_count 0`, `reachable_docs 216 of 357`.
-- Wording scan: `active_contract_word_hits 0`.
+- Markdown relative link scan: `broken_relative_links 0`.
+- Reachability scan: `unreachable_operator_docs 0`, `reachable_operator_docs 164 of 164`.
+- Wording scan: `legacy_keyword_hits 4`; all 4 are route/path names kept for
+  compatibility, not prose wording.
 - Exact duplicate scan: `exact_duplicate_groups 0`.
 
 ## Deployment Notes

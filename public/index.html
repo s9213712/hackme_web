@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>hackme_web — 登入系統</title>
   <!-- Security headers via HTTP (set by server/Talisman) -->
-  <link rel="stylesheet" href="/styles.css?v=20260514-open-world" />
+  <link rel="stylesheet" href="/styles.css?v=20260515-drive-capacity-reservoir" />
 </head>
 <body>
 <!-- ════════════════════ AUTH CARD ════════════════════ -->
@@ -669,6 +669,18 @@
             <span id="drive-used-label">-</span>
             <span id="drive-total-label">/ -</span>
           </div>
+          <div id="drive-capacity-visual" class="drive-capacity-visual" data-warning="low" data-unlimited="false" aria-label="雲端硬碟容量使用率">
+            <div class="drive-capacity-tank" aria-hidden="true">
+              <div class="drive-capacity-liquid">
+                <span class="drive-capacity-bubble drive-capacity-bubble-a"></span>
+                <span class="drive-capacity-bubble drive-capacity-bubble-b"></span>
+              </div>
+            </div>
+            <div class="drive-capacity-copy">
+              <div class="drive-capacity-percent" id="drive-capacity-percent-label">讀取中</div>
+              <div class="drive-capacity-note" id="drive-capacity-note">容量使用率</div>
+            </div>
+          </div>
           <div class="drive-quota-bar fx-capacity-bar" aria-label="雲端硬碟用量">
             <div id="drive-quota-bar-fill" class="fx-capacity-fill"></div>
           </div>
@@ -915,6 +927,12 @@
         </div>
       </div>
       <div id="video-browse-view">
+        <form id="video-search-form" class="video-search-bar" role="search" aria-label="搜尋影音">
+          <input type="search" id="video-search-input" maxlength="80" autocomplete="off" placeholder="搜尋影音" />
+          <button class="btn btn-primary" id="video-search-submit" type="submit">搜尋</button>
+          <button class="btn" id="video-search-clear" type="button">清除</button>
+        </form>
+        <div id="video-search-status" class="drive-card-sub video-search-status"></div>
         <details class="drive-collapsible-panel" id="video-publish-panel">
           <summary>
             <span>
@@ -1076,6 +1094,11 @@
                 <option value="experiment 4:pv">實驗 4：Policy/Value + MCTS</option>
                 <option value="experiment 5:nnue">實驗 5：NNUE + AlphaBeta/PVS</option>
               </select>
+            </div>
+            <div class="field" id="game-practice-stockfish-depth-field" hidden>
+              <label for="game-practice-stockfish-depth">Stockfish 深度</label>
+              <input id="game-practice-stockfish-depth" type="number" min="1" max="20" step="1" value="10" />
+              <div class="field-hint">深度越高越強也越耗 CPU；每局保存，限制 1-20。</div>
             </div>
             <div class="field">
               <label>&nbsp;</label>
@@ -2248,7 +2271,7 @@
         <div class="drive-card-heading">
           <div>
             <div class="drive-card-title">全用戶倉位管理</div>
-            <div class="drive-card-sub">會員 PointsChain 錢包、現貨、借貸倉位與開放掛單；root 模擬倉位不列入</div>
+            <div class="drive-card-sub">會員 PointsChain 錢包、現貨、借貸倉位、開放掛單與交易機器人；root 模擬倉位不列入</div>
           </div>
           <button class="btn" id="economy-root-positions-refresh-btn" type="button">更新</button>
         </div>
@@ -2257,6 +2280,7 @@
           <div><span class="drive-card-sub">現貨倉位</span><strong id="economy-root-position-spot-count">-</strong><small>非 root 會員</small></div>
           <div><span class="drive-card-sub">借貸倉位</span><strong id="economy-root-position-margin-count">-</strong><small id="economy-root-position-margin-detail">開倉 -</small></div>
           <div><span class="drive-card-sub">掛單</span><strong id="economy-root-position-orders">-</strong><small id="economy-root-position-orders-detail">凍結 -</small></div>
+          <div><span class="drive-card-sub">交易機器人</span><strong id="economy-root-position-bots">-</strong><small id="economy-root-position-bots-detail">啟用 -</small></div>
         </div>
       </div>
       <div class="drive-dashboard-grid" style="margin-top:.75rem;">
@@ -2272,6 +2296,11 @@
       <div class="drive-card" style="margin-top:.75rem;">
         <div class="drive-card-title">借貸倉位</div>
         <div id="economy-root-margin-position-list" class="drive-file-list"></div>
+      </div>
+      <div class="drive-card" style="margin-top:.75rem;">
+        <div class="drive-card-title">交易機器人</div>
+        <div class="drive-card-sub">一般 bot、DCA 與網格 bot 的唯讀狀態；處置仍需回交易所風控流程。</div>
+        <div id="economy-root-bot-position-list" class="drive-file-list"></div>
       </div>
       </div>
       <div class="economy-subpage" id="economy-chain-page">
@@ -2732,6 +2761,7 @@
                 <div class="settings-option-grid" style="margin-top:.65rem;">
                   <div class="field"><label>名稱</label><input type="text" id="trading-auto-bot-name" maxlength="80" placeholder="例如 BTC 多條件進場" /></div>
                   <div class="field"><label>市場</label><select id="trading-auto-bot-market"><option value="">讀取市場中...</option></select></div>
+                  <div class="field"><label>可用上限點數</label><input type="number" id="trading-auto-bot-budget-points" min="0" max="1000000000000" step="1" value="100" /><div class="field-hint">買入動作最多使用此上限；0 代表不設上限。</div></div>
                   <div class="field">
                     <label>策略模式</label>
                     <select id="trading-auto-strategy-mode">
@@ -5788,7 +5818,7 @@
 <script src="/js/30-appeals.js?v=20260428-forum-pages" defer></script>
 <script src="/js/32-notifications.js?v=20260428-forum-pages" defer></script>
 <script src="/js/34-markdown-editor.js?v=20260428-forum-pages" defer></script>
-<script src="/js/35-drive.js?v=20260504-drive-media-rename" defer></script>
+<script src="/js/35-drive.js?v=20260515-drive-capacity-reservoir" defer></script>
   <script src="/js/35-drive-preview-share.js?v=20260507-drive-preview-share-split" defer></script>
 <!-- cache marker retained for template-import regression: /js/36-comfyui.js?v=20260509-comfyui-template-embeddings -->
 <script src="/js/36-comfyui.js?v=20260514-comfyui-subtabs" defer></script>
@@ -5796,15 +5826,15 @@
 <script src="/js/37-bug-report.js?v=20260502-device-feature" defer></script>
 <script src="/js/41-game-modules.js?v=20260514-game-user-scope" defer></script>
 <script src="/js/games/game-view-registry.js?v=20260513-legacy-modules" defer></script>
-<script src="/js/games/chess.js?v=20260513-legacy-modules" defer></script>
+<script src="/js/games/chess.js?v=20260515-stockfish-depth-toggle" defer></script>
 <script src="/js/38-games.js?v=20260514-open-world" defer></script>
-<script src="/js/39-videos.js?v=20260505-hlsjs-player" defer></script>
+<script src="/js/39-videos.js?v=20260515-hls-background-worker" defer></script>
 <script src="/js/40-auth-users.js?v=20260503-appearance-reset" defer></script>
 <script src="/js/50-admin.js?v=20260504-fusion-coverage-v1" defer></script>
 <script src="/js/51-admin-server-mode-launch-check.js?v=20260507-admin-launch-check-split" defer></script>
-<script src="/js/55-economy.js?v=20260501-wallet-auto-refresh" defer></script>
-<script src="/js/56-trading.js?v=20260502-grid-spot" defer></script>
-<script src="/js/57-platform-centers.js?v=20260510-job-share-centers" defer></script>
+<script src="/js/55-economy.js?v=20260515-root-bot-positions" defer></script>
+<script src="/js/56-trading.js?v=20260515-grid-inventory-locks" defer></script>
+<script src="/js/57-platform-centers.js?v=20260515-video-share-center" defer></script>
 <script src="/js/90-bootstrap.js?v=20260505-civitai-search" defer></script>
 </body>
 </html>

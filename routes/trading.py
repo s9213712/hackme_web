@@ -1514,6 +1514,34 @@ def register_trading_routes(app, deps):
         except Exception as exc:
             return service_error(exc)
 
+    @app.route("/api/trading/bots/<bot_uuid>/budget", methods=["POST"])
+    @require_csrf
+    def trading_bots_budget(bot_uuid):
+        actor, err = actor_or_401()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        try:
+            result = trading_service.adjust_trading_bot_budget(
+                actor=actor,
+                bot_uuid=bot_uuid,
+                budget_points=data.get("budget_points") if "budget_points" in data else None,
+                delta_points=data.get("delta_points") if "delta_points" in data else None,
+            )
+            audit(
+                "TRADING_BOT_BUDGET_UPDATED",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"bot_uuid={bot_uuid}, delta_points={result.get('delta_points')}",
+            )
+            return json_resp(result)
+        except Exception as exc:
+            return service_error(exc)
+
     @app.route("/api/trading/bots/scan", methods=["POST"])
     @require_csrf
     def trading_bots_scan():
@@ -1631,10 +1659,12 @@ def register_trading_routes(app, deps):
         actor, err = actor_or_401()
         if err:
             return err
+        data = request.get_json(silent=True) or {}
+        base_action = str(data.get("base_action") or "keep").strip().lower()
         try:
-            result = trading_service.delete_grid_bot(actor=actor, bot_uuid=bot_uuid)
+            result = trading_service.delete_grid_bot(actor=actor, bot_uuid=bot_uuid, base_action=base_action)
             audit("GRID_BOT_DELETED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
-                  detail=f"bot_uuid={bot_uuid}")
+                  detail=f"bot_uuid={bot_uuid}, base_action={base_action}")
             return json_resp(result)
         except Exception as exc:
             return service_error(exc)
@@ -1987,6 +2017,98 @@ def register_trading_routes(app, deps):
                   AND o.status IN ('open', 'partially_filled')
                 """
             ).fetchone())
+            bot_summary = dict(conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS bot_count,
+                    COALESCE(SUM(CASE WHEN b.enabled=1 THEN 1 ELSE 0 END), 0) AS enabled_bot_count
+                FROM trading_bots b
+                JOIN users u ON u.id=b.user_id
+                WHERE COALESCE(LOWER(u.username), '') != 'root'
+                """
+            ).fetchone()) if table_columns(conn, "trading_bots") else {"bot_count": 0, "enabled_bot_count": 0}
+            grid_bot_summary = dict(conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS grid_bot_count,
+                    COALESCE(SUM(CASE WHEN gb.enabled=1 THEN 1 ELSE 0 END), 0) AS enabled_grid_bot_count
+                FROM trading_grid_bots gb
+                JOIN users u ON u.id=gb.user_id
+                WHERE COALESCE(LOWER(u.username), '') != 'root'
+                """
+            ).fetchone()) if table_columns(conn, "trading_grid_bots") else {"grid_bot_count": 0, "enabled_grid_bot_count": 0}
+            bots = [
+                dict(row)
+                for row in conn.execute(
+                    """
+                    SELECT
+                        b.bot_uuid,
+                        b.user_id,
+                        u.username,
+                        b.bot_type,
+                        b.name,
+                        b.market_symbol,
+                        b.side,
+                        b.order_type,
+                        b.quantity_text,
+                        b.limit_price_points,
+                        b.trigger_type,
+                        b.trigger_price_points,
+                        b.enabled,
+                        b.run_count,
+                        b.max_runs,
+                        b.cooldown_seconds,
+                        b.interval_hours,
+                        b.budget_points,
+                        b.stop_loss_percent,
+                        b.take_profit_percent,
+                        b.last_run_at,
+                        b.last_error,
+                        b.updated_at
+                    FROM trading_bots b
+                    JOIN users u ON u.id=b.user_id
+                    WHERE COALESCE(LOWER(u.username), '') != 'root'
+                    ORDER BY b.enabled DESC, b.updated_at DESC, b.id DESC
+                    LIMIT 200
+                    """
+                ).fetchall()
+            ] if table_columns(conn, "trading_bots") else []
+            grid_bots = [
+                dict(row)
+                for row in conn.execute(
+                    """
+                    SELECT
+                        gb.bot_uuid,
+                        gb.user_id,
+                        u.username,
+                        'grid' AS bot_type,
+                        gb.name,
+                        gb.market_symbol,
+                        gb.enabled,
+                        gb.total_profit_points,
+                        gb.total_trades,
+                        gb.initial_price_points,
+                        gb.lower_price_points,
+                        gb.upper_price_points,
+                        gb.grid_count,
+                        gb.order_amount_points,
+                        gb.stop_loss_percent,
+                        gb.take_profit_percent,
+                        gb.last_scan_at,
+                        gb.last_error,
+                        gb.updated_at,
+                        COALESCE(SUM(CASE WHEN go.status='open' THEN 1 ELSE 0 END), 0) AS open_grid_orders,
+                        COALESCE(SUM(CASE WHEN go.status='filled' THEN 1 ELSE 0 END), 0) AS filled_grid_orders
+                    FROM trading_grid_bots gb
+                    JOIN users u ON u.id=gb.user_id
+                    LEFT JOIN trading_grid_orders go ON go.grid_bot_id=gb.id
+                    WHERE COALESCE(LOWER(u.username), '') != 'root'
+                    GROUP BY gb.id
+                    ORDER BY gb.enabled DESC, gb.updated_at DESC, gb.id DESC
+                    LIMIT 200
+                    """
+                ).fetchall()
+            ] if table_columns(conn, "trading_grid_bots") else []
             return json_resp({
                 "ok": True,
                 "positions": {
@@ -2000,11 +2122,19 @@ def register_trading_routes(app, deps):
                         "open_order_count": int(order_summary["open_orders"] or 0),
                         "frozen_order_points": int(order_summary["frozen_order_points"] or 0),
                         "remaining_order_quantity": units_to_quantity(order_summary["remaining_quantity_units"]),
+                        "bot_count": int(bot_summary["bot_count"] or 0),
+                        "enabled_bot_count": int(bot_summary["enabled_bot_count"] or 0),
+                        "grid_bot_count": int(grid_bot_summary["grid_bot_count"] or 0),
+                        "enabled_grid_bot_count": int(grid_bot_summary["enabled_grid_bot_count"] or 0),
+                        "total_bot_count": int(bot_summary["bot_count"] or 0) + int(grid_bot_summary["grid_bot_count"] or 0),
+                        "total_enabled_bot_count": int(bot_summary["enabled_bot_count"] or 0) + int(grid_bot_summary["enabled_grid_bot_count"] or 0),
                         "root_simulated_excluded": True,
                     },
                     "wallets": wallet_rows,
                     "spot_positions": spot_positions,
                     "margin_positions": margin_positions,
+                    "bots": bots,
+                    "grid_bots": grid_bots,
                     "order_summary": order_summary,
                     "read_only": True,
                 },

@@ -28,6 +28,8 @@ VIDEO_TIP_MAX_POINTS = 1_000_000
 VIDEO_BOOST_MIN_POINTS = 10
 VIDEO_BOOST_MAX_POINTS = 1_000_000
 VIDEO_BOOST_DAYS = 7
+VIDEO_SEARCH_QUERY_MAX = 80
+VIDEO_SEARCH_TERMS_MAX = 5
 VIDEO_SHARE_PASSWORD_ITERATIONS = 120_000
 MAX_VIDEO_SHARE_PASSWORD_LENGTH = 128
 VIDEO_SHARE_PASSWORD_MAX_FAILURES = 5
@@ -89,6 +91,25 @@ def _json(data):
 
 def _sha256_text(value):
     return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
+
+
+def _normalize_video_search_query(value):
+    query = re.sub(r"\s+", " ", str(value or "").replace("\x00", " ").strip())
+    if len(query) > VIDEO_SEARCH_QUERY_MAX:
+        query = query[:VIDEO_SEARCH_QUERY_MAX].strip()
+    return query
+
+
+def _video_search_terms(query):
+    normalized = _normalize_video_search_query(query)
+    if not normalized:
+        return []
+    return [term for term in normalized.split(" ") if term][:VIDEO_SEARCH_TERMS_MAX]
+
+
+def _sqlite_like_pattern(value, *, prefix=False):
+    text = str(value or "").replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"{text}%" if prefix else f"%{text}%"
 
 
 def _table_columns(conn, table):
@@ -941,6 +962,8 @@ def can_view_video(actor, video_row, *, for_stream=False):
     status = video_row["status"]
     if status == "blocked":
         return bool(_actor_owns(actor, video_row["owner_user_id"]) and not for_stream)
+    if status != "ready":
+        return bool(_actor_owns(actor, video_row["owner_user_id"]) and not for_stream)
     visibility = video_row["visibility"]
     if visibility == "public":
         return True
@@ -972,11 +995,13 @@ def get_video(conn, video_id, *, actor=None, for_stream=False):
     return data
 
 
-def list_videos(conn, *, actor=None, sort="new", page=1, page_size=24):
+def list_videos(conn, *, actor=None, sort="new", page=1, page_size=24, query=""):
     ensure_video_schema(conn)
     page = max(1, _safe_int(page, 1))
     page_size = min(50, max(1, _safe_int(page_size, 24)))
     sort = str(sort or "new").lower()
+    search_query = _normalize_video_search_query(query)
+    search_terms = _video_search_terms(search_query)
     boost_now = utc_now()
     boost_expr = (
         f"(CASE WHEN COALESCE(v.boost_expires_at,'')>'{boost_now}' "
@@ -989,15 +1014,42 @@ def list_videos(conn, *, actor=None, sort="new", page=1, page_size=24):
     elif sort == "trending":
         order = f"({boost_expr} * 5 + v.like_count * 3 + v.comment_count * 2 + v.coin_total * 4) DESC, v.updated_at DESC"
     params = []
+    order_params = []
     where = ["v.status='ready'", "v.deleted_at IS NULL", "f.deleted_at IS NULL"]
     if actor:
         where.append("(v.visibility='public' OR v.owner_user_id=?)")
         params.append(int(_actor_value(actor, "id")))
     else:
         where.append("v.visibility='public'")
+    if search_terms:
+        for term in search_terms:
+            pattern = _sqlite_like_pattern(term)
+            where.append(
+                "("
+                "v.title LIKE ? ESCAPE '\\' OR "
+                "v.description LIKE ? ESCAPE '\\' OR "
+                "u.username LIKE ? ESCAPE '\\' OR "
+                "u.nickname LIKE ? ESCAPE '\\'"
+                ")"
+            )
+            params.extend([pattern, pattern, pattern, pattern])
+        exact_query = search_query
+        prefix_query = _sqlite_like_pattern(search_query, prefix=True)
+        contains_query = _sqlite_like_pattern(search_query)
+        order = (
+            "("
+            "CASE WHEN v.title = ? COLLATE NOCASE THEN 700 ELSE 0 END + "
+            "CASE WHEN v.title LIKE ? ESCAPE '\\' THEN 360 ELSE 0 END + "
+            "CASE WHEN v.title LIKE ? ESCAPE '\\' THEN 220 ELSE 0 END + "
+            "CASE WHEN v.description LIKE ? ESCAPE '\\' THEN 90 ELSE 0 END + "
+            "CASE WHEN u.username LIKE ? ESCAPE '\\' OR u.nickname LIKE ? ESCAPE '\\' THEN 110 ELSE 0 END + "
+            f"{boost_expr} * 3 + v.view_count + v.like_count * 4 + v.coin_total * 2 + v.comment_count * 3"
+            ") DESC, v.created_at DESC, v.id DESC"
+        )
+        order_params.extend([exact_query, prefix_query, contains_query, contains_query, contains_query, contains_query])
     rows = conn.execute(
         _video_base_select() + f" WHERE {' AND '.join(where)} ORDER BY {order} LIMIT ? OFFSET ?",
-        (*params, page_size, (page - 1) * page_size),
+        (*params, *order_params, page_size, (page - 1) * page_size),
     ).fetchall()
     return [serialize_video(row, actor=actor, liked=_liked_by_actor(conn, row["id"], actor)) for row in rows]
 

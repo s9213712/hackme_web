@@ -5,11 +5,18 @@ import uuid
 from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
 
 from services.server_mode.routing import resolve_table
-from services.trading.accounting.core import fee_points, notional_points, units_to_quantity
+from services.trading.accounting.core import (
+    fee_micropoints,
+    fee_points,
+    notional_points,
+    points_from_micropoints_ceil,
+    units_to_quantity,
+)
 from services.trading.constants import (
     ASSET_SCALE,
     DEFAULT_GRID_FEE_DISCOUNT_PERCENT,
     GRID_PREVIEW_YELLOW_NET_SPREAD_PERCENT,
+    OPEN_ORDER_STATUSES,
 )
 from services.trading._clock import now_text as _now_text
 from services.trading.validators import _decimal_text, _to_decimal, _to_int, _to_price_float
@@ -219,6 +226,143 @@ def grid_bot_payload(row, *, json_loads, orders=None):
     return item
 
 
+def grid_base_inventory_units(conn, *, grid_bot_id, orders_table):
+    open_statuses = tuple(sorted(OPEN_ORDER_STATUSES))
+    placeholders = ",".join("?" for _ in open_statuses)
+    open_sell_units = int(
+        conn.execute(
+            f"""
+            SELECT COALESCE(SUM(
+                CASE
+                  WHEN o.quantity_units > COALESCE(o.filled_quantity_units, 0)
+                  THEN o.quantity_units - COALESCE(o.filled_quantity_units, 0)
+                  ELSE 0
+                END
+            ), 0)
+            FROM trading_grid_orders go
+            JOIN {orders_table} o ON o.order_uuid = go.trading_order_uuid
+            WHERE go.grid_bot_id=?
+              AND go.side='sell'
+              AND go.status='open'
+              AND o.status IN ({placeholders})
+            """,
+            (int(grid_bot_id), *open_statuses),
+        ).fetchone()[0]
+        or 0
+    )
+    filled_by_side = {"buy": 0, "sell": 0}
+    rows = conn.execute(
+        f"""
+        SELECT go.side,
+               COALESCE(SUM(
+                   CASE
+                     WHEN COALESCE(go.filled_quantity_units, 0) > 0 THEN go.filled_quantity_units
+                     ELSE COALESCE(o.filled_quantity_units, 0)
+                   END
+               ), 0) AS filled_units
+        FROM trading_grid_orders go
+        LEFT JOIN {orders_table} o ON o.order_uuid = go.trading_order_uuid
+        WHERE go.grid_bot_id=?
+          AND (go.status='filled' OR o.status='filled')
+        GROUP BY go.side
+        """,
+        (int(grid_bot_id),),
+    ).fetchall()
+    for row in rows:
+        filled_by_side[str(row["side"])] = int(row["filled_units"] or 0)
+    filled_buy_units = filled_by_side.get("buy", 0)
+    filled_sell_units = filled_by_side.get("sell", 0)
+    unpaired_buy_units = max(0, filled_buy_units - filled_sell_units - open_sell_units)
+    return {
+        "base_units": open_sell_units + unpaired_buy_units,
+        "open_sell_units": open_sell_units,
+        "unpaired_buy_units": unpaired_buy_units,
+        "filled_buy_units": filled_buy_units,
+        "filled_sell_units": filled_sell_units,
+    }
+
+
+def manual_open_sell_locked_units(conn, *, user_id, market_symbol, orders_table):
+    open_statuses = tuple(sorted(OPEN_ORDER_STATUSES))
+    placeholders = ",".join("?" for _ in open_statuses)
+    return int(
+        conn.execute(
+            f"""
+            SELECT COALESCE(SUM(
+                CASE
+                  WHEN o.quantity_units > COALESCE(o.filled_quantity_units, 0)
+                  THEN o.quantity_units - COALESCE(o.filled_quantity_units, 0)
+                  ELSE 0
+                END
+            ), 0)
+            FROM {orders_table} o
+            WHERE o.user_id=?
+              AND o.market_symbol=?
+              AND o.side='sell'
+              AND o.status IN ({placeholders})
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM trading_grid_orders go
+                  WHERE go.trading_order_uuid = o.order_uuid
+              )
+            """,
+            (int(user_id), str(market_symbol), *open_statuses),
+        ).fetchone()[0]
+        or 0
+    )
+
+
+def release_grid_locked_inventory(service, *, actor, user_id, market_symbol, quantity_units):
+    quantity_units = max(0, int(quantity_units or 0))
+    if quantity_units <= 0:
+        return 0
+    route_ctx = service._resolve_trading_ctx(action="grid_inventory_release")
+    orders_table = resolve_table("orders", route_ctx)
+    positions_table = resolve_table("positions", route_ctx)
+    conn = service.get_db()
+    try:
+        service.ensure_schema(conn)
+        conn.commit()
+        conn.execute("BEGIN IMMEDIATE")
+        position = service._position(conn, int(user_id), str(market_symbol), ctx=route_ctx)
+        locked_units = int(position["locked_quantity_units"] or 0)
+        manual_locked_units = manual_open_sell_locked_units(
+            conn,
+            user_id=int(user_id),
+            market_symbol=str(market_symbol),
+            orders_table=orders_table,
+        )
+        releasable_units = max(0, locked_units - manual_locked_units)
+        release_units = min(quantity_units, releasable_units)
+        if release_units > 0:
+            conn.execute(
+                f"""
+                UPDATE {positions_table}
+                SET quantity_units=quantity_units+?,
+                    locked_quantity_units=locked_quantity_units-?,
+                    updated_at=?
+                WHERE user_id=? AND market_symbol=?
+                """,
+                (release_units, release_units, _now_text(), int(user_id), str(market_symbol)),
+            )
+            service._audit_event(
+                conn,
+                "GRID_INVENTORY_RELEASED",
+                "grid reserved base inventory released",
+                actor=actor,
+                target_user_id=int(user_id),
+                market_symbol=str(market_symbol),
+                metadata={"released_quantity_units": release_units},
+            )
+        conn.commit()
+        return release_units
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def preview_grid_bot(service, *, actor, payload):
     user_id = service._actor_id(actor)
     if not user_id:
@@ -420,6 +564,47 @@ def create_grid_bot(service, *, actor, payload):
         except Exception as exc:
             errors.append(f"level {index} price {level_price}: {exc}")
 
+    if errors or not placed:
+        cleanup_errors = []
+        for placed_order in placed:
+            trading_order_uuid = placed_order.get("trading_order_uuid")
+            if not trading_order_uuid:
+                continue
+            try:
+                service.cancel_order(actor=bot_actor, order_uuid=trading_order_uuid)
+            except Exception as exc:
+                cleanup_errors.append(f"{trading_order_uuid}: {exc}")
+        conn = service.get_db()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            service._audit_event(
+                conn,
+                "GRID_BOT_CREATE_FAILED",
+                "grid trading bot create failed; staged orders were cancelled",
+                actor=actor,
+                target_user_id=user_id,
+                market_symbol=market_symbol,
+                severity="warning",
+                metadata={
+                    "bot_uuid": bot_uuid,
+                    "placed": len(placed),
+                    "errors": errors[:10],
+                    "cleanup_errors": cleanup_errors[:10],
+                },
+            )
+            conn.execute("DELETE FROM trading_grid_bots WHERE id=?", (grid_bot_id,))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            conn.close()
+            raise
+        else:
+            conn.close()
+        message = "; ".join(errors[:3]) if errors else "no grid orders could be placed"
+        if cleanup_errors:
+            message = f"{message}; cleanup failed: {'; '.join(cleanup_errors[:2])}"
+        raise ValueError(f"grid bot create failed: {message}")
+
     if placed:
         conn = service.get_db()
         try:
@@ -557,16 +742,22 @@ def set_grid_bot_share_parameters(service, *, actor, bot_uuid, share_parameters)
         conn.close()
 
 
-def delete_grid_bot(service, *, actor, bot_uuid):
+def delete_grid_bot(service, *, actor, bot_uuid, base_action="keep"):
     user_id = service._actor_id(actor)
     if not user_id:
         raise ValueError("login required")
+    base_action = str(base_action or "keep").strip().lower()
+    if base_action not in {"keep", "sell"}:
+        raise ValueError("base_action must be keep or sell")
+    route_ctx = service._resolve_trading_ctx(action="grid_bot_delete")
+    orders_table = resolve_table("orders", route_ctx)
     conn = service.get_db()
     try:
         service.ensure_schema(conn)
         row = conn.execute("SELECT * FROM trading_grid_bots WHERE bot_uuid=? AND user_id=?", (str(bot_uuid or ""), user_id)).fetchone()
         if not row:
             raise ValueError("grid bot not found")
+        inventory = grid_base_inventory_units(conn, grid_bot_id=int(row["id"]), orders_table=orders_table)
         open_order_uuids = [
             go["trading_order_uuid"]
             for go in conn.execute(
@@ -576,6 +767,7 @@ def delete_grid_bot(service, *, actor, bot_uuid):
             if go["trading_order_uuid"]
         ]
         bot_id = row["id"]
+        market_symbol = row["market_symbol"]
     finally:
         conn.close()
     bot_actor = {"id": int(user_id), "username": service._actor_username(actor), "role": service._actor_role(actor)}
@@ -584,12 +776,69 @@ def delete_grid_bot(service, *, actor, bot_uuid):
             service.cancel_order(actor=bot_actor, order_uuid=order_uuid)
         except Exception:
             pass
+    released_units = release_grid_locked_inventory(
+        service,
+        actor=actor,
+        user_id=int(user_id),
+        market_symbol=market_symbol,
+        quantity_units=inventory["unpaired_buy_units"],
+    )
+    sell_result = None
+    sell_error = ""
+    sold_units = 0
+    if base_action == "sell" and inventory["base_units"] > 0:
+        conn = service.get_db()
+        try:
+            service.ensure_schema(conn)
+            position = service._position(conn, int(user_id), market_symbol, ctx=route_ctx)
+            sell_units = min(int(inventory["base_units"] or 0), int(position["quantity_units"] or 0))
+        finally:
+            conn.close()
+        if sell_units > 0:
+            try:
+                sell_result = service.place_order(
+                    actor=bot_actor,
+                    market_symbol=market_symbol,
+                    side="sell",
+                    order_type="market",
+                    quantity=units_to_quantity(sell_units),
+                    is_grid_order=True,
+                    ctx=route_ctx,
+                )
+                sold_units = sell_units
+            except Exception as exc:
+                sell_error = str(exc)[:300]
     conn = service.get_db()
     try:
         conn.execute("BEGIN IMMEDIATE")
+        service._audit_event(
+            conn,
+            "GRID_BOT_DELETED",
+            "grid trading bot deleted",
+            actor=actor,
+            target_user_id=user_id,
+            market_symbol=market_symbol,
+            metadata={
+                "bot_uuid": str(bot_uuid or ""),
+                "base_action": base_action,
+                "base_quantity_units": int(inventory["base_units"] or 0),
+                "released_quantity_units": released_units,
+                "sold_quantity_units": sold_units,
+                "sell_error": sell_error,
+            },
+        )
         conn.execute("DELETE FROM trading_grid_bots WHERE id=?", (bot_id,))
         conn.commit()
-        return {"ok": True, "bot_uuid": bot_uuid}
+        return {
+            "ok": True,
+            "bot_uuid": bot_uuid,
+            "base_action": base_action,
+            "base_quantity_units": int(inventory["base_units"] or 0),
+            "released_quantity_units": released_units,
+            "sold_quantity_units": sold_units,
+            "sell_order": (sell_result or {}).get("order"),
+            "sell_error": sell_error,
+        }
     except Exception:
         conn.rollback()
         raise
@@ -669,9 +918,12 @@ def stop_grid_bot_for_risk_target(service, *, bot, actor, risk_target, current_p
     user_id = int(bot["user_id"])
     bot_id = int(bot["id"])
     bot_actor = {"id": user_id, "username": service._actor_username(actor), "role": service._actor_role(actor)}
+    route_ctx = service._resolve_trading_ctx(action="grid_bot_risk_stop")
+    orders_table = resolve_table("orders", route_ctx)
     conn = service.get_db()
     try:
         service.ensure_schema(conn)
+        inventory = grid_base_inventory_units(conn, grid_bot_id=bot_id, orders_table=orders_table)
         open_rows = conn.execute(
             "SELECT id, trading_order_uuid FROM trading_grid_orders WHERE grid_bot_id=? AND status='open'",
             (bot_id,),
@@ -690,6 +942,13 @@ def stop_grid_bot_for_risk_target(service, *, bot, actor, risk_target, current_p
             cancelled_grid_ids.append(int(row["id"]))
         except Exception as exc:
             cancel_errors.append({"order_uuid": order_uuid, "error": str(exc)[:160]})
+    released_units = release_grid_locked_inventory(
+        service,
+        actor=actor,
+        user_id=user_id,
+        market_symbol=bot["market_symbol"],
+        quantity_units=inventory["unpaired_buy_units"],
+    )
     now = _now_text()
     message = (
         f"{risk_target['label']}已觸發：相對建立價 {risk_target['move_percent']:+.4f}%，"
@@ -729,6 +988,7 @@ def stop_grid_bot_for_risk_target(service, *, bot, actor, risk_target, current_p
                 "window_high_points": window_high,
                 "cancelled_orders": len(cancelled_grid_ids),
                 "cancel_errors": cancel_errors,
+                "released_quantity_units": released_units,
             },
         )
         conn.commit()
@@ -746,6 +1006,7 @@ def stop_grid_bot_for_risk_target(service, *, bot, actor, risk_target, current_p
         "risk_target": risk_target,
         "cancelled_orders": len(cancelled_grid_ids),
         "cancel_errors": cancel_errors,
+        "released_quantity_units": released_units,
         "fills_processed": [],
         "counter_orders_placed": [],
         "profit_delta": 0,
@@ -840,6 +1101,7 @@ def scan_one_grid_bot(service, bot, *, actor):
         ).fetchall()
         fills_processed = []
         counter_orders_placed = []
+        counter_order_errors = []
         profit_delta = 0
         trades_delta = 0
         for go in open_grid_orders:
@@ -923,7 +1185,10 @@ def scan_one_grid_bot(service, bot, *, actor):
                 buy_notional = notional_points(filled_units, buy_price)
                 sell_notional = notional_points(filled_units, filled_price)
                 gross_profit = sell_notional - buy_notional
-                total_fee = fee_points(buy_notional, grid_fee_rate) + fee_points(sell_notional, grid_fee_rate)
+                total_fee = points_from_micropoints_ceil(
+                    fee_micropoints(buy_notional, grid_fee_rate)
+                    + fee_micropoints(sell_notional, grid_fee_rate)
+                )
                 profit_delta += gross_profit - total_fee
                 trades_delta += 1
             if 0 <= counter_level_idx < len(grid_level_values):
@@ -937,15 +1202,31 @@ def scan_one_grid_bot(service, bot, *, actor):
                     if qty_units > 0:
                         qty_text = units_to_quantity(qty_units)
                         try:
-                            order_result = service.place_order(
-                                actor=bot_actor,
-                                market_symbol=bot["market_symbol"],
-                                side=counter_side,
-                                order_type="limit",
-                                quantity=qty_text,
-                                limit_price_points=counter_price,
-                                is_grid_order=True,
-                            )
+                            try:
+                                order_result = service.place_order(
+                                    actor=bot_actor,
+                                    market_symbol=bot["market_symbol"],
+                                    side=counter_side,
+                                    order_type="limit",
+                                    quantity=qty_text,
+                                    limit_price_points=counter_price,
+                                    is_grid_order=True,
+                                    use_locked_inventory=(counter_side == "sell"),
+                                    ctx=route_ctx,
+                                )
+                            except ValueError as exc:
+                                if counter_side != "sell" or "locked grid spot position" not in str(exc):
+                                    raise
+                                order_result = service.place_order(
+                                    actor=bot_actor,
+                                    market_symbol=bot["market_symbol"],
+                                    side=counter_side,
+                                    order_type="limit",
+                                    quantity=qty_text,
+                                    limit_price_points=counter_price,
+                                    is_grid_order=True,
+                                    ctx=route_ctx,
+                                )
                             t_order_uuid = (order_result.get("order") or {}).get("order_uuid")
                             conn.execute("BEGIN IMMEDIATE")
                             conn.execute(
@@ -959,14 +1240,46 @@ def scan_one_grid_bot(service, bot, *, actor):
                             )
                             conn.commit()
                             counter_orders_placed.append({"level_index": counter_level_idx, "side": counter_side, "price_points": counter_price})
-                        except Exception:
+                        except Exception as exc:
                             conn.rollback()
-                            pass
+                            error_text = f"counter level {counter_level_idx} {counter_side}: {exc}"
+                            counter_order_errors.append(error_text)
+                            try:
+                                conn.execute("BEGIN IMMEDIATE")
+                                conn.execute(
+                                    "UPDATE trading_grid_bots SET last_error=?, updated_at=? WHERE id=?",
+                                    (error_text[:500], now, bot_id),
+                                )
+                                service._audit_event(
+                                    conn,
+                                    "GRID_COUNTER_ORDER_FAILED",
+                                    "grid counter order placement failed",
+                                    actor=actor,
+                                    target_user_id=user_id,
+                                    market_symbol=bot["market_symbol"],
+                                    severity="warning",
+                                    metadata={
+                                        "bot_uuid": bot["bot_uuid"],
+                                        "level_index": counter_level_idx,
+                                        "side": counter_side,
+                                        "price_points": counter_price,
+                                        "error": str(exc)[:240],
+                                    },
+                                )
+                                conn.commit()
+                            except Exception:
+                                conn.rollback()
         if profit_delta or trades_delta:
-            conn.execute(
-                "UPDATE trading_grid_bots SET total_profit_points=total_profit_points+?, total_trades=total_trades+?, last_scan_at=?, last_error=NULL, updated_at=? WHERE id=?",
-                (profit_delta, trades_delta, now, now, bot_id),
-            )
+            if counter_order_errors:
+                conn.execute(
+                    "UPDATE trading_grid_bots SET total_profit_points=total_profit_points+?, total_trades=total_trades+?, last_scan_at=?, updated_at=? WHERE id=?",
+                    (profit_delta, trades_delta, now, now, bot_id),
+                )
+            else:
+                conn.execute(
+                    "UPDATE trading_grid_bots SET total_profit_points=total_profit_points+?, total_trades=total_trades+?, last_scan_at=?, last_error=NULL, updated_at=? WHERE id=?",
+                    (profit_delta, trades_delta, now, now, bot_id),
+                )
             conn.commit()
         else:
             conn.execute("UPDATE trading_grid_bots SET last_scan_at=?, updated_at=? WHERE id=?", (now, now, bot_id))
@@ -978,6 +1291,7 @@ def scan_one_grid_bot(service, bot, *, actor):
             "scan_window_high_points": window_high,
             "fills_processed": fills_processed,
             "counter_orders_placed": counter_orders_placed,
+            "counter_order_errors": counter_order_errors,
             "profit_delta": profit_delta,
         }
     finally:

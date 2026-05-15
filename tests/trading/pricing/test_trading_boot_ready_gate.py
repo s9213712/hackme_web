@@ -94,6 +94,18 @@ def _stamp(trading, symbol):
         conn.close()
 
 
+def _seed_grid_base_position(points, trading):
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="seed")
+    _stamp(trading, "ETH/POINTS")
+    trading.place_order(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        side="buy",
+        order_type="market",
+        quantity="0.1",
+    )
+
+
 def _set_manual_root_price(trading, *, symbol, price_points):
     root = _actor(2, "root", "super_admin")
     trading.update_root_settings(actor=root, settings={"price_source": "manual_root"}, markets=[])
@@ -502,8 +514,7 @@ def test_grid_create_rejects_market_boot_pending(tmp_path):
 
 def test_grid_scan_rejects_market_boot_pending(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="seed")
-    _stamp(trading, "ETH/POINTS")
+    _seed_grid_base_position(points, trading)
     created = trading.create_grid_bot(
         actor=_actor(),
         payload={
@@ -532,8 +543,7 @@ def test_grid_scan_rejects_market_boot_pending(tmp_path):
 
 def test_grid_scan_rejects_manual_root_price(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="seed")
-    _stamp(trading, "ETH/POINTS")
+    _seed_grid_base_position(points, trading)
     trading.create_grid_bot(
         actor=_actor(),
         payload={
@@ -554,8 +564,7 @@ def test_grid_scan_rejects_manual_root_price(tmp_path):
 
 def test_grid_scan_does_not_fill_or_counter_order_on_fallback_price(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="seed")
-    _stamp(trading, "ETH/POINTS")
+    _seed_grid_base_position(points, trading)
     created = trading.create_grid_bot(
         actor=_actor(),
         payload={

@@ -76,6 +76,10 @@ def test_filemanager_and_albummanager_ui_are_wired():
     assert 'id="drive-remote-download-btn"' in index_html
     assert 'id="drive-remote-torrent-inline-btn"' in index_html
     assert 'id="storage-upload-folder"' in index_html
+    assert 'id="drive-capacity-visual"' in index_html
+    assert 'id="drive-capacity-percent-label"' in index_html
+    assert 'id="drive-capacity-note"' in index_html
+    assert "drive-capacity-charge" not in index_html
     assert 'id="drive-upload-client-scan-report"' not in index_html
     assert 'id="drive-upload-mode-client-scan-report"' not in index_html
     assert "附上本機掃描回報" not in index_html
@@ -100,6 +104,21 @@ def test_filemanager_and_albummanager_ui_are_wired():
     assert "async function uploadStorageFile()" in drive_js
     assert "async function uploadStorageFolder()" in drive_js
     assert "let driveLatestQuota = null;" in drive_js
+    assert "function renderDriveCapacityGauge" in drive_js
+    assert '"--drive-capacity-level"' in drive_js
+    assert "zeroQuota" in drive_js
+    assert "function formatDriveSpeed" in drive_js
+    assert "speed_bytes_per_sec" in drive_js
+    assert "function drivePostUploadProcessingMessage(mode)" in drive_js
+    assert "伺服器端加密、儲存與掃描中" in drive_js
+    assert "伺服器儲存密文與掃描中" in drive_js
+    assert "瀏覽器端加密中" in drive_js
+    assert "加密完成，開始上傳密文" in drive_js
+    assert "DRIVE_RESUMABLE_UPLOAD_THRESHOLD_BYTES" in drive_js
+    assert "async function uploadDriveBlobResumable" in drive_js
+    assert '"/cloud-drive/resumable-upload/start"' in drive_js
+    assert "completeDriveResumableUpload" in drive_js
+    assert '"resumable_uploading"' in drive_js
     assert "async function ensureDriveUploadQuota()" in drive_js
     assert "function driveUploadQuotaError" in drive_js
     assert "async function preflightDriveUploadSize" in drive_js
@@ -211,8 +230,8 @@ def test_album_viewer_has_dedicated_module():
     assert 'class="drive-collapsible-panel album-viewer-panel" id="album-viewer-card"' in index_html
     assert 'data-drive-action="album-preview-prev"' in index_html
     assert 'data-drive-action="album-preview-next"' in index_html
-    assert '/js/35-drive.js?v=20260504-drive-media-rename' in index_html
-    assert '/styles.css?v=20260514-open-world' in index_html
+    assert '/js/35-drive.js?v=20260515-drive-capacity-reservoir' in index_html
+    assert '/styles.css?v=20260515-drive-capacity-reservoir' in index_html
     assert '/js/00-core.js?v=20260503-appearance-v2' in index_html
     assert '/js/40-auth-users.js?v=20260503-appearance-reset' in index_html
     assert 'src="/js/50-admin.js' in index_html
@@ -366,6 +385,10 @@ def test_album_viewer_has_dedicated_module():
     assert 'normTab === "albums"' in admin_js
     assert "renderStorageFeatureDisabled" in drive_js
     assert ".drive-collapsible-panel" in (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
+    styles_css = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
+    assert ".drive-capacity-liquid::before" in styles_css
+    assert "@keyframes drive-capacity-wave" in styles_css
+    assert ".drive-capacity-charge" not in styles_css
     assert ".settings-feature-advisory" in (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
     assert ".album-preview-nav" in (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
 
@@ -470,13 +493,15 @@ def test_cloud_drive_e2ee_upload_prepares_required_crypto_fields():
     assert "deriveDriveE2eePassphraseKey" in drive_js
     assert "PBKDF2" in drive_js
     assert "encrypted_file_key" in drive_js
-    assert 'form.append("encrypted_file_key", encrypted.encrypted_file_key)' in drive_js
-    assert 'form.append("encrypted_metadata", encrypted.encrypted_metadata)' in drive_js
-    assert 'form.append("ciphertext_sha256", encrypted.ciphertext_sha256)' in drive_js
-    assert 'form.append("encryption_algorithm", encrypted.encryption_algorithm)' in drive_js
-    assert 'form.append("encryption_version", encrypted.encryption_version)' in drive_js
-    assert 'form.append("nonce", encrypted.nonce)' in drive_js
-    assert 'form.append("file", encrypted.blob, encrypted.filename)' in drive_js
+    assert "function driveEncryptedUploadFields" in drive_js
+    assert "encrypted_file_key: encrypted.encrypted_file_key" in drive_js
+    assert "encrypted_metadata: encrypted.encrypted_metadata" in drive_js
+    assert "ciphertext_sha256: encrypted.ciphertext_sha256" in drive_js
+    assert "encryption_algorithm: encrypted.encryption_algorithm" in drive_js
+    assert "encryption_version: encrypted.encryption_version" in drive_js
+    assert "nonce: encrypted.nonce" in drive_js
+    assert 'form.append("file", uploadBlob, uploadFilename)' in drive_js
+    assert "appendDriveUploadFields(form, uploadFields)" in drive_js
     assert 'const originalName = file.name || "未命名檔案";' in drive_js
     assert "filename: originalName" in drive_js
     assert "vault.bin" not in drive_js

@@ -15,6 +15,7 @@ const CHESS_PIPELINE_FALLBACK_COMMANDS = {
 };
 
 let chessClockMeta = { matchId: null, moveCount: 0, turn: "" };
+let chessPracticeDifficultyUiBound = false;
 const chessCompetitionClock = window.createHackmeCompetitionClock?.({
   onExpire(side) {
     const loser = side === "white" ? "白方" : "黑方";
@@ -120,14 +121,15 @@ function syncChessClockWithMatch(match) {
 chessCompetitionClock?.subscribe(renderChessClockDisplay);
 
 function gameDifficultyOptionDescription(difficulty) {
-  const strength = window.HACKME_GAME_AI_STRENGTH?.chess?.[difficulty];
+  const normalizedDifficulty = normalizeChessPracticeDifficultyKey(difficulty);
+  const strength = window.HACKME_GAME_AI_STRENGTH?.chess?.[normalizedDifficulty] || window.HACKME_GAME_AI_STRENGTH?.chess?.[difficulty];
   const suffix = strength ? `｜${strength}` : "";
-  if (difficulty === "stockfish") return `Stockfish（本機外部引擎）${suffix}`;
-  if (difficulty === "experiment 5:nnue") return `實驗 5：NNUE + AlphaBeta/PVS${suffix}`;
-  if (difficulty === "experiment 4:pv") return `實驗 4：Policy/Value + MCTS${suffix}`;
-  if (difficulty === "experiment 3:dl") return `實驗 3：DL 語義平衡學習${suffix}`;
-  if (difficulty === "experiment") return `實驗：引擎搜尋 + 對局學習${suffix}`;
-  if (difficulty === "hard") return `困難：避免明顯送子${suffix}`;
+  if (normalizedDifficulty === "stockfish") return `Stockfish（本機外部引擎）${suffix}`;
+  if (normalizedDifficulty === "experiment 5:nnue") return `實驗 5：NNUE + AlphaBeta/PVS${suffix}`;
+  if (normalizedDifficulty === "experiment 4:pv") return `實驗 4：Policy/Value + MCTS${suffix}`;
+  if (normalizedDifficulty === "experiment 3:dl") return `實驗 3：DL 語義平衡學習${suffix}`;
+  if (normalizedDifficulty === "experiment") return `實驗：引擎搜尋 + 對局學習${suffix}`;
+  if (normalizedDifficulty === "hard") return `困難：避免明顯送子${suffix}`;
   return `普通：優先吃子與將軍${suffix}`;
 }
 
@@ -153,19 +155,72 @@ function renderChessPracticeDifficultyOptions(games) {
   }).join("");
   const allowed = new Set(rows.map((row) => String(row?.key || "")));
   select.value = allowed.has(current) ? current : (allowed.has("normal") ? "normal" : String(rows[0]?.key || "normal"));
+  bindChessPracticeDifficultyUi();
+  updateChessStockfishDepthControl();
+}
+
+function normalizeChessPracticeDifficultyKey(value) {
+  const key = String(value || "normal").trim().toLowerCase();
+  if (key === "stockfisher" || key === "stockfish") return "stockfish";
+  return key || "normal";
+}
+
+function isChessStockfishDifficulty(value) {
+  return normalizeChessPracticeDifficultyKey(value) === "stockfish";
+}
+
+function normalizeChessStockfishDepth(value) {
+  const parsed = Number.parseInt(String(value || ""), 10);
+  if (!Number.isFinite(parsed)) return 10;
+  return Math.max(1, Math.min(20, parsed));
+}
+
+function selectedChessStockfishDepth() {
+  const input = $("game-practice-stockfish-depth");
+  const depth = normalizeChessStockfishDepth(input?.value || 10);
+  if (input) input.value = String(depth);
+  return depth;
+}
+
+function updateChessStockfishDepthControl() {
+  const field = $("game-practice-stockfish-depth-field");
+  const select = $("game-practice-difficulty");
+  const input = $("game-practice-stockfish-depth");
+  if (!field || !select) return;
+  const enabled = isChessStockfishDifficulty(select.value);
+  field.hidden = !enabled;
+  field.style.display = enabled ? "" : "none";
+  field.setAttribute("aria-hidden", enabled ? "false" : "true");
+  if (input) {
+    input.disabled = !enabled;
+    input.required = enabled;
+  }
+  if (enabled) selectedChessStockfishDepth();
+}
+
+function bindChessPracticeDifficultyUi() {
+  if (chessPracticeDifficultyUiBound) return;
+  const select = $("game-practice-difficulty");
+  const input = $("game-practice-stockfish-depth");
+  if (!select) return;
+  select.addEventListener("change", updateChessStockfishDepthControl);
+  if (input) input.addEventListener("change", selectedChessStockfishDepth);
+  chessPracticeDifficultyUiBound = true;
 }
 
 function gameMatchLabel(match) {
   const side = match.my_side === "black" ? "黑方" : "白方";
   const opponentName = match.my_side === "black" ? match.white_username : match.black_username;
-  const difficulty = match.mode === "computer" ? ` · ${gameDifficultyLabel(match.computer_difficulty)}` : "";
+  const stockfishDepth = match.computer_difficulty === "stockfish" && match.stockfish_depth
+    ? ` depth ${Number(match.stockfish_depth || 0)}`
+    : "";
+  const difficulty = match.mode === "computer" ? ` · ${gameDifficultyLabel(match.computer_difficulty)}${stockfishDepth}` : "";
   return `${side} vs ${opponentName || "電腦"}${difficulty}`;
 }
 
 function gameDifficultyLabel(difficulty) {
   if (difficulty === "stockfish") return "Stockfish（本機）";
   if (difficulty === "experiment 5:nnue") return "實驗 5：NNUE + AlphaBeta/PVS";
-  if (difficulty === "stockfish") return "Stockfish（本機）";
   if (difficulty === "experiment 4:pv") return "實驗 4：Policy/Value + MCTS";
   if (difficulty === "experiment 3:dl") return "實驗 3：DL 語義平衡";
   if (difficulty === "experiment") return "實驗";
@@ -741,11 +796,14 @@ async function reviewGameInvite(inviteId, action) {
 async function createPracticeGame() {
   try {
     const side = $("game-practice-side")?.value || "white";
-    const difficulty = $("game-practice-difficulty")?.value || "normal";
-    const json = await gameRequest("/games/chess/practice", { method: "POST", body: { side, difficulty } });
+    const difficulty = normalizeChessPracticeDifficultyKey($("game-practice-difficulty")?.value || "normal");
+    const body = { side, difficulty };
+    if (isChessStockfishDifficulty(difficulty)) body.stockfish_depth = selectedChessStockfishDepth();
+    const json = await gameRequest("/games/chess/practice", { method: "POST", body });
     gameSelectedMatchId = json.match_id;
     gameSelectedSquare = null;
-    const msg = `${side === "black" ? "已建立電腦練習局，你執黑方" : "已建立電腦練習局，你執白方"}，難度：${gameDifficultyLabel(difficulty)}`;
+    const depthText = isChessStockfishDifficulty(difficulty) ? ` depth ${body.stockfish_depth}` : "";
+    const msg = `${side === "black" ? "已建立電腦練習局，你執黑方" : "已建立電腦練習局，你執白方"}，難度：${gameDifficultyLabel(difficulty)}${depthText}`;
     setGameMsg(msg, true);
     await refreshGameZoneAfterMutation(msg);
   } catch (err) {
@@ -1016,6 +1074,10 @@ async function promoteChessCandidate() {
     leaderboardPath() {
       return "/games/chess/leaderboard";
     },
+    ensure() {
+      bindChessPracticeDifficultyUi();
+      updateChessStockfishDepthControl();
+    },
     dispatch(type, event) {
       const target = event.target;
       if (type === "click" && target?.closest?.("#game-chess-hint-btn")) {
@@ -1037,6 +1099,14 @@ async function promoteChessCandidate() {
         applyChessClockConfig({ reset: true });
         const match = selectedChessMatchForClock();
         if (match) renderChessBoard(match);
+        return true;
+      }
+      if (type === "change" && target?.closest?.("#game-practice-difficulty")) {
+        updateChessStockfishDepthControl();
+        return true;
+      }
+      if (type === "change" && target?.closest?.("#game-practice-stockfish-depth")) {
+        selectedChessStockfishDepth();
         return true;
       }
       return false;

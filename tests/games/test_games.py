@@ -185,6 +185,7 @@ def test_game_matches_difficulty_enum_in_sync_across_bootstrap_and_runtime():
         "'experiment 4:pv'",
         "'experiment 5:nnue'",
         "'stockfish'",
+        "computer_config_json",
     ):
         assert value in bootstrap_sql, f"{value} missing from bootstrap.schema.sql"
         assert value in runtime_sql, f"{value} missing from routes.games.game_schema_sql()"
@@ -1008,11 +1009,20 @@ def test_chess_practice_difficulty_is_persisted_and_rejects_invalid_value(tmp_pa
     assert "難度" in stockfish_unavailable.get_json()["msg"]
 
     with patch("routes.games.stockfish_available", return_value=True):
-        stockfish_match = client.post("/api/games/chess/practice", json={"difficulty": "stockfish"})
+        stockfish_match = client.post("/api/games/chess/practice", json={"difficulty": "stockfish", "stockfish_depth": 14})
     assert stockfish_match.status_code == 200
     stockfish_id = stockfish_match.get_json()["match_id"]
     stockfish_detail = client.get(f"/api/games/chess/matches/{stockfish_id}").get_json()["match"]
     assert stockfish_detail["computer_difficulty"] == "stockfish"
+    assert stockfish_detail["stockfish_depth"] == 14
+    assert stockfish_detail["computer_config"]["stockfish_depth"] == 14
+
+    with patch("routes.games.stockfish_available", return_value=True):
+        capped_match = client.post("/api/games/chess/practice", json={"difficulty": "stockfish", "stockfish_depth": 999})
+    assert capped_match.status_code == 200
+    capped_id = capped_match.get_json()["match_id"]
+    capped_detail = client.get(f"/api/games/chess/matches/{capped_id}").get_json()["match"]
+    assert capped_detail["stockfish_depth"] == 20
 
 
 def test_chess_computer_normal_difficulty_prefers_high_value_capture():
@@ -1027,6 +1037,22 @@ def test_chess_computer_normal_difficulty_prefers_high_value_capture():
     assert move["from"] == "d8"
     assert move["to"] == "d1"
     assert move["captured"] == "Q"
+
+
+def test_chess_stockfish_difficulty_passes_configured_depth():
+    board = {
+        "e1": "K",
+        "e8": "k",
+        "d1": "Q",
+        "d8": "q",
+    }
+    sentinel = {"from": "d8", "to": "d1", "piece": "q"}
+    with patch("routes.games.stockfish_available", return_value=True), patch(
+        "routes.games.choose_stockfish_move", return_value=sentinel
+    ) as choose:
+        move = choose_computer_move(board, "black", "stockfish", computer_config={"stockfish_depth": 12})
+    assert move == sentinel
+    assert choose.call_args.kwargs["depth"] == 12
 
 
 def test_experiment_learning_store_uses_separate_runtime_db(tmp_path):

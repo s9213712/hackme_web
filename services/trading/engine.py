@@ -261,6 +261,7 @@ from services.trading.bots.service import (
     bot_audit_run_findings as bot_audit_run_findings_helper,
     bot_condition_checks as bot_condition_checks_helper,
     bot_trigger_hit as bot_trigger_hit_helper,
+    adjust_trading_bot_budget as adjust_trading_bot_budget_helper,
     delete_trading_bot as delete_trading_bot_helper,
     get_bot_audit_dashboard as get_bot_audit_dashboard_helper,
     increase_trading_bot_max_runs as increase_trading_bot_max_runs_helper,
@@ -277,6 +278,7 @@ from services.trading.bots.service import (
     save_trading_bot as save_trading_bot_helper,
     set_trading_bot_share_parameters as set_trading_bot_share_parameters_helper,
     validate_bot_payload as validate_bot_payload_helper,
+    _bot_payload_with_budget_meta as bot_payload_with_budget_meta_helper,
     workflow_live_context as workflow_live_context_helper,
     workflow_order_from_decision as workflow_order_from_decision_helper,
 )
@@ -1007,20 +1009,33 @@ def ensure_trading_schema(conn):
         conn.execute("ALTER TABLE trading_orders ADD COLUMN trial_frozen_points INTEGER NOT NULL DEFAULT 0")
     if "chain_frozen_points" not in order_cols:
         conn.execute("ALTER TABLE trading_orders ADD COLUMN chain_frozen_points INTEGER NOT NULL DEFAULT 0")
+    if "fee_micropoints" not in order_cols:
+        conn.execute("ALTER TABLE trading_orders ADD COLUMN fee_micropoints INTEGER NOT NULL DEFAULT 0")
     if "stop_loss_percent" not in order_cols:
         conn.execute("ALTER TABLE trading_orders ADD COLUMN stop_loss_percent REAL")
     if "take_profit_percent" not in order_cols:
         conn.execute("ALTER TABLE trading_orders ADD COLUMN take_profit_percent REAL")
     position_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_spot_positions)").fetchall()}
+    if "fee_carry_micropoints" not in position_cols:
+        conn.execute("ALTER TABLE trading_spot_positions ADD COLUMN fee_carry_micropoints INTEGER NOT NULL DEFAULT 0")
     if "stop_loss_percent" not in position_cols:
         conn.execute("ALTER TABLE trading_spot_positions ADD COLUMN stop_loss_percent REAL")
     if "take_profit_percent" not in position_cols:
         conn.execute("ALTER TABLE trading_spot_positions ADD COLUMN take_profit_percent REAL")
     fill_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_fills)").fetchall()}
+    if "fee_micropoints" not in fill_cols:
+        conn.execute("ALTER TABLE trading_fills ADD COLUMN fee_micropoints INTEGER NOT NULL DEFAULT 0")
     if "trial_repaid_points" not in fill_cols:
         conn.execute("ALTER TABLE trading_fills ADD COLUMN trial_repaid_points INTEGER NOT NULL DEFAULT 0")
     if "trial_profit_points" not in fill_cols:
         conn.execute("ALTER TABLE trading_fills ADD COLUMN trial_profit_points INTEGER NOT NULL DEFAULT 0")
+    pnl_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_spot_realized_pnl)").fetchall()}
+    if "buy_fee_micropoints" not in pnl_cols:
+        conn.execute("ALTER TABLE trading_spot_realized_pnl ADD COLUMN buy_fee_micropoints INTEGER NOT NULL DEFAULT 0")
+    if "sell_fee_micropoints" not in pnl_cols:
+        conn.execute("ALTER TABLE trading_spot_realized_pnl ADD COLUMN sell_fee_micropoints INTEGER NOT NULL DEFAULT 0")
+    if "settled_fee_micropoints" not in pnl_cols:
+        conn.execute("ALTER TABLE trading_spot_realized_pnl ADD COLUMN settled_fee_micropoints INTEGER NOT NULL DEFAULT 0")
     trial_credit_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_trial_credits)").fetchall()}
     if "reclaim_blocked_reason" not in trial_credit_cols:
         conn.execute("ALTER TABLE trading_trial_credits ADD COLUMN reclaim_blocked_reason TEXT NOT NULL DEFAULT ''")
@@ -1035,6 +1050,10 @@ def ensure_trading_schema(conn):
         conn.execute("ALTER TABLE trading_margin_positions ADD COLUMN open_fee_trial_points INTEGER NOT NULL DEFAULT 0")
     if "open_fee_chain_points" not in margin_cols:
         conn.execute("ALTER TABLE trading_margin_positions ADD COLUMN open_fee_chain_points INTEGER NOT NULL DEFAULT 0")
+    if "open_fee_micropoints" not in margin_cols:
+        conn.execute("ALTER TABLE trading_margin_positions ADD COLUMN open_fee_micropoints INTEGER NOT NULL DEFAULT 0")
+    if "close_fee_micropoints" not in margin_cols:
+        conn.execute("ALTER TABLE trading_margin_positions ADD COLUMN close_fee_micropoints INTEGER NOT NULL DEFAULT 0")
     if "interest_paid_points" not in margin_cols:
         conn.execute("ALTER TABLE trading_margin_positions ADD COLUMN interest_paid_points INTEGER NOT NULL DEFAULT 0")
     if "interest_accrued_hours" not in margin_cols:
@@ -1962,10 +1981,11 @@ class TradingEngineService:
             observed_high=observed_high,
         )
 
-    def _quantity_text_from_budget(self, *, budget_points, price_points):
+    def _quantity_text_from_budget(self, *, budget_points, price_points, fee_rate_percent=0.0):
         return quantity_text_from_budget_helper(
             budget_points=budget_points,
             price_points=price_points,
+            fee_rate_percent=fee_rate_percent,
         )
 
     def _build_workflow_indicator_series(self, candles):
@@ -2002,7 +2022,7 @@ class TradingEngineService:
             workflow_condition_hit_func=self._workflow_condition_hit,
         )
 
-    def _workflow_order_from_decision(self, conn, *, user_id, actor, market, decision, price_points):
+    def _workflow_order_from_decision(self, conn, *, user_id, actor, market, decision, price_points, budget_points=None, bot_id=None):
         return workflow_order_from_decision_helper(
             self,
             conn,
@@ -2011,10 +2031,24 @@ class TradingEngineService:
             market=market,
             decision=decision,
             price_points=price_points,
+            budget_points=budget_points,
+            bot_id=bot_id,
         )
+
+    def _bot_payload_with_budget_meta(self, conn, row):
+        return bot_payload_with_budget_meta_helper(self, conn, row)
 
     def run_trading_bots(self, *, actor, limit=50):
         return run_trading_bots_helper(self, actor=actor, limit=limit)
+
+    def adjust_trading_bot_budget(self, *, actor, bot_uuid, budget_points=None, delta_points=None):
+        return adjust_trading_bot_budget_helper(
+            self,
+            actor=actor,
+            bot_uuid=bot_uuid,
+            budget_points=budget_points,
+            delta_points=delta_points,
+        )
 
     def run_trading_bot_once(self, *, actor, bot_uuid):
         return run_trading_bot_once_helper(self, actor=actor, bot_uuid=bot_uuid)
@@ -2039,7 +2073,7 @@ class TradingEngineService:
             execution_state=execution_state,
         )
 
-    def place_order(self, *, actor, market_symbol, side, order_type, quantity, limit_price_points=None, stop_loss_percent=None, take_profit_percent=None, emergency_close=False, is_grid_order=False, ctx=None):
+    def place_order(self, *, actor, market_symbol, side, order_type, quantity, limit_price_points=None, stop_loss_percent=None, take_profit_percent=None, emergency_close=False, is_grid_order=False, use_locked_inventory=False, ctx=None):
         return place_order_helper(
             self,
             actor=actor,
@@ -2052,6 +2086,7 @@ class TradingEngineService:
             take_profit_percent=take_profit_percent,
             emergency_close=emergency_close,
             is_grid_order=is_grid_order,
+            use_locked_inventory=use_locked_inventory,
             ctx=ctx,
         )
 
@@ -2322,7 +2357,7 @@ class TradingEngineService:
 
 from services.trading import engine_market_methods as _engine_market_methods
 
-for _name in ('_market_registry_audit', '_market_registry_payload', '_market_provider_mapping_payload', '_validate_market_registry_payload', '_validate_market_provider_mapping_payload', '_probe_market_registry_on_conn', '_persist_market_registry_probe', 'list_market_registry', 'get_market_provider_registry', 'create_market_registry', 'update_market_registry', 'disable_market_registry', 'create_market_provider_mapping', 'update_market_provider_mapping', 'disable_market_provider_mapping', 'probe_market_registry', '_live_price_symbol', '_fetch_json_url', '_price_points_from_float', '_call_with_optional_conn', '_provider_ticker_with_fallback', '_provider_orderbook_with_fallback', '_fetch_binance_price_points', '_fetch_okx_price_points', '_fetch_coinbase_price_points', '_fetch_kraken_price_points', '_fetch_gemini_price_points', '_fetch_bitstamp_price_points', '_fetch_coingecko_price_points', '_price_fusion_depth_levels', '_price_fusion_depth_band_percent', '_price_fusion_min_orderbook_coverage_percent', '_price_fusion_provider_weight_cap_percent', '_price_fusion_min_provider_count', '_price_stream_ws_enabled', '_price_stream_ws_stale_seconds', '_price_stream_provider_state', '_provider_transport_meta', '_resolve_stream_ticker_snapshot', '_resolve_stream_orderbook_snapshot', '_provider_quantity_unit_info', '_price_fusion_warning', '_append_price_fusion_warning', '_primary_price_fusion_warning', '_price_usage_label', '_price_source_label', '_price_context_confidence', '_price_context_risk_grade_usable', '_build_price_context', '_attach_market_price_contexts', '_stored_market_price_contexts', '_price_fusion_effective_score', '_price_fusion_reference_score', '_price_fusion_warning_is_degrading', '_price_fusion_exclusion_is_degrading', '_transport_state_from_provider_rows', '_assert_price_meta_allows_high_risk_use', '_provider_depth_request_limit', '_parse_orderbook_side', '_depth_notional_snapshot', '_depth_notional_score', '_build_orderbook_snapshot', '_normalize_orderbook_fetch_result', '_okx_http_book_getter', '_kraken_http_book_getter', '_fetch_binance_orderbook_snapshot', '_fetch_okx_orderbook_snapshot', '_fetch_coinbase_orderbook_snapshot', '_fetch_kraken_orderbook_snapshot', '_fetch_gemini_orderbook_snapshot', '_fetch_bitstamp_orderbook_snapshot', '_price_fusion_manual_weights', '_apply_price_fusion_weight_cap', '_build_price_fusion_weight_model', '_fetch_weighted_fused_price_points', '_default_price_fusion_market_symbol', '_root_price_fusion_status_on_conn', 'get_root_price_fusion_status', 'get_live_market_quote', '_fetch_live_price_points', '_fetch_indicator_candles', '_parse_candle_time_ms', '_recent_price_window', '_workflow_live_context', '_current_market_price_points', '_root_sim_account', '_sim_delta', '_is_root_user_id', '_system_actor', '_trial_credit_row', '_ensure_trial_credit', '_trial_position', '_trial_delta', '_trial_lock_for_buy', '_trial_spend', '_trial_deploy', '_trial_unlock', '_set_trial_reclaim_blocked', '_clear_trial_reclaim_blocked', '_trial_mark_buy_executed', '_trial_allocate_sell', '_cancel_trial_reclaim_sell_orders', '_release_trial_margin_collateral', '_reclaim_trial_credit', '_funding_payload', '_position_payload', '_position_payload_with_metrics', '_futures_position_payload', '_margin_position_payload', '_margin_trade_records', '_borrowing_settings', '_assert_borrowing_enabled', '_minimum_margin_collateral_points', '_margin_interest_total_hours', '_margin_interest_due_points', '_margin_interest_due_micropoints', '_margin_interest_points', '_accrue_margin_interest', '_margin_risk_payload', '_margin_position_payload_with_risk', '_margin_free_margin_points', '_margin_account_payload', '_margin_summary_payload', '_margin_liquidation_order_key', '_margin_summary_payload_legacy', '_fill_payload', '_spot_realized_map', '_spot_fee_map', '_spot_summary_payload', '_notify_trade_filled', '_is_insufficient_error', '_notify_insufficient_balance', '_notify_margin_liquidated', '_has_unread_margin_alert', '_notify_margin_risk_alerts', 'list_markets', 'user_dashboard', '_is_executable', '_legacy_workflow', '_validate_workflow', '_validate_workflow_graph', '_validate_bot_payload', 'list_trading_bots', 'save_trading_bot', 'set_trading_bot_share_parameters', 'delete_trading_bot', 'increase_trading_bot_max_runs', '_grid_levels', '_grid_quantity_units', '_grid_preview_fee_rates', '_grid_preview_risk', '_grid_preview_summary', 'preview_grid_bot', '_grid_bot_payload', 'create_grid_bot', 'list_grid_bots', 'set_grid_bot_share_parameters', 'toggle_grid_bot', 'delete_grid_bot', 'scan_grid_bots', '_scan_one_grid_bot', 'get_bot_competition', 'award_bot_competition_week'):
+for _name in ('_market_registry_audit', '_market_registry_payload', '_market_provider_mapping_payload', '_validate_market_registry_payload', '_validate_market_provider_mapping_payload', '_probe_market_registry_on_conn', '_persist_market_registry_probe', 'list_market_registry', 'get_market_provider_registry', 'create_market_registry', 'update_market_registry', 'disable_market_registry', 'create_market_provider_mapping', 'update_market_provider_mapping', 'disable_market_provider_mapping', 'probe_market_registry', '_live_price_symbol', '_fetch_json_url', '_price_points_from_float', '_call_with_optional_conn', '_provider_ticker_with_fallback', '_provider_orderbook_with_fallback', '_fetch_binance_price_points', '_fetch_okx_price_points', '_fetch_coinbase_price_points', '_fetch_kraken_price_points', '_fetch_gemini_price_points', '_fetch_bitstamp_price_points', '_fetch_coingecko_price_points', '_price_fusion_depth_levels', '_price_fusion_depth_band_percent', '_price_fusion_min_orderbook_coverage_percent', '_price_fusion_provider_weight_cap_percent', '_price_fusion_min_provider_count', '_price_stream_ws_enabled', '_price_stream_ws_stale_seconds', '_price_stream_provider_state', '_provider_transport_meta', '_resolve_stream_ticker_snapshot', '_resolve_stream_orderbook_snapshot', '_provider_quantity_unit_info', '_price_fusion_warning', '_append_price_fusion_warning', '_primary_price_fusion_warning', '_price_usage_label', '_price_source_label', '_price_context_confidence', '_price_context_risk_grade_usable', '_build_price_context', '_attach_market_price_contexts', '_stored_market_price_contexts', '_price_fusion_effective_score', '_price_fusion_reference_score', '_price_fusion_warning_is_degrading', '_price_fusion_exclusion_is_degrading', '_transport_state_from_provider_rows', '_assert_price_meta_allows_high_risk_use', '_provider_depth_request_limit', '_parse_orderbook_side', '_depth_notional_snapshot', '_depth_notional_score', '_build_orderbook_snapshot', '_normalize_orderbook_fetch_result', '_okx_http_book_getter', '_kraken_http_book_getter', '_fetch_binance_orderbook_snapshot', '_fetch_okx_orderbook_snapshot', '_fetch_coinbase_orderbook_snapshot', '_fetch_kraken_orderbook_snapshot', '_fetch_gemini_orderbook_snapshot', '_fetch_bitstamp_orderbook_snapshot', '_price_fusion_manual_weights', '_apply_price_fusion_weight_cap', '_build_price_fusion_weight_model', '_fetch_weighted_fused_price_points', '_default_price_fusion_market_symbol', '_root_price_fusion_status_on_conn', 'get_root_price_fusion_status', 'get_live_market_quote', '_fetch_live_price_points', '_fetch_indicator_candles', '_parse_candle_time_ms', '_recent_price_window', '_workflow_live_context', '_current_market_price_points', '_root_sim_account', '_sim_delta', '_is_root_user_id', '_system_actor', '_trial_credit_row', '_ensure_trial_credit', '_trial_position', '_trial_delta', '_trial_lock_for_buy', '_trial_spend', '_trial_deploy', '_trial_unlock', '_set_trial_reclaim_blocked', '_clear_trial_reclaim_blocked', '_trial_mark_buy_executed', '_trial_allocate_sell', '_cancel_trial_reclaim_sell_orders', '_release_trial_margin_collateral', '_reclaim_trial_credit', '_funding_payload', '_position_payload', '_position_payload_with_metrics', '_futures_position_payload', '_margin_position_payload', '_margin_trade_records', '_borrowing_settings', '_assert_borrowing_enabled', '_minimum_margin_collateral_points', '_margin_interest_total_hours', '_margin_interest_due_points', '_margin_interest_due_micropoints', '_margin_interest_points', '_accrue_margin_interest', '_margin_risk_payload', '_margin_position_payload_with_risk', '_margin_free_margin_points', '_margin_account_payload', '_margin_summary_payload', '_margin_liquidation_order_key', '_margin_summary_payload_legacy', '_fill_payload', '_spot_realized_map', '_spot_fee_map', '_spot_summary_payload', '_notify_trade_filled', '_is_insufficient_error', '_notify_insufficient_balance', '_notify_margin_liquidated', '_has_unread_margin_alert', '_notify_margin_risk_alerts', 'list_markets', 'user_dashboard', '_is_executable', '_legacy_workflow', '_validate_workflow', '_validate_workflow_graph', '_validate_bot_payload', '_bot_payload_with_budget_meta', 'list_trading_bots', 'save_trading_bot', 'set_trading_bot_share_parameters', 'delete_trading_bot', 'increase_trading_bot_max_runs', 'adjust_trading_bot_budget', '_grid_levels', '_grid_quantity_units', '_grid_preview_fee_rates', '_grid_preview_risk', '_grid_preview_summary', 'preview_grid_bot', '_grid_bot_payload', 'create_grid_bot', 'list_grid_bots', 'set_grid_bot_share_parameters', 'toggle_grid_bot', 'delete_grid_bot', 'scan_grid_bots', '_scan_one_grid_bot', 'get_bot_competition', 'award_bot_competition_week'):
     setattr(TradingEngineService, _name, getattr(_engine_market_methods, _name))
 
 del _engine_market_methods

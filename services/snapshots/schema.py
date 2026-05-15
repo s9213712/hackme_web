@@ -954,6 +954,7 @@ def ensure_snapshot_schema(conn):
             trial_frozen_points INTEGER NOT NULL DEFAULT 0,
             chain_frozen_points INTEGER NOT NULL DEFAULT 0,
             fee_points          INTEGER NOT NULL DEFAULT 0,
+            fee_micropoints     INTEGER NOT NULL DEFAULT 0,
             filled_quantity_units INTEGER NOT NULL DEFAULT 0,
             reason              TEXT,
             token_id            TEXT,
@@ -973,6 +974,7 @@ def ensure_snapshot_schema(conn):
         ("execution_mode", "ALTER TABLE test_shadow_orders ADD COLUMN execution_mode TEXT NOT NULL DEFAULT 'house_counterparty'"),
         ("trial_frozen_points", "ALTER TABLE test_shadow_orders ADD COLUMN trial_frozen_points INTEGER NOT NULL DEFAULT 0"),
         ("chain_frozen_points", "ALTER TABLE test_shadow_orders ADD COLUMN chain_frozen_points INTEGER NOT NULL DEFAULT 0"),
+        ("fee_micropoints", "ALTER TABLE test_shadow_orders ADD COLUMN fee_micropoints INTEGER NOT NULL DEFAULT 0"),
         ("stop_loss_percent", "ALTER TABLE test_shadow_orders ADD COLUMN stop_loss_percent REAL"),
         ("take_profit_percent", "ALTER TABLE test_shadow_orders ADD COLUMN take_profit_percent REAL"),
     ):
@@ -990,6 +992,7 @@ def ensure_snapshot_schema(conn):
             quantity_units      INTEGER NOT NULL DEFAULT 0 CHECK (quantity_units >= 0),
             locked_quantity_units INTEGER NOT NULL DEFAULT 0 CHECK (locked_quantity_units >= 0),
             avg_cost_points     INTEGER NOT NULL DEFAULT 0,
+            fee_carry_micropoints INTEGER NOT NULL DEFAULT 0,
             token_id            TEXT,
             updated_at          TEXT NOT NULL,
             PRIMARY KEY (tester_user_id, market_symbol)
@@ -999,6 +1002,8 @@ def ensure_snapshot_schema(conn):
     shadow_position_cols = {row["name"] for row in conn.execute("PRAGMA table_info(test_shadow_positions)").fetchall()}
     if "user_id" not in shadow_position_cols:
         conn.execute("ALTER TABLE test_shadow_positions ADD COLUMN user_id INTEGER")
+    if "fee_carry_micropoints" not in shadow_position_cols:
+        conn.execute("ALTER TABLE test_shadow_positions ADD COLUMN fee_carry_micropoints INTEGER NOT NULL DEFAULT 0")
     conn.execute("UPDATE test_shadow_positions SET user_id=tester_user_id WHERE user_id IS NULL")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_shadow_positions_tester ON test_shadow_positions(tester_user_id)")
     conn.execute(
@@ -1016,6 +1021,8 @@ def ensure_snapshot_schema(conn):
             collateral_points INTEGER NOT NULL CHECK (collateral_points > 0),
             open_fee_points INTEGER NOT NULL DEFAULT 0,
             close_fee_points INTEGER NOT NULL DEFAULT 0,
+            open_fee_micropoints INTEGER NOT NULL DEFAULT 0,
+            close_fee_micropoints INTEGER NOT NULL DEFAULT 0,
             exit_price_points INTEGER,
             realized_pnl_points INTEGER NOT NULL DEFAULT 0,
             interest_percent_daily REAL NOT NULL DEFAULT 0,
@@ -1046,6 +1053,10 @@ def ensure_snapshot_schema(conn):
         conn.execute("ALTER TABLE test_shadow_margin_positions ADD COLUMN stop_loss_percent REAL")
     if "take_profit_percent" not in shadow_margin_cols:
         conn.execute("ALTER TABLE test_shadow_margin_positions ADD COLUMN take_profit_percent REAL")
+    if "open_fee_micropoints" not in shadow_margin_cols:
+        conn.execute("ALTER TABLE test_shadow_margin_positions ADD COLUMN open_fee_micropoints INTEGER NOT NULL DEFAULT 0")
+    if "close_fee_micropoints" not in shadow_margin_cols:
+        conn.execute("ALTER TABLE test_shadow_margin_positions ADD COLUMN close_fee_micropoints INTEGER NOT NULL DEFAULT 0")
     conn.execute("UPDATE test_shadow_margin_positions SET user_id=tester_user_id WHERE user_id IS NULL")
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_shadow_margin_positions_tester_status ON test_shadow_margin_positions(tester_user_id, status, market_symbol)"

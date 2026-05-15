@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from services.trading.accounting.core import fee_points, notional_points, units_to_quantity
+from services.trading.accounting.core import (
+    fee_micropoints,
+    points_from_micropoints_ceil,
+    notional_points,
+    units_to_quantity,
+)
+from services.trading.constants import POINT_MICRO_SCALE
 from services.trading.funding import funding_payload as funding_payload_helper
 from services.trading.validators import _apr_percent_from_daily, _billable_interest_hours_from_elapsed_seconds, _to_decimal
 
@@ -44,11 +50,16 @@ def position_payload_with_metrics(service, row, *, market=None, realized_points=
     gross_cost = notional_points(quantity_units, avg_cost) if quantity_units and avg_cost else 0
     reference_current_value = notional_points(quantity_units, reference_price) if quantity_units and reference_price else 0
     risk_grade_current_value = notional_points(quantity_units, risk_grade_price) if quantity_units and risk_grade_price else 0
-    estimated_buy_fee = fee_points(gross_cost, fee_rate_percent) if gross_cost else 0
-    reference_exit_fee = fee_points(reference_current_value, fee_rate_percent) if reference_current_value else 0
-    risk_grade_exit_fee = fee_points(risk_grade_current_value, fee_rate_percent) if risk_grade_current_value else 0
-    reference_cost_basis = gross_cost + estimated_buy_fee + reference_exit_fee
-    risk_grade_cost_basis = gross_cost + estimated_buy_fee + risk_grade_exit_fee
+    pending_fee_micro = int(item.get("fee_carry_micropoints") or 0)
+    reference_exit_fee_micro = fee_micropoints(reference_current_value, fee_rate_percent) if reference_current_value else 0
+    risk_grade_exit_fee_micro = fee_micropoints(risk_grade_current_value, fee_rate_percent) if risk_grade_current_value else 0
+    estimated_buy_fee = points_from_micropoints_ceil(pending_fee_micro)
+    reference_exit_fee = points_from_micropoints_ceil(reference_exit_fee_micro)
+    risk_grade_exit_fee = points_from_micropoints_ceil(risk_grade_exit_fee_micro)
+    reference_settlement_fee = points_from_micropoints_ceil(pending_fee_micro + reference_exit_fee_micro)
+    risk_grade_settlement_fee = points_from_micropoints_ceil(pending_fee_micro + risk_grade_exit_fee_micro)
+    reference_cost_basis = gross_cost + reference_settlement_fee
+    risk_grade_cost_basis = gross_cost + risk_grade_settlement_fee
     reference_unrealized = reference_current_value - reference_cost_basis if quantity_units else 0
     risk_grade_unrealized = risk_grade_current_value - risk_grade_cost_basis if quantity_units else 0
     item.update({
@@ -63,8 +74,12 @@ def position_payload_with_metrics(service, row, *, market=None, realized_points=
         "current_value_points": reference_current_value,
         "risk_grade_current_value_points": risk_grade_current_value,
         "estimated_buy_fee_points": estimated_buy_fee,
+        "pending_fee_micropoints": pending_fee_micro,
+        "pending_fee_points_exact": round(pending_fee_micro / POINT_MICRO_SCALE, 8),
         "reference_estimated_exit_fee_points": reference_exit_fee,
         "estimated_exit_fee_points": risk_grade_exit_fee,
+        "reference_settlement_fee_points": reference_settlement_fee,
+        "settlement_fee_points": risk_grade_settlement_fee,
         "reference_cost_basis_points": reference_cost_basis,
         "cost_basis_points": risk_grade_cost_basis,
         "reference_unrealized_pnl_points": reference_unrealized,
@@ -255,7 +270,7 @@ def user_dashboard(service, *, user_id):
         }
         bots = []
         for row in conn.execute("SELECT * FROM trading_bots WHERE user_id=? ORDER BY id DESC LIMIT 50", (int(user_id),)).fetchall():
-            bot = service._bot_payload(row)
+            bot = service._bot_payload_with_budget_meta(conn, row)
             current_price = market_prices.get(str(bot.get("market_symbol") or ""), 0)
             try:
                 bot["condition_checks"] = service._bot_condition_checks(bot, current_price)

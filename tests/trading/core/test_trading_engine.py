@@ -642,11 +642,10 @@ def test_internal_test_open_margin_position_writes_chain_collateral_to_shadow_le
     assert prod_ledger_after == prod_ledger_before
     assert [row["action_type"] for row in shadow_ledger_rows] == [
         "trading_margin_collateral_freeze",
-        "trading_margin_open_fee",
     ]
     assert all(int(row["tester_user_id"] or 0) == 9 for row in shadow_ledger_rows)
     assert shadow_wallet is not None
-    assert int(shadow_wallet["balance_points"] or 0) == 1_699
+    assert int(shadow_wallet["balance_points"] or 0) == 1_700
     assert int(shadow_wallet["frozen_points"] or 0) == 300
 
 
@@ -714,8 +713,8 @@ def test_spot_buy_uses_trial_credit_before_points_chain_and_updates_position(tmp
     wallet = points.get_wallet(1)
     assert wallet["points_balance"] == 2000
     dashboard = trading.user_dashboard(user_id=1)
-    assert dashboard["funding"]["trial_credit"]["available_points"] == 499
-    assert dashboard["funding"]["trial_credit"]["deployed_points"] == 501
+    assert dashboard["funding"]["trial_credit"]["available_points"] == 500
+    assert dashboard["funding"]["trial_credit"]["deployed_points"] == 500
     assert dashboard["positions"][0]["market_symbol"] == "ETH/POINTS"
     assert dashboard["positions"][0]["quantity"] == "0.1"
     assert dashboard["futures_positions"] == []
@@ -753,7 +752,8 @@ def test_mixed_trial_and_real_points_buy_only_records_real_points_on_chain(tmp_p
     fill = dashboard["fills"][0]
     assert fill["funding_mode"] == "trial_mixed"
     assert fill["notional_points"] == 1250
-    assert fill["fee_points"] == 2
+    assert fill["fee_points"] == 0
+    assert fill["fee_micropoints"] == 1_250_000
     assert dashboard["funding"]["trial_credit"]["available_points"] == 0
     assert dashboard["funding"]["trial_credit"]["deployed_points"] == 1000
 
@@ -761,11 +761,11 @@ def test_mixed_trial_and_real_points_buy_only_records_real_points_on_chain(tmp_p
     trading_rows = [row for row in ledger_rows if row["reference_id"] == result["order"]["order_uuid"]]
     amounts_by_action = {row["action_type"]: row["amount"] for row in trading_rows}
     assert amounts_by_action == {
-        "trading_freeze": 252,
-        "trading_unfreeze": 252,
-        "trading_spot_buy": 252,
+        "trading_freeze": 250,
+        "trading_unfreeze": 250,
+        "trading_spot_buy": 250,
     }
-    assert points.get_wallet(1)["points_balance"] == 1748
+    assert points.get_wallet(1)["points_balance"] == 1750
 
 
 def test_fee_points_ceil_positive_fractional_fee_for_integer_point_ledger():
@@ -777,10 +777,10 @@ def test_fee_points_ceil_positive_fractional_fee_for_integer_point_ledger():
     assert trading_engine_module.fee_points(500, 0.3) == 2
 
 
-def test_small_spot_buy_charges_minimum_integer_fee_when_fee_is_positive(tmp_path):
+def test_small_spot_buy_accumulates_fractional_fee_until_sell_settlement(tmp_path):
     _, trading = _services(tmp_path)
 
-    result = trading.place_order(
+    bought = trading.place_order(
         actor=_actor(),
         market_symbol="ETH/POINTS",
         side="buy",
@@ -788,14 +788,33 @@ def test_small_spot_buy_charges_minimum_integer_fee_when_fee_is_positive(tmp_pat
         quantity="0.02",
     )
 
-    assert result["order"]["status"] == "filled"
-    assert result["order"]["fee_points"] == 1
+    assert bought["order"]["status"] == "filled"
+    assert bought["order"]["fee_points"] == 0
+    assert bought["order"]["fee_micropoints"] == 100_000
 
     dashboard = trading.user_dashboard(user_id=1)
     fill = dashboard["fills"][0]
     assert fill["notional_points"] == 100
-    assert fill["fee_points"] == 1
-    assert dashboard["funding"]["trial_credit"]["available_points"] == 899
+    assert fill["fee_points"] == 0
+    assert fill["fee_micropoints"] == 100_000
+    assert dashboard["positions"][0]["fee_carry_micropoints"] == 100_000
+    assert dashboard["funding"]["trial_credit"]["available_points"] == 900
+
+    sold = trading.place_order(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        side="sell",
+        order_type="market",
+        quantity="0.02",
+    )
+    assert sold["order"]["fee_points"] == 1
+    assert sold["order"]["fee_micropoints"] == 200_000
+
+    dashboard = trading.user_dashboard(user_id=1)
+    sell_fill = dashboard["fills"][0]
+    assert sell_fill["fee_points"] == 1
+    assert sell_fill["fee_micropoints"] == 200_000
+    assert dashboard["positions"][0]["fee_carry_micropoints"] == 0
 
 
 @pytest.mark.parametrize(
@@ -833,11 +852,7 @@ def test_new_points_markets_spot_orders_keep_cost_fee_and_realized_pnl_sane(tmp_
     assert position["quantity"] == quantity
     assert position["avg_cost_points"] >= float(entry_price)
     assert position["gross_cost_points"] == expected_notional
-    assert position["cost_basis_points"] == (
-        expected_notional
-        + position["estimated_buy_fee_points"]
-        + position["estimated_exit_fee_points"]
-    )
+    assert position["cost_basis_points"] == expected_notional + position["settlement_fee_points"]
 
     trading.test_prices[market_symbol] = float(exit_price)
     sold = trading.place_order(
@@ -1398,6 +1413,7 @@ def test_grid_bot_audit_marks_orphan_open_orders_as_red(tmp_path):
 def test_grid_bot_stop_loss_disables_bot_and_cancels_open_orders(tmp_path):
     points, trading = _services(tmp_path)
     points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="0.1")
     created = trading.create_grid_bot(
         actor=_actor(),
         payload={
@@ -1811,6 +1827,11 @@ def test_dca_trading_bot_converts_budget_to_market_order(tmp_path):
     dashboard = trading.user_dashboard(user_id=1)
     assert dashboard["orders"][0]["side"] == "buy"
     assert dashboard["orders"][0]["order_type"] == "market"
+    total_spend = (
+        notional_points(dashboard["orders"][0]["filled_quantity_units"], dashboard["orders"][0]["execution_price_points"])
+        + int(dashboard["orders"][0]["fee_points"] or 0)
+    )
+    assert total_spend <= 100
     assert dashboard["bots"][0]["run_count"] == 1
 
 
@@ -2814,12 +2835,128 @@ def test_grid_bot_scans_and_fills_when_price_crosses_level_in_cfd_mode(tmp_path)
     assert trading.verify_state()["ok"] is True
 
 
+def test_grid_buy_inventory_stays_locked_until_grid_sell_uses_it(tmp_path):
+    points, trading = _services(tmp_path)
+    points.record_transaction(
+        user_id=1,
+        currency_type="points",
+        direction="credit",
+        amount=5000,
+        action_type="test_funding",
+    )
+
+    buy = trading.place_order(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        side="buy",
+        order_type="limit",
+        quantity="0.1",
+        limit_price_points=6000,
+        is_grid_order=True,
+    )
+    assert buy["executed"] is True
+    position = trading.user_dashboard(user_id=1)["positions"][0]
+    assert position["quantity_units"] == 0
+    assert position["locked_quantity_units"] == 10_000_000
+
+    with pytest.raises(ValueError, match="insufficient spot position"):
+        trading.place_order(
+            actor=_actor(),
+            market_symbol="ETH/POINTS",
+            side="sell",
+            order_type="market",
+            quantity="0.1",
+        )
+
+    counter = trading.place_order(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        side="sell",
+        order_type="limit",
+        quantity="0.1",
+        limit_price_points=6000,
+        is_grid_order=True,
+        use_locked_inventory=True,
+    )["order"]
+
+    assert counter["status"] == "open"
+    assert counter["frozen_points"] >= 1
+    assert counter["chain_frozen_points"] == counter["frozen_points"]
+    assert points.get_wallet(1)["points_frozen"] == counter["frozen_points"]
+    position = trading.user_dashboard(user_id=1)["positions"][0]
+    assert position["quantity_units"] == 0
+    assert position["locked_quantity_units"] == 10_000_000
+
+    _set_live_price(trading, symbol="ETH/POINTS", price_points=6000)
+    matched = trading.match_open_limit_orders(actor={"username": "system", "role": "system"}, limit=10)
+
+    assert matched["ok"] is True
+    assert matched["matched"][0]["order_uuid"] == counter["order_uuid"]
+    assert points.get_wallet(1)["points_frozen"] == 0
+    position = trading.user_dashboard(user_id=1)["positions"][0]
+    assert position["quantity_units"] == 0
+    assert position["locked_quantity_units"] == 0
+    assert trading.verify_state()["ok"] is True
+
+
+def test_delete_grid_bot_can_sell_or_keep_reserved_base_inventory(tmp_path):
+    points, trading = _services(tmp_path)
+    root = _actor(3, "root", "super_admin")
+    points.record_transaction(
+        user_id=1,
+        currency_type="points",
+        direction="credit",
+        amount=5000,
+        action_type="test_funding",
+    )
+    trading.test_prices["ETH/POINTS"] = 100
+    trading.update_market(actor=root, symbol="ETH/POINTS", manual_price_points=100, confirm_jump=True)
+    trading.place_order(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        side="buy",
+        order_type="market",
+        quantity="2.0",
+    )
+    created = trading.create_grid_bot(
+        actor=_actor(),
+        payload={
+            "name": "grid end sell",
+            "market_symbol": "ETH/POINTS",
+            "lower_price_points": 80,
+            "upper_price_points": 120,
+            "grid_count": 3,
+            "order_amount_points": 100,
+        },
+    )
+
+    assert points.get_wallet(1)["points_frozen"] > 0
+    deleted = trading.delete_grid_bot(
+        actor=_actor(),
+        bot_uuid=created["bot"]["bot_uuid"],
+        base_action="sell",
+    )
+
+    assert deleted["ok"] is True
+    assert deleted["base_action"] == "sell"
+    assert deleted["base_quantity_units"] > 0
+    assert deleted["sold_quantity_units"] == deleted["base_quantity_units"]
+    assert deleted["sell_error"] == ""
+    assert (deleted["sell_order"] or {})["status"] == "filled"
+    assert trading.list_grid_bots(actor=_actor())["bots"] == []
+    dashboard = trading.user_dashboard(user_id=1)
+    assert dashboard["positions"][0]["locked_quantity_units"] == 0
+    assert points.get_wallet(1)["points_frozen"] == 0
+    assert trading.verify_state()["ok"] is True
+
+
 def test_grid_bot_scan_window_low_can_fill_buy_limit(tmp_path):
     candles = [
         {"time_ms": 1_700_000_000_000, "close_points": 100.0, "high_points": 100.0, "low_points": 90.0},
     ]
     points, trading = _services_with_history(tmp_path, prices={"ETH/POINTS": 100.0}, candles=candles)
     points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=5000, action_type="test_funding")
+    trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="2.0")
     created = trading.create_grid_bot(
         actor=_actor(),
         payload={
@@ -2868,6 +3005,33 @@ def test_grid_bot_scan_window_high_can_fill_sell_limit(tmp_path):
     assert scanned["results"][0]["counter_orders_placed"] == [{"level_index": 2, "side": "buy", "price_points": 100}]
 
 
+def test_grid_bot_create_is_all_or_nothing_when_initial_orders_fail(tmp_path):
+    points, trading = _services(tmp_path)
+    root = _actor(3, "root", "super_admin")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=5000, action_type="test_funding")
+    trading.test_prices["ETH/POINTS"] = 100
+    trading.update_market(actor=root, symbol="ETH/POINTS", manual_price_points=100, confirm_jump=True)
+
+    with pytest.raises(ValueError, match="grid bot create failed"):
+        trading.create_grid_bot(
+            actor=_actor(),
+            payload={
+                "name": "partial grid should rollback",
+                "market_symbol": "ETH/POINTS",
+                "lower_price_points": 80,
+                "upper_price_points": 120,
+                "grid_count": 5,
+                "order_amount_points": 100,
+            },
+        )
+
+    assert trading.list_grid_bots(actor=_actor())["bots"] == []
+    dashboard = trading.user_dashboard(user_id=1)
+    assert [row for row in dashboard["orders"] if row["status"] in ("open", "partially_filled")] == []
+    assert points.get_wallet(1)["points_frozen"] == 0
+    assert trading.verify_state()["ok"] is True
+
+
 def test_increase_trading_bot_max_runs_updates_limit(tmp_path):
     _, trading = _services(tmp_path)
     created = trading.save_trading_bot(
@@ -2891,6 +3055,107 @@ def test_increase_trading_bot_max_runs_updates_limit(tmp_path):
     assert updated["ok"] is True
     assert updated["delta"] == 3
     assert updated["bot"]["max_runs"] == 4
+
+
+def test_workflow_budget_caps_buy_percent_order_size(tmp_path):
+    points, trading = _services(tmp_path)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=10000, action_type="test_funding")
+    workflow = {
+        "version": 1,
+        "strategy_kind": "workflow",
+        "branches": [{
+            "id": "entry",
+            "name": "budget capped entry",
+            "priority": 10,
+            "logic": "AND",
+            "cooldown_seconds": 0,
+            "max_runs": 1,
+            "conditions": [{"type": "always"}],
+            "actions": [{"type": "buy_percent", "percent": 100, "step": 1, "order_type": "market"}],
+        }],
+    }
+    created = trading.save_trading_bot(
+        actor=_actor(),
+        payload={
+            "bot_type": "conditional",
+            "name": "budget capped workflow",
+            "market_symbol": "ETH/POINTS",
+            "side": "buy",
+            "order_type": "market",
+            "quantity": "0.00000001",
+            "trigger_type": "always",
+            "budget_points": 100,
+            "max_runs": 1,
+            "cooldown_seconds": 0,
+            "workflow_json": workflow,
+            "enabled": True,
+        },
+    )
+
+    scanned = trading.run_trading_bots(actor=_actor(), limit=10)
+
+    assert scanned["ok"] is True
+    assert len(scanned["triggered"]) == 1
+    dashboard = trading.user_dashboard(user_id=1)
+    order = next(row for row in dashboard["orders"] if row.get("bot_name") == "budget capped workflow")
+    total_spend = notional_points(order["filled_quantity_units"], order["execution_price_points"]) + int(order["fee_points"] or 0)
+    assert total_spend <= 100
+    bot = next(row for row in dashboard["bots"] if row["bot_uuid"] == created["bot"]["bot_uuid"])
+    assert bot["budget_cap_enabled"] is True
+    assert bot["open_order_frozen_points"] == 0
+
+
+def test_adjust_workflow_budget_respects_open_order_floor(tmp_path):
+    points, trading = _services(tmp_path)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=10000, action_type="test_funding")
+    workflow = {
+        "version": 1,
+        "strategy_kind": "workflow",
+        "branches": [{
+            "id": "entry",
+            "name": "limit entry",
+            "priority": 10,
+            "logic": "AND",
+            "cooldown_seconds": 0,
+            "max_runs": 1,
+            "conditions": [{"type": "always"}],
+            "actions": [{"type": "buy_amount", "amount_points": 200, "step": 1, "order_type": "limit", "limit_price_points": 4000}],
+        }],
+    }
+    created = trading.save_trading_bot(
+        actor=_actor(),
+        payload={
+            "bot_type": "conditional",
+            "name": "budget floor workflow",
+            "market_symbol": "ETH/POINTS",
+            "side": "buy",
+            "order_type": "market",
+            "quantity": "0.00000001",
+            "trigger_type": "always",
+            "budget_points": 200,
+            "max_runs": 1,
+            "cooldown_seconds": 0,
+            "workflow_json": workflow,
+            "enabled": True,
+        },
+    )
+    bot_uuid = created["bot"]["bot_uuid"]
+    scanned = trading.run_trading_bots(actor=_actor(), limit=10)
+    assert scanned["ok"] is True
+
+    listed = trading.list_trading_bots(actor=_actor())["bots"][0]
+    floor = int(listed["minimum_budget_points"] or 0)
+    assert floor > 0
+    assert listed["open_order_frozen_points"] == floor
+
+    with pytest.raises(ValueError, match="workflow budget cannot be lower"):
+        trading.adjust_trading_bot_budget(actor=_actor(), bot_uuid=bot_uuid, budget_points=floor - 1)
+
+    removed_cap = trading.adjust_trading_bot_budget(actor=_actor(), bot_uuid=bot_uuid, budget_points=0)
+    assert removed_cap["bot"]["budget_points"] == 0
+    increased = trading.adjust_trading_bot_budget(actor=_actor(), bot_uuid=bot_uuid, budget_points=floor + 50)
+    assert increased["bot"]["budget_points"] == floor + 50
+    assert increased["bot"]["minimum_budget_points"] == floor
 
 
 def test_dca_bot_accepts_unlimited_max_runs_and_can_continue_running(tmp_path):
@@ -3114,10 +3379,10 @@ def test_emergency_market_close_sells_all_with_double_fee(tmp_path):
 
     assert close["order"]["status"] == "filled"
     assert close["order"]["reason"] == "EMERGENCY_MARKET_CLOSE"
-    assert close["order"]["fee_points"] == 1
+    assert close["order"]["fee_points"] == 2
     dashboard = trading.user_dashboard(user_id=1)
     assert dashboard["positions"][0]["quantity"] == "0"
-    assert dashboard["fills"][0]["fee_points"] == 1
+    assert dashboard["fills"][0]["fee_points"] == 2
     assert points.get_wallet(1)["points_balance"] == 2000
     assert dashboard["funding"]["trial_credit"]["available_points"] == 998
     assert dashboard["funding"]["trial_credit"]["deployed_points"] == 0
@@ -3203,6 +3468,7 @@ def test_spot_dashboard_reports_backend_pnl_and_fees(tmp_path):
     assert position["current_value_points"] == 600
     assert position["estimated_buy_fee_points"] == 1
     assert position["estimated_exit_fee_points"] == 1
+    assert position["settlement_fee_points"] == 2
     assert position["cost_basis_points"] == 502
     assert position["unrealized_pnl_points"] == 98
     assert dashboard_after_buy["spot_summary"]["unrealized_pnl_points"] == 98
@@ -3216,12 +3482,13 @@ def test_spot_dashboard_reports_backend_pnl_and_fees(tmp_path):
     assert position_after_sell["current_value_points"] == 360
     assert position_after_sell["estimated_buy_fee_points"] == 1
     assert position_after_sell["estimated_exit_fee_points"] == 1
-    assert position_after_sell["cost_basis_points"] == 302
-    assert position_after_sell["unrealized_pnl_points"] == 58
-    assert position_after_sell["realized_pnl_points"] == 38
-    assert position_after_sell["total_fee_points"] == 2
-    assert dashboard_after_sell["spot_summary"]["realized_pnl_points"] == 38
-    assert dashboard_after_sell["fills"][0]["realized_pnl_points"] == 38
+    assert position_after_sell["settlement_fee_points"] == 1
+    assert position_after_sell["cost_basis_points"] == 301
+    assert position_after_sell["unrealized_pnl_points"] == 59
+    assert position_after_sell["realized_pnl_points"] == 39
+    assert position_after_sell["total_fee_points"] == 1
+    assert dashboard_after_sell["spot_summary"]["realized_pnl_points"] == 39
+    assert dashboard_after_sell["fills"][0]["realized_pnl_points"] == 39
     assert trading.verify_state()["ok"] is True
 
 
@@ -4347,7 +4614,7 @@ def test_root_spot_and_contract_use_simulated_points_outside_points_chain(tmp_pa
     assert result["order"]["funding_mode"] == "root_simulated"
     dashboard = trading.user_dashboard(user_id=3)
     assert dashboard["funding"]["mode"] == "root_simulated"
-    assert dashboard["funding"]["available_points"] == 9499
+    assert dashboard["funding"]["available_points"] == 9500
     assert dashboard["funding"]["locked_points"] == 0
     assert dashboard["positions"][0]["quantity"] == "0.1"
     assert trading.root_report()["reserve_pool"]["balance_points"] == 10000
@@ -4372,7 +4639,7 @@ def test_root_spot_and_contract_use_simulated_points_outside_points_chain(tmp_pa
         margin_points=25,
     )
     assert contract["position"]["status"] == "open"
-    assert contract["funding"]["available_points"] == 9474
+    assert contract["funding"]["available_points"] == 9475
     conn = trading.get_db()
     try:
         assert conn.execute("SELECT COUNT(*) FROM points_ledger").fetchone()[0] == 0
@@ -4471,7 +4738,7 @@ def test_limit_buy_can_be_cancelled_and_unfreezes_points(tmp_path):
     )["order"]
     assert order["status"] == "open"
     assert points.get_wallet(1)["points_frozen"] == 0
-    assert order["trial_frozen_points"] == 401
+    assert order["trial_frozen_points"] == 400
 
     cancelled = trading.cancel_order(actor=_actor(), order_uuid=order["order_uuid"])
     assert cancelled["status"] == "cancelled"
@@ -4494,7 +4761,7 @@ def test_limit_order_matcher_executes_when_price_reaches_limit(tmp_path):
     )["order"]
     assert order["status"] == "open"
     assert points.get_wallet(1)["points_frozen"] == 0
-    assert order["trial_frozen_points"] == 401
+    assert order["trial_frozen_points"] == 400
 
     _set_live_price(trading, symbol="ETH/POINTS", price_points=3900)
     matched = trading.match_open_limit_orders(actor={"username": "system", "role": "system"}, limit=10)
@@ -4525,7 +4792,7 @@ def test_sell_payout_does_not_consume_experimental_reserve_pool(tmp_path):
 
     high_price_sell = trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="sell", order_type="market", quantity="0.05")
     assert high_price_sell["order"]["status"] == "filled"
-    assert trading.root_report()["reserve_pool"]["balance_points"] == 10001
+    assert trading.root_report()["reserve_pool"]["balance_points"] == 10002
 
     trading.update_market(actor=_actor(3, "root", "super_admin"), symbol="ETH/POINTS", manual_price_points=5000, confirm_jump=True)
     trading.test_prices["ETH/POINTS"] = 5000
@@ -4745,6 +5012,8 @@ def test_margin_profit_allows_collateral_withdrawal_with_lower_maintenance_ratio
     )
     _set_live_price(trading, symbol="ETH/POINTS", price_points=7000)
     before = trading.user_dashboard(user_id=3)["margin_positions"][0]["risk"]
+    assert before["max_withdrawable_collateral_points"] >= 50
+    assert before["withdrawable_collateral_after_ratio_percent"] is not None
 
     result = trading.withdraw_margin_collateral(
         actor=root,
@@ -4795,24 +5064,57 @@ def test_margin_long_requires_root_enabled_borrowing_and_closes_with_fee_stats(t
     assert opened["position"]["position_type"] == "margin_long"
     assert opened["position"]["principal_points"] == 300
     assert opened["position"]["collateral_trial_points"] == 200
-    assert opened["position"]["open_fee_trial_points"] == 1
+    assert opened["position"]["open_fee_points"] == 0
+    assert opened["position"]["open_fee_micropoints"] == 500_000
+    assert opened["position"]["open_fee_trial_points"] == 0
     assert points.get_wallet(1)["points_balance"] == 1000
     assert points.get_wallet(1)["points_frozen"] == 0
-    assert opened["funding"]["trial_credit"]["available_points"] == 799
+    assert opened["funding"]["trial_credit"]["available_points"] == 800
     assert opened["funding"]["trial_credit"]["deployed_points"] == 200
     assert opened["position"]["interest_percent_daily"] == pytest.approx(11.2)
-    assert trading.root_report()["reserve_pool"]["balance_points"] == 9701
+    assert trading.root_report()["reserve_pool"]["balance_points"] == 9700
 
     closed = trading.close_margin_position(actor=_actor(), position_uuid=opened["position"]["position_uuid"])
     assert closed["position"]["status"] == "closed"
-    assert closed["interest_points"] == 0
-    assert closed["position"]["interest_paid_points"] == 1
-    assert closed["delta_points"] == -1
+    assert closed["interest_points"] == 2
+    assert closed["close_fee_points"] == 1
+    assert closed["position"]["close_fee_micropoints"] == 1_000_000
+    assert closed["position"]["interest_paid_points"] == 0
+    assert closed["delta_points"] == -3
     assert points.get_wallet(1)["points_frozen"] == 0
-    assert closed["funding"]["trial_credit"]["available_points"] == 998
+    assert closed["funding"]["trial_credit"]["available_points"] == 997
     assert closed["funding"]["trial_credit"]["deployed_points"] == 0
     assert trading.root_report()["reserve_pool"]["balance_points"] == 10003
     assert trading.verify_state()["ok"] is True
+
+
+def test_margin_fee_uses_full_notional_and_settles_on_close(tmp_path):
+    points, trading = _services(tmp_path)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    trading.update_root_settings(
+        actor=_actor(3, "root", "super_admin"),
+        settings={"borrowing_enabled": True, "borrow_interest_percent_daily": 0},
+        markets=[],
+    )
+
+    opened = trading.open_margin_position(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        position_type="margin_long",
+        quantity="0.1",
+        collateral_points=100,
+    )
+
+    assert opened["position"]["principal_points"] == 400
+    assert opened["position"]["open_fee_points"] == 0
+    assert opened["position"]["open_fee_micropoints"] == 500_000
+    assert opened["funding"]["trial_credit"]["available_points"] == 900
+
+    closed = trading.close_margin_position(actor=_actor(), position_uuid=opened["position"]["position_uuid"])
+
+    assert closed["close_fee_points"] == 1
+    assert closed["position"]["close_fee_micropoints"] == 1_000_000
+    assert closed["delta_points"] == -1
 
 
 def test_margin_open_and_close_are_included_in_trade_history(tmp_path):
@@ -4880,11 +5182,11 @@ def test_margin_interest_charges_by_started_hour_not_whole_day(tmp_path):
             "SELECT * FROM trading_margin_positions WHERE position_uuid=?",
             (opened["position"]["position_uuid"],),
         ).fetchone()
-        assert trading._margin_interest_points(row, now_text="2026-05-02T10:00:01") == 3
-        assert trading._margin_interest_points(row, now_text="2026-05-02T10:59:59") == 3
-        assert trading._margin_interest_points(row, now_text="2026-05-02T11:00:00") == 3
-        assert trading._margin_interest_points(row, now_text="2026-05-02T11:00:01") == 6
-        assert trading._margin_interest_points(row, now_text="2026-05-03T09:59:59") == 80
+        assert trading._margin_interest_points(row, now_text="2026-05-02T10:00:01") == 4
+        assert trading._margin_interest_points(row, now_text="2026-05-02T10:59:59") == 4
+        assert trading._margin_interest_points(row, now_text="2026-05-02T11:00:00") == 4
+        assert trading._margin_interest_points(row, now_text="2026-05-02T11:00:01") == 7
+        assert trading._margin_interest_points(row, now_text="2026-05-03T09:59:59") == 81
     finally:
         conn.close()
 
@@ -4925,9 +5227,9 @@ def test_margin_interest_charges_minimum_point_for_fractional_due(tmp_path):
     finally:
         conn.close()
 
-    assert accrued["interest_points"] == 1
+    assert accrued["interest_points"] == 0
     assert accrued["interest_paid_points"] == 0
-    assert accrued["interest_carry_micropoints"] == 0
+    assert accrued["interest_carry_micropoints"] == 500_000
 
     conn = trading.get_db()
     try:
@@ -4941,8 +5243,8 @@ def test_margin_interest_charges_minimum_point_for_fractional_due(tmp_path):
     finally:
         conn.close()
 
-    assert accrued_again["interest_points"] == 2
-    assert accrued_again["interest_carry_micropoints"] == 0
+    assert accrued_again["interest_points"] == 0
+    assert accrued_again["interest_carry_micropoints"] == 1_000_000
     assert trading.verify_state()["ok"] is True
 
 
@@ -4980,7 +5282,7 @@ def test_margin_open_rejects_when_funding_pool_is_insufficient(tmp_path):
     assert trading.verify_state()["ok"] is True
 
 
-def test_margin_open_rejects_total_upfront_cost_before_writing_ledger(tmp_path):
+def test_margin_open_does_not_require_unsettled_fee_upfront(tmp_path):
     points, trading = _services(tmp_path)
     trading.user_dashboard(user_id=1)
     _deplete_trial_credit(trading)
@@ -4995,19 +5297,20 @@ def test_margin_open_rejects_total_upfront_cost_before_writing_ledger(tmp_path):
         markets=[],
     )
 
-    with pytest.raises(ValueError, match=r"margin open funds insufficient .*required=1103 .*available=1100 .*fee=3 .*max_collateral=1097"):
-        trading.open_margin_position(
-            actor=_actor(),
-            market_symbol="ETH/POINTS",
-            position_type="margin_long",
-            quantity="0.4824",
-            collateral_points=1100,
-        )
+    opened = trading.open_margin_position(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        position_type="margin_long",
+        quantity="0.4824",
+        collateral_points=1100,
+    )
 
     wallet = points.get_wallet(1)
-    assert wallet["points_balance"] == 1100
-    assert wallet["points_frozen"] == 0
-    assert trading.user_dashboard(user_id=1)["margin_positions"] == []
+    assert wallet["points_balance"] == 0
+    assert wallet["points_frozen"] == 1100
+    assert opened["position"]["open_fee_points"] == 0
+    assert opened["position"]["open_fee_micropoints"] == 2_412_000
+    assert trading.user_dashboard(user_id=1)["margin_positions"][0]["position_uuid"] == opened["position"]["position_uuid"]
     assert trading.verify_state()["ok"] is True
 
 
@@ -5025,13 +5328,13 @@ def test_margin_open_requires_buffer_so_liquidation_price_starts_beyond_entry(tm
         markets=[],
     )
 
-    with pytest.raises(ValueError, match="collateral below minimum 77"):
+    with pytest.raises(ValueError, match="collateral below minimum 78"):
         trading.open_margin_position(
             actor=_actor(),
             market_symbol="ETH/POINTS",
             position_type="margin_long",
             quantity="0.1",
-            collateral_points=76,
+            collateral_points=77,
         )
     with pytest.raises(ValueError, match="collateral must be lower than notional 500"):
         trading.open_margin_position(
@@ -5046,26 +5349,26 @@ def test_margin_open_requires_buffer_so_liquidation_price_starts_beyond_entry(tm
         market_symbol="ETH/POINTS",
         position_type="margin_long",
         quantity="0.1",
-        collateral_points=77,
+        collateral_points=78,
     )
     long_risk = trading.user_dashboard(user_id=1)["margin_positions"][0]["risk"]
     assert long_risk["liquidation_price_points"] < long_position["position"]["entry_price_points"]
     trading.close_margin_position(actor=_actor(), position_uuid=long_position["position"]["position_uuid"])
 
-    with pytest.raises(ValueError, match="collateral below minimum 77"):
+    with pytest.raises(ValueError, match="collateral below minimum 78"):
         trading.open_margin_position(
             actor=_actor(),
             market_symbol="ETH/POINTS",
             position_type="short",
             quantity="0.1",
-            collateral_points=76,
+            collateral_points=77,
         )
     short_position = trading.open_margin_position(
         actor=_actor(),
         market_symbol="ETH/POINTS",
         position_type="short",
         quantity="0.1",
-        collateral_points=77,
+        collateral_points=78,
     )
     short_risk = trading.user_dashboard(user_id=1)["margin_positions"][0]["risk"]
     assert short_risk["liquidation_price_points"] > short_position["position"]["entry_price_points"]
@@ -5140,8 +5443,9 @@ def test_margin_open_is_idempotent_for_client_key(tmp_path):
     assert second["position"]["position_uuid"] == first["position"]["position_uuid"]
     dashboard = trading.user_dashboard(user_id=1)
     assert len([row for row in dashboard["margin_positions"] if row["status"] == "open"]) == 1
-    assert dashboard["margin_positions"][0]["interest_paid_points"] == 1
-    assert trading.root_report()["reserve_pool"]["balance_points"] == 9702
+    assert dashboard["margin_positions"][0]["interest_paid_points"] == 0
+    assert dashboard["margin_positions"][0]["interest_carry_micropoints"] > 0
+    assert trading.root_report()["reserve_pool"]["balance_points"] == 9700
     assert trading.verify_state()["ok"] is True
 
 
@@ -5180,8 +5484,8 @@ def test_hourly_margin_interest_capitalizes_when_wallet_balance_is_insufficient(
 
     assert accrued["interest_accrued_hours"] == 2
     assert accrued["interest_paid_points"] == 0
-    assert accrued["interest_points"] == 6
-    assert accrued["interest_carry_micropoints"] == 720000
+    assert accrued["interest_points"] == 0
+    assert accrued["interest_carry_micropoints"] == 6_720_000
     conn = trading.get_db()
     try:
         position = conn.execute(
@@ -5190,8 +5494,8 @@ def test_hourly_margin_interest_capitalizes_when_wallet_balance_is_insufficient(
         ).fetchone()
     finally:
         conn.close()
-    assert position["interest_points"] == 6
-    assert position["interest_carry_micropoints"] == 720000
+    assert position["interest_points"] == 0
+    assert position["interest_carry_micropoints"] == 6_720_000
     assert trading.verify_state()["ok"] is True
 
 
@@ -5316,10 +5620,10 @@ def test_short_borrow_position_profit_and_interest_enter_reserve_pool(tmp_path):
     closed = trading.close_margin_position(actor=_actor(), position_uuid=opened["position"]["position_uuid"])
 
     assert closed["position"]["status"] == "closed"
-    assert closed["interest_points"] == 0
-    assert closed["position"]["interest_paid_points"] == 2
-    assert closed["delta_points"] == 99
-    assert trading.root_report()["reserve_pool"]["balance_points"] == 9905
+    assert closed["interest_points"] == 3
+    assert closed["position"]["interest_paid_points"] == 0
+    assert closed["delta_points"] == 96
+    assert trading.root_report()["reserve_pool"]["balance_points"] == 9908
     assert trading.verify_state()["ok"] is True
 
 
@@ -5358,7 +5662,7 @@ def test_margin_liquidation_scan_closes_underwater_position(tmp_path):
     assert points.get_wallet(1)["points_frozen"] == 0
     notices = _notifications(trading, 1)
     assert any(row["type"] == "trading_margin_liquidated" for row in notices)
-    assert trading.root_report()["reserve_pool"]["balance_points"] == 10002
+    assert trading.root_report()["reserve_pool"]["balance_points"] == 10001
     assert trading.verify_state()["ok"] is True
 
 
@@ -6068,7 +6372,7 @@ def test_incremental_spot_buys_keep_average_cost_sane(tmp_path):
     dashboard = trading.user_dashboard(user_id=1)
     position = next(row for row in dashboard["positions"] if row["market_symbol"] == "ETH/POINTS")
 
-    assert position["quantity"] == "1.53998001"
+    assert position["quantity"] == "1.5396"
     assert 5000.0 <= float(position["avg_cost_points"]) < 5100.0
 
 

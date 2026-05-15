@@ -2,7 +2,11 @@ from pathlib import Path
 import html
 import mimetypes
 import json
+import os
 import secrets
+import subprocess
+import sys
+import threading
 from datetime import datetime, timedelta
 
 from flask import Response, request, send_file, session
@@ -19,7 +23,7 @@ from services.core.http_headers import build_content_disposition
 from services.media.streaming import (
     ensure_media_stream_schema,
     get_stream_status,
-    prepare_stream_asset,
+    mark_stream_asset_processing,
     repair_hls_master_manifest_text,
     should_auto_prepare_stream,
     stream_playback_payload,
@@ -30,6 +34,12 @@ from services.media.e2ee_streaming import (
     resolve_e2ee_chunk_response,
     serialize_manifest_for_client,
     upsert_e2ee_stream_v2_asset,
+)
+from services.job_center import (
+    add_job_event as add_platform_job_event,
+    create_job as create_platform_job,
+    get_job_by_source as get_platform_job_by_source,
+    update_job as update_platform_job,
 )
 from services.storage.storage_albums import create_storage_file_entry, ensure_storage_album_schema
 from services.security.upload_security import safe_public_filename
@@ -68,11 +78,19 @@ def register_video_routes(app, deps):
     points_service = deps.get("points_service")
     storage_root = deps["STORAGE_DIR"]
     server_file_fernet = deps.get("server_file_fernet")
+    db_path = deps.get("DB_PATH")
+    log_dir = deps.get("LOG_DIR")
+    server_file_key_path = deps.get("SERVER_FILE_KEY_PATH")
     get_system_settings = deps.get("get_system_settings", lambda: {})
     get_member_level_rule = deps["get_member_level_rule"]
     ffmpeg_bin = deps.get("FFMPEG_BIN", "ffmpeg")
     ffprobe_bin = deps.get("FFPROBE_BIN", "ffprobe")
     forbidden_share_fields = {"raw_file_key", "e2ee_password", "vk", "share_key", "share_key_bytes"}
+    stream_prepare_lock = threading.Lock()
+    stream_prepare_jobs = set()
+
+    def _now_iso():
+        return datetime.utcnow().replace(microsecond=0).isoformat()
 
     def _parse_json_body():
         try:
@@ -169,24 +187,311 @@ def register_video_routes(app, deps):
         text = _append_share_session_to_hls_manifest(text, share_session_id)
         return Response(text, status=200, mimetype="application/vnd.apple.mpegurl")
 
-    def _maybe_prepare_stream_asset(conn, *, file_row, visibility):
+    def _video_stream_worker_key(file_id):
+        return str(file_id or "").strip()
+
+    def _stream_worker_is_active(file_id):
+        key = _video_stream_worker_key(file_id)
+        with stream_prepare_lock:
+            return key in stream_prepare_jobs
+
+    def _mark_video_stream_processing(conn, *, file_id, video_id=None):
+        now = _now_iso()
+        if video_id:
+            conn.execute(
+                """
+                UPDATE videos
+                SET status='processing', updated_at=?
+                WHERE id=? AND cloud_file_id=? AND deleted_at IS NULL
+                """,
+                (now, int(video_id), str(file_id)),
+            )
+            return
+        conn.execute(
+            """
+            UPDATE videos
+            SET status='processing', updated_at=?
+            WHERE cloud_file_id=? AND status<>'ready' AND deleted_at IS NULL
+            """,
+            (now, str(file_id)),
+        )
+
+    def _hls_job_source_ref(file_id):
+        return f"media_stream:{str(file_id or '').strip()}"
+
+    def _platform_job_title(prefix, title="", fallback="影音"):
+        clean = str(title or fallback or "影音").strip() or "影音"
+        return f"{prefix}：{clean[:96]}"
+
+    def _sync_hls_platform_job(
+        conn,
+        *,
+        file_row,
+        video_id=None,
+        owner_user_id=None,
+        title="",
+        status="running",
+        progress_percent=0,
+        stage="queued",
+        stage_detail="",
+        error_message="",
+        result=None,
+    ):
+        try:
+            file_id = str(file_row["id"])
+            owner = owner_user_id if owner_user_id is not None else file_row["owner_user_id"]
+            source_ref = _hls_job_source_ref(file_id)
+            existing = get_platform_job_by_source(conn, "media_hls_prepare", source_ref)
+            metadata = {
+                "file_id": file_id,
+                "video_id": int(video_id or 0),
+                "privacy_mode": str(file_row["privacy_mode"] or ""),
+                "media_type": "audio" if str(file_row["mime_type_plain_for_public"] or "").lower().startswith("audio/") else "video",
+            }
+            if existing:
+                updates = {
+                    "status": status,
+                    "progress_percent": progress_percent,
+                    "stage": stage,
+                    "stage_detail": stage_detail,
+                    "metadata_json": metadata,
+                }
+                if status == "running" and not existing.get("started_at"):
+                    updates["started_at"] = _now_iso()
+                if status in {"succeeded", "failed", "cancelled", "expired"}:
+                    updates["finished_at"] = _now_iso()
+                if result is not None:
+                    updates["result_json"] = result
+                if error_message:
+                    updates["error_message"] = error_message
+                    updates["error_stage"] = stage
+                job = update_platform_job(conn, existing["job_uuid"], **updates)
+                add_platform_job_event(
+                    conn,
+                    job["job_uuid"],
+                    event_type="failed" if status == "failed" else "progress",
+                    stage=stage,
+                    message=stage_detail or error_message or "HLS 任務狀態更新",
+                    progress_percent=progress_percent,
+                    payload=metadata,
+                )
+                return job
+            return create_platform_job(
+                conn,
+                owner_user_id=int(owner or 0) or None,
+                created_by_user_id=int(owner or 0) or None,
+                job_type="video.hls.prepare",
+                title=_platform_job_title("HLS 處理", title, file_row["original_filename_plain_for_public"]),
+                description="影音 HLS 衍生檔建立、轉封裝與可播放狀態追蹤",
+                source_module="media_hls_prepare",
+                source_ref=source_ref,
+                status=status,
+                progress_percent=progress_percent,
+                stage=stage,
+                stage_detail=stage_detail,
+                metadata=metadata,
+            )
+        except Exception:
+            return None
+
+    def _sync_e2ee_stream_v2_platform_job(conn, *, file_row, owner_user_id=None, title="", asset=None, status="succeeded", error_message=""):
+        try:
+            file_id = str(file_row["id"])
+            owner = owner_user_id if owner_user_id is not None else file_row["owner_user_id"]
+            source_ref = f"e2ee_stream_v2:{file_id}"
+            stage = "ready" if status == "succeeded" else "failed"
+            detail = "E2EE Streaming v2 manifest 與密文分段已建立" if status == "succeeded" else (error_message or "E2EE Streaming v2 建立失敗")
+            existing = get_platform_job_by_source(conn, "media_e2ee_stream_v2", source_ref)
+            metadata = {
+                "file_id": file_id,
+                "chunk_count": int((asset or {}).get("chunk_count") or 0),
+                "bundle_size_bytes": int((asset or {}).get("bundle_size_bytes") or 0),
+            }
+            if existing:
+                job = update_platform_job(
+                    conn,
+                    existing["job_uuid"],
+                    status=status,
+                    progress_percent=100,
+                    stage=stage,
+                    stage_detail=detail,
+                    error_message=error_message if status == "failed" else "",
+                    error_stage=stage if status == "failed" else "",
+                    finished_at=_now_iso(),
+                    result_json=asset or {},
+                    metadata_json=metadata,
+                )
+                add_platform_job_event(
+                    conn,
+                    job["job_uuid"],
+                    event_type="failed" if status == "failed" else "progress",
+                    stage=stage,
+                    message=detail,
+                    progress_percent=100,
+                    payload=metadata,
+                )
+                return job
+            job = create_platform_job(
+                conn,
+                owner_user_id=int(owner or 0) or None,
+                created_by_user_id=int(owner or 0) or None,
+                job_type="video.e2ee_stream_v2.prepare",
+                title=_platform_job_title("E2EE Streaming v2", title, file_row["original_filename_plain_for_public"]),
+                description="端到端加密影音的瀏覽器端分段密文串流準備紀錄",
+                source_module="media_e2ee_stream_v2",
+                source_ref=source_ref,
+                status="running",
+                progress_percent=90,
+                stage="server_processing",
+                stage_detail="E2EE Streaming v2 manifest 與密文分段正在儲存。",
+                metadata=metadata,
+            )
+            job = update_platform_job(
+                conn,
+                job["job_uuid"],
+                status=status,
+                progress_percent=100,
+                stage=stage,
+                stage_detail=detail,
+                error_message=error_message if status == "failed" else "",
+                error_stage=stage if status == "failed" else "",
+                finished_at=_now_iso(),
+                result_json=asset or {},
+                metadata_json=metadata,
+            )
+            add_platform_job_event(
+                conn,
+                job["job_uuid"],
+                event_type="failed" if status == "failed" else "progress",
+                stage=stage,
+                message=detail,
+                progress_percent=100,
+                payload=metadata,
+            )
+            return job
+        except Exception:
+            return None
+
+    def _start_stream_prepare_worker(file_id, *, video_id=None, owner_user_id=None, title=""):
+        key = _video_stream_worker_key(file_id)
+        if not key:
+            return False
+        with stream_prepare_lock:
+            if key in stream_prepare_jobs:
+                return False
+            stream_prepare_jobs.add(key)
+        if db_path:
+            try:
+                worker_path = Path(__file__).resolve().parents[1] / "scripts" / "media" / "hls_prepare_worker.py"
+                if not worker_path.exists():
+                    raise FileNotFoundError(str(worker_path))
+                worker_log_dir = Path(log_dir or (Path(storage_root).parent / "logs"))
+                worker_log_dir.mkdir(parents=True, exist_ok=True)
+                log_path = worker_log_dir / "media_hls_worker.log"
+                cmd = [
+                    sys.executable,
+                    str(worker_path),
+                    "--db-path",
+                    str(db_path),
+                    "--storage-root",
+                    str(storage_root),
+                    "--file-id",
+                    key,
+                    "--video-id",
+                    str(int(video_id or 0)),
+                    "--owner-user-id",
+                    str(int(owner_user_id or 0)),
+                    "--title",
+                    str(title or ""),
+                    "--ffmpeg-bin",
+                    str(ffmpeg_bin),
+                    "--ffprobe-bin",
+                    str(ffprobe_bin),
+                ]
+                if server_file_key_path:
+                    cmd.extend(["--server-file-key-path", str(server_file_key_path)])
+                with log_path.open("ab") as log_file:
+                    subprocess.Popen(
+                        cmd,
+                        stdout=log_file,
+                        stderr=log_file,
+                        stdin=subprocess.DEVNULL,
+                        close_fds=True,
+                        start_new_session=True,
+                    )
+                return True
+            except Exception as exc:
+                try:
+                    audit(
+                        "MEDIA_STREAM_PREPARE_BACKGROUND_LAUNCH",
+                        get_client_ip(),
+                        user=f"user_id:{owner_user_id or ''}",
+                        success=False,
+                        ua=get_ua(),
+                        detail=f"file_id={key},video_id={video_id or ''},error={str(exc)[:300]}",
+                    )
+                except Exception:
+                    pass
+                return False
+            finally:
+                with stream_prepare_lock:
+                    stream_prepare_jobs.discard(key)
+        with stream_prepare_lock:
+            stream_prepare_jobs.discard(key)
+        return False
+
+    def _queue_stream_prepare(conn, *, file_row, video_id=None, title="", visibility="public", force=False):
+        ensure_media_stream_schema(conn)
+        current = get_stream_status(conn, file_row=file_row)
+        if not force and current and current.get("status") == "ready":
+            return current, None, False
+        if current and current.get("status") == "processing" and (not force or _stream_worker_is_active(file_row["id"])):
+            return current, None, False
+        asset = mark_stream_asset_processing(conn, file_row=file_row)
+        if video_id:
+            _mark_video_stream_processing(conn, file_id=file_row["id"], video_id=video_id)
+        _sync_hls_platform_job(
+            conn,
+            file_row=file_row,
+            video_id=video_id,
+            owner_user_id=file_row["owner_user_id"],
+            title=title,
+            status="running",
+            progress_percent=5,
+            stage="queued",
+            stage_detail="HLS 背景處理已排程，等待外部轉檔程序接手。",
+        )
+        return asset, None, True
+
+    def _maybe_prepare_stream_asset(conn, *, file_row, visibility, video_id=None, title=""):
         if not _settings_bool("video_stream_auto_prepare_enabled", True):
-            return None, None
+            return None, None, False
         decision = should_auto_prepare_stream(file_row, visibility=visibility)
         if not decision.get("enabled"):
-            return None, None
+            return None, None, False
         try:
-            asset = prepare_stream_asset(
+            return _queue_stream_prepare(
                 conn,
                 file_row=file_row,
-                storage_root=storage_root,
-                server_file_fernet=server_file_fernet,
-                ffprobe_bin=ffprobe_bin,
-                ffmpeg_bin=ffmpeg_bin,
+                video_id=video_id,
+                title=title,
+                visibility=visibility,
             )
-            return asset, None
         except Exception as exc:
-            return None, f"HLS 串流準備失敗：{exc}"
+            return None, f"HLS 串流排程失敗：{exc}", False
+
+    def _video_ready_for_browse(conn, video):
+        if not _settings_bool("video_stream_auto_prepare_enabled", True):
+            return True
+        try:
+            file_row = _load_stream_file(conn, file_id=video["cloud_file_id"])
+            decision = should_auto_prepare_stream(file_row, visibility=video.get("visibility") or "public")
+            if not decision.get("enabled"):
+                return True
+            asset = get_stream_status(conn, file_row=file_row)
+            return bool(asset and asset.get("status") == "ready")
+        except Exception:
+            return False
 
     def _uploaded_file_is_media(file_storage):
         filename = getattr(file_storage, "filename", "") or ""
@@ -204,6 +509,35 @@ def register_video_routes(app, deps):
         declared = str(getattr(file_storage, "mimetype", "") or "").split(";", 1)[0].strip().lower()
         guessed = str(mimetypes.guess_type(filename)[0] or "").lower()
         return declared.startswith("image/") or guessed.startswith("image/")
+
+    def _file_storage_size(file_storage):
+        stream = getattr(file_storage, "stream", file_storage)
+        if hasattr(stream, "tell") and hasattr(stream, "seek"):
+            try:
+                position = stream.tell()
+                stream.seek(0, os.SEEK_END)
+                size = stream.tell()
+                stream.seek(position)
+                return int(size or 0)
+            except Exception:
+                return 0
+        return 0
+
+    def _env_size_bytes(bytes_key, mb_key, default_bytes):
+        raw_bytes = os.environ.get(bytes_key)
+        raw_mb = os.environ.get(mb_key)
+        try:
+            value = int(raw_bytes) if raw_bytes is not None else int(raw_mb) * 1024 * 1024 if raw_mb is not None else int(default_bytes)
+        except Exception:
+            value = int(default_bytes)
+        return max(0, int(value))
+
+    def _e2ee_stream_bundle_max_bytes():
+        return _env_size_bytes(
+            "HACKME_E2EE_STREAM_BUNDLE_MAX_BYTES",
+            "HACKME_E2EE_STREAM_BUNDLE_MAX_MB",
+            512 * 1024 * 1024,
+        )
 
     def _default_media_title(file_storage):
         filename = safe_public_filename(getattr(file_storage, "filename", "") or "media")
@@ -618,7 +952,7 @@ def register_video_routes(app, deps):
     </div>
   </div>
   <script id="share-token" type="application/json">{share_token_json}</script>
-  <script src="/js/shared-video.js?v=20260509-responsive-share"></script>
+  <script src="/js/shared-video.js?v=20260515-hls-safe-fallback"></script>
 </body>
 </html>"""
 
@@ -664,12 +998,50 @@ def register_video_routes(app, deps):
                 share_max_views=data.get("share_max_views") or 0,
             )
             file_row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (video["cloud_file_id"],)).fetchone()
-            stream_asset, stream_warning = _maybe_prepare_stream_asset(
+            stream_asset, stream_warning, stream_queued = _maybe_prepare_stream_asset(
                 conn,
                 file_row=file_row,
                 visibility=video["visibility"],
+                video_id=video["id"],
+                title=video["title"],
             )
+            if stream_asset and stream_asset.get("status") == "processing":
+                video["status"] = "processing"
             conn.commit()
+            if stream_queued:
+                worker_started = _start_stream_prepare_worker(
+                    file_row["id"],
+                    video_id=video["id"],
+                    owner_user_id=video["owner_user_id"],
+                    title=video["title"],
+                )
+                if not worker_started:
+                    stream_warning = "HLS 背景處理程序啟動失敗，請稍後重新排程。"
+                    _sync_hls_platform_job(
+                        conn,
+                        file_row=file_row,
+                        video_id=video["id"],
+                        owner_user_id=video["owner_user_id"],
+                        title=video["title"],
+                        status="failed",
+                        progress_percent=100,
+                        stage="launch_failed",
+                        stage_detail=stream_warning,
+                        error_message=stream_warning,
+                    )
+                else:
+                    _sync_hls_platform_job(
+                        conn,
+                        file_row=file_row,
+                        video_id=video["id"],
+                        owner_user_id=video["owner_user_id"],
+                        title=video["title"],
+                        status="running",
+                        progress_percent=10,
+                        stage="worker_started",
+                        stage_detail="HLS 外部轉檔程序已啟動。",
+                    )
+                conn.commit()
             audit(
                 "VIDEO_PUBLISH",
                 get_client_ip(),
@@ -766,12 +1138,50 @@ def register_video_routes(app, deps):
                 share_expires_at=request.form.get("share_expires_at") or "",
                 share_max_views=request.form.get("share_max_views") or 0,
             )
-            stream_asset, stream_warning = _maybe_prepare_stream_asset(
+            stream_asset, stream_warning, stream_queued = _maybe_prepare_stream_asset(
                 conn,
                 file_row=file_row,
                 visibility=video["visibility"],
+                video_id=video["id"],
+                title=video["title"],
             )
+            if stream_asset and stream_asset.get("status") == "processing":
+                video["status"] = "processing"
             conn.commit()
+            if stream_queued:
+                worker_started = _start_stream_prepare_worker(
+                    file_row["id"],
+                    video_id=video["id"],
+                    owner_user_id=video["owner_user_id"],
+                    title=video["title"],
+                )
+                if not worker_started:
+                    stream_warning = "HLS 背景處理程序啟動失敗，請稍後重新排程。"
+                    _sync_hls_platform_job(
+                        conn,
+                        file_row=file_row,
+                        video_id=video["id"],
+                        owner_user_id=video["owner_user_id"],
+                        title=video["title"],
+                        status="failed",
+                        progress_percent=100,
+                        stage="launch_failed",
+                        stage_detail=stream_warning,
+                        error_message=stream_warning,
+                    )
+                else:
+                    _sync_hls_platform_job(
+                        conn,
+                        file_row=file_row,
+                        video_id=video["id"],
+                        owner_user_id=video["owner_user_id"],
+                        title=video["title"],
+                        status="running",
+                        progress_percent=10,
+                        stage="worker_started",
+                        stage_detail="HLS 外部轉檔程序已啟動。",
+                    )
+                conn.commit()
             audit(
                 "VIDEO_UPLOAD_PUBLISH",
                 get_client_ip(),
@@ -900,9 +1310,12 @@ def register_video_routes(app, deps):
                 conn.commit()
                 return send_file(path, as_attachment=False, download_name=filename, mimetype="application/octet-stream", conditional=True)
             if is_server_encrypted_file(file_row):
-                raw = decrypt_server_encrypted_bytes(path, server_file_fernet)
                 conn.commit()
-                return _send_bytes_with_range(raw, download_name=filename, mimetype=mimetype, range_header=request.headers.get("Range"))
+                return json_resp({
+                    "ok": False,
+                    "msg": "伺服端加密影音不提供主程序直接解密串流，請使用已準備完成的 HLS 播放。",
+                    "error": "server_encrypted_hls_required",
+                }), 409
             conn.commit()
             return send_file(path, as_attachment=False, download_name=filename, mimetype=mimetype, conditional=True)
         finally:
@@ -1204,6 +1617,24 @@ def register_video_routes(app, deps):
                 actor=actor,
                 limit=request.args.get("limit") or 120,
             )
+            for video in videos:
+                try:
+                    detail = get_video(conn, video["id"], actor=actor)
+                    if detail:
+                        for key in (
+                            "share_link",
+                            "share_url",
+                            "share_password_required",
+                            "share_requires_fragment_key",
+                            "share_expires_at",
+                            "share_max_views",
+                        ):
+                            if key in detail:
+                                video[key] = detail[key]
+                    file_row = _load_stream_file(conn, file_id=video["cloud_file_id"])
+                    video["stream_asset"] = get_stream_status(conn, file_row=file_row)
+                except Exception:
+                    video["stream_asset"] = None
             summary = {
                 "total_videos": len(videos),
                 "total_views": sum(int(video.get("view_count") or 0) for video in videos),
@@ -1318,7 +1749,9 @@ def register_video_routes(app, deps):
                 actor=actor,
                 sort=request.args.get("sort") or "new",
                 page=request.args.get("page") or 1,
+                query=request.args.get("q") or "",
             )
+            videos = [video for video in videos if _video_ready_for_browse(conn, video)]
             return json_resp({"ok": True, "videos": videos})
         finally:
             conn.close()
@@ -1352,15 +1785,53 @@ def register_video_routes(app, deps):
             _assert_stream_prepare_allowed(actor, row)
             if is_e2ee_file(row):
                 return json_resp({"ok": False, "msg": "E2EE 影音只支援瀏覽器端解密播放，不建立伺服器端串流衍生檔", "error": "e2ee_direct_only"}), 409
-            asset = prepare_stream_asset(
+            video_row = conn.execute(
+                "SELECT id, title, owner_user_id, visibility FROM videos WHERE cloud_file_id=? AND deleted_at IS NULL LIMIT 1",
+                (row["id"],),
+            ).fetchone()
+            asset, stream_warning, stream_queued = _queue_stream_prepare(
                 conn,
                 file_row=row,
-                storage_root=storage_root,
-                server_file_fernet=server_file_fernet,
-                ffprobe_bin=ffprobe_bin,
-                ffmpeg_bin=ffmpeg_bin,
+                video_id=video_row["id"] if video_row else None,
+                title=video_row["title"] if video_row else row["original_filename_plain_for_public"],
+                visibility=video_row["visibility"] if video_row else "private",
+                force=True,
             )
             conn.commit()
+            if stream_queued:
+                worker_started = _start_stream_prepare_worker(
+                    row["id"],
+                    video_id=video_row["id"] if video_row else None,
+                    owner_user_id=video_row["owner_user_id"] if video_row else row["owner_user_id"],
+                    title=video_row["title"] if video_row else row["original_filename_plain_for_public"],
+                )
+                if not worker_started:
+                    stream_warning = "HLS 背景處理程序啟動失敗，請稍後重新排程。"
+                    _sync_hls_platform_job(
+                        conn,
+                        file_row=row,
+                        video_id=video_row["id"] if video_row else None,
+                        owner_user_id=video_row["owner_user_id"] if video_row else row["owner_user_id"],
+                        title=video_row["title"] if video_row else row["original_filename_plain_for_public"],
+                        status="failed",
+                        progress_percent=100,
+                        stage="launch_failed",
+                        stage_detail=stream_warning,
+                        error_message=stream_warning,
+                    )
+                else:
+                    _sync_hls_platform_job(
+                        conn,
+                        file_row=row,
+                        video_id=video_row["id"] if video_row else None,
+                        owner_user_id=video_row["owner_user_id"] if video_row else row["owner_user_id"],
+                        title=video_row["title"] if video_row else row["original_filename_plain_for_public"],
+                        status="running",
+                        progress_percent=10,
+                        stage="worker_started",
+                        stage_detail="HLS 外部轉檔程序已啟動。",
+                    )
+                conn.commit()
             audit(
                 "MEDIA_STREAM_PREPARE",
                 get_client_ip(),
@@ -1369,7 +1840,13 @@ def register_video_routes(app, deps):
                 ua=get_ua(),
                 detail=f"file_id={file_id},status={asset.get('status')}",
             )
-            return json_resp({"ok": True, "asset": asset})
+            return json_resp({
+                "ok": True,
+                "asset": asset,
+                "queued": bool(stream_queued),
+                "stream_warning": stream_warning or "",
+                "msg": "HLS 串流已排入背景處理，完成後會通知上傳者。",
+            })
         except Exception as exc:
             conn.rollback()
             return _error_response(exc)
@@ -1395,6 +1872,15 @@ def register_video_routes(app, deps):
             manifest_json = request.form.get("manifest_json") or ""
             if not bundle or not getattr(bundle, "filename", ""):
                 return json_resp({"ok": False, "msg": "缺少 E2EE Streaming v2 bundle", "error": "missing_bundle"}), 400
+            bundle_size = _file_storage_size(bundle)
+            bundle_limit = _e2ee_stream_bundle_max_bytes()
+            if bundle_limit > 0 and bundle_size > bundle_limit:
+                return json_resp({
+                    "ok": False,
+                    "msg": f"E2EE Streaming v2 bundle 超過伺服器即時處理上限（{max(1, bundle_limit // (1024 * 1024))} MB），請改用較小分段或背景處理流程。",
+                    "error": "e2ee_stream_bundle_too_large",
+                    "max_bytes": bundle_limit,
+                }), 413
             if not manifest_json.strip():
                 return json_resp({"ok": False, "msg": "缺少 E2EE Streaming v2 manifest", "error": "missing_manifest"}), 400
             try:
@@ -1410,6 +1896,14 @@ def register_video_routes(app, deps):
                 storage_root=storage_root,
                 manifest_payload=manifest_payload,
                 bundle_bytes=bundle.read(),
+            )
+            _sync_e2ee_stream_v2_platform_job(
+                conn,
+                file_row=row,
+                owner_user_id=row["owner_user_id"],
+                title=row["original_filename_plain_for_public"],
+                asset=asset,
+                status="succeeded",
             )
             conn.commit()
             audit(
@@ -1612,8 +2106,11 @@ def register_video_routes(app, deps):
                     conditional=True,
                 )
             if is_server_encrypted_file(row):
-                raw = decrypt_server_encrypted_bytes(path, server_file_fernet)
-                return _send_bytes_with_range(raw, download_name=filename, mimetype=mimetype, range_header=request.headers.get("Range"))
+                return json_resp({
+                    "ok": False,
+                    "msg": "伺服端加密影音不提供主程序直接解密串流，請使用已準備完成的 HLS 播放。",
+                    "error": "server_encrypted_hls_required",
+                }), 409
             return send_file(path, as_attachment=False, download_name=filename, mimetype=mimetype, conditional=True)
         except PermissionError as exc:
             return _error_response(exc)

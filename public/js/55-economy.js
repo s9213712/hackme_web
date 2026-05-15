@@ -103,6 +103,31 @@ function formatPointsCurrency(currency) {
   return "點";
 }
 
+function formatEconomyPointsValue(value) {
+  if (typeof formatTradingPointsValue === "function") return formatTradingPointsValue(value);
+  const number = Number(value || 0);
+  if (!Number.isFinite(number)) return "-";
+  return number.toLocaleString(undefined, { maximumFractionDigits: 4 });
+}
+
+function formatEconomyPercentValue(value) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number)) return "-";
+  return `${number.toLocaleString(undefined, { maximumFractionDigits: 4 })}%`;
+}
+
+function economyDisplayMarketSymbol(symbol) {
+  if (typeof tradingDisplaySymbol === "function") return tradingDisplaySymbol(symbol);
+  return String(symbol || "").toUpperCase().replace("/POINTS", "/USDT");
+}
+
+function formatEconomyQuantityValue(value) {
+  if (typeof formatTradingQuantityValue === "function") return formatTradingQuantityValue(value);
+  const number = Number(value || 0);
+  if (!Number.isFinite(number)) return "-";
+  return number.toLocaleString(undefined, { maximumFractionDigits: 8 });
+}
+
 function formatEconomyLedgerAction(actionType) {
   const action = String(actionType || "");
   const labels = {
@@ -169,10 +194,15 @@ function setEconomyActivePage(page, options = {}) {
   const rootMode = currentUser === "root";
   const chainAllowed = canManageEconomyPoints();
   const positionsAvailable = economyPositionsAvailable();
-  const requestedPage = page === "chain" || page === "positions" ? page : "balance";
+  const rootTradingAllowed = rootMode && positionsAvailable;
+  const requestedPage = ["chain", "positions", "funding-pools", "all-positions"].includes(page) ? page : "balance";
   const nextPage =
     requestedPage === "chain" && chainAllowed
       ? "chain"
+      : requestedPage === "funding-pools" && rootTradingAllowed
+        ? "funding-pools"
+        : requestedPage === "all-positions" && rootTradingAllowed
+          ? "all-positions"
       : requestedPage === "positions" && positionsAvailable
         ? "positions"
         : "balance";
@@ -184,16 +214,32 @@ function setEconomyActivePage(page, options = {}) {
   }
   const balancePage = $("economy-balance-page");
   const positionsPage = $("economy-positions-page");
+  const fundingPoolsPage = $("economy-funding-pools-page");
+  const allPositionsPage = $("economy-all-positions-page");
   const chainPage = $("economy-chain-page");
   if (balancePage) balancePage.classList.toggle("active", nextPage === "balance");
   if (positionsPage) positionsPage.classList.toggle("active", positionsAvailable && nextPage === "positions");
+  if (fundingPoolsPage) fundingPoolsPage.classList.toggle("active", rootTradingAllowed && nextPage === "funding-pools");
+  if (allPositionsPage) allPositionsPage.classList.toggle("active", rootTradingAllowed && nextPage === "all-positions");
   if (chainPage) chainPage.classList.toggle("active", chainAllowed && nextPage === "chain");
   const balanceTab = $("tab-economy-balance");
   const positionsTab = $("tab-economy-positions");
+  const fundingPoolsTab = $("tab-economy-funding-pools");
+  const allPositionsTab = $("tab-economy-all-positions");
   const chainTab = $("tab-economy-chain");
   if (balanceTab) {
     balanceTab.classList.toggle("active", nextPage === "balance");
     balanceTab.setAttribute("aria-selected", nextPage === "balance" ? "true" : "false");
+  }
+  if (fundingPoolsTab) {
+    fundingPoolsTab.style.display = rootTradingAllowed ? "" : "none";
+    fundingPoolsTab.classList.toggle("active", rootTradingAllowed && nextPage === "funding-pools");
+    fundingPoolsTab.setAttribute("aria-selected", rootTradingAllowed && nextPage === "funding-pools" ? "true" : "false");
+  }
+  if (allPositionsTab) {
+    allPositionsTab.style.display = rootTradingAllowed ? "" : "none";
+    allPositionsTab.classList.toggle("active", rootTradingAllowed && nextPage === "all-positions");
+    allPositionsTab.setAttribute("aria-selected", rootTradingAllowed && nextPage === "all-positions" ? "true" : "false");
   }
   if (positionsTab) {
     positionsTab.style.display = positionsAvailable ? "" : "none";
@@ -209,18 +255,26 @@ function setEconomyActivePage(page, options = {}) {
   const title = $("economy-page-title");
   if (title) {
     if (nextPage === "positions") title.textContent = "倉位管理";
+    else if (nextPage === "funding-pools") title.textContent = "資金池管理";
+    else if (nextPage === "all-positions") title.textContent = "全用戶倉位管理";
     else if (!rootMode) title.textContent = nextPage === "chain" ? "積分審核" : "積分錢包";
     else title.textContent = nextPage === "chain" ? "積分私有鏈" : "積分餘額";
+  }
+  if (options.loadRootTrading !== false && rootTradingAllowed && ["funding-pools", "all-positions"].includes(nextPage)) {
+    loadEconomyRootTradingReadOnly();
   }
 }
 
 function syncEconomySubpages(rootMode) {
   if (!canManageEconomyPoints() && economyActivePage === "chain") economyActivePage = "balance";
   if (!economyPositionsAvailable() && economyActivePage === "positions") economyActivePage = "balance";
-  setEconomyActivePage(economyActivePage, { persist: false });
+  if ((!rootMode || !economyPositionsAvailable()) && ["funding-pools", "all-positions"].includes(economyActivePage)) economyActivePage = "balance";
+  setEconomyActivePage(economyActivePage, { persist: false, loadRootTrading: false });
 }
 
 function setEconomyRootLayout(rootMode) {
+  const rootBalanceCard = $("economy-root-balance-card");
+  if (rootBalanceCard) rootBalanceCard.style.display = rootMode ? "" : "none";
   const rootVirtualCard = $("economy-root-virtual-card");
   if (rootVirtualCard) rootVirtualCard.style.display = rootMode ? "" : "none";
   const manualAdjustDetails = $("economy-manual-adjust-details");
@@ -458,8 +512,162 @@ function formatEconomyRecoveryResult(result) {
   ].join("；");
 }
 
+function setEconomyText(id, text) {
+  const el = $(id);
+  if (el) el.textContent = text;
+}
+
+function renderEconomyRootBalanceSummary(report) {
+  const stats = report?.stats && typeof report.stats === "object" ? report.stats : {};
+  const circulation = stats.circulation && typeof stats.circulation === "object" ? stats.circulation : {};
+  const memberOutstanding = Number(circulation.member_outstanding_points ?? circulation.outstanding_points ?? 0);
+  const memberLedgerNet = Number(circulation.member_ledger_net_points ?? circulation.ledger_net_points ?? 0);
+  const memberGap = Number(circulation.member_supply_gap_points ?? circulation.supply_gap_points ?? 0);
+  const memberFrozen = Number(circulation.member_frozen_points ?? circulation.frozen_points ?? 0);
+  setEconomyText("economy-root-outstanding-points", formatEconomyPointsValue(memberOutstanding));
+  setEconomyText(
+    "economy-root-outstanding-detail",
+    `可用 ${formatEconomyPointsValue(circulation.member_available_points ?? circulation.available_points ?? 0)} · root ${formatEconomyPointsValue(circulation.root_outstanding_points || 0)}`,
+  );
+  setEconomyText("economy-root-ledger-net-points", formatEconomyPointsValue(memberLedgerNet));
+  setEconomyText("economy-root-supply-gap", `差額 ${formatEconomyPointsValue(memberGap)}`);
+  setEconomyText("economy-root-wallet-count", formatEconomyPointsValue(circulation.member_wallet_count ?? circulation.wallet_count ?? 0));
+  setEconomyText("economy-root-wallet-detail", `凍結 ${formatEconomyPointsValue(memberFrozen)} · root 錢包 ${formatEconomyPointsValue(circulation.root_wallet_count || 0)}`);
+  setEconomyText("economy-root-chain-coverage", formatEconomyPercentValue(circulation.sealed_coverage_percent || 0));
+  setEconomyText(
+    "economy-root-chain-coverage-detail",
+    `未封 ${formatEconomyPointsValue(circulation.unsealed_ledger_entries || 0)} / ledger ${formatEconomyPointsValue(circulation.confirmed_ledger_entries || 0)}`,
+  );
+}
+
+function renderEconomyRootFundingPools(payload) {
+  const safe = payload && typeof payload === "object" ? payload : {};
+  const reserve = safe.reserve_pool && typeof safe.reserve_pool === "object" ? safe.reserve_pool : {};
+  const funding = safe.funding_pool && typeof safe.funding_pool === "object" ? safe.funding_pool : {};
+  const lending = safe.lending_summary && typeof safe.lending_summary === "object" ? safe.lending_summary : {};
+  const margin = safe.open_margin_summary && typeof safe.open_margin_summary === "object" ? safe.open_margin_summary : {};
+  const fees = safe.fee_summary && typeof safe.fee_summary === "object" ? safe.fee_summary : {};
+  setEconomyText("economy-root-reserve-balance", formatEconomyPointsValue(reserve.balance_points || 0));
+  setEconomyText("economy-root-reserve-updated", `更新 ${reserve.updated_at || "-"}`);
+  setEconomyText("economy-root-funding-available", formatEconomyPointsValue(funding.available_points || 0));
+  setEconomyText("economy-root-funding-outstanding", `貸出 ${formatEconomyPointsValue(funding.outstanding_principal_points || 0)}`);
+  setEconomyText("economy-root-funding-utilization", formatEconomyPercentValue(funding.utilization_percent || 0));
+  setEconomyText("economy-root-funding-apr", `APR ${formatEconomyPercentValue(funding.effective_interest_apr_percent || 0)} · ${funding.borrowed_asset_symbol || "POINTS"}`);
+  const retainedIncome = Number(lending.fee_retained_points || 0) + Number(lending.interest_retained_points || 0);
+  setEconomyText("economy-root-pool-income", formatEconomyPointsValue(retainedIncome));
+  setEconomyText(
+    "economy-root-pool-income-detail",
+    `fee ${formatEconomyPointsValue(lending.fee_retained_points || fees.total_fee_points || 0)} / interest ${formatEconomyPointsValue(lending.interest_retained_points || 0)}`,
+  );
+  renderEconomyRootList([
+    {
+      title: "借貸池",
+      value: `可用 ${formatEconomyPointsValue(funding.available_points || 0)} · 貸出 ${formatEconomyPointsValue(funding.outstanding_principal_points || 0)}`,
+      detail: `容量 ${formatEconomyPointsValue(funding.capacity_points || 0)} · 使用率 ${formatEconomyPercentValue(funding.utilization_percent || 0)}`,
+    },
+    {
+      title: "本金與回收",
+      value: `貸出 ${formatEconomyPointsValue(lending.lent_out_points || 0)} · 回收 ${formatEconomyPointsValue(lending.repaid_points || 0)}`,
+      detail: `開放倉位 ${formatEconomyPointsValue(margin.open_margin_positions || 0)} · 本金 ${formatEconomyPointsValue(margin.open_principal_points || 0)}`,
+    },
+    {
+      title: "利息與 carry",
+      value: `應收 ${formatEconomyPointsValue(margin.open_interest_due_points || 0)} · 已保留 ${formatEconomyPointsValue(lending.interest_retained_points || 0)}`,
+      detail: `micropoints carry ${formatEconomyPointsValue(margin.interest_carry_micropoints || 0)} · 最近事件 ${lending.latest_reserve_event_at || "-"}`,
+    },
+  ], "economy-root-lending-pool-list", "尚無借貸池資料", (row) => `
+    <div class="drive-file-row">
+      <div>
+        <strong>${sanitize(row.title)}</strong>
+        <div class="drive-card-sub">${sanitize(row.value)}</div>
+        <div class="drive-card-sub">${sanitize(row.detail)}</div>
+      </div>
+    </div>
+  `);
+  renderEconomyRootList(safe.reserve_events || [], "economy-root-reserve-events-list", "尚無資金池事件", (row) => {
+    const delta = Number(row.delta_points || 0);
+    const signed = delta >= 0 ? `+${formatEconomyPointsValue(delta)}` : `-${formatEconomyPointsValue(Math.abs(delta))}`;
+    return `
+      <div class="drive-file-row">
+        <div>
+          <strong>${sanitize(row.event_type || "-")} · ${sanitize(signed)} 點</strong>
+          <div class="drive-card-sub">${sanitize(row.created_at || "")} · balance ${sanitize(formatEconomyPointsValue(row.balance_after || 0))}</div>
+          <div class="drive-card-sub">${sanitize(row.reason || "-")} · source ${sanitize(row.source_username || row.source_user_id || "-")}</div>
+        </div>
+      </div>
+    `;
+  });
+}
+
+function renderEconomyRootAllPositions(payload) {
+  const safe = payload && typeof payload === "object" ? payload : {};
+  const summary = safe.summary && typeof safe.summary === "object" ? safe.summary : {};
+  setEconomyText("economy-root-position-users", formatEconomyPointsValue(summary.user_count || 0));
+  setEconomyText("economy-root-position-wallet-total", `在外 ${formatEconomyPointsValue(summary.total_outstanding_points || 0)}`);
+  setEconomyText("economy-root-position-spot-count", formatEconomyPointsValue(summary.spot_position_count || 0));
+  setEconomyText("economy-root-position-margin-count", formatEconomyPointsValue(summary.margin_position_count || 0));
+  setEconomyText("economy-root-position-margin-detail", `開倉 ${formatEconomyPointsValue(summary.margin_position_count || 0)}`);
+  setEconomyText("economy-root-position-orders", formatEconomyPointsValue(summary.open_order_count || 0));
+  setEconomyText("economy-root-position-orders-detail", `凍結 ${formatEconomyPointsValue(summary.frozen_order_points || 0)}`);
+  setEconomyText("economy-root-position-bots", formatEconomyPointsValue(summary.total_bot_count || 0));
+  setEconomyText("economy-root-position-bots-detail", `啟用 ${formatEconomyPointsValue(summary.total_enabled_bot_count || 0)} · 網格 ${formatEconomyPointsValue(summary.grid_bot_count || 0)}`);
+  renderEconomyRootList(safe.wallets || [], "economy-root-wallet-position-list", "尚無會員錢包", (row) => `
+    <div class="drive-file-row">
+      <div>
+        <strong>${sanitize(row.username || `user:${row.user_id || "-"}`)} · ${sanitize(formatEconomyPointsValue(row.outstanding_points || 0))} 點</strong>
+        <div class="drive-card-sub">可用 ${sanitize(formatEconomyPointsValue(row.points_balance || 0))} · 凍結 ${sanitize(formatEconomyPointsValue(row.points_frozen || 0))}</div>
+        <div class="drive-card-sub">wallet ${sanitize(row.wallet_status || "-")} · risk ${sanitize(row.risk_level || "-")} · ${sanitize(row.wallet_updated_at || "-")}</div>
+      </div>
+    </div>
+  `);
+  renderEconomyRootList(safe.spot_positions || [], "economy-root-spot-position-list", "尚無現貨倉位", (row) => `
+    <div class="drive-file-row">
+      <div>
+        <strong>${sanitize(row.username || `user:${row.user_id || "-"}`)} · ${sanitize(economyDisplayMarketSymbol(row.market_symbol))}</strong>
+        <div class="drive-card-sub">數量 ${sanitize(formatEconomyQuantityValue(row.quantity))} · 鎖定 ${sanitize(formatEconomyQuantityValue(row.locked_quantity))}</div>
+        <div class="drive-card-sub">均價 ${sanitize(formatEconomyPointsValue(row.avg_cost_points || 0))} · TP ${sanitize(row.take_profit_percent ?? "-")}% · SL ${sanitize(row.stop_loss_percent ?? "-")}%</div>
+      </div>
+    </div>
+  `);
+  renderEconomyRootList(safe.margin_positions || [], "economy-root-margin-position-list", "尚無借貸倉位", (row) => `
+    <div class="drive-file-row">
+      <div>
+        <strong>${sanitize(row.username || `user:${row.user_id || "-"}`)} · ${sanitize(economyDisplayMarketSymbol(row.market_symbol))} · ${sanitize(row.position_type || "-")}</strong>
+        <div class="drive-card-sub">數量 ${sanitize(formatEconomyQuantityValue(row.quantity))} · 入場 ${sanitize(formatEconomyPointsValue(row.entry_price_points || 0))}</div>
+        <div class="drive-card-sub">本金 ${sanitize(formatEconomyPointsValue(row.principal_points || 0))} · 擔保 ${sanitize(formatEconomyPointsValue(row.collateral_points || 0))} · 利息 ${sanitize(formatEconomyPointsValue(row.interest_due_points || 0))}</div>
+        <div class="economy-ledger-hash">${sanitize(row.position_uuid || "")}</div>
+      </div>
+    </div>
+  `);
+  const botRows = [
+    ...(Array.isArray(safe.bots) ? safe.bots.map((row) => ({ ...row, family: "bot" })) : []),
+    ...(Array.isArray(safe.grid_bots) ? safe.grid_bots.map((row) => ({ ...row, family: "grid" })) : []),
+  ];
+  renderEconomyRootList(botRows, "economy-root-bot-position-list", "尚無交易機器人", (row) => {
+    const isGrid = row.family === "grid";
+    const status = row.enabled ? "啟用" : "暫停";
+    const subtitle = isGrid
+      ? `格數 ${formatEconomyPointsValue(row.grid_count || 0)} · 每格 ${formatEconomyPointsValue(row.order_amount_points || 0)} 點 · 掛單 ${formatEconomyPointsValue(row.open_grid_orders || 0)}`
+      : `${sanitize(row.side || "-")} ${sanitize(row.order_type || "-")} · 執行 ${formatEconomyPointsValue(row.run_count || 0)} / ${formatEconomyPointsValue(row.max_runs || 0)}`;
+    const timing = isGrid
+      ? `掃描 ${sanitize(row.last_scan_at || "-")} · 成交 ${formatEconomyPointsValue(row.total_trades || 0)} · 利潤 ${formatEconomyPointsValue(row.total_profit_points || 0)}`
+      : `觸發 ${sanitize(row.trigger_type || "-")} ${sanitize(row.trigger_price_points ?? "-")} · 最近 ${sanitize(row.last_run_at || "-")}`;
+    return `
+      <div class="drive-file-row">
+        <div>
+          <strong>${sanitize(row.username || `user:${row.user_id || "-"}`)} · ${sanitize(row.name || row.bot_uuid || "-")} · ${sanitize(isGrid ? "網格" : row.bot_type || "bot")} · ${sanitize(status)}</strong>
+          <div class="drive-card-sub">${sanitize(economyDisplayMarketSymbol(row.market_symbol))} · ${subtitle}</div>
+          <div class="drive-card-sub">${timing}</div>
+          ${row.last_error ? `<div class="drive-card-sub negative">錯誤 ${sanitize(row.last_error)}</div>` : ""}
+        </div>
+      </div>
+    `;
+  });
+}
+
 function renderEconomyRootReport(report) {
   const safeReport = report && typeof report === "object" ? report : {};
+  renderEconomyRootBalanceSummary(safeReport);
   const verification = safeReport.verification && typeof safeReport.verification === "object" ? safeReport.verification : {};
   const counts = verification.counts && typeof verification.counts === "object" ? verification.counts : {};
   if ($("economy-chain-ok")) {
@@ -645,10 +853,12 @@ async function loadEconomyDashboard() {
     const rootCard = $("economy-root-card");
     if (rootCard) rootCard.style.display = currentUser === "root" ? "" : "none";
     const rootReportOk = rootMode ? await loadEconomyRootReport() : true;
+    const shouldLoadRootTrading = rootMode && ["funding-pools", "all-positions"].includes(economyActivePage);
+    const rootTradingOk = shouldLoadRootTrading ? await loadEconomyRootTradingReadOnly() : true;
     if (typeof loadTradingDashboard === "function") {
       await loadTradingDashboard();
     }
-    if (rootReportOk !== false) economySetMsg("");
+    if (rootReportOk !== false && rootTradingOk !== false) economySetMsg("");
   } catch (err) {
     economySetMsg(err.message || "PointsChain 讀取失敗", false);
   }
@@ -668,6 +878,22 @@ async function loadEconomyRootReport() {
     if ($("economy-chain-countdown")) $("economy-chain-countdown").textContent = "封塊進度：讀取失敗";
     setEconomyChainStatus(err.message || "PointsChain 狀態讀取失敗", false);
     economySetMsg(err.message || "PointsChain 狀態讀取失敗", false);
+    return false;
+  }
+}
+
+async function loadEconomyRootTradingReadOnly() {
+  if (currentUser !== "root" || !economyPositionsAvailable()) return true;
+  try {
+    const [pools, positions] = await Promise.all([
+      fetchEconomyJson("/root/trading/sitewide/pools"),
+      fetchEconomyJson("/root/trading/sitewide/user-positions"),
+    ]);
+    renderEconomyRootFundingPools(pools.pools || {});
+    renderEconomyRootAllPositions(positions.positions || {});
+    return true;
+  } catch (err) {
+    economySetMsg(err.message || "root 交易資金池與倉位資料讀取失敗", false);
     return false;
   }
 }
@@ -1057,6 +1283,9 @@ function bindEconomyInlineEvents() {
     ["economy-adjust-btn", submitEconomyAdjustment],
     ["economy-account-query-btn", loadEconomyAccountLookup],
     ["economy-wallet-sanction-btn", sanctionEconomyWallet],
+    ["economy-root-balance-refresh-btn", loadEconomyRootReport],
+    ["economy-root-funding-refresh-btn", loadEconomyRootTradingReadOnly],
+    ["economy-root-positions-refresh-btn", loadEconomyRootTradingReadOnly],
     ["economy-root-report-btn", loadEconomyRootReport],
     ["economy-backup-btn", createPointsChainBackup],
     ["economy-recovery-auto-handle-btn", autoHandlePointsChainRecovery],

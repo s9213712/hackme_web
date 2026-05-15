@@ -43,6 +43,32 @@ function formatPlatformCenterPoints(value) {
   return `${formatPlatformCenterNumber(value)} 點`;
 }
 
+function platformJobCenterMergeKey(job = {}) {
+  const sourceModule = String(job.source_module || "").trim();
+  const sourceRef = String(job.source_ref || "").trim();
+  if (sourceModule && sourceRef) return `${sourceModule}:${sourceRef}`;
+  return String(job.job_uuid || "").trim();
+}
+
+function mergePlatformJobCenterJobs(jobs = []) {
+  const byKey = new Map();
+  jobs.filter(Boolean).forEach((job) => {
+    const key = platformJobCenterMergeKey(job);
+    if (!key) return;
+    const existing = byKey.get(key);
+    const currentTs = Date.parse(job.updated_at || job.created_at || "") || 0;
+    const existingTs = existing ? (Date.parse(existing.updated_at || existing.created_at || "") || 0) : -1;
+    if (!existing || currentTs >= existingTs) {
+      byKey.set(key, job);
+    }
+  });
+  return Array.from(byKey.values()).sort((a, b) => {
+    const at = Date.parse(a.updated_at || a.created_at || "") || 0;
+    const bt = Date.parse(b.updated_at || b.created_at || "") || 0;
+    return bt - at;
+  });
+}
+
 function shareCenterVisibilityLabel(value) {
   const map = {
     public: "公開",
@@ -165,8 +191,13 @@ async function loadJobCenter() {
       renderJobCenterJobs([]);
       return;
     }
-    renderJobCenterJobs(json.jobs || []);
-    platformCenterSetMsg("job-center-msg", `已載入 ${(json.jobs || []).length} 筆任務`, true);
+    let jobs = Array.isArray(json.jobs) ? json.jobs : [];
+    if (typeof loadDriveTaskCenterJobs === "function") {
+      const driveJobs = await loadDriveTaskCenterJobs({ csrf });
+      jobs = mergePlatformJobCenterJobs([...jobs, ...driveJobs]);
+    }
+    renderJobCenterJobs(jobs);
+    platformCenterSetMsg("job-center-msg", `已載入 ${jobs.length} 筆任務`, true);
   } catch (_) {
     platformCenterSetMsg("job-center-msg", "任務中心讀取失敗，請稍後再試。", false);
   }
@@ -413,6 +444,36 @@ function videoManageSummaryFrom(videos = []) {
   });
 }
 
+function videoManageProcessingLabel(video = {}) {
+  const status = String(video.status || "ready");
+  const streamStatus = String(video.stream_asset?.status || "");
+  if (status === "processing" || streamStatus === "processing") return "後台處理中";
+  if (streamStatus === "failed") return "HLS 處理失敗";
+  if (streamStatus === "ready") return "HLS 已就緒";
+  if (status === "blocked") return "不可播放";
+  return "可播放";
+}
+
+function videoManageProcessingClass(video = {}) {
+  const status = String(video.status || "ready");
+  const streamStatus = String(video.stream_asset?.status || "");
+  if (status === "processing" || streamStatus === "processing") return "info";
+  if (streamStatus === "failed" || status === "blocked") return "danger";
+  if (streamStatus === "ready" || status === "ready") return "success";
+  return "muted";
+}
+
+function videoManageShareUrl(video = {}) {
+  const url = video.share_url || video.share_link?.url || "";
+  if (!url) return "";
+  try {
+    const parsed = new URL(url, location.origin);
+    return parsed.origin === location.origin ? parsed.href : "";
+  } catch (_) {
+    return "";
+  }
+}
+
 function renderVideoManageCenter(payload = {}) {
   const list = $("video-manage-list");
   if (!list) return;
@@ -435,14 +496,22 @@ function renderVideoManageCenter(payload = {}) {
       ? `曝光中 · 到期 ${sanitize(formatChatTime(video.boost_expires_at || ""))}`
       : "未加曝光";
     const statusClass = video.visibility === "public" ? "success" : (video.visibility === "unlisted" ? "info" : "muted");
+    const processingLabel = videoManageProcessingLabel(video);
+    const processingClass = videoManageProcessingClass(video);
+    const shareUrl = videoManageShareUrl(video);
+    const shareDisabled = String(video.status || "ready") !== "ready";
+    const shareState = video.share_link?.state_message || (shareUrl ? "分享連結有效" : "尚未建立分享連結");
+    const streamError = video.stream_asset?.error_message ? ` · ${video.stream_asset.error_message}` : "";
     return `
       <div class="drive-file-row video-manage-row" data-video-manage-id="${sanitize(id)}">
         <div class="video-manage-main">
           <div class="video-manage-head">
             <strong>${sanitize(video.title || "未命名影音")}</strong>
             <span class="badge ${statusClass}">${sanitize(shareCenterVisibilityLabel(video.visibility))}</span>
+            <span class="badge ${processingClass}">${sanitize(processingLabel)}</span>
             <span class="badge ${boostActive ? "info" : "muted"}">${boostText}</span>
           </div>
+          ${shareDisabled ? `<div class="msg">影音還在後台處理 HLS，完成前不會出現在影音列表；處理完成會通知上傳者。${sanitize(streamError)}</div>` : ""}
           <div class="video-manage-fields">
             <label class="field">
               <span>標題</span>
@@ -470,11 +539,34 @@ function renderVideoManageCenter(payload = {}) {
             <span>平台分潤 ${formatPlatformCenterPoints(video.platform_fee_points)}</span>
             <span>分享 ${formatPlatformCenterNumber(video.active_share_count)} / 開啟 ${formatPlatformCenterNumber(video.share_access_count)}</span>
           </div>
+          <div class="video-manage-share-box">
+            <div class="drive-card-sub">分享狀態：${sanitize(shareState)}</div>
+            ${shareUrl ? `<div class="drive-card-sub drive-share-link">${sanitize(shareUrl)}</div>` : `<div class="drive-card-sub">尚未產生影音分享連結。</div>`}
+            <div class="video-share-manage-grid">
+              <label>
+                <span class="drive-card-sub">分享密碼</span>
+                <input type="password" autocomplete="new-password" placeholder="${video.share_password_required ? "留空代表不變更" : "可選"}" data-video-manage-share-password ${shareDisabled ? "disabled" : ""} />
+              </label>
+              <label>
+                <span class="drive-card-sub">到期時間</span>
+                <input type="datetime-local" value="${sanitize(String(video.share_expires_at || video.share_link?.expires_at || "").slice(0, 16))}" data-video-manage-share-expires ${shareDisabled ? "disabled" : ""} />
+              </label>
+              <label>
+                <span class="drive-card-sub">最大觀看次數</span>
+                <input type="number" min="0" step="1" value="${sanitize(String(video.share_max_views || video.share_link?.max_views || 0))}" data-video-manage-share-max-views ${shareDisabled ? "disabled" : ""} />
+              </label>
+            </div>
+            <div class="drive-file-actions" style="justify-content:flex-start;margin-top:.5rem;">
+              <button class="btn btn-sm" type="button" data-video-manage-share-save="${sanitize(id)}" ${shareDisabled ? "disabled" : ""}>${shareUrl ? "更新分享" : "產生分享連結"}</button>
+              <button class="btn btn-sm" type="button" data-video-manage-share-copy="${sanitize(id)}" ${shareUrl ? "" : "disabled"}>複製連結</button>
+              <button class="btn btn-sm" type="button" data-video-manage-share-regenerate="${sanitize(id)}" ${shareDisabled ? "disabled" : ""}>重新產生</button>
+              <button class="btn btn-sm btn-danger" type="button" data-video-manage-share-revoke="${sanitize(id)}" ${shareUrl ? "" : "disabled"}>撤銷分享</button>
+            </div>
+          </div>
           <div class="drive-card-sub">建立 ${sanitize(formatChatTime(video.created_at || ""))} · 更新 ${sanitize(formatChatTime(video.updated_at || ""))} · 來源 ${sanitize(video.cloud_filename || video.cloud_file_id || "-")}</div>
         </div>
         <div class="drive-file-actions video-manage-actions">
           <button class="btn" type="button" data-video-manage-open="${sanitize(id)}">觀看</button>
-          <button class="btn" type="button" data-video-manage-links="${sanitize(id)}">分享設定</button>
           <button class="btn btn-primary" type="button" data-video-manage-save="${sanitize(id)}">儲存</button>
           <label class="video-manage-boost-control" title="花積分提升影音在平台列表中的排序曝光，曝光到期後可再次加值。">
             <input type="number" min="10" step="10" value="100" data-video-manage-boost-amount />
@@ -490,6 +582,18 @@ function renderVideoManageCenter(payload = {}) {
   });
   list.querySelectorAll("[data-video-manage-links]").forEach((btn) => {
     btn.addEventListener("click", () => setShareCenterTab("links"));
+  });
+  list.querySelectorAll("[data-video-manage-share-save]").forEach((btn) => {
+    btn.addEventListener("click", () => saveManagedVideoShareSettings(btn.dataset.videoManageShareSave || ""));
+  });
+  list.querySelectorAll("[data-video-manage-share-regenerate]").forEach((btn) => {
+    btn.addEventListener("click", () => saveManagedVideoShareSettings(btn.dataset.videoManageShareRegenerate || "", { regenerate: true }));
+  });
+  list.querySelectorAll("[data-video-manage-share-copy]").forEach((btn) => {
+    btn.addEventListener("click", () => copyManagedVideoShareLink(btn.dataset.videoManageShareCopy || ""));
+  });
+  list.querySelectorAll("[data-video-manage-share-revoke]").forEach((btn) => {
+    btn.addEventListener("click", () => revokeManagedVideoShareLink(btn.dataset.videoManageShareRevoke || ""));
   });
   list.querySelectorAll("[data-video-manage-save]").forEach((btn) => {
     btn.addEventListener("click", () => saveManagedVideo(btn.dataset.videoManageSave || ""));
@@ -554,6 +658,102 @@ async function saveManagedVideo(videoId) {
     await loadVideoManageCenter();
   } catch (_) {
     platformCenterSetMsg("video-manage-msg", "影音更新失敗，請稍後再試。", false);
+  }
+}
+
+async function ensureManagedVideoCanShare(row, videoId, csrf) {
+  const visibilitySelect = row.querySelector("[data-video-manage-visibility]");
+  const visibility = visibilitySelect?.value || "public";
+  if (visibility === "unlisted") return true;
+  if (!confirm("要將這支影音改為「持連結」並產生分享連結嗎？")) return false;
+  const payload = {
+    title: row.querySelector("[data-video-manage-title]")?.value || "",
+    description: row.querySelector("[data-video-manage-description]")?.value || "",
+    visibility: "unlisted"
+  };
+  const res = await apiFetch(API + `/videos/${encodeURIComponent(videoId)}/manage`, {
+    method: "PUT",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      "X-CSRF-Token": csrf || ""
+    },
+    body: JSON.stringify(payload)
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) throw new Error(json.msg || "影音可見性更新失敗");
+  if (visibilitySelect) visibilitySelect.value = "unlisted";
+  return true;
+}
+
+async function saveManagedVideoShareSettings(videoId, { regenerate = false } = {}) {
+  const row = videoManageRow(videoId);
+  if (!row) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  try {
+    const canShare = await ensureManagedVideoCanShare(row, videoId, csrf);
+    if (!canShare) return;
+    const payload = {
+      share_expires_at: row.querySelector("[data-video-manage-share-expires]")?.value || "",
+      share_max_views: row.querySelector("[data-video-manage-share-max-views]")?.value || ""
+    };
+    const password = (row.querySelector("[data-video-manage-share-password]")?.value || "").trim();
+    if (password) payload.share_password = password;
+    if (regenerate) payload.regenerate = true;
+    const res = await apiFetch(API + `/videos/${encodeURIComponent(videoId)}/share-link`, {
+      method: "PUT",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRF-Token": csrf || ""
+      },
+      body: JSON.stringify(payload)
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!json.ok) throw new Error(json.msg || "影音分享設定更新失敗");
+    platformCenterSetMsg("video-manage-msg", regenerate ? "影音分享連結已重新產生" : "影音分享設定已更新", true);
+    await loadVideoManageCenter();
+  } catch (err) {
+    platformCenterSetMsg("video-manage-msg", err?.message || "影音分享設定更新失敗，請稍後再試。", false);
+  }
+}
+
+async function copyManagedVideoShareLink(videoId) {
+  const row = videoManageRow(videoId);
+  if (!row) return;
+  const text = row.querySelector(".drive-share-link")?.textContent?.trim() || "";
+  if (!text) {
+    platformCenterSetMsg("video-manage-msg", "尚未產生分享連結", false);
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    platformCenterSetMsg("video-manage-msg", "影音分享連結已複製", true);
+  } catch (_) {
+    window.prompt("影音分享連結", text);
+  }
+}
+
+async function revokeManagedVideoShareLink(videoId) {
+  if (!videoId || !confirm("確定要撤銷這支影音的分享連結？")) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  try {
+    const res = await apiFetch(API + `/videos/${encodeURIComponent(videoId)}/share-link`, {
+      method: "DELETE",
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" }
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!json.ok) {
+      platformCenterSetMsg("video-manage-msg", json.msg || "影音分享撤銷失敗", false);
+      return;
+    }
+    platformCenterSetMsg("video-manage-msg", "影音分享連結已撤銷", true);
+    await loadVideoManageCenter();
+  } catch (_) {
+    platformCenterSetMsg("video-manage-msg", "影音分享撤銷失敗，請稍後再試。", false);
   }
 }
 

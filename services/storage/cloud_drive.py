@@ -22,6 +22,25 @@ from services.security.upload_security import (
 
 CONTEXT_TYPES = {"dm", "group_chat", "chat_message", "forum_thread", "forum_post", "forum_comment", "announcement"}
 ANNOUNCEMENT_REQUEST_STATUSES = {"pending", "approved", "rejected"}
+DEFAULT_SERVER_ENCRYPTED_INLINE_MAX_BYTES = 256 * 1024 * 1024
+
+
+def server_encrypted_inline_max_bytes():
+    raw_bytes = os.environ.get("HACKME_SERVER_ENCRYPTED_INLINE_MAX_BYTES")
+    raw_mb = os.environ.get("HACKME_SERVER_ENCRYPTED_INLINE_MAX_MB")
+    try:
+        value = int(raw_bytes) if raw_bytes is not None else int(raw_mb) * 1024 * 1024 if raw_mb is not None else DEFAULT_SERVER_ENCRYPTED_INLINE_MAX_BYTES
+    except Exception:
+        value = DEFAULT_SERVER_ENCRYPTED_INLINE_MAX_BYTES
+    return max(0, int(value))
+
+
+def _server_encrypted_size_error(size_bytes):
+    limit = server_encrypted_inline_max_bytes()
+    if limit <= 0 or int(size_bytes or 0) <= limit:
+        return ""
+    limit_mb = max(1, limit // (1024 * 1024))
+    return f"伺服器端加密目前只允許 {limit_mb} MB 以內的單檔即時處理；較大的檔案請使用 E2EE 或等背景加密管線。"
 
 
 def ensure_cloud_drive_attachment_schema(conn):
@@ -97,6 +116,9 @@ def is_server_encrypted_file(row_or_mode):
 def decrypt_server_encrypted_bytes(path, server_file_fernet):
     if not server_file_fernet:
         raise ValueError("server-side file encryption key is unavailable")
+    size_error = _server_encrypted_size_error(Path(path).stat().st_size)
+    if size_error:
+        raise ValueError(size_error)
     try:
         return server_file_fernet.decrypt(Path(path).read_bytes())
     except InvalidToken as exc:
@@ -302,6 +324,12 @@ def store_cloud_upload(
     rel_path = f"users/{int(actor['id'])}/{file_id_hint}/{filename}"
     target = resolve_storage_path(storage_root, rel_path, create_parent=True)
     server_encrypted = is_server_encrypted_privacy_mode(privacy_mode)
+    if server_encrypted:
+        size_error = _server_encrypted_size_error(size_bytes)
+        if size_error:
+            if position is not None and hasattr(stream, "seek"):
+                stream.seek(position)
+            return None, size_error
     memfd = None
     plaintext_scan_path = target
     plaintext_bytes = b""

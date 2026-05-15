@@ -54,7 +54,7 @@
 1. 任何寫入交易資料表（`trading_orders`、`trading_fills`、`trading_bot_runs`、`trading_margin_positions`...）都會 **同時** 寫一筆 `secure_audit`（hash chain）與 `trading_audit_events`（結構化 metadata）。
 2. PointsChain ledger 用 `previous_ledger_hash` + `ledger_hash` 串接成不可變鏈；wallet 餘額可由 ledger replay 重建（`07_POINTSCHAIN.md`）。
 3. Bot 每次巡檢依 `last_run_at` + `cooldown_seconds` 與 `interval_hours` 判斷是否該觸發；`run_count < max_runs` 限制最多執行次數。
-4. 訂單金額、手續費、PnL 全部於伺服器端用 integer POINTS 計算 (`fee_points()` 用 `Decimal.ROUND_HALF_UP`、`notional_points()` 用 `ceil`)。
+4. 訂單金額、手續費、PnL 全部於伺服器端計算：`notional_points()` 對名目金額進位，手續費先用 micropoints 累積，只有在現貨賣出、bot 停止賣出、借貸平倉或清算等結算邊界才合併後進位成整數 POINTS。
 5. 異常透過 audit event + last_error 欄位 + 主稽核鏈 + 通知中心 (`/api/notifications`) 多重落點。
 6. 稽核不是 bot 一啟用就立刻打燈。為避免新 bot 還沒碰到任何條件就被誤標，系統會先標成 `未稽核`；等它至少成交 1 筆，或啟用已滿 `24h`，才進入綠 / 黃 / 紅燈狀態。
 

@@ -125,6 +125,16 @@ video_tip_fee_percent
 video_tip_min_points
 ```
 
+Only tips move points between wallets today. Views, likes, comments, and share
+link access are engagement signals: they update counters and influence list
+ranking, but they do not mint points or pay creator revenue by themselves.
+The default tip fee is 5%, configurable by `video_tip_fee_percent`; the
+uploader receives `amount - fee`, and the fee is credited to the official
+`root` account. Boosting a video spends the owner's points as
+`video_boost_debit`, adds the spend to `boost_points_total`, and gives the
+video a ranking lift for seven days. Search is supported on title,
+description, username, and nickname through the bounded `q` parameter.
+
 ## API
 
 ```text
@@ -132,7 +142,7 @@ POST   /api/videos/publish
 POST   /api/videos/upload
 PUT    /api/videos/<id>/share-link
 DELETE /api/videos/<id>/share-link
-GET    /api/videos?sort=new|hot|trending&page=1
+GET    /api/videos?sort=new|hot|trending&page=1&q=keyword
 GET    /api/videos/<id>
 POST   /api/media/<file_id>/prepare-stream
 GET    /api/media/<file_id>/stream-status

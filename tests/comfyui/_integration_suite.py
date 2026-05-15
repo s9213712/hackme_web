@@ -1,6 +1,7 @@
 import io
 import json
 import sqlite3
+import threading
 import time
 import urllib.parse
 from pathlib import Path
@@ -1602,6 +1603,95 @@ def test_comfyui_generate_async_job_captures_request_meta_before_thread_handoff(
         and row["ua"] == "pytest-agent/1.0"
         for row in audit_rows
     )
+
+
+def test_comfyui_async_generation_worker_survives_logout_or_session_change(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor()}
+    started = threading.Event()
+    release = threading.Event()
+
+    class SlowSessionIndependentClient(FakeComfyUIClient):
+        def generate_image(self, params, *, timeout_seconds=180, progress_callback=None):
+            started.set()
+            if progress_callback:
+                progress_callback({
+                    "phase": "running",
+                    "percent": 25,
+                    "current": 1,
+                    "max": 4,
+                    "current_node": "3",
+                    "detail": "session independence check",
+                    "queue_remaining": 0,
+                })
+            assert release.wait(timeout=10)
+            return super().generate_image(params, timeout_seconds=timeout_seconds, progress_callback=progress_callback)
+
+    client = _build_app(
+        db_path,
+        storage_root,
+        comfyui_client=SlowSessionIndependentClient(),
+        actor=lambda: actor_box["actor"],
+    ).test_client()
+
+    started_response = client.post(
+        "/api/comfyui/generate",
+        json={
+            "model": "dream.safetensors",
+            "prompt": "session independent generation",
+            "width": 512,
+            "height": 512,
+            "steps": 12,
+            "cfg": 6.5,
+            "sampler_name": "euler",
+            "scheduler": "normal",
+            "seed": 123,
+            "batch_size": 1,
+            "confirm_billing": True,
+            "async_progress": True,
+        },
+    )
+    assert started_response.status_code == 200
+    job_id = started_response.get_json()["job"]["job_id"]
+    assert started.wait(timeout=10)
+
+    actor_box["actor"] = None
+    logged_out_status = client.get(f"/api/comfyui/jobs/{job_id}")
+    assert logged_out_status.status_code == 401
+    actor_box["actor"] = {"id": 2, "username": "bob", "role": "user", "member_level": "trusted", "effective_level": "trusted"}
+    other_user_status = client.get(f"/api/comfyui/jobs/{job_id}")
+    assert other_user_status.status_code == 403
+
+    release.set()
+    platform_job = None
+    for _ in range(200):
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            platform_job = conn.execute(
+                """
+                SELECT * FROM job_center_jobs
+                WHERE source_module='comfyui' AND source_ref=? AND status='succeeded'
+                """,
+                (job_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        if platform_job:
+            break
+        time.sleep(0.05)
+
+    assert platform_job is not None
+    assert platform_job["owner_user_id"] == 1
+    actor_box["actor"] = _actor()
+    final_status = client.get(f"/api/comfyui/jobs/{job_id}")
+    assert final_status.status_code == 200
+    final_body = final_status.get_json()
+    assert final_body["job"]["status"] == "completed"
+    assert final_body["job"]["result"]["image"]["image_ref"]["filename"] == "hackme_web_00001_.png"
 
 
 def test_comfyui_batch_limit_is_root_configurable(tmp_path):
@@ -4131,7 +4221,7 @@ def test_comfyui_frontend_is_wired():
     assert "if (modelsTab) modelsTab.hidden = !showLocalModels;" in comfyui_js
     assert '目前是雲端 / 遠端模式，所以這個區塊只保留說明。若要管理本站的本地 ComfyUI 模型，請先把 backend 切回本地模式。' in comfyui_js
     assert "/js/36-comfyui.js?v=20260509-comfyui-template-embeddings" in index_html
-    assert "/styles.css?v=20260514-open-world" in index_html
+    assert "/styles.css?v=20260515-drive-capacity-reservoir" in index_html
     assert "width: min(420px, 100%);" in css
     assert "max-height: 320px;" in css
     assert ".comfyui-root-details" in css

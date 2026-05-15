@@ -58,6 +58,17 @@ def test_comfyui_long_running_work_suspends_idle_logout():
     assert 'setComfyuiIdleSuspend("comfyui_model_download", false, "ComfyUI 模型下載中");' in comfyui
 
 
+def test_drive_transfers_suspend_idle_logout_and_guard_browser_upload_reload():
+    drive = (ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8")
+
+    assert "function syncDriveTransferIdleSuspend()" in drive
+    assert 'setInactivitySuspendState("drive_transfer", active, "雲端硬碟傳輸中");' in drive
+    assert "syncDriveTransferIdleSuspend();" in drive
+    assert "function hasActiveDriveBrowserUpload()" in drive
+    assert 'window.addEventListener("beforeunload", (event) => {' in drive
+    assert '["upload", "folder_upload"].includes(item.kind)' in drive
+
+
 def test_internal_test_login_token_is_hidden_outside_internal_test_mode():
     index = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     core = (ROOT / "public" / "js" / "00-core.js").read_text(encoding="utf-8")

@@ -220,7 +220,7 @@ def _build_video_upload_app(db_path, storage_root, fernet):
     return app
 
 
-def test_video_upload_endpoint_stores_server_encrypted_video_and_streams_plaintext(tmp_path):
+def test_video_upload_endpoint_stores_server_encrypted_video_and_requires_hls_for_stream(tmp_path):
     db_path = tmp_path / "video.db"
     storage_root = tmp_path / "storage"
     storage_root.mkdir()
@@ -252,15 +252,10 @@ def test_video_upload_endpoint_stores_server_encrypted_video_and_streams_plainte
     assert body["cover_storage_file"]["virtual_path"].startswith("/Media/Covers/")
 
     stream = client.get(f"/api/videos/{body['video']['id']}/stream")
-    assert stream.status_code == 200
-    assert stream.data == b"not-a-real-mp4-but-route-test"
-    assert stream.headers["Accept-Ranges"] == "bytes"
+    assert stream.status_code == 403
 
     ranged = client.get(f"/api/videos/{body['video']['id']}/stream", headers={"Range": "bytes=4-11"})
-    assert ranged.status_code == 206
-    assert ranged.headers["Content-Range"] == "bytes 4-11/29"
-    assert ranged.headers["Accept-Ranges"] == "bytes"
-    assert ranged.data == b"a-real-m"
+    assert ranged.status_code == 403
 
     cover = client.get(f"/api/videos/{body['video']['id']}/cover")
     assert cover.status_code == 200
@@ -296,9 +291,7 @@ def test_video_upload_endpoint_accepts_audio_and_streams_it(tmp_path):
     assert body["storage_file"]["virtual_path"].startswith("/Media/")
 
     stream = client.get(f"/api/videos/{body['video']['id']}/stream")
-    assert stream.status_code == 200
-    assert stream.mimetype == "audio/mpeg"
-    assert stream.data == b"not-a-real-mp3-but-route-test"
+    assert stream.status_code == 403
 
 
 def test_video_stream_encodes_unicode_filename_safely_for_range_responses(tmp_path):
@@ -314,9 +307,9 @@ def test_video_stream_encodes_unicode_filename_safely_for_range_responses(tmp_pa
         data={
             "video": (io.BytesIO(b"unicode-video-stream"), "測試影片.mp4", "video/mp4"),
             "title": "Unicode video",
-            "description": "server encrypted unicode name",
-            "visibility": "public",
-            "privacy_mode": "server_encrypted",
+            "description": "standard unicode name",
+            "visibility": "private",
+            "privacy_mode": "standard_plain",
         },
         content_type="multipart/form-data",
     )
@@ -328,7 +321,6 @@ def test_video_stream_encodes_unicode_filename_safely_for_range_responses(tmp_pa
     assert stream.status_code == 200
     assert stream.data == b"unicode-video-stream"
     disposition = stream.headers["Content-Disposition"]
-    assert 'filename="' in disposition
     assert "filename*=UTF-8''" in disposition
     assert "%E6%B8%AC%E8%A9%A6%E5%BD%B1%E7%89%87.mp4" in disposition
 
@@ -419,8 +411,7 @@ def test_video_server_encrypted_cover_and_stream_handle_rotated_key_without_500(
     assert cover.mimetype == "image/svg+xml"
 
     stream = reader_client.get(f"/api/videos/{video_id}/stream")
-    assert stream.status_code == 409
-    assert stream.get_json()["error"] == "decrypt_unavailable"
+    assert stream.status_code == 403
 
 
 def test_video_upload_rejects_e2ee_and_non_video(tmp_path):

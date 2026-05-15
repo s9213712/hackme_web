@@ -27,6 +27,8 @@ let tradingReferenceChartModel = null;
 let tradingReferenceHoverIndex = null;
 let tradingDashboardAutoTimer = null;
 let tradingDashboardAutoBusy = false;
+let tradingMutationRefreshTimer = null;
+let tradingMutationRefreshBusy = false;
 let tradingLivePriceTimer = null;
 let tradingLivePriceBusy = false;
 let tradingLivePriceAbort = null;
@@ -57,6 +59,7 @@ function stopTradingModuleTimers() {
   if (tradingReferenceAutoTimer) clearInterval(tradingReferenceAutoTimer);
   if (tradingReferenceChartAutoTimer) clearInterval(tradingReferenceChartAutoTimer);
   if (tradingDashboardAutoTimer) clearInterval(tradingDashboardAutoTimer);
+  if (tradingMutationRefreshTimer) clearTimeout(tradingMutationRefreshTimer);
   if (tradingLivePriceTimer) clearInterval(tradingLivePriceTimer);
   if (tradingReserveUserSyncTimer) clearInterval(tradingReserveUserSyncTimer);
   if (tradingTrialCountdownTimer) clearInterval(tradingTrialCountdownTimer);
@@ -65,6 +68,7 @@ function stopTradingModuleTimers() {
   tradingReferenceAutoTimer = null;
   tradingReferenceChartAutoTimer = null;
   tradingDashboardAutoTimer = null;
+  tradingMutationRefreshTimer = null;
   tradingLivePriceTimer = null;
   tradingReserveUserSyncTimer = null;
   tradingTrialCountdownTimer = null;
@@ -175,6 +179,7 @@ const TRADING_PERSONAL_FORM_FIELDS = [
   { id: "trading-grid-share-parameters", checked: false },
   { id: "trading-auto-bot-name", value: "" },
   { id: "trading-auto-bot-market", value: "" },
+  { id: "trading-auto-bot-budget-points", value: "100" },
   { id: "trading-auto-strategy-mode", value: "single" },
   { id: "trading-auto-daily-runs", value: "5" },
   { id: "trading-auto-bot-max-runs", value: "5" },
@@ -535,6 +540,25 @@ async function fetchTradingJson(url, options = {}) {
     throw new Error(text || `HTTP ${res.status}`);
   }
   return json;
+}
+
+function scheduleTradingMutationRefresh(delayMs = 120) {
+  if (tradingMutationRefreshTimer) clearTimeout(tradingMutationRefreshTimer);
+  tradingMutationRefreshTimer = setTimeout(async () => {
+    tradingMutationRefreshTimer = null;
+    if (tradingMutationRefreshBusy) {
+      scheduleTradingMutationRefresh(300);
+      return;
+    }
+    tradingMutationRefreshBusy = true;
+    try {
+      await loadTradingDashboard();
+    } catch (_) {
+      // The order already succeeded; the next scheduled refresh will retry state sync.
+    } finally {
+      tradingMutationRefreshBusy = false;
+    }
+  }, Math.max(0, Number(delayMs) || 0));
 }
 
 async function tradingFreshCsrfToken() {
@@ -1087,10 +1111,19 @@ function tradingNumber(value, fallback = 0) {
 }
 
 function tradingSettlementFeePoints(notional, feeRatePercent) {
-  const exactFee = Number(notional || 0) * Number(feeRatePercent || 0) / 100;
+  return tradingMicropointsToSettlementPoints(tradingFeeMicropoints(notional, feeRatePercent));
+}
+
+function tradingFeeMicropoints(notional, feeRatePercent) {
+  const exactFee = Number(notional || 0) * Number(feeRatePercent || 0) * TRADING_POINT_MICRO_SCALE / 100;
   if (!Number.isFinite(exactFee) || exactFee <= 0) return 0;
-  // Keep the preview aligned with services.trading.accounting.core.fee_points.
-  return Math.ceil(exactFee - Number.EPSILON);
+  return Math.round(exactFee);
+}
+
+function tradingMicropointsToSettlementPoints(totalMicropoints) {
+  const micro = Math.max(0, Math.round(tradingNumber(totalMicropoints, 0)));
+  if (micro <= 0) return 0;
+  return Math.ceil(micro / TRADING_POINT_MICRO_SCALE - Number.EPSILON);
 }
 
 function currentTradingPosition(marketSymbol) {
@@ -1227,8 +1260,7 @@ function tradingOrderDraftEstimate() {
   const availablePoints = tradingNumber(funding.available_points, 0);
   const position = currentTradingPosition(market.symbol);
   const positionQuantity = tradingNumber(position?.quantity, 0);
-  const lockedQuantity = tradingNumber(position?.locked_quantity, 0);
-  const sellableQuantity = Math.max(0, positionQuantity - lockedQuantity);
+  const sellableQuantity = Math.max(0, positionQuantity);
   const orderPriceNote = orderType === "limit"
     ? `限價單以你輸入的價格為準；目前 reference 價 ${formatTradingPointsValue(tradingMarketPricePoints(market, "reference"))} · ${tradingPriceContextSummary(referenceContext, { compact: true })}`
     : (riskGradePrice > 0
@@ -1425,7 +1457,7 @@ const TRADING_POINT_MICRO_SCALE = 1000000;
 function tradingMarginBillableInterestPoints(totalMicropoints) {
   const micro = Math.max(0, Math.round(tradingNumber(totalMicropoints, 0)));
   if (micro <= 0) return 0;
-  return Math.max(1, Math.floor(micro / TRADING_POINT_MICRO_SCALE));
+  return tradingMicropointsToSettlementPoints(micro);
 }
 
 function tradingMarginPositionIsShort(row) {
@@ -1467,14 +1499,14 @@ function tradingMarginLiveInterest(row, nowMs = Date.now()) {
   const dueHours = Math.max(0, totalHours - accruedHours);
   if (!principal || ratePercentDaily <= 0 || dueHours <= 0) {
     const exact = capitalized + (carryMicropoints / TRADING_POINT_MICRO_SCALE);
-    return { points: capitalized, exactPoints: exact, totalHours, dueHours, totalMicropoints: carryMicropoints };
+    return { points: capitalized + tradingMarginBillableInterestPoints(carryMicropoints), exactPoints: exact, totalHours, dueHours, totalMicropoints: carryMicropoints };
   }
   const hourlyRate = (ratePercentDaily / 100) / 24;
   const dueMicropoints = Math.round(principal * hourlyRate * dueHours * TRADING_POINT_MICRO_SCALE);
   const totalMicropoints = carryMicropoints + dueMicropoints;
   const duePoints = tradingMarginBillableInterestPoints(totalMicropoints);
   const points = capitalized + duePoints;
-  const exactPoints = capitalized + Math.max(duePoints, totalMicropoints / TRADING_POINT_MICRO_SCALE);
+  const exactPoints = capitalized + (totalMicropoints / TRADING_POINT_MICRO_SCALE);
   return { points, exactPoints, totalHours, dueHours, totalMicropoints };
 }
 
@@ -1522,7 +1554,9 @@ function tradingLiveMarginRisk(row, market = null) {
   const feeRatePercent = tradingNumber(resolvedMarket.fee_rate_percent, 0);
   const maintenancePercent = tradingNumber(tradingState.settings?.margin_maintenance_percent, tradingNumber(fallback.maintenance_percent, 0));
   const exitNotional = quantity > 0 && currentPrice > 0 ? Math.ceil(quantity * currentPrice) : tradingNumber(fallback.exit_notional_points, 0);
-  const closeFee = tradingSettlementFeePoints(exitNotional, feeRatePercent);
+  const openFeeMicropoints = tradingNumber(row.open_fee_micropoints, tradingNumber(row.open_fee_points, 0) * TRADING_POINT_MICRO_SCALE);
+  const closeFeeMicropoints = tradingFeeMicropoints(exitNotional, feeRatePercent);
+  const closeFee = tradingMicropointsToSettlementPoints(openFeeMicropoints + closeFeeMicropoints);
   const isShort = tradingMarginPositionIsShort(row);
   const equityAfter = isShort
     ? (collateral + principal - exitNotional - interest - closeFee)
@@ -1564,6 +1598,15 @@ function tradingLiveMarginRisk(row, market = null) {
   } else if (isShort) {
     riskStatus = "short_price_risk";
   }
+  const withdrawEstimate = tradingMarginWithdrawEstimate(row, {
+    collateral_points: collateral,
+    initial_margin_points: collateral,
+    unrealized_pnl_points: delta,
+    delta_points: delta,
+    equity_after_points: equityAfter,
+    maintenance_points: maintenancePoints,
+    maintenance_margin_points: maintenancePoints,
+  });
   return {
     ...fallback,
     price_points: currentPrice,
@@ -1586,7 +1629,56 @@ function tradingLiveMarginRisk(row, market = null) {
     risk_status: riskStatus,
     risk_reason: riskReason,
     liquidation_required: equityAfter <= maintenancePoints,
+    max_withdrawable_collateral_points: withdrawEstimate.maxWithdrawable,
+    withdrawable_collateral_points: withdrawEstimate.maxWithdrawable,
+    withdrawable_collateral_reason: withdrawEstimate.reason,
+    withdrawable_collateral_after_ratio_percent: withdrawEstimate.afterRatio,
   };
+}
+
+function tradingMarginWithdrawEstimate(row, liveRisk = null) {
+  const risk = liveRisk || tradingLiveMarginRisk(row);
+  const backendMax = Number(risk?.max_withdrawable_collateral_points);
+  const collateral = Math.floor(tradingNumber(
+    risk?.collateral_points ?? risk?.initial_margin_points ?? row?.collateral_points ?? row?.initial_margin_points,
+    0
+  ));
+  const profitableSurplus = Math.max(0, Math.floor(tradingNumber(
+    risk?.unrealized_pnl_points ?? risk?.delta_points ?? row?.unrealized_pnl_points,
+    0
+  )));
+  const equity = Math.floor(tradingNumber(risk?.equity_after_points ?? row?.equity_after_points, 0));
+  const maintenance = Math.max(0, Math.ceil(tradingNumber(
+    risk?.maintenance_margin_points ?? risk?.maintenance_points ?? row?.maintenance_margin_points ?? row?.maintenance_points,
+    0
+  )));
+  const collateralCap = Math.max(0, collateral - 1);
+  const maintenanceCap = Math.max(0, equity - maintenance - 1);
+  const fallbackMax = Math.max(0, Math.min(collateralCap, profitableSurplus, maintenanceCap));
+  const maxWithdrawable = Number.isFinite(backendMax)
+    ? Math.max(0, Math.floor(backendMax))
+    : fallbackMax;
+  const afterEquity = equity - maxWithdrawable;
+  const afterRatio = maintenance > 0 && maxWithdrawable > 0
+    ? Math.round((afterEquity * 10000) / maintenance) / 100
+    : null;
+  let reason = "後端仍會用最新風控價、利息與維持率重算";
+  if (collateralCap <= 0) reason = "保證金已接近最低保留額，暫不可抽出";
+  else if (profitableSurplus <= 0) reason = "目前沒有可抽出的未實現盈利";
+  else if (maintenanceCap <= 0) reason = "抽出後會接近或低於維持保證金，暫不可抽出";
+  return {
+    maxWithdrawable,
+    afterRatio,
+    reason,
+    collateralCap,
+    profitableSurplus,
+    maintenanceCap,
+  };
+}
+
+function tradingMarginPositionByUuid(positionUuid) {
+  const target = String(positionUuid || "");
+  return (tradingState.marginPositions || []).find((row) => String(row.position_uuid || "") === target) || null;
 }
 
 function tradingLiveMarginFreeMarginPoints() {
@@ -1828,6 +1920,11 @@ function tradingMarginPositionRow(row, scope = "trading") {
   const leverageHint = collateral > 0 ? `${(principal / collateral).toFixed(2)}x 風險倍數` : "未提供風險倍數";
   const riskText = tradingMarginRiskText({ ...row, risk: liveRisk });
   const riskTargetText = tradingRiskTargetText(row.stop_loss_percent, row.take_profit_percent);
+  const withdrawEstimate = tradingMarginWithdrawEstimate(row, liveRisk);
+  const withdrawHint = withdrawEstimate.maxWithdrawable > 0
+    ? `預估可抽出 ${formatTradingPointsValue(withdrawEstimate.maxWithdrawable)} 點；若全數抽出，維持率約 ${withdrawEstimate.afterRatio == null ? "無法估算" : `${formatTradingPointsValue(withdrawEstimate.afterRatio)}%`}`
+    : `預估可抽出 0 點；${withdrawEstimate.reason}`;
+  const withdrawDisabledAttr = withdrawEstimate.maxWithdrawable > 0 ? "" : " disabled";
   const prefix = scope === "economy" ? "economy-" : "";
   return `
     <div class="drive-file-row">
@@ -1858,9 +1955,10 @@ function tradingMarginPositionRow(row, scope = "trading") {
         <button class="btn" type="button" data-${prefix}margin-add-collateral="${sanitize(row.position_uuid || "")}">補保證金</button>
         <div class="field">
           <label>抽出保證金</label>
-          <input type="number" min="1" step="1" placeholder="盈利可抽出" data-${prefix}margin-withdraw-collateral-amount="${sanitize(row.position_uuid || "")}" />
+          <input type="number" min="1" step="1" max="${sanitize(withdrawEstimate.maxWithdrawable)}" placeholder="${sanitize(withdrawEstimate.maxWithdrawable > 0 ? `${formatTradingPointsValue(withdrawEstimate.maxWithdrawable)} 點內` : "暫不可抽出")}" data-${prefix}margin-withdraw-collateral-amount="${sanitize(row.position_uuid || "")}" />
+          <div class="field-hint">${sanitize(withdrawHint)}。此為提示，實際送出仍以後端最新風控價格為準。</div>
         </div>
-        <button class="btn" type="button" data-${prefix}margin-withdraw-collateral="${sanitize(row.position_uuid || "")}">抽出保證金</button>
+        <button class="btn" type="button" data-${prefix}margin-withdraw-collateral="${sanitize(row.position_uuid || "")}"${withdrawDisabledAttr}>抽出保證金</button>
         <button class="btn btn-danger" type="button" data-${prefix}margin-close="${sanitize(row.position_uuid || "")}">平倉</button>
       </div>
     </div>
@@ -2879,6 +2977,16 @@ function renderTradingOrders(rows, targetId = "trading-order-list", allowCancel 
   });
 }
 
+function applyTradingOrderResult(order) {
+  if (!order?.order_uuid) return;
+  const rows = Array.isArray(tradingState.orders) ? tradingState.orders.slice() : [];
+  const index = rows.findIndex((row) => row.order_uuid === order.order_uuid);
+  if (index >= 0) rows[index] = { ...rows[index], ...order };
+  else rows.unshift(order);
+  tradingState.orders = rows.slice(0, 50);
+  renderTradingOrders(tradingState.orders);
+}
+
 function renderTradingFills(rows, targetId = "trading-fill-list") {
   const list = $(targetId);
   if (!list) return;
@@ -2952,14 +3060,16 @@ function updateTradingMarginEstimate() {
   const baseMinCollateral = positionType === "short"
     ? Math.ceil(notional * shortCollateralRatePercent / 100)
     : Math.ceil(notional * Math.max(0, 100 - marginLongFinancingRatePercent) / 100);
-  const safetyMinCollateral = Math.ceil(notional * Math.max(0, maintenancePercent + feeRatePercent) / 100) + 1;
+  const safetyMinCollateral = Math.ceil(notional * Math.max(0, maintenancePercent + feeRatePercent) / 100) + 2;
   const minCollateral = Math.max(baseMinCollateral, safetyMinCollateral);
   const minimumBorrowUnitPoints = 1;
   const maxLongCollateral = Math.max(0, notional - minimumBorrowUnitPoints);
-  const fee = tradingSettlementFeePoints(notional, feeRatePercent);
+  const feeMicropoints = tradingFeeMicropoints(notional, feeRatePercent);
+  const fee = tradingMicropointsToSettlementPoints(feeMicropoints);
+  const feeExact = feeMicropoints / TRADING_POINT_MICRO_SCALE;
   const available = tradingNumber(tradingState.funding?.available_points, 0);
-  const upfrontRequired = collateral + fee;
-  const maxCollateralFromAvailable = Math.max(0, available - fee);
+  const upfrontRequired = collateral;
+  const maxCollateralFromAvailable = Math.max(0, available);
   const principal = positionType === "short" ? notional : Math.max(0, notional - collateral);
   const fundingPool = tradingState.fundingPool || {};
   const poolAvailable = tradingNumber(fundingPool.available_points, 0);
@@ -2991,7 +3101,7 @@ function updateTradingMarginEstimate() {
     ? `借券保證金 ${formatTradingPercent(shortCollateralRatePercent)}% 底線 ${baseMinCollateral} 點`
     : `融資自備 ${formatTradingPercent(Math.max(0, 100 - marginLongFinancingRatePercent))}% 底線 ${baseMinCollateral} 點`;
   const safetyRuleText = `維持率 + 費率安全底線 ${safetyMinCollateral} 點`;
-  let message = `${typeLabel} · ${priceLabel} ${formatTradingPointsValue(price)} 點 · ${tradingPriceContextSummary(contextForMessage, { compact: true })} · 名目金額約 ${notional} 點 · 開倉費 ${fee} 點 · 原始保證金最低需求 ${minCollateral} 點（${baseRuleText}；${safetyRuleText}）· 目前填寫保證金 ${collateral} 點 · 實際預扣 ${upfrontRequired} 點`;
+  let message = `${typeLabel} · ${priceLabel} ${formatTradingPointsValue(price)} 點 · ${tradingPriceContextSummary(contextForMessage, { compact: true })} · 名目金額約 ${notional} 點 · 預估開倉手續費 ${formatTradingPointsValue(feeExact)} 點（結算時合併進位，約 ${fee} 點）· 原始保證金最低需求 ${minCollateral} 點（${baseRuleText}；${safetyRuleText}）· 目前填寫保證金 ${collateral} 點 · 實際預扣 ${upfrontRequired} 點`;
   if (positionType === "short") {
     message = `${message}；借券放空風險：價格上漲會虧損並降低維持率；借券保證金比例 ${formatTradingPercent(shortCollateralRatePercent)}%`;
   } else {
@@ -3008,9 +3118,9 @@ function updateTradingMarginEstimate() {
     blocking = true;
   } else if (upfrontRequired > available) {
     if (maxCollateralFromAvailable >= minCollateral) {
-      message = `${message}；可用資金不足：開倉費需另扣 ${fee} 點，本欄位最多可填 ${maxCollateralFromAvailable} 點（可用 ${available} - 開倉費 ${fee}）。`;
+      message = `${message}；可用資金不足：本欄位最多可填 ${maxCollateralFromAvailable} 點保證金（手續費會在平倉 / 清算時合併結算）。`;
     } else {
-      message = `${message}；可用資金不足：扣除開倉費後最多只能填 ${maxCollateralFromAvailable} 點保證金，低於最低需求 ${minCollateral} 點；目前可用 ${available} 點。`;
+      message = `${message}；可用資金不足：最多只能填 ${maxCollateralFromAvailable} 點保證金，低於最低需求 ${minCollateral} 點；目前可用 ${available} 點。`;
     }
     blocking = true;
   } else if (principal > poolAvailable && currentUser !== "root") {
@@ -3083,6 +3193,17 @@ function tradingBotTriggerLabel(row) {
   if (row.trigger_type === "price_above") return `價格 >= ${price}`;
   if (row.trigger_type === "price_below") return `價格 <= ${price}`;
   return "每次掃描";
+}
+
+function tradingBotBudgetText(bot) {
+  const budget = Number(bot?.budget_points || 0);
+  const frozen = Number(bot?.open_order_frozen_points || 0);
+  const remaining = bot?.budget_remaining_points == null ? null : Number(bot.budget_remaining_points || 0);
+  if (bot?.bot_type === "dca") return `每次投入 ${formatTradingPointsValue(budget)} 點`;
+  if (budget <= 0) return frozen > 0
+    ? `可用上限不設限 · 已掛單凍結 ${formatTradingPointsValue(frozen)} 點`
+    : "可用上限不設限";
+  return `可用上限 ${formatTradingPointsValue(budget)} 點 · 剩餘可掛 ${formatTradingPointsValue(remaining ?? Math.max(0, budget - frozen))} 點`;
 }
 
 function switchTradingBotTab(tab) {
@@ -3469,6 +3590,7 @@ function renderTradingBots(rows = [], runs = []) {
             <div class="drive-card-sub">
               狀態 ${row.enabled ? "啟用" : "停用"} · 已觸發 ${Number(row.run_count || 0)} / ${tradingBotMaxRunsLabel(row)} · 冷卻 ${Number(row.cooldown_seconds || 0)} 秒
             </div>
+            <div class="drive-card-sub">${sanitize(tradingBotBudgetText(row))}</div>
             <div class="drive-card-sub">${sanitize(tradingRiskTargetText(row.stop_loss_percent, row.take_profit_percent))}</div>
             ${condHtml}
             ${tradeHistoryHtml}
@@ -3477,6 +3599,7 @@ function renderTradingBots(rows = [], runs = []) {
           </div>
           <div class="drive-file-actions">
             ${tradingBotRunLimitReached(row) ? `<button class="btn" type="button" data-trading-bot-increase-runs="${sanitize(row.bot_uuid || "")}">增加次數</button>` : ""}
+	            ${row.bot_type !== "dca" ? `<button class="btn" type="button" data-trading-bot-budget="${sanitize(row.bot_uuid || "")}">調整可用</button>` : ""}
 	            <button class="btn" type="button" data-trading-bot-toggle="${sanitize(row.bot_uuid || "")}" data-trading-bot-enabled="${row.enabled ? "0" : "1"}">${row.enabled ? "暫停" : "啟用"}</button>
 	            <button class="btn" type="button" data-trading-bot-share="${sanitize(row.bot_uuid || "")}" data-trading-bot-share-enabled="${row.share_parameters ? "0" : "1"}">${row.share_parameters ? "停止分享參數" : "分享參數"}</button>
 	            <button class="btn" type="button" data-trading-bot-backtest="${sanitize(row.bot_uuid || "")}">回測</button>
@@ -3513,6 +3636,9 @@ function renderTradingBots(rows = [], runs = []) {
 	    });
     list.querySelectorAll("[data-trading-bot-increase-runs]").forEach((btn) => {
       bindTradingActionButton(btn, () => increaseTradingBotMaxRuns(btn.dataset.tradingBotIncreaseRuns || ""), "正在增加可執行次數...", "增加機器人次數失敗");
+    });
+    list.querySelectorAll("[data-trading-bot-budget]").forEach((btn) => {
+      bindTradingActionButton(btn, () => adjustTradingBotBudget(btn.dataset.tradingBotBudget || ""), "正在調整機器人可用上限...", "調整機器人可用上限失敗");
     });
   });
   refreshBacktestBotSelect();
@@ -3643,6 +3769,7 @@ function tradingWorkflowBotDetail(bot) {
   const action = bot.side === "sell" ? "賣出" : "買入";
   const order = bot.order_type === "limit" ? `限價 ${formatTradingPointsValue(bot.limit_price_points)} 點` : "市價單";
   parts.push(`${action} · ${order}`);
+  parts.push(tradingBotBudgetText(bot));
   if (bot.quantity_text) parts.push(`數量：${bot.quantity_text}`);
   if (Number(bot.cooldown_seconds || 0) > 0) parts.push(`冷卻 ${bot.cooldown_seconds}s`);
   return parts.join(" · ");
@@ -3758,6 +3885,7 @@ function renderMyBotsList() {
           <span class="grid-status-badge ${bot.enabled ? "grid-status-running" : "grid-status-stopped"}">${bot.enabled ? "運行中" : "已暫停"}</span>
         </div>
 	        <div class="drive-card-sub">已觸發 ${Number(bot.run_count || 0)} / ${tradingBotMaxRunsLabel(bot)} · ${sanitize(bot.side === "sell" ? "賣出" : "買入")} · ${sanitize(bot.order_type === "limit" ? `限價 ${bot.limit_price_points}` : "市價單")}${tradingParameterShareBadge(bot)}${bot.last_error ? ` · <span class="negative">上次錯誤：${sanitize(bot.last_error)}</span>` : ""}</div>
+        <div class="drive-card-sub">${sanitize(tradingBotBudgetText(bot))}</div>
         ${condHtml ? `<div class="drive-card-sub trading-bot-conditions">${condHtml}</div>` : ""}
         <details class="economy-collapse" style="margin-top:.35rem;">
           <summary>設定摘要</summary>
@@ -3772,6 +3900,7 @@ function renderMyBotsList() {
 	        <button class="btn btn-sm" type="button" data-chart-type="workflow" data-chart-bot-uuid="${sanitize(bot.bot_uuid || "")}" data-chart-symbol="${sanitize(bot.market_symbol || "")}">圖表</button>
 	        <button class="btn btn-sm" type="button" data-trading-bot-backtest="${sanitize(bot.bot_uuid || "")}">回測</button>
 	        <button class="btn btn-sm" type="button" data-trading-bot-share="${sanitize(bot.bot_uuid || "")}" data-trading-bot-share-enabled="${bot.share_parameters ? "0" : "1"}">${bot.share_parameters ? "停止分享" : "分享參數"}</button>
+	        <button class="btn btn-sm" type="button" data-trading-bot-budget="${sanitize(bot.bot_uuid || "")}">調整可用</button>
 	        ${tradingBotRunLimitReached(bot) ? `<button class="btn btn-sm" type="button" data-trading-bot-increase-runs="${sanitize(bot.bot_uuid || "")}">增加次數</button>` : ""}
         <button class="btn btn-sm" type="button" data-trading-bot-toggle="${sanitize(bot.bot_uuid || "")}" data-trading-bot-enabled="${bot.enabled ? "0" : "1"}">${bot.enabled ? "暫停" : "啟用"}</button>
         <button class="btn btn-sm btn-danger" type="button" data-trading-bot-delete="${sanitize(bot.bot_uuid || "")}">刪除</button>
@@ -3844,6 +3973,9 @@ function renderMyBotsList() {
   });
   container.querySelectorAll("[data-trading-bot-increase-runs]").forEach((btn) => {
     bindTradingActionButton(btn, () => increaseTradingBotMaxRuns(btn.dataset.tradingBotIncreaseRuns || ""), "正在增加可執行次數...", "增加機器人次數失敗");
+  });
+  container.querySelectorAll("[data-trading-bot-budget]").forEach((btn) => {
+    bindTradingActionButton(btn, () => adjustTradingBotBudget(btn.dataset.tradingBotBudget || ""), "正在調整機器人可用上限...", "調整機器人可用上限失敗");
   });
 	  container.querySelectorAll("[data-trading-bot-backtest]").forEach((btn) => {
 	    bindTradingActionButton(btn, () => prepareTradingBacktestFromBot(btn.dataset.tradingBotBacktest || ""), "正在帶入回測設定...", "回測設定帶入失敗");
@@ -4415,15 +4547,25 @@ function renderGridBotList(bots, currentPriceMap) {
 
 async function deleteGridBot(uuid) {
   if (!uuid) return;
-  if (!confirm("確定刪除網格機器人？這會取消所有掛單並移除機器人。")) return;
+  if (!confirm("確定結束網格機器人？這會取消所有網格掛單並移除機器人。")) return;
+  const sellBase = confirm("網格結束後要賣出這個網格鎖定的現貨底倉嗎？\n\n確定：用市價賣出底倉\n取消：保留為現貨底倉");
+  const baseAction = sellBase ? "sell" : "keep";
   const csrf = await tradingFreshCsrfToken();
   const res = await apiFetch(`${API}/trading/grid-bots/${uuid}`, {
     method: "DELETE", credentials: "same-origin",
-    headers: { "X-CSRF-Token": csrf || "" },
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ base_action: baseAction }),
   });
   const json = await res.json().catch(() => ({}));
   if (!res.ok || !json.ok) throw new Error(tradingFriendlyErrorText(json.msg || "刪除失敗"));
-  tradingSetMsg("網格機器人已刪除");
+  const baseQty = formatTradingQuantityValue(Number(json.base_quantity_units || 0) / 100000000);
+  if (json.sell_error) {
+    tradingSetMsg(`網格機器人已結束；底倉賣出失敗，已改為保留現貨（底倉約 ${baseQty}）。${tradingFriendlyErrorText(json.sell_error)}`, false);
+  } else if (baseAction === "sell") {
+    tradingSetMsg(`網格機器人已結束；已送出底倉賣出（約 ${baseQty}）。`);
+  } else {
+    tradingSetMsg(`網格機器人已結束；底倉已保留為現貨（約 ${baseQty}）。`);
+  }
   tradingGridExpandedBots.delete(uuid);
   await loadGridBots();
   await loadTradingDashboard();
@@ -5027,12 +5169,13 @@ async function submitTradingOrder() {
   };
   if (orderType === "limit") payload.limit_price_points = Number($("trading-limit-price")?.value || 0);
   try {
-    await fetchTradingJson("/trading/orders", {
+    const json = await fetchTradingJson("/trading/orders", {
       method: "POST",
       body: JSON.stringify(payload),
     });
-    tradingSetMsg("訂單已送出");
-    await loadEconomyDashboard();
+    applyTradingOrderResult(json.order || null);
+    tradingSetMsg(json.executed ? "訂單已成交，正在背景更新錢包與成交明細" : "限價單已掛出，正在背景更新錢包與訂單列表");
+    scheduleTradingMutationRefresh();
   } catch (err) {
     tradingSetMsg(tradingFriendlyErrorText(err.message || "下單失敗"), false);
   }
@@ -5066,6 +5209,7 @@ async function saveTradingBot() {
     order_type: "market",
     quantity: "0.00000001",
     limit_price_points: null,
+    budget_points: Number($("trading-auto-bot-budget-points")?.value || 0),
     workflow_json: workflow,
     strategy_mode: $("trading-auto-strategy-mode")?.value || "and",
     max_daily_runs: Number($("trading-auto-daily-runs")?.value || 5),
@@ -5544,6 +5688,39 @@ async function increaseTradingBotMaxRuns(botUuid) {
   await loadTradingDashboard();
 }
 
+async function adjustTradingBotBudget(botUuid) {
+  const bot = (tradingState.bots || []).find((row) => row.bot_uuid === botUuid);
+  if (!bot) {
+    tradingSetMsg("找不到要調整可用上限的交易機器人", false);
+    return;
+  }
+  const current = Number(bot.budget_points || 0);
+  const floor = Number(bot.minimum_budget_points || bot.open_order_frozen_points || 0);
+  const raw = window.prompt(
+    `目前 ${tradingBotBudgetText(bot)}。\n請輸入新的可用上限點數；0 代表不設上限。若設定上限，最低不能低於已掛單凍結 ${formatTradingPointsValue(floor)} 點。`,
+    String(current)
+  );
+  if (raw == null) {
+    tradingSetMsg("已取消調整機器人可用上限");
+    return;
+  }
+  const budgetPoints = Number(raw);
+  if (!Number.isInteger(budgetPoints) || budgetPoints < 0) {
+    tradingSetMsg("請輸入 0 或大於 0 的整數點數", false);
+    return;
+  }
+  if (budgetPoints !== 0 && budgetPoints < floor) {
+    tradingSetMsg(`可用上限不能低於已掛單凍結 ${formatTradingPointsValue(floor)} 點；若要取消上限請填 0`, false);
+    return;
+  }
+  const json = await fetchTradingJson(`/trading/bots/${encodeURIComponent(botUuid)}/budget`, {
+    method: "POST",
+    body: JSON.stringify({ budget_points: budgetPoints }),
+  });
+  tradingSetMsg(`已更新機器人可用上限：${tradingBotBudgetText(json?.bot || { budget_points: budgetPoints })}`);
+  await loadTradingDashboard();
+}
+
 async function scanTradingBots() {
   try {
     tradingSetMsg("正在掃描已啟用交易機器人...");
@@ -5753,6 +5930,12 @@ async function withdrawTradingMarginCollateral(positionUuid, scope = "trading") 
   const amount = Number(input?.value || 0);
   if (!amount || amount <= 0) {
     tradingSetMsg("請輸入要抽出的保證金點數", false);
+    return;
+  }
+  const position = tradingMarginPositionByUuid(positionUuid);
+  const withdrawEstimate = position ? tradingMarginWithdrawEstimate(position) : null;
+  if (withdrawEstimate && amount > withdrawEstimate.maxWithdrawable) {
+    tradingSetMsg(`預估可抽出保證金上限為 ${formatTradingPointsValue(withdrawEstimate.maxWithdrawable)} 點；${withdrawEstimate.reason}`, false);
     return;
   }
   if (!confirm("抽出保證金會降低維持率，價格反向波動時更容易接近強平線。確定要抽出？")) {

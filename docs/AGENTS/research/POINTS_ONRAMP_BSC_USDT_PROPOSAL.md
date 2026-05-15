@@ -114,7 +114,7 @@ CREATE TABLE points_onramp_deposits (
     user_id INTEGER NOT NULL REFERENCES users(id),
     chain TEXT NOT NULL,
     token_symbol TEXT NOT NULL,
-    token_contract TEXT NOT NULL,                        -- USDT BSC: 0x55d398326f99059fF775485246999027B3197955
+    token_address TEXT NOT NULL,                         -- USDT BSC: 0x55d398326f99059fF775485246999027B3197955
     receive_address TEXT NOT NULL,
     sender_address TEXT NOT NULL,
     tx_hash TEXT NOT NULL,

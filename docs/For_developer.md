@@ -406,6 +406,12 @@ Remote download APIs:
 - `GET /api/cloud-drive/remote-download/tasks/{task_id}`
 
 BT/magnet/`.torrent` support depends on `aria2c`.
+BT transfers run in `scripts/storage/remote_download_worker.py` by default.
+The task timeout is an idle-progress timeout, not a hard wall-clock limit; set
+`HACKME_BT_IDLE_TIMEOUT_SECONDS`, `HACKME_BT_MAX_RUNTIME_SECONDS`,
+`HACKME_ARIA2_BT_STOP_TIMEOUT_SECONDS`, or
+`HACKME_BT_PROGRESS_INTERVAL_SECONDS` when deploying under different network
+or resource constraints.
 
 Server-encrypted preview/download note:
 
@@ -596,6 +602,11 @@ healthy ledger backup only when PointsChain is already in safe mode. Wallets are
 rebuilt from ledger replay; current wallet balances are never trusted as the
 source of truth.
 
+`GET /api/root/points/report` also returns `stats.circulation`, including
+member outstanding points, root-held points, confirmed ledger net points,
+supply gap, unsealed ledger count, and sealed coverage. Use this field for
+deployment dashboards that need the current in-circulation PointsChain supply.
+
 ### Trading System
 
 User trading APIs:
@@ -625,6 +636,8 @@ User trading APIs:
 Root/admin trading APIs:
 
 - `GET /api/admin/trading/report`
+- `GET /api/root/trading/sitewide/pools`
+- `GET /api/root/trading/sitewide/user-positions`
 - `GET /api/root/trading/settings`
 - `GET /api/root/trading/price-fusion-status`
 - `POST /api/root/trading/settings`

@@ -82,6 +82,45 @@ def test_points_transaction_updates_wallet_and_hash_chain(tmp_path):
     assert service.verify_chain()["ok"] is True
 
 
+def test_economy_stats_reports_member_circulating_supply(tmp_path):
+    service = _service(tmp_path)
+    service.record_transaction(
+        user_id=1,
+        currency_type="points",
+        direction="credit",
+        amount=100,
+        action_type="member_credit",
+        idempotency_key="member:credit",
+    )
+    service.record_transaction(
+        user_id=1,
+        currency_type="points",
+        direction="debit",
+        amount=30,
+        action_type="member_debit",
+        idempotency_key="member:debit",
+    )
+    service.record_transaction(
+        user_id=3,
+        currency_type="points",
+        direction="credit",
+        amount=50,
+        action_type="root_credit",
+        idempotency_key="root:credit",
+    )
+
+    circulation = service.economy_stats()["circulation"]
+
+    assert circulation["outstanding_points"] == 120
+    assert circulation["member_outstanding_points"] == 70
+    assert circulation["root_outstanding_points"] == 50
+    assert circulation["member_wallet_count"] == 1
+    assert circulation["root_wallet_count"] == 1
+    assert circulation["ledger_net_points"] == 120
+    assert circulation["member_ledger_net_points"] == 70
+    assert circulation["member_supply_gap_points"] == 0
+
+
 def test_rebuild_wallets_from_ledger_starts_its_own_transaction_when_needed(tmp_path):
     service = _service(tmp_path)
     service.record_transaction(

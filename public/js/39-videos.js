@@ -2,6 +2,7 @@
 
 const videoState = {
   sort: "new",
+  searchQuery: "",
   videos: [],
   current: null,
   viewRecordedFor: new Set(),
@@ -323,13 +324,35 @@ async function uploadVideoE2eeStreamV2Package(fileId, artifacts) {
   const form = new FormData();
   form.append("manifest_json", artifacts.stream_v2_manifest_json);
   form.append("bundle", artifacts.stream_v2_bundle_blob, "e2ee-stream-v2.bundle");
-  const res = await apiFetch(`/api/media/${encodeURIComponent(fileId)}/e2ee-stream-v2`, {
-    method: "POST",
-    credentials: "same-origin",
-    body: form,
+  setVideoUploadProgress({
+    visible: true,
+    percent: 0,
+    loaded: 0,
+    total: artifacts.stream_v2_bundle_blob.size || 0,
+    status: "E2EE Streaming v2 密文分段上傳中",
   });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok || !json.ok) throw new Error(json.msg || `HTTP ${res.status}`);
+  const upload = await videoUploadFormWithProgress(`/api/media/${encodeURIComponent(fileId)}/e2ee-stream-v2`, form, (event) => {
+    if (event.lengthComputable) {
+      setVideoUploadProgress({
+        visible: true,
+        percent: (event.loaded / event.total) * 100,
+        loaded: event.loaded,
+        total: event.total,
+        status: event.loaded >= event.total ? "E2EE Streaming v2 manifest 儲存中" : "E2EE Streaming v2 密文分段上傳中",
+      });
+    } else {
+      setVideoUploadProgress({ visible: true, percent: 0, loaded: event.loaded || 0, total: 0, status: "E2EE Streaming v2 密文分段上傳中", indeterminate: true });
+    }
+  });
+  const json = upload.json || {};
+  if (!upload.ok || !json.ok) throw new Error(json.msg || `HTTP ${upload.status}`);
+  setVideoUploadProgress({
+    visible: true,
+    percent: 100,
+    loaded: artifacts.stream_v2_bundle_blob.size || 0,
+    total: artifacts.stream_v2_bundle_blob.size || 0,
+    status: "E2EE Streaming v2 已建立",
+  });
   return json.asset || null;
 }
 
@@ -382,6 +405,23 @@ function formatVideoCount(value, unit = "") {
   const number = Number(value || 0);
   if (number >= 10000) return `${(number / 10000).toFixed(1)}萬${unit}`;
   return `${number}${unit}`;
+}
+
+function normalizeVideoSearchQuery(value) {
+  return String(value || "").replace(/\s+/g, " ").trim().slice(0, 80);
+}
+
+function syncVideoSearchControls() {
+  const input = $("video-search-input");
+  const clear = $("video-search-clear");
+  const status = $("video-search-status");
+  if (input && document.activeElement !== input) input.value = videoState.searchQuery || "";
+  if (clear) clear.hidden = !videoState.searchQuery;
+  if (status) {
+    status.textContent = videoState.searchQuery
+      ? `搜尋「${videoState.searchQuery}」`
+      : "";
+  }
 }
 
 function videoVisibilityLabel(value) {
@@ -544,6 +584,10 @@ async function publishVideoFromDrive() {
     let status = 0;
     let json = {};
     if (directFile) {
+      const uploadPrivacyMode = $("video-upload-privacy-mode")?.value || "standard_plain";
+      const uploadDoneStatus = uploadPrivacyMode === "server_encrypted"
+        ? "上傳完成，伺服器端加密、掃描與 HLS 排程中"
+        : "上傳完成，伺服器儲存、掃描與 HLS 排程中";
       const form = new FormData();
       form.append("video", directFile);
       form.append("title", payload.title || directFile.name.replace(/\.[^.]+$/, ""));
@@ -552,7 +596,7 @@ async function publishVideoFromDrive() {
       form.append("share_password", payload.share_password);
       form.append("share_expires_at", payload.share_expires_at);
       form.append("share_max_views", payload.share_max_views);
-      form.append("privacy_mode", $("video-upload-privacy-mode")?.value || "standard_plain");
+      form.append("privacy_mode", uploadPrivacyMode);
       if (coverFile) form.append("cover", coverFile);
       videoMsg("影音檔上傳中，請稍候...", true);
       setVideoUploadProgress({ visible: true, percent: 0, loaded: 0, total: directFile.size, status: `準備上傳 ${directFile.name}` });
@@ -564,7 +608,7 @@ async function publishVideoFromDrive() {
             percent,
             loaded: event.loaded,
             total: event.total,
-            status: event.loaded >= event.total ? "上傳完成，伺服器儲存、掃描與串流準備中" : "影音檔上傳中",
+            status: event.loaded >= event.total ? uploadDoneStatus : "影音檔上傳中",
           });
         } else {
           setVideoUploadProgress({ visible: true, percent: 0, loaded: event.loaded || 0, total: 0, status: "影音檔上傳中", indeterminate: true });
@@ -641,7 +685,7 @@ async function publishVideoFromDrive() {
     } else if (json.stream_asset?.status === "ready") {
       videoMsg("影音已發布，HLS 串流已就緒", true);
     } else if (json.stream_asset?.status === "processing") {
-      videoMsg("影音已發布，HLS 串流準備中", true);
+      videoMsg("影音已發布，正在後台處理 HLS；完成前不會出現在影音列表，處理完成會通知上傳者。", true);
     } else {
       videoMsg("影音已發布", true);
     }
@@ -662,7 +706,10 @@ function renderVideoList() {
   const list = $("video-list");
   if (!list) return;
   if (!videoState.videos.length) {
-    list.innerHTML = `<div class="drive-empty">目前沒有可觀看的影音</div>`;
+    const emptyText = videoState.searchQuery
+      ? `找不到與「${videoState.searchQuery}」相關的影音`
+      : "目前沒有可觀看的影音";
+    list.innerHTML = `<div class="drive-empty">${sanitize(emptyText)}</div>`;
     return;
   }
   list.innerHTML = videoState.videos.map((video) => `
@@ -677,13 +724,19 @@ function renderVideoList() {
   `).join("");
 }
 
-async function loadVideos(sort = "new") {
+async function loadVideos(sort = "new", options = {}) {
   videoState.sort = sort;
+  if (Object.prototype.hasOwnProperty.call(options, "query")) {
+    videoState.searchQuery = normalizeVideoSearchQuery(options.query);
+  }
   videoState.browseLoaded = true;
+  syncVideoSearchControls();
   const list = $("video-list");
   if (list) list.innerHTML = `<div class="drive-empty">影音載入中...</div>`;
   try {
-    const res = await apiFetch(API + `/videos?sort=${encodeURIComponent(sort)}`, { credentials: "same-origin" });
+    const params = new URLSearchParams({ sort });
+    if (videoState.searchQuery) params.set("q", videoState.searchQuery);
+    const res = await apiFetch(API + `/videos?${params.toString()}`, { credentials: "same-origin" });
     const json = await res.json().catch(() => ({}));
     if (!res.ok || !json.ok) throw new Error(json.msg || `HTTP ${res.status}`);
     videoState.videos = Array.isArray(json.videos) ? json.videos : [];
@@ -729,16 +782,24 @@ function playbackSourceForVideo(video, playback) {
     };
   }
   if (!playback || playback.mode !== "hls") {
+    if (playback && playback.direct_fallback_allowed === false) {
+      return {
+        mode: "waiting_stream",
+        src: "",
+        statusText: playback.stream_warning || "影音正在後台處理，完成後才會開放播放。",
+      };
+    }
     return {
       mode: "direct",
       src: videoStreamUrl(video),
       statusText: "",
     };
   }
+  const directFallbackAllowed = playback.direct_fallback_allowed !== false;
   if (browserSupportsNativeHls(video.media_type)) {
     return {
       mode: "hls_native",
-      src: playback.master_url || playback.fallback_url || videoStreamUrl(video),
+      src: playback.master_url || (directFallbackAllowed ? (playback.fallback_url || videoStreamUrl(video)) : ""),
       statusText: "Safari / 原生 HLS 已啟用。",
     };
   }
@@ -747,8 +808,15 @@ function playbackSourceForVideo(video, playback) {
       mode: "hls_js",
       src: "",
       masterUrl: playback.master_url,
-      fallbackUrl: playback.fallback_url || videoStreamUrl(video),
+      fallbackUrl: directFallbackAllowed ? (playback.fallback_url || videoStreamUrl(video)) : "",
       statusText: "桌機瀏覽器將使用內建 HLS.js 播放；若初始化失敗會自動退回直接串流。",
+    };
+  }
+  if (!directFallbackAllowed) {
+    return {
+      mode: "waiting_stream",
+      src: "",
+      statusText: playback.stream_warning || "影音正在後台處理，完成後才會開放播放。",
     };
   }
   return {
@@ -781,7 +849,7 @@ async function prepareVideoStream(fileId, videoId) {
     });
     const json = await res.json().catch(() => ({}));
     if (!res.ok || !json.ok) throw new Error(json.msg || `HTTP ${res.status}`);
-    videoMsg("已更新 HLS 串流衍生檔", true);
+    videoMsg(json.msg || "HLS 串流已排入背景處理，完成後會通知上傳者。", true);
     await openVideoDetail(videoId);
   } catch (err) {
     videoMsg(err.message || "HLS 串流準備失敗", false);
@@ -1346,7 +1414,14 @@ function renderVideoDetail(video, comments = [], playback = null) {
   const playbackSessionId = videoState.playbackSessionId;
   videoState.current = video;
   showVideoWatchView();
-  const playbackSource = playbackSourceForVideo(video, playback);
+  const videoStatus = String(video.status || "ready");
+  const videoPlayable = videoStatus === "ready";
+  const processingText = videoStatus === "processing"
+    ? "影音正在後台處理 HLS，完成前不會出現在影音列表；處理完成會通知上傳者。"
+    : "影音目前不可播放。";
+  const playbackSource = videoPlayable
+    ? playbackSourceForVideo(video, playback)
+    : { mode: "processing", src: "", statusText: processingText };
   const playbackStatus = playback?.status || {};
   const streamStatusText = humanVideoStreamStatus(playback) || String(playback?.stream_warning || "").trim();
   const streamActions = video.can_edit && playback?.mode !== "e2ee_direct"
@@ -1358,9 +1433,11 @@ function renderVideoDetail(video, comments = [], playback = null) {
       </div>
     `
     : "";
-  const player = video.media_type === "audio"
-    ? `<audio id="video-player" class="video-player video-audio-player" controls preload="metadata" src="${sanitize(playbackSource.src)}"></audio>`
-    : `<video id="video-player" class="video-player" controls playsinline preload="metadata" src="${sanitize(playbackSource.src)}"></video>`;
+  const player = !videoPlayable
+    ? `<div class="video-processing-notice" role="status">${sanitize(processingText)}</div>`
+    : (video.media_type === "audio"
+      ? `<audio id="video-player" class="video-player video-audio-player" controls preload="metadata" src="${sanitize(playbackSource.src)}"></audio>`
+      : `<video id="video-player" class="video-player" controls playsinline preload="metadata" src="${sanitize(playbackSource.src)}"></video>`);
   const rememberedFragment = video.share_requires_fragment_key && video.share_url
     ? getRememberedVideoShareFragment(video.share_url)
     : "";
@@ -1487,13 +1564,17 @@ function renderVideoDetail(video, comments = [], playback = null) {
       </aside>
     </div>
   `;
-  bindVideoPlayerView(video.id);
-  activateVideoPlaybackMode(video, playback, playbackSource, playbackSessionId).catch((err) => {
-    if (playbackSessionId !== videoState.playbackSessionId) return;
-    const message = err?.message || "影音播放初始化失敗";
-    setVideoPlaybackStatus(message, true);
-    videoMsg(message, false);
-  });
+  if (videoPlayable) {
+    bindVideoPlayerView(video.id);
+    activateVideoPlaybackMode(video, playback, playbackSource, playbackSessionId).catch((err) => {
+      if (playbackSessionId !== videoState.playbackSessionId) return;
+      const message = err?.message || "影音播放初始化失敗";
+      setVideoPlaybackStatus(message, true);
+      videoMsg(message, false);
+    });
+  } else {
+    clearVideoPlaybackAction();
+  }
 }
 
 function bindVideoPlayerView(videoId) {
@@ -1632,6 +1713,19 @@ async function copyVideoLink(videoId) {
   }
 }
 
+async function submitVideoSearch() {
+  const query = normalizeVideoSearchQuery($("video-search-input")?.value || "");
+  await loadVideos(videoState.sort || "new", { query });
+  showVideoBrowseView({ updateHash: true });
+}
+
+async function clearVideoSearch() {
+  const input = $("video-search-input");
+  if (input) input.value = "";
+  await loadVideos(videoState.sort || "new", { query: "" });
+  showVideoBrowseView({ updateHash: true });
+}
+
 async function loadVideoPlatform() {
   await Promise.all([loadVideos(videoState.sort), loadVideoPublishFiles()]);
   const hash = location.hash || "";
@@ -1657,6 +1751,13 @@ function handleVideoHashRoute() {
 }
 
 window.addEventListener("hashchange", handleVideoHashRoute);
+
+document.addEventListener("submit", (event) => {
+  if (event.target?.id === "video-search-form") {
+    event.preventDefault();
+    submitVideoSearch();
+  }
+});
 
 document.addEventListener("click", (event) => {
   const open = event.target.closest("[data-video-open]");
@@ -1717,6 +1818,10 @@ document.addEventListener("click", (event) => {
   }
   if (event.target.closest("#video-refresh-btn")) {
     loadVideoPlatform();
+    return;
+  }
+  if (event.target.closest("#video-search-clear")) {
+    clearVideoSearch();
     return;
   }
   if (event.target.closest("#video-back-btn")) {

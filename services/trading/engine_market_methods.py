@@ -1142,7 +1142,7 @@ def _minimum_margin_collateral_points(self, conn, *, position_type, notional, fe
     notional = int(notional or 0)
     maintenance_percent = float(settings.get("margin_maintenance_percent") or 0)
     fee_rate_percent = float(fee_rate_percent or 0)
-    safety_minimum = int(math.ceil(notional * max(0.0, maintenance_percent + fee_rate_percent) / 100.0)) + 1
+    safety_minimum = int(math.ceil(notional * max(0.0, maintenance_percent + fee_rate_percent) / 100.0)) + 2
     if position_type == "margin_long":
         financing_percent = float(settings.get("margin_long_financing_percent") or MARGIN_LONG_FINANCING_RATE_PERCENT)
         base_minimum = int(math.ceil(notional * max(0.0, 100.0 - financing_percent) / 100.0))
@@ -1424,6 +1424,9 @@ def _validate_workflow_graph(self, workflow):
 def _validate_bot_payload(self, conn, payload):
     return validate_bot_payload_helper(self, conn, payload)
 
+def _bot_payload_with_budget_meta(self, conn, row):
+    return bot_payload_with_budget_meta_helper(self, conn, row)
+
 def list_trading_bots(self, *, actor):
     return list_trading_bots_helper(self, actor=actor)
 
@@ -1443,6 +1446,15 @@ def delete_trading_bot(self, *, actor, bot_uuid):
 
 def increase_trading_bot_max_runs(self, *, actor, bot_uuid, delta):
     return increase_trading_bot_max_runs_helper(self, actor=actor, bot_uuid=bot_uuid, delta=delta)
+
+def adjust_trading_bot_budget(self, *, actor, bot_uuid, budget_points=None, delta_points=None):
+    return adjust_trading_bot_budget_helper(
+        self,
+        actor=actor,
+        bot_uuid=bot_uuid,
+        budget_points=budget_points,
+        delta_points=delta_points,
+    )
 
 # ── Grid Trading Bot ────────────────────────────────────────────────────
 
@@ -1495,8 +1507,8 @@ def set_grid_bot_share_parameters(self, *, actor, bot_uuid, share_parameters):
 def toggle_grid_bot(self, *, actor, bot_uuid, enabled):
     return toggle_grid_bot_helper(self, actor=actor, bot_uuid=bot_uuid, enabled=enabled)
 
-def delete_grid_bot(self, *, actor, bot_uuid):
-    return delete_grid_bot_helper(self, actor=actor, bot_uuid=bot_uuid)
+def delete_grid_bot(self, *, actor, bot_uuid, base_action="keep"):
+    return delete_grid_bot_helper(self, actor=actor, bot_uuid=bot_uuid, base_action=base_action)
 
 def scan_grid_bots(self, *, actor):
     return scan_grid_bots_helper(self, actor=actor)

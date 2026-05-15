@@ -1,7 +1,7 @@
 """Pure trading margin-interest helpers."""
 
 from datetime import datetime
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_CEILING, ROUND_HALF_UP
 
 
 def margin_interest_total_hours(
@@ -46,14 +46,12 @@ def margin_interest_billable_points(total_micropoints, *, point_micro_scale):
     point_micro_scale = max(1, int(point_micro_scale or 1))
     if total_micropoints <= 0:
         return 0
-    return max(1, int(total_micropoints // point_micro_scale))
+    return int((Decimal(total_micropoints) / Decimal(point_micro_scale)).quantize(Decimal("1"), rounding=ROUND_CEILING))
 
 
 def margin_interest_billable_carry_micropoints(total_micropoints, *, point_micro_scale):
     total_micropoints = max(0, int(total_micropoints or 0))
     point_micro_scale = max(1, int(point_micro_scale or 1))
-    if total_micropoints < point_micro_scale:
-        return 0
     return int(total_micropoints % point_micro_scale)
 
 
@@ -90,9 +88,9 @@ def margin_interest_points(
     total_hours = total_hours_func(row, now_text=now_text)
     due_hours = max(0, total_hours - accrued_hours)
     capitalized = int(row["interest_points"] or 0)
-    if due_hours <= 0:
-        return capitalized
     carry = int(row["interest_carry_micropoints"] or 0) if "interest_carry_micropoints" in row.keys() else 0
+    if due_hours <= 0:
+        return capitalized + margin_interest_billable_points(carry, point_micro_scale=point_micro_scale)
     due_micro = due_micropoints_func(
         principal=int(row["principal_points"] or 0),
         rate_percent=float(row["interest_percent_daily"] or 0),

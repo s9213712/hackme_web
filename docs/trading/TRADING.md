@@ -87,11 +87,10 @@ The trading funding pool is conservative:
   interest return to the pool.
 - Borrow interest is floating: the configured base daily rate rises as pool
   utilization increases.
-- Borrow interest is accrued by started hour. The engine first tries to deduct
-  each accrued interest charge from the user's remaining points through
-  PointsChain. If the user does not have enough remaining points, the unpaid
-  interest is capitalized into the open margin position cost and affects
-  equity, liquidation price, and final close-out.
+- Borrow interest is accrued by started hour into exact micropoints. It is not
+  rounded or deducted each hour. The open position carries the exact unsettled
+  interest, and the engine rounds up to integer points only when the margin
+  position is closed or liquidated.
 - It has no automatic money-creation behavior. If the pool cannot cover a
   requested borrow amount, the trade is rejected.
 
@@ -107,9 +106,11 @@ Use the trading page to:
 5. Review the estimated notional and fee beside the order button.
 6. Submit the order.
 
-Buy orders are rejected when estimated notional plus fee exceeds available
-trading points. Sell orders are rejected when quantity exceeds the available
-spot position.
+Buy orders are rejected when estimated notional exceeds available trading
+points; buy-side fees are kept as exact micropoints on the position and settle
+later. Sell orders are rejected when quantity exceeds the available, unlocked
+spot position. On sell, the engine combines the unsettled buy-side fee and the
+sell-side fee, then rounds the combined fee up once.
 
 The wallet page shows spot details per asset:
 
@@ -199,8 +200,8 @@ falls back to HTTP polling for reference input while keeping `risk-grade`
 blocking rules intact.
 
 Spot wallet rows also show two unit-price helpers now: `持有成本` is the
-current position acquisition cost including the estimated buy-side fee, and
-`損益平均價格` is the break-even exit price after also accounting for the
+current position acquisition cost including unsettled buy-side fee micropoints,
+and `損益平均價格` is the break-even exit price after also accounting for the
 estimated sell-side fee. This prevents the old UI problem where users only saw
 gross PnL and had to mentally back-solve fee-adjusted break-even by hand.
 
@@ -330,7 +331,8 @@ Important fields:
 - Borrow APR by asset group:
   - BTC / ETH: default `8% APR`
   - USDT / POINTS: default `10% APR`
-- Borrow interest interval hours: default `1`, so interest is accrued hourly.
+- Borrow interest interval hours: default `1`, so exact interest micropoints
+  are accrued hourly.
 - Borrow interest minimum hours: default `1`, so even positions shorter than one
   hour are billed as one full started hour.
 - Margin long financing percent: how much of a long position can be financed.
@@ -341,8 +343,11 @@ Important fields:
 - Price source: public live price providers with last-good cache fallback.
 - Max price staleness seconds: how long a cached last-good live price can be
   used when all live providers are unavailable.
-- Market fee percent: percentage fee charged on spot/margin orders. The default
-  spot fee is `0.10%`.
+- Market fee percent: percentage fee charged on spot/margin orders. Spot buy
+  fees and margin open fees are accumulated as exact micropoints; spot sell,
+  bot stop sell, margin close, and liquidation round the combined settlement
+  fee up to integer points. Margin open fee is based on full notional, not only
+  borrowed principal or collateral.
 - Grid fee discount percent: default `25`, meaning grid orders pay `75%` of the
   configured spot fee rather than the older `50%` shortcut.
 - Market min/max order points: per-order notional boundaries.

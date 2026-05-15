@@ -7,6 +7,12 @@ function formatDriveBytes(bytes) {
   return `${(value / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
+function formatDriveSpeed(bytesPerSecond) {
+  const value = Number(bytesPerSecond || 0);
+  if (!Number.isFinite(value) || value <= 0) return "";
+  return `${formatDriveBytes(value)}/s`;
+}
+
 const DRIVE_PRIVACY_MODE_LABELS = {
   standard_plain: "一般檔案",
   server_encrypted: "伺服器端加密",
@@ -57,6 +63,7 @@ const ATTACHMENT_FILE_SELECT_IDS = [
 ];
 
 let driveTransferRows = [];
+let driveTaskCenterLocalJobs = [];
 let driveAttachmentFileOptions = [];
 let driveAttachmentFileOptionsLoadedAt = 0;
 let driveStorageUpgradeCatalog = [];
@@ -67,7 +74,34 @@ let driveLatestQuota = null;
 const driveRemotePollingTaskIds = new Set();
 const DRIVE_TRANSFER_COMPLETED_VISIBLE_MS = 6000;
 const DRIVE_TRANSFER_FAILED_VISIBLE_MS = 15000;
+const DRIVE_TASK_CENTER_LOCAL_MAX = 80;
 const DRIVE_REMOTE_STATUS_RETRY_LIMIT = 12;
+const DRIVE_RESUMABLE_UPLOAD_THRESHOLD_BYTES = 8 * 1024 * 1024;
+const DRIVE_RESUMABLE_UPLOAD_CHUNK_BYTES = 4 * 1024 * 1024;
+const DRIVE_RESUMABLE_UPLOAD_STORAGE_PREFIX = "hackme_web.resumable_upload.";
+
+function isDriveTransferActive(item = {}) {
+  return !["completed", "failed"].includes(String(item.status || ""));
+}
+
+function hasActiveDriveBrowserUpload() {
+  return driveTransferRows.some((item) => ["upload", "folder_upload"].includes(item.kind) && isDriveTransferActive(item));
+}
+
+function syncDriveTransferIdleSuspend() {
+  if (typeof setInactivitySuspendState !== "function") return;
+  const active = driveTransferRows.some(isDriveTransferActive);
+  setInactivitySuspendState("drive_transfer", active, "雲端硬碟傳輸中");
+}
+
+if (typeof window !== "undefined" && !window.__driveTransferBeforeUnloadBound) {
+  window.__driveTransferBeforeUnloadBound = true;
+  window.addEventListener("beforeunload", (event) => {
+    if (!hasActiveDriveBrowserUpload()) return;
+    event.preventDefault();
+    event.returnValue = "";
+  });
+}
 
 function drivePrivacyModeLabel(mode) {
   return DRIVE_PRIVACY_MODE_LABELS[mode] || mode || "-";
@@ -176,6 +210,70 @@ async function ensureAttachmentFileOptionsLoaded({ force = false } = {}) {
 
 function isDriveE2eeMode(mode) {
   return String(mode || "") === "e2ee";
+}
+
+function isDriveServerEncryptedMode(mode) {
+  return String(mode || "") === "server_encrypted";
+}
+
+function drivePostUploadProcessingMessage(mode) {
+  if (isDriveServerEncryptedMode(mode)) return "上傳完成，伺服器端加密、儲存與掃描中";
+  if (isDriveE2eeMode(mode)) return "上傳完成，伺服器儲存密文與掃描中";
+  return "上傳完成，伺服器儲存與掃描中";
+}
+
+function shouldUseDriveResumableUpload(blob) {
+  return Number(blob?.size || 0) >= DRIVE_RESUMABLE_UPLOAD_THRESHOLD_BYTES;
+}
+
+function driveResumableUploadKey({ file, blob, target = "cloud_drive", virtualPath = "", privacyMode = "standard_plain" } = {}) {
+  if (isDriveE2eeMode(privacyMode)) return "";
+  const name = file?.name || blob?.name || "";
+  const size = Number(blob?.size ?? file?.size ?? 0);
+  const modified = Number(file?.lastModified || 0);
+  const raw = [currentUser || "", target, privacyMode, name, size, modified, virtualPath || ""].join("|");
+  return `${DRIVE_RESUMABLE_UPLOAD_STORAGE_PREFIX}${btoa(unescape(encodeURIComponent(raw))).replace(/=+$/g, "")}`;
+}
+
+function rememberDriveResumableUpload(key, sessionId) {
+  if (!key || !sessionId) return;
+  try {
+    localStorage.setItem(key, sessionId);
+  } catch (_) {}
+}
+
+function forgetDriveResumableUpload(key) {
+  if (!key) return;
+  try {
+    localStorage.removeItem(key);
+  } catch (_) {}
+}
+
+function rememberedDriveResumableUpload(key) {
+  if (!key) return "";
+  try {
+    return localStorage.getItem(key) || "";
+  } catch (_) {
+    return "";
+  }
+}
+
+function driveEncryptedUploadFields(encrypted = {}) {
+  return {
+    encrypted_metadata: encrypted.encrypted_metadata || "",
+    encrypted_file_key: encrypted.encrypted_file_key || "",
+    wrapped_by: encrypted.wrapped_by || "",
+    ciphertext_sha256: encrypted.ciphertext_sha256 || "",
+    encryption_algorithm: encrypted.encryption_algorithm || "",
+    encryption_version: encrypted.encryption_version || "",
+    nonce: encrypted.nonce || "",
+  };
+}
+
+function appendDriveUploadFields(form, fields = {}) {
+  Object.entries(fields || {}).forEach(([key, value]) => {
+    if (value !== null && value !== undefined && value !== "") form.append(key, value);
+  });
 }
 
 function driveBytesToBase64(bytes) {
@@ -618,6 +716,42 @@ function renderStorageUpgrade(payload) {
     : `<div class="drive-empty">目前沒有有效的加購容量</div>`;
 }
 
+function renderDriveCapacityGauge(percent, level, options = {}) {
+  const visual = $("drive-capacity-visual");
+  const label = $("drive-capacity-percent-label");
+  const note = $("drive-capacity-note");
+  const unlimited = !!options.unlimited;
+  const zeroQuota = !!options.zeroQuota;
+  const usedBytes = Number(options.usedBytes || 0);
+  const safePercent = Math.max(0, Math.min(100, Number(percent || 0)));
+  let labelText = `${Math.round(safePercent)}%`;
+  let noteText = "容量使用率";
+  if (unlimited) {
+    labelText = "無上限";
+    noteText = `已使用 ${formatDriveBytes(usedBytes)}`;
+  } else if (zeroQuota) {
+    labelText = usedBytes > 0 ? "超出容量" : "未配置";
+    noteText = usedBytes > 0 ? `已使用 ${formatDriveBytes(usedBytes)}` : "尚未設定可用容量";
+  }
+  if (label) {
+    label.textContent = labelText;
+  }
+  if (note) note.textContent = noteText;
+  if (!visual) return;
+  visual.style.setProperty("--drive-capacity-level", unlimited ? "18%" : `${safePercent}%`);
+  visual.dataset.warning = unlimited ? "low" : (level || "low");
+  visual.dataset.unlimited = unlimited ? "true" : "false";
+  visual.dataset.zeroQuota = zeroQuota ? "true" : "false";
+  visual.setAttribute(
+    "aria-label",
+    unlimited
+      ? `雲端硬碟容量無上限，已使用 ${formatDriveBytes(usedBytes)}`
+      : zeroQuota
+        ? (usedBytes > 0 ? `雲端硬碟尚未配置容量，已使用 ${formatDriveBytes(usedBytes)}` : "雲端硬碟尚未配置容量")
+        : `雲端硬碟容量使用率 ${Math.round(safePercent)}%`
+  );
+}
+
 function renderDriveDashboard(payload) {
   const security = payload && payload.security ? payload.security : {};
   const quota = security.usage || (payload && payload.quota) || {};
@@ -625,7 +759,11 @@ function renderDriveDashboard(payload) {
   const used = Number(quota.used_bytes || 0);
   const total = quota.total_bytes;
   const remaining = quota.remaining_bytes;
-  const percent = total === null || total === undefined ? 0 : Math.max(0, Math.min(100, Number(quota.percent_used || 0)));
+  const unlimited = total === null || total === undefined;
+  const totalNumber = Number(total || 0);
+  const zeroQuota = !unlimited && totalNumber <= 0;
+  const percent = unlimited ? 0 : (zeroQuota && used > 0 ? 100 : Math.max(0, Math.min(100, Number(quota.percent_used || 0))));
+  const level = zeroQuota && used > 0 ? "high" : (quota.warning_active || percent >= 80 ? "high" : percent >= 65 ? "medium" : "low");
 
   const usedLabel = $("drive-used-label");
   const totalLabel = $("drive-total-label");
@@ -650,9 +788,9 @@ function renderDriveDashboard(payload) {
     limitLabel.textContent = `單檔限制：${maxFile} · 每日上傳：${daily} · 檔案數：${Number(quota.file_count || 0)}${diskNote}${purchaseNote}`;
     limitLabel.style.color = quota.warning_active ? "#ffb74d" : "var(--muted)";
   }
+  renderDriveCapacityGauge(percent, level, { unlimited, zeroQuota, usedBytes: used });
   if (barFill) {
     barFill.style.width = `${percent}%`;
-    const level = quota.warning_active || percent >= 80 ? "high" : percent >= 65 ? "medium" : "low";
     barFill.dataset.warning = level;
     // P5: also toggle the fx-capacity-bar warning/critical classes on the
     // parent so the wave + pulse animations fire. Existing colour rules
@@ -864,8 +1002,159 @@ function driveTransferPercent(item) {
   return null;
 }
 
+function driveTransferJobStatus(status) {
+  if (status === "completed") return "succeeded";
+  if (status === "failed") return "failed";
+  if (status === "queued") return "queued";
+  return "running";
+}
+
+function driveRemoteTaskJobStatus(status) {
+  if (status === "completed") return "succeeded";
+  if (status === "failed") return "failed";
+  if (status === "queued") return "queued";
+  return "running";
+}
+
+function driveRemoteTaskSourceLabel(task = {}) {
+  return ["torrent_file", "torrent_url", "magnet"].includes(task.source_type) ? "BT 下載" : "Direct link";
+}
+
+function driveTransferSourceLabel(item = {}) {
+  if (item.kind === "remote_download") {
+    return item.source_label || "遠端下載";
+  }
+  return item.kind === "folder_upload" ? "資料夾上傳" : "檔案上傳";
+}
+
+function driveTransferToJobCenterJob(item = {}) {
+  const percent = driveTransferPercent(item);
+  const status = driveTransferJobStatus(item.status);
+  const sourceModule = item.kind === "remote_download" ? "cloud_drive_remote_download" : "cloud_drive_upload";
+  const sourceRef = item.source_ref || (item.task_id ? `remote_download:${item.task_id}` : `local_transfer:${item.id || ""}`);
+  const title = `${driveTransferSourceLabel(item)}：${item.name || item.filename || "處理中的檔案"}`;
+  const speed = formatDriveSpeed(item.speed_bytes_per_sec);
+  const bytes = item.total_bytes
+    ? `${formatDriveBytes(item.loaded_bytes || 0)} / ${formatDriveBytes(item.total_bytes)}`
+    : (item.loaded_bytes ? formatDriveBytes(item.loaded_bytes) : "");
+  return {
+    job_uuid: item.job_uuid || `${sourceModule}:${sourceRef}`,
+    owner_user_id: null,
+    job_type: item.kind === "remote_download" ? "cloud_drive.remote_download" : "cloud_drive.upload",
+    title,
+    description: "雲端硬碟傳輸任務",
+    source_module: sourceModule,
+    source_ref: sourceRef,
+    status,
+    progress_percent: percent === null ? (status === "succeeded" || status === "failed" ? 100 : 0) : Math.round(percent),
+    stage: item.phase || item.status || status,
+    stage_detail: [item.msg || "", bytes, speed].filter(Boolean).join(" · "),
+    error_message: status === "failed" ? (item.msg || "傳輸失敗") : "",
+    error_stage: status === "failed" ? (item.phase || "failed") : "",
+    cancellable: false,
+    metadata: {
+      local_transfer: true,
+      transfer_id: item.id,
+      task_id: item.task_id || "",
+      loaded_bytes: item.loaded_bytes,
+      total_bytes: item.total_bytes,
+      speed_bytes_per_sec: item.speed_bytes_per_sec,
+    },
+    created_at: item.created_at || item.updated_at || new Date().toISOString(),
+    updated_at: item.updated_at || item.created_at || new Date().toISOString(),
+  };
+}
+
+function driveRemoteTaskToJobCenterJob(task = {}) {
+  const label = driveRemoteTaskSourceLabel(task);
+  const status = driveRemoteTaskJobStatus(task.status);
+  const percent = Number(task.progress_percent);
+  const name = task.filename || task.torrent_filename || task.url || "遠端下載";
+  const speed = formatDriveSpeed(task.speed_bytes_per_sec);
+  const bytes = task.total_bytes
+    ? `${formatDriveBytes(task.loaded_bytes || 0)} / ${formatDriveBytes(task.total_bytes)}`
+    : (task.loaded_bytes ? formatDriveBytes(task.loaded_bytes) : "");
+  return {
+    job_uuid: `cloud_drive_remote_download:remote_download:${task.id || ""}`,
+    job_type: ["torrent_file", "torrent_url", "magnet"].includes(task.source_type)
+      ? `cloud_drive.remote_download.bt.${task.source_type || "bt"}`
+      : "cloud_drive.remote_download.direct",
+    title: `${label}：${name}`,
+    description: "遠端下載、掃描與保存",
+    source_module: "cloud_drive_remote_download",
+    source_ref: `remote_download:${task.id || ""}`,
+    status,
+    progress_percent: Number.isFinite(percent) ? Math.max(0, Math.min(100, Math.round(percent))) : (status === "succeeded" || status === "failed" ? 100 : 0),
+    stage: task.phase || task.status || status,
+    stage_detail: [task.msg || task.error || "", bytes, speed].filter(Boolean).join(" · "),
+    error_message: status === "failed" ? (task.error || task.msg || "遠端下載失敗") : "",
+    error_stage: status === "failed" ? (task.phase || "failed") : "",
+    cancellable: false,
+    metadata: {
+      task_id: task.id,
+      source_type: task.source_type,
+      loaded_bytes: task.loaded_bytes,
+      total_bytes: task.total_bytes,
+      speed_bytes_per_sec: task.speed_bytes_per_sec,
+    },
+    created_at: task.created_at || task.updated_at || new Date().toISOString(),
+    updated_at: task.updated_at || task.created_at || new Date().toISOString(),
+  };
+}
+
+function upsertDriveTaskCenterLocalJob(item = {}) {
+  if (!item.id && !item.task_id) return;
+  const job = driveTransferToJobCenterJob(item);
+  const key = `${job.source_module}:${job.source_ref || job.job_uuid}`;
+  driveTaskCenterLocalJobs = [
+    job,
+    ...driveTaskCenterLocalJobs.filter((existing) => `${existing.source_module}:${existing.source_ref || existing.job_uuid}` !== key),
+  ].slice(0, DRIVE_TASK_CENTER_LOCAL_MAX);
+}
+
+function mergeDriveTaskCenterJobs(jobs = []) {
+  const byKey = new Map();
+  jobs.filter(Boolean).forEach((job) => {
+    const key = `${job.source_module || ""}:${job.source_ref || job.job_uuid || ""}`;
+    if (!key.trim()) return;
+    const existing = byKey.get(key);
+    if (!existing || Date.parse(job.updated_at || job.created_at || "") >= Date.parse(existing.updated_at || existing.created_at || "")) {
+      byKey.set(key, job);
+    }
+  });
+  return Array.from(byKey.values()).sort((a, b) => {
+    const at = Date.parse(a.updated_at || a.created_at || "") || 0;
+    const bt = Date.parse(b.updated_at || b.created_at || "") || 0;
+    return bt - at;
+  });
+}
+
+function getDriveTaskCenterLocalJobs() {
+  const transferJobs = driveTransferRows.map(driveTransferToJobCenterJob);
+  return mergeDriveTaskCenterJobs([...transferJobs, ...driveTaskCenterLocalJobs]);
+}
+
+async function loadDriveTaskCenterJobs({ csrf = "" } = {}) {
+  const jobs = getDriveTaskCenterLocalJobs();
+  try {
+    const token = csrf || getCsrfToken() || await fetchCsrfToken();
+    const res = await apiFetch(API + "/cloud-drive/remote-download/tasks", {
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": token || "" },
+    });
+    const json = await res.json().catch(() => ({}));
+    if (res.ok && json.ok && Array.isArray(json.tasks)) {
+      jobs.push(...json.tasks.map(driveRemoteTaskToJobCenterJob));
+    }
+  } catch (_) {
+    // Job Center must still render platform jobs if drive tasks cannot be read.
+  }
+  return mergeDriveTaskCenterJobs(jobs);
+}
+
 function addDriveTransferRow(item) {
   const id = item.id || `transfer-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const now = new Date().toISOString();
   const row = {
     id,
     kind: item.kind || "upload",
@@ -875,9 +1164,17 @@ function addDriveTransferRow(item) {
     loaded_bytes: item.loaded_bytes || 0,
     total_bytes: item.total_bytes ?? null,
     progress_percent: item.progress_percent ?? 0,
+    speed_bytes_per_sec: item.speed_bytes_per_sec || 0,
     msg: item.msg || "準備中",
+    task_id: item.task_id || "",
+    source_label: item.source_label || "",
+    source_ref: item.source_ref || "",
+    created_at: item.created_at || now,
+    updated_at: item.updated_at || now,
   };
   driveTransferRows = [row, ...driveTransferRows.filter((existing) => existing.id !== id)];
+  upsertDriveTaskCenterLocalJob(row);
+  syncDriveTransferIdleSuspend();
   renderDriveFiles(lastDriveFiles || []);
   renderStorageBrowser();
   return id;
@@ -894,18 +1191,22 @@ function updateDriveTransferRow(id, updates) {
   driveTransferRows = driveTransferRows.map((item) => {
     if (item.id !== id) return item;
     found = true;
-    return { ...item, ...updates };
+    const row = { ...item, ...updates, updated_at: new Date().toISOString() };
+    upsertDriveTaskCenterLocalJob(row);
+    return row;
   });
   if (!found) {
     addDriveTransferRow({ id, ...updates });
     return;
   }
+  syncDriveTransferIdleSuspend();
   renderDriveFiles(lastDriveFiles || []);
   renderStorageBrowser();
 }
 
 function removeDriveTransferRow(id) {
   driveTransferRows = driveTransferRows.filter((item) => item.id !== id);
+  syncDriveTransferIdleSuspend();
   renderDriveFiles(lastDriveFiles || []);
   renderStorageBrowser();
 }
@@ -933,6 +1234,10 @@ function renderDriveTransferRow(item) {
         ? formatDriveBytes(item.loaded_bytes)
         : (item.status === "completed" ? "已保存" : "等待資料")
     );
+  const speed = formatDriveSpeed(item.speed_bytes_per_sec);
+  const transferMeta = speed && item.status !== "completed" && item.status !== "failed"
+    ? `${bytes} · ${speed}`
+    : bytes;
   const statusClass = item.status === "failed" ? "failed" : item.status === "completed" ? "completed" : "running";
   const statusText = item.status === "failed"
     ? "下載失敗"
@@ -943,7 +1248,7 @@ function renderDriveTransferRow(item) {
     <div class="drive-file-row drive-transfer-row ${sanitize(statusClass)}">
       <div>
         <strong>${sanitize(item.name || item.filename || "處理中的檔案")}</strong>
-        <div class="drive-card-sub">${sanitize(statusText)} · ${sanitize(item.msg || item.phase || "處理中")} · ${sanitize(bytes)}</div>
+        <div class="drive-card-sub">${sanitize(statusText)} · ${sanitize(item.msg || item.phase || "處理中")} · ${sanitize(transferMeta)}</div>
         <div class="drive-progress" aria-label="${sanitize(label)}">
           <div class="drive-progress-fill ${percent === null ? "indeterminate" : ""}" style="width:${width}%;"></div>
         </div>
@@ -1266,47 +1571,74 @@ async function uploadDriveFile() {
   const privacyMode = $("drive-upload-privacy-mode")?.value || "standard_plain";
   const form = new FormData();
   try {
+    let uploadBlob = file;
+    let uploadFilename = file.name || "upload.bin";
+    let uploadMimeType = file.type || "application/octet-stream";
+    let uploadFields = {};
     if (isDriveE2eeMode(privacyMode)) {
       updateDriveTransferRow(transferId, { phase: "encrypting", msg: "瀏覽器端加密中", progress_percent: null });
       const encrypted = await prepareDriveE2eeUpload(file, getDriveE2eeUploadPassphrase());
       const encryptedQuotaError = driveUploadQuotaError(encrypted.blob.size, `加密後檔案「${file.name || encrypted.filename}」`);
       if (encryptedQuotaError) throw new Error(encryptedQuotaError);
-      form.append("file", encrypted.blob, encrypted.filename);
-      form.append("encrypted_metadata", encrypted.encrypted_metadata);
-      form.append("encrypted_file_key", encrypted.encrypted_file_key);
-      form.append("wrapped_by", encrypted.wrapped_by);
-      form.append("ciphertext_sha256", encrypted.ciphertext_sha256);
-      form.append("encryption_algorithm", encrypted.encryption_algorithm);
-      form.append("encryption_version", encrypted.encryption_version);
-      form.append("nonce", encrypted.nonce);
+      uploadBlob = encrypted.blob;
+      uploadFilename = encrypted.filename;
+      uploadMimeType = encrypted.blob.type || "application/octet-stream";
+      uploadFields = driveEncryptedUploadFields(encrypted);
+      updateDriveTransferRow(transferId, { phase: "uploading", msg: "加密完成，開始上傳密文", progress_percent: 0 });
+    }
+    let json = null;
+    if (shouldUseDriveResumableUpload(uploadBlob)) {
+      json = await uploadDriveBlobResumable({
+        blob: uploadBlob,
+        sourceFile: file,
+        filename: uploadFilename,
+        mimeType: uploadMimeType,
+        privacyMode,
+        fields: uploadFields,
+        target: "cloud_drive",
+        transferId,
+        csrf,
+        label: uploadFilename,
+      });
     } else {
-      form.append("file", file);
-    }
-    form.append("privacy_mode", privacyMode);
-    const { status, json } = await xhrUploadWithProgress(API + "/cloud-drive/upload", form, csrf, (event) => {
-      if (event.lengthComputable) {
-        updateDriveTransferRow(transferId, {
-          loaded_bytes: event.loaded,
-          total_bytes: event.total,
-          progress_percent: (event.loaded / event.total) * 100,
-          msg: event.loaded >= event.total ? "伺服器儲存與掃描中" : "上傳中",
-        });
-      } else {
-        updateDriveTransferRow(transferId, {
-          loaded_bytes: event.loaded || 0,
-          total_bytes: null,
-          progress_percent: null,
-          msg: "上傳中",
-        });
+      form.append("file", uploadBlob, uploadFilename);
+      appendDriveUploadFields(form, uploadFields);
+      form.append("privacy_mode", privacyMode);
+      const upload = await xhrUploadWithProgress(API + "/cloud-drive/upload", form, csrf, (event) => {
+        if (event.lengthComputable) {
+          updateDriveTransferRow(transferId, {
+            loaded_bytes: event.loaded,
+            total_bytes: event.total,
+            progress_percent: (event.loaded / event.total) * 100,
+            phase: event.loaded >= event.total ? "server_processing" : "uploading",
+            msg: event.loaded >= event.total ? drivePostUploadProcessingMessage(privacyMode) : "上傳中",
+          });
+        } else {
+          updateDriveTransferRow(transferId, {
+            loaded_bytes: event.loaded || 0,
+            total_bytes: null,
+            progress_percent: null,
+            msg: "上傳中",
+          });
+        }
+      });
+      json = upload.json || {};
+      if (upload.status < 200 || upload.status >= 300 || !json.ok) {
+        const detail = json.error_code ? `${json.msg || "雲端硬碟上傳失敗"}（${json.error_code}）` : (json.msg || `雲端硬碟上傳失敗（HTTP ${upload.status}）`);
+        updateDriveTransferRow(transferId, { status: "failed", phase: "failed", msg: detail, progress_percent: 100 });
+        alert(detail);
+        return;
       }
-    });
-    if (status < 200 || status >= 300 || !json.ok) {
-      const detail = json.error_code ? `${json.msg || "雲端硬碟上傳失敗"}（${json.error_code}）` : (json.msg || `雲端硬碟上傳失敗（HTTP ${status}）`);
-      updateDriveTransferRow(transferId, { status: "failed", phase: "failed", msg: detail, progress_percent: 100 });
-      alert(detail);
-      return;
     }
-    updateDriveTransferRow(transferId, { status: "completed", phase: "completed", msg: "上傳完成", progress_percent: 100, loaded_bytes: file.size, total_bytes: file.size });
+    updateDriveTransferRow(transferId, {
+      status: "completed",
+      phase: "completed",
+      msg: "上傳完成",
+      progress_percent: 100,
+      loaded_bytes: uploadBlob.size,
+      total_bytes: uploadBlob.size,
+      source_ref: json.file?.file_id ? `cloud_file:${json.file.file_id}` : "",
+    });
     input.value = "";
     if (isDriveE2eeMode(privacyMode)) clearDriveE2eeUploadPassphrase();
     await loadDriveDashboard();
@@ -1340,6 +1672,157 @@ function xhrUploadWithProgress(url, form, csrf, onProgress) {
     xhr.ontimeout = () => reject(new Error("上傳逾時"));
     xhr.send(form);
   });
+}
+
+async function driveResumableJson(path, { method = "GET", body = null, csrf = "" } = {}) {
+  const token = csrf || getCsrfToken() || await fetchCsrfToken({ force: method !== "GET" });
+  const headers = { "X-CSRF-Token": token || "" };
+  if (body) headers["Content-Type"] = "application/json";
+  const res = await apiFetch(API + path, {
+    method,
+    credentials: "same-origin",
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json.ok) throw new Error(json.msg || `HTTP ${res.status}`);
+  return json;
+}
+
+async function getDriveResumableUploadStatus(sessionId, csrf = "") {
+  if (!sessionId) return null;
+  try {
+    const json = await driveResumableJson(`/cloud-drive/resumable-upload/${encodeURIComponent(sessionId)}/status`, { csrf });
+    return json.session || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function startDriveResumableUploadSession(payload, csrf = "") {
+  const json = await driveResumableJson("/cloud-drive/resumable-upload/start", {
+    method: "POST",
+    csrf,
+    body: payload,
+  });
+  return json.session;
+}
+
+async function completeDriveResumableUpload(sessionId, csrf = "") {
+  return driveResumableJson(`/cloud-drive/resumable-upload/${encodeURIComponent(sessionId)}/complete`, {
+    method: "POST",
+    csrf,
+  });
+}
+
+async function uploadDriveBlobResumable({
+  blob,
+  sourceFile = null,
+  filename = "upload.bin",
+  mimeType = "application/octet-stream",
+  privacyMode = "standard_plain",
+  fields = {},
+  target = "cloud_drive",
+  virtualPath = "",
+  displayName = "",
+  transferId,
+  csrf = "",
+  aggregateBaseBytes = 0,
+  aggregateTotalBytes = 0,
+  label = "",
+} = {}) {
+  if (!blob) throw new Error("缺少要上傳的檔案資料");
+  const totalBytes = Number(blob.size || 0);
+  const chunkSize = DRIVE_RESUMABLE_UPLOAD_CHUNK_BYTES;
+  const totalForDisplay = Number(aggregateTotalBytes || totalBytes);
+  const storageKey = driveResumableUploadKey({ file: sourceFile, blob, target, virtualPath, privacyMode });
+  let session = null;
+  const remembered = rememberedDriveResumableUpload(storageKey);
+  if (remembered) {
+    const existing = await getDriveResumableUploadStatus(remembered, csrf);
+    if (
+      existing
+      && existing.status !== "completed"
+      && existing.filename === filename
+      && Number(existing.total_bytes || 0) === totalBytes
+      && existing.target === target
+    ) {
+      session = existing;
+    } else {
+      forgetDriveResumableUpload(storageKey);
+    }
+  }
+  if (!session) {
+    session = await startDriveResumableUploadSession({
+      filename,
+      mime_type: mimeType || blob.type || "application/octet-stream",
+      total_bytes: totalBytes,
+      chunk_size: chunkSize,
+      privacy_mode: privacyMode,
+      target,
+      virtual_path: virtualPath,
+      display_name: displayName,
+      ...fields,
+    }, csrf);
+    rememberDriveResumableUpload(storageKey, session.session_id);
+  }
+  const received = new Set((session.received_chunks || []).map((item) => Number(item)));
+  const totalChunks = Number(session.total_chunks || Math.ceil(totalBytes / chunkSize));
+  let uploadedBytes = Number(session.received_bytes || 0);
+  updateDriveTransferRow(transferId, {
+    phase: "resumable_uploading",
+    loaded_bytes: aggregateBaseBytes + uploadedBytes,
+    total_bytes: totalForDisplay,
+    progress_percent: totalForDisplay > 0 ? ((aggregateBaseBytes + uploadedBytes) / totalForDisplay) * 100 : null,
+    msg: `${label || filename} 分段上傳中${uploadedBytes > 0 ? "（已續傳）" : ""}`,
+  });
+  for (let index = 0; index < totalChunks; index += 1) {
+    if (received.has(index)) continue;
+    const start = index * chunkSize;
+    const end = Math.min(totalBytes, start + chunkSize);
+    const chunk = blob.slice(start, end);
+    const form = new FormData();
+    form.append("chunk", chunk, `${filename}.part${index}`);
+    const uploadedBeforeChunk = uploadedBytes;
+    const { status, json } = await xhrUploadWithProgress(
+      API + `/cloud-drive/resumable-upload/${encodeURIComponent(session.session_id)}/chunks/${index}`,
+      form,
+      csrf,
+      (event) => {
+        const chunkLoaded = event.lengthComputable ? Math.min(chunk.size, event.loaded || 0) : 0;
+        const loaded = aggregateBaseBytes + uploadedBeforeChunk + chunkLoaded;
+        updateDriveTransferRow(transferId, {
+          phase: "resumable_uploading",
+          loaded_bytes: loaded,
+          total_bytes: totalForDisplay,
+          progress_percent: totalForDisplay > 0 ? (loaded / totalForDisplay) * 100 : null,
+          msg: `${label || filename} 分段 ${index + 1}/${totalChunks} 上傳中`,
+        });
+      }
+    );
+    if (status < 200 || status >= 300 || !json.ok) {
+      throw new Error(json.msg || `分段 ${index + 1} 上傳失敗（HTTP ${status}）`);
+    }
+    session = json.session || session;
+    uploadedBytes = Number(session.received_bytes || Math.min(totalBytes, uploadedBytes + chunk.size));
+    updateDriveTransferRow(transferId, {
+      phase: "resumable_uploading",
+      loaded_bytes: aggregateBaseBytes + uploadedBytes,
+      total_bytes: totalForDisplay,
+      progress_percent: totalForDisplay > 0 ? ((aggregateBaseBytes + uploadedBytes) / totalForDisplay) * 100 : null,
+      msg: `${label || filename} 已上傳分段 ${index + 1}/${totalChunks}`,
+    });
+  }
+  updateDriveTransferRow(transferId, {
+    phase: "server_processing",
+    loaded_bytes: aggregateBaseBytes + totalBytes,
+    total_bytes: totalForDisplay,
+    progress_percent: totalForDisplay > 0 ? ((aggregateBaseBytes + totalBytes) / totalForDisplay) * 100 : 100,
+    msg: `${label || filename} 分段合併、掃描與保存中`,
+  });
+  const completed = await completeDriveResumableUpload(session.session_id, csrf);
+  forgetDriveResumableUpload(storageKey);
+  return completed;
 }
 
 async function loadRemoteDownloadCapabilities() {
@@ -1476,6 +1959,7 @@ async function startRemoteDriveDownload({ source = "auto", downloadMode = "direc
   const transferId = addDriveTransferRow({
     kind: "remote_download",
     name: torrentFile ? torrentFile.name : url,
+    source_label: detected.label || "遠端下載",
     loaded_bytes: 0,
     total_bytes: null,
     progress_percent: 0,
@@ -1587,12 +2071,14 @@ async function pollRemoteDownloadTask(taskId, transferId) {
       loaded_bytes: task.loaded_bytes,
       total_bytes: task.total_bytes,
       progress_percent: task.progress_percent,
+      speed_bytes_per_sec: task.speed_bytes_per_sec,
       msg: task.msg || "",
     });
     const status = $("drive-remote-download-status");
     if (status) {
       const percent = task.progress_percent === null || task.progress_percent === undefined ? "計算中" : `${Math.round(Number(task.progress_percent || 0))}%`;
-      status.textContent = `${task.msg || "遠端下載中"} · ${percent}`;
+      const speed = formatDriveSpeed(task.speed_bytes_per_sec);
+      status.textContent = `${task.msg || "遠端下載中"} · ${percent}${speed ? ` · ${speed}` : ""}`;
     }
     if (task.status === "completed") return task;
     if (task.status === "failed") {
@@ -1620,6 +2106,7 @@ function applyRemoteDownloadTaskToTransfer(task) {
     loaded_bytes: task.loaded_bytes,
     total_bytes: task.total_bytes,
     progress_percent: task.progress_percent,
+    speed_bytes_per_sec: task.speed_bytes_per_sec,
     msg: task.msg || "",
   });
   return transferId;
@@ -3195,48 +3682,78 @@ async function uploadStorageFile() {
   const csrf = getCsrfToken();
   const form = new FormData();
   try {
+    let uploadBlob = file;
+    let uploadFilename = file.name || "upload.bin";
+    let uploadMimeType = file.type || "application/octet-stream";
+    let uploadFields = {};
+    const virtualPath = pathInput?.value || joinStoragePath(currentStoragePath, file.name);
     if (isDriveE2eeMode(options.privacyMode)) {
       updateDriveTransferRow(transferId, { phase: "encrypting", msg: "瀏覽器端加密中", progress_percent: null });
       const encrypted = await prepareDriveE2eeUpload(file, options.passphrase);
       const encryptedQuotaError = driveUploadQuotaError(encrypted.blob.size, `加密後檔案「${file.name || encrypted.filename}」`);
       if (encryptedQuotaError) throw new Error(encryptedQuotaError);
-      form.append("file", encrypted.blob, encrypted.filename);
-      form.append("encrypted_metadata", encrypted.encrypted_metadata);
-      form.append("encrypted_file_key", encrypted.encrypted_file_key);
-      form.append("wrapped_by", encrypted.wrapped_by);
-      form.append("ciphertext_sha256", encrypted.ciphertext_sha256);
-      form.append("encryption_algorithm", encrypted.encryption_algorithm);
-      form.append("encryption_version", encrypted.encryption_version);
-      form.append("nonce", encrypted.nonce);
+      uploadBlob = encrypted.blob;
+      uploadFilename = encrypted.filename;
+      uploadMimeType = encrypted.blob.type || "application/octet-stream";
+      uploadFields = driveEncryptedUploadFields(encrypted);
+      updateDriveTransferRow(transferId, { phase: "uploading", msg: "加密完成，開始上傳密文", progress_percent: 0 });
+    }
+    let json = null;
+    if (shouldUseDriveResumableUpload(uploadBlob)) {
+      json = await uploadDriveBlobResumable({
+        blob: uploadBlob,
+        sourceFile: file,
+        filename: uploadFilename,
+        mimeType: uploadMimeType,
+        privacyMode: options.privacyMode,
+        fields: uploadFields,
+        target: "storage",
+        virtualPath,
+        displayName: file.name || uploadFilename,
+        transferId,
+        csrf,
+        label: uploadFilename,
+      });
     } else {
-      form.append("file", file);
-    }
-    form.append("privacy_mode", options.privacyMode);
-    form.append("virtual_path", pathInput?.value || joinStoragePath(currentStoragePath, file.name));
-    const { status, json } = await xhrUploadWithProgress(API + "/storage/files", form, csrf, (event) => {
-      if (event.lengthComputable) {
-        updateDriveTransferRow(transferId, {
-          loaded_bytes: event.loaded,
-          total_bytes: event.total,
-          progress_percent: (event.loaded / event.total) * 100,
-          msg: event.loaded >= event.total ? "伺服器儲存與掃描中" : "上傳中",
-        });
-      } else {
-        updateDriveTransferRow(transferId, {
-          loaded_bytes: event.loaded || 0,
-          total_bytes: null,
-          progress_percent: null,
-          msg: "上傳中",
-        });
+      form.append("file", uploadBlob, uploadFilename);
+      appendDriveUploadFields(form, uploadFields);
+      form.append("privacy_mode", options.privacyMode);
+      form.append("virtual_path", virtualPath);
+      const upload = await xhrUploadWithProgress(API + "/storage/files", form, csrf, (event) => {
+        if (event.lengthComputable) {
+          updateDriveTransferRow(transferId, {
+            loaded_bytes: event.loaded,
+            total_bytes: event.total,
+            progress_percent: (event.loaded / event.total) * 100,
+            phase: event.loaded >= event.total ? "server_processing" : "uploading",
+            msg: event.loaded >= event.total ? drivePostUploadProcessingMessage(options.privacyMode) : "上傳中",
+          });
+        } else {
+          updateDriveTransferRow(transferId, {
+            loaded_bytes: event.loaded || 0,
+            total_bytes: null,
+            progress_percent: null,
+            msg: "上傳中",
+          });
+        }
+      });
+      json = upload.json || {};
+      if (upload.status < 200 || upload.status >= 300 || !json.ok) {
+        const detail = json.msg || `Storage 上傳失敗（HTTP ${upload.status}）`;
+        updateDriveTransferRow(transferId, { status: "failed", phase: "failed", msg: detail, progress_percent: 100 });
+        alert(detail);
+        return;
       }
-    });
-    if (status < 200 || status >= 300 || !json.ok) {
-      const detail = json.msg || `Storage 上傳失敗（HTTP ${status}）`;
-      updateDriveTransferRow(transferId, { status: "failed", phase: "failed", msg: detail, progress_percent: 100 });
-      alert(detail);
-      return;
     }
-    updateDriveTransferRow(transferId, { status: "completed", phase: "completed", msg: "上傳完成", progress_percent: 100, loaded_bytes: file.size, total_bytes: file.size });
+    updateDriveTransferRow(transferId, {
+      status: "completed",
+      phase: "completed",
+      msg: "上傳完成",
+      progress_percent: 100,
+      loaded_bytes: uploadBlob.size,
+      total_bytes: uploadBlob.size,
+      source_ref: json.file?.file_id ? `cloud_file:${json.file.file_id}` : "",
+    });
     input.value = "";
     if (pathInput) pathInput.value = "";
     await loadDriveDashboard();
@@ -3277,7 +3794,7 @@ async function uploadStorageFolder() {
   }
   if ($("drive-upload-privacy-mode")) $("drive-upload-privacy-mode").value = options.privacyMode;
   const transferId = addDriveTransferRow({
-    kind: "upload",
+    kind: "folder_upload",
     name: `${storageBaseName(storageUploadRelativePath(files[0]).split("/")[0] || "資料夾")}（${files.length} 個檔案）`,
     loaded_bytes: 0,
     total_bytes: totalBytes,
@@ -3300,30 +3817,63 @@ async function uploadStorageFolder() {
       msg: `上傳中：${relativePath || file.name}`,
     });
     const form = new FormData();
+    let uploadBlob = file;
+    let uploadFilename = file.name || "upload.bin";
+    let uploadMimeType = file.type || "application/octet-stream";
+    let uploadFields = {};
     try {
       if (isDriveE2eeMode(options.privacyMode)) {
+        updateDriveTransferRow(transferId, {
+          loaded_bytes: uploadedBytes,
+          total_bytes: totalBytes,
+          progress_percent: totalBytes > 0 ? (uploadedBytes / totalBytes) * 100 : null,
+          phase: "encrypting",
+          msg: `瀏覽器端加密中：${relativePath || file.name}`,
+        });
         const encrypted = await prepareDriveE2eeUpload(file, options.passphrase);
         const encryptedQuotaError = driveUploadQuotaError(encrypted.blob.size, `加密後檔案「${relativePath || file.name}」`);
         if (encryptedQuotaError) throw new Error(encryptedQuotaError);
-        form.append("file", encrypted.blob, encrypted.filename);
-        form.append("encrypted_metadata", encrypted.encrypted_metadata);
-        form.append("encrypted_file_key", encrypted.encrypted_file_key);
-        form.append("wrapped_by", encrypted.wrapped_by);
-        form.append("ciphertext_sha256", encrypted.ciphertext_sha256);
-        form.append("encryption_algorithm", encrypted.encryption_algorithm);
-        form.append("encryption_version", encrypted.encryption_version);
-        form.append("nonce", encrypted.nonce);
-      } else {
-        form.append("file", file);
+        uploadBlob = encrypted.blob;
+        uploadFilename = encrypted.filename;
+        uploadMimeType = encrypted.blob.type || "application/octet-stream";
+        uploadFields = driveEncryptedUploadFields(encrypted);
+        updateDriveTransferRow(transferId, {
+          loaded_bytes: uploadedBytes,
+          total_bytes: totalBytes,
+          progress_percent: totalBytes > 0 ? (uploadedBytes / totalBytes) * 100 : null,
+          phase: "uploading",
+          msg: `加密完成，開始上傳：${relativePath || file.name}`,
+        });
       }
     } catch (err) {
       failures.push(`${relativePath || file.name}: ${err.message || "加密失敗"}`);
       uploadedBytes += Number(file.size || 0);
       continue;
     }
-    form.append("privacy_mode", options.privacyMode);
-    form.append("virtual_path", virtualPath);
     try {
+      if (!isDriveE2eeMode(options.privacyMode) && shouldUseDriveResumableUpload(uploadBlob)) {
+        await uploadDriveBlobResumable({
+          blob: uploadBlob,
+          sourceFile: file,
+          filename: uploadFilename,
+          mimeType: uploadMimeType,
+          privacyMode: options.privacyMode,
+          fields: uploadFields,
+          target: "storage",
+          virtualPath,
+          displayName: relativePath || file.name,
+          transferId,
+          csrf,
+          aggregateBaseBytes: uploadedBytes,
+          aggregateTotalBytes: totalBytes,
+          label: relativePath || file.name,
+        });
+        okCount += 1;
+      } else {
+        form.append("file", uploadBlob, uploadFilename);
+        appendDriveUploadFields(form, uploadFields);
+        form.append("privacy_mode", options.privacyMode);
+        form.append("virtual_path", virtualPath);
       const { status, json } = await xhrUploadWithProgress(API + "/storage/files", form, csrf, (event) => {
         const currentLoaded = event.lengthComputable ? Math.min(fileSize, event.loaded || 0) : 0;
         const aggregateLoaded = uploadedBytes + currentLoaded;
@@ -3331,8 +3881,9 @@ async function uploadStorageFolder() {
           loaded_bytes: aggregateLoaded,
           total_bytes: totalBytes,
           progress_percent: totalBytes > 0 ? (aggregateLoaded / totalBytes) * 100 : null,
+          phase: event.lengthComputable && event.loaded >= event.total ? "server_processing" : "uploading",
           msg: event.lengthComputable
-            ? `上傳中：${relativePath || file.name}`
+            ? (event.loaded >= event.total ? `${drivePostUploadProcessingMessage(options.privacyMode)}：${relativePath || file.name}` : `上傳中：${relativePath || file.name}`)
             : `上傳中：${relativePath || file.name}（等待瀏覽器回報大小）`,
         });
       });
@@ -3340,6 +3891,7 @@ async function uploadStorageFolder() {
         failures.push(`${relativePath || file.name}: ${json.msg || `HTTP ${status}`}`);
       } else {
         okCount += 1;
+      }
       }
     } catch (err) {
       failures.push(`${relativePath || file.name}: ${err.message || "上傳失敗"}`);

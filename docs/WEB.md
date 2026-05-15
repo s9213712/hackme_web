@@ -105,7 +105,10 @@ Remote downloads are integrated into Cloud Drive:
 
 BT/magnet/`.torrent` downloads require `aria2c` on the server. Downloaded files
 are saved through the same quota, scan, privacy-mode, and logical-folder
-pipeline as normal uploads.
+pipeline as normal uploads. BT transfers run in an external worker process by
+default; the Flask server only tracks progress and stores the completed file.
+`timeout_seconds` is treated as an idle timeout for BT, so active downloads are
+not stopped just because they run longer than the initial timeout window.
 
 Root can configure per-member-level Cloud Drive transfer controls under
 `伺服器設定 -> 雲端硬碟 -> 階級傳輸限速`:

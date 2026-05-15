@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS game_matches (
     black_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     human_side TEXT NOT NULL DEFAULT 'white',
     computer_difficulty TEXT NOT NULL DEFAULT 'normal',
+    computer_config_json TEXT NOT NULL DEFAULT '{}',
     current_turn TEXT NOT NULL DEFAULT 'white',
     board_json TEXT NOT NULL,
     move_history_json TEXT NOT NULL DEFAULT '[]',
@@ -741,6 +742,29 @@ CREATE TABLE IF NOT EXISTS announcement_attachment_requests (
 CREATE INDEX IF NOT EXISTS idx_cloud_file_refs_file ON cloud_file_refs(file_id);
 CREATE INDEX IF NOT EXISTS idx_cloud_file_refs_context ON cloud_file_refs(context_type, context_id);
 CREATE INDEX IF NOT EXISTS idx_cloud_file_refs_owner ON cloud_file_refs(owner_user_id, created_at);
+
+CREATE TABLE IF NOT EXISTS cloud_resumable_upload_sessions (
+    session_id TEXT PRIMARY KEY,
+    owner_user_id INTEGER NOT NULL,
+    target TEXT NOT NULL DEFAULT 'cloud_drive',
+    status TEXT NOT NULL DEFAULT 'uploading',
+    filename TEXT NOT NULL,
+    mime_type TEXT,
+    total_bytes INTEGER NOT NULL,
+    chunk_size INTEGER NOT NULL,
+    total_chunks INTEGER NOT NULL,
+    received_bytes INTEGER NOT NULL DEFAULT 0,
+    received_chunks_json TEXT NOT NULL DEFAULT '[]',
+    temp_dir TEXT NOT NULL,
+    privacy_mode TEXT NOT NULL DEFAULT 'standard_plain',
+    metadata_json TEXT,
+    result_json TEXT,
+    error_message TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    expires_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_cloud_resumable_owner_status ON cloud_resumable_upload_sessions(owner_user_id, status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_file_access_grants_file ON file_access_grants(file_id, revoked_at);
 CREATE INDEX IF NOT EXISTS idx_file_access_grants_user_context ON file_access_grants(granted_to_user_id, context_type, context_id);
 CREATE INDEX IF NOT EXISTS idx_announcement_attachment_requests_status ON announcement_attachment_requests(status, created_at);

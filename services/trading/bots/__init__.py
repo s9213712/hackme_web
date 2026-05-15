@@ -5,6 +5,7 @@ pure workflow, indicator, and audit reduction logic.
 """
 
 from .service import (
+    adjust_trading_bot_budget,
     bot_condition_checks,
     bot_trigger_hit,
     get_bot_audit_dashboard,
@@ -20,6 +21,7 @@ from .service import (
 
 __all__ = [
     "bot_condition_checks",
+    "adjust_trading_bot_budget",
     "bot_trigger_hit",
     "get_bot_audit_dashboard",
     "increase_trading_bot_max_runs",

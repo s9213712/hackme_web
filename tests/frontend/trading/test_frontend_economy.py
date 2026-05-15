@@ -74,6 +74,8 @@ def test_root_points_page_is_chain_operations_console():
     assert 'id="economy-root-wallet-position-list"' in index_html
     assert 'id="economy-root-spot-position-list"' in index_html
     assert 'id="economy-root-margin-position-list"' in index_html
+    assert 'id="economy-root-bot-position-list"' in index_html
+    assert 'id="economy-root-position-bots"' in index_html
     assert 'id="economy-root-card"' in economy_chain_page
     assert 'id="economy-admin-card"' in economy_chain_page
     assert "PointsChain 私有鏈管理" in index_html
@@ -120,7 +122,7 @@ def test_root_points_page_is_chain_operations_console():
     assert "手動加減分與待審核" in index_html
     assert "積分錢包" in index_html
     assert "積分交易所" in index_html
-    assert "/js/55-economy.js?v=20260501-wallet-auto-refresh" in index_html
+    assert "/js/55-economy.js?v=20260515-root-bot-positions" in index_html
     # Match any cache-bust version — Codex bumps these for browser
     # cache invalidation, the test should not break on each bump.
     assert "/js/50-admin.js?v=" in index_html
@@ -157,6 +159,8 @@ def test_root_points_page_is_chain_operations_console():
     assert "function renderEconomyRootBalanceSummary" in economy_js
     assert "function renderEconomyRootFundingPools" in economy_js
     assert "function renderEconomyRootAllPositions" in economy_js
+    assert 'setEconomyText("economy-root-position-bots"' in economy_js
+    assert 'renderEconomyRootList(botRows, "economy-root-bot-position-list"' in economy_js
     assert "startEconomyBlockCountdown" in economy_js
     assert "function canManageEconomyPoints()" in economy_js
     assert "function setEconomyRootLayout(rootMode)" in economy_js
@@ -488,9 +492,9 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "本欄位最多可填" in trading_js
     assert "維持率 + 費率安全底線" in trading_js
     assert "tradingSettlementFeePoints" in trading_js
-    assert "Math.ceil(exactFee - Number.EPSILON)" in trading_js
-    assert "const fee = tradingSettlementFeePoints(notional, feeRatePercent);" in trading_js
-    assert "const closeFee = tradingSettlementFeePoints(exitNotional, feeRatePercent);" in trading_js
+    assert "tradingMicropointsToSettlementPoints" in trading_js
+    assert "const feeMicropoints = tradingFeeMicropoints(notional, feeRatePercent);" in trading_js
+    assert "const closeFeeMicropoints = tradingFeeMicropoints(exitNotional, feeRatePercent);" in trading_js
     assert "Math.ceil(notional * feeRatePercent / 100)" not in trading_js
     assert "放空價格風險" in trading_js
     assert "價格上漲會虧損並降低維持率" in trading_js
@@ -508,7 +512,7 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "breakeven_price_points" in trading_js
     assert "unrealized_pnl_points" in trading_js
     assert "function tradingMarginBillableInterestPoints" in trading_js
-    assert "Math.max(1, Math.floor(micro / TRADING_POINT_MICRO_SCALE))" in trading_js
+    assert "return tradingMicropointsToSettlementPoints(micro);" in trading_js
     assert "function tradingMarginLiveInterest" in trading_js
     assert "function tradingMarginBreakEvenPrice" in trading_js
     assert "function tradingMarginNextInterestAtMs" in trading_js
@@ -543,6 +547,12 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "data-margin-withdraw-collateral" in trading_js
     assert "addTradingMarginCollateral" in trading_js
     assert "withdrawTradingMarginCollateral" in trading_js
+    assert "function tradingMarginWithdrawEstimate" in trading_js
+    assert "預估可抽出" in trading_js
+    assert "amount > withdrawEstimate.maxWithdrawable" in trading_js
+    assert "function scheduleTradingMutationRefresh" in trading_js
+    assert "applyTradingOrderResult(json.order || null)" in trading_js
+    assert "await loadEconomyDashboard();" not in trading_js.split("async function submitTradingOrder()", 1)[1].split("async function saveTradingBot()", 1)[0]
     assert "margin_positions" in trading_js
     assert "margin_summary" in trading_js
     assert ">確認</button>" in trading_js
@@ -650,6 +660,11 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "trading_bot_weekly_competition_reward" in economy_js
     assert "function increaseTradingBotMaxRuns" in trading_js
     assert "/trading/bots/${encodeURIComponent(botUuid)}/increase-runs" in trading_js
+    assert 'id="trading-auto-bot-budget-points"' in trading_section
+    assert "function adjustTradingBotBudget" in trading_js
+    assert "/trading/bots/${encodeURIComponent(botUuid)}/budget" in trading_js
+    assert "data-trading-bot-budget" in trading_js
+    assert "調整可用" in trading_js
     assert "function tradingBotNextRunText" in trading_js
     assert "function updateTradingBotCountdowns" in trading_js
     assert "data-trading-bot-next-run" in trading_js
@@ -751,7 +766,7 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "root 可用模擬資金進行融資 / 借券" in trading_js
     assert "root 尚未開啟借貸交易，目前僅可查看此區。" in trading_js
     assert "保證金不足，至少需要" in trading_js
-    assert "可用資金不足：開倉費需另扣" in trading_js
+    assert "手續費會在平倉 / 清算時合併結算" in trading_js
     assert "進階交易開倉失敗：" in trading_js
     assert "trading-margin-open-btn" in trading_js
     assert '"trading-limit-match-btn", matchTradingLimitOrders' in trading_js

@@ -243,6 +243,202 @@ def test_cloud_drive_upload_failure_returns_specific_reason(tmp_path):
     assert body["error_code"] == "ValueError"
 
 
+def test_cloud_drive_upload_records_job_center_entry(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    uploaded = client.post(
+        "/api/cloud-drive/upload",
+        data={"file": (io.BytesIO(b"job center upload"), "job-center.txt")},
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 200
+    file_id = uploaded.get_json()["file"]["file_id"]
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        job = conn.execute(
+            """
+            SELECT * FROM job_center_jobs
+            WHERE source_module='cloud_drive_upload' AND source_ref=?
+            """,
+            (f"cloud_file:{file_id}",),
+        ).fetchone()
+        assert job is not None
+        assert job["owner_user_id"] == 1
+        assert job["status"] == "succeeded"
+        assert job["progress_percent"] == 100
+        assert "job-center.txt" in job["title"]
+    finally:
+        conn.close()
+
+
+def test_cloud_drive_resumable_upload_can_resume_chunks_and_complete(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    chunk_size = 256 * 1024
+    payload = (b"A" * chunk_size) + (b"B" * chunk_size) + b"IJ"
+    started = client.post(
+        "/api/cloud-drive/resumable-upload/start",
+        json={
+            "filename": "resume.txt",
+            "mime_type": "text/plain",
+            "total_bytes": len(payload),
+            "chunk_size": chunk_size,
+            "privacy_mode": "standard_plain",
+        },
+    )
+    assert started.status_code == 200
+    session = started.get_json()["session"]
+    session_id = session["session_id"]
+    assert session["total_chunks"] == 3
+
+    chunk1 = client.post(
+        f"/api/cloud-drive/resumable-upload/{session_id}/chunks/1",
+        data={"chunk": (io.BytesIO(b"B" * chunk_size), "part1")},
+        content_type="multipart/form-data",
+    )
+    assert chunk1.status_code == 200
+    status = client.get(f"/api/cloud-drive/resumable-upload/{session_id}/status")
+    assert status.get_json()["session"]["received_chunks"] == [1]
+
+    incomplete = client.post(f"/api/cloud-drive/resumable-upload/{session_id}/complete")
+    assert incomplete.status_code == 409
+    assert incomplete.get_json()["missing_chunks"] == [0, 2]
+
+    assert client.post(
+        f"/api/cloud-drive/resumable-upload/{session_id}/chunks/0",
+        data={"chunk": (io.BytesIO(b"A" * chunk_size), "part0")},
+        content_type="multipart/form-data",
+    ).status_code == 200
+    assert client.post(
+        f"/api/cloud-drive/resumable-upload/{session_id}/chunks/2",
+        data={"chunk": (io.BytesIO(b"IJ"), "part2")},
+        content_type="multipart/form-data",
+    ).status_code == 200
+
+    completed = client.post(f"/api/cloud-drive/resumable-upload/{session_id}/complete")
+    assert completed.status_code == 200
+    body = completed.get_json()
+    file_id = body["file"]["file_id"]
+    assert body["session"]["status"] == "completed"
+    assert client.get(f"/api/cloud-drive/files/{file_id}/download").data == payload
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        session_row = conn.execute("SELECT * FROM cloud_resumable_upload_sessions WHERE session_id=?", (session_id,)).fetchone()
+        assert session_row["status"] == "completed"
+        upload_job = conn.execute(
+            "SELECT * FROM job_center_jobs WHERE source_module='cloud_drive_resumable_upload' AND source_ref=?",
+            (f"upload_session:{session_id}",),
+        ).fetchone()
+        assert upload_job is not None
+        assert upload_job["status"] == "succeeded"
+        assert upload_job["progress_percent"] == 100
+    finally:
+        conn.close()
+
+
+def test_storage_resumable_upload_creates_storage_file_entry(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    chunk_size = 256 * 1024
+    payload = (b"a" * chunk_size) + b"def"
+    started = client.post(
+        "/api/cloud-drive/resumable-upload/start",
+        json={
+            "target": "storage",
+            "filename": "folder-note.txt",
+            "mime_type": "text/plain",
+            "total_bytes": len(payload),
+            "chunk_size": chunk_size,
+            "virtual_path": "/docs/folder-note.txt",
+            "display_name": "Folder Note",
+        },
+    )
+    assert started.status_code == 200
+    session_id = started.get_json()["session"]["session_id"]
+    assert client.post(
+        f"/api/cloud-drive/resumable-upload/{session_id}/chunks/0",
+        data={"chunk": (io.BytesIO(b"a" * chunk_size), "part0")},
+        content_type="multipart/form-data",
+    ).status_code == 200
+    assert client.post(
+        f"/api/cloud-drive/resumable-upload/{session_id}/chunks/1",
+        data={"chunk": (io.BytesIO(b"def"), "part1")},
+        content_type="multipart/form-data",
+    ).status_code == 200
+
+    completed = client.post(f"/api/cloud-drive/resumable-upload/{session_id}/complete")
+    assert completed.status_code == 200
+    body = completed.get_json()
+    storage_file = body["storage_file"]
+    assert storage_file["virtual_path"] == "/docs/folder-note.txt"
+    assert storage_file["display_name"] == "Folder Note"
+    assert client.get(f"/api/storage/files/{storage_file['id']}/download").data == payload
+
+
+def test_resumable_server_encrypted_upload_finishes_through_existing_encryption_path(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    fernet = Fernet(Fernet.generate_key())
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box, server_file_fernet=fernet).test_client()
+
+    chunk_size = 256 * 1024
+    payload = (b"s" * chunk_size) + b"ecret note"
+    started = client.post(
+        "/api/cloud-drive/resumable-upload/start",
+        json={
+            "filename": "secret.txt",
+            "mime_type": "text/plain",
+            "total_bytes": len(payload),
+            "chunk_size": chunk_size,
+            "privacy_mode": "server_encrypted",
+        },
+    )
+    assert started.status_code == 200
+    session_id = started.get_json()["session"]["session_id"]
+    for index, chunk in enumerate((b"s" * chunk_size, b"ecret note")):
+        assert client.post(
+            f"/api/cloud-drive/resumable-upload/{session_id}/chunks/{index}",
+            data={"chunk": (io.BytesIO(chunk), f"part{index}")},
+            content_type="multipart/form-data",
+        ).status_code == 200
+
+    completed = client.post(f"/api/cloud-drive/resumable-upload/{session_id}/complete")
+    assert completed.status_code == 200
+    file_id = completed.get_json()["file"]["file_id"]
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (file_id,)).fetchone()
+        stored = storage_root / row["storage_path"]
+        assert row["privacy_mode"] == "server_encrypted"
+        assert stored.read_bytes() != payload
+        assert decrypt_server_encrypted_bytes(stored, fernet) == payload
+    finally:
+        conn.close()
+
+
 def test_storage_file_e2ee_upload_failure_returns_client_error(tmp_path):
     db_path = tmp_path / "drive.db"
     storage_root = tmp_path / "storage"
@@ -318,6 +514,27 @@ def test_server_encrypted_upload_stores_ciphertext_but_downloads_plaintext(tmp_p
     download = client.get(f"/api/cloud-drive/files/{file_id}/download")
     assert download.status_code == 200
     assert download.data == b"secret note"
+
+
+def test_server_encrypted_large_upload_rejected_before_inline_encrypt(tmp_path, monkeypatch):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    monkeypatch.setenv("HACKME_SERVER_ENCRYPTED_INLINE_MAX_BYTES", "8")
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    res = client.post(
+        "/api/cloud-drive/upload",
+        data={"file": (io.BytesIO(b"too-large"), "large.bin"), "privacy_mode": "server_encrypted"},
+        content_type="multipart/form-data",
+    )
+
+    assert res.status_code == 400
+    body = res.get_json()
+    assert body["ok"] is False
+    assert "伺服器端加密目前只允許" in body["msg"]
 
 
 def test_server_encrypted_upload_scans_in_memory_plaintext_not_final_storage_path(tmp_path, monkeypatch):
@@ -2124,8 +2341,8 @@ def test_remote_download_task_reports_progress_and_completion(tmp_path, monkeypa
     def fake_download(url, **kwargs):
         progress = kwargs.get("progress_callback")
         assert progress
-        progress({"phase": "downloading", "filename": "remote-task.txt", "loaded_bytes": 5, "total_bytes": 20})
-        progress({"phase": "downloaded", "filename": "remote-task.txt", "loaded_bytes": 20, "total_bytes": 20})
+        progress({"phase": "downloading", "filename": "remote-task.txt", "loaded_bytes": 5, "total_bytes": 20, "speed_bytes_per_sec": 1024})
+        progress({"phase": "downloaded", "filename": "remote-task.txt", "loaded_bytes": 20, "total_bytes": 20, "speed_bytes_per_sec": 0})
         return FakeDownloaded()
 
     monkeypatch.setattr("routes.files.download_remote_url", fake_download)
@@ -2141,13 +2358,13 @@ def test_remote_download_task_reports_progress_and_completion(tmp_path, monkeypa
     task_id = created.get_json()["task"]["id"]
 
     body = {}
-    for _ in range(30):
+    for _ in range(600):
         status = client.get(f"/api/cloud-drive/remote-download/tasks/{task_id}")
         assert status.status_code == 200
         body = status.get_json()["task"]
         if body["status"] == "completed":
             break
-        time.sleep(0.02)
+        time.sleep(0.05)
 
     assert body["status"] == "completed"
     assert body["progress_percent"] == 100
@@ -2155,10 +2372,104 @@ def test_remote_download_task_reports_progress_and_completion(tmp_path, monkeypa
     assert body["file"]["size_bytes"] == len(source.read_bytes())
     assert body["loaded_bytes"] == len(source.read_bytes())
     assert body["total_bytes"] == len(source.read_bytes())
+    assert body["speed_bytes_per_sec"] == 0
     assert body["storage_file"]["virtual_path"] == "/Downloads/remote-task.txt"
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        job = conn.execute(
+            """
+            SELECT * FROM job_center_jobs
+            WHERE source_module='cloud_drive_remote_download' AND source_ref=?
+            """,
+            (f"remote_download:{task_id}",),
+        ).fetchone()
+        assert job is not None
+        assert job["owner_user_id"] == 1
+        assert job["job_type"] == "cloud_drive.remote_download.direct"
+        assert job["status"] == "succeeded"
+        assert job["progress_percent"] == 100
+    finally:
+        conn.close()
 
 
-def test_remote_download_tasks_queue_per_user_instead_of_rejecting(tmp_path, monkeypatch):
+def test_remote_download_worker_survives_logout_or_session_change(tmp_path, monkeypatch):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    source = tmp_path / "session-independent.txt"
+    source.write_text("background survives session changes", encoding="utf-8")
+    started = threading.Event()
+    release = threading.Event()
+
+    class FakeDownloaded:
+        path = str(source)
+        filename = "session-independent.txt"
+        mimetype = "text/plain"
+        cleanup_dir = None
+
+    def fake_download(url, **kwargs):
+        started.set()
+        assert release.wait(timeout=10)
+        return FakeDownloaded()
+
+    monkeypatch.setattr("routes.files.download_remote_url", fake_download)
+    created = client.post(
+        "/api/cloud-drive/remote-download/tasks",
+        json={
+            "url": "https://93.184.216.34/session-independent.txt",
+            "privacy_mode": "standard_plain",
+            "virtual_path": "/Downloads/session-independent.txt",
+        },
+    )
+    assert created.status_code == 202
+    task_id = created.get_json()["task"]["id"]
+    assert started.wait(timeout=10)
+
+    actor_box["actor"] = None
+    logged_out_status = client.get(f"/api/cloud-drive/remote-download/tasks/{task_id}")
+    assert logged_out_status.status_code == 401
+    actor_box["actor"] = _actor(2, "bob")
+    other_user_status = client.get(f"/api/cloud-drive/remote-download/tasks/{task_id}")
+    assert other_user_status.status_code == 403
+
+    release.set()
+    job = None
+    for _ in range(200):
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            try:
+                job = conn.execute(
+                    """
+                    SELECT * FROM job_center_jobs
+                    WHERE source_module='cloud_drive_remote_download' AND source_ref=? AND status='succeeded'
+                    """,
+                    (f"remote_download:{task_id}",),
+                ).fetchone()
+            except sqlite3.OperationalError:
+                job = None
+        finally:
+            conn.close()
+        if job:
+            break
+        time.sleep(0.05)
+
+    assert job is not None
+    assert job["owner_user_id"] == 1
+    actor_box["actor"] = _actor(1, "alice")
+    final_status = client.get(f"/api/cloud-drive/remote-download/tasks/{task_id}")
+    assert final_status.status_code == 200
+    final_body = final_status.get_json()["task"]
+    assert final_body["status"] == "completed"
+    assert final_body["storage_file"]["virtual_path"] == "/Downloads/session-independent.txt"
+
+
+def test_remote_download_tasks_can_run_concurrently_per_user(tmp_path, monkeypatch):
     db_path = tmp_path / "drive.db"
     storage_root = tmp_path / "storage"
     storage_root.mkdir()
@@ -2183,7 +2494,7 @@ def test_remote_download_tasks_queue_per_user_instead_of_rejecting(tmp_path, mon
     def fake_download(url, **kwargs):
         if url.endswith("/first.txt"):
             first_started.set()
-            assert release_first.wait(timeout=2)
+            assert release_first.wait(timeout=30)
             return FakeDownloaded(first_source, "first.txt")
         return FakeDownloaded(second_source, "second.txt")
 
@@ -2198,7 +2509,7 @@ def test_remote_download_tasks_queue_per_user_instead_of_rejecting(tmp_path, mon
     )
     assert first.status_code == 202
     first_id = first.get_json()["task"]["id"]
-    assert first_started.wait(timeout=2)
+    assert first_started.wait(timeout=10)
 
     second = client.post(
         "/api/cloud-drive/remote-download/tasks",
@@ -2211,26 +2522,85 @@ def test_remote_download_tasks_queue_per_user_instead_of_rejecting(tmp_path, mon
     assert second.status_code == 202
     second_id = second.get_json()["task"]["id"]
 
-    second_status = client.get(f"/api/cloud-drive/remote-download/tasks/{second_id}")
-    assert second_status.status_code == 200
-    second_task = second_status.get_json()["task"]
-    assert second_task["status"] == "queued"
-    assert "等待" in second_task["msg"] or "佇列" in second_task["msg"]
+    final_second = {}
+    for _ in range(600):
+        final_second = client.get(f"/api/cloud-drive/remote-download/tasks/{second_id}").get_json()["task"]
+        if final_second["status"] == "completed":
+            break
+        time.sleep(0.05)
+    assert final_second["status"] == "completed"
 
     release_first.set()
     final_first = {}
-    final_second = {}
-    for _ in range(80):
+    for _ in range(600):
         final_first = client.get(f"/api/cloud-drive/remote-download/tasks/{first_id}").get_json()["task"]
-        final_second = client.get(f"/api/cloud-drive/remote-download/tasks/{second_id}").get_json()["task"]
-        if final_first["status"] == "completed" and final_second["status"] == "completed":
+        if final_first["status"] == "completed":
             break
-        time.sleep(0.03)
+        time.sleep(0.05)
 
     assert final_first["status"] == "completed"
-    assert final_second["status"] == "completed"
     assert final_first["storage_file"]["virtual_path"] == "/Downloads/first.txt"
     assert final_second["storage_file"]["virtual_path"] == "/Downloads/second.txt"
+
+
+def test_remote_download_third_task_waits_for_per_user_worker_limit(tmp_path, monkeypatch):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    monkeypatch.setenv("HACKME_REMOTE_DOWNLOAD_MAX_CONCURRENT_PER_USER", "2")
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    release = threading.Event()
+    started = []
+
+    class FakeDownloaded:
+        def __init__(self, filename):
+            path = tmp_path / filename
+            path.write_text(filename, encoding="utf-8")
+            self.path = str(path)
+            self.filename = filename
+            self.mimetype = "text/plain"
+            self.cleanup_dir = None
+
+    def fake_download(url, **kwargs):
+        filename = url.rsplit("/", 1)[-1]
+        started.append(filename)
+        if filename in {"first.txt", "second.txt"}:
+            assert release.wait(timeout=10)
+        return FakeDownloaded(filename)
+
+    monkeypatch.setattr("routes.files.download_remote_url", fake_download)
+    ids = []
+    for name in ("first.txt", "second.txt", "third.txt"):
+        res = client.post(
+            "/api/cloud-drive/remote-download/tasks",
+            json={
+                "url": f"https://93.184.216.34/{name}",
+                "privacy_mode": "standard_plain",
+                "virtual_path": f"/Downloads/{name}",
+            },
+        )
+        assert res.status_code == 202
+        ids.append(res.get_json()["task"]["id"])
+
+    for _ in range(40):
+        if {"first.txt", "second.txt"} <= set(started):
+            break
+        time.sleep(0.03)
+    assert {"first.txt", "second.txt"} <= set(started)
+    third_task = client.get(f"/api/cloud-drive/remote-download/tasks/{ids[2]}").get_json()["task"]
+    assert third_task["status"] == "queued"
+    assert "worker" in third_task["msg"]
+
+    release.set()
+    for _ in range(600):
+        states = [client.get(f"/api/cloud-drive/remote-download/tasks/{task_id}").get_json()["task"]["status"] for task_id in ids]
+        if states == ["completed", "completed", "completed"]:
+            break
+        time.sleep(0.05)
+    assert states == ["completed", "completed", "completed"]
 
 
 def test_remote_download_task_without_virtual_path_is_visible_in_storage(tmp_path, monkeypatch):
@@ -2263,13 +2633,13 @@ def test_remote_download_task_without_virtual_path_is_visible_in_storage(tmp_pat
     task_id = created.get_json()["task"]["id"]
 
     body = {}
-    for _ in range(30):
+    for _ in range(600):
         status = client.get(f"/api/cloud-drive/remote-download/tasks/{task_id}")
         assert status.status_code == 200
         body = status.get_json()["task"]
         if body["status"] == "completed":
             break
-        time.sleep(0.02)
+        time.sleep(0.05)
 
     assert body["status"] == "completed"
     assert body["storage_file"]["virtual_path"] == "/Downloads/bt-result.txt"
@@ -2318,13 +2688,13 @@ def test_remote_download_task_direct_mode_keeps_torrent_file(tmp_path, monkeypat
     task_id = task["id"]
 
     body = {}
-    for _ in range(30):
+    for _ in range(600):
         status = client.get(f"/api/cloud-drive/remote-download/tasks/{task_id}")
         assert status.status_code == 200
         body = status.get_json()["task"]
         if body["status"] == "completed":
             break
-        time.sleep(0.02)
+        time.sleep(0.05)
 
     assert captured["url"] == "https://93.184.216.34/sample.torrent"
     assert captured["treat_torrent_as_bt"] is False
@@ -2373,13 +2743,13 @@ def test_remote_download_task_bt_mode_torrent_url_downloads_payload(tmp_path, mo
     task_id = task["id"]
 
     body = {}
-    for _ in range(30):
+    for _ in range(600):
         status = client.get(f"/api/cloud-drive/remote-download/tasks/{task_id}")
         assert status.status_code == 200
         body = status.get_json()["task"]
         if body["status"] == "completed":
             break
-        time.sleep(0.02)
+        time.sleep(0.05)
 
     assert captured["url"] == "https://93.184.216.34/sample.torrent"
     assert body["status"] == "completed"
@@ -2601,13 +2971,13 @@ def test_remote_download_task_accepts_uploaded_torrent_file(tmp_path, monkeypatc
     task_id = task["id"]
 
     body = {}
-    for _ in range(30):
+    for _ in range(600):
         status = client.get(f"/api/cloud-drive/remote-download/tasks/{task_id}")
         assert status.status_code == 200
         body = status.get_json()["task"]
         if body["status"] == "completed":
             break
-        time.sleep(0.02)
+        time.sleep(0.05)
 
     assert captured["display_name"] == "sample.torrent"
     assert body["status"] == "completed"

@@ -151,7 +151,7 @@ def verify_open_order_locks(service, conn, errors):
         funding_mode = order["funding_mode"] if "funding_mode" in order.keys() else "points_chain"
         if funding_mode == "root_simulated":
             continue
-        if order["side"] == "buy":
+        if order["status"] in OPEN_ORDER_STATUSES and int(order["frozen_points"] or 0) > 0:
             expected_total = int(order["trial_frozen_points"] or 0) + int(order["chain_frozen_points"] or 0)
             actual_total = int(order["frozen_points"] or 0) if order["status"] in OPEN_ORDER_STATUSES else 0
             if order["status"] in OPEN_ORDER_STATUSES and expected_total != actual_total:
@@ -165,8 +165,8 @@ def verify_open_order_locks(service, conn, errors):
                 })
         expected = (
             int(order["chain_frozen_points"] or 0)
-            if order["side"] == "buy" and order["status"] in OPEN_ORDER_STATUSES and "chain_frozen_points" in order.keys()
-            else (int(order["frozen_points"] or 0) if order["side"] == "buy" and order["status"] in OPEN_ORDER_STATUSES else 0)
+            if order["status"] in OPEN_ORDER_STATUSES and "chain_frozen_points" in order.keys()
+            else (int(order["frozen_points"] or 0) if order["status"] in OPEN_ORDER_STATUSES else 0)
         )
         actual = ledger_net.get(order["order_uuid"], 0)
         if expected != actual:
@@ -183,6 +183,40 @@ def verify_open_order_locks(service, conn, errors):
         if order["side"] == "sell" and order["status"] in OPEN_ORDER_STATUSES:
             key = (int(order["user_id"]), order["market_symbol"])
             locked_expected[key] = locked_expected.get(key, 0) + int(order["quantity_units"])
+    grid_reserved_expected = {}
+    grid_rows = conn.execute(
+        f"""
+        SELECT gb.user_id,
+               gb.market_symbol,
+               go.side,
+               go.status AS grid_status,
+               COALESCE(go.filled_quantity_units, 0) AS grid_filled_units,
+               COALESCE(o.filled_quantity_units, 0) AS order_filled_units,
+               o.status AS order_status
+        FROM trading_grid_orders go
+        JOIN trading_grid_bots gb ON gb.id = go.grid_bot_id
+        LEFT JOIN {orders_table} o ON o.order_uuid = go.trading_order_uuid
+        WHERE go.status='filled' OR o.status='filled'
+        ORDER BY go.id ASC
+        """
+    ).fetchall()
+    grid_filled = {}
+    for row in grid_rows:
+        key = (int(row["user_id"]), row["market_symbol"])
+        side = str(row["side"])
+        filled_units = int(row["grid_filled_units"] or 0) or int(row["order_filled_units"] or 0)
+        grid_filled.setdefault(key, {"buy": 0, "sell": 0})
+        grid_filled[key][side] = grid_filled[key].get(side, 0) + filled_units
+    open_grid_sells = {}
+    for order in order_rows:
+        if order["side"] == "sell" and order["status"] in OPEN_ORDER_STATUSES and str(order["reason"] or "") == "GRID_ORDER":
+            key = (int(order["user_id"]), order["market_symbol"])
+            open_grid_sells[key] = open_grid_sells.get(key, 0) + int(order["quantity_units"] or 0)
+    for key, totals in grid_filled.items():
+        reserved = max(0, int(totals.get("buy", 0)) - int(totals.get("sell", 0)) - int(open_grid_sells.get(key, 0)))
+        if reserved:
+            grid_reserved_expected[key] = reserved
+            locked_expected[key] = locked_expected.get(key, 0) + reserved
     for row in conn.execute(
         f"SELECT user_id, market_symbol, locked_quantity_units FROM {positions_table} ORDER BY user_id, market_symbol"
     ).fetchall():
@@ -196,6 +230,7 @@ def verify_open_order_locks(service, conn, errors):
                 "market_symbol": key[1],
                 "expected_locked_quantity_units": expected,
                 "actual_locked_quantity_units": actual,
+                "grid_reserved_quantity_units": grid_reserved_expected.get(key, 0),
             })
     for key, expected in locked_expected.items():
         if expected:
@@ -307,8 +342,8 @@ def verify_sim_accounts(service, conn, errors):
         SELECT user_id, frozen_points
         FROM {orders_table}
         WHERE funding_mode='root_simulated'
-          AND side='buy'
           AND status IN ('open', 'partially_filled')
+          AND frozen_points > 0
         """
     ).fetchall():
         user_id = int(order["user_id"])
@@ -433,7 +468,6 @@ def verify_spot_realized_pnl(service, conn, errors):
             int(row["gross_proceeds_points"] or 0)
             - int(row["sell_fee_points"] or 0)
             - int(row["gross_cost_points"] or 0)
-            - int(row["buy_fee_estimate_points"] or 0)
         )
         if int(row["net_pnl_points"] or 0) != expected:
             errors.append({

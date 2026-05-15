@@ -217,6 +217,26 @@ service-layer settlement semantics.
 - `POST /api/root/trading/background/resume`
 - `POST /api/root/trading/background/run-once`
 
+## Implemented Sitewide APIs
+
+These lightweight read-only APIs back the root PointsChain wallet tabs without
+running large calculations in the browser:
+
+- `GET /api/root/trading/sitewide/pools`
+  - reserve pool balance
+  - funding pool availability, outstanding principal, utilization, APR
+  - retained fees, retained interest, open margin principal, micropoints carry
+  - latest reserve pool events
+- `GET /api/root/trading/sitewide/user-positions`
+  - non-root member wallet totals
+  - open spot positions
+  - open margin positions
+  - open order count and frozen order points
+
+Both routes are root-only and read-only. They exclude root simulated trading
+positions so production PointsChain supply and member exposure are not mixed
+with root simulation balances.
+
 ## Planned Sitewide APIs
 
 These routes describe the intended drilldown surface. Do not document them as

@@ -12,6 +12,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from flask import Flask, jsonify, make_response
 
 import routes.videos as video_routes
+import scripts.media.hls_prepare_worker as hls_prepare_worker
 from services.media.e2ee_streaming import _normalize_manifest, resolve_e2ee_chunk_response
 from services.media import streaming as media_streaming
 from routes.videos import register_video_routes
@@ -58,7 +59,7 @@ def _init_db(db_path):
     conn.close()
 
 
-def _build_app(db_path, storage_root, fernet, current_user, *, audit_func=None):
+def _build_app(db_path, storage_root, fernet, current_user, *, audit_func=None, extra_deps=None):
     public_dir = str(Path(__file__).resolve().parents[3] / "public")
     app = Flask(__name__, static_folder=public_dir, static_url_path="")
     app.testing = True
@@ -69,7 +70,7 @@ def _build_app(db_path, storage_root, fernet, current_user, *, audit_func=None):
         conn.row_factory = sqlite3.Row
         return conn
 
-    register_video_routes(app, {
+    deps = {
         "STORAGE_DIR": str(storage_root),
         "audit": audit_func or (lambda *args, **kwargs: None),
         "get_client_ip": lambda: "127.0.0.1",
@@ -88,7 +89,9 @@ def _build_app(db_path, storage_root, fernet, current_user, *, audit_func=None):
         "require_csrf": _passthrough,
         "require_csrf_safe": _passthrough,
         "server_file_fernet": fernet,
-    })
+    }
+    deps.update(extra_deps or {})
+    register_video_routes(app, deps)
     return app
 
 
@@ -641,7 +644,6 @@ def test_media_prepare_stream_route_requires_owner(tmp_path, monkeypatch):
     finally:
         conn.close()
 
-    monkeypatch.setattr(video_routes, "prepare_stream_asset", lambda *args, **kwargs: {"status": "ready"})
     response = viewer_client.post("/api/media/private-video/prepare-stream")
 
     assert response.status_code == 403
@@ -662,11 +664,26 @@ def test_video_publish_auto_prepares_stream_asset_without_blocking_publish(tmp_p
     storage_root.mkdir()
     _init_db(db_path)
     fernet = Fernet(Fernet.generate_key())
+    launched = {}
+
+    class FakePopen:
+        def __init__(self, cmd, **kwargs):
+            launched["cmd"] = list(cmd)
+            launched["kwargs"] = dict(kwargs)
+
+    monkeypatch.setattr(video_routes.subprocess, "Popen", FakePopen)
+    monkeypatch.setattr(
+        video_routes,
+        "prepare_stream_asset",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not prepare HLS inside Flask request")),
+        raising=False,
+    )
     owner_client = _build_app(
         db_path,
         storage_root,
         fernet,
         current_user={"id": 1, "username": "alice", "role": "user", "member_level": "trusted", "effective_level": "trusted"},
+        extra_deps={"DB_PATH": str(db_path), "LOG_DIR": str(tmp_path / "logs")},
     ).test_client()
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -676,13 +693,6 @@ def test_video_publish_auto_prepares_stream_asset_without_blocking_publish(tmp_p
     finally:
         conn.close()
 
-    called = {}
-
-    def fake_prepare(conn, *, file_row, storage_root, server_file_fernet=None, ffprobe_bin="ffprobe", ffmpeg_bin="ffmpeg"):
-        called["file_id"] = file_row["id"]
-        return {"status": "ready", "master_manifest_path": "media_derivatives/video-1/master.m3u8"}
-
-    monkeypatch.setattr(video_routes, "prepare_stream_asset", fake_prepare)
     response = owner_client.post(
         "/api/videos/publish",
         json={
@@ -694,23 +704,111 @@ def test_video_publish_auto_prepares_stream_asset_without_blocking_publish(tmp_p
     body = response.get_json()
 
     assert response.status_code == 200
-    assert called["file_id"] == "video-1"
     assert body["video"]["title"] == "Movie"
-    assert body["stream_asset"]["status"] == "ready"
+    assert body["video"]["status"] == "processing"
+    assert body["stream_asset"]["status"] == "processing"
     assert body["stream_warning"] == ""
+    assert "scripts/media/hls_prepare_worker.py" in " ".join(launched["cmd"])
+    assert "--file-id" in launched["cmd"]
+    assert "video-1" in launched["cmd"]
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        job = conn.execute(
+            """
+            SELECT * FROM job_center_jobs
+            WHERE source_module='media_hls_prepare' AND source_ref='media_stream:video-1'
+            """,
+        ).fetchone()
+        assert job is not None
+        assert job["owner_user_id"] == 1
+        assert job["status"] == "running"
+        assert job["progress_percent"] == 10
+        assert job["stage"] == "worker_started"
+        assert "Movie" in job["title"]
+    finally:
+        conn.close()
+
+    browse = owner_client.get("/api/videos")
+    assert browse.status_code == 200
+    assert browse.get_json()["videos"] == []
 
 
-def test_video_publish_keeps_success_when_auto_prepare_fails(tmp_path, monkeypatch):
+def test_hls_prepare_worker_updates_job_center_until_ready(tmp_path, monkeypatch):
+    db_path = tmp_path / "worker-job-center.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        _seed_uploaded_file(conn, storage_root, file_id="worker-video", owner_user_id=1, filename="worker.mp4", mime="video/mp4")
+        conn.commit()
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(media_streaming, "_run_probe", lambda *args, **kwargs: _fake_probe_payload("video"))
+    monkeypatch.setattr(media_streaming, "_run_ffmpeg_hls", _fake_hls_package)
+
+    rc = hls_prepare_worker.main([
+        "--db-path",
+        str(db_path),
+        "--storage-root",
+        str(storage_root),
+        "--file-id",
+        "worker-video",
+        "--owner-user-id",
+        "1",
+        "--title",
+        "Worker Movie",
+        "--ffmpeg-bin",
+        "fake-ffmpeg",
+        "--ffprobe-bin",
+        "fake-ffprobe",
+    ])
+
+    assert rc == 0
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        job = conn.execute(
+            """
+            SELECT * FROM job_center_jobs
+            WHERE source_module='media_hls_prepare' AND source_ref='media_stream:worker-video'
+            """,
+        ).fetchone()
+        assert job is not None
+        assert job["status"] == "succeeded"
+        assert job["progress_percent"] == 100
+        assert job["stage"] == "ready"
+        assert "Worker Movie" in job["title"]
+        events = conn.execute(
+            "SELECT event_type, stage FROM job_center_events WHERE job_uuid=? ORDER BY id",
+            (job["job_uuid"],),
+        ).fetchall()
+        assert ("created", "transcoding") in [(row["event_type"], row["stage"]) for row in events]
+        assert ("progress", "ready") in [(row["event_type"], row["stage"]) for row in events]
+    finally:
+        conn.close()
+
+
+def test_video_publish_keeps_success_when_background_worker_launch_fails(tmp_path, monkeypatch):
     db_path = tmp_path / "publish-route-fail.db"
     storage_root = tmp_path / "storage"
     storage_root.mkdir()
     _init_db(db_path)
     fernet = Fernet(Fernet.generate_key())
+    monkeypatch.setattr(
+        video_routes.subprocess,
+        "Popen",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("worker spawn failed")),
+    )
     owner_client = _build_app(
         db_path,
         storage_root,
         fernet,
         current_user={"id": 1, "username": "alice", "role": "user", "member_level": "trusted", "effective_level": "trusted"},
+        extra_deps={"DB_PATH": str(db_path), "LOG_DIR": str(tmp_path / "logs")},
     ).test_client()
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -720,7 +818,6 @@ def test_video_publish_keeps_success_when_auto_prepare_fails(tmp_path, monkeypat
     finally:
         conn.close()
 
-    monkeypatch.setattr(video_routes, "prepare_stream_asset", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("ffmpeg missing")))
     response = owner_client.post(
         "/api/videos/publish",
         json={
@@ -733,8 +830,24 @@ def test_video_publish_keeps_success_when_auto_prepare_fails(tmp_path, monkeypat
 
     assert response.status_code == 200
     assert body["video"]["title"] == "Movie 2"
-    assert body["stream_asset"] is None
-    assert "HLS 串流準備失敗" in body["stream_warning"]
+    assert body["video"]["status"] == "processing"
+    assert body["stream_asset"]["status"] == "processing"
+    assert "HLS 背景處理程序啟動失敗" in body["stream_warning"]
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        job = conn.execute(
+            """
+            SELECT * FROM job_center_jobs
+            WHERE source_module='media_hls_prepare' AND source_ref='media_stream:video-2'
+            """,
+        ).fetchone()
+        assert job is not None
+        assert job["status"] == "failed"
+        assert job["stage"] == "launch_failed"
+        assert "HLS 背景處理程序啟動失敗" in job["error_message"]
+    finally:
+        conn.close()
 
 
 def test_video_upload_server_encrypted_auto_prepares_stream_asset(tmp_path, monkeypatch):
@@ -742,22 +855,26 @@ def test_video_upload_server_encrypted_auto_prepares_stream_asset(tmp_path, monk
     storage_root = tmp_path / "storage"
     storage_root.mkdir()
     _init_db(db_path)
-    fernet = Fernet(Fernet.generate_key())
+    server_key = Fernet.generate_key()
+    key_path = tmp_path / "server-file.key"
+    key_path.write_text(server_key.decode("utf-8"), encoding="utf-8")
+    fernet = Fernet(server_key)
+    launched = {}
+
+    class FakePopen:
+        def __init__(self, cmd, **kwargs):
+            launched["cmd"] = list(cmd)
+            launched["kwargs"] = dict(kwargs)
+
+    monkeypatch.setattr(video_routes.subprocess, "Popen", FakePopen)
     owner_client = _build_app(
         db_path,
         storage_root,
         fernet,
         current_user={"id": 1, "username": "alice", "role": "user", "member_level": "trusted", "effective_level": "trusted"},
+        extra_deps={"DB_PATH": str(db_path), "LOG_DIR": str(tmp_path / "logs"), "SERVER_FILE_KEY_PATH": str(key_path)},
     ).test_client()
 
-    called = {}
-
-    def fake_prepare(conn, *, file_row, storage_root, server_file_fernet=None, ffprobe_bin="ffprobe", ffmpeg_bin="ffmpeg"):
-        called["file_id"] = file_row["id"]
-        called["privacy_mode"] = file_row["privacy_mode"]
-        return {"status": "ready", "master_manifest_path": f"media_derivatives/{file_row['id']}/master.m3u8"}
-
-    monkeypatch.setattr(video_routes, "prepare_stream_asset", fake_prepare)
     response = owner_client.post(
         "/api/videos/upload",
         data={
@@ -771,10 +888,92 @@ def test_video_upload_server_encrypted_auto_prepares_stream_asset(tmp_path, monk
     body = response.get_json()
 
     assert response.status_code == 200
-    assert called["file_id"] == body["file"]["file_id"]
-    assert called["privacy_mode"] == "server_encrypted"
-    assert body["stream_asset"]["status"] == "ready"
+    assert body["stream_asset"]["status"] == "processing"
     assert body["stream_warning"] == ""
+    assert body["video"]["status"] == "processing"
+    assert body["file"]["file_id"] in launched["cmd"]
+    assert "--server-file-key-path" in launched["cmd"]
+    assert str(key_path) in launched["cmd"]
+
+
+def test_server_encrypted_video_stream_requires_prepared_hls_not_main_process_decrypt(tmp_path):
+    db_path = tmp_path / "server-encrypted-stream.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    owner = {"id": 1, "username": "alice", "role": "user", "member_level": "trusted", "effective_level": "trusted"}
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        _seed_uploaded_file(
+            conn,
+            storage_root,
+            file_id="server-encrypted-video",
+            owner_user_id=1,
+            filename="private.mp4",
+            mime="video/mp4",
+            privacy_mode="server_encrypted",
+            payload=b"encrypted-placeholder",
+        )
+        video = publish_video(
+            conn,
+            actor=owner,
+            cloud_file_id="server-encrypted-video",
+            title="Private HLS only",
+            visibility="unlisted",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    owner_client = _build_app(db_path, storage_root, Fernet(Fernet.generate_key()), current_user=owner).test_client()
+    direct = owner_client.get(f"/api/videos/{video['id']}/stream")
+    assert direct.status_code == 409
+    assert direct.get_json()["error"] == "server_encrypted_hls_required"
+
+    token = video["share_url"].rsplit("/", 1)[-1]
+    shared_client = _build_app(db_path, storage_root, Fernet(Fernet.generate_key()), current_user=None).test_client()
+    shared = shared_client.get(f"/api/videos/shared/{token}/stream")
+    assert shared.status_code == 409
+    assert shared.get_json()["error"] == "server_encrypted_hls_required"
+
+
+def test_e2ee_stream_v2_bundle_upload_has_inline_size_guard(tmp_path, monkeypatch):
+    db_path = tmp_path / "e2ee-bundle-limit.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    monkeypatch.setenv("HACKME_E2EE_STREAM_BUNDLE_MAX_BYTES", "4")
+    owner = {"id": 1, "username": "alice", "role": "user", "member_level": "trusted", "effective_level": "trusted"}
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        _seed_uploaded_file(
+            conn,
+            storage_root,
+            file_id="e2ee-video-limit",
+            owner_user_id=1,
+            filename="secret.mp4",
+            mime="video/mp4",
+            privacy_mode="e2ee",
+            payload=b"ciphertext",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    client = _build_app(db_path, storage_root, Fernet(Fernet.generate_key()), current_user=owner).test_client()
+    response = client.post(
+        "/api/media/e2ee-video-limit/e2ee-stream-v2",
+        data={
+            "bundle": (io.BytesIO(b"12345"), "bundle.bin", "application/octet-stream"),
+            "manifest_json": "{}",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 413
+    assert response.get_json()["error"] == "e2ee_stream_bundle_too_large"
 
 
 def test_prepare_stream_auto_policy_distinguishes_plain_server_encrypted_and_e2ee(tmp_path):
@@ -1262,6 +1461,22 @@ def test_shared_e2ee_stream_v2_manifest_and_chunk_routes_work_and_stay_off_hls(t
     )
     assert prepared.status_code == 200
     assert prepared.get_json()["asset"]["available"] is True
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        job = conn.execute(
+            """
+            SELECT * FROM job_center_jobs
+            WHERE source_module='media_e2ee_stream_v2' AND source_ref='e2ee_stream_v2:e2ee-video'
+            """,
+        ).fetchone()
+        assert job is not None
+        assert job["owner_user_id"] == 1
+        assert job["status"] == "succeeded"
+        assert job["progress_percent"] == 100
+        assert job["stage"] == "ready"
+    finally:
+        conn.close()
 
     viewer = _build_app(db_path, storage_root, Fernet(Fernet.generate_key()), current_user=None).test_client()
     unlocked = viewer.post(f"/api/videos/shared/{token}/unlock", json={"password": "SharePass123"})

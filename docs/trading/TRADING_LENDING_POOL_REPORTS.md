@@ -81,9 +81,12 @@ Fee types:
 - `liquidation_fee`
 - `transfer_or_future_fee_if_any`
 
-The report should reconcile to fills and ledger entries. If a fee is displayed
-as points-equivalent, the price snapshot or conversion context used for that
-equivalence must be traceable.
+The report should reconcile to fills, open fee micropoints, and ledger entries.
+Accumulated fees stay decimal internally; reporting can show exact points, but
+integer fee income is recognized only at settlement boundaries such as spot
+sell, bot stop sell, margin close, or liquidation. Margin open fee is computed
+from full notional. Example: using 100 points of collateral to borrow 400 points
+and buy 500 points notional accrues the margin-open fee on 500 points.
 
 ## C. Sitewide Interest Income
 
@@ -102,10 +105,10 @@ Daily/period rows:
 
 The report must surface:
 
-- accrued but not yet whole-point `micropoints`
-- already charged integer points
+- accrued but not yet settled `micropoints`
+- integer points already settled at margin close or liquidation
 - next scheduled interest time
-- failed interest charges and whether they were capitalized into position cost
+- settlement failures, if any
 
 This protects the current micropoints design: small principals must not be
 overcharged by rounding every period up to one point.

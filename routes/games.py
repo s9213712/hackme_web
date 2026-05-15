@@ -50,6 +50,7 @@ from services.games.chess_nn import (
 )
 from services.games.chess_opening_book import book_move as chess_book_move
 from services.games.chess_stockfish_teacher import (
+    DEFAULT_RUNTIME_DEPTH as DEFAULT_STOCKFISH_DEPTH,
     STOCKFISH_DIFFICULTY,
     choose_stockfish_move,
     stockfish_available,
@@ -66,6 +67,8 @@ from services.games.chess_replay_buffer import collect_match_replay
 from services.points_chain import DISPLAY_CURRENCY
 
 GAME_KEY = "chess"
+MIN_STOCKFISH_DEPTH = 1
+MAX_STOCKFISH_DEPTH = 20
 SOLO_GAME_KEYS = {
     "sudoku",
     "minesweeper",
@@ -148,6 +151,39 @@ def completed_week_start(week_key):
 
 def default_board_json():
     return json.dumps(initial_board(), ensure_ascii=False, sort_keys=True)
+
+
+def normalize_stockfish_depth(value, *, default=DEFAULT_STOCKFISH_DEPTH):
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = int(default)
+    return max(MIN_STOCKFISH_DEPTH, min(MAX_STOCKFISH_DEPTH, parsed))
+
+
+def computer_config_for_new_match(difficulty, payload):
+    if difficulty != STOCKFISH_DIFFICULTY:
+        return {}
+    payload = payload or {}
+    return {
+        "stockfish_depth": normalize_stockfish_depth(
+            payload.get("stockfish_depth", payload.get("depth", DEFAULT_STOCKFISH_DEPTH))
+        )
+    }
+
+
+def load_computer_config(row):
+    raw = "{}"
+    try:
+        if row is not None and "computer_config_json" in row.keys():
+            raw = row["computer_config_json"] or "{}"
+    except Exception:
+        raw = "{}"
+    try:
+        data = json.loads(raw)
+    except Exception:
+        data = {}
+    return data if isinstance(data, dict) else {}
 
 
 def normalize_computer_difficulty(value):
@@ -237,10 +273,11 @@ def _choose_heuristic_move(board, side, difficulty="normal"):
     return random.choice(best_moves)
 
 
-def choose_computer_move(board, side, difficulty="normal", learning_store=None, move_history=None):
+def choose_computer_move(board, side, difficulty="normal", learning_store=None, move_history=None, computer_config=None):
     difficulty = normalize_computer_difficulty(difficulty) or "normal"
     if difficulty == STOCKFISH_DIFFICULTY:
-        move = choose_stockfish_move(board, side)
+        depth = normalize_stockfish_depth((computer_config or {}).get("stockfish_depth"))
+        move = choose_stockfish_move(board, side, depth=depth)
         if move:
             return move
     if difficulty == EXPERIMENT_DIFFICULTY and learning_store is not None:
@@ -315,6 +352,7 @@ def game_schema_sql():
         black_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
         human_side TEXT NOT NULL DEFAULT 'white',
         computer_difficulty TEXT NOT NULL DEFAULT 'normal',
+        computer_config_json TEXT NOT NULL DEFAULT '{{}}',
         current_turn TEXT NOT NULL DEFAULT 'white',
         board_json TEXT NOT NULL,
         move_history_json TEXT NOT NULL DEFAULT '[]',
@@ -515,6 +553,7 @@ def rebuild_game_matches_table(conn):
                 black_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
                 human_side TEXT NOT NULL DEFAULT 'white',
                 computer_difficulty TEXT NOT NULL DEFAULT 'normal',
+                computer_config_json TEXT NOT NULL DEFAULT '{}',
                 current_turn TEXT NOT NULL DEFAULT 'white',
                 board_json TEXT NOT NULL,
                 move_history_json TEXT NOT NULL DEFAULT '[]',
@@ -546,7 +585,7 @@ def rebuild_game_matches_table(conn):
             f"""
             INSERT INTO game_matches (
                 id, game_key, mode, status, white_user_id, black_user_id, human_side,
-                computer_difficulty, current_turn, board_json, move_history_json,
+                computer_difficulty, computer_config_json, current_turn, board_json, move_history_json,
                 winner_user_id, result_reason, draw_offer_by_user_id, draw_offer_at, leaderboard_week, created_at, updated_at,
                 finished_at, white_deleted_at, black_deleted_at
             )
@@ -559,6 +598,7 @@ def rebuild_game_matches_table(conn):
                 {old_expr('black_user_id', 'NULL')},
                 COALESCE({old_expr('human_side', "'white'")}, 'white'),
                 COALESCE({old_expr('computer_difficulty', "'normal'")}, 'normal'),
+                COALESCE({old_expr('computer_config_json', "'{{}}'")}, '{{}}'),
                 COALESCE({old_expr('current_turn', "'white'")}, 'white'),
                 board_json,
                 COALESCE({old_expr('move_history_json', "'[]'")}, '[]'),
@@ -627,6 +667,8 @@ def ensure_game_schema(conn):
         conn.execute("ALTER TABLE game_matches ADD COLUMN human_side TEXT NOT NULL DEFAULT 'white'")
     if "computer_difficulty" not in cols:
         conn.execute("ALTER TABLE game_matches ADD COLUMN computer_difficulty TEXT NOT NULL DEFAULT 'easy'")
+    if "computer_config_json" not in cols:
+        conn.execute("ALTER TABLE game_matches ADD COLUMN computer_config_json TEXT NOT NULL DEFAULT '{}'")
     if "draw_offer_by_user_id" not in cols:
         conn.execute("ALTER TABLE game_matches ADD COLUMN draw_offer_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL")
     if "draw_offer_at" not in cols:
@@ -668,6 +710,12 @@ def serialize_match(row, actor_id=None):
     human_side = row["human_side"] if "human_side" in row.keys() else "white"
     computer_difficulty = row["computer_difficulty"] if "computer_difficulty" in row.keys() else "normal"
     computer_difficulty = normalize_stored_computer_difficulty(computer_difficulty)
+    computer_config = load_computer_config(row)
+    stockfish_depth = (
+        normalize_stockfish_depth(computer_config.get("stockfish_depth"))
+        if computer_difficulty == STOCKFISH_DIFFICULTY
+        else None
+    )
     if actor_id:
         if row["mode"] == "computer" and int(row["white_user_id"]) == int(actor_id):
             side = human_side
@@ -701,6 +749,8 @@ def serialize_match(row, actor_id=None):
         "black_username": black_username,
         "human_side": human_side,
         "computer_difficulty": computer_difficulty,
+        "computer_config": computer_config,
+        "stockfish_depth": stockfish_depth,
         "current_turn": row["current_turn"],
         "board": board,
         "board_rows": board_rows(board),
@@ -1924,6 +1974,7 @@ def register_games_routes(app, deps):
         difficulty = normalize_computer_difficulty(data.get("difficulty") or data.get("computer_difficulty"))
         if difficulty is None:
             return json_resp({"ok": False, "msg": "請選擇有效的電腦難度"}), 400
+        computer_config = computer_config_for_new_match(difficulty, data)
         conn = get_db()
         try:
             ensure_game_schema(conn)
@@ -1934,7 +1985,13 @@ def register_games_routes(app, deps):
             if human_side == "black":
                 opening_moves = legal_moves(board, "white")
                 if opening_moves:
-                    computer_move = choose_computer_move(board, "white", difficulty, learning_store=chess_engine_store)
+                    computer_move = choose_computer_move(
+                        board,
+                        "white",
+                        difficulty,
+                        learning_store=chess_engine_store,
+                        computer_config=computer_config,
+                    )
                     applied = validate_move(board, "white", computer_move["from"], computer_move["to"], computer_move.get("promotion"))
                     board = applied["board"]
                     history.append({
@@ -1951,15 +2008,16 @@ def register_games_routes(app, deps):
             cur = conn.execute(
                 """
                 INSERT INTO game_matches (
-                    game_key, mode, status, white_user_id, black_user_id, human_side, computer_difficulty, current_turn,
+                    game_key, mode, status, white_user_id, black_user_id, human_side, computer_difficulty, computer_config_json, current_turn,
                     board_json, move_history_json, created_at, updated_at
-                ) VALUES (?, 'computer', 'active', ?, NULL, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, 'computer', 'active', ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     GAME_KEY,
                     int(actor["id"]),
                     human_side,
                     difficulty,
+                    json.dumps(computer_config, ensure_ascii=False, sort_keys=True),
                     current_turn,
                     json.dumps(board, ensure_ascii=False, sort_keys=True),
                     json.dumps(history, ensure_ascii=False),
@@ -2158,6 +2216,7 @@ def register_games_routes(app, deps):
             status_info = game_status(board, next_turn)
             human_side = row["human_side"] if "human_side" in row.keys() else "white"
             computer_difficulty = row["computer_difficulty"] if "computer_difficulty" in row.keys() else "normal"
+            computer_config = load_computer_config(row)
             if row["mode"] == "computer" and status_info["status"] == "active" and next_turn != human_side:
                 computer_side = next_turn
                 computer_move = choose_computer_move(
@@ -2166,6 +2225,7 @@ def register_games_routes(app, deps):
                     computer_difficulty,
                     learning_store=chess_engine_store,
                     move_history=history,
+                    computer_config=computer_config,
                 )
                 if computer_move:
                     computer_applied = validate_move(board, computer_side, computer_move["from"], computer_move["to"], computer_move.get("promotion"))

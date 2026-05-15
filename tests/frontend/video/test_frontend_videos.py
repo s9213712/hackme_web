@@ -14,7 +14,17 @@ def test_video_platform_accepts_audio_media_in_ui():
     assert 'accept="image/*"' in index_html
     assert "發布影片或音樂" in index_html
     assert "雲端硬碟影音" in index_html
+    assert 'id="video-search-form"' in index_html
+    assert 'id="video-search-input"' in index_html
+    assert 'id="video-search-status"' in index_html
     assert "function isCloudMediaFile" in videos_js
+    assert "searchQuery" in videos_js
+    assert "normalizeVideoSearchQuery" in videos_js
+    assert "syncVideoSearchControls" in videos_js
+    assert "submitVideoSearch" in videos_js
+    assert "clearVideoSearch" in videos_js
+    assert "params.set(\"q\", videoState.searchQuery)" in videos_js
+    assert "找不到與" in videos_js
     assert "let videoPendingPublishSelection = null;" in videos_js
     assert "async function openVideoPublishFromDrive(fileId, options = {})" in videos_js
     assert "applyVideoPublishDriveSelection" in videos_js
@@ -51,6 +61,9 @@ def test_video_platform_accepts_audio_media_in_ui():
     assert "prepareVideoE2eeShareArtifacts" in videos_js
     assert "buildVideoE2eeStreamV2Package" in videos_js
     assert "uploadVideoE2eeStreamV2Package" in videos_js
+    assert "E2EE Streaming v2 密文分段上傳中" in videos_js
+    assert "E2EE Streaming v2 manifest 儲存中" in videos_js
+    assert "上傳完成，伺服器端加密、掃描與 HLS 排程中" in videos_js
     assert 'share_wrapped_file_key_envelope' in videos_js
     assert 'share_expires_at' in videos_js
     assert 'share_max_views' in videos_js
@@ -78,6 +91,8 @@ def test_video_platform_accepts_audio_media_in_ui():
     assert ".video-audio-player" in styles
     assert ".video-thumb-image" in styles
     assert ".video-share-manage-grid" in styles
+    assert ".video-search-bar" in styles
+    assert ".video-search-status" in styles
 
 
 def test_video_platform_uses_separate_watch_view_and_mobile_layout():

@@ -1918,7 +1918,103 @@ class PointsLedgerService:
             ).fetchone()
             wallet_data = dict(wallet)
             ledger_data = dict(ledger)
-            return {"wallets": wallet_data, "ledger": ledger_data, "chain": chain, "currency_type": DISPLAY_CURRENCY}
+            wallet_balance = int(wallet_data.get("points_balance") or 0)
+            wallet_frozen = int(wallet_data.get("points_frozen") or 0)
+            ledger_issued = int(ledger_data.get("points_issued") or 0)
+            ledger_spent = int(ledger_data.get("points_spent") or 0)
+            ledger_net = ledger_issued - ledger_spent
+            ledger_data["ledger_net_points"] = ledger_net
+
+            user_cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+            member_wallet_balance = wallet_balance
+            member_wallet_frozen = wallet_frozen
+            member_wallet_count = int(wallet_data.get("wallets") or 0)
+            member_ledger_issued = ledger_issued
+            member_ledger_spent = ledger_spent
+            if "username" in user_cols:
+                member_wallet = conn.execute(
+                    """
+                    SELECT COALESCE(SUM(w.soft_balance + w.hard_balance), 0) AS points_balance,
+                           COALESCE(SUM(w.soft_frozen + w.hard_frozen), 0) AS points_frozen,
+                           COUNT(*) AS wallets
+                    FROM points_wallets w
+                    LEFT JOIN users u ON u.id=w.user_id
+                    WHERE COALESCE(LOWER(u.username), '') != 'root'
+                    """
+                ).fetchone()
+                member_ledger = conn.execute(
+                    """
+                    SELECT
+                        COALESCE(SUM(CASE WHEN l.direction IN ('credit','transfer_in') THEN l.amount ELSE 0 END), 0) AS points_issued,
+                        COALESCE(SUM(CASE WHEN l.direction IN ('debit','transfer_out','reverse') THEN l.amount ELSE 0 END), 0) AS points_spent,
+                        COUNT(*) AS ledger_entries
+                    FROM points_ledger l
+                    LEFT JOIN users u ON u.id=l.user_id
+                    WHERE l.status='confirmed'
+                      AND COALESCE(LOWER(u.username), '') != 'root'
+                    """
+                ).fetchone()
+                member_wallet_balance = int(member_wallet["points_balance"] or 0)
+                member_wallet_frozen = int(member_wallet["points_frozen"] or 0)
+                member_wallet_count = int(member_wallet["wallets"] or 0)
+                member_ledger_issued = int(member_ledger["points_issued"] or 0)
+                member_ledger_spent = int(member_ledger["points_spent"] or 0)
+
+            sealed = conn.execute(
+                """
+                SELECT
+                    COALESCE(SUM(CASE WHEN chain_block_id IS NOT NULL THEN 1 ELSE 0 END), 0) AS sealed_ledger_entries,
+                    COALESCE(SUM(CASE WHEN chain_block_id IS NULL THEN 1 ELSE 0 END), 0) AS unsealed_ledger_entries,
+                    COUNT(*) AS confirmed_ledger_entries
+                FROM points_ledger
+                WHERE status='confirmed'
+                """
+            ).fetchone()
+            latest = conn.execute(
+                """
+                SELECT
+                    (SELECT created_at FROM points_ledger ORDER BY id DESC LIMIT 1) AS latest_ledger_at,
+                    (SELECT updated_at FROM points_wallets ORDER BY updated_at DESC LIMIT 1) AS latest_wallet_at
+                """
+            ).fetchone()
+            outstanding = wallet_balance + wallet_frozen
+            member_outstanding = member_wallet_balance + member_wallet_frozen
+            member_ledger_net = member_ledger_issued - member_ledger_spent
+            confirmed_count = int(sealed["confirmed_ledger_entries"] or 0)
+            sealed_count = int(sealed["sealed_ledger_entries"] or 0)
+            circulation = {
+                "available_points": wallet_balance,
+                "frozen_points": wallet_frozen,
+                "outstanding_points": outstanding,
+                "member_available_points": member_wallet_balance,
+                "member_frozen_points": member_wallet_frozen,
+                "member_outstanding_points": member_outstanding,
+                "root_outstanding_points": outstanding - member_outstanding,
+                "confirmed_issued_points": ledger_issued,
+                "confirmed_spent_points": ledger_spent,
+                "ledger_net_points": ledger_net,
+                "member_confirmed_issued_points": member_ledger_issued,
+                "member_confirmed_spent_points": member_ledger_spent,
+                "member_ledger_net_points": member_ledger_net,
+                "supply_gap_points": outstanding - ledger_net,
+                "member_supply_gap_points": member_outstanding - member_ledger_net,
+                "wallet_count": int(wallet_data.get("wallets") or 0),
+                "member_wallet_count": member_wallet_count,
+                "root_wallet_count": max(0, int(wallet_data.get("wallets") or 0) - member_wallet_count),
+                "confirmed_ledger_entries": confirmed_count,
+                "sealed_ledger_entries": sealed_count,
+                "unsealed_ledger_entries": int(sealed["unsealed_ledger_entries"] or 0),
+                "sealed_coverage_percent": round((sealed_count / confirmed_count) * 100, 4) if confirmed_count else 0,
+                "latest_ledger_at": latest["latest_ledger_at"] if latest else None,
+                "latest_wallet_at": latest["latest_wallet_at"] if latest else None,
+            }
+            return {
+                "wallets": wallet_data,
+                "ledger": ledger_data,
+                "chain": chain,
+                "circulation": circulation,
+                "currency_type": DISPLAY_CURRENCY,
+            }
         finally:
             conn.close()
 

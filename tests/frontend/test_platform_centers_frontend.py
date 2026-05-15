@@ -27,6 +27,8 @@ def test_platform_center_frontend_surfaces_are_wired():
     assert 'switchModuleTab("jobs")' in admin_js or 'normTab === "jobs"' in admin_js
     assert 'normTab === "videos" || normTab === "shares"' in admin_js
     assert 'loadJobCenter()' in platform_js
+    assert 'loadDriveTaskCenterJobs({ csrf })' in platform_js
+    assert 'mergePlatformJobCenterJobs([...jobs, ...driveJobs])' in platform_js
     assert 'loadShareCenter()' in platform_js
     assert 'loadVideoManageCenter()' in platform_js
     assert 'function renderVideoManageCenter' in platform_js
@@ -57,3 +59,8 @@ def test_platform_center_frontend_surfaces_are_wired():
     assert '.video-manage-row' in (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
     assert '/admin/trading/asset-overview' in platform_js
     assert '交易資產總覽讀取失敗' in platform_js
+    drive_js = (ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8")
+    assert 'function loadDriveTaskCenterJobs' in drive_js
+    assert 'driveRemoteTaskToJobCenterJob' in drive_js
+    assert 'driveTransferToJobCenterJob' in drive_js
+    assert 'source_ref: json.file?.file_id ? `cloud_file:${json.file.file_id}` : ""' in drive_js

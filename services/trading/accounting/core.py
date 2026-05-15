@@ -8,7 +8,7 @@ these helpers only perform deterministic calculations.
 
 from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_DOWN, ROUND_HALF_UP
 
-from services.trading.constants import ASSET_SCALE
+from services.trading.constants import ASSET_SCALE, POINT_MICRO_SCALE
 from services.trading.validators import _to_decimal
 
 
@@ -54,7 +54,37 @@ def notional_points(quantity_units, price_points):
 
 
 def fee_points(notional, fee_rate_percent):
-    exact_fee = (Decimal(int(notional or 0)) * Decimal(str(fee_rate_percent or 0))) / Decimal("100")
+    return points_from_micropoints_ceil(fee_micropoints(notional, fee_rate_percent))
+
+
+def fee_micropoints(notional, fee_rate_percent, *, point_micro_scale=POINT_MICRO_SCALE):
+    notional = int(notional or 0)
+    if notional <= 0:
+        return 0
+    exact_fee = (
+        Decimal(notional)
+        * Decimal(str(fee_rate_percent or 0))
+        * Decimal(int(point_micro_scale or POINT_MICRO_SCALE))
+    ) / Decimal("100")
     if exact_fee <= 0:
         return 0
-    return int(exact_fee.quantize(Decimal("1"), rounding=ROUND_CEILING))
+    return int(exact_fee.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def points_from_micropoints_ceil(total_micropoints, *, point_micro_scale=POINT_MICRO_SCALE):
+    total_micropoints = max(0, int(total_micropoints or 0))
+    scale = max(1, int(point_micro_scale or POINT_MICRO_SCALE))
+    if total_micropoints <= 0:
+        return 0
+    return int((Decimal(total_micropoints) / Decimal(scale)).quantize(Decimal("1"), rounding=ROUND_CEILING))
+
+
+def split_micropoints_for_units(total_micropoints, used_units, total_units):
+    total_micropoints = max(0, int(total_micropoints or 0))
+    used_units = max(0, int(used_units or 0))
+    total_units = max(0, int(total_units or 0))
+    if total_micropoints <= 0 or used_units <= 0 or total_units <= 0:
+        return 0
+    if used_units >= total_units:
+        return total_micropoints
+    return int((Decimal(total_micropoints) * Decimal(used_units) / Decimal(total_units)).quantize(Decimal("1"), rounding=ROUND_DOWN))

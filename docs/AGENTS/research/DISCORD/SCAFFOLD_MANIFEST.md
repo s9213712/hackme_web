@@ -19,7 +19,7 @@ docs/discord_sync/DISCORD_GATEWAY_INTENTS.md
 docs/discord_sync/DISCORD_CONTENT_FORMATTING.md
 docs/discord_sync/DISCORD_PERMISSION_MAPPING.md
 docs/discord_sync/DISCORD_ATTACHMENT_POLICY.md
-docs/discord_sync/DISCORD_AUDIT_EVENT_CONTRACT.md
+docs/discord_sync/DISCORD_AUDIT_EVENT_SPEC.md
 ```
 
 Until implementation is approved, keep the canonical proposal in:
