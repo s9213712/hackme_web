@@ -95,6 +95,18 @@
     }
   }
 
+  function gameUserStorageScope() {
+    const id = typeof currentUserId !== "undefined" && currentUserId !== null ? String(currentUserId).trim() : "";
+    if (id) return `user:${id}`;
+    const username = typeof currentUser !== "undefined" && currentUser ? String(currentUser).trim() : "";
+    if (username) return `name:${username.replace(/[^a-zA-Z0-9_.:-]/g, "_").slice(0, 64)}`;
+    return "anonymous";
+  }
+
+  function gameUserStorageKey(key) {
+    return `${key}:${gameUserStorageScope()}`;
+  }
+
   function hashGameString(value) {
     let hash = 2166136261;
     String(value || "").split("").forEach((char) => {

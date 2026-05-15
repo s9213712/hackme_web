@@ -34,13 +34,17 @@ from scripts.games.chess_exp5_opening_candidate_search import (  # noqa: E402
     resolve_current_production_model,
 )
 from scripts.games.chess_exp5_production_readiness import _position_id  # noqa: E402
-from services.games.chess_nnue import normalize_experiment_nnue_model_payload  # noqa: E402
+from services.games.chess_nnue import (  # noqa: E402
+    experiment_nnue_model_template,
+    normalize_experiment_nnue_model_payload,
+    save_experiment_nnue_experience_delta,
+)
 
 
 DEFAULT_RESULTS_ROOT = Path(os.environ.get("HACKME_CHESS_RESULTS_DIR", str(ROOT / "runtime" / "reports" / "games" / "chess_results")))
 DEFAULT_OPENING_CURRICULUM = DEFAULT_RESULTS_ROOT / "exp5_14b_clean_opening_heldout" / "clean_opening_curriculum.jsonl"
 DEFAULT_EXP5_13_SUMMARY = DEFAULT_RESULTS_ROOT / "exp5_13_rule_smoke_stalemate_fix_check" / "summary.json"
-DEFAULT_RUNTIME_PRODUCTION = ROOT / "runtime" / "games" / "models" / "chess_experiment_5_nnue.json"
+DEFAULT_RUNTIME_PRODUCTION = ROOT / "runtime" / "games" / "models" / "chess_experiment_5_nnue_experience.json"
 DEFAULT_PROMOTED_STAGE = DEFAULT_RESULTS_ROOT / "exp5_08_stage_candidate" / "chess_experiment_5_nnue_stage_candidate.json"
 DEFAULT_OUTPUT_DIR = DEFAULT_RESULTS_ROOT / "exp5_16_opening_overlay_candidate"
 DEFAULT_SEARCH_PROFILE = "fixed_depth_strong"
@@ -139,7 +143,13 @@ def build_candidate_model(*, base_model: Path, output_dir: Path, opening_rows: l
     output_dir.mkdir(parents=True, exist_ok=True)
     candidate_model = output_dir / "chess_experiment_5_nnue_opening_overlay_candidate.json"
     overlay_path = output_dir / "opening_overlay.json"
-    shutil.copyfile(base_model, candidate_model)
+    if base_model.exists():
+        shutil.copyfile(base_model, candidate_model)
+    else:
+        candidate_model.write_text(
+            json.dumps(experiment_nnue_model_template(), ensure_ascii=False, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
     payload = json.loads(candidate_model.read_text(encoding="utf-8"))
     overlay = build_opening_overlay(opening_rows, max_fullmove=max_fullmove)
     payload["opening_overlay"] = overlay
@@ -147,7 +157,7 @@ def build_candidate_model(*, base_model: Path, output_dir: Path, opening_rows: l
     normalized = normalize_experiment_nnue_model_payload(payload)
     if normalized is None:
         raise RuntimeError(f"failed to normalize candidate model: {candidate_model}")
-    candidate_model.write_text(json.dumps(normalized, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
+    save_experiment_nnue_experience_delta(candidate_model, normalized)
     _write_json(overlay_path, overlay)
     return {
         "candidate_model_path": str(candidate_model),

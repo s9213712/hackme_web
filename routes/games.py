@@ -41,6 +41,7 @@ from services.games.chess_pv_guarded_overlay import (
 )
 from services.games.chess_nnue import (
     EXPERIMENT_NNUE_DIFFICULTY,
+    EXP5_PRODUCTION_SEARCH_PROFILE,
     choose_experiment_nnue_move,
 )
 from services.games.chess_nn import (
@@ -48,6 +49,11 @@ from services.games.chess_nn import (
     choose_experiment_nn_move,
 )
 from services.games.chess_opening_book import book_move as chess_book_move
+from services.games.chess_stockfish_teacher import (
+    STOCKFISH_DIFFICULTY,
+    choose_stockfish_move,
+    stockfish_available,
+)
 from services.games.chess_dashboard import build_chess_engine_dashboard
 from services.games.chess_pipeline import maybe_launch_chess_train_pipeline
 from services.games.chess_promotion import (
@@ -103,7 +109,7 @@ MULTIPLAYER_MODES_BY_GAME = {
 SOLO_GAME_CHECK_SQL = "'sudoku', 'minesweeper', '1a2b', 'tetris', 'real_tetris', 'space_shooter', 'fps_arena', 'open_world', 'bullet_hell', 'stickman_shooter', 'snake', 'game_2048', 'brick_breaker', 'reversi', 'go', 'gomoku', 'chinese_chess'"
 WEEKLY_REWARDS = (300, 200, 100)
 DAILY_CHALLENGE_REWARD_POINTS = 25
-COMPUTER_DIFFICULTIES = {
+BASE_COMPUTER_DIFFICULTIES = {
     "normal",
     "hard",
     EXPERIMENT_DIFFICULTY,
@@ -111,6 +117,8 @@ COMPUTER_DIFFICULTIES = {
     EXPERIMENT_PV_DIFFICULTY,
     EXPERIMENT_NNUE_DIFFICULTY,
 }
+COMPUTER_DIFFICULTIES = set(BASE_COMPUTER_DIFFICULTIES)
+STORED_COMPUTER_DIFFICULTIES = set(BASE_COMPUTER_DIFFICULTIES) | {STOCKFISH_DIFFICULTY}
 LEGACY_COMPUTER_DIFFICULTIES = {EXPERIMENT_NN_DIFFICULTY}
 MINESWEEPER_DIFFICULTIES = {"easy", "normal", "hard", "master"}
 PIECE_VALUES = {
@@ -146,14 +154,35 @@ def normalize_computer_difficulty(value):
     difficulty = str(value or "normal").strip().lower()
     if difficulty == "easy":
         difficulty = "normal"
-    return difficulty if difficulty in COMPUTER_DIFFICULTIES else None
+    allowed = set(BASE_COMPUTER_DIFFICULTIES)
+    if stockfish_available():
+        allowed.add(STOCKFISH_DIFFICULTY)
+    return difficulty if difficulty in allowed else None
 
 
 def normalize_stored_computer_difficulty(value):
     difficulty = str(value or "normal").strip().lower()
     if difficulty == "easy":
         difficulty = "normal"
-    return difficulty if difficulty in COMPUTER_DIFFICULTIES or difficulty in LEGACY_COMPUTER_DIFFICULTIES else "normal"
+    return difficulty if difficulty in STORED_COMPUTER_DIFFICULTIES or difficulty in LEGACY_COMPUTER_DIFFICULTIES else "normal"
+
+
+def computer_difficulty_options():
+    rows = [
+        {"key": "normal", "label": "普通"},
+        {"key": "hard", "label": "困難"},
+        {"key": EXPERIMENT_DIFFICULTY, "label": "實驗"},
+        {"key": EXPERIMENT_DL_DIFFICULTY, "label": "實驗 3：DL 語義平衡"},
+        {"key": EXPERIMENT_PV_DIFFICULTY, "label": "實驗 4：Policy/Value + MCTS"},
+        {"key": EXPERIMENT_NNUE_DIFFICULTY, "label": "實驗 5：NNUE + AlphaBeta/PVS"},
+    ]
+    if stockfish_available():
+        rows.append({
+            "key": STOCKFISH_DIFFICULTY,
+            "label": "Stockfish（本機）",
+            "local_only": True,
+        })
+    return rows
 
 
 def move_material_value(move):
@@ -210,6 +239,10 @@ def _choose_heuristic_move(board, side, difficulty="normal"):
 
 def choose_computer_move(board, side, difficulty="normal", learning_store=None, move_history=None):
     difficulty = normalize_computer_difficulty(difficulty) or "normal"
+    if difficulty == STOCKFISH_DIFFICULTY:
+        move = choose_stockfish_move(board, side)
+        if move:
+            return move
     if difficulty == EXPERIMENT_DIFFICULTY and learning_store is not None:
         try:
             learning_store.connect().close()
@@ -219,7 +252,7 @@ def choose_computer_move(board, side, difficulty="normal", learning_store=None, 
         board_payload = dict(board or {})
         if isinstance(move_history, list):
             board_payload["__move_history__"] = move_history
-        move = choose_experiment_nnue_move(board_payload, side, search_profile="balanced")
+        move = choose_experiment_nnue_move(board_payload, side, search_profile=EXP5_PRODUCTION_SEARCH_PROFILE)
         if move:
             return move
     # P2: try the static opening book first so engines without a built-in
@@ -298,7 +331,7 @@ def game_schema_sql():
         CHECK (status IN ('active', 'finished', 'cancelled')),
         CHECK (current_turn IN ('white', 'black')),
         CHECK (human_side IN ('white', 'black')),
-        CHECK (computer_difficulty IN ('easy', 'normal', 'hard', 'experiment', 'experiment 2:nn', 'experiment 3:dl', 'experiment 4:pv', 'experiment 5:nnue'))
+        CHECK (computer_difficulty IN ('easy', 'normal', 'hard', 'experiment', 'experiment 2:nn', 'experiment 3:dl', 'experiment 4:pv', 'experiment 5:nnue', 'stockfish'))
     );
     CREATE TABLE IF NOT EXISTS game_invites (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -500,7 +533,7 @@ def rebuild_game_matches_table(conn):
                 CHECK (status IN ('active', 'finished', 'cancelled')),
                 CHECK (current_turn IN ('white', 'black')),
                 CHECK (human_side IN ('white', 'black')),
-                CHECK (computer_difficulty IN ('easy', 'normal', 'hard', 'experiment', 'experiment 2:nn', 'experiment 3:dl', 'experiment 4:pv', 'experiment 5:nnue'))
+                CHECK (computer_difficulty IN ('easy', 'normal', 'hard', 'experiment', 'experiment 2:nn', 'experiment 3:dl', 'experiment 4:pv', 'experiment 5:nnue', 'stockfish'))
             )
             """
         )
@@ -582,6 +615,7 @@ def ensure_game_schema(conn):
         or "experiment 3:dl" not in match_sql
         or "experiment 4:pv" not in match_sql
         or "experiment 5:nnue" not in match_sql
+        or "stockfish" not in match_sql
     ):
         rebuild_game_matches_table(conn)
     cols = {row["name"] for row in conn.execute("PRAGMA table_info(game_matches)").fetchall()}
@@ -1162,14 +1196,7 @@ def register_games_routes(app, deps):
                 "status": "available",
                 "supports_invites": True,
                 "supports_computer": True,
-                "computer_difficulties": [
-                    {"key": "normal", "label": "普通"},
-                    {"key": "hard", "label": "困難"},
-                    {"key": EXPERIMENT_DIFFICULTY, "label": "實驗"},
-                    {"key": EXPERIMENT_DL_DIFFICULTY, "label": "實驗 3：DL 語義平衡"},
-                    {"key": EXPERIMENT_PV_DIFFICULTY, "label": "實驗 4：Policy/Value + MCTS"},
-                    {"key": EXPERIMENT_NNUE_DIFFICULTY, "label": "實驗 5：NNUE + AlphaBeta/PVS"},
-                ],
+                "computer_difficulties": computer_difficulty_options(),
             }, {
                 "key": "sudoku",
                 "title": "數獨",

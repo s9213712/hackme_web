@@ -24,17 +24,18 @@
     particleBlue: `${BRICK_BREAKER_ASSET_BASE}particles/blue_1.png`,
     particleYellow: `${BRICK_BREAKER_ASSET_BASE}particles/yellow_1.png`,
   });
-  const BRICK_BREAKER_IMAGES = loadBrickBreakerImages(BRICK_BREAKER_IMAGE_ASSETS);
+  const BRICK_BREAKER_IMAGES = {};
 
-  function loadBrickBreakerImages(assets) {
-    if (typeof Image === "undefined") return {};
-    return Object.entries(assets).reduce((images, [key, src]) => {
+  function brickBreakerImageFor(key) {
+    const src = BRICK_BREAKER_IMAGE_ASSETS[key];
+    if (!src || typeof Image === "undefined") return null;
+    if (!BRICK_BREAKER_IMAGES[key]) {
       const image = new Image();
       image.decoding = "async";
       image.src = src;
-      images[key] = image;
-      return images;
-    }, {});
+      BRICK_BREAKER_IMAGES[key] = image;
+    }
+    return BRICK_BREAKER_IMAGES[key];
   }
 
   function brickBreakerImageReady(image) {
@@ -42,7 +43,7 @@
   }
 
   function drawBrickBreakerImage(ctx, key, x, y, w, h, options = {}) {
-    const image = BRICK_BREAKER_IMAGES[key];
+    const image = brickBreakerImageFor(key);
     if (!brickBreakerImageReady(image)) return false;
     ctx.save();
     ctx.globalAlpha = options.alpha ?? 1;

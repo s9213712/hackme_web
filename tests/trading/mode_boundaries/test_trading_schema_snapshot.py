@@ -104,6 +104,8 @@ EXPECTED_SETTINGS_KEYS = [
     "trading.bot_auto_scan_enabled",
     "trading.bot_auto_scan_interval_seconds",
     "trading.bot_auto_scan_limit",
+    "trading.bot_competition_enabled",
+    "trading.bot_competition_weekly_reward_points",
     "trading.btc_trade_branch",
     "trading.btc_trade_enabled",
     "trading.btc_trade_repo_url",
@@ -168,6 +170,7 @@ def test_ensure_trading_schema_produces_expected_tables(tmp_path):
         "trading_margin_positions",
         "trading_bots",
         "trading_grid_bots",
+        "trading_bot_competition_rewards",
         "trading_reserve_pool",
         "trading_reserve_pool_events",
         "trading_state",
@@ -312,14 +315,17 @@ def test_ensure_trading_schema_critical_columns_present(tmp_path):
     for col in (
         "bot_type", "interval_hours", "budget_points",
         "workflow_json", "execution_state_json",
-        "enabled_at", "last_scan_at",
+        "enabled_at", "last_scan_at", "share_parameters",
     ):
         assert has_column("trading_bots", col), (
             f"trading_bots missing column {col!r}"
         )
 
-    # trading_grid_bots — enabled_at lifecycle gate
+    # trading_grid_bots — enabled_at lifecycle gate + competition sharing flag
     assert has_column("trading_grid_bots", "enabled_at", type_="TEXT")
+    assert has_column("trading_grid_bots", "share_parameters", type_="INTEGER", notnull=1)
+    assert has_column("trading_grid_bots", "stop_loss_percent", type_="REAL")
+    assert has_column("trading_grid_bots", "take_profit_percent", type_="REAL")
 
     # trading_reserve_pool — funding pool source-of-truth row
     assert has_column("trading_reserve_pool", "balance_points", type_="INTEGER", notnull=1)

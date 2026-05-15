@@ -229,7 +229,19 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     assert {"user_id", "quota_bytes", "used_bytes", "reserved_bytes", "file_count"} <= user_storage_cols
     assert {"file_id", "owner_user_id", "virtual_path", "is_trashed", "deleted_at"} <= storage_file_cols
     assert {"user_id", "delta_bytes", "before_used_bytes", "after_used_bytes", "source"} <= storage_quota_log_cols
-    assert {"storage_file_id", "file_id", "token_hash", "expires_at", "revoked_at", "access_count"} <= storage_share_link_cols
+    assert {
+        "storage_file_id",
+        "file_id",
+        "token",
+        "token_hash",
+        "access_scope",
+        "required_user_id",
+        "max_views",
+        "wrapped_file_key_envelope",
+        "expires_at",
+        "revoked_at",
+        "access_count",
+    } <= storage_share_link_cols
     assert {"owner_user_id", "title", "visibility", "cover_file_id", "deleted_at"} <= album_cols
     assert {"album_id", "storage_file_id", "file_id", "sort_order", "caption"} <= album_file_cols
     assert {"file_id", "context_type", "context_id", "permission_snapshot_json"} <= cloud_ref_cols

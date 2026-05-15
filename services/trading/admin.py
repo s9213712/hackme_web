@@ -187,13 +187,25 @@ def settings_payload(service, conn):
         ),
         "price_stream_ws_enabled": raw_bool_setting(raw, "trading.price_stream_ws_enabled", default=True),
         "price_stream_ws_stale_seconds": raw_int_setting(raw, "trading.price_stream_ws_stale_seconds", service.DEFAULT_PRICE_STREAM_WS_STALE_SECONDS, name="price_stream_ws_stale_seconds", minimum=1, maximum=120),
+        "qa_live_price_provider_enabled": raw_bool_setting(
+            raw,
+            "trading.qa_live_price_provider_enabled",
+            default=False,
+        ),
         "btc_trade_enabled": raw_bool_setting(raw, "trading.btc_trade_enabled", default=False),
         "btc_trade_project_dir": raw.get("trading.btc_trade_project_dir", ""),
         "btc_trade_repo_url": raw.get("trading.btc_trade_repo_url", "https://github.com/s9213712/BTC_trade.git"),
         "btc_trade_branch": raw.get("trading.btc_trade_branch", "strategy/v15b-plus"),
         "bot_auto_scan_enabled": raw_bool_setting(raw, "trading.bot_auto_scan_enabled", default=True),
+        "background_worker_dev_ready_enabled": raw_bool_setting(
+            raw,
+            "trading.background_worker_dev_ready_enabled",
+            default=False,
+        ),
         "bot_auto_scan_interval_seconds": raw_int_setting(raw, "trading.bot_auto_scan_interval_seconds", "30", name="bot_auto_scan_interval_seconds", minimum=10, maximum=3600),
         "bot_auto_scan_limit": raw_int_setting(raw, "trading.bot_auto_scan_limit", "50", name="bot_auto_scan_limit", minimum=1, maximum=200),
+        "bot_competition_enabled": raw_bool_setting(raw, "trading.bot_competition_enabled", default=True),
+        "bot_competition_weekly_reward_points": raw_int_setting(raw, "trading.bot_competition_weekly_reward_points", "100", name="bot_competition_weekly_reward_points", minimum=0, maximum=1_000_000),
         "bot_audit_enabled": raw_bool_setting(raw, "trading.bot_audit_enabled", default=True),
         "bot_audit_interval_seconds": raw_int_setting(raw, "trading.bot_audit_interval_seconds", service.TRADING_BOT_AUDIT_INTERVAL_SECONDS, name="bot_audit_interval_seconds", minimum=60, maximum=86400),
         "bot_audit_limit": raw_int_setting(raw, "trading.bot_audit_limit", service.TRADING_BOT_AUDIT_LIMIT, name="bot_audit_limit", minimum=1, maximum=200),
@@ -502,6 +514,13 @@ def update_root_settings(service, *, actor, settings=None, markets=None):
                 ("trading.bot_auto_scan_limit", value, now, service._actor_id(actor)),
             )
             setting_changes["trading.bot_auto_scan_limit"] = value
+        if "bot_competition_weekly_reward_points" in settings:
+            value = int_input_text(settings, "bot_competition_weekly_reward_points", minimum=0, maximum=1_000_000)
+            conn.execute(
+                "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                ("trading.bot_competition_weekly_reward_points", value, now, service._actor_id(actor)),
+            )
+            setting_changes["trading.bot_competition_weekly_reward_points"] = value
         if "backtest_max_candles" in settings:
             value = int_input_text(settings, "backtest_max_candles", minimum=service.BACKTEST_MAX_CANDLES_FLOOR, maximum=service.BACKTEST_MAX_CANDLES_CEILING)
             conn.execute(

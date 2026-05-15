@@ -1337,21 +1337,21 @@ def register_community_routes(app, deps):
                 if limit is None:
                     return json_resp({"ok": False, "msg": "limit 參數格式錯誤"}), 400
                 like = f"%{q}%"
-                where = "board_id=? AND is_deleted=0"
+                where = "t.board_id=? AND t.is_deleted=0"
                 params = [board_id]
                 if manageable:
                     status_filter = normalize_text(request.args.get("status")) or ""
                     if status_filter in ("pending", "approved", "rejected"):
-                        where += " AND status=?"
+                        where += " AND t.status=?"
                         params.append(status_filter)
                 else:
-                    where += " AND (status='approved' OR author_user_id=?)"
+                    where += " AND (t.status='approved' OR t.author_user_id=?)"
                     params.append(actor["id"])
                 if q:
-                    where += " AND (title LIKE ? OR content LIKE ? OR author_username LIKE ?)"
+                    where += " AND (t.title LIKE ? OR t.content LIKE ? OR t.author_username LIKE ?)"
                     params.extend([like, like, like])
                 total = conn.execute(
-                    f"SELECT COUNT(*) AS c FROM forum_threads WHERE {where}",
+                    f"SELECT COUNT(*) AS c FROM forum_threads t WHERE {where}",
                     tuple(params)
                 ).fetchone()["c"]
                 rows = conn.execute(

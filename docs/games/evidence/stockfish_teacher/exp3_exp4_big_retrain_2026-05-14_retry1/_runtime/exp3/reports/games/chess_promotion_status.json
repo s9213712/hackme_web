@@ -1,0 +1,89 @@
+{
+  "candidate": null,
+  "current_production": [
+    {
+      "engine": "experiment",
+      "exists": true,
+      "mtime": "2026-05-14T05:10:34.161726Z",
+      "path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/games/models/chess_experiment.db",
+      "size_bytes": 77824
+    },
+    {
+      "architecture": "mlp-49x16x1",
+      "engine": "experiment 2:nn",
+      "exists": true,
+      "mtime": "2026-05-14T02:40:37.005361Z",
+      "path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/games/models/chess_experiment_2_nn.json",
+      "sample_count": 0,
+      "size_bytes": 18110,
+      "version": 1
+    },
+    {
+      "architecture": "mlp-49x64x32x1",
+      "engine": "experiment 3:dl",
+      "exists": true,
+      "mtime": "2026-05-14T05:51:47.628785Z",
+      "path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/games/models/chess_experiment_3_dl.json",
+      "sample_count": 31895,
+      "size_bytes": 432919,
+      "version": 1
+    },
+    {
+      "architecture": "board-planes-policy-value-781x96",
+      "engine": "experiment 4:pv",
+      "exists": true,
+      "mtime": "2026-05-14T02:40:37.005361Z",
+      "path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/games/models/chess_experiment_4_pv.json",
+      "sample_count": 2283,
+      "size_bytes": 1696341,
+      "version": 1
+    },
+    {
+      "artifact_role": "adapter_or_experience_table",
+      "base_architecture": "nnue-like-sparse-accumulator-v1",
+      "base_sample_count": 1837,
+      "base_version": 1,
+      "engine": "experiment 5:nnue",
+      "exists": false,
+      "mtime": "",
+      "path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/games/models/chess_experiment_5_nnue_experience.json",
+      "size_bytes": 0,
+      "source_base_module": "services.games.chess_exp5_base_model",
+      "source_embedded_base": true,
+      "static_base_model_sha256": "88464dba7e3497e7be7474e0aae4272801fb2e98838985740e530f592f2ff992"
+    }
+  ],
+  "last_promotion_result": {
+    "benchmark_report_path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/reports/games/chess_self_play_train_20260514T055147Z.json",
+    "candidate_path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/games/models/candidates/experiment_3_dl",
+    "engine": "experiment 3:dl",
+    "production_path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/games/models/chess_experiment_3_dl.json",
+    "promoted_at": "2026-05-14T05:51:47.633230Z",
+    "promotion_gate": {
+      "benchmark_report_path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/reports/games/chess_self_play_train_20260514T055147Z.json",
+      "draw_rate": 0.5,
+      "engine": "experiment 3:dl",
+      "engine_architecture": "mlp-49x64x32x1",
+      "games": 12,
+      "pass": true,
+      "reasons": [],
+      "score_rate": 0.5833,
+      "smoke_pass": true,
+      "suspicious_matches": 0,
+      "win_rate": 0.3333
+    },
+    "promotion_report_consistency": {
+      "benchmark_report_path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/reports/games/chess_self_play_train_20260514T055147Z.json",
+      "candidate_architecture": "",
+      "candidate_path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/games/models/candidates/experiment_3_dl",
+      "candidate_sample_count": 0,
+      "candidate_version": 0,
+      "engine": "experiment 3:dl",
+      "expected_architecture": "mlp-49x64x32x1",
+      "pass": true,
+      "reasons": []
+    },
+    "result": "promoted"
+  },
+  "updated_at": "2026-05-14T05:51:47.659442Z"
+}

@@ -197,6 +197,7 @@ from services.server.startup import (
     start_daily_snapshot_worker as start_daily_snapshot_worker_helper,
     start_points_chain_block_worker as start_points_chain_block_worker_helper,
     start_storage_maintenance_worker as start_storage_maintenance_worker_helper,
+    start_trading_background_worker as start_trading_background_worker_helper,
     start_trading_bot_worker as start_trading_bot_worker_helper,
     start_trading_liquidation_worker as start_trading_liquidation_worker_helper,
 )
@@ -1304,6 +1305,16 @@ def start_trading_bot_worker(shutdown_event=None):
     )
 
 
+def start_trading_background_worker(shutdown_event=None):
+    return start_trading_background_worker_helper(
+        trading_service=trading_service,
+        audit=audit,
+        get_system_settings=get_system_settings,
+        get_runtime_server_mode=get_runtime_server_mode,
+        shutdown_event=shutdown_event or SERVER_SHUTDOWN_EVENT,
+    )
+
+
 def measure_backtest_capacity_first_boot():
     return measure_backtest_capacity_if_needed_helper(trading_service=trading_service, audit=audit)
 
@@ -1360,6 +1371,8 @@ if __name__ == "__main__":
         start_points_chain_block_worker=start_points_chain_block_worker,
         start_trading_liquidation_worker=start_trading_liquidation_worker,
         start_trading_bot_worker=start_trading_bot_worker,
+        start_trading_background_worker=start_trading_background_worker,
+        get_runtime_server_mode=get_runtime_server_mode,
         measure_backtest_capacity_first_boot=measure_backtest_capacity_first_boot,
         ensure_local_tls_files=ensure_local_tls_files,
         cert_file=CERT_FILE,

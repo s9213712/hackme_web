@@ -65,3 +65,49 @@ def test_chess_exp5_teacher_distill_script_writes_exp5_samples(tmp_path):
     assert rows[0]["sample_format"] == "exp5_nnue_position_move_v1"
     assert rows[0]["side"] == "white"
     assert len(rows[0]["move_uci"]) >= 4
+
+
+def test_chess_exp5_teacher_distill_can_use_opening_book_backend(tmp_path):
+    input_path = tmp_path / "positions.jsonl"
+    output_path = tmp_path / "distilled_book.jsonl"
+    input_path.write_text(
+        json.dumps(
+            {
+                "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+                "side": "white",
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(ROOT)
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "games" / "chess_exp5_teacher_distill.py"),
+            "--input-jsonl",
+            str(input_path),
+            "--output-jsonl",
+            str(output_path),
+            "--teacher-backend",
+            "opening_book",
+            "--replace-output",
+        ],
+        cwd=str(ROOT),
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is True
+    assert payload["teacher_backend"] == "opening_book"
+    assert payload["accepted_samples"] == 1
+    row = json.loads(output_path.read_text(encoding="utf-8").strip())
+    assert row["teacher_backend"] == "opening_book"
+    assert row["teacher_top_k_method"] == "deterministic_opening_book"
+    assert row["move_uci"] in {"e2e4", "d2d4", "c2c4", "g1f3", "b2b3"}

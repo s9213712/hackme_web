@@ -4,7 +4,9 @@
 
 已保存目前 exp5 模型檔：
 
-- 原始模型：`services/games/models/chess_experiment_5_nnue.json`
+- 原始模型（當時）：`services/games/models/chess_experiment_5_nnue.json`
+- 2026-05-14 起：同內容已併入 `services/games/chess_exp5_base_model.py`，
+  後續 runtime 只保存 `chess_experiment_5_nnue_experience.json` delta。
 - 快照檔：`docs/games/model_snapshots/2026-05-13_exp5_nnue_conversion_88464dba7e3497e7.json`
 - sha256：`88464dba7e3497e7be7474e0aae4272801fb2e98838985740e530f592f2ff992`
 - 大小：約 `20KB`

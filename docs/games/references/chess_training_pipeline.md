@@ -289,7 +289,19 @@ promotion gate 至少會檢查：
 
 `chess_train_pipeline.py --skip-benchmark` 只允許產生 candidate / stage candidate；因為沒有新的 benchmark report，pipeline 會自動禁止 promote，報告中會標記 `benchmark.skipped=true`。
 
-autorun 可以用環境變數保守降級：
+autorun retrain 目前預設關閉。原因是 2026-05-14 的 exp3/exp4/exp5 retrain
+實驗顯示，直接把少量 replay 或 Stockfish 篩過的 replay 寫回主模型仍可能退步；
+在 teacher/gate/rehearsal 設計完成前，server 只保留「對局紀錄、trusted/quarantine
+分類、優質紀錄篩選、手動推薦命令」，不自動 fork 訓練程序。
+
+需要短期手動驗證 auto-retrain 時才設定：
+
+- `HTML_LEARNING_CHESS_AUTORETRAIN_ENABLED=1`
+  允許 `maybe_launch_chess_train_pipeline()` 在 replay threshold 達標時啟動 pipeline。
+- `HTML_LEARNING_CHESS_PIPELINE_AUTORUN_ENABLED=1`
+  舊別名，作用同上。
+
+autorun 啟用後仍可用環境變數保守降級：
 
 - `HTML_LEARNING_CHESS_AUTORUN_SKIP_BENCHMARK=1`
   autorun command 追加 `--skip-benchmark`，只做 replay prepare / seed / refine / stage，不跑 benchmark。

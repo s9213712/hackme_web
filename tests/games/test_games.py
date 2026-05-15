@@ -184,6 +184,7 @@ def test_game_matches_difficulty_enum_in_sync_across_bootstrap_and_runtime():
     for value in (
         "'experiment 4:pv'",
         "'experiment 5:nnue'",
+        "'stockfish'",
     ):
         assert value in bootstrap_sql, f"{value} missing from bootstrap.schema.sql"
         assert value in runtime_sql, f"{value} missing from routes.games.game_schema_sql()"
@@ -196,7 +197,8 @@ def test_game_catalog_includes_solo_games(tmp_path):
     app = _build_app(db_path, actor_box)
     client = app.test_client()
 
-    response = client.get("/api/games/catalog")
+    with patch("routes.games.stockfish_available", return_value=False):
+        response = client.get("/api/games/catalog")
     assert response.status_code == 200
     games = response.get_json()["games"]
     by_key = {game["key"]: game for game in games}
@@ -239,6 +241,26 @@ def test_game_catalog_includes_solo_games(tmp_path):
     ]
     assert by_key["1a2b"]["supports_invites"] is False
     assert by_key["tetris"]["supports_invites"] is False
+
+
+def test_game_catalog_adds_stockfish_only_when_local_binary_available(tmp_path):
+    db_path = tmp_path / "games.db"
+    _seed_db(db_path)
+    actor_box = {"actor": {"id": 2, "username": "alice", "role": "user"}}
+    app = _build_app(db_path, actor_box)
+    client = app.test_client()
+
+    with patch("routes.games.stockfish_available", return_value=False):
+        payload = client.get("/api/games/catalog").get_json()
+    chess_game = next(game for game in payload["games"] if game["key"] == "chess")
+    assert "stockfish" not in [item["key"] for item in chess_game["computer_difficulties"]]
+
+    with patch("routes.games.stockfish_available", return_value=True):
+        payload = client.get("/api/games/catalog").get_json()
+    chess_game = next(game for game in payload["games"] if game["key"] == "chess")
+    stockfish_rows = [item for item in chess_game["computer_difficulties"] if item["key"] == "stockfish"]
+    assert stockfish_rows == [{"key": "stockfish", "label": "Stockfish（本機）", "local_only": True}]
+    by_key = {game["key"]: game for game in payload["games"]}
     assert by_key["real_tetris"]["title"] == "真實版俄羅斯方塊"
     assert by_key["space_shooter"]["supports_computer"] is False
     assert by_key["fps_arena"]["supports_invites"] is True
@@ -979,6 +1001,18 @@ def test_chess_practice_difficulty_is_persisted_and_rejects_invalid_value(tmp_pa
     experiment_nnue_id = experiment_nnue.get_json()["match_id"]
     experiment_nnue_match = client.get(f"/api/games/chess/matches/{experiment_nnue_id}").get_json()["match"]
     assert experiment_nnue_match["computer_difficulty"] == "experiment 5:nnue"
+
+    with patch("routes.games.stockfish_available", return_value=False):
+        stockfish_unavailable = client.post("/api/games/chess/practice", json={"difficulty": "stockfish"})
+    assert stockfish_unavailable.status_code == 400
+    assert "難度" in stockfish_unavailable.get_json()["msg"]
+
+    with patch("routes.games.stockfish_available", return_value=True):
+        stockfish_match = client.post("/api/games/chess/practice", json={"difficulty": "stockfish"})
+    assert stockfish_match.status_code == 200
+    stockfish_id = stockfish_match.get_json()["match_id"]
+    stockfish_detail = client.get(f"/api/games/chess/matches/{stockfish_id}").get_json()["match"]
+    assert stockfish_detail["computer_difficulty"] == "stockfish"
 
 
 def test_chess_computer_normal_difficulty_prefers_high_value_capture():
@@ -2130,8 +2164,7 @@ def test_root_chess_warm_start_does_not_overwrite_existing_exp1_runtime_db(tmp_p
         conn.close()
 
 
-def test_pipeline_autorun_starts_when_replay_threshold_is_met(tmp_path, monkeypatch):
-    runtime_dir = tmp_path / "runtime"
+def _write_pipeline_ready_replay(runtime_dir: Path) -> None:
     replay_path = runtime_dir / "reports" / "games" / "chess_replays.jsonl"
     replay_path.parent.mkdir(parents=True, exist_ok=True)
     replay_path.write_text(
@@ -2166,8 +2199,39 @@ def test_pipeline_autorun_starts_when_replay_threshold_is_met(tmp_path, monkeypa
         + "\n",
         encoding="utf-8",
     )
+
+
+def test_pipeline_autorun_disabled_by_default_preserves_replay_summary(tmp_path, monkeypatch):
+    runtime_dir = tmp_path / "runtime"
+    _write_pipeline_ready_replay(runtime_dir)
     monkeypatch.setenv("HACKME_RUNTIME_DIR", str(runtime_dir))
     monkeypatch.setenv("HTML_LEARNING_CHESS_RETRAIN_MIN_REPLAYS", "1")
+    monkeypatch.delenv("HTML_LEARNING_CHESS_AUTORETRAIN_ENABLED", raising=False)
+    monkeypatch.delenv("HTML_LEARNING_CHESS_PIPELINE_AUTORUN_ENABLED", raising=False)
+
+    def _unexpected_popen(*args, **kwargs):
+        raise AssertionError("auto-retrain must remain disabled by default")
+
+    monkeypatch.setattr(chess_pipeline_service.subprocess, "Popen", _unexpected_popen)
+
+    result = chess_pipeline_service.maybe_launch_chess_train_pipeline(trigger="test_suite", actor_username="root")
+
+    assert result["ok"] is True
+    assert result["launched"] is False
+    assert result["reason"] == chess_pipeline_service.AUTO_RETRAIN_DISABLED_REASON
+    assert result["recommendation"]["ready"] is True
+    assert result["recommendation"]["usable_replays"] == 1
+    assert result["recommendation"]["auto_retrain_enabled"] is False
+    assert result["status"]["auto_retrain_enabled"] is False
+    assert result["status"]["disabled_reason"] == chess_pipeline_service.AUTO_RETRAIN_DISABLED_REASON
+
+
+def test_pipeline_autorun_starts_when_replay_threshold_is_met(tmp_path, monkeypatch):
+    runtime_dir = tmp_path / "runtime"
+    _write_pipeline_ready_replay(runtime_dir)
+    monkeypatch.setenv("HACKME_RUNTIME_DIR", str(runtime_dir))
+    monkeypatch.setenv("HTML_LEARNING_CHESS_RETRAIN_MIN_REPLAYS", "1")
+    monkeypatch.setenv("HTML_LEARNING_CHESS_AUTORETRAIN_ENABLED", "1")
     monkeypatch.setenv("HTML_LEARNING_CHESS_AUTORUN_SKIP_BENCHMARK", "1")
     monkeypatch.setenv("HTML_LEARNING_CHESS_AUTORUN_SKIP_PROMOTE", "1")
 

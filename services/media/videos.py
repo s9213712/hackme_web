@@ -25,6 +25,9 @@ VIDEO_VIEW_DEDUP_HOURS = 6
 VIDEO_VIEW_MIN_SECONDS = 5
 VIDEO_TIP_MIN_POINTS = 1
 VIDEO_TIP_MAX_POINTS = 1_000_000
+VIDEO_BOOST_MIN_POINTS = 10
+VIDEO_BOOST_MAX_POINTS = 1_000_000
+VIDEO_BOOST_DAYS = 7
 VIDEO_SHARE_PASSWORD_ITERATIONS = 120_000
 MAX_VIDEO_SHARE_PASSWORD_LENGTH = 128
 VIDEO_SHARE_PASSWORD_MAX_FAILURES = 5
@@ -43,6 +46,19 @@ def utc_now():
     return datetime.utcnow().replace(microsecond=0).isoformat()
 
 
+def _parse_iso_datetime(value):
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone().replace(tzinfo=None)
+        return parsed.replace(microsecond=0)
+    except Exception:
+        return None
+
+
 def _actor_value(actor, key, default=None):
     if not actor:
         return default
@@ -52,20 +68,8 @@ def _actor_value(actor, key, default=None):
         return actor.get(key, default) if hasattr(actor, "get") else default
 
 
-def _role(actor):
-    if not actor:
-        return "anonymous"
-    if _actor_value(actor, "username") == "root":
-        return "super_admin"
-    return _actor_value(actor, "role", "user") or "user"
-
-
-def _role_rank(role):
-    return {"anonymous": -1, "user": 0, "manager": 1, "admin": 1, "super_admin": 2}.get(role or "user", 0)
-
-
-def is_manager_or_root(actor):
-    return _role_rank(_role(actor)) >= _role_rank("manager")
+def _actor_owns(actor, owner_user_id):
+    return bool(actor and _safe_int(_actor_value(actor, "id")) == _safe_int(owner_user_id))
 
 
 def _as_dict(row):
@@ -99,6 +103,24 @@ def _ensure_columns(conn, table, definitions):
     for column, ddl in definitions.items():
         if column not in columns:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+
+
+def _row_get(row, key, default=None):
+    if not row:
+        return default
+    if isinstance(row, dict):
+        return row.get(key, default)
+    try:
+        if key in row.keys():
+            return row[key]
+    except Exception:
+        pass
+    return default
+
+
+def _video_boost_active(row):
+    expires_at = str(_row_get(row, "boost_expires_at", "") or "").strip()
+    return bool(expires_at and expires_at > utc_now())
 
 
 def _share_row_value(row, key, default=None):
@@ -219,7 +241,13 @@ def ensure_video_schema(conn):
         """
     )
     _ensure_columns(conn, "video_views", {"counted": "INTEGER NOT NULL DEFAULT 0"})
-    _ensure_columns(conn, "videos", {"cover_file_id": "TEXT"})
+    _ensure_columns(conn, "videos", {
+        "cover_file_id": "TEXT",
+        "deleted_at": "TEXT",
+        "boost_points_total": "INTEGER NOT NULL DEFAULT 0",
+        "boost_expires_at": "TEXT",
+        "boost_last_at": "TEXT",
+    })
     _ensure_columns(conn, "video_tips", {
         "net_points": "INTEGER NOT NULL DEFAULT 0",
         "fee_user_id": "INTEGER",
@@ -240,6 +268,8 @@ def ensure_video_schema(conn):
     })
     conn.execute("CREATE INDEX IF NOT EXISTS idx_videos_owner ON videos(owner_user_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_videos_visibility ON videos(visibility, status, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_videos_owner_deleted ON videos(owner_user_id, deleted_at, updated_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_videos_boost ON videos(boost_expires_at, boost_points_total)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_video_views_video_created ON video_views(video_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_video_comments_video_created ON video_comments(video_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_video_tips_video_created ON video_tips(video_id, created_at)")
@@ -251,10 +281,21 @@ def serialize_video(row, *, actor=None, liked=False):
     data = _as_dict(row)
     if not data:
         return None
-    for key in ("id", "owner_user_id", "duration_seconds", "view_count", "like_count", "coin_total", "comment_count"):
+    for key in (
+        "id",
+        "owner_user_id",
+        "duration_seconds",
+        "view_count",
+        "like_count",
+        "coin_total",
+        "comment_count",
+        "boost_points_total",
+    ):
         data[key] = _safe_int(data.get(key), 0)
     data["liked_by_me"] = bool(liked)
-    data["can_edit"] = bool(actor and (_safe_int(_actor_value(actor, "id")) == data["owner_user_id"] or is_manager_or_root(actor)))
+    data["can_edit"] = _actor_owns(actor, data["owner_user_id"])
+    data["deleted"] = bool(str(data.get("deleted_at") or "").strip())
+    data["boost_active"] = _video_boost_active(data)
     data["stream_url"] = f"/api/videos/{data['id']}/stream"
     data["playback_url"] = f"/api/videos/{data['id']}/playback"
     data["stream_status_url"] = f"/api/media/{data['cloud_file_id']}/stream-status"
@@ -437,7 +478,7 @@ def revoke_video_share_link(conn, *, actor, video_id):
     if not video or not actor:
         raise ValueError("找不到影音")
     actor_id = int(_actor_value(actor, "id") or 0)
-    if int(video["owner_user_id"]) != actor_id and not is_manager_or_root(actor):
+    if int(video["owner_user_id"]) != actor_id:
         raise ValueError("找不到影音")
     now = utc_now()
     conn.execute(
@@ -569,7 +610,6 @@ def ensure_video_share_link(
         or not actor
         or (
             int(video["owner_user_id"]) != int(_actor_value(actor, "id"))
-            and not is_manager_or_root(actor)
         )
     ):
         return None, "找不到影音"
@@ -829,8 +869,6 @@ def publish_video(
     file_row = validate_publishable_cloud_file(conn, actor=actor, cloud_file_id=cloud_file_id)
     cover_row = validate_video_cover_file(conn, actor=actor, cover_file_id=cover_file_id)
     normalized_visibility = normalize_visibility(visibility)
-    if is_e2ee_file(file_row) and normalized_visibility == "public":
-        raise ValueError("E2EE 影音不可設為公開，請改用持連結可看或私人")
     now = utc_now()
     existing = conn.execute("SELECT * FROM videos WHERE cloud_file_id=?", (file_row["id"],)).fetchone()
     if existing:
@@ -847,7 +885,7 @@ def publish_video(
         conn.execute(
             f"""
             UPDATE videos
-            SET title=?, description=?, visibility=?, status='ready', updated_at=?{cover_sql}
+            SET title=?, description=?, visibility=?, status='ready', updated_at=?, deleted_at=NULL{cover_sql}
             WHERE id=?
             """,
             tuple(params),
@@ -898,21 +936,25 @@ def publish_video(
 def can_view_video(actor, video_row, *, for_stream=False):
     if not video_row:
         return False
+    if str(_row_get(video_row, "deleted_at", "") or "").strip():
+        return False
     status = video_row["status"]
     if status == "blocked":
-        return bool(actor and (_safe_int(_actor_value(actor, "id")) == _safe_int(video_row["owner_user_id"]) or is_manager_or_root(actor)) and not for_stream)
+        return bool(_actor_owns(actor, video_row["owner_user_id"]) and not for_stream)
     visibility = video_row["visibility"]
     if visibility == "public":
         return True
     if visibility == "unlisted":
-        return bool(actor and (_safe_int(_actor_value(actor, "id")) == _safe_int(video_row["owner_user_id"]) or is_manager_or_root(actor)))
-    return bool(actor and (_safe_int(_actor_value(actor, "id")) == _safe_int(video_row["owner_user_id"]) or is_manager_or_root(actor)))
+        return _actor_owns(actor, video_row["owner_user_id"])
+    return _actor_owns(actor, video_row["owner_user_id"])
 
 
 def get_video(conn, video_id, *, actor=None, for_stream=False):
     ensure_video_schema(conn)
     row = conn.execute(_video_base_select() + " WHERE v.id=?", (int(video_id),)).fetchone()
     if not row:
+        return None
+    if str(row["deleted_at"] or "").strip():
         return None
     if not can_view_video(actor, row, for_stream=for_stream):
         raise PermissionError("video is private or blocked")
@@ -935,16 +977,22 @@ def list_videos(conn, *, actor=None, sort="new", page=1, page_size=24):
     page = max(1, _safe_int(page, 1))
     page_size = min(50, max(1, _safe_int(page_size, 24)))
     sort = str(sort or "new").lower()
-    order = "v.created_at DESC, v.id DESC"
+    boost_now = utc_now()
+    boost_expr = (
+        f"(CASE WHEN COALESCE(v.boost_expires_at,'')>'{boost_now}' "
+        "THEN CASE WHEN COALESCE(v.boost_points_total,0)>100000 "
+        "THEN 100000 ELSE COALESCE(v.boost_points_total,0) END ELSE 0 END)"
+    )
+    order = f"{boost_expr} DESC, v.created_at DESC, v.id DESC"
     if sort == "hot":
-        order = "(v.view_count + v.like_count * 4 + v.coin_total * 2 + v.comment_count * 3) DESC, v.created_at DESC"
+        order = f"({boost_expr} * 4 + v.view_count + v.like_count * 4 + v.coin_total * 2 + v.comment_count * 3) DESC, v.created_at DESC"
     elif sort == "trending":
-        order = "(v.like_count * 3 + v.comment_count * 2 + v.coin_total * 4) DESC, v.updated_at DESC"
+        order = f"({boost_expr} * 5 + v.like_count * 3 + v.comment_count * 2 + v.coin_total * 4) DESC, v.updated_at DESC"
     params = []
-    where = ["v.status='ready'", "f.deleted_at IS NULL"]
+    where = ["v.status='ready'", "v.deleted_at IS NULL", "f.deleted_at IS NULL"]
     if actor:
-        where.append("(v.visibility='public' OR v.owner_user_id=? OR ?=1)")
-        params.extend([int(_actor_value(actor, "id")), 1 if is_manager_or_root(actor) else 0])
+        where.append("(v.visibility='public' OR v.owner_user_id=?)")
+        params.append(int(_actor_value(actor, "id")))
     else:
         where.append("v.visibility='public'")
     rows = conn.execute(
@@ -952,6 +1000,230 @@ def list_videos(conn, *, actor=None, sort="new", page=1, page_size=24):
         (*params, page_size, (page - 1) * page_size),
     ).fetchall()
     return [serialize_video(row, actor=actor, liked=_liked_by_actor(conn, row["id"], actor)) for row in rows]
+
+
+def _owner_video_management_select():
+    return """
+        SELECT v.*,
+               u.username AS owner_username,
+               u.nickname AS owner_nickname,
+               f.privacy_mode AS cloud_privacy_mode,
+               f.original_filename_plain_for_public AS cloud_filename,
+               f.mime_type_plain_for_public AS cloud_mime_type,
+               f.size_bytes AS cloud_size_bytes,
+               cf.original_filename_plain_for_public AS cover_filename,
+               cf.mime_type_plain_for_public AS cover_mime_type,
+               cf.size_bytes AS cover_size_bytes,
+               COALESCE(tip.gross_points, 0) AS gross_points,
+               COALESCE(tip.revenue_points, 0) AS revenue_points,
+               COALESCE(tip.platform_fee_points, 0) AS platform_fee_points,
+               COALESCE(tip.tip_count, 0) AS tip_count,
+               COALESCE(share.active_share_count, 0) AS active_share_count,
+               COALESCE(share.share_access_count, 0) AS share_access_count,
+               COALESCE(share.latest_share_created_at, '') AS latest_share_created_at
+        FROM videos v
+        LEFT JOIN users u ON u.id=v.owner_user_id
+        LEFT JOIN uploaded_files f ON f.id=v.cloud_file_id
+        LEFT JOIN uploaded_files cf ON cf.id=v.cover_file_id AND cf.deleted_at IS NULL
+        LEFT JOIN (
+            SELECT video_id,
+                   COALESCE(SUM(amount_points), 0) AS gross_points,
+                   COALESCE(SUM(net_points), 0) AS revenue_points,
+                   COALESCE(SUM(fee_points), 0) AS platform_fee_points,
+                   COUNT(*) AS tip_count
+            FROM video_tips
+            GROUP BY video_id
+        ) tip ON tip.video_id=v.id
+        LEFT JOIN (
+            SELECT video_id,
+                   SUM(CASE WHEN revoked_at IS NULL THEN 1 ELSE 0 END) AS active_share_count,
+                   COALESCE(SUM(access_count), 0) AS share_access_count,
+                   COALESCE(MAX(created_at), '') AS latest_share_created_at
+            FROM video_share_links
+            GROUP BY video_id
+        ) share ON share.video_id=v.id
+    """
+
+
+def serialize_owner_video(row, *, actor):
+    data = serialize_video(row, actor=actor, liked=False)
+    if not data:
+        return None
+    for key in (
+        "gross_points",
+        "revenue_points",
+        "platform_fee_points",
+        "tip_count",
+        "active_share_count",
+        "share_access_count",
+    ):
+        data[key] = _safe_int(_row_get(row, key), 0)
+    data["latest_share_created_at"] = str(_row_get(row, "latest_share_created_at", "") or "")
+    data["management"] = {
+        "gross_points": data["gross_points"],
+        "revenue_points": data["revenue_points"],
+        "platform_fee_points": data["platform_fee_points"],
+        "tip_count": data["tip_count"],
+        "active_share_count": data["active_share_count"],
+        "share_access_count": data["share_access_count"],
+        "boost_points_total": data["boost_points_total"],
+        "boost_expires_at": data.get("boost_expires_at") or "",
+        "boost_active": data["boost_active"],
+    }
+    return data
+
+
+def _owner_video_management_row(conn, *, actor, video_id):
+    actor_id = _safe_int(_actor_value(actor, "id"))
+    return conn.execute(
+        _owner_video_management_select()
+        + """
+          WHERE v.owner_user_id=? AND v.id=? AND v.deleted_at IS NULL AND f.deleted_at IS NULL
+          LIMIT 1
+        """,
+        (actor_id, int(video_id)),
+    ).fetchone()
+
+
+def list_owner_videos(conn, *, actor, limit=100):
+    ensure_video_schema(conn)
+    if not actor:
+        raise PermissionError("login required")
+    limit = min(200, max(1, _safe_int(limit, 100)))
+    actor_id = _safe_int(_actor_value(actor, "id"))
+    rows = conn.execute(
+        _owner_video_management_select()
+        + """
+          WHERE v.owner_user_id=? AND v.deleted_at IS NULL AND f.deleted_at IS NULL
+          ORDER BY v.updated_at DESC, v.id DESC
+          LIMIT ?
+        """,
+        (actor_id, limit),
+    ).fetchall()
+    return [serialize_owner_video(row, actor=actor) for row in rows]
+
+
+def _load_owner_video_for_write(conn, *, actor, video_id):
+    if not actor:
+        raise PermissionError("login required")
+    row = conn.execute(
+        """
+        SELECT * FROM videos
+        WHERE id=? AND deleted_at IS NULL
+        LIMIT 1
+        """,
+        (int(video_id),),
+    ).fetchone()
+    if not row or _safe_int(row["owner_user_id"]) != _safe_int(_actor_value(actor, "id")):
+        raise ValueError("找不到影音")
+    return row
+
+
+def update_owner_video(conn, *, actor, video_id, title=None, description=None, visibility=None, cover_file_id=_VIDEO_SHARE_UNSET):
+    ensure_video_schema(conn)
+    row = _load_owner_video_for_write(conn, actor=actor, video_id=video_id)
+    normalized_title = normalize_title(row["title"] if title is None else title)
+    normalized_description = normalize_description(row["description"] if description is None else description)
+    normalized_visibility = normalize_visibility(row["visibility"] if visibility is None else visibility)
+    updates = [
+        "title=?",
+        "description=?",
+        "visibility=?",
+        "updated_at=?",
+    ]
+    now = utc_now()
+    params = [normalized_title, normalized_description, normalized_visibility, now]
+    if cover_file_id is not _VIDEO_SHARE_UNSET:
+        cover_row = validate_video_cover_file(conn, actor=actor, cover_file_id=cover_file_id)
+        updates.append("cover_file_id=?")
+        params.append(cover_row["id"] if cover_row else None)
+    params.append(int(video_id))
+    conn.execute(
+        f"""
+        UPDATE videos
+        SET {", ".join(updates)}
+        WHERE id=?
+        """,
+        tuple(params),
+    )
+    managed = _owner_video_management_row(conn, actor=actor, video_id=video_id)
+    return serialize_owner_video(managed, actor=actor)
+
+
+def delete_owner_video(conn, *, actor, video_id):
+    ensure_video_schema(conn)
+    _load_owner_video_for_write(conn, actor=actor, video_id=video_id)
+    now = utc_now()
+    conn.execute(
+        """
+        UPDATE videos
+        SET status='blocked', deleted_at=?, updated_at=?
+        WHERE id=?
+        """,
+        (now, now, int(video_id)),
+    )
+    conn.execute(
+        """
+        UPDATE video_share_links
+        SET revoked_at=?
+        WHERE video_id=? AND revoked_at IS NULL
+        """,
+        (now, int(video_id)),
+    )
+    return {"ok": True, "video_id": int(video_id), "deleted_at": now}
+
+
+def boost_owner_video(conn, *, points_service, actor, video_id, amount, idempotency_key=None):
+    ensure_video_schema(conn)
+    video_row = _load_owner_video_for_write(conn, actor=actor, video_id=video_id)
+    amount = _safe_int(amount, 0)
+    if amount < VIDEO_BOOST_MIN_POINTS or amount > VIDEO_BOOST_MAX_POINTS:
+        raise ValueError(f"曝光積分必須介於 {VIDEO_BOOST_MIN_POINTS} 到 {VIDEO_BOOST_MAX_POINTS}")
+    if not points_service or not hasattr(points_service, "_record_transaction"):
+        raise RuntimeError("PointsChain service is unavailable")
+    if hasattr(points_service, "ensure_schema"):
+        points_service.ensure_schema(conn)
+    actor_id = _safe_int(_actor_value(actor, "id"))
+    idem = str(idempotency_key or "").strip()[:160] or uuid.uuid4().hex
+    ledger_idem = f"video_boost:{actor_id}:{int(video_id)}:{amount}:{_sha256_text(idem)[:32]}"
+    ledger_row, created = points_service._record_transaction(
+        conn,
+        user_id=actor_id,
+        currency_type=DISPLAY_CURRENCY,
+        direction="debit",
+        amount=amount,
+        action_type="video_boost_debit",
+        reference_type="video_boost",
+        reference_id=str(video_id),
+        idempotency_key=ledger_idem,
+        reason="video platform exposure boost",
+        public_metadata={"video_id": int(video_id), "boost_points": amount, "boost_days": VIDEO_BOOST_DAYS},
+        actor=actor,
+    )
+    if created:
+        now_dt = datetime.utcnow().replace(microsecond=0)
+        existing_expires = _parse_iso_datetime(video_row["boost_expires_at"])
+        active = existing_expires and existing_expires > now_dt
+        base = existing_expires if active else now_dt
+        expires_at = (base + timedelta(days=VIDEO_BOOST_DAYS)).replace(microsecond=0).isoformat()
+        total = (_safe_int(video_row["boost_points_total"], 0) if active else 0) + amount
+        now = utc_now()
+        conn.execute(
+            """
+            UPDATE videos
+            SET boost_points_total=?, boost_expires_at=?, boost_last_at=?, updated_at=?
+            WHERE id=?
+            """,
+            (total, expires_at, now, now, int(video_id)),
+        )
+    managed = _owner_video_management_row(conn, actor=actor, video_id=video_id)
+    return {
+        "ok": True,
+        "created": bool(created),
+        "ledger_uuid": ledger_row["ledger_uuid"],
+        "amount": amount,
+        "video": serialize_owner_video(managed, actor=actor),
+    }
 
 
 def resolve_video_share_token(conn, token, *, password=None, password_verified=False, counted_in_session=False):
@@ -976,7 +1248,7 @@ def resolve_video_share_token(conn, token, *, password=None, password_verified=F
         """ + base_select +
         """
          JOIN video_share_links vsl ON vsl.video_id=v.id
-         WHERE vsl.token_hash=? AND vsl.revoked_at IS NULL AND f.deleted_at IS NULL
+         WHERE vsl.token_hash=? AND vsl.revoked_at IS NULL AND v.deleted_at IS NULL AND f.deleted_at IS NULL
         """,
         (_hash_share_token(token),),
     ).fetchone()

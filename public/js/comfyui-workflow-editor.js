@@ -4,8 +4,25 @@
   const STORAGE_KEY = "hackme_comfyui_workflow_visual_builder";
   const RESULT_KEY = "hackme_comfyui_workflow_editor_result";
   const INPUT_KEY = "hackme_comfyui_workflow_editor_input";
+  const ACCOUNT_SCOPE_STORAGE_KEY = "hackme_web.account.active_scope";
   const UNKNOWN_NODE_TYPE = "__UnknownCustomNode__";
   const $ = (id) => document.getElementById(id);
+
+  function editorAccountStorageScope() {
+    try {
+      const openerScope = window.opener?.getCurrentAccountStorageScope?.();
+      if (openerScope) return openerScope;
+    } catch (_) {}
+    try {
+      return localStorage.getItem(ACCOUNT_SCOPE_STORAGE_KEY) || "anonymous";
+    } catch (_) {
+      return "anonymous";
+    }
+  }
+
+  function editorScopedStorageKey(key) {
+    return `hackme_web:${editorAccountStorageScope()}:${String(key || "state")}`;
+  }
 
   const NODE_DEFS = {
     CheckpointLoaderSimple: {
@@ -352,7 +369,7 @@
 
   function loadState() {
     try {
-      return normalizeState(JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}"));
+      return normalizeState(JSON.parse(localStorage.getItem(editorScopedStorageKey(STORAGE_KEY)) || "{}"));
     } catch (_) {
       return emptyState();
     }
@@ -361,18 +378,18 @@
   function saveState() {
     workflow.name = $("workflowName")?.value || workflow.name || "";
     workflow.description = $("workflowDescription")?.value || workflow.description || "";
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(workflow));
+    localStorage.setItem(editorScopedStorageKey(STORAGE_KEY), JSON.stringify(workflow));
   }
 
   function takePendingInput() {
     let payload = null;
     try {
-      payload = JSON.parse(localStorage.getItem(INPUT_KEY) || "null");
+      payload = JSON.parse(localStorage.getItem(editorScopedStorageKey(INPUT_KEY)) || "null");
     } catch (_) {
       payload = null;
     }
     if (!payload || typeof payload !== "object") return false;
-    localStorage.removeItem(INPUT_KEY);
+    localStorage.removeItem(editorScopedStorageKey(INPUT_KEY));
     const imported = stateFromPackage(payload);
     workflow = normalizeState(imported.state);
     selectedId = workflow.nodes[0]?.id || null;
@@ -1649,7 +1666,7 @@
 
   function sendBackToMainPage() {
     const payload = exportPackage();
-    localStorage.setItem(RESULT_KEY, JSON.stringify(payload));
+    localStorage.setItem(editorScopedStorageKey(RESULT_KEY), JSON.stringify(payload));
     setStatus("已送回主頁。回到 ComfyUI 頁按「載入視覺編輯器結果」即可保存。");
   }
 

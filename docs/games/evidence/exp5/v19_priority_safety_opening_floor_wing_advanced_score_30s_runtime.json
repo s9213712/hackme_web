@@ -1,0 +1,72 @@
+{
+  "components": [
+    {
+      "inputs": {
+        "fixed_pass_rate": 1.0,
+        "legacy_total": 40.0,
+        "sparring_score_rate": 1.0
+      },
+      "max_points": 20.0,
+      "name": "legacy_probe_stability",
+      "points": 20.0
+    },
+    {
+      "inputs": {
+        "cases": 300,
+        "pass_rate": 1.0,
+        "pgn_exact_reference_match_rate": 0.1708,
+        "pgn_exact_reference_target_for_full_credit": 0.55,
+        "pgn_pass_rate": 1.0
+      },
+      "max_points": 30.0,
+      "name": "large_tactical_suite",
+      "points": 24.4844
+    },
+    {
+      "inputs": {
+        "ai_score_rate": 0.8333,
+        "ai_win_rate": 0.6667,
+        "ai_wins": 20,
+        "codex_wins": 0,
+        "complete_game_rate": 1.0,
+        "draws": 10,
+        "games": 30,
+        "loss_rate": 0.0,
+        "threefold_rate": 0.3333
+      },
+      "max_points": 50.0,
+      "name": "complete_game_gauntlet",
+      "points": 41.3139
+    },
+    {
+      "inputs": {
+        "avg_elapsed_ms_per_gauntlet_game": 14977.053,
+        "full_credit_ms": 30000.0,
+        "zero_credit_ms": 120000.0
+      },
+      "max_points": 10.0,
+      "name": "runtime_efficiency",
+      "points": 10.0
+    }
+  ],
+  "engine": "experiment 5:nnue",
+  "generated_at": "2026-05-14T07:11:55+00:00",
+  "grade": "strong_club_candidate",
+  "inputs": {
+    "gauntlet": "/home/s92137/hackme_web/docs/games/evidence/exp5/v19_priority_safety_opening_floor_wing_full_gauntlet_30.json",
+    "runtime_full_credit_ms": 30000.0,
+    "runtime_zero_credit_ms": 120000.0,
+    "score_probe": "/home/s92137/hackme_web/docs/games/evidence/exp5/v17/2026-05-14_exp5_score_probe_v17_trap_prior2_internal_only.json",
+    "tactical_suite": "/home/s92137/hackme_web/docs/games/evidence/exp5/v17/2026-05-14_exp5_tactical_suite_300_v17_trap_prior2_fixed_depth_balanced.json"
+  },
+  "interpretation": {
+    "legacy_40_point_score": "saturated; retained only as stability gate",
+    "main_current_ceiling": "complete-game gauntlet win rate, lower threefold rate, PGN exact-match signal, and runtime",
+    "not_external_elo": true,
+    "runtime_policy": "full credit up to runtime_full_credit_ms, then linear decay to runtime_zero_credit_ms"
+  },
+  "max_points": 110.0,
+  "normalized_100": 87.0894,
+  "score_name": "exp5_advanced_non_saturated_score_v2_30s_runtime",
+  "total_points": 95.7983
+}

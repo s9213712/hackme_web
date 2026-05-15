@@ -1,0 +1,53 @@
+{
+  "accept_topk": 3,
+  "audit_detail_jsonl": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_initial_2026-05-14/audit/stockfish_audit_detail.jsonl",
+  "clean_cp_loss": 60,
+  "counts": {
+    "analyzed_positions": 30,
+    "by_category": {
+      "opening": 20,
+      "quiet_positional": 5,
+      "tactical": 5
+    },
+    "by_played_status": {
+      "clean": 30
+    },
+    "extracted_positions": 732,
+    "hard_negative_source_moves": 0,
+    "input_paths": 1,
+    "invalid_rows": 0,
+    "played_clean_rows": 30,
+    "rejected_rows": 0,
+    "review_rows": 0,
+    "selected_positions": 30,
+    "teacher_eval_rows": 9,
+    "teacher_rows": 30,
+    "teacher_train_rows": 21
+  },
+  "depth": 5,
+  "eval_mod": 3,
+  "generated_at": "2026-05-14T01:41:32+00:00",
+  "hard_negative_cp_loss": 220,
+  "input_jsonls": [
+    "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_initial_2026-05-14/imported_replays.jsonl"
+  ],
+  "movetime_ms": 0,
+  "multipv": 5,
+  "output_dir": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_initial_2026-05-14/audit",
+  "played_clean_jsonl": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_initial_2026-05-14/audit/stockfish_played_clean_rows.jsonl",
+  "rejected_jsonl": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_initial_2026-05-14/audit/stockfish_rejected_rows.jsonl",
+  "review_cp_loss": 160,
+  "review_jsonl": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_initial_2026-05-14/audit/stockfish_review_rows.jsonl",
+  "stage": "stockfish_teacher_audit",
+  "stockfish_license_policy": {
+    "binary_bundled_in_repo": false,
+    "distribution_note": "If Stockfish binary/NNUE is bundled or redistributed, preserve GPLv3 copyright/license/source obligations.",
+    "expected_use": "external_local_teacher"
+  },
+  "stockfish_path": "/home/s92137/reference_repos/Stockfish/src/stockfish",
+  "stockfish_reference": "dd321af5dfc0789de07c4e5c64915073995eb818",
+  "summary_json": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_initial_2026-05-14/audit/summary.json",
+  "teacher_all_jsonl": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_initial_2026-05-14/audit/stockfish_teacher_rows.jsonl",
+  "teacher_eval_jsonl": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_initial_2026-05-14/audit/stockfish_teacher_eval_rows.jsonl",
+  "teacher_train_jsonl": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_initial_2026-05-14/audit/stockfish_teacher_train_rows.jsonl"
+}

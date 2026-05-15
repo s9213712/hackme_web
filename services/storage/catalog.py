@@ -1,5 +1,7 @@
+import json
 import hashlib
 import secrets
+import sqlite3
 import uuid
 from datetime import datetime
 
@@ -113,9 +115,14 @@ def ensure_storage_album_schema(conn):
             storage_file_id TEXT NOT NULL REFERENCES storage_files(id) ON DELETE CASCADE,
             file_id TEXT NOT NULL REFERENCES uploaded_files(id) ON DELETE CASCADE,
             owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            token TEXT,
             token_hash TEXT NOT NULL UNIQUE,
             can_download INTEGER NOT NULL DEFAULT 1,
             can_preview INTEGER NOT NULL DEFAULT 0,
+            access_scope TEXT NOT NULL DEFAULT 'link',
+            required_user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+            max_views INTEGER NOT NULL DEFAULT 0,
+            wrapped_file_key_envelope TEXT,
             expires_at TEXT,
             revoked_at TEXT,
             access_count INTEGER NOT NULL DEFAULT 0,
@@ -152,9 +159,21 @@ def ensure_storage_album_schema(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_album_share_links_album ON album_share_links(album_id, revoked_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_storage_share_links_owner ON storage_share_links(owner_user_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_storage_share_links_file ON storage_share_links(storage_file_id, revoked_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_storage_share_links_required_user ON storage_share_links(required_user_id, revoked_at)")
     storage_file_cols = {row["name"] for row in conn.execute("PRAGMA table_info(storage_files)").fetchall()}
     if "trash_source" not in storage_file_cols:
         conn.execute("ALTER TABLE storage_files ADD COLUMN trash_source TEXT")
+    storage_share_cols = {row["name"] for row in conn.execute("PRAGMA table_info(storage_share_links)").fetchall()}
+    storage_share_defs = {
+        "token": "TEXT",
+        "access_scope": "TEXT NOT NULL DEFAULT 'link'",
+        "required_user_id": "INTEGER",
+        "max_views": "INTEGER NOT NULL DEFAULT 0",
+        "wrapped_file_key_envelope": "TEXT",
+    }
+    for column, ddl in storage_share_defs.items():
+        if column not in storage_share_cols:
+            conn.execute(f"ALTER TABLE storage_share_links ADD COLUMN {column} {ddl}")
     album_share_cols = {row["name"] for row in conn.execute("PRAGMA table_info(album_share_links)").fetchall()}
     if "password_required" not in album_share_cols:
         conn.execute("ALTER TABLE album_share_links ADD COLUMN password_required INTEGER NOT NULL DEFAULT 0")
@@ -483,13 +502,22 @@ def create_storage_folder(conn, *, actor, path):
         return dict(existing), None
     now = _now()
     folder_id = uuid.uuid4().hex
-    conn.execute(
-        """
-        INSERT INTO storage_folders (id, owner_user_id, display_name, virtual_path, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
-        (folder_id, owner_user_id, _display_name_from_path(folder_path), folder_path, now, now),
-    )
+    try:
+        conn.execute(
+            """
+            INSERT INTO storage_folders (id, owner_user_id, display_name, virtual_path, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (folder_id, owner_user_id, _display_name_from_path(folder_path), folder_path, now, now),
+        )
+    except sqlite3.IntegrityError:
+        existing = conn.execute(
+            "SELECT * FROM storage_folders WHERE owner_user_id=? AND virtual_path=? AND deleted_at IS NULL",
+            (owner_user_id, folder_path),
+        ).fetchone()
+        if existing:
+            return dict(existing), None
+        raise
     return dict(conn.execute("SELECT * FROM storage_folders WHERE id=?", (folder_id,)).fetchone()), None
 
 
@@ -904,28 +932,165 @@ def _hash_share_token(token):
     return hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()
 
 
-def create_share_link(conn, *, actor, storage_file_id, expires_at=None, can_preview=False):
+def _normalize_storage_share_max_views(value):
+    if value in (None, "", 0, "0"):
+        return 0
+    try:
+        count = int(value)
+    except Exception:
+        raise ValueError("最大下載次數必須是整數")
+    if count < 0 or count > 1_000_000:
+        raise ValueError("最大下載次數必須介於 0 到 1000000")
+    return count
+
+
+def _normalize_storage_share_scope(value):
+    scope = str(value or "link").strip().lower()
+    if scope not in {"link", "account"}:
+        raise ValueError("分享範圍必須是 link 或 account")
+    return scope
+
+
+def _normalize_storage_share_envelope(value):
+    if value in (None, "", {}):
+        return ""
+    if isinstance(value, str):
+        try:
+            payload = json.loads(value)
+        except Exception as exc:
+            raise ValueError("E2EE 分享授權格式不正確") from exc
+    elif isinstance(value, dict):
+        payload = dict(value)
+    else:
+        raise ValueError("E2EE 分享授權格式不正確")
+    if str(payload.get("alg") or "") != "AES-GCM" or int(payload.get("v") or 0) != 1:
+        raise ValueError("E2EE 分享授權版本不支援")
+    nonce = str(payload.get("nonce") or "").strip()
+    ciphertext = str(payload.get("ciphertext") or "").strip()
+    if not nonce or not ciphertext:
+        raise ValueError("E2EE 分享授權缺少必要欄位")
+    return json.dumps({"alg": "AES-GCM", "v": 1, "nonce": nonce, "ciphertext": ciphertext}, ensure_ascii=False, sort_keys=True)
+
+
+def _storage_file_for_share(conn, *, actor, storage_file_id=None, file_id=None):
+    storage_file_id = str(storage_file_id or "").strip()
+    if storage_file_id:
+        storage_file = get_storage_file(conn, actor=actor, storage_file_id=storage_file_id)
+        if storage_file:
+            return storage_file, None
+        return None, "找不到 storage 檔案或檔案已刪除"
+    file_id = str(file_id or "").strip()
+    if not file_id:
+        return None, "缺少要分享的檔案"
+    file_row = conn.execute(
+        "SELECT * FROM uploaded_files WHERE id=? AND owner_user_id=? AND deleted_at IS NULL",
+        (file_id, int(actor["id"])),
+    ).fetchone()
+    if not file_row:
+        return None, "找不到檔案或檔案已刪除"
+    existing = conn.execute(
+        """
+        SELECT id FROM storage_files
+        WHERE file_id=? AND owner_user_id=? AND deleted_at IS NULL AND is_trashed=0
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (file_id, int(actor["id"])),
+    ).fetchone()
+    if existing:
+        return get_storage_file(conn, actor=actor, storage_file_id=existing["id"]), None
+    display_name = file_row["original_filename_plain_for_public"] or "download.bin"
+    storage_file, msg = create_storage_file_entry(
+        conn,
+        actor=actor,
+        file_row=file_row,
+        virtual_path=_unique_storage_path(conn, int(actor["id"]), display_name, display_name),
+        display_name=display_name,
+        source="share",
+    )
+    return storage_file, msg
+
+
+def _storage_share_payload(row, *, token=None):
+    data = dict(row) if row else None
+    if not data:
+        return None
+    if token:
+        data["token"] = token
+    share_token = token if token is not None else (data.get("token") or "")
+    if token is None:
+        data.pop("token", None)
+    data["share_url"] = f"/shared/files/{share_token}" if share_token else ""
+    data["download_url"] = f"/api/storage/shared/{share_token}/download" if share_token else ""
+    return data
+
+
+def create_share_link(
+    conn,
+    *,
+    actor,
+    storage_file_id=None,
+    file_id=None,
+    expires_at=None,
+    can_preview=False,
+    access_scope="link",
+    required_user_id=None,
+    required_username=None,
+    max_views=0,
+    wrapped_file_key_envelope=None,
+):
     ensure_storage_album_schema(conn)
-    storage_file = get_storage_file(conn, actor=actor, storage_file_id=storage_file_id)
+    storage_file, msg = _storage_file_for_share(conn, actor=actor, storage_file_id=storage_file_id, file_id=file_id)
+    if msg:
+        return None, msg
     if not storage_file or storage_file.get("deleted_at") or storage_file.get("file_deleted_at") or int(storage_file.get("is_trashed") or 0):
         return None, "找不到 storage 檔案或檔案已刪除"
+    try:
+        access_scope = _normalize_storage_share_scope(access_scope)
+        max_views = _normalize_storage_share_max_views(max_views)
+        envelope = _normalize_storage_share_envelope(wrapped_file_key_envelope)
+    except ValueError as exc:
+        return None, str(exc)
+    if access_scope == "account":
+        if required_user_id in (None, "") and str(required_username or "").strip():
+            user = conn.execute(
+                "SELECT id FROM users WHERE username=? LIMIT 1",
+                (str(required_username or "").strip(),),
+            ).fetchone()
+            required_user_id = int(user["id"]) if user else None
+        try:
+            required_user_id = int(required_user_id)
+        except Exception:
+            return None, "請指定可下載的帳戶"
+        if not conn.execute("SELECT id FROM users WHERE id=? LIMIT 1", (required_user_id,)).fetchone():
+            return None, "找不到指定帳戶"
+    else:
+        required_user_id = None
+    if str(storage_file.get("privacy_mode") or "") == "e2ee" and not envelope:
+        return None, "E2EE 檔案分享必須建立瀏覽器端分享授權"
     token = secrets.token_urlsafe(32)
     now = _now()
     link_id = uuid.uuid4().hex
     conn.execute(
         """
         INSERT INTO storage_share_links (
-            id, storage_file_id, file_id, owner_user_id, token_hash, can_download,
-            can_preview, expires_at, created_by, created_at
-        ) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+            id, storage_file_id, file_id, owner_user_id, token, token_hash, can_download,
+            can_preview, access_scope, required_user_id, max_views, wrapped_file_key_envelope,
+            expires_at, created_by, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             link_id,
-            storage_file_id,
+            storage_file["id"],
             storage_file["file_id"],
             int(actor["id"]),
+            token,
             _hash_share_token(token),
             1 if can_preview else 0,
+            access_scope,
+            required_user_id,
+            max_views,
+            envelope or None,
             str(expires_at or "").strip() or None,
             int(actor["id"]),
             now,
@@ -933,6 +1098,8 @@ def create_share_link(conn, *, actor, storage_file_id, expires_at=None, can_prev
     )
     link = get_share_link(conn, actor=actor, link_id=link_id)
     link["token"] = token
+    link["share_url"] = f"/shared/files/{token}"
+    link["download_url"] = f"/api/storage/shared/{token}/download"
     return link, None
 
 
@@ -945,7 +1112,8 @@ def list_share_links(conn, *, actor, storage_file_id=None):
         params.append(str(storage_file_id))
     rows = conn.execute(
         f"""
-        SELECT id, storage_file_id, file_id, owner_user_id, can_download, can_preview,
+        SELECT id, storage_file_id, file_id, owner_user_id, token, can_download, can_preview,
+               access_scope, required_user_id, max_views, wrapped_file_key_envelope,
                expires_at, revoked_at, access_count, last_accessed_at, created_by, created_at
         FROM storage_share_links
         WHERE {where}
@@ -953,20 +1121,21 @@ def list_share_links(conn, *, actor, storage_file_id=None):
         """,
         tuple(params),
     ).fetchall()
-    return [dict(row) for row in rows]
+    return [_storage_share_payload(row) for row in rows]
 
 
 def get_share_link(conn, *, actor, link_id):
     row = conn.execute(
         """
-        SELECT id, storage_file_id, file_id, owner_user_id, can_download, can_preview,
+        SELECT id, storage_file_id, file_id, owner_user_id, token, can_download, can_preview,
+               access_scope, required_user_id, max_views, wrapped_file_key_envelope,
                expires_at, revoked_at, access_count, last_accessed_at, created_by, created_at
         FROM storage_share_links
         WHERE id=? AND owner_user_id=?
         """,
         (link_id, int(actor["id"])),
     ).fetchone()
-    return dict(row) if row else None
+    return _storage_share_payload(row) if row else None
 
 
 def revoke_share_link(conn, *, actor, link_id):
@@ -980,16 +1149,21 @@ def revoke_share_link(conn, *, actor, link_id):
     return get_share_link(conn, actor=actor, link_id=link_id), None
 
 
-def resolve_share_token(conn, token):
+def resolve_share_token(conn, token, *, actor=None):
     ensure_storage_album_schema(conn)
     row = conn.execute(
         """
         SELECT sl.*, sf.display_name, sf.deleted_at AS storage_deleted_at, sf.is_trashed,
                f.storage_path, f.original_filename_plain_for_public, f.scan_status, f.risk_level,
-               f.privacy_mode, f.deleted_at AS file_deleted_at
+               f.privacy_mode, f.size_bytes, f.mime_type_plain_for_public,
+               f.original_filename_encrypted AS encrypted_metadata,
+               f.encryption_algorithm, f.encryption_version, f.nonce,
+               f.deleted_at AS file_deleted_at,
+               u.username AS required_username
         FROM storage_share_links sl
         JOIN storage_files sf ON sf.id=sl.storage_file_id
         JOIN uploaded_files f ON f.id=sl.file_id
+        LEFT JOIN users u ON u.id=sl.required_user_id
         WHERE sl.token_hash=?
         """,
         (_hash_share_token(token),),
@@ -1001,10 +1175,21 @@ def resolve_share_token(conn, token):
         return None, "revoked"
     if data.get("expires_at") and data["expires_at"] <= _now():
         return None, "expired"
+    max_views = int(data.get("max_views") or 0)
+    if max_views > 0 and int(data.get("access_count") or 0) >= max_views:
+        return None, "view_limit_reached"
     if data.get("storage_deleted_at") or data.get("file_deleted_at") or int(data.get("is_trashed") or 0):
         return None, "deleted"
     if not int(data.get("can_download") or 0):
         return None, "download_disabled"
+    if str(data.get("access_scope") or "link") == "account":
+        if not actor:
+            return None, "login_required"
+        actor_id = int(actor["id"])
+        if actor_id != int(data.get("required_user_id") or 0) and actor_id != int(data.get("owner_user_id") or 0):
+            return None, "forbidden"
+    if str(data.get("privacy_mode") or "") == "e2ee" and not str(data.get("wrapped_file_key_envelope") or "").strip():
+        return None, "e2ee_share_authorization_missing"
     return data, ""
 
 

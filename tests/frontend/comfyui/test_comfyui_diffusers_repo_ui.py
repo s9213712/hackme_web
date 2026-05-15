@@ -34,3 +34,16 @@ def test_diffusers_cache_busts_preflight_ui_assets():
     html = _read("public/index.html")
     assert "/js/36-comfyui.js?v=20260514-comfyui-subtabs" in html
     assert "/js/36-comfyui-workflows.js?v=20260514-comfyui-subtabs" in html
+
+
+def test_diffusers_generation_progress_surfaces_huggingface_download_bytes():
+    js = _read("public/js/36-comfyui.js")
+    assert 'phase === "downloading"' in js
+    assert "下載 Hugging Face 模型" in js
+    assert "progress.bytes_written" in js
+    assert "progress.total_bytes" in js
+    assert "progress.current_file" in js
+    assert "progress.speed_bytes_per_sec" in js
+    assert "progress.step" in js
+    assert "formatDriveBytes(writtenBytes)" in js
+    assert "不設等待上限" in js

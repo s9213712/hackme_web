@@ -67,6 +67,8 @@ def detect_stage(payload: dict) -> str:
     explicit = payload.get("stage")
     if isinstance(explicit, str) and explicit in _KNOWN_STAGES:
         return explicit
+    if explicit == "stockfish_teacher_audit":
+        return STAGE_PGN_TEACHER_AUDIT
     # seed_train dry-run payload
     if "external_replay" in payload and "dry_run" in payload:
         return STAGE_SEED_TRAIN_DRY_RUN
@@ -175,8 +177,8 @@ def normalize_stage(payload: dict, *, source_path: str = "") -> dict:
         train = dict(er.get("train_result") or {})
         is_dry_run = bool(payload.get("dry_run"))
         # The model_mutation_in_this_stage flag is True iff training actually
-        # ran — i.e. NOT dry-run AND trained_exp4 or trained_exp5.
-        trained_any = bool(train.get("trained_exp4")) or bool(train.get("trained_exp5"))
+        # ran — i.e. NOT dry-run AND any external-replay trainer wrote a model.
+        trained_any = bool(train.get("trained_exp3")) or bool(train.get("trained_exp4")) or bool(train.get("trained_exp5"))
         base["diagnostic_only"] = is_dry_run
         base["model_mutation_in_this_stage"] = (not is_dry_run) and trained_any
         # Whether the explicit model paths were defaults is captured by the
@@ -191,17 +193,22 @@ def normalize_stage(payload: dict, *, source_path: str = "") -> dict:
         source_breakdown = dict(load_stats.get("source_breakdown_raw") or {})
         base["key_metrics"] = {
             "dry_run": is_dry_run,
+            "train_exp3_external_replay": bool(er.get("train_exp3_external_replay")),
+            "skip_exp3": bool(er.get("skip_exp3")),
             "skip_exp4": bool(er.get("skip_exp4")),
             "skip_exp5": bool(er.get("skip_exp5")),
             "files_read": load_stats.get("files_read", 0),
             "rows_total": load_stats.get("rows_total", 0),
             "rows_kept": load_stats.get("rows_kept", 0),
             "total_kept_after_caps": cap_stats.get("total_kept", 0),
+            "exp3_ok": nv.get("exp3_ok", 0),
+            "exp3_failed": nv.get("exp3_failed", 0),
             "exp4_ok": nv.get("exp4_ok", 0),
             "exp4_failed": nv.get("exp4_failed", 0),
             "exp5_ok": nv.get("exp5_ok", 0),
             "exp5_failed": nv.get("exp5_failed", 0),
             "train_skipped_reason": train.get("skipped_reason", ""),
+            "trained_exp3": bool(train.get("trained_exp3")),
             "trained_exp4": bool(train.get("trained_exp4")),
             "trained_exp5": bool(train.get("trained_exp5")),
             "dry_run_artifact": artifact,
@@ -212,6 +219,28 @@ def normalize_stage(payload: dict, *, source_path: str = "") -> dict:
     if stage == STAGE_PGN_TEACHER_AUDIT:
         counts = dict(payload.get("counts") or {})
         policy = dict(payload.get("policy") or {})
+        if str(payload.get("stage") or "") == "stockfish_teacher_audit":
+            base["diagnostic_only"] = True
+            base["key_metrics"] = {
+                "audit_backend": "stockfish",
+                "depth": payload.get("depth", 0),
+                "movetime_ms": payload.get("movetime_ms", 0),
+                "top_k": payload.get("multipv", 0),
+                "input_rows": counts.get("selected_positions", 0),
+                "accepted_rows": counts.get("teacher_train_rows", 0),
+                "eval_rows": counts.get("teacher_eval_rows", 0),
+                "review_rows": counts.get("review_rows", 0),
+                "rejected_rows": counts.get("rejected_rows", 0),
+                "played_clean_rows": counts.get("played_clean_rows", 0),
+                "teacher_rows": counts.get("teacher_rows", 0),
+                "hard_negative_source_moves": counts.get("hard_negative_source_moves", 0),
+                "by_category": dict(counts.get("by_category") or {}),
+                "by_played_status": dict(counts.get("by_played_status") or {}),
+                "accepted_jsonl": payload.get("teacher_train_jsonl", ""),
+                "audited_trusted_source": "stockfish_teacher_audited",
+                "stockfish_reference": payload.get("stockfish_reference", ""),
+            }
+            return base
         base["diagnostic_only"] = bool(policy.get("diagnostic_only", True))
         base["key_metrics"] = {
             "audit_profile": payload.get("audit_profile", ""),

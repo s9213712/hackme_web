@@ -16,6 +16,10 @@ from services.trading.accounting.core import (
     quantity_to_units,
     units_to_quantity,
 )
+from services.trading.accounting.interest import (
+    margin_interest_billable_carry_micropoints,
+    margin_interest_billable_points,
+)
 from services.trading.constants import ASSET_SCALE, POINT_MICRO_SCALE
 from services.trading.notifications import (
     create_trading_user_notification,
@@ -328,8 +332,8 @@ def accrue_margin_interest(service, conn, position, *, actor=None, now_text=None
         hours=due_hours,
     )
     total_micro = carry + due_micro
-    due_points = int(total_micro // POINT_MICRO_SCALE)
-    next_carry = int(total_micro % POINT_MICRO_SCALE)
+    due_points = margin_interest_billable_points(total_micro, point_micro_scale=POINT_MICRO_SCALE)
+    next_carry = margin_interest_billable_carry_micropoints(total_micro, point_micro_scale=POINT_MICRO_SCALE)
     if due_points <= 0:
         conn.execute(
             f"UPDATE {margin_positions_table} SET interest_accrued_hours=?, interest_carry_micropoints=?, updated_at=? WHERE id=?",
@@ -1118,6 +1122,209 @@ def add_margin_collateral(
         ).fetchone()
         result = {
             "ok": True,
+            "position": service._margin_position_payload_with_risk(conn, row),
+            "funding": service._funding_payload(conn, user_id),
+        }
+        if operation_key:
+            conn.execute(
+                """
+                UPDATE trading_operation_idempotency
+                SET response_json=?, updated_at=?
+                WHERE idempotency_key=?
+                """,
+                (_json_dumps(result), _now_text(), operation_key),
+            )
+        conn.commit()
+        return result
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def withdraw_margin_collateral(
+    service,
+    *,
+    actor,
+    position_uuid,
+    amount_points,
+    idempotency_key=None,
+    ctx=None,
+):
+    ctx = service._resolve_trading_ctx(ctx, action="withdraw_margin_collateral")
+    actor_user_id = service._actor_id(actor)
+    if not actor_user_id:
+        raise ValueError("login required")
+    amount = _to_int(amount_points, name="collateral_points", minimum=1, maximum=10**12)
+    fallback_key = idempotency_key or f"{position_uuid}:{amount}:{int(datetime.now().timestamp() // 60)}"
+    operation_key = _client_idempotency_key(
+        fallback_key,
+        prefix=f"margin_collateral_withdraw:{actor_user_id}:{position_uuid}",
+    )
+    conn = service.get_db()
+    try:
+        service.ensure_schema(conn)
+        conn.commit()
+        conn.execute("BEGIN IMMEDIATE")
+        service._assert_writable(conn)
+        if operation_key:
+            existing_operation = conn.execute(
+                """
+                SELECT response_json FROM trading_operation_idempotency
+                WHERE idempotency_key=? AND operation='margin_collateral_withdraw'
+                """,
+                (operation_key,),
+            ).fetchone()
+            if existing_operation and existing_operation["response_json"]:
+                result = _json_loads(existing_operation["response_json"], {"ok": True})
+                conn.rollback()
+                return result
+            now_text = _now_text()
+            insert_cur = conn.execute(
+                """
+                INSERT OR IGNORE INTO trading_operation_idempotency (
+                    idempotency_key, operation, user_id, reference_uuid, response_json, created_at, updated_at
+                ) VALUES (?, 'margin_collateral_withdraw', ?, ?, '', ?, ?)
+                """,
+                (operation_key, int(actor_user_id), str(position_uuid or ""), now_text, now_text),
+            )
+            if insert_cur.rowcount == 0:
+                existing_operation = conn.execute(
+                    "SELECT response_json FROM trading_operation_idempotency WHERE idempotency_key=?",
+                    (operation_key,),
+                ).fetchone()
+                if existing_operation and existing_operation["response_json"]:
+                    result = _json_loads(existing_operation["response_json"], {"ok": True})
+                    conn.rollback()
+                    return result
+                raise ValueError("duplicate margin collateral withdrawal is still processing")
+        position = conn.execute(
+            "SELECT * FROM trading_margin_positions WHERE position_uuid=?",
+            (str(position_uuid or ""),),
+        ).fetchone()
+        if not position:
+            raise ValueError("margin position not found")
+        user_id = int(position["user_id"])
+        if int(user_id) != int(actor_user_id):
+            raise ValueError("cannot update another user's margin position")
+        if position["status"] != "open":
+            raise ValueError("margin position is not open")
+        collateral = int(position["collateral_points"] or 0)
+        if amount >= collateral:
+            raise ValueError("抽出後保證金不可為 0")
+        market = service._market(conn, position["market_symbol"])
+        risk_before = service._margin_risk_payload(conn, position, market=market)
+        profitable_surplus = max(0, int(risk_before.get("unrealized_pnl_points") or 0))
+        max_withdrawable = min(collateral - 1, profitable_surplus)
+        if profitable_surplus <= 0:
+            raise ValueError("目前沒有可抽出的未實現盈利")
+        if amount > max_withdrawable:
+            raise ValueError(f"可抽出保證金上限為 {max_withdrawable} 點")
+        collateral_trial = int(position["collateral_trial_points"] or 0) if "collateral_trial_points" in position.keys() else 0
+        collateral_chain = int(position["collateral_chain_points"] or 0) if "collateral_chain_points" in position.keys() else collateral
+        chain_release = min(amount, collateral_chain)
+        trial_release = min(collateral_trial, amount - chain_release)
+        if chain_release + trial_release != amount and not service._is_root_user_id(conn, user_id):
+            raise ValueError("margin collateral accounting is inconsistent")
+        is_long = position["position_type"] == POSITION_MARGIN_LONG
+        principal_increment = amount if is_long else 0
+        now = _now_text()
+        conn.execute(
+            """
+            UPDATE trading_margin_positions
+            SET collateral_points=collateral_points-?,
+                collateral_trial_points=MAX(0, collateral_trial_points-?),
+                collateral_chain_points=MAX(0, collateral_chain_points-?),
+                principal_points=principal_points+?,
+                updated_at=?
+            WHERE id=?
+            """,
+            (amount, trial_release, chain_release, principal_increment, now, position["id"]),
+        )
+        updated_for_risk = conn.execute(
+            "SELECT * FROM trading_margin_positions WHERE id=?",
+            (position["id"],),
+        ).fetchone()
+        risk_after = service._margin_risk_payload(conn, updated_for_risk, market=market)
+        if risk_after.get("liquidation_required"):
+            raise ValueError("抽出後權益會低於維持保證金，已拒絕")
+        ledger_uuids = []
+        is_root_simulated = service._is_root_user_id(conn, user_id)
+        route_ctx = service._routing_ctx_for_read(ctx)
+        if is_root_simulated:
+            service._sim_delta(conn, user_id, balance_delta=amount, locked_delta=-amount)
+        else:
+            if is_long and principal_increment:
+                service._reserve_delta(
+                    conn,
+                    delta=-principal_increment,
+                    event_type="margin_collateral_withdraw_principal_lent",
+                    reason="TRADING_MARGIN_COLLATERAL_WITHDRAW_PRINCIPAL_LENT",
+                    actor=actor,
+                )
+            if chain_release:
+                ledger_uuids.append(
+                    service._ledger(
+                        conn,
+                        ctx=route_ctx,
+                        user_id=user_id,
+                        currency_type="points",
+                        direction="unfreeze",
+                        amount=chain_release,
+                        action_type="trading_margin_collateral_unfreeze",
+                        reference_type="trading_margin_position",
+                        reference_id=position["position_uuid"],
+                        idempotency_key=f"trading:margin:collateral_withdraw:{operation_key}",
+                        reason="TRADING_MARGIN_COLLATERAL_WITHDRAW",
+                        public_metadata={
+                            "position_type": position["position_type"],
+                            "market": position["market_symbol"],
+                            "amount_points": amount,
+                            "trial_collateral_points": trial_release,
+                            "chain_collateral_points": chain_release,
+                        },
+                        actor=actor,
+                    )["ledger_uuid"]
+                )
+            if trial_release:
+                service._release_trial_margin_collateral(
+                    conn,
+                    user_id,
+                    collateral_trial=trial_release,
+                    available_delta_if_active=trial_release,
+                )
+        row = conn.execute(
+            "SELECT * FROM trading_margin_positions WHERE id=?",
+            (position["id"],),
+        ).fetchone()
+        warning = "抽出保證金會降低維持率；價格反向波動時更容易接近強平線，請自行控管風險。"
+        service._audit_event(
+            conn,
+            "TRADING_MARGIN_COLLATERAL_WITHDRAWN",
+            "margin collateral withdrawn from profitable position",
+            actor=actor,
+            target_user_id=user_id,
+            market_symbol=position["market_symbol"],
+            severity="warning",
+            metadata={
+                "position_id": position["id"],
+                "position_uuid": position["position_uuid"],
+                "amount_points": amount,
+                "principal_increment_points": principal_increment,
+                "maintenance_ratio_before": risk_before.get("maintenance_ratio_percent"),
+                "maintenance_ratio_after": risk_after.get("maintenance_ratio_percent"),
+                "trial_collateral_points": trial_release,
+                "chain_collateral_points": chain_release,
+                "ledger_uuids": ledger_uuids,
+            },
+        )
+        result = {
+            "ok": True,
+            "amount_points": amount,
+            "warning": warning,
+            "risk_before": risk_before,
+            "risk_after": risk_after,
             "position": service._margin_position_payload_with_risk(conn, row),
             "funding": service._funding_payload(conn, user_id),
         }

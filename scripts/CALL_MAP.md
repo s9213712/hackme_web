@@ -89,6 +89,21 @@ scripts/security/pentest/run_pentest.sh
 
 用途：安全測試總入口。
 
+## Admin / Recovery
+
+### `admin/decrypt_server_files.py`
+
+```text
+scripts/admin/decrypt_server_files.py
+  -> uploaded_files rows where privacy_mode=server_encrypted
+  -> services/storage/paths.py::resolve_storage_path(...)
+  -> SERVER_FILE_ENCRYPTION_KEY or runtime .filekey
+  -> cryptography.fernet.Fernet.decrypt(...)
+  -> plaintext output directory + manifest JSON
+```
+
+用途：在伺服器端檔案金鑰仍可用時，離線解密 server-side encrypted 檔案；不解 E2EE 檔案。腳本 help、stderr 與 manifest 會明確警告：解密可能破壞與網頁使用者間的信任或觸犯隱私相關法律，操作後果請自行負責。
+
 ## Frontend / Playwright
 
 ### `testing/playwright_platform_health_check.py`
@@ -166,21 +181,103 @@ scripts/games/setup_katago.py
 
 用途：安裝 Go 的 KataGo 難度依賴。
 
-### Chess Exp5 評測與訓練鏈
+### Chess PGN / Stockfish Teacher / Exp3-5 訓練鏈
 
 ```text
-chess_pgn_to_replay.py / chess_pvp_history_to_replay.py / chess_sparring_to_replay.py
+chess_pgn_to_replay.py
+  -> local PGN or --source-url download cache
   -> replay JSONL
+  -> --stockfish-filter (optional)
+    -> chess_stockfish_teacher_audit.py
+      -> stockfish_teacher_train_rows.jsonl
+      -> stockfish_teacher_eval_rows.jsonl
+      -> stockfish_played_clean_rows.jsonl
+  -> chess_pipeline_dryrun.py --pgn-audit-backend stockfish (optional orchestrated path)
+
+chess_pvp_history_to_replay.py / chess_sparring_to_replay.py
+  -> replay JSONL
+  -> chess_stockfish_teacher_audit.py (optional local external Stockfish teacher/filter)
+    -> stockfish_teacher_rows.jsonl
+    -> stockfish_teacher_train_rows.jsonl / stockfish_teacher_eval_rows.jsonl
+
+stockfish_teacher_train_rows.jsonl / stockfish_played_clean_rows.jsonl
+  -> chess_seed_train.py --include-replay-jsonl ... --train-exp3-external-replay
+    -> exp3 DL candidate model + adjacent replay ledger
+    -> exp4 PV candidate model
+    -> exp5 experience/candidate artifact
+  -> chess_teacher_eval_probe.py
+    -> baseline-vs-candidate teacher holdout rank report
+
+FEN or replay rows
   -> chess_exp5_teacher_distill.py
     -> teacher-selected FEN/move rows
+  -> chess_exp3_dataset_train.py --teacher-backend stockfish (optional)
+  -> chess_exp4_dataset_train.py --teacher-backend stockfish (optional)
+  -> chess_exp5_dataset_train.py
+
+exp5 candidate artifacts
   -> chess_exp5_dataset_train.py / chess_exp5_retrain_pipeline.py
     -> candidate model
   -> chess_exp5_strength_gate.py
   -> chess_exp5_tactical_suite.py
   -> chess_exp5_gauntlet.py
+    -> chess_redact_gauntlet_evidence.py
+      -> raw replay JSON/JSONL copied to runtime/private
+      -> docs evidence replaced with redacted aggregate JSON/JSONL
+    -> chess_gauntlet_extract_positions.py --actor ai --result draw
+      -> chess_stockfish_teacher_audit.py
+      -> chess_stockfish_audit_summary.py
+      -> chess_exp5_draw_summary.py
+    -> chess_gauntlet_extract_positions.py --actor ai --tail-actor-moves 12
+      -> chess_stockfish_teacher_audit.py
+      -> chess_stockfish_audit_summary.py
+      -> tail/endgame conversion audit for the final AI decisions in complete games
+  -> chess_exp5_validation_probe.py --question-set runtime/private/... --questions 50
+    -> services/games/chess_nnue.py::choose_experiment_nnue_move(...)
+    -> services/games/chess_stockfish_teacher.py::UciStockfish MultiPV
+    -> redacted docs/games/evidence/exp5/*heldout_validation_50_stockfish.{json,jsonl}
+  -> chess_exp5_expanded_validation.py build --input-replay-jsonl runtime/private/...downloaded...
+    -> multi-source downloaded PGN replay rows
+    -> services/games/chess_stockfish_teacher.py::UciStockfish MultiPV as Blockfish teacher
+    -> runtime/private/games/exp5/.../v24_expanded_100_questions.json
+    -> redacted docs/games/evidence/exp5/v24_expanded_100_question_set_summary.json
+  -> chess_exp5_expanded_validation.py evaluate --question-set runtime/private/... [--section tail50pct]
+    -> services/games/chess_nnue.py::choose_experiment_nnue_move(...)
+    -> services/games/chess_stockfish_teacher.py::UciStockfish MultiPV with deterministic Threads/Hash/Clear Hash
+    -> runtime/private/games/exp5/.../*_eval_detail.jsonl
+    -> redacted docs/games/evidence/exp5/v24_expanded_100_evaluation.{json,jsonl}
+  -> chess_exp5_failure_taxonomy.py --input-jsonl runtime/private/.../*_eval_detail.jsonl
+    -> aggregate rejected failure taxonomy only
+    -> redacted docs/games/evidence/exp5/*_failure_taxonomy.json
+    -> no FEN, moves, PV, source game ids, chosen/source moves, or per-question answers
+  -> chess_exp5_v26_gate.py --baseline-eval-json docs/games/evidence/exp5/v24_percent_tail_100_evaluation.json --candidate-eval-json docs/games/evidence/exp5/v26_*.json
+    -> compares weak-slice rejected counts against V24 percent-tail baseline
+    -> optional taxonomy comparison for candidate/search-miss deltas
+    -> redacted docs/games/evidence/exp5/v26_*_gate.json and docs/games/reports/*_v26_gate.md
+  -> chess_exp5_blockfish_match.py --profile <accepted-or-candidate-profile> --games 5 --stockfish-depth-schedule 2,3,4,5,6
+    -> services/games/chess_nnue.py::choose_experiment_nnue_move(...)
+    -> services/games/chess_stockfish_teacher.py::UciStockfish as staged Blockfish opponent
+    -> private complete replay JSONL under runtime/private/games/exp5/...
+    -> redacted win-rate summary under docs/games/evidence/exp5/...
   -> chess_exp5_production_readiness.py
   -> chess_exp5_promote_candidate.py
 ```
+
+`chess_stockfish_teacher_audit.py` and `chess_pgn_to_replay.py --stockfish-filter`
+only run when the caller provides or the environment resolves a local Stockfish
+UCI binary. The binary is not part of the repo and is intentionally outside the
+maintained script assets. Downloaded PGN rows remain diagnostic until they pass a
+teacher/audit filter and are explicitly fed to staged model paths.
+
+Sensitive raw learning/replay JSONL policy:
+
+- Keep FEN/move/teacher-PV JSONL under `runtime/private/` or another ignored
+  local path.
+- Docs evidence should contain redacted aggregate JSON/JSONL unless a caller
+  explicitly opts into private sensitive output.
+- Distilled weights or non-exact feature deltas may be committed after review;
+  exact-memory tables, opening books, replay priors, and `FEN -> move` adapters
+  are still sensitive and should stay private unless intentionally published.
 
 主要輸出：
 

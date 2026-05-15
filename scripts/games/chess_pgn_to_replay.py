@@ -123,6 +123,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-format", choices=["replay-jsonl", "prepared-dataset"], default="replay-jsonl")
     parser.add_argument("--prepared-output-dir", default="")
     parser.add_argument("--distill-manifest", default="", help="Write a manifest for a later teacher-distill run.")
+    parser.add_argument(
+        "--stockfish-filter",
+        action="store_true",
+        help=(
+            "After writing replay JSONL, run the local external Stockfish teacher audit/filter. "
+            "Requires a local Stockfish binary; no binary is downloaded or bundled."
+        ),
+    )
+    parser.add_argument("--stockfish-output-dir", default="", help="Output directory for --stockfish-filter artifacts.")
+    parser.add_argument("--stockfish-path", default="", help="Local Stockfish-compatible UCI binary for --stockfish-filter.")
+    parser.add_argument("--stockfish-depth", type=int, default=8, help="Stockfish depth for --stockfish-filter.")
+    parser.add_argument("--stockfish-movetime-ms", type=int, default=0, help="Optional Stockfish movetime for --stockfish-filter.")
+    parser.add_argument("--stockfish-multipv", type=int, default=5, help="Stockfish MultiPV count for --stockfish-filter.")
+    parser.add_argument("--stockfish-max-positions", type=int, default=0, help="Maximum positions to audit after PGN conversion.")
+    parser.add_argument(
+        "--stockfish-eval-mod",
+        type=int,
+        default=10,
+        help="Deterministic Stockfish split modulus for --stockfish-filter: bucket 0 => eval, others => train.",
+    )
     parser.add_argument("--allow-empty-output", action="store_true")
     parser.add_argument("--no-progress", action="store_true")
     parser.add_argument("--source", choices=sorted(TRUSTED_SOURCES), default="imported_dataset")
@@ -798,6 +818,68 @@ def _prepare_dataset(replay_path: Path, output_dir: Path) -> dict:
     }
 
 
+def _run_stockfish_filter(replay_path: Path, args: argparse.Namespace) -> dict:
+    if not replay_path.exists():
+        return {
+            "ok": False,
+            "skipped": False,
+            "reason": "replay_jsonl_missing",
+            "replay_jsonl": str(replay_path),
+        }
+    output_dir = (
+        Path(args.stockfish_output_dir).expanduser().resolve()
+        if args.stockfish_output_dir
+        else replay_path.with_suffix("").parent / f"{replay_path.stem}_stockfish_filter"
+    )
+    command = [
+        sys.executable,
+        str(RUNTIME_ROOT / "scripts" / "games" / "chess_stockfish_teacher_audit.py"),
+        "--input-jsonl",
+        str(replay_path),
+        "--output-dir",
+        str(output_dir),
+        "--depth",
+        str(max(0, int(args.stockfish_depth or 0))),
+        "--movetime-ms",
+        str(max(0, int(args.stockfish_movetime_ms or 0))),
+        "--multipv",
+        str(max(1, int(args.stockfish_multipv or 1))),
+        "--replace-output",
+    ]
+    if args.stockfish_path:
+        command.extend(["--stockfish-path", str(args.stockfish_path)])
+    if int(args.stockfish_max_positions or 0) > 0:
+        command.extend(["--max-positions", str(int(args.stockfish_max_positions))])
+    if int(args.stockfish_eval_mod or 0) >= 0:
+        command.extend(["--eval-mod", str(max(0, int(args.stockfish_eval_mod or 0)))])
+    proc = subprocess.run(
+        command,
+        cwd=str(RUNTIME_ROOT),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    payload = {}
+    if proc.stdout.strip():
+        try:
+            payload = json.loads(proc.stdout)
+        except Exception:
+            payload = {"raw_stdout": proc.stdout[-4000:]}
+    return {
+        "ok": proc.returncode == 0 and str(payload.get("stage") or "") == "stockfish_teacher_audit",
+        "returncode": proc.returncode,
+        "command": command,
+        "output_dir": str(output_dir),
+        "summary_path": str(output_dir / "summary.json"),
+        "teacher_train_jsonl": str(output_dir / "stockfish_teacher_train_rows.jsonl"),
+        "teacher_eval_jsonl": str(output_dir / "stockfish_teacher_eval_rows.jsonl"),
+        "played_clean_jsonl": str(output_dir / "stockfish_played_clean_rows.jsonl"),
+        "stdout": proc.stdout[-4000:],
+        "stderr": proc.stderr[-4000:],
+        "summary": payload,
+    }
+
+
 def main() -> int:
     args = parse_args()
     if args.interactive:
@@ -946,6 +1028,17 @@ def main() -> int:
         if not summary["prepared_dataset"]["ok"]:
             summary["ok"] = False
             errors.append({"stage": "prepare_dataset", "error": "chess_replay_prepare failed"})
+    if selected and args.stockfish_filter:
+        summary["stockfish_filter"] = _run_stockfish_filter(output_path, args)
+        if not summary["stockfish_filter"]["ok"]:
+            summary["ok"] = False
+            errors.append({"stage": "stockfish_filter", "error": "chess_stockfish_teacher_audit failed"})
+    elif args.stockfish_filter:
+        summary["stockfish_filter"] = {
+            "ok": False,
+            "skipped": True,
+            "reason": "no_selected_games",
+        }
     if selected and args.distill_manifest:
         try:
             summary.update(_write_distill_manifest(Path(args.distill_manifest).expanduser().resolve(), replay_path=output_path, records=selected, summary=summary))

@@ -1,0 +1,36 @@
+{
+  "averages": {
+    "ai_material_cp": -905.71,
+    "tail_capture_rate": 0.0476,
+    "tail_pawn_or_capture_rate": 0.1071
+  },
+  "counts": {
+    "ai_material_buckets": {
+      "ai_down_major_or_more": 4,
+      "ai_down_minor_or_exchange": 2,
+      "near_equal": 1
+    },
+    "draw_reasons": {
+      "threefold_repetition": 7
+    },
+    "draws": 7,
+    "games": 30,
+    "halfmove_clock_buckets": {
+      "fresh": 2,
+      "high": 1,
+      "moderate": 4
+    },
+    "max_repetition_buckets": {
+      "2": 7
+    },
+    "piece_count_buckets": {
+      "low_piece_count": 3,
+      "medium_piece_count": 4
+    },
+    "plies_buckets": {
+      "medium": 5,
+      "very_long": 2
+    }
+  },
+  "source": "docs/games/evidence/exp5/v20_piece_activity_midgame_gate700_full_30.json"
+}

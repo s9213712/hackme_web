@@ -46,17 +46,18 @@
     powerup: `${BULLET_HELL_PARTICLE_BASE}star_06.png`,
     bomb: `${BULLET_HELL_PARTICLE_BASE}light_02.png`,
   });
-  const BULLET_HELL_IMAGES = loadBulletHellImages(BULLET_HELL_IMAGE_ASSETS);
+  const BULLET_HELL_IMAGES = {};
 
-  function loadBulletHellImages(assets) {
-    if (typeof Image === "undefined") return {};
-    return Object.entries(assets).reduce((images, [key, src]) => {
+  function bulletHellImageFor(key) {
+    const src = BULLET_HELL_IMAGE_ASSETS[key];
+    if (!src || typeof Image === "undefined") return null;
+    if (!BULLET_HELL_IMAGES[key]) {
       const image = new Image();
       image.decoding = "async";
       image.src = src;
-      images[key] = image;
-      return images;
-    }, {});
+      BULLET_HELL_IMAGES[key] = image;
+    }
+    return BULLET_HELL_IMAGES[key];
   }
 
   function bulletHellImageReady(image) {
@@ -64,7 +65,7 @@
   }
 
   function drawBulletHellImage(ctx, key, x, y, w, h, options = {}) {
-    const image = BULLET_HELL_IMAGES[key];
+    const image = bulletHellImageFor(key);
     if (!bulletHellImageReady(image)) return false;
     ctx.save();
     ctx.globalAlpha = options.alpha ?? 1;

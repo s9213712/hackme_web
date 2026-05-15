@@ -301,11 +301,10 @@ def register_file_admin_storage_routes(app, ctx):
         conn = get_db()
         try:
             ensure_storage_album_schema(conn)
-            rows = conn.execute("SELECT id FROM users ORDER BY id ASC").fetchall()
+            rows = conn.execute("SELECT * FROM users ORDER BY id ASC").fetchall()
             synced = []
             for row in rows:
-                target = conn.execute("SELECT * FROM users WHERE id=?", (row["id"],)).fetchone()
-                usage = storage_usage_for_user_row(conn, target) if target else {}
+                usage = storage_usage_for_user_row(conn, row)
                 summary = sync_user_storage_summary(conn, row["id"], actor_user_id=actor["id"], source="admin", reason="admin_sync_quota")
                 synced.append(storage_summary_with_live_quota(summary, usage))
             conn.commit()

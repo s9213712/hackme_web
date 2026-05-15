@@ -56,6 +56,7 @@ PVP_CONVERTER = REPO_ROOT / "scripts" / "games" / "chess_pvp_history_to_replay.p
 SPARRING_RUNNER = REPO_ROOT / "scripts" / "games" / "chess_exp4_vs_exp5_sparring.py"
 SPARRING_HARVESTER = REPO_ROOT / "scripts" / "games" / "chess_sparring_to_replay.py"
 PGN_TEACHER_AUDIT = REPO_ROOT / "scripts" / "games" / "chess_imported_replay_teacher_audit.py"
+STOCKFISH_TEACHER_AUDIT = REPO_ROOT / "scripts" / "games" / "chess_stockfish_teacher_audit.py"
 SEED_TRAIN = REPO_ROOT / "scripts" / "games" / "chess_seed_train.py"
 AGGREGATOR = REPO_ROOT / "scripts" / "games" / "chess_pipeline_report.py"
 
@@ -341,6 +342,10 @@ def run_pgn_teacher_audit_stage(
     exp5_model_path: str,
     audit_profile: str,
     top_k: int,
+    backend: str = "local_models",
+    stockfish_path: str = "",
+    stockfish_depth: int = 8,
+    stockfish_movetime_ms: int = 0,
 ) -> dict:
     """Stage 00b (W8): teacher-audit the raw PGN per-ply JSONLs.
 
@@ -366,20 +371,38 @@ def run_pgn_teacher_audit_stage(
             "reason": "upstream raw jsonls missing on disk",
         }
     output_dir.mkdir(parents=True, exist_ok=True)
-    cmd = [
-        sys.executable,
-        str(PGN_TEACHER_AUDIT),
-        "--output-dir",
-        str(output_dir),
-        "--audit-profile",
-        audit_profile,
-        "--top-k",
-        str(top_k),
-    ]
-    if exp4_model_path:
-        cmd.extend(["--exp4-model-path", exp4_model_path])
-    if exp5_model_path:
-        cmd.extend(["--exp5-model-path", exp5_model_path])
+    normalized_backend = str(backend or "local_models").strip().lower()
+    if normalized_backend == "stockfish":
+        cmd = [
+            sys.executable,
+            str(STOCKFISH_TEACHER_AUDIT),
+            "--output-dir",
+            str(output_dir),
+            "--depth",
+            str(max(0, int(stockfish_depth or 0))),
+            "--movetime-ms",
+            str(max(0, int(stockfish_movetime_ms or 0))),
+            "--multipv",
+            str(max(1, int(top_k or 1))),
+            "--replace-output",
+        ]
+        if stockfish_path:
+            cmd.extend(["--stockfish-path", stockfish_path])
+    else:
+        cmd = [
+            sys.executable,
+            str(PGN_TEACHER_AUDIT),
+            "--output-dir",
+            str(output_dir),
+            "--audit-profile",
+            audit_profile,
+            "--top-k",
+            str(top_k),
+        ]
+        if exp4_model_path:
+            cmd.extend(["--exp4-model-path", exp4_model_path])
+        if exp5_model_path:
+            cmd.extend(["--exp5-model-path", exp5_model_path])
     for jsonl in real_jsonls:
         cmd.extend(["--input-jsonl", jsonl])
     log = log_dir / "00b_pgn_teacher_audit.log"
@@ -391,10 +414,15 @@ def run_pgn_teacher_audit_stage(
             "exit_code": rc,
             "log": str(log),
         }
-    accepted = output_dir / "accepted_replay.jsonl"
+    accepted = (
+        output_dir / "stockfish_teacher_train_rows.jsonl"
+        if normalized_backend == "stockfish"
+        else output_dir / "accepted_replay.jsonl"
+    )
     return {
         "stage": "pgn_teacher_audit",
         "status": "ok",
+        "backend": normalized_backend,
         "summary_path": str(output_dir / "summary.json"),
         "accepted_jsonl": str(accepted) if accepted.exists() else "",
         "log": str(log),
@@ -553,6 +581,7 @@ def run_seed_train_dryrun_stage(
         "--preset",
         "warmup10",
         "--dry-run",
+        "--train-exp3-external-replay",
         "--report-dir",
         str(report_dir),
     ]
@@ -659,10 +688,15 @@ def build_suggested_staging_command(
         str(SEED_TRAIN),
         "--preset",
         preset,
+        "--train-exp3-external-replay",
     ]
     for jsonl in include_jsonls:
         parts.extend(["--include-replay-jsonl", jsonl])
+    dl_candidate = candidate_dir / "chess_experiment_3_dl_candidate.json"
+    dl_replay = candidate_dir / "chess_experiment_3_dl_candidate_replay.jsonl"
     pv_candidate = candidate_dir / "chess_experiment_4_pv_candidate.json"
+    parts.extend(["--experiment-3-model-path", str(dl_candidate)])
+    parts.extend(["--experiment-3-replay-path", str(dl_replay)])
     parts.extend(["--experiment-4-model-path", str(pv_candidate)])
     if skip_exp5:
         parts.append("--skip-exp5")
@@ -715,6 +749,10 @@ def run_pipeline(args: argparse.Namespace) -> dict:
             ),
             audit_profile=str(args.pgn_audit_profile or "strict"),
             top_k=int(args.pgn_audit_top_k or 3),
+            backend=str(args.pgn_audit_backend or "local_models"),
+            stockfish_path=str(args.pgn_audit_stockfish_path or ""),
+            stockfish_depth=int(args.pgn_audit_stockfish_depth or 8),
+            stockfish_movetime_ms=int(args.pgn_audit_stockfish_movetime_ms or 0),
         )
     elif raw_pgn_jsonls and args.pgn_skip_audit:
         pgn_audit = {
@@ -869,6 +907,18 @@ def parse_args() -> argparse.Namespace:
             "--include-unaudited-pgn-in-dryrun-diagnostic."
         ),
     )
+    p.add_argument(
+        "--pgn-audit-backend",
+        default="local_models",
+        choices=["local_models", "stockfish"],
+        help=(
+            "Teacher audit backend for downloaded/local PGN rows. local_models "
+            "uses exp4/exp5 candidates; stockfish uses the external local Stockfish binary."
+        ),
+    )
+    p.add_argument("--pgn-audit-stockfish-path", default="", help="Local Stockfish UCI binary for --pgn-audit-backend stockfish.")
+    p.add_argument("--pgn-audit-stockfish-depth", type=int, default=8)
+    p.add_argument("--pgn-audit-stockfish-movetime-ms", type=int, default=0)
     p.add_argument(
         "--pgn-audit-profile",
         default="strict",

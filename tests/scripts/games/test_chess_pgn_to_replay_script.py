@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 import zipfile
 
 
@@ -175,6 +176,48 @@ def test_chess_pgn_to_replay_reads_zip_archives(tmp_path):
     rows = [json.loads(line) for line in output_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert summary["written_records"] == 1
     assert rows[0]["pgn_labels"]["event"] == "Zip sample"
+
+
+def test_chess_pgn_to_replay_stockfish_filter_calls_teacher_audit(tmp_path, monkeypatch):
+    from scripts.games import chess_pgn_to_replay
+
+    replay_path = tmp_path / "replays.jsonl"
+    output_dir = tmp_path / "stockfish_filter"
+    replay_path.write_text('{"replay_id":"r1"}\n', encoding="utf-8")
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        payload = {"stage": "stockfish_teacher_audit", "teacher_train_rows": 2}
+        return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+
+    monkeypatch.setattr(chess_pgn_to_replay.subprocess, "run", fake_run)
+
+    result = chess_pgn_to_replay._run_stockfish_filter(
+        replay_path,
+        SimpleNamespace(
+            stockfish_output_dir=str(output_dir),
+            stockfish_path="/tmp/local-stockfish",
+            stockfish_depth=10,
+            stockfish_movetime_ms=25,
+            stockfish_multipv=4,
+            stockfish_max_positions=12,
+            stockfish_eval_mod=3,
+        ),
+    )
+
+    assert result["ok"] is True
+    assert result["output_dir"] == str(output_dir.resolve())
+    assert result["teacher_train_jsonl"].endswith("stockfish_teacher_train_rows.jsonl")
+    command, kwargs = calls[0]
+    assert str(ROOT / "scripts" / "games" / "chess_stockfish_teacher_audit.py") in command
+    assert command[command.index("--stockfish-path") + 1] == "/tmp/local-stockfish"
+    assert command[command.index("--depth") + 1] == "10"
+    assert command[command.index("--movetime-ms") + 1] == "25"
+    assert command[command.index("--multipv") + 1] == "4"
+    assert command[command.index("--max-positions") + 1] == "12"
+    assert command[command.index("--eval-mod") + 1] == "3"
+    assert kwargs["cwd"] == str(ROOT)
 
 
 def test_chess_pgn_to_replay_fails_loudly_when_filters_write_nothing(tmp_path):

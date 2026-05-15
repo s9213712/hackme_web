@@ -21,9 +21,13 @@ from services.games.chess_nnue import (  # noqa: E402
     default_chess_nnue_model_path,
     rank_experiment_nnue_policy_moves,
 )
+from services.games.chess_opening_book import book_candidates_for_chess_board  # noqa: E402
+from services.games.chess_search import ZobristHasher, search_best_move  # noqa: E402
+from services.games import chess_stockfish_teacher as stockfish_teacher  # noqa: E402
 from services.games.self_play_training import (  # noqa: E402
     DEFAULT_TEACHER_DEPTH,
     _teacher_static_eval,
+    _teacher_move_order,
     choose_teacher_move,
 )
 
@@ -33,6 +37,28 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input-jsonl", action="append", default=[], help="JSONL rows containing fen (+ optional side/weight/target).")
     parser.add_argument("--output-jsonl", required=True, help="Destination exp5 FEN/move JSONL.")
     parser.add_argument("--teacher-depth", type=int, default=DEFAULT_TEACHER_DEPTH)
+    parser.add_argument(
+        "--teacher-backend",
+        default="static_depth3",
+        choices=["static_depth3", "deeper_ab", "opening_book", "stockfish"],
+        help=(
+            "Teacher source for top1 labels. static_depth3 preserves the legacy self-play teacher; "
+            "deeper_ab ranks root moves with a deeper alpha-beta static teacher; opening_book uses "
+            "the curated deterministic opening book when available; stockfish uses UCI MultiPV when "
+            "a local stockfish binary is available."
+        ),
+    )
+    parser.add_argument(
+        "--stockfish-path",
+        default="",
+        help="Path to a local Stockfish-compatible UCI binary for --teacher-backend stockfish. Defaults to $STOCKFISH_PATH or PATH lookup.",
+    )
+    parser.add_argument(
+        "--stockfish-movetime-ms",
+        type=int,
+        default=80,
+        help="Optional movetime for stockfish MultiPV labeling. If <=0, only --teacher-depth is used.",
+    )
     parser.add_argument("--target", type=float, default=1.0)
     parser.add_argument("--weight", type=float, default=1.4)
     parser.add_argument("--source", default="teacher_distill_exp5")
@@ -204,6 +230,182 @@ def _teacher_top_k(board: chess.Board, side: str, *, k: int) -> list[dict]:
     return [{"move": uci, "teacher_eval_cp": int(score)} for uci, score in scored[: max(0, int(k))]]
 
 
+def _move_payload_to_uci(payload: dict | None) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    return f"{payload.get('from') or ''}{payload.get('to') or ''}{payload.get('promotion') or ''}".lower()
+
+
+def _deeper_ab_top_k(board: chess.Board, side: str, *, depth: int, k: int) -> list[dict]:
+    color_sign = 1 if side == "white" else -1
+    ranked: list[tuple[int, str]] = []
+    for move in board.legal_moves:
+        after = board.copy(stack=False)
+        after.push(move)
+        if after.is_checkmate():
+            score = 1_000_000
+        elif after.is_stalemate() or after.is_insufficient_material():
+            score = 0
+        else:
+            search = search_best_move(
+                after,
+                max_depth=max(1, int(depth or DEFAULT_TEACHER_DEPTH) - 1),
+                evaluate=_teacher_static_eval,
+                move_order_fn=lambda current_board, candidate, _ply: _teacher_move_order(current_board, candidate),
+                hasher=ZobristHasher(seed=20260531),
+                quiescence_depth=2,
+                time_budget_ms=None,
+            )
+            score = -int(search.score)
+        # Keep the same white/black-positive convention used by _teacher_top_k
+        # in the output field name, but rank by the mover's perspective.
+        ranked.append((score if color_sign else score, move.uci()))
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+    return [{"move": uci, "teacher_eval_cp": int(score)} for score, uci in ranked[: max(0, int(k))]]
+
+
+def _opening_book_top_k(board: chess.Board, *, k: int) -> list[dict]:
+    rows: list[dict] = []
+    for item in book_candidates_for_chess_board(board, max_candidates=max(1, int(k))):
+        uci = str(item.get("uci") or "").strip().lower()
+        if not uci:
+            continue
+        # Convert weighted book frequency into a monotonic pseudo-cp score so
+        # downstream code can retain a single teacher_topK shape.
+        rows.append({"move": uci, "teacher_eval_cp": int(item.get("weight") or 0) * 100})
+    return rows
+
+
+def _stockfish_top_k(
+    board: chess.Board,
+    *,
+    k: int,
+    depth: int,
+    stockfish_path: str,
+    movetime_ms: int,
+) -> tuple[list[dict], str]:
+    engine_path = _resolve_stockfish_path(stockfish_path)
+    if not engine_path:
+        return [], "stockfish_binary_not_found"
+    try:
+        rows = stockfish_teacher.stockfish_top_k(
+            board,
+            stockfish_path=engine_path,
+            k=max(1, int(k)),
+            depth=int(depth or 0),
+            movetime_ms=int(movetime_ms or 0),
+        )
+    except Exception as exc:
+        return [], f"stockfish_error:{exc.__class__.__name__}"
+    return [{"move": str(row.get("move") or ""), "teacher_eval_cp": int(row.get("teacher_eval_cp") or 0)} for row in rows], ""
+
+
+def _teacher_top_weights_from_ranking(ranking: list[dict]) -> dict[str, float]:
+    if not ranking:
+        return {}
+    best_score = ranking[0].get("teacher_eval_cp")
+    weights: dict[str, float] = {}
+    for index, item in enumerate(ranking[:5]):
+        move = str(item.get("move") or "").strip().lower()
+        if not move:
+            continue
+        score = item.get("teacher_eval_cp")
+        if best_score is None or score is None:
+            weight = 1.0 if index == 0 else 0.8 if index == 1 else 0.6 if index == 2 else 0.3
+        else:
+            loss = max(0.0, float(best_score) - float(score))
+            if index == 0:
+                weight = 1.0
+            elif loss <= 25:
+                weight = 0.85
+            elif loss <= 60:
+                weight = 0.65
+            elif loss <= 120:
+                weight = 0.35
+            else:
+                weight = 0.15
+        weights[move] = round(float(weight), 4)
+    return weights
+
+
+def _source_move_hard_negatives(row: dict, board: chess.Board, teacher_move: str, teacher_top5: list[str]) -> list[str]:
+    hard_negatives = [str(item).strip().lower() for item in (row.get("hard_negatives") or []) if str(item).strip()]
+    source_move = str(row.get("move_uci") or row.get("uci") or row.get("move") or "").strip().lower()
+    if not source_move or source_move == teacher_move or source_move in teacher_top5:
+        return hard_negatives
+    try:
+        move = chess.Move.from_uci(source_move)
+    except Exception:
+        return hard_negatives
+    if move in board.legal_moves and move.uci() not in hard_negatives:
+        hard_negatives.append(move.uci())
+    return hard_negatives
+
+
+def _select_teacher_move_and_topk(
+    *,
+    board: chess.Board,
+    side: str,
+    backend: str,
+    teacher_depth: int,
+    teacher_top_k: int,
+    stockfish_path: str,
+    stockfish_movetime_ms: int,
+) -> tuple[str, list[dict], dict]:
+    requested = str(backend or "static_depth3").strip().lower()
+    k = max(3, int(teacher_top_k or 5))
+    meta = {
+        "teacher_backend_requested": requested,
+        "teacher_backend_used": requested,
+        "teacher_backend_fallback_reason": "",
+        "teacher_top_k_method": "",
+    }
+    if requested == "opening_book":
+        ranking = _opening_book_top_k(board, k=k)
+        if ranking:
+            meta["teacher_top_k_method"] = "deterministic_opening_book"
+            return ranking[0]["move"], ranking, meta
+        meta["teacher_backend_fallback_reason"] = "opening_book_miss"
+        meta["teacher_backend_used"] = "static_depth3"
+    elif requested == "stockfish":
+        ranking, reason = _stockfish_top_k(
+            board,
+            k=k,
+            depth=max(1, int(teacher_depth or DEFAULT_TEACHER_DEPTH)),
+            stockfish_path=stockfish_path,
+            movetime_ms=int(stockfish_movetime_ms or 0),
+        )
+        if ranking:
+            meta["teacher_top_k_method"] = "stockfish_multipv"
+            return ranking[0]["move"], ranking, meta
+        meta["teacher_backend_fallback_reason"] = reason or "stockfish_no_move"
+        meta["teacher_backend_used"] = "deeper_ab"
+        requested = "deeper_ab"
+
+    if requested == "deeper_ab":
+        ranking = _deeper_ab_top_k(
+            board,
+            side,
+            depth=max(2, int(teacher_depth or DEFAULT_TEACHER_DEPTH)),
+            k=k,
+        )
+        if ranking:
+            meta["teacher_top_k_method"] = "deeper_alpha_beta_static_eval"
+            meta["teacher_backend_used"] = "deeper_ab"
+            return ranking[0]["move"], ranking, meta
+        meta["teacher_backend_fallback_reason"] = meta["teacher_backend_fallback_reason"] or "deeper_ab_no_move"
+        meta["teacher_backend_used"] = "static_depth3"
+
+    payload = choose_teacher_move({"__fen__": board.fen()}, side, depth=max(1, int(teacher_depth or DEFAULT_TEACHER_DEPTH)))
+    move_uci = _move_payload_to_uci(payload)
+    ranking = _teacher_top_k(board, side, k=k)
+    if move_uci and move_uci not in {row["move"] for row in ranking}:
+        ranking.insert(0, {"move": move_uci, "teacher_eval_cp": None})
+    meta["teacher_top_k_method"] = "static_depth_ab_top1_plus_one_ply_static_topk"
+    meta["teacher_backend_used"] = "static_depth3"
+    return move_uci, ranking[:k], meta
+
+
 def _baseline_policy_probe(
     *, fen: str, side: str, teacher_move_uci: str, baseline_model_path: Path,
     probe_profile: str = "fixed_depth_fast",
@@ -299,31 +501,50 @@ def _distill_row(
     baseline_probe_profile: str = "fixed_depth_fast",
     source_category: str = "external",
     eval_mod: int = 0,
+    teacher_backend: str = "static_depth3",
+    stockfish_path: str = "",
+    stockfish_movetime_ms: int = 80,
 ) -> tuple[dict | None, dict]:
     fen = str(row.get("fen") or row.get("board_fen") or "").strip()
     if not fen:
         return None, {"accepted": False, "reason": "missing_fen"}
     side = _side_from_row(row, fen)
-    move = choose_teacher_move({"__fen__": fen}, side, depth=max(1, int(teacher_depth)))
-    if not move:
+    try:
+        board = chess.Board(fen)
+        board.turn = chess.WHITE if side == "white" else chess.BLACK
+    except Exception:
+        return None, {"accepted": False, "reason": "invalid_fen", "fen": fen, "side": side}
+    move_uci, teacher_ranking, teacher_meta = _select_teacher_move_and_topk(
+        board=board,
+        side=side,
+        backend=teacher_backend,
+        teacher_depth=int(teacher_depth),
+        teacher_top_k=int(teacher_top_k),
+        stockfish_path=str(stockfish_path or ""),
+        stockfish_movetime_ms=int(stockfish_movetime_ms or 0),
+    )
+    if not move_uci:
         return None, {"accepted": False, "reason": "teacher_no_move", "fen": fen, "side": side}
-    move_uci = f"{move['from']}{move['to']}{move.get('promotion') or ''}".lower()
     quality = _teacher_move_quality(fen=fen, side=side, move_uci=move_uci)
     if not quality["legal"]:
         return None, {"accepted": False, "reason": "illegal_teacher_move", "fen": fen, "side": side, "move_uci": move_uci, "quality": quality}
     if quality["suspicious"]:
         return None, {"accepted": False, "reason": "suspicious_teacher_move", "fen": fen, "side": side, "move_uci": move_uci, "quality": quality}
 
-    board = chess.Board(fen)
-    board.turn = chess.WHITE if side == "white" else chess.BLACK
     top_k = max(3, int(teacher_top_k or 0))
-    teacher_ranking = _teacher_top_k(board, side, k=top_k)
     teacher_top3 = [item["move"] for item in teacher_ranking[:3]]
     teacher_top5 = [item["move"] for item in teacher_ranking[:5]]
     teacher_top3_present = move_uci in teacher_top3
     teacher_eval_of_teacher_move = next(
         (item["teacher_eval_cp"] for item in teacher_ranking if item["move"] == move_uci),
         None,
+    )
+    teacher_top_eval_cp = teacher_ranking[0].get("teacher_eval_cp") if teacher_ranking else None
+    teacher_second_eval_cp = teacher_ranking[1].get("teacher_eval_cp") if len(teacher_ranking) > 1 else None
+    teacher_margin_to_top2_cp = (
+        float(teacher_top_eval_cp) - float(teacher_second_eval_cp)
+        if teacher_top_eval_cp is not None and teacher_second_eval_cp is not None
+        else None
     )
 
     baseline_probe = _baseline_policy_probe(
@@ -347,7 +568,7 @@ def _distill_row(
         target=float(row.get("target", default_target)),
         weight=float(row.get("weight", default_weight)),
         source=str(row.get("source") or default_source),
-        hard_negatives=list(row.get("hard_negatives") or []),
+        hard_negatives=_source_move_hard_negatives(row, board, move_uci, teacher_top5),
         search_profile=str(row.get("search_profile") or "fast"),
     )
     if sample is None:
@@ -361,9 +582,18 @@ def _distill_row(
     # don't treat the ranking as the teacher's true search-strength top-K.
     sample["teacher_top3"] = teacher_top3
     sample["teacher_top5"] = teacher_top5
-    sample["teacher_top_k_method"] = "one_ply_static_eval"
-    sample["static_teacher_top_k"] = True
+    sample["teacher_top_weights"] = _teacher_top_weights_from_ranking(teacher_ranking)
+    sample["teacher_backend"] = teacher_meta["teacher_backend_used"]
+    sample["teacher_backend_requested"] = teacher_meta["teacher_backend_requested"]
+    sample["teacher_backend_fallback_reason"] = teacher_meta["teacher_backend_fallback_reason"]
+    sample["teacher_top_k_method"] = teacher_meta["teacher_top_k_method"]
+    sample["static_teacher_top_k"] = teacher_meta["teacher_top_k_method"] == "static_depth_ab_top1_plus_one_ply_static_topk"
     sample["teacher_eval_cp"] = teacher_eval_of_teacher_move
+    sample["teacher_top_eval_cp"] = teacher_top_eval_cp
+    sample["teacher_margin_to_top2_cp"] = teacher_margin_to_top2_cp
+    sample["teacher_score_available"] = teacher_eval_of_teacher_move is not None and not sample["static_teacher_top_k"]
+    sample["source_move_uci"] = str(row.get("move_uci") or row.get("uci") or row.get("move") or "").strip().lower()
+    sample["source_move_promoted_to_hard_negative"] = sample["source_move_uci"] in set(sample.get("hard_negatives") or [])
     sample["baseline_top1"] = baseline_probe["baseline_top1"]
     sample["baseline_top1_score"] = baseline_probe["baseline_top1_score"]
     sample["baseline_teacher_score"] = baseline_probe["baseline_teacher_score"]
@@ -396,8 +626,17 @@ def _distill_row(
         "quality": quality,
         "teacher_top3": teacher_top3,
         "teacher_top5": teacher_top5,
-        "teacher_top_k_method": "one_ply_static_eval",
-        "static_teacher_top_k": True,
+        "teacher_backend": teacher_meta["teacher_backend_used"],
+        "teacher_backend_requested": teacher_meta["teacher_backend_requested"],
+        "teacher_backend_fallback_reason": teacher_meta["teacher_backend_fallback_reason"],
+        "teacher_top_k_method": teacher_meta["teacher_top_k_method"],
+        "static_teacher_top_k": teacher_meta["teacher_top_k_method"] == "static_depth_ab_top1_plus_one_ply_static_topk",
+        "teacher_eval_cp": teacher_eval_of_teacher_move,
+        "teacher_top_eval_cp": teacher_top_eval_cp,
+        "teacher_margin_to_top2_cp": teacher_margin_to_top2_cp,
+        "teacher_score_available": teacher_eval_of_teacher_move is not None and teacher_meta["teacher_top_k_method"] != "static_depth_ab_top1_plus_one_ply_static_topk",
+        "source_move_uci": sample["source_move_uci"],
+        "source_move_promoted_to_hard_negative": bool(sample["source_move_promoted_to_hard_negative"]),
         "teacher_top3_contains_teacher_move": bool(teacher_top3_present),
         "baseline_top1": baseline_probe["baseline_top1"],
         "baseline_top1_score": baseline_probe["baseline_top1_score"],
@@ -442,6 +681,19 @@ def _quality_summary(
     missing_top3_marker = sum(
         1 for a in classified_audits if not a.get("teacher_top3_contains_teacher_move")
     )
+    backend_counts: dict[str, int] = {}
+    topk_method_counts: dict[str, int] = {}
+    fallback_count = 0
+    score_available_count = 0
+    for audit in classified_audits:
+        backend = str(audit.get("teacher_backend") or "unknown")
+        method = str(audit.get("teacher_top_k_method") or "unknown")
+        backend_counts[backend] = int(backend_counts.get(backend) or 0) + 1
+        topk_method_counts[method] = int(topk_method_counts.get(method) or 0) + 1
+        if audit.get("teacher_backend_fallback_reason"):
+            fallback_count += 1
+        if audit.get("teacher_score_available"):
+            score_available_count += 1
     gaps = [
         float(a.get("baseline_policy_gap_cp") or 0.0)
         for a in classified_audits
@@ -459,7 +711,7 @@ def _quality_summary(
         "legal_teacher_move_rate": round(legal_count / max(1, input_rows), 6),
         "suspicious_teacher_move_rate": round(suspicious_count / max(1, input_rows), 6),
         "teacher_top1_available_rate": round(len(audit_rows) / max(1, input_rows), 6),
-        "teacher_score_available_rate": 0.0,
+        "teacher_score_available_rate": round(score_available_count / max(1, len(classified_audits)), 6) if classified_audits else 0.0,
         "rejected_reasons": rejected_reasons,
         "clean_training_rows": accepted,
         "label_quality_summary": {
@@ -475,12 +727,13 @@ def _quality_summary(
             "questionable_by_baseline_policy_gap_count": int(questionable_by_gap_count),
             "teacher_top3_does_not_contain_teacher_move_count": int(missing_top3_marker),
             "missing_teacher_top3_count": int(missing_top3_marker),
+            "teacher_backend_counts": backend_counts,
+            "teacher_top_k_method_counts": topk_method_counts,
+            "teacher_backend_fallback_count": int(fallback_count),
             "baseline_policy_gap_avg": baseline_policy_gap_avg,
             "baseline_policy_gap_max": baseline_policy_gap_max,
             "far_above_threshold_cp": float(far_above_cp),
             "review_threshold_cp": float(review_cp),
-            "teacher_top_k_method": "one_ply_static_eval",
-            "static_teacher_top_k": True,
         },
     }
 
@@ -524,6 +777,9 @@ def main() -> int:
                 baseline_probe_profile=str(args.baseline_probe_profile or "fixed_depth_fast"),
                 source_category=str(args.source_category or "external"),
                 eval_mod=int(args.eval_mod or 0),
+                teacher_backend=str(args.teacher_backend or "static_depth3"),
+                stockfish_path=str(args.stockfish_path or ""),
+                stockfish_movetime_ms=int(args.stockfish_movetime_ms or 0),
             )
             if (
                 sample is not None
@@ -604,6 +860,9 @@ def main() -> int:
         "ok": True,
         "engine": "experiment 5:nnue",
         "teacher_depth": int(args.teacher_depth),
+        "teacher_backend": str(args.teacher_backend or "static_depth3"),
+        "stockfish_path": str(args.stockfish_path or ""),
+        "stockfish_movetime_ms": int(args.stockfish_movetime_ms or 0),
         "input_rows": input_rows,
         "input_fen_count": input_rows,
         "accepted_samples": len(rows),
@@ -617,8 +876,8 @@ def main() -> int:
         "label_quality_far_above_cp": float(args.label_quality_far_above_cp),
         "label_quality_review_cp": float(args.label_quality_review_cp),
         "teacher_top_k": int(args.teacher_top_k),
-        "teacher_top_k_method": "one_ply_static_eval",
-        "static_teacher_top_k": True,
+        "teacher_top_k_method": "backend_dependent",
+        "static_teacher_top_k": str(args.teacher_backend or "static_depth3") == "static_depth3",
         "baseline_probe_profile": str(args.baseline_probe_profile or "fixed_depth_fast"),
         "audit_jsonl": str(args.audit_jsonl or ""),
         "quarantine_jsonl": str(args.quarantine_jsonl or ""),

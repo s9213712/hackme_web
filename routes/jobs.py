@@ -36,14 +36,14 @@ def register_job_routes(app, deps):
             return None, json_resp({"ok": False, "msg": "未登入"}), 401
         return actor, None, None
 
-    def is_manager(actor):
+    def is_root(actor):
         role = "super_admin" if actor_value(actor, "username") == "root" else actor_value(actor, "role", "user")
-        return role_rank(role) >= role_rank("manager")
+        return actor_value(actor, "username") == "root" or role_rank(role) >= role_rank("super_admin")
 
     def can_access_job(actor, job):
         if not job:
             return False
-        if is_manager(actor):
+        if is_root(actor):
             return True
         return int(job.get("owner_user_id") or -1) == int(actor_value(actor, "id", -2))
 
@@ -68,8 +68,8 @@ def register_job_routes(app, deps):
         actor, err, status_code = actor_or_401()
         if err:
             return err, status_code
-        if not is_manager(actor):
-            return json_resp({"ok": False, "msg": "需要管理員權限"}), 403
+        if not is_root(actor):
+            return json_resp({"ok": False, "msg": "只有 root 可查看全站任務"}), 403
         status = str(request.args.get("status") or "").strip() or None
         limit = parse_positive_int(request.args.get("limit"), default=80, min_value=1, max_value=200)
         conn = get_db()
@@ -121,7 +121,7 @@ def register_job_routes(app, deps):
             job = get_job(conn, job_uuid)
             if not can_access_job(actor, job):
                 return json_resp({"ok": False, "msg": "找不到任務"}), 404
-            if not job.get("cancellable") and not is_manager(actor):
+            if not job.get("cancellable") and not is_root(actor):
                 return json_resp({"ok": False, "msg": "此任務不可取消"}), 400
             updated = request_cancel(conn, job_uuid)
             conn.commit()
@@ -142,7 +142,7 @@ def register_job_routes(app, deps):
             job = get_job(conn, job_uuid)
             if not can_access_job(actor, job):
                 return json_resp({"ok": False, "msg": "找不到任務"}), 404
-            if job.get("status") not in {"failed", "retry_wait", "expired", "cancelled"} and not is_manager(actor):
+            if job.get("status") not in {"failed", "retry_wait", "expired", "cancelled"} and not is_root(actor):
                 return json_resp({"ok": False, "msg": "此任務目前不能重試"}), 400
             updated = request_retry(conn, job_uuid)
             conn.commit()

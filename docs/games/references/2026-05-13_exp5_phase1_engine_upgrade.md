@@ -2,7 +2,7 @@
 
 ## 範圍
 
-本輪依照高階引擎化路線先做 Phase 1：提高評測上限與補 exp5 搜尋核心。沒有替換預設模型檔；`services/games/models/chess_experiment_5_nnue.json` 保持作為目前 runtime 模型。若之後產生更好的模型並要覆蓋，必須先快照舊模型與 checksum。
+本輪依照高階引擎化路線先做 Phase 1：提高評測上限與補 exp5 搜尋核心。當時沒有替換預設模型檔；`services/games/models/chess_experiment_5_nnue.json` 保持作為 runtime 模型。2026-05-14 起，此主 JSON 已併入 `services/games/chess_exp5_base_model.py`，後續 runtime 僅保存 `chess_experiment_5_nnue_experience.json` delta。
 
 ## 程式改動
 
@@ -71,7 +71,7 @@
 1. 實作 null-move pruning / late move reductions / futility pruning，否則 depth 很難再加。
 2. 建立 stronger sparring baseline，而不是只打 transparent reviewer policy。
 3. 針對 gauntlet 的 9 局和棋建立 regression probes，分辨哪些是合理守和、哪些是漏勝。
-4. 若要替換模型，先快照目前 `services/games/models/chess_experiment_5_nnue.json`，再用離線 teacher-labeled data 產生新模型。
+4. 若要替換 exp5 行為，保留 source base 不動，改產生 audited experience delta / adapter；只有在明確要改 base 時才更新 `services/games/chess_exp5_base_model.py` 並記錄 checksum。
 
 ## Phase 1B - Advanced Score Optimization
 

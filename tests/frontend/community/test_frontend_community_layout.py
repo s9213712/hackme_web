@@ -68,7 +68,10 @@ def test_community_composers_are_button_opened_not_permanent():
     assert 'flash($("community-category-msg"), json.msg || "分類讀取失敗", false);' in community_js
     assert 'flash($("community-msg"), json.msg || "討論區清單讀取失敗", false);' in community_js
     assert 'flash($("community-msg"), json.msg || "待審核討論區讀取失敗", false);' in community_js
-    assert 'flash($("community-msg"), json.msg || "待審核主題讀取失敗", false);' in community_js
+    assert "async function loadCommunityThreadReviews(options = {})" in community_js
+    assert "const quiet = !!options.quiet;" in community_js
+    assert 'if (!quiet) flash($("community-msg"), json.msg || "待審核主題讀取失敗", false);' in community_js
+    assert "loadCommunityThreadReviews({ quiet: true })" in community_js
     assert 'switchModuleTab("announcements")' in bootstrap_js
     assert "toggleCommunityAnnouncementEditor(true)" in bootstrap_js
     assert "toggleCommunityBoardRequest(true)" in bootstrap_js

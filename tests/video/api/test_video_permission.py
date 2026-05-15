@@ -25,13 +25,15 @@ def test_video_visibility_rules():
     with pytest.raises(PermissionError):
         get_video(conn, unlisted["id"], actor=None)
     assert get_video(conn, unlisted["id"], actor=actor(1, "owner"))["visibility"] == "unlisted"
-    assert get_video(conn, unlisted["id"], actor=actor(3, "manager", "manager"))["visibility"] == "unlisted"
+    with pytest.raises(PermissionError):
+        get_video(conn, unlisted["id"], actor=actor(3, "manager", "manager"))
 
     with pytest.raises(PermissionError):
         get_video(conn, private["id"], actor=actor(2, "viewer"))
 
     assert get_video(conn, private["id"], actor=actor(1, "owner"))["id"] == private["id"]
-    assert get_video(conn, private["id"], actor=actor(3, "manager", "manager"))["id"] == private["id"]
+    with pytest.raises(PermissionError):
+        get_video(conn, private["id"], actor=actor(3, "manager", "manager"))
 
 
 def test_unlisted_video_is_link_accessible_but_not_publicly_listed():
@@ -50,7 +52,7 @@ def test_unlisted_video_is_link_accessible_but_not_publicly_listed():
     assert unlisted["id"] not in anonymous_ids
     assert unlisted["id"] not in viewer_ids
     assert unlisted["id"] in owner_ids
-    assert unlisted["id"] in manager_ids
+    assert unlisted["id"] not in manager_ids
 
 
 def test_blocked_video_metadata_owner_visible_but_stream_denied():

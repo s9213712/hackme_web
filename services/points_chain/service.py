@@ -1559,7 +1559,15 @@ class PointsLedgerService:
                 LEFT JOIN users actor ON actor.id=l.created_by
                 WHERE l.action_type LIKE 'admin_adjust_%'
                    OR l.action_type LIKE 'rollback:%'
-                   OR l.action_type IN ('admin_initial_grant', 'user_initial_grant', 'admin_weekly_salary', 'new_user_signup_bonus')
+                   OR l.action_type IN (
+                       'admin_initial_grant',
+                       'admin_weekly_salary',
+	                       'game_daily_challenge_reward',
+	                       'game_weekly_leaderboard_reward',
+	                       'trading_bot_weekly_competition_reward',
+	                       'new_user_signup_bonus',
+                       'user_initial_grant'
+                   )
                 ORDER BY l.id DESC LIMIT ?
                 """,
                 (min(200, max(1, int(limit or 100))),),
@@ -1661,9 +1669,31 @@ class PointsLedgerService:
             conn.close()
 
     def seal_due_block(self, *, actor=None, ledger_threshold=DEFAULT_BLOCK_LEDGER_THRESHOLD, max_interval_seconds=DEFAULT_BLOCK_MAX_INTERVAL_SECONDS, limit=100):
-        schedule = self.block_schedule(ledger_threshold=ledger_threshold, max_interval_seconds=max_interval_seconds)
-        if not schedule.get("chain_ok", True):
-            return {"ok": False, "sealed": False, "msg": "PointsChain 驗證失敗", "schedule": schedule}
+        schedule = self.block_schedule(
+            ledger_threshold=ledger_threshold,
+            max_interval_seconds=max_interval_seconds,
+            verify=False,
+        )
+        if not schedule.get("due"):
+            return {"ok": True, "sealed": False, "msg": schedule.get("message") or "not due", "schedule": schedule}
+        verification = self.verify_chain()
+        if verification.get("ok") is not True:
+            return {
+                "ok": False,
+                "sealed": False,
+                "msg": "PointsChain 驗證失敗",
+                "schedule": self.block_schedule(
+                    ledger_threshold=ledger_threshold,
+                    max_interval_seconds=max_interval_seconds,
+                    verification=verification,
+                ),
+                "verification": verification,
+            }
+        schedule = self.block_schedule(
+            ledger_threshold=ledger_threshold,
+            max_interval_seconds=max_interval_seconds,
+            verification=verification,
+        )
         if not schedule.get("due"):
             return {"ok": True, "sealed": False, "msg": schedule.get("message") or "not due", "schedule": schedule}
         result = self.seal_block(actor=actor, limit=limit)
@@ -1863,8 +1893,8 @@ class PointsLedgerService:
         finally:
             conn.close()
 
-    def economy_stats(self):
-        chain = self.verify_chain()
+    def economy_stats(self, *, verification=None):
+        chain = verification if verification is not None else self.verify_chain()
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
@@ -1892,8 +1922,9 @@ class PointsLedgerService:
         finally:
             conn.close()
 
-    def block_schedule(self, *, ledger_threshold=DEFAULT_BLOCK_LEDGER_THRESHOLD, max_interval_seconds=DEFAULT_BLOCK_MAX_INTERVAL_SECONDS):
-        verification = self.verify_chain()
+    def block_schedule(self, *, ledger_threshold=DEFAULT_BLOCK_LEDGER_THRESHOLD, max_interval_seconds=DEFAULT_BLOCK_MAX_INTERVAL_SECONDS, verification=None, verify=True):
+        if verification is None and verify:
+            verification = self.verify_chain()
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
@@ -1902,6 +1933,17 @@ class PointsLedgerService:
             first_unsealed = conn.execute(
                 "SELECT created_at FROM points_ledger WHERE chain_block_id IS NULL ORDER BY id ASC LIMIT 1"
             ).fetchone()
+            if verification is None:
+                safe_mode = self._safe_mode_status(conn)
+                unsealed_count = conn.execute(
+                    "SELECT COUNT(*) AS c FROM points_ledger WHERE chain_block_id IS NULL"
+                ).fetchone()["c"]
+                verification = {
+                    "ok": not bool(safe_mode.get("safe_mode")),
+                    "counts": {"unsealed_entries": int(unsealed_count or 0)},
+                    "safe_mode": safe_mode,
+                    "verification_mode": "schedule_snapshot",
+                }
             anchor_at = parse_utc_timestamp(first_unsealed["created_at"]) if first_unsealed else None
             next_at = anchor_at.timestamp() + max_interval_seconds if anchor_at else None
             now_ts = datetime.now(timezone.utc).timestamp()
@@ -1936,10 +1978,10 @@ class PointsLedgerService:
         scheduled_backup = None
         if verification.get("ok"):
             scheduled_backup = self.create_scheduled_backup_if_due()
-        stats = self.economy_stats()
+        stats = self.economy_stats(verification=verification)
         audit_logs = self.list_chain_audit_logs(limit=50)
         adjustments = self.list_admin_adjustments(limit=100)
-        block_schedule = self.block_schedule()
+        block_schedule = self.block_schedule(verification=verification)
         backups = self.list_ledger_backups(limit=30)
         recovery = self.safe_mode_status()
         conn = self.get_db()

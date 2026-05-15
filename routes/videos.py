@@ -36,9 +36,12 @@ from services.security.upload_security import safe_public_filename
 from services.share_access_events import log_share_access_event
 from services.media.videos import (
     add_video_comment,
+    boost_owner_video,
+    delete_owner_video,
     ensure_video_schema,
     ensure_video_share_link,
     get_video,
+    list_owner_videos,
     list_video_comments,
     list_videos,
     mark_video_share_link_accessed,
@@ -49,6 +52,7 @@ from services.media.videos import (
     set_video_like,
     shared_video_payload,
     tip_video,
+    update_owner_video,
 )
 
 
@@ -118,12 +122,6 @@ def register_video_routes(app, deps):
             return raw
         return str(raw).strip().lower() in {"1", "true", "yes", "on", "y", "t"}
 
-    def _is_manager_or_root(actor):
-        if not actor:
-            return False
-        role = str(actor.get("role") or "").strip().lower()
-        return actor.get("username") == "root" or role in {"manager", "admin", "super_admin"}
-
     def _load_stream_file(conn, *, file_id):
         row = conn.execute(
             "SELECT * FROM uploaded_files WHERE id=? AND deleted_at IS NULL",
@@ -133,12 +131,24 @@ def register_video_routes(app, deps):
             raise ValueError("找不到影音檔案")
         return row
 
+    def _video_e2ee_owner_key(conn, file_row):
+        return conn.execute(
+            """
+            SELECT encrypted_file_key, wrapped_by, key_version
+            FROM encrypted_file_keys
+            WHERE file_id=? AND recipient_user_id=? AND revoked_at IS NULL
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (file_row["id"], int(file_row["owner_user_id"])),
+        ).fetchone()
+
     def _assert_stream_prepare_allowed(actor, row):
         if not actor:
             raise PermissionError("login required")
-        if int(row["owner_user_id"]) == int(actor["id"]) or _is_manager_or_root(actor):
+        if int(row["owner_user_id"]) == int(actor["id"]):
             return
-        raise PermissionError("只有檔案擁有者或管理者可以準備串流衍生檔")
+        raise PermissionError("只有檔案擁有者可以準備串流衍生檔")
 
     def _append_share_session_to_hls_manifest(text, share_session_id=""):
         share_session_id = str(share_session_id or "").strip()
@@ -506,8 +516,8 @@ def register_video_routes(app, deps):
                 manifest_url = f"/api/videos/shared/{shared_token}/e2ee-stream-v2/manifest"
                 chunk_url_template = f"/api/videos/shared/{shared_token}/e2ee-stream-v2/chunks/__INDEX__"
             else:
-                ciphertext_url = f"/api/cloud-drive/files/{row['id']}/preview/content"
-                e2ee_key_url = f"/api/cloud-drive/files/{row['id']}/e2ee-key"
+                ciphertext_url = f"/api/videos/{video_id}/ciphertext"
+                e2ee_key_url = f"/api/videos/{video_id}/e2ee-key"
                 manifest_url = f"/api/videos/{video_id}/e2ee-stream-v2/manifest"
                 chunk_url_template = f"/api/videos/{video_id}/e2ee-stream-v2/chunks/__INDEX__"
             stream_v2 = get_e2ee_stream_v2_status(conn, file_row=row, storage_root=storage_root)
@@ -1118,7 +1128,10 @@ def register_video_routes(app, deps):
             return err
         conn = get_db()
         try:
-            video = get_video(conn, video_id, actor=actor)
+            try:
+                video = get_video(conn, video_id, actor=actor)
+            except PermissionError:
+                return json_resp({"ok": False, "msg": "找不到影音", "error": "not_found"}), 404
             if not video or not video.get("can_edit"):
                 return json_resp({"ok": False, "msg": "找不到影音", "error": "not_found"}), 404
             if request.method == "DELETE":
@@ -1174,6 +1187,122 @@ def register_video_routes(app, deps):
             return _error_response(exc)
         except ValueError as exc:
             conn.rollback()
+            return _error_response(exc)
+        finally:
+            conn.close()
+
+    @app.route("/api/videos/manage", methods=["GET"])
+    @require_csrf
+    def video_manage_list():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            videos = list_owner_videos(
+                conn,
+                actor=actor,
+                limit=request.args.get("limit") or 120,
+            )
+            summary = {
+                "total_videos": len(videos),
+                "total_views": sum(int(video.get("view_count") or 0) for video in videos),
+                "total_likes": sum(int(video.get("like_count") or 0) for video in videos),
+                "total_gross_points": sum(int(video.get("gross_points") or 0) for video in videos),
+                "total_revenue_points": sum(int(video.get("revenue_points") or 0) for video in videos),
+                "total_platform_fee_points": sum(int(video.get("platform_fee_points") or 0) for video in videos),
+                "total_boost_points": sum(int(video.get("boost_points_total") or 0) for video in videos),
+            }
+            return json_resp({"ok": True, "videos": videos, "summary": summary})
+        except PermissionError as exc:
+            return _error_response(exc)
+        finally:
+            conn.close()
+
+    @app.route("/api/videos/<int:video_id>/manage", methods=["PUT", "DELETE"])
+    @require_csrf
+    def video_manage_item(video_id):
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            if request.method == "DELETE":
+                result = delete_owner_video(conn, actor=actor, video_id=video_id)
+                conn.commit()
+                audit(
+                    "VIDEO_MANAGE_DELETE",
+                    get_client_ip(),
+                    user=actor["username"],
+                    success=True,
+                    ua=get_ua(),
+                    detail=f"video_id={int(video_id)}",
+                )
+                return json_resp(result)
+            data, bad_resp, status = _parse_json_body()
+            if bad_resp:
+                return bad_resp, status
+            kwargs = {}
+            if "cover_file_id" in data:
+                kwargs["cover_file_id"] = data.get("cover_file_id")
+            video = update_owner_video(
+                conn,
+                actor=actor,
+                video_id=video_id,
+                title=data.get("title"),
+                description=data.get("description"),
+                visibility=data.get("visibility"),
+                **kwargs,
+            )
+            conn.commit()
+            audit(
+                "VIDEO_MANAGE_UPDATE",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"video_id={int(video_id)},visibility={video.get('visibility') if video else ''}",
+            )
+            return json_resp({"ok": True, "video": video})
+        except Exception as exc:
+            conn.rollback()
+            return _error_response(exc)
+        finally:
+            conn.close()
+
+    @app.route("/api/videos/<int:video_id>/boost", methods=["POST"])
+    @require_csrf
+    def video_manage_boost(video_id):
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        data, bad_resp, status = _parse_json_body()
+        if bad_resp:
+            return bad_resp, status
+        conn = get_db()
+        try:
+            result = boost_owner_video(
+                conn,
+                points_service=points_service,
+                actor=actor,
+                video_id=video_id,
+                amount=data.get("amount"),
+                idempotency_key=request.headers.get("Idempotency-Key") or data.get("idempotency_key"),
+            )
+            conn.commit()
+            audit(
+                "VIDEO_MANAGE_BOOST",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"video_id={int(video_id)},amount={int(result.get('amount') or 0)}",
+            )
+            return json_resp(result)
+        except Exception as exc:
+            conn.rollback()
+            if "insufficient balance" in str(exc):
+                return json_resp({"ok": False, "msg": "積分不足，無法增加曝光", "error": "insufficient_balance"}), 409
             return _error_response(exc)
         finally:
             conn.close()
@@ -1340,6 +1469,73 @@ def register_video_routes(app, deps):
             response.headers["Content-Length"] = str(len(resolved["payload"]))
             response.headers["Cache-Control"] = "private, max-age=0, no-store"
             return response
+        except PermissionError as exc:
+            return _error_response(exc)
+        except ValueError as exc:
+            return _error_response(exc)
+        finally:
+            conn.close()
+
+    @app.route("/api/videos/<int:video_id>/e2ee-key", methods=["GET"])
+    @require_csrf
+    def video_e2ee_key(video_id):
+        actor = get_current_user_ctx()
+        conn = get_db()
+        try:
+            ensure_cloud_drive_attachment_schema(conn)
+            video = get_video(conn, video_id, actor=actor, for_stream=True)
+            if not video:
+                return json_resp({"ok": False, "msg": "找不到影片", "error": "not_found"}), 404
+            file_row = _load_stream_file(conn, file_id=video["cloud_file_id"])
+            if not is_e2ee_file(file_row):
+                return json_resp({"ok": False, "msg": "此影音不是端到端加密檔案", "error": "not_e2ee"}), 400
+            key = _video_e2ee_owner_key(conn, file_row)
+            if not key:
+                return json_resp({"ok": False, "msg": "此 E2EE 影音缺少擁有者解密金鑰包裝", "error": "missing_owner_e2ee_key"}), 409
+            return json_resp({
+                "ok": True,
+                "e2ee": {
+                    "file_id": file_row["id"],
+                    "privacy_mode": file_row["privacy_mode"],
+                    "encrypted_metadata": file_row["original_filename_encrypted"],
+                    "encrypted_file_key": key["encrypted_file_key"],
+                    "wrapped_by": key["wrapped_by"],
+                    "key_version": key["key_version"],
+                    "encryption_algorithm": file_row["encryption_algorithm"],
+                    "encryption_version": file_row["encryption_version"],
+                    "nonce": file_row["nonce"],
+                    "ciphertext_sha256": file_row["ciphertext_sha256"],
+                },
+            })
+        except PermissionError as exc:
+            return _error_response(exc)
+        except ValueError as exc:
+            return _error_response(exc)
+        finally:
+            conn.close()
+
+    @app.route("/api/videos/<int:video_id>/ciphertext", methods=["GET"])
+    @require_csrf
+    def video_e2ee_ciphertext(video_id):
+        actor = get_current_user_ctx()
+        conn = get_db()
+        try:
+            video = get_video(conn, video_id, actor=actor, for_stream=True)
+            if not video:
+                return json_resp({"ok": False, "msg": "找不到影片", "error": "not_found"}), 404
+            file_row = _load_stream_file(conn, file_id=video["cloud_file_id"])
+            if not is_e2ee_file(file_row):
+                return json_resp({"ok": False, "msg": "此影音不是端到端加密檔案", "error": "not_e2ee"}), 400
+            path = resolve_file_storage_path(storage_root, file_row)
+            if not path.exists():
+                return json_resp({"ok": False, "msg": "實體檔案不存在", "error": "file_missing"}), 404
+            return send_file(
+                path,
+                as_attachment=False,
+                download_name=file_row["original_filename_plain_for_public"] or "e2ee.bin",
+                mimetype="application/octet-stream",
+                conditional=True,
+            )
         except PermissionError as exc:
             return _error_response(exc)
         except ValueError as exc:

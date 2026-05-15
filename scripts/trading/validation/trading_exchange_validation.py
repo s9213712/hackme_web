@@ -16,11 +16,12 @@ import tempfile
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from services.points_chain import PointsLedgerService, ensure_points_economy_schema
+from services.platform.db_mode_triggers import register_app_mode_function
 from services.trading.trading_engine import (
     ASSET_SCALE,
     TradingEngineService,
@@ -31,7 +32,8 @@ from services.trading.trading_engine import (
 )
 
 
-REPORT_DIR = ROOT / "security" / "reports"
+REPORT_DIR = REPO_ROOT / "runtime" / "reports" / "trading_validation"
+VALIDATION_MODE_READER = lambda: "production"
 
 
 class ValidationFailure(RuntimeError):
@@ -75,6 +77,7 @@ def make_services(tmp_path):
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
+        register_app_mode_function(conn, mode_reader=VALIDATION_MODE_READER)
         return conn
 
     conn = get_db()
@@ -97,6 +100,7 @@ def make_services(tmp_path):
         get_db=get_db,
         chain_secret="exchange-validation-secret",
         backup_dir=Path(tmp_path) / "points_chain_backups",
+        mode_reader=VALIDATION_MODE_READER,
     )
     trading = TradingEngineService(get_db=get_db, points_service=points, live_price_provider=prices)
     return points, trading, prices, get_db

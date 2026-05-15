@@ -305,7 +305,7 @@ def test_round_robin_benchmark_and_smoke_reports_use_all_engines(tmp_path, monke
     experiment_nn = runtime_dir / "games" / "models" / "chess_experiment_2_nn.json"
     experiment_dl = runtime_dir / "games" / "models" / "chess_experiment_3_dl.json"
     experiment_pv = runtime_dir / "games" / "models" / "chess_experiment_4_pv.json"
-    experiment_nnue = runtime_dir / "games" / "models" / "chess_experiment_5_nnue.json"
+    experiment_nnue = runtime_dir / "games" / "models" / "chess_experiment_5_nnue_experience.json"
     monkeypatch.setenv("HACKME_RUNTIME_DIR", str(runtime_dir))
     monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_DB_PATH", str(experiment_db))
     monkeypatch.setenv("HTML_LEARNING_CHESS_ENGINE_NN_MODEL_PATH", str(experiment_nn))

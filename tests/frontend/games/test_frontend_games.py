@@ -110,29 +110,39 @@ def test_game_zone_frontend_assets_are_wired():
     assert 'data-game-touch="fps-prone"' in index_html
     assert 'id="game-fullscreen-btn"' in index_html
     assert 'id="fps-arena-fullscreen-btn"' in index_html
-    assert "/js/three.min.js?v=0.160.0" in index_html
+    assert "/js/three.min.js?v=0.160.0" not in index_html
+    assert 'const THREE_JS_SRC = "/js/three.min.js?v=0.160.0";' in core_js
+    assert "async function ensureThreeJsLoaded()" in core_js
     assert "/js/41-game-modules.js?v=20260514-game-user-scope" in index_html
-    assert "/js/games/snake.js?v=20260513-game-modules" in index_html
-    assert "/js/games/game-2048.js?v=20260513-game-modules" in index_html
-    assert "/js/games/brick-breaker.js?v=20260513-game-modules" in index_html
-    assert "/js/games/bullet-hell.js?v=20260513-game-modules" in index_html
-    assert "/js/games/stickman-shooter.js?v=20260514-game-levels" in index_html
-    assert "/js/games/open-world.js?v=20260514-open-world" in index_html
-    assert "/js/games/board-game-shared.js?v=20260513-game-modules" in index_html
-    assert "/js/games/real-tetris.js?v=20260513-game-modules" in index_html
-    assert "/js/games/reversi.js?v=20260513-game-modules" in index_html
-    assert "/js/games/go.js?v=20260513-game-modules" in index_html
-    assert "/js/games/gomoku.js?v=20260513-game-modules" in index_html
-    assert "/js/games/chinese-chess.js?v=20260513-game-modules" in index_html
     assert "/js/games/game-view-registry.js?v=20260513-legacy-modules" in index_html
     assert "/js/games/chess.js?v=20260513-legacy-modules" in index_html
-    assert "/js/games/sudoku.js?v=20260513-legacy-modules" in index_html
-    assert "/js/games/minesweeper.js?v=20260513-legacy-modules" in index_html
-    assert "/js/games/onea2b.js?v=20260513-legacy-modules" in index_html
-    assert "/js/games/tetris.js?v=20260513-legacy-modules" in index_html
-    assert "/js/games/space-shooter.js?v=20260513-legacy-modules" in index_html
-    assert "/js/games/fps-arena.js?v=20260514-fps-stance-br" in index_html
-    assert "/js/38-fps-arena.js?v=20260514-fps-stance-br" in index_html
+    lazy_game_scripts = [
+        "/js/games/snake.js?v=20260513-game-modules",
+        "/js/games/game-2048.js?v=20260513-game-modules",
+        "/js/games/brick-breaker.js?v=20260513-game-modules",
+        "/js/games/bullet-hell.js?v=20260513-game-modules",
+        "/js/games/stickman-shooter.js?v=20260514-game-levels",
+        "/js/games/open-world.js?v=20260514-open-world",
+        "/js/games/board-game-shared.js?v=20260513-game-modules",
+        "/js/games/real-tetris.js?v=20260513-game-modules",
+        "/js/games/reversi.js?v=20260513-game-modules",
+        "/js/games/go.js?v=20260513-game-modules",
+        "/js/games/gomoku.js?v=20260513-game-modules",
+        "/js/games/chinese-chess.js?v=20260513-game-modules",
+        "/js/games/sudoku.js?v=20260513-legacy-modules",
+        "/js/games/minesweeper.js?v=20260513-legacy-modules",
+        "/js/games/onea2b.js?v=20260513-legacy-modules",
+        "/js/games/tetris.js?v=20260513-legacy-modules",
+        "/js/games/space-shooter.js?v=20260513-legacy-modules",
+        "/js/games/fps-arena.js?v=20260514-fps-stance-br",
+        "/js/38-fps-arena.js?v=20260514-fps-stance-br",
+    ]
+    for script in lazy_game_scripts:
+        assert script not in index_html
+        assert script in games_js
+    assert "async function ensureGameRuntimeScriptsLoaded()" in games_js
+    assert "await runtimeReady" in games_js
+    assert "/js/56-trading.js?v=20260502-grid-spot" in index_html
     assert 'id="game-select"' in games_js
     assert "chinese_chess" in games_js
     assert "中國象棋" in game_modules_js

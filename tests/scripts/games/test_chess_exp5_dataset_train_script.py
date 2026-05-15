@@ -18,6 +18,9 @@ def _write_exp5_rows(path: Path) -> None:
                 "target": 1.0,
                 "weight": 1.0,
                 "source": "unit",
+                "teacher_top3": ["e7e5", "c7c5", "e7e6"],
+                "teacher_top5": ["e7e5", "c7c5", "e7e6", "c7c6", "g8f6"],
+                "hard_negatives": ["a7a5"],
             },
             ensure_ascii=False,
         )
@@ -28,8 +31,8 @@ def _write_exp5_rows(path: Path) -> None:
 
 def test_chess_exp5_dataset_train_script_builds_model_and_replay(tmp_path):
     runtime_dir = tmp_path / "runtime"
-    model_path = runtime_dir / "games" / "models" / "chess_experiment_5_nnue.json"
-    replay_path = runtime_dir / "games" / "models" / "chess_experiment_5_nnue_replay.jsonl"
+    model_path = runtime_dir / "games" / "models" / "chess_experiment_5_nnue_experience.json"
+    replay_path = runtime_dir / "games" / "models" / "chess_experiment_5_nnue_experience_replay.jsonl"
     rows = tmp_path / "exp5_rows.jsonl"
     _write_exp5_rows(rows)
 
@@ -63,9 +66,14 @@ def test_chess_exp5_dataset_train_script_builds_model_and_replay(tmp_path):
     assert payload["rejected_samples"] == 0
     assert payload["sample_format"] == "exp5_nnue_position_move_v1"
     assert payload["promotion_gate_supported"] is False
+    assert payload["soft_teacher_topk"] is True
+    assert payload["soft_target_updates"] >= 1
+    assert payload["pairwise_hard_negative"] is True
     assert Path(payload["model_path"]).exists()
     assert Path(payload["replay_path"]).exists()
     assert json.loads(model_path.read_text(encoding="utf-8"))["sample_count"] >= 1
+    replay_rows = [json.loads(line) for line in replay_path.read_text(encoding="utf-8").splitlines()]
+    assert replay_rows[0]["teacher_top3"][:2] == ["e7e5", "c7c5"]
 
 
 def test_chess_exp5_retrain_pipeline_reports_pending_strength_gate(tmp_path):
@@ -88,8 +96,6 @@ def test_chess_exp5_retrain_pipeline_reports_pending_strength_gate(tmp_path):
             str(model_path),
             "--candidate-replay-path",
             str(replay_path),
-            "--baseline-model-path",
-            str(ROOT / "services" / "games" / "models" / "chess_experiment_5_nnue.json"),
             "--replace-replay",
         ],
         cwd=str(ROOT),

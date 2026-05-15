@@ -1430,6 +1430,14 @@ def list_trading_bots(self, *, actor):
 def save_trading_bot(self, *, actor, payload, bot_uuid=None):
     return save_trading_bot_helper(self, actor=actor, payload=payload, bot_uuid=bot_uuid)
 
+def set_trading_bot_share_parameters(self, *, actor, bot_uuid, share_parameters):
+    return set_trading_bot_share_parameters_helper(
+        self,
+        actor=actor,
+        bot_uuid=bot_uuid,
+        share_parameters=share_parameters,
+    )
+
 def delete_trading_bot(self, *, actor, bot_uuid):
     return delete_trading_bot_helper(self, actor=actor, bot_uuid=bot_uuid)
 
@@ -1476,6 +1484,14 @@ def create_grid_bot(self, *, actor, payload):
 def list_grid_bots(self, *, actor):
     return list_grid_bots_helper(self, actor=actor)
 
+def set_grid_bot_share_parameters(self, *, actor, bot_uuid, share_parameters):
+    return set_grid_bot_share_parameters_helper(
+        self,
+        actor=actor,
+        bot_uuid=bot_uuid,
+        share_parameters=share_parameters,
+    )
+
 def toggle_grid_bot(self, *, actor, bot_uuid, enabled):
     return toggle_grid_bot_helper(self, actor=actor, bot_uuid=bot_uuid, enabled=enabled)
 
@@ -1489,3 +1505,9 @@ def _scan_one_grid_bot(self, bot, *, actor):
     return scan_one_grid_bot_helper(self, bot, actor=actor)
 
 # ── End Grid Trading Bot ─────────────────────────────────────────────────
+
+def get_bot_competition(self, *, actor=None, week=None, auto_award=True):
+    return get_bot_competition_helper(self, actor=actor, week=week, auto_award=auto_award)
+
+def award_bot_competition_week(self, *, actor=None, week=None):
+    return award_bot_competition_week_helper(self, actor=actor, week=week)

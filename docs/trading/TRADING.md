@@ -11,6 +11,24 @@ The trading system is a simulation and education feature. It is designed to
 exercise accounting, auditability, permission checks, and strategy workflows.
 It is not a real-money exchange.
 
+## Background Engine Requirement
+
+Trading lifecycle must be server-owned. The trading page may display state and
+submit commands, but it must not be the only trigger for price refresh, order
+matching, bot scans, TP/SL triggers, liquidation, interest accrual, or sitewide
+risk snapshots.
+
+The Phase 0 design for this requirement is split into:
+
+- [TRADING_BACKGROUND_ENGINE.md](TRADING_BACKGROUND_ENGINE.md)
+- [TRADING_SITEWIDE_MANAGEMENT.md](TRADING_SITEWIDE_MANAGEMENT.md)
+- [TRADING_LENDING_POOL_REPORTS.md](TRADING_LENDING_POOL_REPORTS.md)
+- [TRADING_BACKGROUND_QA.md](TRADING_BACKGROUND_QA.md)
+
+Until those phases are implemented, any trading behavior that only progresses
+because a browser is open should be treated as an architecture gap, not a
+feature contract.
+
 ## Current Scope
 
 Enabled in this line:
@@ -458,7 +476,9 @@ Creation flow:
 
 Runtime behavior:
 
-- Grid bots are scanned manually from the exchange page in this version.
+- Grid bots are scanned manually from the exchange page in this version. This
+  is a current limitation; the next background-engine phase should move grid
+  scans to server-owned jobs with idempotency.
 - After a level is filled, the scan places the counter-order on the next level.
 - In simulated/CFD-style paths, a price crossing can also fill a resting grid
   level even when no external matching engine event is received.

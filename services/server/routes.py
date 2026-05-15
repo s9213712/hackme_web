@@ -179,6 +179,7 @@ OPERATION_ROUTE_KEYS = (
     "get_latest_violation",
     "get_feature_settings",
     "get_member_level_rule",
+    "get_runtime_server_mode",
     "get_server_output",
     "get_system_settings",
     "get_ua",

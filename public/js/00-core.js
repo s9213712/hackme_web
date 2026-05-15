@@ -36,6 +36,7 @@ const CHAT_POLL_MS = 2500;
 const DEFAULT_INACTIVITY_LOGOUT_MS = 10 * 60 * 1000;
 const IDLE_TIMEOUT_LOGOUT_STORAGE_KEY = "hackme_web.idle_timeout_logout_pending";
 const AUTH_SESSION_HINT_STORAGE_KEY = "hackme_web.auth.session_hint";
+const THREE_JS_SRC = "/js/three.min.js?v=0.160.0";
 let inactivityLogoutMs = DEFAULT_INACTIVITY_LOGOUT_MS;
 let inactivityTimer = null;
 let inactivityCountdownTimer = null;
@@ -50,8 +51,10 @@ let currentSettingsSection = "security";
 let serverConnectionFailures = 0;
 let serverConnectionSlowStreak = 0;
 let serverConnectionTimer = null;
+const SERVER_CONNECTION_MONITOR_MS = 15000;
 let notificationPollTimer = null;
 let notificationsOpen = false;
+const lazyScriptPromises = new Map();
 const avatarCacheBustByUserId = new Map();
 const SITE_APPEARANCE_KEYS = [
   "site_bg",
@@ -82,6 +85,9 @@ const SITE_SIDEBAR_WIDTH_MAP = {
   wide: { expanded: 288, collapsed: 76 },
 };
 const APP_TOAST_LIMIT = 4;
+const ACTION_FEEDBACK_DURATION_MS = { ok: 1600, info: 900, err: 3000 };
+const INLINE_MESSAGE_DURATION_MS = { ok: 2200, info: 1200, err: 4200 };
+const TOAST_DURATION_MS = { ok: 2400, info: 1600, err: 4200 };
 let lastAppToastSignature = "";
 let lastAppToastAt = 0;
 
@@ -114,6 +120,41 @@ function canAccessModule(moduleKey, role = currentRole) {
 }
 
 function $(id) { return document.getElementById(id); }
+
+const ACCOUNT_SCOPE_STORAGE_KEY = "hackme_web.account.active_scope";
+
+function accountScopeFromIdentity(userId = currentUserId, username = currentUser) {
+  const id = Number(userId || 0);
+  if (Number.isFinite(id) && id > 0) return `user:${id}`;
+  const name = String(username || "").trim().toLowerCase();
+  return name ? `name:${name}` : "anonymous";
+}
+
+function getCurrentAccountStorageScope() {
+  return accountScopeFromIdentity(currentUserId, currentUser);
+}
+
+function accountScopedStorageKey(key, scope = getCurrentAccountStorageScope()) {
+  return `hackme_web:${scope}:${String(key || "state")}`;
+}
+
+function syncActiveAccountStorageScope(previousScope = null) {
+  const nextScope = getCurrentAccountStorageScope();
+  try {
+    if (nextScope === "anonymous") localStorage.removeItem(ACCOUNT_SCOPE_STORAGE_KEY);
+    else localStorage.setItem(ACCOUNT_SCOPE_STORAGE_KEY, nextScope);
+  } catch (err) {}
+  if (previousScope !== null && previousScope !== nextScope) {
+    document.dispatchEvent(new CustomEvent("hackme:account-context-changed", {
+      detail: {
+        previousScope,
+        nextScope,
+        userId: currentUserId,
+        username: currentUser,
+      },
+    }));
+  }
+}
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "hackme_web.sidebar.collapsed";
 const SIDEBAR_ICON_PATHS = {
@@ -166,14 +207,24 @@ const SIDEBAR_MENU_CONFIG = [
     group: "工具",
     requiresFeatures: ["feature_storage_albums_enabled"],
   },
-  { tabId: "tab-module-videos", module: "videos", tab: "videos", icon: "video", label: "影音", group: "工具" },
+  {
+    tabId: "tab-module-videos",
+    module: "videos",
+    tab: "videos",
+    icon: "video",
+    label: "影音",
+    group: "工具",
+    submenu: [
+      { label: "影音列表", action: "module:videos" },
+      { label: "分享管理", action: "module:shares", moduleKey: "shares" },
+    ],
+  },
   { tabId: "tab-module-games", module: "games", tab: "games", icon: "game", label: "遊戲區", group: "工具" },
-  { tabId: "tab-module-jobs", module: "jobs", tab: "jobs", icon: "bell", label: "任務中心", group: "工具" },
-  { tabId: "tab-module-shares", module: "shares", tab: "shares", icon: "drive", label: "分享管理", group: "工具" },
   { tabId: "tab-module-comfyui", module: "comfyui", tab: "comfyui", icon: "spark", label: "AI 產圖", group: "工具" },
   { tabId: "tab-module-economy", module: "economy", tab: "economy", icon: "wallet", label: "積分錢包", group: "工具" },
   { tabId: "tab-module-trading", module: "trading", tab: "trading", icon: "wallet", label: "積分交易所", group: "工具" },
   { tabId: "tab-module-appeals", module: "appeals", tab: "appeals", icon: "appeal", label: "申覆", group: "支援", hideForSuperAdmin: true },
+  { tabId: "tab-module-jobs", module: "jobs", tab: "jobs", icon: "bell", label: "任務中心", group: "管理" },
   {
     tabId: "tab-module-accounts",
     module: "accounts",
@@ -229,6 +280,7 @@ function canShowSidebarItem(item) {
 
 function canShowSidebarSubitem(sub) {
   if (!sub) return false;
+  if (sub.moduleKey && !canAccessModule(sub.moduleKey)) return false;
   if (sub.featureKey && !isFeatureEnabledForUi(sub.featureKey)) return false;
   if (sub.requiresCommunityReview) {
     if (typeof canOpenCommunityReviewMode === "function") return canOpenCommunityReviewMode();
@@ -283,7 +335,7 @@ function setSidebarCollapsed(collapsed) {
 
 function sidebarCollapsedStorageKey() {
   const roleKey = currentRole || "guest";
-  return `${SIDEBAR_COLLAPSED_STORAGE_KEY}.${roleKey}`;
+  return accountScopedStorageKey(`${SIDEBAR_COLLAPSED_STORAGE_KEY}.${roleKey}`);
 }
 
 function restoreSidebarState() {
@@ -847,7 +899,7 @@ async function checkServerConnection() {
 function startServerConnectionMonitor() {
   if (serverConnectionTimer) clearInterval(serverConnectionTimer);
   checkServerConnection();
-  serverConnectionTimer = setInterval(checkServerConnection, 8000);
+  serverConnectionTimer = setInterval(checkServerConnection, SERVER_CONNECTION_MONITOR_MS);
 }
 
 function getCsrfToken() { return _csrfToken; }
@@ -885,6 +937,36 @@ window.addEventListener("storage", (event) => {
 });
 
 let _csrfTokenRequest = null;
+
+function loadHackmeScriptOnce(src) {
+  const target = String(src || "").trim();
+  if (!target) return Promise.reject(new Error("missing script src"));
+  if (lazyScriptPromises.has(target)) return lazyScriptPromises.get(target);
+  const existing = Array.from(document.scripts || []).find((script) => script.getAttribute("src") === target);
+  if (existing?.dataset.loaded === "1") return Promise.resolve(existing);
+  const promise = new Promise((resolve, reject) => {
+    const script = existing || document.createElement("script");
+    script.src = target;
+    script.defer = true;
+    script.addEventListener("load", () => {
+      script.dataset.loaded = "1";
+      resolve(script);
+    }, { once: true });
+    script.addEventListener("error", () => reject(new Error(`failed to load ${target}`)), { once: true });
+    if (!existing) document.head.appendChild(script);
+  }).catch((err) => {
+    lazyScriptPromises.delete(target);
+    throw err;
+  });
+  lazyScriptPromises.set(target, promise);
+  return promise;
+}
+
+async function ensureThreeJsLoaded() {
+  if (window.THREE) return window.THREE;
+  await loadHackmeScriptOnce(THREE_JS_SRC);
+  return window.THREE || null;
+}
 
 function markIdleTimeoutLogoutPending() {
   try { localStorage.setItem(IDLE_TIMEOUT_LOGOUT_STORAGE_KEY, String(Date.now())); } catch (_) {}
@@ -961,6 +1043,7 @@ function flash(el, text, ok) {
   if (!el) return;
   el.textContent = text;
   el.className = "msg show " + (ok ? "ok" : "err");
+  showActionFeedback(document.activeElement, text, ok, { skipToast: true });
   announceInlineMessage(text, ok);
 }
 
@@ -985,7 +1068,7 @@ function showAppToast(text, ok = true, options = {}) {
   toast.textContent = message;
   host.appendChild(toast);
   requestAnimationFrame(() => toast.classList.add("show"));
-  const duration = Number(options.duration || (kind === "err" ? 5200 : 3200));
+  const duration = Number(options.duration || TOAST_DURATION_MS[kind] || TOAST_DURATION_MS.ok);
   window.setTimeout(() => {
     toast.classList.remove("show");
     toast.addEventListener("transitionend", () => toast.remove(), { once: true });
@@ -993,10 +1076,64 @@ function showAppToast(text, ok = true, options = {}) {
   }, duration);
 }
 
+function messageKind(ok) {
+  return ok === false ? "err" : ok === null ? "info" : "ok";
+}
+
+function feedbackDuration(ok, options = {}, durations = ACTION_FEEDBACK_DURATION_MS) {
+  const explicit = Number(options.duration || 0);
+  if (explicit > 0) return explicit;
+  const kind = messageKind(ok);
+  return Number(durations[kind] || durations.ok || 1800);
+}
+
+function scheduleInlineMessageClear(el, text, ok = true, options = {}) {
+  const message = String(text || "");
+  if (!el || !message || options.persistent) return;
+  if (el._inlineMessageClearTimer) clearTimeout(el._inlineMessageClearTimer);
+  el._inlineMessageClearTimer = window.setTimeout(() => {
+    if (String(el.textContent || "") !== message) return;
+    el.textContent = "";
+    el.classList?.remove("show", "ok", "err", "info");
+    if (el.style) el.style.color = "";
+    el._inlineMessageClearTimer = null;
+  }, feedbackDuration(ok, options, INLINE_MESSAGE_DURATION_MS));
+}
+
 function announceInlineMessage(text, ok) {
   const normalized = String(text || "").replace(/\s+/g, " ").trim();
   if (!normalized || /載入中|讀取中|同步中|處理中|準備中/.test(normalized)) return;
   showAppToast(normalized, ok);
+}
+
+function actionFeedbackAnchor(trigger) {
+  if (!trigger || typeof trigger.closest !== "function") return null;
+  return trigger.closest(".field, .admin-toolbar, .drive-card-heading, .economy-wallet-grid > div, .drive-file-row, .edit-user-actions, .auth-recovery-actions, .game-action-toolbar")
+    || trigger.parentElement;
+}
+
+function showActionFeedback(trigger, text, ok = true, options = {}) {
+  const button = trigger?.closest?.(".btn, input[type='button'], input[type='submit']");
+  const message = String(text || "").replace(/\s+/g, " ").trim();
+  if (!button || !message) return;
+  const anchor = actionFeedbackAnchor(button);
+  if (!anchor) return;
+  let box = anchor.querySelector(":scope > .action-feedback");
+  if (!box) {
+    box = document.createElement("div");
+    anchor.appendChild(box);
+  }
+  const kind = messageKind(ok);
+  box.textContent = message;
+  box.className = `msg action-feedback show ${kind}`;
+  if (!options.skipToast) announceInlineMessage(message, ok);
+  if (box._actionFeedbackTimer) clearTimeout(box._actionFeedbackTimer);
+  if (!options.persistent) {
+    box._actionFeedbackTimer = window.setTimeout(() => {
+      box.classList.remove("show");
+      box._actionFeedbackTimer = null;
+    }, feedbackDuration(ok, options, ACTION_FEEDBACK_DURATION_MS));
+  }
 }
 
 function animateActiveModule(tab) {
@@ -1052,13 +1189,29 @@ function stopChatPoll() {
   }
 }
 
+function shouldRunChatPoll() {
+  return Boolean(currentUser && selectedChatRoomId && currentModuleTab === "chat" && !document.hidden);
+}
+
 function startChatPoll() {
   stopChatPoll();
-  if (!selectedChatRoomId) return;
+  if (!shouldRunChatPoll()) return;
   chatPollTimer = setInterval(() => {
+    if (!shouldRunChatPoll()) {
+      stopChatPoll();
+      return;
+    }
     loadChatMessages(selectedChatRoomId, true);
   }, CHAT_POLL_MS);
 }
+
+function syncChatPollLifecycle() {
+  if (shouldRunChatPoll()) startChatPoll();
+  else stopChatPoll();
+}
+
+document.addEventListener("hackme:module-changed", syncChatPollLifecycle);
+document.addEventListener("visibilitychange", syncChatPollLifecycle);
 
 function formatChatTime(ts) {
   if (!ts) return "";
@@ -1306,6 +1459,7 @@ function updateAdminPwMatchHint() {
 $("admin-add-pw-confirm").addEventListener("input", updateAdminPwMatchHint);
 
 function setAuthState(json, showLoginHero = false) {
+  const previousAccountScope = getCurrentAccountStorageScope();
   currentUser = json.username || null;
   currentUserId = json.id || null;
   currentUserAvatarFileId = json.avatar_file_id || "";
@@ -1403,7 +1557,6 @@ function setAuthState(json, showLoginHero = false) {
   const tabModuleVideos = $("tab-module-videos");
   const tabModuleGames = $("tab-module-games");
   const tabModuleJobs = $("tab-module-jobs");
-  const tabModuleShares = $("tab-module-shares");
   const tabModuleComfyui = $("tab-module-comfyui");
   const tabModuleEconomy = $("tab-module-economy");
   const tabModuleTrading = $("tab-module-trading");
@@ -1422,7 +1575,6 @@ function setAuthState(json, showLoginHero = false) {
   if (tabModuleVideos) tabModuleVideos.style.display = canAccessModule("videos") ? "" : "none";
   if (tabModuleGames) tabModuleGames.style.display = canAccessModule("games") ? "" : "none";
   if (tabModuleJobs) tabModuleJobs.style.display = canAccessModule("jobs") ? "" : "none";
-  if (tabModuleShares) tabModuleShares.style.display = canAccessModule("shares") ? "" : "none";
   if (tabModuleComfyui) tabModuleComfyui.style.display = canAccessModule("comfyui") ? "" : "none";
   if (tabModuleEconomy) tabModuleEconomy.style.display = canAccessModule("economy") ? "" : "none";
   if (tabModuleTrading) tabModuleTrading.style.display = (canAccessModule("economy") && canAccessModule("trading")) ? "" : "none";
@@ -1437,6 +1589,7 @@ function setAuthState(json, showLoginHero = false) {
   if (noticesTab) noticesTab.style.display = ((currentRole === "manager" || currentRole === "super_admin") && isFeatureEnabledForUi("feature_reports_notifications_enabled", false)) ? "" : "none";
   const restartBtn = $("restart-server-btn");
   if (restartBtn) restartBtn.style.display = currentUser === "root" ? "" : "none";
+  syncActiveAccountStorageScope(previousAccountScope);
 
   if (currentMustChangePassword) {
     resetInactivityTimer();
@@ -1444,19 +1597,8 @@ function setAuthState(json, showLoginHero = false) {
     return;
   }
 
-  if (currentRole === "manager" || currentRole === "super_admin") {
-    loadUsers();
-    if (currentRole === "super_admin" && canAccessModule("appeals")) {
-      loadAdminAppeals();
-    }
-  }
   if (typeof startNotificationPoll === "function") startNotificationPoll();
-  if (canAccessModule("chat")) {
-    loadChatRooms();
-  }
-  if (currentRole !== "super_admin" && canAccessModule("appeals")) {
-    loadUserAppeals();
-  }
+  if (typeof ensureGameMultiplayerInvitePolling === "function") ensureGameMultiplayerInvitePolling();
   let requestedModuleParam = "";
   try {
     requestedModuleParam = new URLSearchParams(location.search || "").get("module") || "";
@@ -1485,13 +1627,11 @@ function setAuthState(json, showLoginHero = false) {
                       : (currentRole !== "super_admin" && canAccessModule("appeals")) ? "appeals" : "chat");
   switchModuleTab(initialModule);
   if (typeof updateSidebarActiveState === "function") updateSidebarActiveState();
-  if (typeof refreshComfyuiStatus === "function" && canAccessModule("comfyui")) {
-    refreshComfyuiStatus({ switchAway: true });
-  }
   resetInactivityTimer();
 }
 
 function resetAuthState() {
+  const previousAccountScope = getCurrentAccountStorageScope();
   showLoginScreen();
   try {
     localStorage.removeItem(AUTH_SESSION_HINT_STORAGE_KEY);
@@ -1507,6 +1647,7 @@ function resetAuthState() {
   inactivitySuspendReasons.clear();
   forcedPasswordChangeMode = false;
   canManageUsers = false;
+  syncActiveAccountStorageScope(previousAccountScope);
   users = [];
   currentServerTab = "security";
   editingUserIsSelf = false;
@@ -1514,6 +1655,9 @@ function resetAuthState() {
   stopInactivityTimer();
   stopChatPoll();
   if (typeof stopNotificationPoll === "function") stopNotificationPoll();
+  if (typeof stopGameMultiplayerInvitePolling === "function") stopGameMultiplayerInvitePolling();
+  if (typeof stopTradingModuleTimers === "function") stopTradingModuleTimers();
+  if (typeof stopEconomyAutoRefresh === "function") stopEconomyAutoRefresh();
   if (typeof clearDriveE2eeSessionPassphrases === "function") clearDriveE2eeSessionPassphrases();
   hideUserEditDialog();
   const welcomeMsg = $("welcome-msg");
@@ -1553,6 +1697,7 @@ function resetAuthState() {
   if (moduleAppeals) moduleAppeals.classList.remove("active");
   if (typeof setComfyuiTabAvailability === "function") setComfyuiTabAvailability(null);
   if (typeof syncSidebarMenuVisibility === "function") syncSidebarMenuVisibility();
+  if (typeof syncRootModuleSettingsButtons === "function") syncRootModuleSettingsButtons();
   $("me-user").textContent = "-";
   $("me-role").textContent = "-";
   $("me-nickname").textContent = "-";

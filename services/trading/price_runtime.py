@@ -2,6 +2,7 @@ from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 from functools import lru_cache
 import math
+import os
 
 
 @lru_cache(maxsize=1)
@@ -1552,6 +1553,32 @@ def fetch_live_price_points(service, market_symbol, *, with_meta=False, settings
     if not service._live_price_symbol(market_symbol, conn=conn):
         raise ValueError("live price is not supported for this market")
     settings = settings or {}
+    raw_settings = settings.get("raw") if isinstance(settings.get("raw"), dict) else {}
+    qa_live_price_enabled = str(
+        settings.get("qa_live_price_provider_enabled")
+        or settings.get("trading.qa_live_price_provider_enabled")
+        or raw_settings.get("trading.qa_live_price_provider_enabled")
+        or ""
+    ).strip().lower() in {"1", "true", "yes", "on", "enabled"}
+    qa_live_price_allowed = str(os.environ.get("HACKME_DEV_TRADING_ALLOW_QA_LIVE_PRICE_PROVIDER") or "").strip().lower() in {"1", "true", "yes", "on", "enabled"}
+    if qa_live_price_allowed and qa_live_price_enabled and conn is not None:
+        market = service._market(conn, market_symbol)
+        price = service._price_points_from_float(market["manual_price_points"], source="test_live_price_provider")
+        meta = {
+            "ws_supported": False,
+            "transport": "qa_db_provider",
+            "connected": True,
+            "fallback": False,
+            "stale": False,
+            "degraded": False,
+            "confidence": "low",
+            "provider_count": 1,
+            "last_update_at": engine._now(),
+            "exclusion_reason": "",
+            "latency_ms": 0.0,
+            "synthetic_test_provider": True,
+        }
+        return (price, "test_live_price_provider", meta) if with_meta else (price, "test_live_price_provider")
     if service.live_price_provider:
         price = service.live_price_provider(market_symbol)
         price_points = service._price_points_from_float(price, source="test_live_price_provider")

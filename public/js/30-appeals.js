@@ -8,8 +8,7 @@ function appealCountdownText(totalSeconds) {
 async function loadUserAppeals() {
   const wrap = $("user-appeal-wrap");
   if (!wrap || !currentUser || !canAccessModule("appeals")) return;
-  await fetchCsrfToken({ force: true });
-  const csrf = getCsrfToken();
+  const csrf = await fetchCsrfToken();
   const res = await apiFetch(API + "/appeals", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
@@ -148,8 +147,7 @@ async function loadAdminAppeals(page = 0, status = null) {
   const targetStatus = status || adminAppealStatus;
   adminAppealStatus = targetStatus;
   const targetPage = Math.max(1, parseInt(page || 1, 10));
-  await fetchCsrfToken({ force: true });
-  const csrf = getCsrfToken();
+  const csrf = await fetchCsrfToken();
   const res = await apiFetch(API + "/admin/appeals?status=" + encodeURIComponent(targetStatus) + "&page=" + targetPage + "&limit=20", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }

@@ -19,9 +19,10 @@ from services.server.runtime import default_runtime_root_path
 
 DEFAULT_RETRAIN_MIN_USABLE_REPLAYS = 25
 DEFAULT_RETRAIN_MAX_AGE_HOURS = 24 * 7
+AUTO_RETRAIN_DISABLED_REASON = "auto_retrain_disabled_pending_research"
 _PIPELINE_AUTORUN_LOCK = threading.Lock()
 PIPELINE_RETRAIN_ENGINES = ("experiment 3:dl", "experiment 4:pv", "experiment 5:nnue")
-PIPELINE_DEFAULT_PROMOTE_ENGINES = ("experiment 3:dl", "experiment 5:nnue")
+PIPELINE_DEFAULT_PROMOTE_ENGINES = ("experiment 3:dl",)
 
 
 def _runtime_root() -> Path:
@@ -55,6 +56,14 @@ def autorun_skip_promote() -> bool:
     return str(os.environ.get("HTML_LEARNING_CHESS_AUTORUN_SKIP_PROMOTE", "")).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def chess_auto_retrain_enabled() -> bool:
+    for name in ("HTML_LEARNING_CHESS_AUTORETRAIN_ENABLED", "HTML_LEARNING_CHESS_PIPELINE_AUTORUN_ENABLED"):
+        raw = os.environ.get(name)
+        if raw is not None and str(raw).strip():
+            return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+    return False
+
+
 def default_chess_pipeline_dataset_root() -> Path:
     return default_chess_reports_dir() / "chess_datasets"
 
@@ -74,8 +83,8 @@ def candidate_paths_for_run(run_id: str, *, include_exp2: bool = False) -> dict[
         "experiment 3:dl": root / "chess_experiment_3_dl.json",
         "experiment 3:dl replay": root / "chess_experiment_3_dl_replay.jsonl",
         "experiment 4:pv": root / "chess_experiment_4_pv.json",
-        "experiment 5:nnue": root / "chess_experiment_5_nnue.json",
-        "experiment 5:nnue replay": root / "chess_experiment_5_nnue_replay.jsonl",
+        "experiment 5:nnue": root / "chess_experiment_5_nnue_experience.json",
+        "experiment 5:nnue replay": root / "chess_experiment_5_nnue_experience_replay.jsonl",
     }
 
 
@@ -147,6 +156,9 @@ def latest_pipeline_autorun_status(*, path: Path | None = None) -> dict:
     payload["is_running"] = running
     payload["path"] = str(status_path)
     payload["exists"] = status_path.exists()
+    payload["auto_retrain_enabled"] = chess_auto_retrain_enabled()
+    if not payload["auto_retrain_enabled"]:
+        payload["disabled_reason"] = AUTO_RETRAIN_DISABLED_REASON
     return payload
 
 
@@ -203,6 +215,7 @@ def _pipeline_command_args(*, min_usable_replays: int, target_engines: list[str]
         cmd.extend([
             "--promote-engines",
             ",".join(PIPELINE_DEFAULT_PROMOTE_ENGINES),
+            "--skip-exp5-refine",
         ])
     return cmd
 
@@ -251,6 +264,7 @@ def pipeline_recommendation(
         command += " --skip-benchmark"
     if autorun_skip_promote():
         command += " --skip-promote"
+    auto_retrain_enabled = chess_auto_retrain_enabled()
     return {
         "ready": bool(ready_reasons) and not blocked_reasons,
         "ready_reasons": ready_reasons,
@@ -259,6 +273,8 @@ def pipeline_recommendation(
         "usable_replays": usable_replays,
         "last_train_at": last_train_at.isoformat() + "Z" if last_train_at else "",
         "recommended_command": command,
+        "auto_retrain_enabled": auto_retrain_enabled,
+        "auto_retrain_disabled_reason": "" if auto_retrain_enabled else AUTO_RETRAIN_DISABLED_REASON,
     }
 
 
@@ -272,6 +288,15 @@ def maybe_launch_chess_train_pipeline(
     replay = replay if isinstance(replay, dict) else replay_buffer_summary()
     recommendation = pipeline_recommendation(replay=replay, target_engines=target_engines)
     status_path = default_chess_pipeline_autorun_status_path()
+    if not chess_auto_retrain_enabled():
+        return {
+            "ok": True,
+            "launched": False,
+            "reason": AUTO_RETRAIN_DISABLED_REASON,
+            "recommendation": recommendation,
+            "status": latest_pipeline_autorun_status(path=status_path),
+            "replay_snapshot": replay,
+        }
     if not recommendation["ready"]:
         return {
             "ok": True,

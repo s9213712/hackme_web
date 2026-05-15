@@ -73,8 +73,7 @@ document.addEventListener("click", (event) => {
 });
 
 async function loadChatRooms() {
-  await fetchCsrfToken({ force: true });
-  const csrf = getCsrfToken();
+  const csrf = await fetchCsrfToken();
   try {
     const res = await apiFetch(API + "/chat/rooms", {
       credentials: "same-origin",
@@ -156,8 +155,7 @@ function renderChatFriends(data) {
 
 async function loadChatFriends() {
   if (!currentUser) return;
-  await fetchCsrfToken({ force: true });
-  const csrf = getCsrfToken();
+  const csrf = await fetchCsrfToken();
   const res = await apiFetch(API + "/chat/friends", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
@@ -248,8 +246,7 @@ async function openChatRoom(roomId, autoPoll = true) {
 
 async function loadChatMessages(roomId, silent = false) {
   if (!roomId) return;
-  await fetchCsrfToken({ force: true });
-  const csrf = getCsrfToken();
+  const csrf = await fetchCsrfToken();
   try {
     const res = await apiFetch(API + `/chat/rooms/${roomId}/messages`, {
       credentials: "same-origin",

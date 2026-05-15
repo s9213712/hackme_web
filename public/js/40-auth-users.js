@@ -1050,7 +1050,8 @@ async function removeUser(userId) {
 }
 
 async function createUserByAdmin() {
-  const msgEl = typeof adminUsersMsgEl === "function" ? adminUsersMsgEl() : $("li-msg");
+  const pageMsgEl = typeof adminUsersMsgEl === "function" ? adminUsersMsgEl() : $("li-msg");
+  const dialogMsgEl = adminAddMsgEl();
   const payload = {
     username: sanitize($("admin-add-user").value.trim()),
     password: $("admin-add-pw").value,
@@ -1064,11 +1065,18 @@ async function createUserByAdmin() {
     status: "active"
   };
   if (!payload.username || !payload.password || !payload.password_confirm || !payload.nickname) {
-    flash(msgEl, "請至少填寫帳號、密碼、確認密碼與暱稱", false);
+    const missingField = !payload.username ? $("admin-add-user")
+      : !payload.password ? $("admin-add-pw")
+        : !payload.password_confirm ? $("admin-add-pw-confirm")
+          : $("admin-add-nickname");
+    flash(dialogMsgEl || pageMsgEl, "請至少填寫帳號、密碼、確認密碼與暱稱", false);
+    if (missingField) missingField.focus();
     return;
   }
   if (payload.password !== payload.password_confirm) {
-    flash(msgEl, "兩次輸入的密碼不一致", false);
+    flash(dialogMsgEl || pageMsgEl, "兩次輸入的密碼不一致", false);
+    const confirmField = $("admin-add-pw-confirm");
+    if (confirmField) confirmField.focus();
     return;
   }
   await fetchCsrfToken({ force: true });
@@ -1085,17 +1093,30 @@ async function createUserByAdmin() {
       .forEach((id) => { const el = $(id); if (el) el.value = ""; });
     const adminAddHint = $("admin-add-pw-confirm-hint");
     if (adminAddHint) adminAddHint.textContent = "";
+    clearAdminAddMsg();
     hideAdminAddDialog();
     await loadUsers();
-    flash(msgEl, json.msg || "帳號已建立", true);
+    flash(pageMsgEl, json.msg || "帳號已建立", true);
   } else {
-    flash(msgEl, json.msg || "建立帳號失敗", false);
+    flash(dialogMsgEl || pageMsgEl, json.msg || "建立帳號失敗", false);
   }
+}
+
+function adminAddMsgEl() {
+  return $("admin-add-msg");
+}
+
+function clearAdminAddMsg() {
+  const el = adminAddMsgEl();
+  if (!el) return;
+  el.textContent = "";
+  el.className = "msg";
 }
 
 function showAdminAddDialog() {
   const overlay = $("admin-add-overlay");
   if (!overlay) return;
+  clearAdminAddMsg();
   overlay.classList.add("show");
   const firstField = $("admin-add-user");
   if (firstField) firstField.focus();
@@ -1105,6 +1126,7 @@ function hideAdminAddDialog() {
   const overlay = $("admin-add-overlay");
   if (!overlay) return;
   overlay.classList.remove("show");
+  clearAdminAddMsg();
 }
 
 async function reviewRegistration(userId, action) {

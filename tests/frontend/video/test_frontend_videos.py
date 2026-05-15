@@ -15,6 +15,10 @@ def test_video_platform_accepts_audio_media_in_ui():
     assert "發布影片或音樂" in index_html
     assert "雲端硬碟影音" in index_html
     assert "function isCloudMediaFile" in videos_js
+    assert "let videoPendingPublishSelection = null;" in videos_js
+    assert "async function openVideoPublishFromDrive(fileId, options = {})" in videos_js
+    assert "applyVideoPublishDriveSelection" in videos_js
+    assert "請完成標題、可見性、分享與封面設定後發布" in videos_js
     assert 'mime.startsWith("audio/")' in videos_js
     assert '".mp3"' in videos_js
     assert 'video.media_type === "audio"' in videos_js

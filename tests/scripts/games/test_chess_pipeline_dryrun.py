@@ -412,6 +412,52 @@ def test_pgn_teacher_audit_stage_skips_when_inputs_missing_on_disk(tmp_path):
     assert "missing on disk" in result["reason"]
 
 
+def test_pgn_teacher_audit_stage_stockfish_backend_uses_stockfish_audit(tmp_path, monkeypatch):
+    raw_jsonl = tmp_path / "raw.jsonl"
+    output_dir = tmp_path / "00b_pgn_teacher_audit"
+    raw_jsonl.write_text('{"fen":"x"}\n', encoding="utf-8")
+    captured = {}
+
+    def fake_run_subprocess(cmd, *, label, log_file):
+        captured["cmd"] = list(cmd)
+        captured["label"] = label
+        captured["log_file"] = str(log_file)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "stockfish_teacher_train_rows.jsonl").write_text("", encoding="utf-8")
+        return 0
+
+    monkeypatch.setattr(
+        "scripts.games.chess_pipeline_dryrun._run_subprocess",
+        fake_run_subprocess,
+    )
+
+    result = run_pgn_teacher_audit_stage(
+        raw_jsonls=[str(raw_jsonl)],
+        output_dir=output_dir,
+        log_dir=tmp_path / "logs",
+        exp4_model_path="/unused/exp4.json",
+        exp5_model_path="/unused/exp5.json",
+        audit_profile="strict",
+        top_k=4,
+        backend="stockfish",
+        stockfish_path="/tmp/local-stockfish",
+        stockfish_depth=11,
+        stockfish_movetime_ms=30,
+    )
+
+    cmd = captured["cmd"]
+    assert result["status"] == "ok"
+    assert result["backend"] == "stockfish"
+    assert result["accepted_jsonl"].endswith("stockfish_teacher_train_rows.jsonl")
+    assert str(REPO_ROOT / "scripts" / "games" / "chess_stockfish_teacher_audit.py") in cmd
+    assert "--audit-profile" not in cmd
+    assert cmd[cmd.index("--stockfish-path") + 1] == "/tmp/local-stockfish"
+    assert cmd[cmd.index("--depth") + 1] == "11"
+    assert cmd[cmd.index("--movetime-ms") + 1] == "30"
+    assert cmd[cmd.index("--multipv") + 1] == "4"
+    assert cmd[cmd.index("--input-jsonl") + 1] == str(raw_jsonl)
+
+
 def test_pgn_input_stage_ignores_missing_prepared(tmp_path):
     result = run_pgn_input_stage(
         pgn_paths=[],

@@ -3,6 +3,7 @@
 (function () {
   const STORAGE_KEY = "hackme_trading_workflow_json";
   const PREVIEW_STORAGE_KEY = "hackme_trading_workflow_preview";
+  const ACCOUNT_SCOPE_STORAGE_KEY = "hackme_web.account.active_scope";
   const $ = (id) => document.getElementById(id);
   const NODE_TYPES = ["start", "condition", "logic", "control", "action"];
   const CONDITION_TYPES = ["always", "price_below", "price_above", "rsi_above", "rsi_below", "kd_above", "kd_below", "ma_position", "bb_position", "has_position"];
@@ -26,6 +27,22 @@
     close_all: "全部平倉",
     hold: "不動作",
   };
+
+  function editorAccountStorageScope() {
+    try {
+      const openerScope = window.opener?.getCurrentAccountStorageScope?.();
+      if (openerScope) return openerScope;
+    } catch (_) {}
+    try {
+      return localStorage.getItem(ACCOUNT_SCOPE_STORAGE_KEY) || "anonymous";
+    } catch (_) {
+      return "anonymous";
+    }
+  }
+
+  function editorScopedStorageKey(key) {
+    return `hackme_web:${editorAccountStorageScope()}:${String(key || "state")}`;
+  }
   const PORTS = {
     start: { inputs: [], outputs: ["out"] },
     condition: { inputs: ["in"], outputs: ["true", "false"] },
@@ -140,7 +157,7 @@
   function loadPreviewConfig() {
     const fallback = defaultPreviewConfig();
     try {
-      const parsed = JSON.parse(localStorage.getItem(PREVIEW_STORAGE_KEY) || "{}");
+      const parsed = JSON.parse(localStorage.getItem(editorScopedStorageKey(PREVIEW_STORAGE_KEY)) || "{}");
       if (!parsed || typeof parsed !== "object") return fallback;
       return {
         market_symbol: String(parsed.market_symbol || fallback.market_symbol),
@@ -178,7 +195,7 @@
 
   function savePreviewConfig() {
     try {
-      localStorage.setItem(PREVIEW_STORAGE_KEY, JSON.stringify(currentPreviewConfig()));
+      localStorage.setItem(editorScopedStorageKey(PREVIEW_STORAGE_KEY), JSON.stringify(currentPreviewConfig()));
     } catch (_) {
       // ignore local storage failures
     }
@@ -352,7 +369,7 @@
 
   function loadInitialWorkflow() {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY);
+      const saved = localStorage.getItem(editorScopedStorageKey(STORAGE_KEY));
       if (saved) return JSON.parse(saved);
     } catch (err) {
       // keep default
@@ -1003,7 +1020,7 @@
         setStatus(workflowValidationErrorSummary(errors), false);
         return;
       }
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(workflow));
+      localStorage.setItem(editorScopedStorageKey(STORAGE_KEY), JSON.stringify(workflow));
       setStatus("Workflow 已儲存，交易頁可載入這份設定。");
       return;
     }

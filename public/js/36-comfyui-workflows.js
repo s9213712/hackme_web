@@ -324,10 +324,20 @@ function downloadComfyuiWorkflowText(filename, text) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+function comfyuiWorkflowEditorStorageKey(key) {
+  if (typeof comfyuiUserStorageKey === "function") return comfyuiUserStorageKey(key);
+  if (typeof accountScopedStorageKey === "function") return accountScopedStorageKey(key);
+  const id = Number(currentUserId || 0);
+  const scope = Number.isFinite(id) && id > 0
+    ? `user:${id}`
+    : (currentUser ? `name:${String(currentUser).trim().toLowerCase()}` : "anonymous");
+  return `hackme_web:${scope}:${String(key || "state")}`;
+}
+
 function loadComfyuiVisualWorkflowEditorResult() {
   let payload = null;
   try {
-    payload = JSON.parse(localStorage.getItem("hackme_comfyui_workflow_editor_result") || "null");
+    payload = JSON.parse(localStorage.getItem(comfyuiWorkflowEditorStorageKey("hackme_comfyui_workflow_editor_result")) || "null");
   } catch (_) {
     payload = null;
   }
@@ -368,7 +378,7 @@ function prepareComfyuiVisualWorkflowEditorInput() {
     layout_json: layout,
   };
   try {
-    localStorage.setItem("hackme_comfyui_workflow_editor_input", JSON.stringify(payload));
+    localStorage.setItem(comfyuiWorkflowEditorStorageKey("hackme_comfyui_workflow_editor_input"), JSON.stringify(payload));
   } catch (_) {
     setComfyuiMessage("瀏覽器無法暫存 workflow 給視覺編輯器；請改用編輯器內匯入 JSON。", false);
     return;
@@ -498,7 +508,7 @@ function renderComfyuiTemplateSelector(payload = {}, { silentReload = true } = {
 
 async function loadComfyuiSelectedTemplateDetail(presetId, { silent = false, applyDefaults = true } = {}) {
   if (!presetId) return;
-  await fetchCsrfToken({ force: true });
+  await fetchCsrfToken();
   const res = await apiFetch(API + `/comfyui/workflows/${encodeURIComponent(presetId)}`, {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": getCsrfToken() || "" }

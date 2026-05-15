@@ -224,6 +224,34 @@ def book_size() -> int:
     return len(_BOOK)
 
 
+def book_candidates_for_chess_board(board: chess.Board, *, max_candidates: int = 5) -> list[dict]:
+    """Return deterministic book candidates for an already-built board.
+
+    Route-layer ``book_move`` intentionally uses weighted randomness for game
+    variety. Engine evaluation and distillation need repeatability, so exp5
+    calls this helper instead and receives legal UCI candidates sorted by book
+    weight, then UCI.
+    """
+    if not isinstance(board, chess.Board):
+        return []
+    entries = _BOOK.get(board.epd())
+    if not entries:
+        return []
+    legal = {move.uci(): move for move in board.legal_moves}
+    candidates: list[dict] = []
+    for weight, uci in entries:
+        move = legal.get(str(uci))
+        if move is None:
+            continue
+        candidates.append({
+            "uci": move.uci(),
+            "weight": int(weight),
+            "move": move,
+        })
+    candidates.sort(key=lambda item: (-int(item["weight"]), str(item["uci"])))
+    return candidates[: max(1, int(max_candidates or 1))]
+
+
 def has_position(board_dict, side) -> bool:
     if not isinstance(board_dict, dict) or side not in ("white", "black"):
         return False

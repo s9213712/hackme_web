@@ -57,7 +57,7 @@ let comfyuiImagePickerState = {
   history: [],
   cloudDrive: [],
 };
-const COMFYUI_GENERATION_TIMEOUT_SECONDS = 1800;
+const COMFYUI_GENERATION_TIMEOUT_SECONDS = 0;
 const COMFYUI_QUEUE_TIMEOUT_EXTENSION_SECONDS = 1800;
 const COMFYUI_QUEUE_MAX_TIMEOUT_SECONDS = 21600;
 const COMFYUI_MAX_LORAS = 8;
@@ -74,6 +74,15 @@ const COMFYUI_CONTROLNET_TIPS = {
   softedge: "適合柔和邊緣與輪廓引導。",
   tile: "適合局部細節補強與放大。",
 };
+
+function comfyuiUserStorageKey(key) {
+  if (typeof accountScopedStorageKey === "function") return accountScopedStorageKey(key);
+  const id = Number(currentUserId || 0);
+  const scope = Number.isFinite(id) && id > 0
+    ? `user:${id}`
+    : (currentUser ? `name:${String(currentUser).trim().toLowerCase()}` : "anonymous");
+  return `hackme_web:${scope}:${String(key || "state")}`;
+}
 const COMFYUI_DRAFT_FIELD_IDS = [
   "comfyui-model-download-type",
   "comfyui-model-relative-path",
@@ -171,6 +180,7 @@ function setComfyuiTabAvailability(available, detail = "") {
   if (status && comfyuiServerAvailable === false) {
     status.textContent = detail || "ComfyUI 伺服器未連線";
   }
+  updateComfyuiRootPanelVisibility();
   updateComfyuiStartButton();
 }
 
@@ -623,10 +633,15 @@ function normalizeComfyuiView(view) {
   return ["generate", "history", "workflow", "models"].includes(value) ? value : "generate";
 }
 
+function canManageComfyuiLocalModels(modeOverride = null) {
+  const mode = String(modeOverride || comfyuiConnectionMode || "remote").trim().toLowerCase();
+  return currentUser === "root" && mode === "local";
+}
+
 function setComfyuiView(view, { persist = true } = {}) {
   const selected = normalizeComfyuiView(view);
   const modelTab = document.querySelector('[data-comfyui-view="models"]');
-  const modelsUnavailable = modelTab && modelTab.hidden;
+  const modelsUnavailable = selected === "models" && (!canManageComfyuiLocalModels() || (modelTab && modelTab.hidden));
   const activeView = selected === "models" && modelsUnavailable ? "generate" : selected;
   document.querySelectorAll("[data-comfyui-view]").forEach((button) => {
     const isActive = button.dataset.comfyuiView === activeView;
@@ -639,7 +654,7 @@ function setComfyuiView(view, { persist = true } = {}) {
     panel.classList.toggle("active", isActive);
   });
   if (persist) {
-    try { localStorage.setItem(COMFYUI_VIEW_STORAGE_KEY, activeView); } catch (_) {}
+    try { localStorage.setItem(comfyuiUserStorageKey(COMFYUI_VIEW_STORAGE_KEY), activeView); } catch (_) {}
   }
   if (activeView === "history") loadComfyuiHistory().catch(() => {});
   if (activeView === "workflow") loadComfyuiWorkflowPresets().catch(() => {});
@@ -652,7 +667,7 @@ function bindComfyuiSubnav() {
     button.addEventListener("click", () => setComfyuiView(button.dataset.comfyuiView));
   });
   let stored = "";
-  try { stored = localStorage.getItem(COMFYUI_VIEW_STORAGE_KEY) || ""; } catch (_) {}
+  try { stored = localStorage.getItem(comfyuiUserStorageKey(COMFYUI_VIEW_STORAGE_KEY)) || ""; } catch (_) {}
   setComfyuiView(stored || "generate", { persist: false });
 }
 
@@ -774,12 +789,14 @@ function updateComfyuiModeVisibility() {
   const upscaleField = $("comfyui-upscale-model-field");
   const outpaintPanel = $("comfyui-outpaint-panel");
   const controlFields = $("comfyui-controlnet-fields");
+  const sourceCard = $(COMFYUI_INPUT_ASSET_META.source.cardId);
   const controlCard = $(COMFYUI_INPUT_ASSET_META.control.cardId);
   const maskCard = $(COMFYUI_INPUT_ASSET_META.mask.cardId);
   if (modeTip) modeTip.textContent = comfyuiModeTip(mode);
   if (denoiseField) denoiseField.style.display = mode === "txt2img" || mode === "upscale" ? "none" : "";
   if (upscaleField) upscaleField.style.display = comfyuiModeUsesUpscale(mode) ? "" : "none";
   if (outpaintPanel) outpaintPanel.style.display = comfyuiModeUsesOutpaint(mode) ? "" : "none";
+  if (sourceCard) sourceCard.style.display = comfyuiModeUsesSourceImage(mode) ? "" : "none";
   if (maskCard) maskCard.style.display = comfyuiModeUsesMaskImage(mode) ? "" : "none";
   if (controlFields) controlFields.style.display = isComfyuiControlnetEnabled() ? "" : "none";
   if (controlCard) controlCard.style.display = isComfyuiControlnetEnabled() ? "" : "none";
@@ -1217,7 +1234,7 @@ function renderComfyuiImagePickerList() {
 }
 
 async function loadComfyuiImagePickerCandidates() {
-  await fetchCsrfToken({ force: true });
+  await fetchCsrfToken();
   const res = await apiFetch(API + "/comfyui/input-image-candidates", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": getCsrfToken() || "" }
@@ -1391,12 +1408,13 @@ function resetComfyuiIdleUi() {
 
 function startComfyuiProgress(timeoutSeconds = COMFYUI_GENERATION_TIMEOUT_SECONDS) {
   comfyuiProgressStartedAt = Date.now();
+  const hasLimit = Number(timeoutSeconds) > 0;
   setComfyuiProgress({
     visible: true,
     running: true,
     percent: 0,
     label: "已送出產圖請求",
-    detail: `已等待 00:00 / 上限 ${formatComfyuiDuration(timeoutSeconds)}`
+    detail: hasLimit ? `已等待 00:00 / 上限 ${formatComfyuiDuration(timeoutSeconds)}` : "已等待 00:00（不設等待上限）"
   });
 }
 
@@ -1406,14 +1424,32 @@ function applyComfyuiJobProgress(progress = {}, timeoutSeconds = COMFYUI_GENERAT
   let label = "等待 ComfyUI";
   const phase = String(progress.phase || "").toLowerCase();
   if (phase === "queued") label = "排隊中";
-  else if (phase === "running") label = "ComfyUI 執行中";
+  else if (phase === "downloading") label = "下載 Hugging Face 模型";
+  else if (phase === "loading") label = comfyuiConnectionMode === "diffusers" ? "載入 Diffusers 模型" : "載入模型";
+  else if (phase === "running") label = comfyuiConnectionMode === "diffusers" ? "Diffusers 推論中" : "ComfyUI 執行中";
   else if (phase === "completed") label = "圖片已完成";
   else if (phase === "error") label = "產圖失敗";
   const queueText = progress.queue_remaining !== null && progress.queue_remaining !== undefined
     ? `，佇列剩餘 ${progress.queue_remaining}`
     : "";
   const nodeText = progress.current_node ? `，節點 ${progress.current_node}` : "";
-  const detail = `${progress.detail || "等待進度資料"}${queueText}${nodeText}；已等待 ${formatComfyuiDuration(elapsed)} / 上限 ${formatComfyuiDuration(timeoutSeconds)}`;
+  const writtenBytes = Number(progress.bytes_written || progress.downloaded_bytes || 0);
+  const totalBytes = Number(progress.total_bytes || 0);
+  const baseDetail = progress.detail || "等待進度資料";
+  const writtenByteText = writtenBytes > 0 && typeof formatDriveBytes === "function" ? formatDriveBytes(writtenBytes) : "";
+  const totalByteText = totalBytes > 0 && typeof formatDriveBytes === "function" ? formatDriveBytes(totalBytes) : "";
+  const speedBytes = Number(progress.speed_bytes_per_sec || progress.download_speed_bytes_per_sec || 0);
+  const speedText = speedBytes > 0 && typeof formatDriveBytes === "function" ? `，速度 ${formatDriveBytes(speedBytes)}/s` : "";
+  const fileText = progress.current_file ? `，檔案 ${progress.current_file}` : "";
+  const stepText = progress.step ? `，步驟 ${progress.step}` : "";
+  const byteText = writtenByteText && !baseDetail.includes(writtenByteText)
+    ? `，下載 ${writtenByteText}${totalByteText ? ` / ${totalByteText}` : ""}`
+    : "";
+  const hasLimit = Number(timeoutSeconds) > 0;
+  const waitText = hasLimit
+    ? `；已等待 ${formatComfyuiDuration(elapsed)} / 上限 ${formatComfyuiDuration(timeoutSeconds)}`
+    : `；已等待 ${formatComfyuiDuration(elapsed)}（不設等待上限）`;
+  const detail = `${baseDetail}${queueText}${nodeText}${stepText}${fileText}${byteText}${speedText}${waitText}`;
   setComfyuiProgress({
     visible: true,
     running: phase !== "completed" && phase !== "error",
@@ -1440,9 +1476,10 @@ function extendComfyuiDeadlineForQueue(deadline, startedAt) {
 async function pollComfyuiJobUntilDone(jobId, controller, timeoutSeconds) {
   comfyuiActiveJobId = jobId;
   const startedAt = Date.now();
-  let deadline = startedAt + timeoutSeconds * 1000 + 15000;
-  let displayTimeoutSeconds = timeoutSeconds;
-  while (Date.now() < deadline) {
+  const unlimited = Number(timeoutSeconds) <= 0;
+  let deadline = unlimited ? Number.POSITIVE_INFINITY : startedAt + timeoutSeconds * 1000 + 15000;
+  let displayTimeoutSeconds = unlimited ? 0 : timeoutSeconds;
+  while (unlimited || Date.now() < deadline) {
     if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
     const res = await apiFetch(API + `/comfyui/jobs/${encodeURIComponent(jobId)}`, {
       credentials: "same-origin",
@@ -1452,14 +1489,16 @@ async function pollComfyuiJobUntilDone(jobId, controller, timeoutSeconds) {
     const json = await res.json().catch(() => ({}));
     if (!res.ok || !json.ok) throw new Error(json.msg || `ComfyUI 工作狀態讀取失敗（HTTP ${res.status}）`);
     const job = json.job || {};
-    if (isComfyuiJobQueued(job)) {
+    if (!unlimited && isComfyuiJobQueued(job)) {
       deadline = extendComfyuiDeadlineForQueue(deadline, startedAt);
     }
-    displayTimeoutSeconds = Math.max(
-      displayTimeoutSeconds,
-      Number(job.progress?.timeout_seconds) || 0,
-      Math.max(timeoutSeconds, Math.floor((deadline - startedAt - 15000) / 1000))
-    );
+    if (!unlimited) {
+      displayTimeoutSeconds = Math.max(
+        displayTimeoutSeconds,
+        Number(job.progress?.timeout_seconds) || 0,
+        Math.max(timeoutSeconds, Math.floor((deadline - startedAt - 15000) / 1000))
+      );
+    }
     applyComfyuiJobProgress(job.progress || {}, displayTimeoutSeconds);
     if (job.status === "completed" && job.result) return job.result;
     if (job.status === "error") throw new Error(job.error || job.progress?.detail || "ComfyUI 產圖失敗");
@@ -1474,7 +1513,7 @@ function selectedComfyuiAlbumId() {
 }
 
 function comfyuiDraftStorageKey() {
-  return `hackme_web:comfyui:draft:${currentUser || "anonymous"}`;
+  return comfyuiUserStorageKey("comfyui:draft");
 }
 
 function readComfyuiDraft() {
@@ -1539,15 +1578,15 @@ function updateComfyuiRootPanelVisibility(modeOverride = null) {
   const hint = $("comfyui-root-model-mode-hint");
   const modelsTab = document.querySelector('[data-comfyui-view="models"]');
   const mode = String(modeOverride || comfyuiConnectionMode || "remote").trim().toLowerCase();
-  const show = currentUser === "root";
   const localReady = mode === "local";
+  const showLocalModels = canManageComfyuiLocalModels(mode);
   updateComfyuiModeNote(mode);
-  if (panel) panel.style.display = show ? "" : "none";
-  if (modelsTab) modelsTab.hidden = !show;
-  if (!show && document.querySelector('[data-comfyui-view-panel="models"]')?.classList.contains("active")) {
+  if (panel) panel.style.display = showLocalModels ? "" : "none";
+  if (modelsTab) modelsTab.hidden = !showLocalModels;
+  if (!showLocalModels && document.querySelector('[data-comfyui-view-panel="models"]')?.classList.contains("active")) {
     setComfyuiView("generate");
   }
-  if (details && !show) details.open = false;
+  if (details && !showLocalModels) details.open = false;
   if (!panel) return;
   panel.querySelectorAll("input, select, button").forEach((el) => {
     el.disabled = !localReady;
@@ -2148,6 +2187,12 @@ function bindComfyuiAdvancedUi() {
     }
   });
   bindComfyuiSubnav();
+  if (!document.body.dataset.comfyuiAccountScopeBound) {
+    document.body.dataset.comfyuiAccountScopeBound = "1";
+    document.addEventListener("hackme:account-context-changed", () => {
+      updateComfyuiRootPanelVisibility();
+    });
+  }
   updateComfyuiModeVisibility();
   updateComfyuiModelSourceMode();
   Object.keys(COMFYUI_INPUT_ASSET_META).forEach((key) => renderComfyuiInputAsset(key));
@@ -2178,7 +2223,7 @@ async function loadComfyuiAlbums({ force = false } = {}) {
     const json = typeof storageAction === "function"
       ? await storageAction("/storage/albums", "GET")
       : await (async () => {
-          await fetchCsrfToken({ force: true });
+          await fetchCsrfToken();
           const res = await apiFetch(API + "/storage/albums", {
             credentials: "same-origin",
             headers: { "X-CSRF-Token": getCsrfToken() || "" }
@@ -2258,7 +2303,7 @@ async function loadComfyuiHistory() {
   if (!currentUser || !canAccessModule("comfyui")) return [];
   const status = $("comfyui-history-status");
   if (status) status.textContent = "正在讀取 ComfyUI 歷史紀錄...";
-  await fetchCsrfToken({ force: true });
+  await fetchCsrfToken();
   const res = await apiFetch(API + "/comfyui/history", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": getCsrfToken() || "" }
@@ -2482,7 +2527,7 @@ async function loadComfyuiModels() {
   if (status) status.textContent = "連線 ComfyUI 中...";
   setComfyuiMessage("");
   try {
-    await fetchCsrfToken({ force: true });
+    await fetchCsrfToken();
     const res = await apiFetch(API + "/comfyui/models" + comfyuiRequestQuery(), {
       credentials: "same-origin",
       headers: { "X-CSRF-Token": getCsrfToken() || "" }
@@ -2535,7 +2580,7 @@ async function refreshComfyuiStatus({ switchAway = true } = {}) {
   const status = $("comfyui-status");
   if (status) status.textContent = "檢測 ComfyUI 伺服器中...";
   try {
-    await fetchCsrfToken({ force: true });
+    await fetchCsrfToken();
     const res = await apiFetch(API + "/comfyui/status" + comfyuiRequestQuery(), {
       credentials: "same-origin",
       headers: { "X-CSRF-Token": getCsrfToken() || "" }

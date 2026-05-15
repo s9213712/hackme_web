@@ -19,6 +19,7 @@ TRADING_ROOT_BOOL_SETTING_KEYS = {
     "margin_liquidation_enabled": "trading.margin_liquidation_enabled",
     "shadow_funding_publish_enabled": "trading.shadow_funding_publish_enabled",
     "bot_auto_scan_enabled": "trading.bot_auto_scan_enabled",
+    "bot_competition_enabled": "trading.bot_competition_enabled",
     "bot_audit_enabled": "trading.bot_audit_enabled",
     "btc_trade_enabled": "trading.btc_trade_enabled",
     "price_stream_ws_enabled": "trading.price_stream_ws_enabled",

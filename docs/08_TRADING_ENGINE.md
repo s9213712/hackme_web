@@ -88,6 +88,40 @@
   取最慢者作為「本機在 60 秒內可跑的根數」，自動填入 `backtest_max_candles`。
   方法/原理/實測結果見 [`BACKTEST_CAPACITY_AND_TEMPLATE_BENCHMARKS.md`](trading/BACKTEST_CAPACITY_AND_TEMPLATE_BENCHMARKS.md)。
 
+## Trading Background Engine
+
+交易引擎不得依賴使用者或 root 正在交易頁面。價格刷新、掛單撮合、借貸交易清算、
+機器人觸發、止盈止損、借貸利息收取與全站風控快照，必須由 server-side
+background worker 依固定週期執行。
+
+前端交易頁只負責送出指令與顯示狀態，不得作為交易作業唯一觸發來源。使用者未登入、
+root 未登入、瀏覽器關閉或使用者切到其他頁面時，Trading Background Engine
+仍應持續運作；`maintenance` / `incident_lockdown` / `superweak` 等模式則依
+Server Mode v2 暫停或限制。
+
+背景作業必須 idempotent。所有成交、計息、清算、bot 觸發與 TP/SL 觸發都必須有
+`idempotency_key`、job run id、audit record 與 Server Mode scope。worker
+重啟或重試不得造成重複成交、重複收息或重複清算。
+
+Phase 0 設計文件：
+
+- [Trading Background Engine](trading/TRADING_BACKGROUND_ENGINE.md)
+- [Root Sitewide Trading Management](trading/TRADING_SITEWIDE_MANAGEMENT.md)
+- [Trading Lending Pool Reports](trading/TRADING_LENDING_POOL_REPORTS.md)
+- [Trading Background Engine QA Gate](trading/TRADING_BACKGROUND_QA.md)
+
+## Root Sitewide Trading Management
+
+root 交易所頁應新增「全站交易管理」分頁，用於查看全站 background engine 健康度、
+價格刷新、掛單撮合、所有用戶 bot 運作、止盈止損觸發、借貸清算、風控異常與全站
+用戶借貸交易整戶維持率。
+
+root 交易所頁也應新增「借貸交易池收支」分頁，用於查看全站手續費收入、借貸利息收入、
+借貸池貸出 / 可用 / 使用率、清算回收、壞帳、micropoints carry 與各用戶維持率分布。
+
+root UI 只能監督、稽核、暫停、恢復與觸發受控 job，不得直接修改使用者 wallet、
+PointsChain、倉位或清算結果。
+
 ## 失敗情境與提示
 
 - 交易頁顯示數字，但成交失敗：
@@ -163,6 +197,10 @@
 ## 相關文件連結
 
 - [TRADING.md](trading/TRADING.md)
+- [TRADING_BACKGROUND_ENGINE.md](trading/TRADING_BACKGROUND_ENGINE.md)
+- [TRADING_SITEWIDE_MANAGEMENT.md](trading/TRADING_SITEWIDE_MANAGEMENT.md)
+- [TRADING_LENDING_POOL_REPORTS.md](trading/TRADING_LENDING_POOL_REPORTS.md)
+- [TRADING_BACKGROUND_QA.md](trading/TRADING_BACKGROUND_QA.md)
 - [07_POINTSCHAIN.md](07_POINTSCHAIN.md)
 - [11_QA_TESTING.md](11_QA_TESTING.md)
 - [security/TRADING_STRESS_PENTEST.md](security/TRADING_STRESS_PENTEST.md)

@@ -319,9 +319,10 @@ per-strategy 時序（由快到慢）：
 ### 2.13 相關檔案
 
 - `scripts/trading/competition/workflow_template_backtest_benchmark.py` — 主腳本（接 `--interval` / `--use-relative-thresholds`）
-- `public/data/workflow_template_benchmarks.json` — 前端用的 1h **絕對值**版（canonical，會被 commit）
-- `public/data/workflow_template_benchmarks_<interval>.json` — 各 variant 結果（gitignored，本地查閱用）
-- `public/js/56-trading.js:renderTradingWorkflowTemplateBenchmark` — 前端顯示（吃 canonical JSON）
+- `workflows/trading_bot/benchmarks/workflow_template_benchmarks.json` — 伺服器 API 供前端讀取的 1h **絕對值**版（canonical，會被 commit）
+- `workflows/trading_bot/benchmarks/workflow_template_benchmarks_<interval>.json` — 各 variant 結果（gitignored，本地查閱用）
+- `routes/trading.py:/api/trading/workflow-template-benchmarks` — 前端讀取 canonical JSON 的受控 API
+- `public/js/56-trading.js:renderTradingWorkflowTemplateBenchmark` — 前端顯示（吃 API 回傳的 canonical JSON）
 
 ### 2.14 重跑指令
 

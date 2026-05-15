@@ -2,7 +2,7 @@ async function loadServerMode() {
   if (!currentUser || currentUser !== "root") return;
   const status = $("server-mode-status");
   if (!$("server-mode-select")) return;
-  await fetchCsrfToken({ force: true });
+  await fetchCsrfToken();
   const csrf = getCsrfToken();
   const res = await apiFetch(API + "/root/server-mode", {
     credentials: "same-origin",
@@ -345,7 +345,7 @@ async function openLaunchCheckDoc(shortcut) {
   if (panel) panel.open = true;
   jumpToAnchor("launch-check-doc-panel");
   try {
-    await fetchCsrfToken({ force: true });
+    await fetchCsrfToken();
     const csrf = getCsrfToken();
     const res = await apiFetch(`${API}/root/launch-check/doc?path=${encodeURIComponent(path)}`, {
       credentials: "same-origin",
@@ -649,7 +649,7 @@ async function loadLaunchCheck() {
   if (summary) summary.textContent = "";
   launchCheckMsg("");
   try {
-    await fetchCsrfToken({ force: true });
+    await fetchCsrfToken();
     const csrf = getCsrfToken();
     const headers = { "X-CSRF-Token": csrf || "" };
     // Pull both endpoints in parallel — we need security center for the
@@ -765,7 +765,7 @@ async function loadInternalTestTokenStatus() {
   const status = $("internal-test-token-status");
   if (!status) return;
   try {
-    await fetchCsrfToken({ force: true });
+    await fetchCsrfToken();
     const csrf = getCsrfToken();
     const res = await apiFetch(API + "/admin/access-controls", {
       credentials: "same-origin",
@@ -813,7 +813,7 @@ function testerTokenListMarkup(tokens) {
 
 async function loadTesterTokens() {
   if (currentUser !== "root" || !$("tester-token-list")) return;
-  await fetchCsrfToken({ force: true });
+  await fetchCsrfToken();
   const csrf = getCsrfToken();
   const res = await apiFetch(API + "/root/tester-token/list", {
     credentials: "same-origin",

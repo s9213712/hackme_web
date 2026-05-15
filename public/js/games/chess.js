@@ -163,6 +163,7 @@ function gameMatchLabel(match) {
 }
 
 function gameDifficultyLabel(difficulty) {
+  if (difficulty === "stockfish") return "Stockfish（本機）";
   if (difficulty === "experiment 5:nnue") return "實驗 5：NNUE + AlphaBeta/PVS";
   if (difficulty === "stockfish") return "Stockfish（本機）";
   if (difficulty === "experiment 4:pv") return "實驗 4：Policy/Value + MCTS";

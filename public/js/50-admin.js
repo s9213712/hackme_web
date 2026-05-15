@@ -141,7 +141,10 @@ function switchSettingsSection(tab) {
   if (tab === "billing") {
     loadRootEconomyCatalog();
   }
-  if (tab === "trading") loadRootTradingSettings();
+  if (tab === "trading") {
+    loadRootTradingSettings();
+    if (typeof loadTradingDashboard === "function") loadTradingDashboard();
+  }
   if (tab === "member-levels") loadEditableMemberLevelRules();
   if (typeof clearSettingsStatus === "function") {
     if (suppressNextSettingsStatusClear) suppressNextSettingsStatusClear = false;
@@ -187,14 +190,14 @@ function switchModuleTab(tab) {
   const canAccessVideos = !!currentUser && canAccessModule("videos");
   const canAccessGames = !!currentUser && canAccessModule("games");
   const canAccessJobs = !!currentUser && canAccessModule("jobs");
-  const canAccessShares = !!currentUser && canAccessModule("shares");
+  const canAccessShareCenter = canAccessVideos && canAccessModule("shares");
   const canUseComfyuiTab = typeof isComfyuiAvailableForNavigation !== "function" || isComfyuiAvailableForNavigation();
   const canAccessComfyui = !!currentUser && canAccessModule("comfyui") && canUseComfyuiTab;
   const canAccessEconomy = !!currentUser && canAccessModule("economy");
   const canAccessTrading = canAccessEconomy && canAccessModule("trading");
 
   let normTab = tab;
-  const fallbackModule = () => canAccessChat ? "chat" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : (canAccessVideos ? "videos" : (canAccessGames ? "games" : (canAccessJobs ? "jobs" : (canAccessShares ? "shares" : (canAccessComfyui ? "comfyui" : (canAccessEconomy ? "economy" : (canAccessAppeals ? "appeals" : (canAccessAccounts ? "accounts" : "chat"))))))))));
+  const fallbackModule = () => canAccessChat ? "chat" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : (canAccessVideos ? "videos" : (canAccessGames ? "games" : (canAccessJobs ? "jobs" : (canAccessComfyui ? "comfyui" : (canAccessEconomy ? "economy" : (canAccessAppeals ? "appeals" : (canAccessAccounts ? "accounts" : "chat")))))))));
   if (tab === "chat" && !canAccessChat) normTab = fallbackModule();
   if (tab === "dm") normTab = fallbackModule();
   if (tab === "announcements" && !canAccessAnnouncements) normTab = fallbackModule();
@@ -204,7 +207,7 @@ function switchModuleTab(tab) {
   if (tab === "videos" && !canAccessVideos) normTab = fallbackModule();
   if (tab === "games" && !canAccessGames) normTab = fallbackModule();
   if (tab === "jobs" && !canAccessJobs) normTab = fallbackModule();
-  if (tab === "shares" && !canAccessShares) normTab = fallbackModule();
+  if (tab === "shares" && !canAccessShareCenter) normTab = fallbackModule();
   if (tab === "comfyui" && !canAccessComfyui) normTab = fallbackModule();
   if (tab === "economy" && !canAccessEconomy) normTab = fallbackModule();
   if (tab === "trading" && !canAccessTrading) normTab = fallbackModule();
@@ -212,6 +215,7 @@ function switchModuleTab(tab) {
   if (tab === "server" && !canAccessServer) normTab = canAccessAccounts ? "accounts" : fallbackModule();
   if (tab === "appeals" && !canAccessAppeals) normTab = fallbackModule();
 
+  const previousModuleTab = currentModuleTab;
   currentModuleTab = normTab;
   const modChat = $("module-chat");
   const modAnnouncements = $("module-announcements");
@@ -236,7 +240,6 @@ function switchModuleTab(tab) {
   const mVideos = $("tab-module-videos");
   const mGames = $("tab-module-games");
   const mJobs = $("tab-module-jobs");
-  const mShares = $("tab-module-shares");
   const mComfyui = $("tab-module-comfyui");
   const mEconomy = $("tab-module-economy");
   const mTrading = $("tab-module-trading");
@@ -264,10 +267,9 @@ function switchModuleTab(tab) {
   if (mCommunity) mCommunity.classList.toggle("active", normTab === "community");
   if (mDrive) mDrive.classList.toggle("active", normTab === "drive");
   if (mAlbums) mAlbums.classList.toggle("active", normTab === "albums");
-  if (mVideos) mVideos.classList.toggle("active", normTab === "videos");
+  if (mVideos) mVideos.classList.toggle("active", normTab === "videos" || normTab === "shares");
   if (mGames) mGames.classList.toggle("active", normTab === "games");
   if (mJobs) mJobs.classList.toggle("active", normTab === "jobs");
-  if (mShares) mShares.classList.toggle("active", normTab === "shares");
   if (mComfyui) mComfyui.classList.toggle("active", normTab === "comfyui");
   if (mEconomy) mEconomy.classList.toggle("active", normTab === "economy");
   if (mTrading) mTrading.classList.toggle("active", normTab === "trading");
@@ -275,7 +277,16 @@ function switchModuleTab(tab) {
   if (mServer) mServer.classList.toggle("active", normTab === "server");
   if (mAppeals) mAppeals.classList.toggle("active", normTab === "appeals");
   if (typeof animateActiveModule === "function") animateActiveModule(normTab);
+  if (typeof syncRootModuleSettingsButtons === "function") syncRootModuleSettingsButtons();
+  if (previousModuleTab !== normTab) {
+    document.dispatchEvent(new CustomEvent("hackme:module-changed", {
+      detail: { previous: previousModuleTab, current: normTab },
+    }));
+  }
 
+  if (normTab === "chat" && canAccessChat && typeof loadChatRooms === "function") {
+    loadChatRooms();
+  }
   if (normTab === "community" && canAccessCommunity) {
     loadCommunityHome();
   }
@@ -301,11 +312,12 @@ function switchModuleTab(tab) {
   if (normTab === "jobs" && canAccessJobs && typeof loadJobCenter === "function") {
     loadJobCenter();
   }
-  if (normTab === "shares" && canAccessShares && typeof loadShareCenter === "function") {
+  if (normTab === "shares" && canAccessShareCenter && typeof loadShareCenter === "function") {
     loadShareCenter();
   }
   if (normTab === "comfyui" && canAccessComfyui && typeof loadComfyuiModels === "function") {
     loadComfyuiModels();
+    if (typeof refreshComfyuiStatus === "function") refreshComfyuiStatus({ switchAway: true });
   }
   if (normTab === "economy" && canAccessEconomy && typeof loadEconomyDashboard === "function") {
     loadEconomyDashboard();
@@ -339,9 +351,13 @@ function switchAdminTab(tab) {
     btn.classList.toggle("active", id === "tab-" + currentAdminTab);
   });
   if (currentAdminTab === "password-resets") loadPasswordResetReviews();
+  if (currentAdminTab === "users") loadUsers();
   if (currentAdminTab === "violations") loadViolations(0);
   if (currentAdminTab === "governance") loadGovernanceDashboard();
-  if (currentAdminTab === "notices") renderAdminNoticeTargetOptions();
+  if (currentAdminTab === "notices") {
+    loadUsers();
+    renderAdminNoticeTargetOptions();
+  }
   if (currentAdminTab === "appeals") loadAdminAppeals(1, adminAppealStatus);
   if (currentAdminTab === "reports") loadAdminReports(0, adminReportStatus);
   if (typeof updateSidebarActiveState === "function") updateSidebarActiveState();
@@ -1238,6 +1254,7 @@ let rootEconomyCatalogCache = [];
 let rootTradingSettingsCache = { settings: {}, markets: [] };
 let rootTradingPriceFusionStatusCache = null;
 let rootTradingBotAuditCache = null;
+let rootTradingBackgroundStatusCache = null;
 let rootTradingMarketRegistryCache = [];
 let rootTradingMarketRegistryAuditCache = [];
 let rootTradingMarketProviderCache = [];
@@ -1383,6 +1400,9 @@ function rootTradingSettingsMsg(text, ok = true) {
   if (!msg) return;
   msg.textContent = text || "";
   msg.style.color = ok ? "#4caf50" : "#ff4f6d";
+  scheduleInlineMessageClear(msg, text, ok);
+  showActionFeedback(document.activeElement, text, ok, { skipToast: true });
+  announceInlineMessage(text, ok);
 }
 
 function rootTradingPriceFusionMsg(text, ok = true) {
@@ -1390,6 +1410,9 @@ function rootTradingPriceFusionMsg(text, ok = true) {
   if (!msg) return;
   msg.textContent = text || "";
   msg.style.color = ok ? "#4caf50" : "#ff4f6d";
+  scheduleInlineMessageClear(msg, text, ok);
+  showActionFeedback(document.activeElement, text, ok, { skipToast: true });
+  announceInlineMessage(text, ok);
 }
 
 function rootTradingBotAuditMsg(text, ok = true) {
@@ -1397,6 +1420,199 @@ function rootTradingBotAuditMsg(text, ok = true) {
   if (!msg) return;
   msg.textContent = text || "";
   msg.style.color = ok ? "#4caf50" : "#ff4f6d";
+  scheduleInlineMessageClear(msg, text, ok);
+  showActionFeedback(document.activeElement, text, ok, { skipToast: true });
+  announceInlineMessage(text, ok);
+}
+
+function rootTradingBackgroundMsg(text, ok = true) {
+  const msg = $("root-trading-background-msg");
+  if (!msg) return;
+  msg.textContent = text || "";
+  msg.style.color = ok ? "#4caf50" : "#ff4f6d";
+  scheduleInlineMessageClear(msg, text, ok);
+  showActionFeedback(document.activeElement, text, ok, { skipToast: true });
+  announceInlineMessage(text, ok);
+}
+
+function rootTradingBackgroundJobLabel(jobKey) {
+  const labels = {
+    price_refresh: "價格刷新",
+    order_matching: "掛單撮合",
+    take_profit_stop_loss_scan: "TP/SL 掃描",
+    bot_trigger_scan: "Bot 觸發",
+    margin_liquidation_scan: "借貸清算",
+    interest_accrual: "借貸計息",
+  };
+  return labels[jobKey] || jobKey || "-";
+}
+
+function rootTradingBackgroundTime(value) {
+  const text = String(value || "").trim();
+  if (!text) return "-";
+  const d = new Date(text.endsWith("Z") ? text : `${text}Z`);
+  if (Number.isNaN(d.getTime())) return text;
+  return d.toLocaleString();
+}
+
+function rootTradingBackgroundStatusLabel(job) {
+  if (!job?.enabled) return { label: "paused", color: "#8a8f98" };
+  if (job.lease_active) return { label: "running", color: "#d2a72a" };
+  if (job.last_status === "failed") return { label: "failed", color: "#ff4f6d" };
+  if (job.last_status === "skipped") return { label: "skipped", color: "#8a8f98" };
+  if (job.last_success_at) return { label: "healthy", color: "#4caf50" };
+  return { label: "waiting", color: "#d2a72a" };
+}
+
+function renderRootTradingBackgroundStatus(payload) {
+  rootTradingBackgroundStatusCache = payload || {};
+  const summaryEl = $("root-trading-background-summary");
+  const jobsEl = $("root-trading-background-jobs");
+  const runsEl = $("root-trading-background-runs");
+  if (!summaryEl || !jobsEl || !runsEl) return;
+  const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
+  const runs = Array.isArray(payload?.recent_runs) ? payload.recent_runs : [];
+  const locks = Array.isArray(payload?.locks) ? payload.locks : [];
+  const failures = jobs.filter((job) => job.last_status === "failed").length;
+  const active = jobs.filter((job) => job.lease_active).length;
+  const paused = jobs.filter((job) => !job.enabled).length;
+  summaryEl.innerHTML = `
+    <div class="drive-file-row">
+      <div>
+        <strong>server time ${sanitize(rootTradingBackgroundTime(payload?.server_time))}</strong>
+        <div class="drive-card-sub">jobs ${jobs.length} · active leases ${active} · paused ${paused} · failures ${failures} · locks ${locks.length}</div>
+      </div>
+    </div>
+  `;
+  if (!jobs.length) {
+    jobsEl.innerHTML = `<div class="drive-empty">尚無 background jobs</div>`;
+  } else {
+    jobsEl.innerHTML = jobs.map((job) => {
+      const status = rootTradingBackgroundStatusLabel(job);
+      const summary = job.last_summary && typeof job.last_summary === "object" ? job.last_summary : {};
+      const reason = summary.reason || job.paused_reason || job.last_error || "";
+      return `
+        <div class="drive-file-row billing-catalog-row">
+          <div>
+            <strong>${sanitize(rootTradingBackgroundJobLabel(job.job_key))}</strong>
+            <div class="drive-card-sub">${sanitize(job.job_key)} · interval ${Number(job.interval_seconds || 0)}s · lease ${Number(job.lease_seconds || 0)}s</div>
+            <div class="drive-card-sub">last success ${sanitize(rootTradingBackgroundTime(job.last_success_at))} · next ${sanitize(rootTradingBackgroundTime(job.next_run_at))} · runs ${Number(job.run_count || 0)} · failures ${Number(job.failure_count || 0)}</div>
+            ${reason ? `<div class="drive-card-sub">${sanitize(reason)}</div>` : ""}
+          </div>
+          <span class="badge" style="color:${status.color};border-color:${status.color};">${sanitize(status.label)}</span>
+        </div>
+      `;
+    }).join("");
+  }
+  if (!runs.length) {
+    runsEl.innerHTML = `<div class="drive-empty">尚無最近執行紀錄</div>`;
+  } else {
+    runsEl.innerHTML = runs.slice(0, 8).map((run) => `
+      <div class="drive-file-row billing-catalog-row">
+        <div>
+          <strong>${sanitize(rootTradingBackgroundJobLabel(run.job_key))} · ${sanitize(run.status || "-")}</strong>
+          <div class="drive-card-sub">${sanitize(rootTradingBackgroundTime(run.started_at))} → ${sanitize(rootTradingBackgroundTime(run.finished_at))} · ${Number(run.duration_ms || 0).toFixed(1)}ms · mode ${sanitize(run.server_mode || "-")}</div>
+          ${run.error ? `<div class="drive-card-sub">${sanitize(run.error)}</div>` : ""}
+        </div>
+      </div>
+    `).join("");
+  }
+}
+
+async function loadRootTradingBackgroundStatus() {
+  if (currentUser !== "root" || !$("root-trading-background-jobs")) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  try {
+    const res = await apiFetch(API + "/root/trading/background/status?limit=12", {
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" }
+    });
+    const json = await parseRootTradingSettingsResponse(res);
+    if (!res.ok || !json.ok) {
+      rootTradingBackgroundMsg(rootTradingSettingsHttpMessage(res, json, "背景引擎狀態讀取失敗"), false);
+      return;
+    }
+    renderRootTradingBackgroundStatus(json);
+    rootTradingBackgroundMsg("");
+  } catch (err) {
+    rootTradingBackgroundMsg(err.message || "背景引擎狀態請求失敗", false);
+  }
+}
+
+async function postRootTradingBackgroundAction(path, payload, successText) {
+  if (currentUser !== "root") return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  try {
+    const res = await apiFetch(API + path, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+      body: JSON.stringify(payload || {})
+    });
+    const json = await parseRootTradingSettingsResponse(res);
+    if (!res.ok || !json.ok) {
+      rootTradingBackgroundMsg(rootTradingSettingsHttpMessage(res, json, "背景引擎操作失敗"), false);
+      return;
+    }
+    rootTradingBackgroundMsg(successText || "背景引擎操作完成");
+    await loadRootTradingBackgroundStatus();
+  } catch (err) {
+    rootTradingBackgroundMsg(err.message || "背景引擎操作請求失敗", false);
+  }
+}
+
+function selectedRootTradingBackgroundJob() {
+  return String($("root-trading-background-job-select")?.value || "").trim();
+}
+
+function bindRootTradingBackgroundControls() {
+  const refreshBtn = $("root-trading-background-refresh-btn");
+  if (refreshBtn && !refreshBtn.dataset.bgBound) {
+    refreshBtn.addEventListener("click", loadRootTradingBackgroundStatus);
+    refreshBtn.dataset.bgBound = "1";
+  }
+  const runBtn = $("root-trading-background-run-once-btn");
+  if (runBtn && !runBtn.dataset.bgBound) {
+    runBtn.addEventListener("click", () => {
+      const jobKey = selectedRootTradingBackgroundJob();
+      if (!jobKey) {
+        rootTradingBackgroundMsg("請先選擇單一 job", false);
+        return;
+      }
+      postRootTradingBackgroundAction(
+        "/root/trading/background/run-once",
+        { job_key: jobKey, confirm: "RUN_TRADING_JOB_ONCE" },
+        `${rootTradingBackgroundJobLabel(jobKey)} 已送出`
+      );
+    });
+    runBtn.dataset.bgBound = "1";
+  }
+  const pauseBtn = $("root-trading-background-pause-btn");
+  if (pauseBtn && !pauseBtn.dataset.bgBound) {
+    pauseBtn.addEventListener("click", () => {
+      const jobKey = selectedRootTradingBackgroundJob();
+      postRootTradingBackgroundAction(
+        "/root/trading/background/pause",
+        jobKey ? { job_key: jobKey, reason: "paused_from_root_ui" } : { reason: "paused_from_root_ui" },
+        jobKey ? `${rootTradingBackgroundJobLabel(jobKey)} 已暫停` : "全部 background jobs 已暫停"
+      );
+    });
+    pauseBtn.dataset.bgBound = "1";
+  }
+  const resumeBtn = $("root-trading-background-resume-btn");
+  if (resumeBtn && !resumeBtn.dataset.bgBound) {
+    resumeBtn.addEventListener("click", () => {
+      const jobKey = selectedRootTradingBackgroundJob();
+      postRootTradingBackgroundAction(
+        "/root/trading/background/resume",
+        jobKey ? { job_key: jobKey } : {},
+        jobKey ? `${rootTradingBackgroundJobLabel(jobKey)} 已恢復` : "全部 background jobs 已恢復"
+      );
+    });
+    resumeBtn.dataset.bgBound = "1";
+  }
 }
 
 function rootTradingMarketRegistryMsg(text, ok = true) {
@@ -1404,6 +1620,9 @@ function rootTradingMarketRegistryMsg(text, ok = true) {
   if (!msg) return;
   msg.textContent = text || "";
   msg.style.color = ok ? "#4caf50" : "#ff4f6d";
+  scheduleInlineMessageClear(msg, text, ok);
+  showActionFeedback(document.activeElement, text, ok, { skipToast: true });
+  announceInlineMessage(text, ok);
 }
 
 function rootTradingMarketRegistryEditorStatus(text, ok = true) {
@@ -1411,6 +1630,9 @@ function rootTradingMarketRegistryEditorStatus(text, ok = true) {
   if (!msg) return;
   msg.textContent = text || "";
   msg.style.color = ok ? "#4caf50" : "#ff4f6d";
+  scheduleInlineMessageClear(msg, text, ok);
+  showActionFeedback(document.activeElement, text, ok, { skipToast: true });
+  announceInlineMessage(text, ok);
 }
 
 function rootTradingMarketProviderStatus(text, ok = true) {
@@ -1418,6 +1640,9 @@ function rootTradingMarketProviderStatus(text, ok = true) {
   if (!msg) return;
   msg.textContent = text || "";
   msg.style.color = ok ? "#4caf50" : "#ff4f6d";
+  scheduleInlineMessageClear(msg, text, ok);
+  showActionFeedback(document.activeElement, text, ok, { skipToast: true });
+  announceInlineMessage(text, ok);
 }
 
 function tradingMarketRegistryCheckbox(id, value, fallback = false) {
@@ -2339,6 +2564,7 @@ function renderRootTradingSettings(payload) {
   const settings = payload?.settings || {};
   const markets = Array.isArray(payload?.markets) ? payload.markets : [];
   const reserve = payload?.reserve_pool || {};
+  bindRootTradingBackgroundControls();
   bindRootTradingMarketRegistryControls();
   if ($("root-trading-enabled")) $("root-trading-enabled").checked = settings.enabled !== false;
   if ($("root-trading-borrowing-enabled")) $("root-trading-borrowing-enabled").checked = !!settings.borrowing_enabled;
@@ -2423,6 +2649,8 @@ function renderRootTradingSettings(payload) {
   if ($("root-trading-bot-auto-enabled")) $("root-trading-bot-auto-enabled").checked = settings.bot_auto_scan_enabled !== false;
   if ($("root-trading-bot-auto-interval")) $("root-trading-bot-auto-interval").value = settings.bot_auto_scan_interval_seconds ?? 30;
   if ($("root-trading-bot-auto-limit")) $("root-trading-bot-auto-limit").value = settings.bot_auto_scan_limit ?? 50;
+  if ($("root-trading-bot-competition-enabled")) $("root-trading-bot-competition-enabled").checked = settings.bot_competition_enabled !== false;
+  if ($("root-trading-bot-competition-reward")) $("root-trading-bot-competition-reward").value = settings.bot_competition_weekly_reward_points ?? 100;
   if ($("root-trading-backtest-max-candles")) $("root-trading-backtest-max-candles").value = settings.backtest_max_candles ?? 20000;
   if ($("root-trading-backtest-capacity-budget")) $("root-trading-backtest-capacity-budget").value = settings.backtest_capacity_time_budget_seconds ?? 60;
   const measuredHintEl = $("root-trading-backtest-measured-hint");
@@ -2478,6 +2706,7 @@ function renderRootTradingSettings(payload) {
   `).join("");
   loadRootTradingPriceFusionStatus();
   loadRootTradingBotAuditDashboard();
+  loadRootTradingBackgroundStatus();
   loadRootTradingMarketRegistry({ silent: true });
 }
 
@@ -2561,6 +2790,8 @@ async function saveRootTradingSettings() {
       bot_auto_scan_enabled: !!$("root-trading-bot-auto-enabled")?.checked,
       bot_auto_scan_interval_seconds: Number($("root-trading-bot-auto-interval")?.value || 30),
       bot_auto_scan_limit: Number($("root-trading-bot-auto-limit")?.value || 50),
+      bot_competition_enabled: $("root-trading-bot-competition-enabled")?.checked !== false,
+      bot_competition_weekly_reward_points: Number($("root-trading-bot-competition-reward")?.value || 100),
       backtest_max_candles: Number($("root-trading-backtest-max-candles")?.value || 20000),
       backtest_capacity_time_budget_seconds: Number($("root-trading-backtest-capacity-budget")?.value || 60),
       bot_audit_enabled: !!$("root-trading-bot-audit-enabled")?.checked,
@@ -2595,6 +2826,7 @@ async function saveRootTradingSettings() {
       renderRootTradingSettings(json);
       loadRootTradingPriceFusionStatus();
       loadRootTradingBotAuditDashboard();
+      loadRootTradingBackgroundStatus();
       if (typeof loadTradingDashboard === "function") loadTradingDashboard();
       if (willBtcTradeEnable && !wasBtcTradeEnabled) {
         await setupRootBtcTrade({ automatic: true });
@@ -4251,6 +4483,9 @@ function setSettingsStatus(text = "", ok = null, options = {}) {
   el.textContent = text;
   el.style.color = ok === true ? "#4caf50" : ok === false ? "#ff4f6d" : "#ffb74d";
   const autoClearMs = Number(options.autoClearMs || 0);
+  scheduleInlineMessageClear(el, text, ok, autoClearMs > 0 ? { duration: autoClearMs } : { persistent: ok === null });
+  showActionFeedback(document.activeElement, text, ok, { skipToast: true });
+  announceInlineMessage(text, ok);
   if (autoClearMs > 0) {
     const expectedText = text;
     settingsStatusAutoClearTimer = setTimeout(() => {
@@ -4761,8 +4996,7 @@ function renderSecurityTestJobs(jobs) {
 async function loadSecurityTestJobs() {
   if (currentUser !== "root") return;
   try {
-    await fetchCsrfToken({ force: true });
-    const csrf = getCsrfToken();
+    const csrf = await fetchCsrfToken();
     const target = $("security-pentest-target");
     if (target && !target.value) target.value = window.location.origin;
     const stressTarget = $("security-stress-target");
@@ -4913,8 +5147,7 @@ async function startSecurityStressTest() {
 
 async function loadServerOutput() {
   if (currentUser !== "root") return;
-  await fetchCsrfToken({ force: true });
-  const csrf = getCsrfToken();
+  const csrf = await fetchCsrfToken();
   const res = await apiFetch(API + "/admin/server-output?limit=300", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
@@ -4951,8 +5184,7 @@ function populateSecurityProfiles(profiles, selectedMode) {
 
 async function loadSecurityCenter() {
   if (currentUser !== "root") return;
-  await fetchCsrfToken({ force: true });
-  const csrf = getCsrfToken();
+  const csrf = await fetchCsrfToken();
   const res = await apiFetch(API + "/admin/security-center", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }

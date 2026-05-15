@@ -1,0 +1,92 @@
+{
+  "by_section": {
+    "complete_game": {
+      "avg_positions_per_question": 115.36,
+      "motifs": {
+        "capture": 543,
+        "castling": 44,
+        "check": 168,
+        "early_queen_human_probe": 11,
+        "en_passant": 1,
+        "endgame": 1573,
+        "opening": 500,
+        "promotion": 10,
+        "quiet": 490,
+        "tactical_exposure": 356
+      },
+      "positions": 2884,
+      "questions": 25,
+      "source_clean": 586,
+      "source_rejected": 0,
+      "source_review": 39
+    },
+    "human_probe_trap": {
+      "avg_positions_per_question": 1.0,
+      "motifs": {
+        "check": 5,
+        "endgame": 24,
+        "promotion": 25
+      },
+      "positions": 25,
+      "questions": 25,
+      "source_clean": 25,
+      "source_rejected": 0,
+      "source_review": 0
+    },
+    "tail10": {
+      "avg_positions_per_question": 10.0,
+      "motifs": {
+        "capture": 46,
+        "check": 34,
+        "endgame": 198,
+        "promotion": 3,
+        "quiet": 24,
+        "tactical_exposure": 35
+      },
+      "positions": 250,
+      "questions": 25,
+      "source_clean": 227,
+      "source_rejected": 0,
+      "source_review": 23
+    },
+    "tail20": {
+      "avg_positions_per_question": 20.0,
+      "motifs": {
+        "capture": 79,
+        "check": 70,
+        "endgame": 471,
+        "promotion": 5,
+        "quiet": 11,
+        "tactical_exposure": 55
+      },
+      "positions": 500,
+      "questions": 25,
+      "source_clean": 465,
+      "source_rejected": 0,
+      "source_review": 35
+    }
+  },
+  "complete": true,
+  "counts_by_section": {
+    "complete_game": 25,
+    "human_probe_trap": 25,
+    "tail10": 25,
+    "tail20": 25
+  },
+  "created_at": "2026-05-14T13:14:24+00:00",
+  "kind": "redacted_exp5_expanded_100_question_set_summary",
+  "leak_policy": "redacted: no FEN, moves, PV, source game ids, or per-position answers",
+  "script": "scripts/games/chess_exp5_expanded_validation.py",
+  "source_games_parsed": 189,
+  "target_per_section": 25,
+  "teacher": {
+    "alias": "blockfish_teacher",
+    "backend": "stockfish_uci",
+    "limit": {
+      "depth": 6
+    },
+    "multipv": 5,
+    "reference": "dd321af5dfc0789de07c4e5c64915073995eb818"
+  },
+  "total_questions": 100
+}

@@ -54,6 +54,7 @@ REFERENCE_PRICE_CACHE_TTL_SECONDS = 1.0
 BACKTEST_PROVIDER_CANDLE_LIMIT = MAX_BACKTEST_CANDLES
 WORKFLOW_ROOT = Path(__file__).resolve().parents[1] / "workflows"
 WORKFLOW_SYSTEM_DIR = WORKFLOW_ROOT / "system"
+WORKFLOW_TEMPLATE_BENCHMARK_PATH = WORKFLOW_ROOT / "trading_bot" / "benchmarks" / "workflow_template_benchmarks.json"
 WORKFLOW_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$")
 
 
@@ -77,6 +78,8 @@ def register_trading_routes(app, deps):
     check_user_rate_limit = deps.get("check_user_rate_limit", lambda *args, **kwargs: (False, {}))
     audit = deps.get("audit", lambda *args, **kwargs: None)
     role_rank = deps.get("role_rank", lambda role: {"user": 0, "manager": 1, "super_admin": 2}.get(role or "user", 0))
+    get_system_settings = deps.get("get_system_settings", lambda: {})
+    get_runtime_server_mode = deps.get("get_runtime_server_mode", lambda: "production")
 
     def actor_value(actor, key, default=None):
         if not actor:
@@ -1090,6 +1093,34 @@ def register_trading_routes(app, deps):
             "errors": errors,
         })
 
+    @app.route("/api/trading/workflow-template-benchmarks", methods=["GET"])
+    @require_csrf_safe
+    def trading_workflow_template_benchmarks():
+        actor, err = actor_or_401()
+        if err:
+            return err
+        try:
+            if not WORKFLOW_TEMPLATE_BENCHMARK_PATH.exists():
+                return json_resp({
+                    "ok": True,
+                    "windows": [],
+                    "load_error": "尚未提供 Workflow 歷史回測報告。",
+                    "source_path": "workflows/trading_bot/benchmarks/workflow_template_benchmarks.json",
+                })
+            payload = json.loads(WORKFLOW_TEMPLATE_BENCHMARK_PATH.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("benchmark payload must be an object")
+        except Exception as exc:
+            return json_resp({
+                "ok": True,
+                "windows": [],
+                "load_error": f"Workflow 歷史回測報告讀取失敗：{exc}",
+                "source_path": "workflows/trading_bot/benchmarks/workflow_template_benchmarks.json",
+            })
+        payload["ok"] = True
+        payload.setdefault("source_path", "workflows/trading_bot/benchmarks/workflow_template_benchmarks.json")
+        return json_resp(payload)
+
     @app.route("/api/trading/workflow-templates/custom", methods=["POST"])
     @require_csrf
     def trading_workflow_templates_save_custom():
@@ -1320,6 +1351,18 @@ def register_trading_routes(app, deps):
         except Exception as exc:
             return service_error(exc)
 
+    @app.route("/api/trading/bot-competition", methods=["GET"])
+    @require_csrf_safe
+    def trading_bot_competition():
+        actor, err = actor_or_401()
+        if err:
+            return err
+        try:
+            week = str(request.args.get("week") or "").strip() or None
+            return json_resp(trading_service.get_bot_competition(actor=actor, week=week))
+        except Exception as exc:
+            return service_error(exc)
+
     @app.route("/api/trading/bots", methods=["POST"])
     @require_csrf
     def trading_bots_create():
@@ -1367,6 +1410,33 @@ def register_trading_routes(app, deps):
                 success=True,
                 ua=get_ua(),
                 detail=f"market={result.get('market_symbol')}, strategy={result.get('strategy')}, trades={result.get('trade_count')}",
+            )
+            return json_resp(result)
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/trading/bots/<bot_uuid>/share", methods=["POST"])
+    @require_csrf
+    def trading_bots_share_parameters(bot_uuid):
+        actor, err = actor_or_401()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        try:
+            result = trading_service.set_trading_bot_share_parameters(
+                actor=actor,
+                bot_uuid=bot_uuid,
+                share_parameters=bool(data.get("share_parameters")),
+            )
+            audit(
+                "TRADING_BOT_PARAMETER_SHARE_UPDATED",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"bot_uuid={bot_uuid}, share_parameters={bool(data.get('share_parameters'))}",
             )
             return json_resp(result)
         except Exception as exc:
@@ -1503,6 +1573,27 @@ def register_trading_routes(app, deps):
         except Exception as exc:
             return service_error(exc)
 
+    @app.route("/api/trading/grid-bots/<bot_uuid>/share", methods=["POST"])
+    @require_csrf
+    def trading_grid_bots_share_parameters(bot_uuid):
+        actor, err = actor_or_401()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        try:
+            result = trading_service.set_grid_bot_share_parameters(
+                actor=actor,
+                bot_uuid=bot_uuid,
+                share_parameters=bool(data.get("share_parameters")),
+            )
+            audit("GRID_BOT_PARAMETER_SHARE_UPDATED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
+                  detail=f"bot_uuid={bot_uuid}, share_parameters={bool(data.get('share_parameters'))}")
+            return json_resp(result)
+        except Exception as exc:
+            return service_error(exc)
+
     @app.route("/api/trading/grid-bots/<bot_uuid>/toggle", methods=["POST"])
     @require_csrf
     def trading_grid_bots_toggle(bot_uuid):
@@ -1618,6 +1709,34 @@ def register_trading_routes(app, deps):
         except Exception as exc:
             return service_error(exc)
 
+    @app.route("/api/trading/margin/<position_uuid>/collateral/withdraw", methods=["POST"])
+    @require_csrf
+    def trading_margin_withdraw_collateral(position_uuid):
+        actor, err = actor_or_401()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        try:
+            result = trading_service.withdraw_margin_collateral(
+                actor=actor,
+                position_uuid=position_uuid,
+                amount_points=data.get("amount_points"),
+                idempotency_key=data.get("idempotency_key"),
+            )
+            audit(
+                "TRADING_MARGIN_COLLATERAL_WITHDRAWN",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"position_uuid={position_uuid}, amount={data.get('amount_points')}",
+            )
+            return json_resp(result)
+        except Exception as exc:
+            return service_error(exc)
+
     @app.route("/api/admin/trading/report", methods=["GET"])
     @require_csrf_safe
     def admin_trading_report():
@@ -1644,6 +1763,122 @@ def register_trading_routes(app, deps):
         try:
             status = trading_service.get_root_price_fusion_status(market_symbol=market_symbol)
             return json_resp({"ok": True, "status": status})
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/root/trading/background/status", methods=["GET"])
+    @require_csrf_safe
+    def root_trading_background_status():
+        actor, err = root_or_403()
+        if err:
+            return err
+        try:
+            limit = int(request.args.get("limit") or 20)
+        except Exception:
+            limit = 20
+        try:
+            return json_resp(trading_service.get_background_status(limit=limit))
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/root/trading/background/run-once", methods=["POST"])
+    @require_csrf
+    def root_trading_background_run_once():
+        actor, err = root_or_403()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        job_key = str(data.get("job_key") or "").strip()
+        if not job_key:
+            return json_resp({"ok": False, "msg": "缺少 job_key"}, 400)
+        if str(data.get("confirm") or "") != "RUN_TRADING_JOB_ONCE":
+            return json_resp({"ok": False, "msg": "confirm 必須為 RUN_TRADING_JOB_ONCE"}, 400)
+        try:
+            result = trading_service.run_background_job_once(
+                job_key=job_key,
+                get_system_settings=get_system_settings,
+                get_runtime_server_mode=get_runtime_server_mode,
+                owner=f"root:{actor_value(actor, 'username', 'root')}",
+                force=True,
+            )
+            audit(
+                "TRADING_BACKGROUND_JOB_RUN_ONCE",
+                get_client_ip(),
+                user=actor_value(actor, "username", "root"),
+                success=bool(result.get("ok")),
+                ua=get_ua(),
+                detail=json.dumps({"job_key": job_key, "status": result.get("status")}, ensure_ascii=False),
+            )
+            return json_resp(result)
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/root/trading/background/pause", methods=["POST"])
+    @require_csrf
+    def root_trading_background_pause():
+        actor, err = root_or_403()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        reason = str(data.get("reason") or "paused_by_root").strip()[:500]
+        job_key = str(data.get("job_key") or "").strip()
+        try:
+            keys = [job_key] if job_key else [row["job_key"] for row in trading_service.get_background_status().get("jobs", [])]
+            results = [
+                trading_service.set_background_job_enabled(
+                    job_key=key,
+                    enabled=False,
+                    reason=reason,
+                    actor=actor,
+                )
+                for key in keys
+            ]
+            audit(
+                "TRADING_BACKGROUND_PAUSED",
+                get_client_ip(),
+                user=actor_value(actor, "username", "root"),
+                success=True,
+                ua=get_ua(),
+                detail=json.dumps({"job_keys": keys, "reason": reason}, ensure_ascii=False),
+            )
+            return json_resp({"ok": True, "paused": results})
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/root/trading/background/resume", methods=["POST"])
+    @require_csrf
+    def root_trading_background_resume():
+        actor, err = root_or_403()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        job_key = str(data.get("job_key") or "").strip()
+        try:
+            keys = [job_key] if job_key else [row["job_key"] for row in trading_service.get_background_status().get("jobs", [])]
+            results = [
+                trading_service.set_background_job_enabled(
+                    job_key=key,
+                    enabled=True,
+                    reason="",
+                    actor=actor,
+                )
+                for key in keys
+            ]
+            audit(
+                "TRADING_BACKGROUND_RESUMED",
+                get_client_ip(),
+                user=actor_value(actor, "username", "root"),
+                success=True,
+                ua=get_ua(),
+                detail=json.dumps({"job_keys": keys}, ensure_ascii=False),
+            )
+            return json_resp({"ok": True, "resumed": results})
         except Exception as exc:
             return service_error(exc)
 
@@ -1684,6 +1919,32 @@ def register_trading_routes(app, deps):
                 success=True,
                 ua=get_ua(),
                 detail=f"audited={len(result.get('audited') or [])}, skipped={len(result.get('skipped') or [])}",
+            )
+            return json_resp(result)
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/root/trading/bot-competition/award", methods=["POST"])
+    @require_csrf
+    def root_trading_bot_competition_award():
+        actor, err = root_or_403()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        try:
+            result = trading_service.award_bot_competition_week(
+                actor=actor,
+                week=str(data.get("week") or "").strip() or None,
+            )
+            audit(
+                "TRADING_BOT_COMPETITION_AWARDED",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"week={result.get('week')}, awarded={len(result.get('awarded') or [])}",
             )
             return json_resp(result)
         except Exception as exc:

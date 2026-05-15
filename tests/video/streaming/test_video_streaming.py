@@ -562,7 +562,7 @@ def test_video_playback_and_hls_routes_use_ready_stream_asset(tmp_path, monkeypa
     assert segment.mimetype == "video/mp4"
 
 
-def test_media_prepare_stream_route_requires_owner_or_manager(tmp_path, monkeypatch):
+def test_media_prepare_stream_route_requires_owner(tmp_path, monkeypatch):
     db_path = tmp_path / "prepare-route.db"
     storage_root = tmp_path / "storage"
     storage_root.mkdir()
@@ -586,6 +586,15 @@ def test_media_prepare_stream_route_requires_owner_or_manager(tmp_path, monkeypa
     response = viewer_client.post("/api/media/private-video/prepare-stream")
 
     assert response.status_code == 403
+
+    manager_client = _build_app(
+        db_path,
+        storage_root,
+        fernet,
+        current_user={"id": 3, "username": "manager", "role": "manager", "member_level": "trusted", "effective_level": "trusted"},
+    ).test_client()
+    manager_response = manager_client.post("/api/media/private-video/prepare-stream")
+    assert manager_response.status_code == 403
 
 
 def test_video_publish_auto_prepares_stream_asset_without_blocking_publish(tmp_path, monkeypatch):
@@ -744,6 +753,55 @@ def test_prepare_stream_auto_policy_distinguishes_plain_server_encrypted_and_e2e
     assert media_streaming.should_auto_prepare_stream(plain, visibility="private")["enabled"] is False
     assert media_streaming.should_auto_prepare_stream(encrypted, visibility="private")["enabled"] is True
     assert media_streaming.should_auto_prepare_stream(e2ee, visibility="public")["enabled"] is False
+
+
+def test_public_e2ee_video_exposes_video_scoped_ciphertext_and_owner_key(tmp_path):
+    db_path = tmp_path / "public-e2ee.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    owner_conn = sqlite3.connect(db_path)
+    owner_conn.row_factory = sqlite3.Row
+    try:
+        _seed_uploaded_file(owner_conn, storage_root, file_id="e2ee-public", owner_user_id=1, filename="public-secret.mp4", mime="video/mp4", privacy_mode="e2ee", payload=b"ciphertext-video")
+        _mark_file_as_e2ee(owner_conn, "e2ee-public")
+        owner_conn.execute(
+            """
+            INSERT INTO encrypted_file_keys (
+                id, file_id, recipient_user_id, encrypted_file_key, wrapped_by, key_version, created_at
+            ) VALUES ('owner-key-public', 'e2ee-public', 1, 'owner-passphrase-wrapped-key', 'owner_passphrase', 1, '2026-01-01T00:00:00')
+            """
+        )
+        video = publish_video(
+            owner_conn,
+            actor={"id": 1, "username": "alice", "role": "user"},
+            cloud_file_id="e2ee-public",
+            title="Public E2EE",
+            visibility="public",
+        )
+        owner_conn.commit()
+        video_id = video["id"]
+    finally:
+        owner_conn.close()
+
+    client = _build_app(db_path, storage_root, Fernet(Fernet.generate_key()), current_user=None).test_client()
+    playback = client.get(f"/api/videos/{video_id}/playback")
+    assert playback.status_code == 200
+    playback_json = playback.get_json()
+    assert playback_json["mode"] == "e2ee_direct"
+    assert playback_json["requires_fragment_key"] is False
+    assert playback_json["e2ee_key_url"] == f"/api/videos/{video_id}/e2ee-key"
+    assert playback_json["ciphertext_url"] == f"/api/videos/{video_id}/ciphertext"
+
+    e2ee_key = client.get(playback_json["e2ee_key_url"])
+    assert e2ee_key.status_code == 200
+    key_payload = e2ee_key.get_json()["e2ee"]
+    assert key_payload["encrypted_file_key"] == "owner-passphrase-wrapped-key"
+    assert key_payload["ciphertext_sha256"] == "a" * 64
+
+    ciphertext = client.get(playback_json["ciphertext_url"])
+    assert ciphertext.status_code == 200
+    assert ciphertext.data == b"ciphertext-video"
 
 
 def test_shared_e2ee_video_requires_password_fragment_and_exposes_browser_side_payload(tmp_path):
@@ -967,7 +1025,7 @@ def test_shared_video_password_lock_max_views_and_revoke_routes(tmp_path):
     assert revoked_view.status_code == 404
 
 
-def test_manager_can_update_unlisted_share_link_and_receives_state_payload(tmp_path):
+def test_manager_cannot_update_another_users_unlisted_share_link(tmp_path):
     db_path = tmp_path / "shared-manager.db"
     storage_root = tmp_path / "storage"
     storage_root.mkdir()
@@ -998,12 +1056,10 @@ def test_manager_can_update_unlisted_share_link_and_receives_state_payload(tmp_p
         f"/api/videos/{video_id}/share-link",
         json={"share_password": "ManagerShare123", "share_max_views": 7},
     )
-    assert updated.status_code == 200
-    body = updated.get_json()
-    assert body["share_link"]["state"] == "active"
-    assert body["share_link"]["remaining_views"] == 7
-    assert body["share_link"]["password_required"] is True
-    assert body["video"]["share_link"]["state_message"] == "分享連結有效"
+    assert updated.status_code == 404
+
+    revoked = manager_client.delete(f"/api/videos/{video_id}/share-link")
+    assert revoked.status_code == 404
 
 
 def test_shared_video_page_mentions_hls_js_fallback_and_fragment_loss(tmp_path):

@@ -1,0 +1,265 @@
+{
+  "benchmark_after": {
+    "draws": 6,
+    "engine": "experiment 3:dl",
+    "games": 12,
+    "legal_rate": 1.0,
+    "losses": 2,
+    "low_quality_rate": 0.0,
+    "score_rate": 0.5833,
+    "suspicious_matches": 0,
+    "win_rate": 0.3333,
+    "wins": 4
+  },
+  "benchmark_before": {
+    "draws": 4,
+    "engine": "experiment 3:dl",
+    "games": 12,
+    "legal_rate": 1.0,
+    "losses": 1,
+    "low_quality_rate": 0.0,
+    "score_rate": 0.75,
+    "suspicious_matches": 0,
+    "win_rate": 0.5833,
+    "wins": 7
+  },
+  "benchmark_delta": {
+    "legal_rate_delta": 0.0,
+    "low_quality_rate_delta": 0.0,
+    "win_rate_delta": -0.25
+  },
+  "benchmark_skip_reason": "",
+  "benchmark_skipped": false,
+  "checkpoint_duration_seconds": 4863.805,
+  "dataset_hash": "sha256:28063a309ba7db178d197d1833ee374a31e6586aa550b2073f9628fcc85beb79",
+  "duration_seconds": 1801.728,
+  "finished_at": "2026-05-14T05:28:50+00:00",
+  "fixed_probe_positions_after": {
+    "positions": [
+      {
+        "chosen_move": "f7e8",
+        "fen": "6k1/5Q2/6K1/8/8/8/8/8 w - - 0 1",
+        "legal": true,
+        "position_id": "mate_in_one_white",
+        "score": 100000,
+        "side": "white",
+        "think_ms": 0.603
+      },
+      {
+        "chosen_move": "e8e7",
+        "fen": "4k3/4Q3/8/8/8/8/8/4K3 b - - 0 1",
+        "legal": true,
+        "position_id": "forced_capture_black",
+        "score": 0,
+        "side": "black",
+        "think_ms": 5.772
+      },
+      {
+        "chosen_move": "d3f2",
+        "fen": "4k3/8/8/8/4K3/3n4/8/7R b - - 0 1",
+        "legal": true,
+        "position_id": "fork_threat_black",
+        "score": 2,
+        "side": "black",
+        "think_ms": 185.059
+      },
+      {
+        "chosen_move": "f1e2",
+        "fen": "4k3/8/8/8/8/8/4r3/4KQ2 w - - 0 1",
+        "legal": true,
+        "position_id": "queen_hanging_white",
+        "score": -9,
+        "side": "white",
+        "think_ms": 119.908
+      },
+      {
+        "chosen_move": "f2e1",
+        "fen": "8/8/8/8/8/6k1/5q2/6K1 b - - 0 1",
+        "legal": true,
+        "position_id": "mate_in_one_black",
+        "score": 100000,
+        "side": "black",
+        "think_ms": 0.48
+      },
+      {
+        "chosen_move": "e7e8q",
+        "fen": "k7/4P3/2K5/8/8/8/8/8 w - - 0 1",
+        "legal": true,
+        "position_id": "promotion_white",
+        "score": -9,
+        "side": "white",
+        "think_ms": 154.47
+      },
+      {
+        "chosen_move": "d7b7",
+        "fen": "k7/3Q4/2K5/8/8/8/8/8 w - - 0 1",
+        "legal": true,
+        "position_id": "avoid_stalemate_white",
+        "score": 100000,
+        "side": "white",
+        "think_ms": 0.358
+      },
+      {
+        "chosen_move": "f1e2",
+        "fen": "4k3/8/8/8/8/8/4q3/4KQ2 w - - 0 1",
+        "legal": true,
+        "position_id": "free_queen_white",
+        "score": -9,
+        "side": "white",
+        "think_ms": 72.724
+      }
+    ],
+    "supported": true
+  },
+  "fixed_probe_positions_before": {
+    "positions": [
+      {
+        "chosen_move": "f7e8",
+        "fen": "6k1/5Q2/6K1/8/8/8/8/8 w - - 0 1",
+        "legal": true,
+        "position_id": "mate_in_one_white",
+        "score": 100000,
+        "side": "white",
+        "think_ms": 0.456
+      },
+      {
+        "chosen_move": "e8e7",
+        "fen": "4k3/4Q3/8/8/8/8/8/4K3 b - - 0 1",
+        "legal": true,
+        "position_id": "forced_capture_black",
+        "score": 0,
+        "side": "black",
+        "think_ms": 5.629
+      },
+      {
+        "chosen_move": "d3f2",
+        "fen": "4k3/8/8/8/4K3/3n4/8/7R b - - 0 1",
+        "legal": true,
+        "position_id": "fork_threat_black",
+        "score": 2,
+        "side": "black",
+        "think_ms": 168.817
+      },
+      {
+        "chosen_move": "f1e2",
+        "fen": "4k3/8/8/8/8/8/4r3/4KQ2 w - - 0 1",
+        "legal": true,
+        "position_id": "queen_hanging_white",
+        "score": -9,
+        "side": "white",
+        "think_ms": 108.135
+      },
+      {
+        "chosen_move": "f2e1",
+        "fen": "8/8/8/8/8/6k1/5q2/6K1 b - - 0 1",
+        "legal": true,
+        "position_id": "mate_in_one_black",
+        "score": 100000,
+        "side": "black",
+        "think_ms": 0.485
+      },
+      {
+        "chosen_move": "e7e8q",
+        "fen": "k7/4P3/2K5/8/8/8/8/8 w - - 0 1",
+        "legal": true,
+        "position_id": "promotion_white",
+        "score": -9,
+        "side": "white",
+        "think_ms": 164.505
+      },
+      {
+        "chosen_move": "d7b7",
+        "fen": "k7/3Q4/2K5/8/8/8/8/8 w - - 0 1",
+        "legal": true,
+        "position_id": "avoid_stalemate_white",
+        "score": 100000,
+        "side": "white",
+        "think_ms": 0.311
+      },
+      {
+        "chosen_move": "f1e2",
+        "fen": "4k3/8/8/8/8/8/4q3/4KQ2 w - - 0 1",
+        "legal": true,
+        "position_id": "free_queen_white",
+        "score": -9,
+        "side": "white",
+        "think_ms": 70.198
+      }
+    ],
+    "supported": true
+  },
+  "gate_decision": {
+    "passed": false,
+    "reasons": [
+      "mistake retention probe failed: no old trusted mistake-retention sample was available for a probe",
+      "mistake retention probe did not match expected move"
+    ]
+  },
+  "hash_change_explanation": "hash_changed only proves model bytes changed; it is not accepted as learning success without probe or benchmark evidence",
+  "hash_changed": false,
+  "ineffective_training": false,
+  "legal_rate_delta": 0.0,
+  "low_quality_rate_delta": 0.0,
+  "mistake_retention_probe": {
+    "after_move": "",
+    "avoided_old_mistake": false,
+    "avoided_same_error": false,
+    "before_move": "",
+    "counted_as_game": false,
+    "expected_move": "",
+    "human_explanation": "目前沒有足夠證據證明 retrain 改善了該錯誤，因為沒有可重測的舊題目。",
+    "learning_signal": false,
+    "learning_signal_reason": "no old trusted mistake-retention sample was available for a probe",
+    "matched_expected": false,
+    "reason": "no_mistake_retention_samples",
+    "result_kind": "fail",
+    "supported": false
+  },
+  "model_hash_changed": false,
+  "move_agreement_after": {
+    "agreement": 0.7422,
+    "avg_think_ms": 208.678,
+    "matches": 521,
+    "model_path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/games/models/candidates/runs/pipeline_20260514T033436Z/chess_experiment_3_dl.json",
+    "supported": true,
+    "total": 702,
+    "total_think_ms": 146491.877
+  },
+  "move_agreement_before": {
+    "agreement": 0.7407,
+    "avg_think_ms": 197.693,
+    "matches": 520,
+    "model_path": "/home/s92137/hackme_web/docs/games/evidence/stockfish_teacher/exp3_exp4_big_retrain_2026-05-14_retry1/_runtime/exp3/games/models/chess_experiment_3_dl.json",
+    "supported": true,
+    "total": 702,
+    "total_think_ms": 138780.69
+  },
+  "new_model_hash": "81e697c587ef7f51730080d9b31058a822b9d7c1123631237d999b77e7ff75be",
+  "post_checkpoint_model_sha256": "81e697c587ef7f51730080d9b31058a822b9d7c1123631237d999b77e7ff75be",
+  "pre_checkpoint_model_sha256": "81e697c587ef7f51730080d9b31058a822b9d7c1123631237d999b77e7ff75be",
+  "previous_model_hash": "81e697c587ef7f51730080d9b31058a822b9d7c1123631237d999b77e7ff75be",
+  "probe_position_move_change_count": 0,
+  "retention_probe": {
+    "after_matches_expected": true,
+    "after_move": "e2e4",
+    "before_matches_expected": true,
+    "before_move": "e2e4",
+    "counted_as_game": false,
+    "expected_move": "e2e4",
+    "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+    "game_id": 1026,
+    "game_index": 1,
+    "game_label": "valid_06",
+    "learning_signal": true,
+    "model_response_changed": false,
+    "ply": 1,
+    "side": "white",
+    "source": "old_trusted_engine_move",
+    "supported": true
+  },
+  "retrain_duration_seconds": 1801.728,
+  "started_at": "2026-05-14T04:58:48+00:00",
+  "trusted_count": 20,
+  "trusted_replays": 20,
+  "verdict": "PASS"
+}

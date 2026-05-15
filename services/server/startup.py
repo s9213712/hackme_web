@@ -189,6 +189,54 @@ def start_points_chain_block_worker(
     return worker
 
 
+def start_trading_background_worker(
+    *,
+    trading_service,
+    audit,
+    get_system_settings=None,
+    get_runtime_server_mode=None,
+    shutdown_event=None,
+):
+    check_interval = _int_env("HTML_LEARNING_TRADING_BACKGROUND_CHECK_INTERVAL_SECONDS", 2, minimum=1, maximum=60)
+    owner = f"trading-bg:{os.getpid()}"
+
+    def loop():
+        while True:
+            if shutdown_event is not None and shutdown_event.is_set():
+                break
+            try:
+                result = trading_service.run_due_background_jobs(
+                    get_system_settings=get_system_settings,
+                    get_runtime_server_mode=get_runtime_server_mode,
+                    owner=owner,
+                )
+                failures = [
+                    row
+                    for row in (result.get("results") or [])
+                    if not row.get("ok") or row.get("status") == "failed"
+                ]
+                if failures:
+                    audit(
+                        "TRADING_BACKGROUND_WORKER_ERRORS",
+                        "0.0.0.0",
+                        user="system",
+                        success=False,
+                        detail=json.dumps(failures[:5], ensure_ascii=False, default=str),
+                    )
+            except Exception as exc:
+                audit("TRADING_BACKGROUND_WORKER_FAILED", "0.0.0.0", user="system", success=False, detail=str(exc))
+            if _wait_or_stop(shutdown_event, check_interval):
+                break
+
+    try:
+        trading_service.ensure_background_schema()
+    except Exception as exc:
+        audit("TRADING_BACKGROUND_SCHEMA_INIT_FAILED", "0.0.0.0", user="system", success=False, detail=str(exc))
+    worker = threading.Thread(target=loop, name="trading-background-worker", daemon=True)
+    worker.start()
+    return worker
+
+
 def start_trading_liquidation_worker(*, trading_service, audit, get_system_settings=None, shutdown_event=None):
     check_interval = _int_env("HTML_LEARNING_TRADING_LIQUIDATION_CHECK_INTERVAL_SECONDS", 30, minimum=10)
 
@@ -433,6 +481,8 @@ def run_server_main(
     start_points_chain_block_worker,
     start_trading_liquidation_worker,
     start_trading_bot_worker,
+    start_trading_background_worker=None,
+    get_runtime_server_mode=None,
     ensure_local_tls_files,
     cert_file,
     key_file,
@@ -541,9 +591,16 @@ def run_server_main(
         start_daily_snapshot_worker(shutdown_event=shutdown_event),
         start_storage_maintenance_worker(shutdown_event=shutdown_event),
         start_points_chain_block_worker(shutdown_event=shutdown_event),
-        start_trading_liquidation_worker(shutdown_event=shutdown_event),
-        start_trading_bot_worker(shutdown_event=shutdown_event),
     ]
+    if start_trading_background_worker is not None:
+        workers.append(start_trading_background_worker(shutdown_event=shutdown_event))
+    else:
+        workers.extend(
+            [
+                start_trading_liquidation_worker(shutdown_event=shutdown_event),
+                start_trading_bot_worker(shutdown_event=shutdown_event),
+            ]
+        )
     if measure_backtest_capacity_first_boot is not None:
         try:
             measure_backtest_capacity_first_boot()

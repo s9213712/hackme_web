@@ -1,5 +1,7 @@
 import json
+import hashlib
 import sqlite3
+from pathlib import Path
 
 import chess
 
@@ -9,16 +11,32 @@ from services.games import chess_pipeline
 from services.games import self_play_training
 from services.games.chess_nnue import (
     EXPERIMENT_NNUE_DIFFICULTY,
+    EXP5_EXPERIENCE_DELTA_FORMAT,
+    EXP5_PRODUCTION_SEARCH_PROFILE,
+    EXP5_STATIC_BASE_MODEL_SHA256,
     _avoid_claimable_repetition_filter,
     _avoid_enabling_opponent_repetition_when_ahead_filter,
+    _avoid_non_progress_shuffle_when_ahead_filter,
+    _avoid_shuffle_with_advanced_pawn_push_filter,
     _avoid_unanswered_immediate_promotion_filter,
+    _endgame_progress_filter,
+    _forced_single_reply_mate_net_move,
     _opening_king_walk_filter,
+    _opening_moved_king_home_filter,
+    _opening_trap_priority_move,
+    _pawn_structure_score,
+    _piece_activity_score,
+    _special_rule_fusion_filter,
     _avoid_reversible_cycle_when_ahead_filter,
     _static_exchange_eval,
     choose_experiment_nnue_move,
+    exp5_model_artifact_policy,
     experiment_nnue_model_template,
     train_experiment_nnue_from_replay_samples,
 )
+
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def _opponent_mate_in_one_after(fen, move_uci):
@@ -92,7 +110,7 @@ def test_exp5_computer_move_dispatches_to_nnue_engine(monkeypatch):
 
     board = {"__fen__": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR b KQkq - 0 1"}
     assert choose_computer_move(board, "black", EXPERIMENT_NNUE_DIFFICULTY) == sentinel
-    assert called == {"board": board, "side": "black", "search_profile": "balanced"}
+    assert called == {"board": board, "side": "black", "search_profile": EXP5_PRODUCTION_SEARCH_PROFILE}
 
     history = [{"from": "g1", "to": "f3", "promotion": None}]
     assert choose_computer_move(board, "black", EXPERIMENT_NNUE_DIFFICULTY, move_history=history) == sentinel
@@ -100,7 +118,7 @@ def test_exp5_computer_move_dispatches_to_nnue_engine(monkeypatch):
     assert called == {
         "board": {**board, "__move_history__": history},
         "side": "black",
-        "search_profile": "balanced",
+        "search_profile": EXP5_PRODUCTION_SEARCH_PROFILE,
     }
 
 
@@ -144,7 +162,8 @@ def test_exp5_is_supported_pipeline_autorun_target():
     assert "experiment 4:pv" in chess_pipeline.PIPELINE_RETRAIN_ENGINES
     assert "experiment 4:pv" not in chess_pipeline.PIPELINE_DEFAULT_PROMOTE_ENGINES
     default_args = chess_pipeline._pipeline_command_args(min_usable_replays=3)
-    assert default_args[default_args.index("--promote-engines") + 1] == "experiment 3:dl,experiment 5:nnue"
+    assert default_args[default_args.index("--promote-engines") + 1] == "experiment 3:dl"
+    assert "--skip-exp5-refine" in default_args
     args = chess_pipeline._pipeline_command_args(
         min_usable_replays=3,
         target_engines=[EXPERIMENT_NNUE_DIFFICULTY],
@@ -153,6 +172,28 @@ def test_exp5_is_supported_pipeline_autorun_target():
     assert "--skip-exp3" in args
     assert "--skip-exp4" in args
     assert "--skip-exp5" not in args
+
+
+def test_exp5_model_policy_separates_static_base_from_generated_artifacts():
+    policy = exp5_model_artifact_policy()
+    assert policy["engine"] == EXPERIMENT_NNUE_DIFFICULTY
+    assert policy["main_model_role"] == "static_base_eval_parameters"
+    assert policy["generated_artifact_role"] == "adapter_or_experience_table"
+    assert policy["main_model_generation_default"] == "disabled"
+    assert policy["source_base_module"] == "services.games.chess_exp5_base_model"
+    assert policy["bundled_main_json_required"] is False
+    assert policy["runtime_experience_model_name"] == "chess_experiment_5_nnue_experience.json"
+    assert policy["experience_delta_format"] == EXP5_EXPERIENCE_DELTA_FORMAT
+    assert policy["score_versions_may_change_without_model_checksum_change"] is True
+
+
+def test_exp5_base_model_is_source_embedded_and_legacy_main_json_removed():
+    payload = experiment_nnue_model_template()
+    body = json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n"
+    assert hashlib.sha256(body.encode("utf-8")).hexdigest() == EXP5_STATIC_BASE_MODEL_SHA256
+    assert payload["sample_count"] == 1837
+    assert payload["opening_overlay"]["positions"]
+    assert not (ROOT / "services/games/models/chess_experiment_5_nnue.json").exists()
 
 
 def test_exp5_rule_priority_handles_core_special_moves(tmp_path):
@@ -174,6 +215,46 @@ def test_exp5_rule_priority_handles_core_special_moves(tmp_path):
         )
         chosen = f"{move['from']}{move['to']}{move.get('promotion') or ''}"
         assert chosen == expected
+
+
+def test_exp5_uses_deterministic_static_opening_book_when_overlay_misses(tmp_path):
+    model_path = tmp_path / "exp5_no_overlay.json"
+    payload = experiment_nnue_model_template()
+    payload["opening_overlay"] = {"enabled": False, "positions": {}}
+    model_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+
+    move = choose_experiment_nnue_move(
+        {"__fen__": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"},
+        "black",
+        model_path=model_path,
+        search_profile="fixed_depth_deep",
+    )
+
+    assert f"{move['from']}{move['to']}{move.get('promotion') or ''}" == "c7c5"
+
+
+def test_exp5_special_rule_final_fusion_promotes_close_castling_choice():
+    board = chess.Board("4k3/8/8/8/8/8/8/R3K2R w KQ - 0 1")
+    quiet = chess.Move.from_uci("a1a2")
+    castle = chess.Move.from_uci("e1g1")
+    assert quiet in board.legal_moves
+    assert castle in board.legal_moves
+
+    chosen = _special_rule_fusion_filter(
+        board,
+        quiet,
+        score_move=lambda move: {quiet: 1000.0, castle: 900.0}.get(move, 0.0),
+    )
+
+    assert chosen == castle
+
+
+def test_exp5_eval_rewards_bishop_pair_and_penalizes_doubled_isolated_pawns():
+    active = chess.Board("4k3/8/8/8/8/8/8/2B1KB2 w - - 0 1")
+    passive = chess.Board("4k3/8/2p5/8/8/2P5/2P5/4K3 w - - 0 1")
+
+    assert _piece_activity_score(active) > 0
+    assert _pawn_structure_score(passive) < 0
 
 
 def test_exp5_adapter_exact_memory_is_guarded_and_opt_in(monkeypatch, tmp_path):
@@ -540,6 +621,22 @@ def test_exp5_opening_king_walk_filter_does_not_overblock_moved_king():
     assert chosen == active_king_move
 
 
+def test_exp5_opening_moved_king_filter_prefers_safe_home_retreat():
+    board = chess.Board("r1b1k1nr/pppp1ppp/5q2/4p2Q/3nP3/2NB4/PPPPK1PP/R1B3NR w kq - 3 7")
+    drift = chess.Move.from_uci("e2d1")
+    home = chess.Move.from_uci("e2e1")
+    assert drift in board.legal_moves
+    assert home in board.legal_moves
+
+    chosen = _opening_moved_king_home_filter(
+        board,
+        drift,
+        score_move=lambda move: {drift: 1562.0, home: 1218.0}.get(move, 0.0),
+    )
+
+    assert chosen == home
+
+
 def test_exp5_training_positive_black_sample_increases_black_piece_weight(tmp_path):
     model_path = tmp_path / "exp5.json"
     replay_path = tmp_path / "exp5_replay.jsonl"
@@ -562,6 +659,10 @@ def test_exp5_training_positive_black_sample_increases_black_piece_weight(tmp_pa
 
     payload = json.loads(model_path.read_text(encoding="utf-8"))
     assert result["accepted_samples"] == 1
+    assert payload["artifact_role"] == "adapter_or_experience_table"
+    assert payload["delta_format"] == EXP5_EXPERIENCE_DELTA_FORMAT
+    assert payload["base_model_sha256"] == EXP5_STATIC_BASE_MODEL_SHA256
+    assert not payload["opening_overlay"]
     assert payload["piece_square_weights"]["b:p:e5"] > 0
 
 
@@ -672,6 +773,26 @@ def test_exp5_opening_guard_blocks_low_value_rook_excursion(tmp_path):
     )
 
     assert f"{chosen['from']}{chosen['to']}{chosen.get('promotion') or ''}" != "a8a3"
+
+
+def test_exp5_opening_guard_prefers_development_over_low_value_pawn_capture(tmp_path):
+    model_path = tmp_path / "exp5.json"
+    fen = "rnbqkbnr/pp3ppp/2p1p3/1B1p4/3PP3/8/PPP2PPP/RNBQK1NR w KQkq - 0 4"
+
+    chosen = choose_experiment_nnue_move(
+        {"__fen__": fen},
+        "white",
+        model_path=model_path,
+        search_profile="fixed_depth_balanced",
+    )
+
+    chosen_uci = f"{chosen['from']}{chosen['to']}{chosen.get('promotion') or ''}"
+    board = chess.Board(fen)
+    move = chess.Move.from_uci(chosen_uci)
+    piece = board.piece_at(move.from_square)
+    assert piece is not None
+    assert piece.piece_type in {chess.KNIGHT, chess.BISHOP}
+    assert chess.square_rank(move.from_square) == 0
 
 
 def test_exp5_tactical_safety_blocks_direct_rook_hang(tmp_path):
@@ -805,3 +926,117 @@ def test_exp5_conversion_check_evasion_avoids_back_rank_cycle(tmp_path):
 
     chosen_uci = f"{chosen['from']}{chosen['to']}{chosen.get('promotion') or ''}"
     assert chosen_uci == "a2b3"
+
+
+def test_exp5_v15_pushes_passed_pawn_race_in_low_material(tmp_path):
+    model_path = tmp_path / "exp5.json"
+    fen = "8/3k4/4P3/8/8/8/3K4/8 w - - 0 1"
+
+    chosen = choose_experiment_nnue_move(
+        {"__fen__": fen},
+        "white",
+        model_path=model_path,
+        search_profile="fixed_depth_fast",
+    )
+
+    assert f"{chosen['from']}{chosen['to']}{chosen.get('promotion') or ''}" == "e6e7"
+
+
+def test_exp5_v15_bare_king_conversion_uses_rook_cutoff(tmp_path):
+    model_path = tmp_path / "exp5.json"
+    fen = "8/8/8/8/5k2/8/6K1/1R6 w - - 58 111"
+
+    chosen = choose_experiment_nnue_move(
+        {"__fen__": fen},
+        "white",
+        model_path=model_path,
+        search_profile="fixed_depth_fast",
+    )
+
+    chosen_uci = f"{chosen['from']}{chosen['to']}{chosen.get('promotion') or ''}"
+    assert chosen_uci == "b1b4"
+    board = chess.Board(fen)
+    board.push(chess.Move.from_uci(chosen_uci))
+    assert not board.is_stalemate()
+
+
+def test_exp5_v15_non_progress_shuffle_filter_replaces_recent_rook_cycle():
+    board = chess.Board("8/8/2N5/5k2/8/6K1/8/R7 w - - 46 105")
+    board.push(chess.Move.from_uci("a1a3"))
+    board.push(chess.Move.from_uci("f5e5"))
+    repeated_rook_shuffle = chess.Move.from_uci("a3a1")
+    assert repeated_rook_shuffle in board.legal_moves
+
+    chosen = _avoid_non_progress_shuffle_when_ahead_filter(
+        board,
+        repeated_rook_shuffle,
+        side="white",
+        score_move=lambda _move: 0.0,
+    )
+
+    assert chosen != repeated_rook_shuffle
+    assert chosen in board.legal_moves
+
+
+def test_exp5_v15_shuffle_filter_prefers_advanced_pawn_push_when_behind():
+    board = chess.Board("1r1qkb1r/pp1bp1pp/7n/3P1p2/8/1pNQ4/5P1P/1R4K1 w k - 0 17")
+    board.push(chess.Move.from_uci("b1b2"))
+    board.push(chess.Move.from_uci("f5f4"))
+    rook_shuffle = chess.Move.from_uci("b2b1")
+    pawn_push = chess.Move.from_uci("d5d6")
+    assert rook_shuffle in board.legal_moves
+    assert pawn_push in board.legal_moves
+
+    chosen = _avoid_shuffle_with_advanced_pawn_push_filter(
+        board,
+        rook_shuffle,
+        side="white",
+        score_move=lambda move: -1.0 if move == pawn_push else 0.0,
+    )
+
+    assert chosen == pawn_push
+
+
+def test_exp5_v15_endgame_progress_filter_prefers_rook_progress_over_back_rank():
+    board = chess.Board("8/8/2N5/5k2/8/R5K1/8/8 w - - 48 106")
+    passive_rook = chess.Move.from_uci("a3a1")
+    progress_rook = chess.Move.from_uci("a3a5")
+    assert passive_rook in board.legal_moves
+    assert progress_rook in board.legal_moves
+
+    chosen = _endgame_progress_filter(
+        board,
+        passive_rook,
+        side="white",
+        score_move=lambda move: 500.0 if move == passive_rook else 0.0,
+    )
+
+    assert chosen != passive_rook
+    assert chosen in board.legal_moves
+    after = board.copy(stack=True)
+    after.push(chosen)
+    assert not after.is_stalemate()
+
+
+def test_exp5_v17_opening_trap_prior_uses_code_level_experience():
+    cases = [
+        ("rnbqkbnr/pppp1ppp/8/4p3/2B1P3/8/PPPP1PPP/RNBQK1NR b KQkq - 1 2", "black", "f8d6"),
+        ("rnbqk1nr/ppp2ppp/4p3/3P4/1b1P4/2P5/PP3PPP/RNBQKBNR b KQkq - 0 4", "black", "e6d5"),
+        ("r1bq1k1r/pppp2p1/2n3Bp/2b5/2Pp1p2/5N2/PP3PPP/R1BQ1RK1 w - - 0 11", "white", "a1b1"),
+    ]
+    for fen, side, expected in cases:
+        board = chess.Board(fen)
+
+        chosen = _opening_trap_priority_move(board, side)
+
+        assert chosen == chess.Move.from_uci(expected)
+
+
+def test_exp5_v17_forced_single_reply_mate_net_finds_caro_kann_finish():
+    board = chess.Board("7r/pp3kp1/5n1p/2b1P3/3r2bK/8/PPP2PPP/RN4NR b - - 1 15")
+
+    chosen = _forced_single_reply_mate_net_move(board)
+
+    assert chosen == chess.Move.from_uci("g7g5")
+    board.push(chosen)
+    assert list(board.legal_moves) == [chess.Move.from_uci("h4g3")]

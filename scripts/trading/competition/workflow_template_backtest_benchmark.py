@@ -16,8 +16,8 @@ Supported intervals: 5m, 15m, 1h, 4h, 4d (4d is resampled from 1d locally;
 Binance does not expose 4d natively).
 
 Default output contract:
-    - 1h, default thresholds  -> public/data/workflow_template_benchmarks.json
-    - anything else           -> public/data/workflow_template_benchmarks_<variant>.json
+    - 1h, default thresholds  -> workflows/trading_bot/benchmarks/workflow_template_benchmarks.json
+    - anything else           -> workflows/trading_bot/benchmarks/workflow_template_benchmarks_<variant>.json
 """
 from __future__ import annotations
 
@@ -37,6 +37,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
 
 WORKFLOWS_DIR = REPO_ROOT / "workflows" / "trading_bot"
+BENCHMARKS_DIR = WORKFLOWS_DIR / "benchmarks"
 # Plan B (N=11 keep set) — covers head-to-head finalists + 4 trend
 # followers + 2 mean-reversion + 3 exit-only tools.  Order matters only
 # for report aesthetics: finalists first, then by composite score.
@@ -93,17 +94,17 @@ def maybe_rewrite_to_relative(template_name: str, workflow: dict, *, use_relativ
 def default_output_path(interval: str, *, use_relative_thresholds: bool = False) -> Path:
     """Return the default benchmark asset path for the given variant.
 
-    The frontend currently consumes the canonical 1h/default-threshold asset.
-    Other interval/variant outputs stay as explicitly suffixed auxiliary files so
-    local benchmark reruns do not silently diverge from the shipped frontend
+    The frontend consumes the canonical 1h/default-threshold result through a
+    server route. Other interval/variant outputs stay as explicitly suffixed
+    auxiliary files so local benchmark reruns do not silently diverge from that
     contract.
     """
     if interval == "1h" and not use_relative_thresholds:
-        return REPO_ROOT / "public" / "data" / CANONICAL_BENCHMARK_FILENAME
+        return BENCHMARKS_DIR / CANONICAL_BENCHMARK_FILENAME
     variant = interval
     if use_relative_thresholds:
         variant = f"{variant}_relative"
-    return REPO_ROOT / "public" / "data" / f"workflow_template_benchmarks_{variant}.json"
+    return BENCHMARKS_DIR / f"workflow_template_benchmarks_{variant}.json"
 
 
 # ─── Data fetch ────────────────────────────────────────────────────────────────

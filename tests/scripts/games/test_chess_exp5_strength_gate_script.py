@@ -1,6 +1,5 @@
 import json
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -11,6 +10,7 @@ from scripts.games.chess_exp5_production_readiness import (
     _normalize_case,
     _soft_label_near_equivalent_audit,
 )
+from services.games.chess_nnue import experiment_nnue_model_template, save_experiment_nnue_experience_delta
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -55,7 +55,7 @@ def test_exp5_audited_multigood_moves_are_explicit_not_broad_endgame_credit():
 def test_chess_exp5_strength_gate_reports_standard_policy(tmp_path):
     model_path = tmp_path / "candidate_exp5.json"
     output_dir = tmp_path / "reports"
-    shutil.copyfile(ROOT / "services" / "games" / "models" / "chess_experiment_5_nnue.json", model_path)
+    save_experiment_nnue_experience_delta(model_path, experiment_nnue_model_template())
 
     env = os.environ.copy()
     env["PYTHONPATH"] = str(ROOT)

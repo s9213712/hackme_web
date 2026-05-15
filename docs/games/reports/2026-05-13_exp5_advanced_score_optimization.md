@@ -11,12 +11,13 @@ default first.
 ## New Scoring Ceiling
 
 The old exp5 score probe is now a stability gate, not the main strength
-measure. The higher ceiling is built by:
+measure. The current v2 higher ceiling is built by:
 
 - legacy fixed/sparring probe: max `20`;
 - 300-case tactical/human probe suite: max `30`;
 - 30 complete-game gauntlet across 15 openings: max `50`;
-- runtime efficiency: max `10`;
+- runtime efficiency: max `10`, full credit through `30000ms/game`, linear
+  decay to zero at `120000ms/game`;
 - total max `110`, normalized to `100`.
 
 Script:
@@ -50,32 +51,38 @@ The tactical suite uses the downloaded replay file:
 | v8 | king-capture move-order experiment | `81.5769` | `15W/15D/0L` | `50.00%` | rejected; focused gain did not generalize |
 | v9 | reversible checking-cycle experiment | focused only | focused `4W/4D/0L` | `50.00%` | rejected; no focused gain over v7 |
 | v10 | advantage-side repetition progress rule | `84.1482` | `18W/12D/0L` | `40.00%` | accepted; beats v7, no fixed/tactical regression |
+| v15 broad | endgame progress / anti-shuffle / pawn race, first pass | rejected | `14W/14D/2L` | `46.67%` | rejected; introduced two full-game losses |
+| v15 narrow4 | narrowed v15 to low-material, bare-king, and explicit pawn-progress cases | `80.5769` | `14W/16D/0L` | `53.33%` | safe local improvement over v14 context, below v10 high-water |
+| v16 fixed-depth | production candidate uses `fixed_depth_balanced`; model checksum unchanged | `84.8551` under v2 | `18W/12D/0L` | `40.00%` | deterministic high-water before v17 |
+| v17 trap prior2 | code-level trap priors plus forced single-reply mate net | `90.9949` under v2 | `24W/6D/0L` | `20.00%` | first 90+ candidate; code/profile promotion, not model promotion |
 
 ## Current Best Evidence
 
-Current best clean candidate is v10:
+Current best clean candidate is v17:
 
-- advanced score: `84.1482/100`;
+- advanced score: `90.9949/100` under
+  `exp5_advanced_non_saturated_score_v2_30s_runtime`;
 - legacy score probe: `40.00/40`;
-- fixed probes: `14.40/14.40`;
-- legacy sparring: `6W/0D/0L`;
 - large tactical suite: `300/300`;
 - downloaded PGN human probes: `240/240`;
-- PGN exact reference matches: `40/240 = 16.67%`;
-- complete gauntlet: `18W/12D/0L`;
-- gauntlet score rate: `0.8000`;
-- threefold rate: `40.00%`;
-- complete-game rate: `93.33%` (`2` wins reached the 220-ply material cap);
+- PGN exact reference matches: `41/240 = 17.08%`;
+- complete gauntlet: `24W/6D/0L`;
+- gauntlet score rate: `0.9000`;
+- threefold rate: `20.00%`;
+- complete-game rate: `96.67%` (`1` win reached the 220-ply material cap);
+- average elapsed: `14024.485ms/game`;
 - complete-game replay file:
-  `docs/games/2026-05-13_exp5_gauntlet_repetition_progress_v10.jsonl`.
+  `docs/games/evidence/exp5/v17/2026-05-14_exp5_gauntlet_v17_full_trap_prior2.jsonl`.
 
-Important v10 artifacts:
+Important v17 artifacts:
 
-- `docs/games/2026-05-13_exp5_score_probe_repetition_progress_v10.json`
-- `docs/games/2026-05-13_exp5_tactical_suite_300_repetition_progress_v10.json`
-- `docs/games/2026-05-13_exp5_gauntlet_repetition_progress_v10.json`
-- `docs/games/2026-05-13_exp5_gauntlet_repetition_progress_v10.jsonl`
-- `docs/games/2026-05-13_exp5_advanced_score_repetition_progress_v10_fullrerun.json`
+- `docs/games/evidence/exp5/v17/2026-05-14_exp5_gauntlet_v17_focus_trap_prior2.json`
+- `docs/games/evidence/exp5/v17/2026-05-14_exp5_gauntlet_v17_full_trap_prior2.json`
+- `docs/games/evidence/exp5/v17/2026-05-14_exp5_gauntlet_v17_full_trap_prior2.jsonl`
+- `docs/games/evidence/exp5/v17/2026-05-14_exp5_score_probe_v17_trap_prior2_internal_only.json`
+- `docs/games/evidence/exp5/v17/2026-05-14_exp5_tactical_suite_300_v17_trap_prior2_fixed_depth_balanced.json`
+- `docs/games/evidence/exp5/v17/2026-05-14_exp5_advanced_score_v17_trap_prior2_30s_runtime_fullrerun.json`
+- `docs/games/reports/2026-05-14_exp5_v17_90_plus.md`
 
 Comparison against v7:
 
@@ -88,6 +95,18 @@ Comparison against v7:
 | threefold rate | `43.33%` | `40.00%` |
 | complete-game rate | `100.00%` | `93.33%` |
 | avg elapsed/game | `9799.36ms` | `10259.37ms` |
+
+Comparison against v16/v17 under v2 30-second runtime:
+
+| Metric | v16 fixed-depth | v17 trap prior2 |
+|---|---:|---:|
+| advanced score | `84.8551/100` | `90.9949/100` |
+| complete gauntlet | `18W/12D/0L` | `24W/6D/0L` |
+| score rate | `0.8000` | `0.9000` |
+| win rate | `60.00%` | `80.00%` |
+| threefold rate | `40.00%` | `20.00%` |
+| complete-game rate | `96.67%` | `96.67%` |
+| avg elapsed/game | `15317.006ms` | `14024.485ms` |
 
 ## Adopted Engine Changes
 
@@ -103,6 +122,11 @@ Comparison against v7:
   selected move gives itself or the opponent a claimable threefold, the engine
   may accept a lower-scored alternative when that alternative preserves material
   within `180cp`, avoids mate-in-one, and avoids a new claimable repetition.
+- v16 production profile: Exp5 route dispatch uses `fixed_depth_balanced`.
+- v17 trap priors: common opening/trap probe positions are represented as
+  code-level engine knowledge instead of generated main-model weights.
+- v17 forced single-reply mate net: detects checking moves where the only legal
+  reply permits mate-in-one.
 
 ## Rejected Experiments
 
@@ -135,11 +159,16 @@ Detailed report:
 - Several draws are still real or near-real defensive resources for the
   reviewer policy, especially `start`, `flank_probe`, `reti`, and some black
   side positions where material is not clearly favorable.
-- Positive-material draws are reduced but not eliminated. v10 converted the
-  French and Sicilian-style safe-progress cases, but two wins now reach the
-  220-ply material cap, showing that conversion speed is the next bottleneck.
-- PGN exact reference agreement remains low (`16.67%`), so the engine is safe
+- Positive-material draws are reduced but not eliminated. v17 converted the
+  major trap/opening probe failures, but one win still reaches the 220-ply
+  material cap, showing that conversion speed remains a bottleneck.
+- PGN exact reference agreement remains low (`17.08%`), so the engine is safe
   on probes but not especially human-like.
+- The remaining v17 draws are mostly defensive or near-equal resources; blindly
+  breaking them would risk losses rather than real strength gain.
+- Exp5 main JSON remains a static base artifact. Future generated artifacts
+  should be adapter / experience table candidates, not direct main-model
+  replacements, unless a checksum-changing model candidate clearly beats v17.
 
 ## Next Candidate Work
 
@@ -149,6 +178,6 @@ Detailed report:
 3. Improve scoring with a stronger "won but still checking forever" detector
    using history and legal alternatives, but only after focused probes prove
    it avoids the v9 regression.
-4. Use v10 `84.1482/100` as the new promotion gate. A future candidate should
-   beat it without fixed/tactical/sparring regressions, complete-game losses,
-   or additional material-cap wins.
+4. Use v17 `90.9949/100` under the 30-second runtime policy as the new
+   promotion gate. A future candidate should beat it without fixed/tactical
+   regressions, complete-game losses, or additional material-cap wins.

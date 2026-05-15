@@ -13,10 +13,14 @@ let localGameModuleTouchStart = null;
 let localGameModulePressedControl = null;
 let localGameModuleSwipeMode = "tap";
 let gameMultiplayerInvitePollTimer = null;
+let gameMultiplayerInviteKickoffTimer = null;
 let gameMultiplayerInviteModalInvite = null;
 let gameMultiplayerInviteActionBusy = false;
 let gameMultiplayerInviteSeenUserId = null;
 const gameMultiplayerInviteSeenIds = new Set();
+const GAME_INVITE_POLL_ACTIVE_MS = 5000;
+const GAME_INVITE_POLL_VISIBLE_IDLE_MS = 60000;
+const GAME_INVITE_POLL_HIDDEN_MS = 180000;
 const GAME_MULTIPLAYER_MODES = {
   fps_arena: [
     { key: "coop", label: "合作破關" },
@@ -47,6 +51,49 @@ const GAME_SOUND_ASSETS = Object.freeze({
 });
 const gameAudioCache = new Map();
 const gameAudioLastPlayedAt = new Map();
+const GAME_RUNTIME_SCRIPT_SRCS = Object.freeze([
+  "/js/games/snake.js?v=20260513-game-modules",
+  "/js/games/game-2048.js?v=20260513-game-modules",
+  "/js/games/brick-breaker.js?v=20260513-game-modules",
+  "/js/games/bullet-hell.js?v=20260513-game-modules",
+  "/js/games/stickman-shooter.js?v=20260514-game-levels",
+  "/js/games/open-world.js?v=20260514-open-world",
+  "/js/games/board-game-shared.js?v=20260513-game-modules",
+  "/js/games/reversi.js?v=20260513-game-modules",
+  "/js/games/go.js?v=20260513-game-modules",
+  "/js/games/gomoku.js?v=20260513-game-modules",
+  "/js/games/chinese-chess.js?v=20260513-game-modules",
+  "/js/games/real-tetris.js?v=20260513-game-modules",
+  "/js/games/sudoku.js?v=20260513-legacy-modules",
+  "/js/games/minesweeper.js?v=20260513-legacy-modules",
+  "/js/games/onea2b.js?v=20260513-legacy-modules",
+  "/js/games/tetris.js?v=20260513-legacy-modules",
+  "/js/games/space-shooter.js?v=20260513-legacy-modules",
+  "/js/38-fps-arena.js?v=20260514-fps-stance-br",
+  "/js/games/fps-arena.js?v=20260514-fps-stance-br",
+]);
+let gameRuntimeScriptsLoaded = false;
+let gameRuntimeScriptsPromise = null;
+
+async function ensureGameRuntimeScriptsLoaded() {
+  if (gameRuntimeScriptsLoaded) return true;
+  if (gameRuntimeScriptsPromise) return gameRuntimeScriptsPromise;
+  if (typeof loadHackmeScriptOnce !== "function") {
+    throw new Error("遊戲模組載入器尚未初始化");
+  }
+  gameRuntimeScriptsPromise = (async () => {
+    for (const src of GAME_RUNTIME_SCRIPT_SRCS) {
+      await loadHackmeScriptOnce(src);
+    }
+    gameRuntimeScriptsLoaded = true;
+    document.dispatchEvent(new CustomEvent("hackme:game-runtime-loaded"));
+    return true;
+  })().catch((err) => {
+    gameRuntimeScriptsPromise = null;
+    throw err;
+  });
+  return gameRuntimeScriptsPromise;
+}
 
 function localGameCatalogKeys() {
   const catalog = Array.isArray(window.HACKME_GAME_CATALOG) ? window.HACKME_GAME_CATALOG : [];
@@ -773,6 +820,8 @@ function hideGameMultiplayerInviteModal() {
 async function loadGlobalGameMultiplayerInvites({ force = false } = {}) {
   syncGameMultiplayerInviteSeenUser();
   if (!currentUserId) return { ok: true, invites: [] };
+  if (typeof canAccessModule === "function" && !canAccessModule("games")) return { ok: true, invites: [] };
+  if (typeof isFeatureEnabledForUi === "function" && !isFeatureEnabledForUi("feature_games_enabled", false)) return { ok: true, invites: [] };
   const data = await gameRequest("/games/multiplayer/invites/pending");
   const invites = Array.isArray(data.invites) ? data.invites : [];
   if (gameMultiplayerInviteModalInvite && !invites.some((invite) => Number(invite.id) === Number(gameMultiplayerInviteModalInvite.id))) {
@@ -812,11 +861,43 @@ async function respondGlobalGameMultiplayerInvite(action) {
   }
 }
 
-function ensureGameMultiplayerInvitePolling() {
+function ensureGameMultiplayerInvitePolling({ kickoff = true } = {}) {
   if (gameMultiplayerInvitePollTimer) return;
-  const tick = () => loadGlobalGameMultiplayerInvites().catch(() => null);
-  gameMultiplayerInvitePollTimer = window.setInterval(tick, 5000);
-  window.setTimeout(tick, 1200);
+  if (!currentUserId) return;
+  if (typeof canAccessModule === "function" && !canAccessModule("games")) return;
+  if (typeof isFeatureEnabledForUi === "function" && !isFeatureEnabledForUi("feature_games_enabled", false)) return;
+  const tick = () => {
+    if (!currentUserId) {
+      stopGameMultiplayerInvitePolling();
+      return;
+    }
+    if (document.hidden && !gameMultiplayerInviteModalInvite) return;
+    if (gameMultiplayerInviteKickoffTimer) {
+      window.clearTimeout(gameMultiplayerInviteKickoffTimer);
+      gameMultiplayerInviteKickoffTimer = null;
+    }
+    loadGlobalGameMultiplayerInvites().catch(() => null);
+  };
+  const delay = document.hidden
+    ? GAME_INVITE_POLL_HIDDEN_MS
+    : (currentModuleTab === "games" || gameMultiplayerInviteModalInvite)
+      ? GAME_INVITE_POLL_ACTIVE_MS
+      : GAME_INVITE_POLL_VISIBLE_IDLE_MS;
+  gameMultiplayerInvitePollTimer = window.setInterval(tick, delay);
+  if (kickoff) {
+    gameMultiplayerInviteKickoffTimer = window.setTimeout(tick, 1200);
+  }
+}
+
+function stopGameMultiplayerInvitePolling() {
+  if (gameMultiplayerInvitePollTimer) {
+    window.clearInterval(gameMultiplayerInvitePollTimer);
+    gameMultiplayerInvitePollTimer = null;
+  }
+  if (gameMultiplayerInviteKickoffTimer) {
+    window.clearTimeout(gameMultiplayerInviteKickoffTimer);
+    gameMultiplayerInviteKickoffTimer = null;
+  }
 }
 
 async function startGameMultiplayerRoom(roomId) {
@@ -1077,13 +1158,15 @@ async function submitSoloGameScore(gameKey, state) {
 
 async function loadGameZone() {
   try {
-    await fetchCsrfToken({ force: true });
+    const runtimeReady = ensureGameRuntimeScriptsLoaded();
+    await fetchCsrfToken();
     const [catalog, usersJson, invitesJson, matchesJson] = await Promise.all([
       gameRequest("/games/catalog"),
       gameRequest("/games/users"),
       gameRequest("/games/chess/invites"),
       gameRequest("/games/chess/matches"),
     ]);
+    await runtimeReady;
     gameState = {
       matches: matchesJson.matches || [],
       invites: invitesJson.invites || [],
@@ -1402,8 +1485,14 @@ document.addEventListener("contextmenu", (event) => {
 
 document.addEventListener("fullscreenchange", updateGameFullscreenButtons);
 
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", ensureGameMultiplayerInvitePolling, { once: true });
-} else {
-  ensureGameMultiplayerInvitePolling();
-}
+document.addEventListener("visibilitychange", () => {
+  if (!gameMultiplayerInvitePollTimer || !currentUserId) return;
+  stopGameMultiplayerInvitePolling();
+  ensureGameMultiplayerInvitePolling({ kickoff: !document.hidden });
+});
+
+document.addEventListener("hackme:module-changed", () => {
+  if (!gameMultiplayerInvitePollTimer || !currentUserId) return;
+  stopGameMultiplayerInvitePolling();
+  ensureGameMultiplayerInvitePolling({ kickoff: currentModuleTab === "games" });
+});

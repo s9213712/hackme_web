@@ -24,17 +24,18 @@ const SPACE_SHOOTER_IMAGE_ASSETS = Object.freeze({
   powerupWeapon: `${SPACE_SHOOTER_ASSET_BASE}parts/powerup_weapon.png`,
   powerupShield: `${SPACE_SHOOTER_ASSET_BASE}parts/powerup_shield.png`,
 });
-const SPACE_SHOOTER_IMAGES = loadSpaceShooterImages(SPACE_SHOOTER_IMAGE_ASSETS);
+const SPACE_SHOOTER_IMAGES = {};
 
-function loadSpaceShooterImages(assets) {
-  if (typeof Image === "undefined") return {};
-  return Object.entries(assets).reduce((images, [key, src]) => {
+function spaceShooterImageFor(key) {
+  const src = SPACE_SHOOTER_IMAGE_ASSETS[key];
+  if (!src || typeof Image === "undefined") return null;
+  if (!SPACE_SHOOTER_IMAGES[key]) {
     const image = new Image();
     image.decoding = "async";
     image.src = src;
-    images[key] = image;
-    return images;
-  }, {});
+    SPACE_SHOOTER_IMAGES[key] = image;
+  }
+  return SPACE_SHOOTER_IMAGES[key];
 }
 
 function spaceShooterImageReady(image) {
@@ -42,7 +43,7 @@ function spaceShooterImageReady(image) {
 }
 
 function drawSpaceShooterImage(ctx, key, x, y, w, h, options = {}) {
-  const image = SPACE_SHOOTER_IMAGES[key];
+  const image = spaceShooterImageFor(key);
   if (!spaceShooterImageReady(image)) return false;
   ctx.save();
   ctx.globalAlpha = options.alpha ?? 1;

@@ -58,8 +58,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-benchmark", action="store_true")
     parser.add_argument(
         "--promote-engines",
-        default="experiment 3:dl,experiment 5:nnue",
-        help="Comma-separated engines to auto stage/promote if their gate passes. exp4 is explicit opt-in while guarded overlay promotion is parked.",
+        default="experiment 3:dl",
+        help=(
+            "Comma-separated engines to auto stage/promote if their gate passes. "
+            "exp5 main-model promotion is explicit only; normal exp5 gains should "
+            "come from engine code/profile changes or separately audited adapters."
+        ),
     )
     return parser.parse_args()
 
@@ -137,6 +141,8 @@ def main() -> int:
 
     dataset_paths = dataset_paths_for_run(run_id)
     candidate_paths = candidate_paths_for_run(run_id)
+    requested_engines = [item.strip() for item in str(args.promote_engines or "").split(",") if item.strip()]
+    exp5_main_model_requested = "experiment 5:nnue" in requested_engines
     _progress(f"dataset root: {dataset_paths['root']}")
     _progress(f"candidate root: {candidate_paths.get('root', '<derived paths>')}")
 
@@ -233,8 +239,13 @@ def main() -> int:
     else:
         _progress(f"phase exp4 refine skipped: {exp4_refine['reason']}")
 
-    exp5_refine = {"ok": False, "skipped": True, "reason": "exp5 refine not requested"}
-    if not args.skip_exp5 and not args.skip_exp5_refine and int(prepare.get("accepted_train_samples") or 0) > 0:
+    exp5_refine = {"ok": False, "skipped": True, "reason": "exp5 main-model refine not requested"}
+    if (
+        exp5_main_model_requested
+        and not args.skip_exp5
+        and not args.skip_exp5_refine
+        and int(prepare.get("accepted_train_samples") or 0) > 0
+    ):
         exp5_cmd = [
             sys.executable,
             str(ROOT / "scripts" / "games" / "chess_exp5_dataset_train.py"),
@@ -321,7 +332,6 @@ def main() -> int:
 
     promotion_results = []
     skip_promote_effective = bool(args.skip_promote or args.skip_benchmark)
-    requested_engines = [item.strip() for item in str(args.promote_engines or "").split(",") if item.strip()]
     for engine in requested_engines:
         _progress(f"phase stage/promote started: {engine}")
         source_path = candidate_paths.get(engine)

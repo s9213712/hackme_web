@@ -1,5 +1,8 @@
 import sqlite3
 
+from flask import Flask, jsonify, make_response
+
+from routes.jobs import register_job_routes
 from services.job_center import create_job, ensure_job_center_schema, list_job_events, list_jobs, request_cancel, request_retry, update_job
 
 
@@ -44,3 +47,65 @@ def test_job_center_lifecycle():
     assert failed["status"] == "failed"
     rows = conn.execute("SELECT type FROM notifications WHERE source_module='job_center' AND source_ref=? ORDER BY id", (job["job_uuid"],)).fetchall()
     assert [row["type"] for row in rows] == ["job_cancelled", "job_failed"]
+
+
+def test_job_routes_are_owner_scoped_for_manager(tmp_path):
+    db_path = tmp_path / "jobs.db"
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, role TEXT)")
+    conn.executemany(
+        "INSERT INTO users (id, username, role) VALUES (?, ?, ?)",
+        [(1, "alice", "user"), (2, "admin", "manager"), (3, "root", "super_admin")],
+    )
+    ensure_job_center_schema(conn)
+    job = create_job(
+        conn,
+        owner_user_id=1,
+        created_by_user_id=1,
+        job_type="comfyui.generate",
+        title="Alice private job",
+        source_module="comfyui",
+        cancellable=True,
+    )
+    conn.commit()
+    conn.close()
+
+    actor_box = {"actor": {"id": 2, "username": "admin", "role": "manager"}}
+
+    def get_db():
+        db = sqlite3.connect(db_path)
+        db.row_factory = sqlite3.Row
+        return db
+
+    def json_resp(payload, status=200):
+        return make_response(jsonify(payload), status)
+
+    app = Flask(__name__)
+    app.testing = True
+    register_job_routes(app, {
+        "audit": lambda *args, **kwargs: None,
+        "get_client_ip": lambda: "127.0.0.1",
+        "get_current_user_ctx": lambda: actor_box["actor"],
+        "get_db": get_db,
+        "get_ua": lambda: "test-agent",
+        "json_resp": json_resp,
+        "parse_positive_int": lambda value, default=50, min_value=1, max_value=200: default,
+        "require_csrf": lambda fn: fn,
+        "require_csrf_safe": lambda fn: fn,
+        "role_rank": lambda role: {"user": 0, "manager": 1, "super_admin": 2}.get(role or "user", 0),
+    })
+    client = app.test_client()
+
+    admin_list = client.get("/api/admin/jobs")
+    assert admin_list.status_code == 403
+
+    detail = client.get(f"/api/jobs/{job['job_uuid']}")
+    assert detail.status_code == 404
+
+    cancel = client.post(f"/api/jobs/{job['job_uuid']}/cancel")
+    assert cancel.status_code == 404
+
+    actor_box["actor"] = {"id": 1, "username": "alice", "role": "user"}
+    owner_detail = client.get(f"/api/jobs/{job['job_uuid']}")
+    assert owner_detail.status_code == 200

@@ -271,8 +271,7 @@ function updatePendingSelectionUi() {
 async function loadUsers() {
   if (!currentUser) return;
   if (!["manager","super_admin"].includes(currentRole)) return;
-  await fetchCsrfToken({ force: true });
-  const csrf = getCsrfToken();
+  const csrf = await fetchCsrfToken();
   try {
     const res = await apiFetch(API + "/admin/users", {
       credentials: "same-origin",

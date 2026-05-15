@@ -221,8 +221,9 @@ def _iter_checkpoint_guarded_rows(checkpoint: dict[str, Any]) -> list[dict[str, 
                 "board_semantics_features": case.get("board_semantics_features") or {},
                 "flank_context_features": case.get("flank_context_features") or {},
             }
-            row["unsafe_override"] = bool(selected_source == "final" and baseline_correct and not final_correct)
-            row["regression_row"] = bool(baseline_correct and not guarded_correct)
+            row["unsafe_override"] = bool(baseline_correct and not final_correct)
+            row["selected_unsafe_override"] = bool(selected_source == "final" and baseline_correct and not final_correct)
+            row["regression_row"] = bool(baseline_correct and not final_correct)
             row["root_causes"] = _cluster_root_causes(row) if row["unsafe_override"] or row["regression_row"] else []
             rows.append(row)
     return rows

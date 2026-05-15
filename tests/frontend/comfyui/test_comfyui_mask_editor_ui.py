@@ -42,3 +42,11 @@ def test_mask_editor_is_touch_friendly_and_responsive():
     assert ".comfyui-mask-editor-stage" in css
     assert "touch-action: none" in css
     assert "@media (max-width: 860px)" in css
+
+
+def test_txt2img_hides_source_image_card():
+    js = _read("public/js/36-comfyui.js")
+    assert "const sourceCard = $(COMFYUI_INPUT_ASSET_META.source.cardId);" in js
+    assert 'if (sourceCard) sourceCard.style.display = comfyuiModeUsesSourceImage(mode) ? "" : "none";' in js
+    assert 'return ["img2img", "inpaint", "outpaint", "upscale", "i2v"].includes' in js
+    assert 'return "文字生圖：只需要提示詞，不需要來源圖片。";' in js

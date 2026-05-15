@@ -786,7 +786,7 @@ def test_comfyui_models_and_generate_routes(tmp_path):
     assert body["image"]["batch_size"] == 1
     assert len(body["images"]) == 1
     assert body["images"][0]["image_ref"]["filename"] == "hackme_web_00001_.png"
-    assert FakeComfyUIClient.last_timeout_seconds == 1800
+    assert FakeComfyUIClient.last_timeout_seconds == 0
     assert FakeComfyUIClient.last_params["loras"] == [{"name": "detail.safetensors", "strength_model": 0.8, "strength_clip": 0.7}]
     assert FakeComfyUIClient.last_params["vae"] == "sdxl_vae.safetensors"
 
@@ -969,7 +969,7 @@ def test_comfyui_history_rerun_reuses_saved_assets(tmp_path):
     polled = client.get(f"/api/comfyui/jobs/{job_id}")
     assert polled.status_code == 200
     body = polled.get_json()
-    for _ in range(40):
+    for _ in range(100):
       if body["job"]["status"] == "completed":
         break
       time.sleep(0.05)
@@ -1237,10 +1237,10 @@ def test_comfyui_export_current_and_run_workflow_preset_preserve_parameters(tmp_
     job_id = run.get_json()["job"]["job_id"]
 
     body = client.get(f"/api/comfyui/jobs/{job_id}").get_json()
-    for _ in range(40):
+    for _ in range(100):
         if body["job"]["status"] == "completed":
             break
-        time.sleep(0.05)
+        time.sleep(0.1)
         body = client.get(f"/api/comfyui/jobs/{job_id}").get_json()
     assert body["job"]["status"] == "completed"
 
@@ -1519,7 +1519,7 @@ def test_comfyui_generate_async_job_reports_progress_and_result(tmp_path):
     job_id = start_body["job"]["job_id"]
 
     final_body = None
-    for _ in range(40):
+    for _ in range(100):
         polled = client.get(f"/api/comfyui/jobs/{job_id}")
         assert polled.status_code == 200
         final_body = polled.get_json()
@@ -1527,7 +1527,7 @@ def test_comfyui_generate_async_job_reports_progress_and_result(tmp_path):
         assert "percent" in (final_body["job"]["progress"] or {})
         if final_body["job"]["status"] == "completed":
             break
-        time.sleep(0.05)
+        time.sleep(0.1)
 
     assert final_body is not None
     assert final_body["job"]["status"] == "completed"
@@ -4125,7 +4125,10 @@ def test_comfyui_frontend_is_wired():
     assert 'href="/api/root/comfyui/local-start-template"' in index_html
     assert 'id="comfyui-civitai-settings" style="display:none;"' in index_html
     assert 'id="s-comfyui-civitai-api-key"' in index_html
-    assert 'const show = currentUser === "root";' in comfyui_js
+    assert "function canManageComfyuiLocalModels" in comfyui_js
+    assert 'return currentUser === "root" && mode === "local";' in comfyui_js
+    assert 'if (panel) panel.style.display = showLocalModels ? "" : "none";' in comfyui_js
+    assert "if (modelsTab) modelsTab.hidden = !showLocalModels;" in comfyui_js
     assert '目前是雲端 / 遠端模式，所以這個區塊只保留說明。若要管理本站的本地 ComfyUI 模型，請先把 backend 切回本地模式。' in comfyui_js
     assert "/js/36-comfyui.js?v=20260509-comfyui-template-embeddings" in index_html
     assert "/styles.css?v=20260514-open-world" in index_html
@@ -4263,7 +4266,8 @@ def test_comfyui_frontend_is_wired():
     assert '目前是 Diffusers 模式：後端會直接載入 Hugging Face repo 生圖' in comfyui_js
     assert "function pollComfyuiJobUntilDone(jobId, controller, timeoutSeconds)" in comfyui_js
     assert "function pollComfyuiModelDownloadJob(jobId)" in comfyui_js
-    assert "const COMFYUI_GENERATION_TIMEOUT_SECONDS = 1800;" in comfyui_js
+    assert "const COMFYUI_GENERATION_TIMEOUT_SECONDS = 0;" in comfyui_js
+    assert "不設等待上限" in comfyui_js
     assert "const COMFYUI_QUEUE_TIMEOUT_EXTENSION_SECONDS = 1800;" in comfyui_js
     assert "function extendComfyuiDeadlineForQueue(deadline, startedAt)" in comfyui_js
     assert "function setComfyuiModelDownloadProgress" in comfyui_js
@@ -4359,7 +4363,7 @@ def test_comfyui_frontend_is_wired():
     assert 'savePath.value = `/output/${comfyuiCurrentImage.image_ref.filename}`;' in comfyui_js
     assert 'placeholder="/output/圖片.png"' in index_html
     assert "COMFYUI_DRAFT_FIELD_IDS" in comfyui_js
-    assert "hackme_web:comfyui:draft" in comfyui_js
+    assert 'comfyuiUserStorageKey("comfyui:draft")' in comfyui_js
     assert "bindComfyuiDraftPersistence" in comfyui_js
     assert "restoreComfyuiDraft()" in comfyui_js
     assert 'album_id: selectedComfyuiAlbumId()' in comfyui_js

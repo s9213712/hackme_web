@@ -109,6 +109,8 @@ def _write_jsonl(path: Path, rows: list[dict]) -> None:
 
 
 def _sha256_file(path: Path) -> str:
+    if not path.exists():
+        return ""
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
@@ -567,8 +569,6 @@ def main() -> int:
     benchmark_path = Path(args.benchmark_report_path).expanduser().resolve() if args.benchmark_report_path else None
     output_root = Path(args.output_dir).expanduser().resolve()
 
-    if not baseline_path.exists():
-        raise FileNotFoundError(f"baseline model missing: {baseline_path}")
     if not distill_path.exists():
         raise FileNotFoundError(f"distill jsonl missing: {distill_path}")
 
@@ -598,12 +598,13 @@ def main() -> int:
     runs: list[dict] = []
     for run_index, seed in enumerate(seeds, start=1):
         run_dir = output_root / f"run_{run_index}_seed_{seed}"
-        candidate_model = run_dir / "candidate" / "chess_experiment_5_nnue.json"
-        candidate_replay = run_dir / "candidate" / "chess_experiment_5_nnue_replay.jsonl"
+        candidate_model = run_dir / "candidate" / "chess_experiment_5_nnue_experience.json"
+        candidate_replay = run_dir / "candidate" / "chess_experiment_5_nnue_experience_replay.jsonl"
         run_dir.mkdir(parents=True, exist_ok=True)
         candidate_model.parent.mkdir(parents=True, exist_ok=True)
 
-        shutil.copyfile(baseline_path, candidate_model)
+        if baseline_path.exists():
+            shutil.copyfile(baseline_path, candidate_model)
 
         distill_rows = _iter_jsonl(distill_path)
         random.Random(seed).shuffle(distill_rows)

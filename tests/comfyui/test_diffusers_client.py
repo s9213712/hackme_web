@@ -98,3 +98,44 @@ def test_diffusers_client_upload_fetch_and_discard_round_trip(tmp_path):
     assert image.type == "input"
     assert image.data == b"png-bytes"
     assert discarded["file_deleted"] is True
+
+
+def test_diffusers_huggingface_progress_tqdm_reports_download_bytes(tmp_path):
+    client = DiffusersClient(model_repo="owner/model", storage_root=tmp_path)
+    events = []
+
+    tqdm_cls = client._huggingface_progress_tqdm_class(
+        events.append,
+        label="model.safetensors",
+        base_percent=10,
+        span_percent=30,
+    )
+    assert tqdm_cls is not None
+
+    bar = tqdm_cls(total=100, unit="B", desc="model.safetensors")
+    bar.update(40)
+    bar.close()
+
+    assert events
+    assert events[-1]["phase"] == "downloading"
+    assert events[-1]["bytes_written"] == 40
+    assert events[-1]["total_bytes"] == 100
+    assert events[-1]["percent"] == 22
+    assert events[-1]["current_file"] == "model.safetensors"
+    assert "speed_bytes_per_sec" in events[-1]
+    assert events[-1]["step"] == "Hugging Face 檔案下載"
+    assert "model.safetensors" in events[-1]["detail"]
+
+
+def test_diffusers_snapshot_patterns_avoid_duplicate_precision_downloads(tmp_path):
+    client = DiffusersClient(model_repo="owner/model", storage_root=tmp_path)
+
+    default_allow, default_ignore = client._diffusers_snapshot_patterns()
+    fp16_allow, fp16_ignore = client._diffusers_snapshot_patterns("fp16")
+
+    assert "*.safetensors" in default_allow
+    assert "*.fp16.*" in default_ignore
+    assert "**/*.bf16.*" in default_ignore
+    assert "*.fp16.safetensors" in fp16_allow
+    assert "**/*.fp16.bin" in fp16_allow
+    assert fp16_ignore is None
